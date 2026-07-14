@@ -1,0 +1,8 @@
+{
+  "name": "Remix: Zea Voice",
+  "description": "Multi-tenant Voice AI SaaS Platform Dashboard with Super Admin, Developer, and User portals.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

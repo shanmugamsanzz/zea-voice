@@ -1,0 +1,181 @@
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import "tailwindcss";
+
+@variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Poppins", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+/* Custom Sleek Scrollbars with Reduced Width */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* For dark-themed sidebars or areas */
+.bg-slate-900 ::-webkit-scrollbar-thumb {
+  background: #334155;
+}
+
+.bg-slate-900 ::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* Comprehensive Dark Mode Global Styles */
+.dark {
+  color-scheme: dark;
+}
+
+.dark body,
+.dark #root,
+.dark .bg-slate-50,
+.dark .bg-slate-50\/30,
+.dark .bg-slate-100\/20,
+.dark .min-h-screen {
+  background-color: #0b0f19 !important; /* Extra Deep Midnight Blue */
+  color: #e2e8f0 !important;
+}
+
+/* Card and Sidebar Backgrounds */
+.dark .bg-white,
+.dark aside.bg-white,
+.dark header.bg-white {
+  background-color: #111827 !important; /* Charcoal Gray */
+  color: #f3f4f6 !important;
+  border-color: #1f2937 !important;
+}
+
+/* Dark theme border overrides */
+.dark .border,
+.dark .border-slate-100,
+.dark .border-slate-200,
+.dark .border-slate-300,
+.dark .border-slate-250,
+.dark .border-gray-100,
+.dark .border-gray-200 {
+  border-color: #1f2937 !important;
+}
+
+/* Scrollbar adaptation for dark mode */
+.dark ::-webkit-scrollbar-thumb {
+  background: #374151;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #4b5563;
+}
+
+/* Interactive backgrounds */
+.dark .hover\:bg-slate-50:hover,
+.dark .hover\:bg-slate-100:hover,
+.dark .hover\:bg-slate-50\/60:hover {
+  background-color: #1f2937 !important;
+}
+
+.dark .bg-slate-100 {
+  background-color: #1f2937 !important;
+}
+
+.dark .bg-slate-50 {
+  background-color: #111827 !important;
+}
+
+/* Typography elements */
+.dark .text-slate-800,
+.dark .text-slate-900,
+.dark .text-slate-700,
+.dark .text-gray-800,
+.dark .text-gray-900 {
+  color: #f3f4f6 !important;
+}
+
+.dark .text-slate-400,
+.dark .text-slate-500,
+.dark .text-slate-600,
+.dark .text-gray-400,
+.dark .text-gray-500 {
+  color: #9ca3af !important;
+}
+
+/* Soft accent background updates for Dark Mode */
+.dark .bg-indigo-50 {
+  background-color: rgba(99, 102, 241, 0.15) !important;
+  color: #a5b4fc !important;
+}
+
+.dark .bg-emerald-50,
+.dark .bg-emerald-50\/50 {
+  background-color: rgba(16, 185, 129, 0.15) !important;
+  color: #34d399 !important;
+}
+
+.dark .bg-amber-50 {
+  background-color: rgba(245, 158, 11, 0.15) !important;
+  color: #fcd34d !important;
+}
+
+.dark .bg-rose-50 {
+  background-color: rgba(244, 63, 94, 0.15) !important;
+  color: #fda4af !important;
+}
+
+/* Table overrides */
+.dark th {
+  background-color: #1f2937 !important;
+  color: #9ca3af !important;
+}
+
+.dark td {
+  border-bottom-color: #1f2937 !important;
+}
+
+/* Form fields input, select, textarea */
+.dark input,
+.dark select,
+.dark textarea {
+  background-color: #111827 !important;
+  border-color: #374151 !important;
+  color: #f3f4f6 !important;
+}
+
+.dark input:focus,
+.dark select:focus,
+.dark textarea:focus {
+  border-color: #6366f1 !important;
+  outline: none;
+}
+
+/* Icons & small buttons dynamic colors */
+.dark .text-slate-400 {
+  color: #9ca3af !important;
+}
+
+.dark .text-slate-500 {
+  color: #9ca3af !important;
+}
+
+/* Chart background grids & axes labels */
+.dark .recharts-cartesian-grid-horizontal line,
+.dark .recharts-cartesian-grid-vertical line {
+  stroke: #374151 !important;
+}
+
+.dark .recharts-text {
+  fill: #9ca3af !important;
+}
+
