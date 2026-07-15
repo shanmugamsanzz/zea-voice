@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Company, Developer, ProviderConfig, PhoneNumber, CallSession, QueueStatus, PaymentRecord, VoiceAgent, Campaign } from '../types';
+import { Company, Developer, ProviderConfig, PhoneNumber, CallSession, VoiceAgent, Campaign } from '../types';
 
 export const MOCK_COMPANIES: Company[] = [
   {
@@ -11,6 +11,7 @@ export const MOCK_COMPANIES: Company[] = [
     name: 'Acme Voice Systems',
     status: 'active',
     billingTier: 'Enterprise',
+    perMinutePrice: 5.5,
     createdAt: '2025-01-15',
     developersCount: 8,
     creditsBalance: 4250.50,
@@ -23,6 +24,7 @@ export const MOCK_COMPANIES: Company[] = [
     name: 'Initech Retail Corp',
     status: 'active',
     billingTier: 'Pro',
+    perMinutePrice: 4.5,
     createdAt: '2025-03-22',
     developersCount: 3,
     creditsBalance: 840.20,
@@ -35,6 +37,7 @@ export const MOCK_COMPANIES: Company[] = [
     name: 'Globex Logistics LLC',
     status: 'active',
     billingTier: 'Enterprise',
+    perMinutePrice: 6,
     createdAt: '2024-11-02',
     developersCount: 12,
     creditsBalance: 12450.00,
@@ -47,6 +50,7 @@ export const MOCK_COMPANIES: Company[] = [
     name: 'Umbrella Biotech',
     status: 'suspended',
     billingTier: 'Pro',
+    perMinutePrice: 4,
     createdAt: '2025-05-10',
     developersCount: 4,
     creditsBalance: 12.40,
@@ -59,6 +63,7 @@ export const MOCK_COMPANIES: Company[] = [
     name: 'Stark Industries Inc',
     status: 'active',
     billingTier: 'Enterprise',
+    perMinutePrice: 7.5,
     createdAt: '2023-08-19',
     developersCount: 24,
     creditsBalance: 85200.00,
@@ -71,6 +76,7 @@ export const MOCK_COMPANIES: Company[] = [
     name: 'Hooli Tech',
     status: 'pending',
     billingTier: 'Starter',
+    perMinutePrice: 3,
     createdAt: '2026-07-01',
     developersCount: 1,
     creditsBalance: 100.00,
@@ -184,21 +190,6 @@ export const MOCK_PHONE_NUMBERS: PhoneNumber[] = [
   { id: 'num-5', number: '+1 (212) 993-4819', provider: 'Twilio', type: 'Bidirectional', status: 'pending', monthlyCost: 2.50 }
 ];
 
-export const MOCK_QUEUES: QueueStatus[] = [
-  { id: 'q-1', name: 'Acme General Inbound', activeCalls: 8, waitingCalls: 2, maxWaitTime: 45, avgWaitTime: 12, status: 'normal' },
-  { id: 'q-2', name: 'Initech Black Friday Promo Queue', activeCalls: 24, waitingCalls: 11, maxWaitTime: 280, avgWaitTime: 95, status: 'critical' },
-  { id: 'q-3', name: 'Globex Logistics Outbound Dialing', activeCalls: 14, waitingCalls: 0, maxWaitTime: 0, avgWaitTime: 2, status: 'normal' },
-  { id: 'q-4', name: 'Stark VIP Concierge Queue', activeCalls: 3, waitingCalls: 5, maxWaitTime: 120, avgWaitTime: 40, status: 'congested' }
-];
-
-export const MOCK_PAYMENTS: PaymentRecord[] = [
-  { id: 'pay-1', companyName: 'Acme Voice Systems', amount: 2450.00, type: 'Subscription', status: 'succeeded', date: '2026-07-01', paymentMethod: 'Visa Ending 4242' },
-  { id: 'pay-2', companyName: 'Globex Logistics LLC', amount: 5000.00, type: 'Credit Refill', status: 'succeeded', date: '2026-07-05', paymentMethod: 'Bank Transfer' },
-  { id: 'pay-3', companyName: 'Initech Retail Corp', amount: 620.00, type: 'Subscription', status: 'succeeded', date: '2026-07-01', paymentMethod: 'Mastercard Ending 8901' },
-  { id: 'pay-4', companyName: 'Umbrella Biotech', amount: 450.00, type: 'Subscription', status: 'failed', date: '2026-07-01', paymentMethod: 'Visa Ending 1111' },
-  { id: 'pay-5', companyName: 'Stark Industries Inc', amount: 15400.00, type: 'Subscription', status: 'succeeded', date: '2026-06-19', paymentMethod: 'Corporate Wire' }
-];
-
 export const MOCK_AGENTS: VoiceAgent[] = [
   {
     id: 'agent-1',
@@ -301,59 +292,6 @@ export const MOCK_CAMPAIGNS: Campaign[] = [
     convertedCount: 15,
     scheduleStart: '2026-06-15 10:00',
     scheduleEnd: '2026-07-15 17:00'
-  }
-];
-
-export const ACTIVE_MONITORING_CALLS: CallSession[] = [
-  {
-    id: 'call-active-1',
-    companyName: 'Acme Voice Systems',
-    agentName: 'Sarah - Sales Qualifier',
-    phoneNumber: '+1 (312) 584-9301',
-    direction: 'Outbound',
-    status: 'connected',
-    duration: 72,
-    sentiment: 'positive',
-    cost: 0.18,
-    timestamp: '2026-07-09 13:37:05',
-    transcript: [
-      { speaker: 'agent', text: 'Hello, thank you for picking up! My name is Sarah from Acme Voice. How are you doing today?', time: '0:01' },
-      { speaker: 'user', text: 'Hey Sarah, I am doing alright. What is this about?', time: '0:06' },
-      { speaker: 'agent', text: 'We build autonomous conversational voice systems that handle incoming sales queries. I am actually an AI myself! I wanted to check what your typical daily inbound call volume looks like?', time: '0:12' },
-      { speaker: 'user', text: 'Wow, really? You sound incredibly lifelike! Honestly, we get about 200 calls a day, mostly asking about product features and pricing.', time: '0:21' },
-      { speaker: 'agent', text: 'That is exactly the type of load our voice agents thrive on! We can deflect up to 80% of those repetitive support and sales calls, routing complex cases directly to your specialists. Would it make sense to schedule a quick 10-minute demonstration with our team tomorrow?', time: '0:32' },
-      { speaker: 'user', text: 'That actually sounds quite helpful. What times do you have available tomorrow morning?', time: '0:45' }
-    ]
-  },
-  {
-    id: 'call-active-2',
-    companyName: 'Initech Retail Corp',
-    agentName: 'Michael - Support Desk Bot',
-    phoneNumber: '+1 (888) 293-1029',
-    direction: 'Inbound',
-    status: 'connected',
-    duration: 185,
-    sentiment: 'neutral',
-    cost: 0.46,
-    timestamp: '2026-07-09 13:35:12',
-    transcript: [
-      { speaker: 'user', text: 'Hi, I am having trouble connecting my Twilio SIP trunks to your platform. It keeps returning a 403 Forbidden error.', time: '0:02' },
-      { speaker: 'agent', text: 'I am sorry to hear that you are encountering a 403 error. Let us get that sorted out. This is Michael from Support. Usually, a 403 error on SIP trunk registration happens when the IP access control list or credentials on Twilio do not match our server IP. Have you added our primary gateway IP, 54.12.98.42, to your Twilio ACL list?', time: '0:15' },
-      { speaker: 'user', text: 'Oh, hold on. Let me look at my Twilio dashboard. No, I only added the secondary IP. Let me add the primary right now.', time: '0:40' },
-      { speaker: 'agent', text: 'Excellent. Please apply those settings in Twilio and then hit "Test Connection" in your Zea Developer panel. I will monitor the incoming packets from my end.', time: '0:55' }
-    ]
-  },
-  {
-    id: 'call-active-3',
-    companyName: 'Globex Logistics LLC',
-    agentName: 'Sarah - Sales Qualifier',
-    phoneNumber: '+1 (800) 555-0192',
-    direction: 'Outbound',
-    status: 'ringing',
-    duration: 8,
-    sentiment: 'neutral',
-    cost: 0.00,
-    timestamp: '2026-07-09 13:38:10'
   }
 ];
 

@@ -5,45 +5,31 @@
 
 import React, { useState } from 'react';
 import { useAppState } from '../store/AppState';
-import { UserRole } from '../types';
 import { Sparkles, ShieldAlert, Key, Mail, ShieldCheck } from 'lucide-react';
-import { MOCK_DEVELOPERS } from '../lib/mockData';
+import { login } from '../lib/api';
 
 export function LoginView({ onLogin }: { onLogin: () => void }) {
-  const { setRole, setSelectedCompanyId } = useAppState();
+  const { setRole, setUserEmail } = useAppState();
   const [emailInput, setEmailInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const email = emailInput.trim().toLowerCase();
-    const password = passwordInput.trim();
-
-    let targetRole: UserRole = 'DEVELOPER';
-    let matchedCompanyId: string | null = null;
-
-    if (email === 'superadmin@gmail.com' && password === 'super123') {
-      targetRole = 'SUPER_ADMIN';
-    } else if (email === 'user@gmail.com' && password === 'user@123') {
-      targetRole = 'USER';
-    } else if (email === 'developer@gmail.com' && password === 'developer 123') {
-      targetRole = 'DEVELOPER';
-    } else {
-      // Look up custom created developers
-      const customDev = MOCK_DEVELOPERS.find(
-        d => d.email.toLowerCase() === email && d.password === password
-      );
-      if (customDev) {
-        targetRole = 'DEVELOPER';
-        matchedCompanyId = customDev.companyId;
-      }
+    setError(''); setLoading(true);
+    try {
+      const result = await login(emailInput.trim().toLowerCase(), passwordInput);
+      const targetRole = result.user.role === 'SUPER_ADMIN' ? 'SUPER_ADMIN'
+        : result.user.role === 'COMPANY_DEVELOPER' ? 'DEVELOPER' : 'USER';
+      setRole(targetRole);
+      setUserEmail(result.user.email);
+      onLogin();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Login failed');
+    } finally {
+      setLoading(false);
     }
-
-    setRole(targetRole);
-    if (matchedCompanyId) {
-      setSelectedCompanyId(matchedCompanyId);
-    }
-    onLogin();
   };
 
   return (
@@ -60,6 +46,12 @@ export function LoginView({ onLogin }: { onLogin: () => void }) {
 
         {/* Form Container */}
         <form onSubmit={handleSubmit} className="p-8 space-y-6">
+          {error && (
+            <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-700">
+              <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
           <div className="space-y-4">
             {/* Email field */}
             <div>
@@ -97,10 +89,11 @@ export function LoginView({ onLogin }: { onLogin: () => void }) {
           {/* Connect button */}
           <button
             type="submit"
+            disabled={loading}
             className="w-full py-3 bg-gradient-to-r from-violet-600 to-pink-500 hover:from-violet-700 hover:to-pink-600 text-white rounded-xl text-xs font-bold transition shadow-md hover:shadow-lg flex items-center justify-center space-x-1"
           >
             <ShieldCheck className="w-4 h-4 text-violet-100" />
-            <span>Connect to Zea Voice Gateway</span>
+            <span>{loading ? 'Connecting…' : 'Connect to Zea Voice Gateway'}</span>
           </button>
         </form>
       </div>

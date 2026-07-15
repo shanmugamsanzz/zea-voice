@@ -3,10 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAppState } from '../../store/AppState';
-import { MOCK_AGENTS } from '../../lib/mockData';
 import { VoiceAgent } from '../../types';
+import { apiRequest } from '../../lib/api';
 import { 
   Bot, 
   Settings, 
@@ -24,7 +24,6 @@ import {
   Lock,
   Sliders,
   ChevronDown,
-  Play,
   Mic,
   Info,
   Sparkles,
@@ -42,20 +41,36 @@ interface AgentTabsProps {
   onCancel: () => void;
 }
 
+interface AgentApiData {
+  id: string; name: string; description: string | null; goal: string | null; language: string;
+  status: 'active' | 'draft' | 'archived'; phoneNumberId: string | null; phoneNumber: string | null;
+  stt: { modelId: string; providerName: string; modelName: string };
+  llm: { modelId: string; providerName: string; modelName: string };
+  tts: { modelId: string; providerName: string; modelName: string };
+  voiceId: string; prompt: string; welcomeMessage: string | null; temperature: number;
+  interruptionSensitivity: number; silenceTimeoutMs: number; inactivityTimeoutSeconds: number;
+  settings: Record<string, unknown>; createdAt: string; updatedAt: string;
+  metrics: { totalCalls: number; averageDurationSeconds: number; successRate: number };
+}
+
+interface ProviderModelOption {
+  id: string; providerId: string; providerName: string; providerType: 'stt' | 'llm' | 'tts';
+  modelKey: string; displayName: string; capabilities: Record<string, unknown>; settings: Record<string, unknown>;
+}
+interface AgentPhoneOption { id: string; number: string; status: string }
+
 export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const { role } = useAppState();
   const isReadOnly = role === 'USER'; // Restricted view
 
-  // Find agent or initialize a new one
-  const existingAgent = MOCK_AGENTS.find(a => a.id === agentId);
   const [agent, setAgent] = useState<VoiceAgent>(() => {
-    const base = existingAgent || {
-      id: `agent-${Date.now()}`,
+    const base: VoiceAgent = {
+      id: '',
       name: '',
       status: 'draft' as const,
-      voiceId: 'elevenlabs-alloy-warm',
+      voiceId: '',
       temperature: 0.7,
-      prompt: 'You are Sarah, a bubbly, professional sales development representative...',
+      prompt: '',
       interruptionSensitivity: 0.3,
       silenceTimeout: 600,
       sttProvider: 'Deepgram Nova-2',
@@ -87,12 +102,12 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       greetingMode: base.greetingMode || 'Agent Initiates (Standard)',
       cachePolicy: base.cachePolicy || '24h Persistent',
       contextId: base.contextId || 'Optional',
-      welcomeMessage: base.welcomeMessage || 'Good ${timeOfDay} - நா ஷண்முகா Hospitalல இருந்து AI Agent கார்த்திகா பேசுறங்க -- How can I help you?',
+      welcomeMessage: base.welcomeMessage || '',
       inactivityTimeout: base.inactivityTimeout !== undefined ? base.inactivityTimeout : 5,
       silentMessage: base.silentMessage || "I can't hear you.Are you still on the call?",
       ttsProvider: base.ttsProvider || 'ElevenLabs Premium',
       ttsModel: base.ttsModel || 'eleven_flash_v2_5',
-      voiceId: base.voiceId || 'monika Shogam English',
+      voiceId: base.voiceId || '',
       ttsAmbienceType: base.ttsAmbienceType || 'Silent (Default)',
       ttsSpeed: base.ttsSpeed !== undefined ? base.ttsSpeed : 1,
       ttsStyle: base.ttsStyle !== undefined ? base.ttsStyle : 0.4,
@@ -104,7 +119,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       preCallProvider: base.preCallProvider || 'Select Provider',
       preCallPrompt: base.preCallPrompt || '',
       preCallApiActive: base.preCallApiActive !== undefined ? base.preCallApiActive : true,
-      preCallApiUrl: base.preCallApiUrl || 'https://n8n.urlfactory.website/webhook/fetchname',
+      preCallApiUrl: base.preCallApiUrl || '',
       preCallApiMethod: base.preCallApiMethod || 'POST',
       preCallApiHeaders: base.preCallApiHeaders || '',
       preCallApiRequestBody: base.preCallApiRequestBody || '{ "mobile_number": "${caller}" }',
@@ -115,7 +130,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       postCallUninterruptibleReasons: base.postCallUninterruptibleReasons || [],
       postCallEndpointDetailsActive: base.postCallEndpointDetailsActive !== undefined ? base.postCallEndpointDetailsActive : true,
       postCallApiMethod: base.postCallApiMethod || 'POST',
-      postCallApiUrl: base.postCallApiUrl || 'https://n8n.urlfactory.website/webhook/appinement',
+      postCallApiUrl: base.postCallApiUrl || '',
       postCallApiHeaders: base.postCallApiHeaders || [
         { key: 'content-type', value: 'application/json' }
       ],
@@ -124,58 +139,158 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
 
   const [activeTab, setActiveTab] = useState<'overview' | 'listener' | 'brain' | 'speaker' | 'precall' | 'postcall' | 'tools' | 'knowledge' | 'analytics'>('overview');
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [models, setModels] = useState<ProviderModelOption[]>([]);
+  const [phoneNumbers, setPhoneNumbers] = useState<AgentPhoneOption[]>([]);
+  const [phoneNumberId, setPhoneNumberId] = useState('');
+  const [sttModelId, setSttModelId] = useState('');
+  const [llmModelId, setLlmModelId] = useState('');
+  const [ttsModelId, setTtsModelId] = useState('');
   const [newReason, setNewReason] = useState('');
 
+  const applyApiAgent = (value: AgentApiData) => {
+    setAgent((current) => ({
+      ...current, ...(value.settings as Partial<VoiceAgent>), id: value.id, name: value.name,
+      status: value.status, description: value.description ?? '', goal: value.goal ?? '', language: value.language,
+      voiceId: value.voiceId, temperature: value.temperature, prompt: value.prompt,
+      interruptionSensitivity: value.interruptionSensitivity, silenceTimeout: value.silenceTimeoutMs,
+      sttProvider: value.stt.providerName, sttModel: value.stt.modelName,
+      llmProvider: value.llm.providerName, llmModel: value.llm.modelName,
+      ttsProvider: value.tts.providerName, ttsModel: value.tts.modelName,
+      welcomeMessage: value.welcomeMessage ?? '', inactivityTimeout: value.inactivityTimeoutSeconds,
+      createdAt: value.createdAt, updatedAt: value.updatedAt,
+      totalCalls: value.metrics.totalCalls, avgDuration: value.metrics.averageDurationSeconds, successRate: value.metrics.successRate,
+    }));
+    setPhoneNumberId(value.phoneNumberId ?? '');
+    setSttModelId(value.stt.modelId); setLlmModelId(value.llm.modelId); setTtsModelId(value.tts.modelId);
+  };
+
+  useEffect(() => {
+    let stopped = false;
+    const load = async () => {
+      setLoading(true); setError('');
+      try {
+        const [catalogResult, phonesResult, existingResult] = await Promise.allSettled([
+          apiRequest<ProviderModelOption[]>('/catalog/providers', { zeaCache: 'reload' }),
+          apiRequest<AgentPhoneOption[]>('/phone-numbers'),
+          agentId ? apiRequest<AgentApiData>(`/agents/${agentId}`) : Promise.resolve(null),
+        ]);
+        if (catalogResult.status === 'rejected') throw catalogResult.reason;
+        if (existingResult.status === 'rejected') throw existingResult.reason;
+        const catalog = catalogResult.value;
+        const phones = phonesResult.status === 'fulfilled' ? phonesResult.value : [];
+        const existing = existingResult.value;
+        if (stopped) return;
+        setModels(catalog); setPhoneNumbers(phones.filter((phone) => phone.status === 'active'));
+        if (phonesResult.status === 'rejected') setError('Models loaded, but assigned phone numbers could not be loaded.');
+        if (existing) applyApiAgent(existing);
+        else {
+          const stt = catalog.find((model) => model.providerType === 'stt');
+          const llm = catalog.find((model) => model.providerType === 'llm');
+          const tts = catalog.find((model) => model.providerType === 'tts');
+          setSttModelId(stt?.id ?? ''); setLlmModelId(llm?.id ?? ''); setTtsModelId(tts?.id ?? '');
+          setPhoneNumberId(phones.find((phone) => phone.status === 'active')?.id ?? '');
+          setAgent((current) => ({ ...current,
+            sttProvider: stt?.providerName ?? '', sttModel: stt?.displayName ?? '',
+            llmProvider: llm?.providerName ?? '', llmModel: llm?.displayName ?? '',
+            ttsProvider: tts?.providerName ?? '', ttsModel: tts?.displayName ?? '',
+            voiceId: tts ? String(tts.settings.voiceId ?? tts.settings.voice_id ?? tts.settings.voice ?? tts.modelKey) : '',
+          }));
+        }
+      } catch (requestError) { if (!stopped) setError(requestError instanceof Error ? requestError.message : 'Agent configuration could not be loaded'); }
+      finally { if (!stopped) setLoading(false); }
+    };
+    void load(); return () => { stopped = true; };
+  }, [agentId]);
+
   // Tools state
-  const [tools, setTools] = useState([
-    { name: 'Calendar Booking', type: 'Cal.com', status: 'Active', description: 'Allows Sarah to book appointments directly into Google Calendars' },
-    { name: 'CRM Syncer', type: 'Hubspot', status: 'Active', description: 'Creates a contact record upon call completion' },
-    { name: 'SMS Followup Sender', type: 'Twilio SMS', status: 'Inactive', description: 'Sends resource SMS if lead requests it' }
-  ]);
+  const [tools, setTools] = useState<Array<{ id: string; name: string; type: string; status: string; description: string | null }>>([]);
 
   // Knowledge base state
-  const [knowledgeDocuments, setKnowledgeDocuments] = useState([
-    { name: 'Company Pricing PDF.pdf', size: '2.4 MB', uploaded: '2026-07-01' },
-    { name: 'Faq_Outline_US_Market.txt', size: '420 KB', uploaded: '2026-06-18' }
-  ]);
+  const [knowledgeDocuments, setKnowledgeDocuments] = useState<Array<{ id: string; name: string; size: string; uploaded: string }>>([]);
   const [newDocName, setNewDocName] = useState('');
   const [newToolName, setNewToolName] = useState('');
   const [newToolType, setNewToolType] = useState('Webhook API');
 
+  useEffect(() => {
+    if (!agentId) { setTools([]); setKnowledgeDocuments([]); return; }
+    Promise.all([
+      apiRequest<Array<{ id: string; name: string; type: string; status: string; description: string | null }>>(`/agents/${agentId}/tools`),
+      apiRequest<Array<{ id: string; displayName: string; sizeBytes: number; createdAt: string }>>(`/agents/${agentId}/knowledge-documents`),
+    ]).then(([toolData, documentData]) => {
+      setTools(toolData);
+      setKnowledgeDocuments(documentData.map((document) => ({ id: document.id, name: document.displayName,
+        size: `${Math.max(1, Math.round(document.sizeBytes / 1024))} KB`, uploaded: new Date(document.createdAt).toLocaleDateString() })));
+    }).catch((requestError) => setError(requestError instanceof Error ? requestError.message : 'Agent resources could not be loaded'));
+  }, [agentId]);
+
+  const saveAgent = async () => {
+    if (isReadOnly || saving) return;
+    if (!sttModelId || !llmModelId || !ttsModelId) { setError('Connected STT, LLM and TTS models are required.'); return; }
+    setSaving(true); setError('');
+    try {
+      const payload = {
+        name: agent.name, description: agent.description || null, goal: agent.goal || null,
+        language: agent.language || 'English (US)', status: agent.status,
+        phoneNumberId: phoneNumberId || null, sttModelId, llmModelId, ttsModelId,
+        voiceId: agent.voiceId, prompt: agent.prompt, welcomeMessage: agent.welcomeMessage || null,
+        temperature: agent.temperature, interruptionSensitivity: agent.interruptionSensitivity,
+        silenceTimeoutMs: agent.silenceTimeout, inactivityTimeoutSeconds: agent.inactivityTimeout ?? 5,
+        settings: { ...agent },
+      };
+      const saved = await apiRequest<AgentApiData>(agentId ? `/agents/${agentId}` : '/agents', {
+        method: agentId ? 'PUT' : 'POST', body: JSON.stringify(payload),
+      });
+      applyApiAgent(saved);
+      onSave({ ...agent, id: saved.id, name: saved.name, status: saved.status, updatedAt: saved.updatedAt });
+      setSuccessMsg('Agent settings saved to the company database successfully.');
+      setTimeout(() => setSuccessMsg(null), 3000);
+    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : 'Agent could not be saved'); }
+    finally { setSaving(false); }
+  };
+
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
-    if (isReadOnly) return;
-    onSave({
-      ...agent,
-      updatedAt: new Date().toISOString().split('T')[0]
-    });
-    setSuccessMsg('Agent settings saved and compiled successfully!');
-    setTimeout(() => setSuccessMsg(null), 3000);
+    void saveAgent();
   };
 
-  const addDocument = () => {
-    if (!newDocName.trim()) return;
-    setKnowledgeDocuments([...knowledgeDocuments, {
-      name: newDocName,
-      size: '1.2 MB',
-      uploaded: new Date().toISOString().split('T')[0]
-    }]);
-    setNewDocName('');
+  const addDocument = async () => {
+    if (!newDocName.trim() || !agentId) return;
+    try {
+      const extension = newDocName.toLowerCase().split('.').pop();
+      const mimeType = extension === 'pdf' ? 'application/pdf' : extension === 'docx'
+        ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : 'text/plain';
+      const created = await apiRequest<{ id: string; displayName: string; sizeBytes: number; createdAt: string }>(`/agents/${agentId}/knowledge-documents`, {
+        method: 'POST', body: JSON.stringify({ displayName: newDocName, fileName: newDocName, mimeType, sizeBytes: 1, metadata: {} }),
+      });
+      setKnowledgeDocuments((current) => [{ id: created.id, name: created.displayName, size: 'Pending upload', uploaded: new Date(created.createdAt).toLocaleDateString() }, ...current]);
+      setNewDocName('');
+    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : 'Knowledge document could not be registered'); }
   };
 
-  const addTool = () => {
-    if (!newToolName.trim()) return;
-    setTools([...tools, {
-      name: newToolName,
-      type: newToolType,
-      status: 'Active',
-      description: 'Custom integrated developer tool connector'
-    }]);
-    setNewToolName('');
+  const addTool = async () => {
+    if (!newToolName.trim() || !agentId) return;
+    try {
+      const typeMap: Record<string, string> = { 'Webhook API': 'webhook_api', 'Cal.com': 'calcom', Hubspot: 'hubspot', Salesforce: 'salesforce' };
+      const created = await apiRequest<{ id: string; name: string; type: string; status: string; description: string | null }>(`/agents/${agentId}/tools`, {
+        method: 'POST', body: JSON.stringify({ name: newToolName, type: typeMap[newToolType] ?? 'webhook_api', status: 'active', description: 'Custom integrated developer tool connector', configuration: {} }),
+      });
+      setTools((current) => [...current, created]); setNewToolName('');
+    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : 'Agent tool could not be created'); }
   };
 
-  const removeTool = (index: number) => {
-    setTools(tools.filter((_, i) => i !== index));
+  const removeTool = async (id: string) => {
+    if (!agentId) return;
+    try { await apiRequest(`/agents/${agentId}/tools/${id}`, { method: 'DELETE' }); setTools((current) => current.filter((tool) => tool.id !== id)); }
+    catch (requestError) { setError(requestError instanceof Error ? requestError.message : 'Agent tool could not be deleted'); }
+  };
+
+  const removeDocument = async (id: string) => {
+    if (!agentId) return;
+    try { await apiRequest(`/agents/${agentId}/knowledge-documents/${id}`, { method: 'DELETE' }); setKnowledgeDocuments((current) => current.filter((document) => document.id !== id)); }
+    catch (requestError) { setError(requestError instanceof Error ? requestError.message : 'Knowledge document could not be deleted'); }
   };
 
   const tabsList = [
@@ -189,6 +304,36 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     { id: 'knowledge', name: 'Knowledge', icon: Database },
     { id: 'analytics', name: 'Analytics', icon: BarChart2 }
   ] as const;
+  const sttModels = models.filter((model) => model.providerType === 'stt');
+  const llmModels = models.filter((model) => model.providerType === 'llm');
+  const ttsModels = models.filter((model) => model.providerType === 'tts');
+  const selectedSttModel = sttModels.find((model) => model.id === sttModelId);
+  const selectedLlmModel = llmModels.find((model) => model.id === llmModelId);
+  const selectedTtsModel = ttsModels.find((model) => model.id === ttsModelId);
+  const modelVoiceId = (model: ProviderModelOption) => {
+    const configured = model.settings.voiceId ?? model.settings.voice_id ?? model.settings.voice;
+    return typeof configured === 'string' && configured.trim() ? configured : model.modelKey;
+  };
+  const renderModelParameters = (model: ProviderModelOption | undefined) => {
+    if (!model) return <div className="mt-5 rounded-xl border border-dashed border-slate-200 p-4 text-xs font-semibold text-slate-400">Select a Super Admin model to view its configuration.</div>;
+    const entries = [...Object.entries(model.settings), ...Object.entries(model.capabilities).map(([key, value]) => [`capability.${key}`, value] as const)];
+    return (
+      <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div><span className="block text-[10px] font-black uppercase tracking-wider text-slate-500">Super Admin Model Parameters</span><span className="text-[10px] font-semibold text-slate-400">Read-only for company developers</span></div>
+          <span className="rounded-md border border-indigo-100 bg-indigo-50 px-2 py-1 font-mono text-[10px] font-bold text-indigo-700">{model.modelKey}</span>
+        </div>
+        {entries.length ? <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">{entries.map(([key, value]) => (
+          <div key={key} className="min-w-0 rounded-lg border border-slate-200 bg-white p-3">
+            <span className="block truncate text-[9px] font-black uppercase tracking-wider text-slate-400" title={key}>{key}</span>
+            <span className="mt-1 block break-words font-mono text-[11px] font-semibold text-slate-700">{typeof value === 'string' ? value : JSON.stringify(value)}</span>
+          </div>
+        ))}</div> : <div className="rounded-lg border border-dashed border-slate-200 bg-white p-4 text-center text-[10px] font-semibold text-slate-400">No model parameters were configured by Super Admin.</div>}
+      </div>
+    );
+  };
+
+  if (loading) return <div className="h-96 animate-pulse rounded-2xl border border-slate-200 bg-white p-8"><div className="h-16 rounded-xl bg-slate-200" /><div className="mt-8 h-56 rounded-xl bg-slate-100" /></div>;
 
   return (
     <form onSubmit={handleSave} className="bg-white rounded-2xl shadow-xs border border-slate-100 overflow-hidden">
@@ -212,10 +357,11 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
           {!isReadOnly && (
             <button
               type="submit"
+              disabled={saving}
               className="px-4 py-2 bg-white text-violet-700 hover:bg-slate-50 rounded-xl text-xs font-bold transition shadow-md flex items-center space-x-1.5"
             >
               <Save className="w-3.5 h-3.5" />
-              <span>Save Changes</span>
+              <span>{saving ? 'Saving...' : 'Save Changes'}</span>
             </button>
           )}
         </div>
@@ -234,6 +380,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
           <span>{successMsg}</span>
         </div>
       )}
+      {error && <div className="m-6 rounded-xl border border-red-200 bg-red-50 p-4 text-xs font-semibold text-red-700">{error}</div>}
 
       {/* Horizontal Scrollable Tabs Strip */}
       <div className="border-b border-slate-100 bg-slate-50/50 p-4">
@@ -263,18 +410,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
             </div>
           </div>
 
-          {/* Play Button on the right */}
-          <button
-            type="button"
-            onClick={() => {
-              setSuccessMsg(`Simulating testing channel: Dialing voice agent "${agent.name || 'New Custom Voice Agent'}"...`);
-              setTimeout(() => setSuccessMsg(null), 3000);
-            }}
-            className="w-10 h-10 rounded-full bg-gradient-to-r from-pink-500 to-violet-500 hover:from-pink-600 hover:to-violet-600 text-white flex items-center justify-center shadow-md hover:shadow-lg transition flex-shrink-0 cursor-pointer"
-            title="Test Voice Agent"
-          >
-            <Play className="w-4 h-4 fill-white translate-x-0.5" />
-          </button>
         </div>
       </div>
 
@@ -356,7 +491,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                 <h3 className="text-base font-extrabold text-slate-800 tracking-tight">Configuration</h3>
               </div>
               
-              <div className="p-6">
+              <div className="p-6 space-y-5">
                 <div>
                   <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">
                     Language <span className="text-red-500">*</span>
@@ -382,6 +517,14 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       <ChevronDown className="w-4 h-4" />
                     </div>
                   </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">Assigned Phone Number</label>
+                  <select value={phoneNumberId} disabled={isReadOnly} onChange={(event) => setPhoneNumberId(event.target.value)} className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 outline-none">
+                    <option value="">No inbound number</option>
+                    {phoneNumbers.map((phone) => <option key={phone.id} value={phone.id}>{phone.number}</option>)}
+                  </select>
+                  <p className="mt-1 text-[10px] text-slate-400">Only numbers assigned to this company are available.</p>
                 </div>
               </div>
             </div>
@@ -413,15 +556,10 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     <div className="relative">
                       <select
                         value={agent.sttProvider}
-                        disabled={isReadOnly}
-                        onChange={(e) => setAgent({ ...agent, sttProvider: e.target.value })}
+                        disabled
                         className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
                       >
-                        <option value="Sarvam">Sarvam</option>
-                        <option value="Deepgram Nova-2">Deepgram</option>
-                        <option value="Google Cloud Speech v2">Google</option>
-                        <option value="OpenAI Whisper Large v3">OpenAI</option>
-                        <option value="AssemblyAI Streaming">AssemblyAI</option>
+                        <option value={selectedSttModel?.providerName ?? agent.sttProvider}>{(selectedSttModel?.providerName ?? agent.sttProvider) || 'Select a model below'}</option>
                       </select>
                       <div className="absolute inset-y-0 right-0 flex items-center pr-4 pointer-events-none text-slate-400">
                         <ChevronDown className="w-4 h-4" />
@@ -436,15 +574,13 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     </label>
                     <div className="relative">
                       <select
-                        value={agent.sttModel || 'saaras:v3'}
+                        value={sttModelId}
                         disabled={isReadOnly}
-                        onChange={(e) => setAgent({ ...agent, sttModel: e.target.value })}
+                        onChange={(e) => { const model = sttModels.find((item) => item.id === e.target.value); setSttModelId(e.target.value); if (model) setAgent({ ...agent, sttProvider: model.providerName, sttModel: model.displayName }); }}
                         className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
                       >
-                        <option value="saaras:v3">saaras:v3</option>
-                        <option value="saaras:v2">saaras:v2</option>
-                        <option value="nova-2-general">nova-2-general</option>
-                        <option value="whisper-1">whisper-1</option>
+                        <option value="" disabled>Select an STT model</option>
+                        {sttModels.map((model) => <option key={model.id} value={model.id}>{model.displayName} — {model.providerName}</option>)}
                       </select>
                       <div className="absolute inset-y-0 right-0 flex items-center pr-4 pointer-events-none text-slate-400">
                         <ChevronDown className="w-4 h-4" />
@@ -453,109 +589,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   </div>
                 </div>
 
-                {/* Performance Tuning section */}
-                <div className="mt-8">
-                  <div className="flex items-center space-x-2 text-[#ec4899] mb-4">
-                    <Sliders className="w-4 h-4" />
-                    <span className="text-xs font-black uppercase tracking-wider">Performance Tuning</span>
-                  </div>
-
-                  {/* 5-Column Grid Card styling from image */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-                    {/* Mode card */}
-                    <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-2xs hover:border-pink-200/50 transition">
-                      <span className="block text-[10px] font-bold text-slate-400 mb-1.5">Mode</span>
-                      <div className="relative">
-                        <select
-                          value={agent.sttMode || 'verbatim'}
-                          disabled={isReadOnly}
-                          onChange={(e) => setAgent({ ...agent, sttMode: e.target.value })}
-                          className="w-full bg-transparent text-xs font-bold text-slate-800 outline-none cursor-pointer appearance-none pr-4"
-                        >
-                          <option value="verbatim">verbatim</option>
-                          <option value="standard">standard</option>
-                          <option value="fast">fast</option>
-                        </select>
-                        <div className="absolute inset-y-0 right-0 flex items-center pointer-events-none text-slate-400">
-                          <ChevronDown className="w-3 h-3" />
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Language card */}
-                    <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-2xs hover:border-pink-200/50 transition">
-                      <span className="block text-[10px] font-bold text-slate-400 mb-1.5">Language</span>
-                      <div className="relative">
-                        <select
-                          value={agent.sttLanguage || 'tamil (india) (ta-IN)'}
-                          disabled={isReadOnly}
-                          onChange={(e) => setAgent({ ...agent, sttLanguage: e.target.value })}
-                          className="w-full bg-transparent text-xs font-bold text-slate-800 outline-none cursor-pointer appearance-none pr-4"
-                        >
-                          <option value="tamil (india) (ta-IN)">tamil (india) (ta-IN)</option>
-                          <option value="english (us) (en-US)">english (us) (en-US)</option>
-                          <option value="hindi (india) (hi-IN)">hindi (india) (hi-IN)</option>
-                          <option value="telugu (india) (te-IN)">telugu (india) (te-IN)</option>
-                        </select>
-                        <div className="absolute inset-y-0 right-0 flex items-center pointer-events-none text-slate-400">
-                          <ChevronDown className="w-3 h-3" />
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Punctuate card */}
-                    <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-2xs hover:border-pink-200/50 transition">
-                      <span className="block text-[10px] font-bold text-slate-400 mb-1.5">Punctuate</span>
-                      <div className="relative">
-                        <select
-                          value={agent.sttPunctuate ? 'true' : 'false'}
-                          disabled={isReadOnly}
-                          onChange={(e) => setAgent({ ...agent, sttPunctuate: e.target.value === 'true' })}
-                          className="w-full bg-transparent text-xs font-bold text-slate-800 outline-none cursor-pointer appearance-none pr-4"
-                        >
-                          <option value="true">true</option>
-                          <option value="false">false</option>
-                        </select>
-                        <div className="absolute inset-y-0 right-0 flex items-center pointer-events-none text-slate-400">
-                          <ChevronDown className="w-3 h-3" />
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Smart Format card */}
-                    <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-2xs hover:border-pink-200/50 transition">
-                      <span className="block text-[10px] font-bold text-slate-400 mb-1.5">Smart Format</span>
-                      <div className="relative">
-                        <select
-                          value={agent.sttSmartFormat ? 'true' : 'false'}
-                          disabled={isReadOnly}
-                          onChange={(e) => setAgent({ ...agent, sttSmartFormat: e.target.value === 'true' })}
-                          className="w-full bg-transparent text-xs font-bold text-slate-800 outline-none cursor-pointer appearance-none pr-4"
-                        >
-                          <option value="true">true</option>
-                          <option value="false">false</option>
-                        </select>
-                        <div className="absolute inset-y-0 right-0 flex items-center pointer-events-none text-slate-400">
-                          <ChevronDown className="w-3 h-3" />
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Stt Price Min card */}
-                    <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-2xs hover:border-pink-200/50 transition">
-                      <span className="block text-[10px] font-bold text-slate-400 mb-1">Stt Price Min</span>
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        value={agent.sttPriceMin !== undefined ? agent.sttPriceMin : 0.05}
-                        disabled={isReadOnly}
-                        onChange={(e) => setAgent({ ...agent, sttPriceMin: parseFloat(e.target.value) || 0 })}
-                        className="w-full bg-transparent text-xs font-bold text-slate-800 outline-none border-none p-0 focus:ring-0"
-                      />
-                    </div>
-                  </div>
-                </div>
+                {renderModelParameters(selectedSttModel)}
               </div>
             </div>
 
@@ -672,11 +706,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                 <button
                   type="button"
                   disabled={isReadOnly}
-                  onClick={() => {
-                    onSave(agent);
-                    setSuccessMsg("Successfully saved AI model configuration!");
-                    setTimeout(() => setSuccessMsg(null), 3000);
-                  }}
+                  onClick={() => void saveAgent()}
                   className="flex items-center space-x-1.5 px-4 py-2 border border-[#ec4899] text-[#ec4899] hover:bg-pink-50 rounded-xl text-xs font-black transition cursor-pointer self-start sm:self-auto shadow-2xs"
                 >
                   <Save className="w-3.5 h-3.5" />
@@ -694,15 +724,11 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     </label>
                     <div className="relative">
                       <select
-                        value={agent.llmProvider || 'Gemini'}
-                        disabled={isReadOnly}
-                        onChange={(e) => setAgent({ ...agent, llmProvider: e.target.value })}
+                        value={agent.llmProvider || ''}
+                        disabled
                         className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
                       >
-                        <option value="Gemini">Gemini</option>
-                        <option value="OpenAI">OpenAI</option>
-                        <option value="Anthropic">Anthropic</option>
-                        <option value="Groq">Groq</option>
+                        <option value={selectedLlmModel?.providerName ?? agent.llmProvider}>{(selectedLlmModel?.providerName ?? agent.llmProvider) || 'Select a model below'}</option>
                       </select>
                       <div className="absolute inset-y-0 right-0 flex items-center pr-4 pointer-events-none text-slate-400">
                         <ChevronDown className="w-4 h-4" />
@@ -717,15 +743,13 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     </label>
                     <div className="relative">
                       <select
-                        value={agent.llmModel || 'gemini-2.5-flash'}
+                        value={llmModelId}
                         disabled={isReadOnly}
-                        onChange={(e) => setAgent({ ...agent, llmModel: e.target.value })}
+                        onChange={(e) => { const model = llmModels.find((item) => item.id === e.target.value); setLlmModelId(e.target.value); if (model) setAgent({ ...agent, llmProvider: model.providerName, llmModel: model.displayName }); }}
                         className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
                       >
-                        <option value="gemini-2.5-flash">gemini-2.5-flash</option>
-                        <option value="gemini-1.5-flash">gemini-1.5-flash</option>
-                        <option value="gpt-4o">gpt-4o</option>
-                        <option value="claude-3-5-sonnet">claude-3-5-sonnet</option>
+                        <option value="" disabled>Select an LLM model</option>
+                        {llmModels.map((model) => <option key={model.id} value={model.id}>{model.displayName} — {model.providerName}</option>)}
                       </select>
                       <div className="absolute inset-y-0 right-0 flex items-center pr-4 pointer-events-none text-slate-400">
                         <ChevronDown className="w-4 h-4" />
@@ -797,6 +821,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   </div>
                 </div>
               </div>
+              <div className="px-6 pb-6">{renderModelParameters(selectedLlmModel)}</div>
             </div>
 
             {/* Welcome Message Section */}
@@ -916,11 +941,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                 <button
                   type="button"
                   disabled={isReadOnly}
-                  onClick={() => {
-                    onSave(agent);
-                    setSuccessMsg("Successfully saved voice configuration!");
-                    setTimeout(() => setSuccessMsg(null), 3000);
-                  }}
+                  onClick={() => void saveAgent()}
                   className="flex items-center space-x-1.5 px-4 py-2 border border-[#ec4899] text-[#ec4899] hover:bg-pink-50 rounded-xl text-xs font-black transition cursor-pointer self-start sm:self-auto shadow-2xs"
                 >
                   <Save className="w-3.5 h-3.5" />
@@ -937,16 +958,11 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     </label>
                     <div className="relative">
                       <select
-                        value={agent.ttsProvider || 'ElevenLabs Premium'}
-                        disabled={isReadOnly}
-                        onChange={(e) => setAgent({ ...agent, ttsProvider: e.target.value })}
+                        value={agent.ttsProvider || ''}
+                        disabled
                         className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
                       >
-                        <option value="ElevenLabs Premium">ElevenLabs Premium</option>
-                        <option value="ElevenLabs Multilingual v2">ElevenLabs Multilingual v2</option>
-                        <option value="PlayHT Hyper-Realistic Male">PlayHT</option>
-                        <option value="Cartesia Sonic">Cartesia Sonic</option>
-                        <option value="OpenAI Audio TTS">OpenAI Voice TTS</option>
+                        <option value={selectedTtsModel?.providerName ?? agent.ttsProvider}>{(selectedTtsModel?.providerName ?? agent.ttsProvider) || 'Select a model below'}</option>
                       </select>
                       <div className="absolute inset-y-0 right-0 flex items-center pr-4 pointer-events-none text-slate-400">
                         <ChevronDown className="w-4 h-4" />
@@ -961,14 +977,13 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     </label>
                     <div className="relative">
                       <select
-                        value={agent.ttsModel || 'eleven_flash_v2_5'}
+                        value={ttsModelId}
                         disabled={isReadOnly}
-                        onChange={(e) => setAgent({ ...agent, ttsModel: e.target.value })}
+                        onChange={(e) => { const model = ttsModels.find((item) => item.id === e.target.value); setTtsModelId(e.target.value); if (model) setAgent({ ...agent, ttsProvider: model.providerName, ttsModel: model.displayName, voiceId: modelVoiceId(model) }); }}
                         className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
                       >
-                        <option value="eleven_flash_v2_5">eleven_flash_v2_5</option>
-                        <option value="eleven_turbo_v2">eleven_turbo_v2</option>
-                        <option value="eleven_multilingual_v2">eleven_multilingual_v2</option>
+                        <option value="" disabled>Select a TTS model</option>
+                        {ttsModels.map((model) => <option key={model.id} value={model.id}>{model.displayName} — {model.providerName}</option>)}
                       </select>
                       <div className="absolute inset-y-0 right-0 flex items-center pr-4 pointer-events-none text-slate-400">
                         <ChevronDown className="w-4 h-4" />
@@ -976,30 +991,18 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     </div>
                   </div>
 
-                  {/* Voice Dropdown */}
+                  {/* Voice configured by Super Admin */}
                   <div>
                     <label className="block text-[11px] font-black text-slate-500 mb-1.5 uppercase tracking-wider flex items-center">
-                      VOICE <span className="text-red-500 ml-0.5">*</span>
+                      CONFIGURED VOICE
                     </label>
-                    <div className="relative">
-                      <select
-                        value={agent.voiceId || 'monika Shogam English'}
-                        disabled={isReadOnly}
-                        onChange={(e) => setAgent({ ...agent, voiceId: e.target.value })}
-                        className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
-                      >
-                        <option value="monika Shogam English">monika Shogam English</option>
-                        <option value="elevenlabs-alloy-warm">Alloy - Calm Warm Female</option>
-                        <option value="elevenlabs-adam-deep">Adam - Authority Professional Male</option>
-                        <option value="elevenlabs-rachel-playful">Rachel - Energetic Playful Female</option>
-                        <option value="elevenlabs-charlie-tech">Charlie - Clear Technical Male</option>
-                      </select>
-                      <div className="absolute inset-y-0 right-0 flex items-center pr-4 pointer-events-none text-slate-400">
-                        <ChevronDown className="w-4 h-4" />
-                      </div>
-                    </div>
+                    <input value={selectedTtsModel ? modelVoiceId(selectedTtsModel) : ''} readOnly
+                      placeholder="Select a TTS model"
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-xs font-semibold text-slate-700 outline-none" />
                   </div>
                 </div>
+
+                {renderModelParameters(selectedTtsModel)}
 
                 {/* Pronunciation / Punctuation Groups */}
                 <div>
@@ -1206,11 +1209,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                 <button
                   type="button"
                   disabled={isReadOnly}
-                  onClick={() => {
-                    onSave(agent);
-                    setSuccessMsg("Successfully saved PreCall configuration!");
-                    setTimeout(() => setSuccessMsg(null), 3000);
-                  }}
+                  onClick={() => void saveAgent()}
                   className="flex items-center space-x-1.5 px-4 py-2 border border-[#ec4899] text-[#ec4899] hover:bg-pink-50 rounded-xl text-xs font-black transition cursor-pointer self-start sm:self-auto shadow-2xs"
                 >
                   <Save className="w-3.5 h-3.5" />
@@ -1459,11 +1458,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                 <button
                   type="button"
                   disabled={isReadOnly}
-                  onClick={() => {
-                    onSave(agent);
-                    setSuccessMsg("Successfully saved Post Call configuration!");
-                    setTimeout(() => setSuccessMsg(null), 3000);
-                  }}
+                  onClick={() => void saveAgent()}
                   className="flex items-center space-x-1.5 px-4 py-2 border border-[#ec4899] text-[#ec4899] hover:bg-pink-50 rounded-xl text-xs font-black transition cursor-pointer self-start sm:self-auto shadow-2xs"
                 >
                   <Save className="w-3.5 h-3.5" />
@@ -1800,8 +1795,8 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
               {/* Active Tools List */}
               <div className="lg:col-span-2 space-y-3">
                 <span className="text-xs font-bold uppercase tracking-wider text-slate-400 block mb-1">Assigned Model Tools ({tools.length})</span>
-                {tools.map((t, idx) => (
-                  <div key={idx} className="bg-white border border-slate-150 rounded-xl p-4 flex justify-between items-center shadow-xs">
+                {tools.map((t) => (
+                  <div key={t.id} className="bg-white border border-slate-150 rounded-xl p-4 flex justify-between items-center shadow-xs">
                     <div>
                       <div className="flex items-center space-x-2">
                         <span className="text-xs font-bold text-slate-800">{t.name}</span>
@@ -1814,7 +1809,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     {!isReadOnly && (
                       <button
                         type="button"
-                        onClick={() => removeTool(idx)}
+                        onClick={() => void removeTool(t.id)}
                         className="text-slate-400 hover:text-red-500 p-1.5 rounded-lg hover:bg-red-50 transition"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -1868,8 +1863,8 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
               {/* Active documents list */}
               <div className="lg:col-span-2 space-y-3">
                 <span className="text-xs font-bold uppercase tracking-wider text-slate-400 block mb-1">Attached Corpora ({knowledgeDocuments.length})</span>
-                {knowledgeDocuments.map((doc, idx) => (
-                  <div key={idx} className="bg-white border border-slate-150 rounded-xl p-4 flex justify-between items-center shadow-xs">
+                {knowledgeDocuments.map((doc) => (
+                  <div key={doc.id} className="bg-white border border-slate-150 rounded-xl p-4 flex justify-between items-center shadow-xs">
                     <div className="flex items-center space-x-3">
                       <div className="w-8 h-8 bg-violet-50 text-violet-600 rounded-lg flex items-center justify-center font-bold text-[10px]">
                         TXT
@@ -1883,7 +1878,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     {!isReadOnly && (
                       <button
                         type="button"
-                        onClick={() => setKnowledgeDocuments(knowledgeDocuments.filter((_, i) => i !== idx))}
+                        onClick={() => void removeDocument(doc.id)}
                         className="text-slate-400 hover:text-red-500 p-1.5 rounded-lg hover:bg-red-50 transition"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -1905,28 +1900,23 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
                 <span className="text-xs text-slate-400 font-bold uppercase block">Total Placed Calls</span>
                 <span className="text-2xl font-black text-slate-800 block mt-1">{agent.totalCalls.toLocaleString()}</span>
-                <span className="text-[10px] text-emerald-600 font-semibold block mt-0.5">↑ 14% this month</span>
+                <span className="text-[10px] text-slate-500 font-semibold block mt-0.5">Stored call sessions</span>
               </div>
 
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
                 <span className="text-xs text-slate-400 font-bold uppercase block">Avg Call Duration</span>
                 <span className="text-2xl font-black text-slate-800 block mt-1">{agent.avgDuration} seconds</span>
-                <span className="text-[10px] text-slate-500 font-medium block mt-0.5">Optimal: 120-180s</span>
+                <span className="text-[10px] text-slate-500 font-medium block mt-0.5">Average completed duration</span>
               </div>
 
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
                 <span className="text-xs text-slate-400 font-bold uppercase block">Conversion Success Rate</span>
                 <span className="text-2xl font-black text-slate-800 block mt-1">{agent.successRate}%</span>
-                <span className="text-[10px] text-violet-600 font-semibold block mt-0.5">Top 5% for sales models</span>
+                <span className="text-[10px] text-violet-600 font-semibold block mt-0.5">Completed-call percentage</span>
               </div>
             </div>
 
-            <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 space-y-3">
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-500 block">AI Evaluation Logs</span>
-              <p className="text-[11px] text-slate-600 leading-relaxed font-semibold">
-                Evaluator assessment: "Sarah shows very strong responsiveness with under 420ms turn latency. Her conversion rate is high, though we detected a minor recurrence of repetition when users ask multiple complex pricing questions consecutively. Knowledge RAG injection is working nicely."
-              </p>
-            </div>
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 text-[11px] font-semibold text-slate-500">Analytics are calculated from this agent's tenant-scoped call sessions. Evaluation summaries will appear after the evaluation pipeline stores results.</div>
           </div>
         )}
       </div>

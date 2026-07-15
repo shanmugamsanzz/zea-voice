@@ -23,11 +23,11 @@ const CustomTooltip = ({ active, payload, label }: any) => {
   return null;
 };
 
-export function CallVolumeChart() {
+export function CallVolumeChart({ data = CALL_VOLUME_CHART_DATA }: { data?: Array<{ name: string; inbound: number; outbound: number }> }) {
   return (
     <div className="w-full h-80">
       <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={CALL_VOLUME_CHART_DATA} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+        <AreaChart data={data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
           <defs>
             <linearGradient id="colorInbound" x1="0" y1="0" x2="0" y2="1">
               <stop offset="5%" stopColor="#7C3AED" stopOpacity={0.2}/>
@@ -51,14 +51,15 @@ export function CallVolumeChart() {
   );
 }
 
-export function OutcomePieChart() {
+export function OutcomePieChart({ data = OUTCOME_DONUT_DATA }: { data?: Array<{ name: string; value: number; color: string }> }) {
+  const total = data.reduce((sum, entry) => sum + entry.value, 0);
   return (
     <div className="w-full h-80 flex flex-col justify-between">
       <div className="h-60 w-full relative">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
             <Pie
-              data={OUTCOME_DONUT_DATA}
+              data={data}
               cx="50%"
               cy="50%"
               innerRadius={65}
@@ -66,7 +67,7 @@ export function OutcomePieChart() {
               paddingAngle={5}
               dataKey="value"
             >
-              {OUTCOME_DONUT_DATA.map((entry, index) => (
+              {data.map((entry, index) => (
                 <Cell key={`cell-${index}`} fill={entry.color} />
               ))}
             </Pie>
@@ -74,15 +75,15 @@ export function OutcomePieChart() {
           </PieChart>
         </ResponsiveContainer>
         <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-          <span className="text-3xl font-bold text-gray-800">100%</span>
-          <span className="text-xs text-gray-400 font-medium">Disposition</span>
+          <span className="text-3xl font-bold text-gray-800">{total.toLocaleString()}</span>
+          <span className="text-xs text-gray-400 font-medium">Calls</span>
         </div>
       </div>
       <div className="grid grid-cols-2 gap-2 text-xs font-sans px-4 mb-2">
-        {OUTCOME_DONUT_DATA.map((entry, idx) => (
+        {data.map((entry, idx) => (
           <div key={idx} className="flex items-center space-x-2">
             <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: entry.color }} />
-            <span className="text-gray-600 truncate">{entry.name} ({entry.value}%)</span>
+            <span className="text-gray-600 truncate">{entry.name} ({entry.value})</span>
           </div>
         ))}
       </div>
@@ -90,17 +91,17 @@ export function OutcomePieChart() {
   );
 }
 
-export function DurationBarChart() {
+export function DurationBarChart({ data = DURATION_BAR_DATA }: { data?: Array<{ range: string; count: number }> }) {
   return (
     <div className="w-full h-80">
       <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={DURATION_BAR_DATA} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+        <BarChart data={data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F3F4F6" />
           <XAxis dataKey="range" stroke="#9CA3AF" fontSize={11} tickLine={false} />
           <YAxis stroke="#9CA3AF" fontSize={11} tickLine={false} />
           <Tooltip content={<CustomTooltip />} />
           <Bar name="Call Count" dataKey="count" fill="#7C3AED" radius={[4, 4, 0, 0]}>
-            {DURATION_BAR_DATA.map((entry, index) => (
+            {data.map((entry, index) => (
               <Cell key={`cell-${index}`} fill={index % 2 === 0 ? '#7C3AED' : '#EC4899'} />
             ))}
           </Bar>

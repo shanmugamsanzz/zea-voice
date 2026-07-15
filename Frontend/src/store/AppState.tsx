@@ -22,6 +22,7 @@ interface AppState {
   setSelectedCampaignId: (id: string | null) => void;
   setSelectedCallId: (id: string | null) => void;
   setTheme: (theme: 'light' | 'dark') => void;
+  setUserEmail: (email: string) => void;
 }
 
 const AppStateContext = createContext<AppState | undefined>(undefined);
@@ -33,7 +34,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(null);
   const [selectedCallId, setSelectedCallId] = useState<string | null>(null);
-  const userEmail = 'jshyperx21@gmail.com';
+  const [userEmail, setUserEmail] = useState('');
   const [theme, setThemeState] = useState<'light' | 'dark'>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('theme');
@@ -90,6 +91,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       setSelectedCampaignId,
       setSelectedCallId,
       setTheme,
+      setUserEmail,
     }}>
       {children}
     </AppStateContext.Provider>

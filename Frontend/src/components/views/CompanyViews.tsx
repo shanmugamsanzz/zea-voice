@@ -3,11 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAppState } from '../../store/AppState';
 import { 
-  MOCK_AGENTS, 
-  MOCK_CAMPAIGNS, 
   COMPLETED_CALL_LOGS, 
   MOCK_PHONE_NUMBERS 
 } from '../../lib/mockData';
@@ -57,15 +55,48 @@ import {
   LayoutGrid
 } from 'lucide-react';
 import { AgentTabs } from '../agent/AgentTabs';
-import { CampaignDialog } from '../campaign/CampaignDialog';
 import { CallVolumeChart, DurationBarChart, OutcomePieChart, LatencyBreakdownChart } from '../charts/DashboardCharts';
+import { apiRequest } from '../../lib/api';
+
+interface CompanyDashboardData {
+  company: { tenantId: string; workspaceId: string; name: string; timezone: string };
+  metrics: {
+    inboundCalls: number; outboundCalls: number; totalCalls: number; activeCalls: number;
+    totalMinutesUsed: number; averageCallDurationSeconds: number; currentMonthCalls: number;
+    totalAgents: number; activeAgents: number; activeCampaigns: number;
+    changes: { totalCallsPercent: number | null; inboundCallsPercent: number | null; outboundCallsPercent: number | null };
+  };
+  resources: {
+    credits: { balance: number; reservedBalance: number; availableBalance: number; currency: string } | null;
+    assignedPhoneNumbers: number; activeTeamMembers: number;
+  };
+  callVolume: Array<{ date: string; inbound: number; outbound: number }>;
+  agents: Array<{
+    id: string; name: string; status: 'active' | 'draft' | 'archived'; prompt: string;
+    voiceId: string; temperature: number; interruptionSensitivity: number; silenceTimeoutMs: number;
+    llmProvider: string; llmModel: string; totalCalls: number; averageDurationSeconds: number;
+    successRate: number; createdAt: string; updatedAt: string;
+  }>;
+  recentActivity: Array<{
+    id: string; agentName: string | null; campaignName: string | null; direction: 'inbound' | 'outbound';
+    status: string; phoneNumber: string; startedAt: string; durationSeconds: number;
+  }>;
+}
+
+interface CompanyAnalyticsData {
+  periodDays: number;
+  summary: { totalCalls: number; completedCalls: number; connectedCalls: number; connectionRate: number; averageDurationSeconds: number; totalMinutes: number };
+  traffic: Array<{ date: string; inbound: number; outbound: number }>;
+  durationDistribution: Array<{ range: string; count: number }>;
+  outcomes: Array<{ name: string; value: number }>;
+  sentiments: Array<{ name: 'positive' | 'neutral' | 'negative' | 'unknown'; value: number; percentage: number }>;
+}
 
 export function CompanyViews() {
   const { view, setView, selectedAgentId, setSelectedAgentId } = useAppState();
-  const [agents, setAgents] = useState<VoiceAgent[]>(MOCK_AGENTS);
-  const [campaigns, setCampaigns] = useState<Campaign[]>(MOCK_CAMPAIGNS);
+  const [agents, setAgents] = useState<VoiceAgent[]>([]);
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [phoneNumbers, setPhoneNumbers] = useState<PhoneNumber[]>(MOCK_PHONE_NUMBERS);
-  const [campaignModalOpen, setCampaignModalOpen] = useState(false);
 
   // Callback to save a voice agent
   const handleSaveAgent = (savedAgent: VoiceAgent) => {
@@ -79,28 +110,15 @@ export function CompanyViews() {
     setView('agents');
   };
 
-  // Callback to schedule a campaign
-  const handleScheduleCampaign = (newCampaign: Campaign) => {
-    setCampaigns([newCampaign, ...campaigns]);
-    setCampaignModalOpen(false);
-  };
-
   switch (view) {
     case 'dashboard':
-      return <CompanyDashboard agents={agents} onEditAgent={(id) => { setSelectedAgentId(id); setView('agents/edit'); }} onAddAgent={() => { setSelectedAgentId(null); setView('agents/create'); }} />;
+      return <CompanyDashboard onEditAgent={(id) => { setSelectedAgentId(id); setView('agents/edit'); }} onAddAgent={() => { setSelectedAgentId(null); setView('agents/create'); }} />;
     case 'analytics':
       return <CompanyAnalytics />;
     case 'campaigns':
-      return (
-        <>
-          <CampaignsListView campaigns={campaigns} setCampaigns={setCampaigns} onOpenModal={() => setCampaignModalOpen(true)} />
-          {campaignModalOpen && (
-            <CampaignDialog onSave={handleScheduleCampaign} onClose={() => setCampaignModalOpen(false)} />
-          )}
-        </>
-      );
+      return <CampaignsListView campaigns={campaigns} setCampaigns={setCampaigns} />;
     case 'agents':
-      return <AgentsListView agents={agents} onEditAgent={(id) => { setSelectedAgentId(id); setView('agents/edit'); }} onAddAgent={() => { setSelectedAgentId(null); setView('agents/create'); }} />;
+      return <AgentsListView agents={agents} setAgents={setAgents} onEditAgent={(id) => { setSelectedAgentId(id); setView('agents/edit'); }} onAddAgent={() => { setSelectedAgentId(null); setView('agents/create'); }} />;
     case 'agents/create':
     case 'agents/edit':
       return <AgentTabs agentId={selectedAgentId} onSave={handleSaveAgent} onCancel={() => { setSelectedAgentId(null); setView('agents'); }} />;
@@ -118,16 +136,41 @@ export function CompanyViews() {
     case 'settings':
       return <CompanySettingsView />;
     default:
-      return <CompanyDashboard agents={agents} onEditAgent={(id) => { setSelectedAgentId(id); setView('agents/edit'); }} onAddAgent={() => { setSelectedAgentId(null); setView('agents/create'); }} />;
+      return <CompanyDashboard onEditAgent={(id) => { setSelectedAgentId(id); setView('agents/edit'); }} onAddAgent={() => { setSelectedAgentId(null); setView('agents/create'); }} />;
   }
 }
 
 /* ==========================================
    1. COMPANY DASHBOARD
    ========================================== */
-function CompanyDashboard({ agents, onEditAgent, onAddAgent }: { agents: VoiceAgent[], onEditAgent: (id: string) => void, onAddAgent: () => void }) {
+function CompanyDashboard({ onEditAgent, onAddAgent }: { onEditAgent: (id: string) => void, onAddAgent: () => void }) {
   const { role, setView } = useAppState();
   const isReadOnly = role === 'USER';
+  const [dashboard, setDashboard] = useState<CompanyDashboardData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true); setError('');
+    apiRequest<CompanyDashboardData>('/dashboard?days=14', { signal: controller.signal })
+      .then(setDashboard)
+      .catch((requestError) => {
+        if (!controller.signal.aborted) setError(requestError instanceof Error ? requestError.message : 'Dashboard data could not be loaded');
+      })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
+  }, []);
+
+  if (loading && !dashboard) return <div className="grid grid-cols-1 gap-6 sm:grid-cols-3">{[1, 2, 3, 4, 5, 6].map((item) => <div key={item} className="h-40 animate-pulse rounded-2xl border border-slate-200 bg-white p-6"><div className="h-3 w-28 rounded bg-slate-200" /><div className="mt-8 h-8 w-16 rounded bg-slate-200" /></div>)}</div>;
+  if (error || !dashboard) return <div className="rounded-xl border border-red-200 bg-red-50 p-6 text-sm font-semibold text-red-700">Unable to load the company dashboard: {error || 'No data was returned'}</div>;
+
+  const { metrics } = dashboard;
+  const changeLabel = (value: number | null) => value === null ? 'New vs last month' : `${value > 0 ? '+' : ''}${value}% vs last month`;
+  const chartData = dashboard.callVolume.map((item) => ({
+    name: new Date(item.date).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' }),
+    inbound: item.inbound, outbound: item.outbound,
+  }));
 
   return (
     <div className="space-y-6">
@@ -142,9 +185,9 @@ function CompanyDashboard({ agents, onEditAgent, onAddAgent }: { agents: VoiceAg
             </div>
           </div>
           <div className="mt-4">
-            <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight">90</h3>
+            <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight">{metrics.inboundCalls.toLocaleString()}</h3>
             <div className="flex items-center space-x-1.5 mt-2.5">
-              <span className="text-[10px] font-extrabold bg-[#F0FDF4] text-[#16A34A] border border-[#DCFCE7] px-2.5 py-0.5 rounded-full">+0% vs last month</span>
+              <span className="text-[10px] font-extrabold bg-[#F0FDF4] text-[#16A34A] border border-[#DCFCE7] px-2.5 py-0.5 rounded-full">{changeLabel(metrics.changes.inboundCallsPercent)}</span>
             </div>
           </div>
         </div>
@@ -158,9 +201,9 @@ function CompanyDashboard({ agents, onEditAgent, onAddAgent }: { agents: VoiceAg
             </div>
           </div>
           <div className="mt-4">
-            <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight">78</h3>
+            <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight">{metrics.outboundCalls.toLocaleString()}</h3>
             <div className="flex items-center space-x-1.5 mt-2.5">
-              <span className="text-[10px] font-extrabold bg-[#F0FDF4] text-[#16A34A] border border-[#DCFCE7] px-2.5 py-0.5 rounded-full">+0% vs last month</span>
+              <span className="text-[10px] font-extrabold bg-[#F0FDF4] text-[#16A34A] border border-[#DCFCE7] px-2.5 py-0.5 rounded-full">{changeLabel(metrics.changes.outboundCallsPercent)}</span>
             </div>
           </div>
         </div>
@@ -174,8 +217,8 @@ function CompanyDashboard({ agents, onEditAgent, onAddAgent }: { agents: VoiceAg
             </div>
           </div>
           <div className="mt-4">
-            <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight">{agents.length}</h3>
-            <p className="text-[10px] font-bold text-slate-400 mt-4 uppercase tracking-wider">Configured operators</p>
+            <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight">{metrics.totalAgents.toLocaleString()}</h3>
+            <p className="text-[10px] font-bold text-slate-400 mt-4 uppercase tracking-wider">{metrics.activeAgents} active operators</p>
           </div>
         </div>
       </div>
@@ -191,9 +234,9 @@ function CompanyDashboard({ agents, onEditAgent, onAddAgent }: { agents: VoiceAg
             </div>
           </div>
           <div className="mt-4">
-            <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight">168</h3>
+            <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight">{metrics.totalCalls.toLocaleString()}</h3>
             <div className="flex items-center space-x-1.5 mt-2.5">
-              <span className="text-[10px] font-extrabold bg-[#F0FDF4] text-[#16A34A] border border-[#DCFCE7] px-2.5 py-0.5 rounded-full">+0% vs last month</span>
+              <span className="text-[10px] font-extrabold bg-[#F0FDF4] text-[#16A34A] border border-[#DCFCE7] px-2.5 py-0.5 rounded-full">{changeLabel(metrics.changes.totalCallsPercent)}</span>
             </div>
           </div>
         </div>
@@ -207,8 +250,8 @@ function CompanyDashboard({ agents, onEditAgent, onAddAgent }: { agents: VoiceAg
             </div>
           </div>
           <div className="mt-4">
-            <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight">0</h3>
-            <p className="text-[10px] font-bold text-slate-400 mt-4 uppercase tracking-wider">0 outbound runs scheduled</p>
+            <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight">{metrics.activeCampaigns.toLocaleString()}</h3>
+            <p className="text-[10px] font-bold text-slate-400 mt-4 uppercase tracking-wider">Running or scheduled campaigns</p>
           </div>
         </div>
 
@@ -221,8 +264,8 @@ function CompanyDashboard({ agents, onEditAgent, onAddAgent }: { agents: VoiceAg
             </div>
           </div>
           <div className="mt-4">
-            <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight">93</h3>
-            <p className="text-[10px] font-bold text-slate-400 mt-4 uppercase tracking-wider">Average 33s per call</p>
+            <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight">{metrics.totalMinutesUsed.toLocaleString()}</h3>
+            <p className="text-[10px] font-bold text-slate-400 mt-4 uppercase tracking-wider">Average {metrics.averageCallDurationSeconds}s per call</p>
           </div>
         </div>
       </div>
@@ -247,7 +290,7 @@ function CompanyDashboard({ agents, onEditAgent, onAddAgent }: { agents: VoiceAg
               </div>
             </div>
           </div>
-          <CallVolumeChart />
+          <CallVolumeChart data={chartData} />
         </div>
 
         {/* Recent Activity */}
@@ -255,41 +298,18 @@ function CompanyDashboard({ agents, onEditAgent, onAddAgent }: { agents: VoiceAg
           <div>
             <h4 className="font-bold text-slate-800 text-sm tracking-tight mb-4">Recent Activity</h4>
             <div className="space-y-5 relative pl-4 border-l border-slate-100">
-              {/* Activity 1 */}
-              <div className="relative">
-                <div className="absolute -left-[20.5px] top-1 w-2 h-2 rounded-full bg-blue-500 border-2 border-white ring-4 ring-blue-50" />
-                <div className="text-xs font-bold text-slate-800">
-                  Campaign — <span className="text-slate-500 font-medium">Call to</span> <span className="font-mono">919790071007</span> <span className="text-slate-400 font-normal">(ended)</span>
+              {dashboard.recentActivity.map((activity) => (
+                <div key={activity.id} className="relative">
+                  <div className={`absolute -left-[20.5px] top-1 w-2 h-2 rounded-full border-2 border-white ring-4 ${activity.status === 'completed' ? 'bg-blue-500 ring-blue-50' : 'bg-amber-500 ring-amber-50'}`} />
+                  <div className="text-xs font-bold text-slate-800">
+                    {activity.campaignName || activity.agentName || 'Direct call'} — <span className="text-slate-500 font-medium">{activity.direction === 'outbound' ? 'Call to' : 'Call from'}</span>{' '}
+                    <span className="font-mono">{activity.phoneNumber}</span>{' '}
+                    <span className="text-slate-400 font-normal">({activity.status.replace('_', ' ')})</span>
+                  </div>
+                  <div className="text-[10px] text-slate-400 mt-1 font-semibold">{new Date(activity.startedAt).toLocaleString()}</div>
                 </div>
-                <div className="text-[10px] text-slate-400 mt-1 font-semibold">03:04 PM</div>
-              </div>
-
-              {/* Activity 2 */}
-              <div className="relative">
-                <div className="absolute -left-[20.5px] top-1 w-2 h-2 rounded-full bg-blue-500 border-2 border-white ring-4 ring-blue-50" />
-                <div className="text-xs font-bold text-slate-800">
-                  "MHC" — <span className="text-slate-500 font-medium">Call to</span> <span className="font-mono">919790071007</span> <span className="text-slate-400 font-normal">(ended)</span>
-                </div>
-                <div className="text-[10px] text-slate-400 mt-1 font-semibold">03:03 PM</div>
-              </div>
-
-              {/* Activity 3 */}
-              <div className="relative">
-                <div className="absolute -left-[20.5px] top-1 w-2 h-2 rounded-full bg-amber-500 border-2 border-white ring-4 ring-amber-50" />
-                <div className="text-xs font-bold text-slate-800">
-                  "MHC" — <span className="text-slate-500 font-medium">Call to</span> <span className="font-mono">+919786305649</span> <span className="text-amber-500 font-bold">(Busy)</span>
-                </div>
-                <div className="text-[10px] text-slate-400 mt-1 font-semibold">02:27 PM</div>
-              </div>
-
-              {/* Activity 4 */}
-              <div className="relative">
-                <div className="absolute -left-[20.5px] top-1 w-2 h-2 rounded-full bg-blue-500 border-2 border-white ring-4 ring-blue-50" />
-                <div className="text-xs font-bold text-slate-800">
-                  Campaign — <span className="text-slate-500 font-medium">Call to</span> <span className="font-mono">918428153549</span> <span className="text-slate-400 font-normal">(ended)</span>
-                </div>
-                <div className="text-[10px] text-slate-400 mt-1 font-semibold">11:10 AM</div>
-              </div>
+              ))}
+              {dashboard.recentActivity.length === 0 && <p className="py-8 text-center text-xs font-semibold text-slate-400">No call activity yet.</p>}
             </div>
           </div>
 
@@ -327,7 +347,7 @@ function CompanyDashboard({ agents, onEditAgent, onAddAgent }: { agents: VoiceAg
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {agents.map((agent) => (
+          {dashboard.agents.map((agent) => (
             <div key={agent.id} className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs flex flex-col justify-between hover:shadow-md transition duration-200">
               <div>
                 <div className="flex justify-between items-start">
@@ -357,7 +377,7 @@ function CompanyDashboard({ agents, onEditAgent, onAddAgent }: { agents: VoiceAg
                   </div>
                   <div>
                     <span className="text-[9px] text-slate-400 block font-bold uppercase tracking-wider">Length</span>
-                    <span className="text-slate-700 font-bold font-mono">{agent.avgDuration}s</span>
+                    <span className="text-slate-700 font-bold font-mono">{agent.averageDurationSeconds}s</span>
                   </div>
                 </div>
               </div>
@@ -372,6 +392,11 @@ function CompanyDashboard({ agents, onEditAgent, onAddAgent }: { agents: VoiceAg
               </button>
             </div>
           ))}
+          {dashboard.agents.length === 0 && (
+            <div className="md:col-span-2 lg:col-span-3 rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center text-xs font-semibold text-slate-400">
+              No AI operators have been created for this company yet.
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -512,63 +537,84 @@ function AiInsightsView() {
    2. COMPANY ANALYTICS
    ========================================== */
 function CompanyAnalytics() {
+  const [days, setDays] = useState(30);
+  const [analytics, setAnalytics] = useState<CompanyAnalyticsData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true); setError('');
+    apiRequest<CompanyAnalyticsData>(`/dashboard/analytics?days=${days}`, { signal: controller.signal })
+      .then(setAnalytics)
+      .catch((requestError) => {
+        if (!controller.signal.aborted) setError(requestError instanceof Error ? requestError.message : 'Analytics could not be loaded');
+      })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
+  }, [days]);
+
+  if (loading && !analytics) return <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">{[1, 2, 3, 4].map((item) => <div key={item} className="h-80 animate-pulse rounded-xl border border-slate-200 bg-white p-6"><div className="h-4 w-40 rounded bg-slate-200" /><div className="mt-8 h-56 rounded bg-slate-100" /></div>)}</div>;
+  if (error || !analytics) return <div className="rounded-xl border border-red-200 bg-red-50 p-6 text-sm font-semibold text-red-700">Unable to load company analytics: {error || 'No data was returned'}</div>;
+
+  const traffic = analytics.traffic.map((item) => ({
+    name: new Date(item.date).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' }),
+    inbound: item.inbound, outbound: item.outbound,
+  }));
+  const outcomeColors = ['#7C3AED', '#EC4899', '#3B82F6', '#F59E0B', '#10B981', '#EF4444', '#64748B'];
+  const outcomes = analytics.outcomes.map((item, index) => ({
+    name: item.name.split('_').map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`).join(' '),
+    value: item.value, color: outcomeColors[index % outcomeColors.length],
+  }));
+  const sentimentStyle = {
+    positive: { label: 'Positive Sentiment', bar: 'bg-emerald-500', text: 'text-emerald-600' },
+    neutral: { label: 'Neutral Sentiment', bar: 'bg-slate-400', text: 'text-slate-600' },
+    negative: { label: 'Negative Sentiment', bar: 'bg-rose-500', text: 'text-rose-600' },
+    unknown: { label: 'Unknown Sentiment', bar: 'bg-amber-400', text: 'text-amber-600' },
+  };
+
   return (
     <div className="space-y-6">
-      <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-        <h2 className="text-xl font-bold text-slate-800 tracking-tight">Enterprise Analytics Dashboard</h2>
-        <p className="text-xs text-slate-400 font-medium mt-0.5">Track call dispositions, talk lengths, and carrier connection thresholds.</p>
+      <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div><h2 className="text-xl font-bold text-slate-800 tracking-tight">Enterprise Analytics Dashboard</h2><p className="text-xs text-slate-400 font-medium mt-0.5">Tenant call dispositions, durations, traffic and sentiment stored in PostgreSQL.</p></div>
+        <select value={days} onChange={(event) => setDays(Number(event.target.value))} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700">
+          <option value={7}>Last 7 days</option><option value={14}>Last 14 days</option><option value={30}>Last 30 days</option><option value={90}>Last 90 days</option>
+        </select>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
+        {[
+          ['Total Calls', analytics.summary.totalCalls], ['Completed', analytics.summary.completedCalls],
+          ['Connection Rate', `${analytics.summary.connectionRate}%`], ['Average Duration', `${analytics.summary.averageDurationSeconds}s`],
+          ['Total Minutes', analytics.summary.totalMinutes],
+        ].map(([label, value]) => <div key={label} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><span className="text-[9px] font-bold uppercase tracking-wider text-slate-400">{label}</span><p className="mt-2 text-xl font-black text-slate-800">{value}</p></div>)}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-          <h3 className="font-bold text-slate-800 mb-4 tracking-tight">Hourly Traffic Volumes</h3>
-          <CallVolumeChart />
+          <h3 className="font-bold text-slate-800 mb-4 tracking-tight">Daily Traffic Volumes</h3>
+          <CallVolumeChart data={traffic} />
         </div>
 
         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
           <h3 className="font-bold text-slate-800 mb-4 tracking-tight">Call Length Frequency Distribution</h3>
-          <DurationBarChart />
+          <DurationBarChart data={analytics.durationDistribution} />
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
           <h3 className="font-bold text-slate-800 mb-4 tracking-tight">Call Conversion Dispositions</h3>
-          <OutcomePieChart />
+          <OutcomePieChart data={outcomes} />
         </div>
 
         <div className="lg:col-span-2 bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
           <h3 className="font-bold text-slate-800 mb-3">NLP Customer Sentiment Breakdown</h3>
           <div className="space-y-4 text-xs font-semibold mt-4">
-            <div>
-              <div className="flex justify-between text-slate-600 mb-1">
-                <span>Positive Sentiment (Favorable qualification, demo booked)</span>
-                <span className="text-emerald-600 font-bold">72%</span>
-              </div>
-              <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden">
-                <div className="h-full bg-emerald-500 rounded-full" style={{ width: '72%' }} />
-              </div>
-            </div>
-
-            <div>
-              <div className="flex justify-between text-slate-600 mb-1">
-                <span>Neutral Sentiment (Factual inquiry, callback requested)</span>
-                <span className="text-slate-600 font-bold">20%</span>
-              </div>
-              <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden">
-                <div className="h-full bg-slate-400 rounded-full" style={{ width: '20%' }} />
-              </div>
-            </div>
-
-            <div>
-              <div className="flex justify-between text-slate-600 mb-1">
-                <span>Negative Sentiment (Anger, immediate hang-up, request DNC)</span>
-                <span className="text-rose-600 font-bold">8%</span>
-              </div>
-              <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden">
-                <div className="h-full bg-rose-500 rounded-full" style={{ width: '8%' }} />
-              </div>
-            </div>
+            {analytics.sentiments.map((sentiment) => {
+              const style = sentimentStyle[sentiment.name];
+              return <div key={sentiment.name}><div className="flex justify-between text-slate-600 mb-1"><span>{style.label} ({sentiment.value} calls)</span><span className={`${style.text} font-bold`}>{sentiment.percentage}%</span></div><div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden"><div className={`h-full rounded-full ${style.bar}`} style={{ width: `${sentiment.percentage}%` }} /></div></div>;
+            })}
           </div>
         </div>
       </div>
@@ -582,10 +628,35 @@ function CompanyAnalytics() {
 interface CampaignsListProps {
   campaigns: Campaign[];
   setCampaigns: React.Dispatch<React.SetStateAction<Campaign[]>>;
-  onOpenModal: () => void;
 }
 
-function CampaignsListView({ campaigns, setCampaigns, onOpenModal }: CampaignsListProps) {
+interface CampaignApiData {
+  id: string; name: string; type: 'batch' | 'realtime';
+  status: 'draft' | 'scheduled' | 'running' | 'paused' | 'completed' | 'failed' | 'archived';
+  agentId: string; agentName: string; phoneNumberId: string; phoneNumber: string;
+  timezone: string; concurrencyLimit: number; priority: 'low' | 'medium' | 'high'; retries: number;
+  retryIntervalsMs: number[]; retryOutcomes: string[]; callingStartTime: string; callingEndTime: string;
+  startAfter: string | null; endAfter: string | null;
+  metrics: { totalTasks: number; attemptedTasks: number; connectedTasks: number; completedTasks: number };
+  createdAt: string; updatedAt: string;
+}
+
+interface CampaignAgentOption { id: string; name: string; status: string }
+interface CampaignPhoneOption { id: string; number: string; provider: string; status: string }
+
+function campaignFromApi(value: CampaignApiData): Campaign {
+  return {
+    id: value.id, name: value.name, status: value.status,
+    agentId: value.agentId, agentName: value.agentName,
+    phoneNumberId: value.phoneNumberId, phoneNumber: value.phoneNumber,
+    totalLeads: value.metrics.totalTasks, calledLeads: value.metrics.attemptedTasks,
+    connectedCalls: value.metrics.connectedTasks, convertedCount: value.metrics.completedTasks,
+    scheduleStart: `${value.callingStartTime.slice(0, 5)} - ${value.callingEndTime.slice(0, 5)} (${value.timezone})`,
+    scheduleEnd: value.endAfter ? new Date(value.endAfter).toLocaleString() : 'No end date',
+  };
+}
+
+function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
   const { role } = useAppState();
   const isReadOnly = role === 'USER';
 
@@ -604,56 +675,70 @@ function CampaignsListView({ campaigns, setCampaigns, onOpenModal }: CampaignsLi
   // Clipboard Copy State
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  // Real-Time Campaigns State
-  const [realtimeCampaigns, setRealtimeCampaigns] = useState([
-    {
-      id: 'Oede12b3-765c-475f-bacd-5b2787b34d37',
-      name: 'MHC',
-      slot: '09:00 - 20:00',
-      endDate: '6/23/2027',
-      status: 'RUNNING' as 'RUNNING' | 'Paused',
-      agentId: MOCK_AGENTS[0]?.id || 'agent-1'
-    },
-    {
-      id: 'fbfc2b94-438f-4f6d-a098-e2dc3f93be21',
-      name: 'Devloper Test',
-      slot: '09:00 - 23:00',
-      endDate: '7/23/2026',
-      status: 'Paused' as 'RUNNING' | 'Paused',
-      agentId: MOCK_AGENTS[1]?.id || 'agent-2'
-    }
-  ]);
+  const [realtimeCampaigns, setRealtimeCampaigns] = useState<CampaignApiData[]>([]);
+  const [campaignAgents, setCampaignAgents] = useState<CampaignAgentOption[]>([]);
+  const [campaignPhones, setCampaignPhones] = useState<CampaignPhoneOption[]>([]);
+  const [campaignsLoading, setCampaignsLoading] = useState(true);
+  const [campaignsError, setCampaignsError] = useState('');
+  const [submittingCampaign, setSubmittingCampaign] = useState(false);
 
   // Batch Form State
   const [phoneInputMethod, setPhoneInputMethod] = useState('Upload CSV File');
   const [uploadedFile, setUploadedFile] = useState<string | null>(null);
   const [simulatedLeadsCount, setSimulatedLeadsCount] = useState(0);
+  const [csvText, setCsvText] = useState('');
   
   const [batchCampName, setBatchCampName] = useState('');
-  const [selectedAgentId, setSelectedAgentId] = useState(MOCK_AGENTS[0]?.id || '');
-  const [selectedNumId, setSelectedNumId] = useState(MOCK_PHONE_NUMBERS[0]?.id || '');
-  const [timezone, setTimezone] = useState('Asia/Calcutta');
+  const [selectedAgentId, setSelectedAgentId] = useState('');
+  const [selectedNumId, setSelectedNumId] = useState('');
+  const [timezone, setTimezone] = useState('Asia/Kolkata');
   
   const [retries, setRetries] = useState(1);
   const [priority, setPriority] = useState('Medium');
   const [slots, setSlots] = useState(2);
   const [retryInterval, setRetryInterval] = useState(60);
   const [retryIntervalUnit, setRetryIntervalUnit] = useState('Mins');
-  const [startTime, setStartTime] = useState('09:00 AM');
-  const [endTime, setEndTime] = useState('05:00 PM');
+  const [startTime, setStartTime] = useState('09:00');
+  const [endTime, setEndTime] = useState('17:00');
   const [scheduleTrigger, setScheduleTrigger] = useState('Now');
-  const [endAfterDate, setEndAfterDate] = useState('08/25/2026 18:00');
+  const [endAfterDate, setEndAfterDate] = useState('');
 
   // Real-Time Form State
   const [rtCampName, setRtCampName] = useState('');
   const [rtAgentId, setRtAgentId] = useState('');
-  const [rtStartTime, setRtStartTime] = useState('09:00 AM');
-  const [rtEndTime, setRtEndTime] = useState('05:00 PM');
-  const [rtEndDate, setRtEndDate] = useState('08/10/2026');
+  const [rtNumberId, setRtNumberId] = useState('');
+  const [rtStartTime, setRtStartTime] = useState('09:00');
+  const [rtEndTime, setRtEndTime] = useState('17:00');
+  const [rtEndDate, setRtEndDate] = useState('');
   const [rtSlots, setRtSlots] = useState(1);
 
   // Toast / Status Message
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+
+  const loadCampaignData = async (forceRefresh = false) => {
+    setCampaignsLoading(true); setCampaignsError('');
+    try {
+      const options = forceRefresh ? { zeaCache: 'reload' as const } : {};
+      const [batch, realtime, agentsResponse, phonesResponse] = await Promise.all([
+        apiRequest<{ items: CampaignApiData[] }>('/campaigns?type=batch&page=1&pageSize=50', options),
+        apiRequest<{ items: CampaignApiData[] }>('/campaigns?type=realtime&page=1&pageSize=50', options),
+        apiRequest<{ items: CampaignAgentOption[] }>('/agents?status=active&page=1&pageSize=50', options),
+        apiRequest<CampaignPhoneOption[]>('/phone-numbers', options),
+      ]);
+      setCampaigns(batch.items.map(campaignFromApi));
+      setRealtimeCampaigns(realtime.items);
+      setCampaignAgents(agentsResponse.items);
+      setCampaignPhones(phonesResponse.filter((phone) => phone.status === 'active'));
+      setSelectedAgentId((current) => current || agentsResponse.items[0]?.id || '');
+      setRtAgentId((current) => current || agentsResponse.items[0]?.id || '');
+      setSelectedNumId((current) => current || phonesResponse.find((phone) => phone.status === 'active')?.id || '');
+      setRtNumberId((current) => current || phonesResponse.find((phone) => phone.status === 'active')?.id || '');
+    } catch (requestError) {
+      setCampaignsError(requestError instanceof Error ? requestError.message : 'Campaign data could not be loaded');
+    } finally { setCampaignsLoading(false); }
+  };
+
+  useEffect(() => { void loadCampaignData(); }, []);
 
   const showToast = (msg: string) => {
     setActionMessage(msg);
@@ -667,124 +752,128 @@ function CampaignsListView({ campaigns, setCampaigns, onOpenModal }: CampaignsLi
     setTimeout(() => setCopiedId(null), 1500);
   };
 
-  // Simulate Choose File for CSV
-  const handleSimulateCSV = () => {
-    const fileNames = ['customers_leads_q3.csv', 'outbound_prospects.csv', 'product_feedback_leads.csv'];
-    const randomName = fileNames[Math.floor(Math.random() * fileNames.length)];
-    const randomCount = Math.floor(150 + Math.random() * 850);
-    setUploadedFile(randomName);
-    setSimulatedLeadsCount(randomCount);
-    // Auto populate campaign name if empty
-    if (!batchCampName) {
-      const baseName = randomName.replace('.csv', '').replace(/_/g, ' ');
-      setBatchCampName(baseName.charAt(0).toUpperCase() + baseName.slice(1) + ' Campaign');
-    }
-    showToast(`Successfully loaded ${randomName} containing ${randomCount} valid lead contacts.`);
+  const to24Hour = (value: string) => {
+    const match = value.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
+    if (!match) return value;
+    let hour = Number(match[1]);
+    const suffix = match[3]?.toUpperCase();
+    if (suffix === 'PM' && hour < 12) hour += 12;
+    if (suffix === 'AM' && hour === 12) hour = 0;
+    return `${String(hour).padStart(2, '0')}:${match[2]}`;
+  };
+
+  const retryIntervalMilliseconds = () => retryInterval * (retryIntervalUnit === 'Days' ? 86_400_000 : retryIntervalUnit === 'Hours' ? 3_600_000 : 60_000);
+  const optionalIsoDate = (value: string) => value ? new Date(value).toISOString() : undefined;
+
+  const handleCsvFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      const contents = await file.text();
+      const rows = contents.split(/\r?\n/).filter((line) => line.trim()).length;
+      setUploadedFile(file.name); setCsvText(contents); setSimulatedLeadsCount(Math.max(0, rows - 1));
+      if (!batchCampName) setBatchCampName(`${file.name.replace(/\.csv$/i, '').replace(/_/g, ' ')} Campaign`);
+      showToast(`Loaded ${file.name}. The backend will validate every phone number and duplicate.`);
+    } catch { showToast('The selected CSV file could not be read.'); }
   };
 
   const handleDownloadTemplate = () => {
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(new Blob(['name,phone,remarks\nJohn (USA),16501234567,Example USA number\n'], { type: 'text/csv' }));
+    link.download = 'zea-voice-batch-template.csv'; link.click(); URL.revokeObjectURL(link.href);
     showToast('Downloaded sample CSV template: name, phone, remarks.');
   };
 
-  const toggleCampaignStatus = (id: string) => {
-    setCampaigns(campaigns.map(c => {
-      if (c.id === id) {
-        const nextStatus = c.status === 'running' ? 'paused' as any : 'running' as any;
-        showToast(`Campaign "${c.name}" is now ${nextStatus}.`);
-        return { ...c, status: nextStatus };
-      }
-      return c;
-    }));
+  const toggleCampaignStatus = async (id: string) => {
+    const campaign = campaigns.find((item) => item.id === id);
+    if (!campaign || !['running', 'scheduled', 'paused'].includes(campaign.status)) return showToast(`Campaign cannot be changed from ${campaign?.status ?? 'unknown'}.`);
+    try {
+      const action = campaign.status === 'paused' ? 'resume' : 'pause';
+      const updated = await apiRequest<CampaignApiData>(`/campaigns/${id}/${action}`, { method: 'POST', body: '{}' });
+      setCampaigns((current) => current.map((item) => item.id === id ? campaignFromApi(updated) : item));
+      showToast(`Campaign "${campaign.name}" is now ${updated.status}.`);
+    } catch (requestError) { showToast(requestError instanceof Error ? requestError.message : 'Campaign status could not be changed'); }
   };
 
-  const deleteCampaign = (id: string) => {
+  const deleteCampaign = async (id: string) => {
     const c = campaigns.find(item => item.id === id);
-    if (c) {
-      setCampaigns(campaigns.filter(item => item.id !== id));
+    if (c && window.confirm(`Delete batch campaign "${c.name}"?`)) {
+      try {
+        await apiRequest(`/campaigns/${id}`, { method: 'DELETE' });
+        setCampaigns((current) => current.filter(item => item.id !== id));
+      } catch (requestError) { return showToast(requestError instanceof Error ? requestError.message : 'Campaign could not be deleted'); }
       showToast(`Deleted batch campaign "${c.name}".`);
     }
   };
 
-  const toggleRealtimeStatus = (id: string) => {
-    setRealtimeCampaigns(realtimeCampaigns.map(c => {
-      if (c.id === id) {
-        const nextStatus = c.status === 'RUNNING' ? 'Paused' : 'RUNNING';
-        showToast(`Real-time listener "${c.name}" is now ${nextStatus}.`);
-        return { ...c, status: nextStatus };
-      }
-      return c;
-    }));
+  const toggleRealtimeStatus = async (id: string) => {
+    const campaign = realtimeCampaigns.find((item) => item.id === id);
+    if (!campaign || !['running', 'scheduled', 'paused'].includes(campaign.status)) return showToast(`Campaign cannot be changed from ${campaign?.status ?? 'unknown'}.`);
+    try {
+      const action = campaign.status === 'paused' ? 'resume' : 'pause';
+      const updated = await apiRequest<CampaignApiData>(`/campaigns/${id}/${action}`, { method: 'POST', body: '{}' });
+      setRealtimeCampaigns((current) => current.map((item) => item.id === id ? updated : item));
+      showToast(`Real-time campaign "${campaign.name}" is now ${updated.status}.`);
+    } catch (requestError) { showToast(requestError instanceof Error ? requestError.message : 'Campaign status could not be changed'); }
   };
 
-  const deleteRealtimeCampaign = (id: string) => {
+  const deleteRealtimeCampaign = async (id: string) => {
     const c = realtimeCampaigns.find(item => item.id === id);
-    if (c) {
-      setRealtimeCampaigns(realtimeCampaigns.filter(item => item.id !== id));
+    if (c && window.confirm(`Delete real-time campaign "${c.name}"?`)) {
+      try {
+        await apiRequest(`/campaigns/${id}`, { method: 'DELETE' });
+        setRealtimeCampaigns((current) => current.filter(item => item.id !== id));
+      } catch (requestError) { return showToast(requestError instanceof Error ? requestError.message : 'Campaign could not be deleted'); }
       showToast(`Deleted real-time service "${c.name}".`);
     }
   };
 
-  const handleCreateBatchCampaign = (e: React.FormEvent) => {
+  const handleCreateBatchCampaign = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!batchCampName.trim()) {
-      showToast('Error: Campaign Name is required!');
-      return;
-    }
-
-    const agent = MOCK_AGENTS.find(a => a.id === selectedAgentId);
-    const num = MOCK_PHONE_NUMBERS.find(n => n.id === selectedNumId);
-
-    const newCamp: Campaign = {
-      id: `camp-${Date.now()}`,
-      name: batchCampName,
-      status: 'running',
-      agentId: selectedAgentId,
-      agentName: agent ? agent.name : 'Outbound Sales Bot',
-      phoneNumberId: selectedNumId,
-      phoneNumber: num ? num.number : '+1 (312) 584-9301',
-      totalLeads: simulatedLeadsCount || 250,
-      calledLeads: 0,
-      connectedCalls: 0,
-      convertedCount: 0,
-      scheduleStart: `${startTime} (Daily)`,
-      scheduleEnd: `Ends ${endAfterDate}`
-    };
-
-    setCampaigns([newCamp, ...campaigns]);
-    setShowBatchCreator(false);
-    
-    // Reset Form State
-    setBatchCampName('');
-    setUploadedFile(null);
-    setSimulatedLeadsCount(0);
-    showToast(`Batch campaign "${batchCampName}" has been successfully launched!`);
+    if (!batchCampName.trim() || !selectedAgentId || !selectedNumId || !csvText) return showToast('Campaign name, active agent, assigned number and CSV file are required.');
+    setSubmittingCampaign(true);
+    try {
+      const created = await apiRequest<CampaignApiData>('/campaigns', { method: 'POST', body: JSON.stringify({
+        name: batchCampName.trim(), type: 'batch', status: scheduleTrigger === 'Now' ? 'running' : 'scheduled',
+        agentId: selectedAgentId, phoneNumberId: selectedNumId, timezone, concurrencyLimit: slots,
+        priority: priority.toLowerCase(), retries,
+        retryIntervalsMs: Array.from({ length: retries }, retryIntervalMilliseconds),
+        retryOutcomes: ['busy', 'failed', 'no_answer'], callingStartTime: to24Hour(startTime), callingEndTime: to24Hour(endTime),
+        endAfter: optionalIsoDate(endAfterDate), contextSchema: {},
+      }) });
+      const imported = await apiRequest<{ import: { acceptedRows: number; invalidRows: number; duplicateRows: number } }>(`/campaigns/${created.id}/batch/import`, {
+        method: 'POST', body: JSON.stringify({ fileName: uploadedFile, csvText }),
+      });
+      await loadCampaignData(true); setShowBatchCreator(false); setBatchCampName(''); setUploadedFile(null); setCsvText(''); setSimulatedLeadsCount(0);
+      showToast(`Campaign created: ${imported.import.acceptedRows} accepted, ${imported.import.invalidRows} invalid, ${imported.import.duplicateRows} duplicate.`);
+    } catch (requestError) { showToast(requestError instanceof Error ? requestError.message : 'Batch campaign could not be created'); }
+    finally { setSubmittingCampaign(false); }
   };
 
-  const handleCreateRealtimeCampaign = (e: React.FormEvent) => {
+  const handleCreateRealtimeCampaign = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!rtCampName.trim()) {
-      showToast('Error: Campaign Name is required!');
-      return;
-    }
-
-    const newRt = {
-      id: `${Math.random().toString(16).substr(2, 8)}-${Math.random().toString(16).substr(2, 4)}-4f6d-a098-${Math.random().toString(16).substr(2, 12)}`,
-      name: rtCampName,
-      slot: `${rtStartTime} - ${rtEndTime}`,
-      endDate: rtEndDate,
-      status: 'RUNNING' as 'RUNNING' | 'Paused',
-      agentId: rtAgentId || 'agent-1'
-    };
-
-    setRealtimeCampaigns([newRt, ...realtimeCampaigns]);
-    setShowRealtimeModal(false);
-    setRtCampName('');
-    showToast(`Real-time Inbound listener "${rtCampName}" activated successfully!`);
+    if (!rtCampName.trim() || !rtAgentId || !rtNumberId) return showToast('Campaign name, active agent and assigned from-number are required.');
+    setSubmittingCampaign(true);
+    try {
+      await apiRequest<CampaignApiData>('/campaigns', { method: 'POST', body: JSON.stringify({
+        name: rtCampName.trim(), type: 'realtime', status: 'running', agentId: rtAgentId,
+        phoneNumberId: rtNumberId, timezone, concurrencyLimit: rtSlots, priority: 'high', retries: 3,
+        retryIntervalsMs: [300000, 600000, 900000], retryOutcomes: ['busy', 'failed', 'no_answer'],
+        callingStartTime: to24Hour(rtStartTime), callingEndTime: to24Hour(rtEndTime),
+        endAfter: optionalIsoDate(rtEndDate), contextSchema: { lead_name: 'string', company: 'string' },
+      }) });
+      await loadCampaignData(true); setShowRealtimeModal(false); setRtCampName('');
+      showToast(`Real-time campaign "${rtCampName}" activated successfully.`);
+    } catch (requestError) { showToast(requestError instanceof Error ? requestError.message : 'Real-time campaign could not be created'); }
+    finally { setSubmittingCampaign(false); }
   };
 
-  const handleResumeAll = () => {
-    setCampaigns(campaigns.map(c => ({ ...c, status: 'running' })));
-    showToast('Resumed all paused dialing campaigns.');
+  const handleResumeAll = async () => {
+    const paused = campaigns.filter((campaign) => campaign.status === 'paused');
+    if (paused.length === 0) return showToast('There are no paused batch campaigns.');
+    const results = await Promise.allSettled(paused.map((campaign) => apiRequest(`/campaigns/${campaign.id}/resume`, { method: 'POST', body: '{}' })));
+    await loadCampaignData(true);
+    showToast(`Resumed ${results.filter((result) => result.status === 'fulfilled').length} of ${paused.length} paused campaigns.`);
   };
 
   // Filter campaigns
@@ -804,6 +893,7 @@ function CampaignsListView({ campaigns, setCampaigns, onOpenModal }: CampaignsLi
           <span>{actionMessage}</span>
         </div>
       )}
+      {campaignsError && <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-700">{campaignsError}</div>}
 
       {/* Main Title Banner matching Attachment 1 */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center pb-1 gap-4">
@@ -886,8 +976,6 @@ function CampaignsListView({ campaigns, setCampaigns, onOpenModal }: CampaignsLi
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-800 outline-none cursor-pointer"
                       >
                         <option value="Upload CSV File">Upload CSV File</option>
-                        <option value="Manual Entry">Manual Lead Entry</option>
-                        <option value="Database Query">Active CRM Database</option>
                       </select>
                     </div>
 
@@ -896,10 +984,7 @@ function CampaignsListView({ campaigns, setCampaigns, onOpenModal }: CampaignsLi
                         Upload CSV File (Name | Phone | Remarks)
                       </label>
                       
-                      <div
-                        onClick={handleSimulateCSV}
-                        className="border-2 border-dashed border-pink-200 hover:border-pink-400 bg-pink-50/20 hover:bg-pink-50/50 rounded-xl p-5 text-center cursor-pointer transition flex flex-col items-center justify-center space-y-2 group"
-                      >
+                      <div className="border-2 border-dashed border-pink-200 hover:border-pink-400 bg-pink-50/20 hover:bg-pink-50/50 rounded-xl p-5 text-center transition flex flex-col items-center justify-center space-y-2 group">
                         <div className="w-9 h-9 rounded-full bg-pink-50 text-[#ec4899] flex items-center justify-center border border-pink-100 group-hover:scale-105 transition">
                           <Upload className="w-4 h-4" />
                         </div>
@@ -917,13 +1002,9 @@ function CampaignsListView({ campaigns, setCampaigns, onOpenModal }: CampaignsLi
                         )}
 
                         <div className="flex items-center space-x-2 pt-2">
-                          <button
-                            type="button"
-                            onClick={(e) => { e.stopPropagation(); handleSimulateCSV(); }}
-                            className="px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-[10px] font-extrabold text-slate-600 hover:bg-slate-50 shadow-xs"
-                          >
-                            Choose File
-                          </button>
+                          <label className="px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-[10px] font-extrabold text-slate-600 hover:bg-slate-50 shadow-xs cursor-pointer">
+                            Choose File<input type="file" accept=".csv,text/csv" onChange={(event) => void handleCsvFile(event)} className="hidden" />
+                          </label>
                           <button
                             type="button"
                             onClick={(e) => { e.stopPropagation(); handleDownloadTemplate(); }}
@@ -965,7 +1046,8 @@ function CampaignsListView({ campaigns, setCampaigns, onOpenModal }: CampaignsLi
                         onChange={(e) => setSelectedAgentId(e.target.value)}
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-800 outline-none cursor-pointer font-bold"
                       >
-                        {MOCK_AGENTS.map(agent => (
+                        <option value="">Select an active agent</option>
+                        {campaignAgents.map(agent => (
                           <option key={agent.id} value={agent.id}>{agent.name}</option>
                         ))}
                       </select>
@@ -978,7 +1060,8 @@ function CampaignsListView({ campaigns, setCampaigns, onOpenModal }: CampaignsLi
                         onChange={(e) => setSelectedNumId(e.target.value)}
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-800 outline-none cursor-pointer font-bold"
                       >
-                        {MOCK_PHONE_NUMBERS.map(num => (
+                        <option value="">Select an assigned number</option>
+                        {campaignPhones.map(num => (
                           <option key={num.id} value={num.id}>{num.number} ({num.provider})</option>
                         ))}
                       </select>
@@ -991,7 +1074,7 @@ function CampaignsListView({ campaigns, setCampaigns, onOpenModal }: CampaignsLi
                         onChange={(e) => setTimezone(e.target.value)}
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-800 outline-none cursor-pointer"
                       >
-                        <option value="Asia/Calcutta">Asia/Calcutta</option>
+                          <option value="Asia/Kolkata">Asia/Kolkata</option>
                         <option value="UTC">UTC (Greenwich Mean Time)</option>
                         <option value="America/New_York">America/New_York (EST)</option>
                         <option value="Europe/London">Europe/London (BST)</option>
@@ -1076,7 +1159,7 @@ function CampaignsListView({ campaigns, setCampaigns, onOpenModal }: CampaignsLi
                         <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Start Time</label>
                         <div className="relative">
                           <input
-                            type="text"
+                            type="time"
                             value={startTime}
                             onChange={(e) => setStartTime(e.target.value)}
                             className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-3 pr-8 py-1.5 text-slate-800 outline-none font-bold"
@@ -1088,7 +1171,7 @@ function CampaignsListView({ campaigns, setCampaigns, onOpenModal }: CampaignsLi
                         <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">End Time</label>
                         <div className="relative">
                           <input
-                            type="text"
+                            type="time"
                             value={endTime}
                             onChange={(e) => setEndTime(e.target.value)}
                             className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-3 pr-8 py-1.5 text-slate-800 outline-none font-bold"
@@ -1115,7 +1198,7 @@ function CampaignsListView({ campaigns, setCampaigns, onOpenModal }: CampaignsLi
                         <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">End After</label>
                         <div className="relative">
                           <input
-                            type="text"
+                            type="datetime-local"
                             value={endAfterDate}
                             onChange={(e) => setEndAfterDate(e.target.value)}
                             placeholder="mm/dd/yyyy --:--"
@@ -1139,9 +1222,10 @@ function CampaignsListView({ campaigns, setCampaigns, onOpenModal }: CampaignsLi
                   </button>
                   <button
                     type="submit"
+                    disabled={submittingCampaign || campaignsLoading || campaignAgents.length === 0 || campaignPhones.length === 0}
                     className="px-6 py-2.5 bg-gradient-to-r from-pink-500 to-rose-600 hover:from-pink-600 hover:to-rose-700 text-white rounded-xl text-xs font-black transition shadow-md cursor-pointer"
                   >
-                    Create & Launch Campaign
+                    {submittingCampaign ? 'Creating Campaign...' : 'Create & Launch Campaign'}
                   </button>
                 </div>
               </form>
@@ -1211,7 +1295,9 @@ function CampaignsListView({ campaigns, setCampaigns, onOpenModal }: CampaignsLi
                 </div>
               </div>
 
-              {filteredCampaigns.length === 0 ? (
+              {campaignsLoading ? (
+                <div className="h-56 animate-pulse rounded-2xl border border-slate-200 bg-white p-6"><div className="h-4 w-48 rounded bg-slate-200" /><div className="mt-8 space-y-4"><div className="h-8 rounded bg-slate-100" /><div className="h-8 rounded bg-slate-100" /><div className="h-8 rounded bg-slate-100" /></div></div>
+              ) : filteredCampaigns.length === 0 ? (
                 /* ==========================================
                    EMPTY STATE (Attachment 1)
                    ========================================== */
@@ -1280,12 +1366,7 @@ function CampaignsListView({ campaigns, setCampaigns, onOpenModal }: CampaignsLi
                             >
                               {c.status === 'running' ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
                             </button>
-                            <button
-                              onClick={() => deleteCampaign(c.id)}
-                              className="p-1.5 bg-slate-50 hover:bg-rose-50 text-slate-400 hover:text-rose-600 border border-slate-200 rounded-lg transition cursor-pointer"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                            {!isReadOnly && <button onClick={() => void deleteCampaign(c.id)} className="p-1.5 bg-slate-50 hover:bg-rose-50 text-slate-400 hover:text-rose-600 border border-slate-200 rounded-lg transition cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>}
                           </div>
                         </div>
                       </div>
@@ -1351,12 +1432,7 @@ function CampaignsListView({ campaigns, setCampaigns, onOpenModal }: CampaignsLi
                                   >
                                     {c.status === 'running' ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
                                   </button>
-                                  <button
-                                    onClick={() => deleteCampaign(c.id)}
-                                    className="p-1.5 bg-slate-50 hover:bg-rose-50 border border-slate-200 rounded-lg text-slate-400 hover:text-rose-600 transition cursor-pointer"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
+                                  {!isReadOnly && <button onClick={() => void deleteCampaign(c.id)} className="p-1.5 bg-slate-50 hover:bg-rose-50 border border-slate-200 rounded-lg text-slate-400 hover:text-rose-600 transition cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>}
                                 </div>
                               </td>
                             </tr>
@@ -1380,7 +1456,7 @@ function CampaignsListView({ campaigns, setCampaigns, onOpenModal }: CampaignsLi
               <div className="flex items-center space-x-2.5">
                 <h2 className="text-md font-extrabold text-slate-800 tracking-tight">Real-Time Campaigns</h2>
                 <button
-                  onClick={() => showToast('Inbound Webhook API Docs loaded. Send call metadata to: /api/v1/inbound')}
+                    onClick={() => showToast('Create instant lead tasks with POST /campaigns/{campaignId}/realtime/tasks using a unique eventId.')}
                   className="px-2 py-1 bg-slate-50 hover:bg-slate-100 text-slate-500 rounded border border-slate-200 text-[10px] font-bold tracking-tight transition flex items-center space-x-1"
                 >
                   <FileSpreadsheet className="w-3 h-3" />
@@ -1437,18 +1513,18 @@ function CampaignsListView({ campaigns, setCampaigns, onOpenModal }: CampaignsLi
 
                       {/* Slot */}
                       <td className="py-3.5 font-mono text-slate-500">
-                        {rt.slot}
+                        {rt.callingStartTime.slice(0, 5)} - {rt.callingEndTime.slice(0, 5)}
                       </td>
 
                       {/* End Date */}
                       <td className="py-3.5 text-slate-500 font-medium">
-                        {rt.endDate}
+                        {rt.endAfter ? new Date(rt.endAfter).toLocaleDateString() : 'No end date'}
                       </td>
 
                       {/* Status badge */}
                       <td className="py-3.5">
                         <span className={`px-2.5 py-0.5 rounded-md text-[9px] font-black uppercase inline-block ${
-                          rt.status === 'RUNNING'
+                          rt.status === 'running'
                             ? 'bg-emerald-500 text-white'
                             : 'bg-amber-500 text-white'
                         }`}>
@@ -1463,36 +1539,28 @@ function CampaignsListView({ campaigns, setCampaigns, onOpenModal }: CampaignsLi
                           <button
                             onClick={() => toggleRealtimeStatus(rt.id)}
                             className="p-1 rounded text-amber-500 hover:bg-amber-50 transition cursor-pointer"
-                            title={rt.status === 'RUNNING' ? 'Pause listener' : 'Resume listener'}
+                            title={rt.status === 'running' ? 'Pause listener' : 'Resume listener'}
                           >
-                            {rt.status === 'RUNNING' ? (
+                            {rt.status === 'running' ? (
                               <Pause className="w-4 h-4 text-amber-600" />
                             ) : (
                               <Play className="w-4 h-4 text-emerald-600" />
                             )}
                           </button>
 
-                          {/* Gear/Settings */}
-                          <button
-                            onClick={() => showToast(`Opening parameters config for real-time campaign "${rt.name}"`)}
-                            className="p-1 rounded text-indigo-500 hover:bg-indigo-50 transition cursor-pointer"
-                            title="Configure routing params"
-                          >
-                            <Settings className="w-4 h-4" />
-                          </button>
-
                           {/* Delete */}
-                          <button
-                            onClick={() => deleteRealtimeCampaign(rt.id)}
+                          {!isReadOnly && <button
+                            onClick={() => void deleteRealtimeCampaign(rt.id)}
                             className="p-1 rounded text-rose-500 hover:bg-rose-50 transition cursor-pointer"
                             title="Deactivate & Delete"
                           >
                             <Trash2 className="w-4 h-4" />
-                          </button>
+                          </button>}
                         </div>
                       </td>
                     </tr>
                   ))}
+                  {!campaignsLoading && realtimeCampaigns.length === 0 && <tr><td colSpan={6} className="py-10 text-center text-slate-400">No real-time campaigns found.</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -1541,10 +1609,18 @@ function CampaignsListView({ campaigns, setCampaigns, onOpenModal }: CampaignsLi
                   onChange={(e) => setRtAgentId(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-800 outline-none cursor-pointer"
                 >
-                  <option value="">Select an Agent (Optional)</option>
-                  {MOCK_AGENTS.map(agent => (
+                  <option value="">Select an active agent</option>
+                  {campaignAgents.map(agent => (
                     <option key={agent.id} value={agent.id}>{agent.name}</option>
                   ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black text-slate-500 uppercase mb-1">From Number</label>
+                <select required value={rtNumberId} onChange={(event) => setRtNumberId(event.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-800 outline-none cursor-pointer">
+                  <option value="">Select an assigned number</option>
+                  {campaignPhones.map((phone) => <option key={phone.id} value={phone.id}>{phone.number} ({phone.provider})</option>)}
                 </select>
               </div>
 
@@ -1554,7 +1630,7 @@ function CampaignsListView({ campaigns, setCampaigns, onOpenModal }: CampaignsLi
                   <label className="block text-[10px] font-black text-slate-500 uppercase mb-1">Start Time</label>
                   <div className="relative">
                     <input
-                      type="text"
+                      type="time"
                       value={rtStartTime}
                       onChange={(e) => setRtStartTime(e.target.value)}
                       className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-800 outline-none font-bold"
@@ -1566,7 +1642,7 @@ function CampaignsListView({ campaigns, setCampaigns, onOpenModal }: CampaignsLi
                   <label className="block text-[10px] font-black text-slate-500 uppercase mb-1">End Time</label>
                   <div className="relative">
                     <input
-                      type="text"
+                      type="time"
                       value={rtEndTime}
                       onChange={(e) => setRtEndTime(e.target.value)}
                       className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-800 outline-none font-bold"
@@ -1581,7 +1657,7 @@ function CampaignsListView({ campaigns, setCampaigns, onOpenModal }: CampaignsLi
                 <label className="block text-[10px] font-black text-slate-500 uppercase mb-1">End Date</label>
                 <div className="relative">
                   <input
-                    type="text"
+                    type="datetime-local"
                     value={rtEndDate}
                     onChange={(e) => setRtEndDate(e.target.value)}
                     className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-800 outline-none font-bold font-mono text-[10px]"
@@ -1610,9 +1686,10 @@ function CampaignsListView({ campaigns, setCampaigns, onOpenModal }: CampaignsLi
               <div className="pt-4 flex flex-col space-y-2">
                 <button
                   type="submit"
+                  disabled={submittingCampaign || campaignsLoading || !rtAgentId || !rtNumberId}
                   className="w-full py-2.5 bg-gradient-to-r from-pink-500 to-rose-600 hover:from-pink-600 hover:to-rose-700 text-white rounded-lg font-black transition shadow-md text-xs cursor-pointer text-center"
                 >
-                  Create
+                  {submittingCampaign ? 'Creating...' : 'Create'}
                 </button>
               </div>
             </form>
@@ -1626,38 +1703,80 @@ function CampaignsListView({ campaigns, setCampaigns, onOpenModal }: CampaignsLi
 /* ==========================================
    4. VOICE AGENTS LIST
    ========================================== */
-function AgentsListView({ agents, onEditAgent, onAddAgent }: { agents: VoiceAgent[], onEditAgent: (id: string) => void, onAddAgent: () => void }) {
+interface AgentApiData {
+  id: string; name: string; description: string | null; goal: string | null; language: string;
+  status: 'active' | 'draft' | 'archived'; phoneNumberId: string | null; phoneNumber: string | null;
+  stt: { modelId: string; providerName: string; modelName: string };
+  llm: { modelId: string; providerName: string; modelName: string };
+  tts: { modelId: string; providerName: string; modelName: string };
+  voiceId: string; prompt: string; welcomeMessage: string | null; temperature: number;
+  interruptionSensitivity: number; silenceTimeoutMs: number; inactivityTimeoutSeconds: number;
+  settings: Record<string, unknown>; createdAt: string; updatedAt: string;
+  metrics: { totalCalls: number; averageDurationSeconds: number; successRate: number };
+}
+
+function agentFromApi(value: AgentApiData): VoiceAgent {
+  return {
+    id: value.id, name: value.name, status: value.status, voiceId: value.voiceId,
+    temperature: value.temperature, prompt: value.prompt,
+    interruptionSensitivity: value.interruptionSensitivity, silenceTimeout: value.silenceTimeoutMs,
+    sttProvider: value.stt.providerName, sttModel: value.stt.modelName,
+    ttsProvider: value.tts.providerName, ttsModel: value.tts.modelName,
+    llmProvider: value.llm.providerName, llmModel: value.llm.modelName,
+    createdAt: value.createdAt, updatedAt: value.updatedAt,
+    totalCalls: value.metrics.totalCalls, avgDuration: value.metrics.averageDurationSeconds, successRate: value.metrics.successRate,
+    description: value.description ?? '', goal: value.goal ?? '', language: value.language,
+    welcomeMessage: value.welcomeMessage ?? '', inactivityTimeout: value.inactivityTimeoutSeconds,
+    ...(value.settings as Partial<VoiceAgent>),
+  };
+}
+
+function AgentsListView({ agents, setAgents, onEditAgent, onAddAgent }: { agents: VoiceAgent[]; setAgents: React.Dispatch<React.SetStateAction<VoiceAgent[]>>; onEditAgent: (id: string) => void; onAddAgent: () => void }) {
   const { role } = useAppState();
   const isReadOnly = role === 'USER';
 
   // State for user role simple view
   const [searchQuery, setSearchQuery] = useState('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(true);
+  const [agentError, setAgentError] = useState('');
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
 
-  const userAgents = [
-    {
-      id: 'd1a6c13b-b20c-453d-b000-4bd6f3d1184a',
-      name: 'Shanmuga_test packages-Inbound',
-      status: 'Live',
-    },
-    {
-      id: '82b9c9c3-e88d-4d00-9f5a-98914cc2f1e6',
-      name: 'Shanmuga_test packages',
-      status: 'Live',
-    }
-  ];
+  const userAgents = agents.map((agent) => ({ ...agent, statusLabel: agent.status === 'active' ? 'Live' : agent.status }));
 
-  const handleRefresh = () => {
+  const handleRefresh = async (forceRefresh = false) => {
     setIsRefreshing(true);
-    setTimeout(() => setIsRefreshing(false), 1000);
+    setAgentError('');
+    try {
+      const data = await apiRequest<{ items: AgentApiData[] }>('/agents?page=1&pageSize=50', forceRefresh ? { zeaCache: 'reload' } : {});
+      setAgents(data.items.map(agentFromApi));
+    } catch (requestError) { setAgentError(requestError instanceof Error ? requestError.message : 'Agents could not be loaded'); }
+    finally { setIsRefreshing(false); }
   };
+
+  useEffect(() => { void handleRefresh(); }, []);
 
   const handleCopy = (id: string) => {
     navigator.clipboard.writeText(id);
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  const toggleAgentStatus = async (agent: VoiceAgent) => {
+    try {
+      const updated = await apiRequest<AgentApiData>(`/agents/${agent.id}/status`, {
+        method: 'PATCH', body: JSON.stringify({ status: agent.status === 'active' ? 'draft' : 'active' }),
+      });
+      setAgents((current) => current.map((item) => item.id === agent.id ? agentFromApi(updated) : item));
+    } catch (requestError) { setAgentError(requestError instanceof Error ? requestError.message : 'Agent status could not be changed'); }
+  };
+
+  const deleteAgent = async (agent: VoiceAgent) => {
+    if (!window.confirm(`Archive voice agent "${agent.name}"?`)) return;
+    try {
+      await apiRequest(`/agents/${agent.id}`, { method: 'DELETE' });
+      setAgents((current) => current.filter((item) => item.id !== agent.id));
+    } catch (requestError) { setAgentError(requestError instanceof Error ? requestError.message : 'Agent could not be archived'); }
   };
 
   const filteredUserAgents = userAgents.filter(agent =>
@@ -1668,6 +1787,7 @@ function AgentsListView({ agents, onEditAgent, onAddAgent }: { agents: VoiceAgen
   if (isReadOnly) {
     return (
       <div className="space-y-6">
+        {agentError && <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-700">{agentError}</div>}
         {/* Header Row */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-6 border-b border-slate-200">
           <div>
@@ -1676,7 +1796,7 @@ function AgentsListView({ agents, onEditAgent, onAddAgent }: { agents: VoiceAgen
           </div>
           <div className="flex items-center space-x-2 mt-4 sm:mt-0">
             <button
-              onClick={handleRefresh}
+              onClick={() => void handleRefresh(true)}
               className="bg-white border border-slate-200 hover:bg-slate-50 rounded-xl px-4 py-2.5 text-xs font-bold text-slate-700 shadow-xs flex items-center space-x-2 transition cursor-pointer select-none"
             >
               <RefreshCw className={`w-3.5 h-3.5 text-slate-500 ${isRefreshing ? 'animate-spin text-purple-600' : ''}`} />
@@ -1733,9 +1853,8 @@ function AgentsListView({ agents, onEditAgent, onAddAgent }: { agents: VoiceAgen
                 {filteredUserAgents.map((agent) => (
                   <div key={agent.id} className="px-6 py-5 flex items-center justify-between hover:bg-slate-50/30 transition">
                     <div className="flex items-center space-x-4">
-                      {/* Purple circle avatar with Sp initials */}
                       <div className="w-11 h-11 rounded-full bg-gradient-to-tr from-[#8B5CF6] to-[#7C3AED] text-white flex items-center justify-center font-black text-sm shrink-0 shadow-sm shadow-purple-100">
-                        Sp
+                        {agent.name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase()}
                       </div>
                       <div className="flex flex-col">
                         <span className="text-sm font-black text-slate-800 tracking-tight leading-none">{agent.name}</span>
@@ -1762,7 +1881,7 @@ function AgentsListView({ agents, onEditAgent, onAddAgent }: { agents: VoiceAgen
                           <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                           <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
                         </span>
-                        <span>{agent.status}</span>
+                        <span>{agent.statusLabel}</span>
                       </span>
                     </div>
                   </div>
@@ -1781,7 +1900,7 @@ function AgentsListView({ agents, onEditAgent, onAddAgent }: { agents: VoiceAgen
                   <div className="flex justify-between items-start">
                     <div className="flex items-center space-x-3">
                       <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#8B5CF6] to-[#7C3AED] text-white flex items-center justify-center font-black text-xs shrink-0 shadow-xs">
-                        Sp
+                        {agent.name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase()}
                       </div>
                       <div className="flex flex-col">
                         <h4 className="font-black text-slate-800 text-sm tracking-tight leading-none">{agent.name}</h4>
@@ -1798,7 +1917,7 @@ function AgentsListView({ agents, onEditAgent, onAddAgent }: { agents: VoiceAgen
                         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                         <span className="relative inline-flex rounded-full h-1 w-1 bg-emerald-500"></span>
                       </span>
-                      <span>{agent.status}</span>
+                      <span>{agent.statusLabel}</span>
                     </span>
                   </div>
                 </div>
@@ -1812,6 +1931,7 @@ function AgentsListView({ agents, onEditAgent, onAddAgent }: { agents: VoiceAgen
 
   return (
     <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+      {agentError && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-700">{agentError}</div>}
       <div className="flex justify-between items-center border-b border-slate-200 pb-5 mb-5">
         <div>
           <h2 className="text-xl font-bold text-slate-800 tracking-tight">Conversational Operators</h2>
@@ -1866,15 +1986,14 @@ function AgentsListView({ agents, onEditAgent, onAddAgent }: { agents: VoiceAgen
               </div>
             </div>
 
-            <button
-              onClick={() => onEditAgent(agent.id)}
-              className="w-full py-2.5 bg-slate-50 hover:bg-indigo-50 text-slate-600 hover:text-indigo-600 rounded-lg text-xs font-bold mt-4 transition border border-slate-200 flex items-center justify-center space-x-1 cursor-pointer"
-            >
-              <span>{isReadOnly ? 'Inspect Operator' : 'Architect Engine'}</span>
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
+            <div className="mt-4 grid grid-cols-[1fr_auto_auto] gap-2">
+              <button onClick={() => onEditAgent(agent.id)} className="py-2.5 bg-slate-50 hover:bg-indigo-50 text-slate-600 hover:text-indigo-600 rounded-lg text-xs font-bold transition border border-slate-200 flex items-center justify-center space-x-1 cursor-pointer"><span>Architect Engine</span><ArrowRight className="w-3.5 h-3.5" /></button>
+              <button onClick={() => void toggleAgentStatus(agent)} title={agent.status === 'active' ? 'Set draft' : 'Activate'} className="rounded-lg border border-amber-100 bg-amber-50 px-3 text-xs font-bold text-amber-700">{agent.status === 'active' ? 'Draft' : 'Activate'}</button>
+              <button onClick={() => void deleteAgent(agent)} title="Archive agent" className="rounded-lg border border-red-100 bg-red-50 px-3 text-red-600"><Trash2 className="h-3.5 w-3.5" /></button>
+            </div>
           </div>
         ))}
+        {!isRefreshing && agents.length === 0 && <div className="md:col-span-2 lg:col-span-3 rounded-xl border border-dashed border-slate-300 p-10 text-center text-xs font-semibold text-slate-400">No voice agents have been created for this company.</div>}
       </div>
     </div>
   );

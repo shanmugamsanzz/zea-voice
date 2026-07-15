@@ -5,6 +5,7 @@
 
 import React, { useState } from 'react';
 import { useAppState } from '../../store/AppState';
+import { startTabMeasurement } from '../../lib/performance';
 import {
   LayoutDashboard,
   Building2,
@@ -20,7 +21,6 @@ import {
   Bot,
   FileSpreadsheet,
   History,
-  ShieldCheck,
   User,
   ChevronDown,
   Menu,
@@ -44,22 +44,30 @@ interface SidebarItem {
   icon: React.ComponentType<any>;
 }
 
-export function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const { role, view, setView, setRole, userEmail, theme, setTheme } = useAppState();
+export function DashboardLayout({ children, onLogout }: { children: React.ReactNode; onLogout: () => void | Promise<void> }) {
+  const { role, view, setView, userEmail, theme, setTheme } = useAppState();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [roleDropdownOpen, setRoleDropdownOpen] = useState(false);
   const [isSidebarMinimized, setIsSidebarMinimized] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
 
   const handleItemClick = (viewId: string) => {
+    startTabMeasurement(viewId);
     setView(viewId);
     setMobileMenuOpen(false);
+  };
+
+  const handleLogout = async () => {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    try { await onLogout(); }
+    finally { setLoggingOut(false); setMobileMenuOpen(false); }
   };
 
   // Super Admin Navigation
   const superAdminItems: SidebarItem[] = [
     { name: 'Dashboard', viewId: 'dashboard', icon: LayoutDashboard },
     { name: 'Companies', viewId: 'companies', icon: Building2 },
-    { name: 'Developers', viewId: 'developers', icon: Users },
+    { name: 'Users', viewId: 'developers', icon: Users },
     { name: 'Voice Providers', viewId: 'providers', icon: Cpu },
     { name: 'Phone Numbers', viewId: 'phone-numbers', icon: Phone },
     { name: 'Credits Manager', viewId: 'credits', icon: Coins },
@@ -133,7 +141,7 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
       case 'companies':
         return { title: 'Tenant Organizations', subtitle: 'Manage active enterprise companies and subscription tiers' };
       case 'developers':
-        return { title: 'SaaS Developers', subtitle: 'Manage developer credentials and systems' };
+        return { title: 'Company Users', subtitle: 'Create developers and users, then assign them to tenant companies' };
       case 'providers':
         return { title: 'Voice Providers', subtitle: 'Configure carrier trunks, speech synthesis, and neural LLM backends' };
       case 'phone-numbers':
@@ -224,7 +232,7 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
           </div>
 
           {/* Sidebar Footer Profile Block */}
-          <div className={`mt-auto border-t border-slate-100 dark:border-slate-850 shrink-0 ${isSidebarMinimized ? 'p-4 flex justify-center' : 'p-6'}`}>
+          <div className={`mt-auto border-t border-slate-100 dark:border-slate-850 shrink-0 ${isSidebarMinimized ? 'p-3 flex flex-col items-center gap-2' : 'p-4 space-y-3'}`}>
             <div className={`flex items-center ${isSidebarMinimized ? 'justify-center' : 'space-x-3'}`}>
               <div className="w-10 h-10 rounded-full bg-indigo-50 dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 border border-indigo-100 dark:border-slate-700 flex items-center justify-center font-bold text-sm shrink-0" title="Project Lead">
                 JS
@@ -236,6 +244,18 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
                 </div>
               )}
             </div>
+            <button
+              type="button"
+              onClick={() => void handleLogout()}
+              disabled={loggingOut}
+              title={isSidebarMinimized ? 'Logout' : undefined}
+              className={`flex items-center rounded-xl text-xs font-bold text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition disabled:opacity-50 cursor-pointer ${
+                isSidebarMinimized ? 'justify-center p-3' : 'w-full space-x-3 px-4 py-3'
+              }`}
+            >
+              <LogOut className="w-4 h-4 shrink-0" />
+              {!isSidebarMinimized && <span>{loggingOut ? 'Logging out...' : 'Logout'}</span>}
+            </button>
           </div>
         </aside>
       ) : (
@@ -309,17 +329,15 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
           {/* Sidebar Footer Logout */}
           <div className={`mt-auto border-t border-slate-100 dark:border-slate-800 shrink-0 ${isSidebarMinimized ? 'p-2 flex justify-center' : 'p-4'}`}>
             <button
-              onClick={() => {
-                setView('dashboard');
-                setRole('SUPER_ADMIN');
-              }}
+              onClick={() => void handleLogout()}
+              disabled={loggingOut}
               className={`flex items-center rounded-xl text-xs font-bold text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition cursor-pointer ${
                 isSidebarMinimized ? 'justify-center p-3' : 'w-full space-x-3 px-4 py-3'
               }`}
               title={isSidebarMinimized ? "Logout" : undefined}
             >
               <LogOut className="w-4 h-4 text-rose-500 shrink-0" />
-              {!isSidebarMinimized && <span>Logout</span>}
+              {!isSidebarMinimized && <span>{loggingOut ? 'Logging out...' : 'Logout'}</span>}
             </button>
           </div>
         </aside>
@@ -394,8 +412,14 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
                 )}
               </nav>
             </div>
-            <div className="p-6 border-t border-slate-100 dark:border-slate-800/60">
-              <p className="text-xs text-slate-400 dark:text-slate-500 font-bold">© 2026 Zea Voice Corp.</p>
+            <div className="p-4 border-t border-slate-100 dark:border-slate-800/60">
+              {role === 'SUPER_ADMIN' ? (
+                <button type="button" onClick={() => void handleLogout()} disabled={loggingOut}
+                  className="w-full flex items-center justify-center gap-2 rounded-xl bg-rose-50 px-4 py-3 text-xs font-bold text-rose-600 hover:bg-rose-100 disabled:opacity-50 cursor-pointer">
+                  <LogOut className="w-4 h-4" />
+                  <span>{loggingOut ? 'Logging out...' : 'Logout'}</span>
+                </button>
+              ) : <p className="text-xs text-slate-400 dark:text-slate-500 font-bold">© 2026 Zea Voice Corp.</p>}
             </div>
           </aside>
         </>
@@ -454,45 +478,6 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
                 <Moon className="w-5 h-5 text-slate-600" />
               )}
             </button>
-
-            {/* Environment/Role Selector for interactive presentation */}
-            <div className="relative">
-              <button
-                onClick={() => setRoleDropdownOpen(!roleDropdownOpen)}
-                className="flex items-center justify-center w-9 h-9 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-full text-indigo-600 dark:text-indigo-400 transition cursor-pointer"
-                id="role-dropdown-btn"
-                title="Switch Role"
-              >
-                <ShieldCheck className="w-5 h-5" />
-              </button>
-
-              {roleDropdownOpen && (
-                <>
-                  <div className="fixed inset-0 z-40" onClick={() => setRoleDropdownOpen(false)} />
-                  <div className="absolute right-0 mt-2 w-48 bg-white border border-slate-250 rounded-xl shadow-xl py-1.5 z-50 text-xs animate-in fade-in slide-in-from-top-2 duration-150">
-                    <div className="px-3 py-1.5 text-slate-400 font-bold border-b border-slate-100 uppercase tracking-wider text-[9px]">Switch Roles (Testing)</div>
-                    <button
-                      onClick={() => { setRole('SUPER_ADMIN'); setRoleDropdownOpen(false); }}
-                      className={`w-full text-left px-4 py-2 hover:bg-slate-50 flex items-center justify-between cursor-pointer ${role === 'SUPER_ADMIN' ? 'text-indigo-600 font-bold bg-indigo-50' : 'text-slate-600'}`}
-                    >
-                      Super Admin
-                    </button>
-                    <button
-                      onClick={() => { setRole('DEVELOPER'); setRoleDropdownOpen(false); }}
-                      className={`w-full text-left px-4 py-2 hover:bg-slate-50 flex items-center justify-between cursor-pointer ${role === 'DEVELOPER' ? 'text-indigo-600 font-bold bg-indigo-50' : 'text-slate-600'}`}
-                    >
-                      Company Developer
-                    </button>
-                    <button
-                      onClick={() => { setRole('USER'); setRoleDropdownOpen(false); }}
-                      className={`w-full text-left px-4 py-2 hover:bg-slate-50 flex items-center justify-between cursor-pointer ${role === 'USER' ? 'text-indigo-600 font-bold bg-indigo-50' : 'text-slate-600'}`}
-                    >
-                      Company User (Restricted)
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
 
             {/* User profile identifier */}
             <div className="flex items-center space-x-3 border-l border-slate-200 pl-4 shrink-0">

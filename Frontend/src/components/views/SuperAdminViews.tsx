@@ -3,19 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAppState } from '../../store/AppState';
 import { 
   MOCK_COMPANIES, 
-  MOCK_DEVELOPERS, 
-  MOCK_PROVIDERS, 
-  MOCK_PHONE_NUMBERS, 
-  MOCK_QUEUES, 
-  MOCK_PAYMENTS, 
-  ACTIVE_MONITORING_CALLS, 
   COMPLETED_CALL_LOGS 
 } from '../../lib/mockData';
-import { Company, PhoneNumber, PaymentRecord, Developer, ProviderConfig } from '../../types';
+import { Company, PhoneNumber, Developer } from '../../types';
 import { 
   Building2, 
   Users, 
@@ -45,7 +39,132 @@ import {
   ArrowUpFromLine,
   Trash2
 } from 'lucide-react';
-import { CallVolumeChart, OutcomePieChart, LatencyBreakdownChart } from '../charts/DashboardCharts';
+import { CallVolumeChart, OutcomePieChart } from '../charts/DashboardCharts';
+import { CreditsManagerView } from './CreditsManagerView';
+import { QueueMonitorView } from './QueueMonitorView';
+import { CallMonitoringView } from './CallMonitoringView';
+import { PaymentsView } from './PaymentsView';
+import { GlobalSettingsView } from './GlobalSettingsView';
+import { apiRequest, isAbortError } from '../../lib/api';
+
+interface PlatformDashboardData {
+  overview: {
+    activeCompanies: number; pendingCompanies: number; inFlightCalls: number;
+    waitingCalls: number; callsToday: number; monthlyRevenue: number; currency: string;
+  };
+  callTraffic: Array<{ name: string; hour: string; inbound: number; outbound: number }>;
+  outcomes: Array<{ name: string; value: number; color: string }>;
+  topCompanies: Array<{ id: string; name: string; billingTier: string; monthlySpend: number; creditsBalance: number }>;
+  liveCalls: Array<{ id: string; companyName: string; agentName: string; status: string; duration: number; phone: string; startedAt: string; latestTranscript: string | null }>;
+}
+
+interface CompanyApiData {
+  tenantId: string; organizationId: string; workspaceId: string; businessName: string;
+  legalName: string | null; firstName: string | null; lastName: string | null; email: string;
+  businessPhone: string | null; website: string | null; billingTier: 'starter' | 'pro' | 'enterprise';
+  perMinutePrice: number;
+  addressLine1: string | null; addressLine2: string | null; state: string | null; country: string | null;
+  postalCode: string | null; timezone: string; status: 'pending' | 'active' | 'suspended' | 'archived';
+  teamSize: number; phoneNumbersCount: number; creditsBalance: number; monthlySpend: number; createdAt: string;
+}
+
+interface CompanyOption { tenantId: string; businessName: string }
+interface PaginationData { page: number; pageSize: number; total: number; totalPages: number }
+
+interface TenantUserApiData {
+  id: string;
+  userId: string;
+  fullName: string;
+  email: string;
+  companyId: string;
+  companyName: string;
+  workspaceId: string;
+  role: 'COMPANY_DEVELOPER' | 'COMPANY_USER';
+  status: 'active' | 'invited' | 'suspended';
+  lastActiveAt: string | null;
+  createdAt: string;
+}
+
+interface ProviderApiData {
+  id: string;
+  name: string;
+  slug: string;
+  type: 'llm' | 'tts' | 'stt';
+  status: 'connected' | 'disconnected' | 'error';
+  baseUrl: string | null;
+  latencyMs: number | null;
+  usageCount: number;
+  parameterKeys: Array<{ key: string; value: string; isSecret: boolean }>;
+  modelCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ProviderModelApiData {
+  id: string; providerId: string; providerName: string; providerType: 'llm' | 'tts' | 'stt';
+  modelKey: string; displayName: string; status: 'active' | 'inactive';
+  capabilities: Record<string, unknown>; settings: Record<string, unknown>;
+  createdAt: string; updatedAt: string;
+}
+
+interface TelephonyAccountApiData {
+  id: string; provider: 'plivo'; name: string; authId: string; authToken: string;
+  baseUrl: string; applicationId: string; answerUrl: string; hangupUrl: string;
+  recordingCallbackUrl: string; status: 'connected' | 'disconnected' | 'error';
+  accountType: 'main' | 'subaccount'; parentAccountId: string | null;
+  companyId: string | null; providerSubaccountId: string | null;
+  lastSyncedAt: string | null; syncError: string | null; createdAt: string;
+}
+
+interface CompanySubaccountApiData extends TelephonyAccountApiData {
+  companyName: string; parentAccountName: string; phoneNumbersCount: number;
+}
+
+interface PhoneNumberApiData {
+  id: string; number: string; provider: string; telephonyAccountId: string;
+  telephonyAccountName: string; accountType: 'main' | 'subaccount'; subaccountAuthId: string | null;
+  countryIso: string | null; numberType: string | null; capabilities: { voice?: boolean; sms?: boolean };
+  monthlyCost: number | null; currency: string; status: 'active' | 'unavailable' | 'released';
+  companyId: string | null; companyName: string | null; assignedAt: string | null;
+}
+
+function providerValuePreview(value: string) {
+  return value.length > 10 ? `${value.slice(0, 10)}..........` : value;
+}
+
+const COMPANY_COUNTRIES = [
+  'India', 'Sri Lanka', 'Bangladesh', 'Nepal', 'Bhutan',
+  'Pakistan', 'United Arab Emirates', 'Singapore', 'Malaysia', 'Indonesia',
+];
+
+const COMPANY_TIMEZONES = [
+  { value: 'Asia/Dubai', label: 'GMT+04:00 Asia/Dubai (+04)' },
+  { value: 'Asia/Karachi', label: 'GMT+05:00 Asia/Karachi (PKT)' },
+  { value: 'Asia/Kolkata', label: 'GMT+05:30 Asia/Kolkata (IST)' },
+  { value: 'Asia/Colombo', label: 'GMT+05:30 Asia/Colombo (+0530)' },
+  { value: 'Asia/Kathmandu', label: 'GMT+05:45 Asia/Kathmandu (+0545)' },
+  { value: 'Asia/Dhaka', label: 'GMT+06:00 Asia/Dhaka (+06)' },
+  { value: 'Asia/Thimphu', label: 'GMT+06:00 Asia/Thimphu (+06)' },
+  { value: 'Asia/Yangon', label: 'GMT+06:30 Asia/Yangon (+0630)' },
+  { value: 'Asia/Bangkok', label: 'GMT+07:00 Asia/Bangkok (+07)' },
+  { value: 'Asia/Singapore', label: 'GMT+08:00 Asia/Singapore (+08)' },
+];
+
+function companyFromApi(value: CompanyApiData): Company {
+  const billingTier = `${value.billingTier[0].toUpperCase()}${value.billingTier.slice(1)}` as Company['billingTier'];
+  return {
+    id: value.tenantId, name: value.businessName, status: value.status, billingTier,
+    createdAt: new Date(value.createdAt).toLocaleDateString(), developersCount: value.teamSize,
+    creditsBalance: value.creditsBalance, phoneNumbersCount: value.phoneNumbersCount,
+    perMinutePrice: value.perMinutePrice,
+    monthlySpend: value.monthlySpend,
+    primaryContact: [value.firstName, value.lastName].filter(Boolean).join(' ') + ` (${value.email})`,
+    firstName: value.firstName ?? undefined, lastName: value.lastName ?? undefined, email: value.email,
+    businessPhone: value.businessPhone ?? undefined,
+    address: value.addressLine1 ?? undefined, state: value.state ?? undefined, country: value.country ?? undefined,
+    zip: value.postalCode ?? undefined, website: value.website ?? undefined, timezone: value.timezone,
+  };
+}
 
 export function SuperAdminViews() {
   const { view, setView, selectedCompanyId, setSelectedCompanyId } = useAppState();
@@ -60,7 +179,7 @@ export function SuperAdminViews() {
       }
       return <CompaniesListView />;
     case 'developers':
-      return <DevelopersListView />;
+      return <UsersListView />;
     case 'providers':
       return <VoiceProvidersView />;
     case 'phone-numbers':
@@ -85,6 +204,30 @@ export function SuperAdminViews() {
    ========================================== */
 function SuperAdminDashboard() {
   const { setView, setSelectedCompanyId } = useAppState();
+  const [dashboard, setDashboard] = useState<PlatformDashboardData | null>(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    apiRequest<PlatformDashboardData>('/admin/dashboard')
+      .then((data) => { if (active) setDashboard(data); })
+      .catch((requestError) => { if (active) setError(requestError instanceof Error ? requestError.message : 'Dashboard could not be loaded'); });
+    return () => { active = false; };
+  }, []);
+
+  if (error) return <div className="rounded-xl border border-red-200 bg-red-50 p-6 text-sm font-semibold text-red-700">Unable to load the Super Admin dashboard: {error}</div>;
+  if (!dashboard) return (
+    <div className="space-y-6" aria-label="Loading live platform data">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+        {[1, 2, 3, 4].map((item) => <div key={item} className="h-32 animate-pulse rounded-xl border border-slate-200 bg-white p-6"><div className="h-3 w-28 rounded bg-slate-200" /><div className="mt-5 h-7 w-36 rounded bg-slate-200" /></div>)}
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 h-80 animate-pulse rounded-xl border border-slate-200 bg-white p-6"><div className="h-4 w-44 rounded bg-slate-200" /><div className="mt-8 h-56 rounded bg-slate-100" /></div>
+        <div className="h-80 animate-pulse rounded-xl border border-slate-200 bg-white p-6"><div className="h-4 w-36 rounded bg-slate-200" /><div className="mx-auto mt-10 h-44 w-44 rounded-full bg-slate-100" /></div>
+      </div>
+    </div>
+  );
+  const { overview, callTraffic, outcomes, topCompanies, liveCalls } = dashboard;
   
   return (
     <div className="space-y-6">
@@ -93,45 +236,45 @@ function SuperAdminDashboard() {
         <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
           <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">Active Organizations</span>
           <div className="flex items-center justify-between mt-2">
-            <h4 className="text-2xl font-extrabold text-slate-800">{MOCK_COMPANIES.length} Companies</h4>
+            <h4 className="text-2xl font-extrabold text-slate-800">{overview.activeCompanies} Companies</h4>
             <div className="w-9 h-9 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center border border-indigo-100">
               <Building2 className="w-4.5 h-4.5" />
             </div>
           </div>
-          <span className="text-xs text-slate-500 mt-2 block font-medium">2 pending registrations</span>
+          <span className="text-xs text-slate-500 mt-2 block font-medium">{overview.pendingCompanies} pending registrations</span>
         </div>
 
         <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
           <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">In-Flight Calls</span>
           <div className="flex items-center justify-between mt-2">
-            <h4 className="text-2xl font-extrabold text-slate-800">{ACTIVE_MONITORING_CALLS.length} Concurrent</h4>
+            <h4 className="text-2xl font-extrabold text-slate-800">{overview.inFlightCalls} Concurrent</h4>
             <div className="w-9 h-9 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100 animate-pulse">
               <Activity className="w-4.5 h-4.5" />
             </div>
           </div>
-          <span className="text-xs text-slate-500 mt-2 block font-medium">13 waiting in queue trunks</span>
+          <span className="text-xs text-slate-500 mt-2 block font-medium">{overview.waitingCalls} waiting in queues</span>
         </div>
 
         <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
-          <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">Avg Gateway Latency</span>
+          <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">Calls Today</span>
           <div className="flex items-center justify-between mt-2">
-            <h4 className="text-2xl font-extrabold text-slate-800">495 ms</h4>
+            <h4 className="text-2xl font-extrabold text-slate-800">{overview.callsToday.toLocaleString()}</h4>
             <div className="w-9 h-9 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center border border-indigo-100">
               <Zap className="w-4.5 h-4.5" />
             </div>
           </div>
-          <span className="text-xs text-slate-500 mt-2 block font-medium">LLM Bottleneck: ~310ms</span>
+          <span className="text-xs text-slate-500 mt-2 block font-medium">Across all organizations</span>
         </div>
 
         <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
           <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">Platform Revenue (MRR)</span>
           <div className="flex items-center justify-between mt-2">
-            <h4 className="text-2xl font-extrabold text-slate-800">₹2,051,760.00</h4>
+            <h4 className="text-2xl font-extrabold text-slate-800">₹{overview.monthlyRevenue.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</h4>
             <div className="w-9 h-9 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100">
               <Coins className="w-4.5 h-4.5" />
             </div>
           </div>
-          <span className="text-xs text-emerald-600 font-bold mt-2 block">↑ 18.2% this quarter</span>
+          <span className="text-xs text-slate-500 font-bold mt-2 block">Successful subscriptions this month</span>
         </div>
       </div>
 
@@ -142,7 +285,7 @@ function SuperAdminDashboard() {
             <h3 className="font-bold text-slate-800 tracking-tight">Global Call Traffic Volumes</h3>
             <span className="text-xs font-semibold text-slate-400">Past 12 Hours</span>
           </div>
-          <CallVolumeChart />
+          <CallVolumeChart data={callTraffic} />
         </div>
 
         <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
@@ -150,7 +293,7 @@ function SuperAdminDashboard() {
             <h3 className="font-bold text-slate-800 tracking-tight">Voice Output Disposition</h3>
             <span className="text-xs font-semibold text-slate-400">All Tenants</span>
           </div>
-          <OutcomePieChart />
+          <OutcomePieChart data={outcomes} />
         </div>
       </div>
 
@@ -176,7 +319,7 @@ function SuperAdminDashboard() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-semibold">
-                {MOCK_COMPANIES.slice(0, 4).map((c) => (
+                {topCompanies.map((c) => (
                   <tr key={c.id} className="hover:bg-slate-50/50 cursor-pointer" onClick={() => { setSelectedCompanyId(c.id); setView('companies'); }}>
                     <td className="py-2.5 font-bold text-slate-800">{c.name}</td>
                     <td className="py-2.5">
@@ -207,7 +350,7 @@ function SuperAdminDashboard() {
             </button>
           </div>
           <div className="space-y-3">
-            {ACTIVE_MONITORING_CALLS.slice(0, 2).map((call) => (
+            {liveCalls.map((call) => (
               <div key={call.id} className="border border-slate-200 rounded-xl p-4 bg-slate-50/30 hover:bg-slate-50 transition duration-200 cursor-pointer" onClick={() => setView('call-monitoring')}>
                 <div className="flex justify-between items-start text-[11px]">
                   <div>
@@ -215,16 +358,17 @@ function SuperAdminDashboard() {
                     <span className="text-slate-400 font-semibold">Agent: {call.agentName}</span>
                   </div>
                   <span className="bg-emerald-50 text-emerald-700 border border-emerald-100 text-[9px] font-bold px-1.5 py-0.5 rounded-full uppercase">
-                    Connected · {call.duration}s
+                    {call.status} · {call.duration}s
                   </span>
                 </div>
-                {call.transcript && call.transcript.length > 0 && (
+                {call.latestTranscript && (
                   <div className="mt-2 text-[11px] bg-white border border-slate-250 rounded-lg p-2.5 text-slate-500 italic font-medium truncate">
-                    "{call.transcript[call.transcript.length - 1].text}"
+                    "{call.latestTranscript}"
                   </div>
                 )}
               </div>
             ))}
+            {liveCalls.length === 0 && <p className="py-8 text-center text-xs font-semibold text-slate-400">No active calls right now.</p>}
           </div>
         </div>
       </div>
@@ -237,70 +381,112 @@ function SuperAdminDashboard() {
    ========================================== */
 function CompaniesListView() {
   const { setSelectedCompanyId } = useAppState();
-  const [companies, setCompanies] = useState<Company[]>(MOCK_COMPANIES);
+  const [companies, setCompanies] = useState<Company[]>([]);
   const [search, setSearch] = useState('');
   const [filterTier, setFilterTier] = useState('All');
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState<PaginationData>({ page: 1, pageSize: 20, total: 0, totalPages: 0 });
+  const [editingCompany, setEditingCompany] = useState<CompanyApiData | null>(null);
 
   // Modal & Form States (pre-filled with the user's requested data for instant confirmation/creation)
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [firstName, setFirstName] = useState('Julia');
-  const [lastName, setLastName] = useState('Gold');
-  const [email, setEmail] = useState('youandmematchmaker@gmail.com');
-  const [businessName, setBusinessName] = useState('You and Me Matchmaking');
-  const [businessPhone, setBusinessPhone] = useState('(215) 595-6697');
-  const [address, setAddress] = useState('679 Baldwin Ln, Langhorne PA 19047');
-  const [state, setState] = useState('Pennsylvania');
-  const [country, setCountry] = useState('United States');
-  const [zip, setZip] = useState('19047');
-  const [website, setWebsite] = useState('www.youandmematchmaker.com');
-  const [timezone, setTimezone] = useState('America/New York(UTC-04:00)');
-  const [billingTier, setBillingTier] = useState<'Starter' | 'Pro' | 'Enterprise'>('Enterprise');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [email, setEmail] = useState('');
+  const [businessName, setBusinessName] = useState('');
+  const [businessPhone, setBusinessPhone] = useState('');
+  const [address, setAddress] = useState('');
+  const [state, setState] = useState('');
+  const [country, setCountry] = useState('India');
+  const [zip, setZip] = useState('');
+  const [website, setWebsite] = useState('');
+  const [timezone, setTimezone] = useState('Asia/Kolkata');
+  const [billingTier, setBillingTier] = useState<'starter' | 'pro' | 'enterprise'>('starter');
+  const [perMinutePrice, setPerMinutePrice] = useState('');
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  const handleCreateCompany = (e: React.FormEvent) => {
+  useEffect(() => {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => {
+      const params = new URLSearchParams({ page: String(page), pageSize: '20' });
+      if (search.trim()) params.set('search', search.trim());
+      if (filterTier !== 'All') params.set('billingTier', filterTier.toLowerCase());
+      setLoading(true); setError('');
+      apiRequest<{ items: CompanyApiData[]; pagination: PaginationData }>(`/admin/companies?${params}`, { signal: controller.signal })
+        .then((result) => { setCompanies(result.items.map(companyFromApi)); setPagination(result.pagination); })
+        .catch((requestError) => { if (!isAbortError(requestError)) setError(requestError instanceof Error ? requestError.message : 'Companies could not be loaded'); })
+        .finally(() => setLoading(false));
+    }, 250);
+    return () => { window.clearTimeout(timeout); controller.abort(); };
+  }, [search, filterTier, refreshKey, page]);
+
+  const handleCreateCompany = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!businessName || !email) return;
-
-    const newCompany: Company = {
-      id: `comp-${Date.now()}`,
-      name: businessName,
-      status: 'active',
-      billingTier,
-      createdAt: new Date().toISOString().split('T')[0],
-      developersCount: 1,
-      creditsBalance: 5000, // Pre-seeded testing credits
-      phoneNumbersCount: 0,
-      monthlySpend: 0,
-      primaryContact: `${firstName} ${lastName} (${email})`,
-      firstName,
-      lastName,
-      email,
-      businessPhone,
-      address,
-      state,
-      country,
-      zip,
-      website,
-      timezone
-    };
-
-    // Store in global mock list
-    MOCK_COMPANIES.push(newCompany);
-    // Refresh local component list state
-    setCompanies([...MOCK_COMPANIES]);
-
-    setSuccessMessage(`Organization "${businessName}" successfully created!`);
-    setTimeout(() => {
-      setSuccessMessage(null);
-      setIsModalOpen(false);
-    }, 2000);
+    setSubmitting(true); setError('');
+    try {
+      await apiRequest<CompanyApiData>('/admin/companies', { method: 'POST', body: JSON.stringify({
+        businessName, legalName: businessName, firstName, lastName, email, businessPhone,
+        website, billingTier, perMinutePrice: Number(perMinutePrice), addressLine1: address, state, country, postalCode: zip,
+        timezone, workspaceName: `${businessName} Workspace`, status: 'active', locale: 'en-US', currency: 'INR',
+      }) });
+      setSuccessMessage(`Organization "${businessName}" successfully created.`);
+      setRefreshKey((value) => value + 1);
+      window.setTimeout(() => { setSuccessMessage(null); setIsModalOpen(false); }, 1200);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Company could not be created');
+    } finally { setSubmitting(false); }
   };
 
-  const filtered = companies.filter(c => {
-    const matchesSearch = c.name.toLowerCase().includes(search.toLowerCase());
-    const matchesTier = filterTier === 'All' || c.billingTier === filterTier;
-    return matchesSearch && matchesTier;
-  });
+  const handleDeleteCompany = async (company: Company) => {
+    if (!window.confirm(`Delete "${company.name}"? All company logins will be revoked and active campaigns will stop.`)) return;
+    setError('');
+    try {
+      await apiRequest(`/admin/companies/${company.id}`, { method: 'DELETE' });
+      setCompanies((current) => current.filter((item) => item.id !== company.id));
+      setRefreshKey((value) => value + 1);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Company could not be deleted');
+    }
+  };
+
+  const openCompanyEditor = async (companyId: string) => {
+    setError('');
+    try {
+      setEditingCompany(await apiRequest<CompanyApiData>(`/admin/companies/${companyId}`));
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Company could not be loaded for editing');
+    }
+  };
+
+  const handleUpdateCompany = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!editingCompany) return;
+    setSubmitting(true); setError('');
+    try {
+      await apiRequest(`/admin/companies/${editingCompany.tenantId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          businessName: editingCompany.businessName, legalName: editingCompany.legalName,
+          firstName: editingCompany.firstName, lastName: editingCompany.lastName,
+          email: editingCompany.email, businessPhone: editingCompany.businessPhone,
+          website: editingCompany.website, billingTier: editingCompany.billingTier,
+          perMinutePrice: Number(editingCompany.perMinutePrice),
+          addressLine1: editingCompany.addressLine1, addressLine2: editingCompany.addressLine2,
+          state: editingCompany.state, country: editingCompany.country,
+          postalCode: editingCompany.postalCode, timezone: editingCompany.timezone,
+        }),
+      });
+      setEditingCompany(null);
+      setRefreshKey((value) => value + 1);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Company could not be updated');
+    } finally { setSubmitting(false); }
+  };
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm relative">
@@ -322,14 +508,14 @@ function CompaniesListView() {
               type="text"
               placeholder="Search companies..."
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
               className="pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none w-full md:w-56 focus:bg-white focus:border-indigo-500 transition"
             />
             <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
           </div>
           <select
             value={filterTier}
-            onChange={(e) => setFilterTier(e.target.value)}
+            onChange={(e) => { setFilterTier(e.target.value); setPage(1); }}
             className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs font-semibold text-slate-700 outline-none cursor-pointer"
           >
             <option value="All">All Tiers</option>
@@ -341,6 +527,7 @@ function CompaniesListView() {
       </div>
 
       <div className="overflow-x-auto">
+        {error && <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-700">{error}</div>}
         <table className="w-full text-left text-xs">
           <thead>
             <tr className="border-b border-slate-200 text-slate-400 font-bold uppercase tracking-wider text-[10px] pb-3">
@@ -354,7 +541,10 @@ function CompaniesListView() {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 font-semibold">
-            {filtered.map((c) => (
+            {loading && (
+              <tr><td colSpan={7} className="py-10 text-center text-xs font-semibold text-slate-400">Loading companies...</td></tr>
+            )}
+            {companies.map((c) => (
               <tr key={c.id} className="hover:bg-slate-50/50 group">
                 <td className="py-3.5 font-bold text-slate-800">
                   <button onClick={() => setSelectedCompanyId(c.id)} className="text-left hover:text-indigo-600 transition cursor-pointer">
@@ -379,19 +569,72 @@ function CompaniesListView() {
                 <td className="py-3.5 text-right font-semibold">{c.phoneNumbersCount} numbers</td>
                 <td className="py-3.5 text-right font-mono font-bold text-indigo-600">₹{c.creditsBalance.toLocaleString()}</td>
                 <td className="py-3.5 text-right">
-                  <button
-                    onClick={() => setSelectedCompanyId(c.id)}
-                    className="px-3 py-1.5 bg-slate-50 group-hover:bg-indigo-50 text-slate-600 group-hover:text-indigo-600 rounded-lg font-bold transition flex items-center space-x-1 ml-auto cursor-pointer"
-                  >
-                    <span>Inspect</span>
-                    <ArrowRight className="w-3 h-3" />
-                  </button>
+                  <div className="flex items-center justify-end gap-1.5">
+                    <button
+                      onClick={() => setSelectedCompanyId(c.id)}
+                      className="px-3 py-1.5 bg-slate-50 group-hover:bg-indigo-50 text-slate-600 group-hover:text-indigo-600 rounded-lg font-bold transition flex items-center space-x-1 cursor-pointer"
+                    >
+                      <span>Inspect</span>
+                      <ArrowRight className="w-3 h-3" />
+                    </button>
+                    <button onClick={() => openCompanyEditor(c.id)}
+                      className="px-2.5 py-1.5 rounded-lg border border-indigo-100 bg-indigo-50 text-[10px] font-bold text-indigo-700 hover:bg-indigo-100 cursor-pointer">
+                      Edit
+                    </button>
+                    <button onClick={() => handleDeleteCompany(c)} title="Delete company"
+                      className="p-1.5 rounded-lg border border-red-100 bg-red-50 text-red-600 hover:bg-red-100 transition cursor-pointer">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
+            {!loading && companies.length === 0 && (
+              <tr><td colSpan={7} className="py-10 text-center text-xs font-semibold text-slate-400">No companies found.</td></tr>
+            )}
           </tbody>
         </table>
       </div>
+
+      <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-4 text-[10px] font-bold text-slate-500">
+        <span>{pagination.total.toLocaleString()} companies</span>
+        <div className="flex items-center gap-2">
+          <button type="button" disabled={loading || page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))} className="rounded-md border border-slate-200 px-3 py-1.5 disabled:opacity-40">Previous</button>
+          <span>Page {pagination.page} of {Math.max(1, pagination.totalPages)}</span>
+          <button type="button" disabled={loading || page >= pagination.totalPages} onClick={() => setPage((value) => value + 1)} className="rounded-md border border-slate-200 px-3 py-1.5 disabled:opacity-40">Next</button>
+        </div>
+      </div>
+
+      {editingCompany && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-xs">
+          <form onSubmit={handleUpdateCompany} className="w-full max-w-2xl max-h-[90vh] overflow-y-auto space-y-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between border-b border-slate-100 pb-3">
+              <div><h3 className="text-sm font-black text-slate-800">Edit Company</h3><p className="text-[10px] text-slate-400">Update tenant business and billing information.</p></div>
+              <button type="button" onClick={() => setEditingCompany(null)} className="rounded-md p-1 text-slate-400 hover:bg-slate-100"><X className="h-4 w-4" /></button>
+            </div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 text-xs">
+              <label className="font-bold text-slate-500">Business Name<input required value={editingCompany.businessName} onChange={(e) => setEditingCompany({ ...editingCompany, businessName: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
+              <label className="font-bold text-slate-500">Legal Name<input value={editingCompany.legalName ?? ''} onChange={(e) => setEditingCompany({ ...editingCompany, legalName: e.target.value || null })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
+              <label className="font-bold text-slate-500">First Name<input required value={editingCompany.firstName ?? ''} onChange={(e) => setEditingCompany({ ...editingCompany, firstName: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
+              <label className="font-bold text-slate-500">Last Name<input required value={editingCompany.lastName ?? ''} onChange={(e) => setEditingCompany({ ...editingCompany, lastName: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
+              <label className="font-bold text-slate-500">Primary Email<input type="email" required value={editingCompany.email} onChange={(e) => setEditingCompany({ ...editingCompany, email: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
+              <label className="font-bold text-slate-500">Business Phone<input required value={editingCompany.businessPhone ?? ''} onChange={(e) => setEditingCompany({ ...editingCompany, businessPhone: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
+              <label className="font-bold text-slate-500">Website<input value={editingCompany.website ?? ''} onChange={(e) => setEditingCompany({ ...editingCompany, website: e.target.value || null })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
+              <label className="font-bold text-slate-500">Billing Tier<select value={editingCompany.billingTier} onChange={(e) => setEditingCompany({ ...editingCompany, billingTier: e.target.value as CompanyApiData['billingTier'] })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800"><option value="starter">Starter</option><option value="pro">Pro</option><option value="enterprise">Enterprise</option></select></label>
+              <label className="font-bold text-slate-500">Per-Minute Price (₹)<input type="number" min="0" step="0.01" required value={editingCompany.perMinutePrice} onChange={(e) => setEditingCompany({ ...editingCompany, perMinutePrice: Number(e.target.value) })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
+              <label className="font-bold text-slate-500">Time Zone<input list="company-timezone-options" required value={editingCompany.timezone} onChange={(e) => setEditingCompany({ ...editingCompany, timezone: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
+              <label className="font-bold text-slate-500 md:col-span-2">Street Address<input value={editingCompany.addressLine1 ?? ''} onChange={(e) => setEditingCompany({ ...editingCompany, addressLine1: e.target.value || null })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
+              <label className="font-bold text-slate-500">State<input value={editingCompany.state ?? ''} onChange={(e) => setEditingCompany({ ...editingCompany, state: e.target.value || null })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
+              <label className="font-bold text-slate-500">Country<input list="company-country-options" value={editingCompany.country ?? ''} onChange={(e) => setEditingCompany({ ...editingCompany, country: e.target.value || null })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
+              <label className="font-bold text-slate-500">Postal Code<input value={editingCompany.postalCode ?? ''} onChange={(e) => setEditingCompany({ ...editingCompany, postalCode: e.target.value || null })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-slate-100 pt-4">
+              <button type="button" onClick={() => setEditingCompany(null)} className="rounded-lg bg-slate-100 px-4 py-2 text-xs font-bold text-slate-600">Cancel</button>
+              <button type="submit" disabled={submitting} className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">{submitting ? 'Saving...' : 'Save Changes'}</button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {/* CREATE COMPANY MODAL DIALOG */}
       {isModalOpen && (
@@ -417,6 +660,11 @@ function CompaniesListView() {
               {successMessage && (
                 <div className="p-3 bg-emerald-50 text-emerald-800 border border-emerald-100 rounded-xl text-xs font-bold animate-pulse">
                   {successMessage}
+                </div>
+              )}
+              {error && (
+                <div className="p-3 bg-red-50 text-red-700 border border-red-100 rounded-xl text-xs font-bold">
+                  {error}
                 </div>
               )}
 
@@ -511,11 +759,24 @@ function CompaniesListView() {
                         onChange={(e) => setBillingTier(e.target.value as any)}
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 outline-none cursor-pointer font-semibold text-slate-800"
                       >
-                        <option value="Starter">Starter</option>
-                        <option value="Pro">Pro</option>
-                        <option value="Enterprise">Enterprise</option>
+                        <option value="starter">Starter</option>
+                        <option value="pro">Pro</option>
+                        <option value="enterprise">Enterprise</option>
                       </select>
                     </div>
+                  </div>
+                  <div className="mt-3">
+                    <label className="block text-[10px] text-slate-500 mb-1 font-bold">Per-Minute Price (₹)</label>
+                    <input
+                      type="number"
+                      required
+                      min="0"
+                      step="0.01"
+                      value={perMinutePrice}
+                      onChange={(e) => setPerMinutePrice(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-indigo-500 rounded-lg px-3 py-2 outline-none font-semibold text-slate-800"
+                      placeholder="e.g. 5.50"
+                    />
                   </div>
                 </div>
 
@@ -551,12 +812,16 @@ function CompaniesListView() {
                       <label className="block text-[10px] text-slate-500 mb-1 font-bold">Country</label>
                       <input
                         type="text"
+                        list="company-country-options"
                         required
                         value={country}
                         onChange={(e) => setCountry(e.target.value)}
                         className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-indigo-500 rounded-lg px-3 py-2 outline-none font-semibold text-slate-800"
-                        placeholder="Country"
+                        placeholder="Search country"
                       />
+                      <datalist id="company-country-options">
+                        {COMPANY_COUNTRIES.map((item) => <option key={item} value={item} />)}
+                      </datalist>
                     </div>
                     <div>
                       <label className="block text-[10px] text-slate-500 mb-1 font-bold">Zip Code</label>
@@ -575,12 +840,18 @@ function CompaniesListView() {
                     <label className="block text-[10px] text-slate-500 mb-1 font-bold">Time Zone</label>
                     <input
                       type="text"
+                      list="company-timezone-options"
                       required
                       value={timezone}
                       onChange={(e) => setTimezone(e.target.value)}
                       className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-indigo-500 rounded-lg px-3 py-2 outline-none font-semibold text-slate-800"
-                      placeholder="e.g. America/New York"
+                      placeholder="Search timezone"
                     />
+                    <datalist id="company-timezone-options">
+                      {COMPANY_TIMEZONES.map((item) => (
+                        <option key={item.value} value={item.value}>{item.label}</option>
+                      ))}
+                    </datalist>
                   </div>
                 </div>
               </div>
@@ -596,15 +867,17 @@ function CompaniesListView() {
                 </button>
                 <button
                   type="submit"
+                  disabled={submitting}
                   className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold transition cursor-pointer text-xs shadow-md shadow-indigo-100"
                 >
-                  Confirm Provisioning
+                  {submitting ? 'Creating…' : 'Confirm Provisioning'}
                 </button>
               </div>
             </form>
           </div>
         </div>
       )}
+
     </div>
   );
 }
@@ -613,24 +886,57 @@ function CompaniesListView() {
    2b. COMPANY DETAIL VIEW (DRILLDOWN)
    ========================================== */
 function CompanyDetailView({ companyId, onBack }: { companyId: string, onBack: () => void }) {
-  const company = MOCK_COMPANIES.find(c => c.id === companyId);
-  if (!company) return <div>Company not found.</div>;
-
-  const [balance, setBalance] = useState(company.creditsBalance);
+  const [company, setCompany] = useState<Company | null>(null);
+  const [developers, setDevelopers] = useState<Developer[]>([]);
+  const [numbers, setNumbers] = useState<PhoneNumber[]>([]);
+  const [balance, setBalance] = useState(0);
   const [adjustAmount, setAdjustAmount] = useState('100');
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
 
-  const developers = MOCK_DEVELOPERS.filter(d => d.companyId === companyId);
-  const numbers = MOCK_PHONE_NUMBERS.filter(num => num.assignedTo?.includes(company.name) || num.id === 'num-1');
+  useEffect(() => {
+    setLoading(true); setError('');
+    Promise.all([
+      apiRequest<CompanyApiData>(`/admin/companies/${companyId}`),
+      apiRequest<{ items: Array<{ id: string; fullName: string; email: string; companyId: string; companyName: string; status: 'active' | 'invited' | 'suspended'; lastActiveAt: string | null }> }>(`/admin/developers?companyId=${companyId}&role=COMPANY_DEVELOPER&pageSize=50`),
+      apiRequest<{ items: Array<{ id: string; number: string; provider: string; numberType: string | null; capabilities: { voice?: boolean }; status: 'active' | 'released' | 'unavailable'; monthlyCost: number | null }> }>(`/admin/telephony/phone-numbers?companyId=${companyId}&assignment=assigned&pageSize=50`),
+    ]).then(([companyData, developerData, phoneData]) => {
+      const mappedCompany = companyFromApi(companyData);
+      setCompany(mappedCompany); setBalance(mappedCompany.creditsBalance);
+      setDevelopers(developerData.items.map((developer) => ({
+        id: developer.id, name: developer.fullName, email: developer.email,
+        companyId: developer.companyId, companyName: developer.companyName,
+        status: developer.status === 'suspended' ? 'inactive' : developer.status,
+        lastActive: developer.lastActiveAt ?? 'Never', role: 'admin',
+      })));
+      setNumbers(phoneData.items.map((number) => ({
+        id: number.id, number: number.number, provider: number.provider,
+        type: 'Bidirectional', status: number.status === 'unavailable' ? 'pending' : number.status,
+        monthlyCost: number.monthlyCost ?? 0,
+      })));
+    }).catch((requestError) => setError(requestError instanceof Error ? requestError.message : 'Company could not be loaded'))
+      .finally(() => setLoading(false));
+  }, [companyId]);
 
-  const adjustCredits = (direction: 'add' | 'subtract') => {
+  const adjustCredits = async (direction: 'add' | 'subtract') => {
     const amt = parseFloat(adjustAmount);
     if (isNaN(amt) || amt <= 0) return;
-    const finalBalance = direction === 'add' ? balance + amt : Math.max(0, balance - amt);
-    setBalance(finalBalance);
-    setSuccessMsg(`Balance adjusted successfully to ₹${finalBalance.toLocaleString()}`);
-    setTimeout(() => setSuccessMsg(null), 3000);
+    setError('');
+    try {
+      const wallet = await apiRequest<{ balance: number }>(`/admin/credits/companies/${companyId}/adjustments`, {
+        method: 'POST', body: JSON.stringify({ direction: direction === 'add' ? 'credit' : 'debit',
+          amount: amt, type: 'manual_adjustment', description: `Super Admin ${direction} adjustment` }),
+      });
+      setBalance(wallet.balance);
+      setSuccessMsg(`Balance adjusted successfully to ₹${wallet.balance.toLocaleString()}`);
+      setTimeout(() => setSuccessMsg(null), 3000);
+    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : 'Credits could not be adjusted'); }
   };
+
+  if (loading) return <div className="rounded-xl border border-slate-200 bg-white p-10 text-center text-sm font-semibold text-slate-500">Loading company…</div>;
+  if (error && !company) return <div className="rounded-xl border border-red-200 bg-red-50 p-6 text-sm font-semibold text-red-700">{error}</div>;
+  if (!company) return <div>Company not found.</div>;
 
   return (
     <div className="space-y-6">
@@ -666,6 +972,10 @@ function CompanyDetailView({ companyId, onBack }: { companyId: string, onBack: (
               <span className="text-slate-700">₹{company.monthlySpend.toLocaleString()}</span>
             </div>
             <div>
+              <span className="text-slate-400 block">Per-Minute Price</span>
+              <span className="text-slate-700">₹{company.perMinutePrice.toFixed(2)}</span>
+            </div>
+            <div>
               <span className="text-slate-400 block">DID Lines</span>
               <span className="text-slate-700">{company.phoneNumbersCount} active</span>
             </div>
@@ -679,7 +989,7 @@ function CompanyDetailView({ companyId, onBack }: { companyId: string, onBack: (
               <div>
                 <span className="text-slate-400 block">Website</span>
                 <span className="text-slate-700 font-medium text-indigo-600 hover:underline">
-                  <a href={`https://${company.website}`} target="_blank" rel="noopener noreferrer">{company.website}</a>
+                  <a href={company.website.startsWith('http') ? company.website : `https://${company.website}`} target="_blank" rel="noopener noreferrer">{company.website}</a>
                 </span>
               </div>
             )}
@@ -706,6 +1016,7 @@ function CompanyDetailView({ companyId, onBack }: { companyId: string, onBack: (
               {successMsg}
             </div>
           )}
+          {error && <div className="p-2.5 bg-red-50 text-red-700 border border-red-100 rounded-lg text-xs font-semibold">{error}</div>}
 
           <div className="flex flex-wrap items-center gap-6">
             <div>
@@ -791,180 +1102,218 @@ function CompanyDetailView({ companyId, onBack }: { companyId: string, onBack: (
 }
 
 /* ==========================================
-   3. DEVELOPERS LIST VIEW
+   3. TENANT USERS LIST VIEW
    ========================================== */
-function DevelopersListView() {
-  const [developers, setDevelopers] = useState<Developer[]>(MOCK_DEVELOPERS);
-  const [devName, setDevName] = useState('');
-  const [devEmail, setDevEmail] = useState('');
-  const [devPassword, setDevPassword] = useState('');
-  const [inviteCompany, setInviteCompany] = useState(MOCK_COMPANIES[0]?.id || '');
-  const [success, setSuccess] = useState<string | null>(null);
+function UsersListView() {
+  const [users, setUsers] = useState<TenantUserApiData[]>([]);
+  const [companies, setCompanies] = useState<CompanyOption[]>([]);
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState<PaginationData>({ page: 1, pageSize: 20, total: 0, totalPages: 0 });
+  const [fullName, setFullName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [companyId, setCompanyId] = useState('');
+  const [userRole, setUserRole] = useState<'COMPANY_DEVELOPER' | 'COMPANY_USER'>('COMPANY_DEVELOPER');
+  const [loading, setLoading] = useState(true);
+  const [companiesLoading, setCompaniesLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [editingUser, setEditingUser] = useState<TenantUserApiData | null>(null);
 
-  const handleCreateDeveloper = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!devName.trim() || !devEmail.trim() || !devPassword.trim()) return;
-
-    const compName = MOCK_COMPANIES.find(c => c.id === inviteCompany)?.name || 'Unknown Corp';
-
-    const newDev: Developer = {
-      id: `dev-${Date.now()}`,
-      name: devName,
-      email: devEmail,
-      companyId: inviteCompany,
-      companyName: compName,
-      status: 'active',
-      lastActive: 'Never',
-      role: 'member',
-      password: devPassword
-    };
-
-    MOCK_DEVELOPERS.unshift(newDev);
-    setDevelopers([...MOCK_DEVELOPERS]);
-    setSuccess(`Developer user "${devName}" created successfully!`);
-    
-    // Clear inputs
-    setDevName('');
-    setDevEmail('');
-    setDevPassword('');
-    
-    setTimeout(() => setSuccess(null), 3000);
+  const loadUsers = async () => {
+    setLoading(true); setCompaniesLoading(true); setError('');
+    await Promise.allSettled([
+      apiRequest<{ items: TenantUserApiData[]; pagination: PaginationData }>(`/admin/developers?page=${page}&pageSize=20`)
+        .then((data) => { setUsers(data.items); setPagination(data.pagination); })
+        .catch((requestError) => setError(requestError instanceof Error ? requestError.message : 'Users could not be loaded'))
+        .finally(() => setLoading(false)),
+      apiRequest<CompanyOption[]>('/admin/companies/options')
+        .then((data) => {
+          setCompanies(data);
+          setCompanyId((current) => current || data[0]?.tenantId || '');
+        })
+        .catch((requestError) => setError(requestError instanceof Error ? requestError.message : 'Companies could not be loaded'))
+        .finally(() => setCompaniesLoading(false)),
+    ]);
   };
 
-  const toggleDevStatus = (id: string) => {
-    // Find inside MOCK_DEVELOPERS too so that status updates persist correctly
-    const foundDev = MOCK_DEVELOPERS.find(d => d.id === id);
-    if (foundDev) {
-      foundDev.status = foundDev.status === 'active' ? 'inactive' : 'active';
+  useEffect(() => { void loadUsers(); }, [page]);
+
+  const handleCreateUser = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!companyId) return;
+    setSubmitting(true); setError(''); setSuccess('');
+    try {
+      await apiRequest<TenantUserApiData>('/admin/developers', {
+        method: 'POST',
+        body: JSON.stringify({ companyId, fullName, email, password, role: userRole }),
+      });
+      setSuccess(`${userRole === 'COMPANY_DEVELOPER' ? 'Developer' : 'User'} account created successfully.`);
+      setFullName(''); setEmail(''); setPassword('');
+      await loadUsers();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'User could not be created');
+    } finally { setSubmitting(false); }
+  };
+
+  const toggleUserStatus = async (user: TenantUserApiData) => {
+    setError('');
+    try {
+      await apiRequest(`/admin/developers/${user.id}/status`, {
+        method: 'PATCH', body: JSON.stringify({ status: user.status === 'active' ? 'suspended' : 'active' }),
+      });
+      await loadUsers();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'User status could not be updated');
     }
-    setDevelopers([...MOCK_DEVELOPERS]);
+  };
+
+  const deleteUser = async (user: TenantUserApiData) => {
+    if (!window.confirm(`Delete ${user.fullName} from ${user.companyName}? This immediately revokes login access.`)) return;
+    setError('');
+    try {
+      await apiRequest(`/admin/developers/${user.id}`, { method: 'DELETE' });
+      setUsers((current) => current.filter((item) => item.id !== user.id));
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'User could not be deleted');
+    }
+  };
+
+  const handleUpdateUser = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!editingUser) return;
+    setSubmitting(true); setError('');
+    try {
+      const updated = await apiRequest<TenantUserApiData>(`/admin/developers/${editingUser.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          fullName: editingUser.fullName, email: editingUser.email,
+          companyId: editingUser.companyId, role: editingUser.role,
+        }),
+      });
+      setUsers((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setEditingUser(null);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'User could not be updated');
+    } finally { setSubmitting(false); }
   };
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      {/* Create Developer form */}
       <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm h-fit space-y-4">
         <div>
-          <h2 className="text-md font-bold text-slate-800 tracking-tight">Create Tenant Developer</h2>
-          <p className="text-xs text-slate-400 mt-0.5 font-medium">Create direct user login credentials for a specific company tenant account.</p>
+          <h2 className="text-md font-bold text-slate-800 tracking-tight">Create Company User</h2>
+          <p className="text-xs text-slate-400 mt-0.5 font-medium">Create a developer or standard user and assign the account to a company.</p>
         </div>
-
-        {success && (
-          <div className="p-2.5 bg-emerald-50 border border-emerald-100 text-emerald-800 rounded-lg text-xs font-semibold">
-            {success}
-          </div>
-        )}
-
-        <form onSubmit={handleCreateDeveloper} className="space-y-4 text-xs font-semibold">
+        {success && <div className="p-2.5 bg-emerald-50 border border-emerald-100 text-emerald-800 rounded-lg text-xs font-semibold">{success}</div>}
+        {error && <div className="p-2.5 bg-red-50 border border-red-100 text-red-700 rounded-lg text-xs font-semibold">{error}</div>}
+        <form onSubmit={handleCreateUser} className="space-y-4 text-xs font-semibold">
           <div>
-            <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Developer Full Name</label>
-            <input
-              type="text"
-              required
-              value={devName}
-              onChange={(e) => setDevName(e.target.value)}
-              placeholder="e.g. John Doe"
-              className="w-full bg-slate-50 border border-slate-200 focus:bg-white rounded-lg px-3 py-1.5 text-slate-800 outline-none focus:border-indigo-500 transition"
-            />
+            <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Full Name</label>
+            <input type="text" required value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="e.g. John Doe"
+              className="w-full bg-slate-50 border border-slate-200 focus:bg-white rounded-lg px-3 py-1.5 text-slate-800 outline-none focus:border-indigo-500 transition" />
           </div>
-
           <div>
-            <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Developer E-mail (Login ID)</label>
-            <input
-              type="email"
-              required
-              value={devEmail}
-              onChange={(e) => setDevEmail(e.target.value)}
-              placeholder="developer@acme.com"
-              className="w-full bg-slate-50 border border-slate-200 focus:bg-white rounded-lg px-3 py-1.5 text-slate-800 outline-none focus:border-indigo-500 transition"
-            />
+            <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Email (Login ID)</label>
+            <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="user@company.com"
+              className="w-full bg-slate-50 border border-slate-200 focus:bg-white rounded-lg px-3 py-1.5 text-slate-800 outline-none focus:border-indigo-500 transition" />
           </div>
-
           <div>
             <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Login Password</label>
-            <input
-              type="text"
-              required
-              value={devPassword}
-              onChange={(e) => setDevPassword(e.target.value)}
-              placeholder="e.g. devSecure123"
-              className="w-full bg-slate-50 border border-slate-200 focus:bg-white rounded-lg px-3 py-1.5 text-slate-800 outline-none focus:border-indigo-500 transition"
-            />
+            <input type="password" required minLength={10} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Minimum 10 characters"
+              className="w-full bg-slate-50 border border-slate-200 focus:bg-white rounded-lg px-3 py-1.5 text-slate-800 outline-none focus:border-indigo-500 transition" />
           </div>
-
           <div>
-            <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Assign Tenant Organization</label>
-            <select
-              value={inviteCompany}
-              onChange={(e) => setInviteCompany(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-slate-800 outline-none cursor-pointer font-bold"
-            >
-              {MOCK_COMPANIES.map(c => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
+            <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Account Role</label>
+            <select value={userRole} onChange={(e) => setUserRole(e.target.value as typeof userRole)}
+              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-slate-800 outline-none cursor-pointer font-bold">
+              <option value="COMPANY_DEVELOPER">Company Developer</option>
+              <option value="COMPANY_USER">Company User</option>
             </select>
           </div>
-
-          <button
-            type="submit"
-            className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold transition shadow-md shadow-indigo-100/50 flex items-center justify-center space-x-1.5 cursor-pointer"
-          >
+          <div>
+            <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Assign Company</label>
+            <select required disabled={companiesLoading} value={companyId} onChange={(e) => setCompanyId(e.target.value)}
+              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-slate-800 outline-none cursor-pointer font-bold">
+              <option value="" disabled>{companiesLoading ? 'Loading companies...' : 'Select a company'}</option>
+              {companies.map((company) => <option key={company.tenantId} value={company.tenantId}>{company.businessName}</option>)}
+            </select>
+          </div>
+          <button type="submit" disabled={submitting || companies.length === 0}
+            className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg font-bold transition shadow-md shadow-indigo-100/50 flex items-center justify-center space-x-1.5 cursor-pointer">
             <UserCheck className="w-4 h-4" />
-            <span>Create Developer Account</span>
+            <span>{submitting ? 'Creating...' : 'Create User Account'}</span>
           </button>
         </form>
       </div>
 
-      {/* Developer directory */}
       <div className="lg:col-span-2 bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-        <h2 className="text-md font-bold text-slate-800 mb-3 tracking-tight">Global Developer Index</h2>
+        <h2 className="text-md font-bold text-slate-800 mb-3 tracking-tight">Company User Directory</h2>
         <div className="overflow-x-auto text-xs">
           <table className="w-full text-left">
-            <thead>
-              <tr className="border-b border-slate-200 text-slate-400 font-bold uppercase tracking-wider text-[9px]">
-                <th className="pb-2">Developer</th>
-                <th className="pb-2">Tenant Association</th>
-                <th className="pb-2">Status</th>
-                <th className="pb-2">Last Sync</th>
-                <th className="pb-2 text-right">Actions</th>
-              </tr>
-            </thead>
+            <thead><tr className="border-b border-slate-200 text-slate-400 font-bold uppercase tracking-wider text-[9px]">
+              <th className="pb-2">User</th><th className="pb-2">Company</th><th className="pb-2">Role</th>
+              <th className="pb-2">Status</th><th className="pb-2">Last Active</th><th className="pb-2 text-right">Actions</th>
+            </tr></thead>
             <tbody className="divide-y divide-slate-100 font-semibold">
-              {developers.map(dev => (
-                <tr key={dev.id} className="hover:bg-slate-50/50">
-                  <td className="py-2.5">
-                    <span className="font-bold text-slate-800 block">{dev.name}</span>
-                    <span className="text-[10px] text-slate-400 font-mono font-medium block">{dev.email}</span>
-                    {dev.password && (
-                      <span className="text-[10px] text-indigo-600 font-mono font-bold block mt-0.5 bg-indigo-50/50 border border-indigo-100/50 px-1 py-0.5 rounded w-fit">Key: {dev.password}</span>
-                    )}
-                  </td>
-                  <td className="py-2.5 text-slate-700">{dev.companyName}</td>
-                  <td className="py-2.5">
-                    <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase border ${
-                      dev.status === 'active' ? 'bg-emerald-50 border-emerald-100 text-emerald-600' :
-                      dev.status === 'invited' ? 'bg-indigo-50 border-indigo-100 text-indigo-600' : 'bg-slate-100 border-slate-200 text-slate-500'
-                    }`}>
-                      {dev.status}
-                    </span>
-                  </td>
-                  <td className="py-2.5 text-slate-500 font-mono text-[10px]">{dev.lastActive}</td>
-                  <td className="py-2.5 text-right">
-                    <button
-                      onClick={() => toggleDevStatus(dev.id)}
-                      className={`px-2.5 py-1 rounded-md text-[10px] font-bold transition border cursor-pointer ${
-                        dev.status === 'active' ? 'bg-red-50 border-red-100 text-red-600 hover:bg-red-100' : 'bg-emerald-50 border-emerald-100 text-emerald-600 hover:bg-emerald-100'
-                      }`}
-                    >
-                      {dev.status === 'active' ? 'Revoke' : 'Re-approve'}
+              {loading && <tr><td colSpan={6} className="py-10 text-center text-slate-400">Loading users...</td></tr>}
+              {!loading && users.map((user) => (
+                <tr key={user.id} className="hover:bg-slate-50/50">
+                  <td className="py-2.5"><span className="font-bold text-slate-800 block">{user.fullName}</span><span className="text-[10px] text-slate-400 font-mono">{user.email}</span></td>
+                  <td className="py-2.5 text-slate-700">{user.companyName}</td>
+                  <td className="py-2.5"><span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-100">{user.role === 'COMPANY_DEVELOPER' ? 'Developer' : 'User'}</span></td>
+                  <td className="py-2.5"><span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase border ${user.status === 'active' ? 'bg-emerald-50 border-emerald-100 text-emerald-600' : 'bg-slate-100 border-slate-200 text-slate-500'}`}>{user.status}</span></td>
+                  <td className="py-2.5 text-slate-500 font-mono text-[10px]">{user.lastActiveAt ? new Date(user.lastActiveAt).toLocaleString() : 'Never'}</td>
+                  <td className="py-2.5 text-right"><div className="flex items-center justify-end gap-1.5">
+                    <button onClick={() => { setEditingUser(user); setError(''); }}
+                      className="px-2.5 py-1 rounded-md text-[10px] font-bold border border-indigo-100 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 cursor-pointer">
+                      Edit
                     </button>
-                  </td>
+                    <button onClick={() => toggleUserStatus(user)}
+                      className={`px-2.5 py-1 rounded-md text-[10px] font-bold transition border cursor-pointer ${user.status === 'active' ? 'bg-red-50 border-red-100 text-red-600' : 'bg-emerald-50 border-emerald-100 text-emerald-600'}`}>
+                      {user.status === 'active' ? 'Suspend' : 'Activate'}
+                    </button>
+                    <button onClick={() => deleteUser(user)} title="Delete user"
+                      className="p-1 rounded-md border border-red-100 bg-red-50 text-red-600 hover:bg-red-100 transition cursor-pointer">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div></td>
                 </tr>
               ))}
+              {!loading && users.length === 0 && <tr><td colSpan={6} className="py-10 text-center text-slate-400">No company users found.</td></tr>}
             </tbody>
           </table>
         </div>
+        <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-4 text-[10px] font-bold text-slate-500">
+          <span>{pagination.total.toLocaleString()} users</span>
+          <div className="flex items-center gap-2">
+            <button type="button" disabled={loading || page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))} className="rounded-md border border-slate-200 px-3 py-1.5 disabled:opacity-40">Previous</button>
+            <span>Page {pagination.page} of {Math.max(1, pagination.totalPages)}</span>
+            <button type="button" disabled={loading || page >= pagination.totalPages} onClick={() => setPage((value) => value + 1)} className="rounded-md border border-slate-200 px-3 py-1.5 disabled:opacity-40">Next</button>
+          </div>
+        </div>
       </div>
+
+      {editingUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-xs">
+          <form onSubmit={handleUpdateUser} className="w-full max-w-lg space-y-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between border-b border-slate-100 pb-3">
+              <div><h3 className="text-sm font-black text-slate-800">Edit Company User</h3><p className="text-[10px] text-slate-400">Role or company changes require the user to log in again.</p></div>
+              <button type="button" onClick={() => setEditingUser(null)} className="rounded-md p-1 text-slate-400 hover:bg-slate-100"><X className="h-4 w-4" /></button>
+            </div>
+            {error && <div className="rounded-lg border border-red-100 bg-red-50 p-2.5 text-xs font-semibold text-red-700">{error}</div>}
+            <label className="block text-[10px] font-bold text-slate-500">Full Name<input required value={editingUser.fullName} onChange={(e) => setEditingUser({ ...editingUser, fullName: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-800 outline-none focus:border-indigo-500" /></label>
+            <label className="block text-[10px] font-bold text-slate-500">Email<input type="email" required value={editingUser.email} onChange={(e) => setEditingUser({ ...editingUser, email: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-800 outline-none focus:border-indigo-500" /></label>
+            <label className="block text-[10px] font-bold text-slate-500">Role<select value={editingUser.role} onChange={(e) => setEditingUser({ ...editingUser, role: e.target.value as TenantUserApiData['role'] })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-800"><option value="COMPANY_DEVELOPER">Company Developer</option><option value="COMPANY_USER">Company User</option></select></label>
+            <label className="block text-[10px] font-bold text-slate-500">Assigned Company<select value={editingUser.companyId} onChange={(e) => setEditingUser({ ...editingUser, companyId: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-800">{companies.map((company) => <option key={company.tenantId} value={company.tenantId}>{company.businessName}</option>)}</select></label>
+            <div className="flex justify-end gap-2 border-t border-slate-100 pt-4">
+              <button type="button" onClick={() => setEditingUser(null)} className="rounded-lg bg-slate-100 px-4 py-2 text-xs font-bold text-slate-600">Cancel</button>
+              <button type="submit" disabled={submitting} className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">{submitting ? 'Saving...' : 'Save Changes'}</button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }
@@ -973,26 +1322,53 @@ function DevelopersListView() {
    4. VOICE PROVIDERS VIEW
    ========================================== */
 function VoiceProvidersView() {
-  const [providers, setProviders] = useState(MOCK_PROVIDERS);
-  
-  // Add Provider State
+  const [providers, setProviders] = useState<ProviderApiData[]>([]);
   const [showAddForm, setShowAddForm] = useState(false);
   const [name, setName] = useState('');
-  const [type, setType] = useState<'telephony' | 'llm' | 'tts' | 'stt'>('tts');
+  const [type, setType] = useState<'llm' | 'tts' | 'stt'>('tts');
   const [status, setStatus] = useState<'connected' | 'disconnected' | 'error'>('connected');
-  
-  // Dynamic Parameters state list
   const [parameters, setParameters] = useState<Array<{ key: string; value: string }>>([]);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+  const [editingProvider, setEditingProvider] = useState<ProviderApiData | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editStatus, setEditStatus] = useState<'connected' | 'disconnected' | 'error'>('disconnected');
+  const [editBaseUrl, setEditBaseUrl] = useState('');
+  const [editLatencyMs, setEditLatencyMs] = useState('');
+  const [editParameters, setEditParameters] = useState<Array<{
+    originalKey?: string; key: string; value: string; isSecret: boolean;
+  }>>([]);
+  const [modelProvider, setModelProvider] = useState<ProviderApiData | null>(null);
+  const [providerModels, setProviderModels] = useState<ProviderModelApiData[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelKey, setModelKey] = useState('');
+  const [modelDisplayName, setModelDisplayName] = useState('');
+  const [modelParameters, setModelParameters] = useState<Array<{ key: string; value: string }>>([]);
 
-  const toggleProviderStatus = (id: string) => {
-    setProviders(providers.map(p => {
-      if (p.id === id) {
-        const nextStatus = p.status === 'connected' ? 'disconnected' : 'connected';
-        return { ...p, status: nextStatus, latency: nextStatus === 'connected' ? '120ms' : 'N/A' };
-      }
-      return p;
-    }));
+  const loadProviders = async () => {
+    setLoading(true); setError('');
+    try {
+      setProviders(await apiRequest<ProviderApiData[]>('/admin/providers'));
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Providers could not be loaded');
+    } finally { setLoading(false); }
+  };
+
+  useEffect(() => { void loadProviders(); }, []);
+
+  const toggleProviderStatus = async (provider: ProviderApiData) => {
+    const nextStatus = provider.status === 'connected' ? 'disconnected' : 'connected';
+    setError('');
+    try {
+      const updated = await apiRequest<ProviderApiData>(`/admin/providers/${provider.id}/status`, {
+        method: 'PATCH', body: JSON.stringify({ status: nextStatus }),
+      });
+      setProviders((current) => current.map((item) => item.id === updated.id ? updated : item));
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Provider status could not be updated');
+    }
   };
 
   const addParameterField = () => {
@@ -1009,40 +1385,121 @@ function VoiceProvidersView() {
     setParameters(updated);
   };
 
-  const handleCreateProvider = (e: React.FormEvent) => {
+  const handleCreateProvider = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
-
-    // Filter out blank parameters
     const finalParameters = parameters.filter(p => p.key.trim() !== '');
+    setSubmitting(true); setError('');
+    try {
+      const created = await apiRequest<ProviderApiData>('/admin/providers', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: name.trim(), type, status,
+          parameters: finalParameters.map((parameter) => ({ ...parameter, isSecret: false })),
+        }),
+      });
+      setProviders((current) => [created, ...current]);
+      setSuccessMsg(`Provider "${name}" successfully configured.`);
+      setName(''); setType('tts'); setStatus('connected'); setParameters([]);
+      window.setTimeout(() => { setSuccessMsg(null); setShowAddForm(false); }, 1500);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Provider could not be created');
+    } finally { setSubmitting(false); }
+  };
 
-    const newProvider: ProviderConfig = {
-      id: `p-${Date.now()}`,
-      name,
-      type,
-      status,
-      latency: status === 'connected' ? '110ms' : 'N/A',
-      usageCount: 0,
-      parameters: finalParameters
-    };
+  const openProviderEditor = (provider: ProviderApiData) => {
+    setEditingProvider(provider);
+    setEditName(provider.name);
+    setEditStatus(provider.status);
+    setEditBaseUrl(provider.baseUrl ?? '');
+    setEditLatencyMs(provider.latencyMs?.toString() ?? '');
+    setEditParameters(provider.parameterKeys.map((parameter) => ({
+      originalKey: parameter.key, key: parameter.key, value: parameter.value, isSecret: false,
+    })));
+    setError('');
+  };
 
-    // Append to global mock storage & local list state
-    MOCK_PROVIDERS.unshift(newProvider);
-    setProviders([...MOCK_PROVIDERS]);
+  const handleUpdateProvider = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!editingProvider) return;
+    setSubmitting(true); setError('');
+    try {
+      const updated = await apiRequest<ProviderApiData>(`/admin/providers/${editingProvider.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          name: editName.trim(), status: editStatus,
+          baseUrl: editBaseUrl.trim() || null,
+          latencyMs: editLatencyMs === '' ? null : Number(editLatencyMs),
+          parameters: editParameters.map((parameter) => ({
+            originalKey: parameter.originalKey,
+            key: parameter.key.trim(),
+            ...(parameter.value ? { value: parameter.value } : {}),
+            isSecret: parameter.isSecret,
+          })),
+        }),
+      });
+      setProviders((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setEditingProvider(null);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Provider could not be updated');
+    } finally { setSubmitting(false); }
+  };
 
-    // Success feedback
-    setSuccessMsg(`Voice provider "${name}" has been successfully configured!`);
-    
-    // Clear inputs
-    setName('');
-    setType('tts');
-    setStatus('connected');
-    setParameters([]);
+  const handleDeleteProvider = async (provider: ProviderApiData) => {
+    if (!window.confirm(`Delete provider "${provider.name}"? Its models will no longer be available for new agents.`)) return;
+    setError('');
+    try {
+      await apiRequest(`/admin/providers/${provider.id}`, { method: 'DELETE' });
+      setProviders((current) => current.filter((item) => item.id !== provider.id));
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Provider could not be deleted');
+    }
+  };
 
-    setTimeout(() => {
-      setSuccessMsg(null);
-      setShowAddForm(false);
-    }, 2000);
+  const openModelManager = async (provider: ProviderApiData) => {
+    setModelProvider(provider); setProviderModels([]); setModelsLoading(true); setError('');
+    setModelKey(''); setModelDisplayName(''); setModelParameters([]);
+    try {
+      setProviderModels(await apiRequest<ProviderModelApiData[]>(`/admin/providers/${provider.id}/models`));
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Provider models could not be loaded');
+    } finally { setModelsLoading(false); }
+  };
+
+  const modelParameterValue = (value: string): unknown => {
+    const trimmed = value.trim();
+    if (!trimmed) return '';
+    try { return JSON.parse(trimmed); } catch { return value; }
+  };
+
+  const handleCreateModel = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!modelProvider) return;
+    setSubmitting(true); setError('');
+    try {
+      const settings = Object.fromEntries(modelParameters.filter((parameter) => parameter.key.trim()).map((parameter) => [parameter.key.trim(), modelParameterValue(parameter.value)]));
+      const created = await apiRequest<ProviderModelApiData>(`/admin/providers/${modelProvider.id}/models`, {
+        method: 'POST', body: JSON.stringify({ modelKey: modelKey.trim(), displayName: modelDisplayName.trim(), status: 'active', capabilities: {}, settings }),
+      });
+      setProviderModels((current) => [created, ...current]);
+      setProviders((current) => current.map((provider) => provider.id === modelProvider.id ? { ...provider, modelCount: provider.modelCount + 1 } : provider));
+      setModelProvider((current) => current ? { ...current, modelCount: current.modelCount + 1 } : current);
+      setModelKey(''); setModelDisplayName(''); setModelParameters([]);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Provider model could not be created');
+    } finally { setSubmitting(false); }
+  };
+
+  const toggleModelStatus = async (model: ProviderModelApiData) => {
+    setError('');
+    try {
+      const updated = await apiRequest<ProviderModelApiData>(`/admin/providers/models/${model.id}/status`, {
+        method: 'PATCH', body: JSON.stringify({ status: model.status === 'active' ? 'inactive' : 'active' }),
+      });
+      setProviderModels((current) => current.map((item) => item.id === updated.id ? updated : item));
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Model status could not be updated');
+    }
   };
 
   return (
@@ -1050,8 +1507,8 @@ function VoiceProvidersView() {
       {/* Header */}
       <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
-          <h2 className="text-xl font-bold text-slate-800 tracking-tight">AI & SIP Providers Engine</h2>
-          <p className="text-xs text-slate-400 font-medium mt-0.5">Control global integration pathways, monitor latency profiles, and toggle gateway servers.</p>
+          <h2 className="text-xl font-bold text-slate-800 tracking-tight">AI Providers</h2>
+          <p className="text-xs text-slate-400 font-medium mt-0.5">Configure LLM, text-to-speech, and speech-to-text providers.</p>
         </div>
         <button
           onClick={() => setShowAddForm(!showAddForm)}
@@ -1062,13 +1519,19 @@ function VoiceProvidersView() {
         </button>
       </div>
 
+      {error && (
+        <div className="p-3 bg-red-50 border border-red-100 text-red-700 text-xs font-bold rounded-xl">
+          {error}
+        </div>
+      )}
+
       {/* NEW PROVIDER PROVISIONING CARD */}
       {showAddForm && (
         <div className="bg-white border-2 border-indigo-100 rounded-2xl p-6 shadow-xl animate-in fade-in duration-200 space-y-5">
           <div className="flex justify-between items-start border-b border-slate-100 pb-3">
             <div>
-              <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider">Configure New Voice / AI Provider</h3>
-              <p className="text-[10px] text-slate-400 font-medium mt-0.5">Provision gateway endpoints, latency tunnels, and operational keys.</p>
+              <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider">Configure New AI Provider</h3>
+              <p className="text-[10px] text-slate-400 font-medium mt-0.5">All parameter values are stored as entered and visible to Super Admin.</p>
             </div>
             <button 
               onClick={() => setShowAddForm(false)}
@@ -1197,17 +1660,112 @@ function VoiceProvidersView() {
               </button>
               <button
                 type="submit"
+                disabled={submitting}
                 className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold transition cursor-pointer text-xs shadow-md shadow-indigo-100"
               >
-                Confirm & Create Provider
+                {submitting ? 'Creating Provider...' : 'Confirm & Create Provider'}
               </button>
             </div>
           </form>
         </div>
       )}
 
+      {editingProvider && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-xs">
+          <form onSubmit={handleUpdateProvider} className="w-full max-w-lg space-y-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between">
+              <div><h3 className="text-sm font-black text-slate-800">Edit Provider</h3><p className="text-[10px] text-slate-400">Super Admin can view and edit all parameter values.</p></div>
+              <button type="button" onClick={() => setEditingProvider(null)} className="rounded-md p-1 text-slate-400 hover:bg-slate-100"><X className="h-4 w-4" /></button>
+            </div>
+            <div>
+              <label className="mb-1 block text-[10px] font-bold text-slate-500">Provider Name</label>
+              <input required value={editName} onChange={(e) => setEditName(e.target.value)} className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs outline-none focus:border-indigo-500" />
+            </div>
+            <div>
+              <label className="mb-1 block text-[10px] font-bold text-slate-500">Connection Status</label>
+              <select value={editStatus} onChange={(e) => setEditStatus(e.target.value as typeof editStatus)} className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold outline-none">
+                <option value="connected">Connected</option><option value="disconnected">Disconnected</option><option value="error">Error</option>
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-[10px] font-bold text-slate-500">Base URL</label>
+              <input type="url" value={editBaseUrl} onChange={(e) => setEditBaseUrl(e.target.value)} placeholder="https://api.provider.com" className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs outline-none focus:border-indigo-500" />
+            </div>
+            <div>
+              <label className="mb-1 block text-[10px] font-bold text-slate-500">Latency (milliseconds)</label>
+              <input type="number" min="0" step="1" value={editLatencyMs} onChange={(e) => setEditLatencyMs(e.target.value)} placeholder="Optional" className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs outline-none focus:border-indigo-500" />
+            </div>
+            <div className="space-y-2 border-t border-slate-100 pt-4">
+              <div className="flex items-center justify-between">
+                <div><h4 className="text-[10px] font-black uppercase tracking-wider text-indigo-600">Configuration Parameters</h4><p className="text-[10px] text-slate-400">All values are visible to Super Admin.</p></div>
+                <button type="button" onClick={() => setEditParameters((current) => [...current, { key: '', value: '', isSecret: false }])}
+                  className="flex items-center gap-1 rounded-lg border border-indigo-100 bg-indigo-50 px-2.5 py-1.5 text-[10px] font-bold text-indigo-700 hover:bg-indigo-100">
+                  <Plus className="h-3 w-3" /> Add Parameter
+                </button>
+              </div>
+              <div className="max-h-56 space-y-2 overflow-y-auto">
+                {editParameters.map((parameter, index) => (
+                  <div key={`${parameter.originalKey ?? 'new'}-${index}`} className="grid grid-cols-[1fr_1fr_auto] items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
+                    <input required value={parameter.key} onChange={(e) => setEditParameters((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, key: e.target.value } : item))}
+                      placeholder="Parameter key" className="rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[10px] font-mono outline-none focus:border-indigo-500" />
+                    <input type="text" required value={parameter.value} onChange={(e) => setEditParameters((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, value: e.target.value } : item))}
+                      placeholder="Parameter value" className="rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[10px] font-mono outline-none focus:border-indigo-500" />
+                    <button type="button" onClick={() => setEditParameters((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                      className="rounded-md border border-red-100 bg-red-50 p-1.5 text-red-600 hover:bg-red-100"><Trash2 className="h-3 w-3" /></button>
+                  </div>
+                ))}
+                {editParameters.length === 0 && <div className="rounded-lg border border-dashed border-slate-200 p-4 text-center text-[10px] text-slate-400">No parameters configured.</div>}
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-slate-100 pt-4">
+              <button type="button" onClick={() => setEditingProvider(null)} className="rounded-lg bg-slate-100 px-4 py-2 text-xs font-bold text-slate-600">Cancel</button>
+              <button type="submit" disabled={submitting} className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">{submitting ? 'Saving...' : 'Save Changes'}</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {modelProvider && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-xs">
+          <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+            <div className="mb-5 flex items-start justify-between border-b border-slate-100 pb-4">
+              <div><h3 className="text-sm font-black text-slate-800">Manage {modelProvider.type.toUpperCase()} Models</h3><p className="mt-1 text-[10px] font-semibold text-slate-400">{modelProvider.name} — developers can only select active models and view these parameters.</p></div>
+              <button type="button" onClick={() => setModelProvider(null)} className="rounded-md p-1 text-slate-400 hover:bg-slate-100"><X className="h-4 w-4" /></button>
+            </div>
+            {error && <div className="mb-4 rounded-lg border border-red-100 bg-red-50 p-2.5 text-xs font-semibold text-red-700">{error}</div>}
+            <form onSubmit={handleCreateModel} className="space-y-4 rounded-xl border border-indigo-100 bg-indigo-50/30 p-4">
+              <div><h4 className="text-[10px] font-black uppercase tracking-wider text-indigo-700">Create Super Admin Model</h4><p className="text-[10px] text-slate-400">Provider credentials remain private. Only the model settings below are visible to developers.</p></div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <label className="text-[10px] font-bold text-slate-500">Model Key<input required value={modelKey} onChange={(e) => setModelKey(e.target.value)} placeholder="e.g. gpt-4.1" className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-xs outline-none focus:border-indigo-500" /></label>
+                <label className="text-[10px] font-bold text-slate-500">Display Name<input required value={modelDisplayName} onChange={(e) => setModelDisplayName(e.target.value)} placeholder="e.g. GPT 4.1" className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs outline-none focus:border-indigo-500" /></label>
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between"><span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Model Parameters</span><button type="button" onClick={() => setModelParameters((current) => [...current, { key: '', value: '' }])} className="rounded-lg border border-indigo-100 bg-white px-2.5 py-1.5 text-[10px] font-bold text-indigo-700"><Plus className="mr-1 inline h-3 w-3" />Add Parameter</button></div>
+                {modelParameters.map((parameter, index) => <div key={index} className="grid grid-cols-[1fr_1fr_auto] gap-2">
+                  <input required value={parameter.key} onChange={(e) => setModelParameters((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, key: e.target.value } : item))} placeholder="Key, e.g. language" className="rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-[10px] outline-none" />
+                  <input required value={parameter.value} onChange={(e) => setModelParameters((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, value: e.target.value } : item))} placeholder="Value; JSON supported" className="rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-[10px] outline-none" />
+                  <button type="button" onClick={() => setModelParameters((current) => current.filter((_, itemIndex) => itemIndex !== index))} className="rounded-lg border border-red-100 bg-red-50 p-2 text-red-600"><Trash2 className="h-3.5 w-3.5" /></button>
+                </div>)}
+                {modelParameters.length === 0 && <div className="rounded-lg border border-dashed border-slate-200 bg-white p-3 text-center text-[10px] text-slate-400">No optional model parameters.</div>}
+              </div>
+              <div className="flex justify-end"><button disabled={submitting} className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">{submitting ? 'Creating...' : 'Add Active Model'}</button></div>
+            </form>
+            <div className="mt-5 space-y-2">
+              <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Created Models ({providerModels.length})</span>
+              {modelsLoading && <div className="rounded-xl border border-slate-200 p-6 text-center text-xs text-slate-400">Loading models...</div>}
+              {!modelsLoading && providerModels.map((model) => <div key={model.id} className="flex items-start justify-between gap-4 rounded-xl border border-slate-200 p-4">
+                <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="text-xs font-black text-slate-800">{model.displayName}</span><span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[9px] text-slate-500">{model.modelKey}</span></div><div className="mt-2 flex flex-wrap gap-1.5">{Object.entries(model.settings).map(([key, value]) => <span key={key} className="rounded border border-slate-200 bg-slate-50 px-2 py-1 font-mono text-[9px] text-slate-600">{key}: {typeof value === 'string' ? value : JSON.stringify(value)}</span>)}{Object.keys(model.settings).length === 0 && <span className="text-[9px] text-slate-400">No model parameters</span>}</div></div>
+                <button type="button" onClick={() => toggleModelStatus(model)} className={`shrink-0 rounded-lg border px-3 py-1.5 text-[10px] font-bold ${model.status === 'active' ? 'border-emerald-100 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-100 text-slate-500'}`}>{model.status === 'active' ? 'Active' : 'Inactive'}</button>
+              </div>)}
+              {!modelsLoading && providerModels.length === 0 && <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-xs text-slate-400">No models created for this provider.</div>}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* PROVIDERS GRID */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {loading && <div className="md:col-span-2 lg:col-span-3 bg-white border border-slate-200 rounded-xl p-10 text-center text-sm font-semibold text-slate-400">Loading providers...</div>}
         {providers.map((p) => (
           <div key={p.id} className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm flex flex-col justify-between hover:shadow-md transition duration-200">
             <div>
@@ -1227,15 +1785,15 @@ function VoiceProvidersView() {
               </div>
 
               {/* Display config parameters if they exist */}
-              {p.parameters && p.parameters.length > 0 && (
+              {p.parameterKeys.length > 0 && (
                 <div className="mt-3.5 bg-slate-50 p-3 rounded-lg border border-slate-200/60 font-sans">
                   <span className="text-[9px] text-slate-400 font-extrabold uppercase tracking-widest block mb-2">Configured Keys & Vars</span>
                   <div className="space-y-1.5 text-[10px] font-mono">
-                    {p.parameters.map((param, index) => (
-                      <div key={index} className="flex justify-between items-center text-slate-600 border-b border-slate-100 pb-1 last:border-0 last:pb-0">
-                        <span className="font-bold text-slate-500">{param.key}</span>
-                        <span className="text-slate-800 bg-white px-1.5 py-0.5 rounded border border-slate-200 select-all truncate max-w-[130px]" title={param.value}>
-                          {param.value}
+                    {p.parameterKeys.map((param) => (
+                      <div key={param.key} className="flex min-w-0 items-center justify-between gap-2 text-slate-600 border-b border-slate-100 pb-1 last:border-0 last:pb-0">
+                        <span className="min-w-0 truncate font-bold text-slate-500" title={param.key}>{param.key}</span>
+                        <span className="shrink-0 max-w-[145px] overflow-hidden whitespace-nowrap text-slate-500 bg-white px-1.5 py-0.5 rounded border border-slate-200" title={param.value}>
+                          {providerValuePreview(param.value)}
                         </span>
                       </div>
                     ))}
@@ -1246,33 +1804,31 @@ function VoiceProvidersView() {
               <div className="grid grid-cols-2 gap-2 text-xs font-semibold mt-4 bg-slate-50/50 p-2.5 rounded-lg border border-slate-200">
                 <div>
                   <span className="text-[10px] text-slate-400 block uppercase font-bold">Latency</span>
-                  <span className="text-slate-700 font-mono text-[11px] font-bold">{p.latency}</span>
+                  <span className="text-slate-700 font-mono text-[11px] font-bold">{p.latencyMs === null ? 'Not measured' : `${p.latencyMs} ms`}</span>
                 </div>
                 <div>
-                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Invocations</span>
-                  <span className="text-slate-700 font-mono text-[11px] font-bold">{p.usageCount.toLocaleString()}</span>
+                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Models</span>
+                  <span className="text-slate-700 font-mono text-[11px] font-bold">{p.modelCount.toLocaleString()}</span>
                 </div>
               </div>
             </div>
 
-            <div className="pt-4 border-t border-slate-200 mt-4 flex justify-between items-center">
-              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Trunk Relay v2</span>
-              <button
-                onClick={() => toggleProviderStatus(p.id)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition border cursor-pointer ${
-                  p.status === 'connected' ? 'bg-red-50 border-red-100 text-red-600 hover:bg-red-100' : 'bg-emerald-50 border-emerald-100 text-emerald-700 hover:bg-emerald-100'
-                }`}
-              >
-                {p.status === 'connected' ? 'Shut Down' : 'Boot Trunk'}
-              </button>
+            <div className="pt-4 border-t border-slate-200 mt-4 flex justify-between items-center gap-2">
+              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">{p.usageCount.toLocaleString()} invocations</span>
+              <div className="flex items-center gap-1">
+                <button onClick={() => void openModelManager(p)} className="rounded-lg border border-violet-100 bg-violet-50 px-2 py-1.5 text-[10px] font-bold text-violet-700 hover:bg-violet-100">Models</button>
+                <button onClick={() => openProviderEditor(p)} className="rounded-lg border border-indigo-100 bg-indigo-50 px-2 py-1.5 text-[10px] font-bold text-indigo-700 hover:bg-indigo-100">Edit</button>
+                <button onClick={() => toggleProviderStatus(p)} className={`rounded-lg border px-2 py-1.5 text-[10px] font-bold ${p.status === 'connected' ? 'border-red-100 bg-red-50 text-red-600' : 'border-emerald-100 bg-emerald-50 text-emerald-700'}`}>
+                  {p.status === 'connected' ? 'Disconnect' : 'Connect'}
+                </button>
+                <button onClick={() => handleDeleteProvider(p)} title="Delete provider" className="rounded-lg border border-red-100 bg-red-50 p-1.5 text-red-600 hover:bg-red-100"><Trash2 className="h-3.5 w-3.5" /></button>
+              </div>
             </div>
           </div>
         ))}
-      </div>
-
-      <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-xs">
-        <h3 className="font-bold text-slate-800 mb-4">Gateway Latency Profiler</h3>
-        <LatencyBreakdownChart />
+        {!loading && providers.length === 0 && (
+          <div className="md:col-span-2 lg:col-span-3 bg-white border border-slate-200 rounded-xl p-10 text-center text-sm font-semibold text-slate-400">No providers configured.</div>
+        )}
       </div>
     </div>
   );
@@ -1283,121 +1839,177 @@ function VoiceProvidersView() {
    ========================================== */
 function PhoneNumbersView() {
   const [activeSubTab, setActiveSubTab] = useState<'telephony' | 'assign'>('telephony');
-  const [numbers, setNumbers] = useState<PhoneNumber[]>(MOCK_PHONE_NUMBERS);
-  const [buyAreaCode, setBuyAreaCode] = useState('312');
-  const [purchasedMsg, setPurchasedMsg] = useState<string | null>(null);
-
-  // Telephony credentials state
-  const [telephonyProviders, setTelephonyProviders] = useState<Array<{ id: string; name: string; authId: string; authToken: string; createdAt: string }>>([
-    { id: 'tp-1', name: 'Twilio USA SIP', authId: 'AC7d9a1f2e3b4c5d6e', authToken: '8a9b0c1d2e3f4a5b6c7d8e9f', createdAt: '2026-05-12' },
-    { id: 'tp-2', name: 'Plivo Global Gateway', authId: 'PL8a9b0c1d2e3f4a', authToken: '2e3f4a5b6c7d8e9f0a1b2c3d', createdAt: '2026-06-20' }
-  ]);
+  const [numbers, setNumbers] = useState<PhoneNumberApiData[]>([]);
+  const [assignableNumbers, setAssignableNumbers] = useState<Array<{ id: string; number: string }>>([]);
+  const [phonePage, setPhonePage] = useState(1);
+  const [phonePagination, setPhonePagination] = useState<PaginationData>({ page: 1, pageSize: 20, total: 0, totalPages: 0 });
+  const [telephonyProviders, setTelephonyProviders] = useState<TelephonyAccountApiData[]>([]);
+  const [companySubaccounts, setCompanySubaccounts] = useState<CompanySubaccountApiData[]>([]);
+  const [companies, setCompanies] = useState<CompanyOption[]>([]);
   const [showTokens, setShowTokens] = useState<{ [key: string]: boolean }>({});
-
-  // Add Telephony Provider state
   const [newProvName, setNewProvName] = useState('');
   const [newAuthId, setNewAuthId] = useState('');
   const [newAuthToken, setNewAuthToken] = useState('');
+  const [newBaseUrl, setNewBaseUrl] = useState('https://api.plivo.com/v1');
+  const [newApplicationId, setNewApplicationId] = useState('');
+  const [newAnswerUrl, setNewAnswerUrl] = useState('https://api.voice.zeacrm.com/webhooks/plivo/answer');
+  const [newHangupUrl, setNewHangupUrl] = useState('https://api.voice.zeacrm.com/webhooks/plivo/hangup');
+  const [newRecordingCallbackUrl, setNewRecordingCallbackUrl] = useState('https://api.voice.zeacrm.com/webhooks/plivo/recording');
   const [provSuccess, setProvSuccess] = useState<string | null>(null);
-
-  // Selected lease platform
-  const [selectedLeaseProvider, setSelectedLeaseProvider] = useState('Twilio USA SIP');
-
-  // Assign form state
-  const [assignNumId, setAssignNumId] = useState(MOCK_PHONE_NUMBERS[0]?.id || '');
-  const [assignCompanyId, setAssignCompanyId] = useState(MOCK_COMPANIES[0]?.id || '');
+  const [assignNumId, setAssignNumId] = useState('');
+  const [assignCompanyId, setAssignCompanyId] = useState('');
   const [assignSuccess, setAssignSuccess] = useState<string | null>(null);
+  const [editingAccount, setEditingAccount] = useState<TelephonyAccountApiData | null>(null);
+  const [accountsLoading, setAccountsLoading] = useState(true);
+  const [numbersLoading, setNumbersLoading] = useState(true);
+  const [companiesLoading, setCompaniesLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [syncingNumbers, setSyncingNumbers] = useState(false);
+  const [error, setError] = useState('');
 
-  const handleAddTelephonyProvider = (e: React.FormEvent) => {
+  const loadTelephonyData = async () => {
+    setAccountsLoading(true); setNumbersLoading(true); setCompaniesLoading(true); setError('');
+    await Promise.allSettled([
+      Promise.all([
+        apiRequest<TelephonyAccountApiData[]>('/admin/telephony/accounts'),
+        apiRequest<CompanySubaccountApiData[]>('/admin/telephony/subaccounts'),
+      ]).then(([accounts, subaccounts]) => {
+        setTelephonyProviders(accounts); setCompanySubaccounts(subaccounts);
+      }).catch((requestError) => setError(requestError instanceof Error ? requestError.message : 'Telephony providers could not be loaded'))
+        .finally(() => setAccountsLoading(false)),
+      apiRequest<{ items: PhoneNumberApiData[]; pagination: PaginationData }>(`/admin/telephony/phone-numbers?page=${phonePage}&pageSize=20`)
+        .then((data) => {
+          setNumbers(data.items);
+          setPhonePagination(data.pagination);
+        }).catch((requestError) => setError(requestError instanceof Error ? requestError.message : 'Phone numbers could not be loaded'))
+        .finally(() => setNumbersLoading(false)),
+      apiRequest<CompanyOption[]>('/admin/companies/options')
+        .then((data) => {
+          setCompanies(data);
+          setAssignCompanyId((current) => current || data[0]?.tenantId || '');
+        }).catch((requestError) => setError(requestError instanceof Error ? requestError.message : 'Companies could not be loaded'))
+        .finally(() => setCompaniesLoading(false)),
+      apiRequest<Array<{ id: string; number: string }>>('/admin/telephony/phone-number-options')
+        .then((data) => {
+          setAssignableNumbers(data);
+          setAssignNumId((current) => data.some((number) => number.id === current) ? current : (data[0]?.id || ''));
+        }).catch((requestError) => setError(requestError instanceof Error ? requestError.message : 'Assignable phone numbers could not be loaded')),
+    ]);
+  };
+
+  useEffect(() => { void loadTelephonyData(); }, [phonePage]);
+
+  const handleAddTelephonyProvider = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newProvName.trim() || !newAuthId.trim() || !newAuthToken.trim()) return;
-
-    const newTp = {
-      id: `tp-${Date.now()}`,
-      name: newProvName.trim(),
-      authId: newAuthId.trim(),
-      authToken: newAuthToken.trim(),
-      createdAt: new Date().toISOString().split('T')[0]
-    };
-
-    setTelephonyProviders([...telephonyProviders, newTp]);
-    setProvSuccess(`Telephony integration provider "${newProvName}" added successfully!`);
-    
-    setNewProvName('');
-    setNewAuthId('');
-    setNewAuthToken('');
-
-    setTimeout(() => setProvSuccess(null), 3000);
+    setSubmitting(true); setError('');
+    try {
+      const created = await apiRequest<TelephonyAccountApiData>('/admin/telephony/accounts', {
+        method: 'POST', body: JSON.stringify({
+          provider: 'plivo', name: newProvName.trim(), authId: newAuthId.trim(),
+          authToken: newAuthToken, baseUrl: newBaseUrl.trim(), applicationId: newApplicationId.trim(),
+          answerUrl: newAnswerUrl.trim(), hangupUrl: newHangupUrl.trim(),
+          recordingCallbackUrl: newRecordingCallbackUrl.trim(), status: 'connected',
+        }),
+      });
+      setTelephonyProviders((current) => [created, ...current]);
+      setNewProvName(''); setNewAuthId(''); setNewAuthToken(''); setNewApplicationId('');
+      setNewBaseUrl('https://api.plivo.com/v1');
+      setNewAnswerUrl('https://api.voice.zeacrm.com/webhooks/plivo/answer');
+      setNewHangupUrl('https://api.voice.zeacrm.com/webhooks/plivo/hangup');
+      setNewRecordingCallbackUrl('https://api.voice.zeacrm.com/webhooks/plivo/recording');
+      setProvSuccess(`Telephony provider "${created.name}" added successfully.`);
+      window.setTimeout(() => setProvSuccess(null), 3000);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Telephony provider could not be created');
+    } finally { setSubmitting(false); }
   };
 
-  const simulatePurchase = () => {
-    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-    const mockNum = `+1 (${buyAreaCode}) 555-${randomSuffix}`;
-    const newNum: PhoneNumber = {
-      id: `num-${Date.now()}`,
-      number: mockNum,
-      provider: selectedLeaseProvider,
-      type: 'Bidirectional',
-      status: 'active',
-      monthlyCost: 2.50
-    };
-    
-    MOCK_PHONE_NUMBERS.unshift(newNum);
-    setNumbers([...MOCK_PHONE_NUMBERS]);
-    setPurchasedMsg(`Succeeded! Number ${mockNum} bought via ${selectedLeaseProvider} and placed in unassigned reserve pools.`);
-    setTimeout(() => setPurchasedMsg(null), 3500);
+  const releaseNumber = async (id: string) => {
+    setError('');
+    try {
+      await apiRequest(`/admin/telephony/phone-numbers/${id}/release`, {
+        method: 'POST', body: JSON.stringify({ reason: 'Released by Super Admin' }),
+      });
+      await loadTelephonyData();
+    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : 'Number could not be released'); }
   };
 
-  const releaseNumber = (id: string) => {
-    const numberObj = MOCK_PHONE_NUMBERS.find(n => n.id === id);
-    if (numberObj) {
-      const oldAssigneeName = numberObj.assignedTo;
-      if (oldAssigneeName) {
-        const oldCompany = MOCK_COMPANIES.find(c => c.name === oldAssigneeName);
-        if (oldCompany && oldCompany.phoneNumbersCount > 0) {
-          oldCompany.phoneNumbersCount--;
-        }
-      }
-      numberObj.assignedTo = undefined;
-      numberObj.status = 'released';
-      setNumbers([...MOCK_PHONE_NUMBERS]);
-    }
-  };
-
-  const handleAssignNumber = (e: React.FormEvent) => {
+  const handleAssignNumber = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!assignNumId || !assignCompanyId) return;
-
-    const targetCompany = MOCK_COMPANIES.find(c => c.id === assignCompanyId);
-    const targetNum = MOCK_PHONE_NUMBERS.find(n => n.id === assignNumId);
-
-    if (targetCompany && targetNum) {
-      const oldAssigneeName = targetNum.assignedTo;
-      
-      // Update company stats: decrement the old company's count if there was one
-      if (oldAssigneeName) {
-        const oldCompany = MOCK_COMPANIES.find(c => c.name === oldAssigneeName);
-        if (oldCompany && oldCompany.phoneNumbersCount > 0) {
-          oldCompany.phoneNumbersCount--;
-        }
-      }
-
-      // Assign to the new company
-      targetNum.assignedTo = targetCompany.name;
-      targetNum.status = 'active';
-
-      // Increment new company's phone count
-      targetCompany.phoneNumbersCount++;
-
-      // Refresh list
-      setNumbers([...MOCK_PHONE_NUMBERS]);
-      setAssignSuccess(`Routed virtual line ${targetNum.number} to ${targetCompany.name}!`);
-      setTimeout(() => setAssignSuccess(null), 3000);
-    }
+    setSubmitting(true); setError('');
+    try {
+      const assigned = await apiRequest<PhoneNumberApiData>(`/admin/telephony/phone-numbers/${assignNumId}/assign`, {
+        method: 'POST', body: JSON.stringify({ companyId: assignCompanyId }),
+      });
+      setAssignSuccess(`Assigned ${assigned.number} to ${assigned.companyName} using subaccount ${assigned.subaccountAuthId}.`);
+      setAssignNumId(''); await loadTelephonyData();
+      window.setTimeout(() => setAssignSuccess(null), 3000);
+    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : 'Number could not be assigned'); }
+    finally { setSubmitting(false); }
   };
 
   const toggleTokenVisibility = (id: string) => {
     setShowTokens(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const syncAccount = async (id: string) => {
+    setError('');
+    try {
+      await apiRequest(`/admin/telephony/accounts/${id}/sync`, { method: 'POST', body: '{}' });
+      await loadTelephonyData();
+    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : 'Provider sync failed'); }
+  };
+
+  const syncPurchasedNumbers = async () => {
+    const accounts = telephonyProviders.filter((account) => account.status === 'connected');
+    if (accounts.length === 0) {
+      setError('Add or connect a telephony provider before synchronizing phone numbers.');
+      return;
+    }
+    setSyncingNumbers(true); setError(''); setAssignSuccess(null);
+    try {
+      const results = await Promise.allSettled(accounts.map((account) =>
+        apiRequest(`/admin/telephony/accounts/${account.id}/sync`, { method: 'POST', body: '{}' })));
+      await loadTelephonyData();
+      const synchronized = results.filter((result) => result.status === 'fulfilled').length;
+      const failed = results.length - synchronized;
+      if (failed > 0) setError(`${synchronized} provider(s) synchronized; ${failed} provider(s) failed.`);
+      else setAssignSuccess('Purchased phone numbers synchronized successfully.');
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Phone numbers could not be synchronized');
+    } finally {
+      setSyncingNumbers(false);
+    }
+  };
+
+  const updateAccount = async (event: React.FormEvent) => {
+    event.preventDefault(); if (!editingAccount) return;
+    setSubmitting(true); setError('');
+    try {
+      const updated = await apiRequest<TelephonyAccountApiData>(`/admin/telephony/accounts/${editingAccount.id}`, {
+        method: 'PATCH', body: JSON.stringify({
+          name: editingAccount.name, authId: editingAccount.authId,
+          authToken: editingAccount.authToken, baseUrl: editingAccount.baseUrl,
+          applicationId: editingAccount.applicationId, answerUrl: editingAccount.answerUrl,
+          hangupUrl: editingAccount.hangupUrl, recordingCallbackUrl: editingAccount.recordingCallbackUrl,
+          status: editingAccount.status,
+        }),
+      });
+      setTelephonyProviders((current) => current.map((account) => account.id === updated.id ? updated : account));
+      setEditingAccount(null);
+    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : 'Provider could not be updated'); }
+    finally { setSubmitting(false); }
+  };
+
+  const deleteAccount = async (account: TelephonyAccountApiData) => {
+    if (!window.confirm(`Delete telephony provider "${account.name}"?`)) return;
+    setError('');
+    try {
+      await apiRequest(`/admin/telephony/accounts/${account.id}`, { method: 'DELETE' });
+      setTelephonyProviders((current) => current.filter((item) => item.id !== account.id));
+      setNumbers((current) => current.filter((number) => number.telephonyAccountId !== account.id));
+    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : 'Provider could not be deleted'); }
   };
 
   return (
@@ -1413,7 +2025,7 @@ function PhoneNumbersView() {
           }`}
         >
           <Cpu className="w-4 h-4" />
-          <span>Telephony Providers & DID Leases</span>
+          <span>Telephony Providers & Phone Numbers</span>
         </button>
         <button
           onClick={() => setActiveSubTab('assign')}
@@ -1427,6 +2039,12 @@ function PhoneNumbersView() {
           <span>Assign Numbers to Companies</span>
         </button>
       </div>
+
+      {error && (
+        <div className="p-3 bg-red-50 text-red-700 border border-red-200 rounded-lg text-xs font-semibold">
+          {error}
+        </div>
+      )}
 
       {activeSubTab === 'telephony' ? (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -1459,15 +2077,16 @@ function PhoneNumbersView() {
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Auth ID (Account SID)</label>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Plivo Account Auth ID</label>
                   <input
                     type="text"
                     required
                     value={newAuthId}
                     onChange={(e) => setNewAuthId(e.target.value)}
                     className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-slate-800 outline-none focus:bg-white focus:border-indigo-500 transition font-mono"
-                    placeholder="e.g. AC8a9f..."
+                    placeholder="e.g. MAXXXXXXXXXXXXXXXXXX"
                   />
+                  <p className="mt-1 text-[9px] text-slate-400">Use the Auth ID from Plivo Console beginning with MA. Do not enter a sip: address.</p>
                 </div>
 
                 <div>
@@ -1482,65 +2101,73 @@ function PhoneNumbersView() {
                   />
                 </div>
 
-                <button
-                  type="submit"
-                  className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold transition shadow-sm flex items-center justify-center space-x-1.5 cursor-pointer text-xs"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Save Telephony Provider</span>
-                </button>
-              </form>
-            </div>
-
-            {/* Lease DID form */}
-            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4">
-              <div>
-                <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider">Lease Telephony SIP DID</h3>
-                <p className="text-[10px] text-slate-400 mt-0.5 font-medium">Instantly lease inbound virtual phone lines from active carriers.</p>
-              </div>
-
-              {purchasedMsg && (
-                <div className="p-2.5 bg-indigo-50 text-indigo-800 border border-indigo-100 rounded-lg text-xs font-semibold">
-                  {purchasedMsg}
-                </div>
-              )}
-
-              <div className="space-y-3 text-xs font-semibold">
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Active Gateway Carrier</label>
-                  <select
-                    value={selectedLeaseProvider}
-                    onChange={(e) => setSelectedLeaseProvider(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-slate-800 outline-none cursor-pointer font-bold"
-                  >
-                    {telephonyProviders.map(tp => (
-                      <option key={tp.id} value={tp.name}>{tp.name}</option>
-                    ))}
-                    <option value="Twilio">Twilio General</option>
-                  </select>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Base URL</label>
+                  <input
+                    type="url"
+                    required
+                    value={newBaseUrl}
+                    onChange={(e) => setNewBaseUrl(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-slate-800 outline-none focus:bg-white focus:border-indigo-500 transition font-mono"
+                    placeholder="https://api.plivo.com/v1"
+                  />
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Target Area Code</label>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Main Application ID (Optional)</label>
                   <input
                     type="text"
-                    maxLength={3}
-                    value={buyAreaCode}
-                    onChange={(e) => setBuyAreaCode(e.target.value)}
+                    value={newApplicationId}
+                    onChange={(e) => setNewApplicationId(e.target.value)}
                     className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-slate-800 outline-none focus:bg-white focus:border-indigo-500 transition font-mono"
-                    placeholder="e.g. 415"
+                    placeholder="Company applications are created automatically"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Answer URL</label>
+                  <input
+                    type="url"
+                    required
+                    value={newAnswerUrl}
+                    onChange={(e) => setNewAnswerUrl(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-slate-800 outline-none focus:bg-white focus:border-indigo-500 transition font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Hangup URL</label>
+                  <input
+                    type="url"
+                    required
+                    value={newHangupUrl}
+                    onChange={(e) => setNewHangupUrl(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-slate-800 outline-none focus:bg-white focus:border-indigo-500 transition font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Recording Callback URL</label>
+                  <input
+                    type="url"
+                    required
+                    value={newRecordingCallbackUrl}
+                    onChange={(e) => setNewRecordingCallbackUrl(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-slate-800 outline-none focus:bg-white focus:border-indigo-500 transition font-mono"
                   />
                 </div>
 
                 <button
-                  onClick={simulatePurchase}
-                  className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold transition shadow-md shadow-indigo-100/50 flex items-center justify-center space-x-1.5 cursor-pointer"
+                  type="submit"
+                  disabled={submitting}
+                  className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white rounded-lg font-bold transition shadow-sm flex items-center justify-center space-x-1.5 cursor-pointer text-xs"
                 >
-                  <Phone className="w-3.5 h-3.5" />
-                  <span>Search & Buy Number (₹200/mo)</span>
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>{submitting ? 'Saving...' : 'Save Telephony Provider'}</span>
                 </button>
-              </div>
+              </form>
             </div>
+
           </div>
 
           {/* Right section: Registered Providers + Global DID Inventory */}
@@ -1549,29 +2176,38 @@ function PhoneNumbersView() {
             <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
               <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider mb-3">Carrier Integrations</h3>
               <div className="space-y-3">
+                {accountsLoading && <div className="py-8 text-center text-slate-400 text-xs">Loading providers...</div>}
                 {telephonyProviders.map(tp => (
                   <div key={tp.id} className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
                     <div className="space-y-1">
-                      <span className="font-bold text-slate-800 block text-xs">{tp.name}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-slate-800 text-xs">{tp.name}</span>
+                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${tp.status === 'connected' ? 'bg-emerald-100 text-emerald-700' : tp.status === 'error' ? 'bg-red-100 text-red-700' : 'bg-slate-200 text-slate-600'}`}>{tp.status}</span>
+                      </div>
                       <div className="flex flex-col space-y-0.5 text-[10px] font-mono text-slate-500">
                         <span>Auth ID: <strong className="text-slate-700">{tp.authId}</strong></span>
+                        <span className="break-all">Base URL: <strong className="text-slate-700">{tp.baseUrl}</strong></span>
+                        <span>Application ID: <strong className="text-slate-700">{tp.applicationId || 'Not configured'}</strong></span>
+                        <span title={tp.answerUrl}>Answer URL: <strong className="text-slate-700">{tp.answerUrl ? providerValuePreview(tp.answerUrl) : 'Not configured'}</strong></span>
+                        <span title={tp.hangupUrl}>Hangup URL: <strong className="text-slate-700">{tp.hangupUrl ? providerValuePreview(tp.hangupUrl) : 'Not configured'}</strong></span>
+                        <span title={tp.recordingCallbackUrl}>Recording URL: <strong className="text-slate-700">{tp.recordingCallbackUrl ? providerValuePreview(tp.recordingCallbackUrl) : 'Not configured'}</strong></span>
                         <span className="flex items-center space-x-1.5">
                           <span>Token: </span>
                           <strong className="text-slate-700">
-                            {showTokens[tp.id] ? tp.authToken : '••••••••••••••••••••'}
+                            {showTokens[tp.id] ? tp.authToken : '•'.repeat(20)}
                           </strong>
                         </span>
                       </div>
                     </div>
-                    <button
-                      onClick={() => toggleTokenVisibility(tp.id)}
-                      className="text-[10px] bg-white border border-slate-200 hover:border-slate-300 text-slate-600 hover:text-slate-900 rounded-lg px-2 py-1 font-bold transition cursor-pointer flex items-center space-x-1"
-                    >
-                      <Eye className="w-3 h-3" />
-                      <span>{showTokens[tp.id] ? 'Hide Token' : 'Show Token'}</span>
-                    </button>
+                    <div className="flex flex-wrap gap-1.5">
+                      <button onClick={() => toggleTokenVisibility(tp.id)} className="text-[10px] bg-white border border-slate-200 text-slate-600 rounded-lg px-2 py-1 font-bold cursor-pointer flex items-center gap-1"><Eye className="w-3 h-3" />{showTokens[tp.id] ? 'Hide' : 'Show'}</button>
+                      <button onClick={() => void syncAccount(tp.id)} className="text-[10px] bg-white border border-slate-200 text-indigo-600 rounded-lg px-2 py-1 font-bold cursor-pointer">Sync</button>
+                      <button onClick={() => setEditingAccount({ ...tp })} className="text-[10px] bg-white border border-slate-200 text-slate-700 rounded-lg px-2 py-1 font-bold cursor-pointer">Edit</button>
+                      <button onClick={() => void deleteAccount(tp)} className="text-[10px] bg-red-50 border border-red-100 text-red-600 rounded-lg px-2 py-1 font-bold cursor-pointer">Delete</button>
+                    </div>
                   </div>
                 ))}
+                {!accountsLoading && telephonyProviders.length === 0 && <div className="py-8 text-center text-slate-400 text-xs">No telephony providers configured.</div>}
               </div>
             </div>
 
@@ -1590,14 +2226,15 @@ function PhoneNumbersView() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 font-semibold">
+                    {numbersLoading && numbers.length === 0 && <tr><td colSpan={5} className="py-8"><div className="h-8 animate-pulse rounded bg-slate-100" /></td></tr>}
                     {numbers.map(num => (
                       <tr key={num.id} className="hover:bg-slate-50/50">
                         <td className="py-2.5 font-bold font-mono text-slate-800">{num.number}</td>
                         <td className="py-2.5 text-slate-500 font-semibold">{num.provider}</td>
                         <td className="py-2.5">
-                          {num.assignedTo ? (
+                          {num.companyName ? (
                             <span className="text-indigo-600 font-bold border border-indigo-100 bg-indigo-50 px-2 py-0.5 rounded text-[10px]">
-                              {num.assignedTo}
+                              {num.companyName}
                             </span>
                           ) : (
                             <span className="text-slate-400 italic">Unassigned Reserve</span>
@@ -1611,7 +2248,7 @@ function PhoneNumbersView() {
                           </span>
                         </td>
                         <td className="py-2.5 text-right">
-                          {num.status === 'active' && (
+                          {num.companyId && (
                             <button
                               onClick={() => releaseNumber(num.id)}
                               className="text-red-600 hover:text-red-700 font-bold cursor-pointer"
@@ -1622,8 +2259,19 @@ function PhoneNumbersView() {
                         </td>
                       </tr>
                     ))}
+                    {!numbersLoading && numbers.length === 0 && (
+                      <tr><td colSpan={5} className="py-8 text-center text-slate-400 italic">No phone numbers found. Add a provider and sync its purchased numbers.</td></tr>
+                    )}
                   </tbody>
                 </table>
+              </div>
+              <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-4 text-[10px] font-bold text-slate-500">
+                <span>{phonePagination.total.toLocaleString()} phone numbers</span>
+                <div className="flex items-center gap-2">
+                  <button type="button" disabled={numbersLoading || phonePage <= 1} onClick={() => setPhonePage((value) => Math.max(1, value - 1))} className="rounded-md border border-slate-200 px-3 py-1.5 disabled:opacity-40">Previous</button>
+                  <span>Page {phonePagination.page} of {Math.max(1, phonePagination.totalPages)}</span>
+                  <button type="button" disabled={numbersLoading || phonePage >= phonePagination.totalPages} onClick={() => setPhonePage((value) => value + 1)} className="rounded-md border border-slate-200 px-3 py-1.5 disabled:opacity-40">Next</button>
+                </div>
               </div>
             </div>
           </div>
@@ -1644,17 +2292,28 @@ function PhoneNumbersView() {
             )}
 
             <form onSubmit={handleAssignNumber} className="space-y-4 text-xs font-semibold">
+              <button
+                type="button"
+                onClick={() => void syncPurchasedNumbers()}
+                disabled={syncingNumbers || telephonyProviders.length === 0}
+                className="w-full py-2.5 bg-white hover:bg-indigo-50 border border-indigo-200 text-indigo-700 disabled:opacity-50 rounded-lg font-bold transition flex items-center justify-center space-x-1.5 cursor-pointer text-xs"
+              >
+                <ArrowDownToLine className={`w-3.5 h-3.5 ${syncingNumbers ? 'animate-bounce' : ''}`} />
+                <span>{syncingNumbers ? 'Syncing Purchased Numbers...' : 'Sync Purchased Numbers'}</span>
+              </button>
+
               <div>
                 <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Select Phone Number</label>
                 <select
+                  disabled={numbersLoading}
                   value={assignNumId}
                   onChange={(e) => setAssignNumId(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-slate-800 outline-none cursor-pointer font-bold"
                 >
                   <option value="">-- Choose Virtual Trunk Line --</option>
-                  {numbers.map(n => (
+                  {assignableNumbers.map(n => (
                     <option key={n.id} value={n.id}>
-                      {n.number} ({n.assignedTo ? `Assigned: ${n.assignedTo}` : 'Unassigned Pool'})
+                      {n.number} (Unassigned Pool)
                     </option>
                   ))}
                 </select>
@@ -1663,20 +2322,33 @@ function PhoneNumbersView() {
               <div>
                 <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Select Tenant Organization</label>
                 <select
+                  disabled={companiesLoading}
                   value={assignCompanyId}
                   onChange={(e) => setAssignCompanyId(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-slate-800 outline-none cursor-pointer font-bold"
                 >
                   <option value="">-- Choose Tenant Company --</option>
-                  {MOCK_COMPANIES.map(c => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
+                  {companies.map(c => (
+                    <option key={c.tenantId} value={c.tenantId}>{c.businessName}</option>
                   ))}
                 </select>
               </div>
 
+              {assignCompanyId && (() => {
+                const subaccount = companySubaccounts.find((item) => item.companyId === assignCompanyId);
+                return (
+                  <div className={`rounded-lg border p-2.5 text-[10px] ${subaccount ? 'border-emerald-100 bg-emerald-50 text-emerald-700' : 'border-indigo-100 bg-indigo-50 text-indigo-700'}`}>
+                    {subaccount
+                      ? `Plivo subaccount ready: ${subaccount.providerSubaccountId} (${subaccount.phoneNumbersCount} number${subaccount.phoneNumbersCount === 1 ? '' : 's'})`
+                      : 'A secure Plivo subaccount and application will be created automatically during the first assignment.'}
+                  </div>
+                );
+              })()}
+
               <button
                 type="submit"
-                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold transition shadow-md shadow-indigo-100/50 flex items-center justify-center space-x-1.5 cursor-pointer text-xs"
+                disabled={submitting || !assignNumId || !assignCompanyId}
+                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white rounded-lg font-bold transition shadow-md shadow-indigo-100/50 flex items-center justify-center space-x-1.5 cursor-pointer text-xs"
               >
                 <UserCheck className="w-3.5 h-3.5" />
                 <span>Assign DID to Company</span>
@@ -1693,19 +2365,21 @@ function PhoneNumbersView() {
                   <tr className="border-b border-slate-200 text-slate-400 font-bold uppercase tracking-wider text-[9px]">
                     <th className="pb-2">Phone line</th>
                     <th className="pb-2">Associated Tenant Org</th>
+                    <th className="pb-2">Plivo Subaccount</th>
                     <th className="pb-2">Carrier Provider</th>
                     <th className="pb-2 text-right">Mapping Control</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-semibold">
-                  {numbers.filter(num => num.assignedTo).map(num => (
+                  {numbers.filter(num => num.companyId).map(num => (
                     <tr key={num.id} className="hover:bg-slate-50/50">
                       <td className="py-2.5 font-bold font-mono text-slate-800">{num.number}</td>
                       <td className="py-2.5">
                         <span className="text-indigo-600 font-bold bg-indigo-50 border border-indigo-100 px-2.5 py-0.5 rounded text-[10px]">
-                          {num.assignedTo}
+                          {num.companyName}
                         </span>
                       </td>
+                      <td className="py-2.5 font-mono text-[10px] text-slate-500">{num.subaccountAuthId || 'Main account'}</td>
                       <td className="py-2.5 text-slate-500">{num.provider}</td>
                       <td className="py-2.5 text-right">
                         <button
@@ -1717,9 +2391,9 @@ function PhoneNumbersView() {
                       </td>
                     </tr>
                   ))}
-                  {numbers.filter(num => num.assignedTo).length === 0 && (
+                  {numbers.filter(num => num.companyId).length === 0 && (
                     <tr>
-                      <td colSpan={4} className="py-8 text-center text-slate-400 italic">
+                      <td colSpan={5} className="py-8 text-center text-slate-400 italic">
                         No active enterprise trunk mappings found. Assign a number above to start routing.
                       </td>
                     </tr>
@@ -1730,455 +2404,38 @@ function PhoneNumbersView() {
           </div>
         </div>
       )}
-    </div>
-  );
-}
 
-/* ==========================================
-   6. CREDITS MANAGER VIEW
-   ========================================== */
-function CreditsManagerView() {
-  const [rateOutbound, setRateOutbound] = useState('12.00');
-  const [rateInbound, setRateInbound] = useState('6.40');
-  const [ledgerLog, setLedgerLog] = useState([
-    { company: 'Acme Voice Systems', action: 'Injected Manual Balance', amount: 500, user: 'Admin Alice', date: '2026-07-09 11:22' },
-    { company: 'Globex Logistics LLC', action: 'Credit Refill Purchase', amount: 5000, user: 'API Stripe Gateway', date: '2026-07-05 13:40' },
-    { company: 'Initech Retail Corp', action: 'Injected Promotional Credit', amount: 50, user: 'Supervisor Bob', date: '2026-07-02 09:15' }
-  ]);
-  const [success, setSuccess] = useState<string | null>(null);
-
-  const savePricingRules = () => {
-    setSuccess('Global platform pricing limits saved successfully!');
-    setTimeout(() => setSuccess(null), 3000);
-  };
-
-  return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      {/* Rate configurator */}
-      <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm h-fit space-y-4">
-        <div>
-          <h2 className="text-md font-bold text-slate-800 tracking-tight">Global Pricing Rates</h2>
-          <p className="text-xs text-slate-400 mt-0.5 font-medium">Adjust default pricing thresholds per minute for voice gateways.</p>
-        </div>
-
-        {success && (
-          <div className="p-2.5 bg-emerald-50 border border-emerald-100 text-emerald-800 rounded-lg text-xs font-semibold animate-in fade-in">
-            {success}
-          </div>
-        )}
-
-        <div className="space-y-4 text-xs font-semibold">
-          <div>
-            <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Inbound Calling Minute Rate (₹)</label>
-            <input
-              type="text"
-              value={rateInbound}
-              onChange={(e) => setRateInbound(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-slate-800 outline-none focus:bg-white focus:border-indigo-500 transition"
-            />
-          </div>
-
-          <div>
-            <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Outbound Campaign Minute Rate (₹)</label>
-            <input
-              type="text"
-              value={rateOutbound}
-              onChange={(e) => setRateOutbound(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-slate-800 outline-none focus:bg-white focus:border-indigo-500 transition"
-            />
-          </div>
-
-          <button
-            onClick={savePricingRules}
-            className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold transition shadow-md shadow-indigo-100/50 cursor-pointer"
-          >
-            Save Pricing Rules
-          </button>
-        </div>
-      </div>
-
-      {/* Audit ledger logs */}
-      <div className="lg:col-span-2 bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-        <h2 className="text-md font-bold text-slate-800 mb-3 tracking-tight">Balance Injection Audit Ledger</h2>
-        <div className="space-y-3 text-xs">
-          {ledgerLog.map((log, idx) => (
-            <div key={idx} className="border border-slate-200 p-3.5 rounded-xl bg-slate-50/30 flex justify-between items-center font-semibold">
-              <div>
-                <span className="font-bold text-slate-800 block">{log.company}</span>
-                <span className="text-[10px] text-slate-500 font-semibold">{log.action} · Triggered by: {log.user}</span>
-                <span className="text-[9px] text-slate-400 font-mono block mt-0.5">{log.date}</span>
-              </div>
-              <span className="text-sm font-black text-emerald-600 font-mono">
-                +₹{log.amount.toLocaleString()}
-              </span>
+      {editingAccount && (
+        <div className="fixed inset-0 z-50 bg-slate-950/50 flex items-center justify-center p-4">
+          <form onSubmit={updateAccount} className="w-full max-w-lg max-h-[90vh] overflow-y-auto bg-white rounded-2xl border border-slate-200 shadow-2xl p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <div><h3 className="font-black text-slate-900">Edit Telephony Provider</h3><p className="text-xs text-slate-400">Update all provider connection parameters.</p></div>
+              <button type="button" onClick={() => setEditingAccount(null)} className="p-1.5 rounded-lg hover:bg-slate-100 cursor-pointer"><X className="w-4 h-4" /></button>
             </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ==========================================
-   7. QUEUE MONITOR VIEW
-   ========================================== */
-function QueueMonitorView() {
-  const [queues, setQueues] = useState(MOCK_QUEUES);
-
-  const triggerEmergencyFlush = (id: string) => {
-    setQueues(queues.map(q => {
-      if (q.id === id) {
-        return { ...q, waitingCalls: 0, maxWaitTime: 0, status: 'normal' as any };
-      }
-      return q;
-    }));
-  };
-
-  return (
-    <div className="space-y-6">
-      <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-        <h2 className="text-xl font-bold text-slate-800 tracking-tight">Active Queue Trunks Monitor</h2>
-        <p className="text-xs text-slate-400 font-medium mt-0.5">Observe current line traffic, concurrent SIP registration queues, and channel answer lags.</p>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {queues.map((q) => (
-          <div key={q.id} className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm flex flex-col justify-between hover:shadow-md transition duration-200">
-            <div>
-              <div className="flex justify-between items-start">
-                <h4 className="font-bold text-slate-800 text-sm tracking-tight">{q.name}</h4>
-                <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider border ${
-                  q.status === 'normal' ? 'bg-emerald-50 border-emerald-100 text-emerald-700' :
-                  q.status === 'congested' ? 'bg-amber-50 border-amber-100 text-amber-700' : 'bg-red-50 border-red-100 text-red-700 animate-pulse'
-                }`}>
-                  {q.status}
-                </span>
+            {(['name', 'authId', 'authToken', 'baseUrl', 'applicationId', 'answerUrl', 'hangupUrl', 'recordingCallbackUrl'] as const).map((field) => (
+              <div key={field}>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">{
+                  field === 'authId' ? 'Auth ID' : field === 'authToken' ? 'Auth Token'
+                    : field === 'baseUrl' ? 'Base URL' : field === 'applicationId' ? 'Main Application ID (Optional)'
+                      : field === 'answerUrl' ? 'Answer URL' : field === 'hangupUrl' ? 'Hangup URL'
+                        : field === 'recordingCallbackUrl' ? 'Recording Callback URL' : 'Provider Name'
+                }</label>
+                <input type={field.toLowerCase().includes('url') ? 'url' : 'text'} required={field !== 'applicationId'} value={editingAccount[field]} onChange={(e) => setEditingAccount({ ...editingAccount, [field]: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs outline-none focus:border-indigo-500 font-mono" />
               </div>
-
-              <div className="grid grid-cols-2 gap-3 text-xs font-semibold mt-4">
-                <div className="bg-slate-50/50 p-2.5 rounded-lg border border-slate-200">
-                  <span className="text-[9px] text-slate-400 block uppercase font-bold">Talking channels</span>
-                  <span className="text-slate-800 font-bold text-lg">{q.activeCalls} Active</span>
-                </div>
-                <div className="bg-slate-50/50 p-2.5 rounded-lg border border-slate-200">
-                  <span className="text-[9px] text-slate-400 block uppercase font-bold">Trunk Holding</span>
-                  <span className="text-slate-800 font-bold text-lg text-rose-500">{q.waitingCalls} Queued</span>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3 text-xs font-semibold mt-2.5">
-                <div className="bg-slate-50/50 p-2.5 rounded-lg border border-slate-200">
-                  <span className="text-[9px] text-slate-400 block uppercase font-bold">Avg Queue Wait</span>
-                  <span className="text-slate-800 font-mono text-[11px] font-bold">{q.avgWaitTime} seconds</span>
-                </div>
-                <div className="bg-slate-50/50 p-2.5 rounded-lg border border-slate-200">
-                  <span className="text-[9px] text-slate-400 block uppercase font-bold">Max Holding Hold</span>
-                  <span className="text-slate-800 font-mono text-[11px] text-amber-500 font-bold">{q.maxWaitTime} seconds</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="pt-4 border-t border-slate-200 mt-4 flex justify-between items-center">
-              <span className="text-[10px] text-slate-400 font-bold uppercase">Trunk SLA Monitor</span>
-              {q.waitingCalls > 0 && (
-                <button
-                  onClick={() => triggerEmergencyFlush(q.id)}
-                  className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 border border-rose-100 text-rose-600 rounded-lg text-xs font-bold transition flex items-center space-x-1 cursor-pointer"
-                >
-                  <span>Emergency Flush</span>
-                </button>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/* ==========================================
-   8. CALL MONITORING VIEW (LIVE INTERCEPT)
-   ========================================== */
-function CallMonitoringView() {
-  const [activeCalls, setActiveCalls] = useState(ACTIVE_MONITORING_CALLS);
-  const [selectedCallId, setSelectedCallId] = useState<string | null>(ACTIVE_MONITORING_CALLS[0]?.id || null);
-
-  const selectedCall = activeCalls.find(c => c.id === selectedCallId);
-
-  const simulateLiveDialogue = () => {
-    if (!selectedCall || !selectedCall.transcript) return;
-    const phrases = [
-      { speaker: 'user' as const, text: 'Okay, that scheduling actually looks great! Put me down for 10 AM tomorrow morning.', time: '0:54' },
-      { speaker: 'agent' as const, text: 'Awesome! I have secured your reservation for 10:00 AM on July 10th. A confirmation e-mail is on its way. Have an incredible rest of your day!', time: '1:02' }
-    ];
-
-    // Append to transcript
-    setActiveCalls(activeCalls.map(c => {
-      if (c.id === selectedCallId) {
-        const existing = c.transcript || [];
-        const nextIdx = existing.length - 6; // start append
-        if (nextIdx < phrases.length && nextIdx >= 0) {
-          return {
-            ...c,
-            duration: c.duration + 12,
-            transcript: [...existing, phrases[nextIdx]]
-          };
-        }
-      }
-      return c;
-    }));
-  };
-
-  return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      {/* Active sessions list */}
-      <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4 h-[calc(100vh-120px)] overflow-y-auto">
-        <div>
-          <h2 className="text-md font-bold text-slate-800 tracking-tight">In-Flight Call Channels</h2>
-          <p className="text-xs text-slate-400 mt-0.5 font-medium">Select an ongoing call stream to intercept live and monitor transcripts.</p>
-        </div>
-
-        <div className="space-y-3">
-          {activeCalls.map((call) => (
-            <div
-              key={call.id}
-              onClick={() => setSelectedCallId(call.id)}
-              className={`border rounded-xl p-3.5 cursor-pointer transition text-xs font-semibold ${
-                selectedCallId === call.id
-                  ? 'border-indigo-300 bg-indigo-50/30 shadow-sm'
-                  : 'border-slate-200 bg-slate-50/50 hover:bg-slate-50'
-              }`}
-            >
-              <div className="flex justify-between items-start">
-                <span className="font-bold text-slate-800 block">{call.companyName}</span>
-                <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide border ${
-                  call.status === 'connected' ? 'bg-emerald-50 border-emerald-100 text-emerald-600 animate-pulse' : 'bg-amber-50 border-amber-100 text-amber-600'
-                }`}>
-                  {call.status}
-                </span>
-              </div>
-              <div className="mt-2 flex justify-between text-[10px] text-slate-400 font-medium">
-                <span>Agent: {call.agentName}</span>
-                <span className="font-mono">{call.duration}s</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Interceptor Canvas */}
-      <div className="lg:col-span-2 bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex flex-col h-[calc(100vh-120px)] justify-between">
-        {selectedCall ? (
-          <>
-            {/* Header details */}
-            <div className="border-b border-slate-200 pb-4 flex justify-between items-center flex-shrink-0">
-              <div>
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Active Intercept Node</span>
-                <h3 className="font-bold text-slate-800 text-md mt-0.5 tracking-tight">{selectedCall.companyName}</h3>
-                <p className="text-xs text-slate-400 font-medium mt-0.5">DID: {selectedCall.phoneNumber} · Direction: {selectedCall.direction}</p>
-              </div>
-
-              {selectedCall.status === 'connected' && (
-                <button
-                  onClick={simulateLiveDialogue}
-                  className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition shadow-md shadow-indigo-100/50 flex items-center space-x-1.5 cursor-pointer"
-                >
-                  <Activity className="w-3.5 h-3.5" />
-                  <span>Simulate Next Turn</span>
-                </button>
-              )}
-            </div>
-
-            {/* Scrolling Dialogue Script */}
-            <div className="flex-1 overflow-y-auto my-4 space-y-4 pr-2 font-sans text-xs scrollbar-thin">
-              {selectedCall.transcript && selectedCall.transcript.length > 0 ? (
-                selectedCall.transcript.map((line, idx) => (
-                  <div key={idx} className={`flex flex-col ${line.speaker === 'agent' ? 'items-start' : 'items-end'}`}>
-                    <span className="text-[9px] text-slate-400 font-bold mb-1 uppercase font-mono tracking-wider">
-                      {line.speaker === 'agent' ? `Zea Agent (${line.time})` : `Caller (${line.time})`}
-                    </span>
-                    <div className={`p-3 rounded-xl max-w-md font-semibold ${
-                      line.speaker === 'agent'
-                        ? 'bg-slate-50 text-slate-800 rounded-tl-none'
-                        : 'bg-indigo-600 text-white rounded-tr-none shadow-sm'
-                    }`}>
-                      {line.text}
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div className="h-full flex flex-col items-center justify-center text-center text-slate-400">
-                  <Activity className="w-8 h-8 text-slate-300 animate-pulse mb-2" />
-                  <span className="text-xs font-bold uppercase tracking-wider block">Establishing Connection...</span>
-                  <span className="text-[10px] text-slate-300 block mt-0.5">Trunk ringing caller ID: {selectedCall.phoneNumber}</span>
-                </div>
-              )}
-            </div>
-
-            {/* Footer monitoring dials */}
-            <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex justify-between items-center flex-shrink-0 text-xs font-semibold">
-              <div className="flex items-center space-x-4">
-                <div>
-                  <span className="text-[9px] text-slate-400 block uppercase font-bold">Call Cost</span>
-                  <span className="text-slate-700 font-mono font-bold text-sm">₹{selectedCall.cost.toFixed(2)}</span>
-                </div>
-                <div>
-                  <span className="text-[9px] text-slate-400 block uppercase font-bold">Sentiment Score</span>
-                  <span className="text-emerald-600 font-bold block capitalize text-sm">{selectedCall.sentiment}</span>
-                </div>
-              </div>
-
-              <div className="flex items-center space-x-2">
-                <span className="text-[10px] text-slate-400 font-bold uppercase">Supervisor Override:</span>
-                <button className="px-2.5 py-1.5 bg-red-50 hover:bg-red-100 border border-red-100 text-red-600 rounded-lg text-xs font-bold transition cursor-pointer">
-                  Force Hang Up
-                </button>
-              </div>
-            </div>
-          </>
-        ) : (
-          <div className="h-full flex flex-col items-center justify-center text-center text-slate-400">
-            <Tv className="w-10 h-10 text-slate-300 mb-2" />
-            <p className="text-xs font-bold">Select a live call trunk to intercept.</p>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/* ==========================================
-   9. PAYMENTS VIEW
-   ========================================== */
-function PaymentsView() {
-  const [payments] = useState<PaymentRecord[]>(MOCK_PAYMENTS);
-
-  return (
-    <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
-      <div className="border-b border-slate-200 pb-5 mb-5">
-        <h2 className="text-xl font-bold text-slate-800 tracking-tight">Financial Ledgers</h2>
-        <p className="text-xs text-slate-400 font-medium mt-0.5">View subscription charges, transactional credit refills, and invoice summaries.</p>
-      </div>
-
-      <div className="overflow-x-auto text-xs">
-        <table className="w-full text-left">
-          <thead>
-            <tr className="border-b border-slate-200 text-slate-400 font-bold uppercase tracking-wider text-[10px]">
-              <th className="pb-3">Transaction Ref</th>
-              <th className="pb-3">Company Name</th>
-              <th className="pb-3">Billing Type</th>
-              <th className="pb-3">Status</th>
-              <th className="pb-3">Settlement Date</th>
-              <th className="pb-3 text-right">Invoice Sum</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100 font-semibold text-slate-700">
-            {payments.map(pay => (
-              <tr key={pay.id} className="hover:bg-slate-50/50">
-                <td className="py-3.5 font-bold font-mono text-slate-800">{pay.id}</td>
-                <td className="py-3.5 font-bold text-slate-800">{pay.companyName}</td>
-                <td className="py-3.5 font-semibold text-slate-500">
-                  <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded border border-slate-200 text-[10px] font-bold">
-                    {pay.type}
-                  </span>
-                </td>
-                <td className="py-3.5">
-                  <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase border ${
-                    pay.status === 'succeeded' ? 'bg-emerald-50 border-emerald-100 text-emerald-600' :
-                    pay.status === 'failed' ? 'bg-red-50 border-red-100 text-red-600' : 'bg-slate-100 border-slate-200 text-slate-500'
-                  }`}>
-                    {pay.status}
-                  </span>
-                </td>
-                <td className="py-3.5 text-slate-400 font-mono font-medium">{pay.date}</td>
-                <td className="py-3.5 text-right font-black font-mono text-slate-800">
-                  ₹{pay.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                </td>
-              </tr>
             ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-/* ==========================================
-   10. GLOBAL SETTINGS VIEW
-   ========================================== */
-function GlobalSettingsView() {
-  const [sessionTimeout, setSessionTimeout] = useState('3600');
-  const [success, setSuccess] = useState<string | null>(null);
-
-  const saveSettings = () => {
-    setSuccess('Global security & cluster config parameters updated successfully.');
-    setTimeout(() => setSuccess(null), 3000);
-  };
-
-  return (
-    <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm max-w-3xl space-y-6">
-      <div>
-        <h2 className="text-xl font-bold text-slate-800 tracking-tight">Platform Configurations</h2>
-        <p className="text-xs text-slate-400 font-medium mt-0.5">Control administrative access ceilings, compliance security flags, and cluster parameters.</p>
-      </div>
-
-      {success && (
-        <div className="p-3 bg-emerald-50 border border-emerald-100 text-emerald-800 rounded-lg text-xs font-semibold animate-in fade-in">
-          {success}
+            <div>
+              <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Status</label>
+              <select value={editingAccount.status} onChange={(e) => setEditingAccount({ ...editingAccount, status: e.target.value as TelephonyAccountApiData['status'] })} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs outline-none">
+                <option value="connected">Connected</option><option value="disconnected">Disconnected</option><option value="error">Error</option>
+              </select>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button type="button" onClick={() => setEditingAccount(null)} className="px-4 py-2 border border-slate-200 rounded-lg text-xs font-bold cursor-pointer">Cancel</button>
+              <button type="submit" disabled={submitting} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-xs font-bold disabled:opacity-60 cursor-pointer">{submitting ? 'Saving...' : 'Save Changes'}</button>
+            </div>
+          </form>
         </div>
       )}
-
-      <div className="space-y-4 text-xs font-semibold">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1.5">Administrative IP Access Restrictions</label>
-            <input
-              type="text"
-              defaultValue="0.0.0.0/0 (All allowed)"
-              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-slate-800 outline-none focus:bg-white focus:border-indigo-500 transition"
-            />
-          </div>
-
-          <div>
-            <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1.5">Max Session Timeout (Seconds)</label>
-            <input
-              type="number"
-              value={sessionTimeout}
-              onChange={(e) => setSessionTimeout(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-slate-800 outline-none focus:bg-white focus:border-indigo-500 transition"
-            />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1.5">Compliance Enforcement Policy</label>
-            <select className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-slate-800 outline-none focus:bg-white focus:border-indigo-500 transition cursor-pointer">
-              <option>Standard HIPAA + PCI Compliant Recording</option>
-              <option>Strict GDPR - Delete Transcripts on hangup</option>
-              <option>Relaxed Developer - Store All Metadata</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1.5">SIP Gatekeeping Relay</label>
-            <select className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-slate-800 outline-none focus:bg-white focus:border-indigo-500 transition cursor-pointer">
-              <option>US-East Gateway Trunk (Standard)</option>
-              <option>EU-Central Trunk Core</option>
-              <option>APAC-South Sydney Core</option>
-            </select>
-          </div>
-        </div>
-
-        <div className="pt-4 border-t border-slate-200 flex justify-end">
-          <button
-            onClick={saveSettings}
-            className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition shadow-md shadow-indigo-100/50 cursor-pointer"
-          >
-            Apply Configurations
-          </button>
-        </div>
-      </div>
     </div>
   );
 }

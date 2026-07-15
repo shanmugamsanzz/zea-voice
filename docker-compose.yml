@@ -1,0 +1,30 @@
+services:
+  backend:
+    container_name: zea-voice-backend
+    build:
+      context: ./Backend
+      dockerfile: Dockerfile
+    env_file:
+      - ./Backend/.env
+    ports:
+      - "1112:1112"
+    restart: unless-stopped
+    networks:
+      - zea-voice
+
+  frontend:
+    container_name: zea-voice-frontend
+    build:
+      context: ./Frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: https://api.voice.zeacrm.com
+    ports:
+      - "5020:80"
+    restart: unless-stopped
+    networks:
+      - zea-voice
+
+networks:
+  zea-voice:
+    name: zea-voice-network

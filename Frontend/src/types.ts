@@ -8,8 +8,9 @@ export type UserRole = 'SUPER_ADMIN' | 'DEVELOPER' | 'USER';
 export interface Company {
   id: string;
   name: string;
-  status: 'active' | 'suspended' | 'pending';
+  status: 'active' | 'suspended' | 'pending' | 'archived';
   billingTier: 'Starter' | 'Pro' | 'Enterprise';
+  perMinutePrice: number;
   createdAt: string;
   developersCount: number;
   creditsBalance: number;
@@ -161,7 +162,7 @@ export interface VoiceAgent {
 export interface Campaign {
   id: string;
   name: string;
-  status: 'running' | 'paused' | 'completed' | 'scheduled';
+  status: 'draft' | 'running' | 'paused' | 'completed' | 'scheduled' | 'failed' | 'archived';
   agentId: string;
   agentName: string;
   phoneNumberId: string;

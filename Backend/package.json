@@ -1,0 +1,63 @@
+{
+  "name": "zea-voice-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "build": "npm run check",
+    "start": "node src/server.js",
+    "check": "node scripts/check-javascript.js",
+    "lint": "npm run check",
+    "verify:task2": "node scripts/verify-task-2.js",
+    "verify:task3": "node scripts/verify-task-3.js",
+    "verify:task4": "node scripts/verify-task-4.js",
+    "verify:task5": "node scripts/verify-task-5.js",
+    "verify:task6": "node scripts/verify-task-6.js",
+    "verify:task7": "node scripts/verify-task-7.js",
+    "verify:task8": "node scripts/verify-task-8.js",
+    "verify:task9": "node scripts/verify-task-9.js",
+    "verify:task9a": "node scripts/verify-task-9a.js",
+    "verify:task10": "node scripts/verify-task-10.js",
+    "verify:task11": "node scripts/verify-task-11.js",
+    "verify:task12": "node scripts/verify-task-12.js",
+    "verify:task13": "node scripts/verify-task-13.js",
+    "verify:task14": "node scripts/verify-task-14.js",
+    "verify:task15": "node scripts/verify-task-15.js",
+    "verify:task16": "node scripts/verify-task-16.js",
+    "verify:task17": "node scripts/verify-task-17.js",
+    "verify:task18": "node scripts/verify-task-18.js",
+    "verify:task19": "node scripts/verify-task-19.js",
+    "verify:task20": "node scripts/verify-task-20.js",
+    "verify:task21": "node scripts/verify-task-21.js",
+    "verify:super-admin-dashboard": "node scripts/verify-super-admin-dashboard.js",
+    "verify:companies-ui-api": "node scripts/verify-companies-ui-api.js",
+    "verify:admin-users-api": "node scripts/verify-admin-users-api.js",
+    "providers:convert-plaintext": "node scripts/convert-provider-parameters-to-plaintext.js",
+    "seed:super-admin": "node scripts/create-super-admin.js",
+    "db:migrate": "node-pg-migrate up --migrations-dir migrations",
+    "db:rollback": "node-pg-migrate down --migrations-dir migrations",
+    "db:create-migration": "node-pg-migrate create --migrations-dir migrations --migration-file-language js"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "bullmq": "^5.80.2",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "helmet": "^8.1.0",
+    "ioredis": "^5.8.2",
+    "node-pg-migrate": "^8.0.3",
+    "pg": "^8.16.3",
+    "pino": "^9.14.0",
+    "pino-http": "^10.5.0",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "pino-pretty": "^13.1.2"
+  }
+}
