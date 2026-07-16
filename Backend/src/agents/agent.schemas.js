@@ -5,6 +5,7 @@ const fields = {
   description: z.string().trim().max(5000).nullable().optional(),
   goal: z.string().trim().max(5000).nullable().optional(),
   language: z.string().trim().min(1).max(80).default('English (US)'),
+  usageDirection: z.enum(['inbound', 'outbound', 'both']).default('both'),
   status: z.enum(['draft', 'active', 'archived']).default('draft'),
   phoneNumberId: z.string().uuid().nullable().optional(),
   sttModelId: z.string().uuid(), llmModelId: z.string().uuid(), ttsModelId: z.string().uuid(),

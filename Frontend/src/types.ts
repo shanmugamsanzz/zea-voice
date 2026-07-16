@@ -116,6 +116,7 @@ export interface VoiceAgent {
   description?: string;
   goal?: string;
   language?: string;
+  agentUsage?: 'inbound' | 'outbound' | 'both';
   sttModel?: string;
   sttMode?: string;
   sttLanguage?: string;

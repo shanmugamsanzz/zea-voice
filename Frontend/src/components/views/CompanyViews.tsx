@@ -1705,6 +1705,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
    ========================================== */
 interface AgentApiData {
   id: string; name: string; description: string | null; goal: string | null; language: string;
+  usageDirection: 'inbound' | 'outbound' | 'both';
   status: 'active' | 'draft' | 'archived'; phoneNumberId: string | null; phoneNumber: string | null;
   stt: { modelId: string; providerName: string; modelName: string };
   llm: { modelId: string; providerName: string; modelName: string };
@@ -1725,7 +1726,7 @@ function agentFromApi(value: AgentApiData): VoiceAgent {
     llmProvider: value.llm.providerName, llmModel: value.llm.modelName,
     createdAt: value.createdAt, updatedAt: value.updatedAt,
     totalCalls: value.metrics.totalCalls, avgDuration: value.metrics.averageDurationSeconds, successRate: value.metrics.successRate,
-    description: value.description ?? '', goal: value.goal ?? '', language: value.language,
+    description: value.description ?? '', goal: value.goal ?? '', language: value.language, agentUsage: value.usageDirection,
     welcomeMessage: value.welcomeMessage ?? '', inactivityTimeout: value.inactivityTimeoutSeconds,
     ...(value.settings as Partial<VoiceAgent>),
   };

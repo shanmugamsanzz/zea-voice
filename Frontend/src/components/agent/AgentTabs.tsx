@@ -43,6 +43,7 @@ interface AgentTabsProps {
 
 interface AgentApiData {
   id: string; name: string; description: string | null; goal: string | null; language: string;
+  usageDirection: 'inbound' | 'outbound' | 'both';
   status: 'active' | 'draft' | 'archived'; phoneNumberId: string | null; phoneNumber: string | null;
   stt: { modelId: string; providerName: string; modelName: string };
   llm: { modelId: string; providerName: string; modelName: string };
@@ -80,7 +81,8 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       updatedAt: new Date().toISOString().split('T')[0],
       totalCalls: 0,
       avgDuration: 0,
-      successRate: 0
+      successRate: 0,
+      agentUsage: 'both'
     };
     return {
       ...base,
@@ -154,6 +156,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     setAgent((current) => ({
       ...current, ...(value.settings as Partial<VoiceAgent>), id: value.id, name: value.name,
       status: value.status, description: value.description ?? '', goal: value.goal ?? '', language: value.language,
+      agentUsage: value.usageDirection,
       voiceId: value.voiceId, temperature: value.temperature, prompt: value.prompt,
       interruptionSensitivity: value.interruptionSensitivity, silenceTimeout: value.silenceTimeoutMs,
       sttProvider: value.stt.providerName, sttModel: value.stt.modelName,
@@ -233,7 +236,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     try {
       const payload = {
         name: agent.name, description: agent.description || null, goal: agent.goal || null,
-        language: agent.language || 'English (US)', status: agent.status,
+        language: agent.language || 'English (US)', usageDirection: agent.agentUsage || 'both', status: agent.status,
         phoneNumberId: phoneNumberId || null, sttModelId, llmModelId, ttsModelId,
         voiceId: agent.voiceId, prompt: agent.prompt, welcomeMessage: agent.welcomeMessage || null,
         temperature: agent.temperature, interruptionSensitivity: agent.interruptionSensitivity,
@@ -263,7 +266,8 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       const mimeType = extension === 'pdf' ? 'application/pdf' : extension === 'docx'
         ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : 'text/plain';
       const created = await apiRequest<{ id: string; displayName: string; sizeBytes: number; createdAt: string }>(`/agents/${agentId}/knowledge-documents`, {
-        method: 'POST', body: JSON.stringify({ displayName: newDocName, fileName: newDocName, mimeType, sizeBytes: 1, metadata: {} }),
+        method: 'POST', body: JSON.stringify({ displayName: newDocName, fileName: newDocName, mimeType, sizeBytes: 1,
+          metadata: { usageDirection: agent.agentUsage || 'both' } }),
       });
       setKnowledgeDocuments((current) => [{ id: created.id, name: created.displayName, size: 'Pending upload', uploaded: new Date(created.createdAt).toLocaleDateString() }, ...current]);
       setNewDocName('');
@@ -492,6 +496,28 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
               </div>
               
               <div className="p-6 space-y-5">
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">
+                    Agent Usage <span className="text-red-500">*</span>
+                  </label>
+                  <div className="relative">
+                    <select
+                      required
+                      value={agent.agentUsage || 'both'}
+                      disabled={isReadOnly}
+                      onChange={(event) => setAgent({ ...agent, agentUsage: event.target.value as 'inbound' | 'outbound' | 'both' })}
+                      className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
+                    >
+                      <option value="inbound">Inbound</option>
+                      <option value="outbound">Outbound</option>
+                      <option value="both">Both</option>
+                    </select>
+                    <div className="absolute inset-y-0 right-0 flex items-center pr-4 pointer-events-none text-slate-400">
+                      <ChevronDown className="w-4 h-4" />
+                    </div>
+                  </div>
+                  <p className="mt-1.5 text-[10px] font-medium text-slate-400">Controls whether this agent can be used for incoming calls, campaigns, or both.</p>
+                </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">
                     Language <span className="text-red-500">*</span>

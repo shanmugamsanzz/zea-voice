@@ -17,7 +17,7 @@ const select = `SELECT a.*, pn.e164 AS phone_number,
     FROM call_sessions c WHERE c.tenant_id=a.tenant_id AND c.agent_id=a.id) stats ON true
   WHERE a.tenant_id=$1 AND a.deleted_at IS NULL`;
 function map(row) { return { id: row.id, tenantId: row.tenant_id, workspaceId: row.workspace_id, name: row.name,
-  description: row.description, goal: row.goal, language: row.language, status: row.status,
+  description: row.description, goal: row.goal, language: row.language, usageDirection: row.usage_direction, status: row.status,
   phoneNumberId: row.phone_number_id, phoneNumber: row.phone_number,
   stt: { modelId: row.stt_model_id, providerName: row.stt_provider_name, modelName: row.stt_model_name },
   llm: { modelId: row.llm_model_id, providerName: row.llm_provider_name, modelName: row.llm_model_name },
@@ -62,11 +62,11 @@ export function createAgent(auth, input) { return withTenantContext(auth, async 
   if (!limit.rowCount || agentCount.rows[0].count >= limit.rows[0].max_agents) throw new AppError(409, 'The company agent limit has been reached', 'AGENT_LIMIT_REACHED');
   await validateModels(client, input); await validatePhone(client, auth.tenantId, input.phoneNumberId);
   try {
-    const created = (await client.query(`INSERT INTO voice_agents (tenant_id,workspace_id,name,description,goal,language,status,phone_number_id,
+    const created = (await client.query(`INSERT INTO voice_agents (tenant_id,workspace_id,name,description,goal,language,usage_direction,status,phone_number_id,
       stt_model_id,llm_model_id,tts_model_id,voice_id,prompt,welcome_message,temperature,interruption_sensitivity,
       silence_timeout_ms,inactivity_timeout_seconds,settings,created_by,updated_by)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::jsonb,$20,$20) RETURNING id`,
-    [auth.tenantId,auth.workspaceId,input.name,input.description??null,input.goal??null,input.language,input.status,input.phoneNumberId??null,
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::jsonb,$21,$21) RETURNING id`,
+    [auth.tenantId,auth.workspaceId,input.name,input.description??null,input.goal??null,input.language,input.usageDirection,input.status,input.phoneNumberId??null,
       input.sttModelId,input.llmModelId,input.ttsModelId,input.voiceId,input.prompt,input.welcomeMessage??null,input.temperature,
       input.interruptionSensitivity,input.silenceTimeoutMs,input.inactivityTimeoutSeconds,JSON.stringify(input.settings),auth.userId])).rows[0];
     await client.query(`INSERT INTO audit_logs (tenant_id,workspace_id,actor_user_id,actor_type,action,entity_type,entity_id,after_data)
@@ -77,7 +77,8 @@ export function createAgent(auth, input) { return withTenantContext(auth, async 
 export function updateAgent(auth, id, input) { return withTenantContext(auth, async (client) => {
   const before = await agentRow(client, auth.tenantId, id);
   const value = { name: input.name??before.name, description: Object.hasOwn(input,'description')?input.description:before.description,
-    goal:Object.hasOwn(input,'goal')?input.goal:before.goal, language:input.language??before.language, status:input.status??before.status,
+    goal:Object.hasOwn(input,'goal')?input.goal:before.goal, language:input.language??before.language,
+    usageDirection:input.usageDirection??before.usage_direction, status:input.status??before.status,
     phoneNumberId:Object.hasOwn(input,'phoneNumberId')?input.phoneNumberId:before.phone_number_id,
     sttModelId:input.sttModelId??before.stt_model_id,llmModelId:input.llmModelId??before.llm_model_id,ttsModelId:input.ttsModelId??before.tts_model_id,
     voiceId:input.voiceId??before.voice_id,prompt:input.prompt??before.prompt,welcomeMessage:Object.hasOwn(input,'welcomeMessage')?input.welcomeMessage:before.welcome_message,
@@ -85,10 +86,10 @@ export function updateAgent(auth, id, input) { return withTenantContext(auth, as
     silenceTimeoutMs:input.silenceTimeoutMs??before.silence_timeout_ms,inactivityTimeoutSeconds:input.inactivityTimeoutSeconds??before.inactivity_timeout_seconds,
     settings:input.settings??before.settings };
   await validateModels(client,value); await validatePhone(client,auth.tenantId,value.phoneNumberId);
-  try { await client.query(`UPDATE voice_agents SET name=$3,description=$4,goal=$5,language=$6,status=$7,phone_number_id=$8,
-    stt_model_id=$9,llm_model_id=$10,tts_model_id=$11,voice_id=$12,prompt=$13,welcome_message=$14,temperature=$15,
-    interruption_sensitivity=$16,silence_timeout_ms=$17,inactivity_timeout_seconds=$18,settings=$19::jsonb,updated_by=$20
-    WHERE tenant_id=$1 AND id=$2`, [auth.tenantId,id,value.name,value.description,value.goal,value.language,value.status,value.phoneNumberId,
+  try { await client.query(`UPDATE voice_agents SET name=$3,description=$4,goal=$5,language=$6,usage_direction=$7,status=$8,phone_number_id=$9,
+    stt_model_id=$10,llm_model_id=$11,tts_model_id=$12,voice_id=$13,prompt=$14,welcome_message=$15,temperature=$16,
+    interruption_sensitivity=$17,silence_timeout_ms=$18,inactivity_timeout_seconds=$19,settings=$20::jsonb,updated_by=$21
+    WHERE tenant_id=$1 AND id=$2`, [auth.tenantId,id,value.name,value.description,value.goal,value.language,value.usageDirection,value.status,value.phoneNumberId,
       value.sttModelId,value.llmModelId,value.ttsModelId,value.voiceId,value.prompt,value.welcomeMessage,value.temperature,value.interruptionSensitivity,
       value.silenceTimeoutMs,value.inactivityTimeoutSeconds,JSON.stringify(value.settings),auth.userId]);
   } catch(error) { if(error.code==='23505') throw new AppError(409,'Agent name or phone mapping already exists','AGENT_CONFLICT'); throw error; }
