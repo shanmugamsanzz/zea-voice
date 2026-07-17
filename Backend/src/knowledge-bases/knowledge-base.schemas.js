@@ -27,6 +27,10 @@ export const knowledgeBaseIdSchema = z.object({
   knowledgeBaseId: z.string().uuid(),
 });
 
+export const knowledgeDeletionJobIdSchema = z.object({
+  jobId: z.string().uuid(),
+});
+
 export const listKnowledgeBasesSchema = z.object({
   search: z.string().trim().max(200).optional(),
   status: knowledgeBaseStatus.optional(),

@@ -416,3 +416,38 @@ export async function processKnowledgeDeletionJob(jobId, dependencies = defaultP
     throw error;
   }
 }
+
+export function getKnowledgeDeletionJob(auth, jobId, contextRunner = withTenantContext) {
+  return contextRunner(auth, async (client) => {
+    const result = await client.query(
+      `SELECT j.id, j.knowledge_base_id, j.document_id, j.job_type, j.status,
+              j.progress, j.attempt_count, j.max_attempts, j.error_code,
+              j.error_message, j.created_at, j.started_at, j.completed_at
+         FROM knowledge_processing_jobs j
+         JOIN knowledge_bases kb
+           ON kb.tenant_id=j.tenant_id AND kb.id=j.knowledge_base_id
+        WHERE j.tenant_id=$1 AND kb.workspace_id=$2 AND j.id=$3
+          AND j.job_type IN ('delete_document','delete_knowledge_base')`,
+      [auth.tenantId, auth.workspaceId, jobId],
+    );
+    if (!result.rowCount) {
+      throw new AppError(404, 'Knowledge deletion job was not found', 'KNOWLEDGE_DELETE_JOB_NOT_FOUND');
+    }
+    const row = result.rows[0];
+    return {
+      id: row.id,
+      knowledgeBaseId: row.knowledge_base_id,
+      documentId: row.document_id,
+      type: row.job_type,
+      status: row.status,
+      progress: row.progress,
+      attemptCount: row.attempt_count,
+      maxAttempts: row.max_attempts,
+      errorCode: row.error_code,
+      errorMessage: row.error_message,
+      createdAt: row.created_at,
+      startedAt: row.started_at,
+      completedAt: row.completed_at,
+    };
+  });
+}

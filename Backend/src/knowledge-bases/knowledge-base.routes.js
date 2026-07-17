@@ -4,6 +4,7 @@ import { requireTenantContext } from '../auth/tenant.middleware.js';
 import { AppError } from '../middleware/errors.js';
 import {
   createKnowledgeBaseSchema,
+  knowledgeDeletionJobIdSchema,
   knowledgeBaseIdSchema,
   listKnowledgeBasesSchema,
   parseKnowledgeBaseInput,
@@ -20,6 +21,7 @@ import { knowledgeDocumentRouter } from './knowledge-document.routes.js';
 import { getKnowledgeBaseReviewSummary, publishKnowledgeBase } from './knowledge-review.service.js';
 import { runtimeKnowledgeQuerySchema } from './knowledge-runtime.schemas.js';
 import { routeKnowledgeQuery } from './knowledge-runtime.service.js';
+import { getKnowledgeDeletionJob } from './knowledge-deletion.service.js';
 
 function valid(schema, value) {
   const parsed = parseKnowledgeBaseInput(schema, value);
@@ -51,6 +53,11 @@ knowledgeBaseRouter.post('/runtime/query', async (request, response) => {
 knowledgeBaseRouter.get('/', async (request, response) => {
   const filters = valid(listKnowledgeBasesSchema, request.query);
   response.json({ success: true, data: await listKnowledgeBases(auth(request), filters) });
+});
+
+knowledgeBaseRouter.get('/deletion-jobs/:jobId', async (request, response) => {
+  const { jobId } = valid(knowledgeDeletionJobIdSchema, request.params);
+  response.json({ success: true, data: await getKnowledgeDeletionJob(auth(request), jobId) });
 });
 
 knowledgeBaseRouter.get('/:knowledgeBaseId', async (request, response) => {

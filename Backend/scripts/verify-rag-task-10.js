@@ -11,6 +11,7 @@ import {
   uploadKnowledgeDocumentVersion,
 } from '../src/knowledge-bases/knowledge-document.service.js';
 import {
+  getKnowledgeDeletionJob,
   processKnowledgeDeletionJob,
   requestDeleteKnowledgeBase,
   requestDeleteKnowledgeDocument,
@@ -264,6 +265,15 @@ async function verifyCompleteLifecycle() {
       auth, knowledgeBaseId, document.documentId, sameTransaction, queue,
     );
     assert.equal(documentDelete.deleted, true);
+    const queuedDocumentDeletion = await getKnowledgeDeletionJob(
+      auth, documentDelete.cleanupJob.id, sameTransaction,
+    );
+    assert.equal(queuedDocumentDeletion.status, 'queued');
+    assert.equal(queuedDocumentDeletion.documentId, document.documentId);
+    await assert.rejects(
+      getKnowledgeDeletionJob(authFor(otherTenant), documentDelete.cleanupJob.id, sameTransaction),
+      (error) => error.code === 'KNOWLEDGE_DELETE_JOB_NOT_FOUND',
+    );
     await assert.rejects(
       getKnowledgeDocument(auth, knowledgeBaseId, document.documentId, sameTransaction),
       (error) => error.code === 'KNOWLEDGE_DOCUMENT_NOT_FOUND',
@@ -288,6 +298,9 @@ async function verifyCompleteLifecycle() {
       async invalidateCache() { return { deletedKeys: 0 }; },
     });
     assert.equal(documentCleanup.status, 'completed');
+    assert.equal((await getKnowledgeDeletionJob(
+      auth, documentDelete.cleanupJob.id, sameTransaction,
+    )).status, 'completed');
     assert.ok(documentCleanup.reindexJobId);
     assert.deepEqual(documentPointDeletes, [{ tenantId: tenant.tenantId, documentId: document.documentId }]);
     assert.deepEqual(reindexQueue, [documentCleanup.reindexJobId]);
@@ -354,6 +367,8 @@ async function verifyRoutesAndImplementation() {
   assert.match(routes, /delete\('\/:documentId\/versions\/:versionId'/);
   assert.match(routes, /post\('\/:documentId\/versions\/:versionId\/activate'/);
   assert.match(routes, /delete\('\/:documentId'/);
+  const knowledgeBaseRoutes = await readFile(new URL('../src/knowledge-bases/knowledge-base.routes.js', import.meta.url), 'utf8');
+  assert.match(knowledgeBaseRoutes, /get\('\/deletion-jobs\/:jobId'/);
   const dispatcher = await readFile(new URL('../src/knowledge-bases/knowledge-job.dispatcher.js', import.meta.url), 'utf8');
   assert.match(dispatcher, /delete_document/);
   assert.match(dispatcher, /delete_knowledge_base/);
@@ -436,6 +451,7 @@ console.log(JSON.stringify({
     deletionJobRetries: true,
     runtimeTombstones: true,
     tenantIsolation: true,
+    tenantSafeDeletionJobStatus: true,
   },
   temporaryB2VersionCleanupVerified: liveCleanup.b2,
   temporaryQdrantPointCleanupVerified: liveCleanup.qdrant,

@@ -1,6 +1,8 @@
 import { z } from 'zod';
 export const resourceAgentIdSchema=z.object({agentId:z.string().uuid()});
 export const resourceIdSchema=z.object({resourceId:z.string().uuid()});
+export const agentKnowledgeBaseParamsSchema=z.object({agentId:z.string().uuid(),knowledgeBaseId:z.string().uuid().optional()});
+export const assignAgentKnowledgeBaseSchema=z.object({usageDirection:z.enum(['inbound','outbound','both']).optional(),priority:z.number().int().min(0).max(100000).default(100)}).strict();
 export const createToolSchema=z.object({name:z.string().trim().min(1).max(160),type:z.enum(['webhook_api','calcom','hubspot','salesforce']),description:z.string().trim().max(5000).nullable().optional(),status:z.enum(['active','inactive']).default('active'),configuration:z.record(z.string(),z.unknown()).default({}),secretConfiguration:z.record(z.string(),z.string()).optional()});
 export const toolStatusSchema=z.object({status:z.enum(['active','inactive'])});
 export const createKnowledgeSchema=z.object({displayName:z.string().trim().min(1).max(240),fileName:z.string().trim().min(1).max(240),mimeType:z.enum(['application/pdf','text/plain','application/vnd.openxmlformats-officedocument.wordprocessingml.document']),sizeBytes:z.number().int().min(1).max(52_428_800),metadata:z.record(z.string(),z.unknown()).default({})});

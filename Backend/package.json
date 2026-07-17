@@ -46,6 +46,7 @@
     "verify:rag-task8": "node scripts/verify-rag-task-8.js",
     "verify:rag-task9": "node scripts/verify-rag-task-9.js",
     "verify:rag-task10": "node scripts/verify-rag-task-10.js",
+    "verify:agent-kb-assignment": "node scripts/verify-agent-knowledge-base-assignment.js",
     "benchmark:embedding": "node scripts/benchmark-embedding.js",
     "providers:convert-plaintext": "node scripts/convert-provider-parameters-to-plaintext.js",
     "seed:super-admin": "node scripts/create-super-admin.js",

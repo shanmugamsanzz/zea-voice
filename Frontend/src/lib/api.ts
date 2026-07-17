@@ -72,7 +72,8 @@ async function networkApiRequest<T>(path: string, init: ApiRequestInit = {}, ret
   const token = getAccessToken();
   const headers = new Headers(init.headers);
   const { zeaCache: _zeaCache, ...requestInit } = init;
-  if (init.body && !headers.has('content-type')) headers.set('content-type', 'application/json');
+  const isMultipart = typeof FormData !== 'undefined' && init.body instanceof FormData;
+  if (init.body && !isMultipart && !headers.has('content-type')) headers.set('content-type', 'application/json');
   if (token) headers.set('authorization', `Bearer ${token}`);
   try {
     const response = await request(`${API_BASE_URL}${path}`, { ...requestInit, headers, credentials: 'include' });
@@ -108,6 +109,36 @@ export async function apiRequest<T>(path: string, init: ApiRequestInit = {}, ret
   const data = await networkApiRequest<T>(path, init, retry);
   if (method !== 'GET') await invalidateApiResource(path);
   return data;
+}
+
+export function uploadApiFormData<T>(path: string, body: FormData, onProgress: (percent: number) => void) {
+  return new Promise<T>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open('POST', `${API_BASE_URL}${path}`);
+    request.withCredentials = true;
+    request.timeout = REQUEST_TIMEOUT_MS;
+    const token = getAccessToken();
+    if (token) request.setRequestHeader('authorization', `Bearer ${token}`);
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) {
+        onProgress(Math.max(1, Math.min(99, Math.round((event.loaded / event.total) * 100))));
+      }
+    };
+    request.onload = () => {
+      let envelope: ApiEnvelope<T> | null = null;
+      try { envelope = JSON.parse(request.responseText) as ApiEnvelope<T>; } catch { /* handled below */ }
+      if (request.status < 200 || request.status >= 300 || !envelope?.success) {
+        reject(new Error(envelope?.error?.message || `Request failed (${request.status})`));
+        return;
+      }
+      onProgress(100);
+      void invalidateApiResource(path).finally(() => resolve(envelope!.data));
+    };
+    request.onerror = () => reject(new Error('Could not connect to the Zea Voice backend.'));
+    request.ontimeout = () => reject(new Error('The backend did not respond before the request timeout.'));
+    request.onabort = () => reject(new DOMException('Request aborted', 'AbortError'));
+    request.send(body);
+  });
 }
 
 export async function login(email: string, password: string) {
