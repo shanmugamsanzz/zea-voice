@@ -7,6 +7,7 @@ const definitions = [
   { name: 'batch-calls', displayName: 'Batch Campaign Calls' },
   { name: 'realtime-calls', displayName: 'Real-Time Lead Calls' },
   { name: 'call-retries', displayName: 'Scheduled Call Retries' },
+  { name: 'knowledge-processing', displayName: 'Knowledge PDF Processing' },
 ];
 const connection = {
   host: env.REDIS_HOST,

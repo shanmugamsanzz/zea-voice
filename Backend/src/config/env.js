@@ -66,6 +66,43 @@ const envSchema = z.object({
   B2_KEY_ID: z.preprocess(emptyToUndefined, z.string().optional()),
   B2_APPLICATION_KEY: z.preprocess(emptyToUndefined, z.string().optional()),
   B2_SKIP_STARTUP_CHECK: booleanFromString.default(true),
+  KNOWLEDGE_PDF_MAX_BYTES: z.coerce.number().int().min(1024).max(104_857_600).default(26_214_400),
+  KNOWLEDGE_PDF_MAX_PAGES: z.coerce.number().int().min(1).max(5000).default(500),
+  KNOWLEDGE_EXTRACTED_TEXT_MAX_CHARS: z.coerce.number().int().min(10000).max(20_000_000).default(2_000_000),
+  KNOWLEDGE_WORKERS_ENABLED: booleanFromString.default(false),
+  KNOWLEDGE_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(20).default(2),
+  RAG_CHUNK_SIZE_TOKENS: z.coerce.number().int().min(50).max(2000).default(300),
+  RAG_CHUNK_OVERLAP_TOKENS: z.coerce.number().int().min(0).max(500).default(50),
+  RAG_EMBEDDING_BATCH_SIZE: z.coerce.number().int().min(1).max(128).default(16),
+  RAG_EMBEDDING_MAX_CHARS: z.coerce.number().int().min(200).max(10000).default(1800),
+  QDRANT_UPSERT_BATCH_SIZE: z.coerce.number().int().min(1).max(512).default(64),
+  RAG_RUNTIME_PROFILE_CACHE_TTL_SECONDS: z.coerce.number().int().min(1).max(300).default(30),
+  RAG_RUNTIME_RESULT_CACHE_TTL_SECONDS: z.coerce.number().int().min(1).max(300).default(30),
+  RAG_RUNTIME_CACHE_TIMEOUT_MS: z.coerce.number().int().min(5).max(1000).default(50),
+  RAG_RUNTIME_TOP_K: z.coerce.number().int().min(1).max(10).default(3),
+  RAG_RUNTIME_MIN_SCORE: z.coerce.number().min(0).max(1).default(0.72),
+
+  RAG_ENABLED: booleanFromString.default(false),
+  RAG_STARTUP_CHECK_ENABLED: booleanFromString.default(true),
+  RAG_HEALTH_CACHE_TTL_MS: z.coerce.number().int().min(1000).max(300000).default(60000),
+  EMBEDDING_BASE_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
+  EMBEDDING_API_KEY: z.preprocess(emptyToUndefined, z.string().min(16).optional()),
+  EMBEDDING_MODEL: z.string().min(1).default('intfloat/multilingual-e5-small'),
+  EMBEDDING_DIMENSIONS: z.coerce.number().int().positive().default(384),
+  EMBEDDING_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(100).max(30000).default(5000),
+  EMBEDDING_BENCHMARK_ITERATIONS: z.coerce.number().int().min(3).max(100).default(10),
+  EMBEDDING_BENCHMARK_TARGET_P95_MS: z.coerce.number().int().min(10).max(10000).default(250),
+  QDRANT_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
+  QDRANT_API_KEY: z.preprocess(emptyToUndefined, z.string().min(16).optional()),
+  QDRANT_COLLECTION_PREFIX: z.string().regex(/^[a-z0-9_]+$/).default('zea_voice_company'),
+  QDRANT_VECTOR_SIZE: z.coerce.number().int().positive().default(384),
+  QDRANT_DISTANCE: z.enum(['Cosine', 'Dot', 'Euclid', 'Manhattan']).default('Cosine'),
+  QDRANT_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(100).max(30000).default(3000),
+  LLM_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(250).max(120000).default(15000),
+  LLM_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(16).max(8192).default(300),
+  LLM_MAX_HISTORY_MESSAGES: z.coerce.number().int().min(0).max(50).default(12),
+  LLM_SYSTEM_PROMPT_MAX_CHARS: z.coerce.number().int().min(2000).max(100000).default(40000),
+  LLM_KNOWLEDGE_CONTEXT_MAX_CHARS: z.coerce.number().int().min(500).max(50000).default(12000),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -79,6 +116,36 @@ if (!parsed.success) {
 
 if (parsed.data.DATABASE_POOL_MIN > parsed.data.DATABASE_POOL_MAX) {
   throw new Error('Invalid environment configuration: DATABASE_POOL_MIN cannot exceed DATABASE_POOL_MAX');
+}
+
+if (parsed.data.RAG_CHUNK_OVERLAP_TOKENS >= parsed.data.RAG_CHUNK_SIZE_TOKENS) {
+  throw new Error('Invalid environment configuration: RAG_CHUNK_OVERLAP_TOKENS must be smaller than RAG_CHUNK_SIZE_TOKENS');
+}
+
+const frozenEmbeddingModel = 'intfloat/multilingual-e5-small';
+const frozenEmbeddingDimensions = 384;
+
+if (parsed.data.RAG_ENABLED) {
+  const missingRagVariables = [
+    'EMBEDDING_BASE_URL', 'EMBEDDING_API_KEY', 'QDRANT_URL', 'QDRANT_API_KEY',
+    'B2_S3_ENDPOINT', 'B2_BUCKET', 'B2_BUCKET_ID', 'B2_KEY_ID', 'B2_APPLICATION_KEY',
+  ].filter((name) => !parsed.data[name]);
+
+  if (missingRagVariables.length > 0) {
+    throw new Error(`Invalid environment configuration: RAG requires ${missingRagVariables.join(', ')}`);
+  }
+
+  if (parsed.data.EMBEDDING_MODEL !== frozenEmbeddingModel) {
+    throw new Error(`Invalid environment configuration: Phase 1 embedding model is frozen to ${frozenEmbeddingModel}`);
+  }
+
+  if (parsed.data.EMBEDDING_DIMENSIONS !== frozenEmbeddingDimensions) {
+    throw new Error(`Invalid environment configuration: ${frozenEmbeddingModel} requires ${frozenEmbeddingDimensions} dimensions`);
+  }
+
+  if (parsed.data.QDRANT_VECTOR_SIZE !== parsed.data.EMBEDDING_DIMENSIONS) {
+    throw new Error('Invalid environment configuration: QDRANT_VECTOR_SIZE must match EMBEDDING_DIMENSIONS');
+  }
 }
 
 export const env = {

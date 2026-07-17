@@ -14,6 +14,7 @@ export const API_KEY_SCOPES = [
   'users:read', 'users:write',
   'agents:read', 'agents:write',
   'campaigns:read', 'campaigns:write',
+  'knowledge_bases:read', 'knowledge_bases:write',
   'calls:read', 'calls:create',
   'reports:read',
 ];

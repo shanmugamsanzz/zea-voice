@@ -7,13 +7,22 @@ import { runPendingMigrations } from './infrastructure/migrations.js';
 import { checkRedis, closeRedis } from './infrastructure/redis.js';
 import { closeQueues } from './queues/queue.registry.js';
 import { closeCampaignWorkers, startCampaignWorkers } from './campaigns/campaign.workers.js';
+import { assertRagInfrastructure } from './rag/rag-infrastructure.js';
+import { closeKnowledgeProcessingWorker, startKnowledgeProcessingWorker } from './knowledge-bases/knowledge-processing.worker.js';
 
 async function bootstrap() {
   await runPendingMigrations();
-  const [databaseHealth, redisHealth] = await Promise.all([checkDatabase(), checkRedis()]);
+  const [databaseHealth, redisHealth, ragHealth] = await Promise.all([
+    checkDatabase(),
+    checkRedis(),
+    env.RAG_ENABLED && env.RAG_STARTUP_CHECK_ENABLED
+      ? assertRagInfrastructure()
+      : Promise.resolve({ ok: true, enabled: env.RAG_ENABLED, skipped: true }),
+  ]);
 
-  logger.info({ databaseHealth, redisHealth }, 'Infrastructure connections verified');
+  logger.info({ databaseHealth, redisHealth, ragHealth }, 'Infrastructure connections verified');
   startCampaignWorkers();
+  await startKnowledgeProcessingWorker();
 
   const server = createServer(createApp());
   server.listen(env.PORT, env.HOST, () => {
@@ -27,7 +36,9 @@ async function bootstrap() {
     logger.info({ signal }, 'Graceful shutdown started');
 
     server.close(async (serverError) => {
-      const results = await Promise.allSettled([closeCampaignWorkers(), closeQueues(), closeRedis(), closeDatabase()]);
+      const results = await Promise.allSettled([
+        closeCampaignWorkers(), closeKnowledgeProcessingWorker(), closeQueues(), closeRedis(), closeDatabase(),
+      ]);
       const failed = results.filter((result) => result.status === 'rejected');
 
       if (serverError || failed.length > 0) {
@@ -50,6 +61,8 @@ async function bootstrap() {
 
 bootstrap().catch(async (error) => {
   logger.fatal({ err: error }, 'Backend startup failed');
-  await Promise.allSettled([closeCampaignWorkers(), closeQueues(), closeRedis(), closeDatabase()]);
+  await Promise.allSettled([
+    closeCampaignWorkers(), closeKnowledgeProcessingWorker(), closeQueues(), closeRedis(), closeDatabase(),
+  ]);
   process.exit(1);
 });

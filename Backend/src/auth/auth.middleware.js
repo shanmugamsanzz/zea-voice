@@ -28,6 +28,7 @@ function requiredApiKeyScope(request) {
     '/users': 'users',
     '/agents': 'agents',
     '/campaigns': 'campaigns',
+    '/knowledge-bases': 'knowledge_bases',
     '/calls': 'calls',
     '/reports': 'reports',
   };
