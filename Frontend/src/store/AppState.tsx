@@ -23,17 +23,19 @@ interface AppState {
   setSelectedCallId: (id: string | null) => void;
   setTheme: (theme: 'light' | 'dark') => void;
   setUserEmail: (email: string) => void;
+  resetNavigation: () => void;
 }
 
 const AppStateContext = createContext<AppState | undefined>(undefined);
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
   const [role, setRoleState] = useState<UserRole>('DEVELOPER'); // Default to DEVELOPER
-  const [view, setViewState] = useState<string>('dashboard');
-  const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
-  const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(null);
-  const [selectedCallId, setSelectedCallId] = useState<string | null>(null);
+  const stored = (key: string) => typeof window === 'undefined' ? null : sessionStorage.getItem(key);
+  const [view, setViewState] = useState<string>(() => stored('zea_voice_view') || 'dashboard');
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(() => stored('zea_voice_company_id'));
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(() => stored('zea_voice_agent_id'));
+  const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(() => stored('zea_voice_campaign_id'));
+  const [selectedCallId, setSelectedCallId] = useState<string | null>(() => stored('zea_voice_call_id'));
   const [userEmail, setUserEmail] = useState('');
   const [theme, setThemeState] = useState<'light' | 'dark'>(() => {
     if (typeof window !== 'undefined') {
@@ -51,6 +53,24 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     }
   }, [theme]);
 
+  React.useEffect(() => { sessionStorage.setItem('zea_voice_view', view); }, [view]);
+  React.useEffect(() => {
+    if (selectedCompanyId) sessionStorage.setItem('zea_voice_company_id', selectedCompanyId);
+    else sessionStorage.removeItem('zea_voice_company_id');
+  }, [selectedCompanyId]);
+  React.useEffect(() => {
+    if (selectedAgentId) sessionStorage.setItem('zea_voice_agent_id', selectedAgentId);
+    else sessionStorage.removeItem('zea_voice_agent_id');
+  }, [selectedAgentId]);
+  React.useEffect(() => {
+    if (selectedCampaignId) sessionStorage.setItem('zea_voice_campaign_id', selectedCampaignId);
+    else sessionStorage.removeItem('zea_voice_campaign_id');
+  }, [selectedCampaignId]);
+  React.useEffect(() => {
+    if (selectedCallId) sessionStorage.setItem('zea_voice_call_id', selectedCallId);
+    else sessionStorage.removeItem('zea_voice_call_id');
+  }, [selectedCallId]);
+
   const setTheme = (newTheme: 'light' | 'dark') => {
     setThemeState(newTheme);
     localStorage.setItem('theme', newTheme);
@@ -58,20 +78,22 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   const setRole = (newRole: UserRole) => {
     setRoleState(newRole);
-    // Automatically reset view to dashboard on role swap
-    setViewState('dashboard');
-    setSelectedCompanyId(null);
-    setSelectedAgentId(null);
-    setSelectedCampaignId(null);
-    setSelectedCallId(null);
   };
 
   const setView = (newView: string) => {
     setViewState(newView);
     // Reset secondary states if switching top-level views
-    if (!newView.startsWith('companies/')) setSelectedCompanyId(null);
-    if (!newView.startsWith('agents/')) setSelectedAgentId(null);
-    if (!newView.startsWith('campaigns/')) setSelectedCampaignId(null);
+    if (newView !== 'companies' && !newView.startsWith('companies/')) setSelectedCompanyId(null);
+    if (newView !== 'agents' && !newView.startsWith('agents/')) setSelectedAgentId(null);
+    if (newView !== 'campaigns' && !newView.startsWith('campaigns/')) setSelectedCampaignId(null);
+  };
+
+  const resetNavigation = () => {
+    setViewState('dashboard');
+    setSelectedCompanyId(null);
+    setSelectedAgentId(null);
+    setSelectedCampaignId(null);
+    setSelectedCallId(null);
   };
 
   return (
@@ -92,6 +114,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       setSelectedCallId,
       setTheme,
       setUserEmail,
+      resetNavigation,
     }}>
       {children}
     </AppStateContext.Provider>

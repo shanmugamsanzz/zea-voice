@@ -176,7 +176,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
   const meta = getViewMeta(view);
 
   return (
-    <div className="min-h-screen bg-slate-50 flex font-sans text-slate-800 overflow-hidden h-screen">
+    <div className="h-dvh bg-slate-50 flex font-sans text-slate-800 overflow-hidden">
       {/* Desktop Persistent Sidebar */}
       {role === 'SUPER_ADMIN' ? (
         <aside className={`${isSidebarMinimized ? 'w-20' : 'w-64'} bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-300 hidden md:flex flex-col justify-between shrink-0 h-full border-r border-slate-200 dark:border-slate-850 transition-all duration-300`}>
@@ -426,7 +426,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
       )}
 
       {/* Main View Container */}
-      <div className="flex-1 flex flex-col h-full overflow-hidden bg-slate-50/30">
+      <div className="min-h-0 flex-1 flex flex-col h-full overflow-hidden bg-slate-50/30">
         {/* Dynamic Header */}
         <header className="h-14 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800/80 flex items-center justify-between px-6 md:px-8 shrink-0 z-10 shadow-sm">
           <div className="flex items-center space-x-4 overflow-hidden">
@@ -517,7 +517,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
         </header>
 
         {/* Content Area */}
-        <main className="flex-1 overflow-y-auto bg-[#F8FAFC] p-6 md:p-10">
+        <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-[#F8FAFC] px-6 pt-6 pb-4 md:px-10 md:pt-8 md:pb-6">
           <div className="max-w-7xl mx-auto space-y-8">
             {children}
           </div>
