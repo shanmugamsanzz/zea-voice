@@ -1718,6 +1718,7 @@ interface AgentApiData {
 
 function agentFromApi(value: AgentApiData): VoiceAgent {
   return {
+    ...(value.settings as Partial<VoiceAgent>),
     id: value.id, name: value.name, status: value.status, voiceId: value.voiceId,
     temperature: value.temperature, prompt: value.prompt,
     interruptionSensitivity: value.interruptionSensitivity, silenceTimeout: value.silenceTimeoutMs,
@@ -1728,7 +1729,6 @@ function agentFromApi(value: AgentApiData): VoiceAgent {
     totalCalls: value.metrics.totalCalls, avgDuration: value.metrics.averageDurationSeconds, successRate: value.metrics.successRate,
     description: value.description ?? '', goal: value.goal ?? '', language: value.language, agentUsage: value.usageDirection,
     welcomeMessage: value.welcomeMessage ?? '', inactivityTimeout: value.inactivityTimeoutSeconds,
-    ...(value.settings as Partial<VoiceAgent>),
   };
 }
 

@@ -520,6 +520,11 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     if (!sttModelId || !llmModelId || !ttsModelId) { setError('Connected STT, LLM and TTS models are required.'); return; }
     setSaving(true); setError('');
     try {
+      const {
+        id: _id, name: _name, status: _status, createdAt: _createdAt, updatedAt: _updatedAt,
+        totalCalls: _totalCalls, avgDuration: _avgDuration, successRate: _successRate,
+        ...agentSettings
+      } = agent;
       const payload = {
         name: agent.name, description: agent.description || null, goal: agent.goal || null,
         language: agent.language || 'English (US)', usageDirection: agent.agentUsage || 'both', status: agent.status,
@@ -527,7 +532,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         voiceId: agent.voiceId, prompt: agent.prompt, welcomeMessage: agent.welcomeMessage || null,
         temperature: agent.temperature, interruptionSensitivity: agent.interruptionSensitivity,
         silenceTimeoutMs: agent.silenceTimeout, inactivityTimeoutSeconds: agent.inactivityTimeout ?? 5,
-        settings: { ...agent },
+        settings: agentSettings,
       };
       const saved = await apiRequest<AgentApiData>(agentId ? `/agents/${agentId}` : '/agents', {
         method: agentId ? 'PUT' : 'POST', body: JSON.stringify(payload),
