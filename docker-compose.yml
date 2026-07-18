@@ -16,7 +16,7 @@ services:
         --port 80
         --huggingface-hub-cache /data
     ports:
-      - "127.0.0.1:8080:80"
+      - "127.0.0.1:1113:80"
     volumes:
       - embedding-model-cache:/data
     restart: unless-stopped
