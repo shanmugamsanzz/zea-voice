@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAppState } from '../../store/AppState';
 import { startTabMeasurement } from '../../lib/performance';
 import {
@@ -49,6 +49,30 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isSidebarMinimized, setIsSidebarMinimized] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+
+  useEffect(() => {
+    const root = document.getElementById('root');
+    const previous = {
+      htmlOverflow: document.documentElement.style.overflow,
+      bodyOverflow: document.body.style.overflow,
+      rootOverflow: root?.style.overflow ?? '',
+      rootHeight: root?.style.height ?? '',
+    };
+    document.documentElement.style.overflow = 'hidden';
+    document.body.style.overflow = 'hidden';
+    if (root) {
+      root.style.height = '100dvh';
+      root.style.overflow = 'hidden';
+    }
+    return () => {
+      document.documentElement.style.overflow = previous.htmlOverflow;
+      document.body.style.overflow = previous.bodyOverflow;
+      if (root) {
+        root.style.height = previous.rootHeight;
+        root.style.overflow = previous.rootOverflow;
+      }
+    };
+  }, []);
 
   const handleItemClick = (viewId: string) => {
     startTabMeasurement(viewId);
