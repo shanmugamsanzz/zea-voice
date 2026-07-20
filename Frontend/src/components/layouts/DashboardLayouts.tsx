@@ -517,8 +517,8 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
         </header>
 
         {/* Content Area */}
-        <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-[#F8FAFC] px-6 pt-6 pb-4 md:px-10 md:pt-8 md:pb-6">
-          <div className="max-w-7xl mx-auto space-y-8">
+        <main className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain bg-[#F8FAFC] px-6 pt-6 pb-4 md:px-10 md:pt-8 md:pb-6">
+          <div className="mx-auto w-full max-w-7xl flex-1 space-y-8">
             {children}
           </div>
         </main>

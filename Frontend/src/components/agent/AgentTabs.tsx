@@ -858,7 +858,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
 
   return (
     <>
-    <form onSubmit={handleSave} className="flex min-h-[calc(100dvh-7rem)] flex-col overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-xs">
+    <form onSubmit={handleSave} className="flex min-h-full flex-col overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-xs">
       {/* Upper Status strip / Banner */}
       <div className="bg-gradient-to-r from-violet-600 via-indigo-600 to-pink-500 p-6 text-white flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
