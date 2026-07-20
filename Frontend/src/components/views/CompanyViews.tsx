@@ -5,10 +5,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { useAppState } from '../../store/AppState';
-import { 
-  COMPLETED_CALL_LOGS, 
-  MOCK_PHONE_NUMBERS 
-} from '../../lib/mockData';
+import { MOCK_PHONE_NUMBERS } from '../../lib/mockData';
 import { VoiceAgent, Campaign, PhoneNumber } from '../../types';
 import { 
   LayoutDashboard, 
@@ -57,6 +54,7 @@ import {
 import { AgentTabs } from '../agent/AgentTabs';
 import { CallVolumeChart, DurationBarChart, OutcomePieChart, LatencyBreakdownChart } from '../charts/DashboardCharts';
 import { apiRequest } from '../../lib/api';
+import { CallLogsAnalyticsView } from './CallLogsAnalyticsView';
 
 interface CompanyDashboardData {
   company: { tenantId: string; workspaceId: string; name: string; timezone: string };
@@ -92,6 +90,31 @@ interface CompanyAnalyticsData {
   sentiments: Array<{ name: 'positive' | 'neutral' | 'negative' | 'unknown'; value: number; percentage: number }>;
 }
 
+interface VqaVoiceData {
+  periodDays: number;
+  health: {
+    score: number | null;
+    label: 'excellent' | 'good' | 'fair' | 'needs_attention' | 'no_data';
+    auditedCalls: number;
+    healthyCalls: number;
+  };
+  latencyTrend: Array<{
+    date: string;
+    sampleCount: number;
+    sttMs: number | null;
+    llmMs: number | null;
+    ttsMs: number | null;
+  }>;
+  audits: Array<{
+    callId: string;
+    auditedAt: string;
+    responseDelayMs: number;
+    sttConfidence: number | null;
+    status: 'optimal' | 'normal' | 'degraded';
+    latency: { sttMs: number | null; llmMs: number | null; ttsMs: number | null };
+  }>;
+}
+
 export function CompanyViews() {
   const { view, setView, selectedAgentId, setSelectedAgentId } = useAppState();
   const [agents, setAgents] = useState<VoiceAgent[]>([]);
@@ -123,9 +146,9 @@ export function CompanyViews() {
     case 'agents/edit':
       return <AgentTabs agentId={selectedAgentId} onSave={handleSaveAgent} onCancel={() => { setSelectedAgentId(null); setView('agents'); }} />;
     case 'reports':
-      return <CustomReportsView agents={agents} />;
+      return <RealReportsView agents={agents} />;
     case 'call-logs':
-      return <CallLogsListView />;
+      return <CallLogsAnalyticsView />;
     case 'phone-numbers':
       return <CompanyPhoneNumbersView phoneNumbers={phoneNumbers} setPhoneNumbers={setPhoneNumbers} agents={agents} />;
     case 'vqa-voice':
@@ -407,57 +430,109 @@ function CompanyDashboard({ onEditAgent, onAddAgent }: { onEditAgent: (id: strin
    1.1 INTERACTIVE MOCK SUB-VIEWS (SHARYX SUPPORT)
    ========================================== */
 function VqaVoiceView() {
-  const auditLogs = [
-    { id: '1', date: 'Jul 9, 2026', delay: '184ms', sttConf: '98.5%', accuracy: '99.1%', status: 'Optimal' },
-    { id: '2', date: 'Jul 8, 2026', delay: '196ms', sttConf: '97.2%', accuracy: '98.6%', status: 'Optimal' },
-    { id: '3', date: 'Jul 7, 2026', delay: '241ms', sttConf: '96.8%', accuracy: '97.4%', status: 'Normal' },
-    { id: '4', date: 'Jul 6, 2026', delay: '172ms', sttConf: '98.9%', accuracy: '99.5%', status: 'Optimal' },
-    { id: '5', date: 'Jul 5, 2026', delay: '315ms', sttConf: '95.1%', accuracy: '96.2%', status: 'Degraded' },
-  ];
+  const [assessment, setAssessment] = useState<VqaVoiceData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadAssessment = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setAssessment(await apiRequest<VqaVoiceData>('/vqa?days=7&auditLimit=5', { zeaCache: 'bypass' }));
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to load voice quality data');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { void loadAssessment(); }, []);
+
+  const health = assessment?.health;
+  const healthTone = health?.label === 'excellent' || health?.label === 'good'
+    ? 'bg-emerald-50 text-emerald-600 border-emerald-200'
+    : health?.label === 'fair'
+      ? 'bg-amber-50 text-amber-700 border-amber-200'
+      : health?.label === 'needs_attention'
+        ? 'bg-rose-50 text-rose-600 border-rose-200'
+        : 'bg-slate-50 text-slate-500 border-slate-200';
+  const healthText = health?.score === null || health?.score === undefined
+    ? 'HEALTH SCORE: NO DATA'
+    : `HEALTH SCORE: ${health.score.toFixed(1)}% (${health.label.replace('_', ' ').toUpperCase()})`;
+  const chartData = (assessment?.latencyTrend ?? []).map((point) => ({
+    day: new Intl.DateTimeFormat('en-US', { weekday: 'short' }).format(new Date(point.date)),
+    stt: point.sttMs,
+    llm: point.llmMs,
+    tts: point.ttsMs,
+  }));
 
   return (
     <div className="space-y-6">
       <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs flex flex-col md:flex-row md:items-center md:justify-between justify-between">
         <div>
           <h2 className="text-xl font-black text-slate-800 tracking-tight">Voice Quality Assessment (VQA)</h2>
-          <p className="text-xs text-slate-500 font-semibold mt-0.5">Neural voice performance auditing, answer-delay latencies, and audio clarity logs.</p>
+          <p className="text-xs text-slate-500 font-semibold mt-0.5">Persisted provider latency and speech-recognition quality for completed voice calls.</p>
         </div>
-        <div className="bg-[#ECFDF5] text-[#059669] border border-[#A7F3D0] px-4 py-2 rounded-xl text-xs font-black shadow-xs mt-3 md:mt-0">
-          HEALTH SCORE: 98.4% (EXCELLENT)
+        <div className={`border px-4 py-2 rounded-xl text-xs font-black shadow-xs mt-3 md:mt-0 ${healthTone}`}>
+          {loading && !assessment ? 'LOADING LIVE VQA DATA...' : healthText}
         </div>
       </div>
 
+      {error && (
+        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-semibold text-rose-700">
+          Unable to load VQA database records: {error}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
-          <h3 className="font-bold text-slate-800 text-sm tracking-tight mb-4">Response Latency Breakdown Trends</h3>
-          <LatencyBreakdownChart />
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <h3 className="font-bold text-slate-800 text-sm tracking-tight">Response Latency Breakdown Trends</h3>
+            <span className="text-[10px] font-bold text-slate-400">{health?.auditedCalls ?? 0} audited calls</span>
+          </div>
+          <LatencyBreakdownChart data={chartData} />
         </div>
 
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between">
           <div>
             <h3 className="font-bold text-slate-800 text-sm tracking-tight mb-4">Audit Records</h3>
             <div className="space-y-3.5 text-xs font-semibold">
-              {auditLogs.map(log => (
-                <div key={log.id} className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex justify-between items-center">
+              {(assessment?.audits ?? []).map(log => (
+                <div key={log.callId} className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex justify-between items-center">
                   <div>
-                    <div className="text-slate-800 font-bold">{log.date}</div>
-                    <div className="text-[10px] text-slate-400 mt-0.5 font-semibold">STT Confidence: {log.sttConf}</div>
+                    <div className="text-slate-800 font-bold">
+                      {new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(log.auditedAt))}
+                    </div>
+                    <div className="text-[10px] text-slate-400 mt-0.5 font-semibold">
+                      STT Confidence: {log.sttConfidence === null ? 'Not reported' : `${log.sttConfidence.toFixed(1)}%`}
+                    </div>
                   </div>
                   <div className="text-right">
                     <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase ${
-                      log.status === 'Optimal' ? 'bg-emerald-50 text-emerald-600' :
-                      log.status === 'Normal' ? 'bg-indigo-50 text-indigo-600' : 'bg-rose-50 text-rose-600'
+                      log.status === 'optimal' ? 'bg-emerald-50 text-emerald-600' :
+                      log.status === 'normal' ? 'bg-indigo-50 text-indigo-600' : 'bg-rose-50 text-rose-600'
                     }`}>
                       {log.status}
                     </span>
-                    <div className="text-[10px] font-mono text-slate-500 font-bold mt-1">Delay: {log.delay}</div>
+                    <div className="text-[10px] font-mono text-slate-500 font-bold mt-1">Delay: {log.responseDelayMs}ms</div>
                   </div>
                 </div>
               ))}
+              {!loading && !error && (assessment?.audits.length ?? 0) === 0 && (
+                <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-5 text-center text-[11px] text-slate-400">
+                  No persisted voice provider usage is available for this period.
+                </div>
+              )}
             </div>
           </div>
-          <button className="w-full text-center py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs font-bold mt-4 transition cursor-pointer">
-            Run Full Network Diagnostic
+          <button
+            type="button"
+            disabled={loading}
+            onClick={() => { void loadAssessment(); }}
+            className="w-full py-2.5 bg-slate-50 hover:bg-slate-100 disabled:opacity-60 border border-slate-200 rounded-xl text-xs font-bold mt-4 transition cursor-pointer flex items-center justify-center gap-2"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+            {loading ? 'Refreshing VQA Data...' : 'Refresh Live Diagnostics'}
           </button>
         </div>
       </div>
@@ -477,7 +552,7 @@ function AiInsightsView() {
     { text: 'Add direct billing triggers to custom Salesforce pipelines.', type: 'Integration', difficulty: 'Easy' },
     { text: 'Fine-tune STT sensitivity thresholds to handle noise filtering better.', type: 'STT Operator', difficulty: 'Medium' },
     { text: 'Provision 3 additional phone DID numbers in active area codes.', type: 'Carrier DID', difficulty: 'Easy' },
-    { text: 'Rewrite CRM transfer prompts to emphasize immediate human fallback.', type: 'Prompt Brain', difficulty: 'Hard' }
+    { text: 'Rewrite CRM transfer prompts to emphasize immediate human fallback.', type: 'Prompt Brain', difficulty: 'Hard' },
   ];
 
   return (
@@ -488,35 +563,31 @@ function AiInsightsView() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Customer Objections Breakdown */}
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
           <h3 className="font-bold text-slate-800 text-sm tracking-tight mb-4">Primary Conversation Topics & Obstacles</h3>
           <div className="space-y-4 text-xs font-semibold">
-            {customerObjections.map((obj, i) => (
-              <div key={i}>
+            {customerObjections.map((obj, index) => (
+              <div key={index}>
                 <div className="flex justify-between text-slate-600 mb-1">
                   <span>{obj.name}</span>
                   <span className="font-bold" style={{ color: obj.color }}>{obj.percentage}%</span>
                 </div>
                 <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden">
-                  <div className="h-full rounded-full" style={{ width: `${obj.percentage}%`, backgroundColor: obj.color }} />
+                  <div className="h-full rounded-full" style={{ width: String(obj.percentage) + '%', backgroundColor: obj.color }} />
                 </div>
               </div>
             ))}
           </div>
         </div>
 
-        {/* Action Items extracted */}
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between">
           <div>
             <h3 className="font-bold text-slate-800 text-sm tracking-tight mb-4">Autonomous Recommendations Captured</h3>
             <div className="space-y-3.5 text-xs font-semibold">
-              {actionItems.map((item, i) => (
-                <div key={i} className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
+              {actionItems.map((item, index) => (
+                <div key={index} className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
                   <div className="flex justify-between items-center">
-                    <span className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-lg text-[9px] font-bold border border-indigo-100">
-                      {item.type}
-                    </span>
+                    <span className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-lg text-[9px] font-bold border border-indigo-100">{item.type}</span>
                     <span className="text-[10px] text-slate-400">Difficulty: {item.difficulty}</span>
                   </div>
                   <p className="text-slate-700 font-bold mt-2 leading-relaxed">"{item.text}"</p>
@@ -524,7 +595,7 @@ function AiInsightsView() {
               ))}
             </div>
           </div>
-          <button className="w-full text-center py-2.5 bg-[#F5F3FF] hover:bg-[#EDE9FE] text-[#7C3AED] rounded-xl text-xs font-bold mt-4 transition border border-[#DDD6FE] cursor-pointer">
+          <button className="w-full text-center py-2.5 bg-violet-50 hover:bg-violet-100 text-violet-600 rounded-xl text-xs font-bold mt-4 transition border border-violet-200 cursor-pointer">
             Export Recommendations to CRM
           </button>
         </div>
@@ -533,9 +604,6 @@ function AiInsightsView() {
   );
 }
 
-/* ==========================================
-   2. COMPANY ANALYTICS
-   ========================================== */
 function CompanyAnalytics() {
   const [days, setDays] = useState(30);
   const [analytics, setAnalytics] = useState<CompanyAnalyticsData | null>(null);
@@ -2004,1943 +2072,278 @@ function AgentsListView({ agents, setAgents, onEditAgent, onAddAgent }: { agents
    5. CUSTOM REPORTS / CALL LOGS
    ================================5. CUSTOM REPORTS / CALL LOGS ========== */
 
-function CallAudioPlayer({ durationSec }: { durationSec: number }) {
-  const [isPlaying, setIsPlaying] = React.useState(false);
-  const [currentTime, setCurrentTime] = React.useState(0);
+type ReportCallStatus = 'queued' | 'ringing' | 'connected' | 'completed' | 'failed' | 'busy' | 'no_answer' | 'canceled';
 
-  React.useEffect(() => {
-    let interval: any;
-    if (isPlaying) {
-      interval = setInterval(() => {
-        setCurrentTime(prev => {
-          if (prev >= durationSec) {
-            setIsPlaying(false);
-            return 0;
-          }
-          return prev + 1;
-        });
-      }, 1000);
-    }
-    return () => clearInterval(interval);
-  }, [isPlaying, durationSec]);
-
-  const formatTime = (secs: number) => {
-    const mins = Math.floor(secs / 60);
-    const remaining = secs % 60;
-    return `${mins}:${remaining < 10 ? '0' : ''}${remaining}`;
-  };
-
-  const handlePlayToggle = () => {
-    setIsPlaying(!isPlaying);
-  };
-
-  const percentage = durationSec > 0 ? (currentTime / durationSec) * 100 : 0;
-
-  return (
-    <div className="bg-[#f1f3f4] rounded-2xl px-5 py-4 flex items-center justify-between w-full shadow-inner select-none">
-      {/* Play/Pause Button */}
-      <button 
-        onClick={handlePlayToggle}
-        className="w-10 h-10 rounded-full hover:bg-slate-200/60 flex items-center justify-center transition cursor-pointer text-slate-800 focus:outline-none"
-      >
-        {isPlaying ? (
-          // Pause Icon
-          <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
-            <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>
-          </svg>
-        ) : (
-          // Play Icon
-          <svg className="w-4 h-4 fill-current ml-0.5" viewBox="0 0 24 24">
-            <path d="M8 5v14l11-7z"/>
-          </svg>
-        )}
-      </button>
-
-      {/* Time Tracker */}
-      <div className="text-xs font-mono font-bold text-slate-600 px-2 shrink-0">
-        {formatTime(currentTime)} / {formatTime(durationSec)}
-      </div>
-
-      {/* Seek Track */}
-      <div 
-        onClick={(e) => {
-          const rect = e.currentTarget.getBoundingClientRect();
-          const clickX = e.clientX - rect.left;
-          const pct = Math.max(0, Math.min(1, clickX / rect.width));
-          setCurrentTime(Math.floor(pct * durationSec));
-        }}
-        className="flex-1 mx-3 h-1 bg-slate-300/80 rounded-full relative cursor-pointer group"
-      >
-        <div 
-          className="h-full bg-slate-800 rounded-full transition-all duration-150"
-          style={{ width: `${percentage}%` }}
-        />
-        <div 
-          className="absolute top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full bg-slate-800 opacity-0 group-hover:opacity-100 transition-opacity"
-          style={{ left: `calc(${percentage}% - 5px)` }}
-        />
-      </div>
-
-      {/* Volume and Actions */}
-      <div className="flex items-center space-x-3 text-slate-600">
-        <button className="p-1 hover:bg-slate-200/50 rounded-full transition cursor-pointer">
-          <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
-            <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>
-          </svg>
-        </button>
-        <button className="p-1 hover:bg-slate-200/50 rounded-full transition cursor-pointer">
-          <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
-            <path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/>
-          </svg>
-        </button>
-      </div>
-    </div>
-  );
-}
-
-interface CallLogItem {
+interface ReportCallApiData {
   id: string;
-  sNo: number;
-  timestamp: string;
-  contactName: string;
-  callType: 'Inbound' | 'Outbound';
-  outcome: 'N/A' | 'Busy' | 'Completed' | 'Answering Machine' | 'User Hung Up';
-  duration: string;
-  durationSec: number;
-  prospectNumber: string;
-  agentName: string;
-  campaignName: string;
-  sentiment: 'positive' | 'neutral' | 'negative' | 'Neutral';
+  providerCallId: string | null;
+  agentId: string | null;
+  agentName: string | null;
+  campaignId: string | null;
+  campaignName: string | null;
+  phoneNumberId: string | null;
+  fromNumber: string;
+  toNumber: string;
+  direction: 'inbound' | 'outbound';
+  status: ReportCallStatus;
+  sentiment: 'unknown' | 'positive' | 'neutral' | 'negative';
+  startedAt: string;
+  ringingAt: string | null;
+  answeredAt: string | null;
+  endedAt: string | null;
+  durationSeconds: number;
   cost: number;
-  transcript: Array<{ speaker: 'agent' | 'user' | 'Customer' | 'Agent'; text: string; time?: string }>;
-  aiSummary?: string;
-  fullTranscriptText?: string;
+  currency: string;
+  recordingAvailable: boolean;
+  transcript?: Array<{
+    id: string;
+    sequenceNumber: number;
+    speaker: 'agent' | 'user' | 'system';
+    text: string;
+    offsetMs: number;
+    isFinal: boolean;
+    createdAt: string;
+  }>;
 }
 
-const truncateToTwoWords = (str: string) => {
-  if (!str) return '—';
-  const cleanStr = str.trim();
-  const words = cleanStr.split(/\s+/);
-  if (words.length <= 2) return cleanStr;
-  return words.slice(0, 2).join(' ') + '...';
+interface ReportCallListResponse {
+  items: ReportCallApiData[];
+  pagination: { page: number; pageSize: number; total: number; totalPages: number };
+  summary: { total: number; inbound: number; outbound: number };
+}
+
+const reportStatusLabels: Record<ReportCallStatus, string> = {
+  queued: 'Queued', ringing: 'Ringing', connected: 'Connected', completed: 'Completed',
+  failed: 'Failed', busy: 'Busy', no_answer: 'No Answer', canceled: 'Canceled',
 };
 
-function CustomReportsView({ agents }: { agents: VoiceAgent[] }) {
-  // Generate 195 mock call logs to match the requested design exactly
-  const [allLogs] = useState<CallLogItem[]>(() => {
-    const list: CallLogItem[] = [];
+const reportStatusStyles: Record<ReportCallStatus, string> = {
+  queued: 'bg-slate-100 text-slate-600 border-slate-200',
+  ringing: 'bg-blue-50 text-blue-600 border-blue-200',
+  connected: 'bg-violet-50 text-violet-600 border-violet-200',
+  completed: 'bg-emerald-50 text-emerald-600 border-emerald-200',
+  failed: 'bg-red-50 text-red-600 border-red-200',
+  busy: 'bg-amber-50 text-amber-700 border-amber-200',
+  no_answer: 'bg-orange-50 text-orange-600 border-orange-200',
+  canceled: 'bg-slate-100 text-slate-500 border-slate-200',
+};
 
-    // 1. The 4 logs from the image
-    list.push({
-      id: 'log-img-1',
-      sNo: 1,
-      timestamp: 'Jul 10, 02:03 PM',
-      contactName: 'Caller',
-      callType: 'Inbound',
-      outcome: 'N/A',
-      duration: '53s',
-      durationSec: 53,
-      prospectNumber: '919500600811',
-      agentName: 'Shanmuga_test packages-Inbound',
-      campaignName: 'Inbound Healthcare Support',
-      sentiment: 'neutral',
-      cost: 0.13,
-      transcript: [
-        { speaker: 'agent', text: 'Good afternoon — Perumal நா ஷண்முகா Hospitalல இருந்து AI Agent கார்த்திகா பேசுறங்க — How can I help you?', time: '0:02' },
-        { speaker: 'user', text: 'ஓகே', time: '0:08' },
-        { speaker: 'agent', text: 'நீங்க Facebookல full body checkupக்காக உங்க details fill பண்ணிருந்தீங்க. எங்க packages பத்தி தெரிஞ்சுக்கிறீங்களா?', time: '0:15' },
-        { speaker: 'user', text: 'எஸ்', time: '0:22' },
-        { speaker: 'agent', text: 'Alright, எங்ககிட்ட மூணு packages இருக்கு. Silver, Gold, and Platinum. And மூணும் இப்போ currentஅ up to fifty percent discountல இருக்கு. Also, organwise health checkupsஉம் இருக்கு. நீங்க என்ன மாதிரி health check upக்கு plan பண்றீங்க?', time: '0:35' }
-      ]
-    });
+function reportDateRange(value: string) {
+  if (value === 'All Time') return {};
+  const now = new Date();
+  const end = new Date(now);
+  let start = new Date(now);
+  if (value === 'Today') start.setHours(0, 0, 0, 0);
+  if (value === 'Yesterday') {
+    start.setDate(start.getDate() - 1); start.setHours(0, 0, 0, 0);
+    end.setDate(end.getDate() - 1); end.setHours(23, 59, 59, 999);
+  }
+  if (value === 'Last 7 Days') { start.setDate(start.getDate() - 6); start.setHours(0, 0, 0, 0); }
+  if (value === 'Last 30 Days') { start.setDate(start.getDate() - 29); start.setHours(0, 0, 0, 0); }
+  return { startedFrom: start.toISOString(), startedTo: end.toISOString() };
+}
 
-    list.push({
-      id: 'log-img-2',
-      sNo: 2,
-      timestamp: 'Jul 10, 02:03 PM',
-      contactName: 'N/A',
-      callType: 'Outbound',
-      outcome: 'N/A',
-      duration: '14s',
-      durationSec: 14,
-      prospectNumber: '919500600811',
-      agentName: 'Sarah - Sales Qualifier',
-      campaignName: 'Q3 Cold Outreach Campaign',
-      sentiment: 'neutral',
-      cost: 0.04,
-      transcript: [
-        { speaker: 'agent', text: 'Hello, this is Sarah from Zea Voice. Am I speaking with the business owner?', time: '0:02' },
-        { speaker: 'user', text: 'No, sorry, wrong number.', time: '0:07' },
-        { speaker: 'agent', text: 'Ah, my apologies. Have a wonderful day!', time: '0:11' }
-      ]
-    });
+function reportDurationRange(value: string) {
+  if (value === '0-30s') return { minDurationSeconds: '0', maxDurationSeconds: '30' };
+  if (value === '31-60s') return { minDurationSeconds: '31', maxDurationSeconds: '60' };
+  if (value === '1-2m') return { minDurationSeconds: '61', maxDurationSeconds: '120' };
+  if (value === '2-5m') return { minDurationSeconds: '121', maxDurationSeconds: '300' };
+  if (value === '5m+') return { minDurationSeconds: '301' };
+  return {};
+}
 
-    list.push({
-      id: 'log-img-3',
-      sNo: 3,
-      timestamp: 'Jul 10, 12:28 PM',
-      contactName: 'N/A',
-      callType: 'Outbound',
-      outcome: 'Busy',
-      duration: '0s',
-      durationSec: 0,
-      prospectNumber: '+917200627475',
-      agentName: 'Sarah - Sales Qualifier',
-      campaignName: 'Q3 Cold Outreach Campaign',
-      sentiment: 'neutral',
-      cost: 0.00,
-      transcript: []
-    });
-
-    list.push({
-      id: 'log-img-4',
-      sNo: 4,
-      timestamp: 'Jul 10, 12:26 PM',
-      contactName: 'N/A',
-      callType: 'Outbound',
-      outcome: 'N/A',
-      duration: '16s',
-      durationSec: 16,
-      prospectNumber: '919442801758',
-      agentName: 'Sarah - Sales Qualifier',
-      campaignName: 'Inactive Customer Re-activation',
-      sentiment: 'negative',
-      cost: 0.04,
-      transcript: [
-        { speaker: 'agent', text: 'Hello, this is Sarah from Zea Voice. Just calling to verify your active subscription status.', time: '0:02' },
-        { speaker: 'user', text: 'Stop calling me. I told you guys to take me off your list.', time: '0:08' },
-        { speaker: 'agent', text: 'I am extremely sorry for the inconvenience. I will mark this number as do-not-call immediately.', time: '0:14' }
-      ]
-    });
-
-    // Generate remaining 191 records (to make exactly 195 records)
-    const phoneSuffixes = ['58', '12', '99', '04', '77', '61', '83', '40', '26', '35'];
-    const agentNames = ['Sarah - Sales Qualifier', 'Michael - Support Desk Bot'];
-    const campaignsList = ['Q3 Cold Outreach Campaign', 'Post-Support Feedback Survey', 'Inactive Customer Re-activation'];
-    const sentiments: ('positive' | 'neutral' | 'negative')[] = ['positive', 'neutral', 'negative'];
-
-    // Add 100 Inbound
-    for (let i = 0; i < 100; i++) {
-      const min = Math.floor(Math.random() * 60);
-      const hour = Math.floor(Math.random() * 12) + 1;
-      const isAm = Math.random() > 0.5;
-      const day = Math.floor(Math.random() * 10) + 1; // Jul 1 to Jul 10
-      const durationSec = Math.floor(Math.random() * 120) + 5;
-      const durationStr = `${durationSec}s`;
-      
-      list.push({
-        id: `log-inbound-${i}`,
-        sNo: 0,
-        timestamp: `Jul ${day < 10 ? '0' + day : day}, ${hour < 10 ? '0' + hour : hour}:${min < 10 ? '0' + min : min} ${isAm ? 'AM' : 'PM'}`,
-        contactName: Math.random() > 0.3 ? 'Caller' : 'N/A',
-        callType: 'Inbound',
-        outcome: durationSec > 35 ? 'Completed' : 'N/A',
-        duration: durationStr,
-        durationSec,
-        prospectNumber: `919500600${phoneSuffixes[i % phoneSuffixes.length]}${String(i).padStart(2, '0')}`,
-        agentName: agentNames[1],
-        campaignName: 'N/A',
-        sentiment: sentiments[i % sentiments.length],
-        cost: Number((durationSec * 0.003).toFixed(2)),
-        transcript: [
-          { speaker: 'user', text: 'Hello, is this tech support for Zea Voice?', time: '0:01' },
-          { speaker: 'agent', text: 'Yes, it is! Michael here. How can I help you today?', time: '0:06' },
-          { speaker: 'user', text: 'I am trying to confirm if my active campaign calls are routed correctly.', time: '0:14' },
-          { speaker: 'agent', text: 'Let me inspect your operational trunks. Yes, everything appears active and routing correctly!', time: '0:22' }
-        ]
-      });
-    }
-
-    // Add 91 Outbound
-    for (let i = 0; i < 91; i++) {
-      const min = Math.floor(Math.random() * 60);
-      const hour = Math.floor(Math.random() * 12) + 1;
-      const isAm = Math.random() > 0.5;
-      const day = Math.floor(Math.random() * 10) + 1;
-      const durationSec = Math.floor(Math.random() * 110);
-      const durationStr = durationSec === 0 ? '0s' : `${durationSec}s`;
-      const outcome = durationSec === 0 ? 'Busy' : (durationSec < 20 ? 'Answering Machine' : 'Completed');
-
-      list.push({
-        id: `log-outbound-${i}`,
-        sNo: 0,
-        timestamp: `Jul ${day < 10 ? '0' + day : day}, ${hour < 10 ? '0' + hour : hour}:${min < 10 ? '0' + min : min} ${isAm ? 'AM' : 'PM'}`,
-        contactName: 'N/A',
-        callType: 'Outbound',
-        outcome,
-        duration: durationStr,
-        durationSec,
-        prospectNumber: `+91720062${phoneSuffixes[i % phoneSuffixes.length]}${String(i).padStart(2, '0')}`,
-        agentName: agentNames[0],
-        campaignName: campaignsList[i % campaignsList.length],
-        sentiment: sentiments[i % sentiments.length],
-        cost: Number((durationSec * 0.0025).toFixed(2)),
-        transcript: durationSec > 0 ? [
-          { speaker: 'agent', text: 'Hello, this is Sarah with Zea Voice. I noticed your interest in automating incoming sales routes?', time: '0:02' },
-          { speaker: 'user', text: 'Yes, we have high call volumes during product launches. Can you scale?', time: '0:10' },
-          { speaker: 'agent', text: 'Absolutely, our neural nodes can manage up to 10,000 parallel streams with less than 400ms delay. Shall we set up an integration trial?', time: '0:19' }
-        ] : []
-      });
-    }
-
-    // Sort to keep img logs at the top (newest Jul 10 logs)
-    list.sort((a, b) => {
-      if (a.id.startsWith('log-img') && b.id.startsWith('log-img')) {
-        return a.sNo - b.sNo;
-      }
-      if (a.id.startsWith('log-img')) return -1;
-      if (b.id.startsWith('log-img')) return 1;
-
-      return b.timestamp.localeCompare(a.timestamp);
-    });
-
-    // Assign S.No
-    list.forEach((item, index) => {
-      item.sNo = index + 1;
-    });
-
-    return list;
+function formatReportTimestamp(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 'Unavailable' : date.toLocaleString([], {
+    year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit',
   });
+}
 
-  // Filters State
+function formatReportDuration(seconds: number) {
+  const safe = Math.max(0, Number(seconds) || 0);
+  if (safe < 60) return `${safe}s`;
+  return `${Math.floor(safe / 60)}m ${safe % 60}s`;
+}
+
+function csvCell(value: unknown) {
+  return `"${String(value ?? '').replace(/"/g, '""')}"`;
+}
+
+function RealReportsView({ agents }: { agents: VoiceAgent[] }) {
+  const pageSize = 10;
   const [dateRange, setDateRange] = useState('All Time');
   const [callType, setCallType] = useState('All Types');
-  const [outcome, setOutcome] = useState('All Outcomes');
-  const [selectedAgent, setSelectedAgent] = useState('All Agents');
+  const [status, setStatus] = useState('All Outcomes');
+  const [selectedAgentId, setSelectedAgentId] = useState('');
+  const [selectedCampaignId, setSelectedCampaignId] = useState('');
   const [callDuration, setCallDuration] = useState('All Durations');
-  const [selectedCampaign, setSelectedCampaign] = useState('All Campaigns');
-  
-  // Search state
-  const [searchQuery, setSearchQuery] = useState('');
-  
-  // Tabs state ("All Calls", "Inbound", "Outbound")
   const [activeTab, setActiveTab] = useState<'All' | 'Inbound' | 'Outbound'>('All');
-
-  // Pagination State
+  const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 10;
-
-  // Selected single log review
-  const [activeReviewLog, setActiveReviewLog] = useState<CallLogItem | null>(null);
+  const [report, setReport] = useState<ReportCallListResponse | null>(null);
+  const [campaignOptions, setCampaignOptions] = useState<Array<{ id: string; name: string }>>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [exporting, setExporting] = useState(false);
+  const [exportMessage, setExportMessage] = useState('');
+  const [activeCall, setActiveCall] = useState<ReportCallApiData | null>(null);
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [detailsError, setDetailsError] = useState('');
   const [drawerMode, setDrawerMode] = useState<'details' | 'transcript'>('details');
 
-  // Success message for Export
-  const [exportMessage, setExportMessage] = useState<string | null>(null);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(searchQuery.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery]);
 
-  // Clear all filters handler
-  const handleClearFilters = () => {
-    setDateRange('All Time');
-    setCallType('All Types');
-    setOutcome('All Outcomes');
-    setSelectedAgent('All Agents');
-    setCallDuration('All Durations');
-    setSelectedCampaign('All Campaigns');
-    setSearchQuery('');
-    setActiveTab('All');
-    setCurrentPage(1);
+  useEffect(() => {
+    apiRequest<{ items: Array<{ id: string; name: string }> }>('/campaigns?page=1&pageSize=100')
+      .then((data) => setCampaignOptions(data.items))
+      .catch(() => setCampaignOptions([]));
+  }, []);
+
+  const buildQuery = (page: number, size = pageSize) => {
+    const params = new URLSearchParams({ page: String(page), pageSize: String(size) });
+    const tabDirection = activeTab === 'Inbound' ? 'inbound' : activeTab === 'Outbound' ? 'outbound' : '';
+    const selectedDirection = tabDirection || (callType === 'Inbound' ? 'inbound' : callType === 'Outbound' ? 'outbound' : '');
+    if (selectedDirection) params.set('direction', selectedDirection);
+    if (status !== 'All Outcomes') params.set('status', status);
+    if (selectedAgentId) params.set('agentId', selectedAgentId);
+    if (selectedCampaignId) params.set('campaignId', selectedCampaignId);
+    if (debouncedSearch) params.set('search', debouncedSearch);
+    Object.entries(reportDateRange(dateRange)).forEach(([key, value]) => params.set(key, value));
+    Object.entries(reportDurationRange(callDuration)).forEach(([key, value]) => params.set(key, value));
+    return params.toString();
   };
 
-  // Filter Logic
-  const filteredLogs = allLogs.filter(log => {
-    // 1. Tab filter
-    if (activeTab === 'Inbound' && log.callType !== 'Inbound') return false;
-    if (activeTab === 'Outbound' && log.callType !== 'Outbound') return false;
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true); setError('');
+    apiRequest<ReportCallListResponse>(`/calls?${buildQuery(currentPage)}`, {
+      signal: controller.signal, zeaCache: 'bypass',
+    }).then((data) => {
+      setReport(data);
+      if (data.pagination.totalPages > 0 && currentPage > data.pagination.totalPages) {
+        setCurrentPage(data.pagination.totalPages);
+      }
+    }).catch((requestError) => {
+      if (!controller.signal.aborted) setError(requestError instanceof Error ? requestError.message : 'Call report could not be loaded');
+    }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
+  }, [currentPage, dateRange, callType, status, selectedAgentId, selectedCampaignId, callDuration, activeTab, debouncedSearch]);
 
-    // 2. Call Type dropdown filter
-    if (callType !== 'All Types' && log.callType !== callType) return false;
-
-    // 3. Date Range filter
-    if (dateRange === 'Today') {
-      if (!log.timestamp.startsWith('Jul 10')) return false;
-    } else if (dateRange === 'Yesterday') {
-      if (!log.timestamp.startsWith('Jul 09')) return false;
-    } else if (dateRange === 'Last 7 Days') {
-      const match = log.timestamp.match(/Jul (\d+)/);
-      if (match) {
-        const day = parseInt(match[1]);
-        if (day < 4 || day > 10) return false;
-      } else return false;
-    }
-
-    // 4. Outcome filter
-    if (outcome !== 'All Outcomes' && log.outcome !== outcome) return false;
-
-    // 5. Voice Agent filter
-    if (selectedAgent !== 'All Agents') {
-      const match = log.agentName.toLowerCase().includes(selectedAgent.toLowerCase().split(' - ')[0]);
-      if (!match) return false;
-    }
-
-    // 6. Call Duration filter
-    if (callDuration !== 'All Durations') {
-      const sec = log.durationSec;
-      if (callDuration === '0-30s' && sec > 30) return false;
-      if (callDuration === '31-60s' && (sec <= 30 || sec > 60)) return false;
-      if (callDuration === '1-2m' && (sec <= 60 || sec > 120)) return false;
-      if (callDuration === '2-5m' && (sec <= 120 || sec > 300)) return false;
-      if (callDuration === '5m+' && sec <= 300) return false;
-    }
-
-    // 7. Outbound Campaign filter
-    if (selectedCampaign !== 'All Campaigns' && log.campaignName !== selectedCampaign) return false;
-
-    // 8. Search query filter
-    if (searchQuery.trim() !== '') {
-      const q = searchQuery.toLowerCase();
-      const numMatch = log.prospectNumber.toLowerCase().includes(q);
-      const agentMatch = log.agentName.toLowerCase().includes(q);
-      const contactMatch = log.contactName.toLowerCase().includes(q);
-      if (!numMatch && !agentMatch && !contactMatch) return false;
-    }
-
-    return true;
-  });
-
-  const paginatedLogs = filteredLogs.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
-  const totalPages = Math.ceil(filteredLogs.length / itemsPerPage);
-
-  const totalCallsCount = allLogs.length; // 195
-  const inboundCount = allLogs.filter(l => l.callType === 'Inbound').length; // 101
-  const outboundCount = allLogs.filter(l => l.callType === 'Outbound').length; // 94
-
-  const handleExportExcel = () => {
-    let csvContent = "data:text/csv;charset=utf-8,";
-    csvContent += "S.No,Time Stamp,Contact Name,Call Type,Outcome,Duration,Prospect Number,Agent Name,Campaign Name,Cost,Sentiment\n";
-    
-    filteredLogs.forEach(l => {
-      const row = [
-        l.sNo,
-        `"${l.timestamp}"`,
-        `"${l.contactName}"`,
-        `"${l.callType}"`,
-        `"${l.outcome}"`,
-        `"${l.duration}"`,
-        `"${l.prospectNumber}"`,
-        `"${l.agentName}"`,
-        `"${l.campaignName}"`,
-        `₹${l.cost}`,
-        `"${l.sentiment}"`
-      ].join(",");
-      csvContent += row + "\n";
-    });
-
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `ZeaVoice_CallLogs_${new Date().toISOString().slice(0, 10)}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-
-    setExportMessage(`Successfully exported ${filteredLogs.length} filtered call records to Excel/CSV format.`);
-    setTimeout(() => setExportMessage(null), 4000);
+  const resetFilters = () => {
+    setDateRange('All Time'); setCallType('All Types'); setStatus('All Outcomes');
+    setSelectedAgentId(''); setSelectedCampaignId(''); setCallDuration('All Durations');
+    setActiveTab('All'); setSearchQuery(''); setDebouncedSearch(''); setCurrentPage(1);
   };
+
+  const openCall = async (call: ReportCallApiData) => {
+    setActiveCall(call); setDrawerMode('details'); setDetailsLoading(true); setDetailsError('');
+    try {
+      setActiveCall(await apiRequest<ReportCallApiData>(`/calls/${call.id}`, { zeaCache: 'bypass' }));
+    } catch (requestError) {
+      setDetailsError(requestError instanceof Error ? requestError.message : 'Call details could not be loaded');
+    } finally { setDetailsLoading(false); }
+  };
+
+  const exportReport = async () => {
+    if (exporting) return;
+    setExporting(true); setExportMessage('');
+    try {
+      const first = await apiRequest<ReportCallListResponse>(`/calls?${buildQuery(1, 100)}`, { zeaCache: 'bypass' });
+      const remaining = first.pagination.totalPages > 1
+        ? await Promise.all(Array.from({ length: first.pagination.totalPages - 1 }, (_, index) =>
+          apiRequest<ReportCallListResponse>(`/calls?${buildQuery(index + 2, 100)}`, { zeaCache: 'bypass' })))
+        : [];
+      const rows = [first, ...remaining].flatMap((page) => page.items);
+      const header = ['S.No', 'Timestamp', 'Direction', 'Status', 'From Number', 'To Number', 'Duration Seconds', 'Agent', 'Campaign', 'Cost', 'Currency', 'Sentiment'];
+      const csv = [header.map(csvCell).join(','), ...rows.map((call, index) => [
+        index + 1, call.startedAt, call.direction, call.status, call.fromNumber, call.toNumber,
+        call.durationSeconds, call.agentName ?? '', call.campaignName ?? '', call.cost, call.currency, call.sentiment,
+      ].map(csvCell).join(','))].join('\n');
+      const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+      const link = document.createElement('a'); link.href = url;
+      link.download = `ZeaVoice_CallLogs_${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
+      setExportMessage(`Exported ${rows.length} database call records.`);
+    } catch (requestError) {
+      setExportMessage(requestError instanceof Error ? requestError.message : 'Call report export failed');
+    } finally { setExporting(false); }
+  };
+
+  const items = report?.items ?? [];
+  const summary = report?.summary ?? { total: 0, inbound: 0, outbound: 0 };
+  const pagination = report?.pagination ?? { page: 1, pageSize, total: 0, totalPages: 0 };
 
   return (
     <div className="space-y-6">
-      {/* Upper header action section matching Attachment image */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div>
-          <h2 className="text-xl font-bold text-slate-800 tracking-tight">Call Logs</h2>
-          <p className="text-xs text-slate-400 font-medium mt-0.5">Review all inbound and outbound calls</p>
-        </div>
-        <button
-          onClick={handleExportExcel}
-          className="bg-white hover:bg-slate-50 text-slate-600 font-bold text-xs px-4 py-2.5 rounded-xl border border-slate-200 transition flex items-center justify-center space-x-2 shadow-xs cursor-pointer animate-none"
-        >
-          <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
-          <span>Export Excel</span>
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div><h2 className="text-xl font-bold tracking-tight text-slate-800">Call Logs</h2><p className="mt-0.5 text-xs font-medium text-slate-400">Live tenant-isolated inbound and outbound call records</p></div>
+        <button onClick={() => void exportReport()} disabled={exporting || pagination.total === 0} className="flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-600 shadow-xs transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">
+          {exporting ? <RefreshCw className="h-4 w-4 animate-spin text-emerald-600" /> : <FileSpreadsheet className="h-4 w-4 text-emerald-600" />}<span>{exporting ? 'Exporting...' : 'Export CSV'}</span>
         </button>
       </div>
+      {exportMessage && <div className="flex items-center gap-2 rounded-lg border border-emerald-100 bg-emerald-50 p-3 text-xs font-semibold text-emerald-800"><CheckCircle2 className="h-4 w-4" />{exportMessage}</div>}
+      {error && <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-xs font-semibold text-red-700">Unable to load database call records: {error}</div>}
 
-      {exportMessage && (
-        <div className="p-3 bg-emerald-50 border border-emerald-100 text-emerald-800 rounded-lg text-xs font-semibold flex items-center space-x-2 animate-in fade-in">
-          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-          <span>{exportMessage}</span>
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
+        {[
+          { label: 'Total Calls', value: summary.total, icon: PhoneCall, style: 'bg-pink-50 border-pink-100 text-pink-500' },
+          { label: 'Inbound', value: summary.inbound, icon: PhoneIncoming, style: 'bg-blue-50 border-blue-100 text-blue-500' },
+          { label: 'Outbound', value: summary.outbound, icon: PhoneOutgoing, style: 'bg-rose-50 border-rose-100 text-rose-500' },
+        ].map((metric) => <div key={metric.label} className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"><div><p className="text-xs font-bold uppercase tracking-wider text-slate-400">{metric.label}</p><p className="mt-1 text-3xl font-black tracking-tight text-slate-800">{loading && !report ? '—' : metric.value}</p></div><div className={`flex h-12 w-12 items-center justify-center rounded-2xl border ${metric.style}`}><metric.icon className="h-5 w-5" /></div></div>)}
+      </div>
+
+      <div className="space-y-5 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-3"><h3 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-slate-800"><Filter className="h-3.5 w-3.5 text-slate-400" />Search Filters</h3><button onClick={resetFilters} className="flex items-center gap-1 text-xs font-bold text-pink-500 hover:text-pink-600"><XCircle className="h-3.5 w-3.5" />Clear Filters</button></div>
+        <div className="grid grid-cols-1 gap-4 text-xs font-semibold sm:grid-cols-2 lg:grid-cols-4">
+          <ReportSelect label="Date Range" icon={Calendar} value={dateRange} onChange={(value) => { setDateRange(value); setCurrentPage(1); }} options={[['All Time','All Time'],['Today','Today'],['Yesterday','Yesterday'],['Last 7 Days','Last 7 Days'],['Last 30 Days','Last 30 Days']]} />
+          <ReportSelect label="Call Type" icon={Phone} value={callType} onChange={(value) => { setCallType(value); setActiveTab('All'); setCurrentPage(1); }} options={[['All Types','All Types'],['Inbound','Inbound'],['Outbound','Outbound']]} />
+          <ReportSelect label="Outcome" icon={Activity} value={status} onChange={(value) => { setStatus(value); setCurrentPage(1); }} options={[['All Outcomes','All Outcomes'], ...Object.entries(reportStatusLabels).map(([value,label]) => [value,label])]} />
+          <ReportSelect label="Voice Agent" icon={User} value={selectedAgentId} onChange={(value) => { setSelectedAgentId(value); setCurrentPage(1); }} options={[['','All Agents'], ...agents.map((agent) => [agent.id, agent.name])]} />
         </div>
-      )}
-
-      {/* Summary Cards Row */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* Total Calls */}
-        <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex items-center justify-between">
-          <div className="space-y-1">
-            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Calls</p>
-            <p className="text-3xl font-black text-slate-800 tracking-tight">{totalCallsCount}</p>
-          </div>
-          <div className="w-12 h-12 bg-pink-50 border border-pink-100 rounded-2xl flex items-center justify-center">
-            <PhoneCall className="w-5 h-5 text-pink-500" />
-          </div>
-        </div>
-
-        {/* Inbound */}
-        <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex items-center justify-between">
-          <div className="space-y-1">
-            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Inbound</p>
-            <p className="text-3xl font-black text-slate-800 tracking-tight">{inboundCount}</p>
-          </div>
-          <div className="w-12 h-12 bg-blue-50 border border-blue-100 rounded-2xl flex items-center justify-center">
-            <PhoneIncoming className="w-5 h-5 text-blue-500" />
-          </div>
-        </div>
-
-        {/* Outbound */}
-        <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex items-center justify-between">
-          <div className="space-y-1">
-            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Outbound</p>
-            <p className="text-3xl font-black text-slate-800 tracking-tight">{outboundCount}</p>
-          </div>
-          <div className="w-12 h-12 bg-rose-50 border border-rose-100 rounded-2xl flex items-center justify-center">
-            <PhoneOutgoing className="w-5 h-5 text-rose-500" />
-          </div>
+        <div className="grid grid-cols-1 gap-4 text-xs font-semibold sm:grid-cols-2">
+          <ReportSelect label="Call Duration" icon={Clock} value={callDuration} onChange={(value) => { setCallDuration(value); setCurrentPage(1); }} options={[['All Durations','All Durations'],['0-30s','0-30s'],['31-60s','31-60s'],['1-2m','1-2m'],['2-5m','2-5m'],['5m+','5m+']]} />
+          <ReportSelect label="Outbound Campaign" icon={Megaphone} value={selectedCampaignId} onChange={(value) => { setSelectedCampaignId(value); setCurrentPage(1); }} options={[['','All Campaigns'], ...campaignOptions.map((campaign) => [campaign.id, campaign.name])]} />
         </div>
       </div>
 
-      {/* Search Filters Card */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-5">
-        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-          <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center space-x-1.5">
-            <Filter className="w-3.5 h-3.5 text-slate-400" />
-            <span>Search Filters</span>
-          </h3>
-          <button
-            onClick={handleClearFilters}
-            className="text-xs font-bold text-pink-500 hover:text-pink-600 transition flex items-center space-x-1 cursor-pointer"
-          >
-            <XCircle className="w-3.5 h-3.5" />
-            <span>Clear Filters</span>
-          </button>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs font-semibold">
-          {/* Date Range */}
-          <div className="space-y-1.5">
-            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest">Date Range</label>
-            <div className="relative">
-              <select
-                value={dateRange}
-                onChange={(e) => { setDateRange(e.target.value); setCurrentPage(1); }}
-                className="w-full bg-slate-50 hover:bg-slate-100/50 border border-slate-200 rounded-xl pl-8 pr-4 py-2.5 text-slate-800 font-bold outline-none cursor-pointer appearance-none transition"
-              >
-                <option value="All Time">All Time</option>
-                <option value="Today">Today</option>
-                <option value="Yesterday">Yesterday</option>
-                <option value="Last 7 Days">Last 7 Days</option>
-                <option value="Last 30 Days">Last 30 Days</option>
-              </select>
-              <Calendar className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-3 pointer-events-none" />
-              <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-3 top-3.5 pointer-events-none" />
-            </div>
-          </div>
-
-          {/* Call Type */}
-          <div className="space-y-1.5">
-            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest">Call Type</label>
-            <div className="relative">
-              <select
-                value={callType}
-                onChange={(e) => { setCallType(e.target.value); setCurrentPage(1); }}
-                className="w-full bg-slate-50 hover:bg-slate-100/50 border border-slate-200 rounded-xl pl-8 pr-4 py-2.5 text-slate-800 font-bold outline-none cursor-pointer appearance-none transition"
-              >
-                <option value="All Types">All Types</option>
-                <option value="Inbound">Inbound</option>
-                <option value="Outbound">Outbound</option>
-              </select>
-              <Phone className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-3 pointer-events-none" />
-              <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-3 top-3.5 pointer-events-none" />
-            </div>
-          </div>
-
-          {/* Outcome */}
-          <div className="space-y-1.5">
-            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest">Outcome</label>
-            <div className="relative">
-              <select
-                value={outcome}
-                onChange={(e) => { setOutcome(e.target.value); setCurrentPage(1); }}
-                className="w-full bg-slate-50 hover:bg-slate-100/50 border border-slate-200 rounded-xl pl-8 pr-4 py-2.5 text-slate-800 font-bold outline-none cursor-pointer appearance-none transition"
-              >
-                <option value="All Outcomes">All Outcomes</option>
-                <option value="N/A">N/A</option>
-                <option value="Busy">Busy</option>
-                <option value="Completed">Completed</option>
-                <option value="Answering Machine">Answering Machine</option>
-                <option value="User Hung Up">User Hung Up</option>
-              </select>
-              <Activity className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-3 pointer-events-none" />
-              <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-3 top-3.5 pointer-events-none" />
-            </div>
-          </div>
-
-          {/* Voice Agent */}
-          <div className="space-y-1.5">
-            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest">Voice Agent</label>
-            <div className="relative">
-              <select
-                value={selectedAgent}
-                onChange={(e) => { setSelectedAgent(e.target.value); setCurrentPage(1); }}
-                className="w-full bg-slate-50 hover:bg-slate-100/50 border border-slate-200 rounded-xl pl-8 pr-4 py-2.5 text-slate-800 font-bold outline-none cursor-pointer appearance-none transition"
-              >
-                <option value="All Agents">All Agents</option>
-                {agents.map(a => (
-                  <option key={a.id} value={a.name}>{a.name}</option>
-                ))}
-              </select>
-              <User className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-3 pointer-events-none" />
-              <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-3 top-3.5 pointer-events-none" />
-            </div>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs font-semibold">
-          {/* Call Duration */}
-          <div className="space-y-1.5">
-            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest">Call Duration</label>
-            <div className="relative">
-              <select
-                value={callDuration}
-                onChange={(e) => { setCallDuration(e.target.value); setCurrentPage(1); }}
-                className="w-full bg-slate-50 hover:bg-slate-100/50 border border-slate-200 rounded-xl pl-8 pr-4 py-2.5 text-slate-800 font-bold outline-none cursor-pointer appearance-none transition"
-              >
-                <option value="All Durations">All Durations</option>
-                <option value="0-30s">0-30s</option>
-                <option value="31-60s">31-60s</option>
-                <option value="1-2m">1-2m</option>
-                <option value="2-5m">2-5m</option>
-                <option value="5m+">5m+</option>
-              </select>
-              <Clock className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-3 pointer-events-none" />
-              <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-3 top-3.5 pointer-events-none" />
-            </div>
-          </div>
-
-          {/* Outbound Campaign */}
-          <div className="space-y-1.5">
-            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest">Outbound Campaign</label>
-            <div className="relative">
-              <select
-                value={selectedCampaign}
-                onChange={(e) => { setSelectedCampaign(e.target.value); setCurrentPage(1); }}
-                className="w-full bg-slate-50 hover:bg-slate-100/50 border border-slate-200 rounded-xl pl-8 pr-4 py-2.5 text-slate-800 font-bold outline-none cursor-pointer appearance-none transition"
-              >
-                <option value="All Campaigns">All Campaigns</option>
-                <option value="Q3 Cold Outreach Campaign">Q3 Cold Outreach Campaign</option>
-                <option value="Post-Support Feedback Survey">Post-Support Feedback Survey</option>
-                <option value="Inactive Customer Re-activation">Inactive Customer Re-activation</option>
-              </select>
-              <Megaphone className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-3 pointer-events-none" />
-              <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-3 top-3.5 pointer-events-none" />
-            </div>
-          </div>
-        </div>
+      <div className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-xs lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex flex-wrap items-center gap-2">{(['All','Inbound','Outbound'] as const).map((tab) => <button key={tab} onClick={() => { setActiveTab(tab); setCallType('All Types'); setCurrentPage(1); }} className={`flex items-center gap-2 rounded-xl border px-4 py-2 text-xs font-bold transition ${activeTab === tab ? 'border-pink-500 bg-pink-500 text-white shadow-md shadow-pink-100/50' : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100'}`}>{tab === 'Inbound' ? <PhoneIncoming className="h-3.5 w-3.5" /> : tab === 'Outbound' ? <PhoneOutgoing className="h-3.5 w-3.5" /> : <Phone className="h-3.5 w-3.5" />}<span>{tab === 'All' ? 'All Calls' : tab}</span></button>)}</div>
+        <div className="flex flex-1 items-center gap-3 lg:max-w-md"><div className="relative flex-1"><Search className="absolute left-3.5 top-3 h-4 w-4 text-slate-400" /><input value={searchQuery} onChange={(event) => { setSearchQuery(event.target.value); setCurrentPage(1); }} placeholder="Search number, agent, campaign..." className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-4 text-xs font-semibold text-slate-800 outline-none transition focus:border-pink-500 focus:bg-white" /></div><span className="shrink-0 whitespace-nowrap text-xs font-bold text-slate-400">{pagination.total} records</span></div>
       </div>
 
-      {/* Pill tabs + Search Row */}
-      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 bg-white border border-slate-200 rounded-2xl p-4 shadow-xs">
-        {/* All / Inbound / Outbound Tabs */}
-        <div className="flex flex-wrap items-center gap-2">
-          {/* All Calls */}
-          <button
-            onClick={() => { setActiveTab('All'); setCurrentPage(1); }}
-            className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center space-x-2 transition cursor-pointer border ${
-              activeTab === 'All'
-                ? 'bg-pink-500 text-white border-pink-500 shadow-md shadow-pink-100/50'
-                : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-            }`}
-          >
-            <Phone className="w-3.5 h-3.5" />
-            <span>All Calls</span>
-            <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-black ${activeTab === 'All' ? 'bg-white/25 text-white' : 'bg-slate-200 text-slate-700'}`}>
-              {totalCallsCount}
-            </span>
-          </button>
-
-          {/* Inbound */}
-          <button
-            onClick={() => { setActiveTab('Inbound'); setCurrentPage(1); }}
-            className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center space-x-2 transition cursor-pointer border ${
-              activeTab === 'Inbound'
-                ? 'bg-pink-500 text-white border-pink-500 shadow-md shadow-pink-100/50'
-                : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-            }`}
-          >
-            <PhoneIncoming className="w-3.5 h-3.5" />
-            <span>Inbound</span>
-            <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-black ${activeTab === 'Inbound' ? 'bg-white/25 text-white' : 'bg-slate-200 text-slate-700'}`}>
-              {inboundCount}
-            </span>
-          </button>
-
-          {/* Outbound */}
-          <button
-            onClick={() => { setActiveTab('Outbound'); setCurrentPage(1); }}
-            className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center space-x-2 transition cursor-pointer border ${
-              activeTab === 'Outbound'
-                ? 'bg-pink-500 text-white border-pink-500 shadow-md shadow-pink-100/50'
-                : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-            }`}
-          >
-            <PhoneOutgoing className="w-3.5 h-3.5" />
-            <span>Outbound</span>
-            <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-black ${activeTab === 'Outbound' ? 'bg-white/25 text-white' : 'bg-slate-200 text-slate-700'}`}>
-              {outboundCount}
-            </span>
-          </button>
-        </div>
-
-        {/* Search input + records counter */}
-        <div className="flex items-center gap-3 flex-1 lg:max-w-md">
-          <div className="relative flex-1">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
-              placeholder="Search number, agent..."
-              className="w-full bg-slate-50 hover:bg-slate-100/40 focus:bg-white border border-slate-200 focus:border-pink-500 rounded-xl pl-10 pr-4 py-2.5 text-xs font-semibold text-slate-800 outline-none transition"
-            />
-          </div>
-          <span className="text-xs font-bold text-slate-400 tracking-tight shrink-0 whitespace-nowrap">
-            {filteredLogs.length} records
-          </span>
-        </div>
+      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="overflow-x-auto"><table className="w-full border-collapse text-left"><thead><tr className="border-b border-slate-200 bg-slate-50/50 text-[9px] font-extrabold uppercase tracking-widest text-slate-400"><th className="px-6 py-4">S.No</th><th className="px-6 py-4">Time Stamp</th><th className="px-6 py-4">Agent</th><th className="px-6 py-4">Call Type</th><th className="px-6 py-4">Outcome</th><th className="px-6 py-4">Duration</th><th className="px-6 py-4">Prospect Number</th><th className="px-6 py-4 text-center">Action</th></tr></thead>
+          <tbody className="divide-y divide-slate-100 text-xs font-semibold">
+            {loading ? <tr><td colSpan={8} className="py-16 text-center text-slate-400"><RefreshCw className="mx-auto mb-3 h-6 w-6 animate-spin text-pink-500" />Loading database call records...</td></tr>
+              : items.length === 0 ? <tr><td colSpan={8} className="py-16 text-center text-slate-400"><Phone className="mx-auto mb-2 h-8 w-8 text-slate-300" /><p className="font-bold">No database call records match these filters.</p></td></tr>
+                : items.map((call, index) => <tr key={call.id} className="transition hover:bg-slate-50/40"><td className="px-6 py-4 font-mono text-slate-400">{(pagination.page - 1) * pagination.pageSize + index + 1}</td><td className="px-6 py-4 text-slate-500">{formatReportTimestamp(call.startedAt)}</td><td className="px-6 py-4 font-bold text-slate-700">{call.agentName || 'Unassigned'}</td><td className="px-6 py-4"><span className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[10px] font-black ${call.direction === 'inbound' ? 'border-blue-100 bg-blue-50 text-blue-600' : 'border-pink-100 bg-pink-50 text-pink-600'}`}>{call.direction === 'inbound' ? <PhoneIncoming className="h-3 w-3" /> : <PhoneOutgoing className="h-3 w-3" />}{call.direction === 'inbound' ? 'Inbound' : 'Outbound'}</span></td><td className="px-6 py-4"><span className={`rounded-md border px-2 py-0.5 text-[10px] font-extrabold uppercase ${reportStatusStyles[call.status]}`}>{reportStatusLabels[call.status]}</span></td><td className="px-6 py-4 font-mono font-bold text-slate-600"><span className="flex items-center gap-1"><Clock className="h-3.5 w-3.5 text-slate-400" />{formatReportDuration(call.durationSeconds)}</span></td><td className="px-6 py-4 font-mono font-bold text-slate-800">{call.direction === 'inbound' ? call.fromNumber : call.toNumber}</td><td className="px-6 py-4 text-center"><button onClick={() => void openCall(call)} className="inline-flex rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-pink-500" title="Open database call details"><ChevronRight className="h-4 w-4" /></button></td></tr>)}
+          </tbody></table></div>
+        {pagination.totalPages > 1 && <div className="flex items-center justify-between border-t border-slate-200 bg-slate-50/50 px-6 py-4"><span className="text-xs font-bold text-slate-400">Page {pagination.page} of {pagination.totalPages} ({pagination.total} records)</span><div className="flex gap-2"><button disabled={pagination.page <= 1 || loading} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))} className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 disabled:opacity-50">Previous</button><button disabled={pagination.page >= pagination.totalPages || loading} onClick={() => setCurrentPage((page) => Math.min(pagination.totalPages, page + 1))} className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 disabled:opacity-50">Next</button></div></div>}
       </div>
 
-      {/* Main Table Panel */}
-      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-slate-50/50 border-b border-slate-200 text-slate-400 font-extrabold uppercase tracking-widest text-[9px]">
-                <th className="px-6 py-4">S.No</th>
-                <th className="px-6 py-4">Time Stamp</th>
-                <th className="px-6 py-4">Contact Name</th>
-                <th className="px-6 py-4">Call Type</th>
-                <th className="px-6 py-4">Outcome</th>
-                <th className="px-6 py-4">Duration</th>
-                <th className="px-6 py-4">Prospect Number</th>
-                <th className="px-6 py-4 text-center">Action</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 text-xs font-semibold">
-              {paginatedLogs.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="text-center py-12 text-slate-400">
-                    <div className="flex flex-col items-center justify-center space-y-2">
-                      <Phone className="w-8 h-8 text-slate-300" />
-                      <p className="font-bold">No call records match your active query.</p>
-                      <button onClick={handleClearFilters} className="text-xs text-pink-500 font-bold hover:underline cursor-pointer">Reset Filters</button>
-                    </div>
-                  </td>
-                </tr>
-              ) : (
-                paginatedLogs.map((log) => (
-                  <tr key={log.id} className="hover:bg-slate-50/40 transition">
-                    <td className="px-6 py-4 font-mono text-slate-400">{log.sNo}</td>
-                    <td className="px-6 py-4 text-slate-500 font-semibold">{log.timestamp}</td>
-                    <td className="px-6 py-4 text-slate-700 font-black">{log.contactName}</td>
-                    <td className="px-6 py-4">
-                      {log.callType === 'Inbound' ? (
-                        <span className="bg-blue-50 text-blue-600 border border-blue-100 font-black rounded-lg px-2.5 py-1 text-[10px] inline-flex items-center space-x-1">
-                          <PhoneIncoming className="w-3 h-3" />
-                          <span>Inbound</span>
-                        </span>
-                      ) : (
-                        <span className="bg-pink-50 text-pink-600 border border-pink-100 font-black rounded-lg px-2.5 py-1 text-[10px] inline-flex items-center space-x-1">
-                          <PhoneOutgoing className="w-3 h-3" />
-                          <span>Outbound</span>
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-6 py-4">
-                      {log.outcome === 'N/A' && (
-                        <span className="bg-slate-100 text-slate-500 border border-slate-200 font-extrabold rounded-md px-2 py-0.5 text-[10px] uppercase">
-                          N/A
-                        </span>
-                      )}
-                      {log.outcome === 'Busy' && (
-                        <span className="bg-blue-100 text-blue-600 border border-blue-200 font-extrabold rounded-md px-2 py-0.5 text-[10px] uppercase">
-                          Busy
-                        </span>
-                      )}
-                      {log.outcome === 'Completed' && (
-                        <span className="bg-emerald-50 text-emerald-600 border border-emerald-200 font-extrabold rounded-md px-2 py-0.5 text-[10px] uppercase">
-                          Completed
-                        </span>
-                      )}
-                      {log.outcome === 'Answering Machine' && (
-                        <span className="bg-amber-50 text-amber-600 border border-amber-200 font-extrabold rounded-md px-2 py-0.5 text-[10px] uppercase">
-                          Ans Machine
-                        </span>
-                      )}
-                      {log.outcome === 'User Hung Up' && (
-                        <span className="bg-rose-50 text-rose-600 border border-rose-200 font-extrabold rounded-md px-2 py-0.5 text-[10px] uppercase">
-                          Hung Up
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-6 py-4 text-slate-600 font-bold font-mono">
-                      <div className="flex items-center space-x-1">
-                        <Clock className="w-3.5 h-3.5 text-slate-400" />
-                        <span>{log.duration}</span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 text-slate-800 font-bold font-mono">{log.prospectNumber}</td>
-                    <td className="px-6 py-4 text-center">
-                      <button
-                        onClick={() => { setActiveReviewLog(log); setDrawerMode('details'); }}
-                        className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-pink-500 transition cursor-pointer inline-flex items-center"
-                        title="Review verbatim transcript"
-                      >
-                        <ChevronRight className="w-4 h-4" />
-                      </button>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Pagination controller */}
-        {totalPages > 1 && (
-          <div className="bg-slate-50/50 border-t border-slate-200 px-6 py-4 flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-400">
-              Showing page {currentPage} of {totalPages} ({filteredLogs.length} records total)
-            </span>
-            <div className="flex items-center space-x-2">
-              <button
-                disabled={currentPage === 1}
-                onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
-                className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-700 hover:bg-slate-50 transition disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-              >
-                Previous
-              </button>
-              <button
-                disabled={currentPage === totalPages}
-                onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
-                className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-700 hover:bg-slate-50 transition disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-              >
-                Next
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Review Transcript Drawer overlay Modal */}
-      {activeReviewLog && (() => {
-        // Prepare precise values to match screenshot or generate highly realistic ones
-        const details = {
-          agentName: activeReviewLog.id === 'log-img-1' ? 'Shanmuga_test packages-Inbound' : activeReviewLog.agentName,
-          timestamp: activeReviewLog.id === 'log-img-1' ? 'Jul 10, 2026, 02:03 PM' : activeReviewLog.timestamp.includes(', 2026') ? activeReviewLog.timestamp : `${activeReviewLog.timestamp.split(',')[0]}, 2026, ${activeReviewLog.timestamp.split(',')[1]?.trim() || '02:03 PM'}`,
-          direction: activeReviewLog.callType === 'Inbound' ? 'INBOUND' : 'OUTBOUND',
-          outcome: activeReviewLog.outcome,
-          endReason: activeReviewLog.outcome === 'Completed' || activeReviewLog.durationSec > 15 ? 'Completed' : (activeReviewLog.outcome === 'Busy' ? 'Busy' : 'User Hung Up'),
-          from: activeReviewLog.callType === 'Inbound' ? activeReviewLog.prospectNumber : '918035383450',
-          to: activeReviewLog.callType === 'Inbound' ? '918035383450' : activeReviewLog.prospectNumber,
-          agentId: 'd1a6c13b-b20c-453d-b000-4bd6f3d1184a',
-          taskId: 'N/A',
-          callSid: activeReviewLog.id === 'log-img-1' ? '695ad8af-b238-4489-a2eb-71f8c39c5224' : '3d4fa78c-097a-4ab0-b11c-' + activeReviewLog.id.substring(activeReviewLog.id.length - 8),
-          callbackDate: 'N/A',
-          callbackTime: 'N/A',
-          sessionSummary: activeReviewLog.callType === 'Inbound' 
-            ? "The AI agent, Karthika, greeted the user and confirmed their interest in health checkup packages. The agent provided information about three packages: Silver, Gold, and Platinum, all currently at a discount, and inquired about the user's specific health checkup plans."
-            : "The AI agent, Sarah, conducted outbound solicitation with the contact. The agent qualified the contact's initial interest in automating incoming routes and scheduled a trial session.",
-          resolvedWelcomeMessage: activeReviewLog.id === 'log-img-1'
-            ? "Good afternoon — Perumal நா ஷண்முகா Hospitalல இருந்து AI Agent கார்த்திகா பேசுறங்க — How can I help you?"
-            : (activeReviewLog.transcript?.[0]?.speaker === 'agent' ? activeReviewLog.transcript[0].text : "Good afternoon, thank you for connecting with our automated helpline. How can I assist you today?")
-        };
-
-        return (
-          <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-end z-50 animate-in fade-in duration-200">
-            <div className="bg-[#fafafb] h-full w-full max-w-xl border-l border-slate-200 shadow-2xl flex flex-col justify-between animate-in slide-in-from-right duration-250 relative overflow-hidden">
-              
-              {/* Header - Sticky */}
-              <div className="p-6 border-b border-slate-200 bg-[#fbfbfc] flex items-center justify-between shrink-0">
-                <div>
-                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">Transcript & Analytics</span>
-                  <h3 className="font-extrabold text-slate-800 text-xl tracking-tight mt-0.5">Call Details</h3>
-                </div>
-                <div className="flex items-center space-x-2 shrink-0">
-                  {drawerMode === 'details' && (
-                    <button 
-                      onClick={() => setDrawerMode('transcript')}
-                      className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 font-bold text-xs px-3.5 py-2 rounded-xl transition flex items-center space-x-1.5 shadow-xs cursor-pointer"
-                    >
-                      <svg className="w-3.5 h-3.5 text-slate-500" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                      </svg>
-                      <span>View Transcript</span>
-                    </button>
-                  )}
-                  <button
-                    onClick={() => setActiveReviewLog(null)}
-                    className="p-2 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl text-slate-400 hover:text-slate-700 transition cursor-pointer"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-
-              {/* Scrollable Content */}
-              <div className="flex-1 overflow-y-auto p-6 space-y-6">
-                
-                {/* Simulated Audio Player bar matching screenshot precisely */}
-                <CallAudioPlayer durationSec={activeReviewLog.durationSec || 53} />
-
-                {drawerMode === 'details' ? (
-                  <>
-                    {/* 2-Column Info Grid */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      
-                      {/* AGENT Card */}
-                      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs">
-                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider flex items-center space-x-1.5">
-                          <User className="w-3.5 h-3.5 text-slate-400" />
-                          <span>Agent</span>
-                        </span>
-                        <span className="text-sm font-black text-slate-800 block mt-2 leading-tight">
-                          {details.agentName}
-                        </span>
-                      </div>
-
-                      {/* TIMESTAMP Card */}
-                      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs">
-                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider flex items-center space-x-1.5">
-                          <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                          <span>Timestamp</span>
-                        </span>
-                        <span className="text-sm font-black text-slate-800 block mt-2 leading-tight">
-                          {details.timestamp}
-                        </span>
-                      </div>
-
-                      {/* DIRECTION Card */}
-                      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs">
-                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider flex items-center space-x-1.5">
-                          <svg className="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L17.5 12M21 7.5H7.5" />
-                          </svg>
-                          <span>Direction</span>
-                        </span>
-                        <div className="mt-2.5">
-                          {details.direction === 'INBOUND' ? (
-                            <span className="bg-blue-50 text-blue-600 border border-blue-100 font-extrabold rounded-md px-2.5 py-1 text-[10px] uppercase inline-block">
-                              INBOUND
-                            </span>
-                          ) : (
-                            <span className="bg-pink-50 text-pink-600 border border-pink-100 font-extrabold rounded-md px-2.5 py-1 text-[10px] uppercase inline-block">
-                              OUTBOUND
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* OUTCOME Card */}
-                      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs">
-                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider flex items-center space-x-1.5">
-                          <Activity className="w-3.5 h-3.5 text-slate-400" />
-                          <span>Outcome</span>
-                        </span>
-                        <div className="mt-2.5">
-                          <span className="bg-slate-100 text-slate-600 border border-slate-200/80 font-extrabold rounded-md px-2.5 py-1 text-[10px] uppercase inline-block">
-                            {details.outcome}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* END REASON Card */}
-                      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs">
-                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider flex items-center space-x-1.5">
-                          <svg className="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-                          </svg>
-                          <span>End Reason</span>
-                        </span>
-                        <span className="text-sm font-black text-slate-800 block mt-2 leading-tight">
-                          {details.endReason}
-                        </span>
-                      </div>
-
-                      {/* FROM Card */}
-                      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs">
-                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider flex items-center space-x-1.5">
-                          <Phone className="w-3.5 h-3.5 text-slate-400" />
-                          <span>From</span>
-                        </span>
-                        <div className="mt-2">
-                          <span className="bg-slate-50 border border-slate-100 text-slate-800 font-bold px-3 py-1 rounded-lg text-xs inline-block font-mono">
-                            {details.from}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* TO Card (Full width row) */}
-                    <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs">
-                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider flex items-center space-x-1.5">
-                        <PhoneCall className="w-3.5 h-3.5 text-slate-400" />
-                        <span>To</span>
-                      </span>
-                      <div className="mt-2">
-                        <span className="bg-slate-50 border border-slate-100 text-slate-800 font-bold px-3 py-1 rounded-lg text-xs inline-block font-mono">
-                          {details.to}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* System Properties Card */}
-                    <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs divide-y divide-slate-100 text-[11px] font-semibold">
-                      <div className="flex justify-between py-2.5">
-                        <span className="text-slate-400 font-bold uppercase tracking-wider">Agent ID</span>
-                        <span className="text-slate-800 font-mono font-bold break-all ml-4 text-right">
-                          {details.agentId}
-                        </span>
-                      </div>
-                      <div className="flex justify-between py-2.5">
-                        <span className="text-slate-400 font-bold uppercase tracking-wider">Task ID</span>
-                        <span className="text-slate-800 font-bold">{details.taskId}</span>
-                      </div>
-                      <div className="flex justify-between py-2.5">
-                        <span className="text-slate-400 font-bold uppercase tracking-wider">Call Sid</span>
-                        <span className="text-slate-800 font-mono font-bold break-all ml-4 text-right">
-                          {details.callSid}
-                        </span>
-                      </div>
-                      <div className="flex justify-between py-2.5">
-                        <span className="text-slate-400 font-bold uppercase tracking-wider">Callback Date</span>
-                        <span className="text-slate-800 font-bold">{details.callbackDate}</span>
-                      </div>
-                      <div className="flex justify-between py-2.5">
-                        <span className="text-slate-400 font-bold uppercase tracking-wider">Callback Time</span>
-                        <span className="text-slate-800 font-bold">{details.callbackTime}</span>
-                      </div>
-                    </div>
-
-                    {/* Session Summary Card */}
-                    <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-2">
-                      <h4 className="font-extrabold text-slate-800 text-sm">Session Summary</h4>
-                      <p className="text-xs text-slate-500 font-medium leading-relaxed">
-                        {details.sessionSummary}
-                      </p>
-                    </div>
-
-                    {/* AI Conversation Parameters Card */}
-                    <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
-                      {/* Title banner */}
-                      <div className="flex items-center space-x-2 text-[#ec4899] font-extrabold text-xs tracking-wider uppercase">
-                        <svg className="w-4 h-4 fill-current animate-pulse text-[#ec4899]" viewBox="0 0 24 24">
-                          <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/>
-                        </svg>
-                        <span>AI Conversation Parameters</span>
-                      </div>
-
-                      {/* Config keys list */}
-                      <div className="divide-y divide-slate-100 text-xs">
-                        
-                        <div className="grid grid-cols-3 py-3 font-semibold">
-                          <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">To</span>
-                          <span className="col-span-2 text-slate-800 font-mono text-right sm:text-left">{details.to}</span>
-                        </div>
-
-                        <div className="grid grid-cols-3 py-3 font-semibold">
-                          <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">Name</span>
-                          <span className="col-span-2 text-slate-800 text-right sm:text-left">{activeReviewLog.contactName || 'Caller'}</span>
-                        </div>
-
-                        <div className="grid grid-cols-3 py-3 font-semibold">
-                          <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">From</span>
-                          <span className="col-span-2 text-slate-800 font-mono text-right sm:text-left">{details.from}</span>
-                        </div>
-
-                        <div className="grid grid-cols-3 py-4 font-semibold">
-                          <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px] self-start">Transcript</span>
-                          <div className="col-span-2 text-slate-800 font-medium leading-relaxed text-left whitespace-pre-line bg-slate-50 p-4 rounded-2xl border border-slate-200/60 max-h-[300px] overflow-y-auto font-sans">
-                            {activeReviewLog.transcript && activeReviewLog.transcript.length > 0 ? (
-                              <div className="space-y-3">
-                                {activeReviewLog.transcript.map((t, i) => (
-                                  <p key={i}>
-                                    <span className={`font-extrabold uppercase text-[10px] tracking-wider block mb-0.5 ${t.speaker === 'agent' ? 'text-[#ec4899]' : 'text-[#4f46e5]'}`}>
-                                      {t.speaker === 'agent' ? 'Zea Voice AI' : 'Customer'}
-                                    </span>
-                                    {t.text}
-                                  </p>
-                                ))}
-                              </div>
-                            ) : (
-                              <span className="text-slate-400 italic">No conversational exchange recorded for this brief connection.</span>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className="grid grid-cols-3 py-3 font-semibold">
-                          <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">From Number</span>
-                          <span className="col-span-2 text-slate-800 font-mono text-right sm:text-left">{details.from}</span>
-                        </div>
-
-                        <div className="grid grid-cols-3 py-3 font-semibold">
-                          <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px] self-start">Resolved Welcome Message</span>
-                          <span className="col-span-2 text-slate-600 leading-relaxed text-right sm:text-left bg-slate-50/50 px-3 py-2 rounded-lg border border-slate-200/60 font-medium">
-                            {details.resolvedWelcomeMessage}
-                          </span>
-                        </div>
-
-                      </div>
-                    </div>
-                  </>
-                ) : (
-                  <div className="space-y-6">
-                    {/* Back to Details Row */}
-                    <div className="flex items-center justify-between">
-                      <button 
-                        onClick={() => setDrawerMode('details')}
-                        className="text-slate-500 hover:text-slate-800 font-extrabold text-xs flex items-center space-x-1.5 py-1 px-2.5 hover:bg-slate-100 rounded-xl transition cursor-pointer select-none"
-                      >
-                        <ArrowLeft className="w-4 h-4" />
-                        <span>Back to Details</span>
-                      </button>
-                      <span className="bg-[#fdf2f8] text-[#db2777] border border-pink-100 font-black rounded-full px-3 py-1 text-[10px] tracking-widest uppercase">
-                        CALL TRANSCRIPT
-                      </span>
-                    </div>
-
-                    {/* Conversations List with customized bubbles matching the design */}
-                    <div className="space-y-6 pt-2">
-                      {activeReviewLog.transcript && activeReviewLog.transcript.length > 0 ? (
-                        activeReviewLog.transcript.map((t, i) => {
-                          const isAgent = t.speaker === 'agent';
-                          return (
-                            <div 
-                              key={i} 
-                              className={`flex flex-col ${isAgent ? 'items-end' : 'items-start'} w-full animate-in fade-in duration-150`}
-                            >
-                              <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest mb-1 block">
-                                {isAgent ? details.agentName : 'CUSTOMER'}
-                              </span>
-                              <div className={`p-4 rounded-2xl text-xs font-semibold leading-relaxed shadow-xs max-w-[85%] ${
-                                isAgent 
-                                  ? 'bg-gradient-to-r from-purple-600 to-fuchsia-500 text-white rounded-tr-none text-left' 
-                                  : 'bg-white border border-slate-200 text-slate-800 rounded-tl-none text-left'
-                              }`}>
-                                {t.text}
-                              </div>
-                            </div>
-                          );
-                        })
-                      ) : (
-                        <div className="text-center py-12 text-slate-400">
-                          <p className="font-bold">No conversation occurred.</p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-              </div>
-
-              {/* Footer - Sticky */}
-              <div className="p-6 border-t border-slate-200 shrink-0 bg-white flex items-center justify-between">
-                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest font-mono">ID: {activeReviewLog.id}</span>
-                <button
-                  onClick={() => setActiveReviewLog(null)}
-                  className="px-5 py-2.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition shadow-md cursor-pointer"
-                >
-                  Close Review
-                </button>
-              </div>
-
-            </div>
-          </div>
-        );
-      })()}
+      {activeCall && <div className="fixed inset-0 z-50 flex items-center justify-end bg-slate-900/50 backdrop-blur-xs"><div className="flex h-full w-full max-w-xl flex-col border-l border-slate-200 bg-[#fafafb] shadow-2xl"><div className="flex shrink-0 items-center justify-between border-b border-slate-200 bg-white p-6"><div><span className="block text-[10px] font-black uppercase tracking-widest text-slate-400">Database record</span><h3 className="mt-0.5 text-xl font-extrabold text-slate-800">Call Details</h3></div><div className="flex gap-2"><button onClick={() => setDrawerMode((mode) => mode === 'details' ? 'transcript' : 'details')} disabled={detailsLoading} className="rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-bold text-slate-700">{drawerMode === 'details' ? 'View Transcript' : 'View Details'}</button><button onClick={() => setActiveCall(null)} className="rounded-xl border border-slate-200 bg-white p-2 text-slate-400"><X className="h-4 w-4" /></button></div></div>
+        <div className="flex-1 overflow-y-auto p-6">{detailsLoading ? <div className="py-20 text-center text-xs font-semibold text-slate-400"><RefreshCw className="mx-auto mb-3 h-6 w-6 animate-spin text-pink-500" />Loading transcript and call details...</div> : drawerMode === 'transcript' ? <div className="space-y-5">{detailsError && <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700">{detailsError}</div>}{activeCall.transcript?.length ? activeCall.transcript.map((entry) => <div key={entry.id} className={`flex flex-col ${entry.speaker === 'agent' ? 'items-end' : 'items-start'}`}><span className="mb-1 text-[9px] font-extrabold uppercase tracking-widest text-slate-400">{entry.speaker === 'agent' ? activeCall.agentName || 'Agent' : entry.speaker === 'user' ? 'Customer' : 'System'}</span><div className={`max-w-[85%] rounded-2xl p-4 text-xs font-semibold leading-relaxed ${entry.speaker === 'agent' ? 'rounded-tr-none bg-gradient-to-r from-purple-600 to-fuchsia-500 text-white' : 'rounded-tl-none border border-slate-200 bg-white text-slate-800'}`}>{entry.text}</div><span className="mt-1 text-[9px] font-medium text-slate-400">{formatReportDuration(Math.floor(entry.offsetMs / 1000))}</span></div>) : <div className="py-16 text-center text-xs font-semibold text-slate-400">No transcript entries are stored for this call.</div>}</div>
+          : <div className="space-y-5">{detailsError && <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700">{detailsError}</div>}<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">{[
+            ['Agent', activeCall.agentName || 'Unassigned'], ['Timestamp', formatReportTimestamp(activeCall.startedAt)],
+            ['Direction', activeCall.direction.toUpperCase()], ['Status', reportStatusLabels[activeCall.status]],
+            ['From', activeCall.fromNumber], ['To', activeCall.toNumber], ['Duration', formatReportDuration(activeCall.durationSeconds)],
+            ['Cost', `${activeCall.currency} ${Number(activeCall.cost).toFixed(2)}`], ['Sentiment', activeCall.sentiment],
+            ['Campaign', activeCall.campaignName || 'None'],
+          ].map(([label,value]) => <div key={label} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs"><span className="text-[10px] font-black uppercase tracking-wider text-slate-400">{label}</span><span className="mt-2 block break-words text-sm font-black capitalize text-slate-800">{value}</span></div>)}</div><div className="divide-y divide-slate-100 rounded-2xl border border-slate-200 bg-white p-5 text-[11px] font-semibold">{[['Call ID',activeCall.id],['Provider Call ID',activeCall.providerCallId || 'Not available'],['Agent ID',activeCall.agentId || 'Not assigned'],['Campaign ID',activeCall.campaignId || 'Not assigned'],['Recording',activeCall.recordingAvailable ? 'Stored' : 'Not available']].map(([label,value]) => <div key={label} className="flex justify-between gap-4 py-2.5"><span className="font-bold uppercase tracking-wider text-slate-400">{label}</span><span className="break-all text-right font-mono font-bold text-slate-800">{value}</span></div>)}</div></div>}</div>
+        <div className="flex shrink-0 items-center justify-between border-t border-slate-200 bg-white p-6"><span className="truncate font-mono text-[10px] font-black uppercase tracking-widest text-slate-400">ID: {activeCall.id}</span><button onClick={() => setActiveCall(null)} className="rounded-xl bg-slate-800 px-5 py-2.5 text-xs font-bold text-white">Close Review</button></div></div></div>}
     </div>
   );
 }
 
-/* ==========================================
-   6. CALL LOGS LIST (REPLICATING THE SHARYX SCREENSHOT PRECISELY)
-   ========================================== */
-function CallLogsListView() {
-  const [allLogs] = useState<CallLogItem[]>(() => {
-    const list: CallLogItem[] = [];
-
-    // Row 1
-    list.push({
-      id: 'call-log-1',
-      sNo: 1,
-      timestamp: 'Jul 10, 2026, 2:03 PM',
-      contactName: 'Caller',
-      callType: 'Inbound',
-      outcome: 'N/A',
-      duration: '53s',
-      durationSec: 53,
-      prospectNumber: '919500600811',
-      agentName: 'Shanmuga_test packages-Inbound',
-      campaignName: '—',
-      sentiment: 'Neutral',
-      cost: 0.13,
-      aiSummary: 'The AI agent, Karthika, greeted the user and confirmed their interest in health checkup packages. The agent provided information about three packages: Silver, Gold, and Platinum, all currently at a discount, and inquired about the user\'s specific health checkup plans.',
-      fullTranscriptText: 'Agent: Good afternoon — Perumal நா ஷண்முகா Hospitalல இருந்து AI Agent கார்த்திகா பேசுறங்க — How can I help you? Customer: ஓகே Agent: நீங்க Facebookல full body checkupக்காக உங்க details fill பண்ணிருந்தீங்க. எங்க packages பத்தி தெரிஞ்சிக்கிறீங்களா? Customer: எஸ் Agent: Alright, எங்ககிட்ட மூணு packages இருக்கு. Silver, Gold, and Platinum. And மூணும் இப்போ currentஅ up to fifty percent discountல இருக்கு. Also, organwise health checkupsஉம் இருக்கு. நீங்க என்ன மாதிரி health check upக்கு plan பண்றீங்க?',
-      transcript: [
-        { speaker: 'agent', text: 'Good afternoon — Perumal நா ஷண்முகா Hospitalல இருந்து AI Agent கார்த்திகா பேசுறங்க — How can I help you?', time: '0:02' },
-        { speaker: 'user', text: 'ஓகே', time: '0:08' },
-        { speaker: 'agent', text: 'நீங்க Facebookல full body checkupக்காக உங்க details fill பண்ணிருந்தீங்க. எங்க packages பத்தி தெரிஞ்சுக்கிறீங்களா?', time: '0:15' },
-        { speaker: 'user', text: 'எஸ்', time: '0:22' },
-        { speaker: 'agent', text: 'Alright, எங்ககிட்ட மூணு packages இருக்கு. Silver, Gold, and Platinum. And மூணும் இப்போ currentஅ up to fifty percent discountல இருக்கு. Also, organwise health checkupsஉம் இருக்கு. நீங்க என்ன மாதிரி health check upக்கு plan பண்றீங்க?', time: '0:35' }
-      ]
-    });
-
-    // Row 2
-    list.push({
-      id: 'call-log-2',
-      sNo: 2,
-      timestamp: 'Jul 10, 2026, 2:03 PM',
-      contactName: 'N/A',
-      callType: 'Outbound',
-      outcome: 'N/A',
-      duration: '14s',
-      durationSec: 14,
-      prospectNumber: '919500600811',
-      agentName: 'Shanmuga_test packages',
-      campaignName: 'MHC',
-      sentiment: 'neutral',
-      cost: 0.04,
-      aiSummary: 'No conversation took place during the call.',
-      fullTranscriptText: 'Agent: Good afternoon — நா ஷ',
-      transcript: [
-        { speaker: 'agent', text: 'Hello, this is Shanmuga_test packages AI assistant calling to follow up on your healthcare inquiry.', time: '0:02' },
-        { speaker: 'user', text: 'Yes, tell me about the healthcare options.', time: '0:07' },
-        { speaker: 'agent', text: 'Perfect. We offer the MHC full body checkup package which includes comprehensive diagnostics. Would you like me to book a slot?', time: '0:12' }
-      ]
-    });
-
-    // Row 3
-    list.push({
-      id: 'call-log-3',
-      sNo: 3,
-      timestamp: 'Jul 10, 2026, 12:28 PM',
-      contactName: 'N/A',
-      callType: 'Outbound',
-      outcome: 'Busy',
-      duration: '0s',
-      durationSec: 0,
-      prospectNumber: '+917200627475',
-      agentName: 'Shanmuga_test packages',
-      campaignName: 'MHC',
-      sentiment: 'neutral',
-      cost: 0.00,
-      aiSummary: 'No conversation took place during the call.',
-      fullTranscriptText: 'No transcript available - call busy.',
-      transcript: []
-    });
-
-    // Row 4
-    list.push({
-      id: 'call-log-4',
-      sNo: 4,
-      timestamp: 'Jul 10, 2026, 12:26 PM',
-      contactName: 'N/A',
-      callType: 'Outbound',
-      outcome: 'N/A',
-      duration: '16s',
-      durationSec: 16,
-      prospectNumber: '919442801758',
-      agentName: 'Shanmuga_test packages',
-      campaignName: 'MHC',
-      sentiment: 'neutral',
-      cost: 0.05,
-      aiSummary: 'The AI agent greeted the customer and they agreed to schedule a call for later.',
-      fullTranscriptText: 'Agent: Good morning, calling from Shanmuga_test packages regarding the health camps. Customer: Ah yes, please schedule a call for later. Agent: Sure thing! Will mark this down. Have a good day!',
-      transcript: [
-        { speaker: 'agent', text: 'Good morning, calling from Shanmuga_test packages regarding the health camps.', time: '0:02' },
-        { speaker: 'user', text: 'Ah yes, please schedule a call for later.', time: '0:07' },
-        { speaker: 'agent', text: 'Sure thing! Will mark this down. Have a good day!', time: '0:12' }
-      ]
-    });
-
-    // Row 5
-    list.push({
-      id: 'call-log-5',
-      sNo: 5,
-      timestamp: 'Jul 10, 2026, 10:44 AM',
-      contactName: 'N/A',
-      callType: 'Outbound',
-      outcome: 'Answering Machine',
-      duration: '0s',
-      durationSec: 0,
-      prospectNumber: '+919894664741',
-      agentName: 'Shanmuga_test packages',
-      campaignName: 'MHC',
-      sentiment: 'neutral',
-      cost: 0.00,
-      aiSummary: 'No conversation took place during the call.',
-      fullTranscriptText: 'No transcript available - answering machine.',
-      transcript: []
-    });
-
-    // Row 6
-    list.push({
-      id: 'call-log-6',
-      sNo: 6,
-      timestamp: 'Jul 10, 2026, 10:44 AM',
-      contactName: 'N/A',
-      callType: 'Outbound',
-      outcome: 'Answering Machine',
-      duration: '0s',
-      durationSec: 0,
-      prospectNumber: '+919751415146',
-      agentName: 'Shanmuga_test packages',
-      campaignName: 'MHC',
-      sentiment: 'neutral',
-      cost: 0.00,
-      aiSummary: 'No conversation took place during the call.',
-      fullTranscriptText: 'No transcript available - answering machine.',
-      transcript: []
-    });
-
-    // Row 7
-    list.push({
-      id: 'call-log-7',
-      sNo: 7,
-      timestamp: 'Jul 10, 2026, 10:44 AM',
-      contactName: 'N/A',
-      callType: 'Outbound',
-      outcome: 'Busy',
-      duration: '0s',
-      durationSec: 0,
-      prospectNumber: '+919655544850',
-      agentName: 'Shanmuga_test packages',
-      campaignName: 'MHC',
-      sentiment: 'neutral',
-      cost: 0.00,
-      aiSummary: 'No conversation took place during the call.',
-      fullTranscriptText: 'No transcript available - call busy.',
-      transcript: []
-    });
-
-    // Generate remaining 165 records (to make exactly 172 records)
-    const phoneSuffixes = ['12', '99', '04', '77', '61', '83', '40', '26', '35'];
-
-    for (let i = 8; i <= 172; i++) {
-      const min = Math.floor(Math.random() * 60);
-      const hour = Math.floor(Math.random() * 12) + 1;
-      const isAm = Math.random() > 0.5;
-      const day = Math.floor(Math.random() * 7) + 3; // Jul 3 to Jul 10
-      const durationSec = Math.random() > 0.3 ? Math.floor(Math.random() * 100) + 10 : 0;
-      const duration = `${durationSec}s`;
-      const outcome: 'N/A' | 'Busy' | 'Completed' | 'Answering Machine' | 'User Hung Up' = durationSec === 0 
-        ? (Math.random() > 0.5 ? 'Busy' : 'Answering Machine') 
-        : 'Completed';
-      const isOutbound = Math.random() > 0.3;
-
-      let summaryText = 'No conversation took place during the call.';
-      let transcriptText = 'No transcript available.';
-
-      if (durationSec > 0) {
-        if (isOutbound) {
-          summaryText = 'The AI agent, Sarah, called the customer to follow up on health diagnostics packages and offered slots.';
-          transcriptText = 'Agent: Hello, thank you for connecting with Shanmuga diagnostics packages. Customer: Hello, I want to confirm my health check appointment. Agent: Let me look that up. Yes, your booking is confirmed for tomorrow morning at 9:00 AM.';
-        } else {
-          summaryText = 'The user called the automated system to verify package details and active booking slots.';
-          transcriptText = 'Customer: Hello, I want to inquire about your body health packages. Agent: Welcome! We have Silver, Gold, and Platinum packages. Would you like details on Silver? Customer: Yes, please send me the discount details.';
-        }
-      }
-
-      list.push({
-        id: `call-log-${i}`,
-        sNo: i,
-        timestamp: `Jul 0${day}, 2026, ${hour < 10 ? '0' + hour : hour}:${min < 10 ? '0' + min : min} ${isAm ? 'AM' : 'PM'}`,
-        contactName: isOutbound ? 'N/A' : 'Caller',
-        callType: isOutbound ? 'Outbound' : 'Inbound',
-        outcome,
-        duration,
-        durationSec,
-        prospectNumber: isOutbound ? `+919500600${phoneSuffixes[i % phoneSuffixes.length]}${String(i).padStart(2, '0')}` : `919500600${phoneSuffixes[i % phoneSuffixes.length]}${String(i).padStart(2, '0')}`,
-        agentName: isOutbound ? 'Shanmuga_test packages' : 'Shanmuga_test packages-Inbound',
-        campaignName: isOutbound ? 'MHC' : '—',
-        sentiment: 'neutral',
-        cost: durationSec > 0 ? 0.05 : 0.00,
-        aiSummary: summaryText,
-        fullTranscriptText: transcriptText,
-        transcript: durationSec > 0 ? [
-          { speaker: 'agent', text: 'Hello, thank you for connecting with Shanmuga diagnostics packages.', time: '0:02' },
-          { speaker: 'user', text: 'Hello, I want to confirm my health check appointment.', time: '0:07' },
-          { speaker: 'agent', text: 'Let me look that up. Yes, your booking is confirmed for tomorrow morning at 9:00 AM.', time: '0:14' }
-        ] : []
-      });
-    }
-
-    return list;
-  });
-
-  const [dateRange, setDateRange] = useState('7 Days');
-  const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 10;
-
-  // Selected single log review drawer state
-  const [activeReviewLog, setActiveReviewLog] = useState<CallLogItem | null>(null);
-  const [drawerMode, setDrawerMode] = useState<'details' | 'transcript'>('details');
-
-  const filteredLogs = allLogs.filter(log => {
-    // Standard filters for presentation
-    return true;
-  });
-
-  const paginatedLogs = filteredLogs.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
-  const totalPages = Math.ceil(filteredLogs.length / itemsPerPage);
-
-  const handleExportxlsx = () => {
-    let csv = "S.No,Date & Time,Agent Name,Campaign Name,Direction,From Number,To Number,Duration,Outcome,Sentiment,AI Summary,Full Transcript\n";
-    filteredLogs.forEach(l => {
-      const dir = l.callType.toLowerCase();
-      const fromNum = l.callType === 'Inbound' ? l.prospectNumber : '+918035383450';
-      const toNum = l.callType === 'Inbound' ? '—' : l.prospectNumber;
-      const safeSummary = (l.aiSummary || '').replace(/"/g, '""');
-      const safeTranscript = (l.fullTranscriptText || '').replace(/"/g, '""');
-      csv += `${l.sNo},"${l.timestamp}","${l.agentName}","${l.campaignName}",${dir},"${fromNum}","${toNum}",${l.duration},${l.outcome},${l.sentiment},"${safeSummary}","${safeTranscript}"\n`;
-    });
-    const encodedUri = encodeURI("data:text/csv;charset=utf-8," + csv);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `ZeaVoice_Call_Logs_Report.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  return (
-    <div className="space-y-6">
-      
-      {/* 1. Report Builder Card */}
-      <div className="bg-white border border-slate-100 rounded-3xl p-6 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-        <div className="flex items-center space-x-4">
-          <div className="p-3 bg-pink-50 rounded-2xl shrink-0">
-            <FileSpreadsheet className="w-6 h-6 text-[#db2777]" />
-          </div>
-          <div>
-            <h2 className="text-xl font-extrabold text-slate-800 tracking-tight leading-tight">Report Builder</h2>
-            <p className="text-xs text-slate-400 font-semibold mt-0.5">Generate, customize, and export powerful insights</p>
-          </div>
-        </div>
-        
-        {/* Dropdowns + Export Button */}
-        <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-          <div className="relative">
-            <select className="bg-slate-50 border border-slate-200 text-slate-700 font-bold text-xs rounded-xl pl-4 pr-8 py-2.5 outline-none appearance-none cursor-pointer">
-              <option>Call Logs Report</option>
-            </select>
-            <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-3 top-3.5 pointer-events-none" />
-          </div>
-
-          <div className="relative">
-            <select 
-              value={dateRange}
-              onChange={(e) => setDateRange(e.target.value)}
-              className="bg-slate-50 border border-slate-200 text-slate-700 font-bold text-xs rounded-xl pl-4 pr-8 py-2.5 outline-none appearance-none cursor-pointer"
-            >
-              <option value="7 Days">7 Days</option>
-              <option value="All Time">All Time</option>
-            </select>
-            <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-3 top-3.5 pointer-events-none" />
-          </div>
-
-          <button 
-            onClick={handleExportxlsx}
-            className="bg-gradient-to-r from-purple-600 to-fuchsia-500 hover:from-purple-700 hover:to-fuchsia-600 text-white font-extrabold text-xs px-5 py-2.5 rounded-xl shadow-xs transition flex items-center space-x-1.5 cursor-pointer select-none"
-          >
-            <svg className="w-4 h-4 text-white shrink-0" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
-            </svg>
-            <span>Export .xlsx</span>
-          </button>
-        </div>
-      </div>
-
-      {/* 2. Three Metric Cards Row */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        
-        {/* Card 1: TOTAL RECORDS */}
-        <div className="bg-white border border-slate-100 rounded-3xl p-6 shadow-xs flex items-center justify-between">
-          <div className="space-y-1">
-            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">TOTAL RECORDS</span>
-            <span className="text-4xl font-black text-slate-800 tracking-tight block">{filteredLogs.length}</span>
-          </div>
-          <div className="w-12 h-12 bg-[#eff6ff] text-[#3b82f6] rounded-2xl flex items-center justify-center border border-blue-50">
-            <Filter className="w-5 h-5 text-blue-500" />
-          </div>
-        </div>
-
-        {/* Card 2: SELECTED COLUMNS */}
-        <div className="bg-white border border-slate-100 rounded-3xl p-6 shadow-xs flex items-center justify-between">
-          <div className="space-y-1">
-            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">SELECTED COLUMNS</span>
-            <span className="text-4xl font-black text-slate-800 tracking-tight block">13</span>
-          </div>
-          <div className="w-12 h-12 bg-[#fdf2f8] text-[#db2777] rounded-2xl flex items-center justify-center border border-pink-50">
-            <Grid className="w-5 h-5 text-pink-500" />
-          </div>
-        </div>
-
-        {/* Card 3: ACTIVE FILTERS */}
-        <div className="bg-white border border-slate-100 rounded-3xl p-6 shadow-xs relative flex flex-col justify-between min-h-[106px]">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">ACTIVE FILTERS</span>
-            <span className="bg-[#f1f5f9] text-slate-500 border border-slate-200/55 rounded-full px-2 py-0.5 text-[9px] font-extrabold tracking-wider">
-              1 Applied
-            </span>
-          </div>
-          <div className="mt-3 flex items-center">
-            <span className="bg-[#f8fafc] hover:bg-slate-100 text-slate-600 font-extrabold text-xs px-3.5 py-2 rounded-xl border border-slate-200/60 inline-flex items-center space-x-1.5 select-none transition cursor-default">
-              <Clock className="w-3.5 h-3.5 text-slate-400" />
-              <span>{dateRange}</span>
-            </span>
-          </div>
-        </div>
-
-      </div>
-
-      {/* 3. Table Card */}
-      <div className="bg-white border border-slate-100 rounded-3xl p-6 shadow-xs space-y-4">
-        <div>
-          <h3 className="text-base font-extrabold text-slate-800 tracking-tight">Report Data</h3>
-          <p className="text-[11px] text-slate-400 font-semibold mt-0.5">Viewing all generated data</p>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-[#f8fafc] border-b border-slate-200 text-slate-400 font-black uppercase tracking-widest text-[9px]">
-                <th className="px-5 py-4">S.No</th>
-                <th className="px-5 py-4">Date & Time</th>
-                <th className="px-5 py-4">Agent Name</th>
-                <th className="px-5 py-4">Campaign Name</th>
-                <th className="px-5 py-4">Direction</th>
-                <th className="px-5 py-4">From Number</th>
-                <th className="px-5 py-4">To Number</th>
-                <th className="px-5 py-4">Duration</th>
-                <th className="px-5 py-4">Outcome</th>
-                <th className="px-5 py-4">Sentiment</th>
-                <th className="px-5 py-4">Recording Link</th>
-                <th className="px-5 py-4">AI Summary</th>
-                <th className="px-5 py-4">Full Transcript</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 text-xs font-semibold text-slate-700">
-              {paginatedLogs.map((log) => (
-                <tr 
-                  key={log.id} 
-                  className="hover:bg-slate-50/40 transition border-b border-slate-100"
-                >
-                  <td className="px-5 py-4 font-mono text-slate-400">{log.sNo}</td>
-                  <td className="px-5 py-4 text-slate-500 font-bold">{log.timestamp}</td>
-                  <td className="px-5 py-4 font-black text-slate-800">{log.agentName}</td>
-                  <td className="px-5 py-4 text-slate-500">{log.campaignName}</td>
-                  <td className="px-5 py-4">
-                    {log.callType === 'Inbound' ? (
-                      <span className="text-blue-500 font-black tracking-tight block">inbound</span>
-                    ) : (
-                      <span className="text-pink-500 font-black tracking-tight block">outbound</span>
-                    )}
-                  </td>
-                  <td className="px-5 py-4 font-mono font-bold text-slate-600">
-                    {log.callType === 'Inbound' ? log.prospectNumber : '+918035383450'}
-                  </td>
-                  <td className="px-5 py-4 font-mono font-bold text-slate-600">
-                    {log.callType === 'Inbound' ? '—' : log.prospectNumber}
-                  </td>
-                  <td className="px-5 py-4 font-mono text-slate-500">{log.duration}</td>
-                  <td className="px-5 py-4">
-                    {log.outcome === 'N/A' ? (
-                      <span className="bg-slate-100 text-slate-500 border border-slate-200/80 font-black rounded-md px-2 py-0.5 text-[9px] uppercase tracking-wide">
-                        N/A
-                      </span>
-                    ) : log.outcome === 'Busy' ? (
-                      <span className="bg-[#f1f5f9] text-[#475569] border border-slate-200/80 font-black rounded-md px-2 py-0.5 text-[9px] uppercase tracking-wide">
-                        BUSY
-                      </span>
-                    ) : log.outcome === 'Answering Machine' ? (
-                      <span className="bg-[#f1f5f9] text-[#475569] border border-slate-200/80 font-black rounded-md px-2 py-0.5 text-[9px] uppercase tracking-wide">
-                        NO ANSWER
-                      </span>
-                    ) : (
-                      <span className="bg-emerald-50 text-emerald-600 border border-emerald-200/80 font-black rounded-md px-2 py-0.5 text-[9px] uppercase tracking-wide">
-                        COMPLETED
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-5 py-4 text-slate-500 font-bold">{log.sentiment}</td>
-                  <td className="px-5 py-4">
-                    {log.duration !== '0s' ? (
-                      <button 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setActiveReviewLog(log);
-                          setDrawerMode('transcript');
-                        }}
-                        className="text-[#4f46e5] hover:text-indigo-700 font-black inline-flex items-center space-x-1 hover:underline select-none cursor-pointer"
-                      >
-                        <Play className="w-3 h-3 text-[#4f46e5] fill-current" />
-                        <span>Play</span>
-                      </button>
-                    ) : (
-                      <span className="text-slate-300">—</span>
-                    )}
-                  </td>
-                  <td 
-                    title={log.aiSummary || ''} 
-                    className="px-5 py-4 text-slate-600 font-medium whitespace-nowrap text-left"
-                  >
-                    {log.aiSummary ? truncateToTwoWords(log.aiSummary) : '—'}
-                  </td>
-                  <td 
-                    title={log.fullTranscriptText || ''} 
-                    className="px-5 py-4 text-slate-500 font-normal whitespace-nowrap text-left"
-                  >
-                    {log.fullTranscriptText ? truncateToTwoWords(log.fullTranscriptText) : '—'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Pagination controller */}
-        {totalPages > 1 && (
-          <div className="bg-[#fafafa] border border-slate-100 rounded-2xl px-6 py-4 flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-400">
-              Showing page {currentPage} of {totalPages} ({filteredLogs.length} records total)
-            </span>
-            <div className="flex items-center space-x-2">
-              <button
-                disabled={currentPage === 1}
-                onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
-                className="px-4 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-700 hover:bg-slate-50 transition disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer select-none"
-              >
-                Previous
-              </button>
-              <button
-                disabled={currentPage === totalPages}
-                onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
-                className="px-4 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-700 hover:bg-slate-50 transition disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer select-none"
-              >
-                Next
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Verbatim Transcript Drawer overlay */}
-      {activeReviewLog && (() => {
-        const isInc = activeReviewLog.callType === 'Inbound';
-        const details = {
-          agentName: activeReviewLog.agentName,
-          timestamp: activeReviewLog.timestamp,
-          direction: isInc ? 'INBOUND' : 'OUTBOUND',
-          outcome: activeReviewLog.outcome,
-          endReason: activeReviewLog.outcome === 'Completed' || activeReviewLog.durationSec > 15 ? 'Completed' : (activeReviewLog.outcome === 'Busy' ? 'Busy' : 'User Hung Up'),
-          from: isInc ? activeReviewLog.prospectNumber : '918035383450',
-          to: isInc ? '918035383450' : activeReviewLog.prospectNumber,
-          agentId: 'd1a6c13b-b20c-453d-b000-4bd6f3d1184a',
-          taskId: 'N/A',
-          callSid: '3d4fa78c-097a-4ab0-b11c-' + activeReviewLog.id.substring(activeReviewLog.id.length - 8),
-          callbackDate: 'N/A',
-          callbackTime: 'N/A',
-          sessionSummary: isInc 
-            ? "The AI agent, Karthika, greeted the user and confirmed their interest in health checkup packages. The agent provided information about three packages: Silver, Gold, and Platinum, all currently at a discount, and inquired about the user's specific health checkup plans."
-            : "The AI agent, Sarah, conducted outbound solicitation with the contact. The agent qualified the contact's initial interest in automating incoming routes and scheduled a trial session.",
-          resolvedWelcomeMessage: isInc
-            ? "Good afternoon — Perumal நா ஷண்முகா Hospitalல இருந்து AI Agent கார்த்திகா பேசுறங்க — How can I help you?"
-            : (activeReviewLog.transcript?.[0]?.speaker === 'agent' ? activeReviewLog.transcript[0].text : "Good afternoon, thank you for connecting with our automated helpline. How can I assist you today?")
-        };
-
-        return (
-          <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-end z-50 animate-in fade-in duration-200">
-            <div className="bg-[#fafafb] h-full w-full max-w-xl border-l border-slate-200 shadow-2xl flex flex-col justify-between animate-in slide-in-from-right duration-250 relative overflow-hidden">
-              
-              {/* Header - Sticky */}
-              <div className="p-6 border-b border-slate-200 bg-[#fbfbfc] flex items-center justify-between shrink-0">
-                <div>
-                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">Transcript & Analytics</span>
-                  <h3 className="font-extrabold text-slate-800 text-xl tracking-tight mt-0.5">Call Details</h3>
-                </div>
-                <div className="flex items-center space-x-2 shrink-0">
-                  {drawerMode === 'details' && (
-                    <button 
-                      onClick={() => setDrawerMode('transcript')}
-                      className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 font-bold text-xs px-3.5 py-2 rounded-xl transition flex items-center space-x-1.5 shadow-xs cursor-pointer"
-                    >
-                      <svg className="w-3.5 h-3.5 text-slate-500" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                      </svg>
-                      <span>View Transcript</span>
-                    </button>
-                  )}
-                  <button
-                    onClick={() => setActiveReviewLog(null)}
-                    className="p-2 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl text-slate-400 hover:text-slate-700 transition cursor-pointer"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-
-              {/* Scrollable Content */}
-              <div className="flex-1 overflow-y-auto p-6 space-y-6">
-                
-                {/* Simulated Audio Player */}
-                <CallAudioPlayer durationSec={activeReviewLog.durationSec || 53} />
-
-                {drawerMode === 'details' ? (
-                  <>
-                    {/* 2-Column Info Grid */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      
-                      {/* AGENT Card */}
-                      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs">
-                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider flex items-center space-x-1.5">
-                          <User className="w-3.5 h-3.5 text-slate-400" />
-                          <span>Agent</span>
-                        </span>
-                        <span className="text-sm font-black text-slate-800 block mt-2 leading-tight">
-                          {details.agentName}
-                        </span>
-                      </div>
-
-                      {/* TIMESTAMP Card */}
-                      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs">
-                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider flex items-center space-x-1.5">
-                          <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                          <span>Timestamp</span>
-                        </span>
-                        <span className="text-sm font-black text-slate-800 block mt-2 leading-tight">
-                          {details.timestamp}
-                        </span>
-                      </div>
-
-                      {/* DIRECTION Card */}
-                      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs">
-                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider flex items-center space-x-1.5">
-                          <svg className="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L17.5 12M21 7.5H7.5" />
-                          </svg>
-                          <span>Direction</span>
-                        </span>
-                        <div className="mt-2.5">
-                          {details.direction === 'INBOUND' ? (
-                            <span className="bg-blue-50 text-blue-600 border border-blue-100 font-extrabold rounded-md px-2.5 py-1 text-[10px] uppercase inline-block">
-                              INBOUND
-                            </span>
-                          ) : (
-                            <span className="bg-pink-50 text-pink-600 border border-pink-100 font-extrabold rounded-md px-2.5 py-1 text-[10px] uppercase inline-block">
-                              OUTBOUND
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* OUTCOME Card */}
-                      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs">
-                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider flex items-center space-x-1.5">
-                          <Activity className="w-3.5 h-3.5 text-slate-400" />
-                          <span>Outcome</span>
-                        </span>
-                        <div className="mt-2.5">
-                          <span className="bg-slate-100 text-slate-600 border border-slate-200/80 font-extrabold rounded-md px-2.5 py-1 text-[10px] uppercase inline-block">
-                            {details.outcome}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* END REASON Card */}
-                      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs">
-                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider flex items-center space-x-1.5">
-                          <svg className="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-                          </svg>
-                          <span>End Reason</span>
-                        </span>
-                        <span className="text-sm font-black text-slate-800 block mt-2 leading-tight">
-                          {details.endReason}
-                        </span>
-                      </div>
-
-                      {/* FROM Card */}
-                      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs">
-                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider flex items-center space-x-1.5">
-                          <Phone className="w-3.5 h-3.5 text-slate-400" />
-                          <span>From</span>
-                        </span>
-                        <div className="mt-2">
-                          <span className="bg-slate-50 border border-slate-100 text-slate-800 font-bold px-3 py-1 rounded-lg text-xs inline-block font-mono">
-                            {details.from}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* TO Card (Full width row) */}
-                    <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs">
-                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider flex items-center space-x-1.5">
-                        <PhoneCall className="w-3.5 h-3.5 text-slate-400" />
-                        <span>To</span>
-                      </span>
-                      <div className="mt-2">
-                        <span className="bg-slate-50 border border-slate-100 text-slate-800 font-bold px-3 py-1 rounded-lg text-xs inline-block font-mono">
-                          {details.to}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* System Properties Card */}
-                    <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs divide-y divide-slate-100 text-[11px] font-semibold">
-                      <div className="flex justify-between py-2.5">
-                        <span className="text-slate-400 font-bold uppercase tracking-wider">Agent ID</span>
-                        <span className="text-slate-800 font-mono font-bold break-all ml-4 text-right">
-                          {details.agentId}
-                        </span>
-                      </div>
-                      <div className="flex justify-between py-2.5">
-                        <span className="text-slate-400 font-bold uppercase tracking-wider">Task ID</span>
-                        <span className="text-slate-800 font-bold">{details.taskId}</span>
-                      </div>
-                      <div className="flex justify-between py-2.5">
-                        <span className="text-slate-400 font-bold uppercase tracking-wider">Call Sid</span>
-                        <span className="text-slate-800 font-mono font-bold break-all ml-4 text-right">
-                          {details.callSid}
-                        </span>
-                      </div>
-                      <div className="flex justify-between py-2.5">
-                        <span className="text-slate-400 font-bold uppercase tracking-wider">Callback Date</span>
-                        <span className="text-slate-800 font-bold">{details.callbackDate}</span>
-                      </div>
-                      <div className="flex justify-between py-2.5">
-                        <span className="text-slate-400 font-bold uppercase tracking-wider">Callback Time</span>
-                        <span className="text-slate-800 font-bold">{details.callbackTime}</span>
-                      </div>
-                    </div>
-
-                    {/* Session Summary Card */}
-                    <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-2">
-                      <h4 className="font-extrabold text-slate-800 text-sm">Session Summary</h4>
-                      <p className="text-xs text-slate-500 font-medium leading-relaxed">
-                        {details.sessionSummary}
-                      </p>
-                    </div>
-
-                    {/* AI Conversation Parameters Card */}
-                    <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
-                      {/* Title banner */}
-                      <div className="flex items-center space-x-2 text-[#ec4899] font-extrabold text-xs tracking-wider uppercase">
-                        <svg className="w-4 h-4 fill-current animate-pulse text-[#ec4899]" viewBox="0 0 24 24">
-                          <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/>
-                        </svg>
-                        <span>AI Conversation Parameters</span>
-                      </div>
-
-                      {/* Config keys list */}
-                      <div className="divide-y divide-slate-100 text-xs">
-                        <div className="grid grid-cols-3 py-3 font-semibold">
-                          <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">To</span>
-                          <span className="col-span-2 text-slate-800 font-mono text-right sm:text-left">{details.to}</span>
-                        </div>
-
-                        <div className="grid grid-cols-3 py-3 font-semibold">
-                          <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">From</span>
-                          <span className="col-span-2 text-slate-800 font-mono text-right sm:text-left">{details.from}</span>
-                        </div>
-
-                        <div className="grid grid-cols-3 py-4 font-semibold">
-                          <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px] self-start">Transcript</span>
-                          <div className="col-span-2 text-slate-800 font-medium leading-relaxed text-left whitespace-pre-line bg-slate-50 p-4 rounded-2xl border border-slate-200/60 max-h-[300px] overflow-y-auto font-sans">
-                            {activeReviewLog.transcript && activeReviewLog.transcript.length > 0 ? (
-                              <div className="space-y-3">
-                                {activeReviewLog.transcript.map((t, i) => (
-                                  <p key={i}>
-                                    <span className={`font-extrabold uppercase text-[10px] tracking-wider block mb-0.5 ${t.speaker === 'agent' ? 'text-[#ec4899]' : 'text-[#4f46e5]'}`}>
-                                      {t.speaker === 'agent' ? 'Zea Voice AI' : 'Customer'}
-                                    </span>
-                                    {t.text}
-                                  </p>
-                                ))}
-                              </div>
-                            ) : (
-                              <span className="text-slate-400 italic">No conversational exchange recorded for this brief connection.</span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </>
-                ) : (
-                  <div className="space-y-6">
-                    {/* Back to Details Row */}
-                    <div className="flex items-center justify-between">
-                      <button 
-                        onClick={() => setDrawerMode('details')}
-                        className="text-slate-500 hover:text-slate-800 font-extrabold text-xs flex items-center space-x-1.5 py-1 px-2.5 hover:bg-slate-100 rounded-xl transition cursor-pointer select-none"
-                      >
-                        <ArrowLeft className="w-4 h-4" />
-                        <span>Back to Details</span>
-                      </button>
-                      <span className="bg-[#fdf2f8] text-[#db2777] border border-pink-100 font-black rounded-full px-3 py-1 text-[10px] tracking-widest uppercase">
-                        CALL TRANSCRIPT
-                      </span>
-                    </div>
-
-                    {/* Conversations List with customized bubbles matching the design */}
-                    <div className="space-y-6 pt-2">
-                      {activeReviewLog.transcript && activeReviewLog.transcript.length > 0 ? (
-                        activeReviewLog.transcript.map((t, i) => {
-                          const isAgent = t.speaker === 'agent';
-                          return (
-                            <div 
-                              key={i} 
-                              className={`flex flex-col ${isAgent ? 'items-end' : 'items-start'} w-full animate-in fade-in duration-150`}
-                            >
-                              <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest mb-1 block">
-                                {isAgent ? details.agentName : 'CUSTOMER'}
-                              </span>
-                              <div className={`p-4 rounded-2xl text-xs font-semibold leading-relaxed shadow-xs max-w-[85%] ${
-                                isAgent 
-                                  ? 'bg-gradient-to-r from-purple-600 to-fuchsia-500 text-white rounded-tr-none text-left' 
-                                  : 'bg-white border border-slate-200 text-slate-800 rounded-tl-none text-left'
-                              }`}>
-                                {t.text}
-                              </div>
-                            </div>
-                          );
-                        })
-                      ) : (
-                        <div className="text-center py-12 text-slate-400">
-                          <p className="font-bold">No conversation occurred.</p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-              </div>
-
-              {/* Footer - Sticky */}
-              <div className="p-6 border-t border-slate-200 shrink-0 bg-white flex items-center justify-between">
-                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest font-mono">ID: {activeReviewLog.id}</span>
-                <button
-                  onClick={() => setActiveReviewLog(null)}
-                  className="px-5 py-2.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition shadow-md cursor-pointer"
-                >
-                  Close Review
-                </button>
-              </div>
-
-            </div>
-          </div>
-        );
-      })()}
-
-    </div>
-  );
+function ReportSelect({ label, icon: Icon, value, onChange, options }: {
+  label: string; icon: React.ComponentType<{ className?: string }>; value: string;
+  onChange: (value: string) => void; options: string[][];
+}) {
+  return <div className="space-y-1.5"><label className="block text-[10px] font-bold uppercase tracking-widest text-slate-400">{label}</label><div className="relative"><select value={value} onChange={(event) => onChange(event.target.value)} className="w-full appearance-none rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-8 pr-8 font-bold text-slate-800 outline-none transition hover:bg-slate-100/50"><option hidden={false} value={options[0]?.[0]}>{options[0]?.[1]}</option>{options.slice(1).map(([optionValue, optionLabel]) => <option key={optionValue} value={optionValue}>{optionLabel}</option>)}</select><Icon className="pointer-events-none absolute left-3 top-3 h-3.5 w-3.5 text-slate-400" /><ChevronDown className="pointer-events-none absolute right-3 top-3.5 h-3.5 w-3.5 text-slate-400" /></div></div>;
 }
 
 /* ==========================================

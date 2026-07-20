@@ -4,7 +4,7 @@
  */
 
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, PieChart, Pie, Cell, BarChart, Bar, LineChart, Line } from 'recharts';
-import { CALL_VOLUME_CHART_DATA, OUTCOME_DONUT_DATA, DURATION_BAR_DATA, LATENCY_TREND_DATA } from '../../lib/mockData';
+import { CALL_VOLUME_CHART_DATA, OUTCOME_DONUT_DATA, DURATION_BAR_DATA } from '../../lib/mockData';
 
 // Custom Tooltip component for a premium look
 const CustomTooltip = ({ active, payload, label }: any) => {
@@ -111,11 +111,21 @@ export function DurationBarChart({ data = DURATION_BAR_DATA }: { data?: Array<{ 
   );
 }
 
-export function LatencyBreakdownChart() {
+export function LatencyBreakdownChart({ data }: {
+  data: Array<{ day: string; stt: number | null; llm: number | null; tts: number | null }>;
+}) {
+  const hasMeasurements = data.some((point) => point.stt !== null || point.llm !== null || point.tts !== null);
+  if (!hasMeasurements) {
+    return (
+      <div className="flex h-80 w-full items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50 px-6 text-center text-xs font-semibold text-slate-400">
+        No persisted provider latency measurements are available for this period.
+      </div>
+    );
+  }
   return (
     <div className="w-full h-80">
       <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={LATENCY_TREND_DATA} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+        <AreaChart data={data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F3F4F6" />
           <XAxis dataKey="day" stroke="#9CA3AF" fontSize={11} tickLine={false} />
           <YAxis stroke="#9CA3AF" fontSize={11} tickLine={false} unit="ms" />

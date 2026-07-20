@@ -83,7 +83,14 @@ try {
   const superHeaders = { authorization: `Bearer ${superToken}` };
   async function company(label) {
     const response = await api(base, '/admin/companies', { method: 'POST', headers: superHeaders,
-      body: JSON.stringify({ businessName: `Task 10 ${label} ${suffix}`, email: `task10-${label}-${suffix}@example.test` }) });
+      body: JSON.stringify({
+        businessName: `Task 10 ${label} ${suffix}`,
+        firstName: 'Task', lastName: `Ten ${label}`,
+        email: `task10-${label}-${suffix}@example.test`,
+        businessPhone: '+919999999999', perMinutePrice: 6.4,
+        timezone: 'Asia/Kolkata', currency: 'INR',
+      }) });
+    assert.equal(response.status, 201);
     const value = (await response.json()).data;
     tenantIds.push(value.tenantId);
     return value;

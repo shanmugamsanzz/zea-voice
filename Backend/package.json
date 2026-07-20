@@ -55,6 +55,8 @@
     "verify:voice-task8": "node scripts/verify-voice-task-8.js",
     "verify:voice-task9": "node scripts/verify-voice-task-9.js",
     "verify:voice-task10": "node scripts/verify-voice-task-10.js",
+    "verify:vqa-voice": "node scripts/verify-vqa-voice.js",
+    "verify:call-logs-analytics": "node scripts/verify-call-logs-analytics.js",
     "benchmark:embedding": "node scripts/benchmark-embedding.js",
     "providers:convert-plaintext": "node scripts/convert-provider-parameters-to-plaintext.js",
     "seed:super-admin": "node scripts/create-super-admin.js",

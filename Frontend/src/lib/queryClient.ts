@@ -13,7 +13,7 @@ export const queryClient = new QueryClient({
   },
 });
 
-const LIVE_PATHS = ['/admin/queues', '/admin/calls'];
+const LIVE_PATHS = ['/admin/queues', '/admin/calls', '/calls'];
 
 export function isLiveApiPath(path: string) {
   const pathname = path.split('?')[0];

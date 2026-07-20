@@ -28,6 +28,7 @@ import { knowledgeBaseRouter } from './knowledge-bases/knowledge-base.routes.js'
 import { plivoWebhookRouter } from './telephony/plivo-webhook.routes.js';
 import { performanceMiddleware } from './middleware/performance.js';
 import { voiceRouter } from './voice/voice.routes.js';
+import { vqaRouter } from './vqa/vqa.routes.js';
 
 export function createApp() {
   const app = express();
@@ -80,6 +81,7 @@ export function createApp() {
   app.use('/users', userRouter);
   app.use('/agents', agentRouter);
   app.use('/campaigns', campaignRouter);
+  app.use('/vqa', vqaRouter);
   app.use('/knowledge-bases', knowledgeBaseRouter);
   app.use('/webhooks/plivo', plivoWebhookRouter);
   app.use('/webhooks/plivo', voiceRouter);

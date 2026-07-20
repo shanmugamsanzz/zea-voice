@@ -10,6 +10,7 @@ import {
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:1112').replace(/\/$/, '');
 const TOKEN_KEY = 'zea_voice_access_token';
+export const SESSION_EXPIRED_EVENT = 'zea:session-expired';
 // The first phone assignment provisions a Plivo subaccount and application
 // before transferring the number, so allow enough time for provider calls.
 const REQUEST_TIMEOUT_MS = 45_000;
@@ -65,6 +66,10 @@ async function refreshAccessToken() {
   return body.data.accessToken;
 }
 
+function notifySessionExpired() {
+  window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+}
+
 async function networkApiRequest<T>(path: string, init: ApiRequestInit = {}, retry = true): Promise<T> {
   const measurement = beginApiMeasurement(path, init.method || 'GET');
   let measuredResponse: Response | null = null;
@@ -81,7 +86,13 @@ async function networkApiRequest<T>(path: string, init: ApiRequestInit = {}, ret
     if (response.status === 401 && retry) {
       finishApiMeasurement(measurement, response);
       measurementFinished = true;
-      try { await refreshAccessToken(); return networkApiRequest<T>(path, init, false); } catch { setAccessToken(null, true); }
+      try {
+        await refreshAccessToken();
+        return networkApiRequest<T>(path, init, false);
+      } catch {
+        setAccessToken(null, true);
+        notifySessionExpired();
+      }
     }
     return (await responseBody<T>(response)).data;
   } finally {

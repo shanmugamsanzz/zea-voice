@@ -156,6 +156,34 @@ hangup requires explicit confirmation, calls Plivo's single-call hangup API,
 and records both a control event and audit event. Tenant routes are read-only
 and protected by row-level security.
 
+The tenant `GET /calls` route powers the Reports tab. It supports server-side
+pagination plus `status`, `direction`, `agentId`, `campaignId`, `startedFrom`,
+`startedTo`, `minDurationSeconds`, `maxDurationSeconds`, and `search` filters.
+Its response includes filtered `total`, `inbound`, and `outbound` summary
+counts. `GET /calls/:callId` returns the stored transcript for the details
+drawer. Tenant identity always comes from the authenticated membership, never
+from a report query parameter.
+
+The Developer Call Logs Analytics view reuses these tenant routes for
+server-side date filtering, pagination, CSV export, call metadata, recording
+availability, and stored transcript review. It reads the existing
+call_sessions and call_transcript_entries tables and does not create a
+separate analytics database or substitute generated call records.
+
+## Voice quality assessment
+
+```text
+GET /vqa?days=7&auditLimit=5
+```
+
+The developer VQA screen reads persisted `call_provider_usage` rows joined to
+tenant-owned `call_sessions`. It returns daily STT, LLM and TTS latency,
+per-call response delay, provider-reported STT confidence when present, and a
+derived health assessment. It never substitutes mock measurements when a
+provider has not reported telemetry. VQA uses the existing calls/usage schema;
+no additional provider-specific table is required. Tenant identity is taken
+only from the authenticated request context and enforced by row-level security.
+
 ## Payment ledger endpoints
 
 ```text

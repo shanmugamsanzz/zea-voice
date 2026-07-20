@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { authenticateRequest, requireRoles } from '../auth/auth.middleware.js';
 import { requireTenantContext } from '../auth/tenant.middleware.js';
 import { AppError } from '../middleware/errors.js';
-import { callIdSchema, forceHangupSchema, listCallsSchema, parseCallInput } from './call.schemas.js';
+import { callIdSchema, forceHangupSchema, listCallsSchema, listTenantCallsSchema, parseCallInput } from './call.schemas.js';
 import { forceHangup, getCall, listCalls } from './call.service.js';
 
 function valid(schema, value) {
@@ -26,7 +26,7 @@ callAdminRouter.post('/:callId/hangup', async (req, res) => {
 
 export const tenantCallRouter = Router();
 tenantCallRouter.use(authenticateRequest, requireTenantContext);
-tenantCallRouter.get('/', async (req, res) => res.json({ success: true, data: await listCalls(req.auth, valid(listCallsSchema.omit({ companyId: true }), req.query)) }));
+tenantCallRouter.get('/', async (req, res) => res.json({ success: true, data: await listCalls(req.auth, valid(listTenantCallsSchema, req.query)) }));
 tenantCallRouter.get('/:callId', async (req, res) => {
   const { callId } = valid(callIdSchema, req.params);
   res.json({ success: true, data: await getCall(req.auth, callId) });

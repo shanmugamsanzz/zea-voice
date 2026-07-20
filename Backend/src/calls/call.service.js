@@ -41,22 +41,38 @@ export function listCalls(auth, filters) {
   return contextFor(auth, async (client) => {
     const companyId = auth.role === 'SUPER_ADMIN' ? filters.companyId ?? null : auth.tenantId;
     const values = [companyId, filters.status ?? null, filters.direction ?? null,
-      filters.search ?? null, filters.activeOnly];
+      filters.search ?? null, filters.activeOnly, filters.agentId ?? null, filters.campaignId ?? null,
+      filters.startedFrom ?? null, filters.startedTo ?? null,
+      filters.minDurationSeconds ?? null, filters.maxDurationSeconds ?? null];
     const where = `WHERE ($1::uuid IS NULL OR c.tenant_id = $1)
       AND ($2::call_status IS NULL OR c.status = $2)
       AND ($3::call_direction IS NULL OR c.direction = $3)
       AND ($4::text IS NULL OR c.from_number ILIKE '%' || $4 || '%'
-        OR c.to_number ILIKE '%' || $4 || '%' OR c.agent_name ILIKE '%' || $4 || '%')
-      AND (NOT $5::boolean OR c.status IN ('queued', 'ringing', 'connected'))`;
+        OR c.to_number ILIKE '%' || $4 || '%' OR c.agent_name ILIKE '%' || $4 || '%'
+        OR c.campaign_name ILIKE '%' || $4 || '%')
+      AND (NOT $5::boolean OR c.status IN ('queued', 'ringing', 'connected'))
+      AND ($6::uuid IS NULL OR c.agent_id = $6)
+      AND ($7::uuid IS NULL OR c.campaign_id = $7)
+      AND ($8::timestamptz IS NULL OR c.started_at >= $8)
+      AND ($9::timestamptz IS NULL OR c.started_at <= $9)
+      AND ($10::int IS NULL OR c.duration_seconds >= $10)
+      AND ($11::int IS NULL OR c.duration_seconds <= $11)`;
     const offset = (filters.page - 1) * filters.pageSize;
     const result = await client.query(`SELECT listed.*, count(*) OVER()::int AS full_count
       FROM (${callSelect} ${where}) listed
-      ORDER BY listed.started_at DESC LIMIT $6 OFFSET $7`, [...values, filters.pageSize, offset]);
+      ORDER BY listed.started_at DESC LIMIT $12 OFFSET $13`, [...values, filters.pageSize, offset]);
     const total = result.rows[0]?.full_count ?? 0;
+    const summary = await client.query(`SELECT
+        count(*)::int AS total,
+        count(*) FILTER (WHERE c.direction = 'inbound')::int AS inbound,
+        count(*) FILTER (WHERE c.direction = 'outbound')::int AS outbound
+      FROM call_sessions c
+      JOIN organizations o ON o.tenant_id = c.tenant_id AND o.deleted_at IS NULL
+      ${where}`, values);
     return { items: result.rows.map((row) => mapCall(row)), pagination: {
       page: filters.page, pageSize: filters.pageSize, total,
       totalPages: Math.ceil(total / filters.pageSize),
-    } };
+    }, summary: summary.rows[0] };
   });
 }
 
