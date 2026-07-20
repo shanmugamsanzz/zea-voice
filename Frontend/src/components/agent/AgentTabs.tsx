@@ -4,6 +4,7 @@
  */
 
 import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useAppState } from '../../store/AppState';
 import { VoiceAgent } from '../../types';
 import { apiRequest, uploadApiFormData } from '../../lib/api';
@@ -393,6 +394,15 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const [knowledgeUploadProgress, setKnowledgeUploadProgress] = useState<Partial<Record<KnowledgeDocumentType, number>>>({});
   const [reviewDocumentId, setReviewDocumentId] = useState<string | null>(null);
   const [versionDocumentId, setVersionDocumentId] = useState<string | null>(null);
+
+  const isKnowledgeUploading = Object.values(uploadingKnowledgeCategories).some(Boolean);
+
+  useEffect(() => {
+    if (!isKnowledgeUploading) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = previousOverflow; };
+  }, [isKnowledgeUploading]);
   const [newToolName, setNewToolName] = useState('');
   const [newToolType, setNewToolType] = useState('Webhook API');
 
@@ -814,6 +824,11 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const selectedKnowledgeDeletionJob = Object.values(knowledgeDeletionJobs).find((job) => job.type === 'delete_knowledge_base' && job.knowledgeBaseId === selectedKnowledgeBaseId);
   const publishedKnowledgeBaseCount = knowledgeBases.filter((knowledgeBase) => knowledgeBase.status === 'published').length;
   const selectedKnowledgeFileCount = Object.values(knowledgeFiles).filter(Boolean).length;
+  const activeKnowledgeUploadCategory = knowledgeDocumentCategories.find((category) => uploadingKnowledgeCategories[category.type]);
+  const activeKnowledgeUploadFile = activeKnowledgeUploadCategory ? knowledgeFiles[activeKnowledgeUploadCategory.type] : null;
+  const activeKnowledgeUploadProgress = activeKnowledgeUploadCategory
+    ? Math.max(0, Math.min(100, knowledgeUploadProgress[activeKnowledgeUploadCategory.type] ?? 0))
+    : 0;
   const reviewDocument = knowledgeDocuments.find((document) => document.id === reviewDocumentId);
   const versionDocument = knowledgeDocuments.find((document) => document.id === versionDocumentId);
   const modelVoiceId = (model: ProviderModelOption) => {
@@ -842,7 +857,8 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   if (loading) return <div className="h-96 animate-pulse rounded-2xl border border-slate-200 bg-white p-8"><div className="h-16 rounded-xl bg-slate-200" /><div className="mt-8 h-56 rounded-xl bg-slate-100" /></div>;
 
   return (
-    <form onSubmit={handleSave} className="bg-white rounded-2xl shadow-xs border border-slate-100 overflow-hidden">
+    <>
+    <form onSubmit={handleSave} className="flex min-h-[calc(100dvh-7rem)] flex-col overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-xs">
       {/* Upper Status strip / Banner */}
       <div className="bg-gradient-to-r from-violet-600 via-indigo-600 to-pink-500 p-6 text-white flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
@@ -920,7 +936,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       </div>
 
       {/* Tab Panel contents */}
-      <div className="p-8 bg-slate-50/30">
+      <div className="flex-1 bg-slate-50/30 p-8">
         {/* TAB: OVERVIEW */}
         {activeTab === 'overview' && (
           <div className="space-y-8 max-w-4xl mx-auto">
@@ -2446,7 +2462,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                 <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-right"><span className="block text-[9px] font-black uppercase tracking-wider text-slate-400">Files selected</span><strong className="text-sm text-slate-700">{selectedKnowledgeFileCount} / {knowledgeDocumentCategories.length}</strong></div>
               </div>
 
-              <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+              <div className="mt-5 grid grid-cols-1 items-start gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {knowledgeDocumentCategories.map((category, index) => {
                   const file = knowledgeFiles[category.type];
                   const fileError = knowledgeFileErrors[category.type];
@@ -2456,7 +2472,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   const uploadProgress = knowledgeUploadProgress[category.type] ?? 0;
                   const disabled = isReadOnly || uploading || ['deleting', 'deleted'].includes(selectedKnowledgeBase.status);
                   const dragging = draggedKnowledgeCategory === category.type;
-                  return <article key={category.type} className={`flex min-h-72 flex-col rounded-xl border bg-white p-4 transition ${dragging ? 'border-violet-500 ring-2 ring-violet-100' : fileError ? 'border-red-200' : file ? 'border-emerald-200' : 'border-slate-200'}`}>
+                  return <article key={category.type} className={`flex w-full flex-col rounded-xl border bg-white p-4 transition ${dragging ? 'border-violet-500 ring-2 ring-violet-100' : fileError ? 'border-red-200' : file ? 'border-emerald-200' : 'border-slate-200'}`}>
                     <div className="flex items-start justify-between gap-3"><div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${index % 3 === 0 ? 'bg-violet-100 text-violet-700' : index % 3 === 1 ? 'bg-blue-100 text-blue-700' : 'bg-pink-100 text-pink-700'}`}><FileText className="h-4 w-4" /></div><div className="flex flex-wrap justify-end gap-1"><span className="rounded-md bg-slate-100 px-2 py-1 font-mono text-[9px] font-bold text-slate-500">{category.type}</span>{latestDocument && <span className={`rounded-md px-2 py-1 text-[9px] font-black uppercase ${knowledgeDocumentStatusStyles[latestDocument.status]}`}>{knowledgeStatusLabel(latestDocument.status)}</span>}</div></div>
                     <h5 className="mt-3 text-sm font-bold text-slate-800">{category.title}</h5>
                     <p className="mt-1 text-[11px] font-medium leading-4 text-slate-500">{category.description}</p>
@@ -2468,7 +2484,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       <input key={`${selectedKnowledgeBase.id}-${category.type}-${file?.name ?? 'empty'}`} type="file" accept=".pdf,application/pdf" disabled={disabled} className="sr-only" onChange={(event) => selectKnowledgePdf(category.type, event.target.files?.[0] ?? null)} />
                     </label>
 
-                    <div className="mt-auto pt-3">
+                    <div className="mt-3">
                       {file && <div className="flex items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3"><div className="min-w-0"><span className="block truncate text-[11px] font-bold text-emerald-800" title={file.name}>{file.name}</span><span className="mt-0.5 block text-[9px] font-semibold text-emerald-600">{formatFileSize(file.size)} · Ready for upload</span></div>{!disabled && <button type="button" aria-label={`Remove ${category.title} PDF`} onClick={() => removeKnowledgePdf(category.type)} className="shrink-0 rounded-md p-1 text-emerald-700 transition hover:bg-emerald-100 hover:text-red-600"><X className="h-4 w-4" /></button>}</div>}
                       {fileError && <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-red-700"><AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" /><span className="text-[10px] font-semibold leading-4">{fileError}</span></div>}
                       {!file && !fileError && <div className="rounded-lg border border-dashed border-slate-200 px-3 py-2 text-center text-[9px] font-semibold text-slate-400">No PDF selected</div>}
@@ -2556,6 +2572,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                 <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => { setShowKnowledgeBaseDeleteDialog(false); setDeleteKnowledgeBaseConfirmation(''); }} disabled={knowledgeDeleting} className="rounded-lg border border-slate-200 px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-50">Cancel</button><button type="button" onClick={() => void deleteSelectedKnowledgeBase()} disabled={knowledgeDeleting || deleteKnowledgeBaseConfirmation.trim() !== selectedKnowledgeBase.name} className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-xs font-bold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50">{knowledgeDeleting ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}{knowledgeDeleting ? 'Starting safe deletion...' : 'Delete permanently'}</button></div>
               </div>
             </div>}
+
           </div>
         )}
 
@@ -2589,5 +2606,27 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         )}
       </div>
     </form>
+    {isKnowledgeUploading && activeKnowledgeUploadCategory && createPortal(
+      <div role="status" aria-live="assertive" aria-label="Uploading knowledge document" className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/35 p-4 backdrop-blur-md">
+        <div className="w-full max-w-md overflow-hidden rounded-2xl border border-white/70 bg-white/95 shadow-2xl shadow-slate-950/25">
+          <div className="relative px-6 pb-5 pt-7 text-center">
+            <div className="absolute inset-x-0 top-0 h-1 bg-slate-100"><div className="h-full bg-gradient-to-r from-violet-600 via-fuchsia-500 to-pink-500 transition-[width] duration-300 ease-out" style={{ width: `${activeKnowledgeUploadProgress}%` }} /></div>
+            <div className="relative mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-violet-100 text-violet-700">
+              <div className="absolute inset-0 animate-ping rounded-2xl bg-violet-300/35" />
+              <Upload className="relative h-7 w-7" />
+            </div>
+            <h4 className="mt-5 text-base font-extrabold text-slate-900">Uploading knowledge document</h4>
+            <p className="mt-1 text-xs font-semibold text-slate-500">Please keep this page open while the PDF is stored securely.</p>
+            <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4 text-left">
+              <div className="flex items-center gap-3"><FileText className="h-5 w-5 shrink-0 text-violet-600" /><div className="min-w-0"><span className="block truncate text-xs font-bold text-slate-800" title={activeKnowledgeUploadFile?.name}>{activeKnowledgeUploadFile?.name ?? 'PDF document'}</span><span className="mt-0.5 block text-[10px] font-semibold text-slate-400">{activeKnowledgeUploadCategory.title}{activeKnowledgeUploadFile ? ` · ${formatFileSize(activeKnowledgeUploadFile.size)}` : ''}</span></div></div>
+            </div>
+            <div className="mt-5 flex items-center justify-between text-[11px] font-bold text-violet-700"><span className="inline-flex items-center gap-2"><RefreshCw className="h-3.5 w-3.5 animate-spin" />Uploading to B2</span><span>{activeKnowledgeUploadProgress}%</span></div>
+            <div className="mt-2 h-2 overflow-hidden rounded-full bg-violet-100"><div className="h-full rounded-full bg-gradient-to-r from-violet-600 to-pink-500 transition-[width] duration-300 ease-out" style={{ width: `${activeKnowledgeUploadProgress}%` }} /></div>
+          </div>
+        </div>
+      </div>,
+      document.body,
+    )}
+    </>
   );
 }
