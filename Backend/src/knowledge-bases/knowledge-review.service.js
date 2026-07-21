@@ -406,6 +406,53 @@ export function decideReviewRecord(auth, knowledgeBaseId, documentId, recordId, 
   });
 }
 
+export function approveAllDraftReviewRecords(
+  auth, knowledgeBaseId, documentId, contextRunner = withTenantContext,
+) {
+  return contextRunner(auth, async (client) => {
+    const [document] = await documentReviewRows(client, auth, knowledgeBaseId, documentId, true);
+    if (!['review_required', 'ready'].includes(document.status)) {
+      throw new AppError(409, 'Document is not available for review', 'DOCUMENT_NOT_REVIEWABLE');
+    }
+
+    const tablesByDocumentType = {
+      faq: ['faq_entries'],
+      catalog: ['structured_catalogs', 'structured_items'],
+      workflow_rules: ['workflow_rules'],
+      conversation_script: ['conversation_flows'],
+      general_knowledge: ['knowledge_chunks'],
+    };
+    const tables = tablesByDocumentType[document.document_type];
+    if (!tables) {
+      throw new AppError(400, 'Document type cannot be reviewed', 'DOCUMENT_TYPE_NOT_REVIEWABLE');
+    }
+
+    let approvedCount = 0;
+    try {
+      for (const table of tables) {
+        const result = await client.query(
+          `UPDATE ${table}
+              SET status = 'approved', approved_by = $3, approved_at = now()
+            WHERE tenant_id = $1 AND document_version_id = $2 AND status = 'draft'`,
+          [auth.tenantId, document.version_id, auth.userId],
+        );
+        approvedCount += result.rowCount;
+      }
+    } catch (error) {
+      if (error.code === '23505') {
+        throw new AppError(409, 'Bulk approval conflicts with another approved record', 'REVIEW_APPROVAL_CONFLICT');
+      }
+      throw error;
+    }
+
+    const synced = await syncReviewStatus(client, auth, knowledgeBaseId, documentId);
+    await audit(client, auth, 'KNOWLEDGE_REVIEW_BULK_APPROVED', documentId, {
+      documentId, approvedCount,
+    });
+    return { documentId, approvedCount, documentStatus: synced.status, summary: synced.summary };
+  });
+}
+
 export function getKnowledgeBaseReviewSummary(auth, knowledgeBaseId, contextRunner = withTenantContext) {
   return contextRunner(auth, async (client) => {
     const knowledgeBase = await client.query(

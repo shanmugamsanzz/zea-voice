@@ -2007,8 +2007,7 @@ function PhoneNumbersView() {
     setError('');
     try {
       await apiRequest(`/admin/telephony/accounts/${account.id}`, { method: 'DELETE' });
-      setTelephonyProviders((current) => current.filter((item) => item.id !== account.id));
-      setNumbers((current) => current.filter((number) => number.telephonyAccountId !== account.id));
+      await loadTelephonyData();
     } catch (requestError) { setError(requestError instanceof Error ? requestError.message : 'Provider could not be deleted'); }
   };
 
