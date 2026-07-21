@@ -16,7 +16,26 @@ const REQUEST_TIMEOUT_MS = 45_000;
 
 type ApiRequestInit = RequestInit & { zeaCache?: 'default' | 'reload' | 'bypass' };
 
-type ApiEnvelope<T> = { success: boolean; data: T; error?: { message?: string } };
+type ApiEnvelope<T> = { success: boolean; data: T; error?: { message?: unknown; details?: unknown } };
+
+function apiErrorMessage(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim()) return value;
+  if (Array.isArray(value)) {
+    const messages = value.map(apiErrorMessage).filter((message): message is string => Boolean(message));
+    return messages.length ? messages.join('; ') : null;
+  }
+  if (value && typeof value === 'object') {
+    const messages = Object.entries(value).flatMap(([field, detail]) => {
+      const details = Array.isArray(detail) ? detail : [detail];
+      return details.map((item) => {
+        const message = apiErrorMessage(item);
+        return message ? `${field}: ${message}` : null;
+      }).filter((message): message is string => Boolean(message));
+    });
+    return messages.length ? messages.join('; ') : null;
+  }
+  return value == null ? null : String(value);
+}
 
 export function getAccessToken() {
   return sessionStorage.getItem(TOKEN_KEY);
@@ -30,7 +49,9 @@ export function setAccessToken(token: string | null, resetCache = false) {
 
 async function responseBody<T>(response: Response): Promise<ApiEnvelope<T>> {
   const body = await response.json().catch(() => ({ success: false })) as ApiEnvelope<T>;
-  if (!response.ok) throw new Error(body.error?.message || `Request failed (${response.status})`);
+  if (!response.ok) {
+    throw new Error(apiErrorMessage(body.error?.message) || apiErrorMessage(body.error?.details) || `Request failed (${response.status})`);
+  }
   return body;
 }
 
@@ -128,7 +149,8 @@ export function uploadApiFormData<T>(path: string, body: FormData, onProgress: (
       let envelope: ApiEnvelope<T> | null = null;
       try { envelope = JSON.parse(request.responseText) as ApiEnvelope<T>; } catch { /* handled below */ }
       if (request.status < 200 || request.status >= 300 || !envelope?.success) {
-        reject(new Error(envelope?.error?.message || `Request failed (${request.status})`));
+        reject(new Error(apiErrorMessage(envelope?.error?.message) || apiErrorMessage(envelope?.error?.details)
+          || `Request failed (${request.status})`));
         return;
       }
       onProgress(100);

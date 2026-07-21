@@ -179,6 +179,7 @@ function ReviewRecordCard({ record, readOnly, onChanged }: { record: ReviewRecor
 export function KnowledgeReviewPanel({ knowledgeBaseId, documentId, documentName, readOnly, onClose, onReviewUpdated }: KnowledgeReviewPanelProps) {
   const [review, setReview] = useState<ReviewResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [error, setError] = useState('');
 
   const load = async () => {
@@ -195,8 +196,23 @@ export function KnowledgeReviewPanel({ knowledgeBaseId, documentId, documentName
   const changed = async () => { await load(); onReviewUpdated(); };
   const records = review ? [...(review.catalogs ?? []), ...review.records] : [];
 
+  const approveAllDrafts = async () => {
+    const pending = review?.document.draftCount ?? 0;
+    if (!pending || bulkBusy || readOnly) return;
+    if (!window.confirm(`Approve all ${pending} pending records in "${documentName}"? Rejected records will not be changed.`)) return;
+    setBulkBusy(true); setError('');
+    try {
+      await apiRequest(`/knowledge-bases/${knowledgeBaseId}/documents/${documentId}/review/approve-all`, {
+        method: 'POST', body: '{}',
+      });
+      await changed();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Pending records could not be approved');
+    } finally { setBulkBusy(false); }
+  };
+
   return <section className="rounded-2xl border border-violet-200 bg-violet-50/30 p-4 sm:p-5">
-    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><span className="text-[10px] font-black uppercase tracking-wider text-violet-600">Developer Review</span><h4 className="mt-1 text-base font-bold text-slate-800">{documentName}</h4><p className="mt-1 text-[11px] font-medium text-slate-500">Correct extracted records, then approve or reject every draft record.</p></div><div className="flex gap-2"><button type="button" onClick={() => void load()} disabled={loading} className="rounded-lg border border-slate-200 bg-white p-2 text-slate-500 hover:bg-slate-50 disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /></button><button type="button" onClick={onClose} className="rounded-lg border border-slate-200 bg-white p-2 text-slate-500 hover:bg-slate-50"><X className="h-4 w-4" /></button></div></div>
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><span className="text-[10px] font-black uppercase tracking-wider text-violet-600">Developer Review</span><h4 className="mt-1 text-base font-bold text-slate-800">{documentName}</h4><p className="mt-1 text-[11px] font-medium text-slate-500">Correct extracted records, then approve or reject every draft record.</p></div><div className="flex flex-wrap gap-2">{!readOnly && Boolean(review?.document.draftCount) && <button type="button" onClick={() => void approveAllDrafts()} disabled={bulkBusy || loading} className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-[10px] font-bold text-white hover:bg-emerald-700 disabled:opacity-50">{bulkBusy ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle className="h-3.5 w-3.5" />}{bulkBusy ? 'Approving...' : `Verify All (${review?.document.draftCount ?? 0})`}</button>}<button type="button" onClick={() => void load()} disabled={loading || bulkBusy} className="rounded-lg border border-slate-200 bg-white p-2 text-slate-500 hover:bg-slate-50 disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /></button><button type="button" onClick={onClose} disabled={bulkBusy} className="rounded-lg border border-slate-200 bg-white p-2 text-slate-500 hover:bg-slate-50 disabled:opacity-50"><X className="h-4 w-4" /></button></div></div>
     {review && <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4"><div className="rounded-lg border border-slate-200 bg-white p-3"><span className="text-[9px] font-black uppercase text-slate-400">Total</span><strong className="block text-lg text-slate-800">{review.document.totalCount}</strong></div><div className="rounded-lg border border-amber-200 bg-amber-50 p-3"><span className="text-[9px] font-black uppercase text-amber-600">Pending</span><strong className="block text-lg text-amber-800">{review.document.draftCount}</strong></div><div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3"><span className="text-[9px] font-black uppercase text-emerald-600">Approved</span><strong className="block text-lg text-emerald-800">{review.document.approvedCount}</strong></div><div className="rounded-lg border border-red-200 bg-red-50 p-3"><span className="text-[9px] font-black uppercase text-red-600">Rejected</span><strong className="block text-lg text-red-800">{review.document.rejectedCount}</strong></div></div>}
     {loading && !review && <div className="mt-4 space-y-3">{[1, 2].map((item) => <div key={item} className="h-40 animate-pulse rounded-xl bg-white" />)}</div>}
     {error && <div className="mt-4 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-[11px] font-semibold text-red-700"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />{error}</div>}

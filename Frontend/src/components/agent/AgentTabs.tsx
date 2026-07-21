@@ -3,8 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState } from 'react';
-import { createPortal } from 'react-dom';
+import React, { useEffect, useRef, useState } from 'react';
 import { useAppState } from '../../store/AppState';
 import { VoiceAgent } from '../../types';
 import { apiRequest, uploadApiFormData } from '../../lib/api';
@@ -71,6 +70,7 @@ interface AgentPhoneOption { id: string; number: string; status: string }
 
 type KnowledgeBaseStatus = 'draft' | 'processing' | 'ready' | 'partially_failed' | 'published' | 'deleting' | 'deleted';
 type KnowledgeDocumentType = 'faq' | 'catalog' | 'workflow_rules' | 'conversation_script' | 'general_knowledge';
+type SelectedKnowledgeFile = { name: string; size: number; type: string };
 
 const KNOWLEDGE_PDF_MAX_BYTES = 25 * 1024 * 1024;
 const knowledgeDocumentCategories: Array<{
@@ -86,7 +86,11 @@ const knowledgeDocumentCategories: Array<{
   { type: 'general_knowledge', title: 'General Knowledge', description: 'Long-form information used for semantic retrieval.', examples: 'Explanations, policies and detailed reference material' },
 ];
 
-function emptyKnowledgeFiles(): Record<KnowledgeDocumentType, File | null> {
+function emptyKnowledgeFiles(): Record<KnowledgeDocumentType, SelectedKnowledgeFile | null> {
+  return { faq: null, catalog: null, workflow_rules: null, conversation_script: null, general_knowledge: null };
+}
+
+function emptyKnowledgeFileObjects(): Record<KnowledgeDocumentType, File | null> {
   return { faq: null, catalog: null, workflow_rules: null, conversation_script: null, general_knowledge: null };
 }
 
@@ -383,7 +387,8 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const [deleteKnowledgeBaseConfirmation, setDeleteKnowledgeBaseConfirmation] = useState('');
   const [showKnowledgeBaseDeleteDialog, setShowKnowledgeBaseDeleteDialog] = useState(false);
   const [knowledgeDeletionJobs, setKnowledgeDeletionJobs] = useState<Record<string, KnowledgeDeletionJob>>({});
-  const [knowledgeFiles, setKnowledgeFiles] = useState<Record<KnowledgeDocumentType, File | null>>(() => emptyKnowledgeFiles());
+  const knowledgeFileObjects = useRef<Record<KnowledgeDocumentType, File | null>>(emptyKnowledgeFileObjects());
+  const [knowledgeFiles, setKnowledgeFiles] = useState<Record<KnowledgeDocumentType, SelectedKnowledgeFile | null>>(() => emptyKnowledgeFiles());
   const [knowledgeFileErrors, setKnowledgeFileErrors] = useState<Partial<Record<KnowledgeDocumentType, string>>>({});
   const [draggedKnowledgeCategory, setDraggedKnowledgeCategory] = useState<KnowledgeDocumentType | null>(null);
   const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeDocumentApiData[]>([]);
@@ -396,13 +401,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const [versionDocumentId, setVersionDocumentId] = useState<string | null>(null);
 
   const isKnowledgeUploading = Object.values(uploadingKnowledgeCategories).some(Boolean);
-
-  useEffect(() => {
-    if (!isKnowledgeUploading) return undefined;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = previousOverflow; };
-  }, [isKnowledgeUploading]);
   const [newToolName, setNewToolName] = useState('');
   const [newToolType, setNewToolType] = useState('Webhook API');
 
@@ -452,6 +450,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   }, [agentId, knowledgeRefreshKey]);
 
   useEffect(() => {
+    knowledgeFileObjects.current = emptyKnowledgeFileObjects();
     setKnowledgeFiles(emptyKnowledgeFiles());
     setKnowledgeFileErrors({});
     setDraggedKnowledgeCategory(null);
@@ -732,21 +731,30 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     else if (file.size > KNOWLEDGE_PDF_MAX_BYTES) validationError = `PDF must not exceed ${formatFileSize(KNOWLEDGE_PDF_MAX_BYTES)}.`;
 
     if (validationError) {
+      knowledgeFileObjects.current[documentType] = null;
+      setKnowledgeFiles((current) => ({ ...current, [documentType]: null }));
       setKnowledgeFileErrors((current) => ({ ...current, [documentType]: validationError }));
       return;
     }
-    setKnowledgeFiles((current) => ({ ...current, [documentType]: file }));
+    knowledgeFileObjects.current[documentType] = file;
+    setKnowledgeFiles((current) => ({
+      ...current,
+      [documentType]: { name: file.name, size: file.size, type: file.type },
+    }));
     setKnowledgeFileErrors((current) => ({ ...current, [documentType]: undefined }));
+    window.setTimeout(() => { void uploadKnowledgePdf(documentType); }, 0);
   };
 
   const removeKnowledgePdf = (documentType: KnowledgeDocumentType) => {
+    knowledgeFileObjects.current[documentType] = null;
     setKnowledgeFiles((current) => ({ ...current, [documentType]: null }));
     setKnowledgeFileErrors((current) => ({ ...current, [documentType]: undefined }));
   };
 
   const uploadKnowledgePdf = async (documentType: KnowledgeDocumentType) => {
-    const file = knowledgeFiles[documentType];
+    const file = knowledgeFileObjects.current[documentType];
     if (!selectedKnowledgeBase || !file || isReadOnly || uploadingKnowledgeCategories[documentType]) return;
+    const overlayStartedAt = performance.now();
     const category = knowledgeDocumentCategories.find((item) => item.type === documentType);
     const form = new FormData();
     form.append('file', file, file.name);
@@ -761,17 +769,23 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     setKnowledgeUploadProgress((current) => ({ ...current, [documentType]: 5 }));
     setKnowledgeFileErrors((current) => ({ ...current, [documentType]: undefined }));
     try {
-      const uploaded = await uploadApiFormData<KnowledgeDocumentApiData>(
+      // Let React commit the portal before XMLHttpRequest starts. This keeps the
+      // loading screen visible even when the request succeeds or fails quickly.
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+      await uploadApiFormData<KnowledgeDocumentApiData>(
         `/knowledge-bases/${selectedKnowledgeBase.id}/documents`,
         form,
         (percent) => setKnowledgeUploadProgress((current) => ({ ...current, [documentType]: percent })),
       );
-      setKnowledgeDocuments((current) => [uploaded, ...current.filter((document) => document.id !== uploaded.id)]);
       setKnowledgeUploadProgress((current) => ({ ...current, [documentType]: 100 }));
+      knowledgeFileObjects.current[documentType] = null;
       setKnowledgeFiles((current) => ({ ...current, [documentType]: null }));
       setKnowledgeBases((current) => current.map((knowledgeBase) => knowledgeBase.id === selectedKnowledgeBase.id
         ? { ...knowledgeBase, status: 'processing', documentCount: knowledgeBase.documentCount + 1, processingDocumentCount: knowledgeBase.processingDocumentCount + 1 }
         : knowledgeBase));
+      // Reload the canonical document shape instead of rendering the partial
+      // upload response. The upload endpoint can return before processing and
+      // version fields are populated.
       setKnowledgeDocumentPollTick((value) => value + 1);
       showKnowledgeSuccess(`${category?.title ?? 'Knowledge'} PDF uploaded and queued for processing.`);
     } catch (requestError) {
@@ -780,6 +794,10 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         [documentType]: requestError instanceof Error ? requestError.message : 'PDF could not be uploaded',
       }));
     } finally {
+      const remainingOverlayMs = Math.max(0, 700 - (performance.now() - overlayStartedAt));
+      if (remainingOverlayMs > 0) {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, remainingOverlayMs));
+      }
       setUploadingKnowledgeCategories((current) => ({ ...current, [documentType]: false }));
       window.setTimeout(() => setKnowledgeUploadProgress((current) => ({ ...current, [documentType]: undefined })), 600);
     }
@@ -2606,26 +2624,34 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         )}
       </div>
     </form>
-    {isKnowledgeUploading && activeKnowledgeUploadCategory && createPortal(
-      <div role="status" aria-live="assertive" aria-label="Uploading knowledge document" className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/35 p-4 backdrop-blur-md">
-        <div className="w-full max-w-md overflow-hidden rounded-2xl border border-white/70 bg-white/95 shadow-2xl shadow-slate-950/25">
-          <div className="relative px-6 pb-5 pt-7 text-center">
-            <div className="absolute inset-x-0 top-0 h-1 bg-slate-100"><div className="h-full bg-gradient-to-r from-violet-600 via-fuchsia-500 to-pink-500 transition-[width] duration-300 ease-out" style={{ width: `${activeKnowledgeUploadProgress}%` }} /></div>
-            <div className="relative mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-violet-100 text-violet-700">
-              <div className="absolute inset-0 animate-ping rounded-2xl bg-violet-300/35" />
-              <Upload className="relative h-7 w-7" />
+    {isKnowledgeUploading && activeKnowledgeUploadCategory && (
+      <div
+        role="status"
+        aria-live="assertive"
+        aria-label="Uploading knowledge document"
+        data-knowledge-upload-overlay="true"
+        style={{
+          position: 'fixed', inset: 0, zIndex: 2147483647, display: 'flex', alignItems: 'center',
+          justifyContent: 'center', padding: 16, backgroundColor: 'rgba(15, 23, 42, 0.48)',
+          backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
+        }}
+      >
+        <div style={{ width: '100%', maxWidth: 440, overflow: 'hidden', borderRadius: 20, border: '1px solid rgba(255,255,255,.8)', backgroundColor: '#ffffff', boxShadow: '0 24px 70px rgba(15,23,42,.35)' }}>
+          <div style={{ position: 'relative', padding: '30px 24px 24px', textAlign: 'center', color: '#0f172a' }}>
+            <div style={{ position: 'absolute', inset: '0 0 auto', height: 5, backgroundColor: '#ede9fe' }}><div style={{ width: `${activeKnowledgeUploadProgress}%`, height: '100%', background: 'linear-gradient(90deg,#7c3aed,#d946ef,#ec4899)', transition: 'width 300ms ease-out' }} /></div>
+            <div style={{ width: 64, height: 64, margin: '0 auto', borderRadius: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6d28d9', backgroundColor: '#ede9fe' }}>
+              <Upload className="h-7 w-7 animate-bounce" />
             </div>
-            <h4 className="mt-5 text-base font-extrabold text-slate-900">Uploading knowledge document</h4>
-            <p className="mt-1 text-xs font-semibold text-slate-500">Please keep this page open while the PDF is stored securely.</p>
-            <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4 text-left">
-              <div className="flex items-center gap-3"><FileText className="h-5 w-5 shrink-0 text-violet-600" /><div className="min-w-0"><span className="block truncate text-xs font-bold text-slate-800" title={activeKnowledgeUploadFile?.name}>{activeKnowledgeUploadFile?.name ?? 'PDF document'}</span><span className="mt-0.5 block text-[10px] font-semibold text-slate-400">{activeKnowledgeUploadCategory.title}{activeKnowledgeUploadFile ? ` · ${formatFileSize(activeKnowledgeUploadFile.size)}` : ''}</span></div></div>
+            <h4 style={{ margin: '20px 0 0', fontSize: 18, lineHeight: 1.4, fontWeight: 800, color: '#0f172a' }}>PDF uploading</h4>
+            <p style={{ margin: '6px 0 0', fontSize: 12, lineHeight: 1.6, fontWeight: 600, color: '#64748b' }}>Please wait while your knowledge document is uploaded securely.</p>
+            <div style={{ marginTop: 20, padding: 14, borderRadius: 12, border: '1px solid #e2e8f0', backgroundColor: '#f8fafc', textAlign: 'left' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}><FileText className="h-5 w-5 shrink-0 text-violet-600" /><div style={{ minWidth: 0 }}><span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12, fontWeight: 800, color: '#1e293b' }} title={activeKnowledgeUploadFile?.name}>{activeKnowledgeUploadFile?.name ?? 'PDF document'}</span><span style={{ display: 'block', marginTop: 3, fontSize: 10, fontWeight: 600, color: '#94a3b8' }}>{activeKnowledgeUploadCategory.title}{activeKnowledgeUploadFile ? ` · ${formatFileSize(activeKnowledgeUploadFile.size)}` : ''}</span></div></div>
             </div>
-            <div className="mt-5 flex items-center justify-between text-[11px] font-bold text-violet-700"><span className="inline-flex items-center gap-2"><RefreshCw className="h-3.5 w-3.5 animate-spin" />Uploading to B2</span><span>{activeKnowledgeUploadProgress}%</span></div>
-            <div className="mt-2 h-2 overflow-hidden rounded-full bg-violet-100"><div className="h-full rounded-full bg-gradient-to-r from-violet-600 to-pink-500 transition-[width] duration-300 ease-out" style={{ width: `${activeKnowledgeUploadProgress}%` }} /></div>
+            <div style={{ marginTop: 20, display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 12, fontWeight: 800, color: '#6d28d9' }}><span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><RefreshCw className="h-4 w-4 animate-spin" />Uploading PDF...</span><span>{activeKnowledgeUploadProgress}%</span></div>
+            <div style={{ height: 9, marginTop: 9, overflow: 'hidden', borderRadius: 999, backgroundColor: '#ede9fe' }}><div style={{ width: `${activeKnowledgeUploadProgress}%`, height: '100%', borderRadius: 999, background: 'linear-gradient(90deg,#7c3aed,#ec4899)', transition: 'width 300ms ease-out' }} /></div>
           </div>
         </div>
-      </div>,
-      document.body,
+      </div>
     )}
     </>
   );
