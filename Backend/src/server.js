@@ -27,6 +27,10 @@ async function bootstrap() {
   const server = createServer(createApp());
   server.listen(env.PORT, env.HOST, () => {
     logger.info({ host: env.HOST, port: env.PORT }, 'Zea Voice API is running');
+    logger.warn({
+      icon: '⚠️', stage: 'voice.media_runtime', status: 'not_implemented',
+      mediaPath: '/webhooks/plivo/media',
+    }, '⚠️ Voice calls can be answered, but Plivo audio streaming, STT, LLM and TTS execution are not implemented');
   });
 
   let shuttingDown = false;

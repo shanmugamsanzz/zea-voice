@@ -29,6 +29,25 @@ import { plivoWebhookRouter } from './telephony/plivo-webhook.routes.js';
 import { performanceMiddleware } from './middleware/performance.js';
 import { voiceRouter } from './voice/voice.routes.js';
 
+function redactRequestUrl(value) {
+  if (typeof value !== 'string' || !value.includes('token=')) return value;
+  try {
+    const parsed = new URL(value, 'http://zea-voice.local');
+    if (parsed.searchParams.has('token')) parsed.searchParams.set('token', '[REDACTED]');
+    return `${parsed.pathname}${parsed.search}`;
+  } catch {
+    return value.replace(/([?&]token=)[^&]*/i, '$1[REDACTED]');
+  }
+}
+
+function sanitizeLoggedRequest(request) {
+  const query = request.query && typeof request.query === 'object'
+    ? { ...request.query }
+    : request.query;
+  if (query && 'token' in query) query.token = '[REDACTED]';
+  return { ...request, url: redactRequestUrl(request.url), query };
+}
+
 export function createApp() {
   const app = express();
 
@@ -47,6 +66,7 @@ export function createApp() {
   app.use(cookieParser());
   app.use(pinoHttp({
     logger,
+    serializers: { req: sanitizeLoggedRequest },
     genReqId: (request, response) => {
       const requestId = request.headers['x-request-id']?.toString() ?? crypto.randomUUID();
       response.setHeader('x-request-id', requestId);
