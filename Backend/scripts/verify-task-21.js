@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 process.env.PUBLIC_BASE_URL = 'https://voice.example.test';
-process.env.PLIVO_ANSWER_URL = 'https://agent.example.test/answer';
 process.env.CREDENTIAL_ENCRYPTION_KEY ||= Buffer.alloc(32, 16).toString('base64');
 const { createFixture } = await import('./task-16-17-fixture.js');
 const { executeCampaignTask } = await import('../src/campaigns/campaign-execution.service.js');

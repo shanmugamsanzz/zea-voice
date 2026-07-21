@@ -265,7 +265,6 @@ voice-runtime URLs are configured:
 
 ```env
 PUBLIC_BASE_URL=https://api.example.com
-PLIVO_ANSWER_URL=https://voice-runtime.example.com/plivo/answer
 CAMPAIGN_WORKERS_ENABLED=true
 CAMPAIGN_WORKER_CONCURRENCY=20
 ```

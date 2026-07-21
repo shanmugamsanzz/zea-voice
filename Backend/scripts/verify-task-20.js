@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 process.env.PUBLIC_BASE_URL = 'https://voice.example.test';
-process.env.PLIVO_ANSWER_URL = 'https://agent.example.test/answer';
 process.env.CREDENTIAL_ENCRYPTION_KEY ||= Buffer.alloc(32, 16).toString('base64');
 const { createFixture } = await import('./task-16-17-fixture.js');
 const { executeCampaignTask } = await import('../src/campaigns/campaign-execution.service.js');
@@ -27,6 +26,8 @@ try {
   const providerCallId = crypto.randomUUID();
   const result = await executeCampaignTask(task.id, { makeCall: async (_authId, token, input) => {
     assert.equal(token, 'test-auth-token'); assert.equal(input.to, '+919999999999');
+    assert.match(input.answerUrl, /^https:\/\/agent\.example\.test\/webhooks\/plivo\/answer\?attempt_id=/);
+    assert.match(input.hangupUrl, /^https:\/\/agent\.example\.test\/webhooks\/plivo\/hangup\?attempt_id=/);
     assert.match(input.ringUrl, /webhooks\/plivo/); return { requestUuid: providerCallId };
   } });
   assert.equal(result.action, 'started');

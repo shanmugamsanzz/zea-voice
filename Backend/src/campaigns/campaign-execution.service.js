@@ -10,6 +10,12 @@ function callbackUrl(attemptId, type) {
   return `${env.PUBLIC_BASE_URL}/webhooks/plivo/calls/${attemptId}/${type}`;
 }
 
+function accountCallbackUrl(baseUrl, attemptId) {
+  const url = new URL(baseUrl);
+  url.searchParams.set('attempt_id', attemptId);
+  return url.toString();
+}
+
 async function deferTask(task, delay = env.CONCURRENCY_RETRY_DELAY_MS) {
   const queue = getQueue(task.source === 'realtime' ? 'realtime-calls' : 'batch-calls');
   await queue.add('campaign-task', {
@@ -24,7 +30,8 @@ async function claimTask(taskId) {
         c.concurrency_limit, c.retry_intervals_ms, c.retry_outcomes,
         c.calling_start_time, c.calling_end_time, c.timezone, c.start_after, c.end_after,
         a.name AS agent_name, n.e164 AS from_number, n.telephony_account_id,
-        p.auth_id, p.auth_token_encrypted, p.base_url, l.max_total_concurrency,
+        p.auth_id, p.auth_token_encrypted, p.base_url, p.answer_url, p.hangup_url,
+        p.recording_callback_url, l.max_total_concurrency,
         w.balance - w.reserved_balance AS available_credits
       FROM campaign_tasks t
       JOIN campaigns c ON c.id = t.campaign_id AND c.tenant_id = t.tenant_id
@@ -95,8 +102,10 @@ export async function executeCampaignTask(taskId, dependencies = {}) {
   const claimed = await claimTask(taskId);
   if (claimed.action === 'deferred' && claimed.enqueue) await deferTask(claimed.task);
   if (claimed.action !== 'call') return claimed;
-  if (!env.PUBLIC_BASE_URL || !env.PLIVO_ANSWER_URL) {
-    await finishAttempt(claimed.attempt.id, 'failed', { error: 'PUBLIC_BASE_URL and PLIVO_ANSWER_URL are required' });
+  if (!env.PUBLIC_BASE_URL || !claimed.task.answer_url || !claimed.task.hangup_url) {
+    await finishAttempt(claimed.attempt.id, 'failed', {
+      error: 'PUBLIC_BASE_URL and telephony account Answer/Hangup URLs are required',
+    });
     return { action: 'failed', reason: 'configuration' };
   }
   const makeCall = dependencies.makeCall ?? makePlivoCall;
@@ -105,9 +114,9 @@ export async function executeCampaignTask(taskId, dependencies = {}) {
       decryptCredential(claimed.task.auth_token_encrypted), {
         from: claimed.task.from_number,
         to: claimed.task.lead_phone,
-        answerUrl: `${env.PLIVO_ANSWER_URL}${env.PLIVO_ANSWER_URL.includes('?') ? '&' : '?'}attempt_id=${claimed.attempt.id}`,
+        answerUrl: accountCallbackUrl(claimed.task.answer_url, claimed.attempt.id),
         ringUrl: callbackUrl(claimed.attempt.id, 'ring'),
-        hangupUrl: callbackUrl(claimed.attempt.id, 'hangup'),
+        hangupUrl: accountCallbackUrl(claimed.task.hangup_url, claimed.attempt.id),
       }, fetch, claimed.task.base_url);
     await withPlatformAdminContext(null, async (client) => {
       await client.query("UPDATE campaign_task_attempts SET status='ringing',provider_metadata=$2::jsonb WHERE id=$1",

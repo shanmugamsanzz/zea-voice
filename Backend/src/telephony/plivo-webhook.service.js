@@ -24,7 +24,7 @@ export function validatePlivoSignature(url, nonce, signatureHeader, authToken, p
 
 async function attemptAccount(attemptId) {
   return withPlatformAdminContext(null, async (client) => {
-    const result = await client.query(`SELECT p.auth_token_encrypted FROM campaign_task_attempts a
+    const result = await client.query(`SELECT p.auth_token_encrypted, p.hangup_url FROM campaign_task_attempts a
       JOIN campaign_tasks t ON t.id=a.task_id JOIN phone_numbers n ON n.id=t.phone_number_id
       JOIN telephony_accounts p ON p.id=n.telephony_account_id WHERE a.id=$1`, [attemptId]);
     if (!result.rowCount) throw new AppError(404, 'Call attempt was not found', 'CALL_ATTEMPT_NOT_FOUND');
@@ -55,9 +55,19 @@ async function recordOnce(attemptId, eventType, providerCallId, payload) {
 }
 
 export async function processPlivoCallback(input) {
-  if (!env.PUBLIC_BASE_URL) throw new AppError(503, 'PUBLIC_BASE_URL is not configured', 'PUBLIC_URL_NOT_CONFIGURED');
+  if (!input.useStoredUrl && !env.PUBLIC_BASE_URL) {
+    throw new AppError(503, 'PUBLIC_BASE_URL is not configured', 'PUBLIC_URL_NOT_CONFIGURED');
+  }
   const account = await attemptAccount(input.attemptId);
-  const url = `${env.PUBLIC_BASE_URL}/webhooks/plivo/calls/${input.attemptId}/${input.eventType}`;
+  let url = `${env.PUBLIC_BASE_URL}/webhooks/plivo/calls/${input.attemptId}/${input.eventType}`;
+  if (input.useStoredUrl) {
+    if (!account.hangup_url) {
+      throw new AppError(503, 'Telephony account Hangup URL is not configured', 'PLIVO_HANGUP_URL_NOT_CONFIGURED');
+    }
+    const storedUrl = new URL(account.hangup_url);
+    storedUrl.searchParams.set('attempt_id', input.attemptId);
+    url = storedUrl.toString();
+  }
   if (!validatePlivoSignature(url, input.nonce, input.signature,
     decryptCredential(account.auth_token_encrypted), input.payload)) {
     throw new AppError(401, 'Invalid Plivo webhook signature', 'PLIVO_SIGNATURE_INVALID');
@@ -85,4 +95,35 @@ export async function processPlivoCallback(input) {
     ));
     throw error;
   }
+}
+
+export async function processInboundPlivoHangup(input) {
+  const providerCallId = String(input.payload?.CallUUID ?? input.payload?.RequestUUID ?? '').trim();
+  if (!providerCallId) throw new AppError(400, 'Plivo callback has no call identifier', 'PLIVO_CALL_ID_MISSING');
+
+  return withPlatformAdminContext(null, async (client) => {
+    const selected = await client.query(`SELECT c.id, c.ended_at, p.auth_token_encrypted, p.hangup_url
+      FROM call_sessions c JOIN telephony_accounts p ON p.id=c.telephony_account_id
+      WHERE c.provider_call_id=$1 ORDER BY c.started_at DESC LIMIT 1 FOR UPDATE OF c`, [providerCallId]);
+    if (!selected.rowCount) throw new AppError(404, 'Call session was not found', 'CALL_SESSION_NOT_FOUND');
+    const call = selected.rows[0];
+    if (!call.hangup_url) {
+      throw new AppError(503, 'Telephony account Hangup URL is not configured', 'PLIVO_HANGUP_URL_NOT_CONFIGURED');
+    }
+    if (!validatePlivoSignature(call.hangup_url, input.nonce, input.signature,
+      decryptCredential(call.auth_token_encrypted), input.payload)) {
+      throw new AppError(401, 'Invalid Plivo webhook signature', 'PLIVO_SIGNATURE_INVALID');
+    }
+    if (call.ended_at) return { duplicate: true, callId: call.id };
+
+    const finalOutcome = outcome(input.payload);
+    const status = ['completed', 'failed', 'busy', 'no_answer', 'canceled'].includes(finalOutcome)
+      ? finalOutcome : 'failed';
+    const duration = Math.max(0, Number(input.payload.BillDuration ?? input.payload.Duration ?? 0));
+    await client.query(`UPDATE call_sessions SET status=$2::call_status, ended_at=now(), duration_seconds=$3,
+      provider_metadata=provider_metadata||$4::jsonb WHERE id=$1`, [
+      call.id, status, duration, JSON.stringify({ plivoHangup: input.payload }),
+    ]);
+    return { duplicate: false, callId: call.id, status };
+  });
 }

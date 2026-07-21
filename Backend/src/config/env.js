@@ -54,7 +54,6 @@ const envSchema = z.object({
   PROVIDER_BALANCE_CACHE_TTL_SECONDS: z.coerce.number().int().min(10).max(600).default(60),
   PROVIDER_BALANCE_CACHE_TIMEOUT_MS: z.coerce.number().int().min(100).max(5000).default(500),
   PUBLIC_BASE_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
-  PLIVO_ANSWER_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
   VOICE_MEDIA_SIGNING_SECRET: z.preprocess(emptyToUndefined, z.string().min(32).optional()),
   VOICE_MEDIA_TOKEN_TTL_SECONDS: z.coerce.number().int().min(30).max(600).default(120),
   VOICE_CALL_SESSION_TTL_SECONDS: z.coerce.number().int().min(60).max(86400).default(3600),
