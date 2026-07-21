@@ -13,6 +13,7 @@ plivoWebhookRouter.post('/hangup', async (req, res) => {
     const data = await processInboundPlivoHangup({
       payload: req.body ?? {},
       signature: req.get('x-plivo-signature-v3'),
+      mainSignature: req.get('x-plivo-signature-ma-v3'),
       nonce: req.get('x-plivo-signature-v3-nonce'),
     });
     res.json({ success: true, data });
@@ -23,6 +24,7 @@ plivoWebhookRouter.post('/hangup', async (req, res) => {
     eventType: 'hangup',
     payload: req.body ?? {},
     signature: req.get('x-plivo-signature-v3'),
+    mainSignature: req.get('x-plivo-signature-ma-v3'),
     nonce: req.get('x-plivo-signature-v3-nonce'),
     useStoredUrl: true,
   });
@@ -36,6 +38,7 @@ plivoWebhookRouter.post('/calls/:attemptId/:eventType', async (req, res) => {
     ...parsed.data,
     payload: req.body ?? {},
     signature: req.get('x-plivo-signature-v3'),
+    mainSignature: req.get('x-plivo-signature-ma-v3'),
     nonce: req.get('x-plivo-signature-v3-nonce'),
   });
   res.json({ success: true, data });

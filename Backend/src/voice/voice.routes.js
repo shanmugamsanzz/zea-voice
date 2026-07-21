@@ -17,6 +17,7 @@ voiceRouter.post('/answer', async (request, response) => {
     payload: parsed.data,
     rawPayload: request.body ?? {},
     signature: request.get('x-plivo-signature-v3'),
+    mainSignature: request.get('x-plivo-signature-ma-v3'),
     nonce: request.get('x-plivo-signature-v3-nonce'),
   });
   const runtimeAgent = await resolvePhoneNumberAgent(call);

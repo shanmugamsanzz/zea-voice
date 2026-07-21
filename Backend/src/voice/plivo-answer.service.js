@@ -2,16 +2,18 @@ import { env } from '../config/env.js';
 import { withPlatformAdminContext } from '../infrastructure/database-context.js';
 import { AppError } from '../middleware/errors.js';
 import { decryptCredential } from '../security/credential-crypto.js';
-import { validatePlivoSignature } from '../telephony/plivo-webhook.service.js';
+import { validatePlivoAccountSignatures } from '../telephony/plivo-webhook.service.js';
 import crypto from 'node:crypto';
 
 async function loadCalledNumberAccount(to) {
   return withPlatformAdminContext(null, async (client) => {
     const result = await client.query(
       `SELECT pn.id AS phone_number_id, pn.status AS phone_status, pn.telephony_account_id,
-          ta.auth_token_encrypted, ta.status AS account_status
+          ta.auth_token_encrypted, ta.status AS account_status, ta.answer_url,
+          COALESCE(parent.auth_token_encrypted,ta.auth_token_encrypted) AS main_auth_token_encrypted
          FROM phone_numbers pn
          JOIN telephony_accounts ta ON ta.id=pn.telephony_account_id
+         LEFT JOIN telephony_accounts parent ON parent.id=ta.parent_account_id AND parent.deleted_at IS NULL
         WHERE pn.e164=$1 AND pn.deleted_at IS NULL AND ta.deleted_at IS NULL`,
       [to],
     );
@@ -23,9 +25,6 @@ async function loadCalledNumberAccount(to) {
 }
 
 export async function validateIncomingPlivoCall(input, dependencies = {}) {
-  if (!env.PUBLIC_BASE_URL) {
-    throw new AppError(503, 'PUBLIC_BASE_URL is not configured', 'PUBLIC_URL_NOT_CONFIGURED');
-  }
   const account = await (dependencies.loadCalledNumberAccount ?? loadCalledNumberAccount)(input.payload.To);
   if (account.phone_status !== 'active') {
     throw new AppError(409, 'Called Plivo number is not active', 'PLIVO_CALLED_NUMBER_INACTIVE');
@@ -33,16 +32,25 @@ export async function validateIncomingPlivoCall(input, dependencies = {}) {
   if (account.account_status !== 'connected') {
     throw new AppError(409, 'Plivo account is not connected', 'PLIVO_ACCOUNT_NOT_CONNECTED');
   }
+  const answerUrl = dependencies.answerUrl ?? account.answer_url;
+  if (!answerUrl) {
+    throw new AppError(503, 'Telephony account Answer URL is not configured', 'PLIVO_ANSWER_URL_NOT_CONFIGURED');
+  }
   const authToken = dependencies.authToken
     ?? decryptCredential(account.auth_token_encrypted);
-  const url = `${env.PUBLIC_BASE_URL}/webhooks/plivo/answer`;
-  const signatureValid = (dependencies.validateSignature ?? validatePlivoSignature)(
-    url,
-    input.nonce,
-    input.signature,
+  const mainAuthToken = dependencies.mainAuthToken
+    ?? (account.main_auth_token_encrypted
+      ? decryptCredential(account.main_auth_token_encrypted)
+      : authToken);
+  const signatureValid = (dependencies.validateSignatures ?? validatePlivoAccountSignatures)({
+    url: answerUrl,
+    nonce: input.nonce,
+    signature: input.signature,
+    mainSignature: input.mainSignature,
     authToken,
-    input.rawPayload,
-  );
+    mainAuthToken,
+    params: input.rawPayload,
+  });
   if (!signatureValid) {
     throw new AppError(401, 'Invalid Plivo webhook signature', 'PLIVO_SIGNATURE_INVALID');
   }

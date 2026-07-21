@@ -9,6 +9,7 @@ process.env.CREDENTIAL_ENCRYPTION_KEY ??= '0123456789abcdef0123456789abcdef';
 
 const { validateIncomingPlivoCall } = await import('../src/voice/plivo-answer.service.js');
 const { plivoAnswerPayloadSchema } = await import('../src/voice/voice.schemas.js');
+const { validatePlivoSignature } = await import('../src/telephony/plivo-webhook.service.js');
 
 const payload = {
   CallUUID: 'call-uuid-1',
@@ -31,6 +32,7 @@ const dependencies = {
     account_status: 'connected',
   }),
   authToken: token,
+  answerUrl: url,
 };
 
 const validated = await validateIncomingPlivoCall({ payload, rawPayload: payload, nonce, signature }, dependencies);
@@ -55,6 +57,27 @@ const normalized = await validateIncomingPlivoCall({
 }, dependencies);
 assert.equal(normalized.from, '+919876543210');
 assert.equal(normalized.to, '+918035313119');
+
+const mainToken = 'plivo-main-auth-token';
+const mainSignature = crypto.createHmac('sha256', mainToken).update(`${url}${values}${nonce}`).digest('base64');
+const validatedByMainAccount = await validateIncomingPlivoCall({
+  payload,
+  rawPayload: payload,
+  nonce,
+  signature: 'invalid-associated-signature',
+  mainSignature,
+}, { ...dependencies, mainAuthToken: mainToken });
+assert.equal(validatedByMainAccount.providerCallId, payload.CallUUID);
+
+const mixedCasePayload = { lower: 'one', Upper: 'two' };
+const bytewiseValues = Object.entries(mixedCasePayload).sort(([left], [right]) => {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}).map(([key, value]) => `${key}${value}`).join('');
+const bytewiseSignature = crypto.createHmac('sha256', token)
+  .update(`${url}${bytewiseValues}${nonce}`).digest('base64');
+assert.equal(validatePlivoSignature(url, nonce, bytewiseSignature, token, mixedCasePayload), true);
 
 assert.equal(plivoAnswerPayloadSchema.safeParse({ ...payload, To: 'not-a-number' }).success, false);
 
