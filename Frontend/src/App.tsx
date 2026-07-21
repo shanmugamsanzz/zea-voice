@@ -11,8 +11,11 @@ import { SuperAdminViews } from './components/views/SuperAdminViews';
 import { CompanyViews } from './components/views/CompanyViews';
 import { apiRequest, logout, setAccessToken } from './lib/api';
 import { startTabMeasurement } from './lib/performance';
+import { useResizableTables } from './lib/useResizableTables';
+import zeaVoiceBrand from './zea-voice-brand.png';
 
 function CoreApp() {
+  useResizableTables();
   const { role, setRole, setUserEmail, resetNavigation } = useAppState();
   const [authState, setAuthState] = useState<'checking' | 'authenticated' | 'anonymous'>('checking');
 
@@ -35,7 +38,7 @@ function CoreApp() {
   }, []);
 
   if (authState === 'checking') {
-    return <div className="flex min-h-dvh items-center justify-center bg-slate-50"><div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-4 text-xs font-bold text-slate-600 shadow-sm"><span className="h-4 w-4 animate-spin rounded-full border-2 border-violet-200 border-t-violet-600" />Restoring your Zea Voice session...</div></div>;
+    return <div className="flex min-h-dvh items-center justify-center bg-slate-50"><div className="flex flex-col items-center gap-3 rounded-2xl border border-slate-200 bg-white px-8 py-6 text-xs font-bold text-slate-600 shadow-sm"><img src={zeaVoiceBrand} alt="Zea Voice" className="h-20 w-52 object-contain" /><span className="flex items-center gap-3"><span className="h-4 w-4 animate-spin rounded-full border-2 border-amber-200 border-t-amber-500" />Restoring your session...</span></div></div>;
   }
 
   if (authState === 'anonymous') {

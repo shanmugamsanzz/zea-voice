@@ -5,8 +5,9 @@
 
 import React, { useState } from 'react';
 import { useAppState } from '../store/AppState';
-import { Sparkles, ShieldAlert, Key, Mail, ShieldCheck } from 'lucide-react';
+import { ShieldAlert, Key, Mail, ShieldCheck } from 'lucide-react';
 import { login } from '../lib/api';
+import zeaVoiceBrand from '../zea-voice-brand.png';
 
 export function LoginView({ onLogin }: { onLogin: () => void }) {
   const { setRole, setUserEmail } = useAppState();
@@ -33,15 +34,12 @@ export function LoginView({ onLogin }: { onLogin: () => void }) {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 font-sans text-slate-800">
-      <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full border border-slate-100/50 overflow-hidden">
+    <div className="zea-login min-h-screen flex items-center justify-center p-4 font-sans">
+      <div className="zea-login-card rounded-3xl max-w-md w-full overflow-hidden">
         {/* Banner with gradient background */}
-        <div className="bg-gradient-to-tr from-violet-600 via-purple-700 to-pink-500 p-8 text-white text-center relative">
-          <div className="w-12 h-12 rounded-2xl bg-white/10 backdrop-blur-md border border-white/20 flex items-center justify-center mx-auto shadow-lg mb-3">
-            <Sparkles className="w-6 h-6 text-white" />
-          </div>
-          <h1 className="text-2xl font-black tracking-tight">Zea Voice</h1>
-          <p className="text-xs text-violet-100/80 mt-1 font-semibold uppercase tracking-widest">Autonomous Voice SaaS Platform</p>
+        <div className="zea-login-banner p-8 text-center relative">
+          <img src={zeaVoiceBrand} alt="Zea Voice" className="mx-auto h-28 w-full max-w-[320px] object-contain" />
+          <p className="text-xs text-amber-100/70 mt-1 font-semibold uppercase tracking-widest">Autonomous Voice SaaS Platform</p>
         </div>
 
         {/* Form Container */}
@@ -90,9 +88,9 @@ export function LoginView({ onLogin }: { onLogin: () => void }) {
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-3 bg-gradient-to-r from-violet-600 to-pink-500 hover:from-violet-700 hover:to-pink-600 text-white rounded-xl text-xs font-bold transition shadow-md hover:shadow-lg flex items-center justify-center space-x-1"
+            className="zea-login-submit w-full py-3 rounded-xl text-xs font-bold transition shadow-md hover:shadow-lg flex items-center justify-center space-x-1"
           >
-            <ShieldCheck className="w-4 h-4 text-violet-100" />
+            <ShieldCheck className="w-4 h-4" />
             <span>{loading ? 'Connecting…' : 'Connect to Zea Voice Gateway'}</span>
           </button>
         </form>
