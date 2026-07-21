@@ -7,8 +7,9 @@ const { executeCampaignTask } = await import('../src/campaigns/campaign-executio
 const { processPlivoCallback, validatePlivoSignature } = await import('../src/telephony/plivo-webhook.service.js');
 const { getQueue } = await import('../src/queues/queue.registry.js');
 const fixture = await createFixture(21);
-const sign = (url, nonce, payload) => crypto.createHmac('sha256', 'test-auth-token').update(url
-  + Object.entries(payload).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}${v}`).join('') + nonce).digest('base64');
+const sign = (url, nonce, payload) => crypto.createHmac('sha256', 'test-auth-token').update(`${url}?`
+  + Object.entries(payload).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([k, v]) => `${k}${v}`).join('') + `.${nonce}`).digest('base64');
 let tenantId;
 try {
   const company = await fixture.company('callbacks'); tenantId = company.tenantId;

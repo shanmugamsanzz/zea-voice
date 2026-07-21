@@ -23,7 +23,7 @@ const token = 'plivo-auth-token';
 const url = `${process.env.PUBLIC_BASE_URL}/webhooks/plivo/answer`;
 const values = Object.entries(payload).sort(([left], [right]) => left.localeCompare(right))
   .map(([key, value]) => `${key}${value}`).join('');
-const signature = crypto.createHmac('sha256', token).update(`${url}${values}${nonce}`).digest('base64');
+const signature = crypto.createHmac('sha256', token).update(`${url}?${values}.${nonce}`).digest('base64');
 const dependencies = {
   loadCalledNumberAccount: async () => ({
     phone_number_id: '00000000-0000-4000-8000-000000000001',
@@ -48,7 +48,7 @@ const rawPlivoPayload = {
 const parsedPlivoPayload = plivoAnswerPayloadSchema.parse(rawPlivoPayload);
 const rawValues = Object.entries(rawPlivoPayload).sort(([left], [right]) => left.localeCompare(right))
   .map(([key, value]) => `${key}${value}`).join('');
-const rawSignature = crypto.createHmac('sha256', token).update(`${url}${rawValues}${nonce}`).digest('base64');
+const rawSignature = crypto.createHmac('sha256', token).update(`${url}?${rawValues}.${nonce}`).digest('base64');
 const normalized = await validateIncomingPlivoCall({
   payload: parsedPlivoPayload,
   rawPayload: rawPlivoPayload,
@@ -59,7 +59,7 @@ assert.equal(normalized.from, '+919876543210');
 assert.equal(normalized.to, '+918035313119');
 
 const mainToken = 'plivo-main-auth-token';
-const mainSignature = crypto.createHmac('sha256', mainToken).update(`${url}${values}${nonce}`).digest('base64');
+const mainSignature = crypto.createHmac('sha256', mainToken).update(`${url}?${values}.${nonce}`).digest('base64');
 const validatedByMainAccount = await validateIncomingPlivoCall({
   payload,
   rawPayload: payload,
@@ -76,8 +76,13 @@ const bytewiseValues = Object.entries(mixedCasePayload).sort(([left], [right]) =
   return 0;
 }).map(([key, value]) => `${key}${value}`).join('');
 const bytewiseSignature = crypto.createHmac('sha256', token)
-  .update(`${url}${bytewiseValues}${nonce}`).digest('base64');
+  .update(`${url}?${bytewiseValues}.${nonce}`).digest('base64');
 assert.equal(validatePlivoSignature(url, nonce, bytewiseSignature, token, mixedCasePayload), true);
+
+const callbackUrl = `${url}?attempt_id=00000000-0000-4000-8000-000000000001`;
+const callbackSignature = crypto.createHmac('sha256', token)
+  .update(`${callbackUrl}.${bytewiseValues}.${nonce}`).digest('base64');
+assert.equal(validatePlivoSignature(callbackUrl, nonce, callbackSignature, token, mixedCasePayload), true);
 
 assert.equal(plivoAnswerPayloadSchema.safeParse({ ...payload, To: 'not-a-number' }).success, false);
 

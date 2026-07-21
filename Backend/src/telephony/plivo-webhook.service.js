@@ -5,14 +5,35 @@ import { AppError } from '../middleware/errors.js';
 import { decryptCredential } from '../security/credential-crypto.js';
 import { finishAttempt, markAttemptRinging } from '../campaigns/campaign-execution.service.js';
 
-function signedMessage(url, nonce, params) {
-  const values = Object.entries(params ?? {}).sort(([left], [right]) => {
+function compareValues(left, right) {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
+function sortedPostParams(params) {
+  return Object.entries(params ?? {}).sort(([left], [right]) => {
     if (left < right) return -1;
     if (left > right) return 1;
     return 0;
   })
-    .map(([key, value]) => `${key}${Array.isArray(value) ? value.join('') : value ?? ''}`).join('');
-  return `${url}${values}${nonce}`;
+    .flatMap(([key, value]) => (Array.isArray(value)
+      ? [...value].sort(compareValues).map((item) => `${key}${item ?? ''}`)
+      : [`${key}${value ?? ''}`]))
+    .join('');
+}
+
+function canonicalUrl(url, hasPostParams) {
+  const parsed = new URL(url);
+  const base = `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+  const query = parsed.search.slice(1).split('&').filter(Boolean).sort(compareValues).join('&');
+  if (!query) return hasPostParams ? `${base}?` : base;
+  return hasPostParams ? `${base}?${query}.` : `${base}?${query}`;
+}
+
+function signedMessage(url, nonce, params) {
+  const values = sortedPostParams(params);
+  return `${canonicalUrl(url, values.length > 0)}${values}.${nonce}`;
 }
 
 export function validatePlivoSignature(url, nonce, signatureHeader, authToken, params) {
