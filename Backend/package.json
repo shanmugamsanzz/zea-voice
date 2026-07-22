@@ -34,6 +34,7 @@
     "verify:task20": "node scripts/verify-task-20.js",
     "verify:task21": "node scripts/verify-task-21.js",
     "verify:public-task": "node scripts/verify-public-task.js",
+    "verify:call-recording": "node scripts/verify-call-recording.js",
     "verify:super-admin-dashboard": "node scripts/verify-super-admin-dashboard.js",
     "verify:companies-ui-api": "node scripts/verify-companies-ui-api.js",
     "verify:admin-users-api": "node scripts/verify-admin-users-api.js",

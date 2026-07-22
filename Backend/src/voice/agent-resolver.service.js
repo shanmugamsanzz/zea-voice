@@ -18,10 +18,12 @@ export function resolvePhoneNumberAgent(call, dependencies = {}) {
   return contextRunner(async (client) => {
     const platformNumber = call.direction === 'outbound' ? call.from : call.to;
     const assignment = await client.query(
-      `SELECT pa.tenant_id,COALESCE(tl.max_total_concurrency,20) max_total_concurrency
+      `SELECT pa.tenant_id,COALESCE(tl.max_total_concurrency,20) max_total_concurrency,
+          COALESCE(ts.recording_enabled,true) recording_enabled
          FROM phone_numbers pn
          JOIN phone_number_assignments pa ON pa.phone_number_id=pn.id AND pa.released_at IS NULL
          LEFT JOIN tenant_limits tl ON tl.tenant_id=pa.tenant_id
+         LEFT JOIN tenant_settings ts ON ts.tenant_id=pa.tenant_id
         WHERE pn.id=$1 AND pn.e164=$2 AND pn.status='active' AND pn.deleted_at IS NULL`,
       [call.phoneNumberId, platformNumber],
     );
@@ -78,6 +80,7 @@ export function resolvePhoneNumberAgent(call, dependencies = {}) {
       callDirection: call.direction,
       usageDirection: agent.usage_direction,
       concurrencyLimit: Number(assignment.rows[0].max_total_concurrency),
+      recordingEnabled: Boolean(assignment.rows[0].recording_enabled),
       stt: model(configured, 'stt'),
       llm: model(configured, 'llm'),
       tts: model(configured, 'tts'),

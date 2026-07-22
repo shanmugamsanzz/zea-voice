@@ -5,6 +5,7 @@ import { AppError } from '../middleware/errors.js';
 import { callIdSchema, forceHangupSchema, listCallsSchema, parseCallInput } from './call.schemas.js';
 import { forceHangup, getCall, listCalls } from './call.service.js';
 import { tenantProviderHealth } from '../voice/provider-health.service.js';
+import { loadStoredCallRecording } from '../telephony/plivo-recording.service.js';
 
 function valid(schema, value) {
   const parsed = parseCallInput(schema, value);
@@ -18,6 +19,17 @@ callAdminRouter.get('/', async (req, res) => res.json({ success: true, data: awa
 callAdminRouter.get('/:callId', async (req, res) => {
   const { callId } = valid(callIdSchema, req.params);
   res.json({ success: true, data: await getCall(req.auth, callId) });
+});
+callAdminRouter.get('/:callId/recording', async (req, res) => {
+  const { callId } = valid(callIdSchema, req.params);
+  const recording = await loadStoredCallRecording(req.auth, callId);
+  res.set({
+    'Content-Type': recording.contentType || 'audio/mpeg',
+    'Content-Length': String(recording.body.length),
+    'Cache-Control': 'private, max-age=300',
+    'Content-Disposition': `inline; filename="call-${callId}.mp3"`,
+    'X-Content-Type-Options': 'nosniff',
+  }).send(recording.body);
 });
 callAdminRouter.post('/:callId/hangup', async (req, res) => {
   const { callId } = valid(callIdSchema, req.params);
@@ -35,4 +47,15 @@ tenantCallRouter.get('/', async (req, res) => res.json({ success: true, data: aw
 tenantCallRouter.get('/:callId', async (req, res) => {
   const { callId } = valid(callIdSchema, req.params);
   res.json({ success: true, data: await getCall(req.auth, callId) });
+});
+tenantCallRouter.get('/:callId/recording', async (req, res) => {
+  const { callId } = valid(callIdSchema, req.params);
+  const recording = await loadStoredCallRecording(req.auth, callId);
+  res.set({
+    'Content-Type': recording.contentType || 'audio/mpeg',
+    'Content-Length': String(recording.body.length),
+    'Cache-Control': 'private, max-age=300',
+    'Content-Disposition': `inline; filename="call-${callId}.mp3"`,
+    'X-Content-Type-Options': 'nosniff',
+  }).send(recording.body);
 });

@@ -102,7 +102,10 @@ voiceRouter.post('/answer', async (request, response) => {
     icon: '⚠️', stage: 'media.awaiting_runtime', callId: callSession.id,
     providerCallId: call.providerCallId, mediaPath: '/webhooks/plivo/media',
   }, '⚠️ Waiting for authenticated Plivo media WebSocket');
-  response.type('application/xml').send(buildPlivoStreamXml(callSession));
+  response.type('application/xml').send(buildPlivoStreamXml(callSession, {
+    recordingEnabled: runtimeAgent.recordingEnabled,
+    recordingCallbackUrl: call.recordingCallbackUrl,
+  }));
 });
 
 voiceRouter.get('/media', (request, response) => {

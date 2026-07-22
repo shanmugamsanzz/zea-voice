@@ -4,7 +4,7 @@ import {
   Eye, FileSpreadsheet, Filter, LoaderCircle, Phone, PhoneIncoming, PhoneOutgoing,
   RefreshCw, Search, User, X, XCircle,
 } from 'lucide-react';
-import { apiRequest, isAbortError } from '../../lib/api';
+import { apiBlobRequest, apiRequest, isAbortError } from '../../lib/api';
 
 type CallDirection = 'inbound' | 'outbound';
 type CallStatus = 'queued' | 'ringing' | 'connected' | 'completed' | 'failed' | 'busy' | 'no_answer' | 'canceled';
@@ -130,6 +130,9 @@ export function DeveloperReportsView({
   const [selected, setSelected] = useState<CallRecord | null>(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [detailsError, setDetailsError] = useState('');
+  const [recordingUrl, setRecordingUrl] = useState('');
+  const [recordingLoading, setRecordingLoading] = useState(false);
+  const [recordingError, setRecordingError] = useState('');
   const [exportMessage, setExportMessage] = useState('');
 
   const refresh = useCallback(() => setRefreshToken((value) => value + 1), []);
@@ -198,14 +201,32 @@ export function DeveloperReportsView({
   };
 
   const openDetails = async (call: CallRecord) => {
+    if (recordingUrl) URL.revokeObjectURL(recordingUrl);
+    setRecordingUrl(''); setRecordingError(''); setRecordingLoading(false);
     setSelected(call); setDetailsLoading(true); setDetailsError('');
     try {
       const detail = await apiRequest<CallRecord>(`/calls/${call.id}`, { zeaCache: 'reload' });
       setSelected(detail);
+      if (detail.recordingAvailable) {
+        setRecordingLoading(true);
+        try {
+          const blob = await apiBlobRequest(`/calls/${call.id}/recording`);
+          setRecordingUrl(URL.createObjectURL(blob));
+        } catch (requestError) {
+          setRecordingError(requestError instanceof Error ? requestError.message : 'Recording could not be loaded');
+        } finally { setRecordingLoading(false); }
+      }
     } catch (requestError) {
       setDetailsError(requestError instanceof Error ? requestError.message : 'Call details could not be loaded');
     } finally { setDetailsLoading(false); }
   };
+
+  const closeDetails = () => {
+    if (recordingUrl) URL.revokeObjectURL(recordingUrl);
+    setRecordingUrl(''); setRecordingError(''); setSelected(null);
+  };
+
+  useEffect(() => () => { if (recordingUrl) URL.revokeObjectURL(recordingUrl); }, [recordingUrl]);
 
   const exportCsv = () => {
     const rows = [['Timestamp', 'Direction', 'Status', 'Duration', 'From', 'To', 'Agent', 'Campaign', 'Sentiment', 'Cost', 'Currency'],
@@ -258,12 +279,12 @@ export function DeveloperReportsView({
       <div className="flex items-center justify-between border-t border-slate-200 bg-slate-50 px-5 py-4"><span className="text-xs font-bold text-slate-400">Page {page} of {totalPages}</span><div className="flex gap-2"><button disabled={page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))} className="rounded-lg border border-slate-200 bg-white p-2 disabled:opacity-40"><ChevronLeft className="h-4 w-4" /></button><button disabled={page >= totalPages} onClick={() => setPage((value) => Math.min(totalPages, value + 1))} className="rounded-lg border border-slate-200 bg-white p-2 disabled:opacity-40"><ChevronRight className="h-4 w-4" /></button></div></div>
     </div>
 
-    {selected && <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/45 backdrop-blur-sm"><div className="flex h-full w-full max-w-xl flex-col bg-slate-50 shadow-2xl"><div className="flex items-center justify-between border-b border-slate-200 bg-white p-6"><div><p className="text-[10px] font-black uppercase tracking-wider text-pink-500">Real Call Record</p><h3 className="text-xl font-black text-slate-800">Call Details</h3></div><button onClick={() => setSelected(null)} className="rounded-xl border border-slate-200 p-2 text-slate-500"><X className="h-4 w-4" /></button></div>
+    {selected && <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/45 backdrop-blur-sm"><div className="flex h-full w-full max-w-xl flex-col bg-slate-50 shadow-2xl"><div className="flex items-center justify-between border-b border-slate-200 bg-white p-6"><div><p className="text-[10px] font-black uppercase tracking-wider text-pink-500">Real Call Record</p><h3 className="text-xl font-black text-slate-800">Call Details</h3></div><button onClick={closeDetails} className="rounded-xl border border-slate-200 p-2 text-slate-500"><X className="h-4 w-4" /></button></div>
       <div className="flex-1 space-y-5 overflow-y-auto p-6">{detailsLoading && <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white p-4 text-xs font-bold text-slate-500"><LoaderCircle className="h-4 w-4 animate-spin" />Loading transcript…</div>}{detailsError && <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-xs font-bold text-rose-700">{detailsError}</div>}
         <div className="grid grid-cols-2 gap-3">{[['Agent', selected.agentName || '—'], ['Timestamp', timestamp(selected.startedAt, true)], ['Direction', selected.direction.toUpperCase()], ['Outcome', statusLabel[selected.status]], ['Duration', duration(selected.durationSeconds)], ['Sentiment', selected.sentiment || 'Not analyzed']].map(([label, value]) => <div key={label} className="rounded-2xl border border-slate-200 bg-white p-4"><p className="text-[9px] font-black uppercase tracking-wider text-slate-400">{label}</p><p className="mt-2 break-words text-xs font-black text-slate-800">{value}</p></div>)}</div>
         <div className="divide-y divide-slate-100 rounded-2xl border border-slate-200 bg-white p-5 text-xs">{[['From', selected.fromNumber], ['To', selected.toNumber], ['Agent ID', selected.agentId || '—'], ['Campaign', selected.campaignName || '—'], ['Plivo Call UUID', selected.providerCallId || '—'], ['Internal Call ID', selected.id]].map(([label, value]) => <div key={label} className="flex items-start justify-between gap-5 py-3"><span className="shrink-0 font-black uppercase text-slate-400">{label}</span><span className="break-all text-right font-mono font-bold text-slate-700">{value}</span></div>)}</div>
         <div className="rounded-2xl border border-slate-200 bg-white p-5"><div className="mb-4 flex items-center justify-between"><h4 className="text-sm font-black text-slate-800">Transcript</h4><span className="rounded-full bg-slate-100 px-2 py-1 text-[9px] font-black uppercase text-slate-500">{selected.transcript?.length ?? 0} entries</span></div>{selected.transcript?.length ? <div className="space-y-4">{selected.transcript.map((entry) => <div key={entry.id} className={`flex flex-col ${entry.speaker === 'agent' ? 'items-end' : 'items-start'}`}><span className="mb-1 text-[9px] font-black uppercase tracking-wider text-slate-400">{entry.speaker} · {elapsed(entry.offsetMs)}</span><div className={`max-w-[88%] rounded-2xl px-4 py-3 text-xs font-semibold leading-relaxed ${entry.speaker === 'agent' ? 'rounded-tr-none bg-gradient-to-r from-violet-600 to-pink-500 text-white' : entry.speaker === 'system' ? 'border border-amber-200 bg-amber-50 text-amber-800' : 'rounded-tl-none border border-slate-200 bg-slate-50 text-slate-800'}`}>{entry.text}</div></div>)}</div> : <p className="py-8 text-center text-xs font-semibold text-slate-400">No finalized transcript entries were saved for this call.</p>}</div>
-        <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-xs font-semibold text-slate-500">{selected.recordingAvailable ? <><Download className="h-4 w-4 text-emerald-500" />Recording metadata exists; a playback endpoint is not currently exposed.</> : <><Activity className="h-4 w-4 text-slate-400" />No recording is available for this call.</>}</div>
-      </div><div className="border-t border-slate-200 bg-white p-5 text-right"><button onClick={() => setSelected(null)} className="rounded-xl bg-slate-900 px-5 py-2.5 text-xs font-bold text-white">Close</button></div></div></div>}
+        <div className="rounded-2xl border border-slate-200 bg-white p-5"><div className="mb-3 flex items-center gap-2"><Download className="h-4 w-4 text-emerald-500" /><h4 className="text-sm font-black text-slate-800">Call Recording</h4></div>{recordingLoading ? <div className="flex items-center gap-2 py-3 text-xs font-bold text-slate-500"><LoaderCircle className="h-4 w-4 animate-spin text-emerald-500" />Loading private recording from B2...</div> : recordingUrl ? <><audio controls preload="metadata" src={recordingUrl} className="w-full" /><a href={recordingUrl} download={`call-${selected.id}.mp3`} className="mt-3 inline-flex items-center gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-[10px] font-black text-emerald-700"><Download className="h-3.5 w-3.5" />Download recording</a></> : recordingError ? <p className="text-xs font-bold text-rose-600">{recordingError}</p> : <div className="flex items-center gap-2 text-xs font-semibold text-slate-500"><Activity className="h-4 w-4 text-slate-400" />No recording is available for this call.</div>}</div>
+      </div><div className="border-t border-slate-200 bg-white p-5 text-right"><button onClick={closeDetails} className="rounded-xl bg-slate-900 px-5 py-2.5 text-xs font-bold text-white">Close</button></div></div></div>}
   </div>;
 }

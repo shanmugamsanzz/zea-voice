@@ -132,6 +132,22 @@ export async function apiRequest<T>(path: string, init: ApiRequestInit = {}, ret
   return data;
 }
 
+export async function apiBlobRequest(path: string, retry = true): Promise<Blob> {
+  const token = getAccessToken();
+  const headers = new Headers();
+  if (token) headers.set('authorization', `Bearer ${token}`);
+  const response = await request(`${API_BASE_URL}${path}`, { headers, credentials: 'include' });
+  if (response.status === 401 && retry) {
+    try { await refreshAccessToken(); return apiBlobRequest(path, false); } catch { setAccessToken(null, true); }
+  }
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({ success: false })) as ApiEnvelope<never>;
+    throw new Error(apiErrorMessage(body.error?.message) || apiErrorMessage(body.error?.details)
+      || `Request failed (${response.status})`);
+  }
+  return response.blob();
+}
+
 export function uploadApiFormData<T>(path: string, body: FormData, onProgress: (percent: number) => void) {
   return new Promise<T>((resolve, reject) => {
     const request = new XMLHttpRequest();

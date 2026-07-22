@@ -26,7 +26,7 @@ try {
   const providerCallId = crypto.randomUUID();
   const result = await executeCampaignTask(task.id, { makeCall: async (_authId, token, input) => {
     assert.equal(token, 'test-auth-token'); assert.equal(input.to, '+919999999999');
-    assert.match(input.answerUrl, /^https:\/\/agent\.example\.test\/webhooks\/plivo\/answer\?attempt_id=/);
+    assert.equal(input.answerUrl, 'https://agent.example.test/webhooks/plivo/answer');
     assert.match(input.hangupUrl, /^https:\/\/agent\.example\.test\/webhooks\/plivo\/hangup\?attempt_id=/);
     assert.match(input.ringUrl, /webhooks\/plivo/); return { requestUuid: providerCallId };
   } });

@@ -9,7 +9,7 @@ async function loadCalledNumberAccount(to) {
   return withPlatformAdminContext(null, async (client) => {
     const result = await client.query(
       `SELECT pn.id AS phone_number_id, pn.status AS phone_status, pn.telephony_account_id,
-          ta.auth_token_encrypted, ta.status AS account_status, ta.answer_url,
+          ta.auth_token_encrypted, ta.status AS account_status, ta.answer_url, ta.recording_callback_url,
           COALESCE(parent.auth_token_encrypted,ta.auth_token_encrypted) AS main_auth_token_encrypted
          FROM phone_numbers pn
          JOIN telephony_accounts ta ON ta.id=pn.telephony_account_id
@@ -64,6 +64,7 @@ export async function validateIncomingPlivoCall(input, dependencies = {}) {
     callStatus: input.payload.CallStatus ?? null,
     phoneNumberId: account.phone_number_id,
     telephonyAccountId: account.telephony_account_id,
+    recordingCallbackUrl: account.recording_callback_url || null,
   };
 }
 
@@ -136,5 +137,14 @@ export function buildPlivoStreamXml(callSession, options = {}) {
   base.search = '';
   base.searchParams.set('call_id', callSession.id);
   base.searchParams.set('token', createVoiceMediaToken(callSession, options));
-  return `<?xml version="1.0" encoding="UTF-8"?><Response><Stream bidirectional="true" keepCallAlive="true" contentType="audio/x-mulaw;rate=8000">${xmlEscape(base.toString())}</Stream></Response>`;
+  let recording = '';
+  if (options.recordingEnabled) {
+    if (!options.recordingCallbackUrl) {
+      throw new AppError(503, 'Plivo Recording Callback URL is not configured', 'PLIVO_RECORDING_CALLBACK_NOT_CONFIGURED');
+    }
+    const callback = new URL(options.recordingCallbackUrl);
+    callback.searchParams.set('call_id', callSession.id);
+    recording = `<Record recordSession="true" callbackUrl="${xmlEscape(callback.toString())}" callbackMethod="POST" fileFormat="mp3" recordChannelType="stereo" />`;
+  }
+  return `<?xml version="1.0" encoding="UTF-8"?><Response>${recording}<Stream bidirectional="true" keepCallAlive="true" contentType="audio/x-mulaw;rate=8000">${xmlEscape(base.toString())}</Stream></Response>`;
 }

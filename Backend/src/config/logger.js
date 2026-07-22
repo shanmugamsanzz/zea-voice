@@ -1,5 +1,6 @@
 import pino from 'pino';
 import { env } from './env.js';
+import { createHumanLogStream } from './human-log-stream.js';
 
 export const loggerRedactPaths = [
       'req.headers.authorization',
@@ -23,13 +24,14 @@ export const loggerRedactPaths = [
       '*.auth_token_encrypted',
 ];
 
-export const logger = pino({
+const options = {
   level: env.LOG_LEVEL,
   redact: {
     paths: loggerRedactPaths,
     censor: '[REDACTED]',
   },
-  transport: env.NODE_ENV === 'development'
-    ? { target: 'pino-pretty', options: { colorize: true, translateTime: 'SYS:standard' } }
-    : undefined,
-});
+};
+
+export const logger = env.LOG_FORMAT === 'human'
+  ? pino(options, createHumanLogStream())
+  : pino(options);

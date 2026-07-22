@@ -3,6 +3,7 @@ import { withPlatformAdminContext } from '../infrastructure/database-context.js'
 import { decryptCredential } from '../security/credential-crypto.js';
 import { makePlivoCall } from '../telephony/plivo.client.js';
 import { getQueue } from '../queues/queue.registry.js';
+import { logger } from '../config/logger.js';
 
 const terminalOutcomes = new Set(['completed', 'failed', 'busy', 'no_answer', 'rejected', 'unavailable', 'canceled']);
 
@@ -100,6 +101,10 @@ async function claimTask(taskId) {
 
 export async function executeCampaignTask(taskId, dependencies = {}) {
   const claimed = await claimTask(taskId);
+  logger.info({
+    stage: 'outbound.task_claimed', taskId, action: claimed.action,
+    reason: claimed.reason ?? null, campaignId: claimed.task?.campaign_id ?? null,
+  }, `Outbound task ${claimed.action}`);
   if (claimed.action === 'deferred' && claimed.enqueue) await deferTask(claimed.task);
   if (claimed.action !== 'call') return claimed;
   if (!env.PUBLIC_BASE_URL || !claimed.task.answer_url || !claimed.task.hangup_url) {
@@ -110,13 +115,20 @@ export async function executeCampaignTask(taskId, dependencies = {}) {
   }
   const makeCall = dependencies.makeCall ?? makePlivoCall;
   try {
+    const answerUrl = claimed.task.answer_url;
+    const hangupUrl = accountCallbackUrl(claimed.task.hangup_url, claimed.attempt.id);
+    logger.info({
+      stage: 'outbound.plivo_dispatch', taskId: claimed.task.id,
+      attemptId: claimed.attempt.id, callId: claimed.callId,
+      direction: 'outbound', answerUrl, hangupUrl,
+    }, 'Sending outbound call to Plivo');
     const response = await makeCall(claimed.task.auth_id,
       decryptCredential(claimed.task.auth_token_encrypted), {
         from: claimed.task.from_number,
         to: claimed.task.lead_phone,
-        answerUrl: accountCallbackUrl(claimed.task.answer_url, claimed.attempt.id),
+        answerUrl,
         ringUrl: callbackUrl(claimed.attempt.id, 'ring'),
-        hangupUrl: accountCallbackUrl(claimed.task.hangup_url, claimed.attempt.id),
+        hangupUrl,
       }, fetch, claimed.task.base_url);
     await withPlatformAdminContext(null, async (client) => {
       await client.query("UPDATE campaign_task_attempts SET status='ringing',provider_metadata=$2::jsonb WHERE id=$1",
@@ -124,8 +136,17 @@ export async function executeCampaignTask(taskId, dependencies = {}) {
       await client.query("UPDATE call_sessions SET provider_call_id=$2,status='ringing',ringing_at=now(),provider_metadata=provider_metadata||$3::jsonb WHERE id=$1",
         [claimed.callId, response.requestUuid, JSON.stringify(response)]);
     });
+    logger.info({
+      stage: 'outbound.plivo_accepted', taskId: claimed.task.id,
+      attemptId: claimed.attempt.id, callId: claimed.callId,
+      providerCallId: response.requestUuid,
+    }, 'Plivo accepted outbound call');
     return { action: 'started', attemptId: claimed.attempt.id, callId: claimed.callId, providerCallId: response.requestUuid };
   } catch (error) {
+    logger.error({
+      err: error, stage: 'outbound.plivo_failed', taskId: claimed.task.id,
+      attemptId: claimed.attempt.id, callId: claimed.callId,
+    }, 'Outbound call failed before answer');
     await finishAttempt(claimed.attempt.id, 'failed', { error: error.message });
     return { action: 'failed', reason: 'provider', error: error.message };
   }

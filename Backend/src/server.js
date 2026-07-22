@@ -11,6 +11,7 @@ import { assertRagInfrastructure } from './rag/rag-infrastructure.js';
 import { closeKnowledgeProcessingWorker, startKnowledgeProcessingWorker } from './knowledge-bases/knowledge-processing.worker.js';
 import { attachPlivoMediaWebSocket } from './voice/plivo-media.socket.js';
 import { attachRealtimeConversationOrchestrator } from './voice/realtime-conversation-orchestrator.js';
+import { closeRecordingWorker, startRecordingWorker } from './telephony/recording.worker.js';
 
 async function bootstrap() {
   await runPendingMigrations();
@@ -25,6 +26,7 @@ async function bootstrap() {
   logger.info({ databaseHealth, redisHealth, ragHealth }, 'Infrastructure connections verified');
   startCampaignWorkers();
   await startKnowledgeProcessingWorker();
+  startRecordingWorker();
 
   const server = createServer(createApp());
   const mediaWebSocket = attachPlivoMediaWebSocket(server, {
@@ -50,7 +52,7 @@ async function bootstrap() {
 
     server.close(async (serverError) => {
       const results = await Promise.allSettled([
-        closeCampaignWorkers(), closeKnowledgeProcessingWorker(), closeQueues(), closeRedis(), closeDatabase(),
+        closeCampaignWorkers(), closeKnowledgeProcessingWorker(), closeRecordingWorker(), closeQueues(), closeRedis(), closeDatabase(),
       ]);
       const failed = results.filter((result) => result.status === 'rejected');
 
@@ -75,7 +77,7 @@ async function bootstrap() {
 bootstrap().catch(async (error) => {
   logger.fatal({ err: error }, 'Backend startup failed');
   await Promise.allSettled([
-    closeCampaignWorkers(), closeKnowledgeProcessingWorker(), closeQueues(), closeRedis(), closeDatabase(),
+    closeCampaignWorkers(), closeKnowledgeProcessingWorker(), closeRecordingWorker(), closeQueues(), closeRedis(), closeDatabase(),
   ]);
   process.exit(1);
 });
