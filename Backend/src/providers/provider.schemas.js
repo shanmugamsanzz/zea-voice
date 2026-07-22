@@ -45,6 +45,14 @@ export const createModelSchema = z.object({
   settings: z.record(z.string(), z.unknown()).default({}),
 });
 
+export const updateModelSchema = z.object({
+  modelKey: z.string().trim().min(1).max(240).optional(),
+  displayName: z.string().trim().min(1).max(240).optional(),
+  status: z.enum(['active', 'inactive']).optional(),
+  capabilities: z.record(z.string(), z.unknown()).optional(),
+  settings: z.record(z.string(), z.unknown()).optional(),
+}).refine((value) => Object.keys(value).length > 0, { message: 'At least one field is required' });
+
 export const modelIdSchema = z.object({ modelId: z.string().uuid() });
 export const modelStatusSchema = z.object({ status: z.enum(['active', 'inactive']) });
 

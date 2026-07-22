@@ -303,6 +303,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [models, setModels] = useState<ProviderModelOption[]>([]);
+  const [modelCatalogRefreshKey, setModelCatalogRefreshKey] = useState(0);
   const [phoneNumbers, setPhoneNumbers] = useState<AgentPhoneOption[]>([]);
   const [phoneNumberId, setPhoneNumberId] = useState('');
   const [sttModelId, setSttModelId] = useState('');
@@ -364,7 +365,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       finally { if (!stopped) setLoading(false); }
     };
     void load(); return () => { stopped = true; };
-  }, [agentId]);
+  }, [agentId, modelCatalogRefreshKey]);
 
   // Tools state
   const [tools, setTools] = useState<Array<{ id: string; name: string; type: string; status: string; description: string | null }>>([]);
@@ -1131,9 +1132,14 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
 
                   {/* Model dropdown */}
                   <div>
-                    <label className="block text-[11px] font-black text-slate-500 mb-1.5 uppercase tracking-wider flex items-center">
-                      MODEL / LANGUAGE MODEL <span className="text-red-500 ml-0.5">*</span>
-                    </label>
+                    <div className="mb-1.5 flex items-center justify-between gap-2">
+                      <label className="text-[11px] font-black text-slate-500 uppercase tracking-wider">
+                        MODEL / LANGUAGE MODEL <span className="text-red-500 ml-0.5">*</span>
+                      </label>
+                      <button type="button" onClick={() => setModelCatalogRefreshKey((value) => value + 1)} className="flex items-center gap-1 text-[10px] font-bold text-pink-600 hover:text-pink-700">
+                        <RefreshCw className="h-3 w-3" /> Refresh models
+                      </button>
+                    </div>
                     <div className="relative">
                       <select
                         value={sttModelId}

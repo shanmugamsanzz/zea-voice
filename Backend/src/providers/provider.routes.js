@@ -4,11 +4,11 @@ import { AppError } from '../middleware/errors.js';
 import {
   createModelSchema, createProviderSchema, listProvidersSchema, modelIdSchema,
   modelStatusSchema, parseProviderInput, providerIdSchema, providerStatusSchema,
-  updateProviderSchema,
+  updateModelSchema, updateProviderSchema,
 } from './provider.schemas.js';
 import {
   createProvider, createProviderModel, deleteProvider, getProviderCatalog, listProviderModels, listProviders,
-  updateModelStatus, updateProvider, updateProviderStatus,
+  updateProviderModel, updateModelStatus, updateProvider, updateProviderStatus,
 } from './provider.service.js';
 
 function valid(schema, value) {
@@ -41,6 +41,10 @@ providerRouter.post('/:providerId/models', async (req, res) => {
 providerRouter.get('/:providerId/models', async (req, res) => {
   const { providerId } = valid(providerIdSchema, req.params);
   res.json({ success: true, data: await listProviderModels(req.auth.userId, providerId) });
+});
+providerRouter.patch('/models/:modelId', async (req, res) => {
+  const { modelId } = valid(modelIdSchema, req.params);
+  res.json({ success: true, data: await updateProviderModel(req.auth.userId, modelId, valid(updateModelSchema, req.body)) });
 });
 providerRouter.patch('/models/:modelId/status', async (req, res) => {
   const { modelId } = valid(modelIdSchema, req.params);

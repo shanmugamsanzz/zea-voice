@@ -104,6 +104,7 @@ try {
   assert.equal(providerResponse.status, 201);
   const provider = (await providerResponse.json()).data;
   providerId = provider.id;
+  assert.equal(provider.modelCount, 0);
   assert.deepEqual(provider.parameterKeys.map((item) => item.key).sort(), ['api_key', 'region']);
   assert.equal(JSON.stringify(provider).includes(secret), true);
   const stored = await admin.query(
@@ -122,11 +123,23 @@ try {
   assert.equal(modelResponse.status, 201);
   const modelId = (await modelResponse.json()).data.id;
 
+  const updateModelResponse = await api(base, `/admin/providers/models/${modelId}`, {
+    method: 'PATCH', headers: adminHeaders,
+    body: JSON.stringify({
+      modelKey: 'task-6-model-v2', displayName: 'Task 6 Model v2',
+      capabilities: { chat: true, streaming: true }, settings: { runtimeAdapter: 'openai' },
+    }),
+  });
+  assert.equal(updateModelResponse.status, 200);
+  const updatedModel = (await updateModelResponse.json()).data;
+  assert.equal(updatedModel.modelKey, 'task-6-model-v2');
+  assert.equal(updatedModel.settings.runtimeAdapter, 'openai');
+
   const developerToken = await login(base, developerEmail);
   const catalog = await api(base, '/catalog/providers?type=llm', { headers: { authorization: `Bearer ${developerToken}` } });
   assert.equal(catalog.status, 200);
   const catalogItems = (await catalog.json()).data;
-  assert.equal(catalogItems.some((item) => item.modelKey === 'task-6-model' && item.providerId === providerId), true);
+  assert.equal(catalogItems.some((item) => item.modelKey === 'task-6-model-v2' && item.providerId === providerId), true);
 
   const forbidden = await api(base, '/admin/providers', { headers: { authorization: `Bearer ${developerToken}` } });
   assert.equal(forbidden.status, 403);
