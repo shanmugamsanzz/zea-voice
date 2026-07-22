@@ -16,6 +16,7 @@ import { executeAgentTools } from './tools/tool-executor.service.js';
 import { LlmCircuitBreaker } from './providers/llm/streaming-runtime.js';
 import { welcomeAudioCache } from './welcome-audio-cache.service.js';
 import { tenantProviderHealth } from './provider-health.service.js';
+import { renderWelcomeTemplate, welcomeTemplateContext } from './welcome-template.service.js';
 
 const closeIntent = /\b(?:bye|goodbye|hang\s*up|disconnect|end (?:the )?call|not interested|call me later|i(?:'m| am) busy)\b|(?:போதும்|அழைப்பை முடி|பிறகு அழைக்கவும்)/iu;
 
@@ -97,8 +98,31 @@ export class RealtimeConversationOrchestrator {
       callId: this.call.id,
     }) ?? this.log;
     this.preCallContext = this.call.providerMetadata?.preCall?.context ?? {};
+    const renderedWelcome = renderWelcomeTemplate(
+      this.runtimeProfile.agent.welcomeMessage,
+      welcomeTemplateContext(this.call),
+      {
+        language: this.runtimeProfile.agent.language,
+        fallbackMessage: this.runtimeProfile.agent.settings?.welcomeFallbackMessage,
+      },
+    );
+    this.runtimeProfile = {
+      ...this.runtimeProfile,
+      agent: { ...this.runtimeProfile.agent, welcomeMessage: renderedWelcome.text },
+    };
+    this.personalizedWelcome = renderedWelcome.personalized;
+    if (renderedWelcome.dynamic) {
+      this.log.info({
+        icon: '👤', stage: 'welcome.template_rendered', callId: this.call.id,
+        personalized: renderedWelcome.personalized,
+        resolvedVariables: renderedWelcome.resolvedVariables,
+        missingVariables: renderedWelcome.missingVariables,
+      }, renderedWelcome.personalized
+        ? '👤 Personalized welcome message prepared'
+        : '👤 Generic welcome fallback prepared');
+    }
     this.welcomeCache = this.dependencies.welcomeCache ?? welcomeAudioCache;
-    this.cachedWelcomePromise = this.runtimeProfile.agent.welcomeMessage
+    this.cachedWelcomePromise = this.runtimeProfile.agent.welcomeMessage && !this.personalizedWelcome
       ? this.welcomeCache.get(this.runtimeProfile, this.runtimeProfile.agent.welcomeMessage)
       : Promise.resolve(null);
     this.controller = new CallController({
@@ -379,7 +403,9 @@ export class RealtimeConversationOrchestrator {
       kind: 'welcome', startedAt: this.mediaStartedAt, capture: chunks,
     });
     this.runtimeMetrics.latency.welcomeCacheHit = false;
-    if (result && chunks.length) void this.welcomeCache.set(this.runtimeProfile, text, Buffer.concat(chunks));
+    if (result && chunks.length && !this.personalizedWelcome) {
+      void this.welcomeCache.set(this.runtimeProfile, text, Buffer.concat(chunks));
+    }
     return result;
   }
 

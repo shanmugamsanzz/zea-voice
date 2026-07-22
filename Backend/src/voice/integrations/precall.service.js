@@ -26,7 +26,8 @@ function requestBody(value, variables) {
 }
 
 function readPath(value, path) {
-  return String(path ?? '').split('.').filter(Boolean).reduce((current, key) => current?.[key], value);
+  return String(path ?? '').split('.').filter((key) => key && key !== '$')
+    .reduce((current, key) => current?.[key], value);
 }
 
 function mappedContext(response, mappings) {
