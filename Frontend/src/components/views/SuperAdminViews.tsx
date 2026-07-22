@@ -1479,11 +1479,12 @@ function VoiceProvidersView() {
     setSubmitting(true); setError('');
     try {
       const settings = Object.fromEntries(modelParameters.filter((parameter) => parameter.key.trim()).map((parameter) => [parameter.key.trim(), modelParameterValue(parameter.value)]));
+      const existingModel = editingModelId ? providerModels.find((model) => model.id === editingModelId) : null;
       const saved = await apiRequest<ProviderModelApiData>(editingModelId
         ? `/admin/providers/models/${editingModelId}`
         : `/admin/providers/${modelProvider.id}/models`, {
         method: editingModelId ? 'PATCH' : 'POST',
-        body: JSON.stringify({ modelKey: modelKey.trim(), displayName: modelDisplayName.trim(), status: 'active', capabilities: {}, settings }),
+        body: JSON.stringify({ modelKey: modelKey.trim(), displayName: modelDisplayName.trim(), status: 'active', capabilities: existingModel?.capabilities ?? {}, settings }),
       });
       if (editingModelId) {
         setProviderModels((current) => current.map((model) => model.id === saved.id ? saved : model));
@@ -1720,7 +1721,7 @@ function VoiceProvidersView() {
             </div>
             <div className="space-y-2 border-t border-slate-100 pt-4">
               <div className="flex items-center justify-between">
-                <div><h4 className="text-[10px] font-black uppercase tracking-wider text-indigo-600">Configuration Parameters</h4><p className="text-[10px] text-slate-400">All values are visible to Super Admin.</p></div>
+                <div><h4 className="text-[10px] font-black uppercase tracking-wider text-indigo-600">Provider Keys &amp; Credentials</h4><p className="text-[10px] text-slate-400">Shared provider configuration only. These values do not create or configure selectable models.</p></div>
                 <button type="button" onClick={() => setEditParameters((current) => [...current, { key: '', value: '', isSecret: false }])}
                   className="flex items-center gap-1 rounded-lg border border-indigo-100 bg-indigo-50 px-2.5 py-1.5 text-[10px] font-bold text-indigo-700 hover:bg-indigo-100">
                   <Plus className="h-3 w-3" /> Add Parameter
@@ -1816,7 +1817,7 @@ function VoiceProvidersView() {
               {/* Display config parameters if they exist */}
               {p.parameterKeys.length > 0 && (
                 <div className="mt-3.5 bg-slate-50 p-3 rounded-lg border border-slate-200/60 font-sans">
-                  <span className="text-[9px] text-slate-400 font-extrabold uppercase tracking-widest block mb-2">Configured Keys & Vars</span>
+                  <span className="text-[9px] text-slate-400 font-extrabold uppercase tracking-widest block mb-2">Provider Keys &amp; Vars (not model settings)</span>
                   <div className="space-y-1.5 text-[10px] font-mono">
                     {p.parameterKeys.map((param) => (
                       <div key={param.key} className="flex min-w-0 items-center justify-between gap-2 text-slate-600 border-b border-slate-100 pb-1 last:border-0 last:pb-0">

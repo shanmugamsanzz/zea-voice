@@ -304,6 +304,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const [saving, setSaving] = useState(false);
   const [models, setModels] = useState<ProviderModelOption[]>([]);
   const [modelCatalogRefreshKey, setModelCatalogRefreshKey] = useState(0);
+  const [modelsRefreshing, setModelsRefreshing] = useState(false);
   const [phoneNumbers, setPhoneNumbers] = useState<AgentPhoneOption[]>([]);
   const [phoneNumberId, setPhoneNumberId] = useState('');
   const [sttModelId, setSttModelId] = useState('');
@@ -349,23 +350,38 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         if (phonesResult.status === 'rejected') setError('Models loaded, but assigned phone numbers could not be loaded.');
         if (existing) applyApiAgent(existing);
         else {
-          const stt = catalog.find((model) => model.providerType === 'stt');
-          const llm = catalog.find((model) => model.providerType === 'llm');
-          const tts = catalog.find((model) => model.providerType === 'tts');
-          setSttModelId(stt?.id ?? ''); setLlmModelId(llm?.id ?? ''); setTtsModelId(tts?.id ?? '');
+          setSttModelId(''); setLlmModelId(''); setTtsModelId('');
           setPhoneNumberId(phones.find((phone) => phone.status === 'active')?.id ?? '');
           setAgent((current) => ({ ...current,
-            sttProvider: stt?.providerName ?? '', sttModel: stt?.displayName ?? '',
-            llmProvider: llm?.providerName ?? '', llmModel: llm?.displayName ?? '',
-            ttsProvider: tts?.providerName ?? '', ttsModel: tts?.displayName ?? '',
-            voiceId: tts ? String(tts.settings.voiceId ?? tts.settings.voice_id ?? tts.settings.voice ?? tts.modelKey) : '',
+            sttProvider: '', sttModel: '', llmProvider: '', llmModel: '',
+            ttsProvider: '', ttsModel: '', voiceId: '',
           }));
         }
       } catch (requestError) { if (!stopped) setError(requestError instanceof Error ? requestError.message : 'Agent configuration could not be loaded'); }
       finally { if (!stopped) setLoading(false); }
     };
     void load(); return () => { stopped = true; };
-  }, [agentId, modelCatalogRefreshKey]);
+  }, [agentId]);
+
+  useEffect(() => {
+    if (modelCatalogRefreshKey === 0) return;
+    let stopped = false;
+    setModelsRefreshing(true);
+    setError('');
+    apiRequest<ProviderModelOption[]>('/catalog/providers', { zeaCache: 'reload' })
+      .then((catalog) => {
+        if (stopped) return;
+        setModels(catalog);
+        setSttModelId((current) => current && !catalog.some((model) => model.id === current && model.providerType === 'stt') ? '' : current);
+        setLlmModelId((current) => current && !catalog.some((model) => model.id === current && model.providerType === 'llm') ? '' : current);
+        setTtsModelId((current) => current && !catalog.some((model) => model.id === current && model.providerType === 'tts') ? '' : current);
+      })
+      .catch((requestError) => {
+        if (!stopped) setError(requestError instanceof Error ? requestError.message : 'Model catalog could not be refreshed');
+      })
+      .finally(() => { if (!stopped) setModelsRefreshing(false); });
+    return () => { stopped = true; };
+  }, [modelCatalogRefreshKey]);
 
   // Tools state
   const [tools, setTools] = useState<Array<{ id: string; name: string; type: string; status: string; description: string | null }>>([]);
@@ -1136,8 +1152,8 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       <label className="text-[11px] font-black text-slate-500 uppercase tracking-wider">
                         MODEL / LANGUAGE MODEL <span className="text-red-500 ml-0.5">*</span>
                       </label>
-                      <button type="button" onClick={() => setModelCatalogRefreshKey((value) => value + 1)} className="flex items-center gap-1 text-[10px] font-bold text-pink-600 hover:text-pink-700">
-                        <RefreshCw className="h-3 w-3" /> Refresh models
+                      <button type="button" disabled={modelsRefreshing} onClick={() => setModelCatalogRefreshKey((value) => value + 1)} className="flex items-center gap-1 text-[10px] font-bold text-pink-600 hover:text-pink-700 disabled:opacity-50">
+                        <RefreshCw className={`h-3 w-3 ${modelsRefreshing ? 'animate-spin' : ''}`} /> {modelsRefreshing ? 'Refreshing...' : 'Refresh models'}
                       </button>
                     </div>
                     <div className="relative">
@@ -1307,9 +1323,10 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
 
                   {/* AI Model */}
                   <div>
-                    <label className="block text-[11px] font-black text-slate-500 mb-1.5 uppercase tracking-wider flex items-center">
-                      AI MODEL <span className="text-red-500 ml-0.5">*</span>
-                    </label>
+                    <div className="mb-1.5 flex items-center justify-between gap-2">
+                      <label className="text-[11px] font-black text-slate-500 uppercase tracking-wider">AI MODEL <span className="text-red-500 ml-0.5">*</span></label>
+                      <button type="button" disabled={modelsRefreshing} onClick={() => setModelCatalogRefreshKey((value) => value + 1)} className="flex items-center gap-1 text-[10px] font-bold text-pink-600 hover:text-pink-700 disabled:opacity-50"><RefreshCw className={`h-3 w-3 ${modelsRefreshing ? 'animate-spin' : ''}`} /> {modelsRefreshing ? 'Refreshing...' : 'Refresh models'}</button>
+                    </div>
                     <div className="relative">
                       <select
                         value={llmModelId}
@@ -1542,9 +1559,10 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
 
                   {/* Model Dropdown */}
                   <div>
-                    <label className="block text-[11px] font-black text-slate-500 mb-1.5 uppercase tracking-wider flex items-center">
-                      MODEL <span className="text-red-500 ml-0.5">*</span>
-                    </label>
+                    <div className="mb-1.5 flex items-center justify-between gap-2">
+                      <label className="text-[11px] font-black text-slate-500 uppercase tracking-wider">MODEL <span className="text-red-500 ml-0.5">*</span></label>
+                      <button type="button" disabled={modelsRefreshing} onClick={() => setModelCatalogRefreshKey((value) => value + 1)} className="flex items-center gap-1 text-[10px] font-bold text-pink-600 hover:text-pink-700 disabled:opacity-50"><RefreshCw className={`h-3 w-3 ${modelsRefreshing ? 'animate-spin' : ''}`} /> {modelsRefreshing ? 'Refreshing...' : 'Refresh models'}</button>
+                    </div>
                     <div className="relative">
                       <select
                         value={ttsModelId}

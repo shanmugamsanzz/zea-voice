@@ -61,6 +61,8 @@ assert.equal(profile.agent.callDirection, 'inbound');
 assert.equal(profile.agent.speech.listener.sttLanguage, 'en-IN');
 assert.equal(profile.agent.speech.speaker.ttsSpeed, 1.1);
 assert.equal(profile.providers.stt.modelKey, 'stt-model');
+assert.equal(profile.providers.stt.effectiveSettings.STT_MODEL, 'stt-model');
+assert.equal(Object.hasOwn(profile.providers.stt.effectiveSettings, 'STT_API_KEY'), false);
 assert.equal(profile.providers.llm.parameters.LLM_API_KEY, 'decrypted:encrypted-llm');
 assert.equal(profile.providers.tts.modelCapabilities.languages[0], 'en');
 assert.equal(profile.providers.tts.effectiveSettings.voiceId, 'hospital-voice');

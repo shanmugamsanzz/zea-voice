@@ -139,7 +139,10 @@ try {
   const catalog = await api(base, '/catalog/providers?type=llm', { headers: { authorization: `Bearer ${developerToken}` } });
   assert.equal(catalog.status, 200);
   const catalogItems = (await catalog.json()).data;
-  assert.equal(catalogItems.some((item) => item.modelKey === 'task-6-model-v2' && item.providerId === providerId), true);
+  const catalogModel = catalogItems.find((item) => item.modelKey === 'task-6-model-v2' && item.providerId === providerId);
+  assert.equal(Boolean(catalogModel), true);
+  assert.equal(catalogModel.settings.region, 'us-east');
+  assert.equal(Object.hasOwn(catalogModel.settings, 'api_key'), false);
 
   const forbidden = await api(base, '/admin/providers', { headers: { authorization: `Bearer ${developerToken}` } });
   assert.equal(forbidden.status, 403);

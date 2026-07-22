@@ -20,6 +20,13 @@ const dynamicProvider = {
 const inputFormat = resolveModelAudioFormat(dynamicProvider, 'input');
 assert.equal(inputFormat.encoding, 'pcm_s16le');
 assert.equal(inputFormat.sampleRate, 16000);
+const inheritedSettingFormat = resolveModelAudioFormat({
+  modelKey: 'provider-defaults-model',
+  effectiveSettings: { inputAudioCodec: 'pcm_s16le', inputSampleRate: '16000', inputChannels: '1' },
+}, 'input');
+assert.equal(inheritedSettingFormat.encoding, 'pcm_s16le');
+assert.equal(inheritedSettingFormat.sampleRate, 16000);
+assert.equal(inheritedSettingFormat.channels, 1);
 assert.throws(
   () => resolveModelAudioFormat({ modelKey: 'undeclared' }, 'input'),
   (error) => error.code === 'VOICE_AUDIO_CAPABILITY_MISSING',

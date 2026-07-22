@@ -11,6 +11,13 @@ function parameterMap(rows, decrypt) {
   ]));
 }
 
+const secretSettingKey = /(api[_.-]?key|token|secret|password|credential|auth)/i;
+
+function providerRuntimeDefaults(parameters) {
+  return Object.fromEntries(Object.entries(parameters)
+    .filter(([key]) => !secretSettingKey.test(key)));
+}
+
 function selectedSettings(settings, keys) {
   return Object.fromEntries(keys
     .filter((key) => Object.hasOwn(settings, key))
@@ -19,6 +26,7 @@ function selectedSettings(settings, keys) {
 
 function provider(row, prefix, decrypt, runtimeSettings = {}) {
   const modelSettings = row[`${prefix}_model_settings`] ?? {};
+  const parameters = parameterMap(row[`${prefix}_parameters`], decrypt);
   return {
     providerId: row[`${prefix}_provider_id`],
     providerName: row[`${prefix}_provider_name`],
@@ -30,8 +38,8 @@ function provider(row, prefix, decrypt, runtimeSettings = {}) {
     modelSettings,
     modelCapabilities: row[`${prefix}_model_capabilities`] ?? {},
     runtimeSettings,
-    effectiveSettings: { ...modelSettings, ...runtimeSettings },
-    parameters: parameterMap(row[`${prefix}_parameters`], decrypt),
+    effectiveSettings: { ...providerRuntimeDefaults(parameters), ...modelSettings, ...runtimeSettings },
+    parameters,
   };
 }
 

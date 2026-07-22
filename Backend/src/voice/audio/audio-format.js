@@ -85,8 +85,6 @@ function declaredFormat(providerConfig, direction) {
     ?? settingAudio[direction]
     ?? settings[`${direction}AudioFormat`]
     ?? settings[`${direction}_audio_format`]
-    ?? settings[`${direction}AudioCodec`]
-    ?? settings[`${direction}_audio_codec`]
     ?? (declaredCodec || declaredSampleRate ? {
       encoding: declaredCodec,
       sampleRate: declaredSampleRate,

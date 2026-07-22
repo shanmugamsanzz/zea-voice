@@ -24,10 +24,11 @@ function mapProvider(row) {
 }
 
 function mapModel(row) {
+  const settings = { ...(row.provider_settings ?? {}), ...(row.settings ?? {}) };
   return {
     id: row.id, providerId: row.provider_id, providerName: row.provider_name,
     providerType: row.provider_type, modelKey: row.model_key, displayName: row.display_name,
-    status: row.status, capabilities: row.capabilities, settings: row.settings,
+    status: row.status, capabilities: row.capabilities, settings,
     createdAt: row.created_at, updatedAt: row.updated_at,
   };
 }
@@ -312,9 +313,14 @@ export function updateProviderModel(actorUserId, modelId, input) {
 }
 
 export function getProviderCatalog(auth, type) {
-  return withTenantContext(auth, async (client) => {
+  return withPlatformAdminContext(auth.userId, async (client) => {
     const result = await client.query(
-      `SELECT m.*, p.name AS provider_name, p.type AS provider_type
+      `SELECT m.*, p.name AS provider_name, p.type AS provider_type,
+          COALESCE((SELECT jsonb_object_agg(x.key, x.plain_value)
+            FROM ai_provider_parameters x
+            WHERE x.provider_id=p.id AND x.plain_value IS NOT NULL
+              AND x.is_secret=false
+              AND lower(x.key) !~ '(api[_.-]?key|token|secret|password|credential|auth)'), '{}'::jsonb) AS provider_settings
        FROM provider_models m JOIN ai_providers p ON p.id = m.provider_id
        WHERE m.status = 'active' AND m.deleted_at IS NULL
          AND p.status = 'connected' AND p.deleted_at IS NULL
