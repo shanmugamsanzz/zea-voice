@@ -250,7 +250,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       sttProvider: base.sttProvider || 'Sarvam',
       sttModel: base.sttModel || 'saaras:v3',
       sttMode: base.sttMode || 'verbatim',
-      sttLanguage: base.sttLanguage || 'tamil (india) (ta-IN)',
+      sttLanguage: base.sttLanguage || 'ta-IN',
       sttPunctuate: base.sttPunctuate !== undefined ? base.sttPunctuate : true,
       sttSmartFormat: base.sttSmartFormat !== undefined ? base.sttSmartFormat : true,
       sttPriceMin: base.sttPriceMin !== undefined ? base.sttPriceMin : 0.05,

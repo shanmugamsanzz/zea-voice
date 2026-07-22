@@ -4,6 +4,11 @@ import { audioDurationMs, resolveModelAudioFormat } from '../../audio/audio-form
 import { SttEventChannel } from './stt.interface.js';
 
 const validModes = new Set(['transcribe', 'translate', 'verbatim', 'translit', 'codemix']);
+const validLanguages = new Set([
+  'unknown', 'hi-IN', 'bn-IN', 'kn-IN', 'ml-IN', 'mr-IN', 'od-IN', 'pa-IN',
+  'ta-IN', 'te-IN', 'en-IN', 'gu-IN', 'as-IN', 'ur-IN', 'ne-IN', 'kok-IN',
+  'ks-IN', 'sd-IN', 'sa-IN', 'sat-IN', 'mni-IN', 'brx-IN', 'mai-IN', 'doi-IN',
+]);
 const queryFields = [
   'positive_speech_threshold', 'negative_speech_threshold', 'min_speech_frames',
   'first_turn_min_speech_frames', 'negative_frames_count', 'negative_frames_window',
@@ -33,6 +38,17 @@ function boolean(value, fallback) {
   if (value === undefined) return fallback;
   if (typeof value === 'boolean') return value;
   return String(value).toLowerCase() === 'true';
+}
+
+function sarvamLanguage(value) {
+  const configured = String(value ?? '').trim();
+  if (validLanguages.has(configured)) return configured;
+  const embeddedCode = configured.match(/(?:^|[ (])([a-z]{2,3}-[A-Z]{2})(?=$|[ )])/u)?.[1];
+  if (embeddedCode && validLanguages.has(embeddedCode)) return embeddedCode;
+  throw new AppError(409, `Sarvam STT language is unsupported: ${configured || '(empty)'}`, 'STT_LANGUAGE_UNSUPPORTED', {
+    configuredLanguage: configured || null,
+    supportedLanguages: [...validLanguages],
+  });
 }
 
 function websocketEndpoint(baseUrl) {
@@ -68,8 +84,7 @@ export function resolveSarvamSttConfiguration(providerConfig) {
     'SARVAM_API_KEY', 'SARVAM_API_SUBSCRIPTION_KEY', 'API_SUBSCRIPTION_KEY', 'API_KEY', 'TOKEN',
   );
   if (!apiKey) throw new AppError(503, 'Selected Sarvam STT provider has no API key', 'STT_API_KEY_MISSING');
-  const language = value(settings, 'sttLanguage', 'languageCode', 'language_code', 'language');
-  if (!language) throw new AppError(409, 'Sarvam STT language is missing from the agent configuration', 'STT_LANGUAGE_MISSING');
+  const language = sarvamLanguage(value(settings, 'sttLanguage', 'languageCode', 'language_code', 'language'));
   const selectedMode = value(settings, 'sarvamMode', 'transcriptionMode', 'mode');
   const mode = validModes.has(selectedMode) ? selectedMode : 'transcribe';
   const endpoint = websocketEndpoint(providerConfig.baseUrl);

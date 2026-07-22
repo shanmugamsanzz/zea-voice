@@ -30,7 +30,7 @@ await controller.setAssistantResponse('Hi there', 3000);
 await controller.playbackComplete(4000);
 
 const usageTracker = new ProviderUsageTracker(runtimeProfile);
-usageTracker.record('llm', { inputTokens: 10, outputTokens: 5, durationMs: 40, cost: 0.002 });
+usageTracker.record('llm', { inputTokens: 10, outputTokens: 5, durationMs: 40.125, cost: 0.002 });
 usageTracker.record('llm', { inputTokens: 4, outputTokens: 3, durationMs: 20, cost: 0.001 });
 usageTracker.record('tts', { characters: 8, audioOutputMs: 1200, cost: 0.004 });
 
@@ -81,6 +81,7 @@ assert.equal(result.usage.totals.totalTokens, 22);
 assert.equal(result.usage.totals.cost, 0.007);
 assert.equal(result.usage.providers.length, 2);
 assert.equal(persistedUsage.length, 2);
+assert.equal(persistedUsage[0][14], 60);
 assert.equal(result.postCall.delivered, true);
 assert.equal(persistedPostCall.delivered, true);
 assert.equal(rows[0].provider_metadata.voiceRuntime.metrics.knowledge[0].durationMs, 8);

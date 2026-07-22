@@ -58,6 +58,19 @@ const parameterStyleConfiguration = resolveSarvamSttConfiguration({
 assert.equal(parameterStyleConfiguration.audioFormat.sampleRate, 8000);
 assert.equal(parameterStyleConfiguration.language, 'en-IN');
 
+const legacyLabelConfiguration = resolveSarvamSttConfiguration({
+  ...providerConfig,
+  effectiveSettings: { ...providerConfig.effectiveSettings, sttLanguage: 'Tamil (India) (ta-IN)' },
+});
+assert.equal(legacyLabelConfiguration.language, 'ta-IN');
+assert.throws(
+  () => resolveSarvamSttConfiguration({
+    ...providerConfig,
+    effectiveSettings: { ...providerConfig.effectiveSettings, sttLanguage: 'en-US' },
+  }),
+  (error) => error.code === 'STT_LANGUAGE_UNSUPPORTED',
+);
+
 class FakeWebSocket extends EventEmitter {
   constructor() {
     super();
