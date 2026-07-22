@@ -30,6 +30,7 @@ import { performanceMiddleware } from './middleware/performance.js';
 import { voiceRouter } from './voice/voice.routes.js';
 import { vqaRouter } from './vqa/vqa.routes.js';
 import { insightRouter } from './insights/insight.routes.js';
+import { publicTaskRouter } from './public-tasks/public-task.routes.js';
 
 function redactRequestUrl(value) {
   if (typeof value !== 'string' || !value.includes('token=')) return value;
@@ -103,6 +104,7 @@ export function createApp() {
   app.use('/credits', tenantCreditRouter);
   app.use('/admin/queues', queueAdminRouter);
   app.use('/api-keys', apiKeyRouter);
+  app.use('/api/public', publicTaskRouter);
   app.use('/admin/calls', callAdminRouter);
   app.use('/calls', tenantCallRouter);
   app.use('/vqa', vqaRouter);
