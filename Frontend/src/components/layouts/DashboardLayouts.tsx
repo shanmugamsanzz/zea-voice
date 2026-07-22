@@ -25,18 +25,17 @@ import {
   ChevronDown,
   Menu,
   X,
-  Sparkles,
   ClipboardList,
   Wifi,
   MessageSquare,
   Brain,
   Link,
-  Moon,
-  Sun,
   LogOut,
   ChevronLeft,
   ChevronRight
 } from 'lucide-react';
+import zeaVoiceIcon from '../../zea-voice-icon.png';
+import zeaVoiceBrand from '../../zea-voice-brand.png';
 
 interface SidebarItem {
   name: string;
@@ -45,7 +44,7 @@ interface SidebarItem {
 }
 
 export function DashboardLayout({ children, onLogout }: { children: React.ReactNode; onLogout: () => void | Promise<void> }) {
-  const { role, view, setView, userEmail, theme, setTheme } = useAppState();
+  const { role, view, setView, userEmail } = useAppState();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isSidebarMinimized, setIsSidebarMinimized] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
@@ -200,24 +199,20 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
   const meta = getViewMeta(view);
 
   return (
-    <div className="h-dvh bg-slate-50 flex font-sans text-slate-800 overflow-hidden">
+    <div className="zea-premium-shell h-dvh bg-slate-50 flex font-sans text-slate-800 overflow-hidden">
       {/* Desktop Persistent Sidebar */}
       {role === 'SUPER_ADMIN' ? (
         <aside className={`${isSidebarMinimized ? 'w-20' : 'w-64'} bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-300 hidden md:flex flex-col justify-between shrink-0 h-full border-r border-slate-200 dark:border-slate-850 transition-all duration-300`}>
           <div className="flex flex-col flex-1 overflow-y-auto">
             {/* Brand Logo Header */}
-            <div className={`flex items-center shrink-0 border-b border-slate-100 dark:border-slate-800/40 ${isSidebarMinimized ? 'p-4 justify-center' : 'p-6 justify-between space-x-3'}`}>
-              <div className="flex items-center space-x-3">
-                <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center shadow-lg shadow-indigo-500/20 shrink-0">
-                  <Sparkles className="w-4 h-4 text-white" />
-                </div>
-                {!isSidebarMinimized && (
-                  <span className="text-xl font-bold text-slate-900 dark:text-white tracking-tight">ZEA VOICE</span>
-                )}
+            <div className={`relative flex items-center justify-center shrink-0 border-b border-slate-100 dark:border-slate-800/40 ${isSidebarMinimized ? 'p-4' : 'p-6'}`}>
+              <div className="flex items-center justify-center">
+                <img src={isSidebarMinimized ? zeaVoiceIcon : zeaVoiceBrand} alt="Zea Voice"
+                  className={isSidebarMinimized ? 'h-12 w-12 rounded-xl object-contain shrink-0' : 'h-16 w-44 object-contain object-center shrink-0'} />
               </div>
               <button
                 onClick={() => setIsSidebarMinimized(!isSidebarMinimized)}
-                className="text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-white p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer shrink-0"
+                className="absolute right-2 text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-white p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer shrink-0"
                 title={isSidebarMinimized ? "Expand Sidebar" : "Collapse Sidebar"}
               >
                 {isSidebarMinimized ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
@@ -287,9 +282,11 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
         <aside className={`${isSidebarMinimized ? 'w-20' : 'w-64'} bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-300 hidden md:flex flex-col justify-between shrink-0 h-full border-r border-slate-200 dark:border-slate-850 transition-all duration-300`}>
           <div className="flex flex-col flex-1 overflow-y-auto">
             {/* Brand Logo Header */}
-            <div className={`flex items-center shrink-0 border-b border-slate-100 dark:border-slate-800/40 ${isSidebarMinimized ? 'p-4 justify-center' : 'p-6 justify-between space-x-3'}`}>
-              <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 bg-[#E0E7FF]/50 dark:bg-slate-800 rounded-2xl flex items-center justify-center relative shrink-0">
+            <div className={`relative flex items-center justify-center shrink-0 border-b border-slate-100 dark:border-slate-800/40 ${isSidebarMinimized ? 'p-4' : 'p-6'}`}>
+              <div className="flex items-center justify-center">
+                <img src={isSidebarMinimized ? zeaVoiceIcon : zeaVoiceBrand} alt="Zea Voice"
+                  className={isSidebarMinimized ? 'h-12 w-12 rounded-xl object-contain shrink-0' : 'h-16 w-44 object-contain object-center shrink-0'} />
+                <div className="hidden w-10 h-10 bg-[#E0E7FF]/50 dark:bg-slate-800 rounded-2xl items-center justify-center relative shrink-0">
                   <div className="absolute -top-1.5 -right-1.5 bg-[#4F46E5] w-4 h-4 rounded-full border-2 border-white dark:border-slate-800 flex items-center justify-center">
                     <span className="text-[8px] text-white font-black">✔</span>
                   </div>
@@ -299,7 +296,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
                   </svg>
                 </div>
                 {!isSidebarMinimized && (
-                  <div>
+                  <div className="hidden">
                     <span className="text-xl font-black text-[#1E293B] dark:text-white tracking-tight block leading-none">ZEA VOICE</span>
                     <span className="text-[8px] font-extrabold text-slate-400 dark:text-slate-500 tracking-wider block uppercase mt-1">AI VOICE AGENT</span>
                   </div>
@@ -307,7 +304,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
               </div>
               <button
                 onClick={() => setIsSidebarMinimized(!isSidebarMinimized)}
-                className="text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-white p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer shrink-0"
+                className="absolute right-2 text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-white p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer shrink-0"
                 title={isSidebarMinimized ? "Expand Sidebar" : "Collapse Sidebar"}
               >
                 {isSidebarMinimized ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
@@ -373,16 +370,8 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
           <div className="fixed inset-0 bg-slate-900/60 z-40 md:hidden transition-opacity duration-200" onClick={() => setMobileMenuOpen(false)} />
           <aside className="fixed left-0 top-0 bottom-0 w-64 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-300 z-50 md:hidden flex flex-col justify-between py-6 shadow-2xl animate-in slide-in-from-left duration-250 border-r border-slate-200 dark:border-slate-850">
             <div className="flex flex-col flex-1 overflow-y-auto">
-              <div className="p-6 flex items-center space-x-3 shrink-0 border-b border-slate-100 dark:border-slate-800/40 mb-4">
-                <div className="w-10 h-10 bg-[#E0E7FF]/50 dark:bg-slate-800 rounded-2xl flex items-center justify-center relative shrink-0">
-                  <svg className="w-6 h-6 text-[#4F46E5]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                  </svg>
-                </div>
-                <div>
-                  <span className="text-xl font-black text-[#1E293B] dark:text-white tracking-tight block leading-none">ZEA VOICE</span>
-                  <span className="text-[8px] font-extrabold text-slate-400 dark:text-slate-500 tracking-wider block uppercase mt-1">AI VOICE AGENT</span>
-                </div>
+              <div className="p-6 flex items-center justify-center shrink-0 border-b border-slate-100 dark:border-slate-800/40 mb-4">
+                <img src={zeaVoiceBrand} alt="Zea Voice" className="h-18 w-48 object-contain object-center" />
               </div>
 
               <nav className="flex-1 px-4 space-y-6">
@@ -465,44 +454,23 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
             
             {/* Mobile Brand Accent */}
             <div className="md:hidden flex items-center space-x-2 shrink-0">
-              <div className="w-8 h-8 bg-indigo-600 rounded flex items-center justify-center shadow-md">
-                <Sparkles className="w-4 h-4 text-white" />
-              </div>
-              <span className="text-lg font-bold text-slate-900 tracking-tight">ZEA VOICE</span>
+              <img src={zeaVoiceBrand} alt="Zea Voice" className="h-12 w-36 object-contain object-left" />
             </div>
 
             {/* Desktop Dynamic Titles */}
             <div className="hidden md:flex flex-col overflow-hidden">
-              {role !== 'SUPER_ADMIN' ? (
+              {role !== 'SUPER_ADMIN' && (
                 <div className="flex items-center">
                   <span className="text-xl font-bold text-slate-800 dark:text-white tracking-tight leading-none">
                     {getViewName(view)}
                   </span>
                 </div>
-              ) : (
-                <>
-                  <h1 className="text-xl md:text-2xl font-bold text-slate-800 dark:text-white tracking-tight leading-none">{meta.title}</h1>
-                  <p className="text-xs md:text-sm text-slate-500 mt-1.5 font-medium truncate">{meta.subtitle}</p>
-                </>
               )}
             </div>
           </div>
 
           {/* Topbar Right Area */}
           <div className="flex items-center space-x-4 shrink-0">
-            {/* Active Dark/Light Mode Toggle */}
-            <button
-              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-              className="p-2 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition cursor-pointer"
-              title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-            >
-              {theme === 'dark' ? (
-                <Sun className="w-5 h-5 text-amber-500 animate-pulse" />
-              ) : (
-                <Moon className="w-5 h-5 text-slate-600" />
-              )}
-            </button>
-
             {/* User profile identifier */}
             <div className="flex items-center space-x-3 border-l border-slate-200 pl-4 shrink-0">
               {role === 'SUPER_ADMIN' ? (

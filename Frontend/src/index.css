@@ -1,11 +1,16 @@
-@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap');
 @import "tailwindcss";
 
 @variant dark (&:where(.dark, .dark *));
 
 @theme {
-  --font-sans: "Poppins", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "DM Sans", ui-monospace, SFMono-Regular, monospace;
+  --font-weight-medium: 400;
+  --font-weight-semibold: 500;
+  --font-weight-bold: 600;
+  --font-weight-extrabold: 700;
+  --font-weight-black: 800;
 }
 
 /* Custom Sleek Scrollbars with Reduced Width */
@@ -179,3 +184,554 @@
   fill: #9ca3af !important;
 }
 
+/* Premium black and bright-gold visual system */
+:root {
+  color-scheme: dark;
+  --zea-gold-50: #fff9dd;
+  --zea-gold-100: #fff0a8;
+  --zea-gold-300: #ffd84d;
+  --zea-gold-400: #ffc516;
+  --zea-gold-500: #f2b400;
+  --zea-gold-600: #ca8f00;
+  --zea-ink: #090a08;
+  --zea-panel: #10110f;
+  --zea-panel-soft: #171814;
+  --zea-line: rgba(255, 205, 46, 0.2);
+  --zea-muted: #a9a79d;
+  --zea-canvas-art:
+    radial-gradient(ellipse 72% 58% at 58% 4%, rgba(248, 207, 92, 0.92) 0%, rgba(238, 191, 52, 0.20) 44%, transparent 72%),
+    radial-gradient(ellipse 82% 108% at 106% 80%, transparent 0 42%, rgba(205, 162, 46, 0.16) 42.2% 57%, transparent 57.2%),
+    radial-gradient(ellipse 95% 120% at 101% 84%, transparent 0 61%, rgba(244, 203, 82, 0.18) 61.2% 70%, transparent 70.2%),
+    linear-gradient(132deg, transparent 0 18%, rgba(255, 244, 187, 0.23) 18.2% 31%, transparent 31.2% 42%, rgba(255, 238, 164, 0.21) 42.2% 55%, transparent 55.2%),
+    linear-gradient(145deg, #c98400 0%, #f4ad08 30%, #ffcb32 58%, #d98e00 100%);
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  background: #d99e05;
+}
+
+body {
+  color: #f8f5e8;
+  background: var(--zea-canvas-art);
+  background-attachment: fixed;
+  background-size: cover;
+}
+
+::selection {
+  color: #090a08;
+  background: #ffd84d;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #8d6b13;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #ffc516;
+}
+
+/* Application canvas */
+.zea-premium-shell,
+.zea-premium-shell > div,
+.zea-premium-shell main,
+body .min-h-screen {
+  background: var(--zea-canvas-art) !important;
+  background-attachment: fixed !important;
+  background-size: cover !important;
+}
+
+/* Navigation and top bar */
+.zea-premium-shell aside {
+  background: linear-gradient(165deg, #12130f 0%, #070806 100%) !important;
+  color: #f7f3df !important;
+  border-color: rgba(255, 206, 48, 0.24) !important;
+  box-shadow: 12px 0 34px rgba(40, 27, 0, 0.24);
+}
+
+.zea-premium-shell header {
+  background: rgba(255, 200, 36, 0.68) !important;
+  color: #0a0b08 !important;
+  border-color: rgba(92, 62, 0, 0.16) !important;
+  box-shadow: none !important;
+  backdrop-filter: blur(18px);
+}
+
+.zea-premium-shell aside [id^="sidebar-link-"] {
+  border: 1px solid transparent;
+  border-radius: 0.85rem !important;
+  color: #aaa89e !important;
+}
+
+.zea-premium-shell aside [id^="sidebar-link-"]:hover {
+  color: #ffe583 !important;
+  background: rgba(255, 197, 22, 0.08) !important;
+  border-color: rgba(255, 197, 22, 0.14);
+}
+
+.zea-premium-shell aside [id^="sidebar-link-"].bg-indigo-50,
+.zea-premium-shell aside [id^="sidebar-link-"].bg-gradient-to-r {
+  color: #0a0b08 !important;
+  background: linear-gradient(135deg, #ffe16b, #f2b400) !important;
+  border-color: #ffe88c !important;
+  box-shadow: 0 10px 24px rgba(242, 180, 0, 0.22) !important;
+}
+
+.zea-premium-shell aside [id^="sidebar-link-"] svg,
+.zea-premium-shell aside [id^="sidebar-link-"].bg-indigo-50 svg,
+.zea-premium-shell aside [id^="sidebar-link-"].bg-gradient-to-r svg {
+  color: currentColor !important;
+}
+
+/* Core surfaces: cards, dialogs, panels and tables */
+body .bg-white,
+body .dark\:bg-slate-900,
+body [role="dialog"],
+body form.bg-white {
+  color: #f8f5e8 !important;
+  background: linear-gradient(145deg, #171814 0%, #0a0b09 100%) !important;
+  border-color: var(--zea-line) !important;
+}
+
+body .bg-slate-50,
+body .bg-slate-50\/30,
+body .bg-slate-50\/50,
+body .bg-slate-50\/60,
+body .bg-slate-100,
+body .bg-gray-50 {
+  background-color: rgba(255, 255, 255, 0.045) !important;
+  border-color: rgba(255, 205, 46, 0.12) !important;
+}
+
+body .rounded-lg,
+body .rounded-xl {
+  border-radius: 0.9rem !important;
+}
+
+body .rounded-2xl,
+body .rounded-3xl {
+  border-radius: 1.35rem !important;
+}
+
+body .shadow-sm,
+body .shadow-md,
+body .shadow-lg,
+body .shadow-xl,
+body .shadow-2xl {
+  box-shadow: 0 18px 42px rgba(42, 28, 0, 0.2), 0 2px 8px rgba(0, 0, 0, 0.22) !important;
+}
+
+body .border-slate-100,
+body .border-slate-200,
+body .border-slate-250,
+body .border-slate-300,
+body .border-gray-100,
+body .border-gray-200,
+body .divide-slate-100 > :not(:last-child),
+body .divide-slate-200 > :not(:last-child) {
+  border-color: var(--zea-line) !important;
+}
+
+/* Typography */
+body .text-slate-950,
+body .text-slate-900,
+body .text-slate-800,
+body .text-slate-700,
+body .text-gray-900,
+body .text-gray-800,
+body .dark\:text-white {
+  color: #f8f5e8 !important;
+}
+
+.zea-premium-shell header .text-slate-950,
+.zea-premium-shell header .text-slate-900,
+.zea-premium-shell header .text-slate-800,
+.zea-premium-shell header .text-slate-700 {
+  color: #0a0b08 !important;
+}
+
+body .text-slate-600,
+body .text-slate-500,
+body .text-slate-400,
+body .text-gray-600,
+body .text-gray-500,
+body .text-gray-400 {
+  color: var(--zea-muted) !important;
+}
+
+body .text-indigo-400,
+body .text-indigo-500,
+body .text-indigo-600,
+body .text-purple-500,
+body .text-purple-600,
+body .text-violet-500,
+body .text-violet-600,
+body .text-amber-500,
+body .text-amber-600 {
+  color: var(--zea-gold-400) !important;
+}
+
+/* Primary and accent controls */
+body .bg-indigo-500,
+body .bg-indigo-600,
+body .bg-purple-500,
+body .bg-purple-600,
+body .bg-violet-500,
+body .bg-violet-600,
+body .bg-amber-500,
+body .bg-amber-600,
+body .from-indigo-500,
+body .from-indigo-600 {
+  color: #0a0b08 !important;
+  background: linear-gradient(135deg, #ffe16b, #f2b400) !important;
+  border-color: #ffe16b !important;
+  box-shadow: 0 10px 24px rgba(242, 180, 0, 0.2);
+}
+
+body .bg-indigo-50,
+body .bg-purple-50,
+body .bg-violet-50,
+body .bg-amber-50 {
+  color: #ffd84d !important;
+  background: rgba(255, 197, 22, 0.1) !important;
+  border-color: rgba(255, 205, 46, 0.22) !important;
+}
+
+body button,
+body a,
+body input,
+body select,
+body textarea {
+  transition: color 160ms ease, background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+body button:not(:disabled):active {
+  transform: translateY(1px);
+}
+
+/* Forms */
+body input,
+body select,
+body textarea {
+  color: #f8f5e8 !important;
+  background: rgba(255, 255, 255, 0.055) !important;
+  border-color: rgba(255, 205, 46, 0.2) !important;
+  border-radius: 0.75rem !important;
+}
+
+body input::placeholder,
+body textarea::placeholder {
+  color: #77766f !important;
+}
+
+body input:focus,
+body select:focus,
+body textarea:focus {
+  outline: none !important;
+  border-color: #ffc516 !important;
+  box-shadow: 0 0 0 3px rgba(255, 197, 22, 0.13) !important;
+}
+
+body option {
+  color: #f8f5e8;
+  background: #11120f;
+}
+
+/* Tables */
+body table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+body thead,
+body th {
+  color: #d6cda8 !important;
+  background: rgba(255, 197, 22, 0.075) !important;
+  border-color: var(--zea-line) !important;
+}
+
+body td {
+  color: #e9e5d8;
+  border-color: rgba(255, 205, 46, 0.1) !important;
+}
+
+body tbody tr:hover {
+  background: rgba(255, 197, 22, 0.045) !important;
+}
+
+/* Charts */
+body .recharts-cartesian-grid-horizontal line,
+body .recharts-cartesian-grid-vertical line {
+  stroke: rgba(255, 220, 104, 0.14) !important;
+}
+
+body .recharts-text {
+  fill: #b9b5a8 !important;
+}
+
+body .recharts-default-tooltip {
+  color: #f8f5e8 !important;
+  background: #10110f !important;
+  border: 1px solid var(--zea-line) !important;
+  border-radius: 0.8rem !important;
+}
+
+/* Modal backdrops and mobile drawer */
+body .bg-slate-900\/60,
+body .bg-black\/40,
+body .bg-black\/50 {
+  background: rgba(5, 5, 3, 0.76) !important;
+  backdrop-filter: blur(6px);
+}
+
+/* Keep status colors meaningful but tuned for the premium palette */
+body .bg-emerald-50,
+body .bg-emerald-50\/50 {
+  background: rgba(16, 185, 129, 0.12) !important;
+}
+
+body .bg-rose-50,
+body .bg-red-50 {
+  background: rgba(244, 63, 94, 0.12) !important;
+}
+
+@media (max-width: 767px) {
+  .zea-premium-shell header {
+    background: rgba(255, 199, 29, 0.88) !important;
+  }
+
+  .zea-premium-shell main {
+    padding-inline: 1rem !important;
+  }
+}
+
+/* Keep the page canvas gold after legacy surface utility overrides. */
+body .zea-premium-shell,
+body .zea-premium-shell > div,
+body .zea-premium-shell main {
+  background: var(--zea-canvas-art) !important;
+  background-attachment: fixed !important;
+  background-size: cover !important;
+}
+
+/* Login uses the same premium canvas and surface language. */
+.zea-login {
+  position: relative;
+  isolation: isolate;
+  color: #f8f5e8;
+  background: var(--zea-canvas-art) !important;
+  background-attachment: fixed !important;
+  background-size: cover !important;
+}
+
+.zea-login::before {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  content: "";
+  background: radial-gradient(circle at 50% 50%, transparent 0 18%, rgba(75, 45, 0, 0.1) 100%);
+  pointer-events: none;
+}
+
+.zea-login-card {
+  color: #f8f5e8;
+  background: linear-gradient(150deg, rgba(25, 26, 21, 0.98), rgba(8, 9, 7, 0.99));
+  border: 1px solid rgba(255, 218, 77, 0.34);
+  box-shadow: 0 32px 80px rgba(49, 31, 0, 0.34), 0 4px 16px rgba(0, 0, 0, 0.32);
+  backdrop-filter: blur(22px);
+}
+
+.zea-login-banner {
+  color: #f8f5e8;
+  background:
+    radial-gradient(circle at 50% -30%, rgba(255, 216, 77, 0.24), transparent 58%),
+    linear-gradient(145deg, #171814, #090a08);
+  border-bottom: 1px solid rgba(255, 205, 46, 0.18);
+}
+
+.zea-login-submit {
+  color: #090a08 !important;
+  background: linear-gradient(135deg, #ffe16b, #f2b400) !important;
+  border: 1px solid #ffe88c;
+  box-shadow: 0 12px 28px rgba(242, 180, 0, 0.24) !important;
+}
+
+.zea-login-submit:hover:not(:disabled) {
+  background: linear-gradient(135deg, #ffea91, #ffc516) !important;
+  box-shadow: 0 16px 34px rgba(242, 180, 0, 0.32) !important;
+  transform: translateY(-1px);
+}
+
+.zea-login-submit:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+/* Readability pass: gently enlarge compact UI copy without changing layout. */
+body {
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+body .text-xs {
+  font-size: 0.8125rem !important;
+  line-height: 1.35rem !important;
+}
+
+body .text-sm {
+  font-size: 0.9375rem !important;
+  line-height: 1.5rem !important;
+}
+
+body [class~="text-[8px]"],
+body [class~="text-[9px]"] {
+  font-size: 0.625rem !important;
+  line-height: 0.95rem !important;
+}
+
+body [class~="text-[10px]"] {
+  font-size: 0.71875rem !important;
+  line-height: 1.05rem !important;
+}
+
+body [class~="text-[11px]"] {
+  font-size: 0.75rem !important;
+  line-height: 1.15rem !important;
+}
+
+body input,
+body select,
+body textarea {
+  font-size: 0.875rem !important;
+  line-height: 1.4rem !important;
+}
+
+body th,
+body td {
+  font-size: 0.8125rem;
+  line-height: 1.35rem;
+}
+
+body button {
+  line-height: 1.3rem;
+}
+
+/* Themed table grid and non-invasive column resize handles. */
+body table th,
+body table td {
+  border-right: 1px solid rgba(255, 205, 46, 0.13) !important;
+  border-bottom: 1px solid rgba(255, 205, 46, 0.13) !important;
+  text-align: center !important;
+  vertical-align: middle !important;
+}
+
+body table th.zea-table-text-column,
+body table td.zea-table-text-column {
+  text-align: left !important;
+}
+
+body table th:first-child,
+body table td:first-child {
+  border-left: 1px solid rgba(255, 205, 46, 0.13) !important;
+}
+
+body table thead:first-child tr:first-child th {
+  border-top: 1px solid rgba(255, 205, 46, 0.13) !important;
+}
+
+body table th {
+  position: relative;
+}
+
+.zea-column-resizer {
+  position: absolute;
+  z-index: 3;
+  top: 18%;
+  right: 0;
+  width: 8px;
+  height: 64%;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.zea-column-resizer::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 1px;
+  content: "";
+  background: rgba(255, 216, 77, 0.26);
+  transition: width 150ms ease, left 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
+}
+
+.zea-column-resizer:hover::after,
+.zea-column-resizer.is-resizing::after {
+  left: 2px;
+  width: 2px;
+  background: #ffd84d;
+  box-shadow: 0 0 8px rgba(255, 197, 22, 0.72);
+}
+
+body.zea-resizing-column,
+body.zea-resizing-column * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+/* Reference-inspired premium table surfaces. */
+body table {
+  padding: 0;
+  background: #0c0e0c !important;
+  border: 1px solid rgba(255, 205, 46, 0.24) !important;
+  border-collapse: separate !important;
+  border-spacing: 0 !important;
+  border-radius: 1rem !important;
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.025), 0 14px 32px rgba(0, 0, 0, 0.16);
+}
+
+body table thead,
+body table th {
+  background: linear-gradient(180deg, #222522 0%, #1a1d1b 100%) !important;
+}
+
+body table tbody,
+body table td {
+  background: #202320 !important;
+}
+
+body table th,
+body table td,
+body table th:first-child,
+body table td:first-child,
+body table thead:first-child tr:first-child th {
+  border: 0 !important;
+  border-right: 1px solid rgba(255, 205, 46, 0.13) !important;
+  border-bottom: 1px solid rgba(255, 205, 46, 0.13) !important;
+}
+
+body table th {
+  border-radius: 0 !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+body table td {
+  border-radius: 0 !important;
+}
+
+body table tr > :last-child {
+  border-right: 0 !important;
+}
+
+body table tbody tr:last-child td {
+  border-bottom: 0 !important;
+}
+
+body table tbody tr:hover td {
+  background: #282b26 !important;
+  border-color: rgba(255, 205, 46, 0.24) !important;
+}
