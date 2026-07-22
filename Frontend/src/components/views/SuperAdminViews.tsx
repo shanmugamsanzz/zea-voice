@@ -60,6 +60,7 @@ interface PlatformDashboardData {
 
 interface CompanyApiData {
   tenantId: string; organizationId: string; workspaceId: string; businessName: string;
+  organizationName: string; workspaceName: string;
   legalName: string | null; firstName: string | null; lastName: string | null; email: string;
   businessPhone: string | null; website: string | null; billingTier: 'starter' | 'pro' | 'enterprise';
   perMinutePrice: number;
@@ -398,6 +399,8 @@ function CompaniesListView() {
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
   const [businessName, setBusinessName] = useState('');
+  const [organizationName, setOrganizationName] = useState('');
+  const [workspaceName, setWorkspaceName] = useState('');
   const [businessPhone, setBusinessPhone] = useState('');
   const [address, setAddress] = useState('');
   const [state, setState] = useState('');
@@ -426,13 +429,13 @@ function CompaniesListView() {
 
   const handleCreateCompany = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!businessName || !email) return;
+    if (!businessName || !organizationName || !workspaceName || !email) return;
     setSubmitting(true); setError('');
     try {
       await apiRequest<CompanyApiData>('/admin/companies', { method: 'POST', body: JSON.stringify({
-        businessName, legalName: businessName, firstName, lastName, email, businessPhone,
+        businessName, organizationName, workspaceName, legalName: organizationName, firstName, lastName, email, businessPhone,
         website, billingTier, perMinutePrice: Number(perMinutePrice), addressLine1: address, state, country, postalCode: zip,
-        timezone, workspaceName: `${businessName} Workspace`, status: 'active', locale: 'en-US', currency: 'INR',
+        timezone, status: 'active', locale: 'en-US', currency: 'INR',
       }) });
       setSuccessMessage(`Organization "${businessName}" successfully created.`);
       setRefreshKey((value) => value + 1);
@@ -471,7 +474,8 @@ function CompaniesListView() {
       await apiRequest(`/admin/companies/${editingCompany.tenantId}`, {
         method: 'PATCH',
         body: JSON.stringify({
-          businessName: editingCompany.businessName, legalName: editingCompany.legalName,
+          businessName: editingCompany.businessName, organizationName: editingCompany.organizationName,
+          workspaceName: editingCompany.workspaceName, legalName: editingCompany.legalName,
           firstName: editingCompany.firstName, lastName: editingCompany.lastName,
           email: editingCompany.email, businessPhone: editingCompany.businessPhone,
           website: editingCompany.website, billingTier: editingCompany.billingTier,
@@ -613,7 +617,9 @@ function CompaniesListView() {
               <button type="button" onClick={() => setEditingCompany(null)} className="rounded-md p-1 text-slate-400 hover:bg-slate-100"><X className="h-4 w-4" /></button>
             </div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 text-xs">
-              <label className="font-bold text-slate-500">Business Name<input required value={editingCompany.businessName} onChange={(e) => setEditingCompany({ ...editingCompany, businessName: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
+              <label className="font-bold text-slate-500">Company / Tenant Name<input required value={editingCompany.businessName} onChange={(e) => setEditingCompany({ ...editingCompany, businessName: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
+              <label className="font-bold text-slate-500">Organization Name<input required value={editingCompany.organizationName} onChange={(e) => setEditingCompany({ ...editingCompany, organizationName: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
+              <label className="font-bold text-slate-500">Workspace Name<input required value={editingCompany.workspaceName} onChange={(e) => setEditingCompany({ ...editingCompany, workspaceName: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
               <label className="font-bold text-slate-500">Legal Name<input value={editingCompany.legalName ?? ''} onChange={(e) => setEditingCompany({ ...editingCompany, legalName: e.target.value || null })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
               <label className="font-bold text-slate-500">First Name<input required value={editingCompany.firstName ?? ''} onChange={(e) => setEditingCompany({ ...editingCompany, firstName: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
               <label className="font-bold text-slate-500">Last Name<input required value={editingCompany.lastName ?? ''} onChange={(e) => setEditingCompany({ ...editingCompany, lastName: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
@@ -670,6 +676,26 @@ function CompaniesListView() {
 
               {/* Form grids */}
               <div className="space-y-4 text-xs font-semibold">
+                <div>
+                  <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2.5">Company Identity</h4>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <div>
+                      <label className="block text-[10px] text-slate-500 mb-1 font-bold">Company / Tenant Name</label>
+                      <input type="text" required value={businessName} onChange={(event) => setBusinessName(event.target.value)} className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-indigo-500 rounded-lg px-3 py-2 outline-none font-semibold text-slate-800" placeholder="Shanmuga Hospital" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-slate-500 mb-1 font-bold">Organization Name</label>
+                      <input type="text" required value={organizationName} onChange={(event) => setOrganizationName(event.target.value)} className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-indigo-500 rounded-lg px-3 py-2 outline-none font-semibold text-slate-800" placeholder="Shanmuga Hospitals Org" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-slate-500 mb-1 font-bold">Workspace Name</label>
+                      <input type="text" required value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-indigo-500 rounded-lg px-3 py-2 outline-none font-semibold text-slate-800" placeholder="Production Workspace" />
+                    </div>
+                  </div>
+                </div>
+
+                <hr className="border-slate-100" />
+
                 {/* 1. Contact Info */}
                 <div>
                   <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2.5">Primary Contact</h4>
@@ -715,19 +741,7 @@ function CompaniesListView() {
                 {/* 2. Business Details */}
                 <div>
                   <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2.5">Business Profile</h4>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-[10px] text-slate-500 mb-1 font-bold">Business Name</label>
-                      <input
-                        type="text"
-                        required
-                        value={businessName}
-                        onChange={(e) => setBusinessName(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-indigo-500 rounded-lg px-3 py-2 outline-none font-semibold text-slate-800"
-                        placeholder="Company Corp"
-                      />
-                    </div>
-                    <div>
+                  <div>
                       <label className="block text-[10px] text-slate-500 mb-1 font-bold">Business Phone</label>
                       <input
                         type="text"
@@ -737,7 +751,6 @@ function CompaniesListView() {
                         className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-indigo-500 rounded-lg px-3 py-2 outline-none font-semibold text-slate-800"
                         placeholder="(555) 000-0000"
                       />
-                    </div>
                   </div>
 
                   <div className="grid grid-cols-2 gap-3 mt-3">

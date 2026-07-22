@@ -40,6 +40,7 @@ import {
   BookOpen,
   AlertCircle,
   Upload,
+  Copy,
   X
 } from 'lucide-react';
 
@@ -988,6 +989,23 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
               </div>
               
               <div className="p-6 space-y-6">
+                {agentId && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">Agent ID</label>
+                    <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2 pl-4">
+                      <span className="min-w-0 flex-1 break-all font-mono text-xs font-bold text-slate-700">{agentId}</span>
+                      <button
+                        type="button"
+                        onClick={() => void navigator.clipboard.writeText(agentId)}
+                        title="Copy Agent ID"
+                        className="rounded-lg border border-slate-200 bg-white p-2.5 text-slate-500 transition hover:border-pink-200 hover:text-pink-600"
+                      >
+                        <Copy className="h-4 w-4" />
+                      </button>
+                    </div>
+                    <p className="mt-1.5 text-[10px] font-semibold text-slate-400">Use this identifier in authenticated API and n8n call-task requests.</p>
+                  </div>
+                )}
                 <div>
                   <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">
                     Agent Name <span className="text-red-500">*</span>

@@ -20,6 +20,7 @@ const limitsSchema = z.object(limitsShape).refine(
 
 export const createCompanySchema = z.object({
   businessName: z.string().trim().min(1).max(200),
+  organizationName: z.string().trim().min(1).max(200).optional(),
   legalName: optionalText(240),
   firstName: z.string().trim().min(1).max(100),
   lastName: z.string().trim().min(1).max(100),
@@ -50,6 +51,8 @@ export const createCompanySchema = z.object({
 
 export const updateCompanySchema = z.object({
   businessName: z.string().trim().min(1).max(200).optional(),
+  organizationName: z.string().trim().min(1).max(200).optional(),
+  workspaceName: z.string().trim().min(1).max(160).optional(),
   legalName: optionalText(240),
   firstName: optionalText(100),
   lastName: optionalText(100),

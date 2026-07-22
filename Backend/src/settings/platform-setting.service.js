@@ -1,5 +1,5 @@
 import { AppError } from '../middleware/errors.js';
-import { withAuthServiceContext, withPlatformAdminContext } from '../infrastructure/database-context.js';
+import { withAuthServiceContext, withPlatformAdminContext, withTenantContext } from '../infrastructure/database-context.js';
 
 function normalizeIp(value) {
   return value.startsWith('::ffff:') ? value.slice(7) : value;
@@ -64,5 +64,28 @@ export function updatePlatformSettings(actorUserId, input, metadata = {}) {
       metadata.ipAddress ?? null, metadata.userAgent ?? null,
     ]);
     return mapSettings(result.rows[0]);
+  });
+}
+
+export function getWorkspaceSettings(auth) {
+  return withTenantContext(auth, async (client) => {
+    const result = await client.query(`SELECT
+        u.id AS user_id,u.first_name,u.last_name,u.email::text,
+        t.id AS tenant_id,t.name AS tenant_name,t.timezone,
+        o.id AS organization_id,o.name AS organization_name,
+        w.id AS workspace_id,w.name AS workspace_name
+      FROM users u
+      JOIN tenants t ON t.id=$2 AND t.deleted_at IS NULL
+      JOIN organizations o ON o.tenant_id=t.id AND o.deleted_at IS NULL
+      JOIN workspaces w ON w.id=$3 AND w.tenant_id=t.id AND w.deleted_at IS NULL
+      WHERE u.id=$1 AND u.deleted_at IS NULL LIMIT 1`, [auth.userId, auth.tenantId, auth.workspaceId]);
+    if (!result.rowCount) throw new AppError(404, 'Workspace settings were not found', 'WORKSPACE_SETTINGS_NOT_FOUND');
+    const row = result.rows[0];
+    return {
+      user: { id: row.user_id, firstName: row.first_name, lastName: row.last_name, email: row.email },
+      tenant: { id: row.tenant_id, name: row.tenant_name, timezone: row.timezone },
+      organization: { id: row.organization_id, name: row.organization_name },
+      workspace: { id: row.workspace_id, name: row.workspace_name },
+    };
   });
 }
