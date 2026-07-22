@@ -11,17 +11,21 @@ assert.equal(normalizeProviderKey('AZURE_OpenAI'), 'azure-openai');
 
 const registry = new ProviderAdapterRegistry();
 registry.register('stt', 'speech-provider', ({ providerConfig }) => ({
-  providerConfig, connect() {}, sendAudio() {}, close() {},
-}), { aliases: ['Speech Provider India'] });
+  providerConfig, connect() {}, sendAudio() {}, flush() {}, cancel() {}, close() {},
+  onEvent() {}, async *events() {},
+}), { aliases: ['Speech Provider India'], supports: ({ runtime }) => runtime.protocol !== 'unsupported' });
 registry.register('llm', 'language-provider', ({ providerConfig }) => ({
-  providerConfig, async generate() { return { answer: 'Hello' }; },
+  providerConfig, async *stream() {}, cancel() {}, close() {},
 }));
 registry.register('tts', 'voice-provider', ({ providerConfig }) => ({
-  providerConfig, async synthesize() {}, cancel() {}, close() {},
+  providerConfig, connect() {}, async *synthesizeStream() {}, cancel() {}, close() {},
 }));
 
 const profile = { providers: {
-  stt: { providerName: 'Speech Provider India', modelKey: 'selected-stt' },
+  stt: {
+    providerName: 'Renamed Speech Provider', providerSlug: 'renamed-speech', modelKey: 'selected-stt',
+    modelCapabilities: { runtime: { adapter: 'speech-provider', streaming: true } },
+  },
   llm: { providerName: 'Language Provider', modelKey: 'selected-llm' },
   tts: { providerName: 'Voice Provider', modelKey: 'selected-tts' },
 } };
@@ -30,12 +34,17 @@ assert.equal(adapters.stt.providerConfig.modelKey, 'selected-stt');
 assert.equal(adapters.llm.providerConfig.modelKey, 'selected-llm');
 assert.equal(adapters.tts.providerConfig.modelKey, 'selected-tts');
 
+assert.deepEqual(registry.preflight(profile), {
+  compatible: true,
+  adapters: { stt: 'speech-provider', llm: 'language-provider', tts: 'voice-provider' },
+});
+
 assert.throws(
   () => registry.resolve('tts', { providerName: 'Not Registered' }),
   (error) => error.code === 'VOICE_PROVIDER_ADAPTER_NOT_FOUND',
 );
 assert.throws(
-  () => registry.register('llm', 'language-provider', () => ({ generate() {} })),
+  () => registry.register('llm', 'language-provider', () => ({ stream() {} })),
   /already registered/,
 );
 await assert.rejects(
@@ -44,7 +53,18 @@ await assert.rejects(
     invalid.register('stt', 'invalid', () => ({}));
     return invalid.create('stt', { providerName: 'invalid' });
   }),
-  /must implement connect, sendAudio, and close/,
+  /missing: connect, sendAudio, flush, cancel, close, onEvent, events/,
+);
+
+assert.throws(
+  () => registry.preflight({ providers: {
+    stt: { providerName: 'Unknown STT', modelKey: 'stt-x' },
+    llm: profile.providers.llm,
+    tts: { ...profile.providers.tts, modelCapabilities: { streaming: false } },
+  } }),
+  (error) => error.code === 'VOICE_RUNTIME_ADAPTERS_UNAVAILABLE'
+    && error.details.incompatible.length === 2
+    && error.details.incompatible.some((item) => item.code === 'VOICE_PROVIDER_STREAMING_UNSUPPORTED'),
 );
 
 assert.equal(registry.unregister('stt', 'speech-provider'), true);

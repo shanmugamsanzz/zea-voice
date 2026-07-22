@@ -25,7 +25,9 @@ async function loadCalledNumberAccount(to) {
 }
 
 export async function validateIncomingPlivoCall(input, dependencies = {}) {
-  const account = await (dependencies.loadCalledNumberAccount ?? loadCalledNumberAccount)(input.payload.To);
+  const direction = input.payload.Direction ?? 'inbound';
+  const platformNumber = direction === 'outbound' ? input.payload.From : input.payload.To;
+  const account = await (dependencies.loadCalledNumberAccount ?? loadCalledNumberAccount)(platformNumber);
   if (account.phone_status !== 'active') {
     throw new AppError(409, 'Called Plivo number is not active', 'PLIVO_CALLED_NUMBER_INACTIVE');
   }
@@ -58,7 +60,7 @@ export async function validateIncomingPlivoCall(input, dependencies = {}) {
     providerCallId: input.payload.CallUUID,
     from: input.payload.From,
     to: input.payload.To,
-    direction: input.payload.Direction ?? 'inbound',
+    direction,
     callStatus: input.payload.CallStatus ?? null,
     phoneNumberId: account.phone_number_id,
     telephonyAccountId: account.telephony_account_id,
@@ -80,10 +82,45 @@ export function createVoiceMediaToken(callSession, options = {}) {
   const payload = encode({
     callId: callSession.id,
     providerCallId: callSession.providerCallId,
+    iat: nowSeconds,
     exp: nowSeconds + env.VOICE_MEDIA_TOKEN_TTL_SECONDS,
   });
   const signature = crypto.createHmac('sha256', options.secret ?? mediaSecret()).update(payload).digest('base64url');
   return `${payload}.${signature}`;
+}
+
+export function validateVoiceMediaToken(token, expectedCallId, options = {}) {
+  const parts = String(token ?? '').split('.');
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    throw new AppError(401, 'Voice media token is invalid', 'VOICE_MEDIA_TOKEN_INVALID');
+  }
+  const expectedSignature = crypto.createHmac('sha256', options.secret ?? mediaSecret())
+    .update(parts[0]).digest('base64url');
+  const supplied = Buffer.from(parts[1]);
+  const expected = Buffer.from(expectedSignature);
+  if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) {
+    throw new AppError(401, 'Voice media token signature is invalid', 'VOICE_MEDIA_TOKEN_INVALID');
+  }
+  let payload;
+  try {
+    payload = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'));
+  } catch {
+    throw new AppError(401, 'Voice media token payload is invalid', 'VOICE_MEDIA_TOKEN_INVALID');
+  }
+  const nowSeconds = Math.floor((options.now ?? Date.now()) / 1000);
+  if (!payload.callId || !payload.providerCallId || !Number.isInteger(payload.exp)) {
+    throw new AppError(401, 'Voice media token payload is incomplete', 'VOICE_MEDIA_TOKEN_INVALID');
+  }
+  if (payload.exp <= nowSeconds) {
+    throw new AppError(401, 'Voice media token has expired', 'VOICE_MEDIA_TOKEN_EXPIRED');
+  }
+  if (payload.iat && payload.iat > nowSeconds + 30) {
+    throw new AppError(401, 'Voice media token is not active', 'VOICE_MEDIA_TOKEN_INVALID');
+  }
+  if (expectedCallId && payload.callId !== expectedCallId) {
+    throw new AppError(401, 'Voice media token does not match the call', 'VOICE_MEDIA_TOKEN_CALL_MISMATCH');
+  }
+  return payload;
 }
 
 function xmlEscape(value) {

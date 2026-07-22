@@ -57,8 +57,24 @@ const envSchema = z.object({
   VOICE_MEDIA_SIGNING_SECRET: z.preprocess(emptyToUndefined, z.string().min(32).optional()),
   VOICE_MEDIA_TOKEN_TTL_SECONDS: z.coerce.number().int().min(30).max(600).default(120),
   VOICE_CALL_SESSION_TTL_SECONDS: z.coerce.number().int().min(60).max(86400).default(3600),
+  VOICE_MEDIA_MAX_MESSAGE_BYTES: z.coerce.number().int().min(1024).max(1048576).default(65536),
+  VOICE_MEDIA_MAX_PENDING_MESSAGES: z.coerce.number().int().min(10).max(10000).default(250),
+  VOICE_MEDIA_IDLE_TIMEOUT_MS: z.coerce.number().int().min(5000).max(300000).default(45000),
+  VOICE_COMPANY_DEFAULT_CONCURRENCY: z.coerce.number().int().min(1).max(10000).default(20),
+  VOICE_CALL_OWNERSHIP_TTL_SECONDS: z.coerce.number().int().min(10).max(300).default(60),
+  VOICE_CALL_HEARTBEAT_INTERVAL_MS: z.coerce.number().int().min(1000).max(60000).default(15000),
+  VOICE_RUNTIME_INSTANCE_ID: z.preprocess(emptyToUndefined, z.string().min(1).max(160).optional()),
+  VOICE_SHUTDOWN_DRAIN_MS: z.coerce.number().int().min(500).max(30000).default(5000),
+  VOICE_AUDIO_FRAME_MS: z.coerce.number().int().min(10).max(100).default(20),
+  VOICE_AUDIO_INPUT_MAX_BUFFER_MS: z.coerce.number().int().min(100).max(10000).default(1000),
+  VOICE_AUDIO_OUTPUT_MAX_BUFFER_MS: z.coerce.number().int().min(100).max(10000).default(2000),
+  VOICE_WELCOME_CACHE_TTL_SECONDS: z.coerce.number().int().min(60).max(604800).default(86400),
+  VOICE_WELCOME_CACHE_MAX_BYTES: z.coerce.number().int().min(1024).max(10485760).default(2097152),
+  VOICE_WELCOME_CACHE_TIMEOUT_MS: z.coerce.number().int().min(5).max(1000).default(50),
   VOICE_POSTCALL_TIMEOUT_MS: z.coerce.number().int().min(250).max(30000).default(5000),
   VOICE_POSTCALL_MAX_RESPONSE_BYTES: z.coerce.number().int().min(1024).max(1048576).default(65536),
+  VOICE_PRECALL_TIMEOUT_MS: z.coerce.number().int().min(250).max(30000).default(5000),
+  VOICE_PRECALL_MAX_RESPONSE_BYTES: z.coerce.number().int().min(1024).max(1048576).default(65536),
   CAMPAIGN_WORKERS_ENABLED: booleanFromString.default(false),
   CAMPAIGN_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(100).default(20),
   CONCURRENCY_RETRY_DELAY_MS: z.coerce.number().int().min(1000).max(60000).default(5000),
@@ -103,10 +119,18 @@ const envSchema = z.object({
   QDRANT_DISTANCE: z.enum(['Cosine', 'Dot', 'Euclid', 'Manhattan']).default('Cosine'),
   QDRANT_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(100).max(30000).default(3000),
   LLM_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(250).max(120000).default(15000),
+  LLM_CIRCUIT_FAILURE_THRESHOLD: z.coerce.number().int().min(1).max(20).default(5),
+  LLM_CIRCUIT_RESET_TIMEOUT_MS: z.coerce.number().int().min(1000).max(300000).default(30000),
   LLM_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(16).max(8192).default(300),
   LLM_MAX_HISTORY_MESSAGES: z.coerce.number().int().min(0).max(50).default(12),
   LLM_SYSTEM_PROMPT_MAX_CHARS: z.coerce.number().int().min(2000).max(100000).default(40000),
   LLM_KNOWLEDGE_CONTEXT_MAX_CHARS: z.coerce.number().int().min(500).max(50000).default(12000),
+  TTS_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(30000),
+  VOICE_TOOL_TIMEOUT_MS: z.coerce.number().int().min(250).max(30000).default(5000),
+  VOICE_TOOL_MAX_RESPONSE_BYTES: z.coerce.number().int().min(1024).max(1048576).default(65536),
+  VOICE_RUNTIME_MAX_RECOVERABLE_ERRORS: z.coerce.number().int().min(0).max(10).default(2),
+  VOICE_PROVIDER_MAX_RETRIES: z.coerce.number().int().min(0).max(3).default(1),
+  VOICE_PROVIDER_RETRY_BASE_MS: z.coerce.number().int().min(10).max(5000).default(100),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -124,6 +148,10 @@ if (parsed.data.DATABASE_POOL_MIN > parsed.data.DATABASE_POOL_MAX) {
 
 if (parsed.data.RAG_CHUNK_OVERLAP_TOKENS >= parsed.data.RAG_CHUNK_SIZE_TOKENS) {
   throw new Error('Invalid environment configuration: RAG_CHUNK_OVERLAP_TOKENS must be smaller than RAG_CHUNK_SIZE_TOKENS');
+}
+
+if (parsed.data.VOICE_CALL_HEARTBEAT_INTERVAL_MS >= parsed.data.VOICE_CALL_OWNERSHIP_TTL_SECONDS * 1000) {
+  throw new Error('Invalid environment configuration: VOICE_CALL_HEARTBEAT_INTERVAL_MS must be shorter than VOICE_CALL_OWNERSHIP_TTL_SECONDS');
 }
 
 const frozenEmbeddingModel = 'intfloat/multilingual-e5-small';

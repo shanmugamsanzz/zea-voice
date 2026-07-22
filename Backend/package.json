@@ -52,6 +52,15 @@
     "verify:voice-task3": "node scripts/verify-voice-task-3.js",
     "verify:voice-task4": "node scripts/verify-voice-task-4.js",
     "verify:voice-task5": "node scripts/verify-voice-task-5.js",
+    "verify:voice-task6": "node scripts/verify-voice-task-6.js",
+    "verify:voice-task7": "node scripts/verify-voice-task-7.js",
+    "verify:voice-stt": "node scripts/verify-voice-stt.js",
+    "verify:voice-llm-streaming": "node scripts/verify-voice-llm-streaming.js",
+    "verify:voice-tts": "node scripts/verify-voice-tts.js",
+    "verify:voice-orchestrator": "node scripts/verify-voice-orchestrator.js",
+    "verify:voice-persistence": "node scripts/verify-voice-persistence.js",
+    "verify:voice-hardening": "node scripts/verify-voice-hardening.js",
+    "verify:voice-live-calls": "node scripts/verify-voice-live-calls.js",
     "verify:voice-task8": "node scripts/verify-voice-task-8.js",
     "verify:voice-task9": "node scripts/verify-voice-task-9.js",
     "verify:voice-task10": "node scripts/verify-voice-task-10.js",
@@ -78,6 +87,7 @@
     "pg": "^8.16.3",
     "pino": "^9.14.0",
     "pino-http": "^10.5.0",
+    "ws": "^8.21.0",
     "zod": "^4.1.12"
   },
   "devDependencies": {

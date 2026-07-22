@@ -16,12 +16,14 @@ function model(row, prefix) {
 export function resolvePhoneNumberAgent(call, dependencies = {}) {
   const contextRunner = dependencies.contextRunner ?? defaultContextRunner;
   return contextRunner(async (client) => {
+    const platformNumber = call.direction === 'outbound' ? call.from : call.to;
     const assignment = await client.query(
-      `SELECT pa.tenant_id
+      `SELECT pa.tenant_id,COALESCE(tl.max_total_concurrency,20) max_total_concurrency
          FROM phone_numbers pn
          JOIN phone_number_assignments pa ON pa.phone_number_id=pn.id AND pa.released_at IS NULL
+         LEFT JOIN tenant_limits tl ON tl.tenant_id=pa.tenant_id
         WHERE pn.id=$1 AND pn.e164=$2 AND pn.status='active' AND pn.deleted_at IS NULL`,
-      [call.phoneNumberId, call.to],
+      [call.phoneNumberId, platformNumber],
     );
     if (!assignment.rowCount) {
       throw new AppError(404, 'Called number is not assigned to a company', 'VOICE_PHONE_NOT_ASSIGNED');
@@ -73,7 +75,9 @@ export function resolvePhoneNumberAgent(call, dependencies = {}) {
       agentId: agent.id,
       agentName: agent.name,
       language: agent.language,
+      callDirection: call.direction,
       usageDirection: agent.usage_direction,
+      concurrencyLimit: Number(assignment.rows[0].max_total_concurrency),
       stt: model(configured, 'stt'),
       llm: model(configured, 'llm'),
       tts: model(configured, 'tts'),

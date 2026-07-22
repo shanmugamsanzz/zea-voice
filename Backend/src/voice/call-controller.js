@@ -94,12 +94,34 @@ export class CallController {
   }
 
   async setAssistantResponse(text, now = Date.now()) {
-    if (this.state !== callStates.THINKING) {
+    if (![callStates.THINKING, callStates.SPEAKING].includes(this.state)) {
       throw new AppError(409, 'Call is not waiting for an assistant response', 'VOICE_CALL_NOT_THINKING');
     }
     const transcript = await this.#append('assistant', text, now);
-    await this.#transition(callStates.SPEAKING, 'assistant_response_ready', now);
+    if (this.state === callStates.THINKING) await this.#transition(callStates.SPEAKING, 'assistant_response_ready', now);
     return { action: 'speak', text: transcript.text, transcript };
+  }
+
+  async beginAssistantResponse(now = Date.now()) {
+    if (this.state === callStates.SPEAKING) return { action: 'speak' };
+    if (this.state !== callStates.THINKING) {
+      throw new AppError(409, 'Call is not waiting for an assistant response', 'VOICE_CALL_NOT_THINKING');
+    }
+    await this.#transition(callStates.SPEAKING, 'assistant_stream_started', now);
+    return { action: 'speak' };
+  }
+
+  async beginSystemResponse(reason = 'system_response', now = Date.now()) {
+    if (this.state !== callStates.LISTENING) {
+      throw new AppError(409, 'Call is not listening', 'VOICE_CALL_NOT_LISTENING');
+    }
+    await this.#transition(callStates.THINKING, reason, now);
+    return { action: 'generate_response' };
+  }
+
+  async recordAssistantMessage(text, now = Date.now()) {
+    if (this.terminal) throw new AppError(409, 'Call is already complete', 'VOICE_CALL_TERMINAL');
+    return this.#append('assistant', text, now);
   }
 
   async playbackComplete(now = Date.now()) {
@@ -108,7 +130,7 @@ export class CallController {
   }
 
   async interrupt(reason = 'caller_barge_in', now = Date.now()) {
-    if (this.state !== callStates.SPEAKING) return { action: 'none' };
+    if (![callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.state)) return { action: 'none' };
     await this.#hooks.onInterrupt({ callId: this.callSession.id, reason, at: now });
     await this.#transition(callStates.LISTENING, reason, now);
     return { action: 'cancel_playback' };

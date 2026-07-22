@@ -24,13 +24,17 @@ const url = `${process.env.PUBLIC_BASE_URL}/webhooks/plivo/answer`;
 const values = Object.entries(payload).sort(([left], [right]) => left.localeCompare(right))
   .map(([key, value]) => `${key}${value}`).join('');
 const signature = crypto.createHmac('sha256', token).update(`${url}?${values}.${nonce}`).digest('base64');
+const resolvedPlatformNumbers = [];
 const dependencies = {
-  loadCalledNumberAccount: async () => ({
+  loadCalledNumberAccount: async (number) => {
+    resolvedPlatformNumbers.push(number);
+    return ({
     phone_number_id: '00000000-0000-4000-8000-000000000001',
     telephony_account_id: '00000000-0000-4000-8000-000000000002',
     phone_status: 'active',
     account_status: 'connected',
-  }),
+    });
+  },
   authToken: token,
   answerUrl: url,
 };
@@ -39,6 +43,20 @@ const validated = await validateIncomingPlivoCall({ payload, rawPayload: payload
 assert.equal(validated.providerCallId, payload.CallUUID);
 assert.equal(validated.from, payload.From);
 assert.equal(validated.to, payload.To);
+assert.equal(resolvedPlatformNumbers[0], payload.To);
+
+const outboundPayload = {
+  ...payload, CallUUID: 'call-uuid-outbound', From: payload.To, To: payload.From, Direction: 'outbound',
+};
+const outboundValues = Object.entries(outboundPayload).sort(([left], [right]) => left.localeCompare(right))
+  .map(([key, value]) => `${key}${value}`).join('');
+const outboundSignature = crypto.createHmac('sha256', token)
+  .update(`${url}?${outboundValues}.${nonce}`).digest('base64');
+const outbound = await validateIncomingPlivoCall({
+  payload: outboundPayload, rawPayload: outboundPayload, nonce, signature: outboundSignature,
+}, dependencies);
+assert.equal(outbound.direction, 'outbound');
+assert.equal(resolvedPlatformNumbers.at(-1), outboundPayload.From);
 
 const rawPlivoPayload = {
   ...payload,

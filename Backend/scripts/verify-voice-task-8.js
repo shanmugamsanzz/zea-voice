@@ -17,17 +17,23 @@ const profile = {
     providerId: 'provider-1', providerName: 'Custom LLM Vendor', modelId: 'model-1', modelKey: 'chosen-model',
     modelSettings: { runtimeAdapter: 'test-llm-adapter' }, modelCapabilities: {}, parameters: {},
   } },
+  tools: [{ id: 'tool-1', name: 'Book Appointment', description: 'Book a hospital appointment', configuration: {
+    inputSchema: { type: 'object', properties: { date: { type: 'string' } }, required: ['date'] },
+  } }],
 };
 const registry = new ProviderAdapterRegistry();
 let received;
 registry.register('llm', 'test-llm-adapter', ({ providerConfig, runtimeContext }) => ({
-  async generate(input) {
+  async *stream(input) {
     received = { providerConfig, runtimeContext, input };
-    return {
-      answer: 'This response came from the selected model.', finishReason: 'stop',
+    yield { type: 'text_delta', delta: 'This response came ' };
+    yield { type: 'text_delta', delta: 'from the selected model.' };
+    yield {
+      type: 'completed', finishReason: 'stop',
       usage: { inputTokens: 10, outputTokens: 8, totalTokens: 18 }, providerRequestId: 'request-1', durationMs: 42,
     };
   },
+  cancel() {}, close() {},
 }));
 
 const response = await generateSelectedLlmResponse(profile, {
@@ -42,6 +48,7 @@ assert.equal(received.providerConfig.modelKey, 'chosen-model');
 assert.equal(received.runtimeContext.callId, 'call-1');
 assert.equal(received.input.temperature, 0.2);
 assert.equal(received.input.maxOutputTokens, 120);
+assert.equal(received.input.tools[0].name, 'Book_Appointment');
 assert.match(received.input.messages[0].content, /Verified service information/);
 assert.equal(received.input.messages.at(-1).content, 'What services are available?');
 

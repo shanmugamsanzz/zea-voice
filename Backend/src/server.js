@@ -9,6 +9,8 @@ import { closeQueues } from './queues/queue.registry.js';
 import { closeCampaignWorkers, startCampaignWorkers } from './campaigns/campaign.workers.js';
 import { assertRagInfrastructure } from './rag/rag-infrastructure.js';
 import { closeKnowledgeProcessingWorker, startKnowledgeProcessingWorker } from './knowledge-bases/knowledge-processing.worker.js';
+import { attachPlivoMediaWebSocket } from './voice/plivo-media.socket.js';
+import { attachRealtimeConversationOrchestrator } from './voice/realtime-conversation-orchestrator.js';
 
 async function bootstrap() {
   await runPendingMigrations();
@@ -25,12 +27,17 @@ async function bootstrap() {
   await startKnowledgeProcessingWorker();
 
   const server = createServer(createApp());
+  const mediaWebSocket = attachPlivoMediaWebSocket(server, {
+    onSession(session) {
+      attachRealtimeConversationOrchestrator(session);
+    },
+  });
   server.listen(env.PORT, env.HOST, () => {
     logger.info({ host: env.HOST, port: env.PORT }, 'Zea Voice API is running');
-    logger.warn({
-      icon: '⚠️', stage: 'voice.media_runtime', status: 'not_implemented',
+    logger.info({
+      icon: '🎧', stage: 'voice.media_websocket', status: 'ready',
       mediaPath: '/webhooks/plivo/media',
-    }, '⚠️ Voice calls can be answered, but Plivo audio streaming, STT, LLM and TTS execution are not implemented');
+    }, '🎧 Authenticated Plivo media WebSocket is ready');
   });
 
   let shuttingDown = false;
@@ -38,6 +45,8 @@ async function bootstrap() {
     if (shuttingDown) return;
     shuttingDown = true;
     logger.info({ signal }, 'Graceful shutdown started');
+
+    await mediaWebSocket.close();
 
     server.close(async (serverError) => {
       const results = await Promise.allSettled([

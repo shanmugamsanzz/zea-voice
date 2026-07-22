@@ -2,9 +2,13 @@ import { Router } from 'express';
 import { AppError } from '../middleware/errors.js';
 import { buildPlivoStreamXml, validateIncomingPlivoCall } from './plivo-answer.service.js';
 import { resolvePhoneNumberAgent } from './agent-resolver.service.js';
-import { createVoiceCallSession } from './call-session-store.js';
+import { createVoiceCallSession, saveVoiceCallPreCallResult } from './call-session-store.js';
 import { plivoAnswerPayloadSchema } from './voice.schemas.js';
 import { loadAgentRuntimeProfile } from './providers/provider-config.js';
+import { assertRuntimeAdapterCompatibility } from './providers/registry.js';
+import { registerImplementedProviderAdapters } from './providers/defaults.js';
+import { executePreCall } from './integrations/precall.service.js';
+import { voiceCallOwnership } from './call-ownership.service.js';
 
 export const voiceRouter = Router();
 
@@ -56,15 +60,33 @@ voiceRouter.post('/answer', async (request, response) => {
     tenantId: runtimeAgent.tenantId, agentId: runtimeAgent.agentId, agentName: runtimeAgent.agentName,
   }, '🏢 Company and active voice agent resolved');
   const runtimeProfile = await loadAgentRuntimeProfile(runtimeAgent);
+  registerImplementedProviderAdapters();
+  const adapterCompatibility = assertRuntimeAdapterCompatibility(runtimeProfile);
   request.log.info({
     icon: '📝', stage: 'prompt.loaded', providerCallId: call.providerCallId,
     agentId: runtimeAgent.agentId, promptCharacters: runtimeProfile.agent.prompt?.length ?? 0,
     promptConfigured: Boolean(runtimeProfile.agent.prompt?.trim()),
+    runtimeAdapters: adapterCompatibility.adapters,
   }, '📝 Agent system prompt loaded (content hidden)');
   providerLog(request, '🎙️', 'stt', call.providerCallId, runtimeProfile.providers.stt);
   providerLog(request, '🧠', 'llm', call.providerCallId, runtimeProfile.providers.llm);
   providerLog(request, '🔊', 'tts', call.providerCallId, runtimeProfile.providers.tts);
-  const callSession = await createVoiceCallSession({ call, runtimeProfile });
+  await voiceCallOwnership.acquire({
+    tenantId: runtimeAgent.tenantId,
+    providerCallId: call.providerCallId,
+    limit: runtimeAgent.concurrencyLimit,
+  });
+  let callSession = await createVoiceCallSession({ call, runtimeProfile });
+  if (callSession.created) {
+    const preCall = await executePreCall(runtimeProfile, call);
+    callSession = await saveVoiceCallPreCallResult(callSession.id, preCall);
+    request.log.info({
+      icon: '🔗', stage: 'precall.completed', callId: callSession.id,
+      attempted: preCall.attempted, delivered: preCall.delivered,
+      status: preCall.status ?? null, durationMs: preCall.durationMs,
+      mappedContextKeys: Object.keys(preCall.context ?? {}),
+    }, '🔗 Pre-call integration completed');
+  }
   request.log.info({
     providerCallId: call.providerCallId,
     phoneNumberId: call.phoneNumberId,
@@ -79,22 +101,22 @@ voiceRouter.post('/answer', async (request, response) => {
   request.log.warn({
     icon: '⚠️', stage: 'media.awaiting_runtime', callId: callSession.id,
     providerCallId: call.providerCallId, mediaPath: '/webhooks/plivo/media',
-  }, '⚠️ Waiting for Plivo media WebSocket; media runtime is not implemented');
+  }, '⚠️ Waiting for authenticated Plivo media WebSocket');
   response.type('application/xml').send(buildPlivoStreamXml(callSession));
 });
 
 voiceRouter.get('/media', (request, response) => {
-  request.log.error({
-    icon: '❌',
-    stage: 'media.unavailable',
+  request.log.warn({
+    icon: '⚠️',
+    stage: 'media.upgrade_required',
     callId: request.query.call_id ?? null,
     upgradeRequested: request.get('upgrade')?.toLowerCase() === 'websocket',
-  }, '❌ Plivo media WebSocket rejected: voice media runtime is not implemented');
+  }, '⚠️ Plivo media endpoint requires a WebSocket upgrade');
   response.set('Upgrade', 'websocket').status(426).json({
     success: false,
     error: {
-      code: 'VOICE_MEDIA_RUNTIME_NOT_IMPLEMENTED',
-      message: 'Plivo media WebSocket runtime is not implemented',
+      code: 'VOICE_MEDIA_WEBSOCKET_REQUIRED',
+      message: 'Use a WebSocket upgrade for the Plivo media endpoint',
     },
     requestId: request.id,
   });

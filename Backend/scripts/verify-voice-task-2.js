@@ -17,7 +17,7 @@ function runner({ direction = 'both', modelsAvailable = true } = {}) {
   let queryNumber = 0;
   return async (operation) => operation({ query: async () => {
     queryNumber += 1;
-    if (queryNumber === 1) return { rowCount: 1, rows: [{ tenant_id: ids.tenant }] };
+    if (queryNumber === 1) return { rowCount: 1, rows: [{ tenant_id: ids.tenant, max_total_concurrency: 12 }] };
     if (queryNumber === 2) return { rowCount: 1, rows: [{
       id: ids.agent, tenant_id: ids.tenant, workspace_id: ids.workspace, name: 'Test Agent',
       language: 'English (US)', usage_direction: direction,
@@ -37,6 +37,11 @@ assert.equal(resolved.agentId, ids.agent);
 assert.equal(resolved.stt.modelKey, 'stt-model');
 assert.equal(resolved.llm.modelKey, 'llm-model');
 assert.equal(resolved.tts.modelKey, 'tts-model');
+assert.equal(resolved.concurrencyLimit, 12);
+
+const outboundCall = { phoneNumberId: ids.phone, from: '+918035313119', to: '+919876543210', direction: 'outbound' };
+const outboundResolved = await resolvePhoneNumberAgent(outboundCall, { contextRunner: runner({ direction: 'both' }) });
+assert.equal(outboundResolved.callDirection, 'outbound');
 
 await assert.rejects(
   resolvePhoneNumberAgent(call, { contextRunner: runner({ direction: 'outbound' }) }),

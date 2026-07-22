@@ -4,6 +4,7 @@ import { requireTenantContext } from '../auth/tenant.middleware.js';
 import { AppError } from '../middleware/errors.js';
 import { callIdSchema, forceHangupSchema, listCallsSchema, parseCallInput } from './call.schemas.js';
 import { forceHangup, getCall, listCalls } from './call.service.js';
+import { tenantProviderHealth } from '../voice/provider-health.service.js';
 
 function valid(schema, value) {
   const parsed = parseCallInput(schema, value);
@@ -26,6 +27,10 @@ callAdminRouter.post('/:callId/hangup', async (req, res) => {
 
 export const tenantCallRouter = Router();
 tenantCallRouter.use(authenticateRequest, requireTenantContext);
+tenantCallRouter.get('/runtime/provider-health', async (req, res) => res.json({
+  success: true,
+  data: tenantProviderHealth.snapshot(req.tenant.tenantId),
+}));
 tenantCallRouter.get('/', async (req, res) => res.json({ success: true, data: await listCalls(req.auth, valid(listCallsSchema.omit({ companyId: true }), req.query)) }));
 tenantCallRouter.get('/:callId', async (req, res) => {
   const { callId } = valid(callIdSchema, req.params);
