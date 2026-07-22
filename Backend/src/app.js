@@ -45,7 +45,17 @@ function sanitizeLoggedRequest(request) {
     ? { ...request.query }
     : request.query;
   if (query && 'token' in query) query.token = '[REDACTED]';
-  return { ...request, url: redactRequestUrl(request.url), query };
+  return {
+    id: request.id,
+    method: request.method,
+    url: redactRequestUrl(request.url),
+    query,
+    remoteAddress: request.remoteAddress,
+  };
+}
+
+function sanitizeLoggedResponse(response) {
+  return { statusCode: response.statusCode };
 }
 
 export function createApp() {
@@ -66,7 +76,8 @@ export function createApp() {
   app.use(cookieParser());
   app.use(pinoHttp({
     logger,
-    serializers: { req: sanitizeLoggedRequest },
+    serializers: { req: sanitizeLoggedRequest, res: sanitizeLoggedResponse },
+    autoLogging: { ignore: (request) => request.url?.split('?')[0] === '/health' },
     genReqId: (request, response) => {
       const requestId = request.headers['x-request-id']?.toString() ?? crypto.randomUUID();
       response.setHeader('x-request-id', requestId);

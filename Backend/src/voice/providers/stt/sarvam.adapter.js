@@ -77,6 +77,9 @@ export function resolveSarvamSttConfiguration(providerConfig) {
   const vadSignals = boolean(value(settings, 'sttVadSignals', 'vadSignals', 'vad_signals'), true);
   const flushSignal = boolean(value(settings, 'sttFlushSignal', 'flushSignal', 'flush_signal'), true);
   const inputAudioCodec = sarvamCodec(audioFormat);
+  // Sarvam uses input_audio_codec on the WebSocket URL to describe raw PCM.
+  // The per-message schema still requires its MIME-style encoding discriminator.
+  const messageEncoding = 'audio/wav';
   const query = {
     'language-code': language,
     model: providerConfig.modelKey,
@@ -93,7 +96,10 @@ export function resolveSarvamSttConfiguration(providerConfig) {
     if (configured !== undefined) query[field] = configured;
   }
   for (const [key, configured] of Object.entries(query)) endpoint.searchParams.set(key, String(configured));
-  return Object.freeze({ endpoint: endpoint.toString(), apiKey, language, mode, audioFormat, inputAudioCodec, query });
+  return Object.freeze({
+    endpoint: endpoint.toString(), apiKey, language, mode, audioFormat,
+    inputAudioCodec, messageEncoding, query,
+  });
 }
 
 function providerError(error, retryable = false) {
@@ -227,7 +233,7 @@ export function createSarvamSttAdapter({ providerConfig, runtimeContext = {} }) 
       audio: {
         data: audio.toString('base64'),
         sample_rate: String(configuration.audioFormat.sampleRate),
-        encoding: configuration.inputAudioCodec,
+        encoding: configuration.messageEncoding,
       },
     }));
   }

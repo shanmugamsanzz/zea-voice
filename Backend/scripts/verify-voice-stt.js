@@ -40,6 +40,7 @@ assert.equal(endpoint.searchParams.get('language-code'), 'ta-IN');
 assert.equal(endpoint.searchParams.get('model'), 'saaras:v3');
 assert.equal(endpoint.searchParams.get('sample_rate'), '16000');
 assert.equal(endpoint.searchParams.get('input_audio_codec'), 'pcm_s16le');
+assert.equal(configuration.messageEncoding, 'audio/wav');
 assert.equal(endpoint.searchParams.get('high_vad_sensitivity'), 'false');
 assert.equal(endpoint.searchParams.get('positive_speech_threshold'), '0.75');
 assert.ok(!configuration.endpoint.includes('database-secret'));
@@ -90,7 +91,7 @@ assert.equal(connectionOptions.headers['Api-Subscription-Key'], 'database-secret
 const pcm = Buffer.alloc(640, 1);
 adapter.sendAudio(pcm);
 assert.equal(socket.sent[0].audio.sample_rate, '16000');
-assert.equal(socket.sent[0].audio.encoding, 'pcm_s16le');
+assert.equal(socket.sent[0].audio.encoding, 'audio/wav');
 assert.deepEqual(Buffer.from(socket.sent[0].audio.data, 'base64'), pcm);
 
 socket.emit('message', Buffer.from(JSON.stringify({ type: 'events', data: { signal_type: 'START_SPEECH' } })));

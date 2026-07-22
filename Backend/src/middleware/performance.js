@@ -23,7 +23,7 @@ export function performanceMiddleware(request, response, next) {
 
     response.once('finish', () => {
       const summary = getPerformanceSummary();
-      if (!summary) return;
+      if (!summary || summary.path === '/health') return;
       const log = summary.durationMs >= env.PERFORMANCE_SLOW_REQUEST_MS ? logger.warn.bind(logger) : logger.info.bind(logger);
       log({ ...summary, statusCode: response.statusCode }, 'API performance');
     });
