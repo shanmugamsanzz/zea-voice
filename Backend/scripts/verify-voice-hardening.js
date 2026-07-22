@@ -136,6 +136,25 @@ await assert.rejects(validateAgentRuntimeModels({
 }, { sttModelId: 's', llmModelId: 'l', ttsModelId: 't' }, configuredRegistry),
 (error) => error.code === 'AGENT_MODEL_RUNTIME_INCOMPATIBLE' && error.details.field === 'llmModelId');
 
+const inheritedRegistry = new ProviderAdapterRegistry();
+inheritedRegistry.register('stt', 'stt-inherited', () => ({ close() {} }), {
+  supports: ({ providerConfig }) => providerConfig.effectiveSettings.inputSampleRate === '16000'
+    && providerConfig.effectiveSettings.inputAudioCodec === 'pcm_s16le',
+});
+inheritedRegistry.register('llm', 'llm-inherited', () => ({ close() {} }));
+inheritedRegistry.register('tts', 'tts-inherited', () => ({ close() {} }));
+let inheritedQuery = 0;
+await validateAgentRuntimeModels({
+  async query() {
+    const kind = ['stt', 'llm', 'tts'][inheritedQuery++];
+    return { rowCount: 1, rows: [{
+      model_id: `${kind}-model`, model_key: `${kind}-model`, model_settings: {}, model_capabilities: {},
+      provider_settings: kind === 'stt' ? { inputSampleRate: '16000', inputAudioCodec: 'pcm_s16le' } : {},
+      provider_id: `${kind}-provider`, provider_name: `${kind}-inherited`, provider_slug: `${kind}-inherited`,
+    }] };
+  },
+}, { sttModelId: 's', llmModelId: 'l', ttsModelId: 't' }, inheritedRegistry);
+
 console.log(JSON.stringify({
   success: true,
   task: 'Voice Task 10 - hardening and scale simulation',
