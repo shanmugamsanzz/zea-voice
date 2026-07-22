@@ -4,12 +4,13 @@ import { requireTenantContext } from '../auth/tenant.middleware.js';
 import { AppError } from '../middleware/errors.js';
 import {
   accountIdSchema, assignPhoneNumberSchema, createTelephonyAccountSchema,
-  listPhoneNumbersSchema, parseTelephonyInput, phoneNumberIdSchema, releasePhoneNumberSchema,
+  listPhoneNumbersSchema, mapTenantPhoneAgentSchema, parseTelephonyInput, phoneNumberIdSchema, releasePhoneNumberSchema,
   updateTelephonyAccountSchema,
 } from './telephony.schemas.js';
 import {
   assignPhoneNumber, createTelephonyAccount, deleteTelephonyAccount, listPhoneNumbers, listTelephonyAccounts,
-  listAssignablePhoneOptions, listCompanySubaccounts, listTenantPhoneNumbers, releasePhoneNumber, syncTelephonyAccount, updateTelephonyAccount,
+  listAssignablePhoneOptions, listCompanySubaccounts, listTenantPhoneNumbers, mapTenantPhoneNumberAgent,
+  releasePhoneNumber, syncTelephonyAccount, updateTelephonyAccount,
 } from './telephony.service.js';
 
 function valid(schema, value) {
@@ -50,4 +51,22 @@ telephonyAdminRouter.post('/phone-numbers/:phoneNumberId/release', async (req, r
 
 export const tenantPhoneRouter = Router();
 tenantPhoneRouter.use(authenticateRequest, requireTenantContext);
-tenantPhoneRouter.get('/', async (req, res) => res.json({ success: true, data: await listTenantPhoneNumbers(req.auth) }));
+function tenantAuth(req) {
+  return { ...req.auth, tenantId: req.tenant.tenantId, workspaceId: req.tenant.workspaceId };
+}
+tenantPhoneRouter.get('/', async (req, res) => res.json({
+  success: true,
+  data: await listTenantPhoneNumbers(tenantAuth(req)),
+}));
+tenantPhoneRouter.put(
+  '/:phoneNumberId/agent',
+  requireRoles('SUPER_ADMIN', 'COMPANY_DEVELOPER'),
+  async (req, res) => {
+    const { phoneNumberId } = valid(phoneNumberIdSchema, req.params);
+    const { agentId } = valid(mapTenantPhoneAgentSchema, req.body);
+    res.json({
+      success: true,
+      data: await mapTenantPhoneNumberAgent(tenantAuth(req), phoneNumberId, agentId),
+    });
+  },
+);

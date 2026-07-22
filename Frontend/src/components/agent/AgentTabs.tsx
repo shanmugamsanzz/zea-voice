@@ -40,6 +40,8 @@ import {
   BookOpen,
   AlertCircle,
   Upload,
+  Copy,
+  Check,
   X
 } from 'lucide-react';
 
@@ -221,6 +223,7 @@ function knowledgeStatusLabel(status: unknown) {
 export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const { role } = useAppState();
   const isReadOnly = role === 'USER'; // Restricted view
+  const [agentIdCopied, setAgentIdCopied] = useState(false);
 
   const [agent, setAgent] = useState<VoiceAgent>(() => {
     const base: VoiceAgent = {
@@ -883,6 +886,24 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
           <span className="text-xs font-bold uppercase tracking-widest text-violet-100">Voice AI Architect</span>
           <h2 className="text-2xl font-bold mt-1 tracking-tight">{agentId ? `Edit Agent: ${agent.name}` : 'Provision New Voice Agent'}</h2>
           <p className="text-xs text-violet-100/80 font-medium mt-0.5">Customize real-time listening, speech engines, prompting brains, and integrations.</p>
+          {agentId && (
+            <div className="mt-3 flex max-w-xl items-center gap-2 rounded-lg border border-white/20 bg-white/10 px-3 py-2">
+              <span className="shrink-0 text-[9px] font-black uppercase tracking-wider text-violet-100">Agent ID</span>
+              <code className="min-w-0 flex-1 break-all text-[10px] font-bold text-white">{agentId}</code>
+              <button
+                type="button"
+                onClick={() => {
+                  void navigator.clipboard.writeText(agentId);
+                  setAgentIdCopied(true);
+                  window.setTimeout(() => setAgentIdCopied(false), 1800);
+                }}
+                className="rounded-md p-1 text-violet-100 hover:bg-white/10 hover:text-white"
+                aria-label="Copy Agent ID"
+              >
+                {agentIdCopied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+              </button>
+            </div>
+          )}
         </div>
         
         <div className="flex items-center space-x-2">

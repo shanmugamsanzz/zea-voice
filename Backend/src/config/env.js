@@ -51,6 +51,7 @@ const envSchema = z.object({
   PLIVO_CREDIT_USD_TO_INR_RATE: z.coerce.number().positive().max(1000).default(80),
   PROVIDER_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(15000),
   PLIVO_BALANCE_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1000).max(30000).default(6000),
+  N8N_API_KEY: z.preprocess(emptyToUndefined, z.string().min(16).optional()),
   PROVIDER_BALANCE_CACHE_TTL_SECONDS: z.coerce.number().int().min(10).max(600).default(60),
   PROVIDER_BALANCE_CACHE_TIMEOUT_MS: z.coerce.number().int().min(100).max(5000).default(500),
   PUBLIC_BASE_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),

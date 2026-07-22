@@ -70,7 +70,7 @@ export function createAgent(auth, input) { return withTenantContext(auth, async 
       input.sttModelId,input.llmModelId,input.ttsModelId,input.voiceId,input.prompt,input.welcomeMessage??null,input.temperature,
       input.interruptionSensitivity,input.silenceTimeoutMs,input.inactivityTimeoutSeconds,JSON.stringify(input.settings),auth.userId])).rows[0];
     await client.query(`INSERT INTO audit_logs (tenant_id,workspace_id,actor_user_id,actor_type,action,entity_type,entity_id,after_data)
-      VALUES ($1,$2,$3,'user','VOICE_AGENT_CREATED','voice_agent',$4,$5::jsonb)`, [auth.tenantId,auth.workspaceId,auth.userId,created.id,JSON.stringify({name:input.name,status:input.status})]);
+      VALUES ($1,$2,$3,'user','VOICE_AGENT_CREATED','voice_agent',$4,$5::jsonb)`, [auth.tenantId,auth.workspaceId,auth.userId,created.id,JSON.stringify({agentId:created.id,name:input.name,status:input.status})]);
     return map(await agentRow(client, auth.tenantId, created.id));
   } catch (error) { if (error.code==='23505') throw new AppError(409, 'Agent name or phone mapping already exists', 'AGENT_CONFLICT'); throw error; }
 }); }

@@ -24,6 +24,7 @@ function requiredApiKeyScope(request) {
     '/admin/payments': 'payments',
     '/payments': 'payments',
     '/admin/settings': 'settings',
+    '/settings': 'settings',
     '/dashboard': 'dashboard',
     '/users': 'users',
     '/agents': 'agents',
@@ -31,6 +32,7 @@ function requiredApiKeyScope(request) {
     '/knowledge-bases': 'knowledge_bases',
     '/calls': 'calls',
     '/reports': 'reports',
+    '/ai-insights': 'reports',
   };
   const resource = resourceByBaseUrl[request.baseUrl];
   if (!resource) return null;

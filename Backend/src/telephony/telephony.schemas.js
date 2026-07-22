@@ -34,6 +34,9 @@ export const accountIdSchema = z.object({ accountId: z.string().uuid() });
 export const phoneNumberIdSchema = z.object({ phoneNumberId: z.string().uuid() });
 export const assignPhoneNumberSchema = z.object({ companyId: z.string().uuid() });
 export const releasePhoneNumberSchema = z.object({ reason: z.string().trim().max(300).optional() });
+export const mapTenantPhoneAgentSchema = z.object({
+  agentId: z.string().uuid().nullable(),
+});
 export const listPhoneNumbersSchema = z.object({
   search: z.string().trim().max(100).optional(),
   assignment: z.enum(['all', 'assigned', 'unassigned']).default('all'),

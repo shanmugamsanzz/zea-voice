@@ -19,6 +19,7 @@ import { apiKeyRouter } from './api-keys/api-key.routes.js';
 import { callAdminRouter, tenantCallRouter } from './calls/call.routes.js';
 import { paymentAdminRouter, tenantPaymentRouter } from './payments/payment.routes.js';
 import { platformSettingRouter } from './settings/platform-setting.routes.js';
+import { tenantSettingRouter } from './settings/tenant-setting.routes.js';
 import { dashboardRouter } from './dashboard/dashboard.routes.js';
 import { platformDashboardRouter } from './dashboard/platform-dashboard.routes.js';
 import { userRouter } from './users/user.routes.js';
@@ -29,6 +30,8 @@ import { plivoWebhookRouter } from './telephony/plivo-webhook.routes.js';
 import { performanceMiddleware } from './middleware/performance.js';
 import { voiceRouter } from './voice/voice.routes.js';
 import { vqaRouter } from './vqa/vqa.routes.js';
+import { aiInsightRouter } from './ai-insights/ai-insight.routes.js';
+import { n8nIntegrationRouter } from './integrations/n8n/n8n.routes.js';
 
 export function createApp() {
   const app = express();
@@ -76,12 +79,15 @@ export function createApp() {
   app.use('/admin/payments', paymentAdminRouter);
   app.use('/payments', tenantPaymentRouter);
   app.use('/admin/settings', platformSettingRouter);
+  app.use('/settings', tenantSettingRouter);
   app.use('/dashboard', dashboardRouter);
   app.use('/admin/dashboard', platformDashboardRouter);
   app.use('/users', userRouter);
   app.use('/agents', agentRouter);
   app.use('/campaigns', campaignRouter);
   app.use('/vqa', vqaRouter);
+  app.use('/ai-insights', aiInsightRouter);
+  app.use('/integrations/n8n', n8nIntegrationRouter);
   app.use('/knowledge-bases', knowledgeBaseRouter);
   app.use('/webhooks/plivo', plivoWebhookRouter);
   app.use('/webhooks/plivo', voiceRouter);

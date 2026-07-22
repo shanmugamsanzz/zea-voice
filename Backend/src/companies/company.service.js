@@ -17,6 +17,7 @@ function mapCompany(row) {
     organizationId: row.organization_id,
     workspaceId: row.workspace_id,
     businessName: row.business_name,
+    organizationName: row.organization_name,
     legalName: row.legal_name,
     firstName: row.first_name,
     lastName: row.last_name,
@@ -55,7 +56,8 @@ function mapCompany(row) {
 const companySelect = `
   SELECT count(*) OVER()::int AS full_count,
          t.id AS tenant_id, o.id AS organization_id, w.id AS workspace_id,
-         o.name AS business_name, o.legal_name, o.first_name, o.last_name,
+         t.name AS business_name, o.name AS organization_name,
+         o.legal_name, o.first_name, o.last_name,
          o.primary_email, o.business_phone, o.website, o.billing_tier, o.per_minute_price,
          o.address_line1, o.address_line2, o.state, o.country, o.postal_code,
          t.timezone, t.status, w.name AS workspace_name,
@@ -104,7 +106,7 @@ export async function createCompany(actorUserId, input, metadata = {}) {
            state, country, postal_code, timezone, status, created_by)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
          RETURNING id`,
-        [tenant.id, input.businessName, input.legalName, input.firstName, input.lastName,
+        [tenant.id, input.organizationName ?? input.businessName, input.legalName, input.firstName, input.lastName,
           input.email, input.businessPhone, input.website, input.billingTier, input.perMinutePrice,
           input.addressLine1, input.addressLine2, input.state, input.country,
           input.postalCode, input.timezone, input.status, actorUserId],
@@ -145,7 +147,10 @@ export async function createCompany(actorUserId, input, metadata = {}) {
                  $4::jsonb, $5, $6, $7)`,
         [tenant.id, workspace.id, actorUserId, JSON.stringify({
           tenantId: tenant.id, organizationId: organization.id, workspaceId: workspace.id,
-          businessName: input.businessName, status: input.status,
+          businessName: input.businessName,
+          organizationName: input.organizationName ?? input.businessName,
+          workspaceName: input.workspaceName,
+          status: input.status,
         }), requestId, ipAddress, userAgent],
       );
 
@@ -207,7 +212,7 @@ export function updateCompany(actorUserId, tenantId, input, metadata = {}) {
   return withPlatformAdminContext(actorUserId, async (client) => {
     const before = mapCompany(await getCompanyRow(client, tenantId));
     const organizationFields = {
-      businessName: 'name', legalName: 'legal_name', firstName: 'first_name', lastName: 'last_name',
+      organizationName: 'name', legalName: 'legal_name', firstName: 'first_name', lastName: 'last_name',
       email: 'primary_email', businessPhone: 'business_phone', website: 'website',
       billingTier: 'billing_tier', perMinutePrice: 'per_minute_price',
       addressLine1: 'address_line1', addressLine2: 'address_line2',
@@ -227,6 +232,12 @@ export function updateCompany(actorUserId, tenantId, input, metadata = {}) {
       if (input.timezone !== undefined) {
         await client.query('UPDATE workspaces SET timezone = $2 WHERE tenant_id = $1 AND is_default = true', [tenantId, input.timezone]);
       }
+    }
+    if (input.workspaceName !== undefined) {
+      await client.query(
+        'UPDATE workspaces SET name = $2 WHERE tenant_id = $1 AND is_default = true',
+        [tenantId, input.workspaceName],
+      );
     }
     if (input.locale !== undefined || input.currency !== undefined) {
       await client.query(

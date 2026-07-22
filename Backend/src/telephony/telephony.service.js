@@ -552,16 +552,132 @@ export function releasePhoneNumber(actorUserId, phoneNumberId, reason, fetchImpl
 export function listTenantPhoneNumbers(auth) {
   return withTenantContext(auth, async (client) => {
     const result = await client.query(
-      `SELECT n.*, 'plivo'::text AS provider, n.assigned_tenant_id AS tenant_id,
-              t.name AS company_name, x.assigned_at
-       FROM phone_numbers n
-       JOIN tenants t ON t.id = n.assigned_tenant_id
-       LEFT JOIN phone_number_assignments x
-         ON x.phone_number_id = n.id AND x.tenant_id = n.assigned_tenant_id AND x.released_at IS NULL
-       WHERE n.deleted_at IS NULL AND n.assigned_tenant_id = $1
-       ORDER BY n.e164`,
+      "SELECT n.id, n.e164, n.country_iso, n.number_type, n.capabilities, n.status, "
+      + "x.assigned_at, agent.id AS agent_id, agent.name AS agent_name, "
+      + "agent.status AS agent_status "
+      + "FROM phone_numbers n "
+      + "JOIN phone_number_assignments x "
+      + "ON x.phone_number_id = n.id AND x.tenant_id = $1 AND x.released_at IS NULL "
+      + "LEFT JOIN voice_agents agent "
+      + "ON agent.phone_number_id = n.id AND agent.tenant_id = $1 "
+      + "AND agent.deleted_at IS NULL AND agent.status <> 'archived' "
+      + "WHERE n.deleted_at IS NULL AND n.assigned_tenant_id = $1 "
+      + "ORDER BY n.e164",
       [auth.tenantId],
     );
-    return result.rows.map(mapPhone);
+    return result.rows.map(mapTenantPhone);
+  });
+}
+
+function mapTenantPhone(row) {
+  return {
+    id: row.id,
+    number: row.e164,
+    countryIso: row.country_iso,
+    numberType: row.number_type,
+    capabilities: row.capabilities,
+    status: row.status,
+    assignedAt: row.assigned_at,
+    assignedAgent: row.agent_id ? {
+      id: row.agent_id,
+      name: row.agent_name,
+      status: row.agent_status,
+    } : null,
+  };
+}
+
+async function tenantPhoneRow(client, tenantId, phoneNumberId) {
+  const result = await client.query(
+    "SELECT n.id, n.e164, n.country_iso, n.number_type, n.capabilities, n.status, "
+    + "x.assigned_at, agent.id AS agent_id, agent.name AS agent_name, "
+    + "agent.status AS agent_status "
+    + "FROM phone_numbers n "
+    + "JOIN phone_number_assignments x "
+    + "ON x.phone_number_id = n.id AND x.tenant_id = $1 AND x.released_at IS NULL "
+    + "LEFT JOIN voice_agents agent "
+    + "ON agent.phone_number_id = n.id AND agent.tenant_id = $1 "
+    + "AND agent.deleted_at IS NULL AND agent.status <> 'archived' "
+    + "WHERE n.id = $2 AND n.deleted_at IS NULL AND n.assigned_tenant_id = $1",
+    [tenantId, phoneNumberId],
+  );
+  if (!result.rowCount) {
+    throw new AppError(404, 'Company phone number was not found', 'TENANT_PHONE_NUMBER_NOT_FOUND');
+  }
+  return result.rows[0];
+}
+
+export function mapTenantPhoneNumberAgent(auth, phoneNumberId, agentId) {
+  return withTenantContext(auth, async (client) => {
+    await client.query(
+      'SELECT pg_advisory_xact_lock(hashtext($1))',
+      ['tenant-phone:' + auth.tenantId + ':' + phoneNumberId],
+    );
+    const phone = await client.query(
+      "SELECT n.id, n.status FROM phone_numbers n "
+      + "JOIN phone_number_assignments assignment "
+      + "ON assignment.phone_number_id = n.id "
+      + "AND assignment.tenant_id = $1 AND assignment.released_at IS NULL "
+      + "WHERE n.id = $2 AND n.assigned_tenant_id = $1 AND n.deleted_at IS NULL",
+      [auth.tenantId, phoneNumberId],
+    );
+    if (!phone.rowCount) {
+      throw new AppError(404, 'Company phone number was not found', 'TENANT_PHONE_NUMBER_NOT_FOUND');
+    }
+    if (phone.rows[0].status !== 'active') {
+      throw new AppError(409, 'Only active company phone numbers can be mapped', 'TENANT_PHONE_NUMBER_NOT_ACTIVE');
+    }
+
+    const current = await client.query(
+      "SELECT id, name FROM voice_agents "
+      + "WHERE tenant_id = $1 AND phone_number_id = $2 "
+      + "AND deleted_at IS NULL AND status <> 'archived' FOR UPDATE",
+      [auth.tenantId, phoneNumberId],
+    );
+    let target = null;
+    if (agentId) {
+      const targetResult = await client.query(
+        "SELECT id, name, phone_number_id FROM voice_agents "
+        + "WHERE tenant_id = $1 AND id = $2 "
+        + "AND deleted_at IS NULL AND status <> 'archived' FOR UPDATE",
+        [auth.tenantId, agentId],
+      );
+      if (!targetResult.rowCount) {
+        throw new AppError(404, 'Company voice agent was not found', 'TENANT_PHONE_AGENT_NOT_FOUND');
+      }
+      target = targetResult.rows[0];
+    }
+
+    const currentAgent = current.rows[0] || null;
+    if ((currentAgent?.id || null) !== (target?.id || null)) {
+      await client.query(
+        "UPDATE voice_agents SET phone_number_id = NULL, updated_by = $4 "
+        + "WHERE tenant_id = $1 AND deleted_at IS NULL "
+        + "AND (phone_number_id = $2 OR ($3::uuid IS NOT NULL AND id = $3))",
+        [auth.tenantId, phoneNumberId, target?.id || null, auth.userId],
+      );
+      if (target) {
+        await client.query(
+          "UPDATE voice_agents SET phone_number_id = $3, updated_by = $4 "
+          + "WHERE tenant_id = $1 AND id = $2",
+          [auth.tenantId, target.id, phoneNumberId, auth.userId],
+        );
+      }
+      await client.query(
+        "INSERT INTO audit_logs "
+        + "(tenant_id, workspace_id, actor_user_id, actor_type, action, entity_type, "
+        + "entity_id, before_data, after_data) "
+        + "VALUES ($1, $2, $3, 'user', $4, 'phone_number', $5, $6::jsonb, $7::jsonb)",
+        [
+          auth.tenantId,
+          auth.workspaceId,
+          auth.userId,
+          target ? 'PHONE_NUMBER_AGENT_MAPPED' : 'PHONE_NUMBER_AGENT_UNMAPPED',
+          phoneNumberId,
+          JSON.stringify({ agentId: currentAgent?.id || null, agentName: currentAgent?.name || null }),
+          JSON.stringify({ agentId: target?.id || null, agentName: target?.name || null }),
+        ],
+      );
+    }
+    return mapTenantPhone(await tenantPhoneRow(client, auth.tenantId, phoneNumberId));
   });
 }

@@ -5,8 +5,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { useAppState } from '../../store/AppState';
-import { MOCK_PHONE_NUMBERS } from '../../lib/mockData';
-import { VoiceAgent, Campaign, PhoneNumber } from '../../types';
+import { VoiceAgent, Campaign } from '../../types';
 import { 
   LayoutDashboard, 
   Activity, 
@@ -55,6 +54,7 @@ import { AgentTabs } from '../agent/AgentTabs';
 import { CallVolumeChart, DurationBarChart, OutcomePieChart, LatencyBreakdownChart } from '../charts/DashboardCharts';
 import { apiRequest } from '../../lib/api';
 import { CallLogsAnalyticsView } from './CallLogsAnalyticsView';
+import { AiInsightsView } from './AiInsightsView';
 
 interface CompanyDashboardData {
   company: { tenantId: string; workspaceId: string; name: string; timezone: string };
@@ -119,7 +119,6 @@ export function CompanyViews() {
   const { view, setView, selectedAgentId, setSelectedAgentId } = useAppState();
   const [agents, setAgents] = useState<VoiceAgent[]>([]);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
-  const [phoneNumbers, setPhoneNumbers] = useState<PhoneNumber[]>(MOCK_PHONE_NUMBERS);
 
   // Callback to save a voice agent
   const handleSaveAgent = (savedAgent: VoiceAgent) => {
@@ -150,12 +149,13 @@ export function CompanyViews() {
     case 'call-logs':
       return <CallLogsAnalyticsView />;
     case 'phone-numbers':
-      return <CompanyPhoneNumbersView phoneNumbers={phoneNumbers} setPhoneNumbers={setPhoneNumbers} agents={agents} />;
+      return <CompanyPhoneNumbersView />;
     case 'vqa-voice':
       return <VqaVoiceView />;
     case 'ai-insights':
       return <AiInsightsView />;
     case 'integrations':
+      return <CompanyIntegrationsView />;
     case 'settings':
       return <CompanySettingsView />;
     default:
@@ -377,6 +377,9 @@ function CompanyDashboard({ onEditAgent, onAddAgent }: { onEditAgent: (id: strin
                   <div>
                     <h4 className="font-bold text-slate-800 text-sm tracking-tight">{agent.name}</h4>
                     <span className="text-[10px] font-mono text-slate-400 block mt-0.5">Brain: {agent.llmModel}</span>
+                    <span className="mt-1 block max-w-[220px] break-all font-mono text-[9px] font-bold text-slate-500">
+                      Agent ID: {agent.id}
+                    </span>
                   </div>
                   <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider border ${
                     agent.status === 'active' ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : 'bg-slate-100 border-slate-200 text-slate-500'
@@ -540,70 +543,6 @@ function VqaVoiceView() {
   );
 }
 
-function AiInsightsView() {
-  const customerObjections = [
-    { name: 'Pricing & Subscription Plans', percentage: 42, color: '#7C3AED' },
-    { name: 'Integration and API Webhooks', percentage: 31, color: '#EC4899' },
-    { name: 'Language & Voice Pronunciations', percentage: 17, color: '#3B82F6' },
-    { name: 'Transfer to Live Agent requests', percentage: 10, color: '#F59E0B' },
-  ];
-
-  const actionItems = [
-    { text: 'Add direct billing triggers to custom Salesforce pipelines.', type: 'Integration', difficulty: 'Easy' },
-    { text: 'Fine-tune STT sensitivity thresholds to handle noise filtering better.', type: 'STT Operator', difficulty: 'Medium' },
-    { text: 'Provision 3 additional phone DID numbers in active area codes.', type: 'Carrier DID', difficulty: 'Easy' },
-    { text: 'Rewrite CRM transfer prompts to emphasize immediate human fallback.', type: 'Prompt Brain', difficulty: 'Hard' },
-  ];
-
-  return (
-    <div className="space-y-6">
-      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
-        <h2 className="text-xl font-black text-slate-800 tracking-tight">AI Cognitive Insights</h2>
-        <p className="text-xs text-slate-500 font-semibold mt-0.5">Deep-sentiment analysis, intent frequency tracking, and conversation intelligence.</p>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
-          <h3 className="font-bold text-slate-800 text-sm tracking-tight mb-4">Primary Conversation Topics & Obstacles</h3>
-          <div className="space-y-4 text-xs font-semibold">
-            {customerObjections.map((obj, index) => (
-              <div key={index}>
-                <div className="flex justify-between text-slate-600 mb-1">
-                  <span>{obj.name}</span>
-                  <span className="font-bold" style={{ color: obj.color }}>{obj.percentage}%</span>
-                </div>
-                <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden">
-                  <div className="h-full rounded-full" style={{ width: String(obj.percentage) + '%', backgroundColor: obj.color }} />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between">
-          <div>
-            <h3 className="font-bold text-slate-800 text-sm tracking-tight mb-4">Autonomous Recommendations Captured</h3>
-            <div className="space-y-3.5 text-xs font-semibold">
-              {actionItems.map((item, index) => (
-                <div key={index} className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
-                  <div className="flex justify-between items-center">
-                    <span className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-lg text-[9px] font-bold border border-indigo-100">{item.type}</span>
-                    <span className="text-[10px] text-slate-400">Difficulty: {item.difficulty}</span>
-                  </div>
-                  <p className="text-slate-700 font-bold mt-2 leading-relaxed">"{item.text}"</p>
-                </div>
-              ))}
-            </div>
-          </div>
-          <button className="w-full text-center py-2.5 bg-violet-50 hover:bg-violet-100 text-violet-600 rounded-xl text-xs font-bold mt-4 transition border border-violet-200 cursor-pointer">
-            Export Recommendations to CRM
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function CompanyAnalytics() {
   const [days, setDays] = useState(30);
   const [analytics, setAnalytics] = useState<CompanyAnalyticsData | null>(null);
@@ -710,7 +649,7 @@ interface CampaignApiData {
 }
 
 interface CampaignAgentOption { id: string; name: string; status: string }
-interface CampaignPhoneOption { id: string; number: string; provider: string; status: string }
+interface CampaignPhoneOption { id: string; number: string; status: string }
 
 function campaignFromApi(value: CampaignApiData): Campaign {
   return {
@@ -1130,7 +1069,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                       >
                         <option value="">Select an assigned number</option>
                         {campaignPhones.map(num => (
-                          <option key={num.id} value={num.id}>{num.number} ({num.provider})</option>
+                          <option key={num.id} value={num.id}>{num.number}</option>
                         ))}
                       </select>
                     </div>
@@ -1688,7 +1627,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                 <label className="block text-[10px] font-black text-slate-500 uppercase mb-1">From Number</label>
                 <select required value={rtNumberId} onChange={(event) => setRtNumberId(event.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-800 outline-none cursor-pointer">
                   <option value="">Select an assigned number</option>
-                  {campaignPhones.map((phone) => <option key={phone.id} value={phone.id}>{phone.number} ({phone.provider})</option>)}
+                  {campaignPhones.map((phone) => <option key={phone.id} value={phone.id}>{phone.number}</option>)}
                 </select>
               </div>
 
@@ -2030,7 +1969,19 @@ function AgentsListView({ agents, setAgents, onEditAgent, onAddAgent }: { agents
               <div className="flex justify-between items-start">
                 <div>
                   <h4 className="font-bold text-slate-800 text-sm tracking-tight">{agent.name}</h4>
-                  <span className="text-[10px] text-slate-400 mt-1 block">TTS ID: {agent.voiceId}</span>
+                  <div className="mt-2 flex items-start gap-1.5">
+                    <span className="shrink-0 text-[9px] font-black uppercase tracking-wider text-slate-400">Agent ID</span>
+                    <code className="min-w-0 flex-1 break-all text-[9px] font-bold text-slate-600">{agent.id}</code>
+                    <button
+                      type="button"
+                      onClick={() => handleCopy(agent.id)}
+                      className="shrink-0 rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-indigo-600"
+                      aria-label={'Copy Agent ID for ' + agent.name}
+                    >
+                      {copiedId === agent.id ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
+                    </button>
+                  </div>
+                  <span className="mt-1 block text-[9px] text-slate-400">Voice ID: {agent.voiceId}</span>
                 </div>
                 <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider border ${
                   agent.status === 'active' ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : 'bg-slate-100 border-slate-200 text-slate-500'
@@ -2349,87 +2300,201 @@ function ReportSelect({ label, icon: Icon, value, onChange, options }: {
 /* ==========================================
    7. COMPANY PHONE NUMBERS
    ========================================== */
-interface PhoneNumbersProps {
-  phoneNumbers: PhoneNumber[];
-  setPhoneNumbers: React.Dispatch<React.SetStateAction<PhoneNumber[]>>;
-  agents: VoiceAgent[];
+interface TenantPhoneNumber {
+  id: string;
+  number: string;
+  countryIso: string | null;
+  numberType: string | null;
+  capabilities: Record<string, unknown>;
+  status: 'active' | 'unavailable' | 'released';
+  assignedAt: string;
+  assignedAgent: { id: string; name: string; status: 'draft' | 'active' } | null;
 }
 
-function CompanyPhoneNumbersView({ phoneNumbers, setPhoneNumbers, agents }: PhoneNumbersProps) {
+interface PhoneAgentOption {
+  id: string;
+  name: string;
+  status: 'draft' | 'active' | 'archived';
+}
+
+function CompanyPhoneNumbersView() {
   const { role } = useAppState();
   const isReadOnly = role === 'USER';
+  const [phoneNumbers, setPhoneNumbers] = useState<TenantPhoneNumber[]>([]);
+  const [agents, setAgents] = useState<PhoneAgentOption[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [mappingId, setMappingId] = useState<string | null>(null);
+  const [error, setError] = useState('');
   const [success, setSuccess] = useState<string | null>(null);
 
-  const assignAgentToNum = (numId: string, agentName: string) => {
-    setPhoneNumbers(phoneNumbers.map(n => {
-      if (n.id === numId) {
-        return { ...n, assignedTo: agentName };
+  const loadPhoneNumbers = async (forceRefresh = false) => {
+    setLoading(true);
+    setError('');
+    try {
+      const options = forceRefresh ? { zeaCache: 'reload' as const } : { zeaCache: 'bypass' as const };
+      const numbersRequest = apiRequest<TenantPhoneNumber[]>('/phone-numbers', options);
+      if (isReadOnly) {
+        setPhoneNumbers(await numbersRequest);
+        setAgents([]);
+      } else {
+        const [numbers, agentResponse] = await Promise.all([
+          numbersRequest,
+          apiRequest<{ items: PhoneAgentOption[] }>('/agents?page=1&pageSize=100', options),
+        ]);
+        setPhoneNumbers(numbers);
+        setAgents(agentResponse.items.filter((agent) => agent.status !== 'archived'));
       }
-      return n;
-    }));
-    setSuccess(`Line reassigned successfully! Incoming calls will now trigger operator [${agentName}].`);
-    setTimeout(() => setSuccess(null), 3000);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Company phone numbers could not be loaded');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { void loadPhoneNumbers(); }, [role]);
+
+  const mapAgent = async (phoneNumberId: string, agentId: string) => {
+    if (isReadOnly) return;
+    setMappingId(phoneNumberId);
+    setError('');
+    setSuccess(null);
+    try {
+      const updated = await apiRequest<TenantPhoneNumber>('/phone-numbers/' + phoneNumberId + '/agent', {
+        method: 'PUT',
+        body: JSON.stringify({ agentId: agentId || null }),
+        zeaCache: 'bypass',
+      });
+      setPhoneNumbers((current) => current.map((number) => number.id === updated.id ? updated : number));
+      setSuccess(updated.assignedAgent
+        ? 'Routing updated to ' + updated.assignedAgent.name + '.'
+        : 'Agent routing removed from this number.');
+      window.setTimeout(() => setSuccess(null), 3000);
+      await loadPhoneNumbers(true);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Agent routing could not be updated');
+    } finally {
+      setMappingId(null);
+    }
   };
 
   return (
-    <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-      <div className="border-b border-slate-200 pb-5 mb-5">
-        <h2 className="text-xl font-bold text-slate-800 tracking-tight">Trunk Assignations</h2>
-        <p className="text-xs text-slate-400 font-medium mt-0.5">Route leased DID telephone lines directly into voice AI operator prompt loops.</p>
+    <div className="space-y-5">
+      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-xs">
+        <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+          <div>
+            <h2 className="text-xl font-black tracking-tight text-slate-800">Phone Numbers</h2>
+            <p className="mt-0.5 text-xs font-semibold text-slate-500">
+              Company-assigned phone numbers and their voice-agent routing.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {isReadOnly && (
+              <span className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-[10px] font-black text-sky-700">
+                READ ONLY
+              </span>
+            )}
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => void loadPhoneNumbers(true)}
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2 text-xs font-black text-slate-600 hover:bg-slate-50 disabled:opacity-60"
+            >
+              <RefreshCw className={'h-4 w-4 ' + (loading ? 'animate-spin' : '')} />
+              Refresh
+            </button>
+          </div>
+        </div>
       </div>
 
       {success && (
-        <div className="p-3 bg-emerald-50 border border-emerald-100 text-emerald-800 rounded-lg text-xs font-semibold mb-4 animate-in fade-in">
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs font-semibold text-emerald-800">
           {success}
         </div>
       )}
+      {error && (
+        <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs font-semibold text-rose-700">
+          Unable to load company phone-number data: {error}
+        </div>
+      )}
 
-      <div className="overflow-x-auto text-xs">
-        <table className="w-full text-left">
-          <thead>
-            <tr className="border-b border-slate-200 text-slate-400 font-bold uppercase tracking-wider text-[9px]">
-              <th className="pb-3">Phone Line</th>
-              <th className="pb-3">Type</th>
-              <th className="pb-3">Active Routing Mapping</th>
-              <th className="pb-3">Monthly Lease Cost</th>
-              <th className="pb-3 text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100 font-semibold">
-            {phoneNumbers.map((num) => (
-              <tr key={num.id} className="hover:bg-slate-50/50">
-                <td className="py-3.5 font-bold font-mono text-slate-800">{num.number}</td>
-                <td className="py-3.5 text-slate-500">{num.type} Trunk</td>
-                <td className="py-3.5">
-                  {num.assignedTo ? (
-                    <span className="bg-indigo-50 text-indigo-700 px-2 py-1 rounded-lg font-bold border border-indigo-100">
-                      {num.assignedTo}
-                    </span>
-                  ) : (
-                    <span className="text-slate-400 italic">No assigned routing</span>
-                  )}
-                </td>
-                <td className="py-3.5 font-mono text-slate-600">₹{num.monthlyCost.toFixed(2)}/mo</td>
-                <td className="py-3.5 text-right">
-                  {!isReadOnly ? (
-                    <select
-                      value={num.assignedTo || ''}
-                      onChange={(e) => assignAgentToNum(num.id, e.target.value)}
-                      className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 font-semibold text-slate-700 outline-none focus:bg-white text-xs cursor-pointer"
-                    >
-                      <option value="">-- Reassign Route --</option>
-                      {agents.map(a => (
-                        <option key={a.id} value={agentLabelShort(a.name)}>{a.name}</option>
-                      ))}
-                    </select>
-                  ) : (
-                    <span className="text-slate-400 italic text-[11px]">Read Only</span>
-                  )}
-                </td>
+      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
+        <div className="overflow-x-auto text-xs">
+          <table className="w-full text-left">
+            <thead>
+              <tr className="border-b border-slate-200 bg-slate-50/70 text-[9px] font-black uppercase tracking-wider text-slate-400">
+                <th className="px-5 py-3.5">Phone Number</th>
+                <th className="px-5 py-3.5">Type</th>
+                <th className="px-5 py-3.5">Status</th>
+                <th className="px-5 py-3.5">Assigned Agent</th>
+                {!isReadOnly && <th className="px-5 py-3.5 text-right">Agent Routing</th>}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody className="divide-y divide-slate-100 font-semibold">
+              {phoneNumbers.map((number) => (
+                <tr key={number.id} className="hover:bg-slate-50/50">
+                  <td className="px-5 py-4">
+                    <span className="block font-mono font-black text-slate-800">{number.number}</span>
+                    <span className="mt-1 block text-[9px] font-semibold text-slate-400">
+                      Assigned {new Date(number.assignedAt).toLocaleDateString()}
+                    </span>
+                  </td>
+                  <td className="px-5 py-4 text-slate-500">
+                    {number.numberType ? agentLabelShort(number.numberType) : 'Voice'}
+                    {number.countryIso ? ' · ' + number.countryIso : ''}
+                  </td>
+                  <td className="px-5 py-4">
+                    <span className={'rounded-full border px-2.5 py-1 text-[9px] font-black uppercase ' + (
+                      number.status === 'active'
+                        ? 'border-emerald-200 bg-emerald-50 text-emerald-600'
+                        : 'border-amber-200 bg-amber-50 text-amber-600'
+                    )}>
+                      {number.status.replaceAll('_', ' ')}
+                    </span>
+                  </td>
+                  <td className="px-5 py-4">
+                    {number.assignedAgent ? (
+                      <span className="rounded-lg border border-indigo-100 bg-indigo-50 px-2 py-1 font-bold text-indigo-700">
+                        {number.assignedAgent.name}
+                      </span>
+                    ) : (
+                      <span className="italic text-slate-400">Not mapped</span>
+                    )}
+                  </td>
+                  {!isReadOnly && (
+                    <td className="px-5 py-4 text-right">
+                      <select
+                        value={number.assignedAgent?.id || ''}
+                        disabled={mappingId === number.id || number.status !== 'active'}
+                        onChange={(event) => void mapAgent(number.id, event.target.value)}
+                        aria-label={'Agent routing for ' + number.number}
+                        className="cursor-pointer rounded-lg border border-slate-200 bg-slate-50 px-2 py-2 text-xs font-semibold text-slate-700 outline-none focus:bg-white disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <option value="">Not mapped</option>
+                        {agents.map((agent) => (
+                          <option key={agent.id} value={agent.id}>{agent.name} ({agent.status})</option>
+                        ))}
+                      </select>
+                    </td>
+                  )}
+                </tr>
+              ))}
+              {!loading && phoneNumbers.length === 0 && (
+                <tr>
+                  <td colSpan={isReadOnly ? 4 : 5} className="px-5 py-14 text-center text-xs font-semibold text-slate-400">
+                    No phone numbers are assigned to this company.
+                  </td>
+                </tr>
+              )}
+              {loading && phoneNumbers.length === 0 && (
+                <tr>
+                  <td colSpan={isReadOnly ? 4 : 5} className="px-5 py-14 text-center text-xs font-semibold text-slate-400">
+                    Loading company phone numbers...
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
@@ -2442,7 +2507,160 @@ function agentLabelShort(fullName: string) {
 /* ==========================================
    8. COMPANY SETTINGS
    ========================================== */
+interface CompanyIdentitySettings {
+  fullName: string;
+  emailAddress: string;
+  organizationName: string;
+  workspaceName: string;
+  organizationId: string;
+  tenantId: string;
+  workspaceId: string;
+}
+
 function CompanySettingsView() {
+  const [identity, setIdentity] = useState<CompanyIdentitySettings | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const loadIdentity = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      setIdentity(await apiRequest<CompanyIdentitySettings>('/settings/profile', { zeaCache: 'bypass' }));
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Company identity could not be loaded');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { void loadIdentity(); }, []);
+
+  const copyIdentifier = async (key: string, value: string) => {
+    await navigator.clipboard.writeText(value);
+    setCopiedId(key);
+    window.setTimeout(() => setCopiedId(null), 1800);
+  };
+
+  const identifiers = identity ? [
+    { key: 'organization', label: 'Organization ID', value: identity.organizationId },
+    { key: 'tenant', label: 'Tenant ID', value: identity.tenantId },
+    { key: 'workspace', label: 'Workspace ID', value: identity.workspaceId },
+  ] : [];
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-col justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-6 shadow-xs sm:flex-row sm:items-center">
+        <div>
+          <h2 className="text-xl font-black tracking-tight text-slate-800">Company Settings</h2>
+          <p className="mt-0.5 text-xs font-semibold text-slate-500">
+            Read-only organization, tenant and active workspace identity.
+          </p>
+        </div>
+        <button
+          type="button"
+          disabled={loading}
+          onClick={() => void loadIdentity()}
+          className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 px-4 py-2 text-xs font-black text-slate-600 hover:bg-slate-50 disabled:opacity-60"
+        >
+          <RefreshCw className={'h-4 w-4 ' + (loading ? 'animate-spin' : '')} />
+          Refresh
+        </button>
+      </div>
+
+      {error && (
+        <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs font-semibold text-rose-700">
+          Unable to load database settings: {error}
+        </div>
+      )}
+
+      {loading && !identity ? (
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+          <div className="h-72 animate-pulse rounded-2xl border border-slate-200 bg-white" />
+          <div className="h-72 animate-pulse rounded-2xl border border-slate-200 bg-white" />
+        </div>
+      ) : identity && (
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+          <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-xs">
+            <div className="mb-6 flex items-center gap-3">
+              <div className="rounded-xl bg-violet-50 p-2.5 text-violet-600">
+                <User className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-800">Organization Profile</h3>
+                <p className="text-[10px] font-semibold text-slate-400">Persisted company workspace details</p>
+              </div>
+            </div>
+            <div className="divide-y divide-slate-100">
+              <div className="flex items-center justify-between gap-4 py-4">
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Full Name</span>
+                <span className="text-right text-sm font-black text-slate-800">{identity.fullName}</span>
+              </div>
+              <div className="flex items-center justify-between gap-4 py-4">
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Email Address</span>
+                <span className="break-all text-right text-sm font-black text-slate-800">{identity.emailAddress}</span>
+              </div>
+              <div className="flex items-center justify-between gap-4 py-4">
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Organization Name</span>
+                <span className="text-right text-sm font-black text-slate-800">{identity.organizationName}</span>
+              </div>
+              <div className="flex items-center justify-between gap-4 py-4">
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Workspace Name</span>
+                <span className="text-right text-sm font-black text-slate-800">{identity.workspaceName}</span>
+              </div>
+            </div>
+            <div className="mt-5 rounded-xl border border-sky-100 bg-sky-50 p-3 text-[10px] font-semibold leading-5 text-sky-700">
+              These values are managed during company creation and displayed here as read-only settings.
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-xs">
+            <div className="mb-6 flex items-center gap-3">
+              <div className="rounded-xl bg-blue-50 p-2.5 text-blue-600">
+                <ShieldCheck className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-800">System Identifiers</h3>
+                <p className="text-[10px] font-semibold text-slate-400">IDs for API and webhook integration</p>
+              </div>
+            </div>
+            <div className="space-y-4">
+              {identifiers.map((item) => (
+                <div key={item.key}>
+                  <label className="mb-1.5 block text-[9px] font-black uppercase tracking-wider text-slate-400">
+                    {item.label}
+                  </label>
+                  <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                    <input
+                      readOnly
+                      value={item.value}
+                      aria-label={item.label}
+                      className="min-w-0 flex-1 bg-transparent font-mono text-[11px] font-bold text-slate-700 outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void copyIdentifier(item.key, item.value)}
+                      className="rounded-lg p-1.5 text-slate-400 hover:bg-white hover:text-violet-600"
+                      aria-label={'Copy ' + item.label}
+                    >
+                      {copiedId === item.key ? <Check className="h-4 w-4 text-emerald-500" /> : <Copy className="h-4 w-4" />}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-3 text-[10px] font-semibold leading-5 text-slate-500">
+              Identifiers are generated by the backend and uniquely map to the authenticated tenant and active workspace.
+            </div>
+          </section>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CompanyIntegrationsView() {
   const { role } = useAppState();
   const isReadOnly = role === 'USER';
   const [success, setSuccess] = useState<string | null>(null);
