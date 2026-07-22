@@ -58,6 +58,7 @@ import { DeveloperAiInsightsView } from '../insights/DeveloperAiInsightsView';
 import { DeveloperPhoneNumbersView } from '../phone-numbers/DeveloperPhoneNumbersView';
 import { DeveloperIntegrationsView } from '../integrations/DeveloperIntegrationsView';
 import { DeveloperWorkspaceSettingsView } from '../settings/DeveloperWorkspaceSettingsView';
+import { DeveloperApiKeysView } from '../api-keys/DeveloperApiKeysView';
 import { CallVolumeChart, DurationBarChart, OutcomePieChart } from '../charts/DashboardCharts';
 import { apiRequest } from '../../lib/api';
 
@@ -141,6 +142,8 @@ export function CompanyViews() {
       return <DeveloperIntegrationsView />;
     case 'settings':
       return <DeveloperWorkspaceSettingsView />;
+    case 'api-keys':
+      return <DeveloperApiKeysView />;
     default:
       return <CompanyDashboard onEditAgent={(id) => { setSelectedAgentId(id); setView('agents/edit'); }} onAddAgent={() => { setSelectedAgentId(null); setView('agents/create'); }} />;
   }
