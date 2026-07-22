@@ -1144,14 +1144,15 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       <select
                         value={sttModelId}
                         disabled={isReadOnly}
-                        onChange={(e) => { const model = sttModels.find((item) => item.id === e.target.value); setSttModelId(e.target.value); if (model) setAgent({ ...agent, sttProvider: model.providerName, sttModel: model.displayName }); }}
-                        className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
+                        onChange={(e) => { const model = sttModels.find((item) => item.id === e.target.value); setSttModelId(e.target.value); setAgent({ ...agent, sttProvider: model?.providerName ?? '', sttModel: model?.displayName ?? '' }); }}
+                        className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-20"
                       >
-                        <option value="" disabled>Select an STT model</option>
+                        <option value="">Unselect STT model</option>
                         {sttModels.map((model) => <option key={model.id} value={model.id}>{model.displayName} — {model.providerName}</option>)}
                       </select>
-                      <div className="absolute inset-y-0 right-0 flex items-center pr-4 pointer-events-none text-slate-400">
-                        <ChevronDown className="w-4 h-4" />
+                      <div className="absolute inset-y-0 right-3 flex items-center gap-2 text-slate-400">
+                        {sttModelId && !isReadOnly && <button type="button" title="Unselect STT model" aria-label="Unselect STT model" onClick={() => { setSttModelId(''); setAgent({ ...agent, sttProvider: '', sttModel: '' }); }} className="rounded-full p-1 hover:bg-red-50 hover:text-red-500"><X className="h-3.5 w-3.5" /></button>}
+                        <ChevronDown className="w-4 h-4 pointer-events-none" />
                       </div>
                     </div>
                   </div>
@@ -1313,14 +1314,15 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       <select
                         value={llmModelId}
                         disabled={isReadOnly}
-                        onChange={(e) => { const model = llmModels.find((item) => item.id === e.target.value); setLlmModelId(e.target.value); if (model) setAgent({ ...agent, llmProvider: model.providerName, llmModel: model.displayName }); }}
-                        className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
+                        onChange={(e) => { const model = llmModels.find((item) => item.id === e.target.value); setLlmModelId(e.target.value); setAgent({ ...agent, llmProvider: model?.providerName ?? '', llmModel: model?.displayName ?? '' }); }}
+                        className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-20"
                       >
-                        <option value="" disabled>Select an LLM model</option>
+                        <option value="">Unselect LLM model</option>
                         {llmModels.map((model) => <option key={model.id} value={model.id}>{model.displayName} — {model.providerName}</option>)}
                       </select>
-                      <div className="absolute inset-y-0 right-0 flex items-center pr-4 pointer-events-none text-slate-400">
-                        <ChevronDown className="w-4 h-4" />
+                      <div className="absolute inset-y-0 right-3 flex items-center gap-2 text-slate-400">
+                        {llmModelId && !isReadOnly && <button type="button" title="Unselect LLM model" aria-label="Unselect LLM model" onClick={() => { setLlmModelId(''); setAgent({ ...agent, llmProvider: '', llmModel: '' }); }} className="rounded-full p-1 hover:bg-red-50 hover:text-red-500"><X className="h-3.5 w-3.5" /></button>}
+                        <ChevronDown className="w-4 h-4 pointer-events-none" />
                       </div>
                     </div>
                   </div>
@@ -1547,14 +1549,15 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       <select
                         value={ttsModelId}
                         disabled={isReadOnly}
-                        onChange={(e) => { const model = ttsModels.find((item) => item.id === e.target.value); setTtsModelId(e.target.value); if (model) setAgent({ ...agent, ttsProvider: model.providerName, ttsModel: model.displayName, voiceId: modelVoiceId(model) }); }}
-                        className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
+                        onChange={(e) => { const model = ttsModels.find((item) => item.id === e.target.value); setTtsModelId(e.target.value); setAgent({ ...agent, ttsProvider: model?.providerName ?? '', ttsModel: model?.displayName ?? '', voiceId: model ? modelVoiceId(model) : '' }); }}
+                        className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-20"
                       >
-                        <option value="" disabled>Select a TTS model</option>
+                        <option value="">Unselect TTS model</option>
                         {ttsModels.map((model) => <option key={model.id} value={model.id}>{model.displayName} — {model.providerName}</option>)}
                       </select>
-                      <div className="absolute inset-y-0 right-0 flex items-center pr-4 pointer-events-none text-slate-400">
-                        <ChevronDown className="w-4 h-4" />
+                      <div className="absolute inset-y-0 right-3 flex items-center gap-2 text-slate-400">
+                        {ttsModelId && !isReadOnly && <button type="button" title="Unselect TTS model" aria-label="Unselect TTS model" onClick={() => { setTtsModelId(''); setAgent({ ...agent, ttsProvider: '', ttsModel: '', voiceId: '' }); }} className="rounded-full p-1 hover:bg-red-50 hover:text-red-500"><X className="h-3.5 w-3.5" /></button>}
+                        <ChevronDown className="w-4 h-4 pointer-events-none" />
                       </div>
                     </div>
                   </div>
