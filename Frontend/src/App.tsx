@@ -12,10 +12,14 @@ import { CompanyViews } from './components/views/CompanyViews';
 import { apiRequest, logout, setAccessToken } from './lib/api';
 import { startTabMeasurement } from './lib/performance';
 import { useResizableTables } from './lib/useResizableTables';
+import { useKpiCardDecorations } from './lib/useKpiCardDecorations';
+import { useSurfaceDecorations } from './lib/useSurfaceDecorations';
 import zeaVoiceBrand from './zea-voice-brand.png';
 
 function CoreApp() {
   useResizableTables();
+  useKpiCardDecorations();
+  useSurfaceDecorations();
   const { role, setRole, setUserEmail, resetNavigation } = useAppState();
   const [authState, setAuthState] = useState<'checking' | 'authenticated' | 'anonymous'>('checking');
 

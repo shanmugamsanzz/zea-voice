@@ -569,6 +569,73 @@ body .zea-premium-shell main {
   opacity: 0.62;
 }
 
+.zea-login-video {
+  position: fixed;
+  z-index: 0;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  pointer-events: none;
+}
+
+.zea-login-video-overlay {
+  position: fixed;
+  z-index: 1;
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(0, 0, 0, 0.08) 0%, rgba(0, 0, 0, 0.2) 44%, rgba(0, 0, 0, 0.72) 73%, rgba(0, 0, 0, 0.82) 100%),
+    linear-gradient(180deg, rgba(0, 0, 0, 0.18), rgba(0, 0, 0, 0.38));
+  pointer-events: none;
+}
+
+.zea-login-frame {
+  color: #f8f5e8;
+  background: linear-gradient(90deg, rgba(7, 8, 6, 0.04), rgba(7, 8, 6, 0.22) 46%, rgba(7, 8, 6, 0.74) 70%, rgba(7, 8, 6, 0.9));
+  border: 1px solid rgba(255, 197, 22, 0.78);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.42), inset 0 0 0 1px rgba(255, 224, 118, 0.05);
+  backdrop-filter: blur(1px);
+}
+
+.zea-login-field {
+  border-bottom: 1px solid rgba(255, 197, 22, 0.72);
+}
+
+body .zea-login-field input {
+  color: #fff9e4 !important;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+body .zea-login-field input:focus {
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+body .zea-login-field input::placeholder {
+  color: rgba(255, 255, 255, 0.58) !important;
+}
+
+@media (max-width: 639px) {
+  .zea-login {
+    background: #000 !important;
+  }
+
+  .zea-login-video,
+  .zea-login-video-overlay {
+    display: none;
+  }
+
+  .zea-login-frame {
+    min-height: auto;
+    background: rgba(8, 9, 7, 0.82);
+    backdrop-filter: blur(10px);
+  }
+}
+
 /* Readability pass: gently enlarge compact UI copy without changing layout. */
 body {
   font-size: 15px;
@@ -623,6 +690,7 @@ body table th,
 body table td {
   border-right: 1px solid rgba(255, 205, 46, 0.13) !important;
   border-bottom: 1px solid rgba(255, 205, 46, 0.13) !important;
+  padding: 0.5rem 0.625rem !important;
   text-align: center !important;
   vertical-align: middle !important;
 }
@@ -689,7 +757,7 @@ body table {
   border: 1px solid rgba(255, 205, 46, 0.24) !important;
   border-collapse: separate !important;
   border-spacing: 0 !important;
-  border-radius: 1rem !important;
+  border-radius: 0.625rem !important;
   overflow: hidden;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.025), 0 14px 32px rgba(0, 0, 0, 0.16);
 }
@@ -734,4 +802,94 @@ body table tbody tr:last-child td {
 body table tbody tr:hover td {
   background: #282b26 !important;
   border-color: rgba(255, 205, 46, 0.24) !important;
+}
+
+/* Low-opacity abstract circle field for non-KPI content surfaces. */
+:root {
+  --zea-surface-circles-sm:
+    radial-gradient(circle 3.5rem at 88% 0%, rgba(190, 193, 196, 0.065) 0 99%, transparent 100%),
+    radial-gradient(circle 2rem at 100% 82%, rgba(190, 193, 196, 0.05) 0 99%, transparent 100%);
+  --zea-surface-circles-md:
+    radial-gradient(circle 5.5rem at 80% -1rem, rgba(190, 193, 196, 0.065) 0 99%, transparent 100%),
+    radial-gradient(circle 3.5rem at 101% 58%, rgba(190, 193, 196, 0.05) 0 99%, transparent 100%),
+    radial-gradient(circle 2.25rem at 84% 90%, rgba(190, 193, 196, 0.06) 0 99%, transparent 100%);
+  --zea-surface-circles-lg:
+    radial-gradient(circle 8rem at 76% -1.5rem, rgba(190, 193, 196, 0.065) 0 99%, transparent 100%),
+    radial-gradient(circle 5rem at 103% 38%, rgba(190, 193, 196, 0.045) 0 99%, transparent 100%),
+    radial-gradient(circle 3.25rem at 87% 62%, rgba(190, 193, 196, 0.06) 0 99%, transparent 100%),
+    radial-gradient(circle 4.25rem at 78% 94%, rgba(190, 193, 196, 0.045) 0 99%, transparent 100%);
+}
+
+body .zea-surface-pattern:not(.zea-kpi-card) {
+  background-color: var(--zea-card-base, #10110f) !important;
+  background-repeat: no-repeat !important;
+}
+
+body .zea-surface-pattern-sm:not(.zea-kpi-card) {
+  background-image: linear-gradient(145deg, var(--zea-card-light, #191a17), var(--zea-card-dark, #090a08)) !important;
+}
+
+body .zea-surface-pattern-md:not(.zea-kpi-card) {
+  background-image: linear-gradient(145deg, var(--zea-card-light, #191a17), var(--zea-card-dark, #090a08)) !important;
+}
+
+body .zea-surface-pattern-lg:not(.zea-kpi-card) {
+  background-image: linear-gradient(145deg, var(--zea-card-light, #191a17), var(--zea-card-dark, #090a08)) !important;
+}
+
+body table:not(.zea-kpi-card) {
+  background-color: #0c0e0c !important;
+  background-image: none !important;
+}
+
+body table:not(.zea-kpi-card) thead,
+body table:not(.zea-kpi-card) th {
+  background-color: #1d201e !important;
+  background-image: none !important;
+}
+
+body table:not(.zea-kpi-card) tbody,
+body table:not(.zea-kpi-card) td {
+  background-color: #202320 !important;
+  background-image: none !important;
+}
+
+/* Keep controls, placeholders and loading/empty states visually clean. */
+body button,
+body button *,
+body input,
+body select,
+body textarea,
+body .animate-pulse,
+body .animate-pulse *,
+body .border-dashed,
+body .border-dashed *,
+body [class*="placeholder"],
+body [class*="placeholder"] * {
+  background-image: none !important;
+}
+
+/* Subtle clipped corner arc for compact KPI/statistic cards. */
+.zea-kpi-card {
+  position: relative !important;
+  isolation: isolate;
+  overflow: hidden !important;
+}
+
+.zea-kpi-card::after {
+  position: absolute;
+  z-index: 0;
+  top: var(--zea-kpi-circle-top, -1.5rem);
+  right: var(--zea-kpi-circle-right, -0.5rem);
+  width: var(--zea-kpi-circle-size, 6.5rem);
+  height: var(--zea-kpi-circle-size, 6.5rem);
+  content: "";
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.17);
+  pointer-events: none;
+}
+
+.zea-kpi-card > * {
+  position: relative;
+  z-index: 1;
 }

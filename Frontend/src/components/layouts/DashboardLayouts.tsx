@@ -268,7 +268,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
               onClick={() => void handleLogout()}
               disabled={loggingOut}
               title={isSidebarMinimized ? 'Logout' : undefined}
-              className={`flex items-center rounded-xl text-xs font-bold text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition disabled:opacity-50 cursor-pointer ${
+              className={`flex items-center rounded-xl text-xs font-bold text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-500/10 transition disabled:opacity-50 cursor-pointer ${
                 isSidebarMinimized ? 'justify-center p-3' : 'w-full space-x-3 px-4 py-3'
               }`}
             >
@@ -352,12 +352,12 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
             <button
               onClick={() => void handleLogout()}
               disabled={loggingOut}
-              className={`flex items-center rounded-xl text-xs font-bold text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition cursor-pointer ${
+              className={`flex items-center rounded-xl text-xs font-bold text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-500/10 transition cursor-pointer ${
                 isSidebarMinimized ? 'justify-center p-3' : 'w-full space-x-3 px-4 py-3'
               }`}
               title={isSidebarMinimized ? "Logout" : undefined}
             >
-              <LogOut className="w-4 h-4 text-rose-500 shrink-0" />
+              <LogOut className="w-4 h-4 text-amber-400 shrink-0" />
               {!isSidebarMinimized && <span>{loggingOut ? 'Logging out...' : 'Logout'}</span>}
             </button>
           </div>
@@ -428,7 +428,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
             <div className="p-4 border-t border-slate-100 dark:border-slate-800/60">
               {role === 'SUPER_ADMIN' ? (
                 <button type="button" onClick={() => void handleLogout()} disabled={loggingOut}
-                  className="w-full flex items-center justify-center gap-2 rounded-xl bg-rose-50 px-4 py-3 text-xs font-bold text-rose-600 hover:bg-rose-100 disabled:opacity-50 cursor-pointer">
+                  className="w-full flex items-center justify-center gap-2 rounded-xl bg-amber-50 px-4 py-3 text-xs font-bold text-amber-400 hover:bg-amber-100 disabled:opacity-50 cursor-pointer">
                   <LogOut className="w-4 h-4" />
                   <span>{loggingOut ? 'Logging out...' : 'Logout'}</span>
                 </button>

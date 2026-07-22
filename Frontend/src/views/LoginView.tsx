@@ -3,11 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAppState } from '../store/AppState';
 import { ShieldAlert, Key, Mail, ShieldCheck } from 'lucide-react';
 import { login } from '../lib/api';
 import zeaVoiceBrand from '../zea-voice-brand.png';
+import loginBackgroundVideo from '../../video2.mp4';
 
 export function LoginView({ onLogin }: { onLogin: () => void }) {
   const { setRole, setUserEmail } = useAppState();
@@ -15,6 +16,22 @@ export function LoginView({ onLogin }: { onLogin: () => void }) {
   const [passwordInput, setPasswordInput] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showVideo, setShowVideo] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia('(min-width: 640px)');
+    const update = () => setShowVideo(mediaQuery.matches);
+    update();
+    mediaQuery.addEventListener('change', update);
+
+    return () => {
+      mediaQuery.removeEventListener('change', update);
+    };
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -34,67 +51,63 @@ export function LoginView({ onLogin }: { onLogin: () => void }) {
   };
 
   return (
-    <div className="zea-login min-h-screen flex items-center justify-center p-4 font-sans">
-      <div className="zea-login-card rounded-3xl max-w-md w-full overflow-hidden">
-        {/* Banner with gradient background */}
-        <div className="zea-login-banner p-8 text-center relative">
-          <img src={zeaVoiceBrand} alt="Zea Voice" className="mx-auto h-28 w-full max-w-[320px] object-contain" />
-          <p className="text-xs text-amber-100/70 mt-1 font-semibold uppercase tracking-widest">Autonomous Voice SaaS Platform</p>
-        </div>
+    <div className="zea-login min-h-screen overflow-hidden font-sans">
+      {showVideo && (
+        <>
+          <video className="zea-login-video" autoPlay muted loop playsInline preload="auto" aria-hidden="true"
+            onCanPlay={(event) => { void event.currentTarget.play().catch(() => undefined); }}>
+            <source src={loginBackgroundVideo} type="video/mp4" />
+          </video>
+          <div className="zea-login-video-overlay" />
+        </>
+      )}
 
-        {/* Form Container */}
-        <form onSubmit={handleSubmit} className="p-8 space-y-6">
-          {error && (
-            <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-700">
-              <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>{error}</span>
-            </div>
-          )}
-          <div className="space-y-4">
-            {/* Email field */}
-            <div>
-              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Email Address</label>
-              <div className="relative">
-                <input
-                  type="email"
-                  required
-                  value={emailInput}
-                  onChange={(e) => setEmailInput(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-violet-500 rounded-xl pl-10 pr-4 py-2.5 text-xs font-semibold text-slate-800 transition outline-none"
-                  placeholder="name@company.com"
-                />
-                <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
-              </div>
-            </div>
+      <main className="relative z-10 flex min-h-screen items-center justify-center p-4 sm:p-6 lg:p-8">
+        <section className="zea-login-frame grid min-h-[min(820px,calc(100vh-4rem))] w-full max-w-[1500px] overflow-hidden rounded-3xl md:grid-cols-[1.08fr_0.92fr]">
+          <div className="hidden min-h-[420px] md:block" aria-hidden="true" />
 
-            {/* Password field */}
-            <div>
-              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Password</label>
-              <div className="relative">
-                <input
-                  type="password"
-                  required
-                  value={passwordInput}
-                  onChange={(e) => setPasswordInput(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-violet-500 rounded-xl pl-10 pr-4 py-2.5 text-xs font-semibold text-slate-800 transition outline-none"
-                  placeholder="••••••••••••"
-                />
-                <Key className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+          <div className="flex items-center justify-center px-6 py-10 sm:px-10 lg:px-16">
+            <form onSubmit={handleSubmit} className="w-full max-w-[470px] space-y-7">
+              <div className="text-center">
+                <img src={zeaVoiceBrand} alt="Zea Voice" className="mx-auto h-24 w-full max-w-[300px] object-contain sm:h-28" />
+                <h1 className="mt-3 text-3xl font-bold tracking-[0.08em] text-amber-400 sm:text-4xl">WELCOME</h1>
+                <p className="mt-2 text-xs font-medium uppercase tracking-[0.24em] text-amber-100/55">Autonomous Voice SaaS Platform</p>
               </div>
-            </div>
+
+              {error && (
+                <div className="flex items-start gap-2 rounded-xl border border-red-400/30 bg-red-950/45 p-3 text-xs font-semibold text-red-200">
+                  <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{error}</span>
+                </div>
+              )}
+
+              <div className="space-y-7">
+                <label className="zea-login-field flex items-center gap-4">
+                  <Mail className="h-5 w-5 shrink-0 text-amber-400" />
+                  <span className="sr-only">Email Address</span>
+                  <input type="email" required value={emailInput} onChange={(e) => setEmailInput(e.target.value)}
+                    className="min-w-0 flex-1 border-0 bg-transparent px-0 py-3 text-base font-medium text-white outline-none"
+                    placeholder="Email address" />
+                </label>
+
+                <label className="zea-login-field flex items-center gap-4">
+                  <Key className="h-5 w-5 shrink-0 text-amber-400" />
+                  <span className="sr-only">Password</span>
+                  <input type="password" required value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)}
+                    className="min-w-0 flex-1 border-0 bg-transparent px-0 py-3 text-base font-medium text-white outline-none"
+                    placeholder="Password" />
+                </label>
+              </div>
+
+              <button type="submit" disabled={loading}
+                className="zea-login-submit flex w-full items-center justify-center gap-2 rounded-full py-3.5 text-sm font-bold uppercase tracking-[0.12em] transition">
+                <ShieldCheck className="h-4 w-4" />
+                <span>{loading ? 'Connecting…' : 'Login'}</span>
+              </button>
+            </form>
           </div>
-
-          {/* Connect button */}
-          <button
-            type="submit"
-            disabled={loading}
-            className="zea-login-submit w-full py-3 rounded-xl text-xs font-bold transition shadow-md hover:shadow-lg flex items-center justify-center space-x-1"
-          >
-            <ShieldCheck className="w-4 h-4" />
-            <span>{loading ? 'Connecting…' : 'Connect to Zea Voice Gateway'}</span>
-          </button>
-        </form>
-      </div>
+        </section>
+      </main>
     </div>
   );
 }
