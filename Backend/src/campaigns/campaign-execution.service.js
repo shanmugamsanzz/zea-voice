@@ -91,7 +91,9 @@ async function claimTask(taskId) {
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'outbound','queued',$11::jsonb) RETURNING id`,
     [task.tenant_id, task.workspace_id, task.telephony_account_id, task.phone_number_id,
       task.agent_id, task.agent_name, task.campaign_id, task.campaign_name, task.from_number,
-      task.lead_phone, JSON.stringify({ taskId: task.id, attemptId: attempt.id, context: task.context })])).rows[0];
+      task.lead_phone, JSON.stringify({
+        taskId: task.id, attemptId: attempt.id, leadName: task.lead_name, context: task.context,
+      })])).rows[0];
     await client.query("UPDATE campaign_task_attempts SET call_session_id=$2 WHERE id=$1", [attempt.id, call.id]);
     await client.query("UPDATE campaign_tasks SET status='running',queue_reason='ready',last_error=NULL WHERE id=$1", [task.id]);
     if (attemptNumber === 1) await client.query('UPDATE campaigns SET attempted_tasks=attempted_tasks+1,status=\'running\' WHERE id=$1', [task.campaign_id]);
