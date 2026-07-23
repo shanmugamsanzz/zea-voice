@@ -226,7 +226,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
 
             <nav className="flex-1 px-4 py-6 space-y-0.5">
               {!isSidebarMinimized && (
-                <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest px-4 mb-3 block">
+                <div className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest px-4 mb-3 block">
                   Super Admin Portal
                 </div>
               )}
@@ -237,7 +237,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
                   <button
                     key={item.viewId}
                     onClick={() => handleItemClick(item.viewId)}
-                    className={`w-full flex items-center rounded-lg text-sm font-semibold transition-all ${
+                    className={`w-full flex items-center rounded-lg text-base font-semibold transition-all ${
                       isSidebarMinimized ? 'justify-center p-3' : 'space-x-3 px-4 py-3'
                     } ${
                       isActive
@@ -321,7 +321,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
               {zeaCategories.map((category) => (
                 <div key={category.title} className="space-y-0.5">
                   {!isSidebarMinimized && (
-                    <div className="text-[10px] font-black text-slate-400 dark:text-slate-500 tracking-wider px-3 mb-2 block uppercase">
+                    <div className="text-xs font-black text-slate-400 dark:text-slate-500 tracking-wider px-3 mb-2 block uppercase">
                       {category.title}
                     </div>
                   )}
@@ -332,7 +332,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
                       <button
                         key={item.viewId}
                         onClick={() => handleItemClick(item.viewId)}
-                        className={`w-full flex items-center rounded-xl text-xs font-bold transition-all ${
+                        className={`w-full flex items-center rounded-xl text-sm font-bold transition-all ${
                           isSidebarMinimized ? 'justify-center p-3' : 'space-x-3 px-3 py-2.5'
                         } ${
                           isActive
@@ -389,7 +389,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
                         <button
                           key={item.viewId}
                           onClick={() => handleItemClick(item.viewId)}
-                          className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-sm font-semibold transition-all ${
+                          className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-base font-semibold transition-all ${
                             isActive
                               ? 'bg-indigo-50 dark:bg-slate-800 text-indigo-600 dark:text-white border-l-2 border-indigo-500 pl-3.5'
                               : 'text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/60 hover:text-slate-900 dark:hover:text-white'
@@ -404,7 +404,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
                 ) : (
                   zeaCategories.map((category) => (
                     <div key={category.title} className="space-y-0.5">
-                      <div className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-wider px-3 mb-2 block">
+                      <div className="text-xs font-black text-slate-400 dark:text-slate-500 uppercase tracking-wider px-3 mb-2 block">
                         {category.title}
                       </div>
                       {category.items.map((item) => {
@@ -414,7 +414,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
                           <button
                             key={item.viewId}
                             onClick={() => handleItemClick(item.viewId)}
-                            className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${
+                            className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-xl text-sm font-bold transition-all ${
                               isActive
                                 ? 'bg-gradient-to-r from-[#A855F7] to-[#8B5CF6] text-white shadow-sm'
                                 : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/60 hover:text-slate-950 dark:hover:text-white'

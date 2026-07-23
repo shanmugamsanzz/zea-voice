@@ -234,36 +234,42 @@ function SuperAdminDashboard() {
     <div className="space-y-6">
       {/* Overview Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-        <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
-          <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">Active Organizations</span>
-          <div className="flex items-center justify-between mt-2">
-            <h4 className="text-2xl font-extrabold text-slate-800">{overview.activeCompanies} Companies</h4>
+        <div className="flex flex-col bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
+          <span className="text-xs font-bold uppercase text-slate-400 tracking-wider">Active Organizations</span>
+          <div className="mt-2 text-center">
+            <h4 className="font-black text-slate-800">
+              <span className="block text-[2.5rem]">{overview.activeCompanies}</span>
+              <span className="mt-1 block text-[10px] font-semibold text-slate-400">Companies</span>
+            </h4>
           </div>
-          <span className="text-xs text-slate-500 mt-2 block font-medium">{overview.pendingCompanies} pending registrations</span>
+          <span className="mt-auto block pt-3 text-center text-[10px] font-medium text-slate-500">{overview.pendingCompanies} pending registrations</span>
         </div>
 
-        <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
-          <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">In-Flight Calls</span>
-          <div className="flex items-center justify-between mt-2">
-            <h4 className="text-2xl font-extrabold text-slate-800">{overview.inFlightCalls} Concurrent</h4>
+        <div className="flex flex-col bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
+          <span className="text-xs font-bold uppercase text-slate-400 tracking-wider">In-Flight Calls</span>
+          <div className="mt-2 text-center">
+            <h4 className="font-black text-slate-800">
+              <span className="block text-[2.5rem]">{overview.inFlightCalls}</span>
+              <span className="mt-1 block text-[10px] font-semibold text-slate-400">Concurrent</span>
+            </h4>
           </div>
-          <span className="text-xs text-slate-500 mt-2 block font-medium">{overview.waitingCalls} waiting in queues</span>
+          <span className="mt-auto block pt-3 text-center text-[10px] font-medium text-slate-500">{overview.waitingCalls} waiting in queues</span>
         </div>
 
-        <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
-          <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">Calls Today</span>
-          <div className="flex items-center justify-between mt-2">
-            <h4 className="text-2xl font-extrabold text-slate-800">{overview.callsToday.toLocaleString()}</h4>
+        <div className="flex flex-col bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
+          <span className="text-xs font-bold uppercase text-slate-400 tracking-wider">Calls Today</span>
+          <div className="mt-2 text-center">
+            <h4 className="text-[2.5rem] font-black text-slate-800">{overview.callsToday.toLocaleString()}</h4>
           </div>
-          <span className="text-xs text-slate-500 mt-2 block font-medium">Across all organizations</span>
+          <span className="mt-auto block pt-3 text-center text-[10px] font-medium text-slate-500">Across all organizations</span>
         </div>
 
-        <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
-          <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">Platform Revenue (MRR)</span>
-          <div className="flex items-center justify-between mt-2">
-            <h4 className="text-2xl font-extrabold text-slate-800">₹{overview.monthlyRevenue.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</h4>
+        <div className="flex flex-col bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
+          <span className="text-xs font-bold uppercase text-slate-400 tracking-wider">Platform Revenue (MRR)</span>
+          <div className="mt-2 text-center">
+            <h4 className="text-[2.5rem] font-black text-slate-800">₹{overview.monthlyRevenue.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</h4>
           </div>
-          <span className="text-xs text-slate-500 font-bold mt-2 block">Successful subscriptions this month</span>
+          <span className="mt-auto block pt-3 text-center text-[10px] font-bold text-slate-500">Subscriptions this month</span>
         </div>
       </div>
 
