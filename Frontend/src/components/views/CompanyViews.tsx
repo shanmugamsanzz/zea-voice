@@ -5,10 +5,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { useAppState } from '../../store/AppState';
-import { 
-  COMPLETED_CALL_LOGS, 
-  MOCK_PHONE_NUMBERS 
-} from '../../lib/mockData';
+import { COMPLETED_CALL_LOGS } from '../../lib/mockData';
 import { VoiceAgent, Campaign, PhoneNumber } from '../../types';
 import { 
   LayoutDashboard, 
@@ -55,7 +52,14 @@ import {
   LayoutGrid
 } from 'lucide-react';
 import { AgentTabs } from '../agent/AgentTabs';
-import { CallVolumeChart, DurationBarChart, OutcomePieChart, LatencyBreakdownChart } from '../charts/DashboardCharts';
+import { DeveloperReportsView } from '../reports/DeveloperReportsView';
+import { DeveloperVqaView } from '../vqa/DeveloperVqaView';
+import { DeveloperAiInsightsView } from '../insights/DeveloperAiInsightsView';
+import { DeveloperPhoneNumbersView } from '../phone-numbers/DeveloperPhoneNumbersView';
+import { DeveloperIntegrationsView } from '../integrations/DeveloperIntegrationsView';
+import { DeveloperWorkspaceSettingsView } from '../settings/DeveloperWorkspaceSettingsView';
+import { DeveloperApiKeysView } from '../api-keys/DeveloperApiKeysView';
+import { CallVolumeChart, DurationBarChart, OutcomePieChart } from '../charts/DashboardCharts';
 import { apiRequest } from '../../lib/api';
 
 interface CompanyDashboardData {
@@ -96,7 +100,6 @@ export function CompanyViews() {
   const { view, setView, selectedAgentId, setSelectedAgentId } = useAppState();
   const [agents, setAgents] = useState<VoiceAgent[]>([]);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
-  const [phoneNumbers, setPhoneNumbers] = useState<PhoneNumber[]>(MOCK_PHONE_NUMBERS);
 
   // Callback to save a voice agent
   const handleSaveAgent = (savedAgent: VoiceAgent) => {
@@ -123,18 +126,25 @@ export function CompanyViews() {
     case 'agents/edit':
       return <AgentTabs agentId={selectedAgentId} onSave={handleSaveAgent} onCancel={() => { setSelectedAgentId(null); setView('agents'); }} />;
     case 'reports':
-      return <CustomReportsView agents={agents} />;
+      return <DeveloperReportsView />;
     case 'call-logs':
-      return <CallLogsListView />;
+      return <DeveloperReportsView
+        variant="call-logs"
+        title="Call Logs Analytics"
+        subtitle="Live tenant call records, outcomes, durations, costs and transcripts from PostgreSQL"
+      />;
     case 'phone-numbers':
-      return <CompanyPhoneNumbersView phoneNumbers={phoneNumbers} setPhoneNumbers={setPhoneNumbers} agents={agents} />;
+      return <DeveloperPhoneNumbersView />;
     case 'vqa-voice':
-      return <VqaVoiceView />;
+      return <DeveloperVqaView />;
     case 'ai-insights':
-      return <AiInsightsView />;
+      return <DeveloperAiInsightsView />;
     case 'integrations':
+      return <DeveloperIntegrationsView />;
     case 'settings':
-      return <CompanySettingsView />;
+      return <DeveloperWorkspaceSettingsView />;
+    case 'api-keys':
+      return <DeveloperApiKeysView />;
     default:
       return <CompanyDashboard onEditAgent={(id) => { setSelectedAgentId(id); setView('agents/edit'); }} onAddAgent={() => { setSelectedAgentId(null); setView('agents/create'); }} />;
   }
@@ -397,136 +407,6 @@ function CompanyDashboard({ onEditAgent, onAddAgent }: { onEditAgent: (id: strin
               No AI operators have been created for this company yet.
             </div>
           )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ==========================================
-   1.1 INTERACTIVE MOCK SUB-VIEWS (SHARYX SUPPORT)
-   ========================================== */
-function VqaVoiceView() {
-  const auditLogs = [
-    { id: '1', date: 'Jul 9, 2026', delay: '184ms', sttConf: '98.5%', accuracy: '99.1%', status: 'Optimal' },
-    { id: '2', date: 'Jul 8, 2026', delay: '196ms', sttConf: '97.2%', accuracy: '98.6%', status: 'Optimal' },
-    { id: '3', date: 'Jul 7, 2026', delay: '241ms', sttConf: '96.8%', accuracy: '97.4%', status: 'Normal' },
-    { id: '4', date: 'Jul 6, 2026', delay: '172ms', sttConf: '98.9%', accuracy: '99.5%', status: 'Optimal' },
-    { id: '5', date: 'Jul 5, 2026', delay: '315ms', sttConf: '95.1%', accuracy: '96.2%', status: 'Degraded' },
-  ];
-
-  return (
-    <div className="space-y-6">
-      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs flex flex-col md:flex-row md:items-center md:justify-between justify-between">
-        <div>
-          <h2 className="text-xl font-black text-slate-800 tracking-tight">Voice Quality Assessment (VQA)</h2>
-          <p className="text-xs text-slate-500 font-semibold mt-0.5">Neural voice performance auditing, answer-delay latencies, and audio clarity logs.</p>
-        </div>
-        <div className="bg-[#ECFDF5] text-[#059669] border border-[#A7F3D0] px-4 py-2 rounded-xl text-xs font-black shadow-xs mt-3 md:mt-0">
-          HEALTH SCORE: 98.4% (EXCELLENT)
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
-          <h3 className="font-bold text-slate-800 text-sm tracking-tight mb-4">Response Latency Breakdown Trends</h3>
-          <LatencyBreakdownChart />
-        </div>
-
-        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between">
-          <div>
-            <h3 className="font-bold text-slate-800 text-sm tracking-tight mb-4">Audit Records</h3>
-            <div className="space-y-3.5 text-xs font-semibold">
-              {auditLogs.map(log => (
-                <div key={log.id} className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex justify-between items-center">
-                  <div>
-                    <div className="text-slate-800 font-bold">{log.date}</div>
-                    <div className="text-[10px] text-slate-400 mt-0.5 font-semibold">STT Confidence: {log.sttConf}</div>
-                  </div>
-                  <div className="text-right">
-                    <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase ${
-                      log.status === 'Optimal' ? 'bg-emerald-50 text-emerald-600' :
-                      log.status === 'Normal' ? 'bg-indigo-50 text-indigo-600' : 'bg-rose-50 text-rose-600'
-                    }`}>
-                      {log.status}
-                    </span>
-                    <div className="text-[10px] font-mono text-slate-500 font-bold mt-1">Delay: {log.delay}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-          <button className="w-full text-center py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs font-bold mt-4 transition cursor-pointer">
-            Run Full Network Diagnostic
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function AiInsightsView() {
-  const customerObjections = [
-    { name: 'Pricing & Subscription Plans', percentage: 42, color: '#7C3AED' },
-    { name: 'Integration and API Webhooks', percentage: 31, color: '#EC4899' },
-    { name: 'Language & Voice Pronunciations', percentage: 17, color: '#3B82F6' },
-    { name: 'Transfer to Live Agent requests', percentage: 10, color: '#F59E0B' },
-  ];
-
-  const actionItems = [
-    { text: 'Add direct billing triggers to custom Salesforce pipelines.', type: 'Integration', difficulty: 'Easy' },
-    { text: 'Fine-tune STT sensitivity thresholds to handle noise filtering better.', type: 'STT Operator', difficulty: 'Medium' },
-    { text: 'Provision 3 additional phone DID numbers in active area codes.', type: 'Carrier DID', difficulty: 'Easy' },
-    { text: 'Rewrite CRM transfer prompts to emphasize immediate human fallback.', type: 'Prompt Brain', difficulty: 'Hard' }
-  ];
-
-  return (
-    <div className="space-y-6">
-      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
-        <h2 className="text-xl font-black text-slate-800 tracking-tight">AI Cognitive Insights</h2>
-        <p className="text-xs text-slate-500 font-semibold mt-0.5">Deep-sentiment analysis, intent frequency tracking, and conversation intelligence.</p>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Customer Objections Breakdown */}
-        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
-          <h3 className="font-bold text-slate-800 text-sm tracking-tight mb-4">Primary Conversation Topics & Obstacles</h3>
-          <div className="space-y-4 text-xs font-semibold">
-            {customerObjections.map((obj, i) => (
-              <div key={i}>
-                <div className="flex justify-between text-slate-600 mb-1">
-                  <span>{obj.name}</span>
-                  <span className="font-bold" style={{ color: obj.color }}>{obj.percentage}%</span>
-                </div>
-                <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden">
-                  <div className="h-full rounded-full" style={{ width: `${obj.percentage}%`, backgroundColor: obj.color }} />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Action Items extracted */}
-        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between">
-          <div>
-            <h3 className="font-bold text-slate-800 text-sm tracking-tight mb-4">Autonomous Recommendations Captured</h3>
-            <div className="space-y-3.5 text-xs font-semibold">
-              {actionItems.map((item, i) => (
-                <div key={i} className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
-                  <div className="flex justify-between items-center">
-                    <span className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-lg text-[9px] font-bold border border-indigo-100">
-                      {item.type}
-                    </span>
-                    <span className="text-[10px] text-slate-400">Difficulty: {item.difficulty}</span>
-                  </div>
-                  <p className="text-slate-700 font-bold mt-2 leading-relaxed">"{item.text}"</p>
-                </div>
-              ))}
-            </div>
-          </div>
-          <button className="w-full text-center py-2.5 bg-[#F5F3FF] hover:bg-[#EDE9FE] text-[#7C3AED] rounded-xl text-xs font-bold mt-4 transition border border-[#DDD6FE] cursor-pointer">
-            Export Recommendations to CRM
-          </button>
         </div>
       </div>
     </div>

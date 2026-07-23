@@ -4,6 +4,8 @@ import { requireTenantContext } from '../auth/tenant.middleware.js';
 import { AppError } from '../middleware/errors.js';
 import { callIdSchema, forceHangupSchema, listCallsSchema, parseCallInput } from './call.schemas.js';
 import { forceHangup, getCall, listCalls } from './call.service.js';
+import { tenantProviderHealth } from '../voice/provider-health.service.js';
+import { loadStoredCallRecording } from '../telephony/plivo-recording.service.js';
 
 function valid(schema, value) {
   const parsed = parseCallInput(schema, value);
@@ -18,6 +20,17 @@ callAdminRouter.get('/:callId', async (req, res) => {
   const { callId } = valid(callIdSchema, req.params);
   res.json({ success: true, data: await getCall(req.auth, callId) });
 });
+callAdminRouter.get('/:callId/recording', async (req, res) => {
+  const { callId } = valid(callIdSchema, req.params);
+  const recording = await loadStoredCallRecording(req.auth, callId);
+  res.set({
+    'Content-Type': recording.contentType || 'audio/mpeg',
+    'Content-Length': String(recording.body.length),
+    'Cache-Control': 'private, max-age=300',
+    'Content-Disposition': `inline; filename="call-${callId}.mp3"`,
+    'X-Content-Type-Options': 'nosniff',
+  }).send(recording.body);
+});
 callAdminRouter.post('/:callId/hangup', async (req, res) => {
   const { callId } = valid(callIdSchema, req.params);
   const { reason } = valid(forceHangupSchema, req.body);
@@ -26,8 +39,23 @@ callAdminRouter.post('/:callId/hangup', async (req, res) => {
 
 export const tenantCallRouter = Router();
 tenantCallRouter.use(authenticateRequest, requireTenantContext);
+tenantCallRouter.get('/runtime/provider-health', async (req, res) => res.json({
+  success: true,
+  data: tenantProviderHealth.snapshot(req.tenant.tenantId),
+}));
 tenantCallRouter.get('/', async (req, res) => res.json({ success: true, data: await listCalls(req.auth, valid(listCallsSchema.omit({ companyId: true }), req.query)) }));
 tenantCallRouter.get('/:callId', async (req, res) => {
   const { callId } = valid(callIdSchema, req.params);
   res.json({ success: true, data: await getCall(req.auth, callId) });
+});
+tenantCallRouter.get('/:callId/recording', async (req, res) => {
+  const { callId } = valid(callIdSchema, req.params);
+  const recording = await loadStoredCallRecording(req.auth, callId);
+  res.set({
+    'Content-Type': recording.contentType || 'audio/mpeg',
+    'Content-Length': String(recording.body.length),
+    'Cache-Control': 'private, max-age=300',
+    'Content-Disposition': `inline; filename="call-${callId}.mp3"`,
+    'X-Content-Type-Options': 'nosniff',
+  }).send(recording.body);
 });

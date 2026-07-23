@@ -27,6 +27,7 @@ import {
   updateReviewRecordSchema,
 } from './knowledge-review.schemas.js';
 import {
+  approveAllDraftReviewRecords,
   decideReviewRecord,
   getDocumentReview,
   updateReviewRecord,
@@ -145,6 +146,18 @@ knowledgeDocumentRouter.patch('/:documentId/review/:recordId', canReview, async 
   response.json({
     success: true,
     data: await updateReviewRecord(auth(request), knowledgeBaseId, documentId, recordId, body.data),
+  });
+});
+
+knowledgeDocumentRouter.post('/:documentId/review/approve-all', canReview, async (request, response) => {
+  const params = parseKnowledgeReviewInput(reviewParamsSchema, request.params);
+  if (!params.success) {
+    throw new AppError(400, 'Request validation failed', 'VALIDATION_ERROR', params.issues);
+  }
+  const { knowledgeBaseId, documentId } = params.data;
+  response.json({
+    success: true,
+    data: await approveAllDraftReviewRecords(auth(request), knowledgeBaseId, documentId),
   });
 });
 

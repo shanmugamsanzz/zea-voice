@@ -54,7 +54,8 @@ export async function measureExternalProvider(provider, operationName, operation
       context.externalDurationMs += durationMs;
       context.externalCallCount += 1;
     }
-    logger.info({
+    const log = context?.path === '/health' ? logger.debug.bind(logger) : logger.info.bind(logger);
+    log({
       requestId: context?.requestId,
       provider,
       operation: operationName,

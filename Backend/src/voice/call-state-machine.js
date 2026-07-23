@@ -15,7 +15,7 @@ const transitions = new Map([
   [callStates.INITIALIZING, new Set([callStates.GREETING, callStates.LISTENING, callStates.CLOSING, callStates.FAILED])],
   [callStates.GREETING, new Set([callStates.LISTENING, callStates.CLOSING, callStates.FAILED])],
   [callStates.LISTENING, new Set([callStates.THINKING, callStates.CLOSING, callStates.FAILED])],
-  [callStates.THINKING, new Set([callStates.SPEAKING, callStates.CLOSING, callStates.FAILED])],
+  [callStates.THINKING, new Set([callStates.LISTENING, callStates.SPEAKING, callStates.CLOSING, callStates.FAILED])],
   [callStates.SPEAKING, new Set([callStates.LISTENING, callStates.CLOSING, callStates.FAILED])],
   [callStates.CLOSING, new Set([callStates.COMPLETED, callStates.FAILED])],
   [callStates.COMPLETED, new Set()],

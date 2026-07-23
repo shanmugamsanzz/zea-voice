@@ -1,5 +1,7 @@
-import { withTenantContext } from '../infrastructure/database-context.js';
+import { withPlatformAdminContext, withTenantContext } from '../infrastructure/database-context.js';
 import { AppError } from '../middleware/errors.js';
+import { providerAdapterRegistry } from '../voice/providers/registry.js';
+import { registerImplementedProviderAdapters } from '../voice/providers/defaults.js';
 
 const select = `SELECT a.*, pn.e164 AS phone_number,
   sp.name AS stt_provider_name, sm.display_name AS stt_model_name,
@@ -30,13 +32,39 @@ function map(row) { return { id: row.id, tenantId: row.tenant_id, workspaceId: r
   createdBy: row.created_by, createdAt: row.created_at, updatedAt: row.updated_at } }
 async function agentRow(client, tenantId, id) { const result = await client.query(`${select} AND a.id=$2`, [tenantId, id]);
   if (!result.rowCount) throw new AppError(404, 'Voice agent was not found', 'AGENT_NOT_FOUND'); return result.rows[0]; }
-async function validateModels(client, input) {
+export async function validateAgentRuntimeModels(client, input, registry = providerAdapterRegistry) {
+  registerImplementedProviderAdapters(registry);
   const expected = [['sttModelId', 'stt'], ['llmModelId', 'llm'], ['ttsModelId', 'tts']];
   for (const [field, type] of expected) {
-    const result = await client.query(`SELECT 1 FROM provider_models m JOIN ai_providers p ON p.id=m.provider_id
+    const result = await client.query(`SELECT m.id model_id,m.model_key,m.settings model_settings,
+      m.capabilities model_capabilities,p.id provider_id,p.name provider_name,p.slug provider_slug,
+      COALESCE((SELECT jsonb_object_agg(x.key,x.plain_value)
+        FROM ai_provider_parameters x
+        WHERE x.provider_id=p.id AND x.plain_value IS NOT NULL AND x.is_secret=false
+          AND lower(x.key) !~ '(api[_.-]?key|token|secret|password|credential|auth)'), '{}'::jsonb) provider_settings
+      FROM provider_models m JOIN ai_providers p ON p.id=m.provider_id
       WHERE m.id=$1 AND m.status='active' AND m.deleted_at IS NULL AND p.type=$2::ai_provider_type
       AND p.status='connected' AND p.deleted_at IS NULL`, [input[field], type]);
     if (!result.rowCount) throw new AppError(400, `Selected ${type.toUpperCase()} model is unavailable`, 'AGENT_MODEL_UNAVAILABLE', { field });
+    const row = result.rows[0];
+    try {
+      registry.resolve(type, {
+        providerId: row.provider_id,
+        providerName: row.provider_name,
+        providerSlug: row.provider_slug,
+        modelId: row.model_id,
+        modelKey: row.model_key,
+        modelSettings: row.model_settings ?? {},
+        modelCapabilities: row.model_capabilities ?? {},
+        effectiveSettings: { ...(row.provider_settings ?? {}), ...(row.model_settings ?? {}) },
+      });
+    } catch (error) {
+      throw new AppError(400,
+        `Selected ${type.toUpperCase()} model cannot run in the voice engine: ${error.message}`,
+        'AGENT_MODEL_RUNTIME_INCOMPATIBLE',
+        { field, providerId: row.provider_id, modelId: row.model_id, reason: error.code },
+      );
+    }
   }
 }
 async function validatePhone(client, tenantId, phoneNumberId) {
@@ -60,7 +88,8 @@ export function createAgent(auth, input) { return withTenantContext(auth, async 
   const agentCount = await client.query(`SELECT count(*)::int AS count FROM voice_agents
     WHERE tenant_id=$1 AND deleted_at IS NULL AND status<>'archived'`, [auth.tenantId]);
   if (!limit.rowCount || agentCount.rows[0].count >= limit.rows[0].max_agents) throw new AppError(409, 'The company agent limit has been reached', 'AGENT_LIMIT_REACHED');
-  await validateModels(client, input); await validatePhone(client, auth.tenantId, input.phoneNumberId);
+  await withPlatformAdminContext(auth.userId, (platformClient) => validateAgentRuntimeModels(platformClient, input));
+  await validatePhone(client, auth.tenantId, input.phoneNumberId);
   try {
     const created = (await client.query(`INSERT INTO voice_agents (tenant_id,workspace_id,name,description,goal,language,usage_direction,status,phone_number_id,
       stt_model_id,llm_model_id,tts_model_id,voice_id,prompt,welcome_message,temperature,interruption_sensitivity,
@@ -85,7 +114,8 @@ export function updateAgent(auth, id, input) { return withTenantContext(auth, as
     temperature:input.temperature??Number(before.temperature),interruptionSensitivity:input.interruptionSensitivity??Number(before.interruption_sensitivity),
     silenceTimeoutMs:input.silenceTimeoutMs??before.silence_timeout_ms,inactivityTimeoutSeconds:input.inactivityTimeoutSeconds??before.inactivity_timeout_seconds,
     settings:input.settings??before.settings };
-  await validateModels(client,value); await validatePhone(client,auth.tenantId,value.phoneNumberId);
+  await withPlatformAdminContext(auth.userId, (platformClient) => validateAgentRuntimeModels(platformClient, value));
+  await validatePhone(client,auth.tenantId,value.phoneNumberId);
   try { await client.query(`UPDATE voice_agents SET name=$3,description=$4,goal=$5,language=$6,usage_direction=$7,status=$8,phone_number_id=$9,
     stt_model_id=$10,llm_model_id=$11,tts_model_id=$12,voice_id=$13,prompt=$14,welcome_message=$15,temperature=$16,
     interruption_sensitivity=$17,silence_timeout_ms=$18,inactivity_timeout_seconds=$19,settings=$20::jsonb,updated_by=$21

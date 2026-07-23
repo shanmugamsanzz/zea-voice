@@ -3,8 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState } from 'react';
-import { createPortal } from 'react-dom';
+import React, { useEffect, useRef, useState } from 'react';
 import { useAppState } from '../../store/AppState';
 import { VoiceAgent } from '../../types';
 import { apiRequest, uploadApiFormData } from '../../lib/api';
@@ -41,6 +40,7 @@ import {
   BookOpen,
   AlertCircle,
   Upload,
+  Copy,
   X
 } from 'lucide-react';
 
@@ -71,6 +71,7 @@ interface AgentPhoneOption { id: string; number: string; status: string }
 
 type KnowledgeBaseStatus = 'draft' | 'processing' | 'ready' | 'partially_failed' | 'published' | 'deleting' | 'deleted';
 type KnowledgeDocumentType = 'faq' | 'catalog' | 'workflow_rules' | 'conversation_script' | 'general_knowledge';
+type SelectedKnowledgeFile = { name: string; size: number; type: string };
 
 const KNOWLEDGE_PDF_MAX_BYTES = 25 * 1024 * 1024;
 const knowledgeDocumentCategories: Array<{
@@ -86,7 +87,11 @@ const knowledgeDocumentCategories: Array<{
   { type: 'general_knowledge', title: 'General Knowledge', description: 'Long-form information used for semantic retrieval.', examples: 'Explanations, policies and detailed reference material' },
 ];
 
-function emptyKnowledgeFiles(): Record<KnowledgeDocumentType, File | null> {
+function emptyKnowledgeFiles(): Record<KnowledgeDocumentType, SelectedKnowledgeFile | null> {
+  return { faq: null, catalog: null, workflow_rules: null, conversation_script: null, general_knowledge: null };
+}
+
+function emptyKnowledgeFileObjects(): Record<KnowledgeDocumentType, File | null> {
   return { faq: null, catalog: null, workflow_rules: null, conversation_script: null, general_knowledge: null };
 }
 
@@ -246,7 +251,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       sttProvider: base.sttProvider || 'Sarvam',
       sttModel: base.sttModel || 'saaras:v3',
       sttMode: base.sttMode || 'verbatim',
-      sttLanguage: base.sttLanguage || 'tamil (india) (ta-IN)',
+      sttLanguage: base.sttLanguage || 'ta-IN',
       sttPunctuate: base.sttPunctuate !== undefined ? base.sttPunctuate : true,
       sttSmartFormat: base.sttSmartFormat !== undefined ? base.sttSmartFormat : true,
       sttPriceMin: base.sttPriceMin !== undefined ? base.sttPriceMin : 0.05,
@@ -299,6 +304,8 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [models, setModels] = useState<ProviderModelOption[]>([]);
+  const [modelCatalogRefreshKey, setModelCatalogRefreshKey] = useState(0);
+  const [modelsRefreshing, setModelsRefreshing] = useState(false);
   const [phoneNumbers, setPhoneNumbers] = useState<AgentPhoneOption[]>([]);
   const [phoneNumberId, setPhoneNumberId] = useState('');
   const [sttModelId, setSttModelId] = useState('');
@@ -344,16 +351,11 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         if (phonesResult.status === 'rejected') setError('Models loaded, but assigned phone numbers could not be loaded.');
         if (existing) applyApiAgent(existing);
         else {
-          const stt = catalog.find((model) => model.providerType === 'stt');
-          const llm = catalog.find((model) => model.providerType === 'llm');
-          const tts = catalog.find((model) => model.providerType === 'tts');
-          setSttModelId(stt?.id ?? ''); setLlmModelId(llm?.id ?? ''); setTtsModelId(tts?.id ?? '');
+          setSttModelId(''); setLlmModelId(''); setTtsModelId('');
           setPhoneNumberId(phones.find((phone) => phone.status === 'active')?.id ?? '');
           setAgent((current) => ({ ...current,
-            sttProvider: stt?.providerName ?? '', sttModel: stt?.displayName ?? '',
-            llmProvider: llm?.providerName ?? '', llmModel: llm?.displayName ?? '',
-            ttsProvider: tts?.providerName ?? '', ttsModel: tts?.displayName ?? '',
-            voiceId: tts ? String(tts.settings.voiceId ?? tts.settings.voice_id ?? tts.settings.voice ?? tts.modelKey) : '',
+            sttProvider: '', sttModel: '', llmProvider: '', llmModel: '',
+            ttsProvider: '', ttsModel: '', voiceId: '',
           }));
         }
       } catch (requestError) { if (!stopped) setError(requestError instanceof Error ? requestError.message : 'Agent configuration could not be loaded'); }
@@ -361,6 +363,26 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     };
     void load(); return () => { stopped = true; };
   }, [agentId]);
+
+  useEffect(() => {
+    if (modelCatalogRefreshKey === 0) return;
+    let stopped = false;
+    setModelsRefreshing(true);
+    setError('');
+    apiRequest<ProviderModelOption[]>('/catalog/providers', { zeaCache: 'reload' })
+      .then((catalog) => {
+        if (stopped) return;
+        setModels(catalog);
+        setSttModelId((current) => current && !catalog.some((model) => model.id === current && model.providerType === 'stt') ? '' : current);
+        setLlmModelId((current) => current && !catalog.some((model) => model.id === current && model.providerType === 'llm') ? '' : current);
+        setTtsModelId((current) => current && !catalog.some((model) => model.id === current && model.providerType === 'tts') ? '' : current);
+      })
+      .catch((requestError) => {
+        if (!stopped) setError(requestError instanceof Error ? requestError.message : 'Model catalog could not be refreshed');
+      })
+      .finally(() => { if (!stopped) setModelsRefreshing(false); });
+    return () => { stopped = true; };
+  }, [modelCatalogRefreshKey]);
 
   // Tools state
   const [tools, setTools] = useState<Array<{ id: string; name: string; type: string; status: string; description: string | null }>>([]);
@@ -383,7 +405,8 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const [deleteKnowledgeBaseConfirmation, setDeleteKnowledgeBaseConfirmation] = useState('');
   const [showKnowledgeBaseDeleteDialog, setShowKnowledgeBaseDeleteDialog] = useState(false);
   const [knowledgeDeletionJobs, setKnowledgeDeletionJobs] = useState<Record<string, KnowledgeDeletionJob>>({});
-  const [knowledgeFiles, setKnowledgeFiles] = useState<Record<KnowledgeDocumentType, File | null>>(() => emptyKnowledgeFiles());
+  const knowledgeFileObjects = useRef<Record<KnowledgeDocumentType, File | null>>(emptyKnowledgeFileObjects());
+  const [knowledgeFiles, setKnowledgeFiles] = useState<Record<KnowledgeDocumentType, SelectedKnowledgeFile | null>>(() => emptyKnowledgeFiles());
   const [knowledgeFileErrors, setKnowledgeFileErrors] = useState<Partial<Record<KnowledgeDocumentType, string>>>({});
   const [draggedKnowledgeCategory, setDraggedKnowledgeCategory] = useState<KnowledgeDocumentType | null>(null);
   const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeDocumentApiData[]>([]);
@@ -396,13 +419,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const [versionDocumentId, setVersionDocumentId] = useState<string | null>(null);
 
   const isKnowledgeUploading = Object.values(uploadingKnowledgeCategories).some(Boolean);
-
-  useEffect(() => {
-    if (!isKnowledgeUploading) return undefined;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = previousOverflow; };
-  }, [isKnowledgeUploading]);
   const [newToolName, setNewToolName] = useState('');
   const [newToolType, setNewToolType] = useState('Webhook API');
 
@@ -452,6 +468,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   }, [agentId, knowledgeRefreshKey]);
 
   useEffect(() => {
+    knowledgeFileObjects.current = emptyKnowledgeFileObjects();
     setKnowledgeFiles(emptyKnowledgeFiles());
     setKnowledgeFileErrors({});
     setDraggedKnowledgeCategory(null);
@@ -732,21 +749,30 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     else if (file.size > KNOWLEDGE_PDF_MAX_BYTES) validationError = `PDF must not exceed ${formatFileSize(KNOWLEDGE_PDF_MAX_BYTES)}.`;
 
     if (validationError) {
+      knowledgeFileObjects.current[documentType] = null;
+      setKnowledgeFiles((current) => ({ ...current, [documentType]: null }));
       setKnowledgeFileErrors((current) => ({ ...current, [documentType]: validationError }));
       return;
     }
-    setKnowledgeFiles((current) => ({ ...current, [documentType]: file }));
+    knowledgeFileObjects.current[documentType] = file;
+    setKnowledgeFiles((current) => ({
+      ...current,
+      [documentType]: { name: file.name, size: file.size, type: file.type },
+    }));
     setKnowledgeFileErrors((current) => ({ ...current, [documentType]: undefined }));
+    window.setTimeout(() => { void uploadKnowledgePdf(documentType); }, 0);
   };
 
   const removeKnowledgePdf = (documentType: KnowledgeDocumentType) => {
+    knowledgeFileObjects.current[documentType] = null;
     setKnowledgeFiles((current) => ({ ...current, [documentType]: null }));
     setKnowledgeFileErrors((current) => ({ ...current, [documentType]: undefined }));
   };
 
   const uploadKnowledgePdf = async (documentType: KnowledgeDocumentType) => {
-    const file = knowledgeFiles[documentType];
+    const file = knowledgeFileObjects.current[documentType];
     if (!selectedKnowledgeBase || !file || isReadOnly || uploadingKnowledgeCategories[documentType]) return;
+    const overlayStartedAt = performance.now();
     const category = knowledgeDocumentCategories.find((item) => item.type === documentType);
     const form = new FormData();
     form.append('file', file, file.name);
@@ -761,17 +787,23 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     setKnowledgeUploadProgress((current) => ({ ...current, [documentType]: 5 }));
     setKnowledgeFileErrors((current) => ({ ...current, [documentType]: undefined }));
     try {
-      const uploaded = await uploadApiFormData<KnowledgeDocumentApiData>(
+      // Let React commit the portal before XMLHttpRequest starts. This keeps the
+      // loading screen visible even when the request succeeds or fails quickly.
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+      await uploadApiFormData<KnowledgeDocumentApiData>(
         `/knowledge-bases/${selectedKnowledgeBase.id}/documents`,
         form,
         (percent) => setKnowledgeUploadProgress((current) => ({ ...current, [documentType]: percent })),
       );
-      setKnowledgeDocuments((current) => [uploaded, ...current.filter((document) => document.id !== uploaded.id)]);
       setKnowledgeUploadProgress((current) => ({ ...current, [documentType]: 100 }));
+      knowledgeFileObjects.current[documentType] = null;
       setKnowledgeFiles((current) => ({ ...current, [documentType]: null }));
       setKnowledgeBases((current) => current.map((knowledgeBase) => knowledgeBase.id === selectedKnowledgeBase.id
         ? { ...knowledgeBase, status: 'processing', documentCount: knowledgeBase.documentCount + 1, processingDocumentCount: knowledgeBase.processingDocumentCount + 1 }
         : knowledgeBase));
+      // Reload the canonical document shape instead of rendering the partial
+      // upload response. The upload endpoint can return before processing and
+      // version fields are populated.
       setKnowledgeDocumentPollTick((value) => value + 1);
       showKnowledgeSuccess(`${category?.title ?? 'Knowledge'} PDF uploaded and queued for processing.`);
     } catch (requestError) {
@@ -780,6 +812,10 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         [documentType]: requestError instanceof Error ? requestError.message : 'PDF could not be uploaded',
       }));
     } finally {
+      const remainingOverlayMs = Math.max(0, 700 - (performance.now() - overlayStartedAt));
+      if (remainingOverlayMs > 0) {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, remainingOverlayMs));
+      }
       setUploadingKnowledgeCategories((current) => ({ ...current, [documentType]: false }));
       window.setTimeout(() => setKnowledgeUploadProgress((current) => ({ ...current, [documentType]: undefined })), 600);
     }
@@ -953,6 +989,23 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
               </div>
               
               <div className="p-6 space-y-6">
+                {agentId && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">Agent ID</label>
+                    <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2 pl-4">
+                      <span className="min-w-0 flex-1 break-all font-mono text-xs font-bold text-slate-700">{agentId}</span>
+                      <button
+                        type="button"
+                        onClick={() => void navigator.clipboard.writeText(agentId)}
+                        title="Copy Agent ID"
+                        className="rounded-lg border border-slate-200 bg-white p-2.5 text-slate-500 transition hover:border-pink-200 hover:text-pink-600"
+                      >
+                        <Copy className="h-4 w-4" />
+                      </button>
+                    </div>
+                    <p className="mt-1.5 text-[10px] font-semibold text-slate-400">Use this identifier in authenticated API and n8n call-task requests.</p>
+                  </div>
+                )}
                 <div>
                   <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">
                     Agent Name <span className="text-red-500">*</span>
@@ -1113,21 +1166,27 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
 
                   {/* Model dropdown */}
                   <div>
-                    <label className="block text-[11px] font-black text-slate-500 mb-1.5 uppercase tracking-wider flex items-center">
-                      MODEL / LANGUAGE MODEL <span className="text-red-500 ml-0.5">*</span>
-                    </label>
+                    <div className="mb-1.5 flex items-center justify-between gap-2">
+                      <label className="text-[11px] font-black text-slate-500 uppercase tracking-wider">
+                        MODEL / LANGUAGE MODEL <span className="text-red-500 ml-0.5">*</span>
+                      </label>
+                      <button type="button" disabled={modelsRefreshing} onClick={() => setModelCatalogRefreshKey((value) => value + 1)} className="flex items-center gap-1 text-[10px] font-bold text-pink-600 hover:text-pink-700 disabled:opacity-50">
+                        <RefreshCw className={`h-3 w-3 ${modelsRefreshing ? 'animate-spin' : ''}`} /> {modelsRefreshing ? 'Refreshing...' : 'Refresh models'}
+                      </button>
+                    </div>
                     <div className="relative">
                       <select
                         value={sttModelId}
                         disabled={isReadOnly}
-                        onChange={(e) => { const model = sttModels.find((item) => item.id === e.target.value); setSttModelId(e.target.value); if (model) setAgent({ ...agent, sttProvider: model.providerName, sttModel: model.displayName }); }}
-                        className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
+                        onChange={(e) => { const model = sttModels.find((item) => item.id === e.target.value); setSttModelId(e.target.value); setAgent({ ...agent, sttProvider: model?.providerName ?? '', sttModel: model?.displayName ?? '' }); }}
+                        className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-20"
                       >
-                        <option value="" disabled>Select an STT model</option>
+                        <option value="">Unselect STT model</option>
                         {sttModels.map((model) => <option key={model.id} value={model.id}>{model.displayName} — {model.providerName}</option>)}
                       </select>
-                      <div className="absolute inset-y-0 right-0 flex items-center pr-4 pointer-events-none text-slate-400">
-                        <ChevronDown className="w-4 h-4" />
+                      <div className="absolute inset-y-0 right-3 flex items-center gap-2 text-slate-400">
+                        {sttModelId && !isReadOnly && <button type="button" title="Unselect STT model" aria-label="Unselect STT model" onClick={() => { setSttModelId(''); setAgent({ ...agent, sttProvider: '', sttModel: '' }); }} className="rounded-full p-1 hover:bg-red-50 hover:text-red-500"><X className="h-3.5 w-3.5" /></button>}
+                        <ChevronDown className="w-4 h-4 pointer-events-none" />
                       </div>
                     </div>
                   </div>
@@ -1282,21 +1341,23 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
 
                   {/* AI Model */}
                   <div>
-                    <label className="block text-[11px] font-black text-slate-500 mb-1.5 uppercase tracking-wider flex items-center">
-                      AI MODEL <span className="text-red-500 ml-0.5">*</span>
-                    </label>
+                    <div className="mb-1.5 flex items-center justify-between gap-2">
+                      <label className="text-[11px] font-black text-slate-500 uppercase tracking-wider">AI MODEL <span className="text-red-500 ml-0.5">*</span></label>
+                      <button type="button" disabled={modelsRefreshing} onClick={() => setModelCatalogRefreshKey((value) => value + 1)} className="flex items-center gap-1 text-[10px] font-bold text-pink-600 hover:text-pink-700 disabled:opacity-50"><RefreshCw className={`h-3 w-3 ${modelsRefreshing ? 'animate-spin' : ''}`} /> {modelsRefreshing ? 'Refreshing...' : 'Refresh models'}</button>
+                    </div>
                     <div className="relative">
                       <select
                         value={llmModelId}
                         disabled={isReadOnly}
-                        onChange={(e) => { const model = llmModels.find((item) => item.id === e.target.value); setLlmModelId(e.target.value); if (model) setAgent({ ...agent, llmProvider: model.providerName, llmModel: model.displayName }); }}
-                        className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
+                        onChange={(e) => { const model = llmModels.find((item) => item.id === e.target.value); setLlmModelId(e.target.value); setAgent({ ...agent, llmProvider: model?.providerName ?? '', llmModel: model?.displayName ?? '' }); }}
+                        className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-20"
                       >
-                        <option value="" disabled>Select an LLM model</option>
+                        <option value="">Unselect LLM model</option>
                         {llmModels.map((model) => <option key={model.id} value={model.id}>{model.displayName} — {model.providerName}</option>)}
                       </select>
-                      <div className="absolute inset-y-0 right-0 flex items-center pr-4 pointer-events-none text-slate-400">
-                        <ChevronDown className="w-4 h-4" />
+                      <div className="absolute inset-y-0 right-3 flex items-center gap-2 text-slate-400">
+                        {llmModelId && !isReadOnly && <button type="button" title="Unselect LLM model" aria-label="Unselect LLM model" onClick={() => { setLlmModelId(''); setAgent({ ...agent, llmProvider: '', llmModel: '' }); }} className="rounded-full p-1 hover:bg-red-50 hover:text-red-500"><X className="h-3.5 w-3.5" /></button>}
+                        <ChevronDown className="w-4 h-4 pointer-events-none" />
                       </div>
                     </div>
                   </div>
@@ -1516,21 +1577,23 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
 
                   {/* Model Dropdown */}
                   <div>
-                    <label className="block text-[11px] font-black text-slate-500 mb-1.5 uppercase tracking-wider flex items-center">
-                      MODEL <span className="text-red-500 ml-0.5">*</span>
-                    </label>
+                    <div className="mb-1.5 flex items-center justify-between gap-2">
+                      <label className="text-[11px] font-black text-slate-500 uppercase tracking-wider">MODEL <span className="text-red-500 ml-0.5">*</span></label>
+                      <button type="button" disabled={modelsRefreshing} onClick={() => setModelCatalogRefreshKey((value) => value + 1)} className="flex items-center gap-1 text-[10px] font-bold text-pink-600 hover:text-pink-700 disabled:opacity-50"><RefreshCw className={`h-3 w-3 ${modelsRefreshing ? 'animate-spin' : ''}`} /> {modelsRefreshing ? 'Refreshing...' : 'Refresh models'}</button>
+                    </div>
                     <div className="relative">
                       <select
                         value={ttsModelId}
                         disabled={isReadOnly}
-                        onChange={(e) => { const model = ttsModels.find((item) => item.id === e.target.value); setTtsModelId(e.target.value); if (model) setAgent({ ...agent, ttsProvider: model.providerName, ttsModel: model.displayName, voiceId: modelVoiceId(model) }); }}
-                        className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
+                        onChange={(e) => { const model = ttsModels.find((item) => item.id === e.target.value); setTtsModelId(e.target.value); setAgent({ ...agent, ttsProvider: model?.providerName ?? '', ttsModel: model?.displayName ?? '', voiceId: model ? modelVoiceId(model) : '' }); }}
+                        className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-20"
                       >
-                        <option value="" disabled>Select a TTS model</option>
+                        <option value="">Unselect TTS model</option>
                         {ttsModels.map((model) => <option key={model.id} value={model.id}>{model.displayName} — {model.providerName}</option>)}
                       </select>
-                      <div className="absolute inset-y-0 right-0 flex items-center pr-4 pointer-events-none text-slate-400">
-                        <ChevronDown className="w-4 h-4" />
+                      <div className="absolute inset-y-0 right-3 flex items-center gap-2 text-slate-400">
+                        {ttsModelId && !isReadOnly && <button type="button" title="Unselect TTS model" aria-label="Unselect TTS model" onClick={() => { setTtsModelId(''); setAgent({ ...agent, ttsProvider: '', ttsModel: '', voiceId: '' }); }} className="rounded-full p-1 hover:bg-red-50 hover:text-red-500"><X className="h-3.5 w-3.5" /></button>}
+                        <ChevronDown className="w-4 h-4 pointer-events-none" />
                       </div>
                     </div>
                   </div>
@@ -2606,26 +2669,34 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         )}
       </div>
     </form>
-    {isKnowledgeUploading && activeKnowledgeUploadCategory && createPortal(
-      <div role="status" aria-live="assertive" aria-label="Uploading knowledge document" className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/35 p-4 backdrop-blur-md">
-        <div className="w-full max-w-md overflow-hidden rounded-2xl border border-white/70 bg-white/95 shadow-2xl shadow-slate-950/25">
-          <div className="relative px-6 pb-5 pt-7 text-center">
-            <div className="absolute inset-x-0 top-0 h-1 bg-slate-100"><div className="h-full bg-gradient-to-r from-violet-600 via-fuchsia-500 to-pink-500 transition-[width] duration-300 ease-out" style={{ width: `${activeKnowledgeUploadProgress}%` }} /></div>
-            <div className="relative mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-violet-100 text-violet-700">
-              <div className="absolute inset-0 animate-ping rounded-2xl bg-violet-300/35" />
-              <Upload className="relative h-7 w-7" />
+    {isKnowledgeUploading && activeKnowledgeUploadCategory && (
+      <div
+        role="status"
+        aria-live="assertive"
+        aria-label="Uploading knowledge document"
+        data-knowledge-upload-overlay="true"
+        style={{
+          position: 'fixed', inset: 0, zIndex: 2147483647, display: 'flex', alignItems: 'center',
+          justifyContent: 'center', padding: 16, backgroundColor: 'rgba(15, 23, 42, 0.48)',
+          backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
+        }}
+      >
+        <div style={{ width: '100%', maxWidth: 440, overflow: 'hidden', borderRadius: 20, border: '1px solid rgba(255,255,255,.8)', backgroundColor: '#ffffff', boxShadow: '0 24px 70px rgba(15,23,42,.35)' }}>
+          <div style={{ position: 'relative', padding: '30px 24px 24px', textAlign: 'center', color: '#0f172a' }}>
+            <div style={{ position: 'absolute', inset: '0 0 auto', height: 5, backgroundColor: '#ede9fe' }}><div style={{ width: `${activeKnowledgeUploadProgress}%`, height: '100%', background: 'linear-gradient(90deg,#7c3aed,#d946ef,#ec4899)', transition: 'width 300ms ease-out' }} /></div>
+            <div style={{ width: 64, height: 64, margin: '0 auto', borderRadius: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6d28d9', backgroundColor: '#ede9fe' }}>
+              <Upload className="h-7 w-7 animate-bounce" />
             </div>
-            <h4 className="mt-5 text-base font-extrabold text-slate-900">Uploading knowledge document</h4>
-            <p className="mt-1 text-xs font-semibold text-slate-500">Please keep this page open while the PDF is stored securely.</p>
-            <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4 text-left">
-              <div className="flex items-center gap-3"><FileText className="h-5 w-5 shrink-0 text-violet-600" /><div className="min-w-0"><span className="block truncate text-xs font-bold text-slate-800" title={activeKnowledgeUploadFile?.name}>{activeKnowledgeUploadFile?.name ?? 'PDF document'}</span><span className="mt-0.5 block text-[10px] font-semibold text-slate-400">{activeKnowledgeUploadCategory.title}{activeKnowledgeUploadFile ? ` · ${formatFileSize(activeKnowledgeUploadFile.size)}` : ''}</span></div></div>
+            <h4 style={{ margin: '20px 0 0', fontSize: 18, lineHeight: 1.4, fontWeight: 800, color: '#0f172a' }}>PDF uploading</h4>
+            <p style={{ margin: '6px 0 0', fontSize: 12, lineHeight: 1.6, fontWeight: 600, color: '#64748b' }}>Please wait while your knowledge document is uploaded securely.</p>
+            <div style={{ marginTop: 20, padding: 14, borderRadius: 12, border: '1px solid #e2e8f0', backgroundColor: '#f8fafc', textAlign: 'left' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}><FileText className="h-5 w-5 shrink-0 text-violet-600" /><div style={{ minWidth: 0 }}><span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12, fontWeight: 800, color: '#1e293b' }} title={activeKnowledgeUploadFile?.name}>{activeKnowledgeUploadFile?.name ?? 'PDF document'}</span><span style={{ display: 'block', marginTop: 3, fontSize: 10, fontWeight: 600, color: '#94a3b8' }}>{activeKnowledgeUploadCategory.title}{activeKnowledgeUploadFile ? ` · ${formatFileSize(activeKnowledgeUploadFile.size)}` : ''}</span></div></div>
             </div>
-            <div className="mt-5 flex items-center justify-between text-[11px] font-bold text-violet-700"><span className="inline-flex items-center gap-2"><RefreshCw className="h-3.5 w-3.5 animate-spin" />Uploading to B2</span><span>{activeKnowledgeUploadProgress}%</span></div>
-            <div className="mt-2 h-2 overflow-hidden rounded-full bg-violet-100"><div className="h-full rounded-full bg-gradient-to-r from-violet-600 to-pink-500 transition-[width] duration-300 ease-out" style={{ width: `${activeKnowledgeUploadProgress}%` }} /></div>
+            <div style={{ marginTop: 20, display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 12, fontWeight: 800, color: '#6d28d9' }}><span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><RefreshCw className="h-4 w-4 animate-spin" />Uploading PDF...</span><span>{activeKnowledgeUploadProgress}%</span></div>
+            <div style={{ height: 9, marginTop: 9, overflow: 'hidden', borderRadius: 999, backgroundColor: '#ede9fe' }}><div style={{ width: `${activeKnowledgeUploadProgress}%`, height: '100%', borderRadius: 999, background: 'linear-gradient(90deg,#7c3aed,#ec4899)', transition: 'width 300ms ease-out' }} /></div>
           </div>
         </div>
-      </div>,
-      document.body,
+      </div>
     )}
     </>
   );

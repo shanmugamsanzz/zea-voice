@@ -30,7 +30,7 @@ await controller.setAssistantResponse('Hi there', 3000);
 await controller.playbackComplete(4000);
 
 const usageTracker = new ProviderUsageTracker(runtimeProfile);
-usageTracker.record('llm', { inputTokens: 10, outputTokens: 5, durationMs: 40, cost: 0.002 });
+usageTracker.record('llm', { inputTokens: 10, outputTokens: 5, durationMs: 40.125, cost: 0.002 });
 usageTracker.record('llm', { inputTokens: 4, outputTokens: 3, durationMs: 20, cost: 0.001 });
 usageTracker.record('tts', { characters: 8, audioOutputMs: 1200, cost: 0.004 });
 
@@ -39,10 +39,16 @@ const rows = [{
   ended_at: null, duration_seconds: 0, provider_metadata: {},
 }];
 const persistedUsage = [];
+let persistedPostCall;
 const contextRunner = async (operation) => operation({
   async query(sql, values) {
     if (sql.startsWith('SELECT * FROM call_sessions')) return { rowCount: 1, rows };
     if (sql.includes('INSERT INTO call_provider_usage')) { persistedUsage.push(values); return { rowCount: 1, rows: [] }; }
+    if (sql.includes("'{voiceRuntime,postCall}'")) {
+      persistedPostCall = JSON.parse(values[1]);
+      rows[0].provider_metadata.voiceRuntime.postCall = persistedPostCall;
+      return { rowCount: 1, rows };
+    }
     if (sql.startsWith('UPDATE call_sessions')) {
       rows[0] = { ...rows[0], status: values[1], ended_at: values[2], duration_seconds: values[3],
         provider_metadata: { ...rows[0].provider_metadata, ...JSON.parse(values[4]) } };
@@ -64,6 +70,7 @@ const result = await completeVoiceCall({
     tts: { async close() { throw new Error('socket already closed'); } },
   },
   endedAt: new Date(61000),
+  metrics: { knowledge: [{ route: 'faq', found: true, durationMs: 8 }] },
 }, { contextRunner, fetchImpl });
 
 assert.equal(result.call.status, 'completed');
@@ -74,7 +81,10 @@ assert.equal(result.usage.totals.totalTokens, 22);
 assert.equal(result.usage.totals.cost, 0.007);
 assert.equal(result.usage.providers.length, 2);
 assert.equal(persistedUsage.length, 2);
+assert.equal(persistedUsage[0][14], 60);
 assert.equal(result.postCall.delivered, true);
+assert.equal(persistedPostCall.delivered, true);
+assert.equal(rows[0].provider_metadata.voiceRuntime.metrics.knowledge[0].durationMs, 8);
 assert.equal(webhookPayload.call.status, 'completed');
 assert.equal(webhookPayload.providerUsage.totals.characters, 8);
 assert.equal(sttClosed, true);

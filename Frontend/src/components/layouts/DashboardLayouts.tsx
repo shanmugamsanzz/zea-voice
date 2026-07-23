@@ -30,6 +30,7 @@ import {
   MessageSquare,
   Brain,
   Link,
+  Key,
   LogOut,
   ChevronLeft,
   ChevronRight
@@ -131,6 +132,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
         { name: 'Phone Numbers', viewId: 'phone-numbers', icon: Phone },
         ...(role === 'DEVELOPER' ? [
           { name: 'Integrations', viewId: 'integrations', icon: Link },
+          { name: 'API Keys', viewId: 'api-keys', icon: Key },
           { name: 'Settings', viewId: 'settings', icon: Settings },
         ] : []),
       ],
@@ -149,6 +151,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
       case 'ai-insights': return 'AI Insights';
       case 'phone-numbers': return 'Phone Numbers';
       case 'integrations': return 'Integrations';
+      case 'api-keys': return 'API Keys';
       case 'settings': return 'Settings';
       default: return 'Dashboard';
     }
@@ -191,6 +194,8 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
         return { title: 'Verbatim Logs', subtitle: 'Historical transcript logs and billing records' };
       case 'settings':
         return { title: 'Account Integrations', subtitle: 'Configure developer webhooks and secure API access' };
+      case 'api-keys':
+        return { title: 'API Keys', subtitle: 'Create tenant-bound credentials for n8n and approved integrations' };
       default:
         return { title: 'SaaS Dashboard', subtitle: 'Voice AI Autonomous Workspace' };
     }

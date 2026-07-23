@@ -16,6 +16,15 @@ export const notFoundHandler = (request, _response, next) => {
 
 export const errorHandler = (error, request, response, _next) => {
   if (error instanceof AppError) {
+    if (request.path?.startsWith('/webhooks/plivo')) {
+      request.log?.warn({
+        icon: '❌',
+        stage: 'voice.webhook_failed',
+        statusCode: error.statusCode,
+        errorCode: error.code,
+        requestId: request.id,
+      }, `❌ Voice call stage failed: ${error.message}`);
+    }
     response.status(error.statusCode).json({
       success: false,
       error: { code: error.code, message: error.message, details: error.details },

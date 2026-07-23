@@ -2,14 +2,16 @@ import { env } from '../../config/env.js';
 
 function configuration(runtimeProfile) {
   const settings = runtimeProfile?.agent?.settings ?? {};
-  const active = settings.postCallEndpointDetailsActive === true;
-  const url = String(settings.postCallApiUrl ?? '').trim();
+  const api = runtimeProfile?.integrations?.postCall?.api ?? {};
+  const active = api.active === true || settings.postCallEndpointDetailsActive === true;
+  const url = String(api.url ?? settings.postCallApiUrl ?? '').trim();
   if (!active || !url) return null;
   const parsedUrl = new URL(url);
   if (!['http:', 'https:'].includes(parsedUrl.protocol)) throw new TypeError('Post-call endpoint must use HTTP or HTTPS');
-  const method = String(settings.postCallApiMethod ?? 'POST').toUpperCase();
+  if (env.NODE_ENV === 'production' && parsedUrl.protocol !== 'https:') throw new TypeError('Post-call endpoint must use HTTPS in production');
+  const method = String(api.method ?? settings.postCallApiMethod ?? 'POST').toUpperCase();
   if (!['POST', 'PUT', 'PATCH'].includes(method)) throw new TypeError('Post-call endpoint method must be POST, PUT, or PATCH');
-  const configuredHeaders = settings.postCallApiHeaders ?? [];
+  const configuredHeaders = api.headers ?? settings.postCallApiHeaders ?? [];
   const entries = Array.isArray(configuredHeaders)
     ? configuredHeaders.map((item) => [item.key, item.value])
     : Object.entries(configuredHeaders);
@@ -28,11 +30,12 @@ async function boundedResponse(response) {
 }
 
 export async function reportPostCall(runtimeProfile, payload, dependencies = {}) {
-  const config = configuration(runtimeProfile);
-  if (!config) return { attempted: false, delivered: false, reason: 'not_configured' };
-  const fetchImpl = dependencies.fetchImpl ?? fetch;
-  const timeoutMs = dependencies.timeoutMs ?? env.VOICE_POSTCALL_TIMEOUT_MS;
+  const startedAt = performance.now();
   try {
+    const config = configuration(runtimeProfile);
+    if (!config) return { attempted: false, delivered: false, reason: 'not_configured', durationMs: 0 };
+    const fetchImpl = dependencies.fetchImpl ?? fetch;
+    const timeoutMs = dependencies.timeoutMs ?? env.VOICE_POSTCALL_TIMEOUT_MS;
     const response = await fetchImpl(config.url, {
       method: config.method,
       headers: config.headers,
@@ -45,9 +48,13 @@ export async function reportPostCall(runtimeProfile, payload, dependencies = {})
       delivered: response.ok,
       status: response.status,
       response: responseBody,
+      durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
       error: response.ok ? null : `Post-call endpoint returned HTTP ${response.status}`,
     };
   } catch (error) {
-    return { attempted: true, delivered: false, status: null, response: null, error: error.message };
+    return {
+      attempted: true, delivered: false, status: null, response: null, error: error.message,
+      durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+    };
   }
 }

@@ -13,6 +13,7 @@ function map(row, created) {
     to: row.to_number,
     direction: row.direction,
     status: row.status,
+    providerMetadata: row.provider_metadata ?? {},
     created,
   };
 }
@@ -36,7 +37,11 @@ export function createVoiceCallSession(input, dependencies = {}) {
     );
     if (existing.rowCount) {
       assertSameCall(existing.rows[0], input);
-      return map(existing.rows[0], false);
+      const connected = await client.query(`UPDATE call_sessions
+        SET status='connected',answered_at=COALESCE(answered_at,now())
+        WHERE id=$1 AND ended_at IS NULL RETURNING *`, [existing.rows[0].id]);
+      if (!connected.rowCount) throw new AppError(409, 'Existing call session has already ended', 'VOICE_CALL_ALREADY_ENDED');
+      return map(connected.rows[0], false);
     }
     try {
       const result = await client.query(
@@ -58,6 +63,7 @@ export function createVoiceCallSession(input, dependencies = {}) {
           input.call.direction,
           JSON.stringify({
             source: 'plivo-answer',
+            preCall: { status: 'pending' },
             sttProviderId: input.runtimeProfile.providers.stt.providerId,
             sttModelId: input.runtimeProfile.providers.stt.modelId,
             llmProviderId: input.runtimeProfile.providers.llm.providerId,
@@ -78,6 +84,37 @@ export function createVoiceCallSession(input, dependencies = {}) {
       assertSameCall(raced.rows[0], input);
       return map(raced.rows[0], false);
     }
+  });
+}
+
+export function loadVoiceMediaCallSession(callId, dependencies = {}) {
+  const contextRunner = dependencies.contextRunner ?? withAuthServiceContext;
+  return contextRunner(async (client) => {
+    const result = await client.query(
+      `SELECT id,tenant_id,workspace_id,provider_call_id,agent_id,from_number,to_number,direction,status,provider_metadata
+         FROM call_sessions
+        WHERE id=$1 AND status='connected' AND ended_at IS NULL`,
+      [callId],
+    );
+    if (!result.rowCount) {
+      throw new AppError(404, 'Active voice call session was not found', 'VOICE_MEDIA_CALL_NOT_FOUND');
+    }
+    return map(result.rows[0], false);
+  });
+}
+
+export function saveVoiceCallPreCallResult(callId, preCall, dependencies = {}) {
+  const contextRunner = dependencies.contextRunner ?? withAuthServiceContext;
+  return contextRunner(async (client) => {
+    const result = await client.query(
+      `UPDATE call_sessions
+          SET provider_metadata=jsonb_set(COALESCE(provider_metadata,'{}'::jsonb),'{preCall}',$2::jsonb,true)
+        WHERE id=$1 AND ended_at IS NULL
+        RETURNING *`,
+      [callId, JSON.stringify(preCall)],
+    );
+    if (!result.rowCount) throw new AppError(404, 'Active call session was not found', 'VOICE_CALL_SESSION_NOT_FOUND');
+    return map(result.rows[0], false);
   });
 }
 
@@ -109,6 +146,12 @@ export class ActiveCallSessionStore {
   }
 
   delete(callId) {
+    return this.#sessions.delete(callId);
+  }
+
+  deleteIf(callId, controller) {
+    const entry = this.#sessions.get(callId);
+    if (!entry || entry.controller !== controller) return false;
     return this.#sessions.delete(callId);
   }
 

@@ -6,6 +6,23 @@ function authorization(authId, authToken) {
   return `Basic ${Buffer.from(`${authId}:${authToken}`).toString('base64')}`;
 }
 
+function providerErrorMessage(payload) {
+  const providerError = payload?.error ?? payload?.message;
+  if (typeof providerError === 'string' && providerError.trim()) return providerError;
+  if (Array.isArray(providerError)) {
+    const messages = providerError.map((item) => providerErrorMessage({ error: item })).filter(Boolean);
+    if (messages.length) return messages.join('; ');
+  }
+  if (providerError && typeof providerError === 'object') {
+    const messages = Object.entries(providerError).flatMap(([field, value]) => {
+      const values = Array.isArray(value) ? value : [value];
+      return values.map((item) => `${field}: ${typeof item === 'string' ? item : JSON.stringify(item)}`);
+    });
+    if (messages.length) return messages.join('; ');
+  }
+  return 'Plivo rejected the request';
+}
+
 async function plivoRequest(authId, authToken, path, options = {}, fetchImpl = fetch,
   baseUrl = env.PLIVO_API_BASE_URL, operationName = 'request', timeoutMs = env.PROVIDER_REQUEST_TIMEOUT_MS) {
   return measureExternalProvider('plivo', operationName, async () => {
@@ -24,8 +41,8 @@ async function plivoRequest(authId, authToken, path, options = {}, fetchImpl = f
     }
     const payload = response.status === 204 ? null : await response.json().catch(() => null);
     if (!response.ok) {
-      throw new AppError(502, payload?.error || 'Plivo rejected the request', 'PLIVO_REQUEST_FAILED', {
-        providerStatus: response.status,
+      throw new AppError(502, providerErrorMessage(payload), 'PLIVO_REQUEST_FAILED', {
+        providerStatus: response.status, providerError: payload?.error ?? payload?.message ?? null,
       });
     }
     return payload;

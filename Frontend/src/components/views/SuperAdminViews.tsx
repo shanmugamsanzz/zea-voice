@@ -60,6 +60,7 @@ interface PlatformDashboardData {
 
 interface CompanyApiData {
   tenantId: string; organizationId: string; workspaceId: string; businessName: string;
+  organizationName: string; workspaceName: string;
   legalName: string | null; firstName: string | null; lastName: string | null; email: string;
   businessPhone: string | null; website: string | null; billingTier: 'starter' | 'pro' | 'enterprise';
   perMinutePrice: number;
@@ -398,6 +399,8 @@ function CompaniesListView() {
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
   const [businessName, setBusinessName] = useState('');
+  const [organizationName, setOrganizationName] = useState('');
+  const [workspaceName, setWorkspaceName] = useState('');
   const [businessPhone, setBusinessPhone] = useState('');
   const [address, setAddress] = useState('');
   const [state, setState] = useState('');
@@ -426,13 +429,13 @@ function CompaniesListView() {
 
   const handleCreateCompany = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!businessName || !email) return;
+    if (!businessName || !organizationName || !workspaceName || !email) return;
     setSubmitting(true); setError('');
     try {
       await apiRequest<CompanyApiData>('/admin/companies', { method: 'POST', body: JSON.stringify({
-        businessName, legalName: businessName, firstName, lastName, email, businessPhone,
+        businessName, organizationName, workspaceName, legalName: organizationName, firstName, lastName, email, businessPhone,
         website, billingTier, perMinutePrice: Number(perMinutePrice), addressLine1: address, state, country, postalCode: zip,
-        timezone, workspaceName: `${businessName} Workspace`, status: 'active', locale: 'en-US', currency: 'INR',
+        timezone, status: 'active', locale: 'en-US', currency: 'INR',
       }) });
       setSuccessMessage(`Organization "${businessName}" successfully created.`);
       setRefreshKey((value) => value + 1);
@@ -471,7 +474,8 @@ function CompaniesListView() {
       await apiRequest(`/admin/companies/${editingCompany.tenantId}`, {
         method: 'PATCH',
         body: JSON.stringify({
-          businessName: editingCompany.businessName, legalName: editingCompany.legalName,
+          businessName: editingCompany.businessName, organizationName: editingCompany.organizationName,
+          workspaceName: editingCompany.workspaceName, legalName: editingCompany.legalName,
           firstName: editingCompany.firstName, lastName: editingCompany.lastName,
           email: editingCompany.email, businessPhone: editingCompany.businessPhone,
           website: editingCompany.website, billingTier: editingCompany.billingTier,
@@ -613,7 +617,9 @@ function CompaniesListView() {
               <button type="button" onClick={() => setEditingCompany(null)} className="rounded-md p-1 text-slate-400 hover:bg-slate-100"><X className="h-4 w-4" /></button>
             </div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 text-xs">
-              <label className="font-bold text-slate-500">Business Name<input required value={editingCompany.businessName} onChange={(e) => setEditingCompany({ ...editingCompany, businessName: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
+              <label className="font-bold text-slate-500">Company / Tenant Name<input required value={editingCompany.businessName} onChange={(e) => setEditingCompany({ ...editingCompany, businessName: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
+              <label className="font-bold text-slate-500">Organization Name<input required value={editingCompany.organizationName} onChange={(e) => setEditingCompany({ ...editingCompany, organizationName: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
+              <label className="font-bold text-slate-500">Workspace Name<input required value={editingCompany.workspaceName} onChange={(e) => setEditingCompany({ ...editingCompany, workspaceName: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
               <label className="font-bold text-slate-500">Legal Name<input value={editingCompany.legalName ?? ''} onChange={(e) => setEditingCompany({ ...editingCompany, legalName: e.target.value || null })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
               <label className="font-bold text-slate-500">First Name<input required value={editingCompany.firstName ?? ''} onChange={(e) => setEditingCompany({ ...editingCompany, firstName: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
               <label className="font-bold text-slate-500">Last Name<input required value={editingCompany.lastName ?? ''} onChange={(e) => setEditingCompany({ ...editingCompany, lastName: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
@@ -670,6 +676,26 @@ function CompaniesListView() {
 
               {/* Form grids */}
               <div className="space-y-4 text-xs font-semibold">
+                <div>
+                  <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2.5">Company Identity</h4>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <div>
+                      <label className="block text-[10px] text-slate-500 mb-1 font-bold">Company / Tenant Name</label>
+                      <input type="text" required value={businessName} onChange={(event) => setBusinessName(event.target.value)} className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-indigo-500 rounded-lg px-3 py-2 outline-none font-semibold text-slate-800" placeholder="Shanmuga Hospital" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-slate-500 mb-1 font-bold">Organization Name</label>
+                      <input type="text" required value={organizationName} onChange={(event) => setOrganizationName(event.target.value)} className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-indigo-500 rounded-lg px-3 py-2 outline-none font-semibold text-slate-800" placeholder="Shanmuga Hospitals Org" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-slate-500 mb-1 font-bold">Workspace Name</label>
+                      <input type="text" required value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-indigo-500 rounded-lg px-3 py-2 outline-none font-semibold text-slate-800" placeholder="Production Workspace" />
+                    </div>
+                  </div>
+                </div>
+
+                <hr className="border-slate-100" />
+
                 {/* 1. Contact Info */}
                 <div>
                   <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2.5">Primary Contact</h4>
@@ -715,19 +741,7 @@ function CompaniesListView() {
                 {/* 2. Business Details */}
                 <div>
                   <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2.5">Business Profile</h4>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-[10px] text-slate-500 mb-1 font-bold">Business Name</label>
-                      <input
-                        type="text"
-                        required
-                        value={businessName}
-                        onChange={(e) => setBusinessName(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-indigo-500 rounded-lg px-3 py-2 outline-none font-semibold text-slate-800"
-                        placeholder="Company Corp"
-                      />
-                    </div>
-                    <div>
+                  <div>
                       <label className="block text-[10px] text-slate-500 mb-1 font-bold">Business Phone</label>
                       <input
                         type="text"
@@ -737,7 +751,6 @@ function CompaniesListView() {
                         className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-indigo-500 rounded-lg px-3 py-2 outline-none font-semibold text-slate-800"
                         placeholder="(555) 000-0000"
                       />
-                    </div>
                   </div>
 
                   <div className="grid grid-cols-2 gap-3 mt-3">
@@ -1346,6 +1359,7 @@ function VoiceProvidersView() {
   const [modelKey, setModelKey] = useState('');
   const [modelDisplayName, setModelDisplayName] = useState('');
   const [modelParameters, setModelParameters] = useState<Array<{ key: string; value: string }>>([]);
+  const [editingModelId, setEditingModelId] = useState<string | null>(null);
 
   const loadProviders = async () => {
     setLoading(true); setError('');
@@ -1458,7 +1472,7 @@ function VoiceProvidersView() {
 
   const openModelManager = async (provider: ProviderApiData) => {
     setModelProvider(provider); setProviderModels([]); setModelsLoading(true); setError('');
-    setModelKey(''); setModelDisplayName(''); setModelParameters([]);
+    setEditingModelId(null); setModelKey(''); setModelDisplayName(''); setModelParameters([]);
     try {
       setProviderModels(await apiRequest<ProviderModelApiData[]>(`/admin/providers/${provider.id}/models`));
     } catch (requestError) {
@@ -1478,16 +1492,39 @@ function VoiceProvidersView() {
     setSubmitting(true); setError('');
     try {
       const settings = Object.fromEntries(modelParameters.filter((parameter) => parameter.key.trim()).map((parameter) => [parameter.key.trim(), modelParameterValue(parameter.value)]));
-      const created = await apiRequest<ProviderModelApiData>(`/admin/providers/${modelProvider.id}/models`, {
-        method: 'POST', body: JSON.stringify({ modelKey: modelKey.trim(), displayName: modelDisplayName.trim(), status: 'active', capabilities: {}, settings }),
+      const existingModel = editingModelId ? providerModels.find((model) => model.id === editingModelId) : null;
+      const saved = await apiRequest<ProviderModelApiData>(editingModelId
+        ? `/admin/providers/models/${editingModelId}`
+        : `/admin/providers/${modelProvider.id}/models`, {
+        method: editingModelId ? 'PATCH' : 'POST',
+        body: JSON.stringify({ modelKey: modelKey.trim(), displayName: modelDisplayName.trim(), status: 'active', capabilities: existingModel?.capabilities ?? {}, settings }),
       });
-      setProviderModels((current) => [created, ...current]);
-      setProviders((current) => current.map((provider) => provider.id === modelProvider.id ? { ...provider, modelCount: provider.modelCount + 1 } : provider));
-      setModelProvider((current) => current ? { ...current, modelCount: current.modelCount + 1 } : current);
-      setModelKey(''); setModelDisplayName(''); setModelParameters([]);
+      if (editingModelId) {
+        setProviderModels((current) => current.map((model) => model.id === saved.id ? saved : model));
+      } else {
+        setProviderModels((current) => [saved, ...current]);
+        setProviders((current) => current.map((provider) => provider.id === modelProvider.id ? { ...provider, modelCount: provider.modelCount + 1 } : provider));
+        setModelProvider((current) => current ? { ...current, modelCount: current.modelCount + 1 } : current);
+      }
+      setEditingModelId(null); setModelKey(''); setModelDisplayName(''); setModelParameters([]);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Provider model could not be created');
     } finally { setSubmitting(false); }
+  };
+
+  const openModelEditor = (model: ProviderModelApiData) => {
+    setEditingModelId(model.id);
+    setModelKey(model.modelKey);
+    setModelDisplayName(model.displayName);
+    setModelParameters(Object.entries(model.settings).map(([key, value]) => ({
+      key,
+      value: typeof value === 'string' ? value : JSON.stringify(value),
+    })));
+    setError('');
+  };
+
+  const cancelModelEditor = () => {
+    setEditingModelId(null); setModelKey(''); setModelDisplayName(''); setModelParameters([]);
   };
 
   const toggleModelStatus = async (model: ProviderModelApiData) => {
@@ -1697,7 +1734,7 @@ function VoiceProvidersView() {
             </div>
             <div className="space-y-2 border-t border-slate-100 pt-4">
               <div className="flex items-center justify-between">
-                <div><h4 className="text-[10px] font-black uppercase tracking-wider text-indigo-600">Configuration Parameters</h4><p className="text-[10px] text-slate-400">All values are visible to Super Admin.</p></div>
+                <div><h4 className="text-[10px] font-black uppercase tracking-wider text-indigo-600">Provider Keys &amp; Credentials</h4><p className="text-[10px] text-slate-400">Shared provider configuration only. These values do not create or configure selectable models.</p></div>
                 <button type="button" onClick={() => setEditParameters((current) => [...current, { key: '', value: '', isSecret: false }])}
                   className="flex items-center gap-1 rounded-lg border border-indigo-100 bg-indigo-50 px-2.5 py-1.5 text-[10px] font-bold text-indigo-700 hover:bg-indigo-100">
                   <Plus className="h-3 w-3" /> Add Parameter
@@ -1734,7 +1771,7 @@ function VoiceProvidersView() {
             </div>
             {error && <div className="mb-4 rounded-lg border border-red-100 bg-red-50 p-2.5 text-xs font-semibold text-red-700">{error}</div>}
             <form onSubmit={handleCreateModel} className="space-y-4 rounded-xl border border-indigo-100 bg-indigo-50/30 p-4">
-              <div><h4 className="text-[10px] font-black uppercase tracking-wider text-indigo-700">Create Super Admin Model</h4><p className="text-[10px] text-slate-400">Provider credentials remain private. Only the model settings below are visible to developers.</p></div>
+              <div><h4 className="text-[10px] font-black uppercase tracking-wider text-indigo-700">{editingModelId ? 'Edit Super Admin Model' : 'Create Super Admin Model'}</h4><p className="text-[10px] text-slate-400">Models are explicit and dynamic. Provider credentials remain private; developers can select active models and view only these model settings.</p></div>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <label className="text-[10px] font-bold text-slate-500">Model Key<input required value={modelKey} onChange={(e) => setModelKey(e.target.value)} placeholder="e.g. gpt-4.1" className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-xs outline-none focus:border-indigo-500" /></label>
                 <label className="text-[10px] font-bold text-slate-500">Display Name<input required value={modelDisplayName} onChange={(e) => setModelDisplayName(e.target.value)} placeholder="e.g. GPT 4.1" className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs outline-none focus:border-indigo-500" /></label>
@@ -1748,14 +1785,20 @@ function VoiceProvidersView() {
                 </div>)}
                 {modelParameters.length === 0 && <div className="rounded-lg border border-dashed border-slate-200 bg-white p-3 text-center text-[10px] text-slate-400">No optional model parameters.</div>}
               </div>
-              <div className="flex justify-end"><button disabled={submitting} className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">{submitting ? 'Creating...' : 'Add Active Model'}</button></div>
+              <div className="flex justify-end gap-2">
+                {editingModelId && <button type="button" onClick={cancelModelEditor} className="rounded-lg bg-white px-4 py-2 text-xs font-bold text-slate-600 ring-1 ring-slate-200">Cancel Edit</button>}
+                <button disabled={submitting} className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">{submitting ? 'Saving...' : editingModelId ? 'Save Model' : 'Add Active Model'}</button>
+              </div>
             </form>
             <div className="mt-5 space-y-2">
               <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Created Models ({providerModels.length})</span>
               {modelsLoading && <div className="rounded-xl border border-slate-200 p-6 text-center text-xs text-slate-400">Loading models...</div>}
               {!modelsLoading && providerModels.map((model) => <div key={model.id} className="flex items-start justify-between gap-4 rounded-xl border border-slate-200 p-4">
                 <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="text-xs font-black text-slate-800">{model.displayName}</span><span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[9px] text-slate-500">{model.modelKey}</span></div><div className="mt-2 flex flex-wrap gap-1.5">{Object.entries(model.settings).map(([key, value]) => <span key={key} className="rounded border border-slate-200 bg-slate-50 px-2 py-1 font-mono text-[9px] text-slate-600">{key}: {typeof value === 'string' ? value : JSON.stringify(value)}</span>)}{Object.keys(model.settings).length === 0 && <span className="text-[9px] text-slate-400">No model parameters</span>}</div></div>
-                <button type="button" onClick={() => toggleModelStatus(model)} className={`shrink-0 rounded-lg border px-3 py-1.5 text-[10px] font-bold ${model.status === 'active' ? 'border-emerald-100 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-100 text-slate-500'}`}>{model.status === 'active' ? 'Active' : 'Inactive'}</button>
+                <div className="flex shrink-0 gap-2">
+                  <button type="button" onClick={() => openModelEditor(model)} className="rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-1.5 text-[10px] font-bold text-indigo-700">Edit</button>
+                  <button type="button" onClick={() => toggleModelStatus(model)} className={`rounded-lg border px-3 py-1.5 text-[10px] font-bold ${model.status === 'active' ? 'border-emerald-100 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-100 text-slate-500'}`}>{model.status === 'active' ? 'Active' : 'Inactive'}</button>
+                </div>
               </div>)}
               {!modelsLoading && providerModels.length === 0 && <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-xs text-slate-400">No models created for this provider.</div>}
             </div>
@@ -1787,7 +1830,7 @@ function VoiceProvidersView() {
               {/* Display config parameters if they exist */}
               {p.parameterKeys.length > 0 && (
                 <div className="mt-3.5 bg-slate-50 p-3 rounded-lg border border-slate-200/60 font-sans">
-                  <span className="text-[9px] text-slate-400 font-extrabold uppercase tracking-widest block mb-2">Configured Keys & Vars</span>
+                  <span className="text-[9px] text-slate-400 font-extrabold uppercase tracking-widest block mb-2">Provider Keys &amp; Vars (not model settings)</span>
                   <div className="space-y-1.5 text-[10px] font-mono">
                     {p.parameterKeys.map((param) => (
                       <div key={param.key} className="flex min-w-0 items-center justify-between gap-2 text-slate-600 border-b border-slate-100 pb-1 last:border-0 last:pb-0">
@@ -2007,8 +2050,7 @@ function PhoneNumbersView() {
     setError('');
     try {
       await apiRequest(`/admin/telephony/accounts/${account.id}`, { method: 'DELETE' });
-      setTelephonyProviders((current) => current.filter((item) => item.id !== account.id));
-      setNumbers((current) => current.filter((number) => number.telephonyAccountId !== account.id));
+      await loadTelephonyData();
     } catch (requestError) { setError(requestError instanceof Error ? requestError.message : 'Provider could not be deleted'); }
   };
 

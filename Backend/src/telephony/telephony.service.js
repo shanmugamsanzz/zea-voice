@@ -136,7 +136,7 @@ export function updateTelephonyAccount(actorUserId, accountId, input) {
   });
 }
 
-export function deleteTelephonyAccount(actorUserId, accountId) {
+export function deleteTelephonyAccount(actorUserId, accountId, fetchImpl = fetch) {
   return withPlatformAdminContext(actorUserId, async (client) => {
     const account = await client.query(
       'SELECT * FROM telephony_accounts WHERE id = $1 AND deleted_at IS NULL', [accountId],
@@ -146,24 +146,44 @@ export function deleteTelephonyAccount(actorUserId, accountId) {
       throw new AppError(409, 'Company subaccounts are managed through their parent provider', 'SUBACCOUNT_DELETE_NOT_ALLOWED');
     }
     const children = await client.query(
-      `SELECT count(*)::int AS count FROM telephony_accounts
-       WHERE parent_account_id = $1 AND deleted_at IS NULL`, [accountId],
+      `SELECT * FROM telephony_accounts
+       WHERE parent_account_id = $1 AND account_type = 'subaccount' AND deleted_at IS NULL
+       ORDER BY created_at`, [accountId],
     );
-    if (children.rows[0].count > 0) {
-      throw new AppError(409, 'This provider still has company subaccounts', 'TELEPHONY_ACCOUNT_HAS_SUBACCOUNTS');
-    }
     const assigned = await client.query(
       `SELECT count(*)::int AS count FROM phone_numbers n
        JOIN phone_number_assignments a ON a.phone_number_id = n.id AND a.released_at IS NULL
-       WHERE n.telephony_account_id = $1 AND n.deleted_at IS NULL`,
+       JOIN telephony_accounts ta ON ta.id = n.telephony_account_id
+       WHERE (ta.id = $1 OR ta.parent_account_id = $1) AND n.deleted_at IS NULL`,
       [accountId],
     );
     if (assigned.rows[0].count > 0) {
       throw new AppError(409, 'Release assigned phone numbers before deleting this provider', 'TELEPHONY_ACCOUNT_IN_USE');
     }
+    const mainToken = readTelephonyCredential(account.rows[0].auth_token_encrypted);
+    for (const child of children.rows) {
+      try {
+        await deletePlivoSubaccount(
+          account.rows[0].auth_id, mainToken, child.provider_subaccount_id || child.auth_id,
+          fetchImpl, account.rows[0].base_url,
+        );
+      } catch (error) {
+        // A previous attempt may have removed the provider resource before its
+        // database transaction failed. Treat provider 404 as an idempotent delete.
+        if (!(error instanceof AppError && error.code === 'PLIVO_REQUEST_FAILED'
+          && error.details?.providerStatus === 404)) throw error;
+      }
+    }
     await client.query(
       `UPDATE phone_numbers SET status = 'released', deleted_at = COALESCE(deleted_at, now())
-       WHERE telephony_account_id = $1 AND deleted_at IS NULL`, [accountId],
+       WHERE telephony_account_id IN (
+         SELECT id FROM telephony_accounts WHERE id = $1 OR parent_account_id = $1
+       ) AND deleted_at IS NULL`, [accountId],
+    );
+    await client.query(
+      `UPDATE telephony_accounts SET status = 'disconnected', deleted_at = now()
+       WHERE parent_account_id = $1 AND account_type = 'subaccount' AND deleted_at IS NULL`,
+      [accountId],
     );
     await client.query(
       `UPDATE telephony_accounts SET status = 'disconnected', deleted_at = now()
@@ -172,7 +192,8 @@ export function deleteTelephonyAccount(actorUserId, accountId) {
     await client.query(
       `INSERT INTO audit_logs (actor_user_id, actor_type, action, entity_type, entity_id, before_data, after_data)
        VALUES ($1, 'user', 'TELEPHONY_ACCOUNT_DELETED', 'telephony_account', $2, $3::jsonb, $4::jsonb)`,
-      [actorUserId, accountId, JSON.stringify(mapAccountAudit(account.rows[0])), JSON.stringify({ deleted: true })],
+      [actorUserId, accountId, JSON.stringify(mapAccountAudit(account.rows[0])),
+        JSON.stringify({ deleted: true, deletedSubaccountCount: children.rowCount })],
     );
     return { id: accountId, deleted: true };
   });
@@ -497,13 +518,11 @@ export function releasePhoneNumber(actorUserId, phoneNumberId, reason, fetchImpl
        WHERE phone_number_id = $1 AND released_at IS NULL FOR UPDATE`, [phoneNumberId],
     );
     if (!activeAssignment.rowCount) throw new AppError(409, 'Phone number is not currently assigned', 'PHONE_NUMBER_NOT_ASSIGNED');
-    if (phone.rows[0].account_type === 'subaccount') {
-      await updatePlivoNumber(
-        phone.rows[0].main_auth_id, readTelephonyCredential(phone.rows[0].main_token_encrypted),
-        phone.rows[0].e164, { subaccountAuthId: null, applicationId: phone.rows[0].main_application_id || undefined },
-        fetchImpl, phone.rows[0].main_base_url,
-      );
-    }
+    // Plivo only accepts an SA... identifier in the number `subaccount` field;
+    // neither null nor the parent MA... identifier moves one DID back to the main
+    // account. Keep the provider ownership record so the number can later move
+    // directly to another company subaccount. Zea revokes routing below by ending
+    // the active assignment, which is required by the inbound agent resolver.
     const assignment = await client.query(
       `UPDATE phone_number_assignments
        SET released_at = now(), released_by = $2, release_reason = $3
@@ -511,14 +530,20 @@ export function releasePhoneNumber(actorUserId, phoneNumberId, reason, fetchImpl
       [phoneNumberId, actorUserId, reason ?? null],
     );
     await client.query(
-      `UPDATE phone_numbers SET assigned_tenant_id = NULL, telephony_account_id = $2,
+      `UPDATE phone_numbers SET assigned_tenant_id = NULL,
         provider_data = provider_data - 'plivoSubaccountAuthId' - 'plivoApplicationId' WHERE id = $1`,
-      [phoneNumberId, phone.rows[0].main_account_id],
+      [phoneNumberId],
+    );
+    const detachedAgents = await client.query(
+      `UPDATE voice_agents SET phone_number_id = NULL, updated_at = now()
+       WHERE phone_number_id = $1 AND deleted_at IS NULL RETURNING id`,
+      [phoneNumberId],
     );
     await client.query(
       `INSERT INTO audit_logs (tenant_id, actor_user_id, actor_type, action, entity_type, entity_id, after_data)
-       VALUES ($1::uuid, $2::uuid, 'user', 'PHONE_NUMBER_RELEASED', 'phone_number', $3::uuid::text, $4::jsonb)`,
-      [assignment.rows[0].tenant_id, actorUserId, phoneNumberId, JSON.stringify({ reason: reason ?? null })],
+        VALUES ($1::uuid, $2::uuid, 'user', 'PHONE_NUMBER_RELEASED', 'phone_number', $3::uuid::text, $4::jsonb)`,
+      [assignment.rows[0].tenant_id, actorUserId, phoneNumberId,
+        JSON.stringify({ reason: reason ?? null, detachedAgentCount: detachedAgents.rowCount })],
     );
     return mapPhone(await phoneRow(client, phoneNumberId));
   });

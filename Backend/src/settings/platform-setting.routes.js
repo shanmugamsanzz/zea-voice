@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { authenticateRequest, requireRoles, requireSessionAuthentication } from '../auth/auth.middleware.js';
+import { requireTenantContext } from '../auth/tenant.middleware.js';
 import { AppError } from '../middleware/errors.js';
 import { parsePlatformSettingInput, updatePlatformSettingsSchema } from './platform-setting.schemas.js';
-import { getPlatformSettings, updatePlatformSettings } from './platform-setting.service.js';
+import { getPlatformSettings, getWorkspaceSettings, updatePlatformSettings } from './platform-setting.service.js';
 
 function valid(schema, value) {
   const parsed = parsePlatformSettingInput(schema, value);
@@ -17,3 +18,10 @@ platformSettingRouter.put('/', requireSessionAuthentication, async (req, res) =>
   data: await updatePlatformSettings(req.auth.userId, valid(updatePlatformSettingsSchema, req.body), {
     ipAddress: req.ip ?? null, userAgent: req.get('user-agent') ?? null,
   }) }));
+
+export const workspaceSettingRouter = Router();
+workspaceSettingRouter.use(authenticateRequest, requireTenantContext);
+workspaceSettingRouter.get('/', async (req, res) => res.json({
+  success: true,
+  data: await getWorkspaceSettings({ ...req.auth, tenantId: req.tenant.tenantId, workspaceId: req.tenant.workspaceId }),
+}));

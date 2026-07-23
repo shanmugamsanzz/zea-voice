@@ -3,6 +3,7 @@ import { activeCallSessions } from './call-session-store.js';
 import { reportPostCall } from './integrations/postcall.service.js';
 
 const terminalStatuses = new Set(['completed', 'failed', 'canceled']);
+const wholeNumber = (value) => Math.max(0, Math.round(Number(value) || 0));
 
 function terminalStatus(outcome) {
   return terminalStatuses.has(outcome) ? outcome : 'failed';
@@ -46,9 +47,10 @@ async function persistCompletion(input, dependencies) {
           character_count=EXCLUDED.character_count,duration_ms=EXCLUDED.duration_ms,
           cost=EXCLUDED.cost,currency=EXCLUDED.currency,raw_usage=EXCLUDED.raw_usage`, [
         input.callId, call.tenant_id, usage.kind, usage.providerId, usage.providerName,
-        usage.modelId, usage.model, usage.requests, usage.inputTokens, usage.outputTokens,
-        usage.totalTokens, usage.audioInputMs, usage.audioOutputMs, usage.characters,
-        usage.durationMs, usage.cost, usage.currency, JSON.stringify(usage.events),
+        usage.modelId, usage.model, wholeNumber(usage.requests), wholeNumber(usage.inputTokens),
+        wholeNumber(usage.outputTokens), wholeNumber(usage.totalTokens), wholeNumber(usage.audioInputMs),
+        wholeNumber(usage.audioOutputMs), wholeNumber(usage.characters), wholeNumber(usage.durationMs),
+        usage.cost, usage.currency, JSON.stringify(usage.events),
       ]);
     }
     const voiceRuntime = {
@@ -56,6 +58,7 @@ async function persistCompletion(input, dependencies) {
       reason: input.reason,
       usage: input.usage,
       adapterCleanup: input.adapterCleanup,
+      metrics: input.metrics ?? {},
       finalizedAt: endedAt.toISOString(),
     };
     const updated = await client.query(`UPDATE call_sessions SET status=$2::call_status,ended_at=$3,
@@ -64,6 +67,16 @@ async function persistCompletion(input, dependencies) {
     ]);
     return { call: updated.rows[0], idempotent: false, usage: input.usage };
   });
+}
+
+async function persistPostCallResult(callId, postCall, dependencies) {
+  const contextRunner = dependencies.contextRunner ?? withAuthServiceContext;
+  return contextRunner(async (client) => client.query(
+    `UPDATE call_sessions
+        SET provider_metadata=jsonb_set(COALESCE(provider_metadata,'{}'::jsonb),'{voiceRuntime,postCall}',$2::jsonb,true)
+      WHERE id=$1`,
+    [callId, JSON.stringify(postCall)],
+  ));
 }
 
 export async function completeVoiceCall(input, dependencies = {}) {
@@ -83,6 +96,7 @@ export async function completeVoiceCall(input, dependencies = {}) {
   const usage = input.usageTracker.report();
   const persisted = await persistCompletion({
     callId: input.controller.callSession.id, status, reason, endedAt, usage, adapterCleanup,
+    metrics: input.metrics ?? {},
   }, dependencies);
   activeCallSessions.delete(input.controller.callSession.id);
 
@@ -107,6 +121,9 @@ export async function completeVoiceCall(input, dependencies = {}) {
       transcript: input.controller.history,
       providerUsage: usage,
     }, dependencies);
+    await (dependencies.persistPostCallResult ?? persistPostCallResult)(
+      input.controller.callSession.id, postCall, dependencies,
+    );
   }
   return { call: persisted.call, usage: persisted.usage, adapterCleanup, postCall, idempotent: persisted.idempotent };
 }

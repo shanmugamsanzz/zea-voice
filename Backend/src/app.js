@@ -18,7 +18,7 @@ import { queueAdminRouter } from './queues/queue.routes.js';
 import { apiKeyRouter } from './api-keys/api-key.routes.js';
 import { callAdminRouter, tenantCallRouter } from './calls/call.routes.js';
 import { paymentAdminRouter, tenantPaymentRouter } from './payments/payment.routes.js';
-import { platformSettingRouter } from './settings/platform-setting.routes.js';
+import { platformSettingRouter, workspaceSettingRouter } from './settings/platform-setting.routes.js';
 import { dashboardRouter } from './dashboard/dashboard.routes.js';
 import { platformDashboardRouter } from './dashboard/platform-dashboard.routes.js';
 import { userRouter } from './users/user.routes.js';
@@ -28,6 +28,38 @@ import { knowledgeBaseRouter } from './knowledge-bases/knowledge-base.routes.js'
 import { plivoWebhookRouter } from './telephony/plivo-webhook.routes.js';
 import { performanceMiddleware } from './middleware/performance.js';
 import { voiceRouter } from './voice/voice.routes.js';
+import { vqaRouter } from './vqa/vqa.routes.js';
+import { insightRouter } from './insights/insight.routes.js';
+import { publicTaskRouter } from './public-tasks/public-task.routes.js';
+
+function redactRequestUrl(value) {
+  if (typeof value !== 'string' || !value.includes('token=')) return value;
+  try {
+    const parsed = new URL(value, 'http://zea-voice.local');
+    if (parsed.searchParams.has('token')) parsed.searchParams.set('token', '[REDACTED]');
+    return `${parsed.pathname}${parsed.search}`;
+  } catch {
+    return value.replace(/([?&]token=)[^&]*/i, '$1[REDACTED]');
+  }
+}
+
+function sanitizeLoggedRequest(request) {
+  const query = request.query && typeof request.query === 'object'
+    ? { ...request.query }
+    : request.query;
+  if (query && 'token' in query) query.token = '[REDACTED]';
+  return {
+    id: request.id,
+    method: request.method,
+    url: redactRequestUrl(request.url),
+    query,
+    remoteAddress: request.remoteAddress,
+  };
+}
+
+function sanitizeLoggedResponse(response) {
+  return { statusCode: response.statusCode };
+}
 
 export function createApp() {
   const app = express();
@@ -47,6 +79,8 @@ export function createApp() {
   app.use(cookieParser());
   app.use(pinoHttp({
     logger,
+    serializers: { req: sanitizeLoggedRequest, res: sanitizeLoggedResponse },
+    autoLogging: { ignore: (request) => request.url?.split('?')[0] === '/health' },
     genReqId: (request, response) => {
       const requestId = request.headers['x-request-id']?.toString() ?? crypto.randomUUID();
       response.setHeader('x-request-id', requestId);
@@ -70,11 +104,15 @@ export function createApp() {
   app.use('/credits', tenantCreditRouter);
   app.use('/admin/queues', queueAdminRouter);
   app.use('/api-keys', apiKeyRouter);
+  app.use('/api/public', publicTaskRouter);
   app.use('/admin/calls', callAdminRouter);
   app.use('/calls', tenantCallRouter);
+  app.use('/vqa', vqaRouter);
+  app.use('/insights', insightRouter);
   app.use('/admin/payments', paymentAdminRouter);
   app.use('/payments', tenantPaymentRouter);
   app.use('/admin/settings', platformSettingRouter);
+  app.use('/settings', workspaceSettingRouter);
   app.use('/dashboard', dashboardRouter);
   app.use('/admin/dashboard', platformDashboardRouter);
   app.use('/users', userRouter);

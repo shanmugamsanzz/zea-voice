@@ -40,6 +40,7 @@ assert.equal(session.created, true);
 const metadata = JSON.parse(insertValues.at(-1));
 assert.equal(metadata.sttProviderId, 'stt-provider');
 assert.equal(metadata.ttsModelId, 'tts-model');
+assert.equal(metadata.preCall.status, 'pending');
 
 const xml = buildPlivoStreamXml(session, { secret: 'test-signing-secret-with-at-least-32-characters', now: 1_700_000_000_000 });
 assert.match(xml, /bidirectional="true"/);

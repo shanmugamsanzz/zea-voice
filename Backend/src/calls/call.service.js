@@ -6,12 +6,30 @@ import { hangupPlivoCall } from '../telephony/plivo.client.js';
 const activeStatuses = ['queued', 'ringing', 'connected'];
 const number = (value) => Number(value);
 
+function contactName(row) {
+  const metadata = row.provider_metadata ?? {};
+  const candidates = [
+    metadata.preCall?.context?.customer_name,
+    metadata.context?.customer_name,
+    metadata.context?.lead_name,
+    metadata.leadName,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string') continue;
+    const value = candidate.normalize('NFC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
+      .replace(/\s+/g, ' ').trim();
+    if (value) return Array.from(value).slice(0, 240).join('');
+  }
+  return null;
+}
+
 function mapCall(row, includeTranscript = false) {
   const call = {
     id: row.id, companyId: row.tenant_id, workspaceId: row.workspace_id,
     companyName: row.company_name, providerCallId: row.provider_call_id,
     agentId: row.agent_id, agentName: row.agent_name,
     campaignId: row.campaign_id, campaignName: row.campaign_name,
+    contactName: contactName(row),
     phoneNumberId: row.phone_number_id, fromNumber: row.from_number, toNumber: row.to_number,
     direction: row.direction, status: row.status, sentiment: row.sentiment,
     startedAt: row.started_at, ringingAt: row.ringing_at, answeredAt: row.answered_at,
