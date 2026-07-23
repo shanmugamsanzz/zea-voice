@@ -129,6 +129,7 @@ export function CompanyViews() {
       return <DeveloperReportsView />;
     case 'call-logs':
       return <DeveloperReportsView
+        variant="call-logs"
         title="Call Logs Analytics"
         subtitle="Live tenant call records, outcomes, durations, costs and transcripts from PostgreSQL"
       />;

@@ -32,6 +32,7 @@ interface CallRecord {
   status: CallStatus;
   sentiment: string | null;
   startedAt: string;
+  ringingAt: string | null;
   answeredAt: string | null;
   endedAt: string | null;
   durationSeconds: number;
@@ -39,6 +40,29 @@ interface CallRecord {
   currency: string;
   recordingAvailable: boolean;
   transcript?: TranscriptEntry[];
+}
+
+interface ReportRow {
+  key: string;
+  dateKey: string;
+  dateLabel: string;
+  agentName: string;
+  campaignName: string;
+  currency: string;
+  totalCalls: number;
+  inboundCalls: number;
+  outboundCalls: number;
+  completedCalls: number;
+  failedCalls: number;
+  busyCalls: number;
+  noAnswerCalls: number;
+  canceledCalls: number;
+  totalDurationSeconds: number;
+  positiveCalls: number;
+  neutralCalls: number;
+  negativeCalls: number;
+  unknownSentimentCalls: number;
+  totalCost: number;
 }
 
 interface CallListResponse {
@@ -62,6 +86,20 @@ function timestamp(value: string, full = false) {
     month: 'short', day: '2-digit', ...(full ? { year: 'numeric' as const } : {}),
     hour: '2-digit', minute: '2-digit', hour12: true,
   }).format(date);
+}
+
+function optionalTimestamp(value: string | null) {
+  return value ? timestamp(value, true) : '—';
+}
+
+function reportDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return { key: 'invalid', label: 'Unknown date' };
+  const key = [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0')].join('-');
+  return { key, label: new Intl.DateTimeFormat('en-IN', {
+    year: 'numeric', month: 'short', day: '2-digit',
+  }).format(date) };
 }
 
 function duration(seconds: number) {
@@ -104,14 +142,88 @@ function StatusBadge({ status }: { status: CallStatus }) {
   return <span className={`inline-flex rounded-md border px-2 py-1 text-[10px] font-black uppercase ${style}`}>{statusLabel[status]}</span>;
 }
 
+function ReportsAggregateTable({ rows, loading }: { rows: ReportRow[]; loading: boolean }) {
+  return <div className="overflow-x-auto"><table className="w-full min-w-[2200px] text-left">
+    <thead className="border-b border-slate-200 bg-slate-50 text-[9px] font-black uppercase tracking-wider text-slate-400"><tr>
+      {['Date', 'Agent', 'Campaign', 'Total', 'Inbound', 'Outbound', 'Completed', 'Failed', 'Busy',
+        'No Answer', 'Canceled', 'Completion', 'Avg Duration', 'Total Duration', 'Positive', 'Neutral',
+        'Negative', 'Unknown', 'Total Cost', 'Currency'].map((heading) => <th key={heading} className="px-4 py-4">{heading}</th>)}
+    </tr></thead>
+    <tbody className="divide-y divide-slate-100 text-xs">{loading
+      ? <tr><td colSpan={20} className="py-16 text-center"><LoaderCircle className="mx-auto h-7 w-7 animate-spin text-pink-500" /><p className="mt-3 font-bold text-slate-400">Building reports from real call records…</p></td></tr>
+      : rows.length ? rows.map((row) => <tr key={row.key} className="hover:bg-slate-50">
+        <td className="px-4 py-4 font-bold text-slate-600">{row.dateLabel}</td>
+        <td className="px-4 py-4 font-black text-slate-700">{row.agentName}</td>
+        <td className="px-4 py-4 font-bold text-slate-600">{row.campaignName}</td>
+        <td className="px-4 py-4 font-black text-slate-800">{row.totalCalls}</td>
+        <td className="px-4 py-4 font-bold text-blue-600">{row.inboundCalls}</td>
+        <td className="px-4 py-4 font-bold text-pink-600">{row.outboundCalls}</td>
+        <td className="px-4 py-4 font-bold text-emerald-600">{row.completedCalls}</td>
+        <td className="px-4 py-4 font-bold text-rose-600">{row.failedCalls}</td>
+        <td className="px-4 py-4 font-bold text-amber-600">{row.busyCalls}</td>
+        <td className="px-4 py-4 font-bold text-amber-600">{row.noAnswerCalls}</td>
+        <td className="px-4 py-4 font-bold text-rose-500">{row.canceledCalls}</td>
+        <td className="px-4 py-4 font-black text-slate-700">{row.totalCalls ? Math.round((row.completedCalls / row.totalCalls) * 100) : 0}%</td>
+        <td className="px-4 py-4 font-mono text-slate-600">{duration(row.totalCalls ? row.totalDurationSeconds / row.totalCalls : 0)}</td>
+        <td className="px-4 py-4 font-mono text-slate-600">{duration(row.totalDurationSeconds)}</td>
+        <td className="px-4 py-4 font-bold text-emerald-600">{row.positiveCalls}</td>
+        <td className="px-4 py-4 font-bold text-slate-600">{row.neutralCalls}</td>
+        <td className="px-4 py-4 font-bold text-rose-600">{row.negativeCalls}</td>
+        <td className="px-4 py-4 font-bold text-slate-400">{row.unknownSentimentCalls}</td>
+        <td className="px-4 py-4 font-mono font-bold text-slate-700">{row.totalCost.toFixed(2)}</td>
+        <td className="px-4 py-4 font-bold text-slate-500">{row.currency}</td>
+      </tr>) : <tr><td colSpan={20} className="py-16 text-center text-slate-400"><FileSpreadsheet className="mx-auto h-8 w-8 text-slate-300" /><p className="mt-3 font-bold">No report data matches these filters.</p></td></tr>}
+    </tbody>
+  </table></div>;
+}
+
+function DetailedCallLogsTable({ calls, loading, page, openDetails }: {
+  calls: CallRecord[];
+  loading: boolean;
+  page: number;
+  openDetails: (call: CallRecord) => Promise<void>;
+}) {
+  return <div className="overflow-x-auto"><table className="w-full min-w-[2350px] text-left">
+    <thead className="border-b border-slate-200 bg-slate-50 text-[9px] font-black uppercase tracking-wider text-slate-400"><tr>
+      {['#', 'Started At', 'Direction', 'From Number', 'To Number', 'Agent', 'Campaign', 'Outcome',
+        'Ringing At', 'Answered At', 'Ended At', 'Duration', 'Sentiment', 'Cost', 'Currency', 'Recording'].map((heading) => <th key={heading} className="px-4 py-4">{heading}</th>)}
+      <th className="px-4 py-4 text-center">Review</th>
+    </tr></thead>
+    <tbody className="divide-y divide-slate-100 text-xs">{loading
+      ? <tr><td colSpan={17} className="py-16 text-center"><LoaderCircle className="mx-auto h-7 w-7 animate-spin text-pink-500" /><p className="mt-3 font-bold text-slate-400">Loading real call records…</p></td></tr>
+      : calls.length ? calls.map((call, index) => <tr key={call.id} className="hover:bg-slate-50">
+        <td className="px-4 py-4 font-mono text-slate-400">{(page - 1) * TABLE_PAGE_SIZE + index + 1}</td>
+        <td className="whitespace-nowrap px-4 py-4 font-semibold text-slate-600">{timestamp(call.startedAt, true)}</td>
+        <td className="px-4 py-4"><span className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-black uppercase ${call.direction === 'inbound' ? 'border-blue-100 bg-blue-50 text-blue-600' : 'border-pink-100 bg-pink-50 text-pink-600'}`}>{call.direction === 'inbound' ? <PhoneIncoming className="h-3 w-3" /> : <PhoneOutgoing className="h-3 w-3" />}{call.direction}</span></td>
+        <td className="px-4 py-4 font-mono font-bold text-slate-700">{call.fromNumber}</td>
+        <td className="px-4 py-4 font-mono font-bold text-slate-700">{call.toNumber}</td>
+        <td className="px-4 py-4 font-bold text-slate-700">{call.agentName || '—'}</td>
+        <td className="px-4 py-4 font-bold text-slate-600">{call.campaignName || '—'}</td>
+        <td className="px-4 py-4"><StatusBadge status={call.status} /></td>
+        <td className="whitespace-nowrap px-4 py-4 text-slate-500">{optionalTimestamp(call.ringingAt)}</td>
+        <td className="whitespace-nowrap px-4 py-4 text-slate-500">{optionalTimestamp(call.answeredAt)}</td>
+        <td className="whitespace-nowrap px-4 py-4 text-slate-500">{optionalTimestamp(call.endedAt)}</td>
+        <td className="px-4 py-4 font-mono font-bold text-slate-600">{duration(call.durationSeconds)}</td>
+        <td className="px-4 py-4 font-bold capitalize text-slate-600">{call.sentiment || 'unknown'}</td>
+        <td className="px-4 py-4 font-mono font-bold text-slate-600">{Number(call.cost || 0).toFixed(2)}</td>
+        <td className="px-4 py-4 font-bold text-slate-500">{call.currency}</td>
+        <td className="px-4 py-4 font-bold text-slate-600">{call.recordingAvailable ? 'Available' : '—'}</td>
+        <td className="px-4 py-4 text-center"><button onClick={() => void openDetails(call)} title="View real call details" className="rounded-lg p-2 text-slate-400 hover:bg-pink-50 hover:text-pink-600"><Eye className="h-4 w-4" /></button></td>
+      </tr>) : <tr><td colSpan={17} className="py-16 text-center text-slate-400"><Phone className="mx-auto h-8 w-8 text-slate-300" /><p className="mt-3 font-bold">No real calls match these filters.</p></td></tr>}
+    </tbody>
+  </table></div>;
+}
+
 interface DeveloperReportsViewProps {
   title?: string;
   subtitle?: string;
+  variant?: 'reports' | 'call-logs';
 }
 
 export function DeveloperReportsView({
   title = 'Call Reports',
-  subtitle = 'Live tenant call history from Zea Voice',
+  subtitle = 'Daily agent and campaign performance calculated from real tenant calls',
+  variant = 'reports',
 }: DeveloperReportsViewProps = {}) {
   const [calls, setCalls] = useState<CallRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -188,12 +300,57 @@ export function DeveloperReportsView({
       .some((value) => String(value ?? '').toLowerCase().includes(query));
   }), [calls, directionFilter, statusFilter, agentFilter, campaignFilter, durationFilter, dateFilter, search]);
 
+  const reportRows = useMemo(() => {
+    const groups = new Map<string, ReportRow>();
+    for (const call of filtered) {
+      const date = reportDate(call.startedAt);
+      const agentName = call.agentName || 'Unassigned Agent';
+      const campaignName = call.campaignName || 'No Campaign';
+      const currency = call.currency || 'INR';
+      const key = [date.key, call.agentId || 'unassigned', call.campaignId || 'none', currency].join('|');
+      const row = groups.get(key) ?? {
+        key, dateKey: date.key, dateLabel: date.label, agentName, campaignName, currency,
+        totalCalls: 0, inboundCalls: 0, outboundCalls: 0, completedCalls: 0,
+        failedCalls: 0, busyCalls: 0, noAnswerCalls: 0, canceledCalls: 0,
+        totalDurationSeconds: 0, positiveCalls: 0, neutralCalls: 0,
+        negativeCalls: 0, unknownSentimentCalls: 0, totalCost: 0,
+      };
+      row.totalCalls += 1;
+      if (call.direction === 'inbound') row.inboundCalls += 1; else row.outboundCalls += 1;
+      if (call.status === 'completed') row.completedCalls += 1;
+      if (call.status === 'failed') row.failedCalls += 1;
+      if (call.status === 'busy') row.busyCalls += 1;
+      if (call.status === 'no_answer') row.noAnswerCalls += 1;
+      if (call.status === 'canceled') row.canceledCalls += 1;
+      row.totalDurationSeconds += Math.max(0, Number(call.durationSeconds) || 0);
+      const sentiment = String(call.sentiment || 'unknown').toLowerCase();
+      if (sentiment === 'positive') row.positiveCalls += 1;
+      else if (sentiment === 'neutral') row.neutralCalls += 1;
+      else if (sentiment === 'negative') row.negativeCalls += 1;
+      else row.unknownSentimentCalls += 1;
+      row.totalCost += Math.max(0, Number(call.cost) || 0);
+      groups.set(key, row);
+    }
+    return [...groups.values()].sort((left, right) => right.dateKey.localeCompare(left.dateKey)
+      || left.agentName.localeCompare(right.agentName) || left.campaignName.localeCompare(right.campaignName));
+  }, [filtered]);
+
   useEffect(() => { setPage(1); }, [directionFilter, statusFilter, agentFilter, campaignFilter, durationFilter, dateFilter, search]);
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / TABLE_PAGE_SIZE));
+  const rowCount = variant === 'reports' ? reportRows.length : filtered.length;
+  const totalPages = Math.max(1, Math.ceil(rowCount / TABLE_PAGE_SIZE));
   const visible = filtered.slice((page - 1) * TABLE_PAGE_SIZE, page * TABLE_PAGE_SIZE);
+  const visibleReportRows = reportRows.slice((page - 1) * TABLE_PAGE_SIZE, page * TABLE_PAGE_SIZE);
   const inbound = calls.filter((call) => call.direction === 'inbound').length;
   const outbound = calls.length - inbound;
+  const completed = filtered.filter((call) => call.status === 'completed').length;
+  const completionRate = filtered.length ? `${Math.round((completed / filtered.length) * 100)}%` : '0%';
+  const reportCurrencies = [...new Set(filtered.map((call) => call.currency || 'INR'))];
+  const totalCost = filtered.reduce((sum, call) => sum + Math.max(0, Number(call.cost) || 0), 0);
+  const totalCostLabel = reportCurrencies.length === 1
+    ? `${reportCurrencies[0]} ${totalCost.toFixed(2)}` : totalCost.toFixed(2);
+
+  useEffect(() => { setPage((current) => Math.min(current, totalPages)); }, [totalPages]);
 
   const clearFilters = () => {
     setDirectionFilter('all'); setStatusFilter('all'); setDateFilter('all'); setAgentFilter('all');
@@ -229,13 +386,30 @@ export function DeveloperReportsView({
   useEffect(() => () => { if (recordingUrl) URL.revokeObjectURL(recordingUrl); }, [recordingUrl]);
 
   const exportCsv = () => {
-    const rows = [['Timestamp', 'Direction', 'Status', 'Duration', 'From', 'To', 'Agent', 'Campaign', 'Sentiment', 'Cost', 'Currency'],
-      ...filtered.map((call) => [timestamp(call.startedAt, true), call.direction, statusLabel[call.status], call.durationSeconds,
-        call.fromNumber, call.toNumber, call.agentName ?? '', call.campaignName ?? '', call.sentiment ?? '', call.cost, call.currency])];
+    const rows = variant === 'reports'
+      ? [['Date', 'Agent', 'Campaign', 'Total Calls', 'Inbound', 'Outbound', 'Completed', 'Failed', 'Busy',
+        'No Answer', 'Canceled', 'Completion Rate', 'Average Duration Seconds', 'Total Duration Seconds',
+        'Positive', 'Neutral', 'Negative', 'Unknown Sentiment', 'Total Cost', 'Currency'],
+      ...reportRows.map((row) => [row.dateLabel, row.agentName, row.campaignName, row.totalCalls,
+        row.inboundCalls, row.outboundCalls, row.completedCalls, row.failedCalls, row.busyCalls,
+        row.noAnswerCalls, row.canceledCalls, row.totalCalls ? Math.round((row.completedCalls / row.totalCalls) * 100) : 0,
+        row.totalCalls ? Math.round(row.totalDurationSeconds / row.totalCalls) : 0, row.totalDurationSeconds,
+        row.positiveCalls, row.neutralCalls, row.negativeCalls, row.unknownSentimentCalls,
+        row.totalCost.toFixed(4), row.currency])]
+      : [['Started At', 'Direction', 'From', 'To', 'Agent', 'Campaign', 'Status', 'Ringing At',
+        'Answered At', 'Ended At', 'Duration Seconds', 'Sentiment', 'Cost', 'Currency', 'Recording Available',
+        'Plivo Call UUID', 'Internal Call ID'],
+      ...filtered.map((call) => [timestamp(call.startedAt, true), call.direction, call.fromNumber, call.toNumber,
+        call.agentName ?? '', call.campaignName ?? '', statusLabel[call.status], optionalTimestamp(call.ringingAt),
+        optionalTimestamp(call.answeredAt), optionalTimestamp(call.endedAt), call.durationSeconds,
+        call.sentiment ?? 'unknown', call.cost, call.currency, call.recordingAvailable ? 'Yes' : 'No',
+        call.providerCallId ?? '', call.id])];
     const blob = new Blob([rows.map((row) => row.map(csvCell).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
-    const link = document.createElement('a'); link.href = url; link.download = `zea-voice-calls-${new Date().toISOString().slice(0, 10)}.csv`; link.click();
-    URL.revokeObjectURL(url); setExportMessage(`Exported ${filtered.length} real call records.`);
+    const link = document.createElement('a'); link.href = url;
+    link.download = `zea-voice-${variant}-${new Date().toISOString().slice(0, 10)}.csv`; link.click();
+    URL.revokeObjectURL(url); setExportMessage(variant === 'reports'
+      ? `Exported ${reportRows.length} aggregated report rows.` : `Exported ${filtered.length} real call records.`);
     window.setTimeout(() => setExportMessage(''), 3500);
   };
 
@@ -252,11 +426,15 @@ export function DeveloperReportsView({
     {error && <div className="flex items-center justify-between rounded-xl border border-rose-200 bg-rose-50 p-4 text-xs font-bold text-rose-700"><span>{error}</span><button onClick={refresh}>Retry</button></div>}
 
     <div className="grid gap-4 md:grid-cols-3">
-      {[
+      {(variant === 'reports' ? [
+        { label: 'Total Calls', value: filtered.length, Icon: Phone, style: 'bg-pink-50 text-pink-600' },
+        { label: 'Completion Rate', value: completionRate, Icon: CheckCircle2, style: 'bg-emerald-50 text-emerald-600' },
+        { label: 'Total Cost', value: totalCostLabel, Icon: Activity, style: 'bg-violet-50 text-violet-600' },
+      ] : [
         { label: 'Total Calls', value: calls.length, Icon: Phone, style: 'bg-pink-50 text-pink-600' },
         { label: 'Inbound', value: inbound, Icon: PhoneIncoming, style: 'bg-blue-50 text-blue-600' },
         { label: 'Outbound', value: outbound, Icon: PhoneOutgoing, style: 'bg-violet-50 text-violet-600' },
-      ].map(({ label, value, Icon, style }) => <div key={label} className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"><div><p className="text-[10px] font-black uppercase tracking-wider text-slate-400">{label}</p><p className="mt-1 text-3xl font-black text-slate-800">{value}</p></div><div className={`rounded-2xl p-3 ${style}`}><Icon className="h-5 w-5" /></div></div>)}
+      ]).map(({ label, value, Icon, style }) => <div key={label} className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"><div><p className="text-[10px] font-black uppercase tracking-wider text-slate-400">{label}</p><p className="mt-1 text-3xl font-black text-slate-800">{value}</p></div><div className={`rounded-2xl p-3 ${style}`}><Icon className="h-5 w-5" /></div></div>)}
     </div>
 
     <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -269,13 +447,13 @@ export function DeveloperReportsView({
         <select value={campaignFilter} onChange={(e) => setCampaignFilter(e.target.value)} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-bold"><option value="all">All Campaigns</option>{campaigns.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select>
         <select value={durationFilter} onChange={(e) => setDurationFilter(e.target.value as typeof durationFilter)} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-bold"><option value="all">All Durations</option><option value="0-30">0–30 sec</option><option value="31-60">31–60 sec</option><option value="61-120">1–2 min</option><option value="121-300">2–5 min</option><option value="301+">5+ min</option></select>
       </div>
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div className="relative max-w-lg flex-1"><Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search phone, agent, campaign or call ID" className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-3 text-xs font-semibold outline-none focus:border-pink-400" /></div><span className="text-xs font-bold text-slate-400">{filtered.length} records · {lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString()}` : 'Loading'}</span></div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div className="relative max-w-lg flex-1"><Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search phone, agent, campaign or call ID" className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-3 text-xs font-semibold outline-none focus:border-pink-400" /></div><span className="text-xs font-bold text-slate-400">{variant === 'reports' ? `${reportRows.length} report groups from ${filtered.length} calls` : `${filtered.length} call records`} · {lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString()}` : 'Loading'}</span></div>
     </div>
 
     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="overflow-x-auto"><table className="w-full min-w-[900px] text-left"><thead className="border-b border-slate-200 bg-slate-50 text-[9px] font-black uppercase tracking-wider text-slate-400"><tr><th className="px-5 py-4">#</th><th className="px-5 py-4">Timestamp</th><th className="px-5 py-4">Direction</th><th className="px-5 py-4">Outcome</th><th className="px-5 py-4">Duration</th><th className="px-5 py-4">Prospect</th><th className="px-5 py-4">Agent</th><th className="px-5 py-4">Cost</th><th className="px-5 py-4 text-center">Review</th></tr></thead>
-        <tbody className="divide-y divide-slate-100 text-xs">{loading ? <tr><td colSpan={9} className="py-16 text-center"><LoaderCircle className="mx-auto h-7 w-7 animate-spin text-pink-500" /><p className="mt-3 font-bold text-slate-400">Loading real call records…</p></td></tr> : visible.length ? visible.map((call, index) => <tr key={call.id} className="hover:bg-slate-50"><td className="px-5 py-4 font-mono text-slate-400">{(page - 1) * TABLE_PAGE_SIZE + index + 1}</td><td className="px-5 py-4 font-semibold text-slate-600">{timestamp(call.startedAt)}</td><td className="px-5 py-4"><span className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-black uppercase ${call.direction === 'inbound' ? 'border-blue-100 bg-blue-50 text-blue-600' : 'border-pink-100 bg-pink-50 text-pink-600'}`}>{call.direction === 'inbound' ? <PhoneIncoming className="h-3 w-3" /> : <PhoneOutgoing className="h-3 w-3" />}{call.direction}</span></td><td className="px-5 py-4"><StatusBadge status={call.status} /></td><td className="px-5 py-4 font-mono font-bold text-slate-600">{duration(call.durationSeconds)}</td><td className="px-5 py-4 font-mono font-bold text-slate-800">{call.direction === 'inbound' ? call.fromNumber : call.toNumber}</td><td className="px-5 py-4 font-bold text-slate-700">{call.agentName || '—'}</td><td className="px-5 py-4 font-bold text-slate-600">{call.currency} {Number(call.cost || 0).toFixed(2)}</td><td className="px-5 py-4 text-center"><button onClick={() => void openDetails(call)} title="View real call details" className="rounded-lg p-2 text-slate-400 hover:bg-pink-50 hover:text-pink-600"><Eye className="h-4 w-4" /></button></td></tr>) : <tr><td colSpan={9} className="py-16 text-center text-slate-400"><Phone className="mx-auto h-8 w-8 text-slate-300" /><p className="mt-3 font-bold">No real calls match these filters.</p></td></tr>}</tbody>
-      </table></div>
+      {variant === 'reports'
+        ? <ReportsAggregateTable rows={visibleReportRows} loading={loading} />
+        : <DetailedCallLogsTable calls={visible} loading={loading} page={page} openDetails={openDetails} />}
       <div className="flex items-center justify-between border-t border-slate-200 bg-slate-50 px-5 py-4"><span className="text-xs font-bold text-slate-400">Page {page} of {totalPages}</span><div className="flex gap-2"><button disabled={page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))} className="rounded-lg border border-slate-200 bg-white p-2 disabled:opacity-40"><ChevronLeft className="h-4 w-4" /></button><button disabled={page >= totalPages} onClick={() => setPage((value) => Math.min(totalPages, value + 1))} className="rounded-lg border border-slate-200 bg-white p-2 disabled:opacity-40"><ChevronRight className="h-4 w-4" /></button></div></div>
     </div>
 
