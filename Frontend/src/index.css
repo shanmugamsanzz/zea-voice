@@ -517,13 +517,22 @@ body .zea-premium-shell main {
 }
 
 /* Login uses the same premium canvas and surface language. */
-.zea-login {
+body .zea-login {
   position: relative;
   isolation: isolate;
   color: #f8f5e8;
-  background: var(--zea-canvas-art) !important;
-  background-attachment: fixed !important;
-  background-size: cover !important;
+  background: #000 !important;
+}
+
+body .zea-login main,
+body .zea-login .min-h-screen,
+body .zea-login .min-h-dvh {
+  background: transparent !important;
+  background-image: none !important;
+}
+
+body .zea-login::before {
+  content: none !important;
 }
 
 .zea-login::before {
@@ -592,10 +601,10 @@ body .zea-premium-shell main {
 
 .zea-login-frame {
   color: #f8f5e8;
-  background: linear-gradient(90deg, rgba(7, 8, 6, 0.04), rgba(7, 8, 6, 0.22) 46%, rgba(7, 8, 6, 0.74) 70%, rgba(7, 8, 6, 0.9));
-  border: 1px solid rgba(255, 197, 22, 0.78);
-  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.42), inset 0 0 0 1px rgba(255, 224, 118, 0.05);
-  backdrop-filter: blur(1px);
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  backdrop-filter: none;
 }
 
 .zea-login-field {
@@ -620,19 +629,18 @@ body .zea-login-field input::placeholder {
 }
 
 @media (max-width: 639px) {
-  .zea-login {
+  body .zea-login {
     background: #000 !important;
   }
 
-  .zea-login-video,
-  .zea-login-video-overlay {
-    display: none;
+  .zea-login-video {
+    display: block;
   }
 
   .zea-login-frame {
     min-height: auto;
-    background: rgba(8, 9, 7, 0.82);
-    backdrop-filter: blur(10px);
+    background: transparent;
+    backdrop-filter: none;
   }
 }
 
