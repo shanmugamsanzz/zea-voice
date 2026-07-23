@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { useAppState } from '../store/AppState';
 import { ShieldAlert, Key, Mail, ShieldCheck } from 'lucide-react';
 import { login } from '../lib/api';
@@ -16,22 +16,6 @@ export function LoginView({ onLogin }: { onLogin: () => void }) {
   const [passwordInput, setPasswordInput] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [showVideo, setShowVideo] = useState(false);
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || !window.matchMedia) {
-      return;
-    }
-
-    const mediaQuery = window.matchMedia('(min-width: 640px)');
-    const update = () => setShowVideo(mediaQuery.matches);
-    update();
-    mediaQuery.addEventListener('change', update);
-
-    return () => {
-      mediaQuery.removeEventListener('change', update);
-    };
-  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -52,16 +36,10 @@ export function LoginView({ onLogin }: { onLogin: () => void }) {
 
   return (
     <div className="zea-login min-h-screen overflow-hidden font-sans">
-      {showVideo && (
-        <>
-          <video className="zea-login-video" autoPlay muted loop playsInline preload="auto" aria-hidden="true"
-            onCanPlay={(event) => { void event.currentTarget.play().catch(() => undefined); }}>
-            <source src={loginBackgroundVideo} type="video/mp4" />
-          </video>
-          <div className="zea-login-video-overlay" />
-        </>
-      )}
-
+      <video className="zea-login-video" autoPlay muted loop playsInline preload="auto" aria-hidden="true"
+        onCanPlay={(event) => { void event.currentTarget.play().catch(() => undefined); }}>
+        <source src={loginBackgroundVideo} type="video/mp4" />
+      </video>
       <main className="relative z-10 flex min-h-screen items-center justify-center p-4 sm:p-6 lg:p-8">
         <section className="zea-login-frame grid min-h-[min(820px,calc(100vh-4rem))] w-full max-w-[1500px] overflow-hidden rounded-3xl md:grid-cols-[1.08fr_0.92fr]">
           <div className="hidden min-h-[420px] md:block" aria-hidden="true" />
