@@ -238,9 +238,6 @@ function SuperAdminDashboard() {
           <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">Active Organizations</span>
           <div className="flex items-center justify-between mt-2">
             <h4 className="text-2xl font-extrabold text-slate-800">{overview.activeCompanies} Companies</h4>
-            <div className="w-9 h-9 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center border border-indigo-100">
-              <Building2 className="w-4.5 h-4.5" />
-            </div>
           </div>
           <span className="text-xs text-slate-500 mt-2 block font-medium">{overview.pendingCompanies} pending registrations</span>
         </div>
@@ -249,9 +246,6 @@ function SuperAdminDashboard() {
           <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">In-Flight Calls</span>
           <div className="flex items-center justify-between mt-2">
             <h4 className="text-2xl font-extrabold text-slate-800">{overview.inFlightCalls} Concurrent</h4>
-            <div className="w-9 h-9 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100 animate-pulse">
-              <Activity className="w-4.5 h-4.5" />
-            </div>
           </div>
           <span className="text-xs text-slate-500 mt-2 block font-medium">{overview.waitingCalls} waiting in queues</span>
         </div>
@@ -260,9 +254,6 @@ function SuperAdminDashboard() {
           <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">Calls Today</span>
           <div className="flex items-center justify-between mt-2">
             <h4 className="text-2xl font-extrabold text-slate-800">{overview.callsToday.toLocaleString()}</h4>
-            <div className="w-9 h-9 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center border border-indigo-100">
-              <Zap className="w-4.5 h-4.5" />
-            </div>
           </div>
           <span className="text-xs text-slate-500 mt-2 block font-medium">Across all organizations</span>
         </div>
@@ -271,9 +262,6 @@ function SuperAdminDashboard() {
           <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">Platform Revenue (MRR)</span>
           <div className="flex items-center justify-between mt-2">
             <h4 className="text-2xl font-extrabold text-slate-800">₹{overview.monthlyRevenue.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</h4>
-            <div className="w-9 h-9 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100">
-              <Coins className="w-4.5 h-4.5" />
-            </div>
           </div>
           <span className="text-xs text-slate-500 font-bold mt-2 block">Successful subscriptions this month</span>
         </div>

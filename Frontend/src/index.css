@@ -187,23 +187,23 @@
 /* Premium black and bright-gold visual system */
 :root {
   color-scheme: dark;
-  --zea-gold-50: #fff9dd;
-  --zea-gold-100: #fff0a8;
-  --zea-gold-300: #ffd84d;
-  --zea-gold-400: #ffc516;
-  --zea-gold-500: #f2b400;
-  --zea-gold-600: #ca8f00;
+  --zea-gold-50: #f6edd2;
+  --zea-gold-100: #e7d18c;
+  --zea-gold-300: #d3a73d;
+  --zea-gold-400: #bd8612;
+  --zea-gold-500: #a96f00;
+  --zea-gold-600: #855600;
   --zea-ink: #090a08;
   --zea-panel: #10110f;
   --zea-panel-soft: #171814;
   --zea-line: rgba(255, 205, 46, 0.2);
   --zea-muted: #a9a79d;
   --zea-canvas-art:
-    radial-gradient(ellipse 72% 58% at 58% 4%, rgba(248, 207, 92, 0.92) 0%, rgba(238, 191, 52, 0.20) 44%, transparent 72%),
-    radial-gradient(ellipse 82% 108% at 106% 80%, transparent 0 42%, rgba(205, 162, 46, 0.16) 42.2% 57%, transparent 57.2%),
-    radial-gradient(ellipse 95% 120% at 101% 84%, transparent 0 61%, rgba(244, 203, 82, 0.18) 61.2% 70%, transparent 70.2%),
-    linear-gradient(132deg, transparent 0 18%, rgba(255, 244, 187, 0.23) 18.2% 31%, transparent 31.2% 42%, rgba(255, 238, 164, 0.21) 42.2% 55%, transparent 55.2%),
-    linear-gradient(145deg, #c98400 0%, #f4ad08 30%, #ffcb32 58%, #d98e00 100%);
+    radial-gradient(ellipse 72% 58% at 58% 4%, rgba(213, 167, 66, 0.62) 0%, rgba(181, 133, 29, 0.16) 44%, transparent 72%),
+    radial-gradient(ellipse 82% 108% at 106% 80%, transparent 0 42%, rgba(147, 103, 22, 0.2) 42.2% 57%, transparent 57.2%),
+    radial-gradient(ellipse 95% 120% at 101% 84%, transparent 0 61%, rgba(188, 140, 44, 0.14) 61.2% 70%, transparent 70.2%),
+    linear-gradient(132deg, transparent 0 18%, rgba(212, 183, 114, 0.15) 18.2% 31%, transparent 31.2% 42%, rgba(201, 165, 91, 0.14) 42.2% 55%, transparent 55.2%),
+    linear-gradient(145deg, #925e00 0%, #b77704 30%, #cf921b 58%, #9e6600 100%);
 }
 
 html,
@@ -222,7 +222,7 @@ body {
 
 ::selection {
   color: #090a08;
-  background: #ffd84d;
+  background: var(--zea-gold-300);
 }
 
 ::-webkit-scrollbar-thumb {
@@ -230,7 +230,7 @@ body {
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #ffc516;
+  background: var(--zea-gold-400);
 }
 
 /* Application canvas */
@@ -252,7 +252,7 @@ body .min-h-screen {
 }
 
 .zea-premium-shell header {
-  background: rgba(255, 200, 36, 0.68) !important;
+  background: rgba(183, 119, 4, 0.76) !important;
   color: #0a0b08 !important;
   border-color: rgba(92, 62, 0, 0.16) !important;
   box-shadow: none !important;
@@ -274,9 +274,9 @@ body .min-h-screen {
 .zea-premium-shell aside [id^="sidebar-link-"].bg-indigo-50,
 .zea-premium-shell aside [id^="sidebar-link-"].bg-gradient-to-r {
   color: #0a0b08 !important;
-  background: linear-gradient(135deg, #ffe16b, #f2b400) !important;
-  border-color: #ffe88c !important;
-  box-shadow: 0 10px 24px rgba(242, 180, 0, 0.22) !important;
+  background: linear-gradient(135deg, #d3a73d, #a96f00) !important;
+  border-color: #d8ae4c !important;
+  box-shadow: 0 10px 24px rgba(150, 97, 0, 0.24) !important;
 }
 
 .zea-premium-shell aside [id^="sidebar-link-"] svg,
@@ -373,6 +373,10 @@ body .text-amber-600 {
   color: var(--zea-gold-400) !important;
 }
 
+body .text-amber-400 {
+  color: var(--zea-gold-400) !important;
+}
+
 /* Primary and accent controls */
 body .bg-indigo-500,
 body .bg-indigo-600,
@@ -385,9 +389,9 @@ body .bg-amber-600,
 body .from-indigo-500,
 body .from-indigo-600 {
   color: #0a0b08 !important;
-  background: linear-gradient(135deg, #ffe16b, #f2b400) !important;
-  border-color: #ffe16b !important;
-  box-shadow: 0 10px 24px rgba(242, 180, 0, 0.2);
+  background: linear-gradient(135deg, #d3a73d, #a96f00) !important;
+  border-color: #d3a73d !important;
+  box-shadow: 0 10px 24px rgba(150, 97, 0, 0.22);
 }
 
 body .bg-indigo-50,
@@ -430,13 +434,18 @@ body input:focus,
 body select:focus,
 body textarea:focus {
   outline: none !important;
-  border-color: #ffc516 !important;
-  box-shadow: 0 0 0 3px rgba(255, 197, 22, 0.13) !important;
+  border-color: var(--zea-gold-400) !important;
+  box-shadow: 0 0 0 3px rgba(169, 111, 0, 0.16) !important;
 }
 
 body option {
   color: #f8f5e8;
   background: #11120f;
+}
+
+body option:checked {
+  color: #fff8e1;
+  background: #855600;
 }
 
 /* Tables */
@@ -499,7 +508,7 @@ body .bg-red-50 {
 
 @media (max-width: 767px) {
   .zea-premium-shell header {
-    background: rgba(255, 199, 29, 0.88) !important;
+    background: rgba(183, 119, 4, 0.88) !important;
   }
 
   .zea-premium-shell main {
@@ -562,14 +571,14 @@ body .zea-login::before {
 
 .zea-login-submit {
   color: #090a08 !important;
-  background: linear-gradient(135deg, #ffe16b, #f2b400) !important;
-  border: 1px solid #ffe88c;
-  box-shadow: 0 12px 28px rgba(242, 180, 0, 0.24) !important;
+  background: linear-gradient(135deg, #d3a73d, #a96f00) !important;
+  border: 1px solid #d8ae4c;
+  box-shadow: 0 12px 28px rgba(150, 97, 0, 0.26) !important;
 }
 
 .zea-login-submit:hover:not(:disabled) {
-  background: linear-gradient(135deg, #ffea91, #ffc516) !important;
-  box-shadow: 0 16px 34px rgba(242, 180, 0, 0.32) !important;
+  background: linear-gradient(135deg, #ddb957, #bd8612) !important;
+  box-shadow: 0 16px 34px rgba(150, 97, 0, 0.34) !important;
   transform: translateY(-1px);
 }
 
@@ -608,7 +617,7 @@ body .zea-login::before {
 }
 
 .zea-login-field {
-  border-bottom: 1px solid rgba(255, 197, 22, 0.72);
+  border-bottom: 1px solid rgba(189, 134, 18, 0.72);
 }
 
 body .zea-login-field input {
@@ -748,8 +757,8 @@ body table th {
 .zea-column-resizer.is-resizing::after {
   left: 2px;
   width: 2px;
-  background: #ffd84d;
-  box-shadow: 0 0 8px rgba(255, 197, 22, 0.72);
+  background: var(--zea-gold-300);
+  box-shadow: 0 0 8px rgba(169, 111, 0, 0.72);
 }
 
 body.zea-resizing-column,
@@ -810,6 +819,47 @@ body table tbody tr:last-child td {
 body table tbody tr:hover td {
   background: #282b26 !important;
   border-color: rgba(255, 205, 46, 0.24) !important;
+}
+
+/* Compact, consistent spacing between application cards and panels. */
+.zea-premium-shell main .grid.gap-8 {
+  gap: 1.25rem !important;
+}
+
+.zea-premium-shell main .grid.gap-6 {
+  gap: 1rem !important;
+}
+
+.zea-premium-shell main .grid.gap-5 {
+  gap: 0.875rem !important;
+}
+
+.zea-premium-shell main .grid.gap-4 {
+  gap: 0.75rem !important;
+}
+
+.zea-premium-shell main .grid.gap-3 {
+  gap: 0.625rem !important;
+}
+
+.zea-premium-shell main .space-y-8 > :not(:last-child) {
+  margin-block-start: 0 !important;
+  margin-block-end: 1.25rem !important;
+}
+
+.zea-premium-shell main .space-y-6 > :not(:last-child) {
+  margin-block-start: 0 !important;
+  margin-block-end: 1rem !important;
+}
+
+.zea-premium-shell main .space-y-5 > :not(:last-child) {
+  margin-block-start: 0 !important;
+  margin-block-end: 0.875rem !important;
+}
+
+.zea-premium-shell main .space-y-4 > :not(:last-child) {
+  margin-block-start: 0 !important;
+  margin-block-end: 0.75rem !important;
 }
 
 /* Low-opacity abstract circle field for non-KPI content surfaces. */

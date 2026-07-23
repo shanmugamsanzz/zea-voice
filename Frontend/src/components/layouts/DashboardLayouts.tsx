@@ -224,7 +224,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
               </button>
             </div>
 
-            <nav className="flex-1 px-4 py-6 space-y-1.5">
+            <nav className="flex-1 px-4 py-6 space-y-0.5">
               {!isSidebarMinimized && (
                 <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest px-4 mb-3 block">
                   Super Admin Portal
@@ -319,7 +319,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
             {/* Navigation categorized list */}
             <nav className={`flex-1 py-6 space-y-5 ${isSidebarMinimized ? 'px-2' : 'px-4'}`}>
               {zeaCategories.map((category) => (
-                <div key={category.title} className="space-y-1">
+                <div key={category.title} className="space-y-0.5">
                   {!isSidebarMinimized && (
                     <div className="text-[10px] font-black text-slate-400 dark:text-slate-500 tracking-wider px-3 mb-2 block uppercase">
                       {category.title}
@@ -381,7 +381,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
 
               <nav className="flex-1 px-4 space-y-6">
                 {role === 'SUPER_ADMIN' ? (
-                  <div className="space-y-1.5">
+                  <div className="space-y-0.5">
                     {superAdminItems.map((item) => {
                       const Icon = item.icon;
                       const isActive = view === item.viewId || view.startsWith(item.viewId + '/');
@@ -403,7 +403,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
                   </div>
                 ) : (
                   zeaCategories.map((category) => (
-                    <div key={category.title} className="space-y-1">
+                    <div key={category.title} className="space-y-0.5">
                       <div className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-wider px-3 mb-2 block">
                         {category.title}
                       </div>

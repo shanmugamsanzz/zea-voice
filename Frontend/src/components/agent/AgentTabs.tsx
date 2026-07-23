@@ -944,7 +944,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       <div className="border-b border-slate-100 bg-slate-50/50 p-4">
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
           <div className="flex-1 overflow-x-auto scrollbar-none py-1">
-            <div className="bg-[#f1f5f9] rounded-full p-1 flex items-center gap-1 w-max">
+            <div className="bg-[#f1f5f9] rounded-full p-1 flex items-center gap-0.5 w-max">
               {tabsList.map((t) => {
                 const Icon = t.icon;
                 const isActive = activeTab === t.id;
