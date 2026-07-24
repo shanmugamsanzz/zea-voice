@@ -1239,7 +1239,8 @@ html.dark body .zea-premium-shell aside .zea-sidebar-profile-avatar {
 
 html.dark body .zea-company-actions-trigger:hover,
 html.dark body .zea-user-actions-trigger:hover,
-html.dark body .zea-provider-actions-trigger:hover {
+html.dark body .zea-provider-actions-trigger:hover,
+html.dark body .zea-carrier-actions-trigger:hover {
   color: #ffe28a !important;
   background: rgba(223, 168, 34, 0.16) !important;
   border-color: rgba(223, 168, 34, 0.48) !important;
@@ -1247,14 +1248,16 @@ html.dark body .zea-provider-actions-trigger:hover {
 
 html.dark body .zea-company-actions-menu,
 html.dark body .zea-user-actions-menu,
-html.dark body .zea-provider-actions-menu {
+html.dark body .zea-provider-actions-menu,
+html.dark body .zea-carrier-actions-menu {
   background: #10110f !important;
   border-color: rgba(223, 168, 34, 0.32) !important;
 }
 
 html.dark body .zea-company-actions-menu [role="menuitem"]:hover,
 html.dark body .zea-user-actions-menu [role="menuitem"]:hover,
-html.dark body .zea-provider-actions-menu [role="menuitem"]:hover {
+html.dark body .zea-provider-actions-menu [role="menuitem"]:hover,
+html.dark body .zea-carrier-actions-menu [role="menuitem"]:hover {
   color: #ffe28a !important;
   background: rgba(223, 168, 34, 0.16) !important;
 }
@@ -1555,6 +1558,112 @@ body .zea-premium-shell .zea-user-create-drawer .zea-user-create-drawer-header {
 body .zea-premium-shell .zea-user-create-drawer form > :last-child {
   background: var(--zea-form-header) !important;
   border-color: var(--zea-form-divider) !important;
+}
+
+body .zea-premium-shell form.zea-provider-edit-modal {
+  width: min(32rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  min-height: 0;
+  color: var(--zea-form-text) !important;
+  background: var(--zea-form-surface) !important;
+  border-color: var(--zea-form-border) !important;
+}
+
+body .zea-premium-shell .zea-provider-edit-header,
+body .zea-premium-shell .zea-provider-edit-footer {
+  color: var(--zea-form-text) !important;
+  background: var(--zea-form-header) !important;
+  border-color: var(--zea-form-divider) !important;
+}
+
+body .zea-premium-shell .zea-provider-edit-body {
+  min-height: 0;
+  overscroll-behavior: contain;
+  background: var(--zea-form-surface) !important;
+}
+
+body .zea-premium-shell .zea-provider-create-drawer {
+  max-height: 100dvh;
+  color: var(--zea-form-text) !important;
+  background: var(--zea-form-surface) !important;
+  border-left: 1px solid var(--zea-form-border) !important;
+  box-shadow: -24px 0 70px rgba(0, 0, 0, 0.28) !important;
+}
+
+body .zea-premium-shell .zea-provider-create-header {
+  color: var(--zea-form-text) !important;
+  background: var(--zea-form-header) !important;
+  border-color: var(--zea-form-divider) !important;
+}
+
+body .zea-premium-shell .zea-provider-create-body {
+  min-height: 0;
+  overscroll-behavior: contain;
+  background: var(--zea-form-surface) !important;
+}
+
+body .zea-premium-shell form.zea-provider-create-form {
+  background: transparent !important;
+  border: 0 !important;
+}
+
+body .zea-premium-shell form.zea-provider-create-form input {
+  min-width: 0;
+}
+
+body .zea-premium-shell .zea-telephony-create-drawer {
+  max-height: 100dvh;
+  color: var(--zea-form-text) !important;
+  background: var(--zea-form-surface) !important;
+  border-left: 1px solid var(--zea-form-border) !important;
+  box-shadow: -24px 0 70px rgba(0, 0, 0, 0.28) !important;
+}
+
+body .zea-premium-shell .zea-telephony-create-header {
+  color: var(--zea-form-text) !important;
+  background: var(--zea-form-header) !important;
+  border-color: var(--zea-form-divider) !important;
+}
+
+body .zea-premium-shell .zea-telephony-create-body {
+  min-height: 0;
+  overscroll-behavior: contain;
+  background: var(--zea-form-surface) !important;
+}
+
+body .zea-premium-shell form.zea-telephony-create-form {
+  background: transparent !important;
+  border: 0 !important;
+}
+
+html:not(.dark) body .zea-premium-shell .zea-telephony-create-body {
+  scrollbar-color: #eee5d5 transparent;
+}
+
+html:not(.dark) body .zea-premium-shell .zea-telephony-create-body::-webkit-scrollbar-thumb,
+html:not(.dark) body .zea-premium-shell .zea-telephony-create-body::-webkit-scrollbar-thumb:hover {
+  background: #eee5d5 !important;
+  border-color: transparent !important;
+}
+
+html:not(.dark) body .zea-premium-shell .zea-provider-create-body {
+  scrollbar-color: #eee5d5 transparent;
+}
+
+html:not(.dark) body .zea-premium-shell .zea-provider-create-body::-webkit-scrollbar-thumb,
+html:not(.dark) body .zea-premium-shell .zea-provider-create-body::-webkit-scrollbar-thumb:hover {
+  background: #eee5d5 !important;
+  border-color: transparent !important;
+}
+
+html:not(.dark) body .zea-premium-shell .zea-provider-edit-body {
+  scrollbar-color: #eee5d5 transparent;
+}
+
+html:not(.dark) body .zea-premium-shell .zea-provider-edit-body::-webkit-scrollbar-thumb,
+html:not(.dark) body .zea-premium-shell .zea-provider-edit-body::-webkit-scrollbar-thumb:hover {
+  background: #eee5d5 !important;
+  border-color: transparent !important;
 }
 
 html:not(.dark) body .zea-provider-metrics {

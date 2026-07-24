@@ -1584,6 +1584,15 @@ function VoiceProvidersView() {
 
   useEffect(() => { void loadProviders(); }, []);
 
+  useEffect(() => {
+    if (!showAddForm) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setShowAddForm(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [showAddForm]);
+
   const toggleProviderStatus = async (provider: ProviderApiData) => {
     const nextStatus = provider.status === 'connected' ? 'disconnected' : 'connected';
     setError('');
@@ -1776,27 +1785,42 @@ function VoiceProvidersView() {
 
       {/* NEW PROVIDER PROVISIONING CARD */}
       {showAddForm && (
-        <div className="bg-white border-2 border-indigo-100 rounded-2xl p-6 shadow-xl animate-in fade-in duration-200 space-y-5">
-          <div className="flex justify-between items-start border-b border-slate-100 pb-3">
-            <div>
-              <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider">Configure New AI Provider</h3>
-              <p className="text-[10px] text-slate-400 font-medium mt-0.5">All parameter values are stored as entered and visible to Super Admin.</p>
+        <div className="fixed inset-0 z-[100]">
+          <button
+            type="button"
+            className="absolute inset-0 h-full w-full cursor-default bg-slate-950/55 backdrop-blur-[2px]"
+            aria-label="Close add provider panel"
+            onClick={() => setShowAddForm(false)}
+          />
+          <aside
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="configure-provider-title"
+            className="zea-provider-create-drawer absolute inset-y-0 right-0 z-[101] flex w-full max-w-2xl flex-col animate-in slide-in-from-right duration-300"
+          >
+            <div className="zea-provider-create-header flex shrink-0 items-start justify-between border-b border-slate-100 px-6 py-5">
+              <div>
+                <h3 id="configure-provider-title" className="text-base font-black text-slate-800 tracking-tight">Configure New AI Provider</h3>
+                <p className="mt-1 text-xs font-medium text-slate-400">All parameter values are stored as entered and visible to Super Admin.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAddForm(false)}
+                className="ml-4 rounded-lg p-2 text-slate-500 transition hover:bg-slate-100"
+                aria-label="Close add provider panel"
+              >
+                <X className="h-5 w-5" />
+              </button>
             </div>
-            <button 
-              onClick={() => setShowAddForm(false)}
-              className="p-1 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition cursor-pointer"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
 
-          {successMsg && (
-            <div className="p-3 bg-emerald-50 border border-emerald-100 text-emerald-800 text-xs font-bold rounded-xl animate-pulse">
-              {successMsg}
-            </div>
-          )}
+            <div className="zea-provider-create-body flex-1 overflow-y-auto px-6 py-6">
+              {successMsg && (
+                <div className="mb-5 rounded-xl border border-emerald-100 bg-emerald-50 p-3 text-xs font-bold text-emerald-800 animate-pulse">
+                  {successMsg}
+                </div>
+              )}
 
-          <form onSubmit={handleCreateProvider} className="space-y-5 text-xs font-semibold">
+              <form onSubmit={handleCreateProvider} className="zea-provider-create-form space-y-5 text-xs font-semibold">
             {/* Step 1: Basic Details */}
             <div>
               <h4 className="text-[10px] font-black text-indigo-600 uppercase tracking-wider mb-2.5">1. Provider Profile Details</h4>
@@ -1915,58 +1939,62 @@ function VoiceProvidersView() {
                 {submitting ? 'Creating Provider...' : 'Confirm & Create Provider'}
               </button>
             </div>
-          </form>
+              </form>
+            </div>
+          </aside>
         </div>
       )}
 
       {editingProvider && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-xs">
-          <form onSubmit={handleUpdateProvider} className="w-full max-w-lg space-y-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
-            <div className="flex items-start justify-between">
+          <form onSubmit={handleUpdateProvider} className="zea-provider-edit-modal flex w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+            <div className="zea-provider-edit-header flex shrink-0 items-start justify-between border-b border-slate-100 px-6 py-5">
               <div><h3 className="text-sm font-black text-slate-800">Edit Provider</h3><p className="text-[10px] text-slate-400">Super Admin can view and edit all parameter values.</p></div>
               <button type="button" onClick={() => setEditingProvider(null)} className="rounded-md p-1 text-slate-400 hover:bg-slate-100"><X className="h-4 w-4" /></button>
             </div>
-            <div>
-              <label className="mb-1 block text-[10px] font-bold text-slate-500">Provider Name</label>
-              <input required value={editName} onChange={(e) => setEditName(e.target.value)} className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs outline-none focus:border-indigo-500" />
-            </div>
-            <div>
-              <label className="mb-1 block text-[10px] font-bold text-slate-500">Connection Status</label>
-              <select value={editStatus} onChange={(e) => setEditStatus(e.target.value as typeof editStatus)} className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold outline-none">
-                <option value="connected">Connected</option><option value="disconnected">Disconnected</option><option value="error">Error</option>
-              </select>
-            </div>
-            <div>
-              <label className="mb-1 block text-[10px] font-bold text-slate-500">Base URL</label>
-              <input type="url" value={editBaseUrl} onChange={(e) => setEditBaseUrl(e.target.value)} placeholder="https://api.provider.com" className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs outline-none focus:border-indigo-500" />
-            </div>
-            <div>
-              <label className="mb-1 block text-[10px] font-bold text-slate-500">Latency (milliseconds)</label>
-              <input type="number" min="0" step="1" value={editLatencyMs} onChange={(e) => setEditLatencyMs(e.target.value)} placeholder="Optional" className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs outline-none focus:border-indigo-500" />
-            </div>
-            <div className="space-y-2 border-t border-slate-100 pt-4">
-              <div className="flex items-center justify-between">
-                <div><h4 className="text-[10px] font-black uppercase tracking-wider text-indigo-600">Provider Keys &amp; Credentials</h4><p className="text-[10px] text-slate-400">Shared provider configuration only. These values do not create or configure selectable models.</p></div>
-                <button type="button" onClick={() => setEditParameters((current) => [...current, { key: '', value: '', isSecret: false }])}
-                  className="flex items-center gap-1 rounded-lg border border-indigo-100 bg-indigo-50 px-2.5 py-1.5 text-[10px] font-bold text-indigo-700 hover:bg-indigo-100">
-                  <Plus className="h-3 w-3" /> Add Parameter
-                </button>
+            <div className="zea-provider-edit-body flex-1 space-y-4 overflow-y-auto px-6 py-5">
+              <div>
+                <label className="mb-1 block text-[10px] font-bold text-slate-500">Provider Name</label>
+                <input required value={editName} onChange={(e) => setEditName(e.target.value)} className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs outline-none focus:border-indigo-500" />
               </div>
-              <div className="max-h-56 space-y-2 overflow-y-auto">
-                {editParameters.map((parameter, index) => (
-                  <div key={`${parameter.originalKey ?? 'new'}-${index}`} className="grid grid-cols-[1fr_1fr_auto] items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
-                    <input required value={parameter.key} onChange={(e) => setEditParameters((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, key: e.target.value } : item))}
-                      placeholder="Parameter key" className="rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[10px] font-mono outline-none focus:border-indigo-500" />
-                    <input type="text" required value={parameter.value} onChange={(e) => setEditParameters((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, value: e.target.value } : item))}
-                      placeholder="Parameter value" className="rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[10px] font-mono outline-none focus:border-indigo-500" />
-                    <button type="button" onClick={() => setEditParameters((current) => current.filter((_, itemIndex) => itemIndex !== index))}
-                      className="rounded-md border border-red-100 bg-red-50 p-1.5 text-red-600 hover:bg-red-100"><Trash2 className="h-3 w-3" /></button>
-                  </div>
-                ))}
-                {editParameters.length === 0 && <div className="rounded-lg border border-dashed border-slate-200 p-4 text-center text-[10px] text-slate-400">No parameters configured.</div>}
+              <div>
+                <label className="mb-1 block text-[10px] font-bold text-slate-500">Connection Status</label>
+                <select value={editStatus} onChange={(e) => setEditStatus(e.target.value as typeof editStatus)} className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold outline-none">
+                  <option value="connected">Connected</option><option value="disconnected">Disconnected</option><option value="error">Error</option>
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] font-bold text-slate-500">Base URL</label>
+                <input type="url" value={editBaseUrl} onChange={(e) => setEditBaseUrl(e.target.value)} placeholder="https://api.provider.com" className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs outline-none focus:border-indigo-500" />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] font-bold text-slate-500">Latency (milliseconds)</label>
+                <input type="number" min="0" step="1" value={editLatencyMs} onChange={(e) => setEditLatencyMs(e.target.value)} placeholder="Optional" className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs outline-none focus:border-indigo-500" />
+              </div>
+              <div className="space-y-2 border-t border-slate-100 pt-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div><h4 className="text-[10px] font-black uppercase tracking-wider text-indigo-600">Provider Keys &amp; Credentials</h4><p className="text-[10px] text-slate-400">Shared provider configuration only. These values do not create or configure selectable models.</p></div>
+                  <button type="button" onClick={() => setEditParameters((current) => [...current, { key: '', value: '', isSecret: false }])}
+                    className="flex shrink-0 items-center gap-1 rounded-lg border border-indigo-100 bg-indigo-50 px-2.5 py-1.5 text-[10px] font-bold text-indigo-700 hover:bg-indigo-100">
+                    <Plus className="h-3 w-3" /> Add Parameter
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {editParameters.map((parameter, index) => (
+                    <div key={`${parameter.originalKey ?? 'new'}-${index}`} className="grid grid-cols-[1fr_1fr_auto] items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
+                      <input required value={parameter.key} onChange={(e) => setEditParameters((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, key: e.target.value } : item))}
+                        placeholder="Parameter key" className="min-w-0 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[10px] font-mono outline-none focus:border-indigo-500" />
+                      <input type="text" required value={parameter.value} onChange={(e) => setEditParameters((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, value: e.target.value } : item))}
+                        placeholder="Parameter value" className="min-w-0 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[10px] font-mono outline-none focus:border-indigo-500" />
+                      <button type="button" onClick={() => setEditParameters((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                        className="rounded-md border border-red-100 bg-red-50 p-1.5 text-red-600 hover:bg-red-100"><Trash2 className="h-3 w-3" /></button>
+                    </div>
+                  ))}
+                  {editParameters.length === 0 && <div className="rounded-lg border border-dashed border-slate-200 p-4 text-center text-[10px] text-slate-400">No parameters configured.</div>}
+                </div>
               </div>
             </div>
-            <div className="flex justify-end gap-2 border-t border-slate-100 pt-4">
+            <div className="zea-provider-edit-footer flex shrink-0 justify-end gap-2 border-t border-slate-100 px-6 py-4">
               <button type="button" onClick={() => setEditingProvider(null)} className="rounded-lg bg-slate-100 px-4 py-2 text-xs font-bold text-slate-600">Cancel</button>
               <button type="submit" disabled={submitting} className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">{submitting ? 'Saving...' : 'Save Changes'}</button>
             </div>
@@ -2184,6 +2212,7 @@ function VoiceProvidersView() {
    ========================================== */
 function PhoneNumbersView() {
   const [activeSubTab, setActiveSubTab] = useState<'telephony' | 'assign'>('telephony');
+  const [showTelephonyDrawer, setShowTelephonyDrawer] = useState(false);
   const [numbers, setNumbers] = useState<PhoneNumberApiData[]>([]);
   const [assignableNumbers, setAssignableNumbers] = useState<Array<{ id: string; number: string }>>([]);
   const [phonePage, setPhonePage] = useState(1);
@@ -2211,6 +2240,11 @@ function PhoneNumbersView() {
   const [submitting, setSubmitting] = useState(false);
   const [syncingNumbers, setSyncingNumbers] = useState(false);
   const [error, setError] = useState('');
+  const [carrierActionMenu, setCarrierActionMenu] = useState<{
+    account: TelephonyAccountApiData;
+    top: number;
+    left: number;
+  } | null>(null);
 
   const loadTelephonyData = async () => {
     setAccountsLoading(true); setNumbersLoading(true); setCompaniesLoading(true); setError('');
@@ -2243,6 +2277,15 @@ function PhoneNumbersView() {
   };
 
   useEffect(() => { void loadTelephonyData(); }, [phonePage]);
+
+  useEffect(() => {
+    if (!showTelephonyDrawer) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setShowTelephonyDrawer(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [showTelephonyDrawer]);
 
   const handleAddTelephonyProvider = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -2359,8 +2402,9 @@ function PhoneNumbersView() {
   return (
     <div className="space-y-6">
       {/* Sub tabs header */}
-      <div className="flex border-b border-slate-200">
-        <button
+      <div className="flex items-end justify-between gap-4 border-b border-slate-200">
+        <div className="flex min-w-0 overflow-x-auto">
+          <button
           onClick={() => setActiveSubTab('telephony')}
           className={`px-4 py-2.5 font-bold text-xs tracking-tight transition border-b-2 cursor-pointer flex items-center space-x-1.5 ${
             activeSubTab === 'telephony'
@@ -2370,8 +2414,8 @@ function PhoneNumbersView() {
         >
           <Cpu className="w-4 h-4" />
           <span>Telephony Providers & Phone Numbers</span>
-        </button>
-        <button
+          </button>
+          <button
           onClick={() => setActiveSubTab('assign')}
           className={`px-4 py-2.5 font-bold text-xs tracking-tight transition border-b-2 cursor-pointer flex items-center space-x-1.5 ${
             activeSubTab === 'assign'
@@ -2381,7 +2425,22 @@ function PhoneNumbersView() {
         >
           <Building2 className="w-4 h-4" />
           <span>Assign Numbers to Companies</span>
-        </button>
+          </button>
+        </div>
+        {activeSubTab === 'telephony' && (
+          <button
+            type="button"
+            onClick={() => {
+              setError('');
+              setProvSuccess(null);
+              setShowTelephonyDrawer(true);
+            }}
+            className="mb-2 inline-flex shrink-0 items-center gap-2 rounded-lg bg-[#dfa822] px-4 py-2.5 text-xs font-bold text-black shadow-md transition hover:bg-[#e8b83f]"
+          >
+            <Plus className="h-4 w-4" />
+            <span>Add Telephony Provider</span>
+          </button>
+        )}
       </div>
 
       {error && (
@@ -2391,23 +2450,49 @@ function PhoneNumbersView() {
       )}
 
       {activeSubTab === 'telephony' ? (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Purchase & Provider inputs */}
-          <div className="space-y-6">
-            {/* Add Telephony Provider form */}
-            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4">
-              <div>
-                <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider">Add Telephony Provider</h3>
-                <p className="text-[10px] text-slate-400 mt-0.5 font-medium font-sans">Register third-party voice carrier API credentials.</p>
-              </div>
-
-              {provSuccess && (
-                <div className="p-2.5 bg-emerald-50 text-emerald-800 border border-emerald-100 rounded-lg text-xs font-semibold">
-                  {provSuccess}
+        <div className="space-y-6">
+          {showTelephonyDrawer && (
+            <div className="fixed inset-0 z-[100]">
+              <button
+                type="button"
+                className="absolute inset-0 h-full w-full cursor-default bg-slate-950/55 backdrop-blur-[2px]"
+                aria-label="Close add telephony provider panel"
+                onClick={() => setShowTelephonyDrawer(false)}
+              />
+              <aside
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="add-telephony-provider-title"
+                className="zea-telephony-create-drawer absolute inset-y-0 right-0 z-[101] flex w-full max-w-xl flex-col animate-in slide-in-from-right duration-300"
+              >
+                <div className="zea-telephony-create-header flex shrink-0 items-start justify-between border-b border-slate-100 px-6 py-5">
+                  <div>
+                    <h3 id="add-telephony-provider-title" className="text-base font-black text-slate-800 tracking-tight">Add Telephony Provider</h3>
+                    <p className="mt-1 text-xs font-medium text-slate-400">Register third-party voice carrier API credentials.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowTelephonyDrawer(false)}
+                    className="ml-4 rounded-lg p-2 text-slate-500 transition hover:bg-slate-100"
+                    aria-label="Close add telephony provider panel"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
                 </div>
-              )}
 
-              <form onSubmit={handleAddTelephonyProvider} className="space-y-3 text-xs font-semibold">
+                <div className="zea-telephony-create-body flex-1 overflow-y-auto px-6 py-6">
+                  {error && (
+                    <div className="mb-5 rounded-lg border border-red-100 bg-red-50 p-3 text-xs font-semibold text-red-700">
+                      {error}
+                    </div>
+                  )}
+                  {provSuccess && (
+                    <div className="mb-5 rounded-lg border border-emerald-100 bg-emerald-50 p-3 text-xs font-semibold text-emerald-800">
+                      {provSuccess}
+                    </div>
+                  )}
+
+                  <form onSubmit={handleAddTelephonyProvider} className="zea-telephony-create-form space-y-4 text-xs font-semibold">
                 <div>
                   <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Provider Name</label>
                   <input
@@ -2509,24 +2594,48 @@ function PhoneNumbersView() {
                   <Plus className="w-3.5 h-3.5" />
                   <span>{submitting ? 'Saving...' : 'Save Telephony Provider'}</span>
                 </button>
-              </form>
+                  </form>
+                </div>
+              </aside>
             </div>
-
-          </div>
+          )}
 
           {/* Right section: Registered Providers + Global DID Inventory */}
-          <div className="lg:col-span-2 space-y-6">
+          <div className="flex flex-col gap-6">
             {/* Providers credentials list */}
-            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+            <div className="order-2 bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
               <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider mb-3">Carrier Integrations</h3>
-              <div className="space-y-3">
-                {accountsLoading && <div className="py-8 text-center text-slate-400 text-xs">Loading providers...</div>}
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {accountsLoading && <div className="py-8 text-center text-slate-400 text-xs md:col-span-2 xl:col-span-3">Loading providers...</div>}
                 {telephonyProviders.map(tp => (
-                  <div key={tp.id} className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-slate-800 text-xs">{tp.name}</span>
-                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${tp.status === 'connected' ? 'bg-emerald-100 text-emerald-700' : tp.status === 'error' ? 'bg-red-100 text-red-700' : 'bg-slate-200 text-slate-600'}`}>{tp.status}</span>
+                  <div key={tp.id} className="flex h-full min-w-0 flex-col justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <div className="min-w-0 space-y-1">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="truncate font-bold text-slate-800 text-xs">{tp.name}</span>
+                          <span className={`shrink-0 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${tp.status === 'connected' ? 'bg-emerald-100 text-emerald-700' : tp.status === 'error' ? 'bg-red-100 text-red-700' : 'bg-slate-200 text-slate-600'}`}>{tp.status}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            const bounds = event.currentTarget.getBoundingClientRect();
+                            const menuWidth = 160;
+                            const menuHeight = 176;
+                            setCarrierActionMenu({
+                              account: tp,
+                              left: Math.max(8, Math.min(window.innerWidth - menuWidth - 8, bounds.right - menuWidth)),
+                              top: window.innerHeight - bounds.bottom >= menuHeight
+                                ? bounds.bottom + 6
+                                : Math.max(8, bounds.top - menuHeight - 6),
+                            });
+                          }}
+                          className="zea-carrier-actions-trigger inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:border-amber-400 hover:bg-amber-50 hover:text-amber-700"
+                          aria-label={`Open actions for ${tp.name}`}
+                          aria-haspopup="menu"
+                          aria-expanded={carrierActionMenu?.account.id === tp.id}
+                        >
+                          <EllipsisVertical className="h-4 w-4" />
+                        </button>
                       </div>
                       <div className="flex flex-col space-y-0.5 text-[10px] font-mono text-slate-500">
                         <span>Auth ID: <strong className="text-slate-700">{tp.authId}</strong></span>
@@ -2543,20 +2652,14 @@ function PhoneNumbersView() {
                         </span>
                       </div>
                     </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      <button onClick={() => toggleTokenVisibility(tp.id)} className="text-[10px] bg-white border border-slate-200 text-slate-600 rounded-lg px-2 py-1 font-bold cursor-pointer flex items-center gap-1"><Eye className="w-3 h-3" />{showTokens[tp.id] ? 'Hide' : 'Show'}</button>
-                      <button onClick={() => void syncAccount(tp.id)} className="text-[10px] bg-white border border-slate-200 text-indigo-600 rounded-lg px-2 py-1 font-bold cursor-pointer">Sync</button>
-                      <button onClick={() => setEditingAccount({ ...tp })} className="text-[10px] bg-white border border-slate-200 text-slate-700 rounded-lg px-2 py-1 font-bold cursor-pointer">Edit</button>
-                      <button onClick={() => void deleteAccount(tp)} className="text-[10px] bg-red-50 border border-red-100 text-red-600 rounded-lg px-2 py-1 font-bold cursor-pointer">Delete</button>
-                    </div>
                   </div>
                 ))}
-                {!accountsLoading && telephonyProviders.length === 0 && <div className="py-8 text-center text-slate-400 text-xs">No telephony providers configured.</div>}
+                {!accountsLoading && telephonyProviders.length === 0 && <div className="py-8 text-center text-slate-400 text-xs md:col-span-2 xl:col-span-3">No telephony providers configured.</div>}
               </div>
             </div>
 
             {/* Global Directory table */}
-            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+            <div className="order-1 bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
               <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider mb-3">Global DID Directory</h3>
               <div className="overflow-x-auto text-xs">
                 <table className="w-full text-left">
@@ -2747,6 +2850,73 @@ function PhoneNumbersView() {
             </div>
           </div>
         </div>
+      )}
+
+      {carrierActionMenu && createPortal(
+        <>
+          <button
+            type="button"
+            className="fixed inset-0 z-[9998] cursor-default bg-transparent"
+            aria-label="Close carrier actions"
+            onClick={() => setCarrierActionMenu(null)}
+          />
+          <div
+            role="menu"
+            aria-label={`Actions for ${carrierActionMenu.account.name}`}
+            className="zea-carrier-actions-menu fixed z-[9999] w-40 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-2xl"
+            style={{ top: carrierActionMenu.top, left: carrierActionMenu.left }}
+          >
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                const accountId = carrierActionMenu.account.id;
+                setCarrierActionMenu(null);
+                toggleTokenVisibility(accountId);
+              }}
+              className="flex w-full items-center rounded-lg px-3 py-2 text-left text-xs font-bold text-slate-700 hover:bg-amber-50"
+            >
+              {showTokens[carrierActionMenu.account.id] ? 'Hide' : 'Show'}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                const accountId = carrierActionMenu.account.id;
+                setCarrierActionMenu(null);
+                void syncAccount(accountId);
+              }}
+              className="flex w-full items-center rounded-lg px-3 py-2 text-left text-xs font-bold text-slate-700 hover:bg-amber-50"
+            >
+              Sync
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                const account = carrierActionMenu.account;
+                setCarrierActionMenu(null);
+                setEditingAccount({ ...account });
+              }}
+              className="flex w-full items-center rounded-lg px-3 py-2 text-left text-xs font-bold text-slate-700 hover:bg-amber-50"
+            >
+              Edit
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                const account = carrierActionMenu.account;
+                setCarrierActionMenu(null);
+                void deleteAccount(account);
+              }}
+              className="flex w-full items-center rounded-lg px-3 py-2 text-left text-xs font-bold text-red-600 hover:bg-red-50"
+            >
+              Delete
+            </button>
+          </div>
+        </>,
+        document.body,
       )}
 
       {editingAccount && (
