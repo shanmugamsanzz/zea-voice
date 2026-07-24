@@ -188,22 +188,22 @@
 :root {
   color-scheme: dark;
   --zea-gold-50: #f6edd2;
-  --zea-gold-100: #e7d18c;
-  --zea-gold-300: #d3a73d;
-  --zea-gold-400: #bd8612;
-  --zea-gold-500: #a96f00;
-  --zea-gold-600: #855600;
+  --zea-gold-100: #f0d58d;
+  --zea-gold-300: #e5b745;
+  --zea-gold-400: #dfa822;
+  --zea-gold-500: #c88e16;
+  --zea-gold-600: #a66f0c;
   --zea-ink: #090a08;
   --zea-panel: #10110f;
   --zea-panel-soft: #171814;
   --zea-line: rgba(255, 205, 46, 0.2);
   --zea-muted: #a9a79d;
   --zea-canvas-art:
-    radial-gradient(ellipse 72% 58% at 58% 4%, rgba(213, 167, 66, 0.62) 0%, rgba(181, 133, 29, 0.16) 44%, transparent 72%),
-    radial-gradient(ellipse 82% 108% at 106% 80%, transparent 0 42%, rgba(147, 103, 22, 0.2) 42.2% 57%, transparent 57.2%),
-    radial-gradient(ellipse 95% 120% at 101% 84%, transparent 0 61%, rgba(188, 140, 44, 0.14) 61.2% 70%, transparent 70.2%),
-    linear-gradient(132deg, transparent 0 18%, rgba(212, 183, 114, 0.15) 18.2% 31%, transparent 31.2% 42%, rgba(201, 165, 91, 0.14) 42.2% 55%, transparent 55.2%),
-    linear-gradient(145deg, #925e00 0%, #b77704 30%, #cf921b 58%, #9e6600 100%);
+    radial-gradient(ellipse 72% 58% at 58% 4%, rgba(223, 168, 34, 0.92) 0%, rgba(200, 142, 22, 0.22) 44%, transparent 72%),
+    radial-gradient(ellipse 82% 108% at 106% 80%, transparent 0 42%, rgba(166, 111, 12, 0.18) 42.2% 57%, transparent 57.2%),
+    radial-gradient(ellipse 95% 120% at 101% 84%, transparent 0 61%, rgba(229, 183, 69, 0.18) 61.2% 70%, transparent 70.2%),
+    linear-gradient(132deg, transparent 0 18%, rgba(240, 213, 141, 0.2) 18.2% 31%, transparent 31.2% 42%, rgba(229, 183, 69, 0.18) 42.2% 55%, transparent 55.2%),
+    linear-gradient(145deg, #ad7911 0%, #ca921a 30%, #dfa822 58%, #bd8615 100%);
 }
 
 html,
@@ -252,7 +252,7 @@ body .min-h-screen {
 }
 
 .zea-premium-shell header {
-  background: rgba(183, 119, 4, 0.76) !important;
+  background: rgba(223, 168, 34, 0.82) !important;
   color: #0a0b08 !important;
   border-color: rgba(92, 62, 0, 0.16) !important;
   box-shadow: none !important;
@@ -274,9 +274,9 @@ body .min-h-screen {
 .zea-premium-shell aside [id^="sidebar-link-"].bg-indigo-50,
 .zea-premium-shell aside [id^="sidebar-link-"].bg-gradient-to-r {
   color: #0a0b08 !important;
-  background: linear-gradient(135deg, #d3a73d, #a96f00) !important;
-  border-color: #d8ae4c !important;
-  box-shadow: 0 10px 24px rgba(150, 97, 0, 0.24) !important;
+  background: linear-gradient(135deg, #e5b745, #dfa822) !important;
+  border-color: #e7bd55 !important;
+  box-shadow: 0 10px 24px rgba(184, 128, 15, 0.26) !important;
 }
 
 .zea-premium-shell aside [id^="sidebar-link-"] svg,
@@ -389,9 +389,9 @@ body .bg-amber-600,
 body .from-indigo-500,
 body .from-indigo-600 {
   color: #0a0b08 !important;
-  background: linear-gradient(135deg, #d3a73d, #a96f00) !important;
-  border-color: #d3a73d !important;
-  box-shadow: 0 10px 24px rgba(150, 97, 0, 0.22);
+  background: linear-gradient(135deg, #e5b745, #dfa822) !important;
+  border-color: #dfa822 !important;
+  box-shadow: 0 10px 24px rgba(184, 128, 15, 0.24);
 }
 
 body .bg-indigo-50,
@@ -508,7 +508,7 @@ body .bg-red-50 {
 
 @media (max-width: 767px) {
   .zea-premium-shell header {
-    background: rgba(183, 119, 4, 0.88) !important;
+    background: rgba(223, 168, 34, 0.9) !important;
   }
 
   .zea-premium-shell main {
@@ -571,14 +571,14 @@ body .zea-login::before {
 
 .zea-login-submit {
   color: #090a08 !important;
-  background: linear-gradient(135deg, #d3a73d, #a96f00) !important;
-  border: 1px solid #d8ae4c;
-  box-shadow: 0 12px 28px rgba(150, 97, 0, 0.26) !important;
+  background: linear-gradient(135deg, #e5b745, #dfa822) !important;
+  border: 1px solid #e7bd55;
+  box-shadow: 0 12px 28px rgba(184, 128, 15, 0.28) !important;
 }
 
 .zea-login-submit:hover:not(:disabled) {
-  background: linear-gradient(135deg, #ddb957, #bd8612) !important;
-  box-shadow: 0 16px 34px rgba(150, 97, 0, 0.34) !important;
+  background: linear-gradient(135deg, #efc968, #e3ad2c) !important;
+  box-shadow: 0 16px 34px rgba(184, 128, 15, 0.36) !important;
   transform: translateY(-1px);
 }
 
@@ -950,4 +950,652 @@ body [class*="placeholder"] * {
 .zea-kpi-card > * {
   position: relative;
   z-index: 1;
+}
+
+/* Light theme keeps the gold canvas and changes dark UI surfaces to white. */
+html:not(.dark) {
+  --zea-canvas-art:
+    radial-gradient(circle at 76% 8%, rgba(255, 225, 139, 0.18) 0%, transparent 32%),
+    linear-gradient(135deg, #f8f6f1 0%, #fffdf8 52%, #faf5e8 100%);
+}
+
+html:not(.dark) body .zea-premium-shell main {
+  color: #000000;
+}
+
+html:not(.dark) body .zea-premium-shell aside {
+  background: #ffffff !important;
+  color: #171717 !important;
+  border-color: rgba(223, 168, 34, 0.16) !important;
+  box-shadow: 8px 0 28px rgba(76, 59, 20, 0.07) !important;
+}
+
+html:not(.dark) body .zea-premium-shell aside .text-white,
+html:not(.dark) body .zea-premium-shell aside .text-slate-100,
+html:not(.dark) body .zea-premium-shell aside .text-slate-200,
+html:not(.dark) body .zea-premium-shell aside .text-slate-300,
+html:not(.dark) body .zea-premium-shell aside .text-slate-400 {
+  color: #171717 !important;
+}
+
+html:not(.dark) body .zea-premium-shell aside [id^="sidebar-link-"] {
+  color: #111111 !important;
+}
+
+html:not(.dark) body .zea-premium-shell aside [id^="sidebar-link-"]:hover {
+  color: #111111 !important;
+  background: rgba(223, 168, 34, 0.14) !important;
+  border-color: rgba(223, 168, 34, 0.24) !important;
+  box-shadow: 0 5px 14px rgba(118, 82, 8, 0.08) !important;
+}
+
+html:not(.dark) body .zea-premium-shell aside [id^="sidebar-link-"]:hover *,
+html:not(.dark) body .zea-premium-shell aside [id^="sidebar-link-"]:hover svg {
+  color: inherit !important;
+}
+
+html:not(.dark) body .zea-premium-shell aside [id^="sidebar-link-"].bg-indigo-50,
+html:not(.dark) body .zea-premium-shell aside [id^="sidebar-link-"].bg-gradient-to-r {
+  color: #111111 !important;
+  background: rgba(223, 168, 34, 0.14) !important;
+  border-color: rgba(223, 168, 34, 0.24) !important;
+  box-shadow: 0 5px 14px rgba(118, 82, 8, 0.08) !important;
+}
+
+html:not(.dark) body .zea-premium-shell header {
+  background: rgba(255, 253, 248, 0.94) !important;
+  border-color: rgba(223, 168, 34, 0.14) !important;
+  box-shadow: 0 6px 20px rgba(76, 59, 20, 0.06) !important;
+}
+
+html:not(.dark) body .zea-premium-shell aside button:not([class*="bg-amber"]):not([class*="bg-yellow"]):hover {
+  background: rgba(223, 168, 34, 0.14) !important;
+}
+
+html:not(.dark) body .zea-premium-shell aside [id^="sidebar-link-"].bg-indigo-50:hover,
+html:not(.dark) body .zea-premium-shell aside [id^="sidebar-link-"].bg-gradient-to-r:hover {
+  color: #111111 !important;
+  background: rgba(223, 168, 34, 0.14) !important;
+  border-color: rgba(223, 168, 34, 0.24) !important;
+  box-shadow: 0 5px 14px rgba(118, 82, 8, 0.08) !important;
+}
+
+html:not(.dark) body .zea-premium-shell aside {
+  scrollbar-color: #f1e5c7 transparent;
+}
+
+html:not(.dark) body .zea-premium-shell aside::-webkit-scrollbar-thumb,
+html:not(.dark) body .zea-premium-shell aside::-webkit-scrollbar-thumb:hover {
+  background: #f1e5c7 !important;
+  border-color: transparent !important;
+}
+
+html:not(.dark) body .bg-white,
+html:not(.dark) body [role="dialog"],
+html:not(.dark) body form.bg-white {
+  background: #ffffff !important;
+  color: #000000 !important;
+  border-color: rgba(223, 168, 34, 0.16) !important;
+  box-shadow: 0 10px 28px rgba(76, 59, 20, 0.08) !important;
+}
+
+html:not(.dark) body .zea-surface-pattern:not(.zea-kpi-card) {
+  --zea-card-base: #ffffff !important;
+  --zea-card-light: #ffffff !important;
+  --zea-card-dark: #fffdf8 !important;
+  background: linear-gradient(145deg, #ffffff 0%, #fffdf8 100%) !important;
+  border-color: rgba(223, 168, 34, 0.16) !important;
+  box-shadow: 0 10px 28px rgba(76, 59, 20, 0.08) !important;
+}
+
+html:not(.dark) body .zea-kpi-card {
+  background: linear-gradient(145deg, #fff4ca 0%, #ffe8a3 100%) !important;
+  color: #000000 !important;
+  border-color: rgba(223, 168, 34, 0.2) !important;
+  box-shadow: 0 10px 24px rgba(76, 59, 20, 0.09) !important;
+}
+
+html:not(.dark) body .zea-kpi-card::after {
+  background: rgba(223, 168, 34, 0.12) !important;
+}
+
+html:not(.dark) body .zea-overview-kpi-grid > .zea-kpi-card:nth-child(1) {
+  background: linear-gradient(145deg, #fff5c8 0%, #ffe59c 100%) !important;
+  border-color: rgba(218, 164, 28, 0.2) !important;
+}
+
+html:not(.dark) body .zea-overview-kpi-grid > .zea-kpi-card:nth-child(2) {
+  background: linear-gradient(145deg, #ffe5d4 0%, #ffcbae 100%) !important;
+  border-color: rgba(225, 126, 77, 0.18) !important;
+}
+
+html:not(.dark) body .zea-overview-kpi-grid > .zea-kpi-card:nth-child(3) {
+  background: linear-gradient(145deg, #dcf6fb 0%, #bcebf4 100%) !important;
+  border-color: rgba(51, 169, 196, 0.17) !important;
+}
+
+html:not(.dark) body .zea-overview-kpi-grid > .zea-kpi-card:nth-child(4) {
+  background: linear-gradient(145deg, #f0e7fb 0%, #dfcff4 100%) !important;
+  border-color: rgba(143, 96, 194, 0.16) !important;
+}
+
+html:not(.dark) body .zea-overview-kpi-grid > .zea-kpi-card::after {
+  background: rgba(255, 255, 255, 0.28) !important;
+}
+
+html:not(.dark) body .bg-slate-50,
+html:not(.dark) body .bg-slate-100,
+html:not(.dark) body .bg-gray-50,
+html:not(.dark) body .bg-gray-100 {
+  background: #faf8f3 !important;
+}
+
+html:not(.dark) body .text-white,
+html:not(.dark) body .text-slate-100,
+html:not(.dark) body .text-slate-200,
+html:not(.dark) body .text-slate-300,
+html:not(.dark) body .text-slate-700,
+html:not(.dark) body .text-slate-800,
+html:not(.dark) body .text-slate-900,
+html:not(.dark) body .text-gray-700,
+html:not(.dark) body .text-gray-800,
+html:not(.dark) body .text-gray-900 {
+  color: #000000 !important;
+}
+
+html:not(.dark) body .text-slate-400,
+html:not(.dark) body .text-slate-500,
+html:not(.dark) body .text-slate-600,
+html:not(.dark) body .text-gray-400,
+html:not(.dark) body .text-gray-500,
+html:not(.dark) body .text-gray-600 {
+  color: #000000 !important;
+}
+
+html:not(.dark) body input,
+html:not(.dark) body select,
+html:not(.dark) body textarea {
+  background: #ffffff !important;
+  color: #000000 !important;
+  border-color: rgba(15, 23, 42, 0.18) !important;
+}
+
+html:not(.dark) body input::placeholder,
+html:not(.dark) body textarea::placeholder {
+  color: #000000 !important;
+  opacity: 0.62;
+}
+
+html:not(.dark) body table {
+  background: #ffffff !important;
+  color: #000000 !important;
+  border-color: rgba(15, 23, 42, 0.14) !important;
+}
+
+html:not(.dark) body table thead,
+html:not(.dark) body table th {
+  background: #fff5d8 !important;
+  color: #000000 !important;
+  border-color: rgba(15, 23, 42, 0.14) !important;
+}
+
+html:not(.dark) body table tbody,
+html:not(.dark) body table td {
+  background: #ffffff !important;
+  color: #000000 !important;
+  border-color: rgba(15, 23, 42, 0.12) !important;
+}
+
+html:not(.dark) body table tbody tr:hover td {
+  background: #fffcf4 !important;
+}
+
+html:not(.dark) body .zea-company-form-section-title {
+  background: #fff5d8 !important;
+  border: 1px solid rgba(223, 168, 34, 0.16);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+}
+
+html:not(.dark) body .zea-company-create-modal .zea-company-create-header,
+html:not(.dark) body .zea-company-create-modal form input,
+html:not(.dark) body .zea-company-create-modal form select,
+html:not(.dark) body .zea-company-create-modal form textarea {
+  background: #fff5d8 !important;
+  background-color: #fff5d8 !important;
+}
+
+html:not(.dark) body .zea-company-create-modal .zea-company-create-header,
+html:not(.dark) body .zea-company-create-modal .zea-company-form-section-title {
+  background: #f1dda5 !important;
+  background-color: #f1dda5 !important;
+}
+
+html:not(.dark) body .zea-global-call-traffic-chart .recharts-cartesian-axis-line,
+html:not(.dark) body .zea-global-call-traffic-chart .recharts-cartesian-axis-tick-line {
+  stroke: #000000 !important;
+}
+
+html:not(.dark) body .zea-global-call-traffic-chart .recharts-cartesian-axis-tick-value {
+  fill: #000000 !important;
+}
+
+body .zea-voice-output-panel {
+  position: relative !important;
+  z-index: 100 !important;
+  overflow: visible !important;
+}
+
+body .zea-voice-output-chart,
+body .zea-voice-output-chart .recharts-responsive-container,
+body .zea-voice-output-chart .recharts-wrapper {
+  overflow: visible !important;
+}
+
+body .zea-voice-output-chart .recharts-tooltip-wrapper {
+  z-index: 9999 !important;
+  pointer-events: none !important;
+}
+
+html.dark body .zea-premium-shell header .zea-theme-toggle {
+  color: #ffd65a !important;
+  background: #0b0c09 !important;
+  border: 1px solid #ffd65a !important;
+  box-shadow: 0 0 0 1px rgba(255, 214, 90, 0.14), 0 6px 16px rgba(46, 31, 0, 0.22) !important;
+}
+
+html.dark body .zea-premium-shell header .zea-theme-toggle:hover {
+  color: #fff0a6 !important;
+  background: #171914 !important;
+  border-color: #fff0a6 !important;
+}
+
+html.dark body .zea-premium-shell header .zea-user-profile {
+  border-left-color: #ffd65a !important;
+}
+
+html.dark body .zea-premium-shell header .zea-user-profile > div:not(.zea-profile-avatar) > span:first-child {
+  color: #ffffff !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+html.dark body .zea-premium-shell header .zea-user-profile > div:not(.zea-profile-avatar) > span:last-child {
+  color: #ffe28a !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+html.dark body .zea-premium-shell header .zea-profile-avatar {
+  color: #ffd65a !important;
+  background: #0b0c09 !important;
+  border: 2px solid #ffd65a !important;
+  box-shadow: 0 0 0 2px rgba(255, 214, 90, 0.16), 0 6px 16px rgba(46, 31, 0, 0.2) !important;
+}
+
+html.dark body .zea-premium-shell aside .zea-sidebar-profile-avatar {
+  color: #0a0b08 !important;
+  background: #dfa822 !important;
+  border-color: #f0c55b !important;
+}
+
+html.dark body .zea-company-actions-trigger:hover,
+html.dark body .zea-user-actions-trigger:hover,
+html.dark body .zea-provider-actions-trigger:hover {
+  color: #ffe28a !important;
+  background: rgba(223, 168, 34, 0.16) !important;
+  border-color: rgba(223, 168, 34, 0.48) !important;
+}
+
+html.dark body .zea-company-actions-menu,
+html.dark body .zea-user-actions-menu,
+html.dark body .zea-provider-actions-menu {
+  background: #10110f !important;
+  border-color: rgba(223, 168, 34, 0.32) !important;
+}
+
+html.dark body .zea-company-actions-menu [role="menuitem"]:hover,
+html.dark body .zea-user-actions-menu [role="menuitem"]:hover,
+html.dark body .zea-provider-actions-menu [role="menuitem"]:hover {
+  color: #ffe28a !important;
+  background: rgba(223, 168, 34, 0.16) !important;
+}
+
+body .zea-login .zea-login-field input,
+body .zea-login .zea-login-field input:hover,
+body .zea-login .zea-login-field input:focus,
+body .zea-login .zea-login-field input:active,
+body .zea-login .zea-login-field input:not(:placeholder-shown) {
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+  font-family: "DM Sans", sans-serif !important;
+}
+
+body .zea-login .zea-login-field input:-webkit-autofill,
+body .zea-login .zea-login-field input:-webkit-autofill:hover,
+body .zea-login .zea-login-field input:-webkit-autofill:focus,
+body .zea-login .zea-login-field input:-webkit-autofill:active {
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  -webkit-background-clip: text !important;
+  background-clip: text !important;
+  -webkit-box-shadow: 0 0 0 1000px transparent inset !important;
+  box-shadow: 0 0 0 1000px transparent inset !important;
+  -webkit-text-fill-color: #ffffff !important;
+  caret-color: #ffffff !important;
+  transition: background-color 9999s ease-out 0s;
+}
+
+body .zea-login .zea-login-field input::placeholder,
+body .zea-login .zea-login-field input:hover::placeholder,
+body .zea-login .zea-login-field input:focus::placeholder,
+body .zea-login .zea-login-field input:active::placeholder,
+body .zea-login .zea-login-field input:-webkit-autofill::placeholder {
+  background: transparent !important;
+  color: rgba(255, 255, 255, 0.68) !important;
+  -webkit-text-fill-color: rgba(255, 255, 255, 0.68) !important;
+  font-size: inherit;
+  opacity: 1 !important;
+}
+
+/* Replace the browser's square focus box with a theme-consistent,
+   non-enclosing indicator so keyboard focus remains discoverable. */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus,
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: none !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
+  --tw-ring-shadow: 0 0 #0000 !important;
+}
+
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  box-shadow: inset 0 -2px 0 rgba(223, 168, 34, 0.9) !important;
+}
+
+/* Larger, more readable typography scoped to Companies → Inspect. */
+.zea-company-inspect .text-\[9px\] {
+  font-size: 0.75rem !important;
+}
+
+.zea-company-inspect .text-\[10px\] {
+  font-size: 0.8125rem !important;
+}
+
+.zea-company-inspect .text-xs {
+  font-size: 0.875rem !important;
+  line-height: 1.35rem !important;
+}
+
+.zea-company-inspect .text-sm {
+  font-size: 1rem !important;
+  line-height: 1.5rem !important;
+}
+
+.zea-company-inspect .text-base {
+  font-size: 1.125rem !important;
+  line-height: 1.65rem !important;
+}
+
+.zea-company-inspect .text-lg {
+  font-size: 1.25rem !important;
+  line-height: 1.75rem !important;
+}
+
+.zea-company-inspect .text-xl {
+  font-size: 1.5rem !important;
+  line-height: 2rem !important;
+}
+
+.zea-company-inspect .text-2xl {
+  font-size: 1.875rem !important;
+  line-height: 2.25rem !important;
+}
+
+.zea-company-inspect .text-4xl {
+  font-size: 2.625rem !important;
+  line-height: 1.1 !important;
+}
+
+@media (min-width: 768px) {
+  .zea-company-inspect .md\:text-base {
+    font-size: 1.125rem !important;
+  }
+
+  .zea-company-inspect .md\:text-lg {
+    font-size: 1.25rem !important;
+  }
+
+  .zea-company-inspect .md\:text-3xl {
+    font-size: 2.125rem !important;
+    line-height: 2.5rem !important;
+  }
+
+  .zea-company-inspect .md\:text-5xl {
+    font-size: 3.25rem !important;
+    line-height: 1.05 !important;
+  }
+}
+
+/* Shared authenticated form language based on the light/dark references.
+   The separately designed login form is intentionally outside this scope. */
+html:not(.dark) body .zea-premium-shell {
+  --zea-form-surface: #fffdfa;
+  --zea-form-header: #fffbf4;
+  --zea-form-field: #fffdf9;
+  --zea-form-border: #e8dfd0;
+  --zea-form-divider: #eee3d1;
+  --zea-form-text: #111827;
+  --zea-form-muted: #68707d;
+}
+
+html.dark body .zea-premium-shell {
+  --zea-form-surface: #0c1626;
+  --zea-form-header: #0e192a;
+  --zea-form-field: #091321;
+  --zea-form-border: #344257;
+  --zea-form-divider: #263449;
+  --zea-form-text: #f8fafc;
+  --zea-form-muted: #aeb8c8;
+}
+
+body .zea-premium-shell form {
+  color: var(--zea-form-text) !important;
+  background: var(--zea-form-surface) !important;
+  border-color: var(--zea-form-border) !important;
+}
+
+body .zea-premium-shell form label {
+  color: var(--zea-form-text) !important;
+}
+
+body .zea-premium-shell form input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]),
+body .zea-premium-shell form select,
+body .zea-premium-shell form textarea {
+  min-height: 2.875rem;
+  color: var(--zea-form-text) !important;
+  background: var(--zea-form-field) !important;
+  background-color: var(--zea-form-field) !important;
+  border: 1px solid var(--zea-form-border) !important;
+  border-radius: 0.75rem !important;
+  box-shadow: none !important;
+}
+
+body .zea-premium-shell form input:not([type="checkbox"]):not([type="radio"]):focus,
+body .zea-premium-shell form select:focus,
+body .zea-premium-shell form textarea:focus {
+  border-color: #dfa822 !important;
+  box-shadow: inset 0 -2px 0 rgba(223, 168, 34, 0.9) !important;
+}
+
+body .zea-premium-shell form input::placeholder,
+body .zea-premium-shell form textarea::placeholder {
+  color: var(--zea-form-muted) !important;
+  -webkit-text-fill-color: var(--zea-form-muted) !important;
+  opacity: 1 !important;
+}
+
+body .zea-premium-shell form select option {
+  color: var(--zea-form-text);
+  background: var(--zea-form-surface);
+}
+
+body .zea-premium-shell form h3,
+body .zea-premium-shell form h4 {
+  color: var(--zea-form-text) !important;
+}
+
+body .zea-premium-shell form button[type="submit"] {
+  color: #0a0b08 !important;
+  background: #dfa822 !important;
+  border-color: #edc45b !important;
+  box-shadow: 0 8px 20px rgba(143, 96, 4, 0.2) !important;
+}
+
+body .zea-premium-shell form button[type="submit"]:hover:not(:disabled) {
+  color: #0a0b08 !important;
+  background: #e8b83f !important;
+  border-color: #f3cf72 !important;
+}
+
+html:not(.dark) body .zea-premium-shell form,
+html:not(.dark) body .zea-company-create-modal,
+html:not(.dark) body .zea-company-edit-modal {
+  scrollbar-color: #eee5d5 transparent;
+}
+
+html:not(.dark) body .zea-premium-shell form::-webkit-scrollbar-thumb,
+html:not(.dark) body .zea-premium-shell form::-webkit-scrollbar-thumb:hover,
+html:not(.dark) body .zea-company-create-modal::-webkit-scrollbar-thumb,
+html:not(.dark) body .zea-company-create-modal::-webkit-scrollbar-thumb:hover,
+html:not(.dark) body .zea-company-edit-modal::-webkit-scrollbar-thumb,
+html:not(.dark) body .zea-company-edit-modal::-webkit-scrollbar-thumb:hover {
+  background: #eee5d5 !important;
+  border-color: transparent !important;
+}
+
+html:not(.dark) body .zea-company-create-modal,
+html:not(.dark) body .zea-company-create-modal form {
+  background: var(--zea-form-surface) !important;
+}
+
+html.dark body .zea-company-create-modal,
+html.dark body .zea-company-create-modal form {
+  background: var(--zea-form-surface) !important;
+  border-color: var(--zea-form-border) !important;
+}
+
+html:not(.dark) body .zea-company-create-modal .zea-company-create-header,
+html.dark body .zea-company-create-modal .zea-company-create-header {
+  color: var(--zea-form-text) !important;
+  background: var(--zea-form-header) !important;
+  border-color: var(--zea-form-divider) !important;
+}
+
+body .zea-premium-shell form.zea-company-edit-modal {
+  background: var(--zea-form-surface) !important;
+  border-color: var(--zea-form-border) !important;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28) !important;
+}
+
+body .zea-premium-shell form.zea-company-user-edit-modal {
+  background: var(--zea-form-surface) !important;
+  border-color: var(--zea-form-border) !important;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28) !important;
+}
+
+body .zea-premium-shell .zea-company-edit-modal .zea-company-edit-header,
+body .zea-premium-shell .zea-company-user-edit-modal .zea-company-user-edit-header {
+  margin: -1.5rem -1.5rem 1.25rem;
+  padding: 1.25rem 1.5rem;
+  color: var(--zea-form-text) !important;
+  background: var(--zea-form-header) !important;
+  border-color: var(--zea-form-divider) !important;
+}
+
+body .zea-premium-shell .zea-company-edit-modal > .border-t,
+body .zea-premium-shell .zea-company-user-edit-modal > .border-t {
+  border-color: var(--zea-form-divider) !important;
+}
+
+body .zea-premium-shell .zea-company-user-form-card {
+  color: var(--zea-form-text) !important;
+  background: var(--zea-form-surface) !important;
+  border-color: var(--zea-form-border) !important;
+}
+
+body .zea-premium-shell .zea-company-user-form-header {
+  margin: -1.5rem -1.5rem 1.25rem;
+  padding: 1.25rem 1.5rem;
+  color: var(--zea-form-text) !important;
+  background: var(--zea-form-header) !important;
+  border-bottom: 1px solid var(--zea-form-divider) !important;
+}
+
+body .zea-premium-shell form.zea-company-user-create-form {
+  color: var(--zea-form-text) !important;
+  background: transparent !important;
+  border: 0 !important;
+}
+
+body .zea-premium-shell .zea-user-create-drawer,
+body .zea-premium-shell .zea-user-create-drawer form.zea-company-user-create-form {
+  color: var(--zea-form-text) !important;
+  background: var(--zea-form-surface) !important;
+  border-color: var(--zea-form-border) !important;
+}
+
+body .zea-premium-shell .zea-user-create-drawer .zea-user-create-drawer-header {
+  color: var(--zea-form-text) !important;
+  background: var(--zea-form-header) !important;
+  border-color: var(--zea-form-divider) !important;
+}
+
+body .zea-premium-shell .zea-user-create-drawer form > :last-child {
+  background: var(--zea-form-header) !important;
+  border-color: var(--zea-form-divider) !important;
+}
+
+html:not(.dark) body .zea-provider-metrics {
+  background: #fffdfa !important;
+  border-color: #eee6d9 !important;
+}
+
+html:not(.dark) body .zea-provider-metrics .zea-provider-metric {
+  border-color: #eee6d9 !important;
+}
+
+html.dark body .zea-provider-metrics {
+  background: #0d100d !important;
+  border-color: rgba(223, 168, 34, 0.2) !important;
+}
+
+html.dark body .zea-provider-metrics .zea-provider-metric {
+  border-color: rgba(223, 168, 34, 0.16) !important;
+}
+
+html:not(.dark) body .zea-premium-shell .zea-user-create-drawer-body {
+  scrollbar-color: #eee5d5 transparent;
+}
+
+html:not(.dark) body .zea-premium-shell .zea-user-create-drawer-body::-webkit-scrollbar-thumb,
+html:not(.dark) body .zea-premium-shell .zea-user-create-drawer-body::-webkit-scrollbar-thumb:hover {
+  background: #eee5d5 !important;
+  border-color: transparent !important;
+}
+
+html:not(.dark) body .zea-company-create-modal .zea-company-form-section-title,
+html.dark body .zea-company-create-modal .zea-company-form-section-title {
+  color: var(--zea-form-text) !important;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  font-size: 0.9375rem !important;
+  line-height: 1.4rem !important;
+}
+
+body .zea-company-create-modal form > .space-y-4 > div {
+  border-color: var(--zea-form-divider) !important;
 }

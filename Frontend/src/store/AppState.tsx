@@ -42,7 +42,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       const saved = localStorage.getItem('theme');
       if (saved === 'dark' || saved === 'light') return saved;
     }
-    return 'light';
+    return 'dark';
   });
 
   React.useEffect(() => {

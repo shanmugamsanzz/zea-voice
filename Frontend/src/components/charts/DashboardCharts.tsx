@@ -23,9 +23,15 @@ const CustomTooltip = ({ active, payload, label }: any) => {
   return null;
 };
 
-export function CallVolumeChart({ data = CALL_VOLUME_CHART_DATA }: { data?: Array<{ name: string; inbound: number; outbound: number }> }) {
+export function CallVolumeChart({
+  data = CALL_VOLUME_CHART_DATA,
+  className = '',
+}: {
+  data?: Array<{ name: string; inbound: number; outbound: number }>;
+  className?: string;
+}) {
   return (
-    <div className="w-full h-80">
+    <div className={`w-full h-80 ${className}`}>
       <ResponsiveContainer width="100%" height="100%">
         <AreaChart data={data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
           <defs>
@@ -51,10 +57,16 @@ export function CallVolumeChart({ data = CALL_VOLUME_CHART_DATA }: { data?: Arra
   );
 }
 
-export function OutcomePieChart({ data = OUTCOME_DONUT_DATA }: { data?: Array<{ name: string; value: number; color: string }> }) {
+export function OutcomePieChart({
+  data = OUTCOME_DONUT_DATA,
+  className = '',
+}: {
+  data?: Array<{ name: string; value: number; color: string }>;
+  className?: string;
+}) {
   const total = data.reduce((sum, entry) => sum + entry.value, 0);
   return (
-    <div className="w-full h-80 flex flex-col justify-between">
+    <div className={`w-full h-80 flex flex-col justify-between ${className}`}>
       <div className="h-60 w-full relative">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
@@ -71,7 +83,11 @@ export function OutcomePieChart({ data = OUTCOME_DONUT_DATA }: { data?: Array<{ 
                 <Cell key={`cell-${index}`} fill={entry.color} />
               ))}
             </Pie>
-            <Tooltip content={<CustomTooltip />} />
+            <Tooltip
+              content={<CustomTooltip />}
+              allowEscapeViewBox={{ x: true, y: true }}
+              wrapperStyle={{ zIndex: 9999, pointerEvents: 'none' }}
+            />
           </PieChart>
         </ResponsiveContainer>
         <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">

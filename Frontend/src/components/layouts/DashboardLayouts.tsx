@@ -33,7 +33,9 @@ import {
   Key,
   LogOut,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Moon,
+  Sun
 } from 'lucide-react';
 import zeaVoiceIcon from '../../zea-voice-icon.png';
 import zeaVoiceBrand from '../../zea-voice-brand.png';
@@ -45,7 +47,7 @@ interface SidebarItem {
 }
 
 export function DashboardLayout({ children, onLogout }: { children: React.ReactNode; onLogout: () => void | Promise<void> }) {
-  const { role, view, setView, userEmail } = useAppState();
+  const { role, view, setView, userEmail, theme, setTheme } = useAppState();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isSidebarMinimized, setIsSidebarMinimized] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
@@ -225,11 +227,6 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
             </div>
 
             <nav className="flex-1 px-4 py-6 space-y-0.5">
-              {!isSidebarMinimized && (
-                <div className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest px-4 mb-3 block">
-                  Super Admin Portal
-                </div>
-              )}
               {superAdminItems.map((item) => {
                 const Icon = item.icon;
                 const isActive = view === item.viewId || view.startsWith(item.viewId + '/');
@@ -258,7 +255,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
           {/* Sidebar Footer Profile Block */}
           <div className={`mt-auto border-t border-slate-100 dark:border-slate-850 shrink-0 ${isSidebarMinimized ? 'p-3 flex flex-col items-center gap-2' : 'p-4 space-y-3'}`}>
             <div className={`flex items-center ${isSidebarMinimized ? 'justify-center' : 'space-x-3'}`}>
-              <div className="w-10 h-10 rounded-full bg-indigo-50 dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 border border-indigo-100 dark:border-slate-700 flex items-center justify-center font-bold text-sm shrink-0" title="Project Lead">
+              <div className="zea-sidebar-profile-avatar w-10 h-10 rounded-full bg-indigo-50 dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 border border-indigo-100 dark:border-slate-700 flex items-center justify-center font-bold text-sm shrink-0" title="Project Lead">
                 JS
               </div>
               {!isSidebarMinimized && (
@@ -476,15 +473,24 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
 
           {/* Topbar Right Area */}
           <div className="flex items-center space-x-4 shrink-0">
+            <button
+              type="button"
+              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+              className="zea-theme-toggle flex h-10 w-10 items-center justify-center rounded-full border border-black/15 bg-black/10 text-slate-950 transition-colors hover:bg-black/20"
+              aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+              title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+            >
+              {theme === 'dark' ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+            </button>
             {/* User profile identifier */}
-            <div className="flex items-center space-x-3 border-l border-slate-200 pl-4 shrink-0">
+            <div className="zea-user-profile flex items-center space-x-3 border-l border-slate-200 pl-4 shrink-0">
               {role === 'SUPER_ADMIN' ? (
                 <>
                   <div className="hidden lg:flex flex-col text-right">
                     <span className="text-xs font-bold text-slate-800 leading-none">Zea Administrator</span>
                     <span className="text-[10px] text-slate-400 font-mono mt-1">{userEmail}</span>
                   </div>
-                  <div className="w-10 h-10 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-sm border border-indigo-100 shadow-xs">
+                  <div className="zea-profile-avatar w-10 h-10 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-sm border border-indigo-100 shadow-xs">
                     JS
                   </div>
                 </>
@@ -494,7 +500,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
                     <span className="text-[10px] text-indigo-500 font-bold uppercase tracking-wider block">Developer Account</span>
                     <span className="text-xs font-black text-slate-800 mt-0.5 block">Lead Developer</span>
                   </div>
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-slate-800 to-indigo-950 text-indigo-300 flex items-center justify-center font-black text-sm border border-slate-700 shadow-md">
+                  <div className="zea-profile-avatar w-10 h-10 rounded-full bg-gradient-to-tr from-slate-800 to-indigo-950 text-indigo-300 flex items-center justify-center font-black text-sm border border-slate-700 shadow-md">
                     D
                   </div>
                 </>
@@ -504,7 +510,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
                     <span className="text-[10px] text-purple-500 font-bold uppercase tracking-wider block">User Account (Restricted)</span>
                     <span className="text-xs font-black text-slate-800 mt-0.5 block">url factory's Org</span>
                   </div>
-                  <div className="w-10 h-10 rounded-full bg-[#7C3AED] text-white flex items-center justify-center font-black text-sm border border-[#DDD6FE] shadow-sm">
+                  <div className="zea-profile-avatar w-10 h-10 rounded-full bg-[#7C3AED] text-white flex items-center justify-center font-black text-sm border border-[#DDD6FE] shadow-sm">
                     U
                   </div>
                 </>

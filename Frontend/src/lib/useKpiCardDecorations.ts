@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 
-const VALUE_SELECTOR = '.text-2xl, .text-3xl, .text-4xl';
+const VALUE_SELECTOR = '.zea-kpi-value, .text-2xl, .text-3xl, .text-4xl';
 const CARD_SELECTOR = 'div.rounded-lg, div.rounded-xl, div.rounded-2xl, div.rounded-3xl';
 const NUMBER_VALUE = /(?:\d|₹|\$|€|£|%)/;
 

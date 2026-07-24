@@ -35,6 +35,14 @@ function captureSurfaceColor(surface: HTMLElement) {
   surface.style.setProperty('--zea-card-dark', tonalColor(rgb, 0, 0.18));
 }
 
+function clearCapturedSurfaceColors() {
+  document.querySelectorAll<HTMLElement>('.zea-surface-pattern').forEach((surface) => {
+    surface.style.removeProperty('--zea-card-base');
+    surface.style.removeProperty('--zea-card-light');
+    surface.style.removeProperty('--zea-card-dark');
+  });
+}
+
 function updateSurfaceDecorations() {
   document.querySelectorAll<HTMLElement>(SURFACE_SELECTOR).forEach((surface) => {
     surface.classList.remove(...SIZE_CLASSES);
@@ -70,10 +78,21 @@ export function useSurfaceDecorations() {
     scheduleUpdate();
     const observer = new MutationObserver(scheduleUpdate);
     observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+
+    const themeObserver = new MutationObserver(() => {
+      clearCapturedSurfaceColors();
+      scheduleUpdate();
+    });
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['class'],
+    });
+
     window.addEventListener('resize', scheduleUpdate, { passive: true });
 
     return () => {
       observer.disconnect();
+      themeObserver.disconnect();
       window.removeEventListener('resize', scheduleUpdate);
       cancelAnimationFrame(frame);
       document.querySelectorAll<HTMLElement>('.zea-surface-pattern').forEach((surface) => {
