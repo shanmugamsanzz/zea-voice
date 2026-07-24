@@ -2,6 +2,7 @@ import { withPlatformAdminContext, withTenantContext } from '../infrastructure/d
 import { AppError } from '../middleware/errors.js';
 import { providerAdapterRegistry } from '../voice/providers/registry.js';
 import { registerImplementedProviderAdapters } from '../voice/providers/defaults.js';
+import { normalizeInterruptionSettings } from '../voice/interruption/interruption-config.js';
 
 const select = `SELECT a.*, pn.e164 AS phone_number,
   sp.name AS stt_provider_name, sm.display_name AS stt_model_name,
@@ -91,13 +92,14 @@ export function createAgent(auth, input) { return withTenantContext(auth, async 
   await withPlatformAdminContext(auth.userId, (platformClient) => validateAgentRuntimeModels(platformClient, input));
   await validatePhone(client, auth.tenantId, input.phoneNumberId);
   try {
+    const settings = normalizeInterruptionSettings(input.settings, input.interruptionSensitivity);
     const created = (await client.query(`INSERT INTO voice_agents (tenant_id,workspace_id,name,description,goal,language,usage_direction,status,phone_number_id,
       stt_model_id,llm_model_id,tts_model_id,voice_id,prompt,welcome_message,temperature,interruption_sensitivity,
       silence_timeout_ms,inactivity_timeout_seconds,settings,created_by,updated_by)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::jsonb,$21,$21) RETURNING id`,
     [auth.tenantId,auth.workspaceId,input.name,input.description??null,input.goal??null,input.language,input.usageDirection,input.status,input.phoneNumberId??null,
       input.sttModelId,input.llmModelId,input.ttsModelId,input.voiceId,input.prompt,input.welcomeMessage??null,input.temperature,
-      input.interruptionSensitivity,input.silenceTimeoutMs,input.inactivityTimeoutSeconds,JSON.stringify(input.settings),auth.userId])).rows[0];
+      input.interruptionSensitivity,input.silenceTimeoutMs,input.inactivityTimeoutSeconds,JSON.stringify(settings),auth.userId])).rows[0];
     await client.query(`INSERT INTO audit_logs (tenant_id,workspace_id,actor_user_id,actor_type,action,entity_type,entity_id,after_data)
       VALUES ($1,$2,$3,'user','VOICE_AGENT_CREATED','voice_agent',$4,$5::jsonb)`, [auth.tenantId,auth.workspaceId,auth.userId,created.id,JSON.stringify({name:input.name,status:input.status})]);
     return map(await agentRow(client, auth.tenantId, created.id));
@@ -113,7 +115,8 @@ export function updateAgent(auth, id, input) { return withTenantContext(auth, as
     voiceId:input.voiceId??before.voice_id,prompt:input.prompt??before.prompt,welcomeMessage:Object.hasOwn(input,'welcomeMessage')?input.welcomeMessage:before.welcome_message,
     temperature:input.temperature??Number(before.temperature),interruptionSensitivity:input.interruptionSensitivity??Number(before.interruption_sensitivity),
     silenceTimeoutMs:input.silenceTimeoutMs??before.silence_timeout_ms,inactivityTimeoutSeconds:input.inactivityTimeoutSeconds??before.inactivity_timeout_seconds,
-    settings:input.settings??before.settings };
+    settings:normalizeInterruptionSettings(input.settings??before.settings,
+      input.interruptionSensitivity??Number(before.interruption_sensitivity)) };
   await withPlatformAdminContext(auth.userId, (platformClient) => validateAgentRuntimeModels(platformClient, value));
   await validatePhone(client,auth.tenantId,value.phoneNumberId);
   try { await client.query(`UPDATE voice_agents SET name=$3,description=$4,goal=$5,language=$6,usage_direction=$7,status=$8,phone_number_id=$9,

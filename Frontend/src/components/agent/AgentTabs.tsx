@@ -257,6 +257,9 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       sttPriceMin: base.sttPriceMin !== undefined ? base.sttPriceMin : 0.05,
       timeBasedInterruptionEnabled: base.timeBasedInterruptionEnabled !== undefined ? base.timeBasedInterruptionEnabled : true,
       wordBasedInterruptionEnabled: base.wordBasedInterruptionEnabled !== undefined ? base.wordBasedInterruptionEnabled : false,
+      wordInterruptionMinWords: base.wordInterruptionMinWords ?? 2,
+      wordInterruptionTriggerWords: base.wordInterruptionTriggerWords || [],
+      interruptionPolicy: base.interruptionPolicy || 'any',
       interruptionSensitivityLabel: base.interruptionSensitivityLabel || 'Medium (ideal for regular conversations)',
       llmProvider: base.llmProvider || 'Gemini',
       llmModel: base.llmModel || 'gemini-2.5-flash',
@@ -312,6 +315,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const [llmModelId, setLlmModelId] = useState('');
   const [ttsModelId, setTtsModelId] = useState('');
   const [newReason, setNewReason] = useState('');
+  const [newInterruptionTrigger, setNewInterruptionTrigger] = useState('');
 
   const applyApiAgent = (value: AgentApiData) => {
     setAgent((current) => ({
@@ -575,6 +579,19 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
     void saveAgent();
+  };
+
+  const addInterruptionTriggers = (rawValue = newInterruptionTrigger) => {
+    const additions = rawValue.split(',').map((value) => value.trim()).filter(Boolean);
+    if (!additions.length) return;
+    setAgent((current) => ({
+      ...current,
+      wordInterruptionTriggerWords: [...new Set([
+        ...(current.wordInterruptionTriggerWords || []),
+        ...additions,
+      ])].slice(0, 20),
+    }));
+    setNewInterruptionTrigger('');
   };
 
   const showKnowledgeSuccess = (message: string) => {
@@ -1284,6 +1301,105 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     />
                   </button>
                 </div>
+
+                {agent.wordBasedInterruptionEnabled && (
+                  <div className="mt-6 pt-6 border-t border-slate-100 space-y-5">
+                    <div>
+                      <label className="block text-[11px] font-black text-slate-500 mb-1.5 uppercase tracking-wider">
+                        Minimum Words
+                      </label>
+                      <div className="relative">
+                        <select
+                          value={agent.wordInterruptionMinWords ?? 2}
+                          disabled={isReadOnly}
+                          onChange={(event) => setAgent({ ...agent, wordInterruptionMinWords: Number(event.target.value) })}
+                          className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3.5 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
+                        >
+                          {[1, 2, 3, 4, 5].map((count) => (
+                            <option key={count} value={count}>{count} {count === 1 ? 'word' : 'words'}</option>
+                          ))}
+                        </select>
+                        <div className="absolute inset-y-0 right-0 flex items-center pr-4 pointer-events-none text-slate-400">
+                          <ChevronDown className="w-4 h-4" />
+                        </div>
+                      </div>
+                      <p className="mt-1.5 text-[11px] text-slate-400">Recommended: 2 words to avoid accidental interruption from short sounds.</p>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-black text-slate-500 mb-1.5 uppercase tracking-wider">
+                        Trigger Words or Phrases <span className="normal-case font-semibold text-slate-400">(optional)</span>
+                      </label>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={newInterruptionTrigger}
+                          disabled={isReadOnly || (agent.wordInterruptionTriggerWords?.length ?? 0) >= 20}
+                          onChange={(event) => setNewInterruptionTrigger(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                              event.preventDefault();
+                              addInterruptionTriggers();
+                            }
+                          }}
+                          placeholder="Example: stop, wait, one minute"
+                          className="flex-1 bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none disabled:bg-slate-50"
+                        />
+                        <button
+                          type="button"
+                          disabled={isReadOnly || !newInterruptionTrigger.trim() || (agent.wordInterruptionTriggerWords?.length ?? 0) >= 20}
+                          onClick={() => addInterruptionTriggers()}
+                          className="px-4 py-3 rounded-xl bg-pink-50 text-pink-600 border border-pink-100 text-xs font-black disabled:opacity-50"
+                        >
+                          Add
+                        </button>
+                      </div>
+                      <p className="mt-1.5 text-[11px] text-slate-400">Enter one or more values separated by commas. Maximum 20.</p>
+                      {(agent.wordInterruptionTriggerWords?.length ?? 0) > 0 && (
+                        <div className="flex flex-wrap gap-2 mt-3">
+                          {agent.wordInterruptionTriggerWords?.map((trigger) => (
+                            <span key={trigger} className="inline-flex items-center gap-1.5 rounded-full bg-pink-50 border border-pink-100 px-3 py-1.5 text-xs font-bold text-pink-700">
+                              {trigger}
+                              {!isReadOnly && (
+                                <button
+                                  type="button"
+                                  aria-label={`Remove ${trigger}`}
+                                  onClick={() => setAgent({
+                                    ...agent,
+                                    wordInterruptionTriggerWords: agent.wordInterruptionTriggerWords?.filter((value) => value !== trigger),
+                                  })}
+                                  className="text-pink-400 hover:text-pink-700"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-black text-slate-500 mb-1.5 uppercase tracking-wider">
+                        Policy
+                      </label>
+                      <div className="relative">
+                        <select
+                          value={agent.interruptionPolicy ?? 'any'}
+                          disabled={isReadOnly}
+                          onChange={(event) => setAgent({ ...agent, interruptionPolicy: event.target.value as 'any' | 'all' })}
+                          className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3.5 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
+                        >
+                          <option value="any">Any — time or word condition can interrupt</option>
+                          <option value="all">All — both time and word conditions must pass</option>
+                        </select>
+                        <div className="absolute inset-y-0 right-0 flex items-center pr-4 pointer-events-none text-slate-400">
+                          <ChevronDown className="w-4 h-4" />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>

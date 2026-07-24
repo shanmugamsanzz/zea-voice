@@ -125,6 +125,9 @@ export interface VoiceAgent {
   sttPriceMin?: number;
   timeBasedInterruptionEnabled?: boolean;
   wordBasedInterruptionEnabled?: boolean;
+  wordInterruptionMinWords?: number;
+  wordInterruptionTriggerWords?: string[];
+  interruptionPolicy?: 'any' | 'all';
   interruptionSensitivityLabel?: string;
   llmProvider?: string;
   greetingMode?: string;

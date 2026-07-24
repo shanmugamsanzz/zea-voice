@@ -64,6 +64,7 @@
     "verify:voice-persistence": "node scripts/verify-voice-persistence.js",
     "verify:voice-hardening": "node scripts/verify-voice-hardening.js",
     "verify:voice-live-calls": "node scripts/verify-voice-live-calls.js",
+    "verify:interruption-settings": "node scripts/verify-interruption-settings.js",
     "verify:voice-task8": "node scripts/verify-voice-task-8.js",
     "verify:voice-task9": "node scripts/verify-voice-task-9.js",
     "verify:voice-task10": "node scripts/verify-voice-task-10.js",
