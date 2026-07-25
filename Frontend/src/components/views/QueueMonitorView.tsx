@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { Info } from 'lucide-react';
 import { apiRequest, isAbortError } from '../../lib/api';
 
 interface QueueMetric {
@@ -121,9 +122,30 @@ export function QueueMonitorView() {
     <div className="space-y-6">
       <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h2 className="text-xl font-bold text-slate-800 tracking-tight">Queue Monitor</h2>
-          <p className="text-xs text-slate-400 font-medium mt-0.5">Live BullMQ call queues and worker heartbeats from Redis.</p>
-          <p className="text-[9px] text-slate-400 mt-1">Auto-refreshes every 5 seconds{lastUpdatedAt ? ` · Last updated ${lastUpdatedAt.toLocaleTimeString()}` : ''}</p>
+          <div className="flex items-center gap-2">
+            <h2 className="text-xl font-bold text-slate-800 tracking-tight">Queue Monitor</h2>
+            <div className="group relative flex">
+              <button
+                type="button"
+                aria-label="About Queue Monitor"
+                aria-describedby="queue-monitor-information"
+                className="zea-queue-info-trigger inline-flex h-7 w-7 items-center justify-center rounded-full text-slate-900 transition hover:text-[#b78513]"
+              >
+                <Info className="h-5 w-5" strokeWidth={2.5} aria-hidden="true" />
+              </button>
+              <div
+                id="queue-monitor-information"
+                role="tooltip"
+                className="zea-queue-info-tooltip pointer-events-none absolute left-1/2 top-full z-[9999] mt-2 w-72 -translate-x-1/2 rounded-xl border border-slate-200 bg-white p-3.5 text-left text-sm font-medium leading-relaxed text-slate-700 opacity-0 shadow-2xl transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+              >
+                <p>Live BullMQ call queues and worker heartbeats from Redis.</p>
+                <p className="mt-2">Auto-refreshes every 5 seconds.</p>
+              </div>
+            </div>
+          </div>
+          <p className="text-xs text-slate-400 mt-1">
+            Last updated {lastUpdatedAt ? lastUpdatedAt.toLocaleTimeString() : '—'}
+          </p>
         </div>
         <button type="button" onClick={() => void loadMonitor()} disabled={queuesLoading || workersLoading}
           className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold disabled:opacity-50 cursor-pointer">

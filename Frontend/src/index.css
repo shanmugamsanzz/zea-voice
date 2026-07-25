@@ -1341,6 +1341,35 @@ html.dark body .zea-platform-available-balance {
   color: #fff3c4 !important;
 }
 
+html.dark body .zea-queue-info-trigger {
+  color: #dfa822 !important;
+}
+
+html.dark body .zea-queue-info-trigger:hover {
+  color: #fff3c4 !important;
+}
+
+html.dark body .zea-queue-info-tooltip {
+  color: #f8f5e8 !important;
+  background: #11120f !important;
+  border-color: rgba(223, 168, 34, 0.38) !important;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.48) !important;
+}
+
+html:not(.dark) body .zea-queue-info-tooltip {
+  color: #29261f !important;
+  background: #ffffff !important;
+  border-color: rgba(223, 168, 34, 0.24) !important;
+}
+
+html:not(.dark) body .zea-queue-info-trigger {
+  color: #171717 !important;
+}
+
+html:not(.dark) body .zea-queue-info-trigger:hover {
+  color: #b78513 !important;
+}
+
 body .zea-login .zea-login-field input,
 body .zea-login .zea-login-field input:hover,
 body .zea-login .zea-login-field input:focus,
