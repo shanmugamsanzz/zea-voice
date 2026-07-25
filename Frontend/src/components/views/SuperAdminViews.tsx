@@ -2679,7 +2679,7 @@ function PhoneNumbersView() {
 
             {/* Global Directory table */}
             <div className="order-1 bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-              <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider mb-3">Global DID Directory</h3>
+              <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider mb-3">ALL PHONE NUMBERS</h3>
               <div className="overflow-x-auto text-xs">
                 <table className="w-full text-left">
                   <thead>
