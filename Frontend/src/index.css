@@ -1280,6 +1280,20 @@ html.dark body .zea-premium-shell header .zea-profile-avatar {
   box-shadow: 0 0 0 2px rgba(255, 214, 90, 0.16), 0 6px 16px rgba(46, 31, 0, 0.2) !important;
 }
 
+html.dark body .zea-premium-shell header {
+  color: #f8f5e8 !important;
+  background: linear-gradient(135deg, #11130f 0%, #080a08 100%) !important;
+  border-color: rgba(223, 168, 34, 0.28) !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.26) !important;
+}
+
+html.dark body .zea-premium-shell header .text-slate-950,
+html.dark body .zea-premium-shell header .text-slate-900,
+html.dark body .zea-premium-shell header .text-slate-800,
+html.dark body .zea-premium-shell header .text-slate-700 {
+  color: #f8f5e8 !important;
+}
+
 html.dark body .zea-premium-shell aside .zea-sidebar-profile-avatar {
   color: #0a0b08 !important;
   background: #dfa822 !important;
@@ -1372,6 +1386,239 @@ html:not(.dark) body .zea-queue-info-trigger:hover {
 
 html.dark body .zea-call-monitor-refresh-time {
   color: #11120f !important;
+}
+
+/* Settings page — reference-matched light and dark surfaces. */
+body .zea-settings-page {
+  width: 100%;
+}
+
+body .zea-settings-shell {
+  width: 100%;
+  overflow: visible !important;
+}
+
+body .zea-settings-header {
+  position: relative;
+  z-index: 100;
+}
+
+body .zea-settings-icon {
+  color: #8b6500 !important;
+  background: rgba(223, 168, 34, 0.14) !important;
+}
+
+body .zea-settings-lock {
+  color: #171717 !important;
+  background: rgba(15, 23, 42, 0.05) !important;
+}
+
+body .zea-settings-card textarea,
+body .zea-settings-card input,
+body .zea-settings-card select {
+  min-height: 3.5rem;
+  box-shadow: none !important;
+}
+
+body .zea-settings-card textarea {
+  min-height: 3.5rem;
+}
+
+body .zea-settings-card textarea:focus,
+body .zea-settings-card input:focus,
+body .zea-settings-card select:focus {
+  border-color: #dfa822 !important;
+  box-shadow: 0 0 0 3px rgba(223, 168, 34, 0.12) !important;
+}
+
+body .zea-settings-confirm input[type="checkbox"] {
+  min-height: 1.25rem;
+  accent-color: #dfa822;
+}
+
+html:not(.dark) body .zea-settings-shell {
+  color: #111827 !important;
+  background: rgba(255, 255, 255, 0.96) !important;
+  border-color: rgba(223, 168, 34, 0.12) !important;
+  box-shadow: 0 12px 38px rgba(72, 54, 18, 0.07) !important;
+}
+
+html:not(.dark) body .zea-settings-card {
+  background: rgba(255, 255, 255, 0.72) !important;
+  border-color: rgba(15, 23, 42, 0.12) !important;
+}
+
+html:not(.dark) body .zea-settings-card textarea,
+html:not(.dark) body .zea-settings-card input,
+html:not(.dark) body .zea-settings-card select {
+  color: #111827 !important;
+  background: rgba(255, 255, 255, 0.9) !important;
+  border-color: rgba(15, 23, 42, 0.16) !important;
+}
+
+html:not(.dark) body .zea-settings-warning,
+html:not(.dark) body .zea-settings-confirm {
+  background: rgba(255, 250, 235, 0.66) !important;
+  border-color: rgba(223, 168, 34, 0.32) !important;
+}
+
+html:not(.dark) body .zea-settings-apply {
+  color: #111111 !important;
+  background: linear-gradient(135deg, #dfa822, #f2bb23) !important;
+  border-color: #dfa822 !important;
+}
+
+html.dark body .zea-settings-shell {
+  color: #f8f5e8 !important;
+  background: linear-gradient(145deg, #101418 0%, #0b0f12 100%) !important;
+  border-color: rgba(148, 163, 184, 0.18) !important;
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.28) !important;
+}
+
+html.dark body .zea-settings-shell h2,
+html.dark body .zea-settings-shell h3 {
+  color: #f8f7f2 !important;
+}
+
+html.dark body .zea-settings-shell p,
+html.dark body .zea-settings-shell span {
+  color: #c2c5cb;
+}
+
+html.dark body .zea-settings-card {
+  background: linear-gradient(145deg, #12171b 0%, #101419 100%) !important;
+  border-color: rgba(148, 163, 184, 0.2) !important;
+}
+
+html.dark body .zea-settings-icon {
+  color: #f2b916 !important;
+  background: rgba(223, 168, 34, 0.17) !important;
+}
+
+html.dark body .zea-settings-card textarea,
+html.dark body .zea-settings-card input,
+html.dark body .zea-settings-card select {
+  color: #f8f7f2 !important;
+  background: rgba(9, 12, 15, 0.42) !important;
+  border-color: rgba(148, 163, 184, 0.24) !important;
+}
+
+html.dark body .zea-settings-card option {
+  color: #f8f7f2 !important;
+  background: #111519 !important;
+}
+
+html.dark body .zea-settings-warning,
+html.dark body .zea-settings-confirm {
+  background: linear-gradient(100deg, rgba(223, 168, 34, 0.08), rgba(223, 168, 34, 0.025)) !important;
+  border-color: rgba(223, 168, 34, 0.34) !important;
+}
+
+html.dark body .zea-settings-warning p,
+html.dark body .zea-settings-confirm span {
+  color: #e5e2d8 !important;
+}
+
+html.dark body .zea-settings-reload {
+  color: #e8d8a6 !important;
+  background: #171b1f !important;
+  border-color: rgba(223, 168, 34, 0.26) !important;
+}
+
+html.dark body .zea-settings-apply {
+  color: #0a0b08 !important;
+  background: linear-gradient(135deg, #dfa822, #ffc229) !important;
+  border-color: #efb524 !important;
+}
+
+body .zea-settings-apply,
+body .zea-settings-apply span,
+body .zea-settings-apply svg {
+  color: #0a0b08 !important;
+}
+
+html.dark body .zea-settings-footer {
+  border-color: rgba(148, 163, 184, 0.2) !important;
+}
+
+html.dark body .zea-settings-lock {
+  color: #e6e7ea !important;
+  background: rgba(148, 163, 184, 0.12) !important;
+}
+
+body .zea-settings-info-trigger {
+  color: #171717 !important;
+  transition: color 160ms ease, background-color 160ms ease;
+}
+
+body .zea-settings-info-trigger:hover {
+  color: #b78513 !important;
+  background: rgba(223, 168, 34, 0.1) !important;
+}
+
+html:not(.dark) body .zea-settings-info-tooltip {
+  color: #29261f !important;
+  background: #ffffff !important;
+  border-color: rgba(223, 168, 34, 0.24) !important;
+}
+
+html.dark body .zea-settings-info-trigger {
+  color: #dfa822 !important;
+}
+
+html.dark body .zea-settings-info-trigger:hover {
+  color: #fff3c4 !important;
+  background: rgba(223, 168, 34, 0.12) !important;
+}
+
+html.dark body .zea-settings-info-tooltip {
+  color: #f8f5e8 !important;
+  background: #11120f !important;
+  border-color: rgba(223, 168, 34, 0.38) !important;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.48) !important;
+}
+
+body .zea-settings-alert-trigger {
+  color: #b78513 !important;
+  background: rgba(223, 168, 34, 0.1) !important;
+  transition: color 160ms ease, background-color 160ms ease;
+}
+
+body .zea-settings-alert-trigger:hover {
+  color: #8b6500 !important;
+  background: rgba(223, 168, 34, 0.18) !important;
+}
+
+html:not(.dark) body .zea-settings-alert-tooltip {
+  color: #29261f !important;
+  background: #fffdf8 !important;
+  border-color: rgba(223, 168, 34, 0.34) !important;
+}
+
+html.dark body .zea-settings-alert-trigger {
+  color: #dfa822 !important;
+  background: rgba(223, 168, 34, 0.12) !important;
+}
+
+html.dark body .zea-settings-alert-trigger:hover {
+  color: #fff3c4 !important;
+  background: rgba(223, 168, 34, 0.2) !important;
+}
+
+html.dark body .zea-settings-alert-tooltip {
+  color: #f8f5e8 !important;
+  background: #11120f !important;
+  border-color: rgba(223, 168, 34, 0.42) !important;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.48) !important;
+}
+
+html.dark body .zea-settings-alert-tooltip span,
+html.dark body .zea-settings-alert-tooltip strong {
+  color: inherit !important;
+}
+
+body .zea-settings-alert-tooltip {
+  z-index: 10000 !important;
 }
 
 body .zea-login .zea-login-field input,
