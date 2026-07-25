@@ -2764,7 +2764,7 @@ function PhoneNumbersView() {
                     <tr key={num.id} className="hover:bg-slate-50/50">
                       <td className="py-2.5 font-bold font-mono text-slate-800">{num.number}</td>
                       <td className="py-2.5">
-                        <span className="text-indigo-600 font-bold bg-indigo-50 border border-indigo-100 px-2.5 py-0.5 rounded text-[10px]">
+                        <span className="zea-associated-tenant-org text-indigo-600 font-bold bg-indigo-50 border border-indigo-100 px-2.5 py-0.5 rounded text-[10px]">
                           {num.companyName}
                         </span>
                       </td>

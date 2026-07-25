@@ -1537,6 +1537,14 @@ body .zea-settings-apply svg {
   color: #0a0b08 !important;
 }
 
+html:not(.dark) body .zea-associated-tenant-org {
+  color: #8a6200 !important;
+}
+
+html.dark body .zea-associated-tenant-org {
+  color: #c99512 !important;
+}
+
 html.dark body .zea-settings-footer {
   border-color: rgba(148, 163, 184, 0.2) !important;
 }
