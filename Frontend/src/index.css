@@ -1370,6 +1370,10 @@ html:not(.dark) body .zea-queue-info-trigger:hover {
   color: #b78513 !important;
 }
 
+html.dark body .zea-call-monitor-refresh-time {
+  color: #11120f !important;
+}
+
 body .zea-login .zea-login-field input,
 body .zea-login .zea-login-field input:hover,
 body .zea-login .zea-login-field input:focus,

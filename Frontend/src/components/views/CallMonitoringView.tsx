@@ -134,7 +134,7 @@ export function CallMonitoringView() {
         <div><h2 className="text-xl font-bold text-slate-800">Live Call Monitoring</h2><p className="text-xs text-slate-400">Active database call sessions and transcript entries · Refreshes every 3 seconds.</p></div>
         <div className="flex items-center gap-3"><span className="text-[10px] font-bold text-indigo-600">{calls.length} active</span><button type="button" onClick={() => void refreshMonitor(true)} disabled={loading} className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-xs font-bold disabled:opacity-50 cursor-pointer">{loading ? 'Refreshing...' : 'Refresh Now'}</button></div>
       </div>
-      {lastUpdatedAt && <p className="text-right text-[9px] text-slate-400">Last database refresh: {lastUpdatedAt.toLocaleTimeString()}</p>}
+      {lastUpdatedAt && <p className="zea-call-monitor-refresh-time text-right text-[9px] text-slate-400">Last database refresh: {lastUpdatedAt.toLocaleTimeString()}</p>}
       {error && <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-xs font-semibold">{error}</div>}
       {success && <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-xs font-semibold">{success}</div>}
 
