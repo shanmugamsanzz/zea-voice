@@ -1299,12 +1299,12 @@ function UsersListView() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="zea-company-user-directory space-y-6">
       <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
         <div className="mb-5 flex flex-col gap-3 border-b border-slate-100 pb-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 className="text-md font-bold text-slate-800 tracking-tight">Company User Directory</h2>
-            <p className="mt-0.5 text-xs font-medium text-slate-400">Manage company developers and standard user accounts.</p>
+            <h2 className="text-2xl font-bold text-slate-800 tracking-tight">Company User Directory</h2>
+            <p className="mt-1 text-sm font-medium text-slate-400">Manage company developers and standard user accounts.</p>
           </div>
           <button
             type="button"
@@ -1313,14 +1313,14 @@ function UsersListView() {
               setSuccess('');
               setIsCreateDrawerOpen(true);
             }}
-            className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#dfa822] px-4 py-2.5 text-xs font-bold text-black shadow-md transition hover:bg-[#e8b83f]"
+            className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#dfa822] px-4 py-2.5 text-sm font-bold text-black shadow-md transition hover:bg-[#e8b83f]"
           >
             <Plus className="h-4 w-4" />
             <span>New User</span>
           </button>
         </div>
-        {!isCreateDrawerOpen && error && <div className="mb-4 rounded-lg border border-red-100 bg-red-50 p-2.5 text-xs font-semibold text-red-700">{error}</div>}
-        <div className="overflow-x-auto text-xs">
+        {!isCreateDrawerOpen && error && <div className="mb-4 rounded-lg border border-red-100 bg-red-50 p-2.5 text-sm font-semibold text-red-700">{error}</div>}
+        <div className="overflow-x-auto text-sm">
           <table className="w-full text-left">
             <thead><tr className="border-b border-slate-200 text-slate-400 font-bold uppercase tracking-wider text-[9px]">
               <th className="pb-2">User</th><th className="pb-2">Company</th><th className="pb-2">Role</th>
@@ -1330,11 +1330,11 @@ function UsersListView() {
               {loading && <tr><td colSpan={6} className="py-10 text-center text-slate-400">Loading users...</td></tr>}
               {!loading && users.map((user) => (
                 <tr key={user.id} className="hover:bg-slate-50/50">
-                  <td className="py-2.5"><span className="font-bold text-slate-800 block">{user.fullName}</span><span className="text-[10px] text-slate-400 font-mono">{user.email}</span></td>
+                  <td className="py-2.5"><span className="font-bold text-slate-800 block">{user.fullName}</span><span className="text-xs text-slate-400 font-mono">{user.email}</span></td>
                   <td className="py-2.5 text-slate-700">{user.companyName}</td>
                   <td className="py-2.5"><span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-100">{user.role === 'COMPANY_DEVELOPER' ? 'Developer' : 'User'}</span></td>
                   <td className="py-2.5"><span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase border ${user.status === 'active' ? 'bg-emerald-50 border-emerald-100 text-emerald-600' : 'bg-slate-100 border-slate-200 text-slate-500'}`}>{user.status}</span></td>
-                  <td className="py-2.5 text-slate-500 font-mono text-[10px]">{user.lastActiveAt ? new Date(user.lastActiveAt).toLocaleString() : 'Never'}</td>
+                  <td className="py-2.5 text-slate-500 font-mono text-xs">{user.lastActiveAt ? new Date(user.lastActiveAt).toLocaleString() : 'Never'}</td>
                   <td className="py-2.5 text-right">
                     <button
                       type="button"
@@ -1364,12 +1364,12 @@ function UsersListView() {
             </tbody>
           </table>
         </div>
-        <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-4 text-[10px] font-bold text-slate-500">
+        <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-4 text-xs font-bold text-slate-500">
           <span>{pagination.total.toLocaleString()} users</span>
           <div className="flex items-center gap-2">
-            <button type="button" disabled={loading || page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))} className="rounded-md border border-slate-200 px-3 py-1.5 disabled:opacity-40">Previous</button>
+            <button type="button" disabled={loading || page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))} className="rounded-md border border-slate-200 px-3 py-2 text-sm disabled:opacity-40">Previous</button>
             <span>Page {pagination.page} of {Math.max(1, pagination.totalPages)}</span>
-            <button type="button" disabled={loading || page >= pagination.totalPages} onClick={() => setPage((value) => value + 1)} className="rounded-md border border-slate-200 px-3 py-1.5 disabled:opacity-40">Next</button>
+            <button type="button" disabled={loading || page >= pagination.totalPages} onClick={() => setPage((value) => value + 1)} className="rounded-md border border-slate-200 px-3 py-2 text-sm disabled:opacity-40">Next</button>
           </div>
         </div>
       </div>
@@ -1397,7 +1397,7 @@ function UsersListView() {
                 setEditingUser(user);
                 setError('');
               }}
-              className="flex w-full items-center rounded-lg px-3 py-2 text-left text-xs font-bold text-slate-700 hover:bg-amber-50"
+              className="flex w-full items-center rounded-lg px-3 py-2.5 text-left text-sm font-bold text-slate-700 hover:bg-amber-50"
             >
               Edit
             </button>
@@ -1409,7 +1409,7 @@ function UsersListView() {
                 setUserActionMenu(null);
                 void toggleUserStatus(user);
               }}
-              className="flex w-full items-center rounded-lg px-3 py-2 text-left text-xs font-bold text-slate-700 hover:bg-amber-50"
+              className="flex w-full items-center rounded-lg px-3 py-2.5 text-left text-sm font-bold text-slate-700 hover:bg-amber-50"
             >
               {userActionMenu.user.status === 'active' ? 'Suspend' : 'Activate'}
             </button>
@@ -1421,7 +1421,7 @@ function UsersListView() {
                 setUserActionMenu(null);
                 void deleteUser(user);
               }}
-              className="flex w-full items-center rounded-lg px-3 py-2 text-left text-xs font-bold text-red-600 hover:bg-red-50"
+              className="flex w-full items-center rounded-lg px-3 py-2.5 text-left text-sm font-bold text-red-600 hover:bg-red-50"
             >
               Delete
             </button>
@@ -1447,8 +1447,8 @@ function UsersListView() {
             <form onSubmit={handleCreateUser} className="zea-company-user-create-form flex h-full flex-col border-l border-slate-200 bg-white shadow-2xl">
               <div className="zea-user-create-drawer-header flex items-start justify-between border-b border-slate-100 px-6 py-5">
                 <div>
-                  <h2 id="create-company-user-title" className="text-lg font-black text-slate-800 tracking-tight">Create Company User</h2>
-                  <p className="mt-1 text-xs font-medium text-slate-400">Create a developer or standard user and assign the account to a company.</p>
+                  <h2 id="create-company-user-title" className="text-xl font-black text-slate-800 tracking-tight">Create Company User</h2>
+                  <p className="mt-1 text-sm font-medium text-slate-400">Create a developer or standard user and assign the account to a company.</p>
                 </div>
                 <button
                   type="button"
@@ -1460,9 +1460,9 @@ function UsersListView() {
                 </button>
               </div>
 
-              <div className="zea-user-create-drawer-body flex-1 space-y-5 overflow-y-auto px-6 py-6 text-xs font-semibold">
-                {success && <div className="rounded-lg border border-emerald-100 bg-emerald-50 p-3 text-xs font-semibold text-emerald-800">{success}</div>}
-                {error && <div className="rounded-lg border border-red-100 bg-red-50 p-3 text-xs font-semibold text-red-700">{error}</div>}
+              <div className="zea-user-create-drawer-body flex-1 space-y-5 overflow-y-auto px-6 py-6 text-sm font-semibold">
+                {success && <div className="rounded-lg border border-emerald-100 bg-emerald-50 p-3 text-sm font-semibold text-emerald-800">{success}</div>}
+                {error && <div className="rounded-lg border border-red-100 bg-red-50 p-3 text-sm font-semibold text-red-700">{error}</div>}
 
                 <div>
                   <label className="mb-1.5 block text-[10px] font-bold uppercase text-slate-500">Full Name</label>
@@ -1501,12 +1501,12 @@ function UsersListView() {
                 <button
                   type="button"
                   onClick={() => setIsCreateDrawerOpen(false)}
-                  className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-bold text-slate-600"
+                  className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-600"
                 >
                   Cancel
                 </button>
                 <button type="submit" disabled={submitting || companies.length === 0}
-                  className="flex items-center justify-center gap-2 rounded-lg bg-[#dfa822] px-5 py-2.5 text-xs font-bold text-black shadow-md transition hover:bg-[#e8b83f] disabled:opacity-50">
+                  className="flex items-center justify-center gap-2 rounded-lg bg-[#dfa822] px-5 py-2.5 text-sm font-bold text-black shadow-md transition hover:bg-[#e8b83f] disabled:opacity-50">
                   <UserCheck className="h-4 w-4" />
                   <span>{submitting ? 'Creating...' : 'Create User Account'}</span>
                 </button>
@@ -1520,17 +1520,17 @@ function UsersListView() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-xs">
           <form onSubmit={handleUpdateUser} className="zea-company-user-edit-modal w-full max-w-lg space-y-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
             <div className="zea-company-user-edit-header flex items-start justify-between border-b border-slate-100 pb-3">
-              <div><h3 className="text-sm font-black text-slate-800">Edit Company User</h3><p className="text-[10px] text-slate-400">Role or company changes require the user to log in again.</p></div>
+              <div><h3 className="text-xl font-black text-slate-800">Edit Company User</h3><p className="text-sm text-slate-400">Role or company changes require the user to log in again.</p></div>
               <button type="button" onClick={() => setEditingUser(null)} className="rounded-md p-1 text-slate-400 hover:bg-slate-100"><X className="h-4 w-4" /></button>
             </div>
             {error && <div className="rounded-lg border border-red-100 bg-red-50 p-2.5 text-xs font-semibold text-red-700">{error}</div>}
-            <label className="block text-[10px] font-bold text-slate-500">Full Name<input required value={editingUser.fullName} onChange={(e) => setEditingUser({ ...editingUser, fullName: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-800 outline-none focus:border-indigo-500" /></label>
-            <label className="block text-[10px] font-bold text-slate-500">Email<input type="email" required value={editingUser.email} onChange={(e) => setEditingUser({ ...editingUser, email: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-800 outline-none focus:border-indigo-500" /></label>
-            <label className="block text-[10px] font-bold text-slate-500">Role<select value={editingUser.role} onChange={(e) => setEditingUser({ ...editingUser, role: e.target.value as TenantUserApiData['role'] })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-800"><option value="COMPANY_DEVELOPER">Company Developer</option><option value="COMPANY_USER">Company User</option></select></label>
-            <label className="block text-[10px] font-bold text-slate-500">Assigned Company<select value={editingUser.companyId} onChange={(e) => setEditingUser({ ...editingUser, companyId: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-800">{companies.map((company) => <option key={company.tenantId} value={company.tenantId}>{company.businessName}</option>)}</select></label>
+            <label className="block text-xs font-bold text-slate-500">Full Name<input required value={editingUser.fullName} onChange={(e) => setEditingUser({ ...editingUser, fullName: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-800 outline-none focus:border-indigo-500" /></label>
+            <label className="block text-xs font-bold text-slate-500">Email<input type="email" required value={editingUser.email} onChange={(e) => setEditingUser({ ...editingUser, email: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-800 outline-none focus:border-indigo-500" /></label>
+            <label className="block text-xs font-bold text-slate-500">Role<select value={editingUser.role} onChange={(e) => setEditingUser({ ...editingUser, role: e.target.value as TenantUserApiData['role'] })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm font-bold text-slate-800"><option value="COMPANY_DEVELOPER">Company Developer</option><option value="COMPANY_USER">Company User</option></select></label>
+            <label className="block text-xs font-bold text-slate-500">Assigned Company<select value={editingUser.companyId} onChange={(e) => setEditingUser({ ...editingUser, companyId: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm font-bold text-slate-800">{companies.map((company) => <option key={company.tenantId} value={company.tenantId}>{company.businessName}</option>)}</select></label>
             <div className="flex justify-end gap-2 border-t border-slate-100 pt-4">
-              <button type="button" onClick={() => setEditingUser(null)} className="rounded-lg bg-slate-100 px-4 py-2 text-xs font-bold text-slate-600">Cancel</button>
-              <button type="submit" disabled={submitting} className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">{submitting ? 'Saving...' : 'Save Changes'}</button>
+              <button type="button" onClick={() => setEditingUser(null)} className="rounded-lg bg-slate-100 px-4 py-2.5 text-sm font-bold text-slate-600">Cancel</button>
+              <button type="submit" disabled={submitting} className="rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50">{submitting ? 'Saving...' : 'Save Changes'}</button>
             </div>
           </form>
         </div>

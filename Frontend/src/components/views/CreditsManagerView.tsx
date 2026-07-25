@@ -115,20 +115,20 @@ export function CreditsManagerView() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="zea-credits-manager space-y-6">
       <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h2 className="text-xl font-bold text-slate-800 tracking-tight">Credit Manager</h2>
-          <p className="text-xs text-slate-400 mt-0.5 font-medium">Live Plivo credits, company wallets, pricing, and ledger activity.</p>
+          <h2 className="text-2xl font-bold text-slate-800 tracking-tight">Credit Manager</h2>
+          <p className="text-sm text-slate-400 mt-1 font-medium">Live Plivo credits, company wallets, pricing, and ledger activity.</p>
         </div>
         <button type="button" onClick={() => void loadCreditData(true)} disabled={summaryLoading || ledgerLoading || providerLoading}
-          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold disabled:opacity-50 cursor-pointer">
+          className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-bold disabled:opacity-50 cursor-pointer">
           {summaryLoading || ledgerLoading || providerLoading ? 'Refreshing...' : 'Refresh Credits'}
         </button>
       </div>
 
-      {error && <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-xs font-semibold">{error}</div>}
-      {success && <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-xs font-semibold">{success}</div>}
+      {error && <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm font-semibold">{error}</div>}
+      {success && <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-sm font-semibold">{success}</div>}
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {providerLoading && providerBalances.length === 0 && [1, 2, 3].map((item) => (
@@ -136,41 +136,41 @@ export function CreditsManagerView() {
             <div className="h-3 w-24 rounded bg-slate-200" /><div className="mt-3 h-4 w-40 rounded bg-slate-200" /><div className="mt-8 h-8 w-32 rounded bg-slate-200" />
           </div>
         ))}
-        {providerError && <div className="md:col-span-2 xl:col-span-3 rounded-xl border border-red-200 bg-red-50 p-4 text-xs font-semibold text-red-700">{providerError}</div>}
+        {providerError && <div className="md:col-span-2 xl:col-span-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">{providerError}</div>}
         {providerBalances.map((balance) => (
           <div key={balance.telephonyAccountId} className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <span className="text-[10px] uppercase tracking-wider font-black text-indigo-600">{balance.provider}</span>
-                <h3 className="font-bold text-slate-800 mt-0.5">{balance.providerName}</h3>
+                <span className="text-xs uppercase tracking-wider font-black text-indigo-600">{balance.provider}</span>
+                <h3 className="text-base font-bold text-slate-800 mt-1">{balance.providerName}</h3>
               </div>
-              <span className={`px-2 py-1 rounded-full text-[9px] uppercase font-black ${balance.available ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+              <span className={`px-2.5 py-1 rounded-full text-xs uppercase font-black ${balance.available ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
                 {balance.available ? 'Live' : 'Unavailable'}
               </span>
             </div>
-            <p className="text-[10px] font-bold uppercase text-slate-400 mt-5">Plivo Remaining Credits</p>
+            <p className="text-xs font-bold uppercase text-slate-400 mt-5">Plivo Remaining Credits</p>
             {balance.available && balance.remainingCredits !== undefined && balance.currency ? (
               <>
                 <p className="text-3xl font-black text-slate-900 font-mono mt-1">
                   {money(providerDisplayAmount(balance), providerDisplayCurrency(balance))}
                 </p>
                 {providerRawUsd(balance) !== undefined && (
-                  <p className="text-[10px] text-slate-400 font-mono mt-1">
+                  <p className="text-xs text-slate-400 font-mono mt-1">
                     Raw Plivo API balance: {providerRawUsd(balance)?.toFixed(5)} USD
                     {` · ₹${balance.conversionRate ?? 80}/USD`}
                   </p>
                 )}
-                <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-slate-500 mt-3 font-semibold">
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500 mt-3 font-semibold">
                   <span>Billing: {balance.billingMode || 'Unknown'}</span>
                   <span>Auto recharge: {balance.autoRecharge ? 'Enabled' : 'Disabled'}</span>
                 </div>
-                <p className="text-[9px] text-slate-400 mt-2">{balance.cacheHit ? 'Cached Plivo balance' : 'Fetched directly from Plivo'} {balance.fetchedAt ? new Date(balance.fetchedAt).toLocaleString() : ''}</p>
+                <p className="text-xs text-slate-400 mt-2">{balance.cacheHit ? 'Cached Plivo balance' : 'Fetched directly from Plivo'} {balance.fetchedAt ? new Date(balance.fetchedAt).toLocaleString() : ''}</p>
               </>
-            ) : <p className="text-xs text-red-600 font-semibold mt-2">{balance.error || 'Balance is unavailable'}</p>}
+            ) : <p className="text-sm text-red-600 font-semibold mt-2">{balance.error || 'Balance is unavailable'}</p>}
           </div>
         ))}
         {!providerLoading && !providerError && providerBalances.length === 0 && (
-          <div className="md:col-span-2 xl:col-span-3 bg-white p-8 rounded-xl border border-dashed border-slate-300 text-center text-xs text-slate-500">
+          <div className="md:col-span-2 xl:col-span-3 bg-white p-8 rounded-xl border border-dashed border-slate-300 text-center text-sm text-slate-500">
             Connect a main Plivo provider in Phone Numbers to display its live remaining credits.
           </div>
         )}
@@ -179,36 +179,36 @@ export function CreditsManagerView() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm h-fit space-y-4">
           <div>
-            <h2 className="text-md font-bold text-slate-800 tracking-tight">Global Pricing Rates</h2>
-            <p className="text-xs text-slate-400 mt-0.5 font-medium">Database-backed company billing rates per minute.</p>
+            <h2 className="text-base font-bold text-slate-800 tracking-tight">Global Pricing Rates</h2>
+            <p className="text-sm text-slate-400 mt-1 font-medium">Database-backed company billing rates per minute.</p>
           </div>
           <div className="rounded-lg bg-indigo-50 border border-indigo-100 p-3">
-            <p className="text-[9px] uppercase text-indigo-500 font-black">Platform Available Balance</p>
-            <p className="text-xl font-black text-indigo-800 font-mono mt-1">{summary ? money(summary.platformWallet.availableBalance, summary.platformWallet.currency) : '—'}</p>
+            <p className="text-xs uppercase text-indigo-500 font-black">Platform Available Balance</p>
+            <p className="zea-platform-available-balance text-2xl font-black text-indigo-800 font-mono mt-1">{summary ? money(summary.platformWallet.availableBalance, summary.platformWallet.currency) : '—'}</p>
           </div>
-          <div className="space-y-4 text-xs font-semibold">
+          <div className="space-y-4 text-sm font-semibold">
             <div>
-              <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Inbound Calling Minute Rate (INR)</label>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Inbound Calling Minute Rate (INR)</label>
               <input type="number" min="0.0001" step="0.0001" value={rateInbound} onChange={(event) => setRateInbound(event.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-800 outline-none focus:bg-white focus:border-indigo-500 transition" />
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2.5 text-sm text-slate-800 outline-none focus:bg-white focus:border-indigo-500 transition" />
             </div>
             <div>
-              <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Outbound Campaign Minute Rate (INR)</label>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Outbound Campaign Minute Rate (INR)</label>
               <input type="number" min="0.0001" step="0.0001" value={rateOutbound} onChange={(event) => setRateOutbound(event.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-800 outline-none focus:bg-white focus:border-indigo-500 transition" />
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2.5 text-sm text-slate-800 outline-none focus:bg-white focus:border-indigo-500 transition" />
             </div>
             <button onClick={() => void savePricingRules()} disabled={saving || !rateInbound || !rateOutbound}
-              className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold transition disabled:opacity-50 cursor-pointer">
+              className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-bold transition disabled:opacity-50 cursor-pointer">
               {saving ? 'Saving...' : 'Save Pricing Rules'}
             </button>
           </div>
         </div>
 
         <div className="lg:col-span-2 bg-white p-6 rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-          <h2 className="text-md font-bold text-slate-800 mb-3 tracking-tight">Company Credit Wallets</h2>
+          <h2 className="text-base font-bold text-slate-800 mb-3 tracking-tight">Company Credit Wallets</h2>
           <div className="overflow-x-auto">
-            <table className="w-full text-xs text-left">
-              <thead><tr className="border-b border-slate-200 text-[10px] uppercase text-slate-400">
+            <table className="w-full text-sm text-left">
+              <thead><tr className="border-b border-slate-200 text-xs uppercase text-slate-400">
                 <th className="py-2">Company</th><th className="py-2 text-right">Balance</th><th className="py-2 text-right">Reserved</th><th className="py-2 text-right">Available</th>
               </tr></thead>
               <tbody>
@@ -223,7 +223,7 @@ export function CreditsManagerView() {
                 ))}
               </tbody>
             </table>
-            {summaryError && <p className="py-5 text-center text-xs font-semibold text-red-600">{summaryError}</p>}
+            {summaryError && <p className="py-5 text-center text-sm font-semibold text-red-600">{summaryError}</p>}
             {!summaryLoading && !summaryError && summary?.companyWallets.length === 0 && <p className="py-8 text-center text-slate-400">No company wallets found.</p>}
           </div>
         </div>
@@ -231,22 +231,22 @@ export function CreditsManagerView() {
 
       <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
         <div className="flex justify-between items-center mb-3">
-          <h2 className="text-md font-bold text-slate-800 tracking-tight">Credit Ledger</h2>
-          <span className="text-[10px] font-bold text-slate-400">{ledger?.pagination.total ?? 0} entries</span>
+          <h2 className="text-base font-bold text-slate-800 tracking-tight">Credit Ledger</h2>
+          <span className="text-xs font-bold text-slate-400">{ledger?.pagination.total ?? 0} entries</span>
         </div>
-        <div className="space-y-3 text-xs">
+        <div className="space-y-3 text-sm">
           {ledger?.items.map((entry) => (
             <div key={entry.id} className="border border-slate-200 p-3.5 rounded-xl bg-slate-50/30 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 font-semibold">
               <div>
                 <span className="font-bold text-slate-800 block">{entry.companyName || 'Platform Wallet'}</span>
-                <span className="text-[10px] text-slate-500">{readableType(entry.type)} · {entry.description || 'No description'} · {entry.actorName || 'System'}</span>
-                <span className="text-[9px] text-slate-400 font-mono block mt-0.5">{new Date(entry.createdAt).toLocaleString()}</span>
+                <span className="text-xs text-slate-500">{readableType(entry.type)} · {entry.description || 'No description'} · {entry.actorName || 'System'}</span>
+                <span className="text-xs text-slate-400 font-mono block mt-1">{new Date(entry.createdAt).toLocaleString()}</span>
               </div>
               <div className="sm:text-right">
-                <span className={`text-sm font-black font-mono ${entry.direction === 'credit' ? 'text-emerald-600' : 'text-red-600'}`}>
+                <span className={`text-base font-black font-mono ${entry.direction === 'credit' ? 'text-emerald-600' : 'text-red-600'}`}>
                   {entry.direction === 'credit' ? '+' : '-'}{money(entry.amount, entry.currency)}
                 </span>
-                <span className="block text-[9px] text-slate-400 mt-0.5">Balance: {money(entry.balanceAfter, entry.currency)}</span>
+                <span className="block text-xs text-slate-400 mt-1">Balance: {money(entry.balanceAfter, entry.currency)}</span>
               </div>
             </div>
           ))}
@@ -255,11 +255,11 @@ export function CreditsManagerView() {
           {ledgerError && <div className="py-8 text-center font-semibold text-red-600">{ledgerError}</div>}
         </div>
         {ledger && (
-          <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-4 text-[10px] font-bold text-slate-500">
+          <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-4 text-xs font-bold text-slate-500">
             <span>Page {ledger.pagination.page} of {Math.max(1, ledger.pagination.totalPages)}</span>
             <div className="flex gap-2">
-              <button type="button" disabled={ledgerLoading || ledgerPage <= 1} onClick={() => setLedgerPage((value) => Math.max(1, value - 1))} className="rounded-md border border-slate-200 px-3 py-1.5 disabled:opacity-40">Previous</button>
-              <button type="button" disabled={ledgerLoading || ledgerPage >= ledger.pagination.totalPages} onClick={() => setLedgerPage((value) => value + 1)} className="rounded-md border border-slate-200 px-3 py-1.5 disabled:opacity-40">Next</button>
+              <button type="button" disabled={ledgerLoading || ledgerPage <= 1} onClick={() => setLedgerPage((value) => Math.max(1, value - 1))} className="rounded-md border border-slate-200 px-3 py-2 text-sm disabled:opacity-40">Previous</button>
+              <button type="button" disabled={ledgerLoading || ledgerPage >= ledger.pagination.totalPages} onClick={() => setLedgerPage((value) => value + 1)} className="rounded-md border border-slate-200 px-3 py-2 text-sm disabled:opacity-40">Next</button>
             </div>
           </div>
         )}

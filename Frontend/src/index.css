@@ -653,7 +653,7 @@ body .zea-login-field input::placeholder {
   }
 }
 
-/* Readability pass: gently enlarge compact UI copy without changing layout. */
+/* Shared application typography scale (aligned with Credits Manager). */
 body {
   font-size: 15px;
   line-height: 1.55;
@@ -661,7 +661,7 @@ body {
 
 body .text-xs {
   font-size: 0.8125rem !important;
-  line-height: 1.35rem !important;
+  line-height: 1.25rem !important;
 }
 
 body .text-sm {
@@ -670,36 +670,85 @@ body .text-sm {
 }
 
 body [class~="text-[8px]"],
-body [class~="text-[9px]"] {
-  font-size: 0.625rem !important;
-  line-height: 0.95rem !important;
-}
-
+body [class~="text-[9px]"],
 body [class~="text-[10px]"] {
-  font-size: 0.71875rem !important;
-  line-height: 1.05rem !important;
+  font-size: 0.8125rem !important;
+  line-height: 1.25rem !important;
 }
 
 body [class~="text-[11px]"] {
-  font-size: 0.75rem !important;
-  line-height: 1.15rem !important;
+  font-size: 0.8125rem !important;
+  line-height: 1.25rem !important;
+}
+
+body .text-md,
+body .text-base {
+  font-size: 1rem !important;
+  line-height: 1.5rem !important;
+}
+
+body .text-lg {
+  font-size: 1.25rem !important;
+  line-height: 1.75rem !important;
+}
+
+body .text-xl {
+  font-size: 1.5rem !important;
+  line-height: 2rem !important;
+}
+
+/* Compact card/section headings use the same 16px size as sidebar menu items. */
+body h2.text-xs,
+body h3.text-xs,
+body h2.text-sm,
+body h3.text-sm,
+body h2.text-md,
+body h3.text-md,
+body h2[class~="text-[9px]"],
+body h3[class~="text-[9px]"],
+body h2[class~="text-[10px]"],
+body h3[class~="text-[10px]"],
+body h2[class~="text-[11px]"],
+body h3[class~="text-[11px]"] {
+  font-size: 1rem !important;
+  line-height: 1.5rem !important;
 }
 
 body input,
 body select,
 body textarea {
-  font-size: 0.875rem !important;
-  line-height: 1.4rem !important;
+  font-size: 0.9375rem !important;
+  line-height: 1.5rem !important;
 }
 
-body th,
-body td {
+body table thead th {
   font-size: 0.8125rem;
-  line-height: 1.35rem;
+  line-height: 1.25rem;
+}
+
+body table tbody td {
+  font-size: 0.9375rem;
+  line-height: 1.5rem;
 }
 
 body button {
-  line-height: 1.3rem;
+  font-size: 0.9375rem;
+  line-height: 1.5rem;
+}
+
+body [role="tab"],
+body [role="menuitem"],
+body .zea-phone-tab {
+  font-size: 0.9375rem !important;
+  line-height: 1.5rem !important;
+}
+
+body .rounded-full.text-xs,
+body .rounded-full[class~="text-[9px]"],
+body .rounded-full[class~="text-[10px]"],
+body .rounded-full[class~="text-[11px]"] {
+  font-size: 0.8125rem !important;
+  line-height: 1.1rem !important;
 }
 
 /* Themed table grid and non-invasive column resize handles. */
@@ -1286,6 +1335,10 @@ html.dark body .zea-phone-tabs-header .zea-phone-tab-active {
   color: #ffd45f !important;
   border-bottom-color: #dfa822 !important;
   background: rgba(223, 168, 34, 0.12) !important;
+}
+
+html.dark body .zea-platform-available-balance {
+  color: #fff3c4 !important;
 }
 
 body .zea-login .zea-login-field input,

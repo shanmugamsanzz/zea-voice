@@ -210,7 +210,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
       {/* Desktop Persistent Sidebar */}
       {role === 'SUPER_ADMIN' ? (
         <aside className={`${isSidebarMinimized ? 'w-20' : 'w-64'} bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-300 hidden md:flex flex-col justify-between shrink-0 h-full border-r border-slate-200 dark:border-slate-850 transition-all duration-300`}>
-          <div className="flex flex-col flex-1 overflow-y-auto">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             {/* Brand Logo Header */}
             <div className={`relative flex items-center justify-center shrink-0 border-b border-slate-100 dark:border-slate-800/40 ${isSidebarMinimized ? 'p-4' : 'p-6'}`}>
               <div className="flex items-center justify-center">
@@ -226,7 +226,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
               </button>
             </div>
 
-            <nav className="flex-1 px-4 py-6 space-y-0.5">
+            <nav className="min-h-0 flex-1 overflow-y-auto px-4 py-6 space-y-0.5">
               {superAdminItems.map((item) => {
                 const Icon = item.icon;
                 const isActive = view === item.viewId || view.startsWith(item.viewId + '/');
@@ -282,7 +282,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
       ) : (
         /* Zea Voice Light Sidebar (Competitor View) */
         <aside className={`${isSidebarMinimized ? 'w-20' : 'w-64'} bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-300 hidden md:flex flex-col justify-between shrink-0 h-full border-r border-slate-200 dark:border-slate-850 transition-all duration-300`}>
-          <div className="flex flex-col flex-1 overflow-y-auto">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             {/* Brand Logo Header */}
             <div className={`relative flex items-center justify-center shrink-0 border-b border-slate-100 dark:border-slate-800/40 ${isSidebarMinimized ? 'p-4' : 'p-6'}`}>
               <div className="flex items-center justify-center">
@@ -314,7 +314,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
             </div>
 
             {/* Navigation categorized list */}
-            <nav className={`flex-1 py-6 space-y-5 ${isSidebarMinimized ? 'px-2' : 'px-4'}`}>
+            <nav className={`min-h-0 flex-1 overflow-y-auto py-6 space-y-5 ${isSidebarMinimized ? 'px-2' : 'px-4'}`}>
               {zeaCategories.map((category) => (
                 <div key={category.title} className="space-y-0.5">
                   {!isSidebarMinimized && (
@@ -370,13 +370,13 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
       {mobileMenuOpen && (
         <>
           <div className="fixed inset-0 bg-slate-900/60 z-40 md:hidden transition-opacity duration-200" onClick={() => setMobileMenuOpen(false)} />
-          <aside className="fixed left-0 top-0 bottom-0 w-64 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-300 z-50 md:hidden flex flex-col justify-between py-6 shadow-2xl animate-in slide-in-from-left duration-250 border-r border-slate-200 dark:border-slate-850">
-            <div className="flex flex-col flex-1 overflow-y-auto">
-              <div className="p-6 flex items-center justify-center shrink-0 border-b border-slate-100 dark:border-slate-800/40 mb-4">
+          <aside className="fixed left-0 top-0 bottom-0 w-64 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-300 z-50 md:hidden flex flex-col justify-between shadow-2xl animate-in slide-in-from-left duration-250 border-r border-slate-200 dark:border-slate-850">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+              <div className="p-6 flex items-center justify-center shrink-0 border-b border-slate-100 dark:border-slate-800/40">
                 <img src={zeaVoiceBrand} alt="Zea Voice" className="h-18 w-48 object-contain object-center" />
               </div>
 
-              <nav className="flex-1 px-4 space-y-6">
+              <nav className="min-h-0 flex-1 overflow-y-auto px-4 py-4 space-y-6">
                 {role === 'SUPER_ADMIN' ? (
                   <div className="space-y-0.5">
                     {superAdminItems.map((item) => {
