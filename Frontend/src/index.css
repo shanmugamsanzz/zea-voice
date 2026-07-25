@@ -1240,7 +1240,8 @@ html.dark body .zea-premium-shell aside .zea-sidebar-profile-avatar {
 html.dark body .zea-company-actions-trigger:hover,
 html.dark body .zea-user-actions-trigger:hover,
 html.dark body .zea-provider-actions-trigger:hover,
-html.dark body .zea-carrier-actions-trigger:hover {
+html.dark body .zea-carrier-actions-trigger:hover,
+html.dark body .zea-table-actions-trigger:hover {
   color: #ffe28a !important;
   background: rgba(223, 168, 34, 0.16) !important;
   border-color: rgba(223, 168, 34, 0.48) !important;
@@ -1249,7 +1250,8 @@ html.dark body .zea-carrier-actions-trigger:hover {
 html.dark body .zea-company-actions-menu,
 html.dark body .zea-user-actions-menu,
 html.dark body .zea-provider-actions-menu,
-html.dark body .zea-carrier-actions-menu {
+html.dark body .zea-carrier-actions-menu,
+html.dark body .zea-table-actions-menu {
   background: #10110f !important;
   border-color: rgba(223, 168, 34, 0.32) !important;
 }
@@ -1257,9 +1259,33 @@ html.dark body .zea-carrier-actions-menu {
 html.dark body .zea-company-actions-menu [role="menuitem"]:hover,
 html.dark body .zea-user-actions-menu [role="menuitem"]:hover,
 html.dark body .zea-provider-actions-menu [role="menuitem"]:hover,
-html.dark body .zea-carrier-actions-menu [role="menuitem"]:hover {
+html.dark body .zea-carrier-actions-menu [role="menuitem"]:hover,
+html.dark body .zea-table-actions-menu [role="menuitem"]:hover {
   color: #ffe28a !important;
   background: rgba(223, 168, 34, 0.16) !important;
+}
+
+html.dark body .zea-phone-tabs-header {
+  padding: 0.45rem 0.65rem 0;
+  border: 1px solid rgba(223, 168, 34, 0.2) !important;
+  border-bottom-color: rgba(223, 168, 34, 0.5) !important;
+  border-radius: 0.75rem 0.75rem 0 0;
+  background: #11120f !important;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.2);
+}
+
+html.dark body .zea-phone-tabs-header .zea-phone-tab {
+  color: #f4e8c5 !important;
+}
+
+html.dark body .zea-phone-tabs-header .zea-phone-tab:hover {
+  color: #fff4cf !important;
+}
+
+html.dark body .zea-phone-tabs-header .zea-phone-tab-active {
+  color: #ffd45f !important;
+  border-bottom-color: #dfa822 !important;
+  background: rgba(223, 168, 34, 0.12) !important;
 }
 
 body .zea-login .zea-login-field input,

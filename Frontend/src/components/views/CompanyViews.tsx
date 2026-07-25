@@ -5,6 +5,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { useAppState } from '../../store/AppState';
+import { TableActionsMenu } from '../common/TableActionsMenu';
 import { COMPLETED_CALL_LOGS } from '../../lib/mockData';
 import { VoiceAgent, Campaign, PhoneNumber } from '../../types';
 import { 
@@ -1268,7 +1269,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                           <th className="pb-3 text-right">Dial Progress</th>
                           <th className="pb-3 text-right">Success Convert</th>
                           <th className="pb-3 pl-4">Status</th>
-                          <th className="pb-3 text-right">Actions</th>
+                          <th className="pb-3 text-right"><span className="sr-only">Actions</span></th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 font-semibold">
@@ -1301,19 +1302,20 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                                 </span>
                               </td>
                               <td className="py-3.5 text-right">
-                                <div className="flex justify-end items-center space-x-1.5">
-                                  <button
-                                    onClick={() => toggleCampaignStatus(c.id)}
-                                    className={`p-1.5 rounded-lg border transition cursor-pointer ${
-                                      c.status === 'running' 
-                                        ? 'bg-amber-50 border-amber-100 text-amber-600 hover:bg-amber-100' 
-                                        : 'bg-emerald-50 border-emerald-100 text-emerald-600 hover:bg-emerald-100'
-                                    }`}
-                                  >
-                                    {c.status === 'running' ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-                                  </button>
-                                  {!isReadOnly && <button onClick={() => void deleteCampaign(c.id)} className="p-1.5 bg-slate-50 hover:bg-rose-50 border border-slate-200 rounded-lg text-slate-400 hover:text-rose-600 transition cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>}
-                                </div>
+                                <TableActionsMenu
+                                  ariaLabel={`Actions for ${c.name}`}
+                                  actions={[
+                                    {
+                                      label: c.status === 'running' ? 'Pause' : 'Resume',
+                                      onClick: () => toggleCampaignStatus(c.id),
+                                    },
+                                    ...(!isReadOnly ? [{
+                                      label: 'Delete',
+                                      onClick: () => void deleteCampaign(c.id),
+                                      danger: true,
+                                    }] : []),
+                                  ]}
+                                />
                               </td>
                             </tr>
                           );
@@ -1362,7 +1364,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                     <th className="pb-3">Slot</th>
                     <th className="pb-3">End Date</th>
                     <th className="pb-3">Status</th>
-                    <th className="pb-3 text-right">Actions</th>
+                    <th className="pb-3 text-right"><span className="sr-only">Actions</span></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-semibold text-slate-700">
@@ -1412,31 +1414,21 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                         </span>
                       </td>
 
-                      {/* Actions */}
                       <td className="py-3.5 text-right">
-                        <div className="flex justify-end items-center space-x-2">
-                          {/* Play/Pause */}
-                          <button
-                            onClick={() => toggleRealtimeStatus(rt.id)}
-                            className="p-1 rounded text-amber-500 hover:bg-amber-50 transition cursor-pointer"
-                            title={rt.status === 'running' ? 'Pause listener' : 'Resume listener'}
-                          >
-                            {rt.status === 'running' ? (
-                              <Pause className="w-4 h-4 text-amber-600" />
-                            ) : (
-                              <Play className="w-4 h-4 text-emerald-600" />
-                            )}
-                          </button>
-
-                          {/* Delete */}
-                          {!isReadOnly && <button
-                            onClick={() => void deleteRealtimeCampaign(rt.id)}
-                            className="p-1 rounded text-rose-500 hover:bg-rose-50 transition cursor-pointer"
-                            title="Deactivate & Delete"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>}
-                        </div>
+                        <TableActionsMenu
+                          ariaLabel={`Actions for ${rt.name}`}
+                          actions={[
+                            {
+                              label: rt.status === 'running' ? 'Pause Listener' : 'Resume Listener',
+                              onClick: () => toggleRealtimeStatus(rt.id),
+                            },
+                            ...(!isReadOnly ? [{
+                              label: 'Deactivate & Delete',
+                              onClick: () => void deleteRealtimeCampaign(rt.id),
+                              danger: true,
+                            }] : []),
+                          ]}
+                        />
                       </td>
                     </tr>
                   ))}
@@ -3869,7 +3861,7 @@ function CompanyPhoneNumbersView({ phoneNumbers, setPhoneNumbers, agents }: Phon
               <th className="pb-3">Type</th>
               <th className="pb-3">Active Routing Mapping</th>
               <th className="pb-3">Monthly Lease Cost</th>
-              <th className="pb-3 text-right">Actions</th>
+              <th className="pb-3 text-right"><span className="sr-only">Actions</span></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 font-semibold">
@@ -3889,16 +3881,20 @@ function CompanyPhoneNumbersView({ phoneNumbers, setPhoneNumbers, agents }: Phon
                 <td className="py-3.5 font-mono text-slate-600">₹{num.monthlyCost.toFixed(2)}/mo</td>
                 <td className="py-3.5 text-right">
                   {!isReadOnly ? (
-                    <select
-                      value={num.assignedTo || ''}
-                      onChange={(e) => assignAgentToNum(num.id, e.target.value)}
-                      className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 font-semibold text-slate-700 outline-none focus:bg-white text-xs cursor-pointer"
-                    >
-                      <option value="">-- Reassign Route --</option>
-                      {agents.map(a => (
-                        <option key={a.id} value={agentLabelShort(a.name)}>{a.name}</option>
-                      ))}
-                    </select>
+                    <TableActionsMenu
+                      ariaLabel={`Routing actions for ${num.number}`}
+                      actions={[
+                        {
+                          label: 'Clear Route',
+                          onClick: () => assignAgentToNum(num.id, ''),
+                          disabled: !num.assignedTo,
+                        },
+                        ...agents.map((agent) => ({
+                          label: `Assign: ${agentLabelShort(agent.name)}`,
+                          onClick: () => assignAgentToNum(num.id, agentLabelShort(agent.name)),
+                        })),
+                      ]}
+                    />
                   ) : (
                     <span className="text-slate-400 italic text-[11px]">Read Only</span>
                   )}
