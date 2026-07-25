@@ -3,6 +3,20 @@ import { AppError } from '../middleware/errors.js';
 import { providerAdapterRegistry } from '../voice/providers/registry.js';
 import { registerImplementedProviderAdapters } from '../voice/providers/defaults.js';
 import { normalizeInterruptionSettings } from '../voice/interruption/interruption-config.js';
+import { normalizeInteractionSettings } from '../voice/interaction/interaction-config.js';
+import { normalizeCallbackSettings } from '../voice/interaction/callback-config.js';
+
+function normalizedAgentSettings(settings, interruptionSensitivity) {
+  try {
+    return normalizeCallbackSettings(
+      normalizeInteractionSettings(normalizeInterruptionSettings(settings, interruptionSensitivity)),
+    );
+  } catch (error) {
+    throw new AppError(400, error.message, error.code ?? 'VOICE_AGENT_SETTINGS_INVALID', {
+      field: error.field ?? 'settings',
+    });
+  }
+}
 
 const select = `SELECT a.*, pn.e164 AS phone_number,
   sp.name AS stt_provider_name, sm.display_name AS stt_model_name,
@@ -92,7 +106,7 @@ export function createAgent(auth, input) { return withTenantContext(auth, async 
   await withPlatformAdminContext(auth.userId, (platformClient) => validateAgentRuntimeModels(platformClient, input));
   await validatePhone(client, auth.tenantId, input.phoneNumberId);
   try {
-    const settings = normalizeInterruptionSettings(input.settings, input.interruptionSensitivity);
+    const settings = normalizedAgentSettings(input.settings, input.interruptionSensitivity);
     const created = (await client.query(`INSERT INTO voice_agents (tenant_id,workspace_id,name,description,goal,language,usage_direction,status,phone_number_id,
       stt_model_id,llm_model_id,tts_model_id,voice_id,prompt,welcome_message,temperature,interruption_sensitivity,
       silence_timeout_ms,inactivity_timeout_seconds,settings,created_by,updated_by)
@@ -115,7 +129,7 @@ export function updateAgent(auth, id, input) { return withTenantContext(auth, as
     voiceId:input.voiceId??before.voice_id,prompt:input.prompt??before.prompt,welcomeMessage:Object.hasOwn(input,'welcomeMessage')?input.welcomeMessage:before.welcome_message,
     temperature:input.temperature??Number(before.temperature),interruptionSensitivity:input.interruptionSensitivity??Number(before.interruption_sensitivity),
     silenceTimeoutMs:input.silenceTimeoutMs??before.silence_timeout_ms,inactivityTimeoutSeconds:input.inactivityTimeoutSeconds??before.inactivity_timeout_seconds,
-    settings:normalizeInterruptionSettings(input.settings??before.settings,
+    settings:normalizedAgentSettings(input.settings??before.settings,
       input.interruptionSensitivity??Number(before.interruption_sensitivity)) };
   await withPlatformAdminContext(auth.userId, (platformClient) => validateAgentRuntimeModels(platformClient, value));
   await validatePhone(client,auth.tenantId,value.phoneNumberId);

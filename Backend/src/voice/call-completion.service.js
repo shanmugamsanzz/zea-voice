@@ -2,7 +2,7 @@ import { withAuthServiceContext } from '../infrastructure/database-context.js';
 import { activeCallSessions } from './call-session-store.js';
 import { reportPostCall } from './integrations/postcall.service.js';
 
-const terminalStatuses = new Set(['completed', 'failed', 'canceled']);
+const terminalStatuses = new Set(['completed', 'failed', 'canceled', 'manual_follow_up_required']);
 const wholeNumber = (value) => Math.max(0, Math.round(Number(value) || 0));
 
 function terminalStatus(outcome) {
@@ -69,6 +69,24 @@ async function persistCompletion(input, dependencies) {
   });
 }
 
+async function persistManualFollowUp(callId, endedAt, dependencies) {
+  const contextRunner = dependencies.contextRunner ?? withAuthServiceContext;
+  return contextRunner(async (client) => {
+    await client.query(`UPDATE campaign_task_attempts
+      SET status='manual_follow_up_required'::campaign_attempt_status,
+          outcome='manual_follow_up_required', ended_at=COALESCE(ended_at,$2),
+          error_message=NULL
+      WHERE call_session_id=$1`, [callId, endedAt]);
+    await client.query(`UPDATE campaign_tasks t
+      SET status='manual_follow_up_required'::campaign_task_status,
+          final_outcome='manual_follow_up_required', completed_at=COALESCE(completed_at,$2),
+          queue_reason='ready', last_error=NULL
+      FROM campaign_task_attempts a
+      WHERE a.task_id=t.id AND a.call_session_id=$1
+        AND t.status NOT IN ('canceled','archived')`, [callId, endedAt]);
+  });
+}
+
 async function persistPostCallResult(callId, postCall, dependencies) {
   const contextRunner = dependencies.contextRunner ?? withAuthServiceContext;
   return contextRunner(async (client) => client.query(
@@ -89,7 +107,7 @@ export async function completeVoiceCall(input, dependencies = {}) {
   if (!(endedAt instanceof Date) || Number.isNaN(endedAt.getTime())) throw new TypeError('endedAt must be a valid Date');
 
   if (!input.controller.terminal) {
-    if (status === 'completed') await input.controller.complete(reason, endedAt.getTime());
+    if (status === 'completed' || status === 'manual_follow_up_required') await input.controller.complete(reason, endedAt.getTime());
     else await input.controller.fail(reason, endedAt.getTime());
   }
   const adapterCleanup = await closeAdapters(input.adapters);
@@ -98,6 +116,11 @@ export async function completeVoiceCall(input, dependencies = {}) {
     callId: input.controller.callSession.id, status, reason, endedAt, usage, adapterCleanup,
     metrics: input.metrics ?? {},
   }, dependencies);
+  if (!persisted.idempotent && status === 'manual_follow_up_required') {
+    await (dependencies.persistManualFollowUp ?? persistManualFollowUp)(
+      input.controller.callSession.id, endedAt, dependencies,
+    );
+  }
   activeCallSessions.delete(input.controller.callSession.id);
 
   let postCall = { attempted: false, delivered: false, reason: 'already_finalized' };

@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Activity, PhoneOff, Tv } from 'lucide-react';
 import { apiRequest, isAbortError } from '../../lib/api';
 
-type CallStatus = 'queued' | 'ringing' | 'connected' | 'completed' | 'failed' | 'busy' | 'no_answer' | 'canceled';
+type CallStatus = 'queued' | 'ringing' | 'connected' | 'completed' | 'failed' | 'busy' | 'no_answer' | 'canceled' | 'manual_follow_up_required';
 
 interface CallItem {
   id: string;

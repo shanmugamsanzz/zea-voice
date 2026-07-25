@@ -118,6 +118,21 @@ export function saveVoiceCallPreCallResult(callId, preCall, dependencies = {}) {
   });
 }
 
+export function saveVoiceCallContextResolution(callId, resolution, dependencies = {}) {
+  const contextRunner = dependencies.contextRunner ?? withAuthServiceContext;
+  return contextRunner(async (client) => {
+    const result = await client.query(
+      `UPDATE call_sessions
+          SET provider_metadata=jsonb_set(COALESCE(provider_metadata,'{}'::jsonb),'{conversationContext}',$2::jsonb,true)
+        WHERE id=$1 AND ended_at IS NULL
+        RETURNING *`,
+      [callId, JSON.stringify(resolution)],
+    );
+    if (!result.rowCount) throw new AppError(404, 'Active call session was not found', 'VOICE_CALL_SESSION_NOT_FOUND');
+    return map(result.rows[0], false);
+  });
+}
+
 export class ActiveCallSessionStore {
   #sessions = new Map();
 

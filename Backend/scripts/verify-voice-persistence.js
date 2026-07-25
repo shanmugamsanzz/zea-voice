@@ -7,7 +7,7 @@ process.env.REDIS_HOST ??= '127.0.0.1';
 const { executePreCall } = await import('../src/voice/integrations/precall.service.js');
 const { reportPostCall } = await import('../src/voice/integrations/postcall.service.js');
 const { executeAgentTool } = await import('../src/voice/tools/tool-executor.service.js');
-const { saveVoiceCallPreCallResult } = await import('../src/voice/call-session-store.js');
+const { saveVoiceCallContextResolution, saveVoiceCallPreCallResult } = await import('../src/voice/call-session-store.js');
 
 const variable = (name) => '$' + '{' + name + '}';
 const runtimeProfile = {
@@ -80,6 +80,26 @@ const savedCall = await saveVoiceCallPreCallResult(call.id, preCall, {
   }),
 });
 assert.equal(savedCall.providerMetadata.preCall.context.customer_name, 'Shanmugam');
+
+const contextResolution = {
+  contextId: 'hospital:contact:crm-123', identity: 'contact:crm-123',
+  namespace: 'hospital', source: 'precall_crm_id', direction: 'inbound',
+};
+const contextCall = await saveVoiceCallContextResolution(call.id, contextResolution, {
+  contextRunner: async (operation) => operation({
+    async query(sql, values) {
+      assert.ok(sql.includes("'{conversationContext}'"));
+      return { rowCount: 1, rows: [{
+        id: call.id, tenant_id: 'tenant-a', workspace_id: 'workspace-a', provider_call_id: 'plivo-1',
+        agent_id: 'agent-1', from_number: call.from, to_number: call.to, direction: 'inbound',
+        status: 'connected', provider_metadata: {
+          ...savedMetadata, conversationContext: JSON.parse(values[1]),
+        },
+      }] };
+    },
+  }),
+});
+assert.equal(contextCall.providerMetadata.conversationContext.contextId, 'hospital:contact:crm-123');
 
 let toolRequest;
 const toolResult = await executeAgentTool(runtimeProfile, call, {

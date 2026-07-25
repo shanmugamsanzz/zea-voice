@@ -52,6 +52,13 @@ const duplicate = await createPublicTask(auth, 'execution-100', input, dependenc
 })));
 assert.equal(duplicate.created, false);
 
+const contextInput = { ...input, context_id: 'crm:lead-123' };
+const contextual = await createPublicTask(auth, 'execution-context', contextInput, dependencies(async (...args) => ({
+  created: true,
+  task: { id: 'task-context', phone: input.phone, context: args[2].context },
+})));
+assert.equal(contextual.task.context.context_id, 'crm:lead-123');
+
 async function expectCode(changes, code, customAuth = auth) {
   await assert.rejects(
     createPublicTask(customAuth, 'execution-200', { ...input, ...changes }, dependencies(async () => ({

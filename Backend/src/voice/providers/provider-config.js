@@ -1,6 +1,7 @@
 import { withPlatformAdminContext } from '../../infrastructure/database-context.js';
 import { AppError } from '../../middleware/errors.js';
 import { decryptCredential } from '../../security/credential-crypto.js';
+import { resolveInteractionConfiguration } from '../interaction/interaction-config.js';
 
 const defaultContextRunner = (operation) => withPlatformAdminContext(null, operation);
 
@@ -107,7 +108,7 @@ const sttSettingKeys = [
 ];
 const ttsSettingKeys = [
   'ttsAmbienceType', 'ttsSpeed', 'ttsStyle', 'ttsLanguage', 'ttsStability',
-  'ttsSimilarityBoost', 'ttsEmotion', 'ttsVolume', 'pronunciationGroups',
+  'ttsSimilarityBoost', 'ttsEmotion', 'ttsVolume',
 ];
 
 const parameterSubquery = (providerAlias) => `COALESCE((SELECT jsonb_agg(jsonb_build_object(
@@ -142,6 +143,23 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
             FROM agent_tools t
            WHERE t.tenant_id=a.tenant_id AND t.agent_id=a.id
              AND t.status='active' AND t.deleted_at IS NULL), '[]'::jsonb) tools,
+          COALESCE((SELECT jsonb_agg(jsonb_build_object(
+            'id', pg.id, 'name', pg.name, 'language', pg.language,
+            'status', pg.status, 'priority', apg.priority,
+            'rules', COALESCE((SELECT jsonb_agg(jsonb_build_object(
+              'id', pr.id, 'sourceText', pr.source_text, 'spokenText', pr.spoken_text,
+              'matchType', pr.match_type, 'caseSensitive', pr.case_sensitive,
+              'priority', pr.priority, 'enabled', pr.enabled
+            ) ORDER BY pr.priority, length(pr.source_text) DESC, pr.id)
+              FROM pronunciation_rules pr
+             WHERE pr.tenant_id=pg.tenant_id AND pr.group_id=pg.id
+               AND pr.enabled=true AND pr.deleted_at IS NULL), '[]'::jsonb)
+          ) ORDER BY apg.priority, apg.created_at, pg.id)
+            FROM agent_pronunciation_groups apg
+            JOIN pronunciation_groups pg
+              ON pg.tenant_id=apg.tenant_id AND pg.id=apg.group_id
+           WHERE apg.tenant_id=a.tenant_id AND apg.agent_id=a.id
+             AND pg.status='active' AND pg.deleted_at IS NULL), '[]'::jsonb) pronunciation_groups,
           COALESCE((SELECT jsonb_agg(jsonb_build_object(
             'id', kb.id, 'name', kb.name, 'description', kb.description,
             'usageDirection', akb.usage_direction, 'priority', akb.priority,
@@ -180,6 +198,7 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
     }
     const row = result.rows[0];
     const settings = row.settings ?? {};
+    const interaction = resolveInteractionConfiguration(settings);
     const sttRuntimeSettings = selectedSettings(settings, sttSettingKeys);
     const ttsRuntimeSettings = {
       ...selectedSettings(settings, ttsSettingKeys),
@@ -210,9 +229,9 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
           listener: sttRuntimeSettings,
           speaker: ttsRuntimeSettings,
           interaction: {
-            greetingMode: settings.greetingMode ?? null,
-            cachePolicy: settings.cachePolicy ?? null,
-            contextId: settings.contextId ?? null,
+            greetingMode: interaction.greetingMode,
+            cachePolicy: interaction.cachePolicy,
+            contextId: interaction.contextId,
             silentMessage: settings.silentMessage ?? '',
           },
         },
@@ -223,6 +242,7 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
         tts: provider(row, 'tts', decrypt, ttsRuntimeSettings),
       },
       knowledgeBases: row.knowledge_bases ?? [],
+      pronunciation: { groups: row.pronunciation_groups ?? [] },
       tools: tools(row.tools, decrypt),
       integrations: integrationConfiguration(settings),
     };

@@ -10,6 +10,7 @@ import { apiRequest, uploadApiFormData } from '../../lib/api';
 import { KnowledgeReviewPanel } from './KnowledgeReviewPanel';
 import { KnowledgePublishPanel } from './KnowledgePublishPanel';
 import { DocumentVersionPanel } from './DocumentVersionPanel';
+import { PronunciationGroupManager } from './PronunciationGroupManager';
 import { 
   Bot, 
   Settings, 
@@ -99,6 +100,20 @@ function formatFileSize(bytes: number) {
   if (!Number.isFinite(bytes) || bytes <= 0) return 'Size unavailable';
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function normalizeGreetingMode(value: unknown): 'agent_initiates' | 'user_initiates' {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return normalized === 'user_initiates' || normalized === 'user initiates'
+    ? 'user_initiates'
+    : 'agent_initiates';
+}
+
+function normalizeCachePolicy(value: unknown): 'persistent_24h' | 'session_only' | 'disabled' {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (normalized === 'session_only' || normalized === 'session only') return 'session_only';
+  if (normalized === 'disabled' || normalized === 'disable' || normalized === 'none') return 'disabled';
+  return 'persistent_24h';
 }
 
 interface KnowledgeBaseApiData {
@@ -263,9 +278,17 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       interruptionSensitivityLabel: base.interruptionSensitivityLabel || 'Medium (ideal for regular conversations)',
       llmProvider: base.llmProvider || 'Gemini',
       llmModel: base.llmModel || 'gemini-2.5-flash',
-      greetingMode: base.greetingMode || 'Agent Initiates (Standard)',
-      cachePolicy: base.cachePolicy || '24h Persistent',
-      contextId: base.contextId || 'Optional',
+      greetingMode: normalizeGreetingMode(base.greetingMode),
+      cachePolicy: normalizeCachePolicy(base.cachePolicy),
+      contextId: base.contextId || '',
+      callbackEnabled: base.callbackEnabled !== undefined ? base.callbackEnabled : true,
+      callbackMinimumDelaySeconds: base.callbackMinimumDelaySeconds ?? 30,
+      callbackMaximumDelayDays: base.callbackMaximumDelayDays ?? 30,
+      callbackCloseAfterScheduling: base.callbackCloseAfterScheduling !== undefined ? base.callbackCloseAfterScheduling : true,
+      callbackConfirmationInstructions: base.callbackConfirmationInstructions || 'Briefly confirm the scheduled callback time in the customer language.',
+      callbackClarificationInstructions: base.callbackClarificationInstructions || 'Ask the caller for a clear relative callback time.',
+      callbackFailureInstructions: base.callbackFailureInstructions || 'Explain briefly that the callback could not be scheduled and do not promise it.',
+      callbackFollowUpOpeningInstructions: base.callbackFollowUpOpeningInstructions || 'Mention that the caller requested this callback and ask whether now is a good time to continue.',
       welcomeMessage: base.welcomeMessage || '',
       inactivityTimeout: base.inactivityTimeout !== undefined ? base.inactivityTimeout : 5,
       silentMessage: base.silentMessage || "I can't hear you.Are you still on the call?",
@@ -314,6 +337,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const [sttModelId, setSttModelId] = useState('');
   const [llmModelId, setLlmModelId] = useState('');
   const [ttsModelId, setTtsModelId] = useState('');
+  const [pronunciationGroupIds, setPronunciationGroupIds] = useState<string[]>([]);
   const [newReason, setNewReason] = useState('');
   const [newInterruptionTrigger, setNewInterruptionTrigger] = useState('');
 
@@ -330,6 +354,9 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       welcomeMessage: value.welcomeMessage ?? '', inactivityTimeout: value.inactivityTimeoutSeconds,
       createdAt: value.createdAt, updatedAt: value.updatedAt,
       totalCalls: value.metrics.totalCalls, avgDuration: value.metrics.averageDurationSeconds, successRate: value.metrics.successRate,
+      greetingMode: normalizeGreetingMode(value.settings.greetingMode),
+      cachePolicy: normalizeCachePolicy(value.settings.cachePolicy),
+      contextId: String(value.settings.contextId ?? '').trim(),
     }));
     setPhoneNumberId(value.phoneNumberId ?? '');
     setSttModelId(value.stt.modelId); setLlmModelId(value.llm.modelId); setTtsModelId(value.tts.modelId);
@@ -549,11 +576,18 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const saveAgent = async () => {
     if (isReadOnly || saving) return;
     if (!sttModelId || !llmModelId || !ttsModelId) { setError('Connected STT, LLM and TTS models are required.'); return; }
+    if ((agent.callbackMinimumDelaySeconds ?? 30) < 30 || (agent.callbackMinimumDelaySeconds ?? 30) > 86400) {
+      setError('Minimum callback delay must be between 30 and 86,400 seconds.'); return;
+    }
+    if ((agent.callbackMaximumDelayDays ?? 30) < 1 || (agent.callbackMaximumDelayDays ?? 30) > 30) {
+      setError('Maximum callback delay must be between 1 and 30 days.'); return;
+    }
     setSaving(true); setError('');
     try {
       const {
         id: _id, name: _name, status: _status, createdAt: _createdAt, updatedAt: _updatedAt,
         totalCalls: _totalCalls, avgDuration: _avgDuration, successRate: _successRate,
+        pronunciationGroups: _legacyPronunciationGroups,
         ...agentSettings
       } = agent;
       const payload = {
@@ -567,6 +601,9 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       };
       const saved = await apiRequest<AgentApiData>(agentId ? `/agents/${agentId}` : '/agents', {
         method: agentId ? 'PUT' : 'POST', body: JSON.stringify(payload),
+      });
+      await apiRequest(`/agents/${saved.id}/pronunciation-groups`, {
+        method: 'PUT', body: JSON.stringify({ groupIds: pronunciationGroupIds }),
       });
       applyApiAgent(saved);
       onSave({ ...agent, id: saved.id, name: saved.name, status: saved.status, updatedAt: saved.updatedAt });
@@ -1492,13 +1529,13 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase">Greeting Mode</label>
                       <div className="relative">
                         <select
-                          value={agent.greetingMode || 'Agent Initiates (Standard)'}
+                          value={agent.greetingMode || 'agent_initiates'}
                           disabled={isReadOnly}
-                          onChange={(e) => setAgent({ ...agent, greetingMode: e.target.value })}
+                          onChange={(e) => setAgent({ ...agent, greetingMode: e.target.value as 'agent_initiates' | 'user_initiates' })}
                           className="w-full bg-slate-50 border border-slate-200 focus:border-pink-500 rounded-xl px-3 py-2.5 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-8"
                         >
-                          <option value="Agent Initiates (Standard)">Agent Initiates (Standard)</option>
-                          <option value="User Initiates">User Initiates</option>
+                          <option value="agent_initiates">Agent Initiates (Standard)</option>
+                          <option value="user_initiates">User Initiates</option>
                         </select>
                         <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none text-slate-400">
                           <ChevronDown className="w-3.5 h-3.5" />
@@ -1506,44 +1543,140 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       </div>
                     </div>
 
-                    {/* Cache Policy & Context ID in two cols */}
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase">Cache Policy</label>
-                        <div className="relative">
-                          <select
-                            value={agent.cachePolicy || '24h Persistent'}
-                            disabled={isReadOnly}
-                            onChange={(e) => setAgent({ ...agent, cachePolicy: e.target.value })}
-                            className="w-full bg-slate-50 border border-slate-200 focus:border-pink-500 rounded-xl px-3 py-2.5 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-8"
-                          >
-                            <option value="24h Persistent">24h Persistent</option>
-                            <option value="Session Only">Session Only</option>
-                            <option value="Disabled">Disabled</option>
-                          </select>
-                          <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none text-slate-400">
-                            <ChevronDown className="w-3.5 h-3.5" />
-                          </div>
-                        </div>
-                      </div>
-
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase">Context ID</label>
-                        <input
-                          type="text"
-                          value={agent.contextId || ''}
-                          placeholder="Optional"
-                          disabled={isReadOnly}
-                          onChange={(e) => setAgent({ ...agent, contextId: e.target.value })}
-                          className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-pink-500 rounded-xl px-3 py-2.5 text-xs font-semibold text-slate-800 transition outline-none"
-                        />
-                      </div>
-                    </div>
                   </div>
                 </div>
               </div>
               <div className="px-6 pb-6">{renderModelParameters(selectedLlmModel)}</div>
             </div>
+
+            {/* Conversation continuity and callback configuration */}
+            <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
+                <div className="flex items-center gap-3 border-b border-violet-100 bg-violet-50/50 p-5">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-violet-200 bg-violet-100 text-violet-600">
+                    <BookOpen className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-extrabold text-slate-800">Conversation Memory</h3>
+                    <p className="text-xs font-semibold text-slate-500">Control whether later calls continue the previous conversation.</p>
+                  </div>
+                </div>
+                <div className="space-y-5 p-6">
+                  <div>
+                    <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-500">Cache Policy</label>
+                    <div className="relative">
+                      <select
+                        value={agent.cachePolicy || 'persistent_24h'}
+                        disabled={isReadOnly}
+                        onChange={(event) => setAgent({ ...agent, cachePolicy: event.target.value as 'persistent_24h' | 'session_only' | 'disabled' })}
+                        className="w-full appearance-none rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 pr-10 text-xs font-semibold text-slate-800 outline-none transition focus:border-violet-500 focus:bg-white"
+                      >
+                        <option value="persistent_24h">24h Persistent + Permanent Memory</option>
+                        <option value="session_only">Current Call Only</option>
+                        <option value="disabled">Memory Disabled</option>
+                      </select>
+                      <ChevronDown className="pointer-events-none absolute right-4 top-3.5 h-4 w-4 text-slate-400" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-500">Context Namespace</label>
+                    <input
+                      type="text"
+                      value={agent.contextId || ''}
+                      placeholder="Optional, e.g. sales_lead"
+                      maxLength={160}
+                      disabled={isReadOnly || agent.cachePolicy === 'disabled'}
+                      onChange={(event) => setAgent({ ...agent, contextId: event.target.value })}
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-800 outline-none transition focus:border-violet-500 focus:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+                    />
+                    <p className="mt-2 text-[10px] font-semibold leading-relaxed text-slate-400">The backend combines this namespace with the tenant, workspace, agent and customer identity. It never shares memory across companies.</p>
+                  </div>
+                  <div className={`rounded-xl border p-4 text-[11px] font-semibold leading-relaxed ${agent.cachePolicy === 'persistent_24h' ? 'border-emerald-100 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
+                    {agent.cachePolicy === 'persistent_24h'
+                      ? 'Redis provides the 24-hour fast cache. PostgreSQL remains the permanent tenant-isolated source of truth.'
+                      : agent.cachePolicy === 'session_only'
+                        ? 'Conversation state is available only during the current call and is removed when the call ends.'
+                        : 'Previous-call context will not be loaded or saved for this agent.'}
+                  </div>
+                </div>
+              </div>
+
+              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
+                <div className="flex items-center justify-between gap-4 border-b border-pink-100 bg-pink-50/50 p-5">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-pink-200 bg-pink-100 text-pink-600">
+                      <PhoneCall className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-extrabold text-slate-800">Customer Callback</h3>
+                      <p className="text-xs font-semibold text-slate-500">Handle explicit callback requests during outbound campaigns.</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={agent.callbackEnabled !== false}
+                    disabled={isReadOnly}
+                    onClick={() => setAgent({ ...agent, callbackEnabled: agent.callbackEnabled === false })}
+                    className={`relative h-7 w-12 rounded-full transition ${agent.callbackEnabled !== false ? 'bg-pink-500' : 'bg-slate-300'} disabled:cursor-not-allowed disabled:opacity-50`}
+                  >
+                    <span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow transition-all ${agent.callbackEnabled !== false ? 'left-6' : 'left-1'}`} />
+                  </button>
+                </div>
+                <div className={`space-y-5 p-6 ${agent.callbackEnabled === false ? 'pointer-events-none opacity-45' : ''}`}>
+                  <div className="flex flex-wrap gap-2">
+                    <span className="rounded-full bg-blue-50 px-3 py-1 text-[10px] font-black uppercase text-blue-700">Outbound campaigns</span>
+                    <span className="rounded-full bg-violet-50 px-3 py-1 text-[10px] font-black uppercase text-violet-700">Code + LLM detection</span>
+                    <span className="rounded-full bg-amber-50 px-3 py-1 text-[10px] font-black uppercase text-amber-700">Uses one retry</span>
+                  </div>
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-500">Minimum Delay (seconds)</label>
+                      <input type="number" min={30} max={86400} value={agent.callbackMinimumDelaySeconds ?? 30} disabled={isReadOnly}
+                        onChange={(event) => setAgent({ ...agent, callbackMinimumDelaySeconds: Number(event.target.value) })}
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-800 outline-none focus:border-pink-500 focus:bg-white" />
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-500">Maximum Delay (days)</label>
+                      <input type="number" min={1} max={30} value={agent.callbackMaximumDelayDays ?? 30} disabled={isReadOnly}
+                        onChange={(event) => setAgent({ ...agent, callbackMaximumDelayDays: Number(event.target.value) })}
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-800 outline-none focus:border-pink-500 focus:bg-white" />
+                    </div>
+                  </div>
+                  <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <input type="checkbox" checked={agent.callbackCloseAfterScheduling !== false} disabled={isReadOnly}
+                      onChange={(event) => setAgent({ ...agent, callbackCloseAfterScheduling: event.target.checked })}
+                      className="mt-0.5 h-4 w-4 accent-pink-500" />
+                    <span><span className="block text-xs font-extrabold text-slate-700">Confirm and end the current call</span><span className="mt-1 block text-[10px] font-semibold text-slate-400">When disabled, the agent confirms the callback and continues the conversation.</span></span>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            {agent.callbackEnabled !== false && (
+              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
+                <div className="border-b border-slate-100 p-5">
+                  <h3 className="text-sm font-extrabold text-slate-800">Callback Language & Industry Instructions</h3>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">These trusted instructions are given to the selected LLM. Write them for this company and industry.</p>
+                </div>
+                <div className="grid grid-cols-1 gap-5 p-6 lg:grid-cols-2">
+                  {([
+                    ['Successful Scheduling', 'callbackConfirmationInstructions', 'Tell the agent how to confirm a successfully scheduled callback.'],
+                    ['Unclear Time', 'callbackClarificationInstructions', 'Tell the agent how to ask for a clearer callback time.'],
+                    ['Scheduling Failure', 'callbackFailureInstructions', 'Tell the agent what to say when scheduling fails or retries are exhausted.'],
+                    ['Follow-Up Opening', 'callbackFollowUpOpeningInstructions', 'Tell the agent how the next connected callback should begin.'],
+                  ] as const).map(([label, field, help]) => (
+                    <div key={field}>
+                      <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-500">{label}</label>
+                      <textarea rows={4} maxLength={2000} value={agent[field] || ''} disabled={isReadOnly}
+                        onChange={(event) => setAgent({ ...agent, [field]: event.target.value })}
+                        className="w-full resize-y rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold leading-relaxed text-slate-800 outline-none transition focus:border-pink-500 focus:bg-white" />
+                      <p className="mt-1.5 text-[10px] font-semibold text-slate-400">{help}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Welcome Message Section */}
             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs p-6 space-y-4">
@@ -1727,58 +1860,18 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
 
                 {renderModelParameters(selectedTtsModel)}
 
-                {/* Pronunciation / Punctuation Groups */}
-                <div>
-                  <label className="block text-[11px] font-black text-slate-500 mb-2 uppercase tracking-wider">
-                    PRONUNCIATION / PUNCTUATION GROUPS
-                  </label>
-                  
-                  <div className="bg-white border border-slate-200 rounded-xl p-3 flex flex-wrap items-center gap-2 shadow-2xs hover:border-pink-200 transition">
-                    {(!agent.pronunciationGroups || agent.pronunciationGroups.length === 0) ? (
-                      <span className="text-xs font-bold text-slate-400 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-100">
-                        No groups selected
-                      </span>
-                    ) : (
-                      agent.pronunciationGroups.map((group, idx) => (
-                        <span key={idx} className="text-xs font-bold text-[#ec4899] bg-pink-50 border border-pink-100 px-3 py-1.5 rounded-lg flex items-center gap-1.5">
-                          {group}
-                          {!isReadOnly && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const updated = (agent.pronunciationGroups || []).filter((_, i) => i !== idx);
-                                setAgent({ ...agent, pronunciationGroups: updated });
-                              }}
-                              className="text-pink-400 hover:text-pink-600 font-extrabold focus:outline-none"
-                            >
-                              &times;
-                            </button>
-                          )}
-                        </span>
-                      ))
-                    )}
-
-                    {!isReadOnly && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const name = prompt("Enter custom pronunciation group name:");
-                          if (name && name.trim()) {
-                            const updated = [...(agent.pronunciationGroups || []), name.trim()];
-                            setAgent({ ...agent, pronunciationGroups: updated });
-                          }
-                        }}
-                        className="w-7 h-7 rounded-full bg-slate-100 hover:bg-pink-100 text-slate-500 hover:text-pink-600 flex items-center justify-center border border-slate-200 hover:border-pink-200 transition cursor-pointer"
-                        title="Add pronunciation group"
-                      >
-                        <Plus className="w-4 h-4" />
-                      </button>
-                    )}
-                  </div>
-                  <span className="text-[10px] font-semibold text-slate-400 mt-1.5 block">
-                    Select multiple rule sets for custom word pronunciations.
-                  </span>
-                </div>
+                <PronunciationGroupManager
+                  agentId={agentId}
+                  selectedGroupIds={pronunciationGroupIds}
+                  onSelectionChange={setPronunciationGroupIds}
+                  defaultLanguage={agent.ttsLanguage || 'und'}
+                  readOnly={isReadOnly}
+                  onError={setError}
+                  onSuccess={(message) => {
+                    setSuccessMsg(message);
+                    window.setTimeout(() => setSuccessMsg(null), 3000);
+                  }}
+                />
               </div>
             </div>
 

@@ -10,6 +10,9 @@ export const publicTaskSchema = z.object({
   workspace_id: z.string().uuid(),
   tenant_id: z.string().uuid().optional(),
   organization_id: z.string().uuid().optional(),
+  context_id: z.string().trim().min(1).max(160)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:@+\/-]*$/, 'context_id contains unsupported characters')
+    .optional(),
   retries: z.number().int().min(0).max(10),
   intervals: z.array(retryInterval).max(10),
   context: z.record(z.string(), z.unknown()).default({}),

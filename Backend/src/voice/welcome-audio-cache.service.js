@@ -11,6 +11,7 @@ function cacheKey(runtimeProfile, text) {
     voiceId: runtimeProfile.agent.voiceId ?? tts.effectiveSettings?.voiceId,
     language: runtimeProfile.agent.language,
     settings: tts.effectiveSettings,
+    pronunciation: runtimeProfile.pronunciation ?? null,
     text,
   });
   const digest = crypto.createHash('sha256').update(identity).digest('hex');

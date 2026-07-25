@@ -7,7 +7,7 @@ import {
 import { apiBlobRequest, apiRequest, isAbortError } from '../../lib/api';
 
 type CallDirection = 'inbound' | 'outbound';
-type CallStatus = 'queued' | 'ringing' | 'connected' | 'completed' | 'failed' | 'busy' | 'no_answer' | 'canceled';
+type CallStatus = 'queued' | 'ringing' | 'connected' | 'completed' | 'failed' | 'busy' | 'no_answer' | 'canceled' | 'manual_follow_up_required';
 
 interface TranscriptEntry {
   id: string;
@@ -55,6 +55,7 @@ const MAX_REPORT_CALLS = 5000;
 const statusLabel: Record<CallStatus, string> = {
   queued: 'Queued', ringing: 'Ringing', connected: 'Connected', completed: 'Completed',
   failed: 'Failed', busy: 'Busy', no_answer: 'No Answer', canceled: 'Canceled',
+  manual_follow_up_required: 'Manual Follow-Up Required',
 };
 
 function timestamp(value: string, full = false) {
@@ -104,6 +105,7 @@ async function loadAllCalls(signal: AbortSignal) {
 function StatusBadge({ status }: { status: CallStatus }) {
   const style = status === 'completed' ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
     : status === 'connected' ? 'border-blue-200 bg-blue-50 text-blue-700'
+      : status === 'manual_follow_up_required' ? 'border-violet-200 bg-violet-50 text-violet-700'
       : ['failed', 'canceled'].includes(status) ? 'border-rose-200 bg-rose-50 text-rose-700'
         : ['busy', 'no_answer'].includes(status) ? 'border-amber-200 bg-amber-50 text-amber-700'
           : 'border-slate-200 bg-slate-100 text-slate-600';

@@ -29,7 +29,11 @@ export function resolveCartesiaTtsConfiguration(providerConfig) {
   const accessToken = parameter(providerConfig.parameters, 'CARTESIA_ACCESS_TOKEN', 'ACCESS_TOKEN');
   if (!apiKey && !accessToken) throw new AppError(503, 'Selected Cartesia TTS provider has no credential', 'TTS_API_KEY_MISSING');
   const version = parameter(providerConfig.parameters, 'CARTESIA_VERSION', 'API_VERSION') ?? '2026-03-01';
-  const dictionary = firstPronunciationDictionary(common.pronunciationRules, 'cartesia');
+  const dictionary = firstPronunciationDictionary(common.pronunciationRules, 'cartesia') ?? (() => {
+    const id = parameter(providerConfig.parameters,
+      'CARTESIA_PRONUNCIATION_DICTIONARY_ID', 'PRONUNCIATION_DICTIONARY_ID', 'DICTIONARY_ID');
+    return id ? { id, versionId: null, lexiconUri: null } : null;
+  })();
   return Object.freeze({ ...common, endpoint: endpoint(providerConfig.baseUrl), apiKey, accessToken, version, dictionary });
 }
 

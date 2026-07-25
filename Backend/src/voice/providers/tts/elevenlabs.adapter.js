@@ -1,6 +1,6 @@
 import { AppError } from '../../../middleware/errors.js';
 import {
-  binaryAudioEvents, createTtsRequestState, firstPronunciationDictionary, parameter,
+  binaryAudioEvents, createTtsRequestState, parameter, pronunciationDictionaries,
   requireAudioResponse, resolveCommonTtsConfiguration, synthesisInput, ttsErrorEvent, ttsFailure,
 } from './streaming-runtime.js';
 import { normalizeTtsEvent } from './tts.interface.js';
@@ -22,10 +22,23 @@ export function resolveElevenLabsTtsConfiguration(providerConfig) {
   const common = resolveCommonTtsConfiguration(providerConfig);
   const apiKey = parameter(providerConfig.parameters, 'ELEVENLABS_API_KEY', 'XI_API_KEY', 'API_KEY');
   if (!apiKey) throw new AppError(503, 'Selected ElevenLabs TTS provider has no API key', 'TTS_API_KEY_MISSING');
-  const dictionary = firstPronunciationDictionary(common.pronunciationRules, 'elevenlabs');
+  const dictionaries = pronunciationDictionaries(common.pronunciationRules, 'elevenlabs');
+  const configuredVersionId = parameter(providerConfig.parameters,
+    'ELEVENLABS_PRONUNCIATION_DICTIONARY_VERSION_ID', 'PRONUNCIATION_DICTIONARY_VERSION_ID', 'VERSION_ID');
+  if (!dictionaries.length) {
+    const id = parameter(providerConfig.parameters,
+      'ELEVENLABS_PRONUNCIATION_DICTIONARY_ID', 'PRONUNCIATION_DICTIONARY_ID', 'DICTIONARY_ID');
+    if (id) dictionaries.push({
+      id,
+      versionId: configuredVersionId,
+      lexiconUri: null,
+    });
+  } else if (configuredVersionId && !dictionaries[0].versionId) {
+    dictionaries[0] = { ...dictionaries[0], versionId: configuredVersionId };
+  }
   const url = endpoint(providerConfig.baseUrl, common.voiceId);
   url.searchParams.set('output_format', outputFormat(common.outputFormat));
-  return Object.freeze({ ...common, endpoint: url.toString(), apiKey, dictionary });
+  return Object.freeze({ ...common, endpoint: url.toString(), apiKey, dictionaries: dictionaries.slice(0, 3) });
 }
 
 export function createElevenLabsTtsAdapter({ providerConfig, runtimeContext = {} }) {
@@ -50,10 +63,10 @@ export function createElevenLabsTtsAdapter({ providerConfig, runtimeContext = {}
             speed: configuration.speed,
           },
         };
-        if (configuration.dictionary?.id) body.pronunciation_dictionary_locators = [{
-          pronunciation_dictionary_id: configuration.dictionary.id,
-          ...(configuration.dictionary.versionId ? { version_id: configuration.dictionary.versionId } : {}),
-        }];
+        if (configuration.dictionaries.length) body.pronunciation_dictionary_locators = configuration.dictionaries.map((dictionary) => ({
+          pronunciation_dictionary_id: dictionary.id,
+          ...(dictionary.versionId ? { version_id: dictionary.versionId } : {}),
+        }));
         const response = await fetchImpl(configuration.endpoint, {
           method: 'POST', signal: request.controller.signal,
           headers: { 'xi-api-key': configuration.apiKey, 'content-type': 'application/json', accept: 'audio/*' },
