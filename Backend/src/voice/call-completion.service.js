@@ -1,6 +1,7 @@
 import { withAuthServiceContext } from '../infrastructure/database-context.js';
 import { activeCallSessions } from './call-session-store.js';
 import { reportPostCall } from './integrations/postcall.service.js';
+import { queuePostCallSummary } from './postcall-summary/postcall-summary.queue.js';
 
 const terminalStatuses = new Set(['completed', 'failed', 'canceled', 'manual_follow_up_required']);
 const wholeNumber = (value) => Math.max(0, Math.round(Number(value) || 0));
@@ -125,7 +126,7 @@ export async function completeVoiceCall(input, dependencies = {}) {
 
   let postCall = { attempted: false, delivered: false, reason: 'already_finalized' };
   if (!persisted.idempotent) {
-    postCall = await reportPostCall(input.runtimeProfile, {
+    const postCallPayload = {
       event: 'call.completed',
       call: {
         id: input.controller.callSession.id,
@@ -143,7 +144,35 @@ export async function completeVoiceCall(input, dependencies = {}) {
       },
       transcript: input.controller.history,
       providerUsage: usage,
-    }, dependencies);
+    };
+    const summaryEnabled = input.runtimeProfile.agent.settings?.postCallSummaryEnabled === true;
+    if (summaryEnabled) {
+      const summaryFallbackPayload = (aiSummary) => {
+        const payload = { ...postCallPayload };
+        if (input.runtimeProfile.agent.settings?.postCallIncludeTranscript === false) delete payload.transcript;
+        if (input.runtimeProfile.agent.settings?.postCallIncludeSummary !== false) payload.aiSummary = aiSummary;
+        return payload;
+      };
+      try {
+        const queueSummary = dependencies.queuePostCallSummary ?? queuePostCallSummary;
+        const summary = await queueSummary(input.controller.callSession.id, dependencies);
+        postCall = summary.queued
+          ? {
+            attempted: false, delivered: false, reason: 'summary_queued',
+            summaryJobId: summary.job?.id ?? null,
+          }
+          : await reportPostCall(input.runtimeProfile, summaryFallbackPayload({
+            status: 'not_queued', reason: summary.reason,
+          }), dependencies);
+      } catch (summaryQueueError) {
+        postCall = await reportPostCall(input.runtimeProfile, summaryFallbackPayload({
+            status: 'queue_failed',
+            error: 'Summary queue unavailable',
+        }), dependencies);
+      }
+    } else {
+      postCall = await reportPostCall(input.runtimeProfile, postCallPayload, dependencies);
+    }
     await (dependencies.persistPostCallResult ?? persistPostCallResult)(
       input.controller.callSession.id, postCall, dependencies,
     );

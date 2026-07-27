@@ -9,6 +9,7 @@ const definitions = [
   { name: 'call-retries', displayName: 'Scheduled Call Retries' },
   { name: 'knowledge-processing', displayName: 'Knowledge PDF Processing' },
   { name: 'recording-processing', displayName: 'Call Recording Storage' },
+  { name: 'post-call-summarization', displayName: 'Post-Call AI Summarization' },
 ];
 const connection = {
   host: env.REDIS_HOST,

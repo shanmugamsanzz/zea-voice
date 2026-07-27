@@ -6,11 +6,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useAppState } from '../../store/AppState';
 import { VoiceAgent } from '../../types';
-import { apiRequest, uploadApiFormData } from '../../lib/api';
+import { apiRequest, isAbortError, uploadApiFormData } from '../../lib/api';
 import { KnowledgeReviewPanel } from './KnowledgeReviewPanel';
 import { KnowledgePublishPanel } from './KnowledgePublishPanel';
 import { DocumentVersionPanel } from './DocumentVersionPanel';
 import { PronunciationGroupManager } from './PronunciationGroupManager';
+import { AmbienceManager } from './AmbienceManager';
 import { 
   Bot, 
   Settings, 
@@ -70,6 +71,15 @@ interface ProviderModelOption {
 }
 interface AgentPhoneOption { id: string; number: string; status: string }
 
+interface AgentToolApiData {
+  id: string;
+  name: string;
+  type: string;
+  status: string;
+  description: string | null;
+  configuration: Record<string, unknown>;
+}
+
 type KnowledgeBaseStatus = 'draft' | 'processing' | 'ready' | 'partially_failed' | 'published' | 'deleting' | 'deleted';
 type KnowledgeDocumentType = 'faq' | 'catalog' | 'workflow_rules' | 'conversation_script' | 'general_knowledge';
 type SelectedKnowledgeFile = { name: string; size: number; type: string };
@@ -114,6 +124,14 @@ function normalizeCachePolicy(value: unknown): 'persistent_24h' | 'session_only'
   if (normalized === 'session_only' || normalized === 'session only') return 'session_only';
   if (normalized === 'disabled' || normalized === 'disable' || normalized === 'none') return 'disabled';
   return 'persistent_24h';
+}
+
+function parseToolJsonObject(value: string, fieldName: string): Record<string, unknown> {
+  const parsed: unknown = JSON.parse(value);
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+    throw new Error(`${fieldName} must be a JSON object.`);
+  }
+  return parsed as Record<string, unknown>;
 }
 
 interface KnowledgeBaseApiData {
@@ -296,25 +314,25 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       ttsModel: base.ttsModel || 'eleven_flash_v2_5',
       voiceId: base.voiceId || '',
       ttsAmbienceType: base.ttsAmbienceType || 'Silent (Default)',
-      ttsSpeed: base.ttsSpeed !== undefined ? base.ttsSpeed : 1,
-      ttsStyle: base.ttsStyle !== undefined ? base.ttsStyle : 0.4,
-      ttsLanguage: base.ttsLanguage || 'ta-IN',
-      ttsStability: base.ttsStability !== undefined ? base.ttsStability : 0.78,
-      ttsPrice1k: base.ttsPrice1k !== undefined ? base.ttsPrice1k : 0.015,
-      ttsSimilarityBoost: base.ttsSimilarityBoost !== undefined ? base.ttsSimilarityBoost : 0.75,
       pronunciationGroups: base.pronunciationGroups || [],
       preCallProvider: base.preCallProvider || 'Select Provider',
-      preCallPrompt: base.preCallPrompt || '',
+      preCallDescription: base.preCallDescription || base.preCallPrompt || '',
       preCallApiActive: base.preCallApiActive !== undefined ? base.preCallApiActive : true,
       preCallApiUrl: base.preCallApiUrl || '',
       preCallApiMethod: base.preCallApiMethod || 'POST',
       preCallApiHeaders: base.preCallApiHeaders || '',
-      preCallApiRequestBody: base.preCallApiRequestBody || '{ "mobile_number": "${caller}" }',
+      preCallApiRequestBody: base.preCallApiRequestBody || '{ "event": "pre_call", "direction": "${direction}", "customer_number": "${customer_number}", "caller": "${caller}", "callee": "${callee}", "call_uuid": "${call_uuid}", "agent_id": "${agent_id}", "company_id": "${company_id}", "workspace_id": "${workspace_id}" }',
       preCallApiResponseMappings: base.preCallApiResponseMappings || [],
       postCallPrompt: base.postCallPrompt || 'Use this to end the call when the task is complete, the user asks to hang up, is busy, unresponsive, sends to voicemail, is abusive, provides a time to call back later, or when explicitly instructed in the prompt.',
       postCallMessageType: base.postCallMessageType || 'Dynamic',
+      postCallStaticMessage: base.postCallStaticMessage || '',
       postCallDynamicClosing: base.postCallDynamicClosing || 'The AI agent will automatically generate a natural, contextual closing message in the customer\'s language before ending the call.',
       postCallUninterruptibleReasons: base.postCallUninterruptibleReasons || [],
+      postCallSummaryEnabled: base.postCallSummaryEnabled !== undefined ? base.postCallSummaryEnabled : false,
+      postCallSummaryModelId: base.postCallSummaryModelId || '',
+      postCallSummaryInstructions: base.postCallSummaryInstructions || 'Create a concise, factual summary of the call. Capture the customer intent, outcome, sentiment, collected information and required follow-up. Do not invent missing information.',
+      postCallIncludeTranscript: base.postCallIncludeTranscript !== undefined ? base.postCallIncludeTranscript : true,
+      postCallIncludeSummary: base.postCallIncludeSummary !== undefined ? base.postCallIncludeSummary : true,
       postCallEndpointDetailsActive: base.postCallEndpointDetailsActive !== undefined ? base.postCallEndpointDetailsActive : true,
       postCallApiMethod: base.postCallApiMethod || 'POST',
       postCallApiUrl: base.postCallApiUrl || '',
@@ -338,6 +356,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const [llmModelId, setLlmModelId] = useState('');
   const [ttsModelId, setTtsModelId] = useState('');
   const [pronunciationGroupIds, setPronunciationGroupIds] = useState<string[]>([]);
+  const [ambienceAssetId, setAmbienceAssetId] = useState<string | null>(null);
   const [newReason, setNewReason] = useState('');
   const [newInterruptionTrigger, setNewInterruptionTrigger] = useState('');
 
@@ -367,10 +386,11 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     const load = async () => {
       setLoading(true); setError('');
       try {
-        const [catalogResult, phonesResult, existingResult] = await Promise.allSettled([
+        const [catalogResult, phonesResult, existingResult, ambienceResult] = await Promise.allSettled([
           apiRequest<ProviderModelOption[]>('/catalog/providers', { zeaCache: 'reload' }),
           apiRequest<AgentPhoneOption[]>('/phone-numbers'),
           agentId ? apiRequest<AgentApiData>(`/agents/${agentId}`) : Promise.resolve(null),
+          agentId ? apiRequest<{ ambienceAssetId: string | null }>(`/agents/${agentId}/ambience`, { zeaCache: 'reload' }) : Promise.resolve(null),
         ]);
         if (catalogResult.status === 'rejected') throw catalogResult.reason;
         if (existingResult.status === 'rejected') throw existingResult.reason;
@@ -389,7 +409,15 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
             ttsProvider: '', ttsModel: '', voiceId: '',
           }));
         }
-      } catch (requestError) { if (!stopped) setError(requestError instanceof Error ? requestError.message : 'Agent configuration could not be loaded'); }
+        setAmbienceAssetId(ambienceResult.status === 'fulfilled' ? (ambienceResult.value?.ambienceAssetId ?? null) : null);
+        if (ambienceResult.status === 'rejected' && !isAbortError(ambienceResult.reason)) {
+          setError('Agent loaded, but its background ambience assignment could not be loaded.');
+        }
+      } catch (requestError) {
+        if (!stopped && !isAbortError(requestError)) {
+          setError(requestError instanceof Error ? requestError.message : 'Agent configuration could not be loaded');
+        }
+      }
       finally { if (!stopped) setLoading(false); }
     };
     void load(); return () => { stopped = true; };
@@ -409,14 +437,14 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         setTtsModelId((current) => current && !catalog.some((model) => model.id === current && model.providerType === 'tts') ? '' : current);
       })
       .catch((requestError) => {
-        if (!stopped) setError(requestError instanceof Error ? requestError.message : 'Model catalog could not be refreshed');
+        if (!stopped && !isAbortError(requestError)) setError(requestError instanceof Error ? requestError.message : 'Model catalog could not be refreshed');
       })
       .finally(() => { if (!stopped) setModelsRefreshing(false); });
     return () => { stopped = true; };
   }, [modelCatalogRefreshKey]);
 
   // Tools state
-  const [tools, setTools] = useState<Array<{ id: string; name: string; type: string; status: string; description: string | null }>>([]);
+  const [tools, setTools] = useState<AgentToolApiData[]>([]);
 
   // Real Knowledge Base state. Document upload and review actions are added in later Knowledge UI tasks.
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBaseApiData[]>([]);
@@ -452,13 +480,32 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const isKnowledgeUploading = Object.values(uploadingKnowledgeCategories).some(Boolean);
   const [newToolName, setNewToolName] = useState('');
   const [newToolType, setNewToolType] = useState('Webhook API');
+  const [newToolDescription, setNewToolDescription] = useState('');
+  const [newToolWebhookUrl, setNewToolWebhookUrl] = useState('');
+  const [newToolMethod, setNewToolMethod] = useState<'POST' | 'PUT' | 'PATCH'>('POST');
+  const [newToolTimeoutSeconds, setNewToolTimeoutSeconds] = useState('15');
+  const [newToolHeaders, setNewToolHeaders] = useState('{\n  "Content-Type": "application/json"\n}');
+  const [newToolSecretHeaders, setNewToolSecretHeaders] = useState('{}');
+  const [newToolInputSchema, setNewToolInputSchema] = useState('{\n  "type": "object",\n  "properties": {},\n  "additionalProperties": true\n}');
+  const [toolSaving, setToolSaving] = useState(false);
+  const [testingToolId, setTestingToolId] = useState<string | null>(null);
+  const [toolTestArguments, setToolTestArguments] = useState('{}');
+  const [toolTestRunning, setToolTestRunning] = useState(false);
+  const [toolTestResult, setToolTestResult] = useState<unknown>(null);
+  const [toolsLoading, setToolsLoading] = useState(false);
+  const [toolRefreshKey, setToolRefreshKey] = useState(0);
+  const [toolStatusUpdatingId, setToolStatusUpdatingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!agentId) { setTools([]); return; }
-    apiRequest<Array<{ id: string; name: string; type: string; status: string; description: string | null }>>(`/agents/${agentId}/tools`)
+    const controller = new AbortController();
+    setToolsLoading(true);
+    apiRequest<AgentToolApiData[]>(`/agents/${agentId}/tools`, { signal: controller.signal, zeaCache: toolRefreshKey > 0 ? 'reload' : 'default' })
       .then(setTools)
-      .catch((requestError) => setError(requestError instanceof Error ? requestError.message : 'Agent tools could not be loaded'));
-  }, [agentId]);
+      .catch((requestError) => { if (!isAbortError(requestError)) setError(requestError instanceof Error ? requestError.message : 'Agent tools could not be loaded'); })
+      .finally(() => { if (!controller.signal.aborted) setToolsLoading(false); });
+    return () => controller.abort();
+  }, [agentId, toolRefreshKey]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -576,6 +623,27 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const saveAgent = async () => {
     if (isReadOnly || saving) return;
     if (!sttModelId || !llmModelId || !ttsModelId) { setError('Connected STT, LLM and TTS models are required.'); return; }
+    const postCallMessageType = agent.postCallMessageType || 'Dynamic';
+    if (postCallMessageType === 'Dynamic' && !agent.postCallPrompt?.trim()) {
+      setError('Dynamic Closing Prompt is required when Message Type is Dynamic.'); return;
+    }
+    if (postCallMessageType === 'Static' && !agent.postCallStaticMessage?.trim()) {
+      setError('Static Closing Message is required when Message Type is Static.'); return;
+    }
+    if ((agent.postCallPrompt?.trim().length ?? 0) > 20_000) {
+      setError('Dynamic Closing Prompt cannot exceed 20,000 characters.'); return;
+    }
+    if ((agent.postCallStaticMessage?.trim().length ?? 0) > 10_000) {
+      setError('Static Closing Message cannot exceed 10,000 characters.'); return;
+    }
+    if (agent.postCallSummaryEnabled) {
+      if (!agent.postCallSummaryModelId) { setError('Select an active LLM model for Post-Call AI Summary.'); return; }
+      if (!models.some((model) => model.id === agent.postCallSummaryModelId && model.providerType === 'llm')) {
+        setError('The selected Post-Call Summary LLM is no longer active or its provider is disconnected. Refresh models and select another LLM.'); return;
+      }
+      if (!agent.postCallSummaryInstructions?.trim()) { setError('Post-Call Summary Instructions are required when AI Summary is enabled.'); return; }
+      if (agent.postCallSummaryInstructions.trim().length > 20_000) { setError('Post-Call Summary Instructions cannot exceed 20,000 characters.'); return; }
+    }
     if ((agent.callbackMinimumDelaySeconds ?? 30) < 30 || (agent.callbackMinimumDelaySeconds ?? 30) > 86400) {
       setError('Minimum callback delay must be between 30 and 86,400 seconds.'); return;
     }
@@ -588,8 +656,16 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         id: _id, name: _name, status: _status, createdAt: _createdAt, updatedAt: _updatedAt,
         totalCalls: _totalCalls, avgDuration: _avgDuration, successRate: _successRate,
         pronunciationGroups: _legacyPronunciationGroups,
-        ...agentSettings
+        ...rawAgentSettings
       } = agent;
+      const deprecatedAgentSettings = new Set([
+        'ttsSpeed', 'ttsStyle', 'ttsStyleDegree', 'ttsLanguage', 'ttsStability',
+        'ttsPrice1k', 'ttsSimilarityBoost', 'ttsEmotion', 'ttsVolume',
+        'preCallPrompt',
+      ]);
+      const agentSettings = Object.fromEntries(
+        Object.entries(rawAgentSettings).filter(([key]) => !deprecatedAgentSettings.has(key)),
+      );
       const payload = {
         name: agent.name, description: agent.description || null, goal: agent.goal || null,
         language: agent.language || 'English (US)', usageDirection: agent.agentUsage || 'both', status: agent.status,
@@ -604,6 +680,9 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       });
       await apiRequest(`/agents/${saved.id}/pronunciation-groups`, {
         method: 'PUT', body: JSON.stringify({ groupIds: pronunciationGroupIds }),
+      });
+      await apiRequest(`/agents/${saved.id}/ambience`, {
+        method: 'PUT', body: JSON.stringify({ ambienceAssetId }),
       });
       applyApiAgent(saved);
       onSave({ ...agent, id: saved.id, name: saved.name, status: saved.status, updatedAt: saved.updatedAt });
@@ -876,20 +955,90 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   };
 
   const addTool = async () => {
-    if (!newToolName.trim() || !agentId) return;
+    if (!newToolName.trim() || !agentId || toolSaving) return;
     try {
-      const typeMap: Record<string, string> = { 'Webhook API': 'webhook_api', 'Cal.com': 'calcom', Hubspot: 'hubspot', Salesforce: 'salesforce' };
-      const created = await apiRequest<{ id: string; name: string; type: string; status: string; description: string | null }>(`/agents/${agentId}/tools`, {
-        method: 'POST', body: JSON.stringify({ name: newToolName, type: typeMap[newToolType] ?? 'webhook_api', status: 'active', description: 'Custom integrated developer tool connector', configuration: {} }),
+      setToolSaving(true);
+      setError('');
+      if (newToolType !== 'Webhook API') throw new Error('This service type is planned for a later phase.');
+      const headers = parseToolJsonObject(newToolHeaders, 'Request headers');
+      const secretHeaders = parseToolJsonObject(newToolSecretHeaders, 'Secret headers');
+      const inputSchema = parseToolJsonObject(newToolInputSchema, 'Input schema');
+      const timeoutSeconds = Number(newToolTimeoutSeconds);
+      const created = await apiRequest<AgentToolApiData>(`/agents/${agentId}/tools`, {
+        method: 'POST',
+        body: JSON.stringify({
+          name: newToolName.trim(),
+          type: 'webhook_api',
+          status: 'active',
+          description: newToolDescription.trim() || null,
+          configuration: {
+            version: 1,
+            url: newToolWebhookUrl.trim(),
+            method: newToolMethod,
+            timeoutMs: Number.isFinite(timeoutSeconds) ? Math.round(timeoutSeconds * 1000) : 15000,
+            headers,
+            inputSchema,
+            responseMode: 'synchronous',
+          },
+          ...(Object.keys(secretHeaders).length ? { secretConfiguration: { headers: secretHeaders } } : {}),
+        }),
       });
-      setTools((current) => [...current, created]); setNewToolName('');
+      setTools((current) => [...current, created]);
+      setNewToolName('');
+      setNewToolDescription('');
+      setNewToolWebhookUrl('');
+      setNewToolMethod('POST');
+      setNewToolTimeoutSeconds('15');
+      setNewToolHeaders('{\n  "Content-Type": "application/json"\n}');
+      setNewToolSecretHeaders('{}');
+      setNewToolInputSchema('{\n  "type": "object",\n  "properties": {},\n  "additionalProperties": true\n}');
     } catch (requestError) { setError(requestError instanceof Error ? requestError.message : 'Agent tool could not be created'); }
+    finally { setToolSaving(false); }
   };
 
   const removeTool = async (id: string) => {
     if (!agentId) return;
     try { await apiRequest(`/agents/${agentId}/tools/${id}`, { method: 'DELETE' }); setTools((current) => current.filter((tool) => tool.id !== id)); }
     catch (requestError) { setError(requestError instanceof Error ? requestError.message : 'Agent tool could not be deleted'); }
+  };
+
+  const updateToolStatus = async (tool: AgentToolApiData) => {
+    if (!agentId || toolStatusUpdatingId) return;
+    try {
+      setToolStatusUpdatingId(tool.id);
+      setError('');
+      const updated = await apiRequest<AgentToolApiData>(`/agents/${agentId}/tools/${tool.id}/status`, {
+        method: 'PATCH', body: JSON.stringify({ status: tool.status === 'active' ? 'inactive' : 'active' }),
+      });
+      setTools((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setSuccessMsg(updated.status === 'active' ? 'Tool activated for this agent.' : 'Tool deactivated for this agent.');
+      window.setTimeout(() => setSuccessMsg(null), 3000);
+      if (updated.status !== 'active' && testingToolId === updated.id) setTestingToolId(null);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Tool status could not be updated');
+    } finally {
+      setToolStatusUpdatingId(null);
+    }
+  };
+
+  const testTool = async (toolId: string) => {
+    if (!agentId || toolTestRunning) return;
+    try {
+      setToolTestRunning(true);
+      setError('');
+      setToolTestResult(null);
+      const argumentsValue = parseToolJsonObject(toolTestArguments, 'Test arguments');
+      const result = await apiRequest<unknown>(`/agents/${agentId}/tools/${toolId}/test`, {
+        method: 'POST', body: JSON.stringify({ arguments: argumentsValue }),
+      });
+      setToolTestResult(result);
+      setSuccessMsg('Webhook tool test completed successfully.');
+      window.setTimeout(() => setSuccessMsg(null), 3000);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Webhook tool test failed');
+    } finally {
+      setToolTestRunning(false);
+    }
   };
 
   const tabsList = [
@@ -909,6 +1058,8 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const selectedSttModel = sttModels.find((model) => model.id === sttModelId);
   const selectedLlmModel = llmModels.find((model) => model.id === llmModelId);
   const selectedTtsModel = ttsModels.find((model) => model.id === ttsModelId);
+  const selectedSummaryLlmModel = llmModels.find((model) => model.id === agent.postCallSummaryModelId);
+  const summaryLlmUnavailable = Boolean(agent.postCallSummaryModelId && !selectedSummaryLlmModel);
   const selectedKnowledgeBase = knowledgeBases.find((knowledgeBase) => knowledgeBase.id === selectedKnowledgeBaseId);
   const selectedKnowledgeAssignment = knowledgeAssignments.find((assignment) => assignment.knowledgeBaseId === selectedKnowledgeBaseId);
   const selectedKnowledgeDeletionJob = Object.values(knowledgeDeletionJobs).find((job) => job.type === 'delete_knowledge_base' && job.knowledgeBaseId === selectedKnowledgeBaseId);
@@ -1864,7 +2015,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   agentId={agentId}
                   selectedGroupIds={pronunciationGroupIds}
                   onSelectionChange={setPronunciationGroupIds}
-                  defaultLanguage={agent.ttsLanguage || 'und'}
+                  defaultLanguage={agent.language || 'und'}
                   readOnly={isReadOnly}
                   onError={setError}
                   onSuccess={(message) => {
@@ -1875,133 +2026,22 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
               </div>
             </div>
 
-            {/* Split row for Background Sound and Provider Settings */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div>
               {/* Background Sound Card */}
-              <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs flex flex-col justify-between">
-                <div>
-                  <div className="flex items-center space-x-2 text-[#ec4899] mb-5">
-                    <Music className="w-5 h-5" />
-                    <span className="text-xs font-black uppercase tracking-wider">Background Sound</span>
-                  </div>
+              <AmbienceManager
+                selectedAssetId={ambienceAssetId}
+                onSelectionChange={(id) => {
+                  setAmbienceAssetId(id);
+                  setAgent((current) => ({ ...current, ttsAmbienceType: id ? 'Company Ambience' : 'Silent (Default)' }));
+                }}
+                readOnly={isReadOnly}
+                onError={setError}
+                onSuccess={(message) => {
+                  setSuccessMsg(message);
+                  window.setTimeout(() => setSuccessMsg(null), 3000);
+                }}
+              />
 
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase">Ambience Type</label>
-                    <div className="relative">
-                      <select
-                        value={agent.ttsAmbienceType || 'Silent (Default)'}
-                        disabled={isReadOnly}
-                        onChange={(e) => setAgent({ ...agent, ttsAmbienceType: e.target.value })}
-                        className="w-full bg-slate-50 border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
-                      >
-                        <option value="Silent (Default)">Silent (Default)</option>
-                        <option value="Office Chatter">Office Chatter</option>
-                        <option value="Coffee Shop Ambient">Coffee Shop Ambient</option>
-                        <option value="Gentle Rain">Gentle Rain</option>
-                      </select>
-                      <div className="absolute inset-y-0 right-0 flex items-center pr-4 pointer-events-none text-slate-400">
-                        <ChevronDown className="w-4 h-4" />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Provider Settings Card */}
-              <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs">
-                <div className="flex items-center space-x-2 text-[#ec4899] mb-5 font-bold uppercase tracking-wider">
-                  <Sliders className="w-5 h-5 text-[#ec4899]" />
-                  <span className="text-xs font-black uppercase tracking-wider text-[#ec4899]">Provider Settings</span>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  {/* Speed */}
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase">Speed</label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      min="0.5"
-                      max="2.0"
-                      value={agent.ttsSpeed !== undefined ? agent.ttsSpeed : 1}
-                      disabled={isReadOnly}
-                      onChange={(e) => setAgent({ ...agent, ttsSpeed: parseFloat(e.target.value) || 1 })}
-                      className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-bold text-slate-800 outline-none transition"
-                    />
-                  </div>
-
-                  {/* Style */}
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase">Style</label>
-                    <input
-                      type="number"
-                      step="0.05"
-                      min="0"
-                      max="1.0"
-                      value={agent.ttsStyle !== undefined ? agent.ttsStyle : 0.4}
-                      disabled={isReadOnly}
-                      onChange={(e) => setAgent({ ...agent, ttsStyle: parseFloat(e.target.value) || 0 })}
-                      className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-bold text-slate-800 outline-none transition"
-                    />
-                  </div>
-
-                  {/* Language */}
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase">Language</label>
-                    <input
-                      type="text"
-                      value={agent.ttsLanguage || 'ta-IN'}
-                      disabled={isReadOnly}
-                      onChange={(e) => setAgent({ ...agent, ttsLanguage: e.target.value })}
-                      className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-bold text-slate-800 outline-none transition"
-                    />
-                  </div>
-
-                  {/* Stability */}
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase">Stability</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      max="1.0"
-                      value={agent.ttsStability !== undefined ? agent.ttsStability : 0.78}
-                      disabled={isReadOnly}
-                      onChange={(e) => setAgent({ ...agent, ttsStability: parseFloat(e.target.value) || 0 })}
-                      className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-bold text-slate-800 outline-none transition"
-                    />
-                  </div>
-
-                  {/* Tts Price 1k */}
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase">Tts Price 1k</label>
-                    <input
-                      type="number"
-                      step="0.001"
-                      min="0"
-                      value={agent.ttsPrice1k !== undefined ? agent.ttsPrice1k : 0.015}
-                      disabled={isReadOnly}
-                      onChange={(e) => setAgent({ ...agent, ttsPrice1k: parseFloat(e.target.value) || 0 })}
-                      className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-bold text-slate-800 outline-none transition"
-                    />
-                  </div>
-
-                  {/* Similarity Boost */}
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase">Similarity Boost</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      max="1.0"
-                      value={agent.ttsSimilarityBoost !== undefined ? agent.ttsSimilarityBoost : 0.75}
-                      disabled={isReadOnly}
-                      onChange={(e) => setAgent({ ...agent, ttsSimilarityBoost: parseFloat(e.target.value) || 0 })}
-                      className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-bold text-slate-800 outline-none transition"
-                    />
-                  </div>
-                </div>
-              </div>
             </div>
           </div>
         )}
@@ -2058,19 +2098,22 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   </div>
                 </div>
 
-                {/* Prompt Field */}
+                {/* Description Field */}
                 <div>
                   <label className="block text-[11px] font-black text-slate-500 mb-1.5 uppercase tracking-wider">
-                    Prompt
+                    Description
                   </label>
                   <textarea
                     rows={4}
                     disabled={isReadOnly}
-                    value={agent.preCallPrompt || ''}
-                    onChange={(e) => setAgent({ ...agent, preCallPrompt: e.target.value })}
-                    placeholder="Enter PreCall prompt..."
+                    value={agent.preCallDescription || ''}
+                    onChange={(e) => setAgent({ ...agent, preCallDescription: e.target.value })}
+                    placeholder="Describe what this Pre-Call integration loads, for example customer details from your CRM."
                     className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-2xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none"
                   />
+                  <p className="mt-1.5 text-[10px] font-semibold text-slate-400">
+                    For developer reference only. This description is not sent to the AI or webhook.
+                  </p>
                 </div>
 
                 {/* Pre-Call API Toggle & Fields */}
@@ -2166,9 +2209,12 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                           value={agent.preCallApiRequestBody || ''}
                           disabled={isReadOnly}
                           onChange={(e) => setAgent({ ...agent, preCallApiRequestBody: e.target.value })}
-                          placeholder='{ "mobile_number": "${caller}" }'
+                          placeholder='{ "customer_number": "${customer_number}", "call_uuid": "${call_uuid}" }'
                           className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-2.5 text-xs font-semibold text-slate-800 transition outline-none"
                         />
+                        <p className="mt-1.5 text-[10px] font-semibold text-slate-400">
+                          Variables: ${'{caller}'}, ${'{callee}'}, ${'{customer_number}'}, ${'{platform_number}'}, ${'{call_uuid}'}, ${'{direction}'}, ${'{agent_id}'}, ${'{company_id}'}, ${'{workspace_id}'}.
+                        </p>
                       </div>
 
                       {/* Response Mapping */}
@@ -2176,6 +2222,9 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                         <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider">
                           Response Mapping
                         </label>
+                        <p className="text-[10px] font-semibold text-slate-400">
+                          Return {`{ "context": { "customer_name": "Shanmugam" } }`} directly, or map fields from any JSON response below. Context values are available to the welcome message and AI.
+                        </p>
 
                         <div className="space-y-2">
                           {(!agent.preCallApiResponseMappings || agent.preCallApiResponseMappings.length === 0) ? (
@@ -2283,21 +2332,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
               </div>
 
               <div className="p-6 space-y-6">
-                {/* Prompt textarea */}
-                <div>
-                  <label className="block text-[11px] font-black text-slate-500 mb-1.5 uppercase tracking-wider">
-                    Prompt
-                  </label>
-                  <textarea
-                    rows={4}
-                    disabled={isReadOnly}
-                    value={agent.postCallPrompt || ''}
-                    onChange={(e) => setAgent({ ...agent, postCallPrompt: e.target.value })}
-                    placeholder="Enter PostCall prompt..."
-                    className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-2xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none"
-                  />
-                </div>
-
                 {/* Message Type Dropdown */}
                 <div>
                   <label className="block text-[11px] font-black text-slate-500 mb-1.5 uppercase tracking-wider">
@@ -2320,18 +2354,43 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   </div>
                 </div>
 
-                {/* AI Dynamic Closing */}
-                <div>
+                {(agent.postCallMessageType || 'Dynamic') === 'Dynamic' && <div className="space-y-3">
+                  <div>
+                    <label className="block text-[11px] font-black text-slate-500 mb-1.5 uppercase tracking-wider">
+                      Dynamic Closing Prompt
+                    </label>
+                    <textarea
+                      rows={4}
+                      disabled={isReadOnly}
+                      value={agent.postCallPrompt || ''}
+                      onChange={(e) => setAgent({ ...agent, postCallPrompt: e.target.value })}
+                      placeholder="Describe when and how the AI should close the call..."
+                      className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-2xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none"
+                    />
+                  </div>
+                  <div className="rounded-xl border border-violet-100 bg-violet-50 px-4 py-3 text-[10px] font-semibold leading-relaxed text-violet-700">
+                    The selected LLM will generate one brief, contextual closing message in the customer&apos;s language.
+                  </div>
+                </div>}
+
+                {agent.postCallMessageType === 'Static' && <div>
                   <label className="block text-[11px] font-black text-slate-500 mb-1.5 uppercase tracking-wider">
-                    AI Dynamic Closing
+                    Static Closing Message
                   </label>
-                  <input
-                    type="text"
-                    disabled
-                    value={agent.postCallDynamicClosing || ''}
-                    className="w-full bg-slate-50 border border-slate-150 rounded-xl px-4 py-3 text-xs font-semibold text-slate-500 outline-none"
+                  <textarea
+                    rows={3}
+                    disabled={isReadOnly}
+                    value={agent.postCallStaticMessage || ''}
+                    onChange={(e) => setAgent({ ...agent, postCallStaticMessage: e.target.value })}
+                    placeholder="Enter the exact message the agent should speak before ending the call..."
+                    className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-2xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none"
                   />
-                </div>
+                  <p className="mt-1.5 text-[10px] font-semibold text-slate-400">The agent will speak this exact text without asking the LLM to rewrite it.</p>
+                </div>}
+
+                {agent.postCallMessageType === 'None' && <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-[10px] font-semibold leading-relaxed text-amber-800">
+                  No closing message will be spoken. The call will end after pending tools and required data operations are finished.
+                </div>}
 
                 {/* Uninterruptible Reasons */}
                 <div>
@@ -2404,6 +2463,132 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       Press Enter or click + to add reason
                     </span>
                   </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Post-Call AI Summary Configuration */}
+            <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
+              <div className="flex flex-col gap-4 border-b border-violet-100 bg-violet-50/40 p-5 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center space-x-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-violet-200/50 bg-violet-100 text-violet-600">
+                    <Sparkles className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-extrabold tracking-tight text-slate-800">AI Call Summary</h3>
+                    <p className="text-xs font-semibold text-slate-500">Generate a structured summary after the call without affecting the live conversation.</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center space-x-2.5">
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={agent.postCallSummaryEnabled === true}
+                    disabled={isReadOnly}
+                    onClick={() => setAgent({ ...agent, postCallSummaryEnabled: !agent.postCallSummaryEnabled })}
+                    className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 ${
+                      agent.postCallSummaryEnabled ? 'bg-violet-600' : 'bg-slate-200'
+                    }`}
+                  >
+                    <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition duration-200 ${
+                      agent.postCallSummaryEnabled ? 'translate-x-5' : 'translate-x-0'
+                    }`} />
+                  </button>
+                  <span className={`text-xs font-bold ${agent.postCallSummaryEnabled ? 'text-violet-700' : 'text-slate-400'}`}>
+                    {agent.postCallSummaryEnabled ? 'Enabled' : 'Disabled'}
+                  </span>
+                </div>
+              </div>
+
+              <div className={`space-y-6 p-6 ${agent.postCallSummaryEnabled ? '' : 'opacity-60'}`}>
+                <div>
+                  <div className="mb-1.5 flex items-center justify-between gap-3">
+                    <label className="block text-[11px] font-black uppercase tracking-wider text-slate-500">Summary LLM</label>
+                    <span className="text-[10px] font-semibold text-slate-400">Active Super Admin LLM models</span>
+                  </div>
+                  <div className="relative">
+                    <select
+                      value={agent.postCallSummaryModelId || ''}
+                      disabled={isReadOnly || !agent.postCallSummaryEnabled}
+                      onChange={(e) => setAgent({ ...agent, postCallSummaryModelId: e.target.value })}
+                      className="w-full appearance-none rounded-xl border border-slate-200 bg-white px-4 py-3 pr-10 text-xs font-semibold text-slate-800 outline-none transition focus:border-violet-500 disabled:cursor-not-allowed disabled:bg-slate-50"
+                    >
+                      <option value="">Select summary LLM</option>
+                      {summaryLlmUnavailable && (
+                        <option value={agent.postCallSummaryModelId}>Previously selected model — unavailable</option>
+                      )}
+                      {llmModels.map((model) => (
+                        <option key={model.id} value={model.id}>{model.displayName} — {model.providerName}</option>
+                      ))}
+                    </select>
+                    <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4 text-slate-400">
+                      <ChevronDown className="h-4 w-4" />
+                    </div>
+                  </div>
+                  {summaryLlmUnavailable && (
+                    <div className="mt-2 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-700">
+                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                      <p className="text-[10px] font-semibold leading-4">This model is inactive, deleted, or its provider is disconnected. Refresh models and select an available LLM before saving.</p>
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-500">Summary Instructions</label>
+                  <textarea
+                    rows={5}
+                    value={agent.postCallSummaryInstructions || ''}
+                    disabled={isReadOnly || !agent.postCallSummaryEnabled}
+                    onChange={(e) => setAgent({ ...agent, postCallSummaryInstructions: e.target.value })}
+                    placeholder="Describe what the summary must capture for this agent and industry."
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs font-semibold text-slate-800 outline-none transition focus:border-violet-500 disabled:cursor-not-allowed disabled:bg-slate-50"
+                  />
+                  <p className="mt-1.5 text-[10px] font-semibold text-slate-400">These instructions are used only by the selected post-call summarization model.</p>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  {[
+                    {
+                      label: 'Include Transcript in Webhook',
+                      description: 'Send the complete saved transcript with the Post-Call webhook.',
+                      checked: agent.postCallIncludeTranscript !== false,
+                      toggle: () => setAgent({ ...agent, postCallIncludeTranscript: agent.postCallIncludeTranscript === false }),
+                    },
+                    {
+                      label: 'Include Summary in Webhook',
+                      description: 'Send the structured AI summary with the Post-Call webhook.',
+                      checked: agent.postCallIncludeSummary !== false,
+                      toggle: () => setAgent({ ...agent, postCallIncludeSummary: agent.postCallIncludeSummary === false }),
+                    },
+                  ].map((option) => (
+                    <div key={option.label} className="flex items-start justify-between gap-4 rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+                      <div>
+                        <p className="text-xs font-black text-slate-700">{option.label}</p>
+                        <p className="mt-1 text-[10px] font-semibold leading-4 text-slate-400">{option.description}</p>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-label={option.label}
+                        aria-checked={option.checked}
+                        disabled={isReadOnly || !agent.postCallSummaryEnabled}
+                        onClick={option.toggle}
+                        className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-60 ${
+                          option.checked ? 'bg-violet-600' : 'bg-slate-200'
+                        }`}
+                      >
+                        <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition duration-200 ${
+                          option.checked ? 'translate-x-5' : 'translate-x-0'
+                        }`} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex items-start gap-2 rounded-xl border border-blue-100 bg-blue-50 p-3 text-blue-700">
+                  <Info className="mt-0.5 h-4 w-4 shrink-0" />
+                  <p className="text-[10px] font-semibold leading-4">Task 1 stores this configuration only. Background summary generation and webhook enrichment will be connected in the following tasks.</p>
                 </div>
               </div>
             </div>
@@ -2563,7 +2748,12 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         {/* TAB: TOOLS */}
         {activeTab === 'tools' && (
           <div className="space-y-6">
-            <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-2">Live Conversational Tool Integrations</h3>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div><h3 className="text-sm font-bold uppercase tracking-wider text-slate-400">Live Conversational Tool Integrations</h3><p className="mt-1 text-[11px] font-medium text-slate-400">Tools registered here belong only to this saved agent and company workspace.</p></div>
+              <button type="button" onClick={() => setToolRefreshKey((value) => value + 1)} disabled={!agentId || toolsLoading} className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"><RefreshCw className={`h-3.5 w-3.5 ${toolsLoading ? 'animate-spin' : ''}`} />Refresh Tools</button>
+            </div>
+
+            {!agentId && <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-800"><Info className="mt-0.5 h-4 w-4 shrink-0" /><div><p className="text-xs font-bold">Save this agent before registering tools.</p><p className="mt-1 text-[11px] font-medium text-amber-700">A saved Agent ID is required so every tool is assigned to exactly one agent, tenant and workspace.</p></div></div>}
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               {/* Tool Creator Card */}
@@ -2578,7 +2768,21 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     disabled={isReadOnly}
                     onChange={(e) => setNewToolName(e.target.value)}
                     className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-semibold text-slate-800 outline-none"
-                    placeholder="e.g. BookingSystem"
+                    placeholder="e.g. check_appointment_slots"
+                  />
+                  <p className="mt-1 text-[9px] font-medium text-slate-400">Use a clear name the agent can associate with an action.</p>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 mb-1">Description</label>
+                  <textarea
+                    value={newToolDescription}
+                    disabled={isReadOnly}
+                    onChange={(e) => setNewToolDescription(e.target.value)}
+                    rows={3}
+                    maxLength={5000}
+                    className="w-full resize-y bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-semibold text-slate-800 outline-none"
+                    placeholder="When should the agent use this tool and what does it return?"
                   />
                 </div>
 
@@ -2591,45 +2795,120 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-semibold text-slate-800 outline-none"
                   >
                     <option>Webhook API</option>
-                    <option>Cal.com Scheduler</option>
-                    <option>Hubspot CRM</option>
-                    <option>Salesforce Sync</option>
+                    <option disabled>Cal.com Scheduler — Coming Soon</option>
+                    <option disabled>HubSpot CRM — Coming Soon</option>
+                    <option disabled>Salesforce Sync — Coming Soon</option>
                   </select>
                 </div>
 
+                {newToolType === 'Webhook API' && (
+                  <div className="space-y-4 rounded-xl border border-violet-100 bg-white p-4">
+                    <div>
+                      <p className="text-[10px] font-black uppercase tracking-wider text-violet-600">Webhook Configuration</p>
+                      <p className="mt-1 text-[9px] font-medium leading-relaxed text-slate-400">The endpoint must return its result in the same HTTP request. In n8n, use Respond to Webhook.</p>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1">Webhook URL *</label>
+                      <input
+                        type="url"
+                        value={newToolWebhookUrl}
+                        disabled={isReadOnly}
+                        onChange={(e) => setNewToolWebhookUrl(e.target.value)}
+                        className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-semibold text-slate-800 outline-none focus:border-violet-400"
+                        placeholder="https://n8n.example.com/webhook/check-slots"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 mb-1">Method</label>
+                        <select value={newToolMethod} disabled={isReadOnly} onChange={(e) => setNewToolMethod(e.target.value as 'POST' | 'PUT' | 'PATCH')} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-semibold text-slate-800 outline-none">
+                          <option value="POST">POST</option>
+                          <option value="PUT">PUT</option>
+                          <option value="PATCH">PATCH</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 mb-1">Timeout (seconds)</label>
+                        <input type="number" min="1" max="30" step="1" value={newToolTimeoutSeconds} disabled={isReadOnly} onChange={(e) => setNewToolTimeoutSeconds(e.target.value)} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-semibold text-slate-800 outline-none" />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1">Request Headers (JSON)</label>
+                      <textarea value={newToolHeaders} disabled={isReadOnly} onChange={(e) => setNewToolHeaders(e.target.value)} rows={4} spellCheck={false} className="w-full resize-y bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 font-mono text-[10px] text-emerald-300 outline-none" />
+                      <p className="mt-1 text-[9px] font-medium text-slate-400">Use this only for non-secret headers. Add credentials in the encrypted field below.</p>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1">Secret Headers (Encrypted JSON)</label>
+                      <textarea value={newToolSecretHeaders} disabled={isReadOnly} onChange={(e) => setNewToolSecretHeaders(e.target.value)} rows={4} spellCheck={false} className="w-full resize-y bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 font-mono text-[10px] text-amber-300 outline-none" placeholder={'{\n  "Authorization": "Bearer ..."\n}'} />
+                      <p className="mt-1 text-[9px] font-medium text-slate-400">Authorization tokens and API keys are encrypted and never returned to the browser.</p>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1">Input Schema (JSON)</label>
+                      <textarea value={newToolInputSchema} disabled={isReadOnly} onChange={(e) => setNewToolInputSchema(e.target.value)} rows={7} spellCheck={false} className="w-full resize-y bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 font-mono text-[10px] text-sky-300 outline-none" />
+                      <p className="mt-1 text-[9px] font-medium text-slate-400">Describe the arguments the LLM must provide when it calls this tool.</p>
+                    </div>
+
+                    <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2">
+                      <span className="text-[9px] font-black uppercase tracking-wider text-emerald-700">Response Mode</span>
+                      <p className="mt-0.5 text-[10px] font-semibold text-emerald-800">Synchronous JSON response</p>
+                    </div>
+                  </div>
+                )}
+
                 <button
                   type="button"
-                  onClick={addTool}
-                  disabled={isReadOnly}
-                  className="w-full py-2 bg-gradient-to-r from-violet-600 to-pink-500 hover:from-violet-700 hover:to-pink-600 text-white rounded-lg text-xs font-bold transition shadow-sm flex items-center justify-center space-x-1"
+                  onClick={() => void addTool()}
+                  disabled={isReadOnly || !agentId || toolSaving || !newToolName.trim() || !newToolWebhookUrl.trim()}
+                  className="w-full py-2 bg-gradient-to-r from-violet-600 to-pink-500 hover:from-violet-700 hover:to-pink-600 disabled:cursor-not-allowed disabled:opacity-50 text-white rounded-lg text-xs font-bold transition shadow-sm flex items-center justify-center space-x-1"
                 >
                   <Plus className="w-3.5 h-3.5" />
-                  <span>Register Tool</span>
+                  <span>{toolSaving ? 'Registering...' : 'Register Tool'}</span>
                 </button>
               </div>
 
               {/* Active Tools List */}
               <div className="lg:col-span-2 space-y-3">
-                <span className="text-xs font-bold uppercase tracking-wider text-slate-400 block mb-1">Assigned Model Tools ({tools.length})</span>
+                <div className="flex items-center justify-between gap-3"><span className="text-xs font-bold uppercase tracking-wider text-slate-400">Assigned to This Agent ({tools.length})</span><span className="rounded-md bg-emerald-50 px-2 py-1 text-[9px] font-black uppercase text-emerald-700">{tools.filter((tool) => tool.status === 'active').length} active in runtime</span></div>
+                {!toolsLoading && tools.length === 0 && agentId && <div className="rounded-xl border border-dashed border-slate-200 bg-white p-8 text-center text-xs font-semibold text-slate-400">No tools are assigned to this agent yet.</div>}
                 {tools.map((t) => (
-                  <div key={t.id} className="bg-white border border-slate-150 rounded-xl p-4 flex justify-between items-center shadow-xs">
-                    <div>
+                  <div key={t.id} className="bg-white border border-slate-150 rounded-xl p-4 shadow-xs">
+                    <div className="flex justify-between items-center gap-4">
+                    <div className="min-w-0">
                       <div className="flex items-center space-x-2">
                         <span className="text-xs font-bold text-slate-800">{t.name}</span>
                         <span className="bg-violet-50 text-violet-600 text-[9px] font-bold px-1.5 py-0.5 rounded-md">{t.type}</span>
-                        <span className="bg-emerald-50 text-emerald-600 text-[9px] font-bold px-1.5 py-0.5 rounded-md">{t.status}</span>
+                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-md ${t.status === 'active' ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'}`}>{t.status}</span>
+                        <span className="rounded-md bg-blue-50 px-1.5 py-0.5 text-[9px] font-bold text-blue-600">assigned</span>
                       </div>
                       <p className="text-[10px] text-slate-500 mt-1 font-medium">{t.description}</p>
+                      {t.type === 'webhook_api' && typeof t.configuration?.url === 'string' && (
+                        <p className="mt-1 max-w-xl truncate font-mono text-[9px] text-slate-400">
+                          {String(t.configuration.method ?? 'POST')} {' | '} {t.configuration.url}
+                        </p>
+                      )}
                     </div>
 
-                    {!isReadOnly && (
-                      <button
-                        type="button"
-                        onClick={() => void removeTool(t.id)}
-                        className="text-slate-400 hover:text-red-500 p-1.5 rounded-lg hover:bg-red-50 transition"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                    {!isReadOnly && <div className="flex shrink-0 items-center gap-2">
+                      <button type="button" disabled={toolStatusUpdatingId === t.id} onClick={() => void updateToolStatus(t)} className={`rounded-lg border px-2.5 py-1.5 text-[10px] font-bold transition disabled:opacity-50 ${t.status === 'active' ? 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100' : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'}`}>{toolStatusUpdatingId === t.id ? 'Updating...' : t.status === 'active' ? 'Deactivate' : 'Activate'}</button>
+                      {t.type === 'webhook_api' && t.status === 'active' && <button type="button" onClick={() => { setTestingToolId((current) => current === t.id ? null : t.id); setToolTestArguments('{}'); setToolTestResult(null); }} className="rounded-lg border border-violet-200 bg-violet-50 px-2.5 py-1.5 text-[10px] font-bold text-violet-700 transition hover:bg-violet-100">{testingToolId === t.id ? 'Close Test' : 'Test Tool'}</button>}
+                      <button type="button" onClick={() => void removeTool(t.id)} className="text-slate-400 hover:text-red-500 p-1.5 rounded-lg hover:bg-red-50 transition"><Trash2 className="w-4 h-4" /></button>
+                    </div>}
+                    </div>
+
+                    {testingToolId === t.id && (
+                      <div className="mt-4 space-y-3 rounded-xl border border-violet-100 bg-violet-50/40 p-4">
+                        <div>
+                          <label className="mb-1 block text-[10px] font-black uppercase tracking-wider text-slate-500">Test Arguments (JSON)</label>
+                          <textarea value={toolTestArguments} disabled={toolTestRunning} onChange={(event) => setToolTestArguments(event.target.value)} rows={5} spellCheck={false} className="w-full resize-y rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 font-mono text-[10px] text-sky-300 outline-none" />
+                        </div>
+                        <div className="flex justify-end"><button type="button" disabled={toolTestRunning} onClick={() => void testTool(t.id)} className="rounded-lg bg-violet-600 px-3 py-2 text-[10px] font-bold text-white transition hover:bg-violet-700 disabled:opacity-50">{toolTestRunning ? 'Testing...' : 'Run Test'}</button></div>
+                        {toolTestResult !== null && <div><span className="mb-1 block text-[10px] font-black uppercase tracking-wider text-emerald-700">Response</span><pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-slate-950 p-3 font-mono text-[10px] text-emerald-300">{JSON.stringify(toolTestResult, null, 2)}</pre></div>}
+                      </div>
                     )}
                   </div>
                 ))}

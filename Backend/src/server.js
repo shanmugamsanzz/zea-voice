@@ -12,6 +12,8 @@ import { closeKnowledgeProcessingWorker, startKnowledgeProcessingWorker } from '
 import { attachPlivoMediaWebSocket } from './voice/plivo-media.socket.js';
 import { attachRealtimeConversationOrchestrator } from './voice/realtime-conversation-orchestrator.js';
 import { closeRecordingWorker, startRecordingWorker } from './telephony/recording.worker.js';
+import { closePostCallSummaryWorker, startPostCallSummaryWorker } from './voice/postcall-summary/postcall-summary.worker.js';
+import { executePostCallSummaryJob } from './voice/postcall-summary/postcall-summary.processor.js';
 
 async function bootstrap() {
   await runPendingMigrations();
@@ -27,6 +29,7 @@ async function bootstrap() {
   startCampaignWorkers();
   await startKnowledgeProcessingWorker();
   startRecordingWorker();
+  await startPostCallSummaryWorker(executePostCallSummaryJob);
 
   const server = createServer(createApp());
   const mediaWebSocket = attachPlivoMediaWebSocket(server, {
@@ -52,7 +55,8 @@ async function bootstrap() {
 
     server.close(async (serverError) => {
       const results = await Promise.allSettled([
-        closeCampaignWorkers(), closeKnowledgeProcessingWorker(), closeRecordingWorker(), closeQueues(), closeRedis(), closeDatabase(),
+        closeCampaignWorkers(), closeKnowledgeProcessingWorker(), closeRecordingWorker(),
+        closePostCallSummaryWorker(), closeQueues(), closeRedis(), closeDatabase(),
       ]);
       const failed = results.filter((result) => result.status === 'rejected');
 
@@ -77,7 +81,8 @@ async function bootstrap() {
 bootstrap().catch(async (error) => {
   logger.fatal({ err: error }, 'Backend startup failed');
   await Promise.allSettled([
-    closeCampaignWorkers(), closeKnowledgeProcessingWorker(), closeRecordingWorker(), closeQueues(), closeRedis(), closeDatabase(),
+    closeCampaignWorkers(), closeKnowledgeProcessingWorker(), closeRecordingWorker(),
+    closePostCallSummaryWorker(), closeQueues(), closeRedis(), closeDatabase(),
   ]);
   process.exit(1);
 });

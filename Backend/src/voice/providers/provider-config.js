@@ -71,7 +71,7 @@ function integrationConfiguration(settings) {
   return {
     preCall: {
       provider: settings.preCallProvider ?? null,
-      prompt: settings.preCallPrompt ?? '',
+      description: settings.preCallDescription ?? settings.preCallPrompt ?? '',
       api: {
         active: settings.preCallApiActive === true,
         url: settings.preCallApiUrl ?? '',
@@ -84,6 +84,7 @@ function integrationConfiguration(settings) {
     postCall: {
       prompt: settings.postCallPrompt ?? '',
       messageType: settings.postCallMessageType ?? null,
+      staticMessage: settings.postCallStaticMessage ?? '',
       dynamicClosing: settings.postCallDynamicClosing ?? '',
       uninterruptibleReasons: settings.postCallUninterruptibleReasons ?? [],
       api: {
@@ -106,11 +107,6 @@ const sttSettingKeys = [
   'sttStartSpeechVolumeThreshold', 'sttInterruptMinSpeechFrames',
   'sttPreSpeechPadFrames', 'sttNumInitialIgnoredFrames',
 ];
-const ttsSettingKeys = [
-  'ttsAmbienceType', 'ttsSpeed', 'ttsStyle', 'ttsLanguage', 'ttsStability',
-  'ttsSimilarityBoost', 'ttsEmotion', 'ttsVolume',
-];
-
 const parameterSubquery = (providerAlias) => `COALESCE((SELECT jsonb_agg(jsonb_build_object(
   'key', p.key, 'plainValue', p.plain_value, 'encryptedValue', p.encrypted_value, 'isSecret', p.is_secret
 ) ORDER BY p.key) FROM ai_provider_parameters p WHERE p.provider_id=${providerAlias}.id), '[]'::jsonb)`;
@@ -141,7 +137,7 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
             'secretConfigurationEncrypted', t.secret_configuration_encrypted
           ) ORDER BY t.created_at, t.id)
             FROM agent_tools t
-           WHERE t.tenant_id=a.tenant_id AND t.agent_id=a.id
+           WHERE t.tenant_id=a.tenant_id AND t.workspace_id=a.workspace_id AND t.agent_id=a.id
              AND t.status='active' AND t.deleted_at IS NULL), '[]'::jsonb) tools,
           COALESCE((SELECT jsonb_agg(jsonb_build_object(
             'id', pg.id, 'name', pg.name, 'language', pg.language,
@@ -160,6 +156,28 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
               ON pg.tenant_id=apg.tenant_id AND pg.id=apg.group_id
            WHERE apg.tenant_id=a.tenant_id AND apg.agent_id=a.id
              AND pg.status='active' AND pg.deleted_at IS NULL), '[]'::jsonb) pronunciation_groups,
+          (SELECT jsonb_build_object(
+            'id', aa.ambience_asset_id,
+            'name', caa.name,
+            'status', caa.status,
+            'storageStatus', caa.storage_status,
+            'normalizedObjectKey', caa.normalized_object_key,
+            'normalizedStorageVersionId', caa.normalized_storage_version_id,
+            'normalizedSizeBytes', caa.normalized_size_bytes,
+            'listeningVolumePercent', caa.listening_volume_percent,
+            'speakingVolumePercent', caa.speaking_volume_percent,
+            'continueDuringSilence', caa.continue_during_silence,
+            'runtimeFormat', jsonb_build_object(
+              'encoding', 'mulaw', 'sampleRate', 8000, 'channels', 1, 'frameDurationMs', 20
+            )
+          )
+             FROM agent_ambience_assignments aa
+             JOIN company_ambience_assets caa
+               ON caa.tenant_id=aa.tenant_id AND caa.workspace_id=aa.workspace_id
+              AND caa.id=aa.ambience_asset_id
+            WHERE aa.tenant_id=a.tenant_id AND aa.workspace_id=a.workspace_id
+              AND aa.agent_id=a.id AND caa.status='active'
+              AND caa.storage_status='ready' AND caa.deleted_at IS NULL) ambience,
           COALESCE((SELECT jsonb_agg(jsonb_build_object(
             'id', kb.id, 'name', kb.name, 'description', kb.description,
             'usageDirection', akb.usage_direction, 'priority', akb.priority,
@@ -200,10 +218,9 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
     const settings = row.settings ?? {};
     const interaction = resolveInteractionConfiguration(settings);
     const sttRuntimeSettings = selectedSettings(settings, sttSettingKeys);
-    const ttsRuntimeSettings = {
-      ...selectedSettings(settings, ttsSettingKeys),
-      voiceId: row.voice_id,
-    };
+    // TTS behavior comes from Super Admin provider/model parameters. The
+    // agent only contributes the voice selected by its configured model.
+    const ttsRuntimeSettings = { voiceId: row.voice_id };
     return {
       schemaVersion: 1,
       agent: {
@@ -243,6 +260,7 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
       },
       knowledgeBases: row.knowledge_bases ?? [],
       pronunciation: { groups: row.pronunciation_groups ?? [] },
+      ambience: row.ambience ?? null,
       tools: tools(row.tools, decrypt),
       integrations: integrationConfiguration(settings),
     };

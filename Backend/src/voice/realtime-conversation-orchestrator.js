@@ -34,6 +34,8 @@ import {
   scheduleCustomerCallback,
 } from '../campaigns/customer-callback.service.js';
 import { createPronunciationTextProcessor } from './pronunciation/pronunciation-text-processor.js';
+import { loadRuntimeAmbience } from './ambience-runtime.service.js';
+import { resolvePostCallClosingConfiguration } from './integrations/postcall-closing-config.js';
 
 const closeIntent = /\b(?:bye|goodbye|hang\s*up|disconnect|end (?:the )?call|not interested|call me later|i(?:'m| am) busy)\b|(?:போதும்|அழைப்பை முடி|பிறகு அழைக்கவும்)/iu;
 
@@ -46,8 +48,6 @@ function languageCode(value) {
 }
 
 function fallbackClosing(profile) {
-  const configured = profile.integrations?.postCall?.dynamicClosing;
-  if (typeof configured === 'string' && configured.trim() && configured !== 'true') return configured.trim();
   return profile.agent.language?.toLowerCase().includes('tamil') || profile.agent.language?.toLowerCase().includes('ta')
     ? 'அழைத்ததற்கு நன்றி. வணக்கம்.' : 'Thank you for calling. Goodbye.';
 }
@@ -224,10 +224,18 @@ export class RealtimeConversationOrchestrator {
       breaker: this.llmCircuitBreaker,
     };
     this.adapters = await createAdapters(this.runtimeProfile, runtimeContext, this.registry);
+    this.runtimeAmbience = await (this.dependencies.loadRuntimeAmbience ?? loadRuntimeAmbience)(
+      this.runtimeProfile,
+      { getObject: this.dependencies.getAmbienceObject, log: this.log },
+    );
     this.audioEngine = (this.dependencies.createAudioEngine ?? ((options) => new ProviderIndependentAudioEngine(options)))({
       runtimeProfile: this.runtimeProfile,
       mediaSession: this.mediaSession,
+      ambience: this.runtimeAmbience,
       onError: (error) => void this.#recover(error, 'audio_output'),
+      onAmbienceError: (error) => this.log.warn({
+        err: error, stage: 'ambience.mixer_disabled', callId: this.call.id,
+      }, 'Ambience mixer failed; speech playback will continue without background sound'),
     });
     this.unsubscribeStt = this.adapters.stt.onEvent((event) => (
       void this.#guard('stt_event', () => this.#handleSttEvent(event))
@@ -252,6 +260,8 @@ export class RealtimeConversationOrchestrator {
       stt: this.runtimeProfile.providers.stt.modelKey,
       llm: this.runtimeProfile.providers.llm.modelKey,
       tts: this.runtimeProfile.providers.tts.modelKey,
+      ambience: this.runtimeAmbience?.name ?? 'silent',
+      ambienceCacheHit: this.runtimeAmbience?.cacheHit ?? false,
     }, '✅ Real-time voice pipeline initialized');
     return this;
   }
@@ -348,6 +358,10 @@ export class RealtimeConversationOrchestrator {
     await this.ready;
     if (this.finalized) return;
     this.audioEngine.start();
+    this.log.info({
+      stage: 'ambience.lifecycle_started', callId: this.call.id,
+      enabled: Boolean(this.runtimeAmbience), ambienceAssetId: this.runtimeAmbience?.id ?? null,
+    }, this.runtimeAmbience ? 'Background ambience started with the call media stream' : 'Call media started in Silent mode');
     this.mediaStartedAt = Date.now();
     void this.#guard('audio_input', () => this.#pumpInbound());
     let followUpOpening = null;
@@ -431,6 +445,7 @@ export class RealtimeConversationOrchestrator {
       return;
     }
     if (event.type === 'speech_started') {
+      this.audioEngine?.setCallerSpeaking?.(true);
       this.#clearInactivity();
       if ([callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) {
         if (!this.interruptionCandidate.active) this.runtimeMetrics.interruptions.candidates += 1;
@@ -447,6 +462,7 @@ export class RealtimeConversationOrchestrator {
       return;
     }
     if (event.type === 'speech_ended') {
+      this.audioEngine?.setCallerSpeaking?.(false);
       try { this.adapters.stt.flush(); } catch (error) { this.log.debug({ err: error, callId: this.call.id }, 'STT flush was not required'); }
       if (this.interruptionCandidate.active && !this.interruptionCandidate.confirmed) {
         this.interruptionCandidate.finish('speech_ended_below_threshold');
@@ -454,6 +470,7 @@ export class RealtimeConversationOrchestrator {
       return;
     }
     if (event.type !== 'final_transcript') return;
+    this.audioEngine?.setCallerSpeaking?.(false);
     this.#clearInactivity();
     const outputWasActive = [callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state);
     if (outputWasActive || this.interruptionCandidate.active) {
@@ -827,13 +844,15 @@ export class RealtimeConversationOrchestrator {
   }
 
   async #closingMessage(reason) {
-    const prompt = String(this.runtimeProfile.integrations?.postCall?.prompt ?? '').trim();
-    const dynamic = String(this.runtimeProfile.integrations?.postCall?.messageType ?? '').toLowerCase() === 'dynamic'
-      || this.runtimeProfile.integrations?.postCall?.dynamicClosing === true;
-    if (!dynamic && !prompt) return fallbackClosing(this.runtimeProfile);
+    const closing = resolvePostCallClosingConfiguration({
+      ...this.runtimeProfile.agent.settings,
+      ...this.runtimeProfile.integrations?.postCall,
+    });
+    if (closing.messageType === 'None') return '';
+    if (closing.messageType === 'Static') return closing.staticMessage;
     try {
       const response = await this.#llm(
-        `End the call now. Reason: ${reason}. Generate one brief natural closing sentence.${prompt ? ` Closing instruction: ${prompt}` : ''}`,
+        `End the call now. Reason: ${reason}. Generate exactly one brief natural closing sentence. Closing instruction: ${closing.prompt}`,
         this.controller.history,
         { route: 'none', found: false },
         { closingReason: reason },
@@ -852,7 +871,7 @@ export class RealtimeConversationOrchestrator {
     if (message && !this.mediaSession.closed) {
       await this.controller.recordAssistantMessage(message);
       try { await this.#synthesize(message, `closing-${this.epoch}`); } catch (error) {
-        this.log.warn({ err: error, callId: this.call.id }, 'Dynamic closing audio failed');
+        this.log.warn({ err: error, callId: this.call.id }, 'Post-Call closing audio failed');
       }
     }
     await this.#finalize('completed', reason);
@@ -910,6 +929,12 @@ export class RealtimeConversationOrchestrator {
     this.activeLlm?.cancel(finalReason);
     this.adapters?.tts?.cancel?.(finalReason);
     this.unsubscribeStt?.();
+    this.runtimeMetrics.ambience = {
+      enabled: Boolean(this.runtimeAmbience),
+      assetId: this.runtimeAmbience?.id ?? null,
+      cacheHit: this.runtimeAmbience?.cacheHit ?? false,
+      ...(this.audioEngine?.ambienceMetrics?.() ?? {}),
+    };
     await this.audioEngine?.close?.();
     await this.#saveConversationMemory(finalOutcome, finalReason);
     if (this.contextCachePolicy?.deleteOnCallEnd && this.contextStore?.delete) {

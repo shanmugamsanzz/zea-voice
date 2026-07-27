@@ -5,11 +5,31 @@ import { registerImplementedProviderAdapters } from '../voice/providers/defaults
 import { normalizeInterruptionSettings } from '../voice/interruption/interruption-config.js';
 import { normalizeInteractionSettings } from '../voice/interaction/interaction-config.js';
 import { normalizeCallbackSettings } from '../voice/interaction/callback-config.js';
+import {
+  normalizePostCallSummarySettings,
+  resolvePostCallSummaryConfiguration,
+} from '../voice/integrations/postcall-summary-config.js';
+import { normalizePostCallClosingSettings } from '../voice/integrations/postcall-closing-config.js';
+
+const legacyAgentTtsProviderOverrides = new Set([
+  'ttsSpeed', 'ttsStyle', 'ttsStyleDegree', 'ttsLanguage', 'ttsStability',
+  'ttsPrice1k', 'ttsSimilarityBoost', 'ttsEmotion', 'ttsVolume',
+]);
+
+function withoutAgentTtsProviderOverrides(settings = {}) {
+  return Object.fromEntries(
+    Object.entries(settings ?? {}).filter(([key]) => !legacyAgentTtsProviderOverrides.has(key)),
+  );
+}
 
 function normalizedAgentSettings(settings, interruptionSensitivity) {
   try {
     return normalizeCallbackSettings(
-      normalizeInteractionSettings(normalizeInterruptionSettings(settings, interruptionSensitivity)),
+      normalizePostCallClosingSettings(normalizePostCallSummarySettings(
+        normalizeInteractionSettings(normalizeInterruptionSettings(
+          withoutAgentTtsProviderOverrides(settings), interruptionSensitivity,
+        )),
+      )),
     );
   } catch (error) {
     throw new AppError(400, error.message, error.code ?? 'VOICE_AGENT_SETTINGS_INVALID', {
@@ -42,15 +62,22 @@ function map(row) { return { id: row.id, tenantId: row.tenant_id, workspaceId: r
   voiceId: row.voice_id, prompt: row.prompt, welcomeMessage: row.welcome_message,
   temperature: Number(row.temperature), interruptionSensitivity: Number(row.interruption_sensitivity),
   silenceTimeoutMs: row.silence_timeout_ms, inactivityTimeoutSeconds: row.inactivity_timeout_seconds,
-  settings: row.settings,
+  settings: withoutAgentTtsProviderOverrides(row.settings),
   metrics: { totalCalls: Number(row.total_calls ?? 0), averageDurationSeconds: Number(row.average_duration_seconds ?? 0), successRate: Number(row.success_rate ?? 0) },
   createdBy: row.created_by, createdAt: row.created_at, updatedAt: row.updated_at } }
 async function agentRow(client, tenantId, id) { const result = await client.query(`${select} AND a.id=$2`, [tenantId, id]);
   if (!result.rowCount) throw new AppError(404, 'Voice agent was not found', 'AGENT_NOT_FOUND'); return result.rows[0]; }
 export async function validateAgentRuntimeModels(client, input, registry = providerAdapterRegistry) {
   registerImplementedProviderAdapters(registry);
-  const expected = [['sttModelId', 'stt'], ['llmModelId', 'llm'], ['ttsModelId', 'tts']];
-  for (const [field, type] of expected) {
+  const summary = resolvePostCallSummaryConfiguration(input.settings ?? {}, { strict: true });
+  const expected = [
+    ['sttModelId', 'stt', 'STT'],
+    ['llmModelId', 'llm', 'LLM'],
+    ['ttsModelId', 'tts', 'TTS'],
+    ...(summary.enabled ? [['postCallSummaryModelId', 'llm', 'Post-Call Summary LLM']] : []),
+  ];
+  for (const [field, type, label] of expected) {
+    const modelId = field === 'postCallSummaryModelId' ? summary.modelId : input[field];
     const result = await client.query(`SELECT m.id model_id,m.model_key,m.settings model_settings,
       m.capabilities model_capabilities,p.id provider_id,p.name provider_name,p.slug provider_slug,
       COALESCE((SELECT jsonb_object_agg(x.key,x.plain_value)
@@ -59,8 +86,10 @@ export async function validateAgentRuntimeModels(client, input, registry = provi
           AND lower(x.key) !~ '(api[_.-]?key|token|secret|password|credential|auth)'), '{}'::jsonb) provider_settings
       FROM provider_models m JOIN ai_providers p ON p.id=m.provider_id
       WHERE m.id=$1 AND m.status='active' AND m.deleted_at IS NULL AND p.type=$2::ai_provider_type
-      AND p.status='connected' AND p.deleted_at IS NULL`, [input[field], type]);
-    if (!result.rowCount) throw new AppError(400, `Selected ${type.toUpperCase()} model is unavailable`, 'AGENT_MODEL_UNAVAILABLE', { field });
+      AND p.status='connected' AND p.deleted_at IS NULL`, [modelId, type]);
+    if (!result.rowCount) throw new AppError(400, `Selected ${label} model is unavailable`,
+      field === 'postCallSummaryModelId' ? 'AGENT_SUMMARY_MODEL_UNAVAILABLE' : 'AGENT_MODEL_UNAVAILABLE',
+      { field: field === 'postCallSummaryModelId' ? 'settings.postCallSummaryModelId' : field });
     const row = result.rows[0];
     try {
       registry.resolve(type, {
@@ -75,9 +104,12 @@ export async function validateAgentRuntimeModels(client, input, registry = provi
       });
     } catch (error) {
       throw new AppError(400,
-        `Selected ${type.toUpperCase()} model cannot run in the voice engine: ${error.message}`,
-        'AGENT_MODEL_RUNTIME_INCOMPATIBLE',
-        { field, providerId: row.provider_id, modelId: row.model_id, reason: error.code },
+        `Selected ${label} model cannot run in the voice engine: ${error.message}`,
+        field === 'postCallSummaryModelId'
+          ? 'AGENT_SUMMARY_MODEL_RUNTIME_INCOMPATIBLE'
+          : 'AGENT_MODEL_RUNTIME_INCOMPATIBLE',
+        { field: field === 'postCallSummaryModelId' ? 'settings.postCallSummaryModelId' : field,
+          providerId: row.provider_id, modelId: row.model_id, reason: error.code },
       );
     }
   }

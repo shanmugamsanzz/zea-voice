@@ -97,6 +97,10 @@ export class FramedAudioQueue {
     });
   }
 
+  tryDequeue() {
+    return this.#frames.length ? this.#shift() : null;
+  }
+
   #shift() {
     const frame = this.#frames.shift();
     this.#bytes -= frame.data.length;

@@ -32,6 +32,7 @@ import { vqaRouter } from './vqa/vqa.routes.js';
 import { insightRouter } from './insights/insight.routes.js';
 import { publicTaskRouter } from './public-tasks/public-task.routes.js';
 import { pronunciationRouter } from './pronunciations/pronunciation.routes.js';
+import { ambienceRouter } from './ambience/ambience.routes.js';
 
 function redactRequestUrl(value) {
   if (typeof value !== 'string' || !value.includes('token=')) return value;
@@ -119,6 +120,7 @@ export function createApp() {
   app.use('/users', userRouter);
   app.use('/agents', agentRouter);
   app.use('/pronunciation-groups', pronunciationRouter);
+  app.use('/ambience-assets', ambienceRouter);
   app.use('/campaigns', campaignRouter);
   app.use('/knowledge-bases', knowledgeBaseRouter);
   app.use('/webhooks/plivo', plivoWebhookRouter);

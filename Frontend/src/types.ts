@@ -146,14 +146,10 @@ export interface VoiceAgent {
   silentMessage?: string;
   ttsModel?: string;
   ttsAmbienceType?: string;
-  ttsSpeed?: number;
-  ttsStyle?: number;
-  ttsLanguage?: string;
-  ttsStability?: number;
-  ttsPrice1k?: number;
-  ttsSimilarityBoost?: number;
   pronunciationGroups?: string[];
   preCallProvider?: string;
+  preCallDescription?: string;
+  /** @deprecated Preserved only when loading agents saved before Pre-Call Description was introduced. */
   preCallPrompt?: string;
   preCallApiActive?: boolean;
   preCallApiUrl?: string;
@@ -163,8 +159,14 @@ export interface VoiceAgent {
   preCallApiResponseMappings?: Array<{ key: string; path: string }>;
   postCallPrompt?: string;
   postCallMessageType?: string;
+  postCallStaticMessage?: string;
   postCallDynamicClosing?: string;
   postCallUninterruptibleReasons?: string[];
+  postCallSummaryEnabled?: boolean;
+  postCallSummaryModelId?: string;
+  postCallSummaryInstructions?: string;
+  postCallIncludeTranscript?: boolean;
+  postCallIncludeSummary?: boolean;
   postCallEndpointDetailsActive?: boolean;
   postCallApiMethod?: string;
   postCallApiUrl?: string;

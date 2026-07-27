@@ -280,7 +280,7 @@ export function PronunciationGroupManager({
         {
           method: editingRuleId ? 'PATCH' : 'POST',
           body: JSON.stringify({
-            writtenText: ruleForm.writtenText.trim(),
+            sourceText: ruleForm.writtenText.trim(),
             spokenText: ruleForm.spokenReplacement.trim(),
             matchType: ruleForm.matchType,
             caseSensitive: ruleForm.caseSensitive,

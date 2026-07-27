@@ -61,6 +61,12 @@ voiceRouter.post('/answer', async (request, response) => {
     tenantId: runtimeAgent.tenantId, agentId: runtimeAgent.agentId, agentName: runtimeAgent.agentName,
   }, '🏢 Company and active voice agent resolved');
   const runtimeProfile = await loadAgentRuntimeProfile(runtimeAgent);
+  request.log.info({
+    stage: 'tools.assigned', providerCallId: call.providerCallId,
+    tenantId: runtimeAgent.tenantId, agentId: runtimeAgent.agentId,
+    activeToolCount: runtimeProfile.tools.length,
+    toolTypes: [...new Set(runtimeProfile.tools.map((tool) => tool.type))],
+  }, 'Active tenant-isolated tools loaded for the selected agent');
   registerImplementedProviderAdapters();
   const adapterCompatibility = assertRuntimeAdapterCompatibility(runtimeProfile);
   request.log.info({

@@ -230,6 +230,7 @@ inactivityMedia.call.id = 'call-inactivity';
 inactivityMedia.callId = 'call-inactivity';
 const inactivityStt = new FakeStt();
 const inactivityTts = new FakeTts();
+const inactivityLlm = new FakeLlm();
 const inactivityAudio = new FakeAudioEngine();
 const inactivityCompleted = [];
 const inactivityProfile = {
@@ -240,11 +241,13 @@ const inactivityProfile = {
     inactivityTimeoutSeconds: 0.02,
     settings: { ...profile.agent.settings, maxInactivityPrompts: 1 },
   },
-  integrations: { postCall: { prompt: '', messageType: 'Static', dynamicClosing: '' } },
+  integrations: { postCall: {
+    prompt: '', messageType: 'Static', staticMessage: 'அழைத்ததற்கு நன்றி. வணக்கம்.',
+  } },
 };
 const inactivityOrchestrator = new RealtimeConversationOrchestrator(inactivityMedia, {
   loadProfile: async () => inactivityProfile,
-  createAdapters: async () => ({ stt: inactivityStt, llm: new FakeLlm(), tts: inactivityTts }),
+  createAdapters: async () => ({ stt: inactivityStt, llm: inactivityLlm, tts: inactivityTts }),
   createAudioEngine: () => inactivityAudio,
   appendTranscript: async () => {},
   contextStore: { get: async () => null, set: async () => true, delete: async () => true },
@@ -256,7 +259,42 @@ inactivityMedia.emit('start', { session: inactivityMedia });
 await waitFor(() => inactivityTts.texts.includes('Are you still there?'), 'Inactivity prompt was not played');
 await waitFor(() => inactivityCompleted.length === 1, 'Inactive call was not closed');
 assert.equal(inactivityCompleted[0].reason, 'inactivity_limit_reached');
-assert.ok(inactivityTts.texts.includes('Thank you for calling. Goodbye.'));
+assert.ok(inactivityTts.texts.includes('அழைத்ததற்கு நன்றி. வணக்கம்.'));
+assert.equal(inactivityLlm.requests.length, 0);
+
+const noneMedia = new FakeMediaSession();
+noneMedia.call.id = 'call-none-closing';
+noneMedia.callId = 'call-none-closing';
+const noneStt = new FakeStt();
+const noneLlm = new FakeLlm();
+const noneTts = new FakeTts();
+const noneAudio = new FakeAudioEngine();
+const noneCompleted = [];
+const noneProfile = {
+  ...profile,
+  agent: {
+    ...profile.agent,
+    welcomeMessage: null,
+    inactivityTimeoutSeconds: 0.02,
+    settings: { ...profile.agent.settings, maxInactivityPrompts: 0 },
+  },
+  integrations: { postCall: { prompt: '', messageType: 'None', staticMessage: '' } },
+};
+const noneOrchestrator = new RealtimeConversationOrchestrator(noneMedia, {
+  loadProfile: async () => noneProfile,
+  createAdapters: async () => ({ stt: noneStt, llm: noneLlm, tts: noneTts }),
+  createAudioEngine: () => noneAudio,
+  appendTranscript: async () => {},
+  contextStore: { get: async () => null, set: async () => true, delete: async () => true },
+  memoryStore: { load: async () => null, save: async (_scope, input) => ({ state: input.state, revision: 1 }) },
+  completeCall: async (input) => { noneCompleted.push(input); },
+});
+await noneOrchestrator.ready;
+noneMedia.emit('start', { session: noneMedia });
+await waitFor(() => noneCompleted.length === 1, 'None closing mode did not end the inactive call');
+assert.equal(noneTts.texts.length, 0);
+assert.equal(noneLlm.requests.length, 0);
+assert.equal(noneMedia.closed, true);
 
 const userMedia = new FakeMediaSession();
 userMedia.call.id = 'call-user-initiates';

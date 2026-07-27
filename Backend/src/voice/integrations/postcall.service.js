@@ -36,9 +36,16 @@ export async function reportPostCall(runtimeProfile, payload, dependencies = {})
     if (!config) return { attempted: false, delivered: false, reason: 'not_configured', durationMs: 0 };
     const fetchImpl = dependencies.fetchImpl ?? fetch;
     const timeoutMs = dependencies.timeoutMs ?? env.VOICE_POSTCALL_TIMEOUT_MS;
+    const headers = { ...config.headers };
+    if (payload?.call?.id && !Object.keys(headers).some((name) => name.toLowerCase() === 'idempotency-key')) {
+      headers['idempotency-key'] = `postcall:${payload.call.id}`;
+    }
+    if (payload?.call?.id && !Object.keys(headers).some((name) => name.toLowerCase() === 'x-zea-event-id')) {
+      headers['x-zea-event-id'] = String(payload.call.id);
+    }
     const response = await fetchImpl(config.url, {
       method: config.method,
-      headers: config.headers,
+      headers,
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(timeoutMs),
     });
