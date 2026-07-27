@@ -1,6 +1,7 @@
 import { env } from '../config/env.js';
 import { AppError } from '../middleware/errors.js';
 import { CallStateMachine, callStates } from './call-state-machine.js';
+import { greetingModes, resolveInteractionConfiguration } from './interaction/interaction-config.js';
 
 const noOp = async () => {};
 
@@ -66,15 +67,26 @@ export class CallController {
     return entry;
   }
 
-  async initialize(now = Date.now()) {
-    const welcome = String(this.#profile.agent.welcomeMessage ?? '').trim();
+  async initialize(now = Date.now(), welcomeOverride = null) {
+    const configuredInteraction = this.#profile.agent.speech?.interaction ?? {};
+    const interaction = resolveInteractionConfiguration({
+      ...this.#profile.agent.settings,
+      greetingMode: configuredInteraction.greetingMode ?? this.#profile.agent.settings?.greetingMode,
+      cachePolicy: configuredInteraction.cachePolicy ?? this.#profile.agent.settings?.cachePolicy,
+      contextId: configuredInteraction.contextId ?? this.#profile.agent.settings?.contextId,
+    });
+    if (interaction.greetingMode !== greetingModes.AGENT_INITIATES) {
+      await this.#transition(callStates.LISTENING, 'user_initiates', now);
+      return { action: 'listen', reason: 'user_initiates', greetingMode: interaction.greetingMode };
+    }
+    const welcome = String(welcomeOverride ?? this.#profile.agent.welcomeMessage ?? '').trim();
     if (welcome) {
       await this.#transition(callStates.GREETING, 'welcome_message', now);
       const transcript = await this.#append('assistant', welcome, now);
-      return { action: 'speak', text: welcome, transcript };
+      return { action: 'speak', text: welcome, transcript, greetingMode: interaction.greetingMode };
     }
-    await this.#transition(callStates.LISTENING, 'ready_without_greeting', now);
-    return { action: 'listen' };
+    await this.#transition(callStates.LISTENING, 'agent_initiates_without_welcome', now);
+    return { action: 'listen', reason: 'agent_initiates_without_welcome', greetingMode: interaction.greetingMode };
   }
 
   async greetingComplete(now = Date.now()) {

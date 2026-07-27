@@ -27,6 +27,7 @@ function requiredApiKeyScope(request) {
     '/dashboard': 'dashboard',
     '/users': 'users',
     '/agents': 'agents',
+    '/pronunciation-groups': 'agents',
     '/campaigns': 'campaigns',
     '/knowledge-bases': 'knowledge_bases',
     '/calls': 'calls',

@@ -1,10 +1,23 @@
 import { env } from '../../config/env.js';
 import { AppError } from '../../middleware/errors.js';
 
-function entries(value) {
-  return Array.isArray(value)
-    ? value.map((item) => [item.key ?? item.name, item.value])
-    : Object.entries(value ?? {});
+function structuredValue(value, fieldName) {
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try { return JSON.parse(trimmed); } catch {
+    throw new AppError(409, `Pre-call ${fieldName} must be valid JSON`, `VOICE_PRECALL_${fieldName.toUpperCase()}_INVALID`);
+  }
+}
+
+function headerEntries(value) {
+  const parsed = structuredValue(value, 'headers');
+  if (parsed === null || parsed === undefined) return [];
+  if (Array.isArray(parsed)) {
+    return parsed.map((item) => [item?.key ?? item?.name, item?.value]);
+  }
+  if (typeof parsed === 'object') return Object.entries(parsed);
+  throw new AppError(409, 'Pre-call headers must be a JSON object or key/value array', 'VOICE_PRECALL_HEADERS_INVALID');
 }
 
 function replaceVariables(value, variables) {
@@ -31,7 +44,12 @@ function readPath(value, path) {
 }
 
 function mappedContext(response, mappings) {
-  const context = {};
+  const suppliedContext = response && typeof response === 'object' && !Array.isArray(response)
+    && response.context && typeof response.context === 'object' && !Array.isArray(response.context)
+    ? response.context
+    : {};
+  const context = Object.fromEntries(Object.entries(suppliedContext)
+    .filter(([key]) => !['__proto__', 'prototype', 'constructor'].includes(key)));
   for (const mapping of mappings ?? []) {
     const source = mapping.source ?? mapping.from ?? mapping.path ?? mapping.responseField ?? mapping.response_field;
     const target = mapping.target ?? mapping.to ?? mapping.key ?? mapping.contextKey ?? mapping.context_key;
@@ -53,8 +71,8 @@ function configuration(runtimeProfile, variables) {
     throw new AppError(409, 'Pre-call endpoint must use HTTPS in production', 'VOICE_PRECALL_HTTPS_REQUIRED');
   }
   const method = String(api.method ?? 'POST').toUpperCase();
-  if (!['GET', 'POST', 'PUT', 'PATCH'].includes(method)) throw new AppError(409, 'Pre-call method is unsupported', 'VOICE_PRECALL_METHOD_INVALID');
-  const headers = Object.fromEntries(entries(api.headers)
+  if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) throw new AppError(409, 'Pre-call method is unsupported', 'VOICE_PRECALL_METHOD_INVALID');
+  const headers = Object.fromEntries(headerEntries(api.headers)
     .map(([key, value]) => [String(key ?? '').trim(), replaceVariables(String(value ?? ''), variables)])
     .filter(([key]) => key));
   if (method !== 'GET' && !Object.keys(headers).some((key) => key.toLowerCase() === 'content-type')) {
@@ -64,7 +82,6 @@ function configuration(runtimeProfile, variables) {
     url: url.toString(), method, headers,
     body: requestBody(api.requestBody, variables),
     mappings: api.responseMappings ?? [],
-    prompt: integration.prompt ?? '',
   };
 }
 
@@ -74,9 +91,12 @@ async function boundedResponse(response) {
 }
 
 export async function executePreCall(runtimeProfile, call, dependencies = {}) {
+  const outbound = call.direction === 'outbound';
   const variables = {
     caller: call.from,
     callee: call.to,
+    customer_number: outbound ? call.to : call.from,
+    platform_number: outbound ? call.from : call.to,
     call_uuid: call.providerCallId,
     callId: call.providerCallId,
     agent_id: runtimeProfile.agent.id,

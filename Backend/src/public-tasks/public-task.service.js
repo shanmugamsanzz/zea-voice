@@ -74,16 +74,19 @@ export async function createPublicTask(auth, idempotencyKey, input, dependencies
   const eventId = `public:${crypto.createHash('sha256')
     .update(`${auth.apiKeyId}:${idempotencyKey}`).digest('hex')}`;
   const createTask = dependencies.createTask ?? createRealtimeTask;
-  const name = typeof input.context.lead_name === 'string'
-    ? input.context.lead_name.trim().slice(0, 240) || undefined
+  const taskContext = input.context_id
+    ? { ...input.context, context_id: input.context_id }
+    : input.context;
+  const name = typeof taskContext.lead_name === 'string'
+    ? taskContext.lead_name.trim().slice(0, 240) || undefined
     : undefined;
   const outcome = await createTask(auth, input.campaign, {
-    eventId, phone: input.phone, name, context: input.context,
+    eventId, phone: input.phone, name, context: taskContext,
   });
 
   if (!outcome.created) {
     const sameRequest = outcome.task.phone === normalizePhone(input.phone)
-      && canonicalJson(outcome.task.context ?? {}) === canonicalJson(input.context);
+      && canonicalJson(outcome.task.context ?? {}) === canonicalJson(taskContext);
     if (!sameRequest) {
       throw new AppError(409,
         'Idempotency-Key was already used with a different request body',

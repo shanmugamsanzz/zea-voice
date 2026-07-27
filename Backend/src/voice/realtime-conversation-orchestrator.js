@@ -17,6 +17,25 @@ import { LlmCircuitBreaker } from './providers/llm/streaming-runtime.js';
 import { welcomeAudioCache } from './welcome-audio-cache.service.js';
 import { tenantProviderHealth } from './provider-health.service.js';
 import { renderWelcomeTemplate, welcomeTemplateContext } from './welcome-template.service.js';
+import { resolveInterruptionConfiguration } from './interruption/interruption-config.js';
+import { InterruptionCandidateManager } from './interruption/interruption-candidate-manager.js';
+import { greetingModes, resolveInteractionConfiguration } from './interaction/interaction-config.js';
+import { resolveCallContextId } from './interaction/context-id-resolver.js';
+import { createContextCachePolicy, publicContextCacheMetadata } from './interaction/context-cache-policy.js';
+import { conversationContextCache } from './interaction/conversation-context-cache.service.js';
+import {
+  conversationMemoryRepository,
+  conversationMemoryScope,
+} from './interaction/conversation-memory.service.js';
+import { buildConversationMemoryState } from './interaction/conversation-memory-state.js';
+import { resolveCallbackConfiguration } from './interaction/callback-config.js';
+import {
+  resolveCustomerCallbackRequest,
+  scheduleCustomerCallback,
+} from '../campaigns/customer-callback.service.js';
+import { createPronunciationTextProcessor } from './pronunciation/pronunciation-text-processor.js';
+import { loadRuntimeAmbience } from './ambience-runtime.service.js';
+import { resolvePostCallClosingConfiguration } from './integrations/postcall-closing-config.js';
 
 const closeIntent = /\b(?:bye|goodbye|hang\s*up|disconnect|end (?:the )?call|not interested|call me later|i(?:'m| am) busy)\b|(?:போதும்|அழைப்பை முடி|பிறகு அழைக்கவும்)/iu;
 
@@ -29,8 +48,6 @@ function languageCode(value) {
 }
 
 function fallbackClosing(profile) {
-  const configured = profile.integrations?.postCall?.dynamicClosing;
-  if (typeof configured === 'string' && configured.trim() && configured !== 'true') return configured.trim();
   return profile.agent.language?.toLowerCase().includes('tamil') || profile.agent.language?.toLowerCase().includes('ta')
     ? 'அழைத்ததற்கு நன்றி. வணக்கம்.' : 'Thank you for calling. Goodbye.';
 }
@@ -58,7 +75,10 @@ export class RealtimeConversationOrchestrator {
     this.activeLlm = null;
     this.inactivityTimer = null;
     this.listeners = [];
-    this.runtimeMetrics = { knowledge: [], tools: [], latency: {} };
+    this.runtimeMetrics = {
+      knowledge: [], tools: [], latency: {},
+      interruptions: { candidates: 0, confirmed: 0, rejected: 0, confirmationMethods: {} },
+    };
     this.llmCircuitBreaker = new LlmCircuitBreaker();
     this.providerHealth = dependencies.providerHealth ?? tenantProviderHealth;
     this.#attach();
@@ -91,6 +111,8 @@ export class RealtimeConversationOrchestrator {
       workspaceId: this.call.workspaceId,
       callDirection: this.call.direction,
     });
+    this.pronunciationProcessor = (this.dependencies.createPronunciationProcessor
+      ?? createPronunciationTextProcessor)(this.runtimeProfile.pronunciation);
     this.log = this.log.child?.({
       tenantId: this.runtimeProfile.agent.tenantId,
       workspaceId: this.runtimeProfile.agent.workspaceId,
@@ -98,19 +120,53 @@ export class RealtimeConversationOrchestrator {
       callId: this.call.id,
     }) ?? this.log;
     this.preCallContext = this.call.providerMetadata?.preCall?.context ?? {};
-    const renderedWelcome = renderWelcomeTemplate(
-      this.runtimeProfile.agent.welcomeMessage,
-      welcomeTemplateContext(this.call),
-      {
-        language: this.runtimeProfile.agent.language,
-        fallbackMessage: this.runtimeProfile.agent.settings?.welcomeFallbackMessage,
+    this.interactionConfiguration = resolveInteractionConfiguration({
+      ...this.runtimeProfile.agent.settings,
+      ...this.runtimeProfile.agent.speech?.interaction,
+    });
+    this.callbackConfiguration = resolveCallbackConfiguration(this.runtimeProfile.agent.settings);
+    this.contextResolution = this.call.providerMetadata?.conversationContext
+      ?? resolveCallContextId({ call: this.call, runtimeProfile: this.runtimeProfile });
+    this.contextCachePolicy = createContextCachePolicy({
+      runtimeProfile: this.runtimeProfile,
+      call: this.call,
+      contextResolution: this.contextResolution,
+    });
+    this.contextStore = this.dependencies.contextStore ?? conversationContextCache;
+    this.memoryStore = this.dependencies.memoryStore ?? conversationMemoryRepository;
+    await this.#loadConversationMemory();
+    this.runtimeProfile = {
+      ...this.runtimeProfile,
+      callContext: {
+        ...this.contextResolution,
+        cache: publicContextCacheMetadata(this.contextCachePolicy),
       },
-    );
+    };
+    this.log.info({
+      stage: 'context.cache_policy', callId: this.call.id,
+      policy: this.contextCachePolicy.policy, scope: this.contextCachePolicy.scope,
+      crossCall: this.contextCachePolicy.crossCall,
+    }, 'Conversation context cache policy activated');
+    const agentInitiates = this.interactionConfiguration.greetingMode === greetingModes.AGENT_INITIATES;
+    const renderedWelcome = agentInitiates
+      ? renderWelcomeTemplate(
+        this.runtimeProfile.agent.welcomeMessage,
+        welcomeTemplateContext(this.call),
+        {
+          language: this.runtimeProfile.agent.language,
+          fallbackMessage: this.runtimeProfile.agent.settings?.welcomeFallbackMessage,
+        },
+      )
+      : { text: this.runtimeProfile.agent.welcomeMessage, dynamic: false, personalized: false, resolvedVariables: [], missingVariables: [] };
     this.runtimeProfile = {
       ...this.runtimeProfile,
       agent: { ...this.runtimeProfile.agent, welcomeMessage: renderedWelcome.text },
     };
     this.personalizedWelcome = renderedWelcome.personalized;
+    this.followUpOpeningRequired = this.callbackConfiguration.enabled && (
+      this.previousConversationMemory?.callback?.scheduled === true
+      || this.previousConversationMemory?.callback?.scheduling === 'scheduled'
+    );
     if (renderedWelcome.dynamic) {
       this.log.info({
         icon: '👤', stage: 'welcome.template_rendered', callId: this.call.id,
@@ -122,7 +178,8 @@ export class RealtimeConversationOrchestrator {
         : '👤 Generic welcome fallback prepared');
     }
     this.welcomeCache = this.dependencies.welcomeCache ?? welcomeAudioCache;
-    this.cachedWelcomePromise = this.runtimeProfile.agent.welcomeMessage && !this.personalizedWelcome
+    this.cachedWelcomePromise = agentInitiates && this.runtimeProfile.agent.welcomeMessage
+      && !this.personalizedWelcome && !this.followUpOpeningRequired
       ? this.welcomeCache.get(this.runtimeProfile, this.runtimeProfile.agent.welcomeMessage)
       : Promise.resolve(null);
     this.controller = new CallController({
@@ -141,6 +198,21 @@ export class RealtimeConversationOrchestrator {
         }, `🔄 Voice call state: ${previous} → ${current}`),
       },
     });
+    this.interruptionConfiguration = resolveInterruptionConfiguration(
+      this.runtimeProfile.agent.settings,
+      this.runtimeProfile.agent.interruptionSensitivity,
+    );
+    this.interruptionCandidate = new InterruptionCandidateManager({
+      configuration: this.interruptionConfiguration,
+      onConfirm: (details) => void this.#guard('interruption', () => this.#confirmInterruption(details)),
+      onReject: (details) => {
+        this.runtimeMetrics.interruptions.rejected += 1;
+        this.log.debug({
+          stage: 'interruption.rejected', callId: this.call.id,
+          elapsedMs: details.elapsedMs, wordCount: details.wordCount,
+        }, 'Short caller audio did not meet the interruption policy');
+      },
+    });
     this.usageTracker = new ProviderUsageTracker(this.runtimeProfile);
     registerImplementedProviderAdapters(this.registry);
     const createAdapters = this.dependencies.createAdapters ?? createRuntimeAdapters;
@@ -152,10 +224,18 @@ export class RealtimeConversationOrchestrator {
       breaker: this.llmCircuitBreaker,
     };
     this.adapters = await createAdapters(this.runtimeProfile, runtimeContext, this.registry);
+    this.runtimeAmbience = await (this.dependencies.loadRuntimeAmbience ?? loadRuntimeAmbience)(
+      this.runtimeProfile,
+      { getObject: this.dependencies.getAmbienceObject, log: this.log },
+    );
     this.audioEngine = (this.dependencies.createAudioEngine ?? ((options) => new ProviderIndependentAudioEngine(options)))({
       runtimeProfile: this.runtimeProfile,
       mediaSession: this.mediaSession,
+      ambience: this.runtimeAmbience,
       onError: (error) => void this.#recover(error, 'audio_output'),
+      onAmbienceError: (error) => this.log.warn({
+        err: error, stage: 'ambience.mixer_disabled', callId: this.call.id,
+      }, 'Ambience mixer failed; speech playback will continue without background sound'),
     });
     this.unsubscribeStt = this.adapters.stt.onEvent((event) => (
       void this.#guard('stt_event', () => this.#handleSttEvent(event))
@@ -180,8 +260,89 @@ export class RealtimeConversationOrchestrator {
       stt: this.runtimeProfile.providers.stt.modelKey,
       llm: this.runtimeProfile.providers.llm.modelKey,
       tts: this.runtimeProfile.providers.tts.modelKey,
+      ambience: this.runtimeAmbience?.name ?? 'silent',
+      ambienceCacheHit: this.runtimeAmbience?.cacheHit ?? false,
     }, '✅ Real-time voice pipeline initialized');
     return this;
+  }
+
+  async #loadConversationMemory() {
+    this.previousConversationMemory = null;
+    const metrics = {
+      ...publicContextCacheMetadata(this.contextCachePolicy),
+      hit: false,
+      source: 'none',
+    };
+    this.runtimeMetrics.contextCache = metrics;
+    if (!this.contextCachePolicy.readEnabled) return;
+
+    try {
+      const cached = await this.contextStore.get(this.contextCachePolicy);
+      if (cached) {
+        this.previousConversationMemory = cached;
+        metrics.hit = true;
+        metrics.source = 'redis';
+        this.log.info({
+          stage: 'context.memory_loaded', callId: this.call.id, source: 'redis',
+        }, 'Previous conversation memory loaded from Redis');
+        return;
+      }
+    } catch (error) {
+      this.log.warn({
+        err: error, stage: 'context.redis_read_failed', callId: this.call.id,
+      }, 'Redis conversation cache read failed; continuing with durable lookup');
+    }
+
+    if (!this.contextCachePolicy.crossCall) return;
+    try {
+      this.conversationMemoryScope = conversationMemoryScope(this.runtimeProfile, this.contextResolution);
+      const stored = await this.memoryStore.load(this.conversationMemoryScope);
+      if (!stored?.state) return;
+      this.previousConversationMemory = stored.state;
+      metrics.hit = true;
+      metrics.source = 'postgresql';
+      await this.contextStore.set(this.contextCachePolicy, stored.state);
+      this.log.info({
+        stage: 'context.memory_loaded', callId: this.call.id, source: 'postgresql',
+        revision: stored.revision,
+      }, 'Previous conversation memory loaded from PostgreSQL');
+    } catch (error) {
+      this.log.warn({
+        err: error, stage: 'context.postgresql_read_failed', callId: this.call.id,
+      }, 'Durable conversation memory read failed; starting with a clean context');
+    }
+  }
+
+  async #saveConversationMemory(outcome, reason) {
+    if (!this.contextCachePolicy?.crossCall || !this.contextCachePolicy.writeEnabled || !this.controller) return;
+    try {
+      this.conversationMemoryScope ??= conversationMemoryScope(this.runtimeProfile, this.contextResolution);
+      const state = buildConversationMemoryState({
+        previous: this.previousConversationMemory,
+        history: this.controller.history,
+        call: this.call,
+        outcome,
+        reason,
+        callback: this.currentCallbackRequest,
+      });
+      const stored = await this.memoryStore.save(this.conversationMemoryScope, {
+        state,
+        callSessionId: this.call.id,
+        outcome,
+      });
+      await this.contextStore.set(this.contextCachePolicy, stored?.state ?? state);
+      this.runtimeMetrics.contextCache.persisted = true;
+      this.runtimeMetrics.contextCache.revision = stored?.revision ?? null;
+      this.log.info({
+        stage: 'context.memory_saved', callId: this.call.id,
+        revision: stored?.revision ?? null,
+      }, 'Conversation memory saved to PostgreSQL and cached in Redis');
+    } catch (error) {
+      this.runtimeMetrics.contextCache.persisted = false;
+      this.log.warn({
+        err: error, stage: 'context.memory_save_failed', callId: this.call.id,
+      }, 'Conversation memory could not be saved; call completion will continue');
+    }
   }
 
   async #guard(stage, operation) {
@@ -197,10 +358,46 @@ export class RealtimeConversationOrchestrator {
     await this.ready;
     if (this.finalized) return;
     this.audioEngine.start();
+    this.log.info({
+      stage: 'ambience.lifecycle_started', callId: this.call.id,
+      enabled: Boolean(this.runtimeAmbience), ambienceAssetId: this.runtimeAmbience?.id ?? null,
+    }, this.runtimeAmbience ? 'Background ambience started with the call media stream' : 'Call media started in Silent mode');
     this.mediaStartedAt = Date.now();
     void this.#guard('audio_input', () => this.#pumpInbound());
-    const action = await this.controller.initialize();
+    let followUpOpening = null;
+    if (this.followUpOpeningRequired) {
+      this.currentCallbackRequest = {
+        ...this.previousConversationMemory.callback,
+        scheduled: false,
+        scheduling: 'fulfilled',
+        fulfilledAt: new Date().toISOString(),
+        fulfilledByCallId: this.call.id,
+      };
+    }
+    if (this.followUpOpeningRequired
+      && this.interactionConfiguration.greetingMode === greetingModes.AGENT_INITIATES) {
+      try {
+        const response = await this.#llm(
+          `Open this follow-up call in one short natural spoken sentence. The caller previously requested this callback. Do not repeat the original introduction or invent details. Follow-up instruction: ${this.callbackConfiguration.followUpOpeningInstructions}`,
+          [],
+          { route: 'none', found: false },
+          { continuationOpening: true },
+        );
+        followUpOpening = response.text || null;
+        this.runtimeMetrics.contextCache.followUpOpening = Boolean(followUpOpening);
+      } catch (error) {
+        this.log.warn({
+          errorCode: error?.code ?? 'CONTINUATION_OPENING_FAILED',
+          stage: 'greeting.continuation_failed', callId: this.call.id,
+        }, 'Memory-aware follow-up opening failed; using the configured welcome');
+      }
+    }
+    const action = await this.controller.initialize(Date.now(), followUpOpening);
     if (action.action === 'speak') {
+      this.log.info({
+        stage: 'greeting.started', callId: this.call.id,
+        mode: action.greetingMode, personalized: this.personalizedWelcome,
+      }, 'Agent-initiated welcome playback started');
       const epoch = this.epoch;
       void this.#guard('welcome', async () => {
         await this.#synthesizeWelcome(action.text, `welcome-${epoch}`);
@@ -209,7 +406,19 @@ export class RealtimeConversationOrchestrator {
           this.#armInactivity();
         }
       });
-    } else this.#armInactivity();
+    } else {
+      if (action.reason === 'user_initiates') {
+        this.log.info({
+          stage: 'greeting.user_initiates', callId: this.call.id, mode: action.greetingMode,
+        }, 'User-Initiates enabled; listening for the caller without welcome playback');
+      }
+      if (action.reason === 'agent_initiates_without_welcome') {
+        this.log.warn({
+          stage: 'greeting.missing', callId: this.call.id, mode: action.greetingMode,
+        }, 'Agent-Initiates is enabled but no Welcome Message is configured; listening safely');
+      }
+      this.#armInactivity();
+    }
   }
 
   async #onMedia(audio) {
@@ -236,29 +445,125 @@ export class RealtimeConversationOrchestrator {
       return;
     }
     if (event.type === 'speech_started') {
+      this.audioEngine?.setCallerSpeaking?.(true);
       this.#clearInactivity();
       if ([callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) {
-        await this.#cancelActive('caller_barge_in');
+        if (!this.interruptionCandidate.active) this.runtimeMetrics.interruptions.candidates += 1;
+        this.interruptionCandidate.start();
+      }
+      return;
+    }
+    if (event.type === 'partial_transcript') {
+      if ([callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)
+        || this.interruptionCandidate.active) {
+        if (!this.interruptionCandidate.active) this.runtimeMetrics.interruptions.candidates += 1;
+        this.interruptionCandidate.observeTranscript(event.text);
       }
       return;
     }
     if (event.type === 'speech_ended') {
+      this.audioEngine?.setCallerSpeaking?.(false);
       try { this.adapters.stt.flush(); } catch (error) { this.log.debug({ err: error, callId: this.call.id }, 'STT flush was not required'); }
+      if (this.interruptionCandidate.active && !this.interruptionCandidate.confirmed) {
+        this.interruptionCandidate.finish('speech_ended_below_threshold');
+      }
       return;
     }
     if (event.type !== 'final_transcript') return;
+    this.audioEngine?.setCallerSpeaking?.(false);
     this.#clearInactivity();
-    if ([callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) {
-      await this.#cancelActive('caller_final_transcript');
+    const outputWasActive = [callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state);
+    if (outputWasActive || this.interruptionCandidate.active) {
+      if (!this.interruptionCandidate.active) this.runtimeMetrics.interruptions.candidates += 1;
+      const decision = this.interruptionCandidate.observeTranscript(event.text);
+      if (decision.confirmed) await this.#cancelActive('caller_barge_in');
+      else if (outputWasActive) {
+        this.interruptionCandidate.finish('final_transcript_below_threshold');
+        return;
+      }
     }
+    this.interruptionCandidate.reset();
     if (this.controller.state !== callStates.LISTENING || !event.text.trim()) return;
     const action = await this.controller.receiveFinalTranscript(event.text);
-    if (closeIntent.test(event.text)) {
-      await this.#close('caller_requested_hangup');
+    const callbackRequest = this.callbackConfiguration.enabled && this.call.direction === 'outbound'
+      ? resolveCustomerCallbackRequest(event.text, this.callbackConfiguration)
+      : { detected: false, resolved: false };
+    if (callbackRequest.detected) {
+      this.currentCallbackRequest = {
+        ...callbackRequest,
+        scheduling: callbackRequest.resolved ? 'pending' : 'needs_clarification',
+      };
+      if (callbackRequest.resolved) {
+        const scheduleCallback = this.dependencies.scheduleCallback ?? scheduleCustomerCallback;
+        try {
+          const result = await scheduleCallback({
+            callId: this.call.id,
+            tenantId: this.runtimeProfile.agent.tenantId,
+            requestedFor: callbackRequest.requestedFor,
+            requestText: callbackRequest.requestText,
+            minimumDelaySeconds: this.callbackConfiguration.minimumDelaySeconds,
+            maximumDelayDays: this.callbackConfiguration.maximumDelayDays,
+          });
+          this.currentCallbackRequest = {
+            ...this.currentCallbackRequest,
+            scheduling: result.scheduled ? 'scheduled' : 'not_scheduled',
+            scheduled: result.scheduled === true,
+            reason: result.reason ?? null,
+            retryCount: result.retryCount ?? null,
+            requestedFor: result.requestedFor ?? callbackRequest.requestedFor,
+          };
+          this.runtimeMetrics.callback = {
+            detected: true,
+            resolved: true,
+            scheduled: result.scheduled === true,
+            reason: result.reason ?? null,
+          };
+        } catch (error) {
+          this.currentCallbackRequest = {
+            ...this.currentCallbackRequest,
+            scheduling: 'not_scheduled', scheduled: false, reason: 'scheduling_failed',
+          };
+          this.runtimeMetrics.callback = {
+            detected: true, resolved: true, scheduled: false, reason: 'scheduling_failed',
+          };
+          this.log.warn({
+            errorCode: error?.code ?? 'CALLBACK_SCHEDULING_FAILED',
+            stage: 'callback.schedule_failed', callId: this.call.id,
+          }, 'Callback request was understood but could not be scheduled');
+        }
+      } else {
+        this.runtimeMetrics.callback = {
+          detected: true, resolved: false, scheduled: false, reason: callbackRequest.reason,
+        };
+      }
+    }
+    if (this.currentCallbackRequest?.scheduled && this.callbackConfiguration.closeAfterScheduling) {
+      await this.#close('customer_callback_scheduled');
+      return;
+    }
+    if (closeIntent.test(event.text) && !callbackRequest.detected) {
+      await this.#close(this.currentCallbackRequest?.scheduled
+        ? 'customer_callback_scheduled'
+        : 'caller_requested_hangup');
       return;
     }
     const epoch = ++this.epoch;
     void this.#guard('turn', () => this.#runTurn(event.text, action.history, epoch));
+  }
+
+  async #confirmInterruption(details) {
+    if (this.finalized || ![callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) return;
+    this.runtimeMetrics.interruptions.confirmed += 1;
+    const method = details.confirmedBy ?? 'unknown';
+    this.runtimeMetrics.interruptions.confirmationMethods[method] =
+      (this.runtimeMetrics.interruptions.confirmationMethods[method] ?? 0) + 1;
+    this.log.info({
+      stage: 'interruption.confirmed', callId: this.call.id, method,
+      elapsedMs: details.elapsedMs, wordCount: details.wordCount,
+      matchedTrigger: details.matchedTrigger ?? undefined,
+      policy: this.interruptionConfiguration.policy,
+    }, 'Caller interruption confirmed');
+    await this.#cancelActive('caller_barge_in');
   }
 
   async #knowledge(query) {
@@ -290,11 +595,25 @@ export class RealtimeConversationOrchestrator {
     const session = await createSelectedLlmStream(this.runtimeProfile, {
       callId: this.call.id,
       query,
-      history,
+      history: [
+        ...(this.previousConversationMemory?.recentMessages ?? []),
+        ...(history ?? []),
+      ].slice(-env.LLM_MAX_HISTORY_MESSAGES),
       knowledge,
       context: {
         callId: this.call.id,
         direction: this.call.direction,
+        conversationMemory: {
+          policy: this.contextCachePolicy.policy,
+          scope: this.contextCachePolicy.scope,
+          previousSummary: this.previousConversationMemory?.summary || undefined,
+          collectedData: this.previousConversationMemory?.collectedData,
+          completedQuestions: this.previousConversationMemory?.completedQuestions,
+          pendingQuestions: this.previousConversationMemory?.pendingQuestions,
+          callback: this.previousConversationMemory?.callback,
+          currentCallbackRequest: this.currentCallbackRequest,
+          lastCall: this.previousConversationMemory?.lastCall,
+        },
         preCall: this.preCallContext,
         ...context,
       },
@@ -448,10 +767,20 @@ export class RealtimeConversationOrchestrator {
   }
 
   async #synthesize(text, generationId, options = {}) {
+    const pronunciation = this.pronunciationProcessor?.process(text)
+      ?? { text, changed: false, replacementCount: 0, appliedRuleIds: [] };
+    if (pronunciation.changed) {
+      this.log.debug({
+        stage: 'tts.pronunciation_applied',
+        callId: this.call.id,
+        replacementCount: pronunciation.replacementCount,
+        appliedRuleIds: pronunciation.appliedRuleIds,
+      }, 'Selected pronunciation rules applied to TTS audio text');
+    }
     let lastError;
     for (let attempt = 0; attempt <= env.VOICE_PROVIDER_MAX_RETRIES; attempt += 1) {
       try {
-        return await this.#synthesizeAttempt(text, generationId, options);
+        return await this.#synthesizeAttempt(pronunciation.text, generationId, options);
       } catch (error) {
         lastError = error;
         const canRetry = error?.retryable === true && error.audioStarted !== true
@@ -515,13 +844,15 @@ export class RealtimeConversationOrchestrator {
   }
 
   async #closingMessage(reason) {
-    const prompt = String(this.runtimeProfile.integrations?.postCall?.prompt ?? '').trim();
-    const dynamic = String(this.runtimeProfile.integrations?.postCall?.messageType ?? '').toLowerCase() === 'dynamic'
-      || this.runtimeProfile.integrations?.postCall?.dynamicClosing === true;
-    if (!dynamic && !prompt) return fallbackClosing(this.runtimeProfile);
+    const closing = resolvePostCallClosingConfiguration({
+      ...this.runtimeProfile.agent.settings,
+      ...this.runtimeProfile.integrations?.postCall,
+    });
+    if (closing.messageType === 'None') return '';
+    if (closing.messageType === 'Static') return closing.staticMessage;
     try {
       const response = await this.#llm(
-        `End the call now. Reason: ${reason}. Generate one brief natural closing sentence.${prompt ? ` Closing instruction: ${prompt}` : ''}`,
+        `End the call now. Reason: ${reason}. Generate exactly one brief natural closing sentence. Closing instruction: ${closing.prompt}`,
         this.controller.history,
         { route: 'none', found: false },
         { closingReason: reason },
@@ -540,7 +871,7 @@ export class RealtimeConversationOrchestrator {
     if (message && !this.mediaSession.closed) {
       await this.controller.recordAssistantMessage(message);
       try { await this.#synthesize(message, `closing-${this.epoch}`); } catch (error) {
-        this.log.warn({ err: error, callId: this.call.id }, 'Dynamic closing audio failed');
+        this.log.warn({ err: error, callId: this.call.id }, 'Post-Call closing audio failed');
       }
     }
     await this.#finalize('completed', reason);
@@ -585,13 +916,36 @@ export class RealtimeConversationOrchestrator {
 
   async #finalize(outcome, reason) {
     if (this.finalized) return;
+    const callbackNeedsManualFollowUp = this.call.direction === 'outbound'
+      && this.currentCallbackRequest?.detected === true
+      && this.currentCallbackRequest?.resolved === false
+      && this.currentCallbackRequest?.scheduled !== true;
+    const finalOutcome = callbackNeedsManualFollowUp ? 'manual_follow_up_required' : outcome;
+    const finalReason = callbackNeedsManualFollowUp ? 'callback_time_not_provided' : reason;
     this.finalized = true;
     this.#clearInactivity();
+    this.interruptionCandidate?.reset();
     this.epoch += 1;
-    this.activeLlm?.cancel(reason);
-    this.adapters?.tts?.cancel?.(reason);
+    this.activeLlm?.cancel(finalReason);
+    this.adapters?.tts?.cancel?.(finalReason);
     this.unsubscribeStt?.();
+    this.runtimeMetrics.ambience = {
+      enabled: Boolean(this.runtimeAmbience),
+      assetId: this.runtimeAmbience?.id ?? null,
+      cacheHit: this.runtimeAmbience?.cacheHit ?? false,
+      ...(this.audioEngine?.ambienceMetrics?.() ?? {}),
+    };
     await this.audioEngine?.close?.();
+    await this.#saveConversationMemory(finalOutcome, finalReason);
+    if (this.contextCachePolicy?.deleteOnCallEnd && this.contextStore?.delete) {
+      try {
+        await this.contextStore.delete(this.contextCachePolicy.key);
+      } catch (error) {
+        this.log.warn({
+          err: error, stage: 'context.session_cleanup', callId: this.call.id,
+        }, 'Session-only conversation context cleanup failed');
+      }
+    }
     if (!this.controller || !this.runtimeProfile || !this.usageTracker) return;
     try {
       await (this.dependencies.completeCall ?? completeVoiceCall)({
@@ -599,8 +953,8 @@ export class RealtimeConversationOrchestrator {
         runtimeProfile: this.runtimeProfile,
         usageTracker: this.usageTracker,
         adapters: this.adapters ?? {},
-        outcome,
-        reason,
+        outcome: finalOutcome,
+        reason: finalReason,
         metrics: this.runtimeMetrics,
       }, this.dependencies.completionDependencies ?? {});
     } catch (error) {

@@ -7,7 +7,7 @@ process.env.REDIS_HOST ??= '127.0.0.1';
 const { executePreCall } = await import('../src/voice/integrations/precall.service.js');
 const { reportPostCall } = await import('../src/voice/integrations/postcall.service.js');
 const { executeAgentTool } = await import('../src/voice/tools/tool-executor.service.js');
-const { saveVoiceCallPreCallResult } = await import('../src/voice/call-session-store.js');
+const { saveVoiceCallContextResolution, saveVoiceCallPreCallResult } = await import('../src/voice/call-session-store.js');
 
 const variable = (name) => '$' + '{' + name + '}';
 const runtimeProfile = {
@@ -16,13 +16,16 @@ const runtimeProfile = {
   },
   integrations: {
     preCall: {
-      prompt: 'Load caller context',
+      description: 'Load caller context',
       api: {
         active: true,
         url: 'https://crm.example.test/caller',
         method: 'POST',
-        headers: { 'x-company': variable('company_id') },
-        requestBody: { caller: variable('caller'), callId: variable('call_uuid') },
+        headers: JSON.stringify({ 'x-company': variable('company_id') }),
+        requestBody: {
+          customerNumber: variable('customer_number'), platformNumber: variable('platform_number'),
+          caller: variable('caller'), callId: variable('call_uuid'),
+        },
         responseMappings: [
           { source: 'customer.name', target: 'customer_name' },
           { source: 'customer.tier', target: 'customer_tier' },
@@ -54,16 +57,45 @@ const preCall = await executePreCall(runtimeProfile, call, {
   fetchImpl: async (url, request) => {
     preCallRequest = { url, request };
     return new Response(JSON.stringify({
-      customer: { name: 'Shanmugam', tier: 'gold' }, internalSecret: 'must-not-enter-llm-context',
+      customer: { name: 'Shanmugam', tier: 'gold' },
+      context: { crm_contact_id: 'crm-123' },
+      internalSecret: 'must-not-enter-llm-context',
     }), { status: 200, headers: { 'content-type': 'application/json' } });
   },
 });
 assert.equal(preCall.delivered, true);
-assert.deepEqual(preCall.context, { customer_name: 'Shanmugam', customer_tier: 'gold' });
+assert.deepEqual(preCall.context, {
+  crm_contact_id: 'crm-123', customer_name: 'Shanmugam', customer_tier: 'gold',
+});
 assert.equal(preCall.context.internalSecret, undefined);
 assert.equal(preCallRequest.request.headers['x-company'], 'tenant-a');
-assert.deepEqual(JSON.parse(preCallRequest.request.body), { caller: call.from, callId: call.providerCallId });
+assert.deepEqual(JSON.parse(preCallRequest.request.body), {
+  customerNumber: call.from, platformNumber: call.to, caller: call.from, callId: call.providerCallId,
+});
 assert.ok(preCall.durationMs >= 0);
+
+let outboundRequest;
+const outboundCall = { ...call, from: call.to, to: call.from, direction: 'outbound' };
+const outboundPreCall = await executePreCall(runtimeProfile, outboundCall, {
+  fetchImpl: async (url, request) => {
+    outboundRequest = { url, request };
+    return new Response(JSON.stringify({ context: { customer_name: 'Outbound Customer' } }), { status: 200 });
+  },
+});
+assert.equal(outboundPreCall.delivered, true);
+assert.equal(outboundPreCall.context.customer_name, 'Outbound Customer');
+assert.equal(JSON.parse(outboundRequest.request.body).customerNumber, outboundCall.to);
+assert.equal(JSON.parse(outboundRequest.request.body).platformNumber, outboundCall.from);
+
+const invalidHeaders = await executePreCall({
+  ...runtimeProfile,
+  integrations: {
+    ...runtimeProfile.integrations,
+    preCall: { ...runtimeProfile.integrations.preCall, api: { ...runtimeProfile.integrations.preCall.api, headers: '{invalid' } },
+  },
+}, call, { fetchImpl: async () => { throw new Error('Network must not run'); } });
+assert.equal(invalidHeaders.delivered, false);
+assert.match(invalidHeaders.error, /headers must be valid JSON/i);
 
 let savedMetadata;
 const savedCall = await saveVoiceCallPreCallResult(call.id, preCall, {
@@ -80,6 +112,26 @@ const savedCall = await saveVoiceCallPreCallResult(call.id, preCall, {
   }),
 });
 assert.equal(savedCall.providerMetadata.preCall.context.customer_name, 'Shanmugam');
+
+const contextResolution = {
+  contextId: 'hospital:contact:crm-123', identity: 'contact:crm-123',
+  namespace: 'hospital', source: 'precall_crm_id', direction: 'inbound',
+};
+const contextCall = await saveVoiceCallContextResolution(call.id, contextResolution, {
+  contextRunner: async (operation) => operation({
+    async query(sql, values) {
+      assert.ok(sql.includes("'{conversationContext}'"));
+      return { rowCount: 1, rows: [{
+        id: call.id, tenant_id: 'tenant-a', workspace_id: 'workspace-a', provider_call_id: 'plivo-1',
+        agent_id: 'agent-1', from_number: call.from, to_number: call.to, direction: 'inbound',
+        status: 'connected', provider_metadata: {
+          ...savedMetadata, conversationContext: JSON.parse(values[1]),
+        },
+      }] };
+    },
+  }),
+});
+assert.equal(contextCall.providerMetadata.conversationContext.contextId, 'hospital:contact:crm-123');
 
 let toolRequest;
 const toolResult = await executeAgentTool(runtimeProfile, call, {

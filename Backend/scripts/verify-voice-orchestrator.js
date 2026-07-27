@@ -61,7 +61,11 @@ class FakeLlm {
       yield { type: 'completed', finishReason: 'tool_calls', toolCalls, usage: {} };
       return;
     }
-    const text = query.includes('End the call now') ? 'Thank you. Goodbye.' : 'Your appointment is booked.';
+    const text = query.includes('End the call now')
+      ? 'Thank you. Goodbye.'
+      : (query.includes('Open this follow-up call')
+        ? 'You asked me to call back. Is now a good time to continue?'
+        : 'Your appointment is booked.');
     yield { type: 'text_delta', delta: text };
     yield { type: 'usage', usage: { inputTokens: 12, outputTokens: 5, totalTokens: 17 } };
     yield { type: 'completed', finishReason: 'stop', toolCalls: [], usage: {} };
@@ -131,6 +135,16 @@ const completed = [];
 const knowledgeQueries = [];
 const knowledgeAuth = [];
 const toolInvocations = [];
+const contextCacheWrites = [];
+const durableMemoryWrites = [];
+const previousMemory = {
+  summary: 'The caller previously asked about an appointment.',
+  recentMessages: [
+    { role: 'user', content: 'Please call me again.' },
+    { role: 'assistant', content: 'Certainly.' },
+  ],
+  collectedData: { customer_name: 'Test Caller' },
+};
 const orchestrator = new RealtimeConversationOrchestrator(media, {
   loadProfile: async () => profile,
   createAdapters: async () => ({ stt, llm, tts }),
@@ -146,6 +160,18 @@ const orchestrator = new RealtimeConversationOrchestrator(media, {
     toolInvocations.push(...calls);
     return calls.map((call) => ({ id: call.id, name: call.name, success: true, output: { bookingId: 'B-1' } }));
   },
+  contextStore: {
+    get: async () => null,
+    set: async (descriptor, state) => { contextCacheWrites.push({ descriptor, state }); return true; },
+    delete: async () => true,
+  },
+  memoryStore: {
+    load: async () => ({ state: previousMemory, revision: 2 }),
+    save: async (_scope, input) => {
+      durableMemoryWrites.push(input);
+      return { state: input.state, revision: 3 };
+    },
+  },
   completeCall: async (input) => { completed.push(input); return { call: { id: 'call-1' } }; },
 });
 
@@ -154,6 +180,7 @@ media.emit('start', { session: media });
 await waitFor(() => audioEngine.audio.some((entry) => entry.id.startsWith('welcome-')), 'Cached welcome audio was not played');
 await waitFor(() => orchestrator.controller.state === 'listening', 'Call did not enter listening state');
 assert.equal(audioEngine.started, true);
+assert.equal(contextCacheWrites.length, 1);
 
 media.emit('media', { session: media, audio: Buffer.alloc(160, 2) });
 await waitFor(() => stt.sent.length === 1, 'Plivo audio was not forwarded to STT');
@@ -163,6 +190,7 @@ stt.publish({ type: 'final_transcript', text: 'book appointment', language: 'en'
 await waitFor(() => transcript.some((entry) => entry.text === 'Your appointment is booked.'), 'Agent response was not persisted');
 await waitFor(() => orchestrator.controller.state === 'listening', 'Call did not return to listening after playback');
 assert.deepEqual(knowledgeQueries, ['book appointment']);
+assert.ok(llm.requests[0].messages.some((message) => message.content === 'Please call me again.'));
 assert.equal(knowledgeAuth[0].tenantId, 'tenant-1');
 assert.equal(knowledgeAuth[0].workspaceId, 'workspace-1');
 assert.equal(toolInvocations[0].name, 'book_visit');
@@ -188,6 +216,12 @@ assert.ok(completed[0].metrics.latency.welcomeAudioStartMs < 300);
 assert.ok(completed[0].metrics.latency.firstResponseAudioMs[0] < 1000);
 assert.equal(completed[0].metrics.knowledge[0].durationMs, 4);
 assert.equal(completed[0].metrics.tools[0].name, 'book_visit');
+assert.equal(completed[0].metrics.contextCache.hit, true);
+assert.equal(completed[0].metrics.contextCache.source, 'postgresql');
+assert.equal(completed[0].metrics.contextCache.persisted, true);
+assert.equal(durableMemoryWrites.length, 1);
+assert.equal(contextCacheWrites.length, 2);
+assert.ok(durableMemoryWrites[0].state.recentMessages.some((message) => message.content === 'book appointment'));
 assert.ok(tts.texts.includes('Thank you. Goodbye.'));
 assert.equal(media.closed, true);
 
@@ -196,6 +230,7 @@ inactivityMedia.call.id = 'call-inactivity';
 inactivityMedia.callId = 'call-inactivity';
 const inactivityStt = new FakeStt();
 const inactivityTts = new FakeTts();
+const inactivityLlm = new FakeLlm();
 const inactivityAudio = new FakeAudioEngine();
 const inactivityCompleted = [];
 const inactivityProfile = {
@@ -206,13 +241,17 @@ const inactivityProfile = {
     inactivityTimeoutSeconds: 0.02,
     settings: { ...profile.agent.settings, maxInactivityPrompts: 1 },
   },
-  integrations: { postCall: { prompt: '', messageType: 'Static', dynamicClosing: '' } },
+  integrations: { postCall: {
+    prompt: '', messageType: 'Static', staticMessage: 'அழைத்ததற்கு நன்றி. வணக்கம்.',
+  } },
 };
 const inactivityOrchestrator = new RealtimeConversationOrchestrator(inactivityMedia, {
   loadProfile: async () => inactivityProfile,
-  createAdapters: async () => ({ stt: inactivityStt, llm: new FakeLlm(), tts: inactivityTts }),
+  createAdapters: async () => ({ stt: inactivityStt, llm: inactivityLlm, tts: inactivityTts }),
   createAudioEngine: () => inactivityAudio,
   appendTranscript: async () => {},
+  contextStore: { get: async () => null, set: async () => true, delete: async () => true },
+  memoryStore: { load: async () => null, save: async (_scope, input) => ({ state: input.state, revision: 1 }) },
   completeCall: async (input) => { inactivityCompleted.push(input); },
 });
 await inactivityOrchestrator.ready;
@@ -220,6 +259,161 @@ inactivityMedia.emit('start', { session: inactivityMedia });
 await waitFor(() => inactivityTts.texts.includes('Are you still there?'), 'Inactivity prompt was not played');
 await waitFor(() => inactivityCompleted.length === 1, 'Inactive call was not closed');
 assert.equal(inactivityCompleted[0].reason, 'inactivity_limit_reached');
-assert.ok(inactivityTts.texts.includes('Thank you for calling. Goodbye.'));
+assert.ok(inactivityTts.texts.includes('அழைத்ததற்கு நன்றி. வணக்கம்.'));
+assert.equal(inactivityLlm.requests.length, 0);
+
+const noneMedia = new FakeMediaSession();
+noneMedia.call.id = 'call-none-closing';
+noneMedia.callId = 'call-none-closing';
+const noneStt = new FakeStt();
+const noneLlm = new FakeLlm();
+const noneTts = new FakeTts();
+const noneAudio = new FakeAudioEngine();
+const noneCompleted = [];
+const noneProfile = {
+  ...profile,
+  agent: {
+    ...profile.agent,
+    welcomeMessage: null,
+    inactivityTimeoutSeconds: 0.02,
+    settings: { ...profile.agent.settings, maxInactivityPrompts: 0 },
+  },
+  integrations: { postCall: { prompt: '', messageType: 'None', staticMessage: '' } },
+};
+const noneOrchestrator = new RealtimeConversationOrchestrator(noneMedia, {
+  loadProfile: async () => noneProfile,
+  createAdapters: async () => ({ stt: noneStt, llm: noneLlm, tts: noneTts }),
+  createAudioEngine: () => noneAudio,
+  appendTranscript: async () => {},
+  contextStore: { get: async () => null, set: async () => true, delete: async () => true },
+  memoryStore: { load: async () => null, save: async (_scope, input) => ({ state: input.state, revision: 1 }) },
+  completeCall: async (input) => { noneCompleted.push(input); },
+});
+await noneOrchestrator.ready;
+noneMedia.emit('start', { session: noneMedia });
+await waitFor(() => noneCompleted.length === 1, 'None closing mode did not end the inactive call');
+assert.equal(noneTts.texts.length, 0);
+assert.equal(noneLlm.requests.length, 0);
+assert.equal(noneMedia.closed, true);
+
+const userMedia = new FakeMediaSession();
+userMedia.call.id = 'call-user-initiates';
+userMedia.callId = 'call-user-initiates';
+const userStt = new FakeStt();
+const userTts = new FakeTts();
+const userAudio = new FakeAudioEngine();
+const userTranscript = [];
+const deletedSessionContextKeys = [];
+const userProfile = {
+  ...profile,
+  agent: {
+    ...profile.agent,
+    welcomeMessage: 'This configured welcome must not be spoken.',
+    speech: { interaction: { greetingMode: 'user_initiates', cachePolicy: 'session_only', contextId: null } },
+  },
+};
+const userOrchestrator = new RealtimeConversationOrchestrator(userMedia, {
+  loadProfile: async () => userProfile,
+  createAdapters: async () => ({ stt: userStt, llm: new FakeLlm(), tts: userTts }),
+  createAudioEngine: () => userAudio,
+  appendTranscript: async (entry) => userTranscript.push(entry),
+  routeKnowledge: async () => ({ route: 'none', found: false, content: null, matches: [], durationMs: 1 }),
+  contextStore: {
+    get: async () => null,
+    set: async () => true,
+    delete: async (key) => { deletedSessionContextKeys.push(key); return true; },
+  },
+  completeCall: async () => {},
+});
+await userOrchestrator.ready;
+userMedia.emit('start', { session: userMedia });
+await waitFor(() => userOrchestrator.controller.state === 'listening', 'User-Initiates did not start in listening mode');
+assert.equal(userTts.texts.includes('This configured welcome must not be spoken.'), false);
+assert.equal(userTranscript.length, 0);
+userStt.publish({ type: 'final_transcript', text: 'I need package information', language: 'en', isFinal: true });
+await waitFor(() => userTranscript.some((entry) => entry.speaker === 'agent'), 'User-Initiates first turn was not answered');
+assert.equal(userTranscript[0].speaker, 'user');
+assert.equal(userTranscript[0].text, 'I need package information');
+assert.equal(userTts.texts.at(-1), 'Your appointment is booked.');
+userMedia.emit('stop', { session: userMedia });
+await waitFor(() => deletedSessionContextKeys.length === 1, 'Session-only context was not deleted at call end');
+assert.match(deletedSessionContextKeys[0], /:session:/);
+
+const callbackMedia = new FakeMediaSession();
+callbackMedia.call.id = 'call-callback';
+callbackMedia.callId = 'call-callback';
+callbackMedia.call.direction = 'outbound';
+const callbackStt = new FakeStt();
+const callbackTts = new FakeTts();
+const callbackAudio = new FakeAudioEngine();
+const callbackSchedules = [];
+const callbackMemory = [];
+const callbackCompleted = [];
+const callbackProfile = {
+  ...profile,
+  agent: {
+    ...profile.agent,
+    speech: { interaction: { greetingMode: 'user_initiates', cachePolicy: 'persistent_24h', contextId: null } },
+  },
+};
+const callbackOrchestrator = new RealtimeConversationOrchestrator(callbackMedia, {
+  loadProfile: async () => callbackProfile,
+  createAdapters: async () => ({ stt: callbackStt, llm: new FakeLlm(), tts: callbackTts }),
+  createAudioEngine: () => callbackAudio,
+  appendTranscript: async () => {},
+  contextStore: { get: async () => null, set: async () => true, delete: async () => true },
+  memoryStore: {
+    load: async () => ({ state: previousMemory, revision: 1 }),
+    save: async (_scope, input) => { callbackMemory.push(input); return { state: input.state, revision: 2 }; },
+  },
+  scheduleCallback: async (input) => {
+    callbackSchedules.push(input);
+    return { scheduled: true, retryCount: 1, requestedFor: input.requestedFor };
+  },
+  completeCall: async (input) => { callbackCompleted.push(input); },
+});
+await callbackOrchestrator.ready;
+callbackMedia.emit('start', { session: callbackMedia });
+await waitFor(() => callbackOrchestrator.controller.state === 'listening', 'Callback test call did not listen');
+callbackStt.publish({ type: 'final_transcript', text: 'Please call me after 5 minutes', language: 'en', isFinal: true });
+await waitFor(() => callbackCompleted.length === 1, 'Scheduled callback did not close the current call');
+assert.equal(callbackSchedules.length, 1);
+assert.equal(callbackCompleted[0].reason, 'customer_callback_scheduled');
+assert.equal(callbackCompleted[0].metrics.callback.scheduled, true);
+assert.equal(callbackMemory[0].state.callback.scheduling, 'scheduled');
+assert.match(callbackMemory[0].state.summary, /Caller: Please call me after 5 minutes/);
+
+const followUpMedia = new FakeMediaSession();
+followUpMedia.call.id = 'call-follow-up';
+followUpMedia.callId = 'call-follow-up';
+followUpMedia.call.direction = 'outbound';
+const followUpStt = new FakeStt();
+const followUpTts = new FakeTts();
+const followUpAudio = new FakeAudioEngine();
+let followUpWelcomeCacheRead = false;
+const followUpMemory = [];
+const followUpCompleted = [];
+const followUpOrchestrator = new RealtimeConversationOrchestrator(followUpMedia, {
+  loadProfile: async () => profile,
+  createAdapters: async () => ({ stt: followUpStt, llm: new FakeLlm(), tts: followUpTts }),
+  createAudioEngine: () => followUpAudio,
+  welcomeCache: { async get() { followUpWelcomeCacheRead = true; return Buffer.alloc(160); } },
+  appendTranscript: async () => {},
+  contextStore: { get: async () => null, set: async () => true, delete: async () => true },
+  memoryStore: {
+    load: async () => ({ state: callbackMemory[0].state, revision: 2 }),
+    save: async (_scope, input) => { followUpMemory.push(input); return { state: input.state, revision: 3 }; },
+  },
+  completeCall: async (input) => { followUpCompleted.push(input); },
+});
+await followUpOrchestrator.ready;
+followUpMedia.emit('start', { session: followUpMedia });
+await waitFor(() => followUpTts.texts.length > 0, 'Memory-aware follow-up opening was not spoken');
+assert.equal(followUpTts.texts[0], 'You asked me to call back. Is now a good time to continue?');
+assert.equal(followUpWelcomeCacheRead, false);
+followUpMedia.emit('stop', { session: followUpMedia });
+await waitFor(() => followUpCompleted.length === 1, 'Follow-up call was not finalized');
+assert.equal(followUpMemory[0].state.callback.scheduling, 'fulfilled');
+assert.equal(followUpMemory[0].state.callback.scheduled, false);
 
 console.log(JSON.stringify({ success: true, task: 'Real-time conversation orchestrator' }));

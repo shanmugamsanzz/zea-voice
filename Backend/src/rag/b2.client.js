@@ -69,6 +69,9 @@ export async function checkB2() {
   if (!bucket || bucket.bucketName !== env.B2_BUCKET) {
     throw new Error('Configured Backblaze B2 bucket is not accessible');
   }
+  if (bucket.bucketType !== 'allPrivate') {
+    throw new Error('Configured Backblaze B2 bucket must be private (allPrivate)');
+  }
 
   return { ok: true, latencyMs: Math.round((performance.now() - startedAt) * 100) / 100 };
 }

@@ -43,41 +43,56 @@ function buildRecommendations(summary) {
   return recommendations;
 }
 
-export function getTenantInsights(auth, input) {
-  return withTenantContext(auth, async (client) => {
+export function getTenantInsights(auth, input, dependencies = {}) {
+  const contextRunner = dependencies.contextRunner ?? withTenantContext;
+  return contextRunner(auth, async (client) => {
     const parameters = [auth.tenantId, input.days];
     const periodFilter = `c.tenant_id=$1 AND c.started_at >= now() - ($2::int * interval '1 day')`;
+    const summaryJoin = `LEFT JOIN call_ai_summaries s ON s.call_session_id=c.id AND s.tenant_id=c.tenant_id`;
+    const analyzedSentiment = `COALESCE(NULLIF(s.sentiment,'unknown'),NULLIF(c.sentiment::text,'unknown'),'unknown')`;
+    const analyzedOutcome = `COALESCE(NULLIF(s.outcome,''),c.status::text)`;
     const [summaryResult, sentimentResult, outcomeResult, agentResult, flaggedResult] = await Promise.all([
       client.query(`SELECT count(*)::int total_calls,
           count(*) FILTER (WHERE c.answered_at IS NOT NULL)::int answered_calls,
           count(*) FILTER (WHERE c.status='completed')::int completed_calls,
           count(*) FILTER (WHERE c.status IN ('failed','busy','no_answer','canceled'))::int unsuccessful_calls,
-          count(*) FILTER (WHERE c.sentiment <> 'unknown')::int sentiment_calls,
-          count(*) FILTER (WHERE c.sentiment='positive')::int positive_calls,
-          count(*) FILTER (WHERE c.sentiment='negative')::int negative_calls,
+          count(*) FILTER (WHERE ${analyzedSentiment}<>'unknown')::int sentiment_calls,
+          count(*) FILTER (WHERE ${analyzedSentiment}='positive')::int positive_calls,
+          count(*) FILTER (WHERE ${analyzedSentiment}='negative')::int negative_calls,
+          count(*) FILTER (WHERE s.status='completed')::int summarized_calls,
+          count(*) FILTER (WHERE s.status='failed')::int summary_failed_calls,
+          count(*) FILTER (WHERE s.status='completed' AND s.follow_up_required=true)::int follow_up_required_calls,
           count(*) FILTER (WHERE EXISTS (SELECT 1 FROM call_transcript_entries t
             WHERE t.call_session_id=c.id AND t.is_final=true))::int transcript_calls,
           COALESCE(avg(c.duration_seconds),0)::numeric average_duration_seconds
-        FROM call_sessions c WHERE ${periodFilter}`, parameters),
-      client.query(`SELECT c.sentiment::text name,count(*)::int value
-        FROM call_sessions c WHERE ${periodFilter} GROUP BY c.sentiment ORDER BY value DESC`, parameters),
-      client.query(`SELECT c.status::text name,count(*)::int value
-        FROM call_sessions c WHERE ${periodFilter} GROUP BY c.status ORDER BY value DESC`, parameters),
+        FROM call_sessions c ${summaryJoin} WHERE ${periodFilter}`, parameters),
+      client.query(`SELECT ${analyzedSentiment} name,count(*)::int value
+        FROM call_sessions c ${summaryJoin} WHERE ${periodFilter}
+        GROUP BY ${analyzedSentiment} ORDER BY value DESC`, parameters),
+      client.query(`SELECT ${analyzedOutcome} name,count(*)::int value
+        FROM call_sessions c ${summaryJoin} WHERE ${periodFilter}
+        GROUP BY ${analyzedOutcome} ORDER BY value DESC`, parameters),
       client.query(`SELECT c.agent_id,c.agent_name,count(*)::int total_calls,
           count(*) FILTER (WHERE c.status='completed')::int completed_calls,
-          count(*) FILTER (WHERE c.sentiment='negative')::int negative_calls,
+          count(*) FILTER (WHERE ${analyzedSentiment}='negative')::int negative_calls,
+          count(*) FILTER (WHERE s.status='completed')::int summarized_calls,
+          count(*) FILTER (WHERE s.follow_up_required=true)::int follow_up_required_calls,
           COALESCE(avg(c.duration_seconds),0)::numeric average_duration_seconds
-        FROM call_sessions c WHERE ${periodFilter} AND c.agent_id IS NOT NULL
+        FROM call_sessions c ${summaryJoin} WHERE ${periodFilter} AND c.agent_id IS NOT NULL
         GROUP BY c.agent_id,c.agent_name ORDER BY total_calls DESC,c.agent_name LIMIT 20`, parameters),
-      client.query(`SELECT c.id,c.provider_call_id,c.agent_id,c.agent_name,c.direction,c.status,c.sentiment,
+      client.query(`SELECT c.id,c.provider_call_id,c.agent_id,c.agent_name,c.direction,c.status,
+          ${analyzedSentiment} sentiment,
           c.started_at,c.duration_seconds,c.from_number,c.to_number,
           c.provider_metadata #>> '{voiceRuntime,reason}' failure_reason,
+          s.status::text summary_status,s.summary_text ai_summary,s.outcome ai_outcome,
+          s.customer_intent,s.follow_up_required,s.follow_up_reason,
           transcript.text customer_excerpt
-        FROM call_sessions c
+        FROM call_sessions c ${summaryJoin}
         LEFT JOIN LATERAL (SELECT t.text FROM call_transcript_entries t
           WHERE t.call_session_id=c.id AND t.speaker='user' AND t.is_final=true
           ORDER BY t.sequence_number DESC LIMIT 1) transcript ON true
-        WHERE ${periodFilter} AND (c.sentiment='negative' OR c.status IN ('failed','busy','no_answer','canceled'))
+        WHERE ${periodFilter} AND (${analyzedSentiment}='negative'
+          OR s.follow_up_required=true OR c.status IN ('failed','busy','no_answer','canceled'))
         ORDER BY c.started_at DESC LIMIT 20`, parameters),
     ]);
 
@@ -90,10 +105,14 @@ export function getTenantInsights(auth, input) {
       unsuccessfulCalls: number(raw.unsuccessful_calls),
       transcriptCalls: number(raw.transcript_calls),
       sentimentCalls: number(raw.sentiment_calls),
+      summarizedCalls: number(raw.summarized_calls),
+      summaryFailedCalls: number(raw.summary_failed_calls),
+      followUpRequiredCalls: number(raw.follow_up_required_calls),
       averageDurationSeconds: Number(number(raw.average_duration_seconds).toFixed(2)),
       completionRate: percentage(raw.completed_calls, totalCalls),
       transcriptCoverage: percentage(raw.transcript_calls, totalCalls),
       sentimentCoverage: percentage(raw.sentiment_calls, totalCalls),
+      summaryCoverage: percentage(raw.summarized_calls, totalCalls),
       positiveRate: percentage(raw.positive_calls, totalCalls),
       negativeRate: percentage(raw.negative_calls, totalCalls),
     };
@@ -111,6 +130,7 @@ export function getTenantInsights(auth, input) {
       agents: agentResult.rows.map((row) => ({
         agentId: row.agent_id, agentName: row.agent_name, totalCalls: number(row.total_calls),
         completedCalls: number(row.completed_calls), negativeCalls: number(row.negative_calls),
+        summarizedCalls: number(row.summarized_calls), followUpRequiredCalls: number(row.follow_up_required_calls),
         completionRate: percentage(row.completed_calls, number(row.total_calls)),
         averageDurationSeconds: Number(number(row.average_duration_seconds).toFixed(2)),
       })),
@@ -119,6 +139,9 @@ export function getTenantInsights(auth, input) {
         direction: row.direction, status: row.status, sentiment: row.sentiment, startedAt: row.started_at,
         durationSeconds: number(row.duration_seconds), fromNumber: row.from_number, toNumber: row.to_number,
         failureReason: row.failure_reason, customerExcerpt: row.customer_excerpt,
+        summaryStatus: row.summary_status, aiSummary: row.ai_summary, aiOutcome: row.ai_outcome,
+        customerIntent: row.customer_intent, followUpRequired: row.follow_up_required === true,
+        followUpReason: row.follow_up_reason,
       })),
       recommendations: buildRecommendations(summary),
     };

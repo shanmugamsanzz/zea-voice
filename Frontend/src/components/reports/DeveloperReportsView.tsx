@@ -7,7 +7,7 @@ import {
 import { apiBlobRequest, apiRequest, isAbortError } from '../../lib/api';
 
 type CallDirection = 'inbound' | 'outbound';
-type CallStatus = 'queued' | 'ringing' | 'connected' | 'completed' | 'failed' | 'busy' | 'no_answer' | 'canceled';
+type CallStatus = 'queued' | 'ringing' | 'connected' | 'completed' | 'failed' | 'busy' | 'no_answer' | 'canceled' | 'manual_follow_up_required';
 
 interface TranscriptEntry {
   id: string;
@@ -40,6 +40,15 @@ interface CallRecord {
   cost: number;
   currency: string;
   recordingAvailable: boolean;
+  aiSummary: {
+    id: string; status: 'queued' | 'processing' | 'completed' | 'failed' | 'skipped';
+    summary: string | null; outcome: string | null; customerIntent: string | null;
+    sentiment: string | null; collectedData: Record<string, unknown>;
+    followUpRequired: boolean | null; followUpReason: string | null;
+    usage: Record<string, unknown>; webhookDelivery: { delivered?: boolean; status?: number; error?: string };
+    errorCode: string | null; errorMessage: string | null;
+    completedAt: string | null;
+  } | null;
   transcript?: TranscriptEntry[];
 }
 
@@ -55,6 +64,7 @@ const MAX_REPORT_CALLS = 5000;
 const statusLabel: Record<CallStatus, string> = {
   queued: 'Queued', ringing: 'Ringing', connected: 'Connected', completed: 'Completed',
   failed: 'Failed', busy: 'Busy', no_answer: 'No Answer', canceled: 'Canceled',
+  manual_follow_up_required: 'Manual Follow-Up Required',
 };
 
 function timestamp(value: string, full = false) {
@@ -104,6 +114,7 @@ async function loadAllCalls(signal: AbortSignal) {
 function StatusBadge({ status }: { status: CallStatus }) {
   const style = status === 'completed' ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
     : status === 'connected' ? 'border-blue-200 bg-blue-50 text-blue-700'
+      : status === 'manual_follow_up_required' ? 'border-violet-200 bg-violet-50 text-violet-700'
       : ['failed', 'canceled'].includes(status) ? 'border-rose-200 bg-rose-50 text-rose-700'
         : ['busy', 'no_answer'].includes(status) ? 'border-amber-200 bg-amber-50 text-amber-700'
           : 'border-slate-200 bg-slate-100 text-slate-600';
@@ -128,7 +139,7 @@ function ReportsReviewTable({ calls, loading, page, openDetails }: {
         <td className="whitespace-nowrap px-5 py-4 font-semibold text-slate-600">{timestamp(call.startedAt, true)}</td>
         <td className="px-5 py-4 font-black text-slate-700">{call.contactName || 'Unknown Caller'}</td>
         <td className="px-5 py-4"><span className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-black uppercase ${call.direction === 'inbound' ? 'border-blue-100 bg-blue-50 text-blue-600' : 'border-pink-100 bg-pink-50 text-pink-600'}`}>{call.direction === 'inbound' ? <PhoneIncoming className="h-3 w-3" /> : <PhoneOutgoing className="h-3 w-3" />}{call.direction}</span></td>
-        <td className="px-5 py-4"><StatusBadge status={call.status} /></td>
+        <td className="px-5 py-4"><StatusBadge status={call.status} />{call.aiSummary?.outcome && <p className="mt-1 max-w-40 truncate text-[9px] font-bold uppercase text-violet-600">AI: {call.aiSummary.outcome.replaceAll('_', ' ')}</p>}</td>
         <td className="px-5 py-4 font-mono font-bold text-slate-600">{duration(call.durationSeconds)}</td>
         <td className="px-5 py-4 font-mono font-bold text-slate-800">{call.direction === 'inbound' ? call.fromNumber : call.toNumber}</td>
         <td className="px-5 py-4 text-center"><button onClick={() => void openDetails(call)} title="Review call" className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-2 font-bold text-slate-600 hover:border-pink-200 hover:bg-pink-50 hover:text-pink-600"><Eye className="h-4 w-4" />Review</button></td>
@@ -307,7 +318,7 @@ export function DeveloperReportsView({
     const rows = variant === 'reports'
       ? [['S.No', 'Time Stamp', 'Contact Name', 'Call Type', 'Outcome', 'Duration Seconds', 'Prospect Number'],
       ...filtered.map((call, index) => [index + 1, timestamp(call.startedAt, true),
-        call.contactName || 'Unknown Caller', call.direction, statusLabel[call.status], call.durationSeconds,
+        call.contactName || 'Unknown Caller', call.direction, call.aiSummary?.outcome || statusLabel[call.status], call.durationSeconds,
         call.direction === 'inbound' ? call.fromNumber : call.toNumber])]
       : [['Started At', 'Direction', 'From', 'To', 'Agent', 'Campaign', 'Status', 'Ringing At',
         'Answered At', 'Ended At', 'Duration Seconds', 'Sentiment', 'Cost', 'Currency', 'Recording Available',
@@ -385,6 +396,7 @@ export function DeveloperReportsView({
         <div className="grid grid-cols-2 gap-3">{[['Agent', selected.agentName || '—'], ['Timestamp', timestamp(selected.startedAt, true)], ['Direction', selected.direction.toUpperCase()], ['Outcome', statusLabel[selected.status]], ['Duration', duration(selected.durationSeconds)], ['Sentiment', selected.sentiment || 'Not analyzed']].map(([label, value]) => <div key={label} className="rounded-2xl border border-slate-200 bg-white p-4"><p className="text-[9px] font-black uppercase tracking-wider text-slate-400">{label}</p><p className="mt-2 break-words text-xs font-black text-slate-800">{value}</p></div>)}</div>
         <div className="divide-y divide-slate-100 rounded-2xl border border-slate-200 bg-white p-5 text-xs">{[['From', selected.fromNumber], ['To', selected.toNumber], ['Agent ID', selected.agentId || '—'], ['Campaign', selected.campaignName || '—'], ['Plivo Call UUID', selected.providerCallId || '—'], ['Internal Call ID', selected.id]].map(([label, value]) => <div key={label} className="flex items-start justify-between gap-5 py-3"><span className="shrink-0 font-black uppercase text-slate-400">{label}</span><span className="break-all text-right font-mono font-bold text-slate-700">{value}</span></div>)}</div>
         <div className="rounded-2xl border border-slate-200 bg-white p-5"><div className="mb-4 flex items-center justify-between"><h4 className="text-sm font-black text-slate-800">Transcript</h4><span className="rounded-full bg-slate-100 px-2 py-1 text-[9px] font-black uppercase text-slate-500">{selected.transcript?.length ?? 0} entries</span></div>{selected.transcript?.length ? <div className="space-y-4">{selected.transcript.map((entry) => <div key={entry.id} className={`flex flex-col ${entry.speaker === 'agent' ? 'items-end' : 'items-start'}`}><span className="mb-1 text-[9px] font-black uppercase tracking-wider text-slate-400">{entry.speaker} · {elapsed(entry.offsetMs)}</span><div className={`max-w-[88%] rounded-2xl px-4 py-3 text-xs font-semibold leading-relaxed ${entry.speaker === 'agent' ? 'rounded-tr-none bg-gradient-to-r from-violet-600 to-pink-500 text-white' : entry.speaker === 'system' ? 'border border-amber-200 bg-amber-50 text-amber-800' : 'rounded-tl-none border border-slate-200 bg-slate-50 text-slate-800'}`}>{entry.text}</div></div>)}</div> : <p className="py-8 text-center text-xs font-semibold text-slate-400">No finalized transcript entries were saved for this call.</p>}</div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-5"><div className="mb-4 flex items-center justify-between"><h4 className="text-sm font-black text-slate-800">AI Call Summary</h4><span className={`rounded-full px-2 py-1 text-[9px] font-black uppercase ${selected.aiSummary?.status === 'completed' ? 'bg-emerald-50 text-emerald-700' : selected.aiSummary?.status === 'failed' ? 'bg-rose-50 text-rose-700' : 'bg-slate-100 text-slate-500'}`}>{selected.aiSummary?.status || 'Not enabled'}</span></div>{selected.aiSummary?.status === 'completed' ? <div className="space-y-4"><p className="text-xs font-semibold leading-relaxed text-slate-700">{selected.aiSummary.summary}</p><div className="grid grid-cols-2 gap-3">{[['Outcome', selected.aiSummary.outcome || 'Unknown'], ['Customer Intent', selected.aiSummary.customerIntent || 'Not identified'], ['Sentiment', selected.aiSummary.sentiment || 'Unknown'], ['Follow-Up', selected.aiSummary.followUpRequired ? 'Required' : 'Not required']].map(([label, value]) => <div key={label} className="rounded-xl bg-slate-50 p-3"><p className="text-[8px] font-black uppercase text-slate-400">{label}</p><p className="mt-1 text-[10px] font-bold text-slate-700">{value}</p></div>)}</div>{selected.aiSummary.followUpReason && <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-[11px] font-semibold text-amber-800">{selected.aiSummary.followUpReason}</div>}<p className={`text-[9px] font-bold ${selected.aiSummary.webhookDelivery?.delivered ? 'text-emerald-600' : 'text-slate-400'}`}>Post-Call webhook: {selected.aiSummary.webhookDelivery?.delivered ? `Delivered (${selected.aiSummary.webhookDelivery.status || 200})` : selected.aiSummary.webhookDelivery?.error || 'Not delivered or not configured'}</p></div> : selected.aiSummary?.status === 'failed' ? <p className="text-xs font-semibold text-rose-600">{selected.aiSummary.errorMessage || 'Summary processing failed.'}</p> : <p className="text-xs font-semibold text-slate-400">No completed AI summary is available for this call.</p>}</div>
         <div className="rounded-2xl border border-slate-200 bg-white p-5"><div className="mb-3 flex items-center gap-2"><Download className="h-4 w-4 text-emerald-500" /><h4 className="text-sm font-black text-slate-800">Call Recording</h4></div>{recordingLoading ? <div className="flex items-center gap-2 py-3 text-xs font-bold text-slate-500"><LoaderCircle className="h-4 w-4 animate-spin text-emerald-500" />Loading private recording from B2...</div> : recordingUrl ? <><audio controls preload="metadata" src={recordingUrl} className="w-full" /><a href={recordingUrl} download={`call-${selected.id}.mp3`} className="mt-3 inline-flex items-center gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-[10px] font-black text-emerald-700"><Download className="h-3.5 w-3.5" />Download recording</a></> : recordingError ? <p className="text-xs font-bold text-rose-600">{recordingError}</p> : <div className="flex items-center gap-2 text-xs font-semibold text-slate-500"><Activity className="h-4 w-4 text-slate-400" />No recording is available for this call.</div>}</div>
       </div><div className="border-t border-slate-200 bg-white p-5 text-right"><button onClick={closeDetails} className="rounded-xl bg-slate-900 px-5 py-2.5 text-xs font-bold text-white">Close</button></div></div></div>}
   </div>;

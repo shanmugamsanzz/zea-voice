@@ -2,6 +2,41 @@ import { withPlatformAdminContext, withTenantContext } from '../infrastructure/d
 import { AppError } from '../middleware/errors.js';
 import { providerAdapterRegistry } from '../voice/providers/registry.js';
 import { registerImplementedProviderAdapters } from '../voice/providers/defaults.js';
+import { normalizeInterruptionSettings } from '../voice/interruption/interruption-config.js';
+import { normalizeInteractionSettings } from '../voice/interaction/interaction-config.js';
+import { normalizeCallbackSettings } from '../voice/interaction/callback-config.js';
+import {
+  normalizePostCallSummarySettings,
+  resolvePostCallSummaryConfiguration,
+} from '../voice/integrations/postcall-summary-config.js';
+import { normalizePostCallClosingSettings } from '../voice/integrations/postcall-closing-config.js';
+
+const legacyAgentTtsProviderOverrides = new Set([
+  'ttsSpeed', 'ttsStyle', 'ttsStyleDegree', 'ttsLanguage', 'ttsStability',
+  'ttsPrice1k', 'ttsSimilarityBoost', 'ttsEmotion', 'ttsVolume',
+]);
+
+function withoutAgentTtsProviderOverrides(settings = {}) {
+  return Object.fromEntries(
+    Object.entries(settings ?? {}).filter(([key]) => !legacyAgentTtsProviderOverrides.has(key)),
+  );
+}
+
+function normalizedAgentSettings(settings, interruptionSensitivity) {
+  try {
+    return normalizeCallbackSettings(
+      normalizePostCallClosingSettings(normalizePostCallSummarySettings(
+        normalizeInteractionSettings(normalizeInterruptionSettings(
+          withoutAgentTtsProviderOverrides(settings), interruptionSensitivity,
+        )),
+      )),
+    );
+  } catch (error) {
+    throw new AppError(400, error.message, error.code ?? 'VOICE_AGENT_SETTINGS_INVALID', {
+      field: error.field ?? 'settings',
+    });
+  }
+}
 
 const select = `SELECT a.*, pn.e164 AS phone_number,
   sp.name AS stt_provider_name, sm.display_name AS stt_model_name,
@@ -27,15 +62,22 @@ function map(row) { return { id: row.id, tenantId: row.tenant_id, workspaceId: r
   voiceId: row.voice_id, prompt: row.prompt, welcomeMessage: row.welcome_message,
   temperature: Number(row.temperature), interruptionSensitivity: Number(row.interruption_sensitivity),
   silenceTimeoutMs: row.silence_timeout_ms, inactivityTimeoutSeconds: row.inactivity_timeout_seconds,
-  settings: row.settings,
+  settings: withoutAgentTtsProviderOverrides(row.settings),
   metrics: { totalCalls: Number(row.total_calls ?? 0), averageDurationSeconds: Number(row.average_duration_seconds ?? 0), successRate: Number(row.success_rate ?? 0) },
   createdBy: row.created_by, createdAt: row.created_at, updatedAt: row.updated_at } }
 async function agentRow(client, tenantId, id) { const result = await client.query(`${select} AND a.id=$2`, [tenantId, id]);
   if (!result.rowCount) throw new AppError(404, 'Voice agent was not found', 'AGENT_NOT_FOUND'); return result.rows[0]; }
 export async function validateAgentRuntimeModels(client, input, registry = providerAdapterRegistry) {
   registerImplementedProviderAdapters(registry);
-  const expected = [['sttModelId', 'stt'], ['llmModelId', 'llm'], ['ttsModelId', 'tts']];
-  for (const [field, type] of expected) {
+  const summary = resolvePostCallSummaryConfiguration(input.settings ?? {}, { strict: true });
+  const expected = [
+    ['sttModelId', 'stt', 'STT'],
+    ['llmModelId', 'llm', 'LLM'],
+    ['ttsModelId', 'tts', 'TTS'],
+    ...(summary.enabled ? [['postCallSummaryModelId', 'llm', 'Post-Call Summary LLM']] : []),
+  ];
+  for (const [field, type, label] of expected) {
+    const modelId = field === 'postCallSummaryModelId' ? summary.modelId : input[field];
     const result = await client.query(`SELECT m.id model_id,m.model_key,m.settings model_settings,
       m.capabilities model_capabilities,p.id provider_id,p.name provider_name,p.slug provider_slug,
       COALESCE((SELECT jsonb_object_agg(x.key,x.plain_value)
@@ -44,8 +86,10 @@ export async function validateAgentRuntimeModels(client, input, registry = provi
           AND lower(x.key) !~ '(api[_.-]?key|token|secret|password|credential|auth)'), '{}'::jsonb) provider_settings
       FROM provider_models m JOIN ai_providers p ON p.id=m.provider_id
       WHERE m.id=$1 AND m.status='active' AND m.deleted_at IS NULL AND p.type=$2::ai_provider_type
-      AND p.status='connected' AND p.deleted_at IS NULL`, [input[field], type]);
-    if (!result.rowCount) throw new AppError(400, `Selected ${type.toUpperCase()} model is unavailable`, 'AGENT_MODEL_UNAVAILABLE', { field });
+      AND p.status='connected' AND p.deleted_at IS NULL`, [modelId, type]);
+    if (!result.rowCount) throw new AppError(400, `Selected ${label} model is unavailable`,
+      field === 'postCallSummaryModelId' ? 'AGENT_SUMMARY_MODEL_UNAVAILABLE' : 'AGENT_MODEL_UNAVAILABLE',
+      { field: field === 'postCallSummaryModelId' ? 'settings.postCallSummaryModelId' : field });
     const row = result.rows[0];
     try {
       registry.resolve(type, {
@@ -60,9 +104,12 @@ export async function validateAgentRuntimeModels(client, input, registry = provi
       });
     } catch (error) {
       throw new AppError(400,
-        `Selected ${type.toUpperCase()} model cannot run in the voice engine: ${error.message}`,
-        'AGENT_MODEL_RUNTIME_INCOMPATIBLE',
-        { field, providerId: row.provider_id, modelId: row.model_id, reason: error.code },
+        `Selected ${label} model cannot run in the voice engine: ${error.message}`,
+        field === 'postCallSummaryModelId'
+          ? 'AGENT_SUMMARY_MODEL_RUNTIME_INCOMPATIBLE'
+          : 'AGENT_MODEL_RUNTIME_INCOMPATIBLE',
+        { field: field === 'postCallSummaryModelId' ? 'settings.postCallSummaryModelId' : field,
+          providerId: row.provider_id, modelId: row.model_id, reason: error.code },
       );
     }
   }
@@ -91,13 +138,14 @@ export function createAgent(auth, input) { return withTenantContext(auth, async 
   await withPlatformAdminContext(auth.userId, (platformClient) => validateAgentRuntimeModels(platformClient, input));
   await validatePhone(client, auth.tenantId, input.phoneNumberId);
   try {
+    const settings = normalizedAgentSettings(input.settings, input.interruptionSensitivity);
     const created = (await client.query(`INSERT INTO voice_agents (tenant_id,workspace_id,name,description,goal,language,usage_direction,status,phone_number_id,
       stt_model_id,llm_model_id,tts_model_id,voice_id,prompt,welcome_message,temperature,interruption_sensitivity,
       silence_timeout_ms,inactivity_timeout_seconds,settings,created_by,updated_by)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::jsonb,$21,$21) RETURNING id`,
     [auth.tenantId,auth.workspaceId,input.name,input.description??null,input.goal??null,input.language,input.usageDirection,input.status,input.phoneNumberId??null,
       input.sttModelId,input.llmModelId,input.ttsModelId,input.voiceId,input.prompt,input.welcomeMessage??null,input.temperature,
-      input.interruptionSensitivity,input.silenceTimeoutMs,input.inactivityTimeoutSeconds,JSON.stringify(input.settings),auth.userId])).rows[0];
+      input.interruptionSensitivity,input.silenceTimeoutMs,input.inactivityTimeoutSeconds,JSON.stringify(settings),auth.userId])).rows[0];
     await client.query(`INSERT INTO audit_logs (tenant_id,workspace_id,actor_user_id,actor_type,action,entity_type,entity_id,after_data)
       VALUES ($1,$2,$3,'user','VOICE_AGENT_CREATED','voice_agent',$4,$5::jsonb)`, [auth.tenantId,auth.workspaceId,auth.userId,created.id,JSON.stringify({name:input.name,status:input.status})]);
     return map(await agentRow(client, auth.tenantId, created.id));
@@ -113,7 +161,8 @@ export function updateAgent(auth, id, input) { return withTenantContext(auth, as
     voiceId:input.voiceId??before.voice_id,prompt:input.prompt??before.prompt,welcomeMessage:Object.hasOwn(input,'welcomeMessage')?input.welcomeMessage:before.welcome_message,
     temperature:input.temperature??Number(before.temperature),interruptionSensitivity:input.interruptionSensitivity??Number(before.interruption_sensitivity),
     silenceTimeoutMs:input.silenceTimeoutMs??before.silence_timeout_ms,inactivityTimeoutSeconds:input.inactivityTimeoutSeconds??before.inactivity_timeout_seconds,
-    settings:input.settings??before.settings };
+    settings:normalizedAgentSettings(input.settings??before.settings,
+      input.interruptionSensitivity??Number(before.interruption_sensitivity)) };
   await withPlatformAdminContext(auth.userId, (platformClient) => validateAgentRuntimeModels(platformClient, value));
   await validatePhone(client,auth.tenantId,value.phoneNumberId);
   try { await client.query(`UPDATE voice_agents SET name=$3,description=$4,goal=$5,language=$6,usage_direction=$7,status=$8,phone_number_id=$9,

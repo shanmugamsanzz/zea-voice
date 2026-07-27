@@ -20,7 +20,7 @@ const row = {
   interruption_sensitivity: '0.3', silence_timeout_ms: 600, inactivity_timeout_seconds: 8,
   settings: {
     greetingMode: 'Agent Initiates', sttLanguage: 'en-IN', sttMode: 'transcribe',
-    ttsLanguage: 'en-IN', ttsSpeed: 1.1, silentMessage: 'Are you still there?',
+    ttsLanguage: 'legacy-agent-value', ttsSpeed: 1.1, silentMessage: 'Are you still there?',
     preCallApiActive: true, preCallApiUrl: 'https://example.com/pre', preCallApiMethod: 'POST',
     postCallEndpointDetailsActive: true, postCallApiUrl: 'https://example.com/post', postCallApiMethod: 'POST',
   },
@@ -46,6 +46,7 @@ for (const type of ['stt', 'llm', 'tts']) {
     ],
   });
 }
+row.tts_model_settings = { streaming: true, ttsLanguage: 'en-IN', ttsSpeed: 0.9 };
 const contextRunner = async (operation) => operation({ query: async () => ({ rowCount: 1, rows: [row] }) });
 const profile = await loadAgentRuntimeProfile(resolved, {
   contextRunner,
@@ -59,13 +60,15 @@ assert.equal(profile.agent.temperature, 0.4);
 assert.equal(profile.agent.voiceId, 'hospital-voice');
 assert.equal(profile.agent.callDirection, 'inbound');
 assert.equal(profile.agent.speech.listener.sttLanguage, 'en-IN');
-assert.equal(profile.agent.speech.speaker.ttsSpeed, 1.1);
+assert.equal(Object.hasOwn(profile.agent.speech.speaker, 'ttsSpeed'), false);
 assert.equal(profile.providers.stt.modelKey, 'stt-model');
 assert.equal(profile.providers.stt.effectiveSettings.STT_MODEL, 'stt-model');
 assert.equal(Object.hasOwn(profile.providers.stt.effectiveSettings, 'STT_API_KEY'), false);
 assert.equal(profile.providers.llm.parameters.LLM_API_KEY, 'decrypted:encrypted-llm');
 assert.equal(profile.providers.tts.modelCapabilities.languages[0], 'en');
 assert.equal(profile.providers.tts.effectiveSettings.voiceId, 'hospital-voice');
+assert.equal(profile.providers.tts.effectiveSettings.ttsLanguage, 'en-IN');
+assert.equal(profile.providers.tts.effectiveSettings.ttsSpeed, 0.9);
 assert.equal(profile.knowledgeBases[0].name, 'Hospital KB');
 assert.equal(profile.tools[0].secretConfiguration.token, 'decrypted-tool-token');
 assert.equal(profile.integrations.preCall.api.url, 'https://example.com/pre');

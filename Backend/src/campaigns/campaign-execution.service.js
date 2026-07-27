@@ -165,11 +165,14 @@ export async function markAttemptRinging(attemptId, providerCallId, payload = {}
   });
 }
 
-export async function finishAttempt(attemptId, outcome, details = {}) {
+export async function finishAttempt(attemptId, outcome, details = {}, dependencies = {}) {
   if (!terminalOutcomes.has(outcome)) outcome = 'failed';
-  const result = await withPlatformAdminContext(null, async (client) => {
+  const runContext = dependencies.contextRunner
+    ?? ((operation) => withPlatformAdminContext(null, operation));
+  const result = await runContext(async (client) => {
     const found = await client.query(`SELECT a.*,t.campaign_id,t.id AS task_id,t.retry_count,t.max_retries,
-      t.source,c.retry_outcomes,c.retry_intervals_ms FROM campaign_task_attempts a
+      t.source,t.status AS task_status,t.callback_origin_attempt_id,t.callback_scheduled_for,
+      c.retry_outcomes,c.retry_intervals_ms FROM campaign_task_attempts a
       JOIN campaign_tasks t ON t.id=a.task_id JOIN campaigns c ON c.id=t.campaign_id
       WHERE a.id=$1 FOR UPDATE OF a,t`, [attemptId]);
     if (!found.rowCount) return { action: 'ignored', reason: 'attempt_not_found' };
@@ -184,6 +187,13 @@ export async function finishAttempt(attemptId, outcome, details = {}) {
       answered_at=CASE WHEN $3>0 THEN COALESCE(answered_at,started_at) ELSE answered_at END,
       provider_metadata=provider_metadata||$4::jsonb WHERE id=$1`,
     [row.call_session_id, callOutcome, duration, JSON.stringify(details.payload ?? {})]);
+    if (row.callback_origin_attempt_id === row.id && row.callback_scheduled_for
+      && row.task_status === 'queued') {
+      return {
+        action: 'callback', taskId: row.task_id,
+        retryCount: Number(row.retry_count), scheduledFor: row.callback_scheduled_for,
+      };
+    }
     const retryable = row.retry_outcomes.includes(outcome) && row.retry_count < row.max_retries;
     if (retryable) {
       const retryCount = row.retry_count + 1;
@@ -201,7 +211,7 @@ export async function finishAttempt(attemptId, outcome, details = {}) {
     return { action: 'final', taskId: row.task_id, outcome };
   });
   if (result.action === 'retry') {
-    const queue = getQueue('call-retries');
+    const queue = dependencies.queue ?? getQueue('call-retries');
     await queue.add('campaign-task', { taskId: result.taskId }, {
       jobId: `${result.taskId}:retry:${result.retryCount}`, delay: result.delay,
       removeOnComplete: 1000, removeOnFail: 5000,

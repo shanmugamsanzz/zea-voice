@@ -2,13 +2,14 @@ import { Router } from 'express';
 import { AppError } from '../middleware/errors.js';
 import { buildPlivoStreamXml, validateIncomingPlivoCall } from './plivo-answer.service.js';
 import { resolvePhoneNumberAgent } from './agent-resolver.service.js';
-import { createVoiceCallSession, saveVoiceCallPreCallResult } from './call-session-store.js';
+import { createVoiceCallSession, saveVoiceCallContextResolution, saveVoiceCallPreCallResult } from './call-session-store.js';
 import { plivoAnswerPayloadSchema } from './voice.schemas.js';
 import { loadAgentRuntimeProfile } from './providers/provider-config.js';
 import { assertRuntimeAdapterCompatibility } from './providers/registry.js';
 import { registerImplementedProviderAdapters } from './providers/defaults.js';
 import { executePreCall } from './integrations/precall.service.js';
 import { voiceCallOwnership } from './call-ownership.service.js';
+import { resolveCallContextId } from './interaction/context-id-resolver.js';
 
 export const voiceRouter = Router();
 
@@ -60,6 +61,12 @@ voiceRouter.post('/answer', async (request, response) => {
     tenantId: runtimeAgent.tenantId, agentId: runtimeAgent.agentId, agentName: runtimeAgent.agentName,
   }, '🏢 Company and active voice agent resolved');
   const runtimeProfile = await loadAgentRuntimeProfile(runtimeAgent);
+  request.log.info({
+    stage: 'tools.assigned', providerCallId: call.providerCallId,
+    tenantId: runtimeAgent.tenantId, agentId: runtimeAgent.agentId,
+    activeToolCount: runtimeProfile.tools.length,
+    toolTypes: [...new Set(runtimeProfile.tools.map((tool) => tool.type))],
+  }, 'Active tenant-isolated tools loaded for the selected agent');
   registerImplementedProviderAdapters();
   const adapterCompatibility = assertRuntimeAdapterCompatibility(runtimeProfile);
   request.log.info({
@@ -77,7 +84,9 @@ voiceRouter.post('/answer', async (request, response) => {
     limit: runtimeAgent.concurrencyLimit,
   });
   let callSession = await createVoiceCallSession({ call, runtimeProfile });
-  if (callSession.created) {
+  const existingPreCall = callSession.providerMetadata?.preCall;
+  const preCallRequired = callSession.created || !existingPreCall || existingPreCall.status === 'pending';
+  if (preCallRequired) {
     const preCall = await executePreCall(runtimeProfile, call);
     callSession = await saveVoiceCallPreCallResult(callSession.id, preCall);
     request.log.info({
@@ -87,6 +96,13 @@ voiceRouter.post('/answer', async (request, response) => {
       mappedContextKeys: Object.keys(preCall.context ?? {}),
     }, '🔗 Pre-call integration completed');
   }
+  const contextResolution = resolveCallContextId({ call: callSession, runtimeProfile });
+  callSession = await saveVoiceCallContextResolution(callSession.id, contextResolution);
+  request.log.info({
+    stage: 'context.resolved', callId: callSession.id,
+    source: contextResolution.source, direction: contextResolution.direction,
+    namespaced: Boolean(contextResolution.namespace),
+  }, 'Call Context ID resolved from validated source metadata');
   request.log.info({
     providerCallId: call.providerCallId,
     phoneNumberId: call.phoneNumberId,

@@ -1,6 +1,6 @@
 import { AppError } from '../../../middleware/errors.js';
 import {
-  binaryAudioEvents, createTtsRequestState, firstPronunciationDictionary, parameter,
+  binaryAudioEvents, createTtsRequestState, parameter, pronunciationDictionaries,
   requireAudioResponse, resolveCommonTtsConfiguration, synthesisInput, ttsErrorEvent, ttsFailure,
 } from './streaming-runtime.js';
 import { normalizeTtsEvent } from './tts.interface.js';
@@ -30,8 +30,9 @@ function outputFormat(format) {
 }
 
 function ssml(text, configuration) {
-  const lexicon = configuration.dictionary?.lexiconUri
-    ? `<lexicon uri="${xmlEscape(configuration.dictionary.lexiconUri)}"/>` : '';
+  const lexicon = configuration.dictionaries
+    .filter((dictionary) => dictionary.lexiconUri)
+    .map((dictionary) => `<lexicon uri="${xmlEscape(dictionary.lexiconUri)}"/>`).join('');
   const prosody = `<prosody rate="${configuration.speed}" volume="${Math.round(configuration.volume * 100)}%">${xmlEscape(text)}</prosody>`;
   const styled = configuration.style
     ? `<mstts:express-as style="${xmlEscape(configuration.style)}" styledegree="${configuration.styleDegree}">${prosody}</mstts:express-as>`
@@ -44,11 +45,15 @@ export function resolveAzureTtsConfiguration(providerConfig) {
   const apiKey = parameter(providerConfig.parameters, 'AZURE_SPEECH_KEY', 'SPEECH_KEY', 'AZURE_API_KEY', 'API_KEY');
   const accessToken = parameter(providerConfig.parameters, 'AZURE_SPEECH_TOKEN', 'ACCESS_TOKEN', 'TOKEN');
   if (!apiKey && !accessToken) throw new AppError(503, 'Selected Azure TTS provider has no credential', 'TTS_API_KEY_MISSING');
+  const dictionaries = pronunciationDictionaries(common.pronunciationRules, 'azure');
+  const configuredLexicon = parameter(providerConfig.parameters, 'AZURE_LEXICON_URI', 'LEXICON_URI');
+  if (configuredLexicon && !dictionaries.some((dictionary) => dictionary.lexiconUri === configuredLexicon)) {
+    dictionaries.push({ id: null, versionId: null, lexiconUri: configuredLexicon });
+  }
   return Object.freeze({
-    ...common, apiKey, accessToken,
+    ...common, apiKey, accessToken, dictionaries,
     endpoint: endpoint(providerConfig.baseUrl, providerConfig.parameters),
     azureOutputFormat: outputFormat(common.outputFormat),
-    dictionary: firstPronunciationDictionary(common.pronunciationRules, 'azure'),
   });
 }
 

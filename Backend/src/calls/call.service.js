@@ -37,6 +37,22 @@ function mapCall(row, includeTranscript = false) {
       ? row.duration_seconds : number(row.live_duration_seconds),
     cost: number(row.cost), currency: row.currency,
     recordingAvailable: Boolean(row.recording_object_key),
+    aiSummary: row.ai_summary_id ? {
+      id: row.ai_summary_id,
+      status: row.ai_summary_status,
+      summary: row.ai_summary_text,
+      outcome: row.ai_summary_outcome,
+      customerIntent: row.ai_customer_intent,
+      sentiment: row.ai_summary_sentiment,
+      collectedData: row.ai_collected_data ?? {},
+      followUpRequired: row.ai_follow_up_required,
+      followUpReason: row.ai_follow_up_reason,
+      usage: row.ai_summary_usage ?? {},
+      webhookDelivery: row.ai_webhook_delivery ?? {},
+      errorCode: row.ai_summary_error_code,
+      errorMessage: row.ai_summary_error_message,
+      completedAt: row.ai_summary_completed_at,
+    } : null,
     createdAt: row.created_at, updatedAt: row.updated_at,
   };
   if (includeTranscript) call.transcript = row.transcript ?? [];
@@ -44,10 +60,17 @@ function mapCall(row, includeTranscript = false) {
 }
 
 const callSelect = `SELECT c.*, o.name AS company_name,
+  s.id ai_summary_id,s.status::text ai_summary_status,s.summary_text ai_summary_text,
+  s.outcome ai_summary_outcome,s.customer_intent ai_customer_intent,
+  s.sentiment ai_summary_sentiment,s.collected_data ai_collected_data,
+  s.follow_up_required ai_follow_up_required,s.follow_up_reason ai_follow_up_reason,
+  s.usage ai_summary_usage,s.webhook_delivery ai_webhook_delivery,s.error_code ai_summary_error_code,
+  s.error_message ai_summary_error_message,s.completed_at ai_summary_completed_at,
   CASE WHEN c.status IN ('queued', 'ringing', 'connected')
     THEN GREATEST(c.duration_seconds, floor(extract(epoch FROM (now() - c.started_at)))::int)
     ELSE c.duration_seconds END AS live_duration_seconds
-  FROM call_sessions c JOIN organizations o ON o.tenant_id = c.tenant_id AND o.deleted_at IS NULL`;
+  FROM call_sessions c JOIN organizations o ON o.tenant_id = c.tenant_id AND o.deleted_at IS NULL
+  LEFT JOIN call_ai_summaries s ON s.call_session_id=c.id AND s.tenant_id=c.tenant_id`;
 
 function contextFor(auth, operation) {
   return auth.role === 'SUPER_ADMIN'

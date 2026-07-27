@@ -3,7 +3,7 @@ import { z } from 'zod';
 export const callIdSchema = z.object({ callId: z.string().uuid() });
 export const listCallsSchema = z.object({
   companyId: z.string().uuid().optional(),
-  status: z.enum(['queued', 'ringing', 'connected', 'completed', 'failed', 'busy', 'no_answer', 'canceled']).optional(),
+  status: z.enum(['queued', 'ringing', 'connected', 'completed', 'failed', 'busy', 'no_answer', 'canceled', 'manual_follow_up_required']).optional(),
   direction: z.enum(['inbound', 'outbound']).optional(),
   search: z.string().trim().max(100).optional(),
   activeOnly: z.preprocess((value) => value === 'true' ? true : value === 'false' ? false : value, z.boolean()).default(false),

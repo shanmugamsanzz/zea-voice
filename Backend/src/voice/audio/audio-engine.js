@@ -6,6 +6,7 @@ import { decodeAudio, encodeAudio, normalizeMono } from './codec.js';
 import { StreamingLinearResampler } from './resampler.js';
 import { FramedAudioQueue } from './framed-audio-queue.js';
 import { AudioPacer } from './audio-pacer.js';
+import { RealtimeAmbienceMixer } from './realtime-ambience-mixer.js';
 
 function concatenate(left, right) {
   if (!left.length) return right;
@@ -105,13 +106,31 @@ export class ProviderIndependentAudioEngine {
       maxBytes: options.outputMaxBytes ?? 1_048_576,
       maxBufferedMs: options.outputMaxBufferedMs ?? env.VOICE_AUDIO_OUTPUT_MAX_BUFFER_MS,
     });
-    this.pacer = new AudioPacer({
+    this.onError = options.onError ?? (() => {});
+    this.onAmbienceError = options.onAmbienceError ?? (() => {});
+    this.pacerOptions = {
       queue: this.outputQueue,
       send: (frame) => this.mediaSession.sendAudio(frame.data),
-      onError: options.onError,
+      onError: this.onError,
       now: options.now,
       sleep: options.sleep,
-    });
+    };
+    this.ambienceConfigured = Boolean(options.ambience?.audio?.length);
+    this.ambienceFailed = false;
+    this.pacer = this.ambienceConfigured
+      ? new RealtimeAmbienceMixer({
+        queue: this.outputQueue,
+        send: this.pacerOptions.send,
+        ambienceAudio: options.ambience.audio,
+        listeningVolumePercent: options.ambience.listeningVolumePercent,
+        speakingVolumePercent: options.ambience.speakingVolumePercent,
+        continueDuringSilence: options.ambience.continueDuringSilence,
+        frameDurationMs: options.frameDurationMs ?? env.VOICE_AUDIO_FRAME_MS,
+        onError: (error) => this.#disableAmbience(error),
+        now: options.now,
+        sleep: options.sleep,
+      })
+      : new AudioPacer(this.pacerOptions);
     this.outputGenerationId = null;
     this.closed = false;
   }
@@ -179,6 +198,24 @@ export class ProviderIndependentAudioEngine {
   }
 
   drainOutput() { return this.pacer.drain(); }
+
+  setCallerSpeaking(active) { this.pacer.setCallerSpeaking?.(active); }
+
+  #disableAmbience(error) {
+    if (this.closed || this.ambienceFailed) return;
+    this.ambienceFailed = true;
+    this.onAmbienceError(error);
+    this.pacer = new AudioPacer(this.pacerOptions);
+    this.pacer.start();
+  }
+
+  ambienceMetrics() {
+    return {
+      configured: this.ambienceConfigured,
+      failed: this.ambienceFailed,
+      ...(this.pacer.snapshot?.() ?? {}),
+    };
+  }
 
   async close() {
     if (this.closed) return;

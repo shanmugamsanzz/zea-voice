@@ -31,19 +31,24 @@ export function normalizeLanguage(value, fallback = null) {
   return String(value).trim();
 }
 
-export function firstPronunciationDictionary(rules, provider) {
+export function pronunciationDictionaries(rules, provider) {
   const list = Array.isArray(rules) ? rules : [];
-  const matching = list.find((rule) => {
+  return list.filter((rule) => {
     if (typeof rule === 'string') return true;
     return !rule?.provider || normalizedKey(rule.provider) === normalizedKey(provider);
-  });
-  if (typeof matching === 'string') return { id: matching };
-  if (!matching || typeof matching !== 'object') return null;
-  return {
-    id: matching.dictionaryId ?? matching.pronunciationDictionaryId ?? matching.id ?? null,
-    versionId: matching.versionId ?? matching.version_id ?? null,
-    lexiconUri: matching.lexiconUri ?? matching.uri ?? null,
-  };
+  }).map((matching) => {
+    if (typeof matching === 'string') return { id: matching, versionId: null, lexiconUri: null };
+    if (!matching || typeof matching !== 'object') return null;
+    return {
+      id: matching.dictionaryId ?? matching.pronunciationDictionaryId ?? matching.id ?? null,
+      versionId: matching.versionId ?? matching.version_id ?? null,
+      lexiconUri: matching.lexiconUri ?? matching.uri ?? null,
+    };
+  }).filter((dictionary) => dictionary?.id || dictionary?.lexiconUri);
+}
+
+export function firstPronunciationDictionary(rules, provider) {
+  return pronunciationDictionaries(rules, provider)[0] ?? null;
 }
 
 export function resolveCommonTtsConfiguration(providerConfig) {

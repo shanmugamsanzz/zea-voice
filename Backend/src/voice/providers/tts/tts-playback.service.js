@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { AppError } from '../../../middleware/errors.js';
 import { providerAdapterRegistry } from '../registry.js';
+import { createPronunciationTextProcessor } from '../../pronunciation/pronunciation-text-processor.js';
 
 export async function streamSelectedTtsToPlivo(runtimeProfile, text, options = {}) {
   const providerConfig = runtimeProfile?.providers?.tts;
@@ -12,11 +13,13 @@ export async function streamSelectedTtsToPlivo(runtimeProfile, text, options = {
   const generationId = options.generationId ?? randomUUID();
   const audioEngine = options.audioEngine;
   const usageTracker = options.usageTracker;
+  const pronunciation = (options.pronunciationProcessor
+    ?? createPronunciationTextProcessor(runtimeProfile.pronunciation)).process(text);
   let completed = false;
   audioEngine.beginOutputGeneration(generationId);
   try {
     await adapter.connect();
-    for await (const event of adapter.synthesizeStream({ text, generationId })) {
+    for await (const event of adapter.synthesizeStream({ text: pronunciation.text, generationId })) {
       if (event.type === 'audio_chunk') {
         const accepted = await audioEngine.enqueueSynthesized(event.audio, generationId);
         if (!accepted) {
