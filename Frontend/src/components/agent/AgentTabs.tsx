@@ -1101,7 +1101,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     <>
     <form onSubmit={handleSave} className="flex min-h-full flex-col overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-xs">
       {/* Upper Status strip / Banner */}
-      <div className="bg-gradient-to-r from-violet-600 via-indigo-600 to-pink-500 p-6 text-white flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+      <div className="zea-agent-editor-header bg-gradient-to-r from-violet-600 via-indigo-600 to-pink-500 p-6 text-white flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
           <span className="text-xs font-bold uppercase tracking-widest text-violet-100">Voice AI Architect</span>
           <h2 className="text-2xl font-bold mt-1 tracking-tight">{agentId ? `Edit Agent: ${agent.name}` : 'Provision New Voice Agent'}</h2>

@@ -1573,6 +1573,113 @@ html.dark body .zea-provider-keys-scroll::-webkit-scrollbar-thumb {
   background: rgba(223, 168, 34, 0.58) !important;
 }
 
+/* Developer dashboard operator cards. */
+body .zea-developer-operator-card {
+  height: 20rem;
+  min-width: 0;
+  padding: 1.5rem !important;
+  padding-bottom: 1.85rem !important;
+  border-radius: 1.35rem !important;
+  border-color: rgba(223, 168, 34, 0.24) !important;
+  box-shadow: 0 10px 26px rgba(54, 39, 8, 0.07) !important;
+}
+
+body .zea-developer-operator-card .zea-operator-card-header {
+  min-height: 3.15rem;
+}
+
+body .zea-developer-operator-card .zea-operator-card-title {
+  overflow-wrap: anywhere;
+  line-height: 1.3rem !important;
+}
+
+body .zea-developer-operator-card .zea-operator-card-brain {
+  margin-top: 0.25rem;
+  line-height: 1.15rem !important;
+}
+
+body .zea-developer-operator-card .zea-operator-card-status {
+  padding: 0.2rem 0.65rem !important;
+}
+
+body .zea-developer-operator-card .zea-operator-card-prompt {
+  min-height: 4.5rem;
+  margin-top: 0.75rem !important;
+  overflow-wrap: anywhere;
+}
+
+body .zea-developer-operator-card .zea-operator-card-stats {
+  padding: 0.75rem 0.35rem !important;
+  border-color: rgba(223, 168, 34, 0.22) !important;
+  background: rgba(223, 168, 34, 0.035) !important;
+}
+
+body .zea-developer-operator-card .zea-operator-stat + .zea-operator-stat {
+  border-left: 1px solid rgba(223, 168, 34, 0.16);
+}
+
+body .zea-developer-operator-card .zea-operator-card-action {
+  min-height: 2.75rem;
+  margin-bottom: 0.5rem;
+  color: #282317 !important;
+  border-color: rgba(223, 168, 34, 0.35) !important;
+  background: rgba(223, 168, 34, 0.045) !important;
+}
+
+body .zea-developer-operator-card .zea-operator-card-action:hover {
+  color: #8a6200 !important;
+  background: rgba(223, 168, 34, 0.12) !important;
+}
+
+html.dark body .zea-developer-operator-card {
+  border-color: rgba(223, 168, 34, 0.3) !important;
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.24) !important;
+}
+
+html.dark body .zea-developer-operator-card .zea-operator-card-stats,
+html.dark body .zea-developer-operator-card .zea-operator-card-action {
+  background: rgba(223, 168, 34, 0.075) !important;
+}
+
+html.dark body .zea-developer-operator-card .zea-operator-card-action {
+  color: #f2cf73 !important;
+}
+
+html.dark body .zea-developer-operator-card .zea-operator-card-action:hover {
+  color: #fff3c4 !important;
+  background: rgba(223, 168, 34, 0.16) !important;
+}
+
+html.dark body .zea-developer-operator-console-description {
+  color: #11120f !important;
+}
+
+html.dark body .zea-developer-operator-console-title {
+  color: #11120f !important;
+}
+
+html:not(.dark) body .zea-agent-editor-header {
+  color: #111827 !important;
+  background: rgba(255, 253, 248, 0.96) !important;
+  border-bottom: 1px solid rgba(223, 168, 34, 0.18);
+}
+
+html:not(.dark) body .zea-agent-editor-header > div:first-child > span,
+html:not(.dark) body .zea-agent-editor-header > div:first-child > p {
+  color: #78570f !important;
+}
+
+html.dark body .zea-agent-editor-header {
+  color: #f8f5e8 !important;
+  background: linear-gradient(135deg, #11130f 0%, #080a08 100%) !important;
+  border-bottom: 1px solid rgba(223, 168, 34, 0.28);
+}
+
+html.dark body .zea-agent-editor-header > div:first-child > span,
+html.dark body .zea-agent-editor-header > div:first-child > p {
+  color: #e9d99f !important;
+}
+
 html.dark body .zea-settings-footer {
   border-color: rgba(148, 163, 184, 0.2) !important;
 }
