@@ -5,7 +5,7 @@
  * test-2
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useAppState } from '../../store/AppState';
 import { startTabMeasurement } from '../../lib/performance';
 import {
@@ -49,10 +49,22 @@ interface SidebarItem {
 }
 
 export function DashboardLayout({ children, onLogout }: { children: React.ReactNode; onLogout: () => void | Promise<void> }) {
-  const { role, view, setView, userEmail, theme, setTheme } = useAppState();
+  const {
+    role,
+    view,
+    setView,
+    userEmail,
+    theme,
+    setTheme,
+    selectedCompanyId,
+    selectedAgentId,
+    selectedCampaignId,
+    selectedCallId,
+  } = useAppState();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isSidebarMinimized, setIsSidebarMinimized] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  const mainScrollRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     const root = document.getElementById('root');
@@ -77,6 +89,16 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
       }
     };
   }, []);
+
+  useLayoutEffect(() => {
+    const scrollContainer = mainScrollRef.current;
+    if (scrollContainer) {
+      scrollContainer.scrollTop = 0;
+      scrollContainer.scrollLeft = 0;
+    }
+
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  }, [role, view, selectedCompanyId, selectedAgentId, selectedCampaignId, selectedCallId]);
 
   const handleItemClick = (viewId: string) => {
     startTabMeasurement(viewId);
@@ -522,7 +544,7 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
         </header>
 
         {/* Content Area */}
-        <main className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain bg-[#F8FAFC] px-6 pt-6 pb-4 md:px-10 md:pt-8 md:pb-6">
+        <main ref={mainScrollRef} className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain bg-[#F8FAFC] px-6 pt-6 pb-4 md:px-10 md:pt-8 md:pb-6">
           <div className="mx-auto w-full max-w-7xl flex-1 space-y-8">
             {children}
           </div>

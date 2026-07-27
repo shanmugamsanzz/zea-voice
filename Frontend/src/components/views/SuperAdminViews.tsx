@@ -2051,8 +2051,8 @@ function VoiceProvidersView() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {loading && <div className="md:col-span-2 lg:col-span-3 bg-white border border-slate-200 rounded-xl p-10 text-center text-sm font-semibold text-slate-400">Loading providers...</div>}
         {providers.map((p) => (
-          <div key={p.id} className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm flex flex-col justify-between hover:shadow-md transition duration-200">
-            <div>
+          <div key={p.id} className="zea-provider-card bg-white border border-slate-200 rounded-xl p-6 shadow-sm flex flex-col justify-between overflow-hidden hover:shadow-md transition duration-200">
+            <div className="min-h-0">
               <div className="flex justify-between items-start">
                 <div>
                   <h4 className="font-bold text-slate-800 text-sm tracking-tight">{p.name}</h4>
@@ -2095,9 +2095,9 @@ function VoiceProvidersView() {
               {p.parameterKeys.length > 0 && (
                 <div className="mt-3.5 bg-slate-50 p-3 rounded-lg border border-slate-200/60 font-sans">
                   <span className="text-[9px] text-slate-400 font-extrabold tracking-wide block mb-2">Provider keys &amp; vars (not model settings)</span>
-                  <div className="space-y-1.5 text-[10px] font-mono">
+                  <div className="zea-provider-keys-scroll space-y-1.5 overflow-y-auto pr-1 text-[10px] font-mono">
                     {p.parameterKeys.map((param) => (
-                      <div key={param.key} className="flex min-w-0 items-center justify-between gap-2 text-slate-600 border-b border-slate-100 pb-1 last:border-0 last:pb-0">
+                      <div key={param.key} className="zea-provider-key-row flex min-w-0 items-center justify-between gap-2 text-slate-600 border-b border-slate-100 pb-1 last:border-0 last:pb-0">
                         <span className="min-w-0 truncate font-bold text-slate-500" title={param.key}>{param.key}</span>
                         <span className="shrink-0 max-w-[145px] overflow-hidden whitespace-nowrap text-slate-500 bg-white px-1.5 py-0.5 rounded border border-slate-200" title={param.value}>
                           {providerValuePreview(param.value)}

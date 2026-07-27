@@ -1545,6 +1545,34 @@ html.dark body .zea-associated-tenant-org {
   color: #c99512 !important;
 }
 
+body .zea-provider-card {
+  height: 28.5rem;
+}
+
+body .zea-provider-keys-scroll {
+  max-height: 9rem;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+body .zea-provider-key-row {
+  min-height: 1.45rem;
+}
+
+body .zea-provider-keys-scroll::-webkit-scrollbar {
+  width: 5px;
+}
+
+body .zea-provider-keys-scroll::-webkit-scrollbar-thumb {
+  border: 0 !important;
+  border-radius: 999px;
+  background: rgba(138, 98, 0, 0.5) !important;
+}
+
+html.dark body .zea-provider-keys-scroll::-webkit-scrollbar-thumb {
+  background: rgba(223, 168, 34, 0.58) !important;
+}
+
 html.dark body .zea-settings-footer {
   border-color: rgba(148, 163, 184, 0.2) !important;
 }
