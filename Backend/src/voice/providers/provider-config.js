@@ -256,8 +256,10 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
         },
       },
       limits: {
+        ttsMaxCharactersPerResponse: usageLimits.ttsMaxCharactersPerResponse,
         ttsMaxCharactersPerMinute: usageLimits.ttsMaxCharactersPerMinute,
         maxCallDurationMinutes: usageLimits.maxCallDurationMinutes,
+        ttsLimitFallbackMessage: usageLimits.ttsLimitFallbackMessage,
       },
       providers: {
         stt: provider(row, 'stt', decrypt, sttRuntimeSettings),

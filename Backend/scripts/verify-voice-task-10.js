@@ -97,6 +97,7 @@ assert.equal(result.postCall.delivered, true);
 assert.equal(persistedPostCall.delivered, true);
 assert.equal(rows[0].provider_metadata.voiceRuntime.metrics.knowledge[0].durationMs, 8);
 assert.deepEqual(rows[0].provider_metadata.voiceRuntime.ttsLimitUsage, {
+  maximumCharactersPerResponse: 0,
   maximumCharactersPerMinute: 1000,
   maximumCallDurationMinutes: 10,
   charactersSynthesized: 245,

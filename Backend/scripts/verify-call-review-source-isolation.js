@@ -49,6 +49,7 @@ assert.deepEqual(call.transcript[0].sources.map((source) => source.type), ['know
 assert.equal(call.transcript[0].sources[1].metadata.apiKey, undefined);
 assert.equal(call.transcript[0].sources[1].metadata.modelKey, 'gpt-test');
 assert.deepEqual(call.ttsLimitUsage, {
+  maximumCharactersPerResponse: 0,
   maximumCharactersPerMinute: 900,
   maximumCallDurationMinutes: 12,
   charactersSynthesized: 321,

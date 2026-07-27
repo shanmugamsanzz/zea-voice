@@ -12,6 +12,7 @@ assert.deepEqual(normalizeTtsLimitUsage({
   durationLimitReached: false,
   providerCredential: 'must-not-persist',
 }, { callDurationSeconds: 95.4 }), {
+  maximumCharactersPerResponse: 0,
   maximumCharactersPerMinute: 0,
   maximumCallDurationMinutes: 0,
   charactersSynthesized: 75,

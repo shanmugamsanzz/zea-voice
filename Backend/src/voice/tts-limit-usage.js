@@ -7,6 +7,7 @@ export function normalizeTtsLimitUsage(value, context = {}) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const throttleWaitMs = nonNegativeInteger(value.throttleWaitMs);
   return {
+    maximumCharactersPerResponse: nonNegativeInteger(value.maximumCharactersPerResponse),
     maximumCharactersPerMinute: nonNegativeInteger(value.maximumCharactersPerMinute),
     maximumCallDurationMinutes: nonNegativeInteger(value.maximumCallDurationMinutes),
     charactersSynthesized: nonNegativeInteger(value.charactersSynthesized),

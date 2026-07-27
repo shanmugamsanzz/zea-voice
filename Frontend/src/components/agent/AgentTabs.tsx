@@ -33,6 +33,7 @@ import {
   Info,
   Sparkles,
   MessageSquare,
+  ShieldCheck,
   Clock,
   Terminal,
   Music,
@@ -314,8 +315,10 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       ttsModel: base.ttsModel || 'eleven_flash_v2_5',
       voiceId: base.voiceId || '',
       ttsAmbienceType: base.ttsAmbienceType || 'Silent (Default)',
+      ttsMaxCharactersPerResponse: base.ttsMaxCharactersPerResponse ?? 0,
       ttsMaxCharactersPerMinute: base.ttsMaxCharactersPerMinute ?? 0,
       maxCallDurationMinutes: base.maxCallDurationMinutes ?? 0,
+      ttsLimitFallbackMessage: base.ttsLimitFallbackMessage || '',
       pronunciationGroups: base.pronunciationGroups || [],
       preCallProvider: base.preCallProvider || 'Select Provider',
       preCallDescription: base.preCallDescription || base.preCallPrompt || '',
@@ -657,6 +660,28 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       || maximumCharactersPerMinute < 0
       || (maximumCharactersPerMinute !== 0 && (maximumCharactersPerMinute < 100 || maximumCharactersPerMinute > 10_000))) {
       setError('Maximum Characters Per Minute must be 0 (unlimited) or between 100 and 10,000.'); return;
+    }
+    const maximumCharactersPerResponse = agent.ttsMaxCharactersPerResponse ?? 0;
+    if (!Number.isInteger(maximumCharactersPerResponse)
+      || maximumCharactersPerResponse < 0
+      || (maximumCharactersPerResponse !== 0 && (maximumCharactersPerResponse < 50 || maximumCharactersPerResponse > 5_000))) {
+      setError('Maximum Characters Per Response must be 0 (unlimited) or between 50 and 5,000.'); return;
+    }
+    const completeFallbackMessage = agent.ttsLimitFallbackMessage?.trim() ?? '';
+    if (completeFallbackMessage.length > 500) {
+      setError('Complete Fallback Message cannot exceed 500 characters.'); return;
+    }
+    if (maximumCharactersPerResponse > 0 && !completeFallbackMessage) {
+      setError('Complete Fallback Message is required when Maximum Characters Per Response is enabled.'); return;
+    }
+    const activeCharacterLimits = [maximumCharactersPerResponse, maximumCharactersPerMinute].filter((value) => value > 0);
+    const effectiveCharacterLimit = activeCharacterLimits.length ? Math.min(...activeCharacterLimits) : 0;
+    if (maximumCharactersPerResponse > 0 && Array.from(completeFallbackMessage).length > effectiveCharacterLimit) {
+      setError('Complete Fallback Message must fit within the smaller active character limit.'); return;
+    }
+    if (maximumCharactersPerResponse > 0
+      && !/[.!?\u2026\u0964\u3002\uff01\uff1f]["'\u201d\u2019)\]]*$/u.test(completeFallbackMessage)) {
+      setError('Complete Fallback Message must end with sentence punctuation.'); return;
     }
     const maximumCallMinutes = agent.maxCallDurationMinutes ?? 0;
     if (!Number.isInteger(maximumCallMinutes)
@@ -2033,6 +2058,25 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   <div className="grid grid-cols-1 gap-5 p-5 sm:grid-cols-2">
                     <label className="block">
                       <span className="mb-1.5 flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-slate-500">
+                        <MessageSquare className="h-3.5 w-3.5 text-pink-500" />Maximum Characters Per Response
+                      </span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={5000}
+                        step={1}
+                        value={agent.ttsMaxCharactersPerResponse ?? 0}
+                        disabled={isReadOnly}
+                        onChange={(event) => setAgent({
+                          ...agent,
+                          ttsMaxCharactersPerResponse: Math.max(0, Number.parseInt(event.target.value, 10) || 0),
+                        })}
+                        className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold text-slate-800 outline-none transition focus:border-pink-500 disabled:cursor-not-allowed disabled:bg-slate-100"
+                      />
+                      <span className="mt-1.5 block text-[10px] font-semibold text-slate-400">Limits each individual agent answer. The runtime keeps only complete sentences.</span>
+                    </label>
+                    <label className="block">
+                      <span className="mb-1.5 flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-slate-500">
                         <FileText className="h-3.5 w-3.5 text-pink-500" />Maximum Characters Per Minute
                       </span>
                       <input
@@ -2069,6 +2113,25 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       />
                       <span className="mt-1.5 block text-[10px] font-semibold text-slate-400">Defines the maximum connected duration for one call.</span>
                     </label>
+                    <label className="block sm:col-span-2">
+                      <span className="mb-1.5 flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-slate-500">
+                        <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" />Complete Fallback Message
+                      </span>
+                      <input
+                        type="text"
+                        maxLength={500}
+                        value={agent.ttsLimitFallbackMessage ?? ''}
+                        disabled={isReadOnly}
+                        onChange={(event) => setAgent({ ...agent, ttsLimitFallbackMessage: event.target.value })}
+                        placeholder="இந்த தகவலை சுருக்கமாகச் சொல்றேன். மீண்டும் கேட்க முடியுமா?"
+                        className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold text-slate-800 outline-none transition focus:border-pink-500 disabled:cursor-not-allowed disabled:bg-slate-100"
+                      />
+                      <span className="mt-1.5 block text-[10px] font-semibold text-slate-400">Used only when no complete generated sentence fits. It must itself fit within the response limit.</span>
+                    </label>
+                    <div className="sm:col-span-2 flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+                      <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+                      <div><p className="text-[10px] font-black uppercase tracking-wider text-emerald-700">Complete Sentence Protection · Always On</p><p className="mt-1 text-[10px] font-semibold leading-relaxed text-emerald-700/80">Tamil, English and Tanglish responses are segmented before TTS. Words and sentences are never cut in the middle.</p></div>
+                    </div>
                   </div>
                 </div>
 

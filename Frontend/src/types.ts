@@ -146,8 +146,10 @@ export interface VoiceAgent {
   silentMessage?: string;
   ttsModel?: string;
   ttsAmbienceType?: string;
+  ttsMaxCharactersPerResponse?: number;
   ttsMaxCharactersPerMinute?: number;
   maxCallDurationMinutes?: number;
+  ttsLimitFallbackMessage?: string;
   pronunciationGroups?: string[];
   preCallProvider?: string;
   preCallDescription?: string;

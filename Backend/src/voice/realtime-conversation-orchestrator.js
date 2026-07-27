@@ -129,6 +129,11 @@ export class RealtimeConversationOrchestrator {
       ?? this.runtimeProfile.agent.settings?.ttsMaxCharactersPerMinute
       ?? 0,
     );
+    const ttsMaximumResponseCharacters = Number(
+      this.runtimeProfile.limits?.ttsMaxCharactersPerResponse
+      ?? this.runtimeProfile.agent.settings?.ttsMaxCharactersPerResponse
+      ?? 0,
+    );
     const maximumCallMinutes = Number(
       this.runtimeProfile.limits?.maxCallDurationMinutes
       ?? this.runtimeProfile.agent.settings?.maxCallDurationMinutes
@@ -138,12 +143,14 @@ export class RealtimeConversationOrchestrator {
       ...this.runtimeProfile,
       limits: {
         ...this.runtimeProfile.limits,
+        ttsMaxCharactersPerResponse: ttsMaximumResponseCharacters,
         ttsMaxCharactersPerMinute: ttsMaximumCharacters,
         maxCallDurationMinutes: maximumCallMinutes,
       },
     };
     this.ttsCharacterBudget = new TtsCharacterBudget(ttsMaximumCharacters);
     this.runtimeMetrics.ttsLimits = {
+      maximumCharactersPerResponse: ttsMaximumResponseCharacters,
       maximumCharactersPerMinute: ttsMaximumCharacters,
       maximumCallDurationMinutes: maximumCallMinutes,
       charactersSynthesized: 0,
@@ -685,16 +692,29 @@ export class RealtimeConversationOrchestrator {
   }
 
   #fitTtsMessage(text) {
+    const configuredLimits = [
+      Number(this.runtimeProfile.limits?.ttsMaxCharactersPerResponse ?? 0),
+      Number(this.runtimeProfile.limits?.ttsMaxCharactersPerMinute ?? 0),
+    ].filter((value) => Number.isFinite(value) && value > 0);
+    const maximumCharacters = configuredLimits.length ? Math.min(...configuredLimits) : 0;
+    const configuredFallback = String(
+      this.runtimeProfile.limits?.ttsLimitFallbackMessage
+      ?? this.runtimeProfile.agent.settings?.ttsLimitFallbackMessage
+      ?? '',
+    ).trim();
+    const defaultFallback = languageCode(this.runtimeProfile.agent.language) === 'ta'
+      ? 'இந்த தகவலை சுருக்கமாகச் சொல்றேன். மீண்டும் கேட்க முடியுமா?'
+      : 'Please ask me again and I will answer briefly.';
     const fitted = this.ttsCharacterBudget.fitMessage(
       text,
-      this.runtimeProfile.agent.settings?.ttsLimitFallbackMessage
-        ?? 'Please ask one question at a time.',
+      configuredFallback || defaultFallback,
+      { maximumCharacters, locale: languageCode(this.runtimeProfile.agent.language) },
     );
     if (fitted !== String(text ?? '').trim()) {
       this.log.warn({
         stage: 'tts.character_limit_message_fitted',
         callId: this.call.id,
-        configuredMaximum: this.ttsCharacterBudget.maximum,
+        configuredMaximum: maximumCharacters,
       }, 'Spoken message was reduced at a complete sentence boundary');
     }
     return fitted;
@@ -756,9 +776,13 @@ export class RealtimeConversationOrchestrator {
         },
         preCall: this.preCallContext,
         ...context,
-        ttsResponseCharacterLimit: this.ttsCharacterBudget.enabled
-          ? this.ttsCharacterBudget.maximum
-          : undefined,
+        ttsResponseCharacterLimit: (() => {
+          const limits = [
+            Number(this.runtimeProfile.limits?.ttsMaxCharactersPerResponse ?? 0),
+            Number(this.runtimeProfile.limits?.ttsMaxCharactersPerMinute ?? 0),
+          ].filter((value) => Number.isFinite(value) && value > 0);
+          return limits.length ? Math.min(...limits) : undefined;
+        })(),
       },
       usageDirection: this.call.direction,
     }, { registry: this.registry, adapter: this.adapters.llm, skipDefaultRegistration: true });

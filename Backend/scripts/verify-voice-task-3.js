@@ -70,7 +70,12 @@ assert.equal(profile.providers.tts.modelCapabilities.languages[0], 'en');
 assert.equal(profile.providers.tts.effectiveSettings.voiceId, 'hospital-voice');
 assert.equal(profile.providers.tts.effectiveSettings.ttsLanguage, 'en-IN');
 assert.equal(profile.providers.tts.effectiveSettings.ttsSpeed, 0.9);
-assert.deepEqual(profile.limits, { ttsMaxCharactersPerMinute: 1000, maxCallDurationMinutes: 5 });
+assert.deepEqual(profile.limits, {
+  ttsMaxCharactersPerResponse: 0,
+  ttsMaxCharactersPerMinute: 1000,
+  maxCallDurationMinutes: 5,
+  ttsLimitFallbackMessage: '',
+});
 assert.equal(profile.knowledgeBases[0].name, 'Hospital KB');
 assert.equal(profile.tools[0].secretConfiguration.token, 'decrypted-tool-token');
 assert.equal(profile.integrations.preCall.api.url, 'https://example.com/pre');
