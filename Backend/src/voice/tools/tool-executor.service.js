@@ -103,7 +103,7 @@ export async function executeAgentTool(runtimeProfile, call, toolCall, dependenc
     toolId: tool.id, status: response.status,
   });
   const result = {
-    id: toolCall.id ?? null, name: safeName(tool.name), success: true, output,
+    id: toolCall.id ?? null, toolId: tool.id, name: safeName(tool.name), success: true, output,
     durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
   };
   logger.info({ stage: 'voice.tool_completed', toolId: tool.id, toolName: result.name, callId: call.id, durationMs: result.durationMs }, 'Assigned voice tool completed');
@@ -117,8 +117,11 @@ export async function executeAgentTools(runtimeProfile, call, toolCalls, depende
     try {
       results.push(await executeAgentTool(runtimeProfile, call, toolCall, dependencies));
     } catch (error) {
+      const assignedTool = (runtimeProfile.tools ?? [])
+        .find((candidate) => safeName(candidate.name) === safeName(toolCall.name));
       const result = {
-        id: toolCall.id ?? null, name: safeName(toolCall.name), success: false,
+        id: toolCall.id ?? null, toolId: assignedTool?.id ?? null,
+        name: safeName(toolCall.name), success: false,
         error: { code: error.code ?? 'VOICE_TOOL_FAILED', message: error.message },
         durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
       };

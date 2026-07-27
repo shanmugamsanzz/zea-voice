@@ -6,6 +6,8 @@ import { routeKnowledgeQuery } from '../knowledge-bases/knowledge-runtime.servic
 import { ProviderIndependentAudioEngine } from './audio/audio-engine.js';
 import { completeVoiceCall } from './call-completion.service.js';
 import { CallController } from './call-controller.js';
+import { TranscriptPersistenceQueue } from './transcript-persistence-queue.js';
+import { TtsCharacterBudget } from './tts-character-budget.js';
 import { callStates } from './call-state-machine.js';
 import { ProviderUsageTracker } from './provider-usage-tracker.js';
 import { loadAgentRuntimeProfile } from './providers/provider-config.js';
@@ -36,6 +38,15 @@ import {
 import { createPronunciationTextProcessor } from './pronunciation/pronunciation-text-processor.js';
 import { loadRuntimeAmbience } from './ambience-runtime.service.js';
 import { resolvePostCallClosingConfiguration } from './integrations/postcall-closing-config.js';
+import {
+  createMessageSource,
+  knowledgeMessageSources,
+  llmMessageSource,
+  MessageSourceTrace,
+  mergeMessageSources,
+  messageSourceTypes,
+  toolMessageSources,
+} from './source-trace.js';
 
 const closeIntent = /\b(?:bye|goodbye|hang\s*up|disconnect|end (?:the )?call|not interested|call me later|i(?:'m| am) busy)\b|(?:போதும்|அழைப்பை முடி|பிறகு அழைக்கவும்)/iu;
 
@@ -74,11 +85,13 @@ export class RealtimeConversationOrchestrator {
     this.closing = false;
     this.activeLlm = null;
     this.inactivityTimer = null;
+    this.callDurationTimer = null;
     this.listeners = [];
     this.runtimeMetrics = {
       knowledge: [], tools: [], latency: {},
       interruptions: { candidates: 0, confirmed: 0, rejected: 0, confirmationMethods: {} },
     };
+    this.followUpOpeningSources = [];
     this.llmCircuitBreaker = new LlmCircuitBreaker();
     this.providerHealth = dependencies.providerHealth ?? tenantProviderHealth;
     this.#attach();
@@ -111,6 +124,32 @@ export class RealtimeConversationOrchestrator {
       workspaceId: this.call.workspaceId,
       callDirection: this.call.direction,
     });
+    const ttsMaximumCharacters = Number(
+      this.runtimeProfile.limits?.ttsMaxCharactersPerMinute
+      ?? this.runtimeProfile.agent.settings?.ttsMaxCharactersPerMinute
+      ?? 0,
+    );
+    const maximumCallMinutes = Number(
+      this.runtimeProfile.limits?.maxCallDurationMinutes
+      ?? this.runtimeProfile.agent.settings?.maxCallDurationMinutes
+      ?? 0,
+    );
+    this.runtimeProfile = {
+      ...this.runtimeProfile,
+      limits: {
+        ...this.runtimeProfile.limits,
+        ttsMaxCharactersPerMinute: ttsMaximumCharacters,
+        maxCallDurationMinutes: maximumCallMinutes,
+      },
+    };
+    this.ttsCharacterBudget = new TtsCharacterBudget(ttsMaximumCharacters);
+    this.runtimeMetrics.ttsLimits = {
+      maximumCharactersPerMinute: ttsMaximumCharacters,
+      maximumCallDurationMinutes: maximumCallMinutes,
+      charactersSynthesized: 0,
+      throttleWaitMs: 0,
+      durationLimitReached: false,
+    };
     this.pronunciationProcessor = (this.dependencies.createPronunciationProcessor
       ?? createPronunciationTextProcessor)(this.runtimeProfile.pronunciation);
     this.log = this.log.child?.({
@@ -158,9 +197,10 @@ export class RealtimeConversationOrchestrator {
         },
       )
       : { text: this.runtimeProfile.agent.welcomeMessage, dynamic: false, personalized: false, resolvedVariables: [], missingVariables: [] };
+    const constrainedWelcome = this.#fitTtsMessage(renderedWelcome.text);
     this.runtimeProfile = {
       ...this.runtimeProfile,
-      agent: { ...this.runtimeProfile.agent, welcomeMessage: renderedWelcome.text },
+      agent: { ...this.runtimeProfile.agent, welcomeMessage: constrainedWelcome },
     };
     this.personalizedWelcome = renderedWelcome.personalized;
     this.followUpOpeningRequired = this.callbackConfiguration.enabled && (
@@ -182,11 +222,16 @@ export class RealtimeConversationOrchestrator {
       && !this.personalizedWelcome && !this.followUpOpeningRequired
       ? this.welcomeCache.get(this.runtimeProfile, this.runtimeProfile.agent.welcomeMessage)
       : Promise.resolve(null);
+    const persistTranscript = this.dependencies.appendTranscript ?? appendTranscriptEntry;
+    this.transcriptPersistence = new TranscriptPersistenceQueue({
+      persist: persistTranscript,
+      log: this.log,
+    });
     this.controller = new CallController({
       callSession: this.call,
       runtimeProfile: this.runtimeProfile,
       hooks: {
-        onTranscript: async (entry) => (this.dependencies.appendTranscript ?? appendTranscriptEntry)({
+        onTranscript: (entry) => this.transcriptPersistence.enqueue({
           ...entry,
           offsetMs: Math.max(0, entry.at - this.startedAt),
         }),
@@ -363,6 +408,7 @@ export class RealtimeConversationOrchestrator {
       enabled: Boolean(this.runtimeAmbience), ambienceAssetId: this.runtimeAmbience?.id ?? null,
     }, this.runtimeAmbience ? 'Background ambience started with the call media stream' : 'Call media started in Silent mode');
     this.mediaStartedAt = Date.now();
+    this.#armCallDuration();
     void this.#guard('audio_input', () => this.#pumpInbound());
     let followUpOpening = null;
     if (this.followUpOpeningRequired) {
@@ -383,7 +429,11 @@ export class RealtimeConversationOrchestrator {
           { route: 'none', found: false },
           { continuationOpening: true },
         );
-        followUpOpening = response.text || null;
+        followUpOpening = response.text ? this.#fitTtsMessage(response.text) : null;
+        this.followUpOpeningSources = mergeMessageSources(
+          this.#baseLlmSources(),
+          response.sources,
+        );
         this.runtimeMetrics.contextCache.followUpOpening = Boolean(followUpOpening);
       } catch (error) {
         this.log.warn({
@@ -392,7 +442,17 @@ export class RealtimeConversationOrchestrator {
         }, 'Memory-aware follow-up opening failed; using the configured welcome');
       }
     }
-    const action = await this.controller.initialize(Date.now(), followUpOpening);
+    const welcomeSources = followUpOpening
+      ? this.followUpOpeningSources
+      : mergeMessageSources(
+        createMessageSource(messageSourceTypes.WELCOME_CONFIGURATION, {
+          id: this.runtimeProfile.agent.id,
+          label: 'Welcome Message',
+          metadata: { personalized: this.personalizedWelcome },
+        }),
+        this.personalizedWelcome ? this.#preCallSource() : null,
+      );
+    const action = await this.controller.initialize(Date.now(), followUpOpening, { sources: welcomeSources });
     if (action.action === 'speak') {
       this.log.info({
         stage: 'greeting.started', callId: this.call.id,
@@ -591,6 +651,86 @@ export class RealtimeConversationOrchestrator {
     }
   }
 
+  #preCallSource() {
+    const keys = Object.keys(this.preCallContext ?? {});
+    if (!keys.length) return null;
+    return createMessageSource(messageSourceTypes.PRE_CALL_CONTEXT, {
+      label: this.runtimeProfile.integrations?.preCall?.provider ?? 'Pre-Call API',
+      metadata: { mappedKeys: keys.sort().join(',') },
+    });
+  }
+
+  #memorySource() {
+    if (!this.previousConversationMemory) return null;
+    return createMessageSource(messageSourceTypes.CONVERSATION_MEMORY, {
+      label: this.runtimeMetrics.contextCache?.source ?? 'conversation_memory',
+      metadata: {
+        policy: this.contextCachePolicy.policy,
+        scope: this.contextCachePolicy.scope,
+        source: this.runtimeMetrics.contextCache?.source,
+      },
+    });
+  }
+
+  #baseLlmSources() {
+    return mergeMessageSources(
+      createMessageSource(messageSourceTypes.SYSTEM_PROMPT, {
+        id: this.runtimeProfile.agent.id,
+        label: 'Agent Instructions',
+        metadata: { configured: Boolean(String(this.runtimeProfile.agent.prompt ?? '').trim()) },
+      }),
+      this.#memorySource(),
+      this.#preCallSource(),
+    );
+  }
+
+  #fitTtsMessage(text) {
+    const fitted = this.ttsCharacterBudget.fitMessage(
+      text,
+      this.runtimeProfile.agent.settings?.ttsLimitFallbackMessage
+        ?? 'Please ask one question at a time.',
+    );
+    if (fitted !== String(text ?? '').trim()) {
+      this.log.warn({
+        stage: 'tts.character_limit_message_fitted',
+        callId: this.call.id,
+        configuredMaximum: this.ttsCharacterBudget.maximum,
+      }, 'Spoken message was reduced at a complete sentence boundary');
+    }
+    return fitted;
+  }
+
+  async #reserveTtsCharacters(text, generationId) {
+    if (!this.ttsCharacterBudget.enabled) return true;
+    const epoch = this.epoch;
+    while (!this.finalized && epoch === this.epoch) {
+      const decision = this.ttsCharacterBudget.inspect(text);
+      if (decision.impossible) {
+        throw new AppError(409, 'TTS message exceeds the configured per-minute character limit',
+          'VOICE_TTS_MESSAGE_LIMIT_EXCEEDED', {
+            characters: decision.characters,
+            maximumCharactersPerMinute: this.ttsCharacterBudget.maximum,
+          });
+      }
+      if (decision.allowed) {
+        const reservation = this.ttsCharacterBudget.consume(text);
+        this.runtimeMetrics.ttsLimits.charactersSynthesized += reservation.characters;
+        this.runtimeMetrics.ttsLimits.currentWindowUsed = reservation.used;
+        return true;
+      }
+      this.runtimeMetrics.ttsLimits.throttleWaitMs += decision.waitMs;
+      this.log.info({
+        stage: 'tts.character_limit_wait', callId: this.call.id, generationId,
+        waitMs: decision.waitMs, characters: decision.characters,
+      }, 'Waiting for rolling TTS character capacity');
+      await new Promise((resolve) => {
+        const timer = setTimeout(resolve, decision.waitMs);
+        timer.unref?.();
+      });
+    }
+    return false;
+  }
+
   async #llmAttempt(query, history, knowledge, context = {}) {
     const session = await createSelectedLlmStream(this.runtimeProfile, {
       callId: this.call.id,
@@ -616,20 +756,26 @@ export class RealtimeConversationOrchestrator {
         },
         preCall: this.preCallContext,
         ...context,
+        ttsResponseCharacterLimit: this.ttsCharacterBudget.enabled
+          ? this.ttsCharacterBudget.maximum
+          : undefined,
       },
       usageDirection: this.call.direction,
     }, { registry: this.registry, adapter: this.adapters.llm, skipDefaultRegistration: true });
     this.activeLlm = session;
     let text = '';
     let toolCalls = [];
+    let completion = {};
     try {
       for await (const event of session.events) {
         if (event.type === 'text_delta') text += event.delta;
         else if (event.type === 'tool_call') toolCalls.push({ id: event.id, name: event.name, arguments: event.arguments });
         else if (event.type === 'usage') this.usageTracker.record('llm', event.usage);
         else if (event.type === 'error') throw Object.assign(new Error(event.message), { code: event.code, retryable: event.retryable });
-        else if (event.type === 'cancelled') return { cancelled: true, text: '', toolCalls: [] };
+        else if (event.type === 'response_started') completion.providerRequestId = event.providerRequestId ?? completion.providerRequestId;
+        else if (event.type === 'cancelled') return { cancelled: true, text: '', toolCalls: [], sources: [] };
         else if (event.type === 'completed') {
+          completion = { ...completion, ...event };
           toolCalls = event.toolCalls?.length ? event.toolCalls : toolCalls;
           if (event.durationMs) this.usageTracker.record('llm', { requests: 0, durationMs: event.durationMs });
           this.providerHealth.record(this.runtimeProfile.agent.tenantId, 'llm', this.runtimeProfile.providers.llm, 'success', {
@@ -637,7 +783,12 @@ export class RealtimeConversationOrchestrator {
           });
         }
       }
-      return { cancelled: false, text: text.trim(), toolCalls };
+      return {
+        cancelled: false,
+        text: text.trim(),
+        toolCalls,
+        sources: [llmMessageSource(this.runtimeProfile.providers.llm, completion)],
+      };
     } finally {
       if (this.activeLlm === session) this.activeLlm = null;
       await session.close();
@@ -667,6 +818,10 @@ export class RealtimeConversationOrchestrator {
   async #runTurn(query, history, epoch) {
     const turnStartedAt = Date.now();
     const knowledge = await this.#knowledge(query);
+    const sourceTrace = new MessageSourceTrace(
+      this.#baseLlmSources(),
+      knowledgeMessageSources(knowledge),
+    );
     if (epoch !== this.epoch || this.finalized) return;
     let response;
     try {
@@ -680,8 +835,16 @@ export class RealtimeConversationOrchestrator {
         stage: 'llm.verified_knowledge_fallback', code: error.code,
         providerId: this.runtimeProfile.providers.llm.providerId,
       }, 'Selected LLM failed; using verified knowledge response for this call');
-      response = { cancelled: false, text: String(knowledge.content).trim(), toolCalls: [] };
+      response = {
+        cancelled: false,
+        text: String(knowledge.content).trim(),
+        toolCalls: [],
+        sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
+          label: 'Verified knowledge fallback', metadata: { reason: error.code },
+        })],
+      };
     }
+    sourceTrace.add(response.sources);
     if (response.cancelled || epoch !== this.epoch) return;
     if (response.toolCalls.length) {
       const toolResults = await (this.dependencies.executeTools ?? executeAgentTools)(
@@ -690,15 +853,25 @@ export class RealtimeConversationOrchestrator {
       this.runtimeMetrics.tools.push(...toolResults.map((result) => ({
         name: result.name, success: result.success, durationMs: Number(result.durationMs ?? 0),
       })));
+      sourceTrace.add(toolMessageSources(toolResults));
       if (epoch !== this.epoch) return;
       response = await this.#llm(query, history, knowledge, {
         toolResults,
         instruction: 'Use these tool results to answer the caller. Never claim an unsuccessful tool completed.',
       });
+      sourceTrace.add(response.sources);
     }
     if (response.cancelled || epoch !== this.epoch || this.finalized) return;
-    const answer = response.text || String(this.runtimeProfile.agent.settings?.noResponseMessage ?? 'Sorry, I could not form a response.');
-    await this.controller.setAssistantResponse(answer);
+    const generatedAnswer = String(response.text ?? '').trim();
+    const unconstrainedAnswer = generatedAnswer
+      || String(this.runtimeProfile.agent.settings?.noResponseMessage ?? 'Sorry, I could not form a response.');
+    const answer = this.#fitTtsMessage(unconstrainedAnswer);
+    if (!generatedAnswer) {
+      sourceTrace.add(createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
+        label: 'No-response fallback',
+      }));
+    }
+    await this.controller.setAssistantResponse(answer, Date.now(), { sources: sourceTrace.snapshot() });
     await this.#synthesize(answer, `turn-${epoch}`, { kind: 'response', startedAt: turnStartedAt });
     if (epoch !== this.epoch || this.finalized || this.controller.state !== callStates.SPEAKING) return;
     await this.controller.playbackComplete();
@@ -709,6 +882,7 @@ export class RealtimeConversationOrchestrator {
   async #synthesizeWelcome(text, generationId) {
     const cached = await this.cachedWelcomePromise;
     if (cached?.length) {
+      if (!await this.#reserveTtsCharacters(text, generationId)) return false;
       this.audioEngine.beginOutputGeneration(generationId);
       this.runtimeMetrics.latency.welcomeCacheHit = true;
       this.runtimeMetrics.latency.welcomeAudioStartMs = Math.max(0, Date.now() - this.mediaStartedAt);
@@ -777,6 +951,7 @@ export class RealtimeConversationOrchestrator {
         appliedRuleIds: pronunciation.appliedRuleIds,
       }, 'Selected pronunciation rules applied to TTS audio text');
     }
+    if (!await this.#reserveTtsCharacters(pronunciation.text, generationId)) return false;
     let lastError;
     for (let attempt = 0; attempt <= env.VOICE_PROVIDER_MAX_RETRIES; attempt += 1) {
       try {
@@ -820,6 +995,29 @@ export class RealtimeConversationOrchestrator {
     this.inactivityTimer = null;
   }
 
+  #clearCallDuration() {
+    const clearTimer = this.dependencies.clearCallDurationTimer ?? clearTimeout;
+    clearTimer(this.callDurationTimer);
+    this.callDurationTimer = null;
+  }
+
+  #armCallDuration() {
+    this.#clearCallDuration();
+    const minutes = Number(this.runtimeProfile.limits?.maxCallDurationMinutes ?? 0);
+    if (!Number.isFinite(minutes) || minutes <= 0) return;
+    const durationMs = minutes * 60_000;
+    const setTimer = this.dependencies.setCallDurationTimer ?? setTimeout;
+    this.callDurationTimer = setTimer(() => void this.#guard('maximum_call_duration', async () => {
+      if (this.finalized) return;
+      this.runtimeMetrics.ttsLimits.durationLimitReached = true;
+      this.log.info({
+        stage: 'call.maximum_duration_reached', callId: this.call.id, maximumCallDurationMinutes: minutes,
+      }, 'Maximum configured call duration reached');
+      await this.#close('maximum_duration_reached', { speakClosing: false });
+    }), durationMs);
+    this.callDurationTimer?.unref?.();
+  }
+
   #armInactivity() {
     this.#clearInactivity();
     if (this.finalized || this.controller.state !== callStates.LISTENING) return;
@@ -834,9 +1032,15 @@ export class RealtimeConversationOrchestrator {
     const action = await this.controller.handleSilence();
     if (action.action === 'close') return this.#close(action.reason);
     if (action.action !== 'inactivity_response') return;
-    await this.controller.setAssistantResponse(action.text);
+    const message = this.#fitTtsMessage(action.text);
+    await this.controller.setAssistantResponse(message, Date.now(), {
+      sources: [createMessageSource(messageSourceTypes.SILENT_MESSAGE, {
+        id: this.runtimeProfile.agent.id,
+        label: 'Silent Message',
+      })],
+    });
     const epoch = ++this.epoch;
-    await this.#synthesize(action.text, `silence-${epoch}`);
+    await this.#synthesize(message, `silence-${epoch}`);
     if (epoch === this.epoch && this.controller.state === callStates.SPEAKING) {
       await this.controller.playbackComplete();
       this.#armInactivity();
@@ -848,8 +1052,13 @@ export class RealtimeConversationOrchestrator {
       ...this.runtimeProfile.agent.settings,
       ...this.runtimeProfile.integrations?.postCall,
     });
-    if (closing.messageType === 'None') return '';
-    if (closing.messageType === 'Static') return closing.staticMessage;
+    if (closing.messageType === 'None') return { text: '', sources: [] };
+    const closingSource = createMessageSource(messageSourceTypes.POST_CALL_CLOSING, {
+      id: this.runtimeProfile.agent.id,
+      label: `${closing.messageType} closing`,
+      metadata: { reason },
+    });
+    if (closing.messageType === 'Static') return { text: closing.staticMessage, sources: [closingSource] };
     try {
       const response = await this.#llm(
         `End the call now. Reason: ${reason}. Generate exactly one brief natural closing sentence. Closing instruction: ${closing.prompt}`,
@@ -857,20 +1066,33 @@ export class RealtimeConversationOrchestrator {
         { route: 'none', found: false },
         { closingReason: reason },
       );
-      return response.text || fallbackClosing(this.runtimeProfile);
-    } catch { return fallbackClosing(this.runtimeProfile); }
+      return {
+        text: response.text || fallbackClosing(this.runtimeProfile),
+        sources: mergeMessageSources(closingSource, this.#baseLlmSources(), response.sources),
+      };
+    } catch {
+      return {
+        text: fallbackClosing(this.runtimeProfile),
+        sources: mergeMessageSources(closingSource, createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
+          label: 'Closing fallback',
+        })),
+      };
+    }
   }
 
-  async #close(reason) {
+  async #close(reason, options = {}) {
     if (this.closing || this.finalized) return;
     this.closing = true;
     this.#clearInactivity();
     await this.#cancelActive(reason);
     await this.controller.requestClose(reason);
-    const message = await this.#closingMessage(reason);
-    if (message && !this.mediaSession.closed) {
-      await this.controller.recordAssistantMessage(message);
-      try { await this.#synthesize(message, `closing-${this.epoch}`); } catch (error) {
+    const closing = options.speakClosing === false
+      ? { text: '', sources: [] }
+      : await this.#closingMessage(reason);
+    const closingText = closing.text ? this.#fitTtsMessage(closing.text) : '';
+    if (closingText && !this.mediaSession.closed) {
+      await this.controller.recordAssistantMessage(closingText, Date.now(), { sources: closing.sources });
+      try { await this.#synthesize(closingText, `closing-${this.epoch}`); } catch (error) {
         this.log.warn({ err: error, callId: this.call.id }, 'Post-Call closing audio failed');
       }
     }
@@ -902,9 +1124,13 @@ export class RealtimeConversationOrchestrator {
     const ttsFailed = stage === 'audio_output' || stage.startsWith('tts') || String(error?.code ?? '').startsWith('TTS_');
     if (!ttsFailed && this.controller.state === callStates.LISTENING) {
       try {
-        const message = fallbackRecovery(this.runtimeProfile);
+        const message = this.#fitTtsMessage(fallbackRecovery(this.runtimeProfile));
         await this.controller.beginSystemResponse('error_recovery');
-        await this.controller.setAssistantResponse(message);
+        await this.controller.setAssistantResponse(message, Date.now(), {
+          sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
+            label: 'Error recovery message', metadata: { stage, errorCode: error?.code },
+          })],
+        });
         await this.#synthesize(message, `recovery-${this.epoch}`);
         if (this.controller.state === callStates.SPEAKING) await this.controller.playbackComplete();
       } catch (recoveryError) {
@@ -924,6 +1150,7 @@ export class RealtimeConversationOrchestrator {
     const finalReason = callbackNeedsManualFollowUp ? 'callback_time_not_provided' : reason;
     this.finalized = true;
     this.#clearInactivity();
+    this.#clearCallDuration();
     this.interruptionCandidate?.reset();
     this.epoch += 1;
     this.activeLlm?.cancel(finalReason);
@@ -936,6 +1163,10 @@ export class RealtimeConversationOrchestrator {
       ...(this.audioEngine?.ambienceMetrics?.() ?? {}),
     };
     await this.audioEngine?.close?.();
+    const transcriptPersistence = await this.transcriptPersistence?.flush?.();
+    if (transcriptPersistence) {
+      this.runtimeMetrics.transcriptPersistence = transcriptPersistence;
+    }
     await this.#saveConversationMemory(finalOutcome, finalReason);
     if (this.contextCachePolicy?.deleteOnCallEnd && this.contextStore?.delete) {
       try {

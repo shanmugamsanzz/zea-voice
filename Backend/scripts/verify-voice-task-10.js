@@ -70,7 +70,18 @@ const result = await completeVoiceCall({
     tts: { async close() { throw new Error('socket already closed'); } },
   },
   endedAt: new Date(61000),
-  metrics: { knowledge: [{ route: 'faq', found: true, durationMs: 8 }] },
+  metrics: {
+    knowledge: [{ route: 'faq', found: true, durationMs: 8 }],
+    ttsLimits: {
+      maximumCharactersPerMinute: 1000,
+      maximumCallDurationMinutes: 10,
+      charactersSynthesized: 245,
+      currentWindowUsed: 120,
+      throttleWaitMs: 250,
+      durationLimitReached: false,
+      ignoredSecret: 'must-not-persist',
+    },
+  },
 }, { contextRunner, fetchImpl });
 
 assert.equal(result.call.status, 'completed');
@@ -85,8 +96,20 @@ assert.equal(persistedUsage[0][14], 60);
 assert.equal(result.postCall.delivered, true);
 assert.equal(persistedPostCall.delivered, true);
 assert.equal(rows[0].provider_metadata.voiceRuntime.metrics.knowledge[0].durationMs, 8);
+assert.deepEqual(rows[0].provider_metadata.voiceRuntime.ttsLimitUsage, {
+  maximumCharactersPerMinute: 1000,
+  maximumCallDurationMinutes: 10,
+  charactersSynthesized: 245,
+  currentWindowUsed: 120,
+  throttleWaitMs: 250,
+  characterLimitApplied: true,
+  durationLimitReached: false,
+  callDurationSeconds: 60,
+});
+assert.equal(rows[0].provider_metadata.voiceRuntime.ttsLimitUsage.ignoredSecret, undefined);
 assert.equal(webhookPayload.call.status, 'completed');
 assert.equal(webhookPayload.providerUsage.totals.characters, 8);
+assert.equal(webhookPayload.ttsLimitUsage.charactersSynthesized, 245);
 assert.equal(sttClosed, true);
 assert.equal(result.adapterCleanup.find((item) => item.kind === 'tts').closed, false);
 assert.equal(controller.terminal, true);

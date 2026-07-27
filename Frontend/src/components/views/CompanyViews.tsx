@@ -61,7 +61,7 @@ import { DeveloperIntegrationsView } from '../integrations/DeveloperIntegrations
 import { DeveloperWorkspaceSettingsView } from '../settings/DeveloperWorkspaceSettingsView';
 import { DeveloperApiKeysView } from '../api-keys/DeveloperApiKeysView';
 import { CallVolumeChart, DurationBarChart, OutcomePieChart } from '../charts/DashboardCharts';
-import { apiRequest } from '../../lib/api';
+import { apiRequest, isAbortError } from '../../lib/api';
 
 interface CompanyDashboardData {
   company: { tenantId: string; workspaceId: string; name: string; timezone: string };
@@ -167,7 +167,9 @@ function CompanyDashboard({ onEditAgent, onAddAgent }: { onEditAgent: (id: strin
     apiRequest<CompanyDashboardData>('/dashboard?days=14', { signal: controller.signal })
       .then(setDashboard)
       .catch((requestError) => {
-        if (!controller.signal.aborted) setError(requestError instanceof Error ? requestError.message : 'Dashboard data could not be loaded');
+        if (!isAbortError(requestError) && !controller.signal.aborted) {
+          setError(requestError instanceof Error ? requestError.message : 'Dashboard data could not be loaded');
+        }
       })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
@@ -429,7 +431,9 @@ function CompanyAnalytics() {
     apiRequest<CompanyAnalyticsData>(`/dashboard/analytics?days=${days}`, { signal: controller.signal })
       .then(setAnalytics)
       .catch((requestError) => {
-        if (!controller.signal.aborted) setError(requestError instanceof Error ? requestError.message : 'Analytics could not be loaded');
+        if (!isAbortError(requestError) && !controller.signal.aborted) {
+          setError(requestError instanceof Error ? requestError.message : 'Analytics could not be loaded');
+        }
       })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();

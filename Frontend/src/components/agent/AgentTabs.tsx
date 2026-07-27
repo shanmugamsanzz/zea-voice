@@ -314,6 +314,8 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       ttsModel: base.ttsModel || 'eleven_flash_v2_5',
       voiceId: base.voiceId || '',
       ttsAmbienceType: base.ttsAmbienceType || 'Silent (Default)',
+      ttsMaxCharactersPerMinute: base.ttsMaxCharactersPerMinute ?? 0,
+      maxCallDurationMinutes: base.maxCallDurationMinutes ?? 0,
       pronunciationGroups: base.pronunciationGroups || [],
       preCallProvider: base.preCallProvider || 'Select Provider',
       preCallDescription: base.preCallDescription || base.preCallPrompt || '',
@@ -649,6 +651,18 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     }
     if ((agent.callbackMaximumDelayDays ?? 30) < 1 || (agent.callbackMaximumDelayDays ?? 30) > 30) {
       setError('Maximum callback delay must be between 1 and 30 days.'); return;
+    }
+    const maximumCharactersPerMinute = agent.ttsMaxCharactersPerMinute ?? 0;
+    if (!Number.isInteger(maximumCharactersPerMinute)
+      || maximumCharactersPerMinute < 0
+      || (maximumCharactersPerMinute !== 0 && (maximumCharactersPerMinute < 100 || maximumCharactersPerMinute > 10_000))) {
+      setError('Maximum Characters Per Minute must be 0 (unlimited) or between 100 and 10,000.'); return;
+    }
+    const maximumCallMinutes = agent.maxCallDurationMinutes ?? 0;
+    if (!Number.isInteger(maximumCallMinutes)
+      || maximumCallMinutes < 0
+      || (maximumCallMinutes !== 0 && (maximumCallMinutes < 1 || maximumCallMinutes > 120))) {
+      setError('Maximum Minutes Per Call must be 0 (unlimited) or between 1 and 120.'); return;
     }
     setSaving(true); setError('');
     try {
@@ -2010,6 +2024,53 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                 </div>
 
                 {renderModelParameters(selectedTtsModel)}
+
+                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50/70">
+                  <div className="border-b border-slate-200 bg-white px-5 py-4">
+                    <h4 className="text-sm font-extrabold text-slate-800">Usage &amp; Call Limits</h4>
+                    <p className="mt-1 text-[10px] font-semibold text-slate-500">Phase 1 limits saved separately for this agent. Enter 0 for unlimited.</p>
+                  </div>
+                  <div className="grid grid-cols-1 gap-5 p-5 sm:grid-cols-2">
+                    <label className="block">
+                      <span className="mb-1.5 flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-slate-500">
+                        <FileText className="h-3.5 w-3.5 text-pink-500" />Maximum Characters Per Minute
+                      </span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={10000}
+                        step={1}
+                        value={agent.ttsMaxCharactersPerMinute ?? 0}
+                        disabled={isReadOnly}
+                        onChange={(event) => setAgent({
+                          ...agent,
+                          ttsMaxCharactersPerMinute: Math.max(0, Number.parseInt(event.target.value, 10) || 0),
+                        })}
+                        className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold text-slate-800 outline-none transition focus:border-pink-500 disabled:cursor-not-allowed disabled:bg-slate-100"
+                      />
+                      <span className="mt-1.5 block text-[10px] font-semibold text-slate-400">Limits the text sent to TTS during each rolling 60-second window.</span>
+                    </label>
+                    <label className="block">
+                      <span className="mb-1.5 flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-slate-500">
+                        <Clock className="h-3.5 w-3.5 text-pink-500" />Maximum Minutes Per Call
+                      </span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={120}
+                        step={1}
+                        value={agent.maxCallDurationMinutes ?? 0}
+                        disabled={isReadOnly}
+                        onChange={(event) => setAgent({
+                          ...agent,
+                          maxCallDurationMinutes: Math.max(0, Number.parseInt(event.target.value, 10) || 0),
+                        })}
+                        className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold text-slate-800 outline-none transition focus:border-pink-500 disabled:cursor-not-allowed disabled:bg-slate-100"
+                      />
+                      <span className="mt-1.5 block text-[10px] font-semibold text-slate-400">Defines the maximum connected duration for one call.</span>
+                    </label>
+                  </div>
+                </div>
 
                 <PronunciationGroupManager
                   agentId={agentId}

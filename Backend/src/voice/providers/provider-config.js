@@ -2,6 +2,7 @@ import { withPlatformAdminContext } from '../../infrastructure/database-context.
 import { AppError } from '../../middleware/errors.js';
 import { decryptCredential } from '../../security/credential-crypto.js';
 import { resolveInteractionConfiguration } from '../interaction/interaction-config.js';
+import { normalizeTtsUsageLimitSettings } from '../tts-usage-limit-config.js';
 
 const defaultContextRunner = (operation) => withPlatformAdminContext(null, operation);
 
@@ -216,6 +217,7 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
     }
     const row = result.rows[0];
     const settings = row.settings ?? {};
+    const usageLimits = normalizeTtsUsageLimitSettings(settings);
     const interaction = resolveInteractionConfiguration(settings);
     const sttRuntimeSettings = selectedSettings(settings, sttSettingKeys);
     // TTS behavior comes from Super Admin provider/model parameters. The
@@ -252,6 +254,10 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
             silentMessage: settings.silentMessage ?? '',
           },
         },
+      },
+      limits: {
+        ttsMaxCharactersPerMinute: usageLimits.ttsMaxCharactersPerMinute,
+        maxCallDurationMinutes: usageLimits.maxCallDurationMinutes,
       },
       providers: {
         stt: provider(row, 'stt', decrypt, sttRuntimeSettings),

@@ -10,7 +10,7 @@ import { LoginView } from './views/LoginView';
 import { DashboardLayout } from './components/layouts/DashboardLayouts';
 import { SuperAdminViews } from './components/views/SuperAdminViews';
 import { CompanyViews } from './components/views/CompanyViews';
-import { apiRequest, logout, setAccessToken } from './lib/api';
+import { apiRequest, logout, SESSION_EXPIRED_EVENT, setAccessToken } from './lib/api';
 import { startTabMeasurement } from './lib/performance';
 import { useResizableTables } from './lib/useResizableTables';
 import { useKpiCardDecorations } from './lib/useKpiCardDecorations';
@@ -23,9 +23,20 @@ function CoreApp() {
   useSurfaceDecorations();
   const { role, setRole, setUserEmail, resetNavigation } = useAppState();
   const [authState, setAuthState] = useState<'checking' | 'authenticated' | 'anonymous'>('checking');
+  const [authNotice, setAuthNotice] = useState('');
 
   useEffect(() => {
     let active = true;
+    const handleSessionExpired = (event: Event) => {
+      if (!active) return;
+      resetNavigation();
+      const reason = event instanceof CustomEvent ? event.detail?.reason : 'expired';
+      setAuthNotice(reason === 'logout'
+        ? 'You signed out in another browser tab. Please sign in again.'
+        : 'Your session has expired. Please sign in again.');
+      setAuthState('anonymous');
+    };
+    window.addEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired);
     apiRequest<{ user: { email?: string; role: string } }>('/auth/me', { zeaCache: 'bypass' })
       .then(({ user }) => {
         if (!active) return;
@@ -39,7 +50,10 @@ function CoreApp() {
         resetNavigation();
         setAuthState('anonymous');
       });
-    return () => { active = false; };
+    return () => {
+      active = false;
+      window.removeEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired);
+    };
   }, []);
 
   if (authState === 'checking') {
@@ -47,12 +61,21 @@ function CoreApp() {
   }
 
   if (authState === 'anonymous') {
-    return <LoginView onLogin={() => { startTabMeasurement('dashboard'); setAuthState('authenticated'); }} />;
+    return <LoginView notice={authNotice} onLogin={() => {
+      setAuthNotice('');
+      startTabMeasurement('dashboard');
+      setAuthState('authenticated');
+    }} />;
   }
 
   // Once logged in, render the main dashboard layout frame
   return (
-    <DashboardLayout onLogout={async () => { await logout(); resetNavigation(); setAuthState('anonymous'); }}>
+    <DashboardLayout onLogout={async () => {
+      await logout();
+      resetNavigation();
+      setAuthNotice('');
+      setAuthState('anonymous');
+    }}>
       {role === 'SUPER_ADMIN' ? (
         <SuperAdminViews />
       ) : (

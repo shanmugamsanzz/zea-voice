@@ -21,7 +21,7 @@ const LOGIN_BACKGROUND_VIDEOS = [
 const loginBackgroundVideo =
   LOGIN_BACKGROUND_VIDEOS[Math.floor(Math.random() * LOGIN_BACKGROUND_VIDEOS.length)];
 
-export function LoginView({ onLogin }: { onLogin: () => void }) {
+export function LoginView({ onLogin, notice = '' }: { onLogin: () => void; notice?: string }) {
   const { setRole, setUserEmail } = useAppState();
   const [emailInput, setEmailInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
@@ -73,6 +73,13 @@ export function LoginView({ onLogin }: { onLogin: () => void }) {
                 <div className="flex items-start gap-2 rounded-xl border border-red-400/30 bg-red-950/45 p-3 text-xs font-semibold text-red-200">
                   <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
                   <span>{error}</span>
+                </div>
+              )}
+
+              {!error && notice && (
+                <div role="status" className="flex items-start gap-2 rounded-xl border border-amber-400/30 bg-amber-950/45 p-3 text-xs font-semibold text-amber-100">
+                  <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{notice}</span>
                 </div>
               )}
 

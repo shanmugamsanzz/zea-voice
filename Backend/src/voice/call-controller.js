@@ -54,12 +54,19 @@ export class CallController {
     await this.#hooks.onStateChange({ callId: this.callSession.id, previous, current: next, reason, at: now });
   }
 
-  async #append(role, text, now = Date.now()) {
+  async #append(role, text, now = Date.now(), options = {}) {
     const normalized = String(text ?? '').trim();
     if (!normalized) throw new AppError(400, 'Conversation message cannot be empty', 'VOICE_MESSAGE_EMPTY');
     this.#transcriptSequence += 1;
     const speaker = role === 'assistant' ? 'agent' : 'user';
-    const entry = { sequenceNumber: this.#transcriptSequence, speaker, text: normalized, isFinal: true, at: now };
+    const entry = {
+      sequenceNumber: this.#transcriptSequence,
+      speaker,
+      text: normalized,
+      isFinal: true,
+      at: now,
+      sources: Array.isArray(options.sources) ? options.sources : [],
+    };
     this.#history.push({ role, content: normalized });
     this.#history = this.#history.slice(-env.LLM_MAX_HISTORY_MESSAGES);
     this.#lastActivityAt = now;
@@ -67,7 +74,7 @@ export class CallController {
     return entry;
   }
 
-  async initialize(now = Date.now(), welcomeOverride = null) {
+  async initialize(now = Date.now(), welcomeOverride = null, options = {}) {
     const configuredInteraction = this.#profile.agent.speech?.interaction ?? {};
     const interaction = resolveInteractionConfiguration({
       ...this.#profile.agent.settings,
@@ -82,7 +89,7 @@ export class CallController {
     const welcome = String(welcomeOverride ?? this.#profile.agent.welcomeMessage ?? '').trim();
     if (welcome) {
       await this.#transition(callStates.GREETING, 'welcome_message', now);
-      const transcript = await this.#append('assistant', welcome, now);
+      const transcript = await this.#append('assistant', welcome, now, options);
       return { action: 'speak', text: welcome, transcript, greetingMode: interaction.greetingMode };
     }
     await this.#transition(callStates.LISTENING, 'agent_initiates_without_welcome', now);
@@ -105,11 +112,11 @@ export class CallController {
     return { action: 'generate_response', transcript, history: this.history };
   }
 
-  async setAssistantResponse(text, now = Date.now()) {
+  async setAssistantResponse(text, now = Date.now(), options = {}) {
     if (![callStates.THINKING, callStates.SPEAKING].includes(this.state)) {
       throw new AppError(409, 'Call is not waiting for an assistant response', 'VOICE_CALL_NOT_THINKING');
     }
-    const transcript = await this.#append('assistant', text, now);
+    const transcript = await this.#append('assistant', text, now, options);
     if (this.state === callStates.THINKING) await this.#transition(callStates.SPEAKING, 'assistant_response_ready', now);
     return { action: 'speak', text: transcript.text, transcript };
   }
@@ -131,9 +138,9 @@ export class CallController {
     return { action: 'generate_response' };
   }
 
-  async recordAssistantMessage(text, now = Date.now()) {
+  async recordAssistantMessage(text, now = Date.now(), options = {}) {
     if (this.terminal) throw new AppError(409, 'Call is already complete', 'VOICE_CALL_TERMINAL');
-    return this.#append('assistant', text, now);
+    return this.#append('assistant', text, now, options);
   }
 
   async playbackComplete(now = Date.now()) {

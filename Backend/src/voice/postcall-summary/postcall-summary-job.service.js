@@ -231,7 +231,7 @@ export function claimPostCallSummaryJob(summaryJobId, dependencies = {}) {
                 'sequenceNumber',t.sequence_number,
                 'role',CASE WHEN t.speaker::text='agent' THEN 'assistant'
                             WHEN t.speaker::text='system' THEN 'system' ELSE 'user' END,
-                'content',t.text,'createdAt',t.created_at
+                'content',t.text,'sources',t.sources,'createdAt',t.created_at
               ) ORDER BY t.sequence_number)
                 FROM call_transcript_entries t
                WHERE t.call_session_id=s.call_session_id AND t.tenant_id=s.tenant_id AND t.is_final=true),'[]'::jsonb) transcript

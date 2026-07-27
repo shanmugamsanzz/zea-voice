@@ -1,13 +1,25 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Activity, Calendar, CheckCircle2, ChevronLeft, ChevronRight, Clock, Download,
-  Eye, FileSpreadsheet, Filter, LoaderCircle, Phone, PhoneIncoming, PhoneOutgoing,
-  RefreshCw, Search, User, X, XCircle,
+  Activity, BookOpen, Brain, Calendar, CheckCircle2, ChevronDown, ChevronLeft,
+  ChevronRight, Clock, Database, Download, Eye, FileSpreadsheet, FileText, Filter,
+  History, LoaderCircle, Phone, PhoneIncoming, PhoneOutgoing, RefreshCw, Search,
+  Settings, User, Wrench, X, XCircle,
 } from 'lucide-react';
 import { apiBlobRequest, apiRequest, isAbortError } from '../../lib/api';
 
 type CallDirection = 'inbound' | 'outbound';
 type CallStatus = 'queued' | 'ringing' | 'connected' | 'completed' | 'failed' | 'busy' | 'no_answer' | 'canceled' | 'manual_follow_up_required';
+
+type MessageSourceType = 'welcome_configuration' | 'system_prompt' | 'pre_call_context'
+  | 'conversation_memory' | 'knowledge' | 'tool' | 'llm' | 'silent_message'
+  | 'runtime_fallback' | 'post_call_closing';
+
+interface MessageSource {
+  type: MessageSourceType;
+  id: string | number | boolean | null;
+  label: string | number | boolean | null;
+  metadata: Record<string, string | number | boolean | null>;
+}
 
 interface TranscriptEntry {
   id: string;
@@ -16,6 +28,7 @@ interface TranscriptEntry {
   text: string;
   offsetMs: number;
   isFinal: boolean;
+  sources: MessageSource[];
   createdAt: string;
 }
 
@@ -90,6 +103,57 @@ function duration(seconds: number) {
 function elapsed(offsetMs: number) {
   const seconds = Math.max(0, Math.floor((Number(offsetMs) || 0) / 1000));
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+const sourceDisplay: Record<MessageSourceType, { label: string; icon: typeof Database; style: string }> = {
+  welcome_configuration: { label: 'Welcome configuration', icon: Settings, style: 'border-violet-200 bg-violet-50 text-violet-700' },
+  system_prompt: { label: 'System instructions', icon: FileText, style: 'border-slate-200 bg-slate-50 text-slate-700' },
+  pre_call_context: { label: 'Pre-call context', icon: Database, style: 'border-cyan-200 bg-cyan-50 text-cyan-700' },
+  conversation_memory: { label: 'Conversation memory', icon: History, style: 'border-indigo-200 bg-indigo-50 text-indigo-700' },
+  knowledge: { label: 'Knowledge', icon: BookOpen, style: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
+  tool: { label: 'Tool result', icon: Wrench, style: 'border-amber-200 bg-amber-50 text-amber-700' },
+  llm: { label: 'LLM', icon: Brain, style: 'border-pink-200 bg-pink-50 text-pink-700' },
+  silent_message: { label: 'Silent message', icon: Settings, style: 'border-blue-200 bg-blue-50 text-blue-700' },
+  runtime_fallback: { label: 'Runtime fallback', icon: Activity, style: 'border-rose-200 bg-rose-50 text-rose-700' },
+  post_call_closing: { label: 'Post-call closing', icon: Phone, style: 'border-purple-200 bg-purple-50 text-purple-700' },
+};
+
+function sourceDescription(source: MessageSource) {
+  const metadata = source.metadata ?? {};
+  if (source.type === 'knowledge') {
+    const document = metadata.documentName || source.label || 'Published knowledge';
+    const page = metadata.pageNumber ? ` · page ${metadata.pageNumber}${metadata.pageEnd && metadata.pageEnd !== metadata.pageNumber ? `–${metadata.pageEnd}` : ''}` : '';
+    return `${document}${page}`;
+  }
+  if (source.type === 'tool') return `${source.label || 'Assigned tool'} · ${metadata.success === true ? 'successful' : 'used'}`;
+  if (source.type === 'llm') return `${metadata.providerName || 'Selected provider'} · ${metadata.modelKey || source.label || 'selected model'}`;
+  if (source.type === 'conversation_memory') return `${source.label || 'Saved context'} · ${metadata.policy || 'configured policy'}`;
+  if (source.type === 'pre_call_context') return `${source.label || 'Pre-call API'}${metadata.mappedKeys ? ` · ${metadata.mappedKeys}` : ''}`;
+  return String(source.label || sourceDisplay[source.type]?.label || source.type).replaceAll('_', ' ');
+}
+
+function TranscriptMessage({ entry }: { entry: TranscriptEntry }) {
+  const sources = Array.isArray(entry.sources) ? entry.sources : [];
+  return <div className={`flex flex-col ${entry.speaker === 'agent' ? 'items-end' : 'items-start'}`}>
+    <span className="mb-1 text-[9px] font-black uppercase tracking-wider text-slate-400">{entry.speaker} · {elapsed(entry.offsetMs)}</span>
+    <div className={`max-w-[88%] rounded-2xl px-4 py-3 text-xs font-semibold leading-relaxed ${entry.speaker === 'agent' ? 'rounded-tr-none bg-gradient-to-r from-violet-600 to-pink-500 text-white' : entry.speaker === 'system' ? 'border border-amber-200 bg-amber-50 text-amber-800' : 'rounded-tl-none border border-slate-200 bg-slate-50 text-slate-800'}`}>{entry.text}</div>
+    {entry.speaker === 'agent' && sources.length > 0 && <details className="group mt-2 w-full max-w-[88%] rounded-xl border border-slate-200 bg-white shadow-sm">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-slate-500">
+        <span className="flex items-center gap-1.5"><Database className="h-3.5 w-3.5 text-violet-500" />Answer sources ({sources.length})</span>
+        <ChevronDown className="h-3.5 w-3.5 transition group-open:rotate-180" />
+      </summary>
+      <div className="space-y-2 border-t border-slate-100 p-3">
+        {sources.map((source, index) => {
+          const display = sourceDisplay[source.type] ?? sourceDisplay.runtime_fallback;
+          const Icon = display.icon;
+          return <div key={`${source.type}-${String(source.id ?? source.label ?? index)}-${index}`} className="flex items-start gap-2">
+            <span className={`mt-0.5 rounded-md border p-1 ${display.style}`}><Icon className="h-3 w-3" /></span>
+            <div className="min-w-0"><p className="text-[9px] font-black uppercase tracking-wider text-slate-500">{display.label}</p><p className="mt-0.5 break-words text-[10px] font-semibold leading-relaxed text-slate-700">{sourceDescription(source)}</p></div>
+          </div>;
+        })}
+      </div>
+    </details>}
+  </div>;
 }
 
 function csvCell(value: unknown) {
@@ -395,7 +459,7 @@ export function DeveloperReportsView({
       <div className="flex-1 space-y-5 overflow-y-auto p-6">{detailsLoading && <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white p-4 text-xs font-bold text-slate-500"><LoaderCircle className="h-4 w-4 animate-spin" />Loading transcript…</div>}{detailsError && <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-xs font-bold text-rose-700">{detailsError}</div>}
         <div className="grid grid-cols-2 gap-3">{[['Agent', selected.agentName || '—'], ['Timestamp', timestamp(selected.startedAt, true)], ['Direction', selected.direction.toUpperCase()], ['Outcome', statusLabel[selected.status]], ['Duration', duration(selected.durationSeconds)], ['Sentiment', selected.sentiment || 'Not analyzed']].map(([label, value]) => <div key={label} className="rounded-2xl border border-slate-200 bg-white p-4"><p className="text-[9px] font-black uppercase tracking-wider text-slate-400">{label}</p><p className="mt-2 break-words text-xs font-black text-slate-800">{value}</p></div>)}</div>
         <div className="divide-y divide-slate-100 rounded-2xl border border-slate-200 bg-white p-5 text-xs">{[['From', selected.fromNumber], ['To', selected.toNumber], ['Agent ID', selected.agentId || '—'], ['Campaign', selected.campaignName || '—'], ['Plivo Call UUID', selected.providerCallId || '—'], ['Internal Call ID', selected.id]].map(([label, value]) => <div key={label} className="flex items-start justify-between gap-5 py-3"><span className="shrink-0 font-black uppercase text-slate-400">{label}</span><span className="break-all text-right font-mono font-bold text-slate-700">{value}</span></div>)}</div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-5"><div className="mb-4 flex items-center justify-between"><h4 className="text-sm font-black text-slate-800">Transcript</h4><span className="rounded-full bg-slate-100 px-2 py-1 text-[9px] font-black uppercase text-slate-500">{selected.transcript?.length ?? 0} entries</span></div>{selected.transcript?.length ? <div className="space-y-4">{selected.transcript.map((entry) => <div key={entry.id} className={`flex flex-col ${entry.speaker === 'agent' ? 'items-end' : 'items-start'}`}><span className="mb-1 text-[9px] font-black uppercase tracking-wider text-slate-400">{entry.speaker} · {elapsed(entry.offsetMs)}</span><div className={`max-w-[88%] rounded-2xl px-4 py-3 text-xs font-semibold leading-relaxed ${entry.speaker === 'agent' ? 'rounded-tr-none bg-gradient-to-r from-violet-600 to-pink-500 text-white' : entry.speaker === 'system' ? 'border border-amber-200 bg-amber-50 text-amber-800' : 'rounded-tl-none border border-slate-200 bg-slate-50 text-slate-800'}`}>{entry.text}</div></div>)}</div> : <p className="py-8 text-center text-xs font-semibold text-slate-400">No finalized transcript entries were saved for this call.</p>}</div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-5"><div className="mb-4 flex items-center justify-between"><h4 className="text-sm font-black text-slate-800">Transcript</h4><span className="rounded-full bg-slate-100 px-2 py-1 text-[9px] font-black uppercase text-slate-500">{selected.transcript?.length ?? 0} entries</span></div>{selected.transcript?.length ? <div className="space-y-4">{selected.transcript.map((entry) => <TranscriptMessage key={entry.id} entry={entry} />)}</div> : <p className="py-8 text-center text-xs font-semibold text-slate-400">No finalized transcript entries were saved for this call.</p>}</div>
         <div className="rounded-2xl border border-slate-200 bg-white p-5"><div className="mb-4 flex items-center justify-between"><h4 className="text-sm font-black text-slate-800">AI Call Summary</h4><span className={`rounded-full px-2 py-1 text-[9px] font-black uppercase ${selected.aiSummary?.status === 'completed' ? 'bg-emerald-50 text-emerald-700' : selected.aiSummary?.status === 'failed' ? 'bg-rose-50 text-rose-700' : 'bg-slate-100 text-slate-500'}`}>{selected.aiSummary?.status || 'Not enabled'}</span></div>{selected.aiSummary?.status === 'completed' ? <div className="space-y-4"><p className="text-xs font-semibold leading-relaxed text-slate-700">{selected.aiSummary.summary}</p><div className="grid grid-cols-2 gap-3">{[['Outcome', selected.aiSummary.outcome || 'Unknown'], ['Customer Intent', selected.aiSummary.customerIntent || 'Not identified'], ['Sentiment', selected.aiSummary.sentiment || 'Unknown'], ['Follow-Up', selected.aiSummary.followUpRequired ? 'Required' : 'Not required']].map(([label, value]) => <div key={label} className="rounded-xl bg-slate-50 p-3"><p className="text-[8px] font-black uppercase text-slate-400">{label}</p><p className="mt-1 text-[10px] font-bold text-slate-700">{value}</p></div>)}</div>{selected.aiSummary.followUpReason && <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-[11px] font-semibold text-amber-800">{selected.aiSummary.followUpReason}</div>}<p className={`text-[9px] font-bold ${selected.aiSummary.webhookDelivery?.delivered ? 'text-emerald-600' : 'text-slate-400'}`}>Post-Call webhook: {selected.aiSummary.webhookDelivery?.delivered ? `Delivered (${selected.aiSummary.webhookDelivery.status || 200})` : selected.aiSummary.webhookDelivery?.error || 'Not delivered or not configured'}</p></div> : selected.aiSummary?.status === 'failed' ? <p className="text-xs font-semibold text-rose-600">{selected.aiSummary.errorMessage || 'Summary processing failed.'}</p> : <p className="text-xs font-semibold text-slate-400">No completed AI summary is available for this call.</p>}</div>
         <div className="rounded-2xl border border-slate-200 bg-white p-5"><div className="mb-3 flex items-center gap-2"><Download className="h-4 w-4 text-emerald-500" /><h4 className="text-sm font-black text-slate-800">Call Recording</h4></div>{recordingLoading ? <div className="flex items-center gap-2 py-3 text-xs font-bold text-slate-500"><LoaderCircle className="h-4 w-4 animate-spin text-emerald-500" />Loading private recording from B2...</div> : recordingUrl ? <><audio controls preload="metadata" src={recordingUrl} className="w-full" /><a href={recordingUrl} download={`call-${selected.id}.mp3`} className="mt-3 inline-flex items-center gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-[10px] font-black text-emerald-700"><Download className="h-3.5 w-3.5" />Download recording</a></> : recordingError ? <p className="text-xs font-bold text-rose-600">{recordingError}</p> : <div className="flex items-center gap-2 text-xs font-semibold text-slate-500"><Activity className="h-4 w-4 text-slate-400" />No recording is available for this call.</div>}</div>
       </div><div className="border-t border-slate-200 bg-white p-5 text-right"><button onClick={closeDetails} className="rounded-xl bg-slate-900 px-5 py-2.5 text-xs font-bold text-white">Close</button></div></div></div>}

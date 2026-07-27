@@ -10,6 +10,7 @@ import {
   resolvePostCallSummaryConfiguration,
 } from '../voice/integrations/postcall-summary-config.js';
 import { normalizePostCallClosingSettings } from '../voice/integrations/postcall-closing-config.js';
+import { normalizeTtsUsageLimitSettings } from '../voice/tts-usage-limit-config.js';
 
 const legacyAgentTtsProviderOverrides = new Set([
   'ttsSpeed', 'ttsStyle', 'ttsStyleDegree', 'ttsLanguage', 'ttsStability',
@@ -24,13 +25,13 @@ function withoutAgentTtsProviderOverrides(settings = {}) {
 
 function normalizedAgentSettings(settings, interruptionSensitivity) {
   try {
-    return normalizeCallbackSettings(
+    return normalizeTtsUsageLimitSettings(normalizeCallbackSettings(
       normalizePostCallClosingSettings(normalizePostCallSummarySettings(
         normalizeInteractionSettings(normalizeInterruptionSettings(
           withoutAgentTtsProviderOverrides(settings), interruptionSensitivity,
         )),
       )),
-    );
+    ));
   } catch (error) {
     throw new AppError(400, error.message, error.code ?? 'VOICE_AGENT_SETTINGS_INVALID', {
       field: error.field ?? 'settings',

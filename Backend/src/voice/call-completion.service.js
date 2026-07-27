@@ -2,6 +2,7 @@ import { withAuthServiceContext } from '../infrastructure/database-context.js';
 import { activeCallSessions } from './call-session-store.js';
 import { reportPostCall } from './integrations/postcall.service.js';
 import { queuePostCallSummary } from './postcall-summary/postcall-summary.queue.js';
+import { normalizeTtsLimitUsage } from './tts-limit-usage.js';
 
 const terminalStatuses = new Set(['completed', 'failed', 'canceled', 'manual_follow_up_required']);
 const wholeNumber = (value) => Math.max(0, Math.round(Number(value) || 0));
@@ -35,6 +36,8 @@ async function persistCompletion(input, dependencies) {
     const endedAt = input.endedAt;
     const startedAt = call.answered_at ?? call.started_at;
     const durationSeconds = Math.max(0, Math.ceil((endedAt.getTime() - new Date(startedAt).getTime()) / 1000));
+    const metrics = input.metrics ?? {};
+    const ttsLimitUsage = normalizeTtsLimitUsage(metrics.ttsLimits, { callDurationSeconds: durationSeconds });
     for (const usage of input.usage.providers) {
       await client.query(`INSERT INTO call_provider_usage
         (call_session_id,tenant_id,provider_kind,provider_id,provider_name,model_id,model_key,
@@ -59,7 +62,8 @@ async function persistCompletion(input, dependencies) {
       reason: input.reason,
       usage: input.usage,
       adapterCleanup: input.adapterCleanup,
-      metrics: input.metrics ?? {},
+      metrics,
+      ttsLimitUsage,
       finalizedAt: endedAt.toISOString(),
     };
     const updated = await client.query(`UPDATE call_sessions SET status=$2::call_status,ended_at=$3,
@@ -144,6 +148,7 @@ export async function completeVoiceCall(input, dependencies = {}) {
       },
       transcript: input.controller.history,
       providerUsage: usage,
+      ttsLimitUsage: persisted.call.provider_metadata?.voiceRuntime?.ttsLimitUsage ?? null,
     };
     const summaryEnabled = input.runtimeProfile.agent.settings?.postCallSummaryEnabled === true;
     if (summaryEnabled) {

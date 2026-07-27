@@ -81,9 +81,12 @@ class FakeLlm {
 
 class FakeTts {
   texts = [];
+  requests = [];
   cancelled = 0;
   async connect() {}
-  async *synthesizeStream({ text, generationId }) {
+  async *synthesizeStream(input) {
+    this.requests.push(input);
+    const { text, generationId } = input;
     this.texts.push(text);
     yield { type: 'audio_chunk', generationId, audio: Buffer.alloc(160, this.texts.length) };
     yield { type: 'usage', generationId, usage: { characters: text.length, audioOutputMs: 20, audioBytes: 160 } };
@@ -123,6 +126,7 @@ const profile = {
   },
   tools: [{ id: 'assigned-tool', name: 'book visit', type: 'webhook_api', description: 'Book a visit', configuration: {} }],
   integrations: { postCall: { prompt: 'Be polite.', messageType: 'Dynamic', dynamicClosing: true } },
+  limits: { ttsMaxCharactersPerMinute: 1000, maxCallDurationMinutes: 1 },
 };
 
 const media = new FakeMediaSession();
@@ -131,12 +135,16 @@ const llm = new FakeLlm();
 const tts = new FakeTts();
 const audioEngine = new FakeAudioEngine();
 const transcript = [];
+const transcriptWriteAttempts = [];
+let releaseTranscriptPersistence;
+const transcriptPersistenceGate = new Promise((resolve) => { releaseTranscriptPersistence = resolve; });
 const completed = [];
 const knowledgeQueries = [];
 const knowledgeAuth = [];
 const toolInvocations = [];
 const contextCacheWrites = [];
 const durableMemoryWrites = [];
+const callDurationTimers = [];
 const previousMemory = {
   summary: 'The caller previously asked about an appointment.',
   recentMessages: [
@@ -150,7 +158,11 @@ const orchestrator = new RealtimeConversationOrchestrator(media, {
   createAdapters: async () => ({ stt, llm, tts }),
   createAudioEngine: () => audioEngine,
   welcomeCache: { async get() { return Buffer.alloc(160, 9); }, async set() { return true; } },
-  appendTranscript: async (entry) => transcript.push(entry),
+  appendTranscript: async (entry) => {
+    transcriptWriteAttempts.push(entry);
+    await transcriptPersistenceGate;
+    transcript.push(entry);
+  },
   routeKnowledge: async (auth, input) => {
     knowledgeAuth.push(auth);
     knowledgeQueries.push(input.query);
@@ -173,6 +185,12 @@ const orchestrator = new RealtimeConversationOrchestrator(media, {
     },
   },
   completeCall: async (input) => { completed.push(input); return { call: { id: 'call-1' } }; },
+  setCallDurationTimer: (callback, delayMs) => {
+    const timer = { callback, delayMs, unref() {} };
+    callDurationTimers.push(timer);
+    return timer;
+  },
+  clearCallDurationTimer: () => {},
 });
 
 await orchestrator.ready;
@@ -181,12 +199,21 @@ await waitFor(() => audioEngine.audio.some((entry) => entry.id.startsWith('welco
 await waitFor(() => orchestrator.controller.state === 'listening', 'Call did not enter listening state');
 assert.equal(audioEngine.started, true);
 assert.equal(contextCacheWrites.length, 1);
+assert.equal(callDurationTimers[0].delayMs, 60_000);
 
 media.emit('media', { session: media, audio: Buffer.alloc(160, 2) });
 await waitFor(() => stt.sent.length === 1, 'Plivo audio was not forwarded to STT');
 
 stt.publish({ type: 'speech_started' });
+const responseTurnStartedAt = Date.now();
 stt.publish({ type: 'final_transcript', text: 'book appointment', language: 'en', isFinal: true });
+await waitFor(() => tts.texts.includes('Your appointment is booked.'), 'TTS waited for transcript persistence');
+const sourceTracingAddedLatencyMs = Date.now() - responseTurnStartedAt;
+assert.ok(sourceTracingAddedLatencyMs < 1000, `TTS did not start within one second (${sourceTracingAddedLatencyMs}ms)`);
+assert.equal(transcript.length, 0, 'Transcript persistence gate should still be blocking database writes');
+assert.equal(transcriptWriteAttempts.length, 1, 'Transcript writes must remain serial while the first write is blocked');
+assert.ok(orchestrator.transcriptPersistence.metrics().pending >= 3, 'Transcript entries were not queued asynchronously');
+releaseTranscriptPersistence();
 await waitFor(() => transcript.some((entry) => entry.text === 'Your appointment is booked.'), 'Agent response was not persisted');
 await waitFor(() => orchestrator.controller.state === 'listening', 'Call did not return to listening after playback');
 assert.deepEqual(knowledgeQueries, ['book appointment']);
@@ -195,7 +222,18 @@ assert.equal(knowledgeAuth[0].tenantId, 'tenant-1');
 assert.equal(knowledgeAuth[0].workspaceId, 'workspace-1');
 assert.equal(toolInvocations[0].name, 'book_visit');
 assert.ok(tts.texts.includes('Your appointment is booked.'));
+assert.match(llm.requests[0].messages[0].content, /within 1000 Unicode characters/);
+const answerTtsRequest = tts.requests.find((request) => request.text === 'Your appointment is booked.');
+assert.ok(answerTtsRequest);
+assert.equal(Object.hasOwn(answerTtsRequest, 'sources'), false, 'Source metadata must never enter the TTS request');
 assert.deepEqual(transcript.map((entry) => entry.speaker), ['agent', 'user', 'agent']);
+assert.deepEqual(transcript[0].sources.map((source) => source.type), ['welcome_configuration']);
+const answerSources = transcript[2].sources.map((source) => source.type);
+assert.ok(answerSources.includes('system_prompt'));
+assert.ok(answerSources.includes('conversation_memory'));
+assert.ok(answerSources.includes('knowledge'));
+assert.ok(answerSources.includes('tool'));
+assert.ok(answerSources.includes('llm'));
 
 llm.wasCancelled = false;
 stt.publish({ type: 'final_transcript', text: 'slow request', language: 'en', isFinal: true });
@@ -219,6 +257,8 @@ assert.equal(completed[0].metrics.tools[0].name, 'book_visit');
 assert.equal(completed[0].metrics.contextCache.hit, true);
 assert.equal(completed[0].metrics.contextCache.source, 'postgresql');
 assert.equal(completed[0].metrics.contextCache.persisted, true);
+assert.ok(completed[0].metrics.ttsLimits.charactersSynthesized > 0);
+assert.equal(completed[0].metrics.ttsLimits.durationLimitReached, false);
 assert.equal(durableMemoryWrites.length, 1);
 assert.equal(contextCacheWrites.length, 2);
 assert.ok(durableMemoryWrites[0].state.recentMessages.some((message) => message.content === 'book appointment'));
@@ -416,4 +456,49 @@ await waitFor(() => followUpCompleted.length === 1, 'Follow-up call was not fina
 assert.equal(followUpMemory[0].state.callback.scheduling, 'fulfilled');
 assert.equal(followUpMemory[0].state.callback.scheduled, false);
 
-console.log(JSON.stringify({ success: true, task: 'Real-time conversation orchestrator' }));
+const deadlineMedia = new FakeMediaSession();
+deadlineMedia.call.id = 'call-duration-limit';
+deadlineMedia.callId = 'call-duration-limit';
+const deadlineCompleted = [];
+let durationDeadlineCallback;
+let durationDeadlineMs;
+const deadlineProfile = {
+  ...profile,
+  agent: {
+    ...profile.agent,
+    settings: { ...profile.agent.settings, greetingMode: 'User Initiates' },
+  },
+  limits: { ttsMaxCharactersPerMinute: 0, maxCallDurationMinutes: 1 },
+};
+const deadlineOrchestrator = new RealtimeConversationOrchestrator(deadlineMedia, {
+  loadProfile: async () => deadlineProfile,
+  createAdapters: async () => ({ stt: new FakeStt(), llm: new FakeLlm(), tts: new FakeTts() }),
+  createAudioEngine: () => new FakeAudioEngine(),
+  welcomeCache: { async get() { return null; }, async set() { return true; } },
+  appendTranscript: async () => {},
+  contextStore: { get: async () => null, set: async () => true, delete: async () => true },
+  memoryStore: { load: async () => null, save: async (_scope, input) => ({ state: input.state, revision: 1 }) },
+  setCallDurationTimer: (callback, delayMs) => {
+    durationDeadlineCallback = callback;
+    durationDeadlineMs = delayMs;
+    return { unref() {} };
+  },
+  clearCallDurationTimer: () => {},
+  completeCall: async (input) => { deadlineCompleted.push(input); },
+});
+await deadlineOrchestrator.ready;
+deadlineMedia.emit('start', { session: deadlineMedia });
+await waitFor(() => typeof durationDeadlineCallback === 'function', 'Maximum call duration timer was not armed');
+assert.equal(durationDeadlineMs, 60_000);
+durationDeadlineCallback();
+await waitFor(() => deadlineCompleted.length === 1, 'Maximum call duration did not finalize the call');
+assert.equal(deadlineCompleted[0].reason, 'maximum_duration_reached');
+assert.equal(deadlineCompleted[0].metrics.ttsLimits.durationLimitReached, true);
+assert.equal(deadlineMedia.closed, true);
+
+console.log(JSON.stringify({
+  success: true,
+  task: 'Real-time conversation orchestrator',
+  sourceTracingAddedLatencyMs,
+  acceptanceTargetMs: 1000,
+}));
