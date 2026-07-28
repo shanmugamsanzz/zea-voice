@@ -166,12 +166,14 @@ export function attachPostCallSummaryQueueJob(summaryJobId, bullmqJobId, depende
   return contextRunner(async (client) => {
     const result = await client.query(
       `UPDATE call_ai_summaries
-          SET bullmq_job_id=$2,error_code=NULL,error_message=NULL
-        WHERE id=$1 AND status='queued'
+          SET bullmq_job_id=COALESCE(bullmq_job_id,$2),
+              error_code=CASE WHEN status='queued' THEN NULL ELSE error_code END,
+              error_message=CASE WHEN status='queued' THEN NULL ELSE error_message END
+        WHERE id=$1
         RETURNING *`,
       [summaryJobId, String(bullmqJobId)],
     );
-    if (!result.rowCount) throw new AppError(409, 'Summary job is no longer queueable', 'POSTCALL_SUMMARY_NOT_QUEUEABLE');
+    if (!result.rowCount) throw new AppError(404, 'Summary job was not found', 'POSTCALL_SUMMARY_JOB_NOT_FOUND');
     return map(result.rows[0]);
   });
 }

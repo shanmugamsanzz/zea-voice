@@ -129,6 +129,14 @@ function xmlEscape(value) {
     .replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;');
 }
 
+const plivoMaximumRecordingSeconds = 86_400;
+
+function recordingMaximumSeconds(value) {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds <= 0) return plivoMaximumRecordingSeconds;
+  return Math.min(plivoMaximumRecordingSeconds, Math.max(1, Math.ceil(seconds)));
+}
+
 export function buildPlivoStreamXml(callSession, options = {}) {
   if (!env.PUBLIC_BASE_URL) throw new AppError(503, 'PUBLIC_BASE_URL is not configured', 'PUBLIC_URL_NOT_CONFIGURED');
   const base = new URL(env.PUBLIC_BASE_URL);
@@ -144,7 +152,8 @@ export function buildPlivoStreamXml(callSession, options = {}) {
     }
     const callback = new URL(options.recordingCallbackUrl);
     callback.searchParams.set('call_id', callSession.id);
-    recording = `<Record recordSession="true" callbackUrl="${xmlEscape(callback.toString())}" callbackMethod="POST" fileFormat="mp3" recordChannelType="stereo" />`;
+    const maxLength = recordingMaximumSeconds(options.recordingMaxLengthSeconds);
+    recording = `<Record recordSession="true" callbackUrl="${xmlEscape(callback.toString())}" callbackMethod="POST" fileFormat="mp3" recordChannelType="stereo" maxLength="${maxLength}" />`;
   }
   return `<?xml version="1.0" encoding="UTF-8"?><Response>${recording}<Stream bidirectional="true" keepCallAlive="true" contentType="audio/x-mulaw;rate=8000">${xmlEscape(base.toString())}</Stream></Response>`;
 }
