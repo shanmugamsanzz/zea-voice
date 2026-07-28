@@ -82,7 +82,11 @@ const result = await completeVoiceCall({
       ignoredSecret: 'must-not-persist',
     },
   },
-}, { contextRunner, fetchImpl });
+}, {
+  contextRunner,
+  fetchImpl,
+  queuePostCallSummary: async () => ({ queued: false, reason: 'not_configured', job: null }),
+});
 
 assert.equal(result.call.status, 'completed');
 assert.equal(result.call.duration_seconds, 60);
