@@ -27,6 +27,8 @@ export class AudioPacer {
     this.preRollMaxWaitMs = options.preRollMaxWaitMs ?? 80;
     this.lowWaterMs = options.lowWaterMs ?? 60;
     this.deliveryLeadMs = options.deliveryLeadMs ?? 160;
+    this.websocketWarnMs = options.websocketWarnMs ?? 40;
+    this.websocketBufferWarnBytes = options.websocketBufferWarnBytes ?? 262_144;
     this.onError = options.onError ?? (() => {});
     this.now = options.now ?? (() => performance.now());
     this.sleep = options.sleep ?? delay;
@@ -132,7 +134,24 @@ export class AudioPacer {
         }
       }
       this.sending = true;
-      await this.send(frame);
+      const deliveryStartedAt = this.now();
+      const transport = await this.send(frame);
+      const measuredDeliveryMs = Math.max(0, this.now() - deliveryStartedAt);
+      const deliveryMs = Math.max(0, Number(transport?.deliveryMs ?? measuredDeliveryMs));
+      const bufferedAmount = Math.max(0, Number(
+        transport?.bufferedAmountAfter ?? transport?.bufferedAmountBefore ?? 0,
+      ));
+      this.onPlaybackMetric({
+        type: 'websocket_delivery',
+        deliveryMs,
+        bufferedAmount,
+        slow: deliveryMs >= this.websocketWarnMs,
+        backpressured: bufferedAmount >= this.websocketBufferWarnBytes,
+        packetDurationMs: frame.durationMs,
+        packetBytes: frame.data.length,
+        packetFrameCount: Number(frame.packetFrameCount ?? 1),
+        playbackGroupId: frame.playbackGroupId,
+      });
       this.sending = false;
       this.lastSentFrame = { ...frame, sentAt: sendingAt };
       this.remotePlaybackEndAt = Math.max(this.remotePlaybackEndAt, sendingAt) + frame.durationMs;

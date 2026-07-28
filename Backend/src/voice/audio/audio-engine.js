@@ -127,6 +127,9 @@ export class ProviderIndependentAudioEngine {
       preRollMaxWaitMs: options.preRollMaxWaitMs ?? env.VOICE_AUDIO_PRE_ROLL_MAX_WAIT_MS,
       lowWaterMs: options.lowWaterMs ?? env.VOICE_AUDIO_LOW_WATER_MS,
       deliveryLeadMs: options.deliveryLeadMs ?? env.VOICE_AUDIO_DELIVERY_LEAD_MS,
+      websocketWarnMs: options.websocketWarnMs ?? env.VOICE_AUDIO_WEBSOCKET_WARN_MS,
+      websocketBufferWarnBytes: options.websocketBufferWarnBytes
+        ?? env.VOICE_AUDIO_WEBSOCKET_BUFFER_WARN_BYTES,
       onError: this.onError,
       now: options.now,
       sleep: options.sleep,
@@ -147,6 +150,8 @@ export class ProviderIndependentAudioEngine {
         frameDurationMs: options.frameDurationMs ?? env.VOICE_AUDIO_FRAME_MS,
         packetDurationMs: this.pacerOptions.packetDurationMs,
         deliveryLeadMs: this.pacerOptions.deliveryLeadMs,
+        websocketWarnMs: this.pacerOptions.websocketWarnMs,
+        websocketBufferWarnBytes: this.pacerOptions.websocketBufferWarnBytes,
         onError: (error) => this.#disableAmbience(error),
         now: options.now,
         sleep: options.sleep,

@@ -35,6 +35,8 @@ export class RealtimeAmbienceMixer {
     this.packetDurationMs = options.packetDurationMs ?? 80;
     this.packetFrameCount = Math.max(1, Math.ceil(this.packetDurationMs / this.frameDurationMs));
     this.deliveryLeadMs = options.deliveryLeadMs ?? 160;
+    this.websocketWarnMs = options.websocketWarnMs ?? 40;
+    this.websocketBufferWarnBytes = options.websocketBufferWarnBytes ?? 262_144;
     this.ambienceSamples = decodeAudio(options.ambienceAudio, this.format);
     if (!this.ambienceSamples.length) throw new TypeError('Normalized ambience audio is empty');
     this.listeningGain = Math.max(0, Math.min(1, Number(options.listeningVolumePercent ?? 10) / 100));
@@ -136,11 +138,29 @@ export class RealtimeAmbienceMixer {
             });
           }
       }
-      await this.send({
+      const deliveryStartedAt = this.now();
+      const transport = await this.send({
         data: outputs.length === 1 ? outputs[0] : Buffer.concat(outputs),
         durationMs: packetDurationMs,
         ambience: true,
         packetFrameCount: outputs.length,
+      });
+      const deliveryMs = Math.max(0, Number(
+        transport?.deliveryMs ?? (this.now() - deliveryStartedAt),
+      ));
+      const bufferedAmount = Math.max(0, Number(
+        transport?.bufferedAmountAfter ?? transport?.bufferedAmountBefore ?? 0,
+      ));
+      this.onPlaybackMetric({
+        type: 'websocket_delivery',
+        deliveryMs,
+        bufferedAmount,
+        slow: deliveryMs >= this.websocketWarnMs,
+        backpressured: bufferedAmount >= this.websocketBufferWarnBytes,
+        packetDurationMs,
+        packetBytes: outputs.reduce((total, output) => total + output.length, 0),
+        packetFrameCount: outputs.length,
+        ambience: true,
       });
       this.metrics.framesSent += outputs.length;
       this.metrics.speechFramesMixed += speechFrames.length;

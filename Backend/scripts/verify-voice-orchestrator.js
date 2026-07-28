@@ -470,6 +470,11 @@ assert.equal(completed[0].metrics.contextCache.persisted, true);
 assert.ok(completed[0].metrics.ttsLimits.charactersSynthesized > 0);
 assert.equal(completed[0].metrics.ttsSpeed.retries, 1);
 assert.equal(completed[0].metrics.ttsLimits.durationLimitReached, false);
+assert.ok(completed[0].metrics.ttsGeneration.requests > 0);
+assert.ok(completed[0].metrics.ttsGeneration.completed > 0);
+assert.ok(completed[0].metrics.ttsGeneration.failed > 0);
+assert.ok(completed[0].metrics.ttsGeneration.sentenceHandoffWaits > 0);
+assert.ok(completed[0].metrics.providerFailures.tts > 0);
 assert.equal(durableMemoryWrites.length, 1);
 assert.equal(contextCacheWrites.length, 2);
 assert.ok(durableMemoryWrites[0].state.recentMessages.some((message) => (

@@ -218,7 +218,38 @@ export class PlivoMediaSession extends EventEmitter {
     if (contentType !== this.mediaFormat.encoding || sampleRate !== this.mediaFormat.sampleRate) {
       throw new AppError(409, 'Synthesized audio format must match the Plivo stream', 'VOICE_MEDIA_OUTPUT_FORMAT_MISMATCH');
     }
-    this.#send({ event: 'playAudio', media: { contentType, sampleRate, payload } });
+    const message = JSON.stringify({ event: 'playAudio', media: { contentType, sampleRate, payload } });
+    if (this.closed || this.socket.readyState !== WebSocket.OPEN) {
+      throw new AppError(409, 'Plivo media WebSocket is not open', 'VOICE_MEDIA_SOCKET_CLOSED');
+    }
+    const startedAt = performance.now();
+    const bufferedAmountBefore = Math.max(0, Number(this.socket.bufferedAmount ?? 0));
+    // ws invokes this callback after the frame has been handed to the socket.
+    // Minimal test doubles generally expose a one-argument send method, so keep
+    // their synchronous behavior without weakening production measurements.
+    if (this.socket.send.length < 2) {
+      this.socket.send(message);
+      return Promise.resolve({
+        deliveryMs: Math.max(0, performance.now() - startedAt),
+        bufferedAmountBefore,
+        bufferedAmountAfter: Math.max(0, Number(this.socket.bufferedAmount ?? 0)),
+      });
+    }
+    return new Promise((resolve, reject) => {
+      this.socket.send(message, (error) => {
+        if (error) {
+          reject(Object.assign(new AppError(502,
+            'Plivo media WebSocket audio delivery failed',
+            'VOICE_MEDIA_WEBSOCKET_SEND_FAILED'), { cause: error }));
+          return;
+        }
+        resolve({
+          deliveryMs: Math.max(0, performance.now() - startedAt),
+          bufferedAmountBefore,
+          bufferedAmountAfter: Math.max(0, Number(this.socket.bufferedAmount ?? 0)),
+        });
+      });
+    });
   }
 
   checkpoint(name) {
