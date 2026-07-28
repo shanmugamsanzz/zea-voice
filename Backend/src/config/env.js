@@ -77,6 +77,15 @@ const envSchema = z.object({
   VOICE_AUDIO_FRAME_MS: z.coerce.number().int().min(10).max(100).default(20),
   VOICE_AUDIO_INPUT_MAX_BUFFER_MS: z.coerce.number().int().min(100).max(10000).default(1000),
   VOICE_AUDIO_OUTPUT_MAX_BUFFER_MS: z.coerce.number().int().min(100).max(10000).default(2000),
+  VOICE_AUDIO_UNDERRUN_THRESHOLD_MS: z.coerce.number().int().min(10).max(2000).default(40),
+  VOICE_TTS_SENTENCE_GROUPING_ENABLED: booleanFromString.default(true),
+  VOICE_TTS_SHORT_SENTENCE_CHARACTERS: z.coerce.number().int().min(20).max(500).default(100),
+  VOICE_TTS_GROUP_MAX_CHARACTERS: z.coerce.number().int().min(40).max(1000).default(220),
+  VOICE_TTS_GROUP_WAIT_MS: z.coerce.number().int().min(10).max(500).default(80),
+  VOICE_TTS_LOOKAHEAD_ENABLED: booleanFromString.default(true),
+  VOICE_TTS_LOOKAHEAD_CONCURRENCY: z.coerce.number().int().min(1).max(4).default(2),
+  VOICE_TTS_LOOKAHEAD_MAX_BYTES_PER_SEGMENT: z.coerce.number().int().min(65536).max(10485760).default(2097152),
+  VOICE_TTS_SMOOTH_SENTENCE_BOUNDARIES: booleanFromString.default(true),
   VOICE_WELCOME_CACHE_TTL_SECONDS: z.coerce.number().int().min(60).max(604800).default(86400),
   VOICE_WELCOME_CACHE_MAX_BYTES: z.coerce.number().int().min(1024).max(10485760).default(2097152),
   VOICE_WELCOME_CACHE_TIMEOUT_MS: z.coerce.number().int().min(5).max(1000).default(50),
@@ -184,6 +193,10 @@ if (parsed.data.VOICE_CALL_HEARTBEAT_INTERVAL_MS >= parsed.data.VOICE_CALL_OWNER
 
 if (parsed.data.TTS_SPEED_MIN_CHARACTERS_PER_SECOND >= parsed.data.TTS_SPEED_MAX_CHARACTERS_PER_SECOND) {
   throw new Error('Invalid environment configuration: TTS_SPEED_MIN_CHARACTERS_PER_SECOND must be lower than TTS_SPEED_MAX_CHARACTERS_PER_SECOND');
+}
+
+if (parsed.data.VOICE_TTS_SHORT_SENTENCE_CHARACTERS > parsed.data.VOICE_TTS_GROUP_MAX_CHARACTERS) {
+  throw new Error('Invalid environment configuration: VOICE_TTS_SHORT_SENTENCE_CHARACTERS cannot exceed VOICE_TTS_GROUP_MAX_CHARACTERS');
 }
 
 if (parsed.data.VOICE_CALL_RECONCILIATION_MIN_AGE_SECONDS <= parsed.data.VOICE_CALL_OWNERSHIP_TTL_SECONDS) {

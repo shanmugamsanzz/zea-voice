@@ -87,6 +87,10 @@ export class RealtimeConversationOrchestrator {
     this.finalized = false;
     this.closing = false;
     this.activeLlm = null;
+    this.activeLookaheadTtsAdapters = new Set();
+    this.activeLookaheadSchedulers = new Set();
+    this.interruptionConfirmationPromise = null;
+    this.activeCancellationPromise = null;
     this.inactivityTimer = null;
     this.callDurationTimer = null;
     this.listeners = [];
@@ -179,6 +183,24 @@ export class RealtimeConversationOrchestrator {
       },
       measured: 0, normal: 0, abnormal: 0, tooFast: 0, tooSlow: 0,
       retries: 0, retriesSuppressedAfterAudio: 0, samples: [],
+    };
+    this.runtimeMetrics.audioContinuity = {
+      underruns: 0, totalUnderrunMs: 0, maximumGapMs: 0,
+      sentenceBoundaries: 0, smoothedBoundaries: 0,
+      lastBufferedAudioMs: 0, minimumBufferedAudioMs: null,
+      samples: [],
+    };
+    this.runtimeMetrics.sentenceGrouping = {
+      enabled: env.VOICE_TTS_SENTENCE_GROUPING_ENABLED,
+      maximumWaitMs: env.VOICE_TTS_GROUP_WAIT_MS,
+      groupsQueued: 0, sentencesGrouped: 0, multiSentenceGroups: 0,
+    };
+    this.runtimeMetrics.ttsLookahead = {
+      enabled: env.VOICE_TTS_LOOKAHEAD_ENABLED,
+      concurrency: env.VOICE_TTS_LOOKAHEAD_CONCURRENCY,
+      scheduled: 0, started: 0, completed: 0, cancelled: 0, failed: 0,
+      readyBeforePlayback: 0, waitedAtPlayback: 0,
+      bufferedBytes: 0, maximumSegmentBytes: 0,
     };
     this.pronunciationProcessor = (this.dependencies.createPronunciationProcessor
       ?? createPronunciationTextProcessor)(this.runtimeProfile.pronunciation);
@@ -294,7 +316,15 @@ export class RealtimeConversationOrchestrator {
     );
     this.interruptionCandidate = new InterruptionCandidateManager({
       configuration: this.interruptionConfiguration,
-      onConfirm: (details) => void this.#guard('interruption', () => this.#confirmInterruption(details)),
+      onConfirm: (details) => {
+        const confirmation = this.#guard('interruption', () => this.#confirmInterruption(details));
+        this.interruptionConfirmationPromise = confirmation;
+        void confirmation.finally(() => {
+          if (this.interruptionConfirmationPromise === confirmation) {
+            this.interruptionConfirmationPromise = null;
+          }
+        });
+      },
       onReject: (details) => {
         this.runtimeMetrics.interruptions.rejected += 1;
         this.log.debug({
@@ -313,6 +343,7 @@ export class RealtimeConversationOrchestrator {
       webSocketFactory: this.dependencies.webSocketFactory,
       breaker: this.llmCircuitBreaker,
     };
+    this.ttsRuntimeContext = runtimeContext;
     this.adapters = await createAdapters(this.runtimeProfile, runtimeContext, this.registry);
     this.runtimeAmbience = await (this.dependencies.loadRuntimeAmbience ?? loadRuntimeAmbience)(
       this.runtimeProfile,
@@ -326,6 +357,39 @@ export class RealtimeConversationOrchestrator {
       onAmbienceError: (error) => this.log.warn({
         err: error, stage: 'ambience.mixer_disabled', callId: this.call.id,
       }, 'Ambience mixer failed; speech playback will continue without background sound'),
+      onPlaybackMetric: (metric) => {
+        const continuity = this.runtimeMetrics.audioContinuity;
+        const gapMs = Math.max(0, Number(metric.gapMs ?? 0));
+        const bufferedAudioMs = Math.max(0, Number(metric.bufferedAudioMs ?? 0));
+        continuity.maximumGapMs = Math.max(continuity.maximumGapMs, gapMs);
+        continuity.lastBufferedAudioMs = bufferedAudioMs;
+        continuity.minimumBufferedAudioMs = continuity.minimumBufferedAudioMs === null
+          ? bufferedAudioMs : Math.min(continuity.minimumBufferedAudioMs, bufferedAudioMs);
+        if (metric.sentenceBoundary) continuity.sentenceBoundaries += 1;
+        if (metric.type === 'boundary_smoothed') continuity.smoothedBoundaries += 1;
+        if (metric.type === 'underrun') {
+          continuity.underruns += 1;
+          continuity.totalUnderrunMs += gapMs;
+        }
+        if (continuity.samples.length < 100) continuity.samples.push({
+          type: metric.type, gapMs, bufferedAudioMs,
+          sentenceBoundary: metric.sentenceBoundary === true,
+          carriedFrameBytes: Number(metric.carriedFrameBytes ?? 0),
+          fromGenerationId: metric.fromGenerationId,
+          toGenerationId: metric.toGenerationId,
+        });
+        const logData = {
+          stage: metric.type === 'underrun' ? 'audio.buffer_underrun'
+            : (metric.type === 'boundary_smoothed'
+              ? 'audio.sentence_boundary_smoothed' : 'audio.sentence_boundary'),
+          callId: this.call.id, gapMs, bufferedAudioMs,
+          sentenceBoundary: metric.sentenceBoundary === true,
+          carriedFrameBytes: Number(metric.carriedFrameBytes ?? 0),
+        };
+        if (metric.type === 'underrun') {
+          this.log.warn(logData, 'Voice playback buffer became empty during an assistant turn');
+        } else this.log.debug(logData, 'Voice sentence boundary playback measured');
+      },
     });
     this.unsubscribeStt = this.adapters.stt.onEvent((event) => (
       void this.#guard('stt_event', () => this.#handleSttEvent(event))
@@ -581,7 +645,11 @@ export class RealtimeConversationOrchestrator {
     if (outputWasActive || this.interruptionCandidate.active) {
       if (!this.interruptionCandidate.active) this.runtimeMetrics.interruptions.candidates += 1;
       const decision = this.interruptionCandidate.observeTranscript(event.text);
-      if (decision.confirmed) await this.#cancelActive('caller_barge_in');
+      if (decision.confirmed) {
+        if (this.interruptionConfirmationPromise) await this.interruptionConfirmationPromise;
+        else if ([callStates.GREETING, callStates.THINKING, callStates.SPEAKING]
+          .includes(this.controller.state)) await this.#confirmInterruption(decision);
+      }
       else if (outputWasActive) {
         this.interruptionCandidate.finish('final_transcript_below_threshold');
         return;
@@ -867,6 +935,7 @@ export class RealtimeConversationOrchestrator {
         }
       }
       for (const sentence of sentenceBuffer.flush()) streaming.onSentence?.(sentence);
+      streaming.flush?.();
       return {
         cancelled: false,
         text: text.trim(),
@@ -875,6 +944,7 @@ export class RealtimeConversationOrchestrator {
       };
     } catch (error) {
       sentenceBuffer.clear();
+      streaming.flush?.();
       error.partialText = text.trim();
       error.streamedSentenceCount = streaming.sentenceCount?.() ?? 0;
       throw error;
@@ -911,12 +981,76 @@ export class RealtimeConversationOrchestrator {
     let failure = null;
     let sentenceNumber = 0;
     let spokenCharacters = 0;
+    let pendingShortSentence = '';
+    let groupingTimer = null;
+    let activeLookaheadJobs = 0;
+    let schedulerCancelled = false;
+    const pendingLookaheadJobs = [];
     const spokenSentences = [];
+    const playbackGroupId = `turn-${epoch}`;
     const maximumResponseCharacters = Number(
       this.runtimeProfile.limits?.ttsMaxCharactersPerResponse ?? 0,
     );
 
-    const enqueue = (rawSentence) => {
+    const pumpLookaheadJobs = () => {
+      while (!schedulerCancelled
+        && activeLookaheadJobs < env.VOICE_TTS_LOOKAHEAD_CONCURRENCY
+        && pendingLookaheadJobs.length) {
+        const job = pendingLookaheadJobs.shift();
+        if (this.finalized || epoch !== this.epoch) {
+          this.runtimeMetrics.ttsLookahead.cancelled += 1;
+          job.resolve({ value: { cancelled: true, chunks: [], bytes: 0 } });
+          continue;
+        }
+        activeLookaheadJobs += 1;
+        this.runtimeMetrics.ttsLookahead.started += 1;
+        Promise.resolve().then(job.task).then((value) => {
+          if (value?.cancelled) this.runtimeMetrics.ttsLookahead.cancelled += 1;
+          else {
+            this.runtimeMetrics.ttsLookahead.completed += 1;
+            this.runtimeMetrics.ttsLookahead.bufferedBytes += Number(value?.bytes ?? 0);
+            this.runtimeMetrics.ttsLookahead.maximumSegmentBytes = Math.max(
+              this.runtimeMetrics.ttsLookahead.maximumSegmentBytes,
+              Number(value?.bytes ?? 0),
+            );
+          }
+          job.resolve({ value });
+        }, (error) => {
+          this.runtimeMetrics.ttsLookahead.failed += 1;
+          job.resolve({ error });
+        }).finally(() => {
+          activeLookaheadJobs -= 1;
+          pumpLookaheadJobs();
+        });
+      }
+    };
+    const scheduleLookahead = (task) => {
+      this.runtimeMetrics.ttsLookahead.scheduled += 1;
+      if (schedulerCancelled || this.finalized || epoch !== this.epoch) {
+        this.runtimeMetrics.ttsLookahead.cancelled += 1;
+        return Promise.resolve({ value: { cancelled: true, chunks: [], bytes: 0 } });
+      }
+      return new Promise((resolve) => {
+        pendingLookaheadJobs.push({ task, resolve });
+        pumpLookaheadJobs();
+      });
+    };
+    const cancelScheduler = () => {
+      if (schedulerCancelled) return 0;
+      schedulerCancelled = true;
+      this.activeLookaheadSchedulers.delete(cancelScheduler);
+      clearGroupingTimer();
+      pendingShortSentence = '';
+      const cancelled = pendingLookaheadJobs.splice(0);
+      this.runtimeMetrics.ttsLookahead.cancelled += cancelled.length;
+      for (const job of cancelled) {
+        job.resolve({ value: { cancelled: true, chunks: [], bytes: 0 } });
+      }
+      return cancelled.length;
+    };
+    this.activeLookaheadSchedulers.add(cancelScheduler);
+
+    const enqueueNow = (rawSentence, groupedSentenceCount = 1) => {
       if (this.finalized || epoch !== this.epoch || failure) return false;
       const sentence = this.#fitTtsMessage(rawSentence);
       if (!sentence) return false;
@@ -933,9 +1067,18 @@ export class RealtimeConversationOrchestrator {
       const currentSentenceNumber = sentenceNumber;
       spokenCharacters += sentenceCharacters;
       spokenSentences.push(sentence);
+      this.runtimeMetrics.sentenceGrouping.groupsQueued += 1;
+      this.runtimeMetrics.sentenceGrouping.sentencesGrouped += groupedSentenceCount;
+      if (groupedSentenceCount > 1) this.runtimeMetrics.sentenceGrouping.multiSentenceGroups += 1;
       beginPromise ??= this.controller.beginAssistantResponse();
       const generationId = `turn-${epoch}-sentence-${currentSentenceNumber}`;
       const kind = currentSentenceNumber === 1 ? 'response' : 'response_sentence';
+      const useLookahead = env.VOICE_TTS_LOOKAHEAD_ENABLED && currentSentenceNumber > 1;
+      let lookaheadReady = false;
+      const lookahead = useLookahead
+        ? scheduleLookahead(() => this.#prefetchTts(sentence, generationId, { epoch }))
+          .then((result) => { lookaheadReady = true; return result; })
+        : null;
       chain = chain.then(async () => {
         await beginPromise;
         if (this.finalized || epoch !== this.epoch) return false;
@@ -943,8 +1086,18 @@ export class RealtimeConversationOrchestrator {
           stage: 'llm.sentence_ready_for_tts', callId: this.call.id,
           generationId, sentenceNumber: currentSentenceNumber, characters: sentenceCharacters,
         }, 'Complete LLM sentence queued for immediate TTS');
+        if (lookahead) {
+          if (lookaheadReady) this.runtimeMetrics.ttsLookahead.readyBeforePlayback += 1;
+          else this.runtimeMetrics.ttsLookahead.waitedAtPlayback += 1;
+          const prepared = await lookahead;
+          if (prepared.error) throw prepared.error;
+          return this.#playPrefetchedTts(prepared.value, generationId, {
+            epoch, playbackGroupId, deferBoundaryFlush: true,
+          });
+        }
         return this.#synthesize(sentence, generationId, {
           kind, startedAt: turnStartedAt, deferDrain: true,
+          playbackGroupId, deferBoundaryFlush: true,
         });
       }).catch((error) => {
         failure ??= error;
@@ -952,17 +1105,69 @@ export class RealtimeConversationOrchestrator {
       });
       return true;
     };
+    const clearGroupingTimer = () => {
+      if (groupingTimer) clearTimeout(groupingTimer);
+      groupingTimer = null;
+    };
+    const flushGrouping = () => {
+      clearGroupingTimer();
+      if (!pendingShortSentence) return false;
+      const pending = pendingShortSentence;
+      pendingShortSentence = '';
+      return enqueueNow(pending, 1);
+    };
+    const armGroupingTimer = () => {
+      clearGroupingTimer();
+      groupingTimer = setTimeout(flushGrouping, env.VOICE_TTS_GROUP_WAIT_MS);
+      groupingTimer.unref?.();
+    };
+    const enqueue = (rawSentence) => {
+      const sentence = String(rawSentence ?? '').trim();
+      if (!sentence) return false;
+      if (!env.VOICE_TTS_SENTENCE_GROUPING_ENABLED || sentenceNumber === 0) {
+        flushGrouping();
+        return enqueueNow(sentence, 1);
+      }
+      const sentenceCharacters = Array.from(sentence).length;
+      if (sentenceCharacters > env.VOICE_TTS_SHORT_SENTENCE_CHARACTERS) {
+        flushGrouping();
+        return enqueueNow(sentence, 1);
+      }
+      if (pendingShortSentence) {
+        const combined = `${pendingShortSentence} ${sentence}`;
+        if (Array.from(combined).length <= env.VOICE_TTS_GROUP_MAX_CHARACTERS) {
+          clearGroupingTimer();
+          pendingShortSentence = '';
+          return enqueueNow(combined, 2);
+        }
+        flushGrouping();
+      }
+      pendingShortSentence = sentence;
+      armGroupingTimer();
+      return true;
+    };
 
     return {
       enqueue,
+      flushGrouping,
+      cancel: cancelScheduler,
       sentenceCount: () => spokenSentences.length,
       spokenText: () => spokenSentences.join(' ').trim(),
       waitUntilStarted: async () => beginPromise ? beginPromise : undefined,
       finish: async () => {
-        await chain;
-        if (failure) throw failure;
-        if (epoch === this.epoch && !this.finalized) await this.audioEngine.drainOutput();
-        return epoch === this.epoch && !this.finalized;
+        try {
+          flushGrouping();
+          await chain;
+          if (failure) throw failure;
+          if (epoch === this.epoch && !this.finalized) {
+            await this.audioEngine.flushOutputGroup?.(playbackGroupId);
+            await this.audioEngine.drainOutput();
+          }
+          return epoch === this.epoch && !this.finalized;
+        } finally {
+          clearGroupingTimer();
+          this.activeLookaheadSchedulers.delete(cancelScheduler);
+        }
       },
     };
   }
@@ -978,6 +1183,7 @@ export class RealtimeConversationOrchestrator {
     const sentencePipeline = this.#createSentenceTtsPipeline(epoch, turnStartedAt);
     const streaming = {
       onSentence: sentencePipeline.enqueue,
+      flush: sentencePipeline.flushGrouping,
       sentenceCount: sentencePipeline.sentenceCount,
     };
     let response;
@@ -1017,7 +1223,10 @@ export class RealtimeConversationOrchestrator {
       }
     }
     sourceTrace.add(response.sources);
-    if (response.cancelled || epoch !== this.epoch) return;
+    if (response.cancelled || epoch !== this.epoch) {
+      sentencePipeline.cancel();
+      return;
+    }
     if (response.toolCalls.length) {
       const toolResults = await (this.dependencies.executeTools ?? executeAgentTools)(
         this.runtimeProfile, this.call, response.toolCalls, { fetchImpl: this.dependencies.fetchImpl },
@@ -1033,7 +1242,10 @@ export class RealtimeConversationOrchestrator {
       }, streaming);
       sourceTrace.add(response.sources);
     }
-    if (response.cancelled || epoch !== this.epoch || this.finalized) return;
+    if (response.cancelled || epoch !== this.epoch || this.finalized) {
+      sentencePipeline.cancel();
+      return;
+    }
     const generatedAnswer = String(response.text ?? '').trim();
     const unconstrainedAnswer = generatedAnswer
       || String(this.runtimeProfile.agent.settings?.noResponseMessage ?? 'Sorry, I could not form a response.');
@@ -1076,8 +1288,52 @@ export class RealtimeConversationOrchestrator {
     return result;
   }
 
+  #recordTtsSpeed(text, generationId, usage, options = {}) {
+    const speed = this.ttsSpeedMonitor.inspect({
+      text,
+      characters: usage?.characters,
+      audioOutputMs: usage?.audioOutputMs,
+    });
+    const sample = {
+      generationId,
+      attempt: Number(options.attempt ?? 0) + 1,
+      classification: speed.classification,
+      measured: speed.measured,
+      characters: speed.characters,
+      audioOutputMs: speed.audioOutputMs,
+      charactersPerSecond: speed.charactersPerSecond,
+      audioStarted: options.audioStarted === true,
+      bufferedLookahead: options.bufferedLookahead === true,
+      requestDurationMs: Math.max(0, Date.now() - Number(options.requestStartedAt ?? Date.now())),
+    };
+    if (this.runtimeMetrics.ttsSpeed.samples.length < 100) {
+      this.runtimeMetrics.ttsSpeed.samples.push(sample);
+    }
+    if (speed.measured) {
+      this.runtimeMetrics.ttsSpeed.measured += 1;
+      if (speed.abnormal) this.runtimeMetrics.ttsSpeed.abnormal += 1;
+      else this.runtimeMetrics.ttsSpeed.normal += 1;
+      if (speed.classification === 'too_fast') this.runtimeMetrics.ttsSpeed.tooFast += 1;
+      if (speed.classification === 'too_slow') this.runtimeMetrics.ttsSpeed.tooSlow += 1;
+    }
+    if (speed.abnormal) {
+      this.providerHealth.record(this.runtimeProfile.agent.tenantId, 'tts', this.runtimeProfile.providers.tts, 'failure', {
+        code: 'TTS_ABNORMAL_SPEED', latencyMs: usage?.firstAudioLatencyMs,
+      });
+      this.log.warn({
+        stage: 'tts.abnormal_speed', callId: this.call.id, ...sample,
+        expectedMinimum: speed.expectedMinimum, expectedMaximum: speed.expectedMaximum,
+      }, 'TTS audio speed was outside the safe speaking range');
+    } else {
+      this.providerHealth.record(this.runtimeProfile.agent.tenantId, 'tts', this.runtimeProfile.providers.tts, 'success', {
+        latencyMs: usage?.firstAudioLatencyMs,
+      });
+    }
+    return { speed, sample };
+  }
+
   async #synthesizeAttempt(text, generationId, options = {}) {
-    this.audioEngine.beginOutputGeneration(generationId);
+    this.audioEngine.beginOutputGeneration(generationId, options.playbackGroupId ?? generationId);
     const requestStartedAt = Date.now();
     let completed = false;
     let firstAudio = true;
@@ -1098,50 +1354,16 @@ export class RealtimeConversationOrchestrator {
         } else if (event.type === 'usage') this.usageTracker.record('tts', event.usage);
         else if (event.type === 'completed') {
           completed = true;
-          const speed = this.ttsSpeedMonitor.inspect({
-            text,
-            characters: event.usage?.characters,
-            audioOutputMs: event.usage?.audioOutputMs,
+          const { speed, sample } = this.#recordTtsSpeed(text, generationId, event.usage, {
+            ...options, audioStarted: !firstAudio, requestStartedAt,
           });
-          const sample = {
-            generationId,
-            attempt: Number(options.attempt ?? 0) + 1,
-            classification: speed.classification,
-            measured: speed.measured,
-            characters: speed.characters,
-            audioOutputMs: speed.audioOutputMs,
-            charactersPerSecond: speed.charactersPerSecond,
-            audioStarted: !firstAudio,
-            requestDurationMs: Math.max(0, Date.now() - requestStartedAt),
-          };
-          if (this.runtimeMetrics.ttsSpeed.samples.length < 100) {
-            this.runtimeMetrics.ttsSpeed.samples.push(sample);
-          }
-          if (speed.measured) {
-            this.runtimeMetrics.ttsSpeed.measured += 1;
-            if (speed.abnormal) this.runtimeMetrics.ttsSpeed.abnormal += 1;
-            else this.runtimeMetrics.ttsSpeed.normal += 1;
-            if (speed.classification === 'too_fast') this.runtimeMetrics.ttsSpeed.tooFast += 1;
-            if (speed.classification === 'too_slow') this.runtimeMetrics.ttsSpeed.tooSlow += 1;
-          }
           if (speed.abnormal) {
-            this.providerHealth.record(this.runtimeProfile.agent.tenantId, 'tts', this.runtimeProfile.providers.tts, 'failure', {
-              code: 'TTS_ABNORMAL_SPEED', latencyMs: event.usage?.firstAudioLatencyMs,
-            });
-            this.log.warn({
-              stage: 'tts.abnormal_speed', callId: this.call.id, ...sample,
-              expectedMinimum: speed.expectedMinimum, expectedMaximum: speed.expectedMaximum,
-            }, 'TTS audio speed was outside the safe speaking range');
             if (firstAudio) {
               throw Object.assign(new AppError(502,
                 'TTS provider generated audio at an abnormal speed', 'TTS_ABNORMAL_SPEED', sample),
               { retryable: true });
             }
             this.runtimeMetrics.ttsSpeed.retriesSuppressedAfterAudio += 1;
-          } else {
-            this.providerHealth.record(this.runtimeProfile.agent.tenantId, 'tts', this.runtimeProfile.providers.tts, 'success', {
-              latencyMs: event.usage?.firstAudioLatencyMs,
-            });
           }
         }
         else if (event.type === 'cancelled') return false;
@@ -1152,8 +1374,125 @@ export class RealtimeConversationOrchestrator {
       throw error;
     }
     if (!completed) throw new AppError(502, 'TTS stream ended without completion', 'TTS_STREAM_INCOMPLETE');
-    await this.audioEngine.flushSynthesized(generationId);
+    await this.audioEngine.flushSynthesized(generationId, {
+      finalizeGroup: options.deferBoundaryFlush !== true,
+    });
     if (!options.deferDrain) await this.audioEngine.drainOutput();
+    return true;
+  }
+
+  async #createLookaheadTtsAdapter(generationId) {
+    const factory = this.dependencies.createLookaheadTtsAdapter;
+    if (factory) return factory({
+      generationId,
+      runtimeProfile: this.runtimeProfile,
+      runtimeContext: this.ttsRuntimeContext,
+    });
+    return this.registry.create('tts', this.runtimeProfile.providers.tts, {
+      ...this.ttsRuntimeContext,
+      callId: `${this.call.id}:${generationId}`,
+    });
+  }
+
+  async #prefetchTtsAttempt(text, generationId, options = {}) {
+    const adapter = await this.#createLookaheadTtsAdapter(generationId);
+    this.activeLookaheadTtsAdapters.add(adapter);
+    const requestStartedAt = Date.now();
+    const chunks = [];
+    let bytes = 0;
+    let completed = false;
+    try {
+      await adapter.connect();
+      for await (const event of adapter.synthesizeStream({ text, generationId })) {
+        if (this.finalized || options.epoch !== this.epoch) {
+          adapter.cancel('stale_lookahead_turn');
+          return { cancelled: true, chunks: [], bytes: 0 };
+        }
+        if (event.type === 'audio_chunk') {
+          bytes += event.audio.length;
+          if (bytes > env.VOICE_TTS_LOOKAHEAD_MAX_BYTES_PER_SEGMENT) {
+            throw Object.assign(new AppError(413,
+              'Look-ahead TTS audio exceeded the per-segment memory limit',
+              'TTS_LOOKAHEAD_BUFFER_LIMIT_EXCEEDED', {
+                generationId, maximumBytes: env.VOICE_TTS_LOOKAHEAD_MAX_BYTES_PER_SEGMENT,
+              }), { retryable: false });
+          }
+          chunks.push(Buffer.from(event.audio));
+        } else if (event.type === 'usage') this.usageTracker.record('tts', event.usage);
+        else if (event.type === 'completed') {
+          completed = true;
+          const { speed, sample } = this.#recordTtsSpeed(text, generationId, event.usage, {
+            ...options, audioStarted: false, bufferedLookahead: true, requestStartedAt,
+          });
+          if (speed.abnormal) {
+            throw Object.assign(new AppError(502,
+              'Look-ahead TTS provider generated audio at an abnormal speed',
+              'TTS_ABNORMAL_SPEED', sample), { retryable: true, audioStarted: false });
+          }
+        } else if (event.type === 'cancelled') return { cancelled: true, chunks: [], bytes: 0 };
+        else if (event.type === 'error') {
+          throw Object.assign(new Error(event.message), {
+            code: event.code, retryable: event.retryable, audioStarted: false,
+          });
+        }
+      }
+      if (!completed || !chunks.length) {
+        throw Object.assign(new AppError(502,
+          'Look-ahead TTS stream ended without complete audio', 'TTS_LOOKAHEAD_STREAM_INCOMPLETE'),
+        { retryable: true, audioStarted: false });
+      }
+      return { cancelled: false, chunks, bytes };
+    } finally {
+      this.activeLookaheadTtsAdapters.delete(adapter);
+      try {
+        await adapter.close();
+      } catch (closeError) {
+        this.log.warn({
+          err: closeError, stage: 'tts.lookahead_adapter_close_failed',
+          callId: this.call.id, generationId,
+        }, 'Isolated look-ahead TTS adapter did not close cleanly');
+      }
+    }
+  }
+
+  async #prefetchTts(text, generationId, options = {}) {
+    const pronunciation = this.pronunciationProcessor?.process(text)
+      ?? { text, changed: false, replacementCount: 0, appliedRuleIds: [] };
+    if (!await this.#reserveTtsCharacters(pronunciation.text, generationId)) {
+      return { cancelled: true, chunks: [], bytes: 0 };
+    }
+    let lastError;
+    const maximumAttempts = Math.max(env.VOICE_PROVIDER_MAX_RETRIES, env.TTS_SPEED_MAX_RETRIES);
+    for (let attempt = 0; attempt <= maximumAttempts; attempt += 1) {
+      try {
+        return await this.#prefetchTtsAttempt(pronunciation.text, generationId, {
+          ...options, attempt,
+        });
+      } catch (error) {
+        lastError = error;
+        const retryLimit = error?.code === 'TTS_ABNORMAL_SPEED'
+          ? env.TTS_SPEED_MAX_RETRIES : env.VOICE_PROVIDER_MAX_RETRIES;
+        const canRetry = error?.retryable === true && attempt < retryLimit
+          && !this.finalized && options.epoch === this.epoch;
+        if (!canRetry) throw error;
+        if (error?.code === 'TTS_ABNORMAL_SPEED') this.runtimeMetrics.ttsSpeed.retries += 1;
+        const delayMs = env.VOICE_PROVIDER_RETRY_BASE_MS * (2 ** attempt);
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+    throw lastError;
+  }
+
+  async #playPrefetchedTts(prepared, generationId, options = {}) {
+    if (prepared?.cancelled || this.finalized || options.epoch !== this.epoch) return false;
+    this.audioEngine.beginOutputGeneration(generationId, options.playbackGroupId ?? generationId);
+    for (const chunk of prepared.chunks) {
+      if (this.finalized || options.epoch !== this.epoch) return false;
+      if (!await this.audioEngine.enqueueSynthesized(chunk, generationId)) return false;
+    }
+    await this.audioEngine.flushSynthesized(generationId, {
+      finalizeGroup: options.deferBoundaryFlush !== true,
+    });
     return true;
   }
 
@@ -1202,20 +1541,45 @@ export class RealtimeConversationOrchestrator {
   }
 
   async #cancelActive(reason = 'cancelled', transition = true) {
-    this.epoch += 1;
-    this.runtimeMetrics.interruptions.cancellationEpochs += 1;
-    this.activeLlm?.cancel(reason);
-    this.adapters?.llm?.cancel?.(reason);
-    this.adapters?.tts?.cancel?.(reason);
-    const audioCancellation = this.audioEngine?.cancelStaleAudio?.(reason);
-    this.runtimeMetrics.interruptions.clearedAudioFrames += Number(audioCancellation?.removedFrames ?? 0);
-    this.log.info({
-      stage: 'audio.turn_cancelled', callId: this.call.id, reason,
-      epoch: this.epoch, removedFrames: audioCancellation?.removedFrames ?? 0,
-      cancellationVersion: audioCancellation?.cancellationVersion ?? null,
-    }, 'Cancelled active voice turn and cleared all stale Plivo audio');
-    if (transition && this.controller && [callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) {
-      await this.controller.interrupt(reason);
+    if (this.activeCancellationPromise) return this.activeCancellationPromise;
+    const operation = (async () => {
+      this.epoch += 1;
+      this.runtimeMetrics.interruptions.cancellationEpochs += 1;
+
+      // Clear queued and already-dequeued Plivo audio first. Provider shutdown
+      // can take time and must never allow stale speech to continue meanwhile.
+      const audioCancellation = this.audioEngine?.cancelStaleAudio?.(reason);
+      this.runtimeMetrics.interruptions.clearedAudioFrames += Number(audioCancellation?.removedFrames ?? 0);
+      let cancelledLookaheadJobs = 0;
+      for (const cancelScheduler of this.activeLookaheadSchedulers) {
+        cancelledLookaheadJobs += Number(cancelScheduler(reason) ?? 0);
+      }
+
+      const cancellables = new Set([
+        this.activeLlm,
+        this.adapters?.llm,
+        this.adapters?.tts,
+        ...this.activeLookaheadTtsAdapters,
+      ].filter((candidate) => typeof candidate?.cancel === 'function'));
+      await Promise.allSettled([...cancellables].map((candidate) => (
+        Promise.resolve().then(() => candidate.cancel(reason))
+      )));
+
+      this.log.info({
+        stage: 'audio.turn_cancelled', callId: this.call.id, reason,
+        epoch: this.epoch, removedFrames: audioCancellation?.removedFrames ?? 0,
+        cancellationVersion: audioCancellation?.cancellationVersion ?? null,
+        cancelledLookaheadJobs,
+      }, 'Cancelled active voice turn and cleared all stale Plivo audio');
+      if (transition && this.controller
+        && [callStates.GREETING, callStates.THINKING, callStates.SPEAKING]
+          .includes(this.controller.state)) await this.controller.interrupt(reason);
+    })();
+    this.activeCancellationPromise = operation;
+    try {
+      return await operation;
+    } finally {
+      if (this.activeCancellationPromise === operation) this.activeCancellationPromise = null;
     }
   }
 
@@ -1382,8 +1746,11 @@ export class RealtimeConversationOrchestrator {
     this.#clearCallDuration();
     this.interruptionCandidate?.reset();
     this.epoch += 1;
+    for (const cancelScheduler of this.activeLookaheadSchedulers) cancelScheduler(finalReason);
     this.activeLlm?.cancel(finalReason);
+    this.adapters?.llm?.cancel?.(finalReason);
     this.adapters?.tts?.cancel?.(finalReason);
+    for (const adapter of this.activeLookaheadTtsAdapters) adapter.cancel?.(finalReason);
     this.unsubscribeStt?.();
     this.runtimeMetrics.ambience = {
       enabled: Boolean(this.runtimeAmbience),
@@ -1417,6 +1784,29 @@ export class RealtimeConversationOrchestrator {
       retries: this.runtimeMetrics.ttsSpeed?.retries ?? 0,
       retriesSuppressedAfterAudio: this.runtimeMetrics.ttsSpeed?.retriesSuppressedAfterAudio ?? 0,
     }, 'TTS speed monitoring summary');
+    this.log.info({
+      stage: 'audio.continuity_summary', callId: this.call.id,
+      underruns: this.runtimeMetrics.audioContinuity?.underruns ?? 0,
+      totalUnderrunMs: this.runtimeMetrics.audioContinuity?.totalUnderrunMs ?? 0,
+      maximumGapMs: this.runtimeMetrics.audioContinuity?.maximumGapMs ?? 0,
+      sentenceBoundaries: this.runtimeMetrics.audioContinuity?.sentenceBoundaries ?? 0,
+      smoothedBoundaries: this.runtimeMetrics.audioContinuity?.smoothedBoundaries ?? 0,
+      minimumBufferedAudioMs: this.runtimeMetrics.audioContinuity?.minimumBufferedAudioMs ?? null,
+      groupedTtsRequests: this.runtimeMetrics.sentenceGrouping?.multiSentenceGroups ?? 0,
+    }, 'Voice playback continuity summary');
+    this.log.info({
+      stage: 'tts.lookahead_summary', callId: this.call.id,
+      enabled: this.runtimeMetrics.ttsLookahead?.enabled ?? false,
+      concurrency: this.runtimeMetrics.ttsLookahead?.concurrency ?? 0,
+      scheduled: this.runtimeMetrics.ttsLookahead?.scheduled ?? 0,
+      completed: this.runtimeMetrics.ttsLookahead?.completed ?? 0,
+      cancelled: this.runtimeMetrics.ttsLookahead?.cancelled ?? 0,
+      failed: this.runtimeMetrics.ttsLookahead?.failed ?? 0,
+      readyBeforePlayback: this.runtimeMetrics.ttsLookahead?.readyBeforePlayback ?? 0,
+      waitedAtPlayback: this.runtimeMetrics.ttsLookahead?.waitedAtPlayback ?? 0,
+      bufferedBytes: this.runtimeMetrics.ttsLookahead?.bufferedBytes ?? 0,
+      maximumSegmentBytes: this.runtimeMetrics.ttsLookahead?.maximumSegmentBytes ?? 0,
+    }, 'Ordered TTS look-ahead summary');
     try {
       await (this.dependencies.completeCall ?? completeVoiceCall)({
         controller: this.controller,

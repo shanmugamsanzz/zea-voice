@@ -61,6 +61,7 @@ assert.equal(queue.cancelGeneration('second'), 1);
 queue.close();
 
 const sent = [];
+const playbackMetrics = [];
 let clearCount = 0;
 let clock = 0;
 const mediaSession = {
@@ -75,6 +76,7 @@ const engine = new ProviderIndependentAudioEngine({
   mediaSession,
   now: () => clock,
   sleep: async (milliseconds) => { clock += milliseconds; },
+  onPlaybackMetric: (metric) => playbackMetrics.push(metric),
 }).start();
 
 const inboundMuLaw = encodeAudio(Int16Array.from({ length: 160 }, (_, index) => Math.sin(index / 10) * 10000), PLIVO_MULAW_8K);
@@ -90,6 +92,24 @@ await engine.flushSynthesized(generationId);
 await engine.drainOutput();
 assert.equal(sent.length, 1);
 assert.equal(sent[0].length, 160, 'Plivo receives paced 20 ms mu-law frames');
+
+const sentBeforeBoundaryTest = sent.length;
+const firstBoundaryGeneration = engine.beginOutputGeneration('sentence-1', 'turn-smooth');
+const halfFrame = encodeAudio(
+  Int16Array.from({ length: 160 }, (_, index) => Math.sin(index / 8) * 8000),
+  inputFormat,
+);
+await engine.enqueueSynthesized(halfFrame, firstBoundaryGeneration);
+await engine.flushSynthesized(firstBoundaryGeneration, { finalizeGroup: false });
+const secondBoundaryGeneration = engine.beginOutputGeneration('sentence-2', 'turn-smooth');
+await engine.enqueueSynthesized(halfFrame, secondBoundaryGeneration);
+await engine.flushSynthesized(secondBoundaryGeneration, { finalizeGroup: false });
+await engine.flushOutputGroup('turn-smooth');
+await engine.drainOutput();
+assert.equal(sent.length, sentBeforeBoundaryTest + 1,
+  'Sentence boundary smoothing must produce one complete Plivo frame instead of partial packets');
+assert.equal(sent.at(-1).length, 160);
+assert.equal(playbackMetrics.filter((metric) => metric.type === 'boundary_smoothed').length, 1);
 
 engine.beginOutputGeneration('response-2');
 engine.cancelStaleAudio('barge-in');

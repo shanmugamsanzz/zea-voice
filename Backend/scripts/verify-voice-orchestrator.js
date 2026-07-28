@@ -64,6 +64,36 @@ class FakeLlm {
       yield { type: 'completed', finishReason: 'stop', toolCalls: [], usage: {} };
       return;
     }
+    if (query === 'group short sentences') {
+      yield { type: 'text_delta', delta: 'First sentence starts now. ' };
+      yield { type: 'text_delta', delta: 'Second short sentence. ' };
+      yield { type: 'text_delta', delta: 'Third short sentence.' };
+      yield { type: 'usage', usage: { inputTokens: 12, outputTokens: 12, totalTokens: 24 } };
+      yield { type: 'completed', finishReason: 'stop', toolCalls: [], usage: {} };
+      return;
+    }
+    if (query === 'verify ordered lookahead') {
+      yield { type: 'text_delta', delta: 'First sentence plays directly. ' };
+      yield { type: 'text_delta', delta: 'Second look-ahead sentence. ' };
+      yield { type: 'text_delta', delta: 'Third look-ahead sentence. ' };
+      yield { type: 'text_delta', delta: 'Fourth look-ahead sentence. ' };
+      yield { type: 'text_delta', delta: 'Fifth look-ahead sentence.' };
+      yield { type: 'usage', usage: { inputTokens: 12, outputTokens: 20, totalTokens: 32 } };
+      yield { type: 'completed', finishReason: 'stop', toolCalls: [], usage: {} };
+      return;
+    }
+    if (query === 'interrupt buffered speech') {
+      yield { type: 'text_delta', delta: 'Immediate sentence plays first. ' };
+      yield { type: 'text_delta', delta: 'Buffered sentence two. ' };
+      yield { type: 'text_delta', delta: 'Buffered sentence three. ' };
+      yield { type: 'text_delta', delta: 'Buffered sentence four. ' };
+      yield { type: 'text_delta', delta: 'Buffered sentence five. ' };
+      yield { type: 'text_delta', delta: 'Buffered sentence six. ' };
+      yield { type: 'text_delta', delta: 'Buffered sentence seven.' };
+      yield { type: 'usage', usage: { inputTokens: 12, outputTokens: 24, totalTokens: 36 } };
+      yield { type: 'completed', finishReason: 'stop', toolCalls: [], usage: {} };
+      return;
+    }
     if (query === 'book appointment' && this.requests.length === 1) {
       const toolCalls = [{ id: 'tool-1', name: 'book_visit', arguments: { date: 'tomorrow' } }];
       yield { type: 'tool_call', ...toolCalls[0] };
@@ -93,14 +123,31 @@ class FakeLlm {
 }
 
 class FakeTts {
-  texts = [];
-  requests = [];
   cancelled = 0;
+  constructor(shared = {}, coordinator = null) {
+    this.texts = shared.texts ?? [];
+    this.requests = shared.requests ?? [];
+    this.coordinator = coordinator;
+  }
   async connect() {}
   async *synthesizeStream(input) {
     this.requests.push(input);
     const { text, generationId } = input;
     this.texts.push(text);
+    if (text.includes('look-ahead sentence')) {
+      this.coordinator.started.push(text);
+      this.activeText = text;
+      await new Promise((resolve) => this.coordinator.releases.set(text, resolve));
+      this.activeText = null;
+      this.coordinator.completed.push(text);
+    }
+    if (text.includes('Buffered sentence')) {
+      this.coordinator.started.push(text);
+      this.activeText = text;
+      await new Promise((resolve) => this.coordinator.releases.set(text, resolve));
+      this.activeText = null;
+      this.coordinator.completed.push(text);
+    }
     const speedAttempt = this.requests.filter((request) => request.text === text).length;
     if (text === 'This sentence verifies safe TTS speed monitoring.' && speedAttempt === 1) {
       const usage = { characters: text.length, audioOutputMs: 1000, audioBytes: 8000 };
@@ -113,7 +160,14 @@ class FakeTts {
     yield { type: 'usage', generationId, usage: { characters: text.length, audioOutputMs, audioBytes: 160 } };
     yield { type: 'completed', generationId, usage: { characters: text.length, audioOutputMs, audioBytes: 160 } };
   }
-  cancel() { this.cancelled += 1; return true; }
+  cancel() {
+    this.cancelled += 1;
+    if (this.activeText) {
+      this.coordinator?.cancelled.push(this.activeText);
+      this.coordinator?.releases.get(this.activeText)?.();
+    }
+    return true;
+  }
   close() { this.closed = true; }
 }
 
@@ -138,7 +192,12 @@ const profile = {
     id: 'agent-1', tenantId: 'tenant-1', workspaceId: 'workspace-1', name: 'Hospital Agent',
     description: 'Hospital receptionist', goal: 'Help callers', language: 'English (US)',
     prompt: 'Answer briefly.', welcomeMessage: 'Welcome to the hospital.', temperature: 0.2,
-    inactivityTimeoutSeconds: 30, settings: { silentMessage: 'Are you still there?', maxInactivityPrompts: 1 },
+    inactivityTimeoutSeconds: 30,
+    settings: {
+      silentMessage: 'Are you still there?', maxInactivityPrompts: 1,
+      wordBasedInterruptionEnabled: true, wordInterruptionMinWords: 2,
+      interruptionPolicy: 'any',
+    },
   },
   providers: {
     stt: { providerId: 'stt-1', providerName: 'Sarvam', modelId: 'stt-m', modelKey: 'saaras' },
@@ -153,7 +212,11 @@ const profile = {
 const media = new FakeMediaSession();
 const stt = new FakeStt();
 const llm = new FakeLlm();
-const tts = new FakeTts();
+const sharedTts = { texts: [], requests: [] };
+const lookaheadCoordinator = {
+  started: [], completed: [], cancelled: [], releases: new Map(),
+};
+const tts = new FakeTts(sharedTts);
 const audioEngine = new FakeAudioEngine();
 const transcript = [];
 const transcriptWriteAttempts = [];
@@ -177,6 +240,7 @@ const previousMemory = {
 const orchestrator = new RealtimeConversationOrchestrator(media, {
   loadProfile: async () => profile,
   createAdapters: async () => ({ stt, llm, tts }),
+  createLookaheadTtsAdapter: async () => new FakeTts(sharedTts, lookaheadCoordinator),
   createAudioEngine: () => audioEngine,
   welcomeCache: { async get() { return Buffer.alloc(160, 9); }, async set() { return true; } },
   appendTranscript: async (entry) => {
@@ -272,6 +336,57 @@ const streamedTranscript = transcript.find((entry) => entry.text
   === 'The first sentence is ready. The second sentence follows.');
 assert.ok(streamedTranscript, 'Streamed sentences were not persisted as one assistant turn');
 
+stt.publish({ type: 'final_transcript', text: 'group short sentences', language: 'en', isFinal: true });
+await waitFor(() => tts.texts.includes('Second short sentence. Third short sentence.'),
+  'Later short LLM sentences were not grouped into one TTS request');
+await waitFor(() => orchestrator.controller.state === 'listening',
+  'Grouped sentence response did not return to listening');
+assert.ok(tts.texts.includes('First sentence starts now.'), 'First sentence was not streamed immediately');
+assert.equal(tts.texts.includes('Second short sentence.'), false,
+  'A grouped short sentence was sent as a separate TTS request');
+assert.ok(orchestrator.runtimeMetrics.sentenceGrouping.multiSentenceGroups >= 1);
+
+stt.publish({ type: 'final_transcript', text: 'verify ordered lookahead', language: 'en', isFinal: true });
+await waitFor(() => lookaheadCoordinator.started.length === 2,
+  'Bounded look-ahead did not start two isolated TTS requests concurrently');
+const [secondGroup, thirdGroup] = lookaheadCoordinator.started;
+assert.match(secondGroup, /^Second look-ahead sentence\./);
+assert.match(thirdGroup, /^Fourth look-ahead sentence\./);
+lookaheadCoordinator.releases.get(thirdGroup)();
+await waitFor(() => lookaheadCoordinator.completed.includes(thirdGroup),
+  'Later look-ahead request did not complete first');
+assert.equal(audioEngine.generations.some((id) => id.endsWith('sentence-3')), false,
+  'Later synthesized audio played before the preceding sentence group');
+lookaheadCoordinator.releases.get(secondGroup)();
+await waitFor(() => orchestrator.controller.state === 'listening',
+  'Ordered look-ahead response did not finish');
+const orderedTurnGenerations = audioEngine.generations.filter((id) => id.startsWith('turn-4-sentence-'));
+assert.deepEqual(orderedTurnGenerations, [
+  'turn-4-sentence-1', 'turn-4-sentence-2', 'turn-4-sentence-3',
+]);
+assert.ok(orchestrator.runtimeMetrics.ttsLookahead.readyBeforePlayback >= 1,
+  'Completed look-ahead audio was not reused from the buffer');
+
+const lookaheadStartsBeforeInterruption = lookaheadCoordinator.started.length;
+const lookaheadCancelledBeforeInterruption = orchestrator.runtimeMetrics.ttsLookahead.cancelled;
+const cancellationEpochsBeforeInterruption = orchestrator.runtimeMetrics.interruptions.cancellationEpochs;
+stt.publish({ type: 'final_transcript', text: 'interrupt buffered speech', language: 'en', isFinal: true });
+await waitFor(() => (
+  lookaheadCoordinator.started.length >= lookaheadStartsBeforeInterruption + 2
+), 'Two bounded look-ahead requests did not become active before interruption');
+stt.publish({ type: 'speech_started' });
+stt.publish({ type: 'final_transcript', text: 'please wait', language: 'en', isFinal: true });
+await waitFor(() => orchestrator.runtimeMetrics.interruptions.cancellationEpochs
+  === cancellationEpochsBeforeInterruption + 1,
+'One confirmed barge-in did not produce exactly one atomic cancellation');
+await waitFor(() => orchestrator.runtimeMetrics.ttsLookahead.cancelled
+  >= lookaheadCancelledBeforeInterruption + 3,
+'Active and pending look-ahead synthesis was not fully cancelled');
+await waitFor(() => orchestrator.controller.state === 'listening',
+  'Conversation did not recover after cancelling buffered speech');
+assert.equal(audioEngine.generations.some((id) => id.startsWith('turn-5-sentence-2')), false,
+  'Buffered audio from the interrupted turn reached playback');
+
 stt.publish({ type: 'final_transcript', text: 'check tts speed', language: 'en', isFinal: true });
 await waitFor(() => tts.requests.filter((request) => request.text
   === 'This sentence verifies safe TTS speed monitoring.').length === 2,
@@ -311,7 +426,9 @@ assert.equal(completed[0].metrics.ttsSpeed.retries, 1);
 assert.equal(completed[0].metrics.ttsLimits.durationLimitReached, false);
 assert.equal(durableMemoryWrites.length, 1);
 assert.equal(contextCacheWrites.length, 2);
-assert.ok(durableMemoryWrites[0].state.recentMessages.some((message) => message.content === 'book appointment'));
+assert.ok(durableMemoryWrites[0].state.recentMessages.some((message) => (
+  message.content === 'verify ordered lookahead'
+)), 'Recent completed conversation turns were not persisted to durable memory');
 assert.ok(tts.texts.includes('Thank you. Goodbye.'));
 assert.equal(media.closed, true);
 

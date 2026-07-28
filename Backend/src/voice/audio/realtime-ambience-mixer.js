@@ -27,6 +27,8 @@ export class RealtimeAmbienceMixer {
     this.queue = options.queue;
     this.send = options.send;
     this.shouldSendSpeech = options.shouldSend ?? (() => true);
+    this.onPlaybackMetric = options.onPlaybackMetric ?? (() => {});
+    this.underrunThresholdMs = options.underrunThresholdMs ?? 40;
     this.format = options.format ?? PLIVO_MULAW_8K;
     this.frameDurationMs = options.frameDurationMs ?? this.format.frameDurationMs;
     this.frameBytes = audioFrameBytes(this.format, this.frameDurationMs);
@@ -44,6 +46,7 @@ export class RealtimeAmbienceMixer {
     this.sendingSpeech = false;
     this.drainWaiters = [];
     this.metrics = { framesSent: 0, speechFramesMixed: 0, ambienceOnlyFrames: 0 };
+    this.lastSpeechFrame = null;
   }
 
   setCallerSpeaking(active) {
@@ -95,12 +98,31 @@ export class RealtimeAmbienceMixer {
       if (waitMs > 0) await this.sleep(waitMs, signal);
       if (signal.aborted) break;
       this.sendingSpeech = Boolean(speech);
+      const sendingAt = this.now();
       if (output) {
+        if (speech && this.lastSpeechFrame?.playbackGroupId
+          && this.lastSpeechFrame.playbackGroupId === speech.playbackGroupId) {
+          const gapMs = Math.max(0,
+            sendingAt - (this.lastSpeechFrame.sentAt + this.lastSpeechFrame.durationMs));
+          const sentenceBoundary = this.lastSpeechFrame.generationId !== speech.generationId;
+          if (sentenceBoundary || gapMs >= this.underrunThresholdMs) {
+            this.onPlaybackMetric({
+              type: gapMs >= this.underrunThresholdMs ? 'underrun' : 'sentence_boundary',
+              gapMs,
+              sentenceBoundary,
+              playbackGroupId: speech.playbackGroupId,
+              fromGenerationId: this.lastSpeechFrame.generationId,
+              toGenerationId: speech.generationId,
+              bufferedAudioMs: this.queue.bufferedMs,
+            });
+          }
+        }
         await this.send({ data: output, durationMs: this.frameDurationMs, ambience: true });
         this.metrics.framesSent += 1;
         if (speech) this.metrics.speechFramesMixed += 1;
         else this.metrics.ambienceOnlyFrames += 1;
       }
+      if (speech) this.lastSpeechFrame = { ...speech, sentAt: sendingAt };
       this.sendingSpeech = false;
       deadline = Math.max(deadline + this.frameDurationMs, this.now());
       this.#resolveDrains();

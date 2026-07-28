@@ -20,6 +20,8 @@ export class AudioPacer {
     this.queue = options.queue;
     this.send = options.send;
     this.shouldSend = options.shouldSend ?? (() => true);
+    this.onPlaybackMetric = options.onPlaybackMetric ?? (() => {});
+    this.underrunThresholdMs = options.underrunThresholdMs ?? 40;
     this.onError = options.onError ?? (() => {});
     this.now = options.now ?? (() => performance.now());
     this.sleep = options.sleep ?? delay;
@@ -28,6 +30,7 @@ export class AudioPacer {
     this.controller = null;
     this.runPromise = null;
     this.drainWaiters = [];
+    this.lastSentFrame = null;
   }
 
   start() {
@@ -56,9 +59,28 @@ export class AudioPacer {
         this.#resolveDrains();
         continue;
       }
+      const sendingAt = this.now();
+      if (this.lastSentFrame?.playbackGroupId
+        && this.lastSentFrame.playbackGroupId === frame.playbackGroupId) {
+        const gapMs = Math.max(0,
+          sendingAt - (this.lastSentFrame.sentAt + this.lastSentFrame.durationMs));
+        const sentenceBoundary = this.lastSentFrame.generationId !== frame.generationId;
+        if (sentenceBoundary || gapMs >= this.underrunThresholdMs) {
+          this.onPlaybackMetric({
+            type: gapMs >= this.underrunThresholdMs ? 'underrun' : 'sentence_boundary',
+            gapMs,
+            sentenceBoundary,
+            playbackGroupId: frame.playbackGroupId,
+            fromGenerationId: this.lastSentFrame.generationId,
+            toGenerationId: frame.generationId,
+            bufferedAudioMs: this.queue.bufferedMs,
+          });
+        }
+      }
       this.sending = true;
       await this.send(frame);
       this.sending = false;
+      this.lastSentFrame = { ...frame, sentAt: sendingAt };
       deadline = Math.max(deadline + frame.durationMs, this.now());
       this.#resolveDrains();
     }

@@ -63,6 +63,8 @@ export class AudioFrameAccumulator {
     this.frameBytes = audioFrameBytes(format, frameDurationMs);
   }
 
+  get bufferedBytes() { return this.#buffer.length; }
+
   push(chunk) {
     if (!Buffer.isBuffer(chunk)) throw new TypeError('Frame accumulator input must be a Buffer');
     this.#buffer = concatenate(this.#buffer, chunk);
@@ -108,11 +110,18 @@ export class ProviderIndependentAudioEngine {
     });
     this.onError = options.onError ?? (() => {});
     this.onAmbienceError = options.onAmbienceError ?? (() => {});
+    this.onPlaybackMetric = options.onPlaybackMetric ?? (() => {});
+    this.smoothSentenceBoundaries = options.smoothSentenceBoundaries
+      ?? env.VOICE_TTS_SMOOTH_SENTENCE_BOUNDARIES;
     this.outputCancellationVersion = 0;
+    this.outputPlaybackGroupId = null;
+    this.outputGroupFinalized = false;
     this.pacerOptions = {
       queue: this.outputQueue,
       send: (frame) => this.mediaSession.sendAudio(frame.data),
       shouldSend: (frame) => frame.cancellationVersion === this.outputCancellationVersion,
+      onPlaybackMetric: this.onPlaybackMetric,
+      underrunThresholdMs: options.underrunThresholdMs ?? env.VOICE_AUDIO_UNDERRUN_THRESHOLD_MS,
       onError: this.onError,
       now: options.now,
       sleep: options.sleep,
@@ -128,6 +137,8 @@ export class ProviderIndependentAudioEngine {
         speakingVolumePercent: options.ambience.speakingVolumePercent,
         continueDuringSilence: options.ambience.continueDuringSilence,
         shouldSend: this.pacerOptions.shouldSend,
+        onPlaybackMetric: this.pacerOptions.onPlaybackMetric,
+        underrunThresholdMs: this.pacerOptions.underrunThresholdMs,
         frameDurationMs: options.frameDurationMs ?? env.VOICE_AUDIO_FRAME_MS,
         onError: (error) => this.#disableAmbience(error),
         now: options.now,
@@ -156,10 +167,26 @@ export class ProviderIndependentAudioEngine {
 
   readInbound(options) { return this.inputQueue.dequeue(options); }
 
-  beginOutputGeneration(generationId = randomUUID()) {
-    this.outboundConverter.reset();
-    this.outboundFrames.reset();
+  beginOutputGeneration(generationId = randomUUID(), playbackGroupId = generationId) {
+    const continuesPlaybackGroup = this.smoothSentenceBoundaries
+      && !this.outputGroupFinalized
+      && Boolean(this.outputGenerationId)
+      && Boolean(this.outputPlaybackGroupId)
+      && this.outputPlaybackGroupId === playbackGroupId;
+    if (!continuesPlaybackGroup) {
+      this.outboundConverter.reset();
+      this.outboundFrames.reset();
+    } else {
+      this.onPlaybackMetric({
+        type: 'boundary_smoothed', sentenceBoundary: true,
+        playbackGroupId, fromGenerationId: this.outputGenerationId,
+        toGenerationId: generationId, bufferedAudioMs: this.outputQueue.bufferedMs,
+        carriedFrameBytes: this.outboundFrames.bufferedBytes,
+      });
+    }
     this.outputGenerationId = generationId;
+    this.outputPlaybackGroupId = playbackGroupId;
+    this.outputGroupFinalized = false;
     return generationId;
   }
 
@@ -170,6 +197,7 @@ export class ProviderIndependentAudioEngine {
       if (generationId !== this.outputGenerationId) return false;
       await this.outputQueue.enqueue({
         data, generationId,
+        playbackGroupId: this.outputPlaybackGroupId,
         cancellationVersion: this.outputCancellationVersion,
         durationMs: audioDurationMs(data.length, this.telephonyFormat),
       });
@@ -177,24 +205,36 @@ export class ProviderIndependentAudioEngine {
     return true;
   }
 
-  async flushSynthesized(generationId = this.outputGenerationId) {
+  async flushSynthesized(generationId = this.outputGenerationId, options = {}) {
     if (!generationId || generationId !== this.outputGenerationId) return false;
+    const finalizeGroup = options.finalizeGroup !== false || !this.smoothSentenceBoundaries;
+    if (!finalizeGroup) return true;
     const converted = this.outboundConverter.flush();
     const frames = [...this.outboundFrames.push(converted), ...this.outboundFrames.flush()];
     for (const data of frames) {
       if (generationId !== this.outputGenerationId) return false;
       await this.outputQueue.enqueue({
         data, generationId,
+        playbackGroupId: this.outputPlaybackGroupId,
         cancellationVersion: this.outputCancellationVersion,
         durationMs: audioDurationMs(data.length, this.telephonyFormat),
       });
     }
+    this.outputGroupFinalized = true;
     return true;
+  }
+
+  async flushOutputGroup(playbackGroupId = this.outputPlaybackGroupId) {
+    if (!playbackGroupId || playbackGroupId !== this.outputPlaybackGroupId
+      || !this.outputGenerationId) return false;
+    return this.flushSynthesized(this.outputGenerationId, { finalizeGroup: true });
   }
 
   cancelStaleAudio(reason = 'caller interruption') {
     const generationId = this.outputGenerationId;
     this.outputGenerationId = null;
+    this.outputPlaybackGroupId = null;
+    this.outputGroupFinalized = false;
     this.outputCancellationVersion += 1;
     this.outboundConverter.reset();
     this.outboundFrames.reset();
