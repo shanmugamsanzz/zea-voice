@@ -1,4 +1,4 @@
-import { withAuthServiceContext, withPlatformAdminContext } from '../../infrastructure/database-context.js';
+import { withPlatformAdminContext } from '../../infrastructure/database-context.js';
 import { AppError } from '../../middleware/errors.js';
 import { decryptCredential } from '../../security/credential-crypto.js';
 
@@ -105,7 +105,12 @@ function processingJob(row, decrypt) {
 }
 
 export function createQueuedPostCallSummaryJob(callSessionId, dependencies = {}) {
-  const contextRunner = dependencies.contextRunner ?? withAuthServiceContext;
+  // This is an internal worker path with no signed-in user. Auth-service context is
+  // intentionally restricted by RLS and cannot see tenant agent/model settings.
+  // Platform context is required to resolve the call, while the SQL still binds every
+  // selected resource to the call's own tenant.
+  const contextRunner = dependencies.contextRunner
+    ?? ((operation) => withPlatformAdminContext(null, operation));
   const maxAttempts = dependencies.maxAttempts ?? 3;
   return contextRunner(async (client) => {
     const result = await client.query(
@@ -156,7 +161,8 @@ export function createQueuedPostCallSummaryJob(callSessionId, dependencies = {})
 }
 
 export function attachPostCallSummaryQueueJob(summaryJobId, bullmqJobId, dependencies = {}) {
-  const contextRunner = dependencies.contextRunner ?? withAuthServiceContext;
+  const contextRunner = dependencies.contextRunner
+    ?? ((operation) => withPlatformAdminContext(null, operation));
   return contextRunner(async (client) => {
     const result = await client.query(
       `UPDATE call_ai_summaries
@@ -171,7 +177,8 @@ export function attachPostCallSummaryQueueJob(summaryJobId, bullmqJobId, depende
 }
 
 export function recordPostCallSummaryQueueFailure(summaryJobId, error, dependencies = {}) {
-  const contextRunner = dependencies.contextRunner ?? withAuthServiceContext;
+  const contextRunner = dependencies.contextRunner
+    ?? ((operation) => withPlatformAdminContext(null, operation));
   return contextRunner((client) => client.query(
     `UPDATE call_ai_summaries
         SET bullmq_job_id=NULL,error_code='QUEUE_UNAVAILABLE',error_message=$2

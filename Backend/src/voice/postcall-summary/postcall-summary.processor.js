@@ -157,7 +157,9 @@ export async function executePostCallSummaryJob(summaryJobId, attemptContext = {
     logger.info({
       stage: 'postcall_summary.completed', summaryJobId, callId: job.callSessionId,
       tenantId: job.tenantId, modelId: job.modelId, durationMs,
+      transcriptEntries: job.transcript.length,
       totalTokens: Number(usage?.totalTokens ?? 0), attempt: attemptContext.attempt ?? job.attemptCount,
+      webhookDelivered: delivery.webhook?.delivered ?? false,
     }, 'Post-Call AI summary completed');
     return { processed: true, status: 'completed', job: delivery.persisted ?? completed, webhook: delivery.webhook };
   } catch (error) {

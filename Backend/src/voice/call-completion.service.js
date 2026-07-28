@@ -151,12 +151,6 @@ export async function completeVoiceCall(input, dependencies = {}) {
       providerUsage: usage,
       ttsLimitUsage: persisted.call.provider_metadata?.voiceRuntime?.ttsLimitUsage ?? null,
     };
-    const summaryFallbackPayload = (aiSummary) => {
-      const payload = { ...postCallPayload };
-      if (input.runtimeProfile.agent.settings?.postCallIncludeTranscript === false) delete payload.transcript;
-      if (input.runtimeProfile.agent.settings?.postCallIncludeSummary !== false) payload.aiSummary = aiSummary;
-      return payload;
-    };
     try {
       // The database is authoritative here. A call can retain a runtime profile that was
       // loaded before the developer enabled summaries, so gating on that cached profile
@@ -175,23 +169,26 @@ export async function completeVoiceCall(input, dependencies = {}) {
           attempted: false, delivered: false, reason: 'summary_queued',
           summaryJobId: summary.job?.id ?? null,
         }
-        : await reportPostCall(
-          input.runtimeProfile,
-          summary.reason === 'not_configured'
-            ? postCallPayload
-            : summaryFallbackPayload({ status: 'not_queued', reason: summary.reason }),
-          dependencies,
-        );
+        : summary.reason === 'not_configured'
+          ? await reportPostCall(input.runtimeProfile, postCallPayload, dependencies)
+          : {
+            attempted: false,
+            delivered: false,
+            reason: `summary_${summary.reason}`,
+            summaryJobId: summary.job?.id ?? null,
+          };
     } catch (summaryQueueError) {
       logger.error({
         err: summaryQueueError,
         stage: 'postcall_summary.queue_failed',
         callId: input.controller.callSession.id,
-      }, 'Post-Call AI summary queue failed; sending the normal Post-Call webhook');
-      postCall = await reportPostCall(input.runtimeProfile, summaryFallbackPayload({
-        status: 'queue_failed',
+      }, 'Post-Call AI summary queue failed; webhook remains deferred');
+      postCall = {
+        attempted: false,
+        delivered: false,
+        reason: 'summary_queue_failed',
         error: 'Summary queue unavailable',
-      }), dependencies);
+      };
     }
     await (dependencies.persistPostCallResult ?? persistPostCallResult)(
       input.controller.callSession.id, postCall, dependencies,

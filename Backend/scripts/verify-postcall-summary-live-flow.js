@@ -57,16 +57,17 @@ assert.equal(deferred.postCall.reason, 'summary_queued');
 assert.equal(deferred.postCall.summaryJobId, 'summary-job-1');
 assert.equal(immediateWebhookCalls, 0);
 
-let fallbackPayload;
+let fallbackWebhookCalls = 0;
 const fallback = await fixture(true, async () => { throw new Error('Redis unavailable with internal details'); },
-  async (_url, request) => {
-    fallbackPayload = JSON.parse(request.body);
+  async () => {
+    fallbackWebhookCalls += 1;
     return new Response('{}', { status: 200 });
   });
-assert.equal(fallback.postCall.delivered, true);
-assert.equal(fallbackPayload.aiSummary.status, 'queue_failed');
-assert.equal(fallbackPayload.aiSummary.error, 'Summary queue unavailable');
-assert.doesNotMatch(JSON.stringify(fallbackPayload), /Redis unavailable/);
+assert.equal(fallback.postCall.delivered, false);
+assert.equal(fallback.postCall.reason, 'summary_queue_failed');
+assert.equal(fallback.postCall.error, 'Summary queue unavailable');
+assert.equal(fallbackWebhookCalls, 0);
+assert.doesNotMatch(JSON.stringify(fallback.postCall), /Redis unavailable/);
 
 let normalHeaders;
 let normalPayload;
