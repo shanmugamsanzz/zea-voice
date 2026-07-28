@@ -46,6 +46,7 @@ class FakeLlm {
   requests = [];
   cancelled = 0;
   releaseSlow = null;
+  releaseSecondSentence = null;
   async *stream(input) {
     this.requests.push(input);
     const query = input.messages.at(-1)?.content ?? '';
@@ -53,6 +54,15 @@ class FakeLlm {
     if (query === 'slow request') {
       await new Promise((resolve) => { this.releaseSlow = resolve; });
       if (this.wasCancelled) { yield { type: 'cancelled', reason: 'barge-in' }; return; }
+    }
+    if (query === 'stream two sentences') {
+      yield { type: 'text_delta', delta: 'The first sentence is ready. ' };
+      await new Promise((resolve) => { this.releaseSecondSentence = resolve; });
+      if (this.wasCancelled) { yield { type: 'cancelled', reason: 'barge-in' }; return; }
+      yield { type: 'text_delta', delta: 'The second sentence follows.' };
+      yield { type: 'usage', usage: { inputTokens: 12, outputTokens: 10, totalTokens: 22 } };
+      yield { type: 'completed', finishReason: 'stop', toolCalls: [], usage: {} };
+      return;
     }
     if (query === 'book appointment' && this.requests.length === 1) {
       const toolCalls = [{ id: 'tool-1', name: 'book_visit', arguments: { date: 'tomorrow' } }];
@@ -65,8 +75,11 @@ class FakeLlm {
       ? 'Thank you. Goodbye.'
       : (query.includes('Open this follow-up call')
         ? 'You asked me to call back. Is now a good time to continue?'
-        : 'Your appointment is booked.');
-    yield { type: 'text_delta', delta: text };
+        : (query === 'check tts speed'
+          ? 'This sentence verifies safe TTS speed monitoring.'
+          : 'Your appointment is booked.'));
+    const normalizedText = typeof text === 'string' ? text : String(text);
+    yield { type: 'text_delta', delta: normalizedText };
     yield { type: 'usage', usage: { inputTokens: 12, outputTokens: 5, totalTokens: 17 } };
     yield { type: 'completed', finishReason: 'stop', toolCalls: [], usage: {} };
   }
@@ -88,9 +101,17 @@ class FakeTts {
     this.requests.push(input);
     const { text, generationId } = input;
     this.texts.push(text);
+    const speedAttempt = this.requests.filter((request) => request.text === text).length;
+    if (text === 'This sentence verifies safe TTS speed monitoring.' && speedAttempt === 1) {
+      const usage = { characters: text.length, audioOutputMs: 1000, audioBytes: 8000 };
+      yield { type: 'usage', generationId, usage };
+      yield { type: 'completed', generationId, usage };
+      return;
+    }
     yield { type: 'audio_chunk', generationId, audio: Buffer.alloc(160, this.texts.length) };
-    yield { type: 'usage', generationId, usage: { characters: text.length, audioOutputMs: 20, audioBytes: 160 } };
-    yield { type: 'completed', generationId, usage: { characters: text.length, audioOutputMs: 20, audioBytes: 160 } };
+    const audioOutputMs = text === 'This sentence verifies safe TTS speed monitoring.' ? 4000 : 20;
+    yield { type: 'usage', generationId, usage: { characters: text.length, audioOutputMs, audioBytes: 160 } };
+    yield { type: 'completed', generationId, usage: { characters: text.length, audioOutputMs, audioBytes: 160 } };
   }
   cancel() { this.cancelled += 1; return true; }
   close() { this.closed = true; }
@@ -236,6 +257,34 @@ assert.ok(answerSources.includes('tool'));
 assert.ok(answerSources.includes('llm'));
 
 llm.wasCancelled = false;
+stt.publish({ type: 'final_transcript', text: 'stream two sentences', language: 'en', isFinal: true });
+await waitFor(() => tts.texts.includes('The first sentence is ready.'),
+  'The first complete LLM sentence did not start TTS before completion');
+assert.equal(tts.texts.includes('The second sentence follows.'), false,
+  'TTS spoke a sentence before the LLM produced it');
+assert.equal(orchestrator.controller.state, 'speaking');
+llm.releaseSecondSentence();
+await waitFor(() => tts.texts.includes('The second sentence follows.'),
+  'The second LLM sentence was not synthesized in order');
+await waitFor(() => orchestrator.controller.state === 'listening',
+  'Streamed sentence response did not return to listening');
+const streamedTranscript = transcript.find((entry) => entry.text
+  === 'The first sentence is ready. The second sentence follows.');
+assert.ok(streamedTranscript, 'Streamed sentences were not persisted as one assistant turn');
+
+stt.publish({ type: 'final_transcript', text: 'check tts speed', language: 'en', isFinal: true });
+await waitFor(() => tts.requests.filter((request) => request.text
+  === 'This sentence verifies safe TTS speed monitoring.').length === 2,
+  'Abnormal TTS speed was not retried before audio playback');
+await waitFor(() => orchestrator.controller.state === 'listening', 'TTS speed retry turn did not complete');
+assert.equal(tts.requests.filter((request) => request.text
+  === 'This sentence verifies safe TTS speed monitoring.').length, 2,
+'Abnormal TTS speed was not retried before audio playback');
+assert.equal(orchestrator.runtimeMetrics.ttsSpeed.retries, 1);
+assert.equal(orchestrator.runtimeMetrics.ttsSpeed.abnormal, 1);
+assert.equal(orchestrator.runtimeMetrics.ttsSpeed.normal, 1);
+
+llm.wasCancelled = false;
 stt.publish({ type: 'final_transcript', text: 'slow request', language: 'en', isFinal: true });
 await waitFor(() => orchestrator.controller.state === 'thinking', 'Slow turn did not start');
 stt.publish({ type: 'speech_started' });
@@ -258,6 +307,7 @@ assert.equal(completed[0].metrics.contextCache.hit, true);
 assert.equal(completed[0].metrics.contextCache.source, 'postgresql');
 assert.equal(completed[0].metrics.contextCache.persisted, true);
 assert.ok(completed[0].metrics.ttsLimits.charactersSynthesized > 0);
+assert.equal(completed[0].metrics.ttsSpeed.retries, 1);
 assert.equal(completed[0].metrics.ttsLimits.durationLimitReached, false);
 assert.equal(durableMemoryWrites.length, 1);
 assert.equal(contextCacheWrites.length, 2);

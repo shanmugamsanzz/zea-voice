@@ -108,9 +108,11 @@ export class ProviderIndependentAudioEngine {
     });
     this.onError = options.onError ?? (() => {});
     this.onAmbienceError = options.onAmbienceError ?? (() => {});
+    this.outputCancellationVersion = 0;
     this.pacerOptions = {
       queue: this.outputQueue,
       send: (frame) => this.mediaSession.sendAudio(frame.data),
+      shouldSend: (frame) => frame.cancellationVersion === this.outputCancellationVersion,
       onError: this.onError,
       now: options.now,
       sleep: options.sleep,
@@ -125,6 +127,7 @@ export class ProviderIndependentAudioEngine {
         listeningVolumePercent: options.ambience.listeningVolumePercent,
         speakingVolumePercent: options.ambience.speakingVolumePercent,
         continueDuringSilence: options.ambience.continueDuringSilence,
+        shouldSend: this.pacerOptions.shouldSend,
         frameDurationMs: options.frameDurationMs ?? env.VOICE_AUDIO_FRAME_MS,
         onError: (error) => this.#disableAmbience(error),
         now: options.now,
@@ -167,6 +170,7 @@ export class ProviderIndependentAudioEngine {
       if (generationId !== this.outputGenerationId) return false;
       await this.outputQueue.enqueue({
         data, generationId,
+        cancellationVersion: this.outputCancellationVersion,
         durationMs: audioDurationMs(data.length, this.telephonyFormat),
       });
     }
@@ -181,6 +185,7 @@ export class ProviderIndependentAudioEngine {
       if (generationId !== this.outputGenerationId) return false;
       await this.outputQueue.enqueue({
         data, generationId,
+        cancellationVersion: this.outputCancellationVersion,
         durationMs: audioDurationMs(data.length, this.telephonyFormat),
       });
     }
@@ -190,11 +195,16 @@ export class ProviderIndependentAudioEngine {
   cancelStaleAudio(reason = 'caller interruption') {
     const generationId = this.outputGenerationId;
     this.outputGenerationId = null;
+    this.outputCancellationVersion += 1;
     this.outboundConverter.reset();
     this.outboundFrames.reset();
-    const removedFrames = generationId ? this.outputQueue.cancelGeneration(generationId) : this.outputQueue.clear();
+    // Every sentence in one assistant turn can have a different generation ID.
+    // An interruption belongs to the whole call output timeline, so all queued
+    // speech must be removed. The cancellation version also rejects a frame that
+    // a pacer already dequeued before Plivo clear-audio was issued.
+    const removedFrames = this.outputQueue.clear();
     if (this.mediaSession.started && !this.mediaSession.closed) this.mediaSession.clearAudio(reason);
-    return { generationId, removedFrames };
+    return { generationId, removedFrames, cancellationVersion: this.outputCancellationVersion };
   }
 
   drainOutput() { return this.pacer.drain(); }

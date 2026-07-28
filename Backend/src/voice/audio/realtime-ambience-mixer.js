@@ -26,6 +26,7 @@ export class RealtimeAmbienceMixer {
     }
     this.queue = options.queue;
     this.send = options.send;
+    this.shouldSendSpeech = options.shouldSend ?? (() => true);
     this.format = options.format ?? PLIVO_MULAW_8K;
     this.frameDurationMs = options.frameDurationMs ?? this.format.frameDurationMs;
     this.frameBytes = audioFrameBytes(this.format, this.frameDurationMs);
@@ -87,7 +88,8 @@ export class RealtimeAmbienceMixer {
   async #run(signal) {
     let deadline = this.now();
     while (!signal.aborted) {
-      const speech = this.queue.tryDequeue();
+      let speech = this.queue.tryDequeue();
+      if (speech && !this.shouldSendSpeech(speech)) speech = null;
       const output = this.#mix(speech);
       const waitMs = deadline - this.now();
       if (waitMs > 0) await this.sleep(waitMs, signal);

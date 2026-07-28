@@ -148,6 +148,12 @@ const envSchema = z.object({
   LLM_SYSTEM_PROMPT_MAX_CHARS: z.coerce.number().int().min(2000).max(100000).default(40000),
   LLM_KNOWLEDGE_CONTEXT_MAX_CHARS: z.coerce.number().int().min(500).max(50000).default(12000),
   TTS_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(30000),
+  TTS_SPEED_MONITOR_ENABLED: booleanFromString.default(true),
+  TTS_SPEED_MIN_CHARACTERS_PER_SECOND: z.coerce.number().min(0.1).max(100).default(3),
+  TTS_SPEED_MAX_CHARACTERS_PER_SECOND: z.coerce.number().min(1).max(200).default(28),
+  TTS_SPEED_MIN_SAMPLE_CHARACTERS: z.coerce.number().int().min(1).max(1000).default(24),
+  TTS_SPEED_MIN_AUDIO_MS: z.coerce.number().int().min(100).max(10000).default(500),
+  TTS_SPEED_MAX_RETRIES: z.coerce.number().int().min(0).max(2).default(1),
   VOICE_TOOL_TIMEOUT_MS: z.coerce.number().int().min(250).max(30000).default(5000),
   VOICE_TOOL_MAX_RESPONSE_BYTES: z.coerce.number().int().min(1024).max(1048576).default(65536),
   VOICE_RUNTIME_MAX_RECOVERABLE_ERRORS: z.coerce.number().int().min(0).max(10).default(2),
@@ -174,6 +180,10 @@ if (parsed.data.RAG_CHUNK_OVERLAP_TOKENS >= parsed.data.RAG_CHUNK_SIZE_TOKENS) {
 
 if (parsed.data.VOICE_CALL_HEARTBEAT_INTERVAL_MS >= parsed.data.VOICE_CALL_OWNERSHIP_TTL_SECONDS * 1000) {
   throw new Error('Invalid environment configuration: VOICE_CALL_HEARTBEAT_INTERVAL_MS must be shorter than VOICE_CALL_OWNERSHIP_TTL_SECONDS');
+}
+
+if (parsed.data.TTS_SPEED_MIN_CHARACTERS_PER_SECOND >= parsed.data.TTS_SPEED_MAX_CHARACTERS_PER_SECOND) {
+  throw new Error('Invalid environment configuration: TTS_SPEED_MIN_CHARACTERS_PER_SECOND must be lower than TTS_SPEED_MAX_CHARACTERS_PER_SECOND');
 }
 
 if (parsed.data.VOICE_CALL_RECONCILIATION_MIN_AGE_SECONDS <= parsed.data.VOICE_CALL_OWNERSHIP_TTL_SECONDS) {

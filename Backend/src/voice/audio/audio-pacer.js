@@ -19,6 +19,7 @@ export class AudioPacer {
     }
     this.queue = options.queue;
     this.send = options.send;
+    this.shouldSend = options.shouldSend ?? (() => true);
     this.onError = options.onError ?? (() => {});
     this.now = options.now ?? (() => performance.now());
     this.sleep = options.sleep ?? delay;
@@ -51,6 +52,10 @@ export class AudioPacer {
       const waitMs = deadline - this.now();
       if (waitMs > 0) await this.sleep(waitMs, signal);
       if (signal.aborted) break;
+      if (!this.shouldSend(frame)) {
+        this.#resolveDrains();
+        continue;
+      }
       this.sending = true;
       await this.send(frame);
       this.sending = false;
