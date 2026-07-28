@@ -113,6 +113,12 @@ export class VoiceCallOwnership {
       tenantId, this.instanceId, this.ttlSeconds, this.now(), providerCallId)) === 1;
   }
 
+  async isOwned({ tenantId, providerCallId }) {
+    this.#assertReady();
+    const [, callKey] = keys(tenantId, providerCallId);
+    return Boolean(await this.redis.get(callKey));
+  }
+
   async release({ tenantId, providerCallId }) {
     this.#assertReady();
     const [tenantKey, callKey] = keys(tenantId, providerCallId);

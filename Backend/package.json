@@ -80,6 +80,7 @@
     "verify:postcall-closing-modes": "node scripts/verify-postcall-closing-modes.js",
     "verify:voice-hardening": "node scripts/verify-voice-hardening.js",
     "verify:voice-live-calls": "node scripts/verify-voice-live-calls.js",
+    "verify:call-reconciliation": "node scripts/verify-call-reconciliation.js",
     "verify:interruption-settings": "node scripts/verify-interruption-settings.js",
     "verify:interaction-config": "node scripts/verify-interaction-config.js",
     "verify:auth-lifecycle": "node scripts/verify-authentication-lifecycle.js",

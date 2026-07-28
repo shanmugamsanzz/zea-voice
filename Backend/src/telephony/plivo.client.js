@@ -55,6 +55,13 @@ export function getPlivoAccountDetails(authId, authToken, fetchImpl = fetch, bas
   }, fetchImpl, baseUrl, 'get-account-details', env.PLIVO_BALANCE_REQUEST_TIMEOUT_MS);
 }
 
+export function getPlivoCallDetails(authId, authToken, callUuid, fetchImpl = fetch,
+  baseUrl = env.PLIVO_API_BASE_URL) {
+  return plivoRequest(authId, authToken,
+    `/Account/${encodeURIComponent(authId)}/Call/${encodeURIComponent(callUuid)}/`,
+    { method: 'GET' }, fetchImpl, baseUrl, 'get-call-details');
+}
+
 export function createPlivoSubaccount(authId, authToken, name, fetchImpl = fetch, baseUrl = env.PLIVO_API_BASE_URL) {
   return plivoRequest(authId, authToken, `/Account/${encodeURIComponent(authId)}/Subaccount/`, {
     method: 'POST', body: JSON.stringify({ name, enabled: true }),

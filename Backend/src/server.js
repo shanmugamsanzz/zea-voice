@@ -14,6 +14,7 @@ import { attachRealtimeConversationOrchestrator } from './voice/realtime-convers
 import { closeRecordingWorker, startRecordingWorker } from './telephony/recording.worker.js';
 import { closePostCallSummaryWorker, startPostCallSummaryWorker } from './voice/postcall-summary/postcall-summary.worker.js';
 import { executePostCallSummaryJob } from './voice/postcall-summary/postcall-summary.processor.js';
+import { closeCallReconciliation, startCallReconciliation } from './voice/call-reconciliation.service.js';
 
 async function bootstrap() {
   await runPendingMigrations();
@@ -30,6 +31,7 @@ async function bootstrap() {
   await startKnowledgeProcessingWorker();
   startRecordingWorker();
   await startPostCallSummaryWorker(executePostCallSummaryJob);
+  startCallReconciliation();
 
   const server = createServer(createApp());
   const mediaWebSocket = attachPlivoMediaWebSocket(server, {
@@ -54,6 +56,7 @@ async function bootstrap() {
     await mediaWebSocket.close();
 
     server.close(async (serverError) => {
+      await closeCallReconciliation();
       const results = await Promise.allSettled([
         closeCampaignWorkers(), closeKnowledgeProcessingWorker(), closeRecordingWorker(),
         closePostCallSummaryWorker(), closeQueues(), closeRedis(), closeDatabase(),

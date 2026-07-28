@@ -67,6 +67,11 @@ const envSchema = z.object({
   VOICE_COMPANY_DEFAULT_CONCURRENCY: z.coerce.number().int().min(1).max(10000).default(20),
   VOICE_CALL_OWNERSHIP_TTL_SECONDS: z.coerce.number().int().min(10).max(300).default(60),
   VOICE_CALL_HEARTBEAT_INTERVAL_MS: z.coerce.number().int().min(1000).max(60000).default(15000),
+  VOICE_CALL_RECONCILIATION_ENABLED: booleanFromString.default(true),
+  VOICE_CALL_RECONCILIATION_INTERVAL_MS: z.coerce.number().int().min(10000).max(300000).default(30000),
+  VOICE_CALL_RECONCILIATION_MIN_AGE_SECONDS: z.coerce.number().int().min(60).max(3600).default(120),
+  VOICE_CALL_RECONCILIATION_FALLBACK_SECONDS: z.coerce.number().int().min(300).max(86400).default(900),
+  VOICE_CALL_RECONCILIATION_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(50),
   VOICE_RUNTIME_INSTANCE_ID: z.preprocess(emptyToUndefined, z.string().min(1).max(160).optional()),
   VOICE_SHUTDOWN_DRAIN_MS: z.coerce.number().int().min(500).max(30000).default(5000),
   VOICE_AUDIO_FRAME_MS: z.coerce.number().int().min(10).max(100).default(20),
@@ -169,6 +174,14 @@ if (parsed.data.RAG_CHUNK_OVERLAP_TOKENS >= parsed.data.RAG_CHUNK_SIZE_TOKENS) {
 
 if (parsed.data.VOICE_CALL_HEARTBEAT_INTERVAL_MS >= parsed.data.VOICE_CALL_OWNERSHIP_TTL_SECONDS * 1000) {
   throw new Error('Invalid environment configuration: VOICE_CALL_HEARTBEAT_INTERVAL_MS must be shorter than VOICE_CALL_OWNERSHIP_TTL_SECONDS');
+}
+
+if (parsed.data.VOICE_CALL_RECONCILIATION_MIN_AGE_SECONDS <= parsed.data.VOICE_CALL_OWNERSHIP_TTL_SECONDS) {
+  throw new Error('Invalid environment configuration: VOICE_CALL_RECONCILIATION_MIN_AGE_SECONDS must exceed VOICE_CALL_OWNERSHIP_TTL_SECONDS');
+}
+
+if (parsed.data.VOICE_CALL_RECONCILIATION_FALLBACK_SECONDS <= parsed.data.VOICE_CALL_RECONCILIATION_MIN_AGE_SECONDS) {
+  throw new Error('Invalid environment configuration: VOICE_CALL_RECONCILIATION_FALLBACK_SECONDS must exceed VOICE_CALL_RECONCILIATION_MIN_AGE_SECONDS');
 }
 
 const frozenEmbeddingModel = 'intfloat/multilingual-e5-small';
