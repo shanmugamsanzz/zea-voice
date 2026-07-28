@@ -94,6 +94,18 @@ class FakeLlm {
       yield { type: 'completed', finishReason: 'stop', toolCalls: [], usage: {} };
       return;
     }
+    if (query === 'recover failed lookahead') {
+      yield { type: 'text_delta', delta: 'The first protected sentence is spoken normally. ' };
+      yield { type: 'text_delta', delta: 'This isolated look-ahead failure sentence intentionally contains enough descriptive words to exceed the short sentence grouping threshold and verify fallback playback.' };
+      yield { type: 'completed', finishReason: 'stop', toolCalls: [], usage: {} };
+      return;
+    }
+    if (query === 'isolate permanent sentence failure') {
+      yield { type: 'text_delta', delta: 'The valid sentence must remain audible. ' };
+      yield { type: 'text_delta', delta: 'This permanent sentence failure intentionally contains enough descriptive words to exceed the short sentence grouping threshold without being played.' };
+      yield { type: 'completed', finishReason: 'stop', toolCalls: [], usage: {} };
+      return;
+    }
     if (query === 'book appointment' && this.requests.length === 1) {
       const toolCalls = [{ id: 'tool-1', name: 'book_visit', arguments: { date: 'tomorrow' } }];
       yield { type: 'tool_call', ...toolCalls[0] };
@@ -134,6 +146,16 @@ class FakeTts {
     this.requests.push(input);
     const { text, generationId } = input;
     this.texts.push(text);
+    if (text.includes('permanent sentence failure')) {
+      throw Object.assign(new Error('Permanent isolated TTS failure'), {
+        code: 'TTS_PROVIDER_REQUEST_FAILED', retryable: false, audioStarted: false,
+      });
+    }
+    if (this.coordinator && text.includes('isolated look-ahead failure')) {
+      throw Object.assign(new Error('Look-ahead-only TTS failure'), {
+        code: 'TTS_PROVIDER_REQUEST_FAILED', retryable: false, audioStarted: false,
+      });
+    }
     if (text.includes('look-ahead sentence')) {
       this.coordinator.started.push(text);
       this.activeText = text;
@@ -399,6 +421,30 @@ assert.equal(orchestrator.runtimeMetrics.ttsSpeed.retries, 1);
 assert.equal(orchestrator.runtimeMetrics.ttsSpeed.abnormal, 1);
 assert.equal(orchestrator.runtimeMetrics.ttsSpeed.normal, 1);
 
+const cancellationsBeforeFallback = audioEngine.cancelled.length;
+stt.publish({ type: 'final_transcript', text: 'recover failed lookahead', language: 'en', isFinal: true });
+await waitFor(() => orchestrator.runtimeMetrics.ttsLookahead.sequentialFallbacks >= 1,
+  'Failed look-ahead request did not use the ordered primary adapter fallback');
+await waitFor(() => orchestrator.controller.state === 'listening',
+  'Sequential fallback after a failed look-ahead request did not finish');
+assert.equal(audioEngine.cancelled.length, cancellationsBeforeFallback,
+  'A recoverable look-ahead failure cleared valid queued audio');
+assert.ok(transcript.some((entry) => entry.speaker === 'agent'
+  && entry.text.includes('verify fallback playback')),
+'The sentence recovered through the primary adapter was not persisted');
+
+const cancellationsBeforeIsolation = audioEngine.cancelled.length;
+stt.publish({ type: 'final_transcript', text: 'isolate permanent sentence failure', language: 'en', isFinal: true });
+await waitFor(() => orchestrator.runtimeMetrics.ttsLookahead.partialTurnsPreserved >= 1,
+  'Permanent later-sentence failure was not isolated');
+await waitFor(() => orchestrator.controller.state === 'listening',
+  'A later permanent sentence failure did not preserve the valid earlier sentence');
+assert.equal(audioEngine.cancelled.length, cancellationsBeforeIsolation,
+  'A later permanent sentence failure cleared valid earlier audio');
+assert.ok(transcript.some((entry) => entry.speaker === 'agent'
+  && entry.text === 'The valid sentence must remain audible.'),
+'Only the successfully synthesized sentence should be persisted after isolated failure');
+
 llm.wasCancelled = false;
 stt.publish({ type: 'final_transcript', text: 'slow request', language: 'en', isFinal: true });
 await waitFor(() => orchestrator.controller.state === 'thinking', 'Slow turn did not start');
@@ -427,7 +473,7 @@ assert.equal(completed[0].metrics.ttsLimits.durationLimitReached, false);
 assert.equal(durableMemoryWrites.length, 1);
 assert.equal(contextCacheWrites.length, 2);
 assert.ok(durableMemoryWrites[0].state.recentMessages.some((message) => (
-  message.content === 'verify ordered lookahead'
+  message.content === 'isolate permanent sentence failure'
 )), 'Recent completed conversation turns were not persisted to durable memory');
 assert.ok(tts.texts.includes('Thank you. Goodbye.'));
 assert.equal(media.closed, true);

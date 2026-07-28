@@ -18,6 +18,10 @@ const pacer = new AudioPacer({
   queue,
   now: () => 0,
   shouldSend: (frame) => frame.cancellationVersion === cancellationVersion,
+  packetDurationMs: 20,
+  preRollMs: 0,
+  lowWaterMs: 0,
+  deliveryLeadMs: 0,
   send: async (frame) => sent.push(frame.data[0]),
   sleep: () => new Promise((resolve) => { releasePacing = resolve; }),
 });

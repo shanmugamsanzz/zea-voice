@@ -52,6 +52,7 @@ const mixer = new RealtimeAmbienceMixer({
   listeningVolumePercent: 50,
   speakingVolumePercent: 10,
   continueDuringSilence: true,
+  packetDurationMs: 20,
   send: async (frame) => sent.push(frame.data),
 });
 mixer.start();

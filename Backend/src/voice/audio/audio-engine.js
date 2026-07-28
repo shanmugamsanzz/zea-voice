@@ -122,6 +122,11 @@ export class ProviderIndependentAudioEngine {
       shouldSend: (frame) => frame.cancellationVersion === this.outputCancellationVersion,
       onPlaybackMetric: this.onPlaybackMetric,
       underrunThresholdMs: options.underrunThresholdMs ?? env.VOICE_AUDIO_UNDERRUN_THRESHOLD_MS,
+      packetDurationMs: options.packetDurationMs ?? env.VOICE_AUDIO_PACKET_MS,
+      preRollMs: options.preRollMs ?? env.VOICE_AUDIO_PRE_ROLL_MS,
+      preRollMaxWaitMs: options.preRollMaxWaitMs ?? env.VOICE_AUDIO_PRE_ROLL_MAX_WAIT_MS,
+      lowWaterMs: options.lowWaterMs ?? env.VOICE_AUDIO_LOW_WATER_MS,
+      deliveryLeadMs: options.deliveryLeadMs ?? env.VOICE_AUDIO_DELIVERY_LEAD_MS,
       onError: this.onError,
       now: options.now,
       sleep: options.sleep,
@@ -140,6 +145,8 @@ export class ProviderIndependentAudioEngine {
         onPlaybackMetric: this.pacerOptions.onPlaybackMetric,
         underrunThresholdMs: this.pacerOptions.underrunThresholdMs,
         frameDurationMs: options.frameDurationMs ?? env.VOICE_AUDIO_FRAME_MS,
+        packetDurationMs: this.pacerOptions.packetDurationMs,
+        deliveryLeadMs: this.pacerOptions.deliveryLeadMs,
         onError: (error) => this.#disableAmbience(error),
         now: options.now,
         sleep: options.sleep,
@@ -244,6 +251,7 @@ export class ProviderIndependentAudioEngine {
     // a pacer already dequeued before Plivo clear-audio was issued.
     const removedFrames = this.outputQueue.clear();
     if (this.mediaSession.started && !this.mediaSession.closed) this.mediaSession.clearAudio(reason);
+    this.pacer.resetPlaybackTimeline?.();
     return { generationId, removedFrames, cancellationVersion: this.outputCancellationVersion };
   }
 

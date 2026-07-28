@@ -200,6 +200,8 @@ export class RealtimeConversationOrchestrator {
       concurrency: env.VOICE_TTS_LOOKAHEAD_CONCURRENCY,
       scheduled: 0, started: 0, completed: 0, cancelled: 0, failed: 0,
       readyBeforePlayback: 0, waitedAtPlayback: 0,
+      sequentialFallbacks: 0, isolatedFailures: 0, successfulHandoffs: 0,
+      partialTurnsPreserved: 0,
       bufferedBytes: 0, maximumSegmentBytes: 0,
     };
     this.pronunciationProcessor = (this.dependencies.createPronunciationProcessor
@@ -381,8 +383,14 @@ export class RealtimeConversationOrchestrator {
         const logData = {
           stage: metric.type === 'underrun' ? 'audio.buffer_underrun'
             : (metric.type === 'boundary_smoothed'
-              ? 'audio.sentence_boundary_smoothed' : 'audio.sentence_boundary'),
+              ? 'audio.sentence_boundary_smoothed'
+              : (metric.type === 'playback_deadline_miss'
+                ? 'audio.playback_deadline_miss'
+                : (metric.type === 'playback_pre_roll' || metric.type === 'playback_refill'
+                  ? `audio.${metric.type}` : 'audio.sentence_boundary'))),
           callId: this.call.id, gapMs, bufferedAudioMs,
+          waitMs: Math.max(0, Number(metric.waitMs ?? 0)),
+          remoteBufferedAudioMs: Math.max(0, Number(metric.remoteBufferedAudioMs ?? 0)),
           sentenceBoundary: metric.sentenceBoundary === true,
           carriedFrameBytes: Number(metric.carriedFrameBytes ?? 0),
         };
@@ -987,6 +995,7 @@ export class RealtimeConversationOrchestrator {
     let schedulerCancelled = false;
     const pendingLookaheadJobs = [];
     const spokenSentences = [];
+    const completedSentences = [];
     const playbackGroupId = `turn-${epoch}`;
     const maximumResponseCharacters = Number(
       this.runtimeProfile.limits?.ttsMaxCharactersPerResponse ?? 0,
@@ -1081,7 +1090,7 @@ export class RealtimeConversationOrchestrator {
         : null;
       chain = chain.then(async () => {
         await beginPromise;
-        if (this.finalized || epoch !== this.epoch) return false;
+        if (this.finalized || epoch !== this.epoch || failure) return false;
         this.log.info({
           stage: 'llm.sentence_ready_for_tts', callId: this.call.id,
           generationId, sentenceNumber: currentSentenceNumber, characters: sentenceCharacters,
@@ -1090,17 +1099,43 @@ export class RealtimeConversationOrchestrator {
           if (lookaheadReady) this.runtimeMetrics.ttsLookahead.readyBeforePlayback += 1;
           else this.runtimeMetrics.ttsLookahead.waitedAtPlayback += 1;
           const prepared = await lookahead;
-          if (prepared.error) throw prepared.error;
-          return this.#playPrefetchedTts(prepared.value, generationId, {
-            epoch, playbackGroupId, deferBoundaryFlush: true,
-          });
+          let played;
+          if (prepared.error) {
+            this.runtimeMetrics.ttsLookahead.sequentialFallbacks += 1;
+            this.log.warn({
+              err: prepared.error, stage: 'tts.lookahead_sequential_fallback',
+              callId: this.call.id, generationId, sentenceNumber: currentSentenceNumber,
+            }, 'Look-ahead TTS failed; retrying this sentence through the ordered primary adapter');
+            played = await this.#synthesize(sentence, generationId, {
+              kind, startedAt: turnStartedAt, deferDrain: true,
+              playbackGroupId, deferBoundaryFlush: true,
+              charactersReserved: true,
+            });
+          } else {
+            played = await this.#playPrefetchedTts(prepared.value, generationId, {
+              epoch, playbackGroupId, deferBoundaryFlush: true,
+            });
+          }
+          if (played) {
+            completedSentences.push(sentence);
+            this.runtimeMetrics.ttsLookahead.successfulHandoffs += 1;
+          }
+          return played;
         }
-        return this.#synthesize(sentence, generationId, {
+        const played = await this.#synthesize(sentence, generationId, {
           kind, startedAt: turnStartedAt, deferDrain: true,
           playbackGroupId, deferBoundaryFlush: true,
         });
+        if (played) completedSentences.push(sentence);
+        return played;
       }).catch((error) => {
         failure ??= error;
+        this.runtimeMetrics.ttsLookahead.isolatedFailures += 1;
+        this.log.error({
+          err: error, stage: 'tts.sentence_failure_isolated', callId: this.call.id,
+          generationId, sentenceNumber: currentSentenceNumber,
+          completedSentences: completedSentences.length,
+        }, 'Failed TTS sentence was isolated from audio already queued for playback');
         return false;
       });
       return true;
@@ -1153,17 +1188,32 @@ export class RealtimeConversationOrchestrator {
       cancel: cancelScheduler,
       sentenceCount: () => spokenSentences.length,
       spokenText: () => spokenSentences.join(' ').trim(),
+      completedText: () => completedSentences.join(' ').trim(),
       waitUntilStarted: async () => beginPromise ? beginPromise : undefined,
       finish: async () => {
         try {
           flushGrouping();
           await chain;
-          if (failure) throw failure;
           if (epoch === this.epoch && !this.finalized) {
             await this.audioEngine.flushOutputGroup?.(playbackGroupId);
             await this.audioEngine.drainOutput();
           }
-          return epoch === this.epoch && !this.finalized;
+          if (failure && completedSentences.length === 0) throw failure;
+          if (failure) {
+            this.runtimeMetrics.ttsLookahead.partialTurnsPreserved += 1;
+            this.log.warn({
+              stage: 'tts.partial_turn_preserved', callId: this.call.id,
+              completedSentences: completedSentences.length,
+              failedCode: failure.code ?? 'TTS_SENTENCE_FAILED',
+            }, 'Completed sentence audio was preserved after a later TTS failure');
+          }
+          return {
+            active: epoch === this.epoch && !this.finalized,
+            partial: Boolean(failure),
+            failure,
+            completedSentences: completedSentences.length,
+            spokenText: completedSentences.join(' ').trim(),
+          };
         } finally {
           clearGroupingTimer();
           this.activeLookaheadSchedulers.delete(cancelScheduler);
@@ -1250,15 +1300,17 @@ export class RealtimeConversationOrchestrator {
     const unconstrainedAnswer = generatedAnswer
       || String(this.runtimeProfile.agent.settings?.noResponseMessage ?? 'Sorry, I could not form a response.');
     if (sentencePipeline.sentenceCount() === 0) sentencePipeline.enqueue(unconstrainedAnswer);
-    const answer = sentencePipeline.spokenText() || this.#fitTtsMessage(unconstrainedAnswer);
     if (!generatedAnswer) {
       sourceTrace.add(createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
         label: 'No-response fallback',
       }));
     }
     await sentencePipeline.waitUntilStarted();
+    const playback = await sentencePipeline.finish();
+    const answer = playback.spokenText
+      || sentencePipeline.completedText()
+      || this.#fitTtsMessage(unconstrainedAnswer);
     await this.controller.setAssistantResponse(answer, Date.now(), { sources: sourceTrace.snapshot() });
-    await sentencePipeline.finish();
     if (epoch !== this.epoch || this.finalized || this.controller.state !== callStates.SPEAKING) return;
     await this.controller.playbackComplete();
     this.errorCount = 0;
@@ -1441,7 +1493,13 @@ export class RealtimeConversationOrchestrator {
           'Look-ahead TTS stream ended without complete audio', 'TTS_LOOKAHEAD_STREAM_INCOMPLETE'),
         { retryable: true, audioStarted: false });
       }
-      return { cancelled: false, chunks, bytes };
+      return {
+        cancelled: false,
+        chunks,
+        bytes,
+        audio: chunks.length === 1 ? chunks[0] : Buffer.concat(chunks),
+        preparedAt: Date.now(),
+      };
     } finally {
       this.activeLookaheadTtsAdapters.delete(adapter);
       try {
@@ -1486,10 +1544,10 @@ export class RealtimeConversationOrchestrator {
   async #playPrefetchedTts(prepared, generationId, options = {}) {
     if (prepared?.cancelled || this.finalized || options.epoch !== this.epoch) return false;
     this.audioEngine.beginOutputGeneration(generationId, options.playbackGroupId ?? generationId);
-    for (const chunk of prepared.chunks) {
-      if (this.finalized || options.epoch !== this.epoch) return false;
-      if (!await this.audioEngine.enqueueSynthesized(chunk, generationId)) return false;
-    }
+    const audio = prepared.audio ?? (prepared.chunks?.length === 1
+      ? prepared.chunks[0] : Buffer.concat(prepared.chunks ?? []));
+    if (!audio.length || this.finalized || options.epoch !== this.epoch) return false;
+    if (!await this.audioEngine.enqueueSynthesized(audio, generationId)) return false;
     await this.audioEngine.flushSynthesized(generationId, {
       finalizeGroup: options.deferBoundaryFlush !== true,
     });
@@ -1507,7 +1565,8 @@ export class RealtimeConversationOrchestrator {
         appliedRuleIds: pronunciation.appliedRuleIds,
       }, 'Selected pronunciation rules applied to TTS audio text');
     }
-    if (!await this.#reserveTtsCharacters(pronunciation.text, generationId)) return false;
+    if (!options.charactersReserved
+      && !await this.#reserveTtsCharacters(pronunciation.text, generationId)) return false;
     let lastError;
     const maximumAttempts = Math.max(env.VOICE_PROVIDER_MAX_RETRIES, env.TTS_SPEED_MAX_RETRIES);
     for (let attempt = 0; attempt <= maximumAttempts; attempt += 1) {
@@ -1804,6 +1863,10 @@ export class RealtimeConversationOrchestrator {
       failed: this.runtimeMetrics.ttsLookahead?.failed ?? 0,
       readyBeforePlayback: this.runtimeMetrics.ttsLookahead?.readyBeforePlayback ?? 0,
       waitedAtPlayback: this.runtimeMetrics.ttsLookahead?.waitedAtPlayback ?? 0,
+      successfulHandoffs: this.runtimeMetrics.ttsLookahead?.successfulHandoffs ?? 0,
+      sequentialFallbacks: this.runtimeMetrics.ttsLookahead?.sequentialFallbacks ?? 0,
+      isolatedFailures: this.runtimeMetrics.ttsLookahead?.isolatedFailures ?? 0,
+      partialTurnsPreserved: this.runtimeMetrics.ttsLookahead?.partialTurnsPreserved ?? 0,
       bufferedBytes: this.runtimeMetrics.ttsLookahead?.bufferedBytes ?? 0,
       maximumSegmentBytes: this.runtimeMetrics.ttsLookahead?.maximumSegmentBytes ?? 0,
     }, 'Ordered TTS look-ahead summary');

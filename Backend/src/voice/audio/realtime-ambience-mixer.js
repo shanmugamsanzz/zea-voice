@@ -32,6 +32,9 @@ export class RealtimeAmbienceMixer {
     this.format = options.format ?? PLIVO_MULAW_8K;
     this.frameDurationMs = options.frameDurationMs ?? this.format.frameDurationMs;
     this.frameBytes = audioFrameBytes(this.format, this.frameDurationMs);
+    this.packetDurationMs = options.packetDurationMs ?? 80;
+    this.packetFrameCount = Math.max(1, Math.ceil(this.packetDurationMs / this.frameDurationMs));
+    this.deliveryLeadMs = options.deliveryLeadMs ?? 160;
     this.ambienceSamples = decodeAudio(options.ambienceAudio, this.format);
     if (!this.ambienceSamples.length) throw new TypeError('Normalized ambience audio is empty');
     this.listeningGain = Math.max(0, Math.min(1, Number(options.listeningVolumePercent ?? 10) / 100));
@@ -47,6 +50,7 @@ export class RealtimeAmbienceMixer {
     this.drainWaiters = [];
     this.metrics = { framesSent: 0, speechFramesMixed: 0, ambienceOnlyFrames: 0 };
     this.lastSpeechFrame = null;
+    this.remotePlaybackEndAt = 0;
   }
 
   setCallerSpeaking(active) {
@@ -89,42 +93,61 @@ export class RealtimeAmbienceMixer {
   }
 
   async #run(signal) {
-    let deadline = this.now();
     while (!signal.aborted) {
-      let speech = this.queue.tryDequeue();
-      if (speech && !this.shouldSendSpeech(speech)) speech = null;
-      const output = this.#mix(speech);
-      const waitMs = deadline - this.now();
+      const outputs = [];
+      const speechFrames = [];
+      for (let index = 0; index < this.packetFrameCount; index += 1) {
+        let speech = this.queue.tryDequeue();
+        if (speech && !this.shouldSendSpeech(speech)) speech = null;
+        const output = this.#mix(speech);
+        if (!output) break;
+        outputs.push(output);
+        if (speech) speechFrames.push(speech);
+      }
+      if (!outputs.length) {
+        await this.sleep(this.frameDurationMs, signal);
+        continue;
+      }
+      const packetDurationMs = outputs.length * this.frameDurationMs;
+      const beforePacing = this.now();
+      const remoteBufferedMs = Math.max(0, this.remotePlaybackEndAt - beforePacing);
+      const waitMs = Math.max(0, remoteBufferedMs - this.deliveryLeadMs);
       if (waitMs > 0) await this.sleep(waitMs, signal);
       if (signal.aborted) break;
-      this.sendingSpeech = Boolean(speech);
+      if (speechFrames.some((speech) => !this.shouldSendSpeech(speech))) continue;
+      this.sendingSpeech = speechFrames.length > 0;
       const sendingAt = this.now();
-      if (output) {
-        if (speech && this.lastSpeechFrame?.playbackGroupId
-          && this.lastSpeechFrame.playbackGroupId === speech.playbackGroupId) {
+      const firstSpeech = speechFrames[0];
+      const lastSpeech = speechFrames.at(-1);
+      if (firstSpeech && this.lastSpeechFrame?.playbackGroupId
+          && this.lastSpeechFrame.playbackGroupId === firstSpeech.playbackGroupId) {
           const gapMs = Math.max(0,
             sendingAt - (this.lastSpeechFrame.sentAt + this.lastSpeechFrame.durationMs));
-          const sentenceBoundary = this.lastSpeechFrame.generationId !== speech.generationId;
+          const sentenceBoundary = this.lastSpeechFrame.generationId !== firstSpeech.generationId;
           if (sentenceBoundary || gapMs >= this.underrunThresholdMs) {
             this.onPlaybackMetric({
               type: gapMs >= this.underrunThresholdMs ? 'underrun' : 'sentence_boundary',
               gapMs,
               sentenceBoundary,
-              playbackGroupId: speech.playbackGroupId,
+              playbackGroupId: firstSpeech.playbackGroupId,
               fromGenerationId: this.lastSpeechFrame.generationId,
-              toGenerationId: speech.generationId,
+              toGenerationId: firstSpeech.generationId,
               bufferedAudioMs: this.queue.bufferedMs,
             });
           }
-        }
-        await this.send({ data: output, durationMs: this.frameDurationMs, ambience: true });
-        this.metrics.framesSent += 1;
-        if (speech) this.metrics.speechFramesMixed += 1;
-        else this.metrics.ambienceOnlyFrames += 1;
       }
-      if (speech) this.lastSpeechFrame = { ...speech, sentAt: sendingAt };
+      await this.send({
+        data: outputs.length === 1 ? outputs[0] : Buffer.concat(outputs),
+        durationMs: packetDurationMs,
+        ambience: true,
+        packetFrameCount: outputs.length,
+      });
+      this.metrics.framesSent += outputs.length;
+      this.metrics.speechFramesMixed += speechFrames.length;
+      this.metrics.ambienceOnlyFrames += outputs.length - speechFrames.length;
+      if (lastSpeech) this.lastSpeechFrame = { ...lastSpeech, sentAt: sendingAt };
       this.sendingSpeech = false;
-      deadline = Math.max(deadline + this.frameDurationMs, this.now());
+      this.remotePlaybackEndAt = Math.max(this.remotePlaybackEndAt, sendingAt) + packetDurationMs;
       this.#resolveDrains();
     }
   }
@@ -132,6 +155,11 @@ export class RealtimeAmbienceMixer {
   drain() {
     if (this.queue.size === 0 && !this.sendingSpeech) return Promise.resolve();
     return new Promise((resolve) => this.drainWaiters.push(resolve));
+  }
+
+  resetPlaybackTimeline() {
+    this.remotePlaybackEndAt = 0;
+    this.lastSpeechFrame = null;
   }
 
   #resolveDrains() {

@@ -26,16 +26,20 @@ const pacer = new AudioPacer({
   now: () => clock,
   sleep: async (milliseconds) => { clock += milliseconds + 60; },
   shouldSend: () => true,
+  packetDurationMs: 20,
+  preRollMs: 0,
+  lowWaterMs: 0,
+  deliveryLeadMs: 0,
   underrunThresholdMs: 40,
   onPlaybackMetric: (metric) => metrics.push(metric),
   send: async () => {},
 });
 pacer.start();
-await waitFor(() => metrics.length === 1, 'Playback underrun was not measured');
-assert.equal(metrics[0].type, 'underrun');
-assert.equal(metrics[0].sentenceBoundary, true);
-assert.equal(metrics[0].gapMs, 60);
-assert.equal(metrics[0].playbackGroupId, 'turn-1');
+await waitFor(() => metrics.some((metric) => metric.type === 'underrun'), 'Playback underrun was not measured');
+const underrun = metrics.find((metric) => metric.type === 'underrun');
+assert.equal(underrun.sentenceBoundary, true);
+assert.equal(underrun.gapMs, 60);
+assert.equal(underrun.playbackGroupId, 'turn-1');
 queue.close();
 await pacer.stop();
 

@@ -66,6 +66,7 @@
     "verify:tts-speed-monitor": "node scripts/verify-tts-speed-monitor.js",
     "verify:interruption-audio-isolation": "node scripts/verify-interruption-audio-isolation.js",
     "verify:audio-continuity": "node scripts/verify-audio-continuity-monitor.js",
+    "verify:adaptive-audio-pacing": "node scripts/verify-adaptive-audio-pacing.js",
     "verify:voice-orchestrator": "node scripts/verify-voice-orchestrator.js",
     "verify:message-source-tracing": "node scripts/verify-message-source-tracing.js",
     "verify:transcript-source-persistence": "node scripts/verify-transcript-source-persistence.js",
