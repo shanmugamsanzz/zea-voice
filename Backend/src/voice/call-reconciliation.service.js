@@ -115,9 +115,22 @@ export async function reconcileStaleVoiceCalls(dependencies = {}) {
         tenantId: candidate.tenant_id,
         providerCallId: candidate.provider_call_id,
       };
-      if (await ownership.isOwned(ownershipIdentity)) {
-        result.active += 1;
-        continue;
+      let ownershipVerified = false;
+      try {
+        if (await ownership.isOwned(ownershipIdentity)) {
+          result.active += 1;
+          continue;
+        }
+        ownershipVerified = true;
+      } catch (error) {
+        // Redis is advisory for stale-call detection. Plivo's ended CDR is
+        // authoritative, so an ownership outage must not leave an ended call
+        // connected forever. Never use the time-only fallback while ownership
+        // is unknown; only a provider-confirmed end may be persisted.
+        logger.warn({
+          stage: 'call.reconciliation_ownership_unavailable', callId: candidate.id,
+          providerCallId: candidate.provider_call_id, errorCode: error?.code,
+        }, 'Voice ownership could not be checked; verifying terminal state with Plivo');
       }
       let resolution = null;
       try {
@@ -132,7 +145,7 @@ export async function reconcileStaleVoiceCalls(dependencies = {}) {
           providerCallId: candidate.provider_call_id, errorCode: error?.code,
         }, 'Stale call could not yet be verified with Plivo');
       }
-      resolution ??= fallbackResolution(candidate, now);
+      if (!resolution && ownershipVerified) resolution = fallbackResolution(candidate, now);
       if (!resolution) {
         result.deferred += 1;
         continue;

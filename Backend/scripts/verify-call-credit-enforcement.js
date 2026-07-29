@@ -48,6 +48,7 @@ const billing = await finalizeCallCreditBilling({
 });
 assert.equal(billing.creditsCharged, 3);
 assert.equal(finalQueries.some(({ sql }) => /entry_type,direction/.test(sql)), true);
+assert.equal(finalQueries.some(({ sql }) => /\$4::bigint,\$4::bigint/.test(sql)), true);
 assert.equal(finalQueries.some(({ sql }) => /credit_billing_finalized=true/.test(sql)), true);
 
 const migration = await readFile(new URL('../migrations/1786400000000_global-credit-threshold-and-call-reservations.js', import.meta.url), 'utf8');

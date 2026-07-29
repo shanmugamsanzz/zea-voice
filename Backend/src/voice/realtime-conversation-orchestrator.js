@@ -4,7 +4,7 @@ import { AppError } from '../middleware/errors.js';
 import { appendTranscriptEntry } from '../calls/call.service.js';
 import { routeKnowledgeQuery } from '../knowledge-bases/knowledge-runtime.service.js';
 import { ProviderIndependentAudioEngine } from './audio/audio-engine.js';
-import { completeVoiceCall } from './call-completion.service.js';
+import { completeVoiceCall, completeVoiceCallWithoutRuntime } from './call-completion.service.js';
 import { CallController } from './call-controller.js';
 import { TranscriptPersistenceQueue } from './transcript-persistence-queue.js';
 import { TtsCharacterBudget } from './tts-character-budget.js';
@@ -2025,7 +2025,19 @@ export class RealtimeConversationOrchestrator {
         }, 'Session-only conversation context cleanup failed');
       }
     }
-    if (!this.controller || !this.runtimeProfile || !this.usageTracker) return;
+    if (!this.controller || !this.runtimeProfile || !this.usageTracker) {
+      try {
+        await (this.dependencies.completeCallWithoutRuntime ?? completeVoiceCallWithoutRuntime)({
+          callId: this.call.id,
+          outcome: finalOutcome,
+          reason: finalReason,
+        }, this.dependencies.completionDependencies ?? {});
+      } catch (error) {
+        this.log.error({ err: error, callId: this.call.id },
+          'Pre-runtime voice call finalization failed');
+      }
+      return;
+    }
     this.log.info({
       stage: 'tts.speed_summary', callId: this.call.id,
       measured: this.runtimeMetrics.ttsSpeed?.measured ?? 0,

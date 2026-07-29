@@ -206,3 +206,55 @@ export async function completeVoiceCall(input, dependencies = {}) {
   }
   return { call: persisted.call, usage: persisted.usage, adapterCleanup, postCall, idempotent: persisted.idempotent };
 }
+
+/**
+ * Terminal persistence for a media stream that closes before provider adapters,
+ * usage tracking, or the conversation controller finish initializing.
+ */
+export async function completeVoiceCallWithoutRuntime(input, dependencies = {}) {
+  if (!input?.callId) throw new TypeError('callId is required');
+  const status = terminalStatus(input.outcome ?? 'failed');
+  const reason = input.reason ?? 'runtime_closed_before_ready';
+  const endedAt = input.endedAt ?? new Date();
+  const contextRunner = dependencies.contextRunner ?? withAuthServiceContext;
+  const persisted = await contextRunner(async (client) => {
+    const finalizeCredit = dependencies.finalizeCreditBilling ?? finalizeCallCreditBilling;
+    const selected = await client.query('SELECT * FROM call_sessions WHERE id=$1 FOR UPDATE', [input.callId]);
+    if (!selected.rowCount) throw new Error(`Call session was not found: ${input.callId}`);
+    const call = selected.rows[0];
+    if (call.ended_at) {
+      const billing = await finalizeCredit(client, {
+        call, durationSeconds: Number(call.duration_seconds ?? 0),
+      });
+      return { call, billing, idempotent: true };
+    }
+    const startedAt = call.answered_at ?? call.started_at;
+    const durationSeconds = Math.max(0,
+      Math.ceil((endedAt.getTime() - new Date(startedAt).getTime()) / 1000));
+    const updated = (await client.query(`UPDATE call_sessions
+      SET status=$2::call_status,ended_at=$3,duration_seconds=$4,
+          provider_metadata=COALESCE(provider_metadata,'{}'::jsonb)||$5::jsonb
+      WHERE id=$1 RETURNING *`, [
+      input.callId, status, endedAt, durationSeconds,
+      JSON.stringify({ voiceRuntime: {
+        finalized: true, degradedFinalization: true, reason,
+        finalizedAt: endedAt.toISOString(),
+      } }),
+    ])).rows[0];
+    const billing = await finalizeCredit(client, { call: updated, durationSeconds });
+    return { call: updated, billing, idempotent: false };
+  });
+  activeCallSessions.delete(input.callId);
+  if (!persisted.idempotent && status === 'completed') {
+    await (dependencies.queuePostCallSummary ?? queuePostCallSummary)(input.callId, dependencies)
+      .catch((error) => logger.warn({
+        stage: 'postcall_summary.degraded_finalization_deferred', callId: input.callId,
+        errorCode: error?.code,
+      }, 'Post-call summary could not be queued after degraded finalization'));
+  }
+  logger.warn({
+    stage: 'call.degraded_finalization', callId: input.callId, status, reason,
+    durationSeconds: Number(persisted.call.duration_seconds ?? 0),
+  }, 'Call persisted through pre-runtime completion fallback');
+  return persisted;
+}

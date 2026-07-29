@@ -50,6 +50,29 @@ const deferredResult = await reconcileStaleVoiceCalls({
 assert.equal(deferredResult.deferred, 1);
 assert.equal(persisted.length, 0, 'A provider call without an end time must remain active');
 
+persisted = [];
+const redisUnavailableCompleted = await reconcileStaleVoiceCalls({
+  ...common,
+  ownership: {
+    isOwned: async () => { throw Object.assign(new Error('Redis unavailable'), { code: 'VOICE_COORDINATION_UNAVAILABLE' }); },
+    releaseValidated: async () => true,
+  },
+});
+assert.equal(redisUnavailableCompleted.reconciled, 1);
+assert.equal(persisted[0].resolution.metadata.source, 'plivo_cdr');
+
+persisted = [];
+const redisUnavailableActive = await reconcileStaleVoiceCalls({
+  ...common,
+  ownership: {
+    isOwned: async () => { throw Object.assign(new Error('Redis unavailable'), { code: 'VOICE_COORDINATION_UNAVAILABLE' }); },
+    releaseValidated: async () => true,
+  },
+  getCallDetails: async () => ({ call_uuid: 'provider-1', call_state: 'ANSWER' }),
+});
+assert.equal(redisUnavailableActive.deferred, 1);
+assert.equal(persisted.length, 0, 'Redis failure must not time-close a provider-active call');
+
 const fallbackResult = await reconcileStaleVoiceCalls({
   ...common,
   ownership: { isOwned: async () => false, releaseValidated: async () => true },

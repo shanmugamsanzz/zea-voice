@@ -128,7 +128,7 @@ export async function finalizeCallCreditBilling(client, { call, durationSeconds 
       (transaction_group_id,company_wallet_id,tenant_id,entry_type,direction,amount,credit_amount,
        balance_after,call_session_id,billed_duration_seconds,price_per_credit_inr,
        description,metadata)
-      VALUES($1,$2,$3,'usage_debit','debit',$4,$4,$5,$6,$7,$8,$9,$10::jsonb)
+      VALUES($1,$2,$3,'usage_debit','debit',$4::bigint,$4::bigint,$5,$6,$7,$8,$9,$10::jsonb)
       ON CONFLICT (call_session_id)
       WHERE call_session_id IS NOT NULL AND entry_type='usage_debit' DO NOTHING`, [
       crypto.randomUUID(), wallet.walletId, call.tenant_id, credits, updatedWallet.balance,
