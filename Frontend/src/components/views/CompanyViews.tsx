@@ -366,20 +366,34 @@ function CompanyDashboard({ onEditAgent, onAddAgent }: { onEditAgent: (id: strin
                     <h4 className="zea-operator-card-title break-words font-bold text-slate-800 text-sm tracking-tight">{agent.name}</h4>
                     <span className="zea-operator-card-brain text-[10px] font-mono text-slate-400 block mt-0.5">Brain: {agent.llmModel}</span>
                   </div>
-                  <span className={`zea-operator-card-status shrink-0 px-2.5 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider border ${
-                    agent.status === 'active' ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : 'bg-slate-100 border-slate-200 text-slate-500'
-                  }`}>
-                    {agent.status}
-                  </span>
+                  {role === 'DEVELOPER' ? (
+                    <TableActionsMenu
+                      ariaLabel={`Open actions for ${agent.name}`}
+                      actions={[
+                        {
+                          label: 'Edit',
+                          onClick: () => onEditAgent(agent.id),
+                        },
+                      ]}
+                    />
+                  ) : (
+                    <span className={`zea-operator-card-status shrink-0 px-2.5 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider border ${
+                      agent.status === 'active' ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : 'bg-slate-100 border-slate-200 text-slate-500'
+                    }`}>
+                      {agent.status}
+                    </span>
+                  )}
                 </div>
 
-                <p className="zea-operator-card-prompt text-xs text-slate-500 font-semibold line-clamp-3 mt-3 italic leading-relaxed">
-                  "{agent.prompt}"
-                </p>
+                {role !== 'DEVELOPER' && (
+                  <p className="zea-operator-card-prompt text-xs text-slate-500 font-semibold line-clamp-3 mt-3 italic leading-relaxed">
+                    "{agent.prompt}"
+                  </p>
+                )}
 
                 <div className="zea-operator-card-stats grid grid-cols-3 gap-1.5 text-center text-xs mt-4 py-2.5 bg-slate-50/50 rounded-xl border border-slate-150">
                   <div className="zea-operator-stat">
-                    <span className="text-[9px] text-slate-400 block font-bold uppercase tracking-wider">Success</span>
+                    <span className="text-[9px] text-slate-400 block font-bold uppercase tracking-wider">{role === 'DEVELOPER' ? 'Success Rate' : 'Success'}</span>
                     <span className="text-slate-700 font-bold font-mono">{agent.successRate}%</span>
                   </div>
                   <div className="zea-operator-stat">
@@ -387,20 +401,22 @@ function CompanyDashboard({ onEditAgent, onAddAgent }: { onEditAgent: (id: strin
                     <span className="text-slate-700 font-bold font-mono">{agent.totalCalls.toLocaleString()}</span>
                   </div>
                   <div className="zea-operator-stat">
-                    <span className="text-[9px] text-slate-400 block font-bold uppercase tracking-wider">Length</span>
+                    <span className="text-[9px] text-slate-400 block font-bold uppercase tracking-wider">{role === 'DEVELOPER' ? 'Average Length' : 'Length'}</span>
                     <span className="text-slate-700 font-bold font-mono">{agent.averageDurationSeconds}s</span>
                   </div>
                 </div>
               </div>
 
-              <button
-                onClick={() => onEditAgent(agent.id)}
-                className="zea-operator-card-action w-full py-2.5 bg-slate-50 hover:bg-indigo-50 text-slate-600 hover:text-indigo-600 rounded-lg text-xs font-bold mt-4 transition border border-slate-200 flex items-center justify-center space-x-1 cursor-pointer"
-                id={`agent-card-edit-${agent.id}`}
-              >
-                <span>{isReadOnly ? 'Inspect Settings' : 'Edit Agent'}</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
+              {role !== 'DEVELOPER' && (
+                <button
+                  onClick={() => onEditAgent(agent.id)}
+                  className="zea-operator-card-action w-full py-2.5 bg-slate-50 hover:bg-indigo-50 text-slate-600 hover:text-indigo-600 rounded-lg text-xs font-bold mt-4 transition border border-slate-200 flex items-center justify-center space-x-1 cursor-pointer"
+                  id={`agent-card-edit-${agent.id}`}
+                >
+                  <span>{isReadOnly ? 'Inspect Settings' : 'Edit Agent'}</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
           ))}
           {dashboard.agents.length === 0 && (

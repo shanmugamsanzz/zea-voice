@@ -1575,7 +1575,7 @@ html.dark body .zea-provider-keys-scroll::-webkit-scrollbar-thumb {
 
 /* Developer dashboard operator cards. */
 body .zea-developer-operator-card {
-  height: 20rem;
+  height: 15rem;
   min-width: 0;
   padding: 1.5rem !important;
   padding-bottom: 1.85rem !important;
@@ -1585,7 +1585,7 @@ body .zea-developer-operator-card {
 }
 
 body .zea-developer-operator-card .zea-operator-card-header {
-  min-height: 3.15rem;
+  min-height: 0;
 }
 
 body .zea-developer-operator-card .zea-operator-card-title {
