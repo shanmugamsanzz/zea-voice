@@ -56,6 +56,8 @@ assert.match(creditService, /convertPaymentToCredits/);
 assert.match(creditService, /INSERT INTO company_credit_payments/);
 assert.match(creditService, /IDEMPOTENCY_KEY_CONFLICT/);
 assert.match(creditService, /previewCompanyCreditPurchase/);
+assert.match(creditService, /'company_allocation','credit',\$4::bigint,\$4::bigint/);
+assert.match(creditService, /\$5::bigint, \$5::bigint/);
 assert.doesNotMatch(creditService.slice(creditService.indexOf('export function getTenantCredits'),
   creditService.indexOf('export function hasAvailableCompanyCredits')), /platform_pricing_rates|inrRemainder|perMinutePrice/);
 

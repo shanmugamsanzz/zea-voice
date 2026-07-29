@@ -60,6 +60,8 @@ const [migration, creditRuntime, callStore, tenantCredits, dashboard, companyUi,
 assert.match(creditRuntime, /WHERE w\.tenant_id=\$1/);
 assert.match(creditRuntime, /FOR UPDATE OF w/);
 assert.match(creditRuntime, /\$4::bigint,\$4::bigint/);
+assert.match(tenantCredits, /'company_allocation','credit',\$4::bigint,\$4::bigint/);
+assert.match(tenantCredits, /\$5::bigint, \$5::bigint/);
 assert.match(callStore, /pg_advisory_xact_lock/);
 assert.match(migration, /call_sessions_pending_credit_billing_idx/);
 assert.match(migration, /call_sessions_finalized_reservation_released/);

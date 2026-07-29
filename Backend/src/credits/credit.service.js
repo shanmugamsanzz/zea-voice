@@ -278,7 +278,7 @@ export function allocateCompanyCredits(actorUserId, companyId, input, idempotenc
         (transaction_group_id,company_wallet_id,tenant_id,entry_type,direction,amount,credit_amount,
          balance_after,payment_amount_inr,price_per_credit_inr,remainder_before_inr,remainder_after_inr,
          reference,description,actor_user_id,metadata)
-        VALUES ($1,$2,$3,'company_allocation','credit',$4,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)`,
+        VALUES ($1,$2,$3,'company_allocation','credit',$4::bigint,$4::bigint,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)`,
       [group, company.id, companyId, conversion.credits, credited.balance, conversion.paymentAmount,
         conversion.perMinutePrice, conversion.previousRemainderAmount, conversion.remainderAmount,
         input.reference ?? null, input.description ?? null, actorUserId,
@@ -308,7 +308,7 @@ export function adjustCompanyCredits(actorUserId, companyId, input) {
     await client.query(`INSERT INTO credit_ledger_entries
       (company_wallet_id, tenant_id, entry_type, direction, amount, credit_amount, balance_after,
        reference, description, actor_user_id)
-      VALUES ($1, $2, $3, $4, $5, $5, $6, $7, $8, $9)`,
+      VALUES ($1, $2, $3, $4, $5::bigint, $5::bigint, $6, $7, $8, $9)`,
     [company.id, companyId, input.type, input.direction, input.amount, updated.balance,
       input.reference ?? null, input.description, actorUserId]);
     return mapWallet({ ...updated, company_name: company.company_name });
