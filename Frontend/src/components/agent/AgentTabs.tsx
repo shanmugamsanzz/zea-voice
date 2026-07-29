@@ -1103,9 +1103,9 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       {/* Upper Status strip / Banner */}
       <div className="zea-agent-editor-header bg-gradient-to-r from-violet-600 via-indigo-600 to-amber-500 p-6 text-white flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
-          <span className="text-xs font-bold uppercase tracking-widest text-violet-100">Voice AI Architect</span>
-          <h2 className="text-2xl font-bold mt-1 tracking-tight">{agentId ? `Edit Agent: ${agent.name}` : 'Provision New Voice Agent'}</h2>
-          <p className="text-xs text-violet-100/80 font-medium mt-0.5">Customize real-time listening, speech engines, prompting brains, and integrations.</p>
+          <span className="text-xs font-bold uppercase tracking-widest text-violet-100">AGENT EDITOR</span>
+          <h2 className="text-2xl font-bold mt-1 tracking-tight">{agentId ? agent.name : 'Provision New Voice Agent'}</h2>
+          {/* <p className="zea-agent-editor-subtitle text-xs text-violet-100/80 font-medium mt-0.5">Customize real-time listening, speech engines, prompting brains, and integrations.</p> */}
         </div>
         
         <div className="flex items-center space-x-2">
@@ -1148,7 +1148,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       {/* Horizontal Scrollable Tabs Strip */}
       <div className={`border-b border-slate-100 bg-slate-50/50 p-4 ${role === 'DEVELOPER' ? 'zea-developer-agent-tabs' : ''}`}>
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
-          <div className="flex-1 overflow-x-auto scrollbar-none py-1">
+          <div className="zea-agent-tabs-scroll flex-1 overflow-x-auto overflow-y-hidden py-1">
             <div className="bg-[#f1f5f9] rounded-full p-1 flex items-center gap-0.5 w-max">
               {tabsList.map((t) => {
                 const Icon = t.icon;

@@ -1491,13 +1491,6 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
             <div className="flex flex-col sm:flex-row justify-between sm:items-center pb-5 mb-5 border-b border-slate-100 gap-4">
               <div className="flex items-center space-x-2.5">
                 <h2 className="text-md font-extrabold text-slate-800 tracking-tight">Real-Time Campaigns</h2>
-                <button
-                    onClick={() => showToast('Create instant lead tasks with POST /campaigns/{campaignId}/realtime/tasks using a unique eventId.')}
-                  className="px-2 py-1 bg-slate-50 hover:bg-slate-100 text-slate-500 rounded border border-slate-200 text-[10px] font-bold tracking-tight transition flex items-center space-x-1"
-                >
-                  <FileSpreadsheet className="w-3 h-3" />
-                  <span>API Docs</span>
-                </button>
               </div>
 
               <button
@@ -1955,8 +1948,9 @@ function AgentsListView({ agents, setAgents, onEditAgent, onAddAgent }: { agents
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex justify-end">
+    <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+      <div className="mb-5 flex items-center justify-between gap-4 border-b border-slate-200 pb-5">
+        <h2 className="text-lg font-bold tracking-tight text-slate-800">Agent List</h2>
         {!isReadOnly ? (
           <button
             onClick={onAddAgent}
@@ -1972,12 +1966,11 @@ function AgentsListView({ agents, setAgents, onEditAgent, onAddAgent }: { agents
         )}
       </div>
 
-      <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-      {agentError && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-700">{agentError}</div>}
+        {agentError && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-700">{agentError}</div>}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {agents.map((agent) => (
-          <div key={agent.id} className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm flex flex-col justify-between hover:shadow-md transition duration-200">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {agents.map((agent) => (
+            <div key={agent.id} className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm flex flex-col justify-between hover:shadow-md transition duration-200">
             <div>
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
@@ -2030,11 +2023,10 @@ function AgentsListView({ agents, setAgents, onEditAgent, onAddAgent }: { agents
               </div>
             </div>
 
-          </div>
-        ))}
-        {!isRefreshing && agents.length === 0 && <div className="md:col-span-2 lg:col-span-3 rounded-xl border border-dashed border-slate-300 p-10 text-center text-xs font-semibold text-slate-400">No voice agents have been created for this company.</div>}
-      </div>
-      </div>
+            </div>
+          ))}
+          {!isRefreshing && agents.length === 0 && <div className="md:col-span-2 lg:col-span-3 rounded-xl border border-dashed border-slate-300 p-10 text-center text-xs font-semibold text-slate-400">No voice agents have been created for this company.</div>}
+        </div>
     </div>
   );
 }

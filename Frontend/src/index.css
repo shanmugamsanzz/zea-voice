@@ -1680,6 +1680,14 @@ html.dark body .zea-agent-editor-header > div:first-child > p {
   color: #e9d99f !important;
 }
 
+html:not(.dark) body .zea-agent-editor-header .zea-agent-editor-subtitle {
+  color: #6b7280 !important;
+}
+
+html.dark body .zea-agent-editor-header .zea-agent-editor-subtitle {
+  color: #9ca3af !important;
+}
+
 body .zea-developer-agent-tabs .zea-developer-agent-tab-active {
   color: #11120f !important;
   background: #dfa822 !important;
@@ -1716,6 +1724,37 @@ html.dark body .zea-developer-agent-tabs .zea-developer-agent-tab-inactive {
 html.dark body .zea-developer-agent-tabs .zea-developer-agent-tab-inactive:hover {
   color: #fff3c4 !important;
   background: rgba(223, 168, 34, 0.16) !important;
+}
+
+.zea-agent-tabs-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.7) rgba(226, 232, 240, 0.6);
+}
+
+.zea-agent-tabs-scroll::-webkit-scrollbar {
+  height: 6px;
+}
+
+.zea-agent-tabs-scroll::-webkit-scrollbar-track {
+  background: rgba(226, 232, 240, 0.6);
+  border-radius: 999px;
+}
+
+.zea-agent-tabs-scroll::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.7);
+  border-radius: 999px;
+}
+
+html.dark body .zea-agent-tabs-scroll {
+  scrollbar-color: rgba(223, 168, 34, 0.7) rgba(255, 255, 255, 0.08);
+}
+
+html.dark body .zea-agent-tabs-scroll::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+html.dark body .zea-agent-tabs-scroll::-webkit-scrollbar-thumb {
+  background: rgba(223, 168, 34, 0.7);
 }
 
 /* Developer agent-editor tab panels use the application gold accent. */
