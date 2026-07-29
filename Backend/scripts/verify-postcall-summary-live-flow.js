@@ -41,6 +41,7 @@ function fixture(summaryEnabled, queueImplementation, fetchImplementation, callI
     adapters: {}, endedAt: new Date(61000),
   }, {
     contextRunner,
+    finalizeCreditBilling: async () => ({ creditsCharged: 1 }),
     queuePostCallSummary: queueImplementation,
     fetchImpl: fetchImplementation,
   });

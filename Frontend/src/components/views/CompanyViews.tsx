@@ -72,7 +72,10 @@ interface CompanyDashboardData {
     changes: { totalCallsPercent: number | null; inboundCallsPercent: number | null; outboundCallsPercent: number | null };
   };
   resources: {
-    credits: { balance: number; reservedBalance: number; availableBalance: number; currency: string } | null;
+    credits: {
+      balance: number; reservedBalance: number; availableBalance: number; unit: 'credit';
+      globalLowCreditThreshold: number; creditStatus: 'available' | 'low' | 'exhausted';
+    } | null;
     assignedPhoneNumbers: number; activeTeamMembers: number;
   };
   callVolume: Array<{ date: string; inbound: number; outbound: number }>;
@@ -179,6 +182,7 @@ function CompanyDashboard({ onEditAgent, onAddAgent }: { onEditAgent: (id: strin
   if (error || !dashboard) return <div className="rounded-xl border border-red-200 bg-red-50 p-6 text-sm font-semibold text-red-700">Unable to load the company dashboard: {error || 'No data was returned'}</div>;
 
   const { metrics } = dashboard;
+  const companyCredits = dashboard.resources.credits;
   const changeLabel = (value: number | null) => value === null ? 'New vs last month' : `${value > 0 ? '+' : ''}${value}% vs last month`;
   const chartData = dashboard.callVolume.map((item) => ({
     name: new Date(item.date).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' }),
@@ -237,7 +241,7 @@ function CompanyDashboard({ onEditAgent, onAddAgent }: { onEditAgent: (id: strin
       </div>
 
       {/* Competitor Dashcards - Row 2 */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-6">
         {/* Card 5: Total Calls */}
         <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs hover:shadow-md transition">
           <div className="flex items-center justify-between">
@@ -279,6 +283,23 @@ function CompanyDashboard({ onEditAgent, onAddAgent }: { onEditAgent: (id: strin
           <div className="mt-4">
             <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight">{metrics.totalMinutesUsed.toLocaleString()}</h3>
             <p className="text-[10px] font-bold text-slate-400 mt-4 uppercase tracking-wider">Average {metrics.averageCallDurationSeconds}s per call</p>
+          </div>
+        </div>
+
+        {/* Company users see whole call credits only; INR pricing remains Super Admin-only. */}
+        <div className={`bg-white border rounded-2xl p-6 shadow-xs hover:shadow-md transition ${companyCredits?.creditStatus === 'exhausted' ? 'border-red-300' : companyCredits?.creditStatus === 'low' ? 'border-amber-300' : 'border-slate-200'}`}>
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Available Credits</span>
+            <div className="w-10 h-10 rounded-full bg-[#EEF2FF] text-[#4F46E5] flex items-center justify-center border border-[#E0E7FF] shadow-sm">
+              <Coins className="w-5 h-5" />
+            </div>
+          </div>
+          <div className="mt-4">
+            <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight">{(companyCredits?.availableBalance ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</h3>
+            <p className="mt-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">{companyCredits
+              ? `${companyCredits.reservedBalance.toLocaleString('en-IN')} reserved | alert at ${companyCredits.globalLowCreditThreshold.toLocaleString('en-IN')}`
+              : 'Credit wallet unavailable'}</p>
+            <p className={`mt-2 text-[10px] font-black uppercase tracking-wider ${companyCredits?.creditStatus === 'exhausted' ? 'text-red-600' : companyCredits?.creditStatus === 'low' ? 'text-amber-600' : 'text-emerald-600'}`}>{companyCredits?.creditStatus ?? 'unavailable'}</p>
           </div>
         </div>
       </div>

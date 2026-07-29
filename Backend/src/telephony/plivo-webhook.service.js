@@ -5,6 +5,7 @@ import { AppError } from '../middleware/errors.js';
 import { voiceCallOwnership } from '../voice/call-ownership.service.js';
 import { decryptCredential } from '../security/credential-crypto.js';
 import { finishAttempt, markAttemptRinging } from '../campaigns/campaign-execution.service.js';
+import { finalizeCallCreditBilling } from '../credits/call-credit.service.js';
 
 function compareValues(left, right) {
   if (left < right) return -1;
@@ -149,7 +150,7 @@ export async function processInboundPlivoHangup(input) {
   if (!providerCallId) throw new AppError(400, 'Plivo callback has no call identifier', 'PLIVO_CALL_ID_MISSING');
 
   const result = await withPlatformAdminContext(null, async (client) => {
-    const selected = await client.query(`SELECT c.id, c.tenant_id, c.ended_at, p.auth_token_encrypted, p.hangup_url,
+    const selected = await client.query(`SELECT c.*, p.auth_token_encrypted, p.hangup_url,
         COALESCE(parent.auth_token_encrypted,p.auth_token_encrypted) AS main_auth_token_encrypted
       FROM call_sessions c JOIN telephony_accounts p ON p.id=c.telephony_account_id
       LEFT JOIN telephony_accounts parent ON parent.id=p.parent_account_id AND parent.deleted_at IS NULL
@@ -170,16 +171,22 @@ export async function processInboundPlivoHangup(input) {
     })) {
       throw new AppError(401, 'Invalid Plivo webhook signature', 'PLIVO_SIGNATURE_INVALID');
     }
-    if (call.ended_at) return { duplicate: true, callId: call.id, tenantId: call.tenant_id };
+    if (call.ended_at) {
+      await finalizeCallCreditBilling(client, {
+        call, durationSeconds: Number(call.duration_seconds ?? 0),
+      });
+      return { duplicate: true, callId: call.id, tenantId: call.tenant_id };
+    }
 
     const finalOutcome = outcome(input.payload);
     const status = ['completed', 'failed', 'busy', 'no_answer', 'canceled'].includes(finalOutcome)
       ? finalOutcome : 'failed';
     const duration = Math.max(0, Number(input.payload.BillDuration ?? input.payload.Duration ?? 0));
-    await client.query(`UPDATE call_sessions SET status=$2::call_status, ended_at=now(), duration_seconds=$3,
-      provider_metadata=provider_metadata||$4::jsonb WHERE id=$1`, [
+    const completed = await client.query(`UPDATE call_sessions SET status=$2::call_status, ended_at=now(), duration_seconds=$3,
+      provider_metadata=provider_metadata||$4::jsonb WHERE id=$1 RETURNING *`, [
       call.id, status, duration, JSON.stringify({ plivoHangup: input.payload }),
     ]);
+    await finalizeCallCreditBilling(client, { call: completed.rows[0], durationSeconds: duration });
     return { duplicate: false, callId: call.id, tenantId: call.tenant_id, status };
   });
   await voiceCallOwnership.releaseValidated({ tenantId: result.tenantId, providerCallId }).catch(() => {});

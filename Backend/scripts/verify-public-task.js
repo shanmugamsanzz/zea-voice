@@ -29,6 +29,7 @@ function dependencies(taskFactory) {
     contextRunner: async (_auth, operation) => operation({
       query: async () => ({ rowCount: 1, rows: [campaign] }),
     }),
+    assertCreditAdmission: async () => ({ allowed: true }),
     createTask: taskFactory,
   };
 }

@@ -13,6 +13,7 @@ import {
   createCompany,
   deleteCompany,
   getCompany,
+  getCompanyPricingHistory,
   listCompanies,
   listCompanyOptions,
   updateCompany,
@@ -50,6 +51,14 @@ companyRouter.post('/', async (request, response) => {
   const input = valid(createCompanySchema, request.body);
   const company = await createCompany(request.auth.userId, input, metadata(request));
   response.status(201).json({ success: true, data: company });
+});
+
+companyRouter.get('/:companyId/pricing-history', async (request, response) => {
+  const { companyId } = valid(companyIdSchema, request.params);
+  response.json({
+    success: true,
+    data: await getCompanyPricingHistory(request.auth.userId, companyId),
+  });
 });
 
 companyRouter.get('/:companyId', async (request, response) => {

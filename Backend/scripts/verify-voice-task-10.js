@@ -84,6 +84,7 @@ const result = await completeVoiceCall({
   },
 }, {
   contextRunner,
+  finalizeCreditBilling: async () => ({ creditsCharged: 1 }),
   fetchImpl,
   queuePostCallSummary: async () => ({ queued: false, reason: 'not_configured', job: null }),
 });

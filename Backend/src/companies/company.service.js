@@ -111,6 +111,13 @@ export async function createCompany(actorUserId, input, metadata = {}) {
           input.postalCode, input.timezone, input.status, actorUserId],
       )).rows[0];
 
+      await client.query(
+        `INSERT INTO company_credit_price_history
+          (tenant_id, price_per_minute, changed_by)
+         VALUES ($1, $2, $3)`,
+        [tenant.id, input.perMinutePrice, actorUserId],
+      );
+
       const workspace = (await client.query(
         `INSERT INTO workspaces
           (tenant_id, organization_id, name, slug, status, is_default, timezone, created_by)
@@ -133,7 +140,7 @@ export async function createCompany(actorUserId, input, metadata = {}) {
           input.limits.maxCampaigns],
       );
       await client.query(
-        `INSERT INTO company_credit_wallets (tenant_id, currency) VALUES ($1, 'INR')`,
+        `INSERT INTO company_credit_wallets (tenant_id, currency, unit) VALUES ($1, 'INR', 'credit')`,
         [tenant.id],
       );
 
@@ -162,6 +169,29 @@ export async function createCompany(actorUserId, input, metadata = {}) {
 
 export function getCompany(actorUserId, tenantId) {
   return withPlatformAdminContext(actorUserId, async (client) => mapCompany(await getCompanyRow(client, tenantId)));
+}
+
+export function getCompanyPricingHistory(actorUserId, tenantId) {
+  return withPlatformAdminContext(actorUserId, async (client) => {
+    await getCompanyRow(client, tenantId);
+    const result = await client.query(
+      `SELECT h.id, h.price_per_minute, h.effective_from, h.effective_to,
+              h.changed_by, concat_ws(' ', u.first_name, u.last_name) AS changed_by_name
+       FROM company_credit_price_history h
+       LEFT JOIN users u ON u.id = h.changed_by
+       WHERE h.tenant_id = $1
+       ORDER BY h.effective_from DESC`,
+      [tenantId],
+    );
+    return result.rows.map((row) => ({
+      id: row.id,
+      perMinutePrice: Number(row.price_per_minute),
+      effectiveFrom: row.effective_from,
+      effectiveTo: row.effective_to,
+      changedBy: row.changed_by,
+      changedByName: row.changed_by_name || null,
+    }));
+  });
 }
 
 export function listCompanies(actorUserId, filters) {
@@ -219,6 +249,20 @@ export function updateCompany(actorUserId, tenantId, input, metadata = {}) {
       const values = organizationEntries.map(([key]) => input[key]);
       const sets = organizationEntries.map(([, column], index) => `${column} = $${index + 2}`);
       await client.query(`UPDATE organizations SET ${sets.join(', ')} WHERE tenant_id = $1`, [tenantId, ...values]);
+    }
+    if (input.perMinutePrice !== undefined && input.perMinutePrice !== before.perMinutePrice) {
+      await client.query(
+        `UPDATE company_credit_price_history
+         SET effective_to = now()
+         WHERE tenant_id = $1 AND effective_to IS NULL`,
+        [tenantId],
+      );
+      await client.query(
+        `INSERT INTO company_credit_price_history
+          (tenant_id, price_per_minute, changed_by)
+         VALUES ($1, $2, $3)`,
+        [tenantId, input.perMinutePrice, actorUserId],
+      );
     }
     if (input.businessName !== undefined || input.timezone !== undefined) {
       await client.query(

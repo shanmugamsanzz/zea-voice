@@ -4,6 +4,7 @@ import { activeCallSessions } from './call-session-store.js';
 import { reportPostCall } from './integrations/postcall.service.js';
 import { queuePostCallSummary } from './postcall-summary/postcall-summary.queue.js';
 import { normalizeTtsLimitUsage } from './tts-limit-usage.js';
+import { finalizeCallCreditBilling } from '../credits/call-credit.service.js';
 
 const terminalStatuses = new Set(['completed', 'failed', 'canceled', 'manual_follow_up_required']);
 const wholeNumber = (value) => Math.max(0, Math.round(Number(value) || 0));
@@ -27,12 +28,17 @@ async function closeAdapters(adapters = {}) {
 async function persistCompletion(input, dependencies) {
   const contextRunner = dependencies.contextRunner ?? withAuthServiceContext;
   return contextRunner(async (client) => {
+    const finalizeCredit = dependencies.finalizeCreditBilling ?? finalizeCallCreditBilling;
     const selected = await client.query('SELECT * FROM call_sessions WHERE id=$1 FOR UPDATE', [input.callId]);
     if (!selected.rowCount) throw new Error(`Call session was not found: ${input.callId}`);
     const call = selected.rows[0];
     const existingRuntime = call.provider_metadata?.voiceRuntime;
     if (call.ended_at && existingRuntime?.finalized) {
-      return { call, idempotent: true, usage: existingRuntime.usage };
+      const billing = await finalizeCredit(client, {
+        call,
+        durationSeconds: Number(call.duration_seconds ?? 0),
+      });
+      return { call, billing, idempotent: true, usage: existingRuntime.usage };
     }
     const endedAt = input.endedAt;
     const startedAt = call.answered_at ?? call.started_at;
@@ -71,7 +77,11 @@ async function persistCompletion(input, dependencies) {
       duration_seconds=$4,provider_metadata=provider_metadata||$5::jsonb WHERE id=$1 RETURNING *`, [
       input.callId, input.status, endedAt, durationSeconds, JSON.stringify({ voiceRuntime }),
     ]);
-    return { call: updated.rows[0], idempotent: false, usage: input.usage };
+    const billing = await finalizeCredit(client, {
+      call: updated.rows[0], durationSeconds,
+    });
+    const finalized = await client.query('SELECT * FROM call_sessions WHERE id=$1', [input.callId]);
+    return { call: finalized.rows[0], billing, idempotent: false, usage: input.usage };
   });
 }
 

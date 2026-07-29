@@ -25,19 +25,21 @@ const inserted = {
   id: 'call-session-1', tenant_id: 'tenant-1', workspace_id: 'workspace-1', provider_call_id: 'plivo-call-1',
   agent_id: 'agent-1', from_number: call.from, to_number: call.to, direction: 'inbound', status: 'connected',
 };
-let queryNumber = 0;
 let insertValues;
-const contextRunner = async (operation) => operation({ query: async (_sql, values) => {
-  queryNumber += 1;
-  if (queryNumber === 1) return { rowCount: 0, rows: [] };
+const contextRunner = async (operation) => operation({ query: async (sql, values) => {
+  if (/pg_advisory_xact_lock/.test(sql)) return { rowCount: 1, rows: [{}] };
+  if (/SELECT \* FROM call_sessions/.test(sql)) return { rowCount: 0, rows: [] };
   insertValues = values;
   return { rowCount: 1, rows: [inserted] };
 } });
 
-const session = await createVoiceCallSession({ call, runtimeProfile }, { contextRunner });
+const session = await createVoiceCallSession({ call, runtimeProfile }, {
+  contextRunner,
+  reserveCredit: async () => ({ reservedCredits: 1, priceSnapshotInr: '7' }),
+});
 assert.equal(session.id, inserted.id);
 assert.equal(session.created, true);
-const metadata = JSON.parse(insertValues.at(-1));
+const metadata = JSON.parse(insertValues.at(-3));
 assert.equal(metadata.sttProviderId, 'stt-provider');
 assert.equal(metadata.ttsModelId, 'tts-model');
 assert.equal(metadata.preCall.status, 'pending');

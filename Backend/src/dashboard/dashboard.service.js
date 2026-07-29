@@ -1,4 +1,5 @@
 import { withTenantContext } from '../infrastructure/database-context.js';
+import { getCompanyCreditStatus } from '../credits/credit-billing-rules.js';
 
 const number = (value) => Number(value ?? 0);
 function change(current, previous) {
@@ -43,8 +44,10 @@ export function getCompanyDashboard(auth, days) {
     const recent = await client.query(`SELECT id, agent_name, campaign_name, direction, status, from_number, to_number,
         started_at, duration_seconds FROM call_sessions WHERE tenant_id = $1
         ORDER BY started_at DESC LIMIT 8`, [tenantId]);
-    const wallet = await client.query(`SELECT balance, reserved_balance, balance - reserved_balance AS available_balance,
-        currency FROM company_credit_wallets WHERE tenant_id = $1`, [tenantId]);
+    const wallet = await client.query(`SELECT w.balance,w.reserved_balance,
+        w.balance-w.reserved_balance AS available_balance,s.low_credit_threshold
+        FROM company_credit_wallets w CROSS JOIN platform_credit_settings s
+        WHERE w.tenant_id=$1 AND s.singleton_key=1`, [tenantId]);
     const phones = await client.query(`SELECT count(*)::int AS count FROM phone_number_assignments
         WHERE tenant_id = $1 AND released_at IS NULL`, [tenantId]);
     const team = await client.query(`SELECT count(*)::int AS count FROM tenant_memberships
@@ -91,7 +94,12 @@ export function getCompanyDashboard(auth, days) {
       },
       resources: {
         credits: credit ? { balance: number(credit.balance), reservedBalance: number(credit.reserved_balance),
-          availableBalance: number(credit.available_balance), currency: credit.currency } : null,
+          availableBalance: number(credit.available_balance), unit: 'credit',
+          globalLowCreditThreshold: number(credit.low_credit_threshold),
+          creditStatus: getCompanyCreditStatus({
+            availableCredits: number(credit.available_balance),
+            lowCreditThreshold: number(credit.low_credit_threshold),
+          }) } : null,
         assignedPhoneNumbers: phones.rows[0].count,
         activeTeamMembers: team.rows[0].count,
       },

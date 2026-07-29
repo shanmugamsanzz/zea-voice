@@ -1,4 +1,5 @@
 import { AppError } from '../middleware/errors.js';
+import { finalizeCallCreditBilling } from '../credits/call-credit.service.js';
 import { withAuthServiceContext, withPlatformAdminContext, withTenantContext } from '../infrastructure/database-context.js';
 import { decryptCredential } from '../security/credential-crypto.js';
 import { hangupPlivoCall } from '../telephony/plivo.client.js';
@@ -150,6 +151,10 @@ export function forceHangup(actorUserId, callId, reason, fetchImpl = fetch) {
     const updated = (await client.query(`UPDATE call_sessions SET status = 'canceled', ended_at = now(),
       duration_seconds = GREATEST(duration_seconds, floor(extract(epoch FROM (now() - started_at)))::int)
       WHERE id = $1 RETURNING *`, [callId])).rows[0];
+    await finalizeCallCreditBilling(client, {
+      call: updated,
+      durationSeconds: Number(updated.duration_seconds ?? 0),
+    });
     await client.query(`INSERT INTO call_control_events
       (call_session_id, tenant_id, action, reason, actor_user_id, provider_response)
       VALUES ($1, $2, 'force_hangup', $3, $4, $5::jsonb)`,

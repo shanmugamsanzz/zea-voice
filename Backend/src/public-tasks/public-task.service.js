@@ -3,6 +3,7 @@ import { createRealtimeTask } from '../campaigns/campaign-task.service.js';
 import { normalizePhone } from '../campaigns/csv.js';
 import { withTenantContext } from '../infrastructure/database-context.js';
 import { AppError } from '../middleware/errors.js';
+import { assertTenantCallCreditAdmission } from '../credits/call-credit.service.js';
 
 function sameNumberArray(left, right) {
   return left.length === right.length && left.every((value, index) => Number(value) === Number(right[index]));
@@ -56,6 +57,11 @@ export async function createPublicTask(auth, idempotencyKey, input, dependencies
     'organization_id does not belong to this API key workspace', 'PUBLIC_TASK_ORGANIZATION_ACCESS_DENIED');
   assertEqual(input.agent, campaign.agent_id,
     'The supplied agent does not match the campaign agent', 'PUBLIC_TASK_AGENT_MISMATCH');
+
+  const assertCredits = dependencies.assertCreditAdmission
+    ?? ((tenantId, direction) => contextRunner(auth,
+      (client) => assertTenantCallCreditAdmission(client, tenantId, direction)));
+  await assertCredits(auth.tenantId, 'outbound');
 
   const from = normalizePhone(input.from);
   if (!from) throw new AppError(400, 'from must be a valid E.164 number', 'PUBLIC_TASK_FROM_INVALID');

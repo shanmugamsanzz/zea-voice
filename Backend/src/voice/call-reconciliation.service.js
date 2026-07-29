@@ -5,6 +5,7 @@ import { decryptCredential } from '../security/credential-crypto.js';
 import { getPlivoCallDetails } from '../telephony/plivo.client.js';
 import { voiceCallOwnership } from './call-ownership.service.js';
 import { queuePostCallSummary } from './postcall-summary/postcall-summary.queue.js';
+import { finalizeCallCreditBilling } from '../credits/call-credit.service.js';
 
 function asDate(value) {
   if (!value) return null;
@@ -55,15 +56,20 @@ async function listCandidates(dependencies = {}) {
 async function persistResolution(candidate, resolution, dependencies = {}) {
   const contextRunner = dependencies.contextRunner ?? withPlatformAdminContext;
   return contextRunner(null, async (client) => {
+    const selected = await client.query(`SELECT * FROM call_sessions
+      WHERE id=$1 AND status='connected' AND ended_at IS NULL FOR UPDATE`, [candidate.id]);
+    if (!selected.rowCount) return null;
     const result = await client.query(`UPDATE call_sessions
       SET status=$2::call_status,ended_at=$3,duration_seconds=$4,
           provider_metadata=provider_metadata||$5::jsonb
       WHERE id=$1 AND status='connected' AND ended_at IS NULL
-      RETURNING id,tenant_id,provider_call_id,status,ended_at,duration_seconds`, [
+      RETURNING *`, [
       candidate.id, resolution.status, resolution.endedAt, resolution.durationSeconds,
       JSON.stringify({ callReconciliation: resolution.metadata }),
     ]);
-    return result.rows[0] ?? null;
+    const call = result.rows[0];
+    await finalizeCallCreditBilling(client, { call, durationSeconds: resolution.durationSeconds });
+    return call;
   });
 }
 

@@ -4,6 +4,7 @@ import { decryptCredential } from '../security/credential-crypto.js';
 import { makePlivoCall } from '../telephony/plivo.client.js';
 import { getQueue } from '../queues/queue.registry.js';
 import { logger } from '../config/logger.js';
+import { finalizeCallCreditBilling, reserveTenantCallCredit } from '../credits/call-credit.service.js';
 
 const terminalOutcomes = new Set(['completed', 'failed', 'busy', 'no_answer', 'rejected', 'unavailable', 'canceled']);
 
@@ -33,7 +34,8 @@ async function claimTask(taskId) {
         a.name AS agent_name, n.e164 AS from_number, n.telephony_account_id,
         p.auth_id, p.auth_token_encrypted, p.base_url, p.answer_url, p.hangup_url,
         p.recording_callback_url, l.max_total_concurrency,
-        w.balance - w.reserved_balance AS available_credits
+        w.id AS wallet_id,w.balance - w.reserved_balance AS available_credits,
+        o.per_minute_price,s.low_credit_threshold
       FROM campaign_tasks t
       JOIN campaigns c ON c.id = t.campaign_id AND c.tenant_id = t.tenant_id
       JOIN voice_agents a ON a.id = t.agent_id
@@ -41,8 +43,10 @@ async function claimTask(taskId) {
       JOIN telephony_accounts p ON p.id = n.telephony_account_id
       JOIN tenant_limits l ON l.tenant_id = t.tenant_id
       JOIN company_credit_wallets w ON w.tenant_id = t.tenant_id
+      JOIN organizations o ON o.tenant_id=t.tenant_id AND o.deleted_at IS NULL
+      CROSS JOIN platform_credit_settings s
       WHERE t.id = $1 AND t.archived_at IS NULL
-      FOR UPDATE OF t`, [taskId]);
+      FOR UPDATE OF t,w`, [taskId]);
     if (!selected.rowCount) return { action: 'ignored', reason: 'not_found' };
     const task = selected.rows[0];
     if (task.status !== 'queued') return { action: 'ignored', reason: `status_${task.status}` };
@@ -55,7 +59,7 @@ async function claimTask(taskId) {
     if (['completed', 'failed', 'archived'].includes(task.campaign_status)) {
       return { action: 'ignored', reason: 'campaign_closed' };
     }
-    if (Number(task.available_credits) <= 0) {
+    if (Number(task.available_credits) <= Number(task.low_credit_threshold)) {
       await client.query("UPDATE campaign_tasks SET queue_reason='waiting_credits' WHERE id=$1", [task.id]);
       return { action: 'deferred', task, reason: 'waiting_credits', enqueue: false };
     }
@@ -80,6 +84,10 @@ async function claimTask(taskId) {
     }
 
     const attemptNumber = task.retry_count + 1;
+    const reservation = await reserveTenantCallCredit(client, {
+      tenantId: task.tenant_id,
+      direction: 'outbound',
+    });
     const attempt = (await client.query(`INSERT INTO campaign_task_attempts
       (tenant_id, task_id, attempt_number, status, scheduled_for, started_at)
       VALUES ($1,$2,$3,'queued',$4,now())
@@ -87,13 +95,14 @@ async function claimTask(taskId) {
       RETURNING *`, [task.tenant_id, task.id, attemptNumber, task.scheduled_for])).rows[0];
     const call = (await client.query(`INSERT INTO call_sessions
       (tenant_id,workspace_id,telephony_account_id,phone_number_id,agent_id,agent_name,
-       campaign_id,campaign_name,from_number,to_number,direction,status,provider_metadata)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'outbound','queued',$11::jsonb) RETURNING id`,
+       campaign_id,campaign_name,from_number,to_number,direction,status,provider_metadata,
+       reserved_credits,credit_price_snapshot_inr)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'outbound','queued',$11::jsonb,$12,$13) RETURNING id`,
     [task.tenant_id, task.workspace_id, task.telephony_account_id, task.phone_number_id,
       task.agent_id, task.agent_name, task.campaign_id, task.campaign_name, task.from_number,
       task.lead_phone, JSON.stringify({
         taskId: task.id, attemptId: attempt.id, leadName: task.lead_name, context: task.context,
-      })])).rows[0];
+      }), reservation.reservedCredits, reservation.priceSnapshotInr])).rows[0];
     await client.query("UPDATE campaign_task_attempts SET call_session_id=$2 WHERE id=$1", [attempt.id, call.id]);
     await client.query("UPDATE campaign_tasks SET status='running',queue_reason='ready',last_error=NULL WHERE id=$1", [task.id]);
     if (attemptNumber === 1) await client.query('UPDATE campaigns SET attempted_tasks=attempted_tasks+1,status=\'running\' WHERE id=$1', [task.campaign_id]);
@@ -183,10 +192,14 @@ export async function finishAttempt(attemptId, outcome, details = {}, dependenci
       provider_metadata=provider_metadata||$4::jsonb WHERE id=$1`,
     [attemptId, outcome, details.error ?? null, JSON.stringify(details.payload ?? {})]);
     const callOutcome = ['rejected', 'unavailable'].includes(outcome) ? 'failed' : outcome;
-    await client.query(`UPDATE call_sessions SET status=$2,ended_at=now(),duration_seconds=$3,
+    const completedCall = await client.query(`UPDATE call_sessions SET status=$2,ended_at=now(),duration_seconds=$3,
       answered_at=CASE WHEN $3>0 THEN COALESCE(answered_at,started_at) ELSE answered_at END,
-      provider_metadata=provider_metadata||$4::jsonb WHERE id=$1`,
+      provider_metadata=provider_metadata||$4::jsonb WHERE id=$1 RETURNING *`,
     [row.call_session_id, callOutcome, duration, JSON.stringify(details.payload ?? {})]);
+    if (completedCall.rowCount) {
+      const finalizeCredit = dependencies.finalizeCreditBilling ?? finalizeCallCreditBilling;
+      await finalizeCredit(client, { call: completedCall.rows[0], durationSeconds: duration });
+    }
     if (row.callback_origin_attempt_id === row.id && row.callback_scheduled_for
       && row.task_status === 'queued') {
       return {
@@ -223,7 +236,10 @@ export async function finishAttempt(attemptId, outcome, details = {}, dependenci
 export async function wakeCreditWaitingTasks(tenantId) {
   const tasks = await withPlatformAdminContext(null, async (client) => {
     const result = await client.query(`UPDATE campaign_tasks t SET queue_reason='ready'
-      FROM campaigns c WHERE t.campaign_id=c.id AND t.tenant_id=$1 AND t.status='queued'
+      FROM campaigns c,company_credit_wallets w,platform_credit_settings s
+      WHERE t.campaign_id=c.id AND w.tenant_id=t.tenant_id AND s.singleton_key=1
+      AND w.balance-w.reserved_balance>s.low_credit_threshold
+      AND t.tenant_id=$1 AND t.status='queued'
       AND t.queue_reason='waiting_credits' AND c.status='running' RETURNING t.*`, [tenantId]);
     return result.rows;
   });
