@@ -186,7 +186,7 @@ export function AmbienceManager({
   return (
     <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-pink-500">
+        <div className="flex items-center gap-2 text-amber-500">
           <Music className="h-5 w-5" />
           <div>
             <div className="text-xs font-black uppercase tracking-wider">Background Sound</div>
@@ -200,7 +200,7 @@ export function AmbienceManager({
             type="button"
             disabled={limits.remaining === 0 || saving}
             onClick={() => setShowCreate((value) => !value)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-pink-200 px-3 py-2 text-[10px] font-bold text-pink-600 hover:bg-pink-50 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 px-3 py-2 text-[10px] font-bold text-amber-600 hover:bg-amber-50 disabled:opacity-50"
           >
             {showCreate ? <X className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
             {showCreate ? 'Cancel' : 'Upload ambience'}
@@ -214,7 +214,7 @@ export function AmbienceManager({
           value={selectedAssetId ?? ''}
           disabled={readOnly || loading}
           onChange={(event) => onSelectionChange(event.target.value || null)}
-          className="w-full appearance-none rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 pr-10 text-xs font-semibold text-slate-800 outline-none focus:border-pink-500 disabled:opacity-60"
+          className="w-full appearance-none rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 pr-10 text-xs font-semibold text-slate-800 outline-none focus:border-amber-500 disabled:opacity-60"
         >
           <option value="">Silent (Default)</option>
           {readyAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}
@@ -226,25 +226,25 @@ export function AmbienceManager({
       </p>
 
       {showCreate && !readOnly && (
-        <div className="mt-4 space-y-3 rounded-xl border border-pink-100 bg-pink-50/40 p-4">
+        <div className="mt-4 space-y-3 rounded-xl border border-amber-100 bg-amber-50/40 p-4">
           <div className="grid gap-3 md:grid-cols-2">
             <input
               value={form.name}
               maxLength={160}
               onChange={(event) => setForm({ ...form, name: event.target.value })}
               placeholder="Ambience name *"
-              className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs outline-none focus:border-pink-400"
+              className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs outline-none focus:border-amber-400"
             />
             <input
               value={form.description}
               maxLength={1000}
               onChange={(event) => setForm({ ...form, description: event.target.value })}
               placeholder="Description (optional)"
-              className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs outline-none focus:border-pink-400"
+              className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs outline-none focus:border-amber-400"
             />
           </div>
-          <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-pink-200 bg-white px-3 py-4 text-xs font-bold text-slate-600 hover:border-pink-400">
-            <Upload className="h-4 w-4 text-pink-500" />
+          <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-amber-200 bg-white px-3 py-4 text-xs font-bold text-slate-600 hover:border-amber-400">
+            <Upload className="h-4 w-4 text-amber-500" />
             {file ? file.name : 'Select WAV or MP3 (5–300 seconds, max 20 MB)'}
             <input
               type="file"
@@ -258,33 +258,33 @@ export function AmbienceManager({
               Listening volume ({form.listeningVolumePercent}%)
               <input type="range" min={0} max={100} value={form.listeningVolumePercent}
                 onChange={(event) => setForm({ ...form, listeningVolumePercent: Number(event.target.value) })}
-                className="mt-2 w-full accent-pink-500" />
+                className="mt-2 w-full accent-amber-500" />
             </label>
             <label className="text-[10px] font-bold uppercase text-slate-500">
               Speaking volume ({form.speakingVolumePercent}%)
               <input type="range" min={0} max={100} value={form.speakingVolumePercent}
                 onChange={(event) => setForm({ ...form, speakingVolumePercent: Number(event.target.value) })}
-                className="mt-2 w-full accent-pink-500" />
+                className="mt-2 w-full accent-amber-500" />
             </label>
           </div>
           <label className="flex items-center gap-2 text-[11px] font-semibold text-slate-600">
             <input type="checkbox" checked={form.continueDuringSilence}
               onChange={(event) => setForm({ ...form, continueDuringSilence: event.target.checked })}
-              className="accent-pink-500" />
+              className="accent-amber-500" />
             Continue ambience while both caller and agent are silent
           </label>
           {uploadProgress !== null && (
             <div>
-              <div className="mb-1 flex justify-between text-[10px] font-bold text-pink-600">
+              <div className="mb-1 flex justify-between text-[10px] font-bold text-amber-600">
                 <span>{uploadProgress === 100 ? 'Upload complete' : 'Uploading audio'}</span><span>{uploadProgress}%</span>
               </div>
-              <div className="h-2 overflow-hidden rounded-full bg-pink-100">
-                <div className="h-full bg-pink-500 transition-all" style={{ width: `${uploadProgress}%` }} />
+              <div className="h-2 overflow-hidden rounded-full bg-amber-100">
+                <div className="h-full bg-amber-500 transition-all" style={{ width: `${uploadProgress}%` }} />
               </div>
             </div>
           )}
           <button type="button" disabled={!form.name.trim() || !file || saving} onClick={() => void createAndUpload()}
-            className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-pink-500 px-4 py-2.5 text-xs font-bold text-white hover:bg-pink-600 disabled:opacity-50">
+            className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-amber-500 px-4 py-2.5 text-xs font-bold text-white hover:bg-amber-600 disabled:opacity-50">
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileAudio className="h-4 w-4" />}
             {saving ? 'Creating and uploading...' : 'Create ambience'}
           </button>
@@ -296,8 +296,8 @@ export function AmbienceManager({
           {assets.map((asset) => {
             const selected = selectedAssetId === asset.id;
             return (
-              <div key={asset.id} className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 ${selected ? 'border-pink-300 bg-pink-50' : 'border-slate-100 bg-slate-50'}`}>
-                <div className={`rounded-lg p-2 ${selected ? 'bg-pink-100 text-pink-600' : 'bg-white text-slate-400'}`}>
+              <div key={asset.id} className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 ${selected ? 'border-amber-300 bg-amber-50' : 'border-slate-100 bg-slate-50'}`}>
+                <div className={`rounded-lg p-2 ${selected ? 'bg-amber-100 text-amber-600' : 'bg-white text-slate-400'}`}>
                   {selected ? <Check className="h-4 w-4" /> : <Music className="h-4 w-4" />}
                 </div>
                 <div className="min-w-0 flex-1">
@@ -308,7 +308,7 @@ export function AmbienceManager({
                 </div>
                 {asset.storageStatus === 'ready' && (
                   <button type="button" title="Preview" onClick={() => void preview(asset)}
-                    className="rounded-lg p-2 text-slate-500 hover:bg-white hover:text-pink-600">
+                    className="rounded-lg p-2 text-slate-500 hover:bg-white hover:text-amber-600">
                     {previewLoadingId === asset.id ? <Loader2 className="h-4 w-4 animate-spin" /> : playingId === asset.id ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                   </button>
                 )}

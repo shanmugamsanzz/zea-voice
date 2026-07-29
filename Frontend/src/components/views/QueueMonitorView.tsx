@@ -173,7 +173,7 @@ export function QueueMonitorView() {
                 </div>
                 <div className="bg-slate-50/50 p-2.5 rounded-lg border border-slate-200">
                   <span className="text-[9px] text-slate-400 block uppercase font-bold">Waiting / Delayed</span>
-                  <span className="text-rose-500 font-bold text-lg">{queue.waitingCalls}</span>
+                  <span className="text-red-500 font-bold text-lg">{queue.waitingCalls}</span>
                 </div>
                 <div className="bg-slate-50/50 p-2.5 rounded-lg border border-slate-200">
                   <span className="text-[9px] text-slate-400 block uppercase font-bold">Average Wait</span>
@@ -201,7 +201,7 @@ export function QueueMonitorView() {
               </button>
               {queue.waitingCalls > 0 && (
                 <button onClick={() => void emergencyFlush(queue)} disabled={actingOn === queue.queueName}
-                  className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 border border-rose-100 text-rose-600 rounded-lg text-xs font-bold disabled:opacity-50 cursor-pointer">
+                  className="px-3 py-1.5 bg-red-50 hover:bg-red-100 border border-red-100 text-red-600 rounded-lg text-xs font-bold disabled:opacity-50 cursor-pointer">
                   Emergency Flush
                 </button>
               )}

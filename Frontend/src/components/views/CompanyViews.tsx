@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useAppState } from '../../store/AppState';
 import { TableActionsMenu } from '../common/TableActionsMenu';
 import { COMPLETED_CALL_LOGS } from '../../lib/mockData';
@@ -466,7 +466,7 @@ function CompanyAnalytics() {
   const sentimentStyle = {
     positive: { label: 'Positive Sentiment', bar: 'bg-emerald-500', text: 'text-emerald-600' },
     neutral: { label: 'Neutral Sentiment', bar: 'bg-slate-400', text: 'text-slate-600' },
-    negative: { label: 'Negative Sentiment', bar: 'bg-rose-500', text: 'text-rose-600' },
+    negative: { label: 'Negative Sentiment', bar: 'bg-red-500', text: 'text-red-600' },
     unknown: { label: 'Unknown Sentiment', bar: 'bg-amber-400', text: 'text-amber-600' },
   };
 
@@ -567,6 +567,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
 
   // Creation forms toggles
   const [showBatchCreator, setShowBatchCreator] = useState(false);
+  const [batchWizardStep, setBatchWizardStep] = useState<0 | 1 | 2>(0);
   const [showRealtimeModal, setShowRealtimeModal] = useState(false);
 
   // Clipboard Copy State
@@ -584,6 +585,8 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
   const [uploadedFile, setUploadedFile] = useState<string | null>(null);
   const [simulatedLeadsCount, setSimulatedLeadsCount] = useState(0);
   const [csvText, setCsvText] = useState('');
+  const [batchCsvError, setBatchCsvError] = useState('');
+  const batchCsvInputRef = useRef<HTMLInputElement>(null);
   
   const [batchCampName, setBatchCampName] = useState('');
   const [selectedAgentId, setSelectedAgentId] = useState('');
@@ -636,6 +639,23 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
   };
 
   useEffect(() => { void loadCampaignData(); }, []);
+  useEffect(() => {
+    if (!showBatchCreator) return;
+    setBatchWizardStep(0);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [showBatchCreator]);
+  useEffect(() => {
+    if (!showRealtimeModal) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [showRealtimeModal]);
 
   const showToast = (msg: string) => {
     setActionMessage(msg);
@@ -662,16 +682,31 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
   const retryIntervalMilliseconds = () => retryInterval * (retryIntervalUnit === 'Days' ? 86_400_000 : retryIntervalUnit === 'Hours' ? 3_600_000 : 60_000);
   const optionalIsoDate = (value: string) => value ? new Date(value).toISOString() : undefined;
 
-  const handleCsvFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
+  const loadBatchCsvFile = async (file: File | undefined) => {
     if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.csv')) {
+      setBatchCsvError('Please upload a valid CSV file.');
+      return;
+    }
     try {
       const contents = await file.text();
+      if (!contents.trim()) {
+        setBatchCsvError('The selected CSV file is empty. Please upload a valid CSV file.');
+        return;
+      }
       const rows = contents.split(/\r?\n/).filter((line) => line.trim()).length;
       setUploadedFile(file.name); setCsvText(contents); setSimulatedLeadsCount(Math.max(0, rows - 1));
+      setBatchCsvError('');
       if (!batchCampName) setBatchCampName(`${file.name.replace(/\.csv$/i, '').replace(/_/g, ' ')} Campaign`);
       showToast(`Loaded ${file.name}. The backend will validate every phone number and duplicate.`);
-    } catch { showToast('The selected CSV file could not be read.'); }
+    } catch {
+      setBatchCsvError('The selected CSV file could not be read. Please choose another CSV file.');
+      showToast('The selected CSV file could not be read.');
+    }
+  };
+
+  const handleCsvFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    await loadBatchCsvFile(event.target.files?.[0]);
   };
 
   const handleDownloadTemplate = () => {
@@ -679,6 +714,26 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
     link.href = URL.createObjectURL(new Blob(['name,phone,remarks\nJohn (USA),16501234567,Example USA number\n'], { type: 'text/csv' }));
     link.download = 'zea-voice-batch-template.csv'; link.click(); URL.revokeObjectURL(link.href);
     showToast('Downloaded sample CSV template: name, phone, remarks.');
+  };
+
+  const advanceBatchWizard = () => {
+    if (batchWizardStep === 0 && !csvText) {
+      setBatchCsvError('Please Upload the Contact List to Continue');
+      showToast('Upload a CSV contact list before continuing.');
+      return;
+    }
+    if (batchWizardStep === 1 && (!batchCampName.trim() || !selectedAgentId || !selectedNumId)) {
+      showToast('Campaign name, active agent, and assigned number are required.');
+      return;
+    }
+    setBatchWizardStep((current) => Math.min(2, current + 1) as 0 | 1 | 2);
+  };
+
+  const cancelBatchCampaignWizard = (event?: React.SyntheticEvent) => {
+    event?.preventDefault();
+    event?.stopPropagation();
+    setBatchWizardStep(0);
+    setShowBatchCreator(false);
   };
 
   const toggleCampaignStatus = async (id: string) => {
@@ -725,8 +780,9 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
     }
   };
 
-  const handleCreateBatchCampaign = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleCreateBatchCampaign = async (event?: React.SyntheticEvent) => {
+    event?.preventDefault();
+    event?.stopPropagation();
     if (!batchCampName.trim() || !selectedAgentId || !selectedNumId || !csvText) return showToast('Campaign name, active agent, assigned number and CSV file are required.');
     setSubmittingCampaign(true);
     try {
@@ -785,31 +841,12 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
     <div className="space-y-6">
       {/* Toast Alert */}
       {actionMessage && (
-        <div className="fixed top-4 right-4 bg-slate-900 text-white text-xs font-semibold px-4 py-3 rounded-xl shadow-2xl border border-slate-700 z-50 animate-in slide-in-from-top-4 duration-200 flex items-center space-x-2">
-          <div className="w-2 h-2 rounded-full bg-pink-500 animate-ping" />
+        <div className="zea-campaign-toast fixed top-4 right-4 bg-slate-900 text-white text-xs font-semibold px-4 py-3 rounded-xl shadow-2xl border border-slate-700 z-50 animate-in slide-in-from-top-4 duration-200 flex items-center space-x-2">
+          <div className="w-2 h-2 rounded-full bg-amber-500 animate-ping" />
           <span>{actionMessage}</span>
         </div>
       )}
       {campaignsError && <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-700">{campaignsError}</div>}
-
-      {/* Main Title Banner matching Attachment 1 */}
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center pb-1 gap-4">
-        <div>
-          <h1 className="text-2xl font-black text-slate-800 tracking-tight">Campaign Hub</h1>
-          <p className="text-xs text-slate-400 font-semibold mt-0.5">Design, pilot, and oversee outbound telephonic operations</p>
-        </div>
-
-        {/* Create Campaign Launcher */}
-        {activeTab === 'batch' && !showBatchCreator && (
-          <button
-            onClick={() => setShowBatchCreator(true)}
-            className="px-5 py-2.5 bg-gradient-to-r from-pink-500 to-rose-600 hover:from-pink-600 hover:to-rose-700 text-white rounded-xl text-xs font-black transition shadow-lg shadow-pink-100/50 flex items-center space-x-1.5 cursor-pointer"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Create Campaign</span>
-          </button>
-        )}
-      </div>
 
       {/* Sub Tabs Pill Selectors matching Attachment 1 */}
       <div className="flex items-center space-x-2">
@@ -820,8 +857,8 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
           }}
           className={`px-5 py-2 rounded-full text-xs font-extrabold tracking-tight transition cursor-pointer ${
             activeTab === 'batch'
-              ? 'bg-[#ec4899] text-white shadow-md shadow-pink-100'
-              : 'bg-slate-100 text-slate-500 hover:text-slate-800'
+              ? 'bg-[#dfa822] text-[#11120f] shadow-md shadow-amber-100'
+              : 'bg-slate-100 text-slate-500 hover:bg-[#dfa822]/10 hover:text-[#8a6200]'
           }`}
         >
           Batch Campaign
@@ -830,8 +867,8 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
           onClick={() => setActiveTab('real-time')}
           className={`px-5 py-2 rounded-full text-xs font-extrabold tracking-tight transition cursor-pointer ${
             activeTab === 'real-time'
-              ? 'bg-[#ec4899] text-white shadow-md shadow-pink-100'
-              : 'bg-slate-100 text-slate-500 hover:text-slate-800'
+              ? 'bg-[#dfa822] text-[#11120f] shadow-md shadow-amber-100'
+              : 'bg-slate-100 text-slate-500 hover:bg-[#dfa822]/10 hover:text-[#8a6200]'
           }`}
         >
           Real-Time Campaign
@@ -844,21 +881,39 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
             /* ==========================================
                BATCH CAMPAIGN CREATION FORM (Attachment 2)
                ========================================== */
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-300">
+            <div className="fixed inset-0 z-[1000] flex items-center justify-center overflow-y-auto bg-black/55 p-4 backdrop-blur-sm sm:p-6" role="dialog" aria-modal="true" aria-labelledby="new-campaign-modal-title">
+            <div className="max-h-[calc(100vh-2rem)] w-full max-w-3xl overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-2xl animate-in fade-in zoom-in-95 duration-200 sm:max-h-[calc(100vh-3rem)]">
               <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-                <h2 className="font-extrabold text-slate-800 text-sm tracking-tight">Campaign Details</h2>
+                <div>
+                  <h2 id="new-campaign-modal-title" className="font-extrabold text-slate-800 text-sm tracking-tight">New Campaign</h2>
+                  <p className="mt-0.5 text-[10px] font-semibold text-slate-400">Step {batchWizardStep + 1} of 3</p>
+                </div>
                 <button
                   type="button"
-                  onClick={() => setShowBatchCreator(false)}
+                  onClick={cancelBatchCampaignWizard}
                   className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition"
                 >
                   <X className="w-4 h-4" />
                 </button>
               </div>
 
-              <form onSubmit={handleCreateBatchCampaign} className="p-6 grid grid-cols-1 lg:grid-cols-3 gap-8">
+              <div className="grid grid-cols-3 border-b border-slate-100 bg-white px-6 py-4">
+                {['Contact List', 'Configuration', 'Dialing & Schedule'].map((label, index) => (
+                  <div key={label} className="flex items-center">
+                    <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-black ${
+                      index <= batchWizardStep ? 'bg-[#dfa822] text-[#11120f]' : 'bg-slate-100 text-slate-400'
+                    }`}>
+                      {index + 1}
+                    </div>
+                    <span className={`ml-2 text-[10px] font-bold ${index <= batchWizardStep ? 'text-slate-800' : 'text-slate-400'}`}>{label}</span>
+                    {index < 2 && <div className={`mx-3 h-px flex-1 ${index < batchWizardStep ? 'bg-[#dfa822]' : 'bg-slate-200'}`} />}
+                  </div>
+                ))}
+              </div>
+
+              <form onSubmit={(event) => event.preventDefault()} className="zea-new-campaign-form p-6">
                 {/* 1. Contacts List Column */}
-                <div className="space-y-4">
+                {batchWizardStep === 0 && <div className="mx-auto max-w-2xl space-y-4">
                   <div className="border-b border-slate-100 pb-2">
                     <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider">1. Contacts List</h3>
                     <p className="text-[10px] text-slate-400 mt-0.5">Select input method and load phone numbers.</p>
@@ -866,7 +921,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
 
                   <div className="space-y-3 font-semibold text-xs">
                     <div>
-                      <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Phone Input Method</label>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Input Method</label>
                       <select
                         value={phoneInputMethod}
                         onChange={(e) => setPhoneInputMethod(e.target.value)}
@@ -877,47 +932,89 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                     </div>
 
                     <div>
-                      <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                      {/* <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
                         Upload CSV File (Name | Phone | Remarks)
-                      </label>
+                      </label> */}
                       
-                      <div className="border-2 border-dashed border-pink-200 hover:border-pink-400 bg-pink-50/20 hover:bg-pink-50/50 rounded-xl p-5 text-center transition flex flex-col items-center justify-center space-y-2 group">
-                        <div className="w-9 h-9 rounded-full bg-pink-50 text-[#ec4899] flex items-center justify-center border border-pink-100 group-hover:scale-105 transition">
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => batchCsvInputRef.current?.click()}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            batchCsvInputRef.current?.click();
+                          }
+                        }}
+                        onDragOver={(event) => {
+                          event.preventDefault();
+                          event.dataTransfer.dropEffect = 'copy';
+                        }}
+                        onDrop={(event) => {
+                          event.preventDefault();
+                          void loadBatchCsvFile(event.dataTransfer.files?.[0]);
+                        }}
+                        className="group flex cursor-pointer flex-col items-center justify-center space-y-2 rounded-xl border-2 border-dashed border-amber-200 bg-amber-50/20 p-5 text-center transition hover:border-amber-400 hover:bg-amber-50/50"
+                      >
+                        <input
+                          key={uploadedFile ?? 'empty'}
+                          ref={batchCsvInputRef}
+                          type="file"
+                          accept=".csv,text/csv"
+                          onChange={(event) => void handleCsvFile(event)}
+                          className="hidden"
+                        />
+                        <div className="w-9 h-9 rounded-full bg-amber-50 text-[#dfa822] flex items-center justify-center border border-amber-100 group-hover:scale-105 transition">
                           <Upload className="w-4 h-4" />
                         </div>
                         
-                        <div>
+                        <div className="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-1">
                           <p className="text-[11px] font-bold text-slate-700">Click to upload or drag and drop</p>
-                          <p className="text-[9px] text-slate-400 mt-0.5">CSV with columns: name, phone, remarks</p>
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              handleDownloadTemplate();
+                            }}
+                            className="text-[10px] font-bold text-[#b78513] underline decoration-[#dfa822]/50 underline-offset-2 hover:text-[#8a6200]"
+                          >
+                            (Sample Template)
+                          </button>
                         </div>
 
                         {uploadedFile && (
                           <div className="px-2.5 py-1 bg-emerald-50 text-emerald-800 border border-emerald-100 text-[10px] font-bold rounded-lg mt-1 flex items-center space-x-1">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                             <span>{uploadedFile} ({simulatedLeadsCount} leads)</span>
+                            <button
+                              type="button"
+                              aria-label={`Remove ${uploadedFile}`}
+                              title="Remove uploaded file"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setUploadedFile(null);
+                                setCsvText('');
+                                setSimulatedLeadsCount(0);
+                                setBatchCsvError('');
+                              }}
+                              className="ml-1 inline-flex h-5 w-5 items-center justify-center rounded-full text-emerald-800 transition hover:bg-red-100 hover:text-red-700"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
                           </div>
                         )}
-
-                        <div className="flex items-center space-x-2 pt-2">
-                          <label className="px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-[10px] font-extrabold text-slate-600 hover:bg-slate-50 shadow-xs cursor-pointer">
-                            Choose File<input type="file" accept=".csv,text/csv" onChange={(event) => void handleCsvFile(event)} className="hidden" />
-                          </label>
-                          <button
-                            type="button"
-                            onClick={(e) => { e.stopPropagation(); handleDownloadTemplate(); }}
-                            className="px-2.5 py-1.5 bg-white border border-pink-200 rounded-lg text-[10px] font-extrabold text-[#ec4899] hover:bg-pink-50 flex items-center space-x-1"
-                          >
-                            <Download className="w-3 h-3" />
-                            <span>Download Template</span>
-                          </button>
-                        </div>
                       </div>
+                      {batchCsvError && (
+                        <p role="alert" className="zea-batch-csv-error mt-2 text-center text-[11px] font-bold">
+                          {batchCsvError}
+                        </p>
+                      )}
                     </div>
                   </div>
-                </div>
+                </div>}
 
                 {/* 2. Configuration Column */}
-                <div className="space-y-4">
+                {batchWizardStep === 1 && <div className="mx-auto max-w-2xl space-y-4">
                   <div className="border-b border-slate-100 pb-2">
                     <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider">2. Configuration</h3>
                     <p className="text-[10px] text-slate-400 mt-0.5">Set campaign identity, agent and dialing route.</p>
@@ -932,7 +1029,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                         value={batchCampName}
                         onChange={(e) => setBatchCampName(e.target.value)}
                         placeholder="Enter campaign name"
-                        className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-pink-500 rounded-lg px-3 py-2 text-slate-800 outline-none transition"
+                        className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-amber-500 rounded-lg px-3 py-2 text-slate-800 outline-none transition"
                       />
                     </div>
 
@@ -978,10 +1075,10 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                       </select>
                     </div>
                   </div>
-                </div>
+                </div>}
 
                 {/* 3. Dialing & Schedule Column */}
-                <div className="space-y-4">
+                {batchWizardStep === 2 && <div className="mx-auto max-w-2xl space-y-4">
                   <div className="border-b border-slate-100 pb-2">
                     <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider">3. Dialing & Schedule</h3>
                     <p className="text-[10px] text-slate-400 mt-0.5">Configure calling retry behavior, time window, and trigger.</p>
@@ -1106,34 +1203,69 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                       </div>
                     </div>
                   </div>
-                </div>
+                </div>}
 
                 {/* Form Action Controls Footer */}
-                <div className="col-span-1 lg:col-span-3 pt-6 border-t border-slate-100 flex justify-end space-x-2">
+                <div className="mt-6 flex justify-between border-t border-slate-100 pt-6">
                   <button
                     type="button"
-                    onClick={() => setShowBatchCreator(false)}
+                    onClick={cancelBatchCampaignWizard}
                     className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition cursor-pointer"
                   >
                     Cancel
                   </button>
-                  <button
-                    type="submit"
-                    disabled={submittingCampaign || campaignsLoading || campaignAgents.length === 0 || campaignPhones.length === 0}
-                    className="px-6 py-2.5 bg-gradient-to-r from-pink-500 to-rose-600 hover:from-pink-600 hover:to-rose-700 text-white rounded-xl text-xs font-black transition shadow-md cursor-pointer"
-                  >
-                    {submittingCampaign ? 'Creating Campaign...' : 'Create & Launch Campaign'}
-                  </button>
+                  <div className="flex items-center space-x-2">
+                    {batchWizardStep > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setBatchWizardStep((current) => Math.max(0, current - 1) as 0 | 1 | 2)}
+                        className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-xs font-bold text-slate-700 transition hover:bg-slate-50"
+                      >
+                        Previous
+                      </button>
+                    )}
+                    {batchWizardStep < 2 ? (
+                      <button
+                        type="button"
+                        onClick={advanceBatchWizard}
+                        className="rounded-xl bg-[#dfa822] px-6 py-2.5 text-xs font-black text-[#11120f] shadow-md transition hover:bg-[#c88e16]"
+                      >
+                        Next
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={(event) => void handleCreateBatchCampaign(event)}
+                        disabled={submittingCampaign || campaignsLoading || campaignAgents.length === 0 || campaignPhones.length === 0}
+                        className="rounded-xl bg-[#dfa822] px-6 py-2.5 text-xs font-black text-[#11120f] shadow-md transition hover:bg-[#c88e16] disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {submittingCampaign ? 'Creating Campaign...' : 'Create & Launch Campaign'}
+                      </button>
+                    )}
+                  </div>
                 </div>
               </form>
+            </div>
             </div>
           ) : (
             /* ==========================================
                BATCH CAMPAIGNS DIRECTORY LISTING
                ========================================== */
-            <>
-              {/* Search Bar / Filters panel matching Attachment 1 */}
-              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex flex-col md:flex-row items-center justify-between gap-4">
+            <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+              {/* Campaign List card header */}
+              <div className="flex items-center justify-between gap-4 border-b border-slate-200 px-4 py-3.5">
+                <h2 className="text-sm font-black text-slate-800">Campaign List</h2>
+                <button
+                  onClick={() => setShowBatchCreator(true)}
+                  className="zea-create-campaign-button flex items-center space-x-1.5 rounded-xl px-4 py-2.5 text-xs font-black transition cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Create Campaign</span>
+                </button>
+              </div>
+
+              {/* Search, filters, and secondary actions */}
+              <div className="flex flex-col items-center justify-between gap-4 border-b border-slate-200 p-4 md:flex-row">
                 <div className="relative w-full md:max-w-md">
                   <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
                   <input
@@ -1141,7 +1273,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     placeholder="Search campaigns by name..."
-                    className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-pink-500 rounded-xl pl-9 pr-4 py-2.5 text-xs font-semibold text-slate-800 outline-none transition"
+                    className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-amber-500 rounded-xl pl-9 pr-4 py-2.5 text-xs font-semibold text-slate-800 outline-none transition"
                   />
                 </div>
 
@@ -1166,7 +1298,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                     <button
                       onClick={() => setViewMode('list')}
                       className={`p-1.5 rounded-lg transition cursor-pointer ${
-                        viewMode === 'list' ? 'bg-white text-pink-600 shadow-xs' : 'text-slate-400 hover:text-slate-700'
+                        viewMode === 'list' ? 'bg-white text-amber-600 shadow-xs' : 'text-slate-400 hover:text-slate-700'
                       }`}
                     >
                       <List className="w-3.5 h-3.5" />
@@ -1174,7 +1306,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                     <button
                       onClick={() => setViewMode('grid')}
                       className={`p-1.5 rounded-lg transition cursor-pointer ${
-                        viewMode === 'grid' ? 'bg-white text-pink-600 shadow-xs' : 'text-slate-400 hover:text-slate-700'
+                        viewMode === 'grid' ? 'bg-white text-amber-600 shadow-xs' : 'text-slate-400 hover:text-slate-700'
                       }`}
                     >
                       <Grid className="w-3.5 h-3.5" />
@@ -1189,17 +1321,18 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                     <Play className="w-3.5 h-3.5 text-slate-500 fill-slate-500" />
                     <span>Resume All</span>
                   </button>
+
                 </div>
               </div>
 
               {campaignsLoading ? (
-                <div className="h-56 animate-pulse rounded-2xl border border-slate-200 bg-white p-6"><div className="h-4 w-48 rounded bg-slate-200" /><div className="mt-8 space-y-4"><div className="h-8 rounded bg-slate-100" /><div className="h-8 rounded bg-slate-100" /><div className="h-8 rounded bg-slate-100" /></div></div>
+                <div className="h-56 animate-pulse p-6"><div className="h-4 w-48 rounded bg-slate-200" /><div className="mt-8 space-y-4"><div className="h-8 rounded bg-slate-100" /><div className="h-8 rounded bg-slate-100" /><div className="h-8 rounded bg-slate-100" /></div></div>
               ) : filteredCampaigns.length === 0 ? (
                 /* ==========================================
                    EMPTY STATE (Attachment 1)
                    ========================================== */
-                <div className="bg-white rounded-2xl border border-slate-200 py-16 px-6 text-center shadow-xs flex flex-col items-center justify-center space-y-4">
-                  <div className="w-12 h-12 rounded-full bg-pink-50 text-pink-500 flex items-center justify-center border border-pink-100">
+                <div className="flex flex-col items-center justify-center space-y-4 px-6 py-16 text-center">
+                  <div className="w-12 h-12 rounded-full bg-amber-50 text-amber-500 flex items-center justify-center border border-amber-100">
                     <span className="text-xl font-bold font-sans">!</span>
                   </div>
                   <div>
@@ -1210,7 +1343,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                   </div>
                   <button
                     onClick={() => setShowBatchCreator(true)}
-                    className="px-5 py-2.5 bg-gradient-to-r from-pink-500 to-rose-600 hover:from-pink-600 hover:to-rose-700 text-white rounded-xl text-xs font-black transition shadow-md shadow-pink-100/50 flex items-center space-x-1.5 cursor-pointer"
+                    className="zea-create-campaign-button px-5 py-2.5 bg-gradient-to-r from-[#e5b745] to-[#dfa822] hover:from-[#dfa822] hover:to-[#c88e16] text-white rounded-xl text-xs font-black transition shadow-md shadow-amber-100/50 flex items-center space-x-1.5 cursor-pointer"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     <span>Create Campaign</span>
@@ -1220,7 +1353,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                 /* ==========================================
                    GRID VIEW
                    ========================================== */
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 font-sans">
+                <div className="grid grid-cols-1 gap-6 p-5 font-sans md:grid-cols-2 lg:grid-cols-3">
                   {filteredCampaigns.map(c => {
                     const progressPct = c.totalLeads > 0 ? Math.round((c.calledLeads / c.totalLeads) * 100) : 0;
                     return (
@@ -1240,16 +1373,21 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                           </div>
 
                           <div className="text-xs space-y-1 pt-2 font-semibold text-slate-600">
-                            <div className="flex justify-between">
-                              <span className="text-slate-400">Agent:</span>
-                              <span>{c.agentName}</span>
+                            <div className="flex min-h-8 items-start justify-between gap-3">
+                              <span className="shrink-0 text-slate-400">Agent:</span>
+                              <span
+                                title={c.agentName}
+                                className="line-clamp-2 min-w-0 max-w-[72%] break-words text-right leading-4"
+                              >
+                                {c.agentName}
+                              </span>
                             </div>
                             <div className="flex justify-between">
                               <span className="text-slate-400">Progress:</span>
                               <span className="font-mono">{c.calledLeads} / {c.totalLeads}</span>
                             </div>
                             <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden mt-1">
-                              <div className="h-full bg-pink-500 rounded-full" style={{ width: `${progressPct}%` }} />
+                              <div className="h-full bg-amber-500 rounded-full" style={{ width: `${progressPct}%` }} />
                             </div>
                           </div>
                         </div>
@@ -1259,11 +1397,11 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                           <div className="flex space-x-1.5">
                             <button
                               onClick={() => toggleCampaignStatus(c.id)}
-                              className="p-1.5 bg-slate-50 hover:bg-pink-50 text-slate-600 hover:text-pink-600 border border-slate-200 rounded-lg transition cursor-pointer"
+                              className="p-1.5 bg-slate-50 hover:bg-amber-50 text-slate-600 hover:text-amber-600 border border-slate-200 rounded-lg transition cursor-pointer"
                             >
                               {c.status === 'running' ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
                             </button>
-                            {!isReadOnly && <button onClick={() => void deleteCampaign(c.id)} className="p-1.5 bg-slate-50 hover:bg-rose-50 text-slate-400 hover:text-rose-600 border border-slate-200 rounded-lg transition cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>}
+                            {!isReadOnly && <button onClick={() => void deleteCampaign(c.id)} className="p-1.5 bg-slate-50 hover:bg-red-50 text-slate-400 hover:text-red-600 border border-slate-200 rounded-lg transition cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>}
                           </div>
                         </div>
                       </div>
@@ -1274,14 +1412,14 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                 /* ==========================================
                    LIST / TABLE VIEW (Default)
                    ========================================== */
-                <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden p-6">
+                <div className="p-6">
                   <div className="overflow-x-auto text-xs">
                     <table className="w-full text-left">
                       <thead>
                         <tr className="border-b border-slate-200 text-slate-400 font-bold uppercase tracking-wider text-[9px] pb-3">
                           <th className="pb-3">Campaign Name</th>
-                          <th className="pb-3">Operator</th>
-                          <th className="pb-3">Caller DID</th>
+                          <th className="pb-3">Agent</th>
+                          <th className="pb-3">Number</th>
                           <th className="pb-3 text-right">Dial Progress</th>
                           <th className="pb-3 text-right">Success Convert</th>
                           <th className="pb-3 pl-4">Status</th>
@@ -1295,7 +1433,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                           return (
                             <tr key={c.id} className="hover:bg-slate-50/50">
                               <td className="py-3.5 font-bold text-slate-800">
-                                <span className="block text-slate-800 hover:text-pink-600 transition">{c.name}</span>
+                                <span className="block text-slate-800 hover:text-amber-600 transition">{c.name}</span>
                                 <span className="text-[9px] text-slate-400 font-mono block mt-0.5 font-medium">Window: {c.scheduleStart}</span>
                               </td>
                               <td className="py-3.5 text-slate-600">{c.agentName}</td>
@@ -1303,7 +1441,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                               <td className="py-3.5 text-right">
                                 <span>{c.calledLeads.toLocaleString()} / {c.totalLeads.toLocaleString()} ({progressPct}%)</span>
                                 <div className="w-24 h-1.5 bg-slate-100 rounded-full overflow-hidden ml-auto mt-1.5">
-                                  <div className="h-full bg-pink-500 rounded-full" style={{ width: `${progressPct}%` }} />
+                                  <div className="h-full bg-amber-500 rounded-full" style={{ width: `${progressPct}%` }} />
                                 </div>
                               </td>
                               <td className="py-3.5 text-right">
@@ -1341,7 +1479,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                   </div>
                 </div>
               )}
-            </>
+            </div>
           )}
         </>
       ) : (
@@ -1364,7 +1502,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
 
               <button
                 onClick={() => setShowRealtimeModal(true)}
-                className="px-5 py-2.5 bg-gradient-to-r from-pink-500 to-rose-600 hover:from-pink-600 hover:to-rose-700 text-white rounded-xl text-xs font-black transition shadow-lg shadow-pink-100/50 flex items-center space-x-1.5 cursor-pointer self-start sm:self-auto"
+                className="zea-create-campaign-button px-5 py-2.5 bg-gradient-to-r from-[#e5b745] to-[#dfa822] hover:from-[#dfa822] hover:to-[#c88e16] text-white rounded-xl text-xs font-black transition shadow-lg shadow-amber-100/50 flex items-center space-x-1.5 cursor-pointer self-start sm:self-auto"
               >
                 <Plus className="w-4 h-4" />
                 <span>Create Realtime</span>
@@ -1456,16 +1594,14 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
         </div>
       )}
 
-      {/* ==========================================
-         CREATE REAL-TIME CAMPAIGN DIALOG MODAL (Attachment 4)
-         ========================================== */}
+      {/* Create Real-Time Campaign right-side drawer */}
       {showRealtimeModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-in fade-in duration-150">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full border border-slate-100 overflow-hidden animate-in zoom-in-95 duration-150 relative">
+        <div className="fixed inset-0 z-[1000] flex justify-end bg-black/35 animate-in fade-in duration-150" role="dialog" aria-modal="true" aria-labelledby="create-realtime-campaign-title">
+          <div className="zea-realtime-campaign-drawer flex h-full max-h-screen w-full max-w-lg flex-col overflow-hidden border-l shadow-2xl animate-in slide-in-from-right duration-300">
             
             {/* Header with 'x' close button */}
-            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
-              <h3 className="font-extrabold text-slate-800 text-sm tracking-tight">Create Real-Time Campaign</h3>
+            <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-6 py-4">
+              <h3 id="create-realtime-campaign-title" className="font-extrabold text-slate-800 text-sm tracking-tight">Create Real-Time Campaign</h3>
               <button
                 onClick={() => setShowRealtimeModal(false)}
                 className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-700 transition cursor-pointer"
@@ -1474,7 +1610,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
               </button>
             </div>
 
-            <form onSubmit={handleCreateRealtimeCampaign} className="p-6 space-y-4 text-xs font-semibold">
+            <form onSubmit={handleCreateRealtimeCampaign} className="min-h-0 flex-1 space-y-4 overflow-y-auto p-6 text-xs font-semibold">
               
               {/* Campaign Name */}
               <div>
@@ -1485,7 +1621,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                   value={rtCampName}
                   onChange={(e) => setRtCampName(e.target.value)}
                   placeholder="e.g. Inbound Lead Responder"
-                  className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-pink-500 rounded-lg px-3 py-2 text-slate-800 outline-none transition font-sans"
+                  className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-amber-500 rounded-lg px-3 py-2 text-slate-800 outline-none transition font-sans"
                 />
               </div>
 
@@ -1575,7 +1711,7 @@ function CampaignsListView({ campaigns, setCampaigns }: CampaignsListProps) {
                 <button
                   type="submit"
                   disabled={submittingCampaign || campaignsLoading || !rtAgentId || !rtNumberId}
-                  className="w-full py-2.5 bg-gradient-to-r from-pink-500 to-rose-600 hover:from-pink-600 hover:to-rose-700 text-white rounded-lg font-black transition shadow-md text-xs cursor-pointer text-center"
+                  className="w-full py-2.5 bg-gradient-to-r from-[#e5b745] to-[#dfa822] hover:from-[#dfa822] hover:to-[#c88e16] text-white rounded-lg font-black transition shadow-md text-xs cursor-pointer text-center"
                 >
                   {submittingCampaign ? 'Creating...' : 'Create'}
                 </button>
@@ -1688,7 +1824,7 @@ function AgentsListView({ agents, setAgents, onEditAgent, onAddAgent }: { agents
               onClick={() => void handleRefresh(true)}
               className="bg-white border border-slate-200 hover:bg-slate-50 rounded-xl px-4 py-2.5 text-xs font-bold text-slate-700 shadow-xs flex items-center space-x-2 transition cursor-pointer select-none"
             >
-              <RefreshCw className={`w-3.5 h-3.5 text-slate-500 ${isRefreshing ? 'animate-spin text-purple-600' : ''}`} />
+              <RefreshCw className={`w-3.5 h-3.5 text-slate-500 ${isRefreshing ? 'animate-spin text-[#dfa822]' : ''}`} />
               <span>Refresh</span>
             </button>
           </div>
@@ -1819,21 +1955,14 @@ function AgentsListView({ agents, setAgents, onEditAgent, onAddAgent }: { agents
   }
 
   return (
-    <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-      {agentError && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-700">{agentError}</div>}
-      <div className="flex justify-between items-center border-b border-slate-200 pb-5 mb-5">
-        <div>
-          <h2 className="text-xl font-bold text-slate-800 tracking-tight">Conversational Operators</h2>
-          <p className="text-xs text-slate-400 font-medium mt-0.5">Control LLM prompts, active voice outputs, and registered tools.</p>
-        </div>
-
+    <div className="space-y-4">
+      <div className="flex justify-end">
         {!isReadOnly ? (
           <button
             onClick={onAddAgent}
             className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition shadow-md shadow-indigo-100/50 flex items-center space-x-1.5 cursor-pointer"
           >
-            <Plus className="w-4 h-4" />
-            <span>Provision Operator</span>
+            <span>+ Create Agent</span>
           </button>
         ) : (
           <span className="bg-slate-100 text-slate-500 text-xs px-3 py-1.5 rounded-lg font-bold flex items-center space-x-1.5 border border-slate-200">
@@ -1843,20 +1972,46 @@ function AgentsListView({ agents, setAgents, onEditAgent, onAddAgent }: { agents
         )}
       </div>
 
+      <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+      {agentError && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-700">{agentError}</div>}
+
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {agents.map((agent) => (
           <div key={agent.id} className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm flex flex-col justify-between hover:shadow-md transition duration-200">
             <div>
-              <div className="flex justify-between items-start">
-                <div>
-                  <h4 className="font-bold text-slate-800 text-sm tracking-tight">{agent.name}</h4>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <h4
+                    title={agent.name}
+                    className="line-clamp-2 min-h-10 break-words text-sm font-bold leading-5 tracking-tight text-slate-800"
+                  >
+                    {agent.name}
+                  </h4>
                   <span className="text-[10px] text-slate-400 mt-1 block">TTS ID: {agent.voiceId}</span>
+                  <span className={`mt-2 inline-block rounded-full border px-2.5 py-0.5 text-[9px] font-bold uppercase tracking-wider ${
+                    agent.status === 'active' ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : 'bg-slate-100 border-slate-200 text-slate-500'
+                  }`}>
+                    {agent.status}
+                  </span>
                 </div>
-                <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider border ${
-                  agent.status === 'active' ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : 'bg-slate-100 border-slate-200 text-slate-500'
-                }`}>
-                  {agent.status}
-                </span>
+                <TableActionsMenu
+                  ariaLabel={`Actions for ${agent.name}`}
+                  actions={[
+                    {
+                      label: 'Edit',
+                      onClick: () => onEditAgent(agent.id),
+                    },
+                    {
+                      label: agent.status === 'active' ? 'Draft' : 'Activate',
+                      onClick: () => void toggleAgentStatus(agent),
+                    },
+                    {
+                      label: 'Delete',
+                      onClick: () => void deleteAgent(agent),
+                      danger: true,
+                    },
+                  ]}
+                />
               </div>
 
               <div className="mt-4 space-y-2">
@@ -1875,14 +2030,10 @@ function AgentsListView({ agents, setAgents, onEditAgent, onAddAgent }: { agents
               </div>
             </div>
 
-            <div className="mt-4 grid grid-cols-[1fr_auto_auto] gap-2">
-              <button onClick={() => onEditAgent(agent.id)} className="py-2.5 bg-slate-50 hover:bg-indigo-50 text-slate-600 hover:text-indigo-600 rounded-lg text-xs font-bold transition border border-slate-200 flex items-center justify-center space-x-1 cursor-pointer"><span>Edit Agent</span><ArrowRight className="w-3.5 h-3.5" /></button>
-              <button onClick={() => void toggleAgentStatus(agent)} title={agent.status === 'active' ? 'Set draft' : 'Activate'} className="rounded-lg border border-amber-100 bg-amber-50 px-3 text-xs font-bold text-amber-700">{agent.status === 'active' ? 'Draft' : 'Activate'}</button>
-              <button onClick={() => void deleteAgent(agent)} title="Archive agent" className="rounded-lg border border-red-100 bg-red-50 px-3 text-red-600"><Trash2 className="h-3.5 w-3.5" /></button>
-            </div>
           </div>
         ))}
         {!isRefreshing && agents.length === 0 && <div className="md:col-span-2 lg:col-span-3 rounded-xl border border-dashed border-slate-300 p-10 text-center text-xs font-semibold text-slate-400">No voice agents have been created for this company.</div>}
+      </div>
       </div>
     </div>
   );
@@ -2356,8 +2507,8 @@ function CustomReportsView({ agents }: { agents: VoiceAgent[] }) {
             <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Calls</p>
             <p className="text-3xl font-black text-slate-800 tracking-tight">{totalCallsCount}</p>
           </div>
-          <div className="w-12 h-12 bg-pink-50 border border-pink-100 rounded-2xl flex items-center justify-center">
-            <PhoneCall className="w-5 h-5 text-pink-500" />
+          <div className="w-12 h-12 bg-amber-50 border border-amber-100 rounded-2xl flex items-center justify-center">
+            <PhoneCall className="w-5 h-5 text-amber-500" />
           </div>
         </div>
 
@@ -2378,8 +2529,8 @@ function CustomReportsView({ agents }: { agents: VoiceAgent[] }) {
             <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Outbound</p>
             <p className="text-3xl font-black text-slate-800 tracking-tight">{outboundCount}</p>
           </div>
-          <div className="w-12 h-12 bg-rose-50 border border-rose-100 rounded-2xl flex items-center justify-center">
-            <PhoneOutgoing className="w-5 h-5 text-rose-500" />
+          <div className="w-12 h-12 bg-red-50 border border-red-100 rounded-2xl flex items-center justify-center">
+            <PhoneOutgoing className="w-5 h-5 text-red-500" />
           </div>
         </div>
       </div>
@@ -2393,7 +2544,7 @@ function CustomReportsView({ agents }: { agents: VoiceAgent[] }) {
           </h3>
           <button
             onClick={handleClearFilters}
-            className="text-xs font-bold text-pink-500 hover:text-pink-600 transition flex items-center space-x-1 cursor-pointer"
+            className="text-xs font-bold text-amber-500 hover:text-amber-600 transition flex items-center space-x-1 cursor-pointer"
           >
             <XCircle className="w-3.5 h-3.5" />
             <span>Clear Filters</span>
@@ -2532,13 +2683,13 @@ function CustomReportsView({ agents }: { agents: VoiceAgent[] }) {
             onClick={() => { setActiveTab('All'); setCurrentPage(1); }}
             className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center space-x-2 transition cursor-pointer border ${
               activeTab === 'All'
-                ? 'bg-pink-500 text-white border-pink-500 shadow-md shadow-pink-100/50'
-                : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                ? 'bg-[#dfa822] text-[#11120f] border-[#dfa822] shadow-md shadow-amber-100/50'
+                : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-[#dfa822]/10 hover:border-[#dfa822]/40 hover:text-[#8a6200]'
             }`}
           >
             <Phone className="w-3.5 h-3.5" />
             <span>All Calls</span>
-            <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-black ${activeTab === 'All' ? 'bg-white/25 text-white' : 'bg-slate-200 text-slate-700'}`}>
+            <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-black ${activeTab === 'All' ? 'bg-black/10 text-[#11120f]' : 'bg-slate-200 text-slate-700'}`}>
               {totalCallsCount}
             </span>
           </button>
@@ -2548,13 +2699,13 @@ function CustomReportsView({ agents }: { agents: VoiceAgent[] }) {
             onClick={() => { setActiveTab('Inbound'); setCurrentPage(1); }}
             className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center space-x-2 transition cursor-pointer border ${
               activeTab === 'Inbound'
-                ? 'bg-pink-500 text-white border-pink-500 shadow-md shadow-pink-100/50'
-                : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                ? 'bg-[#dfa822] text-[#11120f] border-[#dfa822] shadow-md shadow-amber-100/50'
+                : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-[#dfa822]/10 hover:border-[#dfa822]/40 hover:text-[#8a6200]'
             }`}
           >
             <PhoneIncoming className="w-3.5 h-3.5" />
             <span>Inbound</span>
-            <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-black ${activeTab === 'Inbound' ? 'bg-white/25 text-white' : 'bg-slate-200 text-slate-700'}`}>
+            <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-black ${activeTab === 'Inbound' ? 'bg-black/10 text-[#11120f]' : 'bg-slate-200 text-slate-700'}`}>
               {inboundCount}
             </span>
           </button>
@@ -2564,13 +2715,13 @@ function CustomReportsView({ agents }: { agents: VoiceAgent[] }) {
             onClick={() => { setActiveTab('Outbound'); setCurrentPage(1); }}
             className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center space-x-2 transition cursor-pointer border ${
               activeTab === 'Outbound'
-                ? 'bg-pink-500 text-white border-pink-500 shadow-md shadow-pink-100/50'
-                : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                ? 'bg-[#dfa822] text-[#11120f] border-[#dfa822] shadow-md shadow-amber-100/50'
+                : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-[#dfa822]/10 hover:border-[#dfa822]/40 hover:text-[#8a6200]'
             }`}
           >
             <PhoneOutgoing className="w-3.5 h-3.5" />
             <span>Outbound</span>
-            <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-black ${activeTab === 'Outbound' ? 'bg-white/25 text-white' : 'bg-slate-200 text-slate-700'}`}>
+            <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-black ${activeTab === 'Outbound' ? 'bg-black/10 text-[#11120f]' : 'bg-slate-200 text-slate-700'}`}>
               {outboundCount}
             </span>
           </button>
@@ -2585,7 +2736,7 @@ function CustomReportsView({ agents }: { agents: VoiceAgent[] }) {
               value={searchQuery}
               onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
               placeholder="Search number, agent..."
-              className="w-full bg-slate-50 hover:bg-slate-100/40 focus:bg-white border border-slate-200 focus:border-pink-500 rounded-xl pl-10 pr-4 py-2.5 text-xs font-semibold text-slate-800 outline-none transition"
+              className="w-full bg-slate-50 hover:bg-slate-100/40 focus:bg-white border border-slate-200 focus:border-amber-500 rounded-xl pl-10 pr-4 py-2.5 text-xs font-semibold text-slate-800 outline-none transition"
             />
           </div>
           <span className="text-xs font-bold text-slate-400 tracking-tight shrink-0 whitespace-nowrap">
@@ -2617,7 +2768,7 @@ function CustomReportsView({ agents }: { agents: VoiceAgent[] }) {
                     <div className="flex flex-col items-center justify-center space-y-2">
                       <Phone className="w-8 h-8 text-slate-300" />
                       <p className="font-bold">No call records match your active query.</p>
-                      <button onClick={handleClearFilters} className="text-xs text-pink-500 font-bold hover:underline cursor-pointer">Reset Filters</button>
+                      <button onClick={handleClearFilters} className="text-xs text-amber-500 font-bold hover:underline cursor-pointer">Reset Filters</button>
                     </div>
                   </td>
                 </tr>
@@ -2634,7 +2785,7 @@ function CustomReportsView({ agents }: { agents: VoiceAgent[] }) {
                           <span>Inbound</span>
                         </span>
                       ) : (
-                        <span className="bg-pink-50 text-pink-600 border border-pink-100 font-black rounded-lg px-2.5 py-1 text-[10px] inline-flex items-center space-x-1">
+                        <span className="bg-amber-50 text-amber-600 border border-amber-100 font-black rounded-lg px-2.5 py-1 text-[10px] inline-flex items-center space-x-1">
                           <PhoneOutgoing className="w-3 h-3" />
                           <span>Outbound</span>
                         </span>
@@ -2662,7 +2813,7 @@ function CustomReportsView({ agents }: { agents: VoiceAgent[] }) {
                         </span>
                       )}
                       {log.outcome === 'User Hung Up' && (
-                        <span className="bg-rose-50 text-rose-600 border border-rose-200 font-extrabold rounded-md px-2 py-0.5 text-[10px] uppercase">
+                        <span className="bg-red-50 text-red-600 border border-red-200 font-extrabold rounded-md px-2 py-0.5 text-[10px] uppercase">
                           Hung Up
                         </span>
                       )}
@@ -2677,7 +2828,7 @@ function CustomReportsView({ agents }: { agents: VoiceAgent[] }) {
                     <td className="px-6 py-4 text-center">
                       <button
                         onClick={() => { setActiveReviewLog(log); setDrawerMode('details'); }}
-                        className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-pink-500 transition cursor-pointer inline-flex items-center"
+                        className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-amber-500 transition cursor-pointer inline-flex items-center"
                         title="Review verbatim transcript"
                       >
                         <ChevronRight className="w-4 h-4" />
@@ -2818,7 +2969,7 @@ function CustomReportsView({ agents }: { agents: VoiceAgent[] }) {
                               INBOUND
                             </span>
                           ) : (
-                            <span className="bg-pink-50 text-pink-600 border border-pink-100 font-extrabold rounded-md px-2.5 py-1 text-[10px] uppercase inline-block">
+                            <span className="bg-amber-50 text-amber-600 border border-amber-100 font-extrabold rounded-md px-2.5 py-1 text-[10px] uppercase inline-block">
                               OUTBOUND
                             </span>
                           )}
@@ -2917,8 +3068,8 @@ function CustomReportsView({ agents }: { agents: VoiceAgent[] }) {
                     {/* AI Conversation Parameters Card */}
                     <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
                       {/* Title banner */}
-                      <div className="flex items-center space-x-2 text-[#ec4899] font-extrabold text-xs tracking-wider uppercase">
-                        <svg className="w-4 h-4 fill-current animate-pulse text-[#ec4899]" viewBox="0 0 24 24">
+                      <div className="flex items-center space-x-2 text-[#dfa822] font-extrabold text-xs tracking-wider uppercase">
+                        <svg className="w-4 h-4 fill-current animate-pulse text-[#dfa822]" viewBox="0 0 24 24">
                           <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/>
                         </svg>
                         <span>AI Conversation Parameters</span>
@@ -2949,7 +3100,7 @@ function CustomReportsView({ agents }: { agents: VoiceAgent[] }) {
                               <div className="space-y-3">
                                 {activeReviewLog.transcript.map((t, i) => (
                                   <p key={i}>
-                                    <span className={`font-extrabold uppercase text-[10px] tracking-wider block mb-0.5 ${t.speaker === 'agent' ? 'text-[#ec4899]' : 'text-[#4f46e5]'}`}>
+                                    <span className={`font-extrabold uppercase text-[10px] tracking-wider block mb-0.5 ${t.speaker === 'agent' ? 'text-[#dfa822]' : 'text-[#4f46e5]'}`}>
                                       {t.speaker === 'agent' ? 'Zea Voice AI' : 'Customer'}
                                     </span>
                                     {t.text}
@@ -2988,7 +3139,7 @@ function CustomReportsView({ agents }: { agents: VoiceAgent[] }) {
                         <ArrowLeft className="w-4 h-4" />
                         <span>Back to Details</span>
                       </button>
-                      <span className="bg-[#fdf2f8] text-[#db2777] border border-pink-100 font-black rounded-full px-3 py-1 text-[10px] tracking-widest uppercase">
+                      <span className="bg-[#fff8e7] text-[#b78513] border border-amber-100 font-black rounded-full px-3 py-1 text-[10px] tracking-widest uppercase">
                         CALL TRANSCRIPT
                       </span>
                     </div>
@@ -3303,8 +3454,8 @@ function CallLogsListView() {
       {/* 1. Report Builder Card */}
       <div className="bg-white border border-slate-100 rounded-3xl p-6 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div className="flex items-center space-x-4">
-          <div className="p-3 bg-pink-50 rounded-2xl shrink-0">
-            <FileSpreadsheet className="w-6 h-6 text-[#db2777]" />
+          <div className="p-3 bg-amber-50 rounded-2xl shrink-0">
+            <FileSpreadsheet className="w-6 h-6 text-[#b78513]" />
           </div>
           <div>
             <h2 className="text-xl font-extrabold text-slate-800 tracking-tight leading-tight">Report Builder</h2>
@@ -3365,8 +3516,8 @@ function CallLogsListView() {
             <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">SELECTED COLUMNS</span>
             <span className="text-4xl font-black text-slate-800 tracking-tight block">13</span>
           </div>
-          <div className="w-12 h-12 bg-[#fdf2f8] text-[#db2777] rounded-2xl flex items-center justify-center border border-pink-50">
-            <Grid className="w-5 h-5 text-pink-500" />
+          <div className="w-12 h-12 bg-[#fff8e7] text-[#b78513] rounded-2xl flex items-center justify-center border border-amber-50">
+            <Grid className="w-5 h-5 text-amber-500" />
           </div>
         </div>
 
@@ -3428,7 +3579,7 @@ function CallLogsListView() {
                     {log.callType === 'Inbound' ? (
                       <span className="text-blue-500 font-black tracking-tight block">inbound</span>
                     ) : (
-                      <span className="text-pink-500 font-black tracking-tight block">outbound</span>
+                      <span className="text-amber-500 font-black tracking-tight block">outbound</span>
                     )}
                   </td>
                   <td className="px-5 py-4 font-mono font-bold text-slate-600">
@@ -3621,7 +3772,7 @@ function CallLogsListView() {
                               INBOUND
                             </span>
                           ) : (
-                            <span className="bg-pink-50 text-pink-600 border border-pink-100 font-extrabold rounded-md px-2.5 py-1 text-[10px] uppercase inline-block">
+                            <span className="bg-amber-50 text-amber-600 border border-amber-100 font-extrabold rounded-md px-2.5 py-1 text-[10px] uppercase inline-block">
                               OUTBOUND
                             </span>
                           )}
@@ -3720,8 +3871,8 @@ function CallLogsListView() {
                     {/* AI Conversation Parameters Card */}
                     <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
                       {/* Title banner */}
-                      <div className="flex items-center space-x-2 text-[#ec4899] font-extrabold text-xs tracking-wider uppercase">
-                        <svg className="w-4 h-4 fill-current animate-pulse text-[#ec4899]" viewBox="0 0 24 24">
+                      <div className="flex items-center space-x-2 text-[#dfa822] font-extrabold text-xs tracking-wider uppercase">
+                        <svg className="w-4 h-4 fill-current animate-pulse text-[#dfa822]" viewBox="0 0 24 24">
                           <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/>
                         </svg>
                         <span>AI Conversation Parameters</span>
@@ -3746,7 +3897,7 @@ function CallLogsListView() {
                               <div className="space-y-3">
                                 {activeReviewLog.transcript.map((t, i) => (
                                   <p key={i}>
-                                    <span className={`font-extrabold uppercase text-[10px] tracking-wider block mb-0.5 ${t.speaker === 'agent' ? 'text-[#ec4899]' : 'text-[#4f46e5]'}`}>
+                                    <span className={`font-extrabold uppercase text-[10px] tracking-wider block mb-0.5 ${t.speaker === 'agent' ? 'text-[#dfa822]' : 'text-[#4f46e5]'}`}>
                                       {t.speaker === 'agent' ? 'Zea Voice AI' : 'Customer'}
                                     </span>
                                     {t.text}
@@ -3772,7 +3923,7 @@ function CallLogsListView() {
                         <ArrowLeft className="w-4 h-4" />
                         <span>Back to Details</span>
                       </button>
-                      <span className="bg-[#fdf2f8] text-[#db2777] border border-pink-100 font-black rounded-full px-3 py-1 text-[10px] tracking-widest uppercase">
+                      <span className="bg-[#fff8e7] text-[#b78513] border border-amber-100 font-black rounded-full px-3 py-1 text-[10px] tracking-widest uppercase">
                         CALL TRANSCRIPT
                       </span>
                     </div>

@@ -90,7 +90,7 @@ export function TableActionsMenu({
                 }}
                 className={`block w-full rounded-lg px-3 py-2.5 text-left text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-40 ${
                   action.danger
-                    ? 'text-rose-600 hover:bg-rose-50'
+                    ? 'text-red-600 hover:bg-red-50'
                     : 'text-slate-700 hover:bg-[#dfa822]/10 hover:text-[#b78513]'
                 }`}
               >

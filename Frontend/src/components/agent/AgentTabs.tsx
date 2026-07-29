@@ -1099,9 +1099,9 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
 
   return (
     <>
-    <form onSubmit={handleSave} className="flex min-h-full flex-col overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-xs">
+    <form onSubmit={handleSave} className={`flex min-h-full flex-col overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-xs ${role === 'DEVELOPER' ? 'zea-developer-agent-editor' : ''}`}>
       {/* Upper Status strip / Banner */}
-      <div className="zea-agent-editor-header bg-gradient-to-r from-violet-600 via-indigo-600 to-pink-500 p-6 text-white flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+      <div className="zea-agent-editor-header bg-gradient-to-r from-violet-600 via-indigo-600 to-amber-500 p-6 text-white flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
           <span className="text-xs font-bold uppercase tracking-widest text-violet-100">Voice AI Architect</span>
           <h2 className="text-2xl font-bold mt-1 tracking-tight">{agentId ? `Edit Agent: ${agent.name}` : 'Provision New Voice Agent'}</h2>
@@ -1146,7 +1146,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       {error && <div className="m-6 rounded-xl border border-red-200 bg-red-50 p-4 text-xs font-semibold text-red-700">{error}</div>}
 
       {/* Horizontal Scrollable Tabs Strip */}
-      <div className="border-b border-slate-100 bg-slate-50/50 p-4">
+      <div className={`border-b border-slate-100 bg-slate-50/50 p-4 ${role === 'DEVELOPER' ? 'zea-developer-agent-tabs' : ''}`}>
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
           <div className="flex-1 overflow-x-auto scrollbar-none py-1">
             <div className="bg-[#f1f5f9] rounded-full p-1 flex items-center gap-0.5 w-max">
@@ -1159,13 +1159,13 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     type="button"
                     onClick={() => setActiveTab(t.id)}
                     className={`flex items-center space-x-1.5 px-4 py-2 rounded-full text-xs font-bold transition flex-shrink-0 cursor-pointer ${
-                      isActive 
-                        ? 'bg-white text-slate-800 shadow-sm border border-slate-200/50 font-black' 
-                        : 'text-slate-500 hover:text-slate-800'
+                      isActive
+                        ? `${role === 'DEVELOPER' ? 'zea-developer-agent-tab-active' : ''} bg-white text-slate-800 shadow-sm border border-slate-200/50 font-black`
+                        : `${role === 'DEVELOPER' ? 'zea-developer-agent-tab-inactive' : ''} text-slate-500 hover:text-slate-800`
                     }`}
                     id={`agent-tab-${t.id}`}
                   >
-                    <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-[#ec4899]' : 'text-slate-400'}`} />
+                    <Icon className={`w-3.5 h-3.5 ${isActive ? (role === 'DEVELOPER' ? 'zea-developer-agent-tab-icon-active' : 'text-[#dfa822]') : 'text-slate-400'}`} />
                     <span>{t.name}</span>
                   </button>
                 );
@@ -1183,8 +1183,8 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
           <div className="space-y-8 max-w-4xl mx-auto">
             {/* Agent Identity Card */}
             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
-              <div className="bg-pink-50/40 p-5 border-b border-pink-100/50 flex items-center space-x-3">
-                <div className="w-10 h-10 rounded-xl bg-pink-100 text-pink-600 flex items-center justify-center border border-pink-200/50">
+              <div className="bg-amber-50/40 p-5 border-b border-amber-100/50 flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center border border-amber-200/50">
                   <Sliders className="w-5 h-5" />
                 </div>
                 <div>
@@ -1203,7 +1203,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                         type="button"
                         onClick={() => void navigator.clipboard.writeText(agentId)}
                         title="Copy Agent ID"
-                        className="rounded-lg border border-slate-200 bg-white p-2.5 text-slate-500 transition hover:border-pink-200 hover:text-pink-600"
+                        className="rounded-lg border border-slate-200 bg-white p-2.5 text-slate-500 transition hover:border-amber-200 hover:text-amber-600"
                       >
                         <Copy className="h-4 w-4" />
                       </button>
@@ -1221,7 +1221,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     value={agent.name}
                     disabled={isReadOnly}
                     onChange={(e) => setAgent({ ...agent, name: e.target.value })}
-                    className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none"
+                    className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none"
                     placeholder="e.g. Shanmuga_test packages-Inbound"
                   />
                 </div>
@@ -1235,7 +1235,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     value={agent.description || ''}
                     disabled={isReadOnly}
                     onChange={(e) => setAgent({ ...agent, description: e.target.value })}
-                    className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none"
+                    className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none"
                     placeholder="Provide a detailed description of what the agent does..."
                   />
                 </div>
@@ -1243,9 +1243,9 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                 <div>
                   <div className="flex items-center space-x-1.5 mb-1.5">
                     <label className="block text-xs font-bold text-slate-600 uppercase tracking-wide">
-                      Agent Goal <span className="text-pink-500">*</span>
+                      Agent Goal <span className="text-amber-500">*</span>
                     </label>
-                    <div className="w-4 h-4 rounded-full bg-pink-100 text-pink-600 flex items-center justify-center text-[10px] font-extrabold cursor-help" title="The primary objectives or goals this agent is set up to achieve during phone conversations.">
+                    <div className="w-4 h-4 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center text-[10px] font-extrabold cursor-help" title="The primary objectives or goals this agent is set up to achieve during phone conversations.">
                       ?
                     </div>
                   </div>
@@ -1255,11 +1255,11 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     value={agent.goal || ''}
                     disabled={isReadOnly}
                     onChange={(e) => setAgent({ ...agent, goal: e.target.value })}
-                    className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none"
+                    className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none"
                     placeholder="What is the ultimate objective of the agent?"
                   />
                   <p className="text-[11px] text-slate-400 mt-2 font-medium leading-relaxed">
-                    This is used as the <span className="italic font-bold text-slate-500">'North Star'</span> for evaluations. The detailed <span className="font-bold text-slate-500">Golden Script</span> is configured in the <span className="text-pink-500 font-bold underline cursor-pointer hover:text-pink-600" onClick={() => setActiveTab('analytics')}>Analytics Tab</span>.
+                    This is used as the <span className="italic font-bold text-slate-500">'North Star'</span> for evaluations. The detailed <span className="font-bold text-slate-500">Golden Script</span> is configured in the <span className="text-amber-500 font-bold underline cursor-pointer hover:text-amber-600" onClick={() => setActiveTab('analytics')}>Analytics Tab</span>.
                   </p>
                 </div>
               </div>
@@ -1282,7 +1282,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       value={agent.agentUsage || 'both'}
                       disabled={isReadOnly}
                       onChange={(event) => setAgent({ ...agent, agentUsage: event.target.value as 'inbound' | 'outbound' | 'both' })}
-                      className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
+                      className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
                     >
                       <option value="inbound">Inbound</option>
                       <option value="outbound">Outbound</option>
@@ -1303,7 +1303,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       value={agent.language || 'English (US)'}
                       disabled={isReadOnly}
                       onChange={(e) => setAgent({ ...agent, language: e.target.value })}
-                      className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
+                      className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
                     >
                       <option value="English (US)">English (US)</option>
                       <option value="English (UK)">English (UK)</option>
@@ -1322,7 +1322,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">Assigned Phone Number</label>
-                  <select value={phoneNumberId} disabled={isReadOnly} onChange={(event) => setPhoneNumberId(event.target.value)} className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 outline-none">
+                  <select value={phoneNumberId} disabled={isReadOnly} onChange={(event) => setPhoneNumberId(event.target.value)} className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 outline-none">
                     <option value="">No inbound number</option>
                     {phoneNumbers.map((phone) => <option key={phone.id} value={phone.id}>{phone.number}</option>)}
                   </select>
@@ -1338,8 +1338,8 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
           <div className="space-y-8 max-w-4xl mx-auto">
             {/* Speech to Text Card */}
             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
-              <div className="bg-pink-50/40 p-5 border-b border-pink-100/50 flex items-center space-x-3">
-                <div className="w-10 h-10 rounded-xl bg-pink-100 text-pink-600 flex items-center justify-center border border-pink-200/50">
+              <div className="bg-amber-50/40 p-5 border-b border-amber-100/50 flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center border border-amber-200/50">
                   <Mic className="w-5 h-5" />
                 </div>
                 <div>
@@ -1359,7 +1359,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       <select
                         value={agent.sttProvider}
                         disabled
-                        className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
+                        className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
                       >
                         <option value={selectedSttModel?.providerName ?? agent.sttProvider}>{(selectedSttModel?.providerName ?? agent.sttProvider) || 'Select a model below'}</option>
                       </select>
@@ -1375,7 +1375,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       <label className="text-[11px] font-black text-slate-500 uppercase tracking-wider">
                         MODEL / LANGUAGE MODEL <span className="text-red-500 ml-0.5">*</span>
                       </label>
-                      <button type="button" disabled={modelsRefreshing} onClick={() => setModelCatalogRefreshKey((value) => value + 1)} className="flex items-center gap-1 text-[10px] font-bold text-pink-600 hover:text-pink-700 disabled:opacity-50">
+                      <button type="button" disabled={modelsRefreshing} onClick={() => setModelCatalogRefreshKey((value) => value + 1)} className="flex items-center gap-1 text-[10px] font-bold text-amber-600 hover:text-amber-700 disabled:opacity-50">
                         <RefreshCw className={`h-3 w-3 ${modelsRefreshing ? 'animate-spin' : ''}`} /> {modelsRefreshing ? 'Refreshing...' : 'Refresh models'}
                       </button>
                     </div>
@@ -1384,7 +1384,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                         value={sttModelId}
                         disabled={isReadOnly}
                         onChange={(e) => { const model = sttModels.find((item) => item.id === e.target.value); setSttModelId(e.target.value); setAgent({ ...agent, sttProvider: model?.providerName ?? '', sttModel: model?.displayName ?? '' }); }}
-                        className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-20"
+                        className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-20"
                       >
                         <option value="">Unselect STT model</option>
                         {sttModels.map((model) => <option key={model.id} value={model.id}>{model.displayName} — {model.providerName}</option>)}
@@ -1406,7 +1406,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
               <div className="p-6">
                 <div className="flex items-center justify-between">
                   <div className="flex items-start space-x-3">
-                    <div className="w-10 h-10 rounded-xl bg-pink-50 text-[#ec4899] flex items-center justify-center border border-pink-100/50 flex-shrink-0">
+                    <div className="w-10 h-10 rounded-xl bg-amber-50 text-[#dfa822] flex items-center justify-center border border-amber-100/50 flex-shrink-0">
                       <Sparkles className="w-5 h-5" />
                     </div>
                     <div>
@@ -1422,7 +1422,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     disabled={isReadOnly}
                     onClick={() => setAgent({ ...agent, timeBasedInterruptionEnabled: !agent.timeBasedInterruptionEnabled })}
                     className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                      agent.timeBasedInterruptionEnabled ? 'bg-[#ec4899]' : 'bg-slate-200'
+                      agent.timeBasedInterruptionEnabled ? 'bg-[#dfa822]' : 'bg-slate-200'
                     }`}
                   >
                     <span
@@ -1443,7 +1443,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                         value={agent.interruptionSensitivityLabel || 'Medium (ideal for regular conversations)'}
                         disabled={isReadOnly}
                         onChange={(e) => setAgent({ ...agent, interruptionSensitivityLabel: e.target.value })}
-                        className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3.5 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
+                        className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3.5 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
                       >
                         <option value="Low (agent rarely gets interrupted by background noise)">Low (agent rarely gets interrupted by background noise)</option>
                         <option value="Medium (ideal for regular conversations)">Medium (ideal for regular conversations)</option>
@@ -1463,7 +1463,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
               <div className="p-6">
                 <div className="flex items-center justify-between">
                   <div className="flex items-start space-x-3">
-                    <div className="w-10 h-10 rounded-xl bg-pink-50 text-[#ec4899] flex items-center justify-center border border-pink-100/50 flex-shrink-0">
+                    <div className="w-10 h-10 rounded-xl bg-amber-50 text-[#dfa822] flex items-center justify-center border border-amber-100/50 flex-shrink-0">
                       <Sparkles className="w-5 h-5" />
                     </div>
                     <div>
@@ -1479,7 +1479,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     disabled={isReadOnly}
                     onClick={() => setAgent({ ...agent, wordBasedInterruptionEnabled: !agent.wordBasedInterruptionEnabled })}
                     className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                      agent.wordBasedInterruptionEnabled ? 'bg-[#ec4899]' : 'bg-slate-200'
+                      agent.wordBasedInterruptionEnabled ? 'bg-[#dfa822]' : 'bg-slate-200'
                     }`}
                   >
                     <span
@@ -1501,7 +1501,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                           value={agent.wordInterruptionMinWords ?? 2}
                           disabled={isReadOnly}
                           onChange={(event) => setAgent({ ...agent, wordInterruptionMinWords: Number(event.target.value) })}
-                          className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3.5 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
+                          className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3.5 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
                         >
                           {[1, 2, 3, 4, 5].map((count) => (
                             <option key={count} value={count}>{count} {count === 1 ? 'word' : 'words'}</option>
@@ -1531,13 +1531,13 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                             }
                           }}
                           placeholder="Example: stop, wait, one minute"
-                          className="flex-1 bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none disabled:bg-slate-50"
+                          className="flex-1 bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none disabled:bg-slate-50"
                         />
                         <button
                           type="button"
                           disabled={isReadOnly || !newInterruptionTrigger.trim() || (agent.wordInterruptionTriggerWords?.length ?? 0) >= 20}
                           onClick={() => addInterruptionTriggers()}
-                          className="px-4 py-3 rounded-xl bg-pink-50 text-pink-600 border border-pink-100 text-xs font-black disabled:opacity-50"
+                          className="px-4 py-3 rounded-xl bg-amber-50 text-amber-600 border border-amber-100 text-xs font-black disabled:opacity-50"
                         >
                           Add
                         </button>
@@ -1546,7 +1546,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       {(agent.wordInterruptionTriggerWords?.length ?? 0) > 0 && (
                         <div className="flex flex-wrap gap-2 mt-3">
                           {agent.wordInterruptionTriggerWords?.map((trigger) => (
-                            <span key={trigger} className="inline-flex items-center gap-1.5 rounded-full bg-pink-50 border border-pink-100 px-3 py-1.5 text-xs font-bold text-pink-700">
+                            <span key={trigger} className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 border border-amber-100 px-3 py-1.5 text-xs font-bold text-amber-700">
                               {trigger}
                               {!isReadOnly && (
                                 <button
@@ -1556,7 +1556,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                                     ...agent,
                                     wordInterruptionTriggerWords: agent.wordInterruptionTriggerWords?.filter((value) => value !== trigger),
                                   })}
-                                  className="text-pink-400 hover:text-pink-700"
+                                  className="text-amber-400 hover:text-amber-700"
                                 >
                                   <X className="w-3.5 h-3.5" />
                                 </button>
@@ -1576,7 +1576,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                           value={agent.interruptionPolicy ?? 'any'}
                           disabled={isReadOnly}
                           onChange={(event) => setAgent({ ...agent, interruptionPolicy: event.target.value as 'any' | 'all' })}
-                          className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3.5 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
+                          className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3.5 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
                         >
                           <option value="any">Any — time or word condition can interrupt</option>
                           <option value="all">All — both time and word conditions must pass</option>
@@ -1599,9 +1599,9 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
             {/* Model Configuration Card */}
             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
               {/* Header with Save Model button */}
-              <div className="bg-pink-50/40 p-5 border-b border-pink-100/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="bg-amber-50/40 p-5 border-b border-amber-100/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div className="flex items-center space-x-3">
-                  <div className="w-10 h-10 rounded-xl bg-pink-100 text-pink-600 flex items-center justify-center border border-pink-200/50">
+                  <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center border border-amber-200/50">
                     <Brain className="w-5 h-5" />
                   </div>
                   <div>
@@ -1614,7 +1614,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   type="button"
                   disabled={isReadOnly}
                   onClick={() => void saveAgent()}
-                  className="flex items-center space-x-1.5 px-4 py-2 border border-[#ec4899] text-[#ec4899] hover:bg-pink-50 rounded-xl text-xs font-black transition cursor-pointer self-start sm:self-auto shadow-2xs"
+                  className="flex items-center space-x-1.5 px-4 py-2 border border-[#dfa822] text-[#dfa822] hover:bg-amber-50 rounded-xl text-xs font-black transition cursor-pointer self-start sm:self-auto shadow-2xs"
                 >
                   <Save className="w-3.5 h-3.5" />
                   <span>Save Model</span>
@@ -1633,7 +1633,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       <select
                         value={agent.llmProvider || ''}
                         disabled
-                        className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
+                        className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
                       >
                         <option value={selectedLlmModel?.providerName ?? agent.llmProvider}>{(selectedLlmModel?.providerName ?? agent.llmProvider) || 'Select a model below'}</option>
                       </select>
@@ -1647,14 +1647,14 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   <div>
                     <div className="mb-1.5 flex items-center justify-between gap-2">
                       <label className="text-[11px] font-black text-slate-500 uppercase tracking-wider">AI MODEL <span className="text-red-500 ml-0.5">*</span></label>
-                      <button type="button" disabled={modelsRefreshing} onClick={() => setModelCatalogRefreshKey((value) => value + 1)} className="flex items-center gap-1 text-[10px] font-bold text-pink-600 hover:text-pink-700 disabled:opacity-50"><RefreshCw className={`h-3 w-3 ${modelsRefreshing ? 'animate-spin' : ''}`} /> {modelsRefreshing ? 'Refreshing...' : 'Refresh models'}</button>
+                      <button type="button" disabled={modelsRefreshing} onClick={() => setModelCatalogRefreshKey((value) => value + 1)} className="flex items-center gap-1 text-[10px] font-bold text-amber-600 hover:text-amber-700 disabled:opacity-50"><RefreshCw className={`h-3 w-3 ${modelsRefreshing ? 'animate-spin' : ''}`} /> {modelsRefreshing ? 'Refreshing...' : 'Refresh models'}</button>
                     </div>
                     <div className="relative">
                       <select
                         value={llmModelId}
                         disabled={isReadOnly}
                         onChange={(e) => { const model = llmModels.find((item) => item.id === e.target.value); setLlmModelId(e.target.value); setAgent({ ...agent, llmProvider: model?.providerName ?? '', llmModel: model?.displayName ?? '' }); }}
-                        className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-20"
+                        className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-20"
                       >
                         <option value="">Unselect LLM model</option>
                         {llmModels.map((model) => <option key={model.id} value={model.id}>{model.displayName} — {model.providerName}</option>)}
@@ -1668,8 +1668,8 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                 </div>
 
                 {/* Interaction Settings Card */}
-                <div className="lg:col-span-5 bg-white border border-slate-100 rounded-2xl p-5 shadow-2xs hover:border-pink-100 transition relative">
-                  <div className="flex items-center space-x-1.5 text-[#ec4899] mb-4">
+                <div className="lg:col-span-5 bg-white border border-slate-100 rounded-2xl p-5 shadow-2xs hover:border-amber-100 transition relative">
+                  <div className="flex items-center space-x-1.5 text-[#dfa822] mb-4">
                     <Sparkles className="w-4 h-4" />
                     <span className="text-xs font-black uppercase tracking-wider">Interaction Settings</span>
                   </div>
@@ -1683,7 +1683,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                           value={agent.greetingMode || 'agent_initiates'}
                           disabled={isReadOnly}
                           onChange={(e) => setAgent({ ...agent, greetingMode: e.target.value as 'agent_initiates' | 'user_initiates' })}
-                          className="w-full bg-slate-50 border border-slate-200 focus:border-pink-500 rounded-xl px-3 py-2.5 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-8"
+                          className="w-full bg-slate-50 border border-slate-200 focus:border-amber-500 rounded-xl px-3 py-2.5 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-8"
                         >
                           <option value="agent_initiates">Agent Initiates (Standard)</option>
                           <option value="user_initiates">User Initiates</option>
@@ -1753,9 +1753,9 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
               </div>
 
               <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
-                <div className="flex items-center justify-between gap-4 border-b border-pink-100 bg-pink-50/50 p-5">
+                <div className="flex items-center justify-between gap-4 border-b border-amber-100 bg-amber-50/50 p-5">
                   <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-pink-200 bg-pink-100 text-pink-600">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-amber-200 bg-amber-100 text-amber-600">
                       <PhoneCall className="h-5 w-5" />
                     </div>
                     <div>
@@ -1769,7 +1769,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     aria-checked={agent.callbackEnabled !== false}
                     disabled={isReadOnly}
                     onClick={() => setAgent({ ...agent, callbackEnabled: agent.callbackEnabled === false })}
-                    className={`relative h-7 w-12 rounded-full transition ${agent.callbackEnabled !== false ? 'bg-pink-500' : 'bg-slate-300'} disabled:cursor-not-allowed disabled:opacity-50`}
+                    className={`relative h-7 w-12 rounded-full transition ${agent.callbackEnabled !== false ? 'bg-amber-500' : 'bg-slate-300'} disabled:cursor-not-allowed disabled:opacity-50`}
                   >
                     <span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow transition-all ${agent.callbackEnabled !== false ? 'left-6' : 'left-1'}`} />
                   </button>
@@ -1785,19 +1785,19 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-500">Minimum Delay (seconds)</label>
                       <input type="number" min={30} max={86400} value={agent.callbackMinimumDelaySeconds ?? 30} disabled={isReadOnly}
                         onChange={(event) => setAgent({ ...agent, callbackMinimumDelaySeconds: Number(event.target.value) })}
-                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-800 outline-none focus:border-pink-500 focus:bg-white" />
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-800 outline-none focus:border-amber-500 focus:bg-white" />
                     </div>
                     <div>
                       <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-500">Maximum Delay (days)</label>
                       <input type="number" min={1} max={30} value={agent.callbackMaximumDelayDays ?? 30} disabled={isReadOnly}
                         onChange={(event) => setAgent({ ...agent, callbackMaximumDelayDays: Number(event.target.value) })}
-                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-800 outline-none focus:border-pink-500 focus:bg-white" />
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-800 outline-none focus:border-amber-500 focus:bg-white" />
                     </div>
                   </div>
                   <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
                     <input type="checkbox" checked={agent.callbackCloseAfterScheduling !== false} disabled={isReadOnly}
                       onChange={(event) => setAgent({ ...agent, callbackCloseAfterScheduling: event.target.checked })}
-                      className="mt-0.5 h-4 w-4 accent-pink-500" />
+                      className="mt-0.5 h-4 w-4 accent-amber-500" />
                     <span><span className="block text-xs font-extrabold text-slate-700">Confirm and end the current call</span><span className="mt-1 block text-[10px] font-semibold text-slate-400">When disabled, the agent confirms the callback and continues the conversation.</span></span>
                   </label>
                 </div>
@@ -1821,7 +1821,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-500">{label}</label>
                       <textarea rows={4} maxLength={2000} value={agent[field] || ''} disabled={isReadOnly}
                         onChange={(event) => setAgent({ ...agent, [field]: event.target.value })}
-                        className="w-full resize-y rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold leading-relaxed text-slate-800 outline-none transition focus:border-pink-500 focus:bg-white" />
+                        className="w-full resize-y rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold leading-relaxed text-slate-800 outline-none transition focus:border-amber-500 focus:bg-white" />
                       <p className="mt-1.5 text-[10px] font-semibold text-slate-400">{help}</p>
                     </div>
                   ))}
@@ -1832,7 +1832,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
             {/* Welcome Message Section */}
             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs p-6 space-y-4">
               <div className="flex items-center space-x-2">
-                <MessageSquare className="w-4 h-4 text-[#ec4899]" />
+                <MessageSquare className="w-4 h-4 text-[#dfa822]" />
                 <h4 className="text-sm font-extrabold text-slate-800 tracking-tight">Welcome Message</h4>
               </div>
 
@@ -1847,7 +1847,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   value={agent.welcomeMessage || ''}
                   disabled={isReadOnly}
                   onChange={(e) => setAgent({ ...agent, welcomeMessage: e.target.value })}
-                  className="w-full bg-white p-4 text-xs font-semibold text-slate-800 outline-none resize-y transition focus:ring-1 focus:ring-[#ec4899]/30"
+                  className="w-full bg-white p-4 text-xs font-semibold text-slate-800 outline-none resize-y transition focus:ring-1 focus:ring-[#dfa822]/30"
                   placeholder="Welcome sentence when user joins the call..."
                 />
               </div>
@@ -1857,7 +1857,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs p-6 space-y-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-2">
-                  <Clock className="w-4 h-4 text-[#ec4899]" />
+                  <Clock className="w-4 h-4 text-[#dfa822]" />
                   <h4 className="text-sm font-extrabold text-slate-800 tracking-tight">Silent Message</h4>
                 </div>
 
@@ -1870,7 +1870,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     value={agent.inactivityTimeout !== undefined ? agent.inactivityTimeout : 5}
                     disabled={isReadOnly}
                     onChange={(e) => setAgent({ ...agent, inactivityTimeout: parseInt(e.target.value) || 5 })}
-                    className="w-16 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-xs font-bold text-center text-slate-800 outline-none focus:border-pink-500 transition"
+                    className="w-16 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-xs font-bold text-center text-slate-800 outline-none focus:border-amber-500 transition"
                   />
                 </div>
               </div>
@@ -1891,7 +1891,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   value={agent.silentMessage || ''}
                   disabled={isReadOnly}
                   onChange={(e) => setAgent({ ...agent, silentMessage: e.target.value })}
-                  className="w-full bg-white p-4 text-xs font-semibold text-slate-800 outline-none resize-y transition focus:ring-1 focus:ring-[#ec4899]/30"
+                  className="w-full bg-white p-4 text-xs font-semibold text-slate-800 outline-none resize-y transition focus:ring-1 focus:ring-[#dfa822]/30"
                   placeholder="e.g. I can't hear you. Are you still on the call?"
                 />
               </div>
@@ -1900,7 +1900,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
             {/* System Prompt / Instructions Section */}
             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs p-6 space-y-4">
               <div className="flex items-center space-x-2">
-                <Terminal className="w-4 h-4 text-[#ec4899]" />
+                <Terminal className="w-4 h-4 text-[#dfa822]" />
                 <h4 className="text-sm font-extrabold text-slate-800 tracking-tight">System Prompt / Instructions</h4>
               </div>
 
@@ -1932,9 +1932,9 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
           <div className="space-y-8 max-w-4xl mx-auto">
             {/* Voice Configuration Card */}
             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
-              <div className="bg-pink-50/40 p-5 border-b border-pink-100/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="bg-amber-50/40 p-5 border-b border-amber-100/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div className="flex items-center space-x-3">
-                  <div className="w-10 h-10 rounded-xl bg-pink-100 text-pink-600 flex items-center justify-center border border-pink-200/50">
+                  <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center border border-amber-200/50">
                     <Volume2 className="w-5 h-5" />
                   </div>
                   <div>
@@ -1947,7 +1947,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   type="button"
                   disabled={isReadOnly}
                   onClick={() => void saveAgent()}
-                  className="flex items-center space-x-1.5 px-4 py-2 border border-[#ec4899] text-[#ec4899] hover:bg-pink-50 rounded-xl text-xs font-black transition cursor-pointer self-start sm:self-auto shadow-2xs"
+                  className="flex items-center space-x-1.5 px-4 py-2 border border-[#dfa822] text-[#dfa822] hover:bg-amber-50 rounded-xl text-xs font-black transition cursor-pointer self-start sm:self-auto shadow-2xs"
                 >
                   <Save className="w-3.5 h-3.5" />
                   <span>Save Voice</span>
@@ -1965,7 +1965,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       <select
                         value={agent.ttsProvider || ''}
                         disabled
-                        className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
+                        className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
                       >
                         <option value={selectedTtsModel?.providerName ?? agent.ttsProvider}>{(selectedTtsModel?.providerName ?? agent.ttsProvider) || 'Select a model below'}</option>
                       </select>
@@ -1979,14 +1979,14 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   <div>
                     <div className="mb-1.5 flex items-center justify-between gap-2">
                       <label className="text-[11px] font-black text-slate-500 uppercase tracking-wider">MODEL <span className="text-red-500 ml-0.5">*</span></label>
-                      <button type="button" disabled={modelsRefreshing} onClick={() => setModelCatalogRefreshKey((value) => value + 1)} className="flex items-center gap-1 text-[10px] font-bold text-pink-600 hover:text-pink-700 disabled:opacity-50"><RefreshCw className={`h-3 w-3 ${modelsRefreshing ? 'animate-spin' : ''}`} /> {modelsRefreshing ? 'Refreshing...' : 'Refresh models'}</button>
+                      <button type="button" disabled={modelsRefreshing} onClick={() => setModelCatalogRefreshKey((value) => value + 1)} className="flex items-center gap-1 text-[10px] font-bold text-amber-600 hover:text-amber-700 disabled:opacity-50"><RefreshCw className={`h-3 w-3 ${modelsRefreshing ? 'animate-spin' : ''}`} /> {modelsRefreshing ? 'Refreshing...' : 'Refresh models'}</button>
                     </div>
                     <div className="relative">
                       <select
                         value={ttsModelId}
                         disabled={isReadOnly}
                         onChange={(e) => { const model = ttsModels.find((item) => item.id === e.target.value); setTtsModelId(e.target.value); setAgent({ ...agent, ttsProvider: model?.providerName ?? '', ttsModel: model?.displayName ?? '', voiceId: model ? modelVoiceId(model) : '' }); }}
-                        className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-20"
+                        className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-20"
                       >
                         <option value="">Unselect TTS model</option>
                         {ttsModels.map((model) => <option key={model.id} value={model.id}>{model.displayName} — {model.providerName}</option>)}
@@ -2051,9 +2051,9 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
           <div className="space-y-8 max-w-4xl mx-auto">
             {/* PreCall Settings Header Card */}
             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
-              <div className="bg-pink-50/40 p-5 border-b border-pink-100/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="bg-amber-50/40 p-5 border-b border-amber-100/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div className="flex items-center space-x-3">
-                  <div className="w-10 h-10 rounded-xl bg-pink-100 text-pink-600 flex items-center justify-center border border-pink-200/50">
+                  <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center border border-amber-200/50">
                     <PhoneCall className="w-5 h-5" />
                   </div>
                   <div>
@@ -2066,7 +2066,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   type="button"
                   disabled={isReadOnly}
                   onClick={() => void saveAgent()}
-                  className="flex items-center space-x-1.5 px-4 py-2 border border-[#ec4899] text-[#ec4899] hover:bg-pink-50 rounded-xl text-xs font-black transition cursor-pointer self-start sm:self-auto shadow-2xs"
+                  className="flex items-center space-x-1.5 px-4 py-2 border border-[#dfa822] text-[#dfa822] hover:bg-amber-50 rounded-xl text-xs font-black transition cursor-pointer self-start sm:self-auto shadow-2xs"
                 >
                   <Save className="w-3.5 h-3.5" />
                   <span>Save PreCall</span>
@@ -2084,7 +2084,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       value={agent.preCallProvider || 'Select Provider'}
                       disabled={isReadOnly}
                       onChange={(e) => setAgent({ ...agent, preCallProvider: e.target.value })}
-                      className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
+                      className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
                     >
                       <option value="Select Provider">Select Provider</option>
                       <option value="n8n Webhook">n8n Webhook</option>
@@ -2109,7 +2109,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     value={agent.preCallDescription || ''}
                     onChange={(e) => setAgent({ ...agent, preCallDescription: e.target.value })}
                     placeholder="Describe what this Pre-Call integration loads, for example customer details from your CRM."
-                    className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-2xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none"
+                    className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-2xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none"
                   />
                   <p className="mt-1.5 text-[10px] font-semibold text-slate-400">
                     For developer reference only. This description is not sent to the AI or webhook.
@@ -2129,7 +2129,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                         disabled={isReadOnly}
                         onClick={() => setAgent({ ...agent, preCallApiActive: !agent.preCallApiActive })}
                         className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                          agent.preCallApiActive ? 'bg-[#ec4899]' : 'bg-slate-200'
+                          agent.preCallApiActive ? 'bg-[#dfa822]' : 'bg-slate-200'
                         }`}
                       >
                         <span
@@ -2138,7 +2138,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                           }`}
                         />
                       </button>
-                      <span className={`text-xs font-bold ${agent.preCallApiActive ? 'text-[#ec4899]' : 'text-slate-400'}`}>
+                      <span className={`text-xs font-bold ${agent.preCallApiActive ? 'text-[#dfa822]' : 'text-slate-400'}`}>
                         {agent.preCallApiActive ? 'Active' : 'Inactive'}
                       </span>
                     </div>
@@ -2158,7 +2158,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                             disabled={isReadOnly}
                             onChange={(e) => setAgent({ ...agent, preCallApiUrl: e.target.value })}
                             placeholder="https://api.example.com/endpoint"
-                            className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-2.5 text-xs font-semibold text-slate-800 transition outline-none"
+                            className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-2.5 text-xs font-semibold text-slate-800 transition outline-none"
                           />
                         </div>
                         <div>
@@ -2170,7 +2170,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                               value={agent.preCallApiMethod || 'POST'}
                               disabled={isReadOnly}
                               onChange={(e) => setAgent({ ...agent, preCallApiMethod: e.target.value })}
-                              className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-2.5 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
+                              className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-2.5 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
                             >
                               <option value="POST">POST</option>
                               <option value="GET">GET</option>
@@ -2195,7 +2195,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                           disabled={isReadOnly}
                           onChange={(e) => setAgent({ ...agent, preCallApiHeaders: e.target.value })}
                           placeholder='{ "Authorization": "Bearer token" }'
-                          className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-2.5 text-xs font-semibold text-slate-800 transition outline-none"
+                          className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-2.5 text-xs font-semibold text-slate-800 transition outline-none"
                         />
                       </div>
 
@@ -2210,7 +2210,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                           disabled={isReadOnly}
                           onChange={(e) => setAgent({ ...agent, preCallApiRequestBody: e.target.value })}
                           placeholder='{ "customer_number": "${customer_number}", "call_uuid": "${call_uuid}" }'
-                          className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-2.5 text-xs font-semibold text-slate-800 transition outline-none"
+                          className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-2.5 text-xs font-semibold text-slate-800 transition outline-none"
                         />
                         <p className="mt-1.5 text-[10px] font-semibold text-slate-400">
                           Variables: ${'{caller}'}, ${'{callee}'}, ${'{customer_number}'}, ${'{platform_number}'}, ${'{call_uuid}'}, ${'{direction}'}, ${'{agent_id}'}, ${'{company_id}'}, ${'{workspace_id}'}.
@@ -2289,7 +2289,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                               const updated = [...(agent.preCallApiResponseMappings || []), { key: '', path: '' }];
                               setAgent({ ...agent, preCallApiResponseMappings: updated });
                             }}
-                            className="flex items-center space-x-1.5 px-4 py-2 border border-[#ec4899] text-[#ec4899] hover:bg-pink-50 rounded-xl text-xs font-black transition cursor-pointer shadow-2xs"
+                            className="flex items-center space-x-1.5 px-4 py-2 border border-[#dfa822] text-[#dfa822] hover:bg-amber-50 rounded-xl text-xs font-black transition cursor-pointer shadow-2xs"
                           >
                             <Plus className="w-3.5 h-3.5" />
                             <span>Add Response</span>
@@ -2309,9 +2309,9 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
           <div className="space-y-8 max-w-4xl mx-auto">
             {/* Post Call Configuration Card */}
             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs animate-fade-in">
-              <div className="bg-pink-50/40 p-5 border-b border-pink-100/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="bg-amber-50/40 p-5 border-b border-amber-100/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div className="flex items-center space-x-3">
-                  <div className="w-10 h-10 rounded-xl bg-pink-100 text-pink-600 flex items-center justify-center border border-pink-200/50">
+                  <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center border border-amber-200/50">
                     <PhoneOff className="w-5 h-5" />
                   </div>
                   <div>
@@ -2324,7 +2324,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   type="button"
                   disabled={isReadOnly}
                   onClick={() => void saveAgent()}
-                  className="flex items-center space-x-1.5 px-4 py-2 border border-[#ec4899] text-[#ec4899] hover:bg-pink-50 rounded-xl text-xs font-black transition cursor-pointer self-start sm:self-auto shadow-2xs"
+                  className="flex items-center space-x-1.5 px-4 py-2 border border-[#dfa822] text-[#dfa822] hover:bg-amber-50 rounded-xl text-xs font-black transition cursor-pointer self-start sm:self-auto shadow-2xs"
                 >
                   <Save className="w-3.5 h-3.5" />
                   <span>Save Post Call</span>
@@ -2342,7 +2342,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       value={agent.postCallMessageType || 'Dynamic'}
                       disabled={isReadOnly}
                       onChange={(e) => setAgent({ ...agent, postCallMessageType: e.target.value })}
-                      className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
+                      className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
                     >
                       <option value="Dynamic">Dynamic</option>
                       <option value="Static">Static</option>
@@ -2365,7 +2365,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       value={agent.postCallPrompt || ''}
                       onChange={(e) => setAgent({ ...agent, postCallPrompt: e.target.value })}
                       placeholder="Describe when and how the AI should close the call..."
-                      className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-2xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none"
+                      className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-2xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none"
                     />
                   </div>
                   <div className="rounded-xl border border-violet-100 bg-violet-50 px-4 py-3 text-[10px] font-semibold leading-relaxed text-violet-700">
@@ -2383,7 +2383,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     value={agent.postCallStaticMessage || ''}
                     onChange={(e) => setAgent({ ...agent, postCallStaticMessage: e.target.value })}
                     placeholder="Enter the exact message the agent should speak before ending the call..."
-                    className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-2xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none"
+                    className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-2xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none"
                   />
                   <p className="mt-1.5 text-[10px] font-semibold text-slate-400">The agent will speak this exact text without asking the LLM to rewrite it.</p>
                 </div>}
@@ -2398,7 +2398,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     Uninterruptible Reasons
                   </label>
                   
-                  <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-4 shadow-2xs hover:border-pink-200 transition">
+                  <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-4 shadow-2xs hover:border-amber-200 transition">
                     <div className="flex flex-wrap items-center gap-2">
                       {(!agent.postCallUninterruptibleReasons || agent.postCallUninterruptibleReasons.length === 0) ? (
                         <span className="text-xs font-bold text-slate-400 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-100">
@@ -2406,7 +2406,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                         </span>
                       ) : (
                         agent.postCallUninterruptibleReasons.map((reason, idx) => (
-                          <span key={idx} className="text-xs font-bold text-[#ec4899] bg-pink-50 border border-pink-100 px-3 py-1.5 rounded-lg flex items-center gap-1.5 animate-fade-in">
+                          <span key={idx} className="text-xs font-bold text-[#dfa822] bg-amber-50 border border-amber-100 px-3 py-1.5 rounded-lg flex items-center gap-1.5 animate-fade-in">
                             {reason}
                             {!isReadOnly && (
                               <button
@@ -2415,7 +2415,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                                   const updated = (agent.postCallUninterruptibleReasons || []).filter((_, i) => i !== idx);
                                   setAgent({ ...agent, postCallUninterruptibleReasons: updated });
                                 }}
-                                className="text-pink-400 hover:text-pink-600 font-extrabold focus:outline-none"
+                                className="text-amber-400 hover:text-amber-600 font-extrabold focus:outline-none"
                               >
                                 &times;
                               </button>
@@ -2442,7 +2442,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                               }
                             }
                           }}
-                          className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl pl-4 pr-12 py-3 text-xs font-semibold text-slate-800 transition outline-none"
+                          className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl pl-4 pr-12 py-3 text-xs font-semibold text-slate-800 transition outline-none"
                         />
                         <button
                           type="button"
@@ -2453,7 +2453,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                               setNewReason('');
                             }
                           }}
-                          className="absolute right-2 w-8 h-8 rounded-full bg-pink-500 hover:bg-pink-600 text-white flex items-center justify-center transition cursor-pointer shadow-sm"
+                          className="absolute right-2 w-8 h-8 rounded-full bg-amber-500 hover:bg-amber-600 text-white flex items-center justify-center transition cursor-pointer shadow-sm"
                         >
                           <Plus className="w-4 h-4" />
                         </button>
@@ -2596,7 +2596,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
             {/* Endpoint Details Section Card */}
             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs p-6 space-y-6">
               <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-2 text-[#ec4899]">
+                <div className="flex items-center space-x-2 text-[#dfa822]">
                   <Globe className="w-5 h-5" />
                   <span className="text-xs font-black uppercase tracking-wider">Endpoint Details</span>
                 </div>
@@ -2607,7 +2607,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     disabled={isReadOnly}
                     onClick={() => setAgent({ ...agent, postCallEndpointDetailsActive: !agent.postCallEndpointDetailsActive })}
                     className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                      agent.postCallEndpointDetailsActive ? 'bg-[#ec4899]' : 'bg-slate-200'
+                      agent.postCallEndpointDetailsActive ? 'bg-[#dfa822]' : 'bg-slate-200'
                     }`}
                   >
                     <span
@@ -2616,7 +2616,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       }`}
                     />
                   </button>
-                  <span className={`text-xs font-bold ${agent.postCallEndpointDetailsActive ? 'text-[#ec4899]' : 'text-slate-400'}`}>
+                  <span className={`text-xs font-bold ${agent.postCallEndpointDetailsActive ? 'text-[#dfa822]' : 'text-slate-400'}`}>
                     {agent.postCallEndpointDetailsActive ? 'Active' : 'Inactive'}
                   </span>
                 </div>
@@ -2635,7 +2635,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                           value={agent.postCallApiMethod || 'POST'}
                           disabled={isReadOnly}
                           onChange={(e) => setAgent({ ...agent, postCallApiMethod: e.target.value })}
-                          className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-2.5 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
+                          className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-2.5 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
                         >
                           <option value="POST">POST</option>
                           <option value="GET">GET</option>
@@ -2658,7 +2658,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                         disabled={isReadOnly}
                         onChange={(e) => setAgent({ ...agent, postCallApiUrl: e.target.value })}
                         placeholder="https://api.example.com/endpoint"
-                        className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-2.5 text-xs font-semibold text-slate-800 transition outline-none"
+                        className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-2.5 text-xs font-semibold text-slate-800 transition outline-none"
                       />
                     </div>
                   </div>
@@ -2732,7 +2732,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                           const updated = [...(agent.postCallApiHeaders || []), { key: '', value: '' }];
                           setAgent({ ...agent, postCallApiHeaders: updated });
                         }}
-                        className="flex items-center space-x-1.5 px-4 py-2 border border-slate-200 hover:border-[#ec4899] text-slate-700 hover:text-[#ec4899] hover:bg-pink-50 rounded-xl text-xs font-black transition cursor-pointer shadow-2xs"
+                        className="flex items-center space-x-1.5 px-4 py-2 border border-slate-200 hover:border-[#dfa822] text-slate-700 hover:text-[#dfa822] hover:bg-amber-50 rounded-xl text-xs font-black transition cursor-pointer shadow-2xs"
                       >
                         <Plus className="w-3.5 h-3.5" />
                         <span>Add Header</span>
@@ -2864,7 +2864,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   type="button"
                   onClick={() => void addTool()}
                   disabled={isReadOnly || !agentId || toolSaving || !newToolName.trim() || !newToolWebhookUrl.trim()}
-                  className="w-full py-2 bg-gradient-to-r from-violet-600 to-pink-500 hover:from-violet-700 hover:to-pink-600 disabled:cursor-not-allowed disabled:opacity-50 text-white rounded-lg text-xs font-bold transition shadow-sm flex items-center justify-center space-x-1"
+                  className="w-full py-2 bg-gradient-to-r from-violet-600 to-amber-500 hover:from-violet-700 hover:to-amber-600 disabled:cursor-not-allowed disabled:opacity-50 text-white rounded-lg text-xs font-bold transition shadow-sm flex items-center justify-center space-x-1"
                 >
                   <Plus className="w-3.5 h-3.5" />
                   <span>{toolSaving ? 'Registering...' : 'Register Tool'}</span>
@@ -3024,7 +3024,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   const disabled = isReadOnly || uploading || ['deleting', 'deleted'].includes(selectedKnowledgeBase.status);
                   const dragging = draggedKnowledgeCategory === category.type;
                   return <article key={category.type} className={`flex w-full flex-col rounded-xl border bg-white p-4 transition ${dragging ? 'border-violet-500 ring-2 ring-violet-100' : fileError ? 'border-red-200' : file ? 'border-emerald-200' : 'border-slate-200'}`}>
-                    <div className="flex items-start justify-between gap-3"><div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${index % 3 === 0 ? 'bg-violet-100 text-violet-700' : index % 3 === 1 ? 'bg-blue-100 text-blue-700' : 'bg-pink-100 text-pink-700'}`}><FileText className="h-4 w-4" /></div><div className="flex flex-wrap justify-end gap-1"><span className="rounded-md bg-slate-100 px-2 py-1 font-mono text-[9px] font-bold text-slate-500">{category.type}</span>{latestDocument && <span className={`rounded-md px-2 py-1 text-[9px] font-black uppercase ${knowledgeDocumentStatusStyles[latestDocument.status]}`}>{knowledgeStatusLabel(latestDocument.status)}</span>}</div></div>
+                    <div className="flex items-start justify-between gap-3"><div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${index % 3 === 0 ? 'bg-violet-100 text-violet-700' : index % 3 === 1 ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}><FileText className="h-4 w-4" /></div><div className="flex flex-wrap justify-end gap-1"><span className="rounded-md bg-slate-100 px-2 py-1 font-mono text-[9px] font-bold text-slate-500">{category.type}</span>{latestDocument && <span className={`rounded-md px-2 py-1 text-[9px] font-black uppercase ${knowledgeDocumentStatusStyles[latestDocument.status]}`}>{knowledgeStatusLabel(latestDocument.status)}</span>}</div></div>
                     <h5 className="mt-3 text-sm font-bold text-slate-800">{category.title}</h5>
                     <p className="mt-1 text-[11px] font-medium leading-4 text-slate-500">{category.description}</p>
                     <p className="mt-2 text-[10px] leading-4 text-slate-400">{category.examples}</p>
@@ -3043,7 +3043,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                         className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-violet-600 px-3 py-2 text-[11px] font-bold text-white transition hover:bg-violet-700 disabled:cursor-wait disabled:opacity-60">
                         {uploading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}{uploading ? 'Uploading to B2...' : 'Upload PDF'}
                       </button>}
-                      {uploading && <div className="mt-2 rounded-lg border border-violet-100 bg-violet-50 p-3"><div className="mb-1.5 flex items-center justify-between text-[9px] font-bold text-violet-700"><span>Uploading PDF securely</span><span>{uploadProgress}%</span></div><div className="h-1.5 overflow-hidden rounded-full bg-violet-100"><div className="h-full rounded-full bg-gradient-to-r from-violet-600 to-pink-500 transition-all duration-300" style={{ width: `${uploadProgress}%` }} /></div><p className="mt-1.5 text-[9px] font-medium text-violet-600">Keep this page open. Extraction progress will appear below after storage completes.</p></div>}
+                      {uploading && <div className="mt-2 rounded-lg border border-violet-100 bg-violet-50 p-3"><div className="mb-1.5 flex items-center justify-between text-[9px] font-bold text-violet-700"><span>Uploading PDF securely</span><span>{uploadProgress}%</span></div><div className="h-1.5 overflow-hidden rounded-full bg-violet-100"><div className="h-full rounded-full bg-gradient-to-r from-violet-600 to-amber-500 transition-all duration-300" style={{ width: `${uploadProgress}%` }} /></div><p className="mt-1.5 text-[9px] font-medium text-violet-600">Keep this page open. Extraction progress will appear below after storage completes.</p></div>}
                       {latestDocument && <div className="mt-2 border-t border-slate-100 pt-2 text-[9px] font-semibold text-slate-400">{categoryDocuments.length} uploaded document{categoryDocuments.length === 1 ? '' : 's'} · Latest v{latestDocument.currentVersion?.versionNumber ?? 1}</div>}
                     </div>
                   </article>;
@@ -3070,7 +3070,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                 return <article key={document.id} className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="truncate text-xs font-bold text-slate-800" title={document.displayName || 'PDF document'}>{document.displayName || 'PDF document'}</span><span className="rounded bg-white px-1.5 py-0.5 font-mono text-[8px] font-bold text-slate-500">{category?.title ?? document.documentType ?? 'Knowledge'}</span></div><p className="mt-1 text-[9px] font-semibold text-slate-400">{document.originalFilename || 'PDF document'} · {formatFileSize(Number(document.sizeBytes))} · Version {document.currentVersion?.versionNumber ?? 1}</p></div><span className={`w-fit rounded-md px-2 py-1 text-[9px] font-black uppercase ${knowledgeDocumentStatusStyles[documentStatus]}`}>{knowledgeStatusLabel(documentStatus)}</span></div>
 
-                  {(processing || document.processingJob) && <div className="mt-3"><div className="mb-1.5 flex items-center justify-between text-[9px] font-bold text-slate-400"><span>{processing ? 'Processing' : knowledgeStatusLabel(document.processingJob?.status ?? document.status)}</span><span>{progress}%</span></div><div className="h-1.5 overflow-hidden rounded-full bg-slate-200"><div className={`h-full rounded-full transition-all duration-500 ${document.status === 'failed' ? 'bg-red-500' : 'bg-gradient-to-r from-violet-500 to-pink-500'}`} style={{ width: `${progress}%` }} /></div></div>}
+                  {(processing || document.processingJob) && <div className="mt-3"><div className="mb-1.5 flex items-center justify-between text-[9px] font-bold text-slate-400"><span>{processing ? 'Processing' : knowledgeStatusLabel(document.processingJob?.status ?? document.status)}</span><span>{progress}%</span></div><div className="h-1.5 overflow-hidden rounded-full bg-slate-200"><div className={`h-full rounded-full transition-all duration-500 ${document.status === 'failed' ? 'bg-red-500' : 'bg-gradient-to-r from-violet-500 to-amber-500'}`} style={{ width: `${progress}%` }} /></div></div>}
 
                   <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[9px] font-semibold text-slate-400"><span>{document.currentVersion?.pageCount ?? 0} pages</span><span>{document.currentVersion?.chunkCount ?? 0} chunks</span><span>Attempt {document.processingJob?.attemptCount ?? 0}/{document.processingJob?.maxAttempts ?? 0}</span><span>Uploaded {new Date(document.createdAt).toLocaleString()}</span></div>
                   {(document.status === 'failed' || errorMessage) && <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-[10px] font-semibold text-red-700">{errorMessage || 'Document processing failed. Select the PDF again to retry with a new upload.'}</div>}
@@ -3171,7 +3171,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       >
         <div style={{ width: '100%', maxWidth: 440, overflow: 'hidden', borderRadius: 20, border: '1px solid rgba(255,255,255,.8)', backgroundColor: '#ffffff', boxShadow: '0 24px 70px rgba(15,23,42,.35)' }}>
           <div style={{ position: 'relative', padding: '30px 24px 24px', textAlign: 'center', color: '#0f172a' }}>
-            <div style={{ position: 'absolute', inset: '0 0 auto', height: 5, backgroundColor: '#ede9fe' }}><div style={{ width: `${activeKnowledgeUploadProgress}%`, height: '100%', background: 'linear-gradient(90deg,#7c3aed,#d946ef,#ec4899)', transition: 'width 300ms ease-out' }} /></div>
+            <div style={{ position: 'absolute', inset: '0 0 auto', height: 5, backgroundColor: '#ede9fe' }}><div style={{ width: `${activeKnowledgeUploadProgress}%`, height: '100%', background: 'linear-gradient(90deg,#7c3aed,#dfa822,#dfa822)', transition: 'width 300ms ease-out' }} /></div>
             <div style={{ width: 64, height: 64, margin: '0 auto', borderRadius: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6d28d9', backgroundColor: '#ede9fe' }}>
               <Upload className="h-7 w-7 animate-bounce" />
             </div>
@@ -3181,7 +3181,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}><FileText className="h-5 w-5 shrink-0 text-violet-600" /><div style={{ minWidth: 0 }}><span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12, fontWeight: 800, color: '#1e293b' }} title={activeKnowledgeUploadFile?.name}>{activeKnowledgeUploadFile?.name ?? 'PDF document'}</span><span style={{ display: 'block', marginTop: 3, fontSize: 10, fontWeight: 600, color: '#94a3b8' }}>{activeKnowledgeUploadCategory.title}{activeKnowledgeUploadFile ? ` · ${formatFileSize(activeKnowledgeUploadFile.size)}` : ''}</span></div></div>
             </div>
             <div style={{ marginTop: 20, display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 12, fontWeight: 800, color: '#6d28d9' }}><span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><RefreshCw className="h-4 w-4 animate-spin" />Uploading PDF...</span><span>{activeKnowledgeUploadProgress}%</span></div>
-            <div style={{ height: 9, marginTop: 9, overflow: 'hidden', borderRadius: 999, backgroundColor: '#ede9fe' }}><div style={{ width: `${activeKnowledgeUploadProgress}%`, height: '100%', borderRadius: 999, background: 'linear-gradient(90deg,#7c3aed,#ec4899)', transition: 'width 300ms ease-out' }} /></div>
+            <div style={{ height: 9, marginTop: 9, overflow: 'hidden', borderRadius: 999, backgroundColor: '#ede9fe' }}><div style={{ width: `${activeKnowledgeUploadProgress}%`, height: '100%', borderRadius: 999, background: 'linear-gradient(90deg,#7c3aed,#dfa822)', transition: 'width 300ms ease-out' }} /></div>
           </div>
         </div>
       </div>

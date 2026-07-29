@@ -134,7 +134,7 @@
   color: #fcd34d !important;
 }
 
-.dark .bg-rose-50 {
+.dark .bg-red-50 {
   background-color: rgba(244, 63, 94, 0.15) !important;
   color: #fda4af !important;
 }
@@ -501,7 +501,7 @@ body .bg-emerald-50\/50 {
   background: rgba(16, 185, 129, 0.12) !important;
 }
 
-body .bg-rose-50,
+body .bg-red-50,
 body .bg-red-50 {
   background: rgba(244, 63, 94, 0.12) !important;
 }
@@ -1678,6 +1678,136 @@ html.dark body .zea-agent-editor-header {
 html.dark body .zea-agent-editor-header > div:first-child > span,
 html.dark body .zea-agent-editor-header > div:first-child > p {
   color: #e9d99f !important;
+}
+
+body .zea-developer-agent-tabs .zea-developer-agent-tab-active {
+  color: #11120f !important;
+  background: #dfa822 !important;
+  border-color: #e8bd54 !important;
+  box-shadow: 0 4px 12px rgba(153, 104, 7, 0.22) !important;
+}
+
+body .zea-developer-agent-tabs .zea-developer-agent-tab-icon-active {
+  color: #11120f !important;
+}
+
+body .zea-developer-agent-tabs .zea-developer-agent-tab-inactive:hover {
+  color: #8a6200 !important;
+  background: rgba(223, 168, 34, 0.12) !important;
+}
+
+body .zea-developer-agent-tabs .zea-developer-agent-tab-inactive:hover svg {
+  color: #dfa822 !important;
+}
+
+html.dark body .zea-developer-agent-tabs {
+  background: rgba(10, 11, 8, 0.96) !important;
+  border-color: rgba(223, 168, 34, 0.26) !important;
+}
+
+html.dark body .zea-developer-agent-tabs > div > div > div {
+  background: #171914 !important;
+}
+
+html.dark body .zea-developer-agent-tabs .zea-developer-agent-tab-inactive {
+  color: #e9d99f !important;
+}
+
+html.dark body .zea-developer-agent-tabs .zea-developer-agent-tab-inactive:hover {
+  color: #fff3c4 !important;
+  background: rgba(223, 168, 34, 0.16) !important;
+}
+
+/* Developer agent-editor tab panels use the application gold accent. */
+body .zea-developer-agent-editor [class*="text-[#dfa822]"] {
+  color: #b78513 !important;
+}
+
+body .zea-developer-agent-editor [class*="bg-[#dfa822]"] {
+  background-color: rgba(223, 168, 34, 0.12) !important;
+}
+
+body .zea-developer-agent-editor [class*="border-[#dfa822]"] {
+  border-color: rgba(223, 168, 34, 0.48) !important;
+}
+
+body .zea-developer-agent-editor [class*="hover:text-[#dfa822]"]:hover {
+  color: #8a6200 !important;
+}
+
+body .zea-developer-agent-editor [class*="hover:border-[#dfa822]"]:hover,
+body .zea-developer-agent-editor [class*="focus:border-[#dfa822]"]:focus {
+  border-color: #dfa822 !important;
+}
+
+html.dark body .zea-developer-agent-editor [class*="text-[#dfa822]"] {
+  color: #f2cf73 !important;
+}
+
+html.dark body .zea-developer-agent-editor [class*="bg-[#dfa822]"] {
+  background-color: rgba(223, 168, 34, 0.16) !important;
+}
+
+html:not(.dark) body .zea-create-campaign-button {
+  color: #11120f !important;
+  background: #dfa822 !important;
+  border: 1px solid #e5b745 !important;
+  box-shadow: 0 8px 20px rgba(184, 128, 15, 0.22) !important;
+}
+
+html:not(.dark) body .zea-create-campaign-button:hover {
+  color: #11120f !important;
+  background: #c88e16 !important;
+}
+
+html.dark body .zea-create-campaign-button {
+  color: #11120f !important;
+  background: #dfa822 !important;
+  border: 1px solid #e5b745 !important;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.24) !important;
+}
+
+html.dark body .zea-create-campaign-button:hover {
+  color: #11120f !important;
+  background: #c88e16 !important;
+  border-color: #dfa822 !important;
+}
+
+html:not(.dark) body .zea-campaign-toast,
+html:not(.dark) body .zea-campaign-toast span {
+  color: #ffffff !important;
+}
+
+html:not(.dark) body .zea-new-campaign-form label {
+  color: #737373 !important;
+}
+
+html.dark body .zea-new-campaign-form label {
+  color: #a3a3a3 !important;
+}
+
+html:not(.dark) body .zea-batch-csv-error {
+  color: #b91c1c !important;
+}
+
+html.dark body .zea-batch-csv-error {
+  color: #fca5a5 !important;
+}
+
+html:not(.dark) body .zea-realtime-campaign-drawer {
+  background: linear-gradient(145deg, #f7e8bb, #f2d88d) !important;
+  border-color: rgba(166, 111, 12, 0.38) !important;
+  box-shadow: -18px 0 48px rgba(49, 35, 5, 0.2) !important;
+}
+
+html.dark body .zea-realtime-campaign-drawer {
+  background: linear-gradient(145deg, #151712, #090a08) !important;
+  border-color: rgba(223, 168, 34, 0.38) !important;
+  box-shadow: -18px 0 48px rgba(0, 0, 0, 0.46) !important;
+}
+
+body .zea-realtime-campaign-drawer form {
+  background: transparent !important;
 }
 
 html.dark body .zea-settings-footer {
