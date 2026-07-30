@@ -4,6 +4,7 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useAppState } from '../../store/AppState';
 import { VoiceAgent } from '../../types';
 import { apiRequest, isAbortError, uploadApiFormData } from '../../lib/api';
@@ -250,6 +251,82 @@ const knowledgeDocumentStatusStyles: Record<KnowledgeDocumentStatus, string> = {
 function knowledgeStatusLabel(status: unknown) {
   if (typeof status !== 'string' || !status.trim()) return 'Queued';
   return status.replace(/_/g, ' ').replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function FieldInfoTooltip({ id, text, triggerContent }: { id: string; text: string; triggerContent?: React.ReactNode }) {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [isOpen, setIsOpen] = useState(false);
+  const [position, setPosition] = useState<{ top: number; left: number; placement: 'top' | 'bottom' } | null>(null);
+
+  const updatePosition = () => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+
+    const rect = trigger.getBoundingClientRect();
+    const tooltipHalfWidth = 144;
+    const viewportPadding = 12;
+    const left = Math.min(
+      window.innerWidth - tooltipHalfWidth - viewportPadding,
+      Math.max(tooltipHalfWidth + viewportPadding, rect.left + rect.width / 2),
+    );
+    const placement = rect.bottom + 110 > window.innerHeight ? 'top' : 'bottom';
+
+    setPosition({
+      left,
+      top: placement === 'top' ? rect.top - 8 : rect.bottom + 8,
+      placement,
+    });
+  };
+
+  const showTooltip = () => {
+    updatePosition();
+    setIsOpen(true);
+  };
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+    return () => {
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+    };
+  }, [isOpen]);
+
+  return (
+    <span className="relative inline-flex">
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-describedby={id}
+        onMouseEnter={showTooltip}
+        onMouseLeave={() => setIsOpen(false)}
+        onFocus={showTooltip}
+        onBlur={() => setIsOpen(false)}
+        className={triggerContent
+          ? 'cursor-help text-left'
+          : 'zea-field-info-trigger flex h-4 w-4 cursor-help items-center justify-center rounded-full bg-amber-100 text-amber-600'}
+      >
+        {triggerContent ?? <Info className="h-3 w-3" aria-hidden="true" />}
+      </button>
+      {isOpen && position && typeof document !== 'undefined' && createPortal(
+        <span
+          id={id}
+          role="tooltip"
+          className="zea-field-info-tooltip pointer-events-none fixed z-[2147483647] w-72 rounded-xl border p-3 text-left text-xs font-medium normal-case leading-relaxed tracking-normal shadow-2xl"
+          style={{
+            left: position.left,
+            top: position.top,
+            transform: position.placement === 'top' ? 'translate(-50%, -100%)' : 'translateX(-50%)',
+          }}
+        >
+          {text}
+        </span>,
+        document.body,
+      )}
+    </span>
+  );
 }
 
 export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
@@ -1076,14 +1153,44 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     const configured = model.settings.voiceId ?? model.settings.voice_id ?? model.settings.voice;
     return typeof configured === 'string' && configured.trim() ? configured : model.modelKey;
   };
-  const renderModelParameters = (model: ProviderModelOption | undefined) => {
+  const renderModelParameters = (model: ProviderModelOption | undefined, variant: 'default' | 'stt' = 'default') => {
     if (!model) return <div className="mt-5 rounded-xl border border-dashed border-slate-200 p-4 text-xs font-semibold text-slate-400">Select a Super Admin model to view its configuration.</div>;
     const entries = [...Object.entries(model.settings), ...Object.entries(model.capabilities).map(([key, value]) => [`capability.${key}`, value] as const)];
+    if (variant === 'stt') {
+      return (
+        <div className="zea-stt-parameters mt-5 rounded-2xl border border-amber-200/70 bg-amber-50/15 p-4">
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex items-start gap-3">
+              <div>
+                <span className="block text-sm font-black uppercase tracking-wide text-slate-800">Super Admin Model Parameters</span>
+              </div>
+            </div>
+            <span className="zea-stt-model-badge self-start rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 font-mono text-xs font-bold text-[#b78513]">{model.modelKey}</span>
+          </div>
+          {entries.length ? (
+            <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2">
+              {entries.map(([key, value]) => {
+                return (
+                  <div key={key} className="flex min-w-0 items-center rounded-xl border border-slate-200 bg-white px-3.5 py-3">
+                    <div className="min-w-0">
+                      <span className="block truncate text-xs font-black uppercase tracking-wide text-slate-800" title={key}>{key}</span>
+                      <span className="mt-0.5 block break-words font-mono text-sm font-medium leading-tight text-slate-600">{typeof value === 'string' ? value : JSON.stringify(value)}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="rounded-xl border border-dashed border-slate-200 bg-white p-5 text-center text-xs font-semibold text-slate-400">No model parameters were configured by Super Admin.</div>
+          )}
+        </div>
+      );
+    }
     return (
       <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50/70 p-4">
         <div className="mb-3 flex items-center justify-between gap-3">
           <div><span className="block text-[10px] font-black uppercase tracking-wider text-slate-500">Super Admin Model Parameters</span><span className="text-[10px] font-semibold text-slate-400">Read-only for company developers</span></div>
-          <span className="rounded-md border border-indigo-100 bg-indigo-50 px-2 py-1 font-mono text-[10px] font-bold text-indigo-700">{model.modelKey}</span>
+          <span className="zea-super-admin-model-badge rounded-md border border-indigo-100 bg-indigo-50 px-2 py-1 font-mono text-[10px] font-bold text-indigo-700">{model.modelKey}</span>
         </div>
         {entries.length ? <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">{entries.map(([key, value]) => (
           <div key={key} className="min-w-0 rounded-lg border border-slate-200 bg-white p-3">
@@ -1147,7 +1254,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
 
       {/* Horizontal Scrollable Tabs Strip */}
       <div className={`border-b border-slate-100 bg-slate-50/50 p-4 ${role === 'DEVELOPER' ? 'zea-developer-agent-tabs' : ''}`}>
-        <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
+        <div className="flex w-full items-center justify-between gap-4">
           <div className="zea-agent-tabs-scroll flex-1 overflow-x-auto overflow-y-hidden py-1">
             <div className="bg-[#f1f5f9] rounded-full p-1 flex items-center gap-0.5 w-max">
               {tabsList.map((t) => {
@@ -1180,7 +1287,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       <div className="flex-1 bg-slate-50/30 p-8">
         {/* TAB: OVERVIEW */}
         {activeTab === 'overview' && (
-          <div className="space-y-8 max-w-4xl mx-auto">
+          <div className="w-full space-y-8">
             {/* Agent Identity Card */}
             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
               <div className="bg-amber-50/40 p-5 border-b border-amber-100/50 flex items-center space-x-3">
@@ -1196,7 +1303,13 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
               <div className="p-6 space-y-6">
                 {agentId && (
                   <div>
-                    <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">Agent ID</label>
+                    <div className="mb-1.5 flex items-center gap-1.5">
+                      <label className="block text-xs font-bold text-slate-600 uppercase tracking-wide">Agent ID</label>
+                      <FieldInfoTooltip
+                        id="agent-id-information"
+                        text="Use this identifier in authenticated API and n8n call-task requests."
+                      />
+                    </div>
                     <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2 pl-4">
                       <span className="min-w-0 flex-1 break-all font-mono text-xs font-bold text-slate-700">{agentId}</span>
                       <button
@@ -1208,7 +1321,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                         <Copy className="h-4 w-4" />
                       </button>
                     </div>
-                    <p className="mt-1.5 text-[10px] font-semibold text-slate-400">Use this identifier in authenticated API and n8n call-task requests.</p>
                   </div>
                 )}
                 <div>
@@ -1245,9 +1357,10 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     <label className="block text-xs font-bold text-slate-600 uppercase tracking-wide">
                       Agent Goal <span className="text-amber-500">*</span>
                     </label>
-                    <div className="w-4 h-4 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center text-[10px] font-extrabold cursor-help" title="The primary objectives or goals this agent is set up to achieve during phone conversations.">
-                      ?
-                    </div>
+                    <FieldInfoTooltip
+                      id="agent-goal-information"
+                      text="The primary objectives or goals this agent is set up to achieve during phone conversations."
+                    />
                   </div>
                   <textarea
                     rows={4}
@@ -1258,9 +1371,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none"
                     placeholder="What is the ultimate objective of the agent?"
                   />
-                  <p className="text-[11px] text-slate-400 mt-2 font-medium leading-relaxed">
-                    This is used as the <span className="italic font-bold text-slate-500">'North Star'</span> for evaluations. The detailed <span className="font-bold text-slate-500">Golden Script</span> is configured in the <span className="text-amber-500 font-bold underline cursor-pointer hover:text-amber-600" onClick={() => setActiveTab('analytics')}>Analytics Tab</span>.
-                  </p>
                 </div>
               </div>
             </div>
@@ -1272,10 +1382,17 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
               </div>
               
               <div className="p-6 space-y-5">
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">
-                    Agent Usage <span className="text-red-500">*</span>
-                  </label>
+                <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+                  <div>
+                  <div className="mb-1.5 flex items-center gap-1.5">
+                    <label className="block text-xs font-bold text-slate-600 uppercase tracking-wide">
+                      Agent Usage <span className="text-red-500">*</span>
+                    </label>
+                    <FieldInfoTooltip
+                      id="agent-usage-information"
+                      text="Controls whether this agent can be used for incoming calls, campaigns, or both."
+                    />
+                  </div>
                   <div className="relative">
                     <select
                       required
@@ -1292,7 +1409,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       <ChevronDown className="w-4 h-4" />
                     </div>
                   </div>
-                  <p className="mt-1.5 text-[10px] font-medium text-slate-400">Controls whether this agent can be used for incoming calls, campaigns, or both.</p>
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">
@@ -1319,64 +1435,68 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       <ChevronDown className="w-4 h-4" />
                     </div>
                   </div>
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">Assigned Phone Number</label>
+                
+                  <div>
+                  <div className="mb-1.5 flex items-center gap-1.5">
+                    <label className="block text-xs font-bold text-slate-600 uppercase tracking-wide">Assigned Phone Number</label>
+                    <FieldInfoTooltip
+                      id="assigned-phone-number-information"
+                      text="Only numbers assigned to this company are available."
+                    />
+                  </div>
                   <select value={phoneNumberId} disabled={isReadOnly} onChange={(event) => setPhoneNumberId(event.target.value)} className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 outline-none">
                     <option value="">No inbound number</option>
                     {phoneNumbers.map((phone) => <option key={phone.id} value={phone.id}>{phone.number}</option>)}
                   </select>
-                  <p className="mt-1 text-[10px] text-slate-400">Only numbers assigned to this company are available.</p>
                 </div>
-              </div>
             </div>
+          </div>
           </div>
         )}
 
         {/* TAB: LISTENER */}
         {activeTab === 'listener' && (
-          <div className="space-y-8 max-w-4xl mx-auto">
+          <div className="w-full space-y-8">
             {/* Speech to Text Card */}
-            <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
-              <div className="bg-amber-50/40 p-5 border-b border-amber-100/50 flex items-center space-x-3">
-                <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center border border-amber-200/50">
-                  <Mic className="w-5 h-5" />
+            <div className="zea-stt-card overflow-hidden rounded-2xl border border-amber-200/70 bg-white shadow-xs">
+              <div className="flex items-center space-x-4 border-b border-amber-200/60 bg-amber-50/30 p-6 sm:p-7">
+                <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-amber-200/70 bg-amber-50 text-[#dfa822]">
+                  <Mic className="zea-main-stt-icon h-6 w-6" />
                 </div>
                 <div>
-                  <h3 className="text-base font-extrabold text-slate-800 tracking-tight">Speech to Text</h3>
-                  <p className="text-xs text-slate-500 font-semibold">Configure speech recognition and processing settings.</p>
+                  <h3 className="text-xl font-extrabold tracking-tight text-slate-900">Speech to Text</h3>
+                  <p className="mt-1 text-sm font-medium text-slate-600">Configure speech recognition and processing settings.</p>
                 </div>
               </div>
               
-              <div className="p-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="p-6 sm:p-8">
+                <div className="grid grid-cols-1 gap-7 md:grid-cols-2">
                   {/* STT Provider dropdown */}
                   <div>
-                    <label className="block text-[11px] font-black text-slate-500 mb-1.5 uppercase tracking-wider flex items-center">
+                    <label className="mb-3 flex items-center text-xs font-black uppercase tracking-wider text-slate-800">
                       STT PROVIDER <span className="text-red-500 ml-0.5">*</span>
                     </label>
                     <div className="relative">
                       <select
                         value={agent.sttProvider}
                         disabled
-                        className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
+                        className="w-full appearance-none rounded-2xl border border-slate-200 bg-white px-5 py-4 text-sm font-semibold text-slate-800 outline-none transition focus:border-amber-500"
                       >
                         <option value={selectedSttModel?.providerName ?? agent.sttProvider}>{(selectedSttModel?.providerName ?? agent.sttProvider) || 'Select a model below'}</option>
                       </select>
-                      <div className="absolute inset-y-0 right-0 flex items-center pr-4 pointer-events-none text-slate-400">
-                        <ChevronDown className="w-4 h-4" />
-                      </div>
                     </div>
                   </div>
 
                   {/* Model dropdown */}
                   <div>
-                    <div className="mb-1.5 flex items-center justify-between gap-2">
-                      <label className="text-[11px] font-black text-slate-500 uppercase tracking-wider">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <label className="text-xs font-black uppercase tracking-wider text-slate-800">
                         MODEL / LANGUAGE MODEL <span className="text-red-500 ml-0.5">*</span>
                       </label>
-                      <button type="button" disabled={modelsRefreshing} onClick={() => setModelCatalogRefreshKey((value) => value + 1)} className="flex items-center gap-1 text-[10px] font-bold text-amber-600 hover:text-amber-700 disabled:opacity-50">
-                        <RefreshCw className={`h-3 w-3 ${modelsRefreshing ? 'animate-spin' : ''}`} /> {modelsRefreshing ? 'Refreshing...' : 'Refresh models'}
+                      <button type="button" disabled={modelsRefreshing} onClick={() => setModelCatalogRefreshKey((value) => value + 1)} className="flex items-center gap-1.5 text-xs font-bold text-[#c48b10] transition hover:text-[#9a6900] disabled:opacity-50">
+                        {modelsRefreshing ? 'Refreshing...' : 'Refresh models'}
                       </button>
                     </div>
                     <div className="relative">
@@ -1384,20 +1504,19 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                         value={sttModelId}
                         disabled={isReadOnly}
                         onChange={(e) => { const model = sttModels.find((item) => item.id === e.target.value); setSttModelId(e.target.value); setAgent({ ...agent, sttProvider: model?.providerName ?? '', sttModel: model?.displayName ?? '' }); }}
-                        className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-20"
+                        className="w-full cursor-pointer appearance-none rounded-2xl border border-slate-200 bg-white py-4 pl-5 pr-20 text-sm font-semibold text-slate-800 outline-none transition focus:border-amber-500"
                       >
                         <option value="">Unselect STT model</option>
                         {sttModels.map((model) => <option key={model.id} value={model.id}>{model.displayName} — {model.providerName}</option>)}
                       </select>
-                      <div className="absolute inset-y-0 right-3 flex items-center gap-2 text-slate-400">
-                        {sttModelId && !isReadOnly && <button type="button" title="Unselect STT model" aria-label="Unselect STT model" onClick={() => { setSttModelId(''); setAgent({ ...agent, sttProvider: '', sttModel: '' }); }} className="rounded-full p-1 hover:bg-red-50 hover:text-red-500"><X className="h-3.5 w-3.5" /></button>}
-                        <ChevronDown className="w-4 h-4 pointer-events-none" />
+                      <div className="absolute inset-y-0 right-4 flex items-center gap-2 text-slate-700">
+                        {sttModelId && !isReadOnly && <button type="button" title="Unselect STT model" aria-label="Unselect STT model" onClick={() => { setSttModelId(''); setAgent({ ...agent, sttProvider: '', sttModel: '' }); }} className="rounded-md px-2 py-1 text-[10px] font-bold text-slate-500 hover:bg-red-50 hover:text-red-500">Clear</button>}
                       </div>
                     </div>
                   </div>
                 </div>
 
-                {renderModelParameters(selectedSttModel)}
+                {renderModelParameters(selectedSttModel, 'stt')}
               </div>
             </div>
 
@@ -1406,9 +1525,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
               <div className="p-6">
                 <div className="flex items-center justify-between">
                   <div className="flex items-start space-x-3">
-                    <div className="w-10 h-10 rounded-xl bg-amber-50 text-[#dfa822] flex items-center justify-center border border-amber-100/50 flex-shrink-0">
-                      <Sparkles className="w-5 h-5" />
-                    </div>
                     <div>
                       <h4 className="text-sm font-extrabold text-slate-800 tracking-tight flex items-center gap-1">
                         Interruption (Time Based)
@@ -1421,8 +1537,8 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     type="button"
                     disabled={isReadOnly}
                     onClick={() => setAgent({ ...agent, timeBasedInterruptionEnabled: !agent.timeBasedInterruptionEnabled })}
-                    className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                      agent.timeBasedInterruptionEnabled ? 'bg-[#dfa822]' : 'bg-slate-200'
+                    className={`zea-interruption-toggle relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 transition-colors duration-200 ease-in-out focus:outline-none ${
+                      agent.timeBasedInterruptionEnabled ? 'border-[#dfa822] bg-[#dfa822]' : 'zea-toggle-inactive border-slate-400 bg-slate-300'
                     }`}
                   >
                     <span
@@ -1449,9 +1565,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                         <option value="Medium (ideal for regular conversations)">Medium (ideal for regular conversations)</option>
                         <option value="High (agent stops speaking instantly at any user sound)">High (agent stops speaking instantly at any user sound)</option>
                       </select>
-                      <div className="absolute inset-y-0 right-0 flex items-center pr-4 pointer-events-none text-slate-400">
-                        <ChevronDown className="w-4 h-4" />
-                      </div>
                     </div>
                   </div>
                 )}
@@ -1463,9 +1576,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
               <div className="p-6">
                 <div className="flex items-center justify-between">
                   <div className="flex items-start space-x-3">
-                    <div className="w-10 h-10 rounded-xl bg-amber-50 text-[#dfa822] flex items-center justify-center border border-amber-100/50 flex-shrink-0">
-                      <Sparkles className="w-5 h-5" />
-                    </div>
                     <div>
                       <h4 className="text-sm font-extrabold text-slate-800 tracking-tight flex items-center gap-1">
                         Interruption (Word Based)
@@ -1478,8 +1588,8 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     type="button"
                     disabled={isReadOnly}
                     onClick={() => setAgent({ ...agent, wordBasedInterruptionEnabled: !agent.wordBasedInterruptionEnabled })}
-                    className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                      agent.wordBasedInterruptionEnabled ? 'bg-[#dfa822]' : 'bg-slate-200'
+                    className={`zea-interruption-toggle relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 transition-colors duration-200 ease-in-out focus:outline-none ${
+                      agent.wordBasedInterruptionEnabled ? 'border-[#dfa822] bg-[#dfa822]' : 'zea-toggle-inactive border-slate-400 bg-slate-300'
                     }`}
                   >
                     <span
@@ -1493,9 +1603,13 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                 {agent.wordBasedInterruptionEnabled && (
                   <div className="mt-6 pt-6 border-t border-slate-100 space-y-5">
                     <div>
-                      <label className="block text-[11px] font-black text-slate-500 mb-1.5 uppercase tracking-wider">
-                        Minimum Words
-                      </label>
+                      <div className="mb-1.5 flex items-center gap-1.5">
+                        <FieldInfoTooltip
+                          id="minimum-interruption-words-information"
+                          text="Recommended: 2 words to avoid accidental interruption from short sounds."
+                          triggerContent={<span className="block text-[11px] font-black uppercase tracking-wider text-slate-500">Minimum Words</span>}
+                        />
+                      </div>
                       <div className="relative">
                         <select
                           value={agent.wordInterruptionMinWords ?? 2}
@@ -1507,18 +1621,32 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                             <option key={count} value={count}>{count} {count === 1 ? 'word' : 'words'}</option>
                           ))}
                         </select>
-                        <div className="absolute inset-y-0 right-0 flex items-center pr-4 pointer-events-none text-slate-400">
-                          <ChevronDown className="w-4 h-4" />
-                        </div>
                       </div>
-                      <p className="mt-1.5 text-[11px] text-slate-400">Recommended: 2 words to avoid accidental interruption from short sounds.</p>
                     </div>
 
                     <div>
-                      <label className="block text-[11px] font-black text-slate-500 mb-1.5 uppercase tracking-wider">
-                        Trigger Words or Phrases <span className="normal-case font-semibold text-slate-400">(optional)</span>
-                      </label>
-                      <div className="flex gap-2">
+                      <div className="mb-1.5 flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-1.5">
+                          <FieldInfoTooltip
+                            id="interruption-trigger-words-information"
+                            text="Enter one or more values separated by commas. Maximum 20."
+                            triggerContent={(
+                              <span className="block text-[11px] font-black uppercase tracking-wider text-slate-500">
+                                Trigger Words or Phrases <span className="normal-case font-semibold text-slate-400">(optional)</span>
+                              </span>
+                            )}
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          disabled={isReadOnly || !newInterruptionTrigger.trim() || (agent.wordInterruptionTriggerWords?.length ?? 0) >= 20}
+                          onClick={() => addInterruptionTriggers()}
+                          className="zea-trigger-add-button rounded-lg border border-[#a8750d] bg-[#c18a12] px-3 py-1.5 text-xs font-black text-black transition hover:bg-[#ad790d] disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          + Add
+                        </button>
+                      </div>
+                      <div>
                         <input
                           type="text"
                           value={newInterruptionTrigger}
@@ -1531,22 +1659,13 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                             }
                           }}
                           placeholder="Example: stop, wait, one minute"
-                          className="flex-1 bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none disabled:bg-slate-50"
+                          className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none disabled:bg-slate-50"
                         />
-                        <button
-                          type="button"
-                          disabled={isReadOnly || !newInterruptionTrigger.trim() || (agent.wordInterruptionTriggerWords?.length ?? 0) >= 20}
-                          onClick={() => addInterruptionTriggers()}
-                          className="px-4 py-3 rounded-xl bg-amber-50 text-amber-600 border border-amber-100 text-xs font-black disabled:opacity-50"
-                        >
-                          Add
-                        </button>
                       </div>
-                      <p className="mt-1.5 text-[11px] text-slate-400">Enter one or more values separated by commas. Maximum 20.</p>
                       {(agent.wordInterruptionTriggerWords?.length ?? 0) > 0 && (
                         <div className="flex flex-wrap gap-2 mt-3">
                           {agent.wordInterruptionTriggerWords?.map((trigger) => (
-                            <span key={trigger} className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 border border-amber-100 px-3 py-1.5 text-xs font-bold text-amber-700">
+                            <span key={trigger} className="zea-interruption-trigger-chip inline-flex items-center gap-1.5 rounded-full bg-amber-50 border border-amber-100 px-3 py-1.5 text-xs font-bold text-amber-700">
                               {trigger}
                               {!isReadOnly && (
                                 <button
@@ -1556,9 +1675,9 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                                     ...agent,
                                     wordInterruptionTriggerWords: agent.wordInterruptionTriggerWords?.filter((value) => value !== trigger),
                                   })}
-                                  className="text-amber-400 hover:text-amber-700"
+                                  className="zea-trigger-chip-remove inline-flex h-4 w-4 items-center justify-center rounded-full text-amber-700 transition hover:bg-amber-200/70 hover:text-amber-900"
                                 >
-                                  <X className="w-3.5 h-3.5" />
+                                  <X className="h-3 w-3" aria-hidden="true" />
                                 </button>
                               )}
                             </span>
@@ -1581,9 +1700,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                           <option value="any">Any — time or word condition can interrupt</option>
                           <option value="all">All — both time and word conditions must pass</option>
                         </select>
-                        <div className="absolute inset-y-0 right-0 flex items-center pr-4 pointer-events-none text-slate-400">
-                          <ChevronDown className="w-4 h-4" />
-                        </div>
                       </div>
                     </div>
                   </div>
@@ -1595,13 +1711,13 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
 
         {/* TAB: BRAIN */}
         {activeTab === 'brain' && (
-          <div className="space-y-8 max-w-4xl mx-auto">
+          <div className="zea-brain-tab w-full space-y-8">
             {/* Model Configuration Card */}
             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
               {/* Header with Save Model button */}
               <div className="bg-amber-50/40 p-5 border-b border-amber-100/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div className="flex items-center space-x-3">
-                  <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center border border-amber-200/50">
+                  <div className="zea-brain-icon-box w-10 h-10 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center border border-amber-200/50">
                     <Brain className="w-5 h-5" />
                   </div>
                   <div>
@@ -1660,7 +1776,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                         {llmModels.map((model) => <option key={model.id} value={model.id}>{model.displayName} — {model.providerName}</option>)}
                       </select>
                       <div className="absolute inset-y-0 right-3 flex items-center gap-2 text-slate-400">
-                        {llmModelId && !isReadOnly && <button type="button" title="Unselect LLM model" aria-label="Unselect LLM model" onClick={() => { setLlmModelId(''); setAgent({ ...agent, llmProvider: '', llmModel: '' }); }} className="rounded-full p-1 hover:bg-red-50 hover:text-red-500"><X className="h-3.5 w-3.5" /></button>}
+                        {llmModelId && !isReadOnly && <button type="button" title="Unselect LLM model" aria-label="Unselect LLM model" onClick={() => { setLlmModelId(''); setAgent({ ...agent, llmProvider: '', llmModel: '' }); }} className="rounded-md px-2 py-1 text-[10px] font-bold text-slate-500 hover:bg-red-50 hover:text-red-500">Clear</button>}
                         <ChevronDown className="w-4 h-4 pointer-events-none" />
                       </div>
                     </div>
@@ -1704,11 +1820,17 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
             <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
               <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
                 <div className="flex items-center gap-3 border-b border-violet-100 bg-violet-50/50 p-5">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-violet-200 bg-violet-100 text-violet-600">
+                  <div className="zea-brain-icon-box flex h-10 w-10 items-center justify-center rounded-xl border border-violet-200 bg-violet-100 text-violet-600">
                     <BookOpen className="h-5 w-5" />
                   </div>
                   <div>
-                    <h3 className="text-sm font-extrabold text-slate-800">Conversation Memory</h3>
+                    <div className="flex items-center gap-1.5">
+                      <h3 className="text-sm font-extrabold text-slate-800">Conversation Memory</h3>
+                      <FieldInfoTooltip
+                        id="conversation-memory-information"
+                        text="Conversation state is available only during the current call and is removed when the call ends."
+                      />
+                    </div>
                     <p className="text-xs font-semibold text-slate-500">Control whether later calls continue the previous conversation.</p>
                   </div>
                 </div>
@@ -1730,7 +1852,13 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     </div>
                   </div>
                   <div>
-                    <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-500">Context Namespace</label>
+                    <div className="mb-1.5 flex items-center gap-1.5">
+                      <label className="block text-[10px] font-black uppercase tracking-wider text-slate-500">Context Namespace</label>
+                      <FieldInfoTooltip
+                        id="context-namespace-information"
+                        text="The backend combines this namespace with the tenant, workspace, agent, and customer identity. It never shares memory across companies."
+                      />
+                    </div>
                     <input
                       type="text"
                       value={agent.contextId || ''}
@@ -1740,27 +1868,31 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       onChange={(event) => setAgent({ ...agent, contextId: event.target.value })}
                       className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-800 outline-none transition focus:border-violet-500 focus:bg-white disabled:cursor-not-allowed disabled:opacity-50"
                     />
-                    <p className="mt-2 text-[10px] font-semibold leading-relaxed text-slate-400">The backend combines this namespace with the tenant, workspace, agent and customer identity. It never shares memory across companies.</p>
                   </div>
-                  <div className={`rounded-xl border p-4 text-[11px] font-semibold leading-relaxed ${agent.cachePolicy === 'persistent_24h' ? 'border-emerald-100 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
-                    {agent.cachePolicy === 'persistent_24h'
-                      ? 'Redis provides the 24-hour fast cache. PostgreSQL remains the permanent tenant-isolated source of truth.'
-                      : agent.cachePolicy === 'session_only'
-                        ? 'Conversation state is available only during the current call and is removed when the call ends.'
+                  {agent.cachePolicy !== 'session_only' && (
+                    <div className={`rounded-xl border p-4 text-[11px] font-semibold leading-relaxed ${agent.cachePolicy === 'persistent_24h' ? 'border-emerald-100 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
+                      {agent.cachePolicy === 'persistent_24h'
+                        ? 'Redis provides the 24-hour fast cache. PostgreSQL remains the permanent tenant-isolated source of truth.'
                         : 'Previous-call context will not be loaded or saved for this agent.'}
-                  </div>
+                    </div>
+                  )}
                 </div>
               </div>
 
               <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
                 <div className="flex items-center justify-between gap-4 border-b border-amber-100 bg-amber-50/50 p-5">
                   <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-amber-200 bg-amber-100 text-amber-600">
+                    <div className="zea-brain-icon-box flex h-10 w-10 items-center justify-center rounded-xl border border-amber-200 bg-amber-100 text-amber-600">
                       <PhoneCall className="h-5 w-5" />
                     </div>
                     <div>
                       <h3 className="text-sm font-extrabold text-slate-800">Customer Callback</h3>
                       <p className="text-xs font-semibold text-slate-500">Handle explicit callback requests during outbound campaigns.</p>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        <span className="zea-callback-badge-outbound rounded-full bg-blue-50 px-2 py-0.5 text-xs font-black uppercase leading-4 text-blue-700">Outbound campaigns</span>
+                        <span className="zea-callback-badge-detection rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-black uppercase leading-4 text-emerald-800">Code + LLM detection</span>
+                        <span className="zea-callback-badge-retry rounded-full bg-blue-50 px-2 py-0.5 text-xs font-black uppercase leading-4 text-blue-800">Uses one retry</span>
+                      </div>
                     </div>
                   </div>
                   <button
@@ -1769,17 +1901,14 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     aria-checked={agent.callbackEnabled !== false}
                     disabled={isReadOnly}
                     onClick={() => setAgent({ ...agent, callbackEnabled: agent.callbackEnabled === false })}
-                    className={`relative h-7 w-12 rounded-full transition ${agent.callbackEnabled !== false ? 'bg-amber-500' : 'bg-slate-300'} disabled:cursor-not-allowed disabled:opacity-50`}
+                    className={`inline-flex h-7 w-12 shrink-0 items-center rounded-full p-1 transition-colors ${
+                      agent.callbackEnabled !== false ? 'justify-end bg-amber-500' : 'justify-start bg-slate-400'
+                    } disabled:cursor-not-allowed disabled:opacity-50`}
                   >
-                    <span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow transition-all ${agent.callbackEnabled !== false ? 'left-6' : 'left-1'}`} />
+                    <span className="h-5 w-5 shrink-0 rounded-full bg-white shadow-sm" />
                   </button>
                 </div>
                 <div className={`space-y-5 p-6 ${agent.callbackEnabled === false ? 'pointer-events-none opacity-45' : ''}`}>
-                  <div className="flex flex-wrap gap-2">
-                    <span className="rounded-full bg-blue-50 px-3 py-1 text-[10px] font-black uppercase text-blue-700">Outbound campaigns</span>
-                    <span className="rounded-full bg-violet-50 px-3 py-1 text-[10px] font-black uppercase text-violet-700">Code + LLM detection</span>
-                    <span className="rounded-full bg-amber-50 px-3 py-1 text-[10px] font-black uppercase text-amber-700">Uses one retry</span>
-                  </div>
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div>
                       <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-500">Minimum Delay (seconds)</label>
@@ -1818,11 +1947,16 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     ['Follow-Up Opening', 'callbackFollowUpOpeningInstructions', 'Tell the agent how the next connected callback should begin.'],
                   ] as const).map(([label, field, help]) => (
                     <div key={field}>
-                      <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-500">{label}</label>
+                      <div className="mb-1.5 flex items-center gap-1.5">
+                        <label className="block text-[10px] font-black uppercase tracking-wider text-slate-500">{label}</label>
+                        <FieldInfoTooltip
+                          id={`${field}-information`}
+                          text={help}
+                        />
+                      </div>
                       <textarea rows={4} maxLength={2000} value={agent[field] || ''} disabled={isReadOnly}
                         onChange={(event) => setAgent({ ...agent, [field]: event.target.value })}
                         className="w-full resize-y rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold leading-relaxed text-slate-800 outline-none transition focus:border-amber-500 focus:bg-white" />
-                      <p className="mt-1.5 text-[10px] font-semibold text-slate-400">{help}</p>
                     </div>
                   ))}
                 </div>
@@ -1838,10 +1972,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
 
               {/* Purple input buffer header */}
               <div className="rounded-xl overflow-hidden border border-violet-100">
-                <div className="bg-[#e0e7ff]/60 px-4 py-2 border-b border-violet-100 flex items-center justify-between">
-                  <span className="text-[10px] font-black text-[#4f46e5] uppercase tracking-widest">Input Buffer</span>
-                  <Sliders className="w-3.5 h-3.5 text-[#4f46e5]" />
-                </div>
                 <textarea
                   rows={3}
                   value={agent.welcomeMessage || ''}
@@ -1877,15 +2007,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
 
               {/* Orange/Yellow Banner for Hidden Context */}
               <div className="rounded-xl overflow-hidden border border-amber-100">
-                <div className="bg-amber-50 px-4 py-2 border-b border-amber-100 flex items-center justify-between">
-                  <span className="text-[10px] font-black text-amber-700 uppercase tracking-widest flex items-center gap-1.5">
-                    <Lock className="w-3 h-3" />
-                    Hidden Context
-                  </span>
-                  <div className="w-3.5 h-3.5 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center text-[10px]" title="Instructions sent to the model to handle user silence.">
-                    ?
-                  </div>
-                </div>
                 <textarea
                   rows={3}
                   value={agent.silentMessage || ''}
@@ -1907,12 +2028,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
               {/* Terminal code header style */}
               <div className="rounded-xl overflow-hidden border border-slate-200 shadow-sm">
                 <div className="bg-[#f8fafc] px-4 py-3 border-b border-slate-200 flex items-center justify-between">
-                  <div className="flex items-center space-x-2">
-                    <div className="w-3 h-3 rounded-full bg-red-400" />
-                    <div className="w-3 h-3 rounded-full bg-yellow-400" />
-                    <div className="w-3 h-3 rounded-full bg-green-400" />
-                    <span className="text-xs font-extrabold text-slate-500 font-mono ml-2">CORE_DIRECTIVE.PY</span>
-                  </div>
+                  <span className="text-xs font-extrabold text-slate-500 font-mono">CORE_DIRECTIVE.PY</span>
                 </div>
                 <textarea
                   rows={10}
@@ -1929,7 +2045,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
 
         {/* TAB: SPEAKER */}
         {activeTab === 'speaker' && (
-          <div className="space-y-8 max-w-4xl mx-auto">
+          <div className="w-full space-y-8">
             {/* Voice Configuration Card */}
             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
               <div className="bg-amber-50/40 p-5 border-b border-amber-100/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -2048,7 +2164,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
 
         {/* TAB: PRECALL */}
         {activeTab === 'precall' && (
-          <div className="space-y-8 max-w-4xl mx-auto">
+          <div className="w-full space-y-8">
             {/* PreCall Settings Header Card */}
             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
               <div className="bg-amber-50/40 p-5 border-b border-amber-100/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -2306,7 +2422,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
 
         {/* TAB: POSTCALL */}
         {activeTab === 'postcall' && (
-          <div className="space-y-8 max-w-4xl mx-auto">
+          <div className="w-full space-y-8">
             {/* Post Call Configuration Card */}
             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs animate-fade-in">
               <div className="bg-amber-50/40 p-5 border-b border-amber-100/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">

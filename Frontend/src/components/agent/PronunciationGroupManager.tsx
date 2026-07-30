@@ -391,18 +391,18 @@ export function PronunciationGroupManager({
         Select reusable company rule sets. Assignments are applied when this agent is saved.
       </p>
       {!readOnly && (
+        <>
         <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
           <div className="flex flex-col gap-2 sm:flex-row">
             <input value={previewText} maxLength={300} onChange={(event) => setPreviewText(event.target.value)}
               placeholder="Enter text to test pronunciation"
               className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold text-slate-800 outline-none focus:border-amber-400" />
             <button type="button" disabled={previewLoading || !previewText.trim()} onClick={() => void testPronunciation()}
-              className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-xs font-black text-white hover:bg-slate-800 disabled:opacity-50">
+              className="zea-test-pronunciation-button inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-xs font-black text-white hover:bg-slate-800 disabled:opacity-50">
               {previewLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
               {previewLoading ? 'Generating...' : 'Test pronunciation'}
             </button>
           </div>
-          <p className="mt-1.5 text-[9px] font-semibold text-slate-400">Uses the saved agent’s real TTS provider, model and voice. Provider usage charges may apply.</p>
           {preview && (
             <div className="mt-3 rounded-lg border border-emerald-100 bg-white p-3">
               <audio controls preload="metadata" className="h-9 w-full" src={`data:${preview.mimeType};base64,${preview.audioBase64}`}>
@@ -415,6 +415,8 @@ export function PronunciationGroupManager({
             </div>
           )}
         </div>
+        <p className="text-[9px] font-semibold text-slate-400">Uses the saved agent’s real TTS provider, model and voice. Provider usage charges may apply.</p>
+        </>
       )}
       {localError && <p className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{localError}</p>}
 

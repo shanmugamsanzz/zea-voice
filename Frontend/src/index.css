@@ -1688,6 +1688,99 @@ html.dark body .zea-agent-editor-header .zea-agent-editor-subtitle {
   color: #9ca3af !important;
 }
 
+html:not(.dark) body .zea-field-info-tooltip {
+  color: #29261f !important;
+  background: #ffffff !important;
+  border-color: rgba(223, 168, 34, 0.28) !important;
+  box-shadow: 0 16px 36px rgba(66, 48, 8, 0.16) !important;
+  z-index: 2147483647 !important;
+}
+
+html.dark body .zea-field-info-tooltip {
+  color: #f8f5e8 !important;
+  background: #11120f !important;
+  border-color: rgba(223, 168, 34, 0.4) !important;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.48) !important;
+  z-index: 2147483647 !important;
+}
+
+html.dark body .zea-field-info-trigger {
+  color: #dfa822 !important;
+  background: rgba(223, 168, 34, 0.14) !important;
+}
+
+html:not(.dark) body .zea-interruption-toggle.zea-toggle-inactive {
+  background: #94a3b8 !important;
+  border-color: #64748b !important;
+}
+
+html.dark body .zea-interruption-toggle.zea-toggle-inactive {
+  background: #292e27 !important;
+  border-color: #51594d !important;
+}
+
+html:not(.dark) body .zea-stt-model-badge {
+  color: #8a5d00 !important;
+}
+
+html:not(.dark) body .zea-interruption-trigger-chip {
+  color: #7a4f00 !important;
+}
+
+html.dark body .zea-trigger-add-button {
+  color: #11120f !important;
+  background: #c18a12 !important;
+  border-color: #a8750d !important;
+}
+
+html.dark body .zea-trigger-add-button:hover {
+  background: #ad790d !important;
+}
+
+html.dark body .zea-trigger-chip-remove {
+  color: #f2cf73 !important;
+}
+
+html.dark body .zea-trigger-chip-remove:hover {
+  color: #fff3c4 !important;
+  background: rgba(223, 168, 34, 0.2) !important;
+}
+
+body .zea-brain-tab svg,
+body .zea-brain-tab .zea-brain-icon-box {
+  display: none !important;
+}
+
+body .zea-brain-tab .zea-field-info-trigger svg {
+  display: block !important;
+}
+
+html:not(.dark) body .zea-callback-badge-outbound {
+  color: #1e40af !important;
+}
+
+html:not(.dark) body .zea-callback-badge-detection {
+  color: #065f46 !important;
+}
+
+html:not(.dark) body .zea-callback-badge-retry {
+  color: #1e3a8a !important;
+  background: #eff6ff !important;
+}
+
+html:not(.dark) body .zea-brain-tab .zea-super-admin-model-badge {
+  color: #805600 !important;
+}
+
+html:not(.dark) body .zea-test-pronunciation-button {
+  color: #11120f !important;
+  background: #dfa822 !important;
+}
+
+html:not(.dark) body .zea-test-pronunciation-button:hover {
+  background: #c99118 !important;
+}
+
 body .zea-developer-agent-tabs .zea-developer-agent-tab-active {
   color: #11120f !important;
   background: #dfa822 !important;
