@@ -1,9 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Activity, AlertTriangle, AudioWaveform, CheckCircle2, Clock, Database, Gauge, LoaderCircle,
-  MessageSquareText, Phone, RefreshCw, Server, TimerReset,
+  Info, MessageSquareText, Phone, RefreshCw, Server, TimerReset,
 } from 'lucide-react';
 import { apiRequest, isAbortError } from '../../lib/api';
+import { useAppState } from '../../store/AppState';
 
 interface VqaRecord {
   id: string;
@@ -55,6 +57,28 @@ interface ProviderHealth {
 const label = (value: string) => value.split('_').map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`).join(' ');
 const milliseconds = (value: number | null) => value === null ? 'Not measured' : `${Math.round(value)} ms`;
 
+function VqaInfoTooltip({ text }: { text: string }) {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState({ left: 0, top: 0, above: false });
+  const updatePosition = () => {
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const halfWidth = 144;
+    const left = Math.min(window.innerWidth - halfWidth - 12, Math.max(halfWidth + 12, rect.left + rect.width / 2));
+    const above = rect.bottom + 150 > window.innerHeight;
+    setPosition({ left, top: above ? rect.top - 8 : rect.bottom + 8, above });
+  };
+  const show = () => { updatePosition(); setOpen(true); };
+  useEffect(() => {
+    if (!open) return undefined;
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+    return () => { window.removeEventListener('resize', updatePosition); window.removeEventListener('scroll', updatePosition, true); };
+  }, [open]);
+  return <span className="inline-flex"><button ref={triggerRef} type="button" aria-label="About VQA audit records" aria-describedby="vqa-audit-records-information" onMouseEnter={show} onMouseLeave={() => setOpen(false)} onFocus={show} onBlur={() => setOpen(false)} className="zea-field-info-trigger flex h-4 w-4 cursor-help items-center justify-center rounded-full bg-amber-100 text-amber-600"><Info className="h-3 w-3" aria-hidden="true" /></button>{open && createPortal(<span id="vqa-audit-records-information" role="tooltip" className="zea-field-info-tooltip pointer-events-none fixed z-[2147483647] w-72 rounded-xl border p-3 text-left text-xs font-medium leading-relaxed shadow-2xl" style={{ left: position.left, top: position.top, transform: position.above ? 'translate(-50%, -100%)' : 'translateX(-50%)' }}>{text}</span>, document.body)}</span>;
+}
+
 function MetricCard({ title, value, description, Icon, tone }: {
   title: string; value: string | number; description: string; Icon: typeof Activity; tone: string;
 }) {
@@ -62,6 +86,7 @@ function MetricCard({ title, value, description, Icon, tone }: {
 }
 
 export function DeveloperVqaView() {
+  const { setView, setSelectedCallId } = useAppState();
   const [days, setDays] = useState(30);
   const [report, setReport] = useState<VqaReport | null>(null);
   const [providerHealth, setProviderHealth] = useState<ProviderHealth[]>([]);
@@ -70,6 +95,26 @@ export function DeveloperVqaView() {
   const [error, setError] = useState('');
   const [refreshToken, setRefreshToken] = useState(0);
   const refresh = useCallback(() => setRefreshToken((value) => value + 1), []);
+
+  useEffect(() => {
+    if (!report?.records.length) return undefined;
+    const rows = Array.from(document.querySelectorAll<HTMLTableRowElement>('.zea-vqa-audit-title-info + div tbody tr'));
+    const cleanups = rows.map((row, index) => {
+      const record = report.records[index];
+      if (!record) return () => undefined;
+      row.tabIndex = 0;
+      row.setAttribute('role', 'button');
+      row.setAttribute('aria-label', `Open call details for ${record.agentName || 'unassigned agent'}`);
+      row.classList.add('zea-vqa-audit-row');
+      const openCall = () => { setSelectedCallId(record.id); setView('call-logs'); };
+      const click = (event: MouseEvent) => { if (!(event.target as HTMLElement).closest('a, button')) openCall(); };
+      const keydown = (event: KeyboardEvent) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openCall(); } };
+      row.addEventListener('click', click);
+      row.addEventListener('keydown', keydown);
+      return () => { row.removeEventListener('click', click); row.removeEventListener('keydown', keydown); };
+    });
+    return () => cleanups.forEach((cleanup) => cleanup());
+  }, [report, setSelectedCallId, setView]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -97,7 +142,7 @@ export function DeveloperVqaView() {
   if (loading && !report) return <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-slate-200 bg-white"><div className="text-center"><LoaderCircle className="mx-auto h-8 w-8 animate-spin text-[#dfa822]" /><p className="mt-3 text-xs font-bold text-slate-400">Loading measured voice-quality data…</p></div></div>;
 
   return <div className="space-y-6">
-    <div className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm md:flex-row md:items-center md:justify-between"><div><div className="flex items-center gap-2"><AudioWaveform className="h-5 w-5 text-amber-500" /><h2 className="text-xl font-black text-slate-800">Voice Quality Assessment</h2></div><p className="mt-1 text-xs font-semibold text-slate-500">Tenant call reliability, latency, transcripts and runtime-provider health from PostgreSQL.</p></div><div className="flex items-center gap-2"><select value={days} onChange={(event) => setDays(Number(event.target.value))} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-bold text-slate-700"><option value={7}>Last 7 days</option><option value={30}>Last 30 days</option><option value={90}>Last 90 days</option><option value={365}>Last year</option></select><button onClick={refresh} disabled={refreshing} className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-bold text-white disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />Refresh</button></div></div>
+    <div className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm md:flex-row md:items-center md:justify-between"><div><div className="flex items-center gap-2"><AudioWaveform className="h-5 w-5 text-amber-500" /><h2 className="text-xl font-black text-slate-800">Voice Quality Assessment</h2></div><p className="mt-1 text-xs font-semibold text-slate-500">Tenant call reliability, latency, transcripts and runtime-provider health from PostgreSQL.</p></div><div className="flex items-center gap-2"><select value={days} onChange={(event) => setDays(Number(event.target.value))} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-bold text-slate-700"><option value={7}>Last 7 days</option><option value={30}>Last 30 days</option><option value={90}>Last 90 days</option><option value={365}>Last year</option></select><button onClick={refresh} disabled={refreshing} className="zea-vqa-refresh-button inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-bold text-white disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />Refresh</button></div></div>
 
     {error && <div className="flex items-center justify-between rounded-xl border border-red-200 bg-red-50 p-4 text-xs font-bold text-red-700"><span className="flex items-center gap-2"><AlertTriangle className="h-4 w-4" />{error}</span><button onClick={refresh}>Retry</button></div>}
 
@@ -117,9 +162,9 @@ export function DeveloperVqaView() {
         <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"><div><h3 className="text-sm font-black text-slate-800">Runtime Provider Health</h3><p className="mt-1 text-[10px] font-semibold text-slate-400">Current backend process observations</p></div>{providerHealth.length ? providerHealth.map((provider) => <div key={`${provider.kind}:${provider.providerId}:${provider.modelId}`} className="rounded-xl border border-slate-200 bg-slate-50 p-4"><div className="flex items-center justify-between"><span className="flex items-center gap-2 text-xs font-black uppercase text-slate-700"><Server className="h-4 w-4 text-slate-400" />{provider.kind}</span><span className={`rounded-full px-2 py-1 text-[9px] font-black uppercase ${provider.status === 'healthy' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>{provider.status}</span></div><div className="mt-3 grid grid-cols-2 gap-2 text-[10px] font-semibold text-slate-500"><span>Success: <b className="text-slate-700">{provider.successes}</b></span><span>Failures: <b className="text-slate-700">{provider.failures}</b></span><span className="col-span-2">Last latency: <b className="text-slate-700">{Math.round(provider.lastLatencyMs)} ms</b></span>{provider.lastCode && <span className="col-span-2 text-red-600">Last error: {provider.lastCode}</span>}</div></div>) : <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-xs font-semibold text-slate-400">Provider health appears after calls run on this backend instance.</div>}</div>
       </div>
 
+      <div className="zea-vqa-audit-title-info"><VqaInfoTooltip text="Accuracy and STT confidence are not fabricated. They will appear only after the selected STT adapter persists provider confidence and a reference-transcript evaluation pipeline calculates accuracy. Current VQA values are measured operational data." /></div>
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"><div className="flex items-center justify-between border-b border-slate-200 p-5"><div><h3 className="text-sm font-black text-slate-800">VQA Audit Records</h3><p className="mt-1 text-[10px] font-semibold text-slate-400">Stored calls and provider-usage measurements</p></div><Database className="h-5 w-5 text-slate-400" /></div><div className="overflow-x-auto"><table className="w-full min-w-[920px] text-left"><thead className="bg-slate-50 text-[9px] font-black uppercase tracking-wider text-slate-400"><tr><th className="px-5 py-4">Call</th><th className="px-5 py-4">Agent</th><th className="px-5 py-4">Status</th><th className="px-5 py-4">Duration</th><th className="px-5 py-4">Transcript</th><th className="px-5 py-4">Welcome</th><th className="px-5 py-4">Response</th><th className="px-5 py-4">Providers</th></tr></thead><tbody className="divide-y divide-slate-100 text-xs">{report.records.length ? report.records.map((record) => <tr key={record.id} className="hover:bg-slate-50"><td className="px-5 py-4"><p className="font-semibold text-slate-600">{new Date(record.startedAt).toLocaleString('en-IN')}</p><p className="mt-1 max-w-[160px] truncate font-mono text-[9px] text-slate-400">{record.providerCallId || record.id}</p></td><td className="px-5 py-4 font-bold text-slate-700">{record.agentName || '—'}</td><td className="px-5 py-4 font-bold text-slate-600">{label(record.status)}</td><td className="px-5 py-4 font-mono font-bold text-slate-600">{record.durationSeconds}s</td><td className="px-5 py-4"><span className="inline-flex items-center gap-1 font-bold text-slate-600"><MessageSquareText className="h-4 w-4 text-slate-400" />{record.transcriptEntries}</span></td><td className="px-5 py-4 font-mono font-bold text-violet-600">{milliseconds(record.latency.welcomeAudioStartMs)}</td><td className="px-5 py-4 font-mono font-bold text-amber-600">{milliseconds(record.latency.averageFirstResponseAudioMs)}</td><td className="px-5 py-4"><div className="flex gap-1">{Object.keys(record.providers).map((kind) => <span key={kind} className="rounded bg-slate-100 px-2 py-1 text-[9px] font-black uppercase text-slate-600">{kind}</span>)}{!Object.keys(record.providers).length && <span className="text-slate-400">—</span>}</div></td></tr>) : <tr><td colSpan={8} className="py-14 text-center text-xs font-semibold text-slate-400">No audit records for this period.</td></tr>}</tbody></table></div></div>
 
-      <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs font-semibold leading-relaxed text-amber-800"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><div><b>Accuracy and STT confidence are not fabricated.</b> They will appear only after the selected STT adapter persists provider confidence and a reference-transcript evaluation pipeline calculates accuracy. Current VQA values are measured operational data.</div></div>
     </>}
   </div>;
 }

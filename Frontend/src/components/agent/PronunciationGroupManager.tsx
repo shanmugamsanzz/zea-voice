@@ -345,7 +345,7 @@ export function PronunciationGroupManager({
         </label>
         {!readOnly && (
           <button type="button" onClick={() => setManagerOpen(true)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-[10px] font-black text-amber-700 hover:bg-amber-100">
+            className="zea-manage-pronunciation-groups inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-[10px] font-black text-amber-700 hover:bg-amber-100">
             <Languages className="h-3.5 w-3.5" /> Manage groups
           </button>
         )}
@@ -392,7 +392,7 @@ export function PronunciationGroupManager({
       </p>
       {!readOnly && (
         <>
-        <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+        <div className="zea-pronunciation-test-card rounded-xl border border-slate-200 bg-slate-50/70 p-3">
           <div className="flex flex-col gap-2 sm:flex-row">
             <input value={previewText} maxLength={300} onChange={(event) => setPreviewText(event.target.value)}
               placeholder="Enter text to test pronunciation"

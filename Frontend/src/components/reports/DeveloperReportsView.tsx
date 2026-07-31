@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Activity, Calendar, CheckCircle2, ChevronLeft, ChevronRight, Clock, Download,
   Eye, FileSpreadsheet, Filter, LoaderCircle, Phone, PhoneIncoming, PhoneOutgoing,
   RefreshCw, Search, User, X, XCircle,
 } from 'lucide-react';
 import { apiBlobRequest, apiRequest, isAbortError } from '../../lib/api';
+import { useAppState } from '../../store/AppState';
 
 type CallDirection = 'inbound' | 'outbound';
 type CallStatus = 'queued' | 'ringing' | 'connected' | 'completed' | 'failed' | 'busy' | 'no_answer' | 'canceled' | 'manual_follow_up_required';
@@ -154,7 +156,7 @@ function DetailedCallLogsTable({ calls, loading, page, openDetails }: {
   page: number;
   openDetails: (call: CallRecord) => Promise<void>;
 }) {
-  return <div className="overflow-x-auto"><table className="w-full min-w-[2350px] text-left">
+  return <div className="zea-call-logs-table-wrap overflow-x-auto"><table className="w-full min-w-[2350px] text-left">
     <thead className="border-b border-slate-200 bg-slate-50 text-[9px] font-black uppercase tracking-wider text-slate-400"><tr>
       {['#', 'Started At', 'Direction', 'From Number', 'To Number', 'Agent', 'Campaign', 'Outcome',
         'Ringing At', 'Answered At', 'Ended At', 'Duration', 'Sentiment', 'Cost', 'Currency', 'Recording'].map((heading) => <th key={heading} className="px-4 py-4">{heading}</th>)}
@@ -196,6 +198,7 @@ export function DeveloperReportsView({
   subtitle = 'Review all inbound and outbound calls',
   variant = 'reports',
 }: DeveloperReportsViewProps = {}) {
+  const { selectedCallId, setSelectedCallId } = useAppState();
   const [calls, setCalls] = useState<CallRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -209,6 +212,15 @@ export function DeveloperReportsView({
   const [campaignFilter, setCampaignFilter] = useState('all');
   const [durationFilter, setDurationFilter] = useState<'all' | '0-30' | '31-60' | '61-120' | '121-300' | '301+'>('all');
   const [search, setSearch] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [draftFilters, setDraftFilters] = useState({
+    direction: 'all' as 'all' | CallDirection,
+    status: 'all' as 'all' | CallStatus,
+    date: 'all' as 'all' | 'today' | 'yesterday' | '7d' | '30d',
+    agent: 'all', campaign: 'all',
+    duration: 'all' as 'all' | '0-30' | '31-60' | '61-120' | '121-300' | '301+',
+  });
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<CallRecord | null>(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
@@ -283,7 +295,20 @@ export function DeveloperReportsView({
 
   const clearFilters = () => {
     setDirectionFilter('all'); setStatusFilter('all'); setDateFilter('all'); setAgentFilter('all');
-    setCampaignFilter('all'); setDurationFilter('all'); setSearch('');
+    setCampaignFilter('all'); setDurationFilter('all'); setSearch(''); setSearchInput('');
+    setDraftFilters({ direction: 'all', status: 'all', date: 'all', agent: 'all', campaign: 'all', duration: 'all' });
+  };
+
+  const activeFilterCount = [directionFilter, statusFilter, dateFilter, agentFilter, campaignFilter, durationFilter]
+    .filter((value) => value !== 'all').length;
+  const openFilters = () => {
+    setDraftFilters({ direction: directionFilter, status: statusFilter, date: dateFilter, agent: agentFilter, campaign: campaignFilter, duration: durationFilter });
+    setFiltersOpen(true);
+  };
+  const applyFilters = () => {
+    setDirectionFilter(draftFilters.direction); setStatusFilter(draftFilters.status); setDateFilter(draftFilters.date);
+    setAgentFilter(draftFilters.agent); setCampaignFilter(draftFilters.campaign); setDurationFilter(draftFilters.duration);
+    setPage(1); setFiltersOpen(false); refresh();
   };
 
   const openDetails = async (call: CallRecord) => {
@@ -311,6 +336,14 @@ export function DeveloperReportsView({
     if (recordingUrl) URL.revokeObjectURL(recordingUrl);
     setRecordingUrl(''); setRecordingError(''); setSelected(null);
   };
+
+  useEffect(() => {
+    if (!selectedCallId || !calls.length || selected) return;
+    const requestedCall = calls.find((call) => call.id === selectedCallId);
+    if (!requestedCall) return;
+    setSelectedCallId(null);
+    void openDetails(requestedCall);
+  }, [calls, selected, selectedCallId, setSelectedCallId]);
 
   useEffect(() => () => { if (recordingUrl) URL.revokeObjectURL(recordingUrl); }, [recordingUrl]);
 
@@ -341,7 +374,7 @@ export function DeveloperReportsView({
       <div><h2 className="text-xl font-black text-slate-800">{title}</h2><p className="mt-1 text-xs font-semibold text-slate-400">{subtitle}</p></div>
       <div className="flex items-center gap-2">
         <button onClick={refresh} disabled={refreshing} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-600 disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />Refresh</button>
-        <button onClick={exportCsv} disabled={!filtered.length} className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-bold text-white disabled:opacity-50"><FileSpreadsheet className="h-4 w-4 text-emerald-400" />Export CSV</button>
+        <button onClick={exportCsv} disabled={!filtered.length} className="zea-reports-export-csv inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-bold text-white disabled:opacity-50"><FileSpreadsheet className="h-4 w-4 text-emerald-400" />Export CSV</button>
       </div>
     </div>
 
@@ -360,7 +393,7 @@ export function DeveloperReportsView({
       ]).map(({ label, value, Icon, style }) => <div key={label} className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"><div><p className="text-[10px] font-black uppercase tracking-wider text-slate-400">{label}</p><p className="mt-1 text-3xl font-black text-slate-800">{value}</p></div><div className={`rounded-2xl p-3 ${style}`}><Icon className="h-5 w-5" /></div></div>)}
     </div>
 
-    <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <div className="hidden">
       <div className="flex items-center justify-between"><span className="flex items-center gap-2 text-xs font-black uppercase text-slate-600"><Filter className="h-4 w-4" />{variant === 'reports' ? 'Search Filters' : 'Filters'}</span><button onClick={clearFilters} className="flex items-center gap-1 text-xs font-bold text-amber-600"><XCircle className="h-4 w-4" />Clear Filters</button></div>
       <div className="grid gap-3 md:grid-cols-3 lg:grid-cols-4">
         <label className="flex flex-col gap-1.5"><span className="text-[9px] font-black uppercase tracking-wider text-slate-400">Date Range</span><select value={dateFilter} onChange={(e) => setDateFilter(e.target.value as typeof dateFilter)} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-bold"><option value="all">All Time</option><option value="today">Today</option><option value="yesterday">Yesterday</option><option value="7d">Last 7 Days</option><option value="30d">Last 30 Days</option></select></label>
@@ -372,6 +405,34 @@ export function DeveloperReportsView({
       </div>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div className="relative max-w-lg flex-1"><Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search number, agent, campaign or call ID" className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-3 text-xs font-semibold outline-none focus:border-amber-400" /></div><span className="text-xs font-bold text-slate-400">{filtered.length} call records · {lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString()}` : 'Loading'}</span></div>
     </div>
+
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row">
+          <button type="button" onClick={openFilters} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl border border-[#dfa822]/50 bg-[#dfa822]/10 px-4 py-2.5 text-xs font-black text-[#9a6900] transition hover:bg-[#dfa822]/20"><Filter className="h-4 w-4" />Search Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}</button>
+          <div className="relative min-w-0 flex-1"><Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" /><input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); setSearch(searchInput); setPage(1); } }} placeholder="Search number, agent, campaign or call ID" className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-3 text-xs font-semibold outline-none focus:border-amber-400" /></div>
+          <button type="button" onClick={() => { setSearch(searchInput); setPage(1); }} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-[#dfa822] px-5 py-2.5 text-xs font-black text-black transition hover:bg-[#efbd3d]"><Search className="h-4 w-4" />Search</button>
+        </div>
+        <span className="shrink-0 text-xs font-bold text-slate-400">{filtered.length} call records · {lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString()}` : 'Loading'}</span>
+      </div>
+    </div>
+
+    {filtersOpen && createPortal(
+      <div className="fixed inset-0 z-[10000] flex justify-end bg-slate-950/45" onMouseDown={(event) => { if (event.target === event.currentTarget) setFiltersOpen(false); }}>
+        <aside role="dialog" aria-modal="true" aria-labelledby="reports-filter-title" className="zea-reports-filter-drawer flex h-full w-full max-w-md flex-col border-l border-slate-200 bg-white shadow-2xl">
+          <div className="flex items-center justify-between border-b border-slate-200 p-5"><div><p className="text-[10px] font-black uppercase tracking-wider text-[#b78513]">Reports</p><h3 id="reports-filter-title" className="text-lg font-black text-slate-800">Search Filters</h3></div><button type="button" aria-label="Close filters" onClick={() => setFiltersOpen(false)} className="rounded-xl border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><X className="h-4 w-4" /></button></div>
+          <div className="flex-1 space-y-5 overflow-y-auto p-5">
+            <label className="flex flex-col gap-1.5"><span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Date Range</span><select value={draftFilters.date} onChange={(e) => setDraftFilters((current) => ({ ...current, date: e.target.value as typeof current.date }))} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs font-bold"><option value="all">All Time</option><option value="today">Today</option><option value="yesterday">Yesterday</option><option value="7d">Last 7 Days</option><option value="30d">Last 30 Days</option></select></label>
+            <label className="flex flex-col gap-1.5"><span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Call Type</span><select value={draftFilters.direction} onChange={(e) => setDraftFilters((current) => ({ ...current, direction: e.target.value as typeof current.direction }))} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs font-bold"><option value="all">All Types</option><option value="inbound">Inbound</option><option value="outbound">Outbound</option></select></label>
+            <label className="flex flex-col gap-1.5"><span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Outcome</span><select value={draftFilters.status} onChange={(e) => setDraftFilters((current) => ({ ...current, status: e.target.value as typeof current.status }))} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs font-bold"><option value="all">All Outcomes</option>{Object.entries(statusLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+            <label className="flex flex-col gap-1.5"><span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Voice Agent</span><select value={draftFilters.agent} onChange={(e) => setDraftFilters((current) => ({ ...current, agent: e.target.value }))} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs font-bold"><option value="all">All Agents</option>{agents.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>
+            <label className="flex flex-col gap-1.5"><span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Call Duration</span><select value={draftFilters.duration} onChange={(e) => setDraftFilters((current) => ({ ...current, duration: e.target.value as typeof current.duration }))} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs font-bold"><option value="all">All Durations</option><option value="0-30">0–30 sec</option><option value="31-60">31–60 sec</option><option value="61-120">1–2 min</option><option value="121-300">2–5 min</option><option value="301+">5+ min</option></select></label>
+            <label className="flex flex-col gap-1.5"><span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Outbound Campaign</span><select value={draftFilters.campaign} onChange={(e) => setDraftFilters((current) => ({ ...current, campaign: e.target.value }))} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs font-bold"><option value="all">All Campaigns</option>{campaigns.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>
+          </div>
+          <div className="flex gap-3 border-t border-slate-200 bg-white p-5"><button type="button" onClick={clearFilters} className="flex-1 rounded-xl border border-slate-200 px-4 py-3 text-xs font-black text-slate-600 hover:bg-slate-50">Clear Filters</button><button type="button" onClick={applyFilters} className="flex-1 rounded-xl bg-[#dfa822] px-4 py-3 text-xs font-black text-black hover:bg-[#efbd3d]">Apply Filters</button></div>
+        </aside>
+      </div>, document.body,
+    )}
 
     {variant === 'reports' && <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
       <div className="flex flex-wrap gap-2">

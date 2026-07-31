@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
-  Check, ChevronDown, FileAudio, Loader2, Music, Pause, Play, Plus, RefreshCw, Trash2, Upload, X,
+  Check, ChevronDown, FileAudio, Info, Loader2, Music, Pause, Play, Plus, RefreshCw, Trash2, Upload, X,
 } from 'lucide-react';
 import { apiBlobRequest, apiRequest, isAbortError, uploadApiFormData } from '../../lib/api';
 
@@ -33,6 +34,67 @@ interface AmbienceManagerProps {
   readOnly?: boolean;
   onError?: (message: string) => void;
   onSuccess?: (message: string) => void;
+}
+
+function AmbienceInfoTooltip({ id, text }: { id: string; text: string }) {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [position, setPosition] = useState<{ top: number; left: number; placement: 'top' | 'bottom' } | null>(null);
+
+  const updatePosition = () => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const halfWidth = 144;
+    const padding = 12;
+    const placement = rect.bottom + 110 > window.innerHeight ? 'top' : 'bottom';
+    setPosition({
+      left: Math.min(window.innerWidth - halfWidth - padding, Math.max(halfWidth + padding, rect.left + rect.width / 2)),
+      top: placement === 'top' ? rect.top - 8 : rect.bottom + 8,
+      placement,
+    });
+  };
+
+  useEffect(() => {
+    if (!position) return undefined;
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+    return () => {
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+    };
+  }, [position]);
+
+  return (
+    <span className="relative inline-flex">
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-describedby={id}
+        onMouseEnter={updatePosition}
+        onMouseLeave={() => setPosition(null)}
+        onFocus={updatePosition}
+        onBlur={() => setPosition(null)}
+        className="zea-field-info-trigger flex h-4 w-4 cursor-help items-center justify-center rounded-full bg-amber-100 text-amber-600"
+      >
+        <Info className="h-3 w-3" aria-hidden="true" />
+      </button>
+      {position && typeof document !== 'undefined' && createPortal(
+        <span
+          id={id}
+          role="tooltip"
+          className="zea-field-info-tooltip pointer-events-none fixed z-[2147483647] w-72 rounded-xl border p-3 text-left text-xs font-medium leading-relaxed shadow-2xl"
+          style={{
+            left: position.left,
+            top: position.top,
+            transform: position.placement === 'top' ? 'translate(-50%, -100%)' : 'translateX(-50%)',
+          }}
+        >
+          {text}
+        </span>,
+        document.body,
+      )}
+    </span>
+  );
 }
 
 const initialForm = {
@@ -189,7 +251,13 @@ export function AmbienceManager({
         <div className="flex items-center gap-2 text-amber-500">
           <Music className="h-5 w-5" />
           <div>
-            <div className="text-xs font-black uppercase tracking-wider">Background Sound</div>
+            <div className="flex items-center gap-1.5">
+              <div className="text-xs font-black uppercase tracking-wider">Background Sound</div>
+              <AmbienceInfoTooltip
+                id="background-sound-information"
+                text="Silent stores no assignment. Audio remains isolated to this company and workspace."
+              />
+            </div>
             <div className="mt-0.5 text-[10px] font-medium normal-case tracking-normal text-slate-400">
               Private company audio · {limits.used}/{limits.maximum}
             </div>
@@ -221,10 +289,6 @@ export function AmbienceManager({
         </select>
         <ChevronDown className="pointer-events-none absolute right-4 top-3.5 h-4 w-4 text-slate-400" />
       </div>
-      <p className="mt-2 text-[10px] leading-4 text-slate-400">
-        Silent stores no assignment. Audio remains isolated to this company and workspace.
-      </p>
-
       {showCreate && !readOnly && (
         <div className="mt-4 space-y-3 rounded-xl border border-amber-100 bg-amber-50/40 p-4">
           <div className="grid gap-3 md:grid-cols-2">

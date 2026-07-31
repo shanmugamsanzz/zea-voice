@@ -13,6 +13,7 @@ import { KnowledgePublishPanel } from './KnowledgePublishPanel';
 import { DocumentVersionPanel } from './DocumentVersionPanel';
 import { PronunciationGroupManager } from './PronunciationGroupManager';
 import { AmbienceManager } from './AmbienceManager';
+import { TableActionsMenu } from '../common/TableActionsMenu';
 import { 
   Bot, 
   Settings, 
@@ -564,6 +565,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const [newToolHeaders, setNewToolHeaders] = useState('{\n  "Content-Type": "application/json"\n}');
   const [newToolSecretHeaders, setNewToolSecretHeaders] = useState('{}');
   const [newToolInputSchema, setNewToolInputSchema] = useState('{\n  "type": "object",\n  "properties": {},\n  "additionalProperties": true\n}');
+  const [showToolRegistration, setShowToolRegistration] = useState(false);
   const [toolSaving, setToolSaving] = useState(false);
   const [testingToolId, setTestingToolId] = useState<string | null>(null);
   const [toolTestArguments, setToolTestArguments] = useState('{}');
@@ -1069,6 +1071,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       setNewToolHeaders('{\n  "Content-Type": "application/json"\n}');
       setNewToolSecretHeaders('{}');
       setNewToolInputSchema('{\n  "type": "object",\n  "properties": {},\n  "additionalProperties": true\n}');
+      setShowToolRegistration(false);
     } catch (requestError) { setError(requestError instanceof Error ? requestError.message : 'Agent tool could not be created'); }
     finally { setToolSaving(false); }
   };
@@ -1153,7 +1156,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     const configured = model.settings.voiceId ?? model.settings.voice_id ?? model.settings.voice;
     return typeof configured === 'string' && configured.trim() ? configured : model.modelKey;
   };
-  const renderModelParameters = (model: ProviderModelOption | undefined, variant: 'default' | 'stt' = 'default') => {
+  const renderModelParameters = (model: ProviderModelOption | undefined, variant: 'default' | 'stt' | 'tts' = 'default') => {
     if (!model) return <div className="mt-5 rounded-xl border border-dashed border-slate-200 p-4 text-xs font-semibold text-slate-400">Select a Super Admin model to view its configuration.</div>;
     const entries = [...Object.entries(model.settings), ...Object.entries(model.capabilities).map(([key, value]) => [`capability.${key}`, value] as const)];
     if (variant === 'stt') {
@@ -1171,7 +1174,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
             <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2">
               {entries.map(([key, value]) => {
                 return (
-                  <div key={key} className="flex min-w-0 items-center rounded-xl border border-slate-200 bg-white px-3.5 py-3">
+                  <div key={key} className="zea-model-parameter-item flex min-w-0 items-center rounded-xl border border-slate-200 bg-white px-3.5 py-3">
                     <div className="min-w-0">
                       <span className="block truncate text-xs font-black uppercase tracking-wide text-slate-800" title={key}>{key}</span>
                       <span className="mt-0.5 block break-words font-mono text-sm font-medium leading-tight text-slate-600">{typeof value === 'string' ? value : JSON.stringify(value)}</span>
@@ -1187,13 +1190,13 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       );
     }
     return (
-      <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+      <div className="zea-model-parameters mt-5 rounded-xl border border-slate-200 bg-slate-50/70 p-4">
         <div className="mb-3 flex items-center justify-between gap-3">
           <div><span className="block text-[10px] font-black uppercase tracking-wider text-slate-500">Super Admin Model Parameters</span><span className="text-[10px] font-semibold text-slate-400">Read-only for company developers</span></div>
-          <span className="zea-super-admin-model-badge rounded-md border border-indigo-100 bg-indigo-50 px-2 py-1 font-mono text-[10px] font-bold text-indigo-700">{model.modelKey}</span>
+          <span className={`${variant === 'tts' ? 'zea-tts-model-badge' : ''} zea-super-admin-model-badge rounded-md border border-indigo-100 bg-indigo-50 px-2 py-1 font-mono text-[10px] font-bold text-indigo-700`}>{model.modelKey}</span>
         </div>
-        {entries.length ? <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">{entries.map(([key, value]) => (
-          <div key={key} className="min-w-0 rounded-lg border border-slate-200 bg-white p-3">
+        {entries.length ? <div className={`grid grid-cols-1 gap-2 sm:grid-cols-2 ${variant === 'tts' ? 'xl:grid-cols-3' : ''}`}>{entries.map(([key, value]) => (
+          <div key={key} className="zea-model-parameter-item min-w-0 rounded-lg border border-slate-200 bg-white p-3">
             <span className="block truncate text-[9px] font-black uppercase tracking-wider text-slate-400" title={key}>{key}</span>
             <span className="mt-1 block break-words font-mono text-[11px] font-semibold text-slate-700">{typeof value === 'string' ? value : JSON.stringify(value)}</span>
           </div>
@@ -1206,7 +1209,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
 
   return (
     <>
-    <form onSubmit={handleSave} className={`flex min-h-full flex-col overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-xs ${role === 'DEVELOPER' ? 'zea-developer-agent-editor' : ''}`}>
+    <form onSubmit={handleSave} className={`zea-agent-editor flex min-h-full flex-col overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-xs ${role === 'DEVELOPER' ? 'zea-developer-agent-editor' : ''}`}>
       {/* Upper Status strip / Banner */}
       <div className="zea-agent-editor-header bg-gradient-to-r from-violet-600 via-indigo-600 to-amber-500 p-6 text-white flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
@@ -1819,7 +1822,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
             {/* Conversation continuity and callback configuration */}
             <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
               <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
-                <div className="flex items-center gap-3 border-b border-violet-100 bg-violet-50/50 p-5">
+                <div className="zea-conversation-memory-header flex items-center gap-3 border-b border-violet-100 bg-violet-50/50 p-5">
                   <div className="zea-brain-icon-box flex h-10 w-10 items-center justify-center rounded-xl border border-violet-200 bg-violet-100 text-violet-600">
                     <BookOpen className="h-5 w-5" />
                   </div>
@@ -2026,8 +2029,8 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
               </div>
 
               {/* Terminal code header style */}
-              <div className="rounded-xl overflow-hidden border border-slate-200 shadow-sm">
-                <div className="bg-[#f8fafc] px-4 py-3 border-b border-slate-200 flex items-center justify-between">
+              <div className="zea-core-directive-editor rounded-xl overflow-hidden border border-slate-200 shadow-sm">
+                <div className="zea-core-directive-header bg-[#f8fafc] px-4 py-3 border-b border-slate-200 flex items-center justify-between">
                   <span className="text-xs font-extrabold text-slate-500 font-mono">CORE_DIRECTIVE.PY</span>
                 </div>
                 <textarea
@@ -2125,7 +2128,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   </div>
                 </div>
 
-                {renderModelParameters(selectedTtsModel)}
+                {renderModelParameters(selectedTtsModel, 'tts')}
 
                 <PronunciationGroupManager
                   agentId={agentId}
@@ -2216,9 +2219,13 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
 
                 {/* Description Field */}
                 <div>
-                  <label className="block text-[11px] font-black text-slate-500 mb-1.5 uppercase tracking-wider">
-                    Description
-                  </label>
+                  <div className="mb-1.5 flex items-center gap-1.5">
+                    <label className="block text-[11px] font-black uppercase tracking-wider text-slate-500">Description</label>
+                    <FieldInfoTooltip
+                      id="pre-call-description-information"
+                      text="For developer reference only. This description is not sent to the AI or webhook."
+                    />
+                  </div>
                   <textarea
                     rows={4}
                     disabled={isReadOnly}
@@ -2227,17 +2234,19 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     placeholder="Describe what this Pre-Call integration loads, for example customer details from your CRM."
                     className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-2xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none"
                   />
-                  <p className="mt-1.5 text-[10px] font-semibold text-slate-400">
-                    For developer reference only. This description is not sent to the AI or webhook.
-                  </p>
                 </div>
 
                 {/* Pre-Call API Toggle & Fields */}
                 <div className="border-t border-slate-100 pt-6 space-y-6">
                   <div className="flex items-center justify-between">
                     <div>
-                      <h4 className="text-xs font-black text-slate-700 uppercase tracking-wider">Pre-Call API</h4>
-                      <p className="text-[10px] text-slate-400 font-semibold">Enable API execution prior to connecting the call.</p>
+                      <div className="flex items-center gap-1.5">
+                        <h4 className="text-xs font-black uppercase tracking-wider text-slate-700">Pre-Call API</h4>
+                        <FieldInfoTooltip
+                          id="pre-call-api-information"
+                          text="Enable API execution prior to connecting the call."
+                        />
+                      </div>
                     </div>
                     <div className="flex items-center space-x-2.5">
                       <button
@@ -2317,9 +2326,13 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
 
                       {/* Request Body */}
                       <div>
-                        <label className="block text-[10px] font-black text-slate-500 mb-1.5 uppercase tracking-wider">
-                          Request Body
-                        </label>
+                        <div className="mb-1.5 flex items-center gap-1.5">
+                          <label className="block text-[10px] font-black uppercase tracking-wider text-slate-500">Request Body</label>
+                          <FieldInfoTooltip
+                            id="pre-call-request-body-information"
+                            text={'Variables: ${caller}, ${callee}, ${customer_number}, ${platform_number}, ${call_uuid}, ${direction}, ${agent_id}, ${company_id}, ${workspace_id}.'}
+                          />
+                        </div>
                         <input
                           type="text"
                           value={agent.preCallApiRequestBody || ''}
@@ -2328,19 +2341,17 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                           placeholder='{ "customer_number": "${customer_number}", "call_uuid": "${call_uuid}" }'
                           className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-2.5 text-xs font-semibold text-slate-800 transition outline-none"
                         />
-                        <p className="mt-1.5 text-[10px] font-semibold text-slate-400">
-                          Variables: ${'{caller}'}, ${'{callee}'}, ${'{customer_number}'}, ${'{platform_number}'}, ${'{call_uuid}'}, ${'{direction}'}, ${'{agent_id}'}, ${'{company_id}'}, ${'{workspace_id}'}.
-                        </p>
                       </div>
 
                       {/* Response Mapping */}
                       <div className="space-y-3">
-                        <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider">
-                          Response Mapping
-                        </label>
-                        <p className="text-[10px] font-semibold text-slate-400">
-                          Return {`{ "context": { "customer_name": "Shanmugam" } }`} directly, or map fields from any JSON response below. Context values are available to the welcome message and AI.
-                        </p>
+                        <div className="flex items-center gap-1.5">
+                          <label className="block text-[10px] font-black uppercase tracking-wider text-slate-500">Response Mapping</label>
+                          <FieldInfoTooltip
+                            id="pre-call-response-mapping-information"
+                            text={'Return { "context": { "customer_name": "Shanmugam" } } directly, or map fields from any JSON response below. Context values are available to the welcome message and AI.'}
+                          />
+                        </div>
 
                         <div className="space-y-2">
                           {(!agent.preCallApiResponseMappings || agent.preCallApiResponseMappings.length === 0) ? (
@@ -2484,7 +2495,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-2xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none"
                     />
                   </div>
-                  <div className="rounded-xl border border-violet-100 bg-violet-50 px-4 py-3 text-[10px] font-semibold leading-relaxed text-violet-700">
+                  <div className="zea-postcall-llm-helper rounded-xl border border-violet-100 bg-violet-50 px-4 py-3 text-[10px] font-semibold leading-relaxed text-violet-700">
                     The selected LLM will generate one brief, contextual closing message in the customer&apos;s language.
                   </div>
                 </div>}
@@ -2575,9 +2586,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                         </button>
                       </div>
                     )}
-                    <span className="text-[10px] font-semibold text-slate-400 block">
-                      Press Enter or click + to add reason
-                    </span>
                   </div>
                 </div>
               </div>
@@ -2651,7 +2659,13 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                 </div>
 
                 <div>
-                  <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-500">Summary Instructions</label>
+                  <div className="mb-1.5 flex items-center gap-1.5">
+                    <label className="block text-[11px] font-black uppercase tracking-wider text-slate-500">Summary Instructions</label>
+                    <FieldInfoTooltip
+                      id="post-call-summary-instructions-information"
+                      text="These instructions are used only by the selected post-call summarization model."
+                    />
+                  </div>
                   <textarea
                     rows={5}
                     value={agent.postCallSummaryInstructions || ''}
@@ -2660,7 +2674,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     placeholder="Describe what the summary must capture for this agent and industry."
                     className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs font-semibold text-slate-800 outline-none transition focus:border-violet-500 disabled:cursor-not-allowed disabled:bg-slate-50"
                   />
-                  <p className="mt-1.5 text-[10px] font-semibold text-slate-400">These instructions are used only by the selected post-call summarization model.</p>
                 </div>
 
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -2866,18 +2879,44 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
           <div className="space-y-6">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div><h3 className="text-sm font-bold uppercase tracking-wider text-slate-400">Live Conversational Tool Integrations</h3><p className="mt-1 text-[11px] font-medium text-slate-400">Tools registered here belong only to this saved agent and company workspace.</p></div>
-              <button type="button" onClick={() => setToolRefreshKey((value) => value + 1)} disabled={!agentId || toolsLoading} className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"><RefreshCw className={`h-3.5 w-3.5 ${toolsLoading ? 'animate-spin' : ''}`} />Refresh Tools</button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button type="button" onClick={() => setToolRefreshKey((value) => value + 1)} disabled={!agentId || toolsLoading} className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"><RefreshCw className={`h-3.5 w-3.5 ${toolsLoading ? 'animate-spin' : ''}`} />Refresh Tools</button>
+                {!isReadOnly && (
+                  <button type="button" onClick={() => setShowToolRegistration(true)} disabled={!agentId} className="rounded-lg bg-[#dfa822] px-4 py-2 text-xs font-black text-black transition hover:bg-[#c99118] disabled:cursor-not-allowed disabled:opacity-50">
+                    + Register Tool
+                  </button>
+                )}
+              </div>
             </div>
 
             {!agentId && <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-800"><Info className="mt-0.5 h-4 w-4 shrink-0" /><div><p className="text-xs font-bold">Save this agent before registering tools.</p><p className="mt-1 text-[11px] font-medium text-amber-700">A saved Agent ID is required so every tool is assigned to exactly one agent, tenant and workspace.</p></div></div>}
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {showToolRegistration && typeof document !== 'undefined' && createPortal(
+              <div
+                className="fixed inset-0 z-[2147483646] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm"
+                onMouseDown={(event) => {
+                  if (event.target === event.currentTarget && !toolSaving) setShowToolRegistration(false);
+                }}
+              >
               {/* Tool Creator Card */}
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 space-y-4">
-                <span className="text-xs font-bold uppercase tracking-wider text-slate-500 block">Register Custom API Tool</span>
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="register-custom-api-tool-title"
+                className="zea-tool-registration-modal flex max-h-[calc(100vh-2rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 shadow-2xl"
+                onMouseDown={(event) => event.stopPropagation()}
+              >
+                <div className="flex shrink-0 items-center justify-between border-b border-slate-200 bg-white px-5 py-4">
+                  <span id="register-custom-api-tool-title" className="text-sm font-bold uppercase tracking-wider text-slate-700">Register Custom API Tool</span>
+                  <button type="button" onClick={() => setShowToolRegistration(false)} disabled={toolSaving} className="rounded-lg px-3 py-1.5 text-xs font-bold text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 disabled:opacity-50">Close</button>
+                </div>
+                <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
                 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 mb-1">Tool Identifier</label>
+                  <div className="mb-1 flex items-center gap-1.5">
+                    <label className="block text-[10px] font-bold text-slate-400">Tool Identifier</label>
+                    <FieldInfoTooltip id="tool-identifier-information" text="Use a clear name the agent can associate with an action." />
+                  </div>
                   <input
                     type="text"
                     value={newToolName}
@@ -2886,7 +2925,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-semibold text-slate-800 outline-none"
                     placeholder="e.g. check_appointment_slots"
                   />
-                  <p className="mt-1 text-[9px] font-medium text-slate-400">Use a clear name the agent can associate with an action.</p>
                 </div>
 
                 <div>
@@ -2952,21 +2990,27 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     </div>
 
                     <div>
-                      <label className="block text-[10px] font-bold text-slate-400 mb-1">Request Headers (JSON)</label>
+                      <div className="mb-1 flex items-center gap-1.5">
+                        <label className="block text-[10px] font-bold text-slate-400">Request Headers (JSON)</label>
+                        <FieldInfoTooltip id="tool-request-headers-information" text="Use this only for non-secret headers. Add credentials in the encrypted field below." />
+                      </div>
                       <textarea value={newToolHeaders} disabled={isReadOnly} onChange={(e) => setNewToolHeaders(e.target.value)} rows={4} spellCheck={false} className="w-full resize-y bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 font-mono text-[10px] text-emerald-300 outline-none" />
-                      <p className="mt-1 text-[9px] font-medium text-slate-400">Use this only for non-secret headers. Add credentials in the encrypted field below.</p>
                     </div>
 
                     <div>
-                      <label className="block text-[10px] font-bold text-slate-400 mb-1">Secret Headers (Encrypted JSON)</label>
+                      <div className="mb-1 flex items-center gap-1.5">
+                        <label className="block text-[10px] font-bold text-slate-400">Secret Headers (Encrypted JSON)</label>
+                        <FieldInfoTooltip id="tool-secret-headers-information" text="Authorization tokens and API keys are encrypted and never returned to the browser." />
+                      </div>
                       <textarea value={newToolSecretHeaders} disabled={isReadOnly} onChange={(e) => setNewToolSecretHeaders(e.target.value)} rows={4} spellCheck={false} className="w-full resize-y bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 font-mono text-[10px] text-amber-300 outline-none" placeholder={'{\n  "Authorization": "Bearer ..."\n}'} />
-                      <p className="mt-1 text-[9px] font-medium text-slate-400">Authorization tokens and API keys are encrypted and never returned to the browser.</p>
                     </div>
 
                     <div>
-                      <label className="block text-[10px] font-bold text-slate-400 mb-1">Input Schema (JSON)</label>
+                      <div className="mb-1 flex items-center gap-1.5">
+                        <label className="block text-[10px] font-bold text-slate-400">Input Schema (JSON)</label>
+                        <FieldInfoTooltip id="tool-input-schema-information" text="Describe the arguments the LLM must provide when it calls this tool." />
+                      </div>
                       <textarea value={newToolInputSchema} disabled={isReadOnly} onChange={(e) => setNewToolInputSchema(e.target.value)} rows={7} spellCheck={false} className="w-full resize-y bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 font-mono text-[10px] text-sky-300 outline-none" />
-                      <p className="mt-1 text-[9px] font-medium text-slate-400">Describe the arguments the LLM must provide when it calls this tool.</p>
                     </div>
 
                     <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2">
@@ -2986,14 +3030,18 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   <span>{toolSaving ? 'Registering...' : 'Register Tool'}</span>
                 </button>
               </div>
+              </div>
+              </div>,
+              document.body,
+            )}
 
               {/* Active Tools List */}
-              <div className="lg:col-span-2 space-y-3">
+              <div className="space-y-3">
                 <div className="flex items-center justify-between gap-3"><span className="text-xs font-bold uppercase tracking-wider text-slate-400">Assigned to This Agent ({tools.length})</span><span className="rounded-md bg-emerald-50 px-2 py-1 text-[9px] font-black uppercase text-emerald-700">{tools.filter((tool) => tool.status === 'active').length} active in runtime</span></div>
                 {!toolsLoading && tools.length === 0 && agentId && <div className="rounded-xl border border-dashed border-slate-200 bg-white p-8 text-center text-xs font-semibold text-slate-400">No tools are assigned to this agent yet.</div>}
                 {tools.map((t) => (
                   <div key={t.id} className="bg-white border border-slate-150 rounded-xl p-4 shadow-xs">
-                    <div className="flex justify-between items-center gap-4">
+                    <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0">
                       <div className="flex items-center space-x-2">
                         <span className="text-xs font-bold text-slate-800">{t.name}</span>
@@ -3009,11 +3057,35 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       )}
                     </div>
 
-                    {!isReadOnly && <div className="flex shrink-0 items-center gap-2">
-                      <button type="button" disabled={toolStatusUpdatingId === t.id} onClick={() => void updateToolStatus(t)} className={`rounded-lg border px-2.5 py-1.5 text-[10px] font-bold transition disabled:opacity-50 ${t.status === 'active' ? 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100' : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'}`}>{toolStatusUpdatingId === t.id ? 'Updating...' : t.status === 'active' ? 'Deactivate' : 'Activate'}</button>
-                      {t.type === 'webhook_api' && t.status === 'active' && <button type="button" onClick={() => { setTestingToolId((current) => current === t.id ? null : t.id); setToolTestArguments('{}'); setToolTestResult(null); }} className="rounded-lg border border-violet-200 bg-violet-50 px-2.5 py-1.5 text-[10px] font-bold text-violet-700 transition hover:bg-violet-100">{testingToolId === t.id ? 'Close Test' : 'Test Tool'}</button>}
-                      <button type="button" onClick={() => void removeTool(t.id)} className="text-slate-400 hover:text-red-500 p-1.5 rounded-lg hover:bg-red-50 transition"><Trash2 className="w-4 h-4" /></button>
-                    </div>}
+                    {!isReadOnly && (
+                      <div className="shrink-0">
+                        <TableActionsMenu
+                          ariaLabel={`Actions for ${t.name}`}
+                          actions={[
+                            {
+                              label: toolStatusUpdatingId === t.id ? 'Updating...' : t.status === 'active' ? 'Deactivate' : 'Activate',
+                              disabled: toolStatusUpdatingId === t.id,
+                              onClick: () => void updateToolStatus(t),
+                            },
+                            ...(t.type === 'webhook_api' && t.status === 'active'
+                              ? [{
+                                  label: testingToolId === t.id ? 'Close Test' : 'Test Tool',
+                                  onClick: () => {
+                                    setTestingToolId((current) => current === t.id ? null : t.id);
+                                    setToolTestArguments('{}');
+                                    setToolTestResult(null);
+                                  },
+                                }]
+                              : []),
+                            {
+                              label: 'Delete',
+                              danger: true,
+                              onClick: () => void removeTool(t.id),
+                            },
+                          ]}
+                        />
+                      </div>
+                    )}
                     </div>
 
                     {testingToolId === t.id && (
@@ -3029,7 +3101,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   </div>
                 ))}
               </div>
-            </div>
           </div>
         )}
 
@@ -3065,12 +3136,12 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
               <div className="mt-4 flex justify-end gap-2"><button type="button" onClick={closeKnowledgeForm} disabled={knowledgeSaving} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-50">Cancel</button><button type="button" onClick={() => void saveKnowledgeBase()} disabled={knowledgeSaving || !knowledgeFormName.trim()} className="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-xs font-bold text-white hover:bg-violet-700 disabled:opacity-50"><Save className="h-3.5 w-3.5" />{knowledgeSaving ? 'Saving...' : knowledgeFormMode === 'create' ? 'Create' : 'Save Changes'}</button></div>
             </div>}
 
-            {knowledgeBases.length > 0 && <label className="block rounded-xl border border-slate-200 bg-slate-50 p-4"><span className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-500">Selected Knowledge Base</span><select value={selectedKnowledgeBaseId} onChange={(event) => { setSelectedKnowledgeBaseId(event.target.value); setKnowledgeFormMode(null); }} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-800 outline-none focus:border-violet-400">{knowledgeBases.map((knowledgeBase) => <option key={knowledgeBase.id} value={knowledgeBase.id}>{knowledgeBase.name} — {knowledgeStatusLabel(knowledgeBase.status)} — {knowledgeBase.usageDirection}</option>)}</select></label>}
+            {knowledgeBases.length > 0 && <label className="zea-knowledge-selector-card block rounded-xl border border-slate-200 bg-slate-50 p-4"><span className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-500">Selected Knowledge Base</span><select value={selectedKnowledgeBaseId} onChange={(event) => { setSelectedKnowledgeBaseId(event.target.value); setKnowledgeFormMode(null); }} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-800 outline-none focus:border-violet-400">{knowledgeBases.map((knowledgeBase) => <option key={knowledgeBase.id} value={knowledgeBase.id}>{knowledgeBase.name} — {knowledgeStatusLabel(knowledgeBase.status)} — {knowledgeBase.usageDirection}</option>)}</select></label>}
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4"><span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Company Knowledge Bases</span><strong className="mt-1 block text-2xl text-slate-800">{knowledgeBases.length}</strong></div>
-              <div className="rounded-xl border border-emerald-100 bg-emerald-50/60 p-4"><span className="text-[10px] font-black uppercase tracking-wider text-emerald-600">Published</span><strong className="mt-1 block text-2xl text-emerald-800">{publishedKnowledgeBaseCount}</strong></div>
-              <div className="rounded-xl border border-violet-100 bg-violet-50/60 p-4"><span className="text-[10px] font-black uppercase tracking-wider text-violet-600">Assigned to Agent</span><strong className="mt-1 block text-2xl text-violet-800">{knowledgeAssignments.length}</strong></div>
+              <div className="zea-knowledge-summary-card rounded-xl border border-slate-200 bg-slate-50 p-4"><span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Company Knowledge Bases</span><strong className="mt-1 block text-2xl text-slate-800">{knowledgeBases.length}</strong></div>
+              <div className="zea-knowledge-summary-card zea-knowledge-summary-published rounded-xl border border-emerald-100 bg-emerald-50/60 p-4"><span className="text-[10px] font-black uppercase tracking-wider text-emerald-600">Published</span><strong className="mt-1 block text-2xl text-emerald-800">{publishedKnowledgeBaseCount}</strong></div>
+              <div className="zea-knowledge-summary-card zea-knowledge-summary-assigned rounded-xl border border-violet-100 bg-violet-50/60 p-4"><span className="text-[10px] font-black uppercase tracking-wider text-violet-600">Assigned to Agent</span><strong className="mt-1 block text-2xl text-violet-800">{knowledgeAssignments.length}</strong></div>
             </div>
 
             {knowledgeError && <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-red-700"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><div><p className="text-xs font-bold">Unable to load Knowledge Bases</p><p className="mt-1 text-[11px] font-medium">{knowledgeError}</p></div></div>}
@@ -3087,7 +3158,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   const assignment = knowledgeAssignments.find((item) => item.knowledgeBaseId === knowledgeBase.id);
                   const selected = knowledgeBase.id === selectedKnowledgeBaseId;
                   return <button key={knowledgeBase.id} type="button" onClick={() => { setSelectedKnowledgeBaseId(knowledgeBase.id); setKnowledgeFormMode(null); }}
-                    className={`w-full rounded-xl border p-4 text-left transition ${selected ? 'border-violet-400 bg-violet-50/50 ring-2 ring-violet-100' : 'border-slate-200 bg-white hover:border-violet-200 hover:bg-slate-50'}`}>
+                    className={`zea-knowledge-base-list-item ${selected ? 'zea-knowledge-base-list-item-selected' : ''} w-full rounded-xl border p-4 text-left transition ${selected ? 'border-violet-400 bg-violet-50/50 ring-2 ring-violet-100' : 'border-slate-200 bg-white hover:border-violet-200 hover:bg-slate-50'}`}>
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="min-w-0"><span className="block truncate text-sm font-bold text-slate-800">{knowledgeBase.name}</span><p className="mt-1 line-clamp-2 text-[11px] font-medium text-slate-500">{knowledgeBase.description || 'No description provided.'}</p></div>
                       <div className="flex flex-wrap justify-end gap-1.5"><span className={`rounded-md px-2 py-1 text-[9px] font-black uppercase ${knowledgeStatusStyles[knowledgeBase.status]}`}>{knowledgeStatusLabel(knowledgeBase.status)}</span>{assignment && <span className="rounded-md bg-violet-100 px-2 py-1 text-[9px] font-black uppercase text-violet-700">Assigned</span>}</div>
@@ -3170,7 +3241,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
             </section>}
 
             {selectedKnowledgeBase && <section className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><h4 className="text-sm font-bold text-slate-800">Documents and processing</h4><p className="mt-1 text-[11px] font-medium text-slate-400">Live extraction state for {selectedKnowledgeBase.name}.</p></div><button type="button" onClick={() => setKnowledgeDocumentPollTick((value) => value + 1)} disabled={knowledgeDocumentsLoading} className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-[11px] font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-50"><RefreshCw className={`h-3.5 w-3.5 ${knowledgeDocumentsLoading ? 'animate-spin' : ''}`} /> Refresh Documents</button></div>
+              <div><h4 className="text-sm font-bold text-slate-800">Documents and processing</h4><p className="mt-1 text-[11px] font-medium text-slate-400">Live extraction state for {selectedKnowledgeBase.name}.</p></div>
 
               {knowledgeDocumentsError && <div className="mt-4 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-red-700"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span className="text-[11px] font-semibold">{knowledgeDocumentsError}</span></div>}
               {knowledgeDocumentsLoading && knowledgeDocuments.length === 0 && <div className="mt-4 space-y-2">{[1, 2, 3].map((item) => <div key={item} className="h-20 animate-pulse rounded-xl bg-slate-100" />)}</div>}
@@ -3184,7 +3255,12 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                 const processing = ['uploading', 'queued', 'processing'].includes(documentStatus) || document.processingJob?.status === 'queued' || document.processingJob?.status === 'running';
                 const errorMessage = document.processingJob?.errorMessage;
                 return <article key={document.id} className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="truncate text-xs font-bold text-slate-800" title={document.displayName || 'PDF document'}>{document.displayName || 'PDF document'}</span><span className="rounded bg-white px-1.5 py-0.5 font-mono text-[8px] font-bold text-slate-500">{category?.title ?? document.documentType ?? 'Knowledge'}</span></div><p className="mt-1 text-[9px] font-semibold text-slate-400">{document.originalFilename || 'PDF document'} · {formatFileSize(Number(document.sizeBytes))} · Version {document.currentVersion?.versionNumber ?? 1}</p></div><span className={`w-fit rounded-md px-2 py-1 text-[9px] font-black uppercase ${knowledgeDocumentStatusStyles[documentStatus]}`}>{knowledgeStatusLabel(documentStatus)}</span></div>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="truncate text-xs font-bold text-slate-800" title={document.displayName || 'PDF document'}>{document.displayName || 'PDF document'}</span><span className="rounded bg-white px-1.5 py-0.5 font-mono text-[8px] font-bold text-slate-500">{category?.title ?? document.documentType ?? 'Knowledge'}</span></div><p className="mt-1 text-[9px] font-semibold text-slate-400">{document.originalFilename || 'PDF document'} · {formatFileSize(Number(document.sizeBytes))} · Version {document.currentVersion?.versionNumber ?? 1}</p></div><div className="flex shrink-0 items-start gap-2"><span className={`w-fit rounded-md px-2 py-1 text-[9px] font-black uppercase ${knowledgeDocumentStatusStyles[documentStatus]}`}>{knowledgeStatusLabel(documentStatus)}</span><TableActionsMenu ariaLabel={`Actions for ${document.displayName || 'PDF document'}`} actions={[
+                    { label: knowledgeDocumentsLoading ? 'Refreshing...' : 'Refresh Document', disabled: knowledgeDocumentsLoading, onClick: () => setKnowledgeDocumentPollTick((value) => value + 1) },
+                    { label: 'Version History', disabled: document.status === 'deleting', onClick: () => { setVersionDocumentId(document.id); setReviewDocumentId(null); } },
+                    ...(['review_required', 'ready'].includes(document.status) ? [{ label: document.status === 'ready' ? 'Review Approved Records' : 'Review Extracted Records', onClick: () => { setReviewDocumentId(document.id); setVersionDocumentId(null); } }] : []),
+                    ...(!isReadOnly && !['deleting', 'deleted'].includes(document.status) ? [{ label: deletingKnowledgeDocumentIds.includes(document.id) ? 'Starting deletion...' : 'Delete Document', disabled: deletingKnowledgeDocumentIds.includes(document.id), danger: true, onClick: () => void deleteKnowledgeDocument(document) }] : []),
+                  ]} /></div></div>
 
                   {(processing || document.processingJob) && <div className="mt-3"><div className="mb-1.5 flex items-center justify-between text-[9px] font-bold text-slate-400"><span>{processing ? 'Processing' : knowledgeStatusLabel(document.processingJob?.status ?? document.status)}</span><span>{progress}%</span></div><div className="h-1.5 overflow-hidden rounded-full bg-slate-200"><div className={`h-full rounded-full transition-all duration-500 ${document.status === 'failed' ? 'bg-red-500' : 'bg-gradient-to-r from-violet-500 to-amber-500'}`} style={{ width: `${progress}%` }} /></div></div>}
 
@@ -3192,7 +3268,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   {(document.status === 'failed' || errorMessage) && <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-[10px] font-semibold text-red-700">{errorMessage || 'Document processing failed. Select the PDF again to retry with a new upload.'}</div>}
                   {document.status === 'review_required' && <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-[10px] font-semibold text-amber-700">Extraction completed. Developer review is required before publishing.</div>}
                   {document.status === 'deleting' && <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-red-700">{deletionJob?.status === 'failed' ? <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : <RefreshCw className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />}<span className="text-[10px] font-semibold">{deletionJob?.status === 'failed' ? `Cleanup failed: ${deletionJob.errorMessage || 'The backend retained this job for reconciliation.'}` : `Deleting every version, extracted record, B2 object and Qdrant vector (${deletionJob?.progress ?? 0}%).`}</span></div>}
-                  <div className="mt-3 flex flex-wrap justify-end gap-2"><button type="button" onClick={() => { setVersionDocumentId(document.id); setReviewDocumentId(null); }} disabled={document.status === 'deleting'} className="rounded-lg border border-blue-200 bg-white px-3 py-2 text-[10px] font-bold text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50">Version History</button>{['review_required', 'ready'].includes(document.status) && <button type="button" onClick={() => { setReviewDocumentId(document.id); setVersionDocumentId(null); }} className="rounded-lg bg-violet-600 px-3 py-2 text-[10px] font-bold text-white transition hover:bg-violet-700">{document.status === 'ready' ? 'Review Approved Records' : 'Review Extracted Records'}</button>}{!isReadOnly && !['deleting', 'deleted'].includes(document.status) && <button type="button" onClick={() => void deleteKnowledgeDocument(document)} disabled={deletingKnowledgeDocumentIds.includes(document.id)} className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 py-2 text-[10px] font-bold text-red-600 transition hover:bg-red-50 disabled:cursor-wait disabled:opacity-50">{deletingKnowledgeDocumentIds.includes(document.id) ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}{deletingKnowledgeDocumentIds.includes(document.id) ? 'Starting deletion...' : 'Delete Document'}</button>}</div>
                 </article>;
               })}</div>}
             </section>}

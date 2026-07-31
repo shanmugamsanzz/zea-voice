@@ -1688,6 +1688,518 @@ html.dark body .zea-agent-editor-header .zea-agent-editor-subtitle {
   color: #9ca3af !important;
 }
 
+/* Agent Editor section headers: premium near-black surfaces in Dark Mode. */
+html.dark body .zea-agent-editor .bg-amber-50\/40,
+html.dark body .zea-agent-editor .bg-amber-50\/30,
+html.dark body .zea-agent-editor .bg-amber-50\/50,
+html.dark body .zea-agent-editor .bg-slate-50\/55,
+html.dark body .zea-agent-editor .bg-violet-50\/40,
+html.dark body .zea-agent-editor .border-b.border-slate-100.p-5 {
+  background: linear-gradient(135deg, #171914 0%, #0e100d 100%) !important;
+  border-bottom-color: rgba(223, 168, 34, 0.22) !important;
+}
+
+html.dark body .zea-agent-editor .bg-amber-50\/40 h3,
+html.dark body .zea-agent-editor .bg-amber-50\/30 h3,
+html.dark body .zea-agent-editor .bg-amber-50\/50 h3,
+html.dark body .zea-agent-editor .bg-slate-50\/55 h3,
+html.dark body .zea-agent-editor .bg-violet-50\/40 h3,
+html.dark body .zea-agent-editor .border-b.border-slate-100.p-5 h3 {
+  color: #f8f5e8 !important;
+}
+
+html.dark body .zea-agent-editor .bg-amber-50\/40 p,
+html.dark body .zea-agent-editor .bg-amber-50\/30 p,
+html.dark body .zea-agent-editor .bg-amber-50\/50 p,
+html.dark body .zea-agent-editor .bg-slate-50\/55 p,
+html.dark body .zea-agent-editor .bg-violet-50\/40 p,
+html.dark body .zea-agent-editor .border-b.border-slate-100.p-5 p {
+  color: #b7b9b0 !important;
+}
+
+html.dark body .zea-agent-editor .zea-stt-parameters,
+html.dark body .zea-agent-editor .zea-model-parameters,
+html.dark body .zea-agent-editor .zea-knowledge-selector-card,
+html.dark body .zea-agent-editor .zea-pronunciation-test-card {
+  color: #f4f1e6 !important;
+  background: linear-gradient(145deg, #151713 0%, #0d0f0c 100%) !important;
+  border-color: rgba(223, 168, 34, 0.25) !important;
+}
+
+html.dark body .zea-agent-editor .zea-model-parameter-item,
+html.dark body .zea-agent-editor .zea-pronunciation-test-card input,
+html.dark body .zea-agent-editor .zea-knowledge-selector-card select {
+  color: #eee9d8 !important;
+  background: #090b09 !important;
+  border-color: rgba(223, 168, 34, 0.2) !important;
+}
+
+html.dark body .zea-agent-editor .zea-model-parameter-item span:first-child,
+html.dark body .zea-agent-editor .zea-knowledge-selector-card > span {
+  color: #c9c4b4 !important;
+}
+
+html.dark body .zea-agent-editor .zea-model-parameter-item span:last-child {
+  color: #f0d689 !important;
+}
+
+html.dark body .zea-agent-editor .zea-super-admin-model-badge,
+html.dark body .zea-agent-editor .zea-stt-model-badge {
+  color: #f0c75e !important;
+  background: rgba(223, 168, 34, 0.12) !important;
+  border-color: rgba(223, 168, 34, 0.32) !important;
+}
+
+html.dark body .zea-agent-editor .zea-conversation-memory-header {
+  background: linear-gradient(135deg, #171914 0%, #0e100d 100%) !important;
+  border-bottom-color: rgba(223, 168, 34, 0.22) !important;
+}
+
+html.dark body .zea-agent-editor .zea-conversation-memory-header h3 {
+  color: #f8f5e8 !important;
+}
+
+html.dark body .zea-agent-editor .zea-conversation-memory-header p {
+  color: #b7b9b0 !important;
+}
+
+html.dark body .zea-agent-editor .zea-core-directive-editor {
+  background: #080a08 !important;
+  border-color: rgba(223, 168, 34, 0.24) !important;
+}
+
+html.dark body .zea-agent-editor .zea-core-directive-header {
+  background: #121510 !important;
+  border-bottom-color: rgba(223, 168, 34, 0.22) !important;
+}
+
+html.dark body .zea-agent-editor .zea-core-directive-header span {
+  color: #d8c98f !important;
+}
+
+html.dark body .zea-agent-editor .zea-pronunciation-test-card input::placeholder {
+  color: #777b70 !important;
+}
+
+html.dark body .zea-agent-editor .zea-test-pronunciation-button {
+  color: #11120f !important;
+  background: #dfa822 !important;
+}
+
+html.dark body .zea-agent-editor .zea-test-pronunciation-button:hover {
+  background: #efbd3d !important;
+}
+
+html.dark body .zea-agent-editor .zea-knowledge-base-list-item {
+  color: #eee9d8 !important;
+  background: linear-gradient(145deg, #141713 0%, #0a0c0a 100%) !important;
+  border-color: rgba(223, 168, 34, 0.2) !important;
+  box-shadow: none !important;
+}
+
+html.dark body .zea-agent-editor .zea-knowledge-base-list-item:hover {
+  background: #181b16 !important;
+  border-color: rgba(223, 168, 34, 0.48) !important;
+}
+
+html.dark body .zea-agent-editor .zea-knowledge-base-list-item-selected {
+  background: linear-gradient(145deg, #201b0d 0%, #11120d 100%) !important;
+  border-color: #dfa822 !important;
+  box-shadow: 0 0 0 2px rgba(223, 168, 34, 0.16) !important;
+}
+
+html.dark body .zea-agent-editor .zea-knowledge-base-list-item .text-slate-800 {
+  color: #f8f5e8 !important;
+}
+
+html.dark body .zea-agent-editor .zea-knowledge-base-list-item .text-slate-500 {
+  color: #b7b9b0 !important;
+}
+
+html.dark body .zea-agent-editor .zea-knowledge-base-list-item .border-slate-100 {
+  border-color: rgba(223, 168, 34, 0.14) !important;
+}
+
+html.dark body .zea-agent-editor .zea-knowledge-summary-card {
+  background: linear-gradient(145deg, #151713 0%, #0b0d0b 100%) !important;
+  border-color: rgba(223, 168, 34, 0.22) !important;
+}
+
+html.dark body .zea-agent-editor .zea-knowledge-summary-card span {
+  color: #c9b66f !important;
+}
+
+html.dark body .zea-agent-editor .zea-knowledge-summary-card strong {
+  color: #f8f5e8 !important;
+}
+
+html.dark body .zea-agent-editor .zea-knowledge-summary-published {
+  border-color: rgba(52, 211, 153, 0.3) !important;
+}
+
+html.dark body .zea-agent-editor .zea-knowledge-summary-published span {
+  color: #6ee7b7 !important;
+}
+
+html.dark body .zea-agent-editor .zea-knowledge-summary-assigned {
+  border-color: rgba(223, 168, 34, 0.3) !important;
+}
+
+.zea-reports-filter-drawer {
+  animation: zea-reports-drawer-in 180ms ease-out;
+}
+
+@keyframes zea-reports-drawer-in {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+html.dark body .zea-reports-filter-drawer {
+  color: #f8f5e8 !important;
+  background: linear-gradient(145deg, #151713 0%, #090b09 100%) !important;
+  border-left-color: rgba(223, 168, 34, 0.28) !important;
+}
+
+html.dark body .zea-reports-filter-drawer > div:first-child,
+html.dark body .zea-reports-filter-drawer > div:last-child {
+  background: #0e100d !important;
+  border-color: rgba(223, 168, 34, 0.2) !important;
+}
+
+html.dark body .zea-reports-filter-drawer h3 {
+  color: #f8f5e8 !important;
+}
+
+html.dark body .zea-reports-filter-drawer label > span {
+  color: #c9c4b4 !important;
+}
+
+html.dark body .zea-reports-filter-drawer select {
+  color: #eee9d8 !important;
+  background: #090b09 !important;
+  border-color: rgba(223, 168, 34, 0.22) !important;
+}
+
+html.dark body .zea-reports-filter-drawer option {
+  color: #eee9d8 !important;
+  background: #11130f !important;
+}
+
+html:not(.dark) body .zea-reports-export-csv {
+  color: #090a08 !important;
+  background: #dfa822 !important;
+}
+
+html:not(.dark) body .zea-reports-export-csv:hover {
+  background: #efbd3d !important;
+}
+
+html:not(.dark) body .zea-reports-export-csv svg {
+  color: #090a08 !important;
+}
+
+html:not(.dark) body .zea-vqa-refresh-button {
+  color: #090a08 !important;
+  background: #dfa822 !important;
+}
+
+html:not(.dark) body .zea-vqa-refresh-button:hover {
+  background: #efbd3d !important;
+}
+
+html:not(.dark) body .zea-vqa-refresh-button svg {
+  color: #090a08 !important;
+}
+
+html:not(.dark) body .zea-ai-insights-view > div:first-child button {
+  color: #090a08 !important;
+  background: #dfa822 !important;
+}
+
+html:not(.dark) body .zea-ai-insights-view > div:first-child button:hover {
+  background: #efbd3d !important;
+}
+
+html:not(.dark) body .zea-ai-insights-view > div:first-child button svg {
+  color: #090a08 !important;
+}
+
+/* AI Insights: keep every Dark Mode surface within the premium black-and-gold palette. */
+html.dark body .zea-ai-insights-view .bg-white {
+  background: linear-gradient(145deg, #151713 0%, #0b0d0b 100%) !important;
+}
+
+html.dark body .zea-ai-insights-view .bg-slate-50,
+html.dark body .zea-ai-insights-view .bg-slate-100 {
+  background: #181b16 !important;
+}
+
+html.dark body .zea-ai-insights-view .border-slate-200,
+html.dark body .zea-ai-insights-view .border-slate-100,
+html.dark body .zea-ai-insights-view .divide-slate-100 > :not([hidden]) ~ :not([hidden]) {
+  border-color: rgba(223, 168, 34, 0.18) !important;
+}
+
+html.dark body .zea-ai-insights-view .text-slate-800,
+html.dark body .zea-ai-insights-view .text-slate-700 {
+  color: #f8f5e8 !important;
+}
+
+html.dark body .zea-ai-insights-view .text-slate-600 {
+  color: #d2cfc3 !important;
+}
+
+html.dark body .zea-ai-insights-view .text-slate-500,
+html.dark body .zea-ai-insights-view .text-slate-400 {
+  color: #aaaDA4 !important;
+}
+
+html.dark body .zea-ai-insights-view select {
+  color: #f3efe1 !important;
+  background: #090b09 !important;
+  border-color: rgba(223, 168, 34, 0.24) !important;
+}
+
+html.dark body .zea-ai-insights-view select option {
+  color: #f3efe1 !important;
+  background: #11130f !important;
+}
+
+html.dark body .zea-ai-insights-view .hover\:bg-slate-50:hover {
+  background: rgba(223, 168, 34, 0.075) !important;
+}
+
+html.dark body .zea-ai-insights-view .bg-blue-50 {
+  background: rgba(59, 130, 246, 0.12) !important;
+}
+
+html.dark body .zea-ai-insights-view .bg-amber-50 {
+  background: rgba(223, 168, 34, 0.12) !important;
+}
+
+html.dark body .zea-ai-insights-view .bg-emerald-50 {
+  background: rgba(16, 185, 129, 0.12) !important;
+}
+
+html.dark body .zea-ai-insights-view .bg-red-50 {
+  background: rgba(239, 68, 68, 0.12) !important;
+}
+
+html.dark body .zea-ai-insights-view > .flex.items-start.border-blue-200.bg-blue-50 {
+  color: #d9e4dc !important;
+  background: linear-gradient(145deg, #131813 0%, #0b0f0c 100%) !important;
+  border-color: rgba(223, 168, 34, 0.24) !important;
+}
+
+html.dark body .zea-ai-insights-view > .flex.items-start.border-blue-200.bg-blue-50 svg {
+  color: #dfa822 !important;
+}
+
+/* Calls Requiring Review: contain long agent names in the first grid column. */
+.zea-ai-insights-view .lg\:grid-cols-\[180px_1fr_190px\] > div:first-child {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.zea-ai-insights-view .lg\:grid-cols-\[180px_1fr_190px\] > div:first-child > p {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+}
+
+html.dark body .zea-phone-isolation-notice {
+  color: #d9e4dc !important;
+  background: linear-gradient(145deg, #121813 0%, #0a0f0b 100%) !important;
+  border-color: rgba(52, 211, 153, 0.3) !important;
+}
+
+html.dark body .zea-phone-isolation-notice svg {
+  color: #6ee7b7 !important;
+}
+
+html.dark body .zea-settings-task-notice {
+  color: #f4e7bd !important;
+  background: linear-gradient(145deg, #18150d 0%, #0f0d08 100%) !important;
+  border-color: rgba(223, 168, 34, 0.38) !important;
+}
+
+html.dark body .zea-settings-task-notice svg {
+  color: #dfa822 !important;
+}
+
+html:not(.dark) body .zea-settings-task-notice {
+  color: #5b4108 !important;
+}
+
+html:not(.dark) body .zea-n8n-task-code {
+  color: #ffffff !important;
+}
+
+html.dark body .zea-api-key-tenant-notice {
+  color: #f1f5f9 !important;
+  background: #000000 !important;
+  border-color: rgba(223, 168, 34, 0.4) !important;
+}
+
+html.dark body .zea-api-key-tenant-notice svg {
+  color: #dfa822 !important;
+}
+
+html:not(.dark) body .zea-phone-numbers-refresh-button {
+  color: #000000 !important;
+  background: #dfa822 !important;
+}
+
+html:not(.dark) body .zea-phone-numbers-refresh-button svg {
+  color: #000000 !important;
+}
+
+html:not(.dark) body .zea-integration-card-button {
+  color: #000000 !important;
+  background: #dfa822 !important;
+}
+
+html:not(.dark) body .zea-integration-card-button svg {
+  color: #000000 !important;
+}
+
+html:not(.dark) body .zea-integration-card-button:hover {
+  color: #000000 !important;
+  background: #e8b83c !important;
+}
+
+html:not(.dark) body .zea-integration-card-button:focus-visible {
+  color: #000000 !important;
+  background: #dfa822 !important;
+  box-shadow: 0 0 0 3px rgba(223, 168, 34, 0.3) !important;
+}
+
+html:not(.dark) body .zea-integration-card-button:active {
+  color: #000000 !important;
+  background: #c89218 !important;
+}
+
+html:not(.dark) body .zea-integration-card-button:disabled {
+  color: rgba(0, 0, 0, 0.58) !important;
+  background: rgba(223, 168, 34, 0.5) !important;
+  cursor: not-allowed;
+}
+
+html:not(.dark) body .zea-create-api-key-button {
+  color: #000000 !important;
+  background: #dfa822 !important;
+}
+
+html:not(.dark) body .zea-create-api-key-button svg {
+  color: #000000 !important;
+}
+
+html:not(.dark) body .zea-create-api-key-button:hover {
+  color: #000000 !important;
+  background: #e8b83c !important;
+}
+
+html:not(.dark) body .zea-create-api-key-button:focus-visible {
+  color: #000000 !important;
+  background: #dfa822 !important;
+  box-shadow: 0 0 0 3px rgba(223, 168, 34, 0.3) !important;
+}
+
+html:not(.dark) body .zea-create-api-key-button:active {
+  color: #000000 !important;
+  background: #c89218 !important;
+}
+
+html:not(.dark) body .zea-create-api-key-button:disabled {
+  color: rgba(0, 0, 0, 0.58) !important;
+  background: rgba(223, 168, 34, 0.5) !important;
+  cursor: not-allowed;
+}
+
+
+.zea-vqa-audit-title-info {
+  position: relative;
+  z-index: 2;
+  width: 0;
+  height: 0;
+  left: 171px;
+  top: 58px;
+}
+
+.zea-vqa-audit-title-info + div > .overflow-x-auto {
+  width: calc(100% - 1.5rem);
+  margin-top: 0.75rem;
+  margin-right: 0.75rem;
+  margin-bottom: 0.75rem;
+  margin-left: 0.75rem;
+}
+
+.zea-vqa-audit-row {
+  cursor: pointer;
+}
+
+.zea-vqa-audit-row:focus-visible {
+  outline: 2px solid #dfa822 !important;
+  outline-offset: -2px;
+}
+
+/* Call Logs Analytics detail drawer: surface the existing recording card first. */
+.fixed.inset-0.z-50.flex.justify-end > .flex.h-full.w-full.max-w-xl.flex-col > .flex-1.space-y-5.overflow-y-auto.p-6 {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.fixed.inset-0.z-50.flex.justify-end > .flex.h-full.w-full.max-w-xl.flex-col > .flex-1.space-y-5.overflow-y-auto.p-6 > * {
+  margin-top: 0 !important;
+}
+
+.fixed.inset-0.z-50.flex.justify-end > .flex.h-full.w-full.max-w-xl.flex-col > .flex-1.space-y-5.overflow-y-auto.p-6 > :last-child {
+  order: -1;
+}
+
+html:not(.dark) body .fixed.inset-0.z-50.flex.justify-end > .flex.h-full.w-full.max-w-xl.flex-col > .border-t.border-slate-200.bg-white.p-5.text-right > button {
+  color: #090a08 !important;
+  background: #dfa822 !important;
+}
+
+html:not(.dark) body .fixed.inset-0.z-50.flex.justify-end > .flex.h-full.w-full.max-w-xl.flex-col > .border-t.border-slate-200.bg-white.p-5.text-right > button:hover {
+  background: #efbd3d !important;
+}
+
+html:not(.dark) body .fixed.inset-0.z-50.flex.justify-end > .flex.h-full.w-full.max-w-xl.flex-col > .border-t.border-slate-200.bg-white.p-5.text-right > button svg {
+  color: #090a08 !important;
+}
+
+@media (max-width: 640px) {
+  .zea-vqa-audit-title-info + div > .overflow-x-auto {
+    width: calc(100% - 1rem);
+    margin-top: 0.5rem;
+    margin-right: 0.5rem;
+    margin-bottom: 0.5rem;
+    margin-left: 0.5rem;
+  }
+}
+
+.zea-call-logs-table-wrap {
+  width: calc(100% - 1.5rem);
+  margin-top: 0.75rem;
+  margin-right: 0.75rem;
+  margin-bottom: 0.75rem;
+  margin-left: 0.75rem;
+}
+
+@media (max-width: 640px) {
+  .zea-call-logs-table-wrap {
+    width: calc(100% - 1rem);
+    margin-top: 0.5rem;
+    margin-right: 0.5rem;
+    margin-bottom: 0.5rem;
+    margin-left: 0.5rem;
+  }
+}
+
 html:not(.dark) body .zea-field-info-tooltip {
   color: #29261f !important;
   background: #ffffff !important;
@@ -1772,6 +2284,10 @@ html:not(.dark) body .zea-brain-tab .zea-super-admin-model-badge {
   color: #805600 !important;
 }
 
+html:not(.dark) body .zea-tts-model-badge {
+  color: #805600 !important;
+}
+
 html:not(.dark) body .zea-test-pronunciation-button {
   color: #11120f !important;
   background: #dfa822 !important;
@@ -1779,6 +2295,20 @@ html:not(.dark) body .zea-test-pronunciation-button {
 
 html:not(.dark) body .zea-test-pronunciation-button:hover {
   background: #c99118 !important;
+}
+
+html:not(.dark) body .zea-manage-pronunciation-groups {
+  color: #11120f !important;
+  background: #dfa822 !important;
+  border-color: #c99118 !important;
+}
+
+html:not(.dark) body .zea-manage-pronunciation-groups:hover {
+  background: #c99118 !important;
+}
+
+html:not(.dark) body .zea-postcall-llm-helper {
+  color: #4c1d95 !important;
 }
 
 body .zea-developer-agent-tabs .zea-developer-agent-tab-active {
