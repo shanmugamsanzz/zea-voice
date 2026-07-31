@@ -75,6 +75,7 @@ const exhausted = await scheduleCustomerCallback({
   contextRunner: async (operation) => operation({
     query: async () => ({ rowCount: 1, rows: [{ ...selected, retry_count: 3, max_retries: 3 }] }),
   }),
+  finalizeCreditBilling: async () => ({ creditsCharged: 1 }),
   queue,
 });
 assert.equal(exhausted.scheduled, false);
@@ -106,6 +107,7 @@ const protectedResult = await finishAttempt('attempt-1', 'completed', { duration
       return { rowCount: 1, rows: [] };
     },
   }),
+  finalizeCreditBilling: async () => ({ creditsCharged: 1 }),
   queue,
 });
 assert.equal(protectedResult.action, 'callback');
@@ -130,6 +132,7 @@ const automaticRetry = await finishAttempt('attempt-2', 'no_answer', {}, {
       return { rowCount: 1, rows: [] };
     },
   }),
+  finalizeCreditBilling: async () => ({ creditsCharged: 0 }),
   queue: { add: async (...args) => automaticQueueJobs.push(args) },
 });
 assert.equal(automaticRetry.action, 'retry');

@@ -688,7 +688,7 @@ function CompaniesListView() {
               <label className="font-bold text-slate-500">Business Phone<input required value={editingCompany.businessPhone ?? ''} onChange={(e) => setEditingCompany({ ...editingCompany, businessPhone: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
               <label className="font-bold text-slate-500">Website<input value={editingCompany.website ?? ''} onChange={(e) => setEditingCompany({ ...editingCompany, website: e.target.value || null })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
               <label className="font-bold text-slate-500">Billing Tier<select value={editingCompany.billingTier} onChange={(e) => setEditingCompany({ ...editingCompany, billingTier: e.target.value as CompanyApiData['billingTier'] })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800"><option value="starter">Starter</option><option value="pro">Pro</option><option value="enterprise">Enterprise</option></select></label>
-              <label className="font-bold text-slate-500">Per-Minute Price (₹)<input type="number" min="0" step="0.01" required value={editingCompany.perMinutePrice} onChange={(e) => setEditingCompany({ ...editingCompany, perMinutePrice: Number(e.target.value) })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
+              <label className="font-bold text-slate-500">Per-Minute Price (₹)<input type="number" min="0.0001" step="0.0001" required value={editingCompany.perMinutePrice} onChange={(e) => setEditingCompany({ ...editingCompany, perMinutePrice: Number(e.target.value) })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
               <label className="font-bold text-slate-500">Time Zone<input list="company-timezone-options" required value={editingCompany.timezone} onChange={(e) => setEditingCompany({ ...editingCompany, timezone: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
               <label className="font-bold text-slate-500 md:col-span-2">Street Address<input value={editingCompany.addressLine1 ?? ''} onChange={(e) => setEditingCompany({ ...editingCompany, addressLine1: e.target.value || null })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
               <label className="font-bold text-slate-500">State<input value={editingCompany.state ?? ''} onChange={(e) => setEditingCompany({ ...editingCompany, state: e.target.value || null })} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 outline-none focus:border-indigo-500" /></label>
@@ -844,8 +844,8 @@ function CompaniesListView() {
                     <input
                       type="number"
                       required
-                      min="0"
-                      step="0.01"
+                      min="0.0001"
+                      step="0.0001"
                       value={perMinutePrice}
                       onChange={(e) => setPerMinutePrice(e.target.value)}
                       className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-indigo-500 rounded-lg px-3 py-2 outline-none font-semibold text-slate-800"

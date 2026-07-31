@@ -8,6 +8,7 @@ process.env.POSTCALL_SUMMARY_WORKERS_ENABLED = 'true';
 
 const {
   createQueuedPostCallSummaryJob,
+  attachPostCallSummaryQueueJob,
   listRecoverablePostCallSummaryJobs,
 } = await import('../src/voice/postcall-summary/postcall-summary-job.service.js');
 const {
@@ -61,6 +62,25 @@ const noConfiguration = await createQueuedPostCallSummaryJob('call-2', {
   }),
 });
 assert.equal(noConfiguration, null);
+
+let attachSql;
+const attachedAfterFastClaim = await attachPostCallSummaryQueueJob('summary-fast', 'bull-fast', {
+  contextRunner: async (operation) => operation({
+    query: async (sql) => {
+      attachSql = sql;
+      return { rowCount: 1, rows: [{
+        id: 'summary-fast', tenant_id: 'tenant-a', workspace_id: 'workspace-a',
+        call_session_id: 'call-fast', agent_id: 'agent-a', provider_id: 'provider-a', model_id: 'model-a',
+        status: 'processing', instructions: 'Facts', include_transcript_in_webhook: true,
+        include_summary_in_webhook: true, attempt_count: 1, max_attempts: 3,
+        bullmq_job_id: 'bull-fast', error_code: null, error_message: null,
+      }] };
+    },
+  }),
+});
+assert.doesNotMatch(attachSql, /WHERE id=\$1\s+AND status/);
+assert.equal(attachedAfterFastClaim.status, 'processing');
+assert.equal(attachedAfterFastClaim.bullmqJobId, 'bull-fast');
 
 const recoverable = await listRecoverablePostCallSummaryJobs({
   contextRunner: async (userId, operation) => {

@@ -63,8 +63,27 @@ interface PronunciationGroupManagerProps {
   onSuccess?: (message: string) => void;
 }
 
+const AGENT_LANGUAGE_TAGS: Record<string, string> = {
+  'English (US)': 'en-US',
+  'English (UK)': 'en-GB',
+  'Spanish (LatAm)': 'es-419',
+  'French (France)': 'fr-FR',
+  'German (Germany)': 'de-DE',
+  'Hindi (India)': 'hi-IN',
+  'Tamil (India)': 'ta-IN',
+  'Telugu (India)': 'te-IN',
+  'Kannada (India)': 'kn-IN',
+};
+
+const pronunciationLanguageTag = (language?: string) => {
+  const value = language?.trim();
+  if (!value) return 'und';
+  if (AGENT_LANGUAGE_TAGS[value]) return AGENT_LANGUAGE_TAGS[value];
+  return /^(?:und|[a-z]{2,3}(?:-[a-z0-9]{2,8})*)$/i.test(value) ? value : 'und';
+};
+
 const emptyGroupForm = (language = 'und') => ({
-  name: '', language: language || 'und', status: 'active' as GroupStatus, description: '',
+  name: '', language: pronunciationLanguageTag(language), status: 'active' as GroupStatus, description: '',
 });
 const emptyRuleForm = () => ({
   writtenText: '', spokenReplacement: '', matchType: 'whole_word' as MatchType,

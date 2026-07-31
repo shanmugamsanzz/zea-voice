@@ -20,6 +20,7 @@ const row = {
   interruption_sensitivity: '0.3', silence_timeout_ms: 600, inactivity_timeout_seconds: 8,
   settings: {
     greetingMode: 'Agent Initiates', sttLanguage: 'en-IN', sttMode: 'transcribe',
+    ttsMaxCharactersPerMinute: 1000, maxCallDurationMinutes: 5,
     ttsLanguage: 'legacy-agent-value', ttsSpeed: 1.1, silentMessage: 'Are you still there?',
     preCallApiActive: true, preCallApiUrl: 'https://example.com/pre', preCallApiMethod: 'POST',
     postCallEndpointDetailsActive: true, postCallApiUrl: 'https://example.com/post', postCallApiMethod: 'POST',
@@ -69,6 +70,12 @@ assert.equal(profile.providers.tts.modelCapabilities.languages[0], 'en');
 assert.equal(profile.providers.tts.effectiveSettings.voiceId, 'hospital-voice');
 assert.equal(profile.providers.tts.effectiveSettings.ttsLanguage, 'en-IN');
 assert.equal(profile.providers.tts.effectiveSettings.ttsSpeed, 0.9);
+assert.deepEqual(profile.limits, {
+  ttsMaxCharactersPerResponse: 0,
+  ttsMaxCharactersPerMinute: 1000,
+  maxCallDurationMinutes: 5,
+  ttsLimitFallbackMessage: '',
+});
 assert.equal(profile.knowledgeBases[0].name, 'Hospital KB');
 assert.equal(profile.tools[0].secretConfiguration.token, 'decrypted-tool-token');
 assert.equal(profile.integrations.preCall.api.url, 'https://example.com/pre');

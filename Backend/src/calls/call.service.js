@@ -1,7 +1,10 @@
 import { AppError } from '../middleware/errors.js';
+import { finalizeCallCreditBilling } from '../credits/call-credit.service.js';
 import { withAuthServiceContext, withPlatformAdminContext, withTenantContext } from '../infrastructure/database-context.js';
 import { decryptCredential } from '../security/credential-crypto.js';
 import { hangupPlivoCall } from '../telephony/plivo.client.js';
+import { mergeMessageSources } from '../voice/source-trace.js';
+import { normalizeTtsLimitUsage } from '../voice/tts-limit-usage.js';
 
 const activeStatuses = ['queued', 'ringing', 'connected'];
 const number = (value) => Number(value);
@@ -23,7 +26,15 @@ function contactName(row) {
   return null;
 }
 
+function mapTranscriptEntry(entry) {
+  return {
+    ...entry,
+    sources: mergeMessageSources(entry.sources ?? []),
+  };
+}
+
 function mapCall(row, includeTranscript = false) {
+  const runtime = row.provider_metadata?.voiceRuntime;
   const call = {
     id: row.id, companyId: row.tenant_id, workspaceId: row.workspace_id,
     companyName: row.company_name, providerCallId: row.provider_call_id,
@@ -37,6 +48,10 @@ function mapCall(row, includeTranscript = false) {
       ? row.duration_seconds : number(row.live_duration_seconds),
     cost: number(row.cost), currency: row.currency,
     recordingAvailable: Boolean(row.recording_object_key),
+    ttsLimitUsage: normalizeTtsLimitUsage(runtime?.ttsLimitUsage ?? runtime?.metrics?.ttsLimits, {
+      callDurationSeconds: row.live_duration_seconds === undefined
+        ? row.duration_seconds : number(row.live_duration_seconds),
+    }),
     aiSummary: row.ai_summary_id ? {
       id: row.ai_summary_id,
       status: row.ai_summary_status,
@@ -55,7 +70,7 @@ function mapCall(row, includeTranscript = false) {
     } : null,
     createdAt: row.created_at, updatedAt: row.updated_at,
   };
-  if (includeTranscript) call.transcript = row.transcript ?? [];
+  if (includeTranscript) call.transcript = (row.transcript ?? []).map(mapTranscriptEntry);
   return call;
 }
 
@@ -101,15 +116,18 @@ export function listCalls(auth, filters) {
   });
 }
 
-export function getCall(auth, callId) {
-  return contextFor(auth, async (client) => {
+export function getCall(auth, callId, dependencies = {}) {
+  const contextRunner = dependencies.contextRunner ?? ((operation) => contextFor(auth, operation));
+  return contextRunner(async (client) => {
     const companyId = auth.role === 'SUPER_ADMIN' ? null : auth.tenantId;
     const result = await client.query(`${callSelect} WHERE c.id = $1
       AND ($2::uuid IS NULL OR c.tenant_id = $2)`, [callId, companyId]);
     if (!result.rowCount) throw new AppError(404, 'Call was not found', 'CALL_NOT_FOUND');
     const transcript = await client.query(`SELECT id, sequence_number AS "sequenceNumber", speaker,
-      text, offset_ms AS "offsetMs", is_final AS "isFinal", created_at AS "createdAt"
-      FROM call_transcript_entries WHERE call_session_id = $1 ORDER BY sequence_number`, [callId]);
+      text, offset_ms AS "offsetMs", is_final AS "isFinal", sources, created_at AS "createdAt"
+      FROM call_transcript_entries
+      WHERE call_session_id = $1 AND tenant_id = $2
+      ORDER BY sequence_number`, [callId, result.rows[0].tenant_id]);
     return mapCall({ ...result.rows[0], transcript: transcript.rows }, true);
   });
 }
@@ -133,6 +151,10 @@ export function forceHangup(actorUserId, callId, reason, fetchImpl = fetch) {
     const updated = (await client.query(`UPDATE call_sessions SET status = 'canceled', ended_at = now(),
       duration_seconds = GREATEST(duration_seconds, floor(extract(epoch FROM (now() - started_at)))::int)
       WHERE id = $1 RETURNING *`, [callId])).rows[0];
+    await finalizeCallCreditBilling(client, {
+      call: updated,
+      durationSeconds: Number(updated.duration_seconds ?? 0),
+    });
     await client.query(`INSERT INTO call_control_events
       (call_session_id, tenant_id, action, reason, actor_user_id, provider_response)
       VALUES ($1, $2, 'force_hangup', $3, $4, $5::jsonb)`,
@@ -162,14 +184,17 @@ export function createCallSession(input) {
   });
 }
 
-export function appendTranscriptEntry(input) {
-  return withAuthServiceContext(async (client) => {
+export function appendTranscriptEntry(input, dependencies = {}) {
+  const contextRunner = dependencies.contextRunner ?? withAuthServiceContext;
+  return contextRunner(async (client) => {
     const call = await client.query('SELECT tenant_id FROM call_sessions WHERE id = $1', [input.callId]);
     if (!call.rowCount) throw new AppError(404, 'Call was not found', 'CALL_NOT_FOUND');
+    const sources = mergeMessageSources(input.sources ?? []);
     const result = await client.query(`INSERT INTO call_transcript_entries
-      (call_session_id, tenant_id, sequence_number, speaker, text, offset_ms, is_final)
-      VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`, [input.callId, call.rows[0].tenant_id,
-      input.sequenceNumber, input.speaker, input.text, input.offsetMs ?? 0, input.isFinal ?? true]);
+      (call_session_id, tenant_id, sequence_number, speaker, text, offset_ms, is_final, sources)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb) RETURNING *`, [input.callId, call.rows[0].tenant_id,
+      input.sequenceNumber, input.speaker, input.text, input.offsetMs ?? 0, input.isFinal ?? true,
+      JSON.stringify(sources)]);
     return result.rows[0];
   });
 }

@@ -14,6 +14,7 @@ import { apiRequest } from '../../lib/api';
 
 type CompliancePolicy = 'standard_hipaa_pci' | 'strict_gdpr' | 'relaxed_developer';
 type SipRelayRegion = 'us_east' | 'eu_central' | 'apac_south';
+const THIRTY_DAYS_SECONDS = 30 * 24 * 60 * 60;
 
 interface PlatformSettings {
   adminIpAllowlist: string[];
@@ -79,7 +80,10 @@ export function GlobalSettingsView() {
     const adminIpAllowlist = allowlist.split(/[\n,]+/).map((value) => value.trim()).filter(Boolean);
     const timeout = Number(sessionTimeout);
     if (adminIpAllowlist.length === 0) { setError('At least one administrative IP CIDR is required.'); return; }
-    if (!Number.isInteger(timeout) || timeout < 300 || timeout > 86400) { setError('Session timeout must be an integer from 300 to 86400 seconds.'); return; }
+    if (!Number.isInteger(timeout) || timeout < 300 || timeout > THIRTY_DAYS_SECONDS) {
+      setError(`Session timeout must be an integer from 300 to ${THIRTY_DAYS_SECONDS} seconds.`);
+      return;
+    }
     setSaving(true); setError(''); setSuccess('');
     try {
       const updated = await apiRequest<PlatformSettings>('/admin/settings', {
@@ -181,7 +185,7 @@ export function GlobalSettingsView() {
               <div>
                 <div className="flex items-center gap-2">
                   <h3 className="text-base font-black text-slate-900">Maximum Session Timeout</h3>
-                  <SettingsInfoTooltip label="Maximum Session Timeout" text="Set the maximum duration for a Super Admin session." />
+                  <SettingsInfoTooltip label="Maximum Session Timeout" text="Set the fixed maximum lifetime of a login session from its original sign-in time. Access tokens still renew silently every 15 minutes." />
                 </div>
               </div>
             </div>
@@ -190,7 +194,7 @@ export function GlobalSettingsView() {
                 required
                 type="number"
                 min="300"
-                max="86400"
+                max={THIRTY_DAYS_SECONDS}
                 step="1"
                 value={sessionTimeout}
                 onChange={(event) => setSessionTimeout(event.target.value)}
@@ -198,7 +202,7 @@ export function GlobalSettingsView() {
               />
               <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-bold text-slate-500">seconds</span>
             </div>
-            <p className="mt-3 text-xs text-slate-500">Allowed range: 300 seconds to 86400 seconds.</p>
+            <p className="mt-3 text-xs text-slate-500">Allowed range: 300 seconds to 2,592,000 seconds (30 days).</p>
           </section>
 
           <section className="zea-settings-card rounded-xl border border-slate-200 p-5">

@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { completeVoiceCall } from '../src/voice/call-completion.service.js';
 
-function fixture(summaryEnabled, queueImplementation, fetchImplementation) {
-  const callId = summaryEnabled ? 'call-summary' : 'call-normal';
+function fixture(summaryEnabled, queueImplementation, fetchImplementation, callIdOverride) {
+  const callId = callIdOverride ?? (summaryEnabled ? 'call-summary' : 'call-normal');
   const row = {
     id: callId, tenant_id: 'tenant-1', started_at: new Date(0), answered_at: new Date(1000),
     ended_at: null, duration_seconds: 0, provider_metadata: {},
@@ -41,6 +41,7 @@ function fixture(summaryEnabled, queueImplementation, fetchImplementation) {
     adapters: {}, endedAt: new Date(61000),
   }, {
     contextRunner,
+    finalizeCreditBilling: async () => ({ creditsCharged: 1 }),
     queuePostCallSummary: queueImplementation,
     fetchImpl: fetchImplementation,
   });
@@ -57,24 +58,44 @@ assert.equal(deferred.postCall.reason, 'summary_queued');
 assert.equal(deferred.postCall.summaryJobId, 'summary-job-1');
 assert.equal(immediateWebhookCalls, 0);
 
-let fallbackPayload;
+let fallbackWebhookCalls = 0;
 const fallback = await fixture(true, async () => { throw new Error('Redis unavailable with internal details'); },
-  async (_url, request) => {
-    fallbackPayload = JSON.parse(request.body);
+  async () => {
+    fallbackWebhookCalls += 1;
     return new Response('{}', { status: 200 });
   });
-assert.equal(fallback.postCall.delivered, true);
-assert.equal(fallbackPayload.aiSummary.status, 'queue_failed');
-assert.equal(fallbackPayload.aiSummary.error, 'Summary queue unavailable');
-assert.doesNotMatch(JSON.stringify(fallbackPayload), /Redis unavailable/);
+assert.equal(fallback.postCall.delivered, false);
+assert.equal(fallback.postCall.reason, 'summary_queue_failed');
+assert.equal(fallback.postCall.error, 'Summary queue unavailable');
+assert.equal(fallbackWebhookCalls, 0);
+assert.doesNotMatch(JSON.stringify(fallback.postCall), /Redis unavailable/);
 
 let normalHeaders;
-await fixture(false, undefined, async (_url, request) => {
+let normalPayload;
+let disabledQueueChecks = 0;
+await fixture(false, async () => {
+  disabledQueueChecks += 1;
+  return { queued: false, reason: 'not_configured', job: null };
+}, async (_url, request) => {
   normalHeaders = request.headers;
+  normalPayload = JSON.parse(request.body);
   return new Response('{}', { status: 200 });
 });
+assert.equal(disabledQueueChecks, 1);
 assert.equal(normalHeaders['idempotency-key'], 'postcall:call-normal');
 assert.equal(normalHeaders['x-zea-event-id'], 'call-normal');
+assert.equal(normalPayload.aiSummary, undefined);
+
+let staleProfileWebhookCalls = 0;
+const staleProfile = await fixture(false, async () => ({
+  queued: true, reason: 'created', job: { id: 'summary-job-stale-profile' },
+}), async () => {
+  staleProfileWebhookCalls += 1;
+  return new Response('{}', { status: 200 });
+}, 'call-stale-runtime-profile');
+assert.equal(staleProfile.postCall.reason, 'summary_queued');
+assert.equal(staleProfile.postCall.summaryJobId, 'summary-job-stale-profile');
+assert.equal(staleProfileWebhookCalls, 0);
 
 console.log(JSON.stringify({
   success: true,

@@ -121,6 +121,9 @@ voiceRouter.post('/answer', async (request, response) => {
   response.type('application/xml').send(buildPlivoStreamXml(callSession, {
     recordingEnabled: runtimeAgent.recordingEnabled,
     recordingCallbackUrl: call.recordingCallbackUrl,
+    // This is only a provider safety ceiling. Plivo stops recording naturally
+    // when the call ends, including when the agent's own duration limit fires.
+    recordingMaxLengthSeconds: 86_400,
   }));
 });
 

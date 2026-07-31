@@ -1,6 +1,7 @@
 import { withAuthServiceContext } from '../infrastructure/database-context.js';
 import { AppError } from '../middleware/errors.js';
 import { env } from '../config/env.js';
+import { reserveTenantCallCredit } from '../credits/call-credit.service.js';
 
 function map(row, created) {
   return {
@@ -31,6 +32,8 @@ function assertSameCall(row, input) {
 export function createVoiceCallSession(input, dependencies = {}) {
   const contextRunner = dependencies.contextRunner ?? withAuthServiceContext;
   return contextRunner(async (client) => {
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1),hashtext($2))',
+      [input.call.telephonyAccountId, input.call.providerCallId]);
     const existing = await client.query(
       `SELECT * FROM call_sessions WHERE telephony_account_id=$1 AND provider_call_id=$2`,
       [input.call.telephonyAccountId, input.call.providerCallId],
@@ -43,12 +46,18 @@ export function createVoiceCallSession(input, dependencies = {}) {
       if (!connected.rowCount) throw new AppError(409, 'Existing call session has already ended', 'VOICE_CALL_ALREADY_ENDED');
       return map(connected.rows[0], false);
     }
+    const reserveCredit = dependencies.reserveCredit ?? reserveTenantCallCredit;
+    const reservation = await reserveCredit(client, {
+      tenantId: input.runtimeProfile.agent.tenantId,
+      direction: input.call.direction,
+    });
     try {
       const result = await client.query(
         `INSERT INTO call_sessions
           (tenant_id,workspace_id,telephony_account_id,phone_number_id,provider_call_id,
-           agent_id,agent_name,from_number,to_number,direction,status,ringing_at,answered_at,provider_metadata)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'connected',now(),now(),$11::jsonb)
+           agent_id,agent_name,from_number,to_number,direction,status,ringing_at,answered_at,provider_metadata,
+           reserved_credits,credit_price_snapshot_inr)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'connected',now(),now(),$11::jsonb,$12,$13)
          RETURNING *`,
         [
           input.runtimeProfile.agent.tenantId,
@@ -71,6 +80,8 @@ export function createVoiceCallSession(input, dependencies = {}) {
             ttsProviderId: input.runtimeProfile.providers.tts.providerId,
             ttsModelId: input.runtimeProfile.providers.tts.modelId,
           }),
+          reservation.reservedCredits,
+          reservation.priceSnapshotInr,
         ],
       );
       return map(result.rows[0], true);

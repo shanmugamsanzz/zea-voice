@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { AppError } from '../../../middleware/errors.js';
 import { providerAdapterRegistry } from '../registry.js';
 import { createPronunciationTextProcessor } from '../../pronunciation/pronunciation-text-processor.js';
+import { createTtsTextPreprocessor } from '../../tts-text-preprocessor.js';
 
 export async function streamSelectedTtsToPlivo(runtimeProfile, text, options = {}) {
   const providerConfig = runtimeProfile?.providers?.tts;
@@ -13,8 +14,20 @@ export async function streamSelectedTtsToPlivo(runtimeProfile, text, options = {
   const generationId = options.generationId ?? randomUUID();
   const audioEngine = options.audioEngine;
   const usageTracker = options.usageTracker;
+  const prepared = (options.textProcessor ?? createTtsTextPreprocessor({
+    language: runtimeProfile.agent?.language,
+    timeZone: runtimeProfile.agent?.timeZone
+      ?? runtimeProfile.agent?.settings?.timeZone
+      ?? runtimeProfile.agent?.settings?.timezone,
+    context: options.templateContext ?? runtimeProfile.callContext?.variables ?? {},
+  })).process(text, options.templateContext);
+  if (!prepared.text) {
+    throw new AppError(409, 'TTS text contains no safe speakable content', 'TTS_TEXT_EMPTY_AFTER_PREPARATION', {
+      unresolvedVariables: prepared.unresolvedVariables,
+    });
+  }
   const pronunciation = (options.pronunciationProcessor
-    ?? createPronunciationTextProcessor(runtimeProfile.pronunciation)).process(text);
+    ?? createPronunciationTextProcessor(runtimeProfile.pronunciation)).process(prepared.text);
   let completed = false;
   audioEngine.beginOutputGeneration(generationId);
   try {

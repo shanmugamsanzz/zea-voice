@@ -1,7 +1,10 @@
 import { withAuthServiceContext } from '../infrastructure/database-context.js';
+import { logger } from '../config/logger.js';
 import { activeCallSessions } from './call-session-store.js';
 import { reportPostCall } from './integrations/postcall.service.js';
 import { queuePostCallSummary } from './postcall-summary/postcall-summary.queue.js';
+import { normalizeTtsLimitUsage } from './tts-limit-usage.js';
+import { finalizeCallCreditBilling } from '../credits/call-credit.service.js';
 
 const terminalStatuses = new Set(['completed', 'failed', 'canceled', 'manual_follow_up_required']);
 const wholeNumber = (value) => Math.max(0, Math.round(Number(value) || 0));
@@ -25,16 +28,23 @@ async function closeAdapters(adapters = {}) {
 async function persistCompletion(input, dependencies) {
   const contextRunner = dependencies.contextRunner ?? withAuthServiceContext;
   return contextRunner(async (client) => {
+    const finalizeCredit = dependencies.finalizeCreditBilling ?? finalizeCallCreditBilling;
     const selected = await client.query('SELECT * FROM call_sessions WHERE id=$1 FOR UPDATE', [input.callId]);
     if (!selected.rowCount) throw new Error(`Call session was not found: ${input.callId}`);
     const call = selected.rows[0];
     const existingRuntime = call.provider_metadata?.voiceRuntime;
     if (call.ended_at && existingRuntime?.finalized) {
-      return { call, idempotent: true, usage: existingRuntime.usage };
+      const billing = await finalizeCredit(client, {
+        call,
+        durationSeconds: Number(call.duration_seconds ?? 0),
+      });
+      return { call, billing, idempotent: true, usage: existingRuntime.usage };
     }
     const endedAt = input.endedAt;
     const startedAt = call.answered_at ?? call.started_at;
     const durationSeconds = Math.max(0, Math.ceil((endedAt.getTime() - new Date(startedAt).getTime()) / 1000));
+    const metrics = input.metrics ?? {};
+    const ttsLimitUsage = normalizeTtsLimitUsage(metrics.ttsLimits, { callDurationSeconds: durationSeconds });
     for (const usage of input.usage.providers) {
       await client.query(`INSERT INTO call_provider_usage
         (call_session_id,tenant_id,provider_kind,provider_id,provider_name,model_id,model_key,
@@ -59,14 +69,19 @@ async function persistCompletion(input, dependencies) {
       reason: input.reason,
       usage: input.usage,
       adapterCleanup: input.adapterCleanup,
-      metrics: input.metrics ?? {},
+      metrics,
+      ttsLimitUsage,
       finalizedAt: endedAt.toISOString(),
     };
     const updated = await client.query(`UPDATE call_sessions SET status=$2::call_status,ended_at=$3,
       duration_seconds=$4,provider_metadata=provider_metadata||$5::jsonb WHERE id=$1 RETURNING *`, [
       input.callId, input.status, endedAt, durationSeconds, JSON.stringify({ voiceRuntime }),
     ]);
-    return { call: updated.rows[0], idempotent: false, usage: input.usage };
+    const billing = await finalizeCredit(client, {
+      call: updated.rows[0], durationSeconds,
+    });
+    const finalized = await client.query('SELECT * FROM call_sessions WHERE id=$1', [input.callId]);
+    return { call: finalized.rows[0], billing, idempotent: false, usage: input.usage };
   });
 }
 
@@ -144,38 +159,102 @@ export async function completeVoiceCall(input, dependencies = {}) {
       },
       transcript: input.controller.history,
       providerUsage: usage,
+      ttsLimitUsage: persisted.call.provider_metadata?.voiceRuntime?.ttsLimitUsage ?? null,
     };
-    const summaryEnabled = input.runtimeProfile.agent.settings?.postCallSummaryEnabled === true;
-    if (summaryEnabled) {
-      const summaryFallbackPayload = (aiSummary) => {
-        const payload = { ...postCallPayload };
-        if (input.runtimeProfile.agent.settings?.postCallIncludeTranscript === false) delete payload.transcript;
-        if (input.runtimeProfile.agent.settings?.postCallIncludeSummary !== false) payload.aiSummary = aiSummary;
-        return payload;
-      };
-      try {
-        const queueSummary = dependencies.queuePostCallSummary ?? queuePostCallSummary;
-        const summary = await queueSummary(input.controller.callSession.id, dependencies);
-        postCall = summary.queued
-          ? {
-            attempted: false, delivered: false, reason: 'summary_queued',
+    try {
+      // The database is authoritative here. A call can retain a runtime profile that was
+      // loaded before the developer enabled summaries, so gating on that cached profile
+      // silently skipped job creation for otherwise valid summary configurations.
+      const queueSummary = dependencies.queuePostCallSummary ?? queuePostCallSummary;
+      const summary = await queueSummary(input.controller.callSession.id, dependencies);
+      logger.info({
+        stage: 'postcall_summary.dispatch',
+        callId: input.controller.callSession.id,
+        queued: summary.queued,
+        reason: summary.reason,
+        summaryJobId: summary.job?.id ?? null,
+      }, summary.queued ? 'Post-Call AI summary queued' : 'Post-Call AI summary not queued');
+      postCall = summary.queued
+        ? {
+          attempted: false, delivered: false, reason: 'summary_queued',
+          summaryJobId: summary.job?.id ?? null,
+        }
+        : summary.reason === 'not_configured'
+          ? await reportPostCall(input.runtimeProfile, postCallPayload, dependencies)
+          : {
+            attempted: false,
+            delivered: false,
+            reason: `summary_${summary.reason}`,
             summaryJobId: summary.job?.id ?? null,
-          }
-          : await reportPostCall(input.runtimeProfile, summaryFallbackPayload({
-            status: 'not_queued', reason: summary.reason,
-          }), dependencies);
-      } catch (summaryQueueError) {
-        postCall = await reportPostCall(input.runtimeProfile, summaryFallbackPayload({
-            status: 'queue_failed',
-            error: 'Summary queue unavailable',
-        }), dependencies);
-      }
-    } else {
-      postCall = await reportPostCall(input.runtimeProfile, postCallPayload, dependencies);
+          };
+    } catch (summaryQueueError) {
+      logger.error({
+        err: summaryQueueError,
+        stage: 'postcall_summary.queue_failed',
+        callId: input.controller.callSession.id,
+      }, 'Post-Call AI summary queue failed; webhook remains deferred');
+      postCall = {
+        attempted: false,
+        delivered: false,
+        reason: 'summary_queue_failed',
+        error: 'Summary queue unavailable',
+      };
     }
     await (dependencies.persistPostCallResult ?? persistPostCallResult)(
       input.controller.callSession.id, postCall, dependencies,
     );
   }
   return { call: persisted.call, usage: persisted.usage, adapterCleanup, postCall, idempotent: persisted.idempotent };
+}
+
+/**
+ * Terminal persistence for a media stream that closes before provider adapters,
+ * usage tracking, or the conversation controller finish initializing.
+ */
+export async function completeVoiceCallWithoutRuntime(input, dependencies = {}) {
+  if (!input?.callId) throw new TypeError('callId is required');
+  const status = terminalStatus(input.outcome ?? 'failed');
+  const reason = input.reason ?? 'runtime_closed_before_ready';
+  const endedAt = input.endedAt ?? new Date();
+  const contextRunner = dependencies.contextRunner ?? withAuthServiceContext;
+  const persisted = await contextRunner(async (client) => {
+    const finalizeCredit = dependencies.finalizeCreditBilling ?? finalizeCallCreditBilling;
+    const selected = await client.query('SELECT * FROM call_sessions WHERE id=$1 FOR UPDATE', [input.callId]);
+    if (!selected.rowCount) throw new Error(`Call session was not found: ${input.callId}`);
+    const call = selected.rows[0];
+    if (call.ended_at) {
+      const billing = await finalizeCredit(client, {
+        call, durationSeconds: Number(call.duration_seconds ?? 0),
+      });
+      return { call, billing, idempotent: true };
+    }
+    const startedAt = call.answered_at ?? call.started_at;
+    const durationSeconds = Math.max(0,
+      Math.ceil((endedAt.getTime() - new Date(startedAt).getTime()) / 1000));
+    const updated = (await client.query(`UPDATE call_sessions
+      SET status=$2::call_status,ended_at=$3,duration_seconds=$4,
+          provider_metadata=COALESCE(provider_metadata,'{}'::jsonb)||$5::jsonb
+      WHERE id=$1 RETURNING *`, [
+      input.callId, status, endedAt, durationSeconds,
+      JSON.stringify({ voiceRuntime: {
+        finalized: true, degradedFinalization: true, reason,
+        finalizedAt: endedAt.toISOString(),
+      } }),
+    ])).rows[0];
+    const billing = await finalizeCredit(client, { call: updated, durationSeconds });
+    return { call: updated, billing, idempotent: false };
+  });
+  activeCallSessions.delete(input.callId);
+  if (!persisted.idempotent && status === 'completed') {
+    await (dependencies.queuePostCallSummary ?? queuePostCallSummary)(input.callId, dependencies)
+      .catch((error) => logger.warn({
+        stage: 'postcall_summary.degraded_finalization_deferred', callId: input.callId,
+        errorCode: error?.code,
+      }, 'Post-call summary could not be queued after degraded finalization'));
+  }
+  logger.warn({
+    stage: 'call.degraded_finalization', callId: input.callId, status, reason,
+    durationSeconds: Number(persisted.call.duration_seconds ?? 0),
+  }, 'Call persisted through pre-runtime completion fallback');
+  return persisted;
 }

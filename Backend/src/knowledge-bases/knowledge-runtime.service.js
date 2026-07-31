@@ -81,8 +81,9 @@ const runtimeProfileSql = `
     ) ORDER BY priority, id) FROM assigned), '[]'::jsonb) AS knowledge_bases,
     COALESCE((SELECT jsonb_agg(to_jsonb(r) ORDER BY r.priority, r.id)
       FROM (
-        SELECT w.id, w.knowledge_base_id, w.name, w.intent, w.priority,
-          w.action_type, w.action_config, w.response_template
+        SELECT w.id, w.knowledge_base_id, w.document_id, w.document_version_id,
+          d.original_filename AS document_name, w.source_page_start, w.source_page_end,
+          w.name, w.intent, w.priority, w.action_type, w.action_config, w.response_template
           FROM workflow_rules w JOIN assigned a ON a.id = w.knowledge_base_id
           JOIN knowledge_document_versions v ON v.tenant_id=w.tenant_id AND v.id=w.document_version_id
           JOIN knowledge_documents d ON d.tenant_id=w.tenant_id AND d.id=w.document_id
@@ -93,8 +94,10 @@ const runtimeProfileSql = `
       ) r), '[]'::jsonb) AS workflows,
     COALESCE((SELECT jsonb_agg(to_jsonb(c) ORDER BY c.sequence_order, c.id)
       FROM (
-        SELECT f.id, f.knowledge_base_id, f.flow_key, f.node_key, f.node_type,
-          f.language, f.sequence_order, f.is_entry, f.content, f.variables, f.transitions
+        SELECT f.id, f.knowledge_base_id, f.document_id, f.document_version_id,
+          d.original_filename AS document_name, f.source_page_start, f.source_page_end,
+          f.flow_key, f.node_key, f.node_type, f.language, f.sequence_order,
+          f.is_entry, f.content, f.variables, f.transitions
           FROM conversation_flows f JOIN assigned a ON a.id=f.knowledge_base_id
           JOIN knowledge_document_versions v ON v.tenant_id=f.tenant_id AND v.id=f.document_version_id
           JOIN knowledge_documents d ON d.tenant_id=f.tenant_id AND d.id=f.document_id
@@ -105,8 +108,9 @@ const runtimeProfileSql = `
       ) c), '[]'::jsonb) AS conversations,
     COALESCE((SELECT jsonb_agg(to_jsonb(i) ORDER BY i.display_order, i.id)
       FROM (
-        SELECT si.id, si.knowledge_base_id, si.item_key, si.name, si.description,
-          si.price, si.currency, si.display_order,
+        SELECT si.id, si.knowledge_base_id, si.document_id, si.document_version_id,
+          d.original_filename AS document_name, si.source_page_start, si.source_page_end,
+          si.item_key, si.name, si.description, si.price, si.currency, si.display_order,
           COALESCE((SELECT jsonb_agg(jsonb_build_object(
             'key', sa.attribute_key, 'name', sa.display_name, 'value', sa.value
           ) ORDER BY sa.display_order, sa.id) FROM structured_item_attributes sa
@@ -121,7 +125,9 @@ const runtimeProfileSql = `
       ) i), '[]'::jsonb) AS catalog_items,
     COALESCE((SELECT jsonb_agg(to_jsonb(f) ORDER BY f.id)
       FROM (
-        SELECT fe.id, fe.knowledge_base_id, fe.question, fe.answer, fe.language
+        SELECT fe.id, fe.knowledge_base_id, fe.document_id, fe.document_version_id,
+          d.original_filename AS document_name, fe.source_page_start, fe.source_page_end,
+          fe.question, fe.answer, fe.language
           FROM faq_entries fe JOIN assigned a ON a.id=fe.knowledge_base_id
           JOIN knowledge_document_versions v ON v.tenant_id=fe.tenant_id AND v.id=fe.document_version_id
           JOIN knowledge_documents d ON d.tenant_id=fe.tenant_id AND d.id=fe.document_id
@@ -157,6 +163,11 @@ function routeResponse(route, record, content, extra = {}) {
     source: {
       recordId: record.id,
       knowledgeBaseId: record.knowledge_base_id,
+      documentId: record.document_id,
+      documentVersionId: record.document_version_id,
+      documentName: record.document_name,
+      pageNumber: record.source_page_start,
+      pageEnd: record.source_page_end,
       ...extra,
     },
   };

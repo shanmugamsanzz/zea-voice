@@ -1,4 +1,4 @@
-import { withAuthServiceContext, withPlatformAdminContext } from '../../infrastructure/database-context.js';
+import { withPlatformAdminContext } from '../../infrastructure/database-context.js';
 import { AppError } from '../../middleware/errors.js';
 import { decryptCredential } from '../../security/credential-crypto.js';
 
@@ -105,7 +105,12 @@ function processingJob(row, decrypt) {
 }
 
 export function createQueuedPostCallSummaryJob(callSessionId, dependencies = {}) {
-  const contextRunner = dependencies.contextRunner ?? withAuthServiceContext;
+  // This is an internal worker path with no signed-in user. Auth-service context is
+  // intentionally restricted by RLS and cannot see tenant agent/model settings.
+  // Platform context is required to resolve the call, while the SQL still binds every
+  // selected resource to the call's own tenant.
+  const contextRunner = dependencies.contextRunner
+    ?? ((operation) => withPlatformAdminContext(null, operation));
   const maxAttempts = dependencies.maxAttempts ?? 3;
   return contextRunner(async (client) => {
     const result = await client.query(
@@ -156,22 +161,26 @@ export function createQueuedPostCallSummaryJob(callSessionId, dependencies = {})
 }
 
 export function attachPostCallSummaryQueueJob(summaryJobId, bullmqJobId, dependencies = {}) {
-  const contextRunner = dependencies.contextRunner ?? withAuthServiceContext;
+  const contextRunner = dependencies.contextRunner
+    ?? ((operation) => withPlatformAdminContext(null, operation));
   return contextRunner(async (client) => {
     const result = await client.query(
       `UPDATE call_ai_summaries
-          SET bullmq_job_id=$2,error_code=NULL,error_message=NULL
-        WHERE id=$1 AND status='queued'
+          SET bullmq_job_id=COALESCE(bullmq_job_id,$2),
+              error_code=CASE WHEN status='queued' THEN NULL ELSE error_code END,
+              error_message=CASE WHEN status='queued' THEN NULL ELSE error_message END
+        WHERE id=$1
         RETURNING *`,
       [summaryJobId, String(bullmqJobId)],
     );
-    if (!result.rowCount) throw new AppError(409, 'Summary job is no longer queueable', 'POSTCALL_SUMMARY_NOT_QUEUEABLE');
+    if (!result.rowCount) throw new AppError(404, 'Summary job was not found', 'POSTCALL_SUMMARY_JOB_NOT_FOUND');
     return map(result.rows[0]);
   });
 }
 
 export function recordPostCallSummaryQueueFailure(summaryJobId, error, dependencies = {}) {
-  const contextRunner = dependencies.contextRunner ?? withAuthServiceContext;
+  const contextRunner = dependencies.contextRunner
+    ?? ((operation) => withPlatformAdminContext(null, operation));
   return contextRunner((client) => client.query(
     `UPDATE call_ai_summaries
         SET bullmq_job_id=NULL,error_code='QUEUE_UNAVAILABLE',error_message=$2
@@ -231,7 +240,7 @@ export function claimPostCallSummaryJob(summaryJobId, dependencies = {}) {
                 'sequenceNumber',t.sequence_number,
                 'role',CASE WHEN t.speaker::text='agent' THEN 'assistant'
                             WHEN t.speaker::text='system' THEN 'system' ELSE 'user' END,
-                'content',t.text,'createdAt',t.created_at
+                'content',t.text,'sources',t.sources,'createdAt',t.created_at
               ) ORDER BY t.sequence_number)
                 FROM call_transcript_entries t
                WHERE t.call_session_id=s.call_session_id AND t.tenant_id=s.tenant_id AND t.is_final=true),'[]'::jsonb) transcript

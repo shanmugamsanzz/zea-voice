@@ -114,15 +114,19 @@ try {
   const callA = await insertCall(companyA, 'connected', crypto.randomUUID());
   const callB = await insertCall(companyB, 'ringing', crypto.randomUUID());
   await admin.query(`INSERT INTO call_transcript_entries
-    (call_session_id,tenant_id,sequence_number,speaker,text,offset_ms)
-    VALUES ($1,$2,1,'agent','Hello from the monitored agent',1000),
+    (call_session_id,tenant_id,sequence_number,speaker,text,offset_ms,sources)
+    VALUES ($1,$2,1,'agent','Hello from the monitored agent',1000,
+      '[{"type":"knowledge","id":"record-a","label":"catalog","metadata":{"documentName":"company-a.pdf"}}]'::jsonb),
            ($1,$2,2,'user','Hello from the caller',2500)`, [callA, companyA.tenantId]);
 
   const active = await api(base, `/admin/calls?activeOnly=true&companyId=${companyA.tenantId}`, { headers: superHeaders });
   assert.equal(active.status, 200);
   assert.deepEqual((await active.json()).data.items.map((call) => call.id), [callA]);
   const detail = await api(base, `/admin/calls/${callA}`, { headers: superHeaders });
-  assert.equal((await detail.json()).data.transcript.length, 2);
+  const detailData = (await detail.json()).data;
+  assert.equal(detailData.transcript.length, 2);
+  assert.equal(detailData.transcript[0].sources[0].metadata.documentName, 'company-a.pdf');
+  assert.deepEqual(detailData.transcript[1].sources, []);
   const developerToken = await login(base, developerEmail);
   const developerHeaders = { authorization: `Bearer ${developerToken}` };
   assert.deepEqual((await (await api(base, '/calls', { headers: developerHeaders })).json()).data.items.map((call) => call.id), [callA]);

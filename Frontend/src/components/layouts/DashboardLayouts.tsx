@@ -8,6 +8,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useAppState } from '../../store/AppState';
 import { startTabMeasurement } from '../../lib/performance';
+import { apiRequest } from '../../lib/api';
 import {
   LayoutDashboard,
   Building2,
@@ -65,6 +66,36 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
   const [isSidebarMinimized, setIsSidebarMinimized] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const mainScrollRef = useRef<HTMLElement>(null);
+  const [creditNotice, setCreditNotice] = useState<null | {
+    availableBalance: number; globalLowCreditThreshold: number; creditStatus: 'available' | 'low' | 'exhausted';
+  }>(null);
+  const [showCreditDialog, setShowCreditDialog] = useState(false);
+
+  useEffect(() => {
+    if (role === 'SUPER_ADMIN') { setCreditNotice(null); return undefined; }
+    let active = true;
+    const loadCredits = async () => {
+      try {
+        const result = await apiRequest<{ wallet: {
+          availableBalance: number; globalLowCreditThreshold: number;
+          creditStatus: 'available' | 'low' | 'exhausted';
+        } }>('/credits?page=1&pageSize=1', { zeaCache: 'reload' });
+        if (!active) return;
+        const next = result.wallet.creditStatus === 'available' ? null : result.wallet;
+        setCreditNotice(next);
+        if (next) {
+          const key = `zea-credit-alert:${next.creditStatus}:${next.availableBalance}:${next.globalLowCreditThreshold}`;
+          if (sessionStorage.getItem('zea-last-credit-alert') !== key) {
+            sessionStorage.setItem('zea-last-credit-alert', key);
+            setShowCreditDialog(true);
+          }
+        }
+      } catch { /* Global authentication handling owns session errors. */ }
+    };
+    void loadCredits();
+    const timer = window.setInterval(() => void loadCredits(), 60_000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [role]);
 
   useEffect(() => {
     const root = document.getElementById('root');
@@ -546,10 +577,24 @@ export function DashboardLayout({ children, onLogout }: { children: React.ReactN
         {/* Content Area */}
         <main ref={mainScrollRef} className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain bg-[#F8FAFC] px-6 pt-6 pb-4 md:px-10 md:pt-8 md:pb-6">
           <div className="mx-auto w-full max-w-7xl flex-1 space-y-8">
+            {creditNotice && <div className={`rounded-xl border px-4 py-3 text-sm font-semibold ${creditNotice.creditStatus === 'exhausted' ? 'border-red-300 bg-red-50 text-red-800' : 'border-amber-300 bg-amber-50 text-amber-900'}`} role="alert">
+              {creditNotice.creditStatus === 'exhausted'
+                ? 'No call credits are available. New inbound and outbound calls are blocked. Contact Super Admin to add credits.'
+                : `Only ${creditNotice.availableBalance} credits remain. Outbound calls are paused at the ${creditNotice.globalLowCreditThreshold}-credit threshold. Contact Super Admin to add credits.`}
+            </div>}
             {children}
           </div>
         </main>
       </div>
+      {showCreditDialog && creditNotice && <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label="Low credit warning">
+        <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+          <h2 className="text-xl font-black text-slate-900">{creditNotice.creditStatus === 'exhausted' ? 'Call credits exhausted' : 'Please add call credits'}</h2>
+          <p className="mt-3 text-sm leading-6 text-slate-600">{creditNotice.creditStatus === 'exhausted'
+            ? 'Your company has no available credits. New calls cannot start until Super Admin adds credits.'
+            : `Your company has ${creditNotice.availableBalance} credits remaining. New outbound calls are paused because the global threshold is ${creditNotice.globalLowCreditThreshold}.`}</p>
+          <div className="mt-5 flex justify-end"><button type="button" onClick={() => setShowCreditDialog(false)} className="rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-bold text-white">Understood</button></div>
+        </div>
+      </div>}
     </div>
   );
 }

@@ -11,9 +11,10 @@ function isCidr(value) {
 }
 
 const cidr = z.string().trim().refine(isCidr, 'A valid IPv4 or IPv6 CIDR is required');
+const THIRTY_DAYS_SECONDS = 30 * 24 * 60 * 60;
 export const updatePlatformSettingsSchema = z.object({
   adminIpAllowlist: z.array(cidr).min(1).max(100).optional(),
-  maxSessionTimeoutSeconds: z.number().int().min(300).max(86400).optional(),
+  maxSessionTimeoutSeconds: z.number().int().min(300).max(THIRTY_DAYS_SECONDS).optional(),
   compliancePolicy: z.enum(['standard_hipaa_pci', 'strict_gdpr', 'relaxed_developer']).optional(),
   sipRelayRegion: z.enum(['us_east', 'eu_central', 'apac_south']).optional(),
   confirmAccessLoss: z.boolean().default(false),

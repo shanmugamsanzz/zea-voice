@@ -46,6 +46,7 @@ class FakeLlm {
   requests = [];
   cancelled = 0;
   releaseSlow = null;
+  releaseSecondSentence = null;
   async *stream(input) {
     this.requests.push(input);
     const query = input.messages.at(-1)?.content ?? '';
@@ -53,6 +54,57 @@ class FakeLlm {
     if (query === 'slow request') {
       await new Promise((resolve) => { this.releaseSlow = resolve; });
       if (this.wasCancelled) { yield { type: 'cancelled', reason: 'barge-in' }; return; }
+    }
+    if (query === 'stream two sentences') {
+      yield { type: 'text_delta', delta: 'The first sentence is ready. ' };
+      await new Promise((resolve) => { this.releaseSecondSentence = resolve; });
+      if (this.wasCancelled) { yield { type: 'cancelled', reason: 'barge-in' }; return; }
+      yield { type: 'text_delta', delta: 'The second sentence follows.' };
+      yield { type: 'usage', usage: { inputTokens: 12, outputTokens: 10, totalTokens: 22 } };
+      yield { type: 'completed', finishReason: 'stop', toolCalls: [], usage: {} };
+      return;
+    }
+    if (query === 'group short sentences') {
+      yield { type: 'text_delta', delta: 'First sentence starts now. ' };
+      yield { type: 'text_delta', delta: 'Second short sentence. ' };
+      yield { type: 'text_delta', delta: 'Third short sentence.' };
+      yield { type: 'usage', usage: { inputTokens: 12, outputTokens: 12, totalTokens: 24 } };
+      yield { type: 'completed', finishReason: 'stop', toolCalls: [], usage: {} };
+      return;
+    }
+    if (query === 'verify ordered lookahead') {
+      yield { type: 'text_delta', delta: 'First sentence plays directly. ' };
+      yield { type: 'text_delta', delta: 'Second look-ahead sentence. ' };
+      yield { type: 'text_delta', delta: 'Third look-ahead sentence. ' };
+      yield { type: 'text_delta', delta: 'Fourth look-ahead sentence. ' };
+      yield { type: 'text_delta', delta: 'Fifth look-ahead sentence.' };
+      yield { type: 'usage', usage: { inputTokens: 12, outputTokens: 20, totalTokens: 32 } };
+      yield { type: 'completed', finishReason: 'stop', toolCalls: [], usage: {} };
+      return;
+    }
+    if (query === 'interrupt buffered speech') {
+      yield { type: 'text_delta', delta: 'Immediate sentence plays first. ' };
+      yield { type: 'text_delta', delta: 'Buffered sentence two. ' };
+      yield { type: 'text_delta', delta: 'Buffered sentence three. ' };
+      yield { type: 'text_delta', delta: 'Buffered sentence four. ' };
+      yield { type: 'text_delta', delta: 'Buffered sentence five. ' };
+      yield { type: 'text_delta', delta: 'Buffered sentence six. ' };
+      yield { type: 'text_delta', delta: 'Buffered sentence seven.' };
+      yield { type: 'usage', usage: { inputTokens: 12, outputTokens: 24, totalTokens: 36 } };
+      yield { type: 'completed', finishReason: 'stop', toolCalls: [], usage: {} };
+      return;
+    }
+    if (query === 'recover failed lookahead') {
+      yield { type: 'text_delta', delta: 'The first protected sentence is spoken normally. ' };
+      yield { type: 'text_delta', delta: 'This isolated look-ahead failure sentence intentionally contains enough descriptive words to exceed the short sentence grouping threshold and verify fallback playback.' };
+      yield { type: 'completed', finishReason: 'stop', toolCalls: [], usage: {} };
+      return;
+    }
+    if (query === 'isolate permanent sentence failure') {
+      yield { type: 'text_delta', delta: 'The valid sentence must remain audible. ' };
+      yield { type: 'text_delta', delta: 'This permanent sentence failure intentionally contains enough descriptive words to exceed the short sentence grouping threshold without being played.' };
+      yield { type: 'completed', finishReason: 'stop', toolCalls: [], usage: {} };
+      return;
     }
     if (query === 'book appointment' && this.requests.length === 1) {
       const toolCalls = [{ id: 'tool-1', name: 'book_visit', arguments: { date: 'tomorrow' } }];
@@ -65,8 +117,11 @@ class FakeLlm {
       ? 'Thank you. Goodbye.'
       : (query.includes('Open this follow-up call')
         ? 'You asked me to call back. Is now a good time to continue?'
-        : 'Your appointment is booked.');
-    yield { type: 'text_delta', delta: text };
+        : (query === 'check tts speed'
+          ? 'This sentence verifies safe TTS speed monitoring.'
+          : 'Your appointment is booked.'));
+    const normalizedText = typeof text === 'string' ? text : String(text);
+    yield { type: 'text_delta', delta: normalizedText };
     yield { type: 'usage', usage: { inputTokens: 12, outputTokens: 5, totalTokens: 17 } };
     yield { type: 'completed', finishReason: 'stop', toolCalls: [], usage: {} };
   }
@@ -80,16 +135,61 @@ class FakeLlm {
 }
 
 class FakeTts {
-  texts = [];
   cancelled = 0;
-  async connect() {}
-  async *synthesizeStream({ text, generationId }) {
-    this.texts.push(text);
-    yield { type: 'audio_chunk', generationId, audio: Buffer.alloc(160, this.texts.length) };
-    yield { type: 'usage', generationId, usage: { characters: text.length, audioOutputMs: 20, audioBytes: 160 } };
-    yield { type: 'completed', generationId, usage: { characters: text.length, audioOutputMs: 20, audioBytes: 160 } };
+  constructor(shared = {}, coordinator = null) {
+    this.texts = shared.texts ?? [];
+    this.requests = shared.requests ?? [];
+    this.coordinator = coordinator;
   }
-  cancel() { this.cancelled += 1; return true; }
+  async connect() {}
+  async *synthesizeStream(input) {
+    this.requests.push(input);
+    const { text, generationId } = input;
+    this.texts.push(text);
+    if (text.includes('permanent sentence failure')) {
+      throw Object.assign(new Error('Permanent isolated TTS failure'), {
+        code: 'TTS_PROVIDER_REQUEST_FAILED', retryable: false, audioStarted: false,
+      });
+    }
+    if (this.coordinator && text.includes('isolated look-ahead failure')) {
+      throw Object.assign(new Error('Look-ahead-only TTS failure'), {
+        code: 'TTS_PROVIDER_REQUEST_FAILED', retryable: false, audioStarted: false,
+      });
+    }
+    if (text.includes('look-ahead sentence')) {
+      this.coordinator.started.push(text);
+      this.activeText = text;
+      await new Promise((resolve) => this.coordinator.releases.set(text, resolve));
+      this.activeText = null;
+      this.coordinator.completed.push(text);
+    }
+    if (text.includes('Buffered sentence')) {
+      this.coordinator.started.push(text);
+      this.activeText = text;
+      await new Promise((resolve) => this.coordinator.releases.set(text, resolve));
+      this.activeText = null;
+      this.coordinator.completed.push(text);
+    }
+    const speedAttempt = this.requests.filter((request) => request.text === text).length;
+    if (text === 'This sentence verifies safe TTS speed monitoring.' && speedAttempt === 1) {
+      const usage = { characters: text.length, audioOutputMs: 1000, audioBytes: 8000 };
+      yield { type: 'usage', generationId, usage };
+      yield { type: 'completed', generationId, usage };
+      return;
+    }
+    yield { type: 'audio_chunk', generationId, audio: Buffer.alloc(160, this.texts.length) };
+    const audioOutputMs = text === 'This sentence verifies safe TTS speed monitoring.' ? 4000 : 20;
+    yield { type: 'usage', generationId, usage: { characters: text.length, audioOutputMs, audioBytes: 160 } };
+    yield { type: 'completed', generationId, usage: { characters: text.length, audioOutputMs, audioBytes: 160 } };
+  }
+  cancel() {
+    this.cancelled += 1;
+    if (this.activeText) {
+      this.coordinator?.cancelled.push(this.activeText);
+      this.coordinator?.releases.get(this.activeText)?.();
+    }
+    return true;
+  }
   close() { this.closed = true; }
 }
 
@@ -114,7 +214,12 @@ const profile = {
     id: 'agent-1', tenantId: 'tenant-1', workspaceId: 'workspace-1', name: 'Hospital Agent',
     description: 'Hospital receptionist', goal: 'Help callers', language: 'English (US)',
     prompt: 'Answer briefly.', welcomeMessage: 'Welcome to the hospital.', temperature: 0.2,
-    inactivityTimeoutSeconds: 30, settings: { silentMessage: 'Are you still there?', maxInactivityPrompts: 1 },
+    inactivityTimeoutSeconds: 30,
+    settings: {
+      silentMessage: 'Are you still there?', maxInactivityPrompts: 1,
+      wordBasedInterruptionEnabled: true, wordInterruptionMinWords: 2,
+      interruptionPolicy: 'any',
+    },
   },
   providers: {
     stt: { providerId: 'stt-1', providerName: 'Sarvam', modelId: 'stt-m', modelKey: 'saaras' },
@@ -123,20 +228,29 @@ const profile = {
   },
   tools: [{ id: 'assigned-tool', name: 'book visit', type: 'webhook_api', description: 'Book a visit', configuration: {} }],
   integrations: { postCall: { prompt: 'Be polite.', messageType: 'Dynamic', dynamicClosing: true } },
+  limits: { ttsMaxCharactersPerMinute: 1000, maxCallDurationMinutes: 1 },
 };
 
 const media = new FakeMediaSession();
 const stt = new FakeStt();
 const llm = new FakeLlm();
-const tts = new FakeTts();
+const sharedTts = { texts: [], requests: [] };
+const lookaheadCoordinator = {
+  started: [], completed: [], cancelled: [], releases: new Map(),
+};
+const tts = new FakeTts(sharedTts);
 const audioEngine = new FakeAudioEngine();
 const transcript = [];
+const transcriptWriteAttempts = [];
+let releaseTranscriptPersistence;
+const transcriptPersistenceGate = new Promise((resolve) => { releaseTranscriptPersistence = resolve; });
 const completed = [];
 const knowledgeQueries = [];
 const knowledgeAuth = [];
 const toolInvocations = [];
 const contextCacheWrites = [];
 const durableMemoryWrites = [];
+const callDurationTimers = [];
 const previousMemory = {
   summary: 'The caller previously asked about an appointment.',
   recentMessages: [
@@ -148,9 +262,14 @@ const previousMemory = {
 const orchestrator = new RealtimeConversationOrchestrator(media, {
   loadProfile: async () => profile,
   createAdapters: async () => ({ stt, llm, tts }),
+  createLookaheadTtsAdapter: async () => new FakeTts(sharedTts, lookaheadCoordinator),
   createAudioEngine: () => audioEngine,
   welcomeCache: { async get() { return Buffer.alloc(160, 9); }, async set() { return true; } },
-  appendTranscript: async (entry) => transcript.push(entry),
+  appendTranscript: async (entry) => {
+    transcriptWriteAttempts.push(entry);
+    await transcriptPersistenceGate;
+    transcript.push(entry);
+  },
   routeKnowledge: async (auth, input) => {
     knowledgeAuth.push(auth);
     knowledgeQueries.push(input.query);
@@ -173,6 +292,12 @@ const orchestrator = new RealtimeConversationOrchestrator(media, {
     },
   },
   completeCall: async (input) => { completed.push(input); return { call: { id: 'call-1' } }; },
+  setCallDurationTimer: (callback, delayMs) => {
+    const timer = { callback, delayMs, unref() {} };
+    callDurationTimers.push(timer);
+    return timer;
+  },
+  clearCallDurationTimer: () => {},
 });
 
 await orchestrator.ready;
@@ -181,12 +306,21 @@ await waitFor(() => audioEngine.audio.some((entry) => entry.id.startsWith('welco
 await waitFor(() => orchestrator.controller.state === 'listening', 'Call did not enter listening state');
 assert.equal(audioEngine.started, true);
 assert.equal(contextCacheWrites.length, 1);
+assert.equal(callDurationTimers[0].delayMs, 60_000);
 
 media.emit('media', { session: media, audio: Buffer.alloc(160, 2) });
 await waitFor(() => stt.sent.length === 1, 'Plivo audio was not forwarded to STT');
 
 stt.publish({ type: 'speech_started' });
+const responseTurnStartedAt = Date.now();
 stt.publish({ type: 'final_transcript', text: 'book appointment', language: 'en', isFinal: true });
+await waitFor(() => tts.texts.includes('Your appointment is booked.'), 'TTS waited for transcript persistence');
+const sourceTracingAddedLatencyMs = Date.now() - responseTurnStartedAt;
+assert.ok(sourceTracingAddedLatencyMs < 1000, `TTS did not start within one second (${sourceTracingAddedLatencyMs}ms)`);
+assert.equal(transcript.length, 0, 'Transcript persistence gate should still be blocking database writes');
+assert.equal(transcriptWriteAttempts.length, 1, 'Transcript writes must remain serial while the first write is blocked');
+assert.ok(orchestrator.transcriptPersistence.metrics().pending >= 3, 'Transcript entries were not queued asynchronously');
+releaseTranscriptPersistence();
 await waitFor(() => transcript.some((entry) => entry.text === 'Your appointment is booked.'), 'Agent response was not persisted');
 await waitFor(() => orchestrator.controller.state === 'listening', 'Call did not return to listening after playback');
 assert.deepEqual(knowledgeQueries, ['book appointment']);
@@ -195,7 +329,121 @@ assert.equal(knowledgeAuth[0].tenantId, 'tenant-1');
 assert.equal(knowledgeAuth[0].workspaceId, 'workspace-1');
 assert.equal(toolInvocations[0].name, 'book_visit');
 assert.ok(tts.texts.includes('Your appointment is booked.'));
+assert.match(llm.requests[0].messages[0].content, /within 1000 Unicode characters/);
+const answerTtsRequest = tts.requests.find((request) => request.text === 'Your appointment is booked.');
+assert.ok(answerTtsRequest);
+assert.equal(Object.hasOwn(answerTtsRequest, 'sources'), false, 'Source metadata must never enter the TTS request');
 assert.deepEqual(transcript.map((entry) => entry.speaker), ['agent', 'user', 'agent']);
+assert.deepEqual(transcript[0].sources.map((source) => source.type), ['welcome_configuration']);
+const answerSources = transcript[2].sources.map((source) => source.type);
+assert.ok(answerSources.includes('system_prompt'));
+assert.ok(answerSources.includes('conversation_memory'));
+assert.ok(answerSources.includes('knowledge'));
+assert.ok(answerSources.includes('tool'));
+assert.ok(answerSources.includes('llm'));
+
+llm.wasCancelled = false;
+stt.publish({ type: 'final_transcript', text: 'stream two sentences', language: 'en', isFinal: true });
+await waitFor(() => tts.texts.includes('The first sentence is ready.'),
+  'The first complete LLM sentence did not start TTS before completion');
+assert.equal(tts.texts.includes('The second sentence follows.'), false,
+  'TTS spoke a sentence before the LLM produced it');
+assert.equal(orchestrator.controller.state, 'speaking');
+llm.releaseSecondSentence();
+await waitFor(() => tts.texts.includes('The second sentence follows.'),
+  'The second LLM sentence was not synthesized in order');
+await waitFor(() => orchestrator.controller.state === 'listening',
+  'Streamed sentence response did not return to listening');
+const streamedTranscript = transcript.find((entry) => entry.text
+  === 'The first sentence is ready. The second sentence follows.');
+assert.ok(streamedTranscript, 'Streamed sentences were not persisted as one assistant turn');
+
+stt.publish({ type: 'final_transcript', text: 'group short sentences', language: 'en', isFinal: true });
+await waitFor(() => tts.texts.includes('Second short sentence. Third short sentence.'),
+  'Later short LLM sentences were not grouped into one TTS request');
+await waitFor(() => orchestrator.controller.state === 'listening',
+  'Grouped sentence response did not return to listening');
+assert.ok(tts.texts.includes('First sentence starts now.'), 'First sentence was not streamed immediately');
+assert.equal(tts.texts.includes('Second short sentence.'), false,
+  'A grouped short sentence was sent as a separate TTS request');
+assert.ok(orchestrator.runtimeMetrics.sentenceGrouping.multiSentenceGroups >= 1);
+
+stt.publish({ type: 'final_transcript', text: 'verify ordered lookahead', language: 'en', isFinal: true });
+await waitFor(() => lookaheadCoordinator.started.length === 2,
+  'Bounded look-ahead did not start two isolated TTS requests concurrently');
+const [secondGroup, thirdGroup] = lookaheadCoordinator.started;
+assert.match(secondGroup, /^Second look-ahead sentence\./);
+assert.match(thirdGroup, /^Fourth look-ahead sentence\./);
+lookaheadCoordinator.releases.get(thirdGroup)();
+await waitFor(() => lookaheadCoordinator.completed.includes(thirdGroup),
+  'Later look-ahead request did not complete first');
+assert.equal(audioEngine.generations.some((id) => id.endsWith('sentence-3')), false,
+  'Later synthesized audio played before the preceding sentence group');
+lookaheadCoordinator.releases.get(secondGroup)();
+await waitFor(() => orchestrator.controller.state === 'listening',
+  'Ordered look-ahead response did not finish');
+const orderedTurnGenerations = audioEngine.generations.filter((id) => id.startsWith('turn-4-sentence-'));
+assert.deepEqual(orderedTurnGenerations, [
+  'turn-4-sentence-1', 'turn-4-sentence-2', 'turn-4-sentence-3',
+]);
+assert.ok(orchestrator.runtimeMetrics.ttsLookahead.readyBeforePlayback >= 1,
+  'Completed look-ahead audio was not reused from the buffer');
+
+const lookaheadStartsBeforeInterruption = lookaheadCoordinator.started.length;
+const lookaheadCancelledBeforeInterruption = orchestrator.runtimeMetrics.ttsLookahead.cancelled;
+const cancellationEpochsBeforeInterruption = orchestrator.runtimeMetrics.interruptions.cancellationEpochs;
+stt.publish({ type: 'final_transcript', text: 'interrupt buffered speech', language: 'en', isFinal: true });
+await waitFor(() => (
+  lookaheadCoordinator.started.length >= lookaheadStartsBeforeInterruption + 2
+), 'Two bounded look-ahead requests did not become active before interruption');
+stt.publish({ type: 'speech_started' });
+stt.publish({ type: 'final_transcript', text: 'please wait', language: 'en', isFinal: true });
+await waitFor(() => orchestrator.runtimeMetrics.interruptions.cancellationEpochs
+  === cancellationEpochsBeforeInterruption + 1,
+'One confirmed barge-in did not produce exactly one atomic cancellation');
+await waitFor(() => orchestrator.runtimeMetrics.ttsLookahead.cancelled
+  >= lookaheadCancelledBeforeInterruption + 3,
+'Active and pending look-ahead synthesis was not fully cancelled');
+await waitFor(() => orchestrator.controller.state === 'listening',
+  'Conversation did not recover after cancelling buffered speech');
+assert.equal(audioEngine.generations.some((id) => id.startsWith('turn-5-sentence-2')), false,
+  'Buffered audio from the interrupted turn reached playback');
+
+stt.publish({ type: 'final_transcript', text: 'check tts speed', language: 'en', isFinal: true });
+await waitFor(() => tts.requests.filter((request) => request.text
+  === 'This sentence verifies safe TTS speed monitoring.').length === 2,
+  'Abnormal TTS speed was not retried before audio playback');
+await waitFor(() => orchestrator.controller.state === 'listening', 'TTS speed retry turn did not complete');
+assert.equal(tts.requests.filter((request) => request.text
+  === 'This sentence verifies safe TTS speed monitoring.').length, 2,
+'Abnormal TTS speed was not retried before audio playback');
+assert.equal(orchestrator.runtimeMetrics.ttsSpeed.retries, 1);
+assert.equal(orchestrator.runtimeMetrics.ttsSpeed.abnormal, 1);
+assert.equal(orchestrator.runtimeMetrics.ttsSpeed.normal, 1);
+
+const cancellationsBeforeFallback = audioEngine.cancelled.length;
+stt.publish({ type: 'final_transcript', text: 'recover failed lookahead', language: 'en', isFinal: true });
+await waitFor(() => orchestrator.runtimeMetrics.ttsLookahead.sequentialFallbacks >= 1,
+  'Failed look-ahead request did not use the ordered primary adapter fallback');
+await waitFor(() => orchestrator.controller.state === 'listening',
+  'Sequential fallback after a failed look-ahead request did not finish');
+assert.equal(audioEngine.cancelled.length, cancellationsBeforeFallback,
+  'A recoverable look-ahead failure cleared valid queued audio');
+assert.ok(transcript.some((entry) => entry.speaker === 'agent'
+  && entry.text.includes('verify fallback playback')),
+'The sentence recovered through the primary adapter was not persisted');
+
+const cancellationsBeforeIsolation = audioEngine.cancelled.length;
+stt.publish({ type: 'final_transcript', text: 'isolate permanent sentence failure', language: 'en', isFinal: true });
+await waitFor(() => orchestrator.runtimeMetrics.ttsLookahead.partialTurnsPreserved >= 1,
+  'Permanent later-sentence failure was not isolated');
+await waitFor(() => orchestrator.controller.state === 'listening',
+  'A later permanent sentence failure did not preserve the valid earlier sentence');
+assert.equal(audioEngine.cancelled.length, cancellationsBeforeIsolation,
+  'A later permanent sentence failure cleared valid earlier audio');
+assert.ok(transcript.some((entry) => entry.speaker === 'agent'
+  && entry.text === 'The valid sentence must remain audible.'),
+'Only the successfully synthesized sentence should be persisted after isolated failure');
 
 llm.wasCancelled = false;
 stt.publish({ type: 'final_transcript', text: 'slow request', language: 'en', isFinal: true });
@@ -219,9 +467,19 @@ assert.equal(completed[0].metrics.tools[0].name, 'book_visit');
 assert.equal(completed[0].metrics.contextCache.hit, true);
 assert.equal(completed[0].metrics.contextCache.source, 'postgresql');
 assert.equal(completed[0].metrics.contextCache.persisted, true);
+assert.ok(completed[0].metrics.ttsLimits.charactersSynthesized > 0);
+assert.equal(completed[0].metrics.ttsSpeed.retries, 1);
+assert.equal(completed[0].metrics.ttsLimits.durationLimitReached, false);
+assert.ok(completed[0].metrics.ttsGeneration.requests > 0);
+assert.ok(completed[0].metrics.ttsGeneration.completed > 0);
+assert.ok(completed[0].metrics.ttsGeneration.failed > 0);
+assert.ok(completed[0].metrics.ttsGeneration.sentenceHandoffWaits > 0);
+assert.ok(completed[0].metrics.providerFailures.tts > 0);
 assert.equal(durableMemoryWrites.length, 1);
 assert.equal(contextCacheWrites.length, 2);
-assert.ok(durableMemoryWrites[0].state.recentMessages.some((message) => message.content === 'book appointment'));
+assert.ok(durableMemoryWrites[0].state.recentMessages.some((message) => (
+  message.content === 'isolate permanent sentence failure'
+)), 'Recent completed conversation turns were not persisted to durable memory');
 assert.ok(tts.texts.includes('Thank you. Goodbye.'));
 assert.equal(media.closed, true);
 
@@ -416,4 +674,49 @@ await waitFor(() => followUpCompleted.length === 1, 'Follow-up call was not fina
 assert.equal(followUpMemory[0].state.callback.scheduling, 'fulfilled');
 assert.equal(followUpMemory[0].state.callback.scheduled, false);
 
-console.log(JSON.stringify({ success: true, task: 'Real-time conversation orchestrator' }));
+const deadlineMedia = new FakeMediaSession();
+deadlineMedia.call.id = 'call-duration-limit';
+deadlineMedia.callId = 'call-duration-limit';
+const deadlineCompleted = [];
+let durationDeadlineCallback;
+let durationDeadlineMs;
+const deadlineProfile = {
+  ...profile,
+  agent: {
+    ...profile.agent,
+    settings: { ...profile.agent.settings, greetingMode: 'User Initiates' },
+  },
+  limits: { ttsMaxCharactersPerMinute: 0, maxCallDurationMinutes: 1 },
+};
+const deadlineOrchestrator = new RealtimeConversationOrchestrator(deadlineMedia, {
+  loadProfile: async () => deadlineProfile,
+  createAdapters: async () => ({ stt: new FakeStt(), llm: new FakeLlm(), tts: new FakeTts() }),
+  createAudioEngine: () => new FakeAudioEngine(),
+  welcomeCache: { async get() { return null; }, async set() { return true; } },
+  appendTranscript: async () => {},
+  contextStore: { get: async () => null, set: async () => true, delete: async () => true },
+  memoryStore: { load: async () => null, save: async (_scope, input) => ({ state: input.state, revision: 1 }) },
+  setCallDurationTimer: (callback, delayMs) => {
+    durationDeadlineCallback = callback;
+    durationDeadlineMs = delayMs;
+    return { unref() {} };
+  },
+  clearCallDurationTimer: () => {},
+  completeCall: async (input) => { deadlineCompleted.push(input); },
+});
+await deadlineOrchestrator.ready;
+deadlineMedia.emit('start', { session: deadlineMedia });
+await waitFor(() => typeof durationDeadlineCallback === 'function', 'Maximum call duration timer was not armed');
+assert.equal(durationDeadlineMs, 60_000);
+durationDeadlineCallback();
+await waitFor(() => deadlineCompleted.length === 1, 'Maximum call duration did not finalize the call');
+assert.equal(deadlineCompleted[0].reason, 'maximum_duration_reached');
+assert.equal(deadlineCompleted[0].metrics.ttsLimits.durationLimitReached, true);
+assert.equal(deadlineMedia.closed, true);
+
+console.log(JSON.stringify({
+  success: true,
+  task: 'Real-time conversation orchestrator',
+  sourceTracingAddedLatencyMs,
+  acceptanceTargetMs: 1000,
+}));

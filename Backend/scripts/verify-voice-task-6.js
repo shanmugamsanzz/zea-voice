@@ -103,7 +103,9 @@ assert.equal((await dtmfReceived)[0].digit, '5');
 
 const outbound = [];
 client.on('message', (data) => outbound.push(JSON.parse(data.toString('utf8'))));
-mediaSession.sendAudio(Buffer.alloc(160, 0x7f));
+const delivery = await mediaSession.sendAudio(Buffer.alloc(160, 0x7f));
+assert.ok(Number.isFinite(delivery.deliveryMs));
+assert.ok(delivery.deliveryMs >= 0);
 mediaSession.checkpoint('response-1');
 mediaSession.clearAudio('caller_barge_in');
 await new Promise((resolve) => setTimeout(resolve, 20));

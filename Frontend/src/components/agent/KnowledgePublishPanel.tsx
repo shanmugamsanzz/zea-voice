@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { AlertCircle, CheckCircle, RefreshCw, Rocket } from 'lucide-react';
-import { apiRequest } from '../../lib/api';
+import { apiRequest, isAbortError } from '../../lib/api';
 
 interface ReviewDocumentSummary {
   documentId: string; displayName: string; documentType: string; status: string;
@@ -43,7 +43,7 @@ export function KnowledgePublishPanel({ knowledgeBaseId, readOnly, refreshKey, o
           timer = window.setTimeout(() => setPollTick((value) => value + 1), 2500);
         }
       } catch (requestError) {
-        if (requestError instanceof DOMException && requestError.name === 'AbortError') return;
+        if (isAbortError(requestError)) return;
         setError(requestError instanceof Error ? requestError.message : 'Review summary could not be loaded');
       } finally { if (!controller.signal.aborted) setLoading(false); }
     };

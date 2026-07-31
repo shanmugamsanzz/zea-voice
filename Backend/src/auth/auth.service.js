@@ -2,17 +2,10 @@ import { env } from '../config/env.js';
 import { AppError } from '../middleware/errors.js';
 import { withAuthServiceContext } from '../infrastructure/database-context.js';
 import { performDummyPasswordCheck, verifyPassword } from './password.js';
+import { sessionExpirations } from './session-policy.js';
 import { generateOpaqueToken, hashToken } from './tokens.js';
 
 const ACCESS_TOKEN_TYPE = 'Bearer';
-
-function addMinutes(date, minutes) {
-  return new Date(date.getTime() + minutes * 60_000);
-}
-
-function addDays(date, days) {
-  return new Date(date.getTime() + days * 86_400_000);
-}
 
 function roleFor(user, membership) {
   if (user.platform_role === 'super_admin') return 'SUPER_ADMIN';
@@ -35,13 +28,16 @@ function publicUser(user, membership) {
 function createTokenPair(now = new Date()) {
   const accessToken = generateOpaqueToken();
   const refreshToken = generateOpaqueToken();
+  const expirations = sessionExpirations(now, {
+    accessTokenTtlMinutes: env.ACCESS_TOKEN_TTL_MINUTES,
+    refreshTokenTtlDays: env.REFRESH_TOKEN_TTL_DAYS,
+  });
   return {
     accessToken,
     refreshToken,
     accessTokenHash: hashToken(accessToken),
     refreshTokenHash: hashToken(refreshToken),
-    accessExpiresAt: addMinutes(now, env.ACCESS_TOKEN_TTL_MINUTES),
-    refreshExpiresAt: addDays(now, env.REFRESH_TOKEN_TTL_DAYS),
+    ...expirations,
   };
 }
 

@@ -8,6 +8,7 @@ export class FramedAudioQueue {
   #frames = [];
   #readers = [];
   #writers = [];
+  #bufferWaiters = [];
   #closed = false;
   #closeError = null;
   #bytes = 0;
@@ -60,6 +61,50 @@ export class FramedAudioQueue {
     this.#frames.push(frame);
     this.#bytes += frame.data.length;
     this.#durationMs += frame.durationMs;
+    this.#resolveBufferWaiters();
+  }
+
+  waitForBufferedMs(targetMs, options = {}) {
+    const target = Math.max(0, Number(targetMs) || 0);
+    if (this.#durationMs >= target) return Promise.resolve(true);
+    if (this.#closed) return Promise.resolve(false);
+    if (options.signal?.aborted) return Promise.reject(abortError());
+    return new Promise((resolve, reject) => {
+      let timer = null;
+      const waiter = {
+        target,
+        resolve: (value) => { cleanup(); resolve(value); },
+        reject: (error) => { cleanup(); reject(error); },
+      };
+      const onAbort = () => {
+        const index = this.#bufferWaiters.indexOf(waiter);
+        if (index >= 0) this.#bufferWaiters.splice(index, 1);
+        waiter.reject(abortError());
+      };
+      const cleanup = () => {
+        if (timer) clearTimeout(timer);
+        options.signal?.removeEventListener('abort', onAbort);
+      };
+      options.signal?.addEventListener('abort', onAbort, { once: true });
+      const timeoutMs = Math.max(0, Number(options.timeoutMs) || 0);
+      if (timeoutMs) {
+        timer = setTimeout(() => {
+          const index = this.#bufferWaiters.indexOf(waiter);
+          if (index >= 0) this.#bufferWaiters.splice(index, 1);
+          waiter.resolve(false);
+        }, timeoutMs);
+      }
+      this.#bufferWaiters.push(waiter);
+    });
+  }
+
+  #resolveBufferWaiters() {
+    for (const waiter of [...this.#bufferWaiters]) {
+      if (this.#durationMs < waiter.target) continue;
+      const index = this.#bufferWaiters.indexOf(waiter);
+      if (index >= 0) this.#bufferWaiters.splice(index, 1);
+      waiter.resolve(true);
+    }
   }
 
   #waitForCapacity(signal) {
@@ -100,6 +145,8 @@ export class FramedAudioQueue {
   tryDequeue() {
     return this.#frames.length ? this.#shift() : null;
   }
+
+  peek() { return this.#frames[0] ?? null; }
 
   #shift() {
     const frame = this.#frames.shift();
@@ -151,6 +198,9 @@ export class FramedAudioQueue {
     for (const waiter of this.#writers.splice(0)) {
       waiter.cleanup();
       waiter.reject(error ?? new AppError(409, 'Audio queue is closed', 'VOICE_AUDIO_QUEUE_CLOSED'));
+    }
+    for (const waiter of this.#bufferWaiters.splice(0)) {
+      if (error) waiter.reject(error); else waiter.resolve(false);
     }
   }
 }

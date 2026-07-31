@@ -32,11 +32,20 @@ const xml = buildPlivoStreamXml({ id: callId, providerCallId }, {
   secret: 'test-signing-secret-with-at-least-32-characters',
   recordingEnabled: true,
   recordingCallbackUrl: baseCall.recording_callback_url,
+  recordingMaxLengthSeconds: 300,
 });
 assert.match(xml, /<Record recordSession="true"/);
 assert.match(xml, /callbackUrl="https:\/\/api\.voice\.zeacrm\.com\/webhooks\/plivo\/recording\?call_id=/);
 assert.match(xml, /fileFormat="mp3"/);
+assert.match(xml, /maxLength="300"/);
 assert.ok(xml.indexOf('<Record') < xml.indexOf('<Stream'));
+
+const unlimitedXml = buildPlivoStreamXml({ id: callId, providerCallId }, {
+  secret: 'test-signing-secret-with-at-least-32-characters',
+  recordingEnabled: true,
+  recordingCallbackUrl: baseCall.recording_callback_url,
+});
+assert.match(unlimitedXml, /maxLength="86400"/);
 
 let queued;
 const callback = await acceptPlivoRecordingCallback({

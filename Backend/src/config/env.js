@@ -67,11 +67,32 @@ const envSchema = z.object({
   VOICE_COMPANY_DEFAULT_CONCURRENCY: z.coerce.number().int().min(1).max(10000).default(20),
   VOICE_CALL_OWNERSHIP_TTL_SECONDS: z.coerce.number().int().min(10).max(300).default(60),
   VOICE_CALL_HEARTBEAT_INTERVAL_MS: z.coerce.number().int().min(1000).max(60000).default(15000),
+  VOICE_CALL_RECONCILIATION_ENABLED: booleanFromString.default(true),
+  VOICE_CALL_RECONCILIATION_INTERVAL_MS: z.coerce.number().int().min(10000).max(300000).default(30000),
+  VOICE_CALL_RECONCILIATION_MIN_AGE_SECONDS: z.coerce.number().int().min(60).max(3600).default(120),
+  VOICE_CALL_RECONCILIATION_FALLBACK_SECONDS: z.coerce.number().int().min(300).max(86400).default(900),
+  VOICE_CALL_RECONCILIATION_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(50),
   VOICE_RUNTIME_INSTANCE_ID: z.preprocess(emptyToUndefined, z.string().min(1).max(160).optional()),
   VOICE_SHUTDOWN_DRAIN_MS: z.coerce.number().int().min(500).max(30000).default(5000),
   VOICE_AUDIO_FRAME_MS: z.coerce.number().int().min(10).max(100).default(20),
   VOICE_AUDIO_INPUT_MAX_BUFFER_MS: z.coerce.number().int().min(100).max(10000).default(1000),
   VOICE_AUDIO_OUTPUT_MAX_BUFFER_MS: z.coerce.number().int().min(100).max(10000).default(2000),
+  VOICE_AUDIO_UNDERRUN_THRESHOLD_MS: z.coerce.number().int().min(10).max(2000).default(40),
+  VOICE_AUDIO_PACKET_MS: z.coerce.number().int().min(20).max(200).default(80),
+  VOICE_AUDIO_PRE_ROLL_MS: z.coerce.number().int().min(0).max(1000).default(120),
+  VOICE_AUDIO_PRE_ROLL_MAX_WAIT_MS: z.coerce.number().int().min(0).max(500).default(80),
+  VOICE_AUDIO_LOW_WATER_MS: z.coerce.number().int().min(0).max(1000).default(60),
+  VOICE_AUDIO_DELIVERY_LEAD_MS: z.coerce.number().int().min(20).max(1000).default(160),
+  VOICE_AUDIO_WEBSOCKET_WARN_MS: z.coerce.number().int().min(5).max(5000).default(40),
+  VOICE_AUDIO_WEBSOCKET_BUFFER_WARN_BYTES: z.coerce.number().int().min(1024).max(16777216).default(262144),
+  VOICE_TTS_SENTENCE_GROUPING_ENABLED: booleanFromString.default(true),
+  VOICE_TTS_SHORT_SENTENCE_CHARACTERS: z.coerce.number().int().min(20).max(500).default(100),
+  VOICE_TTS_GROUP_MAX_CHARACTERS: z.coerce.number().int().min(40).max(1000).default(220),
+  VOICE_TTS_GROUP_WAIT_MS: z.coerce.number().int().min(10).max(500).default(80),
+  VOICE_TTS_LOOKAHEAD_ENABLED: booleanFromString.default(true),
+  VOICE_TTS_LOOKAHEAD_CONCURRENCY: z.coerce.number().int().min(1).max(4).default(2),
+  VOICE_TTS_LOOKAHEAD_MAX_BYTES_PER_SEGMENT: z.coerce.number().int().min(65536).max(10485760).default(2097152),
+  VOICE_TTS_SMOOTH_SENTENCE_BOUNDARIES: booleanFromString.default(true),
   VOICE_WELCOME_CACHE_TTL_SECONDS: z.coerce.number().int().min(60).max(604800).default(86400),
   VOICE_WELCOME_CACHE_MAX_BYTES: z.coerce.number().int().min(1024).max(10485760).default(2097152),
   VOICE_WELCOME_CACHE_TIMEOUT_MS: z.coerce.number().int().min(5).max(1000).default(50),
@@ -143,6 +164,12 @@ const envSchema = z.object({
   LLM_SYSTEM_PROMPT_MAX_CHARS: z.coerce.number().int().min(2000).max(100000).default(40000),
   LLM_KNOWLEDGE_CONTEXT_MAX_CHARS: z.coerce.number().int().min(500).max(50000).default(12000),
   TTS_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(30000),
+  TTS_SPEED_MONITOR_ENABLED: booleanFromString.default(true),
+  TTS_SPEED_MIN_CHARACTERS_PER_SECOND: z.coerce.number().min(0.1).max(100).default(3),
+  TTS_SPEED_MAX_CHARACTERS_PER_SECOND: z.coerce.number().min(1).max(200).default(28),
+  TTS_SPEED_MIN_SAMPLE_CHARACTERS: z.coerce.number().int().min(1).max(1000).default(24),
+  TTS_SPEED_MIN_AUDIO_MS: z.coerce.number().int().min(100).max(10000).default(500),
+  TTS_SPEED_MAX_RETRIES: z.coerce.number().int().min(0).max(2).default(1),
   VOICE_TOOL_TIMEOUT_MS: z.coerce.number().int().min(250).max(30000).default(5000),
   VOICE_TOOL_MAX_RESPONSE_BYTES: z.coerce.number().int().min(1024).max(1048576).default(65536),
   VOICE_RUNTIME_MAX_RECOVERABLE_ERRORS: z.coerce.number().int().min(0).max(10).default(2),
@@ -169,6 +196,22 @@ if (parsed.data.RAG_CHUNK_OVERLAP_TOKENS >= parsed.data.RAG_CHUNK_SIZE_TOKENS) {
 
 if (parsed.data.VOICE_CALL_HEARTBEAT_INTERVAL_MS >= parsed.data.VOICE_CALL_OWNERSHIP_TTL_SECONDS * 1000) {
   throw new Error('Invalid environment configuration: VOICE_CALL_HEARTBEAT_INTERVAL_MS must be shorter than VOICE_CALL_OWNERSHIP_TTL_SECONDS');
+}
+
+if (parsed.data.TTS_SPEED_MIN_CHARACTERS_PER_SECOND >= parsed.data.TTS_SPEED_MAX_CHARACTERS_PER_SECOND) {
+  throw new Error('Invalid environment configuration: TTS_SPEED_MIN_CHARACTERS_PER_SECOND must be lower than TTS_SPEED_MAX_CHARACTERS_PER_SECOND');
+}
+
+if (parsed.data.VOICE_TTS_SHORT_SENTENCE_CHARACTERS > parsed.data.VOICE_TTS_GROUP_MAX_CHARACTERS) {
+  throw new Error('Invalid environment configuration: VOICE_TTS_SHORT_SENTENCE_CHARACTERS cannot exceed VOICE_TTS_GROUP_MAX_CHARACTERS');
+}
+
+if (parsed.data.VOICE_CALL_RECONCILIATION_MIN_AGE_SECONDS <= parsed.data.VOICE_CALL_OWNERSHIP_TTL_SECONDS) {
+  throw new Error('Invalid environment configuration: VOICE_CALL_RECONCILIATION_MIN_AGE_SECONDS must exceed VOICE_CALL_OWNERSHIP_TTL_SECONDS');
+}
+
+if (parsed.data.VOICE_CALL_RECONCILIATION_FALLBACK_SECONDS <= parsed.data.VOICE_CALL_RECONCILIATION_MIN_AGE_SECONDS) {
+  throw new Error('Invalid environment configuration: VOICE_CALL_RECONCILIATION_FALLBACK_SECONDS must exceed VOICE_CALL_RECONCILIATION_MIN_AGE_SECONDS');
 }
 
 const frozenEmbeddingModel = 'intfloat/multilingual-e5-small';
