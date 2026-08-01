@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Activity, BookOpen, Brain, Calendar, CheckCircle2, ChevronDown, ChevronLeft,
@@ -134,12 +134,12 @@ function sourceDescription(source: MessageSource) {
   return String(source.label || sourceDisplay[source.type]?.label || source.type).replaceAll('_', ' ');
 }
 
-function TranscriptMessage({ entry }: { entry: TranscriptEntry }) {
+function TranscriptMessage({ entry, showSources = true }: { entry: TranscriptEntry; showSources?: boolean }) {
   const sources = Array.isArray(entry.sources) ? entry.sources : [];
   return <div className={`flex flex-col ${entry.speaker === 'agent' ? 'items-end' : 'items-start'}`}>
     <span className="mb-1 text-[9px] font-black uppercase tracking-wider text-slate-400">{entry.speaker} · {elapsed(entry.offsetMs)}</span>
     <div className={`max-w-[88%] rounded-2xl px-4 py-3 text-xs font-semibold leading-relaxed ${entry.speaker === 'agent' ? 'rounded-tr-none bg-gradient-to-r from-violet-600 to-pink-500 text-white' : entry.speaker === 'system' ? 'border border-amber-200 bg-amber-50 text-amber-800' : 'rounded-tl-none border border-slate-200 bg-slate-50 text-slate-800'}`}>{entry.text}</div>
-    {entry.speaker === 'agent' && sources.length > 0 && <details className="group mt-2 w-full max-w-[88%] rounded-xl border border-slate-200 bg-white shadow-sm">
+    {showSources && entry.speaker === 'agent' && sources.length > 0 && <details className="group mt-2 w-full max-w-[88%] rounded-xl border border-slate-200 bg-white shadow-sm">
       <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-slate-500">
         <span className="flex items-center gap-1.5"><Database className="h-3.5 w-3.5 text-violet-500" />Answer sources ({sources.length})</span>
         <ChevronDown className="h-3.5 w-3.5 transition group-open:rotate-180" />
@@ -187,11 +187,12 @@ function StatusBadge({ status }: { status: CallStatus }) {
   return <span className={`inline-flex rounded-md border px-2 py-1 text-[10px] font-black uppercase ${style}`}>{statusLabel[status]}</span>;
 }
 
-function ReportsReviewTable({ calls, loading, page, openDetails }: {
+function ReportsReviewTable({ calls, loading, page, openDetails, rowClickable = false }: {
   calls: CallRecord[];
   loading: boolean;
   page: number;
   openDetails: (call: CallRecord) => Promise<void>;
+  rowClickable?: boolean;
 }) {
   return <div className="overflow-x-auto"><table className="w-full min-w-[1180px] text-left">
     <thead className="border-b border-slate-200 bg-slate-50 text-[10px] font-black uppercase tracking-wider text-slate-500"><tr>
@@ -200,7 +201,25 @@ function ReportsReviewTable({ calls, loading, page, openDetails }: {
     </tr></thead>
     <tbody className="divide-y divide-slate-100 text-xs">{loading
       ? <tr><td colSpan={8} className="py-16 text-center"><LoaderCircle className="mx-auto h-7 w-7 animate-spin text-[#dfa822]" /><p className="mt-3 font-bold text-slate-400">Loading real call reports…</p></td></tr>
-      : calls.length ? calls.map((call, index) => <tr key={call.id} className="hover:bg-slate-50">
+      : calls.length ? calls.map((call, index) => <tr
+        key={call.id}
+        tabIndex={rowClickable ? 0 : undefined}
+        aria-label={rowClickable ? `Open details for call ${call.id}` : undefined}
+        className={`${rowClickable ? 'cursor-pointer' : ''} transition-colors hover:bg-slate-50`}
+        onClick={rowClickable ? (event) => {
+          const target = event.target as Element;
+          if (target.closest('button, a, input, select, textarea, [role="button"], [role="menuitem"], [data-row-click-ignore]')) return;
+          void openDetails(call);
+        } : undefined}
+        onKeyDown={rowClickable ? (event) => {
+          const target = event.target as Element;
+          if (target.closest('button, a, input, select, textarea, [role="button"], [role="menuitem"], [data-row-click-ignore]')) return;
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            void openDetails(call);
+          }
+        } : undefined}
+      >
         <td className="px-5 py-4 font-mono text-slate-400">{(page - 1) * TABLE_PAGE_SIZE + index + 1}</td>
         <td className="whitespace-nowrap px-5 py-4 font-semibold text-slate-600">{timestamp(call.startedAt, true)}</td>
         <td className="px-5 py-4 font-black text-slate-700">{call.contactName || 'Unknown Caller'}</td>
@@ -228,7 +247,25 @@ function DetailedCallLogsTable({ calls, loading, page, openDetails }: {
     </tr></thead>
     <tbody className="divide-y divide-slate-100 text-xs">{loading
       ? <tr><td colSpan={17} className="py-16 text-center"><LoaderCircle className="mx-auto h-7 w-7 animate-spin text-[#dfa822]" /><p className="mt-3 font-bold text-slate-400">Loading real call records…</p></td></tr>
-      : calls.length ? calls.map((call, index) => <tr key={call.id} className="hover:bg-slate-50">
+      : calls.length ? calls.map((call, index) => <tr
+        key={call.id}
+        tabIndex={0}
+        aria-label={`Open details for call ${call.id}`}
+        className="cursor-pointer transition-colors hover:bg-slate-50"
+        onClick={(event) => {
+          const target = event.target as Element;
+          if (target.closest('button, a, input, select, textarea, [role="button"], [role="menuitem"], [data-row-click-ignore]')) return;
+          void openDetails(call);
+        }}
+        onKeyDown={(event) => {
+          const target = event.target as Element;
+          if (target.closest('button, a, input, select, textarea, [role="button"], [role="menuitem"], [data-row-click-ignore]')) return;
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            void openDetails(call);
+          }
+        }}
+      >
         <td className="px-4 py-4 font-mono text-slate-400">{(page - 1) * TABLE_PAGE_SIZE + index + 1}</td>
         <td className="whitespace-nowrap px-4 py-4 font-semibold text-slate-600">{timestamp(call.startedAt, true)}</td>
         <td className="px-4 py-4"><span className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-black uppercase ${call.direction === 'inbound' ? 'border-blue-100 bg-blue-50 text-blue-600' : 'border-amber-100 bg-amber-50 text-amber-600'}`}>{call.direction === 'inbound' ? <PhoneIncoming className="h-3 w-3" /> : <PhoneOutgoing className="h-3 w-3" />}{call.direction}</span></td>
@@ -258,11 +295,9 @@ interface DeveloperReportsViewProps {
 }
 
 export function DeveloperReportsView({
-  title = 'Call Reports',
-  subtitle = 'Review all inbound and outbound calls',
   variant = 'reports',
 }: DeveloperReportsViewProps = {}) {
-  const { selectedCallId, setSelectedCallId } = useAppState();
+  const { role, selectedCallId, setSelectedCallId } = useAppState();
   const [calls, setCalls] = useState<CallRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -293,6 +328,7 @@ export function DeveloperReportsView({
   const [recordingLoading, setRecordingLoading] = useState(false);
   const [recordingError, setRecordingError] = useState('');
   const [exportMessage, setExportMessage] = useState('');
+  const detailsRequestId = useRef(0);
 
   const refresh = useCallback(() => setRefreshToken((value) => value + 1), []);
 
@@ -376,29 +412,37 @@ export function DeveloperReportsView({
   };
 
   const openDetails = async (call: CallRecord) => {
+    const requestId = ++detailsRequestId.current;
     if (recordingUrl) URL.revokeObjectURL(recordingUrl);
     setRecordingUrl(''); setRecordingError(''); setRecordingLoading(false);
     setSelected(call); setDetailsLoading(true); setDetailsError('');
     try {
       const detail = await apiRequest<CallRecord>(`/calls/${call.id}`, { zeaCache: 'reload' });
+      if (requestId !== detailsRequestId.current) return;
       setSelected(detail);
       if (detail.recordingAvailable) {
         setRecordingLoading(true);
         try {
           const blob = await apiBlobRequest(`/calls/${call.id}/recording`);
+          if (requestId !== detailsRequestId.current) return;
           setRecordingUrl(URL.createObjectURL(blob));
         } catch (requestError) {
+          if (requestId !== detailsRequestId.current) return;
           setRecordingError(requestError instanceof Error ? requestError.message : 'Recording could not be loaded');
-        } finally { setRecordingLoading(false); }
+        } finally { if (requestId === detailsRequestId.current) setRecordingLoading(false); }
       }
     } catch (requestError) {
+      if (requestId !== detailsRequestId.current) return;
       setDetailsError(requestError instanceof Error ? requestError.message : 'Call details could not be loaded');
-    } finally { setDetailsLoading(false); }
+    } finally { if (requestId === detailsRequestId.current) setDetailsLoading(false); }
   };
 
   const closeDetails = () => {
+    detailsRequestId.current += 1;
     if (recordingUrl) URL.revokeObjectURL(recordingUrl);
-    setRecordingUrl(''); setRecordingError(''); setSelected(null);
+    setSelectedCallId(null);
+    setRecordingUrl(''); setRecordingError(''); setRecordingLoading(false);
+    setDetailsError(''); setDetailsLoading(false); setSelected(null);
   };
 
   useEffect(() => {
@@ -434,14 +478,6 @@ export function DeveloperReportsView({
   };
 
   return <div className="space-y-6">
-    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-      <div><h2 className="text-xl font-black text-slate-800">{title}</h2><p className="mt-1 text-xs font-semibold text-slate-400">{subtitle}</p></div>
-      <div className="flex items-center gap-2">
-        <button onClick={refresh} disabled={refreshing} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-600 disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />Refresh</button>
-        <button onClick={exportCsv} disabled={!filtered.length} className="zea-reports-export-csv inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-bold text-white disabled:opacity-50"><FileSpreadsheet className="h-4 w-4 text-emerald-400" />Export CSV</button>
-      </div>
-    </div>
-
     {exportMessage && <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs font-bold text-emerald-700"><CheckCircle2 className="h-4 w-4" />{exportMessage}</div>}
     {error && <div className="flex items-center justify-between rounded-xl border border-red-200 bg-red-50 p-4 text-xs font-bold text-red-700"><span>{error}</span><button onClick={refresh}>Retry</button></div>}
 
@@ -471,13 +507,12 @@ export function DeveloperReportsView({
     </div>
 
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row">
+      <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
           <button type="button" onClick={openFilters} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl border border-[#dfa822]/50 bg-[#dfa822]/10 px-4 py-2.5 text-xs font-black text-[#9a6900] transition hover:bg-[#dfa822]/20"><Filter className="h-4 w-4" />Search Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}</button>
-          <div className="relative min-w-0 flex-1"><Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" /><input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); setSearch(searchInput); setPage(1); } }} placeholder="Search number, agent, campaign or call ID" className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-3 text-xs font-semibold outline-none focus:border-amber-400" /></div>
+          <div className="relative min-w-0 flex-1 sm:min-w-[260px]"><Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" /><input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); setSearch(searchInput); setPage(1); } }} placeholder="Search number, agent, campaign or call ID" className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-3 text-xs font-semibold outline-none focus:border-amber-400" /></div>
           <button type="button" onClick={() => { setSearch(searchInput); setPage(1); }} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-[#dfa822] px-5 py-2.5 text-xs font-black text-black transition hover:bg-[#efbd3d]"><Search className="h-4 w-4" />Search</button>
-        </div>
-        <span className="shrink-0 text-xs font-bold text-slate-400">{filtered.length} call records · {lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString()}` : 'Loading'}</span>
+          <button type="button" onClick={refresh} disabled={refreshing} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-600 disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />Refresh</button>
+          <button type="button" onClick={exportCsv} disabled={!filtered.length} className="zea-reports-export-csv inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-bold text-white disabled:opacity-50"><FileSpreadsheet className="h-4 w-4 text-emerald-400" />Export CSV</button>
       </div>
     </div>
 
@@ -511,12 +546,12 @@ export function DeveloperReportsView({
 
     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
       {variant === 'reports'
-        ? <ReportsReviewTable calls={visible} loading={loading} page={page} openDetails={openDetails} />
+        ? <ReportsReviewTable calls={visible} loading={loading} page={page} openDetails={openDetails} rowClickable={role === 'USER'} />
         : <DetailedCallLogsTable calls={visible} loading={loading} page={page} openDetails={openDetails} />}
       <div className="flex items-center justify-between border-t border-slate-200 bg-slate-50 px-5 py-4"><span className="text-xs font-bold text-slate-400">Page {page} of {totalPages}</span><div className="flex gap-2"><button disabled={page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))} className="rounded-lg border border-slate-200 bg-white p-2 disabled:opacity-40"><ChevronLeft className="h-4 w-4" /></button><button disabled={page >= totalPages} onClick={() => setPage((value) => Math.min(totalPages, value + 1))} className="rounded-lg border border-slate-200 bg-white p-2 disabled:opacity-40"><ChevronRight className="h-4 w-4" /></button></div></div>
     </div>
 
-    {selected && <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/45 backdrop-blur-sm"><div className="flex h-full w-full max-w-xl flex-col bg-slate-50 shadow-2xl"><div className="flex items-center justify-between border-b border-slate-200 bg-white p-6"><div><p className="text-[10px] font-black uppercase tracking-wider text-amber-500">Real Call Record</p><h3 className="text-xl font-black text-slate-800">Call Details</h3></div><button onClick={closeDetails} className="rounded-xl border border-slate-200 p-2 text-slate-500"><X className="h-4 w-4" /></button></div>
+    {selected && <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/45 backdrop-blur-sm" onMouseDown={(event) => { if (event.target === event.currentTarget) closeDetails(); }}><div className="flex h-full w-full max-w-xl flex-col bg-slate-50 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}><div className="flex items-center justify-between border-b border-slate-200 bg-white p-6"><div><p className="text-[10px] font-black uppercase tracking-wider text-amber-500">Real Call Record</p><h3 className="text-xl font-black text-slate-800">Call Details</h3></div><button onClick={closeDetails} className="rounded-xl border border-slate-200 p-2 text-slate-500"><X className="h-4 w-4" /></button></div>
       <div className="flex-1 space-y-5 overflow-y-auto p-6">{detailsLoading && <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white p-4 text-xs font-bold text-slate-500"><LoaderCircle className="h-4 w-4 animate-spin text-[#dfa822]" />Loading transcript…</div>}{detailsError && <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-xs font-bold text-red-700">{detailsError}</div>}
         <div className="grid grid-cols-2 gap-3">{[['Agent', selected.agentName || '—'], ['Timestamp', timestamp(selected.startedAt, true)], ['Direction', selected.direction.toUpperCase()], ['Outcome', statusLabel[selected.status]], ['Duration', duration(selected.durationSeconds)], ['Sentiment', selected.sentiment || 'Not analyzed']].map(([label, value]) => <div key={label} className="rounded-2xl border border-slate-200 bg-white p-4"><p className="text-[9px] font-black uppercase tracking-wider text-slate-400">{label}</p><p className="mt-2 break-words text-xs font-black text-slate-800">{value}</p></div>)}</div>
         <div className="divide-y divide-slate-100 rounded-2xl border border-slate-200 bg-white p-5 text-xs">{[['From', selected.fromNumber], ['To', selected.toNumber], ['Agent ID', selected.agentId || '—'], ['Campaign', selected.campaignName || '—'], ['Plivo Call UUID', selected.providerCallId || '—'], ['Internal Call ID', selected.id]].map(([label, value]) => <div key={label} className="flex items-start justify-between gap-5 py-3"><span className="shrink-0 font-black uppercase text-slate-400">{label}</span><span className="break-all text-right font-mono font-bold text-slate-700">{value}</span></div>)}</div>
@@ -525,7 +560,7 @@ export function DeveloperReportsView({
         <div className="rounded-2xl border border-slate-200 bg-white p-5"><div className="mb-4 flex items-center justify-between"><h4 className="text-sm font-black text-slate-800">AI Call Summary</h4><span className={`rounded-full px-2 py-1 text-[9px] font-black uppercase ${selected.aiSummary?.status === 'completed' ? 'bg-emerald-50 text-emerald-700' : selected.aiSummary?.status === 'failed' ? 'bg-red-50 text-red-700' : 'bg-slate-100 text-slate-500'}`}>{selected.aiSummary?.status || 'Not enabled'}</span></div>{selected.aiSummary?.status === 'completed' ? <div className="space-y-4"><p className="text-xs font-semibold leading-relaxed text-slate-700">{selected.aiSummary.summary}</p><div className="grid grid-cols-2 gap-3">{[['Outcome', selected.aiSummary.outcome || 'Unknown'], ['Customer Intent', selected.aiSummary.customerIntent || 'Not identified'], ['Sentiment', selected.aiSummary.sentiment || 'Unknown'], ['Follow-Up', selected.aiSummary.followUpRequired ? 'Required' : 'Not required']].map(([label, value]) => <div key={label} className="rounded-xl bg-slate-50 p-3"><p className="text-[8px] font-black uppercase text-slate-400">{label}</p><p className="mt-1 text-[10px] font-bold text-slate-700">{value}</p></div>)}</div>{selected.aiSummary.followUpReason && <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-[11px] font-semibold text-amber-800">{selected.aiSummary.followUpReason}</div>}<p className={`text-[9px] font-bold ${selected.aiSummary.webhookDelivery?.delivered ? 'text-emerald-600' : 'text-slate-400'}`}>Post-Call webhook: {selected.aiSummary.webhookDelivery?.delivered ? `Delivered (${selected.aiSummary.webhookDelivery.status || 200})` : selected.aiSummary.webhookDelivery?.error || 'Not delivered or not configured'}</p></div> : selected.aiSummary?.status === 'failed' ? <p className="text-xs font-semibold text-red-600">{selected.aiSummary.errorMessage || 'Summary processing failed.'}</p> : <p className="text-xs font-semibold text-slate-400">No completed AI summary is available for this call.</p>}</div>
         <div className="rounded-2xl border border-slate-200 bg-white p-5"><div className="mb-3 flex items-center gap-2"><Download className="h-4 w-4 text-emerald-500" /><h4 className="text-sm font-black text-slate-800">Call Recording</h4></div>{recordingLoading ? <div className="flex items-center gap-2 py-3 text-xs font-bold text-slate-500"><LoaderCircle className="h-4 w-4 animate-spin text-[#dfa822]" />Loading private recording from B2...</div> : recordingUrl ? <><audio controls preload="metadata" src={recordingUrl} className="w-full" /><a href={recordingUrl} download={`call-${selected.id}.mp3`} className="mt-3 inline-flex items-center gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-[10px] font-black text-emerald-700"><Download className="h-3.5 w-3.5" />Download recording</a></> : recordingError ? <p className="text-xs font-bold text-red-600">{recordingError}</p> : <div className="flex items-center gap-2 text-xs font-semibold text-slate-500"><Activity className="h-4 w-4 text-slate-400" />No recording is available for this call.</div>}</div>
         </>}
-        <div className="rounded-2xl border border-slate-200 bg-white p-5"><div className="mb-4 flex items-center justify-between"><h4 className="text-sm font-black text-slate-800">Transcript</h4><span className="rounded-full bg-slate-100 px-2 py-1 text-[9px] font-black uppercase text-slate-500">{selected.transcript?.length ?? 0} entries</span></div>{selected.transcript?.length ? <div className="space-y-4">{selected.transcript.map((entry) => <TranscriptMessage key={entry.id} entry={entry} />)}</div> : <p className="py-8 text-center text-xs font-semibold text-slate-400">No finalized transcript entries were saved for this call.</p>}</div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-5"><div className="mb-4 flex items-center justify-between"><h4 className="text-sm font-black text-slate-800">Transcript</h4><span className="rounded-full bg-slate-100 px-2 py-1 text-[9px] font-black uppercase text-slate-500">{selected.transcript?.length ?? 0} entries</span></div>{selected.transcript?.length ? <div className="space-y-4">{selected.transcript.map((entry) => <TranscriptMessage key={entry.id} entry={entry} showSources={role !== 'USER'} />)}</div> : <p className="py-8 text-center text-xs font-semibold text-slate-400">No finalized transcript entries were saved for this call.</p>}</div>
         <div className="rounded-2xl border border-slate-200 bg-white p-5"><div className="mb-4 flex items-center justify-between"><h4 className="text-sm font-black text-slate-800">AI Call Summary</h4><span className={`rounded-full px-2 py-1 text-[9px] font-black uppercase ${selected.aiSummary?.status === 'completed' ? 'bg-emerald-50 text-emerald-700' : selected.aiSummary?.status === 'failed' ? 'bg-rose-50 text-rose-700' : 'bg-slate-100 text-slate-500'}`}>{selected.aiSummary?.status || 'Not enabled'}</span></div>{selected.aiSummary?.status === 'completed' ? <div className="space-y-4"><p className="text-xs font-semibold leading-relaxed text-slate-700">{selected.aiSummary.summary}</p><div className="grid grid-cols-2 gap-3">{[['Outcome', selected.aiSummary.outcome || 'Unknown'], ['Customer Intent', selected.aiSummary.customerIntent || 'Not identified'], ['Sentiment', selected.aiSummary.sentiment || 'Unknown'], ['Follow-Up', selected.aiSummary.followUpRequired ? 'Required' : 'Not required']].map(([label, value]) => <div key={label} className="rounded-xl bg-slate-50 p-3"><p className="text-[8px] font-black uppercase text-slate-400">{label}</p><p className="mt-1 text-[10px] font-bold text-slate-700">{value}</p></div>)}</div>{selected.aiSummary.followUpReason && <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-[11px] font-semibold text-amber-800">{selected.aiSummary.followUpReason}</div>}<p className={`text-[9px] font-bold ${selected.aiSummary.webhookDelivery?.delivered ? 'text-emerald-600' : 'text-slate-400'}`}>Post-Call webhook: {selected.aiSummary.webhookDelivery?.delivered ? `Delivered (${selected.aiSummary.webhookDelivery.status || 200})` : selected.aiSummary.webhookDelivery?.error || 'Not delivered or not configured'}</p></div> : selected.aiSummary?.status === 'failed' ? <p className="text-xs font-semibold text-rose-600">{selected.aiSummary.errorMessage || 'Summary processing failed.'}</p> : <p className="text-xs font-semibold text-slate-400">No completed AI summary is available for this call.</p>}</div>
         <div className="rounded-2xl border border-slate-200 bg-white p-5"><div className="mb-3 flex items-center gap-2"><Download className="h-4 w-4 text-emerald-500" /><h4 className="text-sm font-black text-slate-800">Call Recording</h4></div>{recordingLoading ? <div className="flex items-center gap-2 py-3 text-xs font-bold text-slate-500"><LoaderCircle className="h-4 w-4 animate-spin text-emerald-500" />Loading private recording from B2...</div> : recordingUrl ? <><audio controls preload="metadata" src={recordingUrl} className="w-full" /><a href={recordingUrl} download={`call-${selected.id}.mp3`} className="mt-3 inline-flex items-center gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-[10px] font-black text-emerald-700"><Download className="h-3.5 w-3.5" />Download recording</a></> : recordingError ? <p className="text-xs font-bold text-rose-600">{recordingError}</p> : <div className="flex items-center gap-2 text-xs font-semibold text-slate-500"><Activity className="h-4 w-4 text-slate-400" />No recording is available for this call.</div>}</div>
       </div><div className="border-t border-slate-200 bg-white p-5 text-right"><button onClick={closeDetails} className="rounded-xl bg-slate-900 px-5 py-2.5 text-xs font-bold text-white">Close</button></div></div></div>}

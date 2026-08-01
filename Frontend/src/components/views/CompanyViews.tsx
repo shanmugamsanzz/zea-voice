@@ -178,7 +178,19 @@ function CompanyDashboard({ onEditAgent, onAddAgent }: { onEditAgent: (id: strin
     return () => controller.abort();
   }, []);
 
-  if (loading && !dashboard) return <div className="grid grid-cols-1 gap-6 sm:grid-cols-3">{[1, 2, 3, 4, 5, 6].map((item) => <div key={item} className="h-40 animate-pulse rounded-2xl border border-slate-200 bg-white p-6"><div className="h-3 w-28 rounded bg-slate-200" /><div className="mt-8 h-8 w-16 rounded bg-slate-200" /></div>)}</div>;
+  if (loading && !dashboard) return <div className="space-y-6" aria-label="Loading dashboard">
+    <div className="grid grid-cols-1 gap-6 sm:grid-cols-3">
+      {[1, 2, 3].map((item) => <div key={item} className="h-40 animate-pulse rounded-2xl border border-slate-200 bg-white p-6"><div className="flex items-center justify-between"><div className="h-3 w-28 rounded bg-slate-200" /><div className="h-10 w-10 rounded-full bg-slate-100" /></div><div className="mt-6 h-8 w-20 rounded bg-slate-200" /><div className="mt-3 h-3 w-32 rounded bg-slate-100" /></div>)}
+    </div>
+    <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-4">
+      {[1, 2, 3, 4].map((item) => <div key={item} className="h-40 animate-pulse rounded-2xl border border-slate-200 bg-white p-6"><div className="flex items-center justify-between"><div className="h-3 w-28 rounded bg-slate-200" /><div className="h-10 w-10 rounded-full bg-slate-100" /></div><div className="mt-6 h-8 w-20 rounded bg-slate-200" /><div className="mt-3 h-3 w-36 rounded bg-slate-100" /></div>)}
+    </div>
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+      <div className="h-80 animate-pulse rounded-2xl border border-slate-200 bg-white p-6 lg:col-span-2"><div className="h-4 w-32 rounded bg-slate-200" /><div className="mt-3 h-3 w-56 rounded bg-slate-100" /><div className="mt-8 h-52 rounded-xl bg-slate-100" /></div>
+      <div className="h-80 animate-pulse rounded-2xl border border-slate-200 bg-white p-6"><div className="h-4 w-32 rounded bg-slate-200" /><div className="mt-6 space-y-5 border-l border-slate-100 pl-4">{[1, 2, 3].map((item) => <div key={item}><div className="h-3 w-full max-w-48 rounded bg-slate-200" /><div className="mt-2 h-2.5 w-28 rounded bg-slate-100" /></div>)}</div><div className="mt-6 h-9 rounded-xl bg-slate-100" /></div>
+    </div>
+    <div className="space-y-4 border-t border-slate-200 pt-4"><div className="h-5 w-44 animate-pulse rounded bg-slate-200" /><div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">{[1, 2, 3].map((item) => <div key={item} className="h-44 animate-pulse rounded-2xl border border-slate-200 bg-white p-6"><div className="h-4 w-3/4 rounded bg-slate-200" /><div className="mt-3 h-3 w-1/2 rounded bg-slate-100" /><div className="mt-6 h-14 rounded-xl bg-slate-100" /></div>)}</div></div>
+  </div>;
   if (error || !dashboard) return <div className="rounded-xl border border-red-200 bg-red-50 p-6 text-sm font-semibold text-red-700">Unable to load the company dashboard: {error || 'No data was returned'}</div>;
 
   const { metrics } = dashboard;
@@ -328,19 +340,19 @@ function CompanyDashboard({ onEditAgent, onAddAgent }: { onEditAgent: (id: strin
         </div>
 
         {/* Recent Activity */}
-        <div className={`bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex flex-col justify-between ${role === 'DEVELOPER' ? 'min-w-0 overflow-hidden' : ''}`}>
-          <div className={role === 'DEVELOPER' ? 'min-w-0' : undefined}>
+        <div className={`bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex flex-col justify-between ${role === 'DEVELOPER' || role === 'USER' ? 'min-w-0 overflow-hidden' : ''}`}>
+          <div className={role === 'DEVELOPER' || role === 'USER' ? 'min-w-0 max-w-full' : undefined}>
             <h4 className="font-bold text-slate-800 text-sm tracking-tight mb-4">Recent Activity</h4>
-            <div className={`space-y-5 relative pl-4 border-l border-slate-100 ${role === 'DEVELOPER' ? 'min-w-0 max-w-full' : ''}`}>
-              {(role === 'DEVELOPER' ? dashboard.recentActivity.slice(0, 3) : dashboard.recentActivity).map((activity) => (
-                <div key={activity.id} className={`relative ${role === 'DEVELOPER' ? 'min-w-0 max-w-full' : ''}`}>
+            <div className={`space-y-5 relative pl-4 border-l border-slate-100 ${role === 'DEVELOPER' || role === 'USER' ? 'min-w-0 max-w-full overflow-hidden' : ''}`}>
+              {(role === 'DEVELOPER' ? dashboard.recentActivity.slice(0, 3) : role === 'USER' ? dashboard.recentActivity.slice(0, 3) : dashboard.recentActivity).map((activity) => (
+                <div key={activity.id} className={`relative ${role === 'DEVELOPER' || role === 'USER' ? 'min-w-0 max-w-full overflow-hidden' : ''}`}>
                   <div className={`absolute -left-[20.5px] top-1 w-2 h-2 rounded-full border-2 border-white ring-4 ${activity.status === 'completed' ? 'bg-blue-500 ring-blue-50' : 'bg-amber-500 ring-amber-50'}`} />
-                  <div className={`text-xs font-bold text-slate-800 ${role === 'DEVELOPER' ? 'max-w-full whitespace-normal break-words [overflow-wrap:anywhere]' : ''}`}>
+                  <div className={`text-xs font-bold text-slate-800 ${role === 'DEVELOPER' || role === 'USER' ? 'max-w-full whitespace-normal break-words [overflow-wrap:anywhere]' : ''}`}>
                     {activity.campaignName || activity.agentName || 'Direct call'} — <span className="text-slate-500 font-medium">{activity.direction === 'outbound' ? 'Call to' : 'Call from'}</span>{' '}
-                    <span className={role === 'DEVELOPER' ? 'font-mono break-all' : 'font-mono'}>{activity.phoneNumber}</span>{' '}
+                    <span className={role === 'DEVELOPER' || role === 'USER' ? 'font-mono break-all' : 'font-mono'}>{activity.phoneNumber}</span>{' '}
                     <span className="text-slate-400 font-normal">({activity.status.replace('_', ' ')})</span>
                   </div>
-                  <div className={`text-[10px] text-slate-400 mt-1 font-semibold ${role === 'DEVELOPER' ? 'max-w-full whitespace-normal break-words' : ''}`}>{new Date(activity.startedAt).toLocaleString()}</div>
+                  <div className={`text-[10px] text-slate-400 mt-1 font-semibold ${role === 'DEVELOPER' || role === 'USER' ? 'max-w-full whitespace-normal break-words' : ''}`}>{new Date(activity.startedAt).toLocaleString()}</div>
                 </div>
               ))}
               {dashboard.recentActivity.length === 0 && <p className="py-8 text-center text-xs font-semibold text-slate-400">No call activity yet.</p>}
@@ -360,8 +372,8 @@ function CompanyDashboard({ onEditAgent, onAddAgent }: { onEditAgent: (id: strin
       <div className="space-y-4 pt-4 border-t border-slate-200">
         <div className="flex justify-between items-center">
           <div>
-            <h3 className={`font-bold text-slate-855 text-lg tracking-tight ${role === 'DEVELOPER' ? 'zea-developer-operator-console-title' : ''}`}>AI Operators Console</h3>
-            <p className={`text-xs text-slate-400 font-semibold mt-0.5 ${role === 'DEVELOPER' ? 'zea-developer-operator-console-description' : ''}`}>Select an operator engine profile to customize prompts, listening filters, and vocal outputs.</p>
+            <h3 className={`font-bold text-slate-855 text-lg tracking-tight ${role === 'DEVELOPER' ? 'zea-developer-operator-console-title' : role === 'USER' ? 'zea-user-operator-console-title' : ''}`}>AI Operators Console</h3>
+            <p className={`text-xs text-slate-400 font-semibold mt-0.5 ${role === 'DEVELOPER' ? 'zea-developer-operator-console-description' : role === 'USER' ? 'zea-user-operator-console-description' : ''}`}>Select an operator engine profile to customize prompts, listening filters, and vocal outputs.</p>
           </div>
 
           {!isReadOnly ? (
@@ -400,11 +412,19 @@ function CompanyDashboard({ onEditAgent, onAddAgent }: { onEditAgent: (id: strin
                       ]}
                     />
                   ) : (
-                    <span className={`zea-operator-card-status shrink-0 px-2.5 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider border ${
-                      agent.status === 'active' ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : 'bg-slate-100 border-slate-200 text-slate-500'
-                    }`}>
-                      {agent.status}
-                    </span>
+                    <div className="flex shrink-0 items-start gap-2">
+                      <span className={`zea-operator-card-status shrink-0 px-2.5 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider border ${
+                        agent.status === 'active' ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : 'bg-slate-100 border-slate-200 text-slate-500'
+                      }`}>
+                        {agent.status}
+                      </span>
+                      {role === 'USER' && (
+                        <TableActionsMenu
+                          ariaLabel={`Open actions for ${agent.name}`}
+                          actions={[{ label: 'Inspect Settings', onClick: () => onEditAgent(agent.id) }]}
+                        />
+                      )}
+                    </div>
                   )}
                 </div>
 
@@ -430,7 +450,7 @@ function CompanyDashboard({ onEditAgent, onAddAgent }: { onEditAgent: (id: strin
                 </div>
               </div>
 
-              {role !== 'DEVELOPER' && (
+              {role !== 'DEVELOPER' && role !== 'USER' && (
                 <button
                   onClick={() => onEditAgent(agent.id)}
                   className="zea-operator-card-action w-full py-2.5 bg-slate-50 hover:bg-indigo-50 text-slate-600 hover:text-indigo-600 rounded-lg text-xs font-bold mt-4 transition border border-slate-200 flex items-center justify-center space-x-1 cursor-pointer"
@@ -1831,26 +1851,9 @@ function AgentsListView({ agents, setAgents, onEditAgent, onAddAgent }: { agents
     return (
       <div className="space-y-6">
         {agentError && <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-700">{agentError}</div>}
-        {/* Header Row */}
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-6 border-b border-slate-200">
-          <div>
-            <h2 className="text-2xl font-black text-slate-800 tracking-tight">Voice Agents</h2>
-            <p className="text-xs text-slate-400 font-semibold mt-1">Build and manage your AI calling agents</p>
-          </div>
-          <div className="flex items-center space-x-2 mt-4 sm:mt-0">
-            <button
-              onClick={() => void handleRefresh(true)}
-              className="bg-white border border-slate-200 hover:bg-slate-50 rounded-xl px-4 py-2.5 text-xs font-bold text-slate-700 shadow-xs flex items-center space-x-2 transition cursor-pointer select-none"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 text-slate-500 ${isRefreshing ? 'animate-spin text-[#dfa822]' : ''}`} />
-              <span>Refresh</span>
-            </button>
-          </div>
-        </div>
-
         {/* Search and view toggle row */}
-        <div className="flex items-center justify-between">
-          <div className="relative w-full max-w-sm">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="relative w-full sm:max-w-sm">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
             <input
               type="text"
@@ -1860,7 +1863,14 @@ function AgentsListView({ agents, setAgents, onEditAgent, onAddAgent }: { agents
               className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 outline-none placeholder-slate-400 focus:border-slate-300 focus:ring-1 focus:ring-slate-300 transition"
             />
           </div>
-          <div className="flex items-center space-x-2 shrink-0">
+          <div className="flex w-full shrink-0 items-center justify-end space-x-2 sm:w-auto">
+            <button
+              onClick={() => void handleRefresh(true)}
+              className="flex items-center space-x-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-700 shadow-xs transition hover:bg-slate-50 cursor-pointer select-none"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-slate-500 ${isRefreshing ? 'animate-spin text-[#dfa822]' : ''}`} />
+              <span>Refresh</span>
+            </button>
             <button
               onClick={() => setViewMode('grid')}
               className={`p-2.5 rounded-xl border transition cursor-pointer ${
@@ -1938,24 +1948,24 @@ function AgentsListView({ agents, setAgents, onEditAgent, onAddAgent }: { agents
           /* Grid Mode matching the simple cards layout */
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {filteredUserAgents.map((agent) => (
-              <div key={agent.id} className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs flex flex-col justify-between hover:shadow-md transition">
-                <div>
-                  <div className="flex justify-between items-start">
-                    <div className="flex items-center space-x-3">
+              <div key={agent.id} className="flex min-h-[132px] min-w-0 flex-col justify-between overflow-hidden rounded-2xl border border-slate-200 bg-white p-6 shadow-xs transition hover:shadow-md">
+                <div className="min-w-0">
+                  <div className="flex min-w-0 items-start justify-between gap-3">
+                    <div className="flex min-w-0 flex-1 items-center space-x-3">
                       <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#8B5CF6] to-[#7C3AED] text-white flex items-center justify-center font-black text-xs shrink-0 shadow-xs">
                         {agent.name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase()}
                       </div>
-                      <div className="flex flex-col">
-                        <h4 className="font-black text-slate-800 text-sm tracking-tight leading-none">{agent.name}</h4>
-                        <div className="flex items-center space-x-1.5 mt-1.5">
-                          <span className="text-[9px] font-mono text-slate-400">{agent.id.slice(0, 15)}...</span>
-                          <button onClick={() => handleCopy(agent.id)} className="text-slate-400 hover:text-slate-600 transition cursor-pointer">
+                      <div className="flex min-w-0 flex-1 flex-col">
+                        <h4 className="line-clamp-2 min-h-10 max-w-full break-words text-sm font-black leading-5 tracking-tight text-slate-800 [overflow-wrap:anywhere]" title={agent.name}>{agent.name}</h4>
+                        <div className="mt-1.5 flex min-w-0 items-center space-x-1.5">
+                          <span className="min-w-0 truncate text-[9px] font-mono text-slate-400" title={agent.id}>{agent.id}</span>
+                          <button onClick={() => handleCopy(agent.id)} className="shrink-0 text-slate-400 transition hover:text-slate-600 cursor-pointer" title="Copy agent ID">
                             {copiedId === agent.id ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
                           </button>
                         </div>
                       </div>
                     </div>
-                    <span className="bg-emerald-50 text-emerald-600 border border-emerald-100 rounded-full px-2.5 py-1 text-[10px] font-black tracking-wide flex items-center space-x-1.5">
+                    <span className="flex shrink-0 items-center space-x-1.5 rounded-full border border-emerald-100 bg-emerald-50 px-2.5 py-1 text-[10px] font-black tracking-wide text-emerald-600">
                       <span className="relative flex h-1 w-1">
                         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                         <span className="relative inline-flex rounded-full h-1 w-1 bg-emerald-500"></span>

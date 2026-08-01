@@ -1244,7 +1244,12 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     );
   };
 
-  if (loading) return <div className="h-96 animate-pulse rounded-2xl border border-slate-200 bg-white p-8"><div className="h-16 rounded-xl bg-slate-200" /><div className="mt-8 h-56 rounded-xl bg-slate-100" /></div>;
+  if (loading) return <div className="w-full space-y-4" aria-label="Loading agent editor">
+    <div className="animate-pulse rounded-2xl border border-slate-200 bg-white p-6"><div className="h-6 w-52 rounded bg-slate-200" /><div className="mt-3 h-3 w-full max-w-md rounded bg-slate-100" /></div>
+    <div className="flex gap-3 overflow-hidden rounded-2xl border border-slate-200 bg-white p-3">{[1, 2, 3, 4, 5, 6, 7, 8].map((item) => <div key={item} className="h-10 w-24 shrink-0 animate-pulse rounded-xl bg-slate-100" />)}</div>
+    <div className="animate-pulse overflow-hidden rounded-2xl border border-slate-200 bg-white"><div className="border-b border-slate-200 p-6"><div className="h-5 w-44 rounded bg-slate-200" /><div className="mt-3 h-3 w-72 max-w-full rounded bg-slate-100" /></div><div className="grid grid-cols-1 gap-5 p-6 md:grid-cols-2">{[1, 2, 3, 4].map((item) => <div key={item}><div className="mb-2 h-3 w-28 rounded bg-slate-200" /><div className="h-12 rounded-xl bg-slate-100" /></div>)}</div></div>
+    <div className="animate-pulse overflow-hidden rounded-2xl border border-slate-200 bg-white"><div className="border-b border-slate-200 p-6"><div className="h-5 w-36 rounded bg-slate-200" /></div><div className="grid grid-cols-1 gap-5 p-6 md:grid-cols-2"><div><div className="mb-2 h-3 w-24 rounded bg-slate-200" /><div className="h-12 rounded-xl bg-slate-100" /></div><div><div className="mb-2 h-3 w-24 rounded bg-slate-200" /><div className="h-12 rounded-xl bg-slate-100" /></div></div></div>
+  </div>;
 
   return (
     <>
