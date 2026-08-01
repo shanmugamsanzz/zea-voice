@@ -29,9 +29,27 @@ function assertSameCall(row, input) {
   }
 }
 
+export function buildKnowledgeSnapshot(runtimeProfile) {
+  const knowledgeBases = Array.isArray(runtimeProfile?.knowledgeBases)
+    ? runtimeProfile.knowledgeBases
+    : [];
+  const items = knowledgeBases
+    .filter((item) => item?.id)
+    .map((item) => ({
+      id: String(item.id),
+      publicationRevision: Number(item.publicationRevision ?? 0),
+    }));
+  return {
+    knowledgeBaseIds: [...new Set(items.map((item) => item.id))],
+    items,
+    loadedAt: new Date().toISOString(),
+  };
+}
+
 export function createVoiceCallSession(input, dependencies = {}) {
   const contextRunner = dependencies.contextRunner ?? withAuthServiceContext;
   return contextRunner(async (client) => {
+    const knowledgeSnapshot = buildKnowledgeSnapshot(input.runtimeProfile);
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1),hashtext($2))',
       [input.call.telephonyAccountId, input.call.providerCallId]);
     const existing = await client.query(
@@ -41,8 +59,13 @@ export function createVoiceCallSession(input, dependencies = {}) {
     if (existing.rowCount) {
       assertSameCall(existing.rows[0], input);
       const connected = await client.query(`UPDATE call_sessions
-        SET status='connected',answered_at=COALESCE(answered_at,now())
-        WHERE id=$1 AND ended_at IS NULL RETURNING *`, [existing.rows[0].id]);
+        SET status='connected',answered_at=COALESCE(answered_at,now()),
+            provider_metadata=CASE
+              WHEN COALESCE(provider_metadata,'{}'::jsonb) ? 'knowledgeSnapshot'
+                THEN COALESCE(provider_metadata,'{}'::jsonb)
+              ELSE jsonb_set(COALESCE(provider_metadata,'{}'::jsonb),'{knowledgeSnapshot}',$2::jsonb,true)
+            END
+        WHERE id=$1 AND ended_at IS NULL RETURNING *`, [existing.rows[0].id, JSON.stringify(knowledgeSnapshot)]);
       if (!connected.rowCount) throw new AppError(409, 'Existing call session has already ended', 'VOICE_CALL_ALREADY_ENDED');
       return map(connected.rows[0], false);
     }
@@ -79,6 +102,7 @@ export function createVoiceCallSession(input, dependencies = {}) {
             llmModelId: input.runtimeProfile.providers.llm.modelId,
             ttsProviderId: input.runtimeProfile.providers.tts.providerId,
             ttsModelId: input.runtimeProfile.providers.tts.modelId,
+            knowledgeSnapshot,
           }),
           reservation.reservedCredits,
           reservation.priceSnapshotInr,

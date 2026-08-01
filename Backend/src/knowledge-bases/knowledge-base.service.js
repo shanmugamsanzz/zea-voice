@@ -228,6 +228,12 @@ export function updateKnowledgeBase(auth, knowledgeBaseId, input, contextRunner 
   });
 }
 
-export function deleteKnowledgeBase(auth, knowledgeBaseId, contextRunner = withTenantContext) {
-  return requestDeleteKnowledgeBase(auth, knowledgeBaseId, contextRunner);
+export function deleteKnowledgeBase(
+  auth,
+  knowledgeBaseId,
+  contextRunner = withTenantContext,
+  queueAdapter = undefined,
+  queueRemovalAdapter = undefined,
+) {
+  return requestDeleteKnowledgeBase(auth, knowledgeBaseId, contextRunner, queueAdapter, queueRemovalAdapter);
 }

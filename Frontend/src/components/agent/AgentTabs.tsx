@@ -225,6 +225,7 @@ interface KnowledgeDeletionJob {
   type: 'delete_document' | 'delete_knowledge_base';
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
   progress: number;
+  errorCode?: string | null;
   errorMessage: string | null;
 }
 
@@ -253,6 +254,10 @@ const knowledgeDocumentStatusStyles: Record<KnowledgeDocumentStatus, string> = {
 function knowledgeStatusLabel(status: unknown) {
   if (typeof status !== 'string' || !status.trim()) return 'Queued';
   return status.replace(/_/g, ' ').replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function knowledgeBaseStatusLabel(status: KnowledgeBaseStatus) {
+  return status === 'deleting' ? 'Deleting permanently' : knowledgeStatusLabel(status);
 }
 
 function FieldInfoTooltip({ id, text, triggerContent }: { id: string; text: string; triggerContent?: React.ReactNode }) {
@@ -677,10 +682,22 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     const activeJobs = Object.values(knowledgeDeletionJobs).filter((job) => ['queued', 'running'].includes(job.status));
     if (activeJobs.length === 0) return;
     const timer = window.setTimeout(async () => {
-      const settled = await Promise.allSettled(activeJobs.map((job) => apiRequest<KnowledgeDeletionJob>(
-        `/knowledge-bases/deletion-jobs/${job.id}`,
-        { zeaCache: 'bypass' },
-      )));
+      const settled = await Promise.allSettled(activeJobs.map(async (job) => {
+        try {
+          return await apiRequest<KnowledgeDeletionJob>(
+            `/knowledge-bases/deletion-jobs/${job.id}`,
+            { zeaCache: 'bypass' },
+          );
+        } catch (requestError) {
+          // A permanent Knowledge Base delete cascades its PostgreSQL cleanup
+          // job. Once that happens the polling endpoint correctly returns 404.
+          if (job.type === 'delete_knowledge_base'
+            && (requestError as { status?: unknown })?.status === 404) {
+            return { ...job, status: 'completed' as const, progress: 100 };
+          }
+          throw requestError;
+        }
+      }));
       const updates = settled.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []);
       if (updates.length === 0) {
         setKnowledgeDeletionJobs((current) => ({ ...current }));
@@ -920,7 +937,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       setKnowledgeFormMode(null);
       setShowKnowledgeBaseDeleteDialog(false);
       setDeleteKnowledgeBaseConfirmation('');
-      showKnowledgeSuccess('Knowledge Base deletion started successfully.');
+      showKnowledgeSuccess('Permanent Knowledge Base deletion started successfully.');
     } catch (requestError) {
       setKnowledgeError(requestError instanceof Error ? requestError.message : 'Knowledge Base could not be deleted');
     } finally {
@@ -3260,7 +3277,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
               <div className="mt-4 flex justify-end gap-2"><button type="button" onClick={closeKnowledgeForm} disabled={knowledgeSaving} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-50">Cancel</button><button type="button" onClick={() => void saveKnowledgeBase()} disabled={knowledgeSaving || !knowledgeFormName.trim()} className="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-xs font-bold text-white hover:bg-violet-700 disabled:opacity-50"><Save className="h-3.5 w-3.5" />{knowledgeSaving ? 'Saving...' : knowledgeFormMode === 'create' ? 'Create' : 'Save Changes'}</button></div>
             </div>}
 
-            {knowledgeBases.length > 0 && <label className="zea-knowledge-selector-card block rounded-xl border border-slate-200 bg-slate-50 p-4"><span className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-500">Selected Knowledge Base</span><select value={selectedKnowledgeBaseId} onChange={(event) => { setSelectedKnowledgeBaseId(event.target.value); setKnowledgeFormMode(null); }} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-800 outline-none focus:border-violet-400">{knowledgeBases.map((knowledgeBase) => <option key={knowledgeBase.id} value={knowledgeBase.id}>{knowledgeBase.name} — {knowledgeStatusLabel(knowledgeBase.status)} — {knowledgeBase.usageDirection}</option>)}</select></label>}
+            {knowledgeBases.length > 0 && <label className="zea-knowledge-selector-card block rounded-xl border border-slate-200 bg-slate-50 p-4"><span className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-500">Selected Knowledge Base</span><select value={selectedKnowledgeBaseId} onChange={(event) => { setSelectedKnowledgeBaseId(event.target.value); setKnowledgeFormMode(null); }} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-800 outline-none focus:border-violet-400">{knowledgeBases.map((knowledgeBase) => <option key={knowledgeBase.id} value={knowledgeBase.id}>{knowledgeBase.name} — {knowledgeBaseStatusLabel(knowledgeBase.status)} — {knowledgeBase.usageDirection}</option>)}</select></label>}
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <div className="zea-knowledge-summary-card rounded-xl border border-slate-200 bg-slate-50 p-4"><span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Company Knowledge Bases</span><strong className="mt-1 block text-2xl text-slate-800">{knowledgeBases.length}</strong></div>
@@ -3285,7 +3302,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     className={`zea-knowledge-base-list-item ${selected ? 'zea-knowledge-base-list-item-selected' : ''} w-full rounded-xl border p-4 text-left transition ${selected ? 'border-violet-400 bg-violet-50/50 ring-2 ring-violet-100' : 'border-slate-200 bg-white hover:border-violet-200 hover:bg-slate-50'}`}>
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="min-w-0"><span className="block truncate text-sm font-bold text-slate-800">{knowledgeBase.name}</span><p className="mt-1 line-clamp-2 text-[11px] font-medium text-slate-500">{knowledgeBase.description || 'No description provided.'}</p></div>
-                      <div className="flex flex-wrap justify-end gap-1.5"><span className={`rounded-md px-2 py-1 text-[9px] font-black uppercase ${knowledgeStatusStyles[knowledgeBase.status]}`}>{knowledgeStatusLabel(knowledgeBase.status)}</span>{assignment && <span className="rounded-md bg-violet-100 px-2 py-1 text-[9px] font-black uppercase text-violet-700">Assigned</span>}</div>
+                      <div className="flex flex-wrap justify-end gap-1.5"><span className={`rounded-md px-2 py-1 text-[9px] font-black uppercase ${knowledgeStatusStyles[knowledgeBase.status]}`}>{knowledgeBaseStatusLabel(knowledgeBase.status)}</span>{assignment && <span className="rounded-md bg-violet-100 px-2 py-1 text-[9px] font-black uppercase text-violet-700">Assigned</span>}</div>
                     </div>
                     <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t border-slate-100 pt-3 text-[10px] font-semibold text-slate-500"><span>{knowledgeBase.documentCount} documents</span><span>{knowledgeBase.processingDocumentCount} processing</span><span>{knowledgeBase.failedDocumentCount} failed</span><span className="capitalize">{knowledgeBase.usageDirection}</span></div>
                   </button>;
@@ -3312,7 +3329,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     {knowledgeAssignmentSaving ? 'Updating assignment...' : selectedKnowledgeAssignment ? 'Unassign from Agent' : selectedKnowledgeBase.status === 'published' ? 'Assign to Agent' : 'Publish Before Assignment'}
                   </button>}
                   {!isReadOnly && !['deleting', 'deleted'].includes(selectedKnowledgeBase.status) && <div className="mt-2 grid grid-cols-2 gap-2"><button type="button" onClick={() => openEditKnowledgeBase(selectedKnowledgeBase)} disabled={knowledgeSaving || knowledgeDeleting} className="rounded-lg border border-violet-200 bg-white px-3 py-2 text-xs font-bold text-violet-700 transition hover:bg-violet-50 disabled:opacity-50">Edit</button><button type="button" onClick={() => { setDeleteKnowledgeBaseConfirmation(''); setShowKnowledgeBaseDeleteDialog(true); }} disabled={knowledgeSaving || knowledgeDeleting} className="rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-bold text-red-600 transition hover:bg-red-50 disabled:opacity-50">Delete</button></div>}
-                  {selectedKnowledgeBase.status === 'deleting' && <div className="mt-4 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-red-700">{selectedKnowledgeDeletionJob?.status === 'failed' ? <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : <RefreshCw className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />}<span className="text-[10px] font-semibold">{selectedKnowledgeDeletionJob?.status === 'failed' ? `Cleanup failed: ${selectedKnowledgeDeletionJob.errorMessage || 'The backend will retain the failed job for reconciliation.'}` : `Deleting documents, stored B2 files and Qdrant vectors (${selectedKnowledgeDeletionJob?.progress ?? 0}%). The Knowledge Base cannot be changed or assigned.`}</span></div>}
+                  {selectedKnowledgeBase.status === 'deleting' && <div className="mt-4 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-red-700">{selectedKnowledgeDeletionJob?.status === 'failed' ? <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : <RefreshCw className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />}<span className="text-[10px] font-semibold">{selectedKnowledgeDeletionJob?.status === 'failed' ? `Cleanup failed: ${selectedKnowledgeDeletionJob.errorMessage || 'The backend will retain the failed job for reconciliation.'}` : ['KNOWLEDGE_DELETE_ACTIVE_CALLS', 'KNOWLEDGE_DELETE_QUEUE_BUSY'].includes(selectedKnowledgeDeletionJob?.errorCode ?? '') ? `Deleting permanently is waiting safely: ${selectedKnowledgeDeletionJob.errorMessage || 'active work is still using this Knowledge Base.'}` : `Deleting permanently (${selectedKnowledgeDeletionJob?.progress ?? 0}%): removing documents, approved data, stored files and vectors. The Knowledge Base cannot be changed or assigned.`}</span></div>}
                   <div className="mt-4 rounded-lg border border-dashed border-slate-300 bg-white p-4 text-center text-[11px] font-semibold text-slate-400">Choose one of the five PDF categories below to add knowledge.</div>
                 </div>}
               </div>
@@ -3432,10 +3449,10 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
 
             {showKnowledgeBaseDeleteDialog && selectedKnowledgeBase && <div role="dialog" aria-modal="true" aria-labelledby="delete-knowledge-base-title" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget && !knowledgeDeleting) setShowKnowledgeBaseDeleteDialog(false); }}>
               <div className="w-full max-w-lg rounded-2xl border border-red-200 bg-white p-6 shadow-2xl">
-                <div className="flex items-start gap-3"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-100 text-red-600"><Trash2 className="h-5 w-5" /></div><div><h4 id="delete-knowledge-base-title" className="text-base font-bold text-slate-900">Permanently delete Knowledge Base?</h4><p className="mt-1 text-xs leading-5 text-slate-500">The backend will safely remove every document version, review record, B2 object, Qdrant vector and agent assignment. This action cannot be undone.</p></div></div>
+                <div className="flex items-start gap-3"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-100 text-red-600"><Trash2 className="h-5 w-5" /></div><div><h4 id="delete-knowledge-base-title" className="text-base font-bold text-slate-900">Permanently delete Knowledge Base?</h4><p className="mt-1 text-xs leading-5 text-slate-500">This permanently deletes all documents, approved data, vectors and files. This action cannot be undone.</p></div></div>
                 <div className="mt-5 rounded-lg border border-red-100 bg-red-50 p-3 text-xs font-semibold text-red-700">Type <strong>{selectedKnowledgeBase.name}</strong> to confirm deletion.</div>
                 <label className="mt-4 block"><span className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-500">Knowledge Base name</span><input autoFocus value={deleteKnowledgeBaseConfirmation} onChange={(event) => setDeleteKnowledgeBaseConfirmation(event.target.value)} disabled={knowledgeDeleting} className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-xs font-semibold text-slate-800 outline-none focus:border-red-400 disabled:opacity-60" /></label>
-                <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => { setShowKnowledgeBaseDeleteDialog(false); setDeleteKnowledgeBaseConfirmation(''); }} disabled={knowledgeDeleting} className="rounded-lg border border-slate-200 px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-50">Cancel</button><button type="button" onClick={() => void deleteSelectedKnowledgeBase()} disabled={knowledgeDeleting || deleteKnowledgeBaseConfirmation.trim() !== selectedKnowledgeBase.name} className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-xs font-bold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50">{knowledgeDeleting ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}{knowledgeDeleting ? 'Starting safe deletion...' : 'Delete permanently'}</button></div>
+                <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => { setShowKnowledgeBaseDeleteDialog(false); setDeleteKnowledgeBaseConfirmation(''); }} disabled={knowledgeDeleting} className="rounded-lg border border-slate-200 px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-50">Cancel</button><button type="button" onClick={() => void deleteSelectedKnowledgeBase()} disabled={knowledgeDeleting || deleteKnowledgeBaseConfirmation.trim() !== selectedKnowledgeBase.name} className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-xs font-bold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50">{knowledgeDeleting ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}{knowledgeDeleting ? 'Starting permanent deletion...' : 'Delete permanently'}</button></div>
               </div>
             </div>}
 

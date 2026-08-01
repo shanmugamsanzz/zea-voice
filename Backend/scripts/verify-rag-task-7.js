@@ -22,6 +22,11 @@ async function verifyQdrantClientContract() {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options = {}) => {
     calls.push({ url: String(url), method: options.method ?? 'GET', body: options.body ? JSON.parse(options.body) : null });
+    if (String(url).includes('/points/count')) {
+      return new Response(JSON.stringify({ result: { count: 0 }, status: 'ok' }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      });
+    }
     if ((options.method ?? 'GET') === 'GET' && String(url).includes('/collections/')) {
       return new Response(JSON.stringify({ status: { error: 'Not found' } }), {
         status: 404, headers: { 'content-type': 'application/json' },
@@ -51,6 +56,9 @@ async function verifyQdrantClientContract() {
     assert.deepEqual(deletion.body.filter.must.at(-1), {
       key: 'publication_revision', range: { lt: 2 },
     });
+    const verification = calls.find((call) => call.url.includes('/points/count'));
+    assert.deepEqual(verification.body.filter, deletion.body.filter);
+    assert.equal(verification.body.exact, true);
   } finally {
     globalThis.fetch = originalFetch;
   }

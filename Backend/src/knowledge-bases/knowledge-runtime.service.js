@@ -5,6 +5,7 @@ import { withTenantContext } from '../infrastructure/database-context.js';
 import { AppError } from '../middleware/errors.js';
 import { embedQuery } from '../rag/embedding.client.js';
 import { searchTenantPoints } from '../rag/qdrant.client.js';
+import { requireTenantId } from '../rag/tenant-isolation.js';
 
 const defaultDependencies = {
   contextRunner: withTenantContext,
@@ -319,29 +320,41 @@ export async function routeKnowledgeQuery(auth, input, dependencies = defaultDep
 }
 
 export async function invalidateTenantKnowledgeCache(tenantId, cache = redis) {
-  if (!cache || (cache.status && cache.status !== 'ready')) return { deletedKeys: 0 };
-  let cursor = '0';
+  const tenant = requireTenantId(tenantId);
+  if (!cache || (cache.status && cache.status !== 'ready')) {
+    return { deletedKeys: 0, incomplete: true };
+  }
   let deletedKeys = 0;
-  const patterns = [`zea:rag:profile:${tenantId}:*`, `zea:rag:result:${tenantId}:*`];
+  const patterns = [`zea:rag:profile:${tenant}:*`, `zea:rag:result:${tenant}:*`];
   try {
     for (const pattern of patterns) {
-      cursor = '0';
-      do {
-        const response = await timed(
-          cache.scan(cursor, 'MATCH', pattern, 'COUNT', 100),
-          env.RAG_RUNTIME_CACHE_TIMEOUT_MS,
-        );
-        if (!response) break;
-        cursor = response[0];
-        const keys = response[1];
-        if (keys.length) {
-          const removed = await timed(cache.del(...keys), env.RAG_RUNTIME_CACHE_TIMEOUT_MS);
-          deletedKeys += Number(removed ?? 0);
-        }
-      } while (cursor !== '0');
+      let cleared = false;
+      for (let pass = 0; pass < 3 && !cleared; pass += 1) {
+        let cursor = '0';
+        let foundThisPass = 0;
+        do {
+          const response = await timed(
+            cache.scan(cursor, 'MATCH', pattern, 'COUNT', 100),
+            env.RAG_RUNTIME_CACHE_TIMEOUT_MS,
+          );
+          if (!Array.isArray(response) || response.length < 2 || !Array.isArray(response[1])) {
+            return { deletedKeys, incomplete: true };
+          }
+          cursor = String(response[0]);
+          const keys = response[1];
+          foundThisPass += keys.length;
+          if (keys.length) {
+            const removed = await timed(cache.del(...keys), env.RAG_RUNTIME_CACHE_TIMEOUT_MS);
+            if (removed === null) return { deletedKeys, incomplete: true };
+            deletedKeys += Number(removed ?? 0);
+          }
+        } while (cursor !== '0');
+        cleared = foundThisPass === 0;
+      }
+      if (!cleared) return { deletedKeys, incomplete: true };
     }
   } catch {
     return { deletedKeys, incomplete: true };
   }
-  return { deletedKeys };
+  return { deletedKeys, verified: true, remainingKeys: 0 };
 }

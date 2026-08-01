@@ -27,13 +27,24 @@ function embeddingText(value) {
 
 async function claimIndexJob(jobId, contextRunner) {
   return contextRunner(null, async (client) => {
+    const locator = await client.query(
+      `SELECT tenant_id, knowledge_base_id FROM knowledge_processing_jobs
+        WHERE id=$1 AND job_type='index'`,
+      [jobId],
+    );
+    if (!locator.rowCount) throw new AppError(404, 'Semantic index job was not found', 'KNOWLEDGE_INDEX_JOB_NOT_FOUND');
+    await client.query(
+      `SELECT id FROM knowledge_bases
+        WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+      [locator.rows[0].tenant_id, locator.rows[0].knowledge_base_id],
+    );
     const result = await client.query(
       `SELECT j.*, kb.status AS knowledge_base_status,
           kb.publication_revision, kb.usage_direction AS knowledge_base_usage
          FROM knowledge_processing_jobs j
          JOIN knowledge_bases kb ON kb.tenant_id = j.tenant_id AND kb.id = j.knowledge_base_id
         WHERE j.id = $1 AND j.job_type = 'index'
-        FOR UPDATE OF j, kb`,
+        FOR UPDATE OF j`,
       [jobId],
     );
     if (!result.rowCount) throw new AppError(404, 'Semantic index job was not found', 'KNOWLEDGE_INDEX_JOB_NOT_FOUND');

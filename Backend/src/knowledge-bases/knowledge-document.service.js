@@ -74,16 +74,16 @@ const documentSelect = `
     LIMIT 1
   ) latest_job ON true`;
 
-async function ensureKnowledgeBase(client, auth, knowledgeBaseId) {
+async function ensureKnowledgeBase(client, auth, knowledgeBaseId, lock = false) {
   const result = await client.query(
-    `SELECT id, status FROM knowledge_bases
+    `SELECT id, status, deleted_at FROM knowledge_bases
       WHERE tenant_id = $1 AND workspace_id = $2 AND id = $3
-        AND deleted_at IS NULL AND status <> 'deleted'`,
+      ${lock ? 'FOR UPDATE' : ''}`,
     [auth.tenantId, auth.workspaceId, knowledgeBaseId],
   );
   if (!result.rowCount) throw new AppError(404, 'Knowledge Base was not found', 'KNOWLEDGE_BASE_NOT_FOUND');
-  if (result.rows[0].status === 'deleting') {
-    throw new AppError(409, 'Documents cannot be uploaded while the Knowledge Base is being deleted', 'KNOWLEDGE_BASE_NOT_EDITABLE');
+  if (result.rows[0].deleted_at || ['deleting', 'deleted'].includes(result.rows[0].status)) {
+    throw new AppError(409, 'Knowledge Base cannot be used while permanent deletion is running', 'KNOWLEDGE_BASE_NOT_EDITABLE');
   }
 }
 
@@ -195,7 +195,7 @@ export async function uploadKnowledgeDocument(
     uploaded = true;
 
     saved = await contextRunner(auth, async (client) => {
-      await ensureKnowledgeBase(client, auth, knowledgeBaseId);
+      await ensureKnowledgeBase(client, auth, knowledgeBaseId, true);
       const inferredDisplayName = path.basename(file.originalname, path.extname(file.originalname)).trim();
       const displayName = (input.displayName ?? inferredDisplayName) || 'PDF document';
       await client.query(
@@ -367,6 +367,7 @@ export async function uploadKnowledgeDocumentVersion(
   if (!env.B2_BUCKET) throw new AppError(503, 'B2 storage is not configured', 'B2_NOT_CONFIGURED');
   const checksumSha256 = crypto.createHash('sha256').update(file.buffer).digest('hex');
   const reserved = await contextRunner(auth, async (client) => {
+    await ensureKnowledgeBase(client, auth, knowledgeBaseId, true);
     const document = await client.query(
       `SELECT d.*, v.content_sha256 AS current_checksum
          FROM knowledge_documents d
@@ -433,6 +434,7 @@ export async function uploadKnowledgeDocumentVersion(
   let saved;
   try {
     saved = await contextRunner(auth, async (client) => {
+      await ensureKnowledgeBase(client, auth, knowledgeBaseId, true);
       const locked = await client.query(
         `SELECT id FROM knowledge_document_versions
           WHERE tenant_id=$1 AND id=$2 AND is_current=false AND status='uploaded' FOR UPDATE`,

@@ -1,6 +1,6 @@
 import { env } from '../config/env.js';
 import { measureExternalProvider } from '../performance/performance-context.js';
-import { tenantCollectionName } from './tenant-isolation.js';
+import { requireEntityId, requireTenantId, tenantCollectionName } from './tenant-isolation.js';
 
 function qdrantBaseUrl() {
   return env.QDRANT_URL.replace(/\/$/, '');
@@ -162,10 +162,12 @@ export async function deleteTenantPointsByKnowledgeBase(
   knowledgeBaseId,
   { publicationRevision = undefined, revisionMode = 'all' } = {},
 ) {
-  const collectionName = collectionForTenant(tenantId);
+  const tenant = requireTenantId(tenantId);
+  const knowledgeBase = requireEntityId(knowledgeBaseId, 'knowledgeBaseId');
+  const collectionName = collectionForTenant(tenant);
   const must = [
-    { key: 'tenant_id', match: { value: tenantId.toLowerCase() } },
-    { key: 'knowledge_base_id', match: { value: knowledgeBaseId.toLowerCase() } },
+    { key: 'tenant_id', match: { value: tenant } },
+    { key: 'knowledge_base_id', match: { value: knowledgeBase } },
   ];
   if (publicationRevision !== undefined) {
     if (!Number.isInteger(publicationRevision) || publicationRevision < 1) {
@@ -189,8 +191,32 @@ export async function deleteTenantPointsByKnowledgeBase(
     });
   } catch (error) {
     if (error.statusCode !== 404) throw error;
+    return { deleted: true, verified: true, remainingCount: 0, collectionMissing: true };
   }
-  return { deleted: true };
+  let counted;
+  try {
+    counted = await qdrantFetch(`/collections/${encodeURIComponent(collectionName)}/points/count`, {
+      method: 'POST',
+      operation: 'verify-knowledge-base-points-deleted',
+      body: JSON.stringify({ filter: { must }, exact: true }),
+    });
+  } catch (error) {
+    if (error.statusCode === 404) {
+      return { deleted: true, verified: true, remainingCount: 0, collectionMissing: true };
+    }
+    throw error;
+  }
+  const remainingCount = counted?.result?.count;
+  if (!Number.isInteger(remainingCount) || remainingCount < 0) {
+    throw new Error('Qdrant returned an invalid Knowledge Base deletion verification count');
+  }
+  if (remainingCount !== 0) {
+    const error = new Error(`Qdrant still contains ${remainingCount} matching Knowledge Base point(s)`);
+    error.code = 'QDRANT_KNOWLEDGE_DELETE_INCOMPLETE';
+    error.remainingCount = remainingCount;
+    throw error;
+  }
+  return { deleted: true, verified: true, remainingCount, collectionMissing: false };
 }
 
 async function deleteTenantPointsByEntity(tenantId, field, entityId, operation) {

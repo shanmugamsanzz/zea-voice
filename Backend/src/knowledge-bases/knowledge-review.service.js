@@ -36,6 +36,23 @@ const reviewSource = `
 
 async function documentReviewRows(client, auth, knowledgeBaseId, documentId = null, lock = false) {
   if (lock) {
+    const knowledgeBase = await client.query(
+      `SELECT id, status, deleted_at FROM knowledge_bases
+        WHERE tenant_id=$1 AND workspace_id=$2 AND id=$3
+        FOR UPDATE`,
+      [auth.tenantId, auth.workspaceId, knowledgeBaseId],
+    );
+    if (!knowledgeBase.rowCount) {
+      throw new AppError(404, 'Knowledge Base was not found', 'KNOWLEDGE_BASE_NOT_FOUND');
+    }
+    if (knowledgeBase.rows[0].deleted_at
+      || ['deleting', 'deleted'].includes(knowledgeBase.rows[0].status)) {
+      throw new AppError(
+        409,
+        'Knowledge review cannot be changed while permanent deletion is running',
+        'KNOWLEDGE_BASE_NOT_EDITABLE',
+      );
+    }
     await client.query(
       `SELECT d.id FROM knowledge_documents d
        JOIN knowledge_bases kb ON kb.tenant_id = d.tenant_id AND kb.id = d.knowledge_base_id

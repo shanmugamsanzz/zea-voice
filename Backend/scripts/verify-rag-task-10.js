@@ -43,6 +43,7 @@ function pdfFile(label) {
 class StorageMock {
   uploaded = [];
   deleted = [];
+  deletedPrefixes = [];
   async putObject(input) {
     this.uploaded.push(input);
     return {
@@ -55,6 +56,12 @@ class StorageMock {
   async deleteAllVersions({ key }) {
     this.deleted.push(key);
     return { key, deleted: true, deletedCount: 1 };
+  }
+  async deletePrefix({ prefix }) {
+    this.deletedPrefixes.push(prefix);
+    return {
+      prefix, deleted: true, verified: true, deletedCount: 2, remainingObjectVersions: 0,
+    };
   }
 }
 
@@ -287,7 +294,10 @@ async function verifyCompleteLifecycle() {
     const reindexQueue = [];
     const documentCleanup = await processKnowledgeDeletionJob(documentDelete.cleanupJob.id, {
       contextRunner: sameTransaction,
-      storage: { deleteAllVersions: storage.deleteAllVersions.bind(storage) },
+      storage: {
+        deleteAllVersions: storage.deleteAllVersions.bind(storage),
+        deletePrefix: storage.deletePrefix.bind(storage),
+      },
       async deleteDocumentPoints(tenantId, documentId) {
         documentPointDeletes.push({ tenantId, documentId });
       },
@@ -324,13 +334,21 @@ async function verifyCompleteLifecycle() {
     const knowledgeBasePointDeletes = [];
     const kbCleanup = await processKnowledgeDeletionJob(kbDelete.cleanupJob.id, {
       contextRunner: sameTransaction,
-      storage: { deleteAllVersions: storage.deleteAllVersions.bind(storage) },
+      storage: {
+        deleteAllVersions: storage.deleteAllVersions.bind(storage),
+        deletePrefix: storage.deletePrefix.bind(storage),
+      },
       async deleteKnowledgeBasePoints(tenantId, id) {
         knowledgeBasePointDeletes.push({ tenantId, knowledgeBaseId: id });
+        return { deleted: true, verified: true, remainingCount: 0 };
       },
-      async invalidateCache() { return { deletedKeys: 0 }; },
+      async removeQueueJobs() {
+        return { removed: [], active: [], verified: true, remaining: [] };
+      },
+      async invalidateCache() { return { deletedKeys: 0, verified: true, remainingKeys: 0 }; },
     });
     assert.equal(kbCleanup.status, 'completed');
+    assert.equal(kbCleanup.permanentlyDeleted, true);
     assert.deepEqual(knowledgeBasePointDeletes, [{
       tenantId: tenant.tenantId, knowledgeBaseId: completeKbId,
     }]);
@@ -343,8 +361,10 @@ async function verifyCompleteLifecycle() {
       [completeKbId, completeDocument.documentId, completeDocument.versionId],
     );
     assert.deepEqual(completeState.rows[0], {
-      kb_status: 'deleted', document_status: 'deleted', version_status: 'deleted', chunks: 0,
+      kb_status: null, document_status: null, version_status: null, chunks: 0,
     });
+    assert.deepEqual(storage.deletedPrefixes.at(-1),
+      `tenants/${tenant.tenantId}/knowledge-bases/${completeKbId}/`);
 
     const isolated = await client.query(
       `SELECT d.status AS document_status, v.status AS version_status,

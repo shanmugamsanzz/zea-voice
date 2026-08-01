@@ -6,6 +6,17 @@ import {
 
 let storageClient;
 
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+export function knowledgeBaseB2Prefix({ tenantId, knowledgeBaseId }) {
+  const normalizedTenantId = String(tenantId ?? '').toLowerCase();
+  const normalizedKnowledgeBaseId = String(knowledgeBaseId ?? '').toLowerCase();
+  if (!uuidPattern.test(normalizedTenantId) || !uuidPattern.test(normalizedKnowledgeBaseId)) {
+    throw new TypeError('Valid tenant and Knowledge Base IDs are required for B2 cleanup');
+  }
+  return `tenants/${normalizedTenantId}/knowledge-bases/${normalizedKnowledgeBaseId}/`;
+}
+
 function requiredStorageConfig() {
   const missing = [
     ['B2_S3_ENDPOINT', env.B2_S3_ENDPOINT],
@@ -161,5 +172,66 @@ export async function deleteAllB2ObjectVersions({ key }) {
       }
     } while (truncated);
     return { bucket: env.B2_BUCKET, key, deletedCount, deleted: true };
+  });
+}
+
+export async function deleteAllB2ObjectsUnderPrefix(
+  { prefix, tenantId, knowledgeBaseId },
+  dependencies = {},
+) {
+  const normalizedPrefix = String(prefix ?? '');
+  const expectedPrefix = knowledgeBaseB2Prefix({ tenantId, knowledgeBaseId });
+  if (normalizedPrefix !== expectedPrefix) {
+    throw new TypeError('A tenant-isolated Knowledge Base storage prefix is required');
+  }
+  return measureExternalProvider('backblaze-b2', 'delete-prefix-versions', async () => {
+    const client = dependencies.client ?? getStorageClient();
+    const bucket = dependencies.bucket ?? env.B2_BUCKET;
+    const timeoutMs = dependencies.timeoutMs ?? env.PROVIDER_REQUEST_TIMEOUT_MS;
+    let deletedCount = 0;
+    let deletedVersionCount = 0;
+    let deletedMarkerCount = 0;
+    let listPasses = 0;
+    // Always restart the listing after deleting a page. This avoids skipping
+    // versions when the remote listing changes while it is being consumed.
+    for (;;) {
+      listPasses += 1;
+      const listed = await client.send(new ListObjectVersionsCommand({
+        Bucket: bucket,
+        Prefix: normalizedPrefix,
+        MaxKeys: 1000,
+      }), { abortSignal: AbortSignal.timeout(timeoutMs) });
+      const entries = [
+        ...(listed.Versions ?? []).map((entry) => ({ ...entry, entryType: 'version' })),
+        ...(listed.DeleteMarkers ?? []).map((entry) => ({ ...entry, entryType: 'delete_marker' })),
+      ].filter((entry) => entry.Key?.startsWith(normalizedPrefix) && entry.VersionId);
+      if (!entries.length) {
+        if (listed.IsTruncated) {
+          throw new Error('B2 prefix listing was truncated without deletable object versions');
+        }
+        break;
+      }
+      for (const entry of entries) {
+        await client.send(new DeleteObjectCommand({
+          Bucket: bucket,
+          Key: entry.Key,
+          VersionId: entry.VersionId,
+        }), { abortSignal: AbortSignal.timeout(timeoutMs) });
+        deletedCount += 1;
+        if (entry.entryType === 'delete_marker') deletedMarkerCount += 1;
+        else deletedVersionCount += 1;
+      }
+    }
+    return {
+      bucket,
+      prefix: normalizedPrefix,
+      deletedCount,
+      deletedVersionCount,
+      deletedMarkerCount,
+      listPasses,
+      deleted: true,
+      verified: true,
+      remainingObjectVersions: 0,
+    };
   });
 }

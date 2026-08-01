@@ -146,7 +146,12 @@ async function verifyLiveCrud() {
     assert.equal(updated.name, 'Hospital Knowledge Updated');
     assert.equal(updated.usageDirection, 'inbound');
 
-    const deleted = await deleteKnowledgeBase(auth, created.id, sameTransaction);
+    const deleted = await deleteKnowledgeBase(
+      auth,
+      created.id,
+      sameTransaction,
+      async ({ processingJobId }) => ({ id: processingJobId }),
+    );
     assert.equal(deleted.deleted, true);
     await assert.rejects(
       getKnowledgeBase(auth, created.id, sameTransaction),

@@ -18,8 +18,31 @@ function extractedTextKey(sourceKey) {
     : `${sourceKey}.extracted-text.json`;
 }
 
+async function lockProcessingKnowledgeBase(client, tenantId, knowledgeBaseId) {
+  const result = await client.query(
+    `SELECT status, deleted_at FROM knowledge_bases
+      WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+    [tenantId, knowledgeBaseId],
+  );
+  if (!result.rowCount || result.rows[0].deleted_at
+    || ['deleting', 'deleted'].includes(result.rows[0].status)) {
+    throw new AppError(409, 'Knowledge Base is being deleted', 'KNOWLEDGE_DOCUMENT_DELETING');
+  }
+}
+
 async function claimJob(jobId, contextRunner) {
   return contextRunner(null, async (client) => {
+    const locator = await client.query(
+      `SELECT tenant_id, knowledge_base_id FROM knowledge_processing_jobs
+        WHERE id=$1 AND job_type='extract'`,
+      [jobId],
+    );
+    if (!locator.rowCount) throw new AppError(404, 'Knowledge processing job was not found', 'KNOWLEDGE_JOB_NOT_FOUND');
+    await lockProcessingKnowledgeBase(
+      client,
+      locator.rows[0].tenant_id,
+      locator.rows[0].knowledge_base_id,
+    );
     const result = await client.query(
       `SELECT j.*, d.document_type, d.status AS document_status,
           v.b2_bucket, v.b2_object_key, v.content_sha256, v.status AS version_status
@@ -61,7 +84,7 @@ async function claimJob(jobId, contextRunner) {
     );
     await client.query(
       `UPDATE knowledge_bases SET status = 'processing'
-        WHERE tenant_id = $1 AND id = $2 AND status <> 'deleted'`,
+        WHERE tenant_id = $1 AND id = $2 AND status NOT IN ('deleting', 'deleted')`,
       [job.tenant_id, job.knowledge_base_id],
     );
     return { ...job, attempt_count: job.attempt_count + 1, alreadyCompleted: false };
@@ -193,6 +216,7 @@ const persistenceByType = {
 
 async function completeJob(job, extraction, category, storedText, contextRunner) {
   return contextRunner(null, async (client) => {
+    await lockProcessingKnowledgeBase(client, job.tenant_id, job.knowledge_base_id);
     const current = await client.query(
       'SELECT status FROM knowledge_processing_jobs WHERE id = $1 FOR UPDATE',
       [job.id],
@@ -260,7 +284,7 @@ async function completeJob(job, extraction, category, storedText, contextRunner)
             ) THEN 'processing'::knowledge_base_status
             ELSE 'ready'::knowledge_base_status
           END
-        WHERE kb.tenant_id = $1 AND kb.id = $2`,
+        WHERE kb.tenant_id = $1 AND kb.id = $2 AND kb.status NOT IN ('deleting', 'deleted')`,
       [job.tenant_id, job.knowledge_base_id],
     );
     return {

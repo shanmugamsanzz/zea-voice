@@ -27,7 +27,24 @@ export async function startKnowledgeProcessingWorker() {
     },
   );
   worker.on('failed', (job, error) => {
+    if (['KNOWLEDGE_DELETE_ACTIVE_CALLS', 'KNOWLEDGE_DELETE_QUEUE_BUSY'].includes(error?.code)) {
+      logger.info({
+        queueName: 'knowledge-processing', jobId: job?.id,
+        activeCallCount: error?.details?.activeCallCount ?? null,
+      }, 'Permanent Knowledge Base cleanup is waiting for active work to finish');
+      return;
+    }
     logger.error({ err: error, queueName: 'knowledge-processing', jobId: job?.id }, 'Knowledge job failed');
+    if ([
+      'KNOWLEDGE_DOCUMENT_DELETING',
+      'KNOWLEDGE_JOB_NOT_FOUND',
+      'KNOWLEDGE_JOB_STATE_CHANGED',
+      'KNOWLEDGE_INDEX_STALE',
+    ].includes(error?.code)) {
+      void job?.remove().catch((removeError) => {
+        logger.warn({ err: removeError, jobId: job?.id }, 'Cancelled Knowledge job could not be removed from Redis');
+      });
+    }
   });
   worker.on('error', (error) => {
     logger.error({ err: error, queueName: 'knowledge-processing' }, 'Knowledge worker error');
