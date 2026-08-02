@@ -2117,6 +2117,351 @@ html:not(.dark) body .zea-create-api-key-button:disabled {
   cursor: not-allowed;
 }
 
+/* Light theme: retain the premium gold accent with stronger text contrast. */
+html:not(.dark) body .zea-premium-shell .text-indigo-400,
+html:not(.dark) body .zea-premium-shell .text-indigo-500,
+html:not(.dark) body .zea-premium-shell .text-indigo-600,
+html:not(.dark) body .zea-premium-shell .text-purple-400,
+html:not(.dark) body .zea-premium-shell .text-purple-500,
+html:not(.dark) body .zea-premium-shell .text-purple-600,
+html:not(.dark) body .zea-premium-shell .text-violet-400,
+html:not(.dark) body .zea-premium-shell .text-violet-500,
+html:not(.dark) body .zea-premium-shell .text-violet-600,
+html:not(.dark) body .zea-premium-shell .text-amber-100,
+html:not(.dark) body .zea-premium-shell .text-amber-200,
+html:not(.dark) body .zea-premium-shell .text-amber-300,
+html:not(.dark) body .zea-premium-shell .text-amber-400,
+html:not(.dark) body .zea-premium-shell .text-amber-500,
+html:not(.dark) body .zea-premium-shell .text-amber-600,
+html:not(.dark) body .zea-premium-shell .text-yellow-100,
+html:not(.dark) body .zea-premium-shell .text-yellow-200,
+html:not(.dark) body .zea-premium-shell .text-yellow-300,
+html:not(.dark) body .zea-premium-shell .text-yellow-400,
+html:not(.dark) body .zea-premium-shell .text-yellow-500,
+html:not(.dark) body .zea-premium-shell .text-yellow-600,
+html:not(.dark) body .zea-premium-shell [class*="text-[#dfa822]"] {
+  color: #946300 !important;
+}
+
+html:not(.dark) body .zea-premium-shell .bg-amber-50,
+html:not(.dark) body .zea-premium-shell .bg-yellow-50 {
+  color: #825700 !important;
+}
+
+html.dark body .zea-user-operator-console-title,
+html.dark body .zea-user-operator-console-description {
+  color: #0a0b08 !important;
+}
+
+/* Premium dropdown system: native selects and shared portaled menus. */
+body .zea-premium-shell select {
+  min-height: 2.625rem;
+  border-radius: 0.8rem !important;
+  border-width: 1px !important;
+  padding-block: 0.625rem;
+  padding-inline-start: 0.875rem;
+  font-family: inherit;
+  font-weight: 600;
+  line-height: 1.25;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
+  transition: color 160ms ease, background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+
+body .zea-premium-shell select:not(.appearance-none) {
+  appearance: none;
+  padding-inline-end: 2.5rem !important;
+  background-repeat: no-repeat !important;
+  background-position: right 0.85rem center !important;
+  background-size: 0.9rem 0.9rem !important;
+}
+
+html:not(.dark) body .zea-premium-shell select:not(.appearance-none) {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23946300' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") !important;
+}
+
+html.dark body .zea-premium-shell select:not(.appearance-none) {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23dfa822' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") !important;
+}
+
+html:not(.dark) body .zea-premium-shell select {
+  color: #171717 !important;
+  background-color: #fffdf8 !important;
+  border-color: rgba(148, 104, 0, 0.24) !important;
+}
+
+html:not(.dark) body .zea-premium-shell select:hover {
+  border-color: rgba(148, 99, 0, 0.5) !important;
+  box-shadow: 0 6px 18px rgba(118, 82, 8, 0.09);
+}
+
+html:not(.dark) body .zea-premium-shell select:focus,
+html:not(.dark) body .zea-premium-shell select:focus-visible {
+  border-color: #dfa822 !important;
+  box-shadow: 0 0 0 3px rgba(223, 168, 34, 0.18) !important;
+}
+
+html.dark body .zea-premium-shell select {
+  color: #f8f5e8 !important;
+  background-color: #10110f !important;
+  border-color: rgba(223, 168, 34, 0.3) !important;
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.24);
+}
+
+html.dark body .zea-premium-shell select:hover {
+  border-color: rgba(223, 168, 34, 0.58) !important;
+  background-color: #15150f !important;
+}
+
+html.dark body .zea-premium-shell select:focus,
+html.dark body .zea-premium-shell select:focus-visible {
+  border-color: #dfa822 !important;
+  box-shadow: 0 0 0 3px rgba(223, 168, 34, 0.2) !important;
+}
+
+body .zea-premium-shell select:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  box-shadow: none !important;
+}
+
+html:not(.dark) body .zea-premium-shell select option {
+  color: #171717;
+  background: #fffdf8;
+}
+
+html.dark body .zea-premium-shell select option {
+  color: #f8f5e8;
+  background: #10110f;
+}
+
+body .zea-premium-shell select option:checked {
+  color: #0a0b08;
+  background: #dfa822;
+}
+
+body .zea-company-actions-trigger,
+body .zea-user-actions-trigger,
+body .zea-provider-actions-trigger,
+body .zea-carrier-actions-trigger,
+body .zea-table-actions-trigger {
+  border-radius: 0.7rem !important;
+  transition: color 160ms ease, background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+body .zea-company-actions-trigger:active,
+body .zea-user-actions-trigger:active,
+body .zea-provider-actions-trigger:active,
+body .zea-carrier-actions-trigger:active,
+body .zea-table-actions-trigger:active {
+  transform: scale(0.96);
+}
+
+body .zea-company-actions-menu,
+body .zea-user-actions-menu,
+body .zea-provider-actions-menu,
+body .zea-carrier-actions-menu,
+body .zea-table-actions-menu,
+body [role="listbox"] {
+  border-radius: 0.85rem !important;
+  padding: 0.375rem !important;
+  box-shadow: 0 18px 46px rgba(15, 23, 42, 0.18) !important;
+  animation: zea-dropdown-enter 140ms ease-out both;
+  transform-origin: top right;
+}
+
+body .zea-company-actions-menu [role="menuitem"],
+body .zea-user-actions-menu [role="menuitem"],
+body .zea-provider-actions-menu [role="menuitem"],
+body .zea-carrier-actions-menu [role="menuitem"],
+body .zea-table-actions-menu [role="menuitem"],
+body [role="listbox"] [role="option"] {
+  min-height: 2.25rem;
+  border-radius: 0.6rem !important;
+  padding: 0.55rem 0.75rem !important;
+  font-family: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.25;
+  transition: color 140ms ease, background-color 140ms ease, transform 140ms ease;
+}
+
+html:not(.dark) body .zea-company-actions-menu,
+html:not(.dark) body .zea-user-actions-menu,
+html:not(.dark) body .zea-provider-actions-menu,
+html:not(.dark) body .zea-carrier-actions-menu,
+html:not(.dark) body .zea-table-actions-menu,
+html:not(.dark) body [role="listbox"] {
+  color: #252117 !important;
+  background: #fffdf8 !important;
+  border-color: rgba(148, 99, 0, 0.22) !important;
+}
+
+html:not(.dark) body .zea-company-actions-menu [role="menuitem"]:not(.text-red-600):hover,
+html:not(.dark) body .zea-user-actions-menu [role="menuitem"]:not(.text-red-600):hover,
+html:not(.dark) body .zea-provider-actions-menu [role="menuitem"]:not(.text-red-600):hover,
+html:not(.dark) body .zea-carrier-actions-menu [role="menuitem"]:not(.text-red-600):hover,
+html:not(.dark) body .zea-table-actions-menu [role="menuitem"]:not(.text-red-600):hover,
+html:not(.dark) body [role="listbox"] [role="option"]:hover,
+html:not(.dark) body [role="listbox"] [role="option"][aria-selected="true"] {
+  color: #704b00 !important;
+  background: rgba(223, 168, 34, 0.14) !important;
+}
+
+html.dark body .zea-company-actions-menu,
+html.dark body .zea-user-actions-menu,
+html.dark body .zea-provider-actions-menu,
+html.dark body .zea-carrier-actions-menu,
+html.dark body .zea-table-actions-menu,
+html.dark body [role="listbox"] {
+  color: #f8f5e8 !important;
+  background: #10110f !important;
+  border-color: rgba(223, 168, 34, 0.34) !important;
+  box-shadow: 0 20px 52px rgba(0, 0, 0, 0.52) !important;
+}
+
+html.dark body .zea-company-actions-menu [role="menuitem"]:not(.text-red-600):hover,
+html.dark body .zea-user-actions-menu [role="menuitem"]:not(.text-red-600):hover,
+html.dark body .zea-provider-actions-menu [role="menuitem"]:not(.text-red-600):hover,
+html.dark body .zea-carrier-actions-menu [role="menuitem"]:not(.text-red-600):hover,
+html.dark body .zea-table-actions-menu [role="menuitem"]:not(.text-red-600):hover,
+html.dark body [role="listbox"] [role="option"]:hover,
+html.dark body [role="listbox"] [role="option"][aria-selected="true"] {
+  color: #ffe28a !important;
+  background: rgba(223, 168, 34, 0.16) !important;
+}
+
+@keyframes zea-dropdown-enter {
+  from { opacity: 0; transform: translateY(-4px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body .zea-company-actions-menu,
+  body .zea-user-actions-menu,
+  body .zea-provider-actions-menu,
+  body .zea-carrier-actions-menu,
+  body .zea-table-actions-menu,
+  body [role="listbox"] {
+    animation: none;
+  }
+}
+
+/* Modern customizable select popup; existing native selects remain the fallback. */
+@supports (appearance: base-select) {
+  body .zea-premium-shell select,
+  body .zea-premium-shell select::picker(select) {
+    appearance: base-select;
+  }
+
+  body .zea-premium-shell select::picker-icon {
+    display: none;
+  }
+
+  body .zea-premium-shell select::picker(select) {
+    max-height: min(22rem, 60vh);
+    margin-top: 0.4rem;
+    overflow-y: auto;
+    border: 1px solid;
+    border-radius: 0.9rem;
+    padding: 0.4rem;
+    font-family: inherit;
+    box-shadow: 0 20px 48px rgba(15, 23, 42, 0.2);
+    opacity: 0;
+    transform: translateY(-5px) scale(0.985);
+    transition: opacity 140ms ease, transform 140ms ease, display 140ms allow-discrete;
+  }
+
+  body .zea-premium-shell select:open::picker(select) {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+
+  @starting-style {
+    body .zea-premium-shell select:open::picker(select) {
+      opacity: 0;
+      transform: translateY(-5px) scale(0.985);
+    }
+  }
+
+  body .zea-premium-shell select option {
+    min-height: 2.35rem;
+    margin: 0.1rem 0;
+    border: 0;
+    border-radius: 0.65rem;
+    padding: 0.6rem 0.75rem;
+    font-family: inherit;
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1.25;
+    transition: color 120ms ease, background-color 120ms ease;
+  }
+
+  body .zea-premium-shell select option::checkmark {
+    order: 1;
+    margin-left: auto;
+    font-weight: 800;
+  }
+
+  html:not(.dark) body .zea-premium-shell select::picker(select) {
+    color: #211d14;
+    background: #fffdf8;
+    border-color: rgba(148, 99, 0, 0.24);
+    box-shadow: 0 20px 48px rgba(76, 59, 20, 0.17);
+  }
+
+  html:not(.dark) body .zea-premium-shell select option {
+    color: #211d14;
+    background: transparent;
+  }
+
+  html:not(.dark) body .zea-premium-shell select option:hover,
+  html:not(.dark) body .zea-premium-shell select option:focus-visible {
+    color: #704b00;
+    background: rgba(223, 168, 34, 0.13);
+  }
+
+  html:not(.dark) body .zea-premium-shell select option:checked {
+    color: #17120a;
+    background: rgba(223, 168, 34, 0.24);
+  }
+
+  html:not(.dark) body .zea-premium-shell select option::checkmark {
+    color: #946300;
+  }
+
+  html.dark body .zea-premium-shell select::picker(select) {
+    color: #f8f5e8;
+    background: #10110f;
+    border-color: rgba(223, 168, 34, 0.36);
+    box-shadow: 0 22px 54px rgba(0, 0, 0, 0.58);
+  }
+
+  html.dark body .zea-premium-shell select option {
+    color: #f8f5e8;
+    background: transparent;
+  }
+
+  html.dark body .zea-premium-shell select option:hover,
+  html.dark body .zea-premium-shell select option:focus-visible {
+    color: #ffe8a3;
+    background: rgba(223, 168, 34, 0.14);
+  }
+
+  html.dark body .zea-premium-shell select option:checked {
+    color: #fff0bc;
+    background: rgba(223, 168, 34, 0.24);
+  }
+
+  html.dark body .zea-premium-shell select option::checkmark {
+    color: #dfa822;
+  }
+
+  body .zea-premium-shell select option:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+}
+
 
 .zea-vqa-audit-title-info {
   position: relative;

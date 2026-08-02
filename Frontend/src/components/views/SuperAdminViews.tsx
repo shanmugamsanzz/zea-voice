@@ -2692,7 +2692,7 @@ function PhoneNumbersView() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 font-semibold">
-                    {numbersLoading && numbers.length === 0 && <tr><td colSpan={5} className="py-8"><div className="h-8 animate-pulse rounded bg-slate-100" /></td></tr>}
+                    {numbersLoading && numbers.length === 0 && [1, 2, 3, 4].map((item) => <tr key={item} className="animate-pulse"><td className="py-3"><div className="h-3 w-32 rounded bg-slate-200" /></td><td className="py-3"><div className="h-3 w-28 rounded bg-slate-100" /></td><td className="py-3"><div className="h-6 w-20 rounded-full bg-slate-100" /></td><td className="py-3"><div className="h-3 w-24 rounded bg-slate-100" /></td><td className="py-3"><div className="ml-auto h-8 w-20 rounded-lg bg-slate-100" /></td></tr>)}
                     {numbers.map(num => (
                       <tr key={num.id} className="hover:bg-slate-50/50">
                         <td className="py-2.5 font-bold font-mono text-slate-800">{num.number}</td>

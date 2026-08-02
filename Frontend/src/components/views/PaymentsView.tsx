@@ -129,7 +129,7 @@ export function PaymentsView() {
               ))}
             </tbody>
           </table>
-          {listLoading && !payments && <div className="space-y-3 py-5">{[1, 2, 3, 4].map((item) => <div key={item} className="h-10 animate-pulse rounded bg-slate-100" />)}</div>}
+          {listLoading && !payments && <div className="min-w-[900px] space-y-2 py-3" aria-label="Loading payment rows">{[1, 2, 3, 4].map((item) => <div key={item} className="grid h-14 animate-pulse grid-cols-8 items-center gap-4 border-b border-slate-100 px-1"><div className="h-3 rounded bg-slate-200" /><div className="h-3 rounded bg-slate-200" /><div className="h-6 rounded-lg bg-slate-100" /><div className="h-6 rounded-full bg-slate-100" /><div className="h-3 rounded bg-slate-100" /><div className="h-7 rounded bg-slate-100" /><div className="h-3 rounded bg-slate-100" /><div className="ml-auto h-3 w-20 rounded bg-slate-200" /></div>)}</div>}
           {!listLoading && payments?.items.length === 0 && <div className="py-10 text-center text-slate-400">No payment transactions match these filters.</div>}
         </div>
 

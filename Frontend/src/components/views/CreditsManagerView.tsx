@@ -252,7 +252,7 @@ export function CreditsManagerView() {
               <tr key={wallet.id} className="border-b border-slate-100 last:border-0"><td className="py-3 font-bold text-slate-800">{wallet.companyName}</td><td className="py-3 text-right font-mono">{money(wallet.perMinutePrice)}</td><td className="py-3 text-right font-mono">{credits(wallet.balance)}</td><td className="py-3 text-right font-mono text-amber-600">{credits(wallet.reservedBalance)}</td><td className="py-3 text-right font-mono font-bold text-emerald-700">{credits(wallet.availableBalance)}</td><td className="py-3 text-right font-mono">{money(wallet.inrRemainder)}</td><td className="py-3 text-right"><button type="button" onClick={() => openPurchase(wallet)} className="rounded-lg bg-indigo-600 px-3 py-2 text-xs font-bold text-white hover:bg-indigo-700">Add payment</button></td></tr>
             ))}</tbody>
           </table>
-          {loading && !summary && <div className="h-24 animate-pulse bg-slate-50 rounded-lg mt-3" />}
+          {loading && !summary && <div className="mt-3 min-w-[900px] space-y-2" aria-label="Loading company credit wallets">{[1, 2, 3, 4].map((item) => <div key={item} className="grid h-12 animate-pulse grid-cols-7 items-center gap-4 border-b border-slate-100"><div className="h-3 rounded bg-slate-200" />{[1, 2, 3, 4, 5].map((cell) => <div key={cell} className="ml-auto h-3 w-16 rounded bg-slate-100" />)}<div className="ml-auto h-8 w-24 rounded-lg bg-slate-100" /></div>)}</div>}
           {!loading && summary?.companyWallets.length === 0 && <p className="py-8 text-center text-slate-400">No company wallets found.</p>}
         </div>
       </section>
