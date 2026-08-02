@@ -161,6 +161,7 @@ const historicalCleanup = await cleanHistoricalKnowledgeBaseReferences({
       assert.equal(text.includes("audit.entity_type='knowledge_document'"), true);
       assert.equal(text.includes("audit.entity_type='knowledge_document_version'"), true);
       assert.equal(text.includes("audit.entity_type='knowledge_review_record'"), true);
+      assert.equal(text.includes('knowledge_base_id=$2::uuid'), true);
       return { rowCount: 7, rows: [] };
     }
     throw new Error(`Unexpected historical cleanup SQL: ${text}`);

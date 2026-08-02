@@ -185,21 +185,28 @@ export async function cleanHistoricalKnowledgeBaseReferences(client, tenantId, k
           (audit.entity_type IN ('knowledge_base','agent_knowledge_base') AND audit.entity_id=$2::text)
           OR (audit.entity_type='knowledge_document' AND audit.entity_id IN (
             SELECT document.id::text FROM knowledge_documents document
-             WHERE document.tenant_id=$1 AND document.knowledge_base_id=$2
+             WHERE document.tenant_id=$1::uuid AND document.knowledge_base_id=$2::uuid
           ))
           OR (audit.entity_type='knowledge_document_version' AND audit.entity_id IN (
             SELECT version.id::text FROM knowledge_document_versions version
-             WHERE version.tenant_id=$1 AND version.knowledge_base_id=$2
+             WHERE version.tenant_id=$1::uuid AND version.knowledge_base_id=$2::uuid
           ))
           OR (audit.entity_type='knowledge_review_record' AND audit.entity_id IN (
             SELECT record_id FROM (
-              SELECT id::text AS record_id FROM faq_entries WHERE tenant_id=$1 AND knowledge_base_id=$2
-              UNION ALL SELECT id::text FROM structured_catalogs WHERE tenant_id=$1 AND knowledge_base_id=$2
-              UNION ALL SELECT id::text FROM structured_items WHERE tenant_id=$1 AND knowledge_base_id=$2
-              UNION ALL SELECT id::text FROM structured_item_attributes WHERE tenant_id=$1 AND knowledge_base_id=$2
-              UNION ALL SELECT id::text FROM workflow_rules WHERE tenant_id=$1 AND knowledge_base_id=$2
-              UNION ALL SELECT id::text FROM conversation_flows WHERE tenant_id=$1 AND knowledge_base_id=$2
-              UNION ALL SELECT id::text FROM knowledge_chunks WHERE tenant_id=$1 AND knowledge_base_id=$2
+              SELECT id::text AS record_id FROM faq_entries
+                WHERE tenant_id=$1::uuid AND knowledge_base_id=$2::uuid
+              UNION ALL SELECT id::text FROM structured_catalogs
+                WHERE tenant_id=$1::uuid AND knowledge_base_id=$2::uuid
+              UNION ALL SELECT id::text FROM structured_items
+                WHERE tenant_id=$1::uuid AND knowledge_base_id=$2::uuid
+              UNION ALL SELECT id::text FROM structured_item_attributes
+                WHERE tenant_id=$1::uuid AND knowledge_base_id=$2::uuid
+              UNION ALL SELECT id::text FROM workflow_rules
+                WHERE tenant_id=$1::uuid AND knowledge_base_id=$2::uuid
+              UNION ALL SELECT id::text FROM conversation_flows
+                WHERE tenant_id=$1::uuid AND knowledge_base_id=$2::uuid
+              UNION ALL SELECT id::text FROM knowledge_chunks
+                WHERE tenant_id=$1::uuid AND knowledge_base_id=$2::uuid
             ) knowledge_record_ids
           ))
           OR (
