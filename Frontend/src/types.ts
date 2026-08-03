@@ -166,6 +166,7 @@ export interface VoiceAgent {
   postCallStaticMessage?: string;
   postCallDynamicClosing?: string;
   postCallUninterruptibleReasons?: string[];
+  callEndTriggerPhrases?: string[];
   postCallSummaryEnabled?: boolean;
   postCallSummaryModelId?: string;
   postCallSummaryInstructions?: string;

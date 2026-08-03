@@ -41,6 +41,7 @@ import { createStreamingSentenceBuffer } from './streaming-sentence-buffer.js';
 import { createTtsSpeedMonitor } from './tts-speed-monitor.js';
 import { loadRuntimeAmbience } from './ambience-runtime.service.js';
 import { resolvePostCallClosingConfiguration } from './integrations/postcall-closing-config.js';
+import { findCallEndTriggerPhrase } from './integrations/postcall-end-trigger-config.js';
 import {
   createMessageSource,
   knowledgeMessageSources,
@@ -50,8 +51,6 @@ import {
   messageSourceTypes,
   toolMessageSources,
 } from './source-trace.js';
-
-const closeIntent = /\b(?:bye|goodbye|hang\s*up|disconnect|end (?:the )?call|not interested|call me later|i(?:'m| am) busy)\b|(?:போதும்|அழைப்பை முடி|பிறகு அழைக்கவும்)/iu;
 
 function languageCode(value) {
   const match = String(value ?? '').match(/\b([a-z]{2,3})(?:-[A-Z]{2})?\b/);
@@ -777,7 +776,12 @@ export class RealtimeConversationOrchestrator {
       await this.#close('customer_callback_scheduled');
       return;
     }
-    if (closeIntent.test(event.text) && !callbackRequest.detected) {
+    const callEndTrigger = findCallEndTriggerPhrase(event.text, this.runtimeProfile.agent.settings);
+    if (callEndTrigger && !callbackRequest.detected) {
+      this.log.info({
+        stage: 'postcall.end_trigger_detected', callId: this.call.id,
+        source: callEndTrigger.source, phrase: callEndTrigger.phrase,
+      }, 'Caller requested call end through configured trigger phrase');
       await this.#close(this.currentCallbackRequest?.scheduled
         ? 'customer_callback_scheduled'
         : 'caller_requested_hangup');

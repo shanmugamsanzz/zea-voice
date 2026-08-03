@@ -416,6 +416,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       postCallStaticMessage: base.postCallStaticMessage || '',
       postCallDynamicClosing: base.postCallDynamicClosing || 'The AI agent will automatically generate a natural, contextual closing message in the customer\'s language before ending the call.',
       postCallUninterruptibleReasons: base.postCallUninterruptibleReasons || [],
+      callEndTriggerPhrases: base.callEndTriggerPhrases || [],
       postCallSummaryEnabled: base.postCallSummaryEnabled !== undefined ? base.postCallSummaryEnabled : false,
       postCallSummaryModelId: base.postCallSummaryModelId || '',
       postCallSummaryInstructions: base.postCallSummaryInstructions || 'Create a concise, factual summary of the call. Capture the customer intent, outcome, sentiment, collected information and required follow-up. Do not invent missing information.',
@@ -446,6 +447,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const [pronunciationGroupIds, setPronunciationGroupIds] = useState<string[]>([]);
   const [ambienceAssetId, setAmbienceAssetId] = useState<string | null>(null);
   const [newReason, setNewReason] = useState('');
+  const [newCallEndTriggerPhrase, setNewCallEndTriggerPhrase] = useState('');
   const [newInterruptionTrigger, setNewInterruptionTrigger] = useState('');
 
   const applyApiAgent = (value: AgentApiData) => {
@@ -737,6 +739,23 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     if ((agent.postCallStaticMessage?.trim().length ?? 0) > 10_000) {
       setError('Static Closing Message cannot exceed 10,000 characters.'); return;
     }
+    if (!Array.isArray(agent.callEndTriggerPhrases)) {
+      setError('Call End Trigger Phrases must be a list of phrases.'); return;
+    }
+    const normalizedEndTriggerPhrases: string[] = [];
+    const seenEndTriggerPhrases = new Set<string>();
+    for (const rawPhrase of agent.callEndTriggerPhrases) {
+      const phrase = String(rawPhrase ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
+      if (!phrase) { setError('Call End Trigger Phrases cannot contain an empty phrase.'); return; }
+      if (phrase.length > 160) { setError('Each Call End Trigger Phrase cannot exceed 160 characters.'); return; }
+      const key = phrase.toLocaleLowerCase();
+      if (seenEndTriggerPhrases.has(key)) continue;
+      seenEndTriggerPhrases.add(key);
+      normalizedEndTriggerPhrases.push(phrase);
+    }
+    if (normalizedEndTriggerPhrases.length > 50) {
+      setError('Call End Trigger Phrases cannot contain more than 50 phrases.'); return;
+    }
     if (agent.postCallSummaryEnabled) {
       if (!agent.postCallSummaryModelId) { setError('Select an active LLM model for Post-Call AI Summary.'); return; }
       if (!models.some((model) => model.id === agent.postCallSummaryModelId && model.providerType === 'llm')) {
@@ -798,9 +817,12 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         'ttsPrice1k', 'ttsSimilarityBoost', 'ttsEmotion', 'ttsVolume',
         'preCallPrompt',
       ]);
-      const agentSettings = Object.fromEntries(
+      const agentSettings = {
+        ...Object.fromEntries(
         Object.entries(rawAgentSettings).filter(([key]) => !deprecatedAgentSettings.has(key)),
-      );
+        ),
+        callEndTriggerPhrases: normalizedEndTriggerPhrases,
+      };
       const payload = {
         name: agent.name, description: agent.description || null, goal: agent.goal || null,
         language: agent.language || 'English (US)', usageDirection: agent.agentUsage || 'both', status: agent.status,
@@ -2727,6 +2749,91 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                             }
                           }}
                           className="absolute right-2 w-8 h-8 rounded-full bg-amber-500 hover:bg-amber-600 text-white flex items-center justify-center transition cursor-pointer shadow-sm"
+                        >
+                          <Plus className="w-4 h-4" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Call End Trigger Phrases */}
+                <div>
+                  <label className="block text-[11px] font-black text-slate-500 mb-1.5 uppercase tracking-wider">
+                    Call End Trigger Phrases
+                  </label>
+                  <p className="mb-3 text-[10px] font-semibold leading-relaxed text-slate-400">
+                    Add phrases that mean the customer wants to end the call. Tamil, English and Tanglish are supported. The agent will use these phrases in a later runtime update.
+                  </p>
+                  <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-4 shadow-2xs hover:border-amber-200 transition">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {(!agent.callEndTriggerPhrases || agent.callEndTriggerPhrases.length === 0) ? (
+                        <span className="text-xs font-bold text-slate-400 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-100">
+                          No call end trigger phrases added yet.
+                        </span>
+                      ) : (
+                        agent.callEndTriggerPhrases.map((phrase, idx) => (
+                          <span key={`${phrase}-${idx}`} className="text-xs font-bold text-rose-600 bg-rose-50 border border-rose-100 px-3 py-1.5 rounded-lg flex items-center gap-1.5 animate-fade-in">
+                            {phrase}
+                            {!isReadOnly && (
+                              <button
+                                type="button"
+                                onClick={() => setAgent({
+                                  ...agent,
+                                  callEndTriggerPhrases: (agent.callEndTriggerPhrases || []).filter((_, index) => index !== idx),
+                                })}
+                                className="text-rose-400 hover:text-rose-600 font-extrabold focus:outline-none"
+                                aria-label={`Remove ${phrase}`}
+                              >
+                                &times;
+                              </button>
+                            )}
+                          </span>
+                        ))
+                      )}
+                    </div>
+
+                    {!isReadOnly && (
+                      <div className="relative flex items-center">
+                        <input
+                          type="text"
+                          placeholder="Example: bye, வேண்டாம், பிறகு பேசலாம்"
+                          value={newCallEndTriggerPhrase}
+                          onChange={(event) => setNewCallEndTriggerPhrase(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key !== 'Enter') return;
+                            event.preventDefault();
+                            const phrase = newCallEndTriggerPhrase.normalize('NFKC').trim().replace(/\s+/gu, ' ');
+                            if (!phrase) { setError('Enter a Call End Trigger Phrase before adding it.'); return; }
+                            if (phrase.length > 160) { setError('Each Call End Trigger Phrase cannot exceed 160 characters.'); return; }
+                            const current = agent.callEndTriggerPhrases || [];
+                            if (current.some((entry) => entry.toLocaleLowerCase() === phrase.toLocaleLowerCase())) {
+                              setError('This Call End Trigger Phrase is already added.'); return;
+                            }
+                            if (current.length >= 50) { setError('You can add up to 50 Call End Trigger Phrases.'); return; }
+                            setAgent({ ...agent, callEndTriggerPhrases: [...current, phrase] });
+                            setNewCallEndTriggerPhrase('');
+                            setError('');
+                          }}
+                          className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl pl-4 pr-12 py-3 text-xs font-semibold text-slate-800 transition outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const phrase = newCallEndTriggerPhrase.normalize('NFKC').trim().replace(/\s+/gu, ' ');
+                            if (!phrase) { setError('Enter a Call End Trigger Phrase before adding it.'); return; }
+                            if (phrase.length > 160) { setError('Each Call End Trigger Phrase cannot exceed 160 characters.'); return; }
+                            const current = agent.callEndTriggerPhrases || [];
+                            if (current.some((entry) => entry.toLocaleLowerCase() === phrase.toLocaleLowerCase())) {
+                              setError('This Call End Trigger Phrase is already added.'); return;
+                            }
+                            if (current.length >= 50) { setError('You can add up to 50 Call End Trigger Phrases.'); return; }
+                            setAgent({ ...agent, callEndTriggerPhrases: [...current, phrase] });
+                            setNewCallEndTriggerPhrase('');
+                            setError('');
+                          }}
+                          className="absolute right-2 w-8 h-8 rounded-full bg-amber-500 hover:bg-amber-600 text-white flex items-center justify-center transition cursor-pointer shadow-sm"
+                          aria-label="Add call end trigger phrase"
                         >
                           <Plus className="w-4 h-4" />
                         </button>

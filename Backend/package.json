@@ -89,6 +89,7 @@
     "verify:postcall-summary-reports-insights": "node scripts/verify-postcall-summary-reports-insights.js",
     "verify:postcall-summary-live-flow": "node scripts/verify-postcall-summary-live-flow.js",
     "verify:postcall-closing-modes": "node scripts/verify-postcall-closing-modes.js",
+    "verify:postcall-end-triggers": "node scripts/verify-postcall-end-trigger-config.js",
     "verify:voice-hardening": "node scripts/verify-voice-hardening.js",
     "verify:voice-live-calls": "node scripts/verify-voice-live-calls.js",
     "verify:call-reconciliation": "node scripts/verify-call-reconciliation.js",

@@ -88,6 +88,7 @@ function integrationConfiguration(settings) {
       staticMessage: settings.postCallStaticMessage ?? '',
       dynamicClosing: settings.postCallDynamicClosing ?? '',
       uninterruptibleReasons: settings.postCallUninterruptibleReasons ?? [],
+      endTriggerPhrases: settings.callEndTriggerPhrases ?? [],
       api: {
         active: settings.postCallEndpointDetailsActive === true,
         url: settings.postCallApiUrl ?? '',

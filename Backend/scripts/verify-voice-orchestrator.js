@@ -219,6 +219,7 @@ const profile = {
       silentMessage: 'Are you still there?', maxInactivityPrompts: 1,
       wordBasedInterruptionEnabled: true, wordInterruptionMinWords: 2,
       interruptionPolicy: 'any',
+      callEndTriggerPhrases: ['finish this conversation'],
     },
   },
   providers: {
@@ -455,7 +456,14 @@ assert.ok(tts.cancelled > 0);
 assert.ok(audioEngine.cancelled.includes('caller_barge_in'));
 
 llm.wasCancelled = false;
+const requestsBeforeUnconfiguredEndPhrase = llm.requests.length;
 stt.publish({ type: 'final_transcript', text: 'goodbye', language: 'en', isFinal: true });
+await waitFor(() => llm.requests.length > requestsBeforeUnconfiguredEndPhrase,
+  'An unconfigured phrase was not handled as a normal caller turn');
+await waitFor(() => orchestrator.controller.state === 'listening',
+  'An unconfigured built-in phrase should not end an agent with custom trigger phrases');
+assert.equal(completed.length, 0);
+stt.publish({ type: 'final_transcript', text: 'Please finish this conversation now', language: 'en', isFinal: true });
 await waitFor(() => completed.length === 1, 'Call was not finalized after closing request');
 assert.equal(completed[0].outcome, 'completed');
 assert.equal(completed[0].reason, 'caller_requested_hangup');
