@@ -5,6 +5,7 @@ import { registerImplementedProviderAdapters } from '../voice/providers/defaults
 import { normalizeInterruptionSettings } from '../voice/interruption/interruption-config.js';
 import { normalizeInteractionSettings } from '../voice/interaction/interaction-config.js';
 import { normalizeCallbackSettings } from '../voice/interaction/callback-config.js';
+import { normalizeTaskCompletionSettings } from '../voice/interaction/completion-config.js';
 import {
   normalizePostCallSummarySettings,
   resolvePostCallSummaryConfiguration,
@@ -26,13 +27,13 @@ function withoutAgentTtsProviderOverrides(settings = {}) {
 
 function normalizedAgentSettings(settings, interruptionSensitivity) {
   try {
-    return normalizeTtsUsageLimitSettings(normalizeCallbackSettings(
+    return normalizeTtsUsageLimitSettings(normalizeTaskCompletionSettings(normalizeCallbackSettings(
       normalizePostCallClosingSettings(normalizePostCallSummarySettings(
         normalizePostCallEndTriggerSettings(normalizeInteractionSettings(normalizeInterruptionSettings(
           withoutAgentTtsProviderOverrides(settings), interruptionSensitivity,
         ))),
       )),
-    ));
+    )));
   } catch (error) {
     throw new AppError(400, error.message, error.code ?? 'VOICE_AGENT_SETTINGS_INVALID', {
       field: error.field ?? 'settings',

@@ -167,6 +167,10 @@ export interface VoiceAgent {
   postCallDynamicClosing?: string;
   postCallUninterruptibleReasons?: string[];
   callEndTriggerPhrases?: string[];
+  taskCompletionEnabled?: boolean;
+  taskCompletionIntent?: string;
+  taskCompletionRequiredFields?: string[];
+  taskCompletionConfirmationMessage?: string;
   postCallSummaryEnabled?: boolean;
   postCallSummaryModelId?: string;
   postCallSummaryInstructions?: string;

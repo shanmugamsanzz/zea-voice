@@ -562,6 +562,51 @@ assert.equal(noneTts.texts.length, 0);
 assert.equal(noneLlm.requests.length, 0);
 assert.equal(noneMedia.closed, true);
 
+const completionMedia = new FakeMediaSession();
+completionMedia.call.id = 'call-task-completion';
+completionMedia.callId = 'call-task-completion';
+const completionStt = new FakeStt();
+const completionLlm = new FakeLlm();
+const completionTts = new FakeTts();
+const completionAudio = new FakeAudioEngine();
+const completionCalls = [];
+const completionProfile = {
+  ...profile,
+  agent: {
+    ...profile.agent,
+    welcomeMessage: null,
+    speech: { interaction: { greetingMode: 'user_initiates', cachePolicy: 'session_only', contextId: null } },
+    settings: {
+      ...profile.agent.settings,
+      taskCompletionEnabled: true,
+      taskCompletionIntent: 'appointment_booking',
+      taskCompletionRequiredFields: ['patient_name', 'patient_age'],
+      taskCompletionConfirmationMessage: 'Appointment for {{patient_name}}, age {{patient_age}}, is confirmed.',
+    },
+  },
+  integrations: { postCall: { prompt: '', messageType: 'Static', staticMessage: 'Thank you. Goodbye.' } },
+};
+const completionOrchestrator = new RealtimeConversationOrchestrator(completionMedia, {
+  loadProfile: async () => completionProfile,
+  createAdapters: async () => ({ stt: completionStt, llm: completionLlm, tts: completionTts }),
+  createAudioEngine: () => completionAudio,
+  appendTranscript: async () => {},
+  contextStore: { get: async () => null, set: async () => true, delete: async () => true },
+  memoryStore: { load: async () => null, save: async (_scope, input) => ({ state: input.state, revision: 1 }) },
+  completeCall: async (input) => { completionCalls.push(input); },
+});
+await completionOrchestrator.ready;
+completionMedia.emit('start', { session: completionMedia });
+await waitFor(() => completionOrchestrator.controller.state === 'listening', 'Task completion test call did not listen');
+completionStt.publish({ type: 'final_transcript', text: 'name Shanmugam age 21', language: 'en', isFinal: true });
+await waitFor(() => completionCalls.length === 1, 'Completed task did not automatically end the call');
+assert.equal(completionCalls[0].reason, 'task_completion_completed');
+assert.equal(completionCalls[0].metrics.taskCompletion.completed, true);
+assert.deepEqual(completionCalls[0].metrics.taskCompletion.collectedData, { patient_name: 'Shanmugam', patient_age: '21' });
+assert.ok(completionTts.texts.includes('Appointment for Shanmugam, age 21, is confirmed.'));
+assert.ok(completionTts.texts.includes('Thank you. Goodbye.'));
+assert.equal(completionLlm.requests.length, 0, 'Task completion should not wait for an LLM response');
+
 const userMedia = new FakeMediaSession();
 userMedia.call.id = 'call-user-initiates';
 userMedia.callId = 'call-user-initiates';

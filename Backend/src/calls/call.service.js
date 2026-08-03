@@ -52,6 +52,7 @@ function mapCall(row, includeTranscript = false) {
       callDurationSeconds: row.live_duration_seconds === undefined
         ? row.duration_seconds : number(row.live_duration_seconds),
     }),
+    taskCompletion: runtime?.metrics?.taskCompletion ?? null,
     aiSummary: row.ai_summary_id ? {
       id: row.ai_summary_id,
       status: row.ai_summary_status,

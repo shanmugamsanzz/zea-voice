@@ -417,6 +417,10 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       postCallDynamicClosing: base.postCallDynamicClosing || 'The AI agent will automatically generate a natural, contextual closing message in the customer\'s language before ending the call.',
       postCallUninterruptibleReasons: base.postCallUninterruptibleReasons || [],
       callEndTriggerPhrases: base.callEndTriggerPhrases || [],
+      taskCompletionEnabled: base.taskCompletionEnabled === true,
+      taskCompletionIntent: base.taskCompletionIntent || '',
+      taskCompletionRequiredFields: base.taskCompletionRequiredFields || [],
+      taskCompletionConfirmationMessage: base.taskCompletionConfirmationMessage || '',
       postCallSummaryEnabled: base.postCallSummaryEnabled !== undefined ? base.postCallSummaryEnabled : false,
       postCallSummaryModelId: base.postCallSummaryModelId || '',
       postCallSummaryInstructions: base.postCallSummaryInstructions || 'Create a concise, factual summary of the call. Capture the customer intent, outcome, sentiment, collected information and required follow-up. Do not invent missing information.',
@@ -448,6 +452,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const [ambienceAssetId, setAmbienceAssetId] = useState<string | null>(null);
   const [newReason, setNewReason] = useState('');
   const [newCallEndTriggerPhrase, setNewCallEndTriggerPhrase] = useState('');
+  const [newCompletionRequiredField, setNewCompletionRequiredField] = useState('');
   const [newInterruptionTrigger, setNewInterruptionTrigger] = useState('');
 
   const applyApiAgent = (value: AgentApiData) => {
@@ -804,6 +809,41 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       || (maximumCallMinutes !== 0 && (maximumCallMinutes < 1 || maximumCallMinutes > 120))) {
       setError('Maximum Minutes Per Call must be 0 (unlimited) or between 1 and 120.'); return;
     }
+    const taskCompletionEnabled = agent.taskCompletionEnabled === true;
+    const taskCompletionIntent = String(agent.taskCompletionIntent || '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
+    const taskCompletionConfirmationMessage = String(agent.taskCompletionConfirmationMessage || '').normalize('NFKC').trim();
+    if (!Array.isArray(agent.taskCompletionRequiredFields)) {
+      setError('Required Information must be a list of field identifiers.'); return;
+    }
+    const normalizedCompletionFields: string[] = [];
+    const seenCompletionFields = new Set<string>();
+    for (const rawField of agent.taskCompletionRequiredFields) {
+      const field = String(rawField ?? '').normalize('NFKC').trim().toLowerCase();
+      if (!/^[a-z][a-z0-9_]{0,63}$/.test(field)) {
+        setError('Each Required Information field must use lowercase letters, numbers and underscores only.'); return;
+      }
+      if (!seenCompletionFields.has(field)) {
+        seenCompletionFields.add(field);
+        normalizedCompletionFields.push(field);
+      }
+    }
+    if (normalizedCompletionFields.length > 20) {
+      setError('Required Information cannot contain more than 20 fields.'); return;
+    }
+    if (taskCompletionEnabled) {
+      if (!/^[a-z][a-z0-9_-]{0,79}$/.test(taskCompletionIntent)) {
+        setError('Completion Intent is required and must use lowercase letters, numbers, underscores or hyphens only.'); return;
+      }
+      if (!normalizedCompletionFields.length) {
+        setError('Add at least one Required Information field when Task Completion Auto Close is enabled.'); return;
+      }
+      if (!taskCompletionConfirmationMessage) {
+        setError('Completion Confirmation Message is required when Task Completion Auto Close is enabled.'); return;
+      }
+      if (taskCompletionConfirmationMessage.length > 2_000) {
+        setError('Completion Confirmation Message cannot exceed 2,000 characters.'); return;
+      }
+    }
     setSaving(true); setError('');
     try {
       const {
@@ -822,6 +862,10 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         Object.entries(rawAgentSettings).filter(([key]) => !deprecatedAgentSettings.has(key)),
         ),
         callEndTriggerPhrases: normalizedEndTriggerPhrases,
+        taskCompletionEnabled,
+        taskCompletionIntent,
+        taskCompletionRequiredFields: normalizedCompletionFields,
+        taskCompletionConfirmationMessage,
       };
       const payload = {
         name: agent.name, description: agent.description || null, goal: agent.goal || null,
@@ -2839,6 +2883,132 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                         </button>
                       </div>
                     )}
+                  </div>
+                </div>
+
+                {/* Task Completion Auto Close */}
+                <div className="overflow-hidden rounded-2xl border border-emerald-200 bg-emerald-50/40 shadow-2xs">
+                  <div className="flex flex-col gap-4 border-b border-emerald-100 bg-emerald-50/70 p-5 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <h4 className="text-sm font-extrabold text-slate-800">Task Completion Auto Close</h4>
+                      <p className="mt-1 text-[10px] font-semibold leading-relaxed text-slate-500">
+                        After a future runtime update, the agent can confirm a completed task and end the call when every required item is collected.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2.5">
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={agent.taskCompletionEnabled === true}
+                        disabled={isReadOnly}
+                        onClick={() => setAgent({ ...agent, taskCompletionEnabled: agent.taskCompletionEnabled !== true })}
+                        className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                          agent.taskCompletionEnabled ? 'bg-emerald-600' : 'bg-slate-200'
+                        }`}
+                      >
+                        <span className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transition ${
+                          agent.taskCompletionEnabled ? 'translate-x-5' : 'translate-x-0'
+                        }`} />
+                      </button>
+                      <span className={`text-xs font-bold ${agent.taskCompletionEnabled ? 'text-emerald-700' : 'text-slate-400'}`}>
+                        {agent.taskCompletionEnabled ? 'Enabled' : 'Disabled'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className={`space-y-5 p-5 ${agent.taskCompletionEnabled ? '' : 'opacity-60'}`}>
+                    <div>
+                      <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-500">Completion Intent</label>
+                      <input
+                        type="text"
+                        disabled={isReadOnly || !agent.taskCompletionEnabled}
+                        value={agent.taskCompletionIntent || ''}
+                        onChange={(event) => setAgent({ ...agent, taskCompletionIntent: event.target.value })}
+                        placeholder="Example: appointment_booking"
+                        className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-semibold text-slate-800 outline-none transition focus:border-emerald-500 disabled:cursor-not-allowed"
+                      />
+                      <p className="mt-1.5 text-[10px] font-semibold text-slate-400">Use lowercase letters, numbers, underscores or hyphens.</p>
+                    </div>
+
+                    <div>
+                      <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-500">Required Information</label>
+                      <p className="mb-3 text-[10px] font-semibold leading-relaxed text-slate-400">
+                        The future completion flow will close only after every field is collected and validated. Example: patient_name, patient_age, selected_package, appointment_date, appointment_time.
+                      </p>
+                      <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
+                        <div className="flex flex-wrap gap-2">
+                          {(agent.taskCompletionRequiredFields || []).length === 0 ? (
+                            <span className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-400">No required information added yet.</span>
+                          ) : agent.taskCompletionRequiredFields?.map((field, index) => (
+                            <span key={`${field}-${index}`} className="flex items-center gap-1.5 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700">
+                              {field}
+                              {!isReadOnly && (
+                                <button
+                                  type="button"
+                                  aria-label={`Remove ${field}`}
+                                  onClick={() => setAgent({
+                                    ...agent,
+                                    taskCompletionRequiredFields: (agent.taskCompletionRequiredFields || []).filter((_, entryIndex) => entryIndex !== index),
+                                  })}
+                                  className="font-extrabold text-emerald-500 hover:text-emerald-700"
+                                >&times;</button>
+                              )}
+                            </span>
+                          ))}
+                        </div>
+                        {!isReadOnly && (
+                          <div className="relative flex items-center">
+                            <input
+                              type="text"
+                              disabled={!agent.taskCompletionEnabled}
+                              value={newCompletionRequiredField}
+                              onChange={(event) => setNewCompletionRequiredField(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key !== 'Enter') return;
+                                event.preventDefault();
+                                const field = newCompletionRequiredField.trim().toLowerCase();
+                                if (!field) return;
+                                const current = agent.taskCompletionRequiredFields || [];
+                                if (current.includes(field)) { setError('This Required Information field is already added.'); return; }
+                                setAgent({ ...agent, taskCompletionRequiredFields: [...current, field] });
+                                setNewCompletionRequiredField('');
+                                setError('');
+                              }}
+                              placeholder="Example: patient_name"
+                              className="w-full rounded-xl border border-slate-200 bg-white py-3 pl-4 pr-12 text-xs font-semibold text-slate-800 outline-none transition focus:border-emerald-500 disabled:cursor-not-allowed"
+                            />
+                            <button
+                              type="button"
+                              disabled={!agent.taskCompletionEnabled}
+                              onClick={() => {
+                                const field = newCompletionRequiredField.trim().toLowerCase();
+                                if (!field) return;
+                                const current = agent.taskCompletionRequiredFields || [];
+                                if (current.includes(field)) { setError('This Required Information field is already added.'); return; }
+                                setAgent({ ...agent, taskCompletionRequiredFields: [...current, field] });
+                                setNewCompletionRequiredField('');
+                                setError('');
+                              }}
+                              className="absolute right-2 flex h-8 w-8 items-center justify-center rounded-full bg-emerald-600 text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                              aria-label="Add required information"
+                            ><Plus className="h-4 w-4" /></button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-500">Completion Confirmation Message</label>
+                      <textarea
+                        rows={3}
+                        disabled={isReadOnly || !agent.taskCompletionEnabled}
+                        value={agent.taskCompletionConfirmationMessage || ''}
+                        onChange={(event) => setAgent({ ...agent, taskCompletionConfirmationMessage: event.target.value })}
+                        placeholder="Example: சரிங்க {{patient_name}}, உங்க {{selected_package}} appointment பதிவு பண்ணியாச்சு."
+                        className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-semibold text-slate-800 outline-none transition focus:border-emerald-500 disabled:cursor-not-allowed"
+                      />
+                      <p className="mt-1.5 text-[10px] font-semibold text-slate-400">This will be spoken before the configured Post-Call closing and automatic hangup.</p>
+                    </div>
                   </div>
                 </div>
               </div>

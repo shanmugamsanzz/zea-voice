@@ -32,6 +32,12 @@ import {
 import { buildConversationMemoryState } from './interaction/conversation-memory-state.js';
 import { resolveCallbackConfiguration } from './interaction/callback-config.js';
 import {
+  captureTaskCompletionInput,
+  createTaskCompletionState,
+  publicTaskCompletionState,
+  renderTaskCompletionConfirmation,
+} from './interaction/task-completion-state.js';
+import {
   resolveCustomerCallbackRequest,
   scheduleCustomerCallback,
 } from '../campaigns/customer-callback.service.js';
@@ -248,6 +254,11 @@ export class RealtimeConversationOrchestrator {
       ...this.runtimeProfile.agent.speech?.interaction,
     });
     this.callbackConfiguration = resolveCallbackConfiguration(this.runtimeProfile.agent.settings);
+    this.taskCompletionState = createTaskCompletionState(this.runtimeProfile.agent.settings, {
+      ...(this.call.providerMetadata?.context ?? {}),
+      ...(this.call.providerMetadata?.preCall?.context ?? {}),
+    });
+    this.runtimeMetrics.taskCompletion = publicTaskCompletionState(this.taskCompletionState);
     this.contextResolution = this.call.providerMetadata?.conversationContext
       ?? resolveCallContextId({ call: this.call, runtimeProfile: this.runtimeProfile });
     this.contextCachePolicy = createContextCachePolicy({
@@ -772,6 +783,21 @@ export class RealtimeConversationOrchestrator {
       await this.#close('customer_callback_scheduled');
       return;
     }
+    const taskCompletion = captureTaskCompletionInput(this.taskCompletionState, event.text, action.history);
+    this.taskCompletionState = taskCompletion.state;
+    this.runtimeMetrics.taskCompletion = publicTaskCompletionState(this.taskCompletionState);
+    if (taskCompletion.captured.length) {
+      this.log.info({
+        stage: 'task_completion.fields_captured', callId: this.call.id,
+        intent: this.taskCompletionState.configuration.intent,
+        capturedFields: taskCompletion.captured,
+        missingFields: taskCompletion.missing,
+      }, 'Configured task completion information captured from caller');
+    }
+    if (taskCompletion.complete) {
+      await this.#confirmTaskCompletion();
+      return;
+    }
     const callEndTrigger = findCallEndTriggerPhrase(event.text, this.runtimeProfile.agent.settings);
     if (callEndTrigger && !callbackRequest.detected) {
       this.log.info({
@@ -785,6 +811,34 @@ export class RealtimeConversationOrchestrator {
     }
     const epoch = ++this.epoch;
     void this.#guard('turn', () => this.#runTurn(event.text, action.history, epoch));
+  }
+
+  async #confirmTaskCompletion() {
+    const completion = publicTaskCompletionState(this.taskCompletionState);
+    if (!completion.completed || this.finalized) return;
+    const confirmation = this.#fitTtsMessage(renderTaskCompletionConfirmation(this.taskCompletionState));
+    if (!confirmation) {
+      this.log.warn({
+        stage: 'task_completion.confirmation_missing', callId: this.call.id,
+        intent: completion.intent,
+      }, 'Task completion was ready but no confirmation message could be rendered');
+      return;
+    }
+    const source = createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
+      id: this.runtimeProfile.agent.id,
+      label: 'Task completion confirmation',
+      metadata: { intent: completion.intent, fields: completion.requiredFields.join(',') },
+    });
+    this.log.info({
+      stage: 'task_completion.completed', callId: this.call.id,
+      intent: completion.intent,
+      collectedFields: Object.keys(completion.collectedData),
+    }, 'All configured task completion information was collected; confirming and closing call');
+    await this.controller.setAssistantResponse(confirmation, Date.now(), { sources: [source] });
+    const epoch = ++this.epoch;
+    await this.#synthesize(confirmation, `task-completion-${epoch}`);
+    await this.audioEngine.drainOutput();
+    await this.#close('task_completion_completed');
   }
 
   async #confirmInterruption(details) {
@@ -1932,7 +1986,10 @@ export class RealtimeConversationOrchestrator {
     const closingText = closing.text ? this.#fitTtsMessage(closing.text) : '';
     if (closingText && !this.mediaSession.closed) {
       await this.controller.recordAssistantMessage(closingText, Date.now(), { sources: closing.sources });
-      try { await this.#synthesize(closingText, `closing-${this.epoch}`); } catch (error) {
+      try {
+        await this.#synthesize(closingText, `closing-${this.epoch}`);
+        await this.audioEngine.drainOutput();
+      } catch (error) {
         this.log.warn({ err: error, callId: this.call.id }, 'Post-Call closing audio failed');
       }
     }
