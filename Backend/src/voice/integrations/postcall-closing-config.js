@@ -43,5 +43,6 @@ export function normalizePostCallClosingSettings(settings = {}) {
     postCallMessageType: configuration.messageType,
     postCallPrompt: configuration.prompt,
     postCallStaticMessage: configuration.staticMessage,
+    postCallIncludePhoneNumbers: settings.postCallIncludePhoneNumbers === true,
   };
 }

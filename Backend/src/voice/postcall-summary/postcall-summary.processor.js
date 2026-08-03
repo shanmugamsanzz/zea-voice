@@ -52,8 +52,10 @@ function postCallPayload(job, structured = {}, summaryUsage = {}, summaryStatus 
       answeredAt: job.call.answeredAt,
       endedAt: job.call.endedAt,
       durationSeconds: job.call.durationSeconds,
-      fromNumber: job.call.fromNumber,
-      toNumber: job.call.toNumber,
+      ...(job.call.includePhoneNumbers ? {
+        fromNumber: job.call.fromNumber,
+        toNumber: job.call.toNumber,
+      } : {}),
     },
     ...(job.includeTranscriptInWebhook ? { transcript: job.transcript } : {}),
     providerUsage: job.providerUsage,

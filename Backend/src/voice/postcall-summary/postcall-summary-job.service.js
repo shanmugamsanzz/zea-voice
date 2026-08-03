@@ -64,6 +64,9 @@ function processingJob(row, decrypt) {
       answeredAt: row.answered_at,
       endedAt: row.ended_at,
       durationSeconds: Number(row.call_duration_seconds ?? 0),
+      fromNumber: row.from_number ?? null,
+      toNumber: row.to_number ?? null,
+      includePhoneNumbers: row.agent_settings?.postCallIncludePhoneNumbers === true,
     },
     agent: {
       name: row.agent_name,

@@ -176,6 +176,7 @@ export interface VoiceAgent {
   postCallSummaryInstructions?: string;
   postCallIncludeTranscript?: boolean;
   postCallIncludeSummary?: boolean;
+  postCallIncludePhoneNumbers?: boolean;
   postCallEndpointDetailsActive?: boolean;
   postCallApiMethod?: string;
   postCallApiUrl?: string;

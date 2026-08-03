@@ -426,6 +426,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       postCallSummaryInstructions: base.postCallSummaryInstructions || 'Create a concise, factual summary of the call. Capture the customer intent, outcome, sentiment, collected information and required follow-up. Do not invent missing information.',
       postCallIncludeTranscript: base.postCallIncludeTranscript !== undefined ? base.postCallIncludeTranscript : true,
       postCallIncludeSummary: base.postCallIncludeSummary !== undefined ? base.postCallIncludeSummary : true,
+      postCallIncludePhoneNumbers: base.postCallIncludePhoneNumbers === true,
       postCallEndpointDetailsActive: base.postCallEndpointDetailsActive !== undefined ? base.postCallEndpointDetailsActive : true,
       postCallApiMethod: base.postCallApiMethod || 'POST',
       postCallApiUrl: base.postCallApiUrl || '',
@@ -3213,6 +3214,28 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                         className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-2.5 text-xs font-semibold text-slate-800 transition outline-none"
                       />
                     </div>
+                  </div>
+
+                  <div className="flex items-start justify-between gap-4 rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+                    <div>
+                      <p className="text-xs font-black text-slate-800">Include Caller &amp; Callee Numbers in Webhook</p>
+                      <p className="mt-1 text-[10px] font-semibold leading-4 text-slate-500">
+                        Sends <code>fromNumber</code> and <code>toNumber</code> to this Post-Call webhook. For inbound calls: caller to company DID; for outbound calls: company DID to customer.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={isReadOnly}
+                      onClick={() => setAgent({ ...agent, postCallIncludePhoneNumbers: agent.postCallIncludePhoneNumbers !== true })}
+                      className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors ${
+                        agent.postCallIncludePhoneNumbers ? 'bg-[#dfa822]' : 'bg-slate-200'
+                      } ${isReadOnly ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
+                      aria-label="Include caller and callee phone numbers in Post-Call webhook"
+                    >
+                      <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition duration-200 ${
+                        agent.postCallIncludePhoneNumbers ? 'translate-x-5' : 'translate-x-0'
+                      }`} />
+                    </button>
                   </div>
 
                   {/* Headers List */}

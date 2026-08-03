@@ -141,6 +141,7 @@ export async function completeVoiceCall(input, dependencies = {}) {
 
   let postCall = { attempted: false, delivered: false, reason: 'already_finalized' };
   if (!persisted.idempotent) {
+    const includePhoneNumbers = input.runtimeProfile.agent.settings?.postCallIncludePhoneNumbers === true;
     const postCallPayload = {
       event: 'call.completed',
       call: {
@@ -156,6 +157,10 @@ export async function completeVoiceCall(input, dependencies = {}) {
         answeredAt: persisted.call.answered_at,
         endedAt: persisted.call.ended_at,
         durationSeconds: Number(persisted.call.duration_seconds),
+        ...(includePhoneNumbers ? {
+          fromNumber: persisted.call.from_number ?? input.controller.callSession.from ?? null,
+          toNumber: persisted.call.to_number ?? input.controller.callSession.to ?? null,
+        } : {}),
       },
       transcript: input.controller.history,
       providerUsage: usage,
