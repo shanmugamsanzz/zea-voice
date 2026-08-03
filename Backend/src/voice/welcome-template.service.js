@@ -22,12 +22,6 @@ function safeTemplateValue(key, value) {
   return text;
 }
 
-function genericHelp(language) {
-  const normalized = String(language ?? '').toLowerCase();
-  if (normalized.startsWith('ta') || normalized.includes('tamil')) return 'உங்களுக்கு எப்படி உதவலாம்?';
-  return 'How may I help you?';
-}
-
 function cleanSpeechText(value) {
   return String(value ?? '').replace(/\s+([,.!?।])/g, '$1').replace(/\s+/g, ' ').trim();
 }
@@ -40,7 +34,7 @@ export function welcomeTemplateContext(call) {
   return context;
 }
 
-export function renderWelcomeTemplate(template, context = {}, options = {}) {
+export function renderWelcomeTemplate(template, context = {}) {
   const source = String(template ?? '').trim();
   if (!source) return {
     text: '', dynamic: false, personalized: false, resolvedVariables: [], missingVariables: [],
@@ -64,8 +58,6 @@ export function renderWelcomeTemplate(template, context = {}, options = {}) {
     text = text.replace(unresolvedSentencePattern, ' ')
       .replace(templatePattern, ' ');
     text = cleanSpeechText(text);
-    const fallback = String(options.fallbackMessage ?? '').trim() || genericHelp(options.language);
-    if (fallback) text = cleanSpeechText(`${text} ${fallback}`);
   }
 
   return {

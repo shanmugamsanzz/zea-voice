@@ -275,10 +275,6 @@ export class RealtimeConversationOrchestrator {
       ? renderWelcomeTemplate(
         this.runtimeProfile.agent.welcomeMessage,
         welcomeTemplateContext(this.call),
-        {
-          language: this.runtimeProfile.agent.language,
-          fallbackMessage: this.runtimeProfile.agent.settings?.welcomeFallbackMessage,
-        },
       )
       : { text: this.runtimeProfile.agent.welcomeMessage, dynamic: false, personalized: false, resolvedVariables: [], missingVariables: [] };
     const constrainedWelcome = this.#fitTtsMessage(renderedWelcome.text);
