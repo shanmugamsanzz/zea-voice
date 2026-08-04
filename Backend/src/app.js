@@ -33,7 +33,8 @@ import { insightRouter } from './insights/insight.routes.js';
 import { publicTaskRouter } from './public-tasks/public-task.routes.js';
 import { pronunciationRouter } from './pronunciations/pronunciation.routes.js';
 import { ambienceRouter } from './ambience/ambience.routes.js';
-//this is test messge for git commit 
+//this is test messge for git commit  
+//this is the new test msg enable the rag in env server
 function redactRequestUrl(value) {
   if (typeof value !== 'string' || !value.includes('token=')) return value;
   try {
