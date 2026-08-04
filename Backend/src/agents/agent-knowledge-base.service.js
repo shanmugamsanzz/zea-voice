@@ -2,7 +2,7 @@ import { withTenantContext } from '../infrastructure/database-context.js';
 import { invalidateTenantKnowledgeCache } from '../knowledge-bases/knowledge-runtime.service.js';
 import { AppError } from '../middleware/errors.js';
 /* test */
-/* test */
+/* test new test ading the user for login purpose */
 function mapAssignment(row) {
   return {
     agentId: row.agent_id,
