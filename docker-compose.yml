@@ -15,8 +15,6 @@ services:
         --api-key "$${EMBEDDING_API_KEY}"
         --port 80
         --huggingface-hub-cache /data
-    ports:
-      - "127.0.0.1:1113:80"
     volumes:
       - embedding-model-cache:/data
     restart: unless-stopped
@@ -41,8 +39,6 @@ services:
     depends_on:
       embedding:
         condition: service_healthy
-    ports:
-      - "1112:1112"
     restart: unless-stopped
     networks:
       - zea-voice
@@ -54,8 +50,6 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_BASE_URL: /api
-    ports:
-      - "5020:80"
     depends_on:
       backend:
         condition: service_healthy
@@ -65,6 +59,7 @@ services:
 
 networks:
   zea-voice:
+    external: true
     name: zea-voice-network
 
 volumes:
