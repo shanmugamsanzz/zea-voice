@@ -2262,7 +2262,24 @@ export class RealtimeConversationOrchestrator {
     }
     await this.#cancelActive(`${stage}_recovery`);
     if (stage === 'stt' && error?.retryable) {
-      try { await this.adapters.stt.connect(); } catch { return this.#finalize('failed', 'stt_reconnect_failed'); }
+      try {
+        // A provider error can leave the WebSocket technically open but unable
+        // to accept audio. Replace it before reconnecting rather than letting
+        // connect() reuse the poisoned socket.
+        this.adapters.stt.cancel?.('stt_recovery');
+        this.customerUtterance.reset();
+        this.interruptionCandidate.reset();
+        await this.adapters.stt.connect();
+        this.providerHealth.record(this.runtimeProfile.agent.tenantId, 'stt', this.runtimeProfile.providers.stt, 'success');
+        this.log.info({
+          stage: 'stt.reconnected', callId: this.call.id, errorCode: error?.code,
+        }, 'STT provider reconnected after a transient provider failure; continuing call');
+        this.#armInactivity();
+        return;
+      } catch (reconnectError) {
+        this.log.error({ err: reconnectError, stage: 'stt.reconnect_failed', callId: this.call.id }, 'STT reconnect failed after transient provider error');
+        return this.#finalize('failed', 'stt_reconnect_failed');
+      }
     }
     const ttsFailed = stage === 'audio_output' || stage.startsWith('tts') || String(error?.code ?? '').startsWith('TTS_');
     if (!ttsFailed && this.controller.state === callStates.LISTENING) {

@@ -124,6 +124,11 @@ function providerError(error, retryable = false) {
   };
 }
 
+function isTransientSarvamProviderError(error) {
+  const message = String(error?.message ?? error ?? '').toLowerCase();
+  return /upstream connect error|disconnect\/reset|reset reason:\s*overflow|\boverflow\b|connection reset|temporar(?:y|ily) unavailable|gateway timeout|\b50[234]\b|\b429\b/.test(message);
+}
+
 export function createSarvamSttAdapter({ providerConfig, runtimeContext = {} }) {
   const configuration = resolveSarvamSttConfiguration(providerConfig);
   const channel = new SttEventChannel({
@@ -217,7 +222,9 @@ export function createSarvamSttAdapter({ providerConfig, runtimeContext = {} }) 
       return;
     }
     if (message.type === 'error' || data.error) {
-      channel.publish(providerError(new Error(data.message ?? data.error?.message ?? data.error ?? 'Sarvam STT failed')));
+      const error = new Error(data.message ?? data.error?.message ?? data.error ?? 'Sarvam STT failed');
+      error.code = data.code ?? data.error?.code;
+      channel.publish(providerError(error, isTransientSarvamProviderError(error)));
       return;
     }
     const text = String(data.transcript ?? data.translation ?? data.text ?? '').trim();

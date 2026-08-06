@@ -144,6 +144,12 @@ assert.deepEqual(events.slice(noEndStart).map((event) => event.type), [
 ]);
 assert.equal(events.at(-2).text, 'Silver package details');
 
+socket.emit('message', Buffer.from(JSON.stringify({
+  type: 'error', data: { message: 'upstream connect error or disconnect/reset before headers. reset reason: overflow' },
+})));
+assert.equal(events.at(-1).type, 'error');
+assert.equal(events.at(-1).retryable, true);
+
 adapter.flush();
 assert.deepEqual(socket.sent.at(-1), { type: 'flush' });
 adapter.cancel('test-complete');
