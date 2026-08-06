@@ -85,6 +85,7 @@ buffer.observePartial('எனக்கு வந்து cardiac package பற
 buffer.observeFinal('எனக்கு வந்து cardiac package பற்றி சொல்லுங்க');
 buffer.markSpeechEnded();
 assert.equal(buffer.ready, true);
+assert.equal(buffer.finalConfidence, null, 'Missing provider confidence must remain unknown, not become zero');
 assert.equal(buffer.markFinalProcessed(), true);
 assert.equal(buffer.markFinalProcessed(), false, 'Repeated final STT events must not create a second customer turn');
 assert.equal(buffer.text, 'எனக்கு வந்து cardiac package பற்றி சொல்லுங்க');

@@ -44,7 +44,12 @@ export class CustomerUtteranceBuffer {
   observeFinal(text, confidence = null) {
     if (!this.started) this.start();
     this.finalText = overlappingAppend(this.partialText, text);
-    this.finalConfidence = Number.isFinite(Number(confidence)) ? Number(confidence) : null;
+    // Several streaming STT providers, including Sarvam, omit confidence.
+    // Number(null) is 0, but a missing score must remain unknown—not become
+    // a low-confidence score that rejects an otherwise valid customer turn.
+    const hasConfidence = confidence !== null && confidence !== undefined && confidence !== '';
+    this.finalConfidence = hasConfidence && Number.isFinite(Number(confidence))
+      ? Number(confidence) : null;
     return this.snapshot();
   }
 
