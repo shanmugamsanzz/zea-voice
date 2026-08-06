@@ -202,6 +202,10 @@ export function createSarvamSttAdapter({ providerConfig, runtimeContext = {} }) 
     const signal = String(data.signal_type ?? data.signalType ?? message.signal_type ?? message.type ?? '').toUpperCase();
     const requestId = data.request_id ?? data.requestId ?? message.request_id ?? null;
     if (signal === 'START_SPEECH' || signal === 'SPEECH_START') {
+      // A new speech-start is also a safe boundary for the preceding turn.
+      // Do not discard a valid transcript merely because Sarvam omitted its
+      // END_SPEECH event before starting the next utterance.
+      if (pendingTranscript) finalizePendingTranscript(requestId);
       clearPendingFinalization();
       pendingTranscript = null;
       channel.publish({ type: 'speech_started', requestId });
@@ -249,6 +253,11 @@ export function createSarvamSttAdapter({ providerConfig, runtimeContext = {} }) 
     clearPendingFinalization();
     pendingTranscript = null;
     const { usageData, ...finalTranscript } = transcript;
+    // Some Sarvam responses are explicitly final but contain no END_SPEECH
+    // signal. The provider-neutral runtime intentionally waits for a speech
+    // boundary before it sends text to the LLM, so synthesize that boundary
+    // immediately for an explicit final response.
+    channel.publish({ type: 'speech_ended', requestId, inferred: true });
     channel.publish({ type: 'final_transcript', ...finalTranscript });
     publishUsage(requestId, data);
   }

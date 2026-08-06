@@ -144,6 +144,18 @@ assert.deepEqual(events.slice(noEndStart).map((event) => event.type), [
 ]);
 assert.equal(events.at(-2).text, 'Silver package details');
 
+// An explicitly final Sarvam transcript may arrive without END_SPEECH. It
+// must still form a complete normalized turn so the LLM can answer it.
+const explicitFinalStart = events.length;
+socket.emit('message', Buffer.from(JSON.stringify({ type: 'events', data: { signal_type: 'START_SPEECH' } })));
+socket.emit('message', Buffer.from(JSON.stringify({
+  type: 'final', data: { transcript: 'Gold package price', is_final: true, request_id: 'request-explicit-final' },
+})));
+assert.deepEqual(events.slice(explicitFinalStart).map((event) => event.type), [
+  'speech_started', 'speech_ended', 'final_transcript', 'usage',
+]);
+assert.equal(events.at(-2).text, 'Gold package price');
+
 socket.emit('message', Buffer.from(JSON.stringify({
   type: 'error', data: { message: 'upstream connect error or disconnect/reset before headers. reset reason: overflow' },
 })));
