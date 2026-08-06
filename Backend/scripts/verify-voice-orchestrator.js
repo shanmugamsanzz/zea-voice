@@ -229,7 +229,13 @@ const profile = {
   },
   tools: [{ id: 'assigned-tool', name: 'book visit', type: 'webhook_api', description: 'Book a visit', configuration: {} }],
   integrations: { postCall: { prompt: 'Be polite.', messageType: 'Dynamic', dynamicClosing: true } },
-  limits: { ttsMaxCharactersPerMinute: 1000, maxCallDurationMinutes: 1 },
+  limits: {
+    ttsMaxCharactersPerResponse: 1000,
+    // Retained as configuration data, but no longer allowed to delay a live
+    // answer in the real-time orchestrator.
+    ttsMaxCharactersPerMinute: 1000,
+    maxCallDurationMinutes: 1,
+  },
 };
 
 const media = new FakeMediaSession();
@@ -274,6 +280,12 @@ const orchestrator = new RealtimeConversationOrchestrator(media, {
   routeKnowledge: async (auth, input) => {
     knowledgeAuth.push(auth);
     knowledgeQueries.push(input.query);
+    if (input.query === 'exact catalog price') {
+      return {
+        route: 'catalog', found: true, content: 'Silver package costs 2,000 rupees.',
+        matches: [], durationMs: 4,
+      };
+    }
     return { route: 'semantic', found: true, content: 'Appointments are available.', matches: [], durationMs: 4 };
   },
   executeTools: async (_runtimeProfile, _call, calls) => {
@@ -343,6 +355,18 @@ assert.ok(answerSources.includes('knowledge'));
 assert.ok(answerSources.includes('tool'));
 assert.ok(answerSources.includes('llm'));
 
+// An approved exact catalog answer must skip the LLM completely so common
+// price/package questions receive TTS as soon as Knowledge returns.
+const llmRequestsBeforeFastKnowledge = llm.requests.length;
+stt.publish({ type: 'speech_started' });
+stt.publish({ type: 'final_transcript', text: 'exact catalog price', language: 'en', isFinal: true });
+await waitFor(() => tts.texts.includes('Silver package costs 2,000 rupees.'),
+  'Exact catalog answer did not start TTS directly from Knowledge');
+assert.equal(llm.requests.length, llmRequestsBeforeFastKnowledge,
+  'Exact catalog answer incorrectly invoked the LLM');
+await waitFor(() => orchestrator.controller.state === 'listening',
+  'Fast Knowledge answer did not return to listening');
+
 llm.wasCancelled = false;
 stt.publish({ type: 'final_transcript', text: 'stream two sentences', language: 'en', isFinal: true });
 await waitFor(() => tts.texts.includes('The first sentence is ready.'),
@@ -383,9 +407,9 @@ assert.equal(audioEngine.generations.some((id) => id.endsWith('sentence-3')), fa
 lookaheadCoordinator.releases.get(secondGroup)();
 await waitFor(() => orchestrator.controller.state === 'listening',
   'Ordered look-ahead response did not finish');
-const orderedTurnGenerations = audioEngine.generations.filter((id) => id.startsWith('turn-4-sentence-'));
+const orderedTurnGenerations = audioEngine.generations.filter((id) => id.startsWith('turn-5-sentence-'));
 assert.deepEqual(orderedTurnGenerations, [
-  'turn-4-sentence-1', 'turn-4-sentence-2', 'turn-4-sentence-3',
+  'turn-5-sentence-1', 'turn-5-sentence-2', 'turn-5-sentence-3',
 ]);
 assert.ok(orchestrator.runtimeMetrics.ttsLookahead.readyBeforePlayback >= 1,
   'Completed look-ahead audio was not reused from the buffer');
@@ -407,7 +431,7 @@ await waitFor(() => orchestrator.runtimeMetrics.ttsLookahead.cancelled
 'Active and pending look-ahead synthesis was not fully cancelled');
 await waitFor(() => orchestrator.controller.state === 'listening',
   'Conversation did not recover after cancelling buffered speech');
-assert.equal(audioEngine.generations.some((id) => id.startsWith('turn-5-sentence-2')), false,
+assert.equal(audioEngine.generations.some((id) => id.startsWith('turn-6-sentence-2')), false,
   'Buffered audio from the interrupted turn reached playback');
 
 stt.publish({ type: 'final_transcript', text: 'check tts speed', language: 'en', isFinal: true });

@@ -114,7 +114,7 @@ export function buildAgentSystemPrompt(agent, { usageDirection, context, knowled
   const knowledgeBudget = Math.max(1200, contentBudget - companyPrompt.length - runtimeContext.length);
   const callback = resolveCallbackConfiguration(agent.settings);
   const responseCharacterLimit = Number(context?.ttsResponseCharacterLimit ?? 0);
-  return [
+  const prompt = [
     `You are ${agent.name}, a real-time AI voice agent.`,
     agent.description ? `Agent description: ${agent.description}` : null,
     agent.goal ? `Primary agent goal: ${agent.goal}` : null,
@@ -158,6 +158,10 @@ export function buildAgentSystemPrompt(agent, { usageDirection, context, knowled
     knowledgeContext(knowledge, knowledgeBudget),
     '</knowledge_context>',
   ].filter((line) => line !== null).join('\n');
+  // The voice runtime has a strict latency budget.  Rules appear first, so
+  // trimming can only remove excess context at the end rather than safety or
+  // tenant instructions.
+  return prompt.slice(0, totalBudget).trim();
 }
 
 function eventResponse(agent, input) {

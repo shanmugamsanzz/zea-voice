@@ -1,4 +1,5 @@
 import { WebSocket } from 'ws';
+import { env } from '../../../config/env.js';
 import { AppError } from '../../../middleware/errors.js';
 import { audioDurationMs, resolveModelAudioFormat } from '../../audio/audio-format.js';
 import { SttEventChannel } from './stt.interface.js';
@@ -172,7 +173,9 @@ export function createSarvamSttAdapter({ providerConfig, runtimeContext = {} }) 
 
   function schedulePendingFinalization(requestId) {
     clearPendingFinalization();
-    const quietPeriodMs = Math.max(500, Number(runtimeContext.partialFinalizationDelayMs ?? 850));
+    const quietPeriodMs = Math.max(500, Number(
+      runtimeContext.partialFinalizationDelayMs ?? env.VOICE_STT_FINALIZATION_SILENCE_MS,
+    ));
     pendingFinalizationTimer = setTimeout(() => finalizePendingTranscript(requestId), quietPeriodMs);
     pendingFinalizationTimer.unref?.();
   }

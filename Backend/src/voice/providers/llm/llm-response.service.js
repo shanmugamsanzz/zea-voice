@@ -59,7 +59,10 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
   });
   const messages = [
     { role: 'system', content: systemPrompt },
-    ...(input.history ?? []).slice(-env.LLM_MAX_HISTORY_MESSAGES),
+    ...(input.history ?? []).slice(-Math.min(
+      env.LLM_MAX_HISTORY_MESSAGES,
+      env.VOICE_LLM_MAX_HISTORY_MESSAGES,
+    )),
     { role: 'user', content: input.query },
   ];
   return {

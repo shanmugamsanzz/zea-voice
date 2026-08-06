@@ -165,7 +165,12 @@ const envSchema = z.object({
   // A voice call needs a much smaller working prompt than an API/chat request.
   // It keeps first-token latency predictable while preserving the agent's
   // instructions, caller context, and the selected knowledge excerpts.
-  VOICE_LLM_PROMPT_BUDGET_CHARS: z.coerce.number().int().min(4000).max(40000).default(12000),
+  VOICE_LLM_PROMPT_BUDGET_CHARS: z.coerce.number().int().min(4000).max(40000).default(6000),
+  VOICE_LLM_MAX_HISTORY_MESSAGES: z.coerce.number().int().min(0).max(20).default(6),
+  // Used only when a streaming STT provider does not send its own speech-end
+  // event.  It finalizes a complete caller turn after genuine quiet, never
+  // from sound alone.
+  VOICE_STT_FINALIZATION_SILENCE_MS: z.coerce.number().int().min(500).max(1500).default(600),
   LLM_KNOWLEDGE_CONTEXT_MAX_CHARS: z.coerce.number().int().min(500).max(50000).default(12000),
   TTS_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(30000),
   TTS_SPEED_MONITOR_ENABLED: booleanFromString.default(true),

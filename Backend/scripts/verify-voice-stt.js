@@ -138,7 +138,7 @@ socket.emit('message', Buffer.from(JSON.stringify({ type: 'events', data: { sign
 socket.emit('message', Buffer.from(JSON.stringify({
   type: 'data', data: { transcript: 'Silver package details', request_id: 'request-no-end' },
 })));
-await new Promise((resolve) => setTimeout(resolve, 950));
+await new Promise((resolve) => setTimeout(resolve, 700));
 assert.deepEqual(events.slice(noEndStart).map((event) => event.type), [
   'speech_started', 'partial_transcript', 'speech_ended', 'final_transcript', 'usage',
 ]);

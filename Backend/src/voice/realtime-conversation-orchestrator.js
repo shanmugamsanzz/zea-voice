@@ -83,8 +83,16 @@ function fallbackRecovery(profile) {
 
 const spokenWordPattern = /[\p{L}\p{N}][\p{L}\p{M}\p{N}'’_-]*/gu;
 const pauseFillerWords = new Set([
-  'hello', 'ok', 'okay', 'sure', 'hmm', 'ம்', 'ஹம்', 'ஆமா', 'சரி', 'சரிங்க',
+  'hello', 'ok', 'okay', 'sure', 'hmm', 'please',
+  'ம்', 'ஹம்', 'ஆமா', 'சரி', 'சரிங்க', 'இருங்க', 'இருங்கள்',
 ]);
+const fastKnowledgeRoutes = new Set(['faq', 'catalog']);
+
+function hasFastKnowledgeAnswer(knowledge) {
+  return knowledge?.found === true
+    && fastKnowledgeRoutes.has(String(knowledge.route ?? '').toLowerCase())
+    && Boolean(String(knowledge.content ?? '').trim());
+}
 
 function spokenWords(value) {
   return String(value ?? '').normalize('NFKC').toLocaleLowerCase().match(spokenWordPattern) ?? [];
@@ -138,6 +146,7 @@ export class RealtimeConversationOrchestrator {
         samples: [],
       },
       shortTurns: { deferred: 0, merged: 0, discarded: 0 },
+      turnLatency: [],
     };
     this.followUpOpeningSources = [];
     this.llmCircuitBreaker = new LlmCircuitBreaker();
@@ -196,10 +205,14 @@ export class RealtimeConversationOrchestrator {
         maxCallDurationMinutes: maximumCallMinutes,
       },
     };
-    this.ttsCharacterBudget = new TtsCharacterBudget(ttsMaximumCharacters);
+    // Per-minute character settings are retained for reporting/billing, but
+    // must never queue live call audio.  A caller should receive a short
+    // complete answer now, rather than wait for a rolling 60-second window.
+    this.ttsCharacterBudget = new TtsCharacterBudget(0);
     this.runtimeMetrics.ttsLimits = {
       maximumCharactersPerResponse: ttsMaximumResponseCharacters,
       maximumCharactersPerMinute: ttsMaximumCharacters,
+      perMinuteThrottlingEnabled: false,
       maximumCallDurationMinutes: maximumCallMinutes,
       charactersSynthesized: 0,
       throttleWaitMs: 0,
@@ -399,6 +412,7 @@ export class RealtimeConversationOrchestrator {
       fetchImpl: this.dependencies.fetchImpl,
       webSocketFactory: this.dependencies.webSocketFactory,
       breaker: this.llmCircuitBreaker,
+      partialFinalizationDelayMs: env.VOICE_STT_FINALIZATION_SILENCE_MS,
     };
     this.ttsRuntimeContext = runtimeContext;
     this.adapters = await createAdapters(this.runtimeProfile, runtimeContext, this.registry);
@@ -731,6 +745,7 @@ export class RealtimeConversationOrchestrator {
       return;
     }
     if (event.type === 'speech_started') {
+      this.activeCustomerSpeechStartedAt = Date.now();
       this.audioEngine?.setCallerSpeaking?.(true);
       this.#clearInactivity();
       this.customerUtterance.start();
@@ -1011,7 +1026,10 @@ export class RealtimeConversationOrchestrator {
       return;
     }
     const epoch = ++this.epoch;
-    void this.#guard('turn', () => this.#runTurn(validation.text, action.history, epoch));
+    void this.#guard('turn', () => this.#runTurn(validation.text, action.history, epoch, {
+      sttSpeechDurationMs: this.activeCustomerSpeechStartedAt
+        ? Math.max(0, Date.now() - this.activeCustomerSpeechStartedAt) : null,
+    }));
   }
 
   async #confirmTaskCompletion() {
@@ -1199,7 +1217,6 @@ export class RealtimeConversationOrchestrator {
     }
     const configuredLimits = [
       Number(this.runtimeProfile.limits?.ttsMaxCharactersPerResponse ?? 0),
-      Number(this.runtimeProfile.limits?.ttsMaxCharactersPerMinute ?? 0),
     ].filter((value) => Number.isFinite(value) && value > 0);
     const maximumCharacters = configuredLimits.length ? Math.min(...configuredLimits) : 0;
     const configuredFallback = String(
@@ -1226,7 +1243,12 @@ export class RealtimeConversationOrchestrator {
   }
 
   async #reserveTtsCharacters(text, generationId) {
-    if (!this.ttsCharacterBudget.enabled) return true;
+    if (!this.ttsCharacterBudget.enabled) {
+      // Retain accurate usage telemetry even though live calls never wait for
+      // the rolling per-minute allowance.
+      this.runtimeMetrics.ttsLimits.charactersSynthesized += Array.from(String(text ?? '')).length;
+      return true;
+    }
     const epoch = this.epoch;
     while (!this.finalized && epoch === this.epoch) {
       const decision = this.ttsCharacterBudget.inspect(text);
@@ -1283,8 +1305,7 @@ export class RealtimeConversationOrchestrator {
         ...context,
         ttsResponseCharacterLimit: (() => {
           const limits = [
-            Number(this.runtimeProfile.limits?.ttsMaxCharactersPerResponse ?? 0),
-            Number(this.runtimeProfile.limits?.ttsMaxCharactersPerMinute ?? 0),
+          Number(this.runtimeProfile.limits?.ttsMaxCharactersPerResponse ?? 0),
           ].filter((value) => Number.isFinite(value) && value > 0);
           return limits.length ? Math.min(...limits) : undefined;
         })(),
@@ -1621,9 +1642,24 @@ export class RealtimeConversationOrchestrator {
     };
   }
 
-  async #runTurn(query, history, epoch) {
+  async #runTurn(query, history, epoch, sttTiming = {}) {
     const turnStartedAt = Date.now();
+    const turnLatency = {
+      epoch,
+      queryCharacters: Array.from(String(query ?? '')).length,
+      sttSpeechDurationMs: sttTiming.sttSpeechDurationMs ?? null,
+      knowledgeMs: null,
+      llmMs: 0,
+      ttsFirstAudioMs: null,
+      totalFirstAudioMs: null,
+      route: 'none',
+      fastKnowledge: false,
+    };
+    if (this.runtimeMetrics.turnLatency.length < 100) this.runtimeMetrics.turnLatency.push(turnLatency);
+    const knowledgeStartedAt = Date.now();
     const knowledge = await this.#knowledge(query);
+    turnLatency.knowledgeMs = Math.max(0, Date.now() - knowledgeStartedAt);
+    turnLatency.route = knowledge.route ?? 'none';
     const sourceTrace = new MessageSourceTrace(
       this.#baseLlmSources(),
       knowledgeMessageSources(knowledge),
@@ -1638,8 +1674,22 @@ export class RealtimeConversationOrchestrator {
       isCurrent: () => !this.#isStaleGeneration(epoch),
     };
     let response;
-    try {
+    if (hasFastKnowledgeAnswer(knowledge)) {
+      turnLatency.fastKnowledge = true;
+      this.log.info({
+        stage: 'knowledge.fast_answer_selected', callId: this.call.id, epoch,
+        route: knowledge.route, knowledgeDurationMs: turnLatency.knowledgeMs,
+      }, 'Using approved exact Knowledge Base answer without an LLM request');
+      response = {
+        cancelled: false,
+        text: String(knowledge.content).trim(),
+        toolCalls: [],
+        sources: [],
+      };
+    } else try {
+      const llmStartedAt = Date.now();
       response = await this.#llm(query, history, knowledge, {}, streaming);
+      turnLatency.llmMs += Math.max(0, Date.now() - llmStartedAt);
     } catch (error) {
       this.#recordProviderFailure('llm', error, 'llm.response');
       this.providerHealth.record(this.runtimeProfile.agent.tenantId, 'llm', this.runtimeProfile.providers.llm, 'failure', {
@@ -1688,10 +1738,12 @@ export class RealtimeConversationOrchestrator {
       })));
       sourceTrace.add(toolMessageSources(toolResults));
       if (epoch !== this.epoch) return;
+      const llmStartedAt = Date.now();
       response = await this.#llm(query, history, knowledge, {
         toolResults,
         instruction: 'Use these tool results to answer the caller. Never claim an unsuccessful tool completed.',
       }, streaming);
+      turnLatency.llmMs += Math.max(0, Date.now() - llmStartedAt);
       sourceTrace.add(response.sources);
     }
     if (response.cancelled || epoch !== this.epoch || this.finalized) {
@@ -1878,6 +1930,23 @@ export class RealtimeConversationOrchestrator {
             if (options.kind === 'response') {
               this.runtimeMetrics.latency.firstResponseAudioMs ??= [];
               this.runtimeMetrics.latency.firstResponseAudioMs.push(latencyMs);
+              const turnLatency = this.runtimeMetrics.turnLatency
+                .find((entry) => entry.epoch === (options.epoch ?? this.epoch));
+              if (turnLatency && turnLatency.ttsFirstAudioMs === null) {
+                turnLatency.ttsFirstAudioMs = firstAudioLatencyMs;
+                turnLatency.totalFirstAudioMs = latencyMs;
+                this.log.info({
+                  stage: 'voice.turn_latency', callId: this.call.id,
+                  epoch: turnLatency.epoch,
+                  sttSpeechDurationMs: turnLatency.sttSpeechDurationMs,
+                  knowledgeMs: turnLatency.knowledgeMs,
+                  llmMs: turnLatency.llmMs,
+                  ttsFirstAudioMs: turnLatency.ttsFirstAudioMs,
+                  totalFirstAudioMs: turnLatency.totalFirstAudioMs,
+                  route: turnLatency.route,
+                  fastKnowledge: turnLatency.fastKnowledge,
+                }, 'Voice turn timing captured from STT through first TTS audio');
+              }
               this.log.info({
                 stage: 'voice.first_response_audio', callId: this.call.id,
                 epoch: options.epoch ?? this.epoch, generationId, latencyMs,
