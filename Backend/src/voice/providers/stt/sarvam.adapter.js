@@ -142,6 +142,35 @@ export function createSarvamSttAdapter({ providerConfig, runtimeContext = {} }) 
   // `is_final`. Keep it as a partial for fast semantic barge-in and publish
   // one final turn only after the provider confirms speech has ended.
   let pendingTranscript = null;
+  let pendingFinalizationTimer = null;
+
+  function clearPendingFinalization() {
+    if (!pendingFinalizationTimer) return;
+    clearTimeout(pendingFinalizationTimer);
+    pendingFinalizationTimer = null;
+  }
+
+  function finalizePendingTranscript(fallbackRequestId = null) {
+    clearPendingFinalization();
+    const transcript = pendingTranscript;
+    pendingTranscript = null;
+    const requestId = transcript?.requestId ?? fallbackRequestId;
+    // Sarvam's streaming endpoint does not always emit END_SPEECH. Emit the
+    // same normalized boundary after a quiet period so valid caller speech is
+    // never left pending forever.
+    channel.publish({ type: 'speech_ended', requestId, inferred: true });
+    if (!transcript) return;
+    const { usageData, ...finalTranscript } = transcript;
+    channel.publish({ type: 'final_transcript', ...finalTranscript });
+    publishUsage(finalTranscript.requestId ?? requestId, usageData ?? {});
+  }
+
+  function schedulePendingFinalization(requestId) {
+    clearPendingFinalization();
+    const quietPeriodMs = Math.max(500, Number(runtimeContext.partialFinalizationDelayMs ?? 850));
+    pendingFinalizationTimer = setTimeout(() => finalizePendingTranscript(requestId), quietPeriodMs);
+    pendingFinalizationTimer.unref?.();
+  }
 
   function publishUsage(requestId, data = {}) {
     const metrics = data.metrics ?? {};
@@ -168,6 +197,7 @@ export function createSarvamSttAdapter({ providerConfig, runtimeContext = {} }) 
     const signal = String(data.signal_type ?? data.signalType ?? message.signal_type ?? message.type ?? '').toUpperCase();
     const requestId = data.request_id ?? data.requestId ?? message.request_id ?? null;
     if (signal === 'START_SPEECH' || signal === 'SPEECH_START') {
+      clearPendingFinalization();
       pendingTranscript = null;
       channel.publish({ type: 'speech_started', requestId });
       return;
@@ -183,13 +213,7 @@ export function createSarvamSttAdapter({ providerConfig, runtimeContext = {} }) 
           usageData: data,
         };
       }
-      channel.publish({ type: 'speech_ended', requestId });
-      if (pendingTranscript) {
-        const { usageData, ...finalTranscript } = pendingTranscript;
-        channel.publish({ type: 'final_transcript', ...finalTranscript });
-        publishUsage(finalTranscript.requestId ?? requestId, usageData ?? data);
-        pendingTranscript = null;
-      }
+      finalizePendingTranscript(requestId);
       return;
     }
     if (message.type === 'error' || data.error) {
@@ -212,8 +236,10 @@ export function createSarvamSttAdapter({ providerConfig, runtimeContext = {} }) 
       pendingTranscript = transcript;
       const { usageData, ...partialTranscript } = transcript;
       channel.publish({ type: 'partial_transcript', ...partialTranscript });
+      schedulePendingFinalization(requestId);
       return;
     }
+    clearPendingFinalization();
     pendingTranscript = null;
     const { usageData, ...finalTranscript } = transcript;
     channel.publish({ type: 'final_transcript', ...finalTranscript });
@@ -294,6 +320,8 @@ export function createSarvamSttAdapter({ providerConfig, runtimeContext = {} }) 
   }
 
   function cancel(reason = 'cancelled') {
+    clearPendingFinalization();
+    pendingTranscript = null;
     if (!socket || socket.readyState === WebSocket.CLOSED) return;
     connected = false;
     socket.close(1000, String(reason).slice(0, 123));
@@ -303,6 +331,7 @@ export function createSarvamSttAdapter({ providerConfig, runtimeContext = {} }) 
   function close() {
     if (closed) return;
     closed = true;
+    clearPendingFinalization();
     cancel('closed');
     channel.close();
   }
