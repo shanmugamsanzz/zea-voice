@@ -1,10 +1,12 @@
-const sensitivityLabels = {
-  low: 'Low (agent rarely gets interrupted by background noise)',
-  medium: 'Medium (ideal for regular conversations)',
-  high: 'High (agent stops speaking instantly at any user sound)',
-};
-
 const thresholdBySensitivity = { low: 700, medium: 350, high: 150 };
+
+export const defaultAcknowledgementPhrases = Object.freeze([
+  'ம்', 'ஹம்', 'ஆமா', 'சரி', 'ok', 'okay', 'sure', 'சொல்லுங்க',
+]);
+
+export const defaultExplicitStopPhrases = Object.freeze([
+  'நிறுத்துங்க', 'ஒரு நிமிஷம்', 'கொஞ்சம் இருங்க', 'wait', 'stop', 'வேண்டாம்',
+]);
 
 function boolean(value, fallback) {
   return typeof value === 'boolean' ? value : fallback;
@@ -30,23 +32,53 @@ function triggerWords(value) {
     .map((entry) => entry.slice(0, 50)))];
 }
 
+function configuredPhrases(value, fallback) {
+  const normalized = triggerWords(value);
+  return normalized.length ? normalized : [...fallback];
+}
+
+function boundedInteger(value, fallback, minimum, maximum) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.min(maximum, Math.max(minimum, Math.round(numeric)));
+}
+
+function legacyDelay(settings, numericSensitivity) {
+  const explicit = Number(settings.speechConfirmationDelayMs);
+  if (Number.isFinite(explicit)) return boundedInteger(explicit, 350, 150, 1500);
+  return thresholdBySensitivity[sensitivity(settings.interruptionSensitivityLabel, numericSensitivity)];
+}
+
 export function resolveInterruptionConfiguration(settings = {}, numericSensitivity = 0.3) {
-  const level = sensitivity(settings.interruptionSensitivityLabel, numericSensitivity);
-  const configuredMinimum = Number(settings.wordInterruptionMinWords ?? settings.minimumInterruptionWords ?? 2);
+  const confirmationDelayMs = legacyDelay(settings, numericSensitivity);
+  const configuredMinimum = settings.minimumMeaningfulWords
+    ?? settings.wordInterruptionMinWords
+    ?? settings.minimumInterruptionWords
+    ?? 2;
+  // `wordInterruptionTriggerWords` is retained only as a legacy alias. New
+  // agents use explicitStopPhrases, while acknowledgement phrases are stored
+  // separately for the transcript classifier added in the next task.
+  const explicitStopPhrases = configuredPhrases(settings.explicitStopPhrases
+    ?? settings.wordInterruptionTriggerWords
+    ?? settings.interruptionTriggerWords
+    ?? defaultExplicitStopPhrases, defaultExplicitStopPhrases);
   return Object.freeze({
     timeBased: Object.freeze({
       enabled: boolean(settings.timeBasedInterruptionEnabled, true),
-      sensitivity: level,
-      thresholdMs: thresholdBySensitivity[level],
+      thresholdMs: confirmationDelayMs,
     }),
     wordBased: Object.freeze({
-      enabled: boolean(settings.wordBasedInterruptionEnabled, false),
-      minimumWords: Number.isInteger(configuredMinimum) ? Math.min(5, Math.max(1, configuredMinimum)) : 2,
-      triggerWords: Object.freeze(triggerWords(
-        settings.wordInterruptionTriggerWords ?? settings.interruptionTriggerWords ?? [],
-      )),
+      // The old independent Word Based toggle is deprecated. The main
+      // interruption toggle now controls the whole transcript-confirmed flow.
+      enabled: boolean(settings.timeBasedInterruptionEnabled, true),
+      minimumWords: boundedInteger(configuredMinimum, 2, 1, 3),
+      triggerWords: Object.freeze(explicitStopPhrases),
     }),
-    policy: String(settings.interruptionPolicy ?? 'any').toLowerCase() === 'all' ? 'all' : 'any',
+    acknowledgementPhrases: Object.freeze(configuredPhrases(
+      settings.acknowledgementPhrases ?? defaultAcknowledgementPhrases,
+      defaultAcknowledgementPhrases,
+    )),
+    explicitStopPhrases: Object.freeze(explicitStopPhrases),
   });
 }
 
@@ -55,11 +87,15 @@ export function normalizeInterruptionSettings(settings = {}, numericSensitivity 
   return {
     ...settings,
     timeBasedInterruptionEnabled: config.timeBased.enabled,
-    interruptionSensitivityLabel: sensitivityLabels[config.timeBased.sensitivity],
+    speechConfirmationDelayMs: config.timeBased.thresholdMs,
+    minimumMeaningfulWords: config.wordBased.minimumWords,
+    acknowledgementPhrases: [...config.acknowledgementPhrases],
+    explicitStopPhrases: [...config.explicitStopPhrases],
+    // Preserve these fields for existing API consumers. Runtime logic no
+    // longer uses sensitivity or policy to allow sound-only interruption.
     wordBasedInterruptionEnabled: config.wordBased.enabled,
     wordInterruptionMinWords: config.wordBased.minimumWords,
-    wordInterruptionTriggerWords: [...config.wordBased.triggerWords],
-    interruptionPolicy: config.policy,
+    wordInterruptionTriggerWords: [...config.explicitStopPhrases],
   };
 }
 

@@ -21,6 +21,8 @@ import { tenantProviderHealth } from './provider-health.service.js';
 import { renderWelcomeTemplate, welcomeTemplateContext } from './welcome-template.service.js';
 import { resolveInterruptionConfiguration } from './interruption/interruption-config.js';
 import { InterruptionCandidateManager } from './interruption/interruption-candidate-manager.js';
+import { CustomerUtteranceBuffer } from './interruption/customer-utterance-buffer.js';
+import { validateFinalCustomerTurn } from './interruption/final-turn-validator.js';
 import { greetingModes, resolveInteractionConfiguration } from './interaction/interaction-config.js';
 import { resolveCallContextId } from './interaction/context-id-resolver.js';
 import { createContextCachePolicy, publicContextCacheMetadata } from './interaction/context-cache-policy.js';
@@ -95,6 +97,9 @@ export class RealtimeConversationOrchestrator {
     this.activeLookaheadTtsAdapters = new Set();
     this.activeLookaheadSchedulers = new Set();
     this.interruptionConfirmationPromise = null;
+    this.customerUtterance = new CustomerUtteranceBuffer();
+    this.recentFinalTurns = new Map();
+    this.cancelledEpochs = new Set();
     this.activeCancellationPromise = null;
     this.inactivityTimer = null;
     this.callDurationTimer = null;
@@ -103,7 +108,9 @@ export class RealtimeConversationOrchestrator {
       knowledge: [], tools: [], latency: {},
       interruptions: {
         candidates: 0, confirmed: 0, rejected: 0, confirmationMethods: {},
-        cancellationEpochs: 0, clearedAudioFrames: 0,
+        cancellationEpochs: 0, clearedAudioFrames: 0, cancellationCalls: 0,
+        lateGenerationEventsRejected: 0, transcriptFragments: 0, finalTurns: 0,
+        samples: [],
       },
     };
     this.followUpOpeningSources = [];
@@ -685,35 +692,109 @@ export class RealtimeConversationOrchestrator {
     if (event.type === 'speech_started') {
       this.audioEngine?.setCallerSpeaking?.(true);
       this.#clearInactivity();
+      this.customerUtterance.start();
+      this.#recordInterruptionTrace('speech_started', {
+        state: this.controller.state,
+        epoch: this.epoch,
+      });
       if ([callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) {
+        if (this.interruptionCandidate.active && !this.interruptionCandidate.confirmed) this.interruptionCandidate.reset();
         if (!this.interruptionCandidate.active) this.runtimeMetrics.interruptions.candidates += 1;
         this.interruptionCandidate.start();
       }
       return;
     }
     if (event.type === 'partial_transcript') {
-      if ([callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)
+      const outputWasActive = [callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state);
+      const agentAudioWasPlaying = [callStates.GREETING, callStates.SPEAKING].includes(this.controller.state);
+      const buffered = this.customerUtterance.observePartial(event.text);
+      this.runtimeMetrics.interruptions.transcriptFragments += 1;
+      let classification = 'listening';
+      if (outputWasActive
         || this.interruptionCandidate.active) {
         if (!this.interruptionCandidate.active) this.runtimeMetrics.interruptions.candidates += 1;
-        this.interruptionCandidate.observeTranscript(event.text);
+        const decision = this.interruptionCandidate.observeTranscript(buffered.text);
+        classification = decision.classification;
+        this.#recordInterruptionTrace('partial_transcript', {
+          state: this.controller.state,
+          epoch: this.epoch,
+          classification: decision.classification,
+          wordCount: decision.wordCount,
+          elapsedMs: decision.elapsedMs,
+          confirmationDelayMs: this.interruptionConfiguration.timeBased.thresholdMs,
+          text: buffered.text,
+        });
+        if (agentAudioWasPlaying && decision.classification === 'acknowledgement') {
+          this.log.debug({
+            stage: 'interruption.acknowledgement_ignored', callId: this.call.id,
+            text: event.text, wordCount: decision.wordCount,
+          }, 'Acknowledgement received while agent audio is active; continuing speech');
+          this.interruptionCandidate.reset();
+        }
+      }
+      if (classification === 'listening') {
+        this.#recordInterruptionTrace('partial_transcript', {
+          state: this.controller.state,
+          epoch: this.epoch,
+          classification,
+          text: buffered.text,
+        });
       }
       return;
     }
     if (event.type === 'speech_ended') {
       this.audioEngine?.setCallerSpeaking?.(false);
       try { this.adapters.stt.flush(); } catch (error) { this.log.debug({ err: error, callId: this.call.id }, 'STT flush was not required'); }
-      if (this.interruptionCandidate.active && !this.interruptionCandidate.confirmed) {
-        this.interruptionCandidate.finish('speech_ended_below_threshold');
+      const buffered = this.customerUtterance.markSpeechEnded();
+      this.#recordInterruptionTrace('speech_ended', {
+        state: this.controller.state,
+        epoch: this.epoch,
+        hasFinal: Boolean(buffered.finalText),
+        bufferedText: buffered.text,
+      });
+      // Some providers deliver final text before speech_ended. Replay the
+      // already-buffered final only after this end-of-speech boundary.
+      if (buffered.ready) {
+        await this.#handleSttEvent({
+          type: 'final_transcript', text: buffered.finalText,
+          confidence: buffered.finalConfidence, bufferedFinal: true,
+        });
       }
       return;
     }
     if (event.type !== 'final_transcript') return;
     this.audioEngine?.setCallerSpeaking?.(false);
     this.#clearInactivity();
+    if (!event.bufferedFinal) this.customerUtterance.observeFinal(event.text, event.confidence);
+    if (!this.customerUtterance.ready || !this.customerUtterance.markFinalProcessed()) return;
+    const completedTurn = this.customerUtterance.text;
+    const finalConfidence = this.customerUtterance.finalConfidence;
+    this.runtimeMetrics.interruptions.finalTurns += 1;
+    this.log.info({
+      stage: 'stt.final_turn_assembled', callId: this.call.id,
+      epoch: this.epoch, text: completedTurn,
+      wordCount: Array.from(completedTurn.matchAll(/[\p{L}\p{N}]+/gu)).length,
+      confidence: finalConfidence ?? undefined,
+      confirmationDelayMs: this.interruptionConfiguration.timeBased.thresholdMs,
+    }, 'STT fragments were assembled into one complete customer turn');
+    this.#recordInterruptionTrace('final_turn_assembled', {
+      epoch: this.epoch, text: completedTurn, confidence: finalConfidence,
+    });
     const outputWasActive = [callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state);
+    const agentAudioWasPlaying = [callStates.GREETING, callStates.SPEAKING].includes(this.controller.state);
     if (outputWasActive || this.interruptionCandidate.active) {
       if (!this.interruptionCandidate.active) this.runtimeMetrics.interruptions.candidates += 1;
-      const decision = this.interruptionCandidate.observeTranscript(event.text);
+      let decision = this.interruptionCandidate.observeTranscript(completedTurn);
+      if (agentAudioWasPlaying && decision.classification === 'acknowledgement') {
+        this.log.info({
+          stage: 'interruption.acknowledgement_ignored', callId: this.call.id,
+          text: event.text, wordCount: decision.wordCount,
+        }, 'Acknowledgement received while agent audio is active; continuing speech');
+        this.interruptionCandidate.reset();
+        this.customerUtterance.reset();
+        return;
+      }
+      decision = await this.#waitForMeaningfulSpeechConfirmation(decision, completedTurn);
       if (decision.confirmed) {
         if (this.interruptionConfirmationPromise) await this.interruptionConfirmationPromise;
         else if ([callStates.GREETING, callStates.THINKING, callStates.SPEAKING]
@@ -721,14 +802,55 @@ export class RealtimeConversationOrchestrator {
       }
       else if (outputWasActive) {
         this.interruptionCandidate.finish('final_transcript_below_threshold');
+        this.customerUtterance.reset();
+        return;
+      }
+      if (decision.classification === 'explicit_stop' && decision.stopPhraseOnly) {
+        this.log.info({
+          stage: 'interruption.explicit_stop_listening', callId: this.call.id,
+          phrase: decision.matchedTrigger ?? undefined, text: completedTurn,
+        }, 'Caller requested the agent to pause; waiting for the next customer turn');
+        this.interruptionCandidate.reset();
+        this.customerUtterance.reset();
         return;
       }
     }
     this.interruptionCandidate.reset();
-    if (this.controller.state !== callStates.LISTENING || !event.text.trim()) return;
-    const action = await this.controller.receiveFinalTranscript(event.text);
+    if (this.controller.state !== callStates.LISTENING || !completedTurn.trim()) {
+      this.customerUtterance.reset();
+      return;
+    }
+    const validation = validateFinalCustomerTurn({
+      text: completedTurn,
+      confidence: finalConfidence,
+      minimumWords: this.interruptionConfiguration.wordBased.minimumWords,
+      acknowledgementPhrases: this.interruptionConfiguration.acknowledgementPhrases,
+      // Backchannels are ignored while agent output is active. A one-word
+      // answer received while listening is handled by the configured minimum
+      // meaningful-word rule instead of being misclassified as a backchannel.
+      rejectAcknowledgement: agentAudioWasPlaying,
+      minimumConfidence: Number(this.runtimeProfile.agent.settings?.sttMinimumConfidence ?? 0.55),
+    });
+    if (!validation.accepted) {
+      this.log.info({
+        stage: 'stt.final_turn_ignored', callId: this.call.id,
+        reason: validation.reason, wordCount: validation.wordCount ?? 0,
+        confidence: validation.confidence ?? finalConfidence ?? undefined,
+      }, 'Final STT turn was not sent to Knowledge or LLM');
+      this.customerUtterance.reset();
+      return;
+    }
+    if (this.#isDuplicateFinalTurn(validation.text)) {
+      this.log.info({
+        stage: 'stt.final_turn_ignored', callId: this.call.id, reason: 'duplicate',
+      }, 'Duplicate final STT turn was not sent to Knowledge or LLM');
+      this.customerUtterance.reset();
+      return;
+    }
+    const action = await this.controller.receiveFinalTranscript(validation.text);
+    this.customerUtterance.reset();
     const callbackRequest = this.callbackConfiguration.enabled && this.call.direction === 'outbound'
-      ? resolveCustomerCallbackRequest(event.text, this.callbackConfiguration)
+      ? resolveCustomerCallbackRequest(validation.text, this.callbackConfiguration)
       : { detected: false, resolved: false };
     if (callbackRequest.detected) {
       this.currentCallbackRequest = {
@@ -783,7 +905,7 @@ export class RealtimeConversationOrchestrator {
       await this.#close('customer_callback_scheduled');
       return;
     }
-    const taskCompletion = captureTaskCompletionInput(this.taskCompletionState, event.text, action.history);
+    const taskCompletion = captureTaskCompletionInput(this.taskCompletionState, validation.text, action.history);
     this.taskCompletionState = taskCompletion.state;
     this.runtimeMetrics.taskCompletion = publicTaskCompletionState(this.taskCompletionState);
     if (taskCompletion.captured.length) {
@@ -798,7 +920,7 @@ export class RealtimeConversationOrchestrator {
       await this.#confirmTaskCompletion();
       return;
     }
-    const callEndTrigger = findCallEndTriggerPhrase(event.text, this.runtimeProfile.agent.settings);
+    const callEndTrigger = findCallEndTriggerPhrase(validation.text, this.runtimeProfile.agent.settings);
     if (callEndTrigger && !callbackRequest.detected) {
       this.log.info({
         stage: 'postcall.end_trigger_detected', callId: this.call.id,
@@ -810,7 +932,7 @@ export class RealtimeConversationOrchestrator {
       return;
     }
     const epoch = ++this.epoch;
-    void this.#guard('turn', () => this.#runTurn(event.text, action.history, epoch));
+    void this.#guard('turn', () => this.#runTurn(validation.text, action.history, epoch));
   }
 
   async #confirmTaskCompletion() {
@@ -841,6 +963,64 @@ export class RealtimeConversationOrchestrator {
     await this.#close('task_completion_completed');
   }
 
+  #isDuplicateFinalTurn(text) {
+    const now = Date.now();
+    const duplicateWindowMs = 10_000;
+    for (const [value, at] of this.recentFinalTurns) {
+      if (now - at > duplicateWindowMs) this.recentFinalTurns.delete(value);
+    }
+    const normalized = String(text).normalize('NFKC').replace(/\s+/gu, ' ').trim().toLocaleLowerCase();
+    if (!normalized) return true;
+    if (this.recentFinalTurns.has(normalized)) return true;
+    this.recentFinalTurns.set(normalized, now);
+    return false;
+  }
+
+  #isStaleGeneration(epoch) {
+    return this.finalized
+      || (Number.isInteger(epoch) && (epoch !== this.epoch || this.cancelledEpochs.has(epoch)));
+  }
+
+  #recordInterruptionTrace(type, details = {}) {
+    const samples = this.runtimeMetrics.interruptions.samples;
+    if (samples.length >= 100) return;
+    samples.push({ type, at: Date.now(), ...details });
+  }
+
+  #rejectLateGenerationEvent(stage, epoch, details = {}) {
+    this.runtimeMetrics.interruptions.lateGenerationEventsRejected += 1;
+    this.log.debug({
+      stage, callId: this.call.id, epoch, currentEpoch: this.epoch, ...details,
+    }, 'Late output from a cancelled voice generation was rejected');
+    this.#recordInterruptionTrace('late_generation_rejected', {
+      stage, epoch, currentEpoch: this.epoch, ...details,
+    });
+  }
+
+  async #waitForMeaningfulSpeechConfirmation(decision, transcript) {
+    if (decision.confirmed || decision.classification !== 'meaningful') return decision;
+    if (decision.wordCount < this.interruptionConfiguration.wordBased.minimumWords) return decision;
+    if (!this.interruptionConfiguration.timeBased.enabled || !this.interruptionCandidate.active) return decision;
+
+    const remainingMs = Math.max(0, this.interruptionConfiguration.timeBased.thresholdMs - decision.elapsedMs);
+    if (remainingMs > 0) {
+      this.log.debug({
+        stage: 'interruption.confirmation_wait', callId: this.call.id,
+        remainingMs, elapsedMs: decision.elapsedMs,
+        confirmationDelayMs: this.interruptionConfiguration.timeBased.thresholdMs,
+        wordCount: decision.wordCount,
+      }, 'Waiting for configured speech confirmation delay');
+      await new Promise((resolve) => {
+        const timer = setTimeout(resolve, remainingMs);
+        timer.unref?.();
+      });
+    }
+    // Re-observe the complete assembled turn after the configured delay. The
+    // candidate timer may already have confirmed it; this call is safe in
+    // both cases and never introduces sound-only interruption.
+    return this.interruptionCandidate.observeTranscript(transcript);
+  }
+
   async #confirmInterruption(details) {
     if (this.finalized || ![callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) return;
     this.runtimeMetrics.interruptions.confirmed += 1;
@@ -851,8 +1031,14 @@ export class RealtimeConversationOrchestrator {
       stage: 'interruption.confirmed', callId: this.call.id, method,
       elapsedMs: details.elapsedMs, wordCount: details.wordCount,
       matchedTrigger: details.matchedTrigger ?? undefined,
-      policy: this.interruptionConfiguration.policy,
+      classification: details.classification ?? 'meaningful',
+      stopPhraseOnly: details.stopPhraseOnly === true,
     }, 'Caller interruption confirmed');
+    this.#recordInterruptionTrace('interruption_confirmed', {
+      epoch: this.epoch, method, classification: details.classification,
+      wordCount: details.wordCount, elapsedMs: details.elapsedMs,
+      matchedTrigger: details.matchedTrigger ?? null,
+    });
     await this.#cancelActive('caller_barge_in');
   }
 
@@ -1033,6 +1219,13 @@ export class RealtimeConversationOrchestrator {
     const sentenceBuffer = createStreamingSentenceBuffer();
     try {
       for await (const event of session.events) {
+        if (streaming.isCurrent && !streaming.isCurrent()) {
+          this.#rejectLateGenerationEvent('llm.late_event_rejected', streaming.epoch, {
+            eventType: event.type,
+          });
+          try { await session.cancel?.('stale_generation'); } catch { /* already cancelled */ }
+          return { cancelled: true, text: '', toolCalls: [], sources: [] };
+        }
         if (event.type === 'text_delta') {
           text += event.delta;
           for (const sentence of sentenceBuffer.push(event.delta)) streaming.onSentence?.(sentence);
@@ -1230,7 +1423,7 @@ export class RealtimeConversationOrchestrator {
             played = await this.#synthesize(sentence, generationId, {
               kind, startedAt: turnStartedAt, deferDrain: true,
               playbackGroupId, deferBoundaryFlush: true,
-              charactersReserved: true,
+              charactersReserved: true, epoch,
             });
           } else {
             played = await this.#playPrefetchedTts(prepared.value, generationId, {
@@ -1245,7 +1438,7 @@ export class RealtimeConversationOrchestrator {
         }
         const played = await this.#synthesize(sentence, generationId, {
           kind, startedAt: turnStartedAt, deferDrain: true,
-          playbackGroupId, deferBoundaryFlush: true,
+          playbackGroupId, deferBoundaryFlush: true, epoch,
         });
         if (played) completedSentences.push(sentence);
         return played;
@@ -1356,6 +1549,8 @@ export class RealtimeConversationOrchestrator {
       onSentence: sentencePipeline.enqueue,
       flush: sentencePipeline.flushGrouping,
       sentenceCount: sentencePipeline.sentenceCount,
+      epoch,
+      isCurrent: () => !this.#isStaleGeneration(epoch),
     };
     let response;
     try {
@@ -1553,6 +1748,10 @@ export class RealtimeConversationOrchestrator {
   }
 
   async #synthesizeAttempt(text, generationId, options = {}) {
+    if (this.#isStaleGeneration(options.epoch)) {
+      this.#rejectLateGenerationEvent('tts.generation_start_rejected', options.epoch, { generationId });
+      return false;
+    }
     this.audioEngine.beginOutputGeneration(generationId, options.playbackGroupId ?? generationId);
     const requestStartedAt = Date.now();
     this.runtimeMetrics.ttsGeneration.requests += 1;
@@ -1562,6 +1761,18 @@ export class RealtimeConversationOrchestrator {
     let generationRecorded = false;
     try {
       for await (const event of this.adapters.tts.synthesizeStream({ text, generationId })) {
+        if (this.#isStaleGeneration(options.epoch)) {
+          this.#rejectLateGenerationEvent('tts.late_event_rejected', options.epoch, {
+            generationId, eventType: event.type,
+          });
+          this.#recordTtsGeneration({
+            generationId, attempt: options.attempt,
+            bufferedLookahead: false, outcome: 'cancelled',
+            generationMs: Date.now() - requestStartedAt, firstAudioLatencyMs,
+          });
+          generationRecorded = true;
+          return false;
+        }
         if (event.type === 'audio_chunk') {
           if (firstAudio) {
             firstAudio = false;
@@ -1571,6 +1782,10 @@ export class RealtimeConversationOrchestrator {
             if (options.kind === 'response') {
               this.runtimeMetrics.latency.firstResponseAudioMs ??= [];
               this.runtimeMetrics.latency.firstResponseAudioMs.push(latencyMs);
+              this.log.info({
+                stage: 'voice.first_response_audio', callId: this.call.id,
+                epoch: options.epoch ?? this.epoch, generationId, latencyMs,
+              }, 'First response audio is ready for Plivo playback');
             }
           }
           if (options.capture) options.capture.push(Buffer.from(event.audio));
@@ -1620,6 +1835,10 @@ export class RealtimeConversationOrchestrator {
       this.#recordProviderFailure('tts', error, 'tts.direct');
       throw error;
     }
+    if (this.#isStaleGeneration(options.epoch)) {
+      this.#rejectLateGenerationEvent('tts.generation_complete_rejected', options.epoch, { generationId });
+      return false;
+    }
     if (!completed) {
       const error = new AppError(502, 'TTS stream ended without completion', 'TTS_STREAM_INCOMPLETE');
       if (!generationRecorded) this.#recordTtsGeneration({
@@ -1638,7 +1857,7 @@ export class RealtimeConversationOrchestrator {
     await this.audioEngine.flushSynthesized(generationId, {
       finalizeGroup: options.deferBoundaryFlush !== true,
     });
-    if (!options.deferDrain) await this.audioEngine.drainOutput();
+    if (!options.deferDrain && !this.#isStaleGeneration(options.epoch)) await this.audioEngine.drainOutput();
     return true;
   }
 
@@ -1844,8 +2063,13 @@ export class RealtimeConversationOrchestrator {
   async #cancelActive(reason = 'cancelled', transition = true) {
     if (this.activeCancellationPromise) return this.activeCancellationPromise;
     const operation = (async () => {
+      const cancelledEpoch = this.epoch;
       this.epoch += 1;
       this.runtimeMetrics.interruptions.cancellationEpochs += 1;
+      this.runtimeMetrics.interruptions.cancellationCalls += 1;
+      this.cancelledEpochs.add(cancelledEpoch);
+      // Keep a small bounded history for explicit late-event diagnostics.
+      while (this.cancelledEpochs.size > 32) this.cancelledEpochs.delete(this.cancelledEpochs.values().next().value);
 
       // Clear queued and already-dequeued Plivo audio first. Provider shutdown
       // can take time and must never allow stale speech to continue meanwhile.
@@ -1868,10 +2092,16 @@ export class RealtimeConversationOrchestrator {
 
       this.log.info({
         stage: 'audio.turn_cancelled', callId: this.call.id, reason,
-        epoch: this.epoch, removedFrames: audioCancellation?.removedFrames ?? 0,
+        cancelledEpoch, epoch: this.epoch, removedFrames: audioCancellation?.removedFrames ?? 0,
         cancellationVersion: audioCancellation?.cancellationVersion ?? null,
         cancelledLookaheadJobs,
       }, 'Cancelled active voice turn and cleared all stale Plivo audio');
+      this.#recordInterruptionTrace('generation_cancelled', {
+        reason, cancelledEpoch, nextEpoch: this.epoch,
+        removedFrames: audioCancellation?.removedFrames ?? 0,
+        cancellationVersion: audioCancellation?.cancellationVersion ?? null,
+        cancelledLookaheadJobs,
+      });
       if (transition && this.controller
         && [callStates.GREETING, callStates.THINKING, callStates.SPEAKING]
           .includes(this.controller.state)) await this.controller.interrupt(reason);

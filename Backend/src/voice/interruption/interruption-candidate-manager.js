@@ -9,6 +9,24 @@ function containsPhrase(source, phrase) {
   return source.some((_, index) => phrase.every((word, offset) => source[index + offset] === word));
 }
 
+function phraseMatches(source, phrases) {
+  return phrases
+    .map((phrase) => ({ phrase, tokens: tokens(phrase) }))
+    .filter(({ tokens: phraseTokens }) => phraseTokens.length > 0 && containsPhrase(source, phraseTokens));
+}
+
+function acknowledgementOnly(source, phrases) {
+  if (!source.length) return false;
+  const covered = new Array(source.length).fill(false);
+  for (const { tokens: phraseTokens } of phraseMatches(source, phrases)) {
+    for (let index = 0; index <= source.length - phraseTokens.length; index += 1) {
+      if (!phraseTokens.every((word, offset) => source[index + offset] === word)) continue;
+      for (let offset = 0; offset < phraseTokens.length; offset += 1) covered[index + offset] = true;
+    }
+  }
+  return covered.every(Boolean);
+}
+
 export class InterruptionCandidateManager {
   constructor({ configuration, onConfirm = () => {}, onReject = () => {}, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout }) {
     this.configuration = configuration;
@@ -37,10 +55,19 @@ export class InterruptionCandidateManager {
     if (!this.active) this.start();
     const transcriptTokens = tokens(text);
     this.wordCount = transcriptTokens.length;
-    this.matchedTrigger = this.configuration.wordBased.triggerWords.find((trigger) => (
-      containsPhrase(transcriptTokens, tokens(trigger))
-    )) ?? null;
-    return this.#evaluate(this.matchedTrigger ? 'trigger_word' : 'minimum_words');
+    this.matchedTrigger = phraseMatches(transcriptTokens, this.configuration.explicitStopPhrases)
+      .map(({ phrase }) => phrase)[0] ?? null;
+    this.classification = !transcriptTokens.length
+      ? 'empty'
+      : this.matchedTrigger
+        ? 'explicit_stop'
+        : acknowledgementOnly(transcriptTokens, this.configuration.acknowledgementPhrases)
+          ? 'acknowledgement'
+          : 'meaningful';
+    this.stopPhraseOnly = this.classification === 'explicit_stop'
+      && acknowledgementOnly(transcriptTokens, [this.matchedTrigger]);
+    if (this.classification === 'acknowledgement') return this.snapshot();
+    return this.#evaluate(this.classification === 'explicit_stop' ? 'explicit_stop' : 'minimum_words');
   }
 
   finish(reason = 'speech_ended') {
@@ -59,6 +86,8 @@ export class InterruptionCandidateManager {
     this.startedAt = null;
     this.wordCount = 0;
     this.matchedTrigger = null;
+    this.classification = 'empty';
+    this.stopPhraseOnly = false;
     this.confirmedBy = null;
   }
 
@@ -70,6 +99,8 @@ export class InterruptionCandidateManager {
       elapsedMs: this.active ? Math.max(0, this.now() - this.startedAt) : 0,
       wordCount: this.wordCount,
       matchedTrigger: this.matchedTrigger,
+      classification: this.classification,
+      stopPhraseOnly: this.stopPhraseOnly,
     };
   }
 
@@ -80,15 +111,18 @@ export class InterruptionCandidateManager {
       && elapsedMs >= this.configuration.timeBased.thresholdMs;
     const wordPassed = this.configuration.wordBased.enabled
       && (this.wordCount >= this.configuration.wordBased.minimumWords || Boolean(this.matchedTrigger));
-    const enabledChecks = [
-      ...(this.configuration.timeBased.enabled ? [timePassed] : []),
-      ...(this.configuration.wordBased.enabled ? [wordPassed] : []),
-    ];
-    const passed = enabledChecks.length > 0 && (
-      this.configuration.policy === 'all' ? enabledChecks.every(Boolean) : enabledChecks.some(Boolean)
-    );
+
+    // A timer is now a confirmation delay, never independent evidence. This
+    // prevents a fan, car, breathing, or an empty STT event from cancelling
+    // the agent merely because the delay elapsed.
+    // A stop phrase is text-confirmed evidence and may stop active TTS at
+    // once. Normal customer speech still needs both meaningful text and the
+    // configured confirmation delay.
+    const passed = this.classification === 'explicit_stop'
+      ? Boolean(this.matchedTrigger)
+      : Boolean(timePassed && wordPassed);
     if (passed) {
-      this.confirmedBy = this.matchedTrigger ? 'trigger_word' : source;
+      this.confirmedBy = this.matchedTrigger ? 'explicit_stop_phrase' : source;
       if (this.timer) this.clearTimer(this.timer);
       this.timer = null;
       const result = { ...this.snapshot(), timePassed, wordPassed };

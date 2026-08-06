@@ -88,6 +88,8 @@ type KnowledgeDocumentType = 'faq' | 'catalog' | 'workflow_rules' | 'conversatio
 type SelectedKnowledgeFile = { name: string; size: number; type: string };
 
 const KNOWLEDGE_PDF_MAX_BYTES = 25 * 1024 * 1024;
+const DEFAULT_ACKNOWLEDGEMENT_PHRASES = ['ம்', 'ஹம்', 'ஆமா', 'சரி', 'ok', 'okay', 'sure', 'சொல்லுங்க'];
+const DEFAULT_EXPLICIT_STOP_PHRASES = ['நிறுத்துங்க', 'ஒரு நிமிஷம்', 'கொஞ்சம் இருங்க', 'wait', 'stop', 'வேண்டாம்'];
 const knowledgeDocumentCategories: Array<{
   type: KnowledgeDocumentType;
   title: string;
@@ -127,6 +129,15 @@ function normalizeCachePolicy(value: unknown): 'persistent_24h' | 'session_only'
   if (normalized === 'session_only' || normalized === 'session only') return 'session_only';
   if (normalized === 'disabled' || normalized === 'disable' || normalized === 'none') return 'disabled';
   return 'persistent_24h';
+}
+
+function legacySpeechConfirmationDelay(settings: Record<string, unknown>) {
+  const configured = Number(settings.speechConfirmationDelayMs);
+  if (Number.isFinite(configured)) return Math.min(1500, Math.max(150, Math.round(configured)));
+  const label = String(settings.interruptionSensitivityLabel ?? '').toLowerCase();
+  if (label.startsWith('low')) return 700;
+  if (label.startsWith('high')) return 150;
+  return 350;
 }
 
 function parseToolJsonObject(value: string, fieldName: string): Record<string, unknown> {
@@ -373,11 +384,17 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       sttSmartFormat: base.sttSmartFormat !== undefined ? base.sttSmartFormat : true,
       sttPriceMin: base.sttPriceMin !== undefined ? base.sttPriceMin : 0.05,
       timeBasedInterruptionEnabled: base.timeBasedInterruptionEnabled !== undefined ? base.timeBasedInterruptionEnabled : true,
-      wordBasedInterruptionEnabled: base.wordBasedInterruptionEnabled !== undefined ? base.wordBasedInterruptionEnabled : false,
+      wordBasedInterruptionEnabled: true,
       wordInterruptionMinWords: base.wordInterruptionMinWords ?? 2,
       wordInterruptionTriggerWords: base.wordInterruptionTriggerWords || [],
       interruptionPolicy: base.interruptionPolicy || 'any',
       interruptionSensitivityLabel: base.interruptionSensitivityLabel || 'Medium (ideal for regular conversations)',
+      speechConfirmationDelayMs: base.speechConfirmationDelayMs ?? 350,
+      minimumMeaningfulWords: base.minimumMeaningfulWords ?? base.wordInterruptionMinWords ?? 2,
+      acknowledgementPhrases: base.acknowledgementPhrases?.length ? base.acknowledgementPhrases : DEFAULT_ACKNOWLEDGEMENT_PHRASES,
+      explicitStopPhrases: base.explicitStopPhrases?.length
+        ? base.explicitStopPhrases
+        : (base.wordInterruptionTriggerWords?.length ? base.wordInterruptionTriggerWords : DEFAULT_EXPLICIT_STOP_PHRASES),
       llmProvider: base.llmProvider || 'Gemini',
       llmModel: base.llmModel || 'gemini-2.5-flash',
       greetingMode: normalizeGreetingMode(base.greetingMode),
@@ -454,11 +471,13 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const [newReason, setNewReason] = useState('');
   const [newCallEndTriggerPhrase, setNewCallEndTriggerPhrase] = useState('');
   const [newCompletionRequiredField, setNewCompletionRequiredField] = useState('');
-  const [newInterruptionTrigger, setNewInterruptionTrigger] = useState('');
+  const [newAcknowledgementPhrase, setNewAcknowledgementPhrase] = useState('');
+  const [newExplicitStopPhrase, setNewExplicitStopPhrase] = useState('');
 
   const applyApiAgent = (value: AgentApiData) => {
+    const savedSettings = value.settings ?? {};
     setAgent((current) => ({
-      ...current, ...(value.settings as Partial<VoiceAgent>), id: value.id, name: value.name,
+      ...current, ...(savedSettings as Partial<VoiceAgent>), id: value.id, name: value.name,
       status: value.status, description: value.description ?? '', goal: value.goal ?? '', language: value.language,
       agentUsage: value.usageDirection,
       voiceId: value.voiceId, temperature: value.temperature, prompt: value.prompt,
@@ -469,9 +488,20 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       welcomeMessage: value.welcomeMessage ?? '', inactivityTimeout: value.inactivityTimeoutSeconds,
       createdAt: value.createdAt, updatedAt: value.updatedAt,
       totalCalls: value.metrics.totalCalls, avgDuration: value.metrics.averageDurationSeconds, successRate: value.metrics.successRate,
-      greetingMode: normalizeGreetingMode(value.settings.greetingMode),
-      cachePolicy: normalizeCachePolicy(value.settings.cachePolicy),
-      contextId: String(value.settings.contextId ?? '').trim(),
+      greetingMode: normalizeGreetingMode(savedSettings.greetingMode),
+      cachePolicy: normalizeCachePolicy(savedSettings.cachePolicy),
+      contextId: String(savedSettings.contextId ?? '').trim(),
+      wordBasedInterruptionEnabled: true,
+      speechConfirmationDelayMs: legacySpeechConfirmationDelay(savedSettings),
+      minimumMeaningfulWords: Number(savedSettings.minimumMeaningfulWords ?? savedSettings.wordInterruptionMinWords ?? 2),
+      acknowledgementPhrases: Array.isArray(savedSettings.acknowledgementPhrases) && savedSettings.acknowledgementPhrases.length
+        ? savedSettings.acknowledgementPhrases.map(String)
+        : DEFAULT_ACKNOWLEDGEMENT_PHRASES,
+      explicitStopPhrases: Array.isArray(savedSettings.explicitStopPhrases) && savedSettings.explicitStopPhrases.length
+        ? savedSettings.explicitStopPhrases.map(String)
+        : (Array.isArray(savedSettings.wordInterruptionTriggerWords) && savedSettings.wordInterruptionTriggerWords.length
+          ? savedSettings.wordInterruptionTriggerWords.map(String)
+          : DEFAULT_EXPLICIT_STOP_PHRASES),
     }));
     setPhoneNumberId(value.phoneNumberId ?? '');
     setSttModelId(value.stt.modelId); setLlmModelId(value.llm.modelId); setTtsModelId(value.tts.modelId);
@@ -899,17 +929,18 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     void saveAgent();
   };
 
-  const addInterruptionTriggers = (rawValue = newInterruptionTrigger) => {
+  const addInterruptionPhrases = (field: 'acknowledgementPhrases' | 'explicitStopPhrases', rawValue: string) => {
     const additions = rawValue.split(',').map((value) => value.trim()).filter(Boolean);
     if (!additions.length) return;
     setAgent((current) => ({
       ...current,
-      wordInterruptionTriggerWords: [...new Set([
-        ...(current.wordInterruptionTriggerWords || []),
+      [field]: [...new Set([
+        ...(current[field] || []),
         ...additions,
       ])].slice(0, 20),
     }));
-    setNewInterruptionTrigger('');
+    if (field === 'acknowledgementPhrases') setNewAcknowledgementPhrase('');
+    else setNewExplicitStopPhrase('');
   };
 
   const showKnowledgeSuccess = (message: string) => {
@@ -1651,16 +1682,16 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
               </div>
             </div>
 
-            {/* Interruption (Time Based) Card */}
+            {/* Transcript-confirmed interruption control */}
             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
               <div className="p-6">
                 <div className="flex items-center justify-between">
                   <div className="flex items-start space-x-3">
                     <div>
                       <h4 className="text-sm font-extrabold text-slate-800 tracking-tight flex items-center gap-1">
-                        Interruption (Time Based)
+                        Interruption Control
                       </h4>
-                      <p className="text-xs text-slate-500 font-medium">Configure agent's interruption behaviour.</p>
+                      <p className="text-xs text-slate-500 font-medium">The agent stops only after STT confirms meaningful customer speech. Sound alone never interrupts.</p>
                     </div>
                   </div>
 
@@ -1682,73 +1713,64 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
 
                 {agent.timeBasedInterruptionEnabled && (
                   <div className="mt-6 pt-6 border-t border-slate-100">
-                    <label className="block text-[11px] font-black text-slate-500 mb-1.5 uppercase tracking-wider">
-                      SENSITIVITY
-                    </label>
-                    <div className="relative">
-                      <select
-                        value={agent.interruptionSensitivityLabel || 'Medium (ideal for regular conversations)'}
-                        disabled={isReadOnly}
-                        onChange={(e) => setAgent({ ...agent, interruptionSensitivityLabel: e.target.value })}
-                        className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3.5 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
-                      >
-                        <option value="Low (agent rarely gets interrupted by background noise)">Low (agent rarely gets interrupted by background noise)</option>
-                        <option value="Medium (ideal for regular conversations)">Medium (ideal for regular conversations)</option>
-                        <option value="High (agent stops speaking instantly at any user sound)">High (agent stops speaking instantly at any user sound)</option>
-                      </select>
+                    <div className="mb-1.5 flex items-center gap-1.5">
+                      <FieldInfoTooltip
+                        id="speech-confirmation-delay-information"
+                        text="After customer speech is confirmed by STT, this delay helps avoid accidental interruptions. It never interrupts on sound alone."
+                        triggerContent={<span className="block text-[11px] font-black uppercase tracking-wider text-slate-500">Speech Confirmation Delay (ms)</span>}
+                      />
                     </div>
+                    <input
+                      type="number"
+                      min={150}
+                      max={1500}
+                      step={50}
+                      value={agent.speechConfirmationDelayMs ?? 350}
+                      disabled={isReadOnly}
+                      onChange={(event) => {
+                        const value = Number(event.target.value);
+                        setAgent({ ...agent, speechConfirmationDelayMs: Number.isFinite(value) ? Math.min(1500, Math.max(150, value)) : 350 });
+                      }}
+                      className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3.5 text-xs font-semibold text-slate-800 transition outline-none disabled:bg-slate-50"
+                    />
+                    <p className="mt-1.5 text-[11px] font-medium text-slate-400">Default: 350 ms. Allowed range: 150–1500 ms.</p>
                   </div>
                 )}
               </div>
             </div>
 
-            {/* Interruption (Word Based) Card */}
+            {/* Transcript phrase rules */}
             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
               <div className="p-6">
                 <div className="flex items-center justify-between">
                   <div className="flex items-start space-x-3">
                     <div>
                       <h4 className="text-sm font-extrabold text-slate-800 tracking-tight flex items-center gap-1">
-                        Interruption (Word Based)
+                        Speech Phrase Rules
                       </h4>
-                      <p className="text-xs text-slate-500 font-medium">Configure whether the agent can be interrupted by speaking a minimum number of words.</p>
+                      <p className="text-xs text-slate-500 font-medium">Continue phrases keep agent audio playing. Explicit stop phrases request a safe interruption.</p>
                     </div>
                   </div>
-
-                  <button
-                    type="button"
-                    disabled={isReadOnly}
-                    onClick={() => setAgent({ ...agent, wordBasedInterruptionEnabled: !agent.wordBasedInterruptionEnabled })}
-                    className={`zea-interruption-toggle relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 transition-colors duration-200 ease-in-out focus:outline-none ${
-                      agent.wordBasedInterruptionEnabled ? 'border-[#dfa822] bg-[#dfa822]' : 'zea-toggle-inactive border-slate-400 bg-slate-300'
-                    }`}
-                  >
-                    <span
-                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
-                        agent.wordBasedInterruptionEnabled ? 'translate-x-5' : 'translate-x-0'
-                      }`}
-                    />
-                  </button>
                 </div>
 
-                {agent.wordBasedInterruptionEnabled && (
+                {agent.timeBasedInterruptionEnabled && (
                   <div className="mt-6 pt-6 border-t border-slate-100 space-y-5">
                     <div>
                       <div className="mb-1.5 flex items-center gap-1.5">
                         <FieldInfoTooltip
-                          id="minimum-interruption-words-information"
-                          text="Recommended: 2 words to avoid accidental interruption from short sounds."
-                          triggerContent={<span className="block text-[11px] font-black uppercase tracking-wider text-slate-500">Minimum Words</span>}
+                          id="minimum-meaningful-words-information"
+                          text="Normal customer speech needs this many recognized words before it can interrupt the agent. Explicit stop phrases remain supported separately."
+                          triggerContent={<span className="block text-[11px] font-black uppercase tracking-wider text-slate-500">Minimum Meaningful Words</span>}
                         />
                       </div>
                       <div className="relative">
                         <select
-                          value={agent.wordInterruptionMinWords ?? 2}
+                          value={agent.minimumMeaningfulWords ?? 2}
                           disabled={isReadOnly}
-                          onChange={(event) => setAgent({ ...agent, wordInterruptionMinWords: Number(event.target.value) })}
+                          onChange={(event) => setAgent({ ...agent, minimumMeaningfulWords: Number(event.target.value) })}
                           className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3.5 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
                         >
-                          {[1, 2, 3, 4, 5].map((count) => (
+                          {[1, 2, 3].map((count) => (
                             <option key={count} value={count}>{count} {count === 1 ? 'word' : 'words'}</option>
                           ))}
                         </select>
@@ -1757,21 +1779,63 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
 
                     <div>
                       <div className="mb-1.5 flex items-center justify-between gap-3">
+                        <FieldInfoTooltip
+                          id="acknowledgement-phrases-information"
+                          text="While the agent is speaking, these short acknowledgements will not stop its audio. Enter one or more values separated by commas. Maximum 20."
+                          triggerContent={<span className="block text-[11px] font-black uppercase tracking-wider text-slate-500">Acknowledgement / Continue Phrases</span>}
+                        />
+                        <button
+                          type="button"
+                          disabled={isReadOnly || !newAcknowledgementPhrase.trim() || (agent.acknowledgementPhrases?.length ?? 0) >= 20}
+                          onClick={() => addInterruptionPhrases('acknowledgementPhrases', newAcknowledgementPhrase)}
+                          className="zea-trigger-add-button rounded-lg border border-[#a8750d] bg-[#c18a12] px-3 py-1.5 text-xs font-black text-black transition hover:bg-[#ad790d] disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          + Add
+                        </button>
+                      </div>
+                      <input
+                        type="text"
+                        value={newAcknowledgementPhrase}
+                        disabled={isReadOnly || (agent.acknowledgementPhrases?.length ?? 0) >= 20}
+                        onChange={(event) => setNewAcknowledgementPhrase(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
+                            addInterruptionPhrases('acknowledgementPhrases', newAcknowledgementPhrase);
+                          }
+                        }}
+                        placeholder="Example: ம், சரி, ok, சொல்லுங்க"
+                        className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none disabled:bg-slate-50"
+                      />
+                      {(agent.acknowledgementPhrases?.length ?? 0) > 0 && (
+                        <div className="flex flex-wrap gap-2 mt-3">
+                          {agent.acknowledgementPhrases?.map((phrase) => (
+                            <span key={phrase} className="zea-interruption-trigger-chip inline-flex items-center gap-1.5 rounded-full bg-sky-50 border border-sky-100 px-3 py-1.5 text-xs font-bold text-sky-700">
+                              {phrase}
+                              {!isReadOnly && <button type="button" aria-label={`Remove ${phrase}`} onClick={() => setAgent({ ...agent, acknowledgementPhrases: agent.acknowledgementPhrases?.filter((value) => value !== phrase) })} className="zea-trigger-chip-remove inline-flex h-4 w-4 items-center justify-center rounded-full text-sky-700 transition hover:bg-sky-200/70"><X className="h-3 w-3" aria-hidden="true" /></button>}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <div>
+                      <div className="mb-1.5 flex items-center justify-between gap-3">
                         <div className="flex items-center gap-1.5">
                           <FieldInfoTooltip
-                            id="interruption-trigger-words-information"
-                            text="Enter one or more values separated by commas. Maximum 20."
+                            id="explicit-stop-phrases-information"
+                            text="When STT confirms one of these phrases, the agent safely stops speaking and listens. Enter one or more values separated by commas. Maximum 20."
                             triggerContent={(
                               <span className="block text-[11px] font-black uppercase tracking-wider text-slate-500">
-                                Trigger Words or Phrases <span className="normal-case font-semibold text-slate-400">(optional)</span>
+                                Explicit Stop Phrases <span className="normal-case font-semibold text-slate-400">(optional)</span>
                               </span>
                             )}
                           />
                         </div>
                         <button
                           type="button"
-                          disabled={isReadOnly || !newInterruptionTrigger.trim() || (agent.wordInterruptionTriggerWords?.length ?? 0) >= 20}
-                          onClick={() => addInterruptionTriggers()}
+                          disabled={isReadOnly || !newExplicitStopPhrase.trim() || (agent.explicitStopPhrases?.length ?? 0) >= 20}
+                          onClick={() => addInterruptionPhrases('explicitStopPhrases', newExplicitStopPhrase)}
                           className="zea-trigger-add-button rounded-lg border border-[#a8750d] bg-[#c18a12] px-3 py-1.5 text-xs font-black text-black transition hover:bg-[#ad790d] disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           + Add
@@ -1780,22 +1844,22 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       <div>
                         <input
                           type="text"
-                          value={newInterruptionTrigger}
-                          disabled={isReadOnly || (agent.wordInterruptionTriggerWords?.length ?? 0) >= 20}
-                          onChange={(event) => setNewInterruptionTrigger(event.target.value)}
+                          value={newExplicitStopPhrase}
+                          disabled={isReadOnly || (agent.explicitStopPhrases?.length ?? 0) >= 20}
+                          onChange={(event) => setNewExplicitStopPhrase(event.target.value)}
                           onKeyDown={(event) => {
                             if (event.key === 'Enter') {
                               event.preventDefault();
-                              addInterruptionTriggers();
+                              addInterruptionPhrases('explicitStopPhrases', newExplicitStopPhrase);
                             }
                           }}
-                          placeholder="Example: stop, wait, one minute"
+                          placeholder="Example: ஒரு நிமிஷம், wait, stop"
                           className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none disabled:bg-slate-50"
                         />
                       </div>
-                      {(agent.wordInterruptionTriggerWords?.length ?? 0) > 0 && (
+                      {(agent.explicitStopPhrases?.length ?? 0) > 0 && (
                         <div className="flex flex-wrap gap-2 mt-3">
-                          {agent.wordInterruptionTriggerWords?.map((trigger) => (
+                          {agent.explicitStopPhrases?.map((trigger) => (
                             <span key={trigger} className="zea-interruption-trigger-chip inline-flex items-center gap-1.5 rounded-full bg-amber-50 border border-amber-100 px-3 py-1.5 text-xs font-bold text-amber-700">
                               {trigger}
                               {!isReadOnly && (
@@ -1804,7 +1868,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                                   aria-label={`Remove ${trigger}`}
                                   onClick={() => setAgent({
                                     ...agent,
-                                    wordInterruptionTriggerWords: agent.wordInterruptionTriggerWords?.filter((value) => value !== trigger),
+                                    explicitStopPhrases: agent.explicitStopPhrases?.filter((value) => value !== trigger),
                                   })}
                                   className="zea-trigger-chip-remove inline-flex h-4 w-4 items-center justify-center rounded-full text-amber-700 transition hover:bg-amber-200/70 hover:text-amber-900"
                                 >
@@ -1817,7 +1881,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       )}
                     </div>
 
-                    <div>
+                    <div className="hidden" aria-hidden="true">
                       <label className="block text-[11px] font-black text-slate-500 mb-1.5 uppercase tracking-wider">
                         Policy
                       </label>

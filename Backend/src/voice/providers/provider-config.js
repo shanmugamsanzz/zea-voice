@@ -102,6 +102,8 @@ function integrationConfiguration(settings) {
 const sttSettingKeys = [
   'sttMode', 'sttLanguage', 'sttPunctuate', 'sttSmartFormat',
   'timeBasedInterruptionEnabled', 'wordBasedInterruptionEnabled',
+  'speechConfirmationDelayMs', 'minimumMeaningfulWords',
+  'acknowledgementPhrases', 'explicitStopPhrases',
   'wordInterruptionMinWords', 'wordInterruptionTriggerWords', 'interruptionPolicy',
   'sttHighVadSensitivity', 'sttVadSignals', 'sttFlushSignal',
   'sttPositiveSpeechThreshold', 'sttNegativeSpeechThreshold', 'sttMinSpeechFrames',

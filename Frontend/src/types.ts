@@ -129,6 +129,10 @@ export interface VoiceAgent {
   wordInterruptionTriggerWords?: string[];
   interruptionPolicy?: 'any' | 'all';
   interruptionSensitivityLabel?: string;
+  speechConfirmationDelayMs?: number;
+  minimumMeaningfulWords?: number;
+  acknowledgementPhrases?: string[];
+  explicitStopPhrases?: string[];
   llmProvider?: string;
   greetingMode?: 'agent_initiates' | 'user_initiates';
   cachePolicy?: 'persistent_24h' | 'session_only' | 'disabled';

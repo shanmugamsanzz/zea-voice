@@ -19,10 +19,11 @@ export function normalizeSttEvent(input, context = {}) {
   if (input.type === 'partial_transcript' || input.type === 'final_transcript') {
     const text = String(input.text ?? '').trim();
     if (!text) throw new TypeError('Normalized STT transcript text cannot be empty');
+    const hasConfidence = input.confidence !== null && input.confidence !== undefined && input.confidence !== '';
     Object.assign(event, {
       text,
       language: input.language ?? context.language ?? null,
-      confidence: Number.isFinite(Number(input.confidence)) ? Number(input.confidence) : null,
+      confidence: hasConfidence && Number.isFinite(Number(input.confidence)) ? Number(input.confidence) : null,
       isFinal: input.type === 'final_transcript',
     });
   }
