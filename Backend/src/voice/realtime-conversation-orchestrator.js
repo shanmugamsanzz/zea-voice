@@ -81,6 +81,28 @@ function fallbackRecovery(profile) {
       : 'Sorry, I had a temporary problem. Could you please say that again?');
 }
 
+const spokenWordPattern = /[\p{L}\p{N}][\p{L}\p{M}\p{N}'’_-]*/gu;
+const pauseFillerWords = new Set([
+  'hello', 'ok', 'okay', 'sure', 'hmm', 'ம்', 'ஹம்', 'ஆமா', 'சரி', 'சரிங்க',
+]);
+
+function spokenWords(value) {
+  return String(value ?? '').normalize('NFKC').toLocaleLowerCase().match(spokenWordPattern) ?? [];
+}
+
+function isPauseOnlyUtterance(text, matchedPhrase) {
+  const phraseWords = spokenWords(matchedPhrase);
+  const sourceWords = spokenWords(text);
+  if (!phraseWords.length || !sourceWords.length) return false;
+  const remaining = [...sourceWords];
+  for (const phraseWord of phraseWords) {
+    const index = remaining.indexOf(phraseWord);
+    if (index < 0) return false;
+    remaining.splice(index, 1);
+  }
+  return remaining.length > 0 && remaining.every((word) => pauseFillerWords.has(word));
+}
+
 export class RealtimeConversationOrchestrator {
   constructor(mediaSession, dependencies = {}) {
     if (!mediaSession?.callId) throw new TypeError('A Plivo media session is required');
@@ -97,6 +119,7 @@ export class RealtimeConversationOrchestrator {
     this.activeLlm = null;
     this.activeLookaheadTtsAdapters = new Set();
     this.activeLookaheadSchedulers = new Set();
+    this.sttReconnectPromise = null;
     this.interruptionConfirmationPromise = null;
     this.customerUtterance = new CustomerUtteranceBuffer();
     this.shortTurnMerger = new ShortTurnMerger();
@@ -678,7 +701,22 @@ export class RealtimeConversationOrchestrator {
     while (!this.finalized) {
       const frame = await this.audioEngine.readInbound();
       if (!frame) return;
-      this.adapters.stt.sendAudio(frame.data);
+      try {
+        this.adapters.stt.sendAudio(frame.data);
+      } catch (error) {
+        // Sarvam can briefly reset a streaming socket.  Audio frames continue
+        // to arrive from Plivo while the provider reconnects; dropping only
+        // those stale 20 ms frames prevents a second STT_NOT_CONNECTED error
+        // from turning a recoverable reconnect into a spoken fallback error.
+        if (error?.code === 'STT_NOT_CONNECTED' && this.sttReconnectPromise) {
+          this.log.debug({
+            stage: 'stt.frame_dropped_during_reconnect', callId: this.call.id,
+          }, 'Dropped one stale inbound audio frame while STT reconnects');
+          await this.sttReconnectPromise.catch(() => undefined);
+          continue;
+        }
+        throw error;
+      }
     }
   }
 
@@ -815,7 +853,8 @@ export class RealtimeConversationOrchestrator {
         this.customerUtterance.reset();
         return;
       }
-      if (decision.classification === 'explicit_stop') {
+      if (decision.classification === 'explicit_stop'
+        && isPauseOnlyUtterance(completedTurn, decision.matchedTrigger)) {
         this.log.info({
           stage: 'interruption.explicit_stop_pause', callId: this.call.id,
           phrase: decision.matchedTrigger ?? undefined, text: completedTurn,
@@ -832,7 +871,8 @@ export class RealtimeConversationOrchestrator {
     // can you hear me?” from the model.
     if (!outputWasActive) {
       const listeningDecision = this.interruptionCandidate.observeTranscript(completedTurn);
-      if (listeningDecision.classification === 'explicit_stop') {
+      if (listeningDecision.classification === 'explicit_stop'
+        && isPauseOnlyUtterance(completedTurn, listeningDecision.matchedTrigger)) {
         this.log.info({
           stage: 'interruption.explicit_stop_pause', callId: this.call.id,
           phrase: listeningDecision.matchedTrigger ?? undefined, text: completedTurn,
@@ -1251,6 +1291,12 @@ export class RealtimeConversationOrchestrator {
       },
       usageDirection: this.call.direction,
     }, { registry: this.registry, adapter: this.adapters.llm, skipDefaultRegistration: true });
+    this.log.info({
+      stage: 'llm.prompt_prepared', callId: this.call.id,
+      promptCharacters: session.promptCharacters,
+      configuredBudgetCharacters: env.VOICE_LLM_PROMPT_BUDGET_CHARS,
+      historyMessages: Math.min((history ?? []).length, env.LLM_MAX_HISTORY_MESSAGES),
+    }, 'Voice LLM prompt prepared within the configured runtime budget');
     this.activeLlm = session;
     let text = '';
     let toolCalls = [];
@@ -2299,9 +2345,9 @@ export class RealtimeConversationOrchestrator {
       if (!this.mediaSession.closed) this.mediaSession.close(1011, 'voice runtime failed');
       return;
     }
-    await this.#cancelActive(`${stage}_recovery`);
     if (stage === 'stt' && error?.retryable) {
-      try {
+      const reconnect = (async () => {
+        await this.#cancelActive(`${stage}_recovery`);
         // A provider error can leave the WebSocket technically open but unable
         // to accept audio. Replace it before reconnecting rather than letting
         // connect() reuse the poisoned socket.
@@ -2309,6 +2355,10 @@ export class RealtimeConversationOrchestrator {
         this.customerUtterance.reset();
         this.interruptionCandidate.reset();
         await this.adapters.stt.connect();
+      })();
+      this.sttReconnectPromise = reconnect;
+      try {
+        await reconnect;
         this.providerHealth.record(this.runtimeProfile.agent.tenantId, 'stt', this.runtimeProfile.providers.stt, 'success');
         this.log.info({
           stage: 'stt.reconnected', callId: this.call.id, errorCode: error?.code,
@@ -2318,8 +2368,11 @@ export class RealtimeConversationOrchestrator {
       } catch (reconnectError) {
         this.log.error({ err: reconnectError, stage: 'stt.reconnect_failed', callId: this.call.id }, 'STT reconnect failed after transient provider error');
         return this.#finalize('failed', 'stt_reconnect_failed');
+      } finally {
+        if (this.sttReconnectPromise === reconnect) this.sttReconnectPromise = null;
       }
     }
+    await this.#cancelActive(`${stage}_recovery`);
     const ttsFailed = stage === 'audio_output' || stage.startsWith('tts') || String(error?.code ?? '').startsWith('TTS_');
     if (!ttsFailed && this.controller.state === callStates.LISTENING) {
       try {

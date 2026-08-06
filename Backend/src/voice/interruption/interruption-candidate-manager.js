@@ -27,6 +27,15 @@ function acknowledgementOnly(source, phrases) {
   return covered.every(Boolean);
 }
 
+// These phrases ask the agent to repeat or explain something; they are not
+// requests to pause audio.  A tenant may have saved one of them in an older
+// "stop phrase" list, so protect the live conversation from that legacy
+// configuration rather than dropping a valid customer question.
+function isRepeatOrExplanationPhrase(phrase) {
+  return /(?:மறுபடியும்|மீண்டும்|சொல்லுங்க|சொல்லு|விளக்க|repeat|again|explain)/iu
+    .test(String(phrase ?? '').normalize('NFKC'));
+}
+
 export class InterruptionCandidateManager {
   constructor({ configuration, onConfirm = () => {}, onReject = () => {}, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout }) {
     this.configuration = configuration;
@@ -56,6 +65,7 @@ export class InterruptionCandidateManager {
     const transcriptTokens = tokens(text);
     this.wordCount = transcriptTokens.length;
     this.matchedTrigger = phraseMatches(transcriptTokens, this.configuration.explicitStopPhrases)
+      .filter(({ phrase }) => !isRepeatOrExplanationPhrase(phrase))
       .map(({ phrase }) => phrase)[0] ?? null;
     this.classification = !transcriptTokens.length
       ? 'empty'

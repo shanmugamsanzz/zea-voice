@@ -69,6 +69,7 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
       temperature: runtimeProfile.agent.temperature,
       maxOutputTokens: env.LLM_MAX_OUTPUT_TOKENS,
     }),
+    promptCharacters: systemPrompt.length,
     cancel: (reason = 'barge-in') => llm.cancel(reason),
     close: () => ownsAdapter ? llm.close() : undefined,
   };
