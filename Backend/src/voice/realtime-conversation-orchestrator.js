@@ -1624,11 +1624,22 @@ export class RealtimeConversationOrchestrator {
     }
     await sentencePipeline.waitUntilStarted();
     const playback = await sentencePipeline.finish();
+    // The caller can interrupt while this older LLM/TTS generation is still
+    // completing. Do not commit that stale response into the new turn state.
+    // Otherwise CallController throws VOICE_CALL_NOT_THINKING and the caller
+    // hears the generic recovery message even though their speech was valid.
+    if (this.#isStaleGeneration(epoch)
+      || ![callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) {
+      this.#rejectLateGenerationEvent('llm.response_commit_rejected', epoch, {
+        state: this.controller.state,
+      });
+      return;
+    }
     const answer = playback.spokenText
       || sentencePipeline.completedText()
       || this.#fitTtsMessage(unconstrainedAnswer);
     await this.controller.setAssistantResponse(answer, Date.now(), { sources: sourceTrace.snapshot() });
-    if (epoch !== this.epoch || this.finalized || this.controller.state !== callStates.SPEAKING) return;
+    if (this.#isStaleGeneration(epoch) || this.controller.state !== callStates.SPEAKING) return;
     await this.controller.playbackComplete();
     this.errorCount = 0;
     this.#armInactivity();

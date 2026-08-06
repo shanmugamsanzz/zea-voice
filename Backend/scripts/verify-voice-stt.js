@@ -120,14 +120,15 @@ socket.emit('message', Buffer.from(JSON.stringify({
 socket.emit('message', Buffer.from(JSON.stringify({ type: 'events', data: { signal_type: 'END_SPEECH' } })));
 
 assert.deepEqual(events.map((event) => event.type), [
-  'speech_started', 'partial_transcript', 'final_transcript', 'usage', 'speech_ended',
+  'speech_started', 'partial_transcript', 'partial_transcript', 'speech_ended', 'final_transcript', 'usage',
 ]);
 assert.equal(events[1].isFinal, false);
 assert.equal(events[2].text, 'வணக்கம்');
-assert.equal(events[2].language, 'ta-IN');
-assert.equal(events[3].audioDurationMs, 20);
-assert.equal(events[3].processingLatencyMs, 70);
-assert.equal(events[3].audioBytes, 640);
+assert.equal(events[2].isFinal, false);
+assert.equal(events[4].language, 'ta-IN');
+assert.equal(events[5].audioDurationMs, 20);
+assert.equal(events[5].processingLatencyMs, 70);
+assert.equal(events[5].audioBytes, 640);
 assert.ok(events.every((event, index) => event.sequence === index + 1));
 
 adapter.flush();

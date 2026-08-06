@@ -138,39 +138,12 @@ export function createSarvamSttAdapter({ providerConfig, runtimeContext = {} }) 
   let connected = false;
   let sentBytes = 0;
   let reportedBytes = 0;
+  // Sarvam may send transcript text before END_SPEECH without marking it
+  // `is_final`. Keep it as a partial for fast semantic barge-in and publish
+  // one final turn only after the provider confirms speech has ended.
+  let pendingTranscript = null;
 
-  function publishProviderMessage(raw) {
-    let message;
-    try { message = JSON.parse(raw.toString('utf8')); } catch {
-      channel.publish(providerError(new Error('Sarvam STT returned invalid JSON')));
-      return;
-    }
-    const data = message.data ?? message;
-    const signal = String(data.signal_type ?? data.signalType ?? message.signal_type ?? message.type ?? '').toUpperCase();
-    const requestId = data.request_id ?? data.requestId ?? message.request_id ?? null;
-    if (signal === 'START_SPEECH' || signal === 'SPEECH_START') {
-      channel.publish({ type: 'speech_started', requestId });
-      return;
-    }
-    if (signal === 'END_SPEECH' || signal === 'SPEECH_END') {
-      channel.publish({ type: 'speech_ended', requestId });
-      return;
-    }
-    if (message.type === 'error' || data.error) {
-      channel.publish(providerError(new Error(data.message ?? data.error?.message ?? data.error ?? 'Sarvam STT failed')));
-      return;
-    }
-    const text = String(data.transcript ?? data.translation ?? data.text ?? '').trim();
-    if (!text) return;
-    const partial = data.is_final === false || data.isFinal === false
-      || ['partial', 'interim', 'partial_transcript'].includes(String(message.type).toLowerCase());
-    channel.publish({
-      type: partial ? 'partial_transcript' : 'final_transcript',
-      text, requestId,
-      language: data.language_code ?? data.languageCode ?? configuration.language,
-      confidence: data.confidence,
-    });
-    if (partial) return;
+  function publishUsage(requestId, data = {}) {
     const metrics = data.metrics ?? {};
     const segmentBytes = Math.max(0, sentBytes - reportedBytes);
     reportedBytes = sentBytes;
@@ -183,6 +156,68 @@ export function createSarvamSttAdapter({ providerConfig, runtimeContext = {} }) 
       processingLatencyMs: Number(metrics.processing_latency ?? metrics.processingLatency ?? 0) * 1000,
       audioBytes: segmentBytes,
     });
+  }
+
+  function publishProviderMessage(raw) {
+    let message;
+    try { message = JSON.parse(raw.toString('utf8')); } catch {
+      channel.publish(providerError(new Error('Sarvam STT returned invalid JSON')));
+      return;
+    }
+    const data = message.data ?? message;
+    const signal = String(data.signal_type ?? data.signalType ?? message.signal_type ?? message.type ?? '').toUpperCase();
+    const requestId = data.request_id ?? data.requestId ?? message.request_id ?? null;
+    if (signal === 'START_SPEECH' || signal === 'SPEECH_START') {
+      pendingTranscript = null;
+      channel.publish({ type: 'speech_started', requestId });
+      return;
+    }
+    if (signal === 'END_SPEECH' || signal === 'SPEECH_END') {
+      const text = String(data.transcript ?? data.translation ?? data.text ?? '').trim();
+      if (text) {
+        pendingTranscript = {
+          text,
+          requestId,
+          language: data.language_code ?? data.languageCode ?? configuration.language,
+          confidence: data.confidence ?? null,
+          usageData: data,
+        };
+      }
+      channel.publish({ type: 'speech_ended', requestId });
+      if (pendingTranscript) {
+        const { usageData, ...finalTranscript } = pendingTranscript;
+        channel.publish({ type: 'final_transcript', ...finalTranscript });
+        publishUsage(finalTranscript.requestId ?? requestId, usageData ?? data);
+        pendingTranscript = null;
+      }
+      return;
+    }
+    if (message.type === 'error' || data.error) {
+      channel.publish(providerError(new Error(data.message ?? data.error?.message ?? data.error ?? 'Sarvam STT failed')));
+      return;
+    }
+    const text = String(data.transcript ?? data.translation ?? data.text ?? '').trim();
+    if (!text) return;
+    const eventType = String(data.type ?? data.event ?? data.event_type ?? message.type ?? '').toLowerCase();
+    const explicitlyFinal = data.is_final === true || data.isFinal === true || data.final === true
+      || ['final', 'final_transcript', 'transcript_final', 'completed'].includes(eventType);
+    const transcript = {
+      text,
+      requestId,
+      language: data.language_code ?? data.languageCode ?? configuration.language,
+      confidence: data.confidence ?? null,
+      usageData: data,
+    };
+    if (!explicitlyFinal) {
+      pendingTranscript = transcript;
+      const { usageData, ...partialTranscript } = transcript;
+      channel.publish({ type: 'partial_transcript', ...partialTranscript });
+      return;
+    }
+    pendingTranscript = null;
+    const { usageData, ...finalTranscript } = transcript;
+    channel.publish({ type: 'final_transcript', ...finalTranscript });
+    publishUsage(requestId, data);
   }
 
   async function connect() {
