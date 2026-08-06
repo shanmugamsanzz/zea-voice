@@ -450,6 +450,7 @@ llm.wasCancelled = false;
 stt.publish({ type: 'final_transcript', text: 'slow request', language: 'en', isFinal: true });
 await waitFor(() => orchestrator.controller.state === 'thinking', 'Slow turn did not start');
 stt.publish({ type: 'speech_started' });
+stt.publish({ type: 'partial_transcript', text: 'please wait', language: 'en', isFinal: false });
 await waitFor(() => orchestrator.controller.state === 'listening', 'Barge-in did not restore listening');
 assert.ok(llm.cancelled > 0);
 assert.ok(tts.cancelled > 0);
@@ -457,7 +458,8 @@ assert.ok(audioEngine.cancelled.includes('caller_barge_in'));
 
 llm.wasCancelled = false;
 const requestsBeforeUnconfiguredEndPhrase = llm.requests.length;
-stt.publish({ type: 'final_transcript', text: 'goodbye', language: 'en', isFinal: true });
+stt.publish({ type: 'speech_started' });
+stt.publish({ type: 'final_transcript', text: 'goodbye now', language: 'en', isFinal: true });
 await waitFor(() => llm.requests.length > requestsBeforeUnconfiguredEndPhrase,
   'An unconfigured phrase was not handled as a normal caller turn');
 await waitFor(() => orchestrator.controller.state === 'listening',

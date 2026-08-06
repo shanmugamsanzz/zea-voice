@@ -162,6 +162,10 @@ const envSchema = z.object({
   LLM_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(16).max(8192).default(300),
   LLM_MAX_HISTORY_MESSAGES: z.coerce.number().int().min(0).max(50).default(12),
   LLM_SYSTEM_PROMPT_MAX_CHARS: z.coerce.number().int().min(2000).max(100000).default(40000),
+  // A voice call needs a much smaller working prompt than an API/chat request.
+  // It keeps first-token latency predictable while preserving the agent's
+  // instructions, caller context, and the selected knowledge excerpts.
+  VOICE_LLM_PROMPT_BUDGET_CHARS: z.coerce.number().int().min(4000).max(40000).default(12000),
   LLM_KNOWLEDGE_CONTEXT_MAX_CHARS: z.coerce.number().int().min(500).max(50000).default(12000),
   TTS_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(30000),
   TTS_SPEED_MONITOR_ENABLED: booleanFromString.default(true),

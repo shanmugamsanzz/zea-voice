@@ -23,6 +23,7 @@ import { resolveInterruptionConfiguration } from './interruption/interruption-co
 import { InterruptionCandidateManager } from './interruption/interruption-candidate-manager.js';
 import { CustomerUtteranceBuffer } from './interruption/customer-utterance-buffer.js';
 import { validateFinalCustomerTurn } from './interruption/final-turn-validator.js';
+import { ShortTurnMerger } from './interruption/short-turn-merger.js';
 import { greetingModes, resolveInteractionConfiguration } from './interaction/interaction-config.js';
 import { resolveCallContextId } from './interaction/context-id-resolver.js';
 import { createContextCachePolicy, publicContextCacheMetadata } from './interaction/context-cache-policy.js';
@@ -98,6 +99,7 @@ export class RealtimeConversationOrchestrator {
     this.activeLookaheadSchedulers = new Set();
     this.interruptionConfirmationPromise = null;
     this.customerUtterance = new CustomerUtteranceBuffer();
+    this.shortTurnMerger = new ShortTurnMerger();
     this.recentFinalTurns = new Map();
     this.cancelledEpochs = new Set();
     this.activeCancellationPromise = null;
@@ -112,6 +114,7 @@ export class RealtimeConversationOrchestrator {
         lateGenerationEventsRejected: 0, transcriptFragments: 0, finalTurns: 0,
         samples: [],
       },
+      shortTurns: { deferred: 0, merged: 0, discarded: 0 },
     };
     this.followUpOpeningSources = [];
     this.llmCircuitBreaker = new LlmCircuitBreaker();
@@ -766,8 +769,15 @@ export class RealtimeConversationOrchestrator {
     this.audioEngine?.setCallerSpeaking?.(false);
     this.#clearInactivity();
     if (!event.bufferedFinal) this.customerUtterance.observeFinal(event.text, event.confidence);
+    // `final_transcript` is a provider-neutral endpoint. Most adapters also
+    // emit speech_ended first, but accepting a final event on its own keeps a
+    // valid caller question from waiting forever when a provider omits that
+    // separate signal.
+    if (!this.customerUtterance.speechEnded) this.customerUtterance.markSpeechEnded();
     if (!this.customerUtterance.ready || !this.customerUtterance.markFinalProcessed()) return;
-    const completedTurn = this.customerUtterance.text;
+    const rawCompletedTurn = this.customerUtterance.text;
+    const completedTurn = this.shortTurnMerger.combine(rawCompletedTurn);
+    if (completedTurn !== rawCompletedTurn) this.runtimeMetrics.shortTurns.merged += 1;
     const finalConfidence = this.customerUtterance.finalConfidence;
     this.runtimeMetrics.interruptions.finalTurns += 1;
     this.log.info({
@@ -805,15 +815,35 @@ export class RealtimeConversationOrchestrator {
         this.customerUtterance.reset();
         return;
       }
-      if (decision.classification === 'explicit_stop' && decision.stopPhraseOnly) {
+      if (decision.classification === 'explicit_stop') {
         this.log.info({
-          stage: 'interruption.explicit_stop_listening', callId: this.call.id,
+          stage: 'interruption.explicit_stop_pause', callId: this.call.id,
           phrase: decision.matchedTrigger ?? undefined, text: completedTurn,
-        }, 'Caller requested the agent to pause; waiting for the next customer turn');
+        }, 'Caller requested the agent to pause; waiting silently for the next customer turn');
         this.interruptionCandidate.reset();
         this.customerUtterance.reset();
+        this.shortTurnMerger.clear();
+        this.#armInactivity();
         return;
       }
+    }
+    // The caller may say “wait” after the previous audio has finished. This
+    // is not an LLM question. Pause silently instead of generating “Hello,
+    // can you hear me?” from the model.
+    if (!outputWasActive) {
+      const listeningDecision = this.interruptionCandidate.observeTranscript(completedTurn);
+      if (listeningDecision.classification === 'explicit_stop') {
+        this.log.info({
+          stage: 'interruption.explicit_stop_pause', callId: this.call.id,
+          phrase: listeningDecision.matchedTrigger ?? undefined, text: completedTurn,
+        }, 'Caller requested the agent to pause while listening');
+        this.interruptionCandidate.reset();
+        this.customerUtterance.reset();
+        this.shortTurnMerger.clear();
+        this.#armInactivity();
+        return;
+      }
+      this.interruptionCandidate.reset();
     }
     this.interruptionCandidate.reset();
     if (this.controller.state !== callStates.LISTENING || !completedTurn.trim()) {
@@ -837,9 +867,18 @@ export class RealtimeConversationOrchestrator {
         reason: validation.reason, wordCount: validation.wordCount ?? 0,
         confidence: validation.confidence ?? finalConfidence ?? undefined,
       }, 'Final STT turn was not sent to Knowledge or LLM');
+      if (!outputWasActive && ['too_short', 'incomplete'].includes(validation.reason)) {
+        this.shortTurnMerger.defer(completedTurn, finalConfidence);
+        this.runtimeMetrics.shortTurns.deferred += 1;
+        this.log.debug({
+          stage: 'stt.short_turn_deferred', callId: this.call.id,
+          reason: validation.reason, text: completedTurn,
+        }, 'Short STT fragment deferred briefly for the next final transcript');
+      } else this.runtimeMetrics.shortTurns.discarded += 1;
       this.customerUtterance.reset();
       return;
     }
+    this.shortTurnMerger.clear();
     if (this.#isDuplicateFinalTurn(validation.text)) {
       this.log.info({
         stage: 'stt.final_turn_ignored', callId: this.call.id, reason: 'duplicate',

@@ -55,6 +55,7 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
     usageDirection: input.usageDirection,
     context: input.context ?? {},
     knowledge: input.knowledge ?? { found: false, route: 'none' },
+    maxPromptChars: env.VOICE_LLM_PROMPT_BUDGET_CHARS,
   });
   const messages = [
     { role: 'system', content: systemPrompt },

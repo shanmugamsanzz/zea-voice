@@ -3,6 +3,7 @@ import { InterruptionCandidateManager } from '../src/voice/interruption/interrup
 import { resolveInterruptionConfiguration } from '../src/voice/interruption/interruption-config.js';
 import { CustomerUtteranceBuffer } from '../src/voice/interruption/customer-utterance-buffer.js';
 import { validateFinalCustomerTurn } from '../src/voice/interruption/final-turn-validator.js';
+import { ShortTurnMerger } from '../src/voice/interruption/short-turn-merger.js';
 
 function createCandidate(configuration) {
   let now = 0;
@@ -89,6 +90,17 @@ assert.equal(buffer.finalConfidence, null, 'Missing provider confidence must rem
 assert.equal(buffer.markFinalProcessed(), true);
 assert.equal(buffer.markFinalProcessed(), false, 'Repeated final STT events must not create a second customer turn');
 assert.equal(buffer.text, 'எனக்கு வந்து cardiac package பற்றி சொல்லுங்க');
+
+// Provider-finalized micro-fragments are joined only during a short window;
+// they are not streamed frame-by-frame to the LLM.
+let mergeNow = 0;
+const merger = new ShortTurnMerger({ windowMs: 1200, now: () => mergeNow });
+merger.defer('silver package');
+mergeNow = 700;
+assert.equal(merger.combine('price sollunga'), 'silver package price sollunga');
+merger.defer('old fragment');
+mergeNow = 2000;
+assert.equal(merger.combine('new question'), 'new question');
 
 console.log(JSON.stringify({
   success: true,
