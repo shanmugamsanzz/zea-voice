@@ -14,6 +14,12 @@ import { DocumentVersionPanel } from './DocumentVersionPanel';
 import { PronunciationGroupManager } from './PronunciationGroupManager';
 import { AmbienceManager } from './AmbienceManager';
 import { TableActionsMenu } from '../common/TableActionsMenu';
+import {
+  KNOWLEDGE_SOURCE_MAX_BYTES,
+  knowledgeSourceDisplayName,
+  knowledgeSourceUploadError,
+  validateKnowledgeSourceFile,
+} from './knowledgeSourceFile';
 import { 
   Bot, 
   Settings, 
@@ -87,7 +93,6 @@ type KnowledgeBaseStatus = 'draft' | 'processing' | 'ready' | 'partially_failed'
 type KnowledgeDocumentType = 'faq' | 'catalog' | 'workflow_rules' | 'conversation_script' | 'general_knowledge';
 type SelectedKnowledgeFile = { name: string; size: number; type: string };
 
-const KNOWLEDGE_PDF_MAX_BYTES = 25 * 1024 * 1024;
 const DEFAULT_ACKNOWLEDGEMENT_PHRASES = ['ம்', 'ஹம்', 'ஆமா', 'சரி', 'ok', 'okay', 'sure', 'சொல்லுங்க'];
 const DEFAULT_EXPLICIT_STOP_PHRASES = ['நிறுத்துங்க', 'ஒரு நிமிஷம்', 'கொஞ்சம் இருங்க', 'wait', 'stop', 'வேண்டாம்'];
 const knowledgeDocumentCategories: Array<{
@@ -1106,13 +1111,11 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     }
   };
 
-  const selectKnowledgePdf = (documentType: KnowledgeDocumentType, file: File | null) => {
+  const selectKnowledgeSource = async (documentType: KnowledgeDocumentType, file: File | null) => {
     if (!file) return;
     let validationError = '';
-    if (!selectedKnowledgeBase) validationError = 'Select a Knowledge Base before choosing a PDF.';
-    else if (!file.name.toLowerCase().endsWith('.pdf') || (file.type && file.type !== 'application/pdf')) validationError = 'Only PDF documents are supported in Phase 1.';
-    else if (file.size <= 0) validationError = 'The selected PDF is empty.';
-    else if (file.size > KNOWLEDGE_PDF_MAX_BYTES) validationError = `PDF must not exceed ${formatFileSize(KNOWLEDGE_PDF_MAX_BYTES)}.`;
+    if (!selectedKnowledgeBase) validationError = 'Select a Knowledge Base before choosing a file.';
+    else validationError = await validateKnowledgeSourceFile(file);
 
     if (validationError) {
       knowledgeFileObjects.current[documentType] = null;
@@ -1126,16 +1129,16 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       [documentType]: { name: file.name, size: file.size, type: file.type },
     }));
     setKnowledgeFileErrors((current) => ({ ...current, [documentType]: undefined }));
-    window.setTimeout(() => { void uploadKnowledgePdf(documentType); }, 0);
+    window.setTimeout(() => { void uploadKnowledgeSource(documentType); }, 0);
   };
 
-  const removeKnowledgePdf = (documentType: KnowledgeDocumentType) => {
+  const removeKnowledgeSource = (documentType: KnowledgeDocumentType) => {
     knowledgeFileObjects.current[documentType] = null;
     setKnowledgeFiles((current) => ({ ...current, [documentType]: null }));
     setKnowledgeFileErrors((current) => ({ ...current, [documentType]: undefined }));
   };
 
-  const uploadKnowledgePdf = async (documentType: KnowledgeDocumentType) => {
+  const uploadKnowledgeSource = async (documentType: KnowledgeDocumentType) => {
     const file = knowledgeFileObjects.current[documentType];
     if (!selectedKnowledgeBase || !file || isReadOnly || uploadingKnowledgeCategories[documentType]) return;
     const overlayStartedAt = performance.now();
@@ -1143,7 +1146,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     const form = new FormData();
     form.append('file', file, file.name);
     form.append('documentType', documentType);
-    form.append('displayName', file.name.replace(/\.pdf$/i, '').trim() || category?.title || 'PDF document');
+    form.append('displayName', knowledgeSourceDisplayName(file) || category?.title || 'Knowledge document');
     form.append('metadata', JSON.stringify({
       usageDirection: selectedKnowledgeBase.usageDirection,
       categoryLabel: category?.title,
@@ -1171,11 +1174,11 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       // upload response. The upload endpoint can return before processing and
       // version fields are populated.
       setKnowledgeDocumentPollTick((value) => value + 1);
-      showKnowledgeSuccess(`${category?.title ?? 'Knowledge'} PDF uploaded and queued for processing.`);
+      showKnowledgeSuccess(`${category?.title ?? 'Knowledge'} file uploaded and queued for processing.`);
     } catch (requestError) {
       setKnowledgeFileErrors((current) => ({
         ...current,
-        [documentType]: requestError instanceof Error ? requestError.message : 'PDF could not be uploaded',
+        [documentType]: knowledgeSourceUploadError(requestError, 'Knowledge file could not be uploaded'),
       }));
     } finally {
       const remainingOverlayMs = Math.max(0, 700 - (performance.now() - overlayStartedAt));
@@ -3699,14 +3702,14 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   </button>}
                   {!isReadOnly && !['deleting', 'deleted'].includes(selectedKnowledgeBase.status) && <div className="mt-2 grid grid-cols-2 gap-2"><button type="button" onClick={() => openEditKnowledgeBase(selectedKnowledgeBase)} disabled={knowledgeSaving || knowledgeDeleting} className="rounded-lg border border-violet-200 bg-white px-3 py-2 text-xs font-bold text-violet-700 transition hover:bg-violet-50 disabled:opacity-50">Edit</button><button type="button" onClick={() => { setDeleteKnowledgeBaseConfirmation(''); setShowKnowledgeBaseDeleteDialog(true); }} disabled={knowledgeSaving || knowledgeDeleting} className="rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-bold text-red-600 transition hover:bg-red-50 disabled:opacity-50">Delete</button></div>}
                   {selectedKnowledgeBase.status === 'deleting' && <div className="mt-4 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-red-700">{selectedKnowledgeDeletionJob?.status === 'failed' ? <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : <RefreshCw className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />}<span className="text-[10px] font-semibold">{selectedKnowledgeDeletionJob?.status === 'failed' ? `Cleanup failed: ${selectedKnowledgeDeletionJob.errorMessage || 'The backend will retain the failed job for reconciliation.'}` : ['KNOWLEDGE_DELETE_ACTIVE_CALLS', 'KNOWLEDGE_DELETE_QUEUE_BUSY'].includes(selectedKnowledgeDeletionJob?.errorCode ?? '') ? `Deleting permanently is waiting safely: ${selectedKnowledgeDeletionJob.errorMessage || 'active work is still using this Knowledge Base.'}` : `Deleting permanently (${selectedKnowledgeDeletionJob?.progress ?? 0}%): removing documents, approved data, stored files and vectors. The Knowledge Base cannot be changed or assigned.`}</span></div>}
-                  <div className="mt-4 rounded-lg border border-dashed border-slate-300 bg-white p-4 text-center text-[11px] font-semibold text-slate-400">Choose one of the five PDF categories below to add knowledge.</div>
+                  <div className="mt-4 rounded-lg border border-dashed border-slate-300 bg-white p-4 text-center text-[11px] font-semibold text-slate-400">Choose one of the five categories below, then upload a PDF or UTF-8 TXT file.</div>
                 </div>}
               </div>
             </div>}
 
             {selectedKnowledgeBase && <section className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4 sm:p-5">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-                <div><span className="text-[10px] font-black uppercase tracking-wider text-violet-600">Phase 1 PDF Knowledge</span><h4 className="mt-1 text-base font-bold text-slate-800">Five-category document workspace</h4><p className="mt-1 text-xs font-medium text-slate-500">Choose the category that matches the PDF content. Auto-detection is not used in Phase 1.</p></div>
+                <div><span className="text-[10px] font-black uppercase tracking-wider text-violet-600">PDF and UTF-8 TXT Knowledge</span><h4 className="mt-1 text-base font-bold text-slate-800">Five-category document workspace</h4><p className="mt-1 text-xs font-medium text-slate-500">Choose the category that matches the file content. Auto-detection is not used.</p></div>
                 <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-right"><span className="block text-[9px] font-black uppercase tracking-wider text-slate-400">Files selected</span><strong className="text-sm text-slate-700">{selectedKnowledgeFileCount} / {knowledgeDocumentCategories.length}</strong></div>
               </div>
 
@@ -3726,28 +3729,28 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     <p className="mt-1 text-[11px] font-medium leading-4 text-slate-500">{category.description}</p>
                     <p className="mt-2 text-[10px] leading-4 text-slate-400">{category.examples}</p>
 
-                    <label onDragOver={(event) => { if (disabled) return; event.preventDefault(); setDraggedKnowledgeCategory(category.type); }} onDragLeave={() => setDraggedKnowledgeCategory(null)} onDrop={(event) => { if (disabled) return; event.preventDefault(); setDraggedKnowledgeCategory(null); selectKnowledgePdf(category.type, event.dataTransfer.files[0] ?? null); }}
+                    <label onDragOver={(event) => { if (disabled) return; event.preventDefault(); setDraggedKnowledgeCategory(category.type); }} onDragLeave={() => setDraggedKnowledgeCategory(null)} onDrop={(event) => { if (disabled) return; event.preventDefault(); setDraggedKnowledgeCategory(null); void selectKnowledgeSource(category.type, event.dataTransfer.files[0] ?? null); }}
                       className={`mt-4 flex cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed px-3 py-4 text-center transition ${disabled ? 'cursor-not-allowed border-slate-200 bg-slate-50 opacity-60' : dragging ? 'border-violet-500 bg-violet-50' : 'border-slate-300 bg-slate-50 hover:border-violet-400 hover:bg-violet-50/40'}`}>
-                      <Upload className="h-5 w-5 text-slate-400" /><span className="mt-2 text-[11px] font-bold text-slate-600">{file ? 'Replace selected PDF' : 'Select or drop PDF'}</span><span className="mt-1 text-[9px] font-medium text-slate-400">PDF only · Maximum {formatFileSize(KNOWLEDGE_PDF_MAX_BYTES)}</span>
-                      <input key={`${selectedKnowledgeBase.id}-${category.type}-${file?.name ?? 'empty'}`} type="file" accept=".pdf,application/pdf" disabled={disabled} className="sr-only" onChange={(event) => selectKnowledgePdf(category.type, event.target.files?.[0] ?? null)} />
+                      <Upload className="h-5 w-5 text-slate-400" /><span className="mt-2 text-[11px] font-bold text-slate-600">{file ? 'Replace selected file' : 'Select or drop a file'}</span><span className="mt-1 text-[9px] font-medium text-slate-400">PDF or UTF-8 TXT · Maximum {formatFileSize(KNOWLEDGE_SOURCE_MAX_BYTES)}</span>
+                      <input key={`${selectedKnowledgeBase.id}-${category.type}-${file?.name ?? 'empty'}`} type="file" accept=".pdf,application/pdf,.txt,text/plain" disabled={disabled} className="sr-only" onChange={(event) => { void selectKnowledgeSource(category.type, event.target.files?.[0] ?? null); }} />
                     </label>
 
                     <div className="mt-3">
-                      {file && <div className="flex items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3"><div className="min-w-0"><span className="block truncate text-[11px] font-bold text-emerald-800" title={file.name}>{file.name}</span><span className="mt-0.5 block text-[9px] font-semibold text-emerald-600">{formatFileSize(file.size)} · Ready for upload</span></div>{!disabled && <button type="button" aria-label={`Remove ${category.title} PDF`} onClick={() => removeKnowledgePdf(category.type)} className="shrink-0 rounded-md p-1 text-emerald-700 transition hover:bg-emerald-100 hover:text-red-600"><X className="h-4 w-4" /></button>}</div>}
+                      {file && <div className="flex items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3"><div className="min-w-0"><span className="block truncate text-[11px] font-bold text-emerald-800" title={file.name}>{file.name}</span><span className="mt-0.5 block text-[9px] font-semibold text-emerald-600">{formatFileSize(file.size)} · Ready for upload</span></div>{!disabled && <button type="button" aria-label={`Remove ${category.title} file`} onClick={() => removeKnowledgeSource(category.type)} className="shrink-0 rounded-md p-1 text-emerald-700 transition hover:bg-emerald-100 hover:text-red-600"><X className="h-4 w-4" /></button>}</div>}
                       {fileError && <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-red-700"><AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" /><span className="text-[10px] font-semibold leading-4">{fileError}</span></div>}
-                      {!file && !fileError && <div className="rounded-lg border border-dashed border-slate-200 px-3 py-2 text-center text-[9px] font-semibold text-slate-400">No PDF selected</div>}
-                      {file && !isReadOnly && <button type="button" onClick={() => void uploadKnowledgePdf(category.type)} disabled={disabled}
+                      {!file && !fileError && <div className="rounded-lg border border-dashed border-slate-200 px-3 py-2 text-center text-[9px] font-semibold text-slate-400">No file selected</div>}
+                      {file && !isReadOnly && <button type="button" onClick={() => void uploadKnowledgeSource(category.type)} disabled={disabled}
                         className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-violet-600 px-3 py-2 text-[11px] font-bold text-white transition hover:bg-violet-700 disabled:cursor-wait disabled:opacity-60">
-                        {uploading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}{uploading ? 'Uploading to B2...' : 'Upload PDF'}
+                        {uploading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}{uploading ? 'Uploading to B2...' : 'Upload File'}
                       </button>}
-                      {uploading && <div className="mt-2 rounded-lg border border-violet-100 bg-violet-50 p-3"><div className="mb-1.5 flex items-center justify-between text-[9px] font-bold text-violet-700"><span>Uploading PDF securely</span><span>{uploadProgress}%</span></div><div className="h-1.5 overflow-hidden rounded-full bg-violet-100"><div className="h-full rounded-full bg-gradient-to-r from-violet-600 to-amber-500 transition-all duration-300" style={{ width: `${uploadProgress}%` }} /></div><p className="mt-1.5 text-[9px] font-medium text-violet-600">Keep this page open. Extraction progress will appear below after storage completes.</p></div>}
+                      {uploading && <div className="mt-2 rounded-lg border border-violet-100 bg-violet-50 p-3"><div className="mb-1.5 flex items-center justify-between text-[9px] font-bold text-violet-700"><span>Uploading file securely</span><span>{uploadProgress}%</span></div><div className="h-1.5 overflow-hidden rounded-full bg-violet-100"><div className="h-full rounded-full bg-gradient-to-r from-violet-600 to-amber-500 transition-all duration-300" style={{ width: `${uploadProgress}%` }} /></div><p className="mt-1.5 text-[9px] font-medium text-violet-600">Keep this page open. Extraction progress will appear below after storage completes.</p></div>}
                       {latestDocument && <div className="mt-2 border-t border-slate-100 pt-2 text-[9px] font-semibold text-slate-400">{categoryDocuments.length} uploaded document{categoryDocuments.length === 1 ? '' : 's'} · Latest v{latestDocument.currentVersion?.versionNumber ?? 1}</div>}
                     </div>
                   </article>;
                 })}
               </div>
 
-              <div className="mt-4 flex items-start gap-2 rounded-lg border border-blue-100 bg-blue-50 p-3 text-blue-700"><Info className="mt-0.5 h-3.5 w-3.5 shrink-0" /><p className="text-[10px] font-semibold leading-4">Selecting a file keeps it local. Clicking Upload PDF stores it in B2, creates the tenant-scoped database record and queues text extraction.</p></div>
+              <div className="mt-4 flex items-start gap-2 rounded-lg border border-blue-100 bg-blue-50 p-3 text-blue-700"><Info className="mt-0.5 h-3.5 w-3.5 shrink-0" /><p className="text-[10px] font-semibold leading-4">Supported formats: PDF and UTF-8 TXT. For Tamil/Tanglish structured documents, TXT is recommended because it preserves the exact Unicode text and line structure. Selecting a file keeps it local; uploading stores it in tenant-isolated B2 and queues the existing category processor.</p></div>
             </section>}
 
             {selectedKnowledgeBase && <section className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5">
@@ -3755,7 +3758,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
 
               {knowledgeDocumentsError && <div className="mt-4 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-red-700"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span className="text-[11px] font-semibold">{knowledgeDocumentsError}</span></div>}
               {knowledgeDocumentsLoading && knowledgeDocuments.length === 0 && <div className="mt-4 space-y-2">{[1, 2, 3].map((item) => <div key={item} className="h-20 animate-pulse rounded-xl bg-slate-100" />)}</div>}
-              {!knowledgeDocumentsLoading && !knowledgeDocumentsError && knowledgeDocuments.length === 0 && <div className="mt-4 rounded-xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-xs font-semibold text-slate-400">No PDF has been uploaded to this Knowledge Base.</div>}
+              {!knowledgeDocumentsLoading && !knowledgeDocumentsError && knowledgeDocuments.length === 0 && <div className="mt-4 rounded-xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-xs font-semibold text-slate-400">No knowledge file has been uploaded to this Knowledge Base.</div>}
 
               {knowledgeDocuments.length > 0 && <div className="mt-4 space-y-3">{knowledgeDocuments.map((document) => {
                 const category = knowledgeDocumentCategories.find((item) => item.type === document.documentType);
@@ -3765,7 +3768,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                 const processing = ['uploading', 'queued', 'processing'].includes(documentStatus) || document.processingJob?.status === 'queued' || document.processingJob?.status === 'running';
                 const errorMessage = document.processingJob?.errorMessage;
                 return <article key={document.id} className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="truncate text-xs font-bold text-slate-800" title={document.displayName || 'PDF document'}>{document.displayName || 'PDF document'}</span><span className="rounded bg-white px-1.5 py-0.5 font-mono text-[8px] font-bold text-slate-500">{category?.title ?? document.documentType ?? 'Knowledge'}</span></div><p className="mt-1 text-[9px] font-semibold text-slate-400">{document.originalFilename || 'PDF document'} · {formatFileSize(Number(document.sizeBytes))} · Version {document.currentVersion?.versionNumber ?? 1}</p></div><div className="flex shrink-0 items-start gap-2"><span className={`w-fit rounded-md px-2 py-1 text-[9px] font-black uppercase ${knowledgeDocumentStatusStyles[documentStatus]}`}>{knowledgeStatusLabel(documentStatus)}</span><TableActionsMenu ariaLabel={`Actions for ${document.displayName || 'PDF document'}`} actions={[
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="truncate text-xs font-bold text-slate-800" title={document.displayName || 'Knowledge document'}>{document.displayName || 'Knowledge document'}</span><span className="rounded bg-white px-1.5 py-0.5 font-mono text-[8px] font-bold text-slate-500">{category?.title ?? document.documentType ?? 'Knowledge'}</span><span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[8px] font-bold uppercase text-slate-500">{document.mimeType === 'text/plain' ? 'TXT' : 'PDF'}</span></div><p className="mt-1 text-[9px] font-semibold text-slate-400">{document.originalFilename || 'Knowledge document'} · {formatFileSize(Number(document.sizeBytes))} · Version {document.currentVersion?.versionNumber ?? 1}</p></div><div className="flex shrink-0 items-start gap-2"><span className={`w-fit rounded-md px-2 py-1 text-[9px] font-black uppercase ${knowledgeDocumentStatusStyles[documentStatus]}`}>{knowledgeStatusLabel(documentStatus)}</span><TableActionsMenu ariaLabel={`Actions for ${document.displayName || 'Knowledge document'}`} actions={[
                     { label: knowledgeDocumentsLoading ? 'Refreshing...' : 'Refresh Document', disabled: knowledgeDocumentsLoading, onClick: () => setKnowledgeDocumentPollTick((value) => value + 1) },
                     { label: 'Version History', disabled: document.status === 'deleting', onClick: () => { setVersionDocumentId(document.id); setReviewDocumentId(null); } },
                     ...(['review_required', 'ready'].includes(document.status) ? [{ label: document.status === 'ready' ? 'Review Approved Records' : 'Review Extracted Records', onClick: () => { setReviewDocumentId(document.id); setVersionDocumentId(null); } }] : []),
@@ -3876,12 +3879,12 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
             <div style={{ width: 64, height: 64, margin: '0 auto', borderRadius: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6d28d9', backgroundColor: '#ede9fe' }}>
               <Upload className="h-7 w-7 animate-bounce" />
             </div>
-            <h4 style={{ margin: '20px 0 0', fontSize: 18, lineHeight: 1.4, fontWeight: 800, color: '#0f172a' }}>PDF uploading</h4>
+            <h4 style={{ margin: '20px 0 0', fontSize: 18, lineHeight: 1.4, fontWeight: 800, color: '#0f172a' }}>Knowledge file uploading</h4>
             <p style={{ margin: '6px 0 0', fontSize: 12, lineHeight: 1.6, fontWeight: 600, color: '#64748b' }}>Please wait while your knowledge document is uploaded securely.</p>
             <div style={{ marginTop: 20, padding: 14, borderRadius: 12, border: '1px solid #e2e8f0', backgroundColor: '#f8fafc', textAlign: 'left' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}><FileText className="h-5 w-5 shrink-0 text-violet-600" /><div style={{ minWidth: 0 }}><span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12, fontWeight: 800, color: '#1e293b' }} title={activeKnowledgeUploadFile?.name}>{activeKnowledgeUploadFile?.name ?? 'PDF document'}</span><span style={{ display: 'block', marginTop: 3, fontSize: 10, fontWeight: 600, color: '#94a3b8' }}>{activeKnowledgeUploadCategory.title}{activeKnowledgeUploadFile ? ` · ${formatFileSize(activeKnowledgeUploadFile.size)}` : ''}</span></div></div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}><FileText className="h-5 w-5 shrink-0 text-violet-600" /><div style={{ minWidth: 0 }}><span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12, fontWeight: 800, color: '#1e293b' }} title={activeKnowledgeUploadFile?.name}>{activeKnowledgeUploadFile?.name ?? 'Knowledge document'}</span><span style={{ display: 'block', marginTop: 3, fontSize: 10, fontWeight: 600, color: '#94a3b8' }}>{activeKnowledgeUploadCategory.title}{activeKnowledgeUploadFile ? ` · ${formatFileSize(activeKnowledgeUploadFile.size)}` : ''}</span></div></div>
             </div>
-            <div style={{ marginTop: 20, display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 12, fontWeight: 800, color: '#6d28d9' }}><span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><RefreshCw className="h-4 w-4 animate-spin" />Uploading PDF...</span><span>{activeKnowledgeUploadProgress}%</span></div>
+            <div style={{ marginTop: 20, display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 12, fontWeight: 800, color: '#6d28d9' }}><span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><RefreshCw className="h-4 w-4 animate-spin" />Uploading file...</span><span>{activeKnowledgeUploadProgress}%</span></div>
             <div style={{ height: 9, marginTop: 9, overflow: 'hidden', borderRadius: 999, backgroundColor: '#ede9fe' }}><div style={{ width: `${activeKnowledgeUploadProgress}%`, height: '100%', borderRadius: 999, background: 'linear-gradient(90deg,#7c3aed,#dfa822)', transition: 'width 300ms ease-out' }} /></div>
           </div>
         </div>

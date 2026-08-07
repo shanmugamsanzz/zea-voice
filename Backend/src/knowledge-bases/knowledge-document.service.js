@@ -8,6 +8,8 @@ import { deleteAllB2ObjectVersions, deleteB2Object, putB2Object } from '../rag/b
 import { deleteTenantPointsByDocumentVersion } from '../rag/qdrant.client.js';
 import { invalidateTenantKnowledgeCache } from './knowledge-runtime.service.js';
 import { enqueueKnowledgeProcessingJob } from './knowledge-processing.queue.js';
+import { PDF_MIME_TYPE, TEXT_MIME_TYPE } from './knowledge-source-extractor.js';
+import { decodeUtf8Text } from './text-file-extractor.js';
 
 const storage = {
   putObject: putB2Object,
@@ -96,13 +98,26 @@ async function documentRow(client, auth, knowledgeBaseId, documentId) {
   return result.rows[0];
 }
 
-export function knowledgeDocumentObjectKey({ tenantId, knowledgeBaseId, documentId, versionNumber }) {
+const supportedSourceTypes = new Map([
+  [PDF_MIME_TYPE, { extension: '.pdf', kind: 'PDF' }],
+  [TEXT_MIME_TYPE, { extension: '.txt', kind: 'TXT' }],
+]);
+
+function normalizedMimeType(value) {
+  return String(value ?? '').split(';', 1)[0].trim().toLowerCase();
+}
+
+export function knowledgeDocumentObjectKey({
+  tenantId, knowledgeBaseId, documentId, versionNumber, extension = '.pdf',
+}) {
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   for (const [name, value] of Object.entries({ tenantId, knowledgeBaseId, documentId })) {
     if (!uuid.test(value)) throw new TypeError(`${name} must be a UUID`);
   }
   if (!Number.isInteger(versionNumber) || versionNumber < 1) throw new TypeError('versionNumber must be positive');
-  return `tenants/${tenantId}/knowledge-bases/${knowledgeBaseId}/documents/${documentId}/versions/${versionNumber}/source.pdf`;
+  const normalizedExtension = String(extension).toLowerCase();
+  if (!['.pdf', '.txt'].includes(normalizedExtension)) throw new TypeError('extension must be .pdf or .txt');
+  return `tenants/${tenantId}/knowledge-bases/${knowledgeBaseId}/documents/${documentId}/versions/${versionNumber}/source${normalizedExtension}`;
 }
 
 export function validatePdfFile(file) {
@@ -121,6 +136,48 @@ export function validatePdfFile(file) {
   if (file.buffer.subarray(0, 5).toString('ascii') !== '%PDF-') {
     throw new AppError(400, 'The uploaded file does not contain a valid PDF signature', 'PDF_SIGNATURE_INVALID');
   }
+  return { mimeType: PDF_MIME_TYPE, extension: '.pdf', kind: 'PDF' };
+}
+
+export function validateKnowledgeSourceFile(file) {
+  if (!file?.buffer || !Buffer.isBuffer(file.buffer)) {
+    throw new AppError(400, 'A PDF or UTF-8 TXT file is required in the file field', 'KNOWLEDGE_SOURCE_FILE_REQUIRED');
+  }
+  const mimeType = normalizedMimeType(file.mimetype);
+  const sourceType = supportedSourceTypes.get(mimeType);
+  if (!sourceType) {
+    throw new AppError(400, 'Only application/pdf and text/plain files are supported', 'KNOWLEDGE_SOURCE_TYPE_INVALID');
+  }
+  const extension = path.extname(file.originalname ?? '').toLowerCase();
+  if (extension !== sourceType.extension) {
+    throw new AppError(
+      400,
+      `The uploaded ${sourceType.kind} filename must end with ${sourceType.extension}`,
+      'KNOWLEDGE_SOURCE_EXTENSION_INVALID',
+    );
+  }
+  if (file.size < 1 || file.size > env.KNOWLEDGE_PDF_MAX_BYTES || file.size !== file.buffer.length) {
+    throw new AppError(
+      400,
+      `Knowledge source size must be between 1 and ${env.KNOWLEDGE_PDF_MAX_BYTES} bytes`,
+      'KNOWLEDGE_SOURCE_SIZE_INVALID',
+    );
+  }
+  if (mimeType === PDF_MIME_TYPE) return validatePdfFile(file);
+
+  let text;
+  try {
+    text = decodeUtf8Text(file.buffer);
+  } catch {
+    throw new AppError(400, 'TXT files must use valid UTF-8 encoding', 'TEXT_ENCODING_INVALID');
+  }
+  if (text.includes('\u0000')) {
+    throw new AppError(400, 'TXT files cannot contain binary null characters', 'TEXT_BINARY_CONTENT');
+  }
+  if (!text.trim()) {
+    throw new AppError(400, 'TXT files must contain usable text', 'TEXT_CONTENT_EMPTY');
+  }
+  return { mimeType: TEXT_MIME_TYPE, extension: '.txt', kind: 'TXT' };
 }
 
 export function listKnowledgeDocuments(auth, knowledgeBaseId, filters, contextRunner = withTenantContext) {
@@ -163,7 +220,7 @@ export async function uploadKnowledgeDocument(
   contextRunner = withTenantContext,
   queueAdapter = enqueueKnowledgeProcessingJob,
 ) {
-  validatePdfFile(file);
+  const sourceType = validateKnowledgeSourceFile(file);
   await contextRunner(auth, (client) => ensureKnowledgeBase(client, auth, knowledgeBaseId));
 
   const documentId = crypto.randomUUID();
@@ -174,6 +231,7 @@ export async function uploadKnowledgeDocument(
     knowledgeBaseId,
     documentId,
     versionNumber,
+    extension: sourceType.extension,
   });
   const checksumSha256 = crypto.createHash('sha256').update(file.buffer).digest('hex');
   let uploaded = false;
@@ -184,12 +242,13 @@ export async function uploadKnowledgeDocument(
     storedObject = await storageAdapter.putObject({
       key: objectKey,
       body: file.buffer,
-      contentType: 'application/pdf',
+      contentType: sourceType.mimeType,
       metadata: {
         tenant_id: auth.tenantId,
         knowledge_base_id: knowledgeBaseId,
         document_id: documentId,
         checksum_sha256: checksumSha256,
+        source_type: sourceType.kind.toLowerCase(),
       },
     });
     uploaded = true;
@@ -197,15 +256,16 @@ export async function uploadKnowledgeDocument(
     saved = await contextRunner(auth, async (client) => {
       await ensureKnowledgeBase(client, auth, knowledgeBaseId, true);
       const inferredDisplayName = path.basename(file.originalname, path.extname(file.originalname)).trim();
-      const displayName = (input.displayName ?? inferredDisplayName) || 'PDF document';
+      const displayName = (input.displayName ?? inferredDisplayName) || `${sourceType.kind} document`;
       await client.query(
         `INSERT INTO knowledge_documents (
            id, tenant_id, knowledge_base_id, document_type, display_name,
            original_filename, mime_type, size_bytes, status, metadata, created_by, updated_by
-         ) VALUES ($1, $2, $3, $4, $5, $6, 'application/pdf', $7, 'queued', $8::jsonb, $9, $9)`,
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'queued', $9::jsonb, $10, $10)`,
         [
           documentId, auth.tenantId, knowledgeBaseId, input.documentType, displayName,
-          file.originalname.slice(0, 500), file.size, JSON.stringify(input.metadata), auth.userId,
+          file.originalname.slice(0, 500), sourceType.mimeType, file.size,
+          JSON.stringify(input.metadata), auth.userId,
         ],
       );
       await client.query(
@@ -216,7 +276,13 @@ export async function uploadKnowledgeDocument(
         [
           versionId, auth.tenantId, knowledgeBaseId, documentId, versionNumber,
           storedObject.bucket, objectKey, checksumSha256, file.size,
-          JSON.stringify({ source: { etag: storedObject.etag, storageVersionId: storedObject.storageVersionId } }), auth.userId,
+          JSON.stringify({ source: {
+            etag: storedObject.etag,
+            storageVersionId: storedObject.storageVersionId,
+            originalFilename: file.originalname.slice(0, 500),
+            mimeType: sourceType.mimeType,
+            extension: sourceType.extension,
+          } }), auth.userId,
         ],
       );
       const processingJob = await client.query(
@@ -242,7 +308,10 @@ export async function uploadKnowledgeDocument(
         [
           auth.tenantId, auth.workspaceId, auth.userId,
           auth.authType === 'api_key' ? 'api' : 'user', documentId,
-          JSON.stringify({ knowledgeBaseId, documentType: input.documentType, sizeBytes: file.size, checksumSha256 }),
+          JSON.stringify({
+            knowledgeBaseId, documentType: input.documentType, mimeType: sourceType.mimeType,
+            sizeBytes: file.size, checksumSha256,
+          }),
         ],
       );
       return {
@@ -261,9 +330,9 @@ export async function uploadKnowledgeDocument(
     }
     if (error instanceof AppError) throw error;
     if (!uploaded) {
-      throw new AppError(502, 'The PDF could not be stored in Backblaze B2', 'B2_UPLOAD_FAILED');
+      throw new AppError(502, 'The knowledge source could not be stored in Backblaze B2', 'B2_UPLOAD_FAILED');
     }
-    throw new AppError(500, 'PDF metadata could not be saved; the B2 upload was removed', 'KNOWLEDGE_DOCUMENT_SAVE_FAILED');
+    throw new AppError(500, 'Knowledge source metadata could not be saved; the B2 upload was removed', 'KNOWLEDGE_DOCUMENT_SAVE_FAILED');
   }
 
   try {
@@ -363,7 +432,7 @@ export async function uploadKnowledgeDocumentVersion(
   contextRunner = withTenantContext,
   queueAdapter = enqueueKnowledgeProcessingJob,
 ) {
-  validatePdfFile(file);
+  const sourceType = validateKnowledgeSourceFile(file);
   if (!env.B2_BUCKET) throw new AppError(503, 'B2 storage is not configured', 'B2_NOT_CONFIGURED');
   const checksumSha256 = crypto.createHash('sha256').update(file.buffer).digest('hex');
   const reserved = await contextRunner(auth, async (client) => {
@@ -383,7 +452,7 @@ export async function uploadKnowledgeDocumentVersion(
       throw new AppError(409, 'Knowledge document is busy', 'KNOWLEDGE_DOCUMENT_BUSY');
     }
     if (document.rows[0].current_checksum === checksumSha256) {
-      throw new AppError(409, 'Uploaded PDF is identical to the current version', 'KNOWLEDGE_VERSION_UNCHANGED');
+      throw new AppError(409, 'Uploaded file is identical to the current version', 'KNOWLEDGE_VERSION_UNCHANGED');
     }
     const versionNumber = (await client.query(
       `SELECT COALESCE(max(version_number),0)::int + 1 AS next_version
@@ -393,6 +462,7 @@ export async function uploadKnowledgeDocumentVersion(
     const versionId = crypto.randomUUID();
     const objectKey = knowledgeDocumentObjectKey({
       tenantId: auth.tenantId, knowledgeBaseId, documentId, versionNumber,
+      extension: sourceType.extension,
     });
     await client.query(
       `INSERT INTO knowledge_document_versions (
@@ -406,6 +476,7 @@ export async function uploadKnowledgeDocumentVersion(
     );
     return {
       versionId, versionNumber, objectKey, documentType: document.rows[0].document_type,
+      sourceType,
     };
   });
 
@@ -414,13 +485,14 @@ export async function uploadKnowledgeDocumentVersion(
     storedObject = await storageAdapter.putObject({
       key: reserved.objectKey,
       body: file.buffer,
-      contentType: 'application/pdf',
+      contentType: reserved.sourceType.mimeType,
       metadata: {
         tenant_id: auth.tenantId,
         knowledge_base_id: knowledgeBaseId,
         document_id: documentId,
         document_version_id: reserved.versionId,
         checksum_sha256: checksumSha256,
+        source_type: reserved.sourceType.kind.toLowerCase(),
       },
     });
   } catch (error) {
@@ -428,7 +500,7 @@ export async function uploadKnowledgeDocumentVersion(
       'DELETE FROM knowledge_document_versions WHERE tenant_id=$1 AND id=$2 AND is_current=false',
       [auth.tenantId, reserved.versionId],
     )).catch(() => {});
-    throw new AppError(502, 'The replacement PDF could not be stored in Backblaze B2', 'B2_UPLOAD_FAILED');
+    throw new AppError(502, 'The replacement knowledge source could not be stored in Backblaze B2', 'B2_UPLOAD_FAILED');
   }
 
   let saved;
@@ -452,18 +524,24 @@ export async function uploadKnowledgeDocumentVersion(
             SET is_current=true, status='queued', extraction_metadata=$3::jsonb
           WHERE tenant_id=$1 AND id=$2`,
         [auth.tenantId, reserved.versionId, JSON.stringify({
-          source: { etag: storedObject.etag, storageVersionId: storedObject.storageVersionId },
+          source: {
+            etag: storedObject.etag,
+            storageVersionId: storedObject.storageVersionId,
+            originalFilename: file.originalname.slice(0, 500),
+            mimeType: reserved.sourceType.mimeType,
+            extension: reserved.sourceType.extension,
+          },
         })],
       );
       const displayName = input.displayName ?? null;
       await client.query(
-        `UPDATE knowledge_documents SET status='queued', original_filename=$4, size_bytes=$5,
-            metadata=metadata || $6::jsonb, updated_by=$7,
-            display_name=COALESCE($8, display_name)
+        `UPDATE knowledge_documents SET status='queued', original_filename=$4, mime_type=$5, size_bytes=$6,
+            metadata=metadata || $7::jsonb, updated_by=$8,
+            display_name=COALESCE($9, display_name)
           WHERE tenant_id=$1 AND knowledge_base_id=$2 AND id=$3`,
         [
-          auth.tenantId, knowledgeBaseId, documentId, file.originalname.slice(0, 500), file.size,
-          JSON.stringify(input.metadata), auth.userId, displayName,
+          auth.tenantId, knowledgeBaseId, documentId, file.originalname.slice(0, 500),
+          reserved.sourceType.mimeType, file.size, JSON.stringify(input.metadata), auth.userId, displayName,
         ],
       );
       const job = await client.query(
@@ -491,7 +569,10 @@ export async function uploadKnowledgeDocumentVersion(
         [
           auth.tenantId, auth.workspaceId, auth.userId,
           auth.authType === 'api_key' ? 'api' : 'user', reserved.versionId,
-          JSON.stringify({ documentId, knowledgeBaseId, versionNumber: reserved.versionNumber, checksumSha256 }),
+          JSON.stringify({
+            documentId, knowledgeBaseId, versionNumber: reserved.versionNumber,
+            mimeType: reserved.sourceType.mimeType, checksumSha256,
+          }),
         ],
       );
       return {

@@ -1,0 +1,14 @@
+Silver Package INR 1650
+Gold Package INR 4950
+Platinum Package INR 7980
+Diabetic Health Check-up Package INR 3200
+Kidney Renal Health Check-up Package INR 1400
+Liver Health Check-up Package INR 1400
+Cardiac Health Check-up Package INR 2950
+Lungs Health Check-up Package INR 999
+Ortho Health Check-up Package INR 1499
+Gastro Health Check-up Package INR 25000
+Oncology Premium Male Screening Package INR 8600
+Oncology Premium Female Screening Package INR 8800
+Oncology Add-on Male Screening Package INR 750
+Oncology Add-on Female Screening Package INR 1100

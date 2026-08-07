@@ -1,0 +1,89 @@
+CATALOG
+
+Name: Shanmuga Hospital Health Check-up Packages
+Description: Shanmuga Hospital-ல் கிடைக்கிற active Master Health Check-up, organ-specific மற்றும் Oncology screening packages.
+Default Currency: INR
+
+ITEM 1
+Name: Silver Package
+Price: 1650
+Currency: INR
+Description: Basic health screening packageங்க. CBC, Blood Grouping and RH Type, fasting மற்றும் post-prandial sugar, HbA1c, Urea, Creatinine, Uric Acid, Lipid Profile, Liver Function Test, Urine Routine, ECG, Chest X-ray மற்றும் ஒரு Doctor Consultation இருக்குங்க.
+
+ITEM 2
+Name: Gold Package
+Price: 4950
+Currency: INR
+Description: Detailed preventive health screening packageங்க. Silver coverage கூட Calcium, Iron and TIBC, Vitamin D, Vitamin B12, Homocysteine, Thyroid tests, Electrolytes, HSCRP, ECHO, USG Abdomen, Dental Check-up மற்றும் ஒரு Doctor Consultation இருக்குங்க.
+
+ITEM 3
+Name: Platinum Package
+Price: 7980
+Currency: INR
+Description: Advanced health screening packageங்க. Gold coverage கூட ESR, HIV, HBsAg, HCV, PFT, Apolipoprotein A1 and B, Magnesium, Phosphorus, Carotid Doppler, Ankle Brachial Index, Diabetic Foot Assessment மற்றும் நாலு specialist consultations இருக்குங்க.
+
+ITEM 4
+Name: Diabetic Health Check-up Package
+Price: 3200
+Currency: INR
+Description: Diabetes screening மற்றும் related complications check பண்ணும் packageங்க. Sugar tests, HbA1c, CBC, Creatinine, Lipid Profile, insulin-related tests, kidney and urine tests, foot screening, ECG, ECHO, Chest X-ray மற்றும் USG Abdomen or Pelvis மாதிரி tests இருக்குங்க.
+
+ITEM 5
+Name: Kidney Renal Health Check-up Package
+Price: 1400
+Currency: INR
+Description: Kidney screening packageங்க. Hb, Urea, Creatinine, Uric Acid, Calcium, Electrolytes, BUN மற்றும் USG Abdomen இருக்குங்க. Urologist அல்லது Nephrologist consultation-உம் கிடைக்கும்.
+
+ITEM 6
+Name: Liver Health Check-up Package
+Price: 1400
+Currency: INR
+Description: Liver screening packageங்க. Hb, Liver Function Test மற்றும் USG Abdomen இருக்குங்க. Gastroenterologist consultation-உம் கிடைக்கும்.
+
+ITEM 7
+Name: Cardiac Health Check-up Package
+Price: 2950
+Currency: INR
+Description: Heart-related screeningக்கான packageங்க. Client source-ல் detailed test list வேறொரு package information-உடன் கலந்து இருக்கு; அதனால் exact tests-ஐ hospital teamகிட்ட confirm பண்ணணும்.
+
+ITEM 8
+Name: Lungs Health Check-up Package
+Price: 999
+Currency: INR
+Description: Lungs screening packageங்க. CBC, RBS, CRP, ESR, Urea, Creatinine, X-ray, ECG மற்றும் PFT இருக்குங்க. Pulmonologist consultation-உம் கிடைக்கும்.
+
+ITEM 9
+Name: Ortho Health Check-up Package
+Price: 1499
+Currency: INR
+Description: Bone மற்றும் joint screening packageங்க. தேவைக்கேற்ற இரண்டு X-rays, ESR, CRP, Calcium, Vitamin D, Uric Acid மற்றும் RA Factor இருக்குங்க. Orthopedic Doctor consultation-உம் கிடைக்கும்.
+
+ITEM 10
+Name: Gastro Health Check-up Package
+Price: 25000
+Currency: INR
+Description: Gastro screening packageங்க. Hb, Liver Function Test, USG Abdomen, 24-hour PH Monitoring, Manometry மற்றும் Endoscopy இருக்குங்க. Gastroenterologist consultation-உம் கிடைக்கும்.
+
+ITEM 11
+Name: Oncology Premium Male Screening Package
+Price: 8600
+Currency: INR
+Description: Male cancer screening packageங்க. CBC, Urine Complete, Urea, Creatinine, Amylase, Lipase, Liver Function Test, Random Sugar, PSA, CEA, CA 19.9 மற்றும் Chest and Whole Abdomen CT screening இருக்குங்க.
+
+ITEM 12
+Name: Oncology Premium Female Screening Package
+Price: 8800
+Currency: INR
+Description: Female cancer screening packageங்க. CBC, Urine Complete, Urea, Creatinine, Amylase, Lipase, Liver Function Test, Random Sugar, CA 125, CEA, CA 19.9, Pap Smear, Mammogram மற்றும் Chest and Abdomen CT screening இருக்குங்க.
+
+ITEM 13
+Name: Oncology Add-on Male Screening Package
+Price: 750
+Currency: INR
+Description: தேர்வு செய்த Master Health Check-up package-க்கு கூடுதலா சேர்க்கிற Male Oncology Add-onங்க. Amylase, Lipase, PSA, CEA மற்றும் CA 19.9 tests சேரும். இந்த 750 ரூபாய் base package விலைக்கு மேல சேரும்.
+
+ITEM 14
+Name: Oncology Add-on Female Screening Package
+Price: 1100
+Currency: INR
+Description: தேர்வு செய்த Master Health Check-up package-க்கு கூடுதலா சேர்க்கிற Female Oncology Add-onங்க. Amylase, Lipase, CA 125, CEA, CA 19.9, Pap Smear மற்றும் Mammogram சேரும். இந்த 1100 ரூபாய் base package விலைக்கு மேல சேரும்.

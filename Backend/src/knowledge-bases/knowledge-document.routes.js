@@ -53,14 +53,14 @@ const multipart = multer({
   limits: { files: 1, fileSize: env.KNOWLEDGE_PDF_MAX_BYTES, fields: 10 },
 });
 
-function receivePdf(request, response, next) {
+function receiveKnowledgeSource(request, response, next) {
   multipart.single('file')(request, response, (error) => {
     if (!error) return next();
     if (error instanceof multer.MulterError) {
       const message = error.code === 'LIMIT_FILE_SIZE'
-        ? `PDF must not exceed ${env.KNOWLEDGE_PDF_MAX_BYTES} bytes`
+        ? `Knowledge source must not exceed ${env.KNOWLEDGE_PDF_MAX_BYTES} bytes`
         : error.message;
-      next(new AppError(400, message, 'PDF_MULTIPART_INVALID'));
+      next(new AppError(400, message, 'KNOWLEDGE_SOURCE_MULTIPART_INVALID'));
       return;
     }
     next(error);
@@ -90,7 +90,7 @@ knowledgeDocumentRouter.get('/:documentId/versions', async (request, response) =
   });
 });
 
-knowledgeDocumentRouter.post('/:documentId/versions', canUpload, receivePdf, async (request, response) => {
+knowledgeDocumentRouter.post('/:documentId/versions', canUpload, receiveKnowledgeSource, async (request, response) => {
   const { knowledgeBaseId, documentId } = valid(knowledgeVersionParamsSchema, request.params);
   const input = valid(uploadKnowledgeDocumentVersionSchema, request.body);
   const data = await uploadKnowledgeDocumentVersion(
@@ -178,7 +178,7 @@ knowledgeDocumentRouter.post('/:documentId/review/:recordId/decision', canReview
   });
 });
 
-knowledgeDocumentRouter.post('/', canUpload, receivePdf, async (request, response) => {
+knowledgeDocumentRouter.post('/', canUpload, receiveKnowledgeSource, async (request, response) => {
   const { knowledgeBaseId } = valid(knowledgeDocumentParamsSchema, request.params);
   const input = valid(uploadKnowledgeDocumentSchema, request.body);
   const data = await uploadKnowledgeDocument(auth(request), knowledgeBaseId, input, request.file);

@@ -1,0 +1,49 @@
+நான் enquiry பண்ணவே இல்லையே -> சரிங்க, தவறாக call வந்திருந்தா மன்னிச்சுக்கோங்க. இருந்தாலும் health check-up package details தெரிஞ்சிக்க விருப்பம் இருக்கா சொல்லுங்க.
+நான் Facebookல form fill பண்ணல -> சரிங்க, புரியுதுங்க. தவறான enquiryஆ இருந்தா மன்னிச்சுக்கோங்க; package information வேணும்னா மட்டும் சொல்லுங்க.
+என்னோட number உங்களுக்கு எப்படி கிடைச்சது -> எங்க recordsல health check-up enquiry மூலமா இந்த number வந்திருக்குங்க. இது உங்களுடைய enquiry இல்லன்னா மன்னிச்சுக்கோங்க.
+எனக்கு package details சொல்லுங்க -> சரிங்க, Silver, Gold, Platinumன்னு மூணு main packages இருக்குங்க. இதுல எந்த package பத்தி முதல்ல தெரிஞ்சிக்கணும்னு சொல்லுங்க.
+என்னென்ன packages இருக்கு -> Silver, Gold, Platinum main packagesங்க. அதோட Diabetic, Kidney, Liver, Cardiac, Lungs, Ortho, Gastro மற்றும் Oncology screening packages-உம் இருக்கு.
+எல்லா packageஐயும் ஒரே தடவை சொல்லுங்க -> Main package names மட்டும் shortஆ சொல்லுறேங்க; Silver, Gold, Platinum, Diabetic மற்றும் organ-specific screening packages இருக்குங்க. எந்த package details வேணும்னு சொல்லுங்க.
+எனக்கு எந்த package சரியா இருக்கும் -> உங்க symptoms வைத்து diagnosis பண்ண முடியாதுங்க. Available package information சொல்லலாம்; personal recommendationக்கு Doctor consultation தான் சரி.
+என்னோட symptomsக்கு package சொல்லுங்க -> Symptoms மட்டும் வைத்து package fix பண்ண முடியாதுங்க. Concern என்னன்னு சொல்லுங்க; related screening information இருந்தா சொல்லுறேன், final advice Doctorதான் கொடுக்கணும்.
+எனக்கு தலைசுத்துது எந்த package எடுக்கலாம் -> தலைசுத்தலுக்கு பல காரணம் இருக்கலாம்ங்க; diagnosis சொல்ல முடியாது. Doctor consultation arrange பண்ணிக்கிறது safer.
+எனக்கு தலைவலி எந்த package எடுக்கலாம் -> தலைவலிக்கு காரணம் கண்டுபிடிக்க Doctor consultation தேவைங்க. Package information சொல்லலாம்; ஆனா diagnosis அல்லது treatment சொல்ல முடியாது.
+எனக்கு கால் வலி எந்த package எடுக்கலாம் -> Bone மற்றும் joint screeningக்கு Ortho package இருக்குங்க. வலி அதிகமா அல்லது தொடர்ந்து இருந்தா Orthopedic Doctor-ஐ consult பண்ணுங்க.
+எனக்கு sugar இருக்கு எந்த package பார்க்கலாம் -> Diabetes screeningக்கு Diabetic Health Check-up package இருக்குங்க. Treatment adviceக்கு Doctor consultation தேவை.
+எனக்கு heart check பண்ணணும் -> Heart-related screeningக்கு Cardiac Health Check-up package இருக்குங்க. Exact tests மற்றும் suitability hospital team அல்லது Doctorகிட்ட confirm பண்ணிக்கோங்க.
+எனக்கு kidney check பண்ணணும் -> Kidney screeningக்கு Kidney அல்லது Renal Health Check-up package இருக்குங்க. Package details வேணும்னா சொல்லுங்க.
+எனக்கு liver check பண்ணணும் -> Liver screeningக்கு Liver Health Check-up package இருக்குங்க. Package details வேணும்னா சொல்லுங்க.
+எனக்கு lungs check பண்ணணும் -> Lungs screeningக்கு Lungs Health Check-up package இருக்குங்க. Package details வேணும்னா சொல்லுங்க.
+appointment book பண்ணுங்க -> சரிங்க, முதல்ல எந்த packageக்கு appointment வேணும்னு சொல்லுங்க.
+booking பண்ணணும் -> சரிங்க, எந்த package select பண்ணிருக்கீங்கன்னு சொல்லுங்க; அடுத்த தேவையான detail மட்டும் கேக்குறேன்.
+எனக்குத்தான் appointment -> சரிங்க, appointment உங்களுக்குன்னு எடுத்துக்கறேன். இன்னும் patient name தெரியலன்னா பெயர் சொல்லுங்க.
+வேற ஒருத்தருக்கு appointment -> சரிங்க, யாருக்காக appointmentன்னு சொல்லி அந்த patient name மற்றும் age ஒவ்வொண்ணா சொல்லுங்க.
+என் பெயர் ஏற்கனவே சொன்னேனே -> மன்னிச்சுக்கோங்க, நீங்க ஏற்கனவே confirm பண்ணிய பெயரை மறுபடியும் கேக்காம அடுத்த missing detailக்கு போறேன்.
+என் வயசு ஏற்கனவே சொன்னேனே -> மன்னிச்சுக்கோங்க, confirm ஆன வயசை மறுபடியும் கேக்காம அடுத்த missing detailக்கு போறேன்.
+date ஏற்கனவே சொன்னேனே -> மன்னிச்சுக்கோங்க, confirm ஆன dateஐ மறுபடியும் கேக்காம அடுத்த missing detailக்கு போறேன்.
+time ஏற்கனவே சொன்னேனே -> மன்னிச்சுக்கோங்க, confirm ஆன timeஐ மறுபடியும் கேக்காம booking details verify பண்றேன்.
+package மாற்றணும் -> சரிங்க, பழைய package selectionஐ மாற்றிக்கலாம். இப்ப எந்த package select பண்றீங்கன்னு சொல்லுங்க.
+date மாற்றணும் -> சரிங்க, appointment dateஐ மாற்றிக்கலாம். புதுசா எந்த date வேணும்னு சொல்லுங்க.
+time மாற்றணும் -> சரிங்க, appointment timeஐ மாற்றிக்கலாம். புதுசா எந்த time வசதின்னு சொல்லுங்க.
+details எல்லாம் சரிதான் -> சரிங்க, confirmed details வைத்து booking request process பண்றேன். System success வந்த பிறகுதான் appointment confirmedன்னு சொல்லுவேன்.
+appointment confirm ஆயிடுச்சா -> Booking system success response வந்திருந்தா மட்டும் confirmedங்க; pending அல்லது response இல்லன்னா hospital confirmation இன்னும் வரணும்.
+booking fail ஆயிடுச்சு -> மன்னிச்சுக்கோங்க, booking complete ஆகலை. Detailsஐ hospital team follow-upக்காக எடுத்துக்கலாமா சொல்லுங்க.
+எனக்கு call back பண்ணுங்க -> சரிங்க, எந்த நாள் மற்றும் எந்த நேரத்துக்கு callback வேணும்னு clearஆ சொல்லுங்க.
+கொஞ்ச நேரம் கழிச்சு call பண்ணுங்க -> சரிங்க, exactஆ எத்தனை மணிக்கு அல்லது எத்தனை நிமிஷம் கழிச்சு call பண்ணணும்னு சொல்லுங்க.
+அஞ்சு நிமிஷம் கழிச்சு call பண்ணுங்க -> சரிங்க, அஞ்சு நிமிஷம் கழிச்சு callback request process பண்றேன்; system confirmation வந்த பிறகுதான் scheduledன்னு உறுதி சொல்வேன்.
+நாளைக்கு call பண்ணுங்க -> சரிங்க, நாளைக்கு எந்த நேரத்துக்கு callback வேணும்னு சொல்லுங்க.
+இப்ப பேச முடியாது -> சரிங்க, புரியுதுங்க. உங்களுக்கு வசதியான callback date மற்றும் time சொல்லுங்க.
+human agent கிட்ட பேசணும் -> சரிங்க, human support வேணும்னு புரியுது. Transfer அல்லது follow-up availability systemல இருந்தா அதன்படி arrange பண்றேன்.
+telecalling team கிட்ட பேசணும் -> சரிங்க, Telecalling team support வேணும்னு எடுத்துக்கறேன். Available transfer அல்லது follow-up option பார்த்து சொல்லுறேன்.
+இந்த information confirm இல்லையா -> இந்த detail verified sourceல clearஆ இல்லீங்க. Guess பண்ணாம hospital teamகிட்ட confirm பண்ணிக்கலாம்.
+எனக்கு புரியல மறுபடியும் சொல்லுங்க -> சரிங்க, இன்னும் shortஆவும் clearஆவும் ஒரே விஷயத்தை மட்டும் சொல்லுறேன்.
+நான் சொன்னது புரியலையா -> மன்னிச்சுக்கோங்க, completeஆ புரியலை. கடைசியா கேட்ட விஷயத்தை மட்டும் கொஞ்சம் clearஆ மறுபடியும் சொல்லுங்க.
+Hello கேக்குதா -> கேக்குதுங்க, நான் callலதான் இருக்கேன். நாம பேசிக்கிட்டிருந்த விஷயத்திலிருந்து continue பண்ணலாம்.
+நீங்க இருக்கீங்களா -> இருக்கேங்க, கேக்குது. நாம பேசிக்கிட்டிருந்த விஷயத்தை continue பண்ணுங்க.
+நெஞ்சு வலி ரொம்ப அதிகமா இருக்கு -> இது emergency symptomஆ இருக்கலாம். Packageக்காக wait பண்ணாம உடனே அருகிலுள்ள emergency medical help எடுக்குங்க.
+மூச்சு விட ரொம்ப கஷ்டமா இருக்கு -> இது emergencyஆ இருக்கலாம். உடனே அருகிலுள்ள emergency medical help எடுக்குங்க; package discussionஐ இப்ப continue பண்ண வேண்டாம்.
+மயக்கம் வந்து விழுந்துட்டாங்க -> இது emergency situationங்க. உடனே emergency medical help அல்லது ambulance contact பண்ணுங்க.
+வேண்டாம் எனக்கு interest இல்லை -> சரிங்க, புரியுதுங்க. தொந்தரவு செய்திருந்தா மன்னிச்சுக்கோங்க; நன்றி.
+இனிமே call பண்ணாதீங்க -> சரிங்க, உங்க request புரிஞ்சுதுங்க. இதை do-not-call requestஆ handle பண்ணணும்; நன்றி.
+call முடிச்சுக்கலாம் -> சரிங்க, பேசினதுக்கு நன்றி. நல்ல நாளா இருக்கட்டுங்க.
+வேற எதுவும் வேண்டாம் -> சரிங்க, பேசினதுக்கு நன்றிங்க. நல்ல நாளா இருக்கட்டும்.
