@@ -114,6 +114,8 @@
     "knowledge:purge-deleted:dry-run": "node scripts/purge-soft-deleted-knowledge-bases.js",
     "knowledge:purge-deleted": "node scripts/purge-soft-deleted-knowledge-bases.js --execute",
     "verify:permanent-kb-deletion": "node scripts/verify-permanent-knowledge-deletion.js",
+    "verify:structured-workflow-rules": "node scripts/verify-structured-workflow-rules.js",
+    "verify:workflow-runtime": "node scripts/verify-workflow-runtime.js",
     "seed:super-admin": "node scripts/create-super-admin.js",
     "db:migrate": "node-pg-migrate up --migrations-dir migrations",
     "db:rollback": "node-pg-migrate down --migrations-dir migrations",

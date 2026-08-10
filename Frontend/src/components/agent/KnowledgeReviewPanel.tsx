@@ -40,7 +40,17 @@ interface KnowledgeReviewPanelProps {
 }
 
 type FieldKind = 'text' | 'textarea' | 'number' | 'select' | 'checkbox' | 'json-object' | 'json-array';
-interface ReviewField { key: string; label: string; kind: FieldKind; required?: boolean; integer?: boolean; nullable?: boolean }
+interface ReviewField {
+  key: string;
+  label: string;
+  kind: FieldKind;
+  required?: boolean;
+  integer?: boolean;
+  nullable?: boolean;
+  virtual?: boolean;
+  options?: Array<{ value: string; label: string }>;
+  help?: string;
+}
 
 const fieldsByKind: Record<ReviewRecord['kind'], ReviewField[]> = {
   faq: [
@@ -68,9 +78,27 @@ const fieldsByKind: Record<ReviewRecord['kind'], ReviewField[]> = {
     { key: 'priority', label: 'Priority', kind: 'number', integer: true },
     { key: 'usageDirection', label: 'Usage Direction', kind: 'select', required: true },
     { key: 'actionType', label: 'Action Type', kind: 'text', required: true },
-    { key: 'responseTemplate', label: 'Response Template', kind: 'textarea', nullable: true },
-    { key: 'conditions', label: 'Conditions (JSON object)', kind: 'json-object' },
-    { key: 'actionConfig', label: 'Action Configuration (JSON object)', kind: 'json-object' },
+    {
+      key: 'triggerPhrases', label: 'Trigger Phrases', kind: 'textarea', virtual: true,
+      help: 'One phrase per line. These are extracted from MATCH values separated by |.',
+    },
+    {
+      key: 'matchMode', label: 'Match Mode', kind: 'select', virtual: true,
+      options: [
+        { value: 'any_phrase', label: 'Any Phrase' },
+        { value: 'contains', label: 'Contains' },
+        { value: 'exact', label: 'Exact' },
+      ],
+    },
+    {
+      key: 'responseMode', label: 'Response Mode', kind: 'select', virtual: true,
+      options: [
+        { value: 'exact', label: 'Exact Response' },
+        { value: 'instruction', label: 'Instruction' },
+        { value: 'generated', label: 'Generated' },
+      ],
+    },
+    { key: 'responseTemplate', label: 'Response', kind: 'textarea', nullable: true },
   ],
   conversation_node: [
     { key: 'flowKey', label: 'Flow Key', kind: 'text', required: true },
@@ -97,7 +125,24 @@ const statusStyle: Record<RecordStatus, string> = {
 
 function initialDraft(record: ReviewRecord) {
   const draft: Record<string, string | boolean> = {};
+  const conditions = record.conditions && typeof record.conditions === 'object' && !Array.isArray(record.conditions)
+    ? record.conditions as Record<string, unknown> : {};
+  const actionConfig = record.actionConfig && typeof record.actionConfig === 'object' && !Array.isArray(record.actionConfig)
+    ? record.actionConfig as Record<string, unknown> : {};
   for (const field of fieldsByKind[record.kind]) {
+    if (record.kind === 'workflow_rule' && field.key === 'triggerPhrases') {
+      const phrases = Array.isArray(conditions.triggerPhrases) ? conditions.triggerPhrases : [];
+      draft[field.key] = phrases.filter((phrase) => typeof phrase === 'string').join('\n');
+      continue;
+    }
+    if (record.kind === 'workflow_rule' && field.key === 'matchMode') {
+      draft[field.key] = typeof conditions.matchMode === 'string' ? conditions.matchMode : 'any_phrase';
+      continue;
+    }
+    if (record.kind === 'workflow_rule' && field.key === 'responseMode') {
+      draft[field.key] = typeof actionConfig.responseMode === 'string' ? actionConfig.responseMode : 'instruction';
+      continue;
+    }
     const value = record[field.key];
     if (field.kind === 'checkbox') draft[field.key] = Boolean(value);
     else if (field.kind === 'json-object' || field.kind === 'json-array') draft[field.key] = JSON.stringify(value ?? (field.kind === 'json-array' ? [] : {}), null, 2);
@@ -118,6 +163,7 @@ function ReviewRecordCard({ record, readOnly, onChanged }: { record: ReviewRecor
     try {
       const payload: Record<string, unknown> = {};
       for (const field of fieldsByKind[record.kind]) {
+        if (field.virtual) continue;
         const value = draft[field.key];
         if (field.kind === 'checkbox') payload[field.key] = Boolean(value);
         else if (field.kind === 'number') {
@@ -135,6 +181,22 @@ function ReviewRecordCard({ record, readOnly, onChanged }: { record: ReviewRecor
           if (field.required && !text) throw new Error(`${field.label} is required.`);
           payload[field.key] = !text && field.nullable ? null : text;
         }
+      }
+      if (record.kind === 'workflow_rule') {
+        const existingConditions = record.conditions && typeof record.conditions === 'object' && !Array.isArray(record.conditions)
+          ? record.conditions as Record<string, unknown> : {};
+        const existingActionConfig = record.actionConfig && typeof record.actionConfig === 'object' && !Array.isArray(record.actionConfig)
+          ? record.actionConfig as Record<string, unknown> : {};
+        const triggerPhrases = [...new Map(String(draft.triggerPhrases ?? '').split(/\r?\n|\|/u)
+          .map((phrase) => phrase.trim()).filter(Boolean)
+          .map((phrase) => [phrase.toLocaleLowerCase(), phrase])).values()];
+        const response = String(draft.responseTemplate ?? '').trim();
+        payload.conditions = { ...existingConditions, triggerPhrases, matchMode: String(draft.matchMode ?? 'any_phrase') };
+        payload.actionConfig = {
+          ...existingActionConfig,
+          responseMode: String(draft.responseMode ?? 'instruction'),
+          instruction: response,
+        };
       }
       await apiRequest(`/knowledge-bases/${String(record.knowledgeBaseId ?? '')}/documents/${String(record.documentId ?? '')}/review/${record.id}`, {
         method: 'PATCH', body: JSON.stringify(payload),
@@ -165,10 +227,11 @@ function ReviewRecordCard({ record, readOnly, onChanged }: { record: ReviewRecor
         {field.kind === 'textarea' || field.kind === 'json-object' || field.kind === 'json-array'
           ? <textarea value={String(value ?? '')} onChange={(event) => setDraft((current) => ({ ...current, [field.key]: event.target.value }))} disabled={readOnly || busy} rows={field.kind === 'textarea' ? 4 : 5} className={`w-full resize-y rounded-lg border border-slate-200 px-3 py-2 text-xs outline-none focus:border-violet-400 disabled:bg-slate-50 ${field.kind.startsWith('json') ? 'font-mono' : 'font-medium'}`} />
           : field.kind === 'select'
-            ? <select value={String(value ?? 'both')} onChange={(event) => setDraft((current) => ({ ...current, [field.key]: event.target.value }))} disabled={readOnly || busy} className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold outline-none focus:border-violet-400 disabled:bg-slate-50"><option value="inbound">Inbound</option><option value="outbound">Outbound</option><option value="both">Both</option></select>
+            ? <select value={String(value ?? field.options?.[0]?.value ?? 'both')} onChange={(event) => setDraft((current) => ({ ...current, [field.key]: event.target.value }))} disabled={readOnly || busy} className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold outline-none focus:border-violet-400 disabled:bg-slate-50">{(field.options ?? [{ value: 'inbound', label: 'Inbound' }, { value: 'outbound', label: 'Outbound' }, { value: 'both', label: 'Both' }]).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
             : field.kind === 'checkbox'
               ? <input type="checkbox" checked={Boolean(value)} onChange={(event) => setDraft((current) => ({ ...current, [field.key]: event.target.checked }))} disabled={readOnly || busy} className="h-4 w-4 rounded border-slate-300 text-violet-600" />
               : <input type={field.kind === 'number' ? 'number' : 'text'} value={String(value ?? '')} onChange={(event) => setDraft((current) => ({ ...current, [field.key]: event.target.value }))} disabled={readOnly || busy} className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold outline-none focus:border-violet-400 disabled:bg-slate-50" />}
+        {field.help && <span className="mt-1 block text-[9px] font-medium text-slate-400">{field.help}</span>}
       </label>;
     })}</div>
     {error && <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-[10px] font-semibold text-red-700"><AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />{error}</div>}

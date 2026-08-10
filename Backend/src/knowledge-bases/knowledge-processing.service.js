@@ -162,12 +162,12 @@ async function persistWorkflow(client, job, result) {
          tenant_id, knowledge_base_id, document_id, document_version_id,
          name, intent, priority, conditions, action_type, action_config,
          response_template, status, source_text, source_page_start, source_page_end
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, '{}'::jsonb, $8, $9::jsonb,
-         $10, 'draft', $11, $12, $13)`,
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::jsonb,
+         $11, 'draft', $12, $13, $14)`,
       [
         job.tenant_id, job.knowledge_base_id, job.document_id, job.document_version_id,
-        record.name, record.intent, record.priority, record.actionType,
-        JSON.stringify(record.actionConfig), record.responseTemplate, record.sourceText,
+        record.name, record.intent, record.priority, JSON.stringify(record.conditions ?? {}),
+        record.actionType, JSON.stringify(record.actionConfig ?? {}), record.responseTemplate, record.sourceText,
         record.sourcePageStart, record.sourcePageEnd,
       ],
     );

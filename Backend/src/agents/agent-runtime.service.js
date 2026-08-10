@@ -2,11 +2,19 @@ import { env } from '../config/env.js';
 import { withTenantContext } from '../infrastructure/database-context.js';
 import { AppError } from '../middleware/errors.js';
 import { decryptCredential } from '../security/credential-crypto.js';
-import { routeKnowledgeQuery } from '../knowledge-bases/knowledge-runtime.service.js';
+import {
+  isExactWorkflowResponse,
+  routeKnowledgeQuery,
+} from '../knowledge-bases/knowledge-runtime.service.js';
 import { invokeAgentLlm, resolveLlmConfiguration } from '../llm/llm.client.js';
 import { resolveCallbackConfiguration } from '../voice/interaction/callback-config.js';
 
-const directKnowledgeRoutes = new Set(['workflow', 'conversation', 'catalog', 'faq']);
+const directKnowledgeRoutes = new Set(['conversation', 'catalog', 'faq']);
+
+function isDirectKnowledgeResponse(knowledge) {
+  return directKnowledgeRoutes.has(knowledge?.route)
+    || isExactWorkflowResponse(knowledge);
+}
 const defaultDependencies = {
   contextRunner: withTenantContext,
   routeKnowledge: routeKnowledgeQuery,
@@ -215,7 +223,7 @@ export async function generateAgentResponse(auth, agentId, input, dependencies =
     ...(input.topK ? { topK: input.topK } : {}),
   });
 
-  if (directKnowledgeRoutes.has(knowledge.route)) {
+  if (isDirectKnowledgeResponse(knowledge)) {
     return {
       agentId,
       event: input.event,

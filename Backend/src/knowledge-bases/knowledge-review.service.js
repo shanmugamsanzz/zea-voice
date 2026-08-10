@@ -2,6 +2,7 @@ import { withTenantContext } from '../infrastructure/database-context.js';
 import { AppError } from '../middleware/errors.js';
 import { logger } from '../config/logger.js';
 import { enqueueKnowledgeProcessingJob } from './knowledge-processing.queue.js';
+import { invalidateTenantKnowledgeCache } from './knowledge-runtime.service.js';
 
 const reviewSource = `
   WITH review_records AS (
@@ -568,6 +569,11 @@ export async function publishKnowledgeBase(
       maxAttempts: indexJob.rows[0].max_attempts,
     };
   });
+
+  // A profile may have been cached before this revision was published. Clear
+  // tenant-scoped RAG caches so newly approved structured rules are available
+  // to the next caller instead of waiting for the profile TTL.
+  await invalidateTenantKnowledgeCache(auth.tenantId);
 
   try {
     const queued = await queueAdapter({

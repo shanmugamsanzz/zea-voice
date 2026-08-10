@@ -2,7 +2,10 @@ import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
 import { AppError } from '../middleware/errors.js';
 import { appendTranscriptEntry } from '../calls/call.service.js';
-import { routeKnowledgeQuery } from '../knowledge-bases/knowledge-runtime.service.js';
+import {
+  isExactWorkflowResponse,
+  routeKnowledgeQuery,
+} from '../knowledge-bases/knowledge-runtime.service.js';
 import { ProviderIndependentAudioEngine } from './audio/audio-engine.js';
 import { completeVoiceCall, completeVoiceCallWithoutRuntime } from './call-completion.service.js';
 import { CallController } from './call-controller.js';
@@ -93,7 +96,8 @@ const fastKnowledgeRoutes = new Set(['faq', 'catalog']);
 
 function hasFastKnowledgeAnswer(knowledge) {
   return knowledge?.found === true
-    && fastKnowledgeRoutes.has(String(knowledge.route ?? '').toLowerCase())
+    && (fastKnowledgeRoutes.has(String(knowledge.route ?? '').toLowerCase())
+      || isExactWorkflowResponse(knowledge))
     && Boolean(String(knowledge.content ?? '').trim());
 }
 
@@ -1849,8 +1853,9 @@ export class RealtimeConversationOrchestrator {
     const knowledge = await this.#knowledge(query);
     turnLatency.knowledgeMs = Math.max(0, Date.now() - knowledgeStartedAt);
     turnLatency.route = knowledge.route ?? 'none';
+    const fastKnowledgeAnswer = hasFastKnowledgeAnswer(knowledge);
     const sourceTrace = new MessageSourceTrace(
-      this.#baseLlmSources(),
+      fastKnowledgeAnswer ? [] : this.#baseLlmSources(),
       knowledgeMessageSources(knowledge),
     );
     if (epoch !== this.epoch || this.finalized) return;
@@ -1863,7 +1868,7 @@ export class RealtimeConversationOrchestrator {
       isCurrent: () => !this.#isStaleGeneration(epoch),
     };
     let response;
-    if (hasFastKnowledgeAnswer(knowledge)) {
+    if (fastKnowledgeAnswer) {
       turnLatency.fastKnowledge = true;
       this.log.info({
         stage: 'knowledge.fast_answer_selected', callId: this.call.id, epoch,

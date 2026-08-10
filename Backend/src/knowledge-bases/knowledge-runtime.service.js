@@ -16,7 +16,7 @@ const defaultDependencies = {
 
 function normalize(value) {
   return String(value ?? '').normalize('NFKC').toLocaleLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, ' ').trim().replace(/\s+/gu, ' ');
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim().replace(/\s+/gu, ' ');
 }
 
 function usageAllowed(configured, requested) {
@@ -84,7 +84,7 @@ const runtimeProfileSql = `
       FROM (
         SELECT w.id, w.knowledge_base_id, w.document_id, w.document_version_id,
           d.original_filename AS document_name, w.source_page_start, w.source_page_end,
-          w.name, w.intent, w.priority, w.action_type, w.action_config, w.response_template
+          w.name, w.intent, w.priority, w.conditions, w.action_type, w.action_config, w.response_template
           FROM workflow_rules w JOIN assigned a ON a.id = w.knowledge_base_id
           JOIN knowledge_document_versions v ON v.tenant_id=w.tenant_id AND v.id=w.document_version_id
           JOIN knowledge_documents d ON d.tenant_id=w.tenant_id AND d.id=w.document_id
@@ -176,14 +176,54 @@ function routeResponse(route, record, content, extra = {}) {
 
 function workflowRoute(profile, input, normalizedQuery) {
   const target = normalize(input.intent ?? normalizedQuery);
-  const record = profile.workflows.find((item) => normalize(item.intent) === target || normalize(item.name) === target);
-  if (!record) return null;
+  let match = null;
+  for (const record of profile.workflows) {
+    const phrases = Array.isArray(record.conditions?.triggerPhrases)
+      ? record.conditions.triggerPhrases.map((phrase) => ({
+        original: String(phrase).trim(), normalized: normalize(phrase),
+      })).filter((phrase) => phrase.normalized)
+      : [];
+    const matchMode = String(record.conditions?.matchMode ?? 'any_phrase').trim().toLowerCase();
+    let matchedPhrase = null;
+    if (phrases.length) {
+      const phraseMatch = phrases.find((phrase) => {
+        if (matchMode === 'exact') return normalizedQuery === phrase.normalized;
+        if (!['contains', 'any_phrase'].includes(matchMode)) return false;
+        return normalizedQuery === phrase.normalized
+          || ` ${normalizedQuery} `.includes(` ${phrase.normalized} `);
+      });
+      matchedPhrase = phraseMatch?.original ?? null;
+    } else if (normalize(record.intent) === target || normalize(record.name) === target) {
+      matchedPhrase = input.intent ?? record.intent ?? record.name;
+    }
+    if (matchedPhrase) {
+      match = { record, matchedPhrase, matchMode: phrases.length ? matchMode : 'legacy_intent' };
+      break;
+    }
+  }
+  if (!match) return null;
+  const { record, matchedPhrase, matchMode } = match;
+  const responseMode = String(record.action_config?.responseMode ?? 'instruction').trim().toLowerCase();
   return {
     ...routeResponse('workflow', record, record.response_template ?? record.action_config?.instruction ?? '', {
-      intent: record.intent,
+      intent: record.intent, matchedPhrase, matchMode, responseMode,
     }),
     action: { type: record.action_type, config: record.action_config },
+    workflow: {
+      intent: record.intent,
+      matchedPhrase,
+      matchMode,
+      responseMode,
+      exactResponse: record.action_type === 'respond' && responseMode === 'exact',
+    },
   };
+}
+
+export function isExactWorkflowResponse(result) {
+  return result?.found === true
+    && result.route === 'workflow'
+    && result.workflow?.exactResponse === true
+    && Boolean(String(result.content ?? '').trim());
 }
 
 function conversationRoute(profile, input) {

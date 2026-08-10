@@ -79,20 +79,109 @@ function parseCatalog(extraction) {
 
 function parseWorkflowRules(extraction) {
   const records = [];
+  const warnings = [];
+  let structuredRule = null;
+
+  const normalizeIntent = (value, fallback) => value.toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_|_$/g, '')
+    .slice(0, 160) || fallback;
+  const splitPhrases = (value) => [...new Map(value.split('|')
+    .map((phrase) => phrase.trim())
+    .filter(Boolean)
+    .map((phrase) => [phrase.toLocaleLowerCase(), phrase])).values()];
+  const normalizeMatchMode = (value) => {
+    const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+    return ['any_phrase', 'contains', 'exact'].includes(normalized) ? normalized : null;
+  };
+  const normalizeResponseMode = (value) => {
+    const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+    return ['exact', 'instruction', 'generated'].includes(normalized) ? normalized : null;
+  };
+  const inferActionType = (action) => {
+    const lowerAction = action.toLowerCase();
+    return lowerAction.includes('transfer') ? 'transfer_call'
+      : lowerAction.includes('hangup') || lowerAction.includes('hang up') ? 'hangup_call'
+        : lowerAction.includes('schedule') ? 'schedule_callback' : 'respond';
+  };
+  const flushStructuredRule = () => {
+    if (!structuredRule) return;
+    const ruleNumber = records.length + 1;
+    const name = structuredRule.name.trim();
+    const response = structuredRule.response.join('\n').trim();
+    const triggerPhrases = splitPhrases(structuredRule.match.join('|'));
+    const matchMode = normalizeMatchMode(structuredRule.matchMode || 'any_phrase');
+    const responseMode = normalizeResponseMode(structuredRule.responseMode || 'instruction');
+
+    if (!name) warnings.push(`Workflow rule on page ${structuredRule.sourcePageStart} has no RULE name and was skipped`);
+    else if (!triggerPhrases.length) warnings.push(`Workflow rule "${name}" has no MATCH phrases and was skipped`);
+    else if (!matchMode) warnings.push(`Workflow rule "${name}" has an unsupported MATCH_MODE and was skipped`);
+    else if (!responseMode) warnings.push(`Workflow rule "${name}" has an unsupported RESPONSE_MODE and was skipped`);
+    else if (!response) warnings.push(`Workflow rule "${name}" has no RESPONSE and was skipped`);
+    else {
+      const actionType = 'respond';
+      records.push({
+        name: name.slice(0, 200),
+        intent: normalizeIntent(name, `rule_${ruleNumber}`),
+        conditions: { triggerPhrases, matchMode },
+        actionType,
+        actionConfig: { instruction: response, responseMode },
+        responseTemplate: response,
+        sourceText: structuredRule.sourceLines.join('\n'),
+        sourcePageStart: structuredRule.sourcePageStart,
+        sourcePageEnd: structuredRule.sourcePageEnd,
+        priority: structuredRule.priority ?? (records.length * 10 + 100),
+      });
+    }
+    structuredRule = null;
+  };
+
   for (const line of nonEmptyLines(extraction)) {
+    const structuredField = line.text.match(/^\s*(RULE|MATCH|MATCH_MODE|RESPONSE_MODE|RESPONSE|PRIORITY)\s*:\s*(.*)$/i);
+    if (structuredField) {
+      const field = structuredField[1].toUpperCase();
+      const value = structuredField[2].trim();
+      if (field === 'RULE') {
+        flushStructuredRule();
+        structuredRule = {
+          name: value, match: [], matchMode: '', responseMode: '', response: [], priority: null,
+          sourceLines: [line.text], sourcePageStart: line.pageNumber, sourcePageEnd: line.pageNumber,
+        };
+      } else if (structuredRule) {
+        structuredRule.sourceLines.push(line.text);
+        structuredRule.sourcePageEnd = line.pageNumber;
+        if (field === 'MATCH') structuredRule.match.push(value);
+        else if (field === 'MATCH_MODE') structuredRule.matchMode = value;
+        else if (field === 'RESPONSE_MODE') structuredRule.responseMode = value;
+        else if (field === 'RESPONSE') structuredRule.response.push(value);
+        else if (field === 'PRIORITY') {
+          const priority = Number(value);
+          if (Number.isInteger(priority) && priority >= 0) structuredRule.priority = priority;
+          else warnings.push(`Workflow rule "${structuredRule.name}" has an invalid PRIORITY; automatic priority was used`);
+        }
+      }
+      continue;
+    }
+    if (structuredRule) {
+      if (structuredRule.response.length) {
+        structuredRule.response.push(line.text.trim());
+        structuredRule.sourceLines.push(line.text);
+        structuredRule.sourcePageEnd = line.pageNumber;
+      }
+      continue;
+    }
+
     const arrow = line.text.match(/^(.+?)\s*(?:->|=>)\s*(.+)$/);
     const conditional = line.text.match(/^if\s+(.+?)\s+then\s+(.+)$/i);
     const match = arrow ?? conditional;
     if (!match) continue;
     const intent = match[1].trim();
     const action = match[2].trim();
-    const lowerAction = action.toLowerCase();
-    const actionType = lowerAction.includes('transfer') ? 'transfer_call'
-      : lowerAction.includes('hangup') || lowerAction.includes('hang up') ? 'hangup_call'
-        : lowerAction.includes('schedule') ? 'schedule_callback' : 'respond';
+    const actionType = inferActionType(action);
     records.push({
       name: intent.slice(0, 200),
-      intent: intent.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 160) || 'rule',
+      intent: normalizeIntent(intent, `rule_${records.length + 1}`),
+      conditions: {},
       actionType,
       actionConfig: { instruction: action },
       responseTemplate: actionType === 'respond' ? action : null,
@@ -102,7 +191,11 @@ function parseWorkflowRules(extraction) {
       priority: records.length * 10 + 100,
     });
   }
-  return { records, warnings: records.length ? [] : ['No workflow lines using IF/THEN or -> syntax were detected'] };
+  flushStructuredRule();
+  if (!records.length && !warnings.length) {
+    warnings.push('No structured RULE blocks or workflow lines using IF/THEN or -> syntax were detected');
+  }
+  return { records, warnings };
 }
 
 function parseConversation(extraction) {
