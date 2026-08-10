@@ -14,7 +14,7 @@ type CallStatus = 'queued' | 'ringing' | 'connected' | 'completed' | 'failed' | 
 
 type MessageSourceType = 'welcome_configuration' | 'system_prompt' | 'pre_call_context'
   | 'conversation_memory' | 'knowledge' | 'tool' | 'llm' | 'silent_message'
-  | 'runtime_fallback' | 'post_call_closing';
+  | 'call_check_configuration' | 'runtime_fallback' | 'post_call_closing';
 
 interface MessageSource {
   type: MessageSourceType;
@@ -116,6 +116,7 @@ const sourceDisplay: Record<MessageSourceType, { label: string; icon: typeof Dat
   tool: { label: 'Tool result', icon: Wrench, style: 'border-amber-200 bg-amber-50 text-amber-700' },
   llm: { label: 'LLM', icon: Brain, style: 'border-pink-200 bg-pink-50 text-pink-700' },
   silent_message: { label: 'Silent message', icon: Settings, style: 'border-blue-200 bg-blue-50 text-blue-700' },
+  call_check_configuration: { label: 'Call check configuration', icon: Phone, style: 'border-violet-200 bg-violet-50 text-violet-700' },
   runtime_fallback: { label: 'Runtime fallback', icon: Activity, style: 'border-rose-200 bg-rose-50 text-rose-700' },
   post_call_closing: { label: 'Post-call closing', icon: Phone, style: 'border-purple-200 bg-purple-50 text-purple-700' },
 };

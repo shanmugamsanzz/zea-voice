@@ -25,6 +25,7 @@ import { CustomerUtteranceBuffer } from './interruption/customer-utterance-buffe
 import { validateFinalCustomerTurn } from './interruption/final-turn-validator.js';
 import { ShortTurnMerger } from './interruption/short-turn-merger.js';
 import { greetingModes, resolveInteractionConfiguration } from './interaction/interaction-config.js';
+import { findCallCheckPhrase, resolveCallCheckConfiguration } from './interaction/call-check-config.js';
 import { resolveCallContextId } from './interaction/context-id-resolver.js';
 import { createContextCachePolicy, publicContextCacheMetadata } from './interaction/context-cache-policy.js';
 import { conversationContextCache } from './interaction/conversation-context-cache.service.js';
@@ -146,6 +147,7 @@ export class RealtimeConversationOrchestrator {
         samples: [],
       },
       shortTurns: { deferred: 0, merged: 0, discarded: 0 },
+      callChecks: { detected: 0, spoken: 0, failed: 0 },
       turnLatency: [],
     };
     this.followUpOpeningSources = [];
@@ -299,6 +301,7 @@ export class RealtimeConversationOrchestrator {
       ...this.runtimeProfile.agent.settings,
       ...this.runtimeProfile.agent.speech?.interaction,
     });
+    this.callCheckConfiguration = resolveCallCheckConfiguration(this.runtimeProfile.agent.settings);
     this.callbackConfiguration = resolveCallbackConfiguration(this.runtimeProfile.agent.settings);
     this.taskCompletionState = createTaskCompletionState(this.runtimeProfile.agent.settings, {
       ...(this.call.providerMetadata?.context ?? {}),
@@ -815,7 +818,7 @@ export class RealtimeConversationOrchestrator {
           type: 'final_transcript', text: buffered.finalText,
           confidence: buffered.finalConfidence, bufferedFinal: true,
         });
-      }
+      } else this.#armInactivity();
       return;
     }
     if (event.type !== 'final_transcript') return;
@@ -827,7 +830,10 @@ export class RealtimeConversationOrchestrator {
     // valid caller question from waiting forever when a provider omits that
     // separate signal.
     if (!this.customerUtterance.speechEnded) this.customerUtterance.markSpeechEnded();
-    if (!this.customerUtterance.ready || !this.customerUtterance.markFinalProcessed()) return;
+    if (!this.customerUtterance.ready || !this.customerUtterance.markFinalProcessed()) {
+      this.#armInactivity();
+      return;
+    }
     const rawCompletedTurn = this.customerUtterance.text;
     const completedTurn = this.shortTurnMerger.combine(rawCompletedTurn);
     if (completedTurn !== rawCompletedTurn) this.runtimeMetrics.shortTurns.merged += 1;
@@ -843,6 +849,11 @@ export class RealtimeConversationOrchestrator {
     this.#recordInterruptionTrace('final_turn_assembled', {
       epoch: this.epoch, text: completedTurn, confidence: finalConfidence,
     });
+    const callCheckPhrase = findCallCheckPhrase(completedTurn, this.callCheckConfiguration);
+    if (callCheckPhrase) {
+      await this.#handleCallCheck(completedTurn, callCheckPhrase);
+      return;
+    }
     const outputWasActive = [callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state);
     const agentAudioWasPlaying = [callStates.GREETING, callStates.SPEAKING].includes(this.controller.state);
     if (outputWasActive || this.interruptionCandidate.active) {
@@ -903,6 +914,7 @@ export class RealtimeConversationOrchestrator {
     this.interruptionCandidate.reset();
     if (this.controller.state !== callStates.LISTENING || !completedTurn.trim()) {
       this.customerUtterance.reset();
+      this.#armInactivity();
       return;
     }
     const validation = validateFinalCustomerTurn({
@@ -931,6 +943,7 @@ export class RealtimeConversationOrchestrator {
         }, 'Short STT fragment deferred briefly for the next final transcript');
       } else this.runtimeMetrics.shortTurns.discarded += 1;
       this.customerUtterance.reset();
+      this.#armInactivity();
       return;
     }
     this.shortTurnMerger.clear();
@@ -939,6 +952,7 @@ export class RealtimeConversationOrchestrator {
         stage: 'stt.final_turn_ignored', callId: this.call.id, reason: 'duplicate',
       }, 'Duplicate final STT turn was not sent to Knowledge or LLM');
       this.customerUtterance.reset();
+      this.#armInactivity();
       return;
     }
     const action = await this.controller.receiveFinalTranscript(validation.text);
@@ -1058,6 +1072,57 @@ export class RealtimeConversationOrchestrator {
     await this.#synthesize(confirmation, `task-completion-${epoch}`);
     await this.audioEngine.drainOutput();
     await this.#close('task_completion_completed');
+  }
+
+  async #handleCallCheck(customerText, matchedPhrase) {
+    if (this.finalized) return;
+    this.runtimeMetrics.callChecks.detected += 1;
+    this.#clearInactivity();
+
+    if ([callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) {
+      await this.#cancelActive('caller_call_check');
+    }
+    if (this.controller.state !== callStates.LISTENING) {
+      this.runtimeMetrics.callChecks.failed += 1;
+      this.log.warn({
+        stage: 'call_check.not_ready', callId: this.call.id,
+        state: this.controller.state, matchedPhrase,
+      }, 'Configured call-check phrase could not run because the call was not listening');
+      this.customerUtterance.reset();
+      return;
+    }
+
+    const response = this.#fitTtsMessage(this.callCheckConfiguration.response);
+    if (!response) {
+      this.runtimeMetrics.callChecks.failed += 1;
+      this.customerUtterance.reset();
+      this.#armInactivity();
+      return;
+    }
+
+    await this.controller.receiveFinalTranscript(customerText);
+    this.customerUtterance.reset();
+    this.shortTurnMerger.clear();
+    await this.controller.setAssistantResponse(response, Date.now(), {
+      sources: [createMessageSource(messageSourceTypes.CALL_CHECK_CONFIGURATION, {
+        id: this.runtimeProfile.agent.id,
+        label: 'Call Check Response',
+        metadata: { matchedPhrase },
+      })],
+    });
+    const epoch = ++this.epoch;
+    this.log.info({
+      stage: 'call_check.detected', callId: this.call.id,
+      epoch, matchedPhrase,
+    }, 'Configured call-check phrase matched; bypassing Knowledge Base and LLM');
+    const spoken = await this.#synthesize(response, `call-check-${epoch}`, { epoch });
+    if (!spoken || this.#isStaleGeneration(epoch) || this.controller.state !== callStates.SPEAKING) return;
+    await this.audioEngine.drainOutput();
+    if (this.#isStaleGeneration(epoch) || this.controller.state !== callStates.SPEAKING) return;
+    await this.controller.playbackComplete();
+    this.runtimeMetrics.callChecks.spoken += 1;
+    this.errorCount = 0;
+    this.#armInactivity();
   }
 
   #isDuplicateFinalTurn(text) {

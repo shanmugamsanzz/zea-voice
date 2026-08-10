@@ -57,6 +57,15 @@ export function validateFinalCustomerTurn({
   }
   const configuredMinimum = Math.min(3, Math.max(1, Number(minimumWords) || 2));
   if (finalTokens.length < configuredMinimum) return { accepted: false, reason: 'too_short', text: finalText };
+  // Sentence-ending punctuation is an explicit STT signal that this is a
+  // complete customer turn. Do not defer it because of a trailing period.
+  if (/[.?!]$/u.test(finalText)) {
+    const resolvedConfidence = confidenceValue(confidence);
+    if (resolvedConfidence !== null && resolvedConfidence < minimumConfidence) {
+      return { accepted: false, reason: 'low_confidence', text: finalText, confidence: resolvedConfidence };
+    }
+    return { accepted: true, text: finalText, confidence: resolvedConfidence, wordCount: finalTokens.length };
+  }
   if (/[….]$/u.test(finalText) || incompleteEndings.has(finalTokens.at(-1))) {
     return { accepted: false, reason: 'incomplete', text: finalText };
   }

@@ -7,6 +7,7 @@ const sourceTypeValues = [
   'tool',
   'llm',
   'silent_message',
+  'call_check_configuration',
   'runtime_fallback',
   'post_call_closing',
 ];

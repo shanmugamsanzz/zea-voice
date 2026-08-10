@@ -400,6 +400,8 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       explicitStopPhrases: base.explicitStopPhrases?.length
         ? base.explicitStopPhrases
         : (base.wordInterruptionTriggerWords?.length ? base.wordInterruptionTriggerWords : DEFAULT_EXPLICIT_STOP_PHRASES),
+      callCheckPhrases: base.callCheckPhrases?.length ? base.callCheckPhrases : [],
+      callCheckResponse: base.callCheckResponse || '',
       llmProvider: base.llmProvider || 'Gemini',
       llmModel: base.llmModel || 'gemini-2.5-flash',
       greetingMode: normalizeGreetingMode(base.greetingMode),
@@ -478,6 +480,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const [newCompletionRequiredField, setNewCompletionRequiredField] = useState('');
   const [newAcknowledgementPhrase, setNewAcknowledgementPhrase] = useState('');
   const [newExplicitStopPhrase, setNewExplicitStopPhrase] = useState('');
+  const [newCallCheckPhrase, setNewCallCheckPhrase] = useState('');
 
   const applyApiAgent = (value: AgentApiData) => {
     const savedSettings = value.settings ?? {};
@@ -507,6 +510,10 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         : (Array.isArray(savedSettings.wordInterruptionTriggerWords) && savedSettings.wordInterruptionTriggerWords.length
           ? savedSettings.wordInterruptionTriggerWords.map(String)
           : DEFAULT_EXPLICIT_STOP_PHRASES),
+      callCheckPhrases: Array.isArray(savedSettings.callCheckPhrases)
+        ? savedSettings.callCheckPhrases.map(String).map((phrase) => phrase.trim()).filter(Boolean).slice(0, 20)
+        : [],
+      callCheckResponse: String(savedSettings.callCheckResponse ?? '').trim(),
     }));
     setPhoneNumberId(value.phoneNumberId ?? '');
     setSttModelId(value.stt.modelId); setLlmModelId(value.llm.modelId); setTtsModelId(value.tts.modelId);
@@ -797,6 +804,32 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     if (normalizedEndTriggerPhrases.length > 50) {
       setError('Call End Trigger Phrases cannot contain more than 50 phrases.'); return;
     }
+    if (!Array.isArray(agent.callCheckPhrases)) {
+      setError('Call Check Phrases must be a list of phrases.'); return;
+    }
+    const normalizedCallCheckPhrases: string[] = [];
+    const seenCallCheckPhrases = new Set<string>();
+    for (const rawPhrase of agent.callCheckPhrases) {
+      const phrase = String(rawPhrase ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
+      if (!phrase) continue;
+      if (Array.from(phrase).length > 100) {
+        setError('Each Call Check Phrase cannot exceed 100 characters.'); return;
+      }
+      const key = phrase.toLocaleLowerCase().replace(/^[\p{P}\p{S}]+|[\p{P}\p{S}]+$/gu, '').trim();
+      if (!key || seenCallCheckPhrases.has(key)) continue;
+      seenCallCheckPhrases.add(key);
+      normalizedCallCheckPhrases.push(phrase);
+    }
+    if (normalizedCallCheckPhrases.length > 20) {
+      setError('Call Check Phrases cannot contain more than 20 phrases.'); return;
+    }
+    const normalizedCallCheckResponse = String(agent.callCheckResponse ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
+    if (Array.from(normalizedCallCheckResponse).length > 500) {
+      setError('Call Check Response cannot exceed 500 characters.'); return;
+    }
+    if (normalizedCallCheckPhrases.length > 0 && !normalizedCallCheckResponse) {
+      setError('Call Check Response is required when Call Check Phrases are configured.'); return;
+    }
     if (agent.postCallSummaryEnabled) {
       if (!agent.postCallSummaryModelId) { setError('Select an active LLM model for Post-Call AI Summary.'); return; }
       if (!models.some((model) => model.id === agent.postCallSummaryModelId && model.providerType === 'llm')) {
@@ -898,6 +931,8 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         Object.entries(rawAgentSettings).filter(([key]) => !deprecatedAgentSettings.has(key)),
         ),
         callEndTriggerPhrases: normalizedEndTriggerPhrases,
+        callCheckPhrases: normalizedCallCheckPhrases,
+        callCheckResponse: normalizedCallCheckResponse,
         taskCompletionEnabled,
         taskCompletionIntent,
         taskCompletionRequiredFields: normalizedCompletionFields,
@@ -934,18 +969,26 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     void saveAgent();
   };
 
-  const addInterruptionPhrases = (field: 'acknowledgementPhrases' | 'explicitStopPhrases', rawValue: string) => {
-    const additions = rawValue.split(',').map((value) => value.trim()).filter(Boolean);
+  const addInterruptionPhrases = (field: 'acknowledgementPhrases' | 'explicitStopPhrases' | 'callCheckPhrases', rawValue: string) => {
+    const additions = rawValue.split(',')
+      .map((value) => value.normalize('NFKC').trim().replace(/\s+/gu, ' '))
+      .filter(Boolean);
     if (!additions.length) return;
-    setAgent((current) => ({
-      ...current,
-      [field]: [...new Set([
-        ...(current[field] || []),
-        ...additions,
-      ])].slice(0, 20),
-    }));
+    setAgent((current) => {
+      const phrases: string[] = [];
+      const seen = new Set<string>();
+      for (const phrase of [...(current[field] || []), ...additions]) {
+        const key = phrase.toLocaleLowerCase();
+        if (!seen.has(key)) {
+          seen.add(key);
+          phrases.push(phrase);
+        }
+      }
+      return { ...current, [field]: phrases.slice(0, 20) };
+    });
     if (field === 'acknowledgementPhrases') setNewAcknowledgementPhrase('');
-    else setNewExplicitStopPhrase('');
+    else if (field === 'explicitStopPhrases') setNewExplicitStopPhrase('');
+    else setNewCallCheckPhrase('');
   };
 
   const showKnowledgeSuccess = (message: string) => {
@@ -1882,6 +1925,60 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                           ))}
                         </div>
                       )}
+                    </div>
+
+                    <div className="rounded-xl border border-violet-100 bg-violet-50/40 p-4">
+                      <div className="mb-1.5 flex items-center justify-between gap-3">
+                        <FieldInfoTooltip
+                          id="call-check-phrases-information"
+                          text="Add short phrases callers use only to check whether the line is active. Save Tamil, Tanglish, or English phrases, separated by commas. Maximum 20."
+                          triggerContent={<span className="block text-[11px] font-black uppercase tracking-wider text-slate-500">Call Check Phrases</span>}
+                        />
+                        <button
+                          type="button"
+                          disabled={isReadOnly || !newCallCheckPhrase.trim() || (agent.callCheckPhrases?.length ?? 0) >= 20}
+                          onClick={() => addInterruptionPhrases('callCheckPhrases', newCallCheckPhrase)}
+                          className="zea-trigger-add-button rounded-lg border border-violet-300 bg-violet-600 px-3 py-1.5 text-xs font-black text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          + Add
+                        </button>
+                      </div>
+                      <input
+                        type="text"
+                        value={newCallCheckPhrase}
+                        disabled={isReadOnly || (agent.callCheckPhrases?.length ?? 0) >= 20}
+                        onChange={(event) => setNewCallCheckPhrase(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
+                            addInterruptionPhrases('callCheckPhrases', newCallCheckPhrase);
+                          }
+                        }}
+                        placeholder="Example: hello, கேக்குதா, இருக்கீங்களா"
+                        className="w-full bg-white border border-slate-200 focus:border-violet-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none disabled:bg-slate-50"
+                      />
+                      {(agent.callCheckPhrases?.length ?? 0) > 0 && (
+                        <div className="flex flex-wrap gap-2 mt-3">
+                          {agent.callCheckPhrases?.map((phrase) => (
+                            <span key={phrase} className="zea-interruption-trigger-chip inline-flex items-center gap-1.5 rounded-full bg-violet-100 border border-violet-200 px-3 py-1.5 text-xs font-bold text-violet-800">
+                              {phrase}
+                              {!isReadOnly && <button type="button" aria-label={`Remove ${phrase}`} onClick={() => setAgent({ ...agent, callCheckPhrases: agent.callCheckPhrases?.filter((value) => value !== phrase) })} className="zea-trigger-chip-remove inline-flex h-4 w-4 items-center justify-center rounded-full text-violet-700 transition hover:bg-violet-200"><X className="h-3 w-3" aria-hidden="true" /></button>}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      <label className="mt-4 block text-[11px] font-black uppercase tracking-wider text-slate-500" htmlFor="call-check-response">Call Check Response</label>
+                      <textarea
+                        id="call-check-response"
+                        value={agent.callCheckResponse ?? ''}
+                        disabled={isReadOnly}
+                        maxLength={500}
+                        onChange={(event) => setAgent({ ...agent, callCheckResponse: event.target.value })}
+                        placeholder="Example: ஆமாங்க, கேக்குதுங்க. சொல்லுங்க."
+                        className="mt-1.5 min-h-20 w-full resize-y rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-semibold text-slate-800 outline-none transition focus:border-violet-500 disabled:bg-slate-50"
+                      />
+                      <p className="mt-1.5 text-[11px] font-medium text-slate-500">Saved as the short immediate response for a configured call-check phrase. It is kept separate from Knowledge Base and LLM instructions.</p>
                     </div>
 
                     <div className="hidden" aria-hidden="true">

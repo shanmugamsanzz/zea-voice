@@ -96,6 +96,7 @@
     "verify:call-terminal-fallback": "node scripts/verify-call-terminal-fallback.js",
     "verify:interruption-settings": "node scripts/verify-interruption-settings.js",
     "verify:interruption-engine": "node scripts/verify-interruption-engine.js",
+    "verify:call-check": "node scripts/verify-call-check-config.js",
     "verify:interaction-config": "node scripts/verify-interaction-config.js",
     "verify:auth-lifecycle": "node scripts/verify-authentication-lifecycle.js",
     "verify:agent-initiates": "node scripts/verify-agent-initiates-mode.js",

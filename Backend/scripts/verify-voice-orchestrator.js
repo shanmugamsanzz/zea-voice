@@ -220,6 +220,8 @@ const profile = {
       wordBasedInterruptionEnabled: true, wordInterruptionMinWords: 2,
       interruptionPolicy: 'any',
       callEndTriggerPhrases: ['finish this conversation'],
+      callCheckPhrases: ['hello', 'are you there'],
+      callCheckResponse: 'Yes, I can hear you. Please continue.',
     },
   },
   providers: {
@@ -489,6 +491,21 @@ await waitFor(() => llm.requests.length > requestsBeforeUnconfiguredEndPhrase,
 await waitFor(() => orchestrator.controller.state === 'listening',
   'An unconfigured built-in phrase should not end an agent with custom trigger phrases');
 assert.equal(completed.length, 0);
+const llmRequestsBeforeCallCheck = llm.requests.length;
+const knowledgeRequestsBeforeCallCheck = knowledgeQueries.length;
+stt.publish({ type: 'final_transcript', text: 'Hello?', language: 'en', isFinal: true });
+await waitFor(() => tts.texts.includes('Yes, I can hear you. Please continue.'),
+  'Configured call-check response was not sent directly to TTS');
+await waitFor(() => orchestrator.controller.state === 'listening',
+  'Call-check response did not continue the current conversation');
+assert.equal(llm.requests.length, llmRequestsBeforeCallCheck,
+  'Configured call-check phrase incorrectly invoked the LLM');
+assert.equal(knowledgeQueries.length, knowledgeRequestsBeforeCallCheck,
+  'Configured call-check phrase incorrectly queried Knowledge Base');
+await waitFor(() => transcript.some((entry) => entry.text === 'Yes, I can hear you. Please continue.'),
+  'Call-check response was not persisted in the existing conversation');
+const callCheckTranscript = transcript.find((entry) => entry.text === 'Yes, I can hear you. Please continue.');
+assert.deepEqual(callCheckTranscript.sources.map((source) => source.type), ['call_check_configuration']);
 stt.publish({ type: 'final_transcript', text: 'Please finish this conversation now', language: 'en', isFinal: true });
 await waitFor(() => completed.length === 1, 'Call was not finalized after closing request');
 assert.equal(completed[0].outcome, 'completed');
@@ -530,7 +547,7 @@ const inactivityProfile = {
   agent: {
     ...profile.agent,
     welcomeMessage: null,
-    inactivityTimeoutSeconds: 0.02,
+    inactivityTimeoutSeconds: 0.05,
     settings: { ...profile.agent.settings, maxInactivityPrompts: 1 },
   },
   integrations: { postCall: {
@@ -548,6 +565,11 @@ const inactivityOrchestrator = new RealtimeConversationOrchestrator(inactivityMe
 });
 await inactivityOrchestrator.ready;
 inactivityMedia.emit('start', { session: inactivityMedia });
+await waitFor(() => inactivityOrchestrator.controller.state === 'listening',
+  'Inactivity test call did not enter listening');
+inactivityStt.publish({ type: 'speech_started' });
+inactivityStt.publish({ type: 'partial_transcript', text: 'background noise', isFinal: false });
+inactivityStt.publish({ type: 'speech_ended' });
 await waitFor(() => inactivityTts.texts.includes('Are you still there?'), 'Inactivity prompt was not played');
 await waitFor(() => inactivityCompleted.length === 1, 'Inactive call was not closed');
 assert.equal(inactivityCompleted[0].reason, 'inactivity_limit_reached');
