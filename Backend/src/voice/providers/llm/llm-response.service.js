@@ -61,7 +61,9 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
     { role: 'system', content: systemPrompt },
     ...(input.history ?? []).slice(-Math.min(
       env.LLM_MAX_HISTORY_MESSAGES,
-      env.VOICE_LLM_MAX_HISTORY_MESSAGES,
+      Number.isInteger(input.historyLimit) && input.historyLimit > 0
+        ? input.historyLimit
+        : env.VOICE_LLM_MAX_HISTORY_MESSAGES,
     )),
     { role: 'user', content: input.query },
   ];

@@ -527,7 +527,9 @@ assert.ok(completed[0].metrics.ttsGeneration.failed > 0);
 assert.ok(completed[0].metrics.ttsGeneration.sentenceHandoffWaits > 0);
 assert.ok(completed[0].metrics.providerFailures.tts > 0);
 assert.equal(durableMemoryWrites.length, 1);
-assert.equal(contextCacheWrites.length, 2);
+assert.ok(contextCacheWrites.length > 2, 'Live conversation state was not checkpointed asynchronously after responses');
+assert.ok(completed[0].metrics.liveCallMemory.background.completed > 0);
+assert.ok(completed[0].metrics.liveCallMemory.timings.maximumMs < 50);
 assert.ok(durableMemoryWrites[0].state.recentMessages.some((message) => (
   message.content === 'isolate permanent sentence failure'
 )), 'Recent completed conversation turns were not persisted to durable memory');

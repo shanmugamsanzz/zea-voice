@@ -136,6 +136,12 @@ function normalizeCachePolicy(value: unknown): 'persistent_24h' | 'session_only'
   return 'persistent_24h';
 }
 
+function normalizeConversationContextMode(value: unknown): 'last_n_turns' | 'full_current_call' {
+  return String(value ?? '').trim().toLowerCase() === 'full_current_call'
+    ? 'full_current_call'
+    : 'last_n_turns';
+}
+
 function legacySpeechConfirmationDelay(settings: Record<string, unknown>) {
   const configured = Number(settings.speechConfirmationDelayMs);
   if (Number.isFinite(configured)) return Math.min(1500, Math.max(150, Math.round(configured)));
@@ -407,6 +413,9 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       greetingMode: normalizeGreetingMode(base.greetingMode),
       cachePolicy: normalizeCachePolicy(base.cachePolicy),
       contextId: base.contextId || '',
+      conversationContextMode: normalizeConversationContextMode(base.conversationContextMode),
+      conversationContextTurns: base.conversationContextTurns ?? 5,
+      conversationMemoryFields: base.conversationMemoryFields || [],
       callbackEnabled: base.callbackEnabled !== undefined ? base.callbackEnabled : true,
       callbackMinimumDelaySeconds: base.callbackMinimumDelaySeconds ?? 30,
       callbackMaximumDelayDays: base.callbackMaximumDelayDays ?? 30,
@@ -499,6 +508,11 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       greetingMode: normalizeGreetingMode(savedSettings.greetingMode),
       cachePolicy: normalizeCachePolicy(savedSettings.cachePolicy),
       contextId: String(savedSettings.contextId ?? '').trim(),
+      conversationContextMode: normalizeConversationContextMode(savedSettings.conversationContextMode),
+      conversationContextTurns: Number(savedSettings.conversationContextTurns ?? 5),
+      conversationMemoryFields: Array.isArray(savedSettings.conversationMemoryFields)
+        ? savedSettings.conversationMemoryFields as VoiceAgent['conversationMemoryFields']
+        : [],
       wordBasedInterruptionEnabled: true,
       speechConfirmationDelayMs: legacySpeechConfirmationDelay(savedSettings),
       minimumMeaningfulWords: Number(savedSettings.minimumMeaningfulWords ?? savedSettings.wordInterruptionMinWords ?? 2),
@@ -878,6 +892,30 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       || (maximumCallMinutes !== 0 && (maximumCallMinutes < 1 || maximumCallMinutes > 120))) {
       setError('Maximum Minutes Per Call must be 0 (unlimited) or between 1 and 120.'); return;
     }
+    const conversationContextMode = normalizeConversationContextMode(agent.conversationContextMode);
+    const conversationContextTurns = Number(agent.conversationContextTurns ?? 5);
+    if (!Number.isInteger(conversationContextTurns) || conversationContextTurns < 1 || conversationContextTurns > 10) {
+      setError('Recent Turns must be between 1 and 10 to protect live response latency.'); return;
+    }
+    if (!Array.isArray(agent.conversationMemoryFields) || agent.conversationMemoryFields.length > 30) {
+      setError('Important Information Fields must be a list with no more than 30 fields.'); return;
+    }
+    const normalizedMemoryFields: NonNullable<VoiceAgent['conversationMemoryFields']> = [];
+    const seenMemoryFieldKeys = new Set<string>();
+    for (const rawField of agent.conversationMemoryFields) {
+      const key = String(rawField?.key ?? '').normalize('NFKC').trim().toLowerCase();
+      const label = String(rawField?.label ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
+      const question = String(rawField?.question ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
+      const type = rawField?.type || 'text';
+      if (!/^[a-z][a-z0-9_]{0,63}$/.test(key)) {
+        setError('Each Information Field key must use lowercase letters, numbers and underscores only.'); return;
+      }
+      if (seenMemoryFieldKeys.has(key)) { setError('Information Field keys must be unique.'); return; }
+      if (!label || label.length > 100) { setError('Each Information Field requires a label of 100 characters or fewer.'); return; }
+      if (!question || question.length > 500) { setError('Each Information Field requires a question of 500 characters or fewer.'); return; }
+      seenMemoryFieldKeys.add(key);
+      normalizedMemoryFields.push({ key, label, type, required: rawField.required !== false, question });
+    }
     const taskCompletionEnabled = agent.taskCompletionEnabled === true;
     const taskCompletionIntent = String(agent.taskCompletionIntent || '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
     const taskCompletionConfirmationMessage = String(agent.taskCompletionConfirmationMessage || '').normalize('NFKC').trim();
@@ -937,6 +975,9 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         taskCompletionIntent,
         taskCompletionRequiredFields: normalizedCompletionFields,
         taskCompletionConfirmationMessage,
+        conversationContextMode,
+        conversationContextTurns,
+        conversationMemoryFields: normalizedMemoryFields,
       };
       const payload = {
         name: agent.name, description: agent.description || null, goal: agent.goal || null,
@@ -2123,7 +2164,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       <h3 className="text-sm font-extrabold text-slate-800">Conversation Memory</h3>
                       <FieldInfoTooltip
                         id="conversation-memory-information"
-                        text="Conversation state is available only during the current call and is removed when the call ends."
+                        text="Live-call context controls what the agent remembers during one call. Cache Policy separately controls whether later calls continue it."
                       />
                     </div>
                     <p className="text-xs font-semibold text-slate-500">Control whether later calls continue the previous conversation.</p>
@@ -2146,6 +2187,41 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       <ChevronDown className="pointer-events-none absolute right-4 top-3.5 h-4 w-4 text-slate-400" />
                     </div>
                   </div>
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-500">Conversation Context Mode</label>
+                      <div className="relative">
+                        <select
+                          value={agent.conversationContextMode || 'last_n_turns'}
+                          disabled={isReadOnly}
+                          onChange={(event) => setAgent({
+                            ...agent,
+                            conversationContextMode: event.target.value as 'last_n_turns' | 'full_current_call',
+                          })}
+                          className="w-full appearance-none rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 pr-10 text-xs font-semibold text-slate-800 outline-none transition focus:border-violet-500 focus:bg-white"
+                        >
+                          <option value="last_n_turns">Last N Turns</option>
+                          <option value="full_current_call">Full Current Call</option>
+                        </select>
+                        <ChevronDown className="pointer-events-none absolute right-4 top-3.5 h-4 w-4 text-slate-400" />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-500">Recent Turns</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={10}
+                        value={agent.conversationContextTurns ?? 5}
+                        disabled={isReadOnly || agent.conversationContextMode === 'full_current_call'}
+                        onChange={(event) => setAgent({ ...agent, conversationContextTurns: Number(event.target.value) })}
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-800 outline-none transition focus:border-violet-500 focus:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-[10px] font-semibold leading-relaxed text-slate-400">
+                    One turn contains a customer message and the related agent response. Full Current Call keeps the complete finalized conversation in process until hangup.
+                  </p>
                   <div>
                     <div className="mb-1.5 flex items-center gap-1.5">
                       <label className="block text-[10px] font-black uppercase tracking-wider text-slate-500">Context Namespace</label>
@@ -2163,6 +2239,120 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       onChange={(event) => setAgent({ ...agent, contextId: event.target.value })}
                       className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-800 outline-none transition focus:border-violet-500 focus:bg-white disabled:cursor-not-allowed disabled:opacity-50"
                     />
+                  </div>
+                  <div>
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <div>
+                        <label className="block text-[10px] font-black uppercase tracking-wider text-slate-500">Important Information Fields</label>
+                        <p className="mt-1 text-[10px] font-semibold text-slate-400">Define reusable information for this agent. No industry-specific fields are built into the runtime.</p>
+                      </div>
+                      {!isReadOnly && (
+                        <button
+                          type="button"
+                          onClick={() => setAgent({
+                            ...agent,
+                            conversationMemoryFields: [
+                              ...(agent.conversationMemoryFields || []),
+                              { key: '', label: '', type: 'text', required: true, question: '' },
+                            ],
+                          })}
+                          className="flex shrink-0 items-center gap-1 rounded-lg bg-violet-600 px-3 py-2 text-[10px] font-black text-white transition hover:bg-violet-700"
+                        >
+                          <Plus className="h-3.5 w-3.5" /> Add Field
+                        </button>
+                      )}
+                    </div>
+                    <div className="space-y-3">
+                      {(agent.conversationMemoryFields || []).length === 0 ? (
+                        <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-center text-[10px] font-semibold text-slate-400">
+                          No important information fields configured.
+                        </div>
+                      ) : agent.conversationMemoryFields?.map((field, index) => (
+                        <div key={`${field.key}-${index}`} className="rounded-xl border border-violet-100 bg-violet-50/30 p-3">
+                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <input
+                              type="text"
+                              value={field.key}
+                              disabled={isReadOnly}
+                              maxLength={64}
+                              placeholder="Field key, e.g. customer_name"
+                              onChange={(event) => {
+                                const fields = [...(agent.conversationMemoryFields || [])];
+                                fields[index] = { ...field, key: event.target.value };
+                                setAgent({ ...agent, conversationMemoryFields: fields });
+                              }}
+                              className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold outline-none focus:border-violet-500"
+                            />
+                            <input
+                              type="text"
+                              value={field.label}
+                              disabled={isReadOnly}
+                              maxLength={100}
+                              placeholder="Label, e.g. Customer Name"
+                              onChange={(event) => {
+                                const fields = [...(agent.conversationMemoryFields || [])];
+                                fields[index] = { ...field, label: event.target.value };
+                                setAgent({ ...agent, conversationMemoryFields: fields });
+                              }}
+                              className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold outline-none focus:border-violet-500"
+                            />
+                            <select
+                              value={field.type}
+                              disabled={isReadOnly}
+                              onChange={(event) => {
+                                const fields = [...(agent.conversationMemoryFields || [])];
+                                fields[index] = { ...field, type: event.target.value as typeof field.type };
+                                setAgent({ ...agent, conversationMemoryFields: fields });
+                              }}
+                              className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold outline-none focus:border-violet-500"
+                            >
+                              <option value="text">Text</option><option value="number">Number</option>
+                              <option value="date">Date</option><option value="time">Time</option>
+                              <option value="boolean">Yes / No</option><option value="select">Selection</option>
+                              <option value="email">Email</option><option value="phone">Phone</option>
+                            </select>
+                            <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-600">
+                              <input
+                                type="checkbox"
+                                checked={field.required !== false}
+                                disabled={isReadOnly}
+                                onChange={(event) => {
+                                  const fields = [...(agent.conversationMemoryFields || [])];
+                                  fields[index] = { ...field, required: event.target.checked };
+                                  setAgent({ ...agent, conversationMemoryFields: fields });
+                                }}
+                              /> Required
+                            </label>
+                          </div>
+                          <div className="mt-3 flex gap-2">
+                            <input
+                              type="text"
+                              value={field.question}
+                              disabled={isReadOnly}
+                              maxLength={500}
+                              placeholder="Question the agent should ask when this field is missing"
+                              onChange={(event) => {
+                                const fields = [...(agent.conversationMemoryFields || [])];
+                                fields[index] = { ...field, question: event.target.value };
+                                setAgent({ ...agent, conversationMemoryFields: fields });
+                              }}
+                              className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold outline-none focus:border-violet-500"
+                            />
+                            {!isReadOnly && (
+                              <button
+                                type="button"
+                                aria-label={`Remove ${field.label || field.key || 'information field'}`}
+                                onClick={() => setAgent({
+                                  ...agent,
+                                  conversationMemoryFields: (agent.conversationMemoryFields || []).filter((_, fieldIndex) => fieldIndex !== index),
+                                })}
+                                className="rounded-lg border border-red-100 bg-red-50 px-3 text-red-600 hover:bg-red-100"
+                              ><Trash2 className="h-4 w-4" /></button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                   {agent.cachePolicy !== 'session_only' && (
                     <div className={`rounded-xl border p-4 text-[11px] font-semibold leading-relaxed ${agent.cachePolicy === 'persistent_24h' ? 'border-emerald-100 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>

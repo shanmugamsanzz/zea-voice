@@ -1,0 +1,78 @@
+const acknowledgementDefaults = new Set([
+  'yes', 'yeah', 'yep', 'no', 'nope', 'ok', 'okay', 'hmm', 'hm', 'sure',
+  'ஆம்', 'ஆமா', 'இல்லை', 'இல்ல', 'சரி', 'ம்', 'ஹம்',
+]);
+
+function normalized(value) {
+  return String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
+    .replace(/\s+/gu, ' ').trim();
+}
+
+function regexp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function isAcknowledgementOnly(text, acknowledgementPhrases = []) {
+  const value = normalized(text).toLocaleLowerCase();
+  const configured = new Set(acknowledgementPhrases.map((entry) => normalized(entry).toLocaleLowerCase()));
+  return acknowledgementDefaults.has(value) || configured.has(value);
+}
+
+function fieldAliases(field) {
+  const label = normalized(field.label);
+  const words = label.split(/\s+/gu).filter((word) => Array.from(word).length >= 3);
+  return [...new Set([field.key, field.key.replace(/_/gu, ' '), label, words.at(-1)])]
+    .map(normalized).filter(Boolean).sort((left, right) => right.length - left.length);
+}
+
+function explicitFieldValue(field, text, fields) {
+  const aliases = fieldAliases(field);
+  const everyAlias = [...new Set(fields.flatMap(fieldAliases))].sort((left, right) => right.length - left.length);
+  const nextField = everyAlias.length ? `(?=\\s+(?:${everyAlias.map(regexp).join('|')})\\s*(?:is|:|=|ன்னா|என்பது|வந்து)?|[,;.!?]|$)` : '(?=[,;.!?]|$)';
+  const match = text.match(new RegExp(`(?:${aliases.map(regexp).join('|')})\\s*(?:is|:|=|ன்னா|என்பது|வந்து)?\\s*(.+?)${nextField}`, 'iu'));
+  return normalized(match?.[1] ?? '');
+}
+
+function typedValue(field, text, pending, fields) {
+  const explicit = explicitFieldValue(field, text, fields);
+  const candidate = explicit || (pending ? text : '');
+  if (!candidate) return '';
+  if (field.type === 'email') return candidate.match(/[\p{L}\p{N}._%+-]+@[\p{L}\p{N}.-]+\.[A-Za-z]{2,}/u)?.[0] ?? '';
+  if (field.type === 'phone') return candidate.match(/(?:\+?\d[\d\s()-]{7,}\d)/u)?.[0]?.replace(/[\s()-]/gu, '') ?? '';
+  if (field.type === 'number') return candidate.match(/-?\d+(?:\.\d+)?/u)?.[0] ?? (pending ? candidate : '');
+  if (field.type === 'date') {
+    return candidate.match(/\b(?:today|tomorrow|day after tomorrow)\b|இன்று|நாளை|நாளைக்கு|மறுநாள்|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?/iu)?.[0] ?? (explicit ? explicit : '');
+  }
+  if (field.type === 'time') {
+    return candidate.match(/\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.|o'?clock)?|காலை\s*\d{1,2}|மாலை\s*\d{1,2}|இரவு\s*\d{1,2}|\d{1,2}\s*மணி/iu)?.[0] ?? (explicit ? explicit : '');
+  }
+  if (field.type === 'boolean') {
+    if (/^(?:yes|yeah|yep|true|ஆம்|ஆமா|சரி)$/iu.test(candidate)) return true;
+    if (/^(?:no|nope|false|இல்லை|இல்ல|வேண்டாம்)$/iu.test(candidate)) return false;
+    return '';
+  }
+  return candidate.slice(0, 500);
+}
+
+export function captureConfiguredMemoryFields({ fields = [], collectedData = {}, pendingQuestion, text, acknowledgementPhrases = [] }) {
+  const utterance = normalized(text);
+  if (!utterance || isAcknowledgementOnly(utterance, acknowledgementPhrases)) return Object.freeze({});
+  const updates = {};
+  for (const field of fields) {
+    const pending = pendingQuestion === field.key;
+    if (collectedData[field.key] !== undefined && !explicitFieldValue(field, utterance, fields)) continue;
+    const value = typedValue(field, utterance, pending, fields);
+    if (value !== '' && value !== undefined && value !== null) updates[field.key] = value;
+  }
+  return Object.freeze(updates);
+}
+
+export function pendingFieldFromAssistantResponse(fields = [], response = '') {
+  const answer = normalized(response).toLocaleLowerCase();
+  if (!answer) return null;
+  for (const field of fields) {
+    const question = normalized(field.question).toLocaleLowerCase();
+    if (question && answer.includes(question)) return field.key;
+  }
+  return null;
+}

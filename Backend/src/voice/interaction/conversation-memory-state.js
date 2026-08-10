@@ -58,18 +58,24 @@ export function normalizeConversationMemoryState(value = {}) {
   });
 }
 
-export function buildConversationMemoryState({ previous = {}, history = [], call, outcome, reason, callback, at = new Date() }) {
+export function buildConversationMemoryState({
+  previous = {}, history = [], call, outcome, reason, callback, collectedData,
+  completedQuestions, pendingQuestions, runningSummary, at = new Date(),
+}) {
   const prior = normalizeConversationMemoryState(previous);
   const currentMessages = messages(history);
   const recentSummary = currentMessages.slice(-6)
     .map((message) => `${message.role === 'user' ? 'Caller' : 'Agent'}: ${message.content}`)
     .join(' | ');
-  const summary = [prior.summary.slice(-8_000), recentSummary].filter(Boolean).join(' | ');
+  const summary = [prior.summary.slice(-8_000), text(runningSummary, 3_600), recentSummary].filter(Boolean).join(' | ');
   return normalizeConversationMemoryState({
     ...prior,
     summary,
     recentMessages: [...prior.recentMessages, ...currentMessages],
     callback: callback ?? prior.callback,
+    collectedData: { ...prior.collectedData, ...(safeJson(collectedData) ?? {}) },
+    completedQuestions: [...prior.completedQuestions, ...(completedQuestions ?? [])],
+    pendingQuestions: pendingQuestions ?? prior.pendingQuestions,
     lastCall: {
       id: call?.id ?? null,
       providerCallId: call?.providerCallId ?? null,

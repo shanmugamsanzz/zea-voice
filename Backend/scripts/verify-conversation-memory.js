@@ -47,9 +47,15 @@ const state = buildConversationMemoryState({
   previous: { recentMessages: [{ role: 'user', content: 'old' }] },
   history: Array.from({ length: 20 }, (_, index) => ({ role: index % 2 ? 'assistant' : 'user', content: `m${index}` })),
   call: { id: 'call-2', direction: 'outbound' }, outcome: 'completed', reason: 'done',
+  collectedData: { customer_name: 'Shanmugam' }, completedQuestions: ['customer_name'],
+  pendingQuestions: ['preferred_date'], runningSummary: 'Customer selected a package.',
 });
 assert.equal(state.recentMessages.length, 12);
 assert.equal(state.recentMessages.at(-1).content, 'm19');
 assert.equal(state.lastCall.id, 'call-2');
+assert.equal(state.collectedData.customer_name, 'Shanmugam');
+assert.deepEqual(state.completedQuestions, ['customer_name']);
+assert.deepEqual(state.pendingQuestions, ['preferred_date']);
+assert.match(state.summary, /Customer selected a package/);
 
 console.log(JSON.stringify({ success: true, task: 'Permanent PostgreSQL conversation memory' }));

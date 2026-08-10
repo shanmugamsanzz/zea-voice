@@ -34,6 +34,8 @@ import {
   conversationMemoryScope,
 } from './interaction/conversation-memory.service.js';
 import { buildConversationMemoryState } from './interaction/conversation-memory-state.js';
+import { compactLiveCallMemoryContext, openLiveCallMemory } from './interaction/live-call-memory.js';
+import { LiveMemoryMaintenanceQueue } from './interaction/live-memory-maintenance.js';
 import { resolveCallbackConfiguration } from './interaction/callback-config.js';
 import {
   captureTaskCompletionInput,
@@ -318,6 +320,21 @@ export class RealtimeConversationOrchestrator {
     this.contextStore = this.dependencies.contextStore ?? conversationContextCache;
     this.memoryStore = this.dependencies.memoryStore ?? conversationMemoryRepository;
     await this.#loadConversationMemory();
+    this.liveCallMemory = (this.dependencies.openLiveCallMemory ?? openLiveCallMemory)({
+      tenantId: this.runtimeProfile.agent.tenantId ?? this.call.tenantId,
+      workspaceId: this.runtimeProfile.agent.workspaceId ?? this.call.workspaceId,
+      agentId: this.runtimeProfile.agent.id ?? this.call.agentId,
+      callId: this.call.id,
+    }, this.runtimeProfile.agent.settings);
+    this.liveMemoryMaintenance = new LiveMemoryMaintenanceQueue({ log: this.log, callId: this.call.id });
+    this.runtimeMetrics.liveCallMemory = {
+      mode: this.liveCallMemory.snapshot().mode,
+      recentTurns: this.liveCallMemory.snapshot().recentTurns,
+      configuredFields: this.liveCallMemory.snapshot().fields.length,
+      storage: 'process_memory',
+      timings: { totalMs: 0, maximumMs: 0, samples: [] },
+      background: this.liveMemoryMaintenance.snapshot(),
+    };
     this.runtimeProfile = {
       ...this.runtimeProfile,
       callContext: {
@@ -371,10 +388,22 @@ export class RealtimeConversationOrchestrator {
       callSession: this.call,
       runtimeProfile: this.runtimeProfile,
       hooks: {
-        onTranscript: (entry) => this.transcriptPersistence.enqueue({
-          ...entry,
-          offsetMs: Math.max(0, entry.at - this.startedAt),
-        }),
+        onTranscript: (entry) => {
+          this.liveCallMemory?.append({
+            role: entry.speaker === 'agent' ? 'assistant' : 'user',
+            content: entry.text,
+            at: entry.at,
+          });
+          if (entry.speaker === 'agent') {
+            this.liveCallMemory?.observeAssistantResponse(entry.text);
+            // The initial welcome contains no caller state to checkpoint.
+            if (entry.sequenceNumber > 1) this.#scheduleLiveMemoryCheckpoint('assistant_response');
+          }
+          return this.transcriptPersistence.enqueue({
+            ...entry,
+            offsetMs: Math.max(0, entry.at - this.startedAt),
+          });
+        },
         onInterrupt: async ({ reason }) => this.log.info({
           icon: '🛑', stage: 'conversation.barge_in', callId: this.call.id, reason,
         }, '🛑 Caller interrupted active agent output'),
@@ -589,13 +618,18 @@ export class RealtimeConversationOrchestrator {
     if (!this.contextCachePolicy?.crossCall || !this.contextCachePolicy.writeEnabled || !this.controller) return;
     try {
       this.conversationMemoryScope ??= conversationMemoryScope(this.runtimeProfile, this.contextResolution);
+      const liveMemory = this.liveCallMemory?.snapshot();
       const state = buildConversationMemoryState({
         previous: this.previousConversationMemory,
-        history: this.controller.history,
+        history: liveMemory?.messages ?? this.controller.history,
         call: this.call,
         outcome,
         reason,
         callback: this.currentCallbackRequest,
+        collectedData: liveMemory?.collectedData,
+        completedQuestions: liveMemory?.completedQuestions,
+        pendingQuestions: liveMemory?.pendingQuestion ? [liveMemory.pendingQuestion] : [],
+        runningSummary: liveMemory?.runningSummary,
       });
       const stored = await this.memoryStore.save(this.conversationMemoryScope, {
         state,
@@ -615,6 +649,44 @@ export class RealtimeConversationOrchestrator {
         err: error, stage: 'context.memory_save_failed', callId: this.call.id,
       }, 'Conversation memory could not be saved; call completion will continue');
     }
+  }
+
+  #recordLiveMemoryTiming(operation, startedAt) {
+    const durationMs = Math.max(0, performance.now() - startedAt);
+    const timings = this.runtimeMetrics.liveCallMemory?.timings;
+    if (!timings) return;
+    timings.totalMs += durationMs;
+    timings.maximumMs = Math.max(timings.maximumMs, durationMs);
+    timings.samples.push({ operation, durationMs: Math.round(durationMs * 100) / 100 });
+    timings.samples = timings.samples.slice(-50);
+  }
+
+  #scheduleLiveSummary() {
+    this.liveMemoryMaintenance?.schedule('running_summary', () => {
+      this.liveCallMemory?.refreshRunningSummary();
+    });
+  }
+
+  #scheduleLiveMemoryCheckpoint(reason) {
+    this.liveMemoryMaintenance?.schedule('redis_checkpoint', async () => {
+      this.liveCallMemory?.refreshRunningSummary();
+      if (!this.contextCachePolicy?.crossCall || !this.contextCachePolicy.writeEnabled || !this.controller) return;
+      const liveMemory = this.liveCallMemory?.snapshot();
+      const state = buildConversationMemoryState({
+        previous: this.previousConversationMemory,
+        history: liveMemory?.messages ?? this.controller.history,
+        call: this.call,
+        outcome: 'connected',
+        reason,
+        callback: this.currentCallbackRequest,
+        collectedData: liveMemory?.collectedData,
+        completedQuestions: liveMemory?.completedQuestions,
+        pendingQuestions: liveMemory?.pendingQuestion ? [liveMemory.pendingQuestion] : [],
+        runningSummary: liveMemory?.runningSummary,
+      });
+      await this.contextStore.set(this.contextCachePolicy, state);
+      this.runtimeMetrics.liveCallMemory.checkpointed = true;
+    });
   }
 
   async #guard(stage, operation) {
@@ -956,6 +1028,18 @@ export class RealtimeConversationOrchestrator {
       return;
     }
     const action = await this.controller.receiveFinalTranscript(validation.text);
+    const memoryCaptureStartedAt = performance.now();
+    const liveCapture = this.liveCallMemory?.captureUserUtterance(validation.text, {
+      acknowledgementPhrases: this.interruptionConfiguration?.acknowledgementPhrases,
+    });
+    this.#recordLiveMemoryTiming('capture', memoryCaptureStartedAt);
+    this.#scheduleLiveSummary();
+    if (Object.keys(liveCapture?.updates ?? {}).length) {
+      this.log.info({
+        stage: 'live_memory.fields_captured', callId: this.call.id,
+        fields: Object.keys(liveCapture.updates),
+      }, 'Configured live-call information captured without an additional LLM request');
+    }
     this.customerUtterance.reset();
     const callbackRequest = this.callbackConfiguration.enabled && this.call.direction === 'outbound'
       ? resolveCustomerCallbackRequest(validation.text, this.callbackConfiguration)
@@ -1015,6 +1099,7 @@ export class RealtimeConversationOrchestrator {
     }
     const taskCompletion = captureTaskCompletionInput(this.taskCompletionState, validation.text, action.history);
     this.taskCompletionState = taskCompletion.state;
+    this.liveCallMemory?.mergeCollectedData(publicTaskCompletionState(this.taskCompletionState).collectedData);
     this.runtimeMetrics.taskCompletion = publicTaskCompletionState(this.taskCompletionState);
     if (taskCompletion.captured.length) {
       this.log.info({
@@ -1092,7 +1177,14 @@ export class RealtimeConversationOrchestrator {
       return;
     }
 
-    const response = this.#fitTtsMessage(this.callCheckConfiguration.response);
+    const liveMemory = this.liveCallMemory?.snapshot();
+    const pendingField = liveMemory?.fields?.find((field) => field.key === liveMemory.pendingQuestion);
+    const configuredResponse = String(this.callCheckConfiguration.response ?? '').trim();
+    const resumeQuestion = pendingField?.question
+      && !configuredResponse.toLocaleLowerCase().includes(String(pendingField.question).toLocaleLowerCase())
+      ? pendingField.question
+      : '';
+    const response = this.#fitTtsMessage([configuredResponse, resumeQuestion].filter(Boolean).join(' '));
     if (!response) {
       this.runtimeMetrics.callChecks.failed += 1;
       this.customerUtterance.reset();
@@ -1113,7 +1205,7 @@ export class RealtimeConversationOrchestrator {
     const epoch = ++this.epoch;
     this.log.info({
       stage: 'call_check.detected', callId: this.call.id,
-      epoch, matchedPhrase,
+      epoch, matchedPhrase, resumedField: pendingField?.key ?? null,
     }, 'Configured call-check phrase matched; bypassing Knowledge Base and LLM');
     const spoken = await this.#synthesize(response, `call-check-${epoch}`, { epoch });
     if (!spoken || this.#isStaleGeneration(epoch) || this.controller.state !== callStates.SPEAKING) return;
@@ -1344,23 +1436,55 @@ export class RealtimeConversationOrchestrator {
   }
 
   async #llmAttempt(query, history, knowledge, context = {}, streaming = {}) {
+    const memoryPromptStartedAt = performance.now();
+    const liveMemory = this.liveCallMemory?.snapshot();
+    const currentCompletion = publicTaskCompletionState(this.taskCompletionState);
+    const collectedData = {
+      ...(this.previousConversationMemory?.collectedData ?? {}),
+      ...(currentCompletion.collectedData ?? {}),
+      ...(liveMemory?.collectedData ?? {}),
+    };
+    const configuredFields = liveMemory?.fields ?? [];
+    const missingFields = configuredFields
+      .filter((field) => field.required && (collectedData[field.key] === undefined || collectedData[field.key] === null || collectedData[field.key] === ''))
+      .map((field) => ({ key: field.key, label: field.label, type: field.type, question: field.question }));
+    const liveHistory = this.liveCallMemory?.promptMessages?.() ?? history ?? [];
+    const promptHistory = liveHistory.filter((message, index, messages) => !(
+      index === messages.length - 1
+      && message.role === 'user'
+      && String(message.content).trim() === String(query).trim()
+    ));
+    const compactLiveMemory = compactLiveCallMemoryContext({
+      snapshot: liveMemory,
+      collectedData,
+      missingFields,
+    });
+    this.#recordLiveMemoryTiming('prompt_context', memoryPromptStartedAt);
     const session = await createSelectedLlmStream(this.runtimeProfile, {
       callId: this.call.id,
       query,
       history: [
         ...(this.previousConversationMemory?.recentMessages ?? []),
-        ...(history ?? []),
+        ...promptHistory,
       ].slice(-env.LLM_MAX_HISTORY_MESSAGES),
+      historyLimit: Math.min(
+        env.LLM_MAX_HISTORY_MESSAGES,
+        Math.max(2, Number(liveMemory?.recentTurns ?? 5) * 2),
+      ),
       knowledge,
       context: {
         callId: this.call.id,
         direction: this.call.direction,
+        liveCallMemory: compactLiveMemory,
         conversationMemory: {
           policy: this.contextCachePolicy.policy,
           scope: this.contextCachePolicy.scope,
           previousSummary: this.previousConversationMemory?.summary || undefined,
-          collectedData: this.previousConversationMemory?.collectedData,
-          completedQuestions: this.previousConversationMemory?.completedQuestions,
+          collectedData,
+          completedQuestions: [
+            ...(this.previousConversationMemory?.completedQuestions ?? []),
+            ...(liveMemory?.completedQuestions ?? []),
+          ],
           pendingQuestions: this.previousConversationMemory?.pendingQuestions,
           callback: this.previousConversationMemory?.callback,
           currentCallbackRequest: this.currentCallbackRequest,
@@ -2556,7 +2680,14 @@ export class RealtimeConversationOrchestrator {
     if (transcriptPersistence) {
       this.runtimeMetrics.transcriptPersistence = transcriptPersistence;
     }
+    await this.liveMemoryMaintenance?.flush();
+    if (this.runtimeMetrics.liveCallMemory) {
+      this.runtimeMetrics.liveCallMemory.background = this.liveMemoryMaintenance?.snapshot();
+    }
     await this.#saveConversationMemory(finalOutcome, finalReason);
+    this.liveMemoryMaintenance?.close();
+    this.liveCallMemory?.close();
+    this.liveCallMemory = null;
     if (this.contextCachePolicy?.deleteOnCallEnd && this.contextStore?.delete) {
       try {
         await this.contextStore.delete(this.contextCachePolicy.key);

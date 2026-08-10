@@ -104,6 +104,7 @@
     "verify:context-cache-policy": "node scripts/verify-context-cache-policy.js",
     "verify:conversation-cache": "node scripts/verify-conversation-context-cache.js",
     "verify:conversation-memory": "node scripts/verify-conversation-memory.js",
+    "verify:live-call-memory": "node scripts/verify-live-call-memory.js",
     "verify:callback-continuity": "node scripts/verify-callback-continuity.js",
     "verify:voice-task8": "node scripts/verify-voice-task-8.js",
     "verify:voice-task9": "node scripts/verify-voice-task-9.js",

@@ -139,6 +139,15 @@ export interface VoiceAgent {
   greetingMode?: 'agent_initiates' | 'user_initiates';
   cachePolicy?: 'persistent_24h' | 'session_only' | 'disabled';
   contextId?: string;
+  conversationContextMode?: 'last_n_turns' | 'full_current_call';
+  conversationContextTurns?: number;
+  conversationMemoryFields?: Array<{
+    key: string;
+    label: string;
+    type: 'text' | 'number' | 'date' | 'time' | 'boolean' | 'select' | 'email' | 'phone';
+    required: boolean;
+    question: string;
+  }>;
   callbackEnabled?: boolean;
   callbackMinimumDelaySeconds?: number;
   callbackMaximumDelayDays?: number;
