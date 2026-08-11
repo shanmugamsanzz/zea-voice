@@ -9,5 +9,7 @@ export const runtimeKnowledgeQuerySchema = z.object({
   intent: z.string().trim().min(1).max(160).optional(),
   flowKey: z.string().trim().min(1).max(160).optional(),
   nodeKey: z.string().trim().min(1).max(160).optional(),
+  currentStage: z.string().trim().min(1).max(80).optional(),
+  selectedCatalogItemId: z.string().uuid().optional(),
   topK: z.coerce.number().int().min(1).max(10).optional(),
 }).strict();

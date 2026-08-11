@@ -6,6 +6,15 @@ import { AppError } from '../middleware/errors.js';
 import { embedQuery } from '../rag/embedding.client.js';
 import { searchTenantPoints } from '../rag/qdrant.client.js';
 import { requireTenantId } from '../rag/tenant-isolation.js';
+import {
+  catalogLabelSimilarity,
+  classifyCatalogEntityLocally,
+} from './catalog-entity-resolver.js';
+import { workflowStageGate } from '../voice/interaction/conversation-stage-config.js';
+import {
+  renderKnowledgeClarification,
+  resolveKnowledgeConfidenceConfiguration,
+} from './knowledge-confidence-config.js';
 
 const defaultDependencies = {
   contextRunner: withTenantContext,
@@ -52,7 +61,7 @@ async function cacheSet(cache, key, value, ttl) {
 
 const runtimeProfileSql = `
   WITH runtime_agent AS (
-    SELECT id, usage_direction
+    SELECT id, usage_direction, settings
       FROM voice_agents
      WHERE tenant_id = $1 AND id = $2 AND status = 'active' AND deleted_at IS NULL
   ), assigned AS (
@@ -76,6 +85,7 @@ const runtimeProfileSql = `
   )
   SELECT
     (SELECT usage_direction FROM runtime_agent) AS agent_usage,
+    (SELECT settings FROM runtime_agent) AS agent_settings,
     COALESCE((SELECT jsonb_agg(jsonb_build_object(
       'id', id, 'publicationRevision', publication_revision,
       'priority', priority, 'semanticReady', semantic_ready
@@ -111,7 +121,8 @@ const runtimeProfileSql = `
       FROM (
         SELECT si.id, si.knowledge_base_id, si.document_id, si.document_version_id,
           d.original_filename AS document_name, si.source_page_start, si.source_page_end,
-          si.item_key, si.name, si.description, si.price, si.currency, si.display_order,
+          si.item_key, si.name, si.category, si.aliases, sc.name AS catalog_name,
+          si.description, si.price, si.currency, si.display_order,
           COALESCE((SELECT jsonb_agg(jsonb_build_object(
             'key', sa.attribute_key, 'name', sa.display_name, 'value', sa.value
           ) ORDER BY sa.display_order, sa.id) FROM structured_item_attributes sa
@@ -174,9 +185,28 @@ function routeResponse(route, record, content, extra = {}) {
   };
 }
 
-function workflowRoute(profile, input, normalizedQuery) {
+function clarificationResponse(record, configuration, candidates, details = {}) {
+  const names = candidates.map((candidate) => candidate.name ?? candidate.matchedPhrase).filter(Boolean);
+  const content = renderKnowledgeClarification(configuration.clarificationMessage, names);
+  if (!record || !content) return null;
+  return {
+    ...routeResponse('clarification', record, content, {
+      confidence: details.confidence,
+      clarificationKind: details.kind,
+    }),
+    clarification: {
+      kind: details.kind,
+      confidence: details.confidence,
+      reason: details.reason ?? 'uncertain_match',
+      candidates: candidates.slice(0, 3),
+    },
+  };
+}
+
+function workflowRoute(profile, input, normalizedQuery, currentCatalogResolution = null) {
   const target = normalize(input.intent ?? normalizedQuery);
-  let match = null;
+  const confidence = resolveKnowledgeConfidenceConfiguration(profile.agent_settings);
+  const ranked = [];
   for (const record of profile.workflows) {
     const phrases = Array.isArray(record.conditions?.triggerPhrases)
       ? record.conditions.triggerPhrases.map((phrase) => ({
@@ -184,37 +214,72 @@ function workflowRoute(profile, input, normalizedQuery) {
       })).filter((phrase) => phrase.normalized)
       : [];
     const matchMode = String(record.conditions?.matchMode ?? 'any_phrase').trim().toLowerCase();
-    let matchedPhrase = null;
+    let phraseResult = null;
     if (phrases.length) {
-      const phraseMatch = phrases.find((phrase) => {
-        if (matchMode === 'exact') return normalizedQuery === phrase.normalized;
-        if (!['contains', 'any_phrase'].includes(matchMode)) return false;
-        return normalizedQuery === phrase.normalized
-          || ` ${normalizedQuery} `.includes(` ${phrase.normalized} `);
-      });
-      matchedPhrase = phraseMatch?.original ?? null;
+      for (const phrase of phrases) {
+        let score = normalizedQuery === phrase.normalized ? 1 : 0;
+        let method = score ? 'normalized' : 'none';
+        if (!score && ['contains', 'any_phrase'].includes(matchMode)
+          && ` ${normalizedQuery} `.includes(` ${phrase.normalized} `)) {
+          score = 0.99; method = 'contains';
+        }
+        if (!score && matchMode !== 'exact') {
+          const fuzzy = catalogLabelSimilarity(input.query, phrase.original);
+          score = fuzzy.score; method = fuzzy.method;
+        }
+        if (!phraseResult || score > phraseResult.score) {
+          phraseResult = { matchedPhrase: phrase.original, score, method };
+        }
+      }
     } else if (normalize(record.intent) === target || normalize(record.name) === target) {
-      matchedPhrase = input.intent ?? record.intent ?? record.name;
+      phraseResult = { matchedPhrase: input.intent ?? record.intent ?? record.name, score: 1, method: 'intent' };
     }
-    if (matchedPhrase) {
-      match = { record, matchedPhrase, matchMode: phrases.length ? matchMode : 'legacy_intent' };
-      break;
+    if (phraseResult?.score > 0) {
+      const gate = workflowStageGate(record, {
+        currentStage: input.currentStage,
+        selectedCatalogItemId: input.selectedCatalogItemId ?? currentCatalogResolution?.item?.id,
+      });
+      if (gate.reason === 'stage_transition_not_allowed') continue;
+      ranked.push({ record, ...phraseResult, matchMode: phrases.length ? matchMode : 'legacy_intent', gate });
     }
   }
-  if (!match) return null;
-  const { record, matchedPhrase, matchMode } = match;
+  ranked.sort((left, right) => right.score - left.score
+    || Number(left.record.priority ?? 100) - Number(right.record.priority ?? 100));
+  const match = ranked[0];
+  if (!match || match.score < confidence.clarificationConfidence) return null;
+  const runnerUp = ranked.find((candidate) => candidate.record.id !== match.record.id);
+  const ambiguous = Boolean(runnerUp && match.score - runnerUp.score < confidence.ambiguityMargin);
+  if (match.score < confidence.highConfidence || ambiguous) {
+    return clarificationResponse(match.record, confidence, ranked.map((candidate) => ({
+      recordId: candidate.record.id,
+      name: candidate.record.name,
+      matchedPhrase: candidate.matchedPhrase,
+      confidence: Math.round(candidate.score * 10000) / 10000,
+    })), {
+      kind: 'workflow', confidence: Math.round(match.score * 10000) / 10000,
+      reason: ambiguous ? 'ambiguous_match' : 'low_confidence',
+    });
+  }
+  const { record, matchedPhrase, matchMode, gate } = match;
   const responseMode = String(record.action_config?.responseMode ?? 'instruction').trim().toLowerCase();
+  const blockedResponse = String(record.action_config?.blockedResponse ?? '').trim();
+  const content = gate.allowed ? (record.response_template ?? record.action_config?.instruction ?? '') : blockedResponse;
+  if (!content) return null;
   return {
-    ...routeResponse('workflow', record, record.response_template ?? record.action_config?.instruction ?? '', {
+    ...routeResponse('workflow', record, content, {
       intent: record.intent, matchedPhrase, matchMode, responseMode,
     }),
     action: { type: record.action_type, config: record.action_config },
     workflow: {
       intent: record.intent,
+      conditions: record.conditions,
       matchedPhrase,
       matchMode,
       responseMode,
       exactResponse: record.action_type === 'respond' && responseMode === 'exact',
+      gate,
+      confidence: Math.round(match.score * 10000) / 10000,
+      matchMethod: match.method,
     },
   };
 }
@@ -242,26 +307,182 @@ function conversationRoute(profile, input) {
   };
 }
 
-const catalogKeywords = /\b(price|cost|rate|amount|how much|package|plan|tests?|includes?|details?)\b/iu;
+const catalogKeywords = /\b(price|cost|rate|amount|how much|package|plan|product|service|tests?|includes?|details?)\b/iu;
 
-function catalogRoute(profile, input, normalizedQuery) {
-  if (input.routeHint !== 'catalog' && !catalogKeywords.test(normalizedQuery)) return null;
-  const candidates = profile.catalog_items.map((item) => {
-    const names = [item.name, item.item_key].map(normalize).filter(Boolean);
-    const matched = names.filter((name) => normalizedQuery === name || normalizedQuery.includes(name));
-    return { item, score: Math.max(0, ...matched.map((name) => name.length)) };
-  }).filter((candidate) => candidate.score > 0).sort((left, right) => right.score - left.score);
-  const record = candidates[0]?.item;
-  if (!record) return null;
+function catalogResponse(record, resolution) {
   const price = record.price == null ? null : `${record.currency ?? ''} ${record.price}`.trim();
   const content = [record.name, price, record.description].filter(Boolean).join(' - ');
   return {
-    ...routeResponse('catalog', record, content),
+    ...routeResponse('catalog', record, content, {
+      entityResolutionMethod: resolution.method,
+      entityResolutionConfidence: resolution.confidence,
+      matchedEntityText: resolution.matchedText,
+    }),
     item: {
-      key: record.item_key, name: record.name, description: record.description,
+      key: record.item_key, name: record.name, category: record.category ?? record.catalog_name,
+      aliases: record.aliases, description: record.description,
       price: record.price, currency: record.currency, attributes: record.attributes,
     },
+    entityResolution: {
+      method: resolution.method,
+      confidence: resolution.confidence,
+      matchedText: resolution.matchedText,
+      matchedKind: resolution.matchedKind ?? 'name',
+    },
   };
+}
+
+function catalogCategoryResponse(records, resolution) {
+  const record = records[0];
+  const category = resolution.category ?? record?.category ?? record?.catalog_name;
+  const names = records.map((item) => item.name);
+  return {
+    ...routeResponse('catalog', record, `${category}: ${names.join(', ')}`, {
+      entityResolutionMethod: resolution.method,
+      entityResolutionConfidence: resolution.confidence,
+      matchedEntityText: resolution.matchedText,
+    }),
+    category: {
+      name: category,
+      items: records.map((item) => ({
+        key: item.item_key,
+        name: item.name,
+        aliases: item.aliases,
+        description: item.description,
+        price: item.price,
+        currency: item.currency,
+        attributes: item.attributes,
+      })),
+    },
+    entityResolution: {
+      method: resolution.method,
+      confidence: resolution.confidence,
+      matchedText: resolution.matchedText,
+      matchedKind: 'category',
+    },
+  };
+}
+
+async function semanticCatalogResolution(auth, profile, input, normalizedQuery, runtime) {
+  const confidenceConfiguration = resolveKnowledgeConfidenceConfiguration(profile.agent_settings);
+  const knowledgeBases = allowedSemanticKnowledgeBases(profile);
+  if (!knowledgeBases.length || !env.RAG_ENABLED) return null;
+  const shortQuery = normalizedQuery.split(' ').length <= 4;
+  if (input.routeHint !== 'catalog' && !catalogKeywords.test(normalizedQuery) && !shortQuery) return null;
+  const fingerprint = knowledgeBases.map((item) => `${item.id}:${item.publicationRevision}`).join('|');
+  const cacheKey = `zea:rag:entity:${auth.tenantId}:${input.agentId}:${input.usageDirection}:${hash(`${fingerprint}|${normalizedQuery}`)}`;
+  const cached = await cacheGet(runtime.cache, cacheKey);
+  if (cached) return cached;
+  const vector = await runtime.embedQueryOnce(input.query);
+  const rawMatches = await runtime.search(auth.tenantId, vector, {
+    knowledgeBases,
+    usageDirection: input.usageDirection,
+    limit: 3,
+    scoreThreshold: Math.min(env.RAG_RUNTIME_MIN_SCORE, confidenceConfiguration.clarificationConfidence),
+    recordTypes: ['CATALOG_ITEM'],
+  });
+  const allowed = new Map(knowledgeBases.map((item) => [item.id.toLowerCase(), item.publicationRevision]));
+  const matches = rawMatches.filter((match) => {
+    const payload = match.payload ?? {};
+    return payload.tenant_id === auth.tenantId.toLowerCase()
+      && allowed.get(String(payload.knowledge_base_id).toLowerCase()) === payload.publication_revision
+      && [input.usageDirection.toUpperCase(), 'BOTH'].includes(payload.agent_usage)
+      && payload.record_type === 'CATALOG_ITEM';
+  }).sort((left, right) => Number(right.score) - Number(left.score));
+  const best = matches[0];
+  const runnerUp = matches[1];
+  if (!best) return null;
+  const bestScore = Number(best.score);
+  if (bestScore < confidenceConfiguration.clarificationConfidence) return null;
+  const closeRunnerUp = runnerUp
+    && bestScore - Number(runnerUp.score) < confidenceConfiguration.ambiguityMargin;
+  const sharedCategory = closeRunnerUp
+    && best.payload?.entity_category
+    && normalize(best.payload.entity_category) === normalize(runnerUp.payload?.entity_category);
+  if (closeRunnerUp && !sharedCategory) {
+    const resolution = {
+      status: 'uncertain',
+      confidence: Math.round(bestScore * 10000) / 10000,
+      candidates: matches.slice(0, 3).map((match) => ({
+        itemId: match.id,
+        name: match.payload?.entity_name,
+        confidence: Math.round(Number(match.score) * 10000) / 10000,
+      })),
+      reason: 'ambiguous_match',
+    };
+    await cacheSet(runtime.cache, cacheKey, resolution, env.RAG_RUNTIME_RESULT_CACHE_TTL_SECONDS);
+    return resolution;
+  }
+  if (sharedCategory) {
+    const resolution = {
+      status: bestScore >= confidenceConfiguration.highConfidence ? 'match' : 'uncertain',
+      entityType: 'category',
+      category: best.payload.entity_category,
+      method: 'semantic',
+      confidence: Math.round(Number(best.score) * 10000) / 10000,
+      matchedText: best.payload.entity_category,
+      matchedKind: 'category',
+      candidates: [{ name: best.payload.entity_category, confidence: Math.round(bestScore * 10000) / 10000 }],
+    };
+    await cacheSet(runtime.cache, cacheKey, resolution, env.RAG_RUNTIME_RESULT_CACHE_TTL_SECONDS);
+    return resolution;
+  }
+  const record = profile.catalog_items.find((item) => String(item.id).toLowerCase() === String(best.id).toLowerCase());
+  if (!record) return null;
+  const resolution = {
+    status: bestScore >= confidenceConfiguration.highConfidence ? 'match' : 'uncertain',
+    entityType: 'item',
+    itemId: record.id,
+    method: 'semantic',
+    confidence: Math.round(Number(best.score) * 10000) / 10000,
+    matchedText: best.payload?.entity_name ?? record.name,
+    matchedKind: 'semantic',
+    candidates: matches.slice(0, 3).map((match) => ({
+      itemId: match.id,
+      name: match.payload?.entity_name,
+      confidence: Math.round(Number(match.score) * 10000) / 10000,
+    })),
+  };
+  await cacheSet(runtime.cache, cacheKey, resolution, env.RAG_RUNTIME_RESULT_CACHE_TTL_SECONDS);
+  return resolution;
+}
+
+async function catalogRoute(auth, profile, input, normalizedQuery, runtime, localClassification = null) {
+  const confidence = resolveKnowledgeConfidenceConfiguration(profile.agent_settings);
+  const local = localClassification ?? classifyCatalogEntityLocally(profile.catalog_items, input.query, confidence);
+  if (local.status === 'match') {
+    if (local.entityType === 'category') {
+      const records = [...local.items].sort((left, right) => Number(left.display_order ?? 0) - Number(right.display_order ?? 0));
+      return records.length ? catalogCategoryResponse(records, local) : null;
+    }
+    return catalogResponse(local.item, local);
+  }
+  const semantic = await semanticCatalogResolution(auth, profile, input, normalizedQuery, runtime);
+  const resolution = semantic?.status === 'match' ? semantic : null;
+  const uncertain = [local.status === 'uncertain' ? local : null, semantic?.status === 'uncertain' ? semantic : null]
+    .filter(Boolean).sort((left, right) => Number(right.confidence) - Number(left.confidence))[0];
+  if (!resolution) {
+    if (!uncertain) return null;
+    const candidateItems = uncertain.candidates ?? [];
+    const record = profile.catalog_items.find((item) => (
+      String(item.id).toLowerCase() === String(candidateItems[0]?.itemId ?? '').toLowerCase()
+      || item.name === candidateItems[0]?.name
+      || normalize(item.category ?? item.catalog_name) === normalize(candidateItems[0]?.category ?? candidateItems[0]?.name)
+    )) ?? profile.catalog_items[0];
+    return clarificationResponse(record, confidence, candidateItems, {
+      kind: 'catalog', confidence: uncertain.confidence,
+      reason: uncertain.reason ?? (uncertain.ambiguous ? 'ambiguous_match' : 'low_confidence'),
+    });
+  }
+  if (resolution.entityType === 'category') {
+    const categoryKey = normalize(resolution.category);
+    const records = profile.catalog_items.filter((item) => (
+      normalize(item.category ?? item.catalog_name) === categoryKey
+    )).sort((left, right) => Number(left.display_order ?? 0) - Number(right.display_order ?? 0));
+    return records.length ? catalogCategoryResponse(records, resolution) : null;
+  }
+  const record = profile.catalog_items.find((item) => String(item.id).toLowerCase() === String(resolution.itemId).toLowerCase());
+  return record ? catalogResponse(record, resolution) : null;
 }
 
 function faqRoute(profile, input, normalizedQuery) {
@@ -285,7 +506,7 @@ async function semanticRoute(auth, profile, input, normalizedQuery, runtime) {
   const cacheKey = `zea:rag:result:${auth.tenantId}:${input.agentId}:${input.usageDirection}:${hash(`${fingerprint}|${normalizedQuery}`)}`;
   const cached = await cacheGet(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
-  const vector = await runtime.embed(input.query);
+  const vector = await runtime.embedQueryOnce(input.query);
   const rawMatches = await runtime.search(auth.tenantId, vector, {
     knowledgeBases,
     usageDirection: input.usageDirection,
@@ -331,19 +552,31 @@ async function semanticRoute(auth, profile, input, normalizedQuery, runtime) {
 export async function routeKnowledgeQuery(auth, input, dependencies = defaultDependencies) {
   const startedAt = performance.now();
   const runtime = { ...defaultDependencies, ...dependencies };
+  let queryVectorPromise = null;
+  runtime.embedQueryOnce = (query) => {
+    queryVectorPromise ??= runtime.embed(query);
+    return queryVectorPromise;
+  };
   const normalizedQuery = normalize(input.query);
   const loaded = await loadProfile(auth, input, runtime);
   const { profile } = loaded;
+  const confidence = resolveKnowledgeConfidenceConfiguration(profile.agent_settings);
+  const currentCatalogClassification = classifyCatalogEntityLocally(profile.catalog_items, input.query, confidence);
+  const currentCatalogResolution = currentCatalogClassification.status === 'match'
+    ? currentCatalogClassification : null;
   let result = null;
 
   if (input.routeHint === 'auto' || input.routeHint === 'workflow') {
-    result = workflowRoute(profile, input, normalizedQuery);
+    result = workflowRoute(profile, input, normalizedQuery, currentCatalogResolution);
+    if (result && currentCatalogResolution?.entityType === 'item') {
+      result.catalogSelection = catalogResponse(currentCatalogResolution.item, currentCatalogResolution);
+    }
   }
   if (!result && (input.routeHint === 'auto' || input.routeHint === 'conversation')) {
     result = conversationRoute(profile, input);
   }
   if (!result && (input.routeHint === 'auto' || input.routeHint === 'catalog')) {
-    result = catalogRoute(profile, input, normalizedQuery);
+    result = await catalogRoute(auth, profile, input, normalizedQuery, runtime, currentCatalogClassification);
   }
   if (!result && (input.routeHint === 'auto' || input.routeHint === 'faq')) {
     result = faqRoute(profile, input, normalizedQuery);
@@ -365,7 +598,11 @@ export async function invalidateTenantKnowledgeCache(tenantId, cache = redis) {
     return { deletedKeys: 0, incomplete: true };
   }
   let deletedKeys = 0;
-  const patterns = [`zea:rag:profile:${tenant}:*`, `zea:rag:result:${tenant}:*`];
+  const patterns = [
+    `zea:rag:profile:${tenant}:*`,
+    `zea:rag:result:${tenant}:*`,
+    `zea:rag:entity:${tenant}:*`,
+  ];
   try {
     for (const pattern of patterns) {
       let cleared = false;

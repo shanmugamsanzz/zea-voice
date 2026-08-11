@@ -108,6 +108,7 @@ export async function searchTenantPoints(tenantId, vector, {
   usageDirection,
   limit = env.RAG_RUNTIME_TOP_K,
   scoreThreshold = env.RAG_RUNTIME_MIN_SCORE,
+  recordTypes = ['FAQ', 'KNOWLEDGE_CHUNK'],
 } = {}) {
   if (!Array.isArray(vector) || vector.length !== env.QDRANT_VECTOR_SIZE
     || vector.some((value) => typeof value !== 'number' || !Number.isFinite(value))) {
@@ -120,6 +121,11 @@ export async function searchTenantPoints(tenantId, vector, {
   if (!Number.isInteger(limit) || limit < 1 || limit > 10) {
     throw new TypeError('limit must be between 1 and 10');
   }
+  if (!Array.isArray(recordTypes) || recordTypes.length === 0
+    || recordTypes.some((value) => typeof value !== 'string' || !value.trim())) {
+    throw new TypeError('recordTypes must contain at least one record type');
+  }
+  const normalizedRecordTypes = [...new Set(recordTypes.map((value) => value.trim().toUpperCase()))];
 
   const tenant = tenantId.toLowerCase();
   const revisionConditions = knowledgeBases.map(({ id, publicationRevision }) => {
@@ -147,7 +153,7 @@ export async function searchTenantPoints(tenantId, vector, {
         must: [
           { key: 'tenant_id', match: { value: tenant } },
           { key: 'agent_usage', match: { any: [usageDirection.toUpperCase(), 'BOTH'] } },
-          { key: 'record_type', match: { any: ['FAQ', 'KNOWLEDGE_CHUNK'] } },
+          { key: 'record_type', match: { any: normalizedRecordTypes } },
           { should: revisionConditions },
         ],
       },

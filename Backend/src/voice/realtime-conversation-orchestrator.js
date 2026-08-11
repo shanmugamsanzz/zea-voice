@@ -43,6 +43,7 @@ import { resolveCallbackConfiguration } from './interaction/callback-config.js';
 import {
   captureTaskCompletionInput,
   createTaskCompletionState,
+  mergeTaskCompletionData,
   publicTaskCompletionState,
   renderTaskCompletionConfirmation,
 } from './interaction/task-completion-state.js';
@@ -92,7 +93,7 @@ const pauseFillerWords = new Set([
   'hello', 'ok', 'okay', 'sure', 'hmm', 'please',
   'ம்', 'ஹம்', 'ஆமா', 'சரி', 'சரிங்க', 'இருங்க', 'இருங்கள்',
 ]);
-const fastKnowledgeRoutes = new Set(['faq', 'catalog']);
+const fastKnowledgeRoutes = new Set(['faq', 'catalog', 'clarification']);
 
 function hasFastKnowledgeAnswer(knowledge) {
   return knowledge?.found === true
@@ -338,6 +339,13 @@ export class RealtimeConversationOrchestrator {
       storage: 'process_memory',
       timings: { totalMs: 0, maximumMs: 0, samples: [] },
       background: this.liveMemoryMaintenance.snapshot(),
+    };
+    this.runtimeMetrics.conversationStage = {
+      currentStage: this.liveCallMemory.snapshot().currentStage,
+      selectedCatalogItemId: null,
+      activeActions: [],
+      transitions: [],
+      blockedActions: 0,
     };
     this.runtimeProfile = {
       ...this.runtimeProfile,
@@ -1101,22 +1109,6 @@ export class RealtimeConversationOrchestrator {
       await this.#close('customer_callback_scheduled');
       return;
     }
-    const taskCompletion = captureTaskCompletionInput(this.taskCompletionState, validation.text, action.history);
-    this.taskCompletionState = taskCompletion.state;
-    this.liveCallMemory?.mergeCollectedData(publicTaskCompletionState(this.taskCompletionState).collectedData);
-    this.runtimeMetrics.taskCompletion = publicTaskCompletionState(this.taskCompletionState);
-    if (taskCompletion.captured.length) {
-      this.log.info({
-        stage: 'task_completion.fields_captured', callId: this.call.id,
-        intent: this.taskCompletionState.configuration.intent,
-        capturedFields: taskCompletion.captured,
-        missingFields: taskCompletion.missing,
-      }, 'Configured task completion information captured from caller');
-    }
-    if (taskCompletion.complete) {
-      await this.#confirmTaskCompletion();
-      return;
-    }
     const callEndTrigger = findCallEndTriggerPhrase(validation.text, this.runtimeProfile.agent.settings);
     if (callEndTrigger && !callbackRequest.detected) {
       this.log.info({
@@ -1303,6 +1295,7 @@ export class RealtimeConversationOrchestrator {
   async #knowledge(query) {
     try {
       const routeKnowledge = this.dependencies.routeKnowledge ?? routeKnowledgeQuery;
+      const stageState = this.liveCallMemory?.snapshot();
       const result = await routeKnowledge({
         tenantId: this.runtimeProfile.agent.tenantId,
         workspaceId: this.runtimeProfile.agent.workspaceId,
@@ -1314,6 +1307,8 @@ export class RealtimeConversationOrchestrator {
         usageDirection: this.call.direction,
         language: languageCode(this.runtimeProfile.agent.language),
         routeHint: 'auto',
+        currentStage: stageState?.currentStage,
+        selectedCatalogItemId: stageState?.selectedCatalogItem?.id,
       });
       this.runtimeMetrics.knowledge.push({
         route: result.route, found: result.found === true, durationMs: Number(result.durationMs ?? 0),
@@ -1851,6 +1846,72 @@ export class RealtimeConversationOrchestrator {
     if (this.runtimeMetrics.turnLatency.length < 100) this.runtimeMetrics.turnLatency.push(turnLatency);
     const knowledgeStartedAt = Date.now();
     const knowledge = await this.#knowledge(query);
+    if (epoch !== this.epoch || this.finalized) return;
+    const stageState = this.liveCallMemory?.applyKnowledge?.(knowledge) ?? this.liveCallMemory?.snapshot();
+    this.runtimeMetrics.conversationStage = {
+      ...this.runtimeMetrics.conversationStage,
+      currentStage: stageState?.currentStage ?? null,
+      selectedCatalogItemId: stageState?.selectedCatalogItem?.id ?? null,
+      activeActions: stageState?.activeActions ?? [],
+      transitions: stageState?.stageTransitions ?? [],
+      blockedActions: Number(this.runtimeMetrics.conversationStage?.blockedActions ?? 0)
+        + (knowledge.workflow?.gate?.allowed === false ? 1 : 0),
+    };
+    if (knowledge.route === 'workflow') {
+      this.log.info({
+        stage: 'conversation.action_gate', callId: this.call.id,
+        currentStage: stageState?.currentStage,
+        actionKey: knowledge.action?.config?.actionKey ?? null,
+        nextStage: knowledge.action?.config?.nextStage ?? null,
+        allowed: knowledge.workflow?.gate?.allowed !== false,
+        reason: knowledge.workflow?.gate?.reason ?? null,
+        selectedCatalogItemId: stageState?.selectedCatalogItem?.id ?? null,
+      }, 'Configured conversation-stage action evaluated');
+    }
+    // Re-run deterministic capture after a transition so fields unlocked by
+    // this same explicit action can be collected without another caller turn.
+    this.liveCallMemory?.captureUserUtterance(query, {
+      acknowledgementPhrases: this.interruptionConfiguration?.acknowledgementPhrases,
+    });
+    const completionConfiguration = this.taskCompletionState.configuration;
+    const completionActionAllowed = this.liveCallMemory?.canRunAction?.(
+      completionConfiguration.intent,
+      { requiresCatalogItem: completionConfiguration.requiresCatalogItem === true },
+    ) === true;
+    if (completionActionAllowed) {
+      if (completionConfiguration.catalogField && stageState?.selectedCatalogItem?.name) {
+        this.taskCompletionState = mergeTaskCompletionData(this.taskCompletionState, {
+          [completionConfiguration.catalogField]: stageState.selectedCatalogItem.name,
+        });
+      }
+      const taskCompletion = captureTaskCompletionInput(this.taskCompletionState, query, history);
+      this.taskCompletionState = taskCompletion.state;
+      this.liveCallMemory?.mergeCollectedData(publicTaskCompletionState(this.taskCompletionState).collectedData);
+      this.runtimeMetrics.taskCompletion = {
+        ...publicTaskCompletionState(this.taskCompletionState),
+        gateOpen: true,
+        currentStage: stageState?.currentStage ?? null,
+      };
+      if (taskCompletion.captured.length) {
+        this.log.info({
+          stage: 'task_completion.fields_captured', callId: this.call.id,
+          intent: completionConfiguration.intent,
+          capturedFields: taskCompletion.captured,
+          missingFields: taskCompletion.missing,
+        }, 'Configured task completion information captured after the action gate opened');
+      }
+      if (taskCompletion.complete) {
+        await this.#confirmTaskCompletion();
+        return;
+      }
+    } else if (completionConfiguration.enabled) {
+      this.runtimeMetrics.taskCompletion = {
+        ...publicTaskCompletionState(this.taskCompletionState),
+        gateOpen: false,
+        currentStage: stageState?.currentStage ?? null,
+        selectedCatalogItem: stageState?.selectedCatalogItem?.id ?? null,
+      };
+    }
     turnLatency.knowledgeMs = Math.max(0, Date.now() - knowledgeStartedAt);
     turnLatency.route = knowledge.route ?? 'none';
     const fastKnowledgeAnswer = hasFastKnowledgeAnswer(knowledge);

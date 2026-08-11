@@ -34,6 +34,7 @@ function normalizeField(input, index, strict) {
   const label = cleanText(input?.label, 100);
   const type = cleanText(input?.type, 20).toLowerCase() || 'text';
   const question = cleanText(input?.question, 500);
+  const requiredAction = cleanText(input?.requiredAction, 80).toLowerCase();
   if (!/^[a-z][a-z0-9_]{0,63}$/.test(key)) {
     if (strict) throw configurationError('Information field keys must use lowercase letters, numbers and underscores', `conversationMemoryFields.${index}.key`);
     return null;
@@ -50,7 +51,14 @@ function normalizeField(input, index, strict) {
     if (strict) throw configurationError('Information field question is required', `conversationMemoryFields.${index}.question`);
     return null;
   }
-  return Object.freeze({ key, label, type, required: input?.required !== false, question });
+  if (requiredAction && !/^[a-z][a-z0-9_-]{0,79}$/.test(requiredAction)) {
+    if (strict) throw configurationError('Required Action must use lowercase letters, numbers, underscores or hyphens', `conversationMemoryFields.${index}.requiredAction`);
+    return null;
+  }
+  return Object.freeze({
+    key, label, type, required: input?.required !== false, question,
+    ...(requiredAction ? { requiredAction } : {}),
+  });
 }
 
 export function resolveLiveMemoryConfiguration(settings = {}, { strict = false } = {}) {

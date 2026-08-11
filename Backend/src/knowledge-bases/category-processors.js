@@ -53,15 +53,48 @@ function priceFromLine(text) {
   return { price: numeric, currency, name };
 }
 
+function uniqueCatalogAliases(values, canonicalName) {
+  const canonical = canonicalName.normalize('NFKC').toLocaleLowerCase();
+  return [...new Map(values.flatMap((value) => String(value).split(','))
+    .map((value) => value.normalize('NFKC').trim())
+    .filter((value) => value && value.length <= 240 && value.toLocaleLowerCase() !== canonical)
+    .map((value) => [value.toLocaleLowerCase(), value])).values()].slice(0, 50);
+}
+
+function catalogLineMetadata(text) {
+  const metadata = { category: null, aliases: [] };
+  const content = [];
+  for (const segment of text.split('|')) {
+    const directive = segment.match(/^\s*(category|aliases?)\s*[:=]\s*(.+?)\s*$/iu);
+    if (!directive) {
+      content.push(segment.trim());
+      continue;
+    }
+    if (directive[1].toLocaleLowerCase() === 'category') metadata.category = directive[2].trim().slice(0, 240);
+    else metadata.aliases.push(directive[2]);
+  }
+  return { ...metadata, content: content.filter(Boolean).join(' | ') };
+}
+
 function parseCatalog(extraction) {
   const lines = nonEmptyLines(extraction);
   const items = [];
+  let currentCategory = null;
   for (let index = 0; index < lines.length; index += 1) {
-    const parsed = priceFromLine(lines[index].text);
+    const categoryHeading = lines[index].text.match(/^\s*category\s*[:=]\s*(.+?)\s*$/iu);
+    if (categoryHeading) {
+      currentCategory = categoryHeading[1].trim().slice(0, 240) || null;
+      continue;
+    }
+    const metadata = catalogLineMetadata(lines[index].text);
+    const parsed = priceFromLine(metadata.content);
     if (!parsed) continue;
     const fallbackName = index > 0 ? lines[index - 1].text : `Item ${items.length + 1}`;
+    const name = parsed.name || fallbackName;
     items.push({
-      name: parsed.name || fallbackName,
+      name,
+      category: metadata.category || currentCategory,
+      aliases: uniqueCatalogAliases(metadata.aliases, name),
       price: parsed.price,
       currency: parsed.currency,
       sourceText: lines[index].text,
@@ -98,6 +131,9 @@ function parseWorkflowRules(extraction) {
     const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, '_');
     return ['exact', 'instruction', 'generated'].includes(normalized) ? normalized : null;
   };
+  const normalizeStageKey = (value) => value.trim().toLowerCase().replace(/[\s-]+/g, '_')
+    .replace(/[^a-z0-9_]/g, '').slice(0, 80);
+  const truthy = (value) => ['true', 'yes', '1'].includes(value.trim().toLowerCase());
   const inferActionType = (action) => {
     const lowerAction = action.toLowerCase();
     return lowerAction.includes('transfer') ? 'transfer_call'
@@ -120,12 +156,21 @@ function parseWorkflowRules(extraction) {
     else if (!response) warnings.push(`Workflow rule "${name}" has no RESPONSE and was skipped`);
     else {
       const actionType = 'respond';
+      const fromStages = splitPhrases(structuredRule.fromStage.join('|')).map(normalizeStageKey).filter(Boolean);
+      const nextStage = normalizeStageKey(structuredRule.nextStage);
+      const actionKey = normalizeStageKey(structuredRule.action);
       records.push({
         name: name.slice(0, 200),
         intent: normalizeIntent(name, `rule_${ruleNumber}`),
-        conditions: { triggerPhrases, matchMode },
+        conditions: { triggerPhrases, matchMode, ...(fromStages.length ? { fromStages } : {}) },
         actionType,
-        actionConfig: { instruction: response, responseMode },
+        actionConfig: {
+          instruction: response, responseMode,
+          ...(nextStage ? { nextStage } : {}),
+          ...(actionKey ? { actionKey } : {}),
+          ...(structuredRule.requiresCatalogItem ? { requiresCatalogItem: true } : {}),
+          ...(structuredRule.blockedResponse ? { blockedResponse: structuredRule.blockedResponse } : {}),
+        },
         responseTemplate: response,
         sourceText: structuredRule.sourceLines.join('\n'),
         sourcePageStart: structuredRule.sourcePageStart,
@@ -137,7 +182,7 @@ function parseWorkflowRules(extraction) {
   };
 
   for (const line of nonEmptyLines(extraction)) {
-    const structuredField = line.text.match(/^\s*(RULE|MATCH|MATCH_MODE|RESPONSE_MODE|RESPONSE|PRIORITY)\s*:\s*(.*)$/i);
+    const structuredField = line.text.match(/^\s*(RULE|MATCH|MATCH_MODE|RESPONSE_MODE|RESPONSE|PRIORITY|FROM_STAGE|NEXT_STAGE|ACTION|REQUIRES_CATALOG_ITEM|BLOCKED_RESPONSE)\s*:\s*(.*)$/i);
     if (structuredField) {
       const field = structuredField[1].toUpperCase();
       const value = structuredField[2].trim();
@@ -145,6 +190,8 @@ function parseWorkflowRules(extraction) {
         flushStructuredRule();
         structuredRule = {
           name: value, match: [], matchMode: '', responseMode: '', response: [], priority: null,
+          fromStage: [], nextStage: '', action: '', requiresCatalogItem: false,
+          blockedResponse: '',
           sourceLines: [line.text], sourcePageStart: line.pageNumber, sourcePageEnd: line.pageNumber,
         };
       } else if (structuredRule) {
@@ -154,6 +201,11 @@ function parseWorkflowRules(extraction) {
         else if (field === 'MATCH_MODE') structuredRule.matchMode = value;
         else if (field === 'RESPONSE_MODE') structuredRule.responseMode = value;
         else if (field === 'RESPONSE') structuredRule.response.push(value);
+        else if (field === 'FROM_STAGE') structuredRule.fromStage.push(value);
+        else if (field === 'NEXT_STAGE') structuredRule.nextStage = value;
+        else if (field === 'ACTION') structuredRule.action = value;
+        else if (field === 'REQUIRES_CATALOG_ITEM') structuredRule.requiresCatalogItem = truthy(value);
+        else if (field === 'BLOCKED_RESPONSE') structuredRule.blockedResponse = value.slice(0, 2000);
         else if (field === 'PRIORITY') {
           const priority = Number(value);
           if (Number.isInteger(priority) && priority >= 0) structuredRule.priority = priority;

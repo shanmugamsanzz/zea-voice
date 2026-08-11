@@ -141,12 +141,18 @@ export interface VoiceAgent {
   contextId?: string;
   conversationContextMode?: 'last_n_turns' | 'full_current_call';
   conversationContextTurns?: number;
+  conversationInitialStage?: string;
+  knowledgeHighConfidence?: number;
+  knowledgeClarificationConfidence?: number;
+  knowledgeAmbiguityMargin?: number;
+  knowledgeClarificationMessage?: string;
   conversationMemoryFields?: Array<{
     key: string;
     label: string;
     type: 'text' | 'number' | 'date' | 'time' | 'boolean' | 'select' | 'email' | 'phone';
     required: boolean;
     question: string;
+    requiredAction?: string;
   }>;
   callbackEnabled?: boolean;
   callbackMinimumDelaySeconds?: number;
@@ -186,6 +192,8 @@ export interface VoiceAgent {
   taskCompletionIntent?: string;
   taskCompletionRequiredFields?: string[];
   taskCompletionConfirmationMessage?: string;
+  taskCompletionRequiresCatalogItem?: boolean;
+  taskCompletionCatalogField?: string;
   postCallSummaryEnabled?: boolean;
   postCallSummaryModelId?: string;
   postCallSummaryInstructions?: string;

@@ -142,12 +142,13 @@ async function persistCatalog(client, job, result) {
     await client.query(
       `INSERT INTO structured_items (
          tenant_id, knowledge_base_id, catalog_id, document_id, document_version_id,
-         name, price, currency, display_order, status, source_text,
+         name, category, aliases, price, currency, display_order, status, source_text,
          source_page_start, source_page_end
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'draft', $10, $11, $12)`,
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, 'draft', $12, $13, $14)`,
       [
         job.tenant_id, job.knowledge_base_id, catalog.rows[0].id,
-        job.document_id, job.document_version_id, record.name, record.price,
+        job.document_id, job.document_version_id, record.name, record.category,
+        JSON.stringify(record.aliases ?? []), record.price,
         record.currency, record.displayOrder, record.sourceText,
         record.sourcePageStart, record.sourcePageEnd,
       ],

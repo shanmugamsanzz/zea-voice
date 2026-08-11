@@ -14,6 +14,10 @@ export const updateReviewRecordSchema = z.object({
   question: z.string().trim().min(1).max(10000).optional(),
   answer: z.string().trim().min(1).max(50000).optional(),
   name: z.string().trim().min(1).max(240).optional(),
+  category: z.string().trim().min(1).max(240).nullable().optional(),
+  aliases: z.array(z.string().trim().min(1).max(240)).max(50)
+    .transform((values) => [...new Map(values.map((value) => [value.toLocaleLowerCase(), value])).values()])
+    .optional(),
   description: z.string().trim().max(50000).nullable().optional(),
   catalogType: z.string().trim().min(1).max(80).optional(),
   defaultCurrency: z.string().trim().length(3).transform((value) => value.toUpperCase()).nullable().optional(),

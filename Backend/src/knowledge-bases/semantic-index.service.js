@@ -25,6 +25,34 @@ function embeddingText(value) {
   return (lastSpace > env.RAG_EMBEDDING_MAX_CHARS * 0.8 ? truncated.slice(0, lastSpace) : truncated).trim();
 }
 
+export function buildSemanticPoint(job, record, vector) {
+  const payload = tenantVectorPayload({
+    tenantId: job.tenant_id,
+    knowledgeBaseId: job.knowledge_base_id,
+    documentId: record.document_id,
+    documentVersionId: record.document_version_id,
+    recordId: record.record_id,
+    recordType: record.record_type,
+    agentUsage: record.usage_direction.toUpperCase(),
+    category: record.record_type,
+    publicationRevision: job.targetRevision,
+    content: record.content,
+    ...(record.source_page_start ? { pageNumber: record.source_page_start } : {}),
+  });
+  return {
+    id: record.record_id,
+    vector,
+    payload: {
+      ...payload,
+      ...(record.question ? { question: record.question, answer: record.answer } : {}),
+      ...(record.entity_name ? { entity_name: record.entity_name } : {}),
+      ...(record.entity_category ? { entity_category: record.entity_category } : {}),
+      ...(Array.isArray(record.entity_aliases) && record.entity_aliases.length
+        ? { entity_aliases: record.entity_aliases } : {}),
+    },
+  };
+}
+
 async function claimIndexJob(jobId, contextRunner) {
   return contextRunner(null, async (client) => {
     const locator = await client.query(
@@ -85,7 +113,8 @@ async function loadSemanticRecords(job, contextRunner) {
       `SELECT f.id AS record_id, 'faq'::text AS record_type,
           f.document_id, f.document_version_id, f.usage_direction,
           f.source_page_start, f.question, f.answer,
-          ('Question: ' || f.question || E'\nAnswer: ' || f.answer) AS content
+          ('Question: ' || f.question || E'\nAnswer: ' || f.answer) AS content,
+          NULL::text AS entity_name, NULL::text AS entity_category, '[]'::jsonb AS entity_aliases
          FROM faq_entries f
          JOIN knowledge_documents d
            ON d.tenant_id = f.tenant_id AND d.id = f.document_id
@@ -97,7 +126,8 @@ async function loadSemanticRecords(job, contextRunner) {
        UNION ALL
        SELECT c.id, 'knowledge_chunk'::text,
           c.document_id, c.document_version_id, c.usage_direction,
-          c.source_page_start, NULL::text, NULL::text, c.content
+          c.source_page_start, NULL::text, NULL::text, c.content,
+          NULL::text, NULL::text, '[]'::jsonb
          FROM knowledge_chunks c
          JOIN knowledge_documents d
            ON d.tenant_id = c.tenant_id AND d.id = c.document_id
@@ -106,6 +136,31 @@ async function loadSemanticRecords(job, contextRunner) {
         WHERE c.tenant_id = $1 AND c.knowledge_base_id = $2
           AND c.status = 'approved' AND d.status = 'ready'
           AND v.is_current = true AND v.status = 'ready' AND v.deleted_at IS NULL
+       UNION ALL
+       SELECT si.id, 'catalog_item'::text,
+          si.document_id, si.document_version_id, kb.usage_direction,
+          si.source_page_start, NULL::text, NULL::text,
+          concat_ws(E'\n',
+            'Catalog item: ' || si.name,
+            'Category: ' || COALESCE(si.category, sc.name),
+            CASE WHEN jsonb_array_length(si.aliases) > 0
+              THEN 'Aliases: ' || array_to_string(ARRAY(SELECT jsonb_array_elements_text(si.aliases)), ', ') END,
+            CASE WHEN si.description IS NOT NULL THEN 'Description: ' || si.description END
+          ),
+          si.name, COALESCE(si.category, sc.name), si.aliases
+         FROM structured_items si
+         JOIN structured_catalogs sc
+           ON sc.tenant_id=si.tenant_id AND sc.knowledge_base_id=si.knowledge_base_id
+          AND sc.id=si.catalog_id AND sc.status='approved'
+         JOIN knowledge_bases kb
+           ON kb.tenant_id=si.tenant_id AND kb.id=si.knowledge_base_id
+         JOIN knowledge_documents d
+           ON d.tenant_id=si.tenant_id AND d.id=si.document_id
+         JOIN knowledge_document_versions v
+           ON v.tenant_id=si.tenant_id AND v.id=si.document_version_id
+        WHERE si.tenant_id=$1 AND si.knowledge_base_id=$2
+          AND si.status='approved' AND d.status='ready'
+          AND v.is_current=true AND v.status='ready' AND v.deleted_at IS NULL
        ORDER BY record_type, record_id`,
       [job.tenant_id, job.knowledge_base_id],
     );
@@ -226,27 +281,7 @@ export async function processSemanticIndexJob(jobId, dependencies = defaultDepen
       const vectors = await runtime.embed(batch.map((record) => embeddingText(record.content)));
       for (let index = 0; index < batch.length; index += 1) {
         const record = batch[index];
-        const payload = tenantVectorPayload({
-          tenantId: job.tenant_id,
-          knowledgeBaseId: job.knowledge_base_id,
-          documentId: record.document_id,
-          documentVersionId: record.document_version_id,
-          recordId: record.record_id,
-          recordType: record.record_type,
-          agentUsage: record.usage_direction.toUpperCase(),
-          category: record.record_type,
-          publicationRevision: job.targetRevision,
-          content: record.content,
-          ...(record.source_page_start ? { pageNumber: record.source_page_start } : {}),
-        });
-        points.push({
-          id: record.record_id,
-          vector: vectors[index],
-          payload: {
-            ...payload,
-            ...(record.question ? { question: record.question, answer: record.answer } : {}),
-          },
-        });
+        points.push(buildSemanticPoint(job, record, vectors[index]));
       }
       const progress = 15 + Math.round(((start + batch.length) / Math.max(records.length, 1)) * 45);
       await updateProgress(jobId, progress, runtime.contextRunner);

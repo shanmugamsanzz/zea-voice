@@ -415,6 +415,11 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       contextId: base.contextId || '',
       conversationContextMode: normalizeConversationContextMode(base.conversationContextMode),
       conversationContextTurns: base.conversationContextTurns ?? 5,
+      conversationInitialStage: base.conversationInitialStage || 'start',
+      knowledgeHighConfidence: base.knowledgeHighConfidence ?? 0.86,
+      knowledgeClarificationConfidence: base.knowledgeClarificationConfidence ?? 0.64,
+      knowledgeAmbiguityMargin: base.knowledgeAmbiguityMargin ?? 0.06,
+      knowledgeClarificationMessage: base.knowledgeClarificationMessage || 'I may not have heard the item correctly. Did you mean {{candidates}}?',
       conversationMemoryFields: base.conversationMemoryFields || [],
       callbackEnabled: base.callbackEnabled !== undefined ? base.callbackEnabled : true,
       callbackMinimumDelaySeconds: base.callbackMinimumDelaySeconds ?? 30,
@@ -454,6 +459,8 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       taskCompletionIntent: base.taskCompletionIntent || '',
       taskCompletionRequiredFields: base.taskCompletionRequiredFields || [],
       taskCompletionConfirmationMessage: base.taskCompletionConfirmationMessage || '',
+      taskCompletionRequiresCatalogItem: base.taskCompletionRequiresCatalogItem === true,
+      taskCompletionCatalogField: base.taskCompletionCatalogField || '',
       postCallSummaryEnabled: base.postCallSummaryEnabled !== undefined ? base.postCallSummaryEnabled : false,
       postCallSummaryModelId: base.postCallSummaryModelId || '',
       postCallSummaryInstructions: base.postCallSummaryInstructions || 'Create a concise, factual summary of the call. Capture the customer intent, outcome, sentiment, collected information and required follow-up. Do not invent missing information.',
@@ -510,6 +517,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       contextId: String(savedSettings.contextId ?? '').trim(),
       conversationContextMode: normalizeConversationContextMode(savedSettings.conversationContextMode),
       conversationContextTurns: Number(savedSettings.conversationContextTurns ?? 5),
+      conversationInitialStage: String(savedSettings.conversationInitialStage ?? 'start'),
       conversationMemoryFields: Array.isArray(savedSettings.conversationMemoryFields)
         ? savedSettings.conversationMemoryFields as VoiceAgent['conversationMemoryFields']
         : [],
@@ -897,6 +905,26 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     if (!Number.isInteger(conversationContextTurns) || conversationContextTurns < 1 || conversationContextTurns > 10) {
       setError('Recent Turns must be between 1 and 10 to protect live response latency.'); return;
     }
+    const conversationInitialStage = String(agent.conversationInitialStage || 'start').normalize('NFKC').trim().toLowerCase().replace(/\s+/gu, '_');
+    if (!/^[a-z][a-z0-9_-]{0,79}$/.test(conversationInitialStage)) {
+      setError('Initial Conversation Stage must use lowercase letters, numbers, underscores or hyphens.'); return;
+    }
+    const knowledgeHighConfidence = Number(agent.knowledgeHighConfidence ?? 0.86);
+    const knowledgeClarificationConfidence = Number(agent.knowledgeClarificationConfidence ?? 0.64);
+    const knowledgeAmbiguityMargin = Number(agent.knowledgeAmbiguityMargin ?? 0.06);
+    const knowledgeClarificationMessage = String(agent.knowledgeClarificationMessage ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
+    if (knowledgeHighConfidence < 0.7 || knowledgeHighConfidence > 1) {
+      setError('High Confidence must be between 0.70 and 1.00.'); return;
+    }
+    if (knowledgeClarificationConfidence < 0.4 || knowledgeClarificationConfidence >= knowledgeHighConfidence) {
+      setError('Clarification Confidence must be at least 0.40 and lower than High Confidence.'); return;
+    }
+    if (knowledgeAmbiguityMargin < 0.01 || knowledgeAmbiguityMargin > 0.25) {
+      setError('Ambiguity Margin must be between 0.01 and 0.25.'); return;
+    }
+    if (!knowledgeClarificationMessage || knowledgeClarificationMessage.length > 500) {
+      setError('Clarification Message is required and cannot exceed 500 characters.'); return;
+    }
     if (!Array.isArray(agent.conversationMemoryFields) || agent.conversationMemoryFields.length > 30) {
       setError('Important Information Fields must be a list with no more than 30 fields.'); return;
     }
@@ -907,18 +935,24 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       const label = String(rawField?.label ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
       const question = String(rawField?.question ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
       const type = rawField?.type || 'text';
+      const requiredAction = String(rawField?.requiredAction ?? '').normalize('NFKC').trim().toLowerCase();
       if (!/^[a-z][a-z0-9_]{0,63}$/.test(key)) {
         setError('Each Information Field key must use lowercase letters, numbers and underscores only.'); return;
       }
       if (seenMemoryFieldKeys.has(key)) { setError('Information Field keys must be unique.'); return; }
       if (!label || label.length > 100) { setError('Each Information Field requires a label of 100 characters or fewer.'); return; }
       if (!question || question.length > 500) { setError('Each Information Field requires a question of 500 characters or fewer.'); return; }
+      if (requiredAction && !/^[a-z][a-z0-9_-]{0,79}$/.test(requiredAction)) {
+        setError('Required Action must use lowercase letters, numbers, underscores or hyphens.'); return;
+      }
       seenMemoryFieldKeys.add(key);
-      normalizedMemoryFields.push({ key, label, type, required: rawField.required !== false, question });
+      normalizedMemoryFields.push({ key, label, type, required: rawField.required !== false, question, ...(requiredAction ? { requiredAction } : {}) });
     }
     const taskCompletionEnabled = agent.taskCompletionEnabled === true;
     const taskCompletionIntent = String(agent.taskCompletionIntent || '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
     const taskCompletionConfirmationMessage = String(agent.taskCompletionConfirmationMessage || '').normalize('NFKC').trim();
+    const taskCompletionRequiresCatalogItem = agent.taskCompletionRequiresCatalogItem === true;
+    const taskCompletionCatalogField = String(agent.taskCompletionCatalogField || '').normalize('NFKC').trim().toLowerCase();
     if (!Array.isArray(agent.taskCompletionRequiredFields)) {
       setError('Required Information must be a list of field identifiers.'); return;
     }
@@ -950,6 +984,10 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       if (taskCompletionConfirmationMessage.length > 2_000) {
         setError('Completion Confirmation Message cannot exceed 2,000 characters.'); return;
       }
+      if (taskCompletionRequiresCatalogItem
+        && (!taskCompletionCatalogField || !normalizedCompletionFields.includes(taskCompletionCatalogField))) {
+        setError('Catalog Field must be one of Required Information when Catalog selection is required.'); return;
+      }
     }
     setSaving(true); setError('');
     try {
@@ -975,8 +1013,15 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         taskCompletionIntent,
         taskCompletionRequiredFields: normalizedCompletionFields,
         taskCompletionConfirmationMessage,
+        taskCompletionRequiresCatalogItem,
+        taskCompletionCatalogField,
         conversationContextMode,
         conversationContextTurns,
+        conversationInitialStage,
+        knowledgeHighConfidence,
+        knowledgeClarificationConfidence,
+        knowledgeAmbiguityMargin,
+        knowledgeClarificationMessage,
         conversationMemoryFields: normalizedMemoryFields,
       };
       const payload = {
@@ -2223,6 +2268,81 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     One turn contains a customer message and the related agent response. Full Current Call keeps the complete finalized conversation in process until hangup.
                   </p>
                   <div>
+                    <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-500">Initial Conversation Stage</label>
+                    <input
+                      type="text"
+                      value={agent.conversationInitialStage || 'start'}
+                      maxLength={80}
+                      disabled={isReadOnly}
+                      onChange={(event) => setAgent({ ...agent, conversationInitialStage: event.target.value })}
+                      placeholder="start"
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-800 outline-none transition focus:border-violet-500 focus:bg-white"
+                    />
+                    <p className="mt-1.5 text-[10px] font-semibold text-slate-400">Workflow Rules may move the call only from their configured FROM_STAGE to NEXT_STAGE.</p>
+                  </div>
+                  <div className="rounded-xl border border-violet-100 bg-violet-50/30 p-4">
+                    <div className="mb-3">
+                      <label className="block text-[10px] font-black uppercase tracking-wider text-slate-500">Knowledge Match Confidence</label>
+                      <p className="mt-1 text-[10px] font-semibold leading-relaxed text-slate-400">
+                        High-confidence Workflow and Catalog matches answer directly. Uncertain matches ask for confirmation instead of guessing.
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                      <div>
+                        <label className="mb-1 block text-[10px] font-bold text-slate-500">High Confidence</label>
+                        <input
+                          type="number"
+                          min={0.7}
+                          max={1}
+                          step={0.01}
+                          value={agent.knowledgeHighConfidence ?? 0.86}
+                          disabled={isReadOnly}
+                          onChange={(event) => setAgent({ ...agent, knowledgeHighConfidence: Number(event.target.value) })}
+                          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold outline-none focus:border-violet-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-[10px] font-bold text-slate-500">Clarification Confidence</label>
+                        <input
+                          type="number"
+                          min={0.4}
+                          max={0.99}
+                          step={0.01}
+                          value={agent.knowledgeClarificationConfidence ?? 0.64}
+                          disabled={isReadOnly}
+                          onChange={(event) => setAgent({ ...agent, knowledgeClarificationConfidence: Number(event.target.value) })}
+                          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold outline-none focus:border-violet-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-[10px] font-bold text-slate-500">Ambiguity Margin</label>
+                        <input
+                          type="number"
+                          min={0.01}
+                          max={0.25}
+                          step={0.01}
+                          value={agent.knowledgeAmbiguityMargin ?? 0.06}
+                          disabled={isReadOnly}
+                          onChange={(event) => setAgent({ ...agent, knowledgeAmbiguityMargin: Number(event.target.value) })}
+                          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold outline-none focus:border-violet-500"
+                        />
+                      </div>
+                    </div>
+                    <div className="mt-3">
+                      <label className="mb-1 block text-[10px] font-bold text-slate-500">Clarification Message</label>
+                      <textarea
+                        rows={2}
+                        maxLength={500}
+                        value={agent.knowledgeClarificationMessage || ''}
+                        disabled={isReadOnly}
+                        onChange={(event) => setAgent({ ...agent, knowledgeClarificationMessage: event.target.value })}
+                        placeholder="I may not have heard the item correctly. Did you mean {{candidates}}?"
+                        className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold outline-none focus:border-violet-500"
+                      />
+                      <p className="mt-1 text-[10px] font-semibold text-slate-400">Use {'{{candidates}}'} where the matched Workflow or Catalog names should appear.</p>
+                    </div>
+                  </div>
+                  <div>
                     <div className="mb-1.5 flex items-center gap-1.5">
                       <label className="block text-[10px] font-black uppercase tracking-wider text-slate-500">Context Namespace</label>
                       <FieldInfoTooltip
@@ -2253,7 +2373,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                             ...agent,
                             conversationMemoryFields: [
                               ...(agent.conversationMemoryFields || []),
-                              { key: '', label: '', type: 'text', required: true, question: '' },
+                              { key: '', label: '', type: 'text', required: true, question: '', requiredAction: '' },
                             ],
                           })}
                           className="flex shrink-0 items-center gap-1 rounded-lg bg-violet-600 px-3 py-2 text-[10px] font-black text-white transition hover:bg-violet-700"
@@ -2350,6 +2470,19 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                               ><Trash2 className="h-4 w-4" /></button>
                             )}
                           </div>
+                          <input
+                            type="text"
+                            value={field.requiredAction || ''}
+                            disabled={isReadOnly}
+                            maxLength={80}
+                            placeholder="Required action (optional), e.g. appointment_booking"
+                            onChange={(event) => {
+                              const fields = [...(agent.conversationMemoryFields || [])];
+                              fields[index] = { ...field, requiredAction: event.target.value };
+                              setAgent({ ...agent, conversationMemoryFields: fields });
+                            }}
+                            className="mt-3 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold outline-none focus:border-violet-500"
+                          />
                         </div>
                       ))}
                     </div>
@@ -3349,6 +3482,30 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                             ><Plus className="h-4 w-4" /></button>
                           </div>
                         )}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <label className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold text-slate-600">
+                        <input
+                          type="checkbox"
+                          checked={agent.taskCompletionRequiresCatalogItem === true}
+                          disabled={isReadOnly || !agent.taskCompletionEnabled}
+                          onChange={(event) => setAgent({ ...agent, taskCompletionRequiresCatalogItem: event.target.checked })}
+                        />
+                        Require a valid Catalog item before collecting fields
+                      </label>
+                      <div>
+                        <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-500">Catalog Field</label>
+                        <input
+                          type="text"
+                          value={agent.taskCompletionCatalogField || ''}
+                          disabled={isReadOnly || !agent.taskCompletionEnabled || !agent.taskCompletionRequiresCatalogItem}
+                          maxLength={64}
+                          onChange={(event) => setAgent({ ...agent, taskCompletionCatalogField: event.target.value })}
+                          placeholder="Example: selected_item"
+                          className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-semibold text-slate-800 outline-none transition focus:border-emerald-500 disabled:cursor-not-allowed disabled:bg-slate-50"
+                        />
                       </div>
                     </div>
 

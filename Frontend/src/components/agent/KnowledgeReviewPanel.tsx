@@ -67,6 +67,11 @@ const fieldsByKind: Record<ReviewRecord['kind'], ReviewField[]> = {
   ],
   catalog_item: [
     { key: 'name', label: 'Item / Package Name', kind: 'text', required: true },
+    { key: 'category', label: 'Category', kind: 'text', nullable: true },
+    {
+      key: 'aliases', label: 'Spoken Aliases (JSON array)', kind: 'json-array',
+      help: 'Optional alternate names or common speech forms. Semantic and phonetic matching also run automatically.',
+    },
     { key: 'description', label: 'Description', kind: 'textarea', nullable: true },
     { key: 'price', label: 'Price', kind: 'number', nullable: true },
     { key: 'currency', label: 'Currency', kind: 'text', nullable: true },
@@ -98,6 +103,11 @@ const fieldsByKind: Record<ReviewRecord['kind'], ReviewField[]> = {
         { value: 'generated', label: 'Generated' },
       ],
     },
+    { key: 'fromStages', label: 'Allowed From Stages', kind: 'textarea', virtual: true, help: 'One stage per line.' },
+    { key: 'nextStage', label: 'Next Stage', kind: 'text', virtual: true },
+    { key: 'actionKey', label: 'Action Key', kind: 'text', virtual: true },
+    { key: 'requiresCatalogItem', label: 'Require Catalog Item', kind: 'checkbox', virtual: true },
+    { key: 'blockedResponse', label: 'Blocked Response', kind: 'textarea', virtual: true },
     { key: 'responseTemplate', label: 'Response', kind: 'textarea', nullable: true },
   ],
   conversation_node: [
@@ -141,6 +151,18 @@ function initialDraft(record: ReviewRecord) {
     }
     if (record.kind === 'workflow_rule' && field.key === 'responseMode') {
       draft[field.key] = typeof actionConfig.responseMode === 'string' ? actionConfig.responseMode : 'instruction';
+      continue;
+    }
+    if (record.kind === 'workflow_rule' && field.key === 'fromStages') {
+      draft[field.key] = Array.isArray(conditions.fromStages) ? conditions.fromStages.join('\n') : '';
+      continue;
+    }
+    if (record.kind === 'workflow_rule' && ['nextStage', 'actionKey', 'blockedResponse'].includes(field.key)) {
+      draft[field.key] = typeof actionConfig[field.key] === 'string' ? actionConfig[field.key] as string : '';
+      continue;
+    }
+    if (record.kind === 'workflow_rule' && field.key === 'requiresCatalogItem') {
+      draft[field.key] = actionConfig.requiresCatalogItem === true;
       continue;
     }
     const value = record[field.key];
@@ -192,10 +214,20 @@ function ReviewRecordCard({ record, readOnly, onChanged }: { record: ReviewRecor
           .map((phrase) => [phrase.toLocaleLowerCase(), phrase])).values()];
         const response = String(draft.responseTemplate ?? '').trim();
         payload.conditions = { ...existingConditions, triggerPhrases, matchMode: String(draft.matchMode ?? 'any_phrase') };
+        const list = (value: unknown) => [...new Set(String(value ?? '').split(/\r?\n|\|/u)
+          .map((entry) => entry.trim().toLowerCase().replace(/\s+/gu, '_')).filter(Boolean))];
+        payload.conditions = {
+          ...payload.conditions as Record<string, unknown>,
+          fromStages: list(draft.fromStages),
+        };
         payload.actionConfig = {
           ...existingActionConfig,
           responseMode: String(draft.responseMode ?? 'instruction'),
           instruction: response,
+          nextStage: String(draft.nextStage ?? '').trim().toLowerCase().replace(/\s+/gu, '_'),
+          actionKey: String(draft.actionKey ?? '').trim().toLowerCase().replace(/\s+/gu, '_'),
+          requiresCatalogItem: draft.requiresCatalogItem === true,
+          blockedResponse: String(draft.blockedResponse ?? '').trim(),
         };
       }
       await apiRequest(`/knowledge-bases/${String(record.knowledgeBaseId ?? '')}/documents/${String(record.documentId ?? '')}/review/${record.id}`, {

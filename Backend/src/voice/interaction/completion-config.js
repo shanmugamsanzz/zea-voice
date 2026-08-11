@@ -23,6 +23,8 @@ export function resolveTaskCompletionConfiguration(settings = {}, { strict = fal
   const enabled = settings.taskCompletionEnabled === true;
   const intent = text(settings.taskCompletionIntent);
   const confirmationMessage = text(settings.taskCompletionConfirmationMessage);
+  const requiresCatalogItem = settings.taskCompletionRequiresCatalogItem === true;
+  const catalogField = text(settings.taskCompletionCatalogField).toLowerCase();
   const inputFields = settings.taskCompletionRequiredFields ?? [];
 
   if (!Array.isArray(inputFields)) {
@@ -50,6 +52,9 @@ export function resolveTaskCompletionConfiguration(settings = {}, { strict = fal
   if (intent && !intentPattern.test(intent)) {
     throw configurationError('Completion Intent must use lowercase letters, numbers, hyphens or underscores only', 'taskCompletionIntent');
   }
+  if (catalogField && !fieldPattern.test(catalogField)) {
+    throw configurationError('Catalog Field must use lowercase letters, numbers and underscores only', 'taskCompletionCatalogField');
+  }
   if (confirmationMessage.length > maxConfirmationLength) {
     throw configurationError(`Confirmation Message cannot exceed ${maxConfirmationLength.toLocaleString('en-US')} characters`, 'taskCompletionConfirmationMessage');
   }
@@ -57,6 +62,9 @@ export function resolveTaskCompletionConfiguration(settings = {}, { strict = fal
     if (!intent) throw configurationError('Completion Intent is required when automatic task completion is enabled', 'taskCompletionIntent');
     if (!requiredFields.length) throw configurationError('Add at least one Required Information field when automatic task completion is enabled', 'taskCompletionRequiredFields');
     if (!confirmationMessage) throw configurationError('Confirmation Message is required when automatic task completion is enabled', 'taskCompletionConfirmationMessage');
+    if (requiresCatalogItem && (!catalogField || !requiredFields.includes(catalogField))) {
+      throw configurationError('Catalog Field must be one of Required Information when Catalog selection is required', 'taskCompletionCatalogField');
+    }
   }
 
   return Object.freeze({
@@ -64,6 +72,8 @@ export function resolveTaskCompletionConfiguration(settings = {}, { strict = fal
     intent,
     requiredFields: Object.freeze(requiredFields),
     confirmationMessage,
+    requiresCatalogItem,
+    catalogField,
   });
 }
 
@@ -75,5 +85,7 @@ export function normalizeTaskCompletionSettings(settings = {}) {
     taskCompletionIntent: configuration.intent,
     taskCompletionRequiredFields: [...configuration.requiredFields],
     taskCompletionConfirmationMessage: configuration.confirmationMessage,
+    taskCompletionRequiresCatalogItem: configuration.requiresCatalogItem,
+    taskCompletionCatalogField: configuration.catalogField,
   };
 }

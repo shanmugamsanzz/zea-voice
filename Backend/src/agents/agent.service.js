@@ -15,6 +15,8 @@ import { normalizePostCallEndTriggerSettings } from '../voice/integrations/postc
 import { normalizeTtsUsageLimitSettings } from '../voice/tts-usage-limit-config.js';
 import { normalizeCallCheckSettings } from '../voice/interaction/call-check-config.js';
 import { normalizeLiveMemorySettings } from '../voice/interaction/live-memory-config.js';
+import { normalizeConversationStageSettings } from '../voice/interaction/conversation-stage-config.js';
+import { normalizeKnowledgeConfidenceSettings } from '../knowledge-bases/knowledge-confidence-config.js';
 
 const legacyAgentTtsProviderOverrides = new Set([
   'ttsSpeed', 'ttsStyle', 'ttsStyleDegree', 'ttsLanguage', 'ttsStability',
@@ -29,13 +31,13 @@ function withoutAgentTtsProviderOverrides(settings = {}) {
 
 function normalizedAgentSettings(settings, interruptionSensitivity) {
   try {
-    return normalizeLiveMemorySettings(normalizeCallCheckSettings(normalizeTtsUsageLimitSettings(normalizeTaskCompletionSettings(normalizeCallbackSettings(
+    return normalizeKnowledgeConfidenceSettings(normalizeConversationStageSettings(normalizeLiveMemorySettings(normalizeCallCheckSettings(normalizeTtsUsageLimitSettings(normalizeTaskCompletionSettings(normalizeCallbackSettings(
       normalizePostCallClosingSettings(normalizePostCallSummarySettings(
         normalizePostCallEndTriggerSettings(normalizeInteractionSettings(normalizeInterruptionSettings(
           withoutAgentTtsProviderOverrides(settings), interruptionSensitivity,
         ))),
       )),
-    )))));
+    )))))));
   } catch (error) {
     throw new AppError(400, error.message, error.code ?? 'VOICE_AGENT_SETTINGS_INVALID', {
       field: error.field ?? 'settings',

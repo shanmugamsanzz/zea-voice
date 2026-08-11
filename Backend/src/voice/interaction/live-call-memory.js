@@ -1,5 +1,6 @@
 import { conversationContextModes, resolveLiveMemoryConfiguration } from './live-memory-config.js';
 import { captureConfiguredMemoryFields, pendingFieldFromAssistantResponse } from './live-memory-extractor.js';
+import { resolveConversationStageConfiguration, workflowStageGate } from './conversation-stage-config.js';
 
 const activeCalls = new Map();
 const maximumFullCallMessages = 2_000;
@@ -40,18 +41,26 @@ function retainRecentTurns(messages, turns) {
 }
 
 function publicState(state) {
+  const visibleFields = state.configuration.fields.filter((field) => (
+    !field.requiredAction || state.activeActions.has(field.requiredAction)
+  ));
   return Object.freeze({
     key: state.key,
     mode: state.configuration.mode,
     recentTurns: state.configuration.recentTurns,
-    fields: state.configuration.fields.map((field) => ({ ...field })),
+    fields: visibleFields.map((field) => ({ ...field })),
+    lockedFields: state.configuration.fields.filter((field) => !visibleFields.includes(field)).map((field) => field.key),
     messages: state.messages.map((message) => ({ ...message })),
     collectedData: { ...state.collectedData },
     completedQuestions: [...state.completedQuestions],
     currentTopic: state.currentTopic,
     pendingQuestion: state.pendingQuestion,
     runningSummary: state.runningSummary,
-    missingFields: state.configuration.fields.filter((field) => field.required && state.collectedData[field.key] === undefined)
+    currentStage: state.currentStage,
+    selectedCatalogItem: state.selectedCatalogItem ? { ...state.selectedCatalogItem } : null,
+    activeActions: [...state.activeActions],
+    stageTransitions: state.stageTransitions.map((transition) => ({ ...transition })),
+    missingFields: visibleFields.filter((field) => field.required && state.collectedData[field.key] === undefined)
       .map((field) => field.key),
     openedAt: state.openedAt,
     updatedAt: state.updatedAt,
@@ -61,9 +70,12 @@ function publicState(state) {
 export function openLiveCallMemory(identity, settings = {}, now = Date.now()) {
   const key = liveCallMemoryKey(identity);
   const configuration = resolveLiveMemoryConfiguration(settings);
+  const stageConfiguration = resolveConversationStageConfiguration(settings);
   const state = {
     key, configuration, messages: [], collectedData: {}, completedQuestions: new Set(),
     currentTopic: null, pendingQuestion: null, runningSummary: '', summaryCursor: 0,
+    currentStage: stageConfiguration.initialStage, selectedCatalogItem: null,
+    activeActions: new Set(), stageTransitions: [],
     openedAt: now, updatedAt: now,
   };
   activeCalls.set(key, state);
@@ -80,8 +92,11 @@ export function openLiveCallMemory(identity, settings = {}, now = Date.now()) {
       return publicState(state);
     },
     captureUserUtterance(text, options = {}) {
+      const visibleFields = configuration.fields.filter((field) => (
+        !field.requiredAction || state.activeActions.has(field.requiredAction)
+      ));
       const updates = captureConfiguredMemoryFields({
-        fields: configuration.fields,
+        fields: visibleFields,
         collectedData: state.collectedData,
         pendingQuestion: state.pendingQuestion,
         text,
@@ -99,7 +114,10 @@ export function openLiveCallMemory(identity, settings = {}, now = Date.now()) {
       return Object.freeze({ updates: { ...updates }, state: publicState(state) });
     },
     observeAssistantResponse(response) {
-      const pending = pendingFieldFromAssistantResponse(configuration.fields, response);
+      const visibleFields = configuration.fields.filter((field) => (
+        !field.requiredAction || state.activeActions.has(field.requiredAction)
+      ));
+      const pending = pendingFieldFromAssistantResponse(visibleFields, response);
       if (pending && state.collectedData[pending] === undefined) {
         state.pendingQuestion = pending;
         state.currentTopic = pending;
@@ -125,7 +143,9 @@ export function openLiveCallMemory(identity, settings = {}, now = Date.now()) {
       return publicState(state);
     },
     mergeCollectedData(values = {}) {
-      for (const field of configuration.fields) {
+      for (const field of configuration.fields.filter((entry) => (
+        !entry.requiredAction || state.activeActions.has(entry.requiredAction)
+      ))) {
         const value = values[field.key];
         if (value !== undefined && value !== null && String(value).trim() !== '') state.collectedData[field.key] = value;
       }
@@ -143,6 +163,44 @@ export function openLiveCallMemory(identity, settings = {}, now = Date.now()) {
       if (value) state.completedQuestions.add(value);
       state.updatedAt = Date.now();
       return publicState(state);
+    },
+    applyKnowledge(knowledge) {
+      const selection = knowledge?.catalogSelection ?? (knowledge?.route === 'catalog' ? knowledge : null);
+      if (selection?.item?.name && selection?.source?.recordId) {
+        state.selectedCatalogItem = {
+          id: selection.source.recordId,
+          key: selection.item.key ?? null,
+          name: selection.item.name,
+          category: selection.item.category ?? null,
+        };
+      }
+      if (knowledge?.route === 'workflow') {
+        const gate = workflowStageGate({
+          conditions: knowledge.workflow?.conditions,
+          action_config: knowledge.action?.config,
+        }, {
+          currentStage: state.currentStage,
+          selectedCatalogItemId: state.selectedCatalogItem?.id,
+        });
+        if (knowledge.workflow?.gate?.allowed === false || !gate.allowed) return publicState(state);
+        if (gate.actionKey) state.activeActions.add(gate.actionKey);
+        if (gate.nextStage && gate.nextStage !== state.currentStage) {
+          state.stageTransitions.push({
+            from: state.currentStage,
+            to: gate.nextStage,
+            actionKey: gate.actionKey || null,
+            at: Date.now(),
+          });
+          state.currentStage = gate.nextStage;
+        }
+      }
+      state.updatedAt = Date.now();
+      return publicState(state);
+    },
+    canRunAction(actionKey, { requiresCatalogItem = false } = {}) {
+      const action = String(actionKey ?? '').trim().toLowerCase();
+      return Boolean(action && state.activeActions.has(action)
+        && (!requiresCatalogItem || state.selectedCatalogItem?.id));
     },
     snapshot: () => publicState(state),
     promptMessages: () => retainRecentTurns(state.messages, configuration.recentTurns).map((message) => ({ ...message })),
@@ -172,6 +230,15 @@ export function compactLiveCallMemoryContext({ snapshot = {}, collectedData = {}
     ].filter(Boolean))].slice(-20),
     pendingQuestion: promptText(snapshot.pendingQuestion, 64) || undefined,
     currentTopic: promptText(snapshot.currentTopic, 160) || undefined,
+    currentStage: promptText(snapshot.currentStage, 80) || undefined,
+    selectedCatalogItem: snapshot.selectedCatalogItem ? {
+      id: promptText(snapshot.selectedCatalogItem.id, 80),
+      key: promptText(snapshot.selectedCatalogItem.key, 80) || undefined,
+      name: promptText(snapshot.selectedCatalogItem.name, 160),
+      category: promptText(snapshot.selectedCatalogItem.category, 160) || undefined,
+    } : undefined,
+    activeActions: (snapshot.activeActions ?? []).map((value) => promptText(value, 80)).filter(Boolean).slice(-10),
+    lockedFields: (snapshot.lockedFields ?? []).map((value) => promptText(value, 64)).filter(Boolean).slice(0, 20),
     missingFields: missing,
     nextMissingField: next ? {
       key: promptText(next.key, 64), label: promptText(next.label, 80),

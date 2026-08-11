@@ -643,12 +643,17 @@ const completionOrchestrator = new RealtimeConversationOrchestrator(completionMe
   appendTranscript: async () => {},
   contextStore: { get: async () => null, set: async () => true, delete: async () => true },
   memoryStore: { load: async () => null, save: async (_scope, input) => ({ state: input.state, revision: 1 }) },
+  routeKnowledge: async () => ({
+    route: 'workflow', found: true, content: 'Please provide the booking details.', durationMs: 1,
+    workflow: { conditions: {}, gate: { allowed: true } },
+    action: { config: { actionKey: 'appointment_booking', nextStage: 'booking_details' } },
+  }),
   completeCall: async (input) => { completionCalls.push(input); },
 });
 await completionOrchestrator.ready;
 completionMedia.emit('start', { session: completionMedia });
 await waitFor(() => completionOrchestrator.controller.state === 'listening', 'Task completion test call did not listen');
-completionStt.publish({ type: 'final_transcript', text: 'name Shanmugam age 21', language: 'en', isFinal: true });
+completionStt.publish({ type: 'final_transcript', text: 'book appointment name Shanmugam age 21', language: 'en', isFinal: true });
 await waitFor(() => completionCalls.length === 1, 'Completed task did not automatically end the call');
 assert.equal(completionCalls[0].reason, 'task_completion_completed');
 assert.equal(completionCalls[0].metrics.taskCompletion.completed, true);

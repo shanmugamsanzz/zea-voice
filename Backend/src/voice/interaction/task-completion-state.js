@@ -124,6 +124,16 @@ export function captureTaskCompletionInput(state, transcript, history = []) {
   };
 }
 
+export function mergeTaskCompletionData(state, updates = {}) {
+  const configuration = state?.configuration ?? resolveTaskCompletionConfiguration({});
+  const values = { ...(state?.values ?? {}) };
+  for (const field of configuration.requiredFields) {
+    const value = safeContextValue(updates[field]);
+    if (value) values[field] = value;
+  }
+  return { configuration, values };
+}
+
 export function renderTaskCompletionConfirmation(state) {
   const template = String(state?.configuration?.confirmationMessage ?? '').trim();
   if (!template) return '';
@@ -140,5 +150,7 @@ export function publicTaskCompletionState(state) {
     collectedData: values,
     missingFields: configuration.requiredFields.filter((field) => !values[field]),
     completed: configuration.enabled && configuration.requiredFields.every((field) => Boolean(values[field])),
+    requiresCatalogItem: configuration.requiresCatalogItem === true,
+    catalogField: configuration.catalogField || null,
   });
 }
