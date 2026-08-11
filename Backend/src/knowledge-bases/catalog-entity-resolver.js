@@ -146,17 +146,25 @@ function categoryCandidates(items, query) {
     const category = String(item.category ?? item.catalog_name ?? '').normalize('NFKC').trim();
     if (!category) continue;
     const key = normalizeCatalogEntityText(category);
-    const existing = categories.get(key) ?? { category, items: [] };
+    const existing = categories.get(key) ?? { category, aliases: [], items: [] };
     existing.items.push(item);
+    existing.aliases.push(...(Array.isArray(item.categoryAliases) ? item.categoryAliases : []));
+    existing.aliases.push(...(Array.isArray(item.category_aliases) ? item.category_aliases : []));
     categories.set(key, existing);
   }
-  return [...categories.values()].map((candidate) => ({
-    ...candidate,
-    ...catalogLabelSimilarity(query, candidate.category),
-    matchedText: candidate.category,
-    matchedKind: 'category',
-    entityType: 'category',
-  }));
+  return [...categories.values()].map((candidate) => {
+    let best = { ...catalogLabelSimilarity(query, candidate.category), matchedText: candidate.category };
+    for (const alias of [...new Set(candidate.aliases.map((value) => String(value).trim()).filter(Boolean))]) {
+      const similarity = catalogLabelSimilarity(query, alias);
+      if (similarity.score > best.score) best = { ...similarity, matchedText: alias };
+    }
+    return {
+      ...candidate,
+      ...best,
+      matchedKind: best.matchedText === candidate.category ? 'category' : 'category_alias',
+      entityType: 'category',
+    };
+  });
 }
 
 export function rankCatalogEntities(items, query) {
@@ -236,4 +244,21 @@ export function resolveCatalogEntityLocally(items, query, {
     ambiguityMargin,
   });
   return result.status === 'match' ? result : null;
+}
+
+export function resolveCatalogEntitiesLocally(items, query, { minimumConfidence = 0.86 } = {}) {
+  const seen = new Set();
+  return rankCatalogEntities(items, query)
+    .filter((candidate) => candidate.entityType === 'item' && candidate.score >= minimumConfidence)
+    .filter((candidate) => {
+      const id = String(candidate.item.id);
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    })
+    .map((candidate) => ({
+      entityType: 'item', item: candidate.item,
+      confidence: Math.round(candidate.score * 10000) / 10000,
+      method: candidate.method, matchedText: candidate.matchedText,
+    }));
 }

@@ -15,6 +15,7 @@ process.env.B2_APPLICATION_KEY ??= 'test-application-key';
 
 const {
   phoneticCatalogToken,
+  resolveCatalogEntitiesLocally,
   resolveCatalogEntityLocally,
 } = await import('../src/knowledge-bases/catalog-entity-resolver.js');
 const { processExtractedCategory } = await import('../src/knowledge-bases/category-processors.js');
@@ -31,7 +32,7 @@ const lungsItemId = '77777777-7777-4777-8777-777777777777';
 const liverItemId = '88888888-8888-4888-8888-888888888888';
 
 const extractionText = [
-  'CATEGORY: Organ-Specific Packages',
+  'CATEGORY: Organ-Specific Packages | ALIASES=Organ Packages, Argon Specific',
   'Lungs Health Checkup - INR 999 | ALIASES=Lung, Pulmonary Screening, Respiratory Check',
   'Liver Health Checkup - INR 1400 | CATEGORY=Liver Care | ALIASES=Hepatic Screening',
 ].join('\n');
@@ -41,6 +42,7 @@ const extracted = processExtractedCategory('catalog', {
 });
 assert.equal(extracted.recordCount, 2);
 assert.equal(extracted.records[0].category, 'Organ-Specific Packages');
+assert.deepEqual(extracted.records[0].categoryAliases, ['Organ Packages', 'Argon Specific']);
 assert.deepEqual(extracted.records[0].aliases, ['Lung', 'Pulmonary Screening', 'Respiratory Check']);
 assert.equal(extracted.records[1].category, 'Liver Care');
 assert.deepEqual(extracted.records[1].aliases, ['Hepatic Screening']);
@@ -57,6 +59,7 @@ const catalogItems = [
     item_key: 'lungs-health-checkup',
     name: 'Lungs Health Checkup',
     category: 'Organ-Specific Packages',
+    category_aliases: ['Organ Packages', 'Argon Specific'],
     aliases: ['Pulmonary Screening'],
     description: 'Respiratory screening',
     price: 999,
@@ -75,6 +78,7 @@ const catalogItems = [
     item_key: 'liver-health-checkup',
     name: 'Liver Health Checkup',
     category: 'Organ-Specific Packages',
+    category_aliases: ['Organ Packages', 'Argon Specific'],
     aliases: ['Hepatic Screening'],
     description: 'Liver screening',
     price: 1400,
@@ -94,6 +98,11 @@ const categoryResolution = resolveCatalogEntityLocally(catalogItems, 'Organ-Spec
 assert.equal(categoryResolution?.entityType, 'category');
 assert.equal(categoryResolution?.category, 'Organ-Specific Packages');
 assert.deepEqual(categoryResolution?.items.map((item) => item.id), [lungsItemId, liverItemId]);
+assert.equal(resolveCatalogEntityLocally(catalogItems, 'Argon Specific')?.entityType, 'category');
+assert.deepEqual(
+  resolveCatalogEntitiesLocally(catalogItems, 'Lungs and Liver package').map((item) => item.item.id),
+  [lungsItemId, liverItemId],
+);
 assert.equal(resolveCatalogEntityLocally(catalogItems, 'Singer package'), null);
 
 const point = buildSemanticPoint({
@@ -111,11 +120,13 @@ const point = buildSemanticPoint({
   entity_name: 'Lungs Health Checkup',
   entity_category: 'Organ-Specific Packages',
   entity_aliases: ['Lung', 'Pulmonary Screening'],
+  entity_category_aliases: ['Organ Packages', 'Argon Specific'],
 }, [0.1, 0.2]);
 assert.equal(point.payload.record_type, 'CATALOG_ITEM');
 assert.equal(point.payload.entity_name, 'Lungs Health Checkup');
 assert.equal(point.payload.entity_category, 'Organ-Specific Packages');
 assert.deepEqual(point.payload.entity_aliases, ['Lung', 'Pulmonary Screening']);
+assert.deepEqual(point.payload.entity_category_aliases, ['Organ Packages', 'Argon Specific']);
 assert.equal(point.payload.tenant_id, tenantId);
 
 const profile = {

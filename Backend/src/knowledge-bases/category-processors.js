@@ -80,10 +80,12 @@ function parseCatalog(extraction) {
   const lines = nonEmptyLines(extraction);
   const items = [];
   let currentCategory = null;
+  let currentCategoryAliases = [];
   for (let index = 0; index < lines.length; index += 1) {
-    const categoryHeading = lines[index].text.match(/^\s*category\s*[:=]\s*(.+?)\s*$/iu);
-    if (categoryHeading) {
-      currentCategory = categoryHeading[1].trim().slice(0, 240) || null;
+    const headingMetadata = catalogLineMetadata(lines[index].text);
+    if (headingMetadata.category && !headingMetadata.content) {
+      currentCategory = headingMetadata.category;
+      currentCategoryAliases = uniqueCatalogAliases(headingMetadata.aliases, currentCategory);
       continue;
     }
     const metadata = catalogLineMetadata(lines[index].text);
@@ -94,6 +96,7 @@ function parseCatalog(extraction) {
     items.push({
       name,
       category: metadata.category || currentCategory,
+      categoryAliases: metadata.category ? [] : currentCategoryAliases,
       aliases: uniqueCatalogAliases(metadata.aliases, name),
       price: parsed.price,
       currency: parsed.currency,

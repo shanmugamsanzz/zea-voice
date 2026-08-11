@@ -47,6 +47,8 @@ export function buildSemanticPoint(job, record, vector) {
       ...(record.question ? { question: record.question, answer: record.answer } : {}),
       ...(record.entity_name ? { entity_name: record.entity_name } : {}),
       ...(record.entity_category ? { entity_category: record.entity_category } : {}),
+      ...(Array.isArray(record.entity_category_aliases) && record.entity_category_aliases.length
+        ? { entity_category_aliases: record.entity_category_aliases } : {}),
       ...(Array.isArray(record.entity_aliases) && record.entity_aliases.length
         ? { entity_aliases: record.entity_aliases } : {}),
     },
@@ -114,7 +116,8 @@ async function loadSemanticRecords(job, contextRunner) {
           f.document_id, f.document_version_id, f.usage_direction,
           f.source_page_start, f.question, f.answer,
           ('Question: ' || f.question || E'\nAnswer: ' || f.answer) AS content,
-          NULL::text AS entity_name, NULL::text AS entity_category, '[]'::jsonb AS entity_aliases
+          NULL::text AS entity_name, NULL::text AS entity_category,
+          '[]'::jsonb AS entity_aliases, '[]'::jsonb AS entity_category_aliases
          FROM faq_entries f
          JOIN knowledge_documents d
            ON d.tenant_id = f.tenant_id AND d.id = f.document_id
@@ -127,7 +130,7 @@ async function loadSemanticRecords(job, contextRunner) {
        SELECT c.id, 'knowledge_chunk'::text,
           c.document_id, c.document_version_id, c.usage_direction,
           c.source_page_start, NULL::text, NULL::text, c.content,
-          NULL::text, NULL::text, '[]'::jsonb
+          NULL::text, NULL::text, '[]'::jsonb, '[]'::jsonb
          FROM knowledge_chunks c
          JOIN knowledge_documents d
            ON d.tenant_id = c.tenant_id AND d.id = c.document_id
@@ -143,11 +146,13 @@ async function loadSemanticRecords(job, contextRunner) {
           concat_ws(E'\n',
             'Catalog item: ' || si.name,
             'Category: ' || COALESCE(si.category, sc.name),
+            CASE WHEN jsonb_array_length(si.category_aliases) > 0
+              THEN 'Category aliases: ' || array_to_string(ARRAY(SELECT jsonb_array_elements_text(si.category_aliases)), ', ') END,
             CASE WHEN jsonb_array_length(si.aliases) > 0
               THEN 'Aliases: ' || array_to_string(ARRAY(SELECT jsonb_array_elements_text(si.aliases)), ', ') END,
             CASE WHEN si.description IS NOT NULL THEN 'Description: ' || si.description END
           ),
-          si.name, COALESCE(si.category, sc.name), si.aliases
+          si.name, COALESCE(si.category, sc.name), si.aliases, si.category_aliases
          FROM structured_items si
          JOIN structured_catalogs sc
            ON sc.tenant_id=si.tenant_id AND sc.knowledge_base_id=si.knowledge_base_id
@@ -160,6 +165,31 @@ async function loadSemanticRecords(job, contextRunner) {
            ON v.tenant_id=si.tenant_id AND v.id=si.document_version_id
         WHERE si.tenant_id=$1 AND si.knowledge_base_id=$2
           AND si.status='approved' AND d.status='ready'
+          AND v.is_current=true AND v.status='ready' AND v.deleted_at IS NULL
+       UNION ALL
+       SELECT w.id, 'workflow_rule'::text,
+          w.document_id, w.document_version_id, w.usage_direction,
+          w.source_page_start, NULL::text, NULL::text,
+          concat_ws(E'\n',
+            'Workflow: ' || w.name,
+            'Intent: ' || w.intent,
+            CASE WHEN jsonb_typeof(w.conditions->'triggerPhrases') = 'array'
+              THEN 'Caller examples: ' || array_to_string(
+                ARRAY(SELECT jsonb_array_elements_text(w.conditions->'triggerPhrases')), ', '
+              ) END,
+            CASE WHEN w.response_template IS NOT NULL THEN 'Approved response: ' || w.response_template END
+          ),
+          w.name, w.intent,
+          CASE WHEN jsonb_typeof(w.conditions->'triggerPhrases') = 'array'
+            THEN w.conditions->'triggerPhrases' ELSE '[]'::jsonb END,
+          '[]'::jsonb
+         FROM workflow_rules w
+         JOIN knowledge_documents d
+           ON d.tenant_id=w.tenant_id AND d.id=w.document_id
+         JOIN knowledge_document_versions v
+           ON v.tenant_id=w.tenant_id AND v.id=w.document_version_id
+        WHERE w.tenant_id=$1 AND w.knowledge_base_id=$2
+          AND w.status='approved' AND d.status='ready'
           AND v.is_current=true AND v.status='ready' AND v.deleted_at IS NULL
        ORDER BY record_type, record_id`,
       [job.tenant_id, job.knowledge_base_id],

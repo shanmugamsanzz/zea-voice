@@ -488,6 +488,15 @@ RESPONSE_MODE: exact
 PRIORITY: 300
 RESPONSE: Stomach மற்றும் digestive health-related screeningக்கு Gastro Checkup இருக்கு. Exact காரணம் Doctorதாங்க confirm பண்ண முடியும். Gastro Checkup details சொல்லட்டுமா?
 
+RULE: general_body_pain_concern
+MATCH: உடம்பெல்லாம் வலிக்குது | உடம்பு முழுக்க வலி | body முழுக்க pain | full body pain | whole body pain | body pain all over | உடல் முழுவதும் வலிக்குது | எல்லா இடமும் வலிக்குது
+MATCH_MODE: any_phrase
+RESPONSE_MODE: exact
+PRIORITY: 300
+NEXT_STAGE: package_selection
+ACTION: recommend_catalog_item
+RESPONSE: உடம்பு முழுக்க வலி இருக்குறதுக்கு exact காரணம் Doctorதாங்க confirm பண்ண முடியும். General screeningக்கு Silver, Gold, Platinum Master Health Checkup options இருக்குங்க. மூணுக்கும் difference சொல்லட்டுமா?
+
 RULE: bone_joint_leg_concern
 MATCH: கால் வலி இருக்கு | மூட்டு வலி இருக்கு | எலும்பு வலி இருக்கு | leg pain | joint pain | bone pain
 MATCH_MODE: any_phrase

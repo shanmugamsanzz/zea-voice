@@ -119,6 +119,7 @@
     "verify:catalog-entity-resolver": "node scripts/verify-catalog-entity-resolver.js",
     "verify:conversation-stage-gating": "node scripts/verify-conversation-stage-gating.js",
     "verify:knowledge-confidence-routing": "node scripts/verify-knowledge-confidence-routing.js",
+    "verify:semantic-workflow-routing": "node scripts/verify-semantic-workflow-routing.js",
     "seed:super-admin": "node scripts/create-super-admin.js",
     "db:migrate": "node-pg-migrate up --migrations-dir migrations",
     "db:rollback": "node-pg-migrate down --migrations-dir migrations",

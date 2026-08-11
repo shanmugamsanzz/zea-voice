@@ -9,6 +9,7 @@ import { requireTenantId } from '../rag/tenant-isolation.js';
 import {
   catalogLabelSimilarity,
   classifyCatalogEntityLocally,
+  resolveCatalogEntitiesLocally,
 } from './catalog-entity-resolver.js';
 import { workflowStageGate } from '../voice/interaction/conversation-stage-config.js';
 import {
@@ -121,7 +122,7 @@ const runtimeProfileSql = `
       FROM (
         SELECT si.id, si.knowledge_base_id, si.document_id, si.document_version_id,
           d.original_filename AS document_name, si.source_page_start, si.source_page_end,
-          si.item_key, si.name, si.category, si.aliases, sc.name AS catalog_name,
+          si.item_key, si.name, si.category, si.category_aliases, si.aliases, sc.name AS catalog_name,
           si.description, si.price, si.currency, si.display_order,
           COALESCE((SELECT jsonb_agg(jsonb_build_object(
             'key', sa.attribute_key, 'name', sa.display_name, 'value', sa.value
@@ -215,6 +216,34 @@ function workflowPhraseSpecificity(value) {
   return normalize(value).split(' ').filter(Boolean).length;
 }
 
+function workflowRecordResponse(record, {
+  matchedPhrase, matchMode, gate, confidence, method,
+} = {}) {
+  const responseMode = String(record.action_config?.responseMode ?? 'instruction').trim().toLowerCase();
+  const blockedResponse = String(record.action_config?.blockedResponse ?? '').trim();
+  const content = gate?.allowed === false
+    ? blockedResponse
+    : (record.response_template ?? record.action_config?.instruction ?? '');
+  if (!content) return null;
+  return {
+    ...routeResponse('workflow', record, content, {
+      intent: record.intent, matchedPhrase, matchMode, responseMode,
+    }),
+    action: { type: record.action_type, config: record.action_config },
+    workflow: {
+      intent: record.intent,
+      conditions: record.conditions,
+      matchedPhrase,
+      matchMode,
+      responseMode,
+      exactResponse: record.action_type === 'respond' && responseMode === 'exact',
+      gate,
+      confidence,
+      matchMethod: method,
+    },
+  };
+}
+
 function workflowRoute(profile, input, normalizedQuery, currentCatalogResolution = null) {
   const target = normalize(input.intent ?? normalizedQuery);
   const confidence = resolveKnowledgeConfidenceConfiguration(profile.agent_settings);
@@ -298,28 +327,66 @@ function workflowRoute(profile, input, normalizedQuery, currentCatalogResolution
       reason: ambiguous ? 'ambiguous_match' : 'low_confidence',
     });
   }
-  const { record, matchedPhrase, matchMode, gate } = match;
-  const responseMode = String(record.action_config?.responseMode ?? 'instruction').trim().toLowerCase();
-  const blockedResponse = String(record.action_config?.blockedResponse ?? '').trim();
-  const content = gate.allowed ? (record.response_template ?? record.action_config?.instruction ?? '') : blockedResponse;
-  if (!content) return null;
-  return {
-    ...routeResponse('workflow', record, content, {
-      intent: record.intent, matchedPhrase, matchMode, responseMode,
-    }),
-    action: { type: record.action_type, config: record.action_config },
-    workflow: {
-      intent: record.intent,
-      conditions: record.conditions,
-      matchedPhrase,
-      matchMode,
-      responseMode,
-      exactResponse: record.action_type === 'respond' && responseMode === 'exact',
-      gate,
-      confidence: Math.round(match.score * 10000) / 10000,
-      matchMethod: match.method,
-    },
-  };
+  return workflowRecordResponse(match.record, {
+    matchedPhrase: match.matchedPhrase,
+    matchMode: match.matchMode,
+    gate: match.gate,
+    confidence: Math.round(match.score * 10000) / 10000,
+    method: match.method,
+  });
+}
+
+async function semanticWorkflowRoute(auth, profile, input, runtime, currentCatalogResolution = null) {
+  const configuration = resolveKnowledgeConfidenceConfiguration(profile.agent_settings);
+  const knowledgeBases = allowedSemanticKnowledgeBases(profile);
+  if (!knowledgeBases.length || !env.RAG_ENABLED || !profile.workflows.length) return null;
+  const vector = await runtime.embedQueryOnce(input.query);
+  const matches = await runtime.search(auth.tenantId, vector, {
+    knowledgeBases,
+    usageDirection: input.usageDirection,
+    limit: 4,
+    scoreThreshold: Math.min(env.RAG_RUNTIME_MIN_SCORE, configuration.clarificationConfidence),
+    recordTypes: ['WORKFLOW_RULE'],
+  });
+  const allowed = new Map(knowledgeBases.map((item) => [item.id.toLowerCase(), item.publicationRevision]));
+  const ranked = matches.map((match) => {
+    const payload = match.payload ?? {};
+    if (payload.tenant_id !== auth.tenantId.toLowerCase()
+      || allowed.get(String(payload.knowledge_base_id).toLowerCase()) !== payload.publication_revision
+      || ![input.usageDirection.toUpperCase(), 'BOTH'].includes(payload.agent_usage)
+      || payload.record_type !== 'WORKFLOW_RULE') return null;
+    const record = profile.workflows.find((item) => String(item.id).toLowerCase() === String(match.id).toLowerCase());
+    if (!record) return null;
+    const gate = workflowStageGate(record, {
+      currentStage: input.currentStage,
+      selectedCatalogItemId: input.selectedCatalogItemId ?? currentCatalogResolution?.item?.id,
+    });
+    if (gate.reason === 'stage_transition_not_allowed') return null;
+    return { record, gate, score: Number(match.score), payload };
+  }).filter(Boolean).sort((left, right) => right.score - left.score
+    || Number(left.record.priority ?? 100) - Number(right.record.priority ?? 100));
+  const best = ranked[0];
+  if (!best || best.score < configuration.clarificationConfidence) return null;
+  const runnerUp = ranked[1];
+  const ambiguous = Boolean(runnerUp && best.score - runnerUp.score < configuration.ambiguityMargin);
+  const phrases = Array.isArray(best.record.conditions?.triggerPhrases)
+    ? best.record.conditions.triggerPhrases : [];
+  if (best.score < configuration.highConfidence || ambiguous) {
+    return clarificationResponse(best.record, configuration, ranked.map((candidate) => ({
+      recordId: candidate.record.id,
+      matchedPhrase: candidate.record.conditions?.triggerPhrases?.[0] ?? candidate.record.name,
+      confidence: Math.round(candidate.score * 10000) / 10000,
+    })), {
+      kind: 'workflow', confidence: Math.round(best.score * 10000) / 10000,
+      reason: ambiguous ? 'ambiguous_semantic_match' : 'low_semantic_confidence',
+    });
+  }
+  return workflowRecordResponse(best.record, {
+    matchedPhrase: phrases[0] ?? best.payload.entity_name ?? best.record.name,
+    matchMode: 'semantic', gate: best.gate,
+    confidence: Math.round(best.score * 10000) / 10000,
+    method: 'semantic',
+  });
 }
 
 export function isExactWorkflowResponse(result) {
@@ -358,7 +425,7 @@ function catalogResponse(record, resolution) {
     }),
     item: {
       key: record.item_key, name: record.name, category: record.category ?? record.catalog_name,
-      aliases: record.aliases, description: record.description,
+      categoryAliases: record.category_aliases, aliases: record.aliases, description: record.description,
       price: record.price, currency: record.currency, attributes: record.attributes,
     },
     entityResolution: {
@@ -385,6 +452,7 @@ function catalogCategoryResponse(records, resolution) {
       items: records.map((item) => ({
         key: item.item_key,
         name: item.name,
+        categoryAliases: item.category_aliases,
         aliases: item.aliases,
         description: item.description,
         price: item.price,
@@ -608,11 +676,24 @@ export async function routeKnowledgeQuery(auth, input, dependencies = defaultDep
   const currentCatalogClassification = classifyCatalogEntityLocally(profile.catalog_items, input.query, confidence);
   const currentCatalogResolution = currentCatalogClassification.status === 'match'
     ? currentCatalogClassification : null;
+  const currentCatalogEntities = resolveCatalogEntitiesLocally(profile.catalog_items, input.query, {
+    minimumConfidence: confidence.highConfidence,
+  });
+  const hasMultipleCatalogItems = currentCatalogEntities.length > 1;
   let result = null;
 
   if (input.routeHint === 'auto' || input.routeHint === 'workflow') {
-    result = workflowRoute(profile, input, normalizedQuery, currentCatalogResolution);
-    if (result?.route === 'clarification' && currentCatalogResolution) {
+    const localWorkflow = workflowRoute(profile, input, normalizedQuery, currentCatalogResolution);
+    result = localWorkflow;
+    if (!localWorkflow || localWorkflow.route === 'clarification') {
+      const semanticWorkflow = await semanticWorkflowRoute(
+        auth, profile, input, runtime, currentCatalogResolution,
+      );
+      result = semanticWorkflow?.route === 'clarification' && !localWorkflow
+        ? null
+        : (semanticWorkflow ?? localWorkflow);
+    }
+    if (result?.route === 'clarification' && currentCatalogResolution && !hasMultipleCatalogItems) {
       result = currentCatalogResolution.entityType === 'category'
         ? catalogCategoryResponse(
           [...currentCatalogResolution.items]
@@ -621,7 +702,11 @@ export async function routeKnowledgeQuery(auth, input, dependencies = defaultDep
         )
         : catalogResponse(currentCatalogResolution.item, currentCatalogResolution);
     }
-    if (result?.route === 'workflow' && currentCatalogResolution?.entityType === 'item') {
+    if (result?.route === 'workflow' && hasMultipleCatalogItems) {
+      result.catalogSelections = currentCatalogEntities.map((selection) => (
+        catalogResponse(selection.item, selection)
+      ));
+    } else if (result?.route === 'workflow' && currentCatalogResolution?.entityType === 'item') {
       result.catalogSelection = catalogResponse(currentCatalogResolution.item, currentCatalogResolution);
     }
   }

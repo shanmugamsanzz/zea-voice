@@ -15,6 +15,9 @@ export const updateReviewRecordSchema = z.object({
   answer: z.string().trim().min(1).max(50000).optional(),
   name: z.string().trim().min(1).max(240).optional(),
   category: z.string().trim().min(1).max(240).nullable().optional(),
+  categoryAliases: z.array(z.string().trim().min(1).max(240)).max(50)
+    .transform((values) => [...new Map(values.map((value) => [value.toLocaleLowerCase(), value])).values()])
+    .optional(),
   aliases: z.array(z.string().trim().min(1).max(240)).max(50)
     .transform((values) => [...new Map(values.map((value) => [value.toLocaleLowerCase(), value])).values()])
     .optional(),

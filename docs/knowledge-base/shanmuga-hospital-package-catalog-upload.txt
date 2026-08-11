@@ -1,16 +1,16 @@
-CATEGORY: Master Health Checkup Packages
-Silver Master Health Checkup INR 1650 | ALIASES=Silver Package, Silver Health Package, Silver Checkup, Silver Master Package, சில்வர் பேக்கேஜ், சில்வர் ஹெல்த் செக்கப், சில்வர் செக்கப், சில்வர் மாஸ்டர் ஹெல்த் செக்கப்
-Gold Master Health Checkup INR 4950 | ALIASES=Gold Package, Gold Health Package, Gold Checkup, Gold Master Package, கோல்டு பேக்கேஜ், கோல்ட் பேக்கேஜ், கோல்டு ஹெல்த் செக்கப், கோல்டு மாஸ்டர் ஹெல்த் செக்கப்
-Platinum Master Health Checkup INR 7980 | ALIASES=Platinum Package, Platinum Health Package, Platinum Checkup, Platinum Master Package, பிளாட்டினம் பேக்கேஜ், பிளாட்டினம் ஹெல்த் செக்கப், பிளாட்டினம் செக்கப், பிளாட்டினம் மாஸ்டர் ஹெல்த் செக்கப்
+CATEGORY: Master Health Checkup Packages | ALIASES=Master Packages, Master Health Packages, Full Body Checkup Packages, General Health Packages, மாஸ்டர் ஹெல்த் செக்கப், ஃபுல் பாடி செக்கப் பேக்கேஜ்கள்
+Silver Master Health Checkup INR 1650 | ALIASES=Silver, Silver Package, Silver Health Package, Silver Checkup, Silver Master Package, சில்வர், சில்வர் பேக்கேஜ், சில்வர் ஹெல்த் செக்கப், சில்வர் செக்கப், சில்வர் மாஸ்டர் ஹெல்த் செக்கப்
+Gold Master Health Checkup INR 4950 | ALIASES=Gold, Gold Package, Gold Health Package, Gold Checkup, Gold Master Package, கோல்டு, கோல்ட், கோல்டு பேக்கேஜ், கோல்ட் பேக்கேஜ், கோல்டு ஹெல்த் செக்கப், கோல்டு மாஸ்டர் ஹெல்த் செக்கப்
+Platinum Master Health Checkup INR 7980 | ALIASES=Platinum, Platinum Package, Platinum Health Package, Platinum Checkup, Platinum Master Package, பிளாட்டினம், பிளாட்டினம் பேக்கேஜ், பிளாட்டினம் ஹெல்த் செக்கப், பிளாட்டினம் செக்கப், பிளாட்டினம் மாஸ்டர் ஹெல்த் செக்கப்
 
-CATEGORY: Master Package Add-ons
+CATEGORY: Master Package Add-ons | ALIASES=Master Add-ons, Checkup Add-ons, Additional Tests, ஆட் ஆன் டெஸ்ட்கள்
 Audiogram Add-on INR 300 | ALIASES=Audiogram, Audiogram Test, Hearing Test Add-on, Audio Test, ஆடியோகிராம், ஆடியோகிராம் டெஸ்ட், காது கேட்கும் திறன் பரிசோதனை
 PFT Add-on INR 350 | ALIASES=PFT, PFT Test, Pulmonary Function Test, Lung Function Test Add-on, பிஎஃப்டி, பிஎஃப்டி டெஸ்ட், நுரையீரல் செயல்பாட்டு பரிசோதனை
 
-CATEGORY: Diabetic Health Packages
+CATEGORY: Diabetic Health Packages | ALIASES=Diabetic Packages, Diabetes Packages, Sugar Packages, டயாபடிக் பேக்கேஜ்கள், சுகர் பேக்கேஜ்கள்
 Diabetic Health Checkup INR 3200 | ALIASES=Diabetic Package, Diabetes Package, Diabetes Health Checkup, Sugar Checkup, Sugar Package, Diabetic Screening, டயாபடிக் பேக்கேஜ், டயாபடீஸ் பேக்கேஜ், சுகர் செக்கப், சர்க்கரை நோய் பரிசோதனை
 
-CATEGORY: Kids Health Packages
+CATEGORY: Kids Health Packages | ALIASES=Kids Packages, Child Health Packages, Paediatric Packages, Pediatric Packages, Baby Health Packages, குழந்தைகள் ஹெல்த் பேக்கேஜ்கள், குழந்தைகள் பேக்கேஜ்கள்
 Paediatric Health Screening INR 1500 | ALIASES=Paediatric Package, Pediatric Package, Paediatric Health Package, Pediatric Health Screening, Kids Health Screening, Child Health Checkup, குழந்தைகள் ஹெல்த் செக்கப், குழந்தைகள் பரிசோதனை, பீடியாட்ரிக் பேக்கேஜ், பீடியாட்ரிக் ஹெல்த் ஸ்கிரீனிங்
 Developmental Screening - Preterm or Developmental Delay INR 450 | ALIASES=Developmental Screening, Development Delay Screening, Preterm Screening, Child Development Screening, Developmental Delay Package, வளர்ச்சி பரிசோதனை, குழந்தை வளர்ச்சி தாமத பரிசோதனை, பிரீடெர்ம் ஸ்கிரீனிங்
 IQ Assessment - Age 5 to 13 INR 1500 | ALIASES=IQ Assessment 5 to 13, Child IQ Test, Kids IQ Assessment, IQ Test Age 5 to 13, ஐக்யூ அசெஸ்மென்ட் 5 முதல் 13, குழந்தைகள் ஐக்யூ டெஸ்ட்
@@ -21,13 +21,13 @@ Neonatal Screening 3 Panel - TSH, 17-OHP, G6PD INR 800 | ALIASES=Neonatal 3 Pane
 Neonatal Screening 4 Panel - TSH, 17-OHP, G6PD, Galactose INR 1000 | ALIASES=Neonatal 4 Panel, Newborn 4 Panel, Baby 4 Panel Screening, Neonatal Screening Four Panel, நியோநேட்டல் 4 பேனல், புதிதாகப் பிறந்த குழந்தை 4 பேனல் பரிசோதனை
 Newborn Hearing Screening INR 1200 | ALIASES=New Born Hearing Screening, Newborn Hearing Test, Baby Hearing Test, Infant Hearing Screening, நியூபார்ன் ஹியரிங் ஸ்கிரீனிங், புதிதாகப் பிறந்த குழந்தை கேட்கும் திறன் பரிசோதனை
 
-CATEGORY: Onco Care Packages
+CATEGORY: Onco Care Packages | ALIASES=Onco Packages, Onco Care, Oncology Packages, Cancer Screening Packages, Anko Packages, Oncocare, ஆன்கோ பேக்கேஜ்கள், ஆன்கோ கேர்
 Onco Care Screening Premium Male INR 8600 | ALIASES=Onco Premium Male, Male Onco Care Package, Male Cancer Screening, Oncology Screening Male, ஆண்களுக்கான ஆன்கோ கேர், ஆண்கள் கேன்சர் ஸ்கிரீனிங், ஆன்கோ பிரீமியம் மேல்
 Onco Care Screening Premium Female INR 8800 | ALIASES=Onco Premium Female, Female Onco Care Package, Female Cancer Screening, Oncology Screening Female, பெண்களுக்கான ஆன்கோ கேர், பெண்கள் கேன்சர் ஸ்கிரீனிங், ஆன்கோ பிரீமியம் ஃபீமேல்
 Onco Care Screening Add-on Male INR 750 | ALIASES=Onco Add-on Male, Male Onco Add-on, Male Cancer Screening Add-on, ஆண்களுக்கான ஆன்கோ ஆட் ஆன், ஆன்கோ ஆட் ஆன் மேல்
 Onco Care Screening Add-on Female INR 1100 | ALIASES=Onco Add-on Female, Female Onco Add-on, Female Cancer Screening Add-on, பெண்களுக்கான ஆன்கோ ஆட் ஆன், ஆன்கோ ஆட் ஆன் ஃபீமேல்
 
-CATEGORY: Organ-Specific Packages
+CATEGORY: Organ-Specific Packages | ALIASES=Organ Packages, Organ Specific, Specific Health Packages, Argon Specific Packages, உறுப்பு பரிசோதனை பேக்கேஜ்கள், ஆர்கன் ஸ்பெசிஃபிக் பேக்கேஜ்கள்
 Renal Health Checkup INR 1400 | ALIASES=Renal Package, Kidney Package, Kidney Health Checkup, Kidney Screening, Renal Checkup, ரீனல் பேக்கேஜ், கிட்னி பேக்கேஜ், சிறுநீரக பரிசோதனை, கிட்னி செக்கப்
 Liver Health Checkup INR 1400 | ALIASES=Liver Package, Liver Checkup, Liver Screening, Hepatic Screening, லிவர் பேக்கேஜ், லிவர் செக்கப், கல்லீரல் பரிசோதனை, கல்லீரல் செக்கப்
 Cardiac Health Checkup INR 2950 | ALIASES=Cardiac Package, Heart Package, Heart Health Checkup, Heart Screening, Cardiac Checkup, கார்டியாக் பேக்கேஜ், ஹார்ட் பேக்கேஜ், இதய பரிசோதனை, ஹார்ட் செக்கப்

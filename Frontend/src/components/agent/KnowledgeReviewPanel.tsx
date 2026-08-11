@@ -69,6 +69,10 @@ const fieldsByKind: Record<ReviewRecord['kind'], ReviewField[]> = {
     { key: 'name', label: 'Item / Package Name', kind: 'text', required: true },
     { key: 'category', label: 'Category', kind: 'text', nullable: true },
     {
+      key: 'categoryAliases', label: 'Category Aliases (JSON array)', kind: 'json-array',
+      help: 'Alternate spoken names for the category. Heading aliases are copied to each extracted item for tenant-isolated runtime matching.',
+    },
+    {
       key: 'aliases', label: 'Spoken Aliases (JSON array)', kind: 'json-array',
       help: 'Optional alternate names or common speech forms. Semantic and phonetic matching also run automatically.',
     },

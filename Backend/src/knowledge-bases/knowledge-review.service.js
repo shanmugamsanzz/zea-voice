@@ -193,7 +193,7 @@ async function reviewContent(client, auth, document) {
       })),
       records: items.rows.map((row) => ({
         ...commonRecord(row, 'catalog_item'), catalogId: row.catalog_id,
-        name: row.name, category: row.category, aliases: row.aliases,
+        name: row.name, category: row.category, categoryAliases: row.category_aliases, aliases: row.aliases,
         description: row.description, price: row.price === null ? null : Number(row.price),
         currency: row.currency, displayOrder: row.display_order, sourceText: row.source_text,
       })),
@@ -261,7 +261,7 @@ const fieldDefinitions = {
   },
   catalog_item: {
     table: 'structured_items', fields: {
-      name: ['name'], category: ['category'], aliases: ['aliases', 'jsonb'], description: ['description'],
+      name: ['name'], category: ['category'], categoryAliases: ['category_aliases', 'jsonb'], aliases: ['aliases', 'jsonb'], description: ['description'],
       price: ['price'], currency: ['currency'], displayOrder: ['display_order'],
     },
   },
