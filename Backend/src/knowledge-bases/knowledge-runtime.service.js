@@ -186,7 +186,7 @@ function routeResponse(route, record, content, extra = {}) {
 }
 
 function clarificationResponse(record, configuration, candidates, details = {}) {
-  const names = candidates.map((candidate) => candidate.name ?? candidate.matchedPhrase).filter(Boolean);
+  const names = candidates.map((candidate) => candidate.matchedPhrase ?? candidate.name).filter(Boolean);
   const content = renderKnowledgeClarification(configuration.clarificationMessage, names);
   if (!record || !content) return null;
   return {
@@ -201,6 +201,18 @@ function clarificationResponse(record, configuration, candidates, details = {}) 
       candidates: candidates.slice(0, 3),
     },
   };
+}
+
+function workflowMatchTier(method) {
+  if (method === 'exact' || method === 'intent') return 4;
+  if (method === 'contains') return 3;
+  if (method === 'normalized') return 2;
+  if (method === 'phonetic' || method === 'fuzzy') return 1;
+  return 0;
+}
+
+function workflowPhraseSpecificity(value) {
+  return normalize(value).split(' ').filter(Boolean).length;
 }
 
 function workflowRoute(profile, input, normalizedQuery, currentCatalogResolution = null) {
@@ -218,21 +230,42 @@ function workflowRoute(profile, input, normalizedQuery, currentCatalogResolution
     if (phrases.length) {
       for (const phrase of phrases) {
         let score = normalizedQuery === phrase.normalized ? 1 : 0;
-        let method = score ? 'normalized' : 'none';
+        let method = score ? 'exact' : 'none';
         if (!score && ['contains', 'any_phrase'].includes(matchMode)
           && ` ${normalizedQuery} `.includes(` ${phrase.normalized} `)) {
           score = 0.99; method = 'contains';
         }
         if (!score && matchMode !== 'exact') {
           const fuzzy = catalogLabelSimilarity(input.query, phrase.original);
-          score = fuzzy.score; method = fuzzy.method;
+          const hasEnoughEvidence = fuzzy.labelTokenCount <= 1
+            || fuzzy.labelCoverage >= 0.5
+            || fuzzy.queryCoverage >= 0.5;
+          score = hasEnoughEvidence ? fuzzy.score : 0;
+          method = score ? fuzzy.method : 'none';
         }
-        if (!phraseResult || score > phraseResult.score) {
-          phraseResult = { matchedPhrase: phrase.original, score, method };
+        const candidatePhrase = {
+            matchedPhrase: phrase.original,
+            score,
+            method,
+            tier: workflowMatchTier(method),
+            specificity: workflowPhraseSpecificity(phrase.original),
+          };
+        if (!phraseResult
+          || candidatePhrase.tier > phraseResult.tier
+          || (candidatePhrase.tier === phraseResult.tier && candidatePhrase.score > phraseResult.score)
+          || (candidatePhrase.tier === phraseResult.tier && candidatePhrase.score === phraseResult.score
+            && candidatePhrase.specificity > phraseResult.specificity)) {
+          phraseResult = candidatePhrase;
         }
       }
     } else if (normalize(record.intent) === target || normalize(record.name) === target) {
-      phraseResult = { matchedPhrase: input.intent ?? record.intent ?? record.name, score: 1, method: 'intent' };
+      phraseResult = {
+        matchedPhrase: input.intent ?? record.intent ?? record.name,
+        score: 1,
+        method: 'intent',
+        tier: workflowMatchTier('intent'),
+        specificity: workflowPhraseSpecificity(input.intent ?? record.intent ?? record.name),
+      };
     }
     if (phraseResult?.score > 0) {
       const gate = workflowStageGate(record, {
@@ -243,12 +276,17 @@ function workflowRoute(profile, input, normalizedQuery, currentCatalogResolution
       ranked.push({ record, ...phraseResult, matchMode: phrases.length ? matchMode : 'legacy_intent', gate });
     }
   }
-  ranked.sort((left, right) => right.score - left.score
+  ranked.sort((left, right) => right.tier - left.tier
+    || right.score - left.score
+    || right.specificity - left.specificity
     || Number(left.record.priority ?? 100) - Number(right.record.priority ?? 100));
   const match = ranked[0];
   if (!match || match.score < confidence.clarificationConfidence) return null;
   const runnerUp = ranked.find((candidate) => candidate.record.id !== match.record.id);
-  const ambiguous = Boolean(runnerUp && match.score - runnerUp.score < confidence.ambiguityMargin);
+  const ambiguous = Boolean(runnerUp
+    && runnerUp.tier === match.tier
+    && runnerUp.specificity === match.specificity
+    && match.score - runnerUp.score < confidence.ambiguityMargin);
   if (match.score < confidence.highConfidence || ambiguous) {
     return clarificationResponse(match.record, confidence, ranked.map((candidate) => ({
       recordId: candidate.record.id,
@@ -459,7 +497,13 @@ async function catalogRoute(auth, profile, input, normalizedQuery, runtime, loca
   }
   const semantic = await semanticCatalogResolution(auth, profile, input, normalizedQuery, runtime);
   const resolution = semantic?.status === 'match' ? semantic : null;
-  const uncertain = [local.status === 'uncertain' ? local : null, semantic?.status === 'uncertain' ? semantic : null]
+  const semanticClarificationAllowed = input.routeHint === 'catalog'
+    || catalogKeywords.test(normalizedQuery)
+    || local.status === 'uncertain';
+  const uncertain = [
+    local.status === 'uncertain' ? local : null,
+    semantic?.status === 'uncertain' && semanticClarificationAllowed ? semantic : null,
+  ]
     .filter(Boolean).sort((left, right) => Number(right.confidence) - Number(left.confidence))[0];
   if (!resolution) {
     if (!uncertain) return null;
@@ -568,7 +612,16 @@ export async function routeKnowledgeQuery(auth, input, dependencies = defaultDep
 
   if (input.routeHint === 'auto' || input.routeHint === 'workflow') {
     result = workflowRoute(profile, input, normalizedQuery, currentCatalogResolution);
-    if (result && currentCatalogResolution?.entityType === 'item') {
+    if (result?.route === 'clarification' && currentCatalogResolution) {
+      result = currentCatalogResolution.entityType === 'category'
+        ? catalogCategoryResponse(
+          [...currentCatalogResolution.items]
+            .sort((left, right) => Number(left.display_order ?? 0) - Number(right.display_order ?? 0)),
+          currentCatalogResolution,
+        )
+        : catalogResponse(currentCatalogResolution.item, currentCatalogResolution);
+    }
+    if (result?.route === 'workflow' && currentCatalogResolution?.entityType === 'item') {
       result.catalogSelection = catalogResponse(currentCatalogResolution.item, currentCatalogResolution);
     }
   }

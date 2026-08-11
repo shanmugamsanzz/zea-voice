@@ -233,6 +233,29 @@ assert.equal(local.route, 'catalog');
 assert.equal(local.item.name, 'Lungs Health Checkup');
 assert.equal(local.entityResolution.method, 'phonetic');
 
+const unrelatedSemantic = await routeKnowledgeQuery({ tenantId }, {
+  agentId,
+  query: 'தமிழ்ல பேசுங்க',
+  usageDirection: 'inbound',
+  language: 'ta-language-request',
+  routeHint: 'auto',
+}, {
+  ...dependencies,
+  search: async () => [{
+    id: lungsItemId,
+    score: 0.75,
+    payload: {
+      tenant_id: tenantId,
+      knowledge_base_id: knowledgeBaseId,
+      publication_revision: 3,
+      agent_usage: 'BOTH',
+      record_type: 'CATALOG_ITEM',
+      entity_name: 'Lungs Health Checkup',
+    },
+  }],
+});
+assert.equal(unrelatedSemantic.route, 'none');
+
 console.log(JSON.stringify({
   task: 'Generic Catalog entity resolver',
   parsedCatalogItems: extracted.recordCount,
@@ -240,4 +263,5 @@ console.log(JSON.stringify({
   semanticIndexRecordType: point.payload.record_type,
   semanticTenantIsolation: true,
   sharedCategoryResolvedWithoutArbitraryItem: true,
+  unrelatedSemanticClarificationSuppressed: true,
 }, null, 2));

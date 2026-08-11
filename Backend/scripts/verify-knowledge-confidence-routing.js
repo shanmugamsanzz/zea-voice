@@ -10,7 +10,10 @@ process.env.B2_BUCKET_ID ??= 'test-bucket-id';
 process.env.B2_KEY_ID ??= 'test-key-id';
 process.env.B2_APPLICATION_KEY ??= 'test-application-key';
 
-const { classifyCatalogEntityLocally } = await import('../src/knowledge-bases/catalog-entity-resolver.js');
+const {
+  classifyCatalogEntityLocally,
+  normalizeCatalogEntityText,
+} = await import('../src/knowledge-bases/catalog-entity-resolver.js');
 const { routeKnowledgeQuery } = await import('../src/knowledge-bases/knowledge-runtime.service.js');
 
 const tenantA = '11111111-1111-4111-8111-111111111111';
@@ -93,6 +96,83 @@ assert.equal(exactWorkflow.content, 'Approved exact workflow answer.');
 assert.equal(exactWorkflow.workflow.exactResponse, true);
 assert.equal(exactWorkflow.workflow.confidence, 1);
 
+const workflowRecord = (id, name, phrase, response, priority = 100) => ({
+  id, knowledge_base_id: tenantA,
+  document_id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+  document_version_id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', document_name: 'workflow.txt',
+  source_page_start: 1, source_page_end: 1, name, intent: name, priority,
+  conditions: { triggerPhrases: [phrase], matchMode: 'any_phrase' },
+  action_type: 'respond', action_config: { responseMode: 'exact' }, response_template: response,
+});
+const specificWorkflow = workflowRecord(
+  'cccccccc-cccc-4ccc-8ccc-ccccccccccc1', 'specific_item_details',
+  'Lungs package details', 'Specific approved answer.', 10,
+);
+const genericWorkflow = workflowRecord(
+  'cccccccc-cccc-4ccc-8ccc-ccccccccccc2', 'generic_item_overview',
+  'package details', 'Generic approved answer.', 20,
+);
+const specificProfile = { ...profiles[tenantA], workflows: [genericWorkflow, specificWorkflow] };
+const specific = await routeKnowledgeQuery({ tenantId: tenantA }, input('Please explain Lungs package details'), {
+  ...dependencies,
+  contextRunner: async (_auth, callback) => callback({ query: async () => ({ rows: [specificProfile] }) }),
+});
+assert.equal(specific.route, 'workflow');
+assert.equal(specific.content, 'Specific approved answer.');
+assert.equal(specific.workflow.matchedPhrase, 'Lungs package details');
+
+assert.equal(normalizeCatalogEntityText('Silver packageன்னு'), 'silver package ன்னு');
+const tamilSpecificWorkflow = workflowRecord(
+  'cccccccc-cccc-4ccc-8ccc-ccccccccccc6', 'specific_tamil_item_details',
+  'Silver package பத்தி சொல்லுங்க', 'Specific Tamil approved answer.', 10,
+);
+const tamilGenericWorkflow = workflowRecord(
+  'cccccccc-cccc-4ccc-8ccc-ccccccccccc7', 'generic_tamil_item_overview',
+  'package பத்தி சொல்லுங்க', 'Generic Tamil approved answer.', 20,
+);
+const tamilSpecificProfile = { ...profiles[tenantA], workflows: [tamilGenericWorkflow, tamilSpecificWorkflow] };
+const tamilSpecific = await routeKnowledgeQuery(
+  { tenantId: tenantA },
+  input('ஆ Silver package பத்தி சொல்லுங்க', { language: 'ta' }),
+  {
+    ...dependencies,
+    contextRunner: async (_auth, callback) => callback({ query: async () => ({ rows: [tamilSpecificProfile] }) }),
+  },
+);
+assert.equal(tamilSpecific.route, 'workflow');
+assert.equal(tamilSpecific.content, 'Specific Tamil approved answer.');
+
+const ambiguousWorkflowProfile = {
+  ...profiles[tenantA],
+  workflows: [
+    workflowRecord('cccccccc-cccc-4ccc-8ccc-ccccccccccc3', 'choice_one', itemA.name, 'Choice one.'),
+    workflowRecord('cccccccc-cccc-4ccc-8ccc-ccccccccccc4', 'choice_two', itemA.name, 'Choice two.'),
+  ],
+};
+const catalogBeatsUncertainWorkflow = await routeKnowledgeQuery({ tenantId: tenantA }, input(itemA.name), {
+  ...dependencies,
+  contextRunner: async (_auth, callback) => callback({ query: async () => ({ rows: [ambiguousWorkflowProfile] }) }),
+});
+assert.equal(catalogBeatsUncertainWorkflow.route, 'catalog');
+assert.equal(catalogBeatsUncertainWorkflow.item.name, itemA.name);
+
+const weakSharedWordProfile = {
+  ...profiles[tenantA], catalog_items: [],
+  workflows: [workflowRecord(
+    'cccccccc-cccc-4ccc-8ccc-ccccccccccc5', 'unrelated_emergency',
+    'நெஞ்சு வலி ரொம்ப அதிகமா இருக்கு', 'Emergency response.',
+  )],
+};
+const weakSharedWords = await routeKnowledgeQuery(
+  { tenantId: tenantA },
+  input('எனக்கு தலை வலிக்குது எந்த service choose பண்ணணும்', { language: 'ta' }),
+  {
+    ...dependencies,
+    contextRunner: async (_auth, callback) => callback({ query: async () => ({ rows: [weakSharedWordProfile] }) }),
+  },
+);
+assert.equal(weakSharedWords.route, 'none');
+
 const uncertainProfile = {
   ...profiles[tenantA],
   agent_settings: { ...defaultSettings, knowledgeHighConfidence: 0.95 },
@@ -127,6 +207,10 @@ assert.ok(p95Ms < 1000, `Local confidence routing p95 must be under one second; 
 console.log(JSON.stringify({
   task: 'Knowledge confidence routing and verification',
   highConfidenceRoutes: ['workflow', 'catalog'],
+  specificPhraseBeatsGeneric: true,
+  mixedScriptBoundaryNormalized: true,
+  catalogBeatsUncertainWorkflow: true,
+  weakSharedWordsRejected: true,
   languages: ['Tamil', 'Tanglish', 'English'],
   sttMistakeVerified: 'Lunch -> Lungs',
   uncertainRoute: uncertain.route,

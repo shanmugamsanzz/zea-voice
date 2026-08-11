@@ -7,6 +7,8 @@ const genericQueryTokens = new Set([
 
 export function normalizeCatalogEntityText(value) {
   return String(value ?? '').normalize('NFKC').toLocaleLowerCase()
+    .replace(/([\p{Script=Latin}\p{N}])(?=[^\p{Script=Latin}\p{N}\s])/gu, '$1 ')
+    .replace(/([^\p{Script=Latin}\p{N}\s])(?=[\p{Script=Latin}\p{N}])/gu, '$1 ')
     .replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim().replace(/\s+/gu, ' ');
 }
 
@@ -77,17 +79,41 @@ function meaningfulTokens(value) {
   return meaningful.length ? meaningful : tokens;
 }
 
+function tokenCoverage(sourceTokens, targetTokens) {
+  if (!sourceTokens.length || !targetTokens.length) return { matched: 0, coverage: 0 };
+  const matched = sourceTokens.filter((sourceToken) => targetTokens.some(
+    (targetToken) => tokenSimilarity(sourceToken, targetToken).score >= 0.72,
+  )).length;
+  return { matched, coverage: matched / sourceTokens.length };
+}
+
+function tokenEvidence(queryTokens, labelTokens) {
+  const query = tokenCoverage(queryTokens, labelTokens);
+  const label = tokenCoverage(labelTokens, queryTokens);
+  return {
+    matchedQueryTokens: query.matched,
+    queryTokenCount: queryTokens.length,
+    queryCoverage: query.coverage,
+    matchedLabelTokens: label.matched,
+    labelTokenCount: labelTokens.length,
+    labelCoverage: label.coverage,
+  };
+}
+
 export function catalogLabelSimilarity(query, label) {
   const normalizedQuery = normalizeCatalogEntityText(query);
   const normalizedLabel = normalizeCatalogEntityText(label);
   if (!normalizedQuery || !normalizedLabel) return { score: 0, method: 'none' };
-  if (normalizedQuery === normalizedLabel) return { score: 1, method: 'normalized' };
-  if (` ${normalizedQuery} `.includes(` ${normalizedLabel} `)) return { score: 0.99, method: 'normalized' };
-  if (normalizedQuery.length >= 3 && ` ${normalizedLabel} `.includes(` ${normalizedQuery} `)) {
-    return { score: 0.94, method: 'normalized' };
-  }
   const queryTokens = meaningfulTokens(normalizedQuery);
   const labelTokens = meaningfulTokens(normalizedLabel);
+  const evidence = tokenEvidence(queryTokens, labelTokens);
+  if (normalizedQuery === normalizedLabel) return { score: 1, method: 'normalized', ...evidence };
+  if (` ${normalizedQuery} `.includes(` ${normalizedLabel} `)) {
+    return { score: 0.99, method: 'normalized', ...evidence };
+  }
+  if (normalizedQuery.length >= 3 && ` ${normalizedLabel} `.includes(` ${normalizedQuery} `)) {
+    return { score: 0.94, method: 'normalized', ...evidence };
+  }
   if (!queryTokens.length || !labelTokens.length) return { score: 0, method: 'none' };
   let method = 'none';
   const scores = queryTokens.map((queryToken) => {
@@ -104,7 +130,7 @@ export function catalogLabelSimilarity(query, label) {
   if (!matched.length) return { score: 0, method: 'none' };
   const coverage = matched.length / queryTokens.length;
   const average = matched.reduce((total, score) => total + score, 0) / matched.length;
-  return { score: average * (0.72 + coverage * 0.28), method };
+  return { score: average * (0.72 + coverage * 0.28), method, ...evidence };
 }
 
 function itemLabels(item) {

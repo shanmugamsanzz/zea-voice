@@ -1,5 +1,5 @@
 SHANMUGA HOSPITAL - STRUCTURED WORKFLOW RULES
-FORMAT VERSION: 2
+FORMAT VERSION: 3
 ENCODING: UTF-8
 LANGUAGE: Tamil, Tanglish and English
 USAGE: Inbound and Outbound
@@ -79,6 +79,11 @@ MATCH: appointment book பண்ணுங்க | appointment வேணும�
 MATCH_MODE: any_phrase
 RESPONSE_MODE: instruction
 PRIORITY: 45
+FROM_STAGE: start | package_selection | package_explanation | booking_details
+NEXT_STAGE: booking_details
+ACTION: appointment_booking
+REQUIRES_CATALOG_ITEM: true
+BLOCKED_RESPONSE: Appointment book பண்ணலாம். முதல்ல எந்த approved Package வேணும்னு சொல்லுங்க; அதுக்கப்புறம் booking details மட்டும் கேக்குறேன்.
 RESPONSE: Start or resume the configured appointment task. First verify that one exact approved Package from the Product Catalog is selected. If the Package is missing or unclear, ask only which approved Package the caller wants and do not collect personal information yet. After Package confirmation, preserve every value already present in collectedData, mention the approved eight-to-ten-hour fasting instruction once, ask only the first configured required missing field and never ask a completed field again.
 
 RULE: booking_confirmation
@@ -86,6 +91,11 @@ MATCH: ஆமா confirm பண்ணுங்க | details சரிதான�
 MATCH_MODE: any_phrase
 RESPONSE_MODE: instruction
 PRIORITY: 45
+FROM_STAGE: booking_details
+NEXT_STAGE: appointment_confirmation
+ACTION: appointment_booking
+REQUIRES_CATALOG_ITEM: true
+BLOCKED_RESPONSE: Booking confirm பண்ண Package clearஆ தேவைங்க. எந்த approved Packageனு மறுபடியும் சொல்லுங்க.
 RESPONSE: Verify that all configured required booking fields are present. If anything is missing, ask only the first missing field. Otherwise execute the configured Booking tool. Never claim success before the tool returns success.
 
 RULE: change_existing_appointment
@@ -142,6 +152,8 @@ MATCH: Silverக்கும் Goldக்கும் என்ன வித்
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 60
+NEXT_STAGE: package_explanation
+ACTION: compare_catalog_items
 RESPONSE: Silverல basic blood Tests, Sugar, Kidney, Liver, ECG மற்றும் Chest X-ray வருங்க. Goldல இதுக்குமேல ECHO, USG Abdomen, Thyroid, Vitamin Tests மற்றும் Dental Check-up இருக்கு. ரெண்டுல எது பத்தி இன்னும் detail வேணும்?
 
 RULE: gold_platinum_comparison
@@ -149,6 +161,8 @@ MATCH: Goldக்கும் Platinumக்கும் என்ன வித�
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 60
+NEXT_STAGE: package_explanation
+ACTION: compare_catalog_items
 RESPONSE: Goldல detailed screening மற்றும் ஒரு Doctor Consultation இருக்கு. Platinumல இதுக்குமேல ESR, PFT, Carotid Doppler, Ankle Brachial Index, viral markers மாதிரி advanced Tests மற்றும் நாலு Doctor Consultations இருக்கு. எது பத்தி இன்னும் detail வேணும்?
 
 RULE: silver_platinum_comparison
@@ -156,6 +170,8 @@ MATCH: Silverக்கும் Platinumக்கும் என்ன வி�
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 60
+NEXT_STAGE: package_explanation
+ACTION: compare_catalog_items
 RESPONSE: Silver basic screeningக்கானது. Platinumல Silver coverageக்கு மேல advanced blood, heart, lung, vascular Tests மற்றும் நாலு Doctor Consultations இருக்கு. எது பத்தி இன்னும் detail வேணும்?
 
 RULE: all_master_packages_comparison
@@ -163,6 +179,8 @@ MATCH: மூணு packageக்கும் difference சொல்லுங�
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 60
+NEXT_STAGE: package_explanation
+ACTION: compare_catalog_items
 RESPONSE: Silver basic screeningக்குங்க. Goldல additional Thyroid, Vitamin, ECHO, USG மற்றும் Dental coverage இருக்கு. Platinumல இதுக்குமேல advanced heart, lung, vascular Tests மற்றும் நாலு Doctor Consultations இருக்கு. எந்த Package பத்தி detail வேணும்?
 
 RULE: package_overview
@@ -170,13 +188,18 @@ MATCH: என்னென்ன Packages இருக்கு | என்ன Pa
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 100
+NEXT_STAGE: package_selection
+ACTION: present_package_overview
 RESPONSE: எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Onco Care Packages, Organ-Specific Packages, Kids Health Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?
 
 RULE: welcome_positive_package_response
 MATCH: ம் ஆ பண்ணுங்க | ஆ பண்ணுங்க | சரி பண்ணுங்க | ம் சொல்லுங்க | ஆ சொல்லுங்க | ஆமா சொல்லுங்க | சரி சொல்லுங்க | ம் explain பண்ணுங்க | ஆ explain பண்ணுங்க | ஆ explain பண்ணலாம் | ஆ explain பண்ணலாம் madam | சரி explain பண்ணுங்க | yes சொல்லுங்க | yes explain பண்ணுங்க | okay சொல்லுங்க | ok சொல்லுங்க | Explain பண்ணுங்க | சொல்லுங்க | ஆமாங்க சொல்லுங்க | ஆம் சொல்லுங்க | ம் சரி சொல்லுங்க | ஆ சரி சொல்லுங்க | சரிங்க சொல்லுங்க | சரி explain பண்ணலாம் | ஆமா explain பண்ணுங்க | ஆமாங்க explain பண்ணுங்க | ஆம் explain பண்ணுங்க | Please explain பண்ணுங்க | கொஞ்சம் explain பண்ணுங்க | Details சொல்லுங்க | Package details சொல்லுங்க | Health checkup details சொல்லுங்க | Package explain பண்ணுங்க | Packages explain பண்ணுங்க | சொல்லலாங்க | explain பண்ணலாங்க | ஆ சொல்லலாங்க | ம் சொல்லலாங்க | சரி சொல்லலாங்க | yes please | yes please explain | okay explain பண்ணுங்க | ok explain பண்ணுங்க | sure சொல்லுங்க | sure explain பண்ணுங்க | continue பண்ணுங்க
-MATCH_MODE: exact
+MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 95
+FROM_STAGE: start | welcome_package_offer
+NEXT_STAGE: package_selection
+ACTION: present_package_overview
 RESPONSE: எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Onco Care Packages, Organ-Specific Packages, Kids Health Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?
 
 RULE: package_prices_overview
@@ -184,6 +207,8 @@ MATCH: package prices சொல்லுங்க | மூணு package price �
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 105
+NEXT_STAGE: package_selection
+ACTION: present_package_prices
 RESPONSE: Silver ஆயிரத்து அறுநூற்று ஐம்பது ரூபாய், Gold நாலாயிரத்து தொள்ளாயிரத்து ஐம்பது ரூபாய், Platinum ஏழாயிரத்து தொள்ளாயிரத்து எண்பது ரூபாய். எது பத்தி detail வேணும்?
 
 RULE: master_health_checkup_options
@@ -191,6 +216,8 @@ MATCH: Master Health Checkup options என்ன | master package என்ன�
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 80
+NEXT_STAGE: package_selection
+ACTION: present_package_overview
 RESPONSE: எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Onco Care Packages, Organ-Specific Packages, Kids Health Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?
 
 RULE: organ_specific_options
@@ -198,6 +225,8 @@ MATCH: organ package என்னென்ன | organ specific packages சொ�
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 80
+NEXT_STAGE: package_selection
+ACTION: present_category_options
 RESPONSE: Organ-Specific Packagesல Renal, Liver, Cardiac, Surgery Profile One, Surgery Profile Two, Lungs, Ortho மற்றும் Gastro Checkups இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?
 
 RULE: kids_health_options
@@ -205,6 +234,8 @@ MATCH: Kids Health Packages சொல்லுங்க | குழந்தை�
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 80
+NEXT_STAGE: package_selection
+ACTION: present_category_options
 RESPONSE: Kids Health Packagesல Paediatric Health Screening, Developmental Screening, IQ Assessment, Behavioural Assessment, Developmental Disorder Screening, Neonatal Screening மற்றும் Newborn Hearing Screening இருக்குங்க. குழந்தையின் வயசு என்னங்க?
 
 RULE: newborn_options
@@ -212,6 +243,8 @@ MATCH: newborn package என்ன | பிறந்த குழந்தை�
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 80
+NEXT_STAGE: package_selection
+ACTION: present_category_options
 RESPONSE: Newbornக்கு Neonatal Three Panel, Neonatal Four Panel மற்றும் Hearing Screening options இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?
 
 RULE: oncology_options
@@ -219,6 +252,8 @@ MATCH: cancer screening packages என்ன | oncology options சொல்ல
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 80
+NEXT_STAGE: package_selection
+ACTION: present_category_options
 RESPONSE: Onco Careல Premium Male, Premium Female, Male Add-on மற்றும் Female Add-on options இருக்குங்க. இது screening மட்டும்தாங்க; diagnosis கிடையாது. Premium அல்லது Add-on எது பத்தி தெரிஞ்சிக்கணும்?
 
 RULE: silver_package
@@ -226,6 +261,8 @@ MATCH: Silver package பத்தி சொல்லுங்க | Silver expla
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 70
+NEXT_STAGE: package_explanation
+ACTION: explain_catalog_item
 RESPONSE: சரிங்க, Silver Master Health Checkup உங்களுக்கு ஆயிரத்து அறுநூற்று ஐம்பது ரூபாய் வருங்க. இதுல Sugar, Kidney, Liver, Cholesterol Tests, ECG, Chest X-ray மற்றும் ஒரு Doctor Consultation இருக்கு. Full Test list சொல்லட்டுமா?
 
 RULE: gold_package
@@ -233,6 +270,8 @@ MATCH: Gold package பத்தி சொல்லுங்க | Gold explain �
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 70
+NEXT_STAGE: package_explanation
+ACTION: explain_catalog_item
 RESPONSE: சரிங்க, Gold Master Health Checkup உங்களுக்கு நாலாயிரத்து தொள்ளாயிரத்து ஐம்பது ரூபாய் வருங்க. இதுல Silver coverage கூட ECHO, USG Abdomen, Thyroid, Vitamin Tests மற்றும் Dental Check-up இருக்கு. Full Test list சொல்லட்டுமா?
 
 RULE: platinum_package
@@ -240,6 +279,8 @@ MATCH: Platinum package பத்தி சொல்லுங்க | Platinum e
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 70
+NEXT_STAGE: package_explanation
+ACTION: explain_catalog_item
 RESPONSE: சரிங்க, Platinum Master Health Checkup உங்களுக்கு ஏழாயிரத்து தொள்ளாயிரத்து எண்பது ரூபாய் வருங்க. இதுல advanced blood, heart, lung, vascular screening மற்றும் நாலு Doctor Consultations இருக்கு. Full Test list சொல்லட்டுமா?
 
 RULE: diabetic_package
@@ -247,6 +288,8 @@ MATCH: Diabetic package பத்தி சொல்லுங்க | Sugar pack
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 70
+NEXT_STAGE: package_explanation
+ACTION: explain_catalog_item
 RESPONSE: சரிங்க, Diabetic Health Checkup உங்களுக்கு மூவாயிரத்து இருநூறு ரூபாய் வருங்க. இதுல Sugar, HbA1c, Insulin, Kidney-related Tests மற்றும் Foot Screening இருக்கு. Full Test list சொல்லட்டுமா?
 
 RULE: renal_package
@@ -254,6 +297,8 @@ MATCH: Renal package பத்தி சொல்லுங்க | Kidney packag
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 70
+NEXT_STAGE: package_explanation
+ACTION: explain_catalog_item
 RESPONSE: சரிங்க, Renal Health Checkup உங்களுக்கு ஆயிரத்து நானூறு ரூபாய் வருங்க. இதுல Hb, Urea, Creatinine, Uric Acid, Calcium, Electrolytes, BUN மற்றும் USG Abdomen இருக்கு. Packageக்கு Appointment பார்க்கலாமா?
 
 RULE: liver_package
@@ -261,6 +306,8 @@ MATCH: Liver package பத்தி சொல்லுங்க | liver checkup
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 70
+NEXT_STAGE: package_explanation
+ACTION: explain_catalog_item
 RESPONSE: சரிங்க, Liver Health Checkup உங்களுக்கு ஆயிரத்து நானூறு ரூபாய் வருங்க. இதுல Hb, Liver Function Test மற்றும் USG Abdomen இருக்கு. Packageக்கு Appointment பார்க்கலாமா?
 
 RULE: cardiac_package
@@ -268,6 +315,8 @@ MATCH: Cardiac package பத்தி சொல்லுங்க | Heart packa
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 70
+NEXT_STAGE: package_explanation
+ACTION: explain_catalog_item
 RESPONSE: சரிங்க, Cardiac Health Checkup உங்களுக்கு இரண்டாயிரத்து தொள்ளாயிரத்து ஐம்பது ரூபாய் வருங்க. இதுல heart-related blood Tests, ECG, ECHO, Treadmill Test, Physical Examination மற்றும் Cardiologist Consultation இருக்கு. Full Test list சொல்லட்டுமா?
 
 RULE: lungs_package
@@ -275,6 +324,8 @@ MATCH: Lungs package பத்தி சொல்லுங்க | Lung package 
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 70
+NEXT_STAGE: package_explanation
+ACTION: explain_catalog_item
 RESPONSE: சரிங்க, Lungs Health Checkup Organ-Specific Packagesல வருங்க. இதன் price தொள்ளாயிரத்து தொண்ணூற்று ஒன்பது ரூபாய். CBC, RBS, CRP, ESR, Urea, Creatinine, Chest X-ray, ECG மற்றும் PFT இருக்கு; Pulmonologist Consultationம் availableங்க. Testக்கு எட்டு மணி நேரம் fastingல இருந்து, காலை எட்டு மணி முதல் பதினொன்று மணிக்குள்ள வரணுங்க. Appointment பார்க்கலாமா?
 
 RULE: ortho_package
@@ -282,6 +333,8 @@ MATCH: Ortho package பத்தி சொல்லுங்க | Bone package 
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 70
+NEXT_STAGE: package_explanation
+ACTION: explain_catalog_item
 RESPONSE: சரிங்க, Ortho Health Checkup உங்களுக்கு ஆயிரத்து நானூற்று தொண்ணூற்று ஒன்பது ரூபாய் வருங்க. இதுல requirementக்கு ஏற்ப இரண்டு X-rays, ESR, CRP, Calcium, Vitamin D, Uric Acid மற்றும் RA Factor இருக்கு. Appointment பார்க்கலாமா?
 
 RULE: gastro_package
@@ -289,6 +342,8 @@ MATCH: Gastro package பத்தி சொல்லுங்க | Stomach pack
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 70
+NEXT_STAGE: package_explanation
+ACTION: explain_catalog_item
 RESPONSE: சரிங்க, Gastro Checkup One-day Admission உங்களுக்கு இருபத்தைந்தாயிரம் ரூபாய் வருங்க. இதுல Hb, Liver Function Test, USG Abdomen, Twenty-four Hours PH Monitoring, Manometry மற்றும் Endoscopy இருக்கு. இந்த Checkupக்கு one-day admission தேவைப்படுங்க.
 
 RULE: paediatric_package
@@ -296,6 +351,8 @@ MATCH: Paediatric Health Screening பத்தி சொல்லுங்க |
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 70
+NEXT_STAGE: package_explanation
+ACTION: explain_catalog_item
 RESPONSE: சரிங்க, Paediatric Health Screening உங்களுக்கு ஆயிரத்து ஐநூறு ரூபாய் வருங்க. இதுல Dental Assessment, Nutritional Assessment, Immunization Counselling, Growth Screening, Developmental Screening மற்றும் Anemia Screening இருக்கு. Anemia Screeningல CBC, MCV, MCH, MCHC மற்றும் Peripheral Smear Tests இருக்குங்க.
 
 RULE: developmental_screening
@@ -303,6 +360,8 @@ MATCH: Developmental Screening பத்தி சொல்லுங்க | dev
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 70
+NEXT_STAGE: package_explanation
+ACTION: explain_catalog_item
 RESPONSE: Developmental Screening Preterm or Developmental Delay price நானூற்று ஐம்பது ரூபாய். இது screening மட்டும்தாங்க; diagnosis கிடையாது.
 
 RULE: iq_assessment_child
@@ -310,6 +369,8 @@ MATCH: child IQ assessment price | ஐந்து முதல் பதிம�
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 70
+NEXT_STAGE: package_explanation
+ACTION: explain_catalog_item
 RESPONSE: ஐந்து முதல் பதிமூன்று வயசுக்கான IQ Assessment price ஆயிரத்து ஐநூறு ரூபாய்.
 
 RULE: iq_assessment_above_thirteen
@@ -317,6 +378,8 @@ MATCH: above 13 IQ assessment price | பதிமூன்று வயசு�
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 70
+NEXT_STAGE: package_explanation
+ACTION: explain_catalog_item
 RESPONSE: பதிமூன்று வயசுக்கு மேல இருக்கிறவர்களுக்கான IQ Assessment price இரண்டாயிரம் ரூபாய்.
 
 RULE: behavioural_assessment
@@ -324,6 +387,8 @@ MATCH: Behavioural Assessment பத்தி சொல்லுங்க | beha
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 70
+NEXT_STAGE: package_explanation
+ACTION: explain_catalog_item
 RESPONSE: Behavioural Assessment price ஐநூறு ரூபாய். இது assessment மட்டும்தாங்க; confirmed diagnosis கிடையாது.
 
 RULE: developmental_disorder_screening
@@ -331,6 +396,8 @@ MATCH: Developmental Disorder Screening பத்தி சொல்லுங்
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 70
+NEXT_STAGE: package_explanation
+ACTION: explain_catalog_item
 RESPONSE: Screening for Developmental Disorder price ஐநூறு ரூபாய். இது screening மட்டும்தாங்க; diagnosis கிடையாது.
 
 RULE: neonatal_three_panel
@@ -338,6 +405,8 @@ MATCH: Neonatal Three Panel பத்தி சொல்லுங்க | newbor
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 70
+NEXT_STAGE: package_explanation
+ACTION: explain_catalog_item
 RESPONSE: Neonatal Screening Three Panel price எண்ணூறு ரூபாய். இதில் TSH, 17-OHP மற்றும் G6PD இருக்கு.
 
 RULE: neonatal_four_panel
@@ -345,6 +414,8 @@ MATCH: Neonatal Four Panel பத்தி சொல்லுங்க | newborn
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 70
+NEXT_STAGE: package_explanation
+ACTION: explain_catalog_item
 RESPONSE: Neonatal Screening Four Panel price ஆயிரம் ரூபாய். இதில் TSH, 17-OHP, G6PD மற்றும் Galactose இருக்கு.
 
 RULE: newborn_hearing_screening
@@ -352,6 +423,8 @@ MATCH: New Born Hearing Screening பத்தி சொல்லுங்க | 
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 70
+NEXT_STAGE: package_explanation
+ACTION: explain_catalog_item
 RESPONSE: New Born Hearing Screening price ஆயிரத்து இருநூறு ரூபாய்.
 
 RULE: oncology_premium_male
@@ -359,6 +432,8 @@ MATCH: Premium Male Screening பத்தி சொல்லுங்க | male
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 70
+NEXT_STAGE: package_explanation
+ACTION: explain_catalog_item
 RESPONSE: Premium Male Screening price எட்டாயிரத்து அறுநூறு ரூபாய். இதில் approved blood Tests, tumour markers மற்றும் Chest and Whole Abdomen CT Screening இருக்கு. இது screening மட்டும்தாங்க; diagnosis கிடையாது.
 
 RULE: oncology_premium_female
@@ -366,6 +441,8 @@ MATCH: Premium Female Screening பத்தி சொல்லுங்க | fe
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 70
+NEXT_STAGE: package_explanation
+ACTION: explain_catalog_item
 RESPONSE: Premium Female Screening price எட்டாயிரத்து எண்ணூறு ரூபாய். இதில் approved blood Tests, tumour markers, Pap Smear, CT Screening மற்றும் Mammogram இருக்கு. இது screening மட்டும்தாங்க; diagnosis கிடையாது.
 
 RULE: oncology_addon_male
@@ -373,6 +450,8 @@ MATCH: Male Add-on பத்தி சொல்லுங்க | male oncology a
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 70
+NEXT_STAGE: package_explanation
+ACTION: explain_catalog_item
 RESPONSE: Male Add-on price எழுநூற்று ஐம்பது ரூபாய். இதை Silver, Gold அல்லது Platinum Master Health Checkup Package கூட மட்டும்தான் Add-onஆ எடுத்துக்க முடியும்.
 
 RULE: oncology_addon_female
@@ -380,6 +459,8 @@ MATCH: Female Add-on பத்தி சொல்லுங்க | female oncolo
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 70
+NEXT_STAGE: package_explanation
+ACTION: explain_catalog_item
 RESPONSE: Female Add-on price ஆயிரத்து நூறு ரூபாய். இதை Silver, Gold அல்லது Platinum Master Health Checkup Package கூட மட்டும்தான் Add-onஆ எடுத்துக்க முடியும்.
 
 RULE: surgery_profile_one
@@ -387,6 +468,8 @@ MATCH: Surgery Profile One பத்தி சொல்லுங்க | surgery
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 70
+NEXT_STAGE: package_explanation
+ACTION: explain_catalog_item
 RESPONSE: Surgery Profile One price ஆயிரத்து ஐநூறு ரூபாய். Exact Tests, eligibility மற்றும் timing Hospital team confirm பண்ணுவாங்க.
 
 RULE: surgery_profile_two
@@ -394,6 +477,8 @@ MATCH: Surgery Profile Two பத்தி சொல்லுங்க | minor p
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 70
+NEXT_STAGE: package_explanation
+ACTION: explain_catalog_item
 RESPONSE: Surgery Profile Two Minor Procedures price எழுநூற்று ஐம்பது ரூபாய். Exact Tests, eligibility மற்றும் timing Hospital team confirm பண்ணுவாங்க.
 
 RULE: stomach_digestive_concern
@@ -528,20 +613,6 @@ MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 330
 RESPONSE: Salem New Bus Standல இருந்து Saradha College Road வழியா Hasthampatti பக்கம் வாங்க. Bridgeக்கு கீழ, left sideல நம்ம hospital இருக்கு.
-
-RULE: unknown_package
-MATCH: இந்த package இருக்கா | வேற package name சொல்றேன் | unknown package | package name புரியுதா
-MATCH_MODE: any_phrase
-RESPONSE_MODE: exact
-PRIORITY: 400
-RESPONSE: நீங்க சொன்ன Package name clearஆ புரியலங்க. மறுபடியும் Package பெயரை மட்டும் சொல்ல முடியுமா?
-
-RULE: unrecognized_package_guard
-MATCH: package | Package | packages | Packages | பேக்கேஜ் | பேக்கேஜ்கள் | packet
-MATCH_MODE: any_phrase
-RESPONSE_MODE: exact
-PRIORITY: 900
-RESPONSE: நீங்க சொன்ன Package name clearஆ புரியலங்க. மறுபடியும் Package பெயரை மட்டும் சொல்ல முடியுமா?
 
 RULE: repeat_last_answer
 MATCH: மறுபடியும் சொல்லுங்க | repeat பண்ணுங்க | இன்னொரு தடவை சொல்லுங்க | say that again | புரியல மறுபடியும் சொல்லுங்க

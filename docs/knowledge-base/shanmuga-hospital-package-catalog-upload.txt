@@ -1,32 +1,38 @@
-Silver Master Health Checkup INR 1650
-Gold Master Health Checkup INR 4950
-Platinum Master Health Checkup INR 7980
+CATEGORY: Master Health Checkup Packages
+Silver Master Health Checkup INR 1650 | ALIASES=Silver Package, Silver Health Package, Silver Checkup, Silver Master Package, சில்வர் பேக்கேஜ், சில்வர் ஹெல்த் செக்கப், சில்வர் செக்கப், சில்வர் மாஸ்டர் ஹெல்த் செக்கப்
+Gold Master Health Checkup INR 4950 | ALIASES=Gold Package, Gold Health Package, Gold Checkup, Gold Master Package, கோல்டு பேக்கேஜ், கோல்ட் பேக்கேஜ், கோல்டு ஹெல்த் செக்கப், கோல்டு மாஸ்டர் ஹெல்த் செக்கப்
+Platinum Master Health Checkup INR 7980 | ALIASES=Platinum Package, Platinum Health Package, Platinum Checkup, Platinum Master Package, பிளாட்டினம் பேக்கேஜ், பிளாட்டினம் ஹெல்த் செக்கப், பிளாட்டினம் செக்கப், பிளாட்டினம் மாஸ்டர் ஹெல்த் செக்கப்
 
-Audiogram Add-on INR 300
-PFT Add-on INR 350
+CATEGORY: Master Package Add-ons
+Audiogram Add-on INR 300 | ALIASES=Audiogram, Audiogram Test, Hearing Test Add-on, Audio Test, ஆடியோகிராம், ஆடியோகிராம் டெஸ்ட், காது கேட்கும் திறன் பரிசோதனை
+PFT Add-on INR 350 | ALIASES=PFT, PFT Test, Pulmonary Function Test, Lung Function Test Add-on, பிஎஃப்டி, பிஎஃப்டி டெஸ்ட், நுரையீரல் செயல்பாட்டு பரிசோதனை
 
-Diabetic Health Checkup INR 3200
+CATEGORY: Diabetic Health Packages
+Diabetic Health Checkup INR 3200 | ALIASES=Diabetic Package, Diabetes Package, Diabetes Health Checkup, Sugar Checkup, Sugar Package, Diabetic Screening, டயாபடிக் பேக்கேஜ், டயாபடீஸ் பேக்கேஜ், சுகர் செக்கப், சர்க்கரை நோய் பரிசோதனை
 
-Paediatric Health Screening INR 1500
-Developmental Screening - Preterm or Developmental Delay INR 450
-IQ Assessment - Age 5 to 13 INR 1500
-IQ Assessment - Above Age 13 INR 2000
-Behavioural Assessment INR 500
-Screening for Developmental Disorder INR 500
-Neonatal Screening 3 Panel - TSH, 17-OHP, G6PD INR 800
-Neonatal Screening 4 Panel - TSH, 17-OHP, G6PD, Galactose INR 1000
-Newborn Hearing Screening INR 1200
+CATEGORY: Kids Health Packages
+Paediatric Health Screening INR 1500 | ALIASES=Paediatric Package, Pediatric Package, Paediatric Health Package, Pediatric Health Screening, Kids Health Screening, Child Health Checkup, குழந்தைகள் ஹெல்த் செக்கப், குழந்தைகள் பரிசோதனை, பீடியாட்ரிக் பேக்கேஜ், பீடியாட்ரிக் ஹெல்த் ஸ்கிரீனிங்
+Developmental Screening - Preterm or Developmental Delay INR 450 | ALIASES=Developmental Screening, Development Delay Screening, Preterm Screening, Child Development Screening, Developmental Delay Package, வளர்ச்சி பரிசோதனை, குழந்தை வளர்ச்சி தாமத பரிசோதனை, பிரீடெர்ம் ஸ்கிரீனிங்
+IQ Assessment - Age 5 to 13 INR 1500 | ALIASES=IQ Assessment 5 to 13, Child IQ Test, Kids IQ Assessment, IQ Test Age 5 to 13, ஐக்யூ அசெஸ்மென்ட் 5 முதல் 13, குழந்தைகள் ஐக்யூ டெஸ்ட்
+IQ Assessment - Above Age 13 INR 2000 | ALIASES=IQ Assessment Above 13, IQ Test Above 13, Teen IQ Assessment, Adult IQ Assessment, ஐக்யூ அசெஸ்மென்ட் 13 வயதுக்கு மேல், ஐக்யூ டெஸ்ட் அபவ் 13
+Behavioural Assessment INR 500 | ALIASES=Behavioral Assessment, Behaviour Assessment, Child Behaviour Assessment, Behavior Screening, நடத்தை மதிப்பீடு, குழந்தைகள் நடத்தை பரிசோதனை, பிஹேவியரல் அசெஸ்மென்ட்
+Screening for Developmental Disorder INR 500 | ALIASES=Developmental Disorder Screening, Development Disorder Test, Child Developmental Disorder Screening, வளர்ச்சிக் குறைபாடு பரிசோதனை, டெவலப்மென்டல் டிஸ்ஆர்டர் ஸ்கிரீனிங்
+Neonatal Screening 3 Panel - TSH, 17-OHP, G6PD INR 800 | ALIASES=Neonatal 3 Panel, Newborn 3 Panel, Baby 3 Panel Screening, Neonatal Screening Three Panel, நியோநேட்டல் 3 பேனல், புதிதாகப் பிறந்த குழந்தை 3 பேனல் பரிசோதனை
+Neonatal Screening 4 Panel - TSH, 17-OHP, G6PD, Galactose INR 1000 | ALIASES=Neonatal 4 Panel, Newborn 4 Panel, Baby 4 Panel Screening, Neonatal Screening Four Panel, நியோநேட்டல் 4 பேனல், புதிதாகப் பிறந்த குழந்தை 4 பேனல் பரிசோதனை
+Newborn Hearing Screening INR 1200 | ALIASES=New Born Hearing Screening, Newborn Hearing Test, Baby Hearing Test, Infant Hearing Screening, நியூபார்ன் ஹியரிங் ஸ்கிரீனிங், புதிதாகப் பிறந்த குழந்தை கேட்கும் திறன் பரிசோதனை
 
-Onco Care Screening Premium Male INR 8600
-Onco Care Screening Premium Female INR 8800
-Onco Care Screening Add-on Male INR 750
-Onco Care Screening Add-on Female INR 1100
+CATEGORY: Onco Care Packages
+Onco Care Screening Premium Male INR 8600 | ALIASES=Onco Premium Male, Male Onco Care Package, Male Cancer Screening, Oncology Screening Male, ஆண்களுக்கான ஆன்கோ கேர், ஆண்கள் கேன்சர் ஸ்கிரீனிங், ஆன்கோ பிரீமியம் மேல்
+Onco Care Screening Premium Female INR 8800 | ALIASES=Onco Premium Female, Female Onco Care Package, Female Cancer Screening, Oncology Screening Female, பெண்களுக்கான ஆன்கோ கேர், பெண்கள் கேன்சர் ஸ்கிரீனிங், ஆன்கோ பிரீமியம் ஃபீமேல்
+Onco Care Screening Add-on Male INR 750 | ALIASES=Onco Add-on Male, Male Onco Add-on, Male Cancer Screening Add-on, ஆண்களுக்கான ஆன்கோ ஆட் ஆன், ஆன்கோ ஆட் ஆன் மேல்
+Onco Care Screening Add-on Female INR 1100 | ALIASES=Onco Add-on Female, Female Onco Add-on, Female Cancer Screening Add-on, பெண்களுக்கான ஆன்கோ ஆட் ஆன், ஆன்கோ ஆட் ஆன் ஃபீமேல்
 
-Renal Health Checkup INR 1400
-Liver Health Checkup INR 1400
-Cardiac Health Checkup INR 2950
-Surgery Profile 1 INR 1500
-Surgery Profile 2 - Minor Procedures INR 750
-Lungs Health Checkup INR 999
-Ortho Health Checkup INR 1499
-Gastro Health Checkup - One-day Admission INR 25000
+CATEGORY: Organ-Specific Packages
+Renal Health Checkup INR 1400 | ALIASES=Renal Package, Kidney Package, Kidney Health Checkup, Kidney Screening, Renal Checkup, ரீனல் பேக்கேஜ், கிட்னி பேக்கேஜ், சிறுநீரக பரிசோதனை, கிட்னி செக்கப்
+Liver Health Checkup INR 1400 | ALIASES=Liver Package, Liver Checkup, Liver Screening, Hepatic Screening, லிவர் பேக்கேஜ், லிவர் செக்கப், கல்லீரல் பரிசோதனை, கல்லீரல் செக்கப்
+Cardiac Health Checkup INR 2950 | ALIASES=Cardiac Package, Heart Package, Heart Health Checkup, Heart Screening, Cardiac Checkup, கார்டியாக் பேக்கேஜ், ஹார்ட் பேக்கேஜ், இதய பரிசோதனை, ஹார்ட் செக்கப்
+Surgery Profile 1 INR 1500 | ALIASES=Surgery Profile One, Surgery Package 1, Pre Surgery Profile 1, Surgical Profile One, சர்ஜரி ப்ரொஃபைல் 1, அறுவை சிகிச்சை பரிசோதனை 1
+Surgery Profile 2 - Minor Procedures INR 750 | ALIASES=Surgery Profile Two, Surgery Package 2, Minor Procedure Profile, Minor Surgery Profile, சர்ஜரி ப்ரொஃபைல் 2, மைனர் ப்ரொசீஜர் பேக்கேஜ், சிறிய அறுவை சிகிச்சை பரிசோதனை
+Lungs Health Checkup INR 999 | ALIASES=Lung Health Checkup, Lungs Package, Lung Package, Lung Checkup, Lungs Checkup, Pulmonary Screening, Respiratory Checkup, லங்ஸ் பேக்கேஜ், லங் பேக்கேஜ், நுரையீரல் பரிசோதனை
+Ortho Health Checkup INR 1499 | ALIASES=Ortho Package, Orthopedic Package, Bone and Joint Checkup, Bones Package, Joint Pain Package, ஆர்த்தோ பேக்கேஜ், எலும்பு மூட்டு பரிசோதனை, கால் வலி பேக்கேஜ், மூட்டு வலி செக்கப்
+Gastro Health Checkup - One-day Admission INR 25000 | ALIASES=Gastro Package, Gastro Checkup, Gastroenterology Package, Stomach Package, Digestive Health Checkup, One Day Gastro Admission, காஸ்ட்ரோ பேக்கேஜ், வயிறு பரிசோதனை, வயிற்று வலி பேக்கேஜ், செரிமான பரிசோதனை
