@@ -11,5 +11,12 @@ export const runtimeKnowledgeQuerySchema = z.object({
   nodeKey: z.string().trim().min(1).max(160).optional(),
   currentStage: z.string().trim().min(1).max(80).optional(),
   selectedCatalogItemId: z.string().uuid().optional(),
+  currentTopic: z.string().trim().min(1).max(240).optional(),
+  pendingQuestion: z.string().trim().min(1).max(500).optional(),
+  activeCategoryKey: z.string().trim().min(1).max(160).optional(),
+  activeCategoryName: z.string().trim().min(1).max(240).optional(),
+  selectedCatalogItemKey: z.string().trim().min(1).max(160).optional(),
+  selectedCatalogItemName: z.string().trim().min(1).max(240).optional(),
+  candidateItemKeys: z.array(z.string().trim().min(1).max(160)).max(8).optional(),
   topK: z.coerce.number().int().min(1).max(10).optional(),
 }).strict();

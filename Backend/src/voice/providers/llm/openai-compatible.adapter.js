@@ -69,6 +69,8 @@ export function createOpenAiCompatibleLlmAdapter({ providerConfig, runtimeContex
           max_tokens: input.maxOutputTokens ?? env.LLM_MAX_OUTPUT_TOKENS,
           stream: true,
           stream_options: { include_usage: true },
+          ...(input.responseFormat?.type === 'json_object'
+            ? { response_format: { type: 'json_object' } } : {}),
           ...(input.tools?.length ? { tools: tools(input.tools), tool_choice: 'auto' } : {}),
         }),
         signal: request.controller.signal,

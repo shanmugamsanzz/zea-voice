@@ -145,15 +145,28 @@ function categoryCandidates(items, query) {
   for (const item of items) {
     const category = String(item.category ?? item.catalog_name ?? '').normalize('NFKC').trim();
     if (!category) continue;
-    const key = normalizeCatalogEntityText(category);
-    const existing = categories.get(key) ?? { category, aliases: [], items: [] };
+    const categoryKey = String(item.categoryKey ?? item.category_key ?? '').normalize('NFKC').trim() || null;
+    const identity = categoryKey ? `key:${normalizeCatalogEntityText(categoryKey)}` : `name:${normalizeCatalogEntityText(category)}`;
+    const existing = categories.get(identity) ?? {
+      category,
+      categoryKey,
+      parentCategoryKey: item.parentCategoryKey ?? item.parent_category_key ?? null,
+      description: item.categoryDescription ?? item.category_description ?? null,
+      selectionRules: item.categorySelectionRules ?? item.category_selection_rules ?? {},
+      aliases: [],
+      items: [],
+    };
     existing.items.push(item);
     existing.aliases.push(...(Array.isArray(item.categoryAliases) ? item.categoryAliases : []));
     existing.aliases.push(...(Array.isArray(item.category_aliases) ? item.category_aliases : []));
-    categories.set(key, existing);
+    categories.set(identity, existing);
   }
   return [...categories.values()].map((candidate) => {
     let best = { ...catalogLabelSimilarity(query, candidate.category), matchedText: candidate.category };
+    if (candidate.categoryKey) {
+      const similarity = catalogLabelSimilarity(query, candidate.categoryKey);
+      if (similarity.score > best.score) best = { ...similarity, matchedText: candidate.categoryKey };
+    }
     for (const alias of [...new Set(candidate.aliases.map((value) => String(value).trim()).filter(Boolean))]) {
       const similarity = catalogLabelSimilarity(query, alias);
       if (similarity.score > best.score) best = { ...similarity, matchedText: alias };
@@ -161,7 +174,9 @@ function categoryCandidates(items, query) {
     return {
       ...candidate,
       ...best,
-      matchedKind: best.matchedText === candidate.category ? 'category' : 'category_alias',
+      matchedKind: best.matchedText === candidate.category
+        ? 'category'
+        : best.matchedText === candidate.categoryKey ? 'category_key' : 'category_alias',
       entityType: 'category',
     };
   });
@@ -183,6 +198,7 @@ export function rankCatalogEntities(items, query) {
   return [...itemCandidates, ...categoryCandidates(items, query)]
     .filter((candidate) => candidate.score > 0)
     .sort((left, right) => right.score - left.score
+      || (left.entityType === right.entityType ? 0 : (left.entityType === 'item' ? -1 : 1))
       || String(left.item?.id ?? left.category).localeCompare(String(right.item?.id ?? right.category)));
 }
 
@@ -190,8 +206,15 @@ function publicCandidate(candidate) {
   return {
     entityType: candidate.entityType,
     ...(candidate.entityType === 'item'
-      ? { itemId: candidate.item.id, name: candidate.item.name }
-      : { category: candidate.category, name: candidate.category }),
+      ? { itemId: candidate.item.id, itemKey: candidate.item.item_key, name: candidate.item.name,
+        category: candidate.item.category ?? candidate.item.catalog_name,
+        categoryKey: candidate.item.category_key ?? null }
+      : {
+        category: candidate.category,
+        categoryKey: candidate.categoryKey,
+        parentCategoryKey: candidate.parentCategoryKey,
+        name: candidate.category,
+      }),
     confidence: Math.round(candidate.score * 10000) / 10000,
     method: candidate.method,
     matchedText: candidate.matchedText,
@@ -208,16 +231,34 @@ export function classifyCatalogEntityLocally(items, query, {
   if (!best || best.score < clarificationConfidence) {
     return Object.freeze({ status: 'none', best: best ? publicCandidate(best) : null, candidates: [] });
   }
-  const bestIdentity = best.entityType === 'item' ? `item:${best.item.id}` : `category:${normalizeCatalogEntityText(best.category)}`;
+  const bestIdentity = best.entityType === 'item'
+    ? `item:${best.item.id}`
+    : `category:${normalizeCatalogEntityText(best.categoryKey ?? best.category)}`;
   const runnerUp = ranked.find((candidate) => (
-    candidate.entityType === 'item' ? `item:${candidate.item.id}` : `category:${normalizeCatalogEntityText(candidate.category)}`
+    candidate.entityType === 'item'
+      ? `item:${candidate.item.id}`
+      : `category:${normalizeCatalogEntityText(candidate.categoryKey ?? candidate.category)}`
   ) !== bestIdentity);
-  const ambiguous = Boolean(runnerUp && best.score - runnerUp.score < ambiguityMargin);
+  const runnerIsParentOfBest = Boolean(
+    best.entityType === 'item'
+    && runnerUp?.entityType === 'category'
+    && normalizeCatalogEntityText(best.item.category_key ?? best.item.category)
+      === normalizeCatalogEntityText(runnerUp.categoryKey ?? runnerUp.category)
+    && best.score >= runnerUp.score,
+  );
+  const ambiguous = Boolean(runnerUp && best.score - runnerUp.score < ambiguityMargin && !runnerIsParentOfBest);
   const status = best.score >= highConfidence && !ambiguous ? 'match' : 'uncertain';
   return Object.freeze({
     status,
     entityType: best.entityType,
-    ...(best.entityType === 'item' ? { item: best.item } : { category: best.category, items: best.items }),
+    ...(best.entityType === 'item' ? { item: best.item } : {
+      category: best.category,
+      categoryKey: best.categoryKey,
+      parentCategoryKey: best.parentCategoryKey,
+      categoryDescription: best.description,
+      categorySelectionRules: best.selectionRules,
+      items: best.items,
+    }),
     confidence: Math.round(best.score * 10000) / 10000,
     method: best.method,
     matchedText: best.matchedText,
@@ -226,7 +267,7 @@ export function classifyCatalogEntityLocally(items, query, {
       entityType: candidate.entityType,
       ...(candidate.entityType === 'item'
         ? { itemId: candidate.item.id, name: candidate.item.name }
-        : { category: candidate.category }),
+        : { category: candidate.category, categoryKey: candidate.categoryKey }),
       confidence: Math.round(candidate.score * 10000) / 10000,
     })),
     candidates: ranked.slice(0, 3).map(publicCandidate),

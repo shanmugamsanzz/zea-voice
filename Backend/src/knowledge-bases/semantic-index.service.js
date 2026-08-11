@@ -51,6 +51,9 @@ export function buildSemanticPoint(job, record, vector) {
         ? { entity_category_aliases: record.entity_category_aliases } : {}),
       ...(Array.isArray(record.entity_aliases) && record.entity_aliases.length
         ? { entity_aliases: record.entity_aliases } : {}),
+      ...(record.entity_metadata && typeof record.entity_metadata === 'object'
+        && !Array.isArray(record.entity_metadata) && Object.keys(record.entity_metadata).length
+        ? { entity_metadata: record.entity_metadata } : {}),
     },
   };
 }
@@ -117,7 +120,8 @@ async function loadSemanticRecords(job, contextRunner) {
           f.source_page_start, f.question, f.answer,
           ('Question: ' || f.question || E'\nAnswer: ' || f.answer) AS content,
           NULL::text AS entity_name, NULL::text AS entity_category,
-          '[]'::jsonb AS entity_aliases, '[]'::jsonb AS entity_category_aliases
+          '[]'::jsonb AS entity_aliases, '[]'::jsonb AS entity_category_aliases,
+          '{}'::jsonb AS entity_metadata
          FROM faq_entries f
          JOIN knowledge_documents d
            ON d.tenant_id = f.tenant_id AND d.id = f.document_id
@@ -130,7 +134,7 @@ async function loadSemanticRecords(job, contextRunner) {
        SELECT c.id, 'knowledge_chunk'::text,
           c.document_id, c.document_version_id, c.usage_direction,
           c.source_page_start, NULL::text, NULL::text, c.content,
-          NULL::text, NULL::text, '[]'::jsonb, '[]'::jsonb
+          NULL::text, NULL::text, '[]'::jsonb, '[]'::jsonb, '{}'::jsonb
          FROM knowledge_chunks c
          JOIN knowledge_documents d
            ON d.tenant_id = c.tenant_id AND d.id = c.document_id
@@ -150,9 +154,22 @@ async function loadSemanticRecords(job, contextRunner) {
               THEN 'Category aliases: ' || array_to_string(ARRAY(SELECT jsonb_array_elements_text(si.category_aliases)), ', ') END,
             CASE WHEN jsonb_array_length(si.aliases) > 0
               THEN 'Aliases: ' || array_to_string(ARRAY(SELECT jsonb_array_elements_text(si.aliases)), ', ') END,
-            CASE WHEN si.description IS NOT NULL THEN 'Description: ' || si.description END
+            CASE WHEN si.category_description IS NOT NULL
+              THEN 'Category description: ' || si.category_description END,
+            CASE WHEN si.description IS NOT NULL THEN 'Description: ' || si.description END,
+            CASE WHEN si.relationships <> '{}'::jsonb THEN 'Relationships: ' || si.relationships::text END,
+            CASE WHEN si.selection_rules <> '{}'::jsonb THEN 'Selection rules: ' || si.selection_rules::text END
           ),
-          si.name, COALESCE(si.category, sc.name), si.aliases, si.category_aliases
+          si.name, COALESCE(si.category, sc.name), si.aliases, si.category_aliases,
+          jsonb_build_object(
+            'itemKey', si.item_key,
+            'categoryKey', si.category_key,
+            'parentCategoryKey', si.parent_category_key,
+            'categoryDescription', si.category_description,
+            'categorySelectionRules', si.category_selection_rules,
+            'relationships', si.relationships,
+            'selectionRules', si.selection_rules
+          )
          FROM structured_items si
          JOIN structured_catalogs sc
            ON sc.tenant_id=si.tenant_id AND sc.knowledge_base_id=si.knowledge_base_id
@@ -182,7 +199,7 @@ async function loadSemanticRecords(job, contextRunner) {
           w.name, w.intent,
           CASE WHEN jsonb_typeof(w.conditions->'triggerPhrases') = 'array'
             THEN w.conditions->'triggerPhrases' ELSE '[]'::jsonb END,
-          '[]'::jsonb
+          '[]'::jsonb, '{}'::jsonb
          FROM workflow_rules w
          JOIN knowledge_documents d
            ON d.tenant_id=w.tenant_id AND d.id=w.document_id

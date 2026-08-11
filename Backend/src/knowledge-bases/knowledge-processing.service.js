@@ -142,13 +142,21 @@ async function persistCatalog(client, job, result) {
     await client.query(
       `INSERT INTO structured_items (
          tenant_id, knowledge_base_id, catalog_id, document_id, document_version_id,
-         name, category, category_aliases, aliases, price, currency, display_order, status, source_text,
-         source_page_start, source_page_end
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, 'draft', $13, $14, $15)`,
+         item_key, name, category, category_key, parent_category_key, category_description,
+         category_selection_rules, category_aliases, aliases, relationships, selection_rules,
+         price, currency, display_order, status, source_text, source_page_start, source_page_end
+       ) VALUES (
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+         $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb,
+         $17, $18, $19, 'draft', $20, $21, $22
+       )`,
       [
         job.tenant_id, job.knowledge_base_id, catalog.rows[0].id,
-        job.document_id, job.document_version_id, record.name, record.category,
-        JSON.stringify(record.categoryAliases ?? []), JSON.stringify(record.aliases ?? []), record.price,
+        job.document_id, job.document_version_id, record.itemKey, record.name, record.category,
+        record.categoryKey, record.parentCategoryKey, record.categoryDescription,
+        JSON.stringify(record.categorySelectionRules ?? {}),
+        JSON.stringify(record.categoryAliases ?? []), JSON.stringify(record.aliases ?? []),
+        JSON.stringify(record.relationships ?? {}), JSON.stringify(record.selectionRules ?? {}), record.price,
         record.currency, record.displayOrder, record.sourceText,
         record.sourcePageStart, record.sourcePageEnd,
       ],

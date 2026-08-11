@@ -67,12 +67,15 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
     )),
     { role: 'user', content: input.query },
   ];
+  const assignedTools = runtimeTools(runtimeProfile.tools);
   return {
     events: llm.stream({
       messages,
-      tools: runtimeTools(runtimeProfile.tools),
+      tools: assignedTools,
       temperature: runtimeProfile.agent.temperature,
       maxOutputTokens: env.LLM_MAX_OUTPUT_TOKENS,
+      ...(input.context?.groundedResponseMode === true && assignedTools.length === 0
+        ? { responseFormat: { type: 'json_object' } } : {}),
     }),
     promptCharacters: systemPrompt.length,
     cancel: (reason = 'barge-in') => llm.cancel(reason),

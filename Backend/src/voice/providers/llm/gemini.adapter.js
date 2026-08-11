@@ -37,6 +37,7 @@ function requestBody(input) {
     generationConfig: {
       temperature: input.temperature,
       maxOutputTokens: input.maxOutputTokens ?? env.LLM_MAX_OUTPUT_TOKENS,
+      ...(input.responseFormat?.type === 'json_object' ? { responseMimeType: 'application/json' } : {}),
     },
     ...(input.tools?.length ? { tools: [{ functionDeclarations: input.tools.map((tool) => ({
       name: tool.name, description: tool.description, parameters: tool.inputSchema,

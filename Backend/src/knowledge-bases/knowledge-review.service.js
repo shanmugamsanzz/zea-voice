@@ -193,7 +193,12 @@ async function reviewContent(client, auth, document) {
       })),
       records: items.rows.map((row) => ({
         ...commonRecord(row, 'catalog_item'), catalogId: row.catalog_id,
-        name: row.name, category: row.category, categoryAliases: row.category_aliases, aliases: row.aliases,
+        itemKey: row.item_key, name: row.name, category: row.category,
+        categoryKey: row.category_key, parentCategoryKey: row.parent_category_key,
+        categoryDescription: row.category_description,
+        categorySelectionRules: row.category_selection_rules,
+        categoryAliases: row.category_aliases, aliases: row.aliases,
+        relationships: row.relationships, selectionRules: row.selection_rules,
         description: row.description, price: row.price === null ? null : Number(row.price),
         currency: row.currency, displayOrder: row.display_order, sourceText: row.source_text,
       })),
@@ -261,7 +266,12 @@ const fieldDefinitions = {
   },
   catalog_item: {
     table: 'structured_items', fields: {
-      name: ['name'], category: ['category'], categoryAliases: ['category_aliases', 'jsonb'], aliases: ['aliases', 'jsonb'], description: ['description'],
+      itemKey: ['item_key'], name: ['name'], category: ['category'], categoryKey: ['category_key'],
+      parentCategoryKey: ['parent_category_key'], categoryDescription: ['category_description'],
+      categorySelectionRules: ['category_selection_rules', 'jsonb'],
+      categoryAliases: ['category_aliases', 'jsonb'], aliases: ['aliases', 'jsonb'],
+      relationships: ['relationships', 'jsonb'], selectionRules: ['selection_rules', 'jsonb'],
+      description: ['description'],
       price: ['price'], currency: ['currency'], displayOrder: ['display_order'],
     },
   },

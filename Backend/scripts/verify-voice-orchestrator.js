@@ -216,6 +216,7 @@ const profile = {
     prompt: 'Answer briefly.', welcomeMessage: 'Welcome to the hospital.', temperature: 0.2,
     inactivityTimeoutSeconds: 30,
     settings: {
+      groundedLlmEnabled: false,
       silentMessage: 'Are you still there?', maxInactivityPrompts: 1,
       wordBasedInterruptionEnabled: true, wordInterruptionMinWords: 2,
       interruptionPolicy: 'any',

@@ -38,6 +38,10 @@ import {
 } from './interaction/conversation-memory.service.js';
 import { buildConversationMemoryState } from './interaction/conversation-memory-state.js';
 import { compactLiveCallMemoryContext, openLiveCallMemory } from './interaction/live-call-memory.js';
+import {
+  buildGroundingEnvelope,
+  validateGroundedLlmResponse,
+} from './interaction/grounded-llm-response.js';
 import { LiveMemoryMaintenanceQueue } from './interaction/live-memory-maintenance.js';
 import { resolveCallbackConfiguration } from './interaction/callback-config.js';
 import {
@@ -155,6 +159,7 @@ export class RealtimeConversationOrchestrator {
       },
       shortTurns: { deferred: 0, merged: 0, discarded: 0 },
       callChecks: { detected: 0, spoken: 0, failed: 0 },
+      grounding: { validated: 0, rejected: 0, fallbacks: 0, samples: [] },
       turnLatency: [],
     };
     this.followUpOpeningSources = [];
@@ -342,10 +347,15 @@ export class RealtimeConversationOrchestrator {
     };
     this.runtimeMetrics.conversationStage = {
       currentStage: this.liveCallMemory.snapshot().currentStage,
+      resumeStage: null,
+      activeCategory: null,
       selectedCatalogItemId: null,
+      candidateItemCount: 0,
+      answeredQuestionCount: 0,
       activeActions: [],
       transitions: [],
       blockedActions: 0,
+      flowRecovery: { sideQuestions: 0, resumedQuestions: 0, repeatedQuestionsSuppressed: 0, clarifications: 0 },
     };
     this.runtimeProfile = {
       ...this.runtimeProfile,
@@ -1159,6 +1169,7 @@ export class RealtimeConversationOrchestrator {
     if (this.finalized) return;
     this.runtimeMetrics.callChecks.detected += 1;
     this.#clearInactivity();
+    this.liveCallMemory?.suspendForDetour?.();
 
     if ([callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) {
       await this.#cancelActive('caller_call_check');
@@ -1176,9 +1187,10 @@ export class RealtimeConversationOrchestrator {
     const liveMemory = this.liveCallMemory?.snapshot();
     const pendingField = liveMemory?.fields?.find((field) => field.key === liveMemory.pendingQuestion);
     const configuredResponse = String(this.callCheckConfiguration.response ?? '').trim();
-    const resumeQuestion = pendingField?.question
-      && !configuredResponse.toLocaleLowerCase().includes(String(pendingField.question).toLocaleLowerCase())
-      ? pendingField.question
+    const questionToResume = pendingField?.question ?? liveMemory?.pendingQuestionText;
+    const resumeQuestion = questionToResume
+      && !configuredResponse.toLocaleLowerCase().includes(String(questionToResume).toLocaleLowerCase())
+      ? questionToResume
       : '';
     const response = this.#fitTtsMessage([configuredResponse, resumeQuestion].filter(Boolean).join(' '));
     if (!response) {
@@ -1202,12 +1214,15 @@ export class RealtimeConversationOrchestrator {
     this.log.info({
       stage: 'call_check.detected', callId: this.call.id,
       epoch, matchedPhrase, resumedField: pendingField?.key ?? null,
+      resumeStage: liveMemory?.resumeStage ?? null,
+      resumedQuestion: questionToResume ?? null,
     }, 'Configured call-check phrase matched; bypassing Knowledge Base and LLM');
     const spoken = await this.#synthesize(response, `call-check-${epoch}`, { epoch });
     if (!spoken || this.#isStaleGeneration(epoch) || this.controller.state !== callStates.SPEAKING) return;
     await this.audioEngine.drainOutput();
     if (this.#isStaleGeneration(epoch) || this.controller.state !== callStates.SPEAKING) return;
     await this.controller.playbackComplete();
+    this.liveCallMemory?.resumeFromDetour?.();
     this.runtimeMetrics.callChecks.spoken += 1;
     this.errorCount = 0;
     this.#armInactivity();
@@ -1309,6 +1324,14 @@ export class RealtimeConversationOrchestrator {
         routeHint: 'auto',
         currentStage: stageState?.currentStage,
         selectedCatalogItemId: stageState?.selectedCatalogItem?.id,
+        currentTopic: stageState?.currentTopic ?? undefined,
+        pendingQuestion: stageState?.pendingQuestionText ?? stageState?.lastAnsweredQuestion
+          ?? stageState?.pendingQuestion ?? undefined,
+        activeCategoryKey: stageState?.activeCategory?.key ?? undefined,
+        activeCategoryName: stageState?.activeCategory?.name ?? undefined,
+        selectedCatalogItemKey: stageState?.selectedCatalogItem?.key ?? undefined,
+        selectedCatalogItemName: stageState?.selectedCatalogItem?.name ?? undefined,
+        candidateItemKeys: (stageState?.candidateItems ?? []).map((item) => item.key).filter(Boolean).slice(0, 8),
       });
       this.runtimeMetrics.knowledge.push({
         route: result.route, found: result.found === true, durationMs: Number(result.durationMs ?? 0),
@@ -1436,6 +1459,7 @@ export class RealtimeConversationOrchestrator {
 
   async #llmAttempt(query, history, knowledge, context = {}, streaming = {}) {
     const memoryPromptStartedAt = performance.now();
+    const groundedResponseMode = this.runtimeProfile.agent.settings?.groundedLlmEnabled !== false;
     const liveMemory = this.liveCallMemory?.snapshot();
     const currentCompletion = publicTaskCompletionState(this.taskCompletionState);
     const collectedData = {
@@ -1458,6 +1482,7 @@ export class RealtimeConversationOrchestrator {
       collectedData,
       missingFields,
     });
+    const groundingEnvelope = buildGroundingEnvelope(knowledge);
     this.#recordLiveMemoryTiming('prompt_context', memoryPromptStartedAt);
     const session = await createSelectedLlmStream(this.runtimeProfile, {
       callId: this.call.id,
@@ -1491,6 +1516,7 @@ export class RealtimeConversationOrchestrator {
         },
         preCall: this.preCallContext,
         ...context,
+        groundedResponseMode,
         ttsResponseCharacterLimit: (() => {
           const limits = [
           Number(this.runtimeProfile.limits?.ttsMaxCharactersPerResponse ?? 0),
@@ -1522,7 +1548,9 @@ export class RealtimeConversationOrchestrator {
         }
         if (event.type === 'text_delta') {
           text += event.delta;
-          for (const sentence of sentenceBuffer.push(event.delta)) streaming.onSentence?.(sentence);
+          if (!groundedResponseMode) {
+            for (const sentence of sentenceBuffer.push(event.delta)) streaming.onSentence?.(sentence);
+          }
         }
         else if (event.type === 'tool_call') toolCalls.push({ id: event.id, name: event.name, arguments: event.arguments });
         else if (event.type === 'usage') this.usageTracker.record('llm', event.usage);
@@ -1538,13 +1566,60 @@ export class RealtimeConversationOrchestrator {
           });
         }
       }
+      if (toolCalls.length) {
+        sentenceBuffer.clear();
+        streaming.flush?.();
+        return {
+          cancelled: false, text: '', toolCalls,
+          sources: [llmMessageSource(this.runtimeProfile.providers.llm, completion)],
+        };
+      }
+      if (!groundedResponseMode) {
+        for (const sentence of sentenceBuffer.flush()) streaming.onSentence?.(sentence);
+        streaming.flush?.();
+        return {
+          cancelled: false, text: text.trim(), toolCalls,
+          sources: [llmMessageSource(this.runtimeProfile.providers.llm, completion)],
+        };
+      }
+      const grounded = validateGroundedLlmResponse(text, groundingEnvelope);
+      const groundingMetric = {
+        valid: grounded.valid, reason: grounded.reason ?? null,
+        intent: grounded.intent ?? null,
+        flowAction: grounded.flowAction ?? null,
+        selectedEntityKeys: grounded.selectedEntityKeys ?? [],
+        evidenceSourceIds: grounded.evidenceSourceIds ?? [],
+      };
+      if (this.runtimeMetrics.grounding.samples.length < 100) {
+        this.runtimeMetrics.grounding.samples.push(groundingMetric);
+      }
+      let answer;
+      const sources = [llmMessageSource(this.runtimeProfile.providers.llm, completion)];
+      if (grounded.valid) {
+        this.runtimeMetrics.grounding.validated += 1;
+        this.liveCallMemory?.applyGroundedDecision?.(grounded);
+        answer = grounded.spokenAnswer;
+      } else {
+        this.runtimeMetrics.grounding.rejected += 1;
+        this.runtimeMetrics.grounding.fallbacks += 1;
+        answer = String(knowledge?.found ? knowledge.content : '').trim()
+          || String(this.runtimeProfile.agent.settings?.noResponseMessage ?? 'Sorry, I do not have verified information for that.');
+        sources.push(createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
+          label: 'Grounding validation fallback', metadata: { reason: grounded.reason },
+        }));
+        this.log.warn({
+          stage: 'llm.grounding_rejected', callId: this.call.id, reason: grounded.reason,
+        }, 'LLM response was rejected before TTS because it was not grounded in published tenant evidence');
+      }
+      answer = this.liveCallMemory?.prepareAssistantResponse?.(answer) || answer;
+      for (const sentence of sentenceBuffer.push(answer)) streaming.onSentence?.(sentence);
       for (const sentence of sentenceBuffer.flush()) streaming.onSentence?.(sentence);
       streaming.flush?.();
       return {
         cancelled: false,
-        text: text.trim(),
+        text: answer,
         toolCalls,
-        sources: [llmMessageSource(this.runtimeProfile.providers.llm, completion)],
+        sources,
       };
     } catch (error) {
       sentenceBuffer.clear();
@@ -1851,9 +1926,14 @@ export class RealtimeConversationOrchestrator {
     this.runtimeMetrics.conversationStage = {
       ...this.runtimeMetrics.conversationStage,
       currentStage: stageState?.currentStage ?? null,
+      resumeStage: stageState?.resumeStage ?? null,
+      activeCategory: stageState?.activeCategory ?? null,
       selectedCatalogItemId: stageState?.selectedCatalogItem?.id ?? null,
+      candidateItemCount: stageState?.candidateItems?.length ?? 0,
+      answeredQuestionCount: stageState?.answeredQuestions?.length ?? 0,
       activeActions: stageState?.activeActions ?? [],
       transitions: stageState?.stageTransitions ?? [],
+      flowRecovery: stageState?.flowRecovery ?? this.runtimeMetrics.conversationStage?.flowRecovery,
       blockedActions: Number(this.runtimeMetrics.conversationStage?.blockedActions ?? 0)
         + (knowledge.workflow?.gate?.allowed === false ? 1 : 0),
     };
@@ -2006,8 +2086,11 @@ export class RealtimeConversationOrchestrator {
       return;
     }
     const generatedAnswer = String(response.text ?? '').trim();
-    const unconstrainedAnswer = generatedAnswer
+    const rawAnswer = generatedAnswer
       || String(this.runtimeProfile.agent.settings?.noResponseMessage ?? 'Sorry, I could not form a response.');
+    const unconstrainedAnswer = sentencePipeline.sentenceCount() === 0
+      ? (this.liveCallMemory?.prepareAssistantResponse?.(rawAnswer) || rawAnswer)
+      : rawAnswer;
     if (sentencePipeline.sentenceCount() === 0) sentencePipeline.enqueue(unconstrainedAnswer);
     if (!generatedAnswer) {
       sourceTrace.add(createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {

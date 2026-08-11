@@ -122,7 +122,10 @@ const runtimeProfileSql = `
       FROM (
         SELECT si.id, si.knowledge_base_id, si.document_id, si.document_version_id,
           d.original_filename AS document_name, si.source_page_start, si.source_page_end,
-          si.item_key, si.name, si.category, si.category_aliases, si.aliases, sc.name AS catalog_name,
+          si.item_key, si.name, si.category, si.category_key, si.parent_category_key,
+          si.category_description, si.category_selection_rules,
+          si.category_aliases, si.aliases, si.relationships, si.selection_rules,
+          sc.name AS catalog_name,
           si.description, si.price, si.currency, si.display_order,
           COALESCE((SELECT jsonb_agg(jsonb_build_object(
             'key', sa.attribute_key, 'name', sa.display_name, 'value', sa.value
@@ -414,6 +417,45 @@ function conversationRoute(profile, input) {
 
 const catalogKeywords = /\b(price|cost|rate|amount|how much|package|plan|product|service|tests?|includes?|details?)\b/iu;
 
+function contextualCatalogClassification(profile, input, localClassification, confidence) {
+  if (localClassification.status === 'match') return null;
+  const candidateKeys = new Set((input.candidateItemKeys ?? []).map(normalize).filter(Boolean));
+  const activeCategoryKey = normalize(input.activeCategoryKey);
+  const selectedItemKey = normalize(input.selectedCatalogItemKey);
+  const scopedItems = profile.catalog_items.filter((item) => (
+    candidateKeys.has(normalize(item.item_key))
+    || (selectedItemKey && normalize(item.item_key) === selectedItemKey)
+    || (activeCategoryKey && normalize(item.category_key) === activeCategoryKey)
+  ));
+  const hasFrameContext = scopedItems.length > 0 || Boolean(
+    input.currentTopic || input.pendingQuestion || input.activeCategoryName || input.selectedCatalogItemName,
+  );
+  if (!hasFrameContext) return null;
+  const latestTokens = normalize(input.query).split(' ').filter(Boolean);
+  if (localClassification.status === 'none' && latestTokens.length > 6) return null;
+  const parts = [
+    input.query,
+    input.currentTopic,
+    input.pendingQuestion,
+    input.selectedCatalogItemName,
+    input.activeCategoryName,
+  ].map((value) => String(value ?? '').trim()).filter(Boolean);
+  const seen = new Set();
+  const contextualQuery = parts.filter((part) => {
+    const identity = normalize(part);
+    if (!identity || seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  }).join(' ').slice(0, 1_200);
+  if (!contextualQuery || normalize(contextualQuery) === normalize(input.query)) return null;
+  const classification = classifyCatalogEntityLocally(
+    scopedItems.length ? scopedItems : profile.catalog_items,
+    contextualQuery,
+    confidence,
+  );
+  return classification.status === 'none' ? null : { classification, contextualQuery };
+}
+
 function catalogResponse(record, resolution) {
   const price = record.price == null ? null : `${record.currency ?? ''} ${record.price}`.trim();
   const content = [record.name, price, record.description].filter(Boolean).join(' - ');
@@ -425,7 +467,12 @@ function catalogResponse(record, resolution) {
     }),
     item: {
       key: record.item_key, name: record.name, category: record.category ?? record.catalog_name,
-      categoryAliases: record.category_aliases, aliases: record.aliases, description: record.description,
+      categoryKey: record.category_key, parentCategoryKey: record.parent_category_key,
+      categoryDescription: record.category_description,
+      categorySelectionRules: record.category_selection_rules,
+      categoryAliases: record.category_aliases, aliases: record.aliases,
+      relationships: record.relationships, selectionRules: record.selection_rules,
+      description: record.description,
       price: record.price, currency: record.currency, attributes: record.attributes,
     },
     entityResolution: {
@@ -449,11 +496,20 @@ function catalogCategoryResponse(records, resolution) {
     }),
     category: {
       name: category,
+      key: resolution.categoryKey ?? records[0]?.category_key ?? null,
+      parentKey: resolution.parentCategoryKey ?? records[0]?.parent_category_key ?? null,
+      description: resolution.categoryDescription ?? records[0]?.category_description ?? null,
+      selectionRules: resolution.categorySelectionRules ?? records[0]?.category_selection_rules ?? {},
       items: records.map((item) => ({
+        id: item.id,
         key: item.item_key,
         name: item.name,
+        categoryKey: item.category_key,
+        parentCategoryKey: item.parent_category_key,
         categoryAliases: item.category_aliases,
         aliases: item.aliases,
+        relationships: item.relationships,
+        selectionRules: item.selection_rules,
         description: item.description,
         price: item.price,
         currency: item.currency,
@@ -469,31 +525,47 @@ function catalogCategoryResponse(records, resolution) {
   };
 }
 
-async function semanticCatalogResolution(auth, profile, input, normalizedQuery, runtime) {
+async function semanticCatalogResolution(auth, profile, input, normalizedQuery, runtime, localClassification = null) {
   const confidenceConfiguration = resolveKnowledgeConfidenceConfiguration(profile.agent_settings);
   const knowledgeBases = allowedSemanticKnowledgeBases(profile);
   if (!knowledgeBases.length || !env.RAG_ENABLED) return null;
   const shortQuery = normalizedQuery.split(' ').length <= 4;
   if (input.routeHint !== 'catalog' && !catalogKeywords.test(normalizedQuery) && !shortQuery) return null;
   const fingerprint = knowledgeBases.map((item) => `${item.id}:${item.publicationRevision}`).join('|');
-  const cacheKey = `zea:rag:entity:${auth.tenantId}:${input.agentId}:${input.usageDirection}:${hash(`${fingerprint}|${normalizedQuery}`)}`;
+  const contextFingerprint = [
+    input.currentTopic, input.pendingQuestion, input.activeCategoryKey, input.activeCategoryName,
+    input.selectedCatalogItemKey, ...(input.candidateItemKeys ?? []),
+  ].map(normalize).filter(Boolean).join('|');
+  const cacheKey = `zea:rag:entity:${auth.tenantId}:${input.agentId}:${input.usageDirection}:${hash(`${fingerprint}|${normalizedQuery}|${contextFingerprint}`)}`;
   const cached = await cacheGet(runtime.cache, cacheKey);
   if (cached) return cached;
   const vector = await runtime.embedQueryOnce(input.query);
   const rawMatches = await runtime.search(auth.tenantId, vector, {
     knowledgeBases,
     usageDirection: input.usageDirection,
-    limit: 3,
+    limit: contextFingerprint ? 6 : 3,
     scoreThreshold: Math.min(env.RAG_RUNTIME_MIN_SCORE, confidenceConfiguration.clarificationConfidence),
     recordTypes: ['CATALOG_ITEM'],
   });
   const allowed = new Map(knowledgeBases.map((item) => [item.id.toLowerCase(), item.publicationRevision]));
+  const candidateKeys = new Set((input.candidateItemKeys ?? []).map(normalize).filter(Boolean));
   const matches = rawMatches.filter((match) => {
     const payload = match.payload ?? {};
     return payload.tenant_id === auth.tenantId.toLowerCase()
       && allowed.get(String(payload.knowledge_base_id).toLowerCase()) === payload.publication_revision
       && [input.usageDirection.toUpperCase(), 'BOTH'].includes(payload.agent_usage)
       && payload.record_type === 'CATALOG_ITEM';
+  }).map((match) => {
+    const metadata = match.payload?.entity_metadata ?? {};
+    const itemKey = normalize(metadata.itemKey);
+    const categoryKey = normalize(metadata.categoryKey);
+    const categoryName = normalize(match.payload?.entity_category);
+    let contextBoost = 0;
+    if (normalize(input.selectedCatalogItemKey) === itemKey && itemKey) contextBoost += 0.08;
+    if (candidateKeys.has(itemKey) && itemKey) contextBoost += 0.05;
+    if ((normalize(input.activeCategoryKey) === categoryKey && categoryKey)
+      || (normalize(input.activeCategoryName) === categoryName && categoryName)) contextBoost += 0.03;
+    return { ...match, score: Math.min(1, Number(match.score) + contextBoost), contextBoost };
   }).sort((left, right) => Number(right.score) - Number(left.score));
   const best = matches[0];
   const runnerUp = matches[1];
@@ -519,7 +591,7 @@ async function semanticCatalogResolution(auth, profile, input, normalizedQuery, 
     await cacheSet(runtime.cache, cacheKey, resolution, env.RAG_RUNTIME_RESULT_CACHE_TTL_SECONDS);
     return resolution;
   }
-  if (sharedCategory) {
+  if (sharedCategory && localClassification?.entityType !== 'item') {
     const resolution = {
       status: bestScore >= confidenceConfiguration.highConfidence ? 'match' : 'uncertain',
       entityType: 'category',
@@ -529,6 +601,20 @@ async function semanticCatalogResolution(auth, profile, input, normalizedQuery, 
       matchedText: best.payload.entity_category,
       matchedKind: 'category',
       candidates: [{ name: best.payload.entity_category, confidence: Math.round(bestScore * 10000) / 10000 }],
+    };
+    await cacheSet(runtime.cache, cacheKey, resolution, env.RAG_RUNTIME_RESULT_CACHE_TTL_SECONDS);
+    return resolution;
+  }
+  if (sharedCategory) {
+    const resolution = {
+      status: 'uncertain',
+      confidence: Math.round(bestScore * 10000) / 10000,
+      candidates: matches.slice(0, 3).map((match) => ({
+        itemId: match.id,
+        name: match.payload?.entity_name,
+        confidence: Math.round(Number(match.score) * 10000) / 10000,
+      })),
+      reason: 'ambiguous_child_match',
     };
     await cacheSet(runtime.cache, cacheKey, resolution, env.RAG_RUNTIME_RESULT_CACHE_TTL_SECONDS);
     return resolution;
@@ -555,15 +641,22 @@ async function semanticCatalogResolution(auth, profile, input, normalizedQuery, 
 
 async function catalogRoute(auth, profile, input, normalizedQuery, runtime, localClassification = null) {
   const confidence = resolveKnowledgeConfidenceConfiguration(profile.agent_settings);
-  const local = localClassification ?? classifyCatalogEntityLocally(profile.catalog_items, input.query, confidence);
+  let local = localClassification ?? classifyCatalogEntityLocally(profile.catalog_items, input.query, confidence);
+  let contextUsed = false;
+  const contextual = contextualCatalogClassification(profile, input, local, confidence);
+  if (contextual && local.status === 'none') {
+    local = contextual.classification;
+    contextUsed = true;
+  }
   if (local.status === 'match') {
     if (local.entityType === 'category') {
       const records = [...local.items].sort((left, right) => Number(left.display_order ?? 0) - Number(right.display_order ?? 0));
-      return records.length ? catalogCategoryResponse(records, local) : null;
+      const response = records.length ? catalogCategoryResponse(records, local) : null;
+      return response ? { ...response, retrieval: { contextUsed } } : null;
     }
-    return catalogResponse(local.item, local);
+    return { ...catalogResponse(local.item, local), retrieval: { contextUsed } };
   }
-  const semantic = await semanticCatalogResolution(auth, profile, input, normalizedQuery, runtime);
+  const semantic = await semanticCatalogResolution(auth, profile, input, normalizedQuery, runtime, local);
   const resolution = semantic?.status === 'match' ? semantic : null;
   const semanticClarificationAllowed = input.routeHint === 'catalog'
     || catalogKeywords.test(normalizedQuery)
@@ -581,20 +674,22 @@ async function catalogRoute(auth, profile, input, normalizedQuery, runtime, loca
       || item.name === candidateItems[0]?.name
       || normalize(item.category ?? item.catalog_name) === normalize(candidateItems[0]?.category ?? candidateItems[0]?.name)
     )) ?? profile.catalog_items[0];
-    return clarificationResponse(record, confidence, candidateItems, {
+    const response = clarificationResponse(record, confidence, candidateItems, {
       kind: 'catalog', confidence: uncertain.confidence,
       reason: uncertain.reason ?? (uncertain.ambiguous ? 'ambiguous_match' : 'low_confidence'),
     });
+    return response ? { ...response, retrieval: { contextUsed } } : null;
   }
   if (resolution.entityType === 'category') {
     const categoryKey = normalize(resolution.category);
     const records = profile.catalog_items.filter((item) => (
       normalize(item.category ?? item.catalog_name) === categoryKey
     )).sort((left, right) => Number(left.display_order ?? 0) - Number(right.display_order ?? 0));
-    return records.length ? catalogCategoryResponse(records, resolution) : null;
+    const response = records.length ? catalogCategoryResponse(records, resolution) : null;
+    return response ? { ...response, retrieval: { contextUsed } } : null;
   }
   const record = profile.catalog_items.find((item) => String(item.id).toLowerCase() === String(resolution.itemId).toLowerCase());
-  return record ? catalogResponse(record, resolution) : null;
+  return record ? { ...catalogResponse(record, resolution), retrieval: { contextUsed } } : null;
 }
 
 function faqRoute(profile, input, normalizedQuery) {

@@ -66,8 +66,19 @@ const fieldsByKind: Record<ReviewRecord['kind'], ReviewField[]> = {
     { key: 'defaultCurrency', label: 'Default Currency', kind: 'text', nullable: true },
   ],
   catalog_item: [
+    { key: 'itemKey', label: 'Stable Item Key', kind: 'text', required: true },
     { key: 'name', label: 'Item / Package Name', kind: 'text', required: true },
     { key: 'category', label: 'Category', kind: 'text', nullable: true },
+    { key: 'categoryKey', label: 'Category Key', kind: 'text', nullable: true },
+    {
+      key: 'parentCategoryKey', label: 'Parent Category Key', kind: 'text', nullable: true,
+      help: 'Optional stable key for a parent category. This creates a generic nested Catalog hierarchy.',
+    },
+    { key: 'categoryDescription', label: 'Category Description', kind: 'textarea', nullable: true },
+    {
+      key: 'categorySelectionRules', label: 'Category Selection Rules (JSON)', kind: 'json-object',
+      help: 'Optional tenant-defined rules such as clarification strategy or a default child item key.',
+    },
     {
       key: 'categoryAliases', label: 'Category Aliases (JSON array)', kind: 'json-array',
       help: 'Alternate spoken names for the category. Heading aliases are copied to each extracted item for tenant-isolated runtime matching.',
@@ -75,6 +86,14 @@ const fieldsByKind: Record<ReviewRecord['kind'], ReviewField[]> = {
     {
       key: 'aliases', label: 'Spoken Aliases (JSON array)', kind: 'json-array',
       help: 'Optional alternate names or common speech forms. Semantic and phonetic matching also run automatically.',
+    },
+    {
+      key: 'relationships', label: 'Entity Relationships (JSON)', kind: 'json-object',
+      help: 'Generic links such as alternatives, related items, add-ons or prerequisites using stable entity keys.',
+    },
+    {
+      key: 'selectionRules', label: 'Item Selection Rules (JSON)', kind: 'json-object',
+      help: 'Optional conditions controlling when this item may be selected. Runtime code does not define industry rules.',
     },
     { key: 'description', label: 'Description', kind: 'textarea', nullable: true },
     { key: 'price', label: 'Price', kind: 'number', nullable: true },

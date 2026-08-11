@@ -61,17 +61,61 @@ function uniqueCatalogAliases(values, canonicalName) {
     .map((value) => [value.toLocaleLowerCase(), value])).values()].slice(0, 50);
 }
 
+function normalizeCatalogKey(value, fallback = 'catalog-entity') {
+  const normalized = String(value ?? '').normalize('NFKC').toLocaleLowerCase()
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, '-')
+    .replace(/^-+|-+$/gu, '').slice(0, 160);
+  return normalized || fallback;
+}
+
+function catalogJsonObject(value, label, warnings, lineNumber) {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+  } catch {
+    // The warning below gives the document author a reviewable extraction error.
+  }
+  warnings.push(`${label} on Catalog line ${lineNumber} must be a valid JSON object`);
+  return {};
+}
+
 function catalogLineMetadata(text) {
-  const metadata = { category: null, aliases: [] };
+  const metadata = {
+    category: null,
+    aliases: [],
+    key: null,
+    itemKey: null,
+    categoryKey: null,
+    parentCategoryKey: null,
+    description: null,
+    defaultItemKey: null,
+    defaultSelection: null,
+    relationships: null,
+    selectionRules: null,
+  };
   const content = [];
   for (const segment of text.split('|')) {
-    const directive = segment.match(/^\s*(category|aliases?)\s*[:=]\s*(.+?)\s*$/iu);
+    const directive = segment.match(
+      /^\s*(category|aliases?|key|item[\s_-]*key|category[\s_-]*key|parent(?:[\s_-]*category)?(?:[\s_-]*key)?|description|default[\s_-]*item(?:[\s_-]*key)?|default[\s_-]*selection|relationships?|selection[\s_-]*rules)\s*[:=]\s*(.+?)\s*$/iu,
+    );
     if (!directive) {
       content.push(segment.trim());
       continue;
     }
-    if (directive[1].toLocaleLowerCase() === 'category') metadata.category = directive[2].trim().slice(0, 240);
-    else metadata.aliases.push(directive[2]);
+    const key = directive[1].toLocaleLowerCase().replace(/[\s_-]+/gu, '_');
+    const value = directive[2].trim();
+    if (key === 'category') metadata.category = value.slice(0, 240);
+    else if (key === 'alias' || key === 'aliases') metadata.aliases.push(value);
+    else if (key === 'key') metadata.key = value;
+    else if (key === 'item_key') metadata.itemKey = value;
+    else if (key === 'category_key') metadata.categoryKey = value;
+    else if (key.startsWith('parent')) metadata.parentCategoryKey = value;
+    else if (key === 'description') metadata.description = value.slice(0, 50000);
+    else if (key.startsWith('default_item')) metadata.defaultItemKey = value;
+    else if (key === 'default_selection') metadata.defaultSelection = value;
+    else if (key === 'relationship' || key === 'relationships') metadata.relationships = value;
+    else if (key === 'selection_rules') metadata.selectionRules = value;
   }
   return { ...metadata, content: content.filter(Boolean).join(' | ') };
 }
@@ -79,13 +123,30 @@ function catalogLineMetadata(text) {
 function parseCatalog(extraction) {
   const lines = nonEmptyLines(extraction);
   const items = [];
+  const warnings = [];
+  const categories = new Map();
   let currentCategory = null;
-  let currentCategoryAliases = [];
   for (let index = 0; index < lines.length; index += 1) {
     const headingMetadata = catalogLineMetadata(lines[index].text);
     if (headingMetadata.category && !headingMetadata.content) {
-      currentCategory = headingMetadata.category;
-      currentCategoryAliases = uniqueCatalogAliases(headingMetadata.aliases, currentCategory);
+      const categoryKey = normalizeCatalogKey(headingMetadata.categoryKey ?? headingMetadata.key ?? headingMetadata.category);
+      const defaultSelectionRules = catalogJsonObject(
+        headingMetadata.defaultSelection ?? headingMetadata.selectionRules,
+        'DEFAULT_SELECTION', warnings, index + 1,
+      );
+      if (headingMetadata.defaultItemKey) {
+        defaultSelectionRules.defaultItemKey = normalizeCatalogKey(headingMetadata.defaultItemKey);
+      }
+      currentCategory = {
+        key: categoryKey,
+        name: headingMetadata.category,
+        parentKey: headingMetadata.parentCategoryKey
+          ? normalizeCatalogKey(headingMetadata.parentCategoryKey) : null,
+        aliases: uniqueCatalogAliases(headingMetadata.aliases, headingMetadata.category),
+        description: headingMetadata.description,
+        defaultSelectionRules,
+      };
+      categories.set(categoryKey, currentCategory);
       continue;
     }
     const metadata = catalogLineMetadata(lines[index].text);
@@ -93,11 +154,29 @@ function parseCatalog(extraction) {
     if (!parsed) continue;
     const fallbackName = index > 0 ? lines[index - 1].text : `Item ${items.length + 1}`;
     const name = parsed.name || fallbackName;
+    const explicitCategory = metadata.category ? {
+      key: normalizeCatalogKey(metadata.categoryKey ?? metadata.category),
+      name: metadata.category,
+      parentKey: metadata.parentCategoryKey ? normalizeCatalogKey(metadata.parentCategoryKey) : null,
+      aliases: [],
+      description: null,
+      defaultSelectionRules: {},
+    } : null;
+    const category = explicitCategory ?? currentCategory;
+    if (explicitCategory && !categories.has(explicitCategory.key)) categories.set(explicitCategory.key, explicitCategory);
     items.push({
+      itemKey: normalizeCatalogKey(metadata.itemKey ?? metadata.key ?? name, `item-${items.length + 1}`),
       name,
-      category: metadata.category || currentCategory,
-      categoryAliases: metadata.category ? [] : currentCategoryAliases,
+      category: category?.name ?? null,
+      categoryKey: category?.key ?? null,
+      parentCategoryKey: category?.parentKey ?? null,
+      categoryAliases: category?.aliases ?? [],
+      categoryDescription: category?.description ?? null,
+      categorySelectionRules: category?.defaultSelectionRules ?? {},
       aliases: uniqueCatalogAliases(metadata.aliases, name),
+      description: metadata.description,
+      relationships: catalogJsonObject(metadata.relationships, 'RELATIONSHIPS', warnings, index + 1),
+      selectionRules: catalogJsonObject(metadata.selectionRules, 'SELECTION_RULES', warnings, index + 1),
       price: parsed.price,
       currency: parsed.currency,
       sourceText: lines[index].text,
@@ -107,9 +186,9 @@ function parseCatalog(extraction) {
     });
   }
   return {
-    catalog: { catalogType: 'document_catalog', name: 'Extracted catalog' },
+    catalog: { catalogType: 'document_catalog', name: 'Extracted catalog', categories: [...categories.values()] },
     records: items,
-    warnings: items.length ? [] : ['No price-bearing catalog items were detected'],
+    warnings: [...warnings, ...(!items.length ? ['No price-bearing catalog items were detected'] : [])],
   };
 }
 

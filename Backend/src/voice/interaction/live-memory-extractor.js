@@ -18,6 +18,14 @@ function isAcknowledgementOnly(text, acknowledgementPhrases = []) {
   return acknowledgementDefaults.has(value) || configured.has(value);
 }
 
+function looksLikeQuestion(text) {
+  const value = normalized(text).toLocaleLowerCase();
+  if (!value) return false;
+  if (/[?？]\s*$/u.test(value)) return true;
+  return /\b(?:who|what|when|where|why|how|which|can|could|would|do|does|did|is|are)\b/iu.test(value)
+    || /(?:என்ன|எங்கே|எங்க|எப்ப|எப்படி|ஏன்|எது|எந்த|யாரு|யார்|முடியுமா|இருக்கா|இருக்கீங்களா)/u.test(value);
+}
+
 function fieldAliases(field) {
   const label = normalized(field.label);
   const words = label.split(/\s+/gu).filter((word) => Array.from(word).length >= 3);
@@ -60,7 +68,12 @@ export function captureConfiguredMemoryFields({ fields = [], collectedData = {},
   const updates = {};
   for (const field of fields) {
     const pending = pendingQuestion === field.key;
-    if (collectedData[field.key] !== undefined && !explicitFieldValue(field, utterance, fields)) continue;
+    const explicit = explicitFieldValue(field, utterance, fields);
+    if (collectedData[field.key] !== undefined && !explicit) continue;
+    // A caller can ask a side question while a free-text field is pending.
+    // Never store that question as the field value; routing will answer it and
+    // the conversation frame will resume the original configured question.
+    if (pending && !explicit && looksLikeQuestion(utterance)) continue;
     const value = typedValue(field, utterance, pending, fields);
     if (value !== '' && value !== undefined && value !== null) updates[field.key] = value;
   }
