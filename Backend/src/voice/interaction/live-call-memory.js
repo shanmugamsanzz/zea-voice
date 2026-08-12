@@ -47,6 +47,11 @@ function frameText(value, maximum = 240) {
     .replace(/\s+/gu, ' ').trim().slice(0, maximum);
 }
 
+function frameLanguage(value, fallback = 'en') {
+  const match = frameText(value, 40).toLocaleLowerCase().match(/\b([a-z]{2,3})(?:-[a-z]{2})?\b/u);
+  return match?.[1] ?? fallback;
+}
+
 function frameItem(value = {}, fallback = {}) {
   const id = frameText(value.id ?? value.itemId ?? value.source?.recordId ?? fallback.id, 100);
   const key = frameText(value.key ?? value.itemKey ?? fallback.key, 160);
@@ -148,6 +153,7 @@ function publicState(state) {
     completedQuestions: [...state.completedQuestions],
     answeredQuestions: [...state.answeredQuestions],
     currentTopic: state.currentTopic,
+    language: state.language,
     pendingQuestion: state.pendingQuestion,
     pendingQuestionText: state.pendingQuestionText,
     pendingQuestionKind: state.pendingQuestionKind,
@@ -177,7 +183,9 @@ export function openLiveCallMemory(identity, settings = {}, now = Date.now()) {
   const stageConfiguration = resolveConversationStageConfiguration(settings);
   const state = {
     key, configuration, messages: [], collectedData: {}, completedQuestions: new Set(),
-    answeredQuestions: new Set(), currentTopic: null, pendingQuestion: null,
+    answeredQuestions: new Set(), currentTopic: null, language: frameLanguage(
+      settings.conversationLanguage ?? settings.defaultLanguage ?? settings.language,
+    ), pendingQuestion: null,
     pendingQuestionText: null, pendingQuestionKind: null, resumeQuestionAfterAnswer: null,
     lastAnsweredQuestion: null, runningSummary: '', lastIntent: null, summaryCursor: 0,
     currentStage: stageConfiguration.initialStage, resumeStage: null,
@@ -299,6 +307,11 @@ export function openLiveCallMemory(identity, settings = {}, now = Date.now()) {
         state.pendingQuestionText = pendingQuestionText ? String(pendingQuestionText).slice(0, 500) : null;
       }
       if (resumeStage !== undefined) state.resumeStage = resumeStage ? String(resumeStage).slice(0, 80) : null;
+      state.updatedAt = Date.now();
+      return publicState(state);
+    },
+    setLanguage(language) {
+      state.language = frameLanguage(language, state.language);
       state.updatedAt = Date.now();
       return publicState(state);
     },
@@ -501,6 +514,7 @@ export function compactLiveCallMemoryContext({ snapshot = {}, collectedData = {}
     pendingQuestionKind: promptText(snapshot.pendingQuestionKind, 32) || undefined,
     resumeQuestionAfterAnswer: promptText(snapshot.resumeQuestionAfterAnswer, 200) || undefined,
     currentTopic: promptText(snapshot.currentTopic, 160) || undefined,
+    language: promptText(snapshot.language, 12) || undefined,
     currentStage: promptText(snapshot.currentStage, 80) || undefined,
     lastIntent: promptText(snapshot.lastIntent, 80) || undefined,
     resumeStage: promptText(snapshot.resumeStage, 80) || undefined,

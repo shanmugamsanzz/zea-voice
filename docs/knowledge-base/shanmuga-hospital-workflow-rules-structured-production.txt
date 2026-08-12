@@ -211,6 +211,14 @@ NEXT_STAGE: package_selection
 ACTION: present_package_prices
 RESPONSE: Silver ஆயிரத்து அறுநூற்று ஐம்பது ரூபாய், Gold நாலாயிரத்து தொள்ளாயிரத்து ஐம்பது ரூபாய், Platinum ஏழாயிரத்து தொள்ளாயிரத்து எண்பது ரூபாய். எது பத்தி detail வேணும்?
 
+RULE: category_price_request
+MATCH: இதோட price என்ன | இந்த package price என்ன | category price என்ன | எவ்வளவு price | how much price | இதோட amount என்ன | இந்த categoryக்கு எவ்வளவு | இந்த package எவ்வளவு வருது
+MATCH_MODE: any_phrase
+RESPONSE_MODE: instruction
+PRIORITY: 75
+ACTION: present_active_category_prices
+RESPONSE: Use activeCategory from current-call state. If it contains multiple approved items, explain that each item has a different price, list the approved child item prices, then ask which item needs details. If activeCategory is unavailable, ask which category or item the caller means. Do not use the generic unclear response when the latest question clearly asks for a price.
+
 RULE: master_health_checkup_options
 MATCH: Master Health Checkup options என்ன | master package என்னென்ன | master health packages | general full body packages | Master Health Checkup சொல்லுங்க | Master packages சொல்லுங்க | full body checkup packages என்ன | Silver Gold Platinum options | general health package சொல்லுங்க | Master Checkupல என்னென்ன இருக்கு
 MATCH_MODE: any_phrase

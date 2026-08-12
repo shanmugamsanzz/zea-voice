@@ -133,11 +133,12 @@ export function buildAgentSystemPrompt(agent, { usageDirection, context, knowled
     contentBudget - companyPrompt.length - runtimeContext.length - String(groundingContract ?? '').length,
   );
   const responseCharacterLimit = Number(context?.ttsResponseCharacterLimit ?? 0);
+  const activeLanguage = String(context?.liveCallMemory?.language ?? agent.language ?? '').trim() || agent.language;
   const prompt = [
     `You are ${agent.name}, a real-time AI voice agent.`,
     agent.description ? `Agent description: ${agent.description}` : null,
     agent.goal ? `Primary agent goal: ${agent.goal}` : null,
-    `Required response language: ${agent.language}.`,
+    `Required response language: ${activeLanguage}.`,
     `Current call direction: ${usageDirection}.`,
     'Runtime rules:',
     '- Respond as natural speech using short, clear sentences suitable for a phone call.',

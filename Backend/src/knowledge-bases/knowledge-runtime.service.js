@@ -224,10 +224,14 @@ function workflowRecordResponse(record, {
 } = {}) {
   const responseMode = String(record.action_config?.responseMode ?? 'instruction').trim().toLowerCase();
   const blockedResponse = String(record.action_config?.blockedResponse ?? '').trim();
+  const instruction = String(record.response_template ?? record.action_config?.instruction ?? '').trim();
+  // Instruction mode is machine-facing only. It can open an action gate or
+  // guide a generated response, but its text must never be exposed as caller
+  // audio. A blocked response is explicitly tenant-authored caller speech.
   const content = gate?.allowed === false
     ? blockedResponse
-    : (record.response_template ?? record.action_config?.instruction ?? '');
-  if (!content) return null;
+    : (responseMode === 'instruction' ? '' : instruction);
+  if (!content && responseMode !== 'instruction') return null;
   return {
     ...routeResponse('workflow', record, content, {
       intent: record.intent, matchedPhrase, matchMode, responseMode,
@@ -239,6 +243,7 @@ function workflowRecordResponse(record, {
       matchedPhrase,
       matchMode,
       responseMode,
+      instruction: responseMode === 'instruction' ? instruction : null,
       exactResponse: record.action_type === 'respond' && responseMode === 'exact',
       gate,
       confidence,
@@ -280,7 +285,9 @@ function withScenarioTarget(profile, record, response) {
   } };
 }
 
-function workflowRoute(profile, input, normalizedQuery, currentCatalogResolution = null) {
+function workflowRoute(profile, input, normalizedQuery, currentCatalogResolution = null, {
+  includeScenarioRules = true,
+} = {}) {
   const target = normalize(input.intent ?? normalizedQuery);
   const confidence = resolveKnowledgeConfidenceConfiguration(profile.agent_settings);
   const ranked = [];
@@ -288,7 +295,8 @@ function workflowRoute(profile, input, normalizedQuery, currentCatalogResolution
     const detectedScenario = input.detectedIntent?.intent === 'scenario';
     // Scenario Rules are activated only for an actual scenario/use-case turn.
     // They remain entirely tenant-authored through Workflow Rules.
-    if (record.conditions?.scenarioRouting === true && !detectedScenario) continue;
+    if (record.conditions?.scenarioRouting === true
+      && (!includeScenarioRules || !detectedScenario)) continue;
     const phrases = Array.isArray(record.conditions?.triggerPhrases)
       ? record.conditions.triggerPhrases.map((phrase) => ({
         original: String(phrase).trim(), normalized: normalize(phrase),
@@ -456,7 +464,6 @@ function conversationRoute(profile, input) {
 const catalogKeywords = /\b(price|cost|rate|amount|how much|package|plan|product|service|tests?|includes?|details?)\b/iu;
 
 function contextualCatalogClassification(profile, input, localClassification, confidence) {
-  if (localClassification.status === 'match') return null;
   const candidateKeys = new Set((input.candidateItemKeys ?? []).map(normalize).filter(Boolean));
   const activeCategoryKey = normalize(input.activeCategoryKey);
   const selectedItemKey = normalize(input.selectedCatalogItemKey);
@@ -469,6 +476,16 @@ function contextualCatalogClassification(profile, input, localClassification, co
     input.currentTopic || input.pendingQuestion || input.activeCategoryName || input.selectedCatalogItemName,
   );
   if (!hasFrameContext) return null;
+  // Resolve the caller's latest words inside the active Category/candidate
+  // set before accepting a broader global Category match. This lets a child
+  // such as "Premium male" win inside any tenant-defined parent hierarchy.
+  if (scopedItems.length) {
+    const scoped = classifyCatalogEntityLocally(scopedItems, input.query, confidence);
+    if (scoped.status !== 'none') {
+      return { classification: scoped, contextualQuery: input.query, preferScoped: true };
+    }
+  }
+  if (localClassification.status === 'match') return null;
   const latestTokens = normalize(input.query).split(' ').filter(Boolean);
   if (localClassification.status === 'none' && latestTokens.length > 6) return null;
   const parts = [
@@ -560,6 +577,54 @@ function catalogCategoryResponse(records, resolution) {
       matchedText: resolution.matchedText,
       matchedKind: 'category',
     },
+  };
+}
+
+function catalogCategoryPriceResponse(records, resolution) {
+  const record = records[0];
+  const category = resolution.category ?? record?.category ?? record?.catalog_name;
+  const prices = records.map((item) => {
+    const price = item.price == null ? null : `${item.currency ?? ''} ${item.price}`.trim();
+    return price ? `${item.name} - ${price}` : item.name;
+  });
+  return {
+    ...catalogCategoryResponse(records, resolution),
+    content: `${category}: ${prices.join(', ')}`,
+    categoryPriceList: true,
+  };
+}
+
+function activeCatalogContextResponse(profile, input) {
+  const intent = String(input.detectedIntent?.intent ?? '').toLowerCase();
+  const isPriceRequest = intent === 'price';
+  const isDetailsRequest = intent === 'details';
+  const selectedKey = normalize(input.selectedCatalogItemKey);
+  const selectedId = String(input.selectedCatalogItemId ?? '').trim();
+  const selected = profile.catalog_items.find((item) => (
+    (selectedId && String(item.id) === selectedId)
+    || (selectedKey && normalize(item.item_key) === selectedKey)
+  ));
+  if (selected && (isPriceRequest || isDetailsRequest)) {
+    return {
+      ...catalogResponse(selected, {
+        method: 'live_context', confidence: 1, matchedText: selected.name, matchedKind: 'selected_item',
+      }),
+      retrieval: { contextUsed: true, activeSelectionUsed: true },
+    };
+  }
+  const categoryKey = normalize(input.activeCategoryKey);
+  if (!isPriceRequest || !categoryKey) return null;
+  const records = profile.catalog_items.filter((item) => normalize(item.category_key) === categoryKey)
+    .sort((left, right) => Number(left.display_order ?? 0) - Number(right.display_order ?? 0));
+  if (!records.length) return null;
+  return {
+    ...catalogCategoryPriceResponse(records, {
+      category: input.activeCategoryName ?? records[0].category ?? records[0].catalog_name,
+      categoryKey: records[0].category_key,
+      parentCategoryKey: records[0].parent_category_key ?? null,
+      method: 'live_context', confidence: 1, matchedText: input.activeCategoryName ?? records[0].category,
+    }),
+    retrieval: { contextUsed: true, activeCategoryUsed: true },
   };
 }
 
@@ -677,12 +742,16 @@ async function semanticCatalogResolution(auth, profile, input, normalizedQuery, 
   return resolution;
 }
 
-async function catalogRoute(auth, profile, input, normalizedQuery, runtime, localClassification = null) {
+async function catalogRoute(auth, profile, input, normalizedQuery, runtime, localClassification = null, {
+  allowClarification = true,
+} = {}) {
   const confidence = resolveKnowledgeConfidenceConfiguration(profile.agent_settings);
   let local = localClassification ?? classifyCatalogEntityLocally(profile.catalog_items, input.query, confidence);
   let contextUsed = false;
+  const activeContext = activeCatalogContextResponse(profile, input);
+  if (activeContext) return activeContext;
   const contextual = contextualCatalogClassification(profile, input, local, confidence);
-  if (contextual && local.status === 'none') {
+  if (contextual && (local.status === 'none' || contextual.preferScoped)) {
     local = contextual.classification;
     contextUsed = true;
   }
@@ -706,6 +775,10 @@ async function catalogRoute(auth, profile, input, normalizedQuery, runtime, loca
     .filter(Boolean).sort((left, right) => Number(right.confidence) - Number(left.confidence))[0];
   if (!resolution) {
     if (!uncertain) return null;
+    // A possible Catalog ambiguity is retained by the caller and returned only
+    // after Workflow scenario routing and semantic fallback have had a chance
+    // to answer the caller's complete meaning.
+    if (!allowClarification) return null;
     const candidateItems = uncertain.candidates ?? [];
     const record = profile.catalog_items.find((item) => (
       String(item.id).toLowerCase() === String(candidateItems[0]?.itemId ?? '').toLowerCase()
@@ -815,45 +888,84 @@ export async function routeKnowledgeQuery(auth, input, dependencies = defaultDep
   const hasMultipleCatalogItems = currentCatalogEntities.length > 1;
   let result = null;
 
-  if (input.routeHint === 'auto' || input.routeHint === 'workflow') {
-    const localWorkflow = workflowRoute(profile, input, normalizedQuery, currentCatalogResolution);
-    result = localWorkflow;
-    if (!localWorkflow || localWorkflow.route === 'clarification') {
-      const semanticWorkflow = await semanticWorkflowRoute(
-        auth, profile, input, runtime, currentCatalogResolution,
-      );
-      result = semanticWorkflow?.route === 'clarification' && !localWorkflow
-        ? null
-        : (semanticWorkflow ?? localWorkflow);
-    }
-    if (result?.route === 'clarification' && currentCatalogResolution && !hasMultipleCatalogItems) {
-      result = currentCatalogResolution.entityType === 'category'
-        ? catalogCategoryResponse(
-          [...currentCatalogResolution.items]
-            .sort((left, right) => Number(left.display_order ?? 0) - Number(right.display_order ?? 0)),
-          currentCatalogResolution,
-        )
-        : catalogResponse(currentCatalogResolution.item, currentCatalogResolution);
-    }
-    if (result?.route === 'workflow' && hasMultipleCatalogItems) {
-      result.catalogSelections = currentCatalogEntities.map((selection) => (
-        catalogResponse(selection.item, selection)
-      ));
-    } else if (result?.route === 'workflow' && currentCatalogResolution?.entityType === 'item') {
-      result.catalogSelection = catalogResponse(currentCatalogResolution.item, currentCatalogResolution);
-    }
+  const automaticRoute = input.routeHint === 'auto';
+  const workflowRouteAllowed = automaticRoute || input.routeHint === 'workflow';
+  const catalogRouteAllowed = automaticRoute || input.routeHint === 'catalog';
+  let deferredClarification = null;
+
+  // Routing order is intentionally strict. A weak fuzzy Workflow result must
+  // never hide the active topic, a Catalog entity, or an approved scenario.
+  // Clarification is retained until every grounded deterministic route fails.
+  if (workflowRouteAllowed) {
+    const exactWorkflow = workflowRoute(profile, input, normalizedQuery, currentCatalogResolution, {
+      includeScenarioRules: false,
+    });
+    if (exactWorkflow?.route === 'workflow') result = exactWorkflow;
+    else if (exactWorkflow?.route === 'clarification') deferredClarification = exactWorkflow;
+  }
+
+  if (!result && catalogRouteAllowed) {
+    result = await catalogRoute(
+      auth, profile, input, normalizedQuery, runtime, currentCatalogClassification,
+      { allowClarification: false },
+    );
+  }
+
+  if (!result && workflowRouteAllowed && input.detectedIntent?.intent === 'scenario') {
+    const scenarioWorkflow = workflowRoute(profile, input, normalizedQuery, currentCatalogResolution, {
+      includeScenarioRules: true,
+    });
+    if (scenarioWorkflow?.route === 'workflow') result = scenarioWorkflow;
+    else if (scenarioWorkflow?.route === 'clarification') deferredClarification ??= scenarioWorkflow;
+  }
+
+  if (!result && workflowRouteAllowed) {
+    const semanticWorkflow = await semanticWorkflowRoute(
+      auth, profile, input, runtime, currentCatalogResolution,
+    );
+    if (semanticWorkflow?.route === 'workflow') result = semanticWorkflow;
+    else if (semanticWorkflow?.route === 'clarification') deferredClarification ??= semanticWorkflow;
+  }
+
+  if (result?.route === 'clarification' && currentCatalogResolution && !hasMultipleCatalogItems) {
+    result = currentCatalogResolution.entityType === 'category'
+      ? catalogCategoryResponse(
+        [...currentCatalogResolution.items]
+          .sort((left, right) => Number(left.display_order ?? 0) - Number(right.display_order ?? 0)),
+        currentCatalogResolution,
+      )
+      : catalogResponse(currentCatalogResolution.item, currentCatalogResolution);
+  }
+  if (result?.route === 'workflow' && hasMultipleCatalogItems) {
+    result.catalogSelections = currentCatalogEntities.map((selection) => (
+      catalogResponse(selection.item, selection)
+    ));
+  } else if (result?.route === 'workflow' && currentCatalogResolution?.entityType === 'item') {
+    result.catalogSelection = catalogResponse(currentCatalogResolution.item, currentCatalogResolution);
   }
   if (!result && (input.routeHint === 'auto' || input.routeHint === 'conversation')) {
     result = conversationRoute(profile, input);
   }
   if (!result && (input.routeHint === 'auto' || input.routeHint === 'catalog')) {
-    result = await catalogRoute(auth, profile, input, normalizedQuery, runtime, currentCatalogClassification);
+    result = await catalogRoute(
+      auth, profile, input, normalizedQuery, runtime, currentCatalogClassification,
+      { allowClarification: false },
+    );
   }
   if (!result && (input.routeHint === 'auto' || input.routeHint === 'faq')) {
     result = faqRoute(profile, input, normalizedQuery);
   }
   if (!result && (input.routeHint === 'auto' || input.routeHint === 'semantic')) {
     result = await semanticRoute(auth, profile, input, normalizedQuery, runtime);
+  }
+  // Clarification is deliberately last. At this point the exact rules, live
+  // frame, Catalog hierarchy, scenario rules and semantic evidence have all
+  // failed to produce an approved answer.
+  if (!result && deferredClarification) result = deferredClarification;
+  if (!result && catalogRouteAllowed) {
+    result = await catalogRoute(auth, profile, input, normalizedQuery, runtime, currentCatalogClassification, {
+      allowClarification: true,
+    });
   }
 
   return {

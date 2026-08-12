@@ -24,6 +24,8 @@ assert.equal(resolveLiveMemoryConfiguration({}).mode, 'last_n_turns');
 
 const identity = { tenantId: 'tenant-a', workspaceId: 'workspace-a', agentId: 'agent-a', callId: 'call-a' };
 const session = openLiveCallMemory(identity, settings, 1);
+session.setLanguage('ta-IN');
+assert.equal(session.snapshot().language, 'ta');
 session.append({ role: 'assistant', content: 'Welcome', at: 2 });
 session.append({ role: 'user', content: 'First request', at: 3 });
 session.append({ role: 'assistant', content: 'First response', at: 4 });
@@ -73,6 +75,12 @@ const oversizedContext = compactLiveCallMemoryContext({
 });
 assert.ok(JSON.stringify(oversizedContext).length <= 1_000);
 assert.equal(oversizedContext.nextMissingField.key, 'field_29');
+
+const framedLanguage = compactLiveCallMemoryContext({
+  snapshot: { language: 'ta', currentStage: 'selection', activeCategory: { key: 'services', name: 'Services' } },
+  collectedData: {}, missingFields: [],
+});
+assert.equal(framedLanguage.language, 'ta');
 
 const maintenance = new LiveMemoryMaintenanceQueue({ callId: 'benchmark-call' });
 let maintenanceRan = false;

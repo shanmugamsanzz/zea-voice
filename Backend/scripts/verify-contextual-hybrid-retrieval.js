@@ -81,6 +81,16 @@ assert.equal(selectedFollowUp.route, 'catalog');
 assert.equal(selectedFollowUp.item.key, 'premium-male');
 assert.equal(selectedFollowUp.retrieval.contextUsed, true);
 
+const categoryPriceFollowUp = await route('how much price', {
+  currentTopic: 'Screening Options', selectedCatalogItemId: undefined,
+  selectedCatalogItemKey: undefined, selectedCatalogItemName: undefined,
+  detectedIntent: { intent: 'price', confidence: 0.95, signals: ['price'] },
+});
+assert.equal(categoryPriceFollowUp.route, 'catalog');
+assert.equal(categoryPriceFollowUp.category.key, 'screening-options');
+assert.equal(categoryPriceFollowUp.categoryPriceList, true);
+assert.match(categoryPriceFollowUp.content, /Premium Male - USD 100/u);
+
 const ambiguousChild = await route('female', {
   currentTopic: 'Screening Options', pendingQuestion: 'Premium or Add-on?',
 });

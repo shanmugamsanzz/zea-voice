@@ -73,6 +73,8 @@ const instruction = await routeKnowledgeQuery(auth, {
 }, dependencies);
 assert.equal(instruction.route, 'workflow');
 assert.equal(instruction.workflow.responseMode, 'instruction');
+assert.equal(instruction.content, '');
+assert.ok(instruction.workflow.instruction);
 assert.equal(isExactWorkflowResponse(instruction), false);
 
 const noExactSubstring = await routeKnowledgeQuery(auth, {

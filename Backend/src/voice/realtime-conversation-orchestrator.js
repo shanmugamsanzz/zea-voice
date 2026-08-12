@@ -29,6 +29,7 @@ import { validateFinalCustomerTurn } from './interruption/final-turn-validator.j
 import { ShortTurnMerger } from './interruption/short-turn-merger.js';
 import { greetingModes, resolveInteractionConfiguration } from './interaction/interaction-config.js';
 import { findCallCheckPhrase, resolveCallCheckConfiguration } from './interaction/call-check-config.js';
+import { findLanguageSwitchRequest, languageSwitchAcknowledgement } from './interaction/language-switch.js';
 import { resolveCallContextId } from './interaction/context-id-resolver.js';
 import { createContextCachePolicy, publicContextCacheMetadata } from './interaction/context-cache-policy.js';
 import { conversationContextCache } from './interaction/conversation-context-cache.service.js';
@@ -336,7 +337,10 @@ export class RealtimeConversationOrchestrator {
       workspaceId: this.runtimeProfile.agent.workspaceId ?? this.call.workspaceId,
       agentId: this.runtimeProfile.agent.id ?? this.call.agentId,
       callId: this.call.id,
-    }, this.runtimeProfile.agent.settings);
+    }, {
+      ...this.runtimeProfile.agent.settings,
+      conversationLanguage: languageCode(this.runtimeProfile.agent.language),
+    });
     this.liveMemoryMaintenance = new LiveMemoryMaintenanceQueue({ log: this.log, callId: this.call.id });
     this.runtimeMetrics.liveCallMemory = {
       mode: this.liveCallMemory.snapshot().mode,
@@ -949,6 +953,11 @@ export class RealtimeConversationOrchestrator {
       await this.#handleCallCheck(completedTurn, callCheckPhrase);
       return;
     }
+    const requestedLanguage = findLanguageSwitchRequest(completedTurn);
+    if (requestedLanguage) {
+      await this.#handleLanguageSwitch(completedTurn, requestedLanguage);
+      return;
+    }
     const outputWasActive = [callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state);
     const agentAudioWasPlaying = [callStates.GREETING, callStates.SPEAKING].includes(this.controller.state);
     if (outputWasActive || this.interruptionCandidate.active) {
@@ -1057,6 +1066,7 @@ export class RealtimeConversationOrchestrator {
     });
     this.#recordLiveMemoryTiming('capture', memoryCaptureStartedAt);
     this.#scheduleLiveSummary();
+    this.#scheduleLiveMemoryCheckpoint('caller_turn');
     if (Object.keys(liveCapture?.updates ?? {}).length) {
       this.log.info({
         stage: 'live_memory.fields_captured', callId: this.call.id,
@@ -1224,8 +1234,45 @@ export class RealtimeConversationOrchestrator {
     if (this.#isStaleGeneration(epoch) || this.controller.state !== callStates.SPEAKING) return;
     await this.controller.playbackComplete();
     this.liveCallMemory?.resumeFromDetour?.();
+    this.#scheduleLiveMemoryCheckpoint('call_check_side_action');
     this.runtimeMetrics.callChecks.spoken += 1;
     this.errorCount = 0;
+    this.#armInactivity();
+  }
+
+  async #handleLanguageSwitch(customerText, language) {
+    if (this.finalized) return;
+    this.#clearInactivity();
+    this.liveCallMemory?.suspendForDetour?.();
+    this.liveCallMemory?.setLanguage?.(language);
+    if ([callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) {
+      await this.#cancelActive('caller_language_switch');
+    }
+    if (this.controller.state !== callStates.LISTENING) {
+      this.customerUtterance.reset();
+      return;
+    }
+    const liveMemory = this.liveCallMemory?.snapshot();
+    const questionToResume = liveMemory?.pendingQuestionText;
+    const acknowledgement = languageSwitchAcknowledgement(language);
+    const response = this.#fitTtsMessage([acknowledgement, questionToResume].filter(Boolean).join(' '));
+    await this.controller.receiveFinalTranscript(customerText);
+    this.customerUtterance.reset();
+    this.shortTurnMerger.clear();
+    await this.controller.setAssistantResponse(response, Date.now(), {
+      sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
+        id: this.runtimeProfile.agent.id,
+        label: 'Language switch side action', metadata: { language },
+      })],
+    });
+    const epoch = ++this.epoch;
+    const spoken = await this.#synthesize(response, `language-switch-${epoch}`, { epoch });
+    if (!spoken || this.#isStaleGeneration(epoch) || this.controller.state !== callStates.SPEAKING) return;
+    await this.audioEngine.drainOutput();
+    if (this.#isStaleGeneration(epoch) || this.controller.state !== callStates.SPEAKING) return;
+    await this.controller.playbackComplete();
+    this.liveCallMemory?.resumeFromDetour?.();
+    this.#scheduleLiveMemoryCheckpoint('language_switch_side_action');
     this.#armInactivity();
   }
 
@@ -1325,7 +1372,7 @@ export class RealtimeConversationOrchestrator {
         agentId: this.runtimeProfile.agent.id,
         query,
         usageDirection: this.call.direction,
-        language: languageCode(this.runtimeProfile.agent.language),
+        language: stageState?.language ?? languageCode(this.runtimeProfile.agent.language),
         routeHint: 'auto',
         detectedIntent,
         currentStage: stageState?.currentStage,
@@ -1348,6 +1395,33 @@ export class RealtimeConversationOrchestrator {
       this.log.warn({ err: error, callId: this.call.id }, 'Knowledge retrieval failed; continuing without unverified context');
       return { route: 'none', found: false, content: null, source: null, error: error.code ?? 'KNOWLEDGE_UNAVAILABLE' };
     }
+  }
+
+  #workflowInstructionResponse(knowledge) {
+    if (knowledge?.route !== 'workflow' || knowledge?.workflow?.responseMode !== 'instruction') return null;
+    if (knowledge.workflow?.gate?.allowed === false) return String(knowledge.content ?? '').trim() || null;
+
+    // Workflow instruction text is operational metadata, never speech. Once
+    // the action gate is open, the next UI-configured required field is the
+    // only safe and useful caller-facing question to ask.
+    const state = this.liveCallMemory?.snapshot();
+    const nextField = (state?.fields ?? []).find((field) => (
+      field.required && (state.collectedData?.[field.key] === undefined
+        || state.collectedData?.[field.key] === null
+        || state.collectedData?.[field.key] === '')
+    ));
+    if (nextField?.question) return String(nextField.question).trim();
+
+    const configured = String(
+      this.runtimeProfile.agent.settings?.workflowInstructionFallbackMessage
+      ?? this.runtimeProfile.agent.settings?.noResponseMessage
+      ?? '',
+    ).trim();
+    if (configured) return configured;
+
+    return state?.language === 'ta'
+      ? 'எந்த option வேணும்னு சொல்லுங்க.'
+      : 'Please tell me which option you need.';
   }
 
   #preCallSource() {
@@ -2001,7 +2075,8 @@ export class RealtimeConversationOrchestrator {
     }
     turnLatency.knowledgeMs = Math.max(0, Date.now() - knowledgeStartedAt);
     turnLatency.route = knowledge.route ?? 'none';
-    const fastKnowledgeAnswer = hasFastKnowledgeAnswer(knowledge);
+    const workflowActionResponse = this.#workflowInstructionResponse(knowledge);
+    const fastKnowledgeAnswer = Boolean(workflowActionResponse) || hasFastKnowledgeAnswer(knowledge);
     const sourceTrace = new MessageSourceTrace(
       fastKnowledgeAnswer ? [] : this.#baseLlmSources(),
       knowledgeMessageSources(knowledge),
@@ -2024,7 +2099,7 @@ export class RealtimeConversationOrchestrator {
       }, 'Using approved exact Knowledge Base answer without an LLM request');
       response = {
         cancelled: false,
-        text: String(knowledge.content).trim(),
+        text: workflowActionResponse ?? String(knowledge.content).trim(),
         toolCalls: [],
         sources: [],
       };
