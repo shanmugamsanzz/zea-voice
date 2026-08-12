@@ -7,6 +7,11 @@ export const runtimeKnowledgeQuerySchema = z.object({
   language: z.string().trim().min(2).max(20).default('en'),
   routeHint: z.enum(['auto', 'workflow', 'conversation', 'catalog', 'faq', 'semantic']).default('auto'),
   intent: z.string().trim().min(1).max(160).optional(),
+  detectedIntent: z.object({
+    intent: z.enum(['overview', 'category_request', 'details', 'price', 'comparison', 'scenario', 'booking_request', 'booking_field_answer', 'side_question', 'confirmation', 'unclear']),
+    confidence: z.number().min(0).max(1),
+    signals: z.array(z.string().trim().min(1).max(80)).max(10).optional(),
+  }).optional(),
   flowKey: z.string().trim().min(1).max(160).optional(),
   nodeKey: z.string().trim().min(1).max(160).optional(),
   currentStage: z.string().trim().min(1).max(80).optional(),

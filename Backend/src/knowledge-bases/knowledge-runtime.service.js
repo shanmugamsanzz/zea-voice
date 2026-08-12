@@ -247,11 +247,48 @@ function workflowRecordResponse(record, {
   };
 }
 
+function scenarioTarget(profile, record) {
+  if (record.conditions?.scenarioRouting !== true) return null;
+  const config = record.action_config ?? {};
+  const itemKey = normalize(config.scenarioTargetItemKey);
+  const categoryKey = normalize(config.scenarioTargetCategoryKey);
+  const item = itemKey ? profile.catalog_items.find((entry) => normalize(entry.item_key) === itemKey) : null;
+  if (item) return { type: 'item', item };
+  const items = categoryKey ? profile.catalog_items.filter((entry) => normalize(entry.category_key) === categoryKey) : [];
+  if (!items.length) return null;
+  return {
+    type: 'category',
+    category: items[0].category ?? items[0].catalog_name,
+    categoryKey: items[0].category_key,
+    parentCategoryKey: items[0].parent_category_key ?? null,
+    items,
+  };
+}
+
+function withScenarioTarget(profile, record, response) {
+  const target = scenarioTarget(profile, record);
+  if (!target) return response;
+  if (target.type === 'item') return { ...response, catalogSelection: catalogResponse(target.item, {
+    method: 'workflow_target', confidence: 1, matchedText: target.item.name, matchedKind: 'scenario_target',
+  }) };
+  return { ...response, scenarioCategory: {
+    key: target.categoryKey, name: target.category, parentKey: target.parentCategoryKey,
+    items: target.items.map((item) => ({
+      id: item.id, key: item.item_key, name: item.name, category: item.category,
+      categoryKey: item.category_key, parentCategoryKey: item.parent_category_key,
+    })),
+  } };
+}
+
 function workflowRoute(profile, input, normalizedQuery, currentCatalogResolution = null) {
   const target = normalize(input.intent ?? normalizedQuery);
   const confidence = resolveKnowledgeConfidenceConfiguration(profile.agent_settings);
   const ranked = [];
   for (const record of profile.workflows) {
+    const detectedScenario = input.detectedIntent?.intent === 'scenario';
+    // Scenario Rules are activated only for an actual scenario/use-case turn.
+    // They remain entirely tenant-authored through Workflow Rules.
+    if (record.conditions?.scenarioRouting === true && !detectedScenario) continue;
     const phrases = Array.isArray(record.conditions?.triggerPhrases)
       ? record.conditions.triggerPhrases.map((phrase) => ({
         original: String(phrase).trim(), normalized: normalize(phrase),
@@ -330,13 +367,13 @@ function workflowRoute(profile, input, normalizedQuery, currentCatalogResolution
       reason: ambiguous ? 'ambiguous_match' : 'low_confidence',
     });
   }
-  return workflowRecordResponse(match.record, {
+  return withScenarioTarget(profile, match.record, workflowRecordResponse(match.record, {
     matchedPhrase: match.matchedPhrase,
     matchMode: match.matchMode,
     gate: match.gate,
     confidence: Math.round(match.score * 10000) / 10000,
     method: match.method,
-  });
+  }));
 }
 
 async function semanticWorkflowRoute(auth, profile, input, runtime, currentCatalogResolution = null) {
@@ -360,6 +397,7 @@ async function semanticWorkflowRoute(auth, profile, input, runtime, currentCatal
       || payload.record_type !== 'WORKFLOW_RULE') return null;
     const record = profile.workflows.find((item) => String(item.id).toLowerCase() === String(match.id).toLowerCase());
     if (!record) return null;
+    if (record.conditions?.scenarioRouting === true && input.detectedIntent?.intent !== 'scenario') return null;
     const gate = workflowStageGate(record, {
       currentStage: input.currentStage,
       selectedCatalogItemId: input.selectedCatalogItemId ?? currentCatalogResolution?.item?.id,
@@ -384,12 +422,12 @@ async function semanticWorkflowRoute(auth, profile, input, runtime, currentCatal
       reason: ambiguous ? 'ambiguous_semantic_match' : 'low_semantic_confidence',
     });
   }
-  return workflowRecordResponse(best.record, {
+  return withScenarioTarget(profile, best.record, workflowRecordResponse(best.record, {
     matchedPhrase: phrases[0] ?? best.payload.entity_name ?? best.record.name,
     matchMode: 'semantic', gate: best.gate,
     confidence: Math.round(best.score * 10000) / 10000,
     method: 'semantic',
-  });
+  }));
 }
 
 export function isExactWorkflowResponse(result) {

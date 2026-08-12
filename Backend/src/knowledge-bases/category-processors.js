@@ -236,6 +236,9 @@ function parseWorkflowRules(extraction) {
     else if (!matchMode) warnings.push(`Workflow rule "${name}" has an unsupported MATCH_MODE and was skipped`);
     else if (!responseMode) warnings.push(`Workflow rule "${name}" has an unsupported RESPONSE_MODE and was skipped`);
     else if (!response) warnings.push(`Workflow rule "${name}" has no RESPONSE and was skipped`);
+    else if (structuredRule.scenario && !structuredRule.targetCategoryKey && !structuredRule.targetItemKey) {
+      warnings.push(`Scenario workflow rule "${name}" needs TARGET_CATEGORY or TARGET_ITEM and was skipped`);
+    }
     else {
       const actionType = 'respond';
       const fromStages = splitPhrases(structuredRule.fromStage.join('|')).map(normalizeStageKey).filter(Boolean);
@@ -244,7 +247,10 @@ function parseWorkflowRules(extraction) {
       records.push({
         name: name.slice(0, 200),
         intent: normalizeIntent(name, `rule_${ruleNumber}`),
-        conditions: { triggerPhrases, matchMode, ...(fromStages.length ? { fromStages } : {}) },
+        conditions: {
+          triggerPhrases, matchMode, ...(fromStages.length ? { fromStages } : {}),
+          ...(structuredRule.scenario ? { scenarioRouting: true } : {}),
+        },
         actionType,
         actionConfig: {
           instruction: response, responseMode,
@@ -252,6 +258,8 @@ function parseWorkflowRules(extraction) {
           ...(actionKey ? { actionKey } : {}),
           ...(structuredRule.requiresCatalogItem ? { requiresCatalogItem: true } : {}),
           ...(structuredRule.blockedResponse ? { blockedResponse: structuredRule.blockedResponse } : {}),
+          ...(structuredRule.targetCategoryKey ? { scenarioTargetCategoryKey: normalizeStageKey(structuredRule.targetCategoryKey) } : {}),
+          ...(structuredRule.targetItemKey ? { scenarioTargetItemKey: normalizeStageKey(structuredRule.targetItemKey) } : {}),
         },
         responseTemplate: response,
         sourceText: structuredRule.sourceLines.join('\n'),
@@ -264,7 +272,7 @@ function parseWorkflowRules(extraction) {
   };
 
   for (const line of nonEmptyLines(extraction)) {
-    const structuredField = line.text.match(/^\s*(RULE|MATCH|MATCH_MODE|RESPONSE_MODE|RESPONSE|PRIORITY|FROM_STAGE|NEXT_STAGE|ACTION|REQUIRES_CATALOG_ITEM|BLOCKED_RESPONSE)\s*:\s*(.*)$/i);
+    const structuredField = line.text.match(/^\s*(RULE|MATCH|MATCH_MODE|RESPONSE_MODE|RESPONSE|PRIORITY|FROM_STAGE|NEXT_STAGE|ACTION|REQUIRES_CATALOG_ITEM|BLOCKED_RESPONSE|SCENARIO|TARGET_CATEGORY|TARGET_ITEM)\s*:\s*(.*)$/i);
     if (structuredField) {
       const field = structuredField[1].toUpperCase();
       const value = structuredField[2].trim();
@@ -273,7 +281,7 @@ function parseWorkflowRules(extraction) {
         structuredRule = {
           name: value, match: [], matchMode: '', responseMode: '', response: [], priority: null,
           fromStage: [], nextStage: '', action: '', requiresCatalogItem: false,
-          blockedResponse: '',
+          blockedResponse: '', scenario: false, targetCategoryKey: '', targetItemKey: '',
           sourceLines: [line.text], sourcePageStart: line.pageNumber, sourcePageEnd: line.pageNumber,
         };
       } else if (structuredRule) {
@@ -288,6 +296,9 @@ function parseWorkflowRules(extraction) {
         else if (field === 'ACTION') structuredRule.action = value;
         else if (field === 'REQUIRES_CATALOG_ITEM') structuredRule.requiresCatalogItem = truthy(value);
         else if (field === 'BLOCKED_RESPONSE') structuredRule.blockedResponse = value.slice(0, 2000);
+        else if (field === 'SCENARIO') structuredRule.scenario = truthy(value);
+        else if (field === 'TARGET_CATEGORY') structuredRule.targetCategoryKey = value;
+        else if (field === 'TARGET_ITEM') structuredRule.targetItemKey = value;
         else if (field === 'PRIORITY') {
           const priority = Number(value);
           if (Number.isInteger(priority) && priority >= 0) structuredRule.priority = priority;

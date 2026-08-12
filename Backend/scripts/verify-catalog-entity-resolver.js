@@ -14,6 +14,7 @@ process.env.B2_KEY_ID ??= 'test-key-id';
 process.env.B2_APPLICATION_KEY ??= 'test-application-key';
 
 const {
+  classifyCatalogEntityLocally,
   phoneticCatalogToken,
   resolveCatalogEntitiesLocally,
   resolveCatalogEntityLocally,
@@ -104,6 +105,22 @@ assert.deepEqual(
   [lungsItemId, liverItemId],
 );
 assert.equal(resolveCatalogEntityLocally(catalogItems, 'Singer package'), null);
+
+// No tenant alias is required for this common STT vowel swap. The matcher uses
+// the generic consonant phonetic signal across every published Catalog entity.
+const vowelSwapCatalog = [{
+  ...catalogItems[0], id: '99999999-9999-4999-8999-999999999999',
+  category: 'Organ Services', category_aliases: [], aliases: [],
+  category_description: 'Approved organ-focused services', parent_category_key: 'health-services',
+  relationships: { relatedCategory: 'Diagnostics' },
+}];
+const vowelSwap = classifyCatalogEntityLocally(vowelSwapCatalog, 'Argon packages');
+assert.equal(vowelSwap.status, 'match');
+assert.equal(vowelSwap.entityType, 'category');
+assert.equal(vowelSwap.category, 'Organ Services');
+const descriptive = classifyCatalogEntityLocally(vowelSwapCatalog, 'organ focused services');
+assert.equal(descriptive.entityType, 'category');
+assert.ok(['match', 'uncertain'].includes(descriptive.status));
 
 const point = buildSemanticPoint({
   tenant_id: tenantId,

@@ -42,6 +42,15 @@ export function phoneticCatalogToken(value) {
   return encoded.padEnd(4, '0');
 }
 
+// STT often changes a leading vowel (for example, "Argon" / "Organ") while
+// retaining the consonant sequence. This is language-agnostic and is used only
+// as a lower-priority matching signal alongside the tenant's own aliases.
+function consonantSkeleton(value) {
+  const token = normalizeCatalogEntityText(value).replace(/[^a-z]/gu, '');
+  if (token.length < 4) return '';
+  return token.replace(/[aeiouy]/gu, '').replace(/(.)\1+/gu, '$1');
+}
+
 function editDistance(left, right) {
   if (left === right) return 0;
   if (!left.length) return right.length;
@@ -67,6 +76,11 @@ function tokenSimilarity(left, right) {
   const leftPhonetic = phoneticCatalogToken(left);
   const rightPhonetic = phoneticCatalogToken(right);
   if (leftPhonetic && leftPhonetic === rightPhonetic) return { score: 0.9, method: 'phonetic' };
+  const leftSkeleton = consonantSkeleton(left);
+  const rightSkeleton = consonantSkeleton(right);
+  if (leftSkeleton.length >= 3 && leftSkeleton === rightSkeleton) {
+    return { score: 0.88, method: 'phonetic' };
+  }
   const longest = Math.max(left.length, right.length);
   if (longest < 4) return { score: 0, method: 'none' };
   const score = 1 - editDistance(left, right) / longest;
@@ -133,11 +147,27 @@ export function catalogLabelSimilarity(query, label) {
   return { score: average * (0.72 + coverage * 0.28), method, ...evidence };
 }
 
+function relationshipText(value) {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.filter((entry) => typeof entry === 'string').join(' ');
+  if (!value || typeof value !== 'object') return '';
+  return Object.values(value).flatMap((entry) => (
+    typeof entry === 'string' ? [entry] : (Array.isArray(entry) ? entry.filter((value) => typeof value === 'string') : [])
+  )).join(' ');
+}
+
 function itemLabels(item) {
   const aliases = Array.isArray(item.aliases) ? item.aliases : [];
-  return [item.name, item.item_key, ...aliases]
-    .filter((value) => typeof value === 'string' && value.trim())
-    .map((value) => ({ value: value.trim(), kind: 'name', weight: 1 }));
+  const description = item.description ?? item.itemDescription;
+  const relationships = relationshipText(item.relationships);
+  return [
+    { value: item.name, kind: 'name', weight: 1 },
+    { value: item.item_key, kind: 'item_key', weight: 0.98 },
+    ...aliases.map((value) => ({ value, kind: 'alias', weight: 0.98 })),
+    { value: description, kind: 'description', weight: 0.7 },
+    { value: relationships, kind: 'relationship', weight: 0.62 },
+  ].filter((label) => typeof label.value === 'string' && label.value.trim())
+    .map((label) => ({ ...label, value: label.value.trim() }));
 }
 
 function categoryCandidates(items, query) {
@@ -154,11 +184,17 @@ function categoryCandidates(items, query) {
       description: item.categoryDescription ?? item.category_description ?? null,
       selectionRules: item.categorySelectionRules ?? item.category_selection_rules ?? {},
       aliases: [],
+      parentLabels: [],
+      descriptions: [],
+      relationshipLabels: [],
       items: [],
     };
     existing.items.push(item);
     existing.aliases.push(...(Array.isArray(item.categoryAliases) ? item.categoryAliases : []));
     existing.aliases.push(...(Array.isArray(item.category_aliases) ? item.category_aliases : []));
+    existing.parentLabels.push(item.parentCategoryKey ?? item.parent_category_key ?? '');
+    existing.descriptions.push(item.categoryDescription ?? item.category_description ?? '');
+    existing.relationshipLabels.push(relationshipText(item.relationships));
     categories.set(identity, existing);
   }
   return [...categories.values()].map((candidate) => {
@@ -167,16 +203,31 @@ function categoryCandidates(items, query) {
       const similarity = catalogLabelSimilarity(query, candidate.categoryKey);
       if (similarity.score > best.score) best = { ...similarity, matchedText: candidate.categoryKey };
     }
+    for (const parentLabel of [...new Set(candidate.parentLabels.map((value) => String(value).trim()).filter(Boolean))]) {
+      const similarity = catalogLabelSimilarity(query, parentLabel);
+      const score = similarity.score * 0.75;
+      if (score > best.score) best = { ...similarity, score, matchedText: parentLabel, matchedKind: 'parent_category_key' };
+    }
     for (const alias of [...new Set(candidate.aliases.map((value) => String(value).trim()).filter(Boolean))]) {
       const similarity = catalogLabelSimilarity(query, alias);
       if (similarity.score > best.score) best = { ...similarity, matchedText: alias };
+    }
+    for (const description of [...new Set(candidate.descriptions.map((value) => String(value).trim()).filter(Boolean))]) {
+      const similarity = catalogLabelSimilarity(query, description);
+      const score = similarity.score * 0.7;
+      if (score > best.score) best = { ...similarity, score, matchedText: description, matchedKind: 'category_description' };
+    }
+    for (const relationship of [...new Set(candidate.relationshipLabels.map((value) => String(value).trim()).filter(Boolean))]) {
+      const similarity = catalogLabelSimilarity(query, relationship);
+      const score = similarity.score * 0.62;
+      if (score > best.score) best = { ...similarity, score, matchedText: relationship, matchedKind: 'category_relationship' };
     }
     return {
       ...candidate,
       ...best,
       matchedKind: best.matchedText === candidate.category
         ? 'category'
-        : best.matchedText === candidate.categoryKey ? 'category_key' : 'category_alias',
+        : best.matchedKind ?? (best.matchedText === candidate.categoryKey ? 'category_key' : 'category_alias'),
       entityType: 'category',
     };
   });

@@ -84,7 +84,7 @@ NEXT_STAGE: booking_details
 ACTION: appointment_booking
 REQUIRES_CATALOG_ITEM: true
 BLOCKED_RESPONSE: Appointment book பண்ணலாம். முதல்ல எந்த approved Package வேணும்னு சொல்லுங்க; அதுக்கப்புறம் booking details மட்டும் கேக்குறேன்.
-RESPONSE: Start or resume the configured appointment task. First verify that one exact approved Package from the Product Catalog is selected. If the Package is missing or unclear, ask only which approved Package the caller wants and do not collect personal information yet. After Package confirmation, preserve every value already present in collectedData, mention the approved eight-to-ten-hour fasting instruction once, ask only the first configured required missing field and never ask a completed field again.
+RESPONSE: Start or resume the configured appointment task. First verify that one exact approved Package from the Product Catalog is selected. If the Package is missing or unclear, ask only which approved Package the caller wants and do not collect personal information yet. After Package confirmation, preserve every value already present in collectedData. Give preparation instructions only when approved for the selected Catalog item. Ask only the first configured required missing field and never ask a completed field again.
 
 RULE: booking_confirmation
 MATCH: ஆமா confirm பண்ணுங்க | details சரிதான் | booking confirm பண்ணலாம் | yes confirm it | appointment confirm பண்ணுங்க
@@ -218,10 +218,10 @@ RESPONSE_MODE: exact
 PRIORITY: 80
 NEXT_STAGE: package_selection
 ACTION: present_package_overview
-RESPONSE: எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Onco Care Packages, Organ-Specific Packages, Kids Health Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?
+RESPONSE: Master Health Checkupல Silver, Gold, Platinum இருக்குங்க. இதில் எந்த Package பத்தி தெரிஞ்சிக்கணும்?
 
 RULE: organ_specific_options
-MATCH: organ package என்னென்ன | organ specific packages சொல்லுங்க | specific health package | kidney liver heart package options | organ package சொல்லுங்க | organ checkup என்ன இருக்கு | body organ packages | kidney liver cardiac packages | organ-specific details சொல்லுங்க | உறுப்பு checkup packages என்ன | ஆர்கன் ஸ்பெசிஃபிக் பேக்கேஜ் | ஆர்கன் specific package | Argon specific package | Argon specific packages | ஆர்வம் specific package | organ-specific package பத்தி சொல்லுங்க | organ specific explain பண்ணுங்க
+MATCH: organ package என்னென்ன | organ specific packages சொல்லுங்க | specific health package | kidney liver heart package options | organ package சொல்லுங்க | organ checkup என்ன இருக்கு | body organ packages | kidney liver cardiac packages | organ-specific details சொல்லுங்க | உறுப்பு checkup packages என்ன | organ-specific package பத்தி சொல்லுங்க | organ specific explain பண்ணுங்க
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 80
@@ -236,7 +236,7 @@ RESPONSE_MODE: exact
 PRIORITY: 80
 NEXT_STAGE: package_selection
 ACTION: present_category_options
-RESPONSE: Kids Health Packagesல Paediatric Health Screening, Developmental Screening, IQ Assessment, Behavioural Assessment, Developmental Disorder Screening, Neonatal Screening மற்றும் Newborn Hearing Screening இருக்குங்க. குழந்தையின் வயசு என்னங்க?
+RESPONSE: Kids Health Packagesல Paediatric Health Screening, Developmental Screening, IQ Assessment, Behavioural Assessment, Developmental Disorder Screening, Neonatal Screening மற்றும் Newborn Hearing Screening இருக்குங்க. இதில் எது பத்தி தெரிஞ்சிக்கணும்?
 
 RULE: newborn_options
 MATCH: newborn package என்ன | பிறந்த குழந்தைக்கு screening | neonatal options சொல்லுங்க | newborn screening options | newborn package சொல்லுங்க | newborn health checkup | born baby screening | புது குழந்தைக்கு என்ன test | neonatal screening package | newborn hearing package
@@ -320,13 +320,13 @@ ACTION: explain_catalog_item
 RESPONSE: சரிங்க, Cardiac Health Checkup உங்களுக்கு இரண்டாயிரத்து தொள்ளாயிரத்து ஐம்பது ரூபாய் வருங்க. இதுல heart-related blood Tests, ECG, ECHO, Treadmill Test, Physical Examination மற்றும் Cardiologist Consultation இருக்கு. Full Test list சொல்லட்டுமா?
 
 RULE: lungs_package
-MATCH: Lungs package பத்தி சொல்லுங்க | Lung package details | lungs checkup price | Lungs Health Checkup explain பண்ணுங்க | Lungs package | Lung package | Lunch package | Lunch packages | லங்ஸ் package | லங் package | லஞ்ச் package | நுரையீரல் package | Lungs பற்றி சொல்லுங்க | Lung பற்றி சொல்லுங்க | Lungsல problem | Lungs ல problem | Lungல problem | Lung ல problem | Lunchல problem | Lunch ல problem | lungs la problem | lung la problem | lunch la problem | lungs problem | respiratory package | breathing package | pulmonary function package | PFT package
+MATCH: Lungs package பத்தி சொல்லுங்க | Lung package details | lungs checkup price | Lungs Health Checkup explain பண்ணுங்க | Lungs package | Lung package | லங்ஸ் package | லங் package | நுரையீரல் package | Lungs பற்றி சொல்லுங்க | Lung பற்றி சொல்லுங்க | Lungsல problem | Lungs ல problem | Lungல problem | Lung ல problem | lungs la problem | lung la problem | lungs problem | respiratory package | breathing package | pulmonary function package | PFT package
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 70
 NEXT_STAGE: package_explanation
 ACTION: explain_catalog_item
-RESPONSE: சரிங்க, Lungs Health Checkup Organ-Specific Packagesல வருங்க. இதன் price தொள்ளாயிரத்து தொண்ணூற்று ஒன்பது ரூபாய். CBC, RBS, CRP, ESR, Urea, Creatinine, Chest X-ray, ECG மற்றும் PFT இருக்கு; Pulmonologist Consultationம் availableங்க. Testக்கு எட்டு மணி நேரம் fastingல இருந்து, காலை எட்டு மணி முதல் பதினொன்று மணிக்குள்ள வரணுங்க. Appointment பார்க்கலாமா?
+RESPONSE: சரிங்க, Lungs Health Checkup Organ-Specific Packagesல வருங்க. இதன் price தொள்ளாயிரத்து தொண்ணூற்று ஒன்பது ரூபாய். Approved test list மற்றும் preparation details சொல்லட்டுமா?
 
 RULE: ortho_package
 MATCH: Ortho package பத்தி சொல்லுங்க | Bone package details | joint package price | Ortho Health Checkup explain பண்ணுங்க
@@ -533,11 +533,11 @@ PRIORITY: 300
 RESPONSE: Heart-related screeningக்கு Cardiac Health Checkup இருக்கு. Exact காரணம் Doctorதாங்க confirm பண்ண முடியும். Package details சொல்லட்டுமா?
 
 RULE: lungs_concern_non_emergency
-MATCH: lungs check பண்ணணும் | lung problem இருக்கு | நுரையீரல் checkup | breathing checkup package | lungsல problem | lungs ல problem | lungல problem | lung ல problem | lunchல problem | lunch ல problem | lungs la problem | lung la problem | lunch la problem | lungs problem | respiratory problem | breathing problem | moochu problem | pulmonary checkup | PFT check பண்ணணும்
+MATCH: lungs check பண்ணணும் | lung problem இருக்கு | நுரையீரல் checkup | breathing checkup package | lungsல problem | lungs ல problem | lungல problem | lung ல problem | lungs la problem | lung la problem | lungs problem | respiratory problem | breathing problem | moochu problem | pulmonary checkup | PFT check பண்ணணும்
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 300
-RESPONSE: Lung-related screeningக்கு Organ-Specific categoryல Lungs Health Checkup இருக்குங்க. இதன் price தொள்ளாயிரத்து தொண்ணூற்று ஒன்பது ரூபாய். Exact காரணம் Doctorதான் confirm பண்ண முடியும். Package details சொல்லட்டுமா?
+RESPONSE: Lung-related screeningக்கு Organ-Specific categoryல Lungs Health Checkup இருக்குங்க. Exact காரணம் Doctorதான் confirm பண்ண முடியும். Package details சொல்லட்டுமா?
 
 RULE: headache_or_dizziness
 MATCH: தலைவலி இருக்கு | தலை சுத்துது | headache இருக்கு | dizziness இருக்கு | head problem
@@ -593,7 +593,7 @@ MATCH: fasting இருக்கணுமா | எத்தனை மணி ந
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 320
-RESPONSE: Health Checkupக்கு வரும்போது எட்டு முதல் பத்து மணி நேரம் fastingல இருக்கணுங்க. தண்ணீர் மட்டும் குடிக்கலாம்; Tea, Coffee மற்றும் Breakfast avoid பண்ணுங்க.
+RESPONSE: எந்த selected Packageக்கு fasting details வேணும்னு சொல்லுங்க. அந்த approved Catalog itemக்கான preparation instruction மட்டும் சொல்றேன்.
 
 RULE: medicine_during_fasting
 MATCH: fastingல medicine சாப்பிடலாமா | fasting time tablet எடுக்கலாமா | can I take medicine while fasting
@@ -607,14 +607,14 @@ MATCH: checkup timing என்ன | test time என்ன | எத்தனை
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 320
-RESPONSE: Standard Health Checkup Testsக்கு காலை எட்டு மணி முதல் பதினொன்று மணி வரை approved timing. Final availability Booking operationல confirm ஆகணும்.
+RESPONSE: Test timing selected Package மற்றும் Booking availabilityக்கு ஏற்ப மாறும். எந்த Package, எந்த Date வேணும்னு சொல்லுங்க; approved availability பார்க்கலாம்.
 
 RULE: invalid_test_time
 MATCH: evening appointment வேணும் | மாலை checkup பண்ணலாமா | night appointment வேணும் | afternoon test பண்ணலாமா
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 320
-RESPONSE: இந்த Checkupக்கு காலை எட்டு மணில இருந்து பதினொன்று மணி வரைக்கும் தாங்க. அந்த Timeக்குள்ள எந்த Time வசதியா இருக்கும்?
+RESPONSE: அந்த Packageக்கு afternoon availability இருக்கான்னு Booking availabilityல confirm பண்ணணும். எந்த Package, எந்த Date வேணும்னு சொல்லுங்க.
 
 RULE: location_request
 MATCH: hospital location எங்க | address சொல்லுங்க | எப்படி வரணும் | where is the hospital | location share பண்ணுங்க

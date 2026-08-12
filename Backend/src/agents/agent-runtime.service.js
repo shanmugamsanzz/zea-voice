@@ -155,6 +155,7 @@ export function buildAgentSystemPrompt(agent, { usageDirection, context, knowled
     '- When asking a configured information field, use its configured question exactly so the runtime can track the pending question.',
     '- If pendingQuestion is present, continue from that point after a call-check phrase or temporary interruption; never introduce yourself again.',
     '- Resolve short follow-ups against activeCategory, selectedCatalogItem and candidateItems before asking the caller to repeat information.',
+    '- Treat runtime_context.detectedIntent as a routing hint, not a fact. Use it to understand natural Tamil, Tanglish and English wording, then ground the answer in verified Knowledge.',
     '- Do not repeat a question listed in answeredQuestions unless the caller explicitly corrects or changes that information.',
     '- For a continuation opening, mention only verified prior-memory facts and keep the opening to one short spoken sentence.',
     '- Never claim a callback was scheduled unless runtime_context says currentCallbackRequest.scheduled is true.',

@@ -42,6 +42,7 @@ import {
   buildGroundingEnvelope,
   validateGroundedLlmResponse,
 } from './interaction/grounded-llm-response.js';
+import { detectConversationIntent } from './interaction/intent-detector.js';
 import { LiveMemoryMaintenanceQueue } from './interaction/live-memory-maintenance.js';
 import { resolveCallbackConfiguration } from './interaction/callback-config.js';
 import {
@@ -1311,6 +1312,10 @@ export class RealtimeConversationOrchestrator {
     try {
       const routeKnowledge = this.dependencies.routeKnowledge ?? routeKnowledgeQuery;
       const stageState = this.liveCallMemory?.snapshot();
+      const detectedIntent = detectConversationIntent(query, {
+        pendingQuestion: stageState?.pendingQuestionText ?? stageState?.pendingQuestion,
+        pendingQuestionKind: stageState?.pendingQuestionKind,
+      });
       const result = await routeKnowledge({
         tenantId: this.runtimeProfile.agent.tenantId,
         workspaceId: this.runtimeProfile.agent.workspaceId,
@@ -1322,6 +1327,7 @@ export class RealtimeConversationOrchestrator {
         usageDirection: this.call.direction,
         language: languageCode(this.runtimeProfile.agent.language),
         routeHint: 'auto',
+        detectedIntent,
         currentStage: stageState?.currentStage,
         selectedCatalogItemId: stageState?.selectedCatalogItem?.id,
         currentTopic: stageState?.currentTopic ?? undefined,
@@ -1335,8 +1341,9 @@ export class RealtimeConversationOrchestrator {
       });
       this.runtimeMetrics.knowledge.push({
         route: result.route, found: result.found === true, durationMs: Number(result.durationMs ?? 0),
+        intent: detectedIntent.intent, intentConfidence: detectedIntent.confidence,
       });
-      return result;
+      return { ...result, intentDetection: detectedIntent };
     } catch (error) {
       this.log.warn({ err: error, callId: this.call.id }, 'Knowledge retrieval failed; continuing without unverified context');
       return { route: 'none', found: false, content: null, source: null, error: error.code ?? 'KNOWLEDGE_UNAVAILABLE' };
@@ -2023,7 +2030,9 @@ export class RealtimeConversationOrchestrator {
       };
     } else try {
       const llmStartedAt = Date.now();
-      response = await this.#llm(query, history, knowledge, {}, streaming);
+      response = await this.#llm(query, history, knowledge, {
+        detectedIntent: knowledge.intentDetection,
+      }, streaming);
       turnLatency.llmMs += Math.max(0, Date.now() - llmStartedAt);
     } catch (error) {
       this.#recordProviderFailure('llm', error, 'llm.response');

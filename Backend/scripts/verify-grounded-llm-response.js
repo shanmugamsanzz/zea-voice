@@ -29,12 +29,14 @@ assert.deepEqual(groundedResponseContract(envelope).allowedEntityKeys, ['premium
 
 const valid = validateGroundedLlmResponse(JSON.stringify({
   intent: 'catalog_item_details',
+  flowAction: 'side_question',
   selectedEntityKeys: ['premium-plan'],
   evidenceSourceIds: ['source_1'],
   spokenAnswer: 'Premium Plan is USD 100 and includes priority support.',
 }), envelope);
 assert.equal(valid.valid, true);
 assert.equal(valid.intent, 'catalog_item_details');
+assert.equal(valid.flowAction, 'side_question');
 assert.equal(valid.selectedEntities[0].key, 'premium-plan');
 
 const unpublishedEntity = validateGroundedLlmResponse(JSON.stringify({
@@ -81,6 +83,7 @@ const systemPrompt = buildAgentSystemPrompt(agent, {
       selectedCatalogItem: { key: 'premium-plan', name: 'Premium Plan' },
       pendingQuestion: 'Do you want the price?',
     },
+    detectedIntent: { intent: 'price', confidence: 0.93, signals: ['price'] },
   },
   maxPromptChars: 6_000,
 });
@@ -91,6 +94,7 @@ assert.match(systemPrompt, /premium-plan/u);
 assert.match(systemPrompt, /priority support/u);
 assert.match(systemPrompt, /<\/knowledge_context>/u);
 assert.match(systemPrompt, /currentStage/u);
+assert.match(systemPrompt, /detectedIntent/u);
 
 let providerInput;
 let providerCalls = 0;
@@ -114,7 +118,10 @@ const streamSession = await createSelectedLlmStream({
   callId: 'call-a', query: 'Tell me the price',
   history: [{ role: 'user', content: 'We were discussing Premium Plan.' }],
   knowledge, usageDirection: 'inbound',
-  context: { groundedResponseMode: true, liveCallMemory: { currentTopic: 'Premium Plan' } },
+  context: {
+    groundedResponseMode: true, liveCallMemory: { currentTopic: 'Premium Plan' },
+    detectedIntent: { intent: 'price', confidence: 0.93, signals: ['price'] },
+  },
 }, { adapter, skipDefaultRegistration: true });
 for await (const _event of streamSession.events) { /* consume one provider response */ }
 await streamSession.close();

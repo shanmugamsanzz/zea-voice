@@ -396,6 +396,14 @@ export function openLiveCallMemory(identity, settings = {}, now = Date.now()) {
           }) ?? state.activeCategory;
         }
       }
+      if (knowledge?.scenarioCategory?.name) {
+        state.activeCategory = frameCategory(knowledge.scenarioCategory) ?? state.activeCategory;
+        state.candidateItems = uniqueFrameItems(knowledge.scenarioCategory.items ?? []);
+        state.currentTopic = knowledge.scenarioCategory.name;
+        if (pendingBeforeKnowledge && pendingKindBeforeKnowledge !== 'field') {
+          schedulePendingQuestionResume(state);
+        }
+      }
       if (knowledge?.route === 'clarification' && knowledge.clarification?.kind === 'catalog') {
         state.flowRecovery.clarifications += 1;
         state.candidateItems = uniqueFrameItems(knowledge.clarification.candidates);
