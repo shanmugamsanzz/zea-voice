@@ -51,6 +51,11 @@ const blockedWorkflow = {
 };
 memory.applyKnowledge(blockedWorkflow);
 assert.equal(memory.canRunAction('appointment_booking', { requiresCatalogItem: true }), false);
+
+// A generic booking action cannot be opened with only a category. This is the
+// same guard used for every tenant's configured booking/completion action.
+memory.activateAction('appointment_booking', { requiresCatalogItem: true });
+assert.equal(memory.canRunAction('appointment_booking', { requiresCatalogItem: true }), false);
 assert.equal(memory.snapshot().currentStage, 'package_details');
 
 const catalogSelection = {
@@ -66,9 +71,24 @@ memory.applyKnowledge({
   action: { config: parsed.records[0].actionConfig },
 });
 assert.equal(memory.canRunAction('appointment_booking', { requiresCatalogItem: true }), true);
+
+// A category request changes the browsing topic only. It must clear the old
+// selected child so a subsequent booking cannot accidentally use Service A.
+memory.applyKnowledge({
+  route: 'catalog', found: true, content: 'Services: Service A, Service B',
+  source: { recordId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' },
+  category: {
+    key: 'services', name: 'Services', items: [
+      { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', key: 'service-a', name: 'Service A', categoryKey: 'services' },
+      { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', key: 'service-b', name: 'Service B', categoryKey: 'services' },
+    ],
+  },
+});
+assert.equal(memory.snapshot().selectedCatalogItem, null);
+assert.equal(memory.canRunAction('appointment_booking', { requiresCatalogItem: true }), false);
 assert.equal(memory.snapshot().currentStage, 'booking_details');
-assert.deepEqual(memory.snapshot().lockedFields, []);
-assert.deepEqual(memory.captureUserUtterance('My name is Shanmugam').updates, { customer_name: 'Shanmugam' });
+assert.deepEqual(memory.snapshot().lockedFields, ['customer_name', 'preferred_date']);
+assert.deepEqual(memory.captureUserUtterance('My name is Shanmugam').updates, {});
 
 const completion = resolveTaskCompletionConfiguration({
   taskCompletionEnabled: true,

@@ -39,6 +39,7 @@ session.observeAssistantResponse('Which date?');
 assert.equal(session.snapshot().pendingQuestion, 'preferred_date');
 const captured = session.captureUserUtterance('tomorrow');
 assert.deepEqual(captured.updates, { preferred_date: 'tomorrow' });
+
 assert.equal(captured.state.pendingQuestion, null);
 assert.deepEqual(captured.state.missingFields, []);
 assert.equal(activeLiveCallMemoryCount(), 1);
@@ -46,10 +47,14 @@ assert.equal(activeLiveCallMemoryCount(), 1);
 const isolated = openLiveCallMemory({ ...identity, tenantId: 'tenant-b', callId: 'call-b' }, {
   conversationContextMode: 'full_current_call', conversationMemoryFields: [],
 });
+const namedDateSession = openLiveCallMemory({ ...identity, callId: 'call-date' }, settings, 1);
+namedDateSession.observeAssistantResponse('Which date?');
+const namedMonthDate = namedDateSession.captureUserUtterance('13th August');
+assert.deepEqual(namedMonthDate.updates, { preferred_date: '13th August' });
 isolated.append({ role: 'user', content: 'Company B', at: 8 });
 assert.equal(isolated.snapshot().messages.length, 1);
 assert.equal(session.snapshot().messages.some((entry) => entry.content === 'Company B'), false);
-assert.equal(activeLiveCallMemoryCount(), 2);
+assert.equal(activeLiveCallMemoryCount(), 3);
 
 const combined = openLiveCallMemory({ ...identity, callId: 'call-combined' }, {
   conversationContextMode: 'last_n_turns',
@@ -62,7 +67,7 @@ const combined = openLiveCallMemory({ ...identity, callId: 'call-combined' }, {
 const combinedCapture = combined.captureUserUtterance('My name is Shanmugam, age is 21');
 assert.deepEqual(combinedCapture.updates, { customer_name: 'Shanmugam', customer_age: '21' });
 assert.deepEqual(combinedCapture.state.missingFields, []);
-assert.equal(activeLiveCallMemoryCount(), 3);
+assert.equal(activeLiveCallMemoryCount(), 4);
 
 const oversizedContext = compactLiveCallMemoryContext({
   snapshot: {
@@ -106,6 +111,7 @@ assert.ok(p95Ms < 50, `Live-memory hot-path p95 ${p95Ms}ms exceeded 50ms`);
 
 session.close();
 isolated.close();
+namedDateSession.close();
 combined.close();
 assert.equal(activeLiveCallMemoryCount(), 0);
 console.log(`Live-call memory configuration, async maintenance, prompt limit and latency verified (p95 ${p95Ms.toFixed(2)}ms).`);

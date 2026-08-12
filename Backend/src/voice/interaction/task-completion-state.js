@@ -2,6 +2,9 @@ import { resolveTaskCompletionConfiguration } from './completion-config.js';
 
 const templatePattern = /\{\{\s*([a-z][a-z0-9_]{0,63})\s*\}\}/giu;
 const ignoredAnswerPattern = /^(?:yes|yeah|yep|no|nope|ok|okay|hmm|hm|ஆமா|ஆம்|இல்லை|இல்ல|சரி|ம்)$/iu;
+const monthNames = '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|ஜனவரி|பிப்ரவரி|மார்ச்|ஏப்ரல்|மே|ஜூன்|ஜூலை|ஆகஸ்ட்|செப்டம்பர்|அக்டோபர்|நவம்பர்|டிசம்பர்)';
+const dateValuePattern = new RegExp(`\\b(?:today|tomorrow|day after tomorrow)\\b|இன்று|நாளை|நாளைக்கு|மறுநாள்|\\d{1,2}[/-]\\d{1,2}(?:[/-]\\d{2,4})?|\\d{1,2}(?:st|nd|rd|th)?\\s+${monthNames}(?:\\s*,?\\s*\\d{2,4})?|${monthNames}\\s+\\d{1,2}(?:st|nd|rd|th)?(?:\\s*,?\\s*\\d{2,4})?`, 'iu');
+const timeValuePattern = /\b(?:morning|afternoon|evening|night)\s*\d{1,2}(?::\d{2})?\b|\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.|o\s*'?clock|in the morning|in the evening)\b|காலை\s*\d{1,2}|மாலை\s*\d{1,2}|இரவு\s*\d{1,2}|\d{1,2}\s*மணிக்கு?|\b(?:kalai|maalai|malai|iravu)\s*\d{1,2}(?:\s*mani)?\b|\d{1,2}\s*mani\b/iu;
 
 function compact(value, maximum = 160) {
   const text = String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
@@ -67,13 +70,15 @@ function detectValue(field, transcript, history) {
   if (type === 'date') {
     const explicit = labeledValue(text, ['date', 'தேதி']);
     if (explicit) return explicit;
-    if (/\b(today|tomorrow|day after tomorrow)\b|இன்று|நாளை|நாளைக்கு|மறுநாள்|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{1,2}(?:st|nd|rd|th)?\s+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s*,?\s*\d{2,4})?|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?(?:\s*,?\s*\d{2,4})?/iu.test(text)) return text;
+    const detectedDate = text.match(dateValuePattern)?.[0];
+    if (detectedDate) return detectedDate;
     return '';
   }
   if (type === 'time') {
     const explicit = labeledValue(text, ['time', 'clock', 'மணி', 'நேரம்']);
     if (explicit) return explicit;
-    if (questionMentions(asked, 'time') && (/\d{1,2}(?::\d{2})?\s*(?:am|pm|o'?clock)?/iu.test(text) || /காலை|மாலை|இரவு|மணி/u.test(text))) return text;
+    const detectedTime = text.match(timeValuePattern)?.[0];
+    if (detectedTime) return detectedTime;
     return '';
   }
   if (type === 'name') {

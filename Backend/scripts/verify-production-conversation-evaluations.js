@@ -6,6 +6,7 @@ import {
   buildGroundingEnvelope,
   validateGroundedLlmResponse,
 } from '../src/voice/interaction/grounded-llm-response.js';
+import { isInternalRuntimeText } from '../src/voice/realtime-conversation-orchestrator.js';
 
 function item(id, key, name, category, aliases = []) {
   return {
@@ -92,6 +93,7 @@ memory.applyGroundedDecision({ intent: 'location_question', flowAction: 'side_qu
 const resumed = memory.prepareAssistantResponse('நாங்க city centreல இருக்கோம்.');
 assert.match(resumed, /Which slot works\?/u);
 assert.equal(memory.snapshot().pendingQuestion, 'preferred_slot');
+assert.equal(memory.snapshot().currentStage, 'collect_details');
 
 memory.captureUserUtterance('Tomorrow morning');
 assert.equal(memory.snapshot().collectedData.preferred_slot, 'Tomorrow morning');
@@ -130,6 +132,10 @@ const groundedSideQuestion = validateGroundedLlmResponse(JSON.stringify({
 }), envelope);
 assert.equal(groundedSideQuestion.valid, true);
 assert.equal(groundedSideQuestion.flowAction, 'side_question');
+
+assert.equal(isInternalRuntimeText('Start or resume the configured appointment task.'), true);
+assert.equal(isInternalRuntimeText('RESPONSE_MODE: instruction'), true);
+assert.equal(isInternalRuntimeText('Our office is downtown.'), false);
 
 const isolated = openLiveCallMemory({
   tenantId: 'tenant-production-b', workspaceId: 'workspace-production-b',

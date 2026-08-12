@@ -191,7 +191,7 @@ export function openLiveCallMemory(identity, settings = {}, now = Date.now()) {
     lastAnsweredQuestion: null, runningSummary: '', lastIntent: null, lastQuestionType: null, summaryCursor: 0,
     currentStage: stageConfiguration.initialStage, resumeStage: null,
     activeCategory: null, selectedCatalogItem: null, candidateItems: [],
-    activeActions: new Set(), stageTransitions: [],
+    activeActions: new Set(), actionRequirements: new Map(), stageTransitions: [],
     flowRecovery: { sideQuestions: 0, resumedQuestions: 0, repeatedQuestionsSuppressed: 0, clarifications: 0 },
     openedAt: now, updatedAt: now,
   };
@@ -386,6 +386,13 @@ export function openLiveCallMemory(identity, settings = {}, now = Date.now()) {
           resolvePendingQuestion(state);
         } else if (pendingBeforeKnowledge) schedulePendingQuestionResume(state);
       } else if (selection?.category?.name) {
+        // A category is a browse context, never a bookable item. Selecting a
+        // category must not silently retain a child selected in an earlier
+        // topic; otherwise a caller can accidentally book that old child.
+        state.selectedCatalogItem = null;
+        for (const [action, requiresCatalogItem] of state.actionRequirements) {
+          if (requiresCatalogItem) state.activeActions.delete(action);
+        }
         state.activeCategory = frameCategory(selection.category);
         state.candidateItems = uniqueFrameItems((selection.category.items ?? []).map((item) => ({
           ...item,
@@ -439,7 +446,10 @@ export function openLiveCallMemory(identity, settings = {}, now = Date.now()) {
           selectedCatalogItemId: state.selectedCatalogItem?.id,
         });
         if (knowledge.workflow?.gate?.allowed === false || !gate.allowed) return publicState(state);
-        if (gate.actionKey) state.activeActions.add(gate.actionKey);
+        if (gate.actionKey) {
+          state.activeActions.add(gate.actionKey);
+          state.actionRequirements.set(gate.actionKey, knowledge.action?.config?.requiresCatalogItem === true);
+        }
         if (gate.nextStage && gate.nextStage !== state.currentStage) {
           state.stageTransitions.push({
             from: state.currentStage,
@@ -478,6 +488,10 @@ export function openLiveCallMemory(identity, settings = {}, now = Date.now()) {
         state.flowRecovery.resumedQuestions += 1;
       }
       state.resumeQuestionAfterAnswer = null;
+      if (state.resumeStage) {
+        state.currentStage = state.resumeStage;
+        state.resumeStage = null;
+      }
       state.updatedAt = Date.now();
       return filtered.join(' ').trim();
     },
@@ -485,6 +499,21 @@ export function openLiveCallMemory(identity, settings = {}, now = Date.now()) {
       const action = String(actionKey ?? '').trim().toLowerCase();
       return Boolean(action && state.activeActions.has(action)
         && (!requiresCatalogItem || state.selectedCatalogItem?.id));
+    },
+    activateAction(actionKey, { requiresCatalogItem = false, nextStage } = {}) {
+      const action = String(actionKey ?? '').trim().toLowerCase();
+      if (!action || (requiresCatalogItem && !state.selectedCatalogItem?.id)) return publicState(state);
+      state.activeActions.add(action);
+      state.actionRequirements.set(action, requiresCatalogItem === true);
+      const targetStage = frameText(nextStage, 80).toLocaleLowerCase();
+      if (targetStage && targetStage !== state.currentStage) {
+        state.stageTransitions.push({
+          from: state.currentStage, to: targetStage, actionKey: action, at: Date.now(),
+        });
+        state.currentStage = targetStage;
+      }
+      state.updatedAt = Date.now();
+      return publicState(state);
     },
     snapshot: () => publicState(state),
     promptMessages: () => retainRecentTurns(state.messages, configuration.recentTurns).map((message) => ({ ...message })),

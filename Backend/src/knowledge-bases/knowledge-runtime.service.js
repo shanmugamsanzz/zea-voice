@@ -949,7 +949,11 @@ export async function retrieveTenantEvidence(auth, input, dependencies = default
   ].map(normalize).filter(Boolean));
   for (const workflow of profile.workflows) {
     if (!understandingKeys.has(normalize(workflow.intent)) && !understandingKeys.has(normalize(workflow.name))) continue;
-    const content = String(workflow.response_template ?? workflow.action_config?.instruction ?? '').trim();
+    const responseMode = String(workflow.action_config?.responseMode ?? 'instruction').trim().toLowerCase();
+    // Instruction-mode Workflow text is runtime metadata, never LLM evidence
+    // and never caller-facing speech.
+    if (responseMode === 'instruction') continue;
+    const content = String(workflow.response_template ?? '').trim();
     if (!content) continue;
     sources.push({
       id: `workflow:${workflow.id}`, content, recordType: 'WORKFLOW_RULE', recordId: workflow.id,
@@ -985,6 +989,10 @@ export async function retrieveTenantEvidence(auth, input, dependencies = default
         || allowed.get(String(payload.knowledge_base_id).toLowerCase()) !== payload.publication_revision
         || ![input.usageDirection.toUpperCase(), 'BOTH'].includes(payload.agent_usage)
         || !['CATALOG_ITEM', 'WORKFLOW_RULE', 'CONVERSATION_NODE', 'FAQ', 'KNOWLEDGE_CHUNK'].includes(recordType)) continue;
+      // Semantic Workflow points can contain instruction metadata. Exact
+      // Workflow routing already evaluates these safely, so do not expose raw
+      // vector Workflow text as evidence for caller speech.
+      if (recordType === 'WORKFLOW_RULE') continue;
       const content = String(payload.answer ?? payload.content ?? '').trim();
       if (!content) continue;
       const identity = `${recordType}:${match.id}`;

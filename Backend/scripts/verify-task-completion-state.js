@@ -33,4 +33,31 @@ result = captureTaskCompletionInput(result.state, 'tomorrow 10 o clock', [
 assert.equal(result.complete, true);
 assert.equal(renderTaskCompletionConfirmation(result.state), 'Shanmugam - Silver confirmed.');
 
+const multilingual = createTaskCompletionState({
+  taskCompletionEnabled: true,
+  taskCompletionIntent: 'reservation',
+  taskCompletionRequiredFields: ['customer_name', 'customer_age', 'appointment_date', 'appointment_time'],
+  taskCompletionConfirmationMessage: 'Confirmed.',
+});
+const multiResult = captureTaskCompletionInput(multilingual,
+  'name Mitra, age 30, 13th August, kalai 10 mani', [
+    { role: 'assistant', content: 'Please share your booking details.' },
+  ]);
+assert.equal(multiResult.state.values.customer_name, 'Mitra');
+assert.equal(multiResult.state.values.customer_age, '30');
+assert.equal(multiResult.state.values.appointment_date, '13th August');
+assert.equal(multiResult.state.values.appointment_time, 'kalai 10 mani');
+assert.equal(multiResult.complete, true);
+
+const tamilDateTime = captureTaskCompletionInput(createTaskCompletionState({
+  taskCompletionEnabled: true,
+  taskCompletionIntent: 'reservation',
+  taskCompletionRequiredFields: ['appointment_date', 'appointment_time'],
+  taskCompletionConfirmationMessage: 'Confirmed.',
+}), 'ஆகஸ்ட் 13 காலை 10 மணி', [
+  { role: 'assistant', content: 'தேதி மற்றும் நேரம் சொல்லுங்க.' },
+]);
+assert.equal(tamilDateTime.state.values.appointment_date, 'ஆகஸ்ட் 13');
+assert.equal(tamilDateTime.state.values.appointment_time, 'காலை 10');
+
 console.log(JSON.stringify({ success: true, task: 'Task completion collection and confirmation rendering' }));

@@ -95,6 +95,25 @@ function fallbackRecovery(profile) {
       : 'Sorry, I had a temporary problem. Could you please say that again?');
 }
 
+export function isInternalRuntimeText(value) {
+  const text = String(value ?? '').normalize('NFKC').toLocaleLowerCase().replace(/\s+/gu, ' ').trim();
+  if (!text) return true;
+  return /(?:runtime_context|grounded_response_contract|response_mode|action_config|selectedentitykeys|evidencesourceids|flowaction|catalog_item_required)/iu.test(text)
+    || /\bstart or resume the configured\b/iu.test(text)
+    || /\buse (?:only )?the configured\b/iu.test(text)
+    || /^\s*(?:instruction|action|workflow|response)\s*:/iu.test(text);
+}
+
+function callerFacingFallback(profile) {
+  const configured = String(profile.agent.settings?.noResponseMessage ?? '').trim();
+  return configured && !isInternalRuntimeText(configured) ? configured : fallbackRecovery(profile);
+}
+
+function callerFacingText(value, profile) {
+  const result = String(value ?? '').trim();
+  return !isInternalRuntimeText(result) ? result : callerFacingFallback(profile);
+}
+
 const spokenWordPattern = /[\p{L}\p{N}][\p{L}\p{M}\p{N}'’_-]*/gu;
 const pauseFillerWords = new Set([
   'hello', 'ok', 'okay', 'sure', 'hmm', 'please',
@@ -1081,19 +1100,8 @@ export class RealtimeConversationOrchestrator {
       return;
     }
     const action = await this.controller.receiveFinalTranscript(validation.text);
-    const memoryCaptureStartedAt = performance.now();
-    const liveCapture = this.liveCallMemory?.captureUserUtterance(validation.text, {
-      acknowledgementPhrases: this.interruptionConfiguration?.acknowledgementPhrases,
-    });
-    this.#recordLiveMemoryTiming('capture', memoryCaptureStartedAt);
     this.#scheduleLiveSummary();
     this.#scheduleLiveMemoryCheckpoint('caller_turn');
-    if (Object.keys(liveCapture?.updates ?? {}).length) {
-      this.log.info({
-        stage: 'live_memory.fields_captured', callId: this.call.id,
-        fields: Object.keys(liveCapture.updates),
-      }, 'Configured live-call information captured without an additional LLM request');
-    }
     this.customerUtterance.reset();
     const callbackRequest = this.callbackConfiguration.enabled && this.call.direction === 'outbound'
       ? resolveCustomerCallbackRequest(validation.text, this.callbackConfiguration)
@@ -1445,6 +1453,88 @@ export class RealtimeConversationOrchestrator {
     }
   }
 
+  async #captureCompletionFieldAfterUnderstanding(query, history, understanding) {
+    // Field collection is intentionally after the structured turn decision.
+    // A caller asking a price, comparison, symptom, or topic-change question
+    // while booking is pending must never have that sentence stored as a
+    // booking value.
+    if (understanding?.questionType !== 'booking_field_answer') return false;
+    const completionConfiguration = this.taskCompletionState.configuration;
+    const stateBeforeCapture = this.liveCallMemory?.snapshot();
+    const actionAllowed = this.liveCallMemory?.canRunAction?.(
+      completionConfiguration.intent,
+      { requiresCatalogItem: completionConfiguration.requiresCatalogItem === true },
+    ) === true;
+    if (!actionAllowed) return false;
+    const captureStartedAt = performance.now();
+    const captured = this.liveCallMemory?.captureUserUtterance(query, {
+      acknowledgementPhrases: this.interruptionConfiguration?.acknowledgementPhrases,
+    });
+    this.#recordLiveMemoryTiming('capture_after_understanding', captureStartedAt);
+    const state = captured?.state ?? this.liveCallMemory?.snapshot() ?? stateBeforeCapture;
+    if (completionConfiguration.catalogField && state?.selectedCatalogItem?.name) {
+      this.taskCompletionState = mergeTaskCompletionData(this.taskCompletionState, {
+        [completionConfiguration.catalogField]: state.selectedCatalogItem.name,
+      });
+    }
+    const taskCompletion = captureTaskCompletionInput(this.taskCompletionState, query, history);
+    this.taskCompletionState = taskCompletion.state;
+    this.liveCallMemory?.mergeCollectedData(publicTaskCompletionState(this.taskCompletionState).collectedData);
+    this.runtimeMetrics.taskCompletion = {
+      ...publicTaskCompletionState(this.taskCompletionState),
+      gateOpen: true,
+      currentStage: state?.currentStage ?? null,
+    };
+    if (taskCompletion.captured.length || Object.keys(captured?.updates ?? {}).length) {
+      this.log.info({
+        stage: 'task_completion.fields_captured_after_understanding', callId: this.call.id,
+        intent: completionConfiguration.intent,
+        capturedFields: [...new Set([
+          ...taskCompletion.captured,
+          ...Object.keys(captured?.updates ?? {}),
+        ])],
+        missingFields: taskCompletion.missing,
+      }, 'Booking fields captured only after the caller turn was classified as a booking-field answer');
+    }
+    if (taskCompletion.complete) {
+      await this.#confirmTaskCompletion();
+      return true;
+    }
+    return false;
+  }
+
+  #openCompletionActionAfterUnderstanding(understanding) {
+    // An LLM classification alone never opens a form. The action opens only
+    // when the caller explicitly requested booking and the live frame already
+    // holds one exact approved Catalog item. A category has no selected item,
+    // so category-level booking remains blocked until a child is chosen.
+    if (understanding?.questionType !== 'booking_request') return null;
+    const completionConfiguration = this.taskCompletionState.configuration;
+    if (!completionConfiguration.enabled) return null;
+    const before = this.liveCallMemory?.snapshot();
+    if (!before?.selectedCatalogItem?.id) return null;
+    const state = this.liveCallMemory?.activateAction?.(completionConfiguration.intent, {
+      requiresCatalogItem: completionConfiguration.requiresCatalogItem === true,
+    }) ?? before;
+    const actionOpened = this.liveCallMemory?.canRunAction?.(
+      completionConfiguration.intent,
+      { requiresCatalogItem: completionConfiguration.requiresCatalogItem === true },
+    ) === true;
+    if (actionOpened) {
+      this.runtimeMetrics.taskCompletion = {
+        ...publicTaskCompletionState(this.taskCompletionState),
+        gateOpen: true,
+        currentStage: state?.currentStage ?? null,
+      };
+      this.log.info({
+        stage: 'task_completion.action_opened_after_understanding', callId: this.call.id,
+        intent: completionConfiguration.intent,
+        selectedCatalogItemId: state?.selectedCatalogItem?.id ?? null,
+      }, 'Booking action opened only after explicit booking intent and an exact selected Catalog item');
+    }
+    return state;
+  }
+
   #workflowInstructionResponse(knowledge) {
     if (knowledge?.route !== 'workflow' || knowledge?.workflow?.responseMode !== 'instruction') return null;
     if (knowledge.workflow?.gate?.allowed === false) return String(knowledge.content ?? '').trim() || null;
@@ -1737,8 +1827,10 @@ export class RealtimeConversationOrchestrator {
       } else {
         this.runtimeMetrics.grounding.rejected += 1;
         this.runtimeMetrics.grounding.fallbacks += 1;
-        answer = String(knowledge?.found ? knowledge.content : '').trim()
-          || String(this.runtimeProfile.agent.settings?.noResponseMessage ?? 'Sorry, I do not have verified information for that.');
+        // Never send raw retrieved content after grounding rejects it. It may
+        // be incomplete, an internal instruction, or unsupported for this
+        // caller turn. Use only the configured caller-facing recovery text.
+        answer = callerFacingFallback(this.runtimeProfile);
         sources.push(createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
           label: 'Grounding validation fallback', metadata: { reason: grounded.reason },
         }));
@@ -1756,6 +1848,7 @@ export class RealtimeConversationOrchestrator {
           sources,
         };
       }
+      answer = callerFacingText(answer, this.runtimeProfile);
       answer = this.liveCallMemory?.prepareAssistantResponse?.(answer) || answer;
       for (const sentence of sentenceBuffer.push(answer)) streaming.onSentence?.(sentence);
       for (const sentence of sentenceBuffer.flush()) streaming.onSentence?.(sentence);
@@ -2093,42 +2186,17 @@ export class RealtimeConversationOrchestrator {
         selectedCatalogItemId: stageState?.selectedCatalogItem?.id ?? null,
       }, 'Configured conversation-stage action evaluated');
     }
-    // Re-run deterministic capture after a transition so fields unlocked by
-    // this same explicit action can be collected without another caller turn.
-    this.liveCallMemory?.captureUserUtterance(query, {
-      acknowledgementPhrases: this.interruptionConfiguration?.acknowledgementPhrases,
-    });
     const completionConfiguration = this.taskCompletionState.configuration;
     const completionActionAllowed = this.liveCallMemory?.canRunAction?.(
       completionConfiguration.intent,
       { requiresCatalogItem: completionConfiguration.requiresCatalogItem === true },
     ) === true;
     if (completionActionAllowed) {
-      if (completionConfiguration.catalogField && stageState?.selectedCatalogItem?.name) {
-        this.taskCompletionState = mergeTaskCompletionData(this.taskCompletionState, {
-          [completionConfiguration.catalogField]: stageState.selectedCatalogItem.name,
-        });
-      }
-      const taskCompletion = captureTaskCompletionInput(this.taskCompletionState, query, history);
-      this.taskCompletionState = taskCompletion.state;
-      this.liveCallMemory?.mergeCollectedData(publicTaskCompletionState(this.taskCompletionState).collectedData);
       this.runtimeMetrics.taskCompletion = {
         ...publicTaskCompletionState(this.taskCompletionState),
         gateOpen: true,
         currentStage: stageState?.currentStage ?? null,
       };
-      if (taskCompletion.captured.length) {
-        this.log.info({
-          stage: 'task_completion.fields_captured', callId: this.call.id,
-          intent: completionConfiguration.intent,
-          capturedFields: taskCompletion.captured,
-          missingFields: taskCompletion.missing,
-        }, 'Configured task completion information captured after the action gate opened');
-      }
-      if (taskCompletion.complete) {
-        await this.#confirmTaskCompletion();
-        return;
-      }
     } else if (completionConfiguration.enabled) {
       this.runtimeMetrics.taskCompletion = {
         ...publicTaskCompletionState(this.taskCompletionState),
@@ -2181,6 +2249,8 @@ export class RealtimeConversationOrchestrator {
       }, understandingStream);
       turnLatency.llmMs += Math.max(0, Date.now() - llmStartedAt);
       if (initialResponse.understanding) {
+        this.#openCompletionActionAfterUnderstanding(initialResponse.understanding);
+        if (await this.#captureCompletionFieldAfterUnderstanding(query, history, initialResponse.understanding)) return;
         const evidenceStartedAt = Date.now();
         const tenantEvidence = await this.#tenantEvidence(query, initialResponse.understanding);
         turnLatency.knowledgeMs += Math.max(0, Date.now() - evidenceStartedAt);
@@ -2223,18 +2293,17 @@ export class RealtimeConversationOrchestrator {
             label: 'Partial streamed response', metadata: { reason: error.code },
           })],
         };
-      } else if (!knowledge.found || !String(knowledge.content ?? '').trim()) throw error;
-      else {
+      } else {
       this.log.warn({
-        stage: 'llm.verified_knowledge_fallback', code: error.code,
+        stage: 'llm.safe_recovery_fallback', code: error.code,
         providerId: this.runtimeProfile.providers.llm.providerId,
-      }, 'Selected LLM failed; using verified knowledge response for this call');
+      }, 'Selected LLM failed; using only the configured caller-facing recovery response');
       response = {
         cancelled: false,
-        text: String(knowledge.content).trim(),
+        text: callerFacingFallback(this.runtimeProfile),
         toolCalls: [],
         sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
-          label: 'Verified knowledge fallback', metadata: { reason: error.code },
+          label: 'Safe recovery fallback', metadata: { reason: error.code },
         })],
       };
       }
@@ -2266,8 +2335,7 @@ export class RealtimeConversationOrchestrator {
       return;
     }
     const generatedAnswer = String(response.text ?? '').trim();
-    const rawAnswer = generatedAnswer
-      || String(this.runtimeProfile.agent.settings?.noResponseMessage ?? 'Sorry, I could not form a response.');
+    const rawAnswer = callerFacingText(generatedAnswer || callerFacingFallback(this.runtimeProfile), this.runtimeProfile);
     const unconstrainedAnswer = sentencePipeline.sentenceCount() === 0
       ? (this.liveCallMemory?.prepareAssistantResponse?.(rawAnswer) || rawAnswer)
       : rawAnswer;
