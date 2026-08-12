@@ -6,7 +6,10 @@ import {
   buildGroundingEnvelope,
   validateGroundedLlmResponse,
 } from '../src/voice/interaction/grounded-llm-response.js';
-import { isInternalRuntimeText } from '../src/voice/realtime-conversation-orchestrator.js';
+import {
+  approvedDocumentFallback,
+  isInternalRuntimeText,
+} from '../src/voice/realtime-conversation-orchestrator.js';
 
 function item(id, key, name, category, aliases = []) {
   return {
@@ -136,6 +139,21 @@ assert.equal(groundedSideQuestion.flowAction, 'side_question');
 assert.equal(isInternalRuntimeText('Start or resume the configured appointment task.'), true);
 assert.equal(isInternalRuntimeText('RESPONSE_MODE: instruction'), true);
 assert.equal(isInternalRuntimeText('Our office is downtown.'), false);
+
+const approvedFallback = approvedDocumentFallback({
+  found: true,
+  content: 'RULE: location\nRESPONSE: Our office is downtown.',
+  tenantEvidence: { sources: [{ recordId: 'faq-office', recordType: 'FAQ', content: 'Our office is downtown.' }] },
+}, { agent: { language: 'English', settings: {} } });
+assert.equal(approvedFallback.text, 'Our office is downtown.');
+assert.equal(approvedFallback.source, null);
+
+const evidenceOnlyFallback = approvedDocumentFallback({
+  found: true,
+  tenantEvidence: { sources: [{ recordId: 'faq-office', recordType: 'FAQ', content: 'Our office is downtown.' }] },
+}, { agent: { language: 'English', settings: {} } });
+assert.equal(evidenceOnlyFallback.text, 'Our office is downtown.');
+assert.equal(evidenceOnlyFallback.source.recordId, 'faq-office');
 
 const isolated = openLiveCallMemory({
   tenantId: 'tenant-production-b', workspaceId: 'workspace-production-b',

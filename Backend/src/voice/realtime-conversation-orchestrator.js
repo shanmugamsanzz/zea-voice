@@ -42,6 +42,7 @@ import { buildConversationMemoryState } from './interaction/conversation-memory-
 import { compactLiveCallMemoryContext, openLiveCallMemory } from './interaction/live-call-memory.js';
 import {
   buildGroundingEnvelope,
+  validateGroundedLlmUnderstanding,
   validateGroundedLlmResponse,
 } from './interaction/grounded-llm-response.js';
 import { detectConversationIntent } from './interaction/intent-detector.js';
@@ -114,6 +115,41 @@ function callerFacingText(value, profile) {
   return !isInternalRuntimeText(result) ? result : callerFacingFallback(profile);
 }
 
+function documentSpeech(value) {
+  const content = String(value ?? '').trim();
+  if (!content || isInternalRuntimeText(content)) return null;
+  // Structured Workflow documents may contain an approved caller response.
+  // Prefer only that response rather than reading its rule metadata aloud.
+  const response = content.match(/(?:^|\n)\s*response\s*:\s*([^\n]+)/iu)?.[1]?.trim();
+  if (response && !isInternalRuntimeText(response)) return response;
+  if (/^\s*(?:rule|match|match_mode|response_mode|priority|action|from_stage|next_stage)\s*:/iu.test(content)) {
+    return null;
+  }
+  return content.length <= 1_200 ? content : null;
+}
+
+// A grounding failure must never turn a normal knowledge question into a
+// technical-error response. This fallback uses only the already retrieved,
+// tenant-approved document content; it never invents a new answer.
+export function approvedDocumentFallback(knowledge, profile) {
+  const candidates = [
+    { content: knowledge?.content, source: knowledge?.source },
+    ...(knowledge?.matches ?? []).map((match) => ({
+      content: match.answer ?? match.content,
+      source: match,
+    })),
+    ...(knowledge?.tenantEvidence?.sources ?? []).map((source) => ({
+      content: source.content,
+      source,
+    })),
+  ];
+  for (const candidate of candidates) {
+    const answer = documentSpeech(candidate.content);
+    if (answer) return { text: answer, source: candidate.source ?? null };
+  }
+  return { text: callerFacingFallback(profile), source: null };
+}
+
 const spokenWordPattern = /[\p{L}\p{N}][\p{L}\p{M}\p{N}'’_-]*/gu;
 const pauseFillerWords = new Set([
   'hello', 'ok', 'okay', 'sure', 'hmm', 'please',
@@ -134,6 +170,16 @@ function hasFastKnowledgeAnswer(knowledge) {
 function withTenantEvidence(knowledge, tenantEvidence) {
   if (!tenantEvidence?.found) return knowledge;
   const first = tenantEvidence.sources?.[0];
+  const tenantMatches = (tenantEvidence.sources ?? []).map((source) => ({
+    id: source.recordId ?? source.id,
+    answer: source.content,
+    content: source.content,
+    recordType: source.recordType,
+    knowledgeBaseId: source.knowledgeBaseId,
+    documentId: source.documentId,
+    pageNumber: source.pageNumber,
+    score: source.score,
+  }));
   return {
     ...knowledge,
     found: knowledge?.found === true || tenantEvidence.found === true,
@@ -144,6 +190,7 @@ function withTenantEvidence(knowledge, tenantEvidence) {
       documentId: first.documentId,
       pageNumber: first.pageNumber,
     } : null),
+    matches: [...(knowledge?.matches ?? []), ...tenantMatches],
     tenantEvidence,
   };
 }
@@ -1801,11 +1848,14 @@ export class RealtimeConversationOrchestrator {
           sources: [llmMessageSource(this.runtimeProfile.providers.llm, completion)],
         };
       }
-      const grounded = validateGroundedLlmResponse(text, groundingEnvelope, {
+      const groundingRuntime = {
         pendingQuestion: liveMemory?.pendingQuestion ?? liveMemory?.pendingQuestionText,
         currentStage: liveMemory?.currentStage,
         activeActions: liveMemory?.activeActions ?? [],
-      });
+      };
+      const grounded = context.understandingOnly === true
+        ? validateGroundedLlmUnderstanding(text, groundingEnvelope, groundingRuntime)
+        : validateGroundedLlmResponse(text, groundingEnvelope, groundingRuntime);
       const groundingMetric = {
         valid: grounded.valid, reason: grounded.reason ?? null,
         intent: grounded.intent ?? null,
@@ -1823,20 +1873,27 @@ export class RealtimeConversationOrchestrator {
       if (grounded.valid) {
         this.runtimeMetrics.grounding.validated += 1;
         if (context.understandingOnly !== true) this.liveCallMemory?.applyGroundedDecision?.(grounded);
-        answer = grounded.spokenAnswer;
+        answer = context.understandingOnly === true ? '' : grounded.spokenAnswer;
       } else {
         this.runtimeMetrics.grounding.rejected += 1;
         this.runtimeMetrics.grounding.fallbacks += 1;
-        // Never send raw retrieved content after grounding rejects it. It may
-        // be incomplete, an internal instruction, or unsupported for this
-        // caller turn. Use only the configured caller-facing recovery text.
-        answer = callerFacingFallback(this.runtimeProfile);
-        sources.push(createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
-          label: 'Grounding validation fallback', metadata: { reason: grounded.reason },
-        }));
+        const documentFallback = context.understandingOnly === true
+          ? null : approvedDocumentFallback(knowledge, this.runtimeProfile);
+        answer = documentFallback?.text ?? callerFacingFallback(this.runtimeProfile);
+        if (documentFallback?.source) {
+          sources.push(createMessageSource(messageSourceTypes.KNOWLEDGE, {
+            id: documentFallback.source.recordId ?? documentFallback.source.id,
+            label: 'Approved document fallback',
+            metadata: { reason: grounded.reason, recordType: documentFallback.source.recordType },
+          }));
+        } else {
+          sources.push(createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
+            label: 'Grounding validation fallback', metadata: { reason: grounded.reason },
+          }));
+        }
         this.log.warn({
           stage: 'llm.grounding_rejected', callId: this.call.id, reason: grounded.reason,
-        }, 'LLM response was rejected before TTS because it was not grounded in published tenant evidence');
+        }, 'LLM response was rejected before TTS; using only approved document fallback when available');
       }
       if (context.understandingOnly === true && grounded.valid) {
         return {
@@ -2272,7 +2329,19 @@ export class RealtimeConversationOrchestrator {
           turnLatency.llmMs += Math.max(0, Date.now() - answerStartedAt);
         } else {
           this.liveCallMemory?.applyGroundedDecision?.(initialResponse.understanding);
-          response = { ...initialResponse, text: initialResponse.proposedAnswer ?? '' };
+          const documentFallback = approvedDocumentFallback(enrichedKnowledge, this.runtimeProfile);
+          response = {
+            ...initialResponse,
+            text: documentFallback.text,
+            sources: [
+              ...(initialResponse.sources ?? []),
+              ...(documentFallback.source ? [createMessageSource(messageSourceTypes.KNOWLEDGE, {
+                id: documentFallback.source.recordId ?? documentFallback.source.id,
+                label: 'Approved document fallback',
+                metadata: { recordType: documentFallback.source.recordType },
+              })] : []),
+            ],
+          };
         }
       } else response = initialResponse;
     } catch (error) {

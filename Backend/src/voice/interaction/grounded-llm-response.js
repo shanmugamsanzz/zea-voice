@@ -12,6 +12,39 @@ const questionTypes = new Set([
   'side_question', 'confirmation', 'unclear',
 ]);
 
+// LLMs may describe the same generic caller question with different labels.
+// Keep this vocabulary domain-neutral: it classifies conversation mechanics,
+// never tenant products, industries, or customer wording.
+const questionTypeAliases = new Map([
+  ['overview', 'overview'], ['package_overview', 'overview'], ['catalog_overview', 'overview'],
+  ['product_overview', 'overview'], ['service_overview', 'overview'], ['options_list', 'overview'],
+  ['available_options', 'overview'], ['list_options', 'overview'],
+  ['category_request', 'category_request'], ['category', 'category_request'],
+  ['category_details', 'category_request'], ['category_options', 'category_request'],
+  ['category_selection', 'category_request'], ['group_request', 'category_request'],
+  ['item_request', 'item_request'], ['item', 'item_request'], ['package_request', 'item_request'],
+  ['product_request', 'item_request'], ['service_request', 'item_request'], ['plan_request', 'item_request'],
+  ['details', 'details'], ['detail', 'details'], ['package_details', 'details'],
+  ['item_details', 'details'], ['product_details', 'details'], ['service_details', 'details'],
+  ['description', 'details'], ['explanation', 'details'], ['package_explanation', 'details'],
+  ['inclusions', 'inclusions'], ['inclusion', 'inclusions'], ['benefits', 'inclusions'],
+  ['features', 'inclusions'], ['coverage', 'inclusions'], ['whats_included', 'inclusions'],
+  ['price', 'price'], ['price_question', 'price'], ['pricing', 'price'], ['cost', 'price'],
+  ['fee', 'price'], ['amount', 'price'],
+  ['comparison', 'comparison'], ['compare', 'comparison'], ['difference', 'comparison'],
+  ['versus', 'comparison'], ['vs', 'comparison'],
+  ['scenario', 'scenario'], ['symptom_query', 'scenario'], ['symptom', 'scenario'],
+  ['use_case', 'scenario'], ['suitability', 'scenario'], ['recommendation', 'scenario'],
+  ['problem', 'scenario'], ['concern', 'scenario'], ['requirement', 'scenario'],
+  ['booking_request', 'booking_request'], ['booking', 'booking_request'], ['book', 'booking_request'],
+  ['appointment_request', 'booking_request'], ['reservation_request', 'booking_request'], ['schedule_request', 'booking_request'],
+  ['booking_field_answer', 'booking_field_answer'], ['field_answer', 'booking_field_answer'],
+  ['field_value', 'booking_field_answer'], ['booking_details', 'booking_field_answer'], ['booking_information', 'booking_field_answer'],
+  ['side_question', 'side_question'], ['general_question', 'side_question'], ['other_question', 'side_question'],
+  ['confirmation', 'confirmation'], ['confirm', 'confirmation'], ['approval', 'confirmation'], ['yes_confirmation', 'confirmation'],
+  ['unclear', 'unclear'], ['unknown', 'unclear'], ['other', 'unclear'], ['none', 'unclear'],
+]);
+
 function text(value, maximum = 2_000) {
   return String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
     .replace(/\s+/gu, ' ').trim().slice(0, maximum);
@@ -19,6 +52,13 @@ function text(value, maximum = 2_000) {
 
 function identity(value) {
   return text(value, 240).toLocaleLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim();
+}
+
+export function normalizeQuestionType(value) {
+  const raw = text(value, 80).toLocaleLowerCase();
+  const key = raw.replace(/[\s\-./]+/gu, '_').replace(/_+/gu, '_').replace(/^_|_$/gu, '');
+  if (questionTypes.has(key)) return key;
+  return questionTypeAliases.get(key) ?? 'unclear';
 }
 
 function addSource(sources, seen, content, metadata = {}) {
@@ -120,6 +160,22 @@ export function groundedResponseContract(envelope) {
   });
 }
 
+// The first LLM pass only identifies the caller's meaning. It does not speak
+// to the caller, so caller-facing evidence and fact assertions are collected
+// only in the later answer-generation pass.
+export function groundedUnderstandingContract(envelope) {
+  return Object.freeze({
+    format: 'json_object',
+    schema: {
+      intent: 'short generic intent name',
+      questionType: 'overview, category_request, item_request, details, inclusions, price, comparison, scenario, booking_request, booking_field_answer, side_question, confirmation or unclear',
+      flowAction: 'continue, answer_pending, side_question or clarify',
+      selectedEntityKeys: ['only keys listed in allowedEntityKeys'],
+    },
+    allowedEntityKeys: envelope.entities.map((item) => item.key),
+  });
+}
+
 function parseObject(value) {
   const raw = String(value ?? '').trim().replace(/^```(?:json)?\s*/iu, '').replace(/\s*```$/u, '');
   const start = raw.indexOf('{');
@@ -176,11 +232,10 @@ export function validateGroundedLlmResponse(raw, envelope, runtime = {}) {
   const parsed = parseObject(raw);
   if (!parsed) return Object.freeze({ valid: false, reason: 'invalid_json' });
   const intent = text(parsed.intent, maximumIntentCharacters);
-  const questionType = text(parsed.questionType ?? parsed.question_type, 80).toLocaleLowerCase();
+  const questionType = normalizeQuestionType(parsed.questionType ?? parsed.question_type);
   const flowAction = text(parsed.flowAction ?? parsed.flow_action, 40).toLocaleLowerCase() || 'continue';
   const spokenAnswer = text(parsed.spokenAnswer ?? parsed.spoken_answer, maximumAnswerCharacters);
-  if (!intent || !questionType || !spokenAnswer) return Object.freeze({ valid: false, reason: 'required_field_missing' });
-  if (!questionTypes.has(questionType)) return Object.freeze({ valid: false, reason: 'invalid_question_type' });
+  if (!intent || !spokenAnswer) return Object.freeze({ valid: false, reason: 'required_field_missing' });
   if (!['continue', 'answer_pending', 'side_question', 'clarify'].includes(flowAction)) {
     return Object.freeze({ valid: false, reason: 'invalid_flow_action' });
   }
@@ -247,6 +302,37 @@ export function validateGroundedLlmResponse(raw, envelope, runtime = {}) {
     selectedEntities: selectedEntities.map((item) => ({ ...item })),
     evidenceSourceIds: citedSources.map((source) => source.id),
     assertedFacts: facts.map((fact) => ({ ...fact })),
+  });
+}
+
+export function validateGroundedLlmUnderstanding(raw, envelope, runtime = {}) {
+  const parsed = parseObject(raw);
+  if (!parsed) return Object.freeze({ valid: false, reason: 'invalid_json' });
+  const intent = text(parsed.intent, maximumIntentCharacters);
+  const questionType = normalizeQuestionType(parsed.questionType ?? parsed.question_type);
+  const flowAction = text(parsed.flowAction ?? parsed.flow_action, 40).toLocaleLowerCase() || 'continue';
+  if (!intent) return Object.freeze({ valid: false, reason: 'required_field_missing' });
+  if (!['continue', 'answer_pending', 'side_question', 'clarify'].includes(flowAction)) {
+    return Object.freeze({ valid: false, reason: 'invalid_flow_action' });
+  }
+  if (flowAction === 'answer_pending' && !String(runtime.pendingQuestion ?? '').trim()) {
+    return Object.freeze({ valid: false, reason: 'pending_answer_without_pending_question' });
+  }
+  const requestedEntityKeys = list(parsed.selectedEntityKeys ?? parsed.selected_entity_keys, maximumEntities);
+  const entitiesByKey = new Map(envelope.entities.map((item) => [identity(item.key), item]));
+  const selectedEntities = requestedEntityKeys.map((key) => entitiesByKey.get(identity(key)));
+  if (selectedEntities.some((item) => !item)) {
+    return Object.freeze({ valid: false, reason: 'unpublished_entity_selected' });
+  }
+  return Object.freeze({
+    valid: true,
+    intent,
+    questionType,
+    flowAction,
+    selectedEntityKeys: selectedEntities.map((item) => item.key),
+    selectedEntities: selectedEntities.map((item) => ({ ...item })),
+    evidenceSourceIds: [],
+    assertedFacts: [],
   });
 }
 

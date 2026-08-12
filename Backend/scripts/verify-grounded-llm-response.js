@@ -7,6 +7,8 @@ const { buildAgentSystemPrompt } = await import('../src/agents/agent-runtime.ser
 const {
   buildGroundingEnvelope,
   groundedResponseContract,
+  normalizeQuestionType,
+  validateGroundedLlmUnderstanding,
   validateGroundedLlmResponse,
 } = await import('../src/voice/interaction/grounded-llm-response.js');
 const { openLiveCallMemory } = await import('../src/voice/interaction/live-call-memory.js');
@@ -26,6 +28,24 @@ assert.equal(envelope.sources.length, 1);
 assert.equal(envelope.sources[0].id, 'source_1');
 assert.equal(envelope.entities[0].key, 'premium-plan');
 assert.deepEqual(groundedResponseContract(envelope).allowedEntityKeys, ['premium-plan']);
+
+assert.equal(normalizeQuestionType('package_overview'), 'overview');
+assert.equal(normalizeQuestionType('package details'), 'details');
+assert.equal(normalizeQuestionType('price_question'), 'price');
+assert.equal(normalizeQuestionType('symptom-query'), 'scenario');
+assert.equal(normalizeQuestionType('unexpected_model_label'), 'unclear');
+
+const normalizedUnderstanding = validateGroundedLlmUnderstanding(JSON.stringify({
+  intent: 'show packages', questionType: 'package_overview', flowAction: 'continue', selectedEntityKeys: [],
+}), envelope);
+assert.equal(normalizedUnderstanding.valid, true);
+assert.equal(normalizedUnderstanding.questionType, 'overview');
+
+const unknownUnderstanding = validateGroundedLlmUnderstanding(JSON.stringify({
+  intent: 'unclassified turn', questionType: 'unexpected_model_label', flowAction: 'clarify', selectedEntityKeys: [],
+}), envelope);
+assert.equal(unknownUnderstanding.valid, true);
+assert.equal(unknownUnderstanding.questionType, 'unclear');
 
 const valid = validateGroundedLlmResponse(JSON.stringify({
   intent: 'catalog_item_details',

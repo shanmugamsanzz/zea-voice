@@ -11,6 +11,7 @@ import { resolveCallbackConfiguration } from '../voice/interaction/callback-conf
 import {
   buildGroundingEnvelope,
   groundedResponseContract,
+  groundedUnderstandingContract,
 } from '../voice/interaction/grounded-llm-response.js';
 
 const directKnowledgeRoutes = new Set(['conversation', 'catalog', 'faq', 'clarification']);
@@ -126,8 +127,13 @@ export function buildAgentSystemPrompt(agent, { usageDirection, context, knowled
   const runtimeContext = JSON.stringify(context ?? {}).slice(0, Math.min(1200, Math.floor(contentBudget * 0.30)));
   const callback = resolveCallbackConfiguration(agent.settings);
   const groundedResponseMode = context?.groundedResponseMode === true;
+  const understandingOnly = context?.understandingOnly === true;
   const groundingContract = groundedResponseMode
-    ? JSON.stringify(groundedResponseContract(buildGroundingEnvelope(knowledge))) : null;
+    ? JSON.stringify(
+      understandingOnly
+        ? groundedUnderstandingContract(buildGroundingEnvelope(knowledge))
+        : groundedResponseContract(buildGroundingEnvelope(knowledge)),
+    ) : null;
   const knowledgeBudget = Math.max(
     900,
     contentBudget - companyPrompt.length - runtimeContext.length - String(groundingContract ?? '').length,
@@ -171,13 +177,19 @@ export function buildAgentSystemPrompt(agent, { usageDirection, context, knowled
     groundedResponseMode
       ? '- Return exactly one valid JSON object matching grounded_response_contract. Do not use Markdown or code fences.'
       : '- Return plain spoken text without Markdown, headings, JSON, or code fences.',
-    groundedResponseMode
+    groundedResponseMode && understandingOnly
+      ? '- This is an understanding-only pass. Return no spokenAnswer, evidenceSourceIds, or assertedFacts; they belong only to the later answer-generation pass.'
+      : null,
+    groundedResponseMode && !understandingOnly
       ? '- Select only listed entity keys and cite only listed evidence source IDs. Use no unsupported facts in spokenAnswer.'
       : null,
-    groundedResponseMode
+    groundedResponseMode && understandingOnly
+      ? '- Return intent, questionType, flowAction and selectedEntityKeys only. questionType must be one exact value from grounded_response_contract.'
+      : null,
+    groundedResponseMode && !understandingOnly
       ? '- Return intent, questionType, flowAction, selectedEntityKeys, evidenceSourceIds and spokenAnswer. questionType must describe this caller turn, including price, inclusions, comparison, scenario or booking_field_answer when applicable.'
       : null,
-    groundedResponseMode
+    groundedResponseMode && !understandingOnly
       ? '- Include assertedFacts. Each asserted fact must be a short verbatim value from one cited source and identify that sourceId. Every spoken price, test, policy, preparation, availability or action claim must be supported by those cited sources.'
       : null,
     groundedResponseMode
