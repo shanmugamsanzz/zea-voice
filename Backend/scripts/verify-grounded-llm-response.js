@@ -29,43 +29,66 @@ assert.deepEqual(groundedResponseContract(envelope).allowedEntityKeys, ['premium
 
 const valid = validateGroundedLlmResponse(JSON.stringify({
   intent: 'catalog_item_details',
+  questionType: 'inclusions',
   flowAction: 'side_question',
   selectedEntityKeys: ['premium-plan'],
   evidenceSourceIds: ['source_1'],
+  assertedFacts: [{ type: 'inclusion', value: 'priority support', sourceId: 'source_1' }],
   spokenAnswer: 'Premium Plan is USD 100 and includes priority support.',
 }), envelope);
 assert.equal(valid.valid, true);
 assert.equal(valid.intent, 'catalog_item_details');
+assert.equal(valid.questionType, 'inclusions');
 assert.equal(valid.flowAction, 'side_question');
 assert.equal(valid.selectedEntities[0].key, 'premium-plan');
 
 const unpublishedEntity = validateGroundedLlmResponse(JSON.stringify({
   intent: 'catalog_item_details', selectedEntityKeys: ['invented-plan'],
-  evidenceSourceIds: ['source_1'], spokenAnswer: 'Premium Plan is USD 100.',
+  questionType: 'details',
+  evidenceSourceIds: ['source_1'], assertedFacts: [{ type: 'price', value: 'USD 100', sourceId: 'source_1' }], spokenAnswer: 'Premium Plan is USD 100.',
 }), envelope);
 assert.equal(unpublishedEntity.valid, false);
 assert.equal(unpublishedEntity.reason, 'unpublished_entity_selected');
 
 const unpublishedEvidence = validateGroundedLlmResponse(JSON.stringify({
   intent: 'catalog_item_details', selectedEntityKeys: ['premium-plan'],
-  evidenceSourceIds: ['source_99'], spokenAnswer: 'Premium Plan is USD 100.',
+  questionType: 'price',
+  evidenceSourceIds: ['source_99'], assertedFacts: [{ type: 'price', value: 'USD 100', sourceId: 'source_99' }], spokenAnswer: 'Premium Plan is USD 100.',
 }), envelope);
 assert.equal(unpublishedEvidence.reason, 'unpublished_evidence_selected');
 
 const inventedPrice = validateGroundedLlmResponse(JSON.stringify({
   intent: 'catalog_item_details', selectedEntityKeys: ['premium-plan'],
-  evidenceSourceIds: ['source_1'], spokenAnswer: 'Premium Plan is USD 999.',
+  questionType: 'price',
+  evidenceSourceIds: ['source_1'], assertedFacts: [{ type: 'price', value: 'USD 100', sourceId: 'source_1' }], spokenAnswer: 'Premium Plan is USD 999.',
 }), envelope);
 assert.equal(inventedPrice.reason, 'unsupported_numeric_fact');
 
+const inventedTechnicalTerm = validateGroundedLlmResponse(JSON.stringify({
+  intent: 'catalog_item_details', questionType: 'details', selectedEntityKeys: ['premium-plan'],
+  evidenceSourceIds: ['source_1'],
+  assertedFacts: [{ type: 'inclusion', value: 'priority support', sourceId: 'source_1' }],
+  spokenAnswer: 'Premium Plan includes priority support and MRI.',
+}), envelope);
+assert.equal(inventedTechnicalTerm.reason, 'unsupported_technical_term');
+
+const inventedAssertedFact = validateGroundedLlmResponse(JSON.stringify({
+  intent: 'catalog_item_details', questionType: 'details', selectedEntityKeys: ['premium-plan'],
+  evidenceSourceIds: ['source_1'],
+  assertedFacts: [{ type: 'policy', value: 'Guaranteed refund', sourceId: 'source_1' }],
+  spokenAnswer: 'Premium Plan includes priority support.',
+}), envelope);
+assert.equal(inventedAssertedFact.reason, 'unsupported_asserted_fact');
+
 const mismatchedEntityAnswer = validateGroundedLlmResponse(JSON.stringify({
   intent: 'catalog_item_details', selectedEntityKeys: ['premium-plan'],
-  evidenceSourceIds: ['source_1'], spokenAnswer: 'Basic Plan is USD 100.',
+  questionType: 'details',
+  evidenceSourceIds: ['source_1'], assertedFacts: [{ type: 'price', value: 'USD 100', sourceId: 'source_1' }], spokenAnswer: 'Basic Plan is USD 100.',
 }), envelope);
 assert.equal(mismatchedEntityAnswer.reason, 'selected_entity_not_supported_by_answer');
 
 const noPublishedEvidence = validateGroundedLlmResponse(JSON.stringify({
-  intent: 'unknown', selectedEntityKeys: [], evidenceSourceIds: [],
+  intent: 'unknown', questionType: 'unclear', selectedEntityKeys: [], evidenceSourceIds: [], assertedFacts: [],
   spokenAnswer: 'This is an unsupported factual answer.',
 }), buildGroundingEnvelope({ route: 'none', found: false }));
 assert.equal(noPublishedEvidence.reason, 'verified_evidence_missing');
@@ -85,7 +108,7 @@ const systemPrompt = buildAgentSystemPrompt(agent, {
     },
     detectedIntent: { intent: 'price', confidence: 0.93, signals: ['price'] },
   },
-  maxPromptChars: 6_000,
+  maxPromptChars: 8_000,
 });
 assert.match(systemPrompt, /grounded_response_contract/u);
 assert.match(systemPrompt, /<\/grounded_response_contract>/u);
@@ -104,7 +127,10 @@ const adapter = {
     providerInput = input;
     yield { type: 'text_delta', delta: JSON.stringify({
       intent: 'catalog_item_details', selectedEntityKeys: ['premium-plan'],
-      evidenceSourceIds: ['source_1'], spokenAnswer: 'Premium Plan is USD 100.',
+      questionType: 'price',
+      evidenceSourceIds: ['source_1'],
+      assertedFacts: [{ type: 'price', value: 'USD 100', sourceId: 'source_1' }],
+      spokenAnswer: 'Premium Plan is USD 100.',
     }) };
     yield { type: 'completed', finishReason: 'stop', toolCalls: [] };
   },

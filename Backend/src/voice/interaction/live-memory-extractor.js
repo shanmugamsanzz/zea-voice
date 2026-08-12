@@ -49,7 +49,7 @@ function typedValue(field, text, pending, fields) {
   if (field.type === 'phone') return candidate.match(/(?:\+?\d[\d\s()-]{7,}\d)/u)?.[0]?.replace(/[\s()-]/gu, '') ?? '';
   if (field.type === 'number') return candidate.match(/-?\d+(?:\.\d+)?/u)?.[0] ?? (pending ? candidate : '');
   if (field.type === 'date') {
-    return candidate.match(/\b(?:today|tomorrow|day after tomorrow)\b|இன்று|நாளை|நாளைக்கு|மறுநாள்|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?/iu)?.[0] ?? (explicit ? explicit : '');
+    return candidate.match(/\b(?:today|tomorrow|day after tomorrow)\b|இன்று|நாளை|நாளைக்கு|மறுநாள்|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{1,2}(?:st|nd|rd|th)?\s+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s*,?\s*\d{2,4})?|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?(?:\s*,?\s*\d{2,4})?/iu)?.[0] ?? (explicit ? explicit : '');
   }
   if (field.type === 'time') {
     return candidate.match(/\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.|o'?clock)?|காலை\s*\d{1,2}|மாலை\s*\d{1,2}|இரவு\s*\d{1,2}|\d{1,2}\s*மணி/iu)?.[0] ?? (explicit ? explicit : '');

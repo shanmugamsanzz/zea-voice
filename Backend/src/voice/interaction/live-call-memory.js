@@ -161,6 +161,7 @@ function publicState(state) {
     lastAnsweredQuestion: state.lastAnsweredQuestion,
     runningSummary: state.runningSummary,
     lastIntent: state.lastIntent,
+    lastQuestionType: state.lastQuestionType,
     currentStage: state.currentStage,
     resumeStage: state.resumeStage,
     activeCategory: state.activeCategory ? { ...state.activeCategory } : null,
@@ -187,7 +188,7 @@ export function openLiveCallMemory(identity, settings = {}, now = Date.now()) {
       settings.conversationLanguage ?? settings.defaultLanguage ?? settings.language,
     ), pendingQuestion: null,
     pendingQuestionText: null, pendingQuestionKind: null, resumeQuestionAfterAnswer: null,
-    lastAnsweredQuestion: null, runningSummary: '', lastIntent: null, summaryCursor: 0,
+    lastAnsweredQuestion: null, runningSummary: '', lastIntent: null, lastQuestionType: null, summaryCursor: 0,
     currentStage: stageConfiguration.initialStage, resumeStage: null,
     activeCategory: null, selectedCatalogItem: null, candidateItems: [],
     activeActions: new Set(), stageTransitions: [],
@@ -337,6 +338,7 @@ export function openLiveCallMemory(identity, settings = {}, now = Date.now()) {
     },
     applyGroundedDecision(decision = {}) {
       state.lastIntent = frameText(decision.intent, 160) || state.lastIntent;
+      state.lastQuestionType = frameText(decision.questionType, 80) || state.lastQuestionType;
       if (decision.flowAction === 'answer_pending') resolvePendingQuestion(state);
       else if (decision.flowAction === 'side_question') schedulePendingQuestionResume(state);
       const selected = frameItem(decision.selectedEntities?.[0]);
@@ -517,6 +519,7 @@ export function compactLiveCallMemoryContext({ snapshot = {}, collectedData = {}
     language: promptText(snapshot.language, 12) || undefined,
     currentStage: promptText(snapshot.currentStage, 80) || undefined,
     lastIntent: promptText(snapshot.lastIntent, 80) || undefined,
+    lastQuestionType: promptText(snapshot.lastQuestionType, 80) || undefined,
     resumeStage: promptText(snapshot.resumeStage, 80) || undefined,
     activeCategory: snapshot.activeCategory ? {
       key: promptText(snapshot.activeCategory.key, 80) || undefined,

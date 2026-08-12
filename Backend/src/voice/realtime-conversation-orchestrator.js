@@ -4,6 +4,7 @@ import { AppError } from '../middleware/errors.js';
 import { appendTranscriptEntry } from '../calls/call.service.js';
 import {
   isExactWorkflowResponse,
+  retrieveTenantEvidence,
   routeKnowledgeQuery,
 } from '../knowledge-bases/knowledge-runtime.service.js';
 import { ProviderIndependentAudioEngine } from './audio/audio-engine.js';
@@ -99,13 +100,33 @@ const pauseFillerWords = new Set([
   'hello', 'ok', 'okay', 'sure', 'hmm', 'please',
   'ம்', 'ஹம்', 'ஆமா', 'சரி', 'சரிங்க', 'இருங்க', 'இருங்கள்',
 ]);
-const fastKnowledgeRoutes = new Set(['faq', 'catalog', 'clarification']);
-
 function hasFastKnowledgeAnswer(knowledge) {
+  // Catalog, FAQ and conversational matches are evidence for the LLM; they
+  // are not final caller answers.  Otherwise a query such as "does this plan
+  // include everything?" collapses into a bare name-and-price response.
+  // Operational Workflow instructions are handled separately by
+  // #workflowInstructionResponse and remain deterministic.
   return knowledge?.found === true
-    && (fastKnowledgeRoutes.has(String(knowledge.route ?? '').toLowerCase())
-      || isExactWorkflowResponse(knowledge))
+    && knowledge?.workflow?.deterministic === true
+    && isExactWorkflowResponse(knowledge)
     && Boolean(String(knowledge.content ?? '').trim());
+}
+
+function withTenantEvidence(knowledge, tenantEvidence) {
+  if (!tenantEvidence?.found) return knowledge;
+  const first = tenantEvidence.sources?.[0];
+  return {
+    ...knowledge,
+    found: knowledge?.found === true || tenantEvidence.found === true,
+    content: knowledge?.content ?? first?.content ?? null,
+    source: knowledge?.source ?? (first ? {
+      recordId: first.recordId,
+      knowledgeBaseId: first.knowledgeBaseId,
+      documentId: first.documentId,
+      pageNumber: first.pageNumber,
+    } : null),
+    tenantEvidence,
+  };
 }
 
 function spokenWords(value) {
@@ -1397,6 +1418,33 @@ export class RealtimeConversationOrchestrator {
     }
   }
 
+  async #tenantEvidence(query, understanding) {
+    try {
+      const retrieveEvidence = this.dependencies.retrieveTenantEvidence ?? retrieveTenantEvidence;
+      const state = this.liveCallMemory?.snapshot();
+      const result = await retrieveEvidence({
+        tenantId: this.runtimeProfile.agent.tenantId,
+        workspaceId: this.runtimeProfile.agent.workspaceId,
+        userId: null,
+        role: 'COMPANY_DEVELOPER',
+      }, {
+        agentId: this.runtimeProfile.agent.id,
+        query,
+        understanding,
+        usageDirection: this.call.direction,
+        language: state?.language ?? languageCode(this.runtimeProfile.agent.language),
+        activeCategoryName: state?.activeCategory?.name,
+        selectedCatalogItemKey: state?.selectedCatalogItem?.key,
+        selectedCatalogItemName: state?.selectedCatalogItem?.name,
+        currentStage: state?.currentStage,
+      });
+      return result;
+    } catch (error) {
+      this.log.warn({ err: error, callId: this.call.id }, 'Supplemental tenant evidence retrieval failed');
+      return { found: false, sources: [], entities: [], error: error.code ?? 'TENANT_EVIDENCE_UNAVAILABLE' };
+    }
+  }
+
   #workflowInstructionResponse(knowledge) {
     if (knowledge?.route !== 'workflow' || knowledge?.workflow?.responseMode !== 'instruction') return null;
     if (knowledge.workflow?.gate?.allowed === false) return String(knowledge.content ?? '').trim() || null;
@@ -1663,13 +1711,19 @@ export class RealtimeConversationOrchestrator {
           sources: [llmMessageSource(this.runtimeProfile.providers.llm, completion)],
         };
       }
-      const grounded = validateGroundedLlmResponse(text, groundingEnvelope);
+      const grounded = validateGroundedLlmResponse(text, groundingEnvelope, {
+        pendingQuestion: liveMemory?.pendingQuestion ?? liveMemory?.pendingQuestionText,
+        currentStage: liveMemory?.currentStage,
+        activeActions: liveMemory?.activeActions ?? [],
+      });
       const groundingMetric = {
         valid: grounded.valid, reason: grounded.reason ?? null,
         intent: grounded.intent ?? null,
+        questionType: grounded.questionType ?? null,
         flowAction: grounded.flowAction ?? null,
         selectedEntityKeys: grounded.selectedEntityKeys ?? [],
         evidenceSourceIds: grounded.evidenceSourceIds ?? [],
+        assertedFactCount: grounded.assertedFacts?.length ?? 0,
       };
       if (this.runtimeMetrics.grounding.samples.length < 100) {
         this.runtimeMetrics.grounding.samples.push(groundingMetric);
@@ -1678,7 +1732,7 @@ export class RealtimeConversationOrchestrator {
       const sources = [llmMessageSource(this.runtimeProfile.providers.llm, completion)];
       if (grounded.valid) {
         this.runtimeMetrics.grounding.validated += 1;
-        this.liveCallMemory?.applyGroundedDecision?.(grounded);
+        if (context.understandingOnly !== true) this.liveCallMemory?.applyGroundedDecision?.(grounded);
         answer = grounded.spokenAnswer;
       } else {
         this.runtimeMetrics.grounding.rejected += 1;
@@ -1691,6 +1745,16 @@ export class RealtimeConversationOrchestrator {
         this.log.warn({
           stage: 'llm.grounding_rejected', callId: this.call.id, reason: grounded.reason,
         }, 'LLM response was rejected before TTS because it was not grounded in published tenant evidence');
+      }
+      if (context.understandingOnly === true && grounded.valid) {
+        return {
+          cancelled: false,
+          text: '',
+          proposedAnswer: answer,
+          understanding: grounded,
+          toolCalls,
+          sources,
+        };
       }
       answer = this.liveCallMemory?.prepareAssistantResponse?.(answer) || answer;
       for (const sentence of sentenceBuffer.push(answer)) streaming.onSentence?.(sentence);
@@ -2105,10 +2169,42 @@ export class RealtimeConversationOrchestrator {
       };
     } else try {
       const llmStartedAt = Date.now();
-      response = await this.#llm(query, history, knowledge, {
+      const understandingStream = {
+        onSentence: () => {}, flush: () => {}, sentenceCount: () => 0,
+        epoch,
+        isCurrent: () => !this.#isStaleGeneration(epoch),
+      };
+      const initialResponse = await this.#llm(query, history, knowledge, {
         detectedIntent: knowledge.intentDetection,
-      }, streaming);
+        instruction: 'First determine the caller\'s structured meaning. Do not treat a Catalog name as the complete answer to a natural question.',
+        understandingOnly: true,
+      }, understandingStream);
       turnLatency.llmMs += Math.max(0, Date.now() - llmStartedAt);
+      if (initialResponse.understanding) {
+        const evidenceStartedAt = Date.now();
+        const tenantEvidence = await this.#tenantEvidence(query, initialResponse.understanding);
+        turnLatency.knowledgeMs += Math.max(0, Date.now() - evidenceStartedAt);
+        const enrichedKnowledge = withTenantEvidence(knowledge, tenantEvidence);
+        if (tenantEvidence.found) {
+          this.log.info({
+            stage: 'knowledge.full_document_evidence', callId: this.call.id,
+            questionType: initialResponse.understanding.questionType,
+            entityCount: tenantEvidence.entities.length,
+            sourceCount: tenantEvidence.sources.length,
+            durationMs: tenantEvidence.durationMs,
+          }, 'Retrieved tenant-approved full-document evidence from grounded caller understanding');
+          const answerStartedAt = Date.now();
+          response = await this.#llm(query, history, enrichedKnowledge, {
+            detectedIntent: knowledge.intentDetection,
+            understanding: initialResponse.understanding,
+            instruction: 'Answer now using the supplemental tenant evidence. Preserve the structured caller meaning and use only approved facts.',
+          }, streaming);
+          turnLatency.llmMs += Math.max(0, Date.now() - answerStartedAt);
+        } else {
+          this.liveCallMemory?.applyGroundedDecision?.(initialResponse.understanding);
+          response = { ...initialResponse, text: initialResponse.proposedAnswer ?? '' };
+        }
+      } else response = initialResponse;
     } catch (error) {
       this.#recordProviderFailure('llm', error, 'llm.response');
       this.providerHealth.record(this.runtimeProfile.agent.tenantId, 'llm', this.runtimeProfile.providers.llm, 'failure', {

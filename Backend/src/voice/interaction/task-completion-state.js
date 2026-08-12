@@ -67,7 +67,7 @@ function detectValue(field, transcript, history) {
   if (type === 'date') {
     const explicit = labeledValue(text, ['date', 'தேதி']);
     if (explicit) return explicit;
-    if (/\b(today|tomorrow|day after tomorrow)\b|இன்று|நாளை|நாளைக்கு|மறுநாள்|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?/iu.test(text)) return text;
+    if (/\b(today|tomorrow|day after tomorrow)\b|இன்று|நாளை|நாளைக்கு|மறுநாள்|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{1,2}(?:st|nd|rd|th)?\s+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s*,?\s*\d{2,4})?|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?(?:\s*,?\s*\d{2,4})?/iu.test(text)) return text;
     return '';
   }
   if (type === 'time') {

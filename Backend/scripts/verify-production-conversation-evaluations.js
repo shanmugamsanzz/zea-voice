@@ -123,8 +123,10 @@ const evidence = {
 };
 const envelope = buildGroundingEnvelope(evidence);
 const groundedSideQuestion = validateGroundedLlmResponse(JSON.stringify({
-  intent: 'location_question', flowAction: 'side_question', selectedEntityKeys: [],
-  evidenceSourceIds: ['source_1'], spokenAnswer: 'Our office is downtown.',
+  intent: 'location_question', questionType: 'side_question', flowAction: 'side_question', selectedEntityKeys: [],
+  evidenceSourceIds: ['source_1'],
+  assertedFacts: [{ type: 'policy', value: 'downtown', sourceId: 'source_1' }],
+  spokenAnswer: 'Our office is downtown.',
 }), envelope);
 assert.equal(groundedSideQuestion.valid, true);
 assert.equal(groundedSideQuestion.flowAction, 'side_question');

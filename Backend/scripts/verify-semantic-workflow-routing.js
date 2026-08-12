@@ -131,7 +131,7 @@ let currentQuery = 'How do these two options differ: Alpha Plan and Beta Plan?';
 const comparison = await routeKnowledgeQuery({ tenantId }, {
   agentId, query: currentQuery, usageDirection: 'inbound', language: 'en', routeHint: 'auto',
 }, dependencies);
-assert.equal(comparison.route, 'workflow');
+assert.equal(comparison.route, 'workflow_hint');
 assert.equal(comparison.content, 'Alpha Plan and Beta Plan approved comparison.');
 assert.equal(comparison.workflow.matchMethod, 'semantic');
 assert.deepEqual(comparison.catalogSelections.map((selection) => selection.item.name), ['Alpha Plan', 'Beta Plan']);
@@ -140,7 +140,7 @@ currentQuery = 'I have discomfort across my entire body. Which option may be rel
 const symptom = await routeKnowledgeQuery({ tenantId }, {
   agentId, query: currentQuery, usageDirection: 'inbound', language: 'en', routeHint: 'auto',
 }, dependencies);
-assert.equal(symptom.route, 'workflow');
+assert.equal(symptom.route, 'workflow_hint');
 assert.equal(symptom.content, 'Approved general screening guidance.');
 
 currentQuery = 'unrelated weather question';

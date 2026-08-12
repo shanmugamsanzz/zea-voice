@@ -157,6 +157,7 @@ export function buildAgentSystemPrompt(agent, { usageDirection, context, knowled
     '- If pendingQuestion is present, continue from that point after a call-check phrase or temporary interruption; never introduce yourself again.',
     '- Resolve short follow-ups against activeCategory, selectedCatalogItem and candidateItems before asking the caller to repeat information.',
     '- Treat runtime_context.detectedIntent as a routing hint, not a fact. Use it to understand natural Tamil, Tanglish and English wording, then ground the answer in verified Knowledge.',
+    '- For every ordinary caller turn, determine questionType from the complete caller meaning and live frame. Do not reduce a question to an entity name or price merely because a Catalog match exists.',
     '- Do not repeat a question listed in answeredQuestions unless the caller explicitly corrects or changes that information.',
     '- For a continuation opening, mention only verified prior-memory facts and keep the opening to one short spoken sentence.',
     '- Never claim a callback was scheduled unless runtime_context says currentCallbackRequest.scheduled is true.',
@@ -172,6 +173,12 @@ export function buildAgentSystemPrompt(agent, { usageDirection, context, knowled
       : '- Return plain spoken text without Markdown, headings, JSON, or code fences.',
     groundedResponseMode
       ? '- Select only listed entity keys and cite only listed evidence source IDs. Use no unsupported facts in spokenAnswer.'
+      : null,
+    groundedResponseMode
+      ? '- Return intent, questionType, flowAction, selectedEntityKeys, evidenceSourceIds and spokenAnswer. questionType must describe this caller turn, including price, inclusions, comparison, scenario or booking_field_answer when applicable.'
+      : null,
+    groundedResponseMode
+      ? '- Include assertedFacts. Each asserted fact must be a short verbatim value from one cited source and identify that sourceId. Every spoken price, test, policy, preparation, availability or action claim must be supported by those cited sources.'
       : null,
     groundedResponseMode
       ? '- Set flowAction to side_question when answering a detour and preserve the pending question; use answer_pending only when the caller actually answered it.'
