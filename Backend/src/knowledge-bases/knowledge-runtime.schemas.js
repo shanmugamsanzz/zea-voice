@@ -8,7 +8,7 @@ export const runtimeKnowledgeQuerySchema = z.object({
   routeHint: z.enum(['auto', 'workflow', 'conversation', 'catalog', 'faq', 'semantic']).default('auto'),
   intent: z.string().trim().min(1).max(160).optional(),
   detectedIntent: z.object({
-    intent: z.enum(['overview', 'category_request', 'details', 'price', 'comparison', 'scenario', 'booking_request', 'booking_field_answer', 'side_question', 'confirmation', 'unclear']),
+    intent: z.enum(['identity', 'overview', 'category_request', 'details', 'coverage', 'preparation', 'price', 'comparison', 'scenario', 'booking_request', 'booking_field_answer', 'side_question', 'confirmation', 'unclear']),
     confidence: z.number().min(0).max(1),
     signals: z.array(z.string().trim().min(1).max(80)).max(10).optional(),
   }).optional(),
@@ -18,6 +18,7 @@ export const runtimeKnowledgeQuerySchema = z.object({
   selectedCatalogItemId: z.string().uuid().optional(),
   currentTopic: z.string().trim().min(1).max(240).optional(),
   pendingQuestion: z.string().trim().min(1).max(500).optional(),
+  pendingQuestionType: z.string().trim().min(1).max(80).optional(),
   activeCategoryKey: z.string().trim().min(1).max(160).optional(),
   activeCategoryName: z.string().trim().min(1).max(240).optional(),
   selectedCatalogItemKey: z.string().trim().min(1).max(160).optional(),

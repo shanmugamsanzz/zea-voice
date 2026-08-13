@@ -31,6 +31,7 @@ import { ShortTurnMerger } from './interruption/short-turn-merger.js';
 import { greetingModes, resolveInteractionConfiguration } from './interaction/interaction-config.js';
 import { findCallCheckPhrase, resolveCallCheckConfiguration } from './interaction/call-check-config.js';
 import { findLanguageSwitchRequest, languageSwitchAcknowledgement } from './interaction/language-switch.js';
+import { detectConversationIntent } from './interaction/intent-detector.js';
 import { resolveCallContextId } from './interaction/context-id-resolver.js';
 import { createContextCachePolicy, publicContextCacheMetadata } from './interaction/context-cache-policy.js';
 import { conversationContextCache } from './interaction/conversation-context-cache.service.js';
@@ -42,6 +43,7 @@ import { buildConversationMemoryState } from './interaction/conversation-memory-
 import { compactLiveCallMemoryContext, openLiveCallMemory } from './interaction/live-call-memory.js';
 import {
   buildGroundingEnvelope,
+  createGroundedJsonStreamDecoder,
   normalizeQuestionType,
   validateGroundedLlmUnderstanding,
   validateGroundedLlmResponse,
@@ -191,15 +193,15 @@ const pauseFillerWords = new Set([
   'ம்', 'ஹம்', 'ஆமா', 'சரி', 'சரிங்க', 'இருங்க', 'இருங்கள்',
 ]);
 function hasFastKnowledgeAnswer(knowledge) {
-  // Catalog, FAQ and conversational matches are evidence for the LLM; they
-  // are not final caller answers.  Otherwise a query such as "does this plan
-  // include everything?" collapses into a bare name-and-price response.
+  // Catalog and conversational matches remain evidence for the LLM; otherwise
+  // a query such as "does this plan include everything?" can collapse into a
+  // bare name-and-price response. Exact FAQ answers are explicitly marked as
+  // approved direct speech by the Knowledge runtime.
   // Operational Workflow instructions are handled separately by
   // #workflowInstructionResponse and remain deterministic.
-  return knowledge?.found === true
-    && knowledge?.workflow?.deterministic === true
-    && isExactWorkflowResponse(knowledge)
-    && Boolean(String(knowledge.content ?? '').trim());
+  if (knowledge?.found !== true || !Boolean(String(knowledge.content ?? '').trim())) return false;
+  if (knowledge?.directAnswer?.approved === true && knowledge?.directAnswer?.validated === true) return true;
+  return knowledge?.workflow?.deterministic === true && isExactWorkflowResponse(knowledge);
 }
 
 function withTenantEvidence(knowledge, tenantEvidence) {
@@ -261,6 +263,7 @@ export class RealtimeConversationOrchestrator {
     this.finalized = false;
     this.closing = false;
     this.activeLlm = null;
+    this.activeRetrievalAbortController = null;
     this.activeLookaheadTtsAdapters = new Set();
     this.activeLookaheadSchedulers = new Set();
     this.sttReconnectPromise = null;
@@ -283,7 +286,11 @@ export class RealtimeConversationOrchestrator {
       },
       shortTurns: { deferred: 0, merged: 0, discarded: 0 },
       callChecks: { detected: 0, spoken: 0, failed: 0 },
-      grounding: { validated: 0, rejected: 0, fallbacks: 0, samples: [] },
+      grounding: {
+        validated: 0, rejected: 0, fallbacks: 0,
+        streamedSentencesValidated: 0, streamedSentencesRejected: 0, samples: [],
+      },
+      llmStreaming: { requests: 0, firstTokenSamples: [], firstTokenTargetMinMs: 250, firstTokenTargetMaxMs: 500 },
       turnLatency: [],
     };
     this.followUpOpeningSources = [];
@@ -962,6 +969,7 @@ export class RealtimeConversationOrchestrator {
   }
 
   async #handleSttEvent(event) {
+    const finalEventReceivedAt = event.type === 'final_transcript' ? Date.now() : null;
     const eventPolicy = sttEventPolicy(event.type);
     if (this.finalized) return;
     if (event.type === 'usage') {
@@ -1027,6 +1035,7 @@ export class RealtimeConversationOrchestrator {
       return;
     }
     if (event.type === 'speech_ended') {
+      this.lastSpeechEndedAt = Date.now();
       this.audioEngine?.setCallerSpeaking?.(false);
       try { this.adapters.stt.flush(); } catch (error) { this.log.debug({ err: error, callId: this.call.id }, 'STT flush was not required'); }
       const buffered = this.customerUtterance.markSpeechEnded();
@@ -1262,6 +1271,8 @@ export class RealtimeConversationOrchestrator {
     void this.#guard('turn', () => this.#runTurn(validation.text, action.history, epoch, {
       sttSpeechDurationMs: this.activeCustomerSpeechStartedAt
         ? Math.max(0, Date.now() - this.activeCustomerSpeechStartedAt) : null,
+      sttFinalizationMs: this.lastSpeechEndedAt
+        ? Math.max(0, (finalEventReceivedAt ?? Date.now()) - this.lastSpeechEndedAt) : null,
     }));
   }
 
@@ -1472,22 +1483,33 @@ export class RealtimeConversationOrchestrator {
     await this.#cancelActive('caller_barge_in');
   }
 
-  async #knowledge(query, understanding = null) {
+  async #knowledge(query, understanding = null, abortSignal = null) {
     try {
       const routeKnowledge = this.dependencies.routeKnowledge ?? routeKnowledgeQuery;
       const stageState = this.liveCallMemory?.snapshot();
-      const questionType = understanding ? normalizeQuestionType(understanding.questionType) : null;
-      const supportedIntent = questionType === 'item_request' || questionType === 'inclusions'
-        ? 'details' : questionType;
+      const localIntent = understanding ? null : detectConversationIntent(query, {
+        pendingQuestion: stageState?.pendingQuestion,
+        pendingQuestionKind: stageState?.pendingQuestionKind,
+      });
+      const questionType = understanding
+        ? normalizeQuestionType(understanding.questionType)
+        : localIntent?.intent;
+      const supportedIntent = questionType === 'item_request'
+        ? 'details' : (questionType === 'inclusions' ? 'coverage' : questionType);
       const detectedIntent = supportedIntent && supportedIntent !== 'unclear' ? {
         intent: supportedIntent,
-        confidence: 1,
-        signals: ['grounded_understanding'],
+        confidence: understanding ? 1 : localIntent.confidence,
+        signals: understanding ? ['grounded_understanding'] : localIntent.signals,
       } : undefined;
       const catalogQuestionTypes = new Set([
         'overview', 'category_request', 'item_request', 'details', 'inclusions',
-        'price', 'comparison',
+        'coverage', 'preparation', 'price', 'comparison',
       ]);
+      const pendingQuestionText = stageState?.pendingQuestionText ?? stageState?.lastAnsweredQuestion
+        ?? stageState?.pendingQuestion ?? undefined;
+      const pendingQuestionType = stageState?.pendingQuestionKind === 'field'
+        ? 'booking'
+        : (pendingQuestionText ? detectConversationIntent(pendingQuestionText).intent : undefined);
       const result = await routeKnowledge({
         tenantId: this.runtimeProfile.agent.tenantId,
         workspaceId: this.runtimeProfile.agent.workspaceId,
@@ -1503,13 +1525,14 @@ export class RealtimeConversationOrchestrator {
         currentStage: stageState?.currentStage,
         selectedCatalogItemId: stageState?.selectedCatalogItem?.id,
         currentTopic: stageState?.currentTopic ?? undefined,
-        pendingQuestion: stageState?.pendingQuestionText ?? stageState?.lastAnsweredQuestion
-          ?? stageState?.pendingQuestion ?? undefined,
+        pendingQuestion: pendingQuestionText,
+        pendingQuestionType,
         activeCategoryKey: stageState?.activeCategory?.key ?? undefined,
         activeCategoryName: stageState?.activeCategory?.name ?? undefined,
         selectedCatalogItemKey: stageState?.selectedCatalogItem?.key ?? undefined,
         selectedCatalogItemName: stageState?.selectedCatalogItem?.name ?? undefined,
         candidateItemKeys: (stageState?.candidateItems ?? []).map((item) => item.key).filter(Boolean).slice(0, 8),
+        abortSignal,
       });
       this.runtimeMetrics.knowledge.push({
         route: result.route, found: result.found === true, durationMs: Number(result.durationMs ?? 0),
@@ -1554,7 +1577,7 @@ export class RealtimeConversationOrchestrator {
     // A caller asking a price, comparison, symptom, or topic-change question
     // while booking is pending must never have that sentence stored as a
     // booking value.
-    if (understanding?.questionType !== 'booking_field_answer') return false;
+    if (!['booking_request', 'booking_field_answer'].includes(understanding?.questionType)) return false;
     const completionConfiguration = this.taskCompletionState.configuration;
     const stateBeforeCapture = this.liveCallMemory?.snapshot();
     const actionAllowed = this.liveCallMemory?.canRunAction?.(
@@ -1773,6 +1796,7 @@ export class RealtimeConversationOrchestrator {
   }
 
   async #llmAttempt(query, history, knowledge, context = {}, streaming = {}) {
+    const llmStartedAt = performance.now();
     const memoryPromptStartedAt = performance.now();
     const groundedResponseMode = this.runtimeProfile.agent.settings?.groundedLlmEnabled !== false;
     const liveMemory = this.liveCallMemory?.snapshot();
@@ -1798,6 +1822,16 @@ export class RealtimeConversationOrchestrator {
       missingFields,
     });
     const groundingEnvelope = buildGroundingEnvelope(knowledge);
+    const groundingRuntime = {
+      pendingQuestion: liveMemory?.pendingQuestion ?? liveMemory?.pendingQuestionText,
+      currentStage: liveMemory?.currentStage,
+      activeActions: liveMemory?.activeActions ?? [],
+    };
+    const configuredSpeech = [
+      liveMemory?.pendingQuestion,
+      liveMemory?.pendingQuestionText,
+      liveMemory?.resumeQuestionAfterAnswer,
+    ];
     this.#recordLiveMemoryTiming('prompt_context', memoryPromptStartedAt);
     const session = await createSelectedLlmStream(this.runtimeProfile, {
       callId: this.call.id,
@@ -1852,6 +1886,13 @@ export class RealtimeConversationOrchestrator {
     let toolCalls = [];
     let completion = {};
     const sentenceBuffer = createStreamingSentenceBuffer();
+    const groundedSentenceBuffer = createStreamingSentenceBuffer();
+    const groundedStreamDecoder = groundedResponseMode && context.understandingOnly !== true
+      ? createGroundedJsonStreamDecoder(groundingEnvelope, groundingRuntime)
+      : null;
+    const streamedGroundedSentences = [];
+    let firstTokenRecorded = false;
+    this.runtimeMetrics.llmStreaming.requests += 1;
     try {
       for await (const event of session.events) {
         if (streaming.isCurrent && !streaming.isCurrent()) {
@@ -1862,9 +1903,47 @@ export class RealtimeConversationOrchestrator {
           return { cancelled: true, text: '', toolCalls: [], sources: [] };
         }
         if (event.type === 'text_delta') {
+          if (!firstTokenRecorded && String(event.delta ?? '').length) {
+            firstTokenRecorded = true;
+            const firstTokenMs = Math.round((performance.now() - llmStartedAt) * 100) / 100;
+            if (this.runtimeMetrics.llmStreaming.firstTokenSamples.length < 100) {
+              this.runtimeMetrics.llmStreaming.firstTokenSamples.push(firstTokenMs);
+            }
+            const turnLatency = this.runtimeMetrics.turnLatency
+              .find((entry) => entry.epoch === streaming.epoch);
+            if (turnLatency && turnLatency.llmFirstTokenMs === null) turnLatency.llmFirstTokenMs = firstTokenMs;
+          }
           text += event.delta;
           if (!groundedResponseMode) {
             for (const sentence of sentenceBuffer.push(event.delta)) streaming.onSentence?.(sentence);
+          } else if (groundedStreamDecoder) {
+            const decoded = groundedStreamDecoder.push(event.delta);
+            for (const rawSentence of groundedSentenceBuffer.push(decoded.delta)) {
+              const preparedSentence = this.liveCallMemory?.prepareAssistantResponse?.(
+                rawSentence, { resumePending: false },
+              ) || rawSentence;
+              const validationStartedAt = performance.now();
+              const validation = validateGroundedSpokenSentences(
+                preparedSentence, groundingEnvelope, decoded.decision,
+                { configuredSpeech },
+              );
+              const turnLatency = this.runtimeMetrics.turnLatency
+                .find((entry) => entry.epoch === streaming.epoch);
+              if (turnLatency) turnLatency.validationMs += Math.max(0, performance.now() - validationStartedAt);
+              if (validation.valid) {
+                for (const sentence of validation.approved) {
+                  streamedGroundedSentences.push(sentence);
+                  this.runtimeMetrics.grounding.streamedSentencesValidated += 1;
+                  streaming.onSentence?.(sentence);
+                }
+              } else {
+                this.runtimeMetrics.grounding.streamedSentencesRejected += validation.rejected.length || 1;
+                this.log.warn({
+                  stage: 'llm.streamed_sentence_grounding_rejected', callId: this.call.id,
+                  reasons: validation.rejected.map((entry) => entry.reason),
+                }, 'Unsupported streamed sentence was blocked before TTS');
+              }
+            }
           }
         }
         else if (event.type === 'tool_call') toolCalls.push({ id: event.id, name: event.name, arguments: event.arguments });
@@ -1897,11 +1976,6 @@ export class RealtimeConversationOrchestrator {
           sources: [llmMessageSource(this.runtimeProfile.providers.llm, completion)],
         };
       }
-      const groundingRuntime = {
-        pendingQuestion: liveMemory?.pendingQuestion ?? liveMemory?.pendingQuestionText,
-        currentStage: liveMemory?.currentStage,
-        activeActions: liveMemory?.activeActions ?? [],
-      };
       const grounded = context.understandingOnly === true
         ? validateGroundedLlmUnderstanding(text, groundingEnvelope, groundingRuntime)
         : validateGroundedLlmResponse(text, groundingEnvelope, groundingRuntime);
@@ -1925,20 +1999,26 @@ export class RealtimeConversationOrchestrator {
         answer = context.understandingOnly === true ? '' : grounded.spokenAnswer;
       } else {
         this.runtimeMetrics.grounding.rejected += 1;
-        this.runtimeMetrics.grounding.fallbacks += 1;
-        const documentFallback = context.understandingOnly === true
-          ? null : approvedDocumentFallback(knowledge, this.runtimeProfile);
-        answer = documentFallback?.text ?? callerFacingFallback(this.runtimeProfile);
-        if (documentFallback?.source) {
-          sources.push(createMessageSource(messageSourceTypes.KNOWLEDGE, {
-            id: documentFallback.source.recordId ?? documentFallback.source.id,
-            label: 'Approved document fallback',
-            metadata: { reason: grounded.reason, recordType: documentFallback.source.recordType },
-          }));
+        if (streamedGroundedSentences.length) {
+          // Each retained sentence already passed the local evidence gate.
+          // Never append a second fallback after safe audio has begun.
+          answer = streamedGroundedSentences.join(' ');
         } else {
-          sources.push(createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
-            label: 'Grounding validation fallback', metadata: { reason: grounded.reason },
-          }));
+          this.runtimeMetrics.grounding.fallbacks += 1;
+          const documentFallback = context.understandingOnly === true
+            ? null : approvedDocumentFallback(knowledge, this.runtimeProfile);
+          answer = documentFallback?.text ?? callerFacingFallback(this.runtimeProfile);
+          if (documentFallback?.source) {
+            sources.push(createMessageSource(messageSourceTypes.KNOWLEDGE, {
+              id: documentFallback.source.recordId ?? documentFallback.source.id,
+              label: 'Approved document fallback',
+              metadata: { reason: grounded.reason, recordType: documentFallback.source.recordType },
+            }));
+          } else {
+            sources.push(createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
+              label: 'Grounding validation fallback', metadata: { reason: grounded.reason },
+            }));
+          }
         }
         this.log.warn({
           stage: 'llm.grounding_rejected', callId: this.call.id, reason: grounded.reason,
@@ -1962,11 +2042,7 @@ export class RealtimeConversationOrchestrator {
           groundingEnvelope,
           grounded,
           {
-            configuredSpeech: [
-              liveMemory?.pendingQuestion,
-              liveMemory?.pendingQuestionText,
-              liveMemory?.resumeQuestionAfterAnswer,
-            ],
+            configuredSpeech,
           },
         );
         if (sentenceValidation.rejected.length) {
@@ -1982,8 +2058,17 @@ export class RealtimeConversationOrchestrator {
             ?? callerFacingFallback(this.runtimeProfile);
         }
       }
-      for (const sentence of sentenceBuffer.push(answer)) streaming.onSentence?.(sentence);
-      for (const sentence of sentenceBuffer.flush()) streaming.onSentence?.(sentence);
+      const alreadyStreamed = new Set(streamedGroundedSentences.map((sentence) => (
+        String(sentence).normalize('NFKC').replace(/\s+/gu, ' ').trim()
+      )));
+      for (const sentence of sentenceBuffer.push(answer)) {
+        const identity = String(sentence).normalize('NFKC').replace(/\s+/gu, ' ').trim();
+        if (!alreadyStreamed.has(identity)) streaming.onSentence?.(sentence);
+      }
+      for (const sentence of sentenceBuffer.flush()) {
+        const identity = String(sentence).normalize('NFKC').replace(/\s+/gu, ' ').trim();
+        if (!alreadyStreamed.has(identity)) streaming.onSentence?.(sentence);
+      }
       streaming.flush?.();
       return {
         cancelled: false,
@@ -2030,6 +2115,7 @@ export class RealtimeConversationOrchestrator {
     let beginPromise = null;
     let failure = null;
     let sentenceNumber = 0;
+    let firstValidatedTextAt = null;
     let spokenCharacters = 0;
     let pendingShortSentence = '';
     let groupingTimer = null;
@@ -2121,6 +2207,7 @@ export class RealtimeConversationOrchestrator {
         return false;
       }
       sentenceNumber += 1;
+      firstValidatedTextAt ??= Date.now();
       const currentSentenceNumber = sentenceNumber;
       spokenCharacters += sentenceCharacters;
       spokenSentences.push(sentence);
@@ -2185,6 +2272,7 @@ export class RealtimeConversationOrchestrator {
         const played = await this.#synthesize(sentence, generationId, {
           kind, startedAt: turnStartedAt, deferDrain: true,
           playbackGroupId, deferBoundaryFlush: true, epoch,
+          validatedTextAt: firstValidatedTextAt,
         });
         if (played) completedSentences.push(sentence);
         return played;
@@ -2288,16 +2376,23 @@ export class RealtimeConversationOrchestrator {
       epoch,
       queryCharacters: Array.from(String(query ?? '')).length,
       sttSpeechDurationMs: sttTiming.sttSpeechDurationMs ?? null,
+      sttFinalizationMs: sttTiming.sttFinalizationMs ?? null,
       knowledgeMs: null,
+      retrievalMs: null,
+      rankingMs: null,
       llmMs: 0,
+      llmFirstTokenMs: null,
+      validationMs: 0,
       ttsFirstAudioMs: null,
       totalFirstAudioMs: null,
       route: 'none',
       fastKnowledge: false,
     };
     if (this.runtimeMetrics.turnLatency.length < 100) this.runtimeMetrics.turnLatency.push(turnLatency);
+    const retrievalAbortController = new AbortController();
+    this.activeRetrievalAbortController = retrievalAbortController;
     const knowledgeStartedAt = Date.now();
-    let knowledge = await this.#knowledge(query);
+    let knowledge = await this.#knowledge(query, null, retrievalAbortController.signal);
     if (epoch !== this.epoch || this.finalized) return;
     const stageState = this.liveCallMemory?.applyKnowledge?.(knowledge) ?? this.liveCallMemory?.snapshot();
     this.runtimeMetrics.conversationStage = {
@@ -2336,6 +2431,13 @@ export class RealtimeConversationOrchestrator {
         gateOpen: true,
         currentStage: stageState?.currentStage ?? null,
       };
+      // A single finalized utterance may explicitly request the action and
+      // provide its configured fields together. Capture those deterministic
+      // fields now; do not spend an LLM call merely to split known form data.
+      if (knowledge.intentDetection?.intent === 'booking_request'
+        && await this.#captureCompletionFieldAfterUnderstanding(query, history, {
+          questionType: 'booking_request',
+        })) return;
     } else if (completionConfiguration.enabled) {
       this.runtimeMetrics.taskCompletion = {
         ...publicTaskCompletionState(this.taskCompletionState),
@@ -2345,6 +2447,9 @@ export class RealtimeConversationOrchestrator {
       };
     }
     turnLatency.knowledgeMs = Math.max(0, Date.now() - knowledgeStartedAt);
+    turnLatency.retrievalMs = Number(knowledge.retrieval?.parallelDurationMs ?? turnLatency.knowledgeMs);
+    turnLatency.rankingMs = Number(knowledge.rankingValidationDurationMs ?? 0);
+    turnLatency.validationMs += turnLatency.rankingMs;
     turnLatency.route = knowledge.route ?? 'none';
     const workflowActionResponse = this.#workflowInstructionResponse(knowledge);
     const fastKnowledgeAnswer = Boolean(workflowActionResponse) || hasFastKnowledgeAnswer(knowledge);
@@ -2375,11 +2480,13 @@ export class RealtimeConversationOrchestrator {
         sources: [],
       };
     } else try {
-      if (this.runtimeProfile.agent.settings?.singleGroundedLlmResponseEnabled === true) {
+      // One grounded streaming response is the SaaS default. The legacy
+      // understand-then-answer path is available only through explicit false.
+      if (this.runtimeProfile.agent.settings?.singleGroundedLlmResponseEnabled !== false) {
         const llmStartedAt = Date.now();
         response = await this.#llm(query, history, knowledge, {
           detectedIntent: knowledge.intentDetection,
-          instruction: 'In one response, determine the caller meaning and produce the natural spoken answer using only the supplied approved evidence. Return only the required generic structured references and spoken answer.',
+          instruction: 'In one response, determine the caller meaning and produce the natural spoken answer using only the supplied approved evidence. Emit JSON fields in the contract order with spokenAnswer last. Return only the required generic structured references and spoken answer.',
         }, streaming);
         turnLatency.llmMs += Math.max(0, Date.now() - llmStartedAt);
         if (response.understanding) {
@@ -2403,7 +2510,9 @@ export class RealtimeConversationOrchestrator {
         this.#openCompletionActionAfterUnderstanding(initialResponse.understanding);
         if (await this.#captureCompletionFieldAfterUnderstanding(query, history, initialResponse.understanding)) return;
         const evidenceStartedAt = Date.now();
-        const understoodKnowledge = await this.#knowledge(query, initialResponse.understanding);
+        const understoodKnowledge = await this.#knowledge(
+          query, initialResponse.understanding, retrievalAbortController.signal,
+        );
         if (understoodKnowledge?.found) {
           knowledge = understoodKnowledge;
           this.liveCallMemory?.applyKnowledge?.(knowledge);
@@ -2708,6 +2817,16 @@ export class RealtimeConversationOrchestrator {
               if (turnLatency && turnLatency.ttsFirstAudioMs === null) {
                 turnLatency.ttsFirstAudioMs = firstAudioLatencyMs;
                 turnLatency.totalFirstAudioMs = latencyMs;
+                turnLatency.validatedTextToAudioMs = Math.max(
+                  0, Date.now() - Number(options.validatedTextAt ?? requestStartedAt),
+                );
+                turnLatency.responseClass = turnLatency.fastKnowledge ? 'direct_approved' : 'grounded_llm';
+                turnLatency.firstAudioTargetMs = 1000;
+                turnLatency.firstAudioAcceptableMs = turnLatency.fastKnowledge ? 1000 : 2000;
+                turnLatency.firstAudioStatus = latencyMs <= turnLatency.firstAudioTargetMs
+                  ? 'target_met'
+                  : (latencyMs <= turnLatency.firstAudioAcceptableMs
+                    ? 'acceptable_fallback' : 'target_missed');
                 this.log.info({
                   stage: 'voice.turn_latency', callId: this.call.id,
                   epoch: turnLatency.epoch,
@@ -2715,22 +2834,27 @@ export class RealtimeConversationOrchestrator {
                   knowledgeMs: turnLatency.knowledgeMs,
                   llmMs: turnLatency.llmMs,
                   ttsFirstAudioMs: turnLatency.ttsFirstAudioMs,
+                  validatedTextToAudioMs: turnLatency.validatedTextToAudioMs,
                   totalFirstAudioMs: turnLatency.totalFirstAudioMs,
                   route: turnLatency.route,
                   fastKnowledge: turnLatency.fastKnowledge,
+                  responseClass: turnLatency.responseClass,
+                  firstAudioStatus: turnLatency.firstAudioStatus,
                 }, 'Voice turn timing captured from STT through first TTS audio');
               }
               this.log.info({
                 stage: 'voice.first_response_audio', callId: this.call.id,
                 epoch: options.epoch ?? this.epoch, generationId, latencyMs,
               }, 'First response audio is ready for Plivo playback');
-              if (latencyMs > env.VOICE_FIRST_AUDIO_TARGET_MS) {
+              const applicableBreachMs = turnLatency?.fastKnowledge === true
+                ? env.VOICE_FIRST_AUDIO_TARGET_MS : Math.max(env.VOICE_FIRST_AUDIO_TARGET_MS, 2000);
+              if (latencyMs > applicableBreachMs) {
                 this.runtimeMetrics.latency.firstAudioTargetBreaches ??= 0;
                 this.runtimeMetrics.latency.firstAudioTargetBreaches += 1;
                 this.log.warn({
                   stage: 'voice.first_audio_target_missed', callId: this.call.id,
                   epoch: options.epoch ?? this.epoch, generationId, latencyMs,
-                  targetMs: env.VOICE_FIRST_AUDIO_TARGET_MS,
+                  targetMs: applicableBreachMs,
                 }, 'End-to-end first response audio exceeded the configured target');
               }
             }
@@ -3015,6 +3139,7 @@ export class RealtimeConversationOrchestrator {
       this.runtimeMetrics.interruptions.cancellationEpochs += 1;
       this.runtimeMetrics.interruptions.cancellationCalls += 1;
       this.cancelledEpochs.add(cancelledEpoch);
+      this.activeRetrievalAbortController?.abort(reason);
       // Keep a small bounded history for explicit late-event diagnostics.
       while (this.cancelledEpochs.size > 32) this.cancelledEpochs.delete(this.cancelledEpochs.values().next().value);
 

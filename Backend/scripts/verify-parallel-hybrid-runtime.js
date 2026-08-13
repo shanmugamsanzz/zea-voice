@@ -65,24 +65,48 @@ const result = await routeKnowledgeQuery({ tenantId, workspaceId: null, userId: 
 
 assert.equal(result.route, 'workflow');
 assert.equal(result.content, 'Approved exact action response.');
-assert.ok(result.rankedEvidence.length >= 3);
-assert.equal(result.rankedEvidence[0].route, 'workflow');
-assert.equal(result.rankedEvidence[0].factors.deterministicAction, 1_000);
-assert.ok(result.rankedEvidence.some((entry) => entry.route === 'conversation'));
-assert.ok(result.rankedEvidence.some((entry) => entry.route === 'faq'));
-assert.ok(result.rankedEvidence.some((entry) => entry.route === 'semantic'), JSON.stringify({
-  rankedEvidence: result.rankedEvidence,
-  retrieval: result.retrieval,
-}));
+assert.equal(result.fastPath.type, 'deterministic_workflow');
+assert.equal(result.fastPath.skippedEmbedding, true);
+assert.equal(embeddingCalls, 0);
+assert.equal(searchCalls, 0);
+
+const parallelResult = await routeKnowledgeQuery(
+  { tenantId, workspaceId: null, userId: null, role: 'COMPANY_DEVELOPER' },
+  {
+    agentId, query: 'approved general information', usageDirection: 'inbound', language: 'en',
+    routeHint: 'auto', currentStage: 'current-stage',
+  },
+  {
+    cache: null,
+    contextRunner: async (_auth, run) => run({ query: async () => ({ rows: [profile] }) }),
+    embed: async () => { embeddingCalls += 1; return [0.1, 0.2]; },
+    search: async (_tenant, _vector, options) => {
+      searchCalls += 1;
+      if (options.recordTypes?.includes('WORKFLOW_RULE')) return [];
+      return [{
+        id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', score: 0.91,
+        payload: {
+          tenant_id: tenantId, knowledge_base_id: knowledgeBaseId, publication_revision: 1,
+          agent_usage: 'BOTH', record_type: 'KNOWLEDGE_CHUNK', content: 'Approved general information.',
+          document_id: documentId, page_number: 1,
+        },
+      }];
+    },
+  },
+);
+assert.ok(parallelResult.rankedEvidence.length >= 2);
+assert.equal(parallelResult.rankedEvidence[0].route, 'semantic');
+assert.ok(parallelResult.rankedEvidence.some((entry) => entry.route === 'conversation'));
 assert.equal(embeddingCalls, 1);
 assert.ok(searchCalls >= 2);
-assert.equal(result.retrieval.channelFailures.length, 0);
+assert.equal(parallelResult.retrieval.channelFailures.length, 0);
 
 console.log(JSON.stringify({
   enabled: true,
   selectedRoute: result.route,
-  rankedRoutes: result.rankedEvidence.map((entry) => entry.route),
+  fastPath: result.fastPath.type,
+  rankedRoutes: parallelResult.rankedEvidence.map((entry) => entry.route),
   sharedEmbeddingCalls: embeddingCalls,
   vectorSearchCalls: searchCalls,
-  channelFailures: result.retrieval.channelFailures.length,
+  channelFailures: parallelResult.retrieval.channelFailures.length,
 }, null, 2));

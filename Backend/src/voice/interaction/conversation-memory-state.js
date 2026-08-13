@@ -55,9 +55,12 @@ export function normalizeLiveCallFrame(value = {}) {
   value = objectValue(value);
   const pending = value.pendingQuestion && typeof value.pendingQuestion === 'object'
     ? value.pendingQuestion : { key: value.pendingQuestion, text: value.pendingQuestionText, kind: value.pendingQuestionKind };
+  const currentStage = text(value.currentStage ?? value.conversationStage, 80) || null;
+  const fields = Object.freeze(safeJson(value.collectedData ?? value.collectedFields ?? value.fields) ?? {});
   return Object.freeze({
     callId: text(value.callId, 100) || null,
-    currentStage: text(value.currentStage ?? value.conversationStage, 80) || null,
+    currentStage,
+    conversationStage: currentStage,
     resumeStage: text(value.resumeStage, 80) || null,
     currentTopic: text(value.currentTopic, 240) || null,
     activeCategory: Object.freeze(safeJson(value.activeCategory) ?? {}),
@@ -70,7 +73,9 @@ export function normalizeLiveCallFrame(value = {}) {
       kind: text(pending?.kind, 40) || null,
     }),
     language: text(value.language, 20) || null,
-    fields: Object.freeze(safeJson(value.collectedData ?? value.fields) ?? {}),
+    fields,
+    collectedFields: fields,
+    lastAnswer: text(value.lastAnswer, maxMessageCharacters) || null,
     completedQuestions: Object.freeze(stringList(value.completedQuestions)),
     answeredQuestions: Object.freeze(stringList(value.answeredQuestions)),
     activeActions: Object.freeze(stringList(value.activeActions)),

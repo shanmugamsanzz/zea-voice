@@ -16,7 +16,12 @@ import {
   renderKnowledgeClarification,
   resolveKnowledgeConfidenceConfiguration,
 } from './knowledge-confidence-config.js';
-import { rankHybridEvidence, rankedEvidenceBundle, resolveEvidenceConfidence } from './hybrid-evidence-ranker.js';
+import {
+  rankHybridEvidence,
+  rankedEvidenceBundle,
+  resolveEvidenceConfidence,
+  validateDirectAnswer,
+} from './hybrid-evidence-ranker.js';
 import { runParallelHybridRetrieval } from './parallel-hybrid-retrieval.js';
 
 const defaultDependencies = {
@@ -25,6 +30,7 @@ const defaultDependencies = {
   search: searchTenantPoints,
   cache: redis,
 };
+const RUNTIME_ABORTED = Symbol('RUNTIME_ABORTED');
 
 function normalize(value) {
   return String(value ?? '').normalize('NFKC').toLocaleLowerCase()
@@ -46,6 +52,18 @@ function timed(promise, timeoutMs) {
     timer.unref?.();
   });
   return Promise.race([promise.catch(() => null), timeout]).finally(() => clearTimeout(timer));
+}
+
+async function abortable(promise, signal) {
+  if (!signal) return promise;
+  if (signal.aborted) return RUNTIME_ABORTED;
+  let abortHandler;
+  const aborted = new Promise((resolve) => {
+    abortHandler = () => resolve(RUNTIME_ABORTED);
+    signal.addEventListener('abort', abortHandler, { once: true });
+  });
+  try { return await Promise.race([promise, aborted]); }
+  finally { signal.removeEventListener('abort', abortHandler); }
 }
 
 async function cacheGet(cache, key) {
@@ -153,12 +171,79 @@ const runtimeProfileSql = `
            AND (fe.usage_direction='both' OR fe.usage_direction=$3::agent_usage_direction)
            AND v.is_current=true AND v.status='ready' AND v.deleted_at IS NULL
            AND d.status='ready' AND d.deleted_at IS NULL
-      ) f), '[]'::jsonb) AS faqs`;
+      ) f), '[]'::jsonb) AS faqs,
+    COALESCE((SELECT jsonb_agg(to_jsonb(g) ORDER BY g.chunk_index, g.id)
+      FROM (
+        SELECT c.id, c.knowledge_base_id, c.document_id, c.document_version_id,
+          d.original_filename AS document_name, c.source_page_start, c.source_page_end,
+          c.chunk_index, c.source_heading, c.content
+          FROM knowledge_chunks c JOIN assigned a ON a.id=c.knowledge_base_id
+          JOIN knowledge_document_versions v ON v.tenant_id=c.tenant_id AND v.id=c.document_version_id
+          JOIN knowledge_documents d ON d.tenant_id=c.tenant_id AND d.id=c.document_id
+         WHERE c.tenant_id=$1 AND c.status='approved'
+           AND (c.usage_direction='both' OR c.usage_direction=$3::agent_usage_direction)
+           AND v.is_current=true AND v.status='ready' AND v.deleted_at IS NULL
+           AND d.status='ready' AND d.deleted_at IS NULL
+      ) g), '[]'::jsonb) AS general_knowledge`;
+
+function lexicalTokens(value) {
+  return normalize(value).split(' ').filter((token) => token.length > 1);
+}
+
+function buildCachedDocumentIndex(profile) {
+  if (profile?.lexical_index?.version === 1 && Array.isArray(profile.lexical_index.documents)) return profile;
+  const documents = [];
+  const add = (recordType, record, searchableText, content) => {
+    const tokens = lexicalTokens(searchableText);
+    const spoken = String(content ?? '').trim();
+    if (!tokens.length || !spoken) return;
+    documents.push({
+      id: record.id,
+      recordType,
+      knowledgeBaseId: record.knowledge_base_id,
+      documentId: record.document_id,
+      documentVersionId: record.document_version_id,
+      documentName: record.document_name,
+      pageNumber: record.source_page_start,
+      pageEnd: record.source_page_end,
+      content: spoken,
+      tokens,
+    });
+  };
+  for (const item of profile.catalog_items ?? []) {
+    add('CATALOG_ITEM', item, [
+      item.name, item.item_key, item.category, item.category_key, item.parent_category_key,
+      ...(item.aliases ?? []), ...(item.category_aliases ?? []), item.description,
+    ].filter(Boolean).join(' '), evidenceItemContent(item));
+  }
+  for (const workflow of profile.workflows ?? []) {
+    const responseMode = String(workflow.action_config?.responseMode ?? 'instruction').trim().toLowerCase();
+    if (responseMode === 'instruction') continue;
+    add('WORKFLOW_RULE', workflow, [
+      workflow.name, workflow.intent, ...(workflow.conditions?.triggerPhrases ?? []),
+    ].filter(Boolean).join(' '), workflow.response_template);
+  }
+  for (const node of profile.conversations ?? []) {
+    add('CONVERSATION_NODE', node, [node.flow_key, node.node_key, node.content].join(' '), node.content);
+  }
+  for (const faq of profile.faqs ?? []) {
+    add('FAQ', faq, `${faq.question ?? ''} ${faq.answer ?? ''}`, faq.answer);
+  }
+  for (const chunk of profile.general_knowledge ?? []) {
+    add('KNOWLEDGE_CHUNK', chunk, `${chunk.source_heading ?? ''} ${chunk.content ?? ''}`, chunk.content);
+  }
+  const documentFrequency = {};
+  for (const document of documents) {
+    for (const token of new Set(document.tokens)) documentFrequency[token] = (documentFrequency[token] ?? 0) + 1;
+  }
+  profile.lexical_index = { version: 1, documents, documentFrequency };
+  return profile;
+}
 
 async function loadProfile(auth, input, runtime) {
   const key = `zea:rag:profile:${auth.tenantId}:${input.agentId}:${input.usageDirection}:${input.language}`;
   const cached = await cacheGet(runtime.cache, key);
-  if (cached) return { profile: cached, cacheHit: true };
+  if (cached) return { profile: buildCachedDocumentIndex(cached), cacheHit: true };
   const profile = await runtime.contextRunner(auth, async (client) => {
     const result = await client.query(runtimeProfileSql, [auth.tenantId, input.agentId, input.usageDirection]);
     return result.rows[0];
@@ -169,7 +254,9 @@ async function loadProfile(auth, input, runtime) {
   if (!usageAllowed(profile.agent_usage, input.usageDirection)) {
     throw new AppError(409, 'Agent does not support this call direction', 'RUNTIME_AGENT_DIRECTION_MISMATCH');
   }
-  await cacheSet(runtime.cache, key, profile, env.RAG_RUNTIME_PROFILE_CACHE_TTL_SECONDS);
+  buildCachedDocumentIndex(profile);
+  void cacheSet(runtime.cache, key, profile, env.RAG_RUNTIME_PROFILE_CACHE_TTL_SECONDS)
+    .catch(() => undefined);
   return { profile, cacheHit: false };
 }
 //
@@ -261,6 +348,9 @@ function workflowRecordResponse(record, {
       confidence,
       matchMethod: method,
     },
+    directAnswer: responseMode === 'exact' && Boolean(content)
+      ? { approved: true, matchMethod: method, sourceType: 'workflow' }
+      : null,
   };
 }
 
@@ -566,6 +656,15 @@ function catalogResponse(record, resolution) {
       matchedText: resolution.matchedText,
       matchedKind: resolution.matchedKind ?? 'name',
     },
+    resolvedEntity: {
+      id: record.id,
+      key: record.item_key,
+      name: record.name,
+      category: record.category ?? record.catalog_name,
+      categoryKey: record.category_key,
+      parentCategoryKey: record.parent_category_key,
+      canonical: true,
+    },
   };
 }
 
@@ -774,6 +873,7 @@ async function semanticCatalogResolution(auth, profile, input, normalizedQuery, 
 
 async function catalogRoute(auth, profile, input, normalizedQuery, runtime, localClassification = null, {
   allowClarification = true,
+  includeSemantic = true,
 } = {}) {
   const confidence = resolveKnowledgeConfidenceConfiguration(profile.agent_settings);
   let local = localClassification ?? classifyCatalogEntityLocally(profile.catalog_items, input.query, confidence);
@@ -792,6 +892,19 @@ async function catalogRoute(auth, profile, input, normalizedQuery, runtime, loca
       return response ? { ...response, retrieval: { contextUsed } } : null;
     }
     return { ...catalogResponse(local.item, local), retrieval: { contextUsed } };
+  }
+  if (!includeSemantic) {
+    if (!allowClarification || local.status !== 'uncertain') return null;
+    const candidateItems = local.candidates ?? [];
+    const record = profile.catalog_items.find((item) => (
+      String(item.id).toLowerCase() === String(candidateItems[0]?.itemId ?? '').toLowerCase()
+      || item.name === candidateItems[0]?.name
+    )) ?? profile.catalog_items[0];
+    const response = clarificationResponse(record, confidence, candidateItems, {
+      kind: 'catalog', confidence: local.confidence,
+      reason: local.reason ?? (local.ambiguous ? 'ambiguous_match' : 'low_confidence'),
+    });
+    return response ? { ...response, retrieval: { contextUsed, semanticSkipped: true } } : null;
   }
   const semantic = await semanticCatalogResolution(auth, profile, input, normalizedQuery, runtime, local);
   const resolution = semantic?.status === 'match' ? semantic : null;
@@ -837,7 +950,74 @@ function faqRoute(profile, input, normalizedQuery) {
   const sameLanguage = profile.faqs.filter((item) => item.language === input.language);
   const record = sameLanguage.find((item) => normalize(item.question) === normalizedQuery)
     ?? profile.faqs.find((item) => normalize(item.question) === normalizedQuery);
-  return record ? routeResponse('faq', record, record.answer, { question: record.question }) : null;
+  return record ? {
+    ...routeResponse('faq', record, record.answer, {
+      question: record.question,
+      questionMatchMethod: 'exact',
+    }),
+    // FAQ answers are explicitly tenant-authored caller-facing speech. An
+    // exact normalized question match can therefore bypass embeddings and the
+    // LLM without turning fuzzy/semantic evidence into a final answer.
+    directAnswer: { approved: true, matchMethod: 'exact', sourceType: 'faq' },
+  } : null;
+}
+
+function lexicalRoute(profile, input, allowedRecordTypes = null) {
+  const index = profile.lexical_index;
+  const queryTokens = [...new Set(lexicalTokens(input.query))];
+  if (!index?.documents?.length || !queryTokens.length) return null;
+  const allowed = allowedRecordTypes ? new Set(allowedRecordTypes) : null;
+  const documents = allowed
+    ? index.documents.filter((document) => allowed.has(document.recordType))
+    : index.documents;
+  if (!documents.length) return null;
+  const averageLength = documents.reduce((total, document) => total + document.tokens.length, 0) / documents.length;
+  const ranked = documents.map((document) => {
+    const frequencies = new Map();
+    for (const token of document.tokens) frequencies.set(token, (frequencies.get(token) ?? 0) + 1);
+    let score = 0;
+    let matched = 0;
+    for (const token of queryTokens) {
+      const frequency = frequencies.get(token) ?? 0;
+      if (!frequency) continue;
+      matched += 1;
+      const documentFrequency = Number(index.documentFrequency?.[token] ?? 0);
+      const inverseFrequency = Math.log(1 + (documents.length - documentFrequency + 0.5) / (documentFrequency + 0.5));
+      const denominator = frequency + 1.2 * (0.25 + 0.75 * (document.tokens.length / Math.max(1, averageLength)));
+      score += inverseFrequency * ((frequency * 2.2) / denominator);
+    }
+    const coverage = matched / queryTokens.length;
+    const confidence = matched ? Math.min(0.95, 0.5 + coverage * 0.45) : 0;
+    return { document, score, matched, coverage, confidence };
+  }).filter((entry) => entry.matched > 0 && entry.coverage >= (queryTokens.length > 1 ? 0.5 : 1))
+    .sort((left, right) => right.coverage - left.coverage || right.score - left.score);
+  if (!ranked.length) return null;
+  const matches = ranked.slice(0, Math.max(3, Math.min(Number(input.topK ?? 5), 8))).map((entry) => ({
+    id: entry.document.id,
+    score: Math.round(entry.confidence * 10000) / 10000,
+    lexicalScore: Math.round(entry.score * 10000) / 10000,
+    content: entry.document.content,
+    recordType: entry.document.recordType,
+    knowledgeBaseId: entry.document.knowledgeBaseId,
+    documentId: entry.document.documentId,
+    pageNumber: entry.document.pageNumber,
+  }));
+  const best = matches[0];
+  return {
+    route: 'lexical',
+    found: true,
+    content: best.content,
+    source: {
+      recordId: best.id,
+      recordType: best.recordType,
+      knowledgeBaseId: best.knowledgeBaseId,
+      documentId: best.documentId,
+      pageNumber: best.pageNumber,
+      confidence: best.score,
+    },
+    matches,
+    lexical: { algorithm: 'bm25', cachedIndex: true },
+  };
 }
 
 function allowedSemanticKnowledgeBases(profile) {
@@ -928,7 +1108,13 @@ function evidenceQuery(input = {}) {
 export async function retrieveTenantEvidence(auth, input, dependencies = defaultDependencies) {
   const startedAt = performance.now();
   const runtime = { ...defaultDependencies, ...dependencies };
-  const loaded = await loadProfile(auth, input, runtime);
+  const loaded = await abortable(loadProfile(auth, input, runtime), input.abortSignal);
+  if (loaded === RUNTIME_ABORTED) {
+    return {
+      route: 'none', found: false, content: null, source: null, cancelled: true,
+      durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+    };
+  }
   const { profile } = loaded;
   const knowledgeBases = allowedSemanticKnowledgeBases(profile);
   const selectedKeys = new Set([
@@ -981,14 +1167,16 @@ export async function retrieveTenantEvidence(auth, input, dependencies = default
   }
   if (knowledgeBases.length && env.RAG_ENABLED) {
     const query = evidenceQuery(input);
-    const vector = await runtime.embed(query);
-    const rawMatches = await runtime.search(auth.tenantId, vector, {
-      knowledgeBases,
-      usageDirection: input.usageDirection,
-      limit: Math.max(4, Math.min(Number(input.topK ?? 8), 12)),
-      scoreThreshold: env.RAG_RUNTIME_MIN_SCORE,
-      recordTypes: ['CATALOG_ITEM', 'WORKFLOW_RULE', 'CONVERSATION_NODE', 'FAQ', 'KNOWLEDGE_CHUNK'],
-    });
+    const rawMatches = await timed((async () => {
+      const vector = await runtime.embed(query);
+      return runtime.search(auth.tenantId, vector, {
+        knowledgeBases,
+        usageDirection: input.usageDirection,
+        limit: Math.max(4, Math.min(Number(input.topK ?? 8), 12)),
+        scoreThreshold: env.RAG_RUNTIME_MIN_SCORE,
+        recordTypes: ['CATALOG_ITEM', 'WORKFLOW_RULE', 'CONVERSATION_NODE', 'FAQ', 'KNOWLEDGE_CHUNK'],
+      });
+    })(), env.RAG_RUNTIME_SEMANTIC_DEADLINE_MS) ?? [];
     const allowed = new Map(knowledgeBases.map((item) => [item.id.toLowerCase(), item.publicationRevision]));
     for (const match of rawMatches) {
       const payload = match.payload ?? {};
@@ -1042,12 +1230,21 @@ async function parallelKnowledgeCandidates({
   const conversation = automatic || input.routeHint === 'conversation';
   const faq = automatic || input.routeHint === 'faq';
   const semantic = automatic || input.routeHint === 'semantic';
+  const semanticDeadlineMs = env.RAG_RUNTIME_SEMANTIC_DEADLINE_MS;
   return runParallelHybridRetrieval({
     ...(workflow ? {
-      workflow_exact: () => workflowRoute(
-        profile, input, normalizedQuery, currentCatalogResolution, { includeScenarioRules: false },
-      ),
-      workflow_semantic: () => semanticWorkflowRoute(auth, profile, input, runtime, currentCatalogResolution),
+      workflow_strong: () => {
+        const candidate = workflowRoute(
+          profile, input, normalizedQuery, currentCatalogResolution, { includeScenarioRules: false },
+        );
+        return candidate?.route === 'workflow' ? candidate : null;
+      },
+      workflow_fuzzy_phonetic: () => {
+        const candidate = workflowRoute(
+          profile, input, normalizedQuery, currentCatalogResolution, { includeScenarioRules: false },
+        );
+        return candidate?.route === 'workflow_hint' ? candidate : null;
+      },
     } : {}),
     ...(workflow && input.detectedIntent?.intent === 'scenario' ? {
       workflow_scenario: () => workflowRoute(
@@ -1055,14 +1252,57 @@ async function parallelKnowledgeCandidates({
       ),
     } : {}),
     ...(catalog ? {
-      catalog_hybrid: () => catalogRoute(
-        auth, profile, input, normalizedQuery, runtime, currentCatalogClassification,
-        { allowClarification: false },
-      ),
+      live_state_context: () => activeCatalogContextResponse(profile, input),
+      catalog_alias_hierarchy: async () => {
+        const candidate = await catalogRoute(
+          auth, profile, input, normalizedQuery, runtime, currentCatalogClassification,
+          { allowClarification: false, includeSemantic: false },
+        );
+        return ['fuzzy', 'phonetic'].includes(candidate?.entityResolution?.method) ? null : candidate;
+      },
+      catalog_fuzzy_phonetic: async () => {
+        const candidate = await catalogRoute(
+          auth, profile, input, normalizedQuery, runtime, currentCatalogClassification,
+          { allowClarification: false, includeSemantic: false },
+        );
+        return ['fuzzy', 'phonetic'].includes(candidate?.entityResolution?.method) ? candidate : null;
+      },
     } : {}),
-    ...(conversation ? { conversation_script: () => conversationRoute(profile, input) } : {}),
-    ...(faq ? { faq_exact: () => faqRoute(profile, input, normalizedQuery) } : {}),
-    ...(semantic ? { document_semantic: () => semanticRoute(auth, profile, input, normalizedQuery, runtime) } : {}),
+    // Catalog and Workflow have dedicated alias/fuzzy resolvers; the BM25
+    // channel searches caller-facing document indexes so it cannot collapse
+    // an ambiguous entity set into an arbitrary Catalog item.
+    lexical_bm25: () => lexicalRoute(
+      profile, input, ['CONVERSATION_NODE', 'FAQ', 'KNOWLEDGE_CHUNK'],
+    ),
+    ...(conversation ? {
+      conversation_script: () => lexicalRoute(profile, input, ['CONVERSATION_NODE']),
+      stage_continuation: () => conversationRoute(profile, input),
+    } : {}),
+    ...(faq ? {
+      faq_exact: () => faqRoute(profile, input, normalizedQuery),
+      faq_search: () => lexicalRoute(profile, input, ['FAQ']),
+    } : {}),
+    general_knowledge: () => lexicalRoute(profile, input, ['KNOWLEDGE_CHUNK']),
+    ...(semantic ? {
+      workflow_semantic: {
+        deadlineMs: semanticDeadlineMs,
+        retrieve: () => semanticWorkflowRoute(auth, profile, input, runtime, currentCatalogResolution),
+      },
+      catalog_semantic: {
+        deadlineMs: semanticDeadlineMs,
+        retrieve: () => catalogRoute(
+          auth, profile, input, normalizedQuery, runtime, currentCatalogClassification,
+          { allowClarification: false, includeSemantic: true },
+        ),
+      },
+      document_semantic: {
+        deadlineMs: semanticDeadlineMs,
+        retrieve: () => semanticRoute(auth, profile, input, normalizedQuery, runtime),
+      },
+    } : {}),
+  }, {
+    defaultDeadlineMs: env.RAG_RUNTIME_CHANNEL_DEADLINE_MS,
+    signal: input.abortSignal,
   });
 }
 
@@ -1079,18 +1319,30 @@ async function parallelRankedKnowledgeResult({
   ])).values()];
   const clarifications = uniqueCandidates.filter((candidate) => candidate.route === 'clarification');
   const workflowHints = uniqueCandidates.filter((candidate) => candidate.route === 'workflow_hint');
+  const rankingStartedAt = performance.now();
   const ranked = rankHybridEvidence(
     uniqueCandidates.filter((candidate) => candidate.route !== 'clarification'),
     {
       selectedItemId: input.selectedCatalogItemId,
       selectedItemKey: input.selectedCatalogItemKey,
+      resolvedEntityId: currentCatalogResolution?.item?.id,
+      resolvedEntityKey: currentCatalogResolution?.item?.item_key,
       activeCategoryKey: input.activeCategoryKey,
+      questionType: input.detectedIntent?.intent,
+      pendingQuestionType: input.pendingQuestionType,
       currentStage: input.currentStage,
       knowledgeBases: profile.knowledge_bases,
     },
   );
-  const selectedCandidate = ranked[0]?.candidate ?? clarifications[0] ?? null;
-  const confidenceRoute = resolveEvidenceConfidence(ranked, confidence);
+  // A Conversation Script node represents where the call can continue; it is
+  // not evidence that it answers the caller's latest question. Prefer every
+  // grounded question candidate before falling back to the saved stage node.
+  const questionRanked = ranked.filter((entry) => entry.candidate.route !== 'conversation');
+  const selectedCandidate = questionRanked[0]?.candidate
+    ?? ranked[0]?.candidate
+    ?? clarifications[0]
+    ?? null;
+  const confidenceRoute = resolveEvidenceConfidence(questionRanked.length ? questionRanked : ranked, confidence);
   const configuredConfidenceRule = profile.workflows
     .filter((record) => record.conditions?.confidenceOutcome === confidenceRoute.outcome)
     .sort((left, right) => Number(left.priority ?? 100) - Number(right.priority ?? 100))
@@ -1116,29 +1368,54 @@ async function parallelRankedKnowledgeResult({
   if (!result && catalogAllowed) {
     result = await catalogRoute(auth, profile, input, normalizedQuery, runtime, currentCatalogClassification, {
       allowClarification: true,
+      includeSemantic: false,
     });
   }
+  // Ambiguous evidence is still useful grounding for the single LLM call.
+  // It must not become direct speech, but dropping it entirely causes an
+  // unnecessary no-evidence response when approved documents were retrieved.
+  if (!result && selectedCandidate) result = { ...selectedCandidate };
   if (['workflow', 'workflow_hint'].includes(result?.route) && currentCatalogEntities.length > 1) {
     result.catalogSelections = currentCatalogEntities.map((selection) => catalogResponse(selection.item, selection));
   } else if (['workflow', 'workflow_hint'].includes(result?.route) && currentCatalogResolution?.entityType === 'item') {
     result.catalogSelection = catalogResponse(currentCatalogResolution.item, currentCatalogResolution);
   }
   if (!result) return null;
-  result.rankedEvidence = rankedEvidenceBundle(ranked);
+  const orderedEvidence = [
+    ...questionRanked,
+    ...ranked.filter((entry) => entry.candidate.route === 'conversation'),
+  ];
+  result.rankedEvidence = rankedEvidenceBundle(orderedEvidence);
   result.retrieval = {
     ...(result.retrieval ?? {}),
     parallelDurationMs: retrieval.durationMs,
+    channelsStarted: retrieval.channelsStarted,
     channelFailures: retrieval.failures,
     candidateCount: uniqueCandidates.length,
     confidence: confidence.highConfidence,
+    semanticDeadlineMs: env.RAG_RUNTIME_SEMANTIC_DEADLINE_MS,
+    usedCachedDocumentIndex: profile.lexical_index?.version === 1,
   };
   result.confidenceRouting = confidenceRoute;
+  result.questionType = input.detectedIntent?.intent ?? 'unclear';
+  const directValidation = validateDirectAnswer(result, {
+    questionType: input.detectedIntent?.intent,
+    confidenceOutcome: confidenceRoute.outcome,
+  });
+  if (result.directAnswer?.approved === true) {
+    result.directAnswer = { ...result.directAnswer, validated: directValidation.valid };
+  }
+  result.directAnswerValidation = directValidation;
+  result.rankingValidationDurationMs = Math.round((performance.now() - rankingStartedAt) * 100) / 100;
   if (workflowHints.length) result.workflowHints = workflowHints;
   return result;
 }
 
 export async function routeKnowledgeQuery(auth, input, dependencies = defaultDependencies) {
   const startedAt = performance.now();
+  if (input.abortSignal?.aborted) {
+    return { route: 'none', found: false, content: null, source: null, cancelled: true, durationMs: 0 };
+  }
   const runtime = { ...defaultDependencies, ...dependencies };
   let queryVectorPromise = null;
   runtime.embedQueryOnce = (query) => {
@@ -1148,6 +1425,7 @@ export async function routeKnowledgeQuery(auth, input, dependencies = defaultDep
   const normalizedQuery = normalize(input.query);
   const loaded = await loadProfile(auth, input, runtime);
   const { profile } = loaded;
+  const routingStartedAt = performance.now();
   const confidence = resolveKnowledgeConfidenceConfiguration(profile.agent_settings);
   const currentCatalogClassification = classifyCatalogEntityLocally(profile.catalog_items, input.query, confidence);
   const currentCatalogResolution = currentCatalogClassification.status === 'match'
@@ -1155,16 +1433,80 @@ export async function routeKnowledgeQuery(auth, input, dependencies = defaultDep
   const currentCatalogEntities = resolveCatalogEntitiesLocally(profile.catalog_items, input.query, {
     minimumConfidence: confidence.highConfidence,
   });
-  if (profile.agent_settings?.parallelHybridRetrievalEnabled === true) {
+
+  // Question-first fast path. Strong tenant-configured Workflow matches are
+  // evaluated before any embedding/Qdrant work. Exact FAQ questions are also
+  // safe to speak directly because their answers are approved caller-facing
+  // document content. Stage-gated actions retain their safety gate; ordinary
+  // current-stage script wording is deliberately not considered here.
+  const fastWorkflow = (input.routeHint === 'auto' || input.routeHint === 'workflow')
+    ? workflowRoute(profile, input, normalizedQuery, currentCatalogResolution, {
+      includeScenarioRules: input.detectedIntent?.intent === 'scenario',
+    })
+    : null;
+  let fastResult = fastWorkflow?.route === 'workflow' ? fastWorkflow : null;
+  if (!fastResult && (input.routeHint === 'auto' || input.routeHint === 'faq')) {
+    fastResult = faqRoute(profile, input, normalizedQuery);
+  }
+  if (fastResult?.directAnswer?.approved === true
+    || (fastResult?.route === 'workflow' && fastResult.workflow?.deterministic === true)) {
+    if (fastResult.route === 'workflow' && currentCatalogEntities.length > 1) {
+      fastResult.catalogSelections = currentCatalogEntities.map((selection) => catalogResponse(selection.item, selection));
+    } else if (fastResult.route === 'workflow' && currentCatalogResolution?.entityType === 'item') {
+      fastResult.catalogSelection = catalogResponse(currentCatalogResolution.item, currentCatalogResolution);
+    }
+    return {
+      ...fastResult,
+      directAnswer: fastResult.directAnswer
+        ? { ...fastResult.directAnswer, validated: true }
+        : fastResult.directAnswer,
+      questionType: input.detectedIntent?.intent ?? 'unclear',
+      profileCacheHit: loaded.cacheHit,
+      fastPath: {
+        type: fastResult.route === 'workflow' ? 'deterministic_workflow' : 'exact_faq',
+        skippedEmbedding: true,
+        skippedLlm: true,
+        routingDurationMs: Math.round((performance.now() - routingStartedAt) * 100) / 100,
+      },
+      durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+    };
+  }
+  // Concurrent hybrid retrieval is the SaaS default for every tenant. An
+  // explicit false remains available only as a temporary legacy rollback.
+  if (profile.agent_settings?.parallelHybridRetrievalEnabled !== false) {
+    const knowledgeFingerprint = profile.knowledge_bases
+      .map((item) => `${item.id}:${item.publicationRevision}`).join('|');
+    const hybridContext = [
+      input.detectedIntent?.intent, input.currentStage, input.activeCategoryKey,
+      input.selectedCatalogItemId, input.selectedCatalogItemKey, input.pendingQuestionType,
+    ].map((value) => normalize(value)).join('|');
+    const hybridCacheKey = `zea:rag:hybrid:${auth.tenantId}:${input.agentId}:${input.usageDirection}:${hash(
+      `${knowledgeFingerprint}|${normalizedQuery}|${hybridContext}`,
+    )}`;
+    const cachedHybrid = await cacheGet(runtime.cache, hybridCacheKey);
+    if (cachedHybrid) {
+      return {
+        ...cachedHybrid,
+        profileCacheHit: loaded.cacheHit,
+        hybridCacheHit: true,
+        durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+      };
+    }
     const parallelResult = await parallelRankedKnowledgeResult({
       auth, profile, input, normalizedQuery, runtime, confidence,
       currentCatalogClassification, currentCatalogResolution, currentCatalogEntities,
     });
-    return {
+    const response = {
       ...(parallelResult ?? { route: 'none', found: false, content: null, source: null }),
       profileCacheHit: loaded.cacheHit,
+      hybridCacheHit: false,
       durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
     };
+    if (response.found === true && response.route !== 'workflow' && !input.abortSignal?.aborted) {
+      void cacheSet(runtime.cache, hybridCacheKey, response, env.RAG_RUNTIME_RESULT_CACHE_TTL_SECONDS)
+        .catch(() => undefined);
+    }
+    return response;
   }
   const hasMultipleCatalogItems = currentCatalogEntities.length > 1;
   let result = null;
@@ -1231,9 +1573,6 @@ export async function routeKnowledgeQuery(auth, input, dependencies = defaultDep
   } else if (['workflow', 'workflow_hint'].includes(result?.route) && currentCatalogResolution?.entityType === 'item') {
     result.catalogSelection = catalogResponse(currentCatalogResolution.item, currentCatalogResolution);
   }
-  if (!result && (input.routeHint === 'auto' || input.routeHint === 'conversation')) {
-    result = conversationRoute(profile, input);
-  }
   if (!result && (input.routeHint === 'auto' || input.routeHint === 'catalog')) {
     result = await catalogRoute(
       auth, profile, input, normalizedQuery, runtime, currentCatalogClassification,
@@ -1245,6 +1584,11 @@ export async function routeKnowledgeQuery(auth, input, dependencies = defaultDep
   }
   if (!result && (input.routeHint === 'auto' || input.routeHint === 'semantic')) {
     result = await semanticRoute(auth, profile, input, normalizedQuery, runtime);
+  }
+  // The saved stage is continuation context, not an answer gate. Consult its
+  // Script node only after routes that can answer the latest caller question.
+  if (!result && (input.routeHint === 'auto' || input.routeHint === 'conversation')) {
+    result = conversationRoute(profile, input);
   }
   // Clarification is deliberately last. At this point the exact rules, live
   // frame, Catalog hierarchy, scenario rules and semantic evidence have all
@@ -1275,6 +1619,7 @@ export async function invalidateTenantKnowledgeCache(tenantId, cache = redis) {
     `zea:rag:profile:${tenant}:*`,
     `zea:rag:result:${tenant}:*`,
     `zea:rag:entity:${tenant}:*`,
+    `zea:rag:hybrid:${tenant}:*`,
   ];
   try {
     for (const pattern of patterns) {

@@ -31,7 +31,8 @@ const detourDuringField = detectConversationIntent('எங்க location இர
 });
 assert.equal(detourDuringField.intent, 'side_question');
 assert.deepEqual(intentNames, [
-  'overview', 'category_request', 'details', 'price', 'comparison', 'scenario',
+  'identity', 'overview', 'category_request', 'details', 'coverage', 'preparation',
+  'price', 'comparison', 'scenario',
   'booking_request', 'booking_field_answer', 'side_question', 'confirmation', 'unclear',
 ]);
 

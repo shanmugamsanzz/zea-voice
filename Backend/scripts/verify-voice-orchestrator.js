@@ -287,6 +287,7 @@ const orchestrator = new RealtimeConversationOrchestrator(media, {
       return {
         route: 'catalog', found: true, content: 'Silver package costs 2,000 rupees.',
         matches: [], durationMs: 4,
+        directAnswer: { approved: true, validated: true, matchMethod: 'exact', sourceType: 'catalog' },
       };
     }
     return { route: 'semantic', found: true, content: 'Appointments are available.', matches: [], durationMs: 4 };

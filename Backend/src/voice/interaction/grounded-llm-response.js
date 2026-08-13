@@ -7,8 +7,8 @@ const maximumAssertedFacts = 12;
 // let every tenant use the same safe live-call mechanics without encoding a
 // company's products, services, or wording in application code.
 const questionTypes = new Set([
-  'overview', 'category_request', 'item_request', 'details', 'inclusions',
-  'price', 'comparison', 'scenario', 'booking_request', 'booking_field_answer',
+  'identity', 'overview', 'category_request', 'item_request', 'details', 'inclusions', 'coverage',
+  'preparation', 'price', 'comparison', 'scenario', 'booking_request', 'booking_field_answer',
   'side_question', 'confirmation', 'unclear',
 ]);
 
@@ -16,6 +16,7 @@ const questionTypes = new Set([
 // Keep this vocabulary domain-neutral: it classifies conversation mechanics,
 // never tenant products, industries, or customer wording.
 const questionTypeAliases = new Map([
+  ['identity', 'identity'], ['caller_identity', 'identity'], ['business_identity', 'identity'],
   ['overview', 'overview'], ['package_overview', 'overview'], ['catalog_overview', 'overview'],
   ['product_overview', 'overview'], ['service_overview', 'overview'], ['options_list', 'overview'],
   ['available_options', 'overview'], ['list_options', 'overview'],
@@ -29,6 +30,8 @@ const questionTypeAliases = new Map([
   ['description', 'details'], ['explanation', 'details'], ['package_explanation', 'details'],
   ['inclusions', 'inclusions'], ['inclusion', 'inclusions'], ['benefits', 'inclusions'],
   ['features', 'inclusions'], ['coverage', 'inclusions'], ['whats_included', 'inclusions'],
+  ['preparation', 'preparation'], ['preparation_instructions', 'preparation'],
+  ['requirements', 'preparation'], ['fasting', 'preparation'],
   ['price', 'price'], ['price_question', 'price'], ['pricing', 'price'], ['cost', 'price'],
   ['fee', 'price'], ['amount', 'price'],
   ['comparison', 'comparison'], ['compare', 'comparison'], ['difference', 'comparison'],
@@ -149,9 +152,14 @@ export function buildGroundingEnvelope(knowledge = {}) {
 export function groundedResponseContract(envelope) {
   return Object.freeze({
     format: 'json_object',
+    fieldOrder: [
+      'intent', 'questionType', 'flowAction', 'selectedEntityKeys',
+      'evidenceSourceIds', 'assertedFacts', 'spokenAnswer',
+    ],
+    streamingRule: 'Emit spokenAnswer last so its complete sentences can be validated and streamed immediately.',
     schema: {
       intent: 'short generic intent name',
-      questionType: 'overview, category_request, item_request, details, inclusions, price, comparison, scenario, booking_request, booking_field_answer, side_question, confirmation or unclear',
+      questionType: 'identity, overview, category_request, item_request, details, inclusions, coverage, preparation, price, comparison, scenario, booking_request, booking_field_answer, side_question, confirmation or unclear',
       flowAction: 'continue, answer_pending, side_question or clarify',
       selectedEntityKeys: ['only keys listed in allowedEntityKeys'],
       evidenceSourceIds: ['source IDs supporting the spoken answer'],
@@ -175,7 +183,7 @@ export function groundedUnderstandingContract(envelope) {
     format: 'json_object',
     schema: {
       intent: 'short generic intent name',
-      questionType: 'overview, category_request, item_request, details, inclusions, price, comparison, scenario, booking_request, booking_field_answer, side_question, confirmation or unclear',
+      questionType: 'identity, overview, category_request, item_request, details, inclusions, coverage, preparation, price, comparison, scenario, booking_request, booking_field_answer, side_question, confirmation or unclear',
       flowAction: 'continue, answer_pending, side_question or clarify',
       selectedEntityKeys: ['only keys listed in allowedEntityKeys'],
     },
@@ -194,6 +202,99 @@ function parseObject(value) {
   } catch {
     return null;
   }
+}
+
+function jsonArrayField(raw, names) {
+  for (const name of names) {
+    const match = new RegExp(`"${name}"\\s*:\\s*(\\[[^\\]]*\\])`, 'iu').exec(raw);
+    if (!match) continue;
+    try {
+      const parsed = JSON.parse(match[1]);
+      if (Array.isArray(parsed)) return parsed;
+    } catch { /* incomplete streaming field */ }
+  }
+  return null;
+}
+
+function jsonStringField(raw, names) {
+  for (const name of names) {
+    const marker = new RegExp(`"${name}"\\s*:\\s*"`, 'iu').exec(raw);
+    if (!marker) continue;
+    const start = marker.index + marker[0].length;
+    let escaped = false;
+    for (let index = start; index < raw.length; index += 1) {
+      const character = raw[index];
+      if (escaped) { escaped = false; continue; }
+      if (character === '\\') { escaped = true; continue; }
+      if (character !== '"') continue;
+      try { return JSON.parse(`"${raw.slice(start, index)}"`); } catch { return null; }
+    }
+  }
+  return null;
+}
+
+function partialJsonStringField(raw, names) {
+  for (const name of names) {
+    const marker = new RegExp(`"${name}"\\s*:\\s*"`, 'iu').exec(raw);
+    if (!marker) continue;
+    const start = marker.index + marker[0].length;
+    let escaped = false;
+    let end = raw.length;
+    for (let index = start; index < raw.length; index += 1) {
+      const character = raw[index];
+      if (escaped) { escaped = false; continue; }
+      if (character === '\\') { escaped = true; continue; }
+      if (character === '"') { end = index; break; }
+    }
+    let encoded = raw.slice(start, end);
+    while (encoded.endsWith('\\') && !encoded.endsWith('\\\\')) encoded = encoded.slice(0, -1);
+    try { return JSON.parse(`"${encoded}"`); } catch { return null; }
+  }
+  return null;
+}
+
+// Decodes only the caller-facing string from a streaming grounded JSON object.
+// Metadata must arrive first and be valid before any answer delta is released.
+// The complete object is still validated after the stream finishes.
+export function createGroundedJsonStreamDecoder(envelope, runtime = {}) {
+  let raw = '';
+  let releasedCharacters = 0;
+  let decision = null;
+  const allowedSources = new Set((envelope.sources ?? []).map((source) => source.id));
+  const allowedEntities = new Set((envelope.entities ?? []).map((entity) => entity.key));
+  const refreshDecision = () => {
+    const intent = jsonStringField(raw, ['intent']);
+    const questionType = normalizeQuestionType(jsonStringField(raw, ['questionType', 'question_type']));
+    const flowAction = normalizeFlowAction(jsonStringField(raw, ['flowAction', 'flow_action']), runtime);
+    const sourceIds = jsonArrayField(raw, ['evidenceSourceIds', 'evidence_source_ids']);
+    const entityKeys = jsonArrayField(raw, ['selectedEntityKeys', 'selected_entity_keys']);
+    if (!intent || !flowAction || !sourceIds || !entityKeys) return;
+    const normalizedSources = list(sourceIds, maximumSources);
+    const normalizedEntities = list(entityKeys, maximumEntities);
+    if (normalizedSources.some((id) => !allowedSources.has(id))) return;
+    if (normalizedEntities.some((key) => !allowedEntities.has(key))) return;
+    decision = Object.freeze({
+      intent: text(intent, maximumIntentCharacters), questionType, flowAction,
+      evidenceSourceIds: Object.freeze(normalizedSources),
+      selectedEntityKeys: Object.freeze(normalizedEntities),
+    });
+  };
+  return Object.freeze({
+    push(delta) {
+      raw += String(delta ?? '');
+      refreshDecision();
+      if (!decision) return Object.freeze({ delta: '', decision: null });
+      const answer = partialJsonStringField(raw, ['spokenAnswer', 'spoken_answer']);
+      if (answer === null || answer.length <= releasedCharacters) {
+        return Object.freeze({ delta: '', decision });
+      }
+      const next = answer.slice(releasedCharacters);
+      releasedCharacters = answer.length;
+      return Object.freeze({ delta: next, decision });
+    },
+    decision: () => decision,
+    releasedText: () => partialJsonStringField(raw, ['spokenAnswer', 'spoken_answer'])?.slice(0, releasedCharacters) ?? '',
+  });
 }
 
 function list(value, maximum = 20) {

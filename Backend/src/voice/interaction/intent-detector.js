@@ -1,5 +1,6 @@
 const intentNames = Object.freeze([
-  'overview', 'category_request', 'details', 'price', 'comparison', 'scenario',
+  'identity', 'overview', 'category_request', 'details', 'coverage', 'preparation',
+  'price', 'comparison', 'scenario',
   'booking_request', 'booking_field_answer', 'side_question', 'confirmation', 'unclear',
 ]);
 
@@ -18,6 +19,9 @@ function matches(value, expressions) {
 }
 
 const expressions = Object.freeze({
+  identity: [/\b(?:who are you|who is calling|where are you calling from|which (?:company|business|organisation|organization)|your identity)\b/iu],
+  coverage: [/\b(?:include|included|contains?|coverage|covered|features?|benefits?|tests?)\b/iu],
+  preparation: [/\b(?:prepare|preparation|fasting|before (?:the )?(?:test|visit|appointment)|bring|instruction|requirement)\b/iu],
   booking: [/\b(?:book|booking|reserve|reservation|appointment|schedule)\b/iu, /(?:புக்|booking|appointment|அப்பாயின்மென்ட்|நேரம் பதிவு|ரிசர்வ்|முன்பதிவு)/u],
   price: [/\b(?:price|cost|rate|amount|how much|fee|charge)\b/iu, /(?:விலை|எவ்வளவு|amount|rate|கட்டணம்|செலவு)/u],
   comparison: [/\b(?:compare|comparison|difference|versus|vs|better)\b/iu, /(?:வித்தியாசம்|ஒப்பிடு|எது நல்லது|வேறுபாடு)/u],
@@ -43,12 +47,15 @@ export function detectConversationIntent(text, { pendingQuestion, pendingQuestio
   if (!value || countWords(value) === 0) return result('unclear', 0, ['empty']);
   if (countWords(value) === 1 && !matches(value, expressions.confirmation)) return result('unclear', 0.25, ['single_token']);
   if (matches(value, expressions.confirmation)) return result('confirmation', 0.95, ['confirmation']);
+  if (matches(value, expressions.identity)) return result('identity', 0.95, ['identity']);
   if (matches(value, expressions.booking)) return result('booking_request', 0.96, ['booking']);
   if (pendingQuestion && pendingQuestionKind === 'field' && !matches(value, expressions.sideQuestion)) {
     return result('booking_field_answer', 0.78, ['pending_field']);
   }
   if (matches(value, expressions.comparison)) return result('comparison', 0.93, ['comparison']);
   if (matches(value, expressions.price)) return result('price', 0.93, ['price']);
+  if (matches(value, expressions.preparation)) return result('preparation', 0.91, ['preparation']);
+  if (matches(value, expressions.coverage)) return result('coverage', 0.9, ['coverage']);
   if (matches(value, expressions.scenario)) return result('scenario', 0.86, ['scenario']);
   if (matches(value, expressions.overview)) return result('overview', 0.9, ['overview']);
   if (matches(value, expressions.sideQuestion)) return result('side_question', 0.82, ['side_question']);

@@ -126,6 +126,7 @@ function resolvePendingQuestion(state) {
   state.pendingQuestionText = null;
   state.pendingQuestionKind = null;
   state.resumeQuestionAfterAnswer = null;
+  state.resumeQuestionContext = null;
 }
 
 function schedulePendingQuestionResume(state) {
@@ -136,6 +137,27 @@ function schedulePendingQuestionResume(state) {
     state.flowRecovery.sideQuestions += 1;
   }
   state.resumeQuestionAfterAnswer = question;
+  state.resumeQuestionContext = {
+    pendingQuestion: state.pendingQuestion,
+    pendingQuestionKind: state.pendingQuestionKind,
+    currentStage: state.currentStage,
+    conversationStage: state.currentStage,
+    activeCategoryKey: state.activeCategory?.key ?? null,
+    selectedItemId: state.selectedCatalogItem?.id ?? null,
+    selectedItemKey: state.selectedCatalogItem?.key ?? null,
+  };
+}
+
+function pendingResumeIsRelevant(state) {
+  const context = state.resumeQuestionContext;
+  if (!state.resumeQuestionAfterAnswer || !context || !state.pendingQuestion) return false;
+  if (!sameFrameValue(context.pendingQuestion, state.pendingQuestion)) return false;
+  if (context.pendingQuestionKind !== state.pendingQuestionKind) return false;
+  if (context.currentStage !== state.currentStage && context.currentStage !== state.resumeStage) return false;
+  if ((context.activeCategoryKey ?? null) !== (state.activeCategory?.key ?? null)) return false;
+  if ((context.selectedItemId ?? null) !== (state.selectedCatalogItem?.id ?? null)) return false;
+  if ((context.selectedItemKey ?? null) !== (state.selectedCatalogItem?.key ?? null)) return false;
+  return !state.answeredQuestions.has(state.resumeQuestionAfterAnswer);
 }
 
 function publicState(state) {
@@ -158,11 +180,13 @@ function publicState(state) {
     pendingQuestionText: state.pendingQuestionText,
     pendingQuestionKind: state.pendingQuestionKind,
     resumeQuestionAfterAnswer: state.resumeQuestionAfterAnswer,
+    lastAnswer: state.lastAnswer,
     lastAnsweredQuestion: state.lastAnsweredQuestion,
     runningSummary: state.runningSummary,
     lastIntent: state.lastIntent,
     lastQuestionType: state.lastQuestionType,
     currentStage: state.currentStage,
+    conversationStage: state.currentStage,
     resumeStage: state.resumeStage,
     activeCategory: state.activeCategory ? { ...state.activeCategory } : null,
     selectedCatalogItem: state.selectedCatalogItem ? { ...state.selectedCatalogItem } : null,
@@ -173,6 +197,7 @@ function publicState(state) {
     flowRecovery: { ...state.flowRecovery },
     missingFields: visibleFields.filter((field) => field.required && state.collectedData[field.key] === undefined)
       .map((field) => field.key),
+    collectedFields: { ...state.collectedData },
     openedAt: state.openedAt,
     updatedAt: state.updatedAt,
   });
@@ -198,8 +223,10 @@ export function openLiveCallMemory(identity, settings = {}, now = Date.now(), in
     pendingQuestion: frameText(restoredPending.key, 500) || null,
     pendingQuestionText: frameText(restoredPending.text, 500) || null,
     pendingQuestionKind: frameText(restoredPending.kind, 40) || null,
-    resumeQuestionAfterAnswer: null,
-    lastAnsweredQuestion: null, runningSummary: frameText(initialFrame.runningSummary, maximumRunningSummaryCharacters),
+    resumeQuestionAfterAnswer: null, resumeQuestionContext: null,
+    lastAnsweredQuestion: null,
+    lastAnswer: frameText(initialFrame.lastAnswer, maximumMessageCharacters) || null,
+    runningSummary: frameText(initialFrame.runningSummary, maximumRunningSummaryCharacters),
     lastIntent: null, lastQuestionType: null, summaryCursor: 0,
     currentStage: frameText(initialFrame.currentStage, 80) || stageConfiguration.initialStage,
     resumeStage: frameText(initialFrame.resumeStage, 80) || null,
@@ -258,6 +285,7 @@ export function openLiveCallMemory(identity, settings = {}, now = Date.now(), in
       return Object.freeze({ updates: { ...updates }, state: publicState(state) });
     },
     observeAssistantResponse(response) {
+      state.lastAnswer = frameText(response, maximumMessageCharacters) || state.lastAnswer;
       const visibleFields = configuration.fields.filter((field) => (
         !field.requiredAction || state.activeActions.has(field.requiredAction)
       ));
@@ -376,7 +404,21 @@ export function openLiveCallMemory(identity, settings = {}, now = Date.now(), in
       const pendingKindBeforeKnowledge = state.pendingQuestionKind;
       const candidateIdentities = new Set(state.candidateItems.flatMap((item) => [item.id, item.key])
         .map((value) => frameText(value, 160)).filter(Boolean));
-      const selection = knowledge?.catalogSelection ?? (knowledge?.route === 'catalog' ? knowledge : null);
+      const canonicalEntitySelection = knowledge?.resolvedEntity?.canonical === true
+        ? {
+          source: { recordId: knowledge.resolvedEntity.id },
+          item: {
+            key: knowledge.resolvedEntity.key,
+            name: knowledge.resolvedEntity.name,
+            category: knowledge.resolvedEntity.category,
+            categoryKey: knowledge.resolvedEntity.categoryKey,
+            parentCategoryKey: knowledge.resolvedEntity.parentCategoryKey,
+          },
+        }
+        : null;
+      const selection = knowledge?.catalogSelection
+        ?? (knowledge?.route === 'catalog' ? knowledge : null)
+        ?? canonicalEntitySelection;
       if (selection?.item?.name && selection?.source?.recordId) {
         state.selectedCatalogItem = frameItem({
           id: selection.source.recordId,
@@ -483,7 +525,7 @@ export function openLiveCallMemory(identity, settings = {}, now = Date.now(), in
       state.updatedAt = Date.now();
       return publicState(state);
     },
-    prepareAssistantResponse(response) {
+    prepareAssistantResponse(response, { resumePending = true } = {}) {
       const original = frameText(response, maximumMessageCharacters);
       if (!original) return '';
       const answered = [...state.answeredQuestions];
@@ -499,12 +541,16 @@ export function openLiveCallMemory(identity, settings = {}, now = Date.now(), in
       )));
       state.flowRecovery.repeatedQuestionsSuppressed += parts.length - filtered.length;
       const resumeQuestion = state.resumeQuestionAfterAnswer;
-      if (resumeQuestion && !filtered.some((part) => sameFrameValue(part, resumeQuestion))) {
+      if (resumePending && pendingResumeIsRelevant(state)
+        && !filtered.some((part) => sameFrameValue(part, resumeQuestion))) {
         filtered.push(resumeQuestion);
         state.flowRecovery.resumedQuestions += 1;
       }
-      state.resumeQuestionAfterAnswer = null;
-      if (state.resumeStage) {
+      if (resumePending) {
+        state.resumeQuestionAfterAnswer = null;
+        state.resumeQuestionContext = null;
+      }
+      if (resumePending && state.resumeStage) {
         state.currentStage = state.resumeStage;
         state.resumeStage = null;
       }
@@ -563,6 +609,7 @@ export function compactLiveCallMemoryContext({ snapshot = {}, collectedData = {}
     currentTopic: promptText(snapshot.currentTopic, 160) || undefined,
     language: promptText(snapshot.language, 12) || undefined,
     currentStage: promptText(snapshot.currentStage, 80) || undefined,
+    lastAnswer: promptText(snapshot.lastAnswer, 300) || undefined,
     lastIntent: promptText(snapshot.lastIntent, 80) || undefined,
     lastQuestionType: promptText(snapshot.lastQuestionType, 80) || undefined,
     resumeStage: promptText(snapshot.resumeStage, 80) || undefined,
