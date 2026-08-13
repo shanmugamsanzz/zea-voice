@@ -80,32 +80,29 @@ const oversizedContext = compactLiveCallMemoryContext({
   missingFields: [{ key: 'field_29', label: 'Final field', type: 'text', question: 'Please provide the final field?' }],
 });
 assert.ok(JSON.stringify(oversizedContext).length <= 1_000);
-assert.equal(oversizedContext.nextMissingField.key, 'field_29');
+assert.equal(oversizedContext.currentTopic, 'appointment');
+assert.deepEqual(Object.keys(oversizedContext).sort(), [
+  'activeToolRequest', 'collectedInformation', 'currentTopic', 'knownEntities',
+  'language', 'lastAnswer', 'pendingQuestion', 'recentTurns',
+].sort());
 
 const framedLanguage = compactLiveCallMemoryContext({
-  snapshot: { language: 'ta', currentStage: 'selection', activeCategory: { key: 'services', name: 'Services' } },
+  snapshot: { language: 'ta', knownEntities: [{ key: 'services', name: 'Services' }] },
   collectedData: {}, missingFields: [],
 });
 assert.equal(framedLanguage.language, 'ta');
 
 const restorableIdentity = { ...identity, callId: 'call-restorable' };
 const restorable = openLiveCallMemory(restorableIdentity, settings, 10, {
-  callId: restorableIdentity.callId,
-  currentStage: 'item_explanation',
-  resumeStage: 'item_selection',
   currentTopic: 'Standard Plan',
-  activeCategory: { key: 'service-plans', name: 'Service Plans' },
-  selectedItem: {
+  knownEntities: [{
     id: 'item-standard', key: 'standard-plan', name: 'Standard Plan',
     category: 'Service Plans', categoryKey: 'service-plans',
-  },
-  candidateItems: [{ id: 'item-premium', key: 'premium-plan', name: 'Premium Plan' }],
+  }],
   pendingQuestion: { key: 'preferred_date', text: 'Which date?', kind: 'field' },
   language: 'ta',
-  fields: { lead_name: 'Example Caller' },
-  completedQuestions: ['lead_name'],
-  answeredQuestions: ['Which option?'],
-  activeActions: ['configured-booking'],
+  collectedInformation: { lead_name: 'Example Caller' },
+  activeToolRequest: { id: 'tool-1', name: 'configured-action', status: 'collecting_information' },
   recentTurns: [
     { role: 'user', content: 'Tell me about the standard option', at: 8 },
     { role: 'assistant', content: 'Approved option details', at: 9 },
@@ -113,11 +110,8 @@ const restorable = openLiveCallMemory(restorableIdentity, settings, 10, {
   runningSummary: 'The caller selected the standard option.',
 });
 const restoredSnapshot = restorable.snapshot();
-assert.equal(restoredSnapshot.currentStage, 'item_explanation');
-assert.equal(restoredSnapshot.resumeStage, 'item_selection');
-assert.equal(restoredSnapshot.activeCategory.key, 'service-plans');
-assert.equal(restoredSnapshot.selectedItem.key, 'standard-plan');
-assert.equal(restoredSnapshot.candidateItems[0].key, 'premium-plan');
+assert.equal(restoredSnapshot.currentTopic, 'Standard Plan');
+assert.equal(restoredSnapshot.knownEntities[0].key, 'standard-plan');
 assert.equal(restoredSnapshot.pendingQuestion, 'preferred_date');
 assert.equal(restoredSnapshot.pendingQuestionText, 'Which date?');
 assert.equal(restoredSnapshot.language, 'ta');
@@ -130,10 +124,15 @@ const checkpoint = buildConversationMemoryState({
   callFrame: restoredSnapshot,
 });
 assert.equal(checkpoint.schemaVersion, 2);
-assert.equal(checkpoint.callFrame.callId, restorableIdentity.callId);
-assert.equal(checkpoint.callFrame.selectedItem.key, 'standard-plan');
+assert.equal(checkpoint.lastCall.id, restorableIdentity.callId);
+assert.equal(checkpoint.callFrame.knownEntities[0].key, 'standard-plan');
 assert.equal(checkpoint.callFrame.recentTurns.length, 2);
-assert.deepEqual(checkpoint.callFrame.fields, { lead_name: 'Example Caller' });
+assert.deepEqual(checkpoint.callFrame.collectedInformation, { lead_name: 'Example Caller' });
+assert.equal(checkpoint.callFrame.activeToolRequest.name, 'configured-action');
+assert.deepEqual(Object.keys(checkpoint.callFrame).sort(), [
+  'activeToolRequest', 'collectedInformation', 'currentTopic', 'knownEntities',
+  'language', 'lastAnswer', 'pendingQuestion', 'recentTurns',
+].sort());
 
 const nullPreviousCheckpoint = buildConversationMemoryState({
   previous: null,
@@ -144,9 +143,8 @@ const nullPreviousCheckpoint = buildConversationMemoryState({
   pendingQuestions: [restoredSnapshot.pendingQuestion],
   callFrame: restoredSnapshot,
 });
-assert.equal(nullPreviousCheckpoint.callFrame.currentStage, 'item_explanation');
-assert.equal(nullPreviousCheckpoint.callFrame.activeCategory.key, 'service-plans');
-assert.equal(nullPreviousCheckpoint.callFrame.selectedItem.key, 'standard-plan');
+assert.equal(nullPreviousCheckpoint.callFrame.currentTopic, 'Standard Plan');
+assert.equal(nullPreviousCheckpoint.callFrame.knownEntities[0].key, 'standard-plan');
 assert.equal(nullPreviousCheckpoint.callFrame.pendingQuestion.key, 'preferred_date');
 assert.equal(nullPreviousCheckpoint.callFrame.language, 'ta');
 assert.deepEqual(nullPreviousCheckpoint.collectedData, { lead_name: 'Example Caller' });

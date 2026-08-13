@@ -1,12 +1,7 @@
 import { z } from 'zod';
+import { KNOWLEDGE_DOCUMENT_TYPES } from './knowledge-document-contract.js';
 
-export const KNOWLEDGE_DOCUMENT_TYPES = [
-  'faq',
-  'catalog',
-  'workflow_rules',
-  'conversation_script',
-  'general_knowledge',
-];
+export { KNOWLEDGE_DOCUMENT_TYPES } from './knowledge-document-contract.js';
 
 function parseMetadata(value) {
   if (value === undefined || value === null || value === '') return {};

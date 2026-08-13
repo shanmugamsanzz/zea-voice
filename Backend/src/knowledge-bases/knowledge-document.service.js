@@ -10,6 +10,7 @@ import { invalidateTenantKnowledgeCache } from './knowledge-runtime.service.js';
 import { enqueueKnowledgeProcessingJob } from './knowledge-processing.queue.js';
 import { PDF_MIME_TYPE, TEXT_MIME_TYPE } from './knowledge-source-extractor.js';
 import { decodeUtf8Text } from './text-file-extractor.js';
+import { normalizeKnowledgeDocumentMetadata } from './knowledge-document-contract.js';
 
 const storage = {
   putObject: putB2Object,
@@ -221,6 +222,7 @@ export async function uploadKnowledgeDocument(
   queueAdapter = enqueueKnowledgeProcessingJob,
 ) {
   const sourceType = validateKnowledgeSourceFile(file);
+  const normalizedMetadata = normalizeKnowledgeDocumentMetadata(input.documentType, input.metadata);
   await contextRunner(auth, (client) => ensureKnowledgeBase(client, auth, knowledgeBaseId));
 
   const documentId = crypto.randomUUID();
@@ -249,6 +251,8 @@ export async function uploadKnowledgeDocument(
         document_id: documentId,
         checksum_sha256: checksumSha256,
         source_type: sourceType.kind.toLowerCase(),
+        document_type: input.documentType,
+        language: normalizedMetadata.language,
       },
     });
     uploaded = true;
@@ -265,7 +269,7 @@ export async function uploadKnowledgeDocument(
         [
           documentId, auth.tenantId, knowledgeBaseId, input.documentType, displayName,
           file.originalname.slice(0, 500), sourceType.mimeType, file.size,
-          JSON.stringify(input.metadata), auth.userId,
+          JSON.stringify(normalizedMetadata), auth.userId,
         ],
       );
       await client.query(
@@ -479,6 +483,7 @@ export async function uploadKnowledgeDocumentVersion(
       sourceType,
     };
   });
+  const normalizedMetadata = normalizeKnowledgeDocumentMetadata(reserved.documentType, input.metadata);
 
   let storedObject;
   try {
@@ -493,6 +498,8 @@ export async function uploadKnowledgeDocumentVersion(
         document_version_id: reserved.versionId,
         checksum_sha256: checksumSha256,
         source_type: reserved.sourceType.kind.toLowerCase(),
+        document_type: reserved.documentType,
+        language: normalizedMetadata.language,
       },
     });
   } catch (error) {
@@ -541,7 +548,7 @@ export async function uploadKnowledgeDocumentVersion(
           WHERE tenant_id=$1 AND knowledge_base_id=$2 AND id=$3`,
         [
           auth.tenantId, knowledgeBaseId, documentId, file.originalname.slice(0, 500),
-          reserved.sourceType.mimeType, file.size, JSON.stringify(input.metadata), auth.userId, displayName,
+          reserved.sourceType.mimeType, file.size, JSON.stringify(normalizedMetadata), auth.userId, displayName,
         ],
       );
       const job = await client.query(

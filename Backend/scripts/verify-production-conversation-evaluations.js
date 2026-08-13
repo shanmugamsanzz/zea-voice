@@ -142,6 +142,7 @@ const evidence = {
 const envelope = buildGroundingEnvelope(evidence);
 const groundedSideQuestion = validateGroundedLlmResponse(JSON.stringify({
   intent: 'location_question', questionType: 'side_question', flowAction: 'side_question', selectedEntityKeys: [],
+  currentTopic: 'office location', topicChanged: true, pendingQuestionRelevant: true,
   evidenceSourceIds: ['source_1'],
   assertedFacts: [{ type: 'policy', value: 'downtown', sourceId: 'source_1' }],
   spokenAnswer: 'Our office is downtown.',

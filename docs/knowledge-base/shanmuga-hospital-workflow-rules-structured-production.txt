@@ -1,3 +1,25 @@
+SHANMUGA HOSPITAL - DOCUMENT-DRIVEN WORKFLOW AND ACTION RULES
+FORMAT VERSION: 4
+ENCODING: UTF-8
+LANGUAGE: Tamil, Tanglish and English
+USAGE: Inbound and Outbound
+
+RUNTIME INTERPRETATION
+
+These rules describe approved caller intents, safety decisions, business actions and action outcomes. The caller does not need to use any exact phrase listed under MATCH. MATCH values are representative meaning examples for semantic retrieval and LLM understanding, including natural Tamil, Tanglish, English and likely STT variations.
+
+Always answer the caller's latest complete question first using current published evidence. Conversation position is context only and must never block a valid answer. Preserve the current topic, known entities, pending question, collected information and last answer. After answering a side question, resume one pending question only when it is still relevant. Never repeat a completed question.
+
+RESPONSE_MODE exact contains approved caller-facing wording. RESPONSE_MODE generated and instruction contain internal behavior guidance and must never be spoken verbatim. External actions may run only when both this document and the configured UI tool authorize them. Never claim an external action succeeded until its tool returns verified success.
+
+RULE: answer_latest_question_before_pending_question
+MATCH: caller asks a new question while another question is pending | caller changes topic temporarily and expects an answer | caller asks a side question during information collection | answer my question first | முதல்ல நான் கேட்டதுக்கு பதில் சொல்லுங்க
+MATCH_MODE: any_phrase
+RESPONSE_MODE: generated
+PRIORITY: 85
+ACTION: answer_then_resume_relevant_pending
+RESPONSE: Answer the latest complete caller question first from approved evidence. Preserve generic current-call context. If the previous pending question is still useful after the answer, ask it once naturally; otherwise clear it. Do not force a stage order, restart the introduction or repeat completed information.
+
 RULE: emergency_severe_chest_pain
 MATCH: கடுமையான நெஞ்சு வலி | நெஞ்சு வலி ரொம்ப அதிகமா இருக்கு | severe chest pain | intense chest pain | chest pain romba athigama iruku
 MATCH_MODE: any_phrase
@@ -35,7 +57,6 @@ MATCH: call cut பண்ணுங்க | call முடிச்சிடு�
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 20
-NEXT_STAGE: completed
 ACTION: hangup_call
 RESPONSE: சரிங்க, தொடர்பு கொண்டதற்கு நன்றி. நல்ல நாளாக அமையட்டும்.
 
@@ -44,7 +65,6 @@ MATCH: எனக்கு interest இல்லை | எனக்கு வே�
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 25
-NEXT_STAGE: completed
 ACTION: hangup_call
 RESPONSE: சரிங்க, பரவாயில்லங்க. உங்க நேரத்துக்கு நன்றி.
 
@@ -60,7 +80,6 @@ MATCH: wrong number | தப்பான number | நான் அந்த ஆ�
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 30
-NEXT_STAGE: completed
 ACTION: hangup_call
 RESPONSE: மன்னிக்கணுங்க. Wrong numberன்னு note பண்ணிக்கறேன். நன்றி.
 
@@ -77,7 +96,6 @@ MATCH: human agent கிட்ட பேசணும் | staff கிட்ட
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 40
-NEXT_STAGE: transfer
 ACTION: transfer_call
 RESPONSE: சரிங்க, Hospital tele-calling teamக்கு connect பண்ண முயற்சி பண்றேன்.
 
@@ -86,7 +104,6 @@ MATCH: Doctor advice வேணும் | Doctorகிட்ட பேசணு�
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 40
-NEXT_STAGE: transfer
 ACTION: transfer_call
 RESPONSE: Medical adviceக்கு Doctor support தேவைங்க. Hospital teamக்கு connect பண்ண முயற்சி பண்றேன்.
 
@@ -95,7 +112,6 @@ MATCH: package customize பண்ணணும் | tests customize பண்ண
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 40
-NEXT_STAGE: transfer
 ACTION: transfer_call
 RESPONSE: Package customizationஐ Hospital teamதான் confirm பண்ணணும். அவர்களோட connect பண்ண முயற்சி பண்றேன்.
 
@@ -104,7 +120,6 @@ MATCH: insurance cover ஆகுமா | insurance details வேணும் | 
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 40
-NEXT_STAGE: transfer
 ACTION: transfer_call
 RESPONSE: Insurance coverage மற்றும் eligibilityயை Hospital teamதான் confirm பண்ணணும். அவர்களோட connect பண்ண முயற்சி பண்றேன்.
 
@@ -113,7 +128,6 @@ MATCH: refund வேணும் | complaint சொல்லணும் | payme
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 40
-NEXT_STAGE: transfer
 ACTION: transfer_call
 RESPONSE: சரிங்க, இந்த requestஐ handle பண்ண Hospital teamக்கு connect பண்ண முயற்சி பண்றேன்.
 
@@ -122,36 +136,30 @@ MATCH: Doctor availableஆ | Doctor timing என்ன | Doctor contact number 
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 40
-NEXT_STAGE: transfer
 ACTION: transfer_call
 RESPONSE: Doctor availability current scheduleக்கு ஏற்ப மாறலாம். Hospital teamகிட்ட connect பண்ணி confirm பண்ணலாம்.
 
 RULE: welcome_positive_package_response
 MATCH: ம் explain பண்ணுங்க | ஆ explain பண்ணலாம் | ஆ explain பண்ணலாம் madam | சரி explain பண்ணுங்க | ஆமா சொல்லுங்க | சொல்லுங்க | package details சொல்லுங்க | yes please explain | okay explain | go ahead
 MATCH_MODE: any_phrase
-RESPONSE_MODE: exact
+RESPONSE_MODE: generated
 PRIORITY: 50
-FROM_STAGE: start
-NEXT_STAGE: package_selection
 ACTION: present_package_overview
-RESPONSE: எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Onco Care Packages, Organ-Specific Packages, Kids Health Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?
+RESPONSE: Use the current published Product Catalog to give a short caller-facing overview of its approved top-level categories and notable Master Health Checkup options. Ask which category or item the caller wants to know about. Do not request booking fields.
 
 RULE: package_overview_request
 MATCH: என்னென்ன packages இருக்கு | உங்ககிட்ட என்ன packages இருக்கு | உங்ககிட்ட என்ன packagesலாம் இருக்கு | என்ன package எல்லாம் available | வேற என்ன packages இருக்கு | package list சொல்லுங்க | எல்லா packages சொல்லுங்க | what packages are available | what health checkups are available | show all packages
 MATCH_MODE: any_phrase
-RESPONSE_MODE: exact
+RESPONSE_MODE: generated
 PRIORITY: 55
-NEXT_STAGE: package_selection
 ACTION: present_package_overview
-RESPONSE: எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Onco Care Packages, Organ-Specific Packages, Kids Health Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?
+RESPONSE: Use the current published Product Catalog to give a short caller-facing overview of all approved top-level categories and notable Master Health Checkup options. Answer naturally in the caller's language, then ask which category or item needs details. Do not omit an approved category and do not collect booking fields.
 
 RULE: direct_appointment_booking_request
 MATCH: appointment book பண்ணுங்க | appointment வேணும் | booking பண்ணலாம் | book an appointment | appointment fix பண்ணுங்க | checkup book பண்ணணும்
 MATCH_MODE: any_phrase
 RESPONSE_MODE: instruction
 PRIORITY: 60
-FROM_STAGE: package_selection | category_selection | package_explanation | package_full_details | package_confirmation | contextual_followup | scenario_answer | booking_details
-NEXT_STAGE: booking_details
 ACTION: appointment_booking
 REQUIRES_CATALOG_ITEM: true
 BLOCKED_RESPONSE: Appointment proceed பண்ணலாம். முதல்ல எந்த Packageக்கு Appointment வேணும்னு சொல்லுங்க.
@@ -162,8 +170,6 @@ MATCH: ஆமா proceed பண்ணலாம் | appointment proceed பண�
 MATCH_MODE: any_phrase
 RESPONSE_MODE: instruction
 PRIORITY: 60
-FROM_STAGE: package_confirmation
-NEXT_STAGE: booking_details
 ACTION: appointment_booking
 REQUIRES_CATALOG_ITEM: true
 BLOCKED_RESPONSE: Appointment proceed பண்ணலாம். முதல்ல எந்த Packageக்கு Appointment வேணும்னு சொல்லுங்க.
@@ -174,8 +180,6 @@ MATCH: details சரிதான் | ஆமா confirm பண்ணுங்�
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 60
-FROM_STAGE: booking_confirmation
-NEXT_STAGE: appointment_confirmation
 ACTION: appointment_booking
 REQUIRES_CATALOG_ITEM: true
 BLOCKED_RESPONSE: Booking confirm பண்ண முதல்ல ஒரு exact Package select பண்ணணுங்க. எந்த Package வேணும்?
@@ -266,7 +270,6 @@ MATCH: ஒரு நிமிஷம் wait பண்ணுங்க | கொஞ
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 80
-NEXT_STAGE: wait
 ACTION: wait_for_caller
 RESPONSE: சரிங்க, நான் wait பண்றேன். நீங்க ready ஆனதும் சொல்லுங்க.
 
@@ -277,7 +280,6 @@ RESPONSE_MODE: generated
 PRIORITY: 200
 SCENARIO: true
 TARGET_CATEGORY: master-health-checkup-packages
-NEXT_STAGE: scenario_answer
 ACTION: recommend_catalog_category
 RESPONSE: General preventive screeningக்கு matched Master Health Checkup category optionsஐ approved Catalog evidenceல இருந்து சுருக்கமா explain பண்ணவும். Callerக்கு தேவையான coverage தெரியலனா basic, detailed அல்லது advanced coverage எது வேணும்னு மட்டும் கேட்கவும்.
 
@@ -288,7 +290,6 @@ RESPONSE_MODE: generated
 PRIORITY: 200
 SCENARIO: true
 TARGET_ITEM: gastro-health-checkup-one-day-admission
-NEXT_STAGE: scenario_answer
 ACTION: recommend_catalog_item
 RESPONSE: Stomach அல்லது digestion concernக்கு related approved Gastro screening optionஐ explain பண்ணவும். இது diagnosis கிடையாது; exact காரணத்தை Doctorதான் confirm பண்ண முடியும்.
 
@@ -299,7 +300,6 @@ RESPONSE_MODE: generated
 PRIORITY: 200
 SCENARIO: true
 TARGET_ITEM: ortho-health-checkup
-NEXT_STAGE: scenario_answer
 ACTION: recommend_catalog_item
 RESPONSE: Bone, joint, knee அல்லது leg concernக்கு related approved Ortho screening optionஐ explain பண்ணவும். இது diagnosis கிடையாது; exact காரணத்தை Doctorதான் confirm பண்ண முடியும்.
 
@@ -310,7 +310,6 @@ RESPONSE_MODE: generated
 PRIORITY: 200
 SCENARIO: true
 TARGET_ITEM: diabetic-health-checkup
-NEXT_STAGE: scenario_answer
 ACTION: recommend_catalog_item
 RESPONSE: Sugar அல்லது diabetes-related concernக்கு matched approved screening optionஐ explain பண்ணவும். இது diagnosis அல்லது treatment கிடையாது; Doctor consultation தேவை.
 
@@ -321,7 +320,6 @@ RESPONSE_MODE: generated
 PRIORITY: 200
 SCENARIO: true
 TARGET_ITEM: renal-health-checkup
-NEXT_STAGE: scenario_answer
 ACTION: recommend_catalog_item
 RESPONSE: Kidney அல்லது urinary concernக்கு related approved Renal screening optionஐ explain பண்ணவும். இது diagnosis கிடையாது; exact காரணத்தை Doctorதான் confirm பண்ண முடியும்.
 
@@ -332,7 +330,6 @@ RESPONSE_MODE: generated
 PRIORITY: 200
 SCENARIO: true
 TARGET_ITEM: liver-health-checkup
-NEXT_STAGE: scenario_answer
 ACTION: recommend_catalog_item
 RESPONSE: Liver-related concernக்கு matched approved Liver screening optionஐ explain பண்ணவும். இது diagnosis கிடையாது; exact காரணத்தை Doctorதான் confirm பண்ண முடியும்.
 
@@ -343,7 +340,6 @@ RESPONSE_MODE: generated
 PRIORITY: 200
 SCENARIO: true
 TARGET_ITEM: cardiac-health-checkup
-NEXT_STAGE: scenario_answer
 ACTION: recommend_catalog_item
 RESPONSE: Emergency warning sign இல்லாத heart-screening requestக்கு approved Cardiac optionஐ explain பண்ணவும். Severe symptom இருந்தா emergency ruleக்கு priority கொடுக்கவும்; diagnosis சொல்லக்கூடாது.
 
@@ -354,7 +350,6 @@ RESPONSE_MODE: generated
 PRIORITY: 200
 SCENARIO: true
 TARGET_ITEM: lungs-health-checkup
-NEXT_STAGE: scenario_answer
 ACTION: recommend_catalog_item
 RESPONSE: Emergency warning sign இல்லாத lung அல்லது breathing-screening requestக்கு approved Lungs optionஐ explain பண்ணவும். Severe breathing difficulty இருந்தா emergency ruleக்கு priority கொடுக்கவும்.
 
@@ -365,7 +360,6 @@ RESPONSE_MODE: generated
 PRIORITY: 200
 SCENARIO: true
 TARGET_ITEM: paediatric-health-screening
-NEXT_STAGE: scenario_answer
 ACTION: recommend_catalog_item
 RESPONSE: குழந்தையின் general health-screening requestக்கு approved Paediatric optionஐ explain பண்ணவும். Exact medical suitabilityக்கு Doctor support தேவை.
 
@@ -376,7 +370,6 @@ RESPONSE_MODE: generated
 PRIORITY: 200
 SCENARIO: true
 TARGET_CATEGORY: kids-health-packages
-NEXT_STAGE: scenario_answer
 ACTION: recommend_catalog_category
 RESPONSE: Development, behaviour அல்லது learning concernக்கு relevant approved Kids category candidatesஐ மட்டும் சொல்லவும். Child age மற்றும் exact concern தேவைப்பட்டா targeted clarification கேட்கவும்; diagnosis சொல்லக்கூடாது.
 
@@ -387,7 +380,6 @@ RESPONSE_MODE: generated
 PRIORITY: 200
 SCENARIO: true
 TARGET_CATEGORY: onco-care-packages
-NEXT_STAGE: scenario_answer
 ACTION: recommend_catalog_category
 RESPONSE: Cancer-screening requestக்கு approved Onco Care optionsஐ மட்டும் explain பண்ணவும். Premium அல்லது Add-on மற்றும் Male அல்லது Female எது தேவையோ contextல resolve பண்ணவும்; screening diagnosis கிடையாது.
 
@@ -398,7 +390,6 @@ RESPONSE_MODE: generated
 PRIORITY: 210
 SCENARIO: true
 TARGET_CATEGORY: master-health-checkup-packages
-NEXT_STAGE: scenario_answer
 ACTION: offer_general_screening_or_doctor_support
 RESPONSE: Headache அல்லது dizzinessக்கு dedicated approved item இருக்குனு claim பண்ணக்கூடாது. Exact காரணத்துக்கு Doctor consultation சொல்லி, caller விரும்பினா general screening category optionsஐ மட்டும் offer பண்ணவும்.
 
@@ -409,7 +400,6 @@ RESPONSE_MODE: generated
 PRIORITY: 210
 SCENARIO: true
 TARGET_CATEGORY: master-health-checkup-packages
-NEXT_STAGE: scenario_answer
 ACTION: offer_doctor_support_before_screening
 RESPONSE: காரணமில்லாத weight lossக்கு முதல்ல Doctor consultation முக்கியம்னு சொல்லவும். Cancer diagnosis அல்லது automatic Onco recommendation கொடுக்காமல், caller விரும்பினா general approved screening optionsஐ மட்டும் offer பண்ணவும்.
 
@@ -432,7 +422,6 @@ CONFIDENCE_OUTCOME: ambiguous
 MATCH_MODE: any_phrase
 RESPONSE_MODE: generated
 PRIORITY: 900
-NEXT_STAGE: targeted_clarification
 ACTION: ask_targeted_clarification
 RESPONSE: Retrieved approved candidatesல caller எதை mean பண்ணுறாங்கன்னு ஒரே ஒரு short targeted question கேட்கவும். Candidate namesஐ மட்டும் பயன்படுத்தவும்; overview அல்லது booking flowஐ restart பண்ணக்கூடாது.
 
@@ -441,6 +430,5 @@ CONFIDENCE_OUTCOME: none
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 910
-NEXT_STAGE: unclear
 ACTION: offer_human_support
 RESPONSE: இந்த detailக்கு confirmed information இப்போ என்கிட்ட இல்லங்க. Hospital teamகிட்ட confirm பண்ண உதவட்டுமா?

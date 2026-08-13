@@ -45,6 +45,8 @@ async function claimJob(jobId, contextRunner) {
     );
     const result = await client.query(
       `SELECT j.*, d.document_type,
+          COALESCE(NULLIF(d.metadata->>'language', ''), 'und') AS document_language,
+          kb.usage_direction AS knowledge_base_usage,
           COALESCE(v.extraction_metadata #>> '{source,originalFilename}', d.original_filename) AS source_filename,
           d.status AS document_status,
           COALESCE(v.extraction_metadata #>> '{source,mimeType}', d.mime_type, 'application/pdf') AS source_mime_type,
@@ -54,6 +56,8 @@ async function claimJob(jobId, contextRunner) {
            ON d.tenant_id = j.tenant_id AND d.id = j.document_id
          JOIN knowledge_document_versions v
            ON v.tenant_id = j.tenant_id AND v.id = j.document_version_id
+         JOIN knowledge_bases kb
+           ON kb.tenant_id = j.tenant_id AND kb.id = j.knowledge_base_id
         WHERE j.id = $1 AND j.job_type = 'extract'
         FOR UPDATE OF j, d, v`,
       [jobId],
@@ -116,11 +120,12 @@ async function persistFaq(client, job, result) {
     await client.query(
       `INSERT INTO faq_entries (
          tenant_id, knowledge_base_id, document_id, document_version_id,
-         question, answer, status, source_page_start, source_page_end
-       ) VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7, $8)`,
+         question, answer, language, usage_direction, status, source_page_start, source_page_end
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'draft', $9, $10)`,
       [
         job.tenant_id, job.knowledge_base_id, job.document_id, job.document_version_id,
-        record.question, record.answer, record.sourcePageStart, record.sourcePageEnd,
+        record.question, record.answer, record.language ?? job.document_language,
+        job.knowledge_base_usage, record.sourcePageStart, record.sourcePageEnd,
       ],
     );
   }
@@ -183,14 +188,14 @@ async function persistWorkflow(client, job, result) {
       `INSERT INTO workflow_rules (
          tenant_id, knowledge_base_id, document_id, document_version_id,
          name, intent, priority, conditions, action_type, action_config,
-         response_template, status, source_text, source_page_start, source_page_end
+         response_template, usage_direction, status, source_text, source_page_start, source_page_end
        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::jsonb,
-         $11, 'draft', $12, $13, $14)`,
+         $11, $12, 'draft', $13, $14, $15)`,
       [
         job.tenant_id, job.knowledge_base_id, job.document_id, job.document_version_id,
         record.name, record.intent, record.priority, JSON.stringify(record.conditions ?? {}),
-        record.actionType, JSON.stringify(record.actionConfig ?? {}), record.responseTemplate, record.sourceText,
-        record.sourcePageStart, record.sourcePageEnd,
+        record.actionType, JSON.stringify(record.actionConfig ?? {}), record.responseTemplate,
+        job.knowledge_base_usage, record.sourceText, record.sourcePageStart, record.sourcePageEnd,
       ],
     );
   }
@@ -202,16 +207,16 @@ async function persistConversation(client, job, result) {
       `INSERT INTO conversation_flows (
          tenant_id, knowledge_base_id, document_id, document_version_id,
          flow_key, node_key, node_type, language, sequence_order, is_entry,
-         content, variables, transitions, status, source_text,
+         content, variables, transitions, usage_direction, status, source_text,
          source_page_start, source_page_end
        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-         $11, $12::jsonb, $13::jsonb, 'draft', $14, $15, $16)`,
+         $11, $12::jsonb, $13::jsonb, $14, 'draft', $15, $16, $17)`,
       [
         job.tenant_id, job.knowledge_base_id, job.document_id, job.document_version_id,
         record.flowKey, record.nodeKey, record.nodeType, record.language,
         record.sequenceOrder, record.isEntry, record.content,
-        JSON.stringify(record.variables ?? []), JSON.stringify(record.transitions ?? []), record.sourceText,
-        record.sourcePageStart, record.sourcePageEnd,
+        JSON.stringify(record.variables ?? []), JSON.stringify(record.transitions ?? []),
+        job.knowledge_base_usage, record.sourceText, record.sourcePageStart, record.sourcePageEnd,
       ],
     );
   }
@@ -222,11 +227,11 @@ async function persistChunks(client, job, result) {
     await client.query(
       `INSERT INTO knowledge_chunks (
          tenant_id, knowledge_base_id, document_id, document_version_id,
-         chunk_index, content, token_count, status
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'draft')`,
+         chunk_index, content, token_count, usage_direction, status
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'draft')`,
       [
         job.tenant_id, job.knowledge_base_id, job.document_id, job.document_version_id,
-        record.chunkIndex, record.content, record.tokenCount,
+        record.chunkIndex, record.content, record.tokenCount, job.knowledge_base_usage,
       ],
     );
   }

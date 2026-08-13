@@ -1,6 +1,6 @@
 import { conversationContextModes, resolveLiveMemoryConfiguration } from './live-memory-config.js';
 import { captureConfiguredMemoryFields, pendingFieldFromAssistantResponse } from './live-memory-extractor.js';
-import { resolveConversationStageConfiguration, workflowStageGate } from './conversation-stage-config.js';
+import { workflowStageGate } from './conversation-stage-config.js';
 
 const activeCalls = new Map();
 const maximumFullCallMessages = 2_000;
@@ -129,9 +129,16 @@ function resolvePendingQuestion(state) {
   state.resumeQuestionContext = null;
 }
 
-function schedulePendingQuestionResume(state) {
+function discardPendingQuestion(state) {
+  state.pendingQuestion = null;
+  state.pendingQuestionText = null;
+  state.pendingQuestionKind = null;
+  state.resumeQuestionAfterAnswer = null;
+  state.resumeQuestionContext = null;
+}
+
+function schedulePendingQuestionResume(state, { groundedRelevant = false, priorTopic = null } = {}) {
   if (!state.pendingQuestion) return;
-  state.resumeStage ??= state.currentStage;
   const question = state.pendingQuestionText || state.pendingQuestion;
   if (!sameFrameValue(state.resumeQuestionAfterAnswer, question)) {
     state.flowRecovery.sideQuestions += 1;
@@ -140,11 +147,8 @@ function schedulePendingQuestionResume(state) {
   state.resumeQuestionContext = {
     pendingQuestion: state.pendingQuestion,
     pendingQuestionKind: state.pendingQuestionKind,
-    currentStage: state.currentStage,
-    conversationStage: state.currentStage,
-    activeCategoryKey: state.activeCategory?.key ?? null,
-    selectedItemId: state.selectedCatalogItem?.id ?? null,
-    selectedItemKey: state.selectedCatalogItem?.key ?? null,
+    priorTopic: frameText(priorTopic, 240) || null,
+    groundedRelevant: groundedRelevant === true,
   };
 }
 
@@ -153,10 +157,9 @@ function pendingResumeIsRelevant(state) {
   if (!state.resumeQuestionAfterAnswer || !context || !state.pendingQuestion) return false;
   if (!sameFrameValue(context.pendingQuestion, state.pendingQuestion)) return false;
   if (context.pendingQuestionKind !== state.pendingQuestionKind) return false;
-  if (context.currentStage !== state.currentStage && context.currentStage !== state.resumeStage) return false;
-  if ((context.activeCategoryKey ?? null) !== (state.activeCategory?.key ?? null)) return false;
-  if ((context.selectedItemId ?? null) !== (state.selectedCatalogItem?.id ?? null)) return false;
-  if ((context.selectedItemKey ?? null) !== (state.selectedCatalogItem?.key ?? null)) return false;
+  // A pending question may cross a temporary topic detour only when the
+  // validated LLM decision explicitly marked it relevant for this turn.
+  if (context.groundedRelevant !== true) return false;
   return !state.answeredQuestions.has(state.resumeQuestionAfterAnswer);
 }
 
@@ -172,15 +175,18 @@ function publicState(state) {
     lockedFields: state.configuration.fields.filter((field) => !visibleFields.includes(field)).map((field) => field.key),
     messages: state.messages.map((message) => ({ ...message })),
     collectedData: { ...state.collectedData },
+    collectedInformation: { ...state.collectedData },
     completedQuestions: [...state.completedQuestions],
     answeredQuestions: [...state.answeredQuestions],
     currentTopic: state.currentTopic,
+    knownEntities: state.knownEntities.map((item) => ({ ...item })),
     language: state.language,
     pendingQuestion: state.pendingQuestion,
     pendingQuestionText: state.pendingQuestionText,
     pendingQuestionKind: state.pendingQuestionKind,
     resumeQuestionAfterAnswer: state.resumeQuestionAfterAnswer,
     lastAnswer: state.lastAnswer,
+    activeToolRequest: state.activeToolRequest ? { ...state.activeToolRequest } : null,
     lastAnsweredQuestion: state.lastAnsweredQuestion,
     runningSummary: state.runningSummary,
     lastIntent: state.lastIntent,
@@ -206,18 +212,24 @@ function publicState(state) {
 export function openLiveCallMemory(identity, settings = {}, now = Date.now(), initialFrame = {}) {
   const key = liveCallMemoryKey(identity);
   const configuration = resolveLiveMemoryConfiguration(settings);
-  const stageConfiguration = resolveConversationStageConfiguration(settings);
   const restoredPending = initialFrame.pendingQuestion && typeof initialFrame.pendingQuestion === 'object'
     ? initialFrame.pendingQuestion : {};
   const restoredMessages = (initialFrame.recentTurns ?? []).map(cleanMessage).filter(Boolean);
   const configuredFieldKeys = new Set(configuration.fields.map((field) => field.key));
-  const restoredFields = Object.fromEntries(Object.entries(initialFrame.fields ?? {})
+  const restoredFields = Object.fromEntries(Object.entries(
+    initialFrame.collectedInformation ?? initialFrame.fields ?? {},
+  )
     .filter(([field, value]) => configuredFieldKeys.has(field) && value !== undefined && value !== null));
   const state = {
     key, configuration, messages: restoredMessages, collectedData: restoredFields,
     completedQuestions: new Set([...(initialFrame.completedQuestions ?? []), ...Object.keys(restoredFields)]),
     answeredQuestions: new Set(initialFrame.answeredQuestions ?? []),
     currentTopic: frameText(initialFrame.currentTopic, 240) || null,
+    knownEntities: uniqueFrameItems([
+      ...(initialFrame.knownEntities ?? []),
+      initialFrame.selectedItem,
+      ...(initialFrame.candidateItems ?? []),
+    ].filter(Boolean)),
     language: frameLanguage(initialFrame.language
       ?? settings.conversationLanguage ?? settings.defaultLanguage ?? settings.language),
     pendingQuestion: frameText(restoredPending.key, 500) || null,
@@ -226,10 +238,14 @@ export function openLiveCallMemory(identity, settings = {}, now = Date.now(), in
     resumeQuestionAfterAnswer: null, resumeQuestionContext: null,
     lastAnsweredQuestion: null,
     lastAnswer: frameText(initialFrame.lastAnswer, maximumMessageCharacters) || null,
+    activeToolRequest: initialFrame.activeToolRequest && typeof initialFrame.activeToolRequest === 'object'
+      ? Object.freeze({ ...initialFrame.activeToolRequest }) : null,
     runningSummary: frameText(initialFrame.runningSummary, maximumRunningSummaryCharacters),
     lastIntent: null, lastQuestionType: null, summaryCursor: 0,
-    currentStage: frameText(initialFrame.currentStage, 80) || stageConfiguration.initialStage,
-    resumeStage: frameText(initialFrame.resumeStage, 80) || null,
+    // Legacy stage fields are retained in the public snapshot during rolling
+    // deployments, but they are no longer restored or used to route a turn.
+    currentStage: null,
+    resumeStage: null,
     activeCategory: frameCategory(initialFrame.activeCategory),
     selectedCatalogItem: frameItem(initialFrame.selectedItem),
     candidateItems: uniqueFrameItems(initialFrame.candidateItems),
@@ -381,12 +397,21 @@ export function openLiveCallMemory(identity, settings = {}, now = Date.now(), in
       return publicState(state);
     },
     applyGroundedDecision(decision = {}) {
+      const priorTopic = state.currentTopic;
       state.lastIntent = frameText(decision.intent, 160) || state.lastIntent;
       state.lastQuestionType = frameText(decision.questionType, 80) || state.lastQuestionType;
+      const decidedTopic = frameText(decision.currentTopic, 240);
+      if (decidedTopic) state.currentTopic = decidedTopic;
+      if (decision.pendingQuestionRelevant === false && decision.flowAction !== 'answer_pending') {
+        discardPendingQuestion(state);
+      }
       if (decision.flowAction === 'answer_pending') resolvePendingQuestion(state);
-      else if (decision.flowAction === 'side_question') schedulePendingQuestionResume(state);
+      else if (decision.flowAction === 'side_question' && decision.pendingQuestionRelevant !== false) {
+        schedulePendingQuestionResume(state, { groundedRelevant: true, priorTopic });
+      }
       const selected = frameItem(decision.selectedEntities?.[0]);
       if (selected) {
+        state.knownEntities = uniqueFrameItems([selected, ...state.knownEntities]);
         const known = [state.selectedCatalogItem, ...state.candidateItems].filter(Boolean)
           .find((item) => (selected.id && item.id === selected.id) || (selected.key && item.key === selected.key));
         state.selectedCatalogItem = frameItem(selected, known ?? {});
@@ -577,6 +602,18 @@ export function openLiveCallMemory(identity, settings = {}, now = Date.now(), in
       state.updatedAt = Date.now();
       return publicState(state);
     },
+    setActiveToolRequest(request = null) {
+      if (!request || typeof request !== 'object') state.activeToolRequest = null;
+      else {
+        state.activeToolRequest = Object.freeze({
+          id: frameText(request.id, 100) || null,
+          name: frameText(request.name ?? request.action, 100) || null,
+          status: frameText(request.status, 40) || 'pending',
+        });
+      }
+      state.updatedAt = Date.now();
+      return publicState(state);
+    },
     snapshot: () => publicState(state),
     promptMessages: () => retainRecentTurns(state.messages, configuration.recentTurns).map((message) => ({ ...message })),
     close() { activeCalls.delete(key); },
@@ -592,65 +629,50 @@ function promptText(value, maximum) {
     .replace(/\s+/gu, ' ').trim().slice(0, maximum);
 }
 
-export function compactLiveCallMemoryContext({ snapshot = {}, collectedData = {}, missingFields = [] }, maximumCharacters = 1_000) {
-  const collectedEntries = Object.entries(collectedData).slice(-12)
-    .map(([key, value]) => [promptText(key, 64), promptText(value, 120)]).filter(([key, value]) => key && value);
-  const missing = missingFields.slice(0, 20).map((field) => promptText(field.key ?? field, 64)).filter(Boolean);
-  const next = missingFields[0];
+export function compactLiveCallMemoryContext({ snapshot = {}, collectedData = {} }, maximumCharacters = 1_000) {
+  const collectedEntries = Object.entries(snapshot.collectedInformation ?? collectedData).slice(-20)
+    .map(([key, value]) => [promptText(key, 64), promptText(value, 160)])
+    .filter(([key, value]) => key && value);
+  const pending = snapshot.pendingQuestion && typeof snapshot.pendingQuestion === 'object'
+    ? snapshot.pendingQuestion
+    : {
+      key: snapshot.pendingQuestion,
+      text: snapshot.pendingQuestionText,
+      kind: snapshot.pendingQuestionKind,
+    };
   const context = {
-    collectedData: Object.fromEntries(collectedEntries),
-    completedQuestions: [...new Set([
-      ...(snapshot.completedQuestions ?? []).map((entry) => promptText(entry, 64)),
-      ...Object.keys(collectedData).map((entry) => promptText(entry, 64)),
-    ].filter(Boolean))].slice(-20),
-    pendingQuestion: promptText(snapshot.pendingQuestion, 64) || undefined,
-    pendingQuestionKind: promptText(snapshot.pendingQuestionKind, 32) || undefined,
-    resumeQuestionAfterAnswer: promptText(snapshot.resumeQuestionAfterAnswer, 200) || undefined,
-    currentTopic: promptText(snapshot.currentTopic, 160) || undefined,
-    language: promptText(snapshot.language, 12) || undefined,
-    currentStage: promptText(snapshot.currentStage, 80) || undefined,
-    lastAnswer: promptText(snapshot.lastAnswer, 300) || undefined,
-    lastIntent: promptText(snapshot.lastIntent, 80) || undefined,
-    lastQuestionType: promptText(snapshot.lastQuestionType, 80) || undefined,
-    resumeStage: promptText(snapshot.resumeStage, 80) || undefined,
-    activeCategory: snapshot.activeCategory ? {
-      key: promptText(snapshot.activeCategory.key, 80) || undefined,
-      name: promptText(snapshot.activeCategory.name, 160),
-      parentKey: promptText(snapshot.activeCategory.parentKey, 80) || undefined,
+    currentTopic: promptText(snapshot.currentTopic, 200) || undefined,
+    knownEntities: (snapshot.knownEntities ?? []).slice(0, 12).map((item) => ({
+      id: promptText(item.id, 100) || undefined,
+      key: promptText(item.key, 120) || undefined,
+      name: promptText(item.name, 200) || undefined,
+      category: promptText(item.category, 160) || undefined,
+    })).filter((item) => item.id || item.key || item.name),
+    pendingQuestion: pending?.key || pending?.text ? {
+      key: promptText(pending.key, 120) || undefined,
+      text: promptText(pending.text, 300) || undefined,
+      kind: promptText(pending.kind, 40) || undefined,
     } : undefined,
-    selectedCatalogItem: snapshot.selectedCatalogItem ? {
-      id: promptText(snapshot.selectedCatalogItem.id, 80),
-      key: promptText(snapshot.selectedCatalogItem.key, 80) || undefined,
-      name: promptText(snapshot.selectedCatalogItem.name, 160),
-      category: promptText(snapshot.selectedCatalogItem.category, 160) || undefined,
+    language: promptText(snapshot.language, 20) || undefined,
+    collectedInformation: Object.fromEntries(collectedEntries),
+    recentTurns: (snapshot.messages ?? snapshot.recentTurns ?? []).slice(-10).map((message) => ({
+      role: message.role === 'assistant' ? 'assistant' : 'user',
+      content: promptText(message.content, 300),
+    })).filter((message) => message.content),
+    lastAnswer: promptText(snapshot.lastAnswer, 500) || undefined,
+    activeToolRequest: snapshot.activeToolRequest ? {
+      id: promptText(snapshot.activeToolRequest.id, 100) || undefined,
+      name: promptText(snapshot.activeToolRequest.name, 100) || undefined,
+      status: promptText(snapshot.activeToolRequest.status, 40) || undefined,
     } : undefined,
-    activeActions: (snapshot.activeActions ?? []).map((value) => promptText(value, 80)).filter(Boolean).slice(-10),
-    candidateItems: (snapshot.candidateItems ?? []).slice(0, 5).map((item) => ({
-      id: promptText(item.id, 80) || undefined,
-      key: promptText(item.key, 80) || undefined,
-      name: promptText(item.name, 120),
-      category: promptText(item.category, 120) || undefined,
-    })).filter((item) => item.name),
-    answeredQuestions: (snapshot.answeredQuestions ?? [])
-      .map((value) => promptText(value, 120)).filter(Boolean).slice(-12),
-    lockedFields: (snapshot.lockedFields ?? []).map((value) => promptText(value, 64)).filter(Boolean).slice(0, 20),
-    missingFields: missing,
-    nextMissingField: next ? {
-      key: promptText(next.key, 64), label: promptText(next.label, 80),
-      type: promptText(next.type, 20), question: promptText(next.question, 240),
-    } : undefined,
-    runningSummary: promptText(snapshot.runningSummary, 500) || undefined,
-    mode: snapshot.mode,
   };
   const size = () => JSON.stringify(context).length;
-  while (size() > maximumCharacters && context.runningSummary) {
-    context.runningSummary = context.runningSummary.slice(0, Math.max(0, context.runningSummary.length - 100)) || undefined;
+  while (size() > maximumCharacters && context.recentTurns.length > 2) context.recentTurns.shift();
+  while (size() > maximumCharacters && context.knownEntities.length > 1) context.knownEntities.pop();
+  const keys = Object.keys(context.collectedInformation);
+  while (size() > maximumCharacters && keys.length > 1) delete context.collectedInformation[keys.shift()];
+  if (size() > maximumCharacters && context.lastAnswer) {
+    context.lastAnswer = context.lastAnswer.slice(0, Math.max(80, context.lastAnswer.length - (size() - maximumCharacters)));
   }
-  while (size() > maximumCharacters && context.completedQuestions.length > 1) context.completedQuestions.shift();
-  while (size() > maximumCharacters && context.answeredQuestions.length > 1) context.answeredQuestions.shift();
-  while (size() > maximumCharacters && context.candidateItems.length > 1) context.candidateItems.pop();
-  while (size() > maximumCharacters && context.missingFields.length > 1) context.missingFields.pop();
-  const keys = Object.keys(context.collectedData);
-  while (size() > maximumCharacters && keys.length > 1) delete context.collectedData[keys.shift()];
   return Object.freeze(context);
 }

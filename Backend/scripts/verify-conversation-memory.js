@@ -8,7 +8,10 @@ import {
 import { buildConversationMemoryState } from '../src/voice/interaction/conversation-memory-state.js';
 
 const cleanState = buildConversationMemoryState({ previous: null, call: { id: 'call-null' } });
-assert.equal(cleanState.callFrame.callId, null);
+assert.deepEqual(Object.keys(cleanState.callFrame).sort(), [
+  'activeToolRequest', 'collectedInformation', 'currentTopic', 'knownEntities',
+  'language', 'lastAnswer', 'pendingQuestion', 'recentTurns',
+].sort());
 assert.deepEqual(cleanState.collectedData, {});
 
 const contextId = 'customer:+919489974421';
@@ -77,12 +80,10 @@ const liveState = buildConversationMemoryState({
   callFrame: { currentStage: 'booking_details', fields: { patient_age: '30' } },
   collectedData: { preferred_date: '2026-08-14' },
 });
-assert.equal(liveState.callFrame.currentStage, 'booking_details');
-assert.equal(liveState.callFrame.activeCategory.key, 'master');
-assert.equal(liveState.callFrame.selectedItem.key, 'silver');
+assert.equal(liveState.callFrame.knownEntities.some((item) => item.key === 'silver'), true);
 assert.equal(liveState.callFrame.pendingQuestion.key, 'patient_age');
 assert.equal(liveState.callFrame.language, 'ta');
-assert.deepEqual(liveState.callFrame.fields, {
+assert.deepEqual(liveState.callFrame.collectedInformation, {
   patient_name: 'Mitra', patient_age: '30', preferred_date: '2026-08-14',
 });
 assert.deepEqual(liveState.collectedData, {
@@ -93,13 +94,12 @@ const clearedSelection = buildConversationMemoryState({
   previous: liveState,
   call: { id: 'call-live' },
   callFrame: {
-    conversationStage: 'category_selection', selectedItem: null, pendingQuestion: null,
-    activeCategory: { key: 'kids', name: 'Kids Health Packages' },
+    currentTopic: 'Kids Health Packages', pendingQuestion: null,
+    knownEntities: [{ key: 'kids', name: 'Kids Health Packages' }],
   },
 });
-assert.equal(clearedSelection.callFrame.currentStage, 'category_selection');
-assert.deepEqual(clearedSelection.callFrame.selectedItem, {});
+assert.equal(clearedSelection.callFrame.currentTopic, 'Kids Health Packages');
+assert.equal(clearedSelection.callFrame.knownEntities[0].key, 'kids');
 assert.equal(clearedSelection.callFrame.pendingQuestion.key, null);
-assert.equal(clearedSelection.callFrame.activeCategory.key, 'kids');
 
 console.log(JSON.stringify({ success: true, task: 'Permanent PostgreSQL conversation memory' }));

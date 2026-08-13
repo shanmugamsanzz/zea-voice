@@ -8,6 +8,8 @@ import {
 import { tenantVectorPayload } from '../rag/tenant-isolation.js';
 import { withPlatformAdminContext } from '../infrastructure/database-context.js';
 import { AppError } from '../middleware/errors.js';
+import { cacheCompactKnowledgeMap } from './knowledge-map.service.js';
+import { invalidateTenantRuntimeKnowledgeCache } from './knowledge-runtime.service.js';
 
 const defaultDependencies = {
   contextRunner: withPlatformAdminContext,
@@ -15,6 +17,8 @@ const defaultDependencies = {
   ensureCollection: ensureTenantCollection,
   deleteKnowledgeBasePoints: deleteTenantPointsByKnowledgeBase,
   upsertPoints: upsertTenantPoints,
+  cacheKnowledgeMap: cacheCompactKnowledgeMap,
+  invalidateCache: invalidateTenantRuntimeKnowledgeCache,
 };
 
 function embeddingText(value) {
@@ -24,6 +28,14 @@ function embeddingText(value) {
   const lastSpace = truncated.lastIndexOf(' ');
   return (lastSpace > env.RAG_EMBEDDING_MAX_CHARS * 0.8 ? truncated.slice(0, lastSpace) : truncated).trim();
 }
+
+const documentTypeByRecordType = Object.freeze({
+  faq: 'faq',
+  knowledge_chunk: 'general_knowledge',
+  catalog_item: 'catalog',
+  workflow_rule: 'workflow_rules',
+  conversation_node: 'conversation_script',
+});
 
 export function buildSemanticPoint(job, record, vector) {
   const payload = tenantVectorPayload({
@@ -37,6 +49,9 @@ export function buildSemanticPoint(job, record, vector) {
     category: record.record_type,
     publicationRevision: job.targetRevision,
     content: record.content,
+    language: record.language,
+    assignedAgentIds: job.assigned_agent_ids ?? [],
+    documentType: documentTypeByRecordType[record.record_type],
     ...(record.source_page_start ? { pageNumber: record.source_page_start } : {}),
   });
   return {
@@ -73,7 +88,10 @@ async function claimIndexJob(jobId, contextRunner) {
     );
     const result = await client.query(
       `SELECT j.*, kb.status AS knowledge_base_status,
-          kb.publication_revision, kb.usage_direction AS knowledge_base_usage
+          kb.publication_revision, kb.usage_direction AS knowledge_base_usage,
+          COALESCE((SELECT jsonb_agg(akb.agent_id ORDER BY akb.priority, akb.agent_id)
+            FROM agent_knowledge_bases akb
+           WHERE akb.tenant_id=kb.tenant_id AND akb.knowledge_base_id=kb.id), '[]'::jsonb) AS assigned_agent_ids
          FROM knowledge_processing_jobs j
          JOIN knowledge_bases kb ON kb.tenant_id = j.tenant_id AND kb.id = j.knowledge_base_id
         WHERE j.id = $1 AND j.job_type = 'index'
@@ -117,6 +135,7 @@ async function loadSemanticRecords(job, contextRunner) {
     const result = await client.query(
       `SELECT f.id AS record_id, 'faq'::text AS record_type,
           f.document_id, f.document_version_id, f.usage_direction,
+          COALESCE(NULLIF(f.language, ''), NULLIF(d.metadata->>'language', ''), 'und') AS language,
           f.source_page_start, f.question, f.answer,
           ('Question: ' || f.question || E'\nAnswer: ' || f.answer) AS content,
           NULL::text AS entity_name, NULL::text AS entity_category,
@@ -133,6 +152,7 @@ async function loadSemanticRecords(job, contextRunner) {
        UNION ALL
        SELECT c.id, 'knowledge_chunk'::text,
           c.document_id, c.document_version_id, c.usage_direction,
+          COALESCE(NULLIF(d.metadata->>'language', ''), 'und'),
           c.source_page_start, NULL::text, NULL::text, c.content,
           NULL::text, NULL::text, '[]'::jsonb, '[]'::jsonb, '{}'::jsonb
          FROM knowledge_chunks c
@@ -146,6 +166,7 @@ async function loadSemanticRecords(job, contextRunner) {
        UNION ALL
        SELECT si.id, 'catalog_item'::text,
           si.document_id, si.document_version_id, kb.usage_direction,
+          COALESCE(NULLIF(d.metadata->>'language', ''), 'und'),
           si.source_page_start, NULL::text, NULL::text,
           concat_ws(E'\n',
             'Catalog item: ' || si.name,
@@ -186,6 +207,7 @@ async function loadSemanticRecords(job, contextRunner) {
        UNION ALL
        SELECT w.id, 'workflow_rule'::text,
           w.document_id, w.document_version_id, w.usage_direction,
+          COALESCE(NULLIF(d.metadata->>'language', ''), 'und'),
           w.source_page_start, NULL::text, NULL::text,
           concat_ws(E'\n',
             'Workflow: ' || w.name,
@@ -208,6 +230,34 @@ async function loadSemanticRecords(job, contextRunner) {
         WHERE w.tenant_id=$1 AND w.knowledge_base_id=$2
           AND w.status='approved' AND d.status='ready'
           AND v.is_current=true AND v.status='ready' AND v.deleted_at IS NULL
+       UNION ALL
+       SELECT cf.id, 'conversation_node'::text,
+          cf.document_id, cf.document_version_id, cf.usage_direction,
+          COALESCE(NULLIF(cf.language, ''), NULLIF(d.metadata->>'language', ''), 'und'),
+          cf.source_page_start, NULL::text, NULL::text,
+          concat_ws(E'\n',
+            'Conversation guidance: ' || cf.content,
+            'Flow: ' || cf.flow_key,
+            'Node: ' || cf.node_key,
+            CASE WHEN cf.variables <> '[]'::jsonb THEN 'Variables: ' || cf.variables::text END,
+            CASE WHEN cf.transitions <> '[]'::jsonb THEN 'Transitions: ' || cf.transitions::text END
+          ),
+          cf.node_key, cf.flow_key, '[]'::jsonb, '[]'::jsonb,
+          jsonb_build_object(
+            'flowKey', cf.flow_key,
+            'nodeKey', cf.node_key,
+            'nodeType', cf.node_type,
+            'sequenceOrder', cf.sequence_order,
+            'isEntry', cf.is_entry
+          )
+         FROM conversation_flows cf
+         JOIN knowledge_documents d
+           ON d.tenant_id=cf.tenant_id AND d.id=cf.document_id
+         JOIN knowledge_document_versions v
+           ON v.tenant_id=cf.tenant_id AND v.id=cf.document_version_id
+        WHERE cf.tenant_id=$1 AND cf.knowledge_base_id=$2
+          AND cf.status='approved' AND d.status='ready'
+          AND v.is_current=true AND v.status='ready' AND v.deleted_at IS NULL
        ORDER BY record_type, record_id`,
       [job.tenant_id, job.knowledge_base_id],
     );
@@ -223,7 +273,7 @@ async function updateProgress(jobId, progress, contextRunner) {
   ));
 }
 
-async function finishIndexJob(job, records, contextRunner) {
+async function finishIndexJob(job, records, contextRunner, knowledgeMapCacheKey = null) {
   return contextRunner(null, async (client) => {
     const state = await client.query(
       `SELECT status, publication_revision FROM knowledge_bases
@@ -275,7 +325,12 @@ async function finishIndexJob(job, records, contextRunner) {
               error_code = NULL, error_message = NULL,
               metadata = metadata || $2::jsonb
         WHERE id = $1`,
-      [job.id, JSON.stringify({ indexedRecordCount: records.length, collection: `tenant:${job.tenant_id}` })],
+      [job.id, JSON.stringify({
+        indexedRecordCount: records.length,
+        collection: `tenant:${job.tenant_id}`,
+        knowledgeMapCacheKey,
+        documentTypes: [...new Set(records.map((record) => documentTypeByRecordType[record.record_type]))],
+      })],
     );
     await client.query(
       `UPDATE knowledge_bases SET status = 'published'
@@ -346,11 +401,33 @@ export async function processSemanticIndexJob(jobId, dependencies = defaultDepen
         / Math.max(points.length, 1)) * 30);
       await updateProgress(jobId, progress, runtime.contextRunner);
     }
-    await runtime.deleteKnowledgeBasePoints(job.tenant_id, job.knowledge_base_id, {
-      publicationRevision: job.targetRevision,
-      revisionMode: 'older',
-    });
-    return await finishIndexJob(job, records, runtime.contextRunner);
+    const cachedMap = await runtime.cacheKnowledgeMap(job, records);
+    const result = await finishIndexJob(job, records, runtime.contextRunner, cachedMap.key);
+    await runtime.invalidateCache(job.tenant_id);
+    // A completed index job is the atomic visibility marker used by runtime.
+    // Older vectors are removed only after the new revision is fully usable.
+    let staleVectorCleanupPending = false;
+    try {
+      await runtime.deleteKnowledgeBasePoints(job.tenant_id, job.knowledge_base_id, {
+        publicationRevision: job.targetRevision,
+        revisionMode: 'older',
+      });
+    } catch {
+      // The new revision is already the only revision visible to retrieval.
+      // Physical cleanup can be retried without rolling back usable vectors.
+      staleVectorCleanupPending = true;
+      try {
+        await runtime.contextRunner(null, (client) => client.query(
+          `UPDATE knowledge_processing_jobs
+              SET metadata=metadata || $2::jsonb
+            WHERE id=$1`,
+          [job.id, JSON.stringify({ staleVectorCleanupPending: true })],
+        ));
+      } catch {
+        // Cleanup is retryable; never roll back the now-active revision.
+      }
+    }
+    return { ...result, knowledgeMapCacheKey: cachedMap.key, staleVectorCleanupPending };
   } catch (error) {
     if (qdrantMutated) {
       try {

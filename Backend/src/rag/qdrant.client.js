@@ -15,7 +15,9 @@ async function qdrantFetch(path, options = {}) {
         ...(options.body ? { 'content-type': 'application/json' } : {}),
         ...options.headers,
       },
-      signal: AbortSignal.timeout(env.QDRANT_REQUEST_TIMEOUT_MS),
+      signal: options.signal
+        ? AbortSignal.any([options.signal, AbortSignal.timeout(env.QDRANT_REQUEST_TIMEOUT_MS)])
+        : AbortSignal.timeout(env.QDRANT_REQUEST_TIMEOUT_MS),
     });
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
@@ -72,8 +74,11 @@ export async function ensureTenantCollection(tenantId) {
     ['document_id', 'keyword'],
     ['document_version_id', 'keyword'],
     ['record_type', 'keyword'],
+    ['document_type', 'keyword'],
     ['category', 'keyword'],
     ['agent_usage', 'keyword'],
+    ['assigned_agent_ids', 'keyword'],
+    ['language', 'keyword'],
     ['publication_revision', 'integer'],
   ];
   for (const [fieldName, fieldSchema] of indexes) {
@@ -106,6 +111,8 @@ export async function upsertTenantPoints(tenantId, points) {
 export async function searchTenantPoints(tenantId, vector, {
   knowledgeBases,
   usageDirection,
+  agentId,
+  abortSignal,
   limit = env.RAG_RUNTIME_TOP_K,
   scoreThreshold = env.RAG_RUNTIME_MIN_SCORE,
   recordTypes = ['FAQ', 'KNOWLEDGE_CHUNK'],
@@ -128,6 +135,8 @@ export async function searchTenantPoints(tenantId, vector, {
   const normalizedRecordTypes = [...new Set(recordTypes.map((value) => value.trim().toUpperCase()))];
 
   const tenant = tenantId.toLowerCase();
+  const normalizedAgentId = agentId === undefined
+    ? null : requireEntityId(agentId, 'agentId');
   const revisionConditions = knowledgeBases.map(({ id, publicationRevision }) => {
     if (typeof id !== 'string' || !Number.isInteger(publicationRevision) || publicationRevision < 1) {
       throw new TypeError('Every Knowledge Base filter requires an id and positive publicationRevision');
@@ -143,6 +152,7 @@ export async function searchTenantPoints(tenantId, vector, {
   const payload = await qdrantFetch(`/collections/${encodeURIComponent(collectionName)}/points/search`, {
     method: 'POST',
     operation: 'search-points',
+    signal: abortSignal,
     body: JSON.stringify({
       vector,
       limit,
@@ -154,6 +164,9 @@ export async function searchTenantPoints(tenantId, vector, {
           { key: 'tenant_id', match: { value: tenant } },
           { key: 'agent_usage', match: { any: [usageDirection.toUpperCase(), 'BOTH'] } },
           { key: 'record_type', match: { any: normalizedRecordTypes } },
+          ...(normalizedAgentId
+            ? [{ key: 'assigned_agent_ids', match: { value: normalizedAgentId } }]
+            : []),
           { should: revisionConditions },
         ],
       },

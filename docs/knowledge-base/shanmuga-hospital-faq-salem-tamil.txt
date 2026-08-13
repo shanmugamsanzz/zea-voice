@@ -4,7 +4,7 @@ ANSWER: Shanmuga Hospitalல கிடைக்குற approved Health Check-u
 
 QUESTION: Shanmuga Hospital எங்க இருக்கு?
 ALIASES: Hospital location என்ன? | Address சொல்லுங்க | Hospitalக்கு எப்படி வரணும்? | Where is the hospital? | Location share பண்ணுங்க
-ANSWER: Shanmuga Hospital Salemல, Ramakrishna Bus Stopக்கு அருகில் Hasthampatti போற வழியில இருக்குங்க.
+ANSWER: Shanmuga Hospital, 51/24, Saradha College Road, Salem – 636007ல இருக்குங்க. Salem New Bus Standல இருந்து Saradha College Road வழியா Hasthampatti பக்கம் வரும்போது bridgeக்கு கீழ left sideல hospital இருக்கு.
 
 QUESTION: Health Check-up Package screeningஆ diagnosisஆ?
 ALIASES: Package diagnosis பண்ணுமா? | இந்த Checkup நோயை confirm பண்ணுமா? | Is this diagnostic? | Screeningக்கும் diagnosisக்கும் என்ன difference?
@@ -16,7 +16,7 @@ ANSWER: எந்த ஒரு Health Check-up Packageமும் எல்ல�
 
 QUESTION: எனக்கு எந்த Package suitableஆ இருக்கும்?
 ALIASES: எந்த Package choose பண்ணலாம்? | Which package should I select? | என்னுடைய requirementக்கு என்ன Package? | எனக்கு suitable Package சொல்லுங்க
-ANSWER: உங்களுடைய screening requirement அல்லது concern சொல்லுங்க. அதுக்கு related approved option இருந்தா explain பண்றேன்; exact medical suitabilityஐ Doctorதான் confirm பண்ண முடியும்.
+ANSWER: நீங்க ஏற்கனவே சொன்ன screening requirement அல்லது concernக்கு related approved option இருந்தா அதை explain பண்றேன். Concern இன்னும் சொல்லலைன்னா அதை மட்டும் சொல்லுங்க; exact medical suitabilityஐ Doctorதான் confirm பண்ண முடியும்.
 
 QUESTION: ஒரு categoryக்கு ஒரே priceஆ?
 ALIASES: Category price என்ன? | இந்த category full price என்ன? | எல்லா optionsக்கும் same priceஆ? | Category package amount என்ன?
@@ -24,23 +24,23 @@ ANSWER: ஒரு categoryக்குள்ள பல Check-up options இர�
 
 QUESTION: Full Test list சொல்ல முடியுமா?
 ALIASES: Complete test list வேணும் | எல்லா Testsம் சொல்லுங்க | What tests are included? | இந்த Packageல என்னென்ன இருக்கு? | Package full details சொல்லுங்க
-ANSWER: சொல்லலாங்க. எந்த Packageக்கான Full Test list வேணும்னு சொல்லுங்க; நீளமான listஆ இருந்தா கேட்க easyஆ சின்ன சின்ன பகுதியாக explain பண்றேன்.
+ANSWER: சொல்லலாங்க. இப்ப பேசுற selected Packageக்கான approved Full Test listஐ சின்ன சின்ன பகுதியாக explain பண்றேன். எந்த Packageனு இன்னும் clear ஆகலைன்னா Package பெயரை மட்டும் கேட்கிறேன்.
 
 QUESTION: Package details சுருக்கமா சொல்ல முடியுமா?
 ALIASES: Short summary சொல்லுங்க | முக்கியமான Tests மட்டும் சொல்லுங்க | Briefஆ explain பண்ணுங்க | Quick summary வேணும்
-ANSWER: சொல்லலாங்க. Selected Packageோட approved price மற்றும் முக்கியமான coverageஐ முதல்ல சுருக்கமா சொல்றேன். Full list தேவைப்பட்டா அடுத்ததாக சொல்லலாம்.
+ANSWER: சொல்லலாங்க. இப்ப பேசுற selected Packageோட approved price மற்றும் முக்கியமான coverageஐ முதல்ல சுருக்கமா சொல்றேன். Full list தேவைப்பட்டா அடுத்ததாக சொல்லலாம்.
 
 QUESTION: இரண்டு Packages compare பண்ண முடியுமா?
 ALIASES: Package difference சொல்லுங்க | Compare these packages | ரெண்டு Packageக்கும் என்ன வித்தியாசம்? | எது better?
-ANSWER: Compare பண்ணலாங்க. எந்த இரண்டு approved Packagesனு சொல்லுங்க; price, included Tests மற்றும் முக்கியமான coverage difference மட்டும் தெளிவா சொல்றேன். Medicalஆ எது suitableன்னு Doctorதான் confirm பண்ண முடியும்.
+ANSWER: Compare பண்ணலாங்க. நீங்க கேட்ட இரண்டு approved Packagesோட price, included Tests மற்றும் முக்கியமான coverage difference மட்டும் தெளிவா சொல்றேன். எந்த இரண்டு Packagesனு clear ஆகலைன்னா அவற்றின் பெயரை மட்டும் கேட்கிறேன்; medicalஆ எது suitableன்னு Doctorதான் confirm பண்ண முடியும்.
 
 QUESTION: Health Check-upக்கு fasting தேவையா?
 ALIASES: Fasting இருக்கணுமா? | சாப்பிடாம வரணுமா? | How long should I fast? | எத்தனை மணி நேரம் fasting? | Testக்கு முன்னாடி சாப்பிடலாமா?
-ANSWER: Health Check-upக்கு முன்னாடி எட்டு முதல் பத்து மணி நேரம் fastingல இருக்கணுங்க.
+ANSWER: Fasting instruction selected Packageக்கு ஏற்ப மாறலாம். இப்ப selected Package clearஆ இருந்தா அதுக்கான approved preparation instruction மட்டும் சொல்றேன்; Package clear இல்லனா எந்த Packageனு மட்டும் கேட்கிறேன்.
 
 QUESTION: Fastingல தண்ணீர் குடிக்கலாமா?
 ALIASES: Water குடிக்கலாமா? | Can I drink water while fasting? | Fasting time water allowedஆ? | Tea coffee குடிக்கலாமா?
-ANSWER: Fasting நேரத்துல தண்ணீர் மட்டும் குடிக்கலாங்க. வேற drinks அல்லது food எடுத்துக்காம வருங்க.
+ANSWER: Water, food மற்றும் drinks பற்றிய preparation instruction selected Packageக்கு ஏற்ப மாறலாம். அந்த Packageக்கான approved instruction இருந்தா அதை மட்டும் சொல்றேன்; இல்லனா Hospital teamகிட்ட confirm பண்ணணுங்க.
 
 QUESTION: Check-upக்கு என்ன கொண்டு வரணும்?
 ALIASES: Testக்கு வரும்போது என்ன எடுத்து வரணும்? | What should I bring? | Previous report கொண்டு வரணுமா? | என்ன dress போடணும்?
@@ -48,7 +48,7 @@ ANSWER: Comfortable dress போட்டுட்டு வாங்க. ஏற
 
 QUESTION: Health Check-upக்கு எத்தனை மணிக்கு வரணும்?
 ALIASES: Test timing என்ன? | Checkup time சொல்லுங்க | What time should I come? | Morning எப்ப வரணும்?
-ANSWER: Health Check-upக்கு காலை எட்டு மணிக்கு வர்றது recommendedங்க. Final Date மற்றும் availability Appointment bookingல confirm ஆகணும்.
+ANSWER: Check-up timing selected Package, preferred Date மற்றும் current availabilityக்கு ஏற்ப மாறலாம். Published Package instruction இருந்தா அதை சொல்றேன்; final available time configured Appointment operation அல்லது Hospital team confirmationலதான் தெரியும்.
 
 QUESTION: Regular Medicine stop பண்ணணுமா?
 ALIASES: Fastingல tablet எடுக்கலாமா? | Medicine சாப்பிடலாமா? | Should I stop my medicine? | Tablet continue பண்ணலாமா?
@@ -56,15 +56,15 @@ ANSWER: Regular Medicineஐ நீங்களாக stop அல்லது cha
 
 QUESTION: Appointmentக்கு என்ன details தேவை?
 ALIASES: Bookingக்கு என்ன information வேணும்? | What details are needed to book? | Appointment எப்படி book பண்ணுவது? | Booking details என்ன?
-ANSWER: Appointmentக்கு எந்த Packageனு clearஆ இருக்கணும். நீங்க bookingக்கு agree பண்ணின பிறகு Patient name, age, preferred Date மற்றும் Time மாதிரி தேவையான details மட்டும் கேட்போம்.
+ANSWER: Appointment requestஐ நீங்க தெளிவா கேட்ட பிறகுதான் booking details கேட்போம். Selected approved Package மற்றும் UIல configuredஆ இருக்குற required detailsல இன்னும் missingஆ இருக்குறதை மட்டும் கேட்போம்; ஏற்கனவே validஆ கிடைத்த தகவலை மறுபடியும் கேட்க மாட்டோம்.
 
 QUESTION: Pre-callல name இருந்தாலும் Patient name ஏன் கேக்குறீங்க?
 ALIASES: என் பெயர் already இருக்கே? | Why are you asking my name again? | Name மறுபடியும் கேக்குறீங்களா? | Facebook formல name கொடுத்தேனே
-ANSWER: Appointment சரியான patientக்காக பதிவு ஆகணும்னு Patient nameஐ callerகிட்ட நேரடியாக confirm பண்றோம். அதுக்கப்புறம் already confirmed detailஐ மறுபடியும் கேட்க மாட்டோம்.
+ANSWER: Current callல Patient name validஆ confirm ஆகியிருந்தா மறுபடியும் கேட்க மாட்டோம். Pre-call information மட்டும் இருந்தால் configured booking requirementக்கு confirmation தேவையா என்பதைப் பொறுத்து கேட்கலாம்; மற்ற already confirmed detailsஐ repeat பண்ண மாட்டோம்.
 
 QUESTION: Family memberக்கு Appointment book பண்ணலாமா?
 ALIASES: வேற ஒருத்தருக்கு booking பண்ணலாமா? | Can I book for a family member? | Friendக்கு Appointment வேணும் | Patient வேற person
-ANSWER: ஆமாங்க, Family member அல்லது வேற patientக்காக Appointment request பண்ணலாம். Booking ஆரம்பிச்ச பிறகு அந்த Patient name மற்றும் தேவையான மீதி details மட்டும் கேட்போம்.
+ANSWER: ஆமாங்க, Family member அல்லது வேற patientக்காக Appointment request பண்ணலாம். Booking ஆரம்பிச்ச பிறகு configured required detailsல அந்த patientக்கு இன்னும் missingஆ இருக்குற தகவலை மட்டும் கேட்போம்.
 
 QUESTION: Appointment request கொடுத்தாலே confirmedஆ?
 ALIASES: Appointment confirmedஆ? | Is my booking confirmed? | Booking success ஆயிடுச்சா? | Request submit ஆனால் போதுமா?

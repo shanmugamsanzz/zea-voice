@@ -20,7 +20,7 @@ import {
 import { knowledgeDocumentRouter } from './knowledge-document.routes.js';
 import { getKnowledgeBaseReviewSummary, publishKnowledgeBase } from './knowledge-review.service.js';
 import { runtimeKnowledgeQuerySchema } from './knowledge-runtime.schemas.js';
-import { routeKnowledgeQuery } from './knowledge-runtime.service.js';
+import { searchPublishedKnowledge } from './knowledge-runtime.service.js';
 import { getKnowledgeDeletionJob, retryKnowledgeDeletionJob } from './knowledge-deletion.service.js';
 
 function valid(schema, value) {
@@ -47,7 +47,7 @@ knowledgeBaseRouter.use('/:knowledgeBaseId/documents', knowledgeDocumentRouter);
 
 knowledgeBaseRouter.post('/runtime/query', async (request, response) => {
   const input = valid(runtimeKnowledgeQuerySchema, request.body);
-  response.json({ success: true, data: await routeKnowledgeQuery(auth(request), input) });
+  response.json({ success: true, data: await searchPublishedKnowledge(auth(request), input) });
 });
 
 knowledgeBaseRouter.get('/', async (request, response) => {

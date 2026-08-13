@@ -25,6 +25,9 @@ const knowledge = {
   },
 };
 const envelope = buildGroundingEnvelope(knowledge);
+const groundedJson = (value) => JSON.stringify({
+  currentTopic: 'Premium Plan', topicChanged: false, pendingQuestionRelevant: true, ...value,
+});
 assert.equal(envelope.sources.length, 1);
 assert.equal(envelope.sources[0].id, 'source_1');
 assert.equal(envelope.entities[0].key, 'premium-plan');
@@ -46,19 +49,19 @@ assert.equal(normalizeQuestionType('price_question'), 'price');
 assert.equal(normalizeQuestionType('symptom-query'), 'scenario');
 assert.equal(normalizeQuestionType('unexpected_model_label'), 'unclear');
 
-const normalizedUnderstanding = validateGroundedLlmUnderstanding(JSON.stringify({
+const normalizedUnderstanding = validateGroundedLlmUnderstanding(groundedJson({
   intent: 'show packages', questionType: 'package_overview', flowAction: 'continue', selectedEntityKeys: [],
 }), envelope);
 assert.equal(normalizedUnderstanding.valid, true);
 assert.equal(normalizedUnderstanding.questionType, 'overview');
 
-const unknownUnderstanding = validateGroundedLlmUnderstanding(JSON.stringify({
+const unknownUnderstanding = validateGroundedLlmUnderstanding(groundedJson({
   intent: 'unclassified turn', questionType: 'unexpected_model_label', flowAction: 'clarify', selectedEntityKeys: [],
 }), envelope);
 assert.equal(unknownUnderstanding.valid, true);
 assert.equal(unknownUnderstanding.questionType, 'unclear');
 
-const directUnderstanding = validateGroundedLlmUnderstanding(JSON.stringify({
+const directUnderstanding = validateGroundedLlmUnderstanding(groundedJson({
   intent: 'show item', questionType: 'details', flowAction: 'answer_pending',
   selectedEntityKeys: ['Premium Plan'],
 }), envelope, { pendingQuestion: null });
@@ -66,7 +69,7 @@ assert.equal(directUnderstanding.valid, true);
 assert.equal(directUnderstanding.flowAction, 'continue');
 assert.deepEqual(directUnderstanding.selectedEntityKeys, ['premium-plan']);
 
-const valid = validateGroundedLlmResponse(JSON.stringify({
+const valid = validateGroundedLlmResponse(groundedJson({
   intent: 'catalog_item_details',
   questionType: 'inclusions',
   flowAction: 'side_question',
@@ -81,7 +84,7 @@ assert.equal(valid.questionType, 'inclusions');
 assert.equal(valid.flowAction, 'side_question');
 assert.equal(valid.selectedEntities[0].key, 'premium-plan');
 
-const canonicalReferences = validateGroundedLlmResponse(JSON.stringify({
+const canonicalReferences = validateGroundedLlmResponse(groundedJson({
   intent: 'catalog_item_details', questionType: 'price', flowAction: 'answer_pending',
   selectedEntityKeys: ['Premium Plan'],
   evidenceSourceIds: ['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'],
@@ -120,7 +123,7 @@ const configuredQuestion = validateGroundedSpokenSentences(
 assert.equal(configuredQuestion.valid, true);
 assert.equal(configuredQuestion.approved.length, 2);
 
-const unpublishedEntity = validateGroundedLlmResponse(JSON.stringify({
+const unpublishedEntity = validateGroundedLlmResponse(groundedJson({
   intent: 'catalog_item_details', selectedEntityKeys: ['invented-plan'],
   questionType: 'details',
   evidenceSourceIds: ['source_1'], assertedFacts: [{ type: 'price', value: 'USD 100', sourceId: 'source_1' }], spokenAnswer: 'Premium Plan is USD 100.',
@@ -128,21 +131,21 @@ const unpublishedEntity = validateGroundedLlmResponse(JSON.stringify({
 assert.equal(unpublishedEntity.valid, false);
 assert.equal(unpublishedEntity.reason, 'unpublished_entity_selected');
 
-const unpublishedEvidence = validateGroundedLlmResponse(JSON.stringify({
+const unpublishedEvidence = validateGroundedLlmResponse(groundedJson({
   intent: 'catalog_item_details', selectedEntityKeys: ['premium-plan'],
   questionType: 'price',
   evidenceSourceIds: ['source_99'], assertedFacts: [{ type: 'price', value: 'USD 100', sourceId: 'source_99' }], spokenAnswer: 'Premium Plan is USD 100.',
 }), envelope);
 assert.equal(unpublishedEvidence.reason, 'unpublished_evidence_selected');
 
-const inventedPrice = validateGroundedLlmResponse(JSON.stringify({
+const inventedPrice = validateGroundedLlmResponse(groundedJson({
   intent: 'catalog_item_details', selectedEntityKeys: ['premium-plan'],
   questionType: 'price',
   evidenceSourceIds: ['source_1'], assertedFacts: [{ type: 'price', value: 'USD 100', sourceId: 'source_1' }], spokenAnswer: 'Premium Plan is USD 999.',
 }), envelope);
 assert.equal(inventedPrice.reason, 'unsupported_numeric_fact');
 
-const inventedTechnicalTerm = validateGroundedLlmResponse(JSON.stringify({
+const inventedTechnicalTerm = validateGroundedLlmResponse(groundedJson({
   intent: 'catalog_item_details', questionType: 'details', selectedEntityKeys: ['premium-plan'],
   evidenceSourceIds: ['source_1'],
   assertedFacts: [{ type: 'inclusion', value: 'priority support', sourceId: 'source_1' }],
@@ -150,7 +153,7 @@ const inventedTechnicalTerm = validateGroundedLlmResponse(JSON.stringify({
 }), envelope);
 assert.equal(inventedTechnicalTerm.reason, 'unsupported_technical_term');
 
-const inventedAssertedFact = validateGroundedLlmResponse(JSON.stringify({
+const inventedAssertedFact = validateGroundedLlmResponse(groundedJson({
   intent: 'catalog_item_details', questionType: 'details', selectedEntityKeys: ['premium-plan'],
   evidenceSourceIds: ['source_1'],
   assertedFacts: [{ type: 'policy', value: 'Guaranteed refund', sourceId: 'source_1' }],
@@ -158,14 +161,14 @@ const inventedAssertedFact = validateGroundedLlmResponse(JSON.stringify({
 }), envelope);
 assert.equal(inventedAssertedFact.reason, 'unsupported_asserted_fact');
 
-const mismatchedEntityAnswer = validateGroundedLlmResponse(JSON.stringify({
+const mismatchedEntityAnswer = validateGroundedLlmResponse(groundedJson({
   intent: 'catalog_item_details', selectedEntityKeys: ['premium-plan'],
   questionType: 'details',
   evidenceSourceIds: ['source_1'], assertedFacts: [{ type: 'price', value: 'USD 100', sourceId: 'source_1' }], spokenAnswer: 'Basic Plan is USD 100.',
 }), envelope);
 assert.equal(mismatchedEntityAnswer.reason, 'selected_entity_not_supported_by_answer');
 
-const noPublishedEvidence = validateGroundedLlmResponse(JSON.stringify({
+const noPublishedEvidence = validateGroundedLlmResponse(groundedJson({
   intent: 'unknown', questionType: 'unclear', selectedEntityKeys: [], evidenceSourceIds: [], assertedFacts: [],
   spokenAnswer: 'This is an unsupported factual answer.',
 }), buildGroundingEnvelope({ route: 'none', found: false }));
@@ -220,7 +223,7 @@ const adapter = {
   async *stream(input) {
     providerCalls += 1;
     providerInput = input;
-    yield { type: 'text_delta', delta: JSON.stringify({
+    yield { type: 'text_delta', delta: groundedJson({
       intent: 'catalog_item_details', selectedEntityKeys: ['premium-plan'],
       questionType: 'price',
       evidenceSourceIds: ['source_1'],

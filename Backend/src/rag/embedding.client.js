@@ -25,7 +25,7 @@ async function parseResponse(response) {
   return payload;
 }
 
-export async function embedTexts(values, { kind = 'passage' } = {}) {
+export async function embedTexts(values, { kind = 'passage', signal } = {}) {
   if (!env.RAG_ENABLED) {
     throw new Error('RAG is disabled');
   }
@@ -42,7 +42,9 @@ export async function embedTexts(values, { kind = 'passage' } = {}) {
         'content-type': 'application/json',
       },
       body: JSON.stringify({ model: env.EMBEDDING_MODEL, input }),
-      signal: AbortSignal.timeout(env.EMBEDDING_REQUEST_TIMEOUT_MS),
+      signal: signal
+        ? AbortSignal.any([signal, AbortSignal.timeout(env.EMBEDDING_REQUEST_TIMEOUT_MS)])
+        : AbortSignal.timeout(env.EMBEDDING_REQUEST_TIMEOUT_MS),
     });
     return parseResponse(response);
   });
@@ -56,8 +58,8 @@ export async function embedTexts(values, { kind = 'passage' } = {}) {
     .map((entry) => validateVector(entry.embedding));
 }
 
-export async function embedQuery(value) {
-  return (await embedTexts([value], { kind: 'query' }))[0];
+export async function embedQuery(value, options = {}) {
+  return (await embedTexts([value], { ...options, kind: 'query' }))[0];
 }
 
 export async function embedPassages(values) {

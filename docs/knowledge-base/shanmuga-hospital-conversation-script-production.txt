@@ -3,134 +3,134 @@ FLOW: main
 TYPE: message
 LANGUAGE: ta
 ENTRY: true
-PURPOSE: Continue after the runtime-configured introduction and wait for the caller's response to the package-information offer.
-RESPONSE: சரிங்க.
-NEXT_QUESTION: Package details கொஞ்சம் explain பண்ணலாமா?
-NEXT_STAGE: package_selection
+PURPOSE: When the caller accepts the introduction offer, provide the approved overview without repeating the introduction or asking for personal details.
+RESPONSE: சரிங்க, எங்ககிட்ட இருக்குற approved Health Check-up optionsஐ சுருக்கமா சொல்லுறேன். அதுல எது பத்தி தெரிஞ்சிக்கணும்னும் கேக்குறேன்.
+NEXT_QUESTION:
+NEXT_STAGE:
 
 STAGE: package_selection
 FLOW: main
 TYPE: message
 LANGUAGE: ta
 PURPOSE: Give the approved top-level package overview after a positive response or a general request for available packages.
-RESPONSE: எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Onco Care Packages, Organ-Specific Packages, Kids Health Packages இருக்குங்க.
-NEXT_QUESTION: எது பத்தி தெரிஞ்சிக்கணும்?
-NEXT_STAGE: package_explanation
+RESPONSE: சரிங்க, availableஆ இருக்குற approved categories மற்றும் optionsஐ சுருக்கமா சொல்லுறேன். அதுல எது பத்தி detail வேணும்னு கேக்குறேன்.
+NEXT_QUESTION:
+NEXT_STAGE:
 
 STAGE: category_selection
 FLOW: main
 TYPE: message
 LANGUAGE: ta
 PURPOSE: Explain an approved selected category without returning to the complete overview.
-RESPONSE: சரிங்க, {{active_category_name}}ல {{approved_child_item_names}} options இருக்குங்க.
-NEXT_QUESTION: இதில் எது பத்தி தெரிஞ்சிக்கணும்?
-NEXT_STAGE: package_explanation
+RESPONSE: சரிங்க, நீங்க கேட்ட categoryக்குள்ள இருக்குற approved optionsஐ மட்டும் சொல்லுறேன். அதுல எது பத்தி detail வேணும்னு கேக்குறேன்.
+NEXT_QUESTION:
+NEXT_STAGE:
 
 STAGE: category_price
 FLOW: main
 TYPE: message
 LANGUAGE: ta
 PURPOSE: Answer a contextual price question when the active category contains multiple approved child items.
-RESPONSE: {{active_category_name}}க்கு ஒரே price கிடையாதுங்க; அதுக்குள்ள ஒவ்வொரு optionக்கும் தனித்தனி price இருக்கு. {{approved_child_item_prices}}
-NEXT_QUESTION: எந்த option பத்தி detail வேணும்?
-NEXT_STAGE: package_explanation
+RESPONSE: இந்த categoryக்குள்ள பல options இருந்தா, ஒவ்வொரு optionக்குமான approved priceஐ தெளிவா தனித்தனியா சொல்லுறேன்.
+NEXT_QUESTION:
+NEXT_STAGE:
 
 STAGE: package_explanation
 FLOW: main
 TYPE: message
 LANGUAGE: ta
 PURPOSE: Give a short, natural explanation of one exact approved selected item before offering the complete test or feature list.
-RESPONSE: சரிங்க, {{selected_item_name}} உங்களுக்கு {{spoken_price}} வருங்க. இதுல முக்கியமா {{approved_short_summary}} இருக்கு.
-NEXT_QUESTION: Full Test list சொல்லட்டுமா?
-NEXT_STAGE: package_full_details
+RESPONSE: சரிங்க, நீங்க கேட்ட optionக்கான approved price மற்றும் முக்கிய coverageஐ முதல்ல சுருக்கமா சொல்லுறேன். Full list வேணும்னா அடுத்ததாக சொல்லலாம்.
+NEXT_QUESTION:
+NEXT_STAGE:
 
 STAGE: package_full_details
 FLOW: main
 TYPE: message
 LANGUAGE: ta
 PURPOSE: Give the complete approved details of the selected item in short spoken groups, using only its published Catalog facts. Split a long list into two or three parts and continue only when the caller asks.
-RESPONSE: சரிங்க, {{selected_item_name}}ல {{approved_detail_group}} இருக்கு.
-NEXT_QUESTION: Appointment proceed பண்ணலாமா?
-NEXT_STAGE: package_confirmation
+RESPONSE: சரிங்க, நீங்க கேட்ட optionல இருக்குற approved detailsஐ சின்ன spoken groupsஆ சொல்லுறேன். Caller கேட்டா மட்டும் அடுத்த groupஐ தொடருறேன்.
+NEXT_QUESTION:
+NEXT_STAGE:
 
 STAGE: package_confirmation
 FLOW: main
 TYPE: message
 LANGUAGE: ta
-PURPOSE: Confirm whether the caller wants to proceed with the selected item. Do not collect booking information until the caller explicitly agrees.
-RESPONSE: சரிங்க, {{selected_item_name}} details இதுதாங்க.
-NEXT_QUESTION: இந்த Packageக்கு Appointment proceed பண்ணலாமா?
-NEXT_STAGE: booking_details
+PURPOSE: After answering the requested information, avoid starting an external action unless the caller explicitly requests one.
+RESPONSE: சரிங்க, நீங்க கேட்ட detail இதுதாங்க. இன்னொரு கேள்வி இருந்தா கேளுங்க.
+NEXT_QUESTION:
+NEXT_STAGE:
 
 STAGE: comparison
 FLOW: main
 TYPE: message
 LANGUAGE: ta
 PURPOSE: Compare only the caller-requested approved items using their validated common and different Catalog facts.
-RESPONSE: சரிங்க. {{compared_item_names}}ல பொதுவா {{approved_common_features}} இருக்கு. முக்கிய difference என்னன்னா, {{approved_item_differences}}.
-NEXT_QUESTION: இதில் எந்த Package பத்தி detail வேணும்?
-NEXT_STAGE: package_explanation
+RESPONSE: சரிங்க, caller கேட்ட approved optionsக்கு பொதுவா இருக்குற விஷயங்களையும் முக்கிய differencesஐயும் மட்டும் தெளிவா compare பண்ணுறேன்.
+NEXT_QUESTION:
+NEXT_STAGE:
 
 STAGE: contextual_followup
 FLOW: main
 TYPE: message
 LANGUAGE: ta
 PURPOSE: Answer price, coverage, inclusion, preparation or suitability follow-up questions using the active selected item and published evidence.
-RESPONSE: {{approved_direct_answer}}
-NEXT_QUESTION: இதைப் பத்தி இன்னும் detail வேணுமா?
-NEXT_STAGE: package_explanation
+RESPONSE: முன்னாடி பேசின current topicஐ வைத்து caller இப்ப கேட்ட price, coverage, preparation அல்லது detailக்கு நேரடியா answer சொல்றேன்.
+NEXT_QUESTION:
+NEXT_STAGE:
 
 STAGE: scenario_answer
 FLOW: main
 TYPE: message
 LANGUAGE: ta
 PURPOSE: Respond safely when the caller describes a non-emergency problem, requirement or use case without naming an item.
-RESPONSE: இந்த concernக்கு related screening optionஆ {{approved_related_item_name}} இருக்குங்க. {{approved_relation_reason}} Exact காரணம் அல்லது treatmentஐ Doctorதான் confirm பண்ண முடியும்.
-NEXT_QUESTION: இந்த Package details சொல்லட்டுமா?
-NEXT_STAGE: package_explanation
+RESPONSE: இந்த concernக்கு approved related screening option இருந்தா அதை மட்டும் சொல்லுறேன். இது screening மட்டும்தாங்க; exact காரணம் அல்லது treatmentஐ Doctorதான் confirm பண்ண முடியும்.
+NEXT_QUESTION:
+NEXT_STAGE:
 
 STAGE: targeted_clarification
 FLOW: main
 TYPE: message
 LANGUAGE: ta
 PURPOSE: Ask a targeted question when two or more approved entities remain possible.
-RESPONSE: சரிங்க.
-NEXT_QUESTION: நீங்க {{approved_candidate_names}}ல எதைப் பத்தி கேக்குறீங்கன்னு மட்டும் சொல்ல முடியுமா?
-NEXT_STAGE: package_explanation
+RESPONSE: நீங்க எந்த option அல்லது எந்த detail பத்தி கேக்குறீங்கன்னு மட்டும் கொஞ்சம் தெளிவா சொல்ல முடியுமா?
+NEXT_QUESTION:
+NEXT_STAGE:
 
 STAGE: unclear
 FLOW: main
 TYPE: message
 LANGUAGE: ta
-PURPOSE: Clarify only after exact, normalized, alias, phonetic, fuzzy, semantic and contextual resolution cannot identify the caller's meaning.
+PURPOSE: Clarify only when the LLM cannot resolve the caller's meaning from the current utterance, recent turns, saved context and approved evidence.
 RESPONSE: மன்னிக்கணுங்க, நீங்க கேட்டது clearஆ புரியல.
 NEXT_QUESTION: இன்னொரு தடவை கொஞ்சம் தெளிவா சொல்ல முடியுமா?
-NEXT_STAGE: package_explanation
+NEXT_STAGE:
 
-STAGE: booking_details
+STAGE: configured_action_details
 FLOW: main
 TYPE: question
 LANGUAGE: ta
-PURPOSE: Start field collection only after explicit booking intent and one exact approved selected item. Always ask the patient name even when a pre-call name exists, then ask only UI-configured missing fields.
-RESPONSE: சரிங்க, {{selected_item_name}}க்கு Appointment proceed பண்ணலாம்.
-NEXT_QUESTION: Patient name சொல்லுங்க.
-NEXT_STAGE: booking_confirmation
+PURPOSE: Start field collection only after explicit caller intent and authorization by the published Workflow and configured UI tool. Ask only the next UI-configured missing field.
+RESPONSE: சரிங்க, இந்த requestக்கு தேவையான missing detail மட்டும் கேக்குறேன். ஏற்கனவே சொன்ன தகவலை மறுபடியும் கேக்க மாட்டேன்.
+NEXT_QUESTION:
+NEXT_STAGE:
 
-STAGE: booking_confirmation
+STAGE: configured_action_confirmation
 FLOW: main
 TYPE: question
 LANGUAGE: ta
-PURPOSE: Read back all validated booking details once after every configured required field has been collected.
-RESPONSE: சரிங்க, {{patient_name}}க்கு {{selected_item_name}}, {{appointment_date}} {{appointment_time}}க்கு Appointment request பண்ணுறேன்.
-NEXT_QUESTION: இந்த details எல்லாம் சரிதானே?
-NEXT_STAGE: appointment_confirmation
+PURPOSE: Read back only the configured validated action details once before executing the authorized operation.
+RESPONSE: சரிங்க, நீங்க கொடுத்த required detailsஐ ஒருமுறை confirm பண்ணுறேன். எல்லாம் சரின்னு சொன்ன பிறகுதான் request process பண்ணுறேன்.
+NEXT_QUESTION:
+NEXT_STAGE:
 
-STAGE: appointment_confirmation
+STAGE: configured_action_processing
 FLOW: main
 TYPE: message
 LANGUAGE: ta
-PURPOSE: Start the configured booking operation only after caller confirmation. Workflow Rules own the verified success, pending and failure messages.
-RESPONSE: சரிங்க, Appointment request process பண்றேன்.
+PURPOSE: Execute only the UI-configured authorized operation after caller confirmation. Never claim success before the verified tool result.
+RESPONSE: சரிங்க, request process பண்றேன். Verified result கிடைச்சதும் சரியா சொல்லுறேன்.
 NEXT_QUESTION:
 NEXT_STAGE:
 
@@ -138,9 +138,9 @@ STAGE: side_question
 FLOW: recovery
 TYPE: message
 LANGUAGE: ta
-PURPOSE: Answer a valid side question first without losing the selected topic, collected fields, saved stage or pending question.
-RESPONSE: {{approved_side_answer}}
-NEXT_QUESTION: {{saved_pending_question}}
+PURPOSE: Answer a valid side question first without losing the current topic, collected information or still-relevant pending question.
+RESPONSE: caller இப்ப கேட்ட side questionக்கு முதல்ல நேரடியா answer சொல்றேன். Saved pending question இன்னும் relevantஆ இருந்தா மட்டும் அதுக்கப்புறம் இயல்பா தொடருறேன்.
+NEXT_QUESTION:
 NEXT_STAGE:
 
 STAGE: call_check
@@ -148,17 +148,17 @@ FLOW: recovery
 TYPE: message
 LANGUAGE: ta
 PURPOSE: Respond briefly when the caller checks whether the agent is present, then resume the saved topic.
-RESPONSE: ஆமாங்க, நான் இருக்கேங்க. நீங்க பேசுறது கேக்குது.
-NEXT_QUESTION: {{saved_pending_question}}
+RESPONSE: ஆமாங்க, நான் இருக்கேங்க. நீங்க பேசுறது கேக்குது, சொல்லுங்க.
+NEXT_QUESTION:
 NEXT_STAGE:
 
 STAGE: language_switch
 FLOW: recovery
 TYPE: message
 LANGUAGE: ta
-PURPOSE: Acknowledge a supported language request without changing the selected item or stage.
-RESPONSE: சரிங்க, தமிழ்ல பேசுறேன்.
-NEXT_QUESTION: {{saved_pending_question}}
+PURPOSE: Acknowledge a supported language request without changing the current topic or pending question.
+RESPONSE: சரிங்க, தமிழ்ல பேசுறேன். நீங்க கேட்ட விஷயத்தையே தொடரலாம்.
+NEXT_QUESTION:
 NEXT_STAGE:
 
 STAGE: wait

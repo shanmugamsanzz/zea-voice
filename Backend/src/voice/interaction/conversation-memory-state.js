@@ -55,33 +55,28 @@ export function normalizeLiveCallFrame(value = {}) {
   value = objectValue(value);
   const pending = value.pendingQuestion && typeof value.pendingQuestion === 'object'
     ? value.pendingQuestion : { key: value.pendingQuestion, text: value.pendingQuestionText, kind: value.pendingQuestionKind };
-  const currentStage = text(value.currentStage ?? value.conversationStage, 80) || null;
-  const fields = Object.freeze(safeJson(value.collectedData ?? value.collectedFields ?? value.fields) ?? {});
+  const collectedInformation = Object.freeze(safeJson(
+    value.collectedInformation ?? value.collectedData ?? value.collectedFields ?? value.fields,
+  ) ?? {});
+  const legacyEntities = [
+    ...(Array.isArray(value.knownEntities) ? value.knownEntities : []),
+    value.selectedItem ?? value.selectedCatalogItem,
+    value.activeCategory,
+    ...(Array.isArray(value.candidateItems) ? value.candidateItems : []),
+  ].filter((entry) => entry && typeof entry === 'object');
   return Object.freeze({
-    callId: text(value.callId, 100) || null,
-    currentStage,
-    conversationStage: currentStage,
-    resumeStage: text(value.resumeStage, 80) || null,
     currentTopic: text(value.currentTopic, 240) || null,
-    activeCategory: Object.freeze(safeJson(value.activeCategory) ?? {}),
-    selectedItem: Object.freeze(safeJson(value.selectedItem ?? value.selectedCatalogItem) ?? {}),
-    candidateItems: Object.freeze((Array.isArray(value.candidateItems) ? value.candidateItems : [])
-      .slice(0, 8).map((item) => safeJson(item)).filter(Boolean)),
+    knownEntities: Object.freeze(legacyEntities.slice(0, 20).map((item) => safeJson(item)).filter(Boolean)),
     pendingQuestion: Object.freeze({
       key: text(pending?.key, 500) || null,
       text: text(pending?.text, 500) || null,
       kind: text(pending?.kind, 40) || null,
     }),
     language: text(value.language, 20) || null,
-    fields,
-    collectedFields: fields,
-    lastAnswer: text(value.lastAnswer, maxMessageCharacters) || null,
-    completedQuestions: Object.freeze(stringList(value.completedQuestions)),
-    answeredQuestions: Object.freeze(stringList(value.answeredQuestions)),
-    activeActions: Object.freeze(stringList(value.activeActions)),
+    collectedInformation,
     recentTurns: Object.freeze(messages(Array.isArray(value.recentTurns) ? value.recentTurns : value.messages)),
-    runningSummary: text(value.runningSummary, 3_600),
-    updatedAt: isoDate(value.updatedAt, new Date().toISOString()),
+    lastAnswer: text(value.lastAnswer, maxMessageCharacters) || null,
+    activeToolRequest: Object.freeze(safeJson(value.activeToolRequest) ?? {}),
   });
 }
 
@@ -110,7 +105,8 @@ export function buildConversationMemoryState({
   const incomingFrame = objectValue(callFrame);
   const mergedCollectedData = {
     ...prior.collectedData,
-    ...objectValue(prior.callFrame?.fields),
+    ...objectValue(prior.callFrame?.collectedInformation),
+    ...objectValue(incomingFrame.collectedInformation),
     ...objectValue(incomingFrame.fields),
     ...objectValue(incomingFrame.collectedData),
     ...objectValue(safeJson(collectedData)),
@@ -118,23 +114,19 @@ export function buildConversationMemoryState({
   const mergedCallFrame = callFrame ? normalizeLiveCallFrame({
     ...prior.callFrame,
     ...incomingFrame,
-    callId: call?.id ?? incomingFrame.callId ?? prior.callFrame.callId,
-    currentStage: owns(incomingFrame, 'currentStage') ? incomingFrame.currentStage
-      : (owns(incomingFrame, 'conversationStage') ? incomingFrame.conversationStage : prior.callFrame.currentStage),
-    activeCategory: owns(incomingFrame, 'activeCategory')
-      ? incomingFrame.activeCategory : prior.callFrame.activeCategory,
-    selectedItem: owns(incomingFrame, 'selectedItem') ? incomingFrame.selectedItem
-      : (owns(incomingFrame, 'selectedCatalogItem')
-        ? incomingFrame.selectedCatalogItem : prior.callFrame.selectedItem),
+    currentTopic: owns(incomingFrame, 'currentTopic')
+      ? incomingFrame.currentTopic : prior.callFrame.currentTopic,
+    knownEntities: owns(incomingFrame, 'knownEntities')
+      ? incomingFrame.knownEntities : prior.callFrame.knownEntities,
     pendingQuestion: owns(incomingFrame, 'pendingQuestion')
       ? incomingFrame.pendingQuestion : prior.callFrame.pendingQuestion,
     language: owns(incomingFrame, 'language') ? incomingFrame.language : prior.callFrame.language,
-    collectedData: mergedCollectedData,
-    completedQuestions: [
-      ...prior.callFrame.completedQuestions,
-      ...(incomingFrame.completedQuestions ?? []),
-      ...(completedQuestions ?? []),
-    ],
+    collectedInformation: mergedCollectedData,
+    recentTurns: owns(incomingFrame, 'recentTurns')
+      ? incomingFrame.recentTurns : prior.callFrame.recentTurns,
+    lastAnswer: owns(incomingFrame, 'lastAnswer') ? incomingFrame.lastAnswer : prior.callFrame.lastAnswer,
+    activeToolRequest: owns(incomingFrame, 'activeToolRequest')
+      ? incomingFrame.activeToolRequest : prior.callFrame.activeToolRequest,
   }) : prior.callFrame;
   const currentMessages = messages(history);
   const recentSummary = currentMessages.slice(-6)

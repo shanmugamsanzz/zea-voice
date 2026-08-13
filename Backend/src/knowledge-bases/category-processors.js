@@ -1,4 +1,5 @@
 import { env } from '../config/env.js';
+import { requireKnowledgeDocumentContract } from './knowledge-document-contract.js';
 
 function nonEmptyLines(extraction) {
   return extraction.pages.flatMap((page) => page.lines.map((text) => ({ pageNumber: page.pageNumber, text })))
@@ -468,6 +469,7 @@ const processors = {
 };
 
 export function processExtractedCategory(documentType, extraction) {
+  requireKnowledgeDocumentContract(documentType);
   const processor = processors[documentType];
   if (!processor) throw new TypeError(`Unsupported knowledge document type: ${documentType}`);
   const result = processor(extraction);

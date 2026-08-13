@@ -34,6 +34,9 @@ export function tenantVectorPayload({
   recordType,
   publicationRevision,
   content,
+  language = 'und',
+  assignedAgentIds = [],
+  documentType,
 }) {
   if (!allowedAgentUsage.has(agentUsage)) {
     throw new TypeError('agentUsage must be INBOUND, OUTBOUND, or BOTH');
@@ -53,6 +56,7 @@ export function tenantVectorPayload({
   if (typeof content !== 'string' || !content.trim()) {
     throw new TypeError('Vector content is required');
   }
+  if (!Array.isArray(assignedAgentIds)) throw new TypeError('assignedAgentIds must be an array');
 
   return Object.freeze({
     tenant_id: requireTenantId(tenantId),
@@ -61,9 +65,12 @@ export function tenantVectorPayload({
     document_version_id: requireEntityId(documentVersionId, 'documentVersionId'),
     record_id: requireEntityId(recordId, 'recordId'),
     record_type: recordType.trim().toUpperCase(),
+    document_type: String(documentType ?? category).trim().toUpperCase(),
     agent_usage: agentUsage,
     category: category.trim().toUpperCase(),
     publication_revision: publicationRevision,
+    language: String(language || 'und').trim().toLowerCase().slice(0, 20) || 'und',
+    assigned_agent_ids: assignedAgentIds.map((id) => requireEntityId(id, 'agentId')),
     content: content.trim(),
     ...(pageNumber === undefined ? {} : { page_number: pageNumber }),
   });

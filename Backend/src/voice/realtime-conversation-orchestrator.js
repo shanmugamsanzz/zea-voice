@@ -3,9 +3,8 @@ import { logger } from '../config/logger.js';
 import { AppError } from '../middleware/errors.js';
 import { appendTranscriptEntry } from '../calls/call.service.js';
 import {
-  isExactWorkflowResponse,
+  loadPublishedKnowledgeMap,
   retrieveTenantEvidence,
-  routeKnowledgeQuery,
 } from '../knowledge-bases/knowledge-runtime.service.js';
 import { ProviderIndependentAudioEngine } from './audio/audio-engine.js';
 import { completeVoiceCall, completeVoiceCallWithoutRuntime } from './call-completion.service.js';
@@ -31,7 +30,6 @@ import { ShortTurnMerger } from './interruption/short-turn-merger.js';
 import { greetingModes, resolveInteractionConfiguration } from './interaction/interaction-config.js';
 import { findCallCheckPhrase, resolveCallCheckConfiguration } from './interaction/call-check-config.js';
 import { findLanguageSwitchRequest, languageSwitchAcknowledgement } from './interaction/language-switch.js';
-import { detectConversationIntent } from './interaction/intent-detector.js';
 import { resolveCallContextId } from './interaction/context-id-resolver.js';
 import { createContextCachePolicy, publicContextCacheMetadata } from './interaction/context-cache-policy.js';
 import { conversationContextCache } from './interaction/conversation-context-cache.service.js';
@@ -45,7 +43,6 @@ import {
   buildGroundingEnvelope,
   createGroundedJsonStreamDecoder,
   normalizeQuestionType,
-  validateGroundedLlmUnderstanding,
   validateGroundedLlmResponse,
   validateGroundedSpokenSentences,
 } from './interaction/grounded-llm-response.js';
@@ -192,18 +189,6 @@ const pauseFillerWords = new Set([
   'hello', 'ok', 'okay', 'sure', 'hmm', 'please',
   'ம்', 'ஹம்', 'ஆமா', 'சரி', 'சரிங்க', 'இருங்க', 'இருங்கள்',
 ]);
-function hasFastKnowledgeAnswer(knowledge) {
-  // Catalog and conversational matches remain evidence for the LLM; otherwise
-  // a query such as "does this plan include everything?" can collapse into a
-  // bare name-and-price response. Exact FAQ answers are explicitly marked as
-  // approved direct speech by the Knowledge runtime.
-  // Operational Workflow instructions are handled separately by
-  // #workflowInstructionResponse and remain deterministic.
-  if (knowledge?.found !== true || !Boolean(String(knowledge.content ?? '').trim())) return false;
-  if (knowledge?.directAnswer?.approved === true && knowledge?.directAnswer?.validated === true) return true;
-  return knowledge?.workflow?.deterministic === true && isExactWorkflowResponse(knowledge);
-}
-
 function withTenantEvidence(knowledge, tenantEvidence) {
   if (!tenantEvidence?.found) return knowledge;
   const first = tenantEvidence.sources?.[0];
@@ -469,7 +454,7 @@ export class RealtimeConversationOrchestrator {
     }, {
       ...this.runtimeProfile.agent.settings,
       conversationLanguage: languageCode(this.runtimeProfile.agent.language),
-    }, Date.now(), this.previousConversationMemory?.callFrame?.callId === this.call.id
+    }, Date.now(), this.previousConversationMemory?.lastCall?.id === this.call.id
       ? this.previousConversationMemory.callFrame : {});
     this.liveMemoryMaintenance = new LiveMemoryMaintenanceQueue({ log: this.log, callId: this.call.id });
     this.runtimeMetrics.liveCallMemory = {
@@ -1483,62 +1468,70 @@ export class RealtimeConversationOrchestrator {
     await this.#cancelActive('caller_barge_in');
   }
 
-  async #knowledge(query, understanding = null, abortSignal = null) {
+  async #knowledge(query, _understanding = null, abortSignal = null) {
     try {
-      const routeKnowledge = this.dependencies.routeKnowledge ?? routeKnowledgeQuery;
       const stageState = this.liveCallMemory?.snapshot();
-      const localIntent = understanding ? null : detectConversationIntent(query, {
-        pendingQuestion: stageState?.pendingQuestion,
-        pendingQuestionKind: stageState?.pendingQuestionKind,
-      });
-      const questionType = understanding
-        ? normalizeQuestionType(understanding.questionType)
-        : localIntent?.intent;
-      const supportedIntent = questionType === 'item_request'
-        ? 'details' : (questionType === 'inclusions' ? 'coverage' : questionType);
-      const detectedIntent = supportedIntent && supportedIntent !== 'unclear' ? {
-        intent: supportedIntent,
-        confidence: understanding ? 1 : localIntent.confidence,
-        signals: understanding ? ['grounded_understanding'] : localIntent.signals,
-      } : undefined;
-      const catalogQuestionTypes = new Set([
-        'overview', 'category_request', 'item_request', 'details', 'inclusions',
-        'coverage', 'preparation', 'price', 'comparison',
-      ]);
-      const pendingQuestionText = stageState?.pendingQuestionText ?? stageState?.lastAnsweredQuestion
-        ?? stageState?.pendingQuestion ?? undefined;
-      const pendingQuestionType = stageState?.pendingQuestionKind === 'field'
-        ? 'booking'
-        : (pendingQuestionText ? detectConversationIntent(pendingQuestionText).intent : undefined);
-      const result = await routeKnowledge({
+      const auth = {
         tenantId: this.runtimeProfile.agent.tenantId,
         workspaceId: this.runtimeProfile.agent.workspaceId,
         userId: null,
         role: 'COMPANY_DEVELOPER',
-      }, {
+      };
+      const genericInput = {
         agentId: this.runtimeProfile.agent.id,
         query,
         usageDirection: this.call.direction,
         language: stageState?.language ?? languageCode(this.runtimeProfile.agent.language),
-        routeHint: questionType && catalogQuestionTypes.has(questionType) ? 'catalog' : 'auto',
-        ...(detectedIntent ? { detectedIntent } : {}),
-        currentStage: stageState?.currentStage,
-        selectedCatalogItemId: stageState?.selectedCatalogItem?.id,
         currentTopic: stageState?.currentTopic ?? undefined,
-        pendingQuestion: pendingQuestionText,
-        pendingQuestionType,
-        activeCategoryKey: stageState?.activeCategory?.key ?? undefined,
-        activeCategoryName: stageState?.activeCategory?.name ?? undefined,
-        selectedCatalogItemKey: stageState?.selectedCatalogItem?.key ?? undefined,
-        selectedCatalogItemName: stageState?.selectedCatalogItem?.name ?? undefined,
-        candidateItemKeys: (stageState?.candidateItems ?? []).map((item) => item.key).filter(Boolean).slice(0, 8),
+        knownEntities: stageState?.knownEntities ?? [],
+        pendingQuestion: stageState?.pendingQuestionText ?? stageState?.pendingQuestion ?? undefined,
+        collectedInformation: stageState?.collectedInformation ?? {},
+        lastAnswer: stageState?.lastAnswer ?? undefined,
         abortSignal,
-      });
+      };
+      const loadMap = this.dependencies.loadPublishedKnowledgeMap ?? loadPublishedKnowledgeMap;
+      const retrieveEvidence = this.dependencies.retrieveTenantEvidence ?? retrieveTenantEvidence;
+      const [publishedMap, tenantEvidence] = await Promise.all([
+        loadMap(auth, genericInput),
+        retrieveEvidence(auth, genericInput),
+      ]);
+      const first = tenantEvidence.sources?.[0];
+      const result = {
+        route: 'llm_first',
+        found: publishedMap.found === true || tenantEvidence.found === true,
+        content: first?.content ?? null,
+        source: first ? {
+          recordId: first.recordId, knowledgeBaseId: first.knowledgeBaseId,
+          documentId: first.documentId, pageNumber: first.pageNumber,
+        } : null,
+        compactKnowledgeMap: publishedMap,
+        tenantEvidence,
+        matches: (tenantEvidence.sources ?? []).map((source) => ({
+          id: source.recordId ?? source.id,
+          answer: source.content,
+          content: source.content,
+          recordType: source.recordType,
+          knowledgeBaseId: source.knowledgeBaseId,
+          documentId: source.documentId,
+          pageNumber: source.pageNumber,
+          score: source.score,
+          callerFacing: source.callerFacing,
+        })),
+        retrieval: {
+          mode: 'llm_first',
+          mapDurationMs: publishedMap.durationMs,
+          semanticDurationMs: tenantEvidence.durationMs,
+          publicationRevisions: (publishedMap.maps ?? []).map((map) => ({
+            knowledgeBaseId: map.knowledgeBaseId,
+            revision: map.publicationRevision,
+          })),
+        },
+      };
       this.runtimeMetrics.knowledge.push({
         route: result.route, found: result.found === true, durationMs: Number(result.durationMs ?? 0),
-        intent: detectedIntent?.intent ?? null, intentConfidence: detectedIntent?.confidence ?? null,
+        intent: null, intentConfidence: null,
       });
-      return detectedIntent ? { ...result, intentDetection: detectedIntent } : result;
+      return result;
     } catch (error) {
       this.log.warn({ err: error, callId: this.call.id }, 'Knowledge retrieval failed; continuing without unverified context');
       return { route: 'none', found: false, content: null, source: null, error: error.code ?? 'KNOWLEDGE_UNAVAILABLE' };
@@ -1577,7 +1570,8 @@ export class RealtimeConversationOrchestrator {
     // A caller asking a price, comparison, symptom, or topic-change question
     // while booking is pending must never have that sentence stored as a
     // booking value.
-    if (!['booking_request', 'booking_field_answer'].includes(understanding?.questionType)) return false;
+    if (!['action_request', 'action_field_answer']
+      .includes(understanding?.questionType)) return false;
     const completionConfiguration = this.taskCompletionState.configuration;
     const stateBeforeCapture = this.liveCallMemory?.snapshot();
     const actionAllowed = this.liveCallMemory?.canRunAction?.(
@@ -1613,7 +1607,7 @@ export class RealtimeConversationOrchestrator {
           ...Object.keys(captured?.updates ?? {}),
         ])],
         missingFields: taskCompletion.missing,
-      }, 'Booking fields captured only after the caller turn was classified as a booking-field answer');
+      }, 'Configured action fields captured after a grounded action-field answer');
     }
     if (taskCompletion.complete) {
       await this.#confirmTaskCompletion();
@@ -1623,11 +1617,10 @@ export class RealtimeConversationOrchestrator {
   }
 
   #openCompletionActionAfterUnderstanding(understanding) {
-    // An LLM classification alone never opens a form. The action opens only
-    // when the caller explicitly requested booking and the live frame already
-    // holds one exact approved Catalog item. A category has no selected item,
-    // so category-level booking remains blocked until a child is chosen.
-    if (understanding?.questionType !== 'booking_request') return null;
+    // An LLM decision alone never executes an external operation. It may open
+    // only a generic UI-configured completion action; backend constraints and
+    // verified tool outcomes remain mandatory.
+    if (understanding?.questionType !== 'action_request') return null;
     const completionConfiguration = this.taskCompletionState.configuration;
     if (!completionConfiguration.enabled) return null;
     const before = this.liveCallMemory?.snapshot();
@@ -1640,6 +1633,10 @@ export class RealtimeConversationOrchestrator {
       { requiresCatalogItem: completionConfiguration.requiresCatalogItem === true },
     ) === true;
     if (actionOpened) {
+      this.liveCallMemory?.setActiveToolRequest?.({
+        name: completionConfiguration.intent,
+        status: 'collecting_information',
+      });
       this.runtimeMetrics.taskCompletion = {
         ...publicTaskCompletionState(this.taskCompletionState),
         gateOpen: true,
@@ -1649,12 +1646,16 @@ export class RealtimeConversationOrchestrator {
         stage: 'task_completion.action_opened_after_understanding', callId: this.call.id,
         intent: completionConfiguration.intent,
         selectedCatalogItemId: state?.selectedCatalogItem?.id ?? null,
-      }, 'Booking action opened only after explicit booking intent and an exact selected Catalog item');
+      }, 'UI-configured action opened after an explicit grounded action request');
     }
     return state;
   }
 
   #workflowInstructionResponse(knowledge) {
+    // Instruction/generated Workflow records are internal action evidence and
+    // can never be used as caller-facing fallback speech.
+    return null;
+    /* c8 ignore start -- retained only for rolling-deployment compatibility
     if (knowledge?.route !== 'workflow' || knowledge?.workflow?.responseMode !== 'instruction') return null;
     if (knowledge.workflow?.gate?.allowed === false) return String(knowledge.content ?? '').trim() || null;
 
@@ -1679,6 +1680,7 @@ export class RealtimeConversationOrchestrator {
     return state?.language === 'ta'
       ? 'எந்த option வேணும்னு சொல்லுங்க.'
       : 'Please tell me which option you need.';
+    c8 ignore stop */
   }
 
   #preCallSource() {
@@ -1887,7 +1889,7 @@ export class RealtimeConversationOrchestrator {
     let completion = {};
     const sentenceBuffer = createStreamingSentenceBuffer();
     const groundedSentenceBuffer = createStreamingSentenceBuffer();
-    const groundedStreamDecoder = groundedResponseMode && context.understandingOnly !== true
+    const groundedStreamDecoder = groundedResponseMode
       ? createGroundedJsonStreamDecoder(groundingEnvelope, groundingRuntime)
       : null;
     const streamedGroundedSentences = [];
@@ -1976,13 +1978,14 @@ export class RealtimeConversationOrchestrator {
           sources: [llmMessageSource(this.runtimeProfile.providers.llm, completion)],
         };
       }
-      const grounded = context.understandingOnly === true
-        ? validateGroundedLlmUnderstanding(text, groundingEnvelope, groundingRuntime)
-        : validateGroundedLlmResponse(text, groundingEnvelope, groundingRuntime);
+      const grounded = validateGroundedLlmResponse(text, groundingEnvelope, groundingRuntime);
       const groundingMetric = {
         valid: grounded.valid, reason: grounded.reason ?? null,
         intent: grounded.intent ?? null,
         questionType: grounded.questionType ?? null,
+        currentTopic: grounded.currentTopic ?? null,
+        topicChanged: grounded.topicChanged ?? null,
+        pendingQuestionRelevant: grounded.pendingQuestionRelevant ?? null,
         flowAction: grounded.flowAction ?? null,
         selectedEntityKeys: grounded.selectedEntityKeys ?? [],
         evidenceSourceIds: grounded.evidenceSourceIds ?? [],
@@ -1995,8 +1998,8 @@ export class RealtimeConversationOrchestrator {
       const sources = [llmMessageSource(this.runtimeProfile.providers.llm, completion)];
       if (grounded.valid) {
         this.runtimeMetrics.grounding.validated += 1;
-        if (context.understandingOnly !== true) this.liveCallMemory?.applyGroundedDecision?.(grounded);
-        answer = context.understandingOnly === true ? '' : grounded.spokenAnswer;
+        this.liveCallMemory?.applyGroundedDecision?.(grounded);
+        answer = grounded.spokenAnswer;
       } else {
         this.runtimeMetrics.grounding.rejected += 1;
         if (streamedGroundedSentences.length) {
@@ -2005,8 +2008,7 @@ export class RealtimeConversationOrchestrator {
           answer = streamedGroundedSentences.join(' ');
         } else {
           this.runtimeMetrics.grounding.fallbacks += 1;
-          const documentFallback = context.understandingOnly === true
-            ? null : approvedDocumentFallback(knowledge, this.runtimeProfile);
+          const documentFallback = approvedDocumentFallback(knowledge, this.runtimeProfile);
           answer = documentFallback?.text ?? callerFacingFallback(this.runtimeProfile);
           if (documentFallback?.source) {
             sources.push(createMessageSource(messageSourceTypes.KNOWLEDGE, {
@@ -2023,16 +2025,6 @@ export class RealtimeConversationOrchestrator {
         this.log.warn({
           stage: 'llm.grounding_rejected', callId: this.call.id, reason: grounded.reason,
         }, 'LLM response was rejected before TTS; using only approved document fallback when available');
-      }
-      if (context.understandingOnly === true && grounded.valid) {
-        return {
-          cancelled: false,
-          text: '',
-          proposedAnswer: answer,
-          understanding: grounded,
-          toolCalls,
-          sources,
-        };
       }
       answer = callerFacingText(answer, this.runtimeProfile);
       answer = this.liveCallMemory?.prepareAssistantResponse?.(answer) || answer;
@@ -2394,32 +2386,14 @@ export class RealtimeConversationOrchestrator {
     const knowledgeStartedAt = Date.now();
     let knowledge = await this.#knowledge(query, null, retrievalAbortController.signal);
     if (epoch !== this.epoch || this.finalized) return;
-    const stageState = this.liveCallMemory?.applyKnowledge?.(knowledge) ?? this.liveCallMemory?.snapshot();
+    // The saved frame is context, not a gate. Ordinary topic/entity state is
+    // updated only after the grounded LLM decision has been validated.
+    const stageState = this.liveCallMemory?.snapshot();
     this.runtimeMetrics.conversationStage = {
       ...this.runtimeMetrics.conversationStage,
-      currentStage: stageState?.currentStage ?? null,
-      resumeStage: stageState?.resumeStage ?? null,
-      activeCategory: stageState?.activeCategory ?? null,
-      selectedCatalogItemId: stageState?.selectedCatalogItem?.id ?? null,
-      candidateItemCount: stageState?.candidateItems?.length ?? 0,
-      answeredQuestionCount: stageState?.answeredQuestions?.length ?? 0,
       activeActions: stageState?.activeActions ?? [],
-      transitions: stageState?.stageTransitions ?? [],
       flowRecovery: stageState?.flowRecovery ?? this.runtimeMetrics.conversationStage?.flowRecovery,
-      blockedActions: Number(this.runtimeMetrics.conversationStage?.blockedActions ?? 0)
-        + (knowledge.workflow?.gate?.allowed === false ? 1 : 0),
     };
-    if (knowledge.route === 'workflow') {
-      this.log.info({
-        stage: 'conversation.action_gate', callId: this.call.id,
-        currentStage: stageState?.currentStage,
-        actionKey: knowledge.action?.config?.actionKey ?? null,
-        nextStage: knowledge.action?.config?.nextStage ?? null,
-        allowed: knowledge.workflow?.gate?.allowed !== false,
-        reason: knowledge.workflow?.gate?.reason ?? null,
-        selectedCatalogItemId: stageState?.selectedCatalogItem?.id ?? null,
-      }, 'Configured conversation-stage action evaluated');
-    }
     const completionConfiguration = this.taskCompletionState.configuration;
     const completionActionAllowed = this.liveCallMemory?.canRunAction?.(
       completionConfiguration.intent,
@@ -2434,10 +2408,6 @@ export class RealtimeConversationOrchestrator {
       // A single finalized utterance may explicitly request the action and
       // provide its configured fields together. Capture those deterministic
       // fields now; do not spend an LLM call merely to split known form data.
-      if (knowledge.intentDetection?.intent === 'booking_request'
-        && await this.#captureCompletionFieldAfterUnderstanding(query, history, {
-          questionType: 'booking_request',
-        })) return;
     } else if (completionConfiguration.enabled) {
       this.runtimeMetrics.taskCompletion = {
         ...publicTaskCompletionState(this.taskCompletionState),
@@ -2451,10 +2421,10 @@ export class RealtimeConversationOrchestrator {
     turnLatency.rankingMs = Number(knowledge.rankingValidationDurationMs ?? 0);
     turnLatency.validationMs += turnLatency.rankingMs;
     turnLatency.route = knowledge.route ?? 'none';
-    const workflowActionResponse = this.#workflowInstructionResponse(knowledge);
-    const fastKnowledgeAnswer = Boolean(workflowActionResponse) || hasFastKnowledgeAnswer(knowledge);
+    // Tenant evidence is interpreted by one grounded LLM turn. Runtime route
+    // labels and Workflow instruction text never bypass that validation.
     const sourceTrace = new MessageSourceTrace(
-      fastKnowledgeAnswer ? [] : this.#baseLlmSources(),
+      this.#baseLlmSources(),
       knowledgeMessageSources(knowledge),
     );
     if (epoch !== this.epoch || this.finalized) return;
@@ -2467,109 +2437,15 @@ export class RealtimeConversationOrchestrator {
       isCurrent: () => !this.#isStaleGeneration(epoch),
     };
     let response;
-    if (fastKnowledgeAnswer) {
-      turnLatency.fastKnowledge = true;
-      this.log.info({
-        stage: 'knowledge.fast_answer_selected', callId: this.call.id, epoch,
-        route: knowledge.route, knowledgeDurationMs: turnLatency.knowledgeMs,
-      }, 'Using approved exact Knowledge Base answer without an LLM request');
-      response = {
-        cancelled: false,
-        text: workflowActionResponse ?? String(knowledge.content).trim(),
-        toolCalls: [],
-        sources: [],
-      };
-    } else try {
-      // One grounded streaming response is the SaaS default. The legacy
-      // understand-then-answer path is available only through explicit false.
-      if (this.runtimeProfile.agent.settings?.singleGroundedLlmResponseEnabled !== false) {
-        const llmStartedAt = Date.now();
-        response = await this.#llm(query, history, knowledge, {
-          detectedIntent: knowledge.intentDetection,
-          instruction: 'In one response, determine the caller meaning and produce the natural spoken answer using only the supplied approved evidence. Emit JSON fields in the contract order with spokenAnswer last. Return only the required generic structured references and spoken answer.',
-        }, streaming);
-        turnLatency.llmMs += Math.max(0, Date.now() - llmStartedAt);
-        if (response.understanding) {
-          this.#openCompletionActionAfterUnderstanding(response.understanding);
-          if (await this.#captureCompletionFieldAfterUnderstanding(query, history, response.understanding)) return;
-        }
-      } else {
+    try {
       const llmStartedAt = Date.now();
-      const understandingStream = {
-        onSentence: () => {}, flush: () => {}, sentenceCount: () => 0,
-        epoch,
-        isCurrent: () => !this.#isStaleGeneration(epoch),
-      };
-      const initialResponse = await this.#llm(query, history, knowledge, {
-        detectedIntent: knowledge.intentDetection,
-        instruction: 'First determine the caller\'s structured meaning. Do not treat a Catalog name as the complete answer to a natural question.',
-        understandingOnly: true,
-      }, understandingStream);
+      response = await this.#llm(query, history, knowledge, {
+        instruction: 'Understand the latest caller utterance from its full natural meaning. Answer that request first using only approved evidence. Decide the current topic, whether it changed, and whether the saved pending question remains relevant. Do not require exact wording and do not use a saved stage as a gate. Emit the required JSON object with spokenAnswer last.',
+      }, streaming);
       turnLatency.llmMs += Math.max(0, Date.now() - llmStartedAt);
-      if (initialResponse.understanding) {
-        this.#openCompletionActionAfterUnderstanding(initialResponse.understanding);
-        if (await this.#captureCompletionFieldAfterUnderstanding(query, history, initialResponse.understanding)) return;
-        const evidenceStartedAt = Date.now();
-        const understoodKnowledge = await this.#knowledge(
-          query, initialResponse.understanding, retrievalAbortController.signal,
-        );
-        if (understoodKnowledge?.found) {
-          knowledge = understoodKnowledge;
-          this.liveCallMemory?.applyKnowledge?.(knowledge);
-        }
-        const tenantEvidence = await this.#tenantEvidence(query, initialResponse.understanding);
-        turnLatency.knowledgeMs += Math.max(0, Date.now() - evidenceStartedAt);
-        const enrichedKnowledge = withTenantEvidence(knowledge, tenantEvidence);
-        if (tenantEvidence.found) {
-          this.log.info({
-            stage: 'knowledge.full_document_evidence', callId: this.call.id,
-            questionType: initialResponse.understanding.questionType,
-            entityCount: tenantEvidence.entities.length,
-            sourceCount: tenantEvidence.sources.length,
-            durationMs: tenantEvidence.durationMs,
-          }, 'Retrieved tenant-approved full-document evidence from grounded caller understanding');
-          const answerStartedAt = Date.now();
-          response = await this.#llm(query, history, enrichedKnowledge, {
-            detectedIntent: knowledge.intentDetection,
-            understanding: initialResponse.understanding,
-            instruction: 'Answer now using the supplemental tenant evidence. Preserve the structured caller meaning and use only approved facts.',
-          }, streaming);
-          turnLatency.llmMs += Math.max(0, Date.now() - answerStartedAt);
-        } else {
-          this.liveCallMemory?.applyGroundedDecision?.(initialResponse.understanding);
-          const documentFallback = approvedDocumentFallback(enrichedKnowledge, this.runtimeProfile);
-          response = {
-            ...initialResponse,
-            text: documentFallback.text,
-            sources: [
-              ...(initialResponse.sources ?? []),
-              ...(documentFallback.source ? [createMessageSource(messageSourceTypes.KNOWLEDGE, {
-                id: documentFallback.source.recordId ?? documentFallback.source.id,
-                label: 'Approved document fallback',
-                metadata: { recordType: documentFallback.source.recordType },
-              })] : []),
-            ],
-          };
-        }
-      } else {
-        // Understanding validation can fail because of malformed structured
-        // output even when retrieval already found a valid tenant answer.
-        // Speak the best approved evidence instead of exposing a technical
-        // recovery message for a normal caller question.
-        const documentFallback = approvedDocumentFallback(knowledge, this.runtimeProfile);
-        response = {
-          ...initialResponse,
-          text: documentFallback.text,
-          sources: [
-            ...(initialResponse.sources ?? []),
-            ...(documentFallback.source ? [createMessageSource(messageSourceTypes.KNOWLEDGE, {
-              id: documentFallback.source.recordId ?? documentFallback.source.id,
-              label: 'Approved understanding fallback',
-              metadata: { recordType: documentFallback.source.recordType },
-            })] : []),
-          ],
-        };
-      }
+      if (response.understanding) {
+        this.#openCompletionActionAfterUnderstanding(response.understanding);
+        if (await this.#captureCompletionFieldAfterUnderstanding(query, history, response.understanding)) return;
       }
     } catch (error) {
       this.#recordProviderFailure('llm', error, 'llm.response');
@@ -2610,21 +2486,37 @@ export class RealtimeConversationOrchestrator {
       return;
     }
     if (response.toolCalls.length) {
-      const toolResults = await (this.dependencies.executeTools ?? executeAgentTools)(
-        this.runtimeProfile, this.call, response.toolCalls, { fetchImpl: this.dependencies.fetchImpl },
-      );
-      this.runtimeMetrics.tools.push(...toolResults.map((result) => ({
-        name: result.name, success: result.success, durationMs: Number(result.durationMs ?? 0),
-      })));
-      sourceTrace.add(toolMessageSources(toolResults));
-      if (epoch !== this.epoch) return;
-      const llmStartedAt = Date.now();
-      response = await this.#llm(query, history, knowledge, {
-        toolResults,
-        instruction: 'Use these tool results to answer the caller. Never claim an unsuccessful tool completed.',
-      }, streaming);
-      turnLatency.llmMs += Math.max(0, Date.now() - llmStartedAt);
-      sourceTrace.add(response.sources);
+      const primaryToolCall = response.toolCalls[0];
+      this.liveCallMemory?.setActiveToolRequest?.({
+        id: primaryToolCall?.id,
+        name: primaryToolCall?.name,
+        status: 'executing',
+      });
+      let toolResults;
+      try {
+        toolResults = await (this.dependencies.executeTools ?? executeAgentTools)(
+          this.runtimeProfile, this.call, response.toolCalls, { fetchImpl: this.dependencies.fetchImpl },
+        );
+      } catch (error) {
+        this.liveCallMemory?.setActiveToolRequest?.(null);
+        throw error;
+      }
+      try {
+        this.runtimeMetrics.tools.push(...toolResults.map((result) => ({
+          name: result.name, success: result.success, durationMs: Number(result.durationMs ?? 0),
+        })));
+        sourceTrace.add(toolMessageSources(toolResults));
+        if (epoch !== this.epoch) return;
+        const llmStartedAt = Date.now();
+        response = await this.#llm(query, history, knowledge, {
+          toolResults,
+          instruction: 'Use these tool results to answer the caller. Never claim an unsuccessful tool completed.',
+        }, streaming);
+        turnLatency.llmMs += Math.max(0, Date.now() - llmStartedAt);
+        sourceTrace.add(response.sources);
+      } finally {
+        this.liveCallMemory?.setActiveToolRequest?.(null);
+      }
     }
     if (response.cancelled || epoch !== this.epoch || this.finalized) {
       sentencePipeline.cancel();

@@ -23,14 +23,17 @@ import {
   validateDirectAnswer,
 } from './hybrid-evidence-ranker.js';
 import { runParallelHybridRetrieval } from './parallel-hybrid-retrieval.js';
+import { knowledgeMapCacheKey } from './knowledge-map.service.js';
 
 const defaultDependencies = {
   contextRunner: withTenantContext,
   embed: embedQuery,
   search: searchTenantPoints,
   cache: redis,
+  ragEnabled: env.RAG_ENABLED,
 };
 const RUNTIME_ABORTED = Symbol('RUNTIME_ABORTED');
+const RUNTIME_TIMED_OUT = Symbol('RUNTIME_TIMED_OUT');
 
 function normalize(value) {
   return String(value ?? '').normalize('NFKC').toLocaleLowerCase()
@@ -52,6 +55,15 @@ function timed(promise, timeoutMs) {
     timer.unref?.();
   });
   return Promise.race([promise.catch(() => null), timeout]).finally(() => clearTimeout(timer));
+}
+
+function withinDeadline(promise, timeoutMs) {
+  let timer;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(RUNTIME_TIMED_OUT), timeoutMs);
+    timer.unref?.();
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 async function abortable(promise, signal) {
@@ -86,12 +98,22 @@ const runtimeProfileSql = `
       FROM voice_agents
      WHERE tenant_id = $1 AND id = $2 AND status = 'active' AND deleted_at IS NULL
   ), assigned AS (
-    SELECT kb.id, kb.publication_revision, akb.priority,
+    SELECT kb.id,
+      COALESCE((
+        SELECT max((j.metadata->>'publicationRevision')::int)
+          FROM knowledge_processing_jobs j
+         WHERE j.tenant_id=kb.tenant_id AND j.knowledge_base_id=kb.id
+           AND j.job_type='index' AND j.status='completed'
+           AND (j.metadata->>'publicationRevision') ~ '^[0-9]+$'
+           AND (j.metadata->>'publicationRevision')::int <= kb.publication_revision
+      ), kb.publication_revision) AS publication_revision,
+      akb.priority,
       EXISTS (
         SELECT 1 FROM knowledge_processing_jobs j
          WHERE j.tenant_id = kb.tenant_id AND j.knowledge_base_id = kb.id
            AND j.job_type = 'index' AND j.status = 'completed'
-           AND j.metadata->>'publicationRevision' = kb.publication_revision::text
+           AND (j.metadata->>'publicationRevision') ~ '^[0-9]+$'
+           AND (j.metadata->>'publicationRevision')::int <= kb.publication_revision
       ) AS semantic_ready
       FROM runtime_agent a
       JOIN agent_knowledge_bases akb
@@ -1085,140 +1107,332 @@ function evidenceItemContent(item) {
   return [item.name, price, item.description, ...attributes].filter(Boolean).join(' - ');
 }
 
+function compactMapFromProfile(profile, knowledgeBase) {
+  const belongs = (record) => record.knowledge_base_id === knowledgeBase.id;
+  const records = [];
+  const add = (type, record, label, summary, metadata = {}) => {
+    records.push({
+      id: record.id,
+      type,
+      documentId: record.document_id,
+      documentVersionId: record.document_version_id,
+      language: record.language ?? 'und',
+      usageDirection: 'both',
+      label: String(label ?? '').trim() || null,
+      summary: String(summary ?? '').replace(/\s+/gu, ' ').trim().slice(0, 700) || null,
+      metadata,
+    });
+  };
+  for (const item of profile.catalog_items.filter(belongs)) {
+    add('CATALOG_ITEM', item, item.name, evidenceItemContent(item), {
+      key: item.item_key, category: item.category, categoryKey: item.category_key,
+    });
+  }
+  for (const workflow of profile.workflows.filter(belongs)) {
+    add('WORKFLOW_RULE', workflow, workflow.name, workflow.response_template, {
+      intent: workflow.intent,
+      responseMode: workflow.action_config?.responseMode ?? 'instruction',
+      actionType: workflow.action_type,
+      actionConfig: workflow.action_config,
+      conditions: workflow.conditions,
+    });
+  }
+  for (const node of profile.conversations.filter(belongs)) {
+    add('CONVERSATION_NODE', node, node.node_key, node.content, {
+      flowKey: node.flow_key, nodeType: node.node_type,
+    });
+  }
+  for (const faq of profile.faqs.filter(belongs)) add('FAQ', faq, faq.question, faq.answer);
+  for (const chunk of profile.general_knowledge.filter(belongs)) {
+    add('KNOWLEDGE_CHUNK', chunk, chunk.source_heading, chunk.content);
+  }
+  return {
+    version: 1,
+    knowledgeBaseId: knowledgeBase.id,
+    publicationRevision: knowledgeBase.publicationRevision,
+    records,
+  };
+}
+
+// Loads a tenant-neutral map of every assigned, published document record.
+// This operation performs no keyword, alias, phonetic, fuzzy, intent, or stage
+// routing; the caller's meaning is deliberately left to the grounded LLM.
+export async function loadPublishedKnowledgeMap(auth, input, dependencies = defaultDependencies) {
+  const startedAt = performance.now();
+  const runtime = { ...defaultDependencies, ...dependencies };
+  const loaded = await abortable(loadProfile(auth, input, runtime), input.abortSignal);
+  if (loaded === RUNTIME_ABORTED) return { found: false, cancelled: true, maps: [], records: [] };
+  const maps = [];
+  for (const knowledgeBase of loaded.profile.knowledge_bases ?? []) {
+    const key = knowledgeMapCacheKey(auth.tenantId, knowledgeBase.id, knowledgeBase.publicationRevision);
+    let map = await cacheGet(runtime.cache, key);
+    if (!map || !Array.isArray(map.records) || map.records.some((record) => !Object.hasOwn(record, 'summary'))) {
+      map = compactMapFromProfile(loaded.profile, knowledgeBase);
+      void cacheSet(runtime.cache, key, map, Math.max(env.RAG_RUNTIME_PROFILE_CACHE_TTL_SECONDS, 3600))
+        .catch(() => undefined);
+    }
+    maps.push(map);
+  }
+  const records = maps.flatMap((map) => map.records ?? []);
+  return {
+    found: records.length > 0,
+    route: 'published_knowledge_map',
+    maps,
+    records,
+    knowledgeBases: loaded.profile.knowledge_bases,
+    profileCacheHit: loaded.cacheHit,
+    durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+  };
+}
+
 function evidenceQuery(input = {}) {
   const understanding = input.understanding ?? {};
   const entities = [
     ...(understanding.selectedEntityKeys ?? []),
     ...(understanding.selectedEntities ?? []).flatMap((item) => [item.name, item.category]),
+    ...(input.knownEntities ?? []).flatMap((item) => [item.name, item.key, item.category]),
     input.activeCategoryName,
     input.selectedCatalogItemName,
+    input.currentTopic,
   ];
   return [
     input.query,
+    ...(Array.isArray(input.requestedFacts) ? input.requestedFacts : []),
     understanding.questionType ? `question type ${understanding.questionType}` : null,
     ...entities,
   ].map((value) => String(value ?? '').trim()).filter(Boolean).join(' ').slice(0, 2_000);
 }
 
-// This is deliberately evidence retrieval rather than another routing path.
-// The first grounded LLM decision describes the caller's natural question;
-// this function uses that neutral decision to collect tenant-approved support
-// from every published source type. No company names, entities or question
-// phrases are encoded here.
-export async function retrieveTenantEvidence(auth, input, dependencies = defaultDependencies) {
+const publishedKnowledgeRecordTypes = Object.freeze([
+  'CATALOG_ITEM', 'WORKFLOW_RULE', 'CONVERSATION_NODE', 'FAQ', 'KNOWLEDGE_CHUNK',
+]);
+
+export const searchPublishedKnowledgeOperation = Object.freeze({
+  name: 'search_published_knowledge',
+  description: 'Search only the current published knowledge assigned to this agent using a natural-language query.',
+  inputSchema: Object.freeze({
+    type: 'object', additionalProperties: false,
+    properties: Object.freeze({
+      semanticQuery: Object.freeze({ type: 'string', minLength: 1, maxLength: 2_000 }),
+      requestedFacts: Object.freeze({
+        type: 'array', maxItems: 20,
+        items: Object.freeze({ type: 'string', minLength: 1, maxLength: 120 }),
+      }),
+    }),
+    required: Object.freeze(['semanticQuery']),
+  }),
+});
+
+function publishedRecordLookup(profile) {
+  const records = new Map();
+  const put = (recordType, record, content, extra = {}) => {
+    const recordId = String(record?.id ?? '').toLowerCase();
+    if (!recordId) return;
+    records.set(`${recordType}:${recordId}`, {
+      id: `published:${recordType.toLowerCase()}:${recordId}`,
+      content: String(content ?? '').trim(), recordType, recordId,
+      knowledgeBaseId: record.knowledge_base_id,
+      documentId: record.document_id,
+      documentVersionId: record.document_version_id,
+      documentName: record.document_name,
+      pageNumber: record.source_page_start ?? null,
+      pageEnd: record.source_page_end ?? null,
+      language: record.language ?? null,
+      ...extra,
+    });
+  };
+  for (const item of profile.catalog_items ?? []) {
+    put('CATALOG_ITEM', item, evidenceItemContent(item), {
+      authoritativeData: {
+        itemKey: item.item_key, name: item.name,
+        category: item.category ?? item.catalog_name,
+        categoryKey: item.category_key, parentCategoryKey: item.parent_category_key,
+        description: item.description, price: item.price, currency: item.currency,
+        attributes: item.attributes ?? [], relationships: item.relationships ?? {},
+        selectionRules: item.selection_rules ?? {},
+      },
+    });
+  }
+  for (const workflow of profile.workflows ?? []) {
+    const responseMode = String(workflow.action_config?.responseMode ?? 'instruction').trim().toLowerCase();
+    put('WORKFLOW_RULE', workflow, responseMode === 'exact' ? workflow.response_template : '', {
+      callerFacing: responseMode === 'exact',
+      authoritativeData: {
+        name: workflow.name, intent: workflow.intent, priority: workflow.priority,
+        conditions: workflow.conditions ?? {}, actionType: workflow.action_type,
+        actionConfig: workflow.action_config ?? {}, responseMode,
+      },
+    });
+  }
+  for (const node of profile.conversations ?? []) {
+    put('CONVERSATION_NODE', node, node.content, {
+      authoritativeData: {
+        flowKey: node.flow_key, nodeKey: node.node_key, nodeType: node.node_type,
+        variables: node.variables ?? [], transitions: node.transitions ?? [],
+      },
+    });
+  }
+  for (const faq of profile.faqs ?? []) {
+    put('FAQ', faq, faq.answer, {
+      authoritativeData: { question: faq.question, answer: faq.answer },
+    });
+  }
+  for (const chunk of profile.general_knowledge ?? []) {
+    put('KNOWLEDGE_CHUNK', chunk, chunk.content, {
+      authoritativeData: { heading: chunk.source_heading ?? null, content: chunk.content },
+    });
+  }
+  return records;
+}
+
+function publishedSearchCacheKey(auth, input, knowledgeBases) {
+  const revisions = knowledgeBases
+    .map((item) => `${String(item.id).toLowerCase()}:${item.publicationRevision}`)
+    .sort().join('|');
+  return `zea:rag:published-search:${auth.tenantId}:${input.agentId}:${input.usageDirection}:${hash(JSON.stringify({
+    revisions, query: evidenceQuery(input), requestedFacts: input.requestedFacts ?? [],
+    language: input.language ?? 'und', selectedCatalogItemKey: input.selectedCatalogItemKey ?? null,
+    activeCategoryName: input.activeCategoryName ?? null,
+  }))}`;
+}
+
+// Generic internal operation. The input contains no SQL or provider details.
+// Qdrant discovers IDs; exact evidence is hydrated from the current approved
+// PostgreSQL profile (or its short-lived, revision-scoped cache).
+export async function searchPublishedKnowledge(auth, input, dependencies = defaultDependencies) {
   const startedAt = performance.now();
   const runtime = { ...defaultDependencies, ...dependencies };
-  const loaded = await abortable(loadProfile(auth, input, runtime), input.abortSignal);
+  const semanticQuery = String(input.semanticQuery ?? input.query ?? '').trim().slice(0, 2_000);
+  const safeInput = {
+    ...input,
+    query: semanticQuery,
+    requestedFacts: Array.isArray(input.requestedFacts)
+      ? input.requestedFacts.map((value) => String(value).trim().slice(0, 120)).filter(Boolean).slice(0, 20)
+      : [],
+  };
+  const loaded = await abortable(
+    withinDeadline(loadProfile(auth, safeInput, runtime), env.RAG_RUNTIME_CHANNEL_DEADLINE_MS),
+    input.abortSignal,
+  );
   if (loaded === RUNTIME_ABORTED) {
     return {
-      route: 'none', found: false, content: null, source: null, cancelled: true,
+      operation: 'search_published_knowledge', found: false, sources: [], actionEvidence: [],
+      entities: [], cancelled: true,
+      durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+    };
+  }
+  if (loaded === RUNTIME_TIMED_OUT) {
+    return {
+      operation: 'search_published_knowledge', found: false, sources: [], actionEvidence: [],
+      entities: [], timedOut: true, timedOutStage: 'postgres_hydration',
       durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
     };
   }
   const { profile } = loaded;
   const knowledgeBases = allowedSemanticKnowledgeBases(profile);
+  const cacheKey = publishedSearchCacheKey(auth, safeInput, knowledgeBases);
+  const cached = await cacheGet(runtime.cache, cacheKey);
+  if (cached) return { ...cached, cacheHit: true };
+
+  const lookup = publishedRecordLookup(profile);
+  const sources = [];
+  const actionEvidence = [];
+  const entities = [];
   const selectedKeys = new Set([
-    ...(input.understanding?.selectedEntityKeys ?? []),
-    ...(input.understanding?.selectedEntities ?? []).map((item) => item.key),
-    input.selectedCatalogItemKey,
+    ...(safeInput.understanding?.selectedEntityKeys ?? []),
+    ...(safeInput.understanding?.selectedEntities ?? []).map((item) => item.key),
+    ...(safeInput.knownEntities ?? []).map((item) => item.key),
+    safeInput.selectedCatalogItemKey,
   ].map(normalize).filter(Boolean));
-  const directItems = profile.catalog_items.filter((item) => selectedKeys.has(normalize(item.item_key)));
-  const sources = directItems.map((item) => ({
-    id: `catalog:${item.id}`,
-    content: evidenceItemContent(item),
-    recordType: 'CATALOG_ITEM',
-    recordId: item.id,
-    knowledgeBaseId: item.knowledge_base_id,
-    documentId: item.document_id,
-    pageNumber: item.source_page_start ?? null,
-  })).filter((source) => source.content);
-  const entities = directItems.map((item) => ({
-    id: item.id, key: item.item_key, name: item.name,
-    category: item.category ?? item.catalog_name, categoryKey: item.category_key,
-    parentCategoryKey: item.parent_category_key,
-  }));
-  const understandingKeys = new Set([
-    input.understanding?.intent,
-    input.understanding?.questionType,
-  ].map(normalize).filter(Boolean));
-  for (const workflow of profile.workflows) {
-    if (!understandingKeys.has(normalize(workflow.intent)) && !understandingKeys.has(normalize(workflow.name))) continue;
-    const responseMode = String(workflow.action_config?.responseMode ?? 'instruction').trim().toLowerCase();
-    // Instruction-mode Workflow text is runtime metadata, never LLM evidence
-    // and never caller-facing speech.
-    if (responseMode === 'instruction') continue;
-    const content = String(workflow.response_template ?? '').trim();
-    if (!content) continue;
-    sources.push({
-      id: `workflow:${workflow.id}`, content, recordType: 'WORKFLOW_RULE', recordId: workflow.id,
-      knowledgeBaseId: workflow.knowledge_base_id, documentId: workflow.document_id,
-      pageNumber: workflow.source_page_start ?? null,
+  for (const item of profile.catalog_items ?? []) {
+    if (!selectedKeys.has(normalize(item.item_key))) continue;
+    const source = lookup.get(`CATALOG_ITEM:${String(item.id).toLowerCase()}`);
+    if (source?.content) sources.push({ ...source, score: 1, matchMode: 'live_context' });
+    entities.push({
+      id: item.id, key: item.item_key, name: item.name,
+      category: item.category ?? item.catalog_name, categoryKey: item.category_key,
+      parentCategoryKey: item.parent_category_key,
     });
   }
-  for (const node of profile.conversations) {
-    if (String(node.node_key ?? '') !== String(input.currentStage ?? '')) continue;
-    const content = String(node.content ?? '').trim();
-    if (!content) continue;
-    sources.push({
-      id: `conversation:${node.id}`, content, recordType: 'CONVERSATION_NODE', recordId: node.id,
-      knowledgeBaseId: node.knowledge_base_id, documentId: node.document_id,
-      pageNumber: node.source_page_start ?? null,
-    });
-  }
-  if (knowledgeBases.length && env.RAG_ENABLED) {
-    const query = evidenceQuery(input);
-    const rawMatches = await timed((async () => {
-      const vector = await runtime.embed(query);
-      return runtime.search(auth.tenantId, vector, {
-        knowledgeBases,
-        usageDirection: input.usageDirection,
-        limit: Math.max(4, Math.min(Number(input.topK ?? 8), 12)),
-        scoreThreshold: env.RAG_RUNTIME_MIN_SCORE,
-        recordTypes: ['CATALOG_ITEM', 'WORKFLOW_RULE', 'CONVERSATION_NODE', 'FAQ', 'KNOWLEDGE_CHUNK'],
-      });
-    })(), env.RAG_RUNTIME_SEMANTIC_DEADLINE_MS) ?? [];
-    const allowed = new Map(knowledgeBases.map((item) => [item.id.toLowerCase(), item.publicationRevision]));
+
+  if (knowledgeBases.length && runtime.ragEnabled && semanticQuery) {
+    const semanticResult = await abortable(
+      timed((async () => {
+        const vector = await runtime.embed(evidenceQuery(safeInput), { signal: input.abortSignal });
+        return runtime.search(auth.tenantId, vector, {
+          knowledgeBases, usageDirection: safeInput.usageDirection, agentId: safeInput.agentId,
+          abortSignal: input.abortSignal,
+          limit: Math.max(4, Math.min(Number(safeInput.topK ?? 8), 10)),
+          scoreThreshold: env.RAG_RUNTIME_MIN_SCORE,
+          recordTypes: publishedKnowledgeRecordTypes,
+        });
+      })(), env.RAG_RUNTIME_SEMANTIC_DEADLINE_MS),
+      input.abortSignal,
+    );
+    if (semanticResult === RUNTIME_ABORTED) {
+      return {
+        operation: 'search_published_knowledge', found: false, sources: [], actionEvidence: [],
+        entities: [], cancelled: true,
+        durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+      };
+    }
+    const rawMatches = semanticResult ?? [];
+    const allowed = new Map(knowledgeBases.map((item) => [String(item.id).toLowerCase(), item.publicationRevision]));
     for (const match of rawMatches) {
       const payload = match.payload ?? {};
       const recordType = String(payload.record_type ?? '').toUpperCase();
-      if (payload.tenant_id !== auth.tenantId.toLowerCase()
-        || allowed.get(String(payload.knowledge_base_id).toLowerCase()) !== payload.publication_revision
-        || ![input.usageDirection.toUpperCase(), 'BOTH'].includes(payload.agent_usage)
-        || !['CATALOG_ITEM', 'WORKFLOW_RULE', 'CONVERSATION_NODE', 'FAQ', 'KNOWLEDGE_CHUNK'].includes(recordType)) continue;
-      // Semantic Workflow points can contain instruction metadata. Exact
-      // Workflow routing already evaluates these safely, so do not expose raw
-      // vector Workflow text as evidence for caller speech.
-      if (recordType === 'WORKFLOW_RULE') continue;
-      const content = String(payload.answer ?? payload.content ?? '').trim();
-      if (!content) continue;
-      const identity = `${recordType}:${match.id}`;
-      if (sources.some((source) => `${source.recordType}:${source.recordId}` === identity)) continue;
-      sources.push({
-        id: `retrieved:${match.id}`,
-        content,
-        recordType,
-        recordId: match.id,
-        knowledgeBaseId: payload.knowledge_base_id,
-        documentId: payload.document_id,
-        pageNumber: payload.page_number ?? null,
-        score: Number(match.score),
-      });
-      const metadata = payload.entity_metadata ?? {};
-      const key = String(metadata.itemKey ?? '').trim();
-      const name = String(payload.entity_name ?? '').trim();
-      if (key && name && !entities.some((item) => normalize(item.key) === normalize(key))) {
-        entities.push({ key, name, category: payload.entity_category ?? null, categoryKey: metadata.categoryKey ?? null });
+      const recordId = String(payload.record_id ?? match.id ?? '').toLowerCase();
+      const knowledgeBaseId = String(payload.knowledge_base_id ?? '').toLowerCase();
+      const assignedAgentIds = Array.isArray(payload.assigned_agent_ids)
+        ? payload.assigned_agent_ids.map((id) => String(id).toLowerCase()) : [];
+      if (String(payload.tenant_id ?? '').toLowerCase() !== auth.tenantId.toLowerCase()
+        || allowed.get(knowledgeBaseId) !== Number(payload.publication_revision)
+        || ![String(safeInput.usageDirection).toUpperCase(), 'BOTH'].includes(payload.agent_usage)
+        || (assignedAgentIds.length && !assignedAgentIds.includes(String(safeInput.agentId).toLowerCase()))
+        || !publishedKnowledgeRecordTypes.includes(recordType)) continue;
+      const hydrated = lookup.get(`${recordType}:${recordId}`);
+      if (!hydrated || String(hydrated.knowledgeBaseId).toLowerCase() !== knowledgeBaseId) continue;
+      const evidence = { ...hydrated, score: Number(match.score), matchMode: 'semantic' };
+      if (recordType === 'WORKFLOW_RULE' && evidence.callerFacing !== true) {
+        actionEvidence.push(evidence);
+        continue;
+      }
+      if (!evidence.content) continue;
+      if (!sources.some((source) => `${source.recordType}:${source.recordId}` === `${recordType}:${recordId}`)) {
+        sources.push(evidence);
+      }
+      if (recordType === 'CATALOG_ITEM') {
+        const data = evidence.authoritativeData ?? {};
+        if (data.itemKey && data.name && !entities.some((item) => normalize(item.key) === normalize(data.itemKey))) {
+          entities.push({
+            id: recordId, key: data.itemKey, name: data.name,
+            category: data.category ?? null, categoryKey: data.categoryKey ?? null,
+            parentCategoryKey: data.parentCategoryKey ?? null,
+          });
+        }
       }
     }
   }
-  return {
-    found: sources.length > 0,
-    route: 'tenant_evidence',
-    sources,
-    entities,
+  const result = {
+    operation: 'search_published_knowledge',
+    found: sources.length > 0 || actionEvidence.length > 0,
+    route: 'tenant_evidence', sources, actionEvidence, entities,
+    requestedFacts: safeInput.requestedFacts,
+    publicationRevisions: knowledgeBases.map((item) => ({
+      knowledgeBaseId: item.id, publicationRevision: item.publicationRevision,
+    })),
     profileCacheHit: loaded.cacheHit,
     durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
   };
+  void cacheSet(runtime.cache, cacheKey, result, env.RAG_RUNTIME_RESULT_CACHE_TTL_SECONDS)
+    .catch(() => undefined);
+  return result;
+}
+
+// Compatibility name used by the orchestrator; all live retrieval now goes
+// through the single generic, PostgreSQL-hydrated operation.
+export async function retrieveTenantEvidence(auth, input, dependencies = defaultDependencies) {
+  return searchPublishedKnowledge(auth, input, dependencies);
 }
 
 async function parallelKnowledgeCandidates({
@@ -1412,6 +1626,22 @@ async function parallelRankedKnowledgeResult({
 }
 
 export async function routeKnowledgeQuery(auth, input, dependencies = defaultDependencies) {
+  // Deprecated compatibility entry point. Keyword, fuzzy and stage routing is
+  // permanently bypassed; every caller now receives the generic published-
+  // knowledge search result hydrated from PostgreSQL.
+  return searchPublishedKnowledge(auth, {
+    agentId: input.agentId,
+    query: input.query,
+    requestedFacts: input.requestedFacts ?? [],
+    usageDirection: input.usageDirection,
+    language: input.language,
+    currentTopic: input.currentTopic,
+    knownEntities: input.knownEntities ?? [],
+    pendingQuestion: input.pendingQuestion,
+    topK: input.topK,
+    abortSignal: input.abortSignal,
+  }, dependencies);
+  /* c8 ignore start -- unreachable compatibility implementation
   const startedAt = performance.now();
   if (input.abortSignal?.aborted) {
     return { route: 'none', found: false, content: null, source: null, cancelled: true, durationMs: 0 };
@@ -1506,8 +1736,8 @@ export async function routeKnowledgeQuery(auth, input, dependencies = defaultDep
       void cacheSet(runtime.cache, hybridCacheKey, response, env.RAG_RUNTIME_RESULT_CACHE_TTL_SECONDS)
         .catch(() => undefined);
     }
-    return response;
-  }
+  return response;
+}
   const hasMultipleCatalogItems = currentCatalogEntities.length > 1;
   let result = null;
 
@@ -1608,8 +1838,10 @@ export async function routeKnowledgeQuery(auth, input, dependencies = defaultDep
     durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
   };
 }
+  c8 ignore stop */
+}
 
-export async function invalidateTenantKnowledgeCache(tenantId, cache = redis) {
+async function invalidateTenantKnowledgeCacheInternal(tenantId, cache, includeKnowledgeMaps) {
   const tenant = requireTenantId(tenantId);
   if (!cache || (cache.status && cache.status !== 'ready')) {
     return { deletedKeys: 0, incomplete: true };
@@ -1618,8 +1850,10 @@ export async function invalidateTenantKnowledgeCache(tenantId, cache = redis) {
   const patterns = [
     `zea:rag:profile:${tenant}:*`,
     `zea:rag:result:${tenant}:*`,
+    `zea:rag:published-search:${tenant}:*`,
     `zea:rag:entity:${tenant}:*`,
     `zea:rag:hybrid:${tenant}:*`,
+    ...(includeKnowledgeMaps ? [`zea:rag:knowledge-map:${tenant}:*`] : []),
   ];
   try {
     for (const pattern of patterns) {
@@ -1652,4 +1886,12 @@ export async function invalidateTenantKnowledgeCache(tenantId, cache = redis) {
     return { deletedKeys, incomplete: true };
   }
   return { deletedKeys, verified: true, remainingKeys: 0 };
+}
+
+export function invalidateTenantKnowledgeCache(tenantId, cache = redis) {
+  return invalidateTenantKnowledgeCacheInternal(tenantId, cache, true);
+}
+
+export function invalidateTenantRuntimeKnowledgeCache(tenantId, cache = redis) {
+  return invalidateTenantKnowledgeCacheInternal(tenantId, cache, false);
 }

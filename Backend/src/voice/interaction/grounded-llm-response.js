@@ -8,7 +8,7 @@ const maximumAssertedFacts = 12;
 // company's products, services, or wording in application code.
 const questionTypes = new Set([
   'identity', 'overview', 'category_request', 'item_request', 'details', 'inclusions', 'coverage',
-  'preparation', 'price', 'comparison', 'scenario', 'booking_request', 'booking_field_answer',
+  'preparation', 'price', 'comparison', 'scenario', 'action_request', 'action_field_answer',
   'side_question', 'confirmation', 'unclear',
 ]);
 
@@ -39,10 +39,9 @@ const questionTypeAliases = new Map([
   ['scenario', 'scenario'], ['symptom_query', 'scenario'], ['symptom', 'scenario'],
   ['use_case', 'scenario'], ['suitability', 'scenario'], ['recommendation', 'scenario'],
   ['problem', 'scenario'], ['concern', 'scenario'], ['requirement', 'scenario'],
-  ['booking_request', 'booking_request'], ['booking', 'booking_request'], ['book', 'booking_request'],
-  ['appointment_request', 'booking_request'], ['reservation_request', 'booking_request'], ['schedule_request', 'booking_request'],
-  ['booking_field_answer', 'booking_field_answer'], ['field_answer', 'booking_field_answer'],
-  ['field_value', 'booking_field_answer'], ['booking_details', 'booking_field_answer'], ['booking_information', 'booking_field_answer'],
+  ['action_request', 'action_request'], ['tool_request', 'action_request'], ['operation_request', 'action_request'],
+  ['field_answer', 'action_field_answer'], ['field_value', 'action_field_answer'],
+  ['action_field_answer', 'action_field_answer'], ['action_input', 'action_field_answer'],
   ['side_question', 'side_question'], ['general_question', 'side_question'], ['other_question', 'side_question'],
   ['confirmation', 'confirmation'], ['confirm', 'confirmation'], ['approval', 'confirmation'], ['yes_confirmation', 'confirmation'],
   ['unclear', 'unclear'], ['unknown', 'unclear'], ['other', 'unclear'], ['none', 'unclear'],
@@ -100,9 +99,17 @@ export function buildGroundingEnvelope(knowledge = {}) {
     });
   }
   for (const evidence of knowledge.tenantEvidence?.sources ?? []) {
+    if (evidence.callerFacing === false) continue;
     addSource(sources, sourceContents, evidence.content, {
       recordId: text(evidence.recordId, 100) || null,
       recordType: text(evidence.recordType, 40) || 'tenant_evidence',
+    });
+  }
+  for (const record of knowledge.compactKnowledgeMap?.records ?? []) {
+    if (String(record.type ?? '').toUpperCase() === 'WORKFLOW_RULE') continue;
+    addSource(sources, sourceContents, record.summary, {
+      recordId: text(record.id, 100) || null,
+      recordType: text(record.type, 40) || 'knowledge_map',
     });
   }
   for (const evidence of knowledge.rankedEvidence ?? []) {
@@ -129,6 +136,15 @@ export function buildGroundingEnvelope(knowledge = {}) {
       ...(hint.catalogSelections ?? []).map((selection) => selection.item),
     ]),
     ...(knowledge.tenantEvidence?.entities ?? []),
+    ...(knowledge.compactKnowledgeMap?.records ?? []).filter((record) => (
+      record.type === 'CATALOG_ITEM' && record.metadata?.key && record.label
+    )).map((record) => ({
+      id: record.id,
+      key: record.metadata.key,
+      name: record.label,
+      category: record.metadata.category,
+      categoryKey: record.metadata.categoryKey,
+    })),
     ...(knowledge.clarification?.candidates ?? []),
   ].filter(Boolean);
   const entities = [];
@@ -153,13 +169,17 @@ export function groundedResponseContract(envelope) {
   return Object.freeze({
     format: 'json_object',
     fieldOrder: [
-      'intent', 'questionType', 'flowAction', 'selectedEntityKeys',
+      'intent', 'questionType', 'currentTopic', 'topicChanged', 'pendingQuestionRelevant',
+      'flowAction', 'selectedEntityKeys',
       'evidenceSourceIds', 'assertedFacts', 'spokenAnswer',
     ],
     streamingRule: 'Emit spokenAnswer last so its complete sentences can be validated and streamed immediately.',
     schema: {
       intent: 'short generic intent name',
-      questionType: 'identity, overview, category_request, item_request, details, inclusions, coverage, preparation, price, comparison, scenario, booking_request, booking_field_answer, side_question, confirmation or unclear',
+      questionType: 'identity, overview, category_request, item_request, details, inclusions, coverage, preparation, price, comparison, scenario, action_request, action_field_answer, side_question, confirmation or unclear',
+      currentTopic: 'short generic description of the caller current topic',
+      topicChanged: 'boolean: whether this turn changes the prior current topic',
+      pendingQuestionRelevant: 'boolean: whether the saved pending question should still be resumed after answering',
       flowAction: 'continue, answer_pending, side_question or clarify',
       selectedEntityKeys: ['only keys listed in allowedEntityKeys'],
       evidenceSourceIds: ['source IDs supporting the spoken answer'],
@@ -172,22 +192,6 @@ export function groundedResponseContract(envelope) {
     },
     allowedEntityKeys: envelope.entities.map((item) => item.key),
     allowedEvidenceSourceIds: envelope.sources.map((source) => source.id),
-  });
-}
-
-// The first LLM pass only identifies the caller's meaning. It does not speak
-// to the caller, so caller-facing evidence and fact assertions are collected
-// only in the later answer-generation pass.
-export function groundedUnderstandingContract(envelope) {
-  return Object.freeze({
-    format: 'json_object',
-    schema: {
-      intent: 'short generic intent name',
-      questionType: 'identity, overview, category_request, item_request, details, inclusions, coverage, preparation, price, comparison, scenario, booking_request, booking_field_answer, side_question, confirmation or unclear',
-      flowAction: 'continue, answer_pending, side_question or clarify',
-      selectedEntityKeys: ['only keys listed in allowedEntityKeys'],
-    },
-    allowedEntityKeys: envelope.entities.map((item) => item.key),
   });
 }
 
@@ -233,6 +237,18 @@ function jsonStringField(raw, names) {
   return null;
 }
 
+function booleanField(value) {
+  return typeof value === 'boolean' ? value : null;
+}
+
+function booleanFieldFromRaw(raw, names) {
+  for (const name of names) {
+    const match = new RegExp(`"${name}"\\s*:\\s*(true|false)`, 'iu').exec(raw);
+    if (match) return match[1].toLowerCase() === 'true';
+  }
+  return null;
+}
+
 function partialJsonStringField(raw, names) {
   for (const name of names) {
     const marker = new RegExp(`"${name}"\\s*:\\s*"`, 'iu').exec(raw);
@@ -265,16 +281,23 @@ export function createGroundedJsonStreamDecoder(envelope, runtime = {}) {
   const refreshDecision = () => {
     const intent = jsonStringField(raw, ['intent']);
     const questionType = normalizeQuestionType(jsonStringField(raw, ['questionType', 'question_type']));
+    const currentTopic = jsonStringField(raw, ['currentTopic', 'current_topic']);
+    const topicChanged = booleanFieldFromRaw(raw, ['topicChanged', 'topic_changed']);
+    const pendingQuestionRelevant = booleanFieldFromRaw(
+      raw, ['pendingQuestionRelevant', 'pending_question_relevant'],
+    );
     const flowAction = normalizeFlowAction(jsonStringField(raw, ['flowAction', 'flow_action']), runtime);
     const sourceIds = jsonArrayField(raw, ['evidenceSourceIds', 'evidence_source_ids']);
     const entityKeys = jsonArrayField(raw, ['selectedEntityKeys', 'selected_entity_keys']);
-    if (!intent || !flowAction || !sourceIds || !entityKeys) return;
+    if (!intent || !currentTopic || topicChanged === null || pendingQuestionRelevant === null
+      || !flowAction || !sourceIds || !entityKeys) return;
     const normalizedSources = list(sourceIds, maximumSources);
     const normalizedEntities = list(entityKeys, maximumEntities);
     if (normalizedSources.some((id) => !allowedSources.has(id))) return;
     if (normalizedEntities.some((key) => !allowedEntities.has(key))) return;
     decision = Object.freeze({
-      intent: text(intent, maximumIntentCharacters), questionType, flowAction,
+      intent: text(intent, maximumIntentCharacters), questionType,
+      currentTopic: text(currentTopic, 240), topicChanged, pendingQuestionRelevant, flowAction,
       evidenceSourceIds: Object.freeze(normalizedSources),
       selectedEntityKeys: Object.freeze(normalizedEntities),
     });
@@ -452,9 +475,16 @@ export function validateGroundedLlmResponse(raw, envelope, runtime = {}) {
   if (!parsed) return Object.freeze({ valid: false, reason: 'invalid_json' });
   const intent = text(parsed.intent, maximumIntentCharacters);
   const questionType = normalizeQuestionType(parsed.questionType ?? parsed.question_type);
+  const currentTopic = text(parsed.currentTopic ?? parsed.current_topic, 240);
+  const topicChanged = booleanField(parsed.topicChanged ?? parsed.topic_changed);
+  const pendingQuestionRelevant = booleanField(
+    parsed.pendingQuestionRelevant ?? parsed.pending_question_relevant,
+  );
   const flowAction = normalizeFlowAction(parsed.flowAction ?? parsed.flow_action, runtime);
   const spokenAnswer = text(parsed.spokenAnswer ?? parsed.spoken_answer, maximumAnswerCharacters);
-  if (!intent || !spokenAnswer) return Object.freeze({ valid: false, reason: 'required_field_missing' });
+  if (!intent || !spokenAnswer || !currentTopic || topicChanged === null || pendingQuestionRelevant === null) {
+    return Object.freeze({ valid: false, reason: 'required_field_missing' });
+  }
   if (!flowAction) {
     return Object.freeze({ valid: false, reason: 'invalid_flow_action' });
   }
@@ -517,6 +547,9 @@ export function validateGroundedLlmResponse(raw, envelope, runtime = {}) {
     valid: true,
     intent,
     questionType,
+    currentTopic,
+    topicChanged,
+    pendingQuestionRelevant,
     flowAction,
     spokenAnswer,
     selectedEntityKeys: selectedEntities.map((item) => item.key),
@@ -533,8 +566,15 @@ export function validateGroundedLlmUnderstanding(raw, envelope, runtime = {}) {
   if (!parsed) return Object.freeze({ valid: false, reason: 'invalid_json' });
   const intent = text(parsed.intent, maximumIntentCharacters);
   const questionType = normalizeQuestionType(parsed.questionType ?? parsed.question_type);
+  const currentTopic = text(parsed.currentTopic ?? parsed.current_topic, 240);
+  const topicChanged = booleanField(parsed.topicChanged ?? parsed.topic_changed);
+  const pendingQuestionRelevant = booleanField(
+    parsed.pendingQuestionRelevant ?? parsed.pending_question_relevant,
+  );
   const flowAction = normalizeFlowAction(parsed.flowAction ?? parsed.flow_action, runtime);
-  if (!intent) return Object.freeze({ valid: false, reason: 'required_field_missing' });
+  if (!intent || !currentTopic || topicChanged === null || pendingQuestionRelevant === null) {
+    return Object.freeze({ valid: false, reason: 'required_field_missing' });
+  }
   if (!flowAction) {
     return Object.freeze({ valid: false, reason: 'invalid_flow_action' });
   }
@@ -548,6 +588,9 @@ export function validateGroundedLlmUnderstanding(raw, envelope, runtime = {}) {
     valid: true,
     intent,
     questionType,
+    currentTopic,
+    topicChanged,
+    pendingQuestionRelevant,
     flowAction,
     selectedEntityKeys: selectedEntities.map((item) => item.key),
     selectedEntities: selectedEntities.map((item) => ({ ...item })),
