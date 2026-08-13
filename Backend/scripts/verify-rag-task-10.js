@@ -63,6 +63,12 @@ class StorageMock {
       prefix, deleted: true, verified: true, deletedCount: 2, remainingObjectVersions: 0,
     };
   }
+  async deleteDocumentPrefix({ prefix }) {
+    this.deletedPrefixes.push(prefix);
+    return {
+      prefix, deleted: true, verified: true, deletedCount: 2, remainingObjectVersions: 0,
+    };
+  }
 }
 
 async function createTenant(client, name) {
@@ -281,10 +287,10 @@ async function verifyCompleteLifecycle() {
       getKnowledgeDeletionJob(authFor(otherTenant), documentDelete.cleanupJob.id, sameTransaction),
       (error) => error.code === 'KNOWLEDGE_DELETE_JOB_NOT_FOUND',
     );
-    await assert.rejects(
-      getKnowledgeDocument(auth, knowledgeBaseId, document.documentId, sameTransaction),
-      (error) => error.code === 'KNOWLEDGE_DOCUMENT_NOT_FOUND',
+    const deletingDocument = await getKnowledgeDocument(
+      auth, knowledgeBaseId, document.documentId, sameTransaction,
     );
+    assert.equal(deletingDocument.status, 'deleting');
     assert.equal((await client.query(
       'SELECT publication_revision FROM knowledge_bases WHERE id=$1',
       [knowledgeBaseId],
@@ -297,22 +303,28 @@ async function verifyCompleteLifecycle() {
       storage: {
         deleteAllVersions: storage.deleteAllVersions.bind(storage),
         deletePrefix: storage.deletePrefix.bind(storage),
+        deleteDocumentPrefix: storage.deleteDocumentPrefix.bind(storage),
       },
-      async deleteDocumentPoints(tenantId, documentId) {
-        documentPointDeletes.push({ tenantId, documentId });
+      async deleteDocumentPoints(tenantId, documentId, options) {
+        documentPointDeletes.push({ tenantId, documentId, options });
+        return { deleted: true, verified: true, remainingCount: 0 };
       },
       async queue({ processingJobId }) {
         reindexQueue.push(processingJobId);
         return { id: `reindex-${processingJobId}` };
       },
-      async invalidateCache() { return { deletedKeys: 0 }; },
+      async invalidateCache() { return { deletedKeys: 0, verified: true, remainingKeys: 0 }; },
     });
     assert.equal(documentCleanup.status, 'completed');
     assert.equal((await getKnowledgeDeletionJob(
       auth, documentDelete.cleanupJob.id, sameTransaction,
     )).status, 'completed');
     assert.ok(documentCleanup.reindexJobId);
-    assert.deepEqual(documentPointDeletes, [{ tenantId: tenant.tenantId, documentId: document.documentId }]);
+    assert.deepEqual(documentPointDeletes, [{
+      tenantId: tenant.tenantId,
+      documentId: document.documentId,
+      options: { knowledgeBaseId },
+    }]);
     assert.deepEqual(reindexQueue, [documentCleanup.reindexJobId]);
     assert.equal((await client.query(
       'SELECT count(*)::int AS count FROM knowledge_chunks WHERE document_id=$1',

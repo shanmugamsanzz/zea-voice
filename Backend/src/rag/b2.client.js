@@ -17,6 +17,14 @@ export function knowledgeBaseB2Prefix({ tenantId, knowledgeBaseId }) {
   return `tenants/${normalizedTenantId}/knowledge-bases/${normalizedKnowledgeBaseId}/`;
 }
 
+export function knowledgeDocumentB2Prefix({ tenantId, knowledgeBaseId, documentId }) {
+  const normalizedDocumentId = String(documentId ?? '').toLowerCase();
+  if (!uuidPattern.test(normalizedDocumentId)) {
+    throw new TypeError('A valid document ID is required for B2 cleanup');
+  }
+  return `${knowledgeBaseB2Prefix({ tenantId, knowledgeBaseId })}documents/${normalizedDocumentId}/`;
+}
+
 function requiredStorageConfig() {
   const missing = [
     ['B2_S3_ENDPOINT', env.B2_S3_ENDPOINT],
@@ -175,15 +183,7 @@ export async function deleteAllB2ObjectVersions({ key }) {
   });
 }
 
-export async function deleteAllB2ObjectsUnderPrefix(
-  { prefix, tenantId, knowledgeBaseId },
-  dependencies = {},
-) {
-  const normalizedPrefix = String(prefix ?? '');
-  const expectedPrefix = knowledgeBaseB2Prefix({ tenantId, knowledgeBaseId });
-  if (normalizedPrefix !== expectedPrefix) {
-    throw new TypeError('A tenant-isolated Knowledge Base storage prefix is required');
-  }
+async function deleteAllB2ObjectsUnderPrefixInternal(normalizedPrefix, dependencies = {}) {
   return measureExternalProvider('backblaze-b2', 'delete-prefix-versions', async () => {
     const client = dependencies.client ?? getStorageClient();
     const bucket = dependencies.bucket ?? env.B2_BUCKET;
@@ -234,4 +234,28 @@ export async function deleteAllB2ObjectsUnderPrefix(
       remainingObjectVersions: 0,
     };
   });
+}
+
+export async function deleteAllB2ObjectsUnderPrefix(
+  { prefix, tenantId, knowledgeBaseId },
+  dependencies = {},
+) {
+  const normalizedPrefix = String(prefix ?? '');
+  const expectedPrefix = knowledgeBaseB2Prefix({ tenantId, knowledgeBaseId });
+  if (normalizedPrefix !== expectedPrefix) {
+    throw new TypeError('A tenant-isolated Knowledge Base storage prefix is required');
+  }
+  return deleteAllB2ObjectsUnderPrefixInternal(normalizedPrefix, dependencies);
+}
+
+export async function deleteAllB2ObjectsUnderDocumentPrefix(
+  { prefix, tenantId, knowledgeBaseId, documentId },
+  dependencies = {},
+) {
+  const normalizedPrefix = String(prefix ?? '');
+  const expectedPrefix = knowledgeDocumentB2Prefix({ tenantId, knowledgeBaseId, documentId });
+  if (normalizedPrefix !== expectedPrefix) {
+    throw new TypeError('A tenant-isolated Knowledge document storage prefix is required');
+  }
+  return deleteAllB2ObjectsUnderPrefixInternal(normalizedPrefix, dependencies);
 }

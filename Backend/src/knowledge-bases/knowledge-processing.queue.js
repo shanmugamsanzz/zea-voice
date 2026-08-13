@@ -1,20 +1,24 @@
 import { withPlatformAdminContext } from '../infrastructure/database-context.js';
 import { getQueue } from '../queues/queue.registry.js';
 
+// Five-second retries for 24 hours. Permanent deletion must survive temporary
+// Redis, Qdrant, B2 and database outages instead of stopping after three tries.
+export const permanentKnowledgeDeletionAttempts = 17_280;
+
 export async function enqueueKnowledgeProcessingJob({
   processingJobId,
   maxAttempts = 3,
   removeOnComplete = 1000,
-}) {
-  const queue = getQueue('knowledge-processing');
-  const permanentDeletion = removeOnComplete === true;
+  permanentDeletion = false,
+}, queue = getQueue('knowledge-processing')) {
+  const durableDeletion = permanentDeletion || removeOnComplete === true;
   const job = await queue.add(
     'extract-pdf-text',
     { processingJobId },
     {
       jobId: processingJobId,
-      attempts: permanentDeletion ? Math.max(maxAttempts, 17_280) : maxAttempts,
-      backoff: permanentDeletion
+      attempts: durableDeletion ? Math.max(maxAttempts, permanentKnowledgeDeletionAttempts) : maxAttempts,
+      backoff: durableDeletion
         ? { type: 'fixed', delay: 5000 }
         : { type: 'exponential', delay: 5000 },
       removeOnComplete,
@@ -26,15 +30,19 @@ export async function enqueueKnowledgeProcessingJob({
 
 export async function removeKnowledgeProcessingQueueJobs(
   jobIds = [],
-  queue = getQueue('knowledge-processing'),
+  queue = undefined,
 ) {
-  if (!queue) throw new Error('Knowledge processing queue is not available');
   const targetIds = [...new Set(jobIds.filter(Boolean).map(String))];
+  if (!targetIds.length) {
+    return { removed: [], active: [], missing: [], verified: true, remaining: [] };
+  }
+  const runtimeQueue = queue ?? getQueue('knowledge-processing');
+  if (!runtimeQueue) throw new Error('Knowledge processing queue is not available');
   const removed = [];
   const active = [];
   const missing = [];
   for (const jobId of targetIds) {
-    const job = await queue.getJob(jobId);
+    const job = await runtimeQueue.getJob(jobId);
     if (!job) {
       missing.push(jobId);
       continue;
@@ -47,7 +55,7 @@ export async function removeKnowledgeProcessingQueueJobs(
     try {
       await job.remove();
     } catch (error) {
-      const current = await queue.getJob(jobId);
+      const current = await runtimeQueue.getJob(jobId);
       if (!current) {
         removed.push(jobId);
         continue;
@@ -62,7 +70,7 @@ export async function removeKnowledgeProcessingQueueJobs(
   }
   const remaining = [];
   for (const jobId of removed) {
-    const job = await queue.getJob(jobId);
+    const job = await runtimeQueue.getJob(jobId);
     if (job) remaining.push(jobId);
   }
   if (remaining.length) {
@@ -80,29 +88,58 @@ export async function removeKnowledgeProcessingQueueJobs(
   };
 }
 
-export async function requeuePendingKnowledgeJobs() {
-  const jobs = await withPlatformAdminContext(null, async (client) => {
+export async function requeuePendingKnowledgeJobs(
+  queue = getQueue('knowledge-processing'),
+  contextRunner = withPlatformAdminContext,
+) {
+  // Repair unfinished jobs created by releases that allowed only three or ten
+  // attempts. This makes deployment self-heal deletions that were already
+  // queued or failed before durable retry support was introduced.
+  await contextRunner(null, (client) => client.query(
+    `UPDATE knowledge_processing_jobs
+        SET max_attempts=GREATEST(max_attempts,$1)
+      WHERE job_type IN ('delete_document','delete_knowledge_base')
+        AND status IN ('queued','running','failed')`,
+    [permanentKnowledgeDeletionAttempts],
+  ));
+  const jobs = await contextRunner(null, async (client) => {
     const result = await client.query(
       `SELECT id, max_attempts, job_type
          FROM knowledge_processing_jobs
-        WHERE status = 'queued' AND bullmq_job_id IS NULL
-          AND attempt_count < max_attempts
+        WHERE attempt_count < max_attempts
+          AND (
+            (status='queued' AND bullmq_job_id IS NULL)
+            OR (job_type IN ('delete_document','delete_knowledge_base')
+              AND status IN ('queued','running','failed'))
+          )
         ORDER BY scheduled_at, created_at
         LIMIT 1000`,
     );
     return result.rows;
   });
+  let reconciled = 0;
   for (const job of jobs) {
+    const existing = await queue.getJob(String(job.id));
+    if (existing) {
+      const state = await existing.getState();
+      // Waiting, delayed and active jobs are already owned by BullMQ. A
+      // completed or exhausted failed queue job with a non-completed database
+      // row is stale and is replaced below with the durable retry policy.
+      if (!['completed', 'failed'].includes(state)) continue;
+      await existing.remove();
+    }
     const queued = await enqueueKnowledgeProcessingJob({
       processingJobId: job.id,
       maxAttempts: job.max_attempts,
-      removeOnComplete: job.job_type === 'delete_knowledge_base' ? true : 1000,
-    });
-    await withPlatformAdminContext(null, (client) => client.query(
-      `UPDATE knowledge_processing_jobs SET bullmq_job_id = $2, error_code = NULL, error_message = NULL
-        WHERE id = $1 AND status = 'queued'`,
+      removeOnComplete: job.job_type.startsWith('delete_') ? true : 1000,
+      permanentDeletion: job.job_type.startsWith('delete_'),
+    }, queue);
+    await contextRunner(null, (client) => client.query(
+      `UPDATE knowledge_processing_jobs SET bullmq_job_id=$2, status='queued',
+          completed_at=NULL WHERE id=$1 AND status <> 'completed'`,
       [job.id, queued.id],
     ));
+    reconciled += 1;
   }
-  return jobs.length;
+  return reconciled;
 }

@@ -4,8 +4,9 @@ import { withPlatformAdminContext, withTenantContext } from '../infrastructure/d
 import { AppError } from '../middleware/errors.js';
 import {
   deleteAllB2ObjectsUnderPrefix,
-  deleteAllB2ObjectVersions,
+  deleteAllB2ObjectsUnderDocumentPrefix,
   knowledgeBaseB2Prefix,
+  knowledgeDocumentB2Prefix,
 } from '../rag/b2.client.js';
 import {
   deleteTenantPointsByDocument,
@@ -13,6 +14,7 @@ import {
 } from '../rag/qdrant.client.js';
 import {
   enqueueKnowledgeProcessingJob,
+  permanentKnowledgeDeletionAttempts,
   removeKnowledgeProcessingQueueJobs,
 } from './knowledge-processing.queue.js';
 import { invalidateTenantKnowledgeCache } from './knowledge-runtime.service.js';
@@ -20,8 +22,8 @@ import { invalidateTenantKnowledgeCache } from './knowledge-runtime.service.js';
 const defaultProcessingDependencies = {
   contextRunner: withPlatformAdminContext,
   storage: {
-    deleteAllVersions: deleteAllB2ObjectVersions,
     deletePrefix: deleteAllB2ObjectsUnderPrefix,
+    deleteDocumentPrefix: deleteAllB2ObjectsUnderDocumentPrefix,
   },
   deleteDocumentPoints: deleteTenantPointsByDocument,
   deleteKnowledgeBasePoints: deleteTenantPointsByKnowledgeBase,
@@ -49,7 +51,22 @@ const knowledgeCascadeTables = [
 
 const knowledgeCascadeChildren = knowledgeCascadeTables.filter((table) => table !== 'knowledge_bases');
 
-export async function verifyKnowledgeBaseCascadeContract(client) {
+const documentCascadeTables = [
+  'knowledge_documents',
+  'knowledge_document_versions',
+  'knowledge_processing_jobs',
+  'faq_entries',
+  'structured_catalogs',
+  'structured_items',
+  'structured_item_attributes',
+  'workflow_rules',
+  'conversation_flows',
+  'knowledge_chunks',
+];
+
+const documentCascadeChildren = documentCascadeTables.filter((table) => table !== 'knowledge_documents');
+
+async function verifyCascadeContract(client, { tables, rootTable, children, errorCode, label }) {
   const constraints = await client.query(
     `SELECT child.relname AS child_table, parent.relname AS parent_table,
             constraint_record.conname AS constraint_name,
@@ -64,7 +81,7 @@ export async function verifyKnowledgeBaseCascadeContract(client) {
         AND parent_namespace.nspname=current_schema()
         AND child.relname=ANY($1::text[])
         AND parent.relname=ANY($1::text[])`,
-    [knowledgeCascadeTables],
+    [tables],
   );
   const cascadeParents = new Map();
   const unsafeConstraints = [];
@@ -82,27 +99,98 @@ export async function verifyKnowledgeBaseCascadeContract(client) {
     parents.add(row.parent_table);
     cascadeParents.set(row.child_table, parents);
   }
-  const reachesKnowledgeBase = (table, visited = new Set()) => {
-    if (table === 'knowledge_bases') return true;
+  const reachesRoot = (table, visited = new Set()) => {
+    if (table === rootTable) return true;
     if (visited.has(table)) return false;
     const nextVisited = new Set(visited).add(table);
-    return [...(cascadeParents.get(table) ?? [])]
-      .some((parent) => reachesKnowledgeBase(parent, nextVisited));
+    return [...(cascadeParents.get(table) ?? [])].some((parent) => reachesRoot(parent, nextVisited));
   };
-  const missingCascadePaths = knowledgeCascadeChildren.filter((table) => !reachesKnowledgeBase(table));
+  const missingCascadePaths = children.filter((table) => !reachesRoot(table));
   if (missingCascadePaths.length || unsafeConstraints.length) {
     throw new AppError(
       500,
-      'PostgreSQL Knowledge Base cascade contract is unsafe; permanent deletion was stopped',
-      'KNOWLEDGE_DELETE_CASCADE_UNSAFE',
+      `PostgreSQL ${label} cascade contract is unsafe; permanent deletion was stopped`,
+      errorCode,
       { missingCascadePaths, unsafeConstraints },
     );
   }
-  return {
-    verified: true,
-    tables: [...knowledgeCascadeTables],
-    constraintCount: constraints.rowCount,
-  };
+  return { verified: true, tables: [...tables], constraintCount: constraints.rowCount };
+}
+
+export async function verifyKnowledgeBaseCascadeContract(client) {
+  return verifyCascadeContract(client, {
+    tables: knowledgeCascadeTables,
+    rootTable: 'knowledge_bases',
+    children: knowledgeCascadeChildren,
+    errorCode: 'KNOWLEDGE_DELETE_CASCADE_UNSAFE',
+    label: 'Knowledge Base',
+  });
+}
+
+export async function verifyKnowledgeDocumentCascadeContract(client) {
+  return verifyCascadeContract(client, {
+    tables: documentCascadeTables,
+    rootTable: 'knowledge_documents',
+    children: documentCascadeChildren,
+    errorCode: 'KNOWLEDGE_DOCUMENT_DELETE_CASCADE_UNSAFE',
+    label: 'Knowledge document',
+  });
+}
+
+async function verifyKnowledgeDocumentRowsRemoved(client, tenantId, knowledgeBaseId, documentId) {
+  const counts = await client.query(
+    `SELECT table_name, remaining_count FROM (
+       SELECT 'knowledge_documents'::text AS table_name, count(*)::int AS remaining_count
+         FROM knowledge_documents WHERE tenant_id=$1 AND knowledge_base_id=$2 AND id=$3
+       UNION ALL SELECT 'knowledge_document_versions', count(*)::int
+         FROM knowledge_document_versions WHERE tenant_id=$1 AND knowledge_base_id=$2 AND document_id=$3
+       UNION ALL SELECT 'knowledge_processing_jobs', count(*)::int
+         FROM knowledge_processing_jobs WHERE tenant_id=$1 AND knowledge_base_id=$2 AND document_id=$3
+       UNION ALL SELECT 'faq_entries', count(*)::int
+         FROM faq_entries WHERE tenant_id=$1 AND knowledge_base_id=$2 AND document_id=$3
+       UNION ALL SELECT 'structured_catalogs', count(*)::int
+         FROM structured_catalogs WHERE tenant_id=$1 AND knowledge_base_id=$2 AND document_id=$3
+       UNION ALL SELECT 'structured_items', count(*)::int
+         FROM structured_items WHERE tenant_id=$1 AND knowledge_base_id=$2 AND document_id=$3
+       UNION ALL SELECT 'structured_item_attributes', count(*)::int
+         FROM structured_item_attributes WHERE tenant_id=$1 AND knowledge_base_id=$2 AND document_id=$3
+       UNION ALL SELECT 'workflow_rules', count(*)::int
+         FROM workflow_rules WHERE tenant_id=$1 AND knowledge_base_id=$2 AND document_id=$3
+       UNION ALL SELECT 'conversation_flows', count(*)::int
+         FROM conversation_flows WHERE tenant_id=$1 AND knowledge_base_id=$2 AND document_id=$3
+       UNION ALL SELECT 'knowledge_chunks', count(*)::int
+         FROM knowledge_chunks WHERE tenant_id=$1 AND knowledge_base_id=$2 AND document_id=$3
+     ) document_cascade_verification
+     ORDER BY table_name`,
+    [tenantId, knowledgeBaseId, documentId],
+  );
+  const remaining = counts.rows.filter((row) => Number(row.remaining_count) !== 0);
+  if (remaining.length) {
+    throw new AppError(
+      500,
+      'PostgreSQL Knowledge document cascade left related records; transaction was rolled back',
+      'KNOWLEDGE_DOCUMENT_DELETE_POSTGRES_INCOMPLETE',
+      { remaining },
+    );
+  }
+  return { verified: true, tables: counts.rows.map((row) => row.table_name) };
+}
+
+async function hardDeleteKnowledgeDocumentInTransaction(client, job) {
+  const cascadeContract = await verifyKnowledgeDocumentCascadeContract(client);
+  const deleted = await client.query(
+    `DELETE FROM knowledge_documents
+      WHERE tenant_id=$1 AND knowledge_base_id=$2 AND id=$3 AND status='deleting'
+      RETURNING id`,
+    [job.tenant_id, job.knowledge_base_id, job.document_id],
+  );
+  if (!deleted.rowCount) {
+    throw new AppError(404, 'Knowledge document was not found during permanent cleanup', 'KNOWLEDGE_DOCUMENT_NOT_FOUND');
+  }
+  const cascadeCleanup = await verifyKnowledgeDocumentRowsRemoved(
+    client, job.tenant_id, job.knowledge_base_id, job.document_id,
+  );
+  return { deleted: true, cascadeContract, cascadeCleanup };
 }
 
 async function verifyKnowledgeBaseRowsRemoved(client, tenantId, knowledgeBaseId) {
@@ -258,7 +346,8 @@ async function enqueueDeletionJob(auth, job, contextRunner, queueAdapter) {
     const queued = await queueAdapter({
       processingJobId: job.id,
       maxAttempts: job.maxAttempts,
-      removeOnComplete: job.permanent === true,
+      removeOnComplete: true,
+      permanentDeletion: true,
     });
     await contextRunner(auth, (client) => client.query(
       `UPDATE knowledge_processing_jobs SET bullmq_job_id=$3,
@@ -336,7 +425,7 @@ export async function requestDeleteKnowledgeDocument(
       [auth.tenantId, documentId],
     );
     await client.query(
-      `UPDATE knowledge_documents SET status='deleted', deleted_at=now(), updated_by=$3
+      `UPDATE knowledge_documents SET status='deleting', deleted_at=NULL, updated_by=$3
         WHERE tenant_id=$1 AND id=$2`,
       [auth.tenantId, documentId, auth.userId],
     );
@@ -347,12 +436,13 @@ export async function requestDeleteKnowledgeDocument(
     );
     const job = await client.query(
       `INSERT INTO knowledge_processing_jobs (
-         tenant_id, knowledge_base_id, document_id, job_type, status, queue_name, metadata
-       ) VALUES ($1,$2,$3,'delete_document','queued','knowledge-processing',$4::jsonb)
+         tenant_id, knowledge_base_id, document_id, job_type, status, queue_name, metadata, max_attempts
+       ) VALUES ($1,$2,$3,'delete_document','queued','knowledge-processing',$4::jsonb,$5)
        RETURNING id, max_attempts`,
       [
         auth.tenantId, knowledgeBaseId, documentId,
         JSON.stringify({ reindexRevision, displayName: document.rows[0].display_name }),
+        permanentKnowledgeDeletionAttempts,
       ],
     );
     await client.query(
@@ -451,7 +541,7 @@ export async function requestDeleteKnowledgeBase(
       [auth.tenantId, knowledgeBaseId],
     );
     await client.query(
-      `UPDATE knowledge_bases SET status='deleting', deleted_at=now(), updated_by=$3
+      `UPDATE knowledge_bases SET status='deleting', deleted_at=NULL, updated_by=$3
         WHERE tenant_id=$1 AND id=$2`,
       [auth.tenantId, knowledgeBaseId, auth.userId],
     );
@@ -469,13 +559,13 @@ export async function requestDeleteKnowledgeBase(
     const job = await client.query(
       `INSERT INTO knowledge_processing_jobs (
          tenant_id, knowledge_base_id, job_type, status, queue_name, metadata, max_attempts
-       ) VALUES ($1,$2,'delete_knowledge_base','queued','knowledge-processing',$3::jsonb,10)
+       ) VALUES ($1,$2,'delete_knowledge_base','queued','knowledge-processing',$3::jsonb,$4)
        RETURNING id, max_attempts`,
       [auth.tenantId, knowledgeBaseId, JSON.stringify({
         name: row.name,
         assignedAgentIds: assignments.rows.map((assignment) => assignment.agent_id),
         runtimeProfileDrainNotBefore: new Date(Date.now() + runtimeProfileDrainGraceMs).toISOString(),
-      })],
+      }), permanentKnowledgeDeletionAttempts],
     );
     return {
       id: knowledgeBaseId,
@@ -568,8 +658,13 @@ async function claimDeletionJob(jobId, contextRunner) {
       `SELECT id, bullmq_job_id
          FROM knowledge_processing_jobs
         WHERE tenant_id=$1 AND knowledge_base_id=$2 AND id<>$3
+          AND (
+            $4::uuid IS NULL
+            OR document_id=$4
+            OR (job_type='index' AND status='cancelled')
+          )
         `,
-      [job.tenant_id, job.knowledge_base_id, job.id],
+      [job.tenant_id, job.knowledge_base_id, job.id, job.document_id],
     );
     return {
       ...job,
@@ -578,6 +673,11 @@ async function claimDeletionJob(jobId, contextRunner) {
         tenantId: job.tenant_id,
         knowledgeBaseId: job.knowledge_base_id,
       }),
+      documentStoragePrefix: job.document_id ? knowledgeDocumentB2Prefix({
+        tenantId: job.tenant_id,
+        knowledgeBaseId: job.knowledge_base_id,
+        documentId: job.document_id,
+      }) : null,
       relatedQueueJobIds: [...new Set(queueJobs.rows.flatMap(
         (row) => [row.id, row.bullmq_job_id].filter(Boolean).map(String),
       ))],
@@ -586,32 +686,10 @@ async function claimDeletionJob(jobId, contextRunner) {
   });
 }
 
-async function deleteContentRecords(client, job) {
-  const condition = job.job_type === 'delete_document'
-    ? 'knowledge_base_id=$2 AND document_id=$3'
-    : 'knowledge_base_id=$2';
-  const values = job.job_type === 'delete_document'
-    ? [job.tenant_id, job.knowledge_base_id, job.document_id]
-    : [job.tenant_id, job.knowledge_base_id];
-  for (const table of ['faq_entries', 'structured_catalogs', 'workflow_rules', 'conversation_flows', 'knowledge_chunks']) {
-    await client.query(`DELETE FROM ${table} WHERE tenant_id=$1 AND ${condition}`, values);
-  }
-}
-
 async function finishDeletion(job, contextRunner) {
   return contextRunner(null, async (client) => {
     if (job.job_type === 'delete_document') {
-      await deleteContentRecords(client, job);
-      await client.query(
-        `UPDATE knowledge_document_versions SET status='deleted', deleted_at=now(), is_current=false
-          WHERE tenant_id=$1 AND document_id=$2`,
-        [job.tenant_id, job.document_id],
-      );
-      await client.query(
-        `UPDATE knowledge_documents SET status='deleted', deleted_at=COALESCE(deleted_at,now())
-          WHERE tenant_id=$1 AND id=$2`,
-        [job.tenant_id, job.document_id],
-      );
+      const postgresCleanup = await hardDeleteKnowledgeDocumentInTransaction(client, job);
       const revision = Number(job.metadata?.reindexRevision);
       let indexJob = null;
       if (Number.isInteger(revision) && revision > 0) {
@@ -637,12 +715,7 @@ async function finishDeletion(job, contextRunner) {
           [job.tenant_id, job.knowledge_base_id],
         );
       }
-      await client.query(
-        `UPDATE knowledge_processing_jobs SET status='completed', progress=100,
-            completed_at=now(), error_code=NULL, error_message=NULL WHERE id=$1`,
-        [job.id],
-      );
-      return { indexJob };
+      return { indexJob, permanentlyDeleted: true, postgresCleanup };
     }
     const postgresCleanup = await hardDeleteKnowledgeBaseInTransaction(client, {
       tenantId: job.tenant_id,
@@ -655,11 +728,24 @@ async function finishDeletion(job, contextRunner) {
   });
 }
 
-async function failDeletion(job, error, contextRunner) {
+async function failDeletion(job, error, contextRunner, errorCode = 'KNOWLEDGE_DELETE_FAILED') {
   await contextRunner(null, (client) => client.query(
     `UPDATE knowledge_processing_jobs SET status='failed', completed_at=now(),
-        error_code='KNOWLEDGE_DELETE_FAILED', error_message=$2 WHERE id=$1 AND status <> 'completed'`,
-    [job.id, String(error.message ?? 'Knowledge deletion failed').slice(0, 4000)],
+        error_code=$2, error_message=$3 WHERE id=$1 AND status <> 'completed'`,
+    [job.id, errorCode, String(error.message ?? 'Knowledge deletion failed').slice(0, 4000)],
+  ));
+}
+
+async function queueDeletionRetry(job, error, contextRunner, errorCode = 'KNOWLEDGE_DELETE_RETRY') {
+  await contextRunner(null, (client) => client.query(
+    `UPDATE knowledge_processing_jobs SET status='queued', progress=5,
+        started_at=NULL, completed_at=NULL, error_code=$2, error_message=$3
+      WHERE id=$1 AND status <> 'completed'`,
+    [
+      job.id,
+      errorCode,
+      String(error.message ?? 'Knowledge deletion will retry').slice(0, 4000),
+    ],
   ));
 }
 
@@ -679,29 +765,35 @@ export async function processKnowledgeDeletionJob(jobId, dependencies = defaultP
       { activeCallCount: job.activeCallCount },
     );
   }
+  let cleanupStage = 'BULLMQ';
   try {
-    if (job.job_type === 'delete_knowledge_base') {
-      const queueCleanup = await runtime.removeQueueJobs(job.relatedQueueJobIds);
-      if (queueCleanup.active.length) {
-        throw new AppError(
-          409,
-          'Knowledge Base processing is still stopping; permanent cleanup will retry',
-          'KNOWLEDGE_DELETE_QUEUE_BUSY',
-        );
-      }
-      if (queueCleanup.verified !== true || queueCleanup.remaining?.length) {
-        throw new AppError(503, 'BullMQ Knowledge Base cleanup could not be verified', 'KNOWLEDGE_DELETE_QUEUE_UNVERIFIED');
-      }
+    const queueCleanup = await runtime.removeQueueJobs(job.relatedQueueJobIds);
+    if (queueCleanup.active.length) {
+      throw new AppError(
+        409,
+        'Related Knowledge processing is still stopping; permanent cleanup will retry',
+        'KNOWLEDGE_DELETE_QUEUE_BUSY',
+      );
     }
+    if (queueCleanup.verified !== true || queueCleanup.remaining?.length) {
+      throw new AppError(503, 'BullMQ Knowledge cleanup could not be verified', 'KNOWLEDGE_DELETE_QUEUE_UNVERIFIED');
+    }
+    cleanupStage = 'QDRANT';
     let qdrantCleanup;
     if (job.job_type === 'delete_document') {
-      await runtime.deleteDocumentPoints(job.tenant_id, job.document_id);
+      qdrantCleanup = await runtime.deleteDocumentPoints(job.tenant_id, job.document_id, {
+        knowledgeBaseId: job.knowledge_base_id,
+      });
+      if (qdrantCleanup?.verified !== true || qdrantCleanup?.remainingCount !== 0) {
+        throw new AppError(503, 'Qdrant document cleanup could not be verified', 'KNOWLEDGE_DELETE_QDRANT_UNVERIFIED');
+      }
     } else {
       qdrantCleanup = await runtime.deleteKnowledgeBasePoints(job.tenant_id, job.knowledge_base_id);
       if (qdrantCleanup?.verified !== true || qdrantCleanup?.remainingCount !== 0) {
         throw new AppError(503, 'Qdrant Knowledge Base cleanup could not be verified', 'KNOWLEDGE_DELETE_QDRANT_UNVERIFIED');
       }
     }
+    cleanupStage = 'B2';
     let storageCleanup;
     if (job.job_type === 'delete_knowledge_base') {
       storageCleanup = await runtime.storage.deletePrefix({
@@ -713,21 +805,25 @@ export async function processKnowledgeDeletionJob(jobId, dependencies = defaultP
         throw new AppError(503, 'B2 Knowledge Base cleanup could not be verified', 'KNOWLEDGE_DELETE_B2_UNVERIFIED');
       }
     } else {
-      for (const version of job.versions) {
-        await runtime.storage.deleteAllVersions({ key: version.b2_object_key });
-        if (version.extracted_text_object_key) {
-          await runtime.storage.deleteAllVersions({ key: version.extracted_text_object_key });
-        }
+      storageCleanup = await runtime.storage.deleteDocumentPrefix({
+        prefix: job.documentStoragePrefix,
+        tenantId: job.tenant_id,
+        knowledgeBaseId: job.knowledge_base_id,
+        documentId: job.document_id,
+      });
+      if (storageCleanup?.verified !== true || storageCleanup?.remainingObjectVersions !== 0) {
+        throw new AppError(503, 'B2 document cleanup could not be verified', 'KNOWLEDGE_DELETE_B2_UNVERIFIED');
       }
     }
+    cleanupStage = 'REDIS';
     const cacheCleanup = await runtime.invalidateCache(job.tenant_id);
     if (cacheCleanup?.incomplete) {
       throw new AppError(503, 'Knowledge Base cache cleanup was incomplete', 'KNOWLEDGE_DELETE_CACHE_INCOMPLETE');
     }
-    if (job.job_type === 'delete_knowledge_base'
-      && (cacheCleanup?.verified !== true || cacheCleanup?.remainingKeys !== 0)) {
-      throw new AppError(503, 'Redis Knowledge Base cache cleanup could not be verified', 'KNOWLEDGE_DELETE_CACHE_UNVERIFIED');
+    if (cacheCleanup?.verified !== true || cacheCleanup?.remainingKeys !== 0) {
+      throw new AppError(503, 'Redis Knowledge cache cleanup could not be verified', 'KNOWLEDGE_DELETE_CACHE_UNVERIFIED');
     }
+    cleanupStage = 'POSTGRES';
     const finished = await finishDeletion(job, runtime.contextRunner);
     if (finished.indexJob) {
       try {
@@ -749,14 +845,14 @@ export async function processKnowledgeDeletionJob(jobId, dependencies = defaultP
       permanentlyDeleted: finished.permanentlyDeleted === true,
       deletedVersionCount: job.versions.length,
       reindexJobId: finished.indexJob?.id ?? null,
-      verification: job.job_type === 'delete_knowledge_base' ? {
+      verification: {
         postgresRows: 0,
-        agentAssignments: 0,
+        ...(job.job_type === 'delete_knowledge_base' ? { agentAssignments: 0 } : {}),
         b2ObjectVersions: storageCleanup.remainingObjectVersions,
         qdrantPoints: qdrantCleanup.remainingCount,
         redisRagKeys: cacheCleanup.remainingKeys,
         bullmqJobs: 0,
-      } : undefined,
+      },
     };
   } catch (error) {
     if (error?.code === 'KNOWLEDGE_DELETE_QUEUE_BUSY') {
@@ -768,7 +864,12 @@ export async function processKnowledgeDeletionJob(jobId, dependencies = defaultP
       ));
       throw error;
     }
-    await failDeletion(job, error, runtime.contextRunner);
+    const stageErrorCode = `KNOWLEDGE_DELETE_${cleanupStage}_FAILED`;
+    if (job.attempt_count < job.max_attempts) {
+      await queueDeletionRetry(job, error, runtime.contextRunner, stageErrorCode);
+    } else {
+      await failDeletion(job, error, runtime.contextRunner, stageErrorCode);
+    }
     throw error;
   }
 }
@@ -801,11 +902,88 @@ export function getKnowledgeDeletionJob(auth, jobId, contextRunner = withTenantC
       maxAttempts: row.max_attempts,
       errorCode: row.error_code,
       errorMessage: row.error_message,
+      failedStage: deletionFailureStage(row.error_code),
       createdAt: row.created_at,
       startedAt: row.started_at,
       completedAt: row.completed_at,
     };
   });
+}
+
+function deletionFailureStage(errorCode) {
+  const code = String(errorCode ?? '').toUpperCase();
+  if (code.includes('QUEUE') || code.includes('BULLMQ')) return 'BullMQ jobs';
+  if (code.includes('QDRANT')) return 'Qdrant vectors';
+  if (code.includes('B2')) return 'Backblaze B2 files';
+  if (code.includes('CACHE') || code.includes('REDIS')) return 'Redis caches';
+  if (code.includes('POSTGRES') || code.includes('CASCADE')) return 'PostgreSQL records';
+  if (code.includes('ACTIVE_CALLS')) return 'active-call drain';
+  return errorCode ? 'cleanup verification' : null;
+}
+
+export async function retryKnowledgeDeletionJob(
+  auth,
+  jobId,
+  contextRunner = withTenantContext,
+  queueAdapter = enqueueKnowledgeProcessingJob,
+  queueRemovalAdapter = removeKnowledgeProcessingQueueJobs,
+) {
+  const job = await contextRunner(auth, async (client) => {
+    const result = await client.query(
+      `SELECT j.id, j.status, j.job_type, j.knowledge_base_id, j.document_id, j.bullmq_job_id
+         FROM knowledge_processing_jobs j
+         JOIN knowledge_bases kb ON kb.tenant_id=j.tenant_id AND kb.id=j.knowledge_base_id
+        WHERE j.tenant_id=$1 AND kb.workspace_id=$2 AND j.id=$3
+          AND j.job_type IN ('delete_document','delete_knowledge_base')
+        FOR UPDATE OF j`,
+      [auth.tenantId, auth.workspaceId, jobId],
+    );
+    if (!result.rowCount) {
+      throw new AppError(404, 'Knowledge deletion job was not found', 'KNOWLEDGE_DELETE_JOB_NOT_FOUND');
+    }
+    if (result.rows[0].status !== 'failed') {
+      throw new AppError(409, 'Only a failed Knowledge deletion can be retried', 'KNOWLEDGE_DELETE_RETRY_NOT_ALLOWED');
+    }
+    const updated = await client.query(
+      `UPDATE knowledge_processing_jobs SET status='queued', progress=0,
+          attempt_count=0, max_attempts=$2, bullmq_job_id=NULL,
+          scheduled_at=now(), started_at=NULL, completed_at=NULL,
+          error_code=NULL, error_message=NULL
+        WHERE id=$1
+        RETURNING id, max_attempts`,
+      [jobId, permanentKnowledgeDeletionAttempts],
+    );
+    return {
+      id: updated.rows[0].id,
+      maxAttempts: updated.rows[0].max_attempts,
+      knowledgeBaseId: result.rows[0].knowledge_base_id,
+      documentId: result.rows[0].document_id,
+      type: result.rows[0].job_type,
+      relatedQueueJobIds: [result.rows[0].id, result.rows[0].bullmq_job_id].filter(Boolean).map(String),
+    };
+  });
+  const queueCleanup = await queueRemovalAdapter(job.relatedQueueJobIds);
+  if (queueCleanup.active.length || queueCleanup.verified !== true || queueCleanup.remaining?.length) {
+    throw new AppError(
+      409,
+      'The previous BullMQ deletion attempt is still stopping; retry will be reconciled automatically',
+      'KNOWLEDGE_DELETE_QUEUE_BUSY',
+    );
+  }
+  await enqueueDeletionJob(auth, job, contextRunner, queueAdapter);
+  return {
+    id: job.id,
+    knowledgeBaseId: job.knowledgeBaseId,
+    documentId: job.documentId,
+    type: job.type,
+    status: 'queued',
+    progress: 0,
+    attemptCount: 0,
+    maxAttempts: job.maxAttempts,
+    errorCode: null,
+    errorMessage: null,
+    failedStage: null,
+  };
 }
 
 export async function purgePreviouslySoftDeletedKnowledgeBases(

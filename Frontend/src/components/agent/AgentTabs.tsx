@@ -172,6 +172,7 @@ interface KnowledgeBaseApiData {
   failedDocumentCount: number;
   assignedAgentCount: number;
   semanticIndex: { status?: string; progress?: number; errorMessage?: string | null } | null;
+  deletionJob: KnowledgeDeletionJob | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -249,6 +250,18 @@ interface KnowledgeDeletionJob {
   progress: number;
   errorCode?: string | null;
   errorMessage: string | null;
+  failedStage?: string | null;
+}
+
+function deletionStageLabel(job?: KnowledgeDeletionJob) {
+  if (job?.failedStage) return job.failedStage;
+  const code = String(job?.errorCode ?? '').toUpperCase();
+  if (code.includes('QUEUE') || code.includes('BULLMQ')) return 'BullMQ jobs';
+  if (code.includes('QDRANT')) return 'Qdrant vectors';
+  if (code.includes('B2')) return 'Backblaze B2 files';
+  if (code.includes('CACHE') || code.includes('REDIS')) return 'Redis caches';
+  if (code.includes('POSTGRES') || code.includes('CASCADE')) return 'PostgreSQL records';
+  return 'cleanup verification';
 }
 
 const knowledgeStatusStyles: Record<KnowledgeBaseStatus, string> = {
@@ -624,6 +637,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const [deleteKnowledgeBaseConfirmation, setDeleteKnowledgeBaseConfirmation] = useState('');
   const [showKnowledgeBaseDeleteDialog, setShowKnowledgeBaseDeleteDialog] = useState(false);
   const [knowledgeDeletionJobs, setKnowledgeDeletionJobs] = useState<Record<string, KnowledgeDeletionJob>>({});
+  const [retryingKnowledgeDeletionJobIds, setRetryingKnowledgeDeletionJobIds] = useState<string[]>([]);
   const knowledgeFileObjects = useRef<Record<KnowledgeDocumentType, File | null>>(emptyKnowledgeFileObjects());
   const [knowledgeFiles, setKnowledgeFiles] = useState<Record<KnowledgeDocumentType, SelectedKnowledgeFile | null>>(() => emptyKnowledgeFiles());
   const [knowledgeFileErrors, setKnowledgeFileErrors] = useState<Partial<Record<KnowledgeDocumentType, string>>>({});
@@ -687,6 +701,16 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
             : Promise.resolve([]),
         ]);
         setKnowledgeBases(list.items);
+        const persistedBaseDeletionJobs = list.items
+          .map((knowledgeBase) => knowledgeBase.deletionJob)
+          .filter((job): job is KnowledgeDeletionJob => Boolean(job?.id));
+        if (persistedBaseDeletionJobs.length) {
+          setKnowledgeDeletionJobs((current) => {
+            const next = { ...current };
+            persistedBaseDeletionJobs.forEach((job) => { next[job.id] = job; });
+            return next;
+          });
+        }
         setKnowledgeAssignments(assignments);
         setSelectedKnowledgeBaseId((current) => {
           if (current && list.items.some((knowledgeBase) => knowledgeBase.id === current)) return current;
@@ -732,7 +756,27 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         );
         if (controller.signal.aborted) return;
         setKnowledgeDocuments(result.items);
-        const active = result.items.some((document) => ['uploading', 'queued', 'processing', 'deleting'].includes(document.status)
+        const persistedDocumentDeletionJobs = result.items
+          .filter((document) => document.processingJob?.type === 'delete_document')
+          .map((document) => ({
+            id: document.processingJob!.id,
+            knowledgeBaseId: document.knowledgeBaseId,
+            documentId: document.id,
+            type: 'delete_document' as const,
+            status: document.processingJob!.status,
+            progress: document.processingJob!.progress,
+            errorCode: document.processingJob!.errorCode,
+            errorMessage: document.processingJob!.errorMessage,
+          }));
+        if (persistedDocumentDeletionJobs.length) {
+          setKnowledgeDeletionJobs((current) => {
+            const next = { ...current };
+            persistedDocumentDeletionJobs.forEach((job) => { next[job.id] = job; });
+            return next;
+          });
+        }
+        const active = result.items.some((document) => ['uploading', 'queued', 'processing'].includes(document.status)
+          || (document.status === 'deleting' && document.processingJob?.status !== 'failed')
           || document.processingJob?.status === 'queued' || document.processingJob?.status === 'running');
         if (active) nextPoll = window.setTimeout(() => setKnowledgeDocumentPollTick((value) => value + 1), 2500);
         else if (knowledgeDocumentPollTick > 0) setKnowledgeRefreshKey((value) => value + 1);
@@ -761,10 +805,10 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
             { zeaCache: 'bypass' },
           );
         } catch (requestError) {
-          // A permanent Knowledge Base delete cascades its PostgreSQL cleanup
-          // job. Once that happens the polling endpoint correctly returns 404.
-          if (job.type === 'delete_knowledge_base'
-            && (requestError as { status?: unknown })?.status === 404) {
+          // A successful permanent delete cascades its own PostgreSQL cleanup
+          // job. A 404 therefore becomes "Deleted" only after the guarded
+          // external cleanup and hard-delete transaction have completed.
+          if ((requestError as { status?: unknown })?.status === 404) {
             return { ...job, status: 'completed' as const, progress: 100 };
           }
           throw requestError;
@@ -787,6 +831,10 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         setKnowledgeDocuments((current) => current.filter((document) => !completedDocumentIds.has(document.id)));
         setKnowledgeBases((current) => current.filter((knowledgeBase) => !completedKnowledgeBaseIds.has(knowledgeBase.id)));
         setSelectedKnowledgeBaseId((current) => completedKnowledgeBaseIds.has(current) ? '' : current);
+        setSuccessMsg(completed.some((job) => job.type === 'delete_knowledge_base')
+          ? 'Knowledge Base permanently deleted from every storage system.'
+          : 'Document permanently deleted from every storage system.');
+        window.setTimeout(() => setSuccessMsg(null), 3000);
         setKnowledgeRefreshKey((value) => value + 1);
       }
     }, 2000);
@@ -1259,6 +1307,27 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     }));
     setKnowledgeFileErrors((current) => ({ ...current, [documentType]: undefined }));
     window.setTimeout(() => { void uploadKnowledgeSource(documentType); }, 0);
+  };
+
+  const retryKnowledgeDeletion = async (job: KnowledgeDeletionJob) => {
+    if (isReadOnly || job.status !== 'failed' || retryingKnowledgeDeletionJobIds.includes(job.id)) return;
+    setRetryingKnowledgeDeletionJobIds((current) => [...current, job.id]);
+    if (job.type === 'delete_knowledge_base') setKnowledgeError('');
+    else setKnowledgeDocumentsError('');
+    try {
+      const retried = await apiRequest<KnowledgeDeletionJob>(
+        `/knowledge-bases/deletion-jobs/${job.id}/retry`,
+        { method: 'POST', zeaCache: 'bypass' },
+      );
+      setKnowledgeDeletionJobs((current) => ({ ...current, [retried.id]: retried }));
+      showKnowledgeSuccess(`Deletion retry started from ${deletionStageLabel(job)}.`);
+    } catch (requestError) {
+      const message = requestError instanceof Error ? requestError.message : 'Deletion retry could not be started';
+      if (job.type === 'delete_knowledge_base') setKnowledgeError(message);
+      else setKnowledgeDocumentsError(message);
+    } finally {
+      setRetryingKnowledgeDeletionJobIds((current) => current.filter((id) => id !== job.id));
+    }
   };
 
   const removeKnowledgeSource = (documentType: KnowledgeDocumentType) => {
@@ -4145,7 +4214,17 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     {knowledgeAssignmentSaving ? 'Updating assignment...' : selectedKnowledgeAssignment ? 'Unassign from Agent' : selectedKnowledgeBase.status === 'published' ? 'Assign to Agent' : 'Publish Before Assignment'}
                   </button>}
                   {!isReadOnly && !['deleting', 'deleted'].includes(selectedKnowledgeBase.status) && <div className="mt-2 grid grid-cols-2 gap-2"><button type="button" onClick={() => openEditKnowledgeBase(selectedKnowledgeBase)} disabled={knowledgeSaving || knowledgeDeleting} className="rounded-lg border border-violet-200 bg-white px-3 py-2 text-xs font-bold text-violet-700 transition hover:bg-violet-50 disabled:opacity-50">Edit</button><button type="button" onClick={() => { setDeleteKnowledgeBaseConfirmation(''); setShowKnowledgeBaseDeleteDialog(true); }} disabled={knowledgeSaving || knowledgeDeleting} className="rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-bold text-red-600 transition hover:bg-red-50 disabled:opacity-50">Delete</button></div>}
-                  {selectedKnowledgeBase.status === 'deleting' && <div className="mt-4 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-red-700">{selectedKnowledgeDeletionJob?.status === 'failed' ? <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : <RefreshCw className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />}<span className="text-[10px] font-semibold">{selectedKnowledgeDeletionJob?.status === 'failed' ? `Cleanup failed: ${selectedKnowledgeDeletionJob.errorMessage || 'The backend will retain the failed job for reconciliation.'}` : ['KNOWLEDGE_DELETE_ACTIVE_CALLS', 'KNOWLEDGE_DELETE_QUEUE_BUSY'].includes(selectedKnowledgeDeletionJob?.errorCode ?? '') ? `Deleting permanently is waiting safely: ${selectedKnowledgeDeletionJob.errorMessage || 'active work is still using this Knowledge Base.'}` : `Deleting permanently (${selectedKnowledgeDeletionJob?.progress ?? 0}%): removing documents, approved data, stored files and vectors. The Knowledge Base cannot be changed or assigned.`}</span></div>}
+                  {selectedKnowledgeBase.status === 'deleting' && <div className="mt-4 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-red-700">
+                    {selectedKnowledgeDeletionJob?.status === 'failed' ? <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : <RefreshCw className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />}
+                    <div className="min-w-0 flex-1 text-[10px] font-semibold">
+                      <p>{selectedKnowledgeDeletionJob?.status === 'failed'
+                        ? `Cleanup failed at ${deletionStageLabel(selectedKnowledgeDeletionJob)}: ${selectedKnowledgeDeletionJob.errorMessage || 'verification did not complete.'}`
+                        : ['KNOWLEDGE_DELETE_ACTIVE_CALLS', 'KNOWLEDGE_DELETE_QUEUE_BUSY'].includes(selectedKnowledgeDeletionJob?.errorCode ?? '')
+                          ? `Deleting permanently is waiting safely: ${selectedKnowledgeDeletionJob.errorMessage || 'active work is still using this Knowledge Base.'}`
+                          : `Deleting… (${selectedKnowledgeDeletionJob?.progress ?? 0}%): removing documents, approved data, stored files and vectors. Editing, publishing and repeated deletion are disabled.`}</p>
+                      {selectedKnowledgeDeletionJob?.status === 'failed' && !isReadOnly && <button type="button" onClick={() => void retryKnowledgeDeletion(selectedKnowledgeDeletionJob)} disabled={retryingKnowledgeDeletionJobIds.includes(selectedKnowledgeDeletionJob.id)} className="mt-2 rounded-md border border-red-300 bg-white px-2.5 py-1 text-[9px] font-black uppercase text-red-700 disabled:opacity-50">{retryingKnowledgeDeletionJobIds.includes(selectedKnowledgeDeletionJob.id) ? 'Retrying…' : 'Retry cleanup'}</button>}
+                    </div>
+                  </div>}
                   <div className="mt-4 rounded-lg border border-dashed border-slate-300 bg-white p-4 text-center text-[11px] font-semibold text-slate-400">Choose one of the five categories below, then upload a PDF or UTF-8 TXT file.</div>
                 </div>}
               </div>
@@ -4224,7 +4303,15 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[9px] font-semibold text-slate-400"><span>{document.currentVersion?.pageCount ?? 0} pages</span><span>{document.currentVersion?.chunkCount ?? 0} chunks</span><span>Attempt {document.processingJob?.attemptCount ?? 0}/{document.processingJob?.maxAttempts ?? 0}</span><span>Uploaded {new Date(document.createdAt).toLocaleString()}</span></div>
                   {(document.status === 'failed' || errorMessage) && <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-[10px] font-semibold text-red-700">{errorMessage || 'Document processing failed. Select the PDF again to retry with a new upload.'}</div>}
                   {document.status === 'review_required' && <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-[10px] font-semibold text-amber-700">Extraction completed. Developer review is required before publishing.</div>}
-                  {document.status === 'deleting' && <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-red-700">{deletionJob?.status === 'failed' ? <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : <RefreshCw className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />}<span className="text-[10px] font-semibold">{deletionJob?.status === 'failed' ? `Cleanup failed: ${deletionJob.errorMessage || 'The backend retained this job for reconciliation.'}` : `Deleting every version, extracted record, B2 object and Qdrant vector (${deletionJob?.progress ?? 0}%).`}</span></div>}
+                  {document.status === 'deleting' && <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-red-700">
+                    {deletionJob?.status === 'failed' ? <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : <RefreshCw className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />}
+                    <div className="min-w-0 flex-1 text-[10px] font-semibold">
+                      <p>{deletionJob?.status === 'failed'
+                        ? `Cleanup failed at ${deletionStageLabel(deletionJob)}: ${deletionJob.errorMessage || 'verification did not complete.'}`
+                        : `Deleting… every version, extracted record, B2 object and Qdrant vector (${deletionJob?.progress ?? 0}%). Editing and repeated deletion are disabled.`}</p>
+                      {deletionJob?.status === 'failed' && !isReadOnly && <button type="button" onClick={() => void retryKnowledgeDeletion(deletionJob)} disabled={retryingKnowledgeDeletionJobIds.includes(deletionJob.id)} className="mt-2 rounded-md border border-red-300 bg-white px-2.5 py-1 text-[9px] font-black uppercase text-red-700 disabled:opacity-50">{retryingKnowledgeDeletionJobIds.includes(deletionJob.id) ? 'Retrying…' : 'Retry cleanup'}</button>}
+                    </div>
+                  </div>}
                 </article>;
               })}</div>}
             </section>}

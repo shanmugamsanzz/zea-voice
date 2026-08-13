@@ -13,6 +13,22 @@ const connection = {
 };
 
 let worker;
+let reconciliationTimer;
+let reconciliationRunning = false;
+const reconciliationIntervalMs = 15_000;
+
+async function reconcilePendingJobs() {
+  if (reconciliationRunning) return 0;
+  reconciliationRunning = true;
+  try {
+    return await requeuePendingKnowledgeJobs();
+  } catch (error) {
+    logger.error({ err: error, queueName: 'knowledge-processing' }, 'Knowledge job reconciliation failed');
+    return 0;
+  } finally {
+    reconciliationRunning = false;
+  }
+}
 
 export async function startKnowledgeProcessingWorker() {
   if (!env.RAG_ENABLED || !env.KNOWLEDGE_WORKERS_ENABLED || worker) return worker;
@@ -49,11 +65,17 @@ export async function startKnowledgeProcessingWorker() {
   worker.on('error', (error) => {
     logger.error({ err: error, queueName: 'knowledge-processing' }, 'Knowledge worker error');
   });
+  reconciliationTimer = setInterval(() => void reconcilePendingJobs(), reconciliationIntervalMs);
+  reconciliationTimer.unref?.();
   logger.info({ requeued, concurrency: env.KNOWLEDGE_WORKER_CONCURRENCY }, 'Knowledge processing worker started');
   return worker;
 }
 
 export async function closeKnowledgeProcessingWorker() {
+  if (reconciliationTimer) {
+    clearInterval(reconciliationTimer);
+    reconciliationTimer = undefined;
+  }
   if (!worker) return;
   const closing = worker;
   worker = undefined;

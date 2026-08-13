@@ -225,30 +225,66 @@ export async function deleteTenantPointsByKnowledgeBase(
   return { deleted: true, verified: true, remainingCount, collectionMissing: false };
 }
 
-async function deleteTenantPointsByEntity(tenantId, field, entityId, operation) {
-  const tenant = tenantId.toLowerCase();
+async function deleteTenantPointsByEntity(
+  tenantId,
+  field,
+  entityId,
+  operation,
+  { knowledgeBaseId = undefined } = {},
+) {
+  const tenant = requireTenantId(tenantId);
+  const entity = requireEntityId(entityId, field);
   const collectionName = collectionForTenant(tenant);
+  const must = [
+    { key: 'tenant_id', match: { value: tenant } },
+    { key: field, match: { value: entity } },
+  ];
+  if (knowledgeBaseId !== undefined) {
+    must.splice(1, 0, {
+      key: 'knowledge_base_id',
+      match: { value: requireEntityId(knowledgeBaseId, 'knowledgeBaseId') },
+    });
+  }
   try {
     await qdrantFetch(`/collections/${encodeURIComponent(collectionName)}/points/delete?wait=true`, {
       method: 'POST',
       operation,
-      body: JSON.stringify({
-        filter: {
-          must: [
-            { key: 'tenant_id', match: { value: tenant } },
-            { key: field, match: { value: entityId.toLowerCase() } },
-          ],
-        },
-      }),
+      body: JSON.stringify({ filter: { must } }),
     });
   } catch (error) {
     if (error.statusCode !== 404) throw error;
+    return { deleted: true, verified: true, remainingCount: 0, collectionMissing: true };
   }
-  return { deleted: true };
+  let counted;
+  try {
+    counted = await qdrantFetch(`/collections/${encodeURIComponent(collectionName)}/points/count`, {
+      method: 'POST',
+      operation: `verify-${operation}`,
+      body: JSON.stringify({ filter: { must }, exact: true }),
+    });
+  } catch (error) {
+    if (error.statusCode === 404) {
+      return { deleted: true, verified: true, remainingCount: 0, collectionMissing: true };
+    }
+    throw error;
+  }
+  const remainingCount = counted?.result?.count;
+  if (!Number.isInteger(remainingCount) || remainingCount < 0) {
+    throw new Error('Qdrant returned an invalid entity deletion verification count');
+  }
+  if (remainingCount !== 0) {
+    const error = new Error(`Qdrant still contains ${remainingCount} matching ${field} point(s)`);
+    error.code = 'QDRANT_KNOWLEDGE_DELETE_INCOMPLETE';
+    error.remainingCount = remainingCount;
+    throw error;
+  }
+  return { deleted: true, verified: true, remainingCount, collectionMissing: false };
 }
 
-export function deleteTenantPointsByDocument(tenantId, documentId) {
-  return deleteTenantPointsByEntity(tenantId, 'document_id', documentId, 'delete-document-points');
+export function deleteTenantPointsByDocument(tenantId, documentId, options = {}) {
+  return deleteTenantPointsByEntity(
+    tenantId, 'document_id', documentId, 'delete-document-points', options,
+  );
 }
 
 export function deleteTenantPointsByDocumentVersion(tenantId, documentVersionId) {

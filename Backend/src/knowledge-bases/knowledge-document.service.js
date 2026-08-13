@@ -71,7 +71,7 @@ const documentSelect = `
       j.created_at AS processing_job_created_at, j.completed_at AS processing_job_completed_at
     FROM knowledge_processing_jobs j
     WHERE j.tenant_id = d.tenant_id AND j.document_id = d.id
-      AND j.document_version_id = v.id
+      AND (j.job_type = 'delete_document' OR j.document_version_id = v.id)
     ORDER BY j.created_at DESC
     LIMIT 1
   ) latest_job ON true`;

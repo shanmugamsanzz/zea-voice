@@ -31,6 +31,27 @@ const knowledgeBaseSelect = `
       ORDER BY j.created_at DESC
       LIMIT 1
     ) AS semantic_index
+    ,(
+      SELECT jsonb_build_object(
+        'id', j.id,
+        'knowledgeBaseId', j.knowledge_base_id,
+        'documentId', j.document_id,
+        'type', j.job_type,
+        'status', j.status,
+        'progress', j.progress,
+        'attemptCount', j.attempt_count,
+        'maxAttempts', j.max_attempts,
+        'errorCode', j.error_code,
+        'errorMessage', j.error_message,
+        'createdAt', j.created_at,
+        'completedAt', j.completed_at
+      )
+      FROM knowledge_processing_jobs j
+      WHERE j.tenant_id = kb.tenant_id AND j.knowledge_base_id = kb.id
+        AND j.job_type = 'delete_knowledge_base'
+      ORDER BY j.created_at DESC
+      LIMIT 1
+    ) AS deletion_job
   FROM knowledge_bases kb
   LEFT JOIN knowledge_documents d
     ON d.tenant_id = kb.tenant_id AND d.knowledge_base_id = kb.id
@@ -55,6 +76,7 @@ function mapKnowledgeBase(row) {
     failedDocumentCount: row.failed_document_count,
     assignedAgentCount: row.assigned_agent_count,
     semanticIndex: row.semantic_index,
+    deletionJob: row.deletion_job,
     createdBy: row.created_by,
     updatedBy: row.updated_by,
     createdAt: row.created_at,

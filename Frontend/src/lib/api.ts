@@ -171,6 +171,7 @@ async function networkApiRequest<T>(path: string, init: ApiRequestInit = {}, ret
   const token = getAccessToken();
   const headers = new Headers(init.headers);
   const { zeaCache: _zeaCache, ...requestInit } = init;
+  if (init.zeaCache === 'bypass') requestInit.cache = 'no-store';
   const isMultipart = typeof FormData !== 'undefined' && init.body instanceof FormData;
   if (init.body && !isMultipart && !headers.has('content-type')) headers.set('content-type', 'application/json');
   if (token) headers.set('authorization', `Bearer ${token}`);

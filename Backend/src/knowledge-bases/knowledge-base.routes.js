@@ -21,7 +21,7 @@ import { knowledgeDocumentRouter } from './knowledge-document.routes.js';
 import { getKnowledgeBaseReviewSummary, publishKnowledgeBase } from './knowledge-review.service.js';
 import { runtimeKnowledgeQuerySchema } from './knowledge-runtime.schemas.js';
 import { routeKnowledgeQuery } from './knowledge-runtime.service.js';
-import { getKnowledgeDeletionJob } from './knowledge-deletion.service.js';
+import { getKnowledgeDeletionJob, retryKnowledgeDeletionJob } from './knowledge-deletion.service.js';
 
 function valid(schema, value) {
   const parsed = parseKnowledgeBaseInput(schema, value);
@@ -57,7 +57,16 @@ knowledgeBaseRouter.get('/', async (request, response) => {
 
 knowledgeBaseRouter.get('/deletion-jobs/:jobId', async (request, response) => {
   const { jobId } = valid(knowledgeDeletionJobIdSchema, request.params);
+  response.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+  response.set('Pragma', 'no-cache');
+  response.set('Expires', '0');
   response.json({ success: true, data: await getKnowledgeDeletionJob(auth(request), jobId) });
+});
+
+knowledgeBaseRouter.post('/deletion-jobs/:jobId/retry', canManageKnowledgeBases, async (request, response) => {
+  const { jobId } = valid(knowledgeDeletionJobIdSchema, request.params);
+  response.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+  response.json({ success: true, data: await retryKnowledgeDeletionJob(auth(request), jobId) });
 });
 
 knowledgeBaseRouter.get('/:knowledgeBaseId', async (request, response) => {

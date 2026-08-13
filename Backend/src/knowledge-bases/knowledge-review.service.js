@@ -528,6 +528,13 @@ export async function publishKnowledgeBase(
       [auth.tenantId, auth.workspaceId, knowledgeBaseId],
     );
     if (!knowledgeBase.rowCount) throw new AppError(404, 'Knowledge Base was not found', 'KNOWLEDGE_BASE_NOT_FOUND');
+    if (['deleting', 'deleted'].includes(knowledgeBase.rows[0].status)) {
+      throw new AppError(
+        409,
+        'Knowledge Base cannot be published while permanent deletion is running',
+        'KNOWLEDGE_BASE_NOT_EDITABLE',
+      );
+    }
     if (knowledgeBase.rows[0].status === 'published') {
       throw new AppError(409, 'Knowledge Base is already published', 'KNOWLEDGE_BASE_ALREADY_PUBLISHED');
     }
