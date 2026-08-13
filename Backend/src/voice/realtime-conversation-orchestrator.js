@@ -135,19 +135,52 @@ function documentSpeech(value) {
 // tenant-approved document content; it never invents a new answer.
 export function approvedDocumentFallback(knowledge, profile) {
   const candidates = [
-    { content: knowledge?.content, source: knowledge?.source },
+    ...(knowledge?.rankedEvidence ?? []).map((evidence, index) => ({
+      content: evidence.content, source: evidence.source ?? evidence,
+      route: evidence.route, score: 2_000 + Number(evidence.score ?? 0) - index,
+    })),
+    ...(knowledge?.workflowHints ?? []).map((hint, index) => ({
+      content: hint.content, source: hint.source ?? hint,
+      route: 'workflow_hint', score: 1_800 - index,
+    })),
+    ...(knowledge?.tenantEvidence?.sources ?? []).map((source, index) => ({
+      content: source.content, source,
+      route: source.recordType, score: 1_600 - index,
+    })),
     ...(knowledge?.matches ?? []).map((match) => ({
       content: match.answer ?? match.content,
       source: match,
+      route: match.recordType,
+      score: 1_400 + Number(match.score ?? 0),
     })),
-    ...(knowledge?.tenantEvidence?.sources ?? []).map((source) => ({
-      content: source.content,
-      source,
-    })),
+    {
+      content: knowledge?.content, source: knowledge?.source,
+      route: knowledge?.route,
+      score: knowledge?.workflow?.deterministic === true ? 3_000 : 1_000,
+    },
   ];
-  for (const candidate of candidates) {
-    const answer = documentSpeech(candidate.content);
-    if (answer) return { text: answer, source: candidate.source ?? null };
+  const typeWeight = (value) => {
+    const type = String(value ?? '').toLocaleLowerCase();
+    if (type.includes('workflow')) return 500;
+    if (type.includes('conversation')) return 450;
+    if (type.includes('faq')) return 400;
+    if (type.includes('catalog')) return 300;
+    if (type.includes('general') || type.includes('knowledge')) return 200;
+    return 0;
+  };
+  const ranked = candidates.map((candidate, index) => ({
+    ...candidate,
+    answer: documentSpeech(candidate.content),
+    rank: Number(candidate.score ?? 0)
+      + typeWeight(candidate.route ?? candidate.source?.recordType) - index / 100,
+  })).filter((candidate) => candidate.answer)
+    .sort((left, right) => right.rank - left.rank);
+  const seen = new Set();
+  for (const candidate of ranked) {
+    const key = candidate.answer.normalize('NFKC').toLocaleLowerCase().replace(/\s+/gu, ' ').trim();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    return { text: candidate.answer, source: candidate.source ?? null };
   }
   return { text: callerFacingFallback(profile), source: null };
 }
@@ -2409,7 +2442,25 @@ export class RealtimeConversationOrchestrator {
             ],
           };
         }
-      } else response = initialResponse;
+      } else {
+        // Understanding validation can fail because of malformed structured
+        // output even when retrieval already found a valid tenant answer.
+        // Speak the best approved evidence instead of exposing a technical
+        // recovery message for a normal caller question.
+        const documentFallback = approvedDocumentFallback(knowledge, this.runtimeProfile);
+        response = {
+          ...initialResponse,
+          text: documentFallback.text,
+          sources: [
+            ...(initialResponse.sources ?? []),
+            ...(documentFallback.source ? [createMessageSource(messageSourceTypes.KNOWLEDGE, {
+              id: documentFallback.source.recordId ?? documentFallback.source.id,
+              label: 'Approved understanding fallback',
+              metadata: { recordType: documentFallback.source.recordType },
+            })] : []),
+          ],
+        };
+      }
       }
     } catch (error) {
       this.#recordProviderFailure('llm', error, 'llm.response');

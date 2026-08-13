@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { performance } from 'node:perf_hooks';
 import { classifyCatalogEntityLocally } from '../src/knowledge-bases/catalog-entity-resolver.js';
+import { detectConversationIntent } from '../src/voice/interaction/intent-detector.js';
 import { openLiveCallMemory } from '../src/voice/interaction/live-call-memory.js';
 import {
   buildGroundingEnvelope,
@@ -51,6 +52,18 @@ for (const [catalog, query, expectedKey] of multilingualCases) {
   const result = classifyCatalogEntityLocally(catalog, query);
   assert.equal(result.status, 'match', `Expected a confident match for: ${query}`);
   assert.equal(result.item.item_key, expectedKey);
+}
+
+const packageQuestionCases = [
+  ['what packages are available?', 'overview'],
+  ['organ specific packages sollunga', 'category_request'],
+  ['silver package explain pannunga', 'details'],
+  ['diabetic package price evlo?', 'price'],
+  ['full body checkup which package should I choose?', 'scenario'],
+  ['kids health package details', 'details'],
+];
+for (const [query, expectedIntent] of packageQuestionCases) {
+  assert.equal(detectConversationIntent(query).intent, expectedIntent, query);
 }
 
 const unrelatedAcrossIndustries = classifyCatalogEntityLocally(retail, 'Premium Male Screening');
@@ -146,7 +159,7 @@ const approvedFallback = approvedDocumentFallback({
   tenantEvidence: { sources: [{ recordId: 'faq-office', recordType: 'FAQ', content: 'Our office is downtown.' }] },
 }, { agent: { language: 'English', settings: {} } });
 assert.equal(approvedFallback.text, 'Our office is downtown.');
-assert.equal(approvedFallback.source, null);
+assert.equal(approvedFallback.source.recordId, 'faq-office');
 
 const evidenceOnlyFallback = approvedDocumentFallback({
   found: true,
@@ -154,6 +167,53 @@ const evidenceOnlyFallback = approvedDocumentFallback({
 }, { agent: { language: 'English', settings: {} } });
 assert.equal(evidenceOnlyFallback.text, 'Our office is downtown.');
 assert.equal(evidenceOnlyFallback.source.recordId, 'faq-office');
+
+const rankedFallback = approvedDocumentFallback({
+  found: true,
+  route: 'catalog',
+  content: 'Approved Item - USD 100',
+  source: { recordId: 'catalog-item', recordType: 'catalog_item' },
+  rankedEvidence: [{
+    route: 'faq', score: 900, content: 'Approved Item includes priority support.',
+    source: { recordId: 'faq-details', recordType: 'FAQ' },
+  }],
+}, { agent: { language: 'English', settings: {} } });
+assert.equal(rankedFallback.text, 'Approved Item includes priority support.');
+assert.equal(rankedFallback.source.recordId, 'faq-details');
+assert.doesNotMatch(rankedFallback.text, /temporary problem|technical/iu);
+
+const bookingJourney = openLiveCallMemory({
+  tenantId: 'tenant-booking', workspaceId: 'workspace-booking',
+  agentId: 'agent-booking', callId: 'call-booking',
+}, {
+  conversationInitialStage: 'package_explanation',
+  conversationContextMode: 'full_current_call',
+  conversationMemoryFields: [
+    { key: 'patient_name', label: 'Patient name', type: 'text', required: true, question: 'Patient name?', requiredAction: 'appointment_booking' },
+    { key: 'patient_age', label: 'Patient age', type: 'number', required: true, question: 'Patient age?', requiredAction: 'appointment_booking' },
+    { key: 'preferred_date', label: 'Preferred date', type: 'date', required: true, question: 'Which date?', requiredAction: 'appointment_booking' },
+    { key: 'preferred_time', label: 'Preferred time', type: 'text', required: true, question: 'Which time?', requiredAction: 'appointment_booking' },
+  ],
+});
+bookingJourney.applyKnowledge({
+  route: 'catalog', found: true, source: { recordId: 'approved-package' },
+  item: { key: 'approved-package', name: 'Approved Package', category: 'Packages', categoryKey: 'packages' },
+});
+assert.equal(bookingJourney.snapshot().lockedFields.length, 4);
+bookingJourney.activateAction('appointment_booking', { requiresCatalogItem: true, nextStage: 'booking_details' });
+for (const [question, answer] of [
+  ['Patient name?', 'My name is Mitra'], ['Patient age?', '30'],
+  ['Which date?', '13th August'], ['Which time?', '9 AM'],
+]) {
+  bookingJourney.observeAssistantResponse(question);
+  bookingJourney.captureUserUtterance(answer);
+}
+assert.deepEqual(bookingJourney.snapshot().collectedData, {
+  patient_name: 'Mitra', patient_age: '30', preferred_date: '13th August', preferred_time: '9 AM',
+});
+assert.deepEqual(bookingJourney.snapshot().missingFields, []);
+assert.equal(bookingJourney.snapshot().selectedItem.key, 'approved-package');
+assert.equal(bookingJourney.snapshot().currentStage, 'booking_details');
 
 const isolated = openLiveCallMemory({
   tenantId: 'tenant-production-b', workspaceId: 'workspace-production-b',
@@ -180,6 +240,7 @@ assert.equal(recovery.repeatedQuestionsSuppressed, 1);
 
 memory.close();
 isolated.close();
+bookingJourney.close();
 
 console.log(JSON.stringify({
   task: 'Flow control, recovery and production evaluations',
@@ -188,6 +249,8 @@ console.log(JSON.stringify({
   verified: [
     'tenant isolation', 'topic/entity changes', 'explicit booking gate', 'side-question resume',
     'repeat-question suppression', 'targeted clarification', 'STT alias recovery', 'grounded flow action',
+    'package overview', 'category browsing', 'package details', 'package recommendation',
+    'topic changes', 'complete booking field journey', 'ranked approved fallback',
   ],
   localRoutingP95Ms: Math.round(p95Ms * 1_000) / 1_000,
   industryHardcoding: false,

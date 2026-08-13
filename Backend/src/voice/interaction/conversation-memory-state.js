@@ -43,12 +43,21 @@ function isoDate(value, fallback = null) {
   return parsed && !Number.isNaN(parsed.getTime()) ? parsed.toISOString() : fallback;
 }
 
+function objectValue(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function owns(value, key) {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
 export function normalizeLiveCallFrame(value = {}) {
+  value = objectValue(value);
   const pending = value.pendingQuestion && typeof value.pendingQuestion === 'object'
     ? value.pendingQuestion : { key: value.pendingQuestion, text: value.pendingQuestionText, kind: value.pendingQuestionKind };
   return Object.freeze({
     callId: text(value.callId, 100) || null,
-    currentStage: text(value.currentStage, 80) || null,
+    currentStage: text(value.currentStage ?? value.conversationStage, 80) || null,
     resumeStage: text(value.resumeStage, 80) || null,
     currentTopic: text(value.currentTopic, 240) || null,
     activeCategory: Object.freeze(safeJson(value.activeCategory) ?? {}),
@@ -72,6 +81,7 @@ export function normalizeLiveCallFrame(value = {}) {
 }
 
 export function normalizeConversationMemoryState(value = {}) {
+  value = objectValue(value);
   const updatedAt = isoDate(value.updatedAt, new Date().toISOString());
   return Object.freeze({
     schemaVersion: 2,
@@ -92,6 +102,35 @@ export function buildConversationMemoryState({
   completedQuestions, pendingQuestions, runningSummary, callFrame, at = new Date(),
 }) {
   const prior = normalizeConversationMemoryState(previous);
+  const incomingFrame = objectValue(callFrame);
+  const mergedCollectedData = {
+    ...prior.collectedData,
+    ...objectValue(prior.callFrame?.fields),
+    ...objectValue(incomingFrame.fields),
+    ...objectValue(incomingFrame.collectedData),
+    ...objectValue(safeJson(collectedData)),
+  };
+  const mergedCallFrame = callFrame ? normalizeLiveCallFrame({
+    ...prior.callFrame,
+    ...incomingFrame,
+    callId: call?.id ?? incomingFrame.callId ?? prior.callFrame.callId,
+    currentStage: owns(incomingFrame, 'currentStage') ? incomingFrame.currentStage
+      : (owns(incomingFrame, 'conversationStage') ? incomingFrame.conversationStage : prior.callFrame.currentStage),
+    activeCategory: owns(incomingFrame, 'activeCategory')
+      ? incomingFrame.activeCategory : prior.callFrame.activeCategory,
+    selectedItem: owns(incomingFrame, 'selectedItem') ? incomingFrame.selectedItem
+      : (owns(incomingFrame, 'selectedCatalogItem')
+        ? incomingFrame.selectedCatalogItem : prior.callFrame.selectedItem),
+    pendingQuestion: owns(incomingFrame, 'pendingQuestion')
+      ? incomingFrame.pendingQuestion : prior.callFrame.pendingQuestion,
+    language: owns(incomingFrame, 'language') ? incomingFrame.language : prior.callFrame.language,
+    collectedData: mergedCollectedData,
+    completedQuestions: [
+      ...prior.callFrame.completedQuestions,
+      ...(incomingFrame.completedQuestions ?? []),
+      ...(completedQuestions ?? []),
+    ],
+  }) : prior.callFrame;
   const currentMessages = messages(history);
   const recentSummary = currentMessages.slice(-6)
     .map((message) => `${message.role === 'user' ? 'Caller' : 'Agent'}: ${message.content}`)
@@ -102,10 +141,10 @@ export function buildConversationMemoryState({
     summary,
     recentMessages: [...prior.recentMessages, ...currentMessages],
     callback: callback ?? prior.callback,
-    collectedData: { ...prior.collectedData, ...(safeJson(collectedData) ?? {}) },
+    collectedData: mergedCollectedData,
     completedQuestions: [...prior.completedQuestions, ...(completedQuestions ?? [])],
     pendingQuestions: pendingQuestions ?? prior.pendingQuestions,
-    callFrame: callFrame ? normalizeLiveCallFrame({ ...callFrame, callId: call?.id ?? callFrame.callId }) : prior.callFrame,
+    callFrame: mergedCallFrame,
     lastCall: {
       id: call?.id ?? null,
       providerCallId: call?.providerCallId ?? null,

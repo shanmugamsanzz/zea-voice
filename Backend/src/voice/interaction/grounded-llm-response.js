@@ -200,6 +200,59 @@ function list(value, maximum = 20) {
   return Array.isArray(value) ? [...new Set(value.map((entry) => text(entry, 160)).filter(Boolean))].slice(0, maximum) : [];
 }
 
+function canonicalLookup(values, aliases) {
+  const lookup = new Map();
+  for (const value of values) {
+    for (const alias of aliases(value)) {
+      const key = identity(alias);
+      if (key && !lookup.has(key)) lookup.set(key, value);
+    }
+  }
+  return lookup;
+}
+
+function canonicalizeList(requested, lookup) {
+  const resolved = [];
+  const unresolved = [];
+  const seen = new Set();
+  for (const value of requested) {
+    const match = lookup.get(identity(value));
+    if (!match) {
+      unresolved.push(value);
+      continue;
+    }
+    if (seen.has(match)) continue;
+    seen.add(match);
+    resolved.push(match);
+  }
+  return { resolved, unresolved };
+}
+
+function normalizeFlowAction(value, runtime = {}) {
+  const raw = text(value, 40).toLocaleLowerCase().replace(/[\s./-]+/gu, '_');
+  const aliases = new Map([
+    ['', 'continue'], ['continue', 'continue'], ['answer', 'continue'],
+    ['direct_answer', 'continue'], ['answer_directly', 'continue'], ['respond', 'continue'],
+    ['answer_pending', 'answer_pending'], ['pending_answer', 'answer_pending'],
+    ['side_question', 'side_question'], ['answer_side_question', 'side_question'],
+    ['clarify', 'clarify'], ['clarification', 'clarify'], ['ask_clarification', 'clarify'],
+  ]);
+  const normalized = aliases.get(raw);
+  if (!normalized) return null;
+  if (normalized === 'answer_pending' && !String(runtime.pendingQuestion ?? '').trim()) return 'continue';
+  return normalized;
+}
+
+function canonicalSources(envelope, requestedIds) {
+  const lookup = canonicalLookup(envelope.sources ?? [], (source) => [source.id, source.recordId]);
+  return canonicalizeList(requestedIds, lookup);
+}
+
+function canonicalEntities(envelope, requestedKeys) {
+  const lookup = canonicalLookup(envelope.entities ?? [], (item) => [item.key, item.name, item.id]);
+  return canonicalizeList(requestedKeys, lookup);
+}
+
 function assertedFacts(value) {
   if (!Array.isArray(value)) return [];
   const allowedTypes = new Set(['entity', 'price', 'inclusion', 'policy', 'availability', 'preparation', 'action']);
@@ -298,23 +351,23 @@ export function validateGroundedLlmResponse(raw, envelope, runtime = {}) {
   if (!parsed) return Object.freeze({ valid: false, reason: 'invalid_json' });
   const intent = text(parsed.intent, maximumIntentCharacters);
   const questionType = normalizeQuestionType(parsed.questionType ?? parsed.question_type);
-  const flowAction = text(parsed.flowAction ?? parsed.flow_action, 40).toLocaleLowerCase() || 'continue';
+  const flowAction = normalizeFlowAction(parsed.flowAction ?? parsed.flow_action, runtime);
   const spokenAnswer = text(parsed.spokenAnswer ?? parsed.spoken_answer, maximumAnswerCharacters);
   if (!intent || !spokenAnswer) return Object.freeze({ valid: false, reason: 'required_field_missing' });
-  if (!['continue', 'answer_pending', 'side_question', 'clarify'].includes(flowAction)) {
+  if (!flowAction) {
     return Object.freeze({ valid: false, reason: 'invalid_flow_action' });
   }
   const requestedEntityKeys = list(parsed.selectedEntityKeys ?? parsed.selected_entity_keys, maximumEntities);
   const requestedSourceIds = list(parsed.evidenceSourceIds ?? parsed.evidence_source_ids, maximumSources);
   const facts = assertedFacts(parsed.assertedFacts ?? parsed.asserted_facts);
-  const entitiesByKey = new Map(envelope.entities.map((item) => [identity(item.key), item]));
-  const sourcesById = new Map(envelope.sources.map((source) => [source.id, source]));
-  const selectedEntities = requestedEntityKeys.map((key) => entitiesByKey.get(identity(key)));
-  if (selectedEntities.some((item) => !item)) {
+  const canonicalEntityResult = canonicalEntities(envelope, requestedEntityKeys);
+  const selectedEntities = canonicalEntityResult.resolved;
+  if (canonicalEntityResult.unresolved.length) {
     return Object.freeze({ valid: false, reason: 'unpublished_entity_selected' });
   }
-  const citedSources = requestedSourceIds.map((id) => sourcesById.get(id));
-  if (citedSources.some((item) => !item)) {
+  const canonicalSourceResult = canonicalSources(envelope, requestedSourceIds);
+  const citedSources = canonicalSourceResult.resolved;
+  if (canonicalSourceResult.unresolved.length) {
     return Object.freeze({ valid: false, reason: 'unpublished_evidence_selected' });
   }
   if (envelope.found && citedSources.length === 0) {
@@ -322,14 +375,16 @@ export function validateGroundedLlmResponse(raw, envelope, runtime = {}) {
   }
   if (!envelope.found) return Object.freeze({ valid: false, reason: 'verified_evidence_missing' });
   if (facts === null || facts.length === 0) return Object.freeze({ valid: false, reason: 'asserted_facts_required' });
-  if (facts.some((fact) => !sourcesById.has(fact.sourceId) || !requestedSourceIds.includes(fact.sourceId))) {
+  const canonicalFactSources = facts.map((fact) => canonicalSources(envelope, [fact.sourceId]));
+  if (canonicalFactSources.some((result) => result.unresolved.length)) {
     return Object.freeze({ valid: false, reason: 'asserted_fact_source_not_cited' });
   }
-  if (facts.some((fact) => !identity(sourcesById.get(fact.sourceId).content).includes(identity(fact.value)))) {
-    return Object.freeze({ valid: false, reason: 'unsupported_asserted_fact' });
+  const citedSourceIds = new Set(citedSources.map((source) => source.id));
+  if (canonicalFactSources.some((result) => !citedSourceIds.has(result.resolved[0]?.id))) {
+    return Object.freeze({ valid: false, reason: 'asserted_fact_source_not_cited' });
   }
-  if (flowAction === 'answer_pending' && !String(runtime.pendingQuestion ?? '').trim()) {
-    return Object.freeze({ valid: false, reason: 'pending_answer_without_pending_question' });
+  if (facts.some((fact, index) => !identity(canonicalFactSources[index].resolved[0].content).includes(identity(fact.value)))) {
+    return Object.freeze({ valid: false, reason: 'unsupported_asserted_fact' });
   }
   const normalizedAnswer = identity(spokenAnswer);
   const selectedKeySet = new Set(selectedEntities.map((item) => identity(item.key)));
@@ -366,7 +421,9 @@ export function validateGroundedLlmResponse(raw, envelope, runtime = {}) {
     selectedEntityKeys: selectedEntities.map((item) => item.key),
     selectedEntities: selectedEntities.map((item) => ({ ...item })),
     evidenceSourceIds: citedSources.map((source) => source.id),
-    assertedFacts: facts.map((fact) => ({ ...fact })),
+    assertedFacts: facts.map((fact, index) => ({
+      ...fact, sourceId: canonicalFactSources[index].resolved[0].id,
+    })),
   });
 }
 
@@ -375,18 +432,15 @@ export function validateGroundedLlmUnderstanding(raw, envelope, runtime = {}) {
   if (!parsed) return Object.freeze({ valid: false, reason: 'invalid_json' });
   const intent = text(parsed.intent, maximumIntentCharacters);
   const questionType = normalizeQuestionType(parsed.questionType ?? parsed.question_type);
-  const flowAction = text(parsed.flowAction ?? parsed.flow_action, 40).toLocaleLowerCase() || 'continue';
+  const flowAction = normalizeFlowAction(parsed.flowAction ?? parsed.flow_action, runtime);
   if (!intent) return Object.freeze({ valid: false, reason: 'required_field_missing' });
-  if (!['continue', 'answer_pending', 'side_question', 'clarify'].includes(flowAction)) {
+  if (!flowAction) {
     return Object.freeze({ valid: false, reason: 'invalid_flow_action' });
   }
-  if (flowAction === 'answer_pending' && !String(runtime.pendingQuestion ?? '').trim()) {
-    return Object.freeze({ valid: false, reason: 'pending_answer_without_pending_question' });
-  }
   const requestedEntityKeys = list(parsed.selectedEntityKeys ?? parsed.selected_entity_keys, maximumEntities);
-  const entitiesByKey = new Map(envelope.entities.map((item) => [identity(item.key), item]));
-  const selectedEntities = requestedEntityKeys.map((key) => entitiesByKey.get(identity(key)));
-  if (selectedEntities.some((item) => !item)) {
+  const canonicalEntityResult = canonicalEntities(envelope, requestedEntityKeys);
+  const selectedEntities = canonicalEntityResult.resolved;
+  if (canonicalEntityResult.unresolved.length) {
     return Object.freeze({ valid: false, reason: 'unpublished_entity_selected' });
   }
   return Object.freeze({

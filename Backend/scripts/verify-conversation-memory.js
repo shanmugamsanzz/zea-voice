@@ -7,6 +7,10 @@ import {
 } from '../src/voice/interaction/conversation-memory.service.js';
 import { buildConversationMemoryState } from '../src/voice/interaction/conversation-memory-state.js';
 
+const cleanState = buildConversationMemoryState({ previous: null, call: { id: 'call-null' } });
+assert.equal(cleanState.callFrame.callId, null);
+assert.deepEqual(cleanState.collectedData, {});
+
 const contextId = 'customer:+919489974421';
 assert.match(conversationContextHash(contextId), /^[a-f0-9]{64}$/);
 assert.equal(conversationContextHash(contextId).includes('+919489974421'), false);
@@ -57,5 +61,45 @@ assert.equal(state.collectedData.customer_name, 'Shanmugam');
 assert.deepEqual(state.completedQuestions, ['customer_name']);
 assert.deepEqual(state.pendingQuestions, ['preferred_date']);
 assert.match(state.summary, /Customer selected a package/);
+
+const liveState = buildConversationMemoryState({
+  previous: {
+    collectedData: { patient_name: 'Mitra' },
+    callFrame: {
+      callId: 'call-live', conversationStage: 'package_selection',
+      activeCategory: { key: 'master', name: 'Master Health Checkup' },
+      selectedItem: { id: 'silver-id', key: 'silver', name: 'Silver' },
+      pendingQuestion: { key: 'patient_age', text: 'Age?', kind: 'field' },
+      language: 'ta', fields: { patient_name: 'Mitra' },
+    },
+  },
+  call: { id: 'call-live' },
+  callFrame: { currentStage: 'booking_details', fields: { patient_age: '30' } },
+  collectedData: { preferred_date: '2026-08-14' },
+});
+assert.equal(liveState.callFrame.currentStage, 'booking_details');
+assert.equal(liveState.callFrame.activeCategory.key, 'master');
+assert.equal(liveState.callFrame.selectedItem.key, 'silver');
+assert.equal(liveState.callFrame.pendingQuestion.key, 'patient_age');
+assert.equal(liveState.callFrame.language, 'ta');
+assert.deepEqual(liveState.callFrame.fields, {
+  patient_name: 'Mitra', patient_age: '30', preferred_date: '2026-08-14',
+});
+assert.deepEqual(liveState.collectedData, {
+  patient_name: 'Mitra', patient_age: '30', preferred_date: '2026-08-14',
+});
+
+const clearedSelection = buildConversationMemoryState({
+  previous: liveState,
+  call: { id: 'call-live' },
+  callFrame: {
+    conversationStage: 'category_selection', selectedItem: null, pendingQuestion: null,
+    activeCategory: { key: 'kids', name: 'Kids Health Packages' },
+  },
+});
+assert.equal(clearedSelection.callFrame.currentStage, 'category_selection');
+assert.deepEqual(clearedSelection.callFrame.selectedItem, {});
+assert.equal(clearedSelection.callFrame.pendingQuestion.key, null);
+assert.equal(clearedSelection.callFrame.activeCategory.key, 'kids');
 
 console.log(JSON.stringify({ success: true, task: 'Permanent PostgreSQL conversation memory' }));

@@ -58,6 +58,14 @@ const unknownUnderstanding = validateGroundedLlmUnderstanding(JSON.stringify({
 assert.equal(unknownUnderstanding.valid, true);
 assert.equal(unknownUnderstanding.questionType, 'unclear');
 
+const directUnderstanding = validateGroundedLlmUnderstanding(JSON.stringify({
+  intent: 'show item', questionType: 'details', flowAction: 'answer_pending',
+  selectedEntityKeys: ['Premium Plan'],
+}), envelope, { pendingQuestion: null });
+assert.equal(directUnderstanding.valid, true);
+assert.equal(directUnderstanding.flowAction, 'continue');
+assert.deepEqual(directUnderstanding.selectedEntityKeys, ['premium-plan']);
+
 const valid = validateGroundedLlmResponse(JSON.stringify({
   intent: 'catalog_item_details',
   questionType: 'inclusions',
@@ -72,6 +80,21 @@ assert.equal(valid.intent, 'catalog_item_details');
 assert.equal(valid.questionType, 'inclusions');
 assert.equal(valid.flowAction, 'side_question');
 assert.equal(valid.selectedEntities[0].key, 'premium-plan');
+
+const canonicalReferences = validateGroundedLlmResponse(JSON.stringify({
+  intent: 'catalog_item_details', questionType: 'price', flowAction: 'answer_pending',
+  selectedEntityKeys: ['Premium Plan'],
+  evidenceSourceIds: ['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'],
+  assertedFacts: [{
+    type: 'price', value: 'USD 100', sourceId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  }],
+  spokenAnswer: 'Premium Plan is USD 100.',
+}), envelope, { pendingQuestion: null });
+assert.equal(canonicalReferences.valid, true);
+assert.equal(canonicalReferences.flowAction, 'continue');
+assert.deepEqual(canonicalReferences.selectedEntityKeys, ['premium-plan']);
+assert.deepEqual(canonicalReferences.evidenceSourceIds, ['source_1']);
+assert.equal(canonicalReferences.assertedFacts[0].sourceId, 'source_1');
 
 const sentenceValidation = validateGroundedSpokenSentences(
   'Premium Plan is USD 100. It includes priority support. Refunds are always guaranteed.',
@@ -173,6 +196,23 @@ assert.match(systemPrompt, /priority support/u);
 assert.match(systemPrompt, /<\/knowledge_context>/u);
 assert.match(systemPrompt, /currentStage/u);
 assert.match(systemPrompt, /detectedIntent/u);
+
+const completeTenantPrompt = `${'Tenant instruction. '.repeat(430)}ESSENTIAL_TENANT_TAIL_MARKER`;
+const productionBudgetPrompt = buildAgentSystemPrompt({
+  ...agent, prompt: completeTenantPrompt,
+}, {
+  usageDirection: 'inbound', knowledge,
+  context: {
+    groundedResponseMode: true,
+    liveCallMemory: { currentStage: 'details', language: 'ta', collectedData: {} },
+  },
+  maxPromptChars: 24_000,
+});
+assert.match(productionBudgetPrompt, /ESSENTIAL_TENANT_TAIL_MARKER/u);
+assert.match(productionBudgetPrompt, /<\/company_instructions>/u);
+assert.match(productionBudgetPrompt, /<\/grounded_response_contract>/u);
+assert.match(productionBudgetPrompt, /<\/knowledge_context>/u);
+assert.ok(productionBudgetPrompt.length <= 24_000);
 
 let providerInput;
 let providerCalls = 0;

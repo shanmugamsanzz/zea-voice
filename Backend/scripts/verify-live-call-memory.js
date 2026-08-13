@@ -134,6 +134,22 @@ assert.equal(checkpoint.callFrame.callId, restorableIdentity.callId);
 assert.equal(checkpoint.callFrame.selectedItem.key, 'standard-plan');
 assert.equal(checkpoint.callFrame.recentTurns.length, 2);
 assert.deepEqual(checkpoint.callFrame.fields, { lead_name: 'Example Caller' });
+
+const nullPreviousCheckpoint = buildConversationMemoryState({
+  previous: null,
+  call: { id: restorableIdentity.callId },
+  history: restoredSnapshot.messages,
+  collectedData: restoredSnapshot.collectedData,
+  completedQuestions: restoredSnapshot.completedQuestions,
+  pendingQuestions: [restoredSnapshot.pendingQuestion],
+  callFrame: restoredSnapshot,
+});
+assert.equal(nullPreviousCheckpoint.callFrame.currentStage, 'item_explanation');
+assert.equal(nullPreviousCheckpoint.callFrame.activeCategory.key, 'service-plans');
+assert.equal(nullPreviousCheckpoint.callFrame.selectedItem.key, 'standard-plan');
+assert.equal(nullPreviousCheckpoint.callFrame.pendingQuestion.key, 'preferred_date');
+assert.equal(nullPreviousCheckpoint.callFrame.language, 'ta');
+assert.deepEqual(nullPreviousCheckpoint.collectedData, { lead_name: 'Example Caller' });
 assert.equal(activeLiveCallMemoryCount(), 5);
 
 const maintenance = new LiveMemoryMaintenanceQueue({ callId: 'benchmark-call' });
