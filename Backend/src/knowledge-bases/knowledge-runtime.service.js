@@ -16,6 +16,8 @@ import {
   renderKnowledgeClarification,
   resolveKnowledgeConfidenceConfiguration,
 } from './knowledge-confidence-config.js';
+import { rankHybridEvidence, rankedEvidenceBundle, resolveEvidenceConfidence } from './hybrid-evidence-ranker.js';
+import { runParallelHybridRetrieval } from './parallel-hybrid-retrieval.js';
 
 const defaultDependencies = {
   contextRunner: withTenantContext,
@@ -247,12 +249,14 @@ function workflowRecordResponse(record, {
     action: { type: record.action_type, config: record.action_config },
     workflow: {
       intent: record.intent,
+      priority: record.priority,
       conditions: record.conditions,
       matchedPhrase,
       matchMode,
       responseMode,
       instruction: responseMode === 'instruction' ? instruction : null,
       exactResponse: record.action_type === 'respond' && responseMode === 'exact',
+      deterministic: isStrongWorkflowMethod(method) || method === 'confidence_outcome',
       gate,
       confidence,
       matchMethod: method,
@@ -274,6 +278,7 @@ function workflowEvidenceHint(profile, record, {
     action: { type: record.action_type, config: record.action_config },
     workflow: {
       intent: record.intent,
+      priority: record.priority,
       conditions: record.conditions,
       matchedPhrase,
       matchMode,
@@ -327,6 +332,7 @@ function workflowRoute(profile, input, normalizedQuery, currentCatalogResolution
   const confidence = resolveKnowledgeConfidenceConfiguration(profile.agent_settings);
   const ranked = [];
   for (const record of profile.workflows) {
+    if (record.conditions?.confidenceOutcome) continue;
     const detectedScenario = input.detectedIntent?.intent === 'scenario';
     // Scenario Rules are activated only for an actual scenario/use-case turn.
     // They remain entirely tenant-authored through Workflow Rules.
@@ -436,6 +442,7 @@ async function semanticWorkflowRoute(auth, profile, input, runtime, currentCatal
       || payload.record_type !== 'WORKFLOW_RULE') return null;
     const record = profile.workflows.find((item) => String(item.id).toLowerCase() === String(match.id).toLowerCase());
     if (!record) return null;
+    if (record.conditions?.confidenceOutcome) return null;
     if (record.conditions?.scenarioRouting === true && input.detectedIntent?.intent !== 'scenario') return null;
     const gate = workflowStageGate(record, {
       currentStage: input.currentStage,
@@ -468,12 +475,13 @@ export function isExactWorkflowResponse(result) {
 }
 
 function conversationRoute(profile, input) {
-  if (input.routeHint !== 'conversation' && !input.flowKey && !input.nodeKey) return null;
+  if (input.routeHint !== 'conversation' && !input.flowKey && !input.nodeKey && !input.currentStage) return null;
   const flowKey = input.flowKey ?? 'main';
+  const nodeKey = input.nodeKey ?? input.currentStage;
   const candidates = profile.conversations.filter((item) => item.flow_key === flowKey
-    && (!input.nodeKey || item.node_key === input.nodeKey)
+    && (!nodeKey || item.node_key === nodeKey)
     && (!item.language || item.language === input.language));
-  const record = candidates.find((item) => input.nodeKey ? item.node_key === input.nodeKey : item.is_entry) ?? candidates[0];
+  const record = candidates.find((item) => nodeKey ? item.node_key === nodeKey : item.is_entry) ?? candidates[0];
   if (!record) return null;
   return {
     ...routeResponse('conversation', record, record.content, {
@@ -859,7 +867,7 @@ async function semanticRoute(auth, profile, input, normalizedQuery, runtime) {
     return payload.tenant_id === auth.tenantId.toLowerCase()
       && allowed.get(String(payload.knowledge_base_id).toLowerCase()) === payload.publication_revision
       && [input.usageDirection.toUpperCase(), 'BOTH'].includes(payload.agent_usage)
-      && ['FAQ', 'KNOWLEDGE_CHUNK'].includes(payload.record_type);
+      && ['CONVERSATION_NODE', 'FAQ', 'KNOWLEDGE_CHUNK'].includes(payload.record_type);
   }).map((match) => ({
     id: match.id,
     score: Number(match.score),
@@ -1025,6 +1033,110 @@ export async function retrieveTenantEvidence(auth, input, dependencies = default
   };
 }
 
+async function parallelKnowledgeCandidates({
+  auth, profile, input, normalizedQuery, runtime, currentCatalogClassification, currentCatalogResolution,
+}) {
+  const automatic = input.routeHint === 'auto';
+  const workflow = automatic || input.routeHint === 'workflow';
+  const catalog = automatic || input.routeHint === 'catalog';
+  const conversation = automatic || input.routeHint === 'conversation';
+  const faq = automatic || input.routeHint === 'faq';
+  const semantic = automatic || input.routeHint === 'semantic';
+  return runParallelHybridRetrieval({
+    ...(workflow ? {
+      workflow_exact: () => workflowRoute(
+        profile, input, normalizedQuery, currentCatalogResolution, { includeScenarioRules: false },
+      ),
+      workflow_semantic: () => semanticWorkflowRoute(auth, profile, input, runtime, currentCatalogResolution),
+    } : {}),
+    ...(workflow && input.detectedIntent?.intent === 'scenario' ? {
+      workflow_scenario: () => workflowRoute(
+        profile, input, normalizedQuery, currentCatalogResolution, { includeScenarioRules: true },
+      ),
+    } : {}),
+    ...(catalog ? {
+      catalog_hybrid: () => catalogRoute(
+        auth, profile, input, normalizedQuery, runtime, currentCatalogClassification,
+        { allowClarification: false },
+      ),
+    } : {}),
+    ...(conversation ? { conversation_script: () => conversationRoute(profile, input) } : {}),
+    ...(faq ? { faq_exact: () => faqRoute(profile, input, normalizedQuery) } : {}),
+    ...(semantic ? { document_semantic: () => semanticRoute(auth, profile, input, normalizedQuery, runtime) } : {}),
+  });
+}
+
+async function parallelRankedKnowledgeResult({
+  auth, profile, input, normalizedQuery, runtime, confidence,
+  currentCatalogClassification, currentCatalogResolution, currentCatalogEntities,
+}) {
+  const retrieval = await parallelKnowledgeCandidates({
+    auth, profile, input, normalizedQuery, runtime,
+    currentCatalogClassification, currentCatalogResolution,
+  });
+  const uniqueCandidates = [...new Map(retrieval.candidates.map((candidate) => [
+    [candidate.route, candidate.source?.recordId, candidate.content].map(String).join('|'), candidate,
+  ])).values()];
+  const clarifications = uniqueCandidates.filter((candidate) => candidate.route === 'clarification');
+  const workflowHints = uniqueCandidates.filter((candidate) => candidate.route === 'workflow_hint');
+  const ranked = rankHybridEvidence(
+    uniqueCandidates.filter((candidate) => candidate.route !== 'clarification'),
+    {
+      selectedItemId: input.selectedCatalogItemId,
+      selectedItemKey: input.selectedCatalogItemKey,
+      activeCategoryKey: input.activeCategoryKey,
+      currentStage: input.currentStage,
+      knowledgeBases: profile.knowledge_bases,
+    },
+  );
+  const selectedCandidate = ranked[0]?.candidate ?? clarifications[0] ?? null;
+  const confidenceRoute = resolveEvidenceConfidence(ranked, confidence);
+  const configuredConfidenceRule = profile.workflows
+    .filter((record) => record.conditions?.confidenceOutcome === confidenceRoute.outcome)
+    .sort((left, right) => Number(left.priority ?? 100) - Number(right.priority ?? 100))
+    .find((record) => workflowStageGate(record, {
+      currentStage: input.currentStage,
+      selectedCatalogItemId: input.selectedCatalogItemId,
+    }).allowed !== false);
+  const configuredConfidenceResponse = configuredConfidenceRule
+    ? workflowRecordResponse(configuredConfidenceRule, {
+      matchedPhrase: confidenceRoute.outcome,
+      matchMode: 'confidence_outcome',
+      gate: workflowStageGate(configuredConfidenceRule, {
+        currentStage: input.currentStage,
+        selectedCatalogItemId: input.selectedCatalogItemId,
+      }),
+      confidence: confidenceRoute.confidence,
+      method: 'confidence_outcome',
+    }) : null;
+  let result = confidenceRoute.outcome === 'high'
+    ? (selectedCandidate ? { ...selectedCandidate } : null)
+    : (configuredConfidenceResponse ? { ...configuredConfidenceResponse } : null);
+  const catalogAllowed = input.routeHint === 'auto' || input.routeHint === 'catalog';
+  if (!result && catalogAllowed) {
+    result = await catalogRoute(auth, profile, input, normalizedQuery, runtime, currentCatalogClassification, {
+      allowClarification: true,
+    });
+  }
+  if (['workflow', 'workflow_hint'].includes(result?.route) && currentCatalogEntities.length > 1) {
+    result.catalogSelections = currentCatalogEntities.map((selection) => catalogResponse(selection.item, selection));
+  } else if (['workflow', 'workflow_hint'].includes(result?.route) && currentCatalogResolution?.entityType === 'item') {
+    result.catalogSelection = catalogResponse(currentCatalogResolution.item, currentCatalogResolution);
+  }
+  if (!result) return null;
+  result.rankedEvidence = rankedEvidenceBundle(ranked);
+  result.retrieval = {
+    ...(result.retrieval ?? {}),
+    parallelDurationMs: retrieval.durationMs,
+    channelFailures: retrieval.failures,
+    candidateCount: uniqueCandidates.length,
+    confidence: confidence.highConfidence,
+  };
+  result.confidenceRouting = confidenceRoute;
+  if (workflowHints.length) result.workflowHints = workflowHints;
+  return result;
+}
+
 export async function routeKnowledgeQuery(auth, input, dependencies = defaultDependencies) {
   const startedAt = performance.now();
   const runtime = { ...defaultDependencies, ...dependencies };
@@ -1043,6 +1155,17 @@ export async function routeKnowledgeQuery(auth, input, dependencies = defaultDep
   const currentCatalogEntities = resolveCatalogEntitiesLocally(profile.catalog_items, input.query, {
     minimumConfidence: confidence.highConfidence,
   });
+  if (profile.agent_settings?.parallelHybridRetrievalEnabled === true) {
+    const parallelResult = await parallelRankedKnowledgeResult({
+      auth, profile, input, normalizedQuery, runtime, confidence,
+      currentCatalogClassification, currentCatalogResolution, currentCatalogEntities,
+    });
+    return {
+      ...(parallelResult ?? { route: 'none', found: false, content: null, source: null }),
+      profileCacheHit: loaded.cacheHit,
+      durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+    };
+  }
   const hasMultipleCatalogItems = currentCatalogEntities.length > 1;
   let result = null;
 

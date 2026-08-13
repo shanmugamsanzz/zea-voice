@@ -1,527 +1,103 @@
-Q: What is Shanmuga Hospital?
-A: Shanmuga Hospital Salemல இருக்குற hospitalங்க. Health Check-up Packages, screening information மற்றும் Appointment support availableஆ இருக்கு.
-
-Q: Shanmuga Hospital எங்க இருக்கு?
-A: Shanmuga Hospital, 51/24, Saradha College Road, Salem – 636007, Tamil Naduல இருக்கு.
-
-Q: Hospitalக்கு எப்படி வரணும்?
-A: Salem New Bus Standல இருந்து Saradha College Road வழியா Hasthampatti பக்கம் வாங்க. Bridgeக்கு கீழ left sideல நம்ம hospital இருக்கு.
-
-Q: Hospital contact number என்ன?
-A: Shanmuga Hospitalக்கு 0427-2706666 அல்லது 8754033833 numberல contact பண்ணலாம்.
-
-Q: Hospital website என்ன?
-A: Shanmuga Hospital website www.shanmugahospital.com.
-
-Q: நீங்க சொன்ன Package approved listல இல்லனா என்ன பண்ணுவீங்க?
-A: Approved Catalogல இருக்குற Package மட்டும் தான் சொல்ல முடியும். நீங்க சொன்ன Package name clearஆ புரியலைன்னா மறுபடியும் பெயரை மட்டும் கேட்கிறேன்; புதுசா Package உருவாக்கி சொல்ல மாட்டேன்.
-
-Q: Package name clearஆ புரியலை
-A: நீங்க சொன்ன Package name clearஆ புரியலங்க. மறுபடியும் Package பெயரை மட்டும் சொல்ல முடியுமா?
-
-Q: நான் கேட்ட Package உங்ககிட்ட இல்லையா?
-A: அந்த Package approved Catalogல இருக்கானு முதல்ல check பண்ணுறேன். இல்லனா தவறான தகவல் சொல்லாம Hospital teamகிட்ட confirm பண்ண ஏற்பாடு பண்றேன்.
-
-Q: Master Health Checkup Package prices என்ன?
-A: Silver ஆயிரத்து அறுநூற்று ஐம்பது ரூபாய், Gold நாலாயிரத்து தொள்ளாயிரத்து ஐம்பது ரூபாய், Platinum ஏழாயிரத்து தொள்ளாயிரத்து எண்பது ரூபாய். எது பத்தி detail வேணும்?
-
-Q: Silver Package price என்ன?
-A: Silver Master Health Checkup உங்களுக்கு ஆயிரத்து அறுநூற்று ஐம்பது ரூபாய் வருங்க.
-
-Q: Silver Package explain பண்ணுங்க
-A: சரிங்க, Silver Master Health Checkup உங்களுக்கு ஆயிரத்து அறுநூற்று ஐம்பது ரூபாய் வருங்க. இதுல Sugar, Kidney, Liver, Cholesterol Tests, ECG, Chest X-ray மற்றும் ஒரு Doctor Consultation இருக்கு. Full Test list சொல்லட்டுமா?
-
-Q: Silver Packageல என்ன Tests இருக்கு?
-A: Silver Packageல CBC, Blood Grouping and RH Type, Sugar Fasting, Post Prandial, HbA1c, Urea, Creatinine, Uric Acid, Lipid Profile, Liver Function Test, Urine Routine, ECG மற்றும் Chest X-ray இருக்கு. ஒரு Doctor Consultationம் includedங்க.
-
-Q: Silver Package யாருக்கானது?
-A: Silver Package basic regular health screeningக்கான optionங்க. உங்களுடைய exact medical requirementக்கு Doctor consultation எடுத்துக்கறது நல்லதுங்க.
-
-Q: Gold Package price என்ன?
-A: Gold Master Health Checkup உங்களுக்கு நாலாயிரத்து தொள்ளாயிரத்து ஐம்பது ரூபாய் வருங்க.
-
-Q: Gold Package explain பண்ணுங்க
-A: சரிங்க, Gold Master Health Checkup உங்களுக்கு நாலாயிரத்து தொள்ளாயிரத்து ஐம்பது ரூபாய் வருங்க. Silverல இருக்குற Tests கூடவே ECHO, USG Abdomen, Thyroid, Vitamin Tests மற்றும் Dental Check-up இருக்கு. Full Test list சொல்லட்டுமா?
-
-Q: Gold Packageல என்ன Tests இருக்கு?
-A: Gold Packageல CBC, Blood Grouping and RH Type, Sugar Fasting, Post Prandial, HbA1c, Urea, Creatinine, Uric Acid, Lipid Profile, Liver Function Test, Calcium, Iron and TIBC, Urine Routine, Vitamin D, Vitamin B12, Homocysteine, TSH, T3, T4, Electrolytes, HSCRP, Chest X-ray, ECG, ECHO, USG Abdomen மற்றும் Dental Check-up இருக்கு. ஒரு Doctor Consultationம் includedங்க.
-
-Q: Gold Package யாருக்கானது?
-A: Gold Package detailed preventive health screeningக்கான optionங்க. Silver coverageக்கு மேல additional Tests இதில் இருக்கு.
-
-Q: Platinum Package price என்ன?
-A: Platinum Master Health Checkup உங்களுக்கு ஏழாயிரத்து தொள்ளாயிரத்து எண்பது ரூபாய் வருங்க.
-
-Q: Platinum Package explain பண்ணுங்க
-A: சரிங்க, Platinum Master Health Checkup உங்களுக்கு ஏழாயிரத்து தொள்ளாயிரத்து எண்பது ரூபாய் வருங்க. Silver மற்றும் Gold Tests கூடவே advanced blood, heart, lung மற்றும் vascular screening இருக்கு. நாலு Doctor Consultationsம் includedங்க. Full Test list சொல்லட்டுமா?
-
-Q: Platinum Packageல என்ன Tests இருக்கு?
-A: Platinum Packageல CBC, Blood Grouping and RH Type, Sugar Fasting, Post Prandial, HbA1c, Urea, Creatinine, Uric Acid, Lipid Profile, Liver Function Test, Calcium, Iron and TIBC, Urine Routine, ESR, Vitamin D, Vitamin B12, Homocysteine, Thyroid Function Test, Electrolytes, HSCRP, HIV, HBsAg, HCV, Chest X-ray, ECG, ECHO, PFT, USG Abdomen, Apolipoprotein A1 and B, Magnesium, Phosphorus, Carotid Doppler, Ankle Brachial Index, Dental Check-up மற்றும் Diabetic Foot Assessment இருக்கு.
-
-Q: Platinum Packageல Consultation இருக்கா?
-A: ஆமாங்க. Cardiologist, General Surgeon, General Medicine, Gynecologist, Orthopedics, Pulmonologist, Dermatologist, Medical Gastroenterologist, Surgical Gastroenterologist மற்றும் Dieticianல availableஆ இருக்குற Doctorsல இருந்து நாலு Consultations எடுத்துக்கலாம்.
-
-Q: Silverக்கும் Goldக்கும் என்ன difference?
-A: Silverல basic blood Tests, Sugar, Kidney, Liver, ECG மற்றும் Chest X-ray வருங்க. Goldல இதுக்குமேல ECHO, USG Abdomen, Thyroid, Vitamin Tests மற்றும் Dental Check-up இருக்கு. ரெண்டுல எது பத்தி இன்னும் detail வேணும்?
-
-Q: Goldக்கும் Platinumக்கும் என்ன difference?
-A: Goldல detailed screening மற்றும் ஒரு Doctor Consultation இருக்கு. Platinumல இதுக்குமேல ESR, PFT, Carotid Doppler, Ankle Brachial Index, viral markers மாதிரி advanced Tests மற்றும் நாலு Doctor Consultations இருக்கு. எது பத்தி இன்னும் detail வேணும்?
-
-Q: Silverக்கும் Platinumக்கும் என்ன difference?
-A: Silver basic screeningக்கானது. Platinumல Silver coverageக்கு மேல advanced blood, heart, lung, vascular Tests மற்றும் நாலு Doctor Consultations இருக்கு. எது பத்தி இன்னும் detail வேணும்?
-
-Q: Silver Gold Platinum மூணுக்கும் என்ன difference?
-A: Silver basic screeningக்குங்க. Goldல additional Thyroid, Vitamin, ECHO, USG Abdomen மற்றும் Dental coverage இருக்கு. Platinumல இதுக்குமேல advanced heart, lung, vascular Tests மற்றும் நாலு Doctor Consultations இருக்கு. எந்த Package பத்தி detail வேணும்?
-
-Q: எனக்கு Full Body Checkup வேணும். எந்த Package பார்க்கலாம்?
-A: Full-body screeningக்கு Silver, Gold, Platinum Packages இருக்குங்க. Basic, detailed, advancedனு மூணுக்கும் coverage மாறும். மூணுக்கும் இருக்குற difference சொல்லட்டுமா?
-
-Q: Master Health Checkup Add-ons என்ன இருக்கு?
-A: Master Health Checkupக்கு TMT, Audiogram மற்றும் PFT Add-on options இருக்குங்க. எந்த Add-on பத்தி தெரிஞ்சிக்கணும்?
-
-Q: TMT Add-on price என்ன?
-A: TMT Add-onக்கு எண்ணூற்று ஐம்பது ரூபாய் கூடவே முன்னூற்று முப்பத்தாறு ரூபாய்னு charge குறிப்பிடப்பட்டிருக்கு. Final billing எப்படி apply ஆகும்னு Hospital team confirm பண்ணுவாங்க.
-
-Q: Audiogram Add-on price என்ன?
-A: Audiogram Add-on உங்களுக்கு முன்னூறு ரூபாய் வருங்க.
-
-Q: PFT Add-on price என்ன?
-A: PFT Add-on உங்களுக்கு முன்னூற்று ஐம்பது ரூபாய் வருங்க.
-
-Q: Diabetic Health Checkup price என்ன?
-A: Diabetic Health Checkup உங்களுக்கு மூவாயிரத்து இருநூறு ரூபாய் வருங்க.
-
-Q: Diabetic Health Checkup explain பண்ணுங்க
-A: சரிங்க, Diabetic Health Checkup உங்களுக்கு மூவாயிரத்து இருநூறு ரூபாய் வருங்க. இதுல Sugar, HbA1c, Insulin, Kidney-related Tests, heart screening மற்றும் Foot Screening இருக்கு. Full Test list சொல்லட்டுமா?
-
-Q: Diabetic Health Checkupல என்ன Tests இருக்கு?
-A: Diabetic Health Checkupல Sugar Fasting, Post Prandial, Chest X-ray, CBC, Creatinine, ECG, ECHO, ESR, HbA1c, Lipid Profile, Fasting Insulin, Insulin Resistance, Insulin Sensitivity, Ankle Brachial Index, Biothesiometry, Foot Screening, Random Urine Microalbumin, USG Abdomen and Pelvis, Urea, Uric Acid, Urine Albumin Creatinine Ratio மற்றும் Urine Complete Analysis இருக்கு. ஒரு Doctor Consultationம் includedங்க.
-
-Q: எனக்கு Sugar problem இருக்கு. எந்த Package பார்க்கலாம்?
-A: Sugar-related screeningக்கு Diabetic Health Checkup இருக்கு. இது screening மட்டும்தாங்க; exact diagnosis Doctorதான் confirm பண்ண முடியும். Package details சொல்லட்டுமா?
-
-Q: Organ-Specific Packages என்ன இருக்கு?
-A: Organ-Specific Packagesல Renal, Liver, Cardiac, Surgery Profile One, Surgery Profile Two, Lungs, Ortho மற்றும் Gastro Health Checkups இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?
-
-Q: Renal Health Checkup price என்ன?
-A: Renal Health Checkup உங்களுக்கு ஆயிரத்து நானூறு ரூபாய் வருங்க.
-
-Q: Kidney Package explain பண்ணுங்க
-A: சரிங்க, Renal Health Checkup உங்களுக்கு ஆயிரத்து நானூறு ரூபாய் வருங்க. இதுல Hb, Urea, Creatinine, Uric Acid, Calcium, Electrolytes, BUN மற்றும் USG Abdomen இருக்கு. Urologist அல்லது Nephrologist Consultation availableங்க.
-
-Q: Renal Health Checkupல என்ன Tests இருக்கு?
-A: Renal Health Checkupல Hb, Urea, Creatinine, Uric Acid, Calcium, Electrolytes, BUN மற்றும் USG Abdomen இருக்கு. Urologist அல்லது Nephrologist Consultation availableங்க.
-
-Q: எனக்கு Kidney problem doubt இருக்கு. எந்த Package பார்க்கலாம்?
-A: Kidney-related screeningக்கு Renal Health Checkup இருக்கு. Exact காரணம் Doctorதான் confirm பண்ண முடியும். Package details சொல்லட்டுமா?
-
-Q: Liver Health Checkup price என்ன?
-A: Liver Health Checkup உங்களுக்கு ஆயிரத்து நானூறு ரூபாய் வருங்க.
-
-Q: Liver Package explain பண்ணுங்க
-A: சரிங்க, Liver Health Checkup உங்களுக்கு ஆயிரத்து நானூறு ரூபாய் வருங்க. இதுல Hb, Liver Function Test மற்றும் USG Abdomen இருக்கு. Gastroenterologist Consultation availableங்க.
-
-Q: Liver Health Checkupல என்ன Tests இருக்கு?
-A: Liver Health Checkupல Hb, Liver Function Test மற்றும் USG Abdomen இருக்கு. Gastroenterologist Consultation availableங்க.
-
-Q: எனக்கு Liver problem doubt இருக்கு. எந்த Package பார்க்கலாம்?
-A: Liver-related screeningக்கு Liver Health Checkup இருக்கு. Exact காரணம் Doctorதான் confirm பண்ண முடியும். Package details சொல்லட்டுமா?
-
-Q: Cardiac Health Checkup price என்ன?
-A: Cardiac Health Checkup உங்களுக்கு இரண்டாயிரத்து தொள்ளாயிரத்து ஐம்பது ரூபாய் வருங்க.
-
-Q: Cardiac Package explain பண்ணுங்க
-A: சரிங்க, Cardiac Health Checkup உங்களுக்கு இரண்டாயிரத்து தொள்ளாயிரத்து ஐம்பது ரூபாய் வருங்க. இதுல heart-related blood Tests, ECG, ECHO, Treadmill Test மற்றும் Cardiologist Consultation இருக்கு. Full Test list சொல்லட்டுமா?
-
-Q: Cardiac Packageல என்ன Tests இருக்கு?
-A: Cardiac Packageல CBC, Fasting Blood Sugar, Post Prandial Blood Sugar, HbA1c, Urea, Creatinine, Lipid Profile, Homocysteine, HSCRP, Urine Complete Analysis, Apolipoprotein A1 and B, ECG, ECHO மற்றும் Treadmill Test இருக்கு. Physical Examination மற்றும் Cardiologist Consultationம் includedங்க.
-
-Q: எனக்கு Heart check பண்ணணும். எந்த Package இருக்கு?
-A: Heart-related screeningக்கு Cardiac Health Checkup இருக்கு. Exact diagnosis Doctorதான் confirm பண்ண முடியும். Package details சொல்லட்டுமா?
-
-Q: எனக்கு Chest pain இருக்கு. எந்த Package பார்க்கலாம்?
-A: Chest pain severeஆ இருந்தா உடனே emergency medical help எடுத்துக்கோங்க. Emergency symptom இல்லனா heart-related screeningக்கு Cardiac Health Checkup இருக்கு. Doctor consultation எடுத்துக்கறது நல்லதுங்க.
-
-Q: Lungs Health Checkup price என்ன?
-A: Lungs Health Checkup உங்களுக்கு தொள்ளாயிரத்து தொண்ணூற்று ஒன்பது ரூபாய் வருங்க.
-
-Q: Lungs Package explain பண்ணுங்க
-A: சரிங்க, Lungs Health Checkup Organ-Specific Packagesல வருங்க. இதன் price தொள்ளாயிரத்து தொண்ணூற்று ஒன்பது ரூபாய். CBC, RBS, CRP, ESR, Urea, Creatinine, Chest X-ray, ECG மற்றும் PFT இருக்கு; Pulmonologist Consultationம் availableங்க. Testக்கு எட்டு மணி நேரம் fastingல இருந்து, காலை எட்டு மணி முதல் பதினொன்று மணிக்குள்ள வரணுங்க. Appointment பார்க்கலாமா?
-
-Q: Lunch Package பத்தி சொல்லுங்க
-A: நீங்க Lungs Health Checkup கேட்டீங்கன்னு புரியுதுங்க. இது Organ-Specific Packagesல வருது. இதன் price தொள்ளாயிரத்து தொண்ணூற்று ஒன்பது ரூபாய். CBC, RBS, CRP, ESR, Urea, Creatinine, Chest X-ray, ECG மற்றும் PFT இருக்கு; Pulmonologist Consultationம் availableங்க.
-
-Q: எனக்கு Lungsல problem எந்த Package choose பண்ணணும்?
-A: Lung-related screeningக்கு Organ-Specific categoryல Lungs Health Checkup இருக்குங்க. இதன் price தொள்ளாயிரத்து தொண்ணூற்று ஒன்பது ரூபாய். Exact காரணம் Doctorதான் confirm பண்ண முடியும். Package details சொல்லட்டுமா?
-
-Q: Lungs Health Checkupல என்ன Tests இருக்கு?
-A: Lungs Health Checkupல CBC, RBS, CRP, ESR, Urea, Creatinine, Chest X-ray, ECG மற்றும் PFT இருக்கு. Pulmonologist Consultation availableங்க.
-
-Q: எனக்கு Breathing problem இருக்கு. எந்த Package பார்க்கலாம்?
-A: மூச்சு விட ரொம்ப சிரமமா இருந்தா உடனே emergency medical help எடுத்துக்கோங்க. Emergency symptom இல்லனா lung-related screeningக்கு Lungs Health Checkup இருக்கு.
-
-Q: Ortho Health Checkup price என்ன?
-A: Ortho Health Checkup உங்களுக்கு ஆயிரத்து நானூற்று தொண்ணூற்று ஒன்பது ரூபாய் வருங்க.
-
-Q: Ortho Package explain பண்ணுங்க
-A: சரிங்க, Ortho Health Checkup உங்களுக்கு ஆயிரத்து நானூற்று தொண்ணூற்று ஒன்பது ரூபாய் வருங்க. இதுல requirementக்கு ஏற்ப இரண்டு X-rays, ESR, CRP, Calcium, Vitamin D, Uric Acid மற்றும் RA Factor இருக்கு. Ortho Doctor Consultation availableங்க.
-
-Q: Ortho Health Checkupல என்ன Tests இருக்கு?
-A: Ortho Health Checkupல requirementக்கு ஏற்ப இரண்டு X-rays, ESR, CRP, Calcium, Vitamin D, Uric Acid மற்றும் RA Factor இருக்கு. Ortho Doctor Consultation availableங்க.
-
-Q: எனக்கு Joint pain இருக்கு. எந்த Package பார்க்கலாம்?
-A: Bone மற்றும் joint-related screeningக்கு Ortho Health Checkup இருக்கு. Exact காரணம் Doctorதான் confirm பண்ண முடியும். Package details சொல்லட்டுமா?
-
-Q: எனக்கு Leg pain இருக்கு. எந்த Package பார்க்கலாம்?
-A: Leg, bone மற்றும் joint-related screeningக்கு Ortho Health Checkup இருக்கு. Exact காரணம் Doctor consultationலதான் confirm ஆகும். Package details சொல்லட்டுமா?
-
-Q: Gastro Checkup price என்ன?
-A: Gastro Checkup One-day Admission உங்களுக்கு இருபத்தைந்தாயிரம் ரூபாய் வருங்க.
-
-Q: Gastro Package explain பண்ணுங்க
-A: சரிங்க, Gastro Checkup One-day Admission உங்களுக்கு இருபத்தைந்தாயிரம் ரூபாய் வருங்க. இதுல Hb, Liver Function Test, USG Abdomen, Twenty-four Hours PH Monitoring, Manometry மற்றும் Endoscopy இருக்கு. இந்த Checkupக்கு one-day admission தேவைப்படுங்க.
-
-Q: Gastro Checkupல Consultation இருக்கா?
-A: ஆமாங்க, Gastro Checkupல Gastroenterologist Consultation availableங்க. Scheduling மற்றும் preparation details hospital team confirm பண்ணுவாங்க.
-
-Q: எனக்கு Stomach pain இருக்கு. எந்த Package பார்க்கலாம்?
-A: Stomach மற்றும் digestive health-related screeningக்கு Gastro Checkup இருக்கு. Exact காரணம் Doctorதான் confirm பண்ண முடியும். Package details சொல்லட்டுமா?
-
-Q: எனக்கு Digestion problem இருக்கு. எந்த Package பார்க்கலாம்?
-A: Digestive health-related screeningக்கு Gastro Checkup One-day Admission இருக்கு. Exact diagnosis Doctorதான் confirm பண்ண முடியும். Details சொல்லட்டுமா?
-
-Q: Onco Care Screening options என்ன இருக்கு?
-A: Onco Careல Premium Male, Premium Female, Male Add-on மற்றும் Female Add-on options இருக்குங்க. இது screening மட்டும்தாங்க; diagnosis கிடையாது. Premium அல்லது Add-on எது பத்தி தெரிஞ்சிக்கணும்?
-
-Q: Onco Care Premium Male price என்ன?
-A: Onco Care Screening Premium Male உங்களுக்கு எட்டாயிரத்து அறுநூறு ரூபாய் வருங்க.
-
-Q: Onco Care Premium Male explain பண்ணுங்க
-A: சரிங்க, Premium Male Screening உங்களுக்கு எட்டாயிரத்து அறுநூறு ரூபாய் வருங்க. இதுல CBC, Urine Complete, Urea, Creatinine, Amylase, Lipase, Liver Function Test, Random Sugar, PSA, CEA, CA 19.9 மற்றும் Chest and Whole Abdomen CT Screening இருக்கு. Medical Oncologist Consultation availableங்க.
-
-Q: Onco Care Premium Female price என்ன?
-A: Onco Care Screening Premium Female உங்களுக்கு எட்டாயிரத்து எண்ணூறு ரூபாய் வருங்க.
-
-Q: Onco Care Premium Female explain பண்ணுங்க
-A: சரிங்க, Premium Female Screening உங்களுக்கு எட்டாயிரத்து எண்ணூறு ரூபாய் வருங்க. இதுல CBC, Urine Complete, Urea, Creatinine, Amylase, Lipase, Liver Function Test, Random Sugar, CA 125, CEA, CA 19.9, Pap Smear, Chest and Whole Abdomen CT Screening மற்றும் Mammogram இருக்கு. Medical Oncologist Consultation availableங்க.
-
-Q: Onco Care Add-on Male price என்ன?
-A: Onco Care Add-on Male உங்களுக்கு எழுநூற்று ஐம்பது ரூபாய் வருங்க. இதை Silver, Gold அல்லது Platinum Master Health Checkup Package கூட மட்டும்தான் Add-onஆ எடுத்துக்க முடியும்.
-
-Q: Onco Care Add-on Maleல என்ன Tests இருக்கு?
-A: Male Add-onல Amylase, Lipase, PSA, CEA மற்றும் CA 19.9 இருக்கு. Medical Oncology Consultationம் includedங்க. Silver, Gold அல்லது Platinum Master Package முதல்ல select பண்ணணுங்க.
-
-Q: Onco Care Add-on Female price என்ன?
-A: Onco Care Add-on Female உங்களுக்கு ஆயிரத்து நூறு ரூபாய் வருங்க. இதை Silver, Gold அல்லது Platinum Master Health Checkup Package கூட மட்டும்தான் Add-onஆ எடுத்துக்க முடியும்.
-
-Q: Onco Care Add-on Femaleல என்ன Tests இருக்கு?
-A: Female Add-onல Amylase, Lipase, CA 125, CEA, CA 19.9, Pap Smear மற்றும் Mammogram இருக்கு. Medical Oncology Consultationம் includedங்க. Silver, Gold அல்லது Platinum Master Package முதல்ல select பண்ணணுங்க.
-
-Q: Cancer Screening பண்ணணும். எந்த Package இருக்கு?
-A: Onco Careல Premium Male, Premium Female மற்றும் Add-on options இருக்குங்க. இது screening மட்டும்தாங்க; Cancer diagnosis கிடையாது. எந்த option பத்தி தெரிஞ்சிக்கணும்?
-
-Q: காரணம் இல்லாம Weight loss ஆகுது. Oncology Package பார்க்கலாமா?
-A: காரணமில்லாம Weight குறைஞ்சிட்டு இருந்தா Doctor consultation முக்கியமுங்க. General screeningக்கு Master Health Checkup options இருக்கு. Doctor recommend பண்ணினா Onco Care Screening பார்க்கலாம்.
-
-Q: Kids Health Packages price என்ன?
-A: Kids Health Packages ஒரு categoryங்க; ஒரே price கிடையாது. Paediatric, Developmental, IQ, Behavioural, Neonatal மற்றும் Newborn Hearing Screening ஒவ்வொன்றுக்கும் தனித்தனி price இருக்கு. எந்த option பத்தி தெரிஞ்சிக்கணும்?
-
-Q: Kids Health Packages explain பண்ணுங்க
-A: Kids Health Packagesல Paediatric Health Screening, Developmental Screening, IQ Assessment, Behavioural Assessment, Developmental Disorder Screening, Neonatal Screening மற்றும் Newborn Hearing Screening இருக்குங்க. குழந்தையின் வயசு என்னங்க?
-
-Q: Paediatric Health Screening price என்ன?
-A: Paediatric Health Screening உங்களுக்கு ஆயிரத்து ஐநூறு ரூபாய் வருங்க.
-
-Q: Paediatric Health Screening explain பண்ணுங்க
-A: சரிங்க, Paediatric Health Screening உங்களுக்கு ஆயிரத்து ஐநூறு ரூபாய் வருங்க. இதுல Dental Assessment, Nutritional Assessment, Immunization Counselling, Growth Screening, Developmental Screening மற்றும் Anemia Screening இருக்கு. Anemia Screeningல CBC, MCV, MCH, MCHC மற்றும் Peripheral Smear Tests இருக்குங்க.
-
-Q: Developmental Screening price என்ன?
-A: Preterm குழந்தைகள் அல்லது developmental delay இருக்குற குழந்தைகளுக்கான Developmental Screening நானூற்று ஐம்பது ரூபாய் வருங்க.
-
-Q: IQ Assessment Age 5 to 13 price என்ன?
-A: ஐந்து முதல் பதிமூன்று வயசுக்கான IQ Assessment உங்களுக்கு ஆயிரத்து ஐநூறு ரூபாய் வருங்க.
-
-Q: IQ Assessment Above Age 13 price என்ன?
-A: பதிமூன்று வயசுக்கு மேல இருக்கிறவர்களுக்கான IQ Assessment உங்களுக்கு இரண்டாயிரம் ரூபாய் வருங்க.
-
-Q: Behavioural Assessment price என்ன?
-A: Behavioural Assessment உங்களுக்கு ஐநூறு ரூபாய் வருங்க.
-
-Q: Screening for Developmental Disorder price என்ன?
-A: Screening for Developmental Disorder உங்களுக்கு ஐநூறு ரூபாய் வருங்க.
-
-Q: குழந்தைக்கு Development problem doubt இருக்கு. எந்த Screening பார்க்கலாம்?
-A: Developmental Screening, Behavioural Assessment மற்றும் Developmental Disorder Screening options இருக்குங்க. இது screening மட்டும்தாங்க; diagnosis கிடையாது. குழந்தையின் வயசு சொல்ல முடியுமா?
-
-Q: Neonatal Screening 3 Panel price என்ன?
-A: Neonatal Screening Three Panel உங்களுக்கு எண்ணூறு ரூபாய் வருங்க. இதில் TSH, 17-OHP மற்றும் G6PD Tests இருக்கு.
-
-Q: Neonatal Screening 4 Panel price என்ன?
-A: Neonatal Screening Four Panel உங்களுக்கு ஆயிரம் ரூபாய் வருங்க. இதில் TSH, 17-OHP, G6PD மற்றும் Galactose Tests இருக்கு.
-
-Q: Newborn Hearing Screening price என்ன?
-A: Newborn Hearing Screening உங்களுக்கு ஆயிரத்து இருநூறு ரூபாய் வருங்க.
-
-Q: Newbornக்கு என்ன Screening இருக்கு?
-A: Newbornக்கு Neonatal Three Panel, Neonatal Four Panel மற்றும் Hearing Screening options இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?
-
-Q: Surgery Profile One price என்ன?
-A: Surgery Profile One உங்களுக்கு ஆயிரத்து ஐநூறு ரூபாய் வருங்க.
-
-Q: Surgery Profile Two price என்ன?
-A: Minor Proceduresக்கான Surgery Profile Two உங்களுக்கு எழுநூற்று ஐம்பது ரூபாய் வருங்க.
-
-Q: Surgery Profiles explain பண்ணுங்க
-A: Surgery Profile One மற்றும் Minor Proceduresக்கான Surgery Profile Two options இருக்குங்க. Exact Tests, eligibility மற்றும் timing Hospital team confirm பண்ணுவாங்க. எது பத்தி தெரிஞ்சிக்கணும்?
-
-Q: வருடத்துக்கு ஒருமுறை general health check பண்ணணும். எந்த Package பார்க்கலாம்?
-A: Routine basic screeningக்கு Silver Master Health Checkup பார்க்கலாம். இதில் Sugar, Kidney, Liver, Cholesterol, ECG மற்றும் Chest X-ray மாதிரி முக்கிய Tests இருக்கு. உங்களுடைய exact requirementக்கு Doctor consultation எடுத்துக்கறது நல்லதுங்க.
-
-Q: எனக்கு basic full-body screening மட்டும் வேணும். எந்த Package?
-A: Basic screeningக்காக Silver Master Health Checkup பார்க்கலாம். இதுல routine blood Tests, ECG, Chest X-ray மற்றும் Doctor Consultation இருப்பதால இந்த option suggest பண்றேங்க.
-
-Q: Thyroid மற்றும் Vitamin Tests கூட சேர்த்து check பண்ணணும். எந்த Package?
-A: Gold Master Health Checkup பார்க்கலாம். Silver coverageக்கு மேல Thyroid, Vitamin D, Vitamin B12, ECHO, USG Abdomen மற்றும் Dental Check-up இருப்பதால Gold suggest பண்றேங்க.
-
-Q: Detailed preventive checkup வேணும். எந்த Package நல்லது?
-A: Detailed preventive screeningக்கு Gold Master Health Checkup பார்க்கலாம். Basic Testsக்கு மேல vitamins, thyroid, heart மற்றும் abdomen screening இருப்பதால இந்த option suitableஆ இருக்கும்.
-
-Q: ரொம்ப comprehensive health screening வேணும். எந்த Package பார்க்கலாம்?
-A: Advanced comprehensive screeningக்கு Platinum Master Health Checkup பார்க்கலாம். இதில் Gold coverageக்கு மேல heart, lung, vascular Tests மற்றும் நாலு Doctor Consultations இருப்பதால Platinum பற்றி பார்க்கலாம்.
-
-Q: Heart, lungs மற்றும் blood circulation எல்லாமே விரிவா check பண்ணணும். எந்த Package?
-A: Platinum Master Health Checkup பார்க்கலாம். PFT, Carotid Doppler, Ankle Brachial Index மற்றும் advanced blood Tests இருப்பதால இந்த option relevantஆ இருக்கும்.
-
-Q: குறைந்த budgetல routine checkup வேணும். எந்த Package?
-A: Silver Master Health Checkup ஆயிரத்து அறுநூற்று ஐம்பது ரூபாய் வருங்க. Basic routine screeningக்கு இது ஆரம்ப optionஆ இருக்கும்.
-
-Q: First time full-body checkup பண்ணப்போறேன். எதை choose பண்ணலாம்?
-A: Basicஆ ஆரம்பிக்க Silver பார்க்கலாம்; detailed screening வேண்டும்னா Gold பார்க்கலாம். ரெண்டுக்கும் difference சொல்லட்டுமா?
-
-Q: Family history இருக்கு; broad preventive screening வேணும். எந்த Package?
-A: Broad preventive screeningக்கு Gold அல்லது Platinum coverage பார்க்கலாம். எந்த Tests தேவைன்னு Doctorதான் confirm பண்ணணும்; ரெண்டுக்கும் difference சொல்லட்டுமா?
-
-Q: எந்த symptomமும் இல்லை; preventive checkup மட்டும் வேணும்.
-A: Preventive screeningக்கு Silver, Gold, Platinum options இருக்குங்க. Basic, detailed அல்லது advanced coverage எது வேணும்னு சொன்னா suitable option explain பண்றேன்.
-
-Q: எனக்கு Diabetes இருக்கு. எந்த Package பார்க்கலாம்?
-A: Sugar-related screeningக்கு Diabetic Health Checkup இருக்கு. Sugar, HbA1c, Insulin, Kidney-related Tests மற்றும் Foot Screening இருப்பதால இந்த Package suggest பண்றேங்க. இது diagnosis கிடையாது; Doctor consultation தேவை.
-
-Q: Sugar level அடிக்கடி அதிகமா வருது. எந்த Package?
-A: Sugar control மற்றும் related screeningக்கு Diabetic Health Checkup பார்க்கலாம். Fasting Sugar, Post Prandial Sugar, HbA1c மற்றும் Insulin-related Tests இருப்பதால இது relevantஆ இருக்கும்.
-
-Q: HbA1c check பண்ணணும். எந்த Package choose பண்ணலாம்?
-A: Diabetic Health Checkupல HbA1c, Fasting Sugar மற்றும் Post Prandial Sugar இருக்கு. அதனால இந்த Package பற்றி பார்க்கலாம்.
-
-Q: Diabetes காரணமா Kidney பாதிப்பு இருக்கானு screening பண்ணணும்.
-A: Diabetic Health Checkupல Urea, Creatinine, Urine Albumin Creatinine Ratio மற்றும் Microalbuminuria Tests இருக்கு. Diabetes-related Kidney screeningக்காக இது relevantஆ இருக்கும்.
-
-Q: கால்ல numbness மாதிரி இருக்கு; Sugar Package இருக்கா?
-A: Diabetic Health Checkupல Biothesiometry, Foot Screening மற்றும் Ankle Brachial Index இருக்கு. அதனால இந்த screening பார்க்கலாம்; exact காரணத்தை Doctorதான் confirm பண்ணணும்.
-
-Q: Diabetes Foot Check பண்ணணும். எந்த Package?
-A: Diabetic Health Checkupல Foot Screening, Biothesiometry மற்றும் Ankle Brachial Index இருப்பதால இந்த Package suitableஆ இருக்கும்.
-
-Q: Insulin level check பண்ணணும். எந்த Package?
-A: Diabetic Health Checkupல Fasting Insulin, Insulin Resistance மற்றும் Insulin Sensitivity Tests இருக்கு. அதனால இந்த Package suggest பண்றேங்க.
-
-Q: Sugarவும் heart screeningவும் ஒன்றாக வேணும்.
-A: Diabetic Health Checkupல Sugar Tests கூட ECG மற்றும் ECHO இருக்கு. அதனால இந்த Package பார்க்கலாம்.
-
-Q: அடிக்கடி தாகம் மற்றும் urine போறது அதிகமா இருக்கு. எந்த Package?
-A: இது பல காரணங்களால் இருக்கலாம்; diagnosis Doctorதான் சொல்ல முடியும். Sugar-related screeningக்கு Diabetic Health Checkup இருக்குங்க.
-
-Q: Familyல Diabetes history இருக்கு; preventive screening வேணும்.
-A: Sugar-related preventive screeningக்கு Diabetic Health Checkup பார்க்கலாம். இதில் Sugar, HbA1c, Lipid Profile மற்றும் related Tests இருப்பதால இந்த option relevantஆ இருக்கும்.
-
-Q: வயிறு வலிக்குது. எந்த Package choose பண்ணணும்?
-A: Stomach மற்றும் digestion-related screeningக்கு Gastro Checkup இருக்கு. இதில் USG Abdomen, PH Monitoring, Manometry மற்றும் Endoscopy இருப்பதால இந்த Package suggest பண்றேங்க. Exact காரணத்தை Doctorதான் confirm பண்ணணும்.
-
-Q: Digestion problem ரொம்ப நாளா இருக்கு. எந்த Package?
-A: Digestive health-related screeningக்கு Gastro Checkup பார்க்கலாம். இது one-day admission Package; exact requirementக்கு Gastroenterologist consultation தேவை.
-
-Q: Kidney check பண்ணணும். எந்த Package?
-A: Kidney-related screeningக்கு Renal Health Checkup இருக்கு. Urea, Creatinine, Uric Acid, BUN மற்றும் USG Abdomen இருப்பதால இந்த Package suggest பண்றேங்க.
-
-Q: Urine problem இருக்கு. எந்த Package பார்க்கலாம்?
-A: Urinary அல்லது Kidney-related concernக்கு Renal Health Checkup பார்க்கலாம். Exact காரணத்தை Urologist அல்லது Nephrologistதான் confirm பண்ணணும்.
-
-Q: Fatty Liver இருக்குனு சொன்னாங்க. எந்த Package?
-A: Liver-related screeningக்கு Liver Health Checkup இருக்கு. Liver Function Test மற்றும் USG Abdomen இருப்பதால இந்த Package suggest பண்றேங்க. Doctor consultation தேவை.
-
-Q: Liver function check பண்ணணும். எந்த Package?
-A: Liver Health Checkup பார்க்கலாம். இதில் Hb, Liver Function Test மற்றும் USG Abdomen இருக்குங்க.
-
-Q: Heart check பண்ணணும். எந்த Package?
-A: Heart-related screeningக்கு Cardiac Health Checkup இருக்கு. ECG, ECHO, Treadmill Test மற்றும் Cardiologist Consultation இருப்பதால இந்த Package suggest பண்றேங்க.
-
-Q: நெஞ்சு வலி லேசா இருக்கு; எந்த Package பார்க்கலாம்?
-A: Heart-related screeningக்கு Cardiac Health Checkup இருக்குங்க. ஆனால் வலி severeஆ இருந்தா Package பார்க்காம உடனே emergency medical help எடுத்துக்கோங்க.
-
-Q: மூச்சு சம்பந்தப்பட்ட checkup வேணும். எந்த Package?
-A: Lung-related screeningக்கு Lungs Health Checkup இருக்கு. Chest X-ray, ECG, PFT மற்றும் Pulmonologist Consultation இருப்பதால இந்த Package suggest பண்றேங்க.
-
-Q: Knee pain மற்றும் joint pain இருக்கு. எந்த Package?
-A: Bone மற்றும் joint-related screeningக்கு Ortho Health Checkup இருக்கு. X-rays, Calcium, Vitamin D, Uric Acid மற்றும் RA Factor இருப்பதால இந்த Package suggest பண்றேங்க.
-
-Q: குழந்தைக்கு general health screening பண்ணணும். எது பார்க்கலாம்?
-A: Paediatric Health Screening பார்க்கலாம். Growth, Nutrition, Dental, Developmental மற்றும் Anemia Screening இருப்பதால குழந்தையின் general screeningக்கு இது relevantஆ இருக்கும்.
-
-Q: குழந்தை சரியா வளரலன்னு doubt இருக்கு. எந்த Screening?
-A: Growth மற்றும் Development concernக்கு Paediatric Health Screening அல்லது Developmental Screening பார்க்கலாம். குழந்தையின் வயசு மற்றும் concern சொல்லுங்க; exact assessment Doctorதான் confirm பண்ணணும்.
-
-Q: Preterm babyக்கு developmental check வேணும்.
-A: Preterm குழந்தைகளுக்கான Developmental Screening option இருக்கு. இதன் price நானூற்று ஐம்பது ரூபாய்.
-
-Q: குழந்தைக்கு speech அல்லது development delay இருக்கு. எந்த Screening?
-A: Developmental Screening மற்றும் Developmental Disorder Screening options இருக்குங்க. இது screening மட்டும்தாங்க; diagnosisக்கு specialist consultation தேவை.
-
-Q: குழந்தைக்கு behaviour problem இருக்கு. எந்த Assessment?
-A: Behavioural Assessment option இருக்கு. குழந்தையின் behaviour concern evaluate பண்ண இந்த assessment relevantஆ இருக்கும்; confirmed diagnosis கிடையாது.
-
-Q: குழந்தைக்கு learning difficulty இருக்கு. IQ Assessment பார்க்கலாமா?
-A: IQ Assessment option இருக்கு. ஐந்து முதல் பதிமூன்று வயசுக்கு ஆயிரத்து ஐநூறு ரூபாய்; பதிமூன்று வயசுக்கு மேல இரண்டாயிரம் ரூபாய். Exact requirement specialist confirm பண்ணணும்.
-
-Q: குழந்தைக்கு Anemia இருக்கானு check பண்ணணும்.
-A: Paediatric Health Screeningல CBC, MCV, MCH, MCHC மற்றும் Peripheral Smear அடங்கிய Anemia Screening இருக்கு. அதனால இந்த option பார்க்கலாம்.
-
-Q: Newborn babyக்கு basic screening என்ன இருக்கு?
-A: Newbornக்கு Neonatal Three Panel, Neonatal Four Panel மற்றும் Hearing Screening options இருக்குங்க. குழந்தையின் age மற்றும் தேவையைப் பொறுத்து Hospital team confirm பண்ணுவாங்க.
-
-Q: Newbornக்கு hearing check பண்ணணும்.
-A: Newborn Hearing Screening option இருக்கு. இதன் price ஆயிரத்து இருநூறு ரூபாய்.
-
-Q: Babyக்கு TSH மற்றும் G6PD check பண்ணணும்.
-A: Neonatal Three Panelல TSH, 17-OHP மற்றும் G6PD இருக்கு. Galactoseவும் சேரணும்னா Four Panel பார்க்கலாம்.
-
-Q: ஆண்களுக்கு Cancer Screening Package என்ன இருக்கு?
-A: ஆண்களுக்கு Onco Care Premium Male Screening மற்றும் Male Add-on options இருக்குங்க. Standalone comprehensive screening வேண்டும்னா Premium; Master Package கூட சேர்க்க வேண்டும்னா Add-on பார்க்கலாம்.
-
-Q: பெண்களுக்கு Cancer Screening Package என்ன இருக்கு?
-A: பெண்களுக்கு Onco Care Premium Female Screening மற்றும் Female Add-on options இருக்குங்க. Premium அல்லது Master Package Add-on எது வேணும்னு சொல்லுங்க.
-
-Q: PSA Test இருக்குற Package எது?
-A: PSA Test Premium Male Screening மற்றும் Male Add-onல இருக்கு. Standalone Package வேண்டுமா, Master Package கூட Add-on வேண்டுமா?
-
-Q: Pap Smear மற்றும் Mammogram இருக்குற Package எது?
-A: Premium Female Screening மற்றும் Female Add-onல Pap Smear, Mammogram இருக்கு. Add-on எடுக்க Silver, Gold அல்லது Platinum base Package முதல்ல select பண்ணணும்.
-
-Q: Cancer markers மட்டும் Master Package கூட சேர்க்கணும்.
-A: Master Health Checkup கூட Male அல்லது Female Onco Add-on சேர்க்கலாம். Caller genderக்கு பொருத்தமான Add-on Tests மற்றும் price சொல்லட்டுமா?
-
-Q: Full Oncology Screening ஆண்களுக்கு வேணும்.
-A: Premium Male Screening எட்டாயிரத்து அறுநூறு ரூபாய் வருங்க. Blood Tests, tumour markers, CT Screening மற்றும் Medical Oncologist Consultation இருப்பதால comprehensive screeningக்கு இது relevantஆ இருக்கும்.
-
-Q: Full Oncology Screening பெண்களுக்கு வேணும்.
-A: Premium Female Screening எட்டாயிரத்து எண்ணூறு ரூபாய் வருங்க. Blood Tests, tumour markers, Pap Smear, Mammogram, CT Screening மற்றும் Medical Oncologist Consultation இதில் இருக்கு.
-
-Q: Familyல Cancer history இருக்கு; எந்த Screening?
-A: Family history இருந்தா Doctor consultation முக்கியமுங்க. Onco Care Premium மற்றும் Add-on screening options இருக்குங்க; எது suitableன்னு Doctor recommendation அடிப்படையில choose பண்ணணும்.
-
-Q: காரணமில்லாம Weight குறையுது; Cancer Package எடுக்கலாமா?
-A: காரணமில்லாத Weight lossக்கு முதல்ல Doctor consultation தேவை. Doctor recommend பண்ணினா Onco Care Screening பார்க்கலாம்; இது diagnosis கிடையாது.
-
-Q: CA 125, CEA, CA 19.9 Tests வேணும். எந்த Package?
-A: இந்த markers Premium Female Screening மற்றும் Female Add-onல இருக்கு. Male optionsல CEA, CA 19.9 மற்றும் PSA இருக்கு. உங்களுக்கு எந்த option தேவைன்னு சொல்லுங்க.
-
-Q: Fasting தேவையா?
-A: எந்த Packageக்கு fasting details வேணும்னு சொல்லுங்க. அந்த approved Packageக்கு Catalogல இருக்குற preparation instruction மட்டும் சொல்றேன்.
-
-Q: எத்தனை மணி நேரம் Fasting இருக்கணும்?
-A: இது selected Packageக்கு மாறலாம். Package பெயர் சொல்லுங்க; approved preparation details சரியா சொல்றேன்.
-
-Q: Fastingல Water குடிக்கலாமா?
-A: இந்த instruction selected Packageக்கு ஏற்ப மாறலாம். Package பெயர் சொல்லுங்க; approved preparation detail பார்க்கலாம்.
-
-Q: Checkupக்கு என்ன கொண்டு வரணும்?
-A: Comfortable dress போட்டுட்டு வாங்க. ஏற்கனவே எடுத்த medical reports இருந்தா அதையும் கொண்டு வாங்க.
-
-Q: Regular Medicine stop பண்ணணுமா?
-A: Regular Medicineஐ நீங்களாக stop பண்ணாதீங்க. Doctor அல்லது hospital teamகிட்ட confirm பண்ணுங்க.
-
-Q: Testக்கு எந்த Time வரணும்?
-A: Available test timing selected Package மற்றும் Booking availabilityக்கு ஏற்ப இருக்கும். எந்த Package, எந்த Dateன்னு சொல்லுங்க; available time பார்க்கலாம்.
-
-Q: Afternoonல Test எடுக்கலாமா?
-A: அந்த Packageக்கு afternoon availability இருக்கான்னு Booking availabilityல confirm பண்ணணும். எந்த Package, எந்த Date வேணும்னு சொல்லுங்க.
-
-Q: Appointment book பண்ண என்ன details வேணும்?
-A: Appointment யாருக்காக, Patient name, age, selected Package, preferred Date மற்றும் Time தேவைப்படுங்க.
-
-Q: Package details மட்டும் கேட்டா Name and Age கேப்பீங்களா?
-A: கேட்க மாட்டேங்க. Package information மட்டும் கேட்டா அதுக்கான answer மட்டும் சொல்றேன். Caller தெளிவா Appointment book பண்ண சொன்ன பிறகுதான் தேவையான Booking details கேட்கிறேன்.
-
-Q: Package select பண்ணாம Appointment details கேப்பீங்களா?
-A: இல்லைங்க. முதல்ல approved Package எதுனு clearஆ select பண்ணணும். அதுக்கப்புறம் Appointment book பண்ண சொன்னா மட்டும் missing details கேட்கிறேன்.
-
-Q: Package select பண்ணினாலே Appointment booking start ஆகுமா?
-A: இல்லைங்க. Package select பண்ணது information அல்லது preference மட்டுமாக இருக்கலாம். Caller தெளிவா Appointment book பண்ண சொன்ன பிறகுதான் Booking flow start ஆகும்.
-
-Q: Bookingக்கு Package name clear இல்லனா என்ன கேப்பீங்க?
-A: சரிங்க, எந்த Packageக்கு Appointment வேணுங்கன்னு மட்டும் கேட்கிறேன். Package clear ஆகுறதுக்கு முன்னாடி Name, Age, Date அல்லது Time கேட்க மாட்டேன்.
-
-Q: நான் Name and Age ஒரே sentenceல சொன்னா மறுபடியும் கேப்பீங்களா?
-A: கேட்க மாட்டேங்க. ஒரே sentenceல கிடைக்குற valid details எல்லாத்தையும் save பண்ணி, அடுத்த missing detail மட்டும் கேட்கிறேன்.
-
-Q: Family memberக்கு Appointment book பண்ணலாமா?
-A: ஆமாங்க, Family member அல்லது Friendக்காக Appointment request பண்ணலாம். Patient name மற்றும் age தேவைப்படுங்க.
-
-Q: Appointment confirmedஆ?
-A: Booking System successfulஆ confirm பண்ணின பிறகுதான் Appointment confirmed ஆகும்.
-
-Q: Appointment request submit ஆனால் confirmed ஆகிடுமா?
-A: Request submit ஆனது மட்டும் confirmation கிடையாதுங்க. Booking operation success ஆன பிறகுதான் Appointment confirmed.
-
-Q: WhatsAppல Package details அனுப்ப முடியுமா?
-A: ஆமாங்க, எந்த Package details வேணும்னு சொல்லுங்க. WhatsApp delivery successful ஆன பிறகு confirm பண்ணுறேன்.
-
-Q: Callback பண்ண முடியுமா?
-A: ஆமாங்க, எந்த Date மற்றும் Timeக்கு Callback வேணும்னு சொல்லுங்க.
-
-Q: நான் பிறகு பேசுறேன்
-A: சரிங்க, எந்த Date மற்றும் Timeக்கு Callback பண்ணலாம்?
-
-Q: AI symptoms diagnose பண்ணுமா?
-A: முடியாதுங்க. Screening மற்றும் Package information மட்டும் சொல்ல முடியும். Diagnosis மற்றும் treatmentக்கு Doctor consultation தேவை.
-
-Q: Medicine suggest பண்ண முடியுமா?
-A: Medicine prescribe பண்ண முடியாதுங்க. Doctor consultation எடுத்துக்கோங்க.
-
-Q: Package என் problemஐ cure பண்ணுமா?
-A: Health Checkup Package screeningக்காக மட்டும்தாங்க. இது treatment அல்லது cure கிடையாது. Diagnosis மற்றும் treatmentக்கு Doctor consultation தேவை.
-
-Q: Emergencyனா என்ன பண்ணணும்?
-A: Severe Chest pain, breathing difficulty, unconsciousness, heavy bleeding அல்லது stroke symptoms இருந்தா உடனே அருகிலுள்ள emergency medical serviceஐ அணுகுங்க.
-
-Q: Headacheக்கு எந்த Package இருக்கு?
-A: Headacheக்கு தனியாக approved Package இல்லைங்க. Exact காரணம் Doctorதான் confirm பண்ண முடியும். General screeningக்கு Master Health Checkup options சொல்லட்டுமா?
-
-Q: தலை சுத்துது. எந்த Package பார்க்கலாம்?
-A: தலை சுத்துறதுக்கு exact காரணம் Doctorதான் confirm பண்ண முடியும். General screeningக்கு Master Health Checkup options இருக்கு. அது பத்தி சொல்லட்டுமா?
-
-Q: Overall Health Check பண்ணணும்
-A: Overall screeningக்கு Silver, Gold, Platinum Packages இருக்குங்க. Basic, detailed, advancedனு coverage மாறும். Difference சொல்லட்டுமா?
-
-Q: Human agentகிட்ட பேச முடியுமா?
-A: ஆமாங்க, Telecalling teamக்கு connect பண்ண முயற்சி செய்யலாம்.
-
-Q: Hello கேக்குதா?
-A: ஆமாங்க, நான் இருக்கேங்க. நீங்க பேசுறது கேக்குது, சொல்லுங்க.
-
-Q: Callல இருக்கீங்களா?
-A: ஆமாங்க, நான் இருக்கேங்க. நீங்க பேசுறது கேக்குது, சொல்லுங்க.
-
-Q: ஒரு நிமிஷம் wait பண்ணுங்க
-A: சரிங்க, நான் wait பண்றேன். நீங்க ready ஆனதும் சொல்லுங்க.
-
-Q: நான் ஏற்கனவே Name and Age சொல்லிட்டேன்
-A: சரிங்க, ஏற்கனவே கொடுத்த தகவலை மறுபடியும் கேட்காம அடுத்த தேவையான detail மட்டும் கேட்கிறேன்.
-
-Q: Package name clearஆ கேட்கலையா?
-A: மன்னிக்கணுங்க, Package name clearஆ புரியல. இன்னொரு தடவை சொல்ல முடியுமா?
-
-Q: Package price தெரியலையா?
-A: Exact approved price கிடைக்காதபோது estimate பண்ணி சொல்ல முடியாதுங்க. Hospital team confirm பண்ணட்டுமா?
-
-Q: Full Test list சொல்ல முடியுமா?
-A: சொல்லலாங்க. எந்த Packageக்கான Full Test list வேணும்னு சொல்லுங்க. சின்ன சின்ன பகுதியாக explain பண்ணுறேன்.
+QUESTION: Shanmuga Hospital என்ன உதவி செய்யும்?
+ALIASES: What information can you provide? | என்ன details சொல்ல முடியும்? | Hospital services பற்றி சொல்லுங்க
+ANSWER: Shanmuga Hospitalல கிடைக்குற approved Health Check-up மற்றும் Screening options பத்தி explain பண்ணலாம். Package details, preparation information மற்றும் Appointment supportக்கும் உதவலாம்.
+
+QUESTION: Shanmuga Hospital எங்க இருக்கு?
+ALIASES: Hospital location என்ன? | Address சொல்லுங்க | Hospitalக்கு எப்படி வரணும்? | Where is the hospital? | Location share பண்ணுங்க
+ANSWER: Shanmuga Hospital Salemல, Ramakrishna Bus Stopக்கு அருகில் Hasthampatti போற வழியில இருக்குங்க.
+
+QUESTION: Health Check-up Package screeningஆ diagnosisஆ?
+ALIASES: Package diagnosis பண்ணுமா? | இந்த Checkup நோயை confirm பண்ணுமா? | Is this diagnostic? | Screeningக்கும் diagnosisக்கும் என்ன difference?
+ANSWER: Health Check-up Package screeningக்காகத்தாங்க. இது diagnosis அல்லது treatment கிடையாது; exact medical காரணம் மற்றும் treatmentஐ Doctorதான் confirm பண்ண முடியும்.
+
+QUESTION: இந்த Package எல்லா health problemஐயும் cover பண்ணுமா?
+ALIASES: Full body checkupல எல்லாமே cover ஆகுமா? | இந்த Packageல எல்லா Testsம் இருக்கா? | Does this package cover everything? | Complete body checkupஆ?
+ANSWER: எந்த ஒரு Health Check-up Packageமும் எல்லா medical condition அல்லது எல்லா Testஐயும் cover பண்ணும்னு சொல்ல முடியாதுங்க. அந்த Packageல approvedஆ listed இருக்குற Tests மட்டும் included; உங்களுடைய exact requirementக்கு Doctor consultation தேவை.
+
+QUESTION: எனக்கு எந்த Package suitableஆ இருக்கும்?
+ALIASES: எந்த Package choose பண்ணலாம்? | Which package should I select? | என்னுடைய requirementக்கு என்ன Package? | எனக்கு suitable Package சொல்லுங்க
+ANSWER: உங்களுடைய screening requirement அல்லது concern சொல்லுங்க. அதுக்கு related approved option இருந்தா explain பண்றேன்; exact medical suitabilityஐ Doctorதான் confirm பண்ண முடியும்.
+
+QUESTION: ஒரு categoryக்கு ஒரே priceஆ?
+ALIASES: Category price என்ன? | இந்த category full price என்ன? | எல்லா optionsக்கும் same priceஆ? | Category package amount என்ன?
+ANSWER: ஒரு categoryக்குள்ள பல Check-up options இருந்தா ஒவ்வொன்றுக்கும் தனித்தனி price இருக்குங்க. எந்த option பத்தி கேக்குறீங்கன்னு சொன்னா அதோட approved price சொல்லலாம்.
+
+QUESTION: Full Test list சொல்ல முடியுமா?
+ALIASES: Complete test list வேணும் | எல்லா Testsம் சொல்லுங்க | What tests are included? | இந்த Packageல என்னென்ன இருக்கு? | Package full details சொல்லுங்க
+ANSWER: சொல்லலாங்க. எந்த Packageக்கான Full Test list வேணும்னு சொல்லுங்க; நீளமான listஆ இருந்தா கேட்க easyஆ சின்ன சின்ன பகுதியாக explain பண்றேன்.
+
+QUESTION: Package details சுருக்கமா சொல்ல முடியுமா?
+ALIASES: Short summary சொல்லுங்க | முக்கியமான Tests மட்டும் சொல்லுங்க | Briefஆ explain பண்ணுங்க | Quick summary வேணும்
+ANSWER: சொல்லலாங்க. Selected Packageோட approved price மற்றும் முக்கியமான coverageஐ முதல்ல சுருக்கமா சொல்றேன். Full list தேவைப்பட்டா அடுத்ததாக சொல்லலாம்.
+
+QUESTION: இரண்டு Packages compare பண்ண முடியுமா?
+ALIASES: Package difference சொல்லுங்க | Compare these packages | ரெண்டு Packageக்கும் என்ன வித்தியாசம்? | எது better?
+ANSWER: Compare பண்ணலாங்க. எந்த இரண்டு approved Packagesனு சொல்லுங்க; price, included Tests மற்றும் முக்கியமான coverage difference மட்டும் தெளிவா சொல்றேன். Medicalஆ எது suitableன்னு Doctorதான் confirm பண்ண முடியும்.
+
+QUESTION: Health Check-upக்கு fasting தேவையா?
+ALIASES: Fasting இருக்கணுமா? | சாப்பிடாம வரணுமா? | How long should I fast? | எத்தனை மணி நேரம் fasting? | Testக்கு முன்னாடி சாப்பிடலாமா?
+ANSWER: Health Check-upக்கு முன்னாடி எட்டு முதல் பத்து மணி நேரம் fastingல இருக்கணுங்க.
+
+QUESTION: Fastingல தண்ணீர் குடிக்கலாமா?
+ALIASES: Water குடிக்கலாமா? | Can I drink water while fasting? | Fasting time water allowedஆ? | Tea coffee குடிக்கலாமா?
+ANSWER: Fasting நேரத்துல தண்ணீர் மட்டும் குடிக்கலாங்க. வேற drinks அல்லது food எடுத்துக்காம வருங்க.
+
+QUESTION: Check-upக்கு என்ன கொண்டு வரணும்?
+ALIASES: Testக்கு வரும்போது என்ன எடுத்து வரணும்? | What should I bring? | Previous report கொண்டு வரணுமா? | என்ன dress போடணும்?
+ANSWER: Comfortable dress போட்டுட்டு வாங்க. ஏற்கனவே எடுத்த medical reports இருந்தா அதையும் கொண்டு வாங்க.
+
+QUESTION: Health Check-upக்கு எத்தனை மணிக்கு வரணும்?
+ALIASES: Test timing என்ன? | Checkup time சொல்லுங்க | What time should I come? | Morning எப்ப வரணும்?
+ANSWER: Health Check-upக்கு காலை எட்டு மணிக்கு வர்றது recommendedங்க. Final Date மற்றும் availability Appointment bookingல confirm ஆகணும்.
+
+QUESTION: Regular Medicine stop பண்ணணுமா?
+ALIASES: Fastingல tablet எடுக்கலாமா? | Medicine சாப்பிடலாமா? | Should I stop my medicine? | Tablet continue பண்ணலாமா?
+ANSWER: Regular Medicineஐ நீங்களாக stop அல்லது change பண்ணாதீங்க. Check-upக்கு முன்னாடி Medicine எடுக்குறது பற்றி Doctor அல்லது Hospital teamகிட்ட confirm பண்ணுங்க.
+
+QUESTION: Appointmentக்கு என்ன details தேவை?
+ALIASES: Bookingக்கு என்ன information வேணும்? | What details are needed to book? | Appointment எப்படி book பண்ணுவது? | Booking details என்ன?
+ANSWER: Appointmentக்கு எந்த Packageனு clearஆ இருக்கணும். நீங்க bookingக்கு agree பண்ணின பிறகு Patient name, age, preferred Date மற்றும் Time மாதிரி தேவையான details மட்டும் கேட்போம்.
+
+QUESTION: Pre-callல name இருந்தாலும் Patient name ஏன் கேக்குறீங்க?
+ALIASES: என் பெயர் already இருக்கே? | Why are you asking my name again? | Name மறுபடியும் கேக்குறீங்களா? | Facebook formல name கொடுத்தேனே
+ANSWER: Appointment சரியான patientக்காக பதிவு ஆகணும்னு Patient nameஐ callerகிட்ட நேரடியாக confirm பண்றோம். அதுக்கப்புறம் already confirmed detailஐ மறுபடியும் கேட்க மாட்டோம்.
+
+QUESTION: Family memberக்கு Appointment book பண்ணலாமா?
+ALIASES: வேற ஒருத்தருக்கு booking பண்ணலாமா? | Can I book for a family member? | Friendக்கு Appointment வேணும் | Patient வேற person
+ANSWER: ஆமாங்க, Family member அல்லது வேற patientக்காக Appointment request பண்ணலாம். Booking ஆரம்பிச்ச பிறகு அந்த Patient name மற்றும் தேவையான மீதி details மட்டும் கேட்போம்.
+
+QUESTION: Appointment request கொடுத்தாலே confirmedஆ?
+ALIASES: Appointment confirmedஆ? | Is my booking confirmed? | Booking success ஆயிடுச்சா? | Request submit ஆனால் போதுமா?
+ANSWER: Appointment operation successfulஆ confirm ஆன பிறகுதான் Booking confirmedங்க. Request processல இருந்தா confirmedனு சொல்ல முடியாது.
+
+QUESTION: Package brochure WhatsAppல அனுப்ப முடியுமா?
+ALIASES: WhatsAppல details அனுப்புங்க | Send brochure in WhatsApp | Package list message பண்ணுங்க | WhatsAppக்கு அனுப்ப முடியுமா?
+ANSWER: அனுப்ப முயற்சி பண்ணலாம். எந்த Package details வேணும்னு சொல்லுங்க; WhatsApp delivery successful ஆன பிறகுதான் அனுப்பியாச்சுனு confirm பண்றோம்.
+
+QUESTION: Package customize பண்ண முடியுமா?
+ALIASES: Tests customize பண்ணலாமா? | Custom package வேணும் | Can I change the package tests? | Package modify பண்ணணும்
+ANSWER: Package customizationக்கு Hospital tele-calling teamகிட்ட confirm பண்ணணுங்க. அவர்களோட connect பண்ண முயற்சி பண்ணலாம்.
+
+QUESTION: Doctor advice கிடைக்குமா?
+ALIASES: Doctorகிட்ட பேசணும் | Medical advice வேணும் | Can I speak to a doctor? | Doctor consultation help
+ANSWER: Medical advice மற்றும் diagnosisக்கு Doctor support தேவைங்க. Hospital teamகிட்ட connect பண்ண முயற்சி பண்ணலாம்.
+
+QUESTION: Insurance பற்றி சொல்ல முடியுமா?
+ALIASES: Insurance cover ஆகுமா? | Cashless availableஆ? | Is insurance accepted? | Insurance details வேணும்
+ANSWER: Insurance coverage மற்றும் eligibilityயை voice agent confirm பண்ண முடியாதுங்க. Hospital tele-calling teamகிட்ட connect பண்ணி verified details கேட்கலாம்.
+
+QUESTION: Refund அல்லது complaint support கிடைக்குமா?
+ALIASES: Refund வேணும் | Complaint சொல்லணும் | I want to complain | Payment refund எப்படி? | Service issue இருக்கு
+ANSWER: Refund அல்லது complaint requestஐ Hospital tele-calling teamதான் handle பண்ணுவாங்க. அவர்களோட connect பண்ண முயற்சி பண்ணலாம்.
+
+QUESTION: Doctor availability எப்படி தெரிஞ்சிக்கறது?
+ALIASES: Doctor availableஆ? | Doctor timing என்ன? | Doctor contact number வேணும் | Which doctor is available? | Specialist availability
+ANSWER: Doctor availability மற்றும் contact details current scheduleக்கு ஏற்ப மாறலாம். Hospital tele-calling teamகிட்ட connect பண்ணி confirm பண்ணலாம்.
+
+QUESTION: Human agentகிட்ட பேச முடியுமா?
+ALIASES: Staffகிட்ட connect பண்ணுங்க | Telecaller வேணும் | Connect me to a person | மனிதர்கிட்ட பேசணும்
+ANSWER: ஆமாங்க, Hospital tele-calling teamகிட்ட connect பண்ண முயற்சி பண்ணலாம். Transfer successful ஆன பிறகுதான் connection confirm ஆகும்.
+
+QUESTION: நீங்கள் answer தெரியாத question கேட்டா என்ன செய்வீங்க?
+ALIASES: Information இல்லனா என்ன செய்வீங்க? | You do not know the answer | இந்த detail confirm இல்லையா? | தெரியாத தகவல் கேட்டா?
+ANSWER: Confirmed information இல்லாதபோது guess பண்ணி சொல்ல மாட்டேங்க. Hospital tele-calling teamகிட்ட connect பண்ணி verified information கேட்க உதவலாம்.

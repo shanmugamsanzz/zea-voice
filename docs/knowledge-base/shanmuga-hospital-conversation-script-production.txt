@@ -1,338 +1,189 @@
-SCENARIO=mandatory_conversation_flow | ACTION=Always follow this order unless the caller asks a different valid question: Welcome and Package offer, exact Package overview, selected Package explanation, selected Package confirmation, appointment information collection, booking details confirmation, verified Booking tool result, closing. Never skip directly from the Welcome Message to asking name, age, date or time.
-
-SCENARIO=approved_package_catalog_guard | ACTION=Treat the Product Package Catalog as the closed source of truth for categories, Package names, aliases, prices, inclusions, preparation and availability. Recognize only approved Catalog entities and their configured aliases or clear spoken variants. Never convert an unclear STT word into a new Package. Never invent Basic, Comprehensive, Senior Citizen, Women Wellness, Thyroid or any other Package not present in the approved Catalog.
-
-SCENARIO=catalog_fact_source | ACTION=Use this Conversation Script only for Salem-style speaking, flow and transitions. Before stating a price, test, inclusion, fasting requirement, availability or booking-hour rule, use the approved Product Package Catalog or approved Workflow Rules. If the Catalog does not confirm a fact, do not state it as fact.
-
-SCENARIO=package_information_before_booking | STATE=caller has not explicitly requested booking | ACTION=Explain only the Package information requested by the caller. Do not ask patient name, age, appointment date or appointment time. Ask for booking details only after the caller clearly asks to book an approved Package.
-
-SCENARIO=package_selection_before_personal_details | STATE=booking requested and selected_package missing or unclear | AGENT=சரிங்க, எந்த Packageக்கு Appointment வேணுங்க? | ACTION=Do not ask name, age, date or time until one approved Package is clearly selected.
-
-SCENARIO=package_selection_confirmation | STATE=caller clearly selected one approved Package | ACTION=Store the exact approved Catalog name as selected_package. Confirm only that Package and preserve it for the rest of the call. Do not replace it because of a later STT fragment unless the caller clearly requests a change.
-
-SCENARIO=unknown_or_misheard_package | CALLER=An unclear, unsupported or low-confidence Package name | AGENT=நீங்க சொன்ன Package name clearஆ புரியலங்க. மறுபடியும் Package பெயரை மட்டும் சொல்ல முடியுமா? | ACTION=Do not explain it, do not save it as selected_package and do not start appointment information collection.
-
-SCENARIO=first_unknown_package_attempt | STATE=Package name does not confidently match an approved Catalog name or configured spoken variant | AGENT=நீங்க சொன்ன Package name சரியா கேக்கலங்க. மறுபடியும் Package பெயரை மட்டும் சொல்ல முடியுமா? | ACTION=Ask once. Do not say the Package is unavailable, do not invent a Package, do not ask name or age and do not start Booking.
-
-SCENARIO=repeated_unknown_package_attempt | STATE=Caller repeated the Package name but it still does not match an approved Catalog name or configured spoken variant | AGENT=அந்த Package name இன்னும் clearஆ புரியலங்க. Available Package options மறுபடியும் சொல்லட்டுமா? | ACTION=Offer the approved overview or Hospital team confirmation. Do not claim that the Package is unavailable unless the clearly understood name was checked against the approved Catalog.
-
-SCENARIO=booking_information_order | STATE=one approved selected_package confirmed and booking requested | ACTION=Collect only the configured missing fields, one question at a time. Preserve values already collected in the current call. Never ask the same completed field again. If the caller gives multiple fields in one utterance, store all of them together and ask only the next missing field.
-
-SCENARIO=booking_success_guard | ACTION=Never say booked, confirmed, registered or successful until the configured Booking tool returns success. If the tool is pending, failed or unavailable, use the matching pending, failure or unavailable response below.
-
-SCENARIO=welcome_positive_response | CONTEXT=The Welcome Message has just asked whether Package details may be explained | CALLER=ம், ஆமா, சரி, சொல்லுங்க, explain பண்ணுங்க, ஆ explain பண்ணலாங்க, ம் explain பண்ணுங்க, சரி explain பண்ணுங்க | AGENT=எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Onco Care Packages, Organ-Specific Packages, Kids Health Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?
-
-SCENARIO=welcome_positive_response_variants | CONTEXT=The Welcome Message has just offered to explain Package details | CALLER=ஆ பண்ணுங்க, ம் ஆ பண்ணுங்க, ஆமா சொல்லுங்க, சரிங்க சொல்லுங்க, okay explain பண்ணுங்க, yes please, continue பண்ணுங்க, details சொல்லுங்க, package சொல்லுங்க, சொல்லலாங்க | AGENT=எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Onco Care Packages, Organ-Specific Packages, Kids Health Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?
-
-SCENARIO=welcome_negative_response | CONTEXT=The Welcome Message has just offered Package details | CALLER=இல்லைங்க, வேண்டாம், நான் enquiry பண்ணல, இப்ப வேண்டாம் | AGENT=சரிங்க, புரியுதுங்க. வேற ஏதாவது உதவி வேணுமா? | ACTION=Do not ask name, age, Package, Date or Time unless the caller later asks for information or booking.
-
-SCENARIO=package_overview | CALLER=என்னென்ன Packages இருக்கு?, என்னென்ன Packagesலாம் இருக்கு?, என்னென்ன Package இருக்குன்னு கேட்டேன், Packages சொல்லுங்க, எல்லா Package-உம் சொல்லுங்க, வேற என்ன Packages இருக்கு?, What Packages are available?, Explain all Packages | AGENT=எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Onco Care Packages, Organ-Specific Packages, Kids Health Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?
-
-SCENARIO=package_overview_any_wording | CALLER=Any Tamil, Tanglish or English request asking what Packages, Checkups, plans, services or options are available | AGENT=எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Onco Care Packages, Organ-Specific Packages, Kids Health Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்? | ACTION=Use this exact response. Do not generate alternate Package names from the LLM.
-
-SCENARIO=package_overview_followup | CALLER=வேற என்ன Packages இருக்கு?, இன்னும் வேற இருக்கா?, Is that all?, What else do you have? | AGENT=எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Onco Care Packages, Organ-Specific Packages, Kids Health Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்? | ACTION=Repeat the approved overview exactly. Never add an unapproved Package.
-
-SCENARIO=master_package_options | CALLER=Master Health Checkupல என்ன இருக்கு?, Full Body Checkup Packages என்ன? | AGENT=Master Health Checkupல Silver, Gold, Platinum இருக்குங்க. இதில் எந்த Package பத்தி தெரிஞ்சிக்கணும்? | ACTION=Say only the children of the requested Master Health Checkup category. Do not repeat the complete hospital overview unless the caller asks for all available Packages.
-
-SCENARIO=master_package_prices | CALLER=மூணு Package price என்ன?, எல்லா price சொல்லுங்க | AGENT=Silver ஆயிரத்து அறுநூற்று ஐம்பது ரூபாய், Gold நாலாயிரத்து தொள்ளாயிரத்து ஐம்பது ரூபாய், Platinum ஏழாயிரத்து தொள்ளாயிரத்து எண்பது ரூபாய். எது பத்தி detail வேணும்?
-
-SCENARIO=organ_specific_options | CALLER=Organ-Specificல என்ன Packages இருக்கு? | AGENT=Organ-Specific Packagesல Renal, Liver, Cardiac, Surgery Profile One, Surgery Profile Two, Lungs, Ortho மற்றும் Gastro Checkups இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?
-
-SCENARIO=kids_health_options | CALLER=Kids Health Packages சொல்லுங்க, குழந்தைகளுக்கு என்ன Packages இருக்கு? | AGENT=Kids Health Packagesல Paediatric Health Screening, Developmental Screening, IQ Assessment, Behavioural Assessment, Developmental Disorder Screening, Neonatal Screening மற்றும் Newborn Hearing Screening இருக்குங்க. இதில் எது பத்தி தெரிஞ்சிக்கணும்? | ACTION=Do not collect personal details during Package information. Ask the child's age only when an approved selected Package requires age to choose an option, or after explicit booking intent.
-
-SCENARIO=newborn_options | CALLER=Newbornக்கு என்ன Screening இருக்கு? | AGENT=Newbornக்கு Neonatal Three Panel, Neonatal Four Panel மற்றும் Hearing Screening options இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?
-
-SCENARIO=oncology_options | CALLER=Cancer Screening Packages என்ன இருக்கு? | AGENT=Onco Careல Premium Male, Premium Female, Male Add-on மற்றும் Female Add-on options இருக்குங்க. இது Screening மட்டும்தாங்க, diagnosis கிடையாது. Premium அல்லது Add-on எது பத்தி தெரிஞ்சிக்கணும்?
-
-SCENARIO=silver_short_explanation | CALLER=Silver Package explain பண்ணுங்க | AGENT=சரிங்க, Silver Master Health Checkup உங்களுக்கு ஆயிரத்து அறுநூற்று ஐம்பது ரூபாய் வருங்க. இதுல Sugar, Kidney, Liver, Cholesterol Tests, ECG, Chest X-ray மற்றும் ஒரு Doctor Consultation இருக்கு. Full Test list சொல்லட்டுமா?
-
-SCENARIO=silver_full_tests | CALLER=Silver Full Test list சொல்லுங்க | AGENT=Silverல CBC, Blood Grouping and RH Type, Sugar Fasting, Post Prandial, HbA1c, Urea, Creatinine, Uric Acid, Lipid Profile, Liver Function Test, Urine Routine, ECG மற்றும் Chest X-ray இருக்கு. ஒரு Doctor Consultationம் includedங்க. Appointment proceed பண்ணலாமா?
-
-SCENARIO=silver_booking_transition | CALLER=Full list வேணாம், Appointment பார்க்கலாம் | AGENT=சரிங்க, Silver Master Health Checkupக்கு proceed பண்ணலாம். இந்த Appointment உங்களுக்கா, இல்ல வேற யாருக்குங்க?
-
-SCENARIO=gold_short_explanation | CALLER=Gold Package explain பண்ணுங்க | AGENT=சரிங்க, Gold Master Health Checkup உங்களுக்கு நாலாயிரத்து தொள்ளாயிரத்து ஐம்பது ரூபாய் வருங்க. இதுல Silver coverage கூட ECHO, USG Abdomen, Thyroid, Vitamin Tests மற்றும் Dental Check-up இருக்கு. Full Test list சொல்லட்டுமா?
-
-SCENARIO=gold_tests_part_one | CALLER=Gold Full Test list சொல்லுங்க | AGENT=Goldல CBC, Blood Grouping, Sugar Fasting, Post Prandial, HbA1c, Urea, Creatinine, Uric Acid, Lipid Profile, Liver Function Test மற்றும் Urine Routine இருக்கு. மீதி Tests சொல்லட்டுமா?
-
-SCENARIO=gold_tests_part_two | CALLER=ம், சொல்லுங்க, continue | AGENT=இதுக்குமேல Calcium, Iron and TIBC, Vitamin D, Vitamin B12, Homocysteine, Thyroid Tests, Electrolytes, HSCRP, ECG, ECHO, Chest X-ray, USG Abdomen மற்றும் Dental Check-up இருக்கு. ஒரு Doctor Consultationம் includedங்க. Appointment proceed பண்ணலாமா?
-
-SCENARIO=gold_booking_transition | CALLER=Gold book பண்ணலாம் | AGENT=சரிங்க, Gold Master Health Checkupக்கு proceed பண்ணலாம். இந்த Appointment உங்களுக்கா, இல்ல வேற யாருக்குங்க?
-
-SCENARIO=platinum_short_explanation | CALLER=Platinum Package explain பண்ணுங்க | AGENT=சரிங்க, Platinum Master Health Checkup உங்களுக்கு ஏழாயிரத்து தொள்ளாயிரத்து எண்பது ரூபாய் வருங்க. இதுல advanced blood, heart, lung, vascular Screening மற்றும் நாலு Doctor Consultations இருக்கு. Full Test list சொல்லட்டுமா?
-
-SCENARIO=platinum_tests_part_one | CALLER=Platinum Full Test list சொல்லுங்க | AGENT=Platinumல CBC, Blood Grouping, Sugar Fasting, Post Prandial, HbA1c, Urea, Creatinine, Uric Acid, Lipid Profile, Liver Function Test, Calcium, Iron and TIBC மற்றும் Urine Routine இருக்கு. மீதி Tests சொல்லட்டுமா?
-
-SCENARIO=platinum_tests_part_two | CALLER=ம், சொல்லுங்க, continue | AGENT=இதுக்குமேல ESR, Vitamin D, Vitamin B12, Homocysteine, Thyroid Tests, Electrolytes, HSCRP, HIV, HBsAg, HCV, Chest X-ray, ECG, ECHO மற்றும் PFT இருக்கு. இன்னும் சொல்லட்டுமா?
-
-SCENARIO=platinum_tests_part_three | CALLER=ஆமா, சொல்லுங்க | AGENT=USG Abdomen, Apolipoprotein A1 and B, Magnesium, Phosphorus, Carotid Doppler, Ankle Brachial Index, Dental Check-up மற்றும் Diabetic Foot Assessmentம் இருக்கு. நாலு Doctor Consultations எடுத்துக்கலாம். Appointment proceed பண்ணலாமா?
-
-SCENARIO=platinum_booking_transition | CALLER=Platinum book பண்ணலாம் | AGENT=சரிங்க, Platinum Master Health Checkupக்கு proceed பண்ணலாம். இந்த Appointment உங்களுக்கா, இல்ல வேற யாருக்குங்க?
-
-SCENARIO=silver_gold_comparison | CALLER=Silverக்கும் Goldக்கும் என்ன difference? | AGENT=Silverல basic blood Tests, Sugar, Kidney, Liver, ECG மற்றும் Chest X-ray வருங்க. Goldல இதுக்குமேல ECHO, USG Abdomen, Thyroid, Vitamin Tests மற்றும் Dental Check-up இருக்கு. ரெண்டுல எது பத்தி இன்னும் detail வேணும்?
-
-SCENARIO=gold_platinum_comparison | CALLER=Goldக்கும் Platinumக்கும் என்ன difference? | AGENT=Goldல detailed Screening மற்றும் ஒரு Doctor Consultation இருக்கு. Platinumல இதுக்குமேல ESR, PFT, Carotid Doppler, Ankle Brachial Index, viral markers மாதிரி advanced Tests மற்றும் நாலு Doctor Consultations இருக்கு. எது பத்தி இன்னும் detail வேணும்?
-
-SCENARIO=silver_platinum_comparison | CALLER=Silverக்கும் Platinumக்கும் என்ன difference? | AGENT=Silver basic Screeningக்கானது. Platinumல Silver coverageக்கு மேல advanced blood, heart, lung, vascular Tests மற்றும் நாலு Doctor Consultations இருக்கு. எது பத்தி இன்னும் detail வேணும்?
-
-SCENARIO=all_master_comparison | CALLER=Silver Gold Platinum மூணுக்கும் என்ன difference? | AGENT=Silver basic Screeningக்குங்க. Goldல additional Thyroid, Vitamin, ECHO, USG மற்றும் Dental coverage இருக்கு. Platinumல இதுக்குமேல advanced heart, lung, vascular Tests மற்றும் நாலு Doctor Consultations இருக்கு. எந்த Package பத்தி detail வேணும்?
-
-SCENARIO=diabetic_short_explanation | CALLER=Diabetic Package explain பண்ணுங்க, Sugar Package சொல்லுங்க | AGENT=சரிங்க, Diabetic Health Checkup உங்களுக்கு மூவாயிரத்து இருநூறு ரூபாய் வருங்க. இதுல Sugar, HbA1c, Insulin, Kidney-related Tests மற்றும் Foot Screening இருக்கு. Full Test list சொல்லட்டுமா?
-
-SCENARIO=diabetic_tests_part_one | CALLER=Diabetic Full Test list சொல்லுங்க | AGENT=இதுல Sugar Fasting, Post Prandial, Chest X-ray, CBC, Creatinine, ECG, ECHO, ESR, HbA1c, Lipid Profile மற்றும் Fasting Insulin இருக்கு. மீதி Tests சொல்லட்டுமா?
-
-SCENARIO=diabetic_tests_part_two | CALLER=ம், சொல்லுங்க, continue | AGENT=இதுக்குமேல Insulin Resistance, Insulin Sensitivity, Ankle Brachial Index, Biothesiometry, Foot Screening, Random Urine Microalbumin, USG Abdomen and Pelvis, Urea, Uric Acid, Urine Albumin Creatinine Ratio மற்றும் Urine Complete Analysis இருக்கு. ஒரு Doctor Consultationம் includedங்க. Appointment proceed பண்ணலாமா?
-
-SCENARIO=diabetic_booking_transition | CALLER=Diabetic Package book பண்ணலாம் | AGENT=சரிங்க, Diabetic Health Checkupக்கு proceed பண்ணலாம். இந்த Appointment உங்களுக்கா, இல்ல வேற யாருக்குங்க?
-
-SCENARIO=renal_explanation | CALLER=Kidney Package explain பண்ணுங்க, Renal Package சொல்லுங்க | AGENT=சரிங்க, Renal Health Checkup உங்களுக்கு ஆயிரத்து நானூறு ரூபாய் வருங்க. இதுல Hb, Urea, Creatinine, Uric Acid, Calcium, Electrolytes, BUN மற்றும் USG Abdomen இருக்கு. Urologist அல்லது Nephrologist Consultation availableங்க. Appointment proceed பண்ணலாமா?
-
-SCENARIO=liver_explanation | CALLER=Liver Package explain பண்ணுங்க | AGENT=சரிங்க, Liver Health Checkup உங்களுக்கு ஆயிரத்து நானூறு ரூபாய் வருங்க. இதுல Hb, Liver Function Test மற்றும் USG Abdomen இருக்கு. Gastroenterologist Consultation availableங்க. Appointment proceed பண்ணலாமா?
-
-SCENARIO=cardiac_explanation | CALLER=Cardiac Package explain பண்ணுங்க, Heart Package சொல்லுங்க | AGENT=சரிங்க, Cardiac Health Checkup உங்களுக்கு இரண்டாயிரத்து தொள்ளாயிரத்து ஐம்பது ரூபாய் வருங்க. இதுல heart-related blood Tests, ECG, ECHO, Treadmill Test, Physical Examination மற்றும் Cardiologist Consultation இருக்கு. Full Test list சொல்லட்டுமா?
-
-SCENARIO=lungs_explanation | CALLER=Lungs Package explain பண்ணுங்க, Lungs Package, Lung Package, Lunch Package, லங்ஸ் Package, நுரையீரல் Package | AGENT=சரிங்க, Lungs Health Checkup Organ-Specific Packagesல வருங்க. இதன் price தொள்ளாயிரத்து தொண்ணூற்று ஒன்பது ரூபாய். CBC, RBS, CRP, ESR, Urea, Creatinine, Chest X-ray, ECG மற்றும் PFT இருக்கு; Pulmonologist Consultationம் availableங்க. Testக்கு எட்டு மணி நேரம் fastingல இருந்து, காலை எட்டு மணி முதல் பதினொன்று மணிக்குள்ள வரணுங்க. Appointment பார்க்கலாமா?
-
-SCENARIO=lungs_symptom_routing | CALLER=எனக்கு lungsல problem எந்த Package choose பண்ணணும்?, lunchல problem, மூச்சு சம்பந்தப்பட்ட problem, respiratory problem | AGENT=Lung-related screeningக்கு Organ-Specific categoryல Lungs Health Checkup இருக்குங்க. இதன் price தொள்ளாயிரத்து தொண்ணூற்று ஒன்பது ரூபாய். Exact காரணம் Doctorதான் confirm பண்ண முடியும். Package details சொல்லட்டுமா?
-
-SCENARIO=ortho_explanation | CALLER=Ortho Package explain பண்ணுங்க | AGENT=சரிங்க, Ortho Health Checkup உங்களுக்கு ஆயிரத்து நானூற்று தொண்ணூற்று ஒன்பது ரூபாய் வருங்க. இதுல requirementக்கு ஏற்ப இரண்டு X-rays, ESR, CRP, Calcium, Vitamin D, Uric Acid மற்றும் RA Factor இருக்கு. Ortho Doctor Consultation availableங்க. Appointment proceed பண்ணலாமா?
-
-SCENARIO=gastro_explanation | CALLER=Gastro Package explain பண்ணுங்க, Stomach Package சொல்லுங்க | AGENT=சரிங்க, Gastro Checkup One-day Admission உங்களுக்கு இருபத்தைந்தாயிரம் ரூபாய் வருங்க. இதுல Hb, Liver Function Test, USG Abdomen, Twenty-four Hours PH Monitoring, Manometry மற்றும் Endoscopy இருக்கு. Gastroenterologist Consultation மற்றும் one-day admission தேவைப்படுங்க. Appointment details பார்க்கலாமா?
-
-SCENARIO=oncology_premium_male | CALLER=Premium Male Onco Package explain பண்ணுங்க | AGENT=சரிங்க, Premium Male Screening உங்களுக்கு எட்டாயிரத்து அறுநூறு ரூபாய் வருங்க. இதுல approved blood Tests, PSA, CEA, CA 19.9 மற்றும் Chest and Whole Abdomen CT Screening இருக்கு. Oncologist Consultation availableங்க. Full Test list சொல்லட்டுமா?
-
-SCENARIO=oncology_premium_male_full_tests | CALLER=Premium Male Full Test list சொல்லுங்க | AGENT=இதுல CBC, Urine Complete, Urea, Creatinine, Amylase, Lipase, Liver Function Test, Random Sugar, PSA, CEA, CA 19.9 மற்றும் Chest and Whole Abdomen CT Screening இருக்கு. இது Screening மட்டும்தாங்க, diagnosis கிடையாது. Appointment proceed பண்ணலாமா?
-
-SCENARIO=oncology_premium_female | CALLER=Premium Female Onco Package explain பண்ணுங்க | AGENT=சரிங்க, Premium Female Screening உங்களுக்கு எட்டாயிரத்து எண்ணூறு ரூபாய் வருங்க. இதுல approved blood Tests, CA 125, CEA, CA 19.9, Pap Smear, CT Screening மற்றும் Mammogram இருக்கு. Oncologist Consultation availableங்க. Full Test list சொல்லட்டுமா?
-
-SCENARIO=oncology_premium_female_full_tests | CALLER=Premium Female Full Test list சொல்லுங்க | AGENT=இதுல CBC, Urine Complete, Urea, Creatinine, Amylase, Lipase, Liver Function Test, Random Sugar, CA 125, CEA, CA 19.9, Pap Smear, CT Screening மற்றும் Mammogram இருக்கு. இது Screening மட்டும்தாங்க, diagnosis கிடையாது. Appointment proceed பண்ணலாமா?
-
-SCENARIO=oncology_addon_overview | CALLER=Onco Add-on explain பண்ணுங்க | AGENT=Onco Add-on எடுக்குறதுக்கு முதல்ல Silver, Gold அல்லது Platinumல ஒரு base Package select பண்ணணுங்க. Male Add-on எழுநூற்று ஐம்பது ரூபாய், Female Add-on ஆயிரத்து நூறு ரூபாய். Male அல்லது Female எது வேணும்?
-
-SCENARIO=oncology_addon_male | CALLER=Male Add-on explain பண்ணுங்க | AGENT=Male Add-onல Amylase, Lipase, PSA, CEA மற்றும் CA 19.9 இருக்கு. Medical Oncology Consultationம் includedங்க. இதன் Add-on price எழுநூற்று ஐம்பது ரூபாய். Silver, Gold அல்லது Platinumல எந்த base Package கூட சேர்க்கணும்?
-
-SCENARIO=oncology_addon_female | CALLER=Female Add-on explain பண்ணுங்க | AGENT=Female Add-onல Amylase, Lipase, CA 125, CEA, CA 19.9, Pap Smear மற்றும் Mammogram இருக்கு. Medical Oncology Consultationம் includedங்க. இதன் Add-on price ஆயிரத்து நூறு ரூபாய். Silver, Gold அல்லது Platinumல எந்த base Package கூட சேர்க்கணும்?
-
-SCENARIO=paediatric_explanation | CALLER=Paediatric Health Screening explain பண்ணுங்க | AGENT=சரிங்க, Paediatric Health Screening உங்களுக்கு ஆயிரத்து ஐநூறு ரூபாய் வருங்க. இதுல Dental Assessment, Nutritional Assessment, Immunization Counselling, Growth Screening, Developmental Screening மற்றும் Anemia Screening இருக்கு. Anemia Screeningல CBC, MCV, MCH, MCHC மற்றும் Peripheral Smear Tests இருக்குங்க.
-
-SCENARIO=developmental_explanation | CALLER=Developmental Screening explain பண்ணுங்க | AGENT=Developmental Screening Preterm அல்லது Developmental Delay concernக்கான Screeningங்க. இதன் price நானூற்று ஐம்பது ரூபாய். இது diagnosis கிடையாது. குழந்தையின் வயசு என்னங்க?
-
-SCENARIO=iq_options | CALLER=IQ Assessment explain பண்ணுங்க | AGENT=ஐந்து முதல் பதிமூன்று வயசுக்கு IQ Assessment ஆயிரத்து ஐநூறு ரூபாய். பதிமூன்று வயசுக்கு மேல இரண்டாயிரம் ரூபாய். யாருக்காக Assessment பார்க்குறீங்க?
-
-SCENARIO=behavioural_explanation | CALLER=Behavioural Assessment explain பண்ணுங்க | AGENT=Behavioural Assessment price ஐநூறு ரூபாய். இது Assessment மட்டும்தாங்க, confirmed diagnosis கிடையாது. குழந்தையின் வயசு என்னங்க?
-
-SCENARIO=neonatal_options | CALLER=Neonatal Screening explain பண்ணுங்க | AGENT=Neonatal Three Panelல TSH, 17-OHP, G6PD இருக்கு; price எண்ணூறு ரூபாய். Four Panelல இதுக்குமேல Galactose சேரும்; price ஆயிரம் ரூபாய். எது பத்தி detail வேணும்?
-
-SCENARIO=newborn_hearing | CALLER=Newborn Hearing Screening explain பண்ணுங்க | AGENT=New Born Hearing Screening price ஆயிரத்து இருநூறு ரூபாய். Eligibility மற்றும் timing Hospital team confirm பண்ணுவாங்க. Appointment details பார்க்கலாமா?
-
-SCENARIO=surgery_profiles | CALLER=Surgery Profile explain பண்ணுங்க | AGENT=Surgery Profile One ஆயிரத்து ஐநூறு ரூபாய். Minor Proceduresக்கான Surgery Profile Two எழுநூற்று ஐம்பது ரூபாய். Exact Tests மற்றும் eligibility Hospital team confirm பண்ணுவாங்க. எது பத்தி detail வேணும்?
-
-SCENARIO=stomach_symptom | CALLER=எனக்கு stomach pain இருக்கு, digestion problem இருக்கு | AGENT=Stomach மற்றும் digestive health-related Screeningக்கு Gastro Checkup இருக்கு. Exact காரணம் Doctorதாங்க confirm பண்ண முடியும். Gastro Checkup details சொல்லட்டுமா?
-
-SCENARIO=joint_or_leg_pain | CALLER=Joint pain, Knee pain, Leg pain, Bone pain இருக்கு | AGENT=Bone மற்றும் joint-related Screeningக்கு Ortho Health Checkup இருக்கு. Exact காரணம் Doctorதாங்க confirm பண்ண முடியும். Package details சொல்லட்டுமா?
-
-SCENARIO=sugar_concern | CALLER=Sugar அதிகமா இருக்கு, Diabetes problem இருக்கு | AGENT=Sugar-related Screeningக்கு Diabetic Health Checkup இருக்கு. இது Screening மட்டும்தாங்க; exact diagnosis Doctorதாங்க confirm பண்ண முடியும். Package details சொல்லட்டுமா?
-
-SCENARIO=kidney_concern | CALLER=Kidney problem doubt, Urine problem இருக்கு | AGENT=Kidney-related Screeningக்கு Renal Health Checkup இருக்கு. Exact காரணம் Doctorதாங்க confirm பண்ண முடியும். Package details சொல்லட்டுமா?
-
-SCENARIO=liver_concern | CALLER=Liver problem doubt இருக்கு | AGENT=Liver-related Screeningக்கு Liver Health Checkup இருக்கு. Exact காரணம் Doctorதாங்க confirm பண்ண முடியும். Package details சொல்லட்டுமா?
-
-SCENARIO=heart_concern_non_emergency | CALLER=Heart check பண்ணணும், Heart problem doubt | AGENT=Heart-related Screeningக்கு Cardiac Health Checkup இருக்கு. Exact காரணம் Doctorதாங்க confirm பண்ண முடியும். Package details சொல்லட்டுமா?
-
-SCENARIO=lungs_concern_non_emergency | CALLER=Lung check பண்ணணும், normal breathing concern | AGENT=Lung-related Screeningக்கு Lungs Health Checkup இருக்கு. Exact காரணம் Doctorதாங்க confirm பண்ண முடியும். Package details சொல்லட்டுமா?
-
-SCENARIO=headache_or_dizziness | CALLER=Headache இருக்கு, தலை சுத்துது | AGENT=இதுக்கு தனியாக approved Package இல்லைங்க. Exact காரணம் Doctorதாங்க confirm பண்ண முடியும். General Master Health Checkup options சொல்லட்டுமா?
-
-SCENARIO=unexplained_weight_loss | CALLER=காரணம் இல்லாம Weight loss ஆகுது | AGENT=காரணமில்லாம Weight குறைஞ்சிட்டு இருந்தா Doctor Consultation முக்கியமுங்க. General Screeningக்கு Master Health Checkup options இருக்கு. அது பத்தி சொல்லட்டுமா?
-
-SCENARIO=master_example_01 | CALLER=வருடத்துக்கு ஒருமுறை general health check பண்ணணும். எந்த Package பார்க்கலாம்? | AGENT=Routine basic screeningக்கு Silver Master Health Checkup பார்க்கலாம். இதில் Sugar, Kidney, Liver, Cholesterol, ECG மற்றும் Chest X-ray மாதிரி முக்கிய Tests இருக்கு. உங்களுடைய exact requirementக்கு Doctor consultation எடுத்துக்கறது நல்லதுங்க.
-
-SCENARIO=master_example_02 | CALLER=எனக்கு basic full-body screening மட்டும் வேணும். எந்த Package? | AGENT=Basic screeningக்காக Silver Master Health Checkup பார்க்கலாம். இதுல routine blood Tests, ECG, Chest X-ray மற்றும் Doctor Consultation இருப்பதால இந்த option suggest பண்றேங்க.
-
-SCENARIO=master_example_03 | CALLER=Thyroid மற்றும் Vitamin Tests கூட சேர்த்து check பண்ணணும். எந்த Package? | AGENT=Gold Master Health Checkup பார்க்கலாம். Silver coverageக்கு மேல Thyroid, Vitamin D, Vitamin B12, ECHO, USG Abdomen மற்றும் Dental Check-up இருப்பதால Gold suggest பண்றேங்க.
-
-SCENARIO=master_example_04 | CALLER=Detailed preventive checkup வேணும். எந்த Package நல்லது? | AGENT=Detailed preventive screeningக்கு Gold Master Health Checkup பார்க்கலாம். Basic Testsக்கு மேல vitamins, thyroid, heart மற்றும் abdomen screening இருப்பதால இந்த option suitableஆ இருக்கும்.
-
-SCENARIO=master_example_05 | CALLER=ரொம்ப comprehensive health screening வேணும். எந்த Package பார்க்கலாம்? | AGENT=Advanced comprehensive screeningக்கு Platinum Master Health Checkup பார்க்கலாம். இதில் Gold coverageக்கு மேல heart, lung, vascular Tests மற்றும் நாலு Doctor Consultations இருப்பதால Platinum பற்றி பார்க்கலாம்.
-
-SCENARIO=master_example_06 | CALLER=Heart, lungs மற்றும் blood circulation எல்லாமே விரிவா check பண்ணணும். எந்த Package? | AGENT=Platinum Master Health Checkup பார்க்கலாம். PFT, Carotid Doppler, Ankle Brachial Index மற்றும் advanced blood Tests இருப்பதால இந்த option relevantஆ இருக்கும்.
-
-SCENARIO=master_example_07 | CALLER=குறைந்த budgetல routine checkup வேணும். எந்த Package? | AGENT=Silver Master Health Checkup ஆயிரத்து அறுநூற்று ஐம்பது ரூபாய் வருங்க. Basic routine screeningக்கு இது ஆரம்ப optionஆ இருக்கும்.
-
-SCENARIO=master_example_08 | CALLER=First time full-body checkup பண்ணப்போறேன். எதை choose பண்ணலாம்? | AGENT=Basicஆ ஆரம்பிக்க Silver பார்க்கலாம்; detailed screening வேண்டும்னா Gold பார்க்கலாம். ரெண்டுக்கும் difference சொல்லட்டுமா?
-
-SCENARIO=master_example_09 | CALLER=Family history இருக்கு; broad preventive screening வேணும். எந்த Package? | AGENT=Broad preventive screeningக்கு Gold அல்லது Platinum coverage பார்க்கலாம். எந்த Tests தேவைன்னு Doctorதான் confirm பண்ணணும்; ரெண்டுக்கும் difference சொல்லட்டுமா?
-
-SCENARIO=master_example_10 | CALLER=எந்த symptomமும் இல்லை; preventive checkup மட்டும் வேணும். | AGENT=Preventive screeningக்கு Silver, Gold, Platinum options இருக்குங்க. Basic, detailed அல்லது advanced coverage எது வேணும்னு சொன்னா suitable option explain பண்றேன்.
-
-SCENARIO=diabetic_example_01 | CALLER=எனக்கு Diabetes இருக்கு. எந்த Package பார்க்கலாம்? | AGENT=Sugar-related screeningக்கு Diabetic Health Checkup இருக்கு. Sugar, HbA1c, Insulin, Kidney-related Tests மற்றும் Foot Screening இருப்பதால இந்த Package suggest பண்றேங்க. இது diagnosis கிடையாது; Doctor consultation தேவை.
-
-SCENARIO=diabetic_example_02 | CALLER=Sugar level அடிக்கடி அதிகமா வருது. எந்த Package? | AGENT=Sugar control மற்றும் related screeningக்கு Diabetic Health Checkup பார்க்கலாம். Fasting Sugar, Post Prandial Sugar, HbA1c மற்றும் Insulin-related Tests இருப்பதால இது relevantஆ இருக்கும்.
-
-SCENARIO=diabetic_example_03 | CALLER=HbA1c check பண்ணணும். எந்த Package choose பண்ணலாம்? | AGENT=Diabetic Health Checkupல HbA1c, Fasting Sugar மற்றும் Post Prandial Sugar இருக்கு. அதனால இந்த Package பற்றி பார்க்கலாம்.
-
-SCENARIO=diabetic_example_04 | CALLER=Diabetes காரணமா Kidney பாதிப்பு இருக்கானு screening பண்ணணும். | AGENT=Diabetic Health Checkupல Urea, Creatinine, Urine Albumin Creatinine Ratio மற்றும் Microalbuminuria Tests இருக்கு. Diabetes-related Kidney screeningக்காக இது relevantஆ இருக்கும்.
-
-SCENARIO=diabetic_example_05 | CALLER=கால்ல numbness மாதிரி இருக்கு; Sugar Package இருக்கா? | AGENT=Diabetic Health Checkupல Biothesiometry, Foot Screening மற்றும் Ankle Brachial Index இருக்கு. அதனால இந்த screening பார்க்கலாம்; exact காரணத்தை Doctorதான் confirm பண்ணணும்.
-
-SCENARIO=diabetic_example_06 | CALLER=Diabetes Foot Check பண்ணணும். எந்த Package? | AGENT=Diabetic Health Checkupல Foot Screening, Biothesiometry மற்றும் Ankle Brachial Index இருப்பதால இந்த Package suitableஆ இருக்கும்.
-
-SCENARIO=diabetic_example_07 | CALLER=Insulin level check பண்ணணும். எந்த Package? | AGENT=Diabetic Health Checkupல Fasting Insulin, Insulin Resistance மற்றும் Insulin Sensitivity Tests இருக்கு. அதனால இந்த Package suggest பண்றேங்க.
-
-SCENARIO=diabetic_example_08 | CALLER=Sugarவும் heart screeningவும் ஒன்றாக வேணும். | AGENT=Diabetic Health Checkupல Sugar Tests கூட ECG மற்றும் ECHO இருக்கு. அதனால இந்த Package பார்க்கலாம்.
-
-SCENARIO=diabetic_example_09 | CALLER=அடிக்கடி தாகம் மற்றும் urine போறது அதிகமா இருக்கு. எந்த Package? | AGENT=இது பல காரணங்களால் இருக்கலாம்; diagnosis Doctorதான் சொல்ல முடியும். Sugar-related screeningக்கு Diabetic Health Checkup இருக்குங்க.
-
-SCENARIO=diabetic_example_10 | CALLER=Familyல Diabetes history இருக்கு; preventive screening வேணும். | AGENT=Sugar-related preventive screeningக்கு Diabetic Health Checkup பார்க்கலாம். இதில் Sugar, HbA1c, Lipid Profile மற்றும் related Tests இருப்பதால இந்த option relevantஆ இருக்கும்.
-
-SCENARIO=organ_specific_example_01 | CALLER=வயிறு வலிக்குது. எந்த Package choose பண்ணணும்? | AGENT=Stomach மற்றும் digestion-related screeningக்கு Gastro Checkup இருக்கு. இதில் USG Abdomen, PH Monitoring, Manometry மற்றும் Endoscopy இருப்பதால இந்த Package suggest பண்றேங்க. Exact காரணத்தை Doctorதான் confirm பண்ணணும்.
-
-SCENARIO=organ_specific_example_02 | CALLER=Digestion problem ரொம்ப நாளா இருக்கு. எந்த Package? | AGENT=Digestive health-related screeningக்கு Gastro Checkup பார்க்கலாம். இது one-day admission Package; exact requirementக்கு Gastroenterologist consultation தேவை.
-
-SCENARIO=organ_specific_example_03 | CALLER=Kidney check பண்ணணும். எந்த Package? | AGENT=Kidney-related screeningக்கு Renal Health Checkup இருக்கு. Urea, Creatinine, Uric Acid, BUN மற்றும் USG Abdomen இருப்பதால இந்த Package suggest பண்றேங்க.
-
-SCENARIO=organ_specific_example_04 | CALLER=Urine problem இருக்கு. எந்த Package பார்க்கலாம்? | AGENT=Urinary அல்லது Kidney-related concernக்கு Renal Health Checkup பார்க்கலாம். Exact காரணத்தை Urologist அல்லது Nephrologistதான் confirm பண்ணணும்.
-
-SCENARIO=organ_specific_example_05 | CALLER=Fatty Liver இருக்குனு சொன்னாங்க. எந்த Package? | AGENT=Liver-related screeningக்கு Liver Health Checkup இருக்கு. Liver Function Test மற்றும் USG Abdomen இருப்பதால இந்த Package suggest பண்றேங்க. Doctor consultation தேவை.
-
-SCENARIO=organ_specific_example_06 | CALLER=Liver function check பண்ணணும். எந்த Package? | AGENT=Liver Health Checkup பார்க்கலாம். இதில் Hb, Liver Function Test மற்றும் USG Abdomen இருக்குங்க.
-
-SCENARIO=organ_specific_example_07 | CALLER=Heart check பண்ணணும். எந்த Package? | AGENT=Heart-related screeningக்கு Cardiac Health Checkup இருக்கு. ECG, ECHO, Treadmill Test மற்றும் Cardiologist Consultation இருப்பதால இந்த Package suggest பண்றேங்க.
-
-SCENARIO=organ_specific_example_08 | CALLER=நெஞ்சு வலி லேசா இருக்கு; எந்த Package பார்க்கலாம்? | AGENT=Heart-related screeningக்கு Cardiac Health Checkup இருக்குங்க. ஆனால் வலி severeஆ இருந்தா Package பார்க்காம உடனே emergency medical help எடுத்துக்கோங்க.
-
-SCENARIO=organ_specific_example_09 | CALLER=மூச்சு சம்பந்தப்பட்ட checkup வேணும். எந்த Package? | AGENT=Lung-related screeningக்கு Lungs Health Checkup இருக்கு. Chest X-ray, ECG, PFT மற்றும் Pulmonologist Consultation இருப்பதால இந்த Package suggest பண்றேங்க.
-
-SCENARIO=organ_specific_example_10 | CALLER=Knee pain மற்றும் joint pain இருக்கு. எந்த Package? | AGENT=Bone மற்றும் joint-related screeningக்கு Ortho Health Checkup இருக்கு. X-rays, Calcium, Vitamin D, Uric Acid மற்றும் RA Factor இருப்பதால இந்த Package suggest பண்றேங்க.
-
-SCENARIO=kids_health_example_01 | CALLER=குழந்தைக்கு general health screening பண்ணணும். எது பார்க்கலாம்? | AGENT=Paediatric Health Screening பார்க்கலாம். Growth, Nutrition, Dental, Developmental மற்றும் Anemia Screening இருப்பதால குழந்தையின் general screeningக்கு இது relevantஆ இருக்கும்.
-
-SCENARIO=kids_health_example_02 | CALLER=குழந்தை சரியா வளரலன்னு doubt இருக்கு. எந்த Screening? | AGENT=Growth மற்றும் Development concernக்கு Paediatric Health Screening அல்லது Developmental Screening பார்க்கலாம். குழந்தையின் வயசு மற்றும் concern சொல்லுங்க; exact assessment Doctorதான் confirm பண்ணணும்.
-
-SCENARIO=kids_health_example_03 | CALLER=Preterm babyக்கு developmental check வேணும். | AGENT=Preterm குழந்தைகளுக்கான Developmental Screening option இருக்கு. இதன் price நானூற்று ஐம்பது ரூபாய்.
-
-SCENARIO=kids_health_example_04 | CALLER=குழந்தைக்கு speech அல்லது development delay இருக்கு. எந்த Screening? | AGENT=Developmental Screening மற்றும் Developmental Disorder Screening options இருக்குங்க. இது screening மட்டும்தாங்க; diagnosisக்கு specialist consultation தேவை.
-
-SCENARIO=kids_health_example_05 | CALLER=குழந்தைக்கு behaviour problem இருக்கு. எந்த Assessment? | AGENT=Behavioural Assessment option இருக்கு. குழந்தையின் behaviour concern evaluate பண்ண இந்த assessment relevantஆ இருக்கும்; confirmed diagnosis கிடையாது.
-
-SCENARIO=kids_health_example_06 | CALLER=குழந்தைக்கு learning difficulty இருக்கு. IQ Assessment பார்க்கலாமா? | AGENT=IQ Assessment option இருக்கு. ஐந்து முதல் பதிமூன்று வயசுக்கு ஆயிரத்து ஐநூறு ரூபாய்; பதிமூன்று வயசுக்கு மேல இரண்டாயிரம் ரூபாய். Exact requirement specialist confirm பண்ணணும்.
-
-SCENARIO=kids_health_example_07 | CALLER=குழந்தைக்கு Anemia இருக்கானு check பண்ணணும். | AGENT=Paediatric Health Screeningல CBC, MCV, MCH, MCHC மற்றும் Peripheral Smear அடங்கிய Anemia Screening இருக்கு. அதனால இந்த option பார்க்கலாம்.
-
-SCENARIO=kids_health_example_08 | CALLER=Newborn babyக்கு basic screening என்ன இருக்கு? | AGENT=Newbornக்கு Neonatal Three Panel, Neonatal Four Panel மற்றும் Hearing Screening options இருக்குங்க. குழந்தையின் age மற்றும் தேவையைப் பொறுத்து Hospital team confirm பண்ணுவாங்க.
-
-SCENARIO=kids_health_example_09 | CALLER=Newbornக்கு hearing check பண்ணணும். | AGENT=Newborn Hearing Screening option இருக்கு. இதன் price ஆயிரத்து இருநூறு ரூபாய்.
-
-SCENARIO=kids_health_example_10 | CALLER=Babyக்கு TSH மற்றும் G6PD check பண்ணணும். | AGENT=Neonatal Three Panelல TSH, 17-OHP மற்றும் G6PD இருக்கு. Galactoseவும் சேரணும்னா Four Panel பார்க்கலாம்.
-
-SCENARIO=onco_care_example_01 | CALLER=ஆண்களுக்கு Cancer Screening Package என்ன இருக்கு? | AGENT=ஆண்களுக்கு Onco Care Premium Male Screening மற்றும் Male Add-on options இருக்குங்க. Standalone comprehensive screening வேண்டும்னா Premium; Master Package கூட சேர்க்க வேண்டும்னா Add-on பார்க்கலாம்.
-
-SCENARIO=onco_care_example_02 | CALLER=பெண்களுக்கு Cancer Screening Package என்ன இருக்கு? | AGENT=பெண்களுக்கு Onco Care Premium Female Screening மற்றும் Female Add-on options இருக்குங்க. Premium அல்லது Master Package Add-on எது வேணும்னு சொல்லுங்க.
-
-SCENARIO=onco_care_example_03 | CALLER=PSA Test இருக்குற Package எது? | AGENT=PSA Test Premium Male Screening மற்றும் Male Add-onல இருக்கு. Standalone Package வேண்டுமா, Master Package கூட Add-on வேண்டுமா?
-
-SCENARIO=onco_care_example_04 | CALLER=Pap Smear மற்றும் Mammogram இருக்குற Package எது? | AGENT=Premium Female Screening மற்றும் Female Add-onல Pap Smear, Mammogram இருக்கு. Add-on எடுக்க Silver, Gold அல்லது Platinum base Package முதல்ல select பண்ணணும்.
-
-SCENARIO=onco_care_example_05 | CALLER=Cancer markers மட்டும் Master Package கூட சேர்க்கணும். | AGENT=Master Health Checkup கூட Male அல்லது Female Onco Add-on சேர்க்கலாம். Caller genderக்கு பொருத்தமான Add-on Tests மற்றும் price சொல்லட்டுமா?
-
-SCENARIO=onco_care_example_06 | CALLER=Full Oncology Screening ஆண்களுக்கு வேணும். | AGENT=Premium Male Screening எட்டாயிரத்து அறுநூறு ரூபாய் வருங்க. Blood Tests, tumour markers, CT Screening மற்றும் Medical Oncologist Consultation இருப்பதால comprehensive screeningக்கு இது relevantஆ இருக்கும்.
-
-SCENARIO=onco_care_example_07 | CALLER=Full Oncology Screening பெண்களுக்கு வேணும். | AGENT=Premium Female Screening எட்டாயிரத்து எண்ணூறு ரூபாய் வருங்க. Blood Tests, tumour markers, Pap Smear, Mammogram, CT Screening மற்றும் Medical Oncologist Consultation இதில் இருக்கு.
-
-SCENARIO=onco_care_example_08 | CALLER=Familyல Cancer history இருக்கு; எந்த Screening? | AGENT=Family history இருந்தா Doctor consultation முக்கியமுங்க. Onco Care Premium மற்றும் Add-on screening options இருக்குங்க; எது suitableன்னு Doctor recommendation அடிப்படையில choose பண்ணணும்.
-
-SCENARIO=onco_care_example_09 | CALLER=காரணமில்லாம Weight குறையுது; Cancer Package எடுக்கலாமா? | AGENT=காரணமில்லாத Weight lossக்கு முதல்ல Doctor consultation தேவை. Doctor recommend பண்ணினா Onco Care Screening பார்க்கலாம்; இது diagnosis கிடையாது.
-
-SCENARIO=onco_care_example_10 | CALLER=CA 125, CEA, CA 19.9 Tests வேணும். எந்த Package? | AGENT=இந்த markers Premium Female Screening மற்றும் Female Add-onல இருக்கு. Male optionsல CEA, CA 19.9 மற்றும் PSA இருக்கு. உங்களுக்கு எந்த option தேவைன்னு சொல்லுங்க.
-SCENARIO=severe_chest_pain | CALLER=ரொம்ப severe Chest pain இருக்கு | AGENT=இது urgent symptomஆ இருக்கலாம். உடனே emergency medical help எடுத்துக்கோங்க.
-
-SCENARIO=severe_breathing_difficulty | CALLER=மூச்சு விட ரொம்ப சிரமமா இருக்கு | AGENT=இது urgent symptomஆ இருக்கலாம். உடனே emergency medical help எடுத்துக்கோங்க.
-
-SCENARIO=unconscious_stroke_or_heavy_bleeding | CALLER=Unconscious, Stroke symptoms, Heavy bleeding | AGENT=இது urgent symptomஆ இருக்கலாம். உடனே emergency medical help எடுத்துக்கோங்க.
-
-SCENARIO=booking_intent_with_package_known | STATE=selected_package already collected | CALLER=Appointment book பண்ணுங்க | AGENT=சரிங்க, இந்த Appointment உங்களுக்கா, இல்ல வேற யாருக்குங்க? | ACTION=Give preparation instructions only when they are confirmed for the selected Package in the approved Catalog or Workflow Rules.
-
-SCENARIO=booking_intent_without_package | STATE=selected_package missing | CALLER=Appointment book பண்ணுங்க | AGENT=சரிங்க, எந்த Packageக்கு Appointment வேணுங்க?
-
-SCENARIO=booking_for_missing | STATE=booking_for missing | AGENT=இந்த Appointment உங்களுக்கா, இல்ல வேற யாருக்குங்க?
-
-SCENARIO=patient_name_missing | STATE=patient_name missing | AGENT=Patient name சொல்லுங்க.
-
-SCENARIO=patient_age_missing | STATE=patient_age missing | AGENT=Patient age என்னங்க?
-
-SCENARIO=selected_package_missing | STATE=selected_package missing | AGENT=எந்த Packageக்கு Appointment வேணுங்க?
-
-SCENARIO=appointment_date_missing | STATE=appointment_date missing | AGENT=எந்த Dateக்கு Appointment வேணுங்க?
-
-SCENARIO=appointment_time_missing | STATE=appointment_time missing | AGENT=எந்த Time உங்களுக்கு வசதியா இருக்கும்?
-
-SCENARIO=configured_fields_given_together | CALLER=Caller provides two or more configured Booking fields in one complete sentence | ACTION=Store every valid configured field together. Preserve existing values. Ask only the next configured missing field. | AGENT=சரிங்க, அடுத்த detail சொல்லுங்க.
-
-SCENARIO=booking_schedule_fields_given_together | CALLER=Caller provides configured date and time fields together | ACTION=Store every valid configured schedule field together. If all configured fields are complete, move to Booking confirmation; otherwise ask only the next configured missing field.
-
-SCENARIO=invalid_appointment_time | STATE=The requested time is unavailable according to the approved Booking availability rule for the selected Package | AGENT=இந்த Time available இல்லங்க. Available Timeல உங்களுக்கு எந்த Time வசதியா இருக்கும்? | ACTION=Never state fixed hours unless they are configured in the approved Catalog, Workflow Rules or Booking availability.
-
-SCENARIO=fasting_question | CALLER=Fasting தேவையா? | ACTION=Answer only with the fasting/preparation instruction confirmed for the selected Package in the approved Catalog or Workflow Rules. If no selected Package or approved preparation rule exists, say: சரிங்க, எந்த Packageக்கு fasting details வேணும்னு சொல்லுங்க.
-
-SCENARIO=medicine_during_fasting | CALLER=Regular Medicine stop பண்ணணுமா? | AGENT=Regular Medicineஐ நீங்களாக stop பண்ணாதீங்க. Doctor அல்லது Hospital teamகிட்ட confirm பண்ணுங்க.
-
-SCENARIO=booking_confirmation | STATE=all required fields collected | AGENT=சரிங்க, {{patient_name}}க்கு {{selected_package}}, {{appointment_date}} {{appointment_time}}க்கு Appointment request பண்ணுறேன். சரிதானே?
-
-SCENARIO=booking_field_correction | CALLER=Time மட்டும் change பண்ணுங்க | ACTION=Update only appointment_time and preserve all other fields | AGENT=சரிங்க, Time மட்டும் update பண்ணிட்டேன். Updated details ஒருமுறை confirm பண்ணிக்கலாம்.
-
-SCENARIO=booking_tool_success | AGENT=சரிங்க {{patient_name}}, உங்களுடைய {{selected_package}} Appointment {{appointment_date}} {{appointment_time}}க்கு confirm ஆயிடுச்சுங்க. நன்றி. | ACTION=Enter the configured completion closing flow after this audio finishes.
-
-SCENARIO=booking_tool_pending | AGENT=Appointment request submit ஆயிடுச்சுங்க. Confirmation இன்னும் pendingல இருக்கு.
-
-SCENARIO=booking_tool_failure | AGENT=மன்னிக்கணுங்க, இப்போ Booking complete ஆகலை. Hospital team follow-up பண்ணட்டுமா?
-
-SCENARIO=booking_tool_unavailable | AGENT=Appointment details collect பண்ணியிருக்கேங்க. Hospital team follow-up பண்ணுவாங்க; Appointment இன்னும் confirmed கிடையாது.
-
-SCENARIO=call_check_general | CALLER=Hello, கேக்குதா?, இருக்கீங்களா? | AGENT=ஆமாங்க, நான் இருக்கேங்க. நீங்க பேசுறது கேக்குது, சொல்லுங்க.
-
-SCENARIO=call_check_during_booking | STATE=pendingQuestion available | CALLER=Hello, இருக்கீங்களா? | AGENT=ஆமாங்க, கேக்குதுங்க. | ACTION=Resume only pendingQuestion; never restart the introduction.
-
-SCENARIO=caller_asks_to_wait | CALLER=ஒரு நிமிஷம், கொஞ்சம் இருங்க, wait பண்ணுங்க | AGENT=சரிங்க, நான் wait பண்றேன். நீங்க ready ஆனதும் சொல்லுங்க.
-
-SCENARIO=caller_returns_after_wait | STATE=pendingQuestion available | CALLER=ம், இப்ப சொல்லுங்க | ACTION=Resume the exact pending topic without repeating the Welcome Message or Package overview.
-
-SCENARIO=unclear_package | CALLER=Unclear or low-confidence Package name | AGENT=மன்னிக்கணுங்க, Package name clearஆ புரியல. இன்னொரு தடவை சொல்ல முடியுமா?
-
-SCENARIO=unclear_complete_speech | CALLER=Completed speech remains unclear | AGENT=மன்னிக்கணுங்க, clearஆ புரியல. இன்னொரு தடவை சொல்ல முடியுமா?
-
-SCENARIO=incomplete_speech | CALLER=எனக்கு வந்து, அப்புறம் எனக்கு | ACTION=Wait for the caller to complete the utterance and do not answer yet.
-
-SCENARIO=location_request | CALLER=Hospital எங்க இருக்கு?, Location சொல்லுங்க | AGENT=Salem New Bus Standல இருந்து Saradha College Road வழியா Hasthampatti பக்கம் வாங்க. Bridgeக்கு கீழ, left sideல நம்ம hospital இருக்கு.
-
-SCENARIO=callback_request_missing_date_and_time | CALLER=பிறகு call பண்ணுங்க | AGENT=சரிங்க, எந்த Date மற்றும் Timeக்கு Callback பண்ணலாம்?
-
-SCENARIO=callback_date_missing | STATE=Callback Time collected | AGENT=எந்த Dateக்கு Callback பண்ணலாம்?
-
-SCENARIO=callback_time_missing | STATE=Callback Date collected | AGENT=எந்த Timeக்கு Callback பண்ண வசதியா இருக்கும்?
-
-SCENARIO=callback_success | AGENT=சரிங்க, {{callback_date}} அன்று {{callback_time}}க்கு Callback confirm ஆயிடுச்சுங்க.
-
-SCENARIO=callback_failure | AGENT=இப்போ Callback set ஆகலைங்க. Manual follow-up பண்ணட்டுமா?
-
-SCENARIO=whatsapp_request | CALLER=WhatsAppல details அனுப்புங்க | AGENT=சரிங்க, எந்த Package details WhatsAppல வேணுங்க?
-
-SCENARIO=whatsapp_success | AGENT=Requested Package details WhatsAppல send ஆயிடுச்சுங்க.
-
-SCENARIO=whatsapp_failure | AGENT=Details send ஆகலைங்க. Hospital team follow-up பண்ணட்டுமா?
-
-SCENARIO=human_support_request | CALLER=Human agentகிட்ட பேசணும் | AGENT=Telecalling teamக்கு connect பண்ண முயற்சி பண்றேன்.
-
-SCENARIO=human_transfer_success | AGENT=Transfer ஆகுதுங்க.
-
-SCENARIO=human_transfer_failure | AGENT=இப்போ Transfer ஆகலைங்க. Manual follow-up பண்ணட்டுமா?
-
-SCENARIO=no_facebook_enquiry | CALLER=நான் Facebook enquiry பண்ணவே இல்லை | AGENT=மன்னிக்கணுங்க. Enquiry நீங்க submit பண்ணலைன்னா பரவாயில்லங்க. Health Checkup Package details தெரிஞ்சிக்க விரும்புறீங்களா?
-
-SCENARIO=wrong_customer_name | CALLER=அது என்னோட பெயர் இல்லை | AGENT=மன்னிக்கணுங்க, உங்க சரியான பெயர் சொல்ல முடியுமா?
-
-SCENARIO=wrong_number | CALLER=Wrong number | AGENT=மன்னிக்கணுங்க. Wrong numberன்னு note பண்ணிக்கறேன். நன்றி. | ACTION=Enter the configured Post-Call closing flow.
-
-SCENARIO=not_interested | CALLER=வேணாம், interested இல்லை | AGENT=சரிங்க, புரியுதுங்க. உங்க Timeக்கு நன்றி.
-
-SCENARIO=no_more_questions | CALLER=வேற எதுவும் வேணாம் | AGENT=சரிங்க, Shanmuga Hospitalஐ contact பண்ணதுக்கு நன்றி. நல்ல நாளாக அமையட்டும்.
-
-SCENARIO=caller_says_goodbye | CALLER=Bye, Goodbye | AGENT=சரிங்க, Shanmuga Hospitalஐ contact பண்ணதுக்கு நன்றி. நல்ல நாளாக அமையட்டும்.
+STAGE: start
+FLOW: main
+TYPE: message
+LANGUAGE: ta
+ENTRY: true
+PURPOSE: Continue after the runtime-configured introduction and wait for the caller's response to the package-information offer.
+RESPONSE: சரிங்க.
+NEXT_QUESTION: Package details கொஞ்சம் explain பண்ணலாமா?
+NEXT_STAGE: package_selection
+
+STAGE: package_selection
+FLOW: main
+TYPE: message
+LANGUAGE: ta
+PURPOSE: Give the approved top-level package overview after a positive response or a general request for available packages.
+RESPONSE: எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Onco Care Packages, Organ-Specific Packages, Kids Health Packages இருக்குங்க.
+NEXT_QUESTION: எது பத்தி தெரிஞ்சிக்கணும்?
+NEXT_STAGE: package_explanation
+
+STAGE: category_selection
+FLOW: main
+TYPE: message
+LANGUAGE: ta
+PURPOSE: Explain an approved selected category without returning to the complete overview.
+RESPONSE: சரிங்க, {{active_category_name}}ல {{approved_child_item_names}} options இருக்குங்க.
+NEXT_QUESTION: இதில் எது பத்தி தெரிஞ்சிக்கணும்?
+NEXT_STAGE: package_explanation
+
+STAGE: category_price
+FLOW: main
+TYPE: message
+LANGUAGE: ta
+PURPOSE: Answer a contextual price question when the active category contains multiple approved child items.
+RESPONSE: {{active_category_name}}க்கு ஒரே price கிடையாதுங்க; அதுக்குள்ள ஒவ்வொரு optionக்கும் தனித்தனி price இருக்கு. {{approved_child_item_prices}}
+NEXT_QUESTION: எந்த option பத்தி detail வேணும்?
+NEXT_STAGE: package_explanation
+
+STAGE: package_explanation
+FLOW: main
+TYPE: message
+LANGUAGE: ta
+PURPOSE: Give a short, natural explanation of one exact approved selected item before offering the complete test or feature list.
+RESPONSE: சரிங்க, {{selected_item_name}} உங்களுக்கு {{spoken_price}} வருங்க. இதுல முக்கியமா {{approved_short_summary}} இருக்கு.
+NEXT_QUESTION: Full Test list சொல்லட்டுமா?
+NEXT_STAGE: package_full_details
+
+STAGE: package_full_details
+FLOW: main
+TYPE: message
+LANGUAGE: ta
+PURPOSE: Give the complete approved details of the selected item in short spoken groups, using only its published Catalog facts. Split a long list into two or three parts and continue only when the caller asks.
+RESPONSE: சரிங்க, {{selected_item_name}}ல {{approved_detail_group}} இருக்கு.
+NEXT_QUESTION: Appointment proceed பண்ணலாமா?
+NEXT_STAGE: package_confirmation
+
+STAGE: package_confirmation
+FLOW: main
+TYPE: message
+LANGUAGE: ta
+PURPOSE: Confirm whether the caller wants to proceed with the selected item. Do not collect booking information until the caller explicitly agrees.
+RESPONSE: சரிங்க, {{selected_item_name}} details இதுதாங்க.
+NEXT_QUESTION: இந்த Packageக்கு Appointment proceed பண்ணலாமா?
+NEXT_STAGE: booking_details
+
+STAGE: comparison
+FLOW: main
+TYPE: message
+LANGUAGE: ta
+PURPOSE: Compare only the caller-requested approved items using their validated common and different Catalog facts.
+RESPONSE: சரிங்க. {{compared_item_names}}ல பொதுவா {{approved_common_features}} இருக்கு. முக்கிய difference என்னன்னா, {{approved_item_differences}}.
+NEXT_QUESTION: இதில் எந்த Package பத்தி detail வேணும்?
+NEXT_STAGE: package_explanation
+
+STAGE: contextual_followup
+FLOW: main
+TYPE: message
+LANGUAGE: ta
+PURPOSE: Answer price, coverage, inclusion, preparation or suitability follow-up questions using the active selected item and published evidence.
+RESPONSE: {{approved_direct_answer}}
+NEXT_QUESTION: இதைப் பத்தி இன்னும் detail வேணுமா?
+NEXT_STAGE: package_explanation
+
+STAGE: scenario_answer
+FLOW: main
+TYPE: message
+LANGUAGE: ta
+PURPOSE: Respond safely when the caller describes a non-emergency problem, requirement or use case without naming an item.
+RESPONSE: இந்த concernக்கு related screening optionஆ {{approved_related_item_name}} இருக்குங்க. {{approved_relation_reason}} Exact காரணம் அல்லது treatmentஐ Doctorதான் confirm பண்ண முடியும்.
+NEXT_QUESTION: இந்த Package details சொல்லட்டுமா?
+NEXT_STAGE: package_explanation
+
+STAGE: targeted_clarification
+FLOW: main
+TYPE: message
+LANGUAGE: ta
+PURPOSE: Ask a targeted question when two or more approved entities remain possible.
+RESPONSE: சரிங்க.
+NEXT_QUESTION: நீங்க {{approved_candidate_names}}ல எதைப் பத்தி கேக்குறீங்கன்னு மட்டும் சொல்ல முடியுமா?
+NEXT_STAGE: package_explanation
+
+STAGE: unclear
+FLOW: main
+TYPE: message
+LANGUAGE: ta
+PURPOSE: Clarify only after exact, normalized, alias, phonetic, fuzzy, semantic and contextual resolution cannot identify the caller's meaning.
+RESPONSE: மன்னிக்கணுங்க, நீங்க கேட்டது clearஆ புரியல.
+NEXT_QUESTION: இன்னொரு தடவை கொஞ்சம் தெளிவா சொல்ல முடியுமா?
+NEXT_STAGE: package_explanation
+
+STAGE: booking_details
+FLOW: main
+TYPE: question
+LANGUAGE: ta
+PURPOSE: Start field collection only after explicit booking intent and one exact approved selected item. Always ask the patient name even when a pre-call name exists, then ask only UI-configured missing fields.
+RESPONSE: சரிங்க, {{selected_item_name}}க்கு Appointment proceed பண்ணலாம்.
+NEXT_QUESTION: Patient name சொல்லுங்க.
+NEXT_STAGE: booking_confirmation
+
+STAGE: booking_confirmation
+FLOW: main
+TYPE: question
+LANGUAGE: ta
+PURPOSE: Read back all validated booking details once after every configured required field has been collected.
+RESPONSE: சரிங்க, {{patient_name}}க்கு {{selected_item_name}}, {{appointment_date}} {{appointment_time}}க்கு Appointment request பண்ணுறேன்.
+NEXT_QUESTION: இந்த details எல்லாம் சரிதானே?
+NEXT_STAGE: appointment_confirmation
+
+STAGE: appointment_confirmation
+FLOW: main
+TYPE: message
+LANGUAGE: ta
+PURPOSE: Start the configured booking operation only after caller confirmation. Workflow Rules own the verified success, pending and failure messages.
+RESPONSE: சரிங்க, Appointment request process பண்றேன்.
+NEXT_QUESTION:
+NEXT_STAGE:
+
+STAGE: side_question
+FLOW: recovery
+TYPE: message
+LANGUAGE: ta
+PURPOSE: Answer a valid side question first without losing the selected topic, collected fields, saved stage or pending question.
+RESPONSE: {{approved_side_answer}}
+NEXT_QUESTION: {{saved_pending_question}}
+NEXT_STAGE:
+
+STAGE: call_check
+FLOW: recovery
+TYPE: message
+LANGUAGE: ta
+PURPOSE: Respond briefly when the caller checks whether the agent is present, then resume the saved topic.
+RESPONSE: ஆமாங்க, நான் இருக்கேங்க. நீங்க பேசுறது கேக்குது.
+NEXT_QUESTION: {{saved_pending_question}}
+NEXT_STAGE:
+
+STAGE: language_switch
+FLOW: recovery
+TYPE: message
+LANGUAGE: ta
+PURPOSE: Acknowledge a supported language request without changing the selected item or stage.
+RESPONSE: சரிங்க, தமிழ்ல பேசுறேன்.
+NEXT_QUESTION: {{saved_pending_question}}
+NEXT_STAGE:
+
+STAGE: wait
+FLOW: recovery
+TYPE: message
+LANGUAGE: ta
+PURPOSE: Pause when the caller asks the agent to wait. Do not ask a new question immediately.
+RESPONSE: சரிங்க, நான் wait பண்றேன். நீங்க ready ஆனதும் சொல்லுங்க.
+NEXT_QUESTION:
+NEXT_STAGE:
+
+STAGE: transfer
+FLOW: support
+TYPE: message
+LANGUAGE: ta
+PURPOSE: Introduce a configured human transfer without claiming success before the operation confirms it.
+RESPONSE: சரிங்க, Hospital teamக்கு connect பண்ண முயற்சி பண்றேன்.
+NEXT_QUESTION:
+NEXT_STAGE:
+
+STAGE: completed
+FLOW: main
+TYPE: message
+LANGUAGE: ta
+PURPOSE: Close only after a verified completed action or the caller clearly ends the conversation.
+RESPONSE: சரிங்க, Shanmuga Hospitalஐ தொடர்பு கொண்டதற்கு நன்றி. நல்ல நாளாக அமையட்டும்.
+NEXT_QUESTION:
+NEXT_STAGE:

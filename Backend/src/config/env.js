@@ -85,6 +85,7 @@ const envSchema = z.object({
   VOICE_AUDIO_DELIVERY_LEAD_MS: z.coerce.number().int().min(20).max(1000).default(160),
   VOICE_AUDIO_WEBSOCKET_WARN_MS: z.coerce.number().int().min(5).max(5000).default(40),
   VOICE_AUDIO_WEBSOCKET_BUFFER_WARN_BYTES: z.coerce.number().int().min(1024).max(16777216).default(262144),
+  VOICE_FIRST_AUDIO_TARGET_MS: z.coerce.number().int().min(100).max(10000).default(1000),
   VOICE_TTS_SENTENCE_GROUPING_ENABLED: booleanFromString.default(true),
   VOICE_TTS_SHORT_SENTENCE_CHARACTERS: z.coerce.number().int().min(20).max(500).default(100),
   VOICE_TTS_GROUP_MAX_CHARACTERS: z.coerce.number().int().min(40).max(1000).default(220),

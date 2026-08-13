@@ -178,20 +178,36 @@ function publicState(state) {
   });
 }
 
-export function openLiveCallMemory(identity, settings = {}, now = Date.now()) {
+export function openLiveCallMemory(identity, settings = {}, now = Date.now(), initialFrame = {}) {
   const key = liveCallMemoryKey(identity);
   const configuration = resolveLiveMemoryConfiguration(settings);
   const stageConfiguration = resolveConversationStageConfiguration(settings);
+  const restoredPending = initialFrame.pendingQuestion && typeof initialFrame.pendingQuestion === 'object'
+    ? initialFrame.pendingQuestion : {};
+  const restoredMessages = (initialFrame.recentTurns ?? []).map(cleanMessage).filter(Boolean);
+  const configuredFieldKeys = new Set(configuration.fields.map((field) => field.key));
+  const restoredFields = Object.fromEntries(Object.entries(initialFrame.fields ?? {})
+    .filter(([field, value]) => configuredFieldKeys.has(field) && value !== undefined && value !== null));
   const state = {
-    key, configuration, messages: [], collectedData: {}, completedQuestions: new Set(),
-    answeredQuestions: new Set(), currentTopic: null, language: frameLanguage(
-      settings.conversationLanguage ?? settings.defaultLanguage ?? settings.language,
-    ), pendingQuestion: null,
-    pendingQuestionText: null, pendingQuestionKind: null, resumeQuestionAfterAnswer: null,
-    lastAnsweredQuestion: null, runningSummary: '', lastIntent: null, lastQuestionType: null, summaryCursor: 0,
-    currentStage: stageConfiguration.initialStage, resumeStage: null,
-    activeCategory: null, selectedCatalogItem: null, candidateItems: [],
-    activeActions: new Set(), actionRequirements: new Map(), stageTransitions: [],
+    key, configuration, messages: restoredMessages, collectedData: restoredFields,
+    completedQuestions: new Set([...(initialFrame.completedQuestions ?? []), ...Object.keys(restoredFields)]),
+    answeredQuestions: new Set(initialFrame.answeredQuestions ?? []),
+    currentTopic: frameText(initialFrame.currentTopic, 240) || null,
+    language: frameLanguage(initialFrame.language
+      ?? settings.conversationLanguage ?? settings.defaultLanguage ?? settings.language),
+    pendingQuestion: frameText(restoredPending.key, 500) || null,
+    pendingQuestionText: frameText(restoredPending.text, 500) || null,
+    pendingQuestionKind: frameText(restoredPending.kind, 40) || null,
+    resumeQuestionAfterAnswer: null,
+    lastAnsweredQuestion: null, runningSummary: frameText(initialFrame.runningSummary, maximumRunningSummaryCharacters),
+    lastIntent: null, lastQuestionType: null, summaryCursor: 0,
+    currentStage: frameText(initialFrame.currentStage, 80) || stageConfiguration.initialStage,
+    resumeStage: frameText(initialFrame.resumeStage, 80) || null,
+    activeCategory: frameCategory(initialFrame.activeCategory),
+    selectedCatalogItem: frameItem(initialFrame.selectedItem),
+    candidateItems: uniqueFrameItems(initialFrame.candidateItems),
+    activeActions: new Set((initialFrame.activeActions ?? []).map((value) => frameText(value, 80)).filter(Boolean)),
+    actionRequirements: new Map(), stageTransitions: [],
     flowRecovery: { sideQuestions: 0, resumedQuestions: 0, repeatedQuestionsSuppressed: 0, clarifications: 0 },
     openedAt: now, updatedAt: now,
   };

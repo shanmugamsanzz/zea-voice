@@ -11,22 +11,35 @@ function parseFaq(extraction) {
   let current;
   const flush = () => {
     if (current?.question && current.answer.length) {
-      entries.push({
-        question: current.question,
-        answer: current.answer.join(' ').trim(),
-        sourcePageStart: current.pageNumber,
-        sourcePageEnd: current.lastPageNumber,
-      });
+      const answer = current.answer.join(' ').trim();
+      const questions = [...new Map([current.question, ...current.aliases]
+        .map((value) => [value.toLocaleLowerCase(), value])).values()];
+      for (const question of questions) {
+        entries.push({
+          question,
+          answer,
+          sourcePageStart: current.pageNumber,
+          sourcePageEnd: current.lastPageNumber,
+        });
+      }
     }
     current = null;
   };
   for (const line of lines) {
     const explicitQuestion = line.text.match(/^(?:q|question)\s*[:.)-]\s*(.+)$/i);
+    const explicitAliases = line.text.match(/^aliases?\s*:\s*(.+)$/i);
+    const explicitAnswer = line.text.match(/^(?:a|answer)\s*[:.)-]\s*(.*)$/i);
+    if (explicitAliases && current) {
+      current.aliases.push(...explicitAliases[1].split('|').map((value) => value.trim()).filter(Boolean));
+      current.lastPageNumber = line.pageNumber;
+      continue;
+    }
     const isQuestion = explicitQuestion || line.text.endsWith('?');
     if (isQuestion) {
       flush();
       current = {
         question: (explicitQuestion?.[1] ?? line.text).trim(),
+        aliases: [],
         answer: [],
         pageNumber: line.pageNumber,
         lastPageNumber: line.pageNumber,
@@ -34,7 +47,7 @@ function parseFaq(extraction) {
       continue;
     }
     if (current) {
-      current.answer.push(line.text.replace(/^(?:a|answer)\s*[:.)-]\s*/i, ''));
+      current.answer.push(explicitAnswer?.[1] ?? line.text);
       current.lastPageNumber = line.pageNumber;
     }
   }
@@ -93,11 +106,12 @@ function catalogLineMetadata(text) {
     defaultSelection: null,
     relationships: null,
     selectionRules: null,
+    attributes: null,
   };
   const content = [];
   for (const segment of text.split('|')) {
     const directive = segment.match(
-      /^\s*(category|aliases?|key|item[\s_-]*key|category[\s_-]*key|parent(?:[\s_-]*category)?(?:[\s_-]*key)?|description|default[\s_-]*item(?:[\s_-]*key)?|default[\s_-]*selection|relationships?|selection[\s_-]*rules)\s*[:=]\s*(.+?)\s*$/iu,
+      /^\s*(category|aliases?|key|item[\s_-]*key|category[\s_-]*key|parent(?:[\s_-]*category)?(?:[\s_-]*key)?|description|default[\s_-]*item(?:[\s_-]*key)?|default[\s_-]*selection|relationships?|selection[\s_-]*rules|attributes?)\s*[:=]\s*(.+?)\s*$/iu,
     );
     if (!directive) {
       content.push(segment.trim());
@@ -116,6 +130,7 @@ function catalogLineMetadata(text) {
     else if (key === 'default_selection') metadata.defaultSelection = value;
     else if (key === 'relationship' || key === 'relationships') metadata.relationships = value;
     else if (key === 'selection_rules') metadata.selectionRules = value;
+    else if (key === 'attribute' || key === 'attributes') metadata.attributes = value;
   }
   return { ...metadata, content: content.filter(Boolean).join(' | ') };
 }
@@ -177,6 +192,14 @@ function parseCatalog(extraction) {
       description: metadata.description,
       relationships: catalogJsonObject(metadata.relationships, 'RELATIONSHIPS', warnings, index + 1),
       selectionRules: catalogJsonObject(metadata.selectionRules, 'SELECTION_RULES', warnings, index + 1),
+      attributes: Object.entries(catalogJsonObject(metadata.attributes, 'ATTRIBUTES', warnings, index + 1))
+        .map(([attributeKey, value], attributeIndex) => ({
+          key: normalizeCatalogKey(attributeKey, `attribute-${attributeIndex + 1}`),
+          name: String(value?.name ?? attributeKey).trim().slice(0, 200),
+          value: value && typeof value === 'object' && !Array.isArray(value) && 'value' in value
+            ? value.value : value,
+          displayOrder: attributeIndex,
+        })),
       price: parsed.price,
       currency: parsed.currency,
       sourceText: lines[index].text,
@@ -230,9 +253,11 @@ function parseWorkflowRules(extraction) {
     const triggerPhrases = splitPhrases(structuredRule.match.join('|'));
     const matchMode = normalizeMatchMode(structuredRule.matchMode || 'any_phrase');
     const responseMode = normalizeResponseMode(structuredRule.responseMode || 'instruction');
+    const confidenceOutcome = ['ambiguous', 'none'].includes(structuredRule.confidenceOutcome)
+      ? structuredRule.confidenceOutcome : '';
 
     if (!name) warnings.push(`Workflow rule on page ${structuredRule.sourcePageStart} has no RULE name and was skipped`);
-    else if (!triggerPhrases.length) warnings.push(`Workflow rule "${name}" has no MATCH phrases and was skipped`);
+    else if (!triggerPhrases.length && !confidenceOutcome) warnings.push(`Workflow rule "${name}" has no MATCH phrases or CONFIDENCE_OUTCOME and was skipped`);
     else if (!matchMode) warnings.push(`Workflow rule "${name}" has an unsupported MATCH_MODE and was skipped`);
     else if (!responseMode) warnings.push(`Workflow rule "${name}" has an unsupported RESPONSE_MODE and was skipped`);
     else if (!response) warnings.push(`Workflow rule "${name}" has no RESPONSE and was skipped`);
@@ -250,6 +275,7 @@ function parseWorkflowRules(extraction) {
         conditions: {
           triggerPhrases, matchMode, ...(fromStages.length ? { fromStages } : {}),
           ...(structuredRule.scenario ? { scenarioRouting: true } : {}),
+          ...(confidenceOutcome ? { confidenceOutcome } : {}),
         },
         actionType,
         actionConfig: {
@@ -272,7 +298,7 @@ function parseWorkflowRules(extraction) {
   };
 
   for (const line of nonEmptyLines(extraction)) {
-    const structuredField = line.text.match(/^\s*(RULE|MATCH|MATCH_MODE|RESPONSE_MODE|RESPONSE|PRIORITY|FROM_STAGE|NEXT_STAGE|ACTION|REQUIRES_CATALOG_ITEM|BLOCKED_RESPONSE|SCENARIO|TARGET_CATEGORY|TARGET_ITEM)\s*:\s*(.*)$/i);
+    const structuredField = line.text.match(/^\s*(RULE|MATCH|MATCH_MODE|RESPONSE_MODE|RESPONSE|PRIORITY|FROM_STAGE|NEXT_STAGE|ACTION|REQUIRES_CATALOG_ITEM|BLOCKED_RESPONSE|SCENARIO|TARGET_CATEGORY|TARGET_ITEM|CONFIDENCE_OUTCOME)\s*:\s*(.*)$/i);
     if (structuredField) {
       const field = structuredField[1].toUpperCase();
       const value = structuredField[2].trim();
@@ -282,6 +308,7 @@ function parseWorkflowRules(extraction) {
           name: value, match: [], matchMode: '', responseMode: '', response: [], priority: null,
           fromStage: [], nextStage: '', action: '', requiresCatalogItem: false,
           blockedResponse: '', scenario: false, targetCategoryKey: '', targetItemKey: '',
+          confidenceOutcome: '',
           sourceLines: [line.text], sourcePageStart: line.pageNumber, sourcePageEnd: line.pageNumber,
         };
       } else if (structuredRule) {
@@ -299,6 +326,7 @@ function parseWorkflowRules(extraction) {
         else if (field === 'SCENARIO') structuredRule.scenario = truthy(value);
         else if (field === 'TARGET_CATEGORY') structuredRule.targetCategoryKey = value;
         else if (field === 'TARGET_ITEM') structuredRule.targetItemKey = value;
+        else if (field === 'CONFIDENCE_OUTCOME') structuredRule.confidenceOutcome = value.toLowerCase();
         else if (field === 'PRIORITY') {
           const priority = Number(value);
           if (Number.isInteger(priority) && priority >= 0) structuredRule.priority = priority;
@@ -344,19 +372,77 @@ function parseWorkflowRules(extraction) {
 }
 
 function parseConversation(extraction) {
-  const records = nonEmptyLines(extraction).map((line, index) => ({
-    flowKey: 'main',
-    nodeKey: `node_${index + 1}`,
-    nodeType: 'message',
-    language: 'en',
-    sequenceOrder: index,
-    isEntry: index === 0,
-    content: line.text,
-    sourceText: line.text,
-    sourcePageStart: line.pageNumber,
-    sourcePageEnd: line.pageNumber,
-  }));
-  return { records, warnings: records.length ? [] : ['No conversation lines were detected'] };
+  const lines = nonEmptyLines(extraction);
+  const records = [];
+  const warnings = [];
+  let block = null;
+  const key = (value, fallback) => String(value ?? '').normalize('NFKC').toLocaleLowerCase()
+    .replace(/[^a-z0-9]+/gu, '_').replace(/^_|_$/gu, '').slice(0, 160) || fallback;
+  const flush = () => {
+    if (!block) return;
+    const response = block.response.join(' ').trim();
+    if (!response) warnings.push(`Conversation stage "${block.stage}" has no RESPONSE and was skipped`);
+    else {
+      const content = [response, block.nextQuestion].filter(Boolean).join(' ').trim();
+      records.push({
+        flowKey: key(block.flow, 'main'),
+        nodeKey: key(block.stage, `node_${records.length + 1}`),
+        nodeType: key(block.type, 'message'),
+        language: String(block.language || 'und').trim().slice(0, 20),
+        sequenceOrder: records.length,
+        isEntry: block.entry === true || records.length === 0,
+        content,
+        variables: block.purpose ? [{ key: 'purpose', value: block.purpose }] : [],
+        transitions: block.nextStage ? [{ to: key(block.nextStage, '') }].filter((item) => item.to) : [],
+        sourceText: block.sourceLines.join('\n'),
+        sourcePageStart: block.sourcePageStart,
+        sourcePageEnd: block.sourcePageEnd,
+      });
+    }
+    block = null;
+  };
+  for (const line of lines) {
+    const field = line.text.match(/^\s*(STAGE|FLOW|TYPE|LANGUAGE|ENTRY|PURPOSE|RESPONSE|NEXT_QUESTION|NEXT_STAGE)\s*:\s*(.*)$/iu);
+    if (field) {
+      const name = field[1].toUpperCase();
+      const value = field[2].trim();
+      if (name === 'STAGE') {
+        flush();
+        block = {
+          stage: value, flow: 'main', type: 'message', language: 'und', entry: false,
+          purpose: '', response: [], nextQuestion: '', nextStage: '', sourceLines: [line.text],
+          sourcePageStart: line.pageNumber, sourcePageEnd: line.pageNumber,
+        };
+      } else if (block) {
+        block.sourceLines.push(line.text);
+        block.sourcePageEnd = line.pageNumber;
+        if (name === 'FLOW') block.flow = value;
+        else if (name === 'TYPE') block.type = value;
+        else if (name === 'LANGUAGE') block.language = value;
+        else if (name === 'ENTRY') block.entry = ['true', 'yes', '1'].includes(value.toLocaleLowerCase());
+        else if (name === 'PURPOSE') block.purpose = value;
+        else if (name === 'RESPONSE') block.response.push(value);
+        else if (name === 'NEXT_QUESTION') block.nextQuestion = value;
+        else if (name === 'NEXT_STAGE') block.nextStage = value;
+      }
+      continue;
+    }
+    if (block) {
+      if (block.response.length) block.response.push(line.text.trim());
+      block.sourceLines.push(line.text);
+      block.sourcePageEnd = line.pageNumber;
+    } else {
+      // Backward-compatible plain-line scripts remain valid.
+      records.push({
+        flowKey: 'main', nodeKey: `node_${records.length + 1}`, nodeType: 'message', language: 'und',
+        sequenceOrder: records.length, isEntry: records.length === 0, content: line.text,
+        variables: [], transitions: [], sourceText: line.text,
+        sourcePageStart: line.pageNumber, sourcePageEnd: line.pageNumber,
+      });
+    }
+  }
+  flush();
+  return { records, warnings: [...warnings, ...(!records.length ? ['No conversation lines were detected'] : [])] };
 }
 
 function parseGeneralKnowledge(extraction) {

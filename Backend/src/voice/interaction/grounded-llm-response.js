@@ -102,6 +102,13 @@ export function buildGroundingEnvelope(knowledge = {}) {
       recordType: text(evidence.recordType, 40) || 'tenant_evidence',
     });
   }
+  for (const evidence of knowledge.rankedEvidence ?? []) {
+    addSource(sources, sourceContents, evidence.content, {
+      recordId: text(evidence.source?.recordId, 100) || null,
+      recordType: text(evidence.route, 40) || 'ranked_evidence',
+      evidenceScore: Number(evidence.score ?? 0),
+    });
+  }
   addSource(sources, sourceContents, knowledge.content, {
     recordId: text(knowledge.source?.recordId, 100) || null,
     recordType: text(knowledge.route, 40) || null,
@@ -226,6 +233,64 @@ function supportRatio(answer, evidence) {
   if (!answerTokens.length) return 1;
   const evidenceTokens = new Set(meaningfulTokens(evidence));
   return answerTokens.filter((token) => evidenceTokens.has(token)).length / answerTokens.length;
+}
+
+function spokenSentences(value) {
+  const normalized = text(value, maximumAnswerCharacters);
+  if (!normalized) return [];
+  if (globalThis.Intl?.Segmenter) {
+    const segmenter = new Intl.Segmenter(undefined, { granularity: 'sentence' });
+    return [...segmenter.segment(normalized)].map((entry) => entry.segment.trim()).filter(Boolean);
+  }
+  return normalized.split(/(?<=[.!?])\s+/u).map((entry) => entry.trim()).filter(Boolean);
+}
+
+function internalSpeech(value) {
+  const normalized = identity(value);
+  return /(?:runtime context|grounded response contract|response mode|action config|selectedentitykeys|evidencesourceids|flowaction|catalog item required)/iu.test(normalized)
+    || /^\s*(?:instruction|action|workflow|response)\s*:/iu.test(String(value ?? ''));
+}
+
+// This is the final evidence gate for generated speech. Validation is done per
+// sentence so one grounded sentence cannot hide an unsupported price, entity,
+// policy or action in a later sentence. Configured flow questions may be
+// supplied explicitly because they originate in tenant call-state, not the LLM.
+export function validateGroundedSpokenSentences(value, envelope, decision, options = {}) {
+  const sourceIds = new Set(decision?.evidenceSourceIds ?? []);
+  const citedSources = (envelope?.sources ?? []).filter((source) => sourceIds.has(source.id));
+  const evidenceText = citedSources.map((source) => source.content).join(' ');
+  const evidenceNumbers = numbers(evidenceText);
+  const evidenceAbbreviations = abbreviations(evidenceText);
+  const selectedKeys = new Set((decision?.selectedEntityKeys ?? []).map(identity));
+  const configuredSpeech = (options.configuredSpeech ?? []).map(identity).filter(Boolean);
+  const approved = [];
+  const rejected = [];
+
+  for (const sentence of spokenSentences(value)) {
+    const normalized = identity(sentence);
+    let reason = null;
+    const configured = configuredSpeech.some((candidate) => candidate === normalized);
+    if (internalSpeech(sentence)) reason = 'internal_text';
+    else if (!configured && [...numbers(sentence)].some((number) => !evidenceNumbers.has(number))) {
+      reason = 'unsupported_numeric_fact';
+    } else if (!configured && [...abbreviations(sentence)].some((term) => !evidenceAbbreviations.has(term))) {
+      reason = 'unsupported_technical_term';
+    } else if (!configured && (envelope?.entities ?? []).some((item) => (
+      !selectedKeys.has(identity(item.key)) && normalized.includes(identity(item.name))
+    ))) {
+      reason = 'unsupported_entity';
+    } else if (!configured && supportRatio(sentence, evidenceText) < 0.2) {
+      reason = 'insufficient_sentence_evidence';
+    }
+    if (reason) rejected.push(Object.freeze({ sentence, reason }));
+    else approved.push(sentence);
+  }
+  return Object.freeze({
+    valid: rejected.length === 0 && approved.length > 0,
+    text: approved.join(' ').trim(),
+    approved: Object.freeze(approved),
+    rejected: Object.freeze(rejected),
+  });
 }
 
 export function validateGroundedLlmResponse(raw, envelope, runtime = {}) {

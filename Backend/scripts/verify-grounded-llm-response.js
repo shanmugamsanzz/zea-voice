@@ -10,6 +10,7 @@ const {
   normalizeQuestionType,
   validateGroundedLlmUnderstanding,
   validateGroundedLlmResponse,
+  validateGroundedSpokenSentences,
 } = await import('../src/voice/interaction/grounded-llm-response.js');
 const { openLiveCallMemory } = await import('../src/voice/interaction/live-call-memory.js');
 const { createSelectedLlmStream } = await import('../src/voice/providers/llm/llm-response.service.js');
@@ -28,6 +29,16 @@ assert.equal(envelope.sources.length, 1);
 assert.equal(envelope.sources[0].id, 'source_1');
 assert.equal(envelope.entities[0].key, 'premium-plan');
 assert.deepEqual(groundedResponseContract(envelope).allowedEntityKeys, ['premium-plan']);
+
+const rankedEnvelope = buildGroundingEnvelope({
+  ...knowledge,
+  rankedEvidence: [{
+    route: 'faq', content: 'Approved follow-up evidence.', score: 450,
+    source: { recordId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' },
+  }],
+});
+assert.equal(rankedEnvelope.sources.length, 2);
+assert.ok(groundedResponseContract(rankedEnvelope).allowedEvidenceSourceIds.includes('source_2'));
 
 assert.equal(normalizeQuestionType('package_overview'), 'overview');
 assert.equal(normalizeQuestionType('package details'), 'details');
@@ -61,6 +72,30 @@ assert.equal(valid.intent, 'catalog_item_details');
 assert.equal(valid.questionType, 'inclusions');
 assert.equal(valid.flowAction, 'side_question');
 assert.equal(valid.selectedEntities[0].key, 'premium-plan');
+
+const sentenceValidation = validateGroundedSpokenSentences(
+  'Premium Plan is USD 100. It includes priority support. Refunds are always guaranteed.',
+  envelope,
+  valid,
+);
+assert.equal(sentenceValidation.valid, false);
+assert.equal(sentenceValidation.approved.length, 2);
+assert.equal(sentenceValidation.rejected[0].reason, 'insufficient_sentence_evidence');
+assert.doesNotMatch(sentenceValidation.text, /guaranteed/iu);
+
+const internalSentence = validateGroundedSpokenSentences(
+  'RESPONSE_MODE: instruction.', envelope, valid,
+);
+assert.equal(internalSentence.rejected[0].reason, 'internal_text');
+
+const configuredQuestion = validateGroundedSpokenSentences(
+  'Premium Plan is USD 100. Which configured value should I collect?',
+  envelope,
+  valid,
+  { configuredSpeech: ['Which configured value should I collect?'] },
+);
+assert.equal(configuredQuestion.valid, true);
+assert.equal(configuredQuestion.approved.length, 2);
 
 const unpublishedEntity = validateGroundedLlmResponse(JSON.stringify({
   intent: 'catalog_item_details', selectedEntityKeys: ['invented-plan'],

@@ -139,7 +139,7 @@ async function persistCatalog(client, job, result) {
     ],
   );
   for (const record of result.records) {
-    await client.query(
+    const item = await client.query(
       `INSERT INTO structured_items (
          tenant_id, knowledge_base_id, catalog_id, document_id, document_version_id,
          item_key, name, category, category_key, parent_category_key, category_description,
@@ -149,7 +149,7 @@ async function persistCatalog(client, job, result) {
          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
          $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb,
          $17, $18, $19, 'draft', $20, $21, $22
-       )`,
+       ) RETURNING id`,
       [
         job.tenant_id, job.knowledge_base_id, catalog.rows[0].id,
         job.document_id, job.document_version_id, record.itemKey, record.name, record.category,
@@ -161,6 +161,19 @@ async function persistCatalog(client, job, result) {
         record.sourcePageStart, record.sourcePageEnd,
       ],
     );
+    for (const attribute of record.attributes ?? []) {
+      await client.query(
+        `INSERT INTO structured_item_attributes (
+           tenant_id, knowledge_base_id, item_id, document_id, document_version_id,
+           attribute_key, display_name, value, display_order
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)`,
+        [
+          job.tenant_id, job.knowledge_base_id, item.rows[0].id,
+          job.document_id, job.document_version_id, attribute.key, attribute.name,
+          JSON.stringify(attribute.value), attribute.displayOrder,
+        ],
+      );
+    }
   }
 }
 
@@ -192,11 +205,12 @@ async function persistConversation(client, job, result) {
          content, variables, transitions, status, source_text,
          source_page_start, source_page_end
        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-         $11, '[]'::jsonb, '[]'::jsonb, 'draft', $12, $13, $14)`,
+         $11, $12::jsonb, $13::jsonb, 'draft', $14, $15, $16)`,
       [
         job.tenant_id, job.knowledge_base_id, job.document_id, job.document_version_id,
         record.flowKey, record.nodeKey, record.nodeType, record.language,
-        record.sequenceOrder, record.isEntry, record.content, record.sourceText,
+        record.sequenceOrder, record.isEntry, record.content,
+        JSON.stringify(record.variables ?? []), JSON.stringify(record.transitions ?? []), record.sourceText,
         record.sourcePageStart, record.sourcePageEnd,
       ],
     );

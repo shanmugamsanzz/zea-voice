@@ -171,6 +171,7 @@ function itemLabels(item) {
 }
 
 function categoryCandidates(items, query) {
+  const normalizedQuery = normalizeCatalogEntityText(query);
   const categories = new Map();
   for (const item of items) {
     const category = String(item.category ?? item.catalog_name ?? '').normalize('NFKC').trim();
@@ -198,10 +199,16 @@ function categoryCandidates(items, query) {
     categories.set(identity, existing);
   }
   return [...categories.values()].map((candidate) => {
-    let best = { ...catalogLabelSimilarity(query, candidate.category), matchedText: candidate.category };
+    let best = {
+      ...catalogLabelSimilarity(query, candidate.category), matchedText: candidate.category,
+      exactLabel: normalizedQuery === normalizeCatalogEntityText(candidate.category),
+    };
     if (candidate.categoryKey) {
       const similarity = catalogLabelSimilarity(query, candidate.categoryKey);
-      if (similarity.score > best.score) best = { ...similarity, matchedText: candidate.categoryKey };
+      if (similarity.score > best.score) best = {
+        ...similarity, matchedText: candidate.categoryKey,
+        exactLabel: normalizedQuery === normalizeCatalogEntityText(candidate.categoryKey),
+      };
     }
     for (const parentLabel of [...new Set(candidate.parentLabels.map((value) => String(value).trim()).filter(Boolean))]) {
       const similarity = catalogLabelSimilarity(query, parentLabel);
@@ -210,7 +217,8 @@ function categoryCandidates(items, query) {
     }
     for (const alias of [...new Set(candidate.aliases.map((value) => String(value).trim()).filter(Boolean))]) {
       const similarity = catalogLabelSimilarity(query, alias);
-      if (similarity.score > best.score) best = { ...similarity, matchedText: alias };
+      const exactLabel = normalizedQuery === normalizeCatalogEntityText(alias);
+      if (exactLabel || similarity.score > best.score) best = { ...similarity, matchedText: alias, exactLabel };
     }
     for (const description of [...new Set(candidate.descriptions.map((value) => String(value).trim()).filter(Boolean))]) {
       const similarity = catalogLabelSimilarity(query, description);
@@ -235,20 +243,24 @@ function categoryCandidates(items, query) {
 
 export function rankCatalogEntities(items, query) {
   if (!Array.isArray(items) || !String(query ?? '').trim()) return [];
+  const normalizedQuery = normalizeCatalogEntityText(query);
   const itemCandidates = items.map((item) => {
-    let best = { score: 0, method: 'none', matchedText: null, matchedKind: null };
+    let best = { score: 0, method: 'none', matchedText: null, matchedKind: null, exactLabel: false };
     for (const label of itemLabels(item)) {
       const similarity = catalogLabelSimilarity(query, label.value);
       const score = similarity.score * label.weight;
-      if (score > best.score) {
-        best = { score, method: similarity.method, matchedText: label.value, matchedKind: label.kind };
+      const exactLabel = ['name', 'item_key', 'alias'].includes(label.kind)
+        && normalizedQuery === normalizeCatalogEntityText(label.value);
+      if (exactLabel || score > best.score) {
+        best = { score, method: similarity.method, matchedText: label.value, matchedKind: label.kind, exactLabel };
       }
     }
     return { entityType: 'item', item, items: [item], ...best };
   });
   return [...itemCandidates, ...categoryCandidates(items, query)]
     .filter((candidate) => candidate.score > 0)
-    .sort((left, right) => right.score - left.score
+    .sort((left, right) => Number(right.exactLabel) - Number(left.exactLabel)
+      || right.score - left.score
       || (left.entityType === right.entityType ? 0 : (left.entityType === 'item' ? -1 : 1))
       || String(left.item?.id ?? left.category).localeCompare(String(right.item?.id ?? right.category)));
 }
@@ -298,7 +310,7 @@ export function classifyCatalogEntityLocally(items, query, {
     && best.score >= runnerUp.score,
   );
   const ambiguous = Boolean(runnerUp && best.score - runnerUp.score < ambiguityMargin && !runnerIsParentOfBest);
-  const status = best.score >= highConfidence && !ambiguous ? 'match' : 'uncertain';
+  const status = (best.exactLabel || (best.score >= highConfidence && !ambiguous)) ? 'match' : 'uncertain';
   return Object.freeze({
     status,
     entityType: best.entityType,

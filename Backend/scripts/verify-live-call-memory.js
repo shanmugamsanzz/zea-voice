@@ -9,6 +9,7 @@ import {
   openLiveCallMemory,
 } from '../src/voice/interaction/live-call-memory.js';
 import { LiveMemoryMaintenanceQueue } from '../src/voice/interaction/live-memory-maintenance.js';
+import { buildConversationMemoryState } from '../src/voice/interaction/conversation-memory-state.js';
 
 const settings = normalizeLiveMemorySettings({
   conversationContextMode: 'last_n_turns',
@@ -87,6 +88,54 @@ const framedLanguage = compactLiveCallMemoryContext({
 });
 assert.equal(framedLanguage.language, 'ta');
 
+const restorableIdentity = { ...identity, callId: 'call-restorable' };
+const restorable = openLiveCallMemory(restorableIdentity, settings, 10, {
+  callId: restorableIdentity.callId,
+  currentStage: 'item_explanation',
+  resumeStage: 'item_selection',
+  currentTopic: 'Standard Plan',
+  activeCategory: { key: 'service-plans', name: 'Service Plans' },
+  selectedItem: {
+    id: 'item-standard', key: 'standard-plan', name: 'Standard Plan',
+    category: 'Service Plans', categoryKey: 'service-plans',
+  },
+  candidateItems: [{ id: 'item-premium', key: 'premium-plan', name: 'Premium Plan' }],
+  pendingQuestion: { key: 'preferred_date', text: 'Which date?', kind: 'field' },
+  language: 'ta',
+  fields: { lead_name: 'Example Caller' },
+  completedQuestions: ['lead_name'],
+  answeredQuestions: ['Which option?'],
+  activeActions: ['configured-booking'],
+  recentTurns: [
+    { role: 'user', content: 'Tell me about the standard option', at: 8 },
+    { role: 'assistant', content: 'Approved option details', at: 9 },
+  ],
+  runningSummary: 'The caller selected the standard option.',
+});
+const restoredSnapshot = restorable.snapshot();
+assert.equal(restoredSnapshot.currentStage, 'item_explanation');
+assert.equal(restoredSnapshot.resumeStage, 'item_selection');
+assert.equal(restoredSnapshot.activeCategory.key, 'service-plans');
+assert.equal(restoredSnapshot.selectedItem.key, 'standard-plan');
+assert.equal(restoredSnapshot.candidateItems[0].key, 'premium-plan');
+assert.equal(restoredSnapshot.pendingQuestion, 'preferred_date');
+assert.equal(restoredSnapshot.pendingQuestionText, 'Which date?');
+assert.equal(restoredSnapshot.language, 'ta');
+assert.deepEqual(restoredSnapshot.collectedData, { lead_name: 'Example Caller' });
+assert.equal(restoredSnapshot.messages.length, 2);
+
+const checkpoint = buildConversationMemoryState({
+  call: { id: restorableIdentity.callId },
+  history: restoredSnapshot.messages,
+  callFrame: restoredSnapshot,
+});
+assert.equal(checkpoint.schemaVersion, 2);
+assert.equal(checkpoint.callFrame.callId, restorableIdentity.callId);
+assert.equal(checkpoint.callFrame.selectedItem.key, 'standard-plan');
+assert.equal(checkpoint.callFrame.recentTurns.length, 2);
+assert.deepEqual(checkpoint.callFrame.fields, { lead_name: 'Example Caller' });
+assert.equal(activeLiveCallMemoryCount(), 5);
+
 const maintenance = new LiveMemoryMaintenanceQueue({ callId: 'benchmark-call' });
 let maintenanceRan = false;
 const scheduleStartedAt = performance.now();
@@ -113,5 +162,6 @@ session.close();
 isolated.close();
 namedDateSession.close();
 combined.close();
+restorable.close();
 assert.equal(activeLiveCallMemoryCount(), 0);
 console.log(`Live-call memory configuration, async maintenance, prompt limit and latency verified (p95 ${p95Ms.toFixed(2)}ms).`);

@@ -43,10 +43,38 @@ function isoDate(value, fallback = null) {
   return parsed && !Number.isNaN(parsed.getTime()) ? parsed.toISOString() : fallback;
 }
 
+export function normalizeLiveCallFrame(value = {}) {
+  const pending = value.pendingQuestion && typeof value.pendingQuestion === 'object'
+    ? value.pendingQuestion : { key: value.pendingQuestion, text: value.pendingQuestionText, kind: value.pendingQuestionKind };
+  return Object.freeze({
+    callId: text(value.callId, 100) || null,
+    currentStage: text(value.currentStage, 80) || null,
+    resumeStage: text(value.resumeStage, 80) || null,
+    currentTopic: text(value.currentTopic, 240) || null,
+    activeCategory: Object.freeze(safeJson(value.activeCategory) ?? {}),
+    selectedItem: Object.freeze(safeJson(value.selectedItem ?? value.selectedCatalogItem) ?? {}),
+    candidateItems: Object.freeze((Array.isArray(value.candidateItems) ? value.candidateItems : [])
+      .slice(0, 8).map((item) => safeJson(item)).filter(Boolean)),
+    pendingQuestion: Object.freeze({
+      key: text(pending?.key, 500) || null,
+      text: text(pending?.text, 500) || null,
+      kind: text(pending?.kind, 40) || null,
+    }),
+    language: text(value.language, 20) || null,
+    fields: Object.freeze(safeJson(value.collectedData ?? value.fields) ?? {}),
+    completedQuestions: Object.freeze(stringList(value.completedQuestions)),
+    answeredQuestions: Object.freeze(stringList(value.answeredQuestions)),
+    activeActions: Object.freeze(stringList(value.activeActions)),
+    recentTurns: Object.freeze(messages(Array.isArray(value.recentTurns) ? value.recentTurns : value.messages)),
+    runningSummary: text(value.runningSummary, 3_600),
+    updatedAt: isoDate(value.updatedAt, new Date().toISOString()),
+  });
+}
+
 export function normalizeConversationMemoryState(value = {}) {
   const updatedAt = isoDate(value.updatedAt, new Date().toISOString());
   return Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: 2,
     summary: text(value.summary, maxSummaryCharacters),
     recentMessages: Object.freeze(messages(value.recentMessages)),
     collectedData: Object.freeze(safeJson(value.collectedData) ?? {}),
@@ -54,13 +82,14 @@ export function normalizeConversationMemoryState(value = {}) {
     pendingQuestions: Object.freeze(stringList(value.pendingQuestions)),
     callback: Object.freeze(safeJson(value.callback) ?? {}),
     lastCall: Object.freeze(safeJson(value.lastCall) ?? {}),
+    callFrame: normalizeLiveCallFrame(value.callFrame),
     updatedAt,
   });
 }
 
 export function buildConversationMemoryState({
   previous = {}, history = [], call, outcome, reason, callback, collectedData,
-  completedQuestions, pendingQuestions, runningSummary, at = new Date(),
+  completedQuestions, pendingQuestions, runningSummary, callFrame, at = new Date(),
 }) {
   const prior = normalizeConversationMemoryState(previous);
   const currentMessages = messages(history);
@@ -76,6 +105,7 @@ export function buildConversationMemoryState({
     collectedData: { ...prior.collectedData, ...(safeJson(collectedData) ?? {}) },
     completedQuestions: [...prior.completedQuestions, ...(completedQuestions ?? [])],
     pendingQuestions: pendingQuestions ?? prior.pendingQuestions,
+    callFrame: callFrame ? normalizeLiveCallFrame({ ...callFrame, callId: call?.id ?? callFrame.callId }) : prior.callFrame,
     lastCall: {
       id: call?.id ?? null,
       providerCallId: call?.providerCallId ?? null,
