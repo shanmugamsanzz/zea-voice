@@ -169,11 +169,11 @@ export function groundedResponseContract(envelope) {
   return Object.freeze({
     format: 'json_object',
     fieldOrder: [
+      'evidenceSourceIds', 'selectedEntityKeys', 'spokenAnswer',
       'intent', 'questionType', 'currentTopic', 'topicChanged', 'pendingQuestionRelevant',
-      'flowAction', 'selectedEntityKeys',
-      'evidenceSourceIds', 'assertedFacts', 'spokenAnswer',
+      'flowAction', 'assertedFacts',
     ],
-    streamingRule: 'Emit spokenAnswer last so its complete sentences can be validated and streamed immediately.',
+    streamingRule: 'Emit evidenceSourceIds and selectedEntityKeys first, then spokenAnswer immediately. Emit the remaining metadata only after spokenAnswer. Keep the first spoken sentence short, direct and punctuated.',
     schema: {
       intent: 'short generic intent name',
       questionType: 'identity, overview, category_request, item_request, details, inclusions, coverage, preparation, price, comparison, scenario, action_request, action_field_answer, side_question, confirmation or unclear',
@@ -270,8 +270,9 @@ function partialJsonStringField(raw, names) {
 }
 
 // Decodes only the caller-facing string from a streaming grounded JSON object.
-// Metadata must arrive first and be valid before any answer delta is released.
-// The complete object is still validated after the stream finishes.
+// Source and entity citations must arrive first so every complete sentence can
+// pass the local evidence gate. Conversation-memory metadata may follow the
+// answer and is still validated before it is committed to live state.
 export function createGroundedJsonStreamDecoder(envelope, runtime = {}) {
   let raw = '';
   let releasedCharacters = 0;
@@ -279,25 +280,17 @@ export function createGroundedJsonStreamDecoder(envelope, runtime = {}) {
   const allowedSources = new Set((envelope.sources ?? []).map((source) => source.id));
   const allowedEntities = new Set((envelope.entities ?? []).map((entity) => entity.key));
   const refreshDecision = () => {
-    const intent = jsonStringField(raw, ['intent']);
-    const questionType = normalizeQuestionType(jsonStringField(raw, ['questionType', 'question_type']));
-    const currentTopic = jsonStringField(raw, ['currentTopic', 'current_topic']);
-    const topicChanged = booleanFieldFromRaw(raw, ['topicChanged', 'topic_changed']);
-    const pendingQuestionRelevant = booleanFieldFromRaw(
-      raw, ['pendingQuestionRelevant', 'pending_question_relevant'],
-    );
-    const flowAction = normalizeFlowAction(jsonStringField(raw, ['flowAction', 'flow_action']), runtime);
     const sourceIds = jsonArrayField(raw, ['evidenceSourceIds', 'evidence_source_ids']);
     const entityKeys = jsonArrayField(raw, ['selectedEntityKeys', 'selected_entity_keys']);
-    if (!intent || !currentTopic || topicChanged === null || pendingQuestionRelevant === null
-      || !flowAction || !sourceIds || !entityKeys) return;
+    if (!sourceIds || !entityKeys || (envelope.found && sourceIds.length === 0)) return;
     const normalizedSources = list(sourceIds, maximumSources);
     const normalizedEntities = list(entityKeys, maximumEntities);
     if (normalizedSources.some((id) => !allowedSources.has(id))) return;
     if (normalizedEntities.some((key) => !allowedEntities.has(key))) return;
     decision = Object.freeze({
-      intent: text(intent, maximumIntentCharacters), questionType,
-      currentTopic: text(currentTopic, 240), topicChanged, pendingQuestionRelevant, flowAction,
+      intent: 'streaming_answer', questionType: 'unclear',
+      currentTopic: text(runtime.currentTopic, 240) || 'current caller request',
+      topicChanged: false, pendingQuestionRelevant: false, flowAction: 'continue',
       evidenceSourceIds: Object.freeze(normalizedSources),
       selectedEntityKeys: Object.freeze(normalizedEntities),
     });

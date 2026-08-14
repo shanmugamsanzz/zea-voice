@@ -85,6 +85,15 @@ function languageCode(value) {
   return Object.entries(names).find(([name]) => lower.includes(name))?.[1] ?? 'en';
 }
 
+function settleWithin(promise, timeoutMs, fallback) {
+  let timer;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(fallback), timeoutMs);
+    timer.unref?.();
+  });
+  return Promise.race([Promise.resolve(promise), timeout]).finally(() => clearTimeout(timer));
+}
+
 function fallbackClosing(profile) {
   return profile.agent.language?.toLowerCase().includes('tamil') || profile.agent.language?.toLowerCase().includes('ta')
     ? 'அழைத்ததற்கு நன்றி. வணக்கம்.' : 'Thank you for calling. Goodbye.';
@@ -1470,6 +1479,7 @@ export class RealtimeConversationOrchestrator {
 
   async #knowledge(query, _understanding = null, abortSignal = null) {
     try {
+      const startedAt = performance.now();
       const stageState = this.liveCallMemory?.snapshot();
       const auth = {
         tenantId: this.runtimeProfile.agent.tenantId,
@@ -1492,9 +1502,23 @@ export class RealtimeConversationOrchestrator {
       const loadMap = this.dependencies.loadPublishedKnowledgeMap ?? loadPublishedKnowledgeMap;
       const retrieveEvidence = this.dependencies.retrieveTenantEvidence ?? retrieveTenantEvidence;
       const [publishedMap, tenantEvidence] = await Promise.all([
-        loadMap(auth, genericInput),
-        retrieveEvidence(auth, genericInput),
+        settleWithin(
+          loadMap(auth, genericInput),
+          env.RAG_RUNTIME_CHANNEL_DEADLINE_MS,
+          { found: false, timedOut: true, maps: [], records: [] },
+        ).catch((error) => ({
+          found: false, error: error.code ?? 'KNOWLEDGE_MAP_UNAVAILABLE', maps: [], records: [],
+        })),
+        settleWithin(
+          retrieveEvidence(auth, genericInput),
+          env.RAG_RUNTIME_CHANNEL_DEADLINE_MS,
+          { found: false, timedOut: true, sources: [], actionEvidence: [], entities: [] },
+        ).catch((error) => ({
+          found: false, error: error.code ?? 'TENANT_EVIDENCE_UNAVAILABLE',
+          sources: [], actionEvidence: [], entities: [],
+        })),
       ]);
+      const parallelDurationMs = Math.round((performance.now() - startedAt) * 100) / 100;
       const first = tenantEvidence.sources?.[0];
       const result = {
         route: 'llm_first',
@@ -1519,6 +1543,7 @@ export class RealtimeConversationOrchestrator {
         })),
         retrieval: {
           mode: 'llm_first',
+          parallelDurationMs,
           mapDurationMs: publishedMap.durationMs,
           semanticDurationMs: tenantEvidence.durationMs,
           publicationRevisions: (publishedMap.maps ?? []).map((map) => ({
@@ -1826,6 +1851,7 @@ export class RealtimeConversationOrchestrator {
     const groundingEnvelope = buildGroundingEnvelope(knowledge);
     const groundingRuntime = {
       pendingQuestion: liveMemory?.pendingQuestion ?? liveMemory?.pendingQuestionText,
+      currentTopic: liveMemory?.currentTopic,
       currentStage: liveMemory?.currentStage,
       activeActions: liveMemory?.activeActions ?? [],
     };
@@ -2440,7 +2466,7 @@ export class RealtimeConversationOrchestrator {
     try {
       const llmStartedAt = Date.now();
       response = await this.#llm(query, history, knowledge, {
-        instruction: 'Understand the latest caller utterance from its full natural meaning. Answer that request first using only approved evidence. Decide the current topic, whether it changed, and whether the saved pending question remains relevant. Do not require exact wording and do not use a saved stage as a gate. Emit the required JSON object with spokenAnswer last.',
+        instruction: 'Understand the latest caller utterance from its full natural meaning. Answer that request first using only approved evidence. Decide the current topic, whether it changed, and whether the saved pending question remains relevant. Do not require exact wording and do not use a saved stage as a gate. In the required JSON object emit evidenceSourceIds and selectedEntityKeys first, then spokenAnswer immediately with a short punctuated first sentence; emit remaining metadata afterward.',
       }, streaming);
       turnLatency.llmMs += Math.max(0, Date.now() - llmStartedAt);
       if (response.understanding) {
@@ -2723,8 +2749,13 @@ export class RealtimeConversationOrchestrator {
                   stage: 'voice.turn_latency', callId: this.call.id,
                   epoch: turnLatency.epoch,
                   sttSpeechDurationMs: turnLatency.sttSpeechDurationMs,
+                  sttFinalizationMs: turnLatency.sttFinalizationMs,
                   knowledgeMs: turnLatency.knowledgeMs,
+                  retrievalMs: turnLatency.retrievalMs,
+                  rankingMs: turnLatency.rankingMs,
                   llmMs: turnLatency.llmMs,
+                  llmFirstTokenMs: turnLatency.llmFirstTokenMs,
+                  validationMs: turnLatency.validationMs,
                   ttsFirstAudioMs: turnLatency.ttsFirstAudioMs,
                   validatedTextToAudioMs: turnLatency.validatedTextToAudioMs,
                   totalFirstAudioMs: turnLatency.totalFirstAudioMs,

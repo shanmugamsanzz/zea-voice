@@ -186,7 +186,7 @@ export function buildAgentSystemPrompt(agent, { usageDirection, context, knowled
       ? '- Select only listed entity keys and cite only listed evidence source IDs. Use no unsupported facts in spokenAnswer.'
       : null,
     groundedResponseMode
-      ? '- Return intent, questionType, currentTopic, topicChanged, pendingQuestionRelevant, flowAction, selectedEntityKeys, evidenceSourceIds and spokenAnswer. questionType must describe this caller turn, including price, inclusions, comparison, scenario, action_request or action_field_answer when applicable.'
+      ? '- Emit evidenceSourceIds and selectedEntityKeys first, then spokenAnswer immediately with a short direct punctuated first sentence. Emit intent, questionType, currentTopic, topicChanged, pendingQuestionRelevant, flowAction and assertedFacts only after spokenAnswer. questionType must describe this caller turn, including price, inclusions, comparison, scenario, action_request or action_field_answer when applicable.'
       : null,
     groundedResponseMode
       ? '- Include assertedFacts. Each asserted fact must be a short verbatim value from one cited source and identify that sourceId. Every spoken price, test, policy, preparation, availability or action claim must be supported by those cited sources.'
