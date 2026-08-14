@@ -147,10 +147,6 @@ export function approvedDocumentFallback(knowledge, profile) {
       content: evidence.content, source: evidence.source ?? evidence,
       route: evidence.route, score: 2_000 + Number(evidence.score ?? 0) - index,
     })),
-    ...(knowledge?.workflowHints ?? []).map((hint, index) => ({
-      content: hint.content, source: hint.source ?? hint,
-      route: 'workflow_hint', score: 1_800 - index,
-    })),
     ...(knowledge?.tenantEvidence?.sources ?? []).map((source, index) => ({
       content: source.content, source,
       route: source.recordType, score: 1_600 - index,
@@ -169,11 +165,11 @@ export function approvedDocumentFallback(knowledge, profile) {
   ];
   const typeWeight = (value) => {
     const type = String(value ?? '').toLocaleLowerCase();
-    if (type.includes('workflow')) return 500;
-    if (type.includes('conversation')) return 450;
-    if (type.includes('faq')) return 400;
-    if (type.includes('catalog')) return 300;
-    if (type.includes('general') || type.includes('knowledge')) return 200;
+    if (type.includes('faq')) return 0.08;
+    if (type.includes('catalog')) return 0.07;
+    if (type.includes('general') || type.includes('knowledge')) return 0.06;
+    if (type.includes('workflow')) return 0.05;
+    if (type.includes('conversation')) return 0.01;
     return 0;
   };
   const ranked = candidates.map((candidate, index) => ({
@@ -1511,11 +1507,13 @@ export class RealtimeConversationOrchestrator {
         })),
         settleWithin(
           retrieveEvidence(auth, genericInput),
-          env.RAG_RUNTIME_CHANNEL_DEADLINE_MS,
-          { found: false, timedOut: true, sources: [], actionEvidence: [], entities: [] },
+          env.RAG_RUNTIME_CHANNEL_DEADLINE_MS
+            + env.RAG_RUNTIME_SEMANTIC_DEADLINE_MS
+            + env.RAG_RUNTIME_CACHE_TIMEOUT_MS,
+          { found: false, timedOut: true, sources: [], actionEvidence: [], guidanceEvidence: [], entities: [] },
         ).catch((error) => ({
           found: false, error: error.code ?? 'TENANT_EVIDENCE_UNAVAILABLE',
-          sources: [], actionEvidence: [], entities: [],
+          sources: [], actionEvidence: [], guidanceEvidence: [], entities: [],
         })),
       ]);
       const parallelDurationMs = Math.round((performance.now() - startedAt) * 100) / 100;

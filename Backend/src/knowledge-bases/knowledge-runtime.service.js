@@ -1266,6 +1266,7 @@ function publishedRecordLookup(profile) {
   }
   for (const node of profile.conversations ?? []) {
     put('CONVERSATION_NODE', node, node.content, {
+      callerFacing: String(node.node_type ?? '').toLowerCase() !== 'guidance',
       authoritativeData: {
         flowKey: node.flow_key, nodeKey: node.node_key, nodeType: node.node_type,
         variables: node.variables ?? [], transitions: node.transitions ?? [],
@@ -1316,14 +1317,14 @@ export async function searchPublishedKnowledge(auth, input, dependencies = defau
   );
   if (loaded === RUNTIME_ABORTED) {
     return {
-      operation: 'search_published_knowledge', found: false, sources: [], actionEvidence: [],
+      operation: 'search_published_knowledge', found: false, sources: [], actionEvidence: [], guidanceEvidence: [],
       entities: [], cancelled: true,
       durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
     };
   }
   if (loaded === RUNTIME_TIMED_OUT) {
     return {
-      operation: 'search_published_knowledge', found: false, sources: [], actionEvidence: [],
+      operation: 'search_published_knowledge', found: false, sources: [], actionEvidence: [], guidanceEvidence: [],
       entities: [], timedOut: true, timedOutStage: 'postgres_hydration',
       durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
     };
@@ -1337,6 +1338,7 @@ export async function searchPublishedKnowledge(auth, input, dependencies = defau
   const lookup = publishedRecordLookup(profile);
   const sources = [];
   const actionEvidence = [];
+  const guidanceEvidence = [];
   const entities = [];
   const selectedKeys = new Set([
     ...(safeInput.understanding?.selectedEntityKeys ?? []),
@@ -1371,7 +1373,7 @@ export async function searchPublishedKnowledge(auth, input, dependencies = defau
     );
     if (semanticResult === RUNTIME_ABORTED) {
       return {
-        operation: 'search_published_knowledge', found: false, sources: [], actionEvidence: [],
+        operation: 'search_published_knowledge', found: false, sources: [], actionEvidence: [], guidanceEvidence: [],
         entities: [], cancelled: true,
         durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
       };
@@ -1397,6 +1399,10 @@ export async function searchPublishedKnowledge(auth, input, dependencies = defau
         actionEvidence.push(evidence);
         continue;
       }
+      if (recordType === 'CONVERSATION_NODE' && evidence.callerFacing !== true) {
+        guidanceEvidence.push(evidence);
+        continue;
+      }
       if (!evidence.content) continue;
       if (!sources.some((source) => `${source.recordType}:${source.recordId}` === `${recordType}:${recordId}`)) {
         sources.push(evidence);
@@ -1415,8 +1421,8 @@ export async function searchPublishedKnowledge(auth, input, dependencies = defau
   }
   const result = {
     operation: 'search_published_knowledge',
-    found: sources.length > 0 || actionEvidence.length > 0,
-    route: 'tenant_evidence', sources, actionEvidence, entities,
+    found: sources.length > 0 || actionEvidence.length > 0 || guidanceEvidence.length > 0,
+    route: 'tenant_evidence', sources, actionEvidence, guidanceEvidence, entities,
     requestedFacts: safeInput.requestedFacts,
     publicationRevisions: knowledgeBases.map((item) => ({
       knowledgeBaseId: item.id, publicationRevision: item.publicationRevision,

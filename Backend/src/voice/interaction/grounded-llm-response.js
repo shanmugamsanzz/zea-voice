@@ -93,6 +93,8 @@ export function buildGroundingEnvelope(knowledge = {}) {
     });
   }
   for (const hint of knowledge.workflowHints ?? []) {
+    const responseMode = String(hint.workflow?.responseMode ?? hint.responseMode ?? '').toLowerCase();
+    if (responseMode !== 'exact') continue;
     addSource(sources, sourceContents, hint.content, {
       recordId: text(hint.source?.recordId, 100) || null,
       recordType: 'workflow_hint',
@@ -106,7 +108,10 @@ export function buildGroundingEnvelope(knowledge = {}) {
     });
   }
   for (const record of knowledge.compactKnowledgeMap?.records ?? []) {
-    if (String(record.type ?? '').toUpperCase() === 'WORKFLOW_RULE') continue;
+    const recordType = String(record.type ?? '').toUpperCase();
+    if (recordType === 'WORKFLOW_RULE'
+      || (recordType === 'CONVERSATION_NODE'
+        && String(record.metadata?.nodeType ?? '').toLowerCase() === 'guidance')) continue;
     addSource(sources, sourceContents, record.summary, {
       recordId: text(record.id, 100) || null,
       recordType: text(record.type, 40) || 'knowledge_map',

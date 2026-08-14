@@ -1,6 +1,6 @@
 STAGE: start
 FLOW: main
-TYPE: message
+TYPE: guidance
 LANGUAGE: ta
 ENTRY: true
 PURPOSE: When the caller accepts the introduction offer, provide the approved overview without repeating the introduction or asking for personal details.
@@ -10,7 +10,7 @@ NEXT_STAGE:
 
 STAGE: package_selection
 FLOW: main
-TYPE: message
+TYPE: guidance
 LANGUAGE: ta
 PURPOSE: Give the approved top-level package overview after a positive response or a general request for available packages.
 RESPONSE: சரிங்க, availableஆ இருக்குற approved categories மற்றும் optionsஐ சுருக்கமா சொல்லுறேன். அதுல எது பத்தி detail வேணும்னு கேக்குறேன்.
@@ -19,7 +19,7 @@ NEXT_STAGE:
 
 STAGE: category_selection
 FLOW: main
-TYPE: message
+TYPE: guidance
 LANGUAGE: ta
 PURPOSE: Explain an approved selected category without returning to the complete overview.
 RESPONSE: சரிங்க, நீங்க கேட்ட categoryக்குள்ள இருக்குற approved optionsஐ மட்டும் சொல்லுறேன். அதுல எது பத்தி detail வேணும்னு கேக்குறேன்.
@@ -28,7 +28,7 @@ NEXT_STAGE:
 
 STAGE: category_price
 FLOW: main
-TYPE: message
+TYPE: guidance
 LANGUAGE: ta
 PURPOSE: Answer a contextual price question when the active category contains multiple approved child items.
 RESPONSE: இந்த categoryக்குள்ள பல options இருந்தா, ஒவ்வொரு optionக்குமான approved priceஐ தெளிவா தனித்தனியா சொல்லுறேன்.
@@ -37,7 +37,7 @@ NEXT_STAGE:
 
 STAGE: package_explanation
 FLOW: main
-TYPE: message
+TYPE: guidance
 LANGUAGE: ta
 PURPOSE: Give a short, natural explanation of one exact approved selected item before offering the complete test or feature list.
 RESPONSE: சரிங்க, நீங்க கேட்ட optionக்கான approved price மற்றும் முக்கிய coverageஐ முதல்ல சுருக்கமா சொல்லுறேன். Full list வேணும்னா அடுத்ததாக சொல்லலாம்.
@@ -46,7 +46,7 @@ NEXT_STAGE:
 
 STAGE: package_full_details
 FLOW: main
-TYPE: message
+TYPE: guidance
 LANGUAGE: ta
 PURPOSE: Give the complete approved details of the selected item in short spoken groups, using only its published Catalog facts. Split a long list into two or three parts and continue only when the caller asks.
 RESPONSE: சரிங்க, நீங்க கேட்ட optionல இருக்குற approved detailsஐ சின்ன spoken groupsஆ சொல்லுறேன். Caller கேட்டா மட்டும் அடுத்த groupஐ தொடருறேன்.
@@ -55,7 +55,7 @@ NEXT_STAGE:
 
 STAGE: package_confirmation
 FLOW: main
-TYPE: message
+TYPE: guidance
 LANGUAGE: ta
 PURPOSE: After answering the requested information, avoid starting an external action unless the caller explicitly requests one.
 RESPONSE: சரிங்க, நீங்க கேட்ட detail இதுதாங்க. இன்னொரு கேள்வி இருந்தா கேளுங்க.
@@ -64,7 +64,7 @@ NEXT_STAGE:
 
 STAGE: comparison
 FLOW: main
-TYPE: message
+TYPE: guidance
 LANGUAGE: ta
 PURPOSE: Compare only the caller-requested approved items using their validated common and different Catalog facts.
 RESPONSE: சரிங்க, caller கேட்ட approved optionsக்கு பொதுவா இருக்குற விஷயங்களையும் முக்கிய differencesஐயும் மட்டும் தெளிவா compare பண்ணுறேன்.
@@ -73,7 +73,7 @@ NEXT_STAGE:
 
 STAGE: contextual_followup
 FLOW: main
-TYPE: message
+TYPE: guidance
 LANGUAGE: ta
 PURPOSE: Answer price, coverage, inclusion, preparation or suitability follow-up questions using the active selected item and published evidence.
 RESPONSE: முன்னாடி பேசின current topicஐ வைத்து caller இப்ப கேட்ட price, coverage, preparation அல்லது detailக்கு நேரடியா answer சொல்றேன்.
@@ -82,7 +82,7 @@ NEXT_STAGE:
 
 STAGE: scenario_answer
 FLOW: main
-TYPE: message
+TYPE: guidance
 LANGUAGE: ta
 PURPOSE: Respond safely when the caller describes a non-emergency problem, requirement or use case without naming an item.
 RESPONSE: இந்த concernக்கு approved related screening option இருந்தா அதை மட்டும் சொல்லுறேன். இது screening மட்டும்தாங்க; exact காரணம் அல்லது treatmentஐ Doctorதான் confirm பண்ண முடியும்.
@@ -109,7 +109,7 @@ NEXT_STAGE:
 
 STAGE: configured_action_details
 FLOW: main
-TYPE: question
+TYPE: guidance
 LANGUAGE: ta
 PURPOSE: Start field collection only after explicit caller intent and authorization by the published Workflow and configured UI tool. Ask only the next UI-configured missing field.
 RESPONSE: சரிங்க, இந்த requestக்கு தேவையான missing detail மட்டும் கேக்குறேன். ஏற்கனவே சொன்ன தகவலை மறுபடியும் கேக்க மாட்டேன்.
@@ -118,7 +118,7 @@ NEXT_STAGE:
 
 STAGE: configured_action_confirmation
 FLOW: main
-TYPE: question
+TYPE: guidance
 LANGUAGE: ta
 PURPOSE: Read back only the configured validated action details once before executing the authorized operation.
 RESPONSE: சரிங்க, நீங்க கொடுத்த required detailsஐ ஒருமுறை confirm பண்ணுறேன். எல்லாம் சரின்னு சொன்ன பிறகுதான் request process பண்ணுறேன்.
@@ -136,7 +136,7 @@ NEXT_STAGE:
 
 STAGE: side_question
 FLOW: recovery
-TYPE: message
+TYPE: guidance
 LANGUAGE: ta
 PURPOSE: Answer a valid side question first without losing the current topic, collected information or still-relevant pending question.
 RESPONSE: caller இப்ப கேட்ட side questionக்கு முதல்ல நேரடியா answer சொல்றேன். Saved pending question இன்னும் relevantஆ இருந்தா மட்டும் அதுக்கப்புறம் இயல்பா தொடருறேன்.

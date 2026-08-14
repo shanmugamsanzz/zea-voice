@@ -37,7 +37,7 @@ const profile = {
     response_template: 'Internal instruction that must never be spoken.',
   }],
   conversations: [{
-    ...base(ids.conversation), flow_key: 'default', node_key: 'guidance', node_type: 'message',
+    ...base(ids.conversation), flow_key: 'default', node_key: 'guidance', node_type: 'guidance',
     content: 'Approved conversational guidance.', variables: [], transitions: [], language: 'en',
   }],
   faqs: [{
@@ -92,12 +92,14 @@ assert.deepEqual([...searchOptions.recordTypes].sort(), [
 ].sort());
 assert.equal(searchOptions.agentId, agentId);
 assert.deepEqual(searchOptions.knowledgeBases, [{ id: knowledgeBaseId, publicationRevision: 7 }]);
-assert.equal(result.sources.length, 4);
+assert.equal(result.sources.length, 3);
 assert.equal(result.actionEvidence.length, 1);
+assert.equal(result.guidanceEvidence.length, 1);
 assert.equal(result.sources.find((source) => source.recordType === 'FAQ').content, 'Approved PostgreSQL answer.');
 assert.equal(result.sources.some((source) => source.content.includes('UNTRUSTED QDRANT')), false);
 assert.equal(result.sources.some((source) => source.recordId === ids.stale), false);
 assert.equal(result.actionEvidence[0].callerFacing, false);
+assert.equal(result.guidanceEvidence[0].callerFacing, false);
 assert.deepEqual(result.requestedFacts, ['location', 'price']);
 
 console.log('Published PostgreSQL/Qdrant knowledge search verification passed.');

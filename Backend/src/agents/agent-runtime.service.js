@@ -113,10 +113,19 @@ function knowledgeContext(knowledge, maximumChars = env.LLM_KNOWLEDGE_CONTEXT_MA
       conditions: evidence.authoritativeData?.conditions ?? {},
       actionConfig: evidence.authoritativeData?.actionConfig ?? {},
     })),
+    conversationGuidance: (knowledge.tenantEvidence?.guidanceEvidence ?? []).map((evidence) => ({
+      recordId: evidence.recordId,
+      nodeType: evidence.authoritativeData?.nodeType ?? null,
+      content: evidence.content,
+    })),
     publishedKnowledgeMap: (knowledge.compactKnowledgeMap?.maps ?? []).map((map) => ({
       knowledgeBaseId: map.knowledgeBaseId,
       publicationRevision: map.publicationRevision,
-      records: (map.records ?? []).filter((record) => String(record.type ?? '').toUpperCase() !== 'WORKFLOW_RULE').map((record) => ({
+      records: (map.records ?? []).filter((record) => {
+        const type = String(record.type ?? '').toUpperCase();
+        return type !== 'WORKFLOW_RULE'
+          && !(type === 'CONVERSATION_NODE' && String(record.metadata?.nodeType ?? '').toLowerCase() === 'guidance');
+      }).map((record) => ({
         id: record.id, type: record.type, label: record.label,
         language: record.language, summary: record.summary,
       })),
@@ -175,6 +184,7 @@ export function buildAgentSystemPrompt(agent, { usageDirection, context, knowled
     '- Never claim a callback was scheduled unless runtime_context says currentCallbackRequest.scheduled is true.',
     '- If a callback request needs clarification or was not scheduled, clearly ask for a valid time or explain that scheduling was unsuccessful.',
     '- For tenant facts, policies, products, services and action rules, use only the provided knowledge context.',
+    '- conversationGuidance controls tone and turn handling only. Never quote or paraphrase its operational wording as the answer, and never cite it as factual evidence.',
     '- If verified context is missing, say you do not have that information and follow the company escalation instructions.',
     '- Never invent external actions or outcomes.',
     '- Ask for action-completion details only when activeToolRequest identifies an authorized configured action.',
