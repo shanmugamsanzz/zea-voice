@@ -1,3 +1,5 @@
+import { validateGroundedLlmDecision } from './grounded-llm-decision.js';
+
 const maximumIntentCharacters = 160;
 const maximumAnswerCharacters = 4_000;
 const maximumSources = 10;
@@ -12,41 +14,6 @@ const questionTypes = new Set([
   'side_question', 'confirmation', 'unclear',
 ]);
 
-// LLMs may describe the same generic caller question with different labels.
-// Keep this vocabulary domain-neutral: it classifies conversation mechanics,
-// never tenant products, industries, or customer wording.
-const questionTypeAliases = new Map([
-  ['identity', 'identity'], ['caller_identity', 'identity'], ['business_identity', 'identity'],
-  ['overview', 'overview'], ['package_overview', 'overview'], ['catalog_overview', 'overview'],
-  ['product_overview', 'overview'], ['service_overview', 'overview'], ['options_list', 'overview'],
-  ['available_options', 'overview'], ['list_options', 'overview'],
-  ['category_request', 'category_request'], ['category', 'category_request'],
-  ['category_details', 'category_request'], ['category_options', 'category_request'],
-  ['category_selection', 'category_request'], ['group_request', 'category_request'],
-  ['item_request', 'item_request'], ['item', 'item_request'], ['package_request', 'item_request'],
-  ['product_request', 'item_request'], ['service_request', 'item_request'], ['plan_request', 'item_request'],
-  ['details', 'details'], ['detail', 'details'], ['package_details', 'details'],
-  ['item_details', 'details'], ['product_details', 'details'], ['service_details', 'details'],
-  ['description', 'details'], ['explanation', 'details'], ['package_explanation', 'details'],
-  ['inclusions', 'inclusions'], ['inclusion', 'inclusions'], ['benefits', 'inclusions'],
-  ['features', 'inclusions'], ['coverage', 'inclusions'], ['whats_included', 'inclusions'],
-  ['preparation', 'preparation'], ['preparation_instructions', 'preparation'],
-  ['requirements', 'preparation'], ['fasting', 'preparation'],
-  ['price', 'price'], ['price_question', 'price'], ['pricing', 'price'], ['cost', 'price'],
-  ['fee', 'price'], ['amount', 'price'],
-  ['comparison', 'comparison'], ['compare', 'comparison'], ['difference', 'comparison'],
-  ['versus', 'comparison'], ['vs', 'comparison'],
-  ['scenario', 'scenario'], ['symptom_query', 'scenario'], ['symptom', 'scenario'],
-  ['use_case', 'scenario'], ['suitability', 'scenario'], ['recommendation', 'scenario'],
-  ['problem', 'scenario'], ['concern', 'scenario'], ['requirement', 'scenario'],
-  ['action_request', 'action_request'], ['tool_request', 'action_request'], ['operation_request', 'action_request'],
-  ['field_answer', 'action_field_answer'], ['field_value', 'action_field_answer'],
-  ['action_field_answer', 'action_field_answer'], ['action_input', 'action_field_answer'],
-  ['side_question', 'side_question'], ['general_question', 'side_question'], ['other_question', 'side_question'],
-  ['confirmation', 'confirmation'], ['confirm', 'confirmation'], ['approval', 'confirmation'], ['yes_confirmation', 'confirmation'],
-  ['unclear', 'unclear'], ['unknown', 'unclear'], ['other', 'unclear'], ['none', 'unclear'],
-]);
-
 function text(value, maximum = 2_000) {
   return String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
     .replace(/\s+/gu, ' ').trim().slice(0, maximum);
@@ -59,8 +26,7 @@ function identity(value) {
 export function normalizeQuestionType(value) {
   const raw = text(value, 80).toLocaleLowerCase();
   const key = raw.replace(/[\s\-./]+/gu, '_').replace(/_+/gu, '_').replace(/^_|_$/gu, '');
-  if (questionTypes.has(key)) return key;
-  return questionTypeAliases.get(key) ?? 'unclear';
+  return questionTypes.has(key) ? key : 'unclear';
 }
 
 function addSource(sources, seen, content, metadata = {}) {
@@ -170,13 +136,18 @@ export function buildGroundingEnvelope(knowledge = {}) {
   });
 }
 
-export function groundedResponseContract(envelope) {
+export function groundedResponseContract(envelope, runtime = {}) {
+  const fieldSchemas = (runtime.fieldSchemas ?? []).map((field) => ({
+    key: field.key, label: field.label, type: field.type,
+    required: field.required !== false, question: field.question,
+    ...(field.requiredAction ? { requiredAction: field.requiredAction } : {}),
+  }));
   return Object.freeze({
     format: 'json_object',
     fieldOrder: [
       'evidenceSourceIds', 'selectedEntityKeys', 'spokenAnswer',
       'intent', 'questionType', 'currentTopic', 'topicChanged', 'pendingQuestionRelevant',
-      'flowAction', 'assertedFacts',
+      'flowAction', 'fieldUpdates', 'correctedFields', 'assertedFacts',
     ],
     streamingRule: 'Emit evidenceSourceIds and selectedEntityKeys first, then spokenAnswer immediately. Emit the remaining metadata only after spokenAnswer. Keep the first spoken sentence short, direct and punctuated.',
     schema: {
@@ -187,6 +158,10 @@ export function groundedResponseContract(envelope) {
       pendingQuestionRelevant: 'boolean: whether the saved pending question should still be resumed after answering',
       flowAction: 'continue, answer_pending, side_question or clarify',
       selectedEntityKeys: ['only keys listed in allowedEntityKeys'],
+      fieldUpdates: Object.fromEntries(fieldSchemas.map((field) => [
+        field.key, `optional ${field.type} value extracted from this finalized caller utterance`,
+      ])),
+      correctedFields: ['only field keys explicitly corrected by the caller in this turn'],
       evidenceSourceIds: ['source IDs supporting the spoken answer'],
       assertedFacts: [{
         type: 'entity, price, inclusion, policy, availability, preparation or action',
@@ -197,6 +172,7 @@ export function groundedResponseContract(envelope) {
     },
     allowedEntityKeys: envelope.entities.map((item) => item.key),
     allowedEvidenceSourceIds: envelope.sources.map((source) => source.id),
+    configuredInformationFields: fieldSchemas,
   });
 }
 
@@ -285,14 +261,17 @@ export function createGroundedJsonStreamDecoder(envelope, runtime = {}) {
   const allowedSources = new Set((envelope.sources ?? []).map((source) => source.id));
   const allowedEntities = new Set((envelope.entities ?? []).map((entity) => entity.key));
   const refreshDecision = () => {
-    const sourceIds = jsonArrayField(raw, ['evidenceSourceIds', 'evidence_source_ids']);
-    const entityKeys = jsonArrayField(raw, ['selectedEntityKeys', 'selected_entity_keys']);
-    if (!sourceIds || !entityKeys || (envelope.found && sourceIds.length === 0)) return;
+    const sourceIds = jsonArrayField(raw, ['evidenceIds', 'evidenceSourceIds', 'evidence_source_ids']);
+    const entityKeys = jsonArrayField(raw, [
+      'knownEntityKeys', 'known_entity_keys', 'selectedEntityKeys', 'selected_entity_keys',
+    ]) ?? [];
+    if (!sourceIds || (envelope.found && sourceIds.length === 0)) return;
     const normalizedSources = list(sourceIds, maximumSources);
     const normalizedEntities = list(entityKeys, maximumEntities);
     if (normalizedSources.some((id) => !allowedSources.has(id))) return;
     if (normalizedEntities.some((key) => !allowedEntities.has(key))) return;
     decision = Object.freeze({
+      decision: jsonStringField(raw, ['decision']) ?? 'answer',
       intent: 'streaming_answer', questionType: 'unclear',
       currentTopic: text(runtime.currentTopic, 240) || 'current caller request',
       topicChanged: false, pendingQuestionRelevant: false, flowAction: 'continue',
@@ -305,7 +284,7 @@ export function createGroundedJsonStreamDecoder(envelope, runtime = {}) {
       raw += String(delta ?? '');
       refreshDecision();
       if (!decision) return Object.freeze({ delta: '', decision: null });
-      const answer = partialJsonStringField(raw, ['spokenAnswer', 'spoken_answer']);
+      const answer = partialJsonStringField(raw, ['answer', 'spokenAnswer', 'spoken_answer']);
       if (answer === null || answer.length <= releasedCharacters) {
         return Object.freeze({ delta: '', decision });
       }
@@ -314,7 +293,7 @@ export function createGroundedJsonStreamDecoder(envelope, runtime = {}) {
       return Object.freeze({ delta: next, decision });
     },
     decision: () => decision,
-    releasedText: () => partialJsonStringField(raw, ['spokenAnswer', 'spoken_answer'])?.slice(0, releasedCharacters) ?? '',
+    releasedText: () => partialJsonStringField(raw, ['answer', 'spokenAnswer', 'spoken_answer'])?.slice(0, releasedCharacters) ?? '',
   });
 }
 
@@ -389,6 +368,40 @@ function assertedFacts(value) {
   return results;
 }
 
+function normalizeFieldValue(value, schema) {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (schema.type === 'boolean') return typeof value === 'boolean' ? value : undefined;
+  if (schema.type === 'number') {
+    const numeric = typeof value === 'number' ? value : Number(String(value).trim());
+    return Number.isFinite(numeric) ? numeric : undefined;
+  }
+  const normalized = text(value, 500);
+  if (!normalized) return undefined;
+  if (schema.type === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(normalized)) return undefined;
+  if (schema.type === 'phone' && !/^\+?[\d\s()-]{8,25}$/u.test(normalized)) return undefined;
+  return normalized;
+}
+
+function fieldUpdates(parsed, runtime) {
+  const requested = parsed.fieldUpdates ?? parsed.field_updates ?? {};
+  if (!requested || typeof requested !== 'object' || Array.isArray(requested)) return null;
+  const activeTool = text(runtime.activeToolRequest?.name, 100).toLocaleLowerCase();
+  const schemas = new Map((runtime.fieldSchemas ?? []).filter((field) => (
+    !field.requiredAction || text(field.requiredAction, 100).toLocaleLowerCase() === activeTool
+  )).map((field) => [field.key, field]));
+  const updates = {};
+  for (const [key, value] of Object.entries(requested)) {
+    const schema = schemas.get(key);
+    if (!schema) return null;
+    const normalized = normalizeFieldValue(value, schema);
+    if (normalized === undefined) return null;
+    updates[key] = normalized;
+  }
+  const corrected = list(parsed.correctedFields ?? parsed.corrected_fields, 30);
+  if (corrected.some((key) => !Object.hasOwn(updates, key))) return null;
+  return { updates, correctedFields: corrected };
+}
+
 function numbers(value) {
   return new Set((text(value, maximumAnswerCharacters).match(/\p{Sc}?\s*\d[\d,.:%/-]*/gu) ?? [])
     .map((entry) => entry.replace(/[^\d]/gu, '')).filter(Boolean));
@@ -422,7 +435,7 @@ function spokenSentences(value) {
 
 function internalSpeech(value) {
   const normalized = identity(value);
-  return /(?:runtime context|grounded response contract|response mode|action config|selectedentitykeys|evidencesourceids|flowaction|catalog item required)/iu.test(normalized)
+  return /(?:runtime context|grounded response contract|response mode|action config|selectedentitykeys|evidencesourceids|evidenceids|stateupdate|toolrequest|flowaction|catalog item required)/iu.test(normalized)
     || /^\s*(?:instruction|action|workflow|response)\s*:/iu.test(String(value ?? ''));
 }
 
@@ -471,6 +484,10 @@ export function validateGroundedSpokenSentences(value, envelope, decision, optio
 export function validateGroundedLlmResponse(raw, envelope, runtime = {}) {
   const parsed = parseObject(raw);
   if (!parsed) return Object.freeze({ valid: false, reason: 'invalid_json' });
+  const decisionFields = ['decision', 'answer', 'evidenceIds', 'stateUpdate', 'pendingQuestion', 'toolRequest'];
+  if (decisionFields.every((field) => Object.hasOwn(parsed, field))) {
+    return validateGroundedLlmDecision(raw, envelope, runtime);
+  }
   const intent = text(parsed.intent, maximumIntentCharacters);
   const questionType = normalizeQuestionType(parsed.questionType ?? parsed.question_type);
   const currentTopic = text(parsed.currentTopic ?? parsed.current_topic, 240);
@@ -489,6 +506,8 @@ export function validateGroundedLlmResponse(raw, envelope, runtime = {}) {
   const requestedEntityKeys = list(parsed.selectedEntityKeys ?? parsed.selected_entity_keys, maximumEntities);
   const requestedSourceIds = list(parsed.evidenceSourceIds ?? parsed.evidence_source_ids, maximumSources);
   const facts = assertedFacts(parsed.assertedFacts ?? parsed.asserted_facts);
+  const extractedFields = fieldUpdates(parsed, runtime);
+  if (!extractedFields) return Object.freeze({ valid: false, reason: 'invalid_field_updates' });
   const canonicalEntityResult = canonicalEntities(envelope, requestedEntityKeys);
   const selectedEntities = canonicalEntityResult.resolved;
   if (canonicalEntityResult.unresolved.length) {
@@ -556,6 +575,8 @@ export function validateGroundedLlmResponse(raw, envelope, runtime = {}) {
     assertedFacts: facts.map((fact, index) => ({
       ...fact, sourceId: canonicalFactSources[index].resolved[0].id,
     })),
+    fieldUpdates: Object.freeze({ ...extractedFields.updates }),
+    correctedFields: Object.freeze([...extractedFields.correctedFields]),
   });
 }
 

@@ -43,14 +43,15 @@ const rankedEnvelope = buildGroundingEnvelope({
 assert.equal(rankedEnvelope.sources.length, 2);
 assert.ok(groundedResponseContract(rankedEnvelope).allowedEvidenceSourceIds.includes('source_2'));
 
-assert.equal(normalizeQuestionType('package_overview'), 'overview');
-assert.equal(normalizeQuestionType('package details'), 'details');
-assert.equal(normalizeQuestionType('price_question'), 'price');
-assert.equal(normalizeQuestionType('symptom-query'), 'scenario');
+assert.equal(normalizeQuestionType('overview'), 'overview');
+assert.equal(normalizeQuestionType('details'), 'details');
+assert.equal(normalizeQuestionType('price'), 'price');
+assert.equal(normalizeQuestionType('scenario'), 'scenario');
+assert.equal(normalizeQuestionType('package_overview'), 'unclear');
 assert.equal(normalizeQuestionType('unexpected_model_label'), 'unclear');
 
 const normalizedUnderstanding = validateGroundedLlmUnderstanding(groundedJson({
-  intent: 'show packages', questionType: 'package_overview', flowAction: 'continue', selectedEntityKeys: [],
+  intent: 'show available options', questionType: 'overview', flowAction: 'continue', selectedEntityKeys: [],
 }), envelope);
 assert.equal(normalizedUnderstanding.valid, true);
 assert.equal(normalizedUnderstanding.questionType, 'overview');

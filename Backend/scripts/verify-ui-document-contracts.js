@@ -34,8 +34,8 @@ BLOCKED_RESPONSE: Which approved option do you want?
 RESPONSE: I can start that action.
 `));
 assert.equal(workflow.recordCount, 1);
-assert.deepEqual(workflow.records[0].conditions.fromStages, ['explanation', 'confirmation']);
-assert.equal(workflow.records[0].actionConfig.nextStage, 'collect_fields');
+assert.equal(workflow.records[0].conditions.fromStages, undefined);
+assert.equal(workflow.records[0].actionConfig.nextStage, undefined);
 assert.equal(workflow.records[0].actionConfig.requiresCatalogItem, true);
 
 const script = processExtractedCategory('conversation_script', extraction(`
@@ -58,7 +58,7 @@ NEXT_STAGE: confirmation
 assert.equal(script.recordCount, 2);
 assert.equal(script.records[0].nodeKey, 'overview');
 assert.equal(script.records[0].variables[0].value, 'Present approved categories.');
-assert.deepEqual(script.records[0].transitions, [{ to: 'explanation' }]);
+assert.deepEqual(script.records[0].transitions, []);
 
 const faq = processExtractedCategory('faq', extraction(`
 QUESTION: What does the selected item include?

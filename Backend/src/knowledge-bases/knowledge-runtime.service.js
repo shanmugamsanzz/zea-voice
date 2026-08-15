@@ -11,7 +11,6 @@ import {
   classifyCatalogEntityLocally,
   resolveCatalogEntitiesLocally,
 } from './catalog-entity-resolver.js';
-import { workflowStageGate } from '../voice/interaction/conversation-stage-config.js';
 import {
   renderKnowledgeClarification,
   resolveKnowledgeConfidenceConfiguration,
@@ -23,7 +22,12 @@ import {
   validateDirectAnswer,
 } from './hybrid-evidence-ranker.js';
 import { runParallelHybridRetrieval } from './parallel-hybrid-retrieval.js';
-import { knowledgeMapCacheKey } from './knowledge-map.service.js';
+import {
+  knowledgeMapCacheKey,
+  sparseIndexCacheKey,
+  tenantKnowledgeGenerationCacheKey,
+} from './knowledge-map.service.js';
+import { searchHybridPublishedKnowledge } from './hybrid-knowledge-retrieval.service.js';
 
 const defaultDependencies = {
   contextRunner: withTenantContext,
@@ -42,6 +46,18 @@ function normalize(value) {
 
 function usageAllowed(configured, requested) {
   return configured === 'both' || configured === requested;
+}
+
+function workflowActionGate(workflow, { selectedCatalogItemId } = {}) {
+  const actionConfig = workflow?.action_config ?? workflow?.actionConfig ?? {};
+  if (actionConfig.requiresCatalogItem === true && !selectedCatalogItemId) {
+    return Object.freeze({ allowed: false, reason: 'catalog_item_required' });
+  }
+  return Object.freeze({
+    allowed: true,
+    reason: null,
+    actionKey: normalize(actionConfig.actionKey).replace(/\s+/gu, '_'),
+  });
 }
 
 function hash(value) {
@@ -98,30 +114,28 @@ const runtimeProfileSql = `
       FROM voice_agents
      WHERE tenant_id = $1 AND id = $2 AND status = 'active' AND deleted_at IS NULL
   ), assigned AS (
-    SELECT kb.id,
-      COALESCE((
-        SELECT max((j.metadata->>'publicationRevision')::int)
-          FROM knowledge_processing_jobs j
-         WHERE j.tenant_id=kb.tenant_id AND j.knowledge_base_id=kb.id
-           AND j.job_type='index' AND j.status='completed'
-           AND (j.metadata->>'publicationRevision') ~ '^[0-9]+$'
-           AND (j.metadata->>'publicationRevision')::int <= kb.publication_revision
-      ), kb.publication_revision) AS publication_revision,
+    SELECT kb.id, kb.publication_revision,
       akb.priority,
       EXISTS (
         SELECT 1 FROM knowledge_processing_jobs j
          WHERE j.tenant_id = kb.tenant_id AND j.knowledge_base_id = kb.id
            AND j.job_type = 'index' AND j.status = 'completed'
            AND (j.metadata->>'publicationRevision') ~ '^[0-9]+$'
-           AND (j.metadata->>'publicationRevision')::int <= kb.publication_revision
+           AND (j.metadata->>'publicationRevision')::int = kb.publication_revision
       ) AS semantic_ready
       FROM runtime_agent a
       JOIN agent_knowledge_bases akb
         ON akb.tenant_id = $1 AND akb.agent_id = a.id
       JOIN knowledge_bases kb
         ON kb.tenant_id = akb.tenant_id AND kb.id = akb.knowledge_base_id
-     WHERE kb.deleted_at IS NULL AND kb.status IN ('published', 'partially_failed')
+     WHERE kb.deleted_at IS NULL AND kb.status = 'published'
        AND kb.publication_revision > 0
+       AND EXISTS (
+         SELECT 1 FROM knowledge_processing_jobs j
+          WHERE j.tenant_id=kb.tenant_id AND j.knowledge_base_id=kb.id
+            AND j.job_type='index' AND j.status='completed'
+            AND j.metadata->>'publicationRevision'=kb.publication_revision::text
+       )
        AND (a.usage_direction = 'both' OR a.usage_direction = $3::agent_usage_direction)
        AND (akb.usage_direction = 'both' OR akb.usage_direction = $3::agent_usage_direction)
        AND (kb.usage_direction = 'both' OR kb.usage_direction = $3::agent_usage_direction)
@@ -208,6 +222,23 @@ const runtimeProfileSql = `
            AND d.status='ready' AND d.deleted_at IS NULL
       ) g), '[]'::jsonb) AS general_knowledge`;
 
+const activePublicationFingerprintSql = `
+  SELECT COALESCE(string_agg(kb.id::text || ':' || kb.publication_revision::text, '|' ORDER BY akb.priority, kb.id), 'none') AS fingerprint
+    FROM voice_agents a
+    JOIN agent_knowledge_bases akb ON akb.tenant_id=a.tenant_id AND akb.agent_id=a.id
+    JOIN knowledge_bases kb ON kb.tenant_id=akb.tenant_id AND kb.id=akb.knowledge_base_id
+   WHERE a.tenant_id=$1 AND a.id=$2 AND a.status='active' AND a.deleted_at IS NULL
+     AND kb.status='published' AND kb.deleted_at IS NULL AND kb.publication_revision>0
+     AND (a.usage_direction='both' OR a.usage_direction=$3::agent_usage_direction)
+     AND (akb.usage_direction='both' OR akb.usage_direction=$3::agent_usage_direction)
+     AND (kb.usage_direction='both' OR kb.usage_direction=$3::agent_usage_direction)
+     AND EXISTS (
+       SELECT 1 FROM knowledge_processing_jobs j
+        WHERE j.tenant_id=kb.tenant_id AND j.knowledge_base_id=kb.id
+          AND j.job_type='index' AND j.status='completed'
+          AND j.metadata->>'publicationRevision'=kb.publication_revision::text
+     )`;
+
 function lexicalTokens(value) {
   return normalize(value).split(' ').filter((token) => token.length > 1);
 }
@@ -242,7 +273,8 @@ function buildCachedDocumentIndex(profile) {
     const responseMode = String(workflow.action_config?.responseMode ?? 'instruction').trim().toLowerCase();
     if (responseMode === 'instruction') continue;
     add('WORKFLOW_RULE', workflow, [
-      workflow.name, workflow.intent, ...(workflow.conditions?.triggerPhrases ?? []),
+      workflow.name, workflow.intent,
+      ...(workflow.conditions?.examples ?? workflow.conditions?.triggerPhrases ?? []),
     ].filter(Boolean).join(' '), workflow.response_template);
   }
   for (const node of profile.conversations ?? []) {
@@ -262,8 +294,42 @@ function buildCachedDocumentIndex(profile) {
   return profile;
 }
 
+async function loadRevisionSparseIndex(profile, auth, cache) {
+  const knowledgeBases = profile?.knowledge_bases ?? [];
+  if (!knowledgeBases.length) return false;
+  const indexes = await Promise.all(knowledgeBases.map((knowledgeBase) => cacheGet(
+    cache,
+    sparseIndexCacheKey(auth.tenantId, knowledgeBase.id, Number(knowledgeBase.publicationRevision)),
+  )));
+  if (indexes.some((index, position) => !index || index.algorithm !== 'bm25'
+    || index.publicationRevision !== Number(knowledgeBases[position].publicationRevision))) return false;
+  const documents = indexes.flatMap((index) => index.documents ?? []).map((document) => ({
+    id: document.id,
+    recordType: document.recordType,
+    knowledgeBaseId: document.knowledgeBaseId,
+    documentId: document.documentId,
+    documentVersionId: document.documentVersionId,
+    pageNumber: document.pageNumber,
+    content: document.content,
+    tokens: document.tokens,
+  }));
+  const documentFrequency = {};
+  for (const document of documents) {
+    for (const token of new Set(document.tokens)) documentFrequency[token] = (documentFrequency[token] ?? 0) + 1;
+  }
+  profile.lexical_index = { version: 1, revisionScoped: true, documents, documentFrequency };
+  return true;
+}
+
 async function loadProfile(auth, input, runtime) {
-  const key = `zea:rag:profile:${auth.tenantId}:${input.agentId}:${input.usageDirection}:${input.language}`;
+  const generation = await cacheGet(runtime.cache, tenantKnowledgeGenerationCacheKey(auth.tenantId)) ?? '0';
+  const activeFingerprint = await runtime.contextRunner(auth, async (client) => {
+    const result = await client.query(activePublicationFingerprintSql, [
+      auth.tenantId, input.agentId, input.usageDirection,
+    ]);
+    return result.rows[0]?.fingerprint ?? 'none';
+  });
+  const key = `zea:rag:profile:${auth.tenantId}:${input.agentId}:${input.usageDirection}:${input.language}:${hash(`${generation}|${activeFingerprint}`)}`;
   const cached = await cacheGet(runtime.cache, key);
   if (cached) return { profile: buildCachedDocumentIndex(cached), cacheHit: true };
   const profile = await runtime.contextRunner(auth, async (client) => {
@@ -276,7 +342,7 @@ async function loadProfile(auth, input, runtime) {
   if (!usageAllowed(profile.agent_usage, input.usageDirection)) {
     throw new AppError(409, 'Agent does not support this call direction', 'RUNTIME_AGENT_DIRECTION_MISMATCH');
   }
-  buildCachedDocumentIndex(profile);
+  if (!await loadRevisionSparseIndex(profile, auth, runtime.cache)) buildCachedDocumentIndex(profile);
   void cacheSet(runtime.cache, key, profile, env.RAG_RUNTIME_PROFILE_CACHE_TTL_SECONDS)
     .catch(() => undefined);
   return { profile, cacheHit: false };
@@ -498,8 +564,7 @@ function workflowRoute(profile, input, normalizedQuery, currentCatalogResolution
       };
     }
     if (phraseResult?.score > 0) {
-      const gate = workflowStageGate(record, {
-        currentStage: input.currentStage,
+      const gate = workflowActionGate(record, {
         selectedCatalogItemId: input.selectedCatalogItemId ?? currentCatalogResolution?.item?.id,
       });
       if (gate.reason === 'stage_transition_not_allowed') continue;
@@ -556,8 +621,7 @@ async function semanticWorkflowRoute(auth, profile, input, runtime, currentCatal
     if (!record) return null;
     if (record.conditions?.confidenceOutcome) return null;
     if (record.conditions?.scenarioRouting === true && input.detectedIntent?.intent !== 'scenario') return null;
-    const gate = workflowStageGate(record, {
-      currentStage: input.currentStage,
+    const gate = workflowActionGate(record, {
       selectedCatalogItemId: input.selectedCatalogItemId ?? currentCatalogResolution?.item?.id,
     });
     if (gate.reason === 'stage_transition_not_allowed') return null;
@@ -1107,6 +1171,14 @@ function evidenceItemContent(item) {
   return [item.name, price, item.description, ...attributes].filter(Boolean).join(' - ');
 }
 
+function withoutLegacyFlowFields(value = {}) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const copy = { ...value };
+  delete copy.fromStages;
+  delete copy.nextStage;
+  return copy;
+}
+
 function compactMapFromProfile(profile, knowledgeBase) {
   const belongs = (record) => record.knowledge_base_id === knowledgeBase.id;
   const records = [];
@@ -1133,8 +1205,8 @@ function compactMapFromProfile(profile, knowledgeBase) {
       intent: workflow.intent,
       responseMode: workflow.action_config?.responseMode ?? 'instruction',
       actionType: workflow.action_type,
-      actionConfig: workflow.action_config,
-      conditions: workflow.conditions,
+      actionConfig: withoutLegacyFlowFields(workflow.action_config),
+      conditions: withoutLegacyFlowFields(workflow.conditions),
     });
   }
   for (const node of profile.conversations.filter(belongs)) {
@@ -1259,8 +1331,8 @@ function publishedRecordLookup(profile) {
       callerFacing: responseMode === 'exact',
       authoritativeData: {
         name: workflow.name, intent: workflow.intent, priority: workflow.priority,
-        conditions: workflow.conditions ?? {}, actionType: workflow.action_type,
-        actionConfig: workflow.action_config ?? {}, responseMode,
+        conditions: withoutLegacyFlowFields(workflow.conditions), actionType: workflow.action_type,
+        actionConfig: withoutLegacyFlowFields(workflow.action_config), responseMode,
       },
     });
   }
@@ -1269,7 +1341,7 @@ function publishedRecordLookup(profile) {
       callerFacing: String(node.node_type ?? '').toLowerCase() !== 'guidance',
       authoritativeData: {
         flowKey: node.flow_key, nodeKey: node.node_key, nodeType: node.node_type,
-        variables: node.variables ?? [], transitions: node.transitions ?? [],
+        variables: node.variables ?? [],
       },
     });
   }
@@ -1300,7 +1372,7 @@ function publishedSearchCacheKey(auth, input, knowledgeBases) {
 // Generic internal operation. The input contains no SQL or provider details.
 // Qdrant discovers IDs; exact evidence is hydrated from the current approved
 // PostgreSQL profile (or its short-lived, revision-scoped cache).
-export async function searchPublishedKnowledge(auth, input, dependencies = defaultDependencies) {
+async function searchPublishedKnowledgeCompatibility(auth, input, dependencies = defaultDependencies) {
   const startedAt = performance.now();
   const runtime = { ...defaultDependencies, ...dependencies };
   const semanticQuery = String(input.semanticQuery ?? input.query ?? '').trim().slice(0, 2_000);
@@ -1435,6 +1507,12 @@ export async function searchPublishedKnowledge(auth, input, dependencies = defau
   return result;
 }
 
+// The only live retrieval entry point. Legacy route helpers remain temporarily
+// private for migration-test compatibility, but cannot select live answers.
+export async function searchPublishedKnowledge(auth, input, dependencies = defaultDependencies) {
+  return searchHybridPublishedKnowledge(auth, input, dependencies);
+}
+
 // Compatibility name used by the orchestrator; all live retrieval now goes
 // through the single generic, PostgreSQL-hydrated operation.
 export async function retrieveTenantEvidence(auth, input, dependencies = defaultDependencies) {
@@ -1566,16 +1644,14 @@ async function parallelRankedKnowledgeResult({
   const configuredConfidenceRule = profile.workflows
     .filter((record) => record.conditions?.confidenceOutcome === confidenceRoute.outcome)
     .sort((left, right) => Number(left.priority ?? 100) - Number(right.priority ?? 100))
-    .find((record) => workflowStageGate(record, {
-      currentStage: input.currentStage,
+    .find((record) => workflowActionGate(record, {
       selectedCatalogItemId: input.selectedCatalogItemId,
     }).allowed !== false);
   const configuredConfidenceResponse = configuredConfidenceRule
     ? workflowRecordResponse(configuredConfidenceRule, {
       matchedPhrase: confidenceRoute.outcome,
       matchMode: 'confidence_outcome',
-      gate: workflowStageGate(configuredConfidenceRule, {
-        currentStage: input.currentStage,
+      gate: workflowActionGate(configuredConfidenceRule, {
         selectedCatalogItemId: input.selectedCatalogItemId,
       }),
       confidence: confidenceRoute.confidence,
@@ -1647,204 +1723,6 @@ export async function routeKnowledgeQuery(auth, input, dependencies = defaultDep
     topK: input.topK,
     abortSignal: input.abortSignal,
   }, dependencies);
-  /* c8 ignore start -- unreachable compatibility implementation
-  const startedAt = performance.now();
-  if (input.abortSignal?.aborted) {
-    return { route: 'none', found: false, content: null, source: null, cancelled: true, durationMs: 0 };
-  }
-  const runtime = { ...defaultDependencies, ...dependencies };
-  let queryVectorPromise = null;
-  runtime.embedQueryOnce = (query) => {
-    queryVectorPromise ??= runtime.embed(query);
-    return queryVectorPromise;
-  };
-  const normalizedQuery = normalize(input.query);
-  const loaded = await loadProfile(auth, input, runtime);
-  const { profile } = loaded;
-  const routingStartedAt = performance.now();
-  const confidence = resolveKnowledgeConfidenceConfiguration(profile.agent_settings);
-  const currentCatalogClassification = classifyCatalogEntityLocally(profile.catalog_items, input.query, confidence);
-  const currentCatalogResolution = currentCatalogClassification.status === 'match'
-    ? currentCatalogClassification : null;
-  const currentCatalogEntities = resolveCatalogEntitiesLocally(profile.catalog_items, input.query, {
-    minimumConfidence: confidence.highConfidence,
-  });
-
-  // Question-first fast path. Strong tenant-configured Workflow matches are
-  // evaluated before any embedding/Qdrant work. Exact FAQ questions are also
-  // safe to speak directly because their answers are approved caller-facing
-  // document content. Stage-gated actions retain their safety gate; ordinary
-  // current-stage script wording is deliberately not considered here.
-  const fastWorkflow = (input.routeHint === 'auto' || input.routeHint === 'workflow')
-    ? workflowRoute(profile, input, normalizedQuery, currentCatalogResolution, {
-      includeScenarioRules: input.detectedIntent?.intent === 'scenario',
-    })
-    : null;
-  let fastResult = fastWorkflow?.route === 'workflow' ? fastWorkflow : null;
-  if (!fastResult && (input.routeHint === 'auto' || input.routeHint === 'faq')) {
-    fastResult = faqRoute(profile, input, normalizedQuery);
-  }
-  if (fastResult?.directAnswer?.approved === true
-    || (fastResult?.route === 'workflow' && fastResult.workflow?.deterministic === true)) {
-    if (fastResult.route === 'workflow' && currentCatalogEntities.length > 1) {
-      fastResult.catalogSelections = currentCatalogEntities.map((selection) => catalogResponse(selection.item, selection));
-    } else if (fastResult.route === 'workflow' && currentCatalogResolution?.entityType === 'item') {
-      fastResult.catalogSelection = catalogResponse(currentCatalogResolution.item, currentCatalogResolution);
-    }
-    return {
-      ...fastResult,
-      directAnswer: fastResult.directAnswer
-        ? { ...fastResult.directAnswer, validated: true }
-        : fastResult.directAnswer,
-      questionType: input.detectedIntent?.intent ?? 'unclear',
-      profileCacheHit: loaded.cacheHit,
-      fastPath: {
-        type: fastResult.route === 'workflow' ? 'deterministic_workflow' : 'exact_faq',
-        skippedEmbedding: true,
-        skippedLlm: true,
-        routingDurationMs: Math.round((performance.now() - routingStartedAt) * 100) / 100,
-      },
-      durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
-    };
-  }
-  // Concurrent hybrid retrieval is the SaaS default for every tenant. An
-  // explicit false remains available only as a temporary legacy rollback.
-  if (profile.agent_settings?.parallelHybridRetrievalEnabled !== false) {
-    const knowledgeFingerprint = profile.knowledge_bases
-      .map((item) => `${item.id}:${item.publicationRevision}`).join('|');
-    const hybridContext = [
-      input.detectedIntent?.intent, input.currentStage, input.activeCategoryKey,
-      input.selectedCatalogItemId, input.selectedCatalogItemKey, input.pendingQuestionType,
-    ].map((value) => normalize(value)).join('|');
-    const hybridCacheKey = `zea:rag:hybrid:${auth.tenantId}:${input.agentId}:${input.usageDirection}:${hash(
-      `${knowledgeFingerprint}|${normalizedQuery}|${hybridContext}`,
-    )}`;
-    const cachedHybrid = await cacheGet(runtime.cache, hybridCacheKey);
-    if (cachedHybrid) {
-      return {
-        ...cachedHybrid,
-        profileCacheHit: loaded.cacheHit,
-        hybridCacheHit: true,
-        durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
-      };
-    }
-    const parallelResult = await parallelRankedKnowledgeResult({
-      auth, profile, input, normalizedQuery, runtime, confidence,
-      currentCatalogClassification, currentCatalogResolution, currentCatalogEntities,
-    });
-    const response = {
-      ...(parallelResult ?? { route: 'none', found: false, content: null, source: null }),
-      profileCacheHit: loaded.cacheHit,
-      hybridCacheHit: false,
-      durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
-    };
-    if (response.found === true && response.route !== 'workflow' && !input.abortSignal?.aborted) {
-      void cacheSet(runtime.cache, hybridCacheKey, response, env.RAG_RUNTIME_RESULT_CACHE_TTL_SECONDS)
-        .catch(() => undefined);
-    }
-  return response;
-}
-  const hasMultipleCatalogItems = currentCatalogEntities.length > 1;
-  let result = null;
-
-  const automaticRoute = input.routeHint === 'auto';
-  const workflowRouteAllowed = automaticRoute || input.routeHint === 'workflow';
-  const catalogRouteAllowed = automaticRoute || input.routeHint === 'catalog';
-  let deferredClarification = null;
-  const workflowHints = [];
-  const retainWorkflowHint = (candidate) => {
-    if (candidate?.route === 'workflow_hint') workflowHints.push(candidate);
-  };
-
-  // Routing order is intentionally strict. A weak fuzzy Workflow result must
-  // never hide the active topic, a Catalog entity, or an approved scenario.
-  // Clarification is retained until every grounded deterministic route fails.
-  if (workflowRouteAllowed) {
-    const exactWorkflow = workflowRoute(profile, input, normalizedQuery, currentCatalogResolution, {
-      includeScenarioRules: false,
-    });
-    if (exactWorkflow?.route === 'workflow') result = exactWorkflow;
-    else if (exactWorkflow?.route === 'clarification') deferredClarification = exactWorkflow;
-    else retainWorkflowHint(exactWorkflow);
-  }
-
-  if (!result && catalogRouteAllowed) {
-    result = await catalogRoute(
-      auth, profile, input, normalizedQuery, runtime, currentCatalogClassification,
-      { allowClarification: false },
-    );
-  }
-
-  if (!result && workflowRouteAllowed && input.detectedIntent?.intent === 'scenario') {
-    const scenarioWorkflow = workflowRoute(profile, input, normalizedQuery, currentCatalogResolution, {
-      includeScenarioRules: true,
-    });
-    if (scenarioWorkflow?.route === 'workflow') result = scenarioWorkflow;
-    else if (scenarioWorkflow?.route === 'clarification') deferredClarification ??= scenarioWorkflow;
-    else retainWorkflowHint(scenarioWorkflow);
-  }
-
-  if (!result && workflowRouteAllowed) {
-    const semanticWorkflow = await semanticWorkflowRoute(
-      auth, profile, input, runtime, currentCatalogResolution,
-    );
-    if (semanticWorkflow?.route === 'workflow') result = semanticWorkflow;
-    else if (semanticWorkflow?.route === 'clarification') deferredClarification ??= semanticWorkflow;
-    else if (semanticWorkflow?.route === 'workflow_hint') result = semanticWorkflow;
-  }
-
-  if (result?.route === 'clarification' && currentCatalogResolution && !hasMultipleCatalogItems) {
-    result = currentCatalogResolution.entityType === 'category'
-      ? catalogCategoryResponse(
-        [...currentCatalogResolution.items]
-          .sort((left, right) => Number(left.display_order ?? 0) - Number(right.display_order ?? 0)),
-        currentCatalogResolution,
-      )
-      : catalogResponse(currentCatalogResolution.item, currentCatalogResolution);
-  }
-  if (['workflow', 'workflow_hint'].includes(result?.route) && hasMultipleCatalogItems) {
-    result.catalogSelections = currentCatalogEntities.map((selection) => (
-      catalogResponse(selection.item, selection)
-    ));
-  } else if (['workflow', 'workflow_hint'].includes(result?.route) && currentCatalogResolution?.entityType === 'item') {
-    result.catalogSelection = catalogResponse(currentCatalogResolution.item, currentCatalogResolution);
-  }
-  if (!result && (input.routeHint === 'auto' || input.routeHint === 'catalog')) {
-    result = await catalogRoute(
-      auth, profile, input, normalizedQuery, runtime, currentCatalogClassification,
-      { allowClarification: false },
-    );
-  }
-  if (!result && (input.routeHint === 'auto' || input.routeHint === 'faq')) {
-    result = faqRoute(profile, input, normalizedQuery);
-  }
-  if (!result && (input.routeHint === 'auto' || input.routeHint === 'semantic')) {
-    result = await semanticRoute(auth, profile, input, normalizedQuery, runtime);
-  }
-  // The saved stage is continuation context, not an answer gate. Consult its
-  // Script node only after routes that can answer the latest caller question.
-  if (!result && (input.routeHint === 'auto' || input.routeHint === 'conversation')) {
-    result = conversationRoute(profile, input);
-  }
-  // Clarification is deliberately last. At this point the exact rules, live
-  // frame, Catalog hierarchy, scenario rules and semantic evidence have all
-  // failed to produce an approved answer.
-  if (!result && deferredClarification) result = deferredClarification;
-  if (!result && catalogRouteAllowed) {
-    result = await catalogRoute(auth, profile, input, normalizedQuery, runtime, currentCatalogClassification, {
-      allowClarification: true,
-    });
-  }
-
-  if (result && workflowHints.length) result.workflowHints = workflowHints;
-
-  return {
-    ...(result ?? { route: 'none', found: false, content: null, source: null }),
-    profileCacheHit: loaded.cacheHit,
-    durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
-  };
-}
-  c8 ignore stop */
 }
 
 async function invalidateTenantKnowledgeCacheInternal(tenantId, cache, includeKnowledgeMaps) {
@@ -1859,7 +1737,12 @@ async function invalidateTenantKnowledgeCacheInternal(tenantId, cache, includeKn
     `zea:rag:published-search:${tenant}:*`,
     `zea:rag:entity:${tenant}:*`,
     `zea:rag:hybrid:${tenant}:*`,
-    ...(includeKnowledgeMaps ? [`zea:rag:knowledge-map:${tenant}:*`] : []),
+    ...(includeKnowledgeMaps ? [
+      `zea:rag:knowledge-map:${tenant}:*`,
+      `zea:rag:bm25:${tenant}:*`,
+      `zea:rag:evidence:${tenant}:*`,
+      `zea:rag:generation:${tenant}`,
+    ] : []),
   ];
   try {
     for (const pattern of patterns) {

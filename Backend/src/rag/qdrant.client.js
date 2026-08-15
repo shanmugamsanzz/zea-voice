@@ -108,6 +108,28 @@ export async function upsertTenantPoints(tenantId, points) {
   return { count: points.length };
 }
 
+export async function countTenantPointsByKnowledgeBaseRevision(tenantId, knowledgeBaseId, publicationRevision) {
+  const tenant = requireTenantId(tenantId);
+  const knowledgeBase = requireEntityId(knowledgeBaseId, 'knowledgeBaseId');
+  if (!Number.isInteger(publicationRevision) || publicationRevision < 1) {
+    throw new TypeError('publicationRevision must be a positive integer');
+  }
+  const collectionName = collectionForTenant(tenant);
+  const filter = { must: [
+    { key: 'tenant_id', match: { value: tenant } },
+    { key: 'knowledge_base_id', match: { value: knowledgeBase } },
+    { key: 'publication_revision', match: { value: publicationRevision } },
+  ] };
+  const counted = await qdrantFetch(`/collections/${encodeURIComponent(collectionName)}/points/count`, {
+    method: 'POST',
+    operation: 'count-publication-revision-points',
+    body: JSON.stringify({ filter, exact: true }),
+  });
+  const count = counted?.result?.count;
+  if (!Number.isInteger(count) || count < 0) throw new Error('Qdrant returned an invalid publication count');
+  return { count, verified: true, filter };
+}
+
 export async function searchTenantPoints(tenantId, vector, {
   knowledgeBases,
   usageDirection,

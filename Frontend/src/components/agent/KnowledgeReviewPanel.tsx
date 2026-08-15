@@ -24,6 +24,7 @@ interface ReviewResponse {
     draftCount: number;
     approvedCount: number;
     rejectedCount: number;
+    validationErrors: string[];
     ready: boolean;
   };
   catalogs?: ReviewRecord[];
@@ -67,7 +68,7 @@ const fieldsByKind: Record<ReviewRecord['kind'], ReviewField[]> = {
   ],
   catalog_item: [
     { key: 'itemKey', label: 'Stable Item Key', kind: 'text', required: true },
-    { key: 'name', label: 'Item / Package Name', kind: 'text', required: true },
+    { key: 'name', label: 'Item Name', kind: 'text', required: true },
     { key: 'category', label: 'Category', kind: 'text', nullable: true },
     { key: 'categoryKey', label: 'Category Key', kind: 'text', nullable: true },
     {
@@ -85,7 +86,7 @@ const fieldsByKind: Record<ReviewRecord['kind'], ReviewField[]> = {
     },
     {
       key: 'aliases', label: 'Spoken Aliases (JSON array)', kind: 'json-array',
-      help: 'Optional alternate names or common speech forms. Semantic and phonetic matching also run automatically.',
+      help: 'Optional alternate names or speech forms supplied by this tenant.',
     },
     {
       key: 'relationships', label: 'Entity Relationships (JSON)', kind: 'json-object',
@@ -105,18 +106,9 @@ const fieldsByKind: Record<ReviewRecord['kind'], ReviewField[]> = {
     { key: 'intent', label: 'Intent', kind: 'text', required: true },
     { key: 'priority', label: 'Priority', kind: 'number', integer: true },
     { key: 'usageDirection', label: 'Usage Direction', kind: 'select', required: true },
-    { key: 'actionType', label: 'Action Type', kind: 'text', required: true },
     {
-      key: 'triggerPhrases', label: 'Trigger Phrases', kind: 'textarea', virtual: true,
-      help: 'One phrase per line. These are extracted from MATCH values separated by |.',
-    },
-    {
-      key: 'matchMode', label: 'Match Mode', kind: 'select', virtual: true,
-      options: [
-        { value: 'any_phrase', label: 'Any Phrase' },
-        { value: 'contains', label: 'Contains' },
-        { value: 'exact', label: 'Exact' },
-      ],
+      key: 'examples', label: 'Situations / Caller Examples', kind: 'textarea', virtual: true,
+      help: 'One natural example per line. Examples provide document evidence; runtime code does not turn them into keyword actions.',
     },
     {
       key: 'responseMode', label: 'Response Mode', kind: 'select', virtual: true,
@@ -126,9 +118,10 @@ const fieldsByKind: Record<ReviewRecord['kind'], ReviewField[]> = {
         { value: 'generated', label: 'Generated' },
       ],
     },
-    { key: 'fromStages', label: 'Allowed From Stages', kind: 'textarea', virtual: true, help: 'One stage per line.' },
-    { key: 'nextStage', label: 'Next Stage', kind: 'text', virtual: true },
-    { key: 'actionKey', label: 'Action Key', kind: 'text', virtual: true },
+    {
+      key: 'toolIdentifier', label: 'Configured Tool Identifier', kind: 'text', virtual: true,
+      help: 'Required for instruction/generated actions. It must identify a tool configured for this agent in the UI.',
+    },
     { key: 'requiresCatalogItem', label: 'Require Catalog Item', kind: 'checkbox', virtual: true },
     { key: 'blockedResponse', label: 'Blocked Response', kind: 'textarea', virtual: true },
     { key: 'responseTemplate', label: 'Response', kind: 'textarea', nullable: true },
@@ -163,24 +156,22 @@ function initialDraft(record: ReviewRecord) {
   const actionConfig = record.actionConfig && typeof record.actionConfig === 'object' && !Array.isArray(record.actionConfig)
     ? record.actionConfig as Record<string, unknown> : {};
   for (const field of fieldsByKind[record.kind]) {
-    if (record.kind === 'workflow_rule' && field.key === 'triggerPhrases') {
-      const phrases = Array.isArray(conditions.triggerPhrases) ? conditions.triggerPhrases : [];
+    if (record.kind === 'workflow_rule' && field.key === 'examples') {
+      const phrases = Array.isArray(conditions.examples) ? conditions.examples
+        : Array.isArray(conditions.triggerPhrases) ? conditions.triggerPhrases : [];
       draft[field.key] = phrases.filter((phrase) => typeof phrase === 'string').join('\n');
-      continue;
-    }
-    if (record.kind === 'workflow_rule' && field.key === 'matchMode') {
-      draft[field.key] = typeof conditions.matchMode === 'string' ? conditions.matchMode : 'any_phrase';
       continue;
     }
     if (record.kind === 'workflow_rule' && field.key === 'responseMode') {
       draft[field.key] = typeof actionConfig.responseMode === 'string' ? actionConfig.responseMode : 'instruction';
       continue;
     }
-    if (record.kind === 'workflow_rule' && field.key === 'fromStages') {
-      draft[field.key] = Array.isArray(conditions.fromStages) ? conditions.fromStages.join('\n') : '';
+    if (record.kind === 'workflow_rule' && field.key === 'toolIdentifier') {
+      draft[field.key] = typeof actionConfig.toolIdentifier === 'string' ? actionConfig.toolIdentifier
+        : typeof actionConfig.actionKey === 'string' ? actionConfig.actionKey : '';
       continue;
     }
-    if (record.kind === 'workflow_rule' && ['nextStage', 'actionKey', 'blockedResponse'].includes(field.key)) {
+    if (record.kind === 'workflow_rule' && field.key === 'blockedResponse') {
       draft[field.key] = typeof actionConfig[field.key] === 'string' ? actionConfig[field.key] as string : '';
       continue;
     }
@@ -232,26 +223,26 @@ function ReviewRecordCard({ record, readOnly, onChanged }: { record: ReviewRecor
           ? record.conditions as Record<string, unknown> : {};
         const existingActionConfig = record.actionConfig && typeof record.actionConfig === 'object' && !Array.isArray(record.actionConfig)
           ? record.actionConfig as Record<string, unknown> : {};
-        const triggerPhrases = [...new Map(String(draft.triggerPhrases ?? '').split(/\r?\n|\|/u)
+        const examples = [...new Map(String(draft.examples ?? '').split(/\r?\n|\|/u)
           .map((phrase) => phrase.trim()).filter(Boolean)
           .map((phrase) => [phrase.toLocaleLowerCase(), phrase])).values()];
         const response = String(draft.responseTemplate ?? '').trim();
-        payload.conditions = { ...existingConditions, triggerPhrases, matchMode: String(draft.matchMode ?? 'any_phrase') };
-        const list = (value: unknown) => [...new Set(String(value ?? '').split(/\r?\n|\|/u)
-          .map((entry) => entry.trim().toLowerCase().replace(/\s+/gu, '_')).filter(Boolean))];
-        payload.conditions = {
-          ...payload.conditions as Record<string, unknown>,
-          fromStages: list(draft.fromStages),
-        };
+        const conditions: Record<string, unknown> = { ...existingConditions, examples };
+        delete conditions.triggerPhrases;
+        delete conditions.matchMode;
+        delete conditions.fromStages;
+        payload.conditions = conditions;
+        const toolIdentifier = String(draft.toolIdentifier ?? '').normalize('NFKC').trim();
         payload.actionConfig = {
           ...existingActionConfig,
           responseMode: String(draft.responseMode ?? 'instruction'),
           instruction: response,
-          nextStage: String(draft.nextStage ?? '').trim().toLowerCase().replace(/\s+/gu, '_'),
-          actionKey: String(draft.actionKey ?? '').trim().toLowerCase().replace(/\s+/gu, '_'),
+          toolIdentifier,
+          actionKey: toolIdentifier,
           requiresCatalogItem: draft.requiresCatalogItem === true,
           blockedResponse: String(draft.blockedResponse ?? '').trim(),
         };
+        delete (payload.actionConfig as Record<string, unknown>).nextStage;
       }
       await apiRequest(`/knowledge-bases/${String(record.knowledgeBaseId ?? '')}/documents/${String(record.documentId ?? '')}/review/${record.id}`, {
         method: 'PATCH', body: JSON.stringify(payload),
@@ -316,7 +307,7 @@ export function KnowledgeReviewPanel({ knowledgeBaseId, documentId, documentName
 
   const approveAllDrafts = async () => {
     const pending = review?.document.draftCount ?? 0;
-    if (!pending || bulkBusy || readOnly) return;
+    if (!pending || bulkBusy || readOnly || review?.document.validationErrors.length) return;
     if (!window.confirm(`Approve all ${pending} pending records in "${documentName}"? Rejected records will not be changed.`)) return;
     setBulkBusy(true); setError('');
     try {
@@ -330,8 +321,9 @@ export function KnowledgeReviewPanel({ knowledgeBaseId, documentId, documentName
   };
 
   return <section className="rounded-2xl border border-violet-200 bg-violet-50/30 p-4 sm:p-5">
-    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><span className="text-[10px] font-black uppercase tracking-wider text-violet-600">Developer Review</span><h4 className="mt-1 text-base font-bold text-slate-800">{documentName}</h4><p className="mt-1 text-[11px] font-medium text-slate-500">Correct extracted records, then approve or reject every draft record.</p></div><div className="flex flex-wrap gap-2">{!readOnly && Boolean(review?.document.draftCount) && <button type="button" onClick={() => void approveAllDrafts()} disabled={bulkBusy || loading} className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-[10px] font-bold text-white hover:bg-emerald-700 disabled:opacity-50">{bulkBusy ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle className="h-3.5 w-3.5" />}{bulkBusy ? 'Approving...' : `Verify All (${review?.document.draftCount ?? 0})`}</button>}<button type="button" onClick={() => void load()} disabled={loading || bulkBusy} className="rounded-lg border border-slate-200 bg-white p-2 text-slate-500 hover:bg-slate-50 disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /></button><button type="button" onClick={onClose} disabled={bulkBusy} className="rounded-lg border border-slate-200 bg-white p-2 text-slate-500 hover:bg-slate-50 disabled:opacity-50"><X className="h-4 w-4" /></button></div></div>
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><span className="text-[10px] font-black uppercase tracking-wider text-violet-600">Developer Review</span><h4 className="mt-1 text-base font-bold text-slate-800">{documentName}</h4><p className="mt-1 text-[11px] font-medium text-slate-500">Correct extracted records, then approve or reject every draft record.</p></div><div className="flex flex-wrap gap-2">{!readOnly && Boolean(review?.document.draftCount) && <button type="button" onClick={() => void approveAllDrafts()} disabled={bulkBusy || loading || Boolean(review?.document.validationErrors.length)} className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-[10px] font-bold text-white hover:bg-emerald-700 disabled:opacity-50">{bulkBusy ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle className="h-3.5 w-3.5" />}{bulkBusy ? 'Approving...' : `Verify All (${review?.document.draftCount ?? 0})`}</button>}<button type="button" onClick={() => void load()} disabled={loading || bulkBusy} className="rounded-lg border border-slate-200 bg-white p-2 text-slate-500 hover:bg-slate-50 disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /></button><button type="button" onClick={onClose} disabled={bulkBusy} className="rounded-lg border border-slate-200 bg-white p-2 text-slate-500 hover:bg-slate-50 disabled:opacity-50"><X className="h-4 w-4" /></button></div></div>
     {review && <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4"><div className="rounded-lg border border-slate-200 bg-white p-3"><span className="text-[9px] font-black uppercase text-slate-400">Total</span><strong className="block text-lg text-slate-800">{review.document.totalCount}</strong></div><div className="rounded-lg border border-amber-200 bg-amber-50 p-3"><span className="text-[9px] font-black uppercase text-amber-600">Pending</span><strong className="block text-lg text-amber-800">{review.document.draftCount}</strong></div><div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3"><span className="text-[9px] font-black uppercase text-emerald-600">Approved</span><strong className="block text-lg text-emerald-800">{review.document.approvedCount}</strong></div><div className="rounded-lg border border-red-200 bg-red-50 p-3"><span className="text-[9px] font-black uppercase text-red-600">Rejected</span><strong className="block text-lg text-red-800">{review.document.rejectedCount}</strong></div></div>}
+    {Boolean(review?.document.validationErrors.length) && <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-[11px] font-semibold text-red-700"><div className="flex items-start gap-2"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><div><p>Publishing is blocked because the uploaded structured document contains invalid records.</p><ul className="mt-2 list-disc space-y-1 pl-4">{review?.document.validationErrors.map((message) => <li key={message}>{message}</li>)}</ul></div></div></div>}
     {loading && !review && <div className="mt-4 space-y-3">{[1, 2].map((item) => <div key={item} className="h-40 animate-pulse rounded-xl bg-white" />)}</div>}
     {error && <div className="mt-4 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-[11px] font-semibold text-red-700"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />{error}</div>}
     {!loading && !error && records.length === 0 && <div className="mt-4 rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center text-xs font-semibold text-slate-400">No extracted review records were returned for this document.</div>}

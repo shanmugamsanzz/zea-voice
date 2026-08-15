@@ -16,7 +16,7 @@ import { ProviderUsageTracker } from './provider-usage-tracker.js';
 import { loadAgentRuntimeProfile } from './providers/provider-config.js';
 import { createRuntimeAdapters, providerAdapterRegistry } from './providers/registry.js';
 import { registerImplementedProviderAdapters } from './providers/defaults.js';
-import { createSelectedLlmStream } from './providers/llm/llm-response.service.js';
+import { createSelectedLlmStream, runtimeTools } from './providers/llm/llm-response.service.js';
 import { executeAgentTools } from './tools/tool-executor.service.js';
 import { LlmCircuitBreaker } from './providers/llm/streaming-runtime.js';
 import { welcomeAudioCache } from './welcome-audio-cache.service.js';
@@ -40,12 +40,20 @@ import {
 import { buildConversationMemoryState } from './interaction/conversation-memory-state.js';
 import { compactLiveCallMemoryContext, openLiveCallMemory } from './interaction/live-call-memory.js';
 import {
+  compactGenericConversationState,
+  openGenericConversationState,
+} from './interaction/generic-conversation-state.js';
+import {
   buildGroundingEnvelope,
   createGroundedJsonStreamDecoder,
   normalizeQuestionType,
   validateGroundedLlmResponse,
   validateGroundedSpokenSentences,
 } from './interaction/grounded-llm-response.js';
+import {
+  composeConfiguredTurnResponse,
+  resolveNextConfiguredQuestion,
+} from './interaction/next-question-policy.js';
 import { sttEventPolicy } from './interaction/stt-event-policy.js';
 import { LiveMemoryMaintenanceQueue } from './interaction/live-memory-maintenance.js';
 import { resolveCallbackConfiguration } from './interaction/callback-config.js';
@@ -470,15 +478,12 @@ export class RealtimeConversationOrchestrator {
       timings: { totalMs: 0, maximumMs: 0, samples: [] },
       background: this.liveMemoryMaintenance.snapshot(),
     };
-    this.runtimeMetrics.conversationStage = {
-      currentStage: this.liveCallMemory.snapshot().currentStage,
-      resumeStage: null,
+    this.runtimeMetrics.conversationFlow = {
       activeCategory: null,
       selectedCatalogItemId: null,
       candidateItemCount: 0,
       answeredQuestionCount: 0,
       activeActions: [],
-      transitions: [],
       blockedActions: 0,
       flowRecovery: { sideQuestions: 0, resumedQuestions: 0, repeatedQuestionsSuppressed: 0, clarifications: 0 },
     };
@@ -1298,7 +1303,6 @@ export class RealtimeConversationOrchestrator {
     if (this.finalized) return;
     this.runtimeMetrics.callChecks.detected += 1;
     this.#clearInactivity();
-    this.liveCallMemory?.suspendForDetour?.();
 
     if ([callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) {
       await this.#cancelActive('caller_call_check');
@@ -1343,7 +1347,6 @@ export class RealtimeConversationOrchestrator {
     this.log.info({
       stage: 'call_check.detected', callId: this.call.id,
       epoch, matchedPhrase, resumedField: pendingField?.key ?? null,
-      resumeStage: liveMemory?.resumeStage ?? null,
       resumedQuestion: questionToResume ?? null,
     }, 'Configured call-check phrase matched; bypassing Knowledge Base and LLM');
     const spoken = await this.#synthesize(response, `call-check-${epoch}`, { epoch });
@@ -1351,7 +1354,6 @@ export class RealtimeConversationOrchestrator {
     await this.audioEngine.drainOutput();
     if (this.#isStaleGeneration(epoch) || this.controller.state !== callStates.SPEAKING) return;
     await this.controller.playbackComplete();
-    this.liveCallMemory?.resumeFromDetour?.();
     this.#scheduleLiveMemoryCheckpoint('call_check_side_action');
     this.runtimeMetrics.callChecks.spoken += 1;
     this.errorCount = 0;
@@ -1361,7 +1363,6 @@ export class RealtimeConversationOrchestrator {
   async #handleLanguageSwitch(customerText, language) {
     if (this.finalized) return;
     this.#clearInactivity();
-    this.liveCallMemory?.suspendForDetour?.();
     this.liveCallMemory?.setLanguage?.(language);
     if ([callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) {
       await this.#cancelActive('caller_language_switch');
@@ -1389,7 +1390,6 @@ export class RealtimeConversationOrchestrator {
     await this.audioEngine.drainOutput();
     if (this.#isStaleGeneration(epoch) || this.controller.state !== callStates.SPEAKING) return;
     await this.controller.playbackComplete();
-    this.liveCallMemory?.resumeFromDetour?.();
     this.#scheduleLiveMemoryCheckpoint('language_switch_side_action');
     this.#armInactivity();
   }
@@ -1476,7 +1476,7 @@ export class RealtimeConversationOrchestrator {
   async #knowledge(query, _understanding = null, abortSignal = null) {
     try {
       const startedAt = performance.now();
-      const stageState = this.liveCallMemory?.snapshot();
+      const memoryState = this.liveCallMemory?.snapshot();
       const auth = {
         tenantId: this.runtimeProfile.agent.tenantId,
         workspaceId: this.runtimeProfile.agent.workspaceId,
@@ -1487,12 +1487,12 @@ export class RealtimeConversationOrchestrator {
         agentId: this.runtimeProfile.agent.id,
         query,
         usageDirection: this.call.direction,
-        language: stageState?.language ?? languageCode(this.runtimeProfile.agent.language),
-        currentTopic: stageState?.currentTopic ?? undefined,
-        knownEntities: stageState?.knownEntities ?? [],
-        pendingQuestion: stageState?.pendingQuestionText ?? stageState?.pendingQuestion ?? undefined,
-        collectedInformation: stageState?.collectedInformation ?? {},
-        lastAnswer: stageState?.lastAnswer ?? undefined,
+        language: memoryState?.language ?? languageCode(this.runtimeProfile.agent.language),
+        currentTopic: memoryState?.currentTopic ?? undefined,
+        knownEntities: memoryState?.knownEntities ?? [],
+        pendingQuestion: memoryState?.pendingQuestionText ?? memoryState?.pendingQuestion ?? undefined,
+        collectedInformation: memoryState?.collectedInformation ?? {},
+        lastAnswer: memoryState?.lastAnswer ?? undefined,
         abortSignal,
       };
       const loadMap = this.dependencies.loadPublishedKnowledgeMap ?? loadPublishedKnowledgeMap;
@@ -1579,7 +1579,6 @@ export class RealtimeConversationOrchestrator {
         activeCategoryName: state?.activeCategory?.name,
         selectedCatalogItemKey: state?.selectedCatalogItem?.key,
         selectedCatalogItemName: state?.selectedCatalogItem?.name,
-        currentStage: state?.currentStage,
       });
       return result;
     } catch (error) {
@@ -1619,7 +1618,6 @@ export class RealtimeConversationOrchestrator {
     this.runtimeMetrics.taskCompletion = {
       ...publicTaskCompletionState(this.taskCompletionState),
       gateOpen: true,
-      currentStage: state?.currentStage ?? null,
     };
     if (taskCompletion.captured.length || Object.keys(captured?.updates ?? {}).length) {
       this.log.info({
@@ -1663,7 +1661,6 @@ export class RealtimeConversationOrchestrator {
       this.runtimeMetrics.taskCompletion = {
         ...publicTaskCompletionState(this.taskCompletionState),
         gateOpen: true,
-        currentStage: state?.currentStage ?? null,
       };
       this.log.info({
         stage: 'task_completion.action_opened_after_understanding', callId: this.call.id,
@@ -1831,7 +1828,7 @@ export class RealtimeConversationOrchestrator {
       ...(currentCompletion.collectedData ?? {}),
       ...(liveMemory?.collectedData ?? {}),
     };
-    const configuredFields = liveMemory?.fields ?? [];
+    const configuredFields = this.liveCallMemory?.fieldSchemas?.() ?? liveMemory?.fields ?? [];
     const missingFields = configuredFields
       .filter((field) => field.required && (collectedData[field.key] === undefined || collectedData[field.key] === null || collectedData[field.key] === ''))
       .map((field) => ({ key: field.key, label: field.label, type: field.type, question: field.question }));
@@ -1850,8 +1847,11 @@ export class RealtimeConversationOrchestrator {
     const groundingRuntime = {
       pendingQuestion: liveMemory?.pendingQuestion ?? liveMemory?.pendingQuestionText,
       currentTopic: liveMemory?.currentTopic,
-      currentStage: liveMemory?.currentStage,
       activeActions: liveMemory?.activeActions ?? [],
+      activeToolRequest: liveMemory?.activeToolRequest ?? null,
+      fieldSchemas: configuredFields,
+      toolSchemas: runtimeTools(this.runtimeProfile.tools),
+      collectedInformation: collectedData,
     };
     const configuredSpeech = [
       liveMemory?.pendingQuestion,
@@ -1875,6 +1875,8 @@ export class RealtimeConversationOrchestrator {
         callId: this.call.id,
         direction: this.call.direction,
         liveCallMemory: compactLiveMemory,
+        configuredInformationFields: configuredFields,
+        configuredToolSchemas: groundingRuntime.toolSchemas,
         conversationMemory: {
           policy: this.contextCachePolicy.policy,
           scope: this.contextCachePolicy.scope,
@@ -2005,6 +2007,7 @@ export class RealtimeConversationOrchestrator {
       const grounded = validateGroundedLlmResponse(text, groundingEnvelope, groundingRuntime);
       const groundingMetric = {
         valid: grounded.valid, reason: grounded.reason ?? null,
+        decision: grounded.decision ?? null,
         intent: grounded.intent ?? null,
         questionType: grounded.questionType ?? null,
         currentTopic: grounded.currentTopic ?? null,
@@ -2022,8 +2025,18 @@ export class RealtimeConversationOrchestrator {
       const sources = [llmMessageSource(this.runtimeProfile.providers.llm, completion)];
       if (grounded.valid) {
         this.runtimeMetrics.grounding.validated += 1;
-        this.liveCallMemory?.applyGroundedDecision?.(grounded);
-        answer = grounded.spokenAnswer;
+        if (streaming.isCurrent && !streaming.isCurrent()) {
+          return { cancelled: true, text: '', toolCalls: [], sources: [] };
+        }
+        this.liveCallMemory?.applyGroundedDecision?.(grounded, { turnToken: streaming.epoch });
+        if (grounded.decision === 'action' && grounded.toolRequest) {
+          toolCalls = [{
+            id: `decision-${streaming.epoch ?? Date.now()}`,
+            name: grounded.toolRequest.name,
+            arguments: grounded.toolRequest.arguments,
+          }];
+          answer = '';
+        } else answer = grounded.answer ?? grounded.spokenAnswer;
       } else {
         this.runtimeMetrics.grounding.rejected += 1;
         if (streamedGroundedSentences.length) {
@@ -2387,6 +2400,7 @@ export class RealtimeConversationOrchestrator {
   }
 
   async #runTurn(query, history, epoch, sttTiming = {}) {
+    this.liveCallMemory?.beginTurn?.(epoch);
     const turnStartedAt = Date.now();
     const turnLatency = {
       epoch,
@@ -2412,11 +2426,11 @@ export class RealtimeConversationOrchestrator {
     if (epoch !== this.epoch || this.finalized) return;
     // The saved frame is context, not a gate. Ordinary topic/entity state is
     // updated only after the grounded LLM decision has been validated.
-    const stageState = this.liveCallMemory?.snapshot();
-    this.runtimeMetrics.conversationStage = {
-      ...this.runtimeMetrics.conversationStage,
-      activeActions: stageState?.activeActions ?? [],
-      flowRecovery: stageState?.flowRecovery ?? this.runtimeMetrics.conversationStage?.flowRecovery,
+    const memoryState = this.liveCallMemory?.snapshot();
+    this.runtimeMetrics.conversationFlow = {
+      ...this.runtimeMetrics.conversationFlow,
+      activeActions: memoryState?.activeActions ?? [],
+      flowRecovery: memoryState?.flowRecovery ?? this.runtimeMetrics.conversationFlow?.flowRecovery,
     };
     const completionConfiguration = this.taskCompletionState.configuration;
     const completionActionAllowed = this.liveCallMemory?.canRunAction?.(
@@ -2427,7 +2441,6 @@ export class RealtimeConversationOrchestrator {
       this.runtimeMetrics.taskCompletion = {
         ...publicTaskCompletionState(this.taskCompletionState),
         gateOpen: true,
-        currentStage: stageState?.currentStage ?? null,
       };
       // A single finalized utterance may explicitly request the action and
       // provide its configured fields together. Capture those deterministic
@@ -2436,8 +2449,7 @@ export class RealtimeConversationOrchestrator {
       this.runtimeMetrics.taskCompletion = {
         ...publicTaskCompletionState(this.taskCompletionState),
         gateOpen: false,
-        currentStage: stageState?.currentStage ?? null,
-        selectedCatalogItem: stageState?.selectedCatalogItem?.id ?? null,
+        selectedCatalogItem: memoryState?.selectedCatalogItem?.id ?? null,
       };
     }
     turnLatency.knowledgeMs = Math.max(0, Date.now() - knowledgeStartedAt);
@@ -2464,7 +2476,7 @@ export class RealtimeConversationOrchestrator {
     try {
       const llmStartedAt = Date.now();
       response = await this.#llm(query, history, knowledge, {
-        instruction: 'Understand the latest caller utterance from its full natural meaning. Answer that request first using only approved evidence. Decide the current topic, whether it changed, and whether the saved pending question remains relevant. Do not require exact wording and do not use a saved stage as a gate. In the required JSON object emit evidenceSourceIds and selectedEntityKeys first, then spokenAnswer immediately with a short punctuated first sentence; emit remaining metadata afterward.',
+        instruction: 'Understand the latest caller utterance from its full natural meaning and answer it first using only approved evidence. Return exactly one decision: answer, clarify or one authorized action. Do not require exact wording or use a stage as a gate. Emit evidenceIds and stateUpdate first, then decision and a short natural answer.',
       }, streaming);
       turnLatency.llmMs += Math.max(0, Date.now() - llmStartedAt);
       if (response.understanding) {
@@ -3057,6 +3069,7 @@ export class RealtimeConversationOrchestrator {
     const operation = (async () => {
       const cancelledEpoch = this.epoch;
       this.epoch += 1;
+      this.liveCallMemory?.cancelTurn?.(cancelledEpoch);
       this.runtimeMetrics.interruptions.cancellationEpochs += 1;
       this.runtimeMetrics.interruptions.cancellationCalls += 1;
       this.cancelledEpochs.add(cancelledEpoch);

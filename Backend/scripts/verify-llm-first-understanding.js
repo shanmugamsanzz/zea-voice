@@ -43,34 +43,32 @@ const prompt = buildAgentSystemPrompt({
     groundedResponseMode: true,
     liveCallMemory: {
       currentTopic: 'service options',
-      selectedCatalogItem: { key: 'service-a', name: 'Service A' },
-      candidateItems: [{ key: 'service-b', name: 'Service B' }],
+      knownEntities: [{ key: 'service-a', name: 'Service A' }],
       pendingQuestion: 'Which option do you prefer?',
-      collectedData: { customerName: 'Example' },
+      collectedInformation: { customerName: 'Example' },
       lastAnswer: 'These are the available options.',
     },
   },
 });
 for (const required of [
-  'latest caller question first', 'currentTopic', 'pendingQuestion', 'collectedData',
-  'lastAnswer', 'publishedKnowledgeMap', 'topicChanged', 'pendingQuestionRelevant',
+  'latest caller question first', 'currentTopic', 'pendingQuestion', 'collectedInformation',
+  'lastAnswer', 'publishedKnowledgeMap', 'decision', 'stateUpdate', 'evidenceIds',
 ]) assert.match(prompt, new RegExp(required, 'u'));
 
 const envelope = buildGroundingEnvelope(knowledge);
 const decision = validateGroundedLlmResponse(JSON.stringify({
-  intent: 'ask caller origin',
-  questionType: 'side_question',
-  currentTopic: 'office location',
-  topicChanged: true,
-  pendingQuestionRelevant: false,
-  flowAction: 'side_question',
-  selectedEntityKeys: [],
-  evidenceSourceIds: ['source_1'],
-  assertedFacts: [{ type: 'policy', value: 'Central City', sourceId: 'source_1' }],
-  spokenAnswer: 'The office is in Central City.',
+  decision: 'answer',
+  answer: 'The office is in Central City.',
+  evidenceIds: ['source_1'],
+  stateUpdate: {
+    currentTopic: 'office location', knownEntityKeys: [], collectedInformation: {},
+    correctedFields: [], pendingQuestionRelevant: false,
+  },
+  pendingQuestion: null,
+  toolRequest: null,
 }), envelope, { pendingQuestion: 'Which option do you prefer?' });
 assert.equal(decision.valid, true);
-assert.equal(decision.topicChanged, true);
+assert.equal(decision.decision, 'answer');
 assert.equal(decision.pendingQuestionRelevant, false);
 
 const memory = openLiveCallMemory({

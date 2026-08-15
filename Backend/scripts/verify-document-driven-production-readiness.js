@@ -37,7 +37,23 @@ const profiles = new Map([
   [tenantB, profile(kbB, faqB, 'Tenant B approved answer.')],
 ]);
 const contextRunner = async (auth, callback) => callback({
-  query: async () => ({ rows: [structuredClone(profiles.get(auth.tenantId))] }),
+  query: async (sql, values) => {
+    const selected = profiles.get(auth.tenantId);
+    if (!String(sql).includes('jsonb_to_recordset')) return { rows: [structuredClone(selected)] };
+    const requested = JSON.parse(values[3]);
+    return { rows: requested.map((candidate) => {
+      const faq = selected.faqs.find((item) => item.id === candidate.record_id);
+      return faq ? {
+        record_type: 'FAQ', record_id: faq.id, knowledge_base_id: faq.knowledge_base_id,
+        document_id: faq.document_id, document_version_id: faq.document_version_id,
+        document_name: faq.document_name, source_page_start: faq.source_page_start,
+        source_page_end: faq.source_page_end, language: faq.language,
+        content: faq.answer, caller_facing: true,
+        authoritative_data: { question: faq.question, answer: faq.answer },
+        rank: candidate.rank, score: candidate.score,
+      } : null;
+    }).filter(Boolean) };
+  },
 });
 const point = (tenantId, knowledgeBaseId, agentId, recordId) => ({
   id: recordId, score: 0.98,

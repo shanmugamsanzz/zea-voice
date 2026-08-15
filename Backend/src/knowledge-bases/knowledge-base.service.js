@@ -69,6 +69,7 @@ function mapKnowledgeBase(row) {
     usageDirection: row.usage_direction,
     settings: row.settings,
     publicationRevision: row.publication_revision,
+    pendingPublicationRevision: row.pending_publication_revision,
     publishedAt: row.published_at,
     publishedBy: row.published_by,
     documentCount: row.document_count,

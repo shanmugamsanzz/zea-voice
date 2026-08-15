@@ -40,7 +40,7 @@ async function verifyQdrantClientContract() {
     const collection = await ensureTenantCollection(tenantId);
     assert.equal(collection.created, true);
     assert.equal(collection.collectionName, collectionForTenant(tenantId));
-    assert.equal(calls.filter((call) => call.url.includes('/index?wait=true')).length, 8);
+    assert.equal(calls.filter((call) => call.url.includes('/index?wait=true')).length, 11);
     const create = calls.find((call) => call.method === 'PUT' && call.body?.vectors);
     assert.deepEqual(create.body.vectors, { size: 384, distance: 'Cosine' });
 
@@ -314,7 +314,7 @@ console.log(JSON.stringify({
   verified: {
     separateTenantCollections: true,
     frozenVectorConfiguration: true,
-    payloadIndexes: 8,
+    payloadIndexes: 11,
     approvedSemanticTypes: ['faq', 'general_knowledge'],
     structuredDataNotEmbedded: true,
     deterministicPointIds: true,

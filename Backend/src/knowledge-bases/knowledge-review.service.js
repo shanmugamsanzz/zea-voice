@@ -3,6 +3,7 @@ import { AppError } from '../middleware/errors.js';
 import { logger } from '../config/logger.js';
 import { enqueueKnowledgeProcessingJob } from './knowledge-processing.queue.js';
 import { invalidateTenantKnowledgeCache } from './knowledge-runtime.service.js';
+import { normalizeConfiguredToolIdentifier, validateKnowledgeRecord } from './knowledge-record-validation.js';
 
 const reviewSource = `
   WITH review_records AS (
@@ -76,6 +77,7 @@ async function documentReviewRows(client, auth, knowledgeBaseId, documentId = nu
   const result = await client.query(`${reviewSource}
     SELECT d.id, d.document_type, d.display_name, d.status,
       v.id AS version_id, v.version_number, v.status AS version_status,
+      COALESCE(v.extraction_metadata->'validationErrors', '[]'::jsonb) AS validation_errors,
       COALESCE(rt.total_count, 0) AS total_count,
       COALESCE(rt.draft_count, 0) AS draft_count,
       COALESCE(rt.approved_count, 0) AS approved_count,
@@ -105,10 +107,12 @@ async function documentReviewRows(client, auth, knowledgeBaseId, documentId = nu
 
 function mapSummary(row) {
   const requiresContainer = row.document_type === 'catalog';
+  const validationErrors = Array.isArray(row.validation_errors) ? row.validation_errors : [];
   const ready = ['ready'].includes(row.status)
     && row.draft_count === 0
     && row.approved_content_count > 0
-    && (!requiresContainer || row.approved_container_count > 0);
+    && (!requiresContainer || row.approved_container_count > 0)
+    && validationErrors.length === 0;
   return {
     documentId: row.id,
     documentType: row.document_type,
@@ -123,6 +127,7 @@ function mapSummary(row) {
     rejectedCount: row.rejected_count,
     approvedContentCount: row.approved_content_count,
     approvedContainerCount: row.approved_container_count,
+    validationErrors,
     ready,
   };
 }
@@ -149,6 +154,14 @@ function blockersForDocuments(rows) {
     }
     if (row.document_type === 'catalog' && row.approved_container_count === 0) {
       blockers.push({ code: 'CATALOG_NOT_APPROVED', documentId: row.id, message: `${row.display_name} catalog must be approved` });
+    }
+    const validationErrors = Array.isArray(row.validation_errors) ? row.validation_errors : [];
+    if (validationErrors.length) {
+      blockers.push({
+        code: 'STRUCTURED_VALIDATION_ERRORS', documentId: row.id,
+        message: `${row.display_name} contains invalid structured records`,
+        errors: validationErrors,
+      });
     }
   }
   return blockers;
@@ -278,7 +291,7 @@ const fieldDefinitions = {
   workflow_rule: {
     table: 'workflow_rules', fields: {
       name: ['name'], intent: ['intent'], priority: ['priority'], usageDirection: ['usage_direction'],
-      conditions: ['conditions', 'jsonb'], actionType: ['action_type'], actionConfig: ['action_config', 'jsonb'],
+      conditions: ['conditions', 'jsonb'], actionConfig: ['action_config', 'jsonb'],
       responseTemplate: ['response_template'],
     },
   },
@@ -294,10 +307,30 @@ const fieldDefinitions = {
   },
 };
 
+export function assertKnowledgeRecordReviewable(record) {
+  const issues = validateKnowledgeRecord(record.record_kind, record);
+  if (issues.length) {
+    throw new AppError(409, 'Structured record must be corrected before approval', 'REVIEW_RECORD_INVALID', {
+      recordId: record.id,
+      recordKind: record.record_kind,
+      issues,
+    });
+  }
+}
+
+export function assertStructuredDocumentReviewable(document) {
+  const issues = Array.isArray(document.validation_errors) ? document.validation_errors : [];
+  if (issues.length) {
+    throw new AppError(409, 'Structured document must be corrected and re-uploaded before approval',
+      'STRUCTURED_VALIDATION_ERRORS', { documentId: document.id, issues });
+  }
+}
+
 async function syncReviewStatus(client, auth, knowledgeBaseId, documentId) {
   const [row] = await documentReviewRows(client, auth, knowledgeBaseId, documentId, true);
   const publishable = row.draft_count === 0 && row.approved_content_count > 0
-    && (row.document_type !== 'catalog' || row.approved_container_count > 0);
+    && (row.document_type !== 'catalog' || row.approved_container_count > 0)
+    && (!Array.isArray(row.validation_errors) || row.validation_errors.length === 0);
   const status = publishable ? 'ready' : 'review_required';
   await client.query(
     `UPDATE knowledge_documents SET status = $3 WHERE tenant_id = $1 AND id = $2`,
@@ -366,7 +399,21 @@ export function updateReviewRecord(auth, knowledgeBaseId, documentId, recordId, 
     const definition = fieldDefinitions[record.record_kind];
     const values = [auth.tenantId, document.version_id, recordId];
     const sets = [];
-    for (const [field, value] of Object.entries(input)) {
+    let normalizedInput = input;
+    if (record.record_kind === 'workflow_rule' && Object.hasOwn(input, 'actionConfig')) {
+      const actionConfig = input.actionConfig ?? {};
+      const toolIdentifier = normalizeConfiguredToolIdentifier(
+        actionConfig.toolIdentifier ?? actionConfig.actionKey,
+      );
+      normalizedInput = {
+        ...input,
+        actionConfig: {
+          ...actionConfig,
+          ...(toolIdentifier ? { toolIdentifier, actionKey: toolIdentifier } : {}),
+        },
+      };
+    }
+    for (const [field, value] of Object.entries(normalizedInput)) {
       const fieldDefinition = definition.fields[field];
       if (!fieldDefinition) {
         throw new AppError(400, `${field} cannot be edited for ${record.record_kind}`, 'REVIEW_FIELD_NOT_ALLOWED');
@@ -378,6 +425,12 @@ export function updateReviewRecord(auth, knowledgeBaseId, documentId, recordId, 
     if (record.record_kind === 'knowledge_chunk' && Object.hasOwn(input, 'content')) {
       values.push(input.content.split(/\s+/u).filter(Boolean).length);
       sets.push(`token_count = $${values.length}`);
+    }
+    if (record.record_kind === 'workflow_rule' && Object.hasOwn(normalizedInput, 'actionConfig')) {
+      const config = normalizedInput.actionConfig;
+      const toolIdentifier = normalizeConfiguredToolIdentifier(config.toolIdentifier ?? config.actionKey);
+      values.push(toolIdentifier ? 'configured_tool' : 'respond');
+      sets.push(`action_type = $${values.length}`);
     }
     sets.push("status = 'draft'", 'approved_by = NULL', 'approved_at = NULL');
     try {
@@ -407,6 +460,10 @@ export function decideReviewRecord(auth, knowledgeBaseId, documentId, recordId, 
     const record = await locateRecord(client, auth, document, recordId, true);
     if (!record) throw new AppError(404, 'Review record was not found', 'REVIEW_RECORD_NOT_FOUND');
     const definition = fieldDefinitions[record.record_kind];
+    if (decision === 'approve') {
+      assertStructuredDocumentReviewable(document);
+      assertKnowledgeRecordReviewable(record);
+    }
     const status = decision === 'approve' ? 'approved' : decision === 'reject' ? 'rejected' : 'draft';
     try {
       await client.query(
@@ -444,13 +501,14 @@ export function approveAllDraftReviewRecords(
     if (!['review_required', 'ready'].includes(document.status)) {
       throw new AppError(409, 'Document is not available for review', 'DOCUMENT_NOT_REVIEWABLE');
     }
+    assertStructuredDocumentReviewable(document);
 
     const tablesByDocumentType = {
-      faq: ['faq_entries'],
-      catalog: ['structured_catalogs', 'structured_items'],
-      workflow_rules: ['workflow_rules'],
-      conversation_script: ['conversation_flows'],
-      general_knowledge: ['knowledge_chunks'],
+      faq: [['faq_entries', 'faq']],
+      catalog: [['structured_catalogs', 'catalog'], ['structured_items', 'catalog_item']],
+      workflow_rules: [['workflow_rules', 'workflow_rule']],
+      conversation_script: [['conversation_flows', 'conversation_node']],
+      general_knowledge: [['knowledge_chunks', 'knowledge_chunk']],
     };
     const tables = tablesByDocumentType[document.document_type];
     if (!tables) {
@@ -459,7 +517,14 @@ export function approveAllDraftReviewRecords(
 
     let approvedCount = 0;
     try {
-      for (const table of tables) {
+      for (const [table, kind] of tables) {
+        const drafts = await client.query(
+          `SELECT *, $3::text AS record_kind FROM ${table}
+            WHERE tenant_id = $1 AND document_version_id = $2 AND status = 'draft'
+            FOR UPDATE`,
+          [auth.tenantId, document.version_id, kind],
+        );
+        for (const record of drafts.rows) assertKnowledgeRecordReviewable(record);
         const result = await client.query(
           `UPDATE ${table}
               SET status = 'approved', approved_by = $3, approved_at = now()
@@ -486,7 +551,7 @@ export function approveAllDraftReviewRecords(
 export function getKnowledgeBaseReviewSummary(auth, knowledgeBaseId, contextRunner = withTenantContext) {
   return contextRunner(auth, async (client) => {
     const knowledgeBase = await client.query(
-      `SELECT id, name, status, publication_revision, published_at
+      `SELECT id, name, status, publication_revision, pending_publication_revision, published_at
          FROM knowledge_bases
         WHERE tenant_id = $1 AND workspace_id = $2 AND id = $3
           AND deleted_at IS NULL AND status <> 'deleted'`,
@@ -504,6 +569,7 @@ export function getKnowledgeBaseReviewSummary(auth, knowledgeBaseId, contextRunn
         name: knowledgeBase.rows[0].name,
         status: knowledgeBase.rows[0].status,
         publicationRevision: knowledgeBase.rows[0].publication_revision,
+        pendingPublicationRevision: knowledgeBase.rows[0].pending_publication_revision,
         publishedAt: knowledgeBase.rows[0].published_at,
       },
       documents: rows.map(mapSummary),
@@ -543,13 +609,14 @@ export async function publishKnowledgeBase(
     if (blockers.length) {
       throw new AppError(409, 'Knowledge Base cannot be published until review is complete', 'KNOWLEDGE_BASE_REVIEW_INCOMPLETE', { blockers });
     }
+    const targetRevision = Number(knowledgeBase.rows[0].publication_revision) + 1;
     const updated = await client.query(
       `UPDATE knowledge_bases
-          SET status = 'published', publication_revision = publication_revision + 1,
-              published_at = now(), published_by = $4, updated_by = $4
+          SET status = 'processing', pending_publication_revision = $5,
+              published_at = NULL, published_by = NULL, updated_by = $4
         WHERE tenant_id = $1 AND workspace_id = $2 AND id = $3
-        RETURNING id, status, publication_revision, published_at, published_by`,
-      [auth.tenantId, auth.workspaceId, knowledgeBaseId, auth.userId],
+        RETURNING id, status, publication_revision, pending_publication_revision`,
+      [auth.tenantId, auth.workspaceId, knowledgeBaseId, auth.userId, targetRevision],
     );
     const indexJob = await client.query(
       `INSERT INTO knowledge_processing_jobs (
@@ -559,27 +626,35 @@ export async function publishKnowledgeBase(
       [
         auth.tenantId,
         knowledgeBaseId,
-        JSON.stringify({ publicationRevision: updated.rows[0].publication_revision }),
+        JSON.stringify({
+          publicationRevision: targetRevision,
+          requestedBy: auth.userId,
+          actorType: auth.authType === 'api_key' ? 'api' : 'user',
+          workspaceId: auth.workspaceId,
+          documentIds: rows.map((row) => row.id),
+          documentVersionIds: rows.map((row) => row.version_id),
+        }),
       ],
     );
     await client.query(
       `INSERT INTO audit_logs (
          tenant_id, workspace_id, actor_user_id, actor_type, action,
          entity_type, entity_id, after_data
-       ) VALUES ($1, $2, $3, $4, 'KNOWLEDGE_BASE_PUBLISHED',
+       ) VALUES ($1, $2, $3, $4, 'KNOWLEDGE_BASE_PUBLICATION_QUEUED',
          'knowledge_base', $5, $6::jsonb)`,
       [
         auth.tenantId, auth.workspaceId, auth.userId,
         auth.authType === 'api_key' ? 'api' : 'user', knowledgeBaseId,
-        JSON.stringify({ publicationRevision: updated.rows[0].publication_revision, documentCount: rows.length }),
+        JSON.stringify({ publicationRevision: targetRevision, documentCount: rows.length }),
       ],
     );
     return {
       id: updated.rows[0].id,
       status: updated.rows[0].status,
       publicationRevision: updated.rows[0].publication_revision,
-      publishedAt: updated.rows[0].published_at,
-      publishedBy: updated.rows[0].published_by,
+      pendingPublicationRevision: targetRevision,
+      publishedAt: null,
+      publishedBy: null,
       documentCount: rows.length,
       semanticIndex: {
         jobId: indexJob.rows[0].id,

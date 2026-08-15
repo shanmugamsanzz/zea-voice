@@ -1,0 +1,329 @@
+const maximumAnswerCharacters = 4_000;
+const maximumSources = 10;
+const maximumEntities = 20;
+const decisions = new Set(['answer', 'clarify', 'action']);
+
+function text(value, maximum = 2_000) {
+  return String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
+    .replace(/\s+/gu, ' ').trim().slice(0, maximum);
+}
+
+function identity(value) {
+  return text(value, 240).toLocaleLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim();
+}
+
+function list(value, maximum = 20) {
+  return Array.isArray(value)
+    ? [...new Set(value.map((entry) => text(entry, 160)).filter(Boolean))].slice(0, maximum)
+    : [];
+}
+
+function parseObject(value) {
+  const raw = String(value ?? '').trim().replace(/^```(?:json)?\s*/iu, '').replace(/\s*```$/u, '');
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  try {
+    const parsed = JSON.parse(raw.slice(start, end + 1));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function exactShape(value) {
+  const expected = ['answer', 'decision', 'evidenceIds', 'pendingQuestion', 'stateUpdate', 'toolRequest'];
+  return Object.keys(value).sort().join('|') === expected.join('|');
+}
+
+function normalizeFieldValue(value, schema) {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (schema.type === 'boolean') return typeof value === 'boolean' ? value : undefined;
+  if (schema.type === 'number' || schema.type === 'integer') {
+    const numeric = typeof value === 'number' ? value : Number(String(value).trim());
+    if (!Number.isFinite(numeric) || (schema.type === 'integer' && !Number.isInteger(numeric))) return undefined;
+    return numeric;
+  }
+  const normalized = text(value, 500);
+  if (!normalized) return undefined;
+  if (schema.type === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(normalized)) return undefined;
+  if (schema.type === 'phone' && !/^\+?[\d\s()-]{8,25}$/u.test(normalized)) return undefined;
+  return normalized;
+}
+
+function normalizeStateUpdate(value, envelope, runtime) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const allowedKeys = new Set([
+    'currentTopic', 'knownEntityKeys', 'collectedInformation', 'correctedFields',
+    'language', 'pendingQuestionRelevant', 'activeToolRequest',
+  ]);
+  if (Object.keys(value).some((key) => !allowedKeys.has(key))) return null;
+  const entityLookup = new Map((envelope.entities ?? []).flatMap((entity) => (
+    [entity.key, entity.name, entity.id].filter(Boolean).map((candidate) => [identity(candidate), entity])
+  )));
+  const requestedEntities = list(value.knownEntityKeys, maximumEntities);
+  const knownEntities = [];
+  const seenEntities = new Set();
+  for (const requested of requestedEntities) {
+    const entity = entityLookup.get(identity(requested));
+    if (!entity) return null;
+    if (!seenEntities.has(entity.key)) knownEntities.push(entity);
+    seenEntities.add(entity.key);
+  }
+  let activeToolRequest = null;
+  if (value.activeToolRequest !== undefined && value.activeToolRequest !== null) {
+    if (!value.activeToolRequest || typeof value.activeToolRequest !== 'object'
+      || Array.isArray(value.activeToolRequest)) return null;
+    const name = text(value.activeToolRequest.name, 64);
+    if (!(runtime.toolSchemas ?? []).some((tool) => tool.name === name)) return null;
+    activeToolRequest = Object.freeze({ name, status: 'collecting_information' });
+  }
+  const requestedInformation = value.collectedInformation ?? {};
+  if (!requestedInformation || typeof requestedInformation !== 'object'
+    || Array.isArray(requestedInformation)) return null;
+  const activeTool = text(activeToolRequest?.name ?? runtime.activeToolRequest?.name, 100).toLocaleLowerCase();
+  const fieldSchemas = new Map((runtime.fieldSchemas ?? []).filter((field) => (
+    !field.requiredAction || text(field.requiredAction, 100).toLocaleLowerCase() === activeTool
+  )).map((field) => [field.key, field]));
+  const collectedInformation = {};
+  for (const [key, fieldValue] of Object.entries(requestedInformation)) {
+    const schema = fieldSchemas.get(key);
+    if (!schema) return null;
+    const normalized = normalizeFieldValue(fieldValue, schema);
+    if (normalized === undefined) return null;
+    collectedInformation[key] = normalized;
+  }
+  const correctedFields = list(value.correctedFields, 30);
+  if (correctedFields.some((key) => !Object.hasOwn(collectedInformation, key))) return null;
+  if (value.pendingQuestionRelevant !== undefined
+    && typeof value.pendingQuestionRelevant !== 'boolean') return null;
+  return Object.freeze({
+    currentTopic: text(value.currentTopic, 240) || null,
+    knownEntityKeys: Object.freeze(knownEntities.map((entity) => entity.key)),
+    knownEntities: Object.freeze(knownEntities.map((entity) => ({ ...entity }))),
+    collectedInformation: Object.freeze(collectedInformation),
+    correctedFields: Object.freeze(correctedFields),
+    language: text(value.language, 20) || null,
+    pendingQuestionRelevant: value.pendingQuestionRelevant ?? true,
+    activeToolRequest,
+  });
+}
+
+function matchesType(value, type) {
+  if (type === 'array') return Array.isArray(value);
+  if (type === 'object') return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  if (type === 'integer') return Number.isInteger(value);
+  if (type === 'number') return typeof value === 'number' && Number.isFinite(value);
+  if (type === 'null') return value === null;
+  return typeof value === type;
+}
+
+function argumentsMatchSchema(value, schema = {}) {
+  if (!matchesType(value, schema.type ?? 'object')) return false;
+  const required = Array.isArray(schema.required) ? schema.required : [];
+  if (required.some((key) => !Object.hasOwn(value, key))) return false;
+  if (schema.additionalProperties === false
+    && Object.keys(value).some((key) => !Object.hasOwn(schema.properties ?? {}, key))) return false;
+  return Object.entries(schema.properties ?? {}).every(([key, property]) => (
+    !Object.hasOwn(value, key) || !property?.type || matchesType(value[key], property.type)
+  ));
+}
+
+function normalizeToolRequest(value, decision, runtime) {
+  if (decision !== 'action') return value === null ? null : undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const name = text(value.name, 64);
+  const tool = (runtime.toolSchemas ?? []).find((candidate) => candidate.name === name);
+  const argumentsValue = value.arguments ?? {};
+  if (!tool || !argumentsMatchSchema(argumentsValue, tool.inputSchema)) return undefined;
+  return Object.freeze({ name, arguments: Object.freeze({ ...argumentsValue }) });
+}
+
+function numbers(value) {
+  return new Set((text(value, maximumAnswerCharacters).match(/\p{Sc}?\s*\d[\d,.:%/-]*/gu) ?? [])
+    .map((entry) => entry.replace(/[^\d]/gu, '')).filter(Boolean));
+}
+
+function meaningfulTokens(value) {
+  return identity(value).split(' ').filter((token) => token.length >= 4 || /\d/u.test(token));
+}
+
+function supportRatio(answer, evidence) {
+  const answerTokens = meaningfulTokens(answer);
+  if (!answerTokens.length) return 1;
+  const evidenceTokens = new Set(meaningfulTokens(evidence));
+  return answerTokens.filter((token) => evidenceTokens.has(token)).length / answerTokens.length;
+}
+
+function internalSpeech(value) {
+  return /(?:grounded[_ ]response|evidenceids|stateupdate|toolrequest|runtime context|system prompt)/iu.test(value)
+    || /^\s*(?:instruction|workflow|debug|json)\s*:/iu.test(value);
+}
+
+export function groundedDecisionContract(envelope, runtime = {}) {
+  const fields = (runtime.fieldSchemas ?? []).map((field) => ({
+    key: field.key, label: field.label, type: field.type,
+    required: field.required !== false, question: field.question,
+    ...(field.requiredAction ? { requiredAction: field.requiredAction } : {}),
+  }));
+  const tools = (runtime.toolSchemas ?? []).map((tool) => ({
+    name: tool.name, description: tool.description, inputSchema: tool.inputSchema,
+  }));
+  return Object.freeze({
+    format: 'json_object',
+    exactFields: ['decision', 'answer', 'evidenceIds', 'stateUpdate', 'pendingQuestion', 'toolRequest'],
+    fieldOrder: ['evidenceIds', 'stateUpdate', 'decision', 'answer', 'pendingQuestion', 'toolRequest'],
+    rules: [
+      'Answer the latest caller question first.',
+      'Use clarify only when recent context and approved evidence cannot resolve the meaning.',
+      'Do not put question text in answer. Put at most one proposed clarification in pendingQuestion.',
+      'Use action only for one configured tool and never claim success before its verified result.',
+      'Use only evidenceIds listed below for factual speech.',
+    ],
+    schema: {
+      decision: 'answer | clarify | action',
+      answer: 'natural caller-facing speech with no question; empty only for action',
+      evidenceIds: ['approved source IDs'],
+      stateUpdate: {
+        currentTopic: 'optional topic', knownEntityKeys: ['approved entity keys'],
+        collectedInformation: Object.fromEntries(fields.map((field) => [field.key, `optional ${field.type}`])),
+        correctedFields: ['corrected collectedInformation keys'], language: 'optional language code',
+        pendingQuestionRelevant: 'optional boolean',
+        activeToolRequest: 'optional null or {name} for one configured tool whose fields are being collected',
+      },
+      pendingQuestion: 'one proposed short question string or null; runtime speaks only configured text',
+      toolRequest: 'null or {name, arguments}',
+    },
+    allowedEvidenceIds: (envelope.sources ?? []).map((source) => source.id),
+    allowedEntityKeys: (envelope.entities ?? []).map((entity) => entity.key),
+    configuredInformationFields: fields,
+    configuredToolSchemas: tools,
+  });
+}
+
+export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
+  const parsed = parseObject(raw);
+  if (!parsed) return Object.freeze({ valid: false, reason: 'invalid_json' });
+  if (!exactShape(parsed)) return Object.freeze({ valid: false, reason: 'invalid_response_shape' });
+  const decision = text(parsed.decision, 20).toLocaleLowerCase();
+  if (!decisions.has(decision)) return Object.freeze({ valid: false, reason: 'invalid_decision' });
+  const answer = text(parsed.answer, maximumAnswerCharacters);
+  if (decision !== 'action' && !answer) return Object.freeze({ valid: false, reason: 'answer_required' });
+  if (internalSpeech(answer)) return Object.freeze({ valid: false, reason: 'internal_text' });
+  const pendingQuestion = parsed.pendingQuestion === null
+    ? null : text(parsed.pendingQuestion, 500);
+  if (parsed.pendingQuestion !== null && !pendingQuestion) {
+    return Object.freeze({ valid: false, reason: 'invalid_pending_question' });
+  }
+  const questionCount = (answer.match(/[?？]/gu) ?? []).length;
+  if (questionCount > 0) return Object.freeze({ valid: false, reason: 'question_must_use_pending_question' });
+  if (decision === 'clarify' && !pendingQuestion) {
+    return Object.freeze({ valid: false, reason: 'clarification_question_required' });
+  }
+  const allowedSources = new Map((envelope.sources ?? []).flatMap((source) => (
+    [source.id, source.recordId].filter(Boolean).map((candidate) => [identity(candidate), source])
+  )));
+  const evidenceIds = list(parsed.evidenceIds, maximumSources);
+  const citedSources = [];
+  const seenSources = new Set();
+  for (const requested of evidenceIds) {
+    const source = allowedSources.get(identity(requested));
+    if (!source) return Object.freeze({ valid: false, reason: 'unpublished_evidence_selected' });
+    if (!seenSources.has(source.id)) citedSources.push(source);
+    seenSources.add(source.id);
+  }
+  if (decision === 'answer' && envelope.found && citedSources.length === 0) {
+    return Object.freeze({ valid: false, reason: 'evidence_required' });
+  }
+  if (decision === 'answer' && !envelope.found) {
+    return Object.freeze({ valid: false, reason: 'verified_evidence_missing' });
+  }
+  const evidenceText = citedSources.map((source) => source.content).join(' ');
+  const evidenceNumbers = numbers(evidenceText);
+  if (answer && [...numbers(answer)].some((number) => !evidenceNumbers.has(number))) {
+    return Object.freeze({ valid: false, reason: 'unsupported_numeric_fact' });
+  }
+  if (decision === 'answer' && supportRatio(answer, evidenceText) < 0.2) {
+    return Object.freeze({ valid: false, reason: 'insufficient_evidence_overlap' });
+  }
+  const stateUpdate = normalizeStateUpdate(parsed.stateUpdate, envelope, runtime);
+  if (!stateUpdate) return Object.freeze({ valid: false, reason: 'invalid_state_update' });
+  const toolRequest = normalizeToolRequest(parsed.toolRequest, decision, runtime);
+  if (toolRequest === undefined) return Object.freeze({ valid: false, reason: 'invalid_tool_request' });
+  return Object.freeze({
+    valid: true, decision, answer,
+    evidenceIds: Object.freeze(citedSources.map((source) => source.id)),
+    stateUpdate, pendingQuestion, toolRequest,
+    // Internal compatibility fields consumed by generic memory and the local
+    // sentence evidence gate. They are never requested from or spoken by LLM.
+    spokenAnswer: answer,
+    evidenceSourceIds: Object.freeze(citedSources.map((source) => source.id)),
+    selectedEntityKeys: stateUpdate.knownEntityKeys,
+    selectedEntities: stateUpdate.knownEntities,
+    currentTopic: stateUpdate.currentTopic,
+    pendingQuestionRelevant: stateUpdate.pendingQuestionRelevant,
+    fieldUpdates: stateUpdate.collectedInformation,
+    correctedFields: stateUpdate.correctedFields,
+    language: stateUpdate.language,
+    activeToolRequest: stateUpdate.activeToolRequest,
+    flowAction: decision === 'clarify' ? 'clarify' : 'continue',
+  });
+}
+
+function jsonArrayField(raw, name) {
+  const match = new RegExp(`"${name}"\\s*:\\s*(\\[[^\\]]*\\])`, 'iu').exec(raw);
+  if (!match) return null;
+  try { const parsed = JSON.parse(match[1]); return Array.isArray(parsed) ? parsed : null; } catch { return null; }
+}
+
+function partialJsonStringField(raw, name) {
+  const marker = new RegExp(`"${name}"\\s*:\\s*"`, 'iu').exec(raw);
+  if (!marker) return null;
+  const start = marker.index + marker[0].length;
+  let escaped = false;
+  let end = raw.length;
+  for (let index = start; index < raw.length; index += 1) {
+    const character = raw[index];
+    if (escaped) { escaped = false; continue; }
+    if (character === '\\') { escaped = true; continue; }
+    if (character === '"') { end = index; break; }
+  }
+  let encoded = raw.slice(start, end);
+  while (encoded.endsWith('\\') && !encoded.endsWith('\\\\')) encoded = encoded.slice(0, -1);
+  try { return JSON.parse(`"${encoded}"`); } catch { return null; }
+}
+
+export function createGroundedDecisionStreamDecoder(envelope) {
+  let raw = '';
+  let releasedCharacters = 0;
+  let decision = null;
+  const allowedSources = new Set((envelope.sources ?? []).map((source) => source.id));
+  return Object.freeze({
+    push(delta) {
+      raw += String(delta ?? '');
+      const sourceIds = jsonArrayField(raw, 'evidenceIds');
+      const decisionValue = partialJsonStringField(raw, 'decision');
+      if (sourceIds && decisions.has(decisionValue)
+        && sourceIds.every((sourceId) => allowedSources.has(sourceId))) {
+        decision = Object.freeze({
+          decision: decisionValue,
+          evidenceIds: Object.freeze([...sourceIds]),
+          evidenceSourceIds: Object.freeze([...sourceIds]),
+          selectedEntityKeys: Object.freeze([]),
+        });
+      }
+      if (!decision) return Object.freeze({ delta: '', decision: null });
+      const answer = partialJsonStringField(raw, 'answer');
+      if (answer === null || answer.length <= releasedCharacters) {
+        return Object.freeze({ delta: '', decision });
+      }
+      const next = answer.slice(releasedCharacters);
+      releasedCharacters = answer.length;
+      return Object.freeze({ delta: next, decision });
+    },
+    decision: () => decision,
+    releasedText: () => partialJsonStringField(raw, 'answer')?.slice(0, releasedCharacters) ?? '',
+  });
+}
+
+export { decisions as groundedDecisionTypes };

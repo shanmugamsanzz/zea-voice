@@ -266,6 +266,7 @@ async function completeJob(job, extraction, category, storedText, contextRunner)
       wordCount: extraction.wordCount,
       recordCount: category.recordCount,
       warnings: category.warnings,
+      validationErrors: category.errors ?? [],
       extractedText: {
         etag: storedText.etag,
         storageVersionId: storedText.storageVersionId,
@@ -303,7 +304,11 @@ async function completeJob(job, extraction, category, storedText, contextRunner)
               error_code = NULL, error_message = NULL,
               metadata = metadata || $2::jsonb
         WHERE id = $1`,
-      [job.id, JSON.stringify({ recordCount: category.recordCount, warnings: category.warnings })],
+      [job.id, JSON.stringify({
+        recordCount: category.recordCount,
+        warnings: category.warnings,
+        validationErrors: category.errors ?? [],
+      })],
     );
     await client.query(
       `UPDATE knowledge_bases kb
@@ -338,6 +343,7 @@ async function completeJob(job, extraction, category, storedText, contextRunner)
       wordCount: extraction.wordCount,
       recordCount: category.recordCount,
       warnings: category.warnings,
+      validationErrors: category.errors ?? [],
       status: 'review_required',
     };
   });

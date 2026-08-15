@@ -39,7 +39,6 @@ export const updateReviewRecordSchema = z.object({
   intent: z.string().trim().min(1).max(160).optional(),
   priority: z.number().int().min(0).optional(),
   conditions: z.record(z.string(), z.unknown()).optional(),
-  actionType: z.string().trim().min(1).max(120).optional(),
   actionConfig: z.record(z.string(), z.unknown()).optional(),
   responseTemplate: z.string().max(50000).nullable().optional(),
   flowKey: z.string().trim().min(1).max(160).optional(),

@@ -428,7 +428,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       contextId: base.contextId || '',
       conversationContextMode: normalizeConversationContextMode(base.conversationContextMode),
       conversationContextTurns: base.conversationContextTurns ?? 5,
-      conversationInitialStage: base.conversationInitialStage || 'start',
       knowledgeHighConfidence: base.knowledgeHighConfidence ?? 0.86,
       knowledgeClarificationConfidence: base.knowledgeClarificationConfidence ?? 0.64,
       knowledgeAmbiguityMargin: base.knowledgeAmbiguityMargin ?? 0.06,
@@ -530,7 +529,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       contextId: String(savedSettings.contextId ?? '').trim(),
       conversationContextMode: normalizeConversationContextMode(savedSettings.conversationContextMode),
       conversationContextTurns: Number(savedSettings.conversationContextTurns ?? 5),
-      conversationInitialStage: String(savedSettings.conversationInitialStage ?? 'start'),
       conversationMemoryFields: Array.isArray(savedSettings.conversationMemoryFields)
         ? savedSettings.conversationMemoryFields as VoiceAgent['conversationMemoryFields']
         : [],
@@ -953,10 +951,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     if (!Number.isInteger(conversationContextTurns) || conversationContextTurns < 1 || conversationContextTurns > 10) {
       setError('Recent Turns must be between 1 and 10 to protect live response latency.'); return;
     }
-    const conversationInitialStage = String(agent.conversationInitialStage || 'start').normalize('NFKC').trim().toLowerCase().replace(/\s+/gu, '_');
-    if (!/^[a-z][a-z0-9_-]{0,79}$/.test(conversationInitialStage)) {
-      setError('Initial Conversation Stage must use lowercase letters, numbers, underscores or hyphens.'); return;
-    }
     const knowledgeHighConfidence = Number(agent.knowledgeHighConfidence ?? 0.86);
     const knowledgeClarificationConfidence = Number(agent.knowledgeClarificationConfidence ?? 0.64);
     const knowledgeAmbiguityMargin = Number(agent.knowledgeAmbiguityMargin ?? 0.06);
@@ -1065,7 +1059,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         taskCompletionCatalogField,
         conversationContextMode,
         conversationContextTurns,
-        conversationInitialStage,
         knowledgeHighConfidence,
         knowledgeClarificationConfidence,
         knowledgeAmbiguityMargin,
@@ -2336,19 +2329,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   <p className="text-[10px] font-semibold leading-relaxed text-slate-400">
                     One turn contains a customer message and the related agent response. Full Current Call keeps the complete finalized conversation in process until hangup.
                   </p>
-                  <div>
-                    <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-500">Initial Conversation Stage</label>
-                    <input
-                      type="text"
-                      value={agent.conversationInitialStage || 'start'}
-                      maxLength={80}
-                      disabled={isReadOnly}
-                      onChange={(event) => setAgent({ ...agent, conversationInitialStage: event.target.value })}
-                      placeholder="start"
-                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-800 outline-none transition focus:border-violet-500 focus:bg-white"
-                    />
-                    <p className="mt-1.5 text-[10px] font-semibold text-slate-400">Workflow Rules may move the call only from their configured FROM_STAGE to NEXT_STAGE.</p>
-                  </div>
                   <div className="rounded-xl border border-violet-100 bg-violet-50/30 p-4">
                     <div className="mb-3">
                       <label className="block text-[10px] font-black uppercase tracking-wider text-slate-500">Knowledge Match Confidence</label>

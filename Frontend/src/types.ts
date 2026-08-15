@@ -141,7 +141,6 @@ export interface VoiceAgent {
   contextId?: string;
   conversationContextMode?: 'last_n_turns' | 'full_current_call';
   conversationContextTurns?: number;
-  conversationInitialStage?: string;
   knowledgeHighConfidence?: number;
   knowledgeClarificationConfidence?: number;
   knowledgeAmbiguityMargin?: number;

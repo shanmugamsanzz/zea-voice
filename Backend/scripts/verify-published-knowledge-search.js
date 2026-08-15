@@ -49,6 +49,33 @@ const profile = {
 };
 
 let searchOptions;
+const hydrated = new Map([
+  [ids.catalog, {
+    ...base(ids.catalog), record_type: 'CATALOG_ITEM', record_id: ids.catalog,
+    content: 'Item: Service A\nPrice: 125 INR', caller_facing: true, language: 'en',
+    authoritative_data: { itemKey: 'service-a', name: 'Service A', category: 'Services', price: '125.00', currency: 'INR' },
+  }],
+  [ids.workflow, {
+    ...base(ids.workflow), record_type: 'WORKFLOW_RULE', record_id: ids.workflow,
+    content: 'Internal instruction that must never be spoken.', caller_facing: false, language: 'en',
+    authoritative_data: { name: 'send_information', intent: 'send_information', conditions: {}, actionType: 'webhook', actionConfig: { responseMode: 'instruction', operation: 'send' } },
+  }],
+  [ids.conversation, {
+    ...base(ids.conversation), record_type: 'CONVERSATION_NODE', record_id: ids.conversation,
+    content: 'Approved conversational guidance.', caller_facing: false, language: 'en',
+    authoritative_data: { flowKey: 'default', nodeKey: 'guidance', nodeType: 'guidance', variables: [] },
+  }],
+  [ids.faq, {
+    ...base(ids.faq), record_type: 'FAQ', record_id: ids.faq,
+    content: 'Approved PostgreSQL answer.', caller_facing: true, language: 'en',
+    authoritative_data: { question: 'Where are you located?', answer: 'Approved PostgreSQL answer.' },
+  }],
+  [ids.knowledge, {
+    ...base(ids.knowledge), record_type: 'KNOWLEDGE_CHUNK', record_id: ids.knowledge,
+    content: 'Approved general knowledge.', caller_facing: true, language: 'en',
+    authoritative_data: { heading: 'Identity', content: 'Approved general knowledge.' },
+  }],
+]);
 const candidate = (id, recordType, overrides = {}) => ({
   id, score: 0.94,
   payload: {
@@ -62,7 +89,14 @@ const candidate = (id, recordType, overrides = {}) => ({
 const dependencies = {
   ragEnabled: true,
   contextRunner: async (_auth, callback) => callback({
-    query: async () => ({ rows: [structuredClone(profile)] }),
+    query: async (sql, values) => {
+      if (!String(sql).includes('jsonb_to_recordset')) return { rows: [structuredClone(profile)] };
+      const requested = JSON.parse(values[3]);
+      return { rows: requested.map((item) => {
+        const row = hydrated.get(item.record_id);
+        return row ? { ...row, rank: item.rank, score: item.score } : null;
+      }).filter(Boolean) };
+    },
   }),
   embed: async () => [0.1],
   search: async (_tenant, _vector, options) => {

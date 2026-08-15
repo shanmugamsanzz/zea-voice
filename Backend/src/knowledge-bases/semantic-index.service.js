@@ -1,14 +1,16 @@
 import { env } from '../config/env.js';
 import { embedPassages } from '../rag/embedding.client.js';
 import {
+  countTenantPointsByKnowledgeBaseRevision,
   deleteTenantPointsByKnowledgeBase,
   ensureTenantCollection,
   upsertTenantPoints,
 } from '../rag/qdrant.client.js';
+import { verifyB2Object } from '../rag/b2.client.js';
 import { tenantVectorPayload } from '../rag/tenant-isolation.js';
 import { withPlatformAdminContext } from '../infrastructure/database-context.js';
 import { AppError } from '../middleware/errors.js';
-import { cacheCompactKnowledgeMap } from './knowledge-map.service.js';
+import { cacheCompactKnowledgeMap, deleteRevisionKnowledgeArtifacts } from './knowledge-map.service.js';
 import { invalidateTenantRuntimeKnowledgeCache } from './knowledge-runtime.service.js';
 
 const defaultDependencies = {
@@ -17,7 +19,10 @@ const defaultDependencies = {
   ensureCollection: ensureTenantCollection,
   deleteKnowledgeBasePoints: deleteTenantPointsByKnowledgeBase,
   upsertPoints: upsertTenantPoints,
+  countRevisionPoints: countTenantPointsByKnowledgeBaseRevision,
+  verifyStorageObject: verifyB2Object,
   cacheKnowledgeMap: cacheCompactKnowledgeMap,
+  deleteKnowledgeArtifacts: deleteRevisionKnowledgeArtifacts,
   invalidateCache: invalidateTenantRuntimeKnowledgeCache,
 };
 
@@ -88,7 +93,8 @@ async function claimIndexJob(jobId, contextRunner) {
     );
     const result = await client.query(
       `SELECT j.*, kb.status AS knowledge_base_status,
-          kb.publication_revision, kb.usage_direction AS knowledge_base_usage,
+          kb.publication_revision, kb.pending_publication_revision,
+          kb.usage_direction AS knowledge_base_usage,
           COALESCE((SELECT jsonb_agg(akb.agent_id ORDER BY akb.priority, akb.agent_id)
             FROM agent_knowledge_bases akb
            WHERE akb.tenant_id=kb.tenant_id AND akb.knowledge_base_id=kb.id), '[]'::jsonb) AS assigned_agent_ids
@@ -105,8 +111,8 @@ async function claimIndexJob(jobId, contextRunner) {
     if (!Number.isInteger(targetRevision) || targetRevision < 1) {
       throw new AppError(409, 'Semantic index job has no valid publication revision', 'KNOWLEDGE_INDEX_REVISION_INVALID');
     }
-    if (job.publication_revision !== targetRevision
-      || !['published', 'partially_failed'].includes(job.knowledge_base_status)) {
+    if (job.pending_publication_revision !== targetRevision
+      || job.knowledge_base_status !== 'processing') {
       await client.query(
         `UPDATE knowledge_processing_jobs
             SET status = 'cancelled', completed_at = now(), error_code = 'KNOWLEDGE_INDEX_STALE',
@@ -170,6 +176,7 @@ async function loadSemanticRecords(job, contextRunner) {
           si.source_page_start, NULL::text, NULL::text,
           concat_ws(E'\n',
             'Catalog item: ' || si.name,
+            CASE WHEN si.item_key IS NOT NULL THEN 'Code: ' || si.item_key END,
             'Category: ' || COALESCE(si.category, sc.name),
             CASE WHEN jsonb_array_length(si.category_aliases) > 0
               THEN 'Category aliases: ' || array_to_string(ARRAY(SELECT jsonb_array_elements_text(si.category_aliases)), ', ') END,
@@ -178,6 +185,8 @@ async function loadSemanticRecords(job, contextRunner) {
             CASE WHEN si.category_description IS NOT NULL
               THEN 'Category description: ' || si.category_description END,
             CASE WHEN si.description IS NOT NULL THEN 'Description: ' || si.description END,
+            CASE WHEN si.price IS NOT NULL
+              THEN 'Price: ' || si.price::text || ' ' || COALESCE(si.currency, '') END,
             CASE WHEN si.relationships <> '{}'::jsonb THEN 'Relationships: ' || si.relationships::text END,
             CASE WHEN si.selection_rules <> '{}'::jsonb THEN 'Selection rules: ' || si.selection_rules::text END
           ),
@@ -212,15 +221,15 @@ async function loadSemanticRecords(job, contextRunner) {
           concat_ws(E'\n',
             'Workflow: ' || w.name,
             'Intent: ' || w.intent,
-            CASE WHEN jsonb_typeof(w.conditions->'triggerPhrases') = 'array'
+            CASE WHEN jsonb_typeof(COALESCE(w.conditions->'examples', w.conditions->'triggerPhrases')) = 'array'
               THEN 'Caller examples: ' || array_to_string(
-                ARRAY(SELECT jsonb_array_elements_text(w.conditions->'triggerPhrases')), ', '
+                ARRAY(SELECT jsonb_array_elements_text(COALESCE(w.conditions->'examples', w.conditions->'triggerPhrases'))), ', '
               ) END,
             CASE WHEN w.response_template IS NOT NULL THEN 'Approved response: ' || w.response_template END
           ),
           w.name, w.intent,
-          CASE WHEN jsonb_typeof(w.conditions->'triggerPhrases') = 'array'
-            THEN w.conditions->'triggerPhrases' ELSE '[]'::jsonb END,
+          CASE WHEN jsonb_typeof(COALESCE(w.conditions->'examples', w.conditions->'triggerPhrases')) = 'array'
+            THEN COALESCE(w.conditions->'examples', w.conditions->'triggerPhrases') ELSE '[]'::jsonb END,
           '[]'::jsonb, '{}'::jsonb
          FROM workflow_rules w
          JOIN knowledge_documents d
@@ -265,6 +274,82 @@ async function loadSemanticRecords(job, contextRunner) {
   });
 }
 
+async function loadPublicationVersions(job, contextRunner) {
+  return contextRunner(null, async (client) => {
+    const result = await client.query(
+      `SELECT d.id AS document_id, d.document_type, v.id AS document_version_id,
+          v.b2_object_key, v.size_bytes, v.extracted_text_object_key
+         FROM knowledge_documents d
+         JOIN knowledge_document_versions v
+           ON v.tenant_id=d.tenant_id AND v.document_id=d.id
+          AND v.is_current=true AND v.status='ready' AND v.deleted_at IS NULL
+        WHERE d.tenant_id=$1 AND d.knowledge_base_id=$2
+          AND d.status='ready' AND d.deleted_at IS NULL
+        ORDER BY d.id`,
+      [job.tenant_id, job.knowledge_base_id],
+    );
+    return result.rows;
+  });
+}
+
+export function validatePublicationMetadata(job, records, points, versions) {
+  const documentIds = new Set(versions.map((version) => String(version.document_id).toLowerCase()));
+  const versionIds = new Set(versions.map((version) => String(version.document_version_id).toLowerCase()));
+  const expectedDocuments = new Set((job.metadata?.documentIds ?? []).map((id) => String(id).toLowerCase()));
+  const expectedVersions = new Set((job.metadata?.documentVersionIds ?? []).map((id) => String(id).toLowerCase()));
+  if (expectedDocuments.size && (expectedDocuments.size !== documentIds.size
+    || [...expectedDocuments].some((id) => !documentIds.has(id)))) {
+    throw new AppError(409, 'Publication document manifest changed during indexing', 'KNOWLEDGE_PUBLICATION_MANIFEST_STALE');
+  }
+  if (expectedVersions.size && (expectedVersions.size !== versionIds.size
+    || [...expectedVersions].some((id) => !versionIds.has(id)))) {
+    throw new AppError(409, 'Publication version manifest changed during indexing', 'KNOWLEDGE_PUBLICATION_MANIFEST_STALE');
+  }
+  if (versions.some((version) => !version.b2_object_key || !version.extracted_text_object_key)) {
+    throw new AppError(409, 'Publication B2 manifest is incomplete', 'KNOWLEDGE_PUBLICATION_B2_MANIFEST_INVALID');
+  }
+  if (records.some((record) => !documentIds.has(String(record.document_id).toLowerCase())
+    || !versionIds.has(String(record.document_version_id).toLowerCase()))) {
+    throw new AppError(409, 'Publication record points outside its document manifest', 'KNOWLEDGE_PUBLICATION_RECORD_MANIFEST_INVALID');
+  }
+  if (points.length !== records.length) {
+    throw new AppError(409, 'Publication vector count does not match PostgreSQL evidence', 'KNOWLEDGE_PUBLICATION_VECTOR_COUNT_INVALID');
+  }
+  for (let index = 0; index < points.length; index += 1) {
+    const payload = points[index].payload;
+    const record = records[index];
+    const required = {
+      tenant_id: String(job.tenant_id).toLowerCase(),
+      knowledge_base_id: String(job.knowledge_base_id).toLowerCase(),
+      document_id: String(record.document_id).toLowerCase(),
+      document_version_id: String(record.document_version_id).toLowerCase(),
+      record_id: String(record.record_id).toLowerCase(),
+      record_type: String(record.record_type).toUpperCase(),
+      document_type: documentTypeByRecordType[record.record_type].toUpperCase(),
+      language: String(record.language ?? 'und').toLowerCase(),
+      agent_usage: String(record.usage_direction).toUpperCase(),
+      publication_revision: job.targetRevision,
+    };
+    if (Object.entries(required).some(([key, value]) => payload[key] !== value)) {
+      throw new AppError(409, 'Qdrant publication metadata validation failed', 'KNOWLEDGE_PUBLICATION_VECTOR_METADATA_INVALID');
+    }
+    const assignedAgents = (job.assigned_agent_ids ?? []).map((id) => String(id).toLowerCase()).sort();
+    if (!Array.isArray(payload.assigned_agent_ids)
+      || payload.assigned_agent_ids.slice().sort().join('|') !== assignedAgents.join('|')) {
+      throw new AppError(409, 'Qdrant assignment metadata validation failed', 'KNOWLEDGE_PUBLICATION_VECTOR_METADATA_INVALID');
+    }
+  }
+  return { recordCount: records.length, documentCount: versions.length, verified: true };
+}
+
+async function verifyPublicationStorage(job, versions, verifyStorageObject) {
+  for (const version of versions) {
+    await verifyStorageObject({ key: version.b2_object_key, expectedSizeBytes: Number(version.size_bytes) });
+    await verifyStorageObject({ key: version.extracted_text_object_key });
+  }
+  return { objectCount: versions.length * 2, verified: true };
+}
+
 async function updateProgress(jobId, progress, contextRunner) {
   await contextRunner(null, (client) => client.query(
     `UPDATE knowledge_processing_jobs SET progress = $2
@@ -273,16 +358,39 @@ async function updateProgress(jobId, progress, contextRunner) {
   ));
 }
 
-async function finishIndexJob(job, records, contextRunner, knowledgeMapCacheKey = null) {
+async function finishIndexJob(job, records, contextRunner, artifacts, verification) {
   return contextRunner(null, async (client) => {
     const state = await client.query(
-      `SELECT status, publication_revision FROM knowledge_bases
+      `SELECT status, publication_revision, pending_publication_revision FROM knowledge_bases
         WHERE tenant_id = $1 AND id = $2 FOR UPDATE`,
       [job.tenant_id, job.knowledge_base_id],
     );
-    if (!state.rowCount || state.rows[0].publication_revision !== job.targetRevision
-      || !['published', 'partially_failed'].includes(state.rows[0].status)) {
+    if (!state.rowCount || state.rows[0].pending_publication_revision !== job.targetRevision
+      || state.rows[0].status !== 'processing') {
       throw new AppError(409, 'Knowledge Base changed during semantic indexing', 'KNOWLEDGE_INDEX_STALE');
+    }
+    const authoritative = await client.query(
+      `SELECT count(*)::int AS record_count FROM (
+         SELECT r.id FROM faq_entries r JOIN knowledge_document_versions v
+           ON v.tenant_id=r.tenant_id AND v.id=r.document_version_id AND v.is_current=true AND v.status='ready'
+          WHERE r.tenant_id=$1 AND r.knowledge_base_id=$2 AND r.status='approved'
+         UNION ALL SELECT r.id FROM knowledge_chunks r JOIN knowledge_document_versions v
+           ON v.tenant_id=r.tenant_id AND v.id=r.document_version_id AND v.is_current=true AND v.status='ready'
+          WHERE r.tenant_id=$1 AND r.knowledge_base_id=$2 AND r.status='approved'
+         UNION ALL SELECT r.id FROM structured_items r JOIN knowledge_document_versions v
+           ON v.tenant_id=r.tenant_id AND v.id=r.document_version_id AND v.is_current=true AND v.status='ready'
+          WHERE r.tenant_id=$1 AND r.knowledge_base_id=$2 AND r.status='approved'
+         UNION ALL SELECT r.id FROM workflow_rules r JOIN knowledge_document_versions v
+           ON v.tenant_id=r.tenant_id AND v.id=r.document_version_id AND v.is_current=true AND v.status='ready'
+          WHERE r.tenant_id=$1 AND r.knowledge_base_id=$2 AND r.status='approved'
+         UNION ALL SELECT r.id FROM conversation_flows r JOIN knowledge_document_versions v
+           ON v.tenant_id=r.tenant_id AND v.id=r.document_version_id AND v.is_current=true AND v.status='ready'
+          WHERE r.tenant_id=$1 AND r.knowledge_base_id=$2 AND r.status='approved'
+       ) approved_records`,
+      [job.tenant_id, job.knowledge_base_id],
+    );
+    if (authoritative.rows[0].record_count !== records.length) {
+      throw new AppError(409, 'PostgreSQL publication verification count changed', 'KNOWLEDGE_PUBLICATION_POSTGRES_UNVERIFIED');
     }
     await client.query(
       `UPDATE faq_entries SET qdrant_point_id = NULL
@@ -328,15 +436,41 @@ async function finishIndexJob(job, records, contextRunner, knowledgeMapCacheKey 
       [job.id, JSON.stringify({
         indexedRecordCount: records.length,
         collection: `tenant:${job.tenant_id}`,
-        knowledgeMapCacheKey,
+        knowledgeMapCacheKey: artifacts.key,
+        sparseIndexCacheKey: artifacts.keys.sparse,
+        evidenceCacheKey: artifacts.keys.evidence,
+        storageVerification: verification.storage,
+        postgresVerification: verification.postgres,
+        qdrantVerification: verification.qdrant,
+        redisVerification: { verified: artifacts.verified, keys: artifacts.keys },
         documentTypes: [...new Set(records.map((record) => documentTypeByRecordType[record.record_type]))],
       })],
     );
     await client.query(
-      `UPDATE knowledge_bases SET status = 'published'
-        WHERE tenant_id = $1 AND id = $2 AND publication_revision = $3`,
-      [job.tenant_id, job.knowledge_base_id, job.targetRevision],
+      `UPDATE knowledge_bases
+          SET status='published', publication_revision=$3, pending_publication_revision=NULL,
+              published_at=now(), published_by=$4
+        WHERE tenant_id=$1 AND id=$2 AND pending_publication_revision=$3`,
+      [job.tenant_id, job.knowledge_base_id, job.targetRevision, job.metadata?.requestedBy ?? null],
     );
+    if (job.metadata?.workspaceId) {
+      await client.query(
+        `INSERT INTO audit_logs (
+           tenant_id, workspace_id, actor_user_id, actor_type, action,
+           entity_type, entity_id, after_data
+         ) VALUES ($1,$2,$3,$4,'KNOWLEDGE_BASE_PUBLISHED',
+           'knowledge_base',$5,$6::jsonb)`,
+        [
+          job.tenant_id, job.metadata.workspaceId, job.metadata?.requestedBy ?? null,
+          job.metadata?.actorType === 'api' ? 'api' : 'user', job.knowledge_base_id,
+          JSON.stringify({
+            publicationRevision: job.targetRevision,
+            indexedRecordCount: records.length,
+            verified: true,
+          }),
+        ],
+      );
+    }
     return {
       jobId: job.id,
       tenantId: job.tenant_id,
@@ -351,20 +485,26 @@ async function finishIndexJob(job, records, contextRunner, knowledgeMapCacheKey 
 async function failIndexJob(job, error, contextRunner) {
   const code = error instanceof AppError ? error.code : 'KNOWLEDGE_INDEX_FAILED';
   const message = String(error.message ?? 'Semantic indexing failed').slice(0, 4000);
+  const retryable = job.attempt_count < job.max_attempts && code !== 'KNOWLEDGE_INDEX_STALE';
   await contextRunner(null, async (client) => {
     await client.query(
       `UPDATE knowledge_processing_jobs
-          SET status = 'failed', completed_at = now(), error_code = $2, error_message = $3
+          SET status = $4::knowledge_job_status,
+              completed_at = CASE WHEN $4::knowledge_job_status='failed'::knowledge_job_status THEN now() ELSE NULL END,
+              error_code = $2, error_message = $3
         WHERE id = $1 AND status <> 'completed'`,
-      [job.id, code, message],
+      [job.id, code, message, retryable ? 'queued' : 'failed'],
     );
-    if (code === 'KNOWLEDGE_INDEX_STALE') return;
-    await client.query(
-      `UPDATE knowledge_bases SET status = 'partially_failed'
-        WHERE tenant_id = $1 AND id = $2 AND publication_revision = $3
-          AND status = 'published'`,
-      [job.tenant_id, job.knowledge_base_id, job.targetRevision],
-    );
+    if (!retryable && code !== 'KNOWLEDGE_INDEX_STALE') {
+      await client.query(
+        `UPDATE knowledge_bases
+            SET status='ready', pending_publication_revision=NULL,
+                published_at=NULL, published_by=NULL
+          WHERE tenant_id=$1 AND id=$2 AND pending_publication_revision=$3
+            AND status='processing'`,
+        [job.tenant_id, job.knowledge_base_id, job.targetRevision],
+      );
+    }
   });
 }
 
@@ -374,8 +514,13 @@ export async function processSemanticIndexJob(jobId, dependencies = defaultDepen
   if (job.alreadyCompleted) return { jobId, status: 'completed', skipped: true };
   if (job.stale) return { jobId, status: 'cancelled', stale: true };
   let qdrantMutated = false;
+  let artifactsCached = false;
+  let activated = false;
   try {
-    const records = await loadSemanticRecords(job, runtime.contextRunner);
+    const [records, versions] = await Promise.all([
+      loadSemanticRecords(job, runtime.contextRunner),
+      loadPublicationVersions(job, runtime.contextRunner),
+    ]);
     await updateProgress(jobId, 15, runtime.contextRunner);
     const points = [];
     for (let start = 0; start < records.length; start += env.RAG_EMBEDDING_BATCH_SIZE) {
@@ -389,6 +534,9 @@ export async function processSemanticIndexJob(jobId, dependencies = defaultDepen
       await updateProgress(jobId, progress, runtime.contextRunner);
     }
 
+    const postgresVerification = validatePublicationMetadata(job, records, points, versions);
+    const storageVerification = await verifyPublicationStorage(job, versions, runtime.verifyStorageObject);
+
     await runtime.ensureCollection(job.tenant_id);
     await runtime.deleteKnowledgeBasePoints(job.tenant_id, job.knowledge_base_id, {
       publicationRevision: job.targetRevision,
@@ -401,9 +549,42 @@ export async function processSemanticIndexJob(jobId, dependencies = defaultDepen
         / Math.max(points.length, 1)) * 30);
       await updateProgress(jobId, progress, runtime.contextRunner);
     }
+    const qdrantVerification = await runtime.countRevisionPoints(
+      job.tenant_id, job.knowledge_base_id, job.targetRevision,
+    );
+    if (qdrantVerification.count !== points.length) {
+      throw new AppError(503, 'Qdrant publication verification count does not match PostgreSQL',
+        'KNOWLEDGE_PUBLICATION_QDRANT_UNVERIFIED');
+    }
     const cachedMap = await runtime.cacheKnowledgeMap(job, records);
-    const result = await finishIndexJob(job, records, runtime.contextRunner, cachedMap.key);
-    await runtime.invalidateCache(job.tenant_id);
+    if (cachedMap?.verified !== true) {
+      throw new AppError(503, 'Redis publication artifacts could not be verified',
+        'KNOWLEDGE_PUBLICATION_REDIS_UNVERIFIED');
+    }
+    artifactsCached = true;
+    const result = await finishIndexJob(job, records, runtime.contextRunner, cachedMap, {
+      storage: storageVerification,
+      postgres: postgresVerification,
+      qdrant: qdrantVerification,
+    });
+    activated = true;
+    let runtimeCacheInvalidationPending = false;
+    try {
+      await runtime.invalidateCache(job.tenant_id);
+    } catch {
+      runtimeCacheInvalidationPending = true;
+      try {
+        await runtime.contextRunner(null, (client) => client.query(
+          `UPDATE knowledge_processing_jobs
+              SET metadata=metadata || $2::jsonb
+            WHERE id=$1`,
+          [job.id, JSON.stringify({ runtimeCacheInvalidationPending: true })],
+        ));
+      } catch {
+        // Activation already committed. Cache keys are revision-filtered and
+        // expire; reconciliation can retry invalidation without hiding data.
+      }
+    }
     // A completed index job is the atomic visibility marker used by runtime.
     // Older vectors are removed only after the new revision is fully usable.
     let staleVectorCleanupPending = false;
@@ -427,8 +608,14 @@ export async function processSemanticIndexJob(jobId, dependencies = defaultDepen
         // Cleanup is retryable; never roll back the now-active revision.
       }
     }
-    return { ...result, knowledgeMapCacheKey: cachedMap.key, staleVectorCleanupPending };
+    return {
+      ...result,
+      knowledgeMapCacheKey: cachedMap.key,
+      staleVectorCleanupPending,
+      runtimeCacheInvalidationPending,
+    };
   } catch (error) {
+    if (activated) throw error;
     if (qdrantMutated) {
       try {
         await runtime.deleteKnowledgeBasePoints(job.tenant_id, job.knowledge_base_id, {
@@ -437,6 +624,13 @@ export async function processSemanticIndexJob(jobId, dependencies = defaultDepen
         });
       } catch (cleanupError) {
         error.qdrantCleanupError = cleanupError.message;
+      }
+    }
+    if (artifactsCached) {
+      try {
+        await runtime.deleteKnowledgeArtifacts(job);
+      } catch (cleanupError) {
+        error.redisCleanupError = cleanupError.message;
       }
     }
     await failIndexJob(job, error, runtime.contextRunner);

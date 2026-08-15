@@ -12,7 +12,7 @@ const agentId = '33333333-3333-4333-8333-333333333333';
 const documentId = '44444444-4444-4444-8444-444444444444';
 const item = {
   id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', knowledge_base_id: knowledgeBaseId,
-  document_id: documentId, source_page_start: 1, item_key: 'premium-plan',
+  document_id: documentId, document_version_id: documentId, source_page_start: 1, item_key: 'premium-plan',
   name: 'Premium Plan', category: 'Plans', category_key: 'plans', parent_category_key: null,
   price: 100, currency: 'USD', description: 'Includes priority support.',
   attributes: [{ key: 'coverage', name: 'Coverage', value: 'Priority support and consultation' }],
@@ -23,6 +23,30 @@ const profile = {
   workflows: [], conversations: [], faqs: [], catalog_items: [item],
 };
 let searchInput;
+const hydrated = new Map([
+  [item.id, {
+    record_type: 'CATALOG_ITEM', record_id: item.id, knowledge_base_id: knowledgeBaseId,
+    document_id: documentId, document_version_id: documentId, document_name: 'catalog.txt',
+    source_page_start: 1, language: 'en', content: 'Premium Plan includes priority support and consultation.',
+    caller_facing: true, authoritative_data: {
+      itemKey: item.item_key, name: item.name, category: item.category,
+      categoryKey: item.category_key, price: item.price, currency: item.currency,
+      description: item.description, attributes: item.attributes,
+    },
+  }],
+  ['bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', {
+    record_type: 'FAQ', record_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', knowledge_base_id: knowledgeBaseId,
+    document_id: documentId, document_version_id: documentId, document_name: 'faq.txt',
+    source_page_start: 2, language: 'en', content: 'Every Premium Plan includes one consultation.',
+    caller_facing: true, authoritative_data: { answer: 'Every Premium Plan includes one consultation.' },
+  }],
+  ['cccccccc-cccc-4ccc-8ccc-cccccccccccc', {
+    record_type: 'KNOWLEDGE_CHUNK', record_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', knowledge_base_id: knowledgeBaseId,
+    document_id: documentId, document_version_id: documentId, document_name: 'knowledge.txt',
+    source_page_start: 3, language: 'en', content: 'The consultation is available during business hours.',
+    caller_facing: true, authoritative_data: { content: 'The consultation is available during business hours.' },
+  }],
+]);
 const result = await retrieveTenantEvidence({ tenantId }, {
   agentId, usageDirection: 'inbound', language: 'en',
   query: 'Does it include consultation?', selectedCatalogItemKey: 'premium-plan',
@@ -30,25 +54,44 @@ const result = await retrieveTenantEvidence({ tenantId }, {
   understanding: { questionType: 'inclusions', selectedEntityKeys: ['premium-plan'] },
 }, {
   cache: null,
-  contextRunner: async (_auth, callback) => callback({ query: async () => ({ rows: [profile] }) }),
-  embed: async (query) => { assert.match(query, /question type inclusions/u); return [0.1, 0.2]; },
+  contextRunner: async (_auth, callback) => callback({
+    query: async (sql, values) => {
+      if (!String(sql).includes('jsonb_to_recordset')) return { rows: [profile] };
+      const requested = JSON.parse(values[3]);
+      return { rows: requested.map((candidate) => {
+        const row = hydrated.get(candidate.record_id);
+        return row ? { ...row, rank: candidate.rank, score: candidate.score } : null;
+      }).filter(Boolean) };
+    },
+  }),
+  embed: async (query) => { assert.match(query, /inclusions/u); return [0.1, 0.2]; },
   search: async (requestedTenantId, _vector, input) => {
     assert.equal(requestedTenantId, tenantId);
     searchInput = input;
     return [
       {
-        id: 'faq-1', score: 0.91,
+        id: item.id, score: 0.93,
         payload: {
           tenant_id: tenantId, knowledge_base_id: knowledgeBaseId, publication_revision: 4,
-          agent_usage: 'BOTH', record_type: 'FAQ', document_id: documentId, page_number: 2,
+          agent_usage: 'BOTH', record_id: item.id, record_type: 'CATALOG_ITEM',
+          document_id: documentId, document_version_id: documentId,
+        },
+      },
+      {
+        id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', score: 0.91,
+        payload: {
+          tenant_id: tenantId, knowledge_base_id: knowledgeBaseId, publication_revision: 4,
+          agent_usage: 'BOTH', record_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+          record_type: 'FAQ', document_id: documentId, document_version_id: documentId, page_number: 2,
           answer: 'Every Premium Plan includes one consultation.',
         },
       },
       {
-        id: 'knowledge-1', score: 0.88,
+        id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', score: 0.88,
         payload: {
           tenant_id: tenantId, knowledge_base_id: knowledgeBaseId, publication_revision: 4,
-          agent_usage: 'BOTH', record_type: 'KNOWLEDGE_CHUNK', document_id: documentId, page_number: 3,
+          agent_usage: 'BOTH', record_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+          record_type: 'KNOWLEDGE_CHUNK', document_id: documentId, document_version_id: documentId, page_number: 3,
           content: 'The consultation is available during business hours.',
         },
       },

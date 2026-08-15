@@ -14,7 +14,7 @@ const resolved = {
 };
 const row = {
   id: resolved.agentId, tenant_id: resolved.tenantId, workspace_id: resolved.workspaceId,
-  phone_number_id: '00000000-0000-4000-8000-000000000004', voice_id: 'hospital-voice',
+  phone_number_id: '00000000-0000-4000-8000-000000000004', voice_id: 'selected-voice',
   name: 'Dynamic Agent', description: 'Test agent', goal: 'Help callers', language: 'English (US)',
   usage_direction: 'both', prompt: 'Be helpful', welcome_message: 'Hello', temperature: '0.4',
   interruption_sensitivity: '0.3', silence_timeout_ms: 600, inactivity_timeout_seconds: 8,
@@ -26,11 +26,15 @@ const row = {
     postCallEndpointDetailsActive: true, postCallApiUrl: 'https://example.com/post', postCallApiMethod: 'POST',
   },
   tools: [{
-    id: 'tool-id', name: 'Appointment', type: 'webhook_api', description: 'Book appointment',
-    configuration: { url: 'https://example.com/book' }, secretConfigurationEncrypted: 'encrypted-tool',
+    id: 'tool-id', name: 'Lookup_Record', type: 'webhook_api', description: 'Retrieve a current record',
+    configuration: {
+      url: 'https://example.com/lookup',
+      inputSchema: { type: 'object', properties: { reference: { type: 'string' } }, required: ['reference'] },
+    },
+    secretConfigurationEncrypted: 'encrypted-tool',
   }],
   knowledge_bases: [{
-    id: 'kb-id', name: 'Hospital KB', description: 'Published knowledge', usageDirection: 'both',
+    id: 'kb-id', name: 'Published KB', description: 'Published knowledge', usageDirection: 'both',
     priority: 10, publicationRevision: 2, semanticReady: true, settings: {},
   }],
 };
@@ -58,7 +62,7 @@ const profile = await loadAgentRuntimeProfile(resolved, {
 
 assert.equal(profile.agent.id, resolved.agentId);
 assert.equal(profile.agent.temperature, 0.4);
-assert.equal(profile.agent.voiceId, 'hospital-voice');
+assert.equal(profile.agent.voiceId, 'selected-voice');
 assert.equal(profile.agent.callDirection, 'inbound');
 assert.equal(profile.agent.speech.listener.sttLanguage, 'en-IN');
 assert.equal(Object.hasOwn(profile.agent.speech.speaker, 'ttsSpeed'), false);
@@ -67,7 +71,7 @@ assert.equal(profile.providers.stt.effectiveSettings.STT_MODEL, 'stt-model');
 assert.equal(Object.hasOwn(profile.providers.stt.effectiveSettings, 'STT_API_KEY'), false);
 assert.equal(profile.providers.llm.parameters.LLM_API_KEY, 'decrypted:encrypted-llm');
 assert.equal(profile.providers.tts.modelCapabilities.languages[0], 'en');
-assert.equal(profile.providers.tts.effectiveSettings.voiceId, 'hospital-voice');
+assert.equal(profile.providers.tts.effectiveSettings.voiceId, 'selected-voice');
 assert.equal(profile.providers.tts.effectiveSettings.ttsLanguage, 'en-IN');
 assert.equal(profile.providers.tts.effectiveSettings.ttsSpeed, 0.9);
 assert.deepEqual(profile.limits, {
@@ -76,8 +80,15 @@ assert.deepEqual(profile.limits, {
   maxCallDurationMinutes: 5,
   ttsLimitFallbackMessage: '',
 });
-assert.equal(profile.knowledgeBases[0].name, 'Hospital KB');
+assert.equal(profile.knowledgeBases[0].name, 'Published KB');
 assert.equal(profile.tools[0].secretConfiguration.token, 'decrypted-tool-token');
+assert.equal(profile.configuration.scope.tenantId, resolved.tenantId);
+assert.equal(profile.configuration.scope.workspaceId, resolved.workspaceId);
+assert.equal(profile.configuration.prompt.system, 'Be helpful');
+assert.equal(profile.configuration.knowledge.assignedPublishedRevisions[0].knowledgeBaseId, 'kb-id');
+assert.equal(profile.configuration.tools[0].name, 'Lookup_Record');
+assert.deepEqual(profile.configuration.tools[0].inputSchema.required, ['reference']);
+assert.equal(profile.configuration.speech.voiceId, 'selected-voice');
 assert.equal(profile.integrations.preCall.api.url, 'https://example.com/pre');
 assert.equal(profile.integrations.postCall.api.active, true);
 

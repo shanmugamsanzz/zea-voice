@@ -26,7 +26,7 @@ function safeToolName(tool, index) {
   return name || `tool_${index + 1}`;
 }
 
-function runtimeTools(tools = []) {
+export function runtimeTools(tools = []) {
   return tools.map((tool, index) => {
     const configuration = tool.configuration ?? {};
     const inputSchema = configuration.inputSchema ?? configuration.input_schema
@@ -51,9 +51,14 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
     breaker: dependencies.breaker,
   });
   const ownsAdapter = !dependencies.adapter;
+  const assignedTools = runtimeTools(runtimeProfile.tools);
+  const groundedResponseMode = input.context?.groundedResponseMode === true;
   const systemPrompt = buildAgentSystemPrompt(runtimeProfile.agent, {
     usageDirection: input.usageDirection,
-    context: input.context ?? {},
+    context: {
+      ...(input.context ?? {}),
+      configuredToolSchemas: assignedTools,
+    },
     knowledge: input.knowledge ?? { found: false, route: 'none' },
     maxPromptChars: env.VOICE_LLM_PROMPT_BUDGET_CHARS,
   });
@@ -67,15 +72,13 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
     )),
     { role: 'user', content: input.query },
   ];
-  const assignedTools = runtimeTools(runtimeProfile.tools);
   return {
     events: llm.stream({
       messages,
-      tools: assignedTools,
+      tools: groundedResponseMode ? [] : assignedTools,
       temperature: runtimeProfile.agent.temperature,
       maxOutputTokens: env.LLM_MAX_OUTPUT_TOKENS,
-      ...(input.context?.groundedResponseMode === true && assignedTools.length === 0
-        ? { responseFormat: { type: 'json_object' } } : {}),
+      ...(groundedResponseMode ? { responseFormat: { type: 'json_object' } } : {}),
     }),
     promptCharacters: systemPrompt.length,
     cancel: (reason = 'barge-in') => llm.cancel(reason),

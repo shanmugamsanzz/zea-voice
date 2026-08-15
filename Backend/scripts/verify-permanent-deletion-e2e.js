@@ -250,7 +250,9 @@ async function assertRuntimeCannotRetrieveDeletedContent(scenario) {
     },
   });
   assert.equal(result.found, false, `${scenario.type}: runtime retrieval must not find deleted content`);
-  assert.equal(result.content, null, `${scenario.type}: runtime content must be empty after deletion`);
+  assert.deepEqual(result.sources ?? [], [], `${scenario.type}: runtime sources must be empty after deletion`);
+  assert.deepEqual(result.actionEvidence ?? [], [], `${scenario.type}: runtime action evidence must be empty after deletion`);
+  assert.deepEqual(result.guidanceEvidence ?? [], [], `${scenario.type}: runtime guidance must be empty after deletion`);
   assert.equal(JSON.stringify(result).includes(scenario.token), false);
 }
 

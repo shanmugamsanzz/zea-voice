@@ -99,6 +99,63 @@ function matchesType(value, type) {
   return typeof value === type;
 }
 
+function schemaViolation(value, schema = {}, path = 'arguments') {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return null;
+  const allowedTypes = Array.isArray(schema.type) ? schema.type : (schema.type ? [schema.type] : []);
+  if (allowedTypes.length && !allowedTypes.some((type) => matchesType(value, type))) {
+    return `${path} does not match the configured type`;
+  }
+  if (schema.const !== undefined && value !== schema.const) return `${path} does not match the configured value`;
+  if (Array.isArray(schema.enum) && !schema.enum.some((item) => Object.is(item, value))) {
+    return `${path} is not an allowed value`;
+  }
+  if (typeof value === 'string') {
+    if (Number.isInteger(schema.minLength) && value.length < schema.minLength) return `${path} is too short`;
+    if (Number.isInteger(schema.maxLength) && value.length > schema.maxLength) return `${path} is too long`;
+    if (schema.pattern) {
+      try { if (!new RegExp(schema.pattern, 'u').test(value)) return `${path} has an invalid format`; }
+      catch { return `${path} has an invalid configured pattern`; }
+    }
+  }
+  if (typeof value === 'number') {
+    if (Number.isFinite(schema.minimum) && value < schema.minimum) return `${path} is below the minimum`;
+    if (Number.isFinite(schema.maximum) && value > schema.maximum) return `${path} is above the maximum`;
+  }
+  if (Array.isArray(value)) {
+    if (Number.isInteger(schema.minItems) && value.length < schema.minItems) return `${path} has too few items`;
+    if (Number.isInteger(schema.maxItems) && value.length > schema.maxItems) return `${path} has too many items`;
+    for (let index = 0; index < value.length; index += 1) {
+      const violation = schemaViolation(value[index], schema.items, `${path}[${index}]`);
+      if (violation) return violation;
+    }
+  }
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const required = Array.isArray(schema.required) ? schema.required : [];
+    const missing = required.filter((key) => !Object.hasOwn(value, key));
+    if (missing.length) return `${path} is missing: ${missing.join(', ')}`;
+    if (schema.additionalProperties === false) {
+      const extras = Object.keys(value).filter((key) => !Object.hasOwn(schema.properties ?? {}, key));
+      if (extras.length) return `${path} contains fields that are not allowed: ${extras.join(', ')}`;
+    }
+    for (const [key, propertyValue] of Object.entries(value)) {
+      if (!Object.hasOwn(schema.properties ?? {}, key)) continue;
+      const violation = schemaViolation(propertyValue, schema.properties[key], `${path}.${key}`);
+      if (violation) return violation;
+    }
+  }
+  for (const child of schema.allOf ?? []) {
+    const violation = schemaViolation(value, child, path);
+    if (violation) return violation;
+  }
+  if (Array.isArray(schema.anyOf) && schema.anyOf.length
+    && !schema.anyOf.some((child) => !schemaViolation(value, child, path))) return `${path} matches no allowed schema`;
+  return null;
+}
+
+export function toolArgumentsMatchSchema(value, schema) {
+  return schemaViolation(value, schema) === null;
+}
+
 export function validateToolArguments(argumentsValue, schema) {
   const value = argumentsValue ?? {};
   let serialized;
@@ -108,24 +165,7 @@ export function validateToolArguments(argumentsValue, schema) {
   if (Buffer.byteLength(serialized) > 32768) {
     throw new AppError(400, 'Tool arguments exceed the 32 KB limit', 'VOICE_TOOL_ARGUMENTS_TOO_LARGE');
   }
-  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return value;
-  if (schema.type && !matchesType(value, schema.type)) {
-    throw new AppError(400, 'Tool arguments do not match the configured input type', 'VOICE_TOOL_ARGUMENTS_INVALID');
-  }
-  if (schema.type === 'object' || schema.properties) {
-    if (!matchesType(value, 'object')) throw new AppError(400, 'Tool arguments must be an object', 'VOICE_TOOL_ARGUMENTS_INVALID');
-    const required = Array.isArray(schema.required) ? schema.required : [];
-    const missing = required.filter((key) => !Object.hasOwn(value, key));
-    if (missing.length) throw new AppError(400, `Tool arguments are missing: ${missing.join(', ')}`, 'VOICE_TOOL_ARGUMENTS_INVALID');
-    for (const [key, propertySchema] of Object.entries(schema.properties ?? {})) {
-      if (Object.hasOwn(value, key) && propertySchema?.type && !matchesType(value[key], propertySchema.type)) {
-        throw new AppError(400, `Tool argument has an invalid type: ${key}`, 'VOICE_TOOL_ARGUMENTS_INVALID');
-      }
-    }
-    if (schema.additionalProperties === false) {
-      const extras = Object.keys(value).filter((key) => !Object.hasOwn(schema.properties ?? {}, key));
-      if (extras.length) throw new AppError(400, `Tool arguments are not allowed: ${extras.join(', ')}`, 'VOICE_TOOL_ARGUMENTS_INVALID');
-    }
-  }
+  const violation = schemaViolation(value, schema);
+  if (violation) throw new AppError(400, `Tool arguments are invalid: ${violation}`, 'VOICE_TOOL_ARGUMENTS_INVALID');
   return value;
 }

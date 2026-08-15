@@ -2,6 +2,10 @@ import { withPlatformAdminContext } from '../../infrastructure/database-context.
 import { AppError } from '../../middleware/errors.js';
 import { decryptCredential } from '../../security/credential-crypto.js';
 import { resolveInteractionConfiguration } from '../interaction/interaction-config.js';
+import { resolveLiveMemoryConfiguration } from '../interaction/live-memory-config.js';
+import { resolveInterruptionConfiguration } from '../interruption/interruption-config.js';
+import { resolvePostCallClosingConfiguration } from '../integrations/postcall-closing-config.js';
+import { resolvePostCallEndTriggerConfiguration } from '../integrations/postcall-end-trigger-config.js';
 import { normalizeTtsUsageLimitSettings } from '../tts-usage-limit-config.js';
 
 const defaultContextRunner = (operation) => withPlatformAdminContext(null, operation);
@@ -66,6 +70,90 @@ function tools(rows, decrypt) {
     configuration: row.configuration ?? {},
     secretConfiguration: parseToolSecret(row, decrypt),
   }));
+}
+
+function configuredToolContract(runtimeTools = []) {
+  return runtimeTools.map((tool) => ({
+    id: tool.id,
+    name: tool.name,
+    type: tool.type,
+    description: tool.description ?? null,
+    inputSchema: tool.configuration?.inputSchema ?? {
+      type: 'object', properties: {}, required: [], additionalProperties: true,
+    },
+  }));
+}
+
+/**
+ * Builds the single, tenant-scoped runtime contract from values already owned
+ * by Agent Creation. It deliberately creates no defaults for an industry,
+ * product, workflow, field, or caller phrase. Existing top-level runtime
+ * fields remain compatibility views until all consumers use `configuration`.
+ */
+export function buildCanonicalRuntimeConfiguration({
+  row,
+  resolvedAgent,
+  settings = {},
+  knowledgeBases = [],
+  runtimeTools = [],
+  sttRuntimeSettings = {},
+  ttsRuntimeSettings = {},
+}) {
+  const interaction = resolveInteractionConfiguration(settings);
+  const memory = resolveLiveMemoryConfiguration(settings);
+  const interruption = resolveInterruptionConfiguration(settings, Number(row.interruption_sensitivity));
+  const closing = resolvePostCallClosingConfiguration(settings);
+  const endTriggers = resolvePostCallEndTriggerConfiguration(settings);
+  return Object.freeze({
+    schemaVersion: 1,
+    scope: Object.freeze({
+      tenantId: row.tenant_id,
+      workspaceId: row.workspace_id,
+      agentId: row.id,
+      usageDirection: row.usage_direction,
+      callDirection: resolvedAgent.callDirection ?? null,
+    }),
+    prompt: Object.freeze({
+      system: row.prompt,
+      welcome: row.welcome_message ?? null,
+      temperature: Number(row.temperature),
+    }),
+    knowledge: Object.freeze({
+      assignedPublishedRevisions: Object.freeze(knowledgeBases.map((knowledgeBase) => Object.freeze({
+        knowledgeBaseId: knowledgeBase.id,
+        usageDirection: knowledgeBase.usageDirection,
+        priority: knowledgeBase.priority,
+        publicationRevision: knowledgeBase.publicationRevision,
+        semanticReady: knowledgeBase.semanticReady === true,
+      }))),
+    }),
+    memory: Object.freeze({
+      policy: interaction.cachePolicy,
+      contextId: interaction.contextId,
+      mode: memory.mode,
+      recentTurns: memory.recentTurns,
+      fields: memory.fields,
+    }),
+    tools: Object.freeze(configuredToolContract(runtimeTools).map((tool) => Object.freeze(tool))),
+    speech: Object.freeze({
+      language: row.language,
+      voiceId: row.voice_id,
+      sttModelId: row.stt_model_id,
+      llmModelId: row.llm_model_id,
+      ttsModelId: row.tts_model_id,
+      listener: Object.freeze({ ...sttRuntimeSettings }),
+      speaker: Object.freeze({ ...ttsRuntimeSettings }),
+    }),
+    interruption,
+    closing: Object.freeze({
+      messageType: closing.messageType,
+      prompt: closing.prompt,
+      staticMessage: closing.staticMessage,
+      endTriggerPhrases: endTriggers.phrases,
+      uninterruptibleReasons: Object.freeze([...(settings.postCallUninterruptibleReasons ?? [])]),
+      includePhoneNumbers: settings.postCallIncludePhoneNumbers === true,
+    }),
+  });
 }
 
 function integrationConfiguration(settings) {
@@ -199,8 +287,15 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
             JOIN knowledge_bases kb
               ON kb.tenant_id=akb.tenant_id AND kb.id=akb.knowledge_base_id
            WHERE akb.tenant_id=a.tenant_id AND akb.agent_id=a.id
-             AND kb.status IN ('published', 'partially_failed')
+             AND kb.status = 'published'
              AND kb.publication_revision>0 AND kb.deleted_at IS NULL
+             AND EXISTS (
+               SELECT 1 FROM knowledge_processing_jobs active_index
+                WHERE active_index.tenant_id=kb.tenant_id
+                  AND active_index.knowledge_base_id=kb.id
+                  AND active_index.job_type='index' AND active_index.status='completed'
+                  AND active_index.metadata->>'publicationRevision'=kb.publication_revision::text
+             )
              AND ($4::agent_usage_direction IS NULL
                OR akb.usage_direction='both' OR akb.usage_direction=$4::agent_usage_direction)
              AND ($4::agent_usage_direction IS NULL
@@ -229,8 +324,20 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
     // TTS behavior comes from Super Admin provider/model parameters. The
     // agent only contributes the voice selected by its configured model.
     const ttsRuntimeSettings = { voiceId: row.voice_id };
+    const runtimeTools = tools(row.tools, decrypt);
+    const knowledgeBases = row.knowledge_bases ?? [];
+    const configuration = buildCanonicalRuntimeConfiguration({
+      row,
+      resolvedAgent,
+      settings,
+      knowledgeBases,
+      runtimeTools,
+      sttRuntimeSettings,
+      ttsRuntimeSettings,
+    });
     return {
       schemaVersion: 1,
+      configuration,
       agent: {
         id: row.id,
         tenantId: row.tenant_id,
@@ -273,10 +380,10 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
         llm: provider(row, 'llm', decrypt),
         tts: provider(row, 'tts', decrypt, ttsRuntimeSettings),
       },
-      knowledgeBases: row.knowledge_bases ?? [],
+      knowledgeBases,
       pronunciation: { groups: row.pronunciation_groups ?? [] },
       ambience: row.ambience ?? null,
-      tools: tools(row.tools, decrypt),
+      tools: runtimeTools,
       integrations: integrationConfiguration(settings),
     };
   });

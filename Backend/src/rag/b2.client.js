@@ -1,7 +1,7 @@
 import { env } from '../config/env.js';
 import { measureExternalProvider } from '../performance/performance-context.js';
 import {
-  DeleteObjectCommand, GetObjectCommand, ListObjectVersionsCommand, PutObjectCommand, S3Client,
+  DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, ListObjectVersionsCommand, PutObjectCommand, S3Client,
 } from '@aws-sdk/client-s3';
 
 let storageClient;
@@ -136,6 +136,30 @@ export async function getB2Object({ key, versionId = undefined, maxBytes = undef
       contentType: result.ContentType ?? null,
       metadata: result.Metadata ?? {},
       body: Buffer.from(bytes),
+    };
+  });
+}
+
+export async function verifyB2Object({ key, versionId = undefined, expectedSizeBytes = undefined }) {
+  if (typeof key !== 'string' || !key.trim()) throw new TypeError('A B2 object key is required');
+  return measureExternalProvider('backblaze-b2', 'head-object', async () => {
+    const result = await getStorageClient().send(
+      new HeadObjectCommand({ Bucket: env.B2_BUCKET, Key: key, VersionId: versionId }),
+      { abortSignal: AbortSignal.timeout(env.PROVIDER_REQUEST_TIMEOUT_MS) },
+    );
+    const sizeBytes = Number(result.ContentLength);
+    if (!Number.isInteger(sizeBytes) || sizeBytes < 0) {
+      throw new Error(`Backblaze B2 returned invalid metadata for ${key}`);
+    }
+    if (expectedSizeBytes !== undefined && sizeBytes !== Number(expectedSizeBytes)) {
+      throw new Error(`Backblaze B2 size verification failed for ${key}`);
+    }
+    return {
+      bucket: env.B2_BUCKET,
+      key,
+      versionId: result.VersionId ?? versionId ?? null,
+      sizeBytes,
+      verified: true,
     };
   });
 }

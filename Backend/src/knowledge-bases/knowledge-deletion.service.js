@@ -401,12 +401,13 @@ export async function requestDeleteKnowledgeDocument(
       [auth.tenantId, knowledgeBaseId, documentId, auth.workspaceId],
     );
     if (!document.rowCount) throw new AppError(404, 'Knowledge document was not found', 'KNOWLEDGE_DOCUMENT_NOT_FOUND');
-    const published = ['published', 'partially_failed'].includes(document.rows[0].knowledge_base_status);
+    const published = document.rows[0].knowledge_base_status === 'published';
     let reindexRevision = null;
     if (published) {
       reindexRevision = document.rows[0].publication_revision + 1;
       await client.query(
-        `UPDATE knowledge_bases SET publication_revision=$3, status='published'
+        `UPDATE knowledge_bases SET pending_publication_revision=$3, status='processing',
+            published_at=NULL, published_by=NULL
           WHERE tenant_id=$1 AND id=$2`,
         [auth.tenantId, knowledgeBaseId, reindexRevision],
       );
@@ -415,6 +416,13 @@ export async function requestDeleteKnowledgeDocument(
             error_code='KNOWLEDGE_CONTENT_CHANGED', error_message='Document deleted during indexing'
           WHERE tenant_id=$1 AND knowledge_base_id=$2 AND job_type='index'
             AND status IN ('queued','running')`,
+        [auth.tenantId, knowledgeBaseId],
+      );
+    } else {
+      await client.query(
+        `UPDATE knowledge_bases SET status='processing', pending_publication_revision=NULL,
+            published_at=NULL, published_by=NULL
+          WHERE tenant_id=$1 AND id=$2`,
         [auth.tenantId, knowledgeBaseId],
       );
     }
