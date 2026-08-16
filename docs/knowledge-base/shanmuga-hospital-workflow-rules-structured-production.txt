@@ -11,30 +11,6 @@ RESPONSE_MODE: exact
 PRIORITY: 100
 RESPONSE: இது urgent medical situationஆ இருக்கலாம். உடனே அருகிலுள்ள emergency medical help எடுத்துக்கோங்க.
 
-RULE: introduction_positive_package_overview
-SITUATION: The caller positively accepts the introduction offer to hear package information, using any natural Tamil, Tanglish or English acknowledgement.
-EXAMPLE: ஆ explain பண்ணலாம் | சொல்லுங்க | சரிங்க சொல்லுங்க | okay explain | yes please | package explain பண்ணுங்க
-MATCH_MODE: any_phrase
-RESPONSE_MODE: exact
-PRIORITY: 99
-RESPONSE: எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Paediatric Health Screening, Onco Care Packages, Organ-Specific Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?
-
-RULE: complete_package_overview
-SITUATION: The caller asks what packages, checkups, categories or options are available, asks for the package overview, or asks what other packages are available.
-EXAMPLE: உங்ககிட்ட என்ன packages இருக்கு | என்னென்ன package இருக்கு | வேற என்ன packages இருக்கு | இன்னும் என்ன options இருக்கு | first package list சொல்லுங்க | what packages do you have | what else is available
-MATCH_MODE: any_phrase
-RESPONSE_MODE: exact
-PRIORITY: 98
-RESPONSE: எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Paediatric Health Screening, Onco Care Packages, Organ-Specific Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?
-
-RULE: health_checkup_preparation
-SITUATION: The caller asks about the approved general fasting requirement or preferred health check-up time.
-EXAMPLE: fasting இருக்கணுமா | எத்தனை மணி நேரம் fasting | சாப்பிடாம வரணுமா | test timing என்ன | எத்தனை மணிக்கு வரணும் | preparation என்ன
-MATCH_MODE: any_phrase
-RESPONSE_MODE: exact
-PRIORITY: 92
-RESPONSE: Health check-upக்கு முன்னாடி 8 மணி நேரம் fasting இருக்கணும். Test எடுக்க morning 8 மணியிலிருந்து 11 மணி வரை approved timing.
-
 RULE: caller_requests_end
 SITUATION: The caller clearly asks to stop or end the conversation.
 EXAMPLE: call முடிச்சிடுங்க | பேச வேண்டாம் | போதும் | bye | goodbye | end the call | hang up
@@ -180,19 +156,3 @@ RESPONSE_MODE: instruction
 PRIORITY: 70
 ACTION: transfer_to_telecaller
 RESPONSE: Do not guess. Explain briefly that the information must be verified and use the configured Telecaller transfer action.
-
-RULE: hospital_location
-SITUATION: The caller asks where Shanmuga Hospital is located or requests its address.
-EXAMPLE: hospital எங்க இருக்கு | location சொல்லுங்க | address என்ன | where is the hospital | எப்படி வரணும்
-MATCH_MODE: any_phrase
-RESPONSE_MODE: exact
-PRIORITY: 84
-RESPONSE: Shanmuga Hospital Salemல Sarada College Road, Hasthampatti bridgeக்கு கீழே left sideல இருக்கு.
-
-RULE: ai_identity
-SITUATION: The caller directly asks whether the speaker is an AI, robot or human.
-EXAMPLE: நீங்க AIயா | robot ஆ | human ஆ | are you an AI | are you a real person
-MATCH_MODE: any_phrase
-RESPONSE_MODE: exact
-PRIORITY: 82
-RESPONSE: ஆமாங்க, நான் Shanmuga Hospital AI agent கார்த்திகா பேசுறேன்.

@@ -52,12 +52,13 @@ import {
 } from './interaction/grounded-llm-response.js';
 import {
   createGroundedDecisionStreamDecoder,
-  validateGroundedLlmDecision,
 } from './interaction/grounded-llm-decision.js';
+import { applyUnifiedGroundedTurn } from './interaction/unified-grounded-turn.js';
+import { evaluateFirstAudioSlo, percentile } from './interaction/voice-latency-slo.js';
 import {
-  composeConfiguredTurnResponse,
-  resolveNextConfiguredQuestion,
-} from './interaction/next-question-policy.js';
+  hydrateSelectedEvidence,
+  validateGroundedClaims,
+} from './interaction/grounded-claim-validator.js';
 import { sttEventPolicy } from './interaction/stt-event-policy.js';
 import { LiveMemoryMaintenanceQueue } from './interaction/live-memory-maintenance.js';
 import { resolveCallbackConfiguration } from './interaction/callback-config.js';
@@ -231,6 +232,43 @@ function withTenantEvidence(knowledge, tenantEvidence) {
     } : null),
     matches: [...(knowledge?.matches ?? []), ...tenantMatches],
     tenantEvidence,
+  };
+}
+
+function withVerifiedToolEvidence(knowledge, results, runtimeProfile) {
+  const verified = (results ?? []).filter((result) => result?.verified === true).map((result, index) => {
+    const recordId = `tool-result-${String(result.id ?? index + 1)}`;
+    const outcome = result.success === true ? 'success' : 'failure';
+    const payload = result.success === true ? result.output : result.error;
+    let renderedPayload = '';
+    try { renderedPayload = JSON.stringify(payload ?? null); } catch { renderedPayload = 'null'; }
+    return {
+      id: `runtime:${recordId}`,
+      recordId,
+      recordType: 'TOOL_RESULT',
+      tenantId: runtimeProfile.agent.tenantId,
+      agentId: runtimeProfile.agent.id,
+      callerFacing: true,
+      content: `Verified tool ${String(result.name ?? '')} result: ${outcome}. Result data: ${renderedPayload.slice(0, 4_000)}`,
+      authoritativeData: {
+        verified: true,
+        success: result.success === true,
+        name: result.name,
+        output: result.success === true ? result.output : null,
+        error: result.success === true ? null : result.error,
+      },
+    };
+  });
+  if (!verified.length) return knowledge;
+  const existing = knowledge?.tenantEvidence ?? {};
+  return {
+    ...knowledge,
+    found: true,
+    tenantEvidence: {
+      ...existing,
+      found: true,
+      sources: [...verified, ...(existing.sources ?? [])].slice(0, 5),
+    },
   };
 }
 
@@ -463,21 +501,36 @@ export class RealtimeConversationOrchestrator {
     this.contextStore = this.dependencies.contextStore ?? conversationContextCache;
     this.memoryStore = this.dependencies.memoryStore ?? conversationMemoryRepository;
     await this.#loadConversationMemory();
-    this.liveCallMemory = (this.dependencies.openLiveCallMemory ?? openLiveCallMemory)({
+    this.unifiedGroundedDecisionEnabled = env.VOICE_UNIFIED_GROUNDED_DECISION_ENABLED === true;
+    const memoryIdentity = {
       tenantId: this.runtimeProfile.agent.tenantId ?? this.call.tenantId,
       workspaceId: this.runtimeProfile.agent.workspaceId ?? this.call.workspaceId,
       agentId: this.runtimeProfile.agent.id ?? this.call.agentId,
       callId: this.call.id,
-    }, {
+    };
+    const memorySettings = {
       ...this.runtimeProfile.agent.settings,
       conversationLanguage: languageCode(this.runtimeProfile.agent.language),
-    }, Date.now(), this.previousConversationMemory?.lastCall?.id === this.call.id
-      ? this.previousConversationMemory.callFrame : {});
+    };
+    const restoredMemory = this.previousConversationMemory?.lastCall?.id === this.call.id
+      ? this.previousConversationMemory.callFrame : {};
+    this.liveCallMemory = this.unifiedGroundedDecisionEnabled
+      ? (this.dependencies.openGenericConversationState ?? openGenericConversationState)(
+        memoryIdentity, memorySettings, Date.now(), restoredMemory,
+      )
+      : (this.dependencies.openLiveCallMemory ?? openLiveCallMemory)(
+        memoryIdentity, memorySettings, Date.now(), restoredMemory,
+      );
     this.liveMemoryMaintenance = new LiveMemoryMaintenanceQueue({ log: this.log, callId: this.call.id });
+    const memorySnapshot = this.liveCallMemory.snapshot();
+    const genericMemoryConfiguration = this.liveCallMemory.configuration?.();
     this.runtimeMetrics.liveCallMemory = {
-      mode: this.liveCallMemory.snapshot().mode,
-      recentTurns: this.liveCallMemory.snapshot().recentTurns,
-      configuredFields: this.liveCallMemory.snapshot().fields.length,
+      mode: genericMemoryConfiguration?.mode ?? memorySnapshot.mode ?? 'generic_current_call',
+      recentTurns: genericMemoryConfiguration?.recentTurns
+        ?? (Array.isArray(memorySnapshot.recentTurns)
+          ? memorySnapshot.recentTurns.length : memorySnapshot.recentTurns),
+      configuredFields: this.liveCallMemory.fieldSchemas?.().length
+        ?? memorySnapshot.fields?.length ?? 0,
       storage: 'process_memory',
       timings: { totalMs: 0, maximumMs: 0, samples: [] },
       background: this.liveMemoryMaintenance.snapshot(),
@@ -777,13 +830,14 @@ export class RealtimeConversationOrchestrator {
       const liveMemory = this.liveCallMemory?.snapshot();
       const state = buildConversationMemoryState({
         previous: this.previousConversationMemory,
-        history: liveMemory?.messages ?? this.controller.history,
+        history: liveMemory?.recentTurns ?? liveMemory?.messages ?? this.controller.history,
         call: this.call,
         outcome,
         reason,
         callback: this.currentCallbackRequest,
-        collectedData: liveMemory?.collectedData,
-        completedQuestions: liveMemory?.completedQuestions,
+        collectedData: liveMemory?.collectedInformation ?? liveMemory?.collectedData,
+        completedQuestions: liveMemory?.completedQuestions
+          ?? Object.keys(liveMemory?.collectedInformation ?? {}),
         pendingQuestions: liveMemory?.pendingQuestion ? [liveMemory.pendingQuestion] : [],
         runningSummary: liveMemory?.runningSummary,
         callFrame: liveMemory,
@@ -831,13 +885,14 @@ export class RealtimeConversationOrchestrator {
       const liveMemory = this.liveCallMemory?.snapshot();
       const state = buildConversationMemoryState({
         previous: this.previousConversationMemory,
-        history: liveMemory?.messages ?? this.controller.history,
+        history: liveMemory?.recentTurns ?? liveMemory?.messages ?? this.controller.history,
         call: this.call,
         outcome: 'connected',
         reason,
         callback: this.currentCallbackRequest,
-        collectedData: liveMemory?.collectedData,
-        completedQuestions: liveMemory?.completedQuestions,
+        collectedData: liveMemory?.collectedInformation ?? liveMemory?.collectedData,
+        completedQuestions: liveMemory?.completedQuestions
+          ?? Object.keys(liveMemory?.collectedInformation ?? {}),
         pendingQuestions: liveMemory?.pendingQuestion ? [liveMemory.pendingQuestion] : [],
         runningSummary: liveMemory?.runningSummary,
         callFrame: liveMemory,
@@ -1384,7 +1439,7 @@ export class RealtimeConversationOrchestrator {
       return;
     }
     const liveMemory = this.liveCallMemory?.snapshot();
-    const questionToResume = liveMemory?.pendingQuestionText;
+    const questionToResume = liveMemory?.pendingQuestion?.text ?? liveMemory?.pendingQuestionText;
     const acknowledgement = languageSwitchAcknowledgement(language);
     const response = this.#fitTtsMessage([acknowledgement, questionToResume].filter(Boolean).join(' '));
     await this.controller.receiveFinalTranscript(customerText);
@@ -1502,7 +1557,8 @@ export class RealtimeConversationOrchestrator {
         language: memoryState?.language ?? languageCode(this.runtimeProfile.agent.language),
         currentTopic: memoryState?.currentTopic ?? undefined,
         knownEntities: memoryState?.knownEntities ?? [],
-        pendingQuestion: memoryState?.pendingQuestionText ?? memoryState?.pendingQuestion ?? undefined,
+        pendingQuestion: memoryState?.pendingQuestion?.text
+          ?? memoryState?.pendingQuestionText ?? memoryState?.pendingQuestion ?? undefined,
         collectedInformation: memoryState?.collectedInformation ?? {},
         lastAnswer: memoryState?.lastAnswer ?? undefined,
         abortSignal,
@@ -1510,13 +1566,15 @@ export class RealtimeConversationOrchestrator {
       const loadMap = this.dependencies.loadPublishedKnowledgeMap ?? loadPublishedKnowledgeMap;
       const retrieveEvidence = this.dependencies.retrieveTenantEvidence ?? retrieveTenantEvidence;
       const [publishedMap, tenantEvidence] = await Promise.all([
-        settleWithin(
-          loadMap(auth, genericInput),
-          env.RAG_RUNTIME_CHANNEL_DEADLINE_MS,
-          { found: false, timedOut: true, maps: [], records: [] },
-        ).catch((error) => ({
-          found: false, error: error.code ?? 'KNOWLEDGE_MAP_UNAVAILABLE', maps: [], records: [],
-        })),
+        this.unifiedGroundedDecisionEnabled
+          ? Promise.resolve({ found: false, skipped: true, maps: [], records: [] })
+          : settleWithin(
+            loadMap(auth, genericInput),
+            env.RAG_RUNTIME_CHANNEL_DEADLINE_MS,
+            { found: false, timedOut: true, maps: [], records: [] },
+          ).catch((error) => ({
+            found: false, error: error.code ?? 'KNOWLEDGE_MAP_UNAVAILABLE', maps: [], records: [],
+          })),
         settleWithin(
           retrieveEvidence(auth, genericInput),
           env.RAG_RUNTIME_CHANNEL_DEADLINE_MS
@@ -1837,8 +1895,8 @@ export class RealtimeConversationOrchestrator {
     const currentCompletion = publicTaskCompletionState(this.taskCompletionState);
     const collectedData = {
       ...(this.previousConversationMemory?.collectedData ?? {}),
-      ...(currentCompletion.collectedData ?? {}),
-      ...(liveMemory?.collectedData ?? {}),
+      ...(this.unifiedGroundedDecisionEnabled ? {} : (currentCompletion.collectedData ?? {})),
+      ...(liveMemory?.collectedInformation ?? liveMemory?.collectedData ?? {}),
     };
     const configuredFields = this.liveCallMemory?.fieldSchemas?.() ?? liveMemory?.fields ?? [];
     const missingFields = configuredFields
@@ -1850,14 +1908,19 @@ export class RealtimeConversationOrchestrator {
       && message.role === 'user'
       && String(message.content).trim() === String(query).trim()
     ));
-    const compactLiveMemory = compactLiveCallMemoryContext({
-      snapshot: liveMemory,
-      collectedData,
-      missingFields,
-    });
-    const groundingEnvelope = buildGroundingEnvelope(knowledge);
+    const compactLiveMemory = this.unifiedGroundedDecisionEnabled
+      ? compactGenericConversationState({
+        ...liveMemory,
+        collectedInformation: collectedData,
+      }, 1_600)
+      : compactLiveCallMemoryContext({ snapshot: liveMemory, collectedData, missingFields });
+    const groundingEnvelope = buildGroundingEnvelope(knowledge,
+      this.unifiedGroundedDecisionEnabled
+        ? { includePublishedMap: false, maximumSources: 5 }
+        : {});
     const groundingRuntime = {
-      pendingQuestion: liveMemory?.pendingQuestion ?? liveMemory?.pendingQuestionText,
+      pendingQuestion: liveMemory?.pendingQuestion?.text
+        ?? liveMemory?.pendingQuestion ?? liveMemory?.pendingQuestionText,
       currentTopic: liveMemory?.currentTopic,
       activeActions: liveMemory?.activeActions ?? [],
       activeToolRequest: liveMemory?.activeToolRequest ?? null,
@@ -1866,7 +1929,7 @@ export class RealtimeConversationOrchestrator {
       collectedInformation: collectedData,
     };
     const configuredSpeech = [
-      liveMemory?.pendingQuestion,
+      liveMemory?.pendingQuestion?.text ?? liveMemory?.pendingQuestion,
       liveMemory?.pendingQuestionText,
       liveMemory?.resumeQuestionAfterAnswer,
     ];
@@ -1880,7 +1943,9 @@ export class RealtimeConversationOrchestrator {
       ].slice(-env.LLM_MAX_HISTORY_MESSAGES),
       historyLimit: Math.min(
         env.LLM_MAX_HISTORY_MESSAGES,
-        Math.max(2, Number(liveMemory?.recentTurns ?? 5) * 2),
+        Math.max(2, Number(Array.isArray(liveMemory?.recentTurns)
+          ? Math.ceil(liveMemory.recentTurns.length / 2)
+          : (liveMemory?.recentTurns ?? 5)) * 2),
       ),
       knowledge,
       context: {
@@ -1896,7 +1961,8 @@ export class RealtimeConversationOrchestrator {
           collectedData,
           completedQuestions: [
             ...(this.previousConversationMemory?.completedQuestions ?? []),
-            ...(liveMemory?.completedQuestions ?? []),
+            ...(liveMemory?.completedQuestions
+              ?? Object.keys(liveMemory?.collectedInformation ?? {})),
           ],
           pendingQuestions: this.previousConversationMemory?.pendingQuestions,
           callback: this.previousConversationMemory?.callback,
@@ -1906,6 +1972,7 @@ export class RealtimeConversationOrchestrator {
         preCall: this.preCallContext,
         ...context,
         groundedResponseMode,
+        compactGrounding: this.unifiedGroundedDecisionEnabled,
         ttsResponseCharacterLimit: (() => {
           const limits = [
           Number(this.runtimeProfile.limits?.ttsMaxCharactersPerResponse ?? 0),
@@ -1919,6 +1986,11 @@ export class RealtimeConversationOrchestrator {
       stage: 'llm.prompt_prepared', callId: this.call.id,
       promptCharacters: session.promptCharacters,
       configuredBudgetCharacters: env.VOICE_LLM_PROMPT_BUDGET_CHARS,
+      effectiveBudgetCharacters: this.unifiedGroundedDecisionEnabled
+        ? Math.min(env.VOICE_LLM_PROMPT_BUDGET_CHARS, 16_000)
+        : env.VOICE_LLM_PROMPT_BUDGET_CHARS,
+      evidenceRecords: groundingEnvelope.sources.length,
+      publishedMapIncluded: !this.unifiedGroundedDecisionEnabled,
       historyMessages: Math.min((history ?? []).length, env.LLM_MAX_HISTORY_MESSAGES),
     }, 'Voice LLM prompt prepared within the configured runtime budget');
     this.activeLlm = session;
@@ -1928,13 +2000,19 @@ export class RealtimeConversationOrchestrator {
     const sentenceBuffer = createStreamingSentenceBuffer();
     const groundedSentenceBuffer = createStreamingSentenceBuffer();
     const unifiedGroundedDecision = groundedResponseMode
-      && env.VOICE_UNIFIED_GROUNDED_DECISION_ENABLED;
+      && this.unifiedGroundedDecisionEnabled;
     const groundedStreamDecoder = groundedResponseMode
       ? (unifiedGroundedDecision
         ? createGroundedDecisionStreamDecoder(groundingEnvelope)
         : createGroundedJsonStreamDecoder(groundingEnvelope, groundingRuntime))
       : null;
     const streamedGroundedSentences = [];
+    const tenantEvidence = knowledge.tenantEvidence ?? {};
+    const authoritativeEvidence = [
+      ...(tenantEvidence.sources ?? []),
+      ...(tenantEvidence.actionEvidence ?? []),
+      ...(tenantEvidence.guidanceEvidence ?? []),
+    ];
     let firstTokenRecorded = false;
     this.runtimeMetrics.llmStreaming.requests += 1;
     try {
@@ -1967,10 +2045,29 @@ export class RealtimeConversationOrchestrator {
                 rawSentence, { resumePending: false },
               ) || rawSentence;
               const validationStartedAt = performance.now();
-              const validation = validateGroundedSpokenSentences(
-                preparedSentence, groundingEnvelope, decoded.decision,
-                { configuredSpeech },
-              );
+              const configured = configuredSpeech.some((candidate) => (
+                String(candidate).normalize('NFKC').trim()
+                === String(preparedSentence).normalize('NFKC').trim()
+              ));
+              const unifiedClaim = unifiedGroundedDecision && !configured
+                ? validateGroundedClaims(
+                  preparedSentence,
+                  hydrateSelectedEvidence(decoded.decision, groundingEnvelope, authoritativeEvidence),
+                )
+                : null;
+              const validation = unifiedGroundedDecision
+                ? {
+                  valid: configured || unifiedClaim?.valid === true,
+                  approved: configured || unifiedClaim?.valid === true ? [preparedSentence] : [],
+                  rejected: configured || unifiedClaim?.valid === true ? [] : [{
+                    sentence: preparedSentence,
+                    reason: unifiedClaim?.reason ?? 'selected_evidence_missing',
+                  }],
+                }
+                : validateGroundedSpokenSentences(
+                  preparedSentence, groundingEnvelope, decoded.decision,
+                  { configuredSpeech },
+                );
               const turnLatency = this.runtimeMetrics.turnLatency
                 .find((entry) => entry.epoch === streaming.epoch);
               if (turnLatency) turnLatency.validationMs += Math.max(0, performance.now() - validationStartedAt);
@@ -2020,8 +2117,35 @@ export class RealtimeConversationOrchestrator {
           sources: [llmMessageSource(this.runtimeProfile.providers.llm, completion)],
         };
       }
+      const unifiedTurn = unifiedGroundedDecision
+        ? applyUnifiedGroundedTurn({
+          rawDecision: text,
+          groundingEnvelope,
+          memory: this.liveCallMemory,
+          turnToken: streaming.epoch,
+          fieldSchemas: configuredFields,
+          tools: groundingRuntime.toolSchemas,
+          evidence: authoritativeEvidence,
+          evidenceScope: {
+            tenantId: this.runtimeProfile.agent.tenantId,
+            agentId: this.runtimeProfile.agent.id,
+            publicationRevisions: tenantEvidence.publicationRevisions ?? [],
+          },
+          safetyPolicies: this.runtimeProfile.agent.settings?.safetyPolicies ?? [],
+        })
+        : null;
       const grounded = unifiedGroundedDecision
-        ? validateGroundedLlmDecision(text, groundingEnvelope, groundingRuntime)
+        ? (unifiedTurn.valid
+          ? {
+            ...unifiedTurn,
+            valid: true,
+            spokenAnswer: unifiedTurn.answer,
+            evidenceSourceIds: unifiedTurn.evidenceIds,
+            selectedEntityKeys: unifiedTurn.stateUpdate?.knownEntityKeys ?? [],
+            currentTopic: unifiedTurn.stateUpdate?.currentTopic ?? null,
+            pendingQuestionRelevant: unifiedTurn.stateUpdate?.pendingQuestionRelevant ?? true,
+          }
+          : unifiedTurn)
         : validateGroundedLlmResponse(text, groundingEnvelope, groundingRuntime);
       const groundingMetric = {
         valid: grounded.valid, reason: grounded.reason ?? null,
@@ -2046,7 +2170,9 @@ export class RealtimeConversationOrchestrator {
         if (streaming.isCurrent && !streaming.isCurrent()) {
           return { cancelled: true, text: '', toolCalls: [], sources: [] };
         }
-        this.liveCallMemory?.applyGroundedDecision?.(grounded, { turnToken: streaming.epoch });
+        if (!unifiedGroundedDecision) {
+          this.liveCallMemory?.applyGroundedDecision?.(grounded, { turnToken: streaming.epoch });
+        }
         if (grounded.decision === 'action' && grounded.toolRequest) {
           toolCalls = [{
             id: `decision-${streaming.epoch ?? Date.now()}`,
@@ -2063,7 +2189,9 @@ export class RealtimeConversationOrchestrator {
           answer = streamedGroundedSentences.join(' ');
         } else {
           this.runtimeMetrics.grounding.fallbacks += 1;
-          const documentFallback = approvedDocumentFallback(knowledge, this.runtimeProfile);
+          const documentFallback = unifiedGroundedDecision
+            ? { text: callerFacingFallback(this.runtimeProfile), source: null }
+            : approvedDocumentFallback(knowledge, this.runtimeProfile);
           answer = documentFallback?.text ?? callerFacingFallback(this.runtimeProfile);
           if (documentFallback?.source) {
             sources.push(createMessageSource(messageSourceTypes.KNOWLEDGE, {
@@ -2084,14 +2212,24 @@ export class RealtimeConversationOrchestrator {
       answer = callerFacingText(answer, this.runtimeProfile);
       answer = this.liveCallMemory?.prepareAssistantResponse?.(answer) || answer;
       if (grounded.valid) {
-        const sentenceValidation = validateGroundedSpokenSentences(
-          answer,
-          groundingEnvelope,
-          grounded,
-          {
-            configuredSpeech,
-          },
-        );
+        const sentenceValidation = unifiedGroundedDecision
+          ? (() => {
+            const claims = validateGroundedClaims(
+              answer,
+              hydrateSelectedEvidence(grounded, groundingEnvelope, authoritativeEvidence),
+            );
+            return {
+              valid: claims.valid,
+              text: claims.valid ? answer : '',
+              rejected: claims.valid ? [] : [{ sentence: answer, reason: claims.reason }],
+            };
+          })()
+          : validateGroundedSpokenSentences(
+            answer,
+            groundingEnvelope,
+            grounded,
+            { configuredSpeech },
+          );
         if (sentenceValidation.rejected.length) {
           this.log.warn({
             stage: 'llm.sentence_grounding_rejected', callId: this.call.id,
@@ -2101,8 +2239,10 @@ export class RealtimeConversationOrchestrator {
         if (sentenceValidation.text) answer = sentenceValidation.text;
         else {
           this.runtimeMetrics.grounding.fallbacks += 1;
-          answer = approvedDocumentFallback(knowledge, this.runtimeProfile)?.text
-            ?? callerFacingFallback(this.runtimeProfile);
+          answer = unifiedGroundedDecision
+            ? callerFacingFallback(this.runtimeProfile)
+            : (approvedDocumentFallback(knowledge, this.runtimeProfile)?.text
+              ?? callerFacingFallback(this.runtimeProfile));
         }
       }
       const alreadyStreamed = new Set(streamedGroundedSentences.map((sentence) => (
@@ -2441,40 +2581,56 @@ export class RealtimeConversationOrchestrator {
     this.activeRetrievalAbortController = retrievalAbortController;
     const knowledgeStartedAt = Date.now();
     let knowledge = await this.#knowledge(query, null, retrievalAbortController.signal);
+    if (this.activeRetrievalAbortController === retrievalAbortController) {
+      this.activeRetrievalAbortController = null;
+    }
     if (epoch !== this.epoch || this.finalized) return;
     // The saved frame is context, not a gate. Ordinary topic/entity state is
     // updated only after the grounded LLM decision has been validated.
     const memoryState = this.liveCallMemory?.snapshot();
-    this.runtimeMetrics.conversationFlow = {
-      ...this.runtimeMetrics.conversationFlow,
-      activeActions: memoryState?.activeActions ?? [],
-      flowRecovery: memoryState?.flowRecovery ?? this.runtimeMetrics.conversationFlow?.flowRecovery,
-    };
-    const completionConfiguration = this.taskCompletionState.configuration;
-    const completionActionAllowed = this.liveCallMemory?.canRunAction?.(
-      completionConfiguration.intent,
-      { requiresCatalogItem: completionConfiguration.requiresCatalogItem === true },
-    ) === true;
-    if (completionActionAllowed) {
-      this.runtimeMetrics.taskCompletion = {
-        ...publicTaskCompletionState(this.taskCompletionState),
-        gateOpen: true,
+    this.runtimeMetrics.conversationFlow = this.unifiedGroundedDecisionEnabled
+      ? {
+        ...this.runtimeMetrics.conversationFlow,
+        currentTopic: memoryState?.currentTopic ?? null,
+        pendingQuestion: memoryState?.pendingQuestion ?? null,
+      }
+      : {
+        ...this.runtimeMetrics.conversationFlow,
+        activeActions: memoryState?.activeActions ?? [],
+        flowRecovery: memoryState?.flowRecovery ?? this.runtimeMetrics.conversationFlow?.flowRecovery,
       };
-      // A single finalized utterance may explicitly request the action and
-      // provide its configured fields together. Capture those deterministic
-      // fields now; do not spend an LLM call merely to split known form data.
-    } else if (completionConfiguration.enabled) {
-      this.runtimeMetrics.taskCompletion = {
-        ...publicTaskCompletionState(this.taskCompletionState),
-        gateOpen: false,
-        selectedCatalogItem: memoryState?.selectedCatalogItem?.id ?? null,
-      };
+    if (!this.unifiedGroundedDecisionEnabled) {
+      const completionConfiguration = this.taskCompletionState.configuration;
+      const completionActionAllowed = this.liveCallMemory?.canRunAction?.(
+        completionConfiguration.intent,
+        { requiresCatalogItem: completionConfiguration.requiresCatalogItem === true },
+      ) === true;
+      if (completionActionAllowed) {
+        this.runtimeMetrics.taskCompletion = {
+          ...publicTaskCompletionState(this.taskCompletionState),
+          gateOpen: true,
+        };
+      } else if (completionConfiguration.enabled) {
+        this.runtimeMetrics.taskCompletion = {
+          ...publicTaskCompletionState(this.taskCompletionState),
+          gateOpen: false,
+          selectedCatalogItem: memoryState?.selectedCatalogItem?.id ?? null,
+        };
+      }
     }
     turnLatency.knowledgeMs = Math.max(0, Date.now() - knowledgeStartedAt);
     turnLatency.retrievalMs = Number(knowledge.retrieval?.parallelDurationMs ?? turnLatency.knowledgeMs);
     turnLatency.rankingMs = Number(knowledge.rankingValidationDurationMs ?? 0);
     turnLatency.validationMs += turnLatency.rankingMs;
     turnLatency.route = knowledge.route ?? 'none';
+    if (turnLatency.retrievalMs > 150) {
+      this.log.warn({
+        stage: 'knowledge.retrieval_target_breached', callId: this.call.id,
+        retrievalMs: turnLatency.retrievalMs, targetMs: 150,
+        semanticTimedOut: knowledge.tenantEvidence?.retrieval?.semanticTimedOut
+          ?? knowledge.retrieval?.semanticTimedOut ?? false,
+      }, 'Hybrid retrieval exceeded the live voice target');
+    }
     // Tenant evidence is interpreted by one grounded LLM turn. Runtime route
     // labels and Workflow instruction text never bypass that validation.
     const sourceTrace = new MessageSourceTrace(
@@ -2497,7 +2653,7 @@ export class RealtimeConversationOrchestrator {
         instruction: 'Understand the latest caller utterance from its full natural meaning and answer it first using only approved evidence. Return exactly one decision: answer, clarify or one authorized action. Do not require exact wording or use a stage as a gate. Emit evidenceIds and stateUpdate first, then decision and a short natural answer.',
       }, streaming);
       turnLatency.llmMs += Math.max(0, Date.now() - llmStartedAt);
-      if (response.understanding) {
+      if (!this.unifiedGroundedDecisionEnabled && response.understanding) {
         this.#openCompletionActionAfterUnderstanding(response.understanding);
         if (await this.#captureCompletionFieldAfterUnderstanding(query, history, response.understanding)) return;
       }
@@ -2561,10 +2717,13 @@ export class RealtimeConversationOrchestrator {
         })));
         sourceTrace.add(toolMessageSources(toolResults));
         if (epoch !== this.epoch) return;
+        const toolGroundedKnowledge = withVerifiedToolEvidence(
+          knowledge, toolResults, this.runtimeProfile,
+        );
         const llmStartedAt = Date.now();
-        response = await this.#llm(query, history, knowledge, {
+        response = await this.#llm(query, history, toolGroundedKnowledge, {
           toolResults,
-          instruction: 'Use these tool results to answer the caller. Never claim an unsuccessful tool completed.',
+          instruction: 'Answer from the selected verified TOOL_RESULT evidence. Speak success only when its verified and success fields are both true; otherwise state the verified failure accurately.',
         }, streaming);
         turnLatency.llmMs += Math.max(0, Date.now() - llmStartedAt);
         sourceTrace.add(response.sources);
@@ -3444,6 +3603,34 @@ export class RealtimeConversationOrchestrator {
       sentenceHandoffWaits: this.runtimeMetrics.ttsGeneration?.sentenceHandoffWaits ?? 0,
       maximumSentenceHandoffWaitMs: this.runtimeMetrics.ttsGeneration?.maximumSentenceHandoffWaitMs ?? 0,
     }, 'TTS generation and sentence handoff summary');
+    const firstAudioSlo = evaluateFirstAudioSlo(
+      (this.runtimeMetrics.turnLatency ?? [])
+        .map((turn) => turn.totalFirstAudioMs)
+        .filter((value) => Number.isFinite(Number(value))),
+    );
+    const retrievalSamples = (this.runtimeMetrics.turnLatency ?? [])
+      .map((turn) => turn.retrievalMs).filter((value) => Number.isFinite(Number(value)));
+    const retrievalPercentiles = {
+      count: retrievalSamples.length,
+      p50: percentile(retrievalSamples, 0.50),
+      p90: percentile(retrievalSamples, 0.90),
+      p95: percentile(retrievalSamples, 0.95),
+    };
+    this.runtimeMetrics.latency.firstAudioPercentiles = firstAudioSlo.observed;
+    this.runtimeMetrics.latency.retrievalPercentiles = retrievalPercentiles;
+    this.log.info({
+      stage: 'voice.first_audio_percentiles', callId: this.call.id,
+      samples: firstAudioSlo.observed.count,
+      p50Ms: firstAudioSlo.observed.p50,
+      p90Ms: firstAudioSlo.observed.p90,
+      p95Ms: firstAudioSlo.observed.p95,
+      targetP90Ms: firstAudioSlo.targets.p90FirstAudioMs,
+      status: firstAudioSlo.reason ?? 'passed',
+      retrievalP50Ms: retrievalPercentiles.p50,
+      retrievalP90Ms: retrievalPercentiles.p90,
+      retrievalP95Ms: retrievalPercentiles.p95,
+      retrievalTargetMs: 150,
+    }, 'End-to-end first-audio latency percentiles');
     this.log.info({
       stage: 'provider.failure_summary', callId: this.call.id,
       total: this.runtimeMetrics.providerFailures?.total ?? 0,

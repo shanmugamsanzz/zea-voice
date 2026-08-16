@@ -49,7 +49,7 @@ function entity(value = {}, sourceId = null) {
   });
 }
 
-export function buildGroundingEnvelope(knowledge = {}) {
+export function buildGroundingEnvelope(knowledge = {}, options = {}) {
   const sources = [];
   const sourceContents = new Set();
   // PostgreSQL-hydrated evidence is authoritative and must be added before
@@ -77,7 +77,8 @@ export function buildGroundingEnvelope(knowledge = {}) {
       recordType: 'workflow_hint',
     });
   }
-  for (const record of knowledge.compactKnowledgeMap?.records ?? []) {
+  for (const record of options.includePublishedMap === false
+    ? [] : (knowledge.compactKnowledgeMap?.records ?? [])) {
     const recordType = String(record.type ?? '').toUpperCase();
     if (recordType === 'WORKFLOW_RULE'
       || (recordType === 'CONVERSATION_NODE'
@@ -132,10 +133,13 @@ export function buildGroundingEnvelope(knowledge = {}) {
     entities.push(next);
     if (entities.length >= maximumEntities) break;
   }
+  const selectedSources = options.maximumSources
+    ? sources.slice(0, Math.max(1, Math.min(Number(options.maximumSources), maximumSources)))
+    : sources;
   return Object.freeze({
-    found: knowledge.found === true && sources.length > 0,
+    found: knowledge.found === true && selectedSources.length > 0,
     route: text(knowledge.route, 40) || 'none',
-    sources: Object.freeze(sources),
+    sources: Object.freeze(selectedSources),
     entities: Object.freeze(entities),
   });
 }

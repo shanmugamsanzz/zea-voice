@@ -22,8 +22,8 @@ TYPE: guidance
 LANGUAGE: ta
 ENTRY: false
 PURPOSE: Continue when the caller accepts the offer to hear package information.
-RESPONSE: Say exactly: எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Paediatric Health Screening, Onco Care Packages, Organ-Specific Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?
-NEXT_QUESTION:
+RESPONSE: Give a short top-level overview using every current approved Catalog category and its principal options. Do not add prices or full item details unless the caller asks.
+NEXT_QUESTION: எது பத்தி தெரிஞ்சிக்கணும்?
 
 STAGE: complete_package_overview
 FLOW: main
@@ -31,8 +31,8 @@ TYPE: guidance
 LANGUAGE: ta
 ENTRY: false
 PURPOSE: Answer every general request for available packages, including requests for other or additional packages.
-RESPONSE: Say exactly: எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Paediatric Health Screening, Onco Care Packages, Organ-Specific Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்? This is the complete top-level overview. Do not replace it with only Silver, Gold and Platinum.
-NEXT_QUESTION:
+RESPONSE: Give a short complete overview from the current Product Catalog. Include every approved top-level category, without expanding every item or repeating package facts from another document.
+NEXT_QUESTION: எது பத்தி தெரிஞ்சிக்கணும்?
 
 STAGE: master_package_selection
 FLOW: main
@@ -49,7 +49,7 @@ TYPE: guidance
 LANGUAGE: ta
 ENTRY: false
 PURPOSE: Explain the approved options inside a selected category.
-RESPONSE: For Paediatric Health Screening, list Paediatric Health Screening, Developmental and Behavioral Screening and Neonatal Health Screening. For Onco Care, list Premium Male, Premium Female, Add-on Male and Add-on Female. For Organ-Specific Packages, list Renal, Liver, Cardiac, Surgery Profile 1, Surgery Profile 2, Lungs, Ortho and Gastro. Ask which one the caller wants explained.
+RESPONSE: List only the selected category's current approved Catalog child items. Do not copy category membership into this guidance or treat the category itself as a selectable item.
 NEXT_QUESTION: அதுல எது பத்தி explain பண்ணட்டும்?
 
 STAGE: selected_package_explanation
@@ -85,17 +85,17 @@ TYPE: guidance
 LANGUAGE: ta
 ENTRY: false
 PURPOSE: Handle a request to hear about another package after an explanation.
-RESPONSE: If the caller names another package, explain it immediately. If no package is named, ask which approved package they want. Do not restart the introduction. Give the complete top-level overview only when the caller asks what other packages are available.
+RESPONSE: If the caller names another package, explain it immediately. If no package is named, use the next question. Do not restart the introduction. Give the complete top-level overview only when the caller asks what other packages are available.
 NEXT_QUESTION: எந்த Package details வேணும்?
 
-STAGE: onco_addon_base_package
+STAGE: required_related_item_selection
 FLOW: main
 TYPE: guidance
 LANGUAGE: ta
 ENTRY: false
-PURPOSE: Handle an Onco Add-on request that requires a Master Health Checkup base package.
-RESPONSE: If Silver, Gold or Platinum is not already selected, explain that the add-on requires one of those approved Master Health Checkup packages and ask which one the caller wants. After selection, preserve both items, calculate only the exact published prices, and explain the tests and consultations from both Catalog records.
-NEXT_QUESTION: Silver, Gold, Platinumல எந்த Package choose பண்ண விரும்புறீங்க?
+PURPOSE: Handle a selected Catalog item that requires another approved related item.
+RESPONSE: Read the current Catalog relationship. If the required related item is missing, use the next question with only valid Catalog candidates. After selection, preserve both items and use only their hydrated facts and published prices.
+NEXT_QUESTION: எந்த approved base Package choose பண்ண விரும்புறீங்க?
 
 STAGE: health_concern
 FLOW: main
@@ -103,7 +103,7 @@ TYPE: guidance
 LANGUAGE: ta
 ENTRY: false
 PURPOSE: Handle a non-emergency health concern or screening requirement.
-RESPONSE: Use only approved Catalog relationships to mention a related screening option. Clearly say it is screening information and that a Doctor must confirm exact suitability, diagnosis and treatment. Emergency Workflow Rules take priority.
+RESPONSE: Use only current Catalog relationships to mention a related screening option. Clearly distinguish screening information from diagnosis, suitability and treatment. Emergency Workflow Rules take priority.
 NEXT_QUESTION: இந்த Package details explain பண்ணட்டுமா?
 
 STAGE: booking_start
@@ -112,7 +112,7 @@ TYPE: guidance
 LANGUAGE: ta
 ENTRY: false
 PURPOSE: Start booking only after an explicit caller request and one exact approved selected package.
-RESPONSE: Preserve the selected package. If it is missing, ask only which approved package the caller wants. Otherwise begin collecting the UI-configured missing fields. Never start booking merely because package information was requested.
+RESPONSE: Preserve the selected package. Start the active tool's UI-configured field collection only after an explicit request and an exact selectable item. If the item is missing, clarify it before using the next booking question.
 NEXT_QUESTION: இந்த appointment உங்களுக்காகவா, இல்ல வேற யாருக்காகவா?
 
 STAGE: booking_for
@@ -121,7 +121,7 @@ TYPE: guidance
 LANGUAGE: ta
 ENTRY: false
 PURPOSE: Establish whether the appointment is for the caller or another person.
-RESPONSE: Save the answer in collected information and ask only the next missing UI-configured field.
+RESPONSE: Save the answer in collected information and continue only with the next missing UI-configured field.
 NEXT_QUESTION: Patient name சொல்லுங்க.
 
 STAGE: patient_name
@@ -148,7 +148,7 @@ TYPE: guidance
 LANGUAGE: ta
 ENTRY: false
 PURPOSE: Collect an exact appointment date.
-RESPONSE: Resolve relative dates using the current date. Sunday booking is unavailable. Preserve a confirmed valid date and ask only the next missing field.
+RESPONSE: Resolve relative dates using the current date, validate the date against current published policy and preserve a confirmed valid value.
 NEXT_QUESTION: Morning 8 மணியிலிருந்து 11 மணிக்குள்ள எந்த time வசதியா இருக்கும்?
 
 STAGE: appointment_time
@@ -157,7 +157,7 @@ TYPE: guidance
 LANGUAGE: ta
 ENTRY: false
 PURPOSE: Collect a preferred time within the approved window.
-RESPONSE: Accept a time from 8 AM to 11 AM. If the caller provides a time outside that window, explain the approved window and ask for another time. Do not claim slot availability before tool verification.
+RESPONSE: Validate the requested time against current published policy. Do not claim slot availability before the configured tool verifies it.
 NEXT_QUESTION:
 
 STAGE: booking_preparation_and_confirmation
@@ -184,7 +184,7 @@ TYPE: guidance
 LANGUAGE: ta
 ENTRY: false
 PURPOSE: Continue naturally after a verified successful booking.
-RESPONSE: Confirm only verified result details, then ask whether the caller has another question.
+RESPONSE: Confirm only verified result details.
 NEXT_QUESTION: வேற ஏதாவது கேள்வி இருக்கா?
 
 STAGE: side_question

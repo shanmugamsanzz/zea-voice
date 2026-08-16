@@ -94,9 +94,9 @@ function requireDirection(agent, requested) {
   }
 }
 
-function knowledgeContext(knowledge, maximumChars = env.LLM_KNOWLEDGE_CONTEXT_MAX_CHARS) {
+function knowledgeContext(knowledge, maximumChars = env.LLM_KNOWLEDGE_CONTEXT_MAX_CHARS, options = {}) {
   if (!knowledge?.found) return 'No verified Knowledge Base result was found for this turn.';
-  const envelope = buildGroundingEnvelope(knowledge);
+  const envelope = buildGroundingEnvelope(knowledge, options);
   return JSON.stringify({
     route: knowledge.route,
     sources: envelope.sources.map((source) => ({
@@ -106,7 +106,7 @@ function knowledgeContext(knowledge, maximumChars = env.LLM_KNOWLEDGE_CONTEXT_MA
     entities: envelope.entities.map((entity) => ({
       key: entity.key, name: entity.name, category: entity.category, sourceId: entity.sourceId,
     })),
-    allowedActions: (knowledge.tenantEvidence?.actionEvidence ?? []).map((evidence) => ({
+    allowedActions: (knowledge.tenantEvidence?.actionEvidence ?? []).slice(0, 3).map((evidence) => ({
       recordId: evidence.recordId,
       name: evidence.authoritativeData?.name ?? null,
       intent: evidence.authoritativeData?.intent ?? null,
@@ -114,12 +114,12 @@ function knowledgeContext(knowledge, maximumChars = env.LLM_KNOWLEDGE_CONTEXT_MA
       conditions: evidence.authoritativeData?.conditions ?? {},
       actionConfig: evidence.authoritativeData?.actionConfig ?? {},
     })),
-    conversationGuidance: (knowledge.tenantEvidence?.guidanceEvidence ?? []).map((evidence) => ({
+    conversationGuidance: (knowledge.tenantEvidence?.guidanceEvidence ?? []).slice(0, 3).map((evidence) => ({
       recordId: evidence.recordId,
       nodeType: evidence.authoritativeData?.nodeType ?? null,
       content: evidence.content,
     })),
-    publishedKnowledgeMap: (knowledge.compactKnowledgeMap?.maps ?? []).map((map) => ({
+    ...(options.includePublishedMap === false ? {} : { publishedKnowledgeMap: (knowledge.compactKnowledgeMap?.maps ?? []).map((map) => ({
       knowledgeBaseId: map.knowledgeBaseId,
       publicationRevision: map.publicationRevision,
       records: (map.records ?? []).filter((record) => {
@@ -130,7 +130,7 @@ function knowledgeContext(knowledge, maximumChars = env.LLM_KNOWLEDGE_CONTEXT_MA
         id: record.id, type: record.type, label: record.label,
         language: record.language, summary: record.summary,
       })),
-    })),
+    })) }),
   }).slice(0, maximumChars);
 }
 
@@ -147,8 +147,11 @@ export function buildAgentSystemPrompt(agent, { usageDirection, context, knowled
   const runtimeContext = JSON.stringify(context ?? {}).slice(0, Math.min(1200, Math.floor(contentBudget * 0.30)));
   const callback = resolveCallbackConfiguration(agent.settings);
   const groundedResponseMode = context?.groundedResponseMode === true;
+  const groundingOptions = context?.compactGrounding === true
+    ? { includePublishedMap: false, maximumSources: 5 }
+    : {};
   const groundingContract = groundedResponseMode
-    ? JSON.stringify(groundedDecisionContract(buildGroundingEnvelope(knowledge), {
+    ? JSON.stringify(groundedDecisionContract(buildGroundingEnvelope(knowledge, groundingOptions), {
       fieldSchemas: context?.configuredInformationFields ?? [],
       toolSchemas: context?.configuredToolSchemas ?? [],
     })) : null;
@@ -218,9 +221,9 @@ export function buildAgentSystemPrompt(agent, { usageDirection, context, knowled
       ? '- Extract every configured information field present in the finalized caller utterance using only the field location defined by grounded_response_contract. Mark only explicit corrections and omit unchanged fields.'
       : null,
     '',
-    '<company_instructions>',
-    companyPrompt,
-    '</company_instructions>',
+    context?.compactGrounding === true ? null : '<company_instructions>',
+    context?.compactGrounding === true ? null : companyPrompt,
+    context?.compactGrounding === true ? null : '</company_instructions>',
     callback.enabled ? '' : null,
     callback.enabled ? '<callback_instructions>' : null,
     callback.enabled ? `Successful scheduling: ${callback.confirmationInstructions}` : null,
@@ -238,8 +241,12 @@ export function buildAgentSystemPrompt(agent, { usageDirection, context, knowled
     groundedResponseMode ? '</grounded_response_contract>' : null,
     '',
     '<knowledge_context>',
-    knowledgeContext(knowledge, knowledgeBudget),
+    knowledgeContext(knowledge, knowledgeBudget, groundingOptions),
     '</knowledge_context>',
+    context?.compactGrounding === true ? '' : null,
+    context?.compactGrounding === true ? '<company_instructions>' : null,
+    context?.compactGrounding === true ? companyPrompt : null,
+    context?.compactGrounding === true ? '</company_instructions>' : null,
   ].filter((line) => line !== null).join('\n');
   // The voice runtime has a strict latency budget.  Rules appear first, so
   // trimming can only remove excess context at the end rather than safety or

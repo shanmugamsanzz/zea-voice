@@ -139,7 +139,7 @@ const toolResult = await executeAgentTool(runtimeProfile, call, {
 }, {
   fetchImpl: async (url, request) => {
     toolRequest = { url, request };
-    return new Response(JSON.stringify({ bookingId: 'B-1' }), { status: 200 });
+    return new Response(JSON.stringify({ success: true, bookingId: 'B-1' }), { status: 200 });
   },
 });
 assert.equal(toolResult.success, true);

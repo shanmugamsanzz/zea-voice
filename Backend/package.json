@@ -149,6 +149,8 @@
     "verify:unified-grounded-turn": "node scripts/verify-unified-grounded-turn.js",
     "verify:strong-grounding-interruption": "node scripts/verify-strong-grounding-interruption.js",
     "verify:production-latency-contract": "node scripts/verify-production-latency-contract.js",
+    "verify:compact-live-prompt-latency": "node scripts/verify-compact-live-prompt-latency.js",
+    "verify:interruption-continuation-tools": "node scripts/verify-interruption-continuation-tools.js",
     "verify:configuration-driven-next-question": "node scripts/verify-configuration-driven-next-question.js",
     "verify:answer-tool-validation": "node scripts/verify-answer-tool-validation.js",
     "verify:production-migration-gate": "node scripts/verify-production-migration-gate.js",

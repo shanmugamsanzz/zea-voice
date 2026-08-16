@@ -18,6 +18,18 @@ function numbers(value) {
     .map((entry) => entry.replace(/[^\d]/gu, '')).filter(Boolean));
 }
 
+function sourceContent(source) {
+  let structured = '';
+  try {
+    structured = source?.authoritativeData && typeof source.authoritativeData === 'object'
+      ? JSON.stringify(source.authoritativeData)
+      : '';
+  } catch {
+    structured = '';
+  }
+  return `${text(source?.content)} ${text(structured)}`.trim();
+}
+
 function sentences(value) {
   const normalized = text(value);
   if (!normalized) return [];
@@ -65,7 +77,10 @@ export function validateGroundedClaim(sentence, sources = [], options = {}) {
   if (containsInternalGuidance(claim)) {
     return Object.freeze({ valid: false, reason: 'internal_guidance' });
   }
-  const evidenceText = sources.map((source) => text(source?.content)).join(' ');
+  if (!sources.length && options.configuredSpeech !== true) {
+    return Object.freeze({ valid: false, reason: 'selected_evidence_missing' });
+  }
+  const evidenceText = sources.map(sourceContent).join(' ');
   const evidenceNumbers = numbers(evidenceText);
   if ([...numbers(claim)].some((number) => !evidenceNumbers.has(number))) {
     return Object.freeze({ valid: false, reason: 'unsupported_numeric_fact' });
@@ -96,4 +111,17 @@ export function validateGroundedClaims(value, sources = [], options = {}) {
     if (!result.valid) return Object.freeze({ ...result, sentence });
   }
   return Object.freeze({ valid: true });
+}
+
+export function hydrateSelectedEvidence(decision, envelope, authoritativeSources = []) {
+  const selected = new Set([
+    ...(decision?.evidenceIds ?? []),
+    ...(decision?.evidenceSourceIds ?? []),
+  ]);
+  return (envelope?.sources ?? []).filter((source) => selected.has(source.id)).map((source) => (
+    authoritativeSources.find((candidate) => (
+      candidate.id === source.id
+      || (source.recordId && candidate.recordId === source.recordId)
+    )) ?? source
+  ));
 }

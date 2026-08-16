@@ -1411,6 +1411,8 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         }),
       });
       setTools((current) => [...current, created]);
+      setSuccessMsg(`Tool ${created.name} is assigned and active for this agent.`);
+      window.setTimeout(() => setSuccessMsg(null), 3000);
       setNewToolName('');
       setNewToolDescription('');
       setNewToolWebhookUrl('');
@@ -3921,7 +3923,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                 <div>
                   <div className="mb-1 flex items-center gap-1.5">
                     <label className="block text-[10px] font-bold text-slate-400">Tool Identifier</label>
-                    <FieldInfoTooltip id="tool-identifier-information" text="Use a clear name the agent can associate with an action." />
+                    <FieldInfoTooltip id="tool-identifier-information" text="This identifier must exactly match the published Workflow toolIdentifier or actionKey that authorizes the action. It remains tenant- and agent-specific." />
                   </div>
                   <input
                     type="text"
@@ -3965,7 +3967,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   <div className="space-y-4 rounded-xl border border-violet-100 bg-white p-4">
                     <div>
                       <p className="text-[10px] font-black uppercase tracking-wider text-violet-600">Webhook Configuration</p>
-                      <p className="mt-1 text-[9px] font-medium leading-relaxed text-slate-400">The endpoint must return its result in the same HTTP request. In n8n, use Respond to Webhook.</p>
+                      <p className="mt-1 text-[9px] font-medium leading-relaxed text-slate-400">The endpoint must return JSON containing an explicit boolean success or ok field in the same HTTP request. Only true is treated as verified action success. In n8n, use Respond to Webhook.</p>
                     </div>
 
                     <div>
@@ -4044,6 +4046,15 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
               {/* Active Tools List */}
               <div className="space-y-3">
                 <div className="flex items-center justify-between gap-3"><span className="text-xs font-bold uppercase tracking-wider text-slate-400">Assigned to This Agent ({tools.length})</span><span className="rounded-md bg-emerald-50 px-2 py-1 text-[9px] font-black uppercase text-emerald-700">{tools.filter((tool) => tool.status === 'active').length} active in runtime</span></div>
+                {!toolsLoading && agentId && tools.filter((tool) => tool.status === 'active').length === 0 && (
+                  <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-800">
+                    <Info className="mt-0.5 h-4 w-4 shrink-0" />
+                    <div>
+                      <p className="text-xs font-bold">No active action tool is available at runtime.</p>
+                      <p className="mt-1 text-[11px] font-medium text-amber-700">Register or activate the required tool, make its identifier exactly match the published Workflow authorization, configure its JSON field schema, and run a successful test before placing calls.</p>
+                    </div>
+                  </div>
+                )}
                 {!toolsLoading && tools.length === 0 && agentId && <div className="rounded-xl border border-dashed border-slate-200 bg-white p-8 text-center text-xs font-semibold text-slate-400">No tools are assigned to this agent yet.</div>}
                 {tools.map((t) => (
                   <div key={t.id} className="bg-white border border-slate-150 rounded-xl p-4 shadow-xs">

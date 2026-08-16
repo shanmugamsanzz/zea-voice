@@ -17,6 +17,14 @@ const source = {
 };
 assert.equal(evidenceBelongsToRuntime(source, scope), true);
 assert.equal(evidenceBelongsToRuntime({ ...source, tenantId: 'tenant-2' }, scope), false);
+const verifiedToolEvidence = {
+  recordType: 'TOOL_RESULT', tenantId: 'tenant-1', agentId: 'agent-1',
+  authoritativeData: { verified: true, success: true },
+};
+assert.equal(evidenceBelongsToRuntime(verifiedToolEvidence, scope), true);
+assert.equal(evidenceBelongsToRuntime({
+  ...verifiedToolEvidence, authoritativeData: { verified: false, success: true },
+}, scope), false);
 assert.equal(validateDecisionSecurity({
   sources: [{ ...source, agentId: 'foreign-agent' }], runtime: { evidenceScope: scope },
 }).reason, 'foreign_evidence_selected');
@@ -134,5 +142,18 @@ const failed = await executeAgentTools(runtimeProfile, call, [{
 assert.equal(failed[0].verified, true);
 assert.equal(failed[0].success, false);
 assert.equal(failed[0].error.code, 'VOICE_TOOL_TIMEOUT');
+
+const reportedFailure = await executeAgentTools(runtimeProfile, call, [{
+  id: 'request-2', name: 'configured_action', arguments: {},
+}], {
+  resolveDns: false,
+  fetchImpl: async () => ({
+    ok: true, headers: { get: () => null }, body: null,
+    text: async () => JSON.stringify({ success: false, reason: 'not_available' }),
+  }),
+});
+assert.equal(reportedFailure[0].verified, true);
+assert.equal(reportedFailure[0].success, false);
+assert.equal(reportedFailure[0].error.code, 'VOICE_TOOL_REPORTED_FAILURE');
 
 console.log('Answer and tool validation verification passed.');

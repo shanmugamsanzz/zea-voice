@@ -47,7 +47,7 @@ ITEM: Developmental and Behavioral Screening | ITEM_KEY: developmental-behaviora
 ITEM: Neonatal Health Screening | ITEM_KEY: neonatal-health-screening | ALIASES: newborn screening, neonatal screening, newborn health screening, baby screening | DESCRIPTION: Screening options for newborns. | ATTRIBUTES: {"services":{"name":"Available Screening","value":["3 Panel Screening","4 Panel Screening","New Born Hearing Screening"]},"pricing":{"name":"Published Prices","value":"3 Panel TSH, 17-OHP, G6PD: 800; 4 Panel TSH, 17-OHP, G6PD, Galactose: 1000; New Born Hearing Screening: 1200"}} | RELATIONSHIPS: {"recommendedFor":["newborn screening","neonatal screening"]} | SELECTION_RULES: {"selectable":true}
 
 
-CATEGORY: Surgery Profiles | CATEGORY_KEY: surgery-profiles | ALIASES: surgery package, surgery profile, minor procedure package | DESCRIPTION: Surgery-related profiles listed in the source package material.
+CATEGORY: Surgery Profiles | CATEGORY_KEY: surgery-profiles | PARENT_CATEGORY_KEY: organ-specific-health-checkups | ALIASES: surgery package, surgery profile, minor procedure package | DESCRIPTION: Surgery-related profiles within Organ-Specific Health Check-ups.
 
 ITEM: Surgery Profile 1 | ITEM_KEY: surgery-profile-1 | ALIASES: surgery profile 1, surgery profile one, surgery package 1 | DESCRIPTION: Surgery Profile 1 is listed as an available surgery profile. Detailed price and test information is not consistently specified in the approved source material. | RELATIONSHIPS: {"category":["surgery profiles"]} | SELECTION_RULES: {"selectable":true}
 

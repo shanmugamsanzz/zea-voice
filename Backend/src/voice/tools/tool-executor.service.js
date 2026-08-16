@@ -65,6 +65,13 @@ async function boundedPayload(response) {
   try { return JSON.parse(text); } catch { return text || null; }
 }
 
+function verifiedOutcome(output) {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) return false;
+  if (typeof output.success === 'boolean') return output.success;
+  if (typeof output.ok === 'boolean') return output.ok;
+  return false;
+}
+
 export async function executeAgentTool(runtimeProfile, call, toolCall, dependencies = {}) {
   const startedAt = performance.now();
   const tool = (runtimeProfile.tools ?? []).find((candidate) => safeName(candidate.name) === safeName(toolCall.name));
@@ -102,12 +109,18 @@ export async function executeAgentTool(runtimeProfile, call, toolCall, dependenc
   if (!response.ok) throw new AppError(502, `Tool ${tool.name} returned HTTP ${response.status}`, 'VOICE_TOOL_REQUEST_FAILED', {
     toolId: tool.id, status: response.status,
   });
+  const success = verifiedOutcome(output);
   const result = {
-    id: toolCall.id ?? null, toolId: tool.id, name: safeName(tool.name), success: true,
+    id: toolCall.id ?? null, toolId: tool.id, name: safeName(tool.name), success,
     verified: true, output,
+    ...(success ? {} : { error: { code: 'VOICE_TOOL_REPORTED_FAILURE', message: 'The tool reported an unsuccessful result' } }),
     durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
   };
-  logger.info({ stage: 'voice.tool_completed', toolId: tool.id, toolName: result.name, callId: call.id, durationMs: result.durationMs }, 'Assigned voice tool completed');
+  const logResult = success ? logger.info.bind(logger) : logger.warn.bind(logger);
+  logResult({
+    stage: success ? 'voice.tool_completed' : 'voice.tool_reported_failure',
+    toolId: tool.id, toolName: result.name, callId: call.id, durationMs: result.durationMs,
+  }, success ? 'Assigned voice tool completed' : 'Assigned voice tool reported an unsuccessful result');
   return result;
 }
 

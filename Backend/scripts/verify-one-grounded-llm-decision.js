@@ -83,8 +83,20 @@ const multipleClarifications = validateGroundedLlmDecision(JSON.stringify({
   stateUpdate: { currentTopic: 'clarification', knownEntityKeys: [], collectedInformation: {}, correctedFields: [] },
   pendingQuestion: 'Which service?', toolRequest: null,
 }), envelope, runtime);
-assert.equal(multipleClarifications.valid, false);
-assert.equal(multipleClarifications.reason, 'question_must_use_pending_question');
+assert.equal(multipleClarifications.valid, true);
+assert.equal(multipleClarifications.answer, '');
+assert.equal(multipleClarifications.pendingQuestion, 'Which service?');
+
+const rollingStateAliases = validateGroundedLlmDecision(JSON.stringify({
+  decision: 'answer', answer: 'Premium service costs INR 3200.', evidenceIds: ['source_1'],
+  stateUpdate: {
+    currentTopic: 'premium service', selectedEntityKeys: ['premium-service'],
+    fieldUpdates: {}, correctedFields: [], pendingQuestionRelevant: false,
+  },
+  pendingQuestion: null, toolRequest: null,
+}), envelope, runtime);
+assert.equal(rollingStateAliases.valid, true);
+assert.deepEqual(rollingStateAliases.selectedEntityKeys, ['premium-service']);
 
 const missingActionField = validateGroundedLlmDecision(JSON.stringify({
   decision: 'clarify', answer: 'I need the visit date.', evidenceIds: [],

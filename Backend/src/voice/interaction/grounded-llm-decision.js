@@ -56,12 +56,22 @@ function normalizeStateUpdate(value, envelope, runtime) {
   const allowedKeys = new Set([
     'currentTopic', 'knownEntityKeys', 'collectedInformation', 'correctedFields',
     'language', 'pendingQuestionRelevant', 'activeToolRequest',
+    // Accepted only as rolling-deployment aliases and normalized below.
+    'knownEntities', 'selectedEntityKeys', 'fieldUpdates',
   ]);
   if (Object.keys(value).some((key) => !allowedKeys.has(key))) return null;
+  const aliasedEntities = Array.isArray(value.knownEntities)
+    ? value.knownEntities.map((entry) => entry?.key ?? entry?.name ?? entry?.id).filter(Boolean)
+    : [];
+  const canonical = {
+    ...value,
+    knownEntityKeys: value.knownEntityKeys ?? value.selectedEntityKeys ?? aliasedEntities,
+    collectedInformation: value.collectedInformation ?? value.fieldUpdates ?? {},
+  };
   const entityLookup = new Map((envelope.entities ?? []).flatMap((entity) => (
     [entity.key, entity.name, entity.id].filter(Boolean).map((candidate) => [identity(candidate), entity])
   )));
-  const requestedEntities = list(value.knownEntityKeys, maximumEntities);
+  const requestedEntities = list(canonical.knownEntityKeys, maximumEntities);
   const knownEntities = [];
   const seenEntities = new Set();
   for (const requested of requestedEntities) {
@@ -71,14 +81,14 @@ function normalizeStateUpdate(value, envelope, runtime) {
     seenEntities.add(entity.key);
   }
   let activeToolRequest = null;
-  if (value.activeToolRequest !== undefined && value.activeToolRequest !== null) {
-    if (!value.activeToolRequest || typeof value.activeToolRequest !== 'object'
-      || Array.isArray(value.activeToolRequest)) return null;
-    const name = text(value.activeToolRequest.name, 64);
+  if (canonical.activeToolRequest !== undefined && canonical.activeToolRequest !== null) {
+    if (!canonical.activeToolRequest || typeof canonical.activeToolRequest !== 'object'
+      || Array.isArray(canonical.activeToolRequest)) return null;
+    const name = text(canonical.activeToolRequest.name, 64);
     if (!(runtime.toolSchemas ?? []).some((tool) => tool.name === name)) return null;
     activeToolRequest = Object.freeze({ name, status: 'collecting_information' });
   }
-  const requestedInformation = value.collectedInformation ?? {};
+  const requestedInformation = canonical.collectedInformation ?? {};
   if (!requestedInformation || typeof requestedInformation !== 'object'
     || Array.isArray(requestedInformation)) return null;
   const activeTool = text(activeToolRequest?.name ?? runtime.activeToolRequest?.name, 100).toLocaleLowerCase();
@@ -93,18 +103,18 @@ function normalizeStateUpdate(value, envelope, runtime) {
     if (normalized === undefined) return null;
     collectedInformation[key] = normalized;
   }
-  const correctedFields = list(value.correctedFields, 30);
+  const correctedFields = list(canonical.correctedFields, 30);
   if (correctedFields.some((key) => !Object.hasOwn(collectedInformation, key))) return null;
-  if (value.pendingQuestionRelevant !== undefined
-    && typeof value.pendingQuestionRelevant !== 'boolean') return null;
+  if (canonical.pendingQuestionRelevant !== undefined
+    && typeof canonical.pendingQuestionRelevant !== 'boolean') return null;
   return Object.freeze({
-    currentTopic: text(value.currentTopic, 240) || null,
+    currentTopic: text(canonical.currentTopic, 240) || null,
     knownEntityKeys: Object.freeze(knownEntities.map((entity) => entity.key)),
     knownEntities: Object.freeze(knownEntities.map((entity) => ({ ...entity }))),
     collectedInformation: Object.freeze(collectedInformation),
     correctedFields: Object.freeze(correctedFields),
-    language: text(value.language, 20) || null,
-    pendingQuestionRelevant: value.pendingQuestionRelevant ?? true,
+    language: text(canonical.language, 20) || null,
+    pendingQuestionRelevant: canonical.pendingQuestionRelevant ?? true,
     activeToolRequest,
   });
 }
@@ -160,6 +170,19 @@ function internalSpeech(value) {
     || /^\s*(?:instruction|workflow|debug|json)\s*:/iu.test(value);
 }
 
+function splitCallerQuestion(value, configuredQuestion) {
+  const original = text(value, maximumAnswerCharacters);
+  let pendingQuestion = configuredQuestion === null ? null : text(configuredQuestion, 500);
+  const parts = original.match(/[^?？]*(?:[?？]|$)/gu)?.map((part) => part.trim()).filter(Boolean) ?? [];
+  const statements = [];
+  for (const part of parts) {
+    if (/[?？]$/u.test(part)) {
+      if (!pendingQuestion) pendingQuestion = text(part, 500);
+    } else statements.push(part);
+  }
+  return Object.freeze({ answer: text(statements.join(' '), maximumAnswerCharacters), pendingQuestion });
+}
+
 export function groundedDecisionContract(envelope, runtime = {}) {
   const fields = (runtime.fieldSchemas ?? []).map((field) => ({
     key: field.key, label: field.label, type: field.type,
@@ -207,16 +230,14 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
   if (!exactShape(parsed)) return Object.freeze({ valid: false, reason: 'invalid_response_shape' });
   const decision = text(parsed.decision, 20).toLocaleLowerCase();
   if (!decisions.has(decision)) return Object.freeze({ valid: false, reason: 'invalid_decision' });
-  const answer = text(parsed.answer, maximumAnswerCharacters);
-  if (decision !== 'action' && !answer) return Object.freeze({ valid: false, reason: 'answer_required' });
+  const separated = splitCallerQuestion(parsed.answer, parsed.pendingQuestion);
+  const answer = separated.answer;
+  const pendingQuestion = separated.pendingQuestion;
+  if (decision === 'answer' && !answer) return Object.freeze({ valid: false, reason: 'answer_required' });
   if (internalSpeech(answer)) return Object.freeze({ valid: false, reason: 'internal_text' });
-  const pendingQuestion = parsed.pendingQuestion === null
-    ? null : text(parsed.pendingQuestion, 500);
   if (parsed.pendingQuestion !== null && !pendingQuestion) {
     return Object.freeze({ valid: false, reason: 'invalid_pending_question' });
   }
-  const questionCount = (answer.match(/[?？]/gu) ?? []).length;
-  if (questionCount > 0) return Object.freeze({ valid: false, reason: 'question_must_use_pending_question' });
   if (decision === 'clarify' && !pendingQuestion) {
     return Object.freeze({ valid: false, reason: 'clarification_question_required' });
   }

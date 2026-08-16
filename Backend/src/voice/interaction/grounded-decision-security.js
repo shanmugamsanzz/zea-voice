@@ -8,6 +8,12 @@ function identity(value) {
 
 export function evidenceBelongsToRuntime(source, scope) {
   if (!scope) return true;
+  if (String(source?.recordType ?? '').toLocaleUpperCase() === 'TOOL_RESULT') {
+    return identity(source?.tenantId) === identity(scope.tenantId)
+      && identity(source?.agentId) === identity(scope.agentId)
+      && source?.authoritativeData?.verified === true
+      && typeof source?.authoritativeData?.success === 'boolean';
+  }
   const revisions = new Map((scope.publicationRevisions ?? []).map((entry) => [
     identity(entry.knowledgeBaseId), Number(entry.publicationRevision ?? entry.revision),
   ]));

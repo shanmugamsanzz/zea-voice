@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import {
   validateGroundedClaim,
   validateGroundedClaims,
+  hydrateSelectedEvidence,
 } from '../src/voice/interaction/grounded-claim-validator.js';
 import { openGenericConversationState } from '../src/voice/interaction/generic-conversation-state.js';
 
@@ -40,6 +41,15 @@ for (const [claim, content] of [
 assert.equal(validateGroundedClaim(
   'Priority service \u0B87\u0BB2\u0BCD\u0BB2\u0BC8.', factualSources,
 ).reason, 'unsupported_negation');
+assert.equal(validateGroundedClaim('Any answer without selected evidence.', []).reason,
+  'selected_evidence_missing');
+const hydrated = hydrateSelectedEvidence(
+  { evidenceIds: ['envelope-1'] },
+  { sources: [{ id: 'envelope-1', recordId: 'record-1', content: 'partial snippet' }] },
+  [{ id: 'postgres-1', recordId: 'record-1', content: 'complete authoritative record' }],
+);
+assert.equal(hydrated.length, 1);
+assert.equal(hydrated[0].content, 'complete authoritative record');
 
 const memory = openGenericConversationState({
   tenantId: 'tenant-a', workspaceId: 'workspace-a', agentId: 'agent-a', callId: 'call-a',
@@ -60,5 +70,7 @@ const orchestrator = readFileSync(
 assert.match(orchestrator, /typeof liveMemory\.pendingQuestion === 'object'/u);
 assert.match(orchestrator, /fieldSchemas\?\.\(\)/u);
 assert.match(orchestrator, /pendingField\?\.question \?\? pendingQuestion\?\.text/u);
+assert.match(orchestrator, /const documentFallback = unifiedGroundedDecision[\s\S]*callerFacingFallback/u);
+assert.match(orchestrator, /hydrateSelectedEvidence\(decoded\.decision, groundingEnvelope, authoritativeEvidence\)/u);
 
 console.log('Strong grounding and interruption preservation verification passed.');

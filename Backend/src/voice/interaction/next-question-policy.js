@@ -146,6 +146,16 @@ export function resolveNextConfiguredQuestion({
   });
   if (fieldQuestion) return fieldQuestion;
 
+  // A clarification is part of the single grounded decision, not a backend
+  // business question. It is allowed only when the validator selected the
+  // explicit clarify decision and limited it to one pending question.
+  const clarification = decision.decision === 'clarify'
+    ? pending(decision.pendingQuestion) : null;
+  if (clarification) return Object.freeze({
+    ...clarification,
+    source: 'grounded_clarification',
+  });
+
   const savedPending = pending(beforeState.pendingQuestion ?? (
     beforeState.pendingQuestionText
       ? { key: beforeState.pendingQuestion, text: beforeState.pendingQuestionText, kind: beforeState.pendingQuestionKind }
