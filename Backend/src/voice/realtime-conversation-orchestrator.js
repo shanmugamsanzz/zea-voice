@@ -51,6 +51,10 @@ import {
   validateGroundedSpokenSentences,
 } from './interaction/grounded-llm-response.js';
 import {
+  createGroundedDecisionStreamDecoder,
+  validateGroundedLlmDecision,
+} from './interaction/grounded-llm-decision.js';
+import {
   composeConfiguredTurnResponse,
   resolveNextConfiguredQuestion,
 } from './interaction/next-question-policy.js';
@@ -1923,8 +1927,12 @@ export class RealtimeConversationOrchestrator {
     let completion = {};
     const sentenceBuffer = createStreamingSentenceBuffer();
     const groundedSentenceBuffer = createStreamingSentenceBuffer();
+    const unifiedGroundedDecision = groundedResponseMode
+      && env.VOICE_UNIFIED_GROUNDED_DECISION_ENABLED;
     const groundedStreamDecoder = groundedResponseMode
-      ? createGroundedJsonStreamDecoder(groundingEnvelope, groundingRuntime)
+      ? (unifiedGroundedDecision
+        ? createGroundedDecisionStreamDecoder(groundingEnvelope)
+        : createGroundedJsonStreamDecoder(groundingEnvelope, groundingRuntime))
       : null;
     const streamedGroundedSentences = [];
     let firstTokenRecorded = false;
@@ -2012,7 +2020,9 @@ export class RealtimeConversationOrchestrator {
           sources: [llmMessageSource(this.runtimeProfile.providers.llm, completion)],
         };
       }
-      const grounded = validateGroundedLlmResponse(text, groundingEnvelope, groundingRuntime);
+      const grounded = unifiedGroundedDecision
+        ? validateGroundedLlmDecision(text, groundingEnvelope, groundingRuntime)
+        : validateGroundedLlmResponse(text, groundingEnvelope, groundingRuntime);
       const groundingMetric = {
         valid: grounded.valid, reason: grounded.reason ?? null,
         decision: grounded.decision ?? null,

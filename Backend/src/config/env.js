@@ -164,6 +164,10 @@ const envSchema = z.object({
   LLM_CIRCUIT_RESET_TIMEOUT_MS: z.coerce.number().int().min(1000).max(300000).default(30000),
   LLM_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(16).max(8192).default(300),
   VOICE_GROUNDED_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(128).max(4096).default(800),
+  // Reversible production canary for the generic six-field grounded decision
+  // contract. Keep false by default so deployments can roll back without a
+  // code change while live-call metrics are evaluated.
+  VOICE_UNIFIED_GROUNDED_DECISION_ENABLED: booleanFromString.default(false),
   LLM_MAX_HISTORY_MESSAGES: z.coerce.number().int().min(0).max(50).default(12),
   LLM_SYSTEM_PROMPT_MAX_CHARS: z.coerce.number().int().min(2000).max(100000).default(40000),
   // Keep enough room for the complete UI-authored tenant prompt, live state,

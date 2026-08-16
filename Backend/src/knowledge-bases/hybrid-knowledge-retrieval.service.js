@@ -484,7 +484,10 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   const startedAt = performance.now();
   const runtime = { ...defaultDependencies, ...dependencies };
   const tenantId = requireTenantId(auth.tenantId);
-  const query = contextualQuery(input);
+  // The finalized caller utterance is the authoritative live-turn query.
+  // Context is available to the separate follow-up branch and reranker; it
+  // must never replace an explicit latest request in the primary search.
+  const query = primaryQuery(input);
   if (!query) throw new AppError(400, 'A natural-language knowledge query is required', 'KNOWLEDGE_QUERY_REQUIRED');
   const safeInput = {
     ...input, usageDirection: input.usageDirection ?? 'inbound', language: input.language ?? 'und',
