@@ -1,35 +1,34 @@
 import assert from 'node:assert/strict';
 import { performance } from 'node:perf_hooks';
-import { openLiveCallMemory } from '../src/voice/interaction/live-call-memory.js';
+import { openGenericConversationState } from '../src/voice/interaction/generic-conversation-state.js';
 import { normalizeLiveCallFrame } from '../src/voice/interaction/conversation-memory-state.js';
 import { runParallelHybridRetrieval } from '../src/knowledge-bases/parallel-hybrid-retrieval.js';
 import fs from 'node:fs';
 
 const identity = { tenantId: 'tenant', workspaceId: 'workspace', agentId: 'agent', callId: 'task-5' };
-const memory = openLiveCallMemory(identity, { conversationStages: { initialStage: 'introduction' } });
-memory.setPosition({ pendingQuestion: 'offer', pendingQuestionText: 'Would you like the available options?' });
+const memory = openGenericConversationState(identity, {});
+memory.setPendingQuestion({ key: 'offer', text: 'Would you like the available options?', kind: 'conversation' });
 memory.applyGroundedDecision({ flowAction: 'side_question', questionType: 'identity' });
 const resumed = memory.prepareAssistantResponse('I am calling from the approved company.');
 assert.match(resumed, /Would you like the available options\?/);
 memory.observeAssistantResponse(resumed);
 let snapshot = memory.snapshot();
-assert.equal(snapshot.conversationStage, snapshot.currentStage);
 assert.equal(snapshot.lastAnswer, resumed);
-assert.deepEqual(snapshot.collectedFields, snapshot.collectedData);
+assert.deepEqual(snapshot.collectedInformation, {});
 
-memory.setPosition({ pendingQuestion: 'old', pendingQuestionText: 'Old pending question?' });
+memory.setPendingQuestion({ key: 'old', text: 'Old pending question?', kind: 'conversation' });
 memory.applyGroundedDecision({ flowAction: 'side_question', questionType: 'identity' });
 memory.applyGroundedDecision({
   flowAction: 'direct_answer', questionType: 'details',
+  pendingQuestionRelevant: false,
   selectedEntities: [{ id: 'new-item', key: 'new-item', name: 'New item' }],
 });
 const changedTopic = memory.prepareAssistantResponse('Here are the new item details.');
 assert.doesNotMatch(changedTopic, /Old pending question/);
 
 const persisted = normalizeLiveCallFrame(memory.snapshot());
-assert.equal(persisted.conversationStage, persisted.currentStage);
 assert.equal(persisted.lastAnswer, resumed);
-assert.deepEqual(persisted.collectedFields, persisted.fields);
+assert.deepEqual(persisted.collectedInformation, {});
 assert.ok(Array.isArray(persisted.recentTurns));
 
 const startedAt = performance.now();

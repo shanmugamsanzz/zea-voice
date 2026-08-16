@@ -52,6 +52,17 @@ function entity(value = {}, sourceId = null) {
 export function buildGroundingEnvelope(knowledge = {}) {
   const sources = [];
   const sourceContents = new Set();
+  // PostgreSQL-hydrated evidence is authoritative and must be added before
+  // duplicate Qdrant/BM25 snippets so the LLM receives the complete approved
+  // record rather than only the discovery preview.
+  for (const evidence of knowledge.tenantEvidence?.sources ?? []) {
+    if (evidence.callerFacing === false) continue;
+    addSource(sources, sourceContents, evidence.content, {
+      recordId: text(evidence.recordId, 100) || null,
+      recordType: text(evidence.recordType, 40) || 'tenant_evidence',
+      authoritativeData: evidence.authoritativeData ?? null,
+    });
+  }
   for (const match of knowledge.matches ?? []) {
     addSource(sources, sourceContents, match.answer ?? match.content, {
       recordId: text(match.id, 100) || null,
@@ -64,13 +75,6 @@ export function buildGroundingEnvelope(knowledge = {}) {
     addSource(sources, sourceContents, hint.content, {
       recordId: text(hint.source?.recordId, 100) || null,
       recordType: 'workflow_hint',
-    });
-  }
-  for (const evidence of knowledge.tenantEvidence?.sources ?? []) {
-    if (evidence.callerFacing === false) continue;
-    addSource(sources, sourceContents, evidence.content, {
-      recordId: text(evidence.recordId, 100) || null,
-      recordType: text(evidence.recordType, 40) || 'tenant_evidence',
     });
   }
   for (const record of knowledge.compactKnowledgeMap?.records ?? []) {

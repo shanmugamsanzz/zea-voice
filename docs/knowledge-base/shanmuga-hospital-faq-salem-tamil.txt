@@ -1,103 +1,139 @@
-QUESTION: Shanmuga Hospital என்ன உதவி செய்யும்?
-ALIASES: What information can you provide? | என்ன details சொல்ல முடியும்? | Hospital services பற்றி சொல்லுங்க
-ANSWER: Shanmuga Hospitalல கிடைக்குற approved Health Check-up மற்றும் Screening options பத்தி explain பண்ணலாம். Package details, preparation information மற்றும் Appointment supportக்கும் உதவலாம்.
+Q: என்னென்ன packages இருக்கு?
+ALIASES: என்ன packages இருக்கு? | உங்ககிட்ட என்ன packageலாம் இருக்கு? | package list சொல்லுங்க | package explain பண்ணுங்க | வேற என்ன packages இருக்கு? | இன்னும் வேற என்ன options இருக்கு? | what packages do you have? | what else is available?
+A: எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Paediatric Health Screening, Onco Care Packages, Organ-Specific Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?
 
-QUESTION: Shanmuga Hospital எங்க இருக்கு?
-ALIASES: Hospital location என்ன? | Address சொல்லுங்க | Hospitalக்கு எப்படி வரணும்? | Where is the hospital? | Location share பண்ணுங்க
-ANSWER: Shanmuga Hospital, 51/24, Saradha College Road, Salem – 636007ல இருக்குங்க. Salem New Bus Standல இருந்து Saradha College Road வழியா Hasthampatti பக்கம் வரும்போது bridgeக்கு கீழ left sideல hospital இருக்கு.
+Q: Master Health Checkupல என்ன packages இருக்கு?
+ALIASES: master package list | full body checkup packages | Silver Gold Platinum | Master Health Checkup options
+A: Master Health Checkupல Silver, Gold, Platinum packages இருக்கு. எது பத்தி தெரிஞ்சிக்கணும்?
 
-QUESTION: Health Check-up Package screeningஆ diagnosisஆ?
-ALIASES: Package diagnosis பண்ணுமா? | இந்த Checkup நோயை confirm பண்ணுமா? | Is this diagnostic? | Screeningக்கும் diagnosisக்கும் என்ன difference?
-ANSWER: Health Check-up Package screeningக்காகத்தாங்க. இது diagnosis அல்லது treatment கிடையாது; exact medical காரணம் மற்றும் treatmentஐ Doctorதான் confirm பண்ண முடியும்.
+Q: Silver package detailஆ explain பண்ணுங்க.
+ALIASES: Silver details | Silverல என்ன tests இருக்கு? | Silver என்ன cover பண்ணும்? | Silver package price and tests | explain Silver
+A: Silver Master Health Checkup 1,650 ரூபாய். இதுல CBC, Blood Grouping and RH Type, Fasting Blood Sugar, Post Prandial Blood Sugar, HbA1C, Urea, Creatinine, Uric Acid, Lipid Profile, Liver Function Test, Urine Routine, ECG மற்றும் Chest X-Ray இருக்கு. One Doctor Consultation included. Testக்கு முன்னாடி 8 மணி நேரம் fasting இருக்கணும்; preferred test timing morning 8 மணியிலிருந்து 11 மணி வரை.
 
-QUESTION: இந்த Package எல்லா health problemஐயும் cover பண்ணுமா?
-ALIASES: Full body checkupல எல்லாமே cover ஆகுமா? | இந்த Packageல எல்லா Testsம் இருக்கா? | Does this package cover everything? | Complete body checkupஆ?
-ANSWER: எந்த ஒரு Health Check-up Packageமும் எல்லா medical condition அல்லது எல்லா Testஐயும் cover பண்ணும்னு சொல்ல முடியாதுங்க. அந்த Packageல approvedஆ listed இருக்குற Tests மட்டும் included; உங்களுடைய exact requirementக்கு Doctor consultation தேவை.
+Q: Gold package detailஆ explain பண்ணுங்க.
+ALIASES: Gold details | Goldல என்ன tests இருக்கு? | Gold என்ன cover பண்ணும்? | Gold package price and tests | explain Gold
+A: Gold Master Health Checkup 4,950 ரூபாய். இதுல CBC, Blood Grouping and RH Type, Fasting Blood Sugar, Post Prandial Blood Sugar, HbA1C, Urea, Creatinine, Uric Acid, Lipid Profile, Liver Function Test, Calcium, Iron and TIBC, Urine Routine, Vitamin D, Vitamin B12, Homocysteine, TSH, T3, T4, Sodium-Potassium-Chloride Electrolytes, HS-CRP, Chest X-Ray, ECG, ECHO, USG Abdomen மற்றும் Dental Check-up இருக்கு. One Doctor Consultation மற்றும் breakfast included. Testக்கு முன்னாடி 8 மணி நேரம் fasting இருக்கணும்; preferred test timing morning 8 மணியிலிருந்து 11 மணி வரை.
 
-QUESTION: எனக்கு எந்த Package suitableஆ இருக்கும்?
-ALIASES: எந்த Package choose பண்ணலாம்? | Which package should I select? | என்னுடைய requirementக்கு என்ன Package? | எனக்கு suitable Package சொல்லுங்க
-ANSWER: நீங்க ஏற்கனவே சொன்ன screening requirement அல்லது concernக்கு related approved option இருந்தா அதை explain பண்றேன். Concern இன்னும் சொல்லலைன்னா அதை மட்டும் சொல்லுங்க; exact medical suitabilityஐ Doctorதான் confirm பண்ண முடியும்.
+Q: Platinum package detailஆ explain பண்ணுங்க.
+ALIASES: Platinum details | Platinumல என்ன tests இருக்கு? | Platinum என்ன cover பண்ணும்? | Platinum package price and tests | explain Platinum
+A: Platinum Master Health Checkup 7,980 ரூபாய். இதுல CBC, Blood Grouping and RH Type, Fasting Blood Sugar, Post Prandial Blood Sugar, HbA1C, Urea, Creatinine, Uric Acid, Lipid Profile, Liver Function Test, Calcium, Iron and TIBC, Urine Routine, ESR, Vitamin D, Vitamin B12, Homocysteine, Thyroid Function Test, Sodium-Potassium-Chloride Electrolytes, HS-CRP, HIV, Hepatitis B Surface Antigen, Hepatitis C Virus Screening, Chest X-Ray, ECG, ECHO, PFT, USG Abdomen, Apolipoprotein A1 and B, Magnesium, Phosphorus, Carotid Doppler, Ankle Brachial Index, Dental Check-up மற்றும் Diabetic Foot Assessment இருக்கு. Four Doctor Consultations included. Testக்கு முன்னாடி 8 மணி நேரம் fasting இருக்கணும்; preferred test timing morning 8 மணியிலிருந்து 11 மணி வரை.
 
-QUESTION: ஒரு categoryக்கு ஒரே priceஆ?
-ALIASES: Category price என்ன? | இந்த category full price என்ன? | எல்லா optionsக்கும் same priceஆ? | Category package amount என்ன?
-ANSWER: ஒரு categoryக்குள்ள பல Check-up options இருந்தா ஒவ்வொன்றுக்கும் தனித்தனி price இருக்குங்க. எந்த option பத்தி கேக்குறீங்கன்னு சொன்னா அதோட approved price சொல்லலாம்.
+Q: Silverக்கும் Goldக்கும் என்ன difference?
+ALIASES: Silver vs Gold | compare Silver Gold | Goldல extra என்ன? | Silver Gold comparison
+A: Silver மற்றும் Gold இரண்டிலும் CBC, Blood Grouping and RH Type, Fasting and Post Prandial Sugar, HbA1C, Urea, Creatinine, Uric Acid, Lipid Profile, Liver Function Test, Urine Routine, ECG மற்றும் Chest X-Ray இருக்கு. Goldல கூடுதலாக Calcium, Iron and TIBC, Vitamin D, Vitamin B12, Homocysteine, TSH, T3, T4, Electrolytes, HS-CRP, ECHO, USG Abdomen, Dental Check-up மற்றும் breakfast இருக்கு. இரண்டிலும் One Doctor Consultation included.
 
-QUESTION: Full Test list சொல்ல முடியுமா?
-ALIASES: Complete test list வேணும் | எல்லா Testsம் சொல்லுங்க | What tests are included? | இந்த Packageல என்னென்ன இருக்கு? | Package full details சொல்லுங்க
-ANSWER: சொல்லலாங்க. இப்ப பேசுற selected Packageக்கான approved Full Test listஐ சின்ன சின்ன பகுதியாக explain பண்றேன். எந்த Packageனு இன்னும் clear ஆகலைன்னா Package பெயரை மட்டும் கேட்கிறேன்.
+Q: Goldக்கும் Platinumக்கும் என்ன difference?
+ALIASES: Gold vs Platinum | compare Gold Platinum | Platinumல extra என்ன? | Gold Platinum comparison
+A: Gold மற்றும் Platinum இரண்டிலும் Gold packageக்கான blood, sugar, kidney, liver, thyroid, vitamin, electrolyte, heart, abdomen மற்றும் dental screening tests இருக்கு. Platinumல கூடுதலாக ESR, HIV, Hepatitis B, Hepatitis C, PFT, Carotid Doppler, Ankle Brachial Index, Magnesium, Phosphorus, Apolipoprotein A1 and B மற்றும் Diabetic Foot Assessment இருக்கு. Goldல One Doctor Consultation; Platinumல Four Doctor Consultations included.
 
-QUESTION: Package details சுருக்கமா சொல்ல முடியுமா?
-ALIASES: Short summary சொல்லுங்க | முக்கியமான Tests மட்டும் சொல்லுங்க | Briefஆ explain பண்ணுங்க | Quick summary வேணும்
-ANSWER: சொல்லலாங்க. இப்ப பேசுற selected Packageோட approved price மற்றும் முக்கியமான coverageஐ முதல்ல சுருக்கமா சொல்றேன். Full list தேவைப்பட்டா அடுத்ததாக சொல்லலாம்.
+Q: Silverக்கும் Platinumக்கும் என்ன difference?
+ALIASES: Silver vs Platinum | compare Silver Platinum | Silver Platinum comparison
+A: Silver மற்றும் Platinum இரண்டிலும் CBC, Blood Grouping and RH Type, Fasting and Post Prandial Sugar, HbA1C, Urea, Creatinine, Uric Acid, Lipid Profile, Liver Function Test, Urine Routine, ECG மற்றும் Chest X-Ray இருக்கு. Platinumல கூடுதலாக Gold-level thyroid, vitamin, electrolyte, ECHO, USG and dental screening tests உடன் ESR, HIV, Hepatitis B, Hepatitis C, PFT, Carotid Doppler, Ankle Brachial Index, Magnesium, Phosphorus, Apolipoprotein A1 and B மற்றும் Diabetic Foot Assessment இருக்கு. Silverல One Doctor Consultation; Platinumல Four Doctor Consultations included.
 
-QUESTION: இரண்டு Packages compare பண்ண முடியுமா?
-ALIASES: Package difference சொல்லுங்க | Compare these packages | ரெண்டு Packageக்கும் என்ன வித்தியாசம்? | எது better?
-ANSWER: Compare பண்ணலாங்க. நீங்க கேட்ட இரண்டு approved Packagesோட price, included Tests மற்றும் முக்கியமான coverage difference மட்டும் தெளிவா சொல்றேன். எந்த இரண்டு Packagesனு clear ஆகலைன்னா அவற்றின் பெயரை மட்டும் கேட்கிறேன்; medicalஆ எது suitableன்னு Doctorதான் confirm பண்ண முடியும்.
+Q: Silver, Gold, Platinum மூன்றையும் compare பண்ணுங்க.
+ALIASES: Silver vs Gold vs Platinum | compare all Master packages | three packages comparison
+A: Silver, Gold, Platinum மூன்றிலும் CBC, Blood Grouping and RH Type, Fasting and Post Prandial Sugar, HbA1C, Urea, Creatinine, Uric Acid, Lipid Profile, Liver Function Test, Urine Routine, ECG மற்றும் Chest X-Ray இருக்கு. Goldல thyroid, vitamin, electrolyte, ECHO, USG Abdomen, Dental Check-up மற்றும் breakfast கூடுதலாக இருக்கு. Platinumல Gold-level screening உடன் ESR, HIV, Hepatitis B, Hepatitis C, PFT, Carotid Doppler, Ankle Brachial Index, Magnesium, Phosphorus, Apolipoprotein A1 and B மற்றும் Diabetic Foot Assessment கூடுதலாக இருக்கு. Silver மற்றும் Goldல One Doctor Consultation; Platinumல Four Doctor Consultations included.
 
-QUESTION: Health Check-upக்கு fasting தேவையா?
-ALIASES: Fasting இருக்கணுமா? | சாப்பிடாம வரணுமா? | How long should I fast? | எத்தனை மணி நேரம் fasting? | Testக்கு முன்னாடி சாப்பிடலாமா?
-ANSWER: Fasting instruction selected Packageக்கு ஏற்ப மாறலாம். இப்ப selected Package clearஆ இருந்தா அதுக்கான approved preparation instruction மட்டும் சொல்றேன்; Package clear இல்லனா எந்த Packageனு மட்டும் கேட்கிறேன்.
+Q: Diabetic Health Checkup detailஆ சொல்லுங்க.
+ALIASES: diabetic package | diabetes package details | sugar package | Diabetes Health Checkup explain
+A: Diabetes Health Checkup 3,200 ரூபாய். இதுல Fasting Blood Sugar, Post Prandial Blood Sugar, Chest X-Ray, CBC, Creatinine, ECG, ECHO, ESR, HbA1C, Lipid Profile, Insulin Fasting, Insulin Resistance, Insulin Sensitivity, Ankle Brachial Index, Biothesiometry, Foot Screening, Microalbuminuria Random Urine, USG Abdomen or Pelvis, Urea, Uric Acid, Urine Albumin Creatinine Ratio மற்றும் Urine Complete Analysis இருக்கு. One Doctor Consultation included.
 
-QUESTION: Fastingல தண்ணீர் குடிக்கலாமா?
-ALIASES: Water குடிக்கலாமா? | Can I drink water while fasting? | Fasting time water allowedஆ? | Tea coffee குடிக்கலாமா?
-ANSWER: Water, food மற்றும் drinks பற்றிய preparation instruction selected Packageக்கு ஏற்ப மாறலாம். அந்த Packageக்கான approved instruction இருந்தா அதை மட்டும் சொல்றேன்; இல்லனா Hospital teamகிட்ட confirm பண்ணணுங்க.
+Q: Kids Health Packagesல என்ன options இருக்கு?
+ALIASES: kids packages | child health package | pediatric options | paediatric packages | குழந்தைகளுக்கு என்ன package?
+A: Kids Health optionsல Paediatric Health Screening, Developmental and Behavioral Screening மற்றும் Neonatal Health Screening இருக்கு. எது பத்தி explain பண்ணட்டும்?
 
-QUESTION: Check-upக்கு என்ன கொண்டு வரணும்?
-ALIASES: Testக்கு வரும்போது என்ன எடுத்து வரணும்? | What should I bring? | Previous report கொண்டு வரணுமா? | என்ன dress போடணும்?
-ANSWER: Comfortable dress போட்டுட்டு வாங்க. ஏற்கனவே எடுத்த medical reports இருந்தா அதையும் கொண்டு வாங்க.
+Q: Paediatric Health Screening detailஆ சொல்லுங்க.
+ALIASES: pediatric screening details | paediatric package explain | child health screening details
+A: Paediatric Health Screening 1,500 ரூபாய். இதுல Dental Assessment, Nutritional Assessment, Immunization Counseling, Growth Screening, Developmental Screening, Anemia Screening, CBC, MCV, MCH, MCHC மற்றும் Peripheral Smear இருக்கு. One Doctor Consultation included. Testக்கு முன்னாடி 8 மணி நேரம் fasting இருக்கணும்; preferred test timing morning 8 மணியிலிருந்து 11 மணி வரை.
 
-QUESTION: Health Check-upக்கு எத்தனை மணிக்கு வரணும்?
-ALIASES: Test timing என்ன? | Checkup time சொல்லுங்க | What time should I come? | Morning எப்ப வரணும்?
-ANSWER: Check-up timing selected Package, preferred Date மற்றும் current availabilityக்கு ஏற்ப மாறலாம். Published Package instruction இருந்தா அதை சொல்றேன்; final available time configured Appointment operation அல்லது Hospital team confirmationலதான் தெரியும்.
+Q: Developmental and Behavioral Screening detailஆ சொல்லுங்க.
+ALIASES: developmental screening | behavioural screening | behavior assessment | IQ assessment | child development package
+A: Developmental Screening for preterm children அல்லது developmental delayக்கு 450 ரூபாய். IQ Assessment age 5 முதல் 13 வரை 1,500 ரூபாய்; age above 13க்கு 2,000 ரூபாய். Behavioural Assessment 500 ரூபாய்; Screening for Developmental Disorder 500 ரூபாய்.
 
-QUESTION: Regular Medicine stop பண்ணணுமா?
-ALIASES: Fastingல tablet எடுக்கலாமா? | Medicine சாப்பிடலாமா? | Should I stop my medicine? | Tablet continue பண்ணலாமா?
-ANSWER: Regular Medicineஐ நீங்களாக stop அல்லது change பண்ணாதீங்க. Check-upக்கு முன்னாடி Medicine எடுக்குறது பற்றி Doctor அல்லது Hospital teamகிட்ட confirm பண்ணுங்க.
+Q: Neonatal Health Screening detailஆ சொல்லுங்க.
+ALIASES: newborn screening | neonatal package | baby screening | newborn health screening details
+A: Neonatal Health Screeningல TSH, 17-OHP, G6PD கொண்ட 3 Panel Screening 800 ரூபாய்; TSH, 17-OHP, G6PD, Galactose கொண்ட 4 Panel Screening 1,000 ரூபாய்; New Born Hearing Screening 1,200 ரூபாய்.
 
-QUESTION: Appointmentக்கு என்ன details தேவை?
-ALIASES: Bookingக்கு என்ன information வேணும்? | What details are needed to book? | Appointment எப்படி book பண்ணுவது? | Booking details என்ன?
-ANSWER: Appointment requestஐ நீங்க தெளிவா கேட்ட பிறகுதான் booking details கேட்போம். Selected approved Package மற்றும் UIல configuredஆ இருக்குற required detailsல இன்னும் missingஆ இருக்குறதை மட்டும் கேட்போம்; ஏற்கனவே validஆ கிடைத்த தகவலை மறுபடியும் கேட்க மாட்டோம்.
+Q: Onco Care Packagesல என்ன options இருக்கு?
+ALIASES: Onco packages | oncology screening options | cancer screening packages | Onco Care explain
+A: Onco Careல Premium Male, Premium Female, Add-on Male மற்றும் Add-on Female options இருக்கு. எது பத்தி explain பண்ணட்டும்?
 
-QUESTION: Pre-callல name இருந்தாலும் Patient name ஏன் கேக்குறீங்க?
-ALIASES: என் பெயர் already இருக்கே? | Why are you asking my name again? | Name மறுபடியும் கேக்குறீங்களா? | Facebook formல name கொடுத்தேனே
-ANSWER: Current callல Patient name validஆ confirm ஆகியிருந்தா மறுபடியும் கேட்க மாட்டோம். Pre-call information மட்டும் இருந்தால் configured booking requirementக்கு confirmation தேவையா என்பதைப் பொறுத்து கேட்கலாம்; மற்ற already confirmed detailsஐ repeat பண்ண மாட்டோம்.
+Q: Onco Care Premium Male detailஆ சொல்லுங்க.
+ALIASES: premium male onco | male oncology premium | male cancer screening package
+A: Onco Care Screening Premium Male 8,600 ரூபாய். இதுல CBC, Urine Complete, Urea, Creatinine, Amylase, Lipase, Liver Function Test, Random Sugar, PSA, CEA, CA 19.9 மற்றும் CT Scan Screening of Chest and Whole Abdomen இருக்கு. Medical Oncologist Consultation included.
 
-QUESTION: Family memberக்கு Appointment book பண்ணலாமா?
-ALIASES: வேற ஒருத்தருக்கு booking பண்ணலாமா? | Can I book for a family member? | Friendக்கு Appointment வேணும் | Patient வேற person
-ANSWER: ஆமாங்க, Family member அல்லது வேற patientக்காக Appointment request பண்ணலாம். Booking ஆரம்பிச்ச பிறகு configured required detailsல அந்த patientக்கு இன்னும் missingஆ இருக்குற தகவலை மட்டும் கேட்போம்.
+Q: Onco Care Premium Female detailஆ சொல்லுங்க.
+ALIASES: premium female onco | female oncology premium | female cancer screening package
+A: Onco Care Screening Premium Female 8,800 ரூபாய். இதுல CBC, Urine Complete, Urea, Creatinine, Amylase, Lipase, Liver Function Test, Random Sugar, CA125, CEA, CA 19.9, Pap Smear, Mammogram மற்றும் CT Scan Screening of Chest and Whole Abdomen இருக்கு. Medical Oncologist Consultation included.
 
-QUESTION: Appointment request கொடுத்தாலே confirmedஆ?
-ALIASES: Appointment confirmedஆ? | Is my booking confirmed? | Booking success ஆயிடுச்சா? | Request submit ஆனால் போதுமா?
-ANSWER: Appointment operation successfulஆ confirm ஆன பிறகுதான் Booking confirmedங்க. Request processல இருந்தா confirmedனு சொல்ல முடியாது.
+Q: Onco Add-on Male detailஆ சொல்லுங்க.
+ALIASES: male onco add on | male cancer add-on | male oncology add-on
+A: Onco Screening Add-on Male 750 ரூபாய்; இது selected Silver, Gold அல்லது Platinum Master Health Checkup package உடன் மட்டும் கிடைக்கும். இதுல Amylase, Lipase, PSA, CEA மற்றும் CA 19.9 இருக்கு. Medical Oncology Consultation included.
 
-QUESTION: Package brochure WhatsAppல அனுப்ப முடியுமா?
-ALIASES: WhatsAppல details அனுப்புங்க | Send brochure in WhatsApp | Package list message பண்ணுங்க | WhatsAppக்கு அனுப்ப முடியுமா?
-ANSWER: அனுப்ப முயற்சி பண்ணலாம். எந்த Package details வேணும்னு சொல்லுங்க; WhatsApp delivery successful ஆன பிறகுதான் அனுப்பியாச்சுனு confirm பண்றோம்.
+Q: Onco Add-on Female detailஆ சொல்லுங்க.
+ALIASES: female onco add on | female cancer add-on | female oncology add-on
+A: Onco Screening Add-on Female 1,100 ரூபாய்; இது selected Silver, Gold அல்லது Platinum Master Health Checkup package உடன் மட்டும் கிடைக்கும். இதுல Amylase, Lipase, CA125, CEA, CA 19.9, Pap Smear மற்றும் Mammogram இருக்கு. Medical Oncology Consultation included.
 
-QUESTION: Package customize பண்ண முடியுமா?
-ALIASES: Tests customize பண்ணலாமா? | Custom package வேணும் | Can I change the package tests? | Package modify பண்ணணும்
-ANSWER: Package customizationக்கு Hospital tele-calling teamகிட்ட confirm பண்ணணுங்க. அவர்களோட connect பண்ண முயற்சி பண்ணலாம்.
+Q: Organ-Specific Packagesல என்ன options இருக்கு?
+ALIASES: organ packages | organ specific list | specialized checkups | organ health packages
+A: Organ-Specific Packagesல Renal Health Checkup, Liver Health Checkup, Cardiac Health Checkup, Surgery Profile 1, Surgery Profile 2, Lungs Health Checkup, Ortho Health Checkup மற்றும் Gastro Health Checkup இருக்கு. எது பத்தி explain பண்ணட்டும்?
 
-QUESTION: Doctor advice கிடைக்குமா?
-ALIASES: Doctorகிட்ட பேசணும் | Medical advice வேணும் | Can I speak to a doctor? | Doctor consultation help
-ANSWER: Medical advice மற்றும் diagnosisக்கு Doctor support தேவைங்க. Hospital teamகிட்ட connect பண்ண முயற்சி பண்ணலாம்.
+Q: Renal Health Checkup detailஆ சொல்லுங்க.
+ALIASES: kidney package | renal package | kidney function test | renal profile
+A: Renal Health Checkup 1,400 ரூபாய். இதுல Hemoglobin, Urea, Creatinine, Uric Acid, Calcium, Electrolytes, BUN மற்றும் USG Abdomen இருக்கு. Urologist அல்லது Nephrologist Consultation included.
 
-QUESTION: Insurance பற்றி சொல்ல முடியுமா?
-ALIASES: Insurance cover ஆகுமா? | Cashless availableஆ? | Is insurance accepted? | Insurance details வேணும்
-ANSWER: Insurance coverage மற்றும் eligibilityயை voice agent confirm பண்ண முடியாதுங்க. Hospital tele-calling teamகிட்ட connect பண்ணி verified details கேட்கலாம்.
+Q: Liver Health Checkup detailஆ சொல்லுங்க.
+ALIASES: liver package | liver test | liver function test | கல்லீரல் checkup
+A: Liver Health Checkup 1,400 ரூபாய். இதுல Hemoglobin, Liver Function Test மற்றும் USG Abdomen இருக்கு. Gastroenterologist Consultation included.
 
-QUESTION: Refund அல்லது complaint support கிடைக்குமா?
-ALIASES: Refund வேணும் | Complaint சொல்லணும் | I want to complain | Payment refund எப்படி? | Service issue இருக்கு
-ANSWER: Refund அல்லது complaint requestஐ Hospital tele-calling teamதான் handle பண்ணுவாங்க. அவர்களோட connect பண்ண முயற்சி பண்ணலாம்.
+Q: Cardiac Health Checkup detailஆ சொல்லுங்க.
+ALIASES: heart package | cardiac package | heart checkup | cardiac screening
+A: Cardiac Health Checkup 2,950 ரூபாய். இதுல CBC, FBS, PPBS, HbA1C, Urea, Creatinine, Lipid Profile, Homocystine, HSCRP, Urine Complete Analysis, Apolipoprotein A1 and B, ECG, ECHO, Treadmill Test மற்றும் Physical Examination இருக்கு. Cardiologist Consultation included.
 
-QUESTION: Doctor availability எப்படி தெரிஞ்சிக்கறது?
-ALIASES: Doctor availableஆ? | Doctor timing என்ன? | Doctor contact number வேணும் | Which doctor is available? | Specialist availability
-ANSWER: Doctor availability மற்றும் contact details current scheduleக்கு ஏற்ப மாறலாம். Hospital tele-calling teamகிட்ட connect பண்ணி confirm பண்ணலாம்.
+Q: Lungs Health Checkup detailஆ சொல்லுங்க.
+ALIASES: lung package | lungs checkup | respiratory package | pulmonary checkup
+A: Lungs Health Checkup 999 ரூபாய். இதுல CBC, RBS, CRP, ESR, Urea, Creatinine, X-Ray, ECG மற்றும் PFT இருக்கு. Pulmonologist Consultation included.
 
-QUESTION: Human agentகிட்ட பேச முடியுமா?
-ALIASES: Staffகிட்ட connect பண்ணுங்க | Telecaller வேணும் | Connect me to a person | மனிதர்கிட்ட பேசணும்
-ANSWER: ஆமாங்க, Hospital tele-calling teamகிட்ட connect பண்ண முயற்சி பண்ணலாம். Transfer successful ஆன பிறகுதான் connection confirm ஆகும்.
+Q: Ortho Health Checkup detailஆ சொல்லுங்க.
+ALIASES: ortho package | body pain package | joint package | bone checkup | mootu vali
+A: Ortho Health Checkup 1,499 ரூபாய். இதுல requirementக்கு ஏற்ப two X-rays, ESR, CRP, Calcium, Vitamin D, Uric Acid மற்றும் RA Factor இருக்கு. Ortho Consultation included.
 
-QUESTION: நீங்கள் answer தெரியாத question கேட்டா என்ன செய்வீங்க?
-ALIASES: Information இல்லனா என்ன செய்வீங்க? | You do not know the answer | இந்த detail confirm இல்லையா? | தெரியாத தகவல் கேட்டா?
-ANSWER: Confirmed information இல்லாதபோது guess பண்ணி சொல்ல மாட்டேங்க. Hospital tele-calling teamகிட்ட connect பண்ணி verified information கேட்க உதவலாம்.
+Q: Gastro Health Checkup detailஆ சொல்லுங்க.
+ALIASES: gastro package | stomach package | digestion package | ulcer package | gas problem package
+A: Gastro Health Checkup 25,000 ரூபாய். இதுல Hemoglobin, Liver Function Test, USG Abdomen, 24 Hours pH Monitoring, Manometry மற்றும் Endoscopy இருக்கு. One-day hospital admission required; Gastroenterologist Consultation included.
+
+Q: Fasting மற்றும் test timing என்ன?
+ALIASES: fasting இருக்கணுமா? | எத்தனை மணி நேரம் fasting? | சாப்பிடாம வரணுமா? | checkup timing | test timing
+A: Health check-upக்கு முன்னாடி 8 மணி நேரம் fasting இருக்கணும். Preferred test timing morning 8 மணியிலிருந்து 11 மணி வரை.
+
+Q: Hospital எங்க இருக்கு?
+ALIASES: hospital location | location சொல்லுங்க | address என்ன? | Shanmuga Hospital எங்கே? | எப்படி வரணும்?
+A: Shanmuga Hospital Salemல Sarada College Road, Hasthampatti bridgeக்கு கீழே left sideல இருக்கு.
+
+Q: Appointment book பண்ணலாமா?
+ALIASES: booking பண்ணணும் | appointment வேண்டும் | checkup book பண்ணுங்க | book an appointment
+A: ஆமாங்க, selected approved Packageக்கு appointment book பண்ணலாம்.
+
+Q: Appointment bookingக்கு என்ன details தேவை?
+ALIASES: booking details என்ன? | என்ன information கொடுக்கணும்? | appointment fields
+A: Appointment யாருக்காக, patient name, age, selected package, preferred date மற்றும் preferred time தேவைப்படும்.
+
+Q: Sunday appointment கிடைக்குமா?
+ALIASES: Sunday booking | ஞாயிறு appointment | Sunday checkup
+A: Sunday appointment booking available இல்லை.
+
+Q: நீங்க AIயா?
+ALIASES: AI agent ஆ? | human ஆ? | robot ஆ? | real person ஆ?
+A: ஆமாங்க, நான் Shanmuga Hospital AI agent கார்த்திகா பேசுறேன்.
+
+Q: Medical diagnosis அல்லது medicine advice சொல்ல முடியுமா?
+ALIASES: diagnosis சொல்லுங்க | medicine change பண்ணலாமா? | report interpretation | treatment advice
+A: Diagnosis, report interpretation, treatment மற்றும் medicine advice Doctorதான் confirm பண்ணணும்.
+
+Q: Medical emergency இருந்தா என்ன செய்யணும்?
+ALIASES: emergency | urgent medical problem | severe chest pain | cannot breathe | heavy bleeding
+A: இது urgent medical situationஆ இருக்கலாம். உடனே அருகிலுள்ள emergency medical help எடுத்துக்கோங்க.
+
+Q: Approved information இல்லாத கேள்விக்கு என்ன செய்வது?
+ALIASES: unknown information | answer கிடைக்கல | unsupported question | verified information இல்லை
+A: Verified information இல்லாததை guess பண்ணாமல் Hospital Telecaller teamகிட்ட confirm பண்ண உதவலாம்.

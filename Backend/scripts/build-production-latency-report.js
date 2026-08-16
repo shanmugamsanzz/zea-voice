@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { evaluateFirstAudioSlo } from '../src/voice/interaction/voice-latency-slo.js';
 
 const inputPath = process.argv[2];
 if (!inputPath) {
@@ -36,4 +37,8 @@ for (const line of readFileSync(inputPath, 'utf8').split(/\r?\n/u)) {
   });
 }
 
-process.stdout.write(`${JSON.stringify({ generatedAt: new Date().toISOString(), samples }, null, 2)}\n`);
+process.stdout.write(`${JSON.stringify({
+  generatedAt: new Date().toISOString(),
+  samples,
+  firstAudioSlo: evaluateFirstAudioSlo(samples),
+}, null, 2)}\n`);

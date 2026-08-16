@@ -22,14 +22,22 @@ function workflowIdentifier(evidence) {
   return identity(config.toolIdentifier ?? config.actionKey);
 }
 
+function actionRequirementsSatisfied(evidence, runtime) {
+  const config = evidence?.authoritativeData?.actionConfig ?? {};
+  return config.requiresCatalogItem !== true || (runtime.knownEntities ?? []).length > 0;
+}
+
 export function workflowAuthorizesTool(name, runtime = {}) {
   const requested = identity(name);
   const current = (runtime.actionEvidence ?? []).some((evidence) => (
-    String(evidence?.authoritativeData?.actionType ?? '').toLocaleLowerCase() === 'configured_tool'
+    evidence?.activationAllowed === true
+    && String(evidence?.authoritativeData?.actionType ?? '').toLocaleLowerCase() === 'configured_tool'
     && workflowIdentifier(evidence) === requested
     && evidenceBelongsToRuntime(evidence, runtime.evidenceScope)
+    && actionRequirementsSatisfied(evidence, runtime)
   ));
   if (current) return true;
+  if (runtime.requireCurrentActionEvidence === true) return false;
   return Boolean(runtime.activeToolRequest?.authorizationRecordId
     && identity(runtime.activeToolRequest?.name) === requested);
 }

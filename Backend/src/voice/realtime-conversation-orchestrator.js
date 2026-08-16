@@ -1318,9 +1318,17 @@ export class RealtimeConversationOrchestrator {
     }
 
     const liveMemory = this.liveCallMemory?.snapshot();
-    const pendingField = liveMemory?.fields?.find((field) => field.key === liveMemory.pendingQuestion);
+    const pendingQuestion = liveMemory?.pendingQuestion && typeof liveMemory.pendingQuestion === 'object'
+      ? liveMemory.pendingQuestion
+      : {
+        key: liveMemory?.pendingQuestion,
+        text: liveMemory?.pendingQuestionText,
+        kind: liveMemory?.pendingQuestionKind,
+      };
+    const pendingField = (this.liveCallMemory?.fieldSchemas?.() ?? liveMemory?.fields ?? [])
+      .find((field) => field.key === pendingQuestion?.key);
     const configuredResponse = String(this.callCheckConfiguration.response ?? '').trim();
-    const questionToResume = pendingField?.question ?? liveMemory?.pendingQuestionText;
+    const questionToResume = pendingField?.question ?? pendingQuestion?.text;
     const resumeQuestion = questionToResume
       && !configuredResponse.toLocaleLowerCase().includes(String(questionToResume).toLocaleLowerCase())
       ? questionToResume

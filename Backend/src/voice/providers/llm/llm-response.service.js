@@ -77,7 +77,9 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
       messages,
       tools: groundedResponseMode ? [] : assignedTools,
       temperature: runtimeProfile.agent.temperature,
-      maxOutputTokens: env.LLM_MAX_OUTPUT_TOKENS,
+      maxOutputTokens: groundedResponseMode
+        ? env.VOICE_GROUNDED_MAX_OUTPUT_TOKENS
+        : env.LLM_MAX_OUTPUT_TOKENS,
       ...(groundedResponseMode ? { responseFormat: { type: 'json_object' } } : {}),
     }),
     promptCharacters: systemPrompt.length,

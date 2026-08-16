@@ -31,6 +31,7 @@ const fieldSchemas = [
 ];
 const actionEvidence = [{
   recordId: 'workflow-record-1',
+  activationAllowed: true,
   authoritativeData: {
     actionType: 'configured_tool',
     actionConfig: { toolIdentifier: 'create_visit' },
@@ -105,6 +106,13 @@ const unauthorized = resolve({
   actionEvidence: [],
 });
 assert.equal(unauthorized, null);
+
+const semanticOnlyAction = resolve({
+  decision: { activeToolRequest: { name: 'create_visit' } },
+  afterState: { collectedInformation: {} },
+  actionEvidence: actionEvidence.map((entry) => ({ ...entry, activationAllowed: false })),
+});
+assert.equal(semanticOnlyAction, null);
 
 // Stored authorization permits later turns to continue without requiring the
 // same Workflow record to be retrieved again.

@@ -101,6 +101,7 @@ function knowledgeContext(knowledge, maximumChars = env.LLM_KNOWLEDGE_CONTEXT_MA
     route: knowledge.route,
     sources: envelope.sources.map((source) => ({
       id: source.id, recordType: source.recordType, content: source.content,
+      ...(source.authoritativeData ? { authoritativeData: source.authoritativeData } : {}),
     })),
     entities: envelope.entities.map((entity) => ({
       key: entity.key, name: entity.name, category: entity.category, sourceId: entity.sourceId,

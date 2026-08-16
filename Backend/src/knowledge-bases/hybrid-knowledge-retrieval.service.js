@@ -7,6 +7,7 @@ import { embedQuery } from '../rag/embedding.client.js';
 import { searchTenantPoints } from '../rag/qdrant.client.js';
 import { requireTenantId } from '../rag/tenant-isolation.js';
 import { sparseIndexCacheKey } from './knowledge-map.service.js';
+import { latestTurnWorkflowActivation } from './workflow-activation-policy.js';
 
 const recordTypes = Object.freeze([
   'CATALOG_ITEM', 'WORKFLOW_RULE', 'CONVERSATION_NODE', 'FAQ', 'KNOWLEDGE_CHUNK',
@@ -78,10 +79,14 @@ const hydrateEvidenceSql = `
        )
   ), evidence AS (
     SELECT 'FAQ'::text AS record_type, f.id AS record_id, f.knowledge_base_id,
+      f.tenant_id, $2::uuid AS agent_id, a.publication_revision,
       f.document_id, f.document_version_id, d.original_filename AS document_name,
       f.source_page_start, f.source_page_end, COALESCE(NULLIF(f.language,''), 'und') AS language,
       f.answer AS content, true AS caller_facing,
-      jsonb_build_object('question',f.question,'answer',f.answer) AS authoritative_data,
+      jsonb_build_object(
+        'question',f.question,'answer',f.answer,'language',f.language,
+        'usageDirection',f.usage_direction
+      ) AS authoritative_data,
       r.rank, r.score
       FROM requested r JOIN faq_entries f ON r.record_type='FAQ' AND f.id=r.record_id
       JOIN assigned a ON a.id=f.knowledge_base_id AND a.id=r.knowledge_base_id
@@ -92,10 +97,15 @@ const hydrateEvidenceSql = `
        AND v.is_current=true AND v.status='ready' AND v.deleted_at IS NULL
        AND d.status='ready' AND d.deleted_at IS NULL
     UNION ALL
-    SELECT 'KNOWLEDGE_CHUNK', c.id, c.knowledge_base_id, c.document_id, c.document_version_id,
+    SELECT 'KNOWLEDGE_CHUNK', c.id, c.knowledge_base_id,
+      c.tenant_id, $2::uuid, a.publication_revision,
+      c.document_id, c.document_version_id,
       d.original_filename, c.source_page_start, c.source_page_end,
       COALESCE(NULLIF(d.metadata->>'language',''), 'und'), c.content, true,
-      jsonb_build_object('heading',c.source_heading,'content',c.content), r.rank, r.score
+      jsonb_build_object(
+        'heading',c.source_heading,'content',c.content,'chunkIndex',c.chunk_index,
+        'tokenCount',c.token_count,'usageDirection',c.usage_direction
+      ), r.rank, r.score
       FROM requested r JOIN knowledge_chunks c ON r.record_type='KNOWLEDGE_CHUNK' AND c.id=r.record_id
       JOIN assigned a ON a.id=c.knowledge_base_id AND a.id=r.knowledge_base_id
       JOIN knowledge_document_versions v ON v.tenant_id=c.tenant_id AND v.id=c.document_version_id
@@ -105,7 +115,9 @@ const hydrateEvidenceSql = `
        AND v.is_current=true AND v.status='ready' AND v.deleted_at IS NULL
        AND d.status='ready' AND d.deleted_at IS NULL
     UNION ALL
-    SELECT 'CATALOG_ITEM', i.id, i.knowledge_base_id, i.document_id, i.document_version_id,
+    SELECT 'CATALOG_ITEM', i.id, i.knowledge_base_id,
+      i.tenant_id, $2::uuid, a.publication_revision,
+      i.document_id, i.document_version_id,
       d.original_filename, i.source_page_start, i.source_page_end,
       COALESCE(NULLIF(d.metadata->>'language',''), 'und'),
       concat_ws(E'\n','Item: '||i.name,'Category: '||COALESCE(i.category,sc.name),
@@ -113,10 +125,18 @@ const hydrateEvidenceSql = `
         CASE WHEN i.price IS NOT NULL THEN 'Price: '||i.price::text||' '||COALESCE(i.currency,'') END,
         CASE WHEN attrs.values_json <> '[]'::jsonb THEN 'Details: '||attrs.values_json::text END),
       true,
-      jsonb_build_object('itemKey',i.item_key,'name',i.name,'category',COALESCE(i.category,sc.name),
+      jsonb_build_object(
+        'catalogId',sc.id,'catalogType',sc.catalog_type,'catalogName',sc.name,
+        'catalogDescription',sc.description,'catalogDefaultCurrency',sc.default_currency,
+        'itemKey',i.item_key,'name',i.name,'aliases',i.aliases,
+        'category',COALESCE(i.category,sc.name),'categoryAliases',i.category_aliases,
         'categoryKey',i.category_key,'parentCategoryKey',i.parent_category_key,
+        'categoryDescription',i.category_description,
+        'categorySelectionRules',i.category_selection_rules,
         'description',i.description,'price',i.price,'currency',i.currency,
-        'attributes',attrs.values_json,'relationships',i.relationships,'selectionRules',i.selection_rules),
+        'displayOrder',i.display_order,'attributes',attrs.values_json,
+        'relationships',i.relationships,'selectionRules',i.selection_rules
+      ),
       r.rank, r.score
       FROM requested r JOIN structured_items i ON r.record_type='CATALOG_ITEM' AND i.id=r.record_id
       JOIN assigned a ON a.id=i.knowledge_base_id AND a.id=r.knowledge_base_id
@@ -124,20 +144,28 @@ const hydrateEvidenceSql = `
       JOIN knowledge_document_versions v ON v.tenant_id=i.tenant_id AND v.id=i.document_version_id
       JOIN knowledge_documents d ON d.tenant_id=i.tenant_id AND d.id=i.document_id
       LEFT JOIN LATERAL (SELECT COALESCE(jsonb_agg(jsonb_build_object(
-        'key',x.attribute_key,'name',x.display_name,'value',x.value
+        'key',x.attribute_key,'name',x.display_name,'value',x.value,
+        'displayOrder',x.display_order
       ) ORDER BY x.display_order,x.id),'[]'::jsonb) AS values_json
-        FROM structured_item_attributes x WHERE x.tenant_id=i.tenant_id AND x.item_id=i.id) attrs ON true
+        FROM structured_item_attributes x
+       WHERE x.tenant_id=i.tenant_id
+         AND x.knowledge_base_id=i.knowledge_base_id
+         AND x.document_version_id=i.document_version_id
+         AND x.item_id=i.id) attrs ON true
      WHERE i.tenant_id=$1 AND i.status='approved'
        AND v.is_current=true AND v.status='ready' AND v.deleted_at IS NULL
        AND d.status='ready' AND d.deleted_at IS NULL
     UNION ALL
-    SELECT 'WORKFLOW_RULE', w.id, w.knowledge_base_id, w.document_id, w.document_version_id,
+    SELECT 'WORKFLOW_RULE', w.id, w.knowledge_base_id,
+      w.tenant_id, $2::uuid, a.publication_revision,
+      w.document_id, w.document_version_id,
       d.original_filename, w.source_page_start, w.source_page_end,
       COALESCE(NULLIF(d.metadata->>'language',''), 'und'), COALESCE(w.response_template,''),
       lower(COALESCE(w.action_config->>'responseMode','instruction'))='exact',
       jsonb_build_object('name',w.name,'intent',w.intent,'priority',w.priority,
         'conditions',w.conditions,'actionType',w.action_type,'actionConfig',w.action_config,
-        'responseMode',COALESCE(w.action_config->>'responseMode','instruction')),
+        'responseMode',COALESCE(w.action_config->>'responseMode','instruction'),
+        'responseTemplate',w.response_template,'usageDirection',w.usage_direction),
       r.rank, r.score
       FROM requested r JOIN workflow_rules w ON r.record_type='WORKFLOW_RULE' AND w.id=r.record_id
       JOIN assigned a ON a.id=w.knowledge_base_id AND a.id=r.knowledge_base_id
@@ -148,12 +176,16 @@ const hydrateEvidenceSql = `
        AND v.is_current=true AND v.status='ready' AND v.deleted_at IS NULL
        AND d.status='ready' AND d.deleted_at IS NULL
     UNION ALL
-    SELECT 'CONVERSATION_NODE', f.id, f.knowledge_base_id, f.document_id, f.document_version_id,
+    SELECT 'CONVERSATION_NODE', f.id, f.knowledge_base_id,
+      f.tenant_id, $2::uuid, a.publication_revision,
+      f.document_id, f.document_version_id,
       d.original_filename, f.source_page_start, f.source_page_end,
       COALESCE(NULLIF(f.language,''),NULLIF(d.metadata->>'language',''),'und'), f.content,
       lower(COALESCE(f.node_type,''))<>'guidance',
       jsonb_build_object('flowKey',f.flow_key,'nodeKey',f.node_key,'nodeType',f.node_type,
-        'variables',f.variables,'transitions',f.transitions), r.rank, r.score
+        'language',f.language,'sequenceOrder',f.sequence_order,'isEntry',f.is_entry,
+        'content',f.content,'variables',f.variables,'transitions',f.transitions,
+        'usageDirection',f.usage_direction), r.rank, r.score
       FROM requested r JOIN conversation_flows f ON r.record_type='CONVERSATION_NODE' AND f.id=r.record_id
       JOIN assigned a ON a.id=f.knowledge_base_id AND a.id=r.knowledge_base_id
       JOIN knowledge_document_versions v ON v.tenant_id=f.tenant_id AND v.id=f.document_version_id
@@ -205,11 +237,21 @@ async function readJson(cache, key) {
   try { return JSON.parse(raw); } catch { return null; }
 }
 
-function contextualQuery(input) {
-  const understanding = input.understanding ?? {};
-  const values = [
+function queryParts(values) {
+  return values.map((value) => String(value ?? '').trim()).filter(Boolean).join(' ').slice(0, 2_000);
+}
+
+function primaryQuery(input) {
+  return queryParts([
     input.semanticQuery ?? input.query,
     ...(Array.isArray(input.requestedFacts) ? input.requestedFacts : []),
+  ]);
+}
+
+function contextualQuery(input, primary) {
+  const understanding = input.understanding ?? {};
+  return queryParts([
+    primary,
     input.currentTopic,
     input.pendingQuestion,
     understanding.questionType,
@@ -217,8 +259,16 @@ function contextualQuery(input) {
       .flatMap((entity) => [entity.name, entity.key, entity.category]),
     ...(Array.isArray(understanding.selectedEntities) ? understanding.selectedEntities : [])
       .flatMap((entity) => [entity.name, entity.key, entity.category]),
-  ];
-  return values.map((value) => String(value ?? '').trim()).filter(Boolean).join(' ').slice(0, 2_000);
+  ]);
+}
+
+export function isolatedRetrievalQueries(input = {}) {
+  const primary = primaryQuery(input);
+  const contextual = contextualQuery(input, primary);
+  return Object.freeze({
+    primary,
+    contextual: contextual && normalize(contextual) !== normalize(primary) ? contextual : '',
+  });
 }
 
 function candidateKey(candidate) {
@@ -302,6 +352,40 @@ export function mergeAndRerankCandidates(semantic, lexical, query, language = 'u
     .map((candidate, index) => ({ ...candidate, rank: index + 1 }));
 }
 
+function primaryEvidenceIsSufficient(candidates, query) {
+  const first = candidates[0];
+  if (!first) return false;
+  const normalizedQuery = normalize(query);
+  const exactCoverage = normalizedQuery.length >= 3
+    && normalize(first.contentPreview).includes(normalizedQuery);
+  const lexicalCoverage = Number(first.tokenCoverage ?? 0) >= 0.6;
+  const semanticScore = Number(first.semanticScore ?? 0);
+  const runnerUpScore = Number(candidates[1]?.semanticScore ?? 0);
+  const semanticFloor = Math.min(0.98, Math.max(0.82, env.RAG_RUNTIME_MIN_SCORE + 0.08));
+  const multiChannel = Array.isArray(first.channels) && first.channels.length > 1
+    && semanticScore >= env.RAG_RUNTIME_MIN_SCORE;
+  return exactCoverage || lexicalCoverage || multiChannel
+    || (semanticScore >= semanticFloor && semanticScore - runnerUpScore >= 0.04);
+}
+
+function contextWasExplicitlyRequested(input) {
+  const understanding = input.understanding ?? {};
+  return input.contextualFollowUp === true
+    || understanding.contextDependent === true
+    || understanding.requiresContext === true;
+}
+
+function prioritizeCandidates(primary, contextual, useContext, limit) {
+  const unique = new Map();
+  for (const candidate of useContext ? [...contextual, ...primary] : primary) {
+    const key = candidateKey(candidate);
+    if (!unique.has(key)) unique.set(key, candidate);
+  }
+  return [...unique.values()]
+    .slice(0, Math.max(3, Math.min(Number(limit) || 5, 5)))
+    .map((candidate, index) => ({ ...candidate, rank: index + 1 }));
+}
+
 async function loadScope(auth, input, runtime) {
   return runtime.contextRunner(auth, async (client) => {
     const result = await client.query(activeScopeSql, [auth.tenantId, input.agentId, input.usageDirection]);
@@ -348,6 +432,25 @@ async function lexicalCandidates(auth, input, query, scope, runtime) {
   });
 }
 
+async function retrieveBranch(auth, input, query, scope, runtime) {
+  if (!query) return { semantic: [], lexical: [], ranked: [] };
+  const [semantic, lexical] = await Promise.all([
+    abortable(deadline(
+      semanticCandidates(auth, input, query, scope, runtime),
+      env.RAG_RUNTIME_SEMANTIC_DEADLINE_MS, [],
+    ), input.abortSignal, []),
+    abortable(deadline(
+      lexicalCandidates(auth, input, query, scope, runtime),
+      env.RAG_RUNTIME_CHANNEL_DEADLINE_MS, [],
+    ), input.abortSignal, []),
+  ]);
+  return {
+    semantic,
+    lexical,
+    ranked: mergeAndRerankCandidates(semantic, lexical, query, input.language, input.topK ?? 5),
+  };
+}
+
 async function hydrate(auth, input, ranked, runtime) {
   if (!ranked.length) return [];
   const manifest = ranked.map((candidate) => ({
@@ -362,10 +465,12 @@ async function hydrate(auth, input, ranked, runtime) {
   });
 }
 
-function evidenceFromRow(row) {
+export function authoritativeEvidenceFromRow(row) {
   return {
     id: `published:${String(row.record_type).toLowerCase()}:${row.record_id}`,
     recordType: row.record_type, recordId: row.record_id,
+    tenantId: row.tenant_id, agentId: row.agent_id,
+    publicationRevision: Number(row.publication_revision),
     knowledgeBaseId: row.knowledge_base_id, documentId: row.document_id,
     documentVersionId: row.document_version_id, documentName: row.document_name,
     pageNumber: row.source_page_start ?? null, pageEnd: row.source_page_end ?? null,
@@ -421,13 +526,28 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
     hydrate({ ...auth, tenantId }, safeInput, ranked, runtime), env.RAG_RUNTIME_CHANNEL_DEADLINE_MS, [],
   ), input.abortSignal, []);
   const hydrationMs = Math.round((performance.now() - hydrationStartedAt) * 100) / 100;
-  const evidence = rows.map(evidenceFromRow).sort((left, right) => left.rank - right.rank);
-  const sources = evidence.filter((item) => !(
+  const evidence = rows.map(authoritativeEvidenceFromRow).sort((left, right) => left.rank - right.rank)
+    .map((item) => {
+      if (item.recordType !== 'WORKFLOW_RULE') return item;
+      const activation = latestTurnWorkflowActivation({
+        latestUtterance: input.query,
+        conditions: item.authoritativeData?.conditions,
+      });
+      return { ...item, activationAllowed: activation.allowed, activation };
+    });
+  const permittedEvidence = evidence.filter((item) => (
+    item.recordType !== 'WORKFLOW_RULE' || item.activationAllowed === true
+  ));
+  const sources = permittedEvidence.filter((item) => !(
     (item.recordType === 'WORKFLOW_RULE' || item.recordType === 'CONVERSATION_NODE')
     && item.callerFacing !== true
   ));
-  const actionEvidence = evidence.filter((item) => item.recordType === 'WORKFLOW_RULE' && item.callerFacing !== true);
-  const guidanceEvidence = evidence.filter((item) => item.recordType === 'CONVERSATION_NODE' && item.callerFacing !== true);
+  const actionEvidence = permittedEvidence.filter((item) => (
+    item.recordType === 'WORKFLOW_RULE' && item.callerFacing !== true
+  ));
+  const guidanceEvidence = permittedEvidence.filter((item) => (
+    item.recordType === 'CONVERSATION_NODE' && item.callerFacing !== true
+  ));
   const entities = sources.filter((item) => item.recordType === 'CATALOG_ITEM').map((item) => ({
     id: item.recordId, key: item.authoritativeData.itemKey, name: item.authoritativeData.name,
     category: item.authoritativeData.category, categoryKey: item.authoritativeData.categoryKey,
@@ -435,12 +555,15 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   }));
   const result = {
     operation: 'search_published_knowledge', route: 'hybrid',
-    found: evidence.length > 0, sources, actionEvidence, guidanceEvidence, entities,
-    evidenceIds: evidence.map((item) => item.id),
+    found: permittedEvidence.length > 0, sources, actionEvidence, guidanceEvidence, entities,
+    evidenceIds: permittedEvidence.map((item) => item.id),
     requestedFacts: Array.isArray(input.requestedFacts) ? input.requestedFacts : [],
     retrieval: {
       semanticCandidates: semantic.length, lexicalCandidates: lexical.length,
       mergedCandidates: ranked.length, hydratedEvidence: evidence.length,
+      workflowCandidatesRejected: evidence.filter((item) => (
+        item.recordType === 'WORKFLOW_RULE' && item.activationAllowed !== true
+      )).length,
       vectorBm25Ms, rerankMs, hydrationMs,
       semanticTimedOut: runtime.ragEnabled && semantic.length === 0 && lexical.length > 0,
     },

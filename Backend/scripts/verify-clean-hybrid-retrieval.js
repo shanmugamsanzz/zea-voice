@@ -19,6 +19,9 @@ const ids = {
   tamil: '60000000-0000-4000-8000-000000000003',
   tanglish: '60000000-0000-4000-8000-000000000004',
   foreign: '60000000-0000-4000-8000-000000000005',
+  currentRequest: '60000000-0000-4000-8000-000000000006',
+  staleContext: '60000000-0000-4000-8000-000000000007',
+  contextualFollowUp: '60000000-0000-4000-8000-000000000008',
 };
 
 const rows = new Map([
@@ -49,6 +52,27 @@ const rows = new Map([
     source_page_start: 2, source_page_end: 2, language: 'ta',
     content: 'Appointment onlineல book பண்ணலாம்.', caller_facing: true,
     authoritative_data: { question: 'Appointment எப்படி book பண்ணுவது?', answer: 'Appointment onlineல book பண்ணலாம்.' },
+  }],
+  [ids.currentRequest, {
+    record_type: 'FAQ', record_id: ids.currentRequest, knowledge_base_id: kbA,
+    document_id: documentId, document_version_id: versionId, document_name: 'faq.txt',
+    source_page_start: 3, source_page_end: 3, language: 'en',
+    content: 'Returns are accepted within fourteen days.', caller_facing: true,
+    authoritative_data: { answer: 'Returns are accepted within fourteen days.' },
+  }],
+  [ids.staleContext, {
+    record_type: 'FAQ', record_id: ids.staleContext, knowledge_base_id: kbA,
+    document_id: documentId, document_version_id: versionId, document_name: 'faq.txt',
+    source_page_start: 4, source_page_end: 4, language: 'en',
+    content: 'The previous subject has a five-year term.', caller_facing: true,
+    authoritative_data: { answer: 'The previous subject has a five-year term.' },
+  }],
+  [ids.contextualFollowUp, {
+    record_type: 'FAQ', record_id: ids.contextualFollowUp, knowledge_base_id: kbA,
+    document_id: documentId, document_version_id: versionId, document_name: 'faq.txt',
+    source_page_start: 5, source_page_end: 5, language: 'en',
+    content: 'Express delivery arrives the next working day.', caller_facing: true,
+    authoritative_data: { answer: 'Express delivery arrives the next working day.' },
   }],
 ]);
 
@@ -118,11 +142,11 @@ function dependencies({ points = [], slowEmbedding = false } = {}) {
         };
       },
     }),
-    embed: async () => {
+    embed: async (query) => {
       if (slowEmbedding) await new Promise((resolve) => setTimeout(resolve, 1_000));
-      return [0.1];
+      return [query];
     },
-    search: async () => points,
+    search: async (_tenantId, vector) => (typeof points === 'function' ? points(String(vector[0])) : points),
   };
 }
 
@@ -164,6 +188,29 @@ const rejected = await search('private foreign evidence', {
 });
 assert.equal(rejected.found, false, 'Cross-tenant Qdrant evidence must be rejected before hydration');
 
+const explicitTopicChange = await search('What is the return window?', {
+  currentTopic: 'previous subject term',
+  points: (query) => (query === 'What is the return window?'
+    ? [semanticPoint(ids.currentRequest, 'FAQ', { score: 0.94 })]
+    : [
+      semanticPoint(ids.staleContext, 'FAQ', { score: 0.99 }),
+      semanticPoint(ids.currentRequest, 'FAQ', { score: 0.8 }),
+    ]),
+});
+assert.equal(explicitTopicChange.sources[0].recordId, ids.currentRequest,
+  'A strong result for the finalized utterance must outrank stale conversational context');
+assert.equal(explicitTopicChange.retrieval.contextualUsed, false);
+
+const genuineFollowUp = await search('What about that one?', {
+  currentTopic: 'express delivery',
+  points: (query) => (query === 'What about that one?'
+    ? []
+    : [semanticPoint(ids.contextualFollowUp, 'FAQ', { score: 0.94 })]),
+});
+assert.equal(genuineFollowUp.sources[0].recordId, ids.contextualFollowUp,
+  'Context may resolve a follow-up only when the finalized utterance has insufficient evidence');
+assert.equal(genuineFollowUp.retrieval.contextualUsed, true);
+
 const deduplicated = mergeAndRerankCandidates([
   { recordType: 'FAQ', recordId: ids.location, knowledgeBaseId: kbA, semanticScore: 0.9, channelRank: 1 },
 ], [
@@ -183,4 +230,5 @@ console.log(JSON.stringify({
   semanticParaphrases: true, exactCodesPricesNames: true,
   languages: ['Tamil', 'Tanglish', 'English'], misspellingsAndSttVariations: true,
   timeoutFallback: true, crossTenantRejection: true,
+  latestRequestIsolation: true, genuineFollowUpResolution: true,
 }));

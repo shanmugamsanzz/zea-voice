@@ -187,20 +187,28 @@ export function openGenericConversationState(identity, settings = {}, now = Date
     },
     applyGroundedDecision(decision = {}, options = {}) {
       if (!current(options.turnToken)) return Object.freeze({ applied: false, stale: true, state: publicState(state) });
-      const topic = cleanText(decision.currentTopic, 240);
+      const update = decision.stateUpdate && typeof decision.stateUpdate === 'object'
+        ? decision.stateUpdate : decision;
+      const topic = cleanText(update.currentTopic ?? decision.currentTopic, 240);
       if (topic) state.currentTopic = topic;
-      const selected = uniqueEntities(decision.selectedEntities ?? []);
+      const selected = uniqueEntities(update.knownEntities ?? decision.selectedEntities ?? []);
       if (selected.length) state.knownEntities = uniqueEntities([...selected, ...state.knownEntities]);
-      const updates = cleanInformation(decision.fieldUpdates, fieldKeys);
+      const updates = cleanInformation(
+        update.collectedInformation ?? decision.fieldUpdates ?? {}, fieldKeys,
+      );
       for (const [field, value] of Object.entries(updates)) state.collectedInformation[field] = value;
       if (state.pendingQuestion?.key && Object.hasOwn(updates, state.pendingQuestion.key)) {
         state.pendingQuestion = null;
-      } else if (decision.pendingQuestionRelevant === false) state.pendingQuestion = null;
+      } else if ((update.pendingQuestionRelevant ?? decision.pendingQuestionRelevant) === false) state.pendingQuestion = null;
       else if (decision.flowAction === 'side_question' && state.pendingQuestion) resumePending = true;
       if (decision.pendingQuestion !== undefined) state.pendingQuestion = cleanPending(decision.pendingQuestion);
-      if (decision.language) state.language = cleanLanguage(decision.language, state.language);
-      if (decision.activeToolRequest !== undefined) {
-        state.activeToolRequest = cleanToolRequest(decision.activeToolRequest);
+      if (update.language ?? decision.language) {
+        state.language = cleanLanguage(update.language ?? decision.language, state.language);
+      }
+      if (update.activeToolRequest !== undefined || decision.activeToolRequest !== undefined) {
+        state.activeToolRequest = cleanToolRequest(
+          update.activeToolRequest ?? decision.activeToolRequest,
+        );
       }
       return Object.freeze({ applied: true, updates: Object.freeze({ ...updates }), state: publicState(state) });
     },

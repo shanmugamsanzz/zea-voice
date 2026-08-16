@@ -8,6 +8,39 @@ function same(left, right) {
   return Boolean(a && b && a === b);
 }
 
+function wholePhrase(haystack, needle) {
+  const source = ` ${text(haystack).replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ')} `;
+  const target = text(needle).replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim();
+  return Boolean(target && source.includes(` ${target} `));
+}
+
+function strongLatestTurnWorkflowMatch(candidate, latestUtterance) {
+  if (candidate?.route !== 'workflow') return true;
+  const method = text(candidate?.workflow?.matchMethod);
+  if (!['exact', 'contains', 'intent'].includes(method)) return false;
+  const phrase = candidate?.workflow?.matchedPhrase;
+  if (!text(latestUtterance) || !text(phrase)) return false;
+  if (method === 'exact') return same(latestUtterance, phrase);
+  return wholePhrase(latestUtterance, phrase);
+}
+
+function requestedFactCoverage(candidate, requestedFacts) {
+  const requested = [...new Set((requestedFacts ?? []).map(text).filter(Boolean))];
+  if (!requested.length) return 0;
+  const data = candidate?.authoritativeData ?? candidate?.source?.authoritativeData ?? {};
+  const available = [
+    ...(candidate?.supportedFacts ?? []),
+    ...(candidate?.directAnswer?.requestedFacts ?? []),
+    ...Object.keys(data),
+    ...(Array.isArray(data.attributes)
+      ? data.attributes.flatMap((attribute) => [attribute?.key, attribute?.name]) : []),
+  ].map(text).filter(Boolean);
+  const matched = requested.filter((fact) => available.some((value) => (
+    value === fact || wholePhrase(value, fact) || wholePhrase(fact, value)
+  ))).length;
+  return matched / requested.length;
+}
+
 const semanticRecordPriority = Object.freeze({
   CATALOG_ITEM: 500,
   WORKFLOW_RULE: 450,
@@ -110,15 +143,21 @@ export function rankHybridEvidence(candidates, context = {}) {
     const compatibility = questionCompatibility(candidate, context.questionType);
     const pendingCompatibility = questionCompatibility(candidate, context.pendingQuestionType);
     const method = text(candidate?.entityResolution?.method ?? candidate?.workflow?.matchMethod);
+    const strongWorkflowMatch = strongLatestTurnWorkflowMatch(candidate, context.latestUtterance);
     const directApproved = candidate?.directAnswer?.approved === true
       && candidate.route !== 'workflow_hint'
+      && strongWorkflowMatch
       && Boolean(String(candidate.content ?? '').trim());
+    const factCoverage = requestedFactCoverage(candidate, context.requestedFacts);
 
     // These weights intentionally encode the documented ordering. A lower
     // concern cannot overcome a mismatch in a higher concern.
     factors.latestQuestionType = compatibility * 1_000_000_000_000;
+    factors.explicitEntity = (same(identity.id, context.explicitEntityId)
+      || same(identity.key, context.explicitEntityKey)) ? 100_000_000_000 : 0;
+    factors.requestedFacts = Math.round(factCoverage * 10_000_000_000);
     factors.selectedItem = (same(identity.id, context.selectedItemId)
-      || same(identity.key, context.selectedItemKey)) ? 10_000_000_000 : 0;
+      || same(identity.key, context.selectedItemKey)) ? 1_000_000_000 : 0;
     factors.resolvedEntity = (same(identity.id, context.resolvedEntityId)
       || same(identity.key, context.resolvedEntityKey)) ? 100_000_000 : 0;
     factors.directAnswerCoverage = directApproved && compatibility >= 0 ? 1_000_000 : 0;
@@ -138,7 +177,7 @@ export function rankHybridEvidence(candidates, context = {}) {
     factors.retrievalModality = candidate.route === 'semantic' ? 10 : (candidate.route === 'lexical' ? 5 : 0);
     factors.deterministicAction = candidate.route === 'workflow'
       && candidate.workflow?.evidenceOnly !== true
-      && ['exact', 'contains', 'intent'].includes(method) ? 1_000 : 0;
+      && strongWorkflowMatch ? 1_000 : 0;
     // Task-1 safety/exact actions precede ordinary evidence ranking. This is
     // deliberately unavailable to fuzzy/phonetic Workflow hints.
     factors.safetyExactAction = factors.deterministicAction > 0 ? 100_000_000_000 : 0;
@@ -180,15 +219,19 @@ export function resolveEvidenceConfidence(ranked, configuration = {}) {
   return Object.freeze({ outcome: 'none', confidence, margin: confidenceMargin });
 }
 
-export function validateDirectAnswer(candidate, { questionType, confidenceOutcome } = {}) {
+export function validateDirectAnswer(candidate, {
+  questionType, confidenceOutcome, latestUtterance,
+} = {}) {
   const approved = candidate?.directAnswer?.approved === true;
   const content = String(candidate?.content ?? '').trim();
   const compatibility = questionCompatibility(candidate, questionType);
+  const strongWorkflowMatch = strongLatestTurnWorkflowMatch(candidate, latestUtterance);
   const valid = approved
     && candidate?.route !== 'workflow_hint'
     && candidate?.workflow?.evidenceOnly !== true
     && confidenceOutcome === 'high'
     && compatibility >= 0
+    && strongWorkflowMatch
     && Boolean(content);
   return Object.freeze({
     valid,
@@ -197,7 +240,8 @@ export function validateDirectAnswer(candidate, { questionType, confidenceOutcom
         : (candidate?.route === 'workflow_hint' || candidate?.workflow?.evidenceOnly === true
           ? 'evidence_hint_only'
           : (confidenceOutcome !== 'high' ? 'confidence_not_high'
-            : (compatibility < 0 ? 'question_type_mismatch' : 'empty_content')))),
+            : (compatibility < 0 ? 'question_type_mismatch'
+              : (!strongWorkflowMatch ? 'latest_turn_match_not_strong' : 'empty_content'))))),
   });
 }
 

@@ -51,6 +51,8 @@ function authorizedTool(activeRequest, tools, actionEvidence) {
   if (!assigned) return null;
   const identifiers = toolIdentifiers(assigned);
   const authorization = (actionEvidence ?? []).find((evidence) => (
+    evidence.activationAllowed === true
+    &&
     String(evidence.authoritativeData?.actionType ?? '').toLocaleLowerCase() === 'configured_tool'
     && identifiers.has(workflowIdentifier(evidence))
   ));
@@ -173,4 +175,3 @@ export function composeConfiguredTurnResponse(answer, nextQuestion) {
   }
   return answerParts.join(' ').trim();
 }
-

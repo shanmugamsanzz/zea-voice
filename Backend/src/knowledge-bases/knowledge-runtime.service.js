@@ -1621,8 +1621,12 @@ async function parallelRankedKnowledgeResult({
   const ranked = rankHybridEvidence(
     uniqueCandidates.filter((candidate) => candidate.route !== 'clarification'),
     {
+      latestUtterance: input.query,
       selectedItemId: input.selectedCatalogItemId,
       selectedItemKey: input.selectedCatalogItemKey,
+      explicitEntityId: input.explicitEntityId,
+      explicitEntityKey: input.explicitEntityKey,
+      requestedFacts: input.requestedFacts,
       resolvedEntityId: currentCatalogResolution?.item?.id,
       resolvedEntityKey: currentCatalogResolution?.item?.item_key,
       activeCategoryKey: input.activeCategoryKey,
@@ -1697,6 +1701,7 @@ async function parallelRankedKnowledgeResult({
   const directValidation = validateDirectAnswer(result, {
     questionType: input.detectedIntent?.intent,
     confidenceOutcome: confidenceRoute.outcome,
+    latestUtterance: input.query,
   });
   if (result.directAnswer?.approved === true) {
     result.directAnswer = { ...result.directAnswer, validated: directValidation.valid };

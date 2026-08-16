@@ -40,7 +40,7 @@ const toolRuntime = {
   evidenceScope: scope,
   toolSchemas: [{ name: 'configured_action', inputSchema: toolSchema }],
   actionEvidence: [{
-    ...source, callerFacing: false,
+    ...source, callerFacing: false, activationAllowed: true,
     authoritativeData: {
       actionType: 'configured_tool', actionConfig: { toolIdentifier: 'configured_action' },
     },
@@ -50,6 +50,54 @@ assert.equal(validateDecisionSecurity({
   toolRequest: { name: 'configured_action', arguments: { email: 'a@b.com', count: 2 } },
   runtime: toolRuntime,
 }).valid, true);
+assert.equal(validateDecisionSecurity({
+  toolRequest: { name: 'configured_action', arguments: { email: 'a@b.com', count: 2 } },
+  runtime: {
+    ...toolRuntime,
+    actionEvidence: toolRuntime.actionEvidence.map((evidence) => ({
+      ...evidence,
+      authoritativeData: {
+        ...evidence.authoritativeData,
+        actionConfig: {
+          ...evidence.authoritativeData.actionConfig,
+          requiresCatalogItem: true,
+        },
+      },
+    })),
+    knownEntities: [],
+    requireCurrentActionEvidence: true,
+  },
+}).reason, 'unauthorized_tool_request');
+assert.equal(validateDecisionSecurity({
+  toolRequest: { name: 'configured_action', arguments: { email: 'a@b.com', count: 2 } },
+  runtime: {
+    ...toolRuntime,
+    actionEvidence: toolRuntime.actionEvidence.map((evidence) => ({
+      ...evidence, tenantId: 'foreign-tenant',
+    })),
+    requireCurrentActionEvidence: true,
+  },
+}).reason, 'unauthorized_tool_request');
+assert.equal(validateDecisionSecurity({
+  toolRequest: { name: 'configured_action', arguments: { email: 'a@b.com', count: 2 } },
+  runtime: {
+    ...toolRuntime,
+    actionEvidence: [],
+    activeToolRequest: {
+      name: 'configured_action', authorizationRecordId: 'older-authorization',
+    },
+    requireCurrentActionEvidence: true,
+  },
+}).reason, 'unauthorized_tool_request');
+assert.equal(validateDecisionSecurity({
+  toolRequest: { name: 'configured_action', arguments: { email: 'a@b.com', count: 2 } },
+  runtime: {
+    ...toolRuntime,
+    actionEvidence: toolRuntime.actionEvidence.map((evidence) => ({
+      ...evidence, activationAllowed: false, matchMode: 'semantic',
+    })),
+  },
+}).reason, 'unauthorized_tool_request');
 assert.equal(validateDecisionSecurity({
   toolRequest: { name: 'unassigned_action', arguments: {} }, runtime: toolRuntime,
 }).reason, 'unauthorized_tool_request');

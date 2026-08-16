@@ -34,6 +34,22 @@ ranked = rankHybridEvidence([resolvedPrice, selectedPrice], {
 });
 assert.equal(ranked[0].candidate, selectedPrice, 'selected item must outrank newly resolved entity');
 
+const selectedWithoutRequestedFact = {
+  ...catalogCandidate('item-d', 'item-d', 'category-d', ['details']),
+  supportedFacts: ['description'],
+};
+const explicitRequestedFact = {
+  ...catalogCandidate('item-e', 'item-e', 'category-e', ['details']),
+  supportedFacts: ['availability'],
+};
+ranked = rankHybridEvidence([selectedWithoutRequestedFact, explicitRequestedFact], {
+  questionType: 'details', selectedItemId: 'item-d', explicitEntityId: 'item-e',
+  requestedFacts: ['availability'],
+});
+assert.equal(ranked[0].candidate, explicitRequestedFact,
+  'an entity explicitly named in the latest request must outrank stale selected state');
+assert.equal(ranked[0].factors.requestedFacts > 0, true);
+
 const fuzzyWorkflow = {
   route: 'workflow_hint', found: true, content: 'Internal evidence hint.',
   source: { recordId: 'rule-1', recordType: 'WORKFLOW_RULE', confidence: 0.95 },
@@ -43,6 +59,29 @@ const fuzzyWorkflow = {
 assert.equal(validateDirectAnswer(fuzzyWorkflow, {
   questionType: 'booking', confidenceOutcome: 'high',
 }).valid, false);
+
+const semanticOnlyWorkflow = {
+  route: 'workflow', found: true, content: 'Approved configured response.',
+  source: { recordId: 'rule-2', recordType: 'WORKFLOW_RULE', confidence: 0.99 },
+  workflow: {
+    evidenceOnly: false, matchMethod: 'semantic', confidence: 0.99,
+    matchedPhrase: 'request account assistance', intent: 'side_question',
+  },
+  directAnswer: { approved: true, questionTypes: ['side_question'] },
+};
+assert.equal(validateDirectAnswer(semanticOnlyWorkflow, {
+  questionType: 'side_question', confidenceOutcome: 'high',
+  latestUtterance: 'I need something unrelated',
+}).reason, 'latest_turn_match_not_strong');
+
+const exactWorkflow = {
+  ...semanticOnlyWorkflow,
+  workflow: { ...semanticOnlyWorkflow.workflow, matchMethod: 'exact' },
+};
+assert.equal(validateDirectAnswer(exactWorkflow, {
+  questionType: 'side_question', confidenceOutcome: 'high',
+  latestUtterance: 'request account assistance',
+}).valid, true);
 
 const approvedDirect = catalogCandidate('item-c', 'item-c', 'category-c', ['price'], { direct: true });
 const directRanked = rankHybridEvidence([approvedDirect], { questionType: 'price' });
@@ -93,10 +132,10 @@ assert.ok(p95Ms <= 20, `ranking and validation p95 ${p95Ms.toFixed(3)}ms exceede
 console.log(JSON.stringify({
   task: 'deterministic-evidence-ranking',
   priorityOrder: [
-    'latestQuestionType', 'selectedItem', 'resolvedEntity', 'directAnswerCoverage',
+    'latestQuestionType', 'explicitEntity', 'requestedFacts', 'selectedItem', 'resolvedEntity', 'directAnswerCoverage',
     'activeCategory', 'pendingQuestion', 'stageCompatibility', 'sourceAuthority',
   ],
-  fuzzyWorkflowDirectSpeech: false,
+  fuzzyWorkflowDirectSpeech: false, semanticWorkflowDirectSpeech: false,
   canonicalEntityStored: true,
   rankingValidationP95Ms: Math.round(p95Ms * 1000) / 1000,
 }, null, 2));
