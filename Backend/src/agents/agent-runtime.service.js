@@ -143,6 +143,8 @@ function buildCompactGroundedSystemPrompt(agent, {
     fieldSchemas: context.configuredInformationFields ?? [],
     toolSchemas: context.configuredToolSchemas ?? [],
   }));
+  // Explicitly highlight collected information for the LLM
+  const collectedInfoSummary = JSON.stringify(context.liveCallMemory?.collectedInformation ?? {});
   const runtimeContext = JSON.stringify({
     callId: context.callId,
     direction: context.direction,

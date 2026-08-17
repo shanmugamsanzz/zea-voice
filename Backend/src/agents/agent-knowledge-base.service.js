@@ -1,8 +1,7 @@
 import { withTenantContext } from '../infrastructure/database-context.js';
 import { invalidateTenantKnowledgeCache } from '../knowledge-bases/knowledge-runtime.service.js';
 import { AppError } from '../middleware/errors.js';
-/* test */
-/* test new test ading the user  purpose */
+
 function mapAssignment(row) {
   return {
     agentId: row.agent_id,
