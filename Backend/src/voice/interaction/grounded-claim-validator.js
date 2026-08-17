@@ -18,6 +18,14 @@ function numbers(value) {
     .map((entry) => entry.replace(/[^\d]/gu, '')).filter(Boolean));
 }
 
+// Codes, abbreviations and compact identifiers are factual values.  Unlike
+// ordinary prose they should never be translated or invented by a model, so a
+// selected authoritative record must contain every one that is spoken.
+function factualTerms(value) {
+  return new Set((text(value).match(/\b(?:[A-Z]{2,12}|[A-Z0-9]+(?:[-_/][A-Z0-9]+)+)\b/gu) ?? [])
+    .map((entry) => entry.toLocaleUpperCase()));
+}
+
 function sourceContent(source) {
   let structured = '';
   try {
@@ -108,6 +116,10 @@ export function validateGroundedClaim(sentence, sources = [], options = {}) {
   const evidenceNumbers = numbers(evidenceText);
   if ([...numbers(claim)].some((number) => !evidenceNumbers.has(number))) {
     return Object.freeze({ valid: false, reason: 'unsupported_numeric_fact' });
+  }
+  const evidenceTerms = factualTerms(evidenceText);
+  if ([...factualTerms(claim)].some((term) => !evidenceTerms.has(term))) {
+    return Object.freeze({ valid: false, reason: 'unsupported_technical_fact' });
   }
   const evidenceSentences = sources.flatMap((source) => sentences(source?.content));
   const ranked = evidenceSentences.map((candidate) => ({ candidate, score: overlap(claim, candidate) }))

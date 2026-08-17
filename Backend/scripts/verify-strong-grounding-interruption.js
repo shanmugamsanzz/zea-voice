@@ -20,6 +20,8 @@ assert.equal(validateGroundedClaim('Priority service does not include standard s
   'unsupported_negation');
 assert.equal(validateGroundedClaims('Priority service costs INR 3500.', factualSources).reason,
   'unsupported_numeric_fact');
+assert.equal(validateGroundedClaim('Priority service includes ABC.', factualSources).reason,
+  'unsupported_technical_fact');
 assert.equal(validateGroundedClaim('The request was confirmed.', factualSources).reason,
   'unauthorized_action_claim');
 assert.equal(validateGroundedClaim('Caller asked information; retrieve approved evidence.', factualSources).reason,
