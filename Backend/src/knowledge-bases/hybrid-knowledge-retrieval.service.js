@@ -254,6 +254,7 @@ function contextualQuery(input, primary) {
     primary,
     input.currentTopic,
     input.pendingQuestion,
+    input.lastAnswer,
     understanding.questionType,
     ...(Array.isArray(input.knownEntities) ? input.knownEntities : [])
       .flatMap((entity) => [entity.name, entity.key, entity.category]),
@@ -487,7 +488,8 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   // The finalized caller utterance is the authoritative live-turn query.
   // Context is available to the separate follow-up branch and reranker; it
   // must never replace an explicit latest request in the primary search.
-  const query = primaryQuery(input);
+  const queries = isolatedRetrievalQueries(input);
+  const query = queries.primary;
   if (!query) throw new AppError(400, 'A natural-language knowledge query is required', 'KNOWLEDGE_QUERY_REQUIRED');
   const safeInput = {
     ...input, usageDirection: input.usageDirection ?? 'inbound', language: input.language ?? 'und',
@@ -501,19 +503,15 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
     cancelled: Boolean(input.abortSignal?.aborted), durationMs: performance.now() - startedAt,
   };
   const revisions = scope.map((item) => `${item.id}:${item.publicationRevision}`).sort().join('|');
-  const cacheKey = `zea:rag:hybrid:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${safeInput.language}`)}`;
+  const cacheKey = `zea:rag:hybrid:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();
-  const [semantic, lexical] = await Promise.all([
-    abortable(deadline(
-      semanticCandidates({ ...auth, tenantId }, safeInput, query, scope, runtime),
-      env.RAG_RUNTIME_SEMANTIC_DEADLINE_MS, [],
-    ), input.abortSignal, []),
-    abortable(deadline(
-      lexicalCandidates({ ...auth, tenantId }, safeInput, query, scope, runtime),
-      env.RAG_RUNTIME_CHANNEL_DEADLINE_MS, [],
-    ), input.abortSignal, []),
+  const [primaryBranch, contextualBranch] = await Promise.all([
+    retrieveBranch({ ...auth, tenantId }, safeInput, query, scope, runtime),
+    queries.contextual
+      ? retrieveBranch({ ...auth, tenantId }, safeInput, queries.contextual, scope, runtime)
+      : Promise.resolve({ semantic: [], lexical: [], ranked: [] }),
   ]);
   if (input.abortSignal?.aborted) return {
     operation: 'search_published_knowledge', route: 'hybrid', found: false, sources: [],
@@ -522,7 +520,14 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   };
   const vectorBm25Ms = Math.round((performance.now() - retrievalStartedAt) * 100) / 100;
   const rerankStartedAt = performance.now();
-  const ranked = mergeAndRerankCandidates(semantic, lexical, query, safeInput.language, safeInput.topK ?? 5);
+  const contextualUsed = Boolean(queries.contextual)
+    && !primaryEvidenceIsSufficient(primaryBranch.ranked, query);
+  const ranked = prioritizeCandidates(
+    primaryBranch.ranked,
+    contextualBranch.ranked,
+    contextualUsed,
+    safeInput.topK ?? 5,
+  );
   const rerankMs = Math.round((performance.now() - rerankStartedAt) * 100) / 100;
   const hydrationStartedAt = performance.now();
   const rows = await abortable(deadline(
@@ -562,13 +567,17 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
     evidenceIds: permittedEvidence.map((item) => item.id),
     requestedFacts: Array.isArray(input.requestedFacts) ? input.requestedFacts : [],
     retrieval: {
-      semanticCandidates: semantic.length, lexicalCandidates: lexical.length,
+      semanticCandidates: primaryBranch.semantic.length + contextualBranch.semantic.length,
+      lexicalCandidates: primaryBranch.lexical.length + contextualBranch.lexical.length,
       mergedCandidates: ranked.length, hydratedEvidence: evidence.length,
+      contextualAvailable: Boolean(queries.contextual), contextualUsed,
       workflowCandidatesRejected: evidence.filter((item) => (
         item.recordType === 'WORKFLOW_RULE' && item.activationAllowed !== true
       )).length,
       vectorBm25Ms, rerankMs, hydrationMs,
-      semanticTimedOut: runtime.ragEnabled && semantic.length === 0 && lexical.length > 0,
+      semanticTimedOut: runtime.ragEnabled
+        && primaryBranch.semantic.length + contextualBranch.semantic.length === 0
+        && primaryBranch.lexical.length + contextualBranch.lexical.length > 0,
     },
     publicationRevisions: scope.map((item) => ({
       knowledgeBaseId: item.id, publicationRevision: Number(item.publicationRevision),

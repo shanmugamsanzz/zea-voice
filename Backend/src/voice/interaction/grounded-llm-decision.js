@@ -330,14 +330,25 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
   if (decision === 'answer' && !envelope.found) {
     return Object.freeze({ valid: false, reason: 'verified_evidence_missing' });
   }
-  const evidenceText = citedSources.map((source) => source.content).join(' ');
+  const evidenceText = citedSources.map((source) => {
+    let structured = '';
+    try {
+      structured = source.authoritativeData && typeof source.authoritativeData === 'object'
+        ? JSON.stringify(source.authoritativeData)
+        : '';
+    } catch {
+      structured = '';
+    }
+    return `${source.content ?? ''} ${structured}`;
+  }).join(' ');
   const evidenceNumbers = numbers(evidenceText);
   if (answer && [...numbers(answer)].some((number) => !evidenceNumbers.has(number))) {
     return Object.freeze({ valid: false, reason: 'unsupported_numeric_fact' });
   }
-  if (decision === 'answer' && supportRatio(answer, evidenceText) < 0.2) {
-    return Object.freeze({ valid: false, reason: 'insufficient_evidence_overlap' });
-  }
+  // Surface-token overlap is not a reliable evidence test for Tamil,
+  // Tanglish, translations, or natural spoken paraphrases. The hydrated
+  // claim validator still enforces selected evidence, numbers, entities,
+  // safety policies and verified tool results before speech.
   const stateUpdate = normalizeStateUpdate(parsed.stateUpdate, envelope, runtime);
   if (!stateUpdate) return Object.freeze({ valid: false, reason: 'invalid_state_update' });
   const toolRequest = normalizeToolRequest(parsed.toolRequest, decision, runtime);
