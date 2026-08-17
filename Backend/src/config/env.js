@@ -170,10 +170,9 @@ const envSchema = z.object({
   VOICE_UNIFIED_GROUNDED_DECISION_ENABLED: booleanFromString.default(false),
   LLM_MAX_HISTORY_MESSAGES: z.coerce.number().int().min(0).max(50).default(12),
   LLM_SYSTEM_PROMPT_MAX_CHARS: z.coerce.number().int().min(2000).max(100000).default(40000),
-  // Keep enough room for the complete UI-authored tenant prompt, live state,
-  // grounding contract and selected evidence. A 6k default silently removed
-  // later booking/safety rules from normal production voice turns.
-  VOICE_LLM_PROMPT_BUDGET_CHARS: z.coerce.number().int().min(4000).max(40000).default(24000),
+  // Unified voice turns reserve the structured contract and cap composition
+  // at 12k; legacy/non-voice callers may still explicitly configure more.
+  VOICE_LLM_PROMPT_BUDGET_CHARS: z.coerce.number().int().min(4000).max(40000).default(12000),
   VOICE_LLM_MAX_HISTORY_MESSAGES: z.coerce.number().int().min(0).max(20).default(6),
   // Used only when a streaming STT provider does not send its own speech-end
   // event.  It finalizes a complete caller turn after genuine quiet, never

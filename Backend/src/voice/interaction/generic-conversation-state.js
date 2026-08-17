@@ -90,9 +90,15 @@ function cleanToolRequest(value) {
   const name = cleanText(value.name ?? value.action, 100);
   const status = cleanText(value.status, 40) || 'pending';
   const authorizationRecordId = cleanText(value.authorizationRecordId, 120);
+  const selectedEntityKey = cleanText(value.selectedEntityKey, 160);
+  const selectedEntityName = cleanText(value.selectedEntityName, 240);
+  const catalogRecordId = cleanText(value.catalogRecordId, 120);
   return id || name ? Object.freeze({
     id: id || null, name: name || null, status,
     ...(authorizationRecordId ? { authorizationRecordId } : {}),
+    ...(selectedEntityKey ? { selectedEntityKey } : {}),
+    ...(selectedEntityName ? { selectedEntityName } : {}),
+    ...(catalogRecordId ? { catalogRecordId } : {}),
   }) : null;
 }
 

@@ -16,7 +16,9 @@ import { ProviderUsageTracker } from './provider-usage-tracker.js';
 import { loadAgentRuntimeProfile } from './providers/provider-config.js';
 import { createRuntimeAdapters, providerAdapterRegistry } from './providers/registry.js';
 import { registerImplementedProviderAdapters } from './providers/defaults.js';
-import { createSelectedLlmStream, runtimeTools } from './providers/llm/llm-response.service.js';
+import {
+  createSelectedLlmStream, runtimeTools, selectedLlmPromptBudget,
+} from './providers/llm/llm-response.service.js';
 import { executeAgentTools } from './tools/tool-executor.service.js';
 import { LlmCircuitBreaker } from './providers/llm/streaming-runtime.js';
 import { welcomeAudioCache } from './welcome-audio-cache.service.js';
@@ -57,6 +59,7 @@ import { applyUnifiedGroundedTurn } from './interaction/unified-grounded-turn.js
 import { evaluateFirstAudioSlo, percentile } from './interaction/voice-latency-slo.js';
 import {
   hydrateSelectedEvidence,
+  rankRelevantHydratedEvidence,
   validateGroundedClaims,
 } from './interaction/grounded-claim-validator.js';
 import { sttEventPolicy } from './interaction/stt-event-policy.js';
@@ -148,7 +151,34 @@ function documentSpeech(value) {
   if (/^\s*(?:rule|match|match_mode|response_mode|priority|action|from_stage|next_stage)\s*:/iu.test(content)) {
     return null;
   }
-  return content.length <= 1_200 ? content : null;
+  return content.length <= 4_000 ? content : null;
+}
+
+function hydratedRecordSpeech(source) {
+  const data = source?.authoritativeData ?? {};
+  const preferred = [
+    data.answer,
+    source?.callerFacing === true ? data.responseTemplate : null,
+    data.content,
+    source?.content,
+  ];
+  for (const value of preferred) {
+    const speech = documentSpeech(value);
+    if (speech) return speech;
+  }
+  return null;
+}
+
+// Unified grounding failures stay attached to the same top PostgreSQL-hydrated
+// evidence retrieved for the finalized utterance. A stale generic overview or
+// the first arbitrary document is never substituted for a specific request.
+export function approvedHydratedEvidenceFallback(query, envelope, evidence, profile) {
+  for (const candidate of rankRelevantHydratedEvidence(query, envelope, evidence)) {
+    const speech = hydratedRecordSpeech(candidate.source);
+    if (!speech || isInternalRuntimeText(speech)) continue;
+    return { text: speech, source: candidate.source };
+  }
+  return { text: callerFacingFallback(profile), source: null };
 }
 
 // A grounding failure must never turn a normal knowledge question into a
@@ -1973,6 +2003,11 @@ export class RealtimeConversationOrchestrator {
         ...context,
         groundedResponseMode,
         compactGrounding: this.unifiedGroundedDecisionEnabled,
+        actionConfirmation: this.taskCompletionState.configuration?.enabled === true ? {
+          intent: this.taskCompletionState.configuration.intent,
+          requiredFields: this.taskCompletionState.configuration.requiredFields,
+          requiresCatalogItem: this.taskCompletionState.configuration.requiresCatalogItem,
+        } : null,
         ttsResponseCharacterLimit: (() => {
           const limits = [
           Number(this.runtimeProfile.limits?.ttsMaxCharactersPerResponse ?? 0),
@@ -1987,7 +2022,7 @@ export class RealtimeConversationOrchestrator {
       promptCharacters: session.promptCharacters,
       configuredBudgetCharacters: env.VOICE_LLM_PROMPT_BUDGET_CHARS,
       effectiveBudgetCharacters: this.unifiedGroundedDecisionEnabled
-        ? Math.min(env.VOICE_LLM_PROMPT_BUDGET_CHARS, 16_000)
+        ? selectedLlmPromptBudget(true)
         : env.VOICE_LLM_PROMPT_BUDGET_CHARS,
       evidenceRecords: groundingEnvelope.sources.length,
       publishedMapIncluded: !this.unifiedGroundedDecisionEnabled,
@@ -2053,6 +2088,7 @@ export class RealtimeConversationOrchestrator {
                 ? validateGroundedClaims(
                   preparedSentence,
                   hydrateSelectedEvidence(decoded.decision, groundingEnvelope, authoritativeEvidence),
+                  { knownEntities: groundingEnvelope.entities },
                 )
                 : null;
               const validation = unifiedGroundedDecision
@@ -2132,6 +2168,8 @@ export class RealtimeConversationOrchestrator {
             publicationRevisions: tenantEvidence.publicationRevisions ?? [],
           },
           safetyPolicies: this.runtimeProfile.agent.settings?.safetyPolicies ?? [],
+          finalizedUtterance: query,
+          confirmationConfiguration: this.taskCompletionState.configuration,
         })
         : null;
       const grounded = unifiedGroundedDecision
@@ -2190,7 +2228,9 @@ export class RealtimeConversationOrchestrator {
         } else {
           this.runtimeMetrics.grounding.fallbacks += 1;
           const documentFallback = unifiedGroundedDecision
-            ? { text: callerFacingFallback(this.runtimeProfile), source: null }
+            ? approvedHydratedEvidenceFallback(
+              query, groundingEnvelope, authoritativeEvidence, this.runtimeProfile,
+            )
             : approvedDocumentFallback(knowledge, this.runtimeProfile);
           answer = documentFallback?.text ?? callerFacingFallback(this.runtimeProfile);
           if (documentFallback?.source) {
@@ -2217,6 +2257,7 @@ export class RealtimeConversationOrchestrator {
             const claims = validateGroundedClaims(
               answer,
               hydrateSelectedEvidence(grounded, groundingEnvelope, authoritativeEvidence),
+              { knownEntities: groundingEnvelope.entities },
             );
             return {
               valid: claims.valid,
@@ -2240,7 +2281,9 @@ export class RealtimeConversationOrchestrator {
         else {
           this.runtimeMetrics.grounding.fallbacks += 1;
           answer = unifiedGroundedDecision
-            ? callerFacingFallback(this.runtimeProfile)
+            ? approvedHydratedEvidenceFallback(
+              query, groundingEnvelope, authoritativeEvidence, this.runtimeProfile,
+            ).text
             : (approvedDocumentFallback(knowledge, this.runtimeProfile)?.text
               ?? callerFacingFallback(this.runtimeProfile));
         }

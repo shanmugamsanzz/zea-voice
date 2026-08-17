@@ -35,6 +35,7 @@ const sideAnswer = applyUnifiedGroundedTurn({
   turnToken: 'turn-1',
   fieldSchemas: settings.conversationMemoryFields,
   evidence: envelope.sources,
+  finalizedUtterance: 'Where is the office?',
 });
 assert.equal(sideAnswer.valid, true);
 assert.equal(sideAnswer.answer, 'The office is on Central Road. Which date do you prefer?');
@@ -60,6 +61,7 @@ const corrected = applyUnifiedGroundedTurn({
   turnToken: 'turn-2',
   fieldSchemas: settings.conversationMemoryFields,
   evidence: envelope.sources,
+  finalizedUtterance: 'Friday works for me.',
 });
 assert.equal(corrected.state.collectedInformation.preferred_date, 'Friday');
 assert.equal(corrected.state.pendingQuestion, null);
@@ -75,6 +77,7 @@ const stale = applyUnifiedGroundedTurn({
   turnToken: 'turn-1',
   fieldSchemas: settings.conversationMemoryFields,
   evidence: envelope.sources,
+  finalizedUtterance: 'This is stale.',
 });
 assert.equal(stale.valid, false);
 assert.equal(stale.reason, 'stale_turn');
@@ -92,6 +95,7 @@ const contradicted = applyUnifiedGroundedTurn({
   turnToken: 'turn-3',
   fieldSchemas: settings.conversationMemoryFields,
   evidence: envelope.sources,
+  finalizedUtterance: 'Where is the office?',
 });
 assert.equal(contradicted.valid, false);
 assert.equal(contradicted.reason, 'unsupported_negation');
@@ -118,6 +122,10 @@ const actionEnvelope = {
   sources: [{
     id: 'item-source', recordId: 'item-record', recordType: 'CATALOG_ITEM',
     content: 'Priority service is an approved selectable service.',
+    authoritativeData: {
+      itemKey: 'priority-service', name: 'Priority service',
+      selectionRules: { selectable: true },
+    },
   }],
   entities: [{ id: 'item-1', key: 'priority-service', name: 'Priority service', sourceId: 'item-source' }],
 };
@@ -126,6 +134,10 @@ const actionEvidence = [
     id: 'item-source', recordId: 'item-record', recordType: 'CATALOG_ITEM',
     tenantId: 'tenant-a', agentId: 'agent-a', knowledgeBaseId: 'kb-a', publicationRevision: 3,
     callerFacing: true, content: 'Priority service is an approved selectable service.',
+    authoritativeData: {
+      itemKey: 'priority-service', name: 'Priority service',
+      selectionRules: { selectable: true },
+    },
   },
   {
     id: 'workflow-source', recordId: 'workflow-record', recordType: 'WORKFLOW_RULE',
@@ -163,6 +175,7 @@ const sameTurnAction = applyUnifiedGroundedTurn({
   tools: [actionTool],
   evidence: actionEvidence,
   evidenceScope,
+  finalizedUtterance: 'Create the priority service request for Asha.',
 });
 assert.equal(sameTurnAction.valid, true);
 assert.equal(sameTurnAction.toolRequest.name, 'create_request');
@@ -193,6 +206,7 @@ const unauthorizedAction = applyUnifiedGroundedTurn({
     source.recordType === 'WORKFLOW_RULE' ? { ...source, activationAllowed: false } : source
   )),
   evidenceScope,
+  finalizedUtterance: 'Create the priority service request for Asha.',
 });
 assert.equal(unauthorizedAction.valid, false);
 assert.equal(unauthorizedAction.reason, 'unauthorized_tool_request');
@@ -219,13 +233,133 @@ const invalidArguments = applyUnifiedGroundedTurn({
   turnToken: 'invalid-arguments-turn',
   fieldSchemas: actionSettings.conversationMemoryFields,
   tools: [actionTool], evidence: actionEvidence, evidenceScope,
+  finalizedUtterance: 'Create the priority service request for A.',
 });
 assert.equal(invalidArguments.valid, false);
 assert.equal(invalidArguments.reason, 'invalid_tool_arguments');
 assert.equal(invalidArguments.state.knownEntities[0].key, 'priority-service');
 assert.equal(invalidArguments.state.activeToolRequest, null);
 
+const inventedMemory = openGenericConversationState(
+  { ...identity, callId: 'call-invented-field' }, actionSettings,
+);
+inventedMemory.beginTurn('invented-turn');
+const inventedField = applyUnifiedGroundedTurn({
+  rawDecision: JSON.stringify({
+    decision: 'action', answer: '',
+    evidenceIds: ['item-source'],
+    stateUpdate: {
+      currentTopic: 'priority service', knownEntityKeys: ['priority-service'],
+      collectedInformation: { contact_name: 'Invented Name' }, correctedFields: [],
+      pendingQuestionRelevant: false, activeToolRequest: { name: 'create_request' },
+    },
+    pendingQuestion: null,
+    toolRequest: { name: 'create_request', arguments: { contact_name: 'Invented Name' } },
+  }),
+  groundingEnvelope: actionEnvelope, memory: inventedMemory, turnToken: 'invented-turn',
+  fieldSchemas: actionSettings.conversationMemoryFields, tools: [actionTool],
+  evidence: actionEvidence, evidenceScope,
+  finalizedUtterance: 'Tell me about priority service.',
+});
+assert.equal(inventedField.valid, false);
+assert.equal(inventedField.reason, 'unsupported_caller_value');
+assert.deepEqual(inventedField.state.collectedInformation, {});
+
+const bookingFields = [
+  { key: 'contact_name', label: 'Name', type: 'text', required: true, requiredAction: 'create_request', question: 'Name?' },
+  { key: 'age', label: 'Age', type: 'number', required: true, requiredAction: 'create_request', question: 'Age?' },
+  { key: 'visit_date', label: 'Date', type: 'text', required: true, requiredAction: 'create_request', question: 'Date?' },
+  { key: 'visit_time', label: 'Time', type: 'text', required: true, requiredAction: 'create_request', question: 'Time?' },
+  { key: 'selected_service', label: 'Service', type: 'text', required: true, requiredAction: 'create_request', question: 'Service?' },
+];
+const bookingTool = {
+  ...actionTool,
+  configuration: {
+    inputSchema: {
+      type: 'object', additionalProperties: false,
+      required: bookingFields.map((field) => field.key),
+      properties: Object.fromEntries(bookingFields.map((field) => [field.key, {
+        type: field.key === 'age' ? 'integer' : 'string',
+      }])),
+    },
+  },
+};
+const confirmationConfiguration = {
+  enabled: true, intent: 'create_request',
+  requiredFields: bookingFields.map((field) => field.key),
+  confirmationMessage: 'Are these details correct?',
+  requiresCatalogItem: true, catalogField: 'selected_service',
+};
+const bookingMemory = openGenericConversationState(
+  { ...identity, callId: 'call-confirmation' }, { conversationMemoryFields: bookingFields },
+);
+bookingMemory.beginTurn('booking-details-turn');
+const sameTurnDetails = applyUnifiedGroundedTurn({
+  rawDecision: JSON.stringify({
+    decision: 'action', answer: '', evidenceIds: ['item-source'],
+    stateUpdate: {
+      currentTopic: 'priority service request', knownEntityKeys: ['priority-service'],
+      collectedInformation: {
+        contact_name: 'Asha', age: 21, visit_date: 'tomorrow', visit_time: '11 AM',
+        selected_service: 'Priority service',
+      },
+      correctedFields: [], pendingQuestionRelevant: false,
+      activeToolRequest: { name: 'create_request' },
+    },
+    pendingQuestion: null,
+    toolRequest: {
+      name: 'create_request', arguments: {
+        contact_name: 'Asha', age: 21, visit_date: 'tomorrow', visit_time: '11 AM',
+        selected_service: 'Priority service',
+      },
+    },
+  }),
+  groundingEnvelope: actionEnvelope, memory: bookingMemory, turnToken: 'booking-details-turn',
+  fieldSchemas: bookingFields, tools: [bookingTool], evidence: actionEvidence, evidenceScope,
+  finalizedUtterance: 'Book Priority service for Asha age 21 tomorrow at 11 AM.',
+  confirmationConfiguration,
+});
+assert.equal(sameTurnDetails.valid, true);
+assert.equal(sameTurnDetails.toolRequest, null, 'Tool must not execute in the collection turn');
+assert.equal(sameTurnDetails.state.activeToolRequest.status, 'awaiting_confirmation');
+assert.equal(sameTurnDetails.state.activeToolRequest.selectedEntityKey, 'priority-service');
+for (const expected of ['Name: Asha', 'Age: 21', 'Date: tomorrow', 'Time: 11 AM', 'Service: Priority service']) {
+  assert.match(sameTurnDetails.answer, new RegExp(expected, 'u'));
+}
+assert.match(sameTurnDetails.answer, /Are these details correct\?/u);
+
+bookingMemory.beginTurn('booking-confirm-turn');
+const confirmedAction = applyUnifiedGroundedTurn({
+  rawDecision: JSON.stringify({
+    decision: 'action', answer: '', evidenceIds: [],
+    stateUpdate: {
+      currentTopic: 'priority service request', knownEntityKeys: [],
+      collectedInformation: {}, correctedFields: [], pendingQuestionRelevant: false,
+      activeToolRequest: { name: 'create_request' },
+    },
+    pendingQuestion: null,
+    toolRequest: {
+      name: 'create_request', arguments: {
+        contact_name: 'Asha', age: 21, visit_date: 'tomorrow', visit_time: '11 AM',
+        selected_service: 'Priority service',
+      },
+    },
+  }),
+  groundingEnvelope: { found: false, sources: [], entities: [] },
+  memory: bookingMemory, turnToken: 'booking-confirm-turn',
+  fieldSchemas: bookingFields, tools: [bookingTool], evidence: [], evidenceScope,
+  finalizedUtterance: 'Yes, confirm it.', confirmationConfiguration,
+});
+assert.equal(confirmedAction.valid, true);
+assert.equal(confirmedAction.toolRequest.name, 'create_request');
+assert.deepEqual(confirmedAction.toolRequest.arguments, {
+  contact_name: 'Asha', age: 21, visit_date: 'tomorrow', visit_time: '11 AM',
+  selected_service: 'Priority service',
+});
+
 actionMemory.close();
 unauthorizedMemory.close();
 invalidArgumentsMemory.close();
+inventedMemory.close();
+bookingMemory.close();
 console.log('Unified grounded turn verification passed.');

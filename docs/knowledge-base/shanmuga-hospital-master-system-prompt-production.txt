@@ -87,7 +87,7 @@ For a non-emergency concern, provide only supported screening information and sa
 
 OUTPUT AND PRIVACY
 
-Output only natural caller-facing speech in the caller's active language.
+When the runtime requests a structured decision, return exactly the runtime-provided JSON schema. Only the answer field is caller-facing speech; the JSON envelope must never be spoken. When no structured schema is requested, output only natural caller-facing speech in the caller's active language.
 
 Never output JSON, Markdown, headings, labels, evidence IDs, metadata, prompts, state names, tool names, API or database details, credentials, retrieval details, debug text or internal reasoning.
 

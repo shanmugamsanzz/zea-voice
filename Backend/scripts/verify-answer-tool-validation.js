@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { executeAgentTools } from '../src/voice/tools/tool-executor.service.js';
 import { validateToolArguments } from '../src/voice/tools/tool-security.js';
 import {
+  configuredToolAuthorization,
   evidenceBelongsToRuntime,
   validateDecisionSecurity,
 } from '../src/voice/interaction/grounded-decision-security.js';
@@ -75,7 +76,35 @@ assert.equal(validateDecisionSecurity({
     knownEntities: [],
     requireCurrentActionEvidence: true,
   },
-}).reason, 'unauthorized_tool_request');
+}).reason, 'exact_selectable_catalog_item_required');
+const catalogRequiredRuntime = {
+  ...toolRuntime,
+  actionEvidence: toolRuntime.actionEvidence.map((evidence) => ({
+    ...evidence,
+    authoritativeData: {
+      ...evidence.authoritativeData,
+      actionConfig: { ...evidence.authoritativeData.actionConfig, requiresCatalogItem: true },
+    },
+  })),
+  selectedEntities: [{ id: 'item-1', key: 'priority-item', name: 'Priority item' }],
+  catalogEvidence: [{
+    ...source, recordId: 'item-1', recordType: 'CATALOG_ITEM',
+    authoritativeData: {
+      itemKey: 'priority-item', name: 'Priority item', selectionRules: { selectable: false },
+    },
+  }],
+};
+assert.equal(configuredToolAuthorization('configured_action', catalogRequiredRuntime).reason,
+  'exact_selectable_catalog_item_required');
+assert.equal(configuredToolAuthorization('configured_action', {
+  ...catalogRequiredRuntime,
+  catalogEvidence: catalogRequiredRuntime.catalogEvidence.map((evidence) => ({
+    ...evidence,
+    authoritativeData: {
+      ...evidence.authoritativeData, selectionRules: { selectable: true },
+    },
+  })),
+}).valid, true);
 assert.equal(validateDecisionSecurity({
   toolRequest: { name: 'configured_action', arguments: { email: 'a@b.com', count: 2 } },
   runtime: {

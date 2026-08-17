@@ -67,9 +67,43 @@ function authorizedTool(activeRequest, tools, actionEvidence) {
 function fieldBelongsToTool(field, tool) {
   const identifiers = toolIdentifiers(tool);
   if (field.requiredAction) return identifiers.has(toolIdentity(field.requiredAction));
-  const required = tool.configuration?.inputSchema?.required
+  const required = tool.inputSchema?.required ?? tool.configuration?.inputSchema?.required
     ?? tool.configuration?.input_schema?.required ?? [];
   return Array.isArray(required) && required.includes(field.key);
+}
+
+function confirmationForTool({
+  activeRequest, fieldSchemas, collectedInformation, tools, actionEvidence, configuration,
+}) {
+  if (!configuration?.enabled || !activeRequest) return null;
+  const authorization = authorizedTool(activeRequest, tools, actionEvidence);
+  if (!authorization || !toolIdentifiers(authorization.tool).has(toolIdentity(configuration.intent))) return null;
+  const collected = object(collectedInformation);
+  const required = configuration.requiredFields ?? [];
+  if (!required.length || required.some((key) => (
+    collected[key] === undefined || collected[key] === null || String(collected[key]).trim() === ''
+  ))) return null;
+  const fields = new Map((fieldSchemas ?? []).map((field) => [field.key, field]));
+  const details = required.map((key) => {
+    const label = text(fields.get(key)?.label ?? key.replace(/_/gu, ' '), 120);
+    return `${label}: ${text(collected[key], 500)}`;
+  });
+  const rendered = text(configuration.confirmationMessage, 2_000).replace(
+    /\{\{\s*([a-z][a-z0-9_]{0,63})\s*\}\}/giu,
+    (match, key) => text(collected[String(key).toLocaleLowerCase()], 500) || match,
+  );
+  const question = text(`${details.join(', ')}. ${rendered}`, 2_000);
+  if (!question) return null;
+  return Object.freeze({
+    key: `confirm_${toolIdentity(authorization.tool.name)}`,
+    question, kind: 'confirmation', source: 'ui_action_confirmation',
+    activeToolRequest: Object.freeze({
+      ...activeRequest,
+      name: authorization.tool.name,
+      status: 'awaiting_confirmation',
+      authorizationRecordId: authorization.authorizationRecordId,
+    }),
+  });
 }
 
 function nextToolField({ activeRequest, fieldSchemas, collectedInformation, tools, actionEvidence }) {
@@ -135,16 +169,21 @@ function completedQuestionIdentities(fieldSchemas, collectedInformation) {
 
 export function resolveNextConfiguredQuestion({
   decision = {}, beforeState = {}, afterState = {}, fieldSchemas = [], tools = [],
-  actionEvidence = [], guidanceEvidence = [],
+  actionEvidence = [], guidanceEvidence = [], confirmationConfiguration = null,
 } = {}) {
   const collected = afterState.collectedInformation ?? afterState.collectedData ?? {};
   const completed = completedQuestionIdentities(fieldSchemas, collected);
-  const activeRequest = decision.activeToolRequest
-    ?? afterState.activeToolRequest ?? beforeState.activeToolRequest ?? null;
+  const activeRequest = afterState.activeToolRequest
+    ?? decision.activeToolRequest ?? beforeState.activeToolRequest ?? null;
   const fieldQuestion = nextToolField({
     activeRequest, fieldSchemas, collectedInformation: collected, tools, actionEvidence,
   });
   if (fieldQuestion) return fieldQuestion;
+  const confirmation = confirmationForTool({
+    activeRequest, fieldSchemas, collectedInformation: collected, tools, actionEvidence,
+    configuration: confirmationConfiguration,
+  });
+  if (confirmation) return confirmation;
 
   // A clarification is part of the single grounded decision, not a backend
   // business question. It is allowed only when the validator selected the

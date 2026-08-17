@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import {
   createGroundedDecisionStreamDecoder,
   groundedDecisionContract,
+  groundedDecisionJsonSchema,
   validateGroundedLlmDecision,
 } from '../src/voice/interaction/grounded-llm-decision.js';
 import { createSelectedLlmStream } from '../src/voice/providers/llm/llm-response.service.js';
@@ -35,11 +36,29 @@ const runtime = Object.freeze({
 });
 
 const contract = groundedDecisionContract(envelope, runtime);
+const jsonSchema = groundedDecisionJsonSchema(envelope, runtime);
 assert.deepEqual(contract.exactFields, [
   'decision', 'answer', 'evidenceIds', 'stateUpdate', 'pendingQuestion', 'toolRequest',
 ]);
 assert.deepEqual(contract.allowedEvidenceIds, ['source_1', 'source_2']);
 assert.equal(contract.configuredToolSchemas[0].name, 'create_visit');
+assert.equal(jsonSchema.additionalProperties, false);
+assert.deepEqual(jsonSchema.required, contract.exactFields);
+assert.deepEqual(jsonSchema.properties.decision.enum.sort(), ['action', 'answer', 'clarify']);
+
+const invalidJsonTamil = validateGroundedLlmDecision('Premium service பற்றி சொல்லுங்க', envelope, runtime);
+assert.equal(invalidJsonTamil.reason, 'invalid_json');
+
+const missingShapeTanglish = validateGroundedLlmDecision(JSON.stringify({
+  decision: 'answer', answer: 'Premium service INR 3200 irukku.', evidenceIds: ['source_1'],
+}), envelope, runtime);
+assert.equal(missingShapeTanglish.reason, 'invalid_response_shape');
+
+const missingAnswerTamil = validateGroundedLlmDecision(JSON.stringify({
+  decision: 'answer', answer: '', evidenceIds: ['source_1'], stateUpdate: {},
+  pendingQuestion: null, toolRequest: null,
+}), envelope, runtime);
+assert.equal(missingAnswerTamil.reason, 'answer_required');
 
 const tamil = validateGroundedLlmDecision(JSON.stringify({
   decision: 'answer',
@@ -160,7 +179,8 @@ const orchestratorSource = readFileSync(new URL('../src/voice/realtime-conversat
 assert.match(agentRuntimeSource, /groundedDecisionContract/u);
 assert.match(agentRuntimeSource, /Answer the latest caller question first/u);
 assert.match(providerSource, /tools:\s*groundedResponseMode\s*\?\s*\[\]\s*:\s*assignedTools/u);
-assert.match(providerSource, /groundedResponseMode\s*\?\s*\{ responseFormat:/u);
+assert.match(providerSource, /responseFormat:\s*\{\s*type:\s*'json_schema'/u);
+assert.match(providerSource, /schema:\s*groundedDecisionJsonSchema/u);
 const ordinaryTurn = orchestratorSource.slice(
   orchestratorSource.indexOf('response = await this.#llm(query, history, knowledge'),
   orchestratorSource.indexOf('if (response.toolCalls.length)'),
@@ -200,8 +220,13 @@ for await (const _event of session.events) { /* consume the single provider stre
 await session.close();
 assert.equal(providerRequests, 1);
 assert.deepEqual(providerInput.tools, []);
-assert.deepEqual(providerInput.responseFormat, { type: 'json_object' });
+assert.equal(providerInput.responseFormat.type, 'json_schema');
+assert.equal(providerInput.responseFormat.name, 'grounded_voice_decision');
+assert.equal(providerInput.responseFormat.schema.additionalProperties, false);
+assert.deepEqual(providerInput.responseFormat.schema.required, contract.exactFields);
 assert.match(providerInput.messages[0].content, /"toolRequest"/u);
 assert.match(providerInput.messages[0].content, /"create_visit"/u);
+assert.ok(providerInput.messages[0].content.length <= 12_000);
+assert.match(providerInput.messages[0].content, /<\/grounded_response_contract>/u);
 
 console.log('One grounded LLM decision verification passed.');

@@ -224,6 +224,77 @@ export function groundedDecisionContract(envelope, runtime = {}) {
   });
 }
 
+function jsonSchemaType(type) {
+  if (type === 'integer' || type === 'number' || type === 'boolean') return type;
+  if (type === 'array' || type === 'object') return type;
+  return 'string';
+}
+
+export function groundedDecisionJsonSchema(envelope, runtime = {}) {
+  const evidenceIds = (envelope.sources ?? []).map((source) => source.id).filter(Boolean);
+  const entityKeys = (envelope.entities ?? []).map((entity) => entity.key).filter(Boolean);
+  const fields = runtime.fieldSchemas ?? [];
+  const tools = runtime.toolSchemas ?? [];
+  const collectedProperties = Object.fromEntries(fields.map((field) => [field.key, {
+    type: [jsonSchemaType(field.type), 'null'],
+  }]));
+  const toolNames = tools.map((tool) => tool.name).filter(Boolean);
+  return Object.freeze({
+    type: 'object',
+    additionalProperties: false,
+    required: ['decision', 'answer', 'evidenceIds', 'stateUpdate', 'pendingQuestion', 'toolRequest'],
+    properties: {
+      decision: { type: 'string', enum: [...decisions] },
+      answer: { type: 'string', maxLength: maximumAnswerCharacters },
+      evidenceIds: {
+        type: 'array', uniqueItems: true, maxItems: maximumSources,
+        items: { type: 'string', ...(evidenceIds.length ? { enum: evidenceIds } : {}) },
+      },
+      stateUpdate: {
+        type: 'object', additionalProperties: false,
+        properties: {
+          currentTopic: { type: ['string', 'null'] },
+          knownEntityKeys: {
+            type: 'array', uniqueItems: true, maxItems: maximumEntities,
+            items: { type: 'string', ...(entityKeys.length ? { enum: entityKeys } : {}) },
+          },
+          collectedInformation: {
+            type: 'object', additionalProperties: false, properties: collectedProperties,
+          },
+          correctedFields: {
+            type: 'array', uniqueItems: true,
+            items: { type: 'string', enum: fields.map((field) => field.key) },
+          },
+          language: { type: ['string', 'null'] },
+          pendingQuestionRelevant: { type: 'boolean' },
+          activeToolRequest: toolNames.length ? {
+            anyOf: [
+              { type: 'null' },
+              {
+                type: 'object', additionalProperties: false, required: ['name'],
+                properties: { name: { type: 'string', enum: toolNames } },
+              },
+            ],
+          } : { type: 'null' },
+        },
+      },
+      pendingQuestion: { type: ['string', 'null'], maxLength: 500 },
+      toolRequest: toolNames.length ? {
+        anyOf: [
+          { type: 'null' },
+          {
+            type: 'object', additionalProperties: false, required: ['name', 'arguments'],
+            properties: {
+              name: { type: 'string', enum: toolNames },
+              arguments: { type: 'object' },
+            },
+          },
+        ],
+      } : { type: 'null' },
+    },
+  });
+}
+
 export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
   const parsed = parseObject(raw);
   if (!parsed) return Object.freeze({ valid: false, reason: 'invalid_json' });

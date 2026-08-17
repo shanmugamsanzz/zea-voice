@@ -4,6 +4,9 @@ import {
   validateGroundedClaim,
   validateGroundedClaims,
   hydrateSelectedEvidence,
+  hydrateGroundingEnvelope,
+  rankRelevantHydratedEvidence,
+  validateCallerProvidedState,
 } from '../src/voice/interaction/grounded-claim-validator.js';
 import { openGenericConversationState } from '../src/voice/interaction/generic-conversation-state.js';
 
@@ -28,6 +31,10 @@ assert.equal(validateGroundedClaim('The request was confirmed.', [{
   content: 'The request was confirmed.', recordType: 'TOOL_RESULT',
   authoritativeData: { verified: true, success: true },
 }]).valid, true);
+assert.equal(validateGroundedClaim('The request was confirmed.', [{
+  content: 'Verified tool result: failure.', recordType: 'TOOL_RESULT',
+  authoritativeData: { verified: true, success: false },
+}]).reason, 'unauthorized_action_claim');
 for (const [claim, content] of [
   ['Priority service includes standard support.', 'Priority service includes standard support.'],
   ['You do not need additional setup.', 'No additional setup is required.'],
@@ -43,6 +50,15 @@ assert.equal(validateGroundedClaim(
 ).reason, 'unsupported_negation');
 assert.equal(validateGroundedClaim('Any answer without selected evidence.', []).reason,
   'selected_evidence_missing');
+assert.equal(validateGroundedClaim(
+  'This screening detects cancer at an early stage.',
+  [{ content: 'This is an approved cancer screening package.', recordType: 'CATALOG_ITEM' }],
+).reason, 'unsupported_medical_claim');
+assert.equal(validateGroundedClaim(
+  'Premium Plan costs INR 3200.',
+  [{ content: 'Standard Plan costs INR 1200.', recordType: 'CATALOG_ITEM' }],
+  { knownEntities: [{ key: 'premium', name: 'Premium Plan' }] },
+).reason, 'unsupported_numeric_fact');
 const hydrated = hydrateSelectedEvidence(
   { evidenceIds: ['envelope-1'] },
   { sources: [{ id: 'envelope-1', recordId: 'record-1', content: 'partial snippet' }] },
@@ -50,6 +66,40 @@ const hydrated = hydrateSelectedEvidence(
 );
 assert.equal(hydrated.length, 1);
 assert.equal(hydrated[0].content, 'complete authoritative record');
+assert.equal(hydrateSelectedEvidence(
+  { evidenceIds: ['envelope-1'] },
+  { sources: [{ id: 'envelope-1', recordId: 'record-1', content: 'partial snippet' }] },
+  [],
+).length, 0, 'A discovery snippet must never substitute for PostgreSQL hydration');
+const hydratedEnvelope = hydrateGroundingEnvelope(
+  { found: true, sources: [{ id: 'envelope-1', recordId: 'record-1', content: 'partial' }], entities: [] },
+  [{ id: 'postgres-1', recordId: 'record-1', content: 'complete authoritative record' }],
+);
+assert.equal(hydratedEnvelope.sources[0].content, 'complete authoritative record');
+assert.equal(validateCallerProvidedState(
+  { collectedInformation: { contact_name: 'Asha', age: 21 } },
+  'My name is Asha and age is 21', { collectedInformation: {} },
+).valid, true);
+assert.equal(validateCallerProvidedState(
+  { collectedInformation: { contact_name: 'Priya' } },
+  'My name is Asha', { collectedInformation: {} },
+).reason, 'unsupported_caller_value');
+assert.equal(validateCallerProvidedState(
+  { collectedInformation: { contact_name: 'Asha' } },
+  'What is the location?', { collectedInformation: { contact_name: 'Asha' } },
+).valid, true);
+const relevant = rankRelevantHydratedEvidence(
+  'Tell me about premium plan',
+  { sources: [
+    { id: 'overview', recordId: 'overview-record', content: 'Available plans overview' },
+    { id: 'premium', recordId: 'premium-record', content: 'partial premium' },
+  ] },
+  [
+    { recordId: 'overview-record', content: 'Available plans are Standard and Premium.', rank: 1, score: 0.8, callerFacing: true },
+    { recordId: 'premium-record', content: 'Premium Plan costs INR 3200.', rank: 2, score: 0.75, callerFacing: true },
+  ],
+);
+assert.equal(relevant[0].source.recordId, 'premium-record');
 
 const memory = openGenericConversationState({
   tenantId: 'tenant-a', workspaceId: 'workspace-a', agentId: 'agent-a', callId: 'call-a',
@@ -70,7 +120,7 @@ const orchestrator = readFileSync(
 assert.match(orchestrator, /typeof liveMemory\.pendingQuestion === 'object'/u);
 assert.match(orchestrator, /fieldSchemas\?\.\(\)/u);
 assert.match(orchestrator, /pendingField\?\.question \?\? pendingQuestion\?\.text/u);
-assert.match(orchestrator, /const documentFallback = unifiedGroundedDecision[\s\S]*callerFacingFallback/u);
+assert.match(orchestrator, /const documentFallback = unifiedGroundedDecision[\s\S]*approvedHydratedEvidenceFallback/u);
 assert.match(orchestrator, /hydrateSelectedEvidence\(decoded\.decision, groundingEnvelope, authoritativeEvidence\)/u);
 
 console.log('Strong grounding and interruption preservation verification passed.');

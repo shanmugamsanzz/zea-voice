@@ -1,5 +1,7 @@
 import { env } from '../../../config/env.js';
 import { buildAgentSystemPrompt } from '../../../agents/agent-runtime.service.js';
+import { groundedDecisionJsonSchema } from '../../interaction/grounded-llm-decision.js';
+import { buildGroundingEnvelope } from '../../interaction/grounded-llm-response.js';
 import { providerAdapterRegistry } from '../registry.js';
 import { registerImplementedProviderAdapters } from '../defaults.js';
 
@@ -24,6 +26,12 @@ async function collectCompletion(stream) {
 function safeToolName(tool, index) {
   const name = String(tool.name ?? `tool_${index + 1}`).trim().replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
   return name || `tool_${index + 1}`;
+}
+
+export function selectedLlmPromptBudget(compactGrounding = false) {
+  return compactGrounding
+    ? Math.min(env.VOICE_LLM_PROMPT_BUDGET_CHARS, 12_000)
+    : env.VOICE_LLM_PROMPT_BUDGET_CHARS;
 }
 
 export function runtimeTools(tools = []) {
@@ -53,6 +61,15 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
   const ownsAdapter = !dependencies.adapter;
   const assignedTools = runtimeTools(runtimeProfile.tools);
   const groundedResponseMode = input.context?.groundedResponseMode === true;
+  const compactGrounding = input.context?.compactGrounding === true;
+  const groundingEnvelope = buildGroundingEnvelope(
+    input.knowledge ?? { found: false, route: 'none' },
+    compactGrounding ? { includePublishedMap: false, maximumSources: 5 } : {},
+  );
+  const decisionRuntime = {
+    fieldSchemas: input.context?.configuredInformationFields ?? [],
+    toolSchemas: assignedTools,
+  };
   const systemPrompt = buildAgentSystemPrompt(runtimeProfile.agent, {
     usageDirection: input.usageDirection,
     context: {
@@ -60,9 +77,7 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
       configuredToolSchemas: assignedTools,
     },
     knowledge: input.knowledge ?? { found: false, route: 'none' },
-    maxPromptChars: input.context?.compactGrounding === true
-      ? Math.min(env.VOICE_LLM_PROMPT_BUDGET_CHARS, 16_000)
-      : env.VOICE_LLM_PROMPT_BUDGET_CHARS,
+    maxPromptChars: selectedLlmPromptBudget(compactGrounding),
   });
   const messages = [
     { role: 'system', content: systemPrompt },
@@ -82,7 +97,12 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
       maxOutputTokens: groundedResponseMode
         ? env.VOICE_GROUNDED_MAX_OUTPUT_TOKENS
         : env.LLM_MAX_OUTPUT_TOKENS,
-      ...(groundedResponseMode ? { responseFormat: { type: 'json_object' } } : {}),
+      ...(groundedResponseMode ? {
+        responseFormat: {
+          type: 'json_schema', name: 'grounded_voice_decision', strict: false,
+          schema: groundedDecisionJsonSchema(groundingEnvelope, decisionRuntime),
+        },
+      } : {}),
     }),
     promptCharacters: systemPrompt.length,
     cancel: (reason = 'barge-in') => llm.cancel(reason),

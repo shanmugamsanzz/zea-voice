@@ -251,7 +251,8 @@ const streamSession = await createSelectedLlmStream({
 for await (const _event of streamSession.events) { /* consume one provider response */ }
 await streamSession.close();
 assert.equal(providerCalls, 1);
-assert.deepEqual(providerInput.responseFormat, { type: 'json_object' });
+assert.equal(providerInput.responseFormat.type, 'json_schema');
+assert.equal(providerInput.responseFormat.schema.additionalProperties, false);
 assert.ok(providerInput.messages.some((message) => message.content === 'We were discussing Premium Plan.'));
 
 const memory = openLiveCallMemory({

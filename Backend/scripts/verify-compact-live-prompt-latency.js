@@ -54,10 +54,12 @@ const prompt = buildAgentSystemPrompt({
     },
   },
 });
-assert.ok(prompt.length < 16_000);
+assert.ok(prompt.length <= 12_000);
 assert.doesNotMatch(prompt, /DUPLICATED_MAP_TEXT/u);
 assert.ok(prompt.indexOf('<runtime_context>') < prompt.indexOf('<knowledge_context>'));
 assert.ok(prompt.indexOf('<knowledge_context>') < prompt.indexOf('<company_instructions>'));
+assert.match(prompt, /<\/grounded_response_contract>/u);
+assert.match(prompt, /Only answer contains caller-facing speech/u);
 
 const observed = evaluateFirstAudioSlo(Array.from({ length: 20 }, (_, index) => 500 + index * 20));
 assert.equal(observed.observed.p50, 680);
