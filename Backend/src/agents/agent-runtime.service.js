@@ -100,6 +100,7 @@ function knowledgeContext(knowledge, maximumChars = env.LLM_KNOWLEDGE_CONTEXT_MA
   return JSON.stringify({
     route: knowledge.route,
     sources: envelope.sources.map((source) => ({
+      relevance: Math.round((source.score ?? 0) * 100) / 100,
       id: source.id, recordType: source.recordType, content: source.content,
       ...(source.authoritativeData ? { authoritativeData: source.authoritativeData } : {}),
     })),
@@ -143,8 +144,8 @@ function buildCompactGroundedSystemPrompt(agent, {
     fieldSchemas: context.configuredInformationFields ?? [],
     toolSchemas: context.configuredToolSchemas ?? [],
   }));
-  // Explicitly highlight collected information for the LLM
-  const collectedInfoSummary = JSON.stringify(context.liveCallMemory?.collectedInformation ?? {});
+  const collectedInformation = context.liveCallMemory?.collectedInformation ?? {};
+  const collectedInfoSummary = JSON.stringify(collectedInformation);
   const runtimeContext = JSON.stringify({
     callId: context.callId,
     direction: context.direction,
@@ -155,6 +156,9 @@ function buildCompactGroundedSystemPrompt(agent, {
   const responseCharacterLimit = Number(context.ttsResponseCharacterLimit ?? 0);
   const activeLanguage = String(context.liveCallMemory?.language ?? agent.language ?? '').trim() || agent.language;
   const rules = [
+    (Object.keys(collectedInformation).length > 0)
+      ? `CRITICAL MEMORY: The following information is authoritative and has already been collected: ${collectedInfoSummary}. You MUST NOT ask for these fields again.`
+      : null,
     `You are ${agent.name}, a real-time AI voice agent.`,
     agent.goal ? `Goal: ${agent.goal}` : null,
     `Required response language: ${activeLanguage}. Call direction: ${usageDirection}.`,
@@ -231,7 +235,12 @@ export function buildAgentSystemPrompt(agent, { usageDirection, context, knowled
   );
   const responseCharacterLimit = Number(context?.ttsResponseCharacterLimit ?? 0);
   const activeLanguage = String(context?.liveCallMemory?.language ?? agent.language ?? '').trim() || agent.language;
+  const collectedInformation = context?.liveCallMemory?.collectedInformation ?? {};
+  const collectedInfoSummary = JSON.stringify(collectedInformation);
   const prompt = [
+    (Object.keys(collectedInformation).length > 0)
+      ? `CRITICAL MEMORY: The following information is authoritative and has already been collected: ${collectedInfoSummary}. You MUST NOT ask for these fields again.`
+      : null,
     `You are ${agent.name}, a real-time AI voice agent.`,
     agent.description ? `Agent description: ${agent.description}` : null,
     agent.goal ? `Primary agent goal: ${agent.goal}` : null,
@@ -342,6 +351,43 @@ function eventResponse(agent, input) {
   return null;
 }
 
+function validateActionPrerequisites(grounded, context) {
+  const action = grounded.decision ?? grounded.flowAction;
+  if (!action?.name || !context.configuredToolSchemas?.length) {
+    return grounded;
+  }
+
+  const toolSchema = context.configuredToolSchemas.find((schema) => schema.name === action.name);
+  if (!toolSchema?.inputSchema?.required?.length) {
+    return grounded;
+  }
+
+  const collected = context.liveCallMemory?.collectedInformation ?? {};
+  const missingField = toolSchema.inputSchema.required.find((field) => {
+    const value = collected[field];
+    return value === null || value === undefined || String(value).trim() === '';
+  });
+
+  if (!missingField) {
+    return grounded;
+  }
+
+  const fieldInfo = context.configuredInformationFields?.find((field) => field.name === missingField);
+  const question = fieldInfo?.question ?? `What is the ${missingField.replace(/_/g, ' ')}?`;
+
+  // Override the LLM decision. Force it to ask for the missing information.
+  return {
+    ...grounded,
+    answer: '', // Prevent any speech before asking the question
+    spokenAnswer: '',
+    decision: {
+      ...grounded.decision,
+      pendingQuestion: question,
+      name: null, // Nullify the action so it doesn't execute
+    },
+  };
+}
+
 export async function generateAgentResponse(auth, agentId, input, dependencies = defaultDependencies) {
   const startedAt = performance.now();
   const runtime = { ...defaultDependencies, ...dependencies };
@@ -395,7 +441,7 @@ export async function generateAgentResponse(auth, agentId, input, dependencies =
     ],
     temperature: agent.temperature,
   });
-  const grounded = validateGroundedLlmResponse(
+  let grounded = validateGroundedLlmResponse(
     completion.answer,
     buildGroundingEnvelope(knowledge),
     {
@@ -405,6 +451,9 @@ export async function generateAgentResponse(auth, agentId, input, dependencies =
       toolSchemas: input.context?.configuredToolSchemas ?? [],
     },
   );
+  if (grounded.valid) {
+    grounded = validateActionPrerequisites(grounded, input.context);
+  }
   const approvedFallback = tenantEvidence.sources?.find((source) => source.callerFacing !== false)?.content ?? '';
   return {
     agentId,
