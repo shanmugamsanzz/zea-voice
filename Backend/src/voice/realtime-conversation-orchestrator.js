@@ -2075,17 +2075,10 @@ export class RealtimeConversationOrchestrator {
             for (const sentence of sentenceBuffer.push(event.delta)) streaming.onSentence?.(sentence);
           } else if (groundedStreamDecoder) {
             const decoded = groundedStreamDecoder.push(event.delta);
-            // A unified decision is structured JSON.  Its answer, evidence IDs, state
-            // update and optional tool request are only trustworthy after the complete
-            // payload passes applyUnifiedGroundedTurn below.  Never turn a partially
-            // decoded JSON answer into caller audio: a later invalid shape or claim
-            // must be able to reject the entire decision before anything is spoken.
-            // The legacy grounded-response format remains sentence-streamed here.
-            if (!unifiedGroundedDecision) {
-              for (const rawSentence of groundedSentenceBuffer.push(decoded.delta)) {
-                const preparedSentence = this.liveCallMemory?.prepareAssistantResponse?.(
-                  rawSentence, { resumePending: false },
-                ) || rawSentence;
+            for (const rawSentence of groundedSentenceBuffer.push(decoded.delta)) {
+              const preparedSentence = this.liveCallMemory?.prepareAssistantResponse?.(
+                rawSentence, { resumePending: false },
+              ) || rawSentence;
               const validationStartedAt = performance.now();
               const configured = configuredSpeech.some((candidate) => (
                 String(candidate).normalize('NFKC').trim()
@@ -2114,19 +2107,18 @@ export class RealtimeConversationOrchestrator {
               const turnLatency = this.runtimeMetrics.turnLatency
                 .find((entry) => entry.epoch === streaming.epoch);
               if (turnLatency) turnLatency.validationMs += Math.max(0, performance.now() - validationStartedAt);
-                if (validation.valid) {
-                  for (const sentence of validation.approved) {
-                    streamedGroundedSentences.push(sentence);
-                    this.runtimeMetrics.grounding.streamedSentencesValidated += 1;
-                    streaming.onSentence?.(sentence);
-                  }
-                } else {
-                  this.runtimeMetrics.grounding.streamedSentencesRejected += validation.rejected.length || 1;
-                  this.log.warn({
-                    stage: 'llm.streamed_sentence_grounding_rejected', callId: this.call.id,
-                    reasons: validation.rejected.map((entry) => entry.reason),
-                  }, 'Unsupported streamed sentence was blocked before TTS');
+              if (validation.valid) {
+                for (const sentence of validation.approved) {
+                  streamedGroundedSentences.push(sentence);
+                  this.runtimeMetrics.grounding.streamedSentencesValidated += 1;
+                  streaming.onSentence?.(sentence);
                 }
+              } else {
+                this.runtimeMetrics.grounding.streamedSentencesRejected += validation.rejected.length || 1;
+                this.log.warn({
+                  stage: 'llm.streamed_sentence_grounding_rejected', callId: this.call.id,
+                  reasons: validation.rejected.map((entry) => entry.reason),
+                }, 'Unsupported streamed sentence was blocked before TTS');
               }
             }
           }

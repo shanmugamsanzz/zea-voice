@@ -112,7 +112,52 @@ TYPE: guidance
 LANGUAGE: ta
 ENTRY: false
 PURPOSE: Start booking only after an explicit caller request and one exact approved selected package.
-RESPONSE: Preserve the selected package. Start the active tool's UI-configured field collection only after an explicit request and an exact selectable item. Accept every valid field supplied in the same utterance, preserve it, and ask only the next missing UI-schema field. If the item is missing, clarify it before asking a tool field. Do not put field names, field order, dates or times in this document; the configured tool schema owns them.
+RESPONSE: Preserve the selected package. Start the active tool's UI-configured field collection only after an explicit request and an exact selectable item. If the item is missing, clarify it before using the next booking question.
+NEXT_QUESTION: இந்த appointment உங்களுக்காகவா, இல்ல வேற யாருக்காகவா?
+
+STAGE: booking_for
+FLOW: booking
+TYPE: guidance
+LANGUAGE: ta
+ENTRY: false
+PURPOSE: Establish whether the appointment is for the caller or another person.
+RESPONSE: Save the answer in collected information and continue only with the next missing UI-configured field.
+NEXT_QUESTION: Patient name சொல்லுங்க.
+
+STAGE: patient_name
+FLOW: booking
+TYPE: guidance
+LANGUAGE: ta
+ENTRY: false
+PURPOSE: Collect the patient's name.
+RESPONSE: Accept the complete name from the finalized utterance. Preserve it and do not ask again unless corrected.
+NEXT_QUESTION: Patient age சொல்லுங்க.
+
+STAGE: patient_age
+FLOW: booking
+TYPE: guidance
+LANGUAGE: ta
+ENTRY: false
+PURPOSE: Collect the patient's age.
+RESPONSE: Save a valid age and do not ask it again unless corrected.
+NEXT_QUESTION: எந்த date appointment வேணும்?
+
+STAGE: appointment_date
+FLOW: booking
+TYPE: guidance
+LANGUAGE: ta
+ENTRY: false
+PURPOSE: Collect an exact appointment date.
+RESPONSE: Resolve relative dates using the current date, validate the date against current published policy and preserve a confirmed valid value.
+NEXT_QUESTION: Morning 8 மணியிலிருந்து 11 மணிக்குள்ள எந்த time வசதியா இருக்கும்?
+
+STAGE: appointment_time
+FLOW: booking
+TYPE: guidance
+LANGUAGE: ta
+ENTRY: false
+PURPOSE: Collect a preferred time within the approved window.
+RESPONSE: Validate the requested time against current published policy. Do not claim slot availability before the configured tool verifies it.
 NEXT_QUESTION:
 
 STAGE: booking_preparation_and_confirmation
@@ -121,8 +166,8 @@ TYPE: guidance
 LANGUAGE: ta
 ENTRY: false
 PURPOSE: Prepare the final booking confirmation.
-RESPONSE: Read the selected package's approved preparation from the Product Catalog when present. Then read back the selected canonical package and every collected UI-configured field once. Ask the UI-configured confirmation question. The package is a readback value, not a field to ask again.
-NEXT_QUESTION:
+RESPONSE: Read the selected package's approved preparation from the Product Catalog when present. Then summarize once: booking for whom, patient name, age, exact date, time and selected canonical package. Ask for final confirmation. The package is a readback value, not a field to ask again.
+NEXT_QUESTION: இந்த details எல்லாம் correctஆ இருக்கா? Appointment confirm பண்ணட்டுமா?
 
 STAGE: booking_execution
 FLOW: booking

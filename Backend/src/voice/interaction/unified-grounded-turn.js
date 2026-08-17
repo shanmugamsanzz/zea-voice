@@ -4,7 +4,6 @@ import {
   validateDecisionSecurity,
 } from './grounded-decision-security.js';
 import {
-  hydrateSelectedEvidence,
   hydrateGroundingEnvelope,
   validateCallerProvidedState,
   validateGroundedClaims,
@@ -20,9 +19,14 @@ function sourcesByType(sources = [], recordType) {
 }
 
 function selectedSources(decision, groundingEnvelope, evidence) {
-  // Discovery snippets are not authoritative facts.  Resolve every cited ID
-  // back to the complete PostgreSQL-hydrated source, or reject the decision.
-  return hydrateSelectedEvidence(decision, groundingEnvelope, evidence);
+  const selected = new Set(decision.evidenceIds ?? []);
+  const envelopeSources = (groundingEnvelope.sources ?? []).filter((source) => selected.has(source.id));
+  return envelopeSources.map((source) => (
+    evidence.find((candidate) => (
+      candidate.id === source.id
+      || (source.recordId && candidate.recordId === source.recordId)
+    )) ?? source
+  ));
 }
 
 /**

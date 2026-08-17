@@ -74,7 +74,7 @@ MATCH_MODE: any_phrase
 RESPONSE_MODE: instruction
 PRIORITY: 90
 ACTION: schedule_callback
-RESPONSE: Collect only the missing UI-configured callback fields. Execute the configured callback action and confirm it only after verified success.
+RESPONSE: Ask only for a callback time between 8 AM and 8 PM if it is missing. Execute the configured callback action and confirm it only after verified success.
 
 RULE: whatsapp_package_information
 SITUATION: The caller asks for approved package or hospital information through WhatsApp.
