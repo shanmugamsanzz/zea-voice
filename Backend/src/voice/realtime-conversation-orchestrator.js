@@ -1567,6 +1567,8 @@ export class RealtimeConversationOrchestrator {
       const genericInput = {
         agentId: this.runtimeProfile.agent.id,
         query,
+        latestCallerUtterance: query,
+        latestRequestPriority: 'primary',
         usageDirection: this.call.direction,
         language: memoryState?.language ?? languageCode(this.runtimeProfile.agent.language),
         currentTopic: memoryState?.currentTopic ?? undefined,
@@ -1985,6 +1987,8 @@ export class RealtimeConversationOrchestrator {
         },
         preCall: this.preCallContext,
         ...context,
+        latestCallerUtterance: query,
+        latestRequestPriority: 'primary',
         groundedResponseMode,
         compactGrounding: this.unifiedGroundedDecisionEnabled,
         actionConfirmation: this.taskCompletionState.configuration?.enabled === true ? {

@@ -523,8 +523,13 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   };
   const vectorBm25Ms = Math.round((performance.now() - retrievalStartedAt) * 100) / 100;
   const rerankStartedAt = performance.now();
-  const contextualUsed = Boolean(queries.contextual)
-    && !primaryEvidenceIsSufficient(primaryBranch.ranked, query);
+  // Contextual retrieval is opt-in for a genuine follow-up. A low primary
+  // score alone must not let stale topic/history evidence override an
+  // explicit latest caller request.
+  const contextualRequested = contextWasExplicitlyRequested(input)
+    || (input.latestRequestPriority !== 'primary'
+      && !primaryEvidenceIsSufficient(primaryBranch.ranked, query));
+  const contextualUsed = Boolean(queries.contextual) && contextualRequested;
   const ranked = prioritizeCandidates(
     primaryBranch.ranked,
     contextualBranch.ranked,

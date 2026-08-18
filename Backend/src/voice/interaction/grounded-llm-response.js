@@ -63,10 +63,16 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
       authoritativeData: evidence.authoritativeData ?? null,
     });
   }
-  // A matched Conversation Guidance record contains approved caller-facing
-  // RESPONSE text. Include only the retrieval-selected record; internal
-  // guidance records are never copied into the envelope.
-  for (const evidence of (knowledge.tenantEvidence?.guidanceEvidence ?? []).slice(0, 1)) {
+  // Only guidance explicitly marked caller-facing by the published record may
+  // enter the speech envelope. Operational guidance remains internal. The
+  // document parser maps caller-facing TYPE: message records into sources;
+  // this branch supports an explicit future callerFacing/responseMode field
+  // without embedding any business wording in runtime code.
+  for (const evidence of (knowledge.tenantEvidence?.guidanceEvidence ?? [])
+    .filter((item) => item.callerFacing === true
+      || item.authoritativeData?.callerFacing === true
+      || String(item.authoritativeData?.responseMode ?? '').toLowerCase() === 'exact')
+    .slice(0, 1)) {
     addSource(sources, sourceContents, evidence.content, {
       recordId: text(evidence.recordId, 100) || null,
       recordType: 'CONVERSATION_NODE',

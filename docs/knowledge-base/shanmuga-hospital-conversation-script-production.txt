@@ -18,7 +18,7 @@ NEXT_QUESTION: Package details கொஞ்சம் explain பண்ணலா�
 
 STAGE: positive_introduction_response
 FLOW: main
-TYPE: guidance
+TYPE: message
 LANGUAGE: ta
 ENTRY: false
 PURPOSE: Continue when the caller accepts the offer to hear package information.
@@ -27,7 +27,7 @@ NEXT_QUESTION:
 
 STAGE: complete_package_overview
 FLOW: main
-TYPE: guidance
+TYPE: message
 LANGUAGE: ta
 ENTRY: false
 PURPOSE: Answer every general request for available packages, including requests for other or additional packages.
