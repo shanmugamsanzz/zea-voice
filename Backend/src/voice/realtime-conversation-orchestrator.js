@@ -165,7 +165,10 @@ function hydratedRecordSpeech(source) {
 // evidence retrieved for the finalized utterance. A stale generic overview or
 // the first arbitrary document is never substituted for a specific request.
 export function approvedHydratedEvidenceFallback(query, envelope, evidence, profile) {
-  for (const candidate of rankRelevantHydratedEvidence(query, envelope, evidence)) {
+  const ranked = rankRelevantHydratedEvidence(query, envelope, evidence);
+  const exact = ranked.filter((candidate) => candidate.source?.callerFacing === true
+    && String(candidate.source?.authoritativeData?.nodeType ?? '').toLowerCase() === 'message');
+  for (const candidate of [...exact, ...ranked.filter((candidate) => !exact.includes(candidate))]) {
     const speech = hydratedRecordSpeech(candidate.source);
     if (!speech || isInternalRuntimeText(speech)) continue;
     return { text: speech, source: candidate.source };
@@ -1862,6 +1865,38 @@ export class RealtimeConversationOrchestrator {
           this.providerHealth.record(this.runtimeProfile.agent.tenantId, 'llm', this.runtimeProfile.providers.llm, 'success', {
             latencyMs: event.durationMs,
           });
+        }
+      }
+      if (toolCalls.length) {
+        // Provider-native tool events are accepted only after the unified
+        // decision path has created an authorized, confirmed request. This
+        // prevents a provider from bypassing UI field validation or calling a
+        // tool before the configured read-back confirmation.
+        const activeToolRequest = this.liveCallMemory?.snapshot?.().activeToolRequest;
+        const confirmationReady = this.actionConfirmationConfiguration?.enabled !== true
+          || (activeToolRequest?.status === 'awaiting_confirmation'
+            && Boolean(activeToolRequest?.authorizationRecordId));
+        const assignedAndCurrent = toolCalls.every((toolCall) => {
+          const toolIdentity = (value) => String(value ?? '').normalize('NFKC')
+            .toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '_').replace(/^_+|_+$/gu, '');
+          const assigned = (this.runtimeProfile.tools ?? []).find((tool) => (
+            toolIdentity(tool.name) === toolIdentity(toolCall.name)
+          ));
+          if (!assigned) return false;
+          if (activeToolRequest?.name && toolIdentity(activeToolRequest.name)
+            !== toolIdentity(toolCall.name)) return false;
+          const collected = this.liveCallMemory?.snapshot?.().collectedInformation ?? {};
+          return Object.entries(toolCall.arguments ?? {}).every(([key, value]) => (
+            !Object.hasOwn(collected, key) || String(collected[key]).trim().toLocaleLowerCase()
+              === String(value).trim().toLocaleLowerCase()
+          ));
+        });
+        if (!confirmationReady || !assignedAndCurrent) {
+          this.log.warn({
+            stage: 'llm.tool_call_rejected_before_execution', callId: this.call.id,
+            reason: !confirmationReady ? 'confirmation_required' : 'assigned_tool_or_state_mismatch',
+          }, 'Provider tool call was blocked until the unified confirmed action state was valid');
+          toolCalls = [];
         }
       }
       if (toolCalls.length) {

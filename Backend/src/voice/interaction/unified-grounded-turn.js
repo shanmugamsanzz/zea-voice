@@ -68,8 +68,21 @@ export function applyUnifiedGroundedTurn({
   }
 
   const beforeState = memory.snapshot();
+  const exactPublishedResponse = decision.evidenceIds.some((id) => (
+    (hydratedEnvelope.exactCallerResponses ?? []).includes(id)
+  ));
+  // An exact overview/message already contains its configured next question.
+  // Clear the prior introduction prompt so it cannot be appended again.
+  const effectiveDecision = exactPublishedResponse
+    ? Object.freeze({
+      ...decision,
+      pendingQuestion: null,
+      pendingQuestionRelevant: false,
+      stateUpdate: Object.freeze({ ...decision.stateUpdate, pendingQuestionRelevant: false }),
+    })
+    : decision;
   const callerStateValidation = validateCallerProvidedState(
-    decision.stateUpdate, finalizedUtterance, beforeState,
+    effectiveDecision.stateUpdate, finalizedUtterance, beforeState,
   );
   if (!callerStateValidation.valid) {
     return Object.freeze({
@@ -77,14 +90,14 @@ export function applyUnifiedGroundedTurn({
       field: callerStateValidation.field, state: beforeState,
     });
   }
-  const selectedEvidence = selectedSources(decision, hydratedEnvelope, evidence);
+  const selectedEvidence = selectedSources(effectiveDecision, hydratedEnvelope, evidence);
   if (selectedEvidence.some((source) => !evidenceBelongsToRuntime(source, evidenceScope))) {
     return Object.freeze({
       valid: false, reason: 'foreign_evidence_selected', state: memory.snapshot(),
     });
   }
   const claimValidation = validateGroundedClaims(
-    decision.answer,
+    effectiveDecision.answer,
     selectedEvidence,
     { knownEntities: hydratedEnvelope.entities },
   );
@@ -94,15 +107,15 @@ export function applyUnifiedGroundedTurn({
     });
   }
 
-  const applied = memory.applyGroundedDecision(decision, { turnToken });
+  const applied = memory.applyGroundedDecision(effectiveDecision, { turnToken });
   if (applied?.stale) {
     return Object.freeze({ valid: false, reason: 'stale_turn', state: applied.state });
   }
   let afterState = memory.snapshot();
   const actionEvidence = sourcesByType(evidence, 'WORKFLOW_RULE');
-  const requestedToolName = decision.toolRequest?.name ?? afterState.activeToolRequest?.name;
-  const exactSelectedEntities = decision.stateUpdate.knownEntities.length
-    ? decision.stateUpdate.knownEntities
+  const requestedToolName = effectiveDecision.toolRequest?.name ?? afterState.activeToolRequest?.name;
+  const exactSelectedEntities = effectiveDecision.stateUpdate.knownEntities.length
+    ? effectiveDecision.stateUpdate.knownEntities
     : (afterState.knownEntities.length === 1 ? afterState.knownEntities : []);
   let actionContext = null;
   if (requestedToolName) {
@@ -122,7 +135,7 @@ export function applyUnifiedGroundedTurn({
         reason: actionContext.reason === 'exact_selectable_catalog_item_required'
           ? actionContext.reason : 'unauthorized_tool_request',
         toolRequest: null,
-        evidenceIds: decision.evidenceIds, stateUpdate: decision.stateUpdate,
+        evidenceIds: effectiveDecision.evidenceIds, stateUpdate: effectiveDecision.stateUpdate,
         state: memory.snapshot(),
       });
     }
@@ -153,9 +166,9 @@ export function applyUnifiedGroundedTurn({
         .replace(/[^a-z0-9]+/gu, '_').replace(/^_+|_+$/gu, '');
   const security = validateDecisionSecurity({
     sources: selectedEvidence,
-    toolRequest: decision.toolRequest,
+    toolRequest: effectiveDecision.toolRequest,
     runtime: {
-      answer: decision.answer,
+      answer: effectiveDecision.answer,
       evidenceScope,
       toolSchemas: runtime.toolSchemas,
       actionEvidence,
@@ -167,7 +180,7 @@ export function applyUnifiedGroundedTurn({
       collectedInformation: afterState.collectedInformation,
       configuredFieldKeys: fieldSchemas.map((field) => field.key),
       confirmationRequired,
-      requireCurrentActionEvidence: decision.toolRequest !== null
+      requireCurrentActionEvidence: effectiveDecision.toolRequest !== null
         && !beforeState.activeToolRequest?.authorizationRecordId,
       safetyPolicies,
     },
@@ -181,7 +194,7 @@ export function applyUnifiedGroundedTurn({
         ...afterState.activeToolRequest,
         status: 'collecting_information',
       }, { turnToken });
-    } else if (decision.toolRequest || decision.activeToolRequest) {
+    } else if (effectiveDecision.toolRequest || effectiveDecision.activeToolRequest) {
       memory.setActiveToolRequest(null, { turnToken });
       afterState = memory.snapshot();
     }
@@ -192,15 +205,15 @@ export function applyUnifiedGroundedTurn({
     return Object.freeze({
       valid: false,
       reason: security.reason,
-      evidenceIds: decision.evidenceIds,
-      stateUpdate: decision.stateUpdate,
+      evidenceIds: effectiveDecision.evidenceIds,
+      stateUpdate: effectiveDecision.stateUpdate,
       toolRequest: null,
       state: afterState,
     });
     }
   }
   const nextQuestion = resolveNextConfiguredQuestion({
-    decision,
+    decision: effectiveDecision,
     beforeState,
     afterState,
     fieldSchemas,
@@ -219,7 +232,7 @@ export function applyUnifiedGroundedTurn({
       afterState = memory.setActiveToolRequest(nextQuestion.activeToolRequest, { turnToken });
     }
   }
-  const answer = composeConfiguredTurnResponse(decision.answer, nextQuestion);
+  const answer = composeConfiguredTurnResponse(effectiveDecision.answer, nextQuestion);
   if (answer) {
     memory.observeAssistantResponse?.(answer, { turnToken });
     memory.append?.({ role: 'assistant', content: answer }, { turnToken });
@@ -228,13 +241,13 @@ export function applyUnifiedGroundedTurn({
 
   return Object.freeze({
     valid: true,
-    decision: decision.decision,
+    decision: effectiveDecision.decision,
     answer,
-    evidenceIds: decision.evidenceIds,
-    stateUpdate: decision.stateUpdate,
+    evidenceIds: effectiveDecision.evidenceIds,
+    stateUpdate: effectiveDecision.stateUpdate,
     pendingQuestion: afterState.pendingQuestion,
     nextQuestion,
-    toolRequest: awaitingConfirmation ? null : decision.toolRequest,
+    toolRequest: awaitingConfirmation ? null : effectiveDecision.toolRequest,
     state: afterState,
   });
 }

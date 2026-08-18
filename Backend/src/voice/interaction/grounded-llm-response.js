@@ -61,6 +61,8 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
       recordId: text(evidence.recordId, 100) || null,
       recordType: text(evidence.recordType, 40) || 'tenant_evidence',
       authoritativeData: evidence.authoritativeData ?? null,
+      exactCallerResponse: evidence.callerFacing === true
+        && String(evidence.authoritativeData?.nodeType ?? '').toLowerCase() === 'message',
     });
   }
   // Only guidance explicitly marked caller-facing by the published record may
@@ -79,6 +81,7 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
       nodeType: text(evidence.authoritativeData?.nodeType, 80) || 'guidance',
       callerFacing: true,
       authoritativeData: evidence.authoritativeData ?? null,
+      exactCallerResponse: String(evidence.authoritativeData?.nodeType ?? '').toLowerCase() === 'message',
     });
   }
   for (const match of knowledge.matches ?? []) {
@@ -159,6 +162,12 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
     route: text(knowledge.route, 40) || 'none',
     sources: Object.freeze(selectedSources),
     entities: Object.freeze(entities),
+    exactCallerResponses: Object.freeze(selectedSources
+      // Retrieval order is latest-turn order. Only the leading matched
+      // caller-facing message becomes an exact-response contract; a lower
+      // stale message must not override a selected catalog item.
+      .filter((source, index) => index === 0 && source.exactCallerResponse === true)
+      .map((source) => source.id)),
   });
 }
 
@@ -176,6 +185,7 @@ export function groundedResponseContract(envelope, runtime = {}) {
       'flowAction', 'fieldUpdates', 'correctedFields', 'assertedFacts',
     ],
     streamingRule: 'Emit evidenceSourceIds and selectedEntityKeys first, then spokenAnswer immediately. Emit the remaining metadata only after spokenAnswer. Keep the first spoken sentence short, direct and punctuated.',
+    exactResponseRule: 'If an allowed source is a caller-facing published message, copy its content exactly as spokenAnswer; do not paraphrase, shorten, or replace it with a question.',
     schema: {
       intent: 'short generic intent name',
       questionType: 'identity, overview, category_request, item_request, details, inclusions, coverage, preparation, price, comparison, scenario, action_request, action_field_answer, side_question, confirmation or unclear',
@@ -199,6 +209,7 @@ export function groundedResponseContract(envelope, runtime = {}) {
     allowedEntityKeys: envelope.entities.map((item) => item.key),
     allowedEvidenceSourceIds: envelope.sources.map((source) => source.id),
     configuredInformationFields: fieldSchemas,
+    exactCallerResponseSourceIds: envelope.exactCallerResponses ?? [],
   });
 }
 

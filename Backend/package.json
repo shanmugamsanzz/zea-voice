@@ -159,6 +159,7 @@
     "report:production-latency": "node scripts/build-production-latency-report.js",
     "verify:production-conversation": "node scripts/verify-production-conversation-evaluations.js",
     "verify:document-driven-conversation": "node scripts/verify-document-driven-conversation-runtime.js",
+    "verify:exact-guidance-priority": "node scripts/verify-exact-guidance-priority.js",
     "verify:generic-intent-detection": "node scripts/verify-generic-intent-detection.js",
     "verify:scenario-routing": "node scripts/verify-document-driven-scenario-routing.js",
     "verify:flow-control-production": "node scripts/verify-flow-control-production.js",

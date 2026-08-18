@@ -390,6 +390,24 @@ function prioritizeCandidates(primary, contextual, useContext, limit) {
     .map((candidate, index) => ({ ...candidate, rank: index + 1 }));
 }
 
+export function messageSelectionScore(evidence, query, input = {}) {
+  if (evidence?.recordType !== 'CONVERSATION_NODE' || evidence?.callerFacing !== true
+    || String(evidence.authoritativeData?.nodeType ?? '').toLowerCase() !== 'message') return 0;
+  // A caller-facing message is eligible for deterministic speech only when
+  // the turn has not already selected a concrete catalog entity. This keeps
+  // item details/comparisons authoritative while making acknowledgements and
+  // overview requests prefer the published message over stale guidance.
+  const selected = Boolean(input.selectedCatalogItemKey)
+    || (Array.isArray(input.knownEntities) && input.knownEntities.length > 0)
+    || (Array.isArray(input.understanding?.selectedEntities)
+      && input.understanding.selectedEntities.length > 0);
+  if (selected) return 0;
+  const queryTokens = new Set(normalize(query).split(' ').filter((token) => token.length > 1));
+  const contentTokens = new Set(normalize(evidence.content).split(' ').filter((token) => token.length > 1));
+  const overlap = [...queryTokens].filter((token) => contentTokens.has(token)).length;
+  return 100 + overlap * 10 - Math.min(20, Number(evidence.rank ?? 0));
+}
+
 async function loadScope(auth, input, runtime) {
   return runtime.contextRunner(auth, async (client) => {
     const result = await client.query(activeScopeSql, [auth.tenantId, input.agentId, input.usageDirection]);
@@ -534,7 +552,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
     primaryBranch.ranked,
     contextualBranch.ranked,
     contextualUsed,
-    safeInput.topK ?? 5,
+    Math.max(8, Number(safeInput.topK ?? 5)),
   );
   const rerankMs = Math.round((performance.now() - rerankStartedAt) * 100) / 100;
   const hydrationStartedAt = performance.now();
@@ -542,7 +560,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
     hydrate({ ...auth, tenantId }, safeInput, ranked, runtime), env.RAG_RUNTIME_CHANNEL_DEADLINE_MS, [],
   ), input.abortSignal, []);
   const hydrationMs = Math.round((performance.now() - hydrationStartedAt) * 100) / 100;
-  const evidence = rows.map(authoritativeEvidenceFromRow).sort((left, right) => left.rank - right.rank)
+  const hydratedEvidence = rows.map(authoritativeEvidenceFromRow).sort((left, right) => left.rank - right.rank)
     .map((item) => {
       if (item.recordType !== 'WORKFLOW_RULE') return item;
       const activation = latestTurnWorkflowActivation({
@@ -551,6 +569,10 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       });
       return { ...item, activationAllowed: activation.allowed, activation };
     });
+  const evidence = hydratedEvidence
+    .map((item) => ({ item, messageScore: messageSelectionScore(item, query, safeInput) }))
+    .sort((left, right) => right.messageScore - left.messageScore || left.item.rank - right.item.rank)
+    .map(({ item }, index) => ({ ...item, rank: index + 1 }));
   const permittedEvidence = evidence.filter((item) => (
     item.recordType !== 'WORKFLOW_RULE' || item.activationAllowed === true
   ));

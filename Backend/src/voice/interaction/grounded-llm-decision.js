@@ -202,6 +202,7 @@ export function groundedDecisionContract(envelope, runtime = {}) {
       'Do not put question text in answer. Put at most one proposed clarification in pendingQuestion.',
       'Use action only for one configured tool and never claim success before its verified result.',
       'Use only evidenceIds listed below for factual speech.',
+      'If a cited evidence source is a caller-facing published message, copy that source content exactly in answer.',
     ],
     schema: {
       decision: 'answer | clarify | action',
@@ -218,6 +219,7 @@ export function groundedDecisionContract(envelope, runtime = {}) {
       toolRequest: 'null or {name, arguments}',
     },
     allowedEvidenceIds: (envelope.sources ?? []).map((source) => source.id),
+    exactCallerResponseSourceIds: envelope.exactCallerResponses ?? [],
     allowedEntityKeys: (envelope.entities ?? []).map((entity) => entity.key),
     configuredInformationFields: fields,
     configuredToolSchemas: tools,
@@ -301,9 +303,15 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
   if (!exactShape(parsed)) return Object.freeze({ valid: false, reason: 'invalid_response_shape' });
   const decision = text(parsed.decision, 20).toLocaleLowerCase();
   if (!decisions.has(decision)) return Object.freeze({ valid: false, reason: 'invalid_decision' });
+  const exactResponseCandidate = (envelope.exactCallerResponses ?? []).length > 0;
   const separated = splitCallerQuestion(parsed.answer, parsed.pendingQuestion);
-  const answer = separated.answer;
-  const pendingQuestion = separated.pendingQuestion;
+  // Exact published messages may intentionally end with a caller-facing
+  // question. Preserve that punctuation/content instead of treating it as a
+  // runtime pending question and altering the approved response.
+  const answer = exactResponseCandidate ? text(parsed.answer, maximumAnswerCharacters) : separated.answer;
+  const pendingQuestion = exactResponseCandidate
+    ? (parsed.pendingQuestion === null ? null : text(parsed.pendingQuestion, 500))
+    : separated.pendingQuestion;
   if (decision === 'answer' && !answer) return Object.freeze({ valid: false, reason: 'answer_required' });
   if (internalSpeech(answer)) return Object.freeze({ valid: false, reason: 'internal_text' });
   if (parsed.pendingQuestion !== null && !pendingQuestion) {
@@ -329,6 +337,19 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
   }
   if (decision === 'answer' && !envelope.found) {
     return Object.freeze({ valid: false, reason: 'verified_evidence_missing' });
+  }
+  // A published caller-facing message is an exact response contract. Once
+  // the latest-turn retriever selects it, the model may cite it but cannot
+  // paraphrase it, replace it with a partial list, or turn it into a question.
+  const exactSources = citedSources.filter((source) => source.exactCallerResponse === true);
+  const requiredExactSourceIds = new Set(envelope.exactCallerResponses ?? []);
+  if (decision === 'answer' && requiredExactSourceIds.size > 0
+    && !exactSources.some((source) => requiredExactSourceIds.has(source.id))) {
+    return Object.freeze({ valid: false, reason: 'exact_published_response_required' });
+  }
+  if (decision === 'answer' && exactSources.length > 0
+    && !exactSources.some((source) => String(source.content ?? '').trim() === answer)) {
+    return Object.freeze({ valid: false, reason: 'exact_published_response_required' });
   }
   const evidenceText = citedSources.map((source) => {
     let structured = '';
@@ -417,6 +438,11 @@ export function createGroundedDecisionStreamDecoder(envelope) {
       }
       if (!decision) return Object.freeze({ delta: '', decision: null });
       const answer = partialJsonStringField(raw, 'answer');
+      if ((envelope.exactCallerResponses ?? []).length > 0) {
+        // Hold exact responses until the complete JSON decision is validated;
+        // otherwise a paraphrase could reach TTS before final validation.
+        return Object.freeze({ delta: '', decision });
+      }
       if (answer === null || answer.length <= releasedCharacters) {
         return Object.freeze({ delta: '', decision });
       }

@@ -226,6 +226,6 @@ export function rankRelevantHydratedEvidence(query, envelope, authoritativeSourc
     // exception is a retrieval-selected Conversation Guidance response,
     // whose semantic match is already constrained to the current turn.
     const type = String(candidate.source?.recordType ?? '').toUpperCase();
-    return candidate.lexicalCoverage > 0 || type === 'CONVERSATION_NODE';
+    return candidate.lexicalCoverage > 0 || source.exactCallerResponse === true;
   }).sort((left, right) => right.score - left.score);
 }
