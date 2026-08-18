@@ -431,6 +431,10 @@ function parseConversation(extraction) {
         content,
         variables: [
           ...(block.purpose ? [{ key: 'purpose', value: block.purpose }] : []),
+          ...(block.situation ? [{ key: 'situation', value: block.situation }] : []),
+          ...(block.examples.length ? [{ key: 'examples', value: block.examples }] : []),
+          ...(block.matchMode ? [{ key: 'matchMode', value: block.matchMode }] : []),
+          ...(block.context ? [{ key: 'context', value: block.context }] : []),
           ...(block.nextQuestion ? [{ key: 'nextQuestion', value: block.nextQuestion }] : []),
         ],
         transitions: [],
@@ -442,7 +446,7 @@ function parseConversation(extraction) {
     block = null;
   };
   for (const line of lines) {
-    const field = line.text.match(/^\s*(STAGE|FLOW|TYPE|LANGUAGE|ENTRY|PURPOSE|RESPONSE|NEXT_QUESTION)\s*:\s*(.*)$/iu);
+    const field = line.text.match(/^\s*(STAGE|FLOW|TYPE|LANGUAGE|ENTRY|PURPOSE|SITUATION|EXAMPLE|EXAMPLES|MATCH_MODE|CONTEXT|RESPONSE|NEXT_QUESTION)\s*:\s*(.*)$/iu);
     if (field) {
       const name = field[1].toUpperCase();
       const value = field[2].trim();
@@ -450,7 +454,7 @@ function parseConversation(extraction) {
         flush();
         block = {
           stage: value, flow: 'main', type: 'message', language: 'und', entry: false,
-          purpose: '', response: [], nextQuestion: '', sourceLines: [line.text],
+          purpose: '', situation: '', examples: [], matchMode: '', context: '', response: [], nextQuestion: '', sourceLines: [line.text],
           sourcePageStart: line.pageNumber, sourcePageEnd: line.pageNumber,
         };
       } else if (block) {
@@ -461,6 +465,12 @@ function parseConversation(extraction) {
         else if (name === 'LANGUAGE') block.language = value;
         else if (name === 'ENTRY') block.entry = ['true', 'yes', '1'].includes(value.toLocaleLowerCase());
         else if (name === 'PURPOSE') block.purpose = value;
+        else if (name === 'SITUATION') block.situation = value;
+        else if (name === 'EXAMPLE' || name === 'EXAMPLES') {
+          block.examples.push(...value.split(/\s*\|\s*/u).map((item) => item.trim()).filter(Boolean));
+        }
+        else if (name === 'MATCH_MODE') block.matchMode = key(value, 'any_phrase');
+        else if (name === 'CONTEXT') block.context = key(value, 'any');
         else if (name === 'RESPONSE') block.response.push(value);
         else if (name === 'NEXT_QUESTION') block.nextQuestion = value;
       }

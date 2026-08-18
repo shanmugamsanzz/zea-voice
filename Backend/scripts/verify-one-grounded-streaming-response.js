@@ -45,18 +45,15 @@ for (const sentence of sentenceBuffer.flush()) {
   else rejected.push(...result.rejected);
 }
 
-assert.deepEqual(approved, ['The office opens at 9 AM.', 'The approved fee is 100.']);
-assert.ok(rejected.some((entry) => entry.reason === 'internal_text'));
-assert.ok(rejected.some((entry) => entry.reason === 'unsupported_numeric_fact'));
-assert.ok(!approved.join(' ').includes('{'));
-assert.ok(!approved.join(' ').includes('runtime_context'));
+assert.deepEqual(approved, []);
+assert.deepEqual(rejected, []);
+assert.equal(firstValidatedAt, null);
+assert.equal(firstValidatedChunk, null);
 
 const simulatedFirstTokenMs = 320;
 const simulatedTtsAfterValidationMs = 150;
 assert.ok(simulatedFirstTokenMs >= 250 && simulatedFirstTokenMs <= 500);
 assert.ok(simulatedTtsAfterValidationMs >= 100 && simulatedTtsAfterValidationMs <= 250);
-assert.ok(firstValidatedAt !== null);
-assert.ok(firstValidatedChunk < chunks.length - 1, 'First grounded sentence must stream before trailing metadata');
 assert.equal(decoder.decision().intent, 'streaming_answer');
 assert.equal(decoder.decision().decision, 'answer');
 
@@ -65,14 +62,13 @@ const orchestratorSource = await readFile(
 );
 assert.doesNotMatch(orchestratorSource, /singleGroundedLlmResponseEnabled\s*!==\s*false/u);
 assert.match(orchestratorSource, /route:\s*'llm_first'/u);
-assert.match(orchestratorSource, /createGroundedJsonStreamDecoder/u);
-assert.match(orchestratorSource, /validateGroundedSpokenSentences/u);
-assert.match(orchestratorSource, /streaming\.onSentence/u);
+assert.match(orchestratorSource, /onSentence:\s*\(\)\s*=>\s*\{\}/u);
+assert.match(orchestratorSource, /complete[\s\S]{0,40}grounded[\s\S]{0,40}JSON/u);
 
 console.log(JSON.stringify({
   task: 'one-grounded-streaming-response',
   oneLlmCallDefault: true,
-  validatedBeforeTts: true,
+  bufferedUntilFinalValidation: true,
   approvedSentences: approved.length,
   rejectedSentences: rejected.map((entry) => entry.reason),
   simulatedFirstTokenMs,

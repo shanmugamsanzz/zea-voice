@@ -46,6 +46,22 @@ assert.equal(jsonSchema.additionalProperties, false);
 assert.deepEqual(jsonSchema.required, contract.exactFields);
 assert.deepEqual(jsonSchema.properties.decision.enum.sort(), ['action', 'answer', 'clarify']);
 
+const emptyStateOrdinaryAnswer = validateGroundedLlmDecision(JSON.stringify({
+  decision: 'answer', answer: 'The office is on Central Road.', evidenceIds: ['source_2'],
+  stateUpdate: {}, pendingQuestion: null, toolRequest: null,
+}), envelope, runtime);
+assert.equal(emptyStateOrdinaryAnswer.valid, true);
+assert.equal(emptyStateOrdinaryAnswer.currentTopic, null);
+assert.deepEqual(emptyStateOrdinaryAnswer.selectedEntityKeys, []);
+assert.deepEqual(emptyStateOrdinaryAnswer.fieldUpdates, {});
+
+const invalidStateField = validateGroundedLlmDecision(JSON.stringify({
+  decision: 'answer', answer: 'The office is on Central Road.', evidenceIds: ['source_2'],
+  stateUpdate: { internalStage: 'hidden' }, pendingQuestion: null, toolRequest: null,
+}), envelope, runtime);
+assert.equal(invalidStateField.valid, false);
+assert.equal(invalidStateField.reason, 'invalid_state_update');
+
 const invalidJsonTamil = validateGroundedLlmDecision('Premium service பற்றி சொல்லுங்க', envelope, runtime);
 assert.equal(invalidJsonTamil.reason, 'invalid_json');
 
@@ -170,7 +186,7 @@ assert.equal(extraInternalField.reason, 'invalid_response_shape');
 const decoder = createGroundedDecisionStreamDecoder(envelope);
 assert.equal(decoder.push('{"evidenceIds":["source_1"],"stateUpdate":{},').delta, '');
 assert.equal(decoder.push('"decision":"answer","answer":"Premium service costs INR 3200.').delta,
-  'Premium service costs INR 3200.');
+  '');
 assert.equal(decoder.push('","pendingQuestion":null,"toolRequest":null}').delta, '');
 
 const agentRuntimeSource = readFileSync(new URL('../src/agents/agent-runtime.service.js', import.meta.url), 'utf8');

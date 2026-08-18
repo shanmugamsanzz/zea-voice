@@ -408,6 +408,41 @@ export function messageSelectionScore(evidence, query, input = {}) {
   return 100 + overlap * 10 - Math.min(20, Number(evidence.rank ?? 0));
 }
 
+function conversationVariable(evidence, requestedKey) {
+  const expected = normalize(requestedKey);
+  const variables = evidence?.authoritativeData?.variables;
+  if (!Array.isArray(variables)) return null;
+  return variables.find((variable) => normalize(variable?.key) === expected)?.value ?? null;
+}
+
+export function strongCallerMessageMatch(evidence, query, input = {}) {
+  if (evidence?.recordType !== 'CONVERSATION_NODE' || evidence?.callerFacing !== true
+    || normalize(evidence.authoritativeData?.nodeType) !== 'message') return false;
+  const examplesValue = conversationVariable(evidence, 'examples');
+  const examples = (Array.isArray(examplesValue) ? examplesValue : [examplesValue])
+    .map(normalize).filter(Boolean);
+  if (!examples.length) return false;
+  const latest = normalize(query);
+  const mode = normalize(conversationVariable(evidence, 'matchMode') ?? 'any_phrase')
+    .replace(/\s+/gu, '_');
+  const context = normalize(conversationVariable(evidence, 'context') ?? 'any')
+    .replace(/\s+/gu, '_');
+  const selectedEntities = [
+    ...(Array.isArray(input.knownEntities) ? input.knownEntities : []),
+    ...(Array.isArray(input.understanding?.selectedEntities)
+      ? input.understanding.selectedEntities : []),
+  ];
+  if (context === 'no_selected_entity'
+    && (input.selectedCatalogItemKey || selectedEntities.length > 0)) return false;
+  if (context === 'pending_question' && !String(input.pendingQuestion ?? '').trim()) return false;
+  if (!['any', 'no_selected_entity', 'pending_question'].includes(context)) return false;
+  if (!latest) return false;
+  if (mode === 'exact') return examples.includes(latest);
+  if (!['contains', 'any_phrase'].includes(mode)) return false;
+  const padded = ` ${latest} `;
+  return examples.some((example) => padded.includes(` ${example} `));
+}
+
 async function loadScope(auth, input, runtime) {
   return runtime.contextRunner(auth, async (client) => {
     const result = await client.query(activeScopeSql, [auth.tenantId, input.agentId, input.usageDirection]);
@@ -591,10 +626,22 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
     category: item.authoritativeData.category, categoryKey: item.authoritativeData.categoryKey,
     parentCategoryKey: item.authoritativeData.parentCategoryKey,
   }));
+  const directMessage = permittedEvidence.find((item) => strongCallerMessageMatch(item, query, input));
   const result = {
     operation: 'search_published_knowledge', route: 'hybrid',
     found: permittedEvidence.length > 0, sources, actionEvidence, guidanceEvidence, entities,
     evidenceIds: permittedEvidence.map((item) => item.id),
+    directResponse: directMessage ? {
+      id: directMessage.id,
+      recordId: directMessage.recordId,
+      recordType: directMessage.recordType,
+      tenantId: directMessage.tenantId,
+      agentId: directMessage.agentId,
+      knowledgeBaseId: directMessage.knowledgeBaseId,
+      publicationRevision: directMessage.publicationRevision,
+      content: directMessage.content,
+      authoritativeData: directMessage.authoritativeData,
+    } : null,
     requestedFacts: Array.isArray(input.requestedFacts) ? input.requestedFacts : [],
     retrieval: {
       semanticCandidates: primaryBranch.semantic.length + contextualBranch.semantic.length,

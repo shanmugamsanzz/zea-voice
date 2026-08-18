@@ -202,7 +202,7 @@ export function groundedDecisionContract(envelope, runtime = {}) {
       'Do not put question text in answer. Put at most one proposed clarification in pendingQuestion.',
       'Use action only for one configured tool and never claim success before its verified result.',
       'Use only evidenceIds listed below for factual speech.',
-      'If a cited evidence source is a caller-facing published message, copy that source content exactly in answer.',
+      'For an ordinary answer with no memory change, return stateUpdate as an empty object.',
     ],
     schema: {
       decision: 'answer | clarify | action',
@@ -419,7 +419,6 @@ function partialJsonStringField(raw, name) {
 
 export function createGroundedDecisionStreamDecoder(envelope) {
   let raw = '';
-  let releasedCharacters = 0;
   let decision = null;
   const allowedSources = new Set((envelope.sources ?? []).map((source) => source.id));
   return Object.freeze({
@@ -436,22 +435,13 @@ export function createGroundedDecisionStreamDecoder(envelope) {
           selectedEntityKeys: Object.freeze([]),
         });
       }
-      if (!decision) return Object.freeze({ delta: '', decision: null });
-      const answer = partialJsonStringField(raw, 'answer');
-      if ((envelope.exactCallerResponses ?? []).length > 0) {
-        // Hold exact responses until the complete JSON decision is validated;
-        // otherwise a paraphrase could reach TTS before final validation.
-        return Object.freeze({ delta: '', decision });
-      }
-      if (answer === null || answer.length <= releasedCharacters) {
-        return Object.freeze({ delta: '', decision });
-      }
-      const next = answer.slice(releasedCharacters);
-      releasedCharacters = answer.length;
-      return Object.freeze({ delta: next, decision });
+      // Keep structural observation available, but never release partial
+      // answer text. The orchestrator emits only the final answer returned
+      // after complete decision validation.
+      return Object.freeze({ delta: '', decision });
     },
     decision: () => decision,
-    releasedText: () => partialJsonStringField(raw, 'answer')?.slice(0, releasedCharacters) ?? '',
+    releasedText: () => '',
   });
 }
 

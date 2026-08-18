@@ -61,8 +61,10 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
       recordId: text(evidence.recordId, 100) || null,
       recordType: text(evidence.recordType, 40) || 'tenant_evidence',
       authoritativeData: evidence.authoritativeData ?? null,
-      exactCallerResponse: evidence.callerFacing === true
-        && String(evidence.authoritativeData?.nodeType ?? '').toLowerCase() === 'message',
+      // Strong caller-facing messages are selected and returned directly by
+      // retrieval/orchestration. Evidence reaching the LLM is supporting
+      // material for a non-exact question, never an exact speech contract.
+      exactCallerResponse: false,
     });
   }
   // Only guidance explicitly marked caller-facing by the published record may
@@ -81,7 +83,7 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
       nodeType: text(evidence.authoritativeData?.nodeType, 80) || 'guidance',
       callerFacing: true,
       authoritativeData: evidence.authoritativeData ?? null,
-      exactCallerResponse: String(evidence.authoritativeData?.nodeType ?? '').toLowerCase() === 'message',
+      exactCallerResponse: false,
     });
   }
   for (const match of knowledge.matches ?? []) {
@@ -162,12 +164,9 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
     route: text(knowledge.route, 40) || 'none',
     sources: Object.freeze(selectedSources),
     entities: Object.freeze(entities),
-    exactCallerResponses: Object.freeze(selectedSources
-      // Retrieval order is latest-turn order. Only the leading matched
-      // caller-facing message becomes an exact-response contract; a lower
-      // stale message must not override a selected catalog item.
-      .filter((source, index) => index === 0 && source.exactCallerResponse === true)
-      .map((source) => source.id)),
+    // Exact published messages never enter the LLM path. They are validated
+    // against tenant/agent/revision scope and spoken directly by the runtime.
+    exactCallerResponses: Object.freeze([]),
   });
 }
 
@@ -184,7 +183,7 @@ export function groundedResponseContract(envelope, runtime = {}) {
       'intent', 'questionType', 'currentTopic', 'topicChanged', 'pendingQuestionRelevant',
       'flowAction', 'fieldUpdates', 'correctedFields', 'assertedFacts',
     ],
-    streamingRule: 'Emit evidenceSourceIds and selectedEntityKeys first, then spokenAnswer immediately. Emit the remaining metadata only after spokenAnswer. Keep the first spoken sentence short, direct and punctuated.',
+    streamingRule: 'Buffer the complete JSON decision. Do not release answer text until evidence IDs, stateUpdate and toolRequest pass final validation; only then send approved sentences to TTS.',
     exactResponseRule: 'If an allowed source is a caller-facing published message, copy its content exactly as spokenAnswer; do not paraphrase, shorten, or replace it with a question.',
     schema: {
       intent: 'short generic intent name',
@@ -287,13 +286,12 @@ function partialJsonStringField(raw, names) {
   return null;
 }
 
-// Decodes only the caller-facing string from a streaming grounded JSON object.
-// Source and entity citations must arrive first so every complete sentence can
-// pass the local evidence gate. Conversation-memory metadata may follow the
-// answer and is still validated before it is committed to live state.
+// Parses a streaming grounded JSON object for structural observation. Answer
+// text is intentionally never released here; the complete decision must pass
+// final evidence/state/tool validation before the orchestrator sends text to
+// TTS.
 export function createGroundedJsonStreamDecoder(envelope, runtime = {}) {
   let raw = '';
-  let releasedCharacters = 0;
   let decision = null;
   const allowedSources = new Set((envelope.sources ?? []).map((source) => source.id));
   const allowedEntities = new Set((envelope.entities ?? []).map((entity) => entity.key));
@@ -321,16 +319,10 @@ export function createGroundedJsonStreamDecoder(envelope, runtime = {}) {
       raw += String(delta ?? '');
       refreshDecision();
       if (!decision) return Object.freeze({ delta: '', decision: null });
-      const answer = partialJsonStringField(raw, ['answer', 'spokenAnswer', 'spoken_answer']);
-      if (answer === null || answer.length <= releasedCharacters) {
-        return Object.freeze({ delta: '', decision });
-      }
-      const next = answer.slice(releasedCharacters);
-      releasedCharacters = answer.length;
-      return Object.freeze({ delta: next, decision });
+      return Object.freeze({ delta: '', decision });
     },
     decision: () => decision,
-    releasedText: () => partialJsonStringField(raw, ['answer', 'spokenAnswer', 'spoken_answer'])?.slice(0, releasedCharacters) ?? '',
+    releasedText: () => '',
   });
 }
 

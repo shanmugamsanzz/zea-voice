@@ -52,6 +52,7 @@ import {
   createGroundedDecisionStreamDecoder,
 } from './interaction/grounded-llm-decision.js';
 import { applyUnifiedGroundedTurn } from './interaction/unified-grounded-turn.js';
+import { evidenceBelongsToRuntime } from './interaction/grounded-decision-security.js';
 import { evaluateFirstAudioSlo, percentile } from './interaction/voice-latency-slo.js';
 import {
   hydrateSelectedEvidence,
@@ -1968,27 +1969,24 @@ export class RealtimeConversationOrchestrator {
         } else answer = grounded.answer ?? grounded.spokenAnswer;
       } else {
         this.runtimeMetrics.grounding.rejected += 1;
-        if (streamedGroundedSentences.length) {
-          // Each retained sentence already passed the local evidence gate.
-          // Never append a second fallback after safe audio has begun.
-          answer = streamedGroundedSentences.join(' ');
+        // A locally claim-valid sentence is not sufficient: the complete JSON
+        // decision, state update and tool request must also validate before
+        // anything is eligible for TTS. Never reuse partial streamed text.
+        this.runtimeMetrics.grounding.fallbacks += 1;
+        const documentFallback = approvedHydratedEvidenceFallback(
+          query, groundingEnvelope, authoritativeEvidence, this.runtimeProfile,
+        );
+        answer = documentFallback?.text ?? callerFacingFallback(this.runtimeProfile);
+        if (documentFallback?.source) {
+          sources.push(createMessageSource(messageSourceTypes.KNOWLEDGE, {
+            id: documentFallback.source.recordId ?? documentFallback.source.id,
+            label: 'Approved document fallback',
+            metadata: { reason: grounded.reason, recordType: documentFallback.source.recordType },
+          }));
         } else {
-          this.runtimeMetrics.grounding.fallbacks += 1;
-          const documentFallback = approvedHydratedEvidenceFallback(
-            query, groundingEnvelope, authoritativeEvidence, this.runtimeProfile,
-          );
-          answer = documentFallback?.text ?? callerFacingFallback(this.runtimeProfile);
-          if (documentFallback?.source) {
-            sources.push(createMessageSource(messageSourceTypes.KNOWLEDGE, {
-              id: documentFallback.source.recordId ?? documentFallback.source.id,
-              label: 'Approved document fallback',
-              metadata: { reason: grounded.reason, recordType: documentFallback.source.recordType },
-            }));
-          } else {
-            sources.push(createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
-              label: 'Grounding validation fallback', metadata: { reason: grounded.reason },
-            }));
-          }
+          sources.push(createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
+            label: 'Grounding validation fallback', metadata: { reason: grounded.reason },
+          }));
         }
         this.log.warn({
           stage: 'llm.grounding_rejected', callId: this.call.id, reason: grounded.reason,
@@ -2390,51 +2388,88 @@ export class RealtimeConversationOrchestrator {
     );
     if (epoch !== this.epoch || this.finalized) return;
     const sentencePipeline = this.#createSentenceTtsPipeline(epoch, turnStartedAt);
+    // LLM output is deliberately buffered until the complete grounded JSON
+    // decision has passed evidence, state and tool validation inside
+    // #llmAttempt. The sentence pipeline is fed only below, from the final
+    // validated response or configured fallback; partial JSON can never reach
+    // TTS.
     const streaming = {
-      onSentence: sentencePipeline.enqueue,
+      onSentence: () => {},
       flush: sentencePipeline.flushGrouping,
       sentenceCount: sentencePipeline.sentenceCount,
       epoch,
       isCurrent: () => !this.#isStaleGeneration(epoch),
     };
     let response;
-    try {
-      const llmStartedAt = Date.now();
-      response = await this.#llm(query, history, knowledge, {
-        instruction: 'Understand the latest caller utterance from its full natural meaning and answer it first using only approved evidence. Return exactly one decision: answer, clarify or one authorized action. Do not require exact wording or use a stage as a gate. Emit evidenceIds and stateUpdate first, then decision and a short natural answer.',
-      }, streaming);
-      turnLatency.llmMs += Math.max(0, Date.now() - llmStartedAt);
-    } catch (error) {
-      this.#recordProviderFailure('llm', error, 'llm.response');
-      this.providerHealth.record(this.runtimeProfile.agent.tenantId, 'llm', this.runtimeProfile.providers.llm, 'failure', {
-        code: error.code,
+    const directResponse = knowledge.tenantEvidence?.directResponse;
+    const directResponseScope = {
+      tenantId: this.runtimeProfile.agent.tenantId,
+      agentId: this.runtimeProfile.agent.id,
+      publicationRevisions: knowledge.tenantEvidence?.publicationRevisions ?? [],
+    };
+    const directResponseValidated = Boolean(directResponse?.content)
+      && evidenceBelongsToRuntime(directResponse, directResponseScope);
+    if (directResponseValidated) {
+      this.liveCallMemory?.setPosition?.({
+        currentTopic: directResponse.authoritativeData?.nodeKey ?? undefined,
+        pendingQuestion: null,
       });
-      if (sentencePipeline.sentenceCount() > 0) {
-        this.log.warn({
-          stage: 'llm.partial_stream_retained', code: error.code,
-          sentenceCount: sentencePipeline.sentenceCount(),
-        }, 'LLM failed after speech started; retaining only complete sentences already queued');
-        response = {
-          cancelled: false,
-          text: String(error.partialText ?? sentencePipeline.spokenText()).trim(),
-          toolCalls: [],
-          sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
-            label: 'Partial streamed response', metadata: { reason: error.code },
-          })],
-        };
-      } else {
-      this.log.warn({
-        stage: 'llm.safe_recovery_fallback', code: error.code,
-        providerId: this.runtimeProfile.providers.llm.providerId,
-      }, 'Selected LLM failed; using only the configured caller-facing recovery response');
       response = {
         cancelled: false,
-        text: callerFacingFallback(this.runtimeProfile),
+        text: directResponse.content,
         toolCalls: [],
-        sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
-          label: 'Safe recovery fallback', metadata: { reason: error.code },
+        sources: [createMessageSource(messageSourceTypes.KNOWLEDGE, {
+          id: directResponse.recordId ?? directResponse.id,
+          label: 'Exact published conversation response',
+          metadata: {
+            recordType: directResponse.recordType,
+            publicationRevision: directResponse.publicationRevision,
+          },
         })],
       };
+      this.log.info({
+        stage: 'knowledge.exact_message_selected', callId: this.call.id,
+        recordId: directResponse.recordId, publicationRevision: directResponse.publicationRevision,
+      }, 'Strongly matched caller-facing published response selected without an LLM rewrite');
+    } else {
+      try {
+        const llmStartedAt = Date.now();
+        response = await this.#llm(query, history, knowledge, {
+          instruction: 'Understand the latest caller utterance from its full natural meaning and answer it first using only approved evidence. Return exactly one decision: answer, clarify or one authorized action. Do not require exact wording or use a stage as a gate. Emit evidenceIds and stateUpdate first, then decision and a short natural answer.',
+        }, streaming);
+        turnLatency.llmMs += Math.max(0, Date.now() - llmStartedAt);
+      } catch (error) {
+        this.#recordProviderFailure('llm', error, 'llm.response');
+        this.providerHealth.record(this.runtimeProfile.agent.tenantId, 'llm', this.runtimeProfile.providers.llm, 'failure', {
+          code: error.code,
+        });
+        if (sentencePipeline.sentenceCount() > 0) {
+          this.log.warn({
+            stage: 'llm.partial_stream_retained', code: error.code,
+            sentenceCount: sentencePipeline.sentenceCount(),
+          }, 'LLM failed after speech started; retaining only complete sentences already queued');
+          response = {
+            cancelled: false,
+            text: String(error.partialText ?? sentencePipeline.spokenText()).trim(),
+            toolCalls: [],
+            sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
+              label: 'Partial streamed response', metadata: { reason: error.code },
+            })],
+          };
+        } else {
+          this.log.warn({
+            stage: 'llm.safe_recovery_fallback', code: error.code,
+            providerId: this.runtimeProfile.providers.llm.providerId,
+          }, 'Selected LLM failed; using only the configured caller-facing recovery response');
+          response = {
+            cancelled: false,
+            text: callerFacingFallback(this.runtimeProfile),
+            toolCalls: [],
+            sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
+              label: 'Safe recovery fallback', metadata: { reason: error.code },
+            })],
+          };
+        }
       }
     }
     sourceTrace.add(response.sources);

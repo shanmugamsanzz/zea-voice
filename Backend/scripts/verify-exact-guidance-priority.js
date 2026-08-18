@@ -19,20 +19,20 @@ assert.ok(messageSelectionScore(message, 'yes, explain', {}) > messageSelectionS
 const envelope = buildGroundingEnvelope({
   found: true, tenantEvidence: { sources: [message, staleGuidance, faq], guidanceEvidence: [] },
 }, { includePublishedMap: false, maximumSources: 5 });
-assert.deepEqual(envelope.exactCallerResponses, ['source_1']);
-const invalid = JSON.stringify({
+assert.deepEqual(envelope.exactCallerResponses, []);
+const ordinary = JSON.stringify({
   decision: 'answer', answer: 'FAQ answer.', evidenceIds: ['source_1'],
   stateUpdate: {}, pendingQuestion: null, toolRequest: null,
 });
-assert.equal(validateGroundedLlmDecision(invalid, envelope).reason, 'exact_published_response_required');
+assert.equal(validateGroundedLlmDecision(ordinary, envelope).valid, true);
 const valid = JSON.stringify({
-  decision: 'answer', answer: 'Approved options response. Which option would you like?', evidenceIds: ['source_1'],
-  stateUpdate: {}, pendingQuestion: null, toolRequest: null,
+  decision: 'answer', answer: 'Approved options response.', evidenceIds: ['source_1'],
+  stateUpdate: {}, pendingQuestion: 'Which option would you like?', toolRequest: null,
 });
 assert.equal(validateGroundedLlmDecision(valid, envelope).valid, true);
 
 console.log(JSON.stringify({
   task: 'exact-guidance-priority', passed: true,
-  callerFacingMessageAboveStaleGuidance: true, exactResponseGate: true,
+  callerFacingMessageAboveStaleGuidance: true, exactResponseHandledBeforeLlm: true,
   noBusinessRoutingWords: true,
 }));
