@@ -54,6 +54,31 @@ assert.equal(emptyStateOrdinaryAnswer.valid, true);
 assert.equal(emptyStateOrdinaryAnswer.currentTopic, null);
 assert.deepEqual(emptyStateOrdinaryAnswer.selectedEntityKeys, []);
 assert.deepEqual(emptyStateOrdinaryAnswer.fieldUpdates, {});
+assert.equal(emptyStateOrdinaryAnswer.requestType, undefined);
+
+const genericMeaning = validateGroundedLlmDecision(JSON.stringify({
+  decision: 'answer', answer: 'Premium service costs INR 3200.', evidenceIds: ['source_1'],
+  stateUpdate: {
+    requestType: 'item_details', currentTopic: 'premium service',
+    knownEntityKeys: ['premium-service'], requestedFacts: ['price', 'included support'],
+    constraints: ['this week'], contextualReferences: ['that service'],
+    contextDependent: true, collectedInformation: {}, correctedFields: [],
+  },
+  pendingQuestion: null, toolRequest: null,
+}), envelope, runtime);
+assert.equal(genericMeaning.valid, true);
+assert.equal(genericMeaning.requestType, 'item_details');
+assert.deepEqual(genericMeaning.requestedFacts, ['price', 'included support']);
+assert.deepEqual(genericMeaning.constraints, ['this week']);
+assert.deepEqual(genericMeaning.contextualReferences, ['that service']);
+assert.equal(genericMeaning.contextDependent, true);
+
+const invalidMeaning = validateGroundedLlmDecision(JSON.stringify({
+  decision: 'answer', answer: 'The office is on Central Road.', evidenceIds: ['source_2'],
+  stateUpdate: { requestType: 'NOT VALID!' }, pendingQuestion: null, toolRequest: null,
+}), envelope, runtime);
+assert.equal(invalidMeaning.valid, false);
+assert.equal(invalidMeaning.reason, 'invalid_state_update');
 
 const invalidStateField = validateGroundedLlmDecision(JSON.stringify({
   decision: 'answer', answer: 'The office is on Central Road.', evidenceIds: ['source_2'],
@@ -203,6 +228,8 @@ const ordinaryTurn = orchestratorSource.slice(
 );
 assert.equal((ordinaryTurn.match(/await this\.#llm\(/gu) ?? []).length, 1);
 assert.match(orchestratorSource, /grounded\.decision === 'action'/u);
+assert.match(orchestratorSource, /llm\.native_tool_events_rejected/u);
+assert.doesNotMatch(orchestratorSource, /return \{ toolCalls: providerToolCalls/u);
 assert.doesNotMatch(orchestratorSource, /streaming\.onSentence\?\.\(text\)/u);
 
 let providerRequests = 0;

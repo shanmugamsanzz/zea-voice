@@ -3,6 +3,11 @@ const maximumSources = 10;
 const maximumEntities = 20;
 const decisions = new Set(['answer', 'clarify', 'action']);
 
+function requestType(value) {
+  const normalized = text(value, 64).toLocaleLowerCase().replace(/[\s./-]+/gu, '_');
+  return /^[a-z][a-z0-9_]{0,63}$/u.test(normalized) ? normalized : null;
+}
+
 function text(value, maximum = 2_000) {
   return String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
     .replace(/\s+/gu, ' ').trim().slice(0, maximum);
@@ -56,8 +61,10 @@ function normalizeStateUpdate(value, envelope, runtime) {
   const allowedKeys = new Set([
     'currentTopic', 'knownEntityKeys', 'collectedInformation', 'correctedFields',
     'language', 'pendingQuestionRelevant', 'activeToolRequest',
+    'requestType', 'requestedFacts', 'constraints', 'contextualReferences',
+    'contextDependent',
     // Accepted only as rolling-deployment aliases and normalized below.
-    'knownEntities', 'selectedEntityKeys', 'fieldUpdates',
+    'knownEntities', 'selectedEntityKeys', 'fieldUpdates', 'questionType',
   ]);
   if (Object.keys(value).some((key) => !allowedKeys.has(key))) return null;
   const aliasedEntities = Array.isArray(value.knownEntities)
@@ -107,6 +114,13 @@ function normalizeStateUpdate(value, envelope, runtime) {
   if (correctedFields.some((key) => !Object.hasOwn(collectedInformation, key))) return null;
   if (canonical.pendingQuestionRelevant !== undefined
     && typeof canonical.pendingQuestionRelevant !== 'boolean') return null;
+  if (canonical.contextDependent !== undefined
+    && typeof canonical.contextDependent !== 'boolean') return null;
+  const resolvedRequestType = canonical.requestType === undefined
+    && canonical.questionType === undefined
+    ? null : requestType(canonical.requestType ?? canonical.questionType);
+  if ((canonical.requestType !== undefined || canonical.questionType !== undefined)
+    && !resolvedRequestType) return null;
   return Object.freeze({
     currentTopic: text(canonical.currentTopic, 240) || null,
     knownEntityKeys: Object.freeze(knownEntities.map((entity) => entity.key)),
@@ -116,6 +130,15 @@ function normalizeStateUpdate(value, envelope, runtime) {
     language: text(canonical.language, 20) || null,
     pendingQuestionRelevant: canonical.pendingQuestionRelevant ?? true,
     activeToolRequest,
+    requestType: canonical.requestType !== undefined || canonical.questionType !== undefined
+      ? resolvedRequestType : undefined,
+    requestedFacts: canonical.requestedFacts !== undefined
+      ? Object.freeze(list(canonical.requestedFacts, 20)) : undefined,
+    constraints: canonical.constraints !== undefined
+      ? Object.freeze(list(canonical.constraints, 20)) : undefined,
+    contextualReferences: canonical.contextualReferences !== undefined
+      ? Object.freeze(list(canonical.contextualReferences, 20)) : undefined,
+    contextDependent: canonical.contextDependent,
   });
 }
 
@@ -203,6 +226,8 @@ export function groundedDecisionContract(envelope, runtime = {}) {
       'Use action only for one configured tool and never claim success before its verified result.',
       'Use only evidenceIds listed below for factual speech.',
       'For an ordinary answer with no memory change, return stateUpdate as an empty object.',
+      'Resolve meaning generically in stateUpdate when useful: requestType, currentTopic, knownEntityKeys, requestedFacts, constraints, contextualReferences and contextDependent.',
+      'Do not depend on exact caller wording or application-defined business vocabulary.',
     ],
     schema: {
       decision: 'answer | clarify | action',
@@ -214,6 +239,11 @@ export function groundedDecisionContract(envelope, runtime = {}) {
         correctedFields: ['corrected collectedInformation keys'], language: 'optional language code',
         pendingQuestionRelevant: 'optional boolean',
         activeToolRequest: 'optional null or {name} for one configured tool whose fields are being collected',
+        requestType: 'optional generic snake_case request type',
+        requestedFacts: ['optional facts requested by the caller'],
+        constraints: ['optional caller constraints'],
+        contextualReferences: ['optional references such as this, that, it or the previous item'],
+        contextDependent: 'optional boolean; true only when recent context is required',
       },
       pendingQuestion: 'one proposed short question string or null; runtime speaks only configured text',
       toolRequest: 'null or {name, arguments}',
@@ -269,6 +299,20 @@ export function groundedDecisionJsonSchema(envelope, runtime = {}) {
           },
           language: { type: ['string', 'null'] },
           pendingQuestionRelevant: { type: 'boolean' },
+          requestType: { type: ['string', 'null'], pattern: '^[a-z][a-z0-9_]{0,63}$' },
+          requestedFacts: {
+            type: 'array', uniqueItems: true, maxItems: 20,
+            items: { type: 'string', maxLength: 160 },
+          },
+          constraints: {
+            type: 'array', uniqueItems: true, maxItems: 20,
+            items: { type: 'string', maxLength: 160 },
+          },
+          contextualReferences: {
+            type: 'array', uniqueItems: true, maxItems: 20,
+            items: { type: 'string', maxLength: 160 },
+          },
+          contextDependent: { type: 'boolean' },
           activeToolRequest: toolNames.length ? {
             anyOf: [
               { type: 'null' },
@@ -390,6 +434,11 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
     correctedFields: stateUpdate.correctedFields,
     language: stateUpdate.language,
     activeToolRequest: stateUpdate.activeToolRequest,
+    requestType: stateUpdate.requestType,
+    requestedFacts: stateUpdate.requestedFacts,
+    constraints: stateUpdate.constraints,
+    contextualReferences: stateUpdate.contextualReferences,
+    contextDependent: stateUpdate.contextDependent,
     flowAction: decision === 'clarify' ? 'clarify' : 'continue',
   });
 }

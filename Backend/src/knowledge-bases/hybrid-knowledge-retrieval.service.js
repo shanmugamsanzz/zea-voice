@@ -242,13 +242,13 @@ function queryParts(values) {
 }
 
 function primaryQuery(input) {
-  return queryParts([
-    input.semanticQuery ?? input.query,
-    ...(Array.isArray(input.requestedFacts) ? input.requestedFacts : []),
-  ]);
+  // The finalized latest utterance remains isolated. Memory-derived meaning
+  // belongs only to the contextual branch and cannot dilute a new request.
+  return queryParts([input.semanticQuery ?? input.query]);
 }
 
 function contextualQuery(input, primary) {
+  if (!contextWasExplicitlyRequested(input)) return '';
   const understanding = input.understanding ?? {};
   return queryParts([
     primary,
@@ -256,6 +256,12 @@ function contextualQuery(input, primary) {
     input.pendingQuestion,
     input.lastAnswer,
     understanding.questionType,
+    understanding.requestType,
+    ...(Array.isArray(input.requestedFacts) ? input.requestedFacts : []),
+    ...(Array.isArray(input.constraints) ? input.constraints : []),
+    ...(Array.isArray(input.contextualReferences) ? input.contextualReferences : []),
+    ...(Array.isArray(input.recentTurns) ? input.recentTurns.slice(-4) : [])
+      .flatMap((turn) => [turn?.content]),
     ...(Array.isArray(input.knownEntities) ? input.knownEntities : [])
       .flatMap((entity) => [entity.name, entity.key, entity.category]),
     ...(Array.isArray(understanding.selectedEntities) ? understanding.selectedEntities : [])
@@ -353,6 +359,37 @@ export function mergeAndRerankCandidates(semantic, lexical, query, language = 'u
     .map((candidate, index) => ({ ...candidate, rank: index + 1 }));
 }
 
+function candidateStrength(candidate, query) {
+  const semantic = Math.max(0, Number(candidate?.semanticScore ?? 0));
+  const coverage = Math.max(0, Number(candidate?.tokenCoverage ?? 0));
+  const lexical = Math.max(0, Number(candidate?.lexicalScore ?? 0));
+  const channels = new Set(candidate?.channels ?? []);
+  const normalizedQuery = normalize(query);
+  const exactCoverage = normalizedQuery.length >= 2
+    && normalize(candidate?.contentPreview).includes(normalizedQuery);
+  const semanticStrong = semantic >= env.RAG_RUNTIME_MIN_SCORE;
+  const lexicalStrong = coverage >= 0.5 && lexical > 0;
+  const corroborated = channels.has('semantic') && channels.has('bm25')
+    && semantic >= Math.max(0, env.RAG_RUNTIME_MIN_SCORE - 0.08)
+    && coverage >= 0.2;
+  return Object.freeze({
+    accepted: exactCoverage || semanticStrong || lexicalStrong || corroborated,
+    exactCoverage, semanticStrong, lexicalStrong, corroborated,
+  });
+}
+
+export function retainStrongCandidates(candidates = [], query = '', maximum = 5) {
+  const limit = Math.max(3, Math.min(Number(maximum) || 5, 5));
+  return candidates.map((candidate) => ({
+    candidate,
+    strength: candidateStrength(candidate, query),
+  })).filter((entry) => entry.strength.accepted)
+    .slice(0, limit)
+    .map(({ candidate, strength }, index) => ({
+      ...candidate, rank: index + 1, strength,
+    }));
+}
+
 function primaryEvidenceIsSufficient(candidates, query) {
   const first = candidates[0];
   if (!first) return false;
@@ -381,7 +418,12 @@ function prioritizeCandidates(primary, contextual, useContext, limit) {
   // The finalized latest utterance is always the primary query. Context is
   // only a resolver for genuine follow-ups and must never displace an
   // explicit new request or an evidence candidate found for that request.
-  for (const candidate of useContext ? [...primary, ...contextual] : primary) {
+  const candidates = [
+    ...primary.map((candidate) => ({ ...candidate, retrievalContext: 'primary' })),
+    ...(useContext
+      ? contextual.map((candidate) => ({ ...candidate, retrievalContext: 'contextual' })) : []),
+  ];
+  for (const candidate of candidates) {
     const key = candidateKey(candidate);
     if (!unique.has(key)) unique.set(key, candidate);
   }
@@ -390,22 +432,93 @@ function prioritizeCandidates(primary, contextual, useContext, limit) {
     .map((candidate, index) => ({ ...candidate, rank: index + 1 }));
 }
 
+function evidenceIdentityForConflict(evidence) {
+  const data = evidence?.authoritativeData ?? {};
+  const key = data.itemKey ?? data.nodeKey ?? data.name ?? data.question ?? data.heading;
+  return key ? `${String(evidence.recordType).toUpperCase()}:${normalize(key)}` : null;
+}
+
+function factSignature(evidence) {
+  const data = evidence?.authoritativeData ?? {};
+  const factual = {
+    price: data.price, currency: data.currency, answer: data.answer,
+    content: data.content, attributes: data.attributes, relationships: data.relationships,
+    responseTemplate: data.responseTemplate,
+  };
+  return JSON.stringify(factual);
+}
+
+export function detectEvidenceConflict(evidence = [], margin = 0.06) {
+  const candidates = evidence.filter((item) => item.retrievalContext === 'primary')
+    .sort((left, right) => Number(right.retrievalScore ?? right.score ?? 0)
+      - Number(left.retrievalScore ?? left.score ?? 0));
+  const first = candidates[0];
+  const second = candidates[1];
+  if (!first || !second) return Object.freeze({ detected: false, type: null, recordIds: [] });
+  const scoreGap = Math.abs(Number(first.retrievalScore ?? first.score ?? 0)
+    - Number(second.retrievalScore ?? second.score ?? 0));
+  if (scoreGap >= margin) return Object.freeze({ detected: false, type: null, recordIds: [] });
+  const firstIdentity = evidenceIdentityForConflict(first);
+  const secondIdentity = evidenceIdentityForConflict(second);
+  if (firstIdentity && firstIdentity === secondIdentity
+    && factSignature(first) !== factSignature(second)) {
+    return Object.freeze({
+      detected: true, type: 'conflicting_facts',
+      recordIds: Object.freeze([first.recordId, second.recordId]), scoreGap,
+    });
+  }
+  if (firstIdentity && secondIdentity && firstIdentity !== secondIdentity
+    && first.recordType === second.recordType) {
+    return Object.freeze({
+      detected: true, type: 'ambiguous_candidates',
+      recordIds: Object.freeze([first.recordId, second.recordId]), scoreGap,
+    });
+  }
+  return Object.freeze({ detected: false, type: null, recordIds: [] });
+}
+
+export function resolveConfidenceResponseRoute({
+  directMessage = null, evidence = [], conflict = null, rejectedCandidates = 0,
+} = {}) {
+  const relevant = evidence.filter((item) => item?.content || item?.authoritativeData);
+  const top = relevant[0];
+  const confidence = Math.max(0, Number(top?.semanticScore
+    ?? top?.retrievalScore ?? top?.score ?? 0));
+  if (conflict?.detected === true) return Object.freeze({
+    outcome: 'clarify', reason: conflict.type ?? 'conflicting_evidence',
+    confidence, evidenceCount: relevant.length,
+  });
+  if (directMessage) return Object.freeze({
+    outcome: 'direct', reason: 'strong_unambiguous_caller_response',
+    confidence: Math.max(confidence, Number(directMessage.semanticScore ?? 0)),
+    evidenceCount: relevant.length,
+  });
+  if (relevant.length > 0) return Object.freeze({
+    outcome: 'grounded_llm', reason: 'reasoning_required',
+    confidence, evidenceCount: relevant.length,
+  });
+  return Object.freeze({
+    outcome: 'clarify', reason: rejectedCandidates > 0 ? 'weak_evidence' : 'evidence_unavailable',
+    confidence: 0, evidenceCount: 0,
+  });
+}
+
 export function messageSelectionScore(evidence, query, input = {}) {
   if (evidence?.recordType !== 'CONVERSATION_NODE' || evidence?.callerFacing !== true
     || String(evidence.authoritativeData?.nodeType ?? '').toLowerCase() !== 'message') return 0;
-  // A caller-facing message is eligible for deterministic speech only when
-  // the turn has not already selected a concrete catalog entity. This keeps
-  // item details/comparisons authoritative while making acknowledgements and
-  // overview requests prefer the published message over stale guidance.
-  const selected = Boolean(input.selectedCatalogItemKey)
-    || (Array.isArray(input.knownEntities) && input.knownEntities.length > 0)
-    || (Array.isArray(input.understanding?.selectedEntities)
-      && input.understanding.selectedEntities.length > 0);
-  if (selected) return 0;
-  const queryTokens = new Set(normalize(query).split(' ').filter((token) => token.length > 1));
-  const contentTokens = new Set(normalize(evidence.content).split(' ').filter((token) => token.length > 1));
-  const overlap = [...queryTokens].filter((token) => contentTokens.has(token)).length;
-  return 100 + overlap * 10 - Math.min(20, Number(evidence.rank ?? 0));
+  // This score is diagnostic only. Candidate order remains the hybrid
+  // semantic/BM25 order; a message never receives automatic priority merely
+  // because it is caller-facing.
+  const semantic = Math.max(0, Number(evidence.semanticScore ?? 0));
+  const lexical = Math.max(0, Number(evidence.tokenCoverage ?? 0));
+  const retrieval = Math.max(0, Number(evidence.retrievalScore ?? evidence.score ?? 0));
+  const multiChannel = Array.isArray(evidence.channels) && evidence.channels.length > 1 ? 0.05 : 0;
+  const configuredContext = normalize(conversationVariable(evidence, 'context') ?? 'any')
+    .replace(/\s+/gu, '_');
+  const contextFit = configuredContext === 'any' ? 0 : 0.05;
+  const latestTurnFit = (evidence.retrievalContext ?? 'primary') === 'primary' ? 0.05 : 0;
+  return semantic * 0.65 + lexical * 0.1 + Math.min(retrieval, 1) * 0.2
+    + multiChannel + contextFit + latestTurnFit;
 }
 
 function conversationVariable(evidence, requestedKey) {
@@ -418,13 +531,8 @@ function conversationVariable(evidence, requestedKey) {
 export function strongCallerMessageMatch(evidence, query, input = {}) {
   if (evidence?.recordType !== 'CONVERSATION_NODE' || evidence?.callerFacing !== true
     || normalize(evidence.authoritativeData?.nodeType) !== 'message') return false;
-  const examplesValue = conversationVariable(evidence, 'examples');
-  const examples = (Array.isArray(examplesValue) ? examplesValue : [examplesValue])
-    .map(normalize).filter(Boolean);
-  if (!examples.length) return false;
-  const latest = normalize(query);
-  const mode = normalize(conversationVariable(evidence, 'matchMode') ?? 'any_phrase')
-    .replace(/\s+/gu, '_');
+  const situation = normalize(conversationVariable(evidence, 'situation'));
+  if (!situation) return false;
   const context = normalize(conversationVariable(evidence, 'context') ?? 'any')
     .replace(/\s+/gu, '_');
   const selectedEntities = [
@@ -436,11 +544,31 @@ export function strongCallerMessageMatch(evidence, query, input = {}) {
     && (input.selectedCatalogItemKey || selectedEntities.length > 0)) return false;
   if (context === 'pending_question' && !String(input.pendingQuestion ?? '').trim()) return false;
   if (!['any', 'no_selected_entity', 'pending_question'].includes(context)) return false;
-  if (!latest) return false;
-  if (mode === 'exact') return examples.includes(latest);
-  if (!['contains', 'any_phrase'].includes(mode)) return false;
-  const padded = ` ${latest} `;
-  return examples.some((example) => padded.includes(` ${example} `));
+  // EXAMPLES and SITUATION improve the indexed representation, but runtime
+  // activation never compares the caller's words with those examples.
+  const semanticScore = Number(evidence.semanticScore ?? 0);
+  const semanticRank = Number(evidence.semanticRank ?? Number.POSITIVE_INFINITY);
+  const channels = new Set(evidence.channels ?? []);
+  const strongSemanticFloor = Math.min(0.98, Math.max(0.82, env.RAG_RUNTIME_MIN_SCORE + 0.08));
+  return (evidence.retrievalContext ?? 'primary') === 'primary'
+    && channels.has('semantic')
+    && semanticScore >= strongSemanticFloor
+    && semanticRank <= 2;
+}
+
+export function selectStrongCallerMessage(evidence = [], query = '', input = {}) {
+  const candidates = evidence.filter((item) => strongCallerMessageMatch(item, query, input))
+    .sort((left, right) => messageSelectionScore(right, query, input)
+      - messageSelectionScore(left, query, input)
+      || Number(left.rank ?? 0) - Number(right.rank ?? 0));
+  const first = candidates[0];
+  if (!first) return null;
+  const runnerUp = candidates[1];
+  if (runnerUp && messageSelectionScore(first, query, input)
+    - messageSelectionScore(runnerUp, query, input) < 0.04) {
+    return null;
+  }
+  return first;
 }
 
 async function loadScope(auth, input, runtime) {
@@ -534,6 +662,12 @@ export function authoritativeEvidenceFromRow(row) {
     language: row.language ?? 'und', content: String(row.content ?? '').trim(),
     callerFacing: row.caller_facing, authoritativeData: row.authoritative_data ?? {},
     score: Number(row.score), rank: Number(row.rank), matchMode: 'hybrid',
+    // These flags are asserted only by this PostgreSQL hydration path. The
+    // SQL above has already enforced assignment, active publication revision,
+    // approved record status, current document version and ready documents.
+    hydrationValidated: true,
+    documentStatus: 'ready', documentVersionStatus: 'ready',
+    documentVersionIsCurrent: true,
   };
 }
 
@@ -583,9 +717,13 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
     || (input.latestRequestPriority !== 'primary'
       && !primaryEvidenceIsSufficient(primaryBranch.ranked, query));
   const contextualUsed = Boolean(queries.contextual) && contextualRequested;
+  const strongPrimary = retainStrongCandidates(primaryBranch.ranked, query, safeInput.topK ?? 5);
+  const strongContextual = retainStrongCandidates(
+    contextualBranch.ranked, queries.contextual, safeInput.topK ?? 5,
+  );
   const ranked = prioritizeCandidates(
-    primaryBranch.ranked,
-    contextualBranch.ranked,
+    strongPrimary,
+    strongContextual,
     contextualUsed,
     Math.max(8, Number(safeInput.topK ?? 5)),
   );
@@ -595,7 +733,22 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
     hydrate({ ...auth, tenantId }, safeInput, ranked, runtime), env.RAG_RUNTIME_CHANNEL_DEADLINE_MS, [],
   ), input.abortSignal, []);
   const hydrationMs = Math.round((performance.now() - hydrationStartedAt) * 100) / 100;
-  const hydratedEvidence = rows.map(authoritativeEvidenceFromRow).sort((left, right) => left.rank - right.rank)
+  const rankedByKey = new Map(ranked.map((candidate) => [candidateKey(candidate), candidate]));
+  const hydratedEvidence = rows.map((row) => {
+    const item = authoritativeEvidenceFromRow(row);
+    const candidate = rankedByKey.get(candidateKey(item)) ?? {};
+    return {
+      ...item,
+      semanticScore: Number(candidate.semanticScore ?? 0),
+      lexicalScore: Number(candidate.lexicalScore ?? 0),
+      tokenCoverage: Number(candidate.tokenCoverage ?? 0),
+      retrievalScore: Number(candidate.score ?? 0),
+      retrievalContext: candidate.retrievalContext ?? 'primary',
+      semanticRank: Number(candidate.semanticRank ?? 0) || null,
+      bm25Rank: Number(candidate.bm25Rank ?? 0) || null,
+      channels: Object.freeze([...(candidate.channels ?? [])]),
+    };
+  }).sort((left, right) => left.rank - right.rank)
     .map((item) => {
       if (item.recordType !== 'WORKFLOW_RULE') return item;
       const activation = latestTurnWorkflowActivation({
@@ -604,13 +757,11 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       });
       return { ...item, activationAllowed: activation.allowed, activation };
     });
-  const evidence = hydratedEvidence
-    .map((item) => ({ item, messageScore: messageSelectionScore(item, query, safeInput) }))
-    .sort((left, right) => right.messageScore - left.messageScore || left.item.rank - right.item.rank)
-    .map(({ item }, index) => ({ ...item, rank: index + 1 }));
+  const evidence = hydratedEvidence.map((item, index) => ({ ...item, rank: index + 1 }));
   const permittedEvidence = evidence.filter((item) => (
     item.recordType !== 'WORKFLOW_RULE' || item.activationAllowed === true
   ));
+  const evidenceConflict = detectEvidenceConflict(permittedEvidence);
   const sources = permittedEvidence.filter((item) => !(
     (item.recordType === 'WORKFLOW_RULE' || item.recordType === 'CONVERSATION_NODE')
     && item.callerFacing !== true
@@ -626,7 +777,14 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
     category: item.authoritativeData.category, categoryKey: item.authoritativeData.categoryKey,
     parentCategoryKey: item.authoritativeData.parentCategoryKey,
   }));
-  const directMessage = permittedEvidence.find((item) => strongCallerMessageMatch(item, query, input));
+  const directMessage = evidenceConflict.detected
+    ? null : selectStrongCallerMessage(permittedEvidence, query, input);
+  const weakCandidatesRejected = primaryBranch.ranked.length + contextualBranch.ranked.length
+    - strongPrimary.length - strongContextual.length;
+  const responseRouting = resolveConfidenceResponseRoute({
+    directMessage, evidence: permittedEvidence, conflict: evidenceConflict,
+    rejectedCandidates: weakCandidatesRejected,
+  });
   const result = {
     operation: 'search_published_knowledge', route: 'hybrid',
     found: permittedEvidence.length > 0, sources, actionEvidence, guidanceEvidence, entities,
@@ -639,15 +797,27 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       agentId: directMessage.agentId,
       knowledgeBaseId: directMessage.knowledgeBaseId,
       publicationRevision: directMessage.publicationRevision,
+      documentId: directMessage.documentId,
+      documentVersionId: directMessage.documentVersionId,
+      hydrationValidated: directMessage.hydrationValidated,
+      documentStatus: directMessage.documentStatus,
+      documentVersionStatus: directMessage.documentVersionStatus,
+      documentVersionIsCurrent: directMessage.documentVersionIsCurrent,
+      callerFacing: directMessage.callerFacing,
       content: directMessage.content,
       authoritativeData: directMessage.authoritativeData,
     } : null,
+    responseRouting,
     requestedFacts: Array.isArray(input.requestedFacts) ? input.requestedFacts : [],
     retrieval: {
       semanticCandidates: primaryBranch.semantic.length + contextualBranch.semantic.length,
       lexicalCandidates: primaryBranch.lexical.length + contextualBranch.lexical.length,
       mergedCandidates: ranked.length, hydratedEvidence: evidence.length,
+      weakCandidatesRejected,
       contextualAvailable: Boolean(queries.contextual), contextualUsed,
+      conflictDetected: evidenceConflict.detected,
+      conflictType: evidenceConflict.type,
+      conflictingRecordIds: evidenceConflict.recordIds,
       workflowCandidatesRejected: evidence.filter((item) => (
         item.recordType === 'WORKFLOW_RULE' && item.activationAllowed !== true
       )).length,

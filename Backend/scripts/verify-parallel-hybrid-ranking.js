@@ -45,15 +45,18 @@ const ranked = rankHybridEvidence(retrieval.candidates, {
   activeCategoryKey: 'active-category', currentStage: 'current-stage',
   knowledgeBases: [{ id: 'kb-primary', priority: 1 }, { id: 'kb-secondary', priority: 2 }],
 });
-assert.equal(ranked[0].candidate.route, 'workflow');
-assert.equal(ranked[0].factors.deterministicAction, 1_000);
+// A legacy Workflow candidate without evidence tying it to the finalized
+// latest utterance must not outrank the selected authoritative Catalog item.
+assert.equal(ranked[0].candidate.route, 'catalog');
+assert.equal(ranked.find((entry) => entry.candidate.route === 'workflow')
+  .factors.deterministicAction, 0);
 assert.ok(ranked.find((entry) => entry.candidate.route === 'catalog').factors.selectedItem > 0);
 assert.ok(ranked.find((entry) => entry.candidate.route === 'conversation').factors.stage > 0);
 assert.equal(rankedEvidenceBundle(ranked).length, 5);
 
 console.log(JSON.stringify({
   parallelChannels: retrieval.candidates.map((candidate) => candidate.retrieval.channel),
-  deterministicWorkflowPrecedence: true,
+  latestTurnWorkflowSafety: true,
   selectedItemBoost: true,
   activeCategoryBoost: true,
   stageCompatibilityBoost: true,

@@ -6,7 +6,8 @@ const maximumMessageCharacters = 2_000;
 const maximumEntities = 20;
 export const genericConversationStateFields = Object.freeze([
   'currentTopic', 'knownEntities', 'pendingQuestion', 'collectedInformation',
-  'recentTurns', 'lastAnswer', 'activeToolRequest', 'language',
+  'recentTurns', 'lastAnswer', 'activeToolRequest', 'language', 'requestType',
+  'requestedFacts', 'constraints', 'contextualReferences', 'contextDependent',
 ]);
 
 function required(value, name) {
@@ -116,6 +117,17 @@ function cleanInformation(value = {}, allowedKeys = null) {
   }));
 }
 
+function cleanList(value, maximum = 20) {
+  return Array.isArray(value)
+    ? [...new Set(value.map((entry) => cleanText(entry, 160)).filter(Boolean))].slice(0, maximum)
+    : [];
+}
+
+function cleanRequestType(value) {
+  const normalized = cleanText(value, 64).toLocaleLowerCase().replace(/[\s./-]+/gu, '_');
+  return /^[a-z][a-z0-9_]{0,63}$/u.test(normalized) ? normalized : null;
+}
+
 function publicState(state) {
   return Object.freeze({
     currentTopic: state.currentTopic,
@@ -126,6 +138,11 @@ function publicState(state) {
     lastAnswer: state.lastAnswer,
     activeToolRequest: state.activeToolRequest ? Object.freeze({ ...state.activeToolRequest }) : null,
     language: state.language,
+    requestType: state.requestType,
+    requestedFacts: Object.freeze([...state.requestedFacts]),
+    constraints: Object.freeze([...state.constraints]),
+    contextualReferences: Object.freeze([...state.contextualReferences]),
+    contextDependent: state.contextDependent,
   });
 }
 
@@ -148,6 +165,11 @@ export function openGenericConversationState(identity, settings = {}, now = Date
     activeToolRequest: cleanToolRequest(initial.activeToolRequest),
     language: cleanLanguage(initial.language
       ?? settings.conversationLanguage ?? settings.defaultLanguage ?? settings.language),
+    requestType: cleanRequestType(initial.requestType ?? initial.questionType),
+    requestedFacts: cleanList(initial.requestedFacts),
+    constraints: cleanList(initial.constraints),
+    contextualReferences: cleanList(initial.contextualReferences),
+    contextDependent: initial.contextDependent === true,
   };
   let activeTurnToken = null;
   let resumePending = false;
@@ -210,6 +232,17 @@ export function openGenericConversationState(identity, settings = {}, now = Date
       if (decision.pendingQuestion !== undefined) state.pendingQuestion = cleanPending(decision.pendingQuestion);
       if (update.language ?? decision.language) {
         state.language = cleanLanguage(update.language ?? decision.language, state.language);
+      }
+      if (update.requestType !== undefined || update.questionType !== undefined) {
+        state.requestType = cleanRequestType(update.requestType ?? update.questionType);
+      }
+      if (update.requestedFacts !== undefined) state.requestedFacts = cleanList(update.requestedFacts);
+      if (update.constraints !== undefined) state.constraints = cleanList(update.constraints);
+      if (update.contextualReferences !== undefined) {
+        state.contextualReferences = cleanList(update.contextualReferences);
+      }
+      if (update.contextDependent !== undefined) {
+        state.contextDependent = update.contextDependent === true;
       }
       if (update.activeToolRequest !== undefined || decision.activeToolRequest !== undefined) {
         state.activeToolRequest = cleanToolRequest(
@@ -289,6 +322,11 @@ export function compactGenericConversationState(snapshot = {}, maximumCharacters
     lastAnswer: snapshot.lastAnswer ?? null,
     activeToolRequest: snapshot.activeToolRequest ?? null,
     language: snapshot.language ?? 'en',
+    requestType: snapshot.requestType ?? null,
+    requestedFacts: (snapshot.requestedFacts ?? []).slice(0, 20),
+    constraints: (snapshot.constraints ?? []).slice(0, 20),
+    contextualReferences: (snapshot.contextualReferences ?? []).slice(0, 20),
+    contextDependent: snapshot.contextDependent === true,
   };
   while (JSON.stringify(context).length > maximumCharacters && context.recentTurns.length > 2) {
     context.recentTurns.shift();

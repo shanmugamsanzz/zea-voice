@@ -27,6 +27,8 @@ const sideAnswer = applyUnifiedGroundedTurn({
     stateUpdate: {
       currentTopic: 'office location', knownEntityKeys: [], collectedInformation: {},
       correctedFields: [], language: 'en', pendingQuestionRelevant: true,
+      requestType: 'location_question', requestedFacts: ['location'], constraints: [],
+      contextualReferences: [], contextDependent: false,
     },
     pendingQuestion: null, toolRequest: null,
   }),
@@ -41,6 +43,8 @@ assert.equal(sideAnswer.valid, true);
 assert.equal(sideAnswer.answer, 'The office is on Central Road. Which date do you prefer?');
 assert.equal(sideAnswer.pendingQuestion.key, 'preferred_date');
 assert.equal(sideAnswer.state.lastAnswer, sideAnswer.answer);
+assert.equal(sideAnswer.state.requestType, 'location_question');
+assert.deepEqual(sideAnswer.state.requestedFacts, ['location']);
 assert.equal(sideAnswer.state.recentTurns.at(-1).role, 'assistant');
 assert.equal(sideAnswer.state.recentTurns.at(-1).content, sideAnswer.answer);
 assert.deepEqual(Object.keys(sideAnswer.state).sort(), [...genericConversationStateFields].sort());

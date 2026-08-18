@@ -5,7 +5,8 @@ import { validateGroundedLlmDecision } from '../src/voice/interaction/grounded-l
 
 const message = {
   id: 'message-1', recordId: 'message-1', recordType: 'CONVERSATION_NODE', callerFacing: true,
-  rank: 4, content: 'Approved options response. Which option would you like?', authoritativeData: { nodeType: 'message' },
+  rank: 4, semanticScore: 0.9, semanticRank: 1, channels: ['semantic'],
+  content: 'Approved options response. Which option would you like?', authoritativeData: { nodeType: 'message' },
 };
 const staleGuidance = {
   id: 'guidance-1', recordId: 'guidance-1', recordType: 'CONVERSATION_NODE', callerFacing: false,

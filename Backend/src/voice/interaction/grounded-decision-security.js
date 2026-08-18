@@ -17,9 +17,16 @@ export function evidenceBelongsToRuntime(source, scope) {
   const revisions = new Map((scope.publicationRevisions ?? []).map((entry) => [
     identity(entry.knowledgeBaseId), Number(entry.publicationRevision ?? entry.revision),
   ]));
-  return identity(source?.tenantId) === identity(scope.tenantId)
+  const identityValid = identity(source?.tenantId) === identity(scope.tenantId)
     && identity(source?.agentId) === identity(scope.agentId)
     && revisions.get(identity(source?.knowledgeBaseId)) === Number(source?.publicationRevision);
+  if (!identityValid) return false;
+  if (scope.requireHydratedEvidence !== true) return true;
+  return source?.hydrationValidated === true
+    && source?.documentStatus === 'ready'
+    && source?.documentVersionStatus === 'ready'
+    && source?.documentVersionIsCurrent === true
+    && Boolean(source?.documentId) && Boolean(source?.documentVersionId);
 }
 
 function workflowIdentifier(evidence) {

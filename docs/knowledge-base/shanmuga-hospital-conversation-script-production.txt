@@ -24,7 +24,7 @@ ENTRY: false
 PURPOSE: Continue when the caller accepts the offer to hear package information.
 SITUATION: The caller positively accepts the immediately preceding offer to hear the available package information without asking a different question.
 EXAMPLES: ஆமாங்க | ஆமா | ம் ஆமாங்க | ம் ஆமா | ஆமா madam | yes ஆமா | சரி சொல்லுங்க | ஆ சொல்லுங்க | சொல்லுங்க | ஏ சாம்பா சொல்லுங்க | yes | yes please | okay tell me | please explain
-MATCH_MODE: exact
+MATCH_MODE: semantic
 CONTEXT: no_selected_entity
 RESPONSE: எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Onco Care Packages, Organ-Specific Packages, Kids Health Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?
 NEXT_QUESTION:
@@ -37,7 +37,7 @@ ENTRY: false
 PURPOSE: Answer every general request for available packages, including requests for other or additional packages.
 SITUATION: The caller asks for the complete package overview, all available package options or what other packages are available.
 EXAMPLES: உங்ககிட்ட என்னென்ன packages இருக்கு | உங்ககிட்ட என்ன packagesலாம் இருக்கு | என்னெல்லாம் packages இருக்கு | என்னென்ன package இருக்கு | வேற என்ன packagesலாம் இருக்கு | detail-ஆ என்னென்ன packages இருக்குன்னு சொல்லுங்க | detail-ஆ என்னென்ன packages இருக்குன்னு overview சொல்லுங்க | package overview சொல்லுங்க | எல்லா packages-யும் சொல்லுங்க | what packages do you have | what packages are available | what other packages are available
-MATCH_MODE: any_phrase
+MATCH_MODE: semantic
 RESPONSE: எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Onco Care Packages, Organ-Specific Packages, Kids Health Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?
 NEXT_QUESTION:
 

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {
+  classifyFinalCallCheckUtterance,
   findCallCheckPhraseCandidate,
   isCallCheckOnlyUtterance,
   resolveCallCheckConfiguration,
@@ -25,6 +26,16 @@ assert.equal(followUpCandidate, 'Are you there?');
 assert.equal(isCallCheckOnlyUtterance(followUp, followUpCandidate, configuration), false);
 
 assert.equal(findCallCheckPhraseCandidate('No configured phrase here', configuration), null);
+
+assert.deepEqual(classifyFinalCallCheckUtterance('Hello', configuration), {
+  matchedPhrase: null, shortcut: false,
+});
+assert.deepEqual(classifyFinalCallCheckUtterance('Hello', configuration, { finalized: true }), {
+  matchedPhrase: 'Hello', shortcut: true,
+});
+assert.deepEqual(classifyFinalCallCheckUtterance(
+  'Hello, please continue with my request', configuration, { finalized: true },
+), { matchedPhrase: 'Hello', shortcut: false });
 
 console.log(JSON.stringify({
   exactCallCheckUsesShortcut: true,

@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
+  detectEvidenceConflict,
   mergeAndRerankCandidates,
+  retainStrongCandidates,
   searchHybridPublishedKnowledge,
 } from '../src/knowledge-bases/hybrid-knowledge-retrieval.service.js';
 import { sparseIndexCacheKey } from '../src/knowledge-bases/knowledge-map.service.js';
@@ -154,6 +156,7 @@ async function search(query, options = {}) {
   return searchHybridPublishedKnowledge({ tenantId: tenantA }, {
     agentId: agentA, query, usageDirection: 'inbound', language: options.language ?? 'en', topK: 5,
     currentTopic: options.currentTopic,
+    contextualFollowUp: options.contextualFollowUp,
   }, dependencies(options));
 }
 
@@ -188,6 +191,13 @@ const rejected = await search('private foreign evidence', {
 });
 assert.equal(rejected.found, false, 'Cross-tenant Qdrant evidence must be rejected before hydration');
 
+const weakEvidence = await search('uncertain request', {
+  points: [semanticPoint(ids.location, 'FAQ', { score: 0.2 })],
+});
+assert.equal(weakEvidence.found, false, 'Weak evidence must be rejected before hydration');
+assert.equal(weakEvidence.responseRouting.outcome, 'clarify');
+assert.equal(weakEvidence.responseRouting.reason, 'weak_evidence');
+
 const explicitTopicChange = await search('What is the return window?', {
   currentTopic: 'previous subject term',
   points: (query) => (query === 'What is the return window?'
@@ -203,6 +213,7 @@ assert.equal(explicitTopicChange.retrieval.contextualUsed, false);
 
 const genuineFollowUp = await search('What about that one?', {
   currentTopic: 'express delivery',
+  contextualFollowUp: true,
   points: (query) => (query === 'What about that one?'
     ? []
     : [semanticPoint(ids.contextualFollowUp, 'FAQ', { score: 0.94 })]),
@@ -218,6 +229,25 @@ const deduplicated = mergeAndRerankCandidates([
 ], 'office location', 'en', 5);
 assert.equal(deduplicated.length, 1);
 assert.deepEqual(deduplicated[0].channels.sort(), ['bm25', 'semantic']);
+
+const strongOnly = retainStrongCandidates([
+  { recordType: 'FAQ', recordId: 'strong', knowledgeBaseId: kbA, semanticScore: 0.92, channels: ['semantic'] },
+  { recordType: 'FAQ', recordId: 'weak', knowledgeBaseId: kbA, semanticScore: 0.2, lexicalScore: 0.1, tokenCoverage: 0.05, channels: ['semantic'] },
+], 'delivery details', 5);
+assert.deepEqual(strongOnly.map((candidate) => candidate.recordId), ['strong']);
+
+const conflict = detectEvidenceConflict([
+  {
+    recordType: 'CATALOG_ITEM', recordId: 'a', retrievalContext: 'primary', retrievalScore: 0.91,
+    authoritativeData: { itemKey: 'same-item', price: 100, currency: 'USD' },
+  },
+  {
+    recordType: 'CATALOG_ITEM', recordId: 'b', retrievalContext: 'primary', retrievalScore: 0.88,
+    authoritativeData: { itemKey: 'same-item', price: 120, currency: 'USD' },
+  },
+]);
+assert.equal(conflict.detected, true);
+assert.equal(conflict.type, 'conflicting_facts');
 
 const serviceSource = await readFile(new URL('../src/knowledge-bases/hybrid-knowledge-retrieval.service.js', import.meta.url), 'utf8');
 assert.doesNotMatch(serviceSource, /intentKeywords|triggerPhrases|packageKeywords|hospital|appointment/iu,

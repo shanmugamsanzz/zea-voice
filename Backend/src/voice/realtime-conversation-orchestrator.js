@@ -28,8 +28,7 @@ import { validateFinalCustomerTurn } from './interruption/final-turn-validator.j
 import { ShortTurnMerger } from './interruption/short-turn-merger.js';
 import { greetingModes, resolveInteractionConfiguration } from './interaction/interaction-config.js';
 import {
-  findCallCheckPhraseCandidate,
-  isCallCheckOnlyUtterance,
+  classifyFinalCallCheckUtterance,
   resolveCallCheckConfiguration,
 } from './interaction/call-check-config.js';
 import { findLanguageSwitchRequest, languageSwitchAcknowledgement } from './interaction/language-switch.js';
@@ -127,6 +126,18 @@ export function isInternalRuntimeText(value) {
 function callerFacingFallback(profile) {
   const configured = String(profile.agent.settings?.noResponseMessage ?? '').trim();
   return configured && !isInternalRuntimeText(configured) ? configured : fallbackRecovery(profile);
+}
+
+function configuredKnowledgeClarification(profile, tenantEvidence = {}) {
+  const configured = String(profile.agent.settings?.knowledgeClarificationMessage ?? '').trim();
+  if (!configured || isInternalRuntimeText(configured)) return callerFacingFallback(profile);
+  const candidates = (tenantEvidence.sources ?? []).map((source) => (
+    source.authoritativeData?.name
+      ?? source.authoritativeData?.question
+      ?? source.authoritativeData?.heading
+  )).filter(Boolean).slice(0, 3);
+  return configured.replace(/\{\{\s*candidates\s*\}\}/giu, candidates.join(', ')).trim()
+    || callerFacingFallback(profile);
 }
 
 function callerFacingText(value, profile) {
@@ -1094,12 +1105,11 @@ export class RealtimeConversationOrchestrator {
     this.#recordInterruptionTrace('final_turn_assembled', {
       epoch: this.epoch, text: completedTurn, confidence: finalConfidence,
     });
-    const callCheckPhrase = findCallCheckPhraseCandidate(completedTurn, this.callCheckConfiguration);
-    const callCheckOnly = isCallCheckOnlyUtterance(
-      completedTurn,
-      callCheckPhrase,
-      this.callCheckConfiguration,
+    const callCheckClassification = classifyFinalCallCheckUtterance(
+      completedTurn, this.callCheckConfiguration, { finalized: true },
     );
+    const callCheckPhrase = callCheckClassification.matchedPhrase;
+    const callCheckOnly = callCheckClassification.shortcut;
     if (callCheckPhrase && callCheckOnly) {
       await this.#handleCallCheck(completedTurn, callCheckPhrase);
       return;
@@ -1483,6 +1493,13 @@ export class RealtimeConversationOrchestrator {
     try {
       const startedAt = performance.now();
       const memoryState = this.liveCallMemory?.snapshot();
+      const currentUnderstanding = _understanding && typeof _understanding === 'object'
+        ? _understanding : {};
+      const pendingQuestion = memoryState?.pendingQuestion?.text
+        ?? memoryState?.pendingQuestionText ?? memoryState?.pendingQuestion ?? undefined;
+      const contextualFollowUp = currentUnderstanding.contextDependent === true
+        || currentUnderstanding.requiresContext === true
+        || Boolean(pendingQuestion);
       const auth = {
         tenantId: this.runtimeProfile.agent.tenantId,
         workspaceId: this.runtimeProfile.agent.workspaceId,
@@ -1498,10 +1515,22 @@ export class RealtimeConversationOrchestrator {
         language: memoryState?.language ?? languageCode(this.runtimeProfile.agent.language),
         currentTopic: memoryState?.currentTopic ?? undefined,
         knownEntities: memoryState?.knownEntities ?? [],
-        pendingQuestion: memoryState?.pendingQuestion?.text
-          ?? memoryState?.pendingQuestionText ?? memoryState?.pendingQuestion ?? undefined,
+        pendingQuestion,
         collectedInformation: memoryState?.collectedInformation ?? {},
         lastAnswer: memoryState?.lastAnswer ?? undefined,
+        understanding: {
+          requestType: currentUnderstanding.requestType
+            ?? currentUnderstanding.questionType ?? undefined,
+          questionType: currentUnderstanding.questionType
+            ?? currentUnderstanding.requestType ?? undefined,
+          contextDependent: contextualFollowUp,
+          selectedEntities: memoryState?.knownEntities ?? [],
+        },
+        requestedFacts: memoryState?.requestedFacts ?? [],
+        constraints: memoryState?.constraints ?? [],
+        contextualReferences: memoryState?.contextualReferences ?? [],
+        recentTurns: memoryState?.recentTurns ?? [],
+        contextualFollowUp,
         abortSignal,
       };
       const retrieveEvidence = this.dependencies.retrieveTenantEvidence ?? retrieveTenantEvidence;
@@ -1869,44 +1898,16 @@ export class RealtimeConversationOrchestrator {
         }
       }
       if (toolCalls.length) {
-        // Provider-native tool events are accepted only after the unified
-        // decision path has created an authorized, confirmed request. This
-        // prevents a provider from bypassing UI field validation or calling a
-        // tool before the configured read-back confirmation.
-        const activeToolRequest = this.liveCallMemory?.snapshot?.().activeToolRequest;
-        const confirmationReady = this.actionConfirmationConfiguration?.enabled !== true
-          || (activeToolRequest?.status === 'awaiting_confirmation'
-            && Boolean(activeToolRequest?.authorizationRecordId));
-        const assignedAndCurrent = toolCalls.every((toolCall) => {
-          const toolIdentity = (value) => String(value ?? '').normalize('NFKC')
-            .toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '_').replace(/^_+|_+$/gu, '');
-          const assigned = (this.runtimeProfile.tools ?? []).find((tool) => (
-            toolIdentity(tool.name) === toolIdentity(toolCall.name)
-          ));
-          if (!assigned) return false;
-          if (activeToolRequest?.name && toolIdentity(activeToolRequest.name)
-            !== toolIdentity(toolCall.name)) return false;
-          const collected = this.liveCallMemory?.snapshot?.().collectedInformation ?? {};
-          return Object.entries(toolCall.arguments ?? {}).every(([key, value]) => (
-            !Object.hasOwn(collected, key) || String(collected[key]).trim().toLocaleLowerCase()
-              === String(value).trim().toLocaleLowerCase()
-          ));
-        });
-        if (!confirmationReady || !assignedAndCurrent) {
-          this.log.warn({
-            stage: 'llm.tool_call_rejected_before_execution', callId: this.call.id,
-            reason: !confirmationReady ? 'confirmation_required' : 'assigned_tool_or_state_mismatch',
-          }, 'Provider tool call was blocked until the unified confirmed action state was valid');
-          toolCalls = [];
-        }
-      }
-      if (toolCalls.length) {
-        sentenceBuffer.clear();
-        streaming.flush?.();
-        return {
-          cancelled: false, text: '', toolCalls,
-          sources: [llmMessageSource(this.runtimeProfile.providers.llm, completion)],
-        };
+        // Grounded mode deliberately exposes no provider-native tools. A raw
+        // tool event is therefore a protocol violation, not an executable
+        // request. Only the fully parsed and validated JSON decision below may
+        // create toolCalls after evidence, state, permission and confirmation
+        // checks have all passed.
+        this.log.warn({
+          stage: 'llm.native_tool_events_rejected', callId: this.call.id,
+          count: toolCalls.length,
+        }, 'Provider-native tool events were rejected before unified decision validation');
+        toolCalls = [];
       }
       const unifiedTurn = applyUnifiedGroundedTurn({
           rawDecision: text,
@@ -1920,6 +1921,7 @@ export class RealtimeConversationOrchestrator {
             tenantId: this.runtimeProfile.agent.tenantId,
             agentId: this.runtimeProfile.agent.id,
             publicationRevisions: tenantEvidence.publicationRevisions ?? [],
+            requireHydratedEvidence: true,
           },
           safetyPolicies: this.runtimeProfile.agent.settings?.safetyPolicies ?? [],
           finalizedUtterance: query,
@@ -2402,12 +2404,21 @@ export class RealtimeConversationOrchestrator {
     };
     let response;
     const directResponse = knowledge.tenantEvidence?.directResponse;
+    const responseRouting = knowledge.tenantEvidence?.responseRouting ?? {
+      outcome: directResponse ? 'direct' : (knowledge.found ? 'grounded_llm' : 'clarify'),
+      reason: 'compatibility_route',
+    };
     const directResponseScope = {
       tenantId: this.runtimeProfile.agent.tenantId,
       agentId: this.runtimeProfile.agent.id,
       publicationRevisions: knowledge.tenantEvidence?.publicationRevisions ?? [],
+      requireHydratedEvidence: true,
     };
     const directResponseValidated = Boolean(directResponse?.content)
+      && responseRouting.outcome === 'direct'
+      && directResponse?.callerFacing === true
+      && String(directResponse?.recordType ?? '').toUpperCase() === 'CONVERSATION_NODE'
+      && String(directResponse?.authoritativeData?.nodeType ?? '').toLowerCase() === 'message'
       && evidenceBelongsToRuntime(directResponse, directResponseScope);
     if (directResponseValidated) {
       this.liveCallMemory?.setPosition?.({
@@ -2431,6 +2442,21 @@ export class RealtimeConversationOrchestrator {
         stage: 'knowledge.exact_message_selected', callId: this.call.id,
         recordId: directResponse.recordId, publicationRevision: directResponse.publicationRevision,
       }, 'Strongly matched caller-facing published response selected without an LLM rewrite');
+    } else if (responseRouting.outcome === 'clarify' || responseRouting.outcome === 'direct') {
+      const reason = responseRouting.outcome === 'direct'
+        ? 'direct_response_validation_failed' : responseRouting.reason;
+      response = {
+        cancelled: false,
+        text: configuredKnowledgeClarification(this.runtimeProfile, knowledge.tenantEvidence),
+        toolCalls: [],
+        sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
+          label: 'Configured knowledge clarification', metadata: { reason },
+        })],
+      };
+      this.log.info({
+        stage: 'knowledge.clarification_selected', callId: this.call.id, reason,
+        conflictType: knowledge.tenantEvidence?.retrieval?.conflictType ?? null,
+      }, 'Weak, conflicting or invalid direct evidence routed to configured clarification');
     } else {
       try {
         const llmStartedAt = Date.now();

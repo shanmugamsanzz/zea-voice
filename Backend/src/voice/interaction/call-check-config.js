@@ -89,3 +89,12 @@ export function isCallCheckOnlyUtterance(transcript, matchedPhrase, configuratio
   if (!matchedPhrase || !configuration?.response) return false;
   return comparable(transcript) === comparable(matchedPhrase);
 }
+
+export function classifyFinalCallCheckUtterance(transcript, configuration, { finalized = false } = {}) {
+  if (!finalized) return Object.freeze({ matchedPhrase: null, shortcut: false });
+  const matchedPhrase = findCallCheckPhraseCandidate(transcript, configuration);
+  return Object.freeze({
+    matchedPhrase,
+    shortcut: isCallCheckOnlyUtterance(transcript, matchedPhrase, configuration),
+  });
+}

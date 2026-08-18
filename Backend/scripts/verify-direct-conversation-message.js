@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { processExtractedCategory } from '../src/knowledge-bases/category-processors.js';
-import { strongCallerMessageMatch } from '../src/knowledge-bases/hybrid-knowledge-retrieval.service.js';
+import {
+  selectStrongCallerMessage,
+  strongCallerMessageMatch,
+} from '../src/knowledge-bases/hybrid-knowledge-retrieval.service.js';
 import { evidenceBelongsToRuntime } from '../src/voice/interaction/grounded-decision-security.js';
 
 const approvedResponse = 'We offer Foundation, Advanced and Professional courses. Which course interests you?';
@@ -14,7 +17,7 @@ const documentText = [
   'PURPOSE: Continue when the caller accepts the offer.',
   'SITUATION: The caller positively accepts the offer to hear available courses.',
   'EXAMPLES: yes | yes please | okay tell me',
-  'MATCH_MODE: exact',
+  'MATCH_MODE: semantic',
   'CONTEXT: no_selected_entity',
   `RESPONSE: ${approvedResponse}`,
   'NEXT_QUESTION:',
@@ -27,7 +30,7 @@ const documentText = [
   'PURPOSE: Answer requests for all available courses.',
   'SITUATION: The caller asks for all available course options.',
   'EXAMPLES: what courses do you have | what other courses are available',
-  'MATCH_MODE: any_phrase',
+  'MATCH_MODE: semantic',
   `RESPONSE: ${approvedResponse}`,
   'NEXT_QUESTION:',
 ].join('\n');
@@ -42,7 +45,7 @@ const overview = parsed.records[1];
 const variable = (record, key) => record.variables.find((item) => item.key === key)?.value;
 assert.equal(variable(positive, 'situation'), 'The caller positively accepts the offer to hear available courses.');
 assert.deepEqual(variable(positive, 'examples'), ['yes', 'yes please', 'okay tell me']);
-assert.equal(variable(positive, 'matchMode'), 'exact');
+assert.equal(variable(positive, 'matchMode'), 'semantic');
 assert.equal(variable(positive, 'context'), 'no_selected_entity');
 
 const scoped = (record, id) => ({
@@ -54,6 +57,12 @@ const scoped = (record, id) => ({
   agentId: 'agent-a',
   knowledgeBaseId: 'kb-a',
   publicationRevision: 4,
+  documentId: 'document-a', documentVersionId: 'version-a',
+  hydrationValidated: true, documentStatus: 'ready', documentVersionStatus: 'ready',
+  documentVersionIsCurrent: true,
+  semanticScore: 0.91,
+  semanticRank: 1,
+  channels: ['semantic'],
   content: record.content,
   authoritativeData: {
     nodeType: record.nodeType,
@@ -64,22 +73,31 @@ const scoped = (record, id) => ({
 const positiveEvidence = scoped(positive, 'positive');
 const overviewEvidence = scoped(overview, 'overview');
 
-assert.equal(strongCallerMessageMatch(positiveEvidence, 'yes', { knownEntities: [] }), true);
-assert.equal(strongCallerMessageMatch(positiveEvidence, 'yes, explain advanced', { knownEntities: [] }), false);
+assert.equal(strongCallerMessageMatch(
+  positiveEvidence, 'I would be happy to hear the choices now', { knownEntities: [] },
+), true);
 assert.equal(strongCallerMessageMatch(positiveEvidence, 'yes', {
   knownEntities: [{ key: 'advanced-course' }],
 }), false);
-assert.equal(strongCallerMessageMatch(overviewEvidence, 'please tell me what courses do you have', {}), true);
-assert.equal(strongCallerMessageMatch(overviewEvidence, 'tell me about the advanced course', {}), false);
+assert.equal(strongCallerMessageMatch(
+  overviewEvidence, 'Could you walk me through everything that is available?', {},
+), true);
+assert.equal(strongCallerMessageMatch({ ...overviewEvidence, semanticScore: 0.2 }, 'unrelated request', {}), false);
+assert.equal(selectStrongCallerMessage([
+  overviewEvidence,
+  { ...positiveEvidence, semanticScore: 0.89, recordId: 'near-tie' },
+], 'ambiguous request', {}), null);
 
 const scope = {
   tenantId: 'tenant-a',
   agentId: 'agent-a',
   publicationRevisions: [{ knowledgeBaseId: 'kb-a', publicationRevision: 4 }],
+  requireHydratedEvidence: true,
 };
 assert.equal(evidenceBelongsToRuntime(overviewEvidence, scope), true);
 assert.equal(evidenceBelongsToRuntime({ ...overviewEvidence, tenantId: 'tenant-b' }, scope), false);
 assert.equal(evidenceBelongsToRuntime({ ...overviewEvidence, publicationRevision: 3 }, scope), false);
+assert.equal(evidenceBelongsToRuntime({ ...overviewEvidence, documentVersionIsCurrent: false }, scope), false);
 
 const orchestrator = await readFile(new URL('../src/voice/realtime-conversation-orchestrator.js', import.meta.url), 'utf8');
 const directBranch = orchestrator.indexOf('if (directResponseValidated)');

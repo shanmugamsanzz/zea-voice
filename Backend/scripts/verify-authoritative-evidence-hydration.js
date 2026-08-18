@@ -5,6 +5,7 @@ import {
 } from '../src/knowledge-bases/hybrid-knowledge-retrieval.service.js';
 import { buildGroundingEnvelope } from '../src/voice/interaction/grounded-llm-response.js';
 import { buildAgentSystemPrompt } from '../src/agents/agent-runtime.service.js';
+import { evidenceBelongsToRuntime } from '../src/voice/interaction/grounded-decision-security.js';
 
 const tenantId = '11111111-1111-4111-8111-111111111111';
 const agentId = '22222222-2222-4222-8222-222222222222';
@@ -35,6 +36,18 @@ assert.equal(evidence.agentId, agentId);
 assert.equal(evidence.knowledgeBaseId, knowledgeBaseId);
 assert.equal(evidence.publicationRevision, 9);
 assert.deepEqual(evidence.authoritativeData, authoritativeData);
+assert.equal(evidence.hydrationValidated, true);
+assert.equal(evidence.documentStatus, 'ready');
+assert.equal(evidence.documentVersionStatus, 'ready');
+assert.equal(evidence.documentVersionIsCurrent, true);
+const strictScope = {
+  tenantId, agentId, requireHydratedEvidence: true,
+  publicationRevisions: [{ knowledgeBaseId, publicationRevision: 9 }],
+};
+assert.equal(evidenceBelongsToRuntime(evidence, strictScope), true);
+assert.equal(evidenceBelongsToRuntime({ ...evidence, documentStatus: 'deleted' }, strictScope), false);
+assert.equal(evidenceBelongsToRuntime({ ...evidence, documentVersionIsCurrent: false }, strictScope), false);
+assert.equal(evidenceBelongsToRuntime({ ...evidence, hydrationValidated: false }, strictScope), false);
 const envelope = buildGroundingEnvelope({
   found: true,
   matches: [{ id: recordId, recordType: 'CATALOG_ITEM', content: evidence.content }],
@@ -61,6 +74,11 @@ for (const requiredIsolation of [
   "j.metadata->>'publicationRevision'=kb.publication_revision::text",
 ]) assert.ok(sql.includes(requiredIsolation), `Missing hydration isolation: ${requiredIsolation}`);
 
+for (const requiredDocumentState of [
+  "f.status='approved'", "c.status='approved'", "i.status='approved'", "w.status='approved'",
+  "v.status='ready'", "d.status='ready'",
+]) assert.ok(sql.includes(requiredDocumentState), `Missing document-status isolation: ${requiredDocumentState}`);
+
 for (const completeField of [
   "'aliases',i.aliases", "'categoryAliases',i.category_aliases",
   "'categorySelectionRules',i.category_selection_rules", "'attributes',attrs.values_json",
@@ -74,5 +92,5 @@ assert.match(sql, /jsonb_to_recordset/u);
 assert.match(sql, /JOIN assigned/u);
 console.log(JSON.stringify({
   task: 'authoritative-evidence-hydration', passed: true,
-  completeRecords: true, tenantAgentKbRevisionIsolation: true,
+  completeRecords: true, tenantAgentKbRevisionIsolation: true, activeDocumentIsolation: true,
 }));
