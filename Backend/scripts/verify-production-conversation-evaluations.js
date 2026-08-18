@@ -8,7 +8,6 @@ import {
   validateGroundedLlmResponse,
 } from '../src/voice/interaction/grounded-llm-response.js';
 import {
-  approvedDocumentFallback,
   isInternalRuntimeText,
 } from '../src/voice/realtime-conversation-orchestrator.js';
 
@@ -153,35 +152,6 @@ assert.equal(groundedSideQuestion.flowAction, 'side_question');
 assert.equal(isInternalRuntimeText('Start or resume the configured appointment task.'), true);
 assert.equal(isInternalRuntimeText('RESPONSE_MODE: instruction'), true);
 assert.equal(isInternalRuntimeText('Our office is downtown.'), false);
-
-const approvedFallback = approvedDocumentFallback({
-  found: true,
-  content: 'RULE: location\nRESPONSE: Our office is downtown.',
-  tenantEvidence: { sources: [{ recordId: 'faq-office', recordType: 'FAQ', content: 'Our office is downtown.' }] },
-}, { agent: { language: 'English', settings: {} } });
-assert.equal(approvedFallback.text, 'Our office is downtown.');
-assert.equal(approvedFallback.source.recordId, 'faq-office');
-
-const evidenceOnlyFallback = approvedDocumentFallback({
-  found: true,
-  tenantEvidence: { sources: [{ recordId: 'faq-office', recordType: 'FAQ', content: 'Our office is downtown.' }] },
-}, { agent: { language: 'English', settings: {} } });
-assert.equal(evidenceOnlyFallback.text, 'Our office is downtown.');
-assert.equal(evidenceOnlyFallback.source.recordId, 'faq-office');
-
-const rankedFallback = approvedDocumentFallback({
-  found: true,
-  route: 'catalog',
-  content: 'Approved Item - USD 100',
-  source: { recordId: 'catalog-item', recordType: 'catalog_item' },
-  rankedEvidence: [{
-    route: 'faq', score: 900, content: 'Approved Item includes priority support.',
-    source: { recordId: 'faq-details', recordType: 'FAQ' },
-  }],
-}, { agent: { language: 'English', settings: {} } });
-assert.equal(rankedFallback.text, 'Approved Item includes priority support.');
-assert.equal(rankedFallback.source.recordId, 'faq-details');
-assert.doesNotMatch(rankedFallback.text, /temporary problem|technical/iu);
 
 const bookingJourney = openLiveCallMemory({
   tenantId: 'tenant-booking', workspaceId: 'workspace-booking',

@@ -7,7 +7,6 @@ import { evidenceBelongsToRuntime } from '../src/voice/interaction/grounded-deci
 import { openGenericConversationState } from '../src/voice/interaction/generic-conversation-state.js';
 import { rankRelevantHydratedEvidence } from '../src/voice/interaction/grounded-claim-validator.js';
 import {
-  approvedDocumentFallback,
   approvedHydratedEvidenceFallback,
 } from '../src/voice/realtime-conversation-orchestrator.js';
 
@@ -138,10 +137,6 @@ assert.equal(
   approvedHydratedEvidenceFallback('latest request', unrelatedEnvelope, [unrelated], profile).text,
   'Configured safe response.',
 );
-assert.equal(approvedDocumentFallback({
-  found: true,
-  tenantEvidence: { sources: [unrelated, { ...unrelated, id: 'other', recordId: 'other' }] },
-}, profile).text, 'Configured safe response.');
 
 assert.equal(evidenceBelongsToRuntime({ ...fullCatalog, tenantId: 'tenant-b' }, scope), false);
 assert.equal(evidenceBelongsToRuntime({ ...fullCatalog, publicationRevision: 6 }, scope), false);

@@ -70,3 +70,22 @@ export function findCallCheckPhrase(transcript, configuration) {
   }
   return null;
 }
+
+export function findCallCheckPhraseCandidate(transcript, configuration) {
+  const source = comparable(transcript);
+  if (!source || !configuration?.response) return null;
+  for (const phrase of configuration.phrases ?? []) {
+    const candidate = comparable(phrase);
+    if (candidate && source.includes(candidate)) return phrase;
+  }
+  return null;
+}
+
+// A call-check response is a deterministic shortcut only for a complete
+// utterance that consists of the configured presence phrase.  Keeping this
+// predicate configuration-based prevents a phrase embedded in a real request
+// from consuming that request (for example, "Hello, what options are there?").
+export function isCallCheckOnlyUtterance(transcript, matchedPhrase, configuration) {
+  if (!matchedPhrase || !configuration?.response) return false;
+  return comparable(transcript) === comparable(matchedPhrase);
+}

@@ -70,7 +70,7 @@ assert.equal(percentile([40, 60, 80, 100, 120], 0.95), 120);
 const orchestrator = readFileSync(
   new URL('../src/voice/realtime-conversation-orchestrator.js', import.meta.url), 'utf8',
 );
-assert.match(orchestrator, /compactGrounding: this\.unifiedGroundedDecisionEnabled/u);
+assert.match(orchestrator, /compactGrounding: true/u);
 assert.match(orchestrator, /streaming\.onSentence\?\.\(sentence\)/u);
 assert.match(orchestrator, /voice\.first_audio_percentiles/u);
 assert.match(orchestrator, /retrievalP90Ms/u);

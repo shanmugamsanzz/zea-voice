@@ -120,7 +120,8 @@ const orchestrator = readFileSync(
 assert.match(orchestrator, /typeof liveMemory\.pendingQuestion === 'object'/u);
 assert.match(orchestrator, /fieldSchemas\?\.\(\)/u);
 assert.match(orchestrator, /pendingField\?\.question \?\? pendingQuestion\?\.text/u);
-assert.match(orchestrator, /const documentFallback = unifiedGroundedDecision[\s\S]*approvedHydratedEvidenceFallback/u);
+assert.match(orchestrator, /const documentFallback = approvedHydratedEvidenceFallback/u);
+assert.doesNotMatch(orchestrator, /const documentFallback = approvedDocumentFallback/u);
 assert.match(orchestrator, /hydrateSelectedEvidence\(decoded\.decision, groundingEnvelope, authoritativeEvidence\)/u);
 
 console.log('Strong grounding and interruption preservation verification passed.');
