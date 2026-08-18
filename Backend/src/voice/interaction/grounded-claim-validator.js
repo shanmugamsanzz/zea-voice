@@ -220,5 +220,12 @@ export function rankRelevantHydratedEvidence(query, envelope, authoritativeSourc
         + Math.max(0, 20 - retrievalRank) - index / 100,
       lexicalCoverage: coverage,
     };
-  }).filter(Boolean).sort((left, right) => right.score - left.score);
+  }).filter((candidate) => {
+    if (!candidate) return false;
+    // A fallback must have observable latest-turn support. The only
+    // exception is a retrieval-selected Conversation Guidance response,
+    // whose semantic match is already constrained to the current turn.
+    const type = String(candidate.source?.recordType ?? '').toUpperCase();
+    return candidate.lexicalCoverage > 0 || type === 'CONVERSATION_NODE';
+  }).sort((left, right) => right.score - left.score);
 }
