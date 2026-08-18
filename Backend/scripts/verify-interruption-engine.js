@@ -75,7 +75,22 @@ for (const customerText of [
 }
 
 assert.equal(validateFinalCustomerTurn({ text: 'எனக்கு வந்து', minimumWords: 2 }).reason, 'incomplete');
-assert.equal(validateFinalCustomerTurn({ text: 'hmm', minimumWords: 2 }).reason, 'too_short');
+assert.equal(validateFinalCustomerTurn({ text: 'hmm', minimumWords: 2 }).accepted, true,
+  'provider-finalized short speech must reach generic meaning resolution');
+for (const acknowledgement of ['சரி', 'okay', 'yes']) {
+  const result = validateFinalCustomerTurn({
+    text: acknowledgement, minimumWords: 3,
+    acknowledgementPhrases: [acknowledgement], rejectAcknowledgement: false,
+  });
+  assert.equal(result.accepted, true, `configured short acknowledgement must be accepted: ${acknowledgement}`);
+  assert.equal(result.shortMeaningfulTurn, true);
+}
+assert.equal(validateFinalCustomerTurn({
+  text: 'price?', minimumWords: 3, acknowledgementPhrases: [],
+}).accepted, true, 'a finalized one-word question must not be rejected by word count');
+assert.equal(validateFinalCustomerTurn({
+  text: 'yes', confidence: 0.2, minimumWords: 3, acknowledgementPhrases: ['yes'],
+}).reason, 'low_confidence', 'low-confidence short speech remains rejected');
 
 // Several STT partials must become one final request, once only.
 const buffer = new CustomerUtteranceBuffer();

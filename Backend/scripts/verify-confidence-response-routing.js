@@ -38,13 +38,24 @@ const weak = resolveConfidenceResponseRoute({
 assert.equal(weak.outcome, 'clarify');
 assert.equal(weak.reason, 'weak_evidence');
 
+const multipleRelevant = resolveConfidenceResponseRoute({
+  evidence: [
+    catalogEvidence,
+    { ...catalogEvidence, recordId: 'item-2', content: 'Additional relevant facts.' },
+  ],
+  conflict: { detected: false },
+});
+assert.equal(multipleRelevant.outcome, 'grounded_llm');
+assert.equal(multipleRelevant.evidenceCount, 2);
+
 const orchestrator = readFileSync(new URL('../src/voice/realtime-conversation-orchestrator.js', import.meta.url), 'utf8');
 const directBranch = orchestrator.indexOf('if (directResponseValidated)');
 const clarificationBranch = orchestrator.indexOf("responseRouting.outcome === 'clarify'", directBranch);
-const llmBranch = orchestrator.indexOf('response = await this.#llm(query, history, knowledge', clarificationBranch);
+const llmBranch = orchestrator.indexOf('response = await this.#llm(query, history, llmKnowledge', clarificationBranch);
 assert.ok(directBranch >= 0 && clarificationBranch > directBranch && llmBranch > clarificationBranch);
 assert.match(orchestrator.slice(clarificationBranch, llmBranch), /configuredKnowledgeClarification/u);
 assert.match(orchestrator, /requireHydratedEvidence:\s*true/u);
+assert.doesNotMatch(orchestrator, /responseRouting\.outcome === 'clarify' \|\| responseRouting\.outcome === 'direct'/u);
 
 console.log(JSON.stringify({
   task: 'confidence-response-routing', passed: true,

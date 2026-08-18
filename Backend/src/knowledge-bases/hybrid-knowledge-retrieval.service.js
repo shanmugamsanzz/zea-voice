@@ -438,41 +438,56 @@ function evidenceIdentityForConflict(evidence) {
   return key ? `${String(evidence.recordType).toUpperCase()}:${normalize(key)}` : null;
 }
 
-function factSignature(evidence) {
-  const data = evidence?.authoritativeData ?? {};
-  const factual = {
-    price: data.price, currency: data.currency, answer: data.answer,
-    content: data.content, attributes: data.attributes, relationships: data.relationships,
-    responseTemplate: data.responseTemplate,
-  };
-  return JSON.stringify(factual);
+const nonComparableFactKeys = new Set([
+  'itemkey', 'nodekey', 'categorykey', 'name', 'heading', 'question',
+  'description', 'answer', 'content', 'responsetemplate', 'relationships',
+  'selectionrules', 'aliases', 'examples', 'variables',
+]);
+
+function comparableScalarFacts(value, path = [], output = new Map()) {
+  if (value === null || value === undefined || value === '') return output;
+  if (Array.isArray(value)) return output;
+  if (typeof value !== 'object') {
+    if (path.length) output.set(path.join('.'), normalize(value));
+    return output;
+  }
+  for (const [key, entry] of Object.entries(value)) {
+    if (nonComparableFactKeys.has(normalize(key).replace(/\s+/gu, ''))) continue;
+    comparableScalarFacts(entry, [...path, normalize(key)], output);
+  }
+  return output;
+}
+
+function contradictoryFactPaths(left, right) {
+  const leftFacts = comparableScalarFacts(left?.authoritativeData ?? {});
+  const rightFacts = comparableScalarFacts(right?.authoritativeData ?? {});
+  return [...leftFacts.entries()].flatMap(([path, value]) => (
+    rightFacts.has(path) && rightFacts.get(path) !== value ? [path] : []
+  ));
 }
 
 export function detectEvidenceConflict(evidence = [], margin = 0.06) {
   const candidates = evidence.filter((item) => item.retrievalContext === 'primary')
     .sort((left, right) => Number(right.retrievalScore ?? right.score ?? 0)
       - Number(left.retrievalScore ?? left.score ?? 0));
-  const first = candidates[0];
-  const second = candidates[1];
-  if (!first || !second) return Object.freeze({ detected: false, type: null, recordIds: [] });
-  const scoreGap = Math.abs(Number(first.retrievalScore ?? first.score ?? 0)
-    - Number(second.retrievalScore ?? second.score ?? 0));
-  if (scoreGap >= margin) return Object.freeze({ detected: false, type: null, recordIds: [] });
-  const firstIdentity = evidenceIdentityForConflict(first);
-  const secondIdentity = evidenceIdentityForConflict(second);
-  if (firstIdentity && firstIdentity === secondIdentity
-    && factSignature(first) !== factSignature(second)) {
-    return Object.freeze({
-      detected: true, type: 'conflicting_facts',
-      recordIds: Object.freeze([first.recordId, second.recordId]), scoreGap,
-    });
-  }
-  if (firstIdentity && secondIdentity && firstIdentity !== secondIdentity
-    && first.recordType === second.recordType) {
-    return Object.freeze({
-      detected: true, type: 'ambiguous_candidates',
-      recordIds: Object.freeze([first.recordId, second.recordId]), scoreGap,
-    });
+  for (let leftIndex = 0; leftIndex < candidates.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < candidates.length; rightIndex += 1) {
+      const left = candidates[leftIndex];
+      const right = candidates[rightIndex];
+      const scoreGap = Math.abs(Number(left.retrievalScore ?? left.score ?? 0)
+        - Number(right.retrievalScore ?? right.score ?? 0));
+      if (scoreGap >= margin) continue;
+      const leftIdentity = evidenceIdentityForConflict(left);
+      const rightIdentity = evidenceIdentityForConflict(right);
+      if (!leftIdentity || leftIdentity !== rightIdentity) continue;
+      const factPaths = contradictoryFactPaths(left, right);
+      if (!factPaths.length) continue;
+      return Object.freeze({
+        detected: true, type: 'conflicting_facts',
+        recordIds: Object.freeze([left.recordId, right.recordId]),
+        factPaths: Object.freeze(factPaths), scoreGap,
+      });
+    }
   }
   return Object.freeze({ detected: false, type: null, recordIds: [] });
 }

@@ -29,6 +29,7 @@ import { ShortTurnMerger } from './interruption/short-turn-merger.js';
 import { greetingModes, resolveInteractionConfiguration } from './interaction/interaction-config.js';
 import {
   classifyFinalCallCheckUtterance,
+  configuredCallCheckEvidence,
   resolveCallCheckConfiguration,
 } from './interaction/call-check-config.js';
 import { findLanguageSwitchRequest, languageSwitchAcknowledgement } from './interaction/language-switch.js';
@@ -138,6 +139,18 @@ function configuredKnowledgeClarification(profile, tenantEvidence = {}) {
   )).filter(Boolean).slice(0, 3);
   return configured.replace(/\{\{\s*candidates\s*\}\}/giu, candidates.join(', ')).trim()
     || callerFacingFallback(profile);
+}
+
+function withConfiguredCallCheckEvidence(knowledge, evidence) {
+  if (!evidence) return knowledge;
+  const existing = knowledge?.tenantEvidence ?? {};
+  const sources = [...(existing.sources ?? [])];
+  if (!sources.some((source) => source.id === evidence.id)) sources.push(evidence);
+  return {
+    ...knowledge,
+    found: true,
+    tenantEvidence: { ...existing, found: true, sources },
+  };
 }
 
 function callerFacingText(value, profile) {
@@ -1735,6 +1748,7 @@ export class RealtimeConversationOrchestrator {
       liveMemory?.pendingQuestion?.text ?? liveMemory?.pendingQuestion,
       liveMemory?.pendingQuestionText,
       liveMemory?.resumeQuestionAfterAnswer,
+      context.callCheck?.configuredResponse,
     ];
     this.#recordLiveMemoryTiming('prompt_context', memoryPromptStartedAt);
     const session = await createSelectedLlmStream(this.runtimeProfile, {
@@ -2408,6 +2422,15 @@ export class RealtimeConversationOrchestrator {
       outcome: directResponse ? 'direct' : (knowledge.found ? 'grounded_llm' : 'clarify'),
       reason: 'compatibility_route',
     };
+    const callCheckClassification = classifyFinalCallCheckUtterance(
+      query, this.callCheckConfiguration, { finalized: true },
+    );
+    const conflictDetected = knowledge.tenantEvidence?.retrieval?.conflictDetected === true
+      || responseRouting.reason === 'conflicting_facts';
+    const semanticCallCheckResolution = Boolean(this.callCheckConfiguration.response)
+      && !conflictDetected
+      && (Boolean(callCheckClassification.matchedPhrase)
+        || responseRouting.outcome === 'clarify');
     const directResponseScope = {
       tenantId: this.runtimeProfile.agent.tenantId,
       agentId: this.runtimeProfile.agent.id,
@@ -2442,9 +2465,8 @@ export class RealtimeConversationOrchestrator {
         stage: 'knowledge.exact_message_selected', callId: this.call.id,
         recordId: directResponse.recordId, publicationRevision: directResponse.publicationRevision,
       }, 'Strongly matched caller-facing published response selected without an LLM rewrite');
-    } else if (responseRouting.outcome === 'clarify' || responseRouting.outcome === 'direct') {
-      const reason = responseRouting.outcome === 'direct'
-        ? 'direct_response_validation_failed' : responseRouting.reason;
+    } else if (responseRouting.outcome === 'clarify' && !semanticCallCheckResolution) {
+      const reason = responseRouting.reason;
       response = {
         cancelled: false,
         text: configuredKnowledgeClarification(this.runtimeProfile, knowledge.tenantEvidence),
@@ -2460,8 +2482,19 @@ export class RealtimeConversationOrchestrator {
     } else {
       try {
         const llmStartedAt = Date.now();
-        response = await this.#llm(query, history, knowledge, {
+        const callCheckEvidence = semanticCallCheckResolution
+          ? configuredCallCheckEvidence(this.callCheckConfiguration, {
+            tenantId: this.runtimeProfile.agent.tenantId,
+            agentId: this.runtimeProfile.agent.id,
+          }) : null;
+        const llmKnowledge = withConfiguredCallCheckEvidence(knowledge, callCheckEvidence);
+        response = await this.#llm(query, history, llmKnowledge, {
           instruction: 'Understand the latest caller utterance from its full natural meaning and answer it first using only approved evidence. Return exactly one decision: answer, clarify or one authorized action. Do not require exact wording or use a stage as a gate. Emit evidenceIds and stateUpdate first, then decision and a short natural answer.',
+          callCheck: semanticCallCheckResolution ? {
+            semanticResolutionRequested: true,
+            configuredResponse: this.callCheckConfiguration.response,
+            referencePhrases: [...this.callCheckConfiguration.phrases],
+          } : null,
         }, streaming);
         turnLatency.llmMs += Math.max(0, Date.now() - llmStartedAt);
       } catch (error) {

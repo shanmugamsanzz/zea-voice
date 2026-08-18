@@ -165,6 +165,7 @@
     "verify:direct-conversation-message": "node scripts/verify-direct-conversation-message.js",
     "verify:failed-production-replay": "node scripts/verify-failed-production-replay.js",
     "verify:semantic-production-replay": "node scripts/verify-semantic-production-replay.js",
+    "verify:clarification-loop-production-replay": "node scripts/verify-clarification-loop-production-replay.js",
     "verify:generic-intent-detection": "node scripts/verify-generic-intent-detection.js",
     "verify:scenario-routing": "node scripts/verify-document-driven-scenario-routing.js",
     "verify:flow-control-production": "node scripts/verify-flow-control-production.js",

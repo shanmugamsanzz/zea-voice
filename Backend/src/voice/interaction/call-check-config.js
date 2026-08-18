@@ -98,3 +98,17 @@ export function classifyFinalCallCheckUtterance(transcript, configuration, { fin
     shortcut: isCallCheckOnlyUtterance(transcript, matchedPhrase, configuration),
   });
 }
+
+export function configuredCallCheckEvidence(configuration, { tenantId, agentId } = {}) {
+  const response = text(configuration?.response);
+  if (!response || !text(tenantId) || !text(agentId)) return null;
+  return Object.freeze({
+    id: 'runtime:configured-call-check-response',
+    recordId: 'configured-call-check-response', recordType: 'RUNTIME_CONFIG',
+    tenantId: text(tenantId), agentId: text(agentId), callerFacing: true,
+    content: response,
+    authoritativeData: Object.freeze({
+      verified: true, configurationType: 'call_check_response',
+    }),
+  });
+}

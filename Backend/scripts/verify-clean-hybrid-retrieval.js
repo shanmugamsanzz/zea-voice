@@ -248,6 +248,33 @@ const conflict = detectEvidenceConflict([
 ]);
 assert.equal(conflict.detected, true);
 assert.equal(conflict.type, 'conflicting_facts');
+assert.deepEqual(conflict.factPaths, ['price']);
+
+const ordinaryAlternatives = detectEvidenceConflict([
+  {
+    recordType: 'FAQ', recordId: 'location', retrievalContext: 'primary', retrievalScore: 0.91,
+    authoritativeData: { question: 'Where are you located?', answer: 'Published location.' },
+  },
+  {
+    recordType: 'FAQ', recordId: 'hours', retrievalContext: 'primary', retrievalScore: 0.89,
+    authoritativeData: { question: 'When are you open?', answer: 'Published hours.' },
+  },
+]);
+assert.equal(ordinaryAlternatives.detected, false,
+  'different relevant records are normal evidence, not contradictory facts');
+
+const complementarySameItem = detectEvidenceConflict([
+  {
+    recordType: 'CATALOG_ITEM', recordId: 'details-a', retrievalContext: 'primary', retrievalScore: 0.92,
+    authoritativeData: { itemKey: 'same-item', price: 100, attributes: { duration: 'Two days' } },
+  },
+  {
+    recordType: 'CATALOG_ITEM', recordId: 'details-b', retrievalContext: 'primary', retrievalScore: 0.9,
+    authoritativeData: { itemKey: 'same-item', price: 100, attributes: { consultation: 'Included' } },
+  },
+]);
+assert.equal(complementarySameItem.detected, false,
+  'complementary facts for the same entity must be available to grounded reasoning');
 
 const serviceSource = await readFile(new URL('../src/knowledge-bases/hybrid-knowledge-retrieval.service.js', import.meta.url), 'utf8');
 assert.doesNotMatch(serviceSource, /intentKeywords|triggerPhrases|packageKeywords|hospital|appointment/iu,

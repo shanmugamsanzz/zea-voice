@@ -1,10 +1,16 @@
 import assert from 'node:assert/strict';
 import {
   classifyFinalCallCheckUtterance,
+  configuredCallCheckEvidence,
   findCallCheckPhraseCandidate,
   isCallCheckOnlyUtterance,
   resolveCallCheckConfiguration,
 } from '../src/voice/interaction/call-check-config.js';
+import { evidenceBelongsToRuntime } from '../src/voice/interaction/grounded-decision-security.js';
+import { readFileSync } from 'node:fs';
+import { buildGroundingEnvelope } from '../src/voice/interaction/grounded-llm-response.js';
+import { validateGroundedLlmDecision } from '../src/voice/interaction/grounded-llm-decision.js';
+import { validateGroundedClaims } from '../src/voice/interaction/grounded-claim-validator.js';
 
 const configuration = resolveCallCheckConfiguration({
   callCheckPhrases: ['Hello', 'Are you there?'],
@@ -36,6 +42,35 @@ assert.deepEqual(classifyFinalCallCheckUtterance('Hello', configuration, { final
 assert.deepEqual(classifyFinalCallCheckUtterance(
   'Hello, please continue with my request', configuration, { finalized: true },
 ), { matchedPhrase: 'Hello', shortcut: false });
+
+const semanticEvidence = configuredCallCheckEvidence(configuration, {
+  tenantId: 'tenant-1', agentId: 'agent-1',
+});
+assert.equal(semanticEvidence.content, configuration.response);
+assert.equal(evidenceBelongsToRuntime(semanticEvidence, {
+  tenantId: 'tenant-1', agentId: 'agent-1', publicationRevisions: [],
+  requireHydratedEvidence: true,
+}), true);
+assert.equal(evidenceBelongsToRuntime(semanticEvidence, {
+  tenantId: 'tenant-2', agentId: 'agent-1', publicationRevisions: [],
+  requireHydratedEvidence: true,
+}), false);
+
+const semanticEnvelope = buildGroundingEnvelope({
+  found: true, tenantEvidence: { sources: [semanticEvidence], entities: [] },
+}, { includePublishedMap: false });
+const semanticDecision = validateGroundedLlmDecision(JSON.stringify({
+  decision: 'answer', answer: configuration.response, evidenceIds: ['source_1'],
+  stateUpdate: {}, pendingQuestion: null, toolRequest: null,
+}), semanticEnvelope);
+assert.equal(semanticDecision.valid, true);
+assert.equal(validateGroundedClaims(semanticDecision.answer, [semanticEvidence]).valid, true);
+
+const orchestratorSource = readFileSync(
+  new URL('../src/voice/realtime-conversation-orchestrator.js', import.meta.url), 'utf8',
+);
+assert.match(orchestratorSource, /semanticCallCheckResolution/u);
+assert.match(orchestratorSource, /withConfiguredCallCheckEvidence/u);
 
 console.log(JSON.stringify({
   exactCallCheckUsesShortcut: true,

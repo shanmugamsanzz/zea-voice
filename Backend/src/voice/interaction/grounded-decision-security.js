@@ -8,6 +8,13 @@ function identity(value) {
 
 export function evidenceBelongsToRuntime(source, scope) {
   if (!scope) return true;
+  if (String(source?.recordType ?? '').toLocaleUpperCase() === 'RUNTIME_CONFIG') {
+    return identity(source?.tenantId) === identity(scope.tenantId)
+      && identity(source?.agentId) === identity(scope.agentId)
+      && source?.callerFacing === true
+      && source?.authoritativeData?.verified === true
+      && identity(source?.authoritativeData?.configurationType) === 'call check response';
+  }
   if (String(source?.recordType ?? '').toLocaleUpperCase() === 'TOOL_RESULT') {
     return identity(source?.tenantId) === identity(scope.tenantId)
       && identity(source?.agentId) === identity(scope.agentId)

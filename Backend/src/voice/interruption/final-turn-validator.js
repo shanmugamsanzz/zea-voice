@@ -52,26 +52,39 @@ export function validateFinalCustomerTurn({
   const finalText = normalized(text);
   const finalTokens = tokens(finalText);
   if (!finalText || !finalTokens.length) return { accepted: false, reason: 'empty', text: finalText };
-  if (rejectAcknowledgement && acknowledgementOnly(finalText, acknowledgementPhrases)) {
+  const configuredAcknowledgement = acknowledgementOnly(finalText, acknowledgementPhrases);
+  if (rejectAcknowledgement && configuredAcknowledgement) {
     return { accepted: false, reason: 'acknowledgement_only', text: finalText };
-  }
-  const configuredMinimum = Math.min(3, Math.max(1, Number(minimumWords) || 2));
-  if (finalTokens.length < configuredMinimum) return { accepted: false, reason: 'too_short', text: finalText };
-  // Sentence-ending punctuation is an explicit STT signal that this is a
-  // complete customer turn. Do not defer it because of a trailing period.
-  if (/[.?!]$/u.test(finalText)) {
-    const resolvedConfidence = confidenceValue(confidence);
-    if (resolvedConfidence !== null && resolvedConfidence < minimumConfidence) {
-      return { accepted: false, reason: 'low_confidence', text: finalText, confidence: resolvedConfidence };
-    }
-    return { accepted: true, text: finalText, confidence: resolvedConfidence, wordCount: finalTokens.length };
-  }
-  if (/[….]$/u.test(finalText) || incompleteEndings.has(finalTokens.at(-1))) {
-    return { accepted: false, reason: 'incomplete', text: finalText };
   }
   const resolvedConfidence = confidenceValue(confidence);
   if (resolvedConfidence !== null && resolvedConfidence < minimumConfidence) {
     return { accepted: false, reason: 'low_confidence', text: finalText, confidence: resolvedConfidence };
+  }
+  const configuredMinimum = Math.min(3, Math.max(1, Number(minimumWords) || 2));
+  if (finalTokens.length < configuredMinimum) {
+    // A provider-finalized lexical turn received while listening must reach
+    // semantic understanding regardless of language or spelling. Word count
+    // remains an interruption/noise threshold while output is active; it is
+    // not an intent classifier for a completed caller turn.
+    if (!/[.?!]$/u.test(finalText) && incompleteEndings.has(finalTokens.at(-1))) {
+      return {
+        accepted: false, reason: 'incomplete', text: finalText,
+        confidence: resolvedConfidence, wordCount: finalTokens.length,
+      };
+    }
+    return {
+      accepted: true, text: finalText,
+      confidence: resolvedConfidence, wordCount: finalTokens.length,
+      shortMeaningfulTurn: true,
+    };
+  }
+  // Sentence-ending punctuation is an explicit STT signal that this is a
+  // complete customer turn. Do not defer it because of a trailing period.
+  if (/[.?!]$/u.test(finalText)) {
+    return { accepted: true, text: finalText, confidence: resolvedConfidence, wordCount: finalTokens.length };
+  }
+  if (/[….]$/u.test(finalText) || incompleteEndings.has(finalTokens.at(-1))) {
+    return { accepted: false, reason: 'incomplete', text: finalText };
   }
   return { accepted: true, text: finalText, confidence: resolvedConfidence, wordCount: finalTokens.length };
 }

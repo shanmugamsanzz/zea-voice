@@ -223,7 +223,7 @@ assert.match(providerSource, /tools:\s*groundedResponseMode\s*\?\s*\[\]\s*:\s*as
 assert.match(providerSource, /responseFormat:\s*\{\s*type:\s*'json_schema'/u);
 assert.match(providerSource, /schema:\s*groundedDecisionJsonSchema/u);
 const ordinaryTurn = orchestratorSource.slice(
-  orchestratorSource.indexOf('response = await this.#llm(query, history, knowledge'),
+  orchestratorSource.indexOf('response = await this.#llm(query, history, llmKnowledge'),
   orchestratorSource.indexOf('if (response.toolCalls.length)'),
 );
 assert.equal((ordinaryTurn.match(/await this\.#llm\(/gu) ?? []).length, 1);
