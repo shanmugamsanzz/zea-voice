@@ -1,6 +1,7 @@
 import { validateGroundedLlmDecision } from './grounded-llm-decision.js';
 import {
   configuredToolAuthorization,
+  evidenceBelongsToRuntime,
   validateDecisionSecurity,
 } from './grounded-decision-security.js';
 import {
@@ -76,9 +77,15 @@ export function applyUnifiedGroundedTurn({
       field: callerStateValidation.field, state: beforeState,
     });
   }
+  const selectedEvidence = selectedSources(decision, hydratedEnvelope, evidence);
+  if (selectedEvidence.some((source) => !evidenceBelongsToRuntime(source, evidenceScope))) {
+    return Object.freeze({
+      valid: false, reason: 'foreign_evidence_selected', state: memory.snapshot(),
+    });
+  }
   const claimValidation = validateGroundedClaims(
     decision.answer,
-    selectedSources(decision, hydratedEnvelope, evidence),
+    selectedEvidence,
     { knownEntities: hydratedEnvelope.entities },
   );
   if (!claimValidation.valid) {
@@ -93,7 +100,6 @@ export function applyUnifiedGroundedTurn({
   }
   let afterState = memory.snapshot();
   const actionEvidence = sourcesByType(evidence, 'WORKFLOW_RULE');
-  const selectedEvidence = selectedSources(decision, hydratedEnvelope, evidence);
   const requestedToolName = decision.toolRequest?.name ?? afterState.activeToolRequest?.name;
   const exactSelectedEntities = decision.stateUpdate.knownEntities.length
     ? decision.stateUpdate.knownEntities

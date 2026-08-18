@@ -1,43 +1,11 @@
-Q: என்னென்ன packages இருக்கு?
-ALIASES: என்ன packages இருக்கு? | உங்ககிட்ட என்ன packageலாம் இருக்கு? | package list சொல்லுங்க | வேற என்ன packages இருக்கு? | what packages do you have? | what else is available?
-A: எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Paediatric Health Screening, Onco Care Packages, Organ-Specific Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?
-
-Q: Fasting மற்றும் health check-up timing என்ன?
-ALIASES: fasting இருக்கணுமா? | எத்தனை மணி நேரம் fasting? | சாப்பிடாம வரணுமா? | test timing என்ன? | preparation என்ன?
-A: Health check-upக்கு முன்னாடி 8 மணி நேரம் fasting இருக்கணும். Preferred health check-up timing morning 8 மணியிலிருந்து 11 மணி வரை.
-
-Q: Fastingக்கு முன்னாடி சாப்பிட்டா என்ன செய்வது?
-ALIASES: tea குடிச்சிட்டேன் | coffee குடிச்சிட்டேன் | fasting இல்லாம test எடுக்கலாமா? | I ate before the test
-A: சாப்பாடு, tea அல்லது coffee எடுத்திருந்தா standard fasting testக்கு பதிலாக random blood test எடுக்கப்படலாம். Exact instructionஐ Hospital team அல்லது Doctorகிட்ட confirm பண்ணுங்க.
-
 Q: Hospital எங்க இருக்கு?
 ALIASES: location சொல்லுங்க | address என்ன? | hospital எப்படி வரணும்? | where is the hospital?
 A: Shanmuga Hospital, 24 Sarada College Road, LRN Colony, Chinna Pudur, Salem 636007ல இருக்கு; Hasthampatti bridgeக்கு கீழே left side.
-
-Q: Appointment book பண்ணலாமா?
-ALIASES: appointment வேண்டும் | checkup book பண்ணுங்க | book an appointment
-A: ஆமாங்க, selected approved packageக்கு appointment request process பண்ணலாம். Verified confirmation கிடைத்த பிறகுதான் appointment confirm ஆனதா சொல்ல முடியும்.
-
-Q: Appointment bookingக்கு என்ன details தேவை?
-ALIASES: booking details என்ன? | என்ன information கொடுக்கணும்? | appointment fields
-A: Appointment யாருக்காக, patient name, age, preferred date மற்றும் preferred time தேவை. ஏற்கனவே selected package இருந்தா அதை மறுபடியும் கேட்காமல் confirmationல read back பண்ணணும்.
-
-Q: Sunday appointment கிடைக்குமா?
-ALIASES: Sunday booking | ஞாயிறு appointment | Sunday checkup
-A: Sunday appointment booking available இல்லை.
 
 Q: நீங்க AIயா?
 ALIASES: AI agent ஆ? | human ஆ? | robot ஆ? | real person ஆ?
 A: ஆமாங்க, நான் Shanmuga Hospital AI agent கார்த்திகா பேசுறேன்.
 
-Q: Medical diagnosis அல்லது medicine advice சொல்ல முடியுமா?
-ALIASES: diagnosis சொல்லுங்க | medicine change பண்ணலாமா? | report interpretation | treatment advice
-A: Diagnosis, report interpretation, treatment மற்றும் medicine advice Doctorதான் confirm பண்ணணும்.
-
-Q: Medical emergency இருந்தா என்ன செய்யணும்?
-ALIASES: emergency | urgent medical problem | severe chest pain | cannot breathe | heavy bleeding
-A: இது urgent medical situationஆ இருக்கலாம். உடனே அருகிலுள்ள emergency medical help எடுத்துக்கோங்க.
-
-Q: Approved information இல்லாத கேள்விக்கு என்ன செய்வது?
-ALIASES: unknown information | answer கிடைக்கல | unsupported question | verified information இல்லை
-A: Verified information இல்லாததை guess பண்ணாமல் configured Hospital support option மூலம் confirm பண்ண உதவலாம்.
+Q: Appointment book பண்ணலாமா?
+ALIASES: appointment வேண்டும் | checkup book பண்ணுங்க | book an appointment
+A: ஆமாங்க, selected approved packageக்கு appointment request process பண்ணலாம். தேவையான booking detailsஐ configured processபடி collect பண்ணி, verified confirmation கிடைத்த பிறகுதான் appointment confirm ஆனதா சொல்ல முடியும்.

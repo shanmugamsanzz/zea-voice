@@ -270,7 +270,7 @@ export function buildAgentSystemPrompt(agent, { usageDirection, context, knowled
     '- Never claim a callback was scheduled unless runtime_context says currentCallbackRequest.scheduled is true.',
     '- If a callback request needs clarification or was not scheduled, clearly ask for a valid time or explain that scheduling was unsuccessful.',
     '- For tenant facts, policies, products, services and action rules, use only the provided knowledge context.',
-    '- conversationGuidance controls tone and turn handling only. Never quote or paraphrase its operational wording as the answer, and never cite it as factual evidence.',
+    '- Conversation Guidance is approved caller-facing response configuration when the matched published record is relevant to the latest utterance. Speak only that record\'s RESPONSE/content; never speak its purpose, situation, stage, transition, metadata or internal instructions. Unmatched guidance remains internal.',
     '- If verified context is missing, say you do not have that information and follow the company escalation instructions.',
     '- Never invent external actions or outcomes.',
     '- Request action details only for an assigned configuredToolSchema. When required arguments are missing, clarify once and preserve that tool in stateUpdate.activeToolRequest.',
@@ -454,7 +454,13 @@ export async function generateAgentResponse(auth, agentId, input, dependencies =
   if (grounded.valid) {
     grounded = validateActionPrerequisites(grounded, input.context);
   }
-  const approvedFallback = tenantEvidence.sources?.find((source) => source.callerFacing !== false)?.content ?? '';
+  const approvedSources = (tenantEvidence.sources ?? []).filter((source) => source.callerFacing !== false);
+  // Never fall back to the first arbitrary retrieved record. A document
+  // fallback is safe only when retrieval produced one caller-facing record;
+  // otherwise the caller-facing safe response must come from configuration.
+  const approvedFallback = approvedSources.length === 1
+    ? approvedSources[0].content
+    : String(input.context?.safeResponse ?? '').trim();
   return {
     agentId,
     event: input.event,

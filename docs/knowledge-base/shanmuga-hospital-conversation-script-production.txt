@@ -4,7 +4,7 @@ TYPE: guidance
 LANGUAGE: ta
 ENTRY: true
 PURPOSE: Give the caller's latest complete question priority over conversation continuation.
-RESPONSE: Understand the latest finalized caller utterance from its meaning, recent conversation and current topic. Answer it first using approved evidence. Resume a saved question only when it is still relevant. Never force the caller to use an exact sentence.
+RESPONSE: Stage labels in this document are guidance labels only, never gates. Understand the latest finalized caller utterance from its meaning, recent conversation and current topic. Answer it first using approved evidence. After every answer, ask the next relevant configured question when one exists. Resume a saved question only when it is still relevant. Never force the caller to use an exact sentence.
 NEXT_QUESTION:
 
 STAGE: introduction
@@ -22,8 +22,8 @@ TYPE: guidance
 LANGUAGE: ta
 ENTRY: false
 PURPOSE: Continue when the caller accepts the offer to hear package information.
-RESPONSE: Give a short top-level overview using every current approved Catalog category and its principal options. Do not add prices or full item details unless the caller asks.
-NEXT_QUESTION: எது பத்தி தெரிஞ்சிக்கணும்?
+RESPONSE: எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Onco Care Packages, Organ-Specific Packages, Kids Health Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?
+NEXT_QUESTION:
 
 STAGE: complete_package_overview
 FLOW: main
@@ -31,8 +31,8 @@ TYPE: guidance
 LANGUAGE: ta
 ENTRY: false
 PURPOSE: Answer every general request for available packages, including requests for other or additional packages.
-RESPONSE: Give a short complete overview from the current Product Catalog. Include every approved top-level category, without expanding every item or repeating package facts from another document.
-NEXT_QUESTION: எது பத்தி தெரிஞ்சிக்கணும்?
+RESPONSE: எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Onco Care Packages, Organ-Specific Packages, Kids Health Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?
+NEXT_QUESTION:
 
 STAGE: master_package_selection
 FLOW: main
@@ -86,7 +86,7 @@ LANGUAGE: ta
 ENTRY: false
 PURPOSE: Handle a request to hear about another package after an explanation.
 RESPONSE: If the caller names another package, explain it immediately. If no package is named, use the next question. Do not restart the introduction. Give the complete top-level overview only when the caller asks what other packages are available.
-NEXT_QUESTION: எந்த Package details வேணும்?
+NEXT_QUESTION: எந்த package details வேணும்?
 
 STAGE: required_related_item_selection
 FLOW: main
@@ -112,7 +112,7 @@ TYPE: guidance
 LANGUAGE: ta
 ENTRY: false
 PURPOSE: Start booking only after an explicit caller request and one exact approved selected package.
-RESPONSE: Preserve the selected package. Start the active tool's UI-configured field collection only after an explicit request and an exact selectable item. If the item is missing, clarify it before using the next booking question.
+RESPONSE: Preserve the selected package. Start the active configured booking tool only after an explicit request and one exact selectable Catalog item. If the item is missing, clarify it before collecting booking fields. Ask the next missing configured field; never repeat a field already supplied.
 NEXT_QUESTION: இந்த appointment உங்களுக்காகவா, இல்ல வேற யாருக்காகவா?
 
 STAGE: booking_information_order
@@ -140,7 +140,7 @@ LANGUAGE: ta
 ENTRY: false
 PURPOSE: Establish whether the appointment is for the caller or another person.
 RESPONSE: Save the answer in collected information and continue only with the next missing UI-configured field.
-NEXT_QUESTION: Patient name சொல்லுங்க.
+NEXT_QUESTION: Patient name மற்றும் age சொல்லுங்க.
 
 STAGE: patient_name
 FLOW: booking
@@ -149,7 +149,7 @@ LANGUAGE: ta
 ENTRY: false
 PURPOSE: Collect the patient's name.
 RESPONSE: Accept the complete name from the finalized utterance. Preserve it and do not ask again unless corrected.
-NEXT_QUESTION: Patient age சொல்லுங்க.
+NEXT_QUESTION:
 
 STAGE: patient_age
 FLOW: booking
@@ -167,7 +167,7 @@ LANGUAGE: ta
 ENTRY: false
 PURPOSE: Collect an exact appointment date.
 RESPONSE: Resolve relative dates using the current date, validate the date against current published policy and preserve a confirmed valid value.
-NEXT_QUESTION: Morning 8 மணியிலிருந்து 11 மணிக்குள்ள எந்த time வசதியா இருக்கும்?
+NEXT_QUESTION: எந்த time appointment வசதியா இருக்கும்?
 
 STAGE: appointment_time
 FLOW: booking
@@ -176,6 +176,15 @@ LANGUAGE: ta
 ENTRY: false
 PURPOSE: Collect a preferred time within the approved window.
 RESPONSE: Validate the requested time against current published policy. Do not claim slot availability before the configured tool verifies it.
+NEXT_QUESTION: எந்த package book பண்ணணும்னு சொல்லுங்க.
+
+STAGE: booking_package_selection
+FLOW: booking
+TYPE: guidance
+LANGUAGE: ta
+ENTRY: false
+PURPOSE: Confirm the package after date and time are collected.
+RESPONSE: If a canonical Catalog package is already selected, preserve it and do not ask for it again. Otherwise ask the caller to select one exact approved selectable package. Never invent or infer a package from an unsupported name.
 NEXT_QUESTION:
 
 STAGE: booking_preparation_and_confirmation
@@ -184,7 +193,7 @@ TYPE: guidance
 LANGUAGE: ta
 ENTRY: false
 PURPOSE: Prepare the final booking confirmation.
-RESPONSE: Read the selected package's approved preparation from the Product Catalog when present. Then summarize once: booking for whom, patient name, age, exact date, time and selected canonical package. Ask for final confirmation. The package is a readback value, not a field to ask again.
+RESPONSE: Read the selected package's approved preparation from the Product Catalog when present. Then read back once: booking for whom, patient name, age, exact appointment date, appointment time and selected canonical package. Ask for final confirmation. The package is a readback value, not a field to ask again.
 NEXT_QUESTION: இந்த details எல்லாம் correctஆ இருக்கா? Appointment confirm பண்ணட்டுமா?
 
 STAGE: booking_execution
@@ -202,7 +211,7 @@ TYPE: guidance
 LANGUAGE: ta
 ENTRY: false
 PURPOSE: Continue naturally after a verified successful booking.
-RESPONSE: Confirm only verified result details.
+RESPONSE: Confirm only verified result details. Then thank the caller for choosing the configured business and use the configured closing; do not claim success before the verified tool result.
 NEXT_QUESTION: வேற ஏதாவது கேள்வி இருக்கா?
 
 STAGE: side_question

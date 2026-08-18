@@ -63,6 +63,18 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
       authoritativeData: evidence.authoritativeData ?? null,
     });
   }
+  // A matched Conversation Guidance record contains approved caller-facing
+  // RESPONSE text. Include only the retrieval-selected record; internal
+  // guidance records are never copied into the envelope.
+  for (const evidence of (knowledge.tenantEvidence?.guidanceEvidence ?? []).slice(0, 1)) {
+    addSource(sources, sourceContents, evidence.content, {
+      recordId: text(evidence.recordId, 100) || null,
+      recordType: 'CONVERSATION_NODE',
+      nodeType: text(evidence.authoritativeData?.nodeType, 80) || 'guidance',
+      callerFacing: true,
+      authoritativeData: evidence.authoritativeData ?? null,
+    });
+  }
   for (const match of knowledge.matches ?? []) {
     addSource(sources, sourceContents, match.answer ?? match.content, {
       recordId: text(match.id, 100) || null,

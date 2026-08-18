@@ -185,41 +185,25 @@ export function approvedHydratedEvidenceFallback(query, envelope, evidence, prof
 // technical-error response. This fallback uses only the already retrieved,
 // tenant-approved document content; it never invents a new answer.
 export function approvedDocumentFallback(knowledge, profile) {
-  const candidates = [
-    ...(knowledge?.rankedEvidence ?? []).map((evidence, index) => ({
+  // A fallback may use only evidence already ranked for this latest query.
+  // If no ranked list exists, a single explicitly returned source is safe;
+  // choosing the first item from an unrelated multi-source result is not.
+  const rankedEvidence = Array.isArray(knowledge?.rankedEvidence)
+    ? knowledge.rankedEvidence : [];
+  const tenantSources = Array.isArray(knowledge?.tenantEvidence?.sources)
+    ? knowledge.tenantEvidence.sources : [];
+  const candidates = rankedEvidence.length
+    ? rankedEvidence.map((evidence, index) => ({
       content: evidence.content, source: evidence.source ?? evidence,
-      route: evidence.route, score: 2_000 + Number(evidence.score ?? 0) - index,
-    })),
-    ...(knowledge?.tenantEvidence?.sources ?? []).map((source, index) => ({
-      content: source.content, source,
-      route: source.recordType, score: 1_600 - index,
-    })),
-    ...(knowledge?.matches ?? []).map((match) => ({
-      content: match.answer ?? match.content,
-      source: match,
-      route: match.recordType,
-      score: 1_400 + Number(match.score ?? 0),
-    })),
-    {
-      content: knowledge?.content, source: knowledge?.source,
-      route: knowledge?.route,
-      score: knowledge?.workflow?.deterministic === true ? 3_000 : 1_000,
-    },
-  ];
-  const typeWeight = (value) => {
-    const type = String(value ?? '').toLocaleLowerCase();
-    if (type.includes('faq')) return 0.08;
-    if (type.includes('catalog')) return 0.07;
-    if (type.includes('general') || type.includes('knowledge')) return 0.06;
-    if (type.includes('workflow')) return 0.05;
-    if (type.includes('conversation')) return 0.01;
-    return 0;
-  };
+      route: evidence.route, score: Number(evidence.score ?? 0) - index,
+    }))
+    : tenantSources.length === 1
+      ? tenantSources.map((source) => ({ content: source.content, source, route: source.recordType, score: 1 }))
+      : [];
   const ranked = candidates.map((candidate, index) => ({
     ...candidate,
     answer: documentSpeech(candidate.content),
-    rank: Number(candidate.score ?? 0)
-      + typeWeight(candidate.route ?? candidate.source?.recordType) - index / 100,
+    rank: Number(candidate.score ?? 0) - index / 100,
   })).filter((candidate) => candidate.answer)
     .sort((left, right) => right.rank - left.rank);
   const seen = new Set();

@@ -168,7 +168,12 @@ export function hydrateGroundingEnvelope(envelope, authoritativeSources = []) {
       || (source.recordId && candidate.recordId === source.recordId)
     ));
     return authoritative ? Object.freeze({
-      ...source, ...authoritative, id: source.id,
+      ...source, ...authoritative,
+      // The envelope may explicitly mark the retrieval-selected guidance
+      // RESPONSE as caller-facing; authoritative metadata still controls all
+      // tenant/revision identity and factual fields.
+      callerFacing: source.callerFacing === true ? true : authoritative.callerFacing,
+      id: source.id,
       recordId: source.recordId ?? authoritative.recordId,
     }) : null;
   }).filter(Boolean);

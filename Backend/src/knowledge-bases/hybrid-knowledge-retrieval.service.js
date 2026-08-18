@@ -378,7 +378,10 @@ function contextWasExplicitlyRequested(input) {
 
 function prioritizeCandidates(primary, contextual, useContext, limit) {
   const unique = new Map();
-  for (const candidate of useContext ? [...contextual, ...primary] : primary) {
+  // The finalized latest utterance is always the primary query. Context is
+  // only a resolver for genuine follow-ups and must never displace an
+  // explicit new request or an evidence candidate found for that request.
+  for (const candidate of useContext ? [...primary, ...contextual] : primary) {
     const key = candidateKey(candidate);
     if (!unique.has(key)) unique.set(key, candidate);
   }
@@ -555,7 +558,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   ));
   const guidanceEvidence = permittedEvidence.filter((item) => (
     item.recordType === 'CONVERSATION_NODE' && item.callerFacing !== true
-  ));
+  )).sort((left, right) => left.rank - right.rank).slice(0, 1);
   const entities = sources.filter((item) => item.recordType === 'CATALOG_ITEM').map((item) => ({
     id: item.recordId, key: item.authoritativeData.itemKey, name: item.authoritativeData.name,
     category: item.authoritativeData.category, categoryKey: item.authoritativeData.categoryKey,

@@ -1491,6 +1491,11 @@ async function searchPublishedKnowledgeCompatibility(auth, input, dependencies =
       }
     }
   }
+  // Only the highest-ranked guidance record is exposed for this turn. Other
+  // guidance remains available in the published store but cannot compete with
+  // the latest caller request or leak into the answer context.
+  guidanceEvidence.sort((left, right) => Number(right.score ?? 0) - Number(left.score ?? 0));
+  guidanceEvidence.splice(1);
   const result = {
     operation: 'search_published_knowledge',
     found: sources.length > 0 || actionEvidence.length > 0 || guidanceEvidence.length > 0,
