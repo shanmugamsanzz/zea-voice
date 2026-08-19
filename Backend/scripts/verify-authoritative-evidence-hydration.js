@@ -76,6 +76,31 @@ assert.equal(focused.focused, true);
 assert.deepEqual(focused.evidence.map((item) => item.recordId), [recordId]);
 assert.deepEqual(focused.evidence[0].authoritativeData.attributes, authoritativeData.attributes);
 assert.deepEqual(focused.evidence[0].authoritativeData.relationships, authoritativeData.relationships);
+const previousItem = {
+  ...evidence, id: 'published:catalog_item:previous', recordId: 'previous-record',
+  retrievalContext: 'contextual',
+  authoritativeData: {
+    ...authoritativeData, itemKey: 'previous-service', name: 'Previous Service',
+    aliases: ['Previous plan'],
+  },
+};
+const latestItem = {
+  ...evidence, id: 'published:catalog_item:latest', recordId: 'latest-record',
+  retrievalContext: 'primary',
+  authoritativeData: {
+    ...authoritativeData, itemKey: 'latest-service', name: 'Latest Service',
+    aliases: ['Latest plan'],
+  },
+};
+const latestFocused = focusAuthoritativeCatalogEvidence([
+  latestItem, previousItem,
+], {
+  query: 'Tell me about the latest plan',
+  latestCallerUtterance: 'Tell me about the latest plan',
+  knownEntities: [{ key: 'previous-service', name: 'Previous Service' }],
+}, 5);
+assert.deepEqual(latestFocused.evidence.map((item) => item.recordId), ['latest-record'],
+  'Latest primary Catalog evidence must replace a stale remembered entity');
 const prompt = buildAgentSystemPrompt({
   name: 'Configured Agent', language: 'en', settings: {}, prompt: 'Use approved evidence only.',
 }, {

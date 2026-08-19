@@ -400,7 +400,7 @@ export function mergeAndRerankCandidates(semantic, lexical, query, language = 'u
   semantic.forEach((candidate) => add(candidate, 'semantic'));
   lexical.forEach((candidate) => add(candidate, 'bm25'));
   const normalizedQuery = normalize(query);
-  return [...merged.values()].map((candidate) => {
+  const ranked = [...merged.values()].map((candidate) => {
     const preview = normalize(candidate.contentPreview);
     const exactBonus = normalizedQuery && preview.includes(normalizedQuery) ? 0.16 : 0;
     const languageBonus = String(candidate.language ?? 'und').toLowerCase() === String(language).toLowerCase() ? 0.02 : 0;
@@ -411,8 +411,25 @@ export function mergeAndRerankCandidates(semantic, lexical, query, language = 'u
       + exactBonus + languageBonus + (candidate.channels.length > 1 ? 0.05 : 0);
     return { ...candidate, score };
   }).sort((left, right) => right.score - left.score
-    || candidateKey(left).localeCompare(candidateKey(right)))
-    .slice(0, Math.max(3, Math.min(Number(limit) || 5, 5)))
+    || candidateKey(left).localeCompare(candidateKey(right)));
+  const maximum = Math.max(3, Math.min(Number(limit) || 5, 8));
+  // Preserve the strongest structured item and caller-guidance discovery
+  // candidates alongside the globally strongest matches. Without this
+  // diversity, several near-identical FAQ vectors can crowd authoritative
+  // Catalog or Conversation records out before PostgreSQL hydration.
+  const selected = [];
+  const selectedKeys = new Set();
+  const add = (candidate) => {
+    const key = candidate && candidateKey(candidate);
+    if (!candidate || selectedKeys.has(key) || selected.length >= maximum) return;
+    selectedKeys.add(key);
+    selected.push(candidate);
+  };
+  ranked.slice(0, Math.max(1, maximum - 2)).forEach(add);
+  add(ranked.find((candidate) => candidate.recordType === 'CONVERSATION_NODE'));
+  add(ranked.find((candidate) => candidate.recordType === 'CATALOG_ITEM'));
+  ranked.forEach(add);
+  return selected
     .map((candidate, index) => ({ ...candidate, rank: index + 1 }));
 }
 
@@ -436,7 +453,7 @@ function candidateStrength(candidate, query) {
 }
 
 export function retainStrongCandidates(candidates = [], query = '', maximum = 5) {
-  const limit = Math.max(3, Math.min(Number(maximum) || 5, 5));
+  const limit = Math.max(3, Math.min(Number(maximum) || 5, 8));
   return candidates.map((candidate) => ({
     candidate,
     strength: candidateStrength(candidate, query),
@@ -563,13 +580,36 @@ export function focusAuthoritativeCatalogEvidence(evidence = [], input = {}, max
     return [data.categoryKey, data.category].map(catalogValue).some((value) => selectedSet.has(value));
   });
   const firstEvidence = evidence[0];
-  const topCatalog = firstEvidence?.recordType === 'CATALOG_ITEM' ? firstEvidence : null;
+  const topPrimaryCatalog = catalog.find((item) => item.retrievalContext === 'primary') ?? null;
+  const topCatalog = topPrimaryCatalog
+    ?? (firstEvidence?.recordType === 'CATALOG_ITEM' ? firstEvidence : null);
   if (!exactSelected.length && !categorySelected.length && !topCatalog) {
     return Object.freeze({ focused: false, evidence: Object.freeze([...evidence].slice(0, limit)) });
   }
 
   let resolvedCatalog;
-  if (exactSelected.length) resolvedCatalog = exactSelected;
+  if (topPrimaryCatalog) {
+    const data = topPrimaryCatalog.authoritativeData ?? {};
+    const queryTokens = new Set(tokens(input.latestCallerUtterance ?? input.query));
+    const overlap = (values) => new Set(values.flatMap((value) => tokens(value)))
+      .size ? [...new Set(values.flatMap((value) => tokens(value)))]
+        .filter((token) => queryTokens.has(token)).length : 0;
+    const itemAffinity = overlap([data.itemKey, data.name, ...(data.aliases ?? [])]);
+    const categoryAffinity = overlap([
+      data.categoryKey, data.category, ...(data.categoryAliases ?? []),
+    ]);
+    if (categoryAffinity > itemAffinity) {
+      const primaryCategory = catalogValue(data.categoryKey ?? data.category);
+      resolvedCatalog = catalog.filter((item) => {
+        const itemData = item.authoritativeData ?? {};
+        return [itemData.categoryKey, itemData.category].map(catalogValue).includes(primaryCategory);
+      });
+    } else {
+      // The latest utterance produced a primary item candidate. It must not
+      // be replaced by a remembered entity from a previous turn.
+      resolvedCatalog = [topPrimaryCatalog];
+    }
+  } else if (exactSelected.length) resolvedCatalog = exactSelected;
   else if (categorySelected.length) resolvedCatalog = categorySelected;
   else {
     const topCategory = catalogValue(topCatalog.authoritativeData?.categoryKey
@@ -737,13 +777,11 @@ export function strongCallerMessageMatch(evidence, query, input = {}) {
   // EXAMPLES and SITUATION improve the indexed representation, but runtime
   // activation never compares the caller's words with those examples.
   const semanticScore = Number(evidence.semanticScore ?? 0);
-  const semanticRank = Number(evidence.semanticRank ?? Number.POSITIVE_INFINITY);
   const channels = new Set(evidence.channels ?? []);
   const strongSemanticFloor = Math.min(0.98, Math.max(0.82, env.RAG_RUNTIME_MIN_SCORE + 0.08));
   return (retrievalContext === 'primary' || contextualLatestTurn)
     && channels.has('semantic')
-    && semanticScore >= strongSemanticFloor
-    && semanticRank <= 2;
+    && semanticScore >= strongSemanticFloor;
 }
 
 export function selectStrongCallerMessage(evidence = [], query = '', input = {}) {
@@ -779,7 +817,7 @@ async function semanticCandidates(auth, input, query, scope, runtime) {
   const matches = await runtime.search(auth.tenantId, vector, {
     knowledgeBases: scope.map((item) => ({ id: item.id, publicationRevision: Number(item.publicationRevision) })),
     usageDirection: input.usageDirection, agentId: input.agentId, abortSignal: input.abortSignal,
-    limit: 10, scoreThreshold: env.RAG_RUNTIME_MIN_SCORE, recordTypes,
+    limit: 30, scoreThreshold: env.RAG_RUNTIME_MIN_SCORE, recordTypes,
   });
   const allowed = new Map(scope.map((item) => [String(item.id).toLowerCase(), Number(item.publicationRevision)]));
   return matches.filter((match) => {
@@ -826,7 +864,9 @@ async function retrieveBranch(auth, input, query, scope, runtime) {
   return {
     semantic,
     lexical,
-    ranked: mergeAndRerankCandidates(semantic, lexical, query, input.language, input.topK ?? 5),
+    ranked: mergeAndRerankCandidates(
+      semantic, lexical, query, input.language, Math.max(8, Number(input.topK) || 5),
+    ),
   };
 }
 
@@ -926,7 +966,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
     actionEvidence: [], guidanceEvidence: [], entities: [], cancelled: true,
     durationMs: performance.now() - startedAt,
   };
-  const strongPrimary = retainStrongCandidates(primaryBranch.ranked, query, safeInput.topK ?? 5);
+  const strongPrimary = retainStrongCandidates(primaryBranch.ranked, query, 8);
   // A selected entity or pending question resolves compact continuations and
   // weak standalone turns. Strong explicit requests remain primary.
   const contextPolicy = contextualRetrievalPolicy(safeInput, query, strongPrimary);
@@ -944,7 +984,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   const vectorBm25Ms = Math.round((performance.now() - retrievalStartedAt) * 100) / 100;
   const rerankStartedAt = performance.now();
   const strongContextual = retainStrongCandidates(
-    contextualBranch.ranked, queries.contextual, safeInput.topK ?? 5,
+    contextualBranch.ranked, queries.contextual, 8,
   );
   let ranked = prioritizeCandidates(
     strongPrimary,

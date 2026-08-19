@@ -46,6 +46,21 @@ function entitySupportedBySelectedCatalog(entity, selectedEvidence) {
   });
 }
 
+function catalogEntityFromEvidence(source, envelopeEntities = []) {
+  if (String(source?.recordType ?? '').toLocaleUpperCase() !== 'CATALOG_ITEM') return null;
+  const data = source.authoritativeData ?? {};
+  const key = String(data.itemKey ?? '').trim();
+  const name = String(data.name ?? '').trim();
+  if (!key || !name) return null;
+  return envelopeEntities.find((entity) => identity(entity?.key) === identity(key)) ?? {
+    id: source.recordId ?? null,
+    key,
+    name,
+    category: data.category ?? null,
+    categoryKey: data.categoryKey ?? null,
+  };
+}
+
 /**
  * Applies one validated LLM decision to one generic call state. This module is
  * industry-neutral: all facts, questions, fields and tools come from the
@@ -84,23 +99,45 @@ export function applyUnifiedGroundedTurn({
   }
 
   const beforeState = memory.snapshot();
-  const exactPublishedResponse = decision.evidenceIds.some((id) => (
+  const initiallySelectedEvidence = selectedSources(decision, hydratedEnvelope, evidence);
+  const citedCatalogEntities = new Map(initiallySelectedEvidence.map((source) => (
+    catalogEntityFromEvidence(source, hydratedEnvelope.entities)
+  )).filter(Boolean).map((entity) => [identity(entity.key), entity]));
+  // A decision citing one authoritative Catalog item has resolved that item,
+  // even if the model omitted optional state metadata. Persist the evidence-
+  // derived canonical identity so contextual follow-ups cannot lose it.
+  const evidenceResolvedEntity = citedCatalogEntities.size === 1
+    ? [...citedCatalogEntities.values()][0] : null;
+  const decisionWithEvidenceState = evidenceResolvedEntity && decision.decision === 'answer'
+    ? Object.freeze({
+      ...decision,
+      stateUpdate: Object.freeze({
+        ...decision.stateUpdate,
+        currentTopic: evidenceResolvedEntity.key,
+        knownEntityKeys: Object.freeze([evidenceResolvedEntity.key]),
+        knownEntities: Object.freeze([{ ...evidenceResolvedEntity }]),
+      }),
+    })
+    : decision;
+  const exactPublishedResponse = decisionWithEvidenceState.evidenceIds.some((id) => (
     (hydratedEnvelope.exactCallerResponses ?? []).includes(id)
   ));
-  const explicitLatestTopic = decision.stateUpdate.contextDependent !== true
+  const explicitLatestTopic = decisionWithEvidenceState.stateUpdate.contextDependent !== true
     && !beforeState.activeToolRequest
-    && decision.stateUpdate.knownEntities.length > 0;
+    && decisionWithEvidenceState.stateUpdate.knownEntities.length > 0;
   // An exact overview/message already contains its configured next question.
   // A specific new topic also completes any stale introduction/overview
   // prompt. Relevant guidance can still supply the next current question.
   const effectiveDecision = exactPublishedResponse || explicitLatestTopic
     ? Object.freeze({
-      ...decision,
+      ...decisionWithEvidenceState,
       pendingQuestion: null,
       pendingQuestionRelevant: false,
-      stateUpdate: Object.freeze({ ...decision.stateUpdate, pendingQuestionRelevant: false }),
+      stateUpdate: Object.freeze({
+        ...decisionWithEvidenceState.stateUpdate, pendingQuestionRelevant: false,
+      }),
     })
-    : decision;
+    : decisionWithEvidenceState;
   const callerStateValidation = validateCallerProvidedState(
     effectiveDecision.stateUpdate, finalizedUtterance, beforeState,
   );
@@ -114,6 +151,16 @@ export function applyUnifiedGroundedTurn({
   if (selectedEvidence.some((source) => !evidenceBelongsToRuntime(source, evidenceScope))) {
     return Object.freeze({
       valid: false, reason: 'foreign_evidence_selected', state: memory.snapshot(),
+    });
+  }
+  const selectedCatalogContexts = selectedEvidence.filter((source) => (
+    String(source?.recordType ?? '').toLocaleUpperCase() === 'CATALOG_ITEM'
+  )).map((source) => source.retrievalContext).filter(Boolean);
+  if (selectedCatalogContexts.length > 0
+    && effectiveDecision.stateUpdate.contextDependent !== true
+    && !selectedCatalogContexts.includes('primary')) {
+    return Object.freeze({
+      valid: false, reason: 'latest_request_evidence_mismatch', state: beforeState,
     });
   }
   if (effectiveDecision.stateUpdate.knownEntities.some((entity) => (

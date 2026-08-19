@@ -91,6 +91,77 @@ const foreignExactTurn = applyUnifiedGroundedTurn({
 });
 assert.equal(foreignExactTurn.valid, false);
 assert.equal(foreignExactTurn.reason, 'foreign_evidence_selected');
+const catalogMemory = openGenericConversationState(
+  { ...identity, callId: 'call-catalog-memory' }, {}, 1,
+);
+catalogMemory.beginTurn('catalog-turn');
+const catalogEvidence = {
+  id: 'catalog-source', recordId: 'catalog-record', recordType: 'CATALOG_ITEM',
+  callerFacing: true, content: 'Current service includes approved support.',
+  retrievalContext: 'primary',
+  authoritativeData: {
+    itemKey: 'current-service', name: 'Current Service', category: 'Services',
+    categoryKey: 'services', attributes: [{ key: 'support', value: 'Included' }],
+  },
+};
+const catalogTurn = applyUnifiedGroundedTurn({
+  rawDecision: unifiedDecision({
+    decision: 'answer', answer: catalogEvidence.content, evidenceIds: ['catalog-source'],
+    stateUpdate: {
+      currentTopic: null, knownEntityKeys: [], collectedInformation: {}, correctedFields: [],
+      contextDependent: false,
+    },
+    pendingQuestion: null, toolRequest: null,
+  }),
+  groundingEnvelope: {
+    found: true,
+    sources: [{
+      id: 'catalog-source', recordId: catalogEvidence.recordId,
+      recordType: catalogEvidence.recordType, content: catalogEvidence.content,
+      authoritativeData: catalogEvidence.authoritativeData,
+    }],
+    entities: [{
+      id: catalogEvidence.recordId, key: 'current-service', name: 'Current Service',
+      category: 'Services', categoryKey: 'services', sourceId: 'catalog-source',
+    }],
+  },
+  memory: catalogMemory, turnToken: 'catalog-turn', evidence: [catalogEvidence],
+  finalizedUtterance: 'Explain the current service.',
+});
+assert.equal(catalogTurn.valid, true);
+assert.equal(catalogTurn.state.knownEntities[0].key, 'current-service',
+  'One cited Catalog item must become the canonical selected entity');
+catalogMemory.beginTurn('stale-catalog-turn');
+const staleContextEvidence = {
+  ...catalogEvidence, retrievalContext: 'contextual',
+};
+const staleCatalogTurn = applyUnifiedGroundedTurn({
+  rawDecision: unifiedDecision({
+    decision: 'answer', answer: catalogEvidence.content, evidenceIds: ['catalog-source'],
+    stateUpdate: {
+      currentTopic: 'different request', knownEntityKeys: [], collectedInformation: {},
+      correctedFields: [], contextDependent: false,
+    },
+    pendingQuestion: null, toolRequest: null,
+  }),
+  groundingEnvelope: {
+    found: true,
+    sources: [{
+      id: 'catalog-source', recordId: catalogEvidence.recordId,
+      recordType: catalogEvidence.recordType, content: catalogEvidence.content,
+      authoritativeData: catalogEvidence.authoritativeData,
+    }],
+    entities: [{
+      id: catalogEvidence.recordId, key: 'current-service', name: 'Current Service',
+      category: 'Services', categoryKey: 'services', sourceId: 'catalog-source',
+    }],
+  },
+  memory: catalogMemory, turnToken: 'stale-catalog-turn', evidence: [staleContextEvidence],
+  finalizedUtterance: 'Explain a different service.',
+});
+assert.equal(staleCatalogTurn.valid, false);
+assert.equal(staleCatalogTurn.reason, 'latest_request_evidence_mismatch');
+catalogMemory.close();
 const sideAnswer = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
     decision: 'answer', answer: 'The office is on Central Road.', evidenceIds: ['source-1'],
