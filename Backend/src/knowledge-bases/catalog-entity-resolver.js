@@ -137,9 +137,19 @@ export function catalogLabelSimilarity(query, label) {
   const phraseSize = normalizedLabel.split(' ').filter(Boolean).length;
   if (phraseSize > 0 && allQueryTokens.length >= phraseSize) {
     const labelPhonetic = phoneticCatalogToken(normalizedLabel);
+    const compactLabel = normalizedLabel.replace(/[^a-z]/gu, '');
     for (let index = 0; index <= allQueryTokens.length - phraseSize; index += 1) {
       const window = allQueryTokens.slice(index, index + phraseSize).join(' ');
-      if (labelPhonetic && phoneticCatalogToken(window) === labelPhonetic) {
+      const compactWindow = window.replace(/[^a-z]/gu, '');
+      const lengthCompatibility = compactLabel.length && compactWindow.length
+        ? Math.min(compactLabel.length, compactWindow.length)
+          / Math.max(compactLabel.length, compactWindow.length)
+        : 0;
+      // A short phonetic code alone is not enough to equate a compact category
+      // name with a much longer child-item name. Requiring comparable phrase
+      // lengths prevents that collision while retaining noisy multi-word STT.
+      if (lengthCompatibility >= 0.7 && labelPhonetic
+        && phoneticCatalogToken(window) === labelPhonetic) {
         return { score: 0.9, method: 'phonetic', ...evidence };
       }
     }
@@ -324,7 +334,15 @@ export function classifyCatalogEntityLocally(items, query, {
       === normalizeCatalogEntityText(runnerUp.categoryKey ?? runnerUp.category)
     && best.score >= runnerUp.score,
   );
-  const ambiguous = Boolean(runnerUp && best.score - runnerUp.score < ambiguityMargin && !runnerIsParentOfBest);
+  const runnerIsChildOfBest = Boolean(
+    best.entityType === 'category'
+    && runnerUp?.entityType === 'item'
+    && normalizeCatalogEntityText(runnerUp.item.category_key ?? runnerUp.item.category)
+      === normalizeCatalogEntityText(best.categoryKey ?? best.category)
+    && best.score >= runnerUp.score,
+  );
+  const ambiguous = Boolean(runnerUp && best.score - runnerUp.score < ambiguityMargin
+    && !runnerIsParentOfBest && !runnerIsChildOfBest);
   const status = (best.exactLabel || (best.score >= highConfidence && !ambiguous)) ? 'match' : 'uncertain';
   return Object.freeze({
     status,

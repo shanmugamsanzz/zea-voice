@@ -15,6 +15,9 @@ const {
   strongCallerMessageMatch,
 } = await import('../src/knowledge-bases/hybrid-knowledge-retrieval.service.js');
 const { QDRANT_SEARCH_LIMIT_MAX } = await import('../src/rag/qdrant.client.js');
+const { classifyCatalogEntityLocally } = await import(
+  '../src/knowledge-bases/catalog-entity-resolver.js'
+);
 
 const tenantId = '11111111-1111-4111-8111-111111111111';
 const agentId = '33333333-3333-4333-8333-333333333333';
@@ -214,6 +217,18 @@ await routeKnowledgeQuery(
 assert.equal(semanticSearchOptions.length, 1);
 assert.equal(semanticSearchOptions[0].limit, QDRANT_SEARCH_LIMIT_MAX);
 assert.equal(semanticSearchOptions[0].limit, 30);
+
+// A compact category and a longer child can share a short phonetic code. The
+// category must remain selected so authoritative hydration can load its children.
+const phoneticCategory = classifyCatalogEntityLocally([{
+  id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  knowledge_base_id: knowledgeBaseId,
+  name: 'Prime Screening Add-on Female', item_key: 'prime-screening-female', aliases: [],
+  category: 'Prime Care Packages', category_key: 'prime-care', category_aliases: [],
+}], 'Pryme Kair package');
+assert.equal(phoneticCategory.status, 'match');
+assert.equal(phoneticCategory.entityType, 'category');
+assert.equal(phoneticCategory.categoryKey, 'prime-care');
 
 const samples = [];
 for (let index = 0; index < 100; index += 1) {
