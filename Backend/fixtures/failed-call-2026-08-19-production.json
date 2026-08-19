@@ -16,7 +16,7 @@
       "turns": [
         {
           "utterance": "ஆமாங்க",
-          "expectedResponseNodeKeys": ["positive_introduction_response"],
+          "expectedResponseNodeKeys": ["complete_package_overview"],
           "requireExactPublishedResponse": true
         },
         {

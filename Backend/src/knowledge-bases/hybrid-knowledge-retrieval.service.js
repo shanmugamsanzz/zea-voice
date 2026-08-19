@@ -522,7 +522,9 @@ export function contextualRetrievalPolicy(input, query, primaryCandidates = []) 
     // second vector search on a normal multi-word request whose latest query
     // already produced a usable primary candidate.
     useContext: available && (explicitlyContextual
-      || (compactTurn && !primarySufficient && primaryRecordType !== 'CATALOG_ITEM')),
+      || (compactTurn
+        && primaryRecordType !== 'CATALOG_ITEM'
+        && (!primarySufficient || primaryRecordType !== 'CONVERSATION_NODE'))),
     // Do not let a generic message match consume a compact continuation. An
     // explicit item match remains primary even when the utterance is short.
     preferContext: available && (explicitlyContextual
@@ -530,7 +532,7 @@ export function contextualRetrievalPolicy(input, query, primaryCandidates = []) 
   });
 }
 
-function prioritizeCandidates(primary, contextual, useContext, preferContext, limit) {
+export function prioritizeCandidates(primary, contextual, useContext, preferContext, limit) {
   const unique = new Map();
   // The finalized latest utterance is always the primary query. Context is
   // only a resolver for genuine follow-ups and must never displace an
@@ -545,9 +547,25 @@ function prioritizeCandidates(primary, contextual, useContext, preferContext, li
     const key = candidateKey(candidate);
     if (!unique.has(key)) unique.set(key, candidate);
   }
-  return [...unique.values()]
-    .slice(0, Math.max(3, Math.min(Number(limit) || 5, 5)))
-    .map((candidate, index) => ({ ...candidate, rank: index + 1 }));
+  const maximum = Math.max(3, Math.min(Number(limit) || 5, 5));
+  const ordered = [...unique.values()];
+  const selected = [];
+  const selectedKeys = new Set();
+  const add = (candidate) => {
+    if (!candidate || selected.length >= maximum) return;
+    const key = candidateKey(candidate);
+    if (selectedKeys.has(key)) return;
+    selectedKeys.add(key);
+    selected.push(candidate);
+  };
+  // Preserve globally strong results while reserving room for authoritative
+  // structured and conversational evidence. Several near-identical FAQ
+  // vectors must not crowd those record types out before PostgreSQL hydration.
+  ordered.slice(0, Math.max(1, maximum - 2)).forEach(add);
+  add(ordered.find((candidate) => candidate.recordType === 'CONVERSATION_NODE'));
+  add(ordered.find((candidate) => candidate.recordType === 'CATALOG_ITEM'));
+  ordered.forEach(add);
+  return selected.map((candidate, index) => ({ ...candidate, rank: index + 1 }));
 }
 
 function traceCandidate(candidate, rejectionReasons = []) {

@@ -9,6 +9,7 @@ const { routeKnowledgeQuery } = await import('../src/knowledge-bases/knowledge-r
 const {
   contextualRetrievalPolicy,
   isolatedRetrievalQueries,
+  prioritizeCandidates,
 } = await import('../src/knowledge-bases/hybrid-knowledge-retrieval.service.js');
 const { QDRANT_SEARCH_LIMIT_MAX } = await import('../src/rag/qdrant.client.js');
 
@@ -92,6 +93,30 @@ const strongMessage = contextualRetrievalPolicy({
 assert.equal(strongMessage.useContext, false);
 assert.equal(strongMessage.preferContext, true);
 
+const misleadingStrongFaq = contextualRetrievalPolicy({
+  pendingQuestion: 'Would you like details?',
+  knownEntities: [],
+}, 'yes', [{
+  recordType: 'FAQ', semanticScore: 0.96, tokenCoverage: 0,
+  channels: ['semantic'], contentPreview: 'A semantically nearby answer',
+}]);
+assert.equal(misleadingStrongFaq.useContext, true);
+assert.equal(misleadingStrongFaq.preferContext, true);
+
+const crowdedCandidates = prioritizeCandidates([
+  ...Array.from({ length: 5 }, (_value, index) => ({
+    recordType: 'FAQ', recordId: `00000000-0000-4000-8000-00000000000${index}`,
+    knowledgeBaseId, score: 1 - index * 0.01,
+  })),
+  {
+    recordType: 'CONVERSATION_NODE',
+    recordId: '00000000-0000-4000-8000-000000000010',
+    knowledgeBaseId, score: 0.8,
+  },
+], [], false, false, 5);
+assert.equal(crowdedCandidates.length, 5);
+assert.ok(crowdedCandidates.some((candidate) => candidate.recordType === 'CONVERSATION_NODE'));
+
 const semanticSearchOptions = [];
 await routeKnowledgeQuery(
   { tenantId },
@@ -131,6 +156,7 @@ console.log(JSON.stringify({
   singleCompatibilityPath: true,
   latestUtterancePrimary: true,
   contextualRetrievalOnlyWhenNeeded: true,
+  authoritativeTypeDiversityPreserved: true,
   qdrantDiscoveryLimitContract: true,
   accumulatedContextSentToEmbeddingProvider: false,
   localP95Ms: Math.round(p95Ms * 1000) / 1000,
