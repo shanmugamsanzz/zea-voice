@@ -350,8 +350,13 @@ export function classifyCatalogEntityLocally(items, query, {
   const runnerIsWeakPartial = Number(best.labelCoverage ?? 0) >= 0.8
     && Number(runnerUp?.labelCoverage ?? 0) > 0
     && Number(runnerUp.labelCoverage) <= Number(best.labelCoverage) - 0.4;
+  const runnerHasWeakerQueryCoverage = Number(best.matchedQueryTokens ?? 0) >= 2
+    && Number(best.matchedQueryTokens ?? 0)
+      > Number(runnerUp?.matchedQueryTokens ?? 0)
+    && Number(best.queryCoverage ?? 0) > Number(runnerUp?.queryCoverage ?? 0);
   const ambiguous = Boolean(runnerUp && best.score - runnerUp.score < ambiguityMargin
-    && !runnerIsParentOfBest && !runnerIsChildOfBest && !runnerIsWeakPartial);
+    && !runnerIsParentOfBest && !runnerIsChildOfBest
+    && !runnerIsWeakPartial && !runnerHasWeakerQueryCoverage);
   const hierarchySupportedCategory = best.entityType === 'category'
     && runnerIsChildOfBest
     && best.score >= Math.max(clarificationConfidence, highConfidence - ambiguityMargin);
