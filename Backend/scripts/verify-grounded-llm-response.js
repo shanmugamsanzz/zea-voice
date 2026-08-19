@@ -58,6 +58,21 @@ const publishedMessageEnvelope = buildGroundingEnvelope({
 assert.equal(publishedMessageEnvelope.sources[0].exactCallerResponse, true);
 assert.deepEqual(publishedMessageEnvelope.exactCallerResponses, ['source_1']);
 
+const ineligiblePublishedMessageEnvelope = buildGroundingEnvelope({
+  found: true,
+  tenantEvidence: {
+    sources: [{
+      recordId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      recordType: 'CONVERSATION_NODE', callerFacing: true,
+      content: 'Published, but not matched for this turn.',
+      authoritativeData: { nodeKey: 'unmatched_response', nodeType: 'message' },
+      exactCallerResponseEligible: false,
+    }],
+  },
+});
+assert.equal(ineligiblePublishedMessageEnvelope.sources[0].exactCallerResponse, false);
+assert.deepEqual(ineligiblePublishedMessageEnvelope.exactCallerResponses, []);
+
 assert.equal(normalizeQuestionType('overview'), 'overview');
 assert.equal(normalizeQuestionType('details'), 'details');
 assert.equal(normalizeQuestionType('price'), 'price');

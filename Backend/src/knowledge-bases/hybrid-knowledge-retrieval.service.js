@@ -1204,7 +1204,16 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   const sources = permittedEvidence.filter((item) => !(
     (item.recordType === 'WORKFLOW_RULE' || item.recordType === 'CONVERSATION_NODE')
     && item.callerFacing !== true
-  ));
+  )).map((item) => ({
+    ...item,
+    // Caller-facing controls whether content may be spoken; it does not make
+    // every retrieved message a valid exact response for this turn. Exact
+    // selection also requires published matching metadata and contextual
+    // confidence to pass the same generic policy used by retrieval.
+    exactCallerResponseEligible: item.recordType === 'CONVERSATION_NODE'
+      ? strongCallerMessageMatch(item, query, safeInput)
+      : false,
+  }));
   const actionEvidence = permittedEvidence.filter((item) => (
     item.recordType === 'WORKFLOW_RULE' && item.callerFacing !== true
   ));

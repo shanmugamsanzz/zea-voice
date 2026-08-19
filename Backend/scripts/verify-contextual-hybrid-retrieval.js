@@ -10,6 +10,7 @@ const {
   contextualRetrievalPolicy,
   isolatedRetrievalQueries,
   prioritizeCandidates,
+  strongCallerMessageMatch,
 } = await import('../src/knowledge-bases/hybrid-knowledge-retrieval.service.js');
 const { QDRANT_SEARCH_LIMIT_MAX } = await import('../src/rag/qdrant.client.js');
 
@@ -102,6 +103,29 @@ const misleadingStrongFaq = contextualRetrievalPolicy({
 }]);
 assert.equal(misleadingStrongFaq.useContext, true);
 assert.equal(misleadingStrongFaq.preferContext, true);
+
+const unqualifiedCallerMessage = {
+  recordType: 'CONVERSATION_NODE', callerFacing: true,
+  authoritativeData: {
+    nodeType: 'message',
+    variables: [{ key: 'purpose', value: 'A configured control response.' }],
+  },
+  retrievalContext: 'contextual', semanticScore: 0.95,
+  channels: ['semantic'],
+};
+assert.equal(strongCallerMessageMatch(unqualifiedCallerMessage, 'Short reply', {
+  pendingQuestion: 'A pending configured question?',
+}), false);
+assert.equal(strongCallerMessageMatch({
+  ...unqualifiedCallerMessage,
+  authoritativeData: {
+    ...unqualifiedCallerMessage.authoritativeData,
+    variables: [
+      ...unqualifiedCallerMessage.authoritativeData.variables,
+      { key: 'situation', value: 'The caller answers the immediately pending question.' },
+    ],
+  },
+}, 'Short reply', { pendingQuestion: 'A pending configured question?' }), true);
 
 const crowdedCandidates = prioritizeCandidates([
   ...Array.from({ length: 5 }, (_value, index) => ({

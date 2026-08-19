@@ -79,7 +79,8 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
     const nodeType = String(evidence.authoritativeData?.nodeType ?? '').toLowerCase();
     const exactCallerResponse = evidence.callerFacing === true
       && recordType === 'CONVERSATION_NODE'
-      && nodeType === 'message';
+      && nodeType === 'message'
+      && evidence.exactCallerResponseEligible !== false;
     addSource(sources, sourceContents, evidence.content, {
       recordId: text(evidence.recordId, 100) || null,
       recordType: text(recordType, 40) || 'tenant_evidence',
