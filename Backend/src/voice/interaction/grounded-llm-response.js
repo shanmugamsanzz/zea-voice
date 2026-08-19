@@ -68,6 +68,9 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
       callerFacing: true,
       authoritativeData: directResponse.authoritativeData ?? null,
       exactCallerResponse: true,
+      retrievalContext: directResponse.retrievalContext ?? 'primary',
+      rank: Number(directResponse.rank ?? 0) || null,
+      score: Number(directResponse.retrievalScore ?? directResponse.semanticScore ?? 0),
     });
   }
   // PostgreSQL-hydrated evidence is authoritative and must be added before
@@ -88,6 +91,9 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
       callerFacing: evidence.callerFacing === true,
       authoritativeData: evidence.authoritativeData ?? null,
       exactCallerResponse,
+      retrievalContext: evidence.retrievalContext ?? 'primary',
+      rank: Number(evidence.rank ?? 0) || null,
+      score: Number(evidence.retrievalScore ?? evidence.semanticScore ?? evidence.score ?? 0),
     });
   }
   // Only guidance explicitly marked caller-facing by the published record may
@@ -145,7 +151,6 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
     recordId: text(knowledge.source?.recordId, 100) || null,
     recordType: text(knowledge.route, 40) || null,
   });
-  const primarySourceId = sources[0]?.id ?? null;
   const values = [
     knowledge.item,
     ...(knowledge.category?.items ?? []),
@@ -172,7 +177,11 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
   const entities = [];
   const entityKeys = new Set();
   for (const value of values) {
-    const next = entity(value, primarySourceId);
+    const entityRecordId = text(value.id ?? value.itemId, 100);
+    const sourceId = sources.find((source) => (
+      entityRecordId && text(source.recordId, 100) === entityRecordId
+    ))?.id ?? null;
+    const next = entity(value, sourceId);
     const key = identity(next?.key);
     if (!next || !key || entityKeys.has(key)) continue;
     entityKeys.add(key);

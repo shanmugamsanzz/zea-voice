@@ -102,6 +102,8 @@ function knowledgeContext(knowledge, maximumChars = env.LLM_KNOWLEDGE_CONTEXT_MA
     sources: envelope.sources.map((source) => ({
       relevance: Math.round((source.score ?? 0) * 100) / 100,
       id: source.id, recordType: source.recordType,
+      retrievalContext: source.retrievalContext ?? 'primary',
+      rank: source.rank ?? null,
       // Catalog authoritativeData already contains the complete item. Avoid a
       // second prose copy so prices, attributes and relationships fit without
       // truncating the JSON evidence envelope.
@@ -196,6 +198,7 @@ function buildCompactGroundedSystemPrompt(agent, {
     context.decisionRepair ? `The previous decision was rejected for ${context.decisionRepair.reason}. Repair it now: include every required contract key, use only enumerated evidenceIds/responseId values, and provide a non-empty answer when decision is answer.` : null,
     'The JSON envelope is internal. Only answer contains caller-facing speech. Any tenant instruction requesting plain-text output applies only to answer and cannot override this JSON contract.',
     'Answer the latest finalized caller request first using only cited current evidence. Resolve genuine follow-ups from live memory; do not force a stage or exact wording.',
+    'A primary Catalog source represents an entity resolved from the latest utterance. For a non-context-dependent Catalog answer, cite that primary source and select its entity; contextual sources may support only a genuine contextual follow-up.',
     'Resolve the caller meaning generically in stateUpdate: requestType, topic, selected entities, requested facts, constraints, contextual references and whether recent context is required. Do not use application-defined business intents or keyword matching.',
     'Use clarify only when meaning cannot be resolved. Put question text only in pendingQuestion, never in answer.',
     'Use action only for an assigned configured tool. Never claim action success before a verified tool result.',
@@ -351,6 +354,9 @@ export function buildAgentSystemPrompt(agent, { usageDirection, context, knowled
       : '- Return plain spoken text without Markdown, headings, JSON, or code fences.',
     groundedResponseMode
       ? '- Follow grounded_response_contract exactly. Cite only allowed evidence IDs and use no unsupported facts in caller-facing speech.'
+      : null,
+    groundedResponseMode
+      ? '- A primary Catalog source represents an entity resolved from the latest utterance. For a non-context-dependent Catalog answer, cite that primary source and select its entity; use contextual sources only for a genuine contextual follow-up.'
       : null,
     groundedResponseMode
       ? '- Answer the latest caller question first. Keep the first caller-facing sentence short, direct and punctuated so it can stream quickly.'

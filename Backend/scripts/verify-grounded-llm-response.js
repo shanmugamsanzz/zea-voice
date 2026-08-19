@@ -73,6 +73,32 @@ const ineligiblePublishedMessageEnvelope = buildGroundingEnvelope({
 assert.equal(ineligiblePublishedMessageEnvelope.sources[0].exactCallerResponse, false);
 assert.deepEqual(ineligiblePublishedMessageEnvelope.exactCallerResponses, []);
 
+const entityAlignedEnvelope = buildGroundingEnvelope({
+  route: 'hybrid', found: true,
+  tenantEvidence: {
+    sources: [
+      {
+        recordId: 'e1111111-1111-4111-8111-111111111111', recordType: 'CATALOG_ITEM',
+        callerFacing: true, content: 'New option details.', retrievalContext: 'primary', rank: 1,
+        retrievalScore: 0.91, authoritativeData: { itemKey: 'new-option', name: 'New Option' },
+      },
+      {
+        recordId: 'e2222222-2222-4222-8222-222222222222', recordType: 'CATALOG_ITEM',
+        callerFacing: true, content: 'Old option details.', retrievalContext: 'contextual', rank: 2,
+        retrievalScore: 0.82, authoritativeData: { itemKey: 'old-option', name: 'Old Option' },
+      },
+    ],
+    entities: [
+      { id: 'e1111111-1111-4111-8111-111111111111', key: 'new-option', name: 'New Option' },
+      { id: 'e2222222-2222-4222-8222-222222222222', key: 'old-option', name: 'Old Option' },
+    ],
+  },
+});
+assert.equal(entityAlignedEnvelope.sources[0].retrievalContext, 'primary');
+assert.equal(entityAlignedEnvelope.sources[1].retrievalContext, 'contextual');
+assert.equal(entityAlignedEnvelope.entities.find((item) => item.key === 'new-option')?.sourceId, 'source_1');
+assert.equal(entityAlignedEnvelope.entities.find((item) => item.key === 'old-option')?.sourceId, 'source_2');
+
 assert.equal(normalizeQuestionType('overview'), 'overview');
 assert.equal(normalizeQuestionType('details'), 'details');
 assert.equal(normalizeQuestionType('price'), 'price');
@@ -227,6 +253,7 @@ assert.match(systemPrompt, /<\/grounded_response_contract>/u);
 assert.match(systemPrompt, /source_1/u);
 assert.match(systemPrompt, /premium-plan/u);
 assert.match(systemPrompt, /priority support/u);
+assert.match(systemPrompt, /primary Catalog source/u);
 assert.match(systemPrompt, /<\/knowledge_context>/u);
 assert.match(systemPrompt, /currentStage/u);
 assert.match(systemPrompt, /detectedIntent/u);
