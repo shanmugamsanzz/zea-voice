@@ -1206,7 +1206,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
     })),
   });
-  const cacheKey = `zea:rag:hybrid:v4:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:v5:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();
@@ -1224,10 +1224,11 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   // mistaken for an unrelated entity and suppress its configured response.
   let contextPolicy = contextualRetrievalPolicy(safeInput, query, strongPrimary);
   const pendingContextPreferred = contextPolicy.useContext && contextPolicy.preferContext;
-  const primaryCatalog = strongPrimary.find((candidate) => candidate.recordType === 'CATALOG_ITEM');
-  const catalogIdentityDiscoveryNeeded = !pendingContextPreferred && (!primaryCatalog
-    || (Number(primaryCatalog.semanticScore ?? 0) < Math.max(0.82, env.RAG_RUNTIME_MIN_SCORE + 0.08)
-      && Number(primaryCatalog.tokenCoverage ?? 0) < 0.6));
+  // Semantic retrieval discovers candidates; the published Catalog projection
+  // resolves their canonical identity. Run that resolution for every genuine
+  // latest-turn request, even when Qdrant already returned a strong Catalog
+  // candidate, so all discovery channels enforce the same entity boundary.
+  const catalogIdentityDiscoveryNeeded = !pendingContextPreferred;
   let catalogIdentityResolution = null;
   let identityDiscoveryCandidates = [];
   if (catalogIdentityDiscoveryNeeded) {
