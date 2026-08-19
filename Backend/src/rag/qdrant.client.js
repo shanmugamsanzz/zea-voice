@@ -2,6 +2,8 @@ import { env } from '../config/env.js';
 import { measureExternalProvider } from '../performance/performance-context.js';
 import { requireEntityId, requireTenantId, tenantCollectionName } from './tenant-isolation.js';
 
+export const QDRANT_SEARCH_LIMIT_MAX = 10;
+
 function qdrantBaseUrl() {
   return env.QDRANT_URL.replace(/\/$/, '');
 }
@@ -147,8 +149,8 @@ export async function searchTenantPoints(tenantId, vector, {
   if (!['inbound', 'outbound'].includes(usageDirection)) {
     throw new TypeError('usageDirection must be inbound or outbound');
   }
-  if (!Number.isInteger(limit) || limit < 1 || limit > 10) {
-    throw new TypeError('limit must be between 1 and 10');
+  if (!Number.isInteger(limit) || limit < 1 || limit > QDRANT_SEARCH_LIMIT_MAX) {
+    throw new TypeError(`limit must be between 1 and ${QDRANT_SEARCH_LIMIT_MAX}`);
   }
   if (!Array.isArray(recordTypes) || recordTypes.length === 0
     || recordTypes.some((value) => typeof value !== 'string' || !value.trim())) {

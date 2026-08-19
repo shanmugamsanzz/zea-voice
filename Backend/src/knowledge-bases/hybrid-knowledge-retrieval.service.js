@@ -1,10 +1,13 @@
 import crypto from 'node:crypto';
 import { env } from '../config/env.js';
+import { logger } from '../config/logger.js';
 import { redis } from '../infrastructure/redis.js';
 import { withTenantContext } from '../infrastructure/database-context.js';
 import { AppError } from '../middleware/errors.js';
 import { embedQuery } from '../rag/embedding.client.js';
-import { searchTenantPoints } from '../rag/qdrant.client.js';
+import {
+  QDRANT_SEARCH_LIMIT_MAX, searchTenantPoints,
+} from '../rag/qdrant.client.js';
 import { requireTenantId } from '../rag/tenant-isolation.js';
 import { sparseIndexCacheKey } from './knowledge-map.service.js';
 import { latestTurnWorkflowActivation } from './workflow-activation-policy.js';
@@ -880,7 +883,7 @@ async function semanticCandidates(auth, input, query, scope, runtime) {
   const matches = await runtime.search(auth.tenantId, vector, {
     knowledgeBases: scope.map((item) => ({ id: item.id, publicationRevision: Number(item.publicationRevision) })),
     usageDirection: input.usageDirection, agentId: input.agentId, abortSignal: input.abortSignal,
-    limit: 30, scoreThreshold: discoveryThreshold, recordTypes,
+    limit: QDRANT_SEARCH_LIMIT_MAX, scoreThreshold: discoveryThreshold, recordTypes,
   });
   const allowed = new Map(scope.map((item) => [String(item.id).toLowerCase(), Number(item.publicationRevision)]));
   return matches.filter((match) => {
@@ -911,9 +914,22 @@ async function lexicalCandidates(auth, input, query, scope, runtime) {
 
 async function retrieveBranch(auth, input, query, scope, runtime) {
   if (!query) return { semantic: [], lexical: [], ranked: [] };
+  const observableSemanticSearch = semanticCandidates(auth, input, query, scope, runtime)
+    .catch((error) => {
+      logger.error({
+        err: error,
+        tenantId: auth.tenantId,
+        agentId: input.agentId,
+        knowledgeBaseRevisions: scope.map((item) => ({
+          knowledgeBaseId: item.id,
+          publicationRevision: Number(item.publicationRevision),
+        })),
+      }, 'Hybrid semantic retrieval failed');
+      return [];
+    });
   const [semantic, lexical] = await Promise.all([
     abortable(deadline(
-      semanticCandidates(auth, input, query, scope, runtime),
+      observableSemanticSearch,
       env.RAG_RUNTIME_SEMANTIC_DEADLINE_MS, [],
     ), input.abortSignal, []),
     abortable(deadline(

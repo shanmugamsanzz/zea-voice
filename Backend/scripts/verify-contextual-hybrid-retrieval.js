@@ -10,6 +10,7 @@ const {
   contextualRetrievalPolicy,
   isolatedRetrievalQueries,
 } = await import('../src/knowledge-bases/hybrid-knowledge-retrieval.service.js');
+const { QDRANT_SEARCH_LIMIT_MAX } = await import('../src/rag/qdrant.client.js');
 
 const tenantId = '11111111-1111-4111-8111-111111111111';
 const agentId = '33333333-3333-4333-8333-333333333333';
@@ -91,6 +92,24 @@ const strongMessage = contextualRetrievalPolicy({
 assert.equal(strongMessage.useContext, false);
 assert.equal(strongMessage.preferContext, true);
 
+const semanticSearchOptions = [];
+await routeKnowledgeQuery(
+  { tenantId },
+  { ...baseInput, query: 'A complete standalone request' },
+  {
+    ...dependencies,
+    ragEnabled: true,
+    embed: async () => [0],
+    search: async (_tenantId, _vector, options) => {
+      semanticSearchOptions.push(options);
+      return [];
+    },
+  },
+);
+assert.equal(semanticSearchOptions.length, 1);
+assert.equal(semanticSearchOptions[0].limit, QDRANT_SEARCH_LIMIT_MAX);
+assert.ok(semanticSearchOptions[0].limit <= 10);
+
 const samples = [];
 for (let index = 0; index < 100; index += 1) {
   const startedAt = performance.now();
@@ -112,6 +131,7 @@ console.log(JSON.stringify({
   singleCompatibilityPath: true,
   latestUtterancePrimary: true,
   contextualRetrievalOnlyWhenNeeded: true,
+  qdrantDiscoveryLimitContract: true,
   accumulatedContextSentToEmbeddingProvider: false,
   localP95Ms: Math.round(p95Ms * 1000) / 1000,
 }, null, 2));

@@ -4,7 +4,8 @@ env.example
 .git
 .gitignore
 coverage
-scripts
+scripts/*
+!scripts/verify-live-production-acceptance.js
 README.md
 MIGRATIONS.md
 docker-compose.yml

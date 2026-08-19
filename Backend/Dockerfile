@@ -9,6 +9,10 @@ RUN npm ci --omit=dev && npm cache clean --force
 
 COPY migrations ./migrations
 COPY src ./src
+COPY scripts/verify-live-production-acceptance.js ./scripts/verify-live-production-acceptance.js
+COPY fixtures/failed-call-2026-08-19-production.json ./fixtures/failed-call-2026-08-19-production.json
+
+RUN mkdir -p /app/artifacts && chown -R node:node /app/artifacts
 
 USER node
 EXPOSE 1112
