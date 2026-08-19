@@ -99,8 +99,11 @@ function normalizeStateUpdate(value, envelope, runtime) {
   if (!requestedInformation || typeof requestedInformation !== 'object'
     || Array.isArray(requestedInformation)) return null;
   const activeTool = text(activeToolRequest?.name ?? runtime.activeToolRequest?.name, 100).toLocaleLowerCase();
+  // Caller fields are action state, not ordinary conversational memory. Do
+  // not accept personal/configured values before an assigned tool is active.
   const fieldSchemas = new Map((runtime.fieldSchemas ?? []).filter((field) => (
-    !field.requiredAction || text(field.requiredAction, 100).toLocaleLowerCase() === activeTool
+    !field.requiredAction
+    || (activeTool && text(field.requiredAction, 100).toLocaleLowerCase() === activeTool)
   )).map((field) => [field.key, field]));
   const collectedInformation = {};
   for (const [key, fieldValue] of Object.entries(requestedInformation)) {

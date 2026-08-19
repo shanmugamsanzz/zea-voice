@@ -14,7 +14,7 @@ import { loadAgentRuntimeProfile } from './providers/provider-config.js';
 import { createRuntimeAdapters, providerAdapterRegistry } from './providers/registry.js';
 import { registerImplementedProviderAdapters } from './providers/defaults.js';
 import {
-  createSelectedLlmStream, runtimeTools, selectedLlmPromptBudget,
+  createMeaningResolutionLlmStream, createSelectedLlmStream, runtimeTools, selectedLlmPromptBudget,
 } from './providers/llm/llm-response.service.js';
 import { executeAgentTools } from './tools/tool-executor.service.js';
 import { LlmCircuitBreaker } from './providers/llm/streaming-runtime.js';
@@ -51,6 +51,11 @@ import {
 import {
   createGroundedDecisionStreamDecoder,
 } from './interaction/grounded-llm-decision.js';
+import {
+  emptyPreRetrievalMeaning,
+  parsePreRetrievalMeaning,
+  preRetrievalMeaningInput,
+} from './interaction/pre-retrieval-meaning.js';
 import { applyUnifiedGroundedTurn } from './interaction/unified-grounded-turn.js';
 import { evidenceBelongsToRuntime } from './interaction/grounded-decision-security.js';
 import { evaluateFirstAudioSlo, percentile } from './interaction/voice-latency-slo.js';
@@ -1527,8 +1532,11 @@ export class RealtimeConversationOrchestrator {
       const pendingQuestion = memoryState?.pendingQuestion?.text
         ?? memoryState?.pendingQuestionText ?? memoryState?.pendingQuestion ?? undefined;
       const contextualFollowUp = currentUnderstanding.contextDependent === true
-        || currentUnderstanding.requiresContext === true
-        || Boolean(pendingQuestion);
+        || currentUnderstanding.requiresContext === true;
+      const resolvedEntities = Array.isArray(currentUnderstanding.selectedEntities)
+        ? currentUnderstanding.selectedEntities : [];
+      const contextualEntities = contextualFollowUp
+        ? (memoryState?.knownEntities ?? []) : [];
       const auth = {
         tenantId: this.runtimeProfile.agent.tenantId,
         workspaceId: this.runtimeProfile.agent.workspaceId,
@@ -1542,9 +1550,10 @@ export class RealtimeConversationOrchestrator {
         latestRequestPriority: 'primary',
         usageDirection: this.call.direction,
         language: memoryState?.language ?? languageCode(this.runtimeProfile.agent.language),
-        currentTopic: memoryState?.currentTopic ?? undefined,
-        knownEntities: memoryState?.knownEntities ?? [],
-        pendingQuestion,
+        currentTopic: currentUnderstanding.topic
+          ?? (contextualFollowUp ? memoryState?.currentTopic : undefined),
+        knownEntities: contextualEntities,
+        pendingQuestion: contextualFollowUp ? pendingQuestion : undefined,
         collectedInformation: memoryState?.collectedInformation ?? {},
         lastAnswer: memoryState?.lastAnswer ?? undefined,
         understanding: {
@@ -1553,12 +1562,20 @@ export class RealtimeConversationOrchestrator {
           questionType: currentUnderstanding.questionType
             ?? currentUnderstanding.requestType ?? undefined,
           contextDependent: contextualFollowUp,
-          selectedEntities: memoryState?.knownEntities ?? [],
+          explicitEntities: currentUnderstanding.explicitEntities ?? [],
+          selectedEntities: resolvedEntities.length ? resolvedEntities : contextualEntities,
+          requestedFacts: currentUnderstanding.requestedFacts ?? [],
+          constraints: currentUnderstanding.constraints ?? [],
+          contextualReferences: currentUnderstanding.contextualReferences ?? [],
+          topicChanged: currentUnderstanding.topicChanged === true,
         },
-        requestedFacts: memoryState?.requestedFacts ?? [],
-        constraints: memoryState?.constraints ?? [],
-        contextualReferences: memoryState?.contextualReferences ?? [],
-        recentTurns: memoryState?.recentTurns ?? [],
+        requestedFacts: currentUnderstanding.requestedFacts
+          ?? (contextualFollowUp ? memoryState?.requestedFacts : []) ?? [],
+        constraints: currentUnderstanding.constraints
+          ?? (contextualFollowUp ? memoryState?.constraints : []) ?? [],
+        contextualReferences: currentUnderstanding.contextualReferences
+          ?? (contextualFollowUp ? memoryState?.contextualReferences : []) ?? [],
+        recentTurns: contextualFollowUp ? (memoryState?.recentTurns ?? []) : [],
         contextualFollowUp,
         abortSignal,
       };
@@ -1610,6 +1627,84 @@ export class RealtimeConversationOrchestrator {
     } catch (error) {
       this.log.warn({ err: error, callId: this.call.id }, 'Knowledge retrieval failed; continuing without unverified context');
       return { route: 'none', found: false, content: null, source: null, error: error.code ?? 'KNOWLEDGE_UNAVAILABLE' };
+    }
+  }
+
+  async #resolvePreRetrievalMeaning(query, epoch) {
+    const fallback = emptyPreRetrievalMeaning();
+    const startedAt = performance.now();
+    let session;
+    try {
+      session = await createMeaningResolutionLlmStream(this.runtimeProfile, {
+        callId: this.call.id,
+        query: preRetrievalMeaningInput(query, this.liveCallMemory?.snapshot?.() ?? {}),
+      }, {
+        registry: this.registry,
+        adapter: this.adapters.llm,
+        skipDefaultRegistration: true,
+      });
+      this.activeLlm = session;
+      const timedOut = Symbol('meaning_timeout');
+      const collect = (async () => {
+        let output = '';
+        for await (const event of session.events) {
+          if (this.#isStaleGeneration(epoch)) {
+            session.cancel('stale_meaning_resolution');
+            return null;
+          }
+          if (event?.type === 'text_delta') output += String(event.delta ?? '');
+          else if (event?.type === 'error') {
+            throw Object.assign(new Error(event.message), {
+              code: event.code, retryable: event.retryable,
+            });
+          } else if (event?.type === 'cancelled') return null;
+          else if (event?.type === 'usage') this.usageTracker.record('llm', event.usage);
+          else if (event?.type === 'completed' && !output) {
+            output = String(event.answer ?? event.text ?? event.outputText ?? '');
+          }
+        }
+        return output;
+      })();
+      const raw = await settleWithin(
+        collect,
+        env.VOICE_MEANING_RESOLUTION_TIMEOUT_MS,
+        timedOut,
+      );
+      if (raw === timedOut) {
+        session.cancel('meaning_resolution_timeout');
+        this.log.warn({
+          stage: 'llm.pre_retrieval_meaning_timeout', callId: this.call.id,
+          timeoutMs: env.VOICE_MEANING_RESOLUTION_TIMEOUT_MS,
+        }, 'Pre-retrieval meaning resolution exceeded its bounded deadline');
+        return fallback;
+      }
+      if (this.#isStaleGeneration(epoch)) return fallback;
+      const meaning = parsePreRetrievalMeaning(raw);
+      if (!meaning) {
+        this.log.warn({
+          stage: 'llm.pre_retrieval_meaning_invalid', callId: this.call.id,
+        }, 'Pre-retrieval meaning resolution returned an invalid schema');
+        return fallback;
+      }
+      this.log.info({
+        stage: 'llm.pre_retrieval_meaning_resolved', callId: this.call.id,
+        requestType: meaning.requestType,
+        explicitEntityCount: meaning.explicitEntities.length,
+        requestedFactCount: meaning.requestedFacts.length,
+        contextDependent: meaning.contextDependent,
+        topicChanged: meaning.topicChanged,
+        durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+      }, 'Resolved generic latest-turn meaning before retrieval');
+      return meaning;
+    } catch (error) {
+      this.log.warn({
+        stage: 'llm.pre_retrieval_meaning_failed', callId: this.call.id,
+        code: error.code ?? 'MEANING_RESOLUTION_FAILED',
+      }, 'Pre-retrieval meaning resolution failed; continuing with the finalized utterance');
+      return fallback;
+    } finally {
+      if (this.activeLlm === session) this.activeLlm = null;
+      await session?.close?.();
     }
   }
 
@@ -2371,6 +2466,7 @@ export class RealtimeConversationOrchestrator {
       queryCharacters: Array.from(String(query ?? '')).length,
       sttSpeechDurationMs: sttTiming.sttSpeechDurationMs ?? null,
       sttFinalizationMs: sttTiming.sttFinalizationMs ?? null,
+      meaningMs: null,
       knowledgeMs: null,
       retrievalMs: null,
       rankingMs: null,
@@ -2383,10 +2479,14 @@ export class RealtimeConversationOrchestrator {
       fastKnowledge: false,
     };
     if (this.runtimeMetrics.turnLatency.length < 100) this.runtimeMetrics.turnLatency.push(turnLatency);
+    const meaningStartedAt = Date.now();
+    const meaning = await this.#resolvePreRetrievalMeaning(query, epoch);
+    turnLatency.meaningMs = Math.max(0, Date.now() - meaningStartedAt);
+    if (epoch !== this.epoch || this.finalized) return;
     const retrievalAbortController = new AbortController();
     this.activeRetrievalAbortController = retrievalAbortController;
     const knowledgeStartedAt = Date.now();
-    let knowledge = await this.#knowledge(query, null, retrievalAbortController.signal);
+    let knowledge = await this.#knowledge(query, meaning, retrievalAbortController.signal);
     if (this.activeRetrievalAbortController === retrievalAbortController) {
       this.activeRetrievalAbortController = null;
     }

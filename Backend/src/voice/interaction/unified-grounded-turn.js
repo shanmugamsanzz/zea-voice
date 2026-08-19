@@ -12,6 +12,7 @@ import {
 import {
   composeConfiguredTurnResponse,
   resolveNextConfiguredQuestion,
+  validateConfiguredFieldCollectionSpeech,
 } from './next-question-policy.js';
 
 function sourcesByType(sources = [], recordType) {
@@ -28,6 +29,21 @@ function selectedSources(decision, groundingEnvelope, evidence) {
       || (source.recordId && candidate.recordId === source.recordId)
     )) ?? source
   ));
+}
+
+function identity(value) {
+  return String(value ?? '').normalize('NFKC').toLocaleLowerCase()
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim();
+}
+
+function entitySupportedBySelectedCatalog(entity, selectedEvidence) {
+  const requested = new Set([entity?.id, entity?.key, entity?.name].map(identity).filter(Boolean));
+  return selectedEvidence.some((source) => {
+    if (String(source?.recordType ?? '').toLocaleUpperCase() !== 'CATALOG_ITEM') return false;
+    const data = source.authoritativeData ?? {};
+    return [source.recordId, data.itemKey, data.name].map(identity)
+      .filter(Boolean).some((candidate) => requested.has(candidate));
+  });
 }
 
 /**
@@ -71,9 +87,13 @@ export function applyUnifiedGroundedTurn({
   const exactPublishedResponse = decision.evidenceIds.some((id) => (
     (hydratedEnvelope.exactCallerResponses ?? []).includes(id)
   ));
+  const explicitLatestTopic = decision.stateUpdate.contextDependent !== true
+    && !beforeState.activeToolRequest
+    && decision.stateUpdate.knownEntities.length > 0;
   // An exact overview/message already contains its configured next question.
-  // Clear the prior introduction prompt so it cannot be appended again.
-  const effectiveDecision = exactPublishedResponse
+  // A specific new topic also completes any stale introduction/overview
+  // prompt. Relevant guidance can still supply the next current question.
+  const effectiveDecision = exactPublishedResponse || explicitLatestTopic
     ? Object.freeze({
       ...decision,
       pendingQuestion: null,
@@ -96,6 +116,41 @@ export function applyUnifiedGroundedTurn({
       valid: false, reason: 'foreign_evidence_selected', state: memory.snapshot(),
     });
   }
+  if (effectiveDecision.stateUpdate.knownEntities.some((entity) => (
+    !entitySupportedBySelectedCatalog(entity, selectedEvidence)
+  ))) {
+    return Object.freeze({
+      valid: false, reason: 'unsupported_selected_entity', state: beforeState,
+    });
+  }
+  const actionEvidence = sourcesByType(evidence, 'WORKFLOW_RULE');
+  const exactSelectedEntities = effectiveDecision.stateUpdate.knownEntities.length
+    ? effectiveDecision.stateUpdate.knownEntities
+    : (beforeState.knownEntities?.length === 1 ? beforeState.knownEntities : []);
+  const proposedToolName = effectiveDecision.toolRequest?.name
+    ?? effectiveDecision.stateUpdate.activeToolRequest?.name
+    ?? beforeState.activeToolRequest?.name;
+  const preliminaryAction = proposedToolName ? configuredToolAuthorization(proposedToolName, {
+    evidenceScope,
+    toolSchemas: runtime.toolSchemas,
+    actionEvidence,
+    catalogEvidence: sourcesByType(selectedEvidence, 'CATALOG_ITEM'),
+    selectedEntities: exactSelectedEntities,
+    activeToolRequest: beforeState.activeToolRequest,
+    requireCurrentActionEvidence: !beforeState.activeToolRequest?.authorizationRecordId,
+  }) : null;
+  const fieldCollection = validateConfiguredFieldCollectionSpeech(
+    [effectiveDecision.answer, effectiveDecision.pendingQuestion].filter(Boolean).join(' '),
+    {
+      fieldSchemas,
+      activeToolAuthorized: preliminaryAction?.valid === true,
+    },
+  );
+  if (!fieldCollection.valid) {
+    return Object.freeze({
+      valid: false, reason: fieldCollection.reason, field: fieldCollection.field, state: beforeState,
+    });
+  }
   const claimValidation = validateGroundedClaims(
     effectiveDecision.answer,
     selectedEvidence,
@@ -112,11 +167,7 @@ export function applyUnifiedGroundedTurn({
     return Object.freeze({ valid: false, reason: 'stale_turn', state: applied.state });
   }
   let afterState = memory.snapshot();
-  const actionEvidence = sourcesByType(evidence, 'WORKFLOW_RULE');
   const requestedToolName = effectiveDecision.toolRequest?.name ?? afterState.activeToolRequest?.name;
-  const exactSelectedEntities = effectiveDecision.stateUpdate.knownEntities.length
-    ? effectiveDecision.stateUpdate.knownEntities
-    : (afterState.knownEntities.length === 1 ? afterState.knownEntities : []);
   let actionContext = null;
   if (requestedToolName) {
     actionContext = configuredToolAuthorization(requestedToolName, {
@@ -222,6 +273,16 @@ export function applyUnifiedGroundedTurn({
     guidanceEvidence: sourcesByType(evidence, 'CONVERSATION_NODE'),
     confirmationConfiguration,
   });
+  const nextQuestionValidation = validateConfiguredFieldCollectionSpeech(nextQuestion?.question, {
+    fieldSchemas,
+    activeToolAuthorized: Boolean(afterState.activeToolRequest?.authorizationRecordId),
+  });
+  if (!nextQuestionValidation.valid) {
+    return Object.freeze({
+      valid: false, reason: nextQuestionValidation.reason,
+      field: nextQuestionValidation.field, state: afterState,
+    });
+  }
   if (nextQuestion) {
     afterState = memory.setPendingQuestion({
       key: nextQuestion.key,

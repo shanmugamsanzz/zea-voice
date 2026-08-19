@@ -531,7 +531,11 @@ export function messageSelectionScore(evidence, query, input = {}) {
   const configuredContext = normalize(conversationVariable(evidence, 'context') ?? 'any')
     .replace(/\s+/gu, '_');
   const contextFit = configuredContext === 'any' ? 0 : 0.05;
-  const latestTurnFit = (evidence.retrievalContext ?? 'primary') === 'primary' ? 0.05 : 0;
+  const retrievalContext = evidence.retrievalContext ?? 'primary';
+  const contextualFollowUpFit = retrievalContext === 'contextual'
+    && input.understanding?.contextDependent === true
+    && Boolean(String(input.pendingQuestion ?? '').trim()) ? 0.08 : 0;
+  const latestTurnFit = retrievalContext === 'primary' ? 0.05 : contextualFollowUpFit;
   return semantic * 0.65 + lexical * 0.1 + Math.min(retrieval, 1) * 0.2
     + multiChannel + contextFit + latestTurnFit;
 }
@@ -555,6 +559,13 @@ export function strongCallerMessageMatch(evidence, query, input = {}) {
     ...(Array.isArray(input.understanding?.selectedEntities)
       ? input.understanding.selectedEntities : []),
   ];
+  const retrievalContext = evidence.retrievalContext ?? 'primary';
+  const contextualLatestTurn = retrievalContext === 'contextual'
+    && input.understanding?.contextDependent === true
+    && Boolean(String(input.pendingQuestion ?? '').trim());
+  // Specific entity turns must be answered from their hydrated records. A
+  // generic caller-facing message cannot replace or follow that answer.
+  if (selectedEntities.length > 0 && input.understanding?.contextDependent !== true) return false;
   if (context === 'no_selected_entity'
     && (input.selectedCatalogItemKey || selectedEntities.length > 0)) return false;
   if (context === 'pending_question' && !String(input.pendingQuestion ?? '').trim()) return false;
@@ -565,7 +576,7 @@ export function strongCallerMessageMatch(evidence, query, input = {}) {
   const semanticRank = Number(evidence.semanticRank ?? Number.POSITIVE_INFINITY);
   const channels = new Set(evidence.channels ?? []);
   const strongSemanticFloor = Math.min(0.98, Math.max(0.82, env.RAG_RUNTIME_MIN_SCORE + 0.08));
-  return (evidence.retrievalContext ?? 'primary') === 'primary'
+  return (retrievalContext === 'primary' || contextualLatestTurn)
     && channels.has('semantic')
     && semanticScore >= strongSemanticFloor
     && semanticRank <= 2;
@@ -579,8 +590,11 @@ export function selectStrongCallerMessage(evidence = [], query = '', input = {})
   const first = candidates[0];
   if (!first) return null;
   const runnerUp = candidates[1];
-  if (runnerUp && messageSelectionScore(first, query, input)
-    - messageSelectionScore(runnerUp, query, input) < 0.04) {
+  const scoreGap = runnerUp ? messageSelectionScore(first, query, input)
+    - messageSelectionScore(runnerUp, query, input) : Number.POSITIVE_INFINITY;
+  const semanticGap = runnerUp ? Number(first.semanticScore ?? 0)
+    - Number(runnerUp.semanticScore ?? 0) : Number.POSITIVE_INFINITY;
+  if (runnerUp && scoreGap < 0.04 && semanticGap < 0.025) {
     return null;
   }
   return first;
@@ -686,6 +700,106 @@ export function authoritativeEvidenceFromRow(row) {
   };
 }
 
+function currentExplicitEntities(input = {}) {
+  const understanding = input.understanding ?? {};
+  const values = [
+    ...(Array.isArray(understanding.explicitEntities) ? understanding.explicitEntities : []),
+    ...(Array.isArray(understanding.selectedEntities) ? understanding.selectedEntities : [])
+      .flatMap((entity) => [entity?.name, entity?.key, entity?.category]),
+  ];
+  return [...new Set(values.map(normalize).filter(Boolean))].slice(0, 12);
+}
+
+function catalogIdentityText(evidence) {
+  const authority = evidence?.authoritativeData ?? {};
+  return normalize([
+    authority.itemKey, authority.name,
+    ...(Array.isArray(authority.aliases) ? authority.aliases : []),
+    authority.category, authority.categoryKey,
+    ...(Array.isArray(authority.categoryAliases) ? authority.categoryAliases : []),
+    authority.parentCategoryKey, authority.catalogName,
+  ].filter(Boolean).join(' '));
+}
+
+function entityIdentityMatch(evidence, explicitEntities) {
+  const identity = catalogIdentityText(evidence);
+  if (!identity) return { matched: false, score: 0, exact: false };
+  let best = 0;
+  let exact = false;
+  const identityTokens = new Set(tokens(identity));
+  for (const entity of explicitEntities) {
+    if (identity.includes(entity) || entity.includes(identity)) {
+      exact = true;
+      best = Math.max(best, 1);
+      continue;
+    }
+    const entityTokens = tokens(entity);
+    if (!entityTokens.length) continue;
+    const coverage = entityTokens.filter((token) => identityTokens.has(token)).length
+      / entityTokens.length;
+    best = Math.max(best, coverage);
+  }
+  return { matched: exact || best >= 0.8, score: best, exact };
+}
+
+function supportingEvidenceMatchesEntity(evidence, explicitEntities) {
+  if (!['FAQ', 'KNOWLEDGE_CHUNK'].includes(evidence.recordType)) return false;
+  const supportText = normalize(`${evidence.content ?? ''} ${JSON.stringify(evidence.authoritativeData ?? {})}`);
+  if (!supportText) return false;
+  const supportTokens = new Set(tokens(supportText));
+  return explicitEntities.some((entity) => {
+    if (supportText.includes(entity)) return true;
+    const entityTokens = tokens(entity);
+    return entityTokens.length > 0
+      && entityTokens.filter((token) => supportTokens.has(token)).length / entityTokens.length >= 0.8;
+  });
+}
+
+// Entity focus happens only after SQL hydration. The selected rows therefore
+// remain complete authoritative records and cannot be replaced by vector
+// snippets. This is generic across catalogs and contains no tenant vocabulary.
+export function focusHydratedEvidenceByMeaning(evidence = [], input = {}, maximum = 5) {
+  const limit = Math.max(1, Math.min(Number(maximum) || 5, 5));
+  const explicitEntities = currentExplicitEntities(input);
+  if (!explicitEntities.length) {
+    return evidence.slice(0, limit).map((item, index) => ({ ...item, rank: index + 1 }));
+  }
+  const catalogs = evidence.filter((item) => item.recordType === 'CATALOG_ITEM')
+    .map((item) => ({ item, identity: entityIdentityMatch(item, explicitEntities) }));
+  let focusedCatalogs = catalogs.filter((entry) => entry.identity.matched);
+  if (!focusedCatalogs.length) {
+    const semanticFloor = Math.max(0, env.RAG_RUNTIME_MIN_SCORE);
+    focusedCatalogs = catalogs.filter((entry) => (
+      (entry.item.retrievalContext ?? 'primary') === 'primary'
+      && Number(entry.item.semanticScore ?? 0) >= semanticFloor
+    )).slice(0, 2);
+  }
+  if (!focusedCatalogs.length) {
+    return evidence.slice(0, limit).map((item, index) => ({ ...item, rank: index + 1 }));
+  }
+  const focusedIds = new Set(focusedCatalogs.map((entry) => entry.item.id));
+  const selected = [
+    ...focusedCatalogs.sort((left, right) => (
+      Number(right.identity.exact) - Number(left.identity.exact)
+      || right.identity.score - left.identity.score
+      || Number(right.item.retrievalScore ?? right.item.score ?? 0)
+        - Number(left.item.retrievalScore ?? left.item.score ?? 0)
+    )).map((entry) => ({
+      ...entry.item,
+      entityFocusScore: entry.identity.score,
+      entityFocusExact: entry.identity.exact,
+    })),
+    ...evidence.filter((item) => !focusedIds.has(item.id) && (
+      (item.recordType === 'CONVERSATION_NODE' && item.callerFacing !== true)
+      || (item.recordType === 'WORKFLOW_RULE' && item.activationAllowed === true)
+      || supportingEvidenceMatchesEntity(item, explicitEntities)
+    )),
+  ];
+  return selected.slice(0, limit).map((item, index) => ({
+    ...item, rank: index + 1, entityFocusApplied: true,
+  }));
+}
+
 export async function searchHybridPublishedKnowledge(auth, input, dependencies = {}) {
   const startedAt = performance.now();
   const runtime = { ...defaultDependencies, ...dependencies };
@@ -708,7 +822,14 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
     cancelled: Boolean(input.abortSignal?.aborted), durationMs: performance.now() - startedAt,
   };
   const revisions = scope.map((item) => `${item.id}:${item.publicationRevision}`).sort().join('|');
-  const cacheKey = `zea:rag:hybrid:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}`)}`;
+  const meaningCacheScope = JSON.stringify({
+    requestType: safeInput.understanding?.requestType ?? null,
+    explicitEntities: currentExplicitEntities(safeInput),
+    requestedFacts: safeInput.requestedFacts ?? [],
+    contextDependent: safeInput.contextualFollowUp === true,
+    topicChanged: safeInput.understanding?.topicChanged === true,
+  });
+  const cacheKey = `zea:rag:hybrid:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${meaningCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();
@@ -773,9 +894,14 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       return { ...item, activationAllowed: activation.allowed, activation };
     });
   const evidence = hydratedEvidence.map((item, index) => ({ ...item, rank: index + 1 }));
-  const permittedEvidence = evidence.filter((item) => (
+  const workflowPermittedEvidence = evidence.filter((item) => (
     item.recordType !== 'WORKFLOW_RULE' || item.activationAllowed === true
   ));
+  const permittedEvidence = focusHydratedEvidenceByMeaning(
+    workflowPermittedEvidence, safeInput, safeInput.topK ?? 5,
+  );
+  const explicitEntityCount = currentExplicitEntities(safeInput).length;
+  const entityFocusApplied = permittedEvidence.some((item) => item.entityFocusApplied === true);
   const evidenceConflict = detectEvidenceConflict(permittedEvidence);
   const sources = permittedEvidence.filter((item) => !(
     (item.recordType === 'WORKFLOW_RULE' || item.recordType === 'CONVERSATION_NODE')
@@ -836,6 +962,9 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       workflowCandidatesRejected: evidence.filter((item) => (
         item.recordType === 'WORKFLOW_RULE' && item.activationAllowed !== true
       )).length,
+      explicitEntityCount,
+      entityFocusApplied,
+      entityFocusRemoved: Math.max(0, workflowPermittedEvidence.length - permittedEvidence.length),
       vectorBm25Ms, rerankMs, hydrationMs,
       semanticTimedOut: runtime.ragEnabled
         && primaryBranch.semantic.length + contextualBranch.semantic.length === 0

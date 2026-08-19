@@ -167,6 +167,30 @@ function completedQuestionIdentities(fieldSchemas, collectedInformation) {
   )).map((field) => identity(field.question)).filter(Boolean));
 }
 
+function configuredFieldQuestionMatch(value, fieldSchemas = []) {
+  const candidate = identity(value);
+  if (!candidate) return null;
+  return (fieldSchemas ?? []).filter((field) => Boolean(field.requiredAction)).find((field) => {
+    const question = identity(field.question);
+    if (!question) return false;
+    if (candidate.includes(question) || question.includes(candidate)) return true;
+    const candidateTokens = new Set(candidate.split(' ').filter(Boolean));
+    const questionTokens = question.split(' ').filter(Boolean);
+    return questionTokens.length > 1
+      && questionTokens.filter((part) => candidateTokens.has(part)).length / questionTokens.length >= 0.75;
+  }) ?? null;
+}
+
+export function validateConfiguredFieldCollectionSpeech(value, {
+  fieldSchemas = [], activeToolAuthorized = false,
+} = {}) {
+  const field = configuredFieldQuestionMatch(value, fieldSchemas);
+  if (!field || activeToolAuthorized) return Object.freeze({ valid: true });
+  return Object.freeze({
+    valid: false, reason: 'premature_configured_field_collection', field: field.key,
+  });
+}
+
 export function resolveNextConfiguredQuestion({
   decision = {}, beforeState = {}, afterState = {}, fieldSchemas = [], tools = [],
   actionEvidence = [], guidanceEvidence = [], confirmationConfiguration = null,
@@ -203,7 +227,13 @@ export function resolveNextConfiguredQuestion({
   if (decision.pendingQuestionRelevant !== false && savedPending
     && !completed.has(identity(savedPending.question))) return savedPending;
 
-  return guidanceQuestion(guidanceEvidence, completed);
+  const guidance = guidanceQuestion(guidanceEvidence, completed);
+  if (!guidance) return null;
+  const guidanceCollection = validateConfiguredFieldCollectionSpeech(guidance.question, {
+    fieldSchemas,
+    activeToolAuthorized: Boolean(authorizedTool(activeRequest, tools, actionEvidence)),
+  });
+  return guidanceCollection.valid ? guidance : null;
 }
 
 function sentenceParts(value) {

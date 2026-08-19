@@ -163,6 +163,8 @@ const envSchema = z.object({
   LLM_CIRCUIT_FAILURE_THRESHOLD: z.coerce.number().int().min(1).max(20).default(5),
   LLM_CIRCUIT_RESET_TIMEOUT_MS: z.coerce.number().int().min(1000).max(300000).default(30000),
   LLM_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(16).max(8192).default(300),
+  VOICE_MEANING_RESOLUTION_TIMEOUT_MS: z.coerce.number().int().min(250).max(5000).default(1200),
+  VOICE_MEANING_RESOLUTION_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(64).max(512).default(220),
   VOICE_GROUNDED_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(128).max(4096).default(800),
   // Production requires the single generic grounded decision engine. The
   // server refuses to start when this flag is disabled.

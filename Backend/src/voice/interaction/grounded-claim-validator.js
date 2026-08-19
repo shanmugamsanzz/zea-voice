@@ -74,6 +74,14 @@ const actionObjectPattern = /\b(?:action|appointment|booking|callback|case|messa
 const internalGuidancePattern = /(?:grounded[_ ]response|evidenceids|stateupdate|toolrequest|runtime context|system prompt|response[_ ]mode|action[_ ]config|\bcaller\s+(?:asked|requested|said|\u0B95\u0BC7\u0B9F\u0BCD\u0B9F)|\b(?:retrieve|rank|hydrate|validate)\s+(?:the\s+)?(?:approved|evidence|record)|\b(?:must|should)\s+(?:ask|answer|retrieve|use|resume|execute|transfer))/iu;
 const medicalClaimPattern = /(?:\b(?:diagnos(?:e|ed|is)|cure[sd]?|treat(?:s|ed|ment)?|prescrib(?:e|ed)|detect(?:s|ed|ion)?|prevent(?:s|ed|ion)?|rule[sd]?\s+out|medically\s+suitable|guarantee[sd]?)\b|\b(?:noi|disease|cancer|symptom|medicine|tablet)\b[^.!?]{0,80}\b(?:confirm|detect|cure|treat|prevent|suitable)\b|\b(?:diagnose|cure|treat|detect|prevent|suitable)\s+(?:pann|aag|irukk)|\u0B95\u0BC1\u0BA3\u0BAE\u0BBE\u0B95\u0BCD\u0B95|\u0B95\u0BA3\u0BCD\u0B9F\u0BC1\u0BAA\u0BBF\u0B9F\u0BBF\u0B95\u0BCD\u0B95|\u0BA8\u0BCB\u0BAF\u0BC8\s*\u0B89\u0BB1\u0BC1\u0BA4\u0BBF)/iu;
 const medicalAssertionPattern = /(?:\b(?:diagnos(?:e|ed|es|is)|cure[sd]?|treat(?:s|ed|ment)?|prescrib(?:e|ed|es)|detect(?:s|ed|ion)?|prevent(?:s|ed|ion)?|rule[sd]?\s+out|medically\s+suitable|guarantee[sd]?)\b|\b(?:diagnose|cure|treat|detect|prevent|suitable)\s+(?:pann|aag|irukk)|\u0B95\u0BC1\u0BA3\u0BAE\u0BBE\u0B95\u0BCD\u0B95|\u0B95\u0BA3\u0BCD\u0B9F\u0BC1\u0BAA\u0BBF\u0B9F\u0BBF\u0B95\u0BCD\u0B95|\u0BA8\u0BCB\u0BAF\u0BC8\s*\u0B89\u0BB1\u0BC1\u0BA4\u0BBF)/iu;
+const unsupportedMedicalAdvicePattern = /\b(?:start|stop|change|take|avoid|increase|decrease|recommend|prescribe)\b[^.!?]{0,80}\b(?:medicine|medication|tablet|dose|dosage|drug|treatment)\b/iu;
+
+function unsupportedStructuredIdentifiers(claim, evidenceText) {
+  const evidence = new Set((String(evidenceText).match(/\b[A-Z][A-Z0-9-]{1,}\b/gu) ?? [])
+    .map((entry) => entry.toLocaleUpperCase()));
+  return [...new Set((String(claim).match(/\b[A-Z][A-Z0-9-]{1,}\b/gu) ?? [])
+    .map((entry) => entry.toLocaleUpperCase()))].filter((entry) => !evidence.has(entry));
+}
 
 function hasNegation(value) {
   return !/\bnot\s+only\b/iu.test(value) && negationPattern.test(value);
@@ -109,6 +117,12 @@ export function validateGroundedClaim(sentence, sources = [], options = {}) {
   if ([...numbers(claim)].some((number) => !evidenceNumbers.has(number))) {
     return Object.freeze({ valid: false, reason: 'unsupported_numeric_fact' });
   }
+  const unsupportedIdentifiers = unsupportedStructuredIdentifiers(claim, evidenceText);
+  if (unsupportedIdentifiers.length) {
+    return Object.freeze({
+      valid: false, reason: 'unsupported_structured_fact', identifiers: unsupportedIdentifiers,
+    });
+  }
   const evidenceSentences = sources.flatMap((source) => sentences(source?.content));
   const ranked = evidenceSentences.map((candidate) => ({ candidate, score: overlap(claim, candidate) }))
     .sort((left, right) => right.score - left.score);
@@ -136,6 +150,10 @@ export function validateGroundedClaim(sentence, sources = [], options = {}) {
   if ((medicalAssertionPattern.test(claim) && !medicalAssertionPattern.test(evidenceText))
     || (medicalClaimPattern.test(claim) && best.score < 0.45)) {
     return Object.freeze({ valid: false, reason: 'unsupported_medical_claim' });
+  }
+  if (unsupportedMedicalAdvicePattern.test(claim)
+    && !unsupportedMedicalAdvicePattern.test(evidenceText)) {
+    return Object.freeze({ valid: false, reason: 'unsupported_medical_advice' });
   }
   return Object.freeze({ valid: true, bestEvidence: best.candidate, overlap: best.score });
 }
