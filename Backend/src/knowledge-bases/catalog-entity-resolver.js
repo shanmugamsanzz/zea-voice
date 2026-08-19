@@ -277,7 +277,13 @@ export function rankCatalogEntities(items, query) {
       const exactLabel = ['name', 'item_key', 'alias'].includes(label.kind)
         && normalizedQuery === normalizeCatalogEntityText(label.value);
       if (exactLabel || score > best.score) {
-        best = { score, method: similarity.method, matchedText: label.value, matchedKind: label.kind, exactLabel };
+        best = {
+          ...similarity,
+          score,
+          matchedText: label.value,
+          matchedKind: label.kind,
+          exactLabel,
+        };
       }
     }
     return { entityType: 'item', item, items: [item], ...best };
@@ -341,9 +347,17 @@ export function classifyCatalogEntityLocally(items, query, {
       === normalizeCatalogEntityText(best.categoryKey ?? best.category)
     && best.score >= runnerUp.score,
   );
+  const runnerIsWeakPartial = Number(best.labelCoverage ?? 0) >= 0.8
+    && Number(runnerUp?.labelCoverage ?? 0) > 0
+    && Number(runnerUp.labelCoverage) <= Number(best.labelCoverage) - 0.4;
   const ambiguous = Boolean(runnerUp && best.score - runnerUp.score < ambiguityMargin
-    && !runnerIsParentOfBest && !runnerIsChildOfBest);
-  const status = (best.exactLabel || (best.score >= highConfidence && !ambiguous)) ? 'match' : 'uncertain';
+    && !runnerIsParentOfBest && !runnerIsChildOfBest && !runnerIsWeakPartial);
+  const hierarchySupportedCategory = best.entityType === 'category'
+    && runnerIsChildOfBest
+    && best.score >= Math.max(clarificationConfidence, highConfidence - ambiguityMargin);
+  const status = (best.exactLabel
+    || (!ambiguous && (best.score >= highConfidence || hierarchySupportedCategory)))
+    ? 'match' : 'uncertain';
   return Object.freeze({
     status,
     entityType: best.entityType,

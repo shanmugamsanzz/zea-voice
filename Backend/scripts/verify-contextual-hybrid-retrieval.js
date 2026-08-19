@@ -245,6 +245,40 @@ assert.equal(phoneticCategory.status, 'match');
 assert.equal(phoneticCategory.entityType, 'category');
 assert.equal(phoneticCategory.categoryKey, 'prime-care');
 
+const hierarchyBackedCategory = classifyCatalogEntityLocally([
+  {
+    id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', knowledge_base_id: knowledgeBaseId,
+    name: 'Renal Health Checkup', item_key: 'renal-health-checkup', aliases: [],
+    category: 'Organ-Specific Health Check-ups',
+    category_key: 'organ-specific-health-checkups', category_aliases: [],
+  },
+  {
+    id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', knowledge_base_id: knowledgeBaseId,
+    name: 'Lungs Health Checkup', item_key: 'lungs-health-checkup', aliases: [],
+    category: 'Organ-Specific Health Check-ups',
+    category_key: 'organ-specific-health-checkups', category_aliases: [],
+  },
+], 'Specific health area checkup');
+assert.equal(hierarchyBackedCategory.status, 'match');
+assert.equal(hierarchyBackedCategory.entityType, 'category');
+assert.equal(hierarchyBackedCategory.categoryKey, 'organ-specific-health-checkups');
+
+const fullAliasBeatsPartialLabel = classifyCatalogEntityLocally([
+  {
+    id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', knowledge_base_id: knowledgeBaseId,
+    name: 'Cloud', item_key: 'cloud-storage', aliases: ['cloud'],
+    category: 'Storage Plans', category_key: 'storage-plans', category_aliases: [],
+  },
+  {
+    id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', knowledge_base_id: knowledgeBaseId,
+    name: 'Premium Care Annual', item_key: 'premium-care-annual', aliases: [],
+    category: 'Support Plans', category_key: 'support-plans', category_aliases: [],
+  },
+], 'Clowd care');
+assert.equal(fullAliasBeatsPartialLabel.status, 'match');
+assert.equal(fullAliasBeatsPartialLabel.entityType, 'item');
+assert.equal(fullAliasBeatsPartialLabel.item.item_key, 'cloud-storage');
+
 const samples = [];
 for (let index = 0; index < 100; index += 1) {
   const startedAt = performance.now();
