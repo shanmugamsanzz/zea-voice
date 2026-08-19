@@ -580,6 +580,13 @@ export function contextualRetrievalPolicy(input, query, primaryCandidates = []) 
   });
 }
 
+export function catalogIdentityDiscoveryPolicy(query, pendingContextPreferred) {
+  // A pending question must not suppress entity discovery for a new explicit
+  // multi-token request. Single-token compact continuations remain contextual
+  // unless their primary retrieval already establishes an entity.
+  return !pendingContextPreferred || tokens(query).length >= 2;
+}
+
 export function prioritizeCandidates(primary, contextual, useContext, preferContext, limit) {
   const unique = new Map();
   // The finalized latest utterance is always the primary query. Context is
@@ -1245,7 +1252,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
     })),
   });
-  const cacheKey = `zea:rag:hybrid:v11:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:v12:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();
@@ -1267,7 +1274,9 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   // resolves their canonical identity. Run that resolution for every genuine
   // latest-turn request, even when Qdrant already returned a strong Catalog
   // candidate, so all discovery channels enforce the same entity boundary.
-  const catalogIdentityDiscoveryNeeded = !pendingContextPreferred;
+  const catalogIdentityDiscoveryNeeded = catalogIdentityDiscoveryPolicy(
+    query, pendingContextPreferred,
+  );
   let catalogIdentityResolution = null;
   let identityDiscoveryCandidates = [];
   if (catalogIdentityDiscoveryNeeded) {

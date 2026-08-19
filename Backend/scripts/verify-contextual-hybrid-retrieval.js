@@ -7,6 +7,7 @@ process.env.RAG_ENABLED = 'false';
 
 const { routeKnowledgeQuery } = await import('../src/knowledge-bases/knowledge-runtime.service.js');
 const {
+  catalogIdentityDiscoveryPolicy,
   contextualRetrievalPolicy,
   callerMessageEligibleForDecision,
   isolatedRetrievalQueries,
@@ -79,6 +80,8 @@ const unresolvedFollowUp = contextualRetrievalPolicy({
 }, 'yes', []);
 assert.equal(unresolvedFollowUp.useContext, true);
 assert.equal(unresolvedFollowUp.preferContext, true);
+assert.equal(catalogIdentityDiscoveryPolicy('yes', true), false);
+assert.equal(catalogIdentityDiscoveryPolicy('New Option', true), true);
 
 const strongExplicitItem = contextualRetrievalPolicy({
   pendingQuestion: 'Would you like another option?',
@@ -286,6 +289,26 @@ const hierarchyBackedCategory = classifyCatalogEntityLocally([
 assert.equal(hierarchyBackedCategory.status, 'match');
 assert.equal(hierarchyBackedCategory.entityType, 'category');
 assert.equal(hierarchyBackedCategory.categoryKey, 'organ-specific-health-checkups');
+
+const explicitChildAfterCategory = classifyCatalogEntityLocally([
+  {
+    id: 'b1111111-1111-4111-8111-111111111111', knowledge_base_id: knowledgeBaseId,
+    name: 'Lungs Health Checkup', item_key: 'lungs-health-checkup',
+    aliases: ['lungs', 'lung package', 'lung health checkup'],
+    category: 'Organ-Specific Health Check-ups',
+    category_key: 'organ-specific-health-checkups', category_aliases: [],
+  },
+  {
+    id: 'b2222222-2222-4222-8222-222222222222', knowledge_base_id: knowledgeBaseId,
+    name: 'Renal Health Checkup', item_key: 'renal-health-checkup',
+    aliases: ['renal', 'kidney package'],
+    category: 'Organ-Specific Health Check-ups',
+    category_key: 'organ-specific-health-checkups', category_aliases: [],
+  },
+], 'Lung care பத்தி சொல்றீங்களா?');
+assert.equal(explicitChildAfterCategory.status, 'match');
+assert.equal(explicitChildAfterCategory.entityType, 'item');
+assert.equal(explicitChildAfterCategory.item.item_key, 'lungs-health-checkup');
 
 // A complete production Catalog contains unrelated items whose partial token
 // matches can sit inside the ambiguity margin. A leading multi-token category
