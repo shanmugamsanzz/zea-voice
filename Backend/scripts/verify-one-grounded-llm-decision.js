@@ -119,7 +119,7 @@ const mixedExactEnvelope = Object.freeze({
 });
 const catalogAnswerWithUnrelatedExactAlternative = validateGroundedLlmDecision(decisionJson({
   decision: 'answer', answer: 'Current Item includes complete approved attributes.',
-  evidenceIds: ['source_2'], responseId: null,
+  evidenceIds: ['source_1', 'source_2'], responseId: null,
   stateUpdate: { requestType: 'item_details' }, pendingQuestion: null, toolRequest: null,
 }), mixedExactEnvelope, runtime);
 assert.equal(catalogAnswerWithUnrelatedExactAlternative.valid, true);

@@ -495,6 +495,7 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
   // the latest-turn retriever selects it, the model may cite it but cannot
   // paraphrase it, replace it with a partial list, or turn it into a question.
   const exactSources = citedSources.filter((source) => source.exactCallerResponse === true);
+  const nonExactSources = citedSources.filter((source) => source.exactCallerResponse !== true);
   const requiredExactSourceIds = new Set(envelope.exactCallerResponses ?? []);
   const requestedResponseType = text(parsed.stateUpdate?.requestType, 80)
     .toLocaleLowerCase().replace(/[\s./-]+/gu, '_');
@@ -502,8 +503,13 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
   // mandate. Require responseId when the model cites one or identifies an
   // overview/options request; a specific item/details answer may legitimately
   // cite only Catalog evidence even while unrelated messages remain available.
-  const exactResponseRequired = exactSources.length > 0
-    || exactResponseRequestTypes.has(requestedResponseType);
+  const exactResponseRequired = Boolean(responseId)
+    || exactResponseRequestTypes.has(requestedResponseType)
+    // When exact speech is the only cited support, omitting responseId would
+    // permit an unsafe paraphrase. If authoritative non-exact evidence also
+    // supports a non-overview request, an incidental message citation must not
+    // force that unrelated message to replace the requested factual answer.
+    || (exactSources.length > 0 && nonExactSources.length === 0);
   if (decision === 'answer' && exactResponseRequired && requiredExactSourceIds.size > 0
     && !exactSources.some((source) => requiredExactSourceIds.has(source.id))) {
     return Object.freeze({ valid: false, reason: 'exact_published_response_required' });

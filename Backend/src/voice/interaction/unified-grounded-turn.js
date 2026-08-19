@@ -156,9 +156,10 @@ export function applyUnifiedGroundedTurn({
       }),
     })
     : decision;
-  const exactPublishedResponse = decisionWithEvidenceState.evidenceIds.some((id) => (
-    (hydratedEnvelope.exactCallerResponses ?? []).includes(id)
-  ));
+  // An exact response is selected only through responseId. Merely citing an
+  // exact-message source alongside Catalog evidence does not make that message
+  // the turn answer or complete the pending conversation question.
+  const exactPublishedResponse = Boolean(decisionWithEvidenceState.responseId);
   const explicitLatestTopic = decisionWithEvidenceState.stateUpdate.contextDependent !== true
     && !beforeState.activeToolRequest
     && decisionWithEvidenceState.stateUpdate.knownEntities.length > 0;
