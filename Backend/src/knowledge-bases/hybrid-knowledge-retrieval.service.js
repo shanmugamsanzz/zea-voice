@@ -910,6 +910,14 @@ function conversationVariable(evidence, requestedKey) {
   return variables.find((variable) => normalize(variable?.key) === expected)?.value ?? null;
 }
 
+function publishedExampleMatch(evidence, query) {
+  const normalizedQuery = normalize(query);
+  if (!normalizedQuery) return false;
+  const configured = conversationVariable(evidence, 'examples');
+  const examples = Array.isArray(configured) ? configured : [configured];
+  return examples.some((example) => normalize(example) === normalizedQuery);
+}
+
 export function strongCallerMessageMatch(evidence, query, input = {}) {
   if (evidence?.recordType !== 'CONVERSATION_NODE' || evidence?.callerFacing !== true
     || normalize(evidence.authoritativeData?.nodeType) !== 'message') return false;
@@ -933,8 +941,8 @@ export function strongCallerMessageMatch(evidence, query, input = {}) {
     && (input.selectedCatalogItemKey || selectedEntities.length > 0)) return false;
   if (context === 'pending_question' && !String(input.pendingQuestion ?? '').trim()) return false;
   if (!['any', 'no_selected_entity', 'pending_question'].includes(context)) return false;
-  // EXAMPLES and SITUATION improve the indexed representation, but runtime
-  // activation never compares the caller's words with those examples.
+  // Published examples may deterministically select an exact response. The
+  // vocabulary remains tenant-owned document data rather than runtime code.
   const semanticScore = Number(evidence.semanticScore ?? 0);
   const lexicalScore = Number(evidence.lexicalScore ?? 0);
   const tokenCoverage = Number(evidence.tokenCoverage ?? 0);
@@ -942,19 +950,25 @@ export function strongCallerMessageMatch(evidence, query, input = {}) {
   const strongSemanticFloor = Math.min(0.98, Math.max(0.82, env.RAG_RUNTIME_MIN_SCORE + 0.08));
   const strongLexicalMessage = channels.has('bm25')
     && lexicalScore >= 4 && tokenCoverage >= 0.4;
+  const exactPublishedExample = publishedExampleMatch(evidence, query);
   return (retrievalContext === 'primary' || contextualLatestTurn)
-    && ((channels.has('semantic') && semanticScore >= strongSemanticFloor)
+    && (exactPublishedExample
+      || (channels.has('semantic') && semanticScore >= strongSemanticFloor)
       || strongLexicalMessage);
 }
 
 export function selectStrongCallerMessage(evidence = [], query = '', input = {}) {
   const candidates = evidence.filter((item) => strongCallerMessageMatch(item, query, input))
-    .sort((left, right) => messageSelectionScore(right, query, input)
+    .sort((left, right) => Number(publishedExampleMatch(right, query))
+      - Number(publishedExampleMatch(left, query))
+      || messageSelectionScore(right, query, input)
       - messageSelectionScore(left, query, input)
       || Number(left.rank ?? 0) - Number(right.rank ?? 0));
   const first = candidates[0];
   if (!first) return null;
   const runnerUp = candidates[1];
+  const exactPublishedExample = publishedExampleMatch(first, query)
+    && !publishedExampleMatch(runnerUp, query);
   const scoreGap = runnerUp ? messageSelectionScore(first, query, input)
     - messageSelectionScore(runnerUp, query, input) : Number.POSITIVE_INFINITY;
   const semanticGap = runnerUp ? Number(first.semanticScore ?? 0)
@@ -963,7 +977,7 @@ export function selectStrongCallerMessage(evidence = [], query = '', input = {})
     && first.retrievalContext === 'contextual'
     && (scoreGap > 0 || semanticGap > 0);
   if (runnerUp && scoreGap < 0.04 && semanticGap < 0.025
-    && !contextualPendingResolution) {
+    && !contextualPendingResolution && !exactPublishedExample) {
     return null;
   }
   return first;
@@ -1231,7 +1245,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
     })),
   });
-  const cacheKey = `zea:rag:hybrid:v10:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:v11:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();

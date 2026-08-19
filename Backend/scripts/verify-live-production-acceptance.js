@@ -501,7 +501,7 @@ try {
           retrievalTrace,
           routing: responseRouting, expectation,
           language: replayLanguage,
-          positiveSemanticRecordIds: positiveSemanticEvidence.map(sourceRecordId),
+          positiveSemanticRecordIds: positiveSemanticCandidates.map(sourceRecordId),
           toolSafe: true, ttsText: finalText, latencyMs: { retrievalMs, llmMs, totalMs },
         });
       }

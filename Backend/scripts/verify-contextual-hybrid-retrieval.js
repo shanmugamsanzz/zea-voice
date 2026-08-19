@@ -171,6 +171,30 @@ const contextualWinner = selectStrongCallerMessage([
 ], 'Short reply', { pendingQuestion: 'A pending configured question?' });
 assert.equal(contextualWinner?.id, 'contextual-winner');
 
+const exactConfiguredExample = selectStrongCallerMessage([
+  {
+    ...unqualifiedCallerMessage, id: 'semantic-neighbour', semanticScore: 0.97,
+    authoritativeData: {
+      ...unqualifiedCallerMessage.authoritativeData,
+      variables: [
+        { key: 'situation', value: 'The caller makes a nearby request.' },
+        { key: 'examples', value: ['Are you there?'] },
+      ],
+    },
+  },
+  {
+    ...unqualifiedCallerMessage, id: 'configured-example', semanticScore: 0.84,
+    authoritativeData: {
+      ...unqualifiedCallerMessage.authoritativeData,
+      variables: [
+        { key: 'situation', value: 'The caller answers the pending configured question.' },
+        { key: 'examples', value: ['Yes, that is correct'] },
+      ],
+    },
+  },
+], 'Yes, that is correct', { pendingQuestion: 'Is this the correct account?' });
+assert.equal(exactConfiguredExample?.id, 'configured-example');
+
 const crowdedCandidates = prioritizeCandidates([
   ...Array.from({ length: 5 }, (_value, index) => ({
     recordType: 'FAQ', recordId: `00000000-0000-4000-8000-00000000000${index}`,
