@@ -559,11 +559,18 @@ export function prioritizeCandidates(primary, contextual, useContext, preferCont
     selected.push(candidate);
   };
   // Preserve globally strong results while reserving room for authoritative
-  // structured and conversational evidence. Several near-identical FAQ
-  // vectors must not crowd those record types out before PostgreSQL hydration.
-  ordered.slice(0, Math.max(1, maximum - 2)).forEach(add);
-  add(ordered.find((candidate) => candidate.recordType === 'CONVERSATION_NODE'));
-  add(ordered.find((candidate) => candidate.recordType === 'CATALOG_ITEM'));
+  // structured and conversational evidence. A contextual turn can require
+  // the LLM to distinguish two semantically close published messages using
+  // the pending question, so retaining only one message would decide too
+  // early and make the correct response impossible to select.
+  const conversationCandidates = ordered
+    .filter((candidate) => candidate.recordType === 'CONVERSATION_NODE')
+    .slice(0, useContext ? 2 : 1);
+  const catalogCandidate = ordered.find((candidate) => candidate.recordType === 'CATALOG_ITEM');
+  const reservedCount = conversationCandidates.length + (catalogCandidate ? 1 : 0);
+  ordered.slice(0, Math.max(1, maximum - reservedCount)).forEach(add);
+  conversationCandidates.forEach(add);
+  add(catalogCandidate);
   ordered.forEach(add);
   return selected.map((candidate, index) => ({ ...candidate, rank: index + 1 }));
 }

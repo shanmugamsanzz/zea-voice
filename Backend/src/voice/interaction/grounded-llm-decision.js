@@ -278,6 +278,7 @@ export function groundedDecisionContract(envelope, runtime = {}) {
       'Never request or collect a configured information field unless the caller explicitly requested the assigned action and the selected Workflow evidence authorizes that tool.',
       'Use only evidenceIds listed below for factual speech.',
       'Set responseId only when selecting one exact caller-facing published response; otherwise use null.',
+      'When multiple exact caller-facing responses are available, select by the meaning of the complete latest utterance together with the immediately pending question and each source situation/context. A short contextual answer resolves the pending question; do not reinterpret it as a presence check unless that is its complete meaning.',
       'For clarify, set clarification.reason and pendingQuestion. For answer or action, clarification must be null.',
       'For an ordinary answer with no memory change, return stateUpdate as an empty object.',
       'Resolve meaning generically in stateUpdate when useful: requestType, currentTopic, knownEntityKeys, requestedFacts, constraints, contextualReferences and contextDependent.',

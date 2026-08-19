@@ -117,6 +117,22 @@ const crowdedCandidates = prioritizeCandidates([
 assert.equal(crowdedCandidates.length, 5);
 assert.ok(crowdedCandidates.some((candidate) => candidate.recordType === 'CONVERSATION_NODE'));
 
+const contextualMessageCandidates = prioritizeCandidates([
+  ...Array.from({ length: 5 }, (_value, index) => ({
+    recordType: 'FAQ', recordId: `10000000-0000-4000-8000-00000000000${index}`,
+    knowledgeBaseId, score: 1 - index * 0.01,
+  })),
+  ...Array.from({ length: 2 }, (_value, index) => ({
+    recordType: 'CONVERSATION_NODE',
+    recordId: `20000000-0000-4000-8000-00000000000${index}`,
+    knowledgeBaseId, score: 0.8 - index * 0.01,
+  })),
+], [], true, true, 5);
+assert.equal(contextualMessageCandidates.length, 5);
+assert.equal(contextualMessageCandidates.filter((candidate) => (
+  candidate.recordType === 'CONVERSATION_NODE'
+)).length, 2);
+
 const semanticSearchOptions = [];
 await routeKnowledgeQuery(
   { tenantId },
