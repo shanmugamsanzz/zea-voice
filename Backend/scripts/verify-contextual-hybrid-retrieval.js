@@ -10,6 +10,7 @@ const {
   contextualRetrievalPolicy,
   callerMessageEligibleForDecision,
   isolatedRetrievalQueries,
+  mergeCandidateSignals,
   prioritizeCandidates,
   selectStrongCallerMessage,
   strongCallerMessageMatch,
@@ -217,6 +218,20 @@ await routeKnowledgeQuery(
 assert.equal(semanticSearchOptions.length, 1);
 assert.equal(semanticSearchOptions[0].limit, QDRANT_SEARCH_LIMIT_MAX);
 assert.equal(semanticSearchOptions[0].limit, 30);
+
+const mergedIdentitySignals = mergeCandidateSignals({
+  recordType: 'CATALOG_ITEM', recordId: 'shared-record',
+  score: 0.9, semanticScore: 0, lexicalScore: 0, tokenCoverage: 0,
+  channels: ['catalog_identity'], retrievalContext: 'primary',
+}, {
+  recordType: 'CATALOG_ITEM', recordId: 'shared-record',
+  score: 0.82, semanticScore: 0.82, lexicalScore: 3, tokenCoverage: 0.5,
+  channels: ['semantic', 'bm25'], semanticRank: 2, bm25Rank: 1,
+});
+assert.equal(mergedIdentitySignals.semanticScore, 0.82);
+assert.equal(mergedIdentitySignals.lexicalScore, 3);
+assert.equal(mergedIdentitySignals.tokenCoverage, 0.5);
+assert.deepEqual(mergedIdentitySignals.channels, ['catalog_identity', 'semantic', 'bm25']);
 
 // A compact category and a longer child can share a short phonetic code. The
 // category must remain selected so authoritative hydration can load its children.

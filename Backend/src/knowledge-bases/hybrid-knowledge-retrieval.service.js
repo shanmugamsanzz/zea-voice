@@ -631,6 +631,28 @@ export function prioritizeCandidates(primary, contextual, useContext, preferCont
   return selected.map((candidate, index) => ({ ...candidate, rank: index + 1 }));
 }
 
+export function mergeCandidateSignals(preferred, additional) {
+  if (!preferred) return additional;
+  if (!additional) return preferred;
+  return {
+    ...additional,
+    ...preferred,
+    score: Math.max(Number(preferred.score ?? 0), Number(additional.score ?? 0)),
+    semanticScore: Math.max(
+      Number(preferred.semanticScore ?? 0), Number(additional.semanticScore ?? 0),
+    ),
+    lexicalScore: Math.max(
+      Number(preferred.lexicalScore ?? 0), Number(additional.lexicalScore ?? 0),
+    ),
+    tokenCoverage: Math.max(
+      Number(preferred.tokenCoverage ?? 0), Number(additional.tokenCoverage ?? 0),
+    ),
+    semanticRank: preferred.semanticRank ?? additional.semanticRank ?? null,
+    bm25Rank: preferred.bm25Rank ?? additional.bm25Rank ?? null,
+    channels: [...new Set([...(preferred.channels ?? []), ...(additional.channels ?? [])])],
+  };
+}
+
 function traceCandidate(candidate, rejectionReasons = []) {
   return Object.freeze({
     recordId: candidate.recordId ?? candidate.id ?? null,
@@ -1206,7 +1228,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
     })),
   });
-  const cacheKey = `zea:rag:hybrid:v5:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:v6:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();
@@ -1242,7 +1264,8 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       const uniquePrimary = new Map();
       for (const candidate of [...identityDiscoveryCandidates, ...strongPrimary]) {
         const key = candidateKey(candidate);
-        if (!uniquePrimary.has(key)) uniquePrimary.set(key, candidate);
+        const current = uniquePrimary.get(key);
+        uniquePrimary.set(key, current ? mergeCandidateSignals(current, candidate) : candidate);
       }
       strongPrimary = [...uniquePrimary.values()].slice(0, 8)
         .map((candidate, index) => ({ ...candidate, rank: index + 1 }));
