@@ -11,6 +11,9 @@ const clarificationReasons = new Set([
   'ambiguous_request', 'missing_evidence', 'conflicting_evidence',
   'missing_required_information',
 ]);
+const exactResponseRequestTypes = new Set([
+  'overview', 'options', 'available_options', 'list_options', 'category_overview',
+]);
 
 function requestType(value) {
   const normalized = text(value, 64).toLocaleLowerCase().replace(/[\s./-]+/gu, '_');
@@ -493,11 +496,20 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
   // paraphrase it, replace it with a partial list, or turn it into a question.
   const exactSources = citedSources.filter((source) => source.exactCallerResponse === true);
   const requiredExactSourceIds = new Set(envelope.exactCallerResponses ?? []);
-  if (decision === 'answer' && requiredExactSourceIds.size > 0
+  const requestedResponseType = text(parsed.stateUpdate?.requestType, 80)
+    .toLocaleLowerCase().replace(/[\s./-]+/gu, '_');
+  // Exact messages present in the evidence set are alternatives, not a global
+  // mandate. Require responseId when the model cites one or identifies an
+  // overview/options request; a specific item/details answer may legitimately
+  // cite only Catalog evidence even while unrelated messages remain available.
+  const exactResponseRequired = exactSources.length > 0
+    || exactResponseRequestTypes.has(requestedResponseType);
+  if (decision === 'answer' && exactResponseRequired && requiredExactSourceIds.size > 0
     && !exactSources.some((source) => requiredExactSourceIds.has(source.id))) {
     return Object.freeze({ valid: false, reason: 'exact_published_response_required' });
   }
-  if (decision === 'answer' && requiredExactSourceIds.size > 0 && !responseId) {
+  if (decision === 'answer' && exactResponseRequired && requiredExactSourceIds.size > 0
+    && !responseId) {
     return Object.freeze({ valid: false, reason: 'response_id_required' });
   }
   const evidenceText = citedSources.map((source) => {

@@ -105,6 +105,25 @@ const missingExactResponseId = validateGroundedLlmDecision(decisionJson({
 assert.equal(missingExactResponseId.valid, false);
 assert.equal(missingExactResponseId.reason, 'response_id_required');
 
+const mixedExactEnvelope = Object.freeze({
+  ...exactEnvelope,
+  sources: Object.freeze([
+    ...exactEnvelope.sources,
+    Object.freeze({
+      id: 'source_2', recordId: 'catalog-record', recordType: 'CATALOG_ITEM',
+      content: 'Current Item includes complete approved attributes.',
+      exactCallerResponse: false,
+      authoritativeData: { itemKey: 'current-item', name: 'Current Item' },
+    }),
+  ]),
+});
+const catalogAnswerWithUnrelatedExactAlternative = validateGroundedLlmDecision(decisionJson({
+  decision: 'answer', answer: 'Current Item includes complete approved attributes.',
+  evidenceIds: ['source_2'], responseId: null,
+  stateUpdate: { requestType: 'item_details' }, pendingQuestion: null, toolRequest: null,
+}), mixedExactEnvelope, runtime);
+assert.equal(catalogAnswerWithUnrelatedExactAlternative.valid, true);
+
 const genericMeaning = validateGroundedLlmDecision(decisionJson({
   decision: 'answer', answer: 'Premium service costs INR 3200.', evidenceIds: ['source_1'],
   stateUpdate: {
