@@ -8,6 +8,7 @@ process.env.RAG_ENABLED = 'false';
 const { routeKnowledgeQuery } = await import('../src/knowledge-bases/knowledge-runtime.service.js');
 const {
   contextualRetrievalPolicy,
+  callerMessageEligibleForDecision,
   isolatedRetrievalQueries,
   prioritizeCandidates,
   strongCallerMessageMatch,
@@ -126,6 +127,20 @@ assert.equal(strongCallerMessageMatch({
     ],
   },
 }, 'Short reply', { pendingQuestion: 'A pending configured question?' }), true);
+assert.equal(callerMessageEligibleForDecision({
+  ...unqualifiedCallerMessage,
+  semanticScore: 0.7,
+  authoritativeData: {
+    ...unqualifiedCallerMessage.authoritativeData,
+    variables: [
+      ...unqualifiedCallerMessage.authoritativeData.variables,
+      { key: 'situation', value: 'The caller answers the immediately pending question.' },
+    ],
+  },
+}, 'Short reply', { pendingQuestion: 'A pending configured question?' }), true);
+assert.equal(callerMessageEligibleForDecision(unqualifiedCallerMessage, 'Short reply', {
+  pendingQuestion: 'A pending configured question?',
+}), false);
 
 const crowdedCandidates = prioritizeCandidates([
   ...Array.from({ length: 5 }, (_value, index) => ({

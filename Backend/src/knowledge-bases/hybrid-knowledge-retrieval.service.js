@@ -910,6 +910,30 @@ async function loadScope(auth, input, runtime) {
   return scope;
 }
 
+export function callerMessageEligibleForDecision(evidence, query, input = {}) {
+  if (strongCallerMessageMatch(evidence, query, input)) return true;
+  if (evidence?.recordType !== 'CONVERSATION_NODE' || evidence?.callerFacing !== true
+    || normalize(evidence.authoritativeData?.nodeType) !== 'message') return false;
+  // Direct speech bypass requires a high confidence margin. The one grounded
+  // decision may also choose a lower-margin contextual candidate, but only
+  // when the published record provides matching metadata and retrieval has
+  // already retained it for an immediately pending question.
+  const situation = normalize(conversationVariable(evidence, 'situation'));
+  if (!situation || evidence.retrievalContext !== 'contextual'
+    || !String(input.pendingQuestion ?? '').trim()) return false;
+  const context = normalize(conversationVariable(evidence, 'context') ?? 'any')
+    .replace(/\s+/gu, '_');
+  const selectedEntities = [
+    ...(Array.isArray(input.knownEntities) ? input.knownEntities : []),
+    ...(Array.isArray(input.understanding?.selectedEntities)
+      ? input.understanding.selectedEntities : []),
+  ];
+  if (context === 'no_selected_entity'
+    && (input.selectedCatalogItemKey || selectedEntities.length > 0)) return false;
+  if (context === 'pending_question' && !String(input.pendingQuestion ?? '').trim()) return false;
+  return ['any', 'no_selected_entity', 'pending_question'].includes(context);
+}
+
 async function semanticCandidates(auth, input, query, scope, runtime) {
   if (!runtime.ragEnabled || !scope.length || !query) return [];
   const vector = await runtime.embed(query, { signal: input.abortSignal });
@@ -1211,7 +1235,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
     // selection also requires published matching metadata and contextual
     // confidence to pass the same generic policy used by retrieval.
     exactCallerResponseEligible: item.recordType === 'CONVERSATION_NODE'
-      ? strongCallerMessageMatch(item, query, safeInput)
+      ? callerMessageEligibleForDecision(item, query, safeInput)
       : false,
   }));
   const actionEvidence = permittedEvidence.filter((item) => (
