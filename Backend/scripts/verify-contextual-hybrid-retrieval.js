@@ -122,7 +122,7 @@ const contextualMessageCandidates = prioritizeCandidates([
     recordType: 'FAQ', recordId: `10000000-0000-4000-8000-00000000000${index}`,
     knowledgeBaseId, score: 1 - index * 0.01,
   })),
-  ...Array.from({ length: 2 }, (_value, index) => ({
+  ...Array.from({ length: 4 }, (_value, index) => ({
     recordType: 'CONVERSATION_NODE',
     recordId: `20000000-0000-4000-8000-00000000000${index}`,
     knowledgeBaseId, score: 0.8 - index * 0.01,
@@ -131,7 +131,7 @@ const contextualMessageCandidates = prioritizeCandidates([
 assert.equal(contextualMessageCandidates.length, 5);
 assert.equal(contextualMessageCandidates.filter((candidate) => (
   candidate.recordType === 'CONVERSATION_NODE'
-)).length, 2);
+)).length, 4);
 
 const semanticSearchOptions = [];
 await routeKnowledgeQuery(

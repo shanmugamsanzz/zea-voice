@@ -563,10 +563,18 @@ export function prioritizeCandidates(primary, contextual, useContext, preferCont
   // the LLM to distinguish two semantically close published messages using
   // the pending question, so retaining only one message would decide too
   // early and make the correct response impossible to select.
+  const catalogCandidate = ordered.find((candidate) => candidate.recordType === 'CATALOG_ITEM');
+  // On a contextual turn, several semantically close published messages can
+  // be valid retrieval candidates. Preserve every message that fits inside
+  // the final evidence budget and let the grounded decision resolve them from
+  // the pending question. A fixed two-message cap can discard the correct
+  // response before the decision sees it.
+  const conversationLimit = useContext
+    ? Math.max(1, maximum - (catalogCandidate ? 1 : 0))
+    : 1;
   const conversationCandidates = ordered
     .filter((candidate) => candidate.recordType === 'CONVERSATION_NODE')
-    .slice(0, useContext ? 2 : 1);
-  const catalogCandidate = ordered.find((candidate) => candidate.recordType === 'CATALOG_ITEM');
+    .slice(0, conversationLimit);
   const reservedCount = conversationCandidates.length + (catalogCandidate ? 1 : 0);
   ordered.slice(0, Math.max(1, maximum - reservedCount)).forEach(add);
   conversationCandidates.forEach(add);
