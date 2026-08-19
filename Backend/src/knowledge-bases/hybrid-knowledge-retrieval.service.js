@@ -261,6 +261,8 @@ const catalogCategoryCandidatesSql = `
    ORDER BY i.display_order, i.id
    LIMIT $7`;
 
+const maximumHydratedCategoryChildren = 100;
+
 function normalize(value) {
   return String(value ?? '').normalize('NFKC').toLocaleLowerCase()
     .replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim().replace(/\s+/gu, ' ');
@@ -443,12 +445,24 @@ function candidateStrength(candidate, query) {
     && normalize(candidate?.contentPreview).includes(normalizedQuery);
   const semanticStrong = semantic >= env.RAG_RUNTIME_MIN_SCORE;
   const lexicalStrong = coverage >= 0.5 && lexical > 0;
+  // Structured Catalog rows and published Conversation messages often use a
+  // concise canonical name while callers use a longer natural-language
+  // request. A high BM25 score with meaningful coverage is sufficient for
+  // discovery even when the semantic channel is unavailable. PostgreSQL
+  // hydration still performs the authoritative tenant/agent/revision check.
+  const recordType = String(candidate?.recordType ?? '').toUpperCase();
+  const catalogLexicalStrong = recordType === 'CATALOG_ITEM'
+    && coverage >= 0.35 && lexical >= 3;
+  const messageLexicalStrong = recordType === 'CONVERSATION_NODE'
+    && coverage >= 0.4 && lexical >= 4;
   const corroborated = channels.has('semantic') && channels.has('bm25')
     && semantic >= Math.max(0, env.RAG_RUNTIME_MIN_SCORE - 0.08)
     && coverage >= 0.2;
   return Object.freeze({
-    accepted: exactCoverage || semanticStrong || lexicalStrong || corroborated,
-    exactCoverage, semanticStrong, lexicalStrong, corroborated,
+    accepted: exactCoverage || semanticStrong || lexicalStrong
+      || catalogLexicalStrong || messageLexicalStrong || corroborated,
+    exactCoverage, semanticStrong, lexicalStrong, catalogLexicalStrong,
+    messageLexicalStrong, corroborated,
   });
 }
 
@@ -640,8 +654,24 @@ export function focusAuthoritativeCatalogEvidence(evidence = [], input = {}, max
     (item.recordType === 'WORKFLOW_RULE' || item.recordType === 'CONVERSATION_NODE')
     && item.callerFacing !== true
   ));
+  // A multi-fact request may legitimately need a Catalog row plus another
+  // caller-facing record (for example an item attribute and a stable policy).
+  // Catalog focus establishes the primary entity but must not erase those
+  // already-ranked complementary facts.
+  const preserveComplementaryFacts = Array.isArray(input.requestedFacts)
+    && new Set(input.requestedFacts.map(catalogValue).filter(Boolean)).size > 1;
+  const complementaryCallerEvidence = preserveComplementaryFacts
+    ? evidence.filter((item) => item.callerFacing === true
+      && item.recordType !== 'CATALOG_ITEM'
+      && item.id !== preferredCallerMessage?.id)
+    : [];
   const unique = new Map();
-  for (const item of [preferredCallerMessage, ...resolvedCatalog, ...supportingRules]) {
+  for (const item of [
+    preferredCallerMessage,
+    ...resolvedCatalog,
+    ...complementaryCallerEvidence,
+    ...supportingRules,
+  ]) {
     if (!item) continue;
     if (!unique.has(item.id)) unique.set(item.id, item);
   }
@@ -793,11 +823,15 @@ export function strongCallerMessageMatch(evidence, query, input = {}) {
   // EXAMPLES and SITUATION improve the indexed representation, but runtime
   // activation never compares the caller's words with those examples.
   const semanticScore = Number(evidence.semanticScore ?? 0);
+  const lexicalScore = Number(evidence.lexicalScore ?? 0);
+  const tokenCoverage = Number(evidence.tokenCoverage ?? 0);
   const channels = new Set(evidence.channels ?? []);
   const strongSemanticFloor = Math.min(0.98, Math.max(0.82, env.RAG_RUNTIME_MIN_SCORE + 0.08));
+  const strongLexicalMessage = channels.has('bm25')
+    && lexicalScore >= 4 && tokenCoverage >= 0.4;
   return (retrievalContext === 'primary' || contextualLatestTurn)
-    && channels.has('semantic')
-    && semanticScore >= strongSemanticFloor;
+    && ((channels.has('semantic') && semanticScore >= strongSemanticFloor)
+      || strongLexicalMessage);
 }
 
 export function selectStrongCallerMessage(evidence = [], query = '', input = {}) {
@@ -838,21 +872,23 @@ async function loadScope(auth, input, runtime) {
 async function semanticCandidates(auth, input, query, scope, runtime) {
   if (!runtime.ragEnabled || !scope.length || !query) return [];
   const vector = await runtime.embed(query, { signal: input.abortSignal });
+  // Retrieve a wider semantic discovery set, then apply the stricter runtime
+  // evidence threshold after hybrid corroboration. Using the final evidence
+  // threshold inside Qdrant hides useful multilingual candidates before BM25
+  // can corroborate them.
+  const discoveryThreshold = Math.max(0, env.RAG_RUNTIME_MIN_SCORE - 0.12);
   const matches = await runtime.search(auth.tenantId, vector, {
     knowledgeBases: scope.map((item) => ({ id: item.id, publicationRevision: Number(item.publicationRevision) })),
     usageDirection: input.usageDirection, agentId: input.agentId, abortSignal: input.abortSignal,
-    limit: 30, scoreThreshold: env.RAG_RUNTIME_MIN_SCORE, recordTypes,
+    limit: 30, scoreThreshold: discoveryThreshold, recordTypes,
   });
   const allowed = new Map(scope.map((item) => [String(item.id).toLowerCase(), Number(item.publicationRevision)]));
   return matches.filter((match) => {
     const payload = match.payload ?? {};
-    const assigned = Array.isArray(payload.assigned_agent_ids)
-      ? payload.assigned_agent_ids.map((id) => String(id).toLowerCase()) : [];
     return String(payload.tenant_id).toLowerCase() === String(auth.tenantId).toLowerCase()
       && allowed.get(String(payload.knowledge_base_id).toLowerCase()) === Number(payload.publication_revision)
       && recordTypes.includes(String(payload.record_type).toUpperCase())
-      && [String(input.usageDirection).toUpperCase(), 'BOTH'].includes(String(payload.agent_usage).toUpperCase())
-      && (!assigned.length || assigned.includes(String(input.agentId).toLowerCase()));
+      && [String(input.usageDirection).toUpperCase(), 'BOTH'].includes(String(payload.agent_usage).toUpperCase());
   }).map((match, index) => ({
     recordType: String(match.payload.record_type).toUpperCase(),
     recordId: match.payload.record_id ?? match.id,
@@ -915,7 +951,8 @@ async function catalogCategoryCandidates(auth, input, seed, runtime, limit = 5) 
     const result = await client.query(catalogCategoryCandidatesSql, [
       auth.tenantId, input.agentId, input.usageDirection,
       seed.knowledge_base_id, data.catalogId, data.categoryKey,
-      Math.max(1, Math.min(Number(limit) || 5, 5)),
+      Math.max(1, Math.min(Number(limit) || maximumHydratedCategoryChildren,
+        maximumHydratedCategoryChildren)),
     ]);
     return result.rows.filter((row) => row.record_id).map((row, index) => ({
       recordType: 'CATALOG_ITEM', recordId: row.record_id,
@@ -926,6 +963,24 @@ async function catalogCategoryCandidates(auth, input, seed, runtime, limit = 5) 
       channels: ['postgres_category'], retrievalContext: 'catalog_category', rank: index + 1,
     }));
   });
+}
+
+function catalogCategoryRequestedByLatestTurn(rows = [], query = '') {
+  const seed = [...rows].filter((row) => row.record_type === 'CATALOG_ITEM')
+    .sort((left, right) => Number(left.rank) - Number(right.rank))[0];
+  if (!seed) return false;
+  const data = seed.authoritative_data ?? {};
+  const queryTokens = new Set(tokens(query));
+  if (!queryTokens.size) return false;
+  const overlap = (values) => [...new Set(values.flatMap((value) => tokens(value)))]
+    .filter((token) => queryTokens.has(token)).length;
+  const itemAffinity = overlap([data.itemKey, data.name, ...(data.aliases ?? [])]);
+  const categoryAffinity = overlap([
+    data.categoryKey, data.category, ...(data.categoryAliases ?? []),
+  ]);
+  // Category identity comes entirely from the published Catalog metadata.
+  // No tenant vocabulary or application keyword list is involved.
+  return categoryAffinity > 0 && categoryAffinity >= itemAffinity;
 }
 
 export function authoritativeEvidenceFromRow(row) {
@@ -1025,14 +1080,15 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   const categoryRequest = String(safeInput.understanding?.requestType ?? '').toLocaleLowerCase()
     === 'category_request'
     || String(safeInput.requestType ?? '').toLocaleLowerCase() === 'category_request'
-    || Boolean(String(safeInput.activeCategoryKey ?? '').trim());
+    || Boolean(String(safeInput.activeCategoryKey ?? '').trim())
+    || catalogCategoryRequestedByLatestTurn(rows, query);
   if (categoryRequest && ranked[0]?.recordType === 'CATALOG_ITEM' && rows.length) {
     const seed = [...rows]
       .filter((row) => row.record_type === 'CATALOG_ITEM')
       .sort((left, right) => Number(left.rank) - Number(right.rank))[0];
     const categoryCandidates = await abortable(deadline(
       catalogCategoryCandidates(
-        { ...auth, tenantId }, safeInput, seed, runtime, safeInput.topK,
+        { ...auth, tenantId }, safeInput, seed, runtime, maximumHydratedCategoryChildren,
       ), env.RAG_RUNTIME_CHANNEL_DEADLINE_MS, [],
     ), input.abortSignal, []);
     if (categoryCandidates.length) {
@@ -1042,7 +1098,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
         if (!expanded.has(key)) expanded.set(key, candidate);
       }
       ranked = [...expanded.values()]
-        .slice(0, Math.max(3, Math.min(Number(safeInput.topK) || 5, 5)))
+        .slice(0, maximumHydratedCategoryChildren)
         .map((candidate, index) => ({ ...candidate, rank: index + 1 }));
       rows = await abortable(deadline(
         hydrate({ ...auth, tenantId }, safeInput, ranked, runtime),

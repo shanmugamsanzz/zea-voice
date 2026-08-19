@@ -18,7 +18,16 @@ const resumed = resolveNextConfiguredQuestion({
   decision: { decision: 'answer', pendingQuestionRelevant: true },
   beforeState: memory.snapshot(), afterState: memory.snapshot(),
 });
-assert.equal(resumed.question, 'Which date works for you?');
+assert.equal(resumed, null,
+  'a saved field question must not resume without a current authorized tool or contextual continuation');
+const contextualResume = resolveNextConfiguredQuestion({
+  decision: {
+    decision: 'answer', pendingQuestionRelevant: true,
+    stateUpdate: { contextDependent: true },
+  },
+  beforeState: memory.snapshot(), afterState: memory.snapshot(),
+});
+assert.equal(contextualResume.question, 'Which date works for you?');
 const discarded = resolveNextConfiguredQuestion({
   decision: { decision: 'answer', pendingQuestionRelevant: false },
   beforeState: memory.snapshot(), afterState: memory.snapshot(),

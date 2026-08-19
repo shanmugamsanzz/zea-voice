@@ -207,10 +207,10 @@ export function openGenericConversationState(identity, settings = {}, now = Date
       if (pendingField) state.pendingQuestion = cleanPending({
         key: pendingField.key, text: pendingField.question, kind: 'field',
       });
-      else if (!state.pendingQuestion && state.lastAnswer?.includes('?')) {
-        const question = state.lastAnswer.split(/(?<=[.!?])\s+/u).reverse().find((part) => part.includes('?'));
-        state.pendingQuestion = cleanPending({ text: question, kind: 'conversation' });
-      }
+      // Arbitrary spoken questions are not durable workflow state. The
+      // unified turn explicitly stores only a validated configured guidance,
+      // field or confirmation question. This prevents clarifications and safe
+      // fallback text from contaminating later turns.
       return publicState(state);
     },
     applyGroundedDecision(decision = {}, options = {}) {
@@ -236,7 +236,9 @@ export function openGenericConversationState(identity, settings = {}, now = Date
         state.pendingQuestion = null;
       } else if ((update.pendingQuestionRelevant ?? decision.pendingQuestionRelevant) === false) state.pendingQuestion = null;
       else if (decision.flowAction === 'side_question' && state.pendingQuestion) resumePending = true;
-      if (decision.pendingQuestion !== undefined) state.pendingQuestion = cleanPending(decision.pendingQuestion);
+      // decision.pendingQuestion is only a proposal. The unified turn policy
+      // validates it against published guidance before setPendingQuestion is
+      // called, and clarification questions are intentionally turn-local.
       if (update.language ?? decision.language) {
         state.language = cleanLanguage(update.language ?? decision.language, state.language);
       }

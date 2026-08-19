@@ -16,28 +16,16 @@ PURPOSE: Start the configured Shanmuga Hospital health check-up enquiry call.
 RESPONSE: Introduce Karthika as the Shanmuga Hospital AI Agent, use verified pre-call context for the Facebook Master Health Check-up enquiry and ask permission to explain the packages. Do not repeat this introduction later in the call.
 NEXT_QUESTION: Package details கொஞ்சம் explain பண்ணலாமா?
 
-STAGE: positive_introduction_response
-FLOW: main
-TYPE: message
-LANGUAGE: ta
-ENTRY: false
-PURPOSE: Continue when the caller accepts the offer to hear package information.
-SITUATION: The caller positively accepts the immediately preceding offer to hear the available package information without asking a different question.
-EXAMPLES: ஆமாங்க | ஆமா | ம் ஆமாங்க | ம் ஆமா | ஆமா madam | yes ஆமா | சரி சொல்லுங்க | ஆ சொல்லுங்க | சொல்லுங்க | ஏ சாம்பா சொல்லுங்க | yes | yes please | okay tell me | please explain
-MATCH_MODE: semantic
-CONTEXT: no_selected_entity
-RESPONSE: எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Onco Care Packages, Organ-Specific Packages, Kids Health Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?
-NEXT_QUESTION:
-
 STAGE: complete_package_overview
 FLOW: main
 TYPE: message
 LANGUAGE: ta
 ENTRY: false
-PURPOSE: Answer every general request for available packages, including requests for other or additional packages.
-SITUATION: The caller asks for the complete package overview, all available package options or what other packages are available.
-EXAMPLES: உங்ககிட்ட என்னென்ன packages இருக்கு | உங்ககிட்ட என்ன packagesலாம் இருக்கு | என்னெல்லாம் packages இருக்கு | என்னென்ன package இருக்கு | வேற என்ன packagesலாம் இருக்கு | detail-ஆ என்னென்ன packages இருக்குன்னு சொல்லுங்க | detail-ஆ என்னென்ன packages இருக்குன்னு overview சொல்லுங்க | package overview சொல்லுங்க | எல்லா packages-யும் சொல்லுங்க | what packages do you have | what packages are available | what other packages are available
+PURPOSE: Use the single approved package overview after the caller accepts the introduction offer or asks for all, other or available package options.
+SITUATION: The caller positively accepts the immediately preceding package-information offer without asking a different question; or the caller asks for the complete package overview, all available options or other options.
+EXAMPLES: ஆமாங்க | சரி சொல்லுங்க | package details சொல்லுங்க | உங்ககிட்ட என்ன packagesலாம் இருக்கு | வேற என்ன options இருக்கு | மொத்த overview சொல்லுங்க | yes please | okay, explain the options | what packages are available | what other options do you have
 MATCH_MODE: semantic
+CONTEXT: no_selected_entity
 RESPONSE: எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Onco Care Packages, Organ-Specific Packages, Kids Health Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?
 NEXT_QUESTION:
 

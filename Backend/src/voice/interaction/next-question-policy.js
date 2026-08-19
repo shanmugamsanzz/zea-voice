@@ -159,6 +159,14 @@ function guidanceQuestion(guidanceEvidence = [], completedQuestionIdentities = n
   return null;
 }
 
+function selectedGuidanceQuestion(decision, guidanceEvidence = [], completedQuestionIdentities = new Set()) {
+  const proposed = identity(decision.pendingQuestion);
+  if (!proposed || decision.decision !== 'answer') return null;
+  const configured = guidanceQuestion(guidanceEvidence, completedQuestionIdentities);
+  if (!configured || identity(configured.question) !== proposed) return null;
+  return Object.freeze({ ...configured, source: 'selected_conversation_guidance' });
+}
+
 function completedQuestionIdentities(fieldSchemas, collectedInformation) {
   const collected = object(collectedInformation);
   return new Set((fieldSchemas ?? []).filter((field) => (
@@ -224,10 +232,18 @@ export function resolveNextConfiguredQuestion({
       ? { key: beforeState.pendingQuestion, text: beforeState.pendingQuestionText, kind: beforeState.pendingQuestionKind }
       : null
   ));
+  const savedPendingIsActionState = ['field', 'confirmation'].includes(savedPending?.kind)
+    && Boolean(activeRequest);
+  const contextualContinuation = decision.stateUpdate?.contextDependent === true
+    || decision.contextDependent === true;
   if (decision.pendingQuestionRelevant !== false && savedPending
+    && (savedPendingIsActionState || contextualContinuation)
     && !completed.has(identity(savedPending.question))) return savedPending;
 
-  const guidance = guidanceQuestion(guidanceEvidence, completed);
+  // Conversation guidance is appended only when the grounded decision chose
+  // that exact configured question. Never append the first retrieved guidance
+  // record merely because it happened to rank in the evidence set.
+  const guidance = selectedGuidanceQuestion(decision, guidanceEvidence, completed);
   if (!guidance) return null;
   const guidanceCollection = validateConfiguredFieldCollectionSpeech(guidance.question, {
     fieldSchemas,

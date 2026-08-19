@@ -5,12 +5,14 @@ import {
   mergeAndRerankCandidates,
   retainStrongCandidates,
   searchHybridPublishedKnowledge,
+  selectStrongCallerMessage,
 } from '../src/knowledge-bases/hybrid-knowledge-retrieval.service.js';
 import { sparseIndexCacheKey } from '../src/knowledge-bases/knowledge-map.service.js';
 
 const tenantA = '10000000-0000-4000-8000-000000000001';
 const tenantB = '10000000-0000-4000-8000-000000000002';
 const agentA = '20000000-0000-4000-8000-000000000001';
+const previouslyAssignedAgent = '20000000-0000-4000-8000-000000000002';
 const kbA = '30000000-0000-4000-8000-000000000001';
 const kbB = '30000000-0000-4000-8000-000000000002';
 const documentId = '40000000-0000-4000-8000-000000000001';
@@ -105,13 +107,13 @@ class FakeRedis {
 
 function semanticPoint(recordId, recordType, {
   tenantId = tenantA, knowledgeBaseId = kbA, language = 'en', score = 0.94,
-  content = 'semantic preview',
+  content = 'semantic preview', assignedAgentIds = [agentA],
 } = {}) {
   return {
     id: recordId, score,
     payload: {
       tenant_id: tenantId, knowledge_base_id: knowledgeBaseId, publication_revision: 3,
-      agent_usage: 'INBOUND', assigned_agent_ids: [agentA], record_id: recordId,
+      agent_usage: 'INBOUND', assigned_agent_ids: assignedAgentIds, record_id: recordId,
       record_type: recordType, document_id: documentId, document_version_id: versionId,
       language, content,
     },
@@ -166,6 +168,12 @@ const paraphrase = await search('How do I find your workplace?', {
   points: [semanticPoint(ids.location, 'FAQ')],
 });
 assert.equal(paraphrase.sources[0].content, 'The office is beside Central Station.');
+
+const assignmentChangedAfterPublish = await search('How do I find your workplace?', {
+  points: [semanticPoint(ids.location, 'FAQ', { assignedAgentIds: [previouslyAssignedAgent] })],
+});
+assert.equal(assignmentChangedAfterPublish.sources[0].recordId, ids.location,
+  'current PostgreSQL assignment must authorize hydration when the Qdrant assignment snapshot is stale');
 
 for (const query of ['SKU-X9', '499 INR', 'Solar Max']) {
   const exact = await search(query);
@@ -240,6 +248,32 @@ const strongOnly = retainStrongCandidates([
 ], 'delivery details', 5);
 assert.deepEqual(strongOnly.map((candidate) => candidate.recordId), ['strong']);
 
+const authoritativeBm25Fallback = retainStrongCandidates([
+  {
+    recordType: 'CATALOG_ITEM', recordId: 'catalog-bm25', knowledgeBaseId: kbA,
+    semanticScore: 0, lexicalScore: 14.2, tokenCoverage: 0.44, channels: ['bm25'],
+  },
+  {
+    recordType: 'CONVERSATION_NODE', recordId: 'message-bm25', knowledgeBaseId: kbA,
+    semanticScore: 0, lexicalScore: 4.7, tokenCoverage: 0.4, channels: ['bm25'],
+  },
+], 'natural caller request', 5);
+assert.deepEqual(authoritativeBm25Fallback.map((candidate) => candidate.recordId), [
+  'catalog-bm25', 'message-bm25',
+], 'strong structured BM25 evidence must survive a semantic-channel miss');
+
+const publishedOverview = {
+  id: 'published:conversation_node:message-bm25', recordType: 'CONVERSATION_NODE',
+  recordId: 'message-bm25', callerFacing: true, content: 'Published overview response.',
+  authoritativeData: {
+    nodeType: 'message', variables: [{ key: 'situation', value: 'Caller requests an overview.' }],
+  },
+  semanticScore: 0, lexicalScore: 4.7, tokenCoverage: 0.4,
+  retrievalScore: 0.31, retrievalContext: 'primary', channels: ['bm25'], rank: 1,
+};
+assert.equal(selectStrongCallerMessage([publishedOverview], 'unseen overview wording', {}), publishedOverview,
+  'an unambiguous caller-facing published message may be selected from strong BM25 evidence');
+
 const conflict = detectEvidenceConflict([
   {
     recordType: 'CATALOG_ITEM', recordId: 'a', retrievalContext: 'primary', retrievalScore: 0.91,
@@ -284,6 +318,8 @@ const serviceSource = await readFile(new URL('../src/knowledge-bases/hybrid-know
 assert.doesNotMatch(serviceSource, /intentKeywords|triggerPhrases|packageKeywords|hospital|appointment/iu,
   'The generic retrieval service must not contain business intent keywords');
 assert.match(serviceSource, /Promise\.all/u);
+assert.doesNotMatch(serviceSource, /assigned\.includes\(String\(input\.agentId/u,
+  'stale Qdrant assignment snapshots must not override current PostgreSQL assignment');
 assert.ok(serviceSource.indexOf('mergeAndRerankCandidates') < serviceSource.indexOf('hydrate('));
 
 console.log(JSON.stringify({

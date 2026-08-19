@@ -157,8 +157,17 @@ export async function searchTenantPoints(tenantId, vector, {
   const normalizedRecordTypes = [...new Set(recordTypes.map((value) => value.trim().toUpperCase()))];
 
   const tenant = tenantId.toLowerCase();
-  const normalizedAgentId = agentId === undefined
-    ? null : requireEntityId(agentId, 'agentId');
+  // Agent assignment is mutable runtime state, while Qdrant payloads are an
+  // immutable snapshot of the assignment at publication time. Filtering on
+  // assigned_agent_ids here makes a correctly assigned, published KB
+  // undiscoverable whenever an assignment changes without a republish.
+  //
+  // Current assignment is enforced twice by the caller: the active scope is
+  // loaded from PostgreSQL before this search, and every selected record is
+  // hydrated through the same current assignment/revision scope before it can
+  // become evidence. Keep Qdrant discovery scoped to tenant + exact KB
+  // revision + direction + record type; never trust discovery as authority.
+  if (agentId !== undefined) requireEntityId(agentId, 'agentId');
   const revisionConditions = knowledgeBases.map(({ id, publicationRevision }) => {
     if (typeof id !== 'string' || !Number.isInteger(publicationRevision) || publicationRevision < 1) {
       throw new TypeError('Every Knowledge Base filter requires an id and positive publicationRevision');
@@ -186,9 +195,6 @@ export async function searchTenantPoints(tenantId, vector, {
           { key: 'tenant_id', match: { value: tenant } },
           { key: 'agent_usage', match: { any: [usageDirection.toUpperCase(), 'BOTH'] } },
           { key: 'record_type', match: { any: normalizedRecordTypes } },
-          ...(normalizedAgentId
-            ? [{ key: 'assigned_agent_ids', match: { value: normalizedAgentId } }]
-            : []),
           { should: revisionConditions },
         ],
       },

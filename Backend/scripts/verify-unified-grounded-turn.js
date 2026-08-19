@@ -131,6 +131,103 @@ const catalogTurn = applyUnifiedGroundedTurn({
 assert.equal(catalogTurn.valid, true);
 assert.equal(catalogTurn.state.knownEntities[0].key, 'current-service',
   'One cited Catalog item must become the canonical selected entity');
+
+const guidanceMemory = openGenericConversationState(
+  { ...identity, callId: 'call-selected-guidance' }, {}, 1,
+  { pendingQuestion: { text: 'Stale introduction question?', kind: 'conversation' } },
+);
+guidanceMemory.beginTurn('selected-guidance-turn');
+const guidanceEvidence = {
+  id: 'guidance-source', recordId: 'guidance-record', recordType: 'CONVERSATION_NODE',
+  callerFacing: false, content: 'Internal continuation guidance.', retrievalContext: 'primary',
+  authoritativeData: {
+    nodeType: 'guidance', nextQuestion: 'Would you like another approved option?',
+  },
+};
+const selectedGuidanceTurn = applyUnifiedGroundedTurn({
+  rawDecision: unifiedDecision({
+    decision: 'answer', answer: catalogEvidence.content, evidenceIds: ['catalog-source'],
+    stateUpdate: {
+      knownEntityKeys: ['current-service'], collectedInformation: {}, correctedFields: [],
+      contextDependent: false,
+    },
+    pendingQuestion: 'Would you like another approved option?', toolRequest: null,
+  }),
+  groundingEnvelope: {
+    found: true,
+    sources: [{
+      id: 'catalog-source', recordId: catalogEvidence.recordId,
+      recordType: catalogEvidence.recordType, content: catalogEvidence.content,
+      authoritativeData: catalogEvidence.authoritativeData,
+    }],
+    entities: [{
+      id: catalogEvidence.recordId, key: 'current-service', name: 'Current Service',
+      category: 'Services', categoryKey: 'services', sourceId: 'catalog-source',
+    }],
+  },
+  memory: guidanceMemory, turnToken: 'selected-guidance-turn',
+  evidence: [catalogEvidence, guidanceEvidence], finalizedUtterance: 'Explain the current service.',
+});
+assert.equal(selectedGuidanceTurn.valid, true);
+assert.equal(selectedGuidanceTurn.answer,
+  `${catalogEvidence.content} Would you like another approved option?`);
+assert.equal(selectedGuidanceTurn.pendingQuestion.text, 'Would you like another approved option?');
+assert.notEqual(selectedGuidanceTurn.pendingQuestion.text, 'Stale introduction question?');
+guidanceMemory.close();
+
+const clarificationMemory = openGenericConversationState(
+  { ...identity, callId: 'call-turn-local-clarification' }, {}, 1,
+);
+clarificationMemory.beginTurn('clarification-turn');
+const clarificationTurn = applyUnifiedGroundedTurn({
+  rawDecision: unifiedDecision({
+    decision: 'clarify', answer: '', evidenceIds: [], stateUpdate: {},
+    pendingQuestion: 'Which approved option do you mean?', toolRequest: null,
+  }),
+  groundingEnvelope: { found: false, sources: [], entities: [] },
+  memory: clarificationMemory, turnToken: 'clarification-turn', evidence: [],
+  finalizedUtterance: 'That one.',
+});
+assert.equal(clarificationTurn.valid, true);
+assert.equal(clarificationTurn.answer, 'Which approved option do you mean?');
+assert.equal(clarificationTurn.state.pendingQuestion, null,
+  'clarification speech must remain turn-local and never become conversation memory');
+clarificationMemory.close();
+
+const mismatchedEvidenceMemory = openGenericConversationState(
+  { ...identity, callId: 'call-latest-entity-alignment' }, {}, 1,
+);
+mismatchedEvidenceMemory.beginTurn('entity-alignment-turn');
+const genericEvidence = {
+  id: 'generic-source', recordId: 'generic-record', recordType: 'FAQ',
+  callerFacing: true, content: 'Generic approved information.', retrievalContext: 'primary',
+  authoritativeData: { question: 'General information', answer: 'Generic approved information.' },
+};
+const mismatchedEvidenceTurn = applyUnifiedGroundedTurn({
+  rawDecision: unifiedDecision({
+    decision: 'answer', answer: genericEvidence.content, evidenceIds: ['generic-source'],
+    stateUpdate: { contextDependent: false }, pendingQuestion: null, toolRequest: null,
+  }),
+  groundingEnvelope: {
+    found: true,
+    sources: [
+      { id: 'catalog-source', recordId: catalogEvidence.recordId, recordType: 'CATALOG_ITEM',
+        content: catalogEvidence.content, authoritativeData: catalogEvidence.authoritativeData },
+      { id: 'generic-source', recordId: genericEvidence.recordId, recordType: 'FAQ',
+        content: genericEvidence.content, authoritativeData: genericEvidence.authoritativeData },
+    ],
+    entities: [{
+      id: catalogEvidence.recordId, key: 'current-service', name: 'Current Service',
+      sourceId: 'catalog-source',
+    }],
+  },
+  memory: mismatchedEvidenceMemory, turnToken: 'entity-alignment-turn',
+  evidence: [catalogEvidence, genericEvidence], finalizedUtterance: 'Explain the current service.',
+});
+assert.equal(mismatchedEvidenceTurn.valid, false);
+assert.equal(mismatchedEvidenceTurn.reason, 'latest_request_evidence_mismatch');
+mismatchedEvidenceMemory.close();
+
 catalogMemory.beginTurn('stale-catalog-turn');
 const staleContextEvidence = {
   ...catalogEvidence, retrievalContext: 'contextual',
@@ -218,8 +315,9 @@ const sideAnswer = applyUnifiedGroundedTurn({
   finalizedUtterance: 'Where is the office?',
 });
 assert.equal(sideAnswer.valid, true);
-assert.equal(sideAnswer.answer, 'The office is on Central Road. Which date do you prefer?');
-assert.equal(sideAnswer.pendingQuestion.key, 'preferred_date');
+assert.equal(sideAnswer.answer, 'The office is on Central Road.');
+assert.equal(sideAnswer.pendingQuestion, null,
+  'an unrelated saved field question must not continue without an authorized active tool');
 assert.equal(sideAnswer.state.lastAnswer, sideAnswer.answer);
 assert.equal(sideAnswer.state.requestType, 'location_question');
 assert.deepEqual(sideAnswer.state.requestedFacts, ['location']);

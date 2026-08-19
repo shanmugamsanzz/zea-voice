@@ -127,12 +127,16 @@ assert.deepEqual([...searchOptions.recordTypes].sort(), [
 assert.equal(searchOptions.agentId, agentId);
 assert.deepEqual(searchOptions.knowledgeBases, [{ id: knowledgeBaseId, publicationRevision: 7 }]);
 assert.equal(result.sources.length, 3);
-assert.equal(result.actionEvidence.length, 1);
+assert.equal(result.actionEvidence.length, 0,
+  'a workflow that is not activated by the latest caller turn must not be authorized');
 assert.equal(result.guidanceEvidence.length, 1);
 assert.equal(result.sources.find((source) => source.recordType === 'FAQ').content, 'Approved PostgreSQL answer.');
 assert.equal(result.sources.some((source) => source.content.includes('UNTRUSTED QDRANT')), false);
 assert.equal(result.sources.some((source) => source.recordId === ids.stale), false);
-assert.equal(result.actionEvidence[0].callerFacing, false);
+assert.ok(result.retrievalTrace.rejectedCandidates.some((candidate) => (
+  candidate.recordId === ids.workflow
+    && candidate.rejectionReasons.includes('workflow_not_activated_by_latest_turn')
+)), 'inactive workflow evidence must be visible in the rejection trace');
 assert.equal(result.guidanceEvidence[0].callerFacing, false);
 assert.deepEqual(result.requestedFacts, ['location', 'price']);
 

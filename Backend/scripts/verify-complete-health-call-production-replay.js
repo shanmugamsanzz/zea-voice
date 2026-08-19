@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import {
   authoritativeEvidenceFromRow,
@@ -25,6 +26,23 @@ const scope = Object.freeze({
   requireHydratedEvidence: true,
 });
 const overview = 'எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Onco Care Packages, Organ-Specific Packages, Kids Health Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?';
+
+const publishedDocuments = Object.freeze({
+  conversation: fs.readFileSync(new URL('../../docs/knowledge-base/shanmuga-hospital-conversation-script-production.txt', import.meta.url), 'utf8'),
+  catalog: fs.readFileSync(new URL('../../docs/knowledge-base/shanmuga-hospital-package-catalog-upload.txt', import.meta.url), 'utf8'),
+  faq: fs.readFileSync(new URL('../../docs/knowledge-base/shanmuga-hospital-faq-salem-tamil.txt', import.meta.url), 'utf8'),
+  general: fs.readFileSync(new URL('../../docs/knowledge-base/shanmuga-hospital-general-knowledge-production-upload.txt', import.meta.url), 'utf8'),
+  prompt: fs.readFileSync(new URL('../../docs/knowledge-base/shanmuga-hospital-master-system-prompt-production.txt', import.meta.url), 'utf8'),
+});
+const overviewOccurrences = Object.values(publishedDocuments)
+  .reduce((count, document) => count + document.split(overview).length - 1, 0);
+assert.equal(overviewOccurrences, 1, 'exactly one approved overview response must be published');
+assert.doesNotMatch(publishedDocuments.catalog, /APPROVED OVERVIEW RESPONSE|\bRESPONSE\s*:/iu,
+  'Catalog must contain facts, not caller-facing routing responses');
+assert.doesNotMatch(publishedDocuments.faq, /Appointment book|booking details|package overview/iu,
+  'FAQ must not duplicate Workflow or Conversation routing behavior');
+assert.match(publishedDocuments.general, /Package names, categories, prices, tests, services, consultations, preparation and relationships must come only from the current Product Catalog\./u);
+assert.match(publishedDocuments.prompt, /single exact approved overview response from Conversation Guidance/u);
 
 function hydratedRow({ recordId, recordType = 'CATALOG_ITEM', content, authoritativeData, rank = 1 }) {
   return {
@@ -54,23 +72,12 @@ function catalog({ recordId, itemKey, name, aliases = [], category, categoryAlia
   });
 }
 
-const positiveMessage = hydratedRow({
-  recordId: 'message-positive', recordType: 'CONVERSATION_NODE', content: overview,
-  authoritativeData: {
-    nodeType: 'message', nodeKey: 'positive-introduction-response',
-    variables: [
-      { key: 'situation', value: 'The caller positively accepts the immediately preceding offer.' },
-      { key: 'context', value: 'pending_question' },
-    ],
-  },
-});
-positiveMessage.retrievalContext = 'contextual';
 const overviewMessage = hydratedRow({
   recordId: 'message-overview', recordType: 'CONVERSATION_NODE', content: overview,
   authoritativeData: {
     nodeType: 'message', nodeKey: 'complete-package-overview',
     variables: [
-      { key: 'situation', value: 'The caller requests all available options.' },
+      { key: 'situation', value: 'The caller accepts the preceding package-information offer or requests all available options.' },
       { key: 'context', value: 'no_selected_entity' },
     ],
   },
@@ -176,7 +183,7 @@ function unifiedDecision(value) {
 }
 
 const capturedTurns = [
-  { utterance: 'ம் ஆமாங்க', direct: positiveMessage, contextual: true, requestType: 'positive_acknowledgement', answer: overview },
+  { utterance: 'ம் ஆமாங்க', direct: overviewMessage, contextual: true, requestType: 'positive_acknowledgement', answer: overview },
   { utterance: 'எனக்கு phone பண்ணு', evidence: callSupport, contextual: false, requestType: 'call_request', answer: callSupport.content },
   { utterance: 'ஊர்ல என்ன packagesலாம் இருக்கு', direct: overviewMessage, contextual: false, requestType: 'overview', answer: overview },
 ];
@@ -196,7 +203,11 @@ for (const [index, turn] of capturedTurns.entries()) {
   const token = memory.beginTurn(`direct-${index + 1}`);
   memory.append({ role: 'user', content: turn.utterance }, { turnToken: token });
   if (turn.direct) {
-    const selected = selectStrongCallerMessage([turn.direct], turn.utterance, {
+    const contextualizedMessage = {
+      ...turn.direct,
+      retrievalContext: turn.contextual ? 'contextual' : 'primary',
+    };
+    const selected = selectStrongCallerMessage([contextualizedMessage], turn.utterance, {
       pendingQuestion: turn.contextual ? 'Package details explain பண்ணலாமா?' : null,
       understanding: meaning, knownEntities: [],
     });
@@ -231,6 +242,112 @@ for (const [index, turn] of capturedTurns.entries()) {
     ttsOutputs.push(result.answer);
   }
   latencySamples.push(performance.now() - started);
+}
+
+const unseenLanguageReplays = Object.freeze([
+  Object.freeze({
+    language: 'Tamil',
+    positive: 'சரிங்க, கிடைக்கிற விவரங்களை சொல்லலாம்',
+    overview: 'மொத்தமா என்னென்ன பரிசோதனை வகைகள் இருக்குன்னு முதல்ல சொல்லுங்க',
+    details: Object.freeze([
+      'புற்றுநோய் பரிசோதனை தேர்வுகளை விளக்குங்க',
+      'குழந்தைகளுக்கான பரிசோதனை வகைகளை சொல்லுங்க',
+      'ஒவ்வொரு உடல் உறுப்புக்குமான பரிசோதனைகள் என்ன இருக்கு',
+      'சர்க்கரை பரிசோதனை திட்டத்தோட முழு விவரம் வேணும்',
+    ]),
+  }),
+  Object.freeze({
+    language: 'Tanglish',
+    positive: 'seri, available details-a explain pannunga',
+    overview: 'overall-a enna enna checkup choices available-nu sollunga',
+    details: Object.freeze([
+      'cancer screening options enna irukku',
+      'children-ku available screening choices explain pannunga',
+      'body organ wise checkup options-a list pannunga',
+      'sugar screening plan full details sollunga',
+    ]),
+  }),
+  Object.freeze({
+    language: 'English',
+    positive: 'Yes, please walk me through the available choices',
+    overview: 'Could you first list every screening category you currently offer?',
+    details: Object.freeze([
+      'Explain the available cancer-screening choices',
+      'What screening choices are available for children?',
+      'List the checkups offered for individual organ systems',
+      'Give me the complete details of the blood-sugar screening plan',
+    ]),
+  }),
+]);
+
+let unseenTurnsValidated = 0;
+for (const scenario of unseenLanguageReplays) {
+  const scenarioMemory = openGenericConversationState({
+    ...identity, callId: `unseen-${scenario.language.toLowerCase()}`,
+  }, { conversationLanguage: scenario.language }, Date.now(), {
+    pendingQuestion: { key: 'introduction_offer', text: 'May I explain the available options?', kind: 'conversation' },
+  });
+  for (const [utteranceIndex, utterance] of [scenario.positive, scenario.overview].entries()) {
+    const stt = validateFinalCustomerTurn({ text: utterance, minimumWords: 2 });
+    assert.equal(stt.accepted, true, `${scenario.language}: overview STT ${utteranceIndex + 1}`);
+    const selected = selectStrongCallerMessage([{
+      ...overviewMessage,
+      retrievalContext: utteranceIndex === 0 ? 'contextual' : 'primary',
+    }], utterance, {
+      pendingQuestion: utteranceIndex === 0 ? 'May I explain the available options?' : null,
+      understanding: {
+        requestType: utteranceIndex === 0 ? 'positive_acknowledgement' : 'overview',
+        contextDependent: utteranceIndex === 0,
+        explicitEntities: [], requestedFacts: [], constraints: [], contextualReferences: [],
+      },
+      knownEntities: [],
+    });
+    assert.equal(selected?.recordId, overviewMessage.recordId,
+      `${scenario.language}: the single published overview must handle both contexts`);
+    assert.equal(selected.content, overview, `${scenario.language}: exact overview TTS`);
+    unseenTurnsValidated += 1;
+  }
+  scenarioMemory.setPendingQuestion(null);
+  for (const [detailIndex, utterance] of scenario.details.entries()) {
+    const expected = detailTurns[detailIndex];
+    const stt = validateFinalCustomerTurn({ text: utterance, minimumWords: 2 });
+    assert.equal(stt.accepted, true, `${scenario.language}: detail STT ${detailIndex + 1}`);
+    const focused = expected.records.slice(0, 5);
+    const envelope = buildGroundingEnvelope({
+      found: true,
+      tenantEvidence: {
+        sources: focused,
+        entities: focused.map((source) => ({
+          id: source.recordId, key: source.authoritativeData.itemKey,
+          name: source.authoritativeData.name, category: source.authoritativeData.category,
+        })),
+      },
+    }, { includePublishedMap: false, maximumSources: 5 });
+    const token = scenarioMemory.beginTurn(`${scenario.language}-${detailIndex + 1}`);
+    scenarioMemory.append({ role: 'user', content: utterance }, { turnToken: token });
+    const result = applyUnifiedGroundedTurn({
+      rawDecision: unifiedDecision({
+        decision: 'answer', answer: expected.answer,
+        evidenceIds: envelope.sources.map((source) => source.id),
+        stateUpdate: {
+          requestType: 'details', currentTopic: expected.topic,
+          knownEntityKeys: focused.map((source) => source.authoritativeData.itemKey),
+          requestedFacts: ['complete details'], constraints: [], contextualReferences: [],
+          contextDependent: false, collectedInformation: {}, correctedFields: [],
+          pendingQuestionRelevant: false,
+        },
+        pendingQuestion: null, toolRequest: null,
+      }),
+      groundingEnvelope: envelope, memory: scenarioMemory, turnToken: token,
+      evidence: focused, evidenceScope: scope, finalizedUtterance: utterance,
+    });
+    assert.equal(result.valid, true, `${scenario.language}: grounded detail ${detailIndex + 1}`);
+    assert.equal(result.answer, expected.answer, `${scenario.language}: final detail TTS ${detailIndex + 1}`);
+    assert.equal(result.answer.includes(overview), false, `${scenario.language}: no repeated overview`);
+    assert.equal(result.pendingQuestion, null, `${scenario.language}: no unrelated continuation`);
+    unseenTurnsValidated += 1;
+  }
+  scenarioMemory.close();
 }
 
 // Recreate the stale overview prompt once before the first specific request;
@@ -315,12 +432,18 @@ assert.ok(latency.p95 < 100, `local complete-call replay p95 exceeded 100ms: ${l
 
 console.log(JSON.stringify({
   task: 'complete-health-call-production-replay', passed: true,
-  turns: ttsOutputs.length, positiveIntroduction: true, overviewValidated: true,
+  turns: ttsOutputs.length + unseenTurnsValidated,
+  positiveIntroduction: true, overviewValidated: true,
   sttVariationsValidated: detailTurns.length + capturedTurns.length,
   detailTopics: detailTurns.map((turn) => turn.topic),
   topicChangesValidated: detailTurns.length,
   repeatedOverviewAfterSpecificAnswer: false,
-  completeCatalogHydration: true, finalTtsOutputsValidated: ttsOutputs.length,
+  singlePublishedOverview: true,
+  catalogOnlyPackageFacts: true,
+  unseenLanguages: unseenLanguageReplays.map((scenario) => scenario.language),
+  unseenTurnsValidated,
+  completeCatalogHydration: true,
+  finalTtsOutputsValidated: ttsOutputs.length + unseenTurnsValidated,
   localReplayLatencyMs: Object.fromEntries(Object.entries(latency)
     .map(([key, value]) => [key, Number(value.toFixed(2))])),
 }));

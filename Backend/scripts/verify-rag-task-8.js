@@ -24,6 +24,7 @@ class MemoryCache {
 
 async function verifyQdrantSearchContract() {
   const tenantId = crypto.randomUUID();
+  const agentId = crypto.randomUUID();
   const knowledgeBases = [
     { id: crypto.randomUUID(), publicationRevision: 2 },
     { id: crypto.randomUUID(), publicationRevision: 5 },
@@ -38,7 +39,7 @@ async function verifyQdrantSearchContract() {
   };
   try {
     const result = await searchTenantPoints(tenantId, Array(env.QDRANT_VECTOR_SIZE).fill(0), {
-      knowledgeBases, usageDirection: 'outbound', limit: 3, scoreThreshold: 0.72,
+      knowledgeBases, usageDirection: 'outbound', agentId, limit: 3, scoreThreshold: 0.72,
     });
     assert.deepEqual(result, []);
     assert.match(request.url, /points\/search$/);
@@ -47,6 +48,8 @@ async function verifyQdrantSearchContract() {
       key: 'tenant_id', match: { value: tenantId },
     });
     assert.deepEqual(request.body.filter.must[1].match.any, ['OUTBOUND', 'BOTH']);
+    assert.equal(request.body.filter.must.some((condition) => condition.key === 'assigned_agent_ids'), false,
+      'mutable assignment snapshots must not be a Qdrant discovery filter');
     assert.equal(request.body.filter.must[3].should.length, 2);
     assert.deepEqual(request.body.filter.must[3].should[0].must, [
       { key: 'knowledge_base_id', match: { value: knowledgeBases[0].id } },

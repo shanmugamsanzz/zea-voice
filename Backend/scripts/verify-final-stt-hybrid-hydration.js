@@ -11,6 +11,14 @@ const agentId = '22222222-2222-4222-8222-222222222222';
 const knowledgeBaseId = '33333333-3333-4333-8333-333333333333';
 const recordId = '44444444-4444-4444-8444-444444444444';
 const siblingRecordId = '44444444-4444-4444-8444-444444444445';
+const categoryRecordIds = [
+  recordId, siblingRecordId,
+  '44444444-4444-4444-8444-444444444446',
+  '44444444-4444-4444-8444-444444444447',
+  '44444444-4444-4444-8444-444444444448',
+  '44444444-4444-4444-8444-444444444449',
+  '44444444-4444-4444-8444-444444444450',
+];
 const documentId = '55555555-5555-4555-8555-555555555555';
 const versionId = '66666666-6666-4666-8666-666666666666';
 const catalogId = '77777777-7777-4777-8777-777777777777';
@@ -82,7 +90,7 @@ function dependencies({ primaryStrong }) {
         return operation({
           async query(sql, values) {
             if (String(sql).includes('ORDER BY i.display_order')) return {
-              rows: [recordId, siblingRecordId].map((id) => ({
+              rows: categoryRecordIds.map((id) => ({
                 record_id: id, knowledge_base_id: knowledgeBaseId,
                 document_id: documentId, document_version_id: versionId, language: 'en',
               })),
@@ -105,7 +113,9 @@ function dependencies({ primaryStrong }) {
                 catalogId,
                 itemKey: candidate.record_id === recordId ? 'premium-plan' : 'standard-plan',
                 name: candidate.record_id === recordId ? 'Premium Plan' : 'Standard Plan',
-                category: 'Plans', categoryKey: 'plans', price: 100, currency: 'USD',
+                aliases: candidate.record_id === recordId ? ['premium'] : ['standard'],
+                category: 'Plans', categoryKey: 'plans', categoryAliases: ['plan', 'plans'],
+                price: 100, currency: 'USD',
                 attributes: [{ key: 'benefits', value: ['Approved benefit'] }],
                 relationships: {}, selectionRules: { selectable: true },
               },
@@ -168,10 +178,11 @@ await searchHybridPublishedKnowledge(
     latestCallerUtterance: 'Show approved plan options',
     pendingQuestion: undefined,
     knownEntities: [],
-    requestType: 'category_request',
   }, category.runtime,
 );
 assert.equal(category.hydratedManifests.length, 2, 'Category requests must rehydrate the bounded authoritative set');
+assert.equal(category.hydratedManifests[1].length, categoryRecordIds.length,
+  'Category identity from published metadata must hydrate every approved child before top-K selection');
 
 const orchestratorSource = await import('node:fs/promises').then((fs) => fs.readFile(
   new URL('../src/voice/realtime-conversation-orchestrator.js', import.meta.url), 'utf8',

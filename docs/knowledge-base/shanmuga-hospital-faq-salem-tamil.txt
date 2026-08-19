@@ -5,7 +5,3 @@ A: Shanmuga Hospital, 24 Sarada College Road, LRN Colony, Chinna Pudur, Salem 63
 Q: நீங்க AIயா?
 ALIASES: AI agent ஆ? | human ஆ? | robot ஆ? | real person ஆ?
 A: ஆமாங்க, நான் Shanmuga Hospital AI agent கார்த்திகா பேசுறேன்.
-
-Q: Appointment book பண்ணலாமா?
-ALIASES: appointment வேண்டும் | checkup book பண்ணுங்க | book an appointment
-A: ஆமாங்க, selected approved packageக்கு appointment request process பண்ணலாம். தேவையான booking detailsஐ configured processபடி collect பண்ணி, verified confirmation கிடைத்த பிறகுதான் appointment confirm ஆனதா சொல்ல முடியும்.

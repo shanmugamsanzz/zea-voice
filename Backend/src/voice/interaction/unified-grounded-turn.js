@@ -134,14 +134,22 @@ export function applyUnifiedGroundedTurn({
   const explicitLatestTopic = decisionWithEvidenceState.stateUpdate.contextDependent !== true
     && !beforeState.activeToolRequest
     && decisionWithEvidenceState.stateUpdate.knownEntities.length > 0;
+  const independentLatestAnswer = decisionWithEvidenceState.decision === 'answer'
+    && decisionWithEvidenceState.stateUpdate.contextDependent !== true
+    && !beforeState.activeToolRequest;
   const pendingQuestionCompleted = decisionWithEvidenceState.stateUpdate.pendingQuestionRelevant === false;
   // An exact overview/message already contains its configured next question.
   // A specific new topic also completes any stale introduction/overview
   // prompt. Relevant guidance can still supply the next current question.
-  const effectiveDecision = exactPublishedResponse || explicitLatestTopic || pendingQuestionCompleted
+  const effectiveDecision = exactPublishedResponse || explicitLatestTopic
+    || independentLatestAnswer || pendingQuestionCompleted
     ? Object.freeze({
       ...decisionWithEvidenceState,
-      pendingQuestion: null,
+      // Exact caller-facing responses already contain their configured
+      // continuation. For ordinary answers retain the model's proposed
+      // question only long enough for exact published-guidance validation;
+      // it is never written directly to memory.
+      pendingQuestion: exactPublishedResponse ? null : decisionWithEvidenceState.pendingQuestion,
       pendingQuestionRelevant: false,
       stateUpdate: Object.freeze({
         ...decisionWithEvidenceState.stateUpdate, pendingQuestionRelevant: false,
@@ -171,10 +179,11 @@ export function applyUnifiedGroundedTurn({
   const selectedEntities = selectedEvidence.map((source) => catalogEntityFromEvidence(
     source, hydratedEnvelope.entities,
   )).filter(Boolean);
-  if (primaryEntities.length > 0 && selectedEntities.length > 0
-    && effectiveDecision.stateUpdate.contextDependent !== true) {
-    const primaryKey = identity(primaryEntities[0].key);
-    if (!selectedEntities.some((entity) => identity(entity.key) === primaryKey)) {
+  if (primaryEntities.length > 0
+    && effectiveDecision.stateUpdate.contextDependent !== true
+    && !effectiveDecision.responseId) {
+    const primaryKeys = new Set(primaryEntities.map((entity) => identity(entity.key)));
+    if (!selectedEntities.some((entity) => primaryKeys.has(identity(entity.key)))) {
       return Object.freeze({
         valid: false, reason: 'latest_request_evidence_mismatch', state: beforeState,
       });
@@ -344,7 +353,9 @@ export function applyUnifiedGroundedTurn({
     fieldSchemas,
     tools,
     actionEvidence,
-    guidanceEvidence: sourcesByType(evidence, 'CONVERSATION_NODE'),
+    guidanceEvidence: sourcesByType(evidence, 'CONVERSATION_NODE').filter((source) => (
+      String(source?.retrievalContext ?? 'primary').toLocaleLowerCase() === 'primary'
+    )),
     confirmationConfiguration,
   });
   const nextQuestionValidation = validateConfiguredFieldCollectionSpeech(nextQuestion?.question, {
@@ -357,7 +368,8 @@ export function applyUnifiedGroundedTurn({
       field: nextQuestionValidation.field, state: afterState,
     });
   }
-  if (nextQuestion) {
+  const durableNextQuestion = nextQuestion?.source !== 'grounded_clarification';
+  if (nextQuestion && durableNextQuestion) {
     afterState = memory.setPendingQuestion({
       key: nextQuestion.key,
       text: nextQuestion.question,

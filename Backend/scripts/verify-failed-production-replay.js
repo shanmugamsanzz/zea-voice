@@ -9,7 +9,7 @@ import { validateGroundedClaims } from '../src/voice/interaction/grounded-claim-
 // generic; these utterances and records are test data representing a captured
 // multilingual call, not business logic.
 const turns = [
-  { utterance: 'ஏ சாம்பா சொல்லுங்க', recordId: 'guidance-positive', direct: true },
+  { utterance: 'ஏ சாம்பா சொல்லுங்க', recordId: 'guidance-overview', direct: true },
   { utterance: 'உங்ககிட்ட என்னென்ன packages இருக்கு?', recordId: 'guidance-overview', direct: true },
   { utterance: 'உங்ககிட்ட என்ன packagesலாம் இருக்கு', recordId: 'guidance-overview', direct: true },
   { utterance: 'ஆமாங்க எனக்கு detail-ஆ என்னென்ன packages இருக்குன்னு சொல்லுங்க', recordId: 'guidance-overview', direct: true },
@@ -27,8 +27,7 @@ const turns = [
 ];
 
 const records = new Map([
-  ['guidance-positive', { recordType: 'CONVERSATION_NODE', content: 'எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Onco Care Packages, Organ-Specific Packages, Kids Health Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?', callerFacing: true, authoritativeData: { nodeType: 'message', variables: [{ key: 'situation', value: 'The caller positively accepts the immediately preceding offer.' }, { key: 'examples', value: ['ஏ சாம்பா சொல்லுங்க'] }, { key: 'matchMode', value: 'semantic' }, { key: 'context', value: 'no_selected_entity' }] } }],
-  ['guidance-overview', { recordType: 'CONVERSATION_NODE', content: 'எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Onco Care Packages, Organ-Specific Packages, Kids Health Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?', callerFacing: true, authoritativeData: { nodeType: 'message', variables: [{ key: 'situation', value: 'The caller asks for all available options or an overview.' }, { key: 'examples', value: ['உங்ககிட்ட என்னென்ன packages இருக்கு', 'உங்ககிட்ட என்ன packagesலாம் இருக்கு', 'detail-ஆ என்னென்ன packages இருக்குன்னு சொல்லுங்க', 'detail-ஆ என்னென்ன packages இருக்குன்னு overview சொல்லுங்க'] }, { key: 'matchMode', value: 'semantic' }] } }],
+  ['guidance-overview', { recordType: 'CONVERSATION_NODE', content: 'எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Onco Care Packages, Organ-Specific Packages, Kids Health Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?', callerFacing: true, authoritativeData: { nodeType: 'message', variables: [{ key: 'situation', value: 'The caller accepts the preceding offer or asks for all available options.' }, { key: 'matchMode', value: 'semantic' }, { key: 'context', value: 'no_selected_entity' }] } }],
   ['catalog-cardiac', { recordType: 'CATALOG_ITEM', content: 'Cardiac screening includes cardiovascular tests and a specialist consultation.', callerFacing: true, authoritativeData: {} }],
   ['catalog-oncology', { recordType: 'CATALOG_ITEM', content: 'Oncology screening options include approved screening tests and oncology consultation.', callerFacing: true, authoritativeData: {} }],
   ['catalog-respiratory', { recordType: 'CATALOG_ITEM', content: 'Respiratory screening includes approved lung-function tests and specialist consultation.', callerFacing: true, authoritativeData: {} }],
@@ -63,9 +62,11 @@ for (const [index, turn] of turns.entries()) {
   assert.equal(direct, false, `non-exact turn ${index + 1}`);
   const answer = turn.answer;
   const decision = validateGroundedLlmDecision(JSON.stringify({
-    decision: 'answer', answer, evidenceIds: ['source_1'], stateUpdate: {}, pendingQuestion: null, toolRequest: null,
+    decision: 'answer', answer, responseId: null, evidenceIds: ['source_1'],
+    stateUpdate: {}, pendingQuestion: null, toolRequest: null, clarification: null,
   }), envelope);
-  assert.equal(decision.valid, true, `validated decision turn ${index + 1}`);
+  assert.equal(decision.valid, true,
+    `validated decision turn ${index + 1}: ${decision.reason ?? 'unknown'}`);
   const claims = validateGroundedClaims(decision.answer, [evidence]);
   assert.equal(claims.valid, true, `validated claims turn ${index + 1}`);
   // This is the exact text that the final validated response hands to TTS.

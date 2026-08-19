@@ -22,11 +22,9 @@ CALLBACK_POLICY
 CALLBACK_AVAILABLE: A caller may request a callback when busy or unable to continue.
 CALLBACK_WINDOW: 8:00 AM to 8:00 PM.
 
-GENERAL_PREPARATION
-FASTING: Eight hours of fasting is generally required before a fasting health check-up.
-PREFERRED_TIME: Tests are generally preferred between 8:00 AM and 11:00 AM.
-AFTER_FOOD_OR_DRINK: If food, tea or coffee was consumed before a fasting test, the Hospital team or Doctor must confirm whether a random blood test or another option is appropriate.
-PACKAGE_PREPARATION: Package-specific preparation must come only from the current Product Catalog. Do not add or infer preparation instructions.
+PACKAGE_INFORMATION_SOURCE
+PACKAGE_FACTS: Package names, categories, prices, tests, services, consultations, preparation and relationships must come only from the current Product Catalog.
+MISSING_PACKAGE_FACT: If a requested package fact is not published in the current Product Catalog, do not infer it from a general policy or another package.
 
 MEDICAL_SAFETY
 SERVICE_SCOPE: Health check-up packages provide screening information, not diagnosis or treatment.
