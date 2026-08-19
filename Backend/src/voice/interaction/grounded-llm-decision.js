@@ -275,6 +275,7 @@ export function groundedDecisionContract(envelope, runtime = {}) {
       'Use clarify only when recent context and approved evidence cannot resolve the meaning.',
       'Do not put question text in answer. Put at most one proposed clarification in pendingQuestion.',
       'Use action only for one configured tool and never claim success before its verified result.',
+      'Never request or collect a configured information field unless the caller explicitly requested the assigned action and the selected Workflow evidence authorizes that tool.',
       'Use only evidenceIds listed below for factual speech.',
       'Set responseId only when selecting one exact caller-facing published response; otherwise use null.',
       'For clarify, set clarification.reason and pendingQuestion. For answer or action, clarification must be null.',

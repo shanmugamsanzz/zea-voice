@@ -85,6 +85,29 @@ function cleanPending(value) {
   return key || text ? Object.freeze({ key: key || null, text: text || key, kind: kind || null }) : null;
 }
 
+export function configuredMessageQuestion(message, key = 'configured_message_question') {
+  const content = cleanText(message, maximumMessageCharacters);
+  const questionEnd = Math.max(content.lastIndexOf('?'), content.lastIndexOf('？'));
+  if (questionEnd < 0) return null;
+  const prefix = content.slice(0, questionEnd);
+  const questionStart = Math.max(
+    prefix.lastIndexOf('.'), prefix.lastIndexOf('!'), prefix.lastIndexOf('?'),
+    prefix.lastIndexOf('。'), prefix.lastIndexOf('！'), prefix.lastIndexOf('？'),
+  );
+  const question = cleanText(content.slice(questionStart + 1, questionEnd + 1), 500);
+  return question ? cleanPending({ key, text: question, kind: 'conversation' }) : null;
+}
+
+export function seedConfiguredQuestion(memory, message, key = 'configured_message_question') {
+  if (!memory?.snapshot || !memory?.setPendingQuestion) return null;
+  const snapshot = memory.snapshot();
+  if (snapshot.pendingQuestion) return snapshot.pendingQuestion;
+  const pending = configuredMessageQuestion(message, key);
+  if (!pending) return null;
+  memory.setPendingQuestion(pending);
+  return memory.snapshot().pendingQuestion;
+}
+
 function cleanToolRequest(value) {
   if (!value || typeof value !== 'object') return null;
   const id = cleanText(value.id, 100);

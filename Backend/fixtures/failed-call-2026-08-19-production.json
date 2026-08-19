@@ -10,6 +10,7 @@
     {
       "id": "failed-call-2026-08-19-c3559ea3",
       "sourceCallId": "c3559ea3-9074-477a-9982-becac294bdc6",
+      "language": "tanglish",
       "initialAssistantTurn": "வணக்கம், நான் Shanmuga Hospitalல இருந்து AI Agent கார்த்திகா பேசுறேன். நான் பேசுறது shanmugam கூடங்களா?.",
       "initialPendingQuestion": "நான் பேசுறது shanmugam கூடங்களா?",
       "turns": [
@@ -80,6 +81,28 @@
         {
           "utterance": "Argan specific package",
           "expectedAnyCategoryKeys": ["organ-specific-health-checkups"]
+        }
+      ]
+    },
+    {
+      "id": "unseen-tamil-overview",
+      "language": "ta",
+      "turns": [
+        {
+          "utterance": "உங்களிடம் கிடைக்கும் எல்லா உடல்நலப் பரிசோதனைத் திட்டங்களையும் சுருக்கமாகச் சொல்ல முடியுமா?",
+          "expectedResponseNodeKeys": ["complete_package_overview"],
+          "requireExactPublishedResponse": true
+        }
+      ]
+    },
+    {
+      "id": "unseen-english-overview",
+      "language": "en",
+      "turns": [
+        {
+          "utterance": "Could you give me a complete overview of the available health screening options?",
+          "expectedResponseNodeKeys": ["complete_package_overview"],
+          "requireExactPublishedResponse": true
         }
       ]
     }

@@ -31,6 +31,34 @@ function selectedSources(decision, groundingEnvelope, evidence) {
   ));
 }
 
+function callerFacingConversationMessage(source) {
+  return String(source?.recordType ?? '').toLocaleUpperCase() === 'CONVERSATION_NODE'
+    && source?.callerFacing === true
+    && String(source?.authoritativeData?.nodeType ?? '').toLocaleLowerCase() === 'message';
+}
+
+const overviewRequestTypes = new Set([
+  'overview', 'options', 'available_options', 'list_options', 'category_overview',
+]);
+
+const catalogFactRequestTypes = new Set([
+  'details', 'item_details', 'price', 'inclusion', 'comparison', 'coverage',
+  'preparation', 'attributes', 'services',
+]);
+
+function isOverviewDecision(decision) {
+  return overviewRequestTypes.has(String(decision?.stateUpdate?.requestType
+    ?? decision?.requestType ?? '').toLocaleLowerCase());
+}
+
+function hasCurrentActionEvidence(sources = []) {
+  return sources.some((source) => (
+    String(source?.recordType ?? '').toLocaleUpperCase() === 'WORKFLOW_RULE'
+    && source?.activationAllowed === true
+    && String(source?.retrievalContext ?? 'primary').toLocaleLowerCase() === 'primary'
+  ));
+}
+
 function identity(value) {
   return String(value ?? '').normalize('NFKC').toLocaleLowerCase()
     .replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim();
@@ -206,7 +234,36 @@ export function applyUnifiedGroundedTurn({
       valid: false, reason: 'unsupported_selected_entity', state: beforeState,
     });
   }
-  const actionEvidence = sourcesByType(evidence, 'WORKFLOW_RULE');
+  // Evidence ownership is an invariant at the final speech boundary. General
+  // overview wording belongs to a caller-facing Conversation message; entity
+  // facts belong to hydrated Catalog records. This is deliberately based on
+  // document types and resolved state, never tenant/business vocabulary.
+  if (effectiveDecision.decision === 'answer' && isOverviewDecision(effectiveDecision)
+    && !selectedEvidence.some(callerFacingConversationMessage)) {
+    return Object.freeze({
+      valid: false, reason: 'overview_conversation_evidence_required', state: beforeState,
+    });
+  }
+  const catalogFactAnswer = effectiveDecision.decision === 'answer'
+    && !effectiveDecision.responseId
+    && (selectedEntities.length > 0
+      || effectiveDecision.stateUpdate.knownEntities.length > 0
+      || primaryEntities.length > 0
+      || catalogFactRequestTypes.has(String(effectiveDecision.stateUpdate.requestType
+        ?? effectiveDecision.requestType ?? '').toLocaleLowerCase()));
+  if (catalogFactAnswer && !selectedEvidence.some((source) => (
+    String(source?.recordType ?? '').toLocaleUpperCase() === 'CATALOG_ITEM'
+  ))) {
+    return Object.freeze({
+      valid: false, reason: 'catalog_evidence_required', state: beforeState,
+    });
+  }
+  // Workflow rules are internal authorization evidence and therefore are not
+  // caller-citable. They must nevertheless come from the current primary
+  // retrieval, never merely from saved or expanded context.
+  const actionEvidence = sourcesByType(evidence, 'WORKFLOW_RULE').filter((source) => (
+    String(source?.retrievalContext ?? 'primary').toLocaleLowerCase() === 'primary'
+  ));
   const exactSelectedEntities = effectiveDecision.stateUpdate.knownEntities.length
     ? effectiveDecision.stateUpdate.knownEntities
     : (beforeState.knownEntities?.length === 1 ? beforeState.knownEntities : []);
@@ -222,6 +279,24 @@ export function applyUnifiedGroundedTurn({
     activeToolRequest: beforeState.activeToolRequest,
     requireCurrentActionEvidence: !beforeState.activeToolRequest?.authorizationRecordId,
   }) : null;
+  const collectedInformationUpdate = Object.keys(
+    effectiveDecision.stateUpdate.collectedInformation ?? {},
+  ).length > 0;
+  const startsToolCollection = Boolean(effectiveDecision.stateUpdate.activeToolRequest)
+    && !beforeState.activeToolRequest;
+  if ((collectedInformationUpdate || startsToolCollection)
+    && (!proposedToolName || preliminaryAction?.valid !== true)) {
+    return Object.freeze({
+      valid: false,
+      reason: proposedToolName ? 'unauthorized_tool_request' : 'unauthorized_information_collection',
+      state: beforeState,
+    });
+  }
+  if (startsToolCollection && !hasCurrentActionEvidence(actionEvidence)) {
+    return Object.freeze({
+      valid: false, reason: 'explicit_action_request_required', state: beforeState,
+    });
+  }
   const fieldCollection = validateConfiguredFieldCollectionSpeech(
     [effectiveDecision.answer, effectiveDecision.pendingQuestion].filter(Boolean).join(' '),
     {
@@ -234,9 +309,12 @@ export function applyUnifiedGroundedTurn({
       valid: false, reason: fieldCollection.reason, field: fieldCollection.field, state: beforeState,
     });
   }
+  const claimEvidence = catalogFactAnswer
+    ? sourcesByType(selectedEvidence, 'CATALOG_ITEM')
+    : selectedEvidence;
   const claimValidation = validateGroundedClaims(
     effectiveDecision.answer,
-    selectedEvidence,
+    claimEvidence,
     { knownEntities: hydratedEnvelope.entities },
   );
   if (!claimValidation.valid) {

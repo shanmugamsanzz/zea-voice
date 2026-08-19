@@ -169,8 +169,25 @@ const acceptancePath = resolve(
 assert.ok(existsSync(acceptancePath),
   `Live PostgreSQL/Qdrant acceptance report is required before production activation: ${acceptancePath}`);
 const acceptance = JSON.parse(readFileSync(acceptancePath, 'utf8'));
-assert.equal(acceptance.mode, 'live_postgresql_qdrant');
+assert.equal(acceptance.mode, 'live_candidate_revision_postgresql_qdrant');
 assert.equal(acceptance.passed, true);
+assert.ok(Number(acceptance.version) >= 3,
+  'Production activation requires the candidate-revision acceptance contract');
+assert.equal(acceptance.verification?.candidateRevisionPinned, true,
+  'Acceptance must be pinned to explicit PostgreSQL/Qdrant revisions');
+assert.equal(acceptance.verification?.postgresRevisionValidated, true,
+  'Candidate PostgreSQL revisions were not validated');
+assert.equal(acceptance.verification?.qdrantRevisionValidated, true,
+  'Candidate Qdrant revisions were not validated');
+assert.ok(Array.isArray(acceptance.candidateRevisions) && acceptance.candidateRevisions.length > 0,
+  'Acceptance report has no candidate revision manifest');
+assert.ok(acceptance.candidateRevisions.every((entry) => (
+  entry.postgresPublished === true && Number(entry.qdrantPointCount) > 0
+)), 'Every candidate revision must exist in PostgreSQL and contain Qdrant points');
+const reportAgeMs = Date.now() - new Date(acceptance.generatedAt).getTime();
+const maximumReportAgeMs = Number(process.env.PRODUCTION_ACCEPTANCE_MAX_AGE_MS ?? 30 * 60 * 1000);
+assert.ok(Number.isFinite(reportAgeMs) && reportAgeMs >= 0 && reportAgeMs <= maximumReportAgeMs,
+  'Production acceptance report is stale; replay the current candidate revision');
 assert.ok(Number(acceptance.callCount) > 0 && Number(acceptance.turnCount) > 0,
   'Live production acceptance must replay at least one call and one turn');
 assert.ok(Number(acceptance.semanticCandidates) > 0,
@@ -184,6 +201,18 @@ assert.equal(acceptance.verification?.retrievedIdsRecorded, true,
   'The acceptance report must record every retrieved candidate ID');
 assert.equal(acceptance.verification?.selectedEvidenceIdsValidated, true,
   'Every LLM-selected evidence ID must be validated');
+assert.equal(acceptance.verification?.perTurnSemanticScoresValidated, true,
+  'Every answerable replay turn must have non-zero semantic evidence');
+assert.equal(acceptance.verification?.evidenceTypesValidated, true,
+  'Every selected evidence record type must be validated');
+assert.equal(acceptance.verification?.memoryValidated, true,
+  'Conversation memory was not validated');
+assert.equal(acceptance.verification?.toolSafetyValidated, true,
+  'Tool and personal-data collection safety was not validated');
+for (const language of ['ta', 'tanglish', 'en']) {
+  assert.ok((acceptance.replayLanguages ?? []).includes(language),
+    `Live acceptance is missing unseen ${language} turns`);
+}
 assert.ok(Number(acceptance.verification?.overviewResponsesValidated) >= 2,
   'Positive introduction and explicit overview responses must be verified');
 assert.ok(Number(acceptance.verification?.followUpEntitiesValidated) >= 1,

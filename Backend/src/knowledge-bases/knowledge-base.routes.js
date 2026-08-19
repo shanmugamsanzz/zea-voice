@@ -8,6 +8,7 @@ import {
   knowledgeBaseIdSchema,
   listKnowledgeBasesSchema,
   parseKnowledgeBaseInput,
+  publishKnowledgeBaseSchema,
   updateKnowledgeBaseSchema,
 } from './knowledge-base.schemas.js';
 import {
@@ -81,7 +82,13 @@ knowledgeBaseRouter.get('/:knowledgeBaseId/review-summary', async (request, resp
 
 knowledgeBaseRouter.post('/:knowledgeBaseId/publish', canManageKnowledgeBases, async (request, response) => {
   const { knowledgeBaseId } = valid(knowledgeBaseIdSchema, request.params);
-  response.json({ success: true, data: await publishKnowledgeBase(auth(request), knowledgeBaseId) });
+  const publication = valid(publishKnowledgeBaseSchema, request.body ?? {});
+  response.json({
+    success: true,
+    data: await publishKnowledgeBase(
+      auth(request), knowledgeBaseId, undefined, undefined, publication,
+    ),
+  });
 });
 
 knowledgeBaseRouter.post('/', canManageKnowledgeBases, async (request, response) => {

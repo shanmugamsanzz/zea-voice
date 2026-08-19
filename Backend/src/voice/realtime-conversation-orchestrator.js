@@ -44,6 +44,7 @@ import { buildConversationMemoryState } from './interaction/conversation-memory-
 import {
   compactGenericConversationState,
   openGenericConversationState,
+  seedConfiguredQuestion,
 } from './interaction/generic-conversation-state.js';
 import {
   buildGroundingEnvelope,
@@ -896,6 +897,17 @@ export class RealtimeConversationOrchestrator {
       );
     const action = await this.controller.initialize(Date.now(), followUpOpening, { sources: welcomeSources });
     if (action.action === 'speak') {
+      if (!followUpOpening) {
+        const pendingWelcomeQuestion = seedConfiguredQuestion(
+          this.liveCallMemory, action.text, 'configured_welcome_question',
+        );
+        if (pendingWelcomeQuestion) {
+          this.log.info({
+            stage: 'conversation.welcome_question_seeded', callId: this.call.id,
+            pendingQuestionKey: pendingWelcomeQuestion.key,
+          }, 'Configured welcome question stored for contextual acknowledgement');
+        }
+      }
       this.log.info({
         stage: 'greeting.started', callId: this.call.id,
         mode: action.greetingMode, personalized: this.personalizedWelcome,

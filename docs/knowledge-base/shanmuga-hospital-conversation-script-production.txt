@@ -21,12 +21,25 @@ FLOW: main
 TYPE: message
 LANGUAGE: ta
 ENTRY: false
-PURPOSE: Use the single approved package overview after the caller accepts the introduction offer or asks for all, other or available package options.
-SITUATION: The caller positively accepts the immediately preceding package-information offer without asking a different question; or the caller asks for the complete package overview, all available options or other options.
-EXAMPLES: ஆமாங்க | சரி சொல்லுங்க | package details சொல்லுங்க | உங்ககிட்ட என்ன packagesலாம் இருக்கு | வேற என்ன options இருக்கு | மொத்த overview சொல்லுங்க | yes please | okay, explain the options | what packages are available | what other options do you have
+PURPOSE: Use the single approved package overview after the caller positively confirms the configured welcome or identity question, accepts the introduction offer, or asks for all, other or available package options.
+SITUATION: The caller positively confirms the immediately preceding configured welcome or identity question without asking a different question; accepts the immediately preceding package-information offer; or asks for the complete package overview, all available options or other options.
+EXAMPLES: ஆமாங்க | சரி சொல்லுங்க | package details சொல்லுங்க | உங்ககிட்ட என்ன packagesலாம் இருக்கு | வேற என்ன options இருக்கு | மொத்த overview சொல்லுங்க | yes please | yes, speaking | okay, explain the options | what packages are available | what other options do you have
 MATCH_MODE: semantic
 CONTEXT: no_selected_entity
 RESPONSE: எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Onco Care Packages, Organ-Specific Packages, Kids Health Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?
+NEXT_QUESTION:
+
+STAGE: call_purpose
+FLOW: main
+TYPE: message
+LANGUAGE: ta
+ENTRY: false
+PURPOSE: Answer when the caller asks why the agent called or what assistance this call provides.
+SITUATION: The caller asks the reason for the call, why the agent is speaking with them, or what help is available.
+EXAMPLES: எதுக்கு phone பண்ணீங்க | எதுக்காக call பண்ணிருக்கீங்க | என்ன விஷயம் | why are you calling | what is this call about
+MATCH_MODE: semantic
+CONTEXT: no_selected_entity
+RESPONSE: Shanmuga Hospitalல கிடைக்கிற Health Check-up packages பற்றிய தகவல் சொல்லவும், தேவைப்பட்டால் appointmentக்கு உதவவும் பேசுறேங்க.
 NEXT_QUESTION:
 
 STAGE: master_package_selection
@@ -53,7 +66,7 @@ TYPE: guidance
 LANGUAGE: ta
 ENTRY: false
 PURPOSE: Give a complete natural explanation of one exact selected package.
-RESPONSE: Use only the selected Product Catalog item. Speak in this order: package name, exact price when published, complete approved tests or services, consultation, and only that item's approved preparation and preferred test time. Split a long test list into natural spoken groups without dropping facts. Do not restart the introduction and do not substitute another item.
+RESPONSE: Use only the selected Product Catalog item. Speak in this order: package name, exact price when published, complete approved tests or services, and consultation. Give preparation or preferred test time here only when the caller explicitly asks; otherwise reserve preparation for the booking confirmation stage so it is spoken once. Split a long test list into natural spoken groups without dropping facts. Do not restart the introduction and do not substitute another item.
 NEXT_QUESTION: Appointment book பண்ணலாமா, இல்ல வேற Package details வேணுமா?
 
 STAGE: selected_package_price
@@ -188,7 +201,7 @@ TYPE: guidance
 LANGUAGE: ta
 ENTRY: false
 PURPOSE: Prepare the final booking confirmation.
-RESPONSE: Read the selected package's approved preparation from the Product Catalog when present. Then read back once: booking for whom, patient name, age, exact appointment date, appointment time and selected canonical package. Ask for final confirmation. The package is a readback value, not a field to ask again.
+RESPONSE: If the selected package's approved preparation has not already been spoken in the current call, read it once from the Product Catalog when present. Then read back once: booking for whom, patient name, age, exact appointment date, appointment time and selected canonical package. Ask for final confirmation. The package is a readback value, not a field to ask again.
 NEXT_QUESTION: இந்த details எல்லாம் correctஆ இருக்கா? Appointment confirm பண்ணட்டுமா?
 
 STAGE: booking_execution

@@ -11,6 +11,10 @@ import {
 } from '../src/knowledge-bases/knowledge-map.service.js';
 import { countTenantPointsByKnowledgeBaseRevision } from '../src/rag/qdrant.client.js';
 import { env } from '../src/config/env.js';
+import {
+  parseKnowledgeBaseInput,
+  publishKnowledgeBaseSchema,
+} from '../src/knowledge-bases/knowledge-base.schemas.js';
 
 const ids = Array.from({ length: 18 }, (_value, index) => {
   const suffix = String(index + 1).padStart(12, '0');
@@ -59,6 +63,20 @@ assert.ok(points.every((point) => point.payload.tenant_id === job.tenant_id
 assert.throws(() => validatePublicationMetadata(job, records, [
   { ...points[0], payload: { ...points[0].payload, publication_revision: 99 } }, ...points.slice(1),
 ], versions), /metadata validation/u);
+
+const replacementManifest = parseKnowledgeBaseInput(publishKnowledgeBaseSchema, {
+  replaceCurrentDocuments: true,
+  documentIds: versions.map((version) => version.document_id),
+});
+assert.equal(replacementManifest.success, true);
+assert.equal(replacementManifest.data.documentIds.length, 5);
+assert.equal(parseKnowledgeBaseInput(publishKnowledgeBaseSchema, {
+  replaceCurrentDocuments: true,
+}).success, false);
+assert.equal(parseKnowledgeBaseInput(publishKnowledgeBaseSchema, {
+  replaceCurrentDocuments: true,
+  documentIds: [versions[0].document_id, versions[0].document_id],
+}).success, false);
 
 const sparse = buildRevisionSparseIndex(job, records);
 assert.equal(sparse.algorithm, 'bm25');
@@ -166,6 +184,9 @@ const runtimeSource = await readFile(new URL('src/knowledge-bases/knowledge-runt
 const providerSource = await readFile(new URL('src/voice/providers/provider-config.js', root), 'utf8');
 const migrationSource = await readFile(new URL('migrations/1786900000000_atomic-knowledge-publication.js', root), 'utf8');
 assert.match(publishSource, /status = 'processing', pending_publication_revision/u);
+assert.match(publishSource, /KNOWLEDGE_PUBLICATION_DOCUMENTS_REPLACED/u);
+assert.match(publishSource, /SET status='archived'/u);
+assert.match(publishSource, /documentIds: rows\.map/u);
 assert.ok(semanticSource.indexOf('countRevisionPoints(') < semanticSource.lastIndexOf('finishIndexJob(job'));
 assert.match(semanticSource, /pending_publication_revision=NULL/u);
 assert.match(runtimeSource, /j\.metadata->>'publicationRevision'=kb\.publication_revision::text/u);

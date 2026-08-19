@@ -91,6 +91,72 @@ const foreignExactTurn = applyUnifiedGroundedTurn({
 });
 assert.equal(foreignExactTurn.valid, false);
 assert.equal(foreignExactTurn.reason, 'foreign_evidence_selected');
+
+const overviewMemory = openGenericConversationState(
+  { ...identity, callId: 'call-overview-boundary' }, {}, 1,
+);
+overviewMemory.beginTurn('overview-wrong-source');
+const overviewFromFaq = applyUnifiedGroundedTurn({
+  rawDecision: unifiedDecision({
+    decision: 'answer', answer: 'Several options are available.', evidenceIds: ['faq-source'],
+    stateUpdate: { requestType: 'overview' }, pendingQuestion: null, toolRequest: null,
+  }),
+  groundingEnvelope: {
+    found: true, entities: [], sources: [{
+      id: 'faq-source', recordId: 'faq-record', recordType: 'FAQ',
+      content: 'Several options are available.',
+    }],
+  },
+  memory: overviewMemory, turnToken: 'overview-wrong-source',
+  evidence: [{
+    id: 'faq-source', recordId: 'faq-record', recordType: 'FAQ',
+    callerFacing: true, content: 'Several options are available.',
+  }],
+  finalizedUtterance: 'What options are available?',
+});
+assert.equal(overviewFromFaq.valid, false);
+assert.equal(overviewFromFaq.reason, 'overview_conversation_evidence_required');
+overviewMemory.beginTurn('overview-message-source');
+const overviewFromGuidance = applyUnifiedGroundedTurn({
+  rawDecision: unifiedDecision({
+    decision: 'answer', answer: 'Approved options are available.', evidenceIds: ['message-source'],
+    stateUpdate: { requestType: 'overview' }, pendingQuestion: null, toolRequest: null,
+  }),
+  groundingEnvelope: {
+    found: true, entities: [], sources: [{
+      id: 'message-source', recordId: 'message-record', recordType: 'CONVERSATION_NODE',
+      content: 'Approved options are available.',
+    }],
+  },
+  memory: overviewMemory, turnToken: 'overview-message-source',
+  evidence: [{
+    id: 'message-source', recordId: 'message-record', recordType: 'CONVERSATION_NODE',
+    callerFacing: true, content: 'Approved options are available.',
+    authoritativeData: { nodeType: 'message' },
+  }],
+  finalizedUtterance: 'What options are available?',
+});
+assert.equal(overviewFromGuidance.valid, true);
+overviewMemory.close();
+
+const noToolMemory = openGenericConversationState(
+  { ...identity, callId: 'call-no-tool-collection' }, settings, 1,
+);
+noToolMemory.beginTurn('no-tool-collection');
+const noToolCollection = applyUnifiedGroundedTurn({
+  rawDecision: unifiedDecision({
+    decision: 'answer', answer: 'The office is on Central Road.', evidenceIds: ['source-1'],
+    stateUpdate: { collectedInformation: { contact_name: 'Asha' } },
+    pendingQuestion: null, toolRequest: null,
+  }),
+  groundingEnvelope: envelope, memory: noToolMemory, turnToken: 'no-tool-collection',
+  fieldSchemas: settings.conversationMemoryFields, tools: [],
+  evidence: envelope.sources, finalizedUtterance: 'Asha asked for the office location.',
+});
+assert.equal(noToolCollection.valid, false);
+assert.equal(noToolCollection.reason, 'unauthorized_information_collection');
+assert.deepEqual(noToolCollection.state.collectedInformation, {});
+noToolMemory.close();
 const catalogMemory = openGenericConversationState(
   { ...identity, callId: 'call-catalog-memory' }, {}, 1,
 );
@@ -343,7 +409,9 @@ const corrected = applyUnifiedGroundedTurn({
   evidence: envelope.sources,
   finalizedUtterance: 'Friday works for me.',
 });
-assert.equal(corrected.state.collectedInformation.preferred_date, 'Friday');
+assert.equal(corrected.valid, false);
+assert.equal(corrected.reason, 'unauthorized_information_collection');
+assert.equal(corrected.state.collectedInformation.preferred_date, undefined);
 assert.equal(corrected.state.pendingQuestion, null);
 
 const stale = applyUnifiedGroundedTurn({
@@ -489,7 +557,7 @@ const unauthorizedAction = applyUnifiedGroundedTurn({
 });
 assert.equal(unauthorizedAction.valid, false);
 assert.equal(unauthorizedAction.reason, 'unauthorized_tool_request');
-assert.equal(unauthorizedAction.state.knownEntities[0].key, 'priority-service');
+assert.deepEqual(unauthorizedAction.state.knownEntities, []);
 assert.equal(unauthorizedAction.state.activeToolRequest, null);
 
 const invalidArgumentsMemory = openGenericConversationState(

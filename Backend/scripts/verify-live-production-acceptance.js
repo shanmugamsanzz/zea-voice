@@ -15,6 +15,7 @@ import { buildGroundingEnvelope } from '../src/voice/interaction/grounded-llm-re
 import { applyUnifiedGroundedTurn } from '../src/voice/interaction/unified-grounded-turn.js';
 import { evidenceBelongsToRuntime } from '../src/voice/interaction/grounded-decision-security.js';
 import { configuredSafeFailureResponse } from '../src/voice/realtime-conversation-orchestrator.js';
+import { countTenantPointsByKnowledgeBaseRevision } from '../src/rag/qdrant.client.js';
 
 function argument(name, fallback = null) {
   const prefix = `--${name}=`;
@@ -49,6 +50,36 @@ function catalogAttributeKeys(source) {
 
 function sourceRecordId(source) {
   return String(source?.recordId ?? source?.id ?? '').trim();
+}
+
+const allowedEvidenceTypes = new Set([
+  'CATALOG_ITEM', 'WORKFLOW_RULE', 'CONVERSATION_NODE', 'FAQ', 'KNOWLEDGE_CHUNK',
+]);
+
+function expectedRevisionMap(value) {
+  const entries = String(value ?? '').split(',').map((entry) => entry.trim()).filter(Boolean);
+  assert.ok(entries.length > 0,
+    'Explicit --expected-revisions=<knowledgeBaseId>:<revision>[,...] is required');
+  const result = new Map();
+  for (const entry of entries) {
+    const separator = entry.lastIndexOf(':');
+    assert.ok(separator > 0, `Invalid expected revision entry: ${entry}`);
+    const knowledgeBaseId = entry.slice(0, separator).trim().toLowerCase();
+    const revision = Number(entry.slice(separator + 1));
+    assert.match(knowledgeBaseId,
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+      `Invalid Knowledge Base ID: ${knowledgeBaseId}`);
+    assert.ok(Number.isInteger(revision) && revision > 0, `Invalid revision: ${entry}`);
+    assert.equal(result.has(knowledgeBaseId), false, `Duplicate Knowledge Base revision: ${knowledgeBaseId}`);
+    result.set(knowledgeBaseId, revision);
+  }
+  return result;
+}
+
+function revisionFingerprint(revisions) {
+  return revisions.map((entry) => (
+    `${String(entry.knowledgeBaseId).toLowerCase()}:${Number(entry.publicationRevision)}`
+  )).sort().join('|');
 }
 
 function matchingCatalogSources(hydrated, turn) {
@@ -134,6 +165,54 @@ async function resolveAgent(agentId) {
   });
 }
 
+async function verifyCandidateRevisions(agent, expected) {
+  const rows = await withPlatformAdminContext(null, async (client) => {
+    const result = await client.query(
+      `SELECT kb.id AS knowledge_base_id, kb.status, kb.publication_revision,
+          kb.pending_publication_revision,
+          EXISTS (
+            SELECT 1 FROM knowledge_processing_jobs j
+             WHERE j.tenant_id=kb.tenant_id AND j.knowledge_base_id=kb.id
+               AND j.job_type='index' AND j.status='completed'
+               AND j.metadata->>'publicationRevision'=kb.publication_revision::text
+          ) AS completed_index
+         FROM agent_knowledge_bases akb
+         JOIN knowledge_bases kb
+           ON kb.tenant_id=akb.tenant_id AND kb.id=akb.knowledge_base_id
+        WHERE akb.tenant_id=$1 AND akb.agent_id=$2
+          AND kb.deleted_at IS NULL
+        ORDER BY akb.priority, kb.id`,
+      [agent.tenant_id, agent.id],
+    );
+    return result.rows;
+  });
+  const byId = new Map(rows.map((row) => [String(row.knowledge_base_id).toLowerCase(), row]));
+  const verified = [];
+  for (const [knowledgeBaseId, revision] of expected) {
+    const row = byId.get(knowledgeBaseId);
+    assert.ok(row, `Expected Knowledge Base ${knowledgeBaseId} is not assigned to the agent`);
+    assert.equal(row.status, 'published', `${knowledgeBaseId} is not atomically published`);
+    assert.equal(Number(row.publication_revision), revision,
+      `${knowledgeBaseId} active revision does not match the activation candidate`);
+    assert.equal(row.pending_publication_revision, null,
+      `${knowledgeBaseId} still has an unfinished PostgreSQL publication revision`);
+    assert.equal(row.completed_index, true,
+      `${knowledgeBaseId}:${revision} has no completed semantic index job`);
+    const qdrant = await countTenantPointsByKnowledgeBaseRevision(
+      agent.tenant_id, knowledgeBaseId, revision,
+    );
+    assert.ok(Number(qdrant.count) > 0,
+      `${knowledgeBaseId}:${revision} has no Qdrant points`);
+    verified.push({
+      knowledgeBaseId, publicationRevision: revision,
+      postgresPublished: true, qdrantPointCount: Number(qdrant.count),
+    });
+  }
+  assert.equal(rows.length, expected.size,
+    'Every Knowledge Base assigned to the activation candidate agent must be pinned explicitly');
+  return verified;
+}
+
 async function collectDecision(profile, input) {
   const session = await createSelectedLlmStream(profile, input);
   let raw = '';
@@ -157,6 +236,9 @@ const agentId = required(
   argument('agent-id', process.env.PRODUCTION_ACCEPTANCE_AGENT_ID),
   'PRODUCTION_ACCEPTANCE_AGENT_ID or --agent-id',
 );
+const expectedRevisions = expectedRevisionMap(argument(
+  'expected-revisions', process.env.PRODUCTION_ACCEPTANCE_EXPECTED_REVISIONS,
+));
 const replayPath = resolve(argument(
   'replay-file', process.env.PRODUCTION_ACCEPTANCE_REPLAY_FILE
     ?? 'fixtures/failed-call-2026-08-19-production.json',
@@ -169,6 +251,8 @@ const replay = JSON.parse(await readFile(replayPath, 'utf8'));
 assert.ok(Array.isArray(replay.calls) && replay.calls.length > 0, 'At least one failed call replay is required');
 
 const agent = await resolveAgent(agentId);
+const candidateRevisions = await verifyCandidateRevisions(agent, expectedRevisions);
+const candidateRevisionFingerprint = revisionFingerprint(candidateRevisions);
 const direction = agent.usage_direction === 'outbound' ? 'outbound' : 'inbound';
 const resolvedAgent = {
   agentId: agent.id, tenantId: agent.tenant_id, workspaceId: agent.workspace_id,
@@ -183,6 +267,7 @@ const tools = runtimeTools(profile.tools);
 const samples = [];
 const results = [];
 let semanticCandidates = 0;
+const replayLanguages = new Set();
 const safeResponse = configuredSafeFailureResponse(profile);
 
 try {
@@ -205,6 +290,10 @@ try {
       }
       for (const [index, turn] of call.turns.entries()) {
         const utterance = required(turn.utterance, `${call.id} turn ${index + 1} utterance`);
+        const replayLanguage = required(turn.language ?? call.language,
+          `${call.id} turn ${index + 1} language`)
+          .toLocaleLowerCase();
+        replayLanguages.add(replayLanguage);
         const totalStartedAt = performance.now();
         const retrievalStartedAt = performance.now();
         const snapshot = memory.snapshot();
@@ -223,6 +312,8 @@ try {
         const retrievalMs = performance.now() - retrievalStartedAt;
         const publicationRevisions = tenantEvidence.publicationRevisions ?? [];
         assert.ok(publicationRevisions.length > 0, `${call.id} turn ${index + 1}: no active publication revision`);
+        assert.equal(revisionFingerprint(publicationRevisions), candidateRevisionFingerprint,
+          `${call.id} turn ${index + 1}: retrieval did not use the pinned activation candidate revision`);
         const activeRevisionByKnowledgeBase = new Map(publicationRevisions.map((revision) => (
           [normalized(revision.knowledgeBaseId), Number(revision.publicationRevision)]
         )));
@@ -240,6 +331,13 @@ try {
           ...(tenantEvidence.actionEvidence ?? []),
           ...(tenantEvidence.guidanceEvidence ?? []),
         ];
+        assert.ok(hydrated.length > 0 || turn.allowSafeResponse === true,
+          `${call.id} turn ${index + 1}: no hydrated evidence`);
+        for (const source of hydrated) {
+          assert.ok(source.recordId, `${call.id} turn ${index + 1}: evidence has no PostgreSQL record ID`);
+          assert.ok(allowedEvidenceTypes.has(String(source.recordType).toUpperCase()),
+            `${call.id} turn ${index + 1}: unsupported evidence type ${source.recordType}`);
+        }
         const scope = {
           tenantId: agent.tenant_id, agentId: agent.id,
           publicationRevisions, requireHydratedEvidence: true,
@@ -249,6 +347,13 @@ try {
             `${call.id} turn ${index + 1}: foreign, stale or unhydrated evidence ${source.recordId}`);
         }
         semanticCandidates += Number(tenantEvidence.retrieval?.semanticCandidates ?? 0);
+        const positiveSemanticEvidence = hydrated.filter((source) => Number(source.semanticScore) > 0);
+        if (turn.allowSafeResponse !== true) {
+          assert.ok(Number(tenantEvidence.retrieval?.semanticCandidates ?? 0) > 0,
+            `${call.id} turn ${index + 1}: semantic retrieval returned no candidates`);
+          assert.ok(positiveSemanticEvidence.length > 0,
+            `${call.id} turn ${index + 1}: hydrated evidence has no non-zero semantic score`);
+        }
         const knowledge = {
           route: 'llm_first', found: tenantEvidence.found === true,
           content: tenantEvidence.sources?.[0]?.content ?? null,
@@ -270,6 +375,7 @@ try {
         let responseId = null;
         let llmMs = 0;
         let envelope = null;
+        let unifiedApplied = false;
         if (responseRouting.outcome === 'clarify') {
           finalDecision = 'safe_failure';
           finalText = safeResponse;
@@ -306,6 +412,7 @@ try {
             `${call.id} turn ${index + 1}: invalid final decision (${unified.reason ?? 'unknown'})`);
           finalDecision = unified.decision;
           finalText = unified.answer;
+          unifiedApplied = true;
           selectedEvidenceIds = [...unified.evidenceIds];
           responseId = unified.responseId ?? null;
           selectedRecordIds = selectedEvidenceIds.map((id) => (
@@ -316,8 +423,21 @@ try {
             `${call.id} turn ${index + 1}: decision selected evidence outside top records`);
           assert.ok(!unified.toolRequest || tools.some((tool) => tool.name === unified.toolRequest.name),
             `${call.id} turn ${index + 1}: unauthorized tool request`);
+          if (!turn.expectedToolName) {
+            assert.equal(unified.toolRequest, null,
+              `${call.id} turn ${index + 1}: an information-only turn requested a tool`);
+          } else {
+            assert.equal(unified.toolRequest?.name, turn.expectedToolName,
+              `${call.id} turn ${index + 1}: expected tool was not selected`);
+          }
+          if (turn.allowInformationCollection !== true) {
+            assert.deepEqual(unified.stateUpdate?.collectedInformation ?? {}, {},
+              `${call.id} turn ${index + 1}: personal/configured fields were collected without authorization`);
+          }
         }
         assert.ok(String(finalText ?? '').trim(), `${call.id} turn ${index + 1}: empty TTS text`);
+        assert.doesNotMatch(String(finalText), /(?:"evidenceIds"|"stateUpdate"|"toolRequest")/u,
+          `${call.id} turn ${index + 1}: internal JSON reached TTS`);
         const retrievedRecordIds = hydrated.map((source) => source.recordId).filter(Boolean);
         if (Array.isArray(turn.expectedAnyRecordIds) && turn.expectedAnyRecordIds.length) {
           assert.ok(turn.expectedAnyRecordIds.some((id) => retrievedRecordIds.includes(id)),
@@ -328,15 +448,30 @@ try {
           selectedRecordIds, responseId, finalText, safeResponse,
           memoryState: memory.snapshot(),
         });
-        memory.append({ role: 'assistant', content: finalText }, { turnToken: token });
+        if (!unifiedApplied) {
+          memory.append({ role: 'assistant', content: finalText }, { turnToken: token });
+        }
+        const finalMemory = memory.snapshot();
+        assert.equal(finalMemory.recentTurns.at(-1)?.role, 'assistant',
+          `${call.id} turn ${index + 1}: final assistant turn was not stored`);
+        assert.equal(finalMemory.recentTurns.at(-1)?.content, finalText,
+          `${call.id} turn ${index + 1}: memory does not contain final TTS text`);
+        const adjacentDuplicate = finalMemory.recentTurns.some((entry, entryIndex, turns) => (
+          entryIndex > 0 && entry.role === 'assistant' && turns[entryIndex - 1]?.role === 'assistant'
+          && normalized(entry.content) === normalized(turns[entryIndex - 1]?.content)
+        ));
+        assert.equal(adjacentDuplicate, false,
+          `${call.id} turn ${index + 1}: assistant response was duplicated in memory`);
         const totalMs = performance.now() - totalStartedAt;
         samples.push({ retrievalMs, llmMs, totalMs });
         results.push({
           callId: call.id, turn: index + 1, utterance,
           publicationRevisions, retrievedRecordIds, selectedEvidenceIds,
-          selectedRecordIds, responseId, finalDecision, memory: memory.snapshot(),
+          selectedRecordIds, responseId, finalDecision, memory: finalMemory,
           retrievalTrace,
           routing: responseRouting, expectation,
+          language: replayLanguage,
+          positiveSemanticRecordIds: positiveSemanticEvidence.map(sourceRecordId),
           toolSafe: true, ttsText: finalText, latencyMs: { retrievalMs, llmMs, totalMs },
         });
       }
@@ -345,6 +480,9 @@ try {
     }
   }
   assert.ok(semanticCandidates > 0, 'No Qdrant semantic candidates were observed in the live replay');
+  for (const language of ['ta', 'tanglish', 'en']) {
+    assert.ok(replayLanguages.has(language), `Live replay is missing unseen ${language} coverage`);
+  }
   const latency = Object.fromEntries(['retrievalMs', 'llmMs', 'totalMs'].map((field) => [field, {
     p50: percentile(samples.map((sample) => sample[field]), 0.50),
     p90: percentile(samples.map((sample) => sample[field]), 0.90),
@@ -366,17 +504,26 @@ try {
   assert.ok(latency.totalMs.p95 <= thresholds.totalP95,
     `Production total p95 ${latency.totalMs.p95.toFixed(2)}ms exceeds ${thresholds.totalP95}ms`);
   const report = {
-    version: 2, mode: 'live_postgresql_qdrant', passed: true,
+    version: 3, mode: 'live_candidate_revision_postgresql_qdrant', passed: true,
     generatedAt: new Date().toISOString(), agentId: agent.id,
     replayVersion: replay.version ?? 1,
     replayFile: replayPath,
     sourceCallIds: replay.calls.map((call) => call.sourceCallId).filter(Boolean),
     callCount: replay.calls.length, turnCount: results.length,
     semanticCandidates, latency, thresholds,
+    candidateRevisions, candidateRevisionFingerprint,
+    replayLanguages: [...replayLanguages].sort(),
     verification: {
       allHydratedEvidenceScopeValidated: true,
       retrievedIdsRecorded: true,
       selectedEvidenceIdsValidated: true,
+      candidateRevisionPinned: true,
+      postgresRevisionValidated: true,
+      qdrantRevisionValidated: true,
+      perTurnSemanticScoresValidated: true,
+      evidenceTypesValidated: true,
+      memoryValidated: true,
+      toolSafetyValidated: true,
       overviewResponsesValidated: results.filter((result) => (
         result.expectation.exactPublishedResponse
       )).length,

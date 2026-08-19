@@ -584,6 +584,7 @@ export async function publishKnowledgeBase(
   knowledgeBaseId,
   contextRunner = withTenantContext,
   queueAdapter = enqueueKnowledgeProcessingJob,
+  publication = {},
 ) {
   const published = await contextRunner(auth, async (client) => {
     const knowledgeBase = await client.query(
@@ -604,10 +605,56 @@ export async function publishKnowledgeBase(
     if (knowledgeBase.rows[0].status === 'published') {
       throw new AppError(409, 'Knowledge Base is already published', 'KNOWLEDGE_BASE_ALREADY_PUBLISHED');
     }
-    const rows = await documentReviewRows(client, auth, knowledgeBaseId, null, true);
+    const availableRows = await documentReviewRows(client, auth, knowledgeBaseId, null, true);
+    let rows = availableRows;
+    let deactivatedDocumentIds = [];
+    if (publication.replaceCurrentDocuments === true) {
+      const requestedIds = new Set((publication.documentIds ?? []).map((id) => String(id).toLowerCase()));
+      const availableIds = new Set(availableRows.map((row) => String(row.id).toLowerCase()));
+      const missingIds = [...requestedIds].filter((id) => !availableIds.has(id));
+      if (missingIds.length) {
+        throw new AppError(409, 'Publication contains unavailable documents',
+          'KNOWLEDGE_PUBLICATION_DOCUMENT_UNAVAILABLE', { documentIds: missingIds });
+      }
+      rows = availableRows.filter((row) => requestedIds.has(String(row.id).toLowerCase()));
+      deactivatedDocumentIds = availableRows
+        .filter((row) => !requestedIds.has(String(row.id).toLowerCase()))
+        .map((row) => row.id);
+    }
     const blockers = blockersForDocuments(rows);
     if (blockers.length) {
       throw new AppError(409, 'Knowledge Base cannot be published until review is complete', 'KNOWLEDGE_BASE_REVIEW_INCOMPLETE', { blockers });
+    }
+    if (deactivatedDocumentIds.length) {
+      await client.query(
+        `UPDATE knowledge_document_versions
+            SET status='archived'
+          WHERE tenant_id=$1 AND knowledge_base_id=$2
+            AND document_id=ANY($3::uuid[]) AND is_current=true
+            AND deleted_at IS NULL AND status <> 'deleted'`,
+        [auth.tenantId, knowledgeBaseId, deactivatedDocumentIds],
+      );
+      await client.query(
+        `UPDATE knowledge_documents
+            SET status='archived', updated_by=$4
+          WHERE tenant_id=$1 AND knowledge_base_id=$2
+            AND id=ANY($3::uuid[]) AND deleted_at IS NULL AND status <> 'deleted'`,
+        [auth.tenantId, knowledgeBaseId, deactivatedDocumentIds, auth.userId],
+      );
+      await client.query(
+        `INSERT INTO audit_logs (
+           tenant_id, workspace_id, actor_user_id, actor_type, action,
+           entity_type, entity_id, after_data
+         ) VALUES ($1,$2,$3,$4,'KNOWLEDGE_PUBLICATION_DOCUMENTS_REPLACED',
+           'knowledge_base',$5,$6::jsonb)`,
+        [
+          auth.tenantId, auth.workspaceId, auth.userId,
+          auth.authType === 'api_key' ? 'api' : 'user', knowledgeBaseId,
+          JSON.stringify({
+            documentIds: rows.map((row) => row.id), deactivatedDocumentIds,
+          }),
+        ],
+      );
     }
     const targetRevision = Number(knowledgeBase.rows[0].publication_revision) + 1;
     const updated = await client.query(
@@ -656,6 +703,7 @@ export async function publishKnowledgeBase(
       publishedAt: null,
       publishedBy: null,
       documentCount: rows.length,
+      deactivatedDocumentCount: deactivatedDocumentIds.length,
       semanticIndex: {
         jobId: indexJob.rows[0].id,
         status: 'queued',

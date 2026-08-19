@@ -31,6 +31,33 @@ export const knowledgeDeletionJobIdSchema = z.object({
   jobId: z.string().uuid(),
 });
 
+export const publishKnowledgeBaseSchema = z.object({
+  replaceCurrentDocuments: z.boolean().default(false),
+  documentIds: z.array(z.string().uuid()).min(1).max(100).optional(),
+}).strict().superRefine((value, context) => {
+  if (value.replaceCurrentDocuments && !value.documentIds?.length) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['documentIds'],
+      message: 'documentIds are required when replacing the current publication documents',
+    });
+  }
+  if (!value.replaceCurrentDocuments && value.documentIds !== undefined) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['replaceCurrentDocuments'],
+      message: 'replaceCurrentDocuments must be true when documentIds are supplied',
+    });
+  }
+  if (value.documentIds && new Set(value.documentIds).size !== value.documentIds.length) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['documentIds'],
+      message: 'documentIds must be unique',
+    });
+  }
+});
+
 export const listKnowledgeBasesSchema = z.object({
   search: z.string().trim().max(200).optional(),
   status: knowledgeBaseStatus.optional(),
