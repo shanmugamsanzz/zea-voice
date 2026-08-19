@@ -93,7 +93,10 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
     events: llm.stream({
       messages,
       tools: groundedResponseMode ? [] : assignedTools,
-      temperature: runtimeProfile.agent.temperature,
+      // Evidence selection, state mutation and tool authorization are control
+      // decisions. They must be reproducible for identical input; conversational
+      // creativity remains available only outside the grounded JSON path.
+      temperature: groundedResponseMode ? 0 : runtimeProfile.agent.temperature,
       maxOutputTokens: groundedResponseMode
         ? env.VOICE_GROUNDED_MAX_OUTPUT_TOKENS
         : env.LLM_MAX_OUTPUT_TOKENS,

@@ -281,6 +281,8 @@ const streamSession = await createSelectedLlmStream({
 for await (const _event of streamSession.events) { /* consume one provider response */ }
 await streamSession.close();
 assert.equal(providerCalls, 1);
+assert.equal(providerInput.temperature, 0,
+  'Grounded JSON decisions must be deterministic regardless of conversational temperature');
 assert.equal(providerInput.responseFormat.type, 'json_schema');
 assert.equal(providerInput.responseFormat.schema.additionalProperties, false);
 assert.ok(providerInput.messages.some((message) => message.content === 'We were discussing Premium Plan.'));
