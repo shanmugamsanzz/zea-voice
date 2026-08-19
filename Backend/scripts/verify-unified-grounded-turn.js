@@ -161,6 +161,43 @@ const staleCatalogTurn = applyUnifiedGroundedTurn({
 });
 assert.equal(staleCatalogTurn.valid, false);
 assert.equal(staleCatalogTurn.reason, 'latest_request_evidence_mismatch');
+
+// A newer primary Catalog match must override a previously selected entity.
+catalogMemory.beginTurn('new-primary-item-turn');
+const primaryItem = {
+  ...catalogEvidence, id: 'catalog-primary', recordId: 'catalog-primary',
+  retrievalContext: 'primary', rank: 1,
+  authoritativeData: { ...catalogEvidence.authoritativeData, itemKey: 'new-item', name: 'New Item' },
+};
+const staleItem = {
+  ...catalogEvidence, id: 'catalog-stale', recordId: 'catalog-stale',
+  retrievalContext: 'contextual', rank: 2,
+  authoritativeData: { ...catalogEvidence.authoritativeData, itemKey: 'old-item', name: 'Old Item' },
+};
+const primaryMismatch = applyUnifiedGroundedTurn({
+  rawDecision: unifiedDecision({
+    decision: 'answer', answer: 'Old Item details.', evidenceIds: ['catalog-stale'],
+    stateUpdate: {
+      currentTopic: 'old-item', knownEntityKeys: ['old-item'], collectedInformation: {},
+      correctedFields: [], contextDependent: false,
+    }, pendingQuestion: null, toolRequest: null,
+  }),
+  groundingEnvelope: {
+    found: true,
+    sources: [
+      { id: 'catalog-primary', recordId: 'catalog-primary', recordType: 'CATALOG_ITEM', content: 'New Item details.' },
+      { id: 'catalog-stale', recordId: 'catalog-stale', recordType: 'CATALOG_ITEM', content: 'Old Item details.' },
+    ],
+    entities: [
+      { id: 'catalog-primary', key: 'new-item', name: 'New Item' },
+      { id: 'catalog-stale', key: 'old-item', name: 'Old Item' },
+    ],
+  },
+  memory: catalogMemory, turnToken: 'new-primary-item-turn',
+  evidence: [primaryItem, staleItem], finalizedUtterance: 'Tell me about New Item.',
+});
+assert.equal(primaryMismatch.valid, false);
+assert.equal(primaryMismatch.reason, 'latest_request_evidence_mismatch');
 catalogMemory.close();
 const sideAnswer = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({

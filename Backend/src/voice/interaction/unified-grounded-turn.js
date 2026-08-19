@@ -61,6 +61,15 @@ function catalogEntityFromEvidence(source, envelopeEntities = []) {
   };
 }
 
+function primaryCatalogEntities(evidence = []) {
+  return evidence
+    .filter((source) => String(source?.recordType ?? '').toLocaleUpperCase() === 'CATALOG_ITEM'
+      && String(source?.retrievalContext ?? 'primary').toLocaleLowerCase() === 'primary')
+    .sort((left, right) => Number(left.rank ?? 0) - Number(right.rank ?? 0))
+    .map((source) => catalogEntityFromEvidence(source, []))
+    .filter(Boolean);
+}
+
 /**
  * Applies one validated LLM decision to one generic call state. This module is
  * industry-neutral: all facts, questions, fields and tools come from the
@@ -125,10 +134,11 @@ export function applyUnifiedGroundedTurn({
   const explicitLatestTopic = decisionWithEvidenceState.stateUpdate.contextDependent !== true
     && !beforeState.activeToolRequest
     && decisionWithEvidenceState.stateUpdate.knownEntities.length > 0;
+  const pendingQuestionCompleted = decisionWithEvidenceState.stateUpdate.pendingQuestionRelevant === false;
   // An exact overview/message already contains its configured next question.
   // A specific new topic also completes any stale introduction/overview
   // prompt. Relevant guidance can still supply the next current question.
-  const effectiveDecision = exactPublishedResponse || explicitLatestTopic
+  const effectiveDecision = exactPublishedResponse || explicitLatestTopic || pendingQuestionCompleted
     ? Object.freeze({
       ...decisionWithEvidenceState,
       pendingQuestion: null,
@@ -152,6 +162,23 @@ export function applyUnifiedGroundedTurn({
     return Object.freeze({
       valid: false, reason: 'foreign_evidence_selected', state: memory.snapshot(),
     });
+  }
+  // An explicit latest-turn Catalog match outranks saved conversational
+  // context. A contextual record may answer a pronoun/follow-up only when
+  // the primary query did not resolve a Catalog item. This prevents a prior
+  // selection from making a new item request answer with the old item.
+  const primaryEntities = primaryCatalogEntities(evidence);
+  const selectedEntities = selectedEvidence.map((source) => catalogEntityFromEvidence(
+    source, hydratedEnvelope.entities,
+  )).filter(Boolean);
+  if (primaryEntities.length > 0 && selectedEntities.length > 0
+    && effectiveDecision.stateUpdate.contextDependent !== true) {
+    const primaryKey = identity(primaryEntities[0].key);
+    if (!selectedEntities.some((entity) => identity(entity.key) === primaryKey)) {
+      return Object.freeze({
+        valid: false, reason: 'latest_request_evidence_mismatch', state: beforeState,
+      });
+    }
   }
   const selectedCatalogContexts = selectedEvidence.filter((source) => (
     String(source?.recordType ?? '').toLocaleUpperCase() === 'CATALOG_ITEM'

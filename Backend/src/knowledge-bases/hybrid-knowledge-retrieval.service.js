@@ -419,16 +419,16 @@ export function mergeAndRerankCandidates(semantic, lexical, query, language = 'u
   // Catalog or Conversation records out before PostgreSQL hydration.
   const selected = [];
   const selectedKeys = new Set();
-  const add = (candidate) => {
+  const addSelected = (candidate) => {
     const key = candidate && candidateKey(candidate);
     if (!candidate || selectedKeys.has(key) || selected.length >= maximum) return;
     selectedKeys.add(key);
     selected.push(candidate);
   };
-  ranked.slice(0, Math.max(1, maximum - 2)).forEach(add);
-  add(ranked.find((candidate) => candidate.recordType === 'CONVERSATION_NODE'));
-  add(ranked.find((candidate) => candidate.recordType === 'CATALOG_ITEM'));
-  ranked.forEach(add);
+  ranked.slice(0, Math.max(1, maximum - 2)).forEach(addSelected);
+  addSelected(ranked.find((candidate) => candidate.recordType === 'CONVERSATION_NODE'));
+  addSelected(ranked.find((candidate) => candidate.recordType === 'CATALOG_ITEM'));
+  ranked.forEach(addSelected);
   return selected
     .map((candidate, index) => ({ ...candidate, rank: index + 1 }));
 }
@@ -501,7 +501,11 @@ export function contextualRetrievalPolicy(input, query, primaryCandidates = []) 
     // A compact response or reference is normally meaningful only together
     // with the immediately pending question or selected entity. Longer turns
     // retain latest-utterance-first behavior unless their evidence is weak.
-    useContext: available && (explicitlyContextual || compactTurn || !primarySufficient),
+    // Context is an explicit/compact-turn resolver only. Do not pay for a
+    // second vector search on a normal multi-word request whose latest query
+    // already produced a usable primary candidate.
+    useContext: available && (explicitlyContextual
+      || (compactTurn && !primarySufficient && primaryRecordType !== 'CATALOG_ITEM')),
     // Do not let a generic message match consume a compact continuation. An
     // explicit item match remains primary even when the utterance is short.
     preferContext: available && (explicitlyContextual
@@ -564,8 +568,16 @@ function catalogValue(value) {
 
 export function focusAuthoritativeCatalogEvidence(evidence = [], input = {}, maximum = 5) {
   const limit = Math.max(3, Math.min(Number(maximum) || 5, 5));
+  const preferredCallerMessage = input.preferredCallerMessage?.recordType === 'CONVERSATION_NODE'
+    && input.preferredCallerMessage?.callerFacing === true
+    ? input.preferredCallerMessage : null;
   const catalog = evidence.filter((item) => item.recordType === 'CATALOG_ITEM');
-  if (!catalog.length) return Object.freeze({ focused: false, evidence: Object.freeze([...evidence].slice(0, limit)) });
+  if (!catalog.length) {
+    const ordered = preferredCallerMessage
+      ? [preferredCallerMessage, ...evidence.filter((item) => item.id !== preferredCallerMessage.id)]
+      : evidence;
+    return Object.freeze({ focused: false, evidence: Object.freeze(ordered.slice(0, limit)) });
+  }
 
   const selected = (input.knownEntities ?? []).flatMap((entity) => [
     entity?.key, entity?.name, entity?.category, entity?.categoryKey,
@@ -584,7 +596,10 @@ export function focusAuthoritativeCatalogEvidence(evidence = [], input = {}, max
   const topCatalog = topPrimaryCatalog
     ?? (firstEvidence?.recordType === 'CATALOG_ITEM' ? firstEvidence : null);
   if (!exactSelected.length && !categorySelected.length && !topCatalog) {
-    return Object.freeze({ focused: false, evidence: Object.freeze([...evidence].slice(0, limit)) });
+    const ordered = preferredCallerMessage
+      ? [preferredCallerMessage, ...evidence.filter((item) => item.id !== preferredCallerMessage.id)]
+      : evidence;
+    return Object.freeze({ focused: false, evidence: Object.freeze(ordered.slice(0, limit)) });
   }
 
   let resolvedCatalog;
@@ -626,7 +641,8 @@ export function focusAuthoritativeCatalogEvidence(evidence = [], input = {}, max
     && item.callerFacing !== true
   ));
   const unique = new Map();
-  for (const item of [...resolvedCatalog, ...supportingRules]) {
+  for (const item of [preferredCallerMessage, ...resolvedCatalog, ...supportingRules]) {
+    if (!item) continue;
     if (!unique.has(item.id)) unique.set(item.id, item);
   }
   return Object.freeze({
@@ -803,12 +819,20 @@ export function selectStrongCallerMessage(evidence = [], query = '', input = {})
 }
 
 async function loadScope(auth, input, runtime) {
-  return runtime.contextRunner(auth, async (client) => {
+  const cacheKey = `zea:rag:active-scope:${auth.tenantId}:${input.agentId}:${input.usageDirection}`;
+  const cached = await readJson(runtime.cache, cacheKey);
+  if (Array.isArray(cached) && cached.length > 0) return cached;
+  const scope = await runtime.contextRunner(auth, async (client) => {
     const result = await client.query(activeScopeSql, [auth.tenantId, input.agentId, input.usageDirection]);
     const row = result.rows[0];
     if (!row?.agent_usage) throw new AppError(404, 'Active voice agent was not found', 'RUNTIME_AGENT_NOT_FOUND');
     return Array.isArray(row.knowledge_bases) ? row.knowledge_bases : [];
   });
+  if (scope.length > 0 && runtime.cache && (!runtime.cache.status || runtime.cache.status === 'ready')) {
+    void deadline(runtime.cache.set(cacheKey, JSON.stringify(scope), 'EX',
+      env.RAG_RUNTIME_RESULT_CACHE_TTL_SECONDS), env.RAG_RUNTIME_CACHE_TIMEOUT_MS, null);
+  }
+  return scope;
 }
 
 async function semanticCandidates(auth, input, query, scope, runtime) {
@@ -998,7 +1022,11 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   let rows = await abortable(deadline(
     hydrate({ ...auth, tenantId }, safeInput, ranked, runtime), env.RAG_RUNTIME_CHANNEL_DEADLINE_MS, [],
   ), input.abortSignal, []);
-  if (ranked[0]?.recordType === 'CATALOG_ITEM' && rows.length) {
+  const categoryRequest = String(safeInput.understanding?.requestType ?? '').toLocaleLowerCase()
+    === 'category_request'
+    || String(safeInput.requestType ?? '').toLocaleLowerCase() === 'category_request'
+    || Boolean(String(safeInput.activeCategoryKey ?? '').trim());
+  if (categoryRequest && ranked[0]?.recordType === 'CATALOG_ITEM' && rows.length) {
     const seed = [...rows]
       .filter((row) => row.record_type === 'CATALOG_ITEM')
       .sort((left, right) => Number(left.rank) - Number(right.rank))[0];
@@ -1051,8 +1079,13 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   const workflowPermittedEvidence = evidence.filter((item) => (
     item.recordType !== 'WORKFLOW_RULE' || item.activationAllowed === true
   ));
+  // Select an exact caller-facing message before Catalog focusing so FAQ and
+  // category records cannot crowd out a published overview RESPONSE.
+  const preferredCallerMessage = selectStrongCallerMessage(
+    workflowPermittedEvidence, query, safeInput,
+  );
   const catalogFocus = focusAuthoritativeCatalogEvidence(
-    workflowPermittedEvidence, safeInput, safeInput.topK,
+    workflowPermittedEvidence, { ...safeInput, preferredCallerMessage }, safeInput.topK,
   );
   const permittedEvidence = catalogFocus.evidence
     .slice(0, Math.max(1, Math.min(Number(safeInput.topK) || 5, 5)))

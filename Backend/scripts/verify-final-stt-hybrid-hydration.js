@@ -35,7 +35,9 @@ const compactContinuation = contextualRetrievalPolicy({
   recordType: 'CONVERSATION_NODE', semanticScore: 0.96, tokenCoverage: 1,
   channels: ['semantic', 'bm25'], contentPreview: 'ஆம்',
 }]);
-assert.equal(compactContinuation.useContext, true);
+assert.equal(compactContinuation.available, true);
+assert.equal(compactContinuation.primarySufficient, true);
+assert.equal(compactContinuation.useContext, false);
 assert.equal(compactContinuation.preferContext, true);
 
 const explicitItemTurn = contextualRetrievalPolicy({
@@ -45,7 +47,8 @@ const explicitItemTurn = contextualRetrievalPolicy({
   recordType: 'CATALOG_ITEM', semanticScore: 0.96, tokenCoverage: 1,
   channels: ['semantic', 'bm25'], contentPreview: 'New Plan',
 }]);
-assert.equal(explicitItemTurn.useContext, true);
+assert.equal(explicitItemTurn.primarySufficient, true);
+assert.equal(explicitItemTurn.useContext, false);
 assert.equal(explicitItemTurn.preferContext, false);
 
 function dependencies({ primaryStrong }) {
@@ -136,8 +139,7 @@ assert.deepEqual(strong.embeddedQueries, [
 ]);
 assert.equal(primaryResult.retrieval.contextualUsed, false);
 assert.equal(primaryResult.sources[0].authoritativeData.attributes[0].key, 'benefits');
-assert.equal(primaryResult.sources.length, 2, 'Top Catalog match must hydrate same-category records from PostgreSQL');
-assert.equal(primaryResult.sources[1].recordId, siblingRecordId);
+assert.equal(primaryResult.sources.length, 1, 'Ordinary item turns must hydrate only the focused item record');
 assert.equal(primaryResult.sources[0].hydrationValidated, true);
 assert.equal(primaryResult.sources[0].publicationValidated, true);
 
@@ -151,12 +153,25 @@ assert.match(weak.embeddedQueries[1], /Premium Plan/u);
 assert.match(weak.embeddedQueries[1], /Would you like details\?/u);
 assert.equal(contextualResult.retrieval.contextualUsed, true);
 assert.equal(contextualResult.sources[0].retrievalContext, 'contextual');
-assert.equal(weak.hydratedManifests.length, 2, 'Category expansion must rehydrate the bounded authoritative set');
+assert.equal(weak.hydratedManifests.length, 1, 'Ordinary follow-ups must avoid category expansion rehydration');
 assert.equal(contextualResult.retrievalTrace.primaryQuery, latestUtterance);
 assert.match(contextualResult.retrievalTrace.contextualQuery, /Premium Plan/u);
 assert.equal(contextualResult.retrievalTrace.hydratedEvidence[0].recordId, recordId);
 assert.equal(contextualResult.retrievalTrace.publicationRevisions[0].publicationRevision, 7);
 assert.deepEqual(contextualResult.retrievalTrace.permittedEvidenceIds, contextualResult.evidenceIds);
+
+const category = dependencies({ primaryStrong: true });
+await searchHybridPublishedKnowledge(
+  { tenantId }, {
+    ...commonInput,
+    query: 'Show approved plan options',
+    latestCallerUtterance: 'Show approved plan options',
+    pendingQuestion: undefined,
+    knownEntities: [],
+    requestType: 'category_request',
+  }, category.runtime,
+);
+assert.equal(category.hydratedManifests.length, 2, 'Category requests must rehydrate the bounded authoritative set');
 
 const orchestratorSource = await import('node:fs/promises').then((fs) => fs.readFile(
   new URL('../src/voice/realtime-conversation-orchestrator.js', import.meta.url), 'utf8',

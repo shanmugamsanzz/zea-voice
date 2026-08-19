@@ -2455,6 +2455,20 @@ export class RealtimeConversationOrchestrator {
         stage: 'knowledge.clarification_selected', callId: this.call.id, reason,
         conflictType: knowledge.tenantEvidence?.retrieval?.conflictType ?? null,
       }, 'Weak, conflicting or invalid direct evidence routed to configured clarification');
+    } else if (responseRouting.outcome === 'direct' && directResponse?.content) {
+      // A scoped, hydrated caller-facing message is already approved speech.
+      // Do not spend another LLM turn paraphrasing it or let stale memory
+      // change its meaning.
+      response = {
+        cancelled: false,
+        text: directResponse.content,
+        toolCalls: [],
+        sources: [createMessageSource(messageSourceTypes.KNOWLEDGE, {
+          label: 'Published caller-facing response',
+          metadata: { recordId: directResponse.recordId, responseId: directResponse.id },
+        })],
+      };
+      this.liveCallMemory?.setPendingQuestion?.(null);
     } else {
       try {
         const llmStartedAt = Date.now();

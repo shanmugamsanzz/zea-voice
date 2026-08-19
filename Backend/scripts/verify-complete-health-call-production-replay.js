@@ -154,10 +154,10 @@ const diabetic = catalog({
 });
 
 const detailTurns = Object.freeze([
-  Object.freeze({ utterance: 'On Cooker package பத்தி சொல்லுங்க', entity: 'Onco Care', topic: 'Onco Care', records: [onco], answer: onco.content }),
+  Object.freeze({ utterance: 'On Cooker package பத்தி சொல்லுங்க', entity: 'Onco Care', topic: 'Onco Care', stateTopic: 'onco-care-premium', records: [onco], answer: onco.content }),
   Object.freeze({ utterance: 'Kids package பத்தி சொல்லுங்க', entity: 'Kids Health Packages', topic: 'Kids Health Packages', records: kids, answer: kids.map((item) => item.content).join(' ') }),
   Object.freeze({ utterance: 'organ specific package பத்தி சொல்லுங்க', entity: 'Organ-Specific Packages', topic: 'Organ-Specific Packages', records: organ, answer: organ.map((item) => item.content).join(' ') }),
-  Object.freeze({ utterance: 'diabetic package பத்தி சொல்லுங்க', entity: 'Diabetic Health Checkup', topic: 'Diabetic Health Checkup', records: [diabetic], answer: diabetic.content }),
+  Object.freeze({ utterance: 'diabetic package பத்தி சொல்லுங்க', entity: 'Diabetic Health Checkup', topic: 'Diabetic Health Checkup', stateTopic: 'diabetes-health-checkup', records: [diabetic], answer: diabetic.content }),
 ]);
 
 const memory = openGenericConversationState(identity, { conversationLanguage: 'ta' }, Date.now(), {
@@ -293,7 +293,7 @@ for (const [index, turn] of detailTurns.entries()) {
   assert.equal(result.pendingQuestion, null, `detail turn ${index + 1}: stale overview cleared`);
   assert.equal(result.answer.includes(overview), false, `detail turn ${index + 1}: overview not repeated`);
   assert.equal(result.answer, turn.answer, `detail turn ${index + 1}: final TTS output`);
-  assert.equal(result.state.currentTopic, turn.topic, `detail turn ${index + 1}: topic changed`);
+  assert.equal(result.state.currentTopic, turn.stateTopic ?? turn.topic, `detail turn ${index + 1}: topic changed`);
   ttsOutputs.push(result.answer);
   latencySamples.push(performance.now() - started);
 }
@@ -301,7 +301,7 @@ for (const [index, turn] of detailTurns.entries()) {
 assert.equal(ttsOutputs.length, capturedTurns.length + detailTurns.length);
 assert.equal(ttsOutputs.filter((value) => value === overview).length, overviewOutputs,
   'overview appears only for positive introduction and explicit overview turns');
-assert.equal(memory.snapshot().currentTopic, 'Diabetic Health Checkup');
+assert.equal(memory.snapshot().currentTopic, 'diabetes-health-checkup');
 assert.equal(memory.snapshot().pendingQuestion, null);
 memory.close();
 

@@ -101,6 +101,22 @@ const latestFocused = focusAuthoritativeCatalogEvidence([
 }, 5);
 assert.deepEqual(latestFocused.evidence.map((item) => item.recordId), ['latest-record'],
   'Latest primary Catalog evidence must replace a stale remembered entity');
+const overviewMessage = {
+  ...evidence, id: 'published:conversation_node:overview-message',
+  recordId: 'overview-message-record', recordType: 'CONVERSATION_NODE',
+  callerFacing: true, retrievalContext: 'primary', semanticScore: 0.95,
+  authoritativeData: { nodeType: 'message', nodeKey: 'available-overview' },
+  content: 'The published overview response.',
+};
+const overviewFocused = focusAuthoritativeCatalogEvidence([
+  { ...latestItem, semanticScore: 0.82 }, overviewMessage,
+], {
+  latestCallerUtterance: 'What options are available?',
+  preferredCallerMessage: overviewMessage,
+  knownEntities: [],
+}, 5);
+assert.equal(overviewFocused.evidence[0].recordId, 'overview-message-record',
+  'A strongly matched caller-facing published response must outrank Catalog evidence');
 const prompt = buildAgentSystemPrompt({
   name: 'Configured Agent', language: 'en', settings: {}, prompt: 'Use approved evidence only.',
 }, {
