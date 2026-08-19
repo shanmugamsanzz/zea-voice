@@ -1154,7 +1154,10 @@ async function catalogCategoryCandidates(auth, input, seed, runtime, limit = 5) 
       knowledgeBaseId: row.knowledge_base_id, documentId: row.document_id,
       documentVersionId: row.document_version_id, language: row.language ?? 'und',
       score: Math.max(0, Number(seed.score ?? 1) - index * 0.001),
-      semanticScore: Number(seed.score ?? 1), lexicalScore: 0, tokenCoverage: 0,
+      // These records are authoritative PostgreSQL category expansion results,
+      // not Qdrant hits. Keep their retrieval strength while preserving score
+      // provenance; only an actual vector candidate may carry semanticScore.
+      semanticScore: 0, lexicalScore: 0, tokenCoverage: 0,
       channels: ['postgres_category'], retrievalContext: 'catalog_category', rank: index + 1,
     }));
   });

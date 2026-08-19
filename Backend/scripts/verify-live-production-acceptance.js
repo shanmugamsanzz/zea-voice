@@ -355,12 +355,17 @@ try {
             `${call.id} turn ${index + 1}: foreign, stale or unhydrated evidence ${source.recordId}`);
         }
         semanticCandidates += Number(tenantEvidence.retrieval?.semanticCandidates ?? 0);
-        const positiveSemanticEvidence = hydrated.filter((source) => Number(source.semanticScore) > 0);
+        // Qdrant validates semantic discovery. Authoritative hydration may then
+        // replace a matching category seed with complete PostgreSQL children;
+        // those children must not inherit a fabricated vector score.
+        const positiveSemanticCandidates = (retrievalTrace.retrievedCandidates ?? [])
+          .filter((candidate) => Number(candidate.semanticScore) > 0
+            && (candidate.channels ?? []).includes('semantic'));
         if (turn.allowSafeResponse !== true) {
           assert.ok(Number(tenantEvidence.retrieval?.semanticCandidates ?? 0) > 0,
             `${call.id} turn ${index + 1}: semantic retrieval returned no candidates`);
-          assert.ok(positiveSemanticEvidence.length > 0,
-            `${call.id} turn ${index + 1}: hydrated evidence has no non-zero semantic score`);
+          assert.ok(positiveSemanticCandidates.length > 0,
+            `${call.id} turn ${index + 1}: semantic retrieval trace has no genuine non-zero score`);
         }
         const knowledge = {
           route: 'llm_first', found: tenantEvidence.found === true,
