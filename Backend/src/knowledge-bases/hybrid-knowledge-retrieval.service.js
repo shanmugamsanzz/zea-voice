@@ -1206,7 +1206,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
     })),
   });
-  const cacheKey = `zea:rag:hybrid:v3:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:v4:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();
@@ -1219,10 +1219,15 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
     durationMs: performance.now() - startedAt,
   };
   let strongPrimary = retainStrongCandidates(primaryBranch.ranked, query, 8);
+  // Resolve an immediately pending question before attempting noisy-STT
+  // Catalog identity discovery. Otherwise a compact acknowledgement can be
+  // mistaken for an unrelated entity and suppress its configured response.
+  let contextPolicy = contextualRetrievalPolicy(safeInput, query, strongPrimary);
+  const pendingContextPreferred = contextPolicy.useContext && contextPolicy.preferContext;
   const primaryCatalog = strongPrimary.find((candidate) => candidate.recordType === 'CATALOG_ITEM');
-  const catalogIdentityDiscoveryNeeded = !primaryCatalog
+  const catalogIdentityDiscoveryNeeded = !pendingContextPreferred && (!primaryCatalog
     || (Number(primaryCatalog.semanticScore ?? 0) < Math.max(0.82, env.RAG_RUNTIME_MIN_SCORE + 0.08)
-      && Number(primaryCatalog.tokenCoverage ?? 0) < 0.6);
+      && Number(primaryCatalog.tokenCoverage ?? 0) < 0.6));
   let catalogIdentityResolution = null;
   let identityDiscoveryCandidates = [];
   if (catalogIdentityDiscoveryNeeded) {
@@ -1244,7 +1249,9 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   }
   // A selected entity or pending question resolves compact continuations and
   // weak standalone turns. Strong explicit requests remain primary.
-  const contextPolicy = contextualRetrievalPolicy(safeInput, query, strongPrimary);
+  if (!pendingContextPreferred) {
+    contextPolicy = contextualRetrievalPolicy(safeInput, query, strongPrimary);
+  }
   const contextualUsed = Boolean(queries.contextual) && contextPolicy.useContext;
   const contextualBranch = contextualUsed
     ? await retrieveBranch(
