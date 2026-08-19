@@ -392,12 +392,20 @@ try {
           }
         } else if (responseRouting.outcome === 'direct'
           && tenantEvidence.directResponse?.content) {
+          envelope = buildGroundingEnvelope(
+            knowledge, { includePublishedMap: false, maximumSources: 5 },
+          );
+          const directEnvelopeSource = envelope.sources.find((source) => (
+            source.recordId === tenantEvidence.directResponse.recordId
+          )) ?? null;
+          assert.ok(directEnvelopeSource,
+            `${call.id} turn ${index + 1}: directly matched response is missing from the grounding envelope`);
           finalDecision = 'answer';
           finalText = tenantEvidence.directResponse.content;
-          responseId = tenantEvidence.directResponse.id ?? null;
+          responseId = directEnvelopeSource.id;
           selectedEvidenceIds = responseId ? [responseId] : [];
-          selectedRecordIds = tenantEvidence.directResponse.recordId
-            ? [tenantEvidence.directResponse.recordId] : [];
+          selectedRecordIds = directEnvelopeSource.recordId
+            ? [directEnvelopeSource.recordId] : [];
           memory.setPendingQuestion(null);
         } else {
           envelope = buildGroundingEnvelope(
