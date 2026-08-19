@@ -127,14 +127,22 @@ function verifyTurnExpectations({
   if ((turn.expectedResponseNodeKeys?.length ?? 0) > 0) {
     const expectedKeys = new Set(turn.expectedResponseNodeKeys.map(normalized));
     const direct = tenantEvidence.directResponse;
-    assert.ok(direct && expectedKeys.has(normalized(direct.authoritativeData?.nodeKey)),
-      `${label}: expected caller-facing published response was not selected by retrieval`);
+    const selectedPublishedResponse = (envelope?.sources ?? [])
+      .find((source) => source.id === responseId) ?? null;
+    const resolvedPublishedResponse = direct ?? selectedPublishedResponse;
+    assert.ok(resolvedPublishedResponse
+      && expectedKeys.has(normalized(resolvedPublishedResponse.authoritativeData?.nodeKey)),
+    `${label}: expected caller-facing published response was not selected by retrieval or grounded decision`);
     if (turn.requireExactPublishedResponse === true) {
       assert.ok(responseId, `${label}: exact published responseId was not selected`);
-      const exactSource = (envelope?.sources ?? []).find((source) => source.id === responseId);
-      assert.equal(exactSource?.recordId, direct.recordId,
-        `${label}: responseId does not identify the matched published response`);
-      assert.equal(finalText, direct.content,
+      const exactSource = selectedPublishedResponse;
+      assert.ok(exactSource?.callerFacing === true,
+        `${label}: responseId does not identify caller-facing published evidence`);
+      if (direct) {
+        assert.equal(exactSource?.recordId, direct.recordId,
+          `${label}: responseId does not identify the directly matched published response`);
+      }
+      assert.equal(finalText, exactSource.content,
         `${label}: final TTS text did not preserve the published RESPONSE exactly`);
     }
   }
