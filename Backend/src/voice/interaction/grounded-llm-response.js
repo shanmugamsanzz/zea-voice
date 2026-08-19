@@ -75,11 +75,18 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
   // record rather than only the discovery preview.
   for (const evidence of knowledge.tenantEvidence?.sources ?? []) {
     if (evidence.callerFacing === false) continue;
+    const recordType = String(evidence.recordType ?? '').toUpperCase();
+    const nodeType = String(evidence.authoritativeData?.nodeType ?? '').toLowerCase();
+    const exactCallerResponse = evidence.callerFacing === true
+      && recordType === 'CONVERSATION_NODE'
+      && nodeType === 'message';
     addSource(sources, sourceContents, evidence.content, {
       recordId: text(evidence.recordId, 100) || null,
-      recordType: text(evidence.recordType, 40) || 'tenant_evidence',
+      recordType: text(recordType, 40) || 'tenant_evidence',
+      nodeType: text(nodeType, 80) || null,
+      callerFacing: evidence.callerFacing === true,
       authoritativeData: evidence.authoritativeData ?? null,
-      exactCallerResponse: false,
+      exactCallerResponse,
     });
   }
   // Only guidance explicitly marked caller-facing by the published record may

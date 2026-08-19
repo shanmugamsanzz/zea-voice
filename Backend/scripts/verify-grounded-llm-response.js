@@ -43,6 +43,21 @@ const rankedEnvelope = buildGroundingEnvelope({
 assert.equal(rankedEnvelope.sources.length, 2);
 assert.ok(groundedResponseContract(rankedEnvelope).allowedEvidenceSourceIds.includes('source_2'));
 
+const publishedMessageEnvelope = buildGroundingEnvelope({
+  found: true,
+  tenantEvidence: {
+    sources: [{
+      recordId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      recordType: 'CONVERSATION_NODE',
+      callerFacing: true,
+      content: 'This is the exact approved response.',
+      authoritativeData: { nodeKey: 'approved_response', nodeType: 'message' },
+    }],
+  },
+});
+assert.equal(publishedMessageEnvelope.sources[0].exactCallerResponse, true);
+assert.deepEqual(publishedMessageEnvelope.exactCallerResponses, ['source_1']);
+
 assert.equal(normalizeQuestionType('overview'), 'overview');
 assert.equal(normalizeQuestionType('details'), 'details');
 assert.equal(normalizeQuestionType('price'), 'price');
