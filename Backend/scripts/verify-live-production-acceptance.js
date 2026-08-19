@@ -37,6 +37,90 @@ function percentile(values, ratio) {
   return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * ratio) - 1))];
 }
 
+function normalized(value) {
+  return String(value ?? '').normalize('NFKC').trim().toLocaleLowerCase();
+}
+
+function catalogAttributeKeys(source) {
+  return new Set((source?.authoritativeData?.attributes ?? []).map((attribute) => (
+    normalized(attribute?.key ?? attribute?.name)
+  )).filter(Boolean));
+}
+
+function sourceRecordId(source) {
+  return String(source?.recordId ?? source?.id ?? '').trim();
+}
+
+function matchingCatalogSources(hydrated, turn) {
+  const entityKeys = new Set((turn.expectedAnyEntityKeys ?? []).map(normalized));
+  const categoryKeys = new Set((turn.expectedAnyCategoryKeys ?? []).map(normalized));
+  return hydrated.filter((source) => {
+    if (String(source?.recordType ?? '').toUpperCase() !== 'CATALOG_ITEM') return false;
+    const data = source.authoritativeData ?? {};
+    return entityKeys.has(normalized(data.itemKey)) || categoryKeys.has(normalized(data.categoryKey));
+  });
+}
+
+function verifyTurnExpectations({
+  call, index, turn, tenantEvidence, hydrated, envelope, selectedRecordIds,
+  responseId, finalText, safeResponse, memoryState,
+}) {
+  const label = `${call.id} turn ${index + 1}`;
+  const catalogSources = matchingCatalogSources(hydrated, turn);
+  if ((turn.expectedAnyEntityKeys?.length ?? 0) > 0) {
+    assert.ok(catalogSources.length > 0, `${label}: expected Catalog item was not hydrated`);
+  }
+  if ((turn.expectedAnyCategoryKeys?.length ?? 0) > 0) {
+    assert.ok(catalogSources.length > 0, `${label}: expected Catalog category was not hydrated`);
+  }
+  if (catalogSources.length > 0) {
+    const catalogRecordIds = new Set(catalogSources.map(sourceRecordId));
+    assert.ok(selectedRecordIds.some((id) => catalogRecordIds.has(id)),
+      `${label}: grounded decision did not cite the expected Catalog evidence`);
+  }
+  for (const source of catalogSources) {
+    const data = source.authoritativeData ?? {};
+    for (const field of turn.requiredCatalogFields ?? []) {
+      assert.ok(Object.hasOwn(data, field), `${label}: hydrated Catalog record is missing ${field}`);
+    }
+  }
+  for (const expectedAttribute of turn.requiredCatalogAttributes ?? []) {
+    assert.ok(catalogSources.some((source) => catalogAttributeKeys(source).has(normalized(expectedAttribute))),
+      `${label}: hydrated Catalog record is missing ${expectedAttribute}`);
+  }
+  if (turn.expectedMemoryEntityKey) {
+    assert.ok((memoryState.knownEntities ?? []).some((entity) => (
+      normalized(entity?.key) === normalized(turn.expectedMemoryEntityKey)
+    )), `${label}: selected follow-up entity was not preserved in memory`);
+  }
+  if ((turn.expectedResponseNodeKeys?.length ?? 0) > 0) {
+    const expectedKeys = new Set(turn.expectedResponseNodeKeys.map(normalized));
+    const direct = tenantEvidence.directResponse;
+    assert.ok(direct && expectedKeys.has(normalized(direct.authoritativeData?.nodeKey)),
+      `${label}: expected caller-facing published response was not selected by retrieval`);
+    if (turn.requireExactPublishedResponse === true) {
+      assert.ok(responseId, `${label}: exact published responseId was not selected`);
+      const exactSource = (envelope?.sources ?? []).find((source) => source.id === responseId);
+      assert.equal(exactSource?.recordId, direct.recordId,
+        `${label}: responseId does not identify the matched published response`);
+      assert.equal(finalText, direct.content,
+        `${label}: final TTS text did not preserve the published RESPONSE exactly`);
+    }
+  }
+  const usedSafeResponse = normalized(finalText) === normalized(safeResponse);
+  if (turn.allowSafeResponse === true) {
+    assert.equal(usedSafeResponse, true, `${label}: configured safe response was expected`);
+    assert.equal(selectedRecordIds.length, 0, `${label}: safe fallback must not cite an unrelated record`);
+  } else {
+    assert.equal(usedSafeResponse, false, `${label}: answerable turn used the generic safe response`);
+  }
+  return Object.freeze({
+    expectedCatalogRecordIds: catalogSources.map(sourceRecordId),
+    usedSafeResponse,
+    exactPublishedResponse: turn.requireExactPublishedResponse === true,
+  });
+}
+
 async function resolveAgent(agentId) {
   return withPlatformAdminContext(null, async (client) => {
     const result = await client.query(
@@ -75,7 +159,7 @@ const agentId = required(
 );
 const replayPath = resolve(argument(
   'replay-file', process.env.PRODUCTION_ACCEPTANCE_REPLAY_FILE
-    ?? 'fixtures/production-failed-transcripts.json',
+    ?? 'fixtures/failed-call-2026-08-19-production.json',
 ));
 const reportPath = resolve(argument(
   'report-file', process.env.PRODUCTION_ACCEPTANCE_REPORT
@@ -99,6 +183,7 @@ const tools = runtimeTools(profile.tools);
 const samples = [];
 const results = [];
 let semanticCandidates = 0;
+const safeResponse = configuredSafeFailureResponse(profile);
 
 try {
   for (const call of replay.calls) {
@@ -109,6 +194,15 @@ try {
       agentId: agent.id, callId,
     }, profile.agent.settings, Date.now(), { language: profile.agent.language });
     try {
+      if (call.initialAssistantTurn) {
+        memory.append({ role: 'assistant', content: String(call.initialAssistantTurn) });
+      }
+      if (call.initialPendingQuestion) {
+        memory.setPendingQuestion({
+          key: 'production-replay-initial-question',
+          text: String(call.initialPendingQuestion), kind: 'conversation',
+        });
+      }
       for (const [index, turn] of call.turns.entries()) {
         const utterance = required(turn.utterance, `${call.id} turn ${index + 1} utterance`);
         const totalStartedAt = performance.now();
@@ -129,6 +223,18 @@ try {
         const retrievalMs = performance.now() - retrievalStartedAt;
         const publicationRevisions = tenantEvidence.publicationRevisions ?? [];
         assert.ok(publicationRevisions.length > 0, `${call.id} turn ${index + 1}: no active publication revision`);
+        const activeRevisionByKnowledgeBase = new Map(publicationRevisions.map((revision) => (
+          [normalized(revision.knowledgeBaseId), Number(revision.publicationRevision)]
+        )));
+        const retrievalTrace = tenantEvidence.retrievalTrace ?? {};
+        for (const candidate of retrievalTrace.retrievedCandidates ?? []) {
+          assert.ok(candidate.recordId, `${call.id} turn ${index + 1}: retrieved candidate has no record ID`);
+          assert.ok(candidate.knowledgeBaseId,
+            `${call.id} turn ${index + 1}: retrieved ${candidate.recordId} has no Knowledge Base ID`);
+          assert.equal(Number(candidate.publicationRevision),
+            activeRevisionByKnowledgeBase.get(normalized(candidate.knowledgeBaseId)),
+            `${call.id} turn ${index + 1}: retrieved ${candidate.recordId} is from a stale revision`);
+        }
         const hydrated = [
           ...(tenantEvidence.sources ?? []),
           ...(tenantEvidence.actionEvidence ?? []),
@@ -160,16 +266,18 @@ try {
         let finalDecision;
         let finalText;
         let selectedEvidenceIds = [];
+        let selectedRecordIds = [];
         let responseId = null;
         let llmMs = 0;
+        let envelope = null;
         if (responseRouting.outcome === 'clarify') {
           finalDecision = 'safe_failure';
-          finalText = configuredSafeFailureResponse(profile);
+          finalText = safeResponse;
           if (turn.allowSafeResponse !== true) {
             throw new Error(`${call.id} turn ${index + 1}: unexpectedly routed to safe failure (${responseRouting.reason})`);
           }
         } else {
-          const envelope = buildGroundingEnvelope(
+          envelope = buildGroundingEnvelope(
             knowledge, { includePublishedMap: false, maximumSources: 5 },
           );
           assert.ok(envelope.sources.length > 0 && envelope.sources.length <= 5,
@@ -200,6 +308,9 @@ try {
           finalText = unified.answer;
           selectedEvidenceIds = [...unified.evidenceIds];
           responseId = unified.responseId ?? null;
+          selectedRecordIds = selectedEvidenceIds.map((id) => (
+            envelope.sources.find((source) => source.id === id)?.recordId
+          )).filter(Boolean);
           const allowedIds = new Set(envelope.sources.map((source) => source.id));
           assert.ok(selectedEvidenceIds.every((id) => allowedIds.has(id)),
             `${call.id} turn ${index + 1}: decision selected evidence outside top records`);
@@ -212,12 +323,20 @@ try {
           assert.ok(turn.expectedAnyRecordIds.some((id) => retrievedRecordIds.includes(id)),
             `${call.id} turn ${index + 1}: expected record ID was not retrieved`);
         }
+        const expectation = verifyTurnExpectations({
+          call, index, turn, tenantEvidence, hydrated, envelope,
+          selectedRecordIds, responseId, finalText, safeResponse,
+          memoryState: memory.snapshot(),
+        });
+        memory.append({ role: 'assistant', content: finalText }, { turnToken: token });
         const totalMs = performance.now() - totalStartedAt;
         samples.push({ retrievalMs, llmMs, totalMs });
         results.push({
           callId: call.id, turn: index + 1, utterance,
           publicationRevisions, retrievedRecordIds, selectedEvidenceIds,
-          responseId, finalDecision, memory: memory.snapshot(),
+          selectedRecordIds, responseId, finalDecision, memory: memory.snapshot(),
+          retrievalTrace,
+          routing: responseRouting, expectation,
           toolSafe: true, ttsText: finalText, latencyMs: { retrievalMs, llmMs, totalMs },
         });
       }
@@ -231,17 +350,51 @@ try {
     p90: percentile(samples.map((sample) => sample[field]), 0.90),
     p95: percentile(samples.map((sample) => sample[field]), 0.95),
   }]));
+  const configuredThresholds = replay.latencyThresholdsMs ?? {};
+  const thresholds = {
+    retrievalP95: Number(argument('retrieval-p95-ms', process.env.PRODUCTION_ACCEPTANCE_RETRIEVAL_P95_MS
+      ?? configuredThresholds.retrievalP95 ?? 150)),
+    llmP95: Number(argument('llm-p95-ms', process.env.PRODUCTION_ACCEPTANCE_LLM_P95_MS
+      ?? configuredThresholds.llmP95 ?? 3_000)),
+    totalP95: Number(argument('total-p95-ms', process.env.PRODUCTION_ACCEPTANCE_TOTAL_P95_MS
+      ?? configuredThresholds.totalP95 ?? 3_500)),
+  };
+  assert.ok(latency.retrievalMs.p95 <= thresholds.retrievalP95,
+    `Production retrieval p95 ${latency.retrievalMs.p95.toFixed(2)}ms exceeds ${thresholds.retrievalP95}ms`);
+  assert.ok(latency.llmMs.p95 <= thresholds.llmP95,
+    `Production LLM p95 ${latency.llmMs.p95.toFixed(2)}ms exceeds ${thresholds.llmP95}ms`);
+  assert.ok(latency.totalMs.p95 <= thresholds.totalP95,
+    `Production total p95 ${latency.totalMs.p95.toFixed(2)}ms exceeds ${thresholds.totalP95}ms`);
   const report = {
-    version: 1, mode: 'live_postgresql_qdrant', passed: true,
+    version: 2, mode: 'live_postgresql_qdrant', passed: true,
     generatedAt: new Date().toISOString(), agentId: agent.id,
+    replayVersion: replay.version ?? 1,
+    replayFile: replayPath,
+    sourceCallIds: replay.calls.map((call) => call.sourceCallId).filter(Boolean),
     callCount: replay.calls.length, turnCount: results.length,
-    semanticCandidates, latency, results,
+    semanticCandidates, latency, thresholds,
+    verification: {
+      allHydratedEvidenceScopeValidated: true,
+      retrievedIdsRecorded: true,
+      selectedEvidenceIdsValidated: true,
+      overviewResponsesValidated: results.filter((result) => (
+        result.expectation.exactPublishedResponse
+      )).length,
+      followUpEntitiesValidated: results.filter((result) => (
+        result.expectation.expectedCatalogRecordIds.length > 0
+      )).length,
+      catalogDetailsValidated: true,
+      fallbackValidated: true,
+      finalTtsTextValidated: results.length,
+    },
+    results,
   };
   await mkdir(dirname(reportPath), { recursive: true });
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
   console.log(JSON.stringify({
     passed: true, mode: report.mode, callCount: report.callCount,
-    turnCount: report.turnCount, semanticCandidates, latency, reportPath,
+    turnCount: report.turnCount, semanticCandidates, latency, thresholds,
+    verification: report.verification, reportPath,
   }));
 } finally {
   await closeDatabase();

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   authoritativeEvidenceFromRow,
+  focusAuthoritativeCatalogEvidence,
   hybridRetrievalSql,
 } from '../src/knowledge-bases/hybrid-knowledge-retrieval.service.js';
 import { buildGroundingEnvelope } from '../src/voice/interaction/grounded-llm-response.js';
@@ -59,6 +60,22 @@ const envelope = buildGroundingEnvelope({
 assert.equal(envelope.sources.length, 1);
 assert.deepEqual(envelope.sources[0].authoritativeData, authoritativeData,
   'The LLM grounding source must receive the complete PostgreSQL record, not a duplicate snippet');
+const focused = focusAuthoritativeCatalogEvidence([
+  evidence,
+  {
+    ...evidence, id: 'published:faq:unrelated', recordId: '88888888-8888-4888-8888-888888888888',
+    recordType: 'FAQ', authoritativeData: { question: 'Unrelated overview' }, rank: 2,
+  },
+  {
+    ...evidence, id: 'published:conversation_node:overview',
+    recordId: '99999999-9999-4999-8999-999999999999', recordType: 'CONVERSATION_NODE',
+    callerFacing: true, authoritativeData: { nodeType: 'message' }, rank: 3,
+  },
+], { knownEntities: [{ key: 'service-a', name: 'Service A' }] }, 5);
+assert.equal(focused.focused, true);
+assert.deepEqual(focused.evidence.map((item) => item.recordId), [recordId]);
+assert.deepEqual(focused.evidence[0].authoritativeData.attributes, authoritativeData.attributes);
+assert.deepEqual(focused.evidence[0].authoritativeData.relationships, authoritativeData.relationships);
 const prompt = buildAgentSystemPrompt({
   name: 'Configured Agent', language: 'en', settings: {}, prompt: 'Use approved evidence only.',
 }, {
@@ -69,8 +86,25 @@ const prompt = buildAgentSystemPrompt({
 });
 assert.ok(prompt.includes('categorySelectionRules'));
 assert.ok(prompt.includes('30 minutes'));
+const compactPrompt = buildAgentSystemPrompt({
+  name: 'Configured Agent', language: 'en', settings: {}, prompt: 'x'.repeat(10_000),
+}, {
+  usageDirection: 'inbound', knowledge: {
+    found: true, route: 'llm_first', matches: [],
+    tenantEvidence: { sources: [evidence], entities: [], actionEvidence: [], guidanceEvidence: [] },
+  }, context: { groundedResponseMode: true, compactGrounding: true }, maxPromptChars: 12_000,
+});
+assert.ok(compactPrompt.length <= 12_000);
+const contractJson = compactPrompt.match(/<grounded_response_contract>\n([\s\S]*?)\n<\/grounded_response_contract>/u)?.[1];
+const knowledgeJson = compactPrompt.match(/<knowledge_context>\n([\s\S]*?)\n<\/knowledge_context>/u)?.[1];
+assert.ok(contractJson && knowledgeJson, 'Compact prompt must preserve complete tagged sections');
+assert.doesNotThrow(() => JSON.parse(contractJson), 'Grounded decision schema must remain valid JSON');
+assert.doesNotThrow(() => JSON.parse(knowledgeJson), 'Knowledge evidence must remain valid JSON');
+assert.match(knowledgeJson, /"relationships"/u);
+assert.match(knowledgeJson, /30 minutes/u);
 
 const sql = hybridRetrievalSql.hydrateEvidenceSql;
+const categorySql = hybridRetrievalSql.catalogCategoryCandidatesSql;
 for (const requiredIsolation of [
   'f.tenant_id=$1', 'c.tenant_id=$1', 'i.tenant_id=$1', 'w.tenant_id=$1',
   'kb.status=\'published\'', 'v.is_current=true', "j.status='completed'",
@@ -93,6 +127,10 @@ for (const completeField of [
 
 assert.match(sql, /jsonb_to_recordset/u);
 assert.match(sql, /JOIN assigned/u);
+assert.match(categorySql, /i\.category_key=\$6/u);
+assert.match(categorySql, /sc\.id=\$5::uuid/u);
+assert.match(categorySql, /v\.is_current=true/u);
+assert.match(categorySql, /j\.metadata->>'publicationRevision'=kb\.publication_revision::text/u);
 for (const completeChain of [
   'v.knowledge_base_id=f.knowledge_base_id', 'v.document_id=f.document_id',
   'd.knowledge_base_id=f.knowledge_base_id',
@@ -106,5 +144,6 @@ for (const completeChain of [
 ]) assert.ok(sql.includes(completeChain), `Missing complete document isolation chain: ${completeChain}`);
 console.log(JSON.stringify({
   task: 'authoritative-evidence-hydration', passed: true,
-  completeRecords: true, tenantAgentKbRevisionIsolation: true, activeDocumentIsolation: true,
+  completeRecords: true, catalogFocused: true, promptSchemaPreserved: true,
+  tenantAgentKbRevisionIsolation: true, activeDocumentIsolation: true,
 }));

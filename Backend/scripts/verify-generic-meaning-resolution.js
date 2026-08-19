@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { isolatedRetrievalQueries, messageSelectionScore, selectStrongCallerMessage } from '../src/knowledge-bases/hybrid-knowledge-retrieval.service.js';
+import {
+  contextualRetrievalPolicy,
+  isolatedRetrievalQueries,
+  messageSelectionScore,
+  selectStrongCallerMessage,
+} from '../src/knowledge-bases/hybrid-knowledge-retrieval.service.js';
 import { openGenericConversationState } from '../src/voice/interaction/generic-conversation-state.js';
 
 const latest = 'Tell me what is included in the advanced option';
@@ -13,9 +18,15 @@ const queries = isolatedRetrievalQueries({
   understanding: { requestType: 'details', contextDependent: true },
 });
 assert.equal(queries.primary, latest);
-assert.match(queries.contextual, /previous topic/u);
-assert.match(queries.contextual, /price features/u);
-assert.match(queries.contextual, /weekday only/u);
+assert.equal(queries.contextual, '', 'arbitrary topic and inferred fields must not pollute retrieval');
+
+const selectedContext = isolatedRetrievalQueries({
+  query: 'What does it include?',
+  pendingQuestion: 'Would you like the selected option details?',
+  knownEntities: [{ key: 'advanced-option', name: 'Advanced Option' }],
+});
+assert.match(selectedContext.contextual, /Advanced Option/u);
+assert.match(selectedContext.contextual, /selected option details/u);
 
 const unrelatedTurn = isolatedRetrievalQueries({
   query: 'Tell me about a completely new subject',
@@ -23,7 +34,15 @@ const unrelatedTurn = isolatedRetrievalQueries({
   pendingQuestion: 'Old pending question', recentTurns: [{ role: 'user', content: 'Old context' }],
 });
 assert.equal(unrelatedTurn.primary, 'Tell me about a completely new subject');
-assert.equal(unrelatedTurn.contextual, '');
+assert.match(unrelatedTurn.contextual, /Old pending question/u);
+const unrelatedPolicy = contextualRetrievalPolicy({
+  knownEntities: [{ key: 'old-item', name: 'Old Item' }],
+  pendingQuestion: 'Old pending question',
+}, unrelatedTurn.primary, [{
+  recordType: 'CATALOG_ITEM', semanticScore: 0.96, tokenCoverage: 1,
+  channels: ['semantic', 'bm25'], contentPreview: unrelatedTurn.primary,
+}]);
+assert.equal(unrelatedPolicy.useContext, false, 'strong explicit request must remain latest-turn-first');
 
 const baseMessage = {
   recordType: 'CONVERSATION_NODE', callerFacing: true,

@@ -2,6 +2,11 @@ const maximumAnswerCharacters = 4_000;
 const maximumSources = 10;
 const maximumEntities = 20;
 const decisions = new Set(['answer', 'clarify', 'action']);
+const repairableDecisionReasons = new Set(['invalid_response_shape', 'answer_required']);
+
+export function isRepairableGroundedDecisionReason(reason) {
+  return repairableDecisionReasons.has(String(reason ?? '').trim());
+}
 const clarificationReasons = new Set([
   'ambiguous_request', 'missing_evidence', 'conflicting_evidence',
   'missing_required_information',

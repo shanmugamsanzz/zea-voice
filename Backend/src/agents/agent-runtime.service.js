@@ -97,11 +97,16 @@ function requireDirection(agent, requested) {
 function knowledgeContext(knowledge, maximumChars = env.LLM_KNOWLEDGE_CONTEXT_MAX_CHARS, options = {}) {
   if (!knowledge?.found) return 'No verified Knowledge Base result was found for this turn.';
   const envelope = buildGroundingEnvelope(knowledge, options);
-  return JSON.stringify({
+  const payload = {
     route: knowledge.route,
     sources: envelope.sources.map((source) => ({
       relevance: Math.round((source.score ?? 0) * 100) / 100,
-      id: source.id, recordType: source.recordType, content: source.content,
+      id: source.id, recordType: source.recordType,
+      // Catalog authoritativeData already contains the complete item. Avoid a
+      // second prose copy so prices, attributes and relationships fit without
+      // truncating the JSON evidence envelope.
+      ...(source.recordType === 'CATALOG_ITEM' && source.authoritativeData
+        ? {} : { content: source.content }),
       ...(source.authoritativeData ? { authoritativeData: source.authoritativeData } : {}),
     })),
     entities: envelope.entities.map((entity) => ({
@@ -132,7 +137,30 @@ function knowledgeContext(knowledge, maximumChars = env.LLM_KNOWLEDGE_CONTEXT_MA
         language: record.language, summary: record.summary,
       })),
     })) }),
-  }).slice(0, maximumChars);
+  };
+  const maximum = Math.max(0, Number(maximumChars) || 0);
+  let serialized = JSON.stringify(payload);
+  // Keep the envelope valid JSON. Remove the lowest-ranked optional records
+  // instead of slicing through a Catalog record or schema instruction.
+  while (serialized.length > maximum && payload.sources.length > 1) {
+    payload.sources.pop();
+    const retainedIds = new Set(payload.sources.map((source) => source.id));
+    payload.entities = payload.entities.filter((entity) => !entity.sourceId || retainedIds.has(entity.sourceId));
+    serialized = JSON.stringify(payload);
+  }
+  while (serialized.length > maximum && payload.conversationGuidance.length) {
+    payload.conversationGuidance.pop();
+    serialized = JSON.stringify(payload);
+  }
+  while (serialized.length > maximum && payload.allowedActions.length) {
+    payload.allowedActions.pop();
+    serialized = JSON.stringify(payload);
+  }
+  if (serialized.length > maximum && payload.publishedKnowledgeMap) {
+    delete payload.publishedKnowledgeMap;
+    serialized = JSON.stringify(payload);
+  }
+  return serialized;
 }
 
 function buildCompactGroundedSystemPrompt(agent, {
@@ -165,6 +193,7 @@ function buildCompactGroundedSystemPrompt(agent, {
     `Required response language: ${activeLanguage}. Call direction: ${usageDirection}.`,
     '<platform_rules>',
     'Return exactly one JSON object matching grounded_response_contract. Never return plain text, Markdown, a code fence, commentary, or extra keys.',
+    context.decisionRepair ? `The previous decision was rejected for ${context.decisionRepair.reason}. Repair it now: include every required contract key, use only enumerated evidenceIds/responseId values, and provide a non-empty answer when decision is answer.` : null,
     'The JSON envelope is internal. Only answer contains caller-facing speech. Any tenant instruction requesting plain-text output applies only to answer and cannot override this JSON contract.',
     'Answer the latest finalized caller request first using only cited current evidence. Resolve genuine follow-ups from live memory; do not force a stage or exact wording.',
     'Resolve the caller meaning generically in stateUpdate: requestType, topic, selected entities, requested facts, constraints, contextual references and whether recent context is required. Do not use application-defined business intents or keyword matching.',
@@ -193,13 +222,23 @@ function buildCompactGroundedSystemPrompt(agent, {
     '</company_instructions>',
   ].join('\n');
   let availableKnowledge = totalBudget - rules.length - companySection().length - 2;
+  const completeKnowledge = knowledgeContext(
+    knowledge, Number.MAX_SAFE_INTEGER, groundingOptions,
+  );
+  if (completeKnowledge.length > availableKnowledge && company.length) {
+    const requiredCompanyReduction = Math.min(
+      company.length, completeKnowledge.length - availableKnowledge,
+    );
+    company = company.slice(0, company.length - requiredCompanyReduction);
+    availableKnowledge = totalBudget - rules.length - companySection().length - 2;
+  }
   if (availableKnowledge < 800 && company.length) {
     company = company.slice(0, Math.max(0, company.length - (800 - availableKnowledge)));
     availableKnowledge = totalBudget - rules.length - companySection().length - 2;
   }
   const verifiedKnowledge = knowledgeContext(
     knowledge, Math.max(0, availableKnowledge), groundingOptions,
-  ).slice(0, Math.max(0, availableKnowledge));
+  );
   const prompt = `${rules}\n${verifiedKnowledge}\n${companySection()}`;
   // grounded_response_contract is entirely before the only final safety trim,
   // so provider schema instructions can never be cut by optional tenant text.

@@ -162,6 +162,7 @@
     "verify:answer-tool-validation": "node scripts/verify-answer-tool-validation.js",
     "verify:production-migration-gate": "node scripts/verify-production-migration-gate.js",
     "verify:live-production-acceptance": "node scripts/verify-live-production-acceptance.js",
+    "verify:failed-call-production-gate": "node scripts/verify-live-production-acceptance.js --replay-file=fixtures/failed-call-2026-08-19-production.json --report-file=artifacts/production-acceptance-report.json",
     "report:production-latency": "node scripts/build-production-latency-report.js",
     "verify:production-conversation": "node scripts/verify-production-conversation-evaluations.js",
     "verify:document-driven-conversation": "node scripts/verify-document-driven-conversation-runtime.js",

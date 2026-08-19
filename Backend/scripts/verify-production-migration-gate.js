@@ -175,6 +175,25 @@ assert.ok(Number(acceptance.callCount) > 0 && Number(acceptance.turnCount) > 0,
   'Live production acceptance must replay at least one call and one turn');
 assert.ok(Number(acceptance.semanticCandidates) > 0,
   'Live production acceptance must observe Qdrant semantic candidates');
+assert.ok(Array.isArray(acceptance.sourceCallIds)
+  && acceptance.sourceCallIds.includes('c3559ea3-9074-477a-9982-becac294bdc6'),
+  'Live acceptance must include the failed 2026-08-19 production call replay');
+assert.equal(acceptance.verification?.allHydratedEvidenceScopeValidated, true,
+  'Every hydrated evidence ID must pass tenant, agent, KB and revision validation');
+assert.equal(acceptance.verification?.retrievedIdsRecorded, true,
+  'The acceptance report must record every retrieved candidate ID');
+assert.equal(acceptance.verification?.selectedEvidenceIdsValidated, true,
+  'Every LLM-selected evidence ID must be validated');
+assert.ok(Number(acceptance.verification?.overviewResponsesValidated) >= 2,
+  'Positive introduction and explicit overview responses must be verified');
+assert.ok(Number(acceptance.verification?.followUpEntitiesValidated) >= 1,
+  'Catalog selection and contextual follow-up entities must be verified');
+assert.equal(acceptance.verification?.catalogDetailsValidated, true,
+  'Complete Catalog hydration must be verified');
+assert.equal(acceptance.verification?.fallbackValidated, true,
+  'Configured fallback behavior must be verified');
+assert.equal(Number(acceptance.verification?.finalTtsTextValidated), Number(acceptance.turnCount),
+  'Final TTS text must be verified for every replay turn');
 for (const field of ['retrievalMs', 'llmMs', 'totalMs']) {
   for (const percentileName of ['p50', 'p90', 'p95']) {
     assert.ok(Number.isFinite(Number(acceptance.latency?.[field]?.[percentileName])),

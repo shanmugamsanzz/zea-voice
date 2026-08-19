@@ -220,6 +220,47 @@ const hydrateEvidenceSql = `
        AND d.status='ready' AND d.deleted_at IS NULL
   ) SELECT * FROM evidence ORDER BY rank, record_type, record_id`;
 
+const catalogCategoryCandidatesSql = `
+  WITH runtime_agent AS (
+    SELECT id, usage_direction FROM voice_agents
+     WHERE tenant_id=$1 AND id=$2 AND status='active' AND deleted_at IS NULL
+  ), assigned AS (
+    SELECT kb.id, kb.publication_revision
+      FROM runtime_agent a
+      JOIN agent_knowledge_bases akb ON akb.tenant_id=$1 AND akb.agent_id=a.id
+      JOIN knowledge_bases kb ON kb.tenant_id=akb.tenant_id AND kb.id=akb.knowledge_base_id
+     WHERE kb.status='published' AND kb.deleted_at IS NULL AND kb.publication_revision>0
+       AND (a.usage_direction='both' OR a.usage_direction=$3::agent_usage_direction)
+       AND (akb.usage_direction='both' OR akb.usage_direction=$3::agent_usage_direction)
+       AND (kb.usage_direction='both' OR kb.usage_direction=$3::agent_usage_direction)
+       AND EXISTS (
+         SELECT 1 FROM knowledge_processing_jobs j
+          WHERE j.tenant_id=kb.tenant_id AND j.knowledge_base_id=kb.id
+            AND j.job_type='index' AND j.status='completed'
+            AND j.metadata->>'publicationRevision'=kb.publication_revision::text
+       )
+  )
+  SELECT 'CATALOG_ITEM'::text AS record_type, i.id AS record_id,
+    i.knowledge_base_id, i.document_id, i.document_version_id,
+    COALESCE(NULLIF(d.metadata->>'language',''), 'und') AS language
+    FROM structured_items i
+    JOIN assigned a ON a.id=i.knowledge_base_id AND a.id=$4::uuid
+    JOIN structured_catalogs sc
+      ON sc.tenant_id=i.tenant_id AND sc.knowledge_base_id=i.knowledge_base_id
+     AND sc.document_id=i.document_id AND sc.document_version_id=i.document_version_id
+     AND sc.id=i.catalog_id AND sc.id=$5::uuid AND sc.status='approved'
+    JOIN knowledge_document_versions v
+      ON v.tenant_id=i.tenant_id AND v.knowledge_base_id=i.knowledge_base_id
+     AND v.document_id=i.document_id AND v.id=i.document_version_id
+    JOIN knowledge_documents d
+      ON d.tenant_id=i.tenant_id AND d.knowledge_base_id=i.knowledge_base_id
+     AND d.id=i.document_id
+   WHERE i.tenant_id=$1 AND i.status='approved' AND i.category_key=$6
+     AND v.is_current=true AND v.status='ready' AND v.deleted_at IS NULL
+     AND d.status='ready' AND d.deleted_at IS NULL
+   ORDER BY i.display_order, i.id
+   LIMIT $7`;
+
 function normalize(value) {
   return String(value ?? '').normalize('NFKC').toLocaleLowerCase()
     .replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim().replace(/\s+/gu, ' ');
@@ -332,7 +373,8 @@ export function rankBm25Documents(indexes, query, scope, input = {}) {
     return {
       recordType: String(document.recordType).toUpperCase(), recordId: document.id,
       knowledgeBaseId: document.knowledgeBaseId, documentId: document.documentId,
-      documentVersionId: document.documentVersionId, language: document.language,
+      documentVersionId: document.documentVersionId,
+      publicationRevision: Number(document.publicationRevision), language: document.language,
       lexicalScore: score, tokenCoverage: matched / queryTokens.length,
       channel: 'bm25', contentPreview: document.content,
     };
@@ -426,16 +468,41 @@ function contextIsAvailable(input) {
     || (Array.isArray(input.knownEntities) && input.knownEntities.length > 0);
 }
 
-function prioritizeCandidates(primary, contextual, useContext, limit) {
+export function contextualRetrievalPolicy(input, query, primaryCandidates = []) {
+  const available = contextIsAvailable(input);
+  const queryTokens = tokens(query);
+  const compactTurn = queryTokens.length > 0 && queryTokens.length <= 4
+    && Array.from(String(query ?? '')).length <= 80;
+  const explicitlyContextual = input.contextualFollowUp === true;
+  const primarySufficient = primaryEvidenceIsSufficient(primaryCandidates, query);
+  const primaryRecordType = String(primaryCandidates[0]?.recordType ?? '').toUpperCase();
+  return Object.freeze({
+    available,
+    compactTurn,
+    explicitlyContextual,
+    primarySufficient,
+    // A compact response or reference is normally meaningful only together
+    // with the immediately pending question or selected entity. Longer turns
+    // retain latest-utterance-first behavior unless their evidence is weak.
+    useContext: available && (explicitlyContextual || compactTurn || !primarySufficient),
+    // Do not let a generic message match consume a compact continuation. An
+    // explicit item match remains primary even when the utterance is short.
+    preferContext: available && (explicitlyContextual
+      || (compactTurn && primaryRecordType !== 'CATALOG_ITEM')),
+  });
+}
+
+function prioritizeCandidates(primary, contextual, useContext, preferContext, limit) {
   const unique = new Map();
   // The finalized latest utterance is always the primary query. Context is
   // only a resolver for genuine follow-ups and must never displace an
   // explicit new request or an evidence candidate found for that request.
-  const candidates = [
-    ...primary.map((candidate) => ({ ...candidate, retrievalContext: 'primary' })),
-    ...(useContext
-      ? contextual.map((candidate) => ({ ...candidate, retrievalContext: 'contextual' })) : []),
-  ];
+  const primaryCandidates = primary.map((candidate) => ({ ...candidate, retrievalContext: 'primary' }));
+  const contextualCandidates = useContext
+    ? contextual.map((candidate) => ({ ...candidate, retrievalContext: 'contextual' })) : [];
+  const candidates = preferContext
+    ? [...contextualCandidates, ...primaryCandidates]
+    : [...primaryCandidates, ...contextualCandidates];
   for (const candidate of candidates) {
     const key = candidateKey(candidate);
     if (!unique.has(key)) unique.set(key, candidate);
@@ -443,6 +510,90 @@ function prioritizeCandidates(primary, contextual, useContext, limit) {
   return [...unique.values()]
     .slice(0, Math.max(3, Math.min(Number(limit) || 5, 5)))
     .map((candidate, index) => ({ ...candidate, rank: index + 1 }));
+}
+
+function traceCandidate(candidate, rejectionReasons = []) {
+  return Object.freeze({
+    recordId: candidate.recordId ?? candidate.id ?? null,
+    recordType: candidate.recordType ?? null,
+    knowledgeBaseId: candidate.knowledgeBaseId ?? null,
+    documentId: candidate.documentId ?? null,
+    documentVersionId: candidate.documentVersionId ?? null,
+    publicationRevision: Number(candidate.publicationRevision ?? 0) || null,
+    score: Number(candidate.score ?? 0),
+    semanticScore: Number(candidate.semanticScore ?? 0),
+    lexicalScore: Number(candidate.lexicalScore ?? 0),
+    tokenCoverage: Number(candidate.tokenCoverage ?? 0),
+    channels: Object.freeze([...(candidate.channels ?? [])]),
+    retrievalContext: candidate.retrievalContext ?? null,
+    rejectionReasons: Object.freeze([...rejectionReasons]),
+  });
+}
+
+function weakCandidateReasons(candidate, query) {
+  const strength = candidateStrength(candidate, query);
+  if (strength.accepted) return [];
+  const reasons = [];
+  if (!strength.exactCoverage) reasons.push('no_exact_coverage');
+  if (!strength.semanticStrong) reasons.push('semantic_below_threshold');
+  if (!strength.lexicalStrong) reasons.push('lexical_below_threshold');
+  if (!strength.corroborated) reasons.push('not_cross_channel_corroborated');
+  return reasons;
+}
+
+function catalogValue(value) {
+  return normalize(value).replace(/\s+/gu, ' ').trim();
+}
+
+export function focusAuthoritativeCatalogEvidence(evidence = [], input = {}, maximum = 5) {
+  const limit = Math.max(3, Math.min(Number(maximum) || 5, 5));
+  const catalog = evidence.filter((item) => item.recordType === 'CATALOG_ITEM');
+  if (!catalog.length) return Object.freeze({ focused: false, evidence: Object.freeze([...evidence].slice(0, limit)) });
+
+  const selected = (input.knownEntities ?? []).flatMap((entity) => [
+    entity?.key, entity?.name, entity?.category, entity?.categoryKey,
+  ]).map(catalogValue).filter(Boolean);
+  const selectedSet = new Set(selected);
+  const exactSelected = catalog.filter((item) => {
+    const data = item.authoritativeData ?? {};
+    return [data.itemKey, data.name].map(catalogValue).some((value) => selectedSet.has(value));
+  });
+  const categorySelected = catalog.filter((item) => {
+    const data = item.authoritativeData ?? {};
+    return [data.categoryKey, data.category].map(catalogValue).some((value) => selectedSet.has(value));
+  });
+  const firstEvidence = evidence[0];
+  const topCatalog = firstEvidence?.recordType === 'CATALOG_ITEM' ? firstEvidence : null;
+  if (!exactSelected.length && !categorySelected.length && !topCatalog) {
+    return Object.freeze({ focused: false, evidence: Object.freeze([...evidence].slice(0, limit)) });
+  }
+
+  let resolvedCatalog;
+  if (exactSelected.length) resolvedCatalog = exactSelected;
+  else if (categorySelected.length) resolvedCatalog = categorySelected;
+  else {
+    const topCategory = catalogValue(topCatalog.authoritativeData?.categoryKey
+      ?? topCatalog.authoritativeData?.category);
+    resolvedCatalog = catalog.filter((item) => {
+      const data = item.authoritativeData ?? {};
+      return !topCategory || [data.categoryKey, data.category]
+        .map(catalogValue).includes(topCategory);
+    });
+  }
+
+  const supportingRules = evidence.filter((item) => (
+    (item.recordType === 'WORKFLOW_RULE' || item.recordType === 'CONVERSATION_NODE')
+    && item.callerFacing !== true
+  ));
+  const unique = new Map();
+  for (const item of [...resolvedCatalog, ...supportingRules]) {
+    if (!unique.has(item.id)) unique.set(item.id, item);
+  }
+  return Object.freeze({
+    focused: true,
+    evidence: Object.freeze([...unique.values()].slice(0, limit)
+      .map((item, index) => ({ ...item, rank: index + 1 }))),
+  });
 }
 
 function evidenceIdentityForConflict(evidence) {
@@ -644,6 +795,7 @@ async function semanticCandidates(auth, input, query, scope, runtime) {
     recordType: String(match.payload.record_type).toUpperCase(),
     recordId: match.payload.record_id ?? match.id,
     knowledgeBaseId: match.payload.knowledge_base_id,
+    publicationRevision: Number(match.payload.publication_revision),
     documentId: match.payload.document_id,
     documentVersionId: match.payload.document_version_id,
     language: match.payload.language ?? 'und', contentPreview: match.payload.content,
@@ -689,6 +841,26 @@ async function hydrate(auth, input, ranked, runtime) {
       auth.tenantId, input.agentId, input.usageDirection, JSON.stringify(manifest),
     ]);
     return result.rows;
+  });
+}
+
+async function catalogCategoryCandidates(auth, input, seed, runtime, limit = 5) {
+  const data = seed?.authoritative_data ?? seed?.authoritativeData ?? {};
+  if (!seed?.knowledge_base_id || !data.catalogId || !data.categoryKey) return [];
+  return runtime.contextRunner(auth, async (client) => {
+    const result = await client.query(catalogCategoryCandidatesSql, [
+      auth.tenantId, input.agentId, input.usageDirection,
+      seed.knowledge_base_id, data.catalogId, data.categoryKey,
+      Math.max(1, Math.min(Number(limit) || 5, 5)),
+    ]);
+    return result.rows.filter((row) => row.record_id).map((row, index) => ({
+      recordType: 'CATALOG_ITEM', recordId: row.record_id,
+      knowledgeBaseId: row.knowledge_base_id, documentId: row.document_id,
+      documentVersionId: row.document_version_id, language: row.language ?? 'und',
+      score: Math.max(0, Number(seed.score ?? 1) - index * 0.001),
+      semanticScore: Number(seed.score ?? 1), lexicalScore: 0, tokenCoverage: 0,
+      channels: ['postgres_category'], retrievalContext: 'catalog_category', rank: index + 1,
+    }));
   });
 }
 
@@ -755,11 +927,10 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
     durationMs: performance.now() - startedAt,
   };
   const strongPrimary = retainStrongCandidates(primaryBranch.ranked, query, safeInput.topK ?? 5);
-  // A selected entity or pending question is only consulted when the raw
-  // latest utterance cannot independently retrieve sufficient evidence. This
-  // makes context a follow-up resolver instead of a competing primary query.
-  const contextualUsed = Boolean(queries.contextual)
-    && !primaryEvidenceIsSufficient(strongPrimary, query);
+  // A selected entity or pending question resolves compact continuations and
+  // weak standalone turns. Strong explicit requests remain primary.
+  const contextPolicy = contextualRetrievalPolicy(safeInput, query, strongPrimary);
+  const contextualUsed = Boolean(queries.contextual) && contextPolicy.useContext;
   const contextualBranch = contextualUsed
     ? await retrieveBranch(
       { ...auth, tenantId }, safeInput, queries.contextual, scope, runtime,
@@ -775,17 +946,42 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   const strongContextual = retainStrongCandidates(
     contextualBranch.ranked, queries.contextual, safeInput.topK ?? 5,
   );
-  const ranked = prioritizeCandidates(
+  let ranked = prioritizeCandidates(
     strongPrimary,
     strongContextual,
     contextualUsed,
+    contextPolicy.preferContext,
     Math.max(8, Number(safeInput.topK ?? 5)),
   );
   const rerankMs = Math.round((performance.now() - rerankStartedAt) * 100) / 100;
   const hydrationStartedAt = performance.now();
-  const rows = await abortable(deadline(
+  let rows = await abortable(deadline(
     hydrate({ ...auth, tenantId }, safeInput, ranked, runtime), env.RAG_RUNTIME_CHANNEL_DEADLINE_MS, [],
   ), input.abortSignal, []);
+  if (ranked[0]?.recordType === 'CATALOG_ITEM' && rows.length) {
+    const seed = [...rows]
+      .filter((row) => row.record_type === 'CATALOG_ITEM')
+      .sort((left, right) => Number(left.rank) - Number(right.rank))[0];
+    const categoryCandidates = await abortable(deadline(
+      catalogCategoryCandidates(
+        { ...auth, tenantId }, safeInput, seed, runtime, safeInput.topK,
+      ), env.RAG_RUNTIME_CHANNEL_DEADLINE_MS, [],
+    ), input.abortSignal, []);
+    if (categoryCandidates.length) {
+      const expanded = new Map();
+      for (const candidate of [ranked[0], ...categoryCandidates, ...ranked.slice(1)]) {
+        const key = candidateKey(candidate);
+        if (!expanded.has(key)) expanded.set(key, candidate);
+      }
+      ranked = [...expanded.values()]
+        .slice(0, Math.max(3, Math.min(Number(safeInput.topK) || 5, 5)))
+        .map((candidate, index) => ({ ...candidate, rank: index + 1 }));
+      rows = await abortable(deadline(
+        hydrate({ ...auth, tenantId }, safeInput, ranked, runtime),
+        env.RAG_RUNTIME_CHANNEL_DEADLINE_MS, [],
+      ), input.abortSignal, []);
+    }
+  }
   const hydrationMs = Math.round((performance.now() - hydrationStartedAt) * 100) / 100;
   const rankedByKey = new Map(ranked.map((candidate) => [candidateKey(candidate), candidate]));
   const hydratedEvidence = rows.map((row) => {
@@ -815,7 +1011,10 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   const workflowPermittedEvidence = evidence.filter((item) => (
     item.recordType !== 'WORKFLOW_RULE' || item.activationAllowed === true
   ));
-  const permittedEvidence = workflowPermittedEvidence
+  const catalogFocus = focusAuthoritativeCatalogEvidence(
+    workflowPermittedEvidence, safeInput, safeInput.topK,
+  );
+  const permittedEvidence = catalogFocus.evidence
     .slice(0, Math.max(1, Math.min(Number(safeInput.topK) || 5, 5)))
     .map((item, index) => ({ ...item, rank: index + 1 }));
   const evidenceConflict = detectEvidenceConflict(permittedEvidence);
@@ -838,6 +1037,36 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
     ? null : selectStrongCallerMessage(permittedEvidence, query, input);
   const weakCandidatesRejected = primaryBranch.ranked.length + contextualBranch.ranked.length
     - strongPrimary.length - strongContextual.length;
+  const rankedKeys = new Set(ranked.map(candidateKey));
+  const hydratedKeys = new Set(evidence.map(candidateKey));
+  const rejectedByKey = new Map();
+  const addRejected = (candidate, reasons) => {
+    const key = candidateKey(candidate);
+    const current = rejectedByKey.get(key);
+    if (!current) rejectedByKey.set(key, traceCandidate(candidate, reasons));
+  };
+  for (const candidate of primaryBranch.ranked) {
+    const reasons = weakCandidateReasons(candidate, query);
+    if (reasons.length) addRejected({ ...candidate, retrievalContext: 'primary' }, reasons);
+    else if (!rankedKeys.has(candidateKey(candidate))) {
+      addRejected({ ...candidate, retrievalContext: 'primary' }, ['outside_top_k']);
+    }
+  }
+  for (const candidate of contextualBranch.ranked) {
+    const reasons = weakCandidateReasons(candidate, queries.contextual);
+    if (reasons.length) addRejected({ ...candidate, retrievalContext: 'contextual' }, reasons);
+    else if (!rankedKeys.has(candidateKey(candidate))) {
+      addRejected({ ...candidate, retrievalContext: 'contextual' }, ['outside_top_k']);
+    }
+  }
+  for (const candidate of ranked) {
+    if (!hydratedKeys.has(candidateKey(candidate))) addRejected(candidate, ['postgres_hydration_rejected']);
+  }
+  for (const candidate of evidence) {
+    if (candidate.recordType === 'WORKFLOW_RULE' && candidate.activationAllowed !== true) {
+      addRejected(candidate, ['workflow_not_activated_by_latest_turn']);
+    }
+  }
   const responseRouting = resolveConfidenceResponseRoute({
     directMessage, evidence: permittedEvidence, conflict: evidenceConflict,
     rejectedCandidates: weakCandidatesRejected,
@@ -872,6 +1101,8 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       mergedCandidates: ranked.length, hydratedEvidence: evidence.length,
       weakCandidatesRejected,
       contextualAvailable: Boolean(queries.contextual), contextualUsed,
+      contextualPreferred: contextPolicy.preferContext,
+      compactContextualTurn: contextPolicy.compactTurn,
       conflictDetected: evidenceConflict.detected,
       conflictType: evidenceConflict.type,
       conflictingRecordIds: evidenceConflict.recordIds,
@@ -880,6 +1111,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       )).length,
       selectedEntityContextCount: Array.isArray(safeInput.knownEntities)
         ? safeInput.knownEntities.length : 0,
+      catalogEvidenceFocused: catalogFocus.focused,
       vectorBm25Ms, rerankMs, hydrationMs,
       semanticTimedOut: runtime.ragEnabled
         && primaryBranch.semantic.length + contextualBranch.semantic.length === 0
@@ -888,6 +1120,33 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
     publicationRevisions: scope.map((item) => ({
       knowledgeBaseId: item.id, publicationRevision: Number(item.publicationRevision),
     })),
+    retrievalTrace: {
+      primaryQuery: query,
+      contextualQuery: contextualUsed ? queries.contextual : null,
+      memoryContext: {
+        pendingQuestion: safeInput.pendingQuestion ?? null,
+        knownEntities: (safeInput.knownEntities ?? []).map((entity) => ({
+          key: entity?.key ?? null,
+          name: entity?.name ?? null,
+          category: entity?.category ?? null,
+        })),
+      },
+      retrievedCandidates: [
+        ...primaryBranch.ranked.map((candidate) => traceCandidate({
+          ...candidate, retrievalContext: 'primary',
+        })),
+        ...contextualBranch.ranked.map((candidate) => traceCandidate({
+          ...candidate, retrievalContext: 'contextual',
+        })),
+      ],
+      hydratedEvidence: evidence.map((item) => traceCandidate(item)),
+      permittedEvidenceIds: permittedEvidence.map((item) => item.id),
+      rejectedCandidates: [...rejectedByKey.values()],
+      publicationRevisions: scope.map((item) => ({
+        knowledgeBaseId: item.id,
+        publicationRevision: Number(item.publicationRevision),
+      })),
+    },
     durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
   };
   if (runtime.cache && (!runtime.cache.status || runtime.cache.status === 'ready')) {
@@ -897,4 +1156,6 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   return result;
 }
 
-export const hybridRetrievalSql = Object.freeze({ activeScopeSql, hydrateEvidenceSql });
+export const hybridRetrievalSql = Object.freeze({
+  activeScopeSql, hydrateEvidenceSql, catalogCategoryCandidatesSql,
+});

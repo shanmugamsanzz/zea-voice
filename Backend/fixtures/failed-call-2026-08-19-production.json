@@ -1,0 +1,87 @@
+{
+  "version": 2,
+  "description": "Production replay for call c3559ea3-9074-477a-9982-becac294bdc6. Expectations are test data only; runtime matching remains tenant-neutral.",
+  "latencyThresholdsMs": {
+    "retrievalP95": 150,
+    "llmP95": 3000,
+    "totalP95": 3500
+  },
+  "calls": [
+    {
+      "id": "failed-call-2026-08-19-c3559ea3",
+      "sourceCallId": "c3559ea3-9074-477a-9982-becac294bdc6",
+      "initialAssistantTurn": "வணக்கம், நான் Shanmuga Hospitalல இருந்து AI Agent கார்த்திகா பேசுறேன். நான் பேசுறது shanmugam கூடங்களா?.",
+      "initialPendingQuestion": "நான் பேசுறது shanmugam கூடங்களா?",
+      "turns": [
+        {
+          "utterance": "ஆமாங்க",
+          "expectedResponseNodeKeys": ["positive_introduction_response"],
+          "requireExactPublishedResponse": true
+        },
+        {
+          "utterance": "உங்ககிட்ட என்ன packagesலாம் இருக்கு?",
+          "expectedResponseNodeKeys": ["complete_package_overview"],
+          "requireExactPublishedResponse": true
+        },
+        {
+          "utterance": "One Cooker package பத்தி சொல்றீங்களா?",
+          "expectedAnyCategoryKeys": ["oncology-screening"],
+          "requiredCatalogFields": ["relationships", "selectionRules"]
+        },
+        {
+          "utterance": "ஆ diabetic package பத்தி சொல்றீங்களா?",
+          "expectedAnyEntityKeys": ["diabetes-health-checkup"],
+          "requiredCatalogAttributes": ["tests", "consultation"]
+        },
+        {
+          "utterance": "சரி basic health check-அ பத்தி சொல்றீங்களா?",
+          "expectedAnyEntityKeys": ["silver-master-health-checkup"],
+          "requiredCatalogAttributes": ["tests", "consultation", "preparation"]
+        },
+        {
+          "utterance": "Specific health area checkup பத்தி சொல்றீங்களா?",
+          "expectedAnyCategoryKeys": ["organ-specific-health-checkups"]
+        },
+        {
+          "utterance": "Lung care பத்தி சொல்றீங்களா?",
+          "expectedAnyEntityKeys": ["lungs-health-checkup"],
+          "requiredCatalogAttributes": ["tests", "consultation", "purpose"]
+        },
+        {
+          "utterance": "lungsக்கு எந்த package நான் choose பண்றது?",
+          "expectedAnyEntityKeys": ["lungs-health-checkup"],
+          "expectedMemoryEntityKey": "lungs-health-checkup"
+        },
+        {
+          "utterance": "இதுல என்னென்ன test scans எல்லாம் வரும்?",
+          "expectedAnyEntityKeys": ["lungs-health-checkup"],
+          "expectedMemoryEntityKey": "lungs-health-checkup",
+          "requiredCatalogAttributes": ["tests"]
+        },
+        {
+          "utterance": "இந்த package-ல என்னெல்லாம் test scans-லாம் வரும்?",
+          "expectedAnyEntityKeys": ["lungs-health-checkup"],
+          "expectedMemoryEntityKey": "lungs-health-checkup",
+          "requiredCatalogAttributes": ["tests"]
+        },
+        {
+          "utterance": "சரி வேற என்ன packagesலாம் இருக்கு?",
+          "expectedResponseNodeKeys": ["complete_package_overview"],
+          "requireExactPublishedResponse": true
+        },
+        {
+          "utterance": "ஆர்கன் ஸ்பெசிஃபிக் பேக்கேஜ் பத்தி சொல்றீங்களா?",
+          "expectedAnyCategoryKeys": ["organ-specific-health-checkups"]
+        },
+        {
+          "utterance": "Argon specific package.",
+          "expectedAnyCategoryKeys": ["organ-specific-health-checkups"]
+        },
+        {
+          "utterance": "Argan specific package",
+          "expectedAnyCategoryKeys": ["organ-specific-health-checkups"]
+        }
+      ]
+    }
+  ]
+}

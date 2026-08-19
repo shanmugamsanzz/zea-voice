@@ -157,6 +157,8 @@ async function search(query, options = {}) {
     agentId: agentA, query, usageDirection: 'inbound', language: options.language ?? 'en', topK: 5,
     currentTopic: options.currentTopic,
     contextualFollowUp: options.contextualFollowUp,
+    pendingQuestion: options.pendingQuestion,
+    knownEntities: options.knownEntities ?? [],
   }, dependencies(options));
 }
 
@@ -214,6 +216,8 @@ assert.equal(explicitTopicChange.retrieval.contextualUsed, false);
 const genuineFollowUp = await search('What about that one?', {
   currentTopic: 'express delivery',
   contextualFollowUp: true,
+  pendingQuestion: 'Would you like details about express delivery?',
+  knownEntities: [{ key: 'express-delivery', name: 'express delivery' }],
   points: (query) => (query === 'What about that one?'
     ? []
     : [semanticPoint(ids.contextualFollowUp, 'FAQ', { score: 0.94 })]),

@@ -4,6 +4,7 @@ import {
   createGroundedDecisionStreamDecoder,
   groundedDecisionContract,
   groundedDecisionJsonSchema,
+  isRepairableGroundedDecisionReason,
   validateGroundedLlmDecision,
 } from '../src/voice/interaction/grounded-llm-decision.js';
 import { createSelectedLlmStream } from '../src/voice/providers/llm/llm-response.service.js';
@@ -345,5 +346,10 @@ assert.match(providerInput.messages[0].content, /"toolRequest"/u);
 assert.match(providerInput.messages[0].content, /"create_visit"/u);
 assert.ok(providerInput.messages[0].content.length <= 12_000);
 assert.match(providerInput.messages[0].content, /<\/grounded_response_contract>/u);
+assert.equal(isRepairableGroundedDecisionReason('invalid_response_shape'), true);
+assert.equal(isRepairableGroundedDecisionReason('answer_required'), true);
+assert.equal(isRepairableGroundedDecisionReason('invalid_json'), false);
+assert.match(orchestratorSource, /stage: 'llm\.decision_repair_retry'/u);
+assert.match(orchestratorSource, /deferDecisionRepair: false/u);
 
 console.log('One grounded LLM decision verification passed.');

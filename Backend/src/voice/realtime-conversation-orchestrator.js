@@ -50,6 +50,7 @@ import {
 } from './interaction/grounded-llm-response.js';
 import {
   createGroundedDecisionStreamDecoder,
+  isRepairableGroundedDecisionReason,
 } from './interaction/grounded-llm-decision.js';
 import { applyUnifiedGroundedTurn } from './interaction/unified-grounded-turn.js';
 import { evaluateFirstAudioSlo, percentile } from './interaction/voice-latency-slo.js';
@@ -1918,8 +1919,21 @@ export class RealtimeConversationOrchestrator {
       if (this.runtimeMetrics.grounding.samples.length < 100) {
         this.runtimeMetrics.grounding.samples.push(groundingMetric);
       }
+      this.log.info({
+        stage: 'llm.turn_decision_trace',
+        callId: this.call.id,
+        turnEpoch: streaming.epoch,
+        valid: grounded.valid === true,
+        rejectionReason: grounded.valid === true ? null : grounded.reason ?? 'unknown',
+        decision: grounded.decision ?? null,
+        responseId: grounded.responseId ?? null,
+        selectedEvidenceIds: grounded.evidenceIds ?? grounded.evidenceSourceIds ?? [],
+        selectedEntityKeys: grounded.selectedEntityKeys ?? [],
+        toolRequested: Boolean(grounded.toolRequest),
+      }, 'Grounded turn decision and selected evidence were traced before speech or action');
       let answer;
       const sources = [llmMessageSource(this.runtimeProfile.providers.llm, completion)];
+      const repairableDecisionFailure = isRepairableGroundedDecisionReason(grounded.reason);
       if (grounded.valid) {
         this.runtimeMetrics.grounding.validated += 1;
         if (streaming.isCurrent && !streaming.isCurrent()) {
@@ -1938,14 +1952,21 @@ export class RealtimeConversationOrchestrator {
         // A locally claim-valid sentence is not sufficient: the complete JSON
         // decision, state update and tool request must also validate before
         // anything is eligible for TTS. Never reuse partial streamed text.
-        this.runtimeMetrics.grounding.fallbacks += 1;
-        answer = configuredSafeFailureResponse(this.runtimeProfile);
-        sources.push(createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
-          label: 'Configured safe failure response', metadata: { reason: grounded.reason },
-        }));
-        this.log.warn({
-          stage: 'llm.grounding_rejected', callId: this.call.id, reason: grounded.reason,
-        }, 'LLM response was rejected before TTS; using the configured safe failure response');
+        if (repairableDecisionFailure && context.deferDecisionRepair === true) {
+          answer = '';
+          this.log.warn({
+            stage: 'llm.decision_repair_required', callId: this.call.id, reason: grounded.reason,
+          }, 'Structured decision was rejected and withheld from TTS pending one repair attempt');
+        } else {
+          this.runtimeMetrics.grounding.fallbacks += 1;
+          answer = configuredSafeFailureResponse(this.runtimeProfile);
+          sources.push(createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
+            label: 'Configured safe failure response', metadata: { reason: grounded.reason },
+          }));
+          this.log.warn({
+            stage: 'llm.grounding_rejected', callId: this.call.id, reason: grounded.reason,
+          }, 'LLM response was rejected before TTS; using the configured safe failure response');
+        }
       }
       answer = callerFacingText(answer, this.runtimeProfile);
       answer = this.liveCallMemory?.prepareAssistantResponse?.(answer) || answer;
@@ -1988,6 +2009,7 @@ export class RealtimeConversationOrchestrator {
         cancelled: false,
         text: answer,
         understanding: grounded.valid ? grounded : undefined,
+        groundingFailureReason: grounded.valid ? null : grounded.reason,
         toolCalls,
         sources,
       };
@@ -2004,24 +2026,40 @@ export class RealtimeConversationOrchestrator {
   }
 
   async #llm(query, history, knowledge, context = {}, streaming = {}) {
-    let lastError;
-    for (let attempt = 0; attempt <= env.VOICE_PROVIDER_MAX_RETRIES; attempt += 1) {
-      try {
-        return await this.#llmAttempt(query, history, knowledge, context, streaming);
-      } catch (error) {
-        lastError = error;
-        if (streaming.sentenceCount?.() > 0
-          || error?.retryable !== true || attempt >= env.VOICE_PROVIDER_MAX_RETRIES) throw error;
-        const delayMs = env.VOICE_PROVIDER_RETRY_BASE_MS * (2 ** attempt);
-        this.log.warn({
-          stage: 'llm.retry', attempt: attempt + 1, delayMs,
-          providerId: this.runtimeProfile.providers.llm.providerId,
-          modelId: this.runtimeProfile.providers.llm.modelId,
-        }, 'Retrying selected LLM after transient failure');
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
+    const runWithProviderRetries = async (attemptContext) => {
+      let lastError;
+      for (let attempt = 0; attempt <= env.VOICE_PROVIDER_MAX_RETRIES; attempt += 1) {
+        try {
+          return await this.#llmAttempt(query, history, knowledge, attemptContext, streaming);
+        } catch (error) {
+          lastError = error;
+          if (streaming.sentenceCount?.() > 0
+            || error?.retryable !== true || attempt >= env.VOICE_PROVIDER_MAX_RETRIES) throw error;
+          const delayMs = env.VOICE_PROVIDER_RETRY_BASE_MS * (2 ** attempt);
+          this.log.warn({
+            stage: 'llm.retry', attempt: attempt + 1, delayMs,
+            providerId: this.runtimeProfile.providers.llm.providerId,
+            modelId: this.runtimeProfile.providers.llm.modelId,
+          }, 'Retrying selected LLM after transient failure');
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
       }
+      throw lastError;
+    };
+
+    const first = await runWithProviderRetries({ ...context, deferDecisionRepair: true });
+    if (!isRepairableGroundedDecisionReason(first.groundingFailureReason)) {
+      return first;
     }
-    throw lastError;
+    this.log.warn({
+      stage: 'llm.decision_repair_retry', callId: this.call.id,
+      reason: first.groundingFailureReason, attempt: 1,
+    }, 'Retrying the complete grounded decision once with schema repair guidance');
+    return runWithProviderRetries({
+      ...context,
+      deferDecisionRepair: false,
+      decisionRepair: { reason: first.groundingFailureReason },
+    });
   }
 
   #createSentenceTtsPipeline(epoch, turnStartedAt) {
@@ -2317,6 +2355,40 @@ export class RealtimeConversationOrchestrator {
     // The saved frame is context, not a gate. Ordinary topic/entity state is
     // updated only after the grounded LLM decision has been validated.
     const memoryState = this.liveCallMemory?.snapshot();
+    const retrievalTrace = knowledge.tenantEvidence?.retrievalTrace ?? {};
+    this.log.info({
+      stage: 'knowledge.turn_retrieval_trace',
+      callId: this.call.id,
+      turnEpoch: epoch,
+      finalizedUtterance: query,
+      memoryContext: {
+        currentTopic: memoryState?.currentTopic ?? null,
+        knownEntities: (memoryState?.knownEntities ?? []).map((entity) => ({
+          key: entity?.key ?? null,
+          name: entity?.name ?? null,
+          category: entity?.category ?? null,
+        })),
+        pendingQuestion: memoryState?.pendingQuestion?.text
+          ?? memoryState?.pendingQuestionText ?? memoryState?.pendingQuestion ?? null,
+        recentTurnCount: Array.isArray(memoryState?.recentTurns)
+          ? memoryState.recentTurns.length : 0,
+        collectedFieldKeys: Object.keys(memoryState?.collectedInformation ?? {}).sort(),
+      },
+      retrievalQueries: {
+        primary: retrievalTrace.primaryQuery ?? query,
+        contextual: retrievalTrace.contextualQuery ?? null,
+      },
+      retrievedCandidates: retrievalTrace.retrievedCandidates ?? [],
+      hydratedEvidence: retrievalTrace.hydratedEvidence ?? [],
+      permittedEvidenceIds: retrievalTrace.permittedEvidenceIds
+        ?? knowledge.tenantEvidence?.evidenceIds ?? [],
+      rejectedCandidates: retrievalTrace.rejectedCandidates ?? [],
+      publicationRevisions: retrievalTrace.publicationRevisions
+        ?? knowledge.tenantEvidence?.publicationRevisions ?? [],
+      contextualUsed: knowledge.tenantEvidence?.retrieval?.contextualUsed ?? false,
+      contextualPreferred: knowledge.tenantEvidence?.retrieval?.contextualPreferred ?? false,
+      cacheHit: knowledge.tenantEvidence?.cacheHit === true,
+    }, 'Finalized utterance, memory and authoritative retrieval selection were traced');
     this.runtimeMetrics.conversationFlow = {
       ...this.runtimeMetrics.conversationFlow,
       currentTopic: memoryState?.currentTopic ?? null,
