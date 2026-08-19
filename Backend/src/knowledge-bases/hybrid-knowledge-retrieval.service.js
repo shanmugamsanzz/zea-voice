@@ -666,7 +666,9 @@ function catalogValue(value) {
 
 export function focusAuthoritativeCatalogEvidence(evidence = [], input = {}, maximum = 5) {
   const limit = Math.max(3, Math.min(Number(maximum) || 5, 5));
-  const preferredCallerMessage = input.preferredCallerMessage?.recordType === 'CONVERSATION_NODE'
+  const catalogIdentityResolved = input.catalogIdentityResolved === true;
+  const preferredCallerMessage = !catalogIdentityResolved
+    && input.preferredCallerMessage?.recordType === 'CONVERSATION_NODE'
     && input.preferredCallerMessage?.callerFacing === true
     ? input.preferredCallerMessage : null;
   const catalog = evidence.filter((item) => item.recordType === 'CATALOG_ITEM');
@@ -1204,7 +1206,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
     })),
   });
-  const cacheKey = `zea:rag:hybrid:v2:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:v3:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();
@@ -1337,7 +1339,11 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
     workflowPermittedEvidence, query, safeInput,
   );
   const catalogFocus = focusAuthoritativeCatalogEvidence(
-    workflowPermittedEvidence, { ...safeInput, preferredCallerMessage }, safeInput.topK,
+    workflowPermittedEvidence, {
+      ...safeInput,
+      preferredCallerMessage,
+      catalogIdentityResolved: catalogIdentityResolution?.status === 'match',
+    }, safeInput.topK,
   );
   const permittedEvidence = catalogFocus.evidence
     .slice(0, Math.max(1, Math.min(Number(safeInput.topK) || 5, 5)))

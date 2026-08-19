@@ -117,6 +117,16 @@ const overviewFocused = focusAuthoritativeCatalogEvidence([
 }, 5);
 assert.equal(overviewFocused.evidence[0].recordId, 'overview-message-record',
   'A strongly matched caller-facing published response must outrank Catalog evidence');
+const explicitCatalogFocused = focusAuthoritativeCatalogEvidence([
+  latestItem, overviewMessage,
+], {
+  latestCallerUtterance: 'Tell me about the selected published item',
+  preferredCallerMessage: overviewMessage,
+  catalogIdentityResolved: true,
+  knownEntities: [],
+}, 5);
+assert.deepEqual(explicitCatalogFocused.evidence.map((item) => item.recordId), ['latest-record'],
+  'An explicitly resolved Catalog identity must remove unrelated caller-facing guidance');
 const contextualMessage = {
   ...overviewMessage, id: 'published:conversation_node:contextual-message',
   recordId: 'contextual-message-record', retrievalContext: 'contextual',
