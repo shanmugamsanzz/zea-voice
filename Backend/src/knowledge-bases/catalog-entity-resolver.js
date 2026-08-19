@@ -354,14 +354,27 @@ export function classifyCatalogEntityLocally(items, query, {
     && Number(best.matchedQueryTokens ?? 0)
       > Number(runnerUp?.matchedQueryTokens ?? 0)
     && Number(best.queryCoverage ?? 0) > Number(runnerUp?.queryCoverage ?? 0);
+  // Category names are often broader than their child item names and voice STT
+  // may omit one leading qualifier. Accept a strong multi-token category-label
+  // match when it still leads an unrelated runner by a meaningful fraction of
+  // the ambiguity margin. This remains tenant vocabulary driven: no category
+  // names or caller phrases are encoded here.
+  const categoryPhraseSupported = best.entityType === 'category'
+    && ['category', 'category_key', 'category_alias'].includes(best.matchedKind)
+    && best.score >= Math.max(clarificationConfidence, highConfidence - ambiguityMargin)
+    && Number(best.matchedQueryTokens ?? 0) >= 2
+    && Number(best.labelCoverage ?? 0) >= 0.5
+    && runnerUp?.exactLabel !== true
+    && (!runnerUp || best.score - runnerUp.score >= ambiguityMargin * 0.65);
   const ambiguous = Boolean(runnerUp && best.score - runnerUp.score < ambiguityMargin
     && !runnerIsParentOfBest && !runnerIsChildOfBest
-    && !runnerIsWeakPartial && !runnerHasWeakerQueryCoverage);
+    && !runnerIsWeakPartial && !runnerHasWeakerQueryCoverage && !categoryPhraseSupported);
   const hierarchySupportedCategory = best.entityType === 'category'
     && runnerIsChildOfBest
     && best.score >= Math.max(clarificationConfidence, highConfidence - ambiguityMargin);
   const status = (best.exactLabel
-    || (!ambiguous && (best.score >= highConfidence || hierarchySupportedCategory)))
+    || (!ambiguous && (best.score >= highConfidence
+      || hierarchySupportedCategory || categoryPhraseSupported)))
     ? 'match' : 'uncertain';
   return Object.freeze({
     status,

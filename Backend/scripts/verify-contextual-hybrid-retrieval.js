@@ -263,6 +263,31 @@ assert.equal(hierarchyBackedCategory.status, 'match');
 assert.equal(hierarchyBackedCategory.entityType, 'category');
 assert.equal(hierarchyBackedCategory.categoryKey, 'organ-specific-health-checkups');
 
+// A complete production Catalog contains unrelated items whose partial token
+// matches can sit inside the ambiguity margin. A leading multi-token category
+// phrase must still hydrate the category when no exact competing identity wins.
+const crowdedCategory = classifyCatalogEntityLocally([
+  {
+    id: 'f1111111-1111-4111-8111-111111111111', knowledge_base_id: knowledgeBaseId,
+    name: 'Renal Health Checkup', item_key: 'renal-health-checkup', aliases: [],
+    category: 'Organ-Specific Health Check-ups',
+    category_key: 'organ-specific-health-checkups', category_aliases: [],
+  },
+  {
+    id: 'f2222222-2222-4222-8222-222222222222', knowledge_base_id: knowledgeBaseId,
+    name: 'Diabetes Health Checkup', item_key: 'diabetes-health-checkup', aliases: [],
+    category: 'Metabolic Screening', category_key: 'metabolic-screening', category_aliases: [],
+  },
+  {
+    id: 'f3333333-3333-4333-8333-333333333333', knowledge_base_id: knowledgeBaseId,
+    name: 'Advanced Specific Screening', item_key: 'advanced-specific-screening', aliases: [],
+    category: 'Advanced Screening', category_key: 'advanced-screening', category_aliases: [],
+  },
+], 'Specific health area checkup');
+assert.equal(crowdedCategory.status, 'match');
+assert.equal(crowdedCategory.entityType, 'category');
+assert.equal(crowdedCategory.categoryKey, 'organ-specific-health-checkups');
+
 const fullAliasBeatsPartialLabel = classifyCatalogEntityLocally([
   {
     id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', knowledge_base_id: knowledgeBaseId,
