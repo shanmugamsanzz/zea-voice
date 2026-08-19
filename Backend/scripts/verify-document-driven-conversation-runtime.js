@@ -138,6 +138,32 @@ assert.equal(
   'Configured safe response.',
 );
 
+const genericOverview = {
+  ...safeMessage,
+  id: 'overview-message', recordId: 'overview-message', rank: 1, score: 0.99,
+  content: 'Available options overview.',
+  authoritativeData: { nodeType: 'message' },
+};
+const selectedItem = {
+  ...fullCatalog,
+  id: 'selected-item', recordId: 'selected-item', rank: 2, score: 0.9,
+  content: 'Selected item includes detailed features and consultation.',
+};
+const specificEnvelope = {
+  found: true,
+  sources: [
+    { id: 'source_overview', recordId: genericOverview.recordId, content: genericOverview.content },
+    { id: 'source_item', recordId: selectedItem.recordId, content: selectedItem.content },
+  ],
+};
+assert.equal(
+  approvedHydratedEvidenceFallback(
+    'selected item detailed features', specificEnvelope, [genericOverview, selectedItem], profile,
+  ).text,
+  selectedItem.content,
+  'fallback must preserve latest-turn relevance instead of prioritizing every message record',
+);
+
 assert.equal(evidenceBelongsToRuntime({ ...fullCatalog, tenantId: 'tenant-b' }, scope), false);
 assert.equal(evidenceBelongsToRuntime({ ...fullCatalog, publicationRevision: 6 }, scope), false);
 
@@ -146,6 +172,7 @@ const orchestratorSource = await readFile(new URL(
 ), 'utf8');
 assert.match(orchestratorSource, /settleWithin\(/u, 'Retrieval/provider operations must remain bounded');
 assert.match(orchestratorSource, /caller_barge_in/u, 'Barge-in must cancel stale work');
+assert.doesNotMatch(orchestratorSource, /for \(const candidate of \[\.\.\.exact/u);
 
 console.log(JSON.stringify({
   task: 'document-driven-conversation-runtime', passed: true,

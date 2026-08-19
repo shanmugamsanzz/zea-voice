@@ -214,12 +214,14 @@ export function rankRelevantHydratedEvidence(query, envelope, authoritativeSourc
     const exact = normalizedQuery.length >= 3 && contentIdentity.includes(normalizedQuery) ? 1 : 0;
     const retrievalScore = Number(hydrated.score ?? source.evidenceScore ?? 0);
     const retrievalRank = Number(hydrated.rank ?? source.evidenceRank ?? index + 1);
+    const exactCallerResponse = source.exactCallerResponse === true;
     return {
       source: hydrated,
-      score: exact * 10_000 + coverage * 1_000 + Math.max(0, retrievalScore) * 10
+      score: exact * 10_000 + (exactCallerResponse ? 5_000 : 0)
+        + coverage * 1_000 + Math.max(0, retrievalScore) * 10
         + Math.max(0, 20 - retrievalRank) - index / 100,
       lexicalCoverage: coverage,
-      exactCallerResponse: source.exactCallerResponse === true,
+      exactCallerResponse,
     };
   }).filter((candidate) => {
     if (!candidate) return false;

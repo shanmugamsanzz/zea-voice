@@ -191,9 +191,11 @@ function hydratedRecordSpeech(source) {
 // the first arbitrary document is never substituted for a specific request.
 export function approvedHydratedEvidenceFallback(query, envelope, evidence, profile) {
   const ranked = rankRelevantHydratedEvidence(query, envelope, evidence);
-  const exact = ranked.filter((candidate) => candidate.source?.callerFacing === true
-    && String(candidate.source?.authoritativeData?.nodeType ?? '').toLowerCase() === 'message');
-  for (const candidate of [...exact, ...ranked.filter((candidate) => !exact.includes(candidate))]) {
+  // Preserve latest-turn relevance order. Caller-facing message records are
+  // not inherently safer or more relevant than a specific hydrated catalog,
+  // FAQ or policy record. Only an exactCallerResponse selected for this turn
+  // receives priority, and that priority is already encoded by the ranker.
+  for (const candidate of ranked) {
     const speech = hydratedRecordSpeech(candidate.source);
     if (!speech || isInternalRuntimeText(speech)) continue;
     return { text: speech, source: candidate.source };
@@ -1349,7 +1351,21 @@ export class RealtimeConversationOrchestrator {
     const pendingField = (this.liveCallMemory?.fieldSchemas?.() ?? liveMemory?.fields ?? [])
       .find((field) => field.key === pendingQuestion?.key);
     const configuredResponse = String(this.callCheckConfiguration.response ?? '').trim();
-    const questionToResume = pendingField?.question ?? pendingQuestion?.text;
+    const pendingText = pendingField?.question ?? pendingQuestion?.text;
+    const answeredQuestions = new Set((liveMemory?.answeredQuestions ?? [])
+      .map((value) => String(value).trim().toLocaleLowerCase()).filter(Boolean));
+    const explicitlyScheduled = pendingText
+      && String(liveMemory?.resumeQuestionAfterAnswer ?? '').trim().toLocaleLowerCase()
+        === String(pendingText).trim().toLocaleLowerCase();
+    // A presence check must not revive stale conversational prompts. Required
+    // configured fields and questions explicitly scheduled by validated
+    // continuation state remain resumable; all other pending context stays in
+    // memory for the next grounded turn.
+    const questionToResume = pendingText
+      && !answeredQuestions.has(String(pendingText).trim().toLocaleLowerCase())
+      && (Boolean(pendingField) || explicitlyScheduled)
+      ? pendingText
+      : '';
     const resumeQuestion = questionToResume
       && !configuredResponse.toLocaleLowerCase().includes(String(questionToResume).toLocaleLowerCase())
       ? questionToResume

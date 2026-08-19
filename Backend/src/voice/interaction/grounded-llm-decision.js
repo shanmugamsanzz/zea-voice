@@ -142,6 +142,29 @@ function normalizeStateUpdate(value, envelope, runtime) {
   });
 }
 
+function recoverSafeAnswerStateUpdate(value, envelope, runtime) {
+  const candidate = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const safe = {};
+  const currentTopic = text(candidate.currentTopic, 240);
+  const language = text(candidate.language, 20);
+  const resolvedRequestType = requestType(candidate.requestType ?? candidate.questionType);
+  if (currentTopic) safe.currentTopic = currentTopic;
+  if (language) safe.language = language;
+  if (typeof candidate.pendingQuestionRelevant === 'boolean') {
+    safe.pendingQuestionRelevant = candidate.pendingQuestionRelevant;
+  }
+  if (typeof candidate.contextDependent === 'boolean') safe.contextDependent = candidate.contextDependent;
+  if (resolvedRequestType) safe.requestType = resolvedRequestType;
+  if (Array.isArray(candidate.requestedFacts)) safe.requestedFacts = list(candidate.requestedFacts, 20);
+  if (Array.isArray(candidate.constraints)) safe.constraints = list(candidate.constraints, 20);
+  if (Array.isArray(candidate.contextualReferences)) {
+    safe.contextualReferences = list(candidate.contextualReferences, 20);
+  }
+  // Entity selection, collected caller values and tool state are deliberately
+  // excluded from recovery. They require strict evidence/schema validation.
+  return normalizeStateUpdate(safe, envelope, runtime) ?? normalizeStateUpdate({}, envelope, runtime);
+}
+
 function matchesType(value, type) {
   if (type === 'array') return Array.isArray(value);
   if (type === 'object') return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -193,17 +216,24 @@ function internalSpeech(value) {
     || /^\s*(?:instruction|workflow|debug|json)\s*:/iu.test(value);
 }
 
-function splitCallerQuestion(value, configuredQuestion) {
+function splitCallerQuestion(value, configuredQuestion, decision) {
   const original = text(value, maximumAnswerCharacters);
-  let pendingQuestion = configuredQuestion === null ? null : text(configuredQuestion, 500);
-  const parts = original.match(/[^?？]*(?:[?？]|$)/gu)?.map((part) => part.trim()).filter(Boolean) ?? [];
-  const statements = [];
-  for (const part of parts) {
-    if (/[?？]$/u.test(part)) {
-      if (!pendingQuestion) pendingQuestion = text(part, 500);
-    } else statements.push(part);
+  const pendingQuestion = configuredQuestion === null ? null : text(configuredQuestion, 500);
+  // Question punctuation is valid caller-facing speech. Previously, any
+  // answer ending in "?" was treated as one large pending question, which
+  // erased the factual answer and produced answer_required. The structured
+  // pendingQuestion field is the only reliable boundary. Remove it from the
+  // answer only when it is an exact trailing duplicate.
+  if (pendingQuestion && original.toLocaleLowerCase().endsWith(pendingQuestion.toLocaleLowerCase())) {
+    const answer = text(original.slice(0, original.length - pendingQuestion.length), maximumAnswerCharacters);
+    return Object.freeze({ answer, pendingQuestion });
   }
-  return Object.freeze({ answer: text(statements.join(' '), maximumAnswerCharacters), pendingQuestion });
+  // Clarifications are spoken from pendingQuestion; do not repeat question-
+  // only text placed in answer by a provider.
+  if (decision === 'clarify' && pendingQuestion && /^[^.!]*[?？](?:\s*[^.!]*[?？])*$/u.test(original)) {
+    return Object.freeze({ answer: '', pendingQuestion });
+  }
+  return Object.freeze({ answer: original, pendingQuestion });
 }
 
 export function groundedDecisionContract(envelope, runtime = {}) {
@@ -348,7 +378,7 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
   const decision = text(parsed.decision, 20).toLocaleLowerCase();
   if (!decisions.has(decision)) return Object.freeze({ valid: false, reason: 'invalid_decision' });
   const exactResponseCandidate = (envelope.exactCallerResponses ?? []).length > 0;
-  const separated = splitCallerQuestion(parsed.answer, parsed.pendingQuestion);
+  const separated = splitCallerQuestion(parsed.answer, parsed.pendingQuestion, decision);
   // Exact published messages may intentionally end with a caller-facing
   // question. Preserve that punctuation/content instead of treating it as a
   // runtime pending question and altering the approved response.
@@ -414,8 +444,15 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
   // Tanglish, translations, or natural spoken paraphrases. The hydrated
   // claim validator still enforces selected evidence, numbers, entities,
   // safety policies and verified tool results before speech.
-  const stateUpdate = normalizeStateUpdate(parsed.stateUpdate, envelope, runtime);
-  if (!stateUpdate) return Object.freeze({ valid: false, reason: 'invalid_state_update' });
+  let stateUpdate = normalizeStateUpdate(parsed.stateUpdate, envelope, runtime);
+  if (!stateUpdate) {
+    // Optional memory metadata must never discard a grounded ordinary answer.
+    // Recover only harmless generic context and discard unverified entities,
+    // caller fields and tool state. Action and clarification decisions remain
+    // strict because their state controls tools or the next interaction.
+    if (decision !== 'answer') return Object.freeze({ valid: false, reason: 'invalid_state_update' });
+    stateUpdate = recoverSafeAnswerStateUpdate(parsed.stateUpdate, envelope, runtime);
+  }
   const toolRequest = normalizeToolRequest(parsed.toolRequest, decision, runtime);
   if (toolRequest === undefined) return Object.freeze({ valid: false, reason: 'invalid_tool_request' });
   return Object.freeze({

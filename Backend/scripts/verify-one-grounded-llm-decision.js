@@ -56,6 +56,23 @@ assert.deepEqual(emptyStateOrdinaryAnswer.selectedEntityKeys, []);
 assert.deepEqual(emptyStateOrdinaryAnswer.fieldUpdates, {});
 assert.equal(emptyStateOrdinaryAnswer.requestType, undefined);
 
+const answerEndingWithQuestion = validateGroundedLlmDecision(JSON.stringify({
+  decision: 'answer',
+  answer: 'Available options are Standard and Premium. Which option would you like?',
+  evidenceIds: ['source_1'], stateUpdate: {}, pendingQuestion: null, toolRequest: null,
+}), {
+  ...envelope,
+  sources: [{
+    ...envelope.sources[0],
+    content: 'Available options are Standard and Premium. Which option would you like?',
+  }],
+}, runtime);
+assert.equal(answerEndingWithQuestion.valid, true);
+assert.equal(
+  answerEndingWithQuestion.answer,
+  'Available options are Standard and Premium. Which option would you like?',
+);
+
 const genericMeaning = validateGroundedLlmDecision(JSON.stringify({
   decision: 'answer', answer: 'Premium service costs INR 3200.', evidenceIds: ['source_1'],
   stateUpdate: {
@@ -77,15 +94,38 @@ const invalidMeaning = validateGroundedLlmDecision(JSON.stringify({
   decision: 'answer', answer: 'The office is on Central Road.', evidenceIds: ['source_2'],
   stateUpdate: { requestType: 'NOT VALID!' }, pendingQuestion: null, toolRequest: null,
 }), envelope, runtime);
-assert.equal(invalidMeaning.valid, false);
-assert.equal(invalidMeaning.reason, 'invalid_state_update');
+assert.equal(invalidMeaning.valid, true);
+assert.deepEqual(invalidMeaning.stateUpdate.knownEntityKeys, []);
+assert.equal(invalidMeaning.requestType, undefined);
 
 const invalidStateField = validateGroundedLlmDecision(JSON.stringify({
   decision: 'answer', answer: 'The office is on Central Road.', evidenceIds: ['source_2'],
   stateUpdate: { internalStage: 'hidden' }, pendingQuestion: null, toolRequest: null,
 }), envelope, runtime);
-assert.equal(invalidStateField.valid, false);
-assert.equal(invalidStateField.reason, 'invalid_state_update');
+assert.equal(invalidStateField.valid, true);
+assert.deepEqual(invalidStateField.stateUpdate.knownEntityKeys, []);
+
+const partiallyRecoverableState = validateGroundedLlmDecision(JSON.stringify({
+  decision: 'answer', answer: 'The office is on Central Road.', evidenceIds: ['source_2'],
+  stateUpdate: {
+    knownEntityKeys: ['not-published'], pendingQuestionRelevant: false,
+    currentTopic: 'office location', requestType: 'location_details',
+  },
+  pendingQuestion: null, toolRequest: null,
+}), envelope, runtime);
+assert.equal(partiallyRecoverableState.valid, true);
+assert.equal(partiallyRecoverableState.pendingQuestionRelevant, false);
+assert.equal(partiallyRecoverableState.currentTopic, 'office location');
+assert.equal(partiallyRecoverableState.requestType, 'location_details');
+assert.deepEqual(partiallyRecoverableState.selectedEntityKeys, []);
+
+const invalidActionState = validateGroundedLlmDecision(JSON.stringify({
+  decision: 'action', answer: '', evidenceIds: [], stateUpdate: { internalStage: 'hidden' },
+  pendingQuestion: null,
+  toolRequest: { name: 'create_visit', arguments: { customer_name: 'Ravi', visit_date: '2026-08-20' } },
+}), envelope, runtime);
+assert.equal(invalidActionState.valid, false);
+assert.equal(invalidActionState.reason, 'invalid_state_update');
 
 const invalidJsonTamil = validateGroundedLlmDecision('Premium service பற்றி சொல்லுங்க', envelope, runtime);
 assert.equal(invalidJsonTamil.reason, 'invalid_json');
