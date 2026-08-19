@@ -133,7 +133,8 @@ for (const [index, fixture] of fixtures.entries()) {
     },
   }, { includePublishedMap: false });
   const rawDecision = JSON.stringify({
-    decision: 'answer', answer: fixture.answer, evidenceIds: ['source_1'],
+    decision: 'answer', answer: fixture.answer, responseId: null,
+    evidenceIds: ['source_1'],
     stateUpdate: {
       requestType: 'details', currentTopic: fixture.topic,
       knownEntityKeys: [fixture.entityKey], requestedFacts: fixture.requestedFacts,
@@ -141,7 +142,7 @@ for (const [index, fixture] of fixtures.entries()) {
         || fixture.utterance.includes('that') || fixture.utterance.includes('this') ? ['current item'] : [],
       contextDependent: true, collectedInformation: {}, correctedFields: [],
     },
-    pendingQuestion: null, toolRequest: null,
+    pendingQuestion: null, toolRequest: null, clarification: null,
   });
 
   const decoder = createGroundedDecisionStreamDecoder(envelope);

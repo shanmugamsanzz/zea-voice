@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   defaultCallEndTriggerPhrases,
+  classifyFinalCallEndUtterance,
   findCallEndTriggerPhrase,
   normalizePostCallEndTriggerSettings,
   resolveCallEndTriggerPhrases,
@@ -36,5 +37,12 @@ assert.deepEqual(resolveCallEndTriggerPhrases(companyA), {
 assert.equal(findCallEndTriggerPhrase('Please stop the demo now', companyA).phrase, 'stop the demo');
 assert.equal(findCallEndTriggerPhrase('Please stop the demo now', companyB), null);
 assert.equal(findCallEndTriggerPhrase('Could you call me after 5 minutes?', companyA), null);
+assert.equal(classifyFinalCallEndUtterance('stop the demo', companyA, { finalized: true }).shortcut, true);
+assert.equal(classifyFinalCallEndUtterance(
+  'stop the demo after you answer my pricing question', companyA, { finalized: true },
+).shortcut, false);
+assert.deepEqual(classifyFinalCallEndUtterance('stop the demo', companyA), {
+  matchedPhrase: null, shortcut: false, source: null,
+});
 
 console.log('Post-call end-trigger configuration verification passed.');

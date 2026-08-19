@@ -52,6 +52,24 @@ function entity(value = {}, sourceId = null) {
 export function buildGroundingEnvelope(knowledge = {}, options = {}) {
   const sources = [];
   const sourceContents = new Set();
+  // A strongly matched published message is still decided by the one
+  // grounded LLM call. Expose it as an exact response candidate; the runtime
+  // validates its scope after selection and replaces model wording with this
+  // authoritative content before speech.
+  const directResponse = knowledge.tenantEvidence?.directResponse;
+  if (directResponse?.content
+    && directResponse.callerFacing === true
+    && String(directResponse.recordType ?? '').toUpperCase() === 'CONVERSATION_NODE'
+    && String(directResponse.authoritativeData?.nodeType ?? '').toLowerCase() === 'message') {
+    addSource(sources, sourceContents, directResponse.content, {
+      recordId: text(directResponse.recordId, 100) || null,
+      recordType: 'CONVERSATION_NODE',
+      nodeType: 'message',
+      callerFacing: true,
+      authoritativeData: directResponse.authoritativeData ?? null,
+      exactCallerResponse: true,
+    });
+  }
   // PostgreSQL-hydrated evidence is authoritative and must be added before
   // duplicate Qdrant/BM25 snippets so the LLM receives the complete approved
   // record rather than only the discovery preview.
@@ -61,9 +79,6 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
       recordId: text(evidence.recordId, 100) || null,
       recordType: text(evidence.recordType, 40) || 'tenant_evidence',
       authoritativeData: evidence.authoritativeData ?? null,
-      // Strong caller-facing messages are selected and returned directly by
-      // retrieval/orchestration. Evidence reaching the LLM is supporting
-      // material for a non-exact question, never an exact speech contract.
       exactCallerResponse: false,
     });
   }
@@ -159,14 +174,15 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
   const selectedSources = options.maximumSources
     ? sources.slice(0, Math.max(1, Math.min(Number(options.maximumSources), maximumSources)))
     : sources;
+  const exactCallerResponses = selectedSources
+    .filter((source) => source.exactCallerResponse === true)
+    .map((source) => source.id);
   return Object.freeze({
     found: knowledge.found === true && selectedSources.length > 0,
     route: text(knowledge.route, 40) || 'none',
     sources: Object.freeze(selectedSources),
     entities: Object.freeze(entities),
-    // Exact published messages never enter the LLM path. They are validated
-    // against tenant/agent/revision scope and spoken directly by the runtime.
-    exactCallerResponses: Object.freeze([]),
+    exactCallerResponses: Object.freeze(exactCallerResponses),
   });
 }
 

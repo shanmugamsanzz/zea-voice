@@ -7,7 +7,7 @@ import { evidenceBelongsToRuntime } from '../src/voice/interaction/grounded-deci
 import { openGenericConversationState } from '../src/voice/interaction/generic-conversation-state.js';
 import { rankRelevantHydratedEvidence } from '../src/voice/interaction/grounded-claim-validator.js';
 import {
-  approvedHydratedEvidenceFallback,
+  configuredSafeFailureResponse,
 } from '../src/voice/realtime-conversation-orchestrator.js';
 
 const scope = Object.freeze({
@@ -134,7 +134,7 @@ const unrelatedEnvelope = {
 assert.equal(rankRelevantHydratedEvidence('latest request', unrelatedEnvelope, [unrelated]).length, 0);
 const profile = { agent: { language: 'English', settings: { noResponseMessage: 'Configured safe response.' } } };
 assert.equal(
-  approvedHydratedEvidenceFallback('latest request', unrelatedEnvelope, [unrelated], profile).text,
+  configuredSafeFailureResponse(profile),
   'Configured safe response.',
 );
 
@@ -157,11 +157,9 @@ const specificEnvelope = {
   ],
 };
 assert.equal(
-  approvedHydratedEvidenceFallback(
-    'selected item detailed features', specificEnvelope, [genericOverview, selectedItem], profile,
-  ).text,
-  selectedItem.content,
-  'fallback must preserve latest-turn relevance instead of prioritizing every message record',
+  configuredSafeFailureResponse(profile),
+  'Configured safe response.',
+  'validation failure must never substitute a retrieved document',
 );
 
 assert.equal(evidenceBelongsToRuntime({ ...fullCatalog, tenantId: 'tenant-b' }, scope), false);

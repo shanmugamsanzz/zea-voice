@@ -102,3 +102,17 @@ export function findCallEndTriggerPhrase(transcript, settings = {}) {
   }
   return null;
 }
+
+export function classifyFinalCallEndUtterance(transcript, settings = {}, { finalized = false } = {}) {
+  if (!finalized) return Object.freeze({ matchedPhrase: null, shortcut: false, source: null });
+  const match = findCallEndTriggerPhrase(transcript, settings);
+  if (!match) return Object.freeze({ matchedPhrase: null, shortcut: false, source: null });
+  return Object.freeze({
+    matchedPhrase: match.phrase,
+    source: match.source,
+    // A phrase embedded in a larger finalized request is not a control turn.
+    // The complete utterance continues to the unified grounded decision.
+    shortcut: canonicalPhrase(transcript).toLocaleLowerCase()
+      === canonicalPhrase(match.phrase).toLocaleLowerCase(),
+  });
+}

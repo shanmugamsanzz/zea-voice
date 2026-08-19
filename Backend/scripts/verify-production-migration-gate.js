@@ -97,8 +97,9 @@ const envelope = {
 };
 const hallucination = validateGroundedLlmDecision(JSON.stringify({
   decision: 'answer', answer: 'The verified value is 99.', evidenceIds: ['source_1'],
+  responseId: null,
   stateUpdate: { currentTopic: 'value', knownEntityKeys: [], collectedInformation: {}, correctedFields: [] },
-  pendingQuestion: null, toolRequest: null,
+  pendingQuestion: null, toolRequest: null, clarification: null,
 }), envelope, { fieldSchemas: [], toolSchemas: [] });
 assert.equal(hallucination.valid, false);
 assert.equal(hallucination.reason, 'unsupported_numeric_fact');
@@ -162,11 +163,35 @@ assert.ok(audio.p50 < 700, `p50 first audio ${audio.p50} ms must be below 700 ms
 assert.ok(audio.p90 < 1000, `p90 first audio ${audio.p90} ms must be below 1000 ms`);
 assert.ok(audio.p95 < 1500, `p95 first audio ${audio.p95} ms must be below 1500 ms`);
 
+const acceptancePath = resolve(
+  process.env.PRODUCTION_ACCEPTANCE_REPORT ?? 'artifacts/production-acceptance-report.json',
+);
+assert.ok(existsSync(acceptancePath),
+  `Live PostgreSQL/Qdrant acceptance report is required before production activation: ${acceptancePath}`);
+const acceptance = JSON.parse(readFileSync(acceptancePath, 'utf8'));
+assert.equal(acceptance.mode, 'live_postgresql_qdrant');
+assert.equal(acceptance.passed, true);
+assert.ok(Number(acceptance.callCount) > 0 && Number(acceptance.turnCount) > 0,
+  'Live production acceptance must replay at least one call and one turn');
+assert.ok(Number(acceptance.semanticCandidates) > 0,
+  'Live production acceptance must observe Qdrant semantic candidates');
+for (const field of ['retrievalMs', 'llmMs', 'totalMs']) {
+  for (const percentileName of ['p50', 'p90', 'p95']) {
+    assert.ok(Number.isFinite(Number(acceptance.latency?.[field]?.[percentileName])),
+      `Live production acceptance is missing ${field}.${percentileName}`);
+  }
+}
+
 console.log(JSON.stringify({
   gate: 'production-migration', passed: true,
   industries: task10Industries.map((fixture) => fixture.industry),
   retrievalMaxMs: Math.max(...retrievalSamples),
   rerankHydrationMaxMs: Math.max(...rerankHydrationSamples),
   firstAudio: audio,
+  liveAcceptance: {
+    calls: acceptance.callCount, turns: acceptance.turnCount,
+    semanticCandidates: acceptance.semanticCandidates,
+    latency: acceptance.latency,
+  },
   legacyDeletionAuthorized: true,
 }));

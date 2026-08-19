@@ -2,6 +2,10 @@ const maximumAnswerCharacters = 4_000;
 const maximumSources = 10;
 const maximumEntities = 20;
 const decisions = new Set(['answer', 'clarify', 'action']);
+const clarificationReasons = new Set([
+  'ambiguous_request', 'missing_evidence', 'conflicting_evidence',
+  'missing_required_information',
+]);
 
 function requestType(value) {
   const normalized = text(value, 64).toLocaleLowerCase().replace(/[\s./-]+/gu, '_');
@@ -37,7 +41,10 @@ function parseObject(value) {
 }
 
 function exactShape(value) {
-  const expected = ['answer', 'decision', 'evidenceIds', 'pendingQuestion', 'stateUpdate', 'toolRequest'];
+  const expected = [
+    'answer', 'clarification', 'decision', 'evidenceIds', 'pendingQuestion',
+    'responseId', 'stateUpdate', 'toolRequest',
+  ];
   return Object.keys(value).sort().join('|') === expected.join('|');
 }
 
@@ -250,14 +257,22 @@ export function groundedDecisionContract(envelope, runtime = {}) {
   }));
   return Object.freeze({
     format: 'json_object',
-    exactFields: ['decision', 'answer', 'evidenceIds', 'stateUpdate', 'pendingQuestion', 'toolRequest'],
-    fieldOrder: ['evidenceIds', 'stateUpdate', 'decision', 'answer', 'pendingQuestion', 'toolRequest'],
+    exactFields: [
+      'decision', 'answer', 'responseId', 'evidenceIds', 'stateUpdate',
+      'pendingQuestion', 'toolRequest', 'clarification',
+    ],
+    fieldOrder: [
+      'evidenceIds', 'responseId', 'stateUpdate', 'decision', 'answer',
+      'pendingQuestion', 'clarification', 'toolRequest',
+    ],
     rules: [
       'Answer the latest caller question first.',
       'Use clarify only when recent context and approved evidence cannot resolve the meaning.',
       'Do not put question text in answer. Put at most one proposed clarification in pendingQuestion.',
       'Use action only for one configured tool and never claim success before its verified result.',
       'Use only evidenceIds listed below for factual speech.',
+      'Set responseId only when selecting one exact caller-facing published response; otherwise use null.',
+      'For clarify, set clarification.reason and pendingQuestion. For answer or action, clarification must be null.',
       'For an ordinary answer with no memory change, return stateUpdate as an empty object.',
       'Resolve meaning generically in stateUpdate when useful: requestType, currentTopic, knownEntityKeys, requestedFacts, constraints, contextualReferences and contextDependent.',
       'Do not depend on exact caller wording or application-defined business vocabulary.',
@@ -265,6 +280,7 @@ export function groundedDecisionContract(envelope, runtime = {}) {
     schema: {
       decision: 'answer | clarify | action',
       answer: 'natural caller-facing speech with no question; empty only for action',
+      responseId: 'one exact caller-facing published response source ID or null',
       evidenceIds: ['approved source IDs'],
       stateUpdate: {
         currentTopic: 'optional topic', knownEntityKeys: ['approved entity keys'],
@@ -280,6 +296,7 @@ export function groundedDecisionContract(envelope, runtime = {}) {
       },
       pendingQuestion: 'one proposed short question string or null; runtime speaks only configured text',
       toolRequest: 'null or {name, arguments}',
+      clarification: 'null or {reason: ambiguous_request | missing_evidence | conflicting_evidence | missing_required_information}',
     },
     allowedEvidenceIds: (envelope.sources ?? []).map((source) => source.id),
     exactCallerResponseSourceIds: envelope.exactCallerResponses ?? [],
@@ -304,13 +321,23 @@ export function groundedDecisionJsonSchema(envelope, runtime = {}) {
     type: [jsonSchemaType(field.type), 'null'],
   }]));
   const toolNames = tools.map((tool) => tool.name).filter(Boolean);
+  const exactResponseIds = (envelope.exactCallerResponses ?? []).filter(Boolean);
   return Object.freeze({
     type: 'object',
     additionalProperties: false,
-    required: ['decision', 'answer', 'evidenceIds', 'stateUpdate', 'pendingQuestion', 'toolRequest'],
+    required: [
+      'decision', 'answer', 'responseId', 'evidenceIds', 'stateUpdate',
+      'pendingQuestion', 'toolRequest', 'clarification',
+    ],
     properties: {
       decision: { type: 'string', enum: [...decisions] },
       answer: { type: 'string', maxLength: maximumAnswerCharacters },
+      responseId: exactResponseIds.length ? {
+        anyOf: [
+          { type: 'null' },
+          { type: 'string', enum: exactResponseIds },
+        ],
+      } : { type: 'null' },
       evidenceIds: {
         type: 'array', uniqueItems: true, maxItems: maximumSources,
         items: { type: 'string', ...(evidenceIds.length ? { enum: evidenceIds } : {}) },
@@ -358,6 +385,15 @@ export function groundedDecisionJsonSchema(envelope, runtime = {}) {
         },
       },
       pendingQuestion: { type: ['string', 'null'], maxLength: 500 },
+      clarification: {
+        anyOf: [
+          { type: 'null' },
+          {
+            type: 'object', additionalProperties: false, required: ['reason'],
+            properties: { reason: { type: 'string', enum: [...clarificationReasons] } },
+          },
+        ],
+      },
       toolRequest: toolNames.length ? {
         anyOf: [
           { type: 'null' },
@@ -380,22 +416,29 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
   if (!exactShape(parsed)) return Object.freeze({ valid: false, reason: 'invalid_response_shape' });
   const decision = text(parsed.decision, 20).toLocaleLowerCase();
   if (!decisions.has(decision)) return Object.freeze({ valid: false, reason: 'invalid_decision' });
+  const clarification = parsed.clarification === null ? null : (() => {
+    if (!parsed.clarification || typeof parsed.clarification !== 'object'
+      || Array.isArray(parsed.clarification)
+      || Object.keys(parsed.clarification).sort().join('|') !== 'reason') return undefined;
+    const reason = text(parsed.clarification.reason, 64).toLocaleLowerCase();
+    return clarificationReasons.has(reason) ? Object.freeze({ reason }) : undefined;
+  })();
+  if (clarification === undefined
+    || (decision === 'clarify' && clarification === null)
+    || (decision !== 'clarify' && clarification !== null)) {
+    return Object.freeze({ valid: false, reason: 'invalid_clarification' });
+  }
   const exactResponseCandidate = (envelope.exactCallerResponses ?? []).length > 0;
   const separated = splitCallerQuestion(parsed.answer, parsed.pendingQuestion, decision);
   // Exact published messages may intentionally end with a caller-facing
   // question. Preserve that punctuation/content instead of treating it as a
   // runtime pending question and altering the approved response.
-  const answer = exactResponseCandidate ? text(parsed.answer, maximumAnswerCharacters) : separated.answer;
-  const pendingQuestion = exactResponseCandidate
+  const candidateAnswer = exactResponseCandidate ? text(parsed.answer, maximumAnswerCharacters) : separated.answer;
+  const candidatePendingQuestion = exactResponseCandidate
     ? (parsed.pendingQuestion === null ? null : text(parsed.pendingQuestion, 500))
     : separated.pendingQuestion;
-  if (decision === 'answer' && !answer) return Object.freeze({ valid: false, reason: 'answer_required' });
-  if (internalSpeech(answer)) return Object.freeze({ valid: false, reason: 'internal_text' });
-  if (parsed.pendingQuestion !== null && !pendingQuestion) {
+  if (parsed.pendingQuestion !== null && !candidatePendingQuestion) {
     return Object.freeze({ valid: false, reason: 'invalid_pending_question' });
-  }
-  if (decision === 'clarify' && !pendingQuestion) {
-    return Object.freeze({ valid: false, reason: 'clarification_question_required' });
   }
   const allowedSources = new Map((envelope.sources ?? []).flatMap((source) => (
     [source.id, source.recordId].filter(Boolean).map((candidate) => [identity(candidate), source])
@@ -408,6 +451,29 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
     if (!source) return Object.freeze({ valid: false, reason: 'unpublished_evidence_selected' });
     if (!seenSources.has(source.id)) citedSources.push(source);
     seenSources.add(source.id);
+  }
+  const responseId = parsed.responseId === null ? null : text(parsed.responseId, 160);
+  const exactResponseSource = responseId ? allowedSources.get(identity(responseId)) : null;
+  if (responseId && (!exactResponseSource || exactResponseSource.exactCallerResponse !== true)) {
+    return Object.freeze({ valid: false, reason: 'invalid_response_id' });
+  }
+  if (exactResponseSource && !citedSources.some((source) => source.id === exactResponseSource.id)) {
+    return Object.freeze({ valid: false, reason: 'response_evidence_required' });
+  }
+  if (responseId && decision !== 'answer') {
+    return Object.freeze({ valid: false, reason: 'invalid_response_id' });
+  }
+  // responseId is a selection, not model-authored speech. The authoritative
+  // published RESPONSE always replaces any generated wording. Scope is then
+  // checked by applyUnifiedGroundedTurn before this answer can reach TTS.
+  const answer = exactResponseSource
+    ? text(exactResponseSource.content, maximumAnswerCharacters)
+    : candidateAnswer;
+  const pendingQuestion = exactResponseSource ? null : candidatePendingQuestion;
+  if (decision === 'answer' && !answer) return Object.freeze({ valid: false, reason: 'answer_required' });
+  if (internalSpeech(answer)) return Object.freeze({ valid: false, reason: 'internal_text' });
+  if (decision === 'clarify' && !pendingQuestion) {
+    return Object.freeze({ valid: false, reason: 'clarification_question_required' });
   }
   if (decision === 'answer' && envelope.found && citedSources.length === 0) {
     return Object.freeze({ valid: false, reason: 'evidence_required' });
@@ -424,9 +490,8 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
     && !exactSources.some((source) => requiredExactSourceIds.has(source.id))) {
     return Object.freeze({ valid: false, reason: 'exact_published_response_required' });
   }
-  if (decision === 'answer' && exactSources.length > 0
-    && !exactSources.some((source) => String(source.content ?? '').trim() === answer)) {
-    return Object.freeze({ valid: false, reason: 'exact_published_response_required' });
+  if (decision === 'answer' && requiredExactSourceIds.size > 0 && !responseId) {
+    return Object.freeze({ valid: false, reason: 'response_id_required' });
   }
   const evidenceText = citedSources.map((source) => {
     let structured = '';
@@ -459,9 +524,9 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
   const toolRequest = normalizeToolRequest(parsed.toolRequest, decision, runtime);
   if (toolRequest === undefined) return Object.freeze({ valid: false, reason: 'invalid_tool_request' });
   return Object.freeze({
-    valid: true, decision, answer,
+    valid: true, decision, answer, responseId,
     evidenceIds: Object.freeze(citedSources.map((source) => source.id)),
-    stateUpdate, pendingQuestion, toolRequest,
+    stateUpdate, pendingQuestion, toolRequest, clarification,
     // Internal compatibility fields consumed by generic memory and the local
     // sentence evidence gate. They are never requested from or spoken by LLM.
     spokenAnswer: answer,

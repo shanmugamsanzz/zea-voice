@@ -61,7 +61,7 @@ const semanticEnvelope = buildGroundingEnvelope({
 }, { includePublishedMap: false });
 const semanticDecision = validateGroundedLlmDecision(JSON.stringify({
   decision: 'answer', answer: configuration.response, evidenceIds: ['source_1'],
-  stateUpdate: {}, pendingQuestion: null, toolRequest: null,
+  responseId: null, stateUpdate: {}, pendingQuestion: null, toolRequest: null, clarification: null,
 }), semanticEnvelope);
 assert.equal(semanticDecision.valid, true);
 assert.equal(validateGroundedClaims(semanticDecision.answer, [semanticEvidence]).valid, true);
@@ -71,6 +71,7 @@ const orchestratorSource = readFileSync(
 );
 assert.match(orchestratorSource, /semanticCallCheckResolution/u);
 assert.match(orchestratorSource, /withConfiguredCallCheckEvidence/u);
+assert.match(orchestratorSource, /callCheckClassification\.shortcut === true/u);
 
 console.log(JSON.stringify({
   exactCallCheckUsesShortcut: true,

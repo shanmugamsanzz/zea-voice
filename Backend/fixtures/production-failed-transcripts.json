@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "calls": [
+    {
+      "id": "introduction-and-overview-failures",
+      "turns": [
+        { "utterance": "ஆமாங்க சொல்லுங்க" },
+        { "utterance": "எதுக்கு phone பண்ணிருக்கீங்க?" },
+        { "utterance": "உங்ககிட்ட என்னென்ன packages இருக்கு?" },
+        { "utterance": "வேற என்ன packagesலாம் இருக்கு?" },
+        { "utterance": "overview குடுத்தா போதும்" }
+      ]
+    },
+    {
+      "id": "catalog-detail-failures",
+      "turns": [
+        { "utterance": "Silver package பத்தி detailஆ சொல்லுங்க" },
+        { "utterance": "அந்த packageல என்ன test scan வரும்னு fullஆ சொல்லுங்க" },
+        { "utterance": "Diabetic package பத்தி explain பண்ணுங்க" },
+        { "utterance": "அதுல என்னென்ன tests இருக்கு?" },
+        { "utterance": "Kids health checkup package பத்தி சொல்லுங்க" },
+        { "utterance": "Organ specific packages பத்தி சொல்லுங்க" }
+      ]
+    },
+    {
+      "id": "stt-and-topic-change-failures",
+      "turns": [
+        { "utterance": "On Cooker package பத்தி சொல்லுங்க" },
+        { "utterance": "Onco Care packages பத்தி சொல்லுங்க" },
+        { "utterance": "சரி lungs பத்தி சொல்லுங்க" },
+        { "utterance": "எனக்கு heart package பத்தி சொல்லுங்க" },
+        { "utterance": "Goldக்கும் Platinumக்கும் என்ன difference?" },
+        { "utterance": "இப்ப Silver package பத்தி சொல்லுங்க" }
+      ]
+    },
+    {
+      "id": "mixed-language-follow-ups",
+      "turns": [
+        { "utterance": "What packages are available?" },
+        { "utterance": "Tell me the complete details of the diabetic option" },
+        { "utterance": "அந்த option price என்ன?" },
+        { "utterance": "vera package details venum" },
+        { "utterance": "organ specific la enna options irukku?" }
+      ]
+    }
+  ]
+}

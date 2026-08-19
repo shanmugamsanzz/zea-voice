@@ -220,7 +220,14 @@ export function openGenericConversationState(identity, settings = {}, now = Date
       const topic = cleanText(update.currentTopic ?? decision.currentTopic, 240);
       if (topic) state.currentTopic = topic;
       const selected = uniqueEntities(update.knownEntities ?? decision.selectedEntities ?? []);
-      if (selected.length) state.knownEntities = uniqueEntities([...selected, ...state.knownEntities]);
+      if (selected.length) {
+        // An explicit latest-turn selection replaces stale entities. A true
+        // contextual follow-up may retain earlier entities for comparisons or
+        // references. This remains industry-neutral and decision-controlled.
+        state.knownEntities = update.contextDependent === true
+          ? uniqueEntities([...selected, ...state.knownEntities])
+          : selected;
+      }
       const updates = cleanInformation(
         update.collectedInformation ?? decision.fieldUpdates ?? {}, fieldKeys,
       );

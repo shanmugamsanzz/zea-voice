@@ -6,6 +6,7 @@ import {
   strongCallerMessageMatch,
 } from '../src/knowledge-bases/hybrid-knowledge-retrieval.service.js';
 import { evidenceBelongsToRuntime } from '../src/voice/interaction/grounded-decision-security.js';
+import { buildGroundingEnvelope } from '../src/voice/interaction/grounded-llm-response.js';
 
 const approvedResponse = 'We offer Foundation, Advanced and Professional courses. Which course interests you?';
 const documentText = [
@@ -100,10 +101,16 @@ assert.equal(evidenceBelongsToRuntime({ ...overviewEvidence, publicationRevision
 assert.equal(evidenceBelongsToRuntime({ ...overviewEvidence, documentVersionIsCurrent: false }, scope), false);
 
 const orchestrator = await readFile(new URL('../src/voice/realtime-conversation-orchestrator.js', import.meta.url), 'utf8');
-const directBranch = orchestrator.indexOf('if (directResponseValidated)');
-const llmBranch = orchestrator.indexOf('response = await this.#llm(query, history, knowledge', directBranch);
-assert.ok(directBranch >= 0 && llmBranch > directBranch);
-assert.match(orchestrator.slice(directBranch, llmBranch), /response\s*=\s*\{[\s\S]*text:\s*directResponse\.content/);
+const exactEnvelope = buildGroundingEnvelope({
+  found: true,
+  tenantEvidence: { directResponse: overviewEvidence, sources: [overviewEvidence] },
+}, { includePublishedMap: false, maximumSources: 5 });
+assert.deepEqual(exactEnvelope.exactCallerResponses, ['source_1']);
+assert.equal(exactEnvelope.sources[0].content, approvedResponse);
+assert.equal(exactEnvelope.sources[0].exactCallerResponse, true);
+assert.doesNotMatch(orchestrator, /if \(directResponseValidated\)/u);
+assert.match(orchestrator, /response = await this\.#llm\(query, history, llmKnowledge/u);
+assert.match(orchestrator, /select its responseId and cite it/u);
 
 console.log(JSON.stringify({
   task: 'direct-conversation-message',
@@ -111,6 +118,6 @@ console.log(JSON.stringify({
   parsedMatchingMetadata: true,
   contextGuarded: true,
   tenantAgentRevisionValidated: true,
-  llmBypassedForValidatedMessage: true,
+  oneGroundedDecisionSelectsValidatedMessage: true,
   businessSpecificRuntimeMatching: false,
 }));

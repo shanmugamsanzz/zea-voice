@@ -23,17 +23,18 @@ const envelope = buildGroundingEnvelope({
 assert.deepEqual(envelope.exactCallerResponses, []);
 const ordinary = JSON.stringify({
   decision: 'answer', answer: 'FAQ answer.', evidenceIds: ['source_1'],
-  stateUpdate: {}, pendingQuestion: null, toolRequest: null,
+  responseId: null, stateUpdate: {}, pendingQuestion: null, toolRequest: null, clarification: null,
 });
 assert.equal(validateGroundedLlmDecision(ordinary, envelope).valid, true);
 const valid = JSON.stringify({
   decision: 'answer', answer: 'Approved options response.', evidenceIds: ['source_1'],
-  stateUpdate: {}, pendingQuestion: 'Which option would you like?', toolRequest: null,
+  responseId: null, stateUpdate: {}, pendingQuestion: 'Which option would you like?',
+  toolRequest: null, clarification: null,
 });
 assert.equal(validateGroundedLlmDecision(valid, envelope).valid, true);
 
 console.log(JSON.stringify({
   task: 'exact-guidance-priority', passed: true,
-  callerFacingMessageAboveStaleGuidance: true, exactResponseHandledBeforeLlm: true,
+  callerFacingMessageAboveStaleGuidance: true, exactResponseSelectedByUnifiedDecision: true,
   noBusinessRoutingWords: true,
 }));

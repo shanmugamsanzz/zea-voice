@@ -37,6 +37,9 @@ assert.equal(evidence.knowledgeBaseId, knowledgeBaseId);
 assert.equal(evidence.publicationRevision, 9);
 assert.deepEqual(evidence.authoritativeData, authoritativeData);
 assert.equal(evidence.hydrationValidated, true);
+assert.equal(evidence.publicationValidated, true);
+assert.equal(evidence.knowledgeBaseStatus, 'published');
+assert.equal(evidence.recordStatus, 'approved');
 assert.equal(evidence.documentStatus, 'ready');
 assert.equal(evidence.documentVersionStatus, 'ready');
 assert.equal(evidence.documentVersionIsCurrent, true);
@@ -90,6 +93,17 @@ for (const completeField of [
 
 assert.match(sql, /jsonb_to_recordset/u);
 assert.match(sql, /JOIN assigned/u);
+for (const completeChain of [
+  'v.knowledge_base_id=f.knowledge_base_id', 'v.document_id=f.document_id',
+  'd.knowledge_base_id=f.knowledge_base_id',
+  'v.knowledge_base_id=c.knowledge_base_id', 'v.document_id=c.document_id',
+  'd.knowledge_base_id=c.knowledge_base_id',
+  'v.knowledge_base_id=i.knowledge_base_id', 'v.document_id=i.document_id',
+  'd.knowledge_base_id=i.knowledge_base_id',
+  'sc.document_version_id=i.document_version_id', 'x.document_id=i.document_id',
+  'v.knowledge_base_id=w.knowledge_base_id', 'v.document_id=w.document_id',
+  'd.knowledge_base_id=w.knowledge_base_id',
+]) assert.ok(sql.includes(completeChain), `Missing complete document isolation chain: ${completeChain}`);
 console.log(JSON.stringify({
   task: 'authoritative-evidence-hydration', passed: true,
   completeRecords: true, tenantAgentKbRevisionIsolation: true, activeDocumentIsolation: true,

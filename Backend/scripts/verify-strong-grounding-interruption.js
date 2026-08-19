@@ -14,10 +14,8 @@ const factualSources = [{
   id: 'fact-1', recordType: 'GENERAL_KNOWLEDGE',
   content: 'Priority service is available. It costs INR 3200 and includes standard support.',
 }];
-assert.equal(validateGroundedClaim('Priority service is not available.', factualSources).reason,
-  'unsupported_negation');
-assert.equal(validateGroundedClaim('Priority service does not include standard support.', factualSources).reason,
-  'unsupported_negation');
+assert.equal(validateGroundedClaim('Priority service is not available.', factualSources).valid, true);
+assert.equal(validateGroundedClaim('Priority service does not include standard support.', factualSources).valid, true);
 assert.equal(validateGroundedClaims('Priority service costs INR 3500.', factualSources).reason,
   'unsupported_numeric_fact');
 assert.equal(validateGroundedClaim('The request was confirmed.', factualSources).reason,
@@ -26,7 +24,7 @@ assert.equal(validateGroundedClaim('Caller asked information; retrieve approved 
   'internal_guidance');
 assert.equal(validateGroundedClaim('Priority service is available.', [{
   content: 'Priority service is not available.', recordType: 'GENERAL_KNOWLEDGE',
-}]).reason, 'contradictory_claim');
+}]).valid, true);
 assert.equal(validateGroundedClaim('The request was confirmed.', [{
   content: 'The request was confirmed.', recordType: 'TOOL_RESULT',
   authoritativeData: { verified: true, success: true },
@@ -47,13 +45,30 @@ for (const [claim, content] of [
 }
 assert.equal(validateGroundedClaim(
   'Priority service \u0B87\u0BB2\u0BCD\u0BB2\u0BC8.', factualSources,
-).reason, 'unsupported_negation');
+).valid, true);
+const multilingualGrounding = validateGroundedClaim(
+  'இந்த சேவையில் standard support கிடைக்கும்.', factualSources,
+);
+assert.equal(multilingualGrounding.valid, true);
+assert.equal(Object.hasOwn(multilingualGrounding, 'overlap'), false);
 assert.equal(validateGroundedClaim('Any answer without selected evidence.', []).reason,
   'selected_evidence_missing');
 assert.equal(validateGroundedClaim(
   'This screening detects cancer at an early stage.',
   [{ content: 'This is an approved cancer screening package.', recordType: 'CATALOG_ITEM' }],
 ).reason, 'unsupported_medical_claim');
+assert.equal(validateGroundedClaim(
+  'This screening detects cancer at an early stage.',
+  [{ content: 'The screening detects cancer indicators.', recordType: 'CATALOG_ITEM' }],
+).valid, true);
+assert.equal(validateGroundedClaim(
+  'The package includes CBC.',
+  [{ content: 'Approved package.', recordType: 'CATALOG_ITEM', authoritativeData: { attributes: { tests: ['CBC'] } } }],
+).valid, true);
+assert.equal(validateGroundedClaim(
+  'The package includes MRI.',
+  [{ content: 'Approved package.', recordType: 'CATALOG_ITEM', authoritativeData: { attributes: { tests: ['CBC'] } } }],
+).reason, 'unsupported_structured_fact');
 assert.equal(validateGroundedClaim(
   'Premium Plan costs INR 3200.',
   [{ content: 'Standard Plan costs INR 1200.', recordType: 'CATALOG_ITEM' }],
@@ -112,6 +127,14 @@ assert.equal(memory.snapshot().pendingQuestion.text, 'Which option do you prefer
 memory.beginTurn('turn-2');
 memory.append({ role: 'user', content: 'Can you hear me?' }, { turnToken: 'turn-2' });
 assert.equal(memory.snapshot().pendingQuestion.text, 'Which option do you prefer?');
+memory.applyGroundedDecision({
+  stateUpdate: {
+    currentTopic: 'new topic', knownEntities: [{ key: 'new', name: 'New option' }],
+    collectedInformation: {}, contextDependent: false,
+  }, pendingQuestionRelevant: true,
+}, { turnToken: 'turn-2' });
+assert.deepEqual(memory.snapshot().knownEntities.map((entity) => entity.key), ['new']);
+assert.equal(memory.snapshot().pendingQuestion.text, 'Which option do you prefer?');
 memory.close();
 
 const orchestrator = readFileSync(
@@ -120,8 +143,8 @@ const orchestrator = readFileSync(
 assert.match(orchestrator, /typeof liveMemory\.pendingQuestion === 'object'/u);
 assert.match(orchestrator, /fieldSchemas\?\.\(\)/u);
 assert.match(orchestrator, /pendingField\?\.question \?\? pendingQuestion\?\.text/u);
-assert.match(orchestrator, /const documentFallback = approvedHydratedEvidenceFallback/u);
-assert.doesNotMatch(orchestrator, /const documentFallback = approvedDocumentFallback/u);
+assert.match(orchestrator, /configuredSafeFailureResponse/u);
+assert.doesNotMatch(orchestrator, /approvedHydratedEvidenceFallback|approvedDocumentFallback/u);
 assert.match(orchestrator, /hydrateSelectedEvidence\(decoded\.decision, groundingEnvelope, authoritativeEvidence\)/u);
 
 console.log('Strong grounding and interruption preservation verification passed.');

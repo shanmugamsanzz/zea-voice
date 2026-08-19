@@ -14,7 +14,7 @@ import { loadAgentRuntimeProfile } from './providers/provider-config.js';
 import { createRuntimeAdapters, providerAdapterRegistry } from './providers/registry.js';
 import { registerImplementedProviderAdapters } from './providers/defaults.js';
 import {
-  createMeaningResolutionLlmStream, createSelectedLlmStream, runtimeTools, selectedLlmPromptBudget,
+  createSelectedLlmStream, runtimeTools, selectedLlmPromptBudget,
 } from './providers/llm/llm-response.service.js';
 import { executeAgentTools } from './tools/tool-executor.service.js';
 import { LlmCircuitBreaker } from './providers/llm/streaming-runtime.js';
@@ -51,17 +51,10 @@ import {
 import {
   createGroundedDecisionStreamDecoder,
 } from './interaction/grounded-llm-decision.js';
-import {
-  emptyPreRetrievalMeaning,
-  parsePreRetrievalMeaning,
-  preRetrievalMeaningInput,
-} from './interaction/pre-retrieval-meaning.js';
 import { applyUnifiedGroundedTurn } from './interaction/unified-grounded-turn.js';
-import { evidenceBelongsToRuntime } from './interaction/grounded-decision-security.js';
 import { evaluateFirstAudioSlo, percentile } from './interaction/voice-latency-slo.js';
 import {
   hydrateSelectedEvidence,
-  rankRelevantHydratedEvidence,
   validateGroundedClaims,
 } from './interaction/grounded-claim-validator.js';
 import { sttEventPolicy } from './interaction/stt-event-policy.js';
@@ -80,7 +73,7 @@ import { createStreamingSentenceBuffer } from './streaming-sentence-buffer.js';
 import { createTtsSpeedMonitor } from './tts-speed-monitor.js';
 import { loadRuntimeAmbience } from './ambience-runtime.service.js';
 import { resolvePostCallClosingConfiguration } from './integrations/postcall-closing-config.js';
-import { findCallEndTriggerPhrase } from './integrations/postcall-end-trigger-config.js';
+import { classifyFinalCallEndUtterance } from './integrations/postcall-end-trigger-config.js';
 import {
   createMessageSource,
   knowledgeMessageSources,
@@ -134,16 +127,10 @@ function callerFacingFallback(profile) {
   return configured && !isInternalRuntimeText(configured) ? configured : fallbackRecovery(profile);
 }
 
-function configuredKnowledgeClarification(profile, tenantEvidence = {}) {
+export function configuredSafeFailureResponse(profile) {
   const configured = String(profile.agent.settings?.knowledgeClarificationMessage ?? '').trim();
-  if (!configured || isInternalRuntimeText(configured)) return callerFacingFallback(profile);
-  const candidates = (tenantEvidence.sources ?? []).map((source) => (
-    source.authoritativeData?.name
-      ?? source.authoritativeData?.question
-      ?? source.authoritativeData?.heading
-  )).filter(Boolean).slice(0, 3);
-  return configured.replace(/\{\{\s*candidates\s*\}\}/giu, candidates.join(', ')).trim()
-    || callerFacingFallback(profile);
+  return configured && !isInternalRuntimeText(configured)
+    ? configured : callerFacingFallback(profile);
 }
 
 function withConfiguredCallCheckEvidence(knowledge, evidence) {
@@ -161,51 +148,6 @@ function withConfiguredCallCheckEvidence(knowledge, evidence) {
 function callerFacingText(value, profile) {
   const result = String(value ?? '').trim();
   return !isInternalRuntimeText(result) ? result : callerFacingFallback(profile);
-}
-
-function documentSpeech(value) {
-  const content = String(value ?? '').trim();
-  if (!content || isInternalRuntimeText(content)) return null;
-  // Structured Workflow documents may contain an approved caller response.
-  // Prefer only that response rather than reading its rule metadata aloud.
-  const response = content.match(/(?:^|\n)\s*response\s*:\s*([^\n]+)/iu)?.[1]?.trim();
-  if (response && !isInternalRuntimeText(response)) return response;
-  if (/^\s*(?:rule|match|match_mode|response_mode|priority|action|from_stage|next_stage)\s*:/iu.test(content)) {
-    return null;
-  }
-  return content.length <= 4_000 ? content : null;
-}
-
-function hydratedRecordSpeech(source) {
-  const data = source?.authoritativeData ?? {};
-  const preferred = [
-    data.answer,
-    source?.callerFacing === true ? data.responseTemplate : null,
-    data.content,
-    source?.content,
-  ];
-  for (const value of preferred) {
-    const speech = documentSpeech(value);
-    if (speech) return speech;
-  }
-  return null;
-}
-
-// Unified grounding failures stay attached to the same top PostgreSQL-hydrated
-// evidence retrieved for the finalized utterance. A stale generic overview or
-// the first arbitrary document is never substituted for a specific request.
-export function approvedHydratedEvidenceFallback(query, envelope, evidence, profile) {
-  const ranked = rankRelevantHydratedEvidence(query, envelope, evidence);
-  // Preserve latest-turn relevance order. Caller-facing message records are
-  // not inherently safer or more relevant than a specific hydrated catalog,
-  // FAQ or policy record. Only an exactCallerResponse selected for this turn
-  // receives priority, and that priority is already encoded by the ranker.
-  for (const candidate of ranked) {
-    const speech = hydratedRecordSpeech(candidate.source);
-    if (!speech || isInternalRuntimeText(speech)) continue;
-    return { text: speech, source: candidate.source };
-  }
-  return { text: callerFacingFallback(profile), source: null };
 }
 
 const spokenWordPattern = /[\p{L}\p{N}][\p{L}\p{M}\p{N}'’_-]*/gu;
@@ -1307,11 +1249,13 @@ export class RealtimeConversationOrchestrator {
       await this.#close('customer_callback_scheduled');
       return;
     }
-    const callEndTrigger = findCallEndTriggerPhrase(validation.text, this.runtimeProfile.agent.settings);
-    if (callEndTrigger && !callbackRequest.detected) {
+    const callEndControl = classifyFinalCallEndUtterance(
+      validation.text, this.runtimeProfile.agent.settings, { finalized: true },
+    );
+    if (callEndControl.shortcut && !callbackRequest.detected) {
       this.log.info({
         stage: 'postcall.end_trigger_detected', callId: this.call.id,
-        source: callEndTrigger.source, phrase: callEndTrigger.phrase,
+        source: callEndControl.source, phrase: callEndControl.matchedPhrase,
       }, 'Caller requested call end through configured trigger phrase');
       await this.#close(this.currentCallbackRequest?.scheduled
         ? 'customer_callback_scheduled'
@@ -1523,20 +1467,14 @@ export class RealtimeConversationOrchestrator {
     await this.#cancelActive('caller_barge_in');
   }
 
-  async #knowledge(query, _understanding = null, abortSignal = null) {
+  async #knowledge(query, abortSignal = null) {
     try {
       const startedAt = performance.now();
       const memoryState = this.liveCallMemory?.snapshot();
-      const currentUnderstanding = _understanding && typeof _understanding === 'object'
-        ? _understanding : {};
       const pendingQuestion = memoryState?.pendingQuestion?.text
         ?? memoryState?.pendingQuestionText ?? memoryState?.pendingQuestion ?? undefined;
-      const contextualFollowUp = currentUnderstanding.contextDependent === true
-        || currentUnderstanding.requiresContext === true;
-      const resolvedEntities = Array.isArray(currentUnderstanding.selectedEntities)
-        ? currentUnderstanding.selectedEntities : [];
-      const contextualEntities = contextualFollowUp
-        ? (memoryState?.knownEntities ?? []) : [];
+      const selectedEntities = Array.isArray(memoryState?.knownEntities)
+        ? memoryState.knownEntities : [];
       const auth = {
         tenantId: this.runtimeProfile.agent.tenantId,
         workspaceId: this.runtimeProfile.agent.workspaceId,
@@ -1550,33 +1488,12 @@ export class RealtimeConversationOrchestrator {
         latestRequestPriority: 'primary',
         usageDirection: this.call.direction,
         language: memoryState?.language ?? languageCode(this.runtimeProfile.agent.language),
-        currentTopic: currentUnderstanding.topic
-          ?? (contextualFollowUp ? memoryState?.currentTopic : undefined),
-        knownEntities: contextualEntities,
-        pendingQuestion: contextualFollowUp ? pendingQuestion : undefined,
+        // These two memory fields are follow-up candidates only. Hybrid
+        // retrieval first searches the finalized utterance alone and adds
+        // them only when that primary evidence is insufficient.
+        knownEntities: selectedEntities,
+        pendingQuestion,
         collectedInformation: memoryState?.collectedInformation ?? {},
-        lastAnswer: memoryState?.lastAnswer ?? undefined,
-        understanding: {
-          requestType: currentUnderstanding.requestType
-            ?? currentUnderstanding.questionType ?? undefined,
-          questionType: currentUnderstanding.questionType
-            ?? currentUnderstanding.requestType ?? undefined,
-          contextDependent: contextualFollowUp,
-          explicitEntities: currentUnderstanding.explicitEntities ?? [],
-          selectedEntities: resolvedEntities.length ? resolvedEntities : contextualEntities,
-          requestedFacts: currentUnderstanding.requestedFacts ?? [],
-          constraints: currentUnderstanding.constraints ?? [],
-          contextualReferences: currentUnderstanding.contextualReferences ?? [],
-          topicChanged: currentUnderstanding.topicChanged === true,
-        },
-        requestedFacts: currentUnderstanding.requestedFacts
-          ?? (contextualFollowUp ? memoryState?.requestedFacts : []) ?? [],
-        constraints: currentUnderstanding.constraints
-          ?? (contextualFollowUp ? memoryState?.constraints : []) ?? [],
-        contextualReferences: currentUnderstanding.contextualReferences
-          ?? (contextualFollowUp ? memoryState?.contextualReferences : []) ?? [],
-        recentTurns: contextualFollowUp ? (memoryState?.recentTurns ?? []) : [],
-        contextualFollowUp,
         abortSignal,
       };
       const retrieveEvidence = this.dependencies.retrieveTenantEvidence ?? retrieveTenantEvidence;
@@ -1627,84 +1544,6 @@ export class RealtimeConversationOrchestrator {
     } catch (error) {
       this.log.warn({ err: error, callId: this.call.id }, 'Knowledge retrieval failed; continuing without unverified context');
       return { route: 'none', found: false, content: null, source: null, error: error.code ?? 'KNOWLEDGE_UNAVAILABLE' };
-    }
-  }
-
-  async #resolvePreRetrievalMeaning(query, epoch) {
-    const fallback = emptyPreRetrievalMeaning();
-    const startedAt = performance.now();
-    let session;
-    try {
-      session = await createMeaningResolutionLlmStream(this.runtimeProfile, {
-        callId: this.call.id,
-        query: preRetrievalMeaningInput(query, this.liveCallMemory?.snapshot?.() ?? {}),
-      }, {
-        registry: this.registry,
-        adapter: this.adapters.llm,
-        skipDefaultRegistration: true,
-      });
-      this.activeLlm = session;
-      const timedOut = Symbol('meaning_timeout');
-      const collect = (async () => {
-        let output = '';
-        for await (const event of session.events) {
-          if (this.#isStaleGeneration(epoch)) {
-            session.cancel('stale_meaning_resolution');
-            return null;
-          }
-          if (event?.type === 'text_delta') output += String(event.delta ?? '');
-          else if (event?.type === 'error') {
-            throw Object.assign(new Error(event.message), {
-              code: event.code, retryable: event.retryable,
-            });
-          } else if (event?.type === 'cancelled') return null;
-          else if (event?.type === 'usage') this.usageTracker.record('llm', event.usage);
-          else if (event?.type === 'completed' && !output) {
-            output = String(event.answer ?? event.text ?? event.outputText ?? '');
-          }
-        }
-        return output;
-      })();
-      const raw = await settleWithin(
-        collect,
-        env.VOICE_MEANING_RESOLUTION_TIMEOUT_MS,
-        timedOut,
-      );
-      if (raw === timedOut) {
-        session.cancel('meaning_resolution_timeout');
-        this.log.warn({
-          stage: 'llm.pre_retrieval_meaning_timeout', callId: this.call.id,
-          timeoutMs: env.VOICE_MEANING_RESOLUTION_TIMEOUT_MS,
-        }, 'Pre-retrieval meaning resolution exceeded its bounded deadline');
-        return fallback;
-      }
-      if (this.#isStaleGeneration(epoch)) return fallback;
-      const meaning = parsePreRetrievalMeaning(raw);
-      if (!meaning) {
-        this.log.warn({
-          stage: 'llm.pre_retrieval_meaning_invalid', callId: this.call.id,
-        }, 'Pre-retrieval meaning resolution returned an invalid schema');
-        return fallback;
-      }
-      this.log.info({
-        stage: 'llm.pre_retrieval_meaning_resolved', callId: this.call.id,
-        requestType: meaning.requestType,
-        explicitEntityCount: meaning.explicitEntities.length,
-        requestedFactCount: meaning.requestedFacts.length,
-        contextDependent: meaning.contextDependent,
-        topicChanged: meaning.topicChanged,
-        durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
-      }, 'Resolved generic latest-turn meaning before retrieval');
-      return meaning;
-    } catch (error) {
-      this.log.warn({
-        stage: 'llm.pre_retrieval_meaning_failed', callId: this.call.id,
-        code: error.code ?? 'MEANING_RESOLUTION_FAILED',
-      }, 'Pre-retrieval meaning resolution failed; continuing with the finalized utterance');
-      return fallback;
-    } finally {
-      if (this.activeLlm === session) this.activeLlm = null;
-      await session?.close?.();
     }
   }
 
@@ -2100,24 +1939,13 @@ export class RealtimeConversationOrchestrator {
         // decision, state update and tool request must also validate before
         // anything is eligible for TTS. Never reuse partial streamed text.
         this.runtimeMetrics.grounding.fallbacks += 1;
-        const documentFallback = approvedHydratedEvidenceFallback(
-          query, groundingEnvelope, authoritativeEvidence, this.runtimeProfile,
-        );
-        answer = documentFallback?.text ?? callerFacingFallback(this.runtimeProfile);
-        if (documentFallback?.source) {
-          sources.push(createMessageSource(messageSourceTypes.KNOWLEDGE, {
-            id: documentFallback.source.recordId ?? documentFallback.source.id,
-            label: 'Approved document fallback',
-            metadata: { reason: grounded.reason, recordType: documentFallback.source.recordType },
-          }));
-        } else {
-          sources.push(createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
-            label: 'Grounding validation fallback', metadata: { reason: grounded.reason },
-          }));
-        }
+        answer = configuredSafeFailureResponse(this.runtimeProfile);
+        sources.push(createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
+          label: 'Configured safe failure response', metadata: { reason: grounded.reason },
+        }));
         this.log.warn({
           stage: 'llm.grounding_rejected', callId: this.call.id, reason: grounded.reason,
-        }, 'LLM response was rejected before TTS; using only approved document fallback when available');
+        }, 'LLM response was rejected before TTS; using the configured safe failure response');
       }
       answer = callerFacingText(answer, this.runtimeProfile);
       answer = this.liveCallMemory?.prepareAssistantResponse?.(answer) || answer;
@@ -2141,9 +1969,7 @@ export class RealtimeConversationOrchestrator {
         if (sentenceValidation.text) answer = sentenceValidation.text;
         else {
           this.runtimeMetrics.grounding.fallbacks += 1;
-          answer = approvedHydratedEvidenceFallback(
-            query, groundingEnvelope, authoritativeEvidence, this.runtimeProfile,
-          ).text;
+          answer = configuredSafeFailureResponse(this.runtimeProfile);
         }
       }
       const alreadyStreamed = new Set(streamedGroundedSentences.map((sentence) => (
@@ -2466,7 +2292,6 @@ export class RealtimeConversationOrchestrator {
       queryCharacters: Array.from(String(query ?? '')).length,
       sttSpeechDurationMs: sttTiming.sttSpeechDurationMs ?? null,
       sttFinalizationMs: sttTiming.sttFinalizationMs ?? null,
-      meaningMs: null,
       knowledgeMs: null,
       retrievalMs: null,
       rankingMs: null,
@@ -2479,14 +2304,12 @@ export class RealtimeConversationOrchestrator {
       fastKnowledge: false,
     };
     if (this.runtimeMetrics.turnLatency.length < 100) this.runtimeMetrics.turnLatency.push(turnLatency);
-    const meaningStartedAt = Date.now();
-    const meaning = await this.#resolvePreRetrievalMeaning(query, epoch);
-    turnLatency.meaningMs = Math.max(0, Date.now() - meaningStartedAt);
-    if (epoch !== this.epoch || this.finalized) return;
     const retrievalAbortController = new AbortController();
     this.activeRetrievalAbortController = retrievalAbortController;
     const knowledgeStartedAt = Date.now();
-    let knowledge = await this.#knowledge(query, meaning, retrievalAbortController.signal);
+    // Finalized STT is the only primary retrieval query. Conversational
+    // meaning and state are resolved once, inside the grounded turn decision.
+    let knowledge = await this.#knowledge(query, retrievalAbortController.signal);
     if (this.activeRetrievalAbortController === retrievalAbortController) {
       this.activeRetrievalAbortController = null;
     }
@@ -2545,47 +2368,12 @@ export class RealtimeConversationOrchestrator {
       || responseRouting.reason === 'conflicting_facts';
     const semanticCallCheckResolution = Boolean(this.callCheckConfiguration.response)
       && !conflictDetected
-      && (Boolean(callCheckClassification.matchedPhrase)
-        || responseRouting.outcome === 'clarify');
-    const directResponseScope = {
-      tenantId: this.runtimeProfile.agent.tenantId,
-      agentId: this.runtimeProfile.agent.id,
-      publicationRevisions: knowledge.tenantEvidence?.publicationRevisions ?? [],
-      requireHydratedEvidence: true,
-    };
-    const directResponseValidated = Boolean(directResponse?.content)
-      && responseRouting.outcome === 'direct'
-      && directResponse?.callerFacing === true
-      && String(directResponse?.recordType ?? '').toUpperCase() === 'CONVERSATION_NODE'
-      && String(directResponse?.authoritativeData?.nodeType ?? '').toLowerCase() === 'message'
-      && evidenceBelongsToRuntime(directResponse, directResponseScope);
-    if (directResponseValidated) {
-      this.liveCallMemory?.setPosition?.({
-        currentTopic: directResponse.authoritativeData?.nodeKey ?? undefined,
-        pendingQuestion: null,
-      });
-      response = {
-        cancelled: false,
-        text: directResponse.content,
-        toolCalls: [],
-        sources: [createMessageSource(messageSourceTypes.KNOWLEDGE, {
-          id: directResponse.recordId ?? directResponse.id,
-          label: 'Exact published conversation response',
-          metadata: {
-            recordType: directResponse.recordType,
-            publicationRevision: directResponse.publicationRevision,
-          },
-        })],
-      };
-      this.log.info({
-        stage: 'knowledge.exact_message_selected', callId: this.call.id,
-        recordId: directResponse.recordId, publicationRevision: directResponse.publicationRevision,
-      }, 'Strongly matched caller-facing published response selected without an LLM rewrite');
-    } else if (responseRouting.outcome === 'clarify' && !semanticCallCheckResolution) {
+      && callCheckClassification.shortcut === true;
+    if (responseRouting.outcome === 'clarify' && !semanticCallCheckResolution) {
       const reason = responseRouting.reason;
       response = {
         cancelled: false,
-        text: configuredKnowledgeClarification(this.runtimeProfile, knowledge.tenantEvidence),
+        text: configuredSafeFailureResponse(this.runtimeProfile),
         toolCalls: [],
         sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
           label: 'Configured knowledge clarification', metadata: { reason },
@@ -2605,7 +2393,7 @@ export class RealtimeConversationOrchestrator {
           }) : null;
         const llmKnowledge = withConfiguredCallCheckEvidence(knowledge, callCheckEvidence);
         response = await this.#llm(query, history, llmKnowledge, {
-          instruction: 'Understand the latest caller utterance from its full natural meaning and answer it first using only approved evidence. Return exactly one decision: answer, clarify or one authorized action. Do not require exact wording or use a stage as a gate. Emit evidenceIds and stateUpdate first, then decision and a short natural answer.',
+          instruction: 'Understand the latest caller utterance from its full natural meaning and answer it first using only approved evidence. Return exactly one structured decision: answer, clarify or one authorized action. When an exact caller-facing response matches, select its responseId and cite it; runtime will speak the published RESPONSE exactly. Otherwise set responseId to null. Do not require exact caller wording or use a stage as a gate.',
           callCheck: semanticCallCheckResolution ? {
             semanticResolutionRequested: true,
             configuredResponse: this.callCheckConfiguration.response,
@@ -2618,33 +2406,18 @@ export class RealtimeConversationOrchestrator {
         this.providerHealth.record(this.runtimeProfile.agent.tenantId, 'llm', this.runtimeProfile.providers.llm, 'failure', {
           code: error.code,
         });
-        if (sentencePipeline.sentenceCount() > 0) {
-          this.log.warn({
-            stage: 'llm.partial_stream_retained', code: error.code,
-            sentenceCount: sentencePipeline.sentenceCount(),
-          }, 'LLM failed after speech started; retaining only complete sentences already queued');
-          response = {
-            cancelled: false,
-            text: String(error.partialText ?? sentencePipeline.spokenText()).trim(),
-            toolCalls: [],
-            sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
-              label: 'Partial streamed response', metadata: { reason: error.code },
-            })],
-          };
-        } else {
-          this.log.warn({
-            stage: 'llm.safe_recovery_fallback', code: error.code,
-            providerId: this.runtimeProfile.providers.llm.providerId,
-          }, 'Selected LLM failed; using only the configured caller-facing recovery response');
-          response = {
-            cancelled: false,
-            text: callerFacingFallback(this.runtimeProfile),
-            toolCalls: [],
-            sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
-              label: 'Safe recovery fallback', metadata: { reason: error.code },
-            })],
-          };
-        }
+        this.log.warn({
+          stage: 'llm.safe_recovery_fallback', code: error.code,
+          providerId: this.runtimeProfile.providers.llm.providerId,
+        }, 'Selected LLM failed; using the configured safe failure response');
+        response = {
+          cancelled: false,
+          text: configuredSafeFailureResponse(this.runtimeProfile),
+          toolCalls: [],
+          sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
+            label: 'Configured safe failure response', metadata: { reason: error.code },
+          })],
+        };
       }
     }
     sourceTrace.add(response.sources);
@@ -2693,7 +2466,9 @@ export class RealtimeConversationOrchestrator {
       return;
     }
     const generatedAnswer = String(response.text ?? '').trim();
-    const rawAnswer = callerFacingText(generatedAnswer || callerFacingFallback(this.runtimeProfile), this.runtimeProfile);
+    const rawAnswer = callerFacingText(
+      generatedAnswer || configuredSafeFailureResponse(this.runtimeProfile), this.runtimeProfile,
+    );
     const unconstrainedAnswer = sentencePipeline.sentenceCount() === 0
       ? (this.liveCallMemory?.prepareAssistantResponse?.(rawAnswer) || rawAnswer)
       : rawAnswer;

@@ -263,7 +263,7 @@ export function applyUnifiedGroundedTurn({
     });
     }
   }
-  const nextQuestion = resolveNextConfiguredQuestion({
+  const nextQuestion = effectiveDecision.responseId ? null : resolveNextConfiguredQuestion({
     decision: effectiveDecision,
     beforeState,
     afterState,
@@ -293,7 +293,9 @@ export function applyUnifiedGroundedTurn({
       afterState = memory.setActiveToolRequest(nextQuestion.activeToolRequest, { turnToken });
     }
   }
-  const answer = composeConfiguredTurnResponse(effectiveDecision.answer, nextQuestion);
+  const answer = effectiveDecision.responseId
+    ? effectiveDecision.answer
+    : composeConfiguredTurnResponse(effectiveDecision.answer, nextQuestion);
   if (answer) {
     memory.observeAssistantResponse?.(answer, { turnToken });
     memory.append?.({ role: 'assistant', content: answer }, { turnToken });
@@ -304,6 +306,7 @@ export function applyUnifiedGroundedTurn({
     valid: true,
     decision: effectiveDecision.decision,
     answer,
+    responseId: effectiveDecision.responseId,
     evidenceIds: effectiveDecision.evidenceIds,
     stateUpdate: effectiveDecision.stateUpdate,
     pendingQuestion: afterState.pendingQuestion,

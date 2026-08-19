@@ -90,8 +90,12 @@ const hydrateEvidenceSql = `
       r.rank, r.score
       FROM requested r JOIN faq_entries f ON r.record_type='FAQ' AND f.id=r.record_id
       JOIN assigned a ON a.id=f.knowledge_base_id AND a.id=r.knowledge_base_id
-      JOIN knowledge_document_versions v ON v.tenant_id=f.tenant_id AND v.id=f.document_version_id
-      JOIN knowledge_documents d ON d.tenant_id=f.tenant_id AND d.id=f.document_id
+      JOIN knowledge_document_versions v
+        ON v.tenant_id=f.tenant_id AND v.knowledge_base_id=f.knowledge_base_id
+       AND v.document_id=f.document_id AND v.id=f.document_version_id
+      JOIN knowledge_documents d
+        ON d.tenant_id=f.tenant_id AND d.knowledge_base_id=f.knowledge_base_id
+       AND d.id=f.document_id
      WHERE f.tenant_id=$1 AND f.status='approved'
        AND (f.usage_direction='both' OR f.usage_direction=$3::agent_usage_direction)
        AND v.is_current=true AND v.status='ready' AND v.deleted_at IS NULL
@@ -108,8 +112,12 @@ const hydrateEvidenceSql = `
       ), r.rank, r.score
       FROM requested r JOIN knowledge_chunks c ON r.record_type='KNOWLEDGE_CHUNK' AND c.id=r.record_id
       JOIN assigned a ON a.id=c.knowledge_base_id AND a.id=r.knowledge_base_id
-      JOIN knowledge_document_versions v ON v.tenant_id=c.tenant_id AND v.id=c.document_version_id
-      JOIN knowledge_documents d ON d.tenant_id=c.tenant_id AND d.id=c.document_id
+      JOIN knowledge_document_versions v
+        ON v.tenant_id=c.tenant_id AND v.knowledge_base_id=c.knowledge_base_id
+       AND v.document_id=c.document_id AND v.id=c.document_version_id
+      JOIN knowledge_documents d
+        ON d.tenant_id=c.tenant_id AND d.knowledge_base_id=c.knowledge_base_id
+       AND d.id=c.document_id
      WHERE c.tenant_id=$1 AND c.status='approved'
        AND (c.usage_direction='both' OR c.usage_direction=$3::agent_usage_direction)
        AND v.is_current=true AND v.status='ready' AND v.deleted_at IS NULL
@@ -140,9 +148,16 @@ const hydrateEvidenceSql = `
       r.rank, r.score
       FROM requested r JOIN structured_items i ON r.record_type='CATALOG_ITEM' AND i.id=r.record_id
       JOIN assigned a ON a.id=i.knowledge_base_id AND a.id=r.knowledge_base_id
-      JOIN structured_catalogs sc ON sc.tenant_id=i.tenant_id AND sc.id=i.catalog_id AND sc.status='approved'
-      JOIN knowledge_document_versions v ON v.tenant_id=i.tenant_id AND v.id=i.document_version_id
-      JOIN knowledge_documents d ON d.tenant_id=i.tenant_id AND d.id=i.document_id
+      JOIN structured_catalogs sc
+        ON sc.tenant_id=i.tenant_id AND sc.knowledge_base_id=i.knowledge_base_id
+       AND sc.document_id=i.document_id AND sc.document_version_id=i.document_version_id
+       AND sc.id=i.catalog_id AND sc.status='approved'
+      JOIN knowledge_document_versions v
+        ON v.tenant_id=i.tenant_id AND v.knowledge_base_id=i.knowledge_base_id
+       AND v.document_id=i.document_id AND v.id=i.document_version_id
+      JOIN knowledge_documents d
+        ON d.tenant_id=i.tenant_id AND d.knowledge_base_id=i.knowledge_base_id
+       AND d.id=i.document_id
       LEFT JOIN LATERAL (SELECT COALESCE(jsonb_agg(jsonb_build_object(
         'key',x.attribute_key,'name',x.display_name,'value',x.value,
         'displayOrder',x.display_order
@@ -150,6 +165,7 @@ const hydrateEvidenceSql = `
         FROM structured_item_attributes x
        WHERE x.tenant_id=i.tenant_id
          AND x.knowledge_base_id=i.knowledge_base_id
+         AND x.document_id=i.document_id
          AND x.document_version_id=i.document_version_id
          AND x.item_id=i.id) attrs ON true
      WHERE i.tenant_id=$1 AND i.status='approved'
@@ -169,8 +185,12 @@ const hydrateEvidenceSql = `
       r.rank, r.score
       FROM requested r JOIN workflow_rules w ON r.record_type='WORKFLOW_RULE' AND w.id=r.record_id
       JOIN assigned a ON a.id=w.knowledge_base_id AND a.id=r.knowledge_base_id
-      JOIN knowledge_document_versions v ON v.tenant_id=w.tenant_id AND v.id=w.document_version_id
-      JOIN knowledge_documents d ON d.tenant_id=w.tenant_id AND d.id=w.document_id
+      JOIN knowledge_document_versions v
+        ON v.tenant_id=w.tenant_id AND v.knowledge_base_id=w.knowledge_base_id
+       AND v.document_id=w.document_id AND v.id=w.document_version_id
+      JOIN knowledge_documents d
+        ON d.tenant_id=w.tenant_id AND d.knowledge_base_id=w.knowledge_base_id
+       AND d.id=w.document_id
      WHERE w.tenant_id=$1 AND w.status='approved'
        AND (w.usage_direction='both' OR w.usage_direction=$3::agent_usage_direction)
        AND v.is_current=true AND v.status='ready' AND v.deleted_at IS NULL
@@ -188,8 +208,12 @@ const hydrateEvidenceSql = `
         'usageDirection',f.usage_direction), r.rank, r.score
       FROM requested r JOIN conversation_flows f ON r.record_type='CONVERSATION_NODE' AND f.id=r.record_id
       JOIN assigned a ON a.id=f.knowledge_base_id AND a.id=r.knowledge_base_id
-      JOIN knowledge_document_versions v ON v.tenant_id=f.tenant_id AND v.id=f.document_version_id
-      JOIN knowledge_documents d ON d.tenant_id=f.tenant_id AND d.id=f.document_id
+      JOIN knowledge_document_versions v
+        ON v.tenant_id=f.tenant_id AND v.knowledge_base_id=f.knowledge_base_id
+       AND v.document_id=f.document_id AND v.id=f.document_version_id
+      JOIN knowledge_documents d
+        ON d.tenant_id=f.tenant_id AND d.knowledge_base_id=f.knowledge_base_id
+       AND d.id=f.document_id
      WHERE f.tenant_id=$1 AND f.status='approved'
        AND (f.usage_direction='both' OR f.usage_direction=$3::agent_usage_direction)
        AND v.is_current=true AND v.status='ready' AND v.deleted_at IS NULL
@@ -242,29 +266,20 @@ function queryParts(values) {
 }
 
 function primaryQuery(input) {
-  // The finalized latest utterance remains isolated. Memory-derived meaning
-  // belongs only to the contextual branch and cannot dilute a new request.
-  return queryParts([input.semanticQuery ?? input.query]);
+  // The finalized latest utterance is the only primary query for both
+  // Qdrant and BM25. No inferred intent or memory text may replace it.
+  return queryParts([input.latestCallerUtterance ?? input.query]);
 }
 
 function contextualQuery(input, primary) {
-  if (!contextWasExplicitlyRequested(input)) return '';
-  const understanding = input.understanding ?? {};
+  if (!contextIsAvailable(input)) return '';
+  // Context is deliberately narrow. Only the currently selected entity and
+  // pending question may resolve a weak standalone follow-up; old answers,
+  // topics and arbitrary history cannot pull retrieval back to stale content.
   return queryParts([
     primary,
-    input.currentTopic,
     input.pendingQuestion,
-    input.lastAnswer,
-    understanding.questionType,
-    understanding.requestType,
-    ...(Array.isArray(input.requestedFacts) ? input.requestedFacts : []),
-    ...(Array.isArray(input.constraints) ? input.constraints : []),
-    ...(Array.isArray(input.contextualReferences) ? input.contextualReferences : []),
-    ...(Array.isArray(input.recentTurns) ? input.recentTurns.slice(-4) : [])
-      .flatMap((turn) => [turn?.content]),
     ...(Array.isArray(input.knownEntities) ? input.knownEntities : [])
-      .flatMap((entity) => [entity.name, entity.key, entity.category]),
-    ...(Array.isArray(understanding.selectedEntities) ? understanding.selectedEntities : [])
       .flatMap((entity) => [entity.name, entity.key, entity.category]),
   ]);
 }
@@ -406,11 +421,9 @@ function primaryEvidenceIsSufficient(candidates, query) {
     || (semanticScore >= semanticFloor && semanticScore - runnerUpScore >= 0.04);
 }
 
-function contextWasExplicitlyRequested(input) {
-  const understanding = input.understanding ?? {};
-  return input.contextualFollowUp === true
-    || understanding.contextDependent === true
-    || understanding.requiresContext === true;
+function contextIsAvailable(input) {
+  return Boolean(String(input.pendingQuestion ?? '').trim())
+    || (Array.isArray(input.knownEntities) && input.knownEntities.length > 0);
 }
 
 function prioritizeCandidates(primary, contextual, useContext, limit) {
@@ -533,7 +546,7 @@ export function messageSelectionScore(evidence, query, input = {}) {
   const contextFit = configuredContext === 'any' ? 0 : 0.05;
   const retrievalContext = evidence.retrievalContext ?? 'primary';
   const contextualFollowUpFit = retrievalContext === 'contextual'
-    && input.understanding?.contextDependent === true
+    && contextIsAvailable(input)
     && Boolean(String(input.pendingQuestion ?? '').trim()) ? 0.08 : 0;
   const latestTurnFit = retrievalContext === 'primary' ? 0.05 : contextualFollowUpFit;
   return semantic * 0.65 + lexical * 0.1 + Math.min(retrieval, 1) * 0.2
@@ -561,11 +574,11 @@ export function strongCallerMessageMatch(evidence, query, input = {}) {
   ];
   const retrievalContext = evidence.retrievalContext ?? 'primary';
   const contextualLatestTurn = retrievalContext === 'contextual'
-    && input.understanding?.contextDependent === true
+    && contextIsAvailable(input)
     && Boolean(String(input.pendingQuestion ?? '').trim());
   // Specific entity turns must be answered from their hydrated records. A
   // generic caller-facing message cannot replace or follow that answer.
-  if (selectedEntities.length > 0 && input.understanding?.contextDependent !== true) return false;
+  if (selectedEntities.length > 0 && retrievalContext !== 'contextual') return false;
   if (context === 'no_selected_entity'
     && (input.selectedCatalogItemKey || selectedEntities.length > 0)) return false;
   if (context === 'pending_question' && !String(input.pendingQuestion ?? '').trim()) return false;
@@ -695,109 +708,10 @@ export function authoritativeEvidenceFromRow(row) {
     // SQL above has already enforced assignment, active publication revision,
     // approved record status, current document version and ready documents.
     hydrationValidated: true,
+    publicationValidated: true, knowledgeBaseStatus: 'published', recordStatus: 'approved',
     documentStatus: 'ready', documentVersionStatus: 'ready',
     documentVersionIsCurrent: true,
   };
-}
-
-function currentExplicitEntities(input = {}) {
-  const understanding = input.understanding ?? {};
-  const values = [
-    ...(Array.isArray(understanding.explicitEntities) ? understanding.explicitEntities : []),
-    ...(Array.isArray(understanding.selectedEntities) ? understanding.selectedEntities : [])
-      .flatMap((entity) => [entity?.name, entity?.key, entity?.category]),
-  ];
-  return [...new Set(values.map(normalize).filter(Boolean))].slice(0, 12);
-}
-
-function catalogIdentityText(evidence) {
-  const authority = evidence?.authoritativeData ?? {};
-  return normalize([
-    authority.itemKey, authority.name,
-    ...(Array.isArray(authority.aliases) ? authority.aliases : []),
-    authority.category, authority.categoryKey,
-    ...(Array.isArray(authority.categoryAliases) ? authority.categoryAliases : []),
-    authority.parentCategoryKey, authority.catalogName,
-  ].filter(Boolean).join(' '));
-}
-
-function entityIdentityMatch(evidence, explicitEntities) {
-  const identity = catalogIdentityText(evidence);
-  if (!identity) return { matched: false, score: 0, exact: false };
-  let best = 0;
-  let exact = false;
-  const identityTokens = new Set(tokens(identity));
-  for (const entity of explicitEntities) {
-    if (identity.includes(entity) || entity.includes(identity)) {
-      exact = true;
-      best = Math.max(best, 1);
-      continue;
-    }
-    const entityTokens = tokens(entity);
-    if (!entityTokens.length) continue;
-    const coverage = entityTokens.filter((token) => identityTokens.has(token)).length
-      / entityTokens.length;
-    best = Math.max(best, coverage);
-  }
-  return { matched: exact || best >= 0.8, score: best, exact };
-}
-
-function supportingEvidenceMatchesEntity(evidence, explicitEntities) {
-  if (!['FAQ', 'KNOWLEDGE_CHUNK'].includes(evidence.recordType)) return false;
-  const supportText = normalize(`${evidence.content ?? ''} ${JSON.stringify(evidence.authoritativeData ?? {})}`);
-  if (!supportText) return false;
-  const supportTokens = new Set(tokens(supportText));
-  return explicitEntities.some((entity) => {
-    if (supportText.includes(entity)) return true;
-    const entityTokens = tokens(entity);
-    return entityTokens.length > 0
-      && entityTokens.filter((token) => supportTokens.has(token)).length / entityTokens.length >= 0.8;
-  });
-}
-
-// Entity focus happens only after SQL hydration. The selected rows therefore
-// remain complete authoritative records and cannot be replaced by vector
-// snippets. This is generic across catalogs and contains no tenant vocabulary.
-export function focusHydratedEvidenceByMeaning(evidence = [], input = {}, maximum = 5) {
-  const limit = Math.max(1, Math.min(Number(maximum) || 5, 5));
-  const explicitEntities = currentExplicitEntities(input);
-  if (!explicitEntities.length) {
-    return evidence.slice(0, limit).map((item, index) => ({ ...item, rank: index + 1 }));
-  }
-  const catalogs = evidence.filter((item) => item.recordType === 'CATALOG_ITEM')
-    .map((item) => ({ item, identity: entityIdentityMatch(item, explicitEntities) }));
-  let focusedCatalogs = catalogs.filter((entry) => entry.identity.matched);
-  if (!focusedCatalogs.length) {
-    const semanticFloor = Math.max(0, env.RAG_RUNTIME_MIN_SCORE);
-    focusedCatalogs = catalogs.filter((entry) => (
-      (entry.item.retrievalContext ?? 'primary') === 'primary'
-      && Number(entry.item.semanticScore ?? 0) >= semanticFloor
-    )).slice(0, 2);
-  }
-  if (!focusedCatalogs.length) {
-    return evidence.slice(0, limit).map((item, index) => ({ ...item, rank: index + 1 }));
-  }
-  const focusedIds = new Set(focusedCatalogs.map((entry) => entry.item.id));
-  const selected = [
-    ...focusedCatalogs.sort((left, right) => (
-      Number(right.identity.exact) - Number(left.identity.exact)
-      || right.identity.score - left.identity.score
-      || Number(right.item.retrievalScore ?? right.item.score ?? 0)
-        - Number(left.item.retrievalScore ?? left.item.score ?? 0)
-    )).map((entry) => ({
-      ...entry.item,
-      entityFocusScore: entry.identity.score,
-      entityFocusExact: entry.identity.exact,
-    })),
-    ...evidence.filter((item) => !focusedIds.has(item.id) && (
-      (item.recordType === 'CONVERSATION_NODE' && item.callerFacing !== true)
-      || (item.recordType === 'WORKFLOW_RULE' && item.activationAllowed === true)
-      || supportingEvidenceMatchesEntity(item, explicitEntities)
-    )),
-  ];
-  return selected.slice(0, limit).map((item, index) => ({
-    ...item, rank: index + 1, entityFocusApplied: true,
-  }));
 }
 
 export async function searchHybridPublishedKnowledge(auth, input, dependencies = {}) {
@@ -822,23 +736,35 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
     cancelled: Boolean(input.abortSignal?.aborted), durationMs: performance.now() - startedAt,
   };
   const revisions = scope.map((item) => `${item.id}:${item.publicationRevision}`).sort().join('|');
-  const meaningCacheScope = JSON.stringify({
-    requestType: safeInput.understanding?.requestType ?? null,
-    explicitEntities: currentExplicitEntities(safeInput),
-    requestedFacts: safeInput.requestedFacts ?? [],
-    contextDependent: safeInput.contextualFollowUp === true,
-    topicChanged: safeInput.understanding?.topicChanged === true,
+  const contextCacheScope = JSON.stringify({
+    pendingQuestion: safeInput.pendingQuestion ?? null,
+    selectedEntities: (safeInput.knownEntities ?? []).map((entity) => ({
+      key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
+    })),
   });
-  const cacheKey = `zea:rag:hybrid:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${meaningCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();
-  const [primaryBranch, contextualBranch] = await Promise.all([
-    retrieveBranch({ ...auth, tenantId }, safeInput, query, scope, runtime),
-    queries.contextual
-      ? retrieveBranch({ ...auth, tenantId }, safeInput, queries.contextual, scope, runtime)
-      : Promise.resolve({ semantic: [], lexical: [], ranked: [] }),
-  ]);
+  const primaryBranch = await retrieveBranch(
+    { ...auth, tenantId }, safeInput, query, scope, runtime,
+  );
+  if (input.abortSignal?.aborted) return {
+    operation: 'search_published_knowledge', route: 'hybrid', found: false, sources: [],
+    actionEvidence: [], guidanceEvidence: [], entities: [], cancelled: true,
+    durationMs: performance.now() - startedAt,
+  };
+  const strongPrimary = retainStrongCandidates(primaryBranch.ranked, query, safeInput.topK ?? 5);
+  // A selected entity or pending question is only consulted when the raw
+  // latest utterance cannot independently retrieve sufficient evidence. This
+  // makes context a follow-up resolver instead of a competing primary query.
+  const contextualUsed = Boolean(queries.contextual)
+    && !primaryEvidenceIsSufficient(strongPrimary, query);
+  const contextualBranch = contextualUsed
+    ? await retrieveBranch(
+      { ...auth, tenantId }, safeInput, queries.contextual, scope, runtime,
+    )
+    : { semantic: [], lexical: [], ranked: [] };
   if (input.abortSignal?.aborted) return {
     operation: 'search_published_knowledge', route: 'hybrid', found: false, sources: [],
     actionEvidence: [], guidanceEvidence: [], entities: [], cancelled: true,
@@ -846,14 +772,6 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   };
   const vectorBm25Ms = Math.round((performance.now() - retrievalStartedAt) * 100) / 100;
   const rerankStartedAt = performance.now();
-  // Contextual retrieval is opt-in for a genuine follow-up. A low primary
-  // score alone must not let stale topic/history evidence override an
-  // explicit latest caller request.
-  const contextualRequested = contextWasExplicitlyRequested(input)
-    || (input.latestRequestPriority !== 'primary'
-      && !primaryEvidenceIsSufficient(primaryBranch.ranked, query));
-  const contextualUsed = Boolean(queries.contextual) && contextualRequested;
-  const strongPrimary = retainStrongCandidates(primaryBranch.ranked, query, safeInput.topK ?? 5);
   const strongContextual = retainStrongCandidates(
     contextualBranch.ranked, queries.contextual, safeInput.topK ?? 5,
   );
@@ -897,11 +815,9 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   const workflowPermittedEvidence = evidence.filter((item) => (
     item.recordType !== 'WORKFLOW_RULE' || item.activationAllowed === true
   ));
-  const permittedEvidence = focusHydratedEvidenceByMeaning(
-    workflowPermittedEvidence, safeInput, safeInput.topK ?? 5,
-  );
-  const explicitEntityCount = currentExplicitEntities(safeInput).length;
-  const entityFocusApplied = permittedEvidence.some((item) => item.entityFocusApplied === true);
+  const permittedEvidence = workflowPermittedEvidence
+    .slice(0, Math.max(1, Math.min(Number(safeInput.topK) || 5, 5)))
+    .map((item, index) => ({ ...item, rank: index + 1 }));
   const evidenceConflict = detectEvidenceConflict(permittedEvidence);
   const sources = permittedEvidence.filter((item) => !(
     (item.recordType === 'WORKFLOW_RULE' || item.recordType === 'CONVERSATION_NODE')
@@ -962,9 +878,8 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       workflowCandidatesRejected: evidence.filter((item) => (
         item.recordType === 'WORKFLOW_RULE' && item.activationAllowed !== true
       )).length,
-      explicitEntityCount,
-      entityFocusApplied,
-      entityFocusRemoved: Math.max(0, workflowPermittedEvidence.length - permittedEvidence.length),
+      selectedEntityContextCount: Array.isArray(safeInput.knownEntities)
+        ? safeInput.knownEntities.length : 0,
       vectorBm25Ms, rerankMs, hydrationMs,
       semanticTimedOut: runtime.ragEnabled
         && primaryBranch.semantic.length + contextualBranch.semantic.length === 0

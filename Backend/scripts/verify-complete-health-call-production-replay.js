@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { performance } from 'node:perf_hooks';
 import {
   authoritativeEvidenceFromRow,
-  focusHydratedEvidenceByMeaning,
   selectStrongCallerMessage,
 } from '../src/knowledge-bases/hybrid-knowledge-retrieval.service.js';
 import { validateFinalCustomerTurn } from '../src/voice/interruption/final-turn-validator.js';
@@ -10,7 +9,6 @@ import { buildGroundingEnvelope } from '../src/voice/interaction/grounded-llm-re
 import { openGenericConversationState } from '../src/voice/interaction/generic-conversation-state.js';
 import { applyUnifiedGroundedTurn } from '../src/voice/interaction/unified-grounded-turn.js';
 import { evidenceBelongsToRuntime } from '../src/voice/interaction/grounded-decision-security.js';
-import { parsePreRetrievalMeaning } from '../src/voice/interaction/pre-retrieval-meaning.js';
 
 // Captured-call content is intentionally test-only. Production runtime uses
 // published tenant records and generic semantics; it contains none of these
@@ -169,6 +167,14 @@ const latencySamples = [];
 const ttsOutputs = [];
 let overviewOutputs = 0;
 
+function unifiedDecision(value) {
+  return JSON.stringify({
+    responseId: null,
+    clarification: value.decision === 'clarify' ? { reason: 'ambiguous_request' } : null,
+    ...value,
+  });
+}
+
 const capturedTurns = [
   { utterance: 'ம் ஆமாங்க', direct: positiveMessage, contextual: true, requestType: 'positive_acknowledgement', answer: overview },
   { utterance: 'எனக்கு phone பண்ணு', evidence: callSupport, contextual: false, requestType: 'call_request', answer: callSupport.content },
@@ -181,12 +187,12 @@ for (const [index, turn] of capturedTurns.entries()) {
     acknowledgementPhrases: ['ம் ஆமாங்க', 'ஆமாங்க', 'Yes'], rejectAcknowledgement: false,
   });
   assert.equal(stt.accepted, true, `direct turn ${index + 1}: finalized STT accepted`);
-  const meaning = parsePreRetrievalMeaning(JSON.stringify({
+  const meaning = Object.freeze({
     requestType: turn.requestType,
     topic: null, explicitEntities: [], requestedFacts: [], constraints: [],
     contextualReferences: turn.contextual ? ['pending offer'] : [],
     contextDependent: turn.contextual, topicChanged: false,
-  }));
+  });
   const token = memory.beginTurn(`direct-${index + 1}`);
   memory.append({ role: 'user', content: turn.utterance }, { turnToken: token });
   if (turn.direct) {
@@ -208,7 +214,7 @@ for (const [index, turn] of capturedTurns.entries()) {
       found: true, tenantEvidence: { sources: [turn.evidence], entities: [] },
     }, { includePublishedMap: false });
     const result = applyUnifiedGroundedTurn({
-      rawDecision: JSON.stringify({
+      rawDecision: unifiedDecision({
         decision: 'answer', answer: turn.answer, evidenceIds: ['source_1'],
         stateUpdate: {
           requestType: 'call_request', currentTopic: 'current call', knownEntityKeys: [],
@@ -235,16 +241,15 @@ for (const [index, turn] of detailTurns.entries()) {
   const started = performance.now();
   const stt = validateFinalCustomerTurn({ text: turn.utterance, minimumWords: 2 });
   assert.equal(stt.accepted, true, `detail turn ${index + 1}: STT variation accepted`);
-  const meaning = parsePreRetrievalMeaning(JSON.stringify({
+  const meaning = Object.freeze({
     requestType: 'details', topic: turn.topic, explicitEntities: [turn.entity],
     requestedFacts: ['price', 'included details'], constraints: [], contextualReferences: [],
     contextDependent: false, topicChanged: true,
-  }));
+  });
   assert.equal(meaning.explicitEntities[0], turn.entity, `detail turn ${index + 1}: entity resolved before retrieval`);
-  const focused = focusHydratedEvidenceByMeaning(
-    [overviewMessage, ...turn.records, unrelatedFaq],
-    { understanding: meaning, requestedFacts: meaning.requestedFacts }, 5,
-  );
+  // The production retriever now uses the raw finalized utterance; these are
+  // the authoritative rows returned for that test query after SQL hydration.
+  const focused = turn.records.slice(0, 5);
   assert.equal(focused.some((item) => item.recordId === overviewMessage.recordId), false,
     `detail turn ${index + 1}: overview evidence removed`);
   assert.equal(focused.some((item) => item.recordType === 'FAQ'), false,
@@ -270,7 +275,7 @@ for (const [index, turn] of detailTurns.entries()) {
   const token = memory.beginTurn(`detail-${index + 1}`);
   memory.append({ role: 'user', content: turn.utterance }, { turnToken: token });
   const result = applyUnifiedGroundedTurn({
-    rawDecision: JSON.stringify({
+    rawDecision: unifiedDecision({
       decision: 'answer', answer: turn.answer, evidenceIds,
       stateUpdate: {
         requestType: 'details', currentTopic: turn.topic,

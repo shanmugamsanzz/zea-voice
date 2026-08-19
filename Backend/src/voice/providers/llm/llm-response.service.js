@@ -2,10 +2,6 @@ import { env } from '../../../config/env.js';
 import { buildAgentSystemPrompt } from '../../../agents/agent-runtime.service.js';
 import { groundedDecisionJsonSchema } from '../../interaction/grounded-llm-decision.js';
 import { buildGroundingEnvelope } from '../../interaction/grounded-llm-response.js';
-import {
-  preRetrievalMeaningSchema,
-  preRetrievalMeaningSystemPrompt,
-} from '../../interaction/pre-retrieval-meaning.js';
 import { providerAdapterRegistry } from '../registry.js';
 import { registerImplementedProviderAdapters } from '../defaults.js';
 
@@ -110,34 +106,6 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
     }),
     promptCharacters: systemPrompt.length,
     cancel: (reason = 'barge-in') => llm.cancel(reason),
-    close: () => ownsAdapter ? llm.close() : undefined,
-  };
-}
-
-export async function createMeaningResolutionLlmStream(runtimeProfile, input, dependencies = {}) {
-  const registry = dependencies.registry ?? providerAdapterRegistry;
-  if (!dependencies.skipDefaultRegistration) ensureDefaultLlmAdapters(registry);
-  const llm = dependencies.adapter ?? await registry.create('llm', runtimeProfile.providers.llm, {
-    callId: input.callId,
-    fetchImpl: dependencies.fetchImpl,
-    timeoutMs: dependencies.timeoutMs ?? env.VOICE_MEANING_RESOLUTION_TIMEOUT_MS,
-    breaker: dependencies.breaker,
-  });
-  const ownsAdapter = !dependencies.adapter;
-  return {
-    events: llm.stream({
-      messages: [
-        { role: 'system', content: preRetrievalMeaningSystemPrompt },
-        { role: 'user', content: input.query },
-      ],
-      tools: [], temperature: 0,
-      maxOutputTokens: env.VOICE_MEANING_RESOLUTION_MAX_OUTPUT_TOKENS,
-      responseFormat: {
-        type: 'json_schema', name: 'pre_retrieval_meaning', strict: true,
-        schema: preRetrievalMeaningSchema,
-      },
-    }),
-    cancel: (reason = 'cancelled') => llm.cancel(reason),
     close: () => ownsAdapter ? llm.close() : undefined,
   };
 }

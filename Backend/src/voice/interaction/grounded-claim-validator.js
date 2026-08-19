@@ -61,20 +61,23 @@ function sentences(value) {
   return normalized.split(/(?<=[.!?ï¼Ÿ])\s+/u).map((entry) => entry.trim()).filter(Boolean);
 }
 
-function overlap(left, right) {
-  const leftTokens = tokens(left);
-  if (!leftTokens.length) return 0;
-  const rightTokens = new Set(tokens(right));
-  return leftTokens.filter((token) => rightTokens.has(token)).length / leftTokens.length;
-}
-
-const negationPattern = /(?:\b(?:no|not|never|none|without|unavailable|cannot|can't|won't|doesn't|isn't|aren't|didn't)\b|\u0B87\u0BB2\u0BCD\u0BB2\u0BC8|\u0B95\u0BBF\u0B9F\u0BC8\u0BAF\u0BBE\u0BA4\u0BC1|\u0B85\u0BB2\u0BCD\u0BB2|\u0BAE\u0BC1\u0B9F\u0BBF\u0BAF\u0BBE\u0BA4\u0BC1|\u0BB5\u0BC7\u0BA3\u0BCD\u0B9F\u0BBE\u0BAE\u0BCD|\b(?:illa|illai|kidaiyathu|mudiyathu|vendam)\b)/iu;
 const actionSuccessPattern = /(?:\b(?:confirmed|completed|successful|successfully|booked|scheduled|sent|transferred|created|updated|cancelled|refunded|reserved)\b|\u0B86\u0B95\u0BBF\u0BB5\u0BBF\u0B9F\u0BCD\u0B9F\u0BA4\u0BC1|\u0BAE\u0BC1\u0B9F\u0BBF\u0BA8\u0BCD\u0BA4\u0BC1\u0BB5\u0BBF\u0B9F\u0BCD\u0B9F\u0BA4\u0BC1|\b(?:confirm|book|schedule|send|transfer|complete)\s+(?:aagiduchu|ayiduchu|panniyachu|panniten)\b)/iu;
 const actionObjectPattern = /\b(?:action|appointment|booking|callback|case|message|order|payment|refund|request|reservation|ticket|transfer|tool)\b/iu;
 const internalGuidancePattern = /(?:grounded[_ ]response|evidenceids|stateupdate|toolrequest|runtime context|system prompt|response[_ ]mode|action[_ ]config|\bcaller\s+(?:asked|requested|said|\u0B95\u0BC7\u0B9F\u0BCD\u0B9F)|\b(?:retrieve|rank|hydrate|validate)\s+(?:the\s+)?(?:approved|evidence|record)|\b(?:must|should)\s+(?:ask|answer|retrieve|use|resume|execute|transfer))/iu;
-const medicalClaimPattern = /(?:\b(?:diagnos(?:e|ed|is)|cure[sd]?|treat(?:s|ed|ment)?|prescrib(?:e|ed)|detect(?:s|ed|ion)?|prevent(?:s|ed|ion)?|rule[sd]?\s+out|medically\s+suitable|guarantee[sd]?)\b|\b(?:noi|disease|cancer|symptom|medicine|tablet)\b[^.!?]{0,80}\b(?:confirm|detect|cure|treat|prevent|suitable)\b|\b(?:diagnose|cure|treat|detect|prevent|suitable)\s+(?:pann|aag|irukk)|\u0B95\u0BC1\u0BA3\u0BAE\u0BBE\u0B95\u0BCD\u0B95|\u0B95\u0BA3\u0BCD\u0B9F\u0BC1\u0BAA\u0BBF\u0B9F\u0BBF\u0B95\u0BCD\u0B95|\u0BA8\u0BCB\u0BAF\u0BC8\s*\u0B89\u0BB1\u0BC1\u0BA4\u0BBF)/iu;
-const medicalAssertionPattern = /(?:\b(?:diagnos(?:e|ed|es|is)|cure[sd]?|treat(?:s|ed|ment)?|prescrib(?:e|ed|es)|detect(?:s|ed|ion)?|prevent(?:s|ed|ion)?|rule[sd]?\s+out|medically\s+suitable|guarantee[sd]?)\b|\b(?:diagnose|cure|treat|detect|prevent|suitable)\s+(?:pann|aag|irukk)|\u0B95\u0BC1\u0BA3\u0BAE\u0BBE\u0B95\u0BCD\u0B95|\u0B95\u0BA3\u0BCD\u0B9F\u0BC1\u0BAA\u0BBF\u0B9F\u0BBF\u0B95\u0BCD\u0B95|\u0BA8\u0BCB\u0BAF\u0BC8\s*\u0B89\u0BB1\u0BC1\u0BA4\u0BBF)/iu;
-const unsupportedMedicalAdvicePattern = /\b(?:start|stop|change|take|avoid|increase|decrease|recommend|prescribe)\b[^.!?]{0,80}\b(?:medicine|medication|tablet|dose|dosage|drug|treatment)\b/iu;
+const medicalAssertions = Object.freeze({
+  diagnosis: /(?:\bdiagnos(?:e|ed|es|is)\b|\u0BA8\u0BCB\u0BAF\u0BC8\s*\u0B89\u0BB1\u0BC1\u0BA4\u0BBF|\bdiagnos(?:e|is)\s+pann)/iu,
+  cure: /(?:\bcure[sd]?\b|\u0B95\u0BC1\u0BA3\u0BAE\u0BBE\u0B95\u0BCD\u0B95|\bcure\s+pann)/iu,
+  treatment: /(?:\btreat(?:s|ed|ment)?\b|\bprescrib(?:e|ed|es)?\b|\btreat\s+pann)/iu,
+  detection: /(?:\bdetect(?:s|ed|ion)?\b|\u0B95\u0BA3\u0BCD\u0B9F\u0BC1\u0BAA\u0BBF\u0B9F\u0BBF\u0B95\u0BCD\u0B95|\bdetect\s+pann)/iu,
+  prevention: /(?:\bprevent(?:s|ed|ion)?\b|\bprevent\s+pann)/iu,
+  rule_out: /\brule[sd]?\s+out\b/iu,
+  suitability: /(?:\bmedically\s+suitable\b|\bsuitable\s+(?:pann|aag|irukk))/iu,
+  guarantee: /\bguarantee[sd]?\b/iu,
+});
+const medicalAdvice = Object.freeze({
+  start: /\b(?:start|take|increase|recommend|prescribe)\b[^.!?]{0,80}\b(?:medicine|medication|tablet|dose|dosage|drug|treatment)\b/iu,
+  stop: /\b(?:stop|avoid|decrease|change)\b[^.!?]{0,80}\b(?:medicine|medication|tablet|dose|dosage|drug|treatment)\b/iu,
+});
 
 function unsupportedStructuredIdentifiers(claim, evidenceText) {
   const evidence = new Set((String(evidenceText).match(/\b[A-Z][A-Z0-9-]{1,}\b/gu) ?? [])
@@ -83,8 +86,14 @@ function unsupportedStructuredIdentifiers(claim, evidenceText) {
     .map((entry) => entry.toLocaleUpperCase()))].filter((entry) => !evidence.has(entry));
 }
 
-function hasNegation(value) {
-  return !/\bnot\s+only\b/iu.test(value) && negationPattern.test(value);
+function matchedPolicyTypes(value, policies) {
+  return new Set(Object.entries(policies).filter(([, pattern]) => pattern.test(value)).map(([key]) => key));
+}
+
+function typesSupportedByEvidence(claimTypes, evidenceText, policies) {
+  if (!claimTypes.size) return true;
+  const supported = matchedPolicyTypes(evidenceText, policies);
+  return [...claimTypes].every((type) => supported.has(type));
 }
 
 function claimsActionSuccess(value) {
@@ -112,7 +121,6 @@ export function validateGroundedClaim(sentence, sources = [], options = {}) {
     return Object.freeze({ valid: false, reason: 'selected_evidence_missing' });
   }
   const evidenceText = sources.map(sourceContent).join(' ');
-  const normalizedEvidence = identity(evidenceText);
   const evidenceNumbers = numbers(evidenceText);
   if ([...numbers(claim)].some((number) => !evidenceNumbers.has(number))) {
     return Object.freeze({ valid: false, reason: 'unsupported_numeric_fact' });
@@ -123,39 +131,39 @@ export function validateGroundedClaim(sentence, sources = [], options = {}) {
       valid: false, reason: 'unsupported_structured_fact', identifiers: unsupportedIdentifiers,
     });
   }
-  const evidenceSentences = sources.flatMap((source) => sentences(source?.content));
-  const ranked = evidenceSentences.map((candidate) => ({ candidate, score: overlap(claim, candidate) }))
-    .sort((left, right) => right.score - left.score);
-  const best = ranked[0] ?? { candidate: '', score: 0 };
+  const selectedCatalogIdentities = new Set(sources.flatMap((source) => {
+    const data = source?.authoritativeData ?? {};
+    return [source?.recordId, data.itemKey, data.name, data.categoryKey, data.category]
+      .map(identity).filter(Boolean);
+  }));
   const unsupportedEntity = (options.knownEntities ?? []).find((entity) => {
-    const name = identity(entity?.name);
-    return name.length >= 3 && identity(claim).includes(name) && !normalizedEvidence.includes(name);
+    const candidates = [entity?.id, entity?.key, entity?.name].map(identity).filter(Boolean);
+    const mentioned = candidates.some((candidate) => candidate.length >= 3 && identity(claim).includes(candidate));
+    return mentioned && !candidates.some((candidate) => selectedCatalogIdentities.has(candidate));
   });
   if (unsupportedEntity) {
     return Object.freeze({ valid: false, reason: 'unsupported_entity', entity: unsupportedEntity.key ?? unsupportedEntity.name });
-  }
-  const claimNegated = hasNegation(claim);
-  const evidenceNegated = hasNegation(best.candidate);
-  if (claimNegated && best.score >= 0.2 && !evidenceNegated) {
-    return Object.freeze({ valid: false, reason: 'unsupported_negation' });
-  }
-  if (!claimNegated && best.score >= 0.45 && evidenceNegated) {
-    return Object.freeze({ valid: false, reason: 'contradictory_claim' });
   }
   if (claimsActionSuccess(claim)
     && !sources.some(verifiedActionSource)
     && options.allowVerifiedActionClaim !== true) {
     return Object.freeze({ valid: false, reason: 'unauthorized_action_claim' });
   }
-  if ((medicalAssertionPattern.test(claim) && !medicalAssertionPattern.test(evidenceText))
-    || (medicalClaimPattern.test(claim) && best.score < 0.45)) {
+  const medicalClaimTypes = matchedPolicyTypes(claim, medicalAssertions);
+  if (!typesSupportedByEvidence(medicalClaimTypes, evidenceText, medicalAssertions)) {
     return Object.freeze({ valid: false, reason: 'unsupported_medical_claim' });
   }
-  if (unsupportedMedicalAdvicePattern.test(claim)
-    && !unsupportedMedicalAdvicePattern.test(evidenceText)) {
+  const medicalAdviceTypes = matchedPolicyTypes(claim, medicalAdvice);
+  if (!typesSupportedByEvidence(medicalAdviceTypes, evidenceText, medicalAdvice)) {
     return Object.freeze({ valid: false, reason: 'unsupported_medical_advice' });
   }
-  return Object.freeze({ valid: true, bestEvidence: best.candidate, overlap: best.score });
+  return Object.freeze({
+    valid: true,
+    validatedBy: Object.freeze([
+      'selected_evidence', 'canonical_entities', 'exact_numbers',
+      'catalog_attributes', 'medical_policy', 'action_authorization',
+    ]),
+  });
 }
 
 export function validateGroundedClaims(value, sources = [], options = {}) {
