@@ -117,6 +117,28 @@ const overviewFocused = focusAuthoritativeCatalogEvidence([
 }, 5);
 assert.equal(overviewFocused.evidence[0].recordId, 'overview-message-record',
   'A strongly matched caller-facing published response must outrank Catalog evidence');
+const contextualMessage = {
+  ...overviewMessage, id: 'published:conversation_node:contextual-message',
+  recordId: 'contextual-message-record', retrievalContext: 'contextual',
+};
+const unrelatedCatalogCandidate = {
+  ...latestItem, retrievalContext: 'primary', semanticScore: 0.76, rank: 5,
+};
+const acknowledgementEvidence = focusAuthoritativeCatalogEvidence([
+  {
+    ...evidence, id: 'published:faq:nearby', recordId: 'nearby-faq',
+    recordType: 'FAQ', retrievalContext: 'contextual', rank: 1,
+  },
+  contextualMessage,
+  unrelatedCatalogCandidate,
+], {
+  latestCallerUtterance: 'A short contextual reply',
+  knownEntities: [],
+}, 5);
+assert.equal(acknowledgementEvidence.focused, false);
+assert.ok(acknowledgementEvidence.evidence.some((item) => (
+  item.recordId === 'contextual-message-record'
+)), 'A lower-ranked unrelated Catalog candidate must not erase contextual Conversation evidence');
 const prompt = buildAgentSystemPrompt({
   name: 'Configured Agent', language: 'en', settings: {}, prompt: 'Use approved evidence only.',
 }, {

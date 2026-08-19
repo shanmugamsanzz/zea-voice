@@ -634,7 +634,12 @@ export function focusAuthoritativeCatalogEvidence(evidence = [], input = {}, max
     return [data.categoryKey, data.category].map(catalogValue).some((value) => selectedSet.has(value));
   });
   const firstEvidence = evidence[0];
-  const topPrimaryCatalog = catalog.find((item) => item.retrievalContext === 'primary') ?? null;
+  // A Catalog candidate is entity-defining only when it is the strongest
+  // latest-turn evidence or matches an entity already selected in memory.
+  // Merely appearing later in a semantic result set must not erase stronger
+  // Conversation/FAQ evidence for an unrelated acknowledgement or question.
+  const topPrimaryCatalog = firstEvidence?.recordType === 'CATALOG_ITEM'
+    && firstEvidence?.retrievalContext === 'primary' ? firstEvidence : null;
   const topCatalog = topPrimaryCatalog
     ?? (firstEvidence?.recordType === 'CATALOG_ITEM' ? firstEvidence : null);
   if (!exactSelected.length && !categorySelected.length && !topCatalog) {
