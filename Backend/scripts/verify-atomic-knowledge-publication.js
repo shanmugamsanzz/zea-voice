@@ -88,7 +88,12 @@ assert.ok(sparse.documents.every((document) => document.tenantId === job.tenant_
 class FakeRedis {
   status = 'ready';
   values = new Map();
-  async set(key, value) { this.values.set(key, value); return 'OK'; }
+  setCalls = [];
+  async set(key, value, ...options) {
+    this.setCalls.push({ key, options });
+    this.values.set(key, value);
+    return 'OK';
+  }
   async get(key) { return this.values.get(key) ?? null; }
   async del(...keys) { let count = 0; for (const key of keys) count += this.values.delete(key) ? 1 : 0; return count; }
   async exists(key) { return this.values.has(key) ? 1 : 0; }
@@ -100,6 +105,9 @@ assert.match(artifacts.keys.map, /:1$/u);
 assert.match(artifacts.keys.sparse, /:1$/u);
 assert.match(artifacts.keys.evidence, /:1$/u);
 assert.equal(JSON.parse(await fakeRedis.get(artifacts.keys.sparse)).publicationRevision, 1);
+assert.ok(fakeRedis.setCalls.filter((call) => Object.values(artifacts.keys).includes(call.key))
+  .every((call) => call.options.length === 0),
+  'Active revision artifacts must not expire while the publication remains active');
 
 function fakeContext({ authoritativeCount = records.length } = {}) {
   const state = { activated: false, recovered: false, jobStatus: 'queued' };

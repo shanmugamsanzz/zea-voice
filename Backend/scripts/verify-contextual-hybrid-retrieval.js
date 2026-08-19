@@ -149,7 +149,7 @@ await routeKnowledgeQuery(
 );
 assert.equal(semanticSearchOptions.length, 1);
 assert.equal(semanticSearchOptions[0].limit, QDRANT_SEARCH_LIMIT_MAX);
-assert.ok(semanticSearchOptions[0].limit <= 10);
+assert.equal(semanticSearchOptions[0].limit, 30);
 
 const samples = [];
 for (let index = 0; index < 100; index += 1) {

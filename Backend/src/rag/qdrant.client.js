@@ -2,7 +2,11 @@ import { env } from '../config/env.js';
 import { measureExternalProvider } from '../performance/performance-context.js';
 import { requireEntityId, requireTenantId, tenantCollectionName } from './tenant-isolation.js';
 
-export const QDRANT_SEARCH_LIMIT_MAX = 10;
+// Discovery is intentionally wider than the final evidence window. The
+// hybrid ranker reduces this set to three-to-five hydrated records, while a
+// wider Qdrant window prevents clusters of near-duplicate records from hiding
+// authoritative Catalog or Conversation evidence before reranking.
+export const QDRANT_SEARCH_LIMIT_MAX = 30;
 
 function qdrantBaseUrl() {
   return env.QDRANT_URL.replace(/\/$/, '');

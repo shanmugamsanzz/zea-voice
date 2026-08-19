@@ -1,4 +1,3 @@
-import { env } from '../config/env.js';
 import { redis } from '../infrastructure/redis.js';
 import { requireEntityId, requireTenantId } from '../rag/tenant-isolation.js';
 
@@ -106,21 +105,23 @@ export async function cacheCompactKnowledgeMap(job, records, cache = redis) {
   if (!cache || (cache.status && cache.status !== 'ready')) {
     throw new Error('Redis is not ready to cache publication artifacts');
   }
-  const ttl = Math.max(env.RAG_RUNTIME_PROFILE_CACHE_TTL_SECONDS, 3600);
   const entries = [[keys.map, map], [keys.sparse, sparseIndex], [keys.evidence, evidence]];
   const generationKey = tenantKnowledgeGenerationCacheKey(job.tenant_id);
   const generation = `${requireEntityId(job.knowledge_base_id, 'knowledgeBaseId')}:${job.targetRevision}`;
   try {
     if (typeof cache.multi === 'function') {
       const transaction = cache.multi();
-      for (const [key, value] of entries) transaction.set(key, JSON.stringify(value), 'EX', ttl);
+      // These artifacts are immutable and revision-scoped. Expiring them
+      // silently disables BM25 for a still-active publication. Older revision
+      // keys are explicitly deleted by the publication cleanup path instead.
+      for (const [key, value] of entries) transaction.set(key, JSON.stringify(value));
       transaction.set(generationKey, JSON.stringify(generation));
       const results = await transaction.exec();
       if (!Array.isArray(results) || results.some(([error]) => error)) {
         throw new Error('Redis publication artifact transaction failed');
       }
     } else {
-      for (const [key, value] of entries) await cache.set(key, JSON.stringify(value), 'EX', ttl);
+      for (const [key, value] of entries) await cache.set(key, JSON.stringify(value));
       await cache.set(generationKey, JSON.stringify(generation));
     }
     if (JSON.parse(await cache.get(generationKey) ?? 'null') !== generation) {
