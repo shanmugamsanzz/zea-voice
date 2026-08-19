@@ -11,6 +11,7 @@ import {
 import { requireTenantId } from '../rag/tenant-isolation.js';
 import { sparseIndexCacheKey } from './knowledge-map.service.js';
 import { latestTurnWorkflowActivation } from './workflow-activation-policy.js';
+import { classifyCatalogEntityLocally } from './catalog-entity-resolver.js';
 
 const recordTypes = Object.freeze([
   'CATALOG_ITEM', 'WORKFLOW_RULE', 'CONVERSATION_NODE', 'FAQ', 'KNOWLEDGE_CHUNK',
@@ -52,6 +53,53 @@ const activeScopeSql = `
     COALESCE((SELECT jsonb_agg(jsonb_build_object(
       'id', id, 'publicationRevision', publication_revision, 'priority', priority
     ) ORDER BY priority, id) FROM assigned), '[]'::jsonb) AS knowledge_bases`;
+
+// A bounded identity projection supports noisy-STT entity discovery when the
+// intended Catalog record does not enter Qdrant's semantic top set. Exact
+// facts are never taken from this projection; selected IDs still pass through
+// the authoritative hydration query below.
+const catalogIdentitySql = `
+  WITH requested_scope AS (
+    SELECT knowledge_base_id::uuid, publication_revision::int
+      FROM jsonb_to_recordset($4::jsonb)
+        AS scope(knowledge_base_id text, publication_revision int)
+  ), runtime_agent AS (
+    SELECT id, usage_direction FROM voice_agents
+     WHERE tenant_id=$1 AND id=$2 AND status='active' AND deleted_at IS NULL
+  ), assigned AS (
+    SELECT kb.id, kb.publication_revision
+      FROM runtime_agent a
+      JOIN agent_knowledge_bases akb ON akb.tenant_id=$1 AND akb.agent_id=a.id
+      JOIN knowledge_bases kb ON kb.tenant_id=akb.tenant_id AND kb.id=akb.knowledge_base_id
+      JOIN requested_scope rs
+        ON rs.knowledge_base_id=kb.id AND rs.publication_revision=kb.publication_revision
+     WHERE kb.status='published' AND kb.deleted_at IS NULL AND kb.publication_revision>0
+       AND (a.usage_direction='both' OR a.usage_direction=$3::agent_usage_direction)
+       AND (akb.usage_direction='both' OR akb.usage_direction=$3::agent_usage_direction)
+       AND (kb.usage_direction='both' OR kb.usage_direction=$3::agent_usage_direction)
+  )
+  SELECT i.id, i.item_key, i.name, i.aliases,
+    COALESCE(i.category,sc.name) AS category, i.category_key, i.category_aliases,
+    i.parent_category_key, i.category_description, i.category_selection_rules,
+    i.description, i.relationships, i.knowledge_base_id, i.document_id,
+    i.document_version_id, a.publication_revision
+    FROM structured_items i
+    JOIN assigned a ON a.id=i.knowledge_base_id
+    JOIN structured_catalogs sc
+      ON sc.tenant_id=i.tenant_id AND sc.knowledge_base_id=i.knowledge_base_id
+     AND sc.document_id=i.document_id AND sc.document_version_id=i.document_version_id
+     AND sc.id=i.catalog_id AND sc.status='approved'
+    JOIN knowledge_document_versions v
+      ON v.tenant_id=i.tenant_id AND v.knowledge_base_id=i.knowledge_base_id
+     AND v.document_id=i.document_id AND v.id=i.document_version_id
+    JOIN knowledge_documents d
+      ON d.tenant_id=i.tenant_id AND d.knowledge_base_id=i.knowledge_base_id
+     AND d.id=i.document_id
+   WHERE i.tenant_id=$1 AND i.status='approved'
+     AND v.is_current=true AND v.status='ready' AND v.deleted_at IS NULL
+     AND d.status='ready' AND d.deleted_at IS NULL
+   ORDER BY i.knowledge_base_id,i.display_order,i.id
+   LIMIT 2000`;
 
 // IDs selected by Qdrant/BM25 are never trusted as evidence. This query
 // rechecks tenant, agent assignment, active revision, current document version
@@ -910,6 +958,47 @@ async function loadScope(auth, input, runtime) {
   return scope;
 }
 
+async function loadCatalogIdentities(auth, input, scope, runtime) {
+  if (!scope.length) return [];
+  const revisions = scope.map((item) => `${item.id}:${item.publicationRevision}`).sort().join('|');
+  const cacheKey = `zea:rag:catalog-identities:${auth.tenantId}:${input.agentId}:${input.usageDirection}:${hash(revisions)}`;
+  const cached = await readJson(runtime.cache, cacheKey);
+  if (Array.isArray(cached)) return cached;
+  const manifest = scope.map((item) => ({
+    knowledge_base_id: item.id, publication_revision: Number(item.publicationRevision),
+  }));
+  const rows = await runtime.contextRunner(auth, async (client) => {
+    const result = await client.query(catalogIdentitySql, [
+      auth.tenantId, input.agentId, input.usageDirection, JSON.stringify(manifest),
+    ]);
+    return result.rows;
+  });
+  if (runtime.cache && (!runtime.cache.status || runtime.cache.status === 'ready')) {
+    void deadline(runtime.cache.set(cacheKey, JSON.stringify(rows)),
+      env.RAG_RUNTIME_CACHE_TIMEOUT_MS, null);
+  }
+  return rows;
+}
+
+function catalogIdentityCandidates(resolution) {
+  if (resolution?.status !== 'match') return [];
+  const items = resolution.entityType === 'category'
+    ? resolution.items : [resolution.item];
+  return items.filter((item) => item?.id && item?.knowledge_base_id)
+    .slice(0, maximumHydratedCategoryChildren)
+    .map((item, index) => ({
+      recordType: 'CATALOG_ITEM', recordId: item.id,
+      knowledgeBaseId: item.knowledge_base_id,
+      publicationRevision: Number(item.publication_revision),
+      documentId: item.document_id, documentVersionId: item.document_version_id,
+      language: 'und', contentPreview: `${item.name ?? ''} ${item.category ?? ''}`.trim(),
+      score: Math.max(0.86, Number(resolution.confidence ?? 0)) - index * 0.001,
+      semanticScore: 0, lexicalScore: 0,
+      tokenCoverage: Number(resolution.confidence ?? 0),
+      channels: ['catalog_identity'], retrievalContext: 'primary',
+    }));
+}
+
 export function callerMessageEligibleForDecision(evidence, query, input = {}) {
   if (strongCallerMessageMatch(evidence, query, input)) return true;
   if (evidence?.recordType !== 'CONVERSATION_NODE' || evidence?.callerFacing !== true
@@ -1123,7 +1212,30 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
     actionEvidence: [], guidanceEvidence: [], entities: [], cancelled: true,
     durationMs: performance.now() - startedAt,
   };
-  const strongPrimary = retainStrongCandidates(primaryBranch.ranked, query, 8);
+  let strongPrimary = retainStrongCandidates(primaryBranch.ranked, query, 8);
+  const primaryCatalog = strongPrimary.find((candidate) => candidate.recordType === 'CATALOG_ITEM');
+  const catalogIdentityDiscoveryNeeded = !primaryCatalog
+    || (Number(primaryCatalog.semanticScore ?? 0) < Math.max(0.82, env.RAG_RUNTIME_MIN_SCORE + 0.08)
+      && Number(primaryCatalog.tokenCoverage ?? 0) < 0.6);
+  let catalogIdentityResolution = null;
+  let identityDiscoveryCandidates = [];
+  if (catalogIdentityDiscoveryNeeded) {
+    const identities = await abortable(deadline(
+      loadCatalogIdentities({ ...auth, tenantId }, safeInput, scope, runtime),
+      env.RAG_RUNTIME_CHANNEL_DEADLINE_MS, [],
+    ), input.abortSignal, []);
+    catalogIdentityResolution = classifyCatalogEntityLocally(identities, query);
+    identityDiscoveryCandidates = catalogIdentityCandidates(catalogIdentityResolution);
+    if (identityDiscoveryCandidates.length) {
+      const uniquePrimary = new Map();
+      for (const candidate of [...identityDiscoveryCandidates, ...strongPrimary]) {
+        const key = candidateKey(candidate);
+        if (!uniquePrimary.has(key)) uniquePrimary.set(key, candidate);
+      }
+      strongPrimary = [...uniquePrimary.values()].slice(0, 8)
+        .map((candidate, index) => ({ ...candidate, rank: index + 1 }));
+    }
+  }
   // A selected entity or pending question resolves compact continuations and
   // weak standalone turns. Strong explicit requests remain primary.
   const contextPolicy = contextualRetrievalPolicy(safeInput, query, strongPrimary);
@@ -1155,7 +1267,9 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   let rows = await abortable(deadline(
     hydrate({ ...auth, tenantId }, safeInput, ranked, runtime), env.RAG_RUNTIME_CHANNEL_DEADLINE_MS, [],
   ), input.abortSignal, []);
-  const categoryRequest = String(safeInput.understanding?.requestType ?? '').toLocaleLowerCase()
+  const categoryRequest = catalogIdentityResolution?.status === 'match'
+    && catalogIdentityResolution.entityType === 'category'
+    || String(safeInput.understanding?.requestType ?? '').toLocaleLowerCase()
     === 'category_request'
     || String(safeInput.requestType ?? '').toLocaleLowerCase() === 'category_request'
     || Boolean(String(safeInput.activeCategoryKey ?? '').trim())
@@ -1328,6 +1442,11 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       selectedEntityContextCount: Array.isArray(safeInput.knownEntities)
         ? safeInput.knownEntities.length : 0,
       catalogEvidenceFocused: catalogFocus.focused,
+      catalogIdentityResolution: catalogIdentityResolution?.status === 'match' ? {
+        entityType: catalogIdentityResolution.entityType,
+        confidence: catalogIdentityResolution.confidence,
+        method: catalogIdentityResolution.method,
+      } : null,
       vectorBm25Ms, rerankMs, hydrationMs,
       semanticTimedOut: runtime.ragEnabled
         && primaryBranch.semantic.length + contextualBranch.semantic.length === 0
@@ -1348,6 +1467,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
         })),
       },
       retrievedCandidates: [
+        ...identityDiscoveryCandidates.map((candidate) => traceCandidate(candidate)),
         ...primaryBranch.ranked.map((candidate) => traceCandidate({
           ...candidate, retrievalContext: 'primary',
         })),
@@ -1373,5 +1493,5 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
 }
 
 export const hybridRetrievalSql = Object.freeze({
-  activeScopeSql, hydrateEvidenceSql, catalogCategoryCandidatesSql,
+  activeScopeSql, hydrateEvidenceSql, catalogCategoryCandidatesSql, catalogIdentitySql,
 });

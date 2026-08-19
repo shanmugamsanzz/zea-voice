@@ -122,6 +122,18 @@ const descriptive = classifyCatalogEntityLocally(vowelSwapCatalog, 'organ focuse
 assert.equal(descriptive.entityType, 'category');
 assert.ok(['match', 'uncertain'].includes(descriptive.status));
 
+const multiWordSttCatalog = [{
+  ...catalogItems[0], id: '88888888-8888-4888-8888-888888888888',
+  name: 'Archive Plus', item_key: 'archive-plus', aliases: [],
+  category: 'Cloud Storage', category_key: 'cloud-storage', category_aliases: [],
+}];
+const multiWordStt = classifyCatalogEntityLocally(
+  multiWordSttCatalog, 'Clowd Storrage options',
+);
+assert.equal(multiWordStt.status, 'match');
+assert.equal(multiWordStt.entityType, 'category');
+assert.equal(multiWordStt.categoryKey, 'cloud-storage');
+
 const point = buildSemanticPoint({
   tenant_id: tenantId,
   knowledge_base_id: knowledgeBaseId,

@@ -129,6 +129,21 @@ export function catalogLabelSimilarity(query, label) {
     return { score: 0.94, method: 'normalized', ...evidence };
   }
   if (!queryTokens.length || !labelTokens.length) return { score: 0, method: 'none' };
+  // Compare contiguous phrase windows as well as individual tokens. Voice STT
+  // can split or reshape a multi-word name while preserving its consonant
+  // pattern; a phrase-level phonetic match recovers that published identity
+  // without maintaining application vocabulary or caller-phrase lists.
+  const allQueryTokens = normalizedQuery.split(' ').filter(Boolean);
+  const phraseSize = normalizedLabel.split(' ').filter(Boolean).length;
+  if (phraseSize > 0 && allQueryTokens.length >= phraseSize) {
+    const labelPhonetic = phoneticCatalogToken(normalizedLabel);
+    for (let index = 0; index <= allQueryTokens.length - phraseSize; index += 1) {
+      const window = allQueryTokens.slice(index, index + phraseSize).join(' ');
+      if (labelPhonetic && phoneticCatalogToken(window) === labelPhonetic) {
+        return { score: 0.9, method: 'phonetic', ...evidence };
+      }
+    }
+  }
   let method = 'none';
   const scores = queryTokens.map((queryToken) => {
     let best = { score: 0, method: 'none' };

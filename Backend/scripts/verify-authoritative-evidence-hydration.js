@@ -168,6 +168,7 @@ assert.match(knowledgeJson, /30 minutes/u);
 
 const sql = hybridRetrievalSql.hydrateEvidenceSql;
 const categorySql = hybridRetrievalSql.catalogCategoryCandidatesSql;
+const identitySql = hybridRetrievalSql.catalogIdentitySql;
 for (const requiredIsolation of [
   'f.tenant_id=$1', 'c.tenant_id=$1', 'i.tenant_id=$1', 'w.tenant_id=$1',
   'kb.status=\'published\'', 'v.is_current=true', "j.status='completed'",
@@ -194,6 +195,10 @@ assert.match(categorySql, /i\.category_key=\$6/u);
 assert.match(categorySql, /sc\.id=\$5::uuid/u);
 assert.match(categorySql, /v\.is_current=true/u);
 assert.match(categorySql, /j\.metadata->>'publicationRevision'=kb\.publication_revision::text/u);
+assert.match(identitySql, /requested_scope/u);
+assert.match(identitySql, /rs\.publication_revision=kb\.publication_revision/u);
+assert.match(identitySql, /i\.status='approved'/u);
+assert.match(identitySql, /v\.is_current=true/u);
 for (const completeChain of [
   'v.knowledge_base_id=f.knowledge_base_id', 'v.document_id=f.document_id',
   'd.knowledge_base_id=f.knowledge_base_id',
