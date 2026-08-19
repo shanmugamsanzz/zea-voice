@@ -390,6 +390,15 @@ try {
           if (turn.allowSafeResponse !== true) {
             throw new Error(`${call.id} turn ${index + 1}: unexpectedly routed to safe failure (${responseRouting.reason})`);
           }
+        } else if (responseRouting.outcome === 'direct'
+          && tenantEvidence.directResponse?.content) {
+          finalDecision = 'answer';
+          finalText = tenantEvidence.directResponse.content;
+          responseId = tenantEvidence.directResponse.id ?? null;
+          selectedEvidenceIds = responseId ? [responseId] : [];
+          selectedRecordIds = tenantEvidence.directResponse.recordId
+            ? [tenantEvidence.directResponse.recordId] : [];
+          memory.setPendingQuestion(null);
         } else {
           envelope = buildGroundingEnvelope(
             knowledge, { includePublishedMap: false, maximumSources: 5 },

@@ -935,7 +935,11 @@ export function selectStrongCallerMessage(evidence = [], query = '', input = {})
     - messageSelectionScore(runnerUp, query, input) : Number.POSITIVE_INFINITY;
   const semanticGap = runnerUp ? Number(first.semanticScore ?? 0)
     - Number(runnerUp.semanticScore ?? 0) : Number.POSITIVE_INFINITY;
-  if (runnerUp && scoreGap < 0.04 && semanticGap < 0.025) {
+  const contextualPendingResolution = Boolean(String(input.pendingQuestion ?? '').trim())
+    && first.retrievalContext === 'contextual'
+    && (scoreGap > 0 || semanticGap > 0);
+  if (runnerUp && scoreGap < 0.04 && semanticGap < 0.025
+    && !contextualPendingResolution) {
     return null;
   }
   return first;

@@ -11,6 +11,7 @@ const {
   callerMessageEligibleForDecision,
   isolatedRetrievalQueries,
   prioritizeCandidates,
+  selectStrongCallerMessage,
   strongCallerMessageMatch,
 } = await import('../src/knowledge-bases/hybrid-knowledge-retrieval.service.js');
 const { QDRANT_SEARCH_LIMIT_MAX } = await import('../src/rag/qdrant.client.js');
@@ -141,6 +142,30 @@ assert.equal(callerMessageEligibleForDecision({
 assert.equal(callerMessageEligibleForDecision(unqualifiedCallerMessage, 'Short reply', {
   pendingQuestion: 'A pending configured question?',
 }), false);
+
+const contextualWinner = selectStrongCallerMessage([
+  {
+    ...unqualifiedCallerMessage, id: 'contextual-winner', semanticScore: 0.831,
+    authoritativeData: {
+      ...unqualifiedCallerMessage.authoritativeData,
+      variables: [
+        { key: 'situation', value: 'The caller answers the immediately pending question.' },
+        { key: 'context', value: 'pending_question' },
+      ],
+    },
+  },
+  {
+    ...unqualifiedCallerMessage, id: 'contextual-runner-up', semanticScore: 0.829,
+    authoritativeData: {
+      ...unqualifiedCallerMessage.authoritativeData,
+      variables: [
+        { key: 'situation', value: 'The caller begins a different configured request.' },
+        { key: 'context', value: 'pending_question' },
+      ],
+    },
+  },
+], 'Short reply', { pendingQuestion: 'A pending configured question?' });
+assert.equal(contextualWinner?.id, 'contextual-winner');
 
 const crowdedCandidates = prioritizeCandidates([
   ...Array.from({ length: 5 }, (_value, index) => ({
