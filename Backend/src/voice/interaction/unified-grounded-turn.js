@@ -99,7 +99,9 @@ function primaryCatalogEntities(evidence = []) {
 }
 
 function rememberedCatalogSource(envelope, beforeState, evidence = []) {
-  const remembered = new Set((beforeState.knownEntities ?? []).flatMap((entity) => [
+  const currentSelection = beforeState.selectedCatalogItem ?? beforeState.selectedItem ?? null;
+  const rememberedEntities = currentSelection ? [currentSelection] : (beforeState.knownEntities ?? []);
+  const remembered = new Set(rememberedEntities.flatMap((entity) => [
     entity?.id, entity?.key, entity?.name,
   ]).map(identity).filter(Boolean));
   if (!remembered.size) return null;
@@ -109,11 +111,10 @@ function rememberedCatalogSource(envelope, beforeState, evidence = []) {
     return [source.recordId, data.itemKey, data.name].map(identity)
       .filter(Boolean).some((value) => remembered.has(value));
   };
-  const candidates = (envelope.sources ?? []).filter((source) => (
-    matchesRemembered(source)
-    && (source.channels ?? []).includes('conversation_memory')
-  ));
-  if (candidates.length !== 1) return null;
+  const candidates = (envelope.sources ?? []).filter(matchesRemembered)
+    .sort((left, right) => Number(left.rank ?? Number.MAX_SAFE_INTEGER)
+      - Number(right.rank ?? Number.MAX_SAFE_INTEGER));
+  if (!candidates.length) return null;
   // A different primary Catalog entity means the caller changed topic. In
   // that case memory must not add the previous item's citation.
   const differentPrimaryEntity = evidence.some((source) => (

@@ -332,6 +332,9 @@ const duplicateFactEvidence = {
   id: 'duplicate-fact-source', recordId: 'duplicate-fact-record', recordType: 'FAQ',
   callerFacing: true, content: catalogEvidence.content, retrievalContext: 'primary',
 };
+const selectedCatalogEvidenceWithoutMemoryChannel = {
+  ...catalogEvidence, retrievalContext: 'primary', channels: ['semantic'],
+};
 const rememberedCitationTurn = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
     decision: 'answer', answer: catalogEvidence.content,
@@ -358,7 +361,7 @@ const rememberedCitationTurn = applyUnifiedGroundedTurn({
     }],
   },
   memory: catalogMemory, turnToken: 'remembered-citation-turn',
-  evidence: [rememberedContextEvidence, duplicateFactEvidence],
+  evidence: [selectedCatalogEvidenceWithoutMemoryChannel, duplicateFactEvidence],
   finalizedUtterance: 'What does this include?',
 });
 assert.equal(rememberedCitationTurn.valid, true);
