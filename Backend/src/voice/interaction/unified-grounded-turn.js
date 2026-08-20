@@ -6,6 +6,7 @@ import {
 } from './grounded-decision-security.js';
 import {
   hydrateGroundingEnvelope,
+  removeUnsupportedRecommendationSentences,
   validateCallerProvidedState,
   validateGroundedClaims,
 } from './grounded-claim-validator.js';
@@ -269,7 +270,7 @@ export function applyUnifiedGroundedTurn({
   // An exact overview/message already contains its configured next question.
   // A specific new topic also completes any stale introduction/overview
   // prompt. Relevant guidance can still supply the next current question.
-  const effectiveDecision = exactPublishedResponse || explicitLatestTopic
+  let effectiveDecision = exactPublishedResponse || explicitLatestTopic
     || independentLatestAnswer || pendingQuestionCompleted
     ? Object.freeze({
       ...decisionWithEvidenceState,
@@ -397,6 +398,29 @@ export function applyUnifiedGroundedTurn({
       valid: false, reason: 'explicit_action_request_required', state: beforeState,
     });
   }
+  const claimEvidence = catalogFactAnswer
+    ? sourcesByType(selectedEvidence, 'CATALOG_ITEM')
+    : selectedEvidence;
+  const recommendationSanitization = removeUnsupportedRecommendationSentences(
+    effectiveDecision.answer,
+    claimEvidence,
+    { knownEntities: hydratedEnvelope.entities, finalizedUtterance },
+  );
+  if (recommendationSanitization.removed.length > 0) {
+    if (!recommendationSanitization.answer) {
+      return Object.freeze({
+        valid: false,
+        reason: 'unsupported_recommendation',
+        rejectedSentence: recommendationSanitization.removed[0],
+        evidenceIds: Object.freeze([...(effectiveDecision.evidenceIds ?? [])]),
+        state: memory.snapshot(),
+      });
+    }
+    effectiveDecision = Object.freeze({
+      ...effectiveDecision,
+      answer: recommendationSanitization.answer,
+    });
+  }
   const fieldCollection = validateConfiguredFieldCollectionSpeech(
     [effectiveDecision.answer, effectiveDecision.pendingQuestion].filter(Boolean).join(' '),
     {
@@ -409,9 +433,6 @@ export function applyUnifiedGroundedTurn({
       valid: false, reason: fieldCollection.reason, field: fieldCollection.field, state: beforeState,
     });
   }
-  const claimEvidence = catalogFactAnswer
-    ? sourcesByType(selectedEvidence, 'CATALOG_ITEM')
-    : selectedEvidence;
   const claimValidation = validateGroundedClaims(
     effectiveDecision.answer,
     claimEvidence,

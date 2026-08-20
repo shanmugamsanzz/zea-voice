@@ -213,6 +213,20 @@ export function validateGroundedClaims(value, sources = [], options = {}) {
   return Object.freeze({ valid: true });
 }
 
+export function removeUnsupportedRecommendationSentences(value, sources = [], options = {}) {
+  const kept = [];
+  const removed = [];
+  for (const sentence of sentences(value)) {
+    const result = validateGroundedClaim(sentence, sources, options);
+    if (!result.valid && result.reason === 'unsupported_recommendation') removed.push(sentence);
+    else kept.push(sentence);
+  }
+  return Object.freeze({
+    answer: kept.join(' ').trim(),
+    removed: Object.freeze(removed),
+  });
+}
+
 export function hydrateSelectedEvidence(decision, envelope, authoritativeSources = []) {
   const selected = new Set([
     ...(decision?.evidenceIds ?? []),

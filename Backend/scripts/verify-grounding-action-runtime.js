@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import { validateGroundedClaim } from '../src/voice/interaction/grounded-claim-validator.js';
+import {
+  removeUnsupportedRecommendationSentences,
+  validateGroundedClaim,
+} from '../src/voice/interaction/grounded-claim-validator.js';
 import { mergeToolFieldSchemas } from '../src/voice/interaction/tool-field-schema.js';
 import { resolveNextConfiguredQuestion } from '../src/voice/interaction/next-question-policy.js';
 import { executeAgentTools } from '../src/voice/tools/tool-executor.service.js';
@@ -22,6 +25,18 @@ assert.equal(validateGroundedClaim(
   'I cannot recommend a plan based on symptoms.', catalogEvidence,
   { finalizedUtterance: 'I have pain. Which plan is best?' },
 ).valid, true);
+const sanitizedOffer = removeUnsupportedRecommendationSentences(
+  'The standard plan includes an assessment. If you want to book this package, let me know.',
+  catalogEvidence,
+);
+assert.equal(sanitizedOffer.answer, 'The standard plan includes an assessment.');
+assert.equal(sanitizedOffer.removed.length, 1);
+const unsafeSuitability = removeUnsupportedRecommendationSentences(
+  'The standard plan is best for your breathing problem.',
+  catalogEvidence,
+  { finalizedUtterance: 'I have a breathing problem. Which plan should I choose?' },
+);
+assert.equal(unsafeSuitability.removed.length, 0);
 
 const tool = {
   id: 'tool-1', name: 'create_request',
