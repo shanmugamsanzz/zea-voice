@@ -89,15 +89,7 @@ const catalogIdentitySql = `
       ON sc.tenant_id=i.tenant_id AND sc.knowledge_base_id=i.knowledge_base_id
      AND sc.document_id=i.document_id AND sc.document_version_id=i.document_version_id
      AND sc.id=i.catalog_id AND sc.status='approved'
-    JOIN knowledge_document_versions v
-      ON v.tenant_id=i.tenant_id AND v.knowledge_base_id=i.knowledge_base_id
-     AND v.document_id=i.document_id AND v.id=i.document_version_id
-    JOIN knowledge_documents d
-      ON d.tenant_id=i.tenant_id AND d.knowledge_base_id=i.knowledge_base_id
-     AND d.id=i.document_id
    WHERE i.tenant_id=$1 AND i.status='approved'
-     AND v.is_current=true AND v.status='ready' AND v.deleted_at IS NULL
-     AND d.status='ready' AND d.deleted_at IS NULL
    ORDER BY i.knowledge_base_id,i.display_order,i.id
    LIMIT 2000`;
 
@@ -1460,14 +1452,18 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
     })),
   });
-  const cacheKey = `zea:rag:hybrid:v27:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:v28:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();
-  const [primaryBranch, conversationRoutes] = await Promise.all([
+  const [primaryBranch, conversationRoutes, loadedCatalogIdentities] = await Promise.all([
     retrieveBranch({ ...auth, tenantId }, safeInput, query, scope, runtime),
     abortable(deadline(
       loadConversationMessageRoutes({ ...auth, tenantId }, safeInput, scope, runtime),
+      env.RAG_RUNTIME_CHANNEL_DEADLINE_MS, [],
+    ), input.abortSignal, []),
+    abortable(deadline(
+      loadCatalogIdentities({ ...auth, tenantId }, safeInput, scope, runtime),
       env.RAG_RUNTIME_CHANNEL_DEADLINE_MS, [],
     ), input.abortSignal, []),
   ]);
@@ -1501,14 +1497,10 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   const catalogIdentityDiscoveryNeeded = !metadataCallerMessage
     && catalogIdentityDiscoveryPolicy(query, pendingContextPreferred);
   let catalogIdentityResolution = null;
-  let catalogIdentities = [];
+  const catalogIdentities = loadedCatalogIdentities;
   let identityDiscoveryCandidates = [];
   const rememberedEntityHydrationNeeded = (safeInput.knownEntities ?? []).length > 0;
   if (catalogIdentityDiscoveryNeeded || rememberedEntityHydrationNeeded) {
-    catalogIdentities = await abortable(deadline(
-      loadCatalogIdentities({ ...auth, tenantId }, safeInput, scope, runtime),
-      env.RAG_RUNTIME_CHANNEL_DEADLINE_MS, [],
-    ), input.abortSignal, []);
     if (catalogIdentityDiscoveryNeeded) {
       catalogIdentityResolution = classifyCatalogEntityLocally(catalogIdentities, query);
       const identityOverridesMemory = catalogIdentityOverridesRememberedEntity(

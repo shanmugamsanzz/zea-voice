@@ -549,7 +549,11 @@ try {
         assert.equal(adjacentDuplicate, false,
           `${call.id} turn ${index + 1}: assistant response was duplicated in memory`);
         const totalMs = performance.now() - totalStartedAt;
-        samples.push({ retrievalMs, llmMs, totalMs });
+        samples.push({
+          callId: call.id, turn: index + 1, utterance,
+          retrievalMs, llmMs, totalMs,
+          retrievalStages: tenantEvidence.retrieval ?? {},
+        });
         results.push({
           callId: call.id, turn: index + 1, utterance,
           publicationRevisions, retrievedRecordIds, selectedEvidenceIds,
@@ -583,8 +587,15 @@ try {
     totalP95: Number(argument('total-p95-ms', process.env.PRODUCTION_ACCEPTANCE_TOTAL_P95_MS
       ?? configuredThresholds.totalP95 ?? 3_500)),
   };
+  const slowestRetrieval = [...samples]
+    .sort((left, right) => right.retrievalMs - left.retrievalMs)
+    .slice(0, 3).map((sample) => ({
+      callId: sample.callId, turn: sample.turn, utterance: sample.utterance,
+      retrievalMs: Math.round(sample.retrievalMs * 100) / 100,
+      stages: sample.retrievalStages,
+    }));
   assert.ok(latency.retrievalMs.p95 <= thresholds.retrievalP95,
-    `Production retrieval p95 ${latency.retrievalMs.p95.toFixed(2)}ms exceeds ${thresholds.retrievalP95}ms`);
+    `Production retrieval p95 ${latency.retrievalMs.p95.toFixed(2)}ms exceeds ${thresholds.retrievalP95}ms ${JSON.stringify({ slowestRetrieval })}`);
   assert.ok(latency.llmMs.p95 <= thresholds.llmP95,
     `Production LLM p95 ${latency.llmMs.p95.toFixed(2)}ms exceeds ${thresholds.llmP95}ms`);
   assert.ok(latency.totalMs.p95 <= thresholds.totalP95,
