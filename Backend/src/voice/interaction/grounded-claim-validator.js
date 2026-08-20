@@ -1,10 +1,11 @@
 import { groundedNumbers as numbers } from './grounded-number-validator.js';
 
 const maximumText = 8_000;
+const maximumEvidenceText = 32_000;
 
-function text(value) {
+function text(value, maximum = maximumText) {
   return String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
-    .replace(/\s+/gu, ' ').trim().slice(0, maximumText);
+    .replace(/\s+/gu, ' ').trim().slice(0, maximum);
 }
 
 function identity(value) {
@@ -18,13 +19,23 @@ function tokens(value) {
 function sourceContent(source) {
   let structured = '';
   try {
-    structured = source?.authoritativeData && typeof source.authoritativeData === 'object'
-      ? JSON.stringify(source.authoritativeData)
-      : '';
+    const data = source?.authoritativeData;
+    if (data && typeof data === 'object') {
+      const priorityKeys = [
+        'attributes', 'tests', 'services', 'consultations', 'benefits',
+        'preparation', 'price', 'currency', 'relationships', 'selectionRules',
+        'availability', 'sourceText',
+      ];
+      const orderedEntries = [
+        ...priorityKeys.filter((key) => Object.hasOwn(data, key)).map((key) => [key, data[key]]),
+        ...Object.entries(data).filter(([key]) => !priorityKeys.includes(key)),
+      ];
+      structured = JSON.stringify(Object.fromEntries(orderedEntries));
+    }
   } catch {
     structured = '';
   }
-  return `${text(source?.content)} ${text(structured)}`.trim();
+  return `${text(source?.content, maximumEvidenceText)} ${text(structured, maximumEvidenceText)}`.trim();
 }
 
 function sameValue(left, right) {

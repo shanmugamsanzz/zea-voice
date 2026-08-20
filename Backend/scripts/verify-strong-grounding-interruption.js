@@ -91,6 +91,17 @@ assert.equal(validateGroundedClaim(
   }],
 ).valid, true, 'approved Catalog source text must prevent normalized child-data loss');
 assert.equal(validateGroundedClaim(
+  'The Lungs Health Checkup includes CBC, RBS, CRP, ESR, ECG and PFT.',
+  [{
+    content: 'Approved Lungs Health Checkup package.', recordType: 'CATALOG_ITEM',
+    authoritativeData: {
+      description: 'x'.repeat(12_000),
+      sourceText: 'Approved package source.',
+      attributes: [{ key: 'tests', value: ['CBC', 'RBS', 'CRP', 'ESR', 'ECG', 'PFT'] }],
+    },
+  }],
+).valid, true, 'Catalog attributes must remain visible after large descriptive fields');
+assert.equal(validateGroundedClaim(
   'Premium Plan costs INR 3200.',
   [{ content: 'Standard Plan costs INR 1200.', recordType: 'CATALOG_ITEM' }],
   { knownEntities: [{ key: 'premium', name: 'Premium Plan' }] },
