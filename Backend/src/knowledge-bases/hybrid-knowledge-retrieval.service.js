@@ -965,6 +965,30 @@ function publishedExampleCoverage(evidence, query) {
   }));
 }
 
+export function selectedCatalogFactAligned(evidence = [], query = '', input = {}) {
+  const selected = new Set((input.knownEntities ?? []).flatMap((entity) => [
+    entity?.id, entity?.key, entity?.name,
+  ]).map(catalogValue).filter(Boolean));
+  if (!selected.size) return false;
+  const queryTokens = tokens(query);
+  const tokenMatches = (left, right) => left === right
+    || (Math.min(left.length, right.length) >= 4
+      && (left.includes(right) || right.includes(left)));
+  return evidence.some((item) => {
+    if (item.recordType !== 'CATALOG_ITEM') return false;
+    const data = item.authoritativeData ?? {};
+    const identityMatches = [item.recordId, data.itemKey, data.name]
+      .map(catalogValue).some((value) => selected.has(value));
+    if (!identityMatches) return false;
+    const descriptors = (data.attributes ?? []).flatMap((attribute) => [
+      attribute?.key, attribute?.name,
+    ]).flatMap(tokens);
+    return queryTokens.some((queryToken) => (
+      descriptors.some((descriptor) => tokenMatches(queryToken, descriptor))
+    ));
+  });
+}
+
 export function strongCallerMessageMatch(evidence, query, input = {}) {
   if (evidence?.recordType !== 'CONVERSATION_NODE' || evidence?.callerFacing !== true
     || normalize(evidence.authoritativeData?.nodeType) !== 'message') return false;
@@ -1000,6 +1024,7 @@ export function strongCallerMessageMatch(evidence, query, input = {}) {
   // exact published example or strong lexical evidence for that override.
   const explicitMessageTopicChange = retrievalContext === 'primary'
     && context === 'no_selected_entity'
+    && input.selectedCatalogFactAligned !== true
     && (exactPublishedExample || documentAlignedSemanticMessage
       || (strongLexicalMessage && documentExampleCoverage >= 0.45));
   if (selectedEntities.length > 0 && retrievalContext !== 'contextual'
@@ -1327,7 +1352,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
     })),
   });
-  const cacheKey = `zea:rag:hybrid:v21:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:v22:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();
@@ -1493,14 +1518,20 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   const workflowPermittedEvidence = evidence.filter((item) => (
     item.recordType !== 'WORKFLOW_RULE' || item.activationAllowed === true
   ));
+  const messageSelectionInput = {
+    ...safeInput,
+    selectedCatalogFactAligned: selectedCatalogFactAligned(
+      workflowPermittedEvidence, query, safeInput,
+    ),
+  };
   // Select an exact caller-facing message before Catalog focusing so FAQ and
   // category records cannot crowd out a published overview RESPONSE.
   const preferredCallerMessage = selectStrongCallerMessage(
-    workflowPermittedEvidence, query, safeInput,
+    workflowPermittedEvidence, query, messageSelectionInput,
   );
   const catalogFocus = focusAuthoritativeCatalogEvidence(
     workflowPermittedEvidence, {
-      ...safeInput,
+      ...messageSelectionInput,
       preferredCallerMessage,
       catalogIdentityResolved: catalogIdentityResolution?.status === 'match',
     }, safeInput.topK,
@@ -1519,7 +1550,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
     // selection also requires published matching metadata and contextual
     // confidence to pass the same generic policy used by retrieval.
     exactCallerResponseEligible: item.recordType === 'CONVERSATION_NODE'
-      ? callerMessageEligibleForDecision(item, query, safeInput)
+      ? callerMessageEligibleForDecision(item, query, messageSelectionInput)
       : false,
   }));
   const actionEvidence = permittedEvidence.filter((item) => (
@@ -1534,7 +1565,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
     parentCategoryKey: item.authoritativeData.parentCategoryKey,
   }));
   const directMessage = evidenceConflict.detected
-    ? null : selectStrongCallerMessage(permittedEvidence, query, input);
+    ? null : selectStrongCallerMessage(permittedEvidence, query, messageSelectionInput);
   const weakCandidatesRejected = primaryBranch.ranked.length + contextualBranch.ranked.length
     - strongPrimary.length - strongContextual.length;
   const rankedKeys = new Set(ranked.map(candidateKey));

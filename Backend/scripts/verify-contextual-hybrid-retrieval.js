@@ -16,6 +16,7 @@ const {
   postIdentityContextPolicy,
   prioritizeCandidates,
   rememberedCatalogIdentityCandidates,
+  selectedCatalogFactAligned,
   selectStrongCallerMessage,
   strongCallerMessageMatch,
 } = await import('../src/knowledge-bases/hybrid-knowledge-retrieval.service.js');
@@ -227,6 +228,23 @@ const documentAlignedSemanticOverview = {
     )),
   },
 };
+const selectedFactEvidence = [{
+  recordType: 'CATALOG_ITEM', recordId: 'old-item-id',
+  authoritativeData: {
+    itemKey: 'old-item', name: 'Old Item',
+    attributes: [{ key: 'tests', name: 'Included Tests', value: ['Approved Test'] }],
+  },
+}];
+assert.equal(selectedCatalogFactAligned(
+  selectedFactEvidence,
+  'What tests are included in this package?',
+  { knownEntities: [{ key: 'old-item', name: 'Old Item' }] },
+), true);
+assert.equal(selectedCatalogFactAligned(
+  selectedFactEvidence,
+  'What other package options are available?',
+  { knownEntities: [{ key: 'old-item', name: 'Old Item' }] },
+), false);
 assert.equal(strongCallerMessageMatch(
   documentAlignedSemanticOverview,
   'What other packages do you have?',
@@ -240,7 +258,10 @@ assert.equal(strongCallerMessageMatch(
 assert.equal(strongCallerMessageMatch(
   documentAlignedSemanticOverview,
   'What tests are included in this package?',
-  { knownEntities: [{ key: 'old-item', name: 'Old Item' }] },
+  {
+    knownEntities: [{ key: 'old-item', name: 'Old Item' }],
+    selectedCatalogFactAligned: true,
+  },
 ), false, 'a contextual package fact request must retain the selected entity');
 const lexicalLatestOverview = {
   ...documentAlignedSemanticOverview,
