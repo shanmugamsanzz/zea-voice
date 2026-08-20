@@ -86,6 +86,14 @@ const envSchema = z.object({
   VOICE_AUDIO_WEBSOCKET_WARN_MS: z.coerce.number().int().min(5).max(5000).default(40),
   VOICE_AUDIO_WEBSOCKET_BUFFER_WARN_BYTES: z.coerce.number().int().min(1024).max(16777216).default(262144),
   VOICE_FIRST_AUDIO_TARGET_MS: z.coerce.number().int().min(100).max(10000).default(1000),
+  // Hard live-turn budgets keep a slow Knowledge/LLM/TTS provider from
+  // holding the caller in silence.  The complete first-audio deadline is
+  // intentionally two seconds; individual stages receive smaller budgets.
+  VOICE_TURN_FIRST_AUDIO_DEADLINE_MS: z.coerce.number().int().min(1000).max(10000).default(2000),
+  VOICE_KNOWLEDGE_TURN_TIMEOUT_MS: z.coerce.number().int().min(100).max(5000).default(600),
+  VOICE_LLM_TURN_TIMEOUT_MS: z.coerce.number().int().min(250).max(10000).default(1100),
+  VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS: z.coerce.number().int().min(250).max(5000).default(800),
+  VOICE_TTS_MAX_RESPONSE_CHARACTERS: z.coerce.number().int().min(100).max(2000).default(600),
   VOICE_TTS_SENTENCE_GROUPING_ENABLED: booleanFromString.default(true),
   VOICE_TTS_SHORT_SENTENCE_CHARACTERS: z.coerce.number().int().min(20).max(500).default(100),
   VOICE_TTS_GROUP_MAX_CHARACTERS: z.coerce.number().int().min(40).max(1000).default(220),

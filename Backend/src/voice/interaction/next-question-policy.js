@@ -35,7 +35,7 @@ function toolIdentifiers(tool = {}) {
   const configuration = object(tool.configuration);
   return new Set([
     tool.id, tool.name, configuration.identifier, configuration.toolIdentifier,
-    configuration.actionKey, configuration.key,
+    configuration.actionKey, configuration.key, ...(tool.identifiers ?? []),
   ].map(toolIdentity).filter(Boolean));
 }
 

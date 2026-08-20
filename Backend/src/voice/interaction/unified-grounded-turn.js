@@ -1,5 +1,6 @@
 import { validateGroundedLlmDecision } from './grounded-llm-decision.js';
 import {
+  configuredActionActivation,
   configuredToolAuthorization,
   evidenceBelongsToRuntime,
   validateDecisionSecurity,
@@ -192,7 +193,9 @@ export function applyUnifiedGroundedTurn({
   const runtime = {
     fieldSchemas,
     toolSchemas: tools.map((tool) => ({
+      id: tool.id,
       name: tool.name,
+      identifiers: [...(tool.identifiers ?? [])],
       description: tool.description,
       inputSchema: tool.inputSchema ?? tool.configuration?.inputSchema
         ?? tool.configuration?.input_schema ?? { type: 'object', properties: {} },
@@ -236,10 +239,32 @@ export function applyUnifiedGroundedTurn({
   const citedCatalogEntities = new Map(initiallySelectedEvidence.map((source) => (
     catalogEntityFromEvidence(source, hydratedEnvelope.entities)
   )).filter(Boolean).map((entity) => [identity(entity.key), entity]));
+  const exactCatalogIdentitySources = evidence.filter((source) => (
+    String(source?.recordType ?? '').toLocaleUpperCase() === 'CATALOG_ITEM'
+    && String(source?.retrievalContext ?? '').toLocaleLowerCase() === 'primary'
+    && (source?.channels ?? []).includes('catalog_identity')
+  ));
+  const exactCategoryKeys = new Set(exactCatalogIdentitySources.map((source) => (
+    identity(source?.authoritativeData?.categoryKey ?? source?.authoritativeData?.category)
+  )).filter(Boolean));
+  const exactCategorySelection = exactCatalogIdentitySources.length > 1
+    && exactCategoryKeys.size === 1 ? Object.freeze({
+      key: exactCatalogIdentitySources[0].authoritativeData?.categoryKey ?? null,
+      name: exactCatalogIdentitySources[0].authoritativeData?.category ?? null,
+      parentKey: exactCatalogIdentitySources[0].authoritativeData?.parentCategoryKey ?? null,
+      description: exactCatalogIdentitySources[0].authoritativeData?.categoryDescription ?? null,
+      items: exactCatalogIdentitySources.map((source) => ({
+        id: source.recordId,
+        key: source.authoritativeData?.itemKey,
+        name: source.authoritativeData?.name,
+        categoryKey: source.authoritativeData?.categoryKey,
+        parentCategoryKey: source.authoritativeData?.parentCategoryKey,
+      })),
+    }) : null;
   // A decision citing one authoritative Catalog item has resolved that item,
   // even if the model omitted optional state metadata. Persist the evidence-
   // derived canonical identity so contextual follow-ups cannot lose it.
-  const evidenceResolvedEntity = citedCatalogEntities.size === 1
+  const evidenceResolvedEntity = !exactCategorySelection && citedCatalogEntities.size === 1
     ? [...citedCatalogEntities.values()][0] : null;
   const resolvedFromMemory = memoryResolvedContext(
     decision, initiallySelectedEvidence, beforeState, hydratedEnvelope.entities,
@@ -285,6 +310,24 @@ export function applyUnifiedGroundedTurn({
       }),
     })
     : decisionWithEvidenceState;
+  if (exactCategorySelection) {
+    effectiveDecision = Object.freeze({
+      ...effectiveDecision,
+      currentTopic: exactCategorySelection.key ?? exactCategorySelection.name,
+      selectedEntityKeys: Object.freeze([]),
+      selectedEntities: Object.freeze([]),
+      requestType: 'category_overview',
+      stateUpdate: Object.freeze({
+        ...effectiveDecision.stateUpdate,
+        currentTopic: exactCategorySelection.key ?? exactCategorySelection.name,
+        knownEntityKeys: Object.freeze([]),
+        knownEntities: Object.freeze([]),
+        requestType: 'category_overview',
+        contextDependent: false,
+        pendingQuestionRelevant: false,
+      }),
+    });
+  }
   const callerStateValidation = validateCallerProvidedState(
     effectiveDecision.stateUpdate, finalizedUtterance, beforeState,
   );
@@ -339,7 +382,10 @@ export function applyUnifiedGroundedTurn({
   // overview wording belongs to a caller-facing Conversation message; entity
   // facts belong to hydrated Catalog records. This is deliberately based on
   // document types and resolved state, never tenant/business vocabulary.
+  const categoryOverviewDecision = String(effectiveDecision.stateUpdate.requestType
+    ?? effectiveDecision.requestType ?? '').toLocaleLowerCase() === 'category_overview';
   if (effectiveDecision.decision === 'answer' && isOverviewDecision(effectiveDecision)
+    && !categoryOverviewDecision
     && !selectedEvidence.some(callerFacingConversationMessage)) {
     return Object.freeze({
       valid: false, reason: 'overview_conversation_evidence_required', state: beforeState,
@@ -365,6 +411,30 @@ export function applyUnifiedGroundedTurn({
   const actionEvidence = sourcesByType(evidence, 'WORKFLOW_RULE').filter((source) => (
     String(source?.retrievalContext ?? 'primary').toLocaleLowerCase() === 'primary'
   ));
+  const configuredActivation = !beforeState.activeToolRequest
+    && !effectiveDecision.toolRequest
+    && !effectiveDecision.stateUpdate.activeToolRequest
+    ? configuredActionActivation({
+      evidenceScope,
+      toolSchemas: runtime.toolSchemas,
+      actionEvidence,
+    }) : null;
+  if (configuredActivation?.valid) {
+    effectiveDecision = Object.freeze({
+      ...effectiveDecision,
+      stateUpdate: Object.freeze({
+        ...effectiveDecision.stateUpdate,
+        activeToolRequest: Object.freeze({
+          name: configuredActivation.tool.name,
+          status: 'collecting_information',
+        }),
+      }),
+      activeToolRequest: Object.freeze({
+        name: configuredActivation.tool.name,
+        status: 'collecting_information',
+      }),
+    });
+  }
   const exactSelectedEntities = effectiveDecision.stateUpdate.knownEntities.length
     ? effectiveDecision.stateUpdate.knownEntities
     : (beforeState.knownEntities?.length === 1 ? beforeState.knownEntities : []);
@@ -455,6 +525,11 @@ export function applyUnifiedGroundedTurn({
     return Object.freeze({ valid: false, reason: 'stale_turn', state: applied.state });
   }
   let afterState = memory.snapshot();
+  if (exactCategorySelection) {
+    afterState = memory.applyKnowledge({
+      catalogSelection: { category: exactCategorySelection },
+    });
+  }
   const requestedToolName = effectiveDecision.toolRequest?.name ?? afterState.activeToolRequest?.name;
   let actionContext = null;
   if (requestedToolName) {

@@ -28,6 +28,19 @@ function safeToolName(tool, index) {
   return name || `tool_${index + 1}`;
 }
 
+function toolIdentifiers(tool, runtimeName) {
+  const configuration = tool.configuration ?? {};
+  return [...new Set([
+    runtimeName,
+    tool.id,
+    tool.name,
+    configuration.identifier,
+    configuration.toolIdentifier,
+    configuration.actionKey,
+    configuration.key,
+  ].map((value) => String(value ?? '').trim()).filter(Boolean))];
+}
+
 export function selectedLlmPromptBudget(compactGrounding = false) {
   return compactGrounding
     ? Math.min(env.VOICE_LLM_PROMPT_BUDGET_CHARS, 12_000)
@@ -37,12 +50,14 @@ export function selectedLlmPromptBudget(compactGrounding = false) {
 export function runtimeTools(tools = []) {
   return tools.map((tool, index) => {
     const configuration = tool.configuration ?? {};
+    const name = safeToolName(tool, index);
     const inputSchema = configuration.inputSchema ?? configuration.input_schema
       ?? configuration.parametersSchema ?? configuration.parameters_schema
       ?? { type: 'object', properties: {}, additionalProperties: true };
     return {
       id: tool.id,
-      name: safeToolName(tool, index),
+      name,
+      identifiers: toolIdentifiers(tool, name),
       description: String(tool.description ?? `Execute ${tool.name}`).slice(0, 1024),
       inputSchema,
     };

@@ -670,7 +670,7 @@ export function catalogIdentityOverridesRememberedEntity(resolution, knownEntiti
   if (resolution?.status !== 'match') return false;
   if (!Array.isArray(knownEntities) || knownEntities.length === 0) return true;
   return new Set([
-    'name', 'item_key', 'alias',
+    'name', 'item_key', 'alias', 'distinctive_identity_token',
     'category', 'category_key', 'category_alias', 'parent_category_key',
   ]).has(String(resolution.matchedKind ?? '').toLocaleLowerCase());
 }
@@ -1080,21 +1080,10 @@ export function callerMessageOverridesCategoryResolution(message, resolution, qu
   if (!message || resolution?.status !== 'match' || resolution.entityType !== 'category') {
     return false;
   }
-  if (publishedExampleMatch(message, query)) return true;
-  const queryTokens = [...new Set(tokens(query))];
-  const categoryTokens = [...new Set(tokens(
-    resolution.matchedText ?? resolution.category ?? resolution.categoryKey,
-  ))];
-  const categoryMatches = queryTokens.filter((queryToken) => categoryTokens.some(
-    (categoryToken) => queryToken === categoryToken
-      || (Math.min(queryToken.length, categoryToken.length) >= 4
-        && (queryToken.includes(categoryToken) || categoryToken.includes(queryToken))),
-  )).length;
-  const messageMatches = publishedMessageMatchedTokenCount(message, query);
-  // A category remains authoritative when it is at least as specific as the
-  // configured message. Only a materially stronger tenant-published routing
-  // description may identify a cross-category overview request.
-  return messageMatches >= 3 && messageMatches > categoryMatches;
+  // A category explicitly resolved from uploaded Catalog identity is always
+  // more specific than a cross-category Conversation overview. Conversation
+  // messages remain eligible when no category identity was resolved.
+  return false;
 }
 
 export function conversationMessageRouteCandidates(routes = [], query = '') {

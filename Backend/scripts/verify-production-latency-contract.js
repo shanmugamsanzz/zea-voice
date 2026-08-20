@@ -8,6 +8,7 @@ import {
   evaluateFirstAudioSlo,
   voiceLatencyTargets,
 } from '../src/voice/interaction/voice-latency-slo.js';
+import { env } from '../src/config/env.js';
 
 assert.equal(task10Industries.length, 5);
 assert.ok(new Set(task10Industries.map((fixture) => fixture.industry)).size === 5);
@@ -90,6 +91,10 @@ assert.equal(evaluateFirstAudioSlo(passingSamples).passed, true);
 assert.equal(evaluateFirstAudioSlo(passingSamples.slice(0, 5)).reason,
   'insufficient_production_samples');
 assert.equal(voiceLatencyTargets.p90FirstAudioMs, 1_000);
+assert.equal(env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS, 2_000);
+assert.ok(env.VOICE_KNOWLEDGE_TURN_TIMEOUT_MS < env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS);
+assert.ok(env.VOICE_LLM_TURN_TIMEOUT_MS < env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS);
+assert.ok(env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS < env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS);
 
 const orchestrator = readFileSync(
   new URL('../src/voice/realtime-conversation-orchestrator.js', import.meta.url), 'utf8',
@@ -97,5 +102,11 @@ const orchestrator = readFileSync(
 assert.match(orchestrator, /streaming\.onSentence\?\.\(sentence\)/u);
 assert.match(orchestrator, /activeRetrievalAbortController\?\.abort\(reason\)/u);
 assert.match(orchestrator, /LLM_REQUEST_TIMEOUT_MS|#llmAttempt/u);
+assert.match(orchestrator, /VOICE_KNOWLEDGE_TURN_TIMEOUT_MS/u);
+assert.match(orchestrator, /VOICE_LLM_TURN_TIMEOUT_MS/u);
+assert.match(orchestrator, /VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS/u);
+assert.match(orchestrator, /persistAudible/u,
+  'audible assistant speech must survive a confirmed interruption');
+assert.match(orchestrator, /transcript\.audible_partial_persisted/u);
 
 console.log('Production latency contract verification passed; real p90 remains production-sample gated.');

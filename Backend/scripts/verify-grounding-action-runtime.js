@@ -6,6 +6,11 @@ import {
 import { mergeToolFieldSchemas } from '../src/voice/interaction/tool-field-schema.js';
 import { resolveNextConfiguredQuestion } from '../src/voice/interaction/next-question-policy.js';
 import { executeAgentTools } from '../src/voice/tools/tool-executor.service.js';
+import {
+  configuredActionActivation,
+  configuredToolAuthorization,
+} from '../src/voice/interaction/grounded-decision-security.js';
+import { runtimeTools } from '../src/voice/providers/llm/llm-response.service.js';
 
 const catalogEvidence = [{
   id: 'source_catalog', recordId: 'item-1', recordType: 'CATALOG_ITEM',
@@ -61,6 +66,23 @@ const actionEvidence = [{
   recordId: 'workflow-1', activationAllowed: true,
   authoritativeData: { actionType: 'configured_tool', actionConfig: { toolIdentifier: 'create_request' } },
 }];
+
+const uiAssignedTool = runtimeTools([{
+  id: 'tool-ui-1', name: 'create_request-1', description: 'Create a configured request',
+  configuration: {
+    identifier: 'create_request',
+    inputSchema: tool.inputSchema,
+  },
+}])[0];
+const aliasActivation = configuredActionActivation({
+  toolSchemas: [uiAssignedTool], actionEvidence,
+});
+assert.equal(aliasActivation.valid, true);
+assert.equal(aliasActivation.tool.name, 'create_request-1');
+assert.equal(configuredToolAuthorization('create_request-1', {
+  toolSchemas: [uiAssignedTool], actionEvidence,
+}).authorizationRecordId, 'workflow-1');
+
 const firstQuestion = resolveNextConfiguredQuestion({
   afterState: { activeToolRequest: { name: 'create_request' }, collectedInformation: {} },
   fieldSchemas: fields, tools: [tool], actionEvidence,
@@ -75,6 +97,13 @@ const confirmation = resolveNextConfiguredQuestion({
 });
 assert.equal(confirmation?.kind, 'confirmation');
 assert.match(confirmation?.question ?? '', /Should I submit this request/u);
+
+const aliasedFirstQuestion = resolveNextConfiguredQuestion({
+  afterState: { activeToolRequest: { name: 'create_request-1' }, collectedInformation: {} },
+  fieldSchemas: mergeToolFieldSchemas([], [uiAssignedTool]),
+  tools: [uiAssignedTool], actionEvidence,
+});
+assert.equal(aliasedFirstQuestion?.key, 'customerName');
 
 const runtimeProfile = {
   agent: { id: 'agent-1', tenantId: 'tenant-1', workspaceId: 'workspace-1' },

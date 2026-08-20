@@ -14,6 +14,9 @@ const {
   strongCallerMessageMatch,
   workflowActionRouteCandidates,
 } = await import('../src/knowledge-bases/hybrid-knowledge-retrieval.service.js');
+const { openGenericConversationState } = await import(
+  '../src/voice/interaction/generic-conversation-state.js'
+);
 
 const base = {
   knowledge_base_id: 'knowledge-base', document_id: 'document',
@@ -48,6 +51,33 @@ const switched = classifyCatalogEntityLocally(catalog, 'Advanced package details
 assert.equal(switched.status, 'match');
 assert.equal(switched.item.item_key, 'advanced-plan');
 assert.equal(catalogIdentityOverridesRememberedEntity(switched, [{ key: 'foundation-plan' }]), true);
+const shortExplicitSwitch = classifyCatalogEntityLocally(catalog, 'Advanced');
+assert.equal(shortExplicitSwitch.status, 'match');
+assert.equal(shortExplicitSwitch.item.item_key, 'advanced-plan');
+assert.equal(catalogIdentityOverridesRememberedEntity(
+  shortExplicitSwitch, [{ key: 'foundation-plan' }],
+), true);
+assert.equal(catalogIdentityOverridesRememberedEntity({
+  status: 'match', entityType: 'item', matchedKind: 'distinctive_identity_token',
+}, [{ key: 'foundation-plan' }]), true);
+
+const memory = openGenericConversationState({
+  tenantId: 'tenant', workspaceId: 'workspace', agentId: 'agent', callId: 'call',
+}, {}, Date.now(), { knownEntities: [{ key: 'foundation-plan', name: 'Foundation Plan' }] });
+memory.applyGroundedDecision({ stateUpdate: {
+  currentTopic: 'advanced-plan',
+  knownEntities: [{ key: 'advanced-plan', name: 'Advanced Plan' }],
+  contextDependent: false,
+} });
+assert.deepEqual(memory.snapshot().knownEntities.map((entity) => entity.key), ['advanced-plan']);
+memory.applyGroundedDecision({ stateUpdate: {
+  currentTopic: 'general-services',
+  knownEntities: [],
+  requestType: 'category_overview',
+  contextDependent: false,
+} });
+assert.deepEqual(memory.snapshot().knownEntities, []);
+assert.equal(memory.snapshot().currentTopic, 'general-services');
 
 const compared = resolveCatalogEntitiesLocally(
   catalog, 'What is the difference between Foundation and Advanced?',
@@ -129,7 +159,7 @@ assert.equal(callerMessageOverridesCategoryResolution(
   completeOverviewMessage,
   overviewCategoryResolution,
   'Could you give me a complete overview of the available health screening options?',
-), true);
+), false);
 assert.equal(callerMessageOverridesCategoryResolution(
   completeOverviewMessage,
   { ...overviewCategoryResolution, category: 'Organ Specific Services', categoryKey: 'organ-specific-services', matchedText: 'Organ Specific Services' },

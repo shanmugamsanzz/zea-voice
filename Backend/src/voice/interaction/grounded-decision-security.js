@@ -42,6 +42,12 @@ function workflowIdentifier(evidence) {
   return identity(config.toolIdentifier ?? config.actionKey);
 }
 
+function toolIdentifiers(tool = {}) {
+  return new Set([
+    tool.id, tool.name, ...(tool.identifiers ?? []),
+  ].map(identity).filter(Boolean));
+}
+
 function sameValue(left, right) {
   if (typeof left === 'number' || typeof right === 'number') return Number(left) === Number(right);
   if (typeof left === 'boolean' || typeof right === 'boolean') return left === right;
@@ -86,12 +92,12 @@ function exactCatalogItem(runtime = {}) {
   });
 }
 
-function workflowAuthorization(name, runtime = {}) {
-  const requested = identity(name);
+function workflowAuthorization(tool, runtime = {}) {
+  const identifiers = toolIdentifiers(tool);
   const evidence = (runtime.actionEvidence ?? []).find((candidate) => (
     candidate?.activationAllowed === true
     && String(candidate?.authoritativeData?.actionType ?? '').toLocaleLowerCase() === 'configured_tool'
-    && workflowIdentifier(candidate) === requested
+    && identifiers.has(workflowIdentifier(candidate))
     && evidenceBelongsToRuntime(candidate, runtime.evidenceScope)
   ));
   if (evidence) return Object.freeze({
@@ -100,7 +106,7 @@ function workflowAuthorization(name, runtime = {}) {
   });
   if (runtime.requireCurrentActionEvidence !== true
     && runtime.activeToolRequest?.authorizationRecordId
-    && identity(runtime.activeToolRequest?.name) === requested) {
+    && identifiers.has(identity(runtime.activeToolRequest?.name))) {
     return Object.freeze({
       recordId: runtime.activeToolRequest.authorizationRecordId,
       requiresCatalogItem: Boolean(runtime.activeToolRequest.catalogRecordId),
@@ -111,9 +117,9 @@ function workflowAuthorization(name, runtime = {}) {
 
 export function configuredToolAuthorization(name, runtime = {}) {
   const requested = identity(name);
-  const tool = (runtime.toolSchemas ?? []).find((candidate) => identity(candidate.name) === requested);
+  const tool = (runtime.toolSchemas ?? []).find((candidate) => toolIdentifiers(candidate).has(requested));
   if (!tool) return Object.freeze({ valid: false, reason: 'tool_not_assigned' });
-  const authorization = workflowAuthorization(name, runtime);
+  const authorization = workflowAuthorization(tool, runtime);
   if (!authorization) return Object.freeze({ valid: false, reason: 'workflow_authorization_missing' });
   const catalogItem = authorization.requiresCatalogItem ? exactCatalogItem(runtime) : null;
   if (authorization.requiresCatalogItem && !catalogItem) {
@@ -121,6 +127,24 @@ export function configuredToolAuthorization(name, runtime = {}) {
   }
   return Object.freeze({
     valid: true, tool, authorizationRecordId: authorization.recordId, catalogItem,
+  });
+}
+
+export function configuredActionActivation(runtime = {}) {
+  const matches = (runtime.toolSchemas ?? []).flatMap((tool) => {
+    const authorization = workflowAuthorization(tool, {
+      ...runtime, requireCurrentActionEvidence: true,
+    });
+    return authorization ? [{ tool, authorization }] : [];
+  });
+  if (matches.length !== 1) return Object.freeze({ valid: false, reason: matches.length
+    ? 'ambiguous_configured_action' : 'configured_action_not_activated' });
+  const [{ tool, authorization }] = matches;
+  return Object.freeze({
+    valid: true,
+    tool,
+    authorizationRecordId: authorization.recordId,
+    requiresCatalogItem: authorization.requiresCatalogItem,
   });
 }
 

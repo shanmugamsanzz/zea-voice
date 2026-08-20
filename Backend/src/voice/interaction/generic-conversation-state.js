@@ -250,6 +250,12 @@ export function openGenericConversationState(identity, settings = {}, now = Date
         state.knownEntities = update.contextDependent === true
           ? uniqueEntities([...selected, ...state.knownEntities])
           : selected;
+      } else if (update.contextDependent === false
+        && cleanRequestType(update.requestType ?? update.questionType) === 'category_overview') {
+        // A category is a deterministic browse context, not an arbitrary
+        // child selection. Clear the previous item while retaining the
+        // category topic supplied by the grounded runtime.
+        state.knownEntities = [];
       }
       const updates = cleanInformation(
         update.collectedInformation ?? decision.fieldUpdates ?? {}, fieldKeys,

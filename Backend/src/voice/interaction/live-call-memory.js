@@ -412,9 +412,15 @@ export function openLiveCallMemory(identity, settings = {}, now = Date.now(), in
       else if (decision.flowAction === 'side_question' && decision.pendingQuestionRelevant !== false) {
         schedulePendingQuestionResume(state, { groundedRelevant: true, priorTopic });
       }
-      const selected = frameItem(decision.selectedEntities?.[0]);
+      const selectedEntities = uniqueFrameItems(decision.selectedEntities ?? []);
+      const selected = selectedEntities[0];
       if (selected) {
-        state.knownEntities = uniqueFrameItems([selected, ...state.knownEntities]);
+        // A latest explicit selection replaces stale item memory. A comparison
+        // keeps every explicitly selected item, while a contextual follow-up
+        // may retain the existing list.
+        state.knownEntities = decision.stateUpdate?.contextDependent === true
+          ? uniqueFrameItems([...selectedEntities, ...state.knownEntities])
+          : selectedEntities;
         const known = [state.selectedCatalogItem, ...state.candidateItems].filter(Boolean)
           .find((item) => (selected.id && item.id === selected.id) || (selected.key && item.key === selected.key));
         state.selectedCatalogItem = frameItem(selected, known ?? {});
@@ -484,6 +490,7 @@ export function openLiveCallMemory(identity, settings = {}, now = Date.now(), in
           categoryKey: selection.item.categoryKey ?? null,
           parentCategoryKey: selection.item.parentCategoryKey ?? null,
         });
+        state.knownEntities = uniqueFrameItems([state.selectedCatalogItem]);
         state.activeCategory = frameCategory({
           key: selection.item.categoryKey,
           name: selection.item.category,
@@ -503,6 +510,7 @@ export function openLiveCallMemory(identity, settings = {}, now = Date.now(), in
         // category must not silently retain a child selected in an earlier
         // topic; otherwise a caller can accidentally book that old child.
         state.selectedCatalogItem = null;
+        state.knownEntities = [];
         for (const [action, requiresCatalogItem] of state.actionRequirements) {
           if (requiresCatalogItem) state.activeActions.delete(action);
         }

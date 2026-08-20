@@ -616,6 +616,46 @@ const evidenceScope = {
   tenantId: 'tenant-a', agentId: 'agent-a',
   publicationRevisions: [{ knowledgeBaseId: 'kb-a', publicationRevision: 3 }],
 };
+const configuredAliasTool = {
+  ...actionTool,
+  id: 'tool-configured-name',
+  name: 'create_request-1',
+  identifiers: ['create_request-1', 'create_request'],
+};
+const configuredAliasFields = actionSettings.conversationMemoryFields.map((field) => ({
+  ...field, requiredAction: 'create_request-1',
+}));
+const deterministicActionMemory = openGenericConversationState(
+  { ...identity, callId: 'call-deterministic-action' },
+  { conversationMemoryFields: configuredAliasFields },
+);
+deterministicActionMemory.beginTurn('deterministic-action-turn');
+const deterministicAction = applyUnifiedGroundedTurn({
+  rawDecision: unifiedDecision({
+    decision: 'answer',
+    answer: 'Priority service is an approved selectable service.',
+    evidenceIds: ['item-source'],
+    stateUpdate: {
+      currentTopic: 'priority service', knownEntityKeys: ['priority-service'],
+      collectedInformation: {}, correctedFields: [], pendingQuestionRelevant: false,
+    },
+    pendingQuestion: null, toolRequest: null,
+  }),
+  groundingEnvelope: actionEnvelope,
+  memory: deterministicActionMemory,
+  turnToken: 'deterministic-action-turn',
+  fieldSchemas: configuredAliasFields,
+  tools: [configuredAliasTool],
+  evidence: actionEvidence,
+  evidenceScope,
+  finalizedUtterance: 'Use the configured action for this priority service.',
+});
+assert.equal(deterministicAction.valid, true);
+assert.equal(deterministicAction.state.activeToolRequest.name, 'create_request-1');
+assert.equal(deterministicAction.state.activeToolRequest.authorizationRecordId, 'workflow-record');
+assert.equal(deterministicAction.nextQuestion?.key, 'contact_name');
+assert.equal(deterministicAction.toolRequest, null);
+
 const actionMemory = openGenericConversationState(
   { ...identity, callId: 'call-action' }, actionSettings,
 );
