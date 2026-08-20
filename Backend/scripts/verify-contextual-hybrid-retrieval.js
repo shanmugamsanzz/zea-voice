@@ -8,6 +8,7 @@ process.env.RAG_ENABLED = 'false';
 const { routeKnowledgeQuery } = await import('../src/knowledge-bases/knowledge-runtime.service.js');
 const {
   catalogIdentityDiscoveryPolicy,
+  catalogIdentityOverridesRememberedEntity,
   contextualRetrievalPolicy,
   callerMessageEligibleForDecision,
   focusAuthoritativeCatalogEvidence,
@@ -160,6 +161,17 @@ const strongExplicitItem = contextualRetrievalPolicy({
 }]);
 assert.equal(strongExplicitItem.useContext, false);
 assert.equal(strongExplicitItem.preferContext, false);
+
+assert.equal(catalogIdentityOverridesRememberedEntity({
+  status: 'match', matchedKind: 'alias',
+}, [{ key: 'old-item' }]), true, 'a direct published alias may replace remembered identity');
+assert.equal(catalogIdentityOverridesRememberedEntity({
+  status: 'match', matchedKind: 'category_description',
+}, [{ key: 'old-item' }]), false,
+'descriptive similarity must not suppress deterministic remembered-item hydration');
+assert.equal(catalogIdentityOverridesRememberedEntity({
+  status: 'match', matchedKind: 'category_relationship',
+}, []), true, 'without saved identity the strongest accepted Catalog match remains usable');
 
 const strongMessage = contextualRetrievalPolicy({
   pendingQuestion: 'Would you like details?',
