@@ -12,6 +12,7 @@ import {
   compactGenericConversationState, openGenericConversationState,
 } from '../src/voice/interaction/generic-conversation-state.js';
 import { buildGroundingEnvelope } from '../src/voice/interaction/grounded-llm-response.js';
+import { isRepairableGroundedDecisionReason } from '../src/voice/interaction/grounded-llm-decision.js';
 import { applyUnifiedGroundedTurn } from '../src/voice/interaction/unified-grounded-turn.js';
 import { evidenceBelongsToRuntime } from '../src/voice/interaction/grounded-decision-security.js';
 import { configuredSafeFailureResponse } from '../src/voice/realtime-conversation-orchestrator.js';
@@ -419,7 +420,7 @@ try {
           assert.ok(envelope.sources.length > 0 && envelope.sources.length <= 5,
             `${call.id} turn ${index + 1}: expected one to five selected records`);
           const llmStartedAt = performance.now();
-          const rawDecision = await collectDecision(profile, {
+          const decisionInput = {
             callId, query: utterance,
             history: memory.promptMessages?.() ?? snapshot.recentTurns,
             knowledge,
@@ -430,14 +431,30 @@ try {
               configuredInformationFields: memory.fieldSchemas(), configuredToolSchemas: tools,
             },
             usageDirection: direction,
-          });
-          llmMs = performance.now() - llmStartedAt;
-          const unified = applyUnifiedGroundedTurn({
+          };
+          let rawDecision = await collectDecision(profile, decisionInput);
+          let unified = applyUnifiedGroundedTurn({
             rawDecision, groundingEnvelope: envelope, memory, turnToken: token,
             fieldSchemas: memory.fieldSchemas(), tools, evidence: hydrated, evidenceScope: scope,
             safetyPolicies: profile.agent.settings?.safetyPolicies ?? [],
             finalizedUtterance: utterance,
           });
+          if (!unified.valid && isRepairableGroundedDecisionReason(unified.reason)) {
+            rawDecision = await collectDecision(profile, {
+              ...decisionInput,
+              context: {
+                ...decisionInput.context,
+                decisionRepair: { reason: unified.reason },
+              },
+            });
+            unified = applyUnifiedGroundedTurn({
+              rawDecision, groundingEnvelope: envelope, memory, turnToken: token,
+              fieldSchemas: memory.fieldSchemas(), tools, evidence: hydrated, evidenceScope: scope,
+              safetyPolicies: profile.agent.settings?.safetyPolicies ?? [],
+              finalizedUtterance: utterance,
+            });
+          }
+          llmMs = performance.now() - llmStartedAt;
           assert.equal(unified.valid, true,
             `${call.id} turn ${index + 1}: invalid final decision (${unified.reason ?? 'unknown'})`);
           finalDecision = unified.decision;

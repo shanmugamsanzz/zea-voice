@@ -2,7 +2,9 @@ const maximumAnswerCharacters = 4_000;
 const maximumSources = 10;
 const maximumEntities = 20;
 const decisions = new Set(['answer', 'clarify', 'action']);
-const repairableDecisionReasons = new Set(['invalid_response_shape', 'answer_required']);
+const repairableDecisionReasons = new Set([
+  'invalid_response_shape', 'answer_required', 'unsupported_numeric_fact',
+]);
 
 export function isRepairableGroundedDecisionReason(reason) {
   return repairableDecisionReasons.has(String(reason ?? '').trim());
