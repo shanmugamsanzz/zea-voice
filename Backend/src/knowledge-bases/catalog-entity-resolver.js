@@ -437,9 +437,60 @@ export function resolveCatalogEntityLocally(items, query, {
   return result.status === 'match' ? result : null;
 }
 
+function distinctiveItemMentions(items, query) {
+  const queryTokens = normalizeCatalogEntityText(query).split(' ').filter(Boolean);
+  if (!queryTokens.length) return [];
+  const identityTokensByItem = new Map();
+  const tokenOwners = new Map();
+  for (const item of items) {
+    const identity = String(item.id);
+    const identityTokens = [...new Set(itemLabels(item)
+      .filter((label) => ['name', 'item_key', 'alias'].includes(label.kind))
+      .flatMap((label) => meaningfulTokens(label.value))
+      .filter((token) => token.length >= 3 || /[^a-z]/u.test(token)))];
+    identityTokensByItem.set(identity, identityTokens);
+    for (const token of identityTokens) {
+      const owners = tokenOwners.get(token) ?? new Set();
+      owners.add(identity);
+      tokenOwners.set(token, owners);
+    }
+  }
+  const mentions = [];
+  for (const item of items) {
+    const identity = String(item.id);
+    const distinctiveTokens = (identityTokensByItem.get(identity) ?? [])
+      .filter((token) => tokenOwners.get(token)?.size === 1);
+    let best = null;
+    for (const token of distinctiveTokens) {
+      for (let index = 0; index < queryTokens.length; index += 1) {
+        const similarity = tokenSimilarity(queryTokens[index], token);
+        if (similarity.score < 0.88) continue;
+        if (!best || similarity.score > best.confidence
+          || (similarity.score === best.confidence && index < best.firstMatchedQueryIndex)) {
+          best = {
+            status: 'match', entityType: 'item', item,
+            confidence: Math.round(similarity.score * 10000) / 10000,
+            method: similarity.method === 'normalized' ? 'distinctive_token' : similarity.method,
+            matchedText: token, matchedKind: 'distinctive_identity_token',
+            firstMatchedQueryIndex: index,
+          };
+        }
+      }
+    }
+    if (best) mentions.push(best);
+  }
+  // A single short-name hit can be ambiguous conversational text. This path
+  // is specifically for an utterance that explicitly names multiple tenant
+  // identities, such as a comparison, so require at least two distinct items.
+  return mentions.length > 1
+    ? mentions.sort((left, right) => left.firstMatchedQueryIndex - right.firstMatchedQueryIndex
+      || String(left.item.id).localeCompare(String(right.item.id)))
+    : [];
+}
+
 export function resolveCatalogEntitiesLocally(items, query, { minimumConfidence = 0.86 } = {}) {
   const seen = new Set();
-  return rankCatalogEntities(items, query)
+  const rankedMatches = rankCatalogEntities(items, query)
     .filter((candidate) => candidate.entityType === 'item'
       && (candidate.score >= minimumConfidence
         // A comparison naturally divides query coverage between two or more
@@ -449,16 +500,20 @@ export function resolveCatalogEntitiesLocally(items, query, { minimumConfidence 
           && ['name', 'item_key', 'alias'].includes(candidate.matchedKind)
           && Number(candidate.labelCoverage ?? 0) >= 0.8
           && Number(candidate.matchedQueryTokens ?? 0) >= 1)))
+    .map((candidate) => ({
+      status: 'match', entityType: 'item', item: candidate.item,
+      confidence: Math.round(candidate.score * 10000) / 10000,
+      method: candidate.method, matchedText: candidate.matchedText,
+      matchedKind: candidate.matchedKind,
+      firstMatchedQueryIndex: candidate.firstMatchedQueryIndex,
+    }));
+  const distinctiveMatches = distinctiveItemMentions(items, query);
+  return [...distinctiveMatches, ...rankedMatches]
     .filter((candidate) => {
       const id = String(candidate.item.id);
       if (seen.has(id)) return false;
       seen.add(id);
       return true;
     })
-    .map((candidate) => ({
-      status: 'match', entityType: 'item', item: candidate.item,
-      confidence: Math.round(candidate.score * 10000) / 10000,
-      method: candidate.method, matchedText: candidate.matchedText,
-      matchedKind: candidate.matchedKind,
-    }));
+    .map(({ firstMatchedQueryIndex: _firstMatchedQueryIndex, ...candidate }) => candidate);
 }

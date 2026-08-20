@@ -54,6 +54,25 @@ assert.deepEqual(compared.map((entry) => entry.item.item_key), [
   'foundation-plan', 'advanced-plan',
 ]);
 
+const sharedNameCatalog = [
+  {
+    ...base, id: 'aurora', item_key: 'aurora-complete-service',
+    name: 'Aurora Complete Service', aliases: [], category: 'Complete Services',
+    category_key: 'complete-services', category_aliases: [],
+  },
+  {
+    ...base, id: 'beacon', item_key: 'beacon-complete-service',
+    name: 'Beacon Complete Service', aliases: [], category: 'Complete Services',
+    category_key: 'complete-services', category_aliases: [],
+  },
+];
+const shortNameComparison = resolveCatalogEntitiesLocally(
+  sharedNameCatalog, 'Auroraக்கும் Beaconக்கும் என்ன difference?',
+);
+assert.deepEqual(shortNameComparison.map((entry) => entry.item.item_key), [
+  'aurora-complete-service', 'beacon-complete-service',
+]);
+
 const catalogEvidence = compared.map((entry, index) => ({
   id: `source_${index + 1}`, recordId: entry.item.id, recordType: 'CATALOG_ITEM',
   retrievalContext: 'primary', callerFacing: true, authoritativeData: {

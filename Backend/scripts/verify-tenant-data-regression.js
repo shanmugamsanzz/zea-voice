@@ -152,7 +152,14 @@ try {
     }
     if (turn.expect === 'comparison') {
       assert.ok(catalog.length >= Number(turn.minimumEntities ?? 2),
-        `complete live call turn ${index + 1}: comparison evidence is incomplete`);
+        `complete live call turn ${index + 1}: comparison evidence is incomplete ${JSON.stringify({
+          utterance: turn.utterance,
+          catalog: catalog.map((source) => ({
+            recordId: recordId(source), itemKey: source.authoritativeData?.itemKey ?? null,
+            name: source.authoritativeData?.name ?? null,
+          })),
+          entities: evidence.entities ?? [],
+        })}`);
     }
     if (turn.safety === 'no_symptom_suitability') {
       const label = catalog[0]?.authoritativeData?.name ?? 'This option';
