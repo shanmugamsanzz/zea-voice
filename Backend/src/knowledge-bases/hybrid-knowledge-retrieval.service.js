@@ -1000,7 +1000,8 @@ export function strongCallerMessageMatch(evidence, query, input = {}) {
   // exact published example or strong lexical evidence for that override.
   const explicitMessageTopicChange = retrievalContext === 'primary'
     && context === 'no_selected_entity'
-    && (exactPublishedExample || strongLexicalMessage || documentAlignedSemanticMessage);
+    && (exactPublishedExample || documentAlignedSemanticMessage
+      || (strongLexicalMessage && documentExampleCoverage >= 0.45));
   if (selectedEntities.length > 0 && retrievalContext !== 'contextual'
     && !explicitMessageTopicChange) return false;
   if (context === 'no_selected_entity'
@@ -1326,7 +1327,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
     })),
   });
-  const cacheKey = `zea:rag:hybrid:v20:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:v21:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();

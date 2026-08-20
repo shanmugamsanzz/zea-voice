@@ -243,7 +243,7 @@ assert.equal(strongCallerMessageMatch(
   { knownEntities: [{ key: 'old-item', name: 'Old Item' }] },
 ), false, 'a contextual package fact request must retain the selected entity');
 const lexicalLatestOverview = {
-  ...semanticLatestOverview,
+  ...documentAlignedSemanticOverview,
   semanticScore: 0.7,
   lexicalScore: 5,
   tokenCoverage: 0.6,
@@ -254,6 +254,14 @@ assert.equal(strongCallerMessageMatch(
   'What other packages do you have?',
   { knownEntities: [{ key: 'old-item', name: 'Old Item' }] },
 ), true, 'strong lexical latest-turn evidence may explicitly change topic');
+assert.equal(strongCallerMessageMatch(
+  {
+    ...lexicalLatestOverview,
+    authoritativeData: semanticLatestOverview.authoritativeData,
+  },
+  'What tests are included in this package?',
+  { knownEntities: [{ key: 'old-item', name: 'Old Item' }] },
+), false, 'raw BM25 strength must not override an entity without published-example alignment');
 assert.equal(strongCallerMessageMatch(
   exactLatestOverview,
   'Tell me about the old item.',
