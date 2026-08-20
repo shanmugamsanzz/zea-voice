@@ -493,7 +493,12 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
   const allowedSources = new Map((envelope.sources ?? []).flatMap((source) => (
     [source.id, source.recordId].filter(Boolean).map((candidate) => [identity(candidate), source])
   )));
-  const evidenceIds = list(parsed.evidenceIds, maximumSources);
+  const requiredEvidenceIds = decision === 'answer' && parsed.responseId === null
+    ? list(runtime.requiredEvidenceIds, maximumSources) : [];
+  const evidenceIds = list([
+    ...(Array.isArray(parsed.evidenceIds) ? parsed.evidenceIds : []),
+    ...requiredEvidenceIds,
+  ], maximumSources);
   const citedSources = [];
   const seenSources = new Set();
   for (const requested of evidenceIds) {

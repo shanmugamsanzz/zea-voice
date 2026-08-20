@@ -167,6 +167,9 @@ export function applyUnifiedGroundedTurn({
   if (!memory?.snapshot || !memory?.applyGroundedDecision) {
     throw new TypeError('A generic conversation memory instance is required');
   }
+  const beforeState = memory.snapshot();
+  const hydratedEnvelope = hydrateGroundingEnvelope(groundingEnvelope, evidence);
+  const rememberedSource = rememberedCatalogSource(hydratedEnvelope, beforeState, evidence);
   const runtime = {
     fieldSchemas,
     toolSchemas: tools.map((tool) => ({
@@ -176,8 +179,8 @@ export function applyUnifiedGroundedTurn({
         ?? tool.configuration?.input_schema ?? { type: 'object', properties: {} },
     })),
     activeToolRequest: memory.snapshot().activeToolRequest,
+    requiredEvidenceIds: rememberedSource ? [rememberedSource.id] : [],
   };
-  const hydratedEnvelope = hydrateGroundingEnvelope(groundingEnvelope, evidence);
   const validatedDecision = validateGroundedLlmDecision(rawDecision, hydratedEnvelope, runtime);
   if (!validatedDecision.valid) {
     return Object.freeze({
@@ -190,8 +193,6 @@ export function applyUnifiedGroundedTurn({
     });
   }
 
-  const beforeState = memory.snapshot();
-  const rememberedSource = rememberedCatalogSource(hydratedEnvelope, beforeState, evidence);
   const retainRememberedCatalogCitation = validatedDecision.decision === 'answer'
     && !validatedDecision.responseId
     && rememberedSource

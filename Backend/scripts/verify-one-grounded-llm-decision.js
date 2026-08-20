@@ -141,6 +141,13 @@ assert.deepEqual(genericMeaning.constraints, ['this week']);
 assert.deepEqual(genericMeaning.contextualReferences, ['that service']);
 assert.equal(genericMeaning.contextDependent, true);
 
+const runtimeRequiredCatalogEvidence = validateGroundedLlmDecision(decisionJson({
+  decision: 'answer', answer: 'Premium service costs INR 3200.', evidenceIds: ['source_2'],
+  stateUpdate: { contextDependent: true }, pendingQuestion: null, toolRequest: null,
+}), envelope, { ...runtime, requiredEvidenceIds: ['source_1'] });
+assert.equal(runtimeRequiredCatalogEvidence.valid, true);
+assert.deepEqual(runtimeRequiredCatalogEvidence.evidenceIds, ['source_2', 'source_1']);
+
 const invalidMeaning = validateGroundedLlmDecision(decisionJson({
   decision: 'answer', answer: 'The office is on Central Road.', evidenceIds: ['source_2'],
   stateUpdate: { requestType: 'NOT VALID!' }, pendingQuestion: null, toolRequest: null,
