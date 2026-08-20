@@ -35,7 +35,7 @@ const result = await testAgentTool({
   }),
   fetchImpl: async (url, options) => {
     request = { url, options };
-    return new Response(JSON.stringify({ available: ['10:00', '11:30'] }), { status: 200 });
+    return new Response(JSON.stringify({ success: true, available: ['10:00', '11:30'] }), { status: 200 });
   },
 });
 
@@ -45,6 +45,6 @@ assert.equal(request.options.headers.authorization, 'Bearer encrypted-secret');
 assert.equal(request.options.redirect, 'error');
 assert.equal(JSON.parse(request.options.body).arguments.date, '2026-07-27');
 assert.equal(result.success, true);
-assert.deepEqual(result.output, { available: ['10:00', '11:30'] });
+assert.deepEqual(result.output, { success: true, available: ['10:00', '11:30'] });
 
 console.log(JSON.stringify({ success: true, tenantIsolation: 'verified', encryptedHeaders: 'verified', runtimeExecution: 'verified' }));

@@ -87,6 +87,7 @@ interface AgentToolApiData {
   status: string;
   description: string | null;
   configuration: Record<string, unknown>;
+  hasSecretConfiguration?: boolean;
 }
 
 type KnowledgeBaseStatus = 'draft' | 'processing' | 'ready' | 'partially_failed' | 'published' | 'deleting' | 'deleted';
@@ -660,6 +661,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const [newToolSecretHeaders, setNewToolSecretHeaders] = useState('{}');
   const [newToolInputSchema, setNewToolInputSchema] = useState('{\n  "type": "object",\n  "properties": {},\n  "additionalProperties": true\n}');
   const [showToolRegistration, setShowToolRegistration] = useState(false);
+  const [editingTool, setEditingTool] = useState<AgentToolApiData | null>(null);
   const [toolSaving, setToolSaving] = useState(false);
   const [testingToolId, setTestingToolId] = useState<string | null>(null);
   const [toolTestArguments, setToolTestArguments] = useState('{}');
@@ -1381,6 +1383,46 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     }
   };
 
+  const resetToolForm = () => {
+    setNewToolName('');
+    setNewToolType('Webhook API');
+    setNewToolDescription('');
+    setNewToolWebhookUrl('');
+    setNewToolMethod('POST');
+    setNewToolTimeoutSeconds('15');
+    setNewToolHeaders('{\n  "Content-Type": "application/json"\n}');
+    setNewToolSecretHeaders('{}');
+    setNewToolInputSchema('{\n  "type": "object",\n  "properties": {},\n  "additionalProperties": true\n}');
+  };
+
+  const openToolRegistration = () => {
+    setEditingTool(null);
+    resetToolForm();
+    setShowToolRegistration(true);
+  };
+
+  const openToolEditor = (tool: AgentToolApiData) => {
+    const configuration = tool.configuration ?? {};
+    setEditingTool(tool);
+    setNewToolName(tool.name);
+    setNewToolType('Webhook API');
+    setNewToolDescription(tool.description ?? '');
+    setNewToolWebhookUrl(typeof configuration.url === 'string' ? configuration.url : '');
+    setNewToolMethod(['POST', 'PUT', 'PATCH'].includes(String(configuration.method)) ? configuration.method as 'POST' | 'PUT' | 'PATCH' : 'POST');
+    const timeoutMs = Number(configuration.timeoutMs);
+    setNewToolTimeoutSeconds(Number.isFinite(timeoutMs) ? String(timeoutMs / 1000) : '15');
+    setNewToolHeaders(JSON.stringify(configuration.headers ?? {}, null, 2));
+    setNewToolSecretHeaders('{}');
+    setNewToolInputSchema(JSON.stringify(configuration.inputSchema ?? { type: 'object', properties: {}, additionalProperties: true }, null, 2));
+    setShowToolRegistration(true);
+  };
+
+  const closeToolEditor = () => {
+    setShowToolRegistration(false);
+    setEditingTool(null);
+    resetToolForm();
+  };
+
   const addTool = async () => {
     if (!newToolName.trim() || !agentId || toolSaving) return;
     try {
@@ -1391,12 +1433,12 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       const secretHeaders = parseToolJsonObject(newToolSecretHeaders, 'Secret headers');
       const inputSchema = parseToolJsonObject(newToolInputSchema, 'Input schema');
       const timeoutSeconds = Number(newToolTimeoutSeconds);
-      const created = await apiRequest<AgentToolApiData>(`/agents/${agentId}/tools`, {
-        method: 'POST',
+      const saved = await apiRequest<AgentToolApiData>(editingTool ? `/agents/${agentId}/tools/${editingTool.id}` : `/agents/${agentId}/tools`, {
+        method: editingTool ? 'PUT' : 'POST',
         body: JSON.stringify({
           name: newToolName.trim(),
           type: 'webhook_api',
-          status: 'active',
+          status: editingTool?.status === 'inactive' ? 'inactive' : 'active',
           description: newToolDescription.trim() || null,
           configuration: {
             version: 1,
@@ -1410,19 +1452,13 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
           ...(Object.keys(secretHeaders).length ? { secretConfiguration: { headers: secretHeaders } } : {}),
         }),
       });
-      setTools((current) => [...current, created]);
-      setSuccessMsg(`Tool ${created.name} is assigned and active for this agent.`);
+      setTools((current) => editingTool
+        ? current.map((tool) => tool.id === saved.id ? saved : tool)
+        : [...current, saved]);
+      setSuccessMsg(editingTool ? `Tool ${saved.name} was updated.` : `Tool ${saved.name} is assigned and active for this agent.`);
       window.setTimeout(() => setSuccessMsg(null), 3000);
-      setNewToolName('');
-      setNewToolDescription('');
-      setNewToolWebhookUrl('');
-      setNewToolMethod('POST');
-      setNewToolTimeoutSeconds('15');
-      setNewToolHeaders('{\n  "Content-Type": "application/json"\n}');
-      setNewToolSecretHeaders('{}');
-      setNewToolInputSchema('{\n  "type": "object",\n  "properties": {},\n  "additionalProperties": true\n}');
-      setShowToolRegistration(false);
-    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : 'Agent tool could not be created'); }
+      closeToolEditor();
+    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : `Agent tool could not be ${editingTool ? 'updated' : 'created'}`); }
     finally { setToolSaving(false); }
   };
 
@@ -3890,7 +3926,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
               <div className="flex flex-wrap items-center gap-2">
                 <button type="button" onClick={() => setToolRefreshKey((value) => value + 1)} disabled={!agentId || toolsLoading} className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"><RefreshCw className={`h-3.5 w-3.5 ${toolsLoading ? 'animate-spin' : ''}`} />Refresh Tools</button>
                 {!isReadOnly && (
-                  <button type="button" onClick={() => setShowToolRegistration(true)} disabled={!agentId} className="rounded-lg bg-[#dfa822] px-4 py-2 text-xs font-black text-black transition hover:bg-[#c99118] disabled:cursor-not-allowed disabled:opacity-50">
+                  <button type="button" onClick={openToolRegistration} disabled={!agentId} className="rounded-lg bg-[#dfa822] px-4 py-2 text-xs font-black text-black transition hover:bg-[#c99118] disabled:cursor-not-allowed disabled:opacity-50">
                     + Register Tool
                   </button>
                 )}
@@ -3903,7 +3939,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
               <div
                 className="fixed inset-0 z-[2147483646] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm"
                 onMouseDown={(event) => {
-                  if (event.target === event.currentTarget && !toolSaving) setShowToolRegistration(false);
+                  if (event.target === event.currentTarget && !toolSaving) closeToolEditor();
                 }}
               >
               {/* Tool Creator Card */}
@@ -3915,8 +3951,8 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                 onMouseDown={(event) => event.stopPropagation()}
               >
                 <div className="flex shrink-0 items-center justify-between border-b border-slate-200 bg-white px-5 py-4">
-                  <span id="register-custom-api-tool-title" className="text-sm font-bold uppercase tracking-wider text-slate-700">Register Custom API Tool</span>
-                  <button type="button" onClick={() => setShowToolRegistration(false)} disabled={toolSaving} className="rounded-lg px-3 py-1.5 text-xs font-bold text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 disabled:opacity-50">Close</button>
+                  <span id="register-custom-api-tool-title" className="text-sm font-bold uppercase tracking-wider text-slate-700">{editingTool ? 'Edit Custom API Tool' : 'Register Custom API Tool'}</span>
+                  <button type="button" onClick={closeToolEditor} disabled={toolSaving} className="rounded-lg px-3 py-1.5 text-xs font-bold text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 disabled:opacity-50">Close</button>
                 </div>
                 <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
                 
@@ -4011,6 +4047,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                         <FieldInfoTooltip id="tool-secret-headers-information" text="Authorization tokens and API keys are encrypted and never returned to the browser." />
                       </div>
                       <textarea value={newToolSecretHeaders} disabled={isReadOnly} onChange={(e) => setNewToolSecretHeaders(e.target.value)} rows={4} spellCheck={false} className="w-full resize-y bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 font-mono text-[10px] text-amber-300 outline-none" placeholder={'{\n  "Authorization": "Bearer ..."\n}'} />
+                      {editingTool?.hasSecretConfiguration && <p className="mt-1 text-[9px] font-semibold text-slate-400">Leave this as {'{}'} to keep the existing encrypted secret headers.</p>}
                     </div>
 
                     <div>
@@ -4035,7 +4072,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   className="w-full py-2 bg-gradient-to-r from-violet-600 to-amber-500 hover:from-violet-700 hover:to-amber-600 disabled:cursor-not-allowed disabled:opacity-50 text-white rounded-lg text-xs font-bold transition shadow-sm flex items-center justify-center space-x-1"
                 >
                   <Plus className="w-3.5 h-3.5" />
-                  <span>{toolSaving ? 'Registering...' : 'Register Tool'}</span>
+                  <span>{toolSaving ? (editingTool ? 'Saving...' : 'Registering...') : (editingTool ? 'Save Tool' : 'Register Tool')}</span>
                 </button>
               </div>
               </div>
@@ -4079,6 +4116,10 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                         <TableActionsMenu
                           ariaLabel={`Actions for ${t.name}`}
                           actions={[
+                            {
+                              label: 'Edit',
+                              onClick: () => openToolEditor(t),
+                            },
                             {
                               label: toolStatusUpdatingId === t.id ? 'Updating...' : t.status === 'active' ? 'Deactivate' : 'Activate',
                               disabled: toolStatusUpdatingId === t.id,

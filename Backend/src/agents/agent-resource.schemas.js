@@ -28,6 +28,7 @@ export const createToolSchema=z.discriminatedUnion('type',[
   z.object({...commonToolFields,type:z.literal('webhook_api'),configuration:webhookToolConfigurationSchema.default({})}),
   z.object({...commonToolFields,type:z.enum(['calcom','hubspot','salesforce']),configuration:z.record(z.string(),z.unknown()).default({})}),
 ]);
+export const updateToolSchema=createToolSchema;
 export const testToolSchema=z.object({arguments:z.record(z.string(),z.unknown()).default({})}).strict();
 export const toolStatusSchema=z.object({status:z.enum(['active','inactive'])});
 export const createKnowledgeSchema=z.object({displayName:z.string().trim().min(1).max(240),fileName:z.string().trim().min(1).max(240),mimeType:z.enum(['application/pdf','text/plain','application/vnd.openxmlformats-officedocument.wordprocessingml.document']),sizeBytes:z.number().int().min(1).max(52_428_800),metadata:z.record(z.string(),z.unknown()).default({})});
