@@ -10,6 +10,7 @@ const {
   catalogIdentityDiscoveryPolicy,
   contextualRetrievalPolicy,
   callerMessageEligibleForDecision,
+  focusAuthoritativeCatalogEvidence,
   isolatedRetrievalQueries,
   mergeCandidateSignals,
   postIdentityContextPolicy,
@@ -125,6 +126,29 @@ assert.equal(rememberedCatalogIdentityCandidates([{
   knowledge_base_id: knowledgeBaseId,
   item_key: 'lungs-health-checkup', name: 'Lungs Health Checkup',
 }], [{ key: 'diabetes-health-checkup', name: 'Diabetes Health Checkup' }]).length, 0);
+
+const retainedRememberedEntity = prioritizeCandidates([{
+  recordType: 'FAQ', recordId: 'faq-1', knowledgeBaseId,
+  semanticScore: 0.9, score: 0.9, channels: ['semantic'],
+}], rememberedLungs, true, false, 5);
+assert.ok(retainedRememberedEntity.some((candidate) => (
+  candidate.recordId === rememberedLungs[0].recordId
+  && candidate.retrievalContext === 'contextual'
+)));
+const memoryFocusedEvidence = focusAuthoritativeCatalogEvidence([{
+  ...rememberedLungs[0], id: rememberedLungs[0].recordId,
+  callerFacing: true,
+  authoritativeData: {
+    itemKey: 'lungs-health-checkup', name: 'Lungs Health Checkup',
+  },
+}, {
+  id: 'faq-1', recordId: 'faq-1', recordType: 'FAQ', callerFacing: true,
+  content: 'A relevant primary fact.', retrievalContext: 'primary',
+}], {
+  knownEntities: [{ key: 'lungs-health-checkup', name: 'Lungs Health Checkup' }],
+}, 5);
+assert.ok(memoryFocusedEvidence.evidence.some((item) => item.recordId === 'faq-1'),
+  'memory hydration must not erase complementary latest-turn evidence');
 
 const strongExplicitItem = contextualRetrievalPolicy({
   pendingQuestion: 'Would you like another option?',

@@ -790,8 +790,12 @@ export function focusAuthoritativeCatalogEvidence(evidence = [], input = {}, max
   // caller-facing record (for example an item attribute and a stable policy).
   // Catalog focus establishes the primary entity but must not erase those
   // already-ranked complementary facts.
-  const preserveComplementaryFacts = Array.isArray(input.requestedFacts)
-    && new Set(input.requestedFacts.map(catalogValue).filter(Boolean)).size > 1;
+  const memoryResolvedCatalog = resolvedCatalog.some((item) => (
+    (item.channels ?? []).includes('conversation_memory')
+  ));
+  const preserveComplementaryFacts = memoryResolvedCatalog
+    || (Array.isArray(input.requestedFacts)
+      && new Set(input.requestedFacts.map(catalogValue).filter(Boolean)).size > 1);
   const complementaryCallerEvidence = preserveComplementaryFacts
     ? evidence.filter((item) => item.callerFacing === true
       && item.recordType !== 'CATALOG_ITEM'
@@ -1285,7 +1289,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
     })),
   });
-  const cacheKey = `zea:rag:hybrid:v14:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:v15:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();
@@ -1313,8 +1317,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   let catalogIdentityResolution = null;
   let catalogIdentities = [];
   let identityDiscoveryCandidates = [];
-  const rememberedEntityHydrationNeeded = contextPolicy.useContext
-    && (safeInput.knownEntities ?? []).length > 0;
+  const rememberedEntityHydrationNeeded = (safeInput.knownEntities ?? []).length > 0;
   if (catalogIdentityDiscoveryNeeded || rememberedEntityHydrationNeeded) {
     catalogIdentities = await abortable(deadline(
       loadCatalogIdentities({ ...auth, tenantId }, safeInput, scope, runtime),
@@ -1340,6 +1343,15 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   contextPolicy = postIdentityContextPolicy(
     contextPolicy, safeInput, query, strongPrimary, catalogIdentityResolution,
   );
+  const rememberedIdentityCandidates = catalogIdentityResolution?.status !== 'match'
+    ? rememberedCatalogIdentityCandidates(catalogIdentities, safeInput.knownEntities)
+    : [];
+  if (rememberedIdentityCandidates.length) {
+    const rememberedKeys = new Set(rememberedIdentityCandidates.map(candidateKey));
+    strongPrimary = strongPrimary.filter((candidate) => (
+      candidate.recordType !== 'CATALOG_ITEM' || rememberedKeys.has(candidateKey(candidate))
+    ));
+  }
   const contextualUsed = Boolean(queries.contextual) && contextPolicy.useContext;
   const contextualBranch = contextualUsed
     ? await retrieveBranch(
@@ -1360,10 +1372,6 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   // entity must hydrate that exact PostgreSQL record deterministically. Vector
   // and lexical retrieval still provide discovery/trace signals, but they do
   // not have to rediscover an identity already established in call memory.
-  const rememberedIdentityCandidates = contextPolicy.useContext
-    && catalogIdentityResolution?.status !== 'match'
-    ? rememberedCatalogIdentityCandidates(catalogIdentities, safeInput.knownEntities)
-    : [];
   if (rememberedIdentityCandidates.length) {
     const contextualByKey = new Map();
     for (const candidate of [...rememberedIdentityCandidates, ...strongContextual]) {
@@ -1374,10 +1382,11 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
     strongContextual = [...contextualByKey.values()].slice(0, 8)
       .map((candidate, index) => ({ ...candidate, rank: index + 1 }));
   }
+  const contextualEvidenceUsed = contextualUsed || rememberedIdentityCandidates.length > 0;
   let ranked = prioritizeCandidates(
     strongPrimary,
     strongContextual,
-    contextualUsed,
+    contextualEvidenceUsed,
     contextPolicy.preferContext,
     Math.max(8, Number(safeInput.topK ?? 5)),
   );
@@ -1553,7 +1562,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       lexicalCandidates: primaryBranch.lexical.length + contextualBranch.lexical.length,
       mergedCandidates: ranked.length, hydratedEvidence: evidence.length,
       weakCandidatesRejected,
-      contextualAvailable: Boolean(queries.contextual), contextualUsed,
+      contextualAvailable: Boolean(queries.contextual), contextualUsed: contextualEvidenceUsed,
       contextualPreferred: contextPolicy.preferContext,
       compactContextualTurn: contextPolicy.compactTurn,
       conflictDetected: evidenceConflict.detected,
