@@ -214,7 +214,28 @@ assert.equal(strongCallerMessageMatch(
   semanticLatestOverview,
   'What other packages do you have?',
   { knownEntities: [{ key: 'old-item', name: 'Old Item' }] },
-), false, 'semantic similarity alone must not override a selected entity');
+), false, 'semantic similarity without document-example alignment must not override an entity');
+const documentAlignedSemanticOverview = {
+  ...semanticLatestOverview,
+  authoritativeData: {
+    ...semanticLatestOverview.authoritativeData,
+    variables: semanticLatestOverview.authoritativeData.variables.map((variable) => (
+      variable.key === 'examples'
+        ? { ...variable, value: ['What other package options do you have?'] }
+        : variable
+    )),
+  },
+};
+assert.equal(strongCallerMessageMatch(
+  documentAlignedSemanticOverview,
+  'What other packages do you have?',
+  { knownEntities: [{ key: 'old-item', name: 'Old Item' }] },
+), true, 'semantic topic changes must align with tenant-published examples');
+assert.equal(strongCallerMessageMatch(
+  documentAlignedSemanticOverview,
+  'What tests are included in this package?',
+  { knownEntities: [{ key: 'old-item', name: 'Old Item' }] },
+), false, 'a contextual package fact request must retain the selected entity');
 const lexicalLatestOverview = {
   ...semanticLatestOverview,
   semanticScore: 0.7,

@@ -943,6 +943,23 @@ function publishedExampleMatch(evidence, query) {
   return examples.some((example) => normalize(example) === normalizedQuery);
 }
 
+function publishedExampleCoverage(evidence, query) {
+  const queryTokens = [...new Set(tokens(query))];
+  if (!queryTokens.length) return 0;
+  const configured = conversationVariable(evidence, 'examples');
+  const examples = Array.isArray(configured) ? configured : [configured];
+  const tokenMatches = (left, right) => left === right
+    || (Math.min(left.length, right.length) >= 4
+      && (left.includes(right) || right.includes(left)));
+  return Math.max(0, ...examples.map((example) => {
+    const exampleTokens = [...new Set(tokens(example))];
+    const matched = queryTokens.filter((queryToken) => (
+      exampleTokens.some((exampleToken) => tokenMatches(queryToken, exampleToken))
+    )).length;
+    return matched / queryTokens.length;
+  }));
+}
+
 export function strongCallerMessageMatch(evidence, query, input = {}) {
   if (evidence?.recordType !== 'CONVERSATION_NODE' || evidence?.callerFacing !== true
     || normalize(evidence.authoritativeData?.nodeType) !== 'message') return false;
@@ -964,6 +981,9 @@ export function strongCallerMessageMatch(evidence, query, input = {}) {
   const strongSemanticFloor = Math.min(0.98, Math.max(0.82, env.RAG_RUNTIME_MIN_SCORE + 0.08));
   const strongLexicalMessage = channels.has('bm25')
     && lexicalScore >= 4 && tokenCoverage >= 0.4;
+  const documentExampleCoverage = publishedExampleCoverage(evidence, query);
+  const documentAlignedSemanticMessage = channels.has('semantic')
+    && semanticScore >= strongSemanticFloor && documentExampleCoverage >= 0.45;
   const contextualLatestTurn = retrievalContext === 'contextual'
     && contextIsAvailable(input)
     && Boolean(String(input.pendingQuestion ?? '').trim());
@@ -975,7 +995,7 @@ export function strongCallerMessageMatch(evidence, query, input = {}) {
   // exact published example or strong lexical evidence for that override.
   const explicitMessageTopicChange = retrievalContext === 'primary'
     && context === 'no_selected_entity'
-    && (exactPublishedExample || strongLexicalMessage);
+    && (exactPublishedExample || strongLexicalMessage || documentAlignedSemanticMessage);
   if (selectedEntities.length > 0 && retrievalContext !== 'contextual'
     && !explicitMessageTopicChange) return false;
   if (context === 'no_selected_entity'
@@ -1300,7 +1320,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
     })),
   });
-  const cacheKey = `zea:rag:hybrid:v18:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:v19:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();
