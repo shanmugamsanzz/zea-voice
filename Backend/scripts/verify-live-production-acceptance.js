@@ -107,8 +107,26 @@ function verifyTurnExpectations({
   }
   if (catalogSources.length > 0) {
     const catalogRecordIds = new Set(catalogSources.map(sourceRecordId));
+    const citationDiagnostic = JSON.stringify({
+      expectedCatalogRecordIds: [...catalogRecordIds],
+      selectedRecordIds,
+      envelopeSources: (envelope?.sources ?? []).map((source) => ({
+        id: source.id,
+        recordId: sourceRecordId(source),
+        recordType: source.recordType,
+        itemKey: source.authoritativeData?.itemKey ?? null,
+        categoryKey: source.authoritativeData?.categoryKey ?? null,
+        retrievalContext: source.retrievalContext ?? null,
+        channels: source.channels ?? [],
+      })),
+      memory: {
+        selectedItemKey: memoryState.selectedCatalogItem?.key
+          ?? memoryState.selectedItem?.key ?? null,
+        knownEntityKeys: (memoryState.knownEntities ?? []).map((entity) => entity?.key),
+      },
+    });
     assert.ok(selectedRecordIds.some((id) => catalogRecordIds.has(id)),
-      `${label}: grounded decision did not cite the expected Catalog evidence`);
+      `${label}: grounded decision did not cite the expected Catalog evidence ${citationDiagnostic}`);
   }
   for (const source of catalogSources) {
     const data = source.authoritativeData ?? {};
