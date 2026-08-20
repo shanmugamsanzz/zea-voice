@@ -101,6 +101,49 @@ const catalogIdentitySql = `
    ORDER BY i.knowledge_base_id,i.display_order,i.id
    LIMIT 2000`;
 
+// Caller-facing message routing must not depend on a vector top-k hit. This
+// bounded projection contains only tenant-published routing metadata; any
+// matched ID is still passed through hydrateEvidenceSql before it can speak.
+const conversationMessageRouteSql = `
+  WITH requested_scope AS (
+    SELECT knowledge_base_id::uuid, publication_revision::int
+      FROM jsonb_to_recordset($4::jsonb)
+        AS scope(knowledge_base_id text, publication_revision int)
+  ), runtime_agent AS (
+    SELECT id, usage_direction FROM voice_agents
+     WHERE tenant_id=$1 AND id=$2 AND status='active' AND deleted_at IS NULL
+  ), assigned AS (
+    SELECT kb.id, kb.publication_revision
+      FROM runtime_agent a
+      JOIN agent_knowledge_bases akb ON akb.tenant_id=$1 AND akb.agent_id=a.id
+      JOIN knowledge_bases kb ON kb.tenant_id=akb.tenant_id AND kb.id=akb.knowledge_base_id
+      JOIN requested_scope rs
+        ON rs.knowledge_base_id=kb.id AND rs.publication_revision=kb.publication_revision
+     WHERE kb.status='published' AND kb.deleted_at IS NULL AND kb.publication_revision>0
+       AND (a.usage_direction='both' OR a.usage_direction=$3::agent_usage_direction)
+       AND (akb.usage_direction='both' OR akb.usage_direction=$3::agent_usage_direction)
+       AND (kb.usage_direction='both' OR kb.usage_direction=$3::agent_usage_direction)
+  )
+  SELECT 'conversation_route'::text AS projection_type,
+    f.id, f.node_key, f.node_type, f.content, f.variables, f.language,
+    f.knowledge_base_id, f.document_id, f.document_version_id,
+    a.publication_revision
+    FROM conversation_flows f
+    JOIN assigned a ON a.id=f.knowledge_base_id
+    JOIN knowledge_document_versions v
+      ON v.tenant_id=f.tenant_id AND v.knowledge_base_id=f.knowledge_base_id
+     AND v.document_id=f.document_id AND v.id=f.document_version_id
+    JOIN knowledge_documents d
+      ON d.tenant_id=f.tenant_id AND d.knowledge_base_id=f.knowledge_base_id
+     AND d.id=f.document_id
+   WHERE f.tenant_id=$1 AND f.status='approved'
+     AND lower(COALESCE(f.node_type,''))='message'
+     AND (f.usage_direction='both' OR f.usage_direction=$3::agent_usage_direction)
+     AND v.is_current=true AND v.status='ready' AND v.deleted_at IS NULL
+     AND d.status='ready' AND d.deleted_at IS NULL
+   ORDER BY f.knowledge_base_id,f.sequence_order,f.id
+   LIMIT 500`;
+
 // IDs selected by Qdrant/BM25 are never trusted as evidence. This query
 // rechecks tenant, agent assignment, active revision, current document version
 // and approval status before returning exact authoritative PostgreSQL rows.
@@ -979,6 +1022,32 @@ function publishedExampleCoverage(evidence, query) {
   }));
 }
 
+export function conversationMessageRouteCandidates(routes = [], query = '') {
+  return routes.map((route) => {
+    const authoritativeData = {
+      nodeKey: route.node_key,
+      nodeType: route.node_type,
+      content: route.content,
+      variables: route.variables,
+    };
+    const candidate = {
+      recordType: 'CONVERSATION_NODE', recordId: route.id,
+      knowledgeBaseId: route.knowledge_base_id,
+      publicationRevision: Number(route.publication_revision),
+      documentId: route.document_id, documentVersionId: route.document_version_id,
+      language: route.language ?? 'und', contentPreview: route.content ?? '',
+      callerFacing: true, authoritativeData,
+      semanticScore: 0, lexicalScore: 0, tokenCoverage: 0,
+      retrievalScore: 0, score: 0, rank: Number.MAX_SAFE_INTEGER,
+      channels: ['conversation_metadata'], retrievalContext: 'primary',
+    };
+    const coverage = publishedExampleCoverage(candidate, query);
+    return {
+      ...candidate, tokenCoverage: coverage, retrievalScore: coverage, score: coverage,
+    };
+  }).filter((candidate) => candidate.tokenCoverage >= 0.45);
+}
+
 export function selectedCatalogFactAligned(evidence = [], query = '', input = {}) {
   const selected = new Set((input.knownEntities ?? []).flatMap((entity) => [
     entity?.id, entity?.key, entity?.name,
@@ -1034,7 +1103,8 @@ export function strongCallerMessageMatch(evidence, query, input = {}) {
   // to document-owned routing metadata rather than application vocabulary.
   const documentMetadataMessage = retrievalContext === 'primary'
     && documentExampleCoverage >= 0.45
-    && (channels.has('semantic') || channels.has('bm25'));
+    && (channels.has('semantic') || channels.has('bm25')
+      || channels.has('conversation_metadata'));
   const contextualLatestTurn = retrievalContext === 'contextual'
     && contextIsAvailable(input)
     && Boolean(String(input.pendingQuestion ?? '').trim());
@@ -1121,6 +1191,28 @@ async function loadCatalogIdentities(auth, input, scope, runtime) {
   }));
   const rows = await runtime.contextRunner(auth, async (client) => {
     const result = await client.query(catalogIdentitySql, [
+      auth.tenantId, input.agentId, input.usageDirection, JSON.stringify(manifest),
+    ]);
+    return result.rows;
+  });
+  if (runtime.cache && (!runtime.cache.status || runtime.cache.status === 'ready')) {
+    void deadline(runtime.cache.set(cacheKey, JSON.stringify(rows)),
+      env.RAG_RUNTIME_CACHE_TIMEOUT_MS, null);
+  }
+  return rows;
+}
+
+async function loadConversationMessageRoutes(auth, input, scope, runtime) {
+  if (!scope.length) return [];
+  const revisions = scope.map((item) => `${item.id}:${item.publicationRevision}`).sort().join('|');
+  const cacheKey = `zea:rag:conversation-routes:${auth.tenantId}:${input.agentId}:${input.usageDirection}:${hash(revisions)}`;
+  const cached = await readJson(runtime.cache, cacheKey);
+  if (Array.isArray(cached)) return cached;
+  const manifest = scope.map((item) => ({
+    knowledge_base_id: item.id, publication_revision: Number(item.publicationRevision),
+  }));
+  const rows = await runtime.contextRunner(auth, async (client) => {
+    const result = await client.query(conversationMessageRouteSql, [
       auth.tenantId, input.agentId, input.usageDirection, JSON.stringify(manifest),
     ]);
     return result.rows;
@@ -1376,7 +1468,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
     })),
   });
-  const cacheKey = `zea:rag:hybrid:v25:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:v26:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();
@@ -1389,6 +1481,22 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
     durationMs: performance.now() - startedAt,
   };
   let strongPrimary = retainStrongCandidates(primaryBranch.ranked, query, 8);
+  const conversationRoutes = await abortable(deadline(
+    loadConversationMessageRoutes({ ...auth, tenantId }, safeInput, scope, runtime),
+    env.RAG_RUNTIME_CHANNEL_DEADLINE_MS, [],
+  ), input.abortSignal, []);
+  const routeCandidates = conversationMessageRouteCandidates(conversationRoutes, query);
+  const metadataCallerMessage = selectStrongCallerMessage(routeCandidates, query, safeInput);
+  if (metadataCallerMessage) {
+    const primaryByKey = new Map();
+    for (const candidate of [metadataCallerMessage, ...strongPrimary]) {
+      const key = candidateKey(candidate);
+      const current = primaryByKey.get(key);
+      primaryByKey.set(key, current ? mergeCandidateSignals(current, candidate) : candidate);
+    }
+    strongPrimary = [...primaryByKey.values()].slice(0, 8)
+      .map((candidate, index) => ({ ...candidate, rank: index + 1 }));
+  }
   // Resolve an immediately pending question before attempting noisy-STT
   // Catalog identity discovery. Otherwise a compact acknowledgement can be
   // mistaken for an unrelated entity and suppress its configured response.
@@ -1398,9 +1506,8 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   // resolves their canonical identity. Run that resolution for every genuine
   // latest-turn request, even when Qdrant already returned a strong Catalog
   // candidate, so all discovery channels enforce the same entity boundary.
-  const catalogIdentityDiscoveryNeeded = catalogIdentityDiscoveryPolicy(
-    query, pendingContextPreferred,
-  );
+  const catalogIdentityDiscoveryNeeded = !metadataCallerMessage
+    && catalogIdentityDiscoveryPolicy(query, pendingContextPreferred);
   let catalogIdentityResolution = null;
   let catalogIdentities = [];
   let identityDiscoveryCandidates = [];
@@ -1725,4 +1832,5 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
 
 export const hybridRetrievalSql = Object.freeze({
   activeScopeSql, hydrateEvidenceSql, catalogCategoryCandidatesSql, catalogIdentitySql,
+  conversationMessageRouteSql,
 });

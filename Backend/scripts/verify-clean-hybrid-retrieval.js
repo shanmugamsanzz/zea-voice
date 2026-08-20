@@ -26,6 +26,7 @@ const ids = {
   currentRequest: '60000000-0000-4000-8000-000000000006',
   staleContext: '60000000-0000-4000-8000-000000000007',
   contextualFollowUp: '60000000-0000-4000-8000-000000000008',
+  overview: '60000000-0000-4000-8000-000000000009',
 };
 
 const rows = new Map([
@@ -78,6 +79,19 @@ const rows = new Map([
     content: 'Express delivery arrives the next working day.', caller_facing: true,
     authoritative_data: { answer: 'Express delivery arrives the next working day.' },
   }],
+  [ids.overview, {
+    record_type: 'CONVERSATION_NODE', record_id: ids.overview, knowledge_base_id: kbA,
+    document_id: documentId, document_version_id: versionId, document_name: 'conversation.txt',
+    source_page_start: 1, source_page_end: 1, language: 'ta',
+    content: 'Published overview response.', caller_facing: true,
+    authoritative_data: {
+      nodeKey: 'complete_overview', nodeType: 'message', content: 'Published overview response.',
+      variables: [{
+        key: 'situation',
+        value: 'The caller asks for the complete package overview or all available options.',
+      }],
+    },
+  }],
 ]);
 
 const sparseIndex = {
@@ -120,7 +134,7 @@ function semanticPoint(recordId, recordType, {
   };
 }
 
-function dependencies({ points = [], slowEmbedding = false } = {}) {
+function dependencies({ points = [], slowEmbedding = false, conversationRoutes = [] } = {}) {
   const cache = new FakeRedis();
   return {
     cache, ragEnabled: true,
@@ -133,6 +147,9 @@ function dependencies({ points = [], slowEmbedding = false } = {}) {
             agent_usage: 'inbound',
             knowledge_bases: [{ id: kbA, publicationRevision: 3, priority: 1 }],
           }] };
+        }
+        if (text.includes("'conversation_route'::text AS projection_type")) {
+          return { rows: conversationRoutes };
         }
         assert.match(text, /jsonb_to_recordset/u);
         assert.equal(values[0], tenantA);
@@ -168,6 +185,24 @@ const paraphrase = await search('How do I find your workplace?', {
   points: [semanticPoint(ids.location, 'FAQ')],
 });
 assert.equal(paraphrase.sources[0].content, 'The office is beside Central Station.');
+
+const deterministicOverview = await search(
+  'Could you give me a complete overview of the available health screening options?',
+  {
+    conversationRoutes: [{
+      id: ids.overview, node_key: 'complete_overview', node_type: 'message',
+      content: 'Published overview response.',
+      variables: [{
+        key: 'situation',
+        value: 'The caller asks for the complete package overview or all available options.',
+      }],
+      language: 'ta', knowledge_base_id: kbA, document_id: documentId,
+      document_version_id: versionId, publication_revision: 3,
+    }],
+  },
+);
+assert.equal(deterministicOverview.directResponse?.recordId, ids.overview,
+  'published Conversation metadata must route an unseen English overview without a vector hit');
 
 const assignmentChangedAfterPublish = await search('How do I find your workplace?', {
   points: [semanticPoint(ids.location, 'FAQ', { assignedAgentIds: [previouslyAssignedAgent] })],
