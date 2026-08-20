@@ -496,8 +496,8 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
   const requiredEvidenceIds = decision === 'answer' && parsed.responseId === null
     ? list(runtime.requiredEvidenceIds, maximumSources) : [];
   const evidenceIds = list([
-    ...(Array.isArray(parsed.evidenceIds) ? parsed.evidenceIds : []),
     ...requiredEvidenceIds,
+    ...(Array.isArray(parsed.evidenceIds) ? parsed.evidenceIds : []),
   ], maximumSources);
   const citedSources = [];
   const seenSources = new Set();

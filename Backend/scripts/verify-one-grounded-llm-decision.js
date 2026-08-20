@@ -146,7 +146,8 @@ const runtimeRequiredCatalogEvidence = validateGroundedLlmDecision(decisionJson(
   stateUpdate: { contextDependent: true }, pendingQuestion: null, toolRequest: null,
 }), envelope, { ...runtime, requiredEvidenceIds: ['source_1'] });
 assert.equal(runtimeRequiredCatalogEvidence.valid, true);
-assert.deepEqual(runtimeRequiredCatalogEvidence.evidenceIds, ['source_2', 'source_1']);
+assert.deepEqual(runtimeRequiredCatalogEvidence.evidenceIds, ['source_1', 'source_2'],
+  'runtime-required canonical evidence must take priority over model-selected evidence');
 
 const invalidMeaning = validateGroundedLlmDecision(decisionJson({
   decision: 'answer', answer: 'The office is on Central Road.', evidenceIds: ['source_2'],

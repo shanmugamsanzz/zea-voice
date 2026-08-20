@@ -98,6 +98,22 @@ function primaryCatalogEntities(evidence = []) {
     .filter(Boolean);
 }
 
+function exactPrimaryCatalogSource(envelope, evidence = []) {
+  const exactRecordIds = [...new Set(evidence.filter((source) => (
+    String(source?.recordType ?? '').toLocaleUpperCase() === 'CATALOG_ITEM'
+    && String(source?.retrievalContext ?? '').toLocaleLowerCase() === 'primary'
+    && (source?.channels ?? []).includes('catalog_identity')
+  )).map((source) => source.recordId).filter(Boolean))];
+  // One exact identity is an item selection. Multiple identity rows represent
+  // a category and must remain a caller/model choice instead of arbitrarily
+  // forcing one child item.
+  if (exactRecordIds.length !== 1) return null;
+  return (envelope.sources ?? []).find((source) => (
+    String(source?.recordType ?? '').toLocaleUpperCase() === 'CATALOG_ITEM'
+    && source.recordId === exactRecordIds[0]
+  )) ?? null;
+}
+
 function rememberedCatalogSource(envelope, beforeState, evidence = []) {
   const currentSelection = beforeState.selectedCatalogItem ?? beforeState.selectedItem ?? null;
   const rememberedEntities = currentSelection ? [currentSelection] : (beforeState.knownEntities ?? []);
@@ -170,6 +186,8 @@ export function applyUnifiedGroundedTurn({
   const beforeState = memory.snapshot();
   const hydratedEnvelope = hydrateGroundingEnvelope(groundingEnvelope, evidence);
   const rememberedSource = rememberedCatalogSource(hydratedEnvelope, beforeState, evidence);
+  const requiredCatalogSource = exactPrimaryCatalogSource(hydratedEnvelope, evidence)
+    ?? rememberedSource;
   const runtime = {
     fieldSchemas,
     toolSchemas: tools.map((tool) => ({
@@ -179,7 +197,7 @@ export function applyUnifiedGroundedTurn({
         ?? tool.configuration?.input_schema ?? { type: 'object', properties: {} },
     })),
     activeToolRequest: memory.snapshot().activeToolRequest,
-    requiredEvidenceIds: rememberedSource ? [rememberedSource.id] : [],
+    requiredEvidenceIds: requiredCatalogSource ? [requiredCatalogSource.id] : [],
   };
   const validatedDecision = validateGroundedLlmDecision(rawDecision, hydratedEnvelope, runtime);
   if (!validatedDecision.valid) {

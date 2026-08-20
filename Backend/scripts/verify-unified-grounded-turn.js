@@ -368,6 +368,48 @@ assert.equal(rememberedCitationTurn.valid, true);
 assert.ok(rememberedCitationTurn.evidenceIds.includes('catalog-source'),
   'a contextual fact answer must retain its canonical memory-selected Catalog citation');
 
+const exactCatalogMemory = openGenericConversationState({
+  tenantId: 'tenant-a', workspaceId: 'workspace-a', agentId: 'agent-a',
+  callId: 'exact-catalog-citation-call',
+});
+exactCatalogMemory.beginTurn('exact-catalog-citation-turn');
+const exactCatalogCitationTurn = applyUnifiedGroundedTurn({
+  rawDecision: unifiedDecision({
+    decision: 'answer', answer: catalogEvidence.content,
+    evidenceIds: ['duplicate-fact-source'],
+    stateUpdate: { collectedInformation: {}, correctedFields: [], contextDependent: false },
+    pendingQuestion: null, toolRequest: null,
+  }),
+  groundingEnvelope: {
+    found: true,
+    sources: [
+      {
+        id: 'catalog-source', recordId: catalogEvidence.recordId,
+        recordType: catalogEvidence.recordType, content: catalogEvidence.content,
+        authoritativeData: catalogEvidence.authoritativeData,
+      },
+      {
+        id: 'duplicate-fact-source', recordId: duplicateFactEvidence.recordId,
+        recordType: duplicateFactEvidence.recordType, content: duplicateFactEvidence.content,
+      },
+    ],
+    entities: [{
+      id: catalogEvidence.recordId, key: 'current-service', name: 'Current Service',
+      category: 'Services', categoryKey: 'services', sourceId: 'catalog-source',
+    }],
+  },
+  memory: exactCatalogMemory, turnToken: 'exact-catalog-citation-turn',
+  evidence: [
+    { ...catalogEvidence, retrievalContext: 'primary', channels: ['catalog_identity'] },
+    duplicateFactEvidence,
+  ],
+  finalizedUtterance: 'Explain Current Service.',
+});
+assert.equal(exactCatalogCitationTurn.valid, true);
+assert.ok(exactCatalogCitationTurn.evidenceIds.includes('catalog-source'),
+  'an exact latest-turn Catalog identity must always retain its canonical citation');
+exactCatalogMemory.close();
+
 catalogMemory.beginTurn('stale-catalog-turn');
 const staleContextEvidence = {
   ...catalogEvidence, retrievalContext: 'contextual',
