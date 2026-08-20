@@ -74,6 +74,18 @@ function verifiedOutcome(output) {
 
 export async function executeAgentTool(runtimeProfile, call, toolCall, dependencies = {}) {
   const startedAt = performance.now();
+  const authorizationRecordId = String(toolCall?.authorizationRecordId ?? '').trim();
+  const executionAuthorization = dependencies.workflowAuthorization ?? {};
+  const workflowAuthorized = authorizationRecordId
+    && authorizationRecordId === String(executionAuthorization.recordId ?? '').trim()
+    && safeName(toolCall?.name) === safeName(executionAuthorization.toolName);
+  if (dependencies.requireWorkflowAuthorization === true && !workflowAuthorized) {
+    throw new AppError(
+      409,
+      'The configured Workflow did not authorize this tool execution',
+      'VOICE_TOOL_WORKFLOW_AUTHORIZATION_REQUIRED',
+    );
+  }
   const tool = (runtimeProfile.tools ?? []).find((candidate) => safeName(candidate.name) === safeName(toolCall.name));
   if (!tool) throw new AppError(409, `Requested tool is not assigned to this agent: ${toolCall.name}`, 'VOICE_TOOL_NOT_ASSIGNED');
   const config = await configuration(tool, dependencies);

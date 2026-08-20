@@ -30,13 +30,13 @@ function normalizeMode(value, strict) {
 }
 
 function normalizeField(input, index, strict) {
-  const key = cleanText(input?.key, 64).toLowerCase();
+  const key = cleanText(input?.key, 64);
   const label = cleanText(input?.label, 100);
   const type = cleanText(input?.type, 20).toLowerCase() || 'text';
   const question = cleanText(input?.question, 500);
   const requiredAction = cleanText(input?.requiredAction, 80).toLowerCase();
-  if (!/^[a-z][a-z0-9_]{0,63}$/.test(key)) {
-    if (strict) throw configurationError('Information field keys must use lowercase letters, numbers and underscores', `conversationMemoryFields.${index}.key`);
+  if (!/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(key)) {
+    if (strict) throw configurationError('Information field keys must use letters, numbers and underscores', `conversationMemoryFields.${index}.key`);
     return null;
   }
   if (!label) {

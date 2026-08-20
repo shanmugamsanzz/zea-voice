@@ -62,6 +62,7 @@ import {
 import { sttEventPolicy } from './interaction/stt-event-policy.js';
 import { LiveMemoryMaintenanceQueue } from './interaction/live-memory-maintenance.js';
 import { resolveCallbackConfiguration } from './interaction/callback-config.js';
+import { mergeToolFieldSchemas } from './interaction/tool-field-schema.js';
 import {
   createTaskCompletionState,
 } from './interaction/task-completion-state.js';
@@ -442,9 +443,14 @@ export class RealtimeConversationOrchestrator {
       agentId: this.runtimeProfile.agent.id ?? this.call.agentId,
       callId: this.call.id,
     };
+    const assignedToolSchemas = runtimeTools(this.runtimeProfile.tools);
     const memorySettings = {
       ...this.runtimeProfile.agent.settings,
       conversationLanguage: languageCode(this.runtimeProfile.agent.language),
+      conversationMemoryFields: mergeToolFieldSchemas(
+        this.runtimeProfile.agent.settings?.conversationMemoryFields,
+        assignedToolSchemas,
+      ),
     };
     const restoredMemory = this.previousConversationMemory?.lastCall?.id === this.call.id
       ? this.previousConversationMemory.callFrame : {};
@@ -1958,6 +1964,7 @@ export class RealtimeConversationOrchestrator {
             id: `decision-${streaming.epoch ?? Date.now()}`,
             name: grounded.toolRequest.name,
             arguments: grounded.toolRequest.arguments,
+            authorizationRecordId: grounded.state?.activeToolRequest?.authorizationRecordId ?? null,
           }];
           answer = '';
         } else answer = grounded.answer ?? grounded.spokenAnswer;
@@ -2539,11 +2546,19 @@ export class RealtimeConversationOrchestrator {
         id: primaryToolCall?.id,
         name: primaryToolCall?.name,
         status: 'executing',
+        authorizationRecordId: primaryToolCall?.authorizationRecordId ?? null,
       });
       let toolResults;
       try {
         toolResults = await (this.dependencies.executeTools ?? executeAgentTools)(
-          this.runtimeProfile, this.call, response.toolCalls, { fetchImpl: this.dependencies.fetchImpl },
+          this.runtimeProfile, this.call, response.toolCalls, {
+            fetchImpl: this.dependencies.fetchImpl,
+            requireWorkflowAuthorization: true,
+            workflowAuthorization: {
+              recordId: primaryToolCall?.authorizationRecordId ?? null,
+              toolName: primaryToolCall?.name ?? null,
+            },
+          },
         );
       } catch (error) {
         this.liveCallMemory?.setActiveToolRequest?.(null);

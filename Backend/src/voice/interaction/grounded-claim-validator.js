@@ -86,6 +86,12 @@ const medicalAdvice = Object.freeze({
   start: /\b(?:start|take|increase|recommend|prescribe)\b[^.!?]{0,80}\b(?:medicine|medication|tablet|dose|dosage|drug|treatment)\b/iu,
   stop: /\b(?:stop|avoid|decrease|change)\b[^.!?]{0,80}\b(?:medicine|medication|tablet|dose|dosage|drug|treatment)\b/iu,
 });
+const unsupportedRecommendationPattern = /(?:\b(?:recommend(?:ed|ation)?|best|ideal|appropriate|suitable)\b|\bright\s+(?:choice|option|fit)\b|\bshould\s+(?:choose|select|book|take|use|go\s+for)\b|\b(?:choose|select|book|take|use)\s+this\b|\b(?:recommend|suitable|best)\s+(?:pann|aag|irukk)\b)/iu;
+const recommendationRefusalPattern = /(?:\b(?:cannot|can't|can\s+not|do\s+not|don't|unable\s+to|not\s+able\s+to)\s+(?:recommend|determine|say|choose|select)\b|\bnot\s+(?:enough|authorized)\s+(?:information\s+)?to\s+(?:recommend|determine|choose|select)\b)/iu;
+const medicalConcernPattern = /(?:\b(?:symptom|pain|fever|cough|breath(?:ing|lessness)?|condition|disease|diagnos|medical|health\s+(?:issue|problem|concern))\b|\b(?:vali|kaichal|irumal|moochu|udambu)\b|\u0BA8\u0BCB\u0BAF\u0BCD|\u0BB5\u0BB2\u0BBF|\u0B95\u0BBE\u0BAF\u0BCD\u0B9A\u0BCD\u0B9A\u0BB2\u0BCD|\u0B87\u0BB0\u0BC1\u0BAE\u0BB2\u0BCD|\u0BAE\u0BC2\u0B9A\u0BCD\u0B9A\u0BC1)/iu;
+const explicitRecommendationSupportPattern = /(?:\b(?:recommend(?:ed|ation)?|suitable|suitability|appropriate|eligib(?:le|ility)|selection\s+rule|best\s+for|intended\s+for)\b|\b(?:recommend|suitable)\s+(?:pann|aag|irukk)\b)/iu;
+const negativeFactPattern = /(?:\b(?:is|are|was|were)\s+not\s+(?:available|included|offered|provided|supported|selectable)\b|\b(?:does|do|did)\s+not\s+(?:include|offer|provide|support|allow)\b|\bwithout\s+(?:a\s+)?(?:test|service|consultation|benefit|feature)\b|\b(?:unavailable|excluded|unsupported|not\s+selectable)\b|\b(?:available|include|offer|provide|support)\s+(?:illa|illai|kidayathu)\b|\u0B87\u0BB2\u0BCD\u0BB2\u0BC8|\u0B95\u0BBF\u0B9F\u0BC8\u0BAF\u0BBE\u0BA4\u0BC1)/iu;
+const positiveFactPattern = /(?:\b(?:is|are|was|were)\s+(?:available|included|offered|provided|supported|selectable)\b|\b(?:includes?|offers?|provides?|supports?|allows?)\b|\b(?:available|include|offer|provide|support)\s+(?:irukku|undu|yes)\b|\u0B95\u0BBF\u0B9F\u0BC8\u0B95\u0BCD\u0B95\u0BC1\u0BAE\u0BCD|\u0B89\u0BB3\u0BCD\u0BB3\u0BA4\u0BC1)/iu;
 
 function unsupportedStructuredIdentifiers(claim, evidenceText) {
   const evidence = new Set((String(evidenceText).match(/\b[A-Z][A-Z0-9-]{1,}\b/gu) ?? [])
@@ -169,11 +175,32 @@ export function validateGroundedClaim(sentence, sources = [], options = {}) {
   if (!typesSupportedByEvidence(medicalAdviceTypes, evidenceText, medicalAdvice)) {
     return Object.freeze({ valid: false, reason: 'unsupported_medical_advice' });
   }
+  const makesRecommendation = unsupportedRecommendationPattern.test(claim)
+    && !recommendationRefusalPattern.test(claim);
+  if (makesRecommendation
+    && medicalConcernPattern.test(text(options.finalizedUtterance))) {
+    const explicitlySupported = explicitRecommendationSupportPattern.test(evidenceText);
+    if (!explicitlySupported) {
+      return Object.freeze({ valid: false, reason: 'unsupported_suitability_recommendation' });
+    }
+  }
+  if (makesRecommendation
+    && !explicitRecommendationSupportPattern.test(evidenceText)) {
+    return Object.freeze({ valid: false, reason: 'unsupported_recommendation' });
+  }
+  if (negativeFactPattern.test(claim) && !negativeFactPattern.test(evidenceText)) {
+    return Object.freeze({ valid: false, reason: 'unsupported_claim_polarity' });
+  }
+  if (positiveFactPattern.test(claim) && negativeFactPattern.test(evidenceText)
+    && !positiveFactPattern.test(evidenceText)) {
+    return Object.freeze({ valid: false, reason: 'unsupported_claim_polarity' });
+  }
   return Object.freeze({
     valid: true,
     validatedBy: Object.freeze([
       'selected_evidence', 'canonical_entities', 'exact_numbers',
-      'catalog_attributes', 'medical_policy', 'action_authorization',
+      'catalog_attributes', 'claim_polarity', 'recommendation_policy',
+      'medical_policy', 'action_authorization',
     ]),
   });
 }

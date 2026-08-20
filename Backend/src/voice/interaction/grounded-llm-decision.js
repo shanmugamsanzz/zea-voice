@@ -8,6 +8,8 @@ const repairableDecisionReasons = new Set([
   'invalid_json', 'invalid_response_shape', 'invalid_clarification',
   'answer_required', 'unsupported_numeric_fact',
   'unsupported_structured_fact', 'unsupported_technical_term',
+  'unsupported_claim_polarity', 'unsupported_recommendation',
+  'unsupported_suitability_recommendation',
 ]);
 
 export function isRepairableGroundedDecisionReason(reason) {
@@ -318,6 +320,8 @@ export function groundedDecisionContract(envelope, runtime = {}) {
       'Use action only for one configured tool and never claim success before its verified result.',
       'Never request or collect a configured information field unless the caller explicitly requested the assigned action and the selected Workflow evidence authorizes that tool.',
       'Use only evidenceIds listed below for factual speech.',
+      'Do not recommend or claim that an item is suitable for symptoms, conditions, or personal needs unless the selected evidence explicitly authorizes that recommendation.',
+      'When a safety-sensitive request requires authorized human support, use only the configured tool authorized by selected Workflow evidence; otherwise give a grounded limitation without inventing an action.',
       'Set responseId only when selecting one exact caller-facing published response; otherwise use null.',
       'When multiple exact caller-facing responses are available, select by the meaning of the complete latest utterance together with the immediately pending question and each source situation/context. A short contextual answer resolves the pending question; do not reinterpret it as a presence check unless that is its complete meaning.',
       'For clarify, set clarification.reason and pendingQuestion. For answer or action, clarification must be null.',

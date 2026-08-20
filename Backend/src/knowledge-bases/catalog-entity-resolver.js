@@ -104,6 +104,9 @@ function tokenCoverage(sourceTokens, targetTokens) {
 function tokenEvidence(queryTokens, labelTokens) {
   const query = tokenCoverage(queryTokens, labelTokens);
   const label = tokenCoverage(labelTokens, queryTokens);
+  const firstMatchedQueryIndex = queryTokens.findIndex((queryToken) => labelTokens.some(
+    (labelToken) => tokenSimilarity(queryToken, labelToken).score >= 0.72,
+  ));
   return {
     matchedQueryTokens: query.matched,
     queryTokenCount: queryTokens.length,
@@ -111,6 +114,8 @@ function tokenEvidence(queryTokens, labelTokens) {
     matchedLabelTokens: label.matched,
     labelTokenCount: labelTokens.length,
     labelCoverage: label.coverage,
+    firstMatchedQueryIndex: firstMatchedQueryIndex < 0
+      ? Number.MAX_SAFE_INTEGER : firstMatchedQueryIndex,
   };
 }
 
@@ -118,12 +123,27 @@ export function catalogLabelSimilarity(query, label) {
   const normalizedQuery = normalizeCatalogEntityText(query);
   const normalizedLabel = normalizeCatalogEntityText(label);
   if (!normalizedQuery || !normalizedLabel) return { score: 0, method: 'none' };
-  const queryTokens = meaningfulTokens(normalizedQuery);
+  const rawQueryTokens = meaningfulTokens(normalizedQuery);
   const labelTokens = meaningfulTokens(normalizedLabel);
+  // Mixed-language callers commonly surround a tenant-owned Latin identity
+  // with natural-language filler in another script. Compare coverage within
+  // the label's script so those words do not weaken an otherwise explicit
+  // identity, while still accounting for additional same-script qualifiers
+  // such as a more specific product or category name.
+  const labelIsLatin = labelTokens.some((token) => /[a-z]/u.test(token));
+  const queryTokens = labelIsLatin
+    ? rawQueryTokens.filter((token) => /[a-z0-9]/u.test(token))
+    : rawQueryTokens;
   const evidence = tokenEvidence(queryTokens, labelTokens);
   if (normalizedQuery === normalizedLabel) return { score: 1, method: 'normalized', ...evidence };
   if (` ${normalizedQuery} `.includes(` ${normalizedLabel} `)) {
-    return { score: 0.99, method: 'normalized', ...evidence };
+    // A contained label is not automatically the most specific identity.
+    // Account for other same-script identity words in the request so a broad
+    // category alias cannot outrank a more specific uploaded item/category.
+    const score = labelIsLatin
+      ? Math.min(0.99, 0.72 + evidence.queryCoverage * 0.27)
+      : 0.99;
+    return { score, method: 'normalized', ...evidence };
   }
   if (normalizedQuery.length >= 3 && ` ${normalizedLabel} `.includes(` ${normalizedQuery} `)) {
     return { score: 0.94, method: 'normalized', ...evidence };
@@ -292,6 +312,8 @@ export function rankCatalogEntities(items, query) {
     .filter((candidate) => candidate.score > 0)
     .sort((left, right) => Number(right.exactLabel) - Number(left.exactLabel)
       || right.score - left.score
+      || Number(left.firstMatchedQueryIndex ?? Number.MAX_SAFE_INTEGER)
+        - Number(right.firstMatchedQueryIndex ?? Number.MAX_SAFE_INTEGER)
       || (left.entityType === right.entityType ? 0 : (left.entityType === 'item' ? -1 : 1))
       || String(left.item?.id ?? left.category).localeCompare(String(right.item?.id ?? right.category)));
 }
@@ -418,7 +440,15 @@ export function resolveCatalogEntityLocally(items, query, {
 export function resolveCatalogEntitiesLocally(items, query, { minimumConfidence = 0.86 } = {}) {
   const seen = new Set();
   return rankCatalogEntities(items, query)
-    .filter((candidate) => candidate.entityType === 'item' && candidate.score >= minimumConfidence)
+    .filter((candidate) => candidate.entityType === 'item'
+      && (candidate.score >= minimumConfidence
+        // A comparison naturally divides query coverage between two or more
+        // explicit names. Accept a complete normalized name/key/alias match
+        // even when other named entities lower its whole-query score.
+        || (candidate.method === 'normalized'
+          && ['name', 'item_key', 'alias'].includes(candidate.matchedKind)
+          && Number(candidate.labelCoverage ?? 0) >= 0.8
+          && Number(candidate.matchedQueryTokens ?? 0) >= 1)))
     .filter((candidate) => {
       const id = String(candidate.item.id);
       if (seen.has(id)) return false;
@@ -426,8 +456,9 @@ export function resolveCatalogEntitiesLocally(items, query, { minimumConfidence 
       return true;
     })
     .map((candidate) => ({
-      entityType: 'item', item: candidate.item,
+      status: 'match', entityType: 'item', item: candidate.item,
       confidence: Math.round(candidate.score * 10000) / 10000,
       method: candidate.method, matchedText: candidate.matchedText,
+      matchedKind: candidate.matchedKind,
     }));
 }

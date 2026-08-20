@@ -11,7 +11,9 @@ import {
 import { requireTenantId } from '../rag/tenant-isolation.js';
 import { sparseIndexCacheKey } from './knowledge-map.service.js';
 import { latestTurnWorkflowActivation } from './workflow-activation-policy.js';
-import { classifyCatalogEntityLocally } from './catalog-entity-resolver.js';
+import {
+  classifyCatalogEntityLocally, resolveCatalogEntitiesLocally,
+} from './catalog-entity-resolver.js';
 
 const recordTypes = Object.freeze([
   'CATALOG_ITEM', 'WORKFLOW_RULE', 'CONVERSATION_NODE', 'FAQ', 'KNOWLEDGE_CHUNK',
@@ -762,6 +764,12 @@ export function focusAuthoritativeCatalogEvidence(evidence = [], input = {}, max
     entity?.key, entity?.name, entity?.category, entity?.categoryKey,
   ]).map(catalogValue).filter(Boolean);
   const selectedSet = new Set(selected);
+  const explicitlyResolvedIds = new Set(
+    (input.explicitCatalogRecordIds ?? []).map(catalogValue).filter(Boolean),
+  );
+  const explicitlyResolved = catalog.filter((item) => explicitlyResolvedIds.has(
+    catalogValue(item.recordId),
+  ));
   const exactSelected = catalog.filter((item) => {
     const data = item.authoritativeData ?? {};
     return [data.itemKey, data.name].map(catalogValue).some((value) => selectedSet.has(value));
@@ -787,7 +795,12 @@ export function focusAuthoritativeCatalogEvidence(evidence = [], input = {}, max
   }
 
   let resolvedCatalog;
-  if (topPrimaryCatalog) {
+  if (explicitlyResolved.length) {
+    // The latest finalized utterance explicitly named these canonical records.
+    // Preserve all of them for comparisons and never let stale call memory
+    // collapse the set back to a previously selected item.
+    resolvedCatalog = explicitlyResolved;
+  } else if (topPrimaryCatalog) {
     const data = topPrimaryCatalog.authoritativeData ?? {};
     const queryTokens = new Set(tokens(input.latestCallerUtterance ?? input.query));
     const overlap = (values) => new Set(values.flatMap((value) => tokens(value)))
@@ -1059,6 +1072,7 @@ export function selectedCatalogFactAligned(evidence = [], query = '', input = {}
 export function strongCallerMessageMatch(evidence, query, input = {}) {
   if (evidence?.recordType !== 'CONVERSATION_NODE' || evidence?.callerFacing !== true
     || normalize(evidence.authoritativeData?.nodeType) !== 'message') return false;
+  if (input.catalogIdentityResolved === true || input.catalogIdentityDetected === true) return false;
   const situation = normalize(conversationVariable(evidence, 'situation'));
   if (!situation) return false;
   const context = normalize(conversationVariable(evidence, 'context') ?? 'any')
@@ -1070,6 +1084,18 @@ export function strongCallerMessageMatch(evidence, query, input = {}) {
   ];
   const retrievalContext = evidence.retrievalContext ?? 'primary';
   const exactPublishedExample = publishedExampleMatch(evidence, query);
+  const queryTokens = tokens(query);
+  const situationTokens = tokens(situation);
+  const compactSituationAligned = queryTokens.some((queryToken) => situationTokens.some(
+    (situationToken) => queryToken === situationToken
+      || (Math.min(queryToken.length, situationToken.length) >= 4
+        && (queryToken.includes(situationToken) || situationToken.includes(queryToken))),
+  ));
+  // A short acknowledgement such as an uploaded "yes" example is incomplete
+  // without the question it answers. Keep self-contained short requests valid
+  // when their words also align with the uploaded situation metadata.
+  if (queryTokens.length <= 2 && !String(input.pendingQuestion ?? '').trim()
+    && !compactSituationAligned) return false;
   const semanticScore = Number(evidence.semanticScore ?? 0);
   const lexicalScore = Number(evidence.lexicalScore ?? 0);
   const tokenCoverage = Number(evidence.tokenCoverage ?? 0);
@@ -1101,11 +1127,10 @@ export function strongCallerMessageMatch(evidence, query, input = {}) {
   const explicitMessageTopicChange = retrievalContext === 'primary'
     && context === 'no_selected_entity'
     && input.selectedCatalogFactAligned !== true
+    && (selectedEntities.length === 0 || tokens(query).length >= 3)
     && (exactPublishedExample || documentAlignedSemanticMessage
       || documentMetadataMessage
       || (strongLexicalMessage && documentExampleCoverage >= 0.3));
-  if (selectedEntities.length > 0 && retrievalContext !== 'contextual'
-    && !explicitMessageTopicChange) return false;
   if (context === 'no_selected_entity'
     && (input.selectedCatalogItemKey || selectedEntities.length > 0)
     && !explicitMessageTopicChange) return false;
@@ -1266,6 +1291,11 @@ export function callerMessageEligibleForDecision(evidence, query, input = {}) {
     ...(Array.isArray(input.understanding?.selectedEntities)
       ? input.understanding.selectedEntities : []),
   ];
+  if (input.catalogIdentityResolved === true || input.catalogIdentityDetected === true) return false;
+  // Catalog owns entity-specific facts. Once the latest finalized utterance
+  // resolves an uploaded item/category, a generic Conversation message cannot
+  // replace it—even if that message contains broad words such as "details" or
+  // "options". Applicability is evaluated again on a later non-Catalog turn.
   if (context === 'no_selected_entity'
     && (input.selectedCatalogItemKey || selectedEntities.length > 0)) return false;
   if (context === 'pending_question' && !String(input.pendingQuestion ?? '').trim()) return false;
@@ -1452,7 +1482,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
     })),
   });
-  const cacheKey = `zea:rag:hybrid:v28:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:v29:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();
@@ -1474,17 +1504,6 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   };
   let strongPrimary = retainStrongCandidates(primaryBranch.ranked, query, 8);
   const routeCandidates = conversationMessageRouteCandidates(conversationRoutes, query);
-  const metadataCallerMessage = selectStrongCallerMessage(routeCandidates, query, safeInput);
-  if (metadataCallerMessage) {
-    const primaryByKey = new Map();
-    for (const candidate of [metadataCallerMessage, ...strongPrimary]) {
-      const key = candidateKey(candidate);
-      const current = primaryByKey.get(key);
-      primaryByKey.set(key, current ? mergeCandidateSignals(current, candidate) : candidate);
-    }
-    strongPrimary = [...primaryByKey.values()].slice(0, 8)
-      .map((candidate, index) => ({ ...candidate, rank: index + 1 }));
-  }
   // Resolve an immediately pending question before attempting noisy-STT
   // Catalog identity discovery. Otherwise a compact acknowledgement can be
   // mistaken for an unrelated entity and suppress its configured response.
@@ -1494,11 +1513,13 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   // resolves their canonical identity. Run that resolution for every genuine
   // latest-turn request, even when Qdrant already returned a strong Catalog
   // candidate, so all discovery channels enforce the same entity boundary.
-  const catalogIdentityDiscoveryNeeded = !metadataCallerMessage
-    && catalogIdentityDiscoveryPolicy(query, pendingContextPreferred);
+  const catalogIdentityDiscoveryNeeded = catalogIdentityDiscoveryPolicy(
+    query, pendingContextPreferred,
+  );
   let catalogIdentityResolution = null;
   const catalogIdentities = loadedCatalogIdentities;
   let identityDiscoveryCandidates = [];
+  let explicitCatalogRecordIds = [];
   const rememberedEntityHydrationNeeded = (safeInput.knownEntities ?? []).length > 0;
   if (catalogIdentityDiscoveryNeeded || rememberedEntityHydrationNeeded) {
     if (catalogIdentityDiscoveryNeeded) {
@@ -1509,7 +1530,12 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       if (!identityOverridesMemory && rememberedEntityHydrationNeeded) {
         catalogIdentityResolution = null;
       }
-      identityDiscoveryCandidates = catalogIdentityCandidates(catalogIdentityResolution);
+      const explicitItems = resolveCatalogEntitiesLocally(catalogIdentities, query);
+      const multipleExplicitItems = explicitItems.length > 1 ? explicitItems : [];
+      const identityResolutions = multipleExplicitItems.length
+        ? multipleExplicitItems : [catalogIdentityResolution].filter(Boolean);
+      identityDiscoveryCandidates = identityResolutions.flatMap(catalogIdentityCandidates);
+      explicitCatalogRecordIds = identityDiscoveryCandidates.map((candidate) => candidate.recordId);
     }
     if (identityDiscoveryCandidates.length) {
       const uniquePrimary = new Map();
@@ -1522,12 +1548,29 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
         .map((candidate, index) => ({ ...candidate, rank: index + 1 }));
     }
   }
+  const catalogIdentityResolved = explicitCatalogRecordIds.length > 0;
+  const catalogIdentityDetected = catalogIdentityResolved
+    || ['match', 'uncertain'].includes(catalogIdentityResolution?.status);
+  const metadataCallerMessage = selectStrongCallerMessage(routeCandidates, query, {
+    ...safeInput, catalogIdentityResolved, catalogIdentityDetected,
+  });
+  if (metadataCallerMessage) {
+    const primaryByKey = new Map();
+    for (const candidate of [metadataCallerMessage, ...strongPrimary]) {
+      const key = candidateKey(candidate);
+      const current = primaryByKey.get(key);
+      primaryByKey.set(key, current ? mergeCandidateSignals(current, candidate) : candidate);
+    }
+    strongPrimary = [...primaryByKey.values()].slice(0, 8)
+      .map((candidate, index) => ({ ...candidate, rank: index + 1 }));
+  }
   // A selected entity or pending question resolves compact continuations and
   // weak standalone turns. Strong explicit requests remain primary.
   contextPolicy = postIdentityContextPolicy(
-    contextPolicy, safeInput, query, strongPrimary, catalogIdentityResolution,
+    contextPolicy, safeInput, query, strongPrimary,
+    catalogIdentityResolved ? { status: 'match' } : catalogIdentityResolution,
   );
-  const rememberedIdentityCandidates = catalogIdentityResolution?.status !== 'match'
+  const rememberedIdentityCandidates = !catalogIdentityResolved
     ? rememberedCatalogIdentityCandidates(catalogIdentities, safeInput.knownEntities)
     : [];
   if (rememberedIdentityCandidates.length) {
@@ -1641,6 +1684,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   ));
   const messageSelectionInput = {
     ...safeInput,
+    catalogIdentityResolved, catalogIdentityDetected,
     selectedCatalogFactAligned: selectedCatalogFactAligned(
       workflowPermittedEvidence, query, safeInput,
     ),
@@ -1654,7 +1698,8 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
     workflowPermittedEvidence, {
       ...messageSelectionInput,
       preferredCallerMessage,
-      catalogIdentityResolved: catalogIdentityResolution?.status === 'match',
+      catalogIdentityResolved,
+      explicitCatalogRecordIds,
     }, safeInput.topK,
   );
   const permittedEvidence = catalogFocus.evidence
@@ -1769,6 +1814,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
         confidence: catalogIdentityResolution.confidence,
         method: catalogIdentityResolution.method,
       } : null,
+      explicitCatalogRecordIds: Object.freeze([...explicitCatalogRecordIds]),
       vectorBm25Ms, rerankMs, hydrationMs,
       semanticTimedOut: runtime.ragEnabled
         && primaryBranch.semantic.length + contextualBranch.semantic.length === 0

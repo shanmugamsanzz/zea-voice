@@ -556,6 +556,29 @@ assert.equal(fullAliasBeatsPartialLabel.status, 'match');
 assert.equal(fullAliasBeatsPartialLabel.entityType, 'item');
 assert.equal(fullAliasBeatsPartialLabel.item.item_key, 'cloud-storage');
 
+const explicitComparisonEvidence = focusAuthoritativeCatalogEvidence([
+  {
+    id: 'published:catalog_item:first', recordId: 'first', recordType: 'CATALOG_ITEM',
+    retrievalContext: 'primary', callerFacing: true, authoritativeData: {
+      itemKey: 'first-plan', name: 'First Plan', category: 'Plans', categoryKey: 'plans',
+    },
+  },
+  {
+    id: 'published:catalog_item:second', recordId: 'second', recordType: 'CATALOG_ITEM',
+    retrievalContext: 'primary', callerFacing: true, authoritativeData: {
+      itemKey: 'second-plan', name: 'Second Plan', category: 'Plans', categoryKey: 'plans',
+    },
+  },
+], {
+  catalogIdentityResolved: true,
+  explicitCatalogRecordIds: ['first', 'second'],
+  knownEntities: [{ key: 'stale-plan', name: 'Stale Plan' }],
+  query: 'Compare First and Second',
+}, 5);
+assert.deepEqual(explicitComparisonEvidence.evidence.map((item) => item.recordId), [
+  'first', 'second',
+]);
+
 const samples = [];
 for (let index = 0; index < 100; index += 1) {
   const startedAt = performance.now();

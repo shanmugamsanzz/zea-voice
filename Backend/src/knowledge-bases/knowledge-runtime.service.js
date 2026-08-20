@@ -1198,6 +1198,8 @@ function compactMapFromProfile(profile, knowledgeBase) {
   for (const item of profile.catalog_items.filter(belongs)) {
     add('CATALOG_ITEM', item, item.name, evidenceItemContent(item), {
       key: item.item_key, category: item.category, categoryKey: item.category_key,
+      aliases: item.aliases ?? [], categoryAliases: item.category_aliases ?? [],
+      parentCategoryKey: item.parent_category_key ?? null,
     });
   }
   for (const workflow of profile.workflows.filter(belongs)) {
@@ -1212,6 +1214,7 @@ function compactMapFromProfile(profile, knowledgeBase) {
   for (const node of profile.conversations.filter(belongs)) {
     add('CONVERSATION_NODE', node, node.node_key, node.content, {
       flowKey: node.flow_key, nodeType: node.node_type,
+      variables: node.variables ?? [],
     });
   }
   for (const faq of profile.faqs.filter(belongs)) add('FAQ', faq, faq.question, faq.answer);
@@ -1219,7 +1222,7 @@ function compactMapFromProfile(profile, knowledgeBase) {
     add('KNOWLEDGE_CHUNK', chunk, chunk.source_heading, chunk.content);
   }
   return {
-    version: 1,
+    version: 2,
     knowledgeBaseId: knowledgeBase.id,
     publicationRevision: knowledgeBase.publicationRevision,
     records,
@@ -1238,7 +1241,8 @@ export async function loadPublishedKnowledgeMap(auth, input, dependencies = defa
   for (const knowledgeBase of loaded.profile.knowledge_bases ?? []) {
     const key = knowledgeMapCacheKey(auth.tenantId, knowledgeBase.id, knowledgeBase.publicationRevision);
     let map = await cacheGet(runtime.cache, key);
-    if (!map || !Array.isArray(map.records) || map.records.some((record) => !Object.hasOwn(record, 'summary'))) {
+    if (!map || map.version !== 2 || !Array.isArray(map.records)
+      || map.records.some((record) => !Object.hasOwn(record, 'summary'))) {
       map = compactMapFromProfile(loaded.profile, knowledgeBase);
       void cacheSet(runtime.cache, key, map, Math.max(env.RAG_RUNTIME_PROFILE_CACHE_TTL_SECONDS, 3600))
         .catch(() => undefined);

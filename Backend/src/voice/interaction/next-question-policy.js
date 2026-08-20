@@ -75,11 +75,20 @@ function fieldBelongsToTool(field, tool) {
 function confirmationForTool({
   activeRequest, fieldSchemas, collectedInformation, tools, actionEvidence, configuration,
 }) {
-  if (!configuration?.enabled || !activeRequest) return null;
+  if (!activeRequest) return null;
   const authorization = authorizedTool(activeRequest, tools, actionEvidence);
-  if (!authorization || !toolIdentifiers(authorization.tool).has(toolIdentity(configuration.intent))) return null;
+  if (!authorization) return null;
+  const inputSchema = object(authorization.tool.inputSchema
+    ?? authorization.tool.configuration?.inputSchema
+    ?? authorization.tool.configuration?.input_schema);
+  const schemaConfirmation = inputSchema['x-requires-confirmation'] === true;
+  const configuredConfirmation = configuration?.enabled === true
+    && toolIdentifiers(authorization.tool).has(toolIdentity(configuration.intent));
+  if (!schemaConfirmation && !configuredConfirmation) return null;
   const collected = object(collectedInformation);
-  const required = configuration.requiredFields ?? [];
+  const required = configuredConfirmation
+    ? (configuration.requiredFields ?? [])
+    : (Array.isArray(inputSchema.required) ? inputSchema.required : []);
   if (!required.length || required.some((key) => (
     collected[key] === undefined || collected[key] === null || String(collected[key]).trim() === ''
   ))) return null;
@@ -88,7 +97,11 @@ function confirmationForTool({
     const label = text(fields.get(key)?.label ?? key.replace(/_/gu, ' '), 120);
     return `${label}: ${text(collected[key], 500)}`;
   });
-  const rendered = text(configuration.confirmationMessage, 2_000).replace(
+  const confirmationMessage = configuredConfirmation
+    ? configuration.confirmationMessage
+    : (inputSchema['x-confirmation-message']
+      ?? 'Would you like me to continue with this action?');
+  const rendered = text(confirmationMessage, 2_000).replace(
     /\{\{\s*([a-z][a-z0-9_]{0,63})\s*\}\}/giu,
     (match, key) => text(collected[String(key).toLocaleLowerCase()], 500) || match,
   );
@@ -110,7 +123,16 @@ function nextToolField({ activeRequest, fieldSchemas, collectedInformation, tool
   const authorization = authorizedTool(activeRequest, tools, actionEvidence);
   if (!authorization) return null;
   const collected = object(collectedInformation);
-  const field = (fieldSchemas ?? []).find((candidate) => (
+  const inputSchema = object(authorization.tool.inputSchema
+    ?? authorization.tool.configuration?.inputSchema
+    ?? authorization.tool.configuration?.input_schema);
+  const requiredOrder = Array.isArray(inputSchema.required) ? inputSchema.required : [];
+  const positions = new Map(requiredOrder.map((key, index) => [key, index]));
+  const candidates = [...(fieldSchemas ?? [])].sort((left, right) => (
+    (positions.get(left.key) ?? Number.MAX_SAFE_INTEGER)
+    - (positions.get(right.key) ?? Number.MAX_SAFE_INTEGER)
+  ));
+  const field = candidates.find((candidate) => (
     candidate.required !== false
     && fieldBelongsToTool(candidate, authorization.tool)
     && (collected[candidate.key] === undefined || collected[candidate.key] === null

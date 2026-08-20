@@ -74,6 +74,23 @@ const scoped = (record, id) => ({
 const positiveEvidence = scoped(positive, 'positive');
 const overviewEvidence = scoped(overview, 'overview');
 
+assert.equal(strongCallerMessageMatch(positiveEvidence, 'yes', { knownEntities: [] }), false);
+assert.equal(strongCallerMessageMatch(positiveEvidence, 'yes', {
+  knownEntities: [], pendingQuestion: 'Would you like to hear the choices?',
+}), true);
+const shortStandaloneEvidence = {
+  ...positiveEvidence,
+  authoritativeData: {
+    ...positiveEvidence.authoritativeData,
+    variables: [
+      { key: 'situation', value: 'The caller asks about opening hours.' },
+      { key: 'examples', value: ['hours'] },
+      { key: 'context', value: 'any' },
+    ],
+  },
+};
+assert.equal(strongCallerMessageMatch(shortStandaloneEvidence, 'hours', {}), true);
+
 assert.equal(strongCallerMessageMatch(
   positiveEvidence, 'I would be happy to hear the choices now', { knownEntities: [] },
 ), true);
@@ -83,6 +100,9 @@ assert.equal(strongCallerMessageMatch(positiveEvidence, 'yes', {
 assert.equal(strongCallerMessageMatch(
   overviewEvidence, 'Could you walk me through everything that is available?', {},
 ), true);
+assert.equal(strongCallerMessageMatch(
+  overviewEvidence, 'Advanced course details please', { catalogIdentityResolved: true },
+), false);
 assert.equal(strongCallerMessageMatch({ ...overviewEvidence, semanticScore: 0.2 }, 'unrelated request', {}), false);
 assert.equal(selectStrongCallerMessage([
   overviewEvidence,

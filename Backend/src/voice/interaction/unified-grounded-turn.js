@@ -415,7 +415,7 @@ export function applyUnifiedGroundedTurn({
   const claimValidation = validateGroundedClaims(
     effectiveDecision.answer,
     claimEvidence,
-    { knownEntities: hydratedEnvelope.entities },
+    { knownEntities: hydratedEnvelope.entities, finalizedUtterance },
   );
   if (!claimValidation.valid) {
     return Object.freeze({
@@ -476,12 +476,16 @@ export function applyUnifiedGroundedTurn({
       });
     }
   }
-  const confirmationRequired = confirmationConfiguration?.enabled === true
+  const requestedToolSchema = (runtime.toolSchemas ?? []).find((tool) => (
+    identity(tool?.name) === identity(requestedToolName)
+  ));
+  const schemaRequiresConfirmation = requestedToolSchema?.inputSchema?.['x-requires-confirmation'] === true;
+  const confirmationRequired = schemaRequiresConfirmation || (confirmationConfiguration?.enabled === true
     && requestedToolName
     && String(confirmationConfiguration.intent ?? '').normalize('NFKC').toLocaleLowerCase()
       .replace(/[^a-z0-9]+/gu, '_').replace(/^_+|_+$/gu, '')
       === String(requestedToolName).normalize('NFKC').toLocaleLowerCase()
-        .replace(/[^a-z0-9]+/gu, '_').replace(/^_+|_+$/gu, '');
+        .replace(/[^a-z0-9]+/gu, '_').replace(/^_+|_+$/gu, ''));
   const security = validateDecisionSecurity({
     sources: selectedEvidence,
     toolRequest: effectiveDecision.toolRequest,

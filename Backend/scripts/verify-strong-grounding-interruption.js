@@ -14,8 +14,10 @@ const factualSources = [{
   id: 'fact-1', recordType: 'GENERAL_KNOWLEDGE',
   content: 'Priority service is available. It costs INR 3200 and includes standard support.',
 }];
-assert.equal(validateGroundedClaim('Priority service is not available.', factualSources).valid, true);
-assert.equal(validateGroundedClaim('Priority service does not include standard support.', factualSources).valid, true);
+assert.equal(validateGroundedClaim('Priority service is not available.', factualSources).reason,
+  'unsupported_claim_polarity');
+assert.equal(validateGroundedClaim('Priority service does not include standard support.', factualSources).reason,
+  'unsupported_claim_polarity');
 assert.equal(validateGroundedClaims('Priority service costs INR 3500.', factualSources).reason,
   'unsupported_numeric_fact');
 assert.equal(validateGroundedClaim(
@@ -35,7 +37,7 @@ assert.equal(validateGroundedClaim('Caller asked information; retrieve approved 
   'internal_guidance');
 assert.equal(validateGroundedClaim('Priority service is available.', [{
   content: 'Priority service is not available.', recordType: 'GENERAL_KNOWLEDGE',
-}]).valid, true);
+}]).reason, 'unsupported_claim_polarity');
 assert.equal(validateGroundedClaim('The request was confirmed.', [{
   content: 'The request was confirmed.', recordType: 'TOOL_RESULT',
   authoritativeData: { verified: true, success: true },
@@ -56,7 +58,7 @@ for (const [claim, content] of [
 }
 assert.equal(validateGroundedClaim(
   'Priority service \u0B87\u0BB2\u0BCD\u0BB2\u0BC8.', factualSources,
-).valid, true);
+).reason, 'unsupported_claim_polarity');
 const multilingualGrounding = validateGroundedClaim(
   'இந்த சேவையில் standard support கிடைக்கும்.', factualSources,
 );

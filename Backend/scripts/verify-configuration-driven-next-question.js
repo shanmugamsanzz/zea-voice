@@ -45,8 +45,8 @@ function resolve(overrides = {}) {
   });
 }
 
-// A side question is answered first and the still-relevant saved question is
-// appended exactly once.
+// A stale action-field question is never resumed without an active,
+// Workflow-authorized tool request.
 const resumed = resolve({
   decision: { pendingQuestionRelevant: true },
   beforeState: {
@@ -55,11 +55,9 @@ const resumed = resolve({
   afterState: { collectedInformation: {} },
   fieldSchemas: [], tools: [], actionEvidence: [],
 });
-assert.equal(resumed.source, 'redis_pending_question');
-assert.equal(
-  composeConfiguredTurnResponse('The office is on Central Road.', resumed),
-  'The office is on Central Road. Which date do you prefer?',
-);
+assert.equal(resumed, null);
+assert.equal(composeConfiguredTurnResponse('The office is on Central Road.', resumed),
+  'The office is on Central Road.');
 
 // A topic change explicitly discards an irrelevant pending question.
 const discarded = resolve({
@@ -130,6 +128,7 @@ assert.equal(authorizedContinuation.key, 'visit_date');
 
 // Conversation Guidance is the final configured source before waiting.
 const guidance = resolve({
+  decision: { decision: 'answer', pendingQuestion: 'Would you like to continue?' },
   fieldSchemas: [], tools: [], actionEvidence: [],
   guidanceEvidence: [{
     recordId: 'guidance-record-1',
@@ -139,7 +138,7 @@ const guidance = resolve({
     },
   }],
 });
-assert.equal(guidance.source, 'conversation_guidance');
+assert.equal(guidance.source, 'selected_conversation_guidance');
 assert.equal(guidance.question, 'Would you like to continue?');
 
 // With no configured source, the agent waits; it cannot invent a sales,
