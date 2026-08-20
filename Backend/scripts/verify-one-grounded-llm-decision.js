@@ -368,6 +368,8 @@ assert.match(providerInput.messages[0].content, /<\/grounded_response_contract>/
 assert.equal(isRepairableGroundedDecisionReason('invalid_response_shape'), true);
 assert.equal(isRepairableGroundedDecisionReason('answer_required'), true);
 assert.equal(isRepairableGroundedDecisionReason('unsupported_numeric_fact'), true);
+assert.equal(isRepairableGroundedDecisionReason('unsupported_structured_fact'), true);
+assert.equal(isRepairableGroundedDecisionReason('unsupported_technical_term'), true);
 assert.equal(isRepairableGroundedDecisionReason('invalid_json'), false);
 assert.match(orchestratorSource, /stage: 'llm\.decision_repair_retry'/u);
 assert.match(orchestratorSource, /deferDecisionRepair: false/u);

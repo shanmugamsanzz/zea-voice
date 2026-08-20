@@ -4,6 +4,7 @@ const maximumEntities = 20;
 const decisions = new Set(['answer', 'clarify', 'action']);
 const repairableDecisionReasons = new Set([
   'invalid_response_shape', 'answer_required', 'unsupported_numeric_fact',
+  'unsupported_structured_fact', 'unsupported_technical_term',
 ]);
 
 export function isRepairableGroundedDecisionReason(reason) {

@@ -255,6 +255,7 @@ assert.match(systemPrompt, /premium-plan/u);
 assert.match(systemPrompt, /priority support/u);
 assert.match(systemPrompt, /primary Catalog source/u);
 assert.match(systemPrompt, /Never calculate counts/u);
+assert.match(systemPrompt, /Copy Catalog test/u);
 assert.match(systemPrompt, /<\/knowledge_context>/u);
 assert.match(systemPrompt, /currentStage/u);
 assert.match(systemPrompt, /detectedIntent/u);
