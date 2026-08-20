@@ -274,6 +274,31 @@ const publishedOverview = {
 assert.equal(selectStrongCallerMessage([publishedOverview], 'unseen overview wording', {}), publishedOverview,
   'an unambiguous caller-facing published message may be selected from strong BM25 evidence');
 
+const crossLanguageOverview = {
+  ...publishedOverview,
+  semanticScore: 0.2, lexicalScore: 0, tokenCoverage: 0,
+  retrievalScore: 0.45, channels: ['semantic'],
+  authoritativeData: {
+    nodeType: 'message',
+    variables: [
+      {
+        key: 'situation',
+        value: 'The caller asks for the complete package overview or all available options.',
+      },
+      {
+        key: 'examples',
+        value: ['what packages are available', 'okay, explain the options'],
+      },
+    ],
+  },
+};
+assert.equal(selectStrongCallerMessage(
+  [crossLanguageOverview],
+  'Could you give me a complete overview of the available health screening options?',
+  {},
+), crossLanguageOverview,
+'published routing metadata must resolve an unseen cross-language overview paraphrase');
+
 const conflict = detectEvidenceConflict([
   {
     recordType: 'CATALOG_ITEM', recordId: 'a', retrievalContext: 'primary', retrievalScore: 0.91,

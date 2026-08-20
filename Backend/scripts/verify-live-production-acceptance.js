@@ -149,9 +149,21 @@ function verifyTurnExpectations({
     const selectedPublishedResponse = (envelope?.sources ?? [])
       .find((source) => source.id === responseId) ?? null;
     const resolvedPublishedResponse = direct ?? selectedPublishedResponse;
+    const responseDiagnostic = JSON.stringify({
+      responseId,
+      directNodeKey: direct?.authoritativeData?.nodeKey ?? null,
+      sources: (envelope?.sources ?? []).map((source) => ({
+        id: source.id,
+        recordType: source.recordType,
+        nodeKey: source.authoritativeData?.nodeKey ?? null,
+        exactCallerResponse: source.exactCallerResponse === true,
+        retrievalContext: source.retrievalContext ?? null,
+        score: source.score ?? null,
+      })),
+    });
     assert.ok(resolvedPublishedResponse
       && expectedKeys.has(normalized(resolvedPublishedResponse.authoritativeData?.nodeKey)),
-    `${label}: expected caller-facing published response was not selected by retrieval or grounded decision`);
+    `${label}: expected caller-facing published response was not selected by retrieval or grounded decision ${responseDiagnostic}`);
     if (turn.requireExactPublishedResponse === true) {
       assert.ok(responseId, `${label}: exact published responseId was not selected`);
       const exactSource = selectedPublishedResponse;

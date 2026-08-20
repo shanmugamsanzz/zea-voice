@@ -1027,6 +1027,14 @@ export function strongCallerMessageMatch(evidence, query, input = {}) {
   const documentExampleCoverage = publishedExampleCoverage(evidence, query);
   const documentAlignedSemanticMessage = channels.has('semantic')
     && semanticScore >= env.RAG_RUNTIME_MIN_SCORE && documentExampleCoverage >= 0.3;
+  // Retrieval already admitted this PostgreSQL-hydrated record as relevant.
+  // A strong match against tenant-published purpose/situation/examples is a
+  // deterministic intent signal even when a cross-language embedding score
+  // sits below the direct-response floor. This keeps unseen paraphrases tied
+  // to document-owned routing metadata rather than application vocabulary.
+  const documentMetadataMessage = retrievalContext === 'primary'
+    && documentExampleCoverage >= 0.45
+    && (channels.has('semantic') || channels.has('bm25'));
   const contextualLatestTurn = retrievalContext === 'contextual'
     && contextIsAvailable(input)
     && Boolean(String(input.pendingQuestion ?? '').trim());
@@ -1040,6 +1048,7 @@ export function strongCallerMessageMatch(evidence, query, input = {}) {
     && context === 'no_selected_entity'
     && input.selectedCatalogFactAligned !== true
     && (exactPublishedExample || documentAlignedSemanticMessage
+      || documentMetadataMessage
       || (strongLexicalMessage && documentExampleCoverage >= 0.3));
   if (selectedEntities.length > 0 && retrievalContext !== 'contextual'
     && !explicitMessageTopicChange) return false;
@@ -1054,6 +1063,7 @@ export function strongCallerMessageMatch(evidence, query, input = {}) {
     && (exactPublishedExample
       || (channels.has('semantic') && semanticScore >= strongSemanticFloor)
       || documentAlignedSemanticMessage
+      || documentMetadataMessage
       || strongLexicalMessage);
 }
 
@@ -1366,7 +1376,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
     })),
   });
-  const cacheKey = `zea:rag:hybrid:v24:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:v25:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();
