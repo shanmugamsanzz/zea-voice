@@ -81,6 +81,16 @@ assert.equal(validateGroundedClaim(
   [{ content: 'Approved package.', recordType: 'CATALOG_ITEM', authoritativeData: { attributes: { tests: ['CBC'] } } }],
 ).reason, 'unsupported_structured_fact');
 assert.equal(validateGroundedClaim(
+  'The package includes CBC, RBS, CRP, ESR, ECG and PFT.',
+  [{
+    content: 'Approved package includes CBC and ECG.', recordType: 'CATALOG_ITEM',
+    authoritativeData: {
+      sourceText: 'ATTRIBUTES: tests CBC, RBS, CRP, ESR, ECG, PFT',
+      attributes: [{ key: 'tests', value: ['CBC', 'ECG'] }],
+    },
+  }],
+).valid, true, 'approved Catalog source text must prevent normalized child-data loss');
+assert.equal(validateGroundedClaim(
   'Premium Plan costs INR 3200.',
   [{ content: 'Standard Plan costs INR 1200.', recordType: 'CATALOG_ITEM' }],
   { knownEntities: [{ key: 'premium', name: 'Premium Plan' }] },

@@ -182,7 +182,8 @@ const hydrateEvidenceSql = `
       concat_ws(E'\n','Item: '||i.name,'Category: '||COALESCE(i.category,sc.name),
         CASE WHEN i.description IS NOT NULL THEN 'Description: '||i.description END,
         CASE WHEN i.price IS NOT NULL THEN 'Price: '||i.price::text||' '||COALESCE(i.currency,'') END,
-        CASE WHEN attrs.values_json <> '[]'::jsonb THEN 'Details: '||attrs.values_json::text END),
+        CASE WHEN attrs.values_json <> '[]'::jsonb THEN 'Details: '||attrs.values_json::text END,
+        CASE WHEN i.source_text IS NOT NULL THEN 'Approved Source: '||i.source_text END),
       true,
       jsonb_build_object(
         'catalogId',sc.id,'catalogType',sc.catalog_type,'catalogName',sc.name,
@@ -193,6 +194,7 @@ const hydrateEvidenceSql = `
         'categoryDescription',i.category_description,
         'categorySelectionRules',i.category_selection_rules,
         'description',i.description,'price',i.price,'currency',i.currency,
+        'sourceText',i.source_text,
         'displayOrder',i.display_order,'attributes',attrs.values_json,
         'relationships',i.relationships,'selectionRules',i.selection_rules
       ),
@@ -1289,7 +1291,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
     })),
   });
-  const cacheKey = `zea:rag:hybrid:v15:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:v16:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();

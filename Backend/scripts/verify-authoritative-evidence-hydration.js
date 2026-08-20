@@ -193,6 +193,7 @@ for (const requiredDocumentState of [
 for (const completeField of [
   "'aliases',i.aliases", "'categoryAliases',i.category_aliases",
   "'categorySelectionRules',i.category_selection_rules", "'attributes',attrs.values_json",
+  "'sourceText',i.source_text",
   "'relationships',i.relationships", "'selectionRules',i.selection_rules",
   "'conditions',w.conditions", "'actionConfig',w.action_config",
   "'sequenceOrder',f.sequence_order", "'variables',f.variables", "'transitions',f.transitions",
