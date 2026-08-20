@@ -11,6 +11,7 @@ const {
   catalogIdentityOverridesRememberedEntity,
   focusAuthoritativeCatalogEvidence,
   strongCallerMessageMatch,
+  workflowActionRouteCandidates,
 } = await import('../src/knowledge-bases/hybrid-knowledge-retrieval.service.js');
 
 const base = {
@@ -106,6 +107,18 @@ assert.equal(strongCallerMessageMatch(overview, 'yes', {}), false);
 assert.equal(strongCallerMessageMatch(
   overview, 'yes', { pendingQuestion: 'Would you like to hear the choices?' },
 ), true);
+
+const actionRoutes = workflowActionRouteCandidates([{
+  id: 'book', name: 'create_reservation', conditions: {
+    examples: ['reserve this selected service'],
+  }, knowledge_base_id: 'knowledge-base', publication_revision: 1,
+  document_id: 'document', document_version_id: 'version',
+}], 'Please reserve this selected service');
+assert.equal(actionRoutes.length, 1);
+assert.equal(actionRoutes[0].recordType, 'WORKFLOW_RULE');
+assert.equal(workflowActionRouteCandidates([{
+  id: 'book', conditions: { examples: ['reserve this selected service'] },
+}], 'Tell me about this selected service').length, 0);
 
 console.log(JSON.stringify({
   task: 'universal-entity-routing', passed: true,
