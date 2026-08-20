@@ -217,6 +217,7 @@ assert.equal(strongCallerMessageMatch(
 ), false, 'semantic similarity without document-example alignment must not override an entity');
 const documentAlignedSemanticOverview = {
   ...semanticLatestOverview,
+  semanticScore: 0.8,
   authoritativeData: {
     ...semanticLatestOverview.authoritativeData,
     variables: semanticLatestOverview.authoritativeData.variables.map((variable) => (
@@ -231,6 +232,11 @@ assert.equal(strongCallerMessageMatch(
   'What other packages do you have?',
   { knownEntities: [{ key: 'old-item', name: 'Old Item' }] },
 ), true, 'semantic topic changes must align with tenant-published examples');
+assert.equal(strongCallerMessageMatch(
+  documentAlignedSemanticOverview,
+  'Could you give me a complete overview of the other package options?',
+  { knownEntities: [] },
+), true, 'polite filler must not dilute multi-term published-example alignment');
 assert.equal(strongCallerMessageMatch(
   documentAlignedSemanticOverview,
   'What tests are included in this package?',

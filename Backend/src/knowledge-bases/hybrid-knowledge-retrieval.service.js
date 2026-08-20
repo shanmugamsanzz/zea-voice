@@ -956,7 +956,12 @@ function publishedExampleCoverage(evidence, query) {
     const matched = queryTokens.filter((queryToken) => (
       exampleTokens.some((exampleToken) => tokenMatches(queryToken, exampleToken))
     )).length;
-    return matched / queryTokens.length;
+    // One shared product noun is not intent evidence. Two or more aligned
+    // terms can represent a natural longer paraphrase, so normalize against
+    // the shorter phrase instead of penalizing polite filler in the caller's
+    // utterance.
+    if (matched < 2) return 0;
+    return matched / Math.max(1, Math.min(queryTokens.length, exampleTokens.length));
   }));
 }
 
@@ -983,7 +988,7 @@ export function strongCallerMessageMatch(evidence, query, input = {}) {
     && lexicalScore >= 4 && tokenCoverage >= 0.4;
   const documentExampleCoverage = publishedExampleCoverage(evidence, query);
   const documentAlignedSemanticMessage = channels.has('semantic')
-    && semanticScore >= strongSemanticFloor && documentExampleCoverage >= 0.45;
+    && semanticScore >= env.RAG_RUNTIME_MIN_SCORE && documentExampleCoverage >= 0.45;
   const contextualLatestTurn = retrievalContext === 'contextual'
     && contextIsAvailable(input)
     && Boolean(String(input.pendingQuestion ?? '').trim());
@@ -1008,6 +1013,7 @@ export function strongCallerMessageMatch(evidence, query, input = {}) {
   return (retrievalContext === 'primary' || contextualLatestTurn)
     && (exactPublishedExample
       || (channels.has('semantic') && semanticScore >= strongSemanticFloor)
+      || documentAlignedSemanticMessage
       || strongLexicalMessage);
 }
 
@@ -1320,7 +1326,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
     })),
   });
-  const cacheKey = `zea:rag:hybrid:v19:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:v20:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();
