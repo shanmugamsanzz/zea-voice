@@ -587,6 +587,18 @@ export function catalogIdentityDiscoveryPolicy(query, pendingContextPreferred) {
   return !pendingContextPreferred || tokens(query).length >= 2;
 }
 
+export function postIdentityContextPolicy(
+  currentPolicy, input, query, primaryCandidates, catalogIdentityResolution,
+) {
+  // A canonical identity resolved from the latest utterance is an explicit
+  // topic selection. Re-evaluate routing with that primary evidence so stale
+  // pending context cannot remain preferred and displace the new entity.
+  if (catalogIdentityResolution?.status === 'match') {
+    return contextualRetrievalPolicy(input, query, primaryCandidates);
+  }
+  return currentPolicy;
+}
+
 export function prioritizeCandidates(primary, contextual, useContext, preferContext, limit) {
   const unique = new Map();
   // The finalized latest utterance is always the primary query. Context is
@@ -1252,7 +1264,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
     })),
   });
-  const cacheKey = `zea:rag:hybrid:v12:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:v13:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();
@@ -1299,9 +1311,9 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   }
   // A selected entity or pending question resolves compact continuations and
   // weak standalone turns. Strong explicit requests remain primary.
-  if (!pendingContextPreferred) {
-    contextPolicy = contextualRetrievalPolicy(safeInput, query, strongPrimary);
-  }
+  contextPolicy = postIdentityContextPolicy(
+    contextPolicy, safeInput, query, strongPrimary, catalogIdentityResolution,
+  );
   const contextualUsed = Boolean(queries.contextual) && contextPolicy.useContext;
   const contextualBranch = contextualUsed
     ? await retrieveBranch(

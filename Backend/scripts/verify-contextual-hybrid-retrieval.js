@@ -12,6 +12,7 @@ const {
   callerMessageEligibleForDecision,
   isolatedRetrievalQueries,
   mergeCandidateSignals,
+  postIdentityContextPolicy,
   prioritizeCandidates,
   selectStrongCallerMessage,
   strongCallerMessageMatch,
@@ -82,6 +83,28 @@ assert.equal(unresolvedFollowUp.useContext, true);
 assert.equal(unresolvedFollowUp.preferContext, true);
 assert.equal(catalogIdentityDiscoveryPolicy('yes', true), false);
 assert.equal(catalogIdentityDiscoveryPolicy('New Option', true), true);
+
+const stalePreferredPolicy = contextualRetrievalPolicy({
+  pendingQuestion: 'Would you like another option?',
+  knownEntities: [{ key: 'old-option', name: 'Old Option' }],
+}, 'New Option', []);
+assert.equal(stalePreferredPolicy.preferContext, true);
+const refreshedPrimaryPolicy = postIdentityContextPolicy(
+  stalePreferredPolicy,
+  {
+    pendingQuestion: 'Would you like another option?',
+    knownEntities: [{ key: 'old-option', name: 'Old Option' }],
+  },
+  'New Option',
+  [{
+    recordType: 'CATALOG_ITEM', semanticScore: 0, lexicalScore: 0,
+    tokenCoverage: 1, score: 0.9, channels: ['catalog_identity'],
+    contentPreview: 'New Option',
+  }],
+  { status: 'match', entityType: 'item' },
+);
+assert.equal(refreshedPrimaryPolicy.useContext, false);
+assert.equal(refreshedPrimaryPolicy.preferContext, false);
 
 const strongExplicitItem = contextualRetrievalPolicy({
   pendingQuestion: 'Would you like another option?',
