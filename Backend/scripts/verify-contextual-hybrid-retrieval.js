@@ -180,6 +180,47 @@ const misleadingStrongFaq = contextualRetrievalPolicy({
 assert.equal(misleadingStrongFaq.useContext, true);
 assert.equal(misleadingStrongFaq.preferContext, true);
 
+const exactLatestOverview = {
+  id: 'overview-message', recordId: 'overview-message',
+  recordType: 'CONVERSATION_NODE', callerFacing: true,
+  retrievalContext: 'primary', semanticScore: 0.7, channels: ['semantic'],
+  authoritativeData: {
+    nodeType: 'message',
+    variables: [
+      { key: 'situation', value: 'The caller explicitly requests all or other available options.' },
+      { key: 'context', value: 'no_selected_entity' },
+      { key: 'examples', value: ['What other options are available?'] },
+    ],
+  },
+};
+assert.equal(strongCallerMessageMatch(
+  exactLatestOverview,
+  'What other options are available?',
+  { knownEntities: [{ key: 'old-item', name: 'Old Item' }] },
+), true, 'an exact latest published example must override stale selected-entity context');
+const semanticLatestOverview = {
+  ...exactLatestOverview,
+  semanticScore: 0.99,
+  authoritativeData: {
+    ...exactLatestOverview.authoritativeData,
+    variables: exactLatestOverview.authoritativeData.variables.map((variable) => (
+      variable.key === 'examples'
+        ? { ...variable, value: ['A different approved example'] }
+        : variable
+    )),
+  },
+};
+assert.equal(strongCallerMessageMatch(
+  semanticLatestOverview,
+  'What other packages do you have?',
+  { knownEntities: [{ key: 'old-item', name: 'Old Item' }] },
+), true, 'a strong primary message match must allow an explicit topic change from a stale entity');
+assert.equal(strongCallerMessageMatch(
+  exactLatestOverview,
+  'Tell me about the old item.',
+  { knownEntities: [{ key: 'old-item', name: 'Old Item' }] },
+), false, 'a non-matching generic message must not override a selected entity');
+
 const unqualifiedCallerMessage = {
   recordType: 'CONVERSATION_NODE', callerFacing: true,
   authoritativeData: {

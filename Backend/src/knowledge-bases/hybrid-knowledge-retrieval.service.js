@@ -956,18 +956,7 @@ export function strongCallerMessageMatch(evidence, query, input = {}) {
       ? input.understanding.selectedEntities : []),
   ];
   const retrievalContext = evidence.retrievalContext ?? 'primary';
-  const contextualLatestTurn = retrievalContext === 'contextual'
-    && contextIsAvailable(input)
-    && Boolean(String(input.pendingQuestion ?? '').trim());
-  // Specific entity turns must be answered from their hydrated records. A
-  // generic caller-facing message cannot replace or follow that answer.
-  if (selectedEntities.length > 0 && retrievalContext !== 'contextual') return false;
-  if (context === 'no_selected_entity'
-    && (input.selectedCatalogItemKey || selectedEntities.length > 0)) return false;
-  if (context === 'pending_question' && !String(input.pendingQuestion ?? '').trim()) return false;
-  if (!['any', 'no_selected_entity', 'pending_question'].includes(context)) return false;
-  // Published examples may deterministically select an exact response. The
-  // vocabulary remains tenant-owned document data rather than runtime code.
+  const exactPublishedExample = publishedExampleMatch(evidence, query);
   const semanticScore = Number(evidence.semanticScore ?? 0);
   const lexicalScore = Number(evidence.lexicalScore ?? 0);
   const tokenCoverage = Number(evidence.tokenCoverage ?? 0);
@@ -975,7 +964,25 @@ export function strongCallerMessageMatch(evidence, query, input = {}) {
   const strongSemanticFloor = Math.min(0.98, Math.max(0.82, env.RAG_RUNTIME_MIN_SCORE + 0.08));
   const strongLexicalMessage = channels.has('bm25')
     && lexicalScore >= 4 && tokenCoverage >= 0.4;
-  const exactPublishedExample = publishedExampleMatch(evidence, query);
+  const strongLatestMessage = exactPublishedExample
+    || (channels.has('semantic') && semanticScore >= strongSemanticFloor)
+    || strongLexicalMessage;
+  const contextualLatestTurn = retrievalContext === 'contextual'
+    && contextIsAvailable(input)
+    && Boolean(String(input.pendingQuestion ?? '').trim());
+  // Specific entity turns must be answered from their hydrated records. A
+  // generic caller-facing message cannot replace or follow that answer.
+  const explicitMessageTopicChange = retrievalContext === 'primary'
+    && context === 'no_selected_entity' && strongLatestMessage;
+  if (selectedEntities.length > 0 && retrievalContext !== 'contextual'
+    && !explicitMessageTopicChange) return false;
+  if (context === 'no_selected_entity'
+    && (input.selectedCatalogItemKey || selectedEntities.length > 0)
+    && !explicitMessageTopicChange) return false;
+  if (context === 'pending_question' && !String(input.pendingQuestion ?? '').trim()) return false;
+  if (!['any', 'no_selected_entity', 'pending_question'].includes(context)) return false;
+  // Published examples may deterministically select an exact response. The
+  // vocabulary remains tenant-owned document data rather than runtime code.
   return (retrievalContext === 'primary' || contextualLatestTurn)
     && (exactPublishedExample
       || (channels.has('semantic') && semanticScore >= strongSemanticFloor)
@@ -1291,7 +1298,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
     })),
   });
-  const cacheKey = `zea:rag:hybrid:v16:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:v17:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();
