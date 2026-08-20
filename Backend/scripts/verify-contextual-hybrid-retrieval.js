@@ -214,7 +214,19 @@ assert.equal(strongCallerMessageMatch(
   semanticLatestOverview,
   'What other packages do you have?',
   { knownEntities: [{ key: 'old-item', name: 'Old Item' }] },
-), true, 'a strong primary message match must allow an explicit topic change from a stale entity');
+), false, 'semantic similarity alone must not override a selected entity');
+const lexicalLatestOverview = {
+  ...semanticLatestOverview,
+  semanticScore: 0.7,
+  lexicalScore: 5,
+  tokenCoverage: 0.6,
+  channels: ['bm25'],
+};
+assert.equal(strongCallerMessageMatch(
+  lexicalLatestOverview,
+  'What other packages do you have?',
+  { knownEntities: [{ key: 'old-item', name: 'Old Item' }] },
+), true, 'strong lexical latest-turn evidence may explicitly change topic');
 assert.equal(strongCallerMessageMatch(
   exactLatestOverview,
   'Tell me about the old item.',

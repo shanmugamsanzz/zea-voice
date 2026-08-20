@@ -964,16 +964,18 @@ export function strongCallerMessageMatch(evidence, query, input = {}) {
   const strongSemanticFloor = Math.min(0.98, Math.max(0.82, env.RAG_RUNTIME_MIN_SCORE + 0.08));
   const strongLexicalMessage = channels.has('bm25')
     && lexicalScore >= 4 && tokenCoverage >= 0.4;
-  const strongLatestMessage = exactPublishedExample
-    || (channels.has('semantic') && semanticScore >= strongSemanticFloor)
-    || strongLexicalMessage;
   const contextualLatestTurn = retrievalContext === 'contextual'
     && contextIsAvailable(input)
     && Boolean(String(input.pendingQuestion ?? '').trim());
   // Specific entity turns must be answered from their hydrated records. A
   // generic caller-facing message cannot replace or follow that answer.
+  // With an entity already selected, semantic similarity alone is not enough
+  // to prove a topic change: contextual fact requests such as "this package"
+  // are often semantically close to generic overview guidance. Require an
+  // exact published example or strong lexical evidence for that override.
   const explicitMessageTopicChange = retrievalContext === 'primary'
-    && context === 'no_selected_entity' && strongLatestMessage;
+    && context === 'no_selected_entity'
+    && (exactPublishedExample || strongLexicalMessage);
   if (selectedEntities.length > 0 && retrievalContext !== 'contextual'
     && !explicitMessageTopicChange) return false;
   if (context === 'no_selected_entity'
@@ -1298,7 +1300,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
     })),
   });
-  const cacheKey = `zea:rag:hybrid:v17:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:v18:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();
