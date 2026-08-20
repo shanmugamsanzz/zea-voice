@@ -1937,6 +1937,7 @@ export class RealtimeConversationOrchestrator {
         turnEpoch: streaming.epoch,
         valid: grounded.valid === true,
         rejectionReason: grounded.valid === true ? null : grounded.reason ?? 'unknown',
+        rejectedIdentifiers: grounded.valid === true ? [] : grounded.identifiers ?? [],
         decision: grounded.decision ?? null,
         responseId: grounded.responseId ?? null,
         selectedEvidenceIds: grounded.evidenceIds ?? grounded.evidenceSourceIds ?? [],
@@ -2022,6 +2023,9 @@ export class RealtimeConversationOrchestrator {
         text: answer,
         understanding: grounded.valid ? grounded : undefined,
         groundingFailureReason: grounded.valid ? null : grounded.reason,
+        groundingFailureDetails: grounded.valid ? null : {
+          identifiers: grounded.identifiers ?? [],
+        },
         toolCalls,
         sources,
       };
@@ -2070,7 +2074,10 @@ export class RealtimeConversationOrchestrator {
     return runWithProviderRetries({
       ...context,
       deferDecisionRepair: false,
-      decisionRepair: { reason: first.groundingFailureReason },
+      decisionRepair: {
+        reason: first.groundingFailureReason,
+        identifiers: first.groundingFailureDetails?.identifiers ?? [],
+      },
     });
   }
 

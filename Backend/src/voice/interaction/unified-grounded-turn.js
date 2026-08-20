@@ -320,7 +320,12 @@ export function applyUnifiedGroundedTurn({
   );
   if (!claimValidation.valid) {
     return Object.freeze({
-      valid: false, reason: claimValidation.reason, state: memory.snapshot(),
+      valid: false,
+      reason: claimValidation.reason,
+      identifiers: Object.freeze([...(claimValidation.identifiers ?? [])]),
+      rejectedSentence: claimValidation.sentence ?? null,
+      evidenceIds: Object.freeze([...(effectiveDecision.evidenceIds ?? [])]),
+      state: memory.snapshot(),
     });
   }
 

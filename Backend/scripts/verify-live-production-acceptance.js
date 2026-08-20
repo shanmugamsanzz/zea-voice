@@ -444,7 +444,10 @@ try {
               ...decisionInput,
               context: {
                 ...decisionInput.context,
-                decisionRepair: { reason: unified.reason },
+                decisionRepair: {
+                  reason: unified.reason,
+                  identifiers: unified.identifiers ?? [],
+                },
               },
             });
             unified = applyUnifiedGroundedTurn({
@@ -455,8 +458,12 @@ try {
             });
           }
           llmMs = performance.now() - llmStartedAt;
-          assert.equal(unified.valid, true,
-            `${call.id} turn ${index + 1}: invalid final decision (${unified.reason ?? 'unknown'})`);
+          assert.equal(unified.valid, true, `${call.id} turn ${index + 1}: invalid final decision ${JSON.stringify({
+            reason: unified.reason ?? 'unknown',
+            identifiers: unified.identifiers ?? [],
+            rejectedSentence: unified.rejectedSentence ?? null,
+            evidenceIds: unified.evidenceIds ?? [],
+          })}`);
           finalDecision = unified.decision;
           finalText = unified.answer;
           unifiedApplied = true;
