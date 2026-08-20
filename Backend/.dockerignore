@@ -6,6 +6,12 @@ env.example
 coverage
 scripts/*
 !scripts/verify-live-production-acceptance.js
+!scripts/verify-universal-entity-routing.js
+!scripts/verify-grounding-action-runtime.js
+!scripts/verify-tenant-regression-generator.js
+!scripts/verify-tenant-data-regression.js
+!scripts/lib/
+!scripts/lib/tenant-regression-scenarios.js
 README.md
 MIGRATIONS.md
 docker-compose.yml
