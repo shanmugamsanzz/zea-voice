@@ -5,7 +5,8 @@ const maximumSources = 10;
 const maximumEntities = 20;
 const decisions = new Set(['answer', 'clarify', 'action']);
 const repairableDecisionReasons = new Set([
-  'invalid_json', 'invalid_response_shape', 'answer_required', 'unsupported_numeric_fact',
+  'invalid_json', 'invalid_response_shape', 'invalid_clarification',
+  'answer_required', 'unsupported_numeric_fact',
   'unsupported_structured_fact', 'unsupported_technical_term',
 ]);
 

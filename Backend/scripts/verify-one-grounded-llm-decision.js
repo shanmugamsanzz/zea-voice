@@ -382,6 +382,7 @@ assert.match(providerInput.messages[0].content, /"create_visit"/u);
 assert.ok(providerInput.messages[0].content.length <= 12_000);
 assert.match(providerInput.messages[0].content, /<\/grounded_response_contract>/u);
 assert.equal(isRepairableGroundedDecisionReason('invalid_response_shape'), true);
+assert.equal(isRepairableGroundedDecisionReason('invalid_clarification'), true);
 assert.equal(isRepairableGroundedDecisionReason('answer_required'), true);
 assert.equal(isRepairableGroundedDecisionReason('unsupported_numeric_fact'), true);
 assert.equal(isRepairableGroundedDecisionReason('unsupported_structured_fact'), true);
