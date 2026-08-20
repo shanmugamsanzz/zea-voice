@@ -294,6 +294,39 @@ assert.equal(mismatchedEvidenceTurn.valid, false);
 assert.equal(mismatchedEvidenceTurn.reason, 'latest_request_evidence_mismatch');
 mismatchedEvidenceMemory.close();
 
+catalogMemory.beginTurn('remembered-context-turn');
+const rememberedContextEvidence = {
+  ...catalogEvidence,
+  retrievalContext: 'contextual',
+  channels: ['conversation_memory'],
+};
+const rememberedContextTurn = applyUnifiedGroundedTurn({
+  rawDecision: unifiedDecision({
+    decision: 'answer', answer: catalogEvidence.content, evidenceIds: ['catalog-source'],
+    stateUpdate: {
+      currentTopic: 'current-service', knownEntityKeys: ['current-service'],
+      collectedInformation: {}, correctedFields: [], contextDependent: false,
+    },
+    pendingQuestion: null, toolRequest: null,
+  }),
+  groundingEnvelope: {
+    found: true,
+    sources: [{
+      id: 'catalog-source', recordId: catalogEvidence.recordId,
+      recordType: catalogEvidence.recordType, content: catalogEvidence.content,
+      authoritativeData: catalogEvidence.authoritativeData,
+    }],
+    entities: [{
+      id: catalogEvidence.recordId, key: 'current-service', name: 'Current Service',
+      category: 'Services', categoryKey: 'services', sourceId: 'catalog-source',
+    }],
+  },
+  memory: catalogMemory, turnToken: 'remembered-context-turn',
+  evidence: [rememberedContextEvidence], finalizedUtterance: 'What does it include?',
+});
+assert.equal(rememberedContextTurn.valid, true,
+  'canonical conversation-memory evidence determines contextual follow-up state');
+
 catalogMemory.beginTurn('stale-catalog-turn');
 const staleContextEvidence = {
   ...catalogEvidence, retrievalContext: 'contextual',

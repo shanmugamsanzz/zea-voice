@@ -98,6 +98,27 @@ function primaryCatalogEntities(evidence = []) {
     .filter(Boolean);
 }
 
+function memoryResolvedContext(decision, selectedEvidence, beforeState, envelopeEntities = []) {
+  const remembered = new Set((beforeState.knownEntities ?? []).flatMap((entity) => [
+    entity?.id, entity?.key, entity?.name,
+  ]).map(identity).filter(Boolean));
+  if (!remembered.size) return false;
+  const memorySources = selectedEvidence.filter((source) => (
+    String(source?.recordType ?? '').toLocaleUpperCase() === 'CATALOG_ITEM'
+    && String(source?.retrievalContext ?? '').toLocaleLowerCase() === 'contextual'
+    && (source?.channels ?? []).includes('conversation_memory')
+  ));
+  const selectedMatchesMemory = memorySources.some((source) => {
+    const entity = catalogEntityFromEvidence(source, envelopeEntities);
+    return [entity?.id, entity?.key, entity?.name].map(identity)
+      .filter(Boolean).some((value) => remembered.has(value));
+  });
+  if (!selectedMatchesMemory) return false;
+  const proposedTopic = identity(decision?.stateUpdate?.currentTopic);
+  // An explicitly different topic must never be reinterpreted as contextual.
+  return !proposedTopic || remembered.has(proposedTopic);
+}
+
 /**
  * Applies one validated LLM decision to one generic call state. This module is
  * industry-neutral: all facts, questions, fields and tools come from the
@@ -152,6 +173,9 @@ export function applyUnifiedGroundedTurn({
   // derived canonical identity so contextual follow-ups cannot lose it.
   const evidenceResolvedEntity = citedCatalogEntities.size === 1
     ? [...citedCatalogEntities.values()][0] : null;
+  const resolvedFromMemory = memoryResolvedContext(
+    decision, initiallySelectedEvidence, beforeState, hydratedEnvelope.entities,
+  );
   const decisionWithEvidenceState = evidenceResolvedEntity && decision.decision === 'answer'
     ? Object.freeze({
       ...decision,
@@ -160,6 +184,7 @@ export function applyUnifiedGroundedTurn({
         currentTopic: evidenceResolvedEntity.key,
         knownEntityKeys: Object.freeze([evidenceResolvedEntity.key]),
         knownEntities: Object.freeze([{ ...evidenceResolvedEntity }]),
+        contextDependent: decision.stateUpdate.contextDependent === true || resolvedFromMemory,
       }),
     })
     : decision;
