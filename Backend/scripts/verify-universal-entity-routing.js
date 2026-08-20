@@ -9,6 +9,7 @@ const {
 } = await import('../src/knowledge-bases/catalog-entity-resolver.js');
 const {
   catalogIdentityOverridesRememberedEntity,
+  callerMessageOverridesCategoryResolution,
   focusAuthoritativeCatalogEvidence,
   strongCallerMessageMatch,
   workflowActionRouteCandidates,
@@ -107,6 +108,33 @@ assert.equal(strongCallerMessageMatch(overview, 'yes', {}), false);
 assert.equal(strongCallerMessageMatch(
   overview, 'yes', { pendingQuestion: 'Would you like to hear the choices?' },
 ), true);
+
+const overviewCategoryResolution = {
+  status: 'match', entityType: 'category', category: 'Health Screening',
+  categoryKey: 'health-screening', matchedText: 'Health Screening',
+};
+const completeOverviewMessage = {
+  ...overview,
+  authoritativeData: {
+    ...overview.authoritativeData,
+    variables: [
+      { key: 'purpose', value: 'Provide the complete overview of all available options.' },
+      { key: 'situation', value: 'The caller asks for a complete overview of all available options.' },
+      { key: 'examples', value: ['What options are available?'] },
+      { key: 'context', value: 'no_selected_entity' },
+    ],
+  },
+};
+assert.equal(callerMessageOverridesCategoryResolution(
+  completeOverviewMessage,
+  overviewCategoryResolution,
+  'Could you give me a complete overview of the available health screening options?',
+), true);
+assert.equal(callerMessageOverridesCategoryResolution(
+  completeOverviewMessage,
+  { ...overviewCategoryResolution, category: 'Organ Specific Services', categoryKey: 'organ-specific-services', matchedText: 'Organ Specific Services' },
+  'What organ specific services are available?',
+), false);
 
 const actionRoutes = workflowActionRouteCandidates([{
   id: 'book', name: 'create_reservation', conditions: {

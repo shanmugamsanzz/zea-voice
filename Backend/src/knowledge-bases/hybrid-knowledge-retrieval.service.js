@@ -1055,6 +1055,48 @@ function publishedExampleCoverage(evidence, query) {
   }));
 }
 
+function publishedMessageMatchedTokenCount(evidence, query) {
+  const queryTokens = [...new Set(tokens(query))];
+  if (!queryTokens.length) return 0;
+  const configured = conversationVariable(evidence, 'examples');
+  const examples = Array.isArray(configured) ? configured : [configured];
+  const routingMetadata = [
+    ...examples,
+    conversationVariable(evidence, 'purpose'),
+    conversationVariable(evidence, 'situation'),
+  ];
+  const tokenMatches = (left, right) => left === right
+    || (Math.min(left.length, right.length) >= 4
+      && (left.includes(right) || right.includes(left)));
+  return Math.max(0, ...routingMetadata.map((entry) => {
+    const metadataTokens = [...new Set(tokens(entry))];
+    return queryTokens.filter((queryToken) => metadataTokens.some(
+      (metadataToken) => tokenMatches(queryToken, metadataToken),
+    )).length;
+  }));
+}
+
+export function callerMessageOverridesCategoryResolution(message, resolution, query = '') {
+  if (!message || resolution?.status !== 'match' || resolution.entityType !== 'category') {
+    return false;
+  }
+  if (publishedExampleMatch(message, query)) return true;
+  const queryTokens = [...new Set(tokens(query))];
+  const categoryTokens = [...new Set(tokens(
+    resolution.matchedText ?? resolution.category ?? resolution.categoryKey,
+  ))];
+  const categoryMatches = queryTokens.filter((queryToken) => categoryTokens.some(
+    (categoryToken) => queryToken === categoryToken
+      || (Math.min(queryToken.length, categoryToken.length) >= 4
+        && (queryToken.includes(categoryToken) || categoryToken.includes(queryToken))),
+  )).length;
+  const messageMatches = publishedMessageMatchedTokenCount(message, query);
+  // A category remains authoritative when it is at least as specific as the
+  // configured message. Only a materially stronger tenant-published routing
+  // description may identify a cross-category overview request.
+  return messageMatches >= 3 && messageMatches > categoryMatches;
+}
+
 export function conversationMessageRouteCandidates(routes = [], query = '') {
   return routes.map((route) => {
     const authoritativeData = {
@@ -1559,7 +1601,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
     })),
   });
-  const cacheKey = `zea:rag:hybrid:v31:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:v32:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();
@@ -1644,8 +1686,20 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   const catalogIdentityResolved = explicitCatalogRecordIds.length > 0;
   const catalogIdentityDetected = catalogIdentityResolved
     || ['match', 'uncertain'].includes(catalogIdentityResolution?.status);
+  const unconstrainedMetadataCallerMessage = selectStrongCallerMessage(
+    routeCandidates, query, safeInput,
+  );
+  const callerMessageCategoryOverride = callerMessageOverridesCategoryResolution(
+    unconstrainedMetadataCallerMessage, catalogIdentityResolution, query,
+  );
+  const catalogIdentityResolvedForMessage = catalogIdentityResolved
+    && !callerMessageCategoryOverride;
+  const catalogIdentityDetectedForMessage = catalogIdentityDetected
+    && !callerMessageCategoryOverride;
   const metadataCallerMessage = selectStrongCallerMessage(routeCandidates, query, {
-    ...safeInput, catalogIdentityResolved, catalogIdentityDetected,
+    ...safeInput,
+    catalogIdentityResolved: catalogIdentityResolvedForMessage,
+    catalogIdentityDetected: catalogIdentityDetectedForMessage,
   });
   if (metadataCallerMessage) {
     const primaryByKey = new Map();
@@ -1788,7 +1842,8 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   ));
   const messageSelectionInput = {
     ...safeInput,
-    catalogIdentityResolved, catalogIdentityDetected,
+    catalogIdentityResolved: catalogIdentityResolvedForMessage,
+    catalogIdentityDetected: catalogIdentityDetectedForMessage,
     selectedCatalogFactAligned: selectedCatalogFactAligned(
       workflowPermittedEvidence, query, safeInput,
     ),
@@ -1802,7 +1857,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
     workflowPermittedEvidence, {
       ...messageSelectionInput,
       preferredCallerMessage,
-      catalogIdentityResolved,
+      catalogIdentityResolved: catalogIdentityResolvedForMessage,
       explicitCatalogRecordIds,
     }, safeInput.topK,
   );
