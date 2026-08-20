@@ -327,6 +327,44 @@ const rememberedContextTurn = applyUnifiedGroundedTurn({
 assert.equal(rememberedContextTurn.valid, true,
   'canonical conversation-memory evidence determines contextual follow-up state');
 
+catalogMemory.beginTurn('remembered-citation-turn');
+const duplicateFactEvidence = {
+  id: 'duplicate-fact-source', recordId: 'duplicate-fact-record', recordType: 'FAQ',
+  callerFacing: true, content: catalogEvidence.content, retrievalContext: 'primary',
+};
+const rememberedCitationTurn = applyUnifiedGroundedTurn({
+  rawDecision: unifiedDecision({
+    decision: 'answer', answer: catalogEvidence.content,
+    evidenceIds: ['duplicate-fact-source'],
+    stateUpdate: { collectedInformation: {}, correctedFields: [], contextDependent: false },
+    pendingQuestion: null, toolRequest: null,
+  }),
+  groundingEnvelope: {
+    found: true,
+    sources: [
+      {
+        id: 'catalog-source', recordId: catalogEvidence.recordId,
+        recordType: catalogEvidence.recordType, content: catalogEvidence.content,
+        authoritativeData: catalogEvidence.authoritativeData,
+      },
+      {
+        id: 'duplicate-fact-source', recordId: duplicateFactEvidence.recordId,
+        recordType: duplicateFactEvidence.recordType, content: duplicateFactEvidence.content,
+      },
+    ],
+    entities: [{
+      id: catalogEvidence.recordId, key: 'current-service', name: 'Current Service',
+      category: 'Services', categoryKey: 'services', sourceId: 'catalog-source',
+    }],
+  },
+  memory: catalogMemory, turnToken: 'remembered-citation-turn',
+  evidence: [rememberedContextEvidence, duplicateFactEvidence],
+  finalizedUtterance: 'What does this include?',
+});
+assert.equal(rememberedCitationTurn.valid, true);
+assert.ok(rememberedCitationTurn.evidenceIds.includes('catalog-source'),
+  'a contextual fact answer must retain its canonical memory-selected Catalog citation');
+
 catalogMemory.beginTurn('stale-catalog-turn');
 const staleContextEvidence = {
   ...catalogEvidence, retrievalContext: 'contextual',

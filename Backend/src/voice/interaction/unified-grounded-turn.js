@@ -98,6 +98,32 @@ function primaryCatalogEntities(evidence = []) {
     .filter(Boolean);
 }
 
+function rememberedCatalogSource(envelope, beforeState, evidence = []) {
+  const remembered = new Set((beforeState.knownEntities ?? []).flatMap((entity) => [
+    entity?.id, entity?.key, entity?.name,
+  ]).map(identity).filter(Boolean));
+  if (!remembered.size) return null;
+  const matchesRemembered = (source) => {
+    if (String(source?.recordType ?? '').toLocaleUpperCase() !== 'CATALOG_ITEM') return false;
+    const data = source.authoritativeData ?? {};
+    return [source.recordId, data.itemKey, data.name].map(identity)
+      .filter(Boolean).some((value) => remembered.has(value));
+  };
+  const candidates = (envelope.sources ?? []).filter((source) => (
+    matchesRemembered(source)
+    && (source.channels ?? []).includes('conversation_memory')
+  ));
+  if (candidates.length !== 1) return null;
+  // A different primary Catalog entity means the caller changed topic. In
+  // that case memory must not add the previous item's citation.
+  const differentPrimaryEntity = evidence.some((source) => (
+    String(source?.retrievalContext ?? '').toLocaleLowerCase() === 'primary'
+    && String(source?.recordType ?? '').toLocaleUpperCase() === 'CATALOG_ITEM'
+    && !matchesRemembered(source)
+  ));
+  return differentPrimaryEntity ? null : candidates[0];
+}
+
 function memoryResolvedContext(decision, selectedEvidence, beforeState, envelopeEntities = []) {
   const remembered = new Set((beforeState.knownEntities ?? []).flatMap((entity) => [
     entity?.id, entity?.key, entity?.name,
@@ -151,19 +177,40 @@ export function applyUnifiedGroundedTurn({
     activeToolRequest: memory.snapshot().activeToolRequest,
   };
   const hydratedEnvelope = hydrateGroundingEnvelope(groundingEnvelope, evidence);
-  const decision = validateGroundedLlmDecision(rawDecision, hydratedEnvelope, runtime);
-  if (!decision.valid) {
+  const validatedDecision = validateGroundedLlmDecision(rawDecision, hydratedEnvelope, runtime);
+  if (!validatedDecision.valid) {
     return Object.freeze({
       valid: false,
-      reason: decision.reason,
-      numbers: Object.freeze([...(decision.numbers ?? [])]),
-      rejectedSentence: decision.rejectedAnswer ?? null,
-      evidenceIds: Object.freeze([...(decision.evidenceIds ?? [])]),
+      reason: validatedDecision.reason,
+      numbers: Object.freeze([...(validatedDecision.numbers ?? [])]),
+      rejectedSentence: validatedDecision.rejectedAnswer ?? null,
+      evidenceIds: Object.freeze([...(validatedDecision.evidenceIds ?? [])]),
       state: memory.snapshot(),
     });
   }
 
   const beforeState = memory.snapshot();
+  const rememberedSource = rememberedCatalogSource(hydratedEnvelope, beforeState, evidence);
+  const retainRememberedCatalogCitation = validatedDecision.decision === 'answer'
+    && !validatedDecision.responseId
+    && rememberedSource
+    && !(validatedDecision.evidenceIds ?? []).includes(rememberedSource.id);
+  // The model chooses the wording, while runtime owns traceability. Preserve
+  // the one canonical memory-selected Catalog citation for a contextual fact
+  // answer so repeated pronoun/follow-up turns cannot lose their entity source.
+  const decision = retainRememberedCatalogCitation ? Object.freeze({
+    ...validatedDecision,
+    evidenceIds: Object.freeze([
+      ...(validatedDecision.evidenceIds ?? []), rememberedSource.id,
+    ].slice(0, 5)),
+    evidenceSourceIds: Object.freeze([
+      ...(validatedDecision.evidenceSourceIds ?? []), rememberedSource.id,
+    ].slice(0, 5)),
+    stateUpdate: Object.freeze({
+      ...validatedDecision.stateUpdate,
+      contextDependent: true,
+    }),
+  }) : validatedDecision;
   const initiallySelectedEvidence = selectedSources(decision, hydratedEnvelope, evidence);
   const citedCatalogEntities = new Map(initiallySelectedEvidence.map((source) => (
     catalogEntityFromEvidence(source, hydratedEnvelope.entities)
