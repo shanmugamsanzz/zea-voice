@@ -14,6 +14,7 @@ const {
   mergeCandidateSignals,
   postIdentityContextPolicy,
   prioritizeCandidates,
+  rememberedCatalogIdentityCandidates,
   selectStrongCallerMessage,
   strongCallerMessageMatch,
 } = await import('../src/knowledge-bases/hybrid-knowledge-retrieval.service.js');
@@ -105,6 +106,25 @@ const refreshedPrimaryPolicy = postIdentityContextPolicy(
 );
 assert.equal(refreshedPrimaryPolicy.useContext, false);
 assert.equal(refreshedPrimaryPolicy.preferContext, false);
+
+const rememberedLungs = rememberedCatalogIdentityCandidates([{
+  id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  knowledge_base_id: knowledgeBaseId,
+  publication_revision: 3,
+  document_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+  document_version_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+  item_key: 'lungs-health-checkup', name: 'Lungs Health Checkup',
+  category: 'Organ-Specific Health Check-ups',
+}], [{ key: 'lungs-health-checkup', name: 'Lungs Health Checkup' }]);
+assert.equal(rememberedLungs.length, 1);
+assert.equal(rememberedLungs[0].recordId, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+assert.equal(rememberedLungs[0].retrievalContext, 'contextual');
+assert.deepEqual(rememberedLungs[0].channels, ['conversation_memory']);
+assert.equal(rememberedCatalogIdentityCandidates([{
+  id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  knowledge_base_id: knowledgeBaseId,
+  item_key: 'lungs-health-checkup', name: 'Lungs Health Checkup',
+}], [{ key: 'diabetes-health-checkup', name: 'Diabetes Health Checkup' }]).length, 0);
 
 const strongExplicitItem = contextualRetrievalPolicy({
   pendingQuestion: 'Would you like another option?',

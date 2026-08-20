@@ -1060,6 +1060,27 @@ function catalogIdentityCandidates(resolution) {
     }));
 }
 
+export function rememberedCatalogIdentityCandidates(identities = [], knownEntities = []) {
+  const selected = new Set((knownEntities ?? []).flatMap((entity) => [
+    entity?.id, entity?.key, entity?.name,
+  ]).map(catalogValue).filter(Boolean));
+  if (!selected.size) return [];
+  return identities.filter((item) => [item?.id, item?.item_key, item?.name]
+    .map(catalogValue).some((value) => selected.has(value)))
+    .filter((item) => item?.id && item?.knowledge_base_id)
+    .slice(0, 5)
+    .map((item, index) => ({
+      recordType: 'CATALOG_ITEM', recordId: item.id,
+      knowledgeBaseId: item.knowledge_base_id,
+      publicationRevision: Number(item.publication_revision),
+      documentId: item.document_id, documentVersionId: item.document_version_id,
+      language: 'und', contentPreview: `${item.name ?? ''} ${item.category ?? ''}`.trim(),
+      score: 0.99 - index * 0.001,
+      semanticScore: 0, lexicalScore: 0, tokenCoverage: 1,
+      channels: ['conversation_memory'], retrievalContext: 'contextual',
+    }));
+}
+
 export function callerMessageEligibleForDecision(evidence, query, input = {}) {
   if (strongCallerMessageMatch(evidence, query, input)) return true;
   if (evidence?.recordType !== 'CONVERSATION_NODE' || evidence?.callerFacing !== true
@@ -1264,7 +1285,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
     })),
   });
-  const cacheKey = `zea:rag:hybrid:v13:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:v14:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();
@@ -1290,14 +1311,19 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
     query, pendingContextPreferred,
   );
   let catalogIdentityResolution = null;
+  let catalogIdentities = [];
   let identityDiscoveryCandidates = [];
-  if (catalogIdentityDiscoveryNeeded) {
-    const identities = await abortable(deadline(
+  const rememberedEntityHydrationNeeded = contextPolicy.useContext
+    && (safeInput.knownEntities ?? []).length > 0;
+  if (catalogIdentityDiscoveryNeeded || rememberedEntityHydrationNeeded) {
+    catalogIdentities = await abortable(deadline(
       loadCatalogIdentities({ ...auth, tenantId }, safeInput, scope, runtime),
       env.RAG_RUNTIME_CHANNEL_DEADLINE_MS, [],
     ), input.abortSignal, []);
-    catalogIdentityResolution = classifyCatalogEntityLocally(identities, query);
-    identityDiscoveryCandidates = catalogIdentityCandidates(catalogIdentityResolution);
+    if (catalogIdentityDiscoveryNeeded) {
+      catalogIdentityResolution = classifyCatalogEntityLocally(catalogIdentities, query);
+      identityDiscoveryCandidates = catalogIdentityCandidates(catalogIdentityResolution);
+    }
     if (identityDiscoveryCandidates.length) {
       const uniquePrimary = new Map();
       for (const candidate of [...identityDiscoveryCandidates, ...strongPrimary]) {
@@ -1327,9 +1353,27 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   };
   const vectorBm25Ms = Math.round((performance.now() - retrievalStartedAt) * 100) / 100;
   const rerankStartedAt = performance.now();
-  const strongContextual = retainStrongCandidates(
+  let strongContextual = retainStrongCandidates(
     contextualBranch.ranked, queries.contextual, 8,
   );
+  // A genuine contextual reference to an already selected canonical Catalog
+  // entity must hydrate that exact PostgreSQL record deterministically. Vector
+  // and lexical retrieval still provide discovery/trace signals, but they do
+  // not have to rediscover an identity already established in call memory.
+  const rememberedIdentityCandidates = contextPolicy.useContext
+    && catalogIdentityResolution?.status !== 'match'
+    ? rememberedCatalogIdentityCandidates(catalogIdentities, safeInput.knownEntities)
+    : [];
+  if (rememberedIdentityCandidates.length) {
+    const contextualByKey = new Map();
+    for (const candidate of [...rememberedIdentityCandidates, ...strongContextual]) {
+      const key = candidateKey(candidate);
+      const current = contextualByKey.get(key);
+      contextualByKey.set(key, current ? mergeCandidateSignals(current, candidate) : candidate);
+    }
+    strongContextual = [...contextualByKey.values()].slice(0, 8)
+      .map((candidate, index) => ({ ...candidate, rank: index + 1 }));
+  }
   let ranked = prioritizeCandidates(
     strongPrimary,
     strongContextual,
