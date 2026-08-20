@@ -18,6 +18,17 @@ assert.equal(validateGroundedClaim('Priority service is not available.', factual
 assert.equal(validateGroundedClaim('Priority service does not include standard support.', factualSources).valid, true);
 assert.equal(validateGroundedClaims('Priority service costs INR 3500.', factualSources).reason,
   'unsupported_numeric_fact');
+assert.equal(validateGroundedClaim(
+  'Tests: 1. CBC, 2. RBS.',
+  [{
+    content: 'Approved package.', recordType: 'CATALOG_ITEM',
+    authoritativeData: { attributes: { tests: ['CBC', 'RBS'] } },
+  }],
+).valid, true, 'ordered-list markers are presentation, not factual numeric claims');
+assert.equal(validateGroundedClaim(
+  'The package includes 9 tests.',
+  [{ content: 'Approved package.', recordType: 'CATALOG_ITEM' }],
+).reason, 'unsupported_numeric_fact', 'a calculated count remains a checked factual number');
 assert.equal(validateGroundedClaim('The request was confirmed.', factualSources).reason,
   'unauthorized_action_claim');
 assert.equal(validateGroundedClaim('Caller asked information; retrieve approved evidence.', factualSources).reason,

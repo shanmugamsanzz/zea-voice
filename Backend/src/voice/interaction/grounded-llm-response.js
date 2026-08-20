@@ -1,4 +1,5 @@
 import { validateGroundedLlmDecision } from './grounded-llm-decision.js';
+import { groundedNumbers as numbers } from './grounded-number-validator.js';
 
 const maximumIntentCharacters = 160;
 const maximumAnswerCharacters = 4_000;
@@ -462,11 +463,6 @@ function fieldUpdates(parsed, runtime) {
   const corrected = list(parsed.correctedFields ?? parsed.corrected_fields, 30);
   if (corrected.some((key) => !Object.hasOwn(updates, key))) return null;
   return { updates, correctedFields: corrected };
-}
-
-function numbers(value) {
-  return new Set((text(value, maximumAnswerCharacters).match(/\p{Sc}?\s*\d[\d,.:%/-]*/gu) ?? [])
-    .map((entry) => entry.replace(/[^\d]/gu, '')).filter(Boolean));
 }
 
 function meaningfulTokens(value) {

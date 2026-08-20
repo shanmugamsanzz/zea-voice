@@ -1,3 +1,5 @@
+import { groundedNumbers as numbers } from './grounded-number-validator.js';
+
 const maximumAnswerCharacters = 4_000;
 const maximumSources = 10;
 const maximumEntities = 20;
@@ -214,11 +216,6 @@ function normalizeToolRequest(value, decision, runtime) {
   const argumentsValue = value.arguments ?? {};
   if (!tool || !argumentsMatchSchema(argumentsValue, tool.inputSchema)) return undefined;
   return Object.freeze({ name, arguments: Object.freeze({ ...argumentsValue }) });
-}
-
-function numbers(value) {
-  return new Set((text(value, maximumAnswerCharacters).match(/\p{Sc}?\s*\d[\d,.:%/-]*/gu) ?? [])
-    .map((entry) => entry.replace(/[^\d]/gu, '')).filter(Boolean));
 }
 
 function meaningfulTokens(value) {
@@ -533,8 +530,16 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
     return `${source.content ?? ''} ${structured}`;
   }).join(' ');
   const evidenceNumbers = numbers(evidenceText);
-  if (answer && [...numbers(answer)].some((number) => !evidenceNumbers.has(number))) {
-    return Object.freeze({ valid: false, reason: 'unsupported_numeric_fact' });
+  const unsupportedNumbers = answer
+    ? [...numbers(answer)].filter((number) => !evidenceNumbers.has(number)) : [];
+  if (unsupportedNumbers.length) {
+    return Object.freeze({
+      valid: false,
+      reason: 'unsupported_numeric_fact',
+      numbers: Object.freeze(unsupportedNumbers),
+      rejectedAnswer: answer,
+      evidenceIds: Object.freeze(citedSources.map((source) => source.id)),
+    });
   }
   // Surface-token overlap is not a reliable evidence test for Tamil,
   // Tanglish, translations, or natural spoken paraphrases. The hydrated

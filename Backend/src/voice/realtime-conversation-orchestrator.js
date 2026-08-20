@@ -1938,6 +1938,7 @@ export class RealtimeConversationOrchestrator {
         valid: grounded.valid === true,
         rejectionReason: grounded.valid === true ? null : grounded.reason ?? 'unknown',
         rejectedIdentifiers: grounded.valid === true ? [] : grounded.identifiers ?? [],
+        rejectedNumbers: grounded.valid === true ? [] : grounded.numbers ?? [],
         decision: grounded.decision ?? null,
         responseId: grounded.responseId ?? null,
         selectedEvidenceIds: grounded.evidenceIds ?? grounded.evidenceSourceIds ?? [],
@@ -2025,6 +2026,7 @@ export class RealtimeConversationOrchestrator {
         groundingFailureReason: grounded.valid ? null : grounded.reason,
         groundingFailureDetails: grounded.valid ? null : {
           identifiers: grounded.identifiers ?? [],
+          numbers: grounded.numbers ?? [],
         },
         toolCalls,
         sources,
@@ -2077,6 +2079,7 @@ export class RealtimeConversationOrchestrator {
       decisionRepair: {
         reason: first.groundingFailureReason,
         identifiers: first.groundingFailureDetails?.identifiers ?? [],
+        numbers: first.groundingFailureDetails?.numbers ?? [],
       },
     });
   }

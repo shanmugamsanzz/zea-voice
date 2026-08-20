@@ -447,6 +447,7 @@ try {
                 decisionRepair: {
                   reason: unified.reason,
                   identifiers: unified.identifiers ?? [],
+                  numbers: unified.numbers ?? [],
                 },
               },
             });
@@ -461,6 +462,7 @@ try {
           assert.equal(unified.valid, true, `${call.id} turn ${index + 1}: invalid final decision ${JSON.stringify({
             reason: unified.reason ?? 'unknown',
             identifiers: unified.identifiers ?? [],
+            numbers: unified.numbers ?? [],
             rejectedSentence: unified.rejectedSentence ?? null,
             evidenceIds: unified.evidenceIds ?? [],
           })}`);

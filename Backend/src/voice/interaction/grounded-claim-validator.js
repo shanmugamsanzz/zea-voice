@@ -1,3 +1,5 @@
+import { groundedNumbers as numbers } from './grounded-number-validator.js';
+
 const maximumText = 8_000;
 
 function text(value) {
@@ -11,11 +13,6 @@ function identity(value) {
 
 function tokens(value) {
   return identity(value).split(' ').filter((token) => token.length >= 3 || /\d/u.test(token));
-}
-
-function numbers(value) {
-  return new Set((text(value).match(/\p{Sc}?\s*\d[\d,.:%/-]*/gu) ?? [])
-    .map((entry) => entry.replace(/[^\d]/gu, '')).filter(Boolean));
 }
 
 function sourceContent(source) {
@@ -122,8 +119,12 @@ export function validateGroundedClaim(sentence, sources = [], options = {}) {
   }
   const evidenceText = sources.map(sourceContent).join(' ');
   const evidenceNumbers = numbers(evidenceText);
-  if ([...numbers(claim)].some((number) => !evidenceNumbers.has(number))) {
-    return Object.freeze({ valid: false, reason: 'unsupported_numeric_fact' });
+  const unsupportedNumbers = [...numbers(claim)].filter((number) => !evidenceNumbers.has(number));
+  if (unsupportedNumbers.length) {
+    return Object.freeze({
+      valid: false, reason: 'unsupported_numeric_fact',
+      numbers: Object.freeze(unsupportedNumbers),
+    });
   }
   const unsupportedIdentifiers = unsupportedStructuredIdentifiers(claim, evidenceText);
   if (unsupportedIdentifiers.length) {

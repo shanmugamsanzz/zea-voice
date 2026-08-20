@@ -132,7 +132,14 @@ export function applyUnifiedGroundedTurn({
   const hydratedEnvelope = hydrateGroundingEnvelope(groundingEnvelope, evidence);
   const decision = validateGroundedLlmDecision(rawDecision, hydratedEnvelope, runtime);
   if (!decision.valid) {
-    return Object.freeze({ valid: false, reason: decision.reason, state: memory.snapshot() });
+    return Object.freeze({
+      valid: false,
+      reason: decision.reason,
+      numbers: Object.freeze([...(decision.numbers ?? [])]),
+      rejectedSentence: decision.rejectedAnswer ?? null,
+      evidenceIds: Object.freeze([...(decision.evidenceIds ?? [])]),
+      state: memory.snapshot(),
+    });
   }
 
   const beforeState = memory.snapshot();
@@ -323,6 +330,7 @@ export function applyUnifiedGroundedTurn({
       valid: false,
       reason: claimValidation.reason,
       identifiers: Object.freeze([...(claimValidation.identifiers ?? [])]),
+      numbers: Object.freeze([...(claimValidation.numbers ?? [])]),
       rejectedSentence: claimValidation.sentence ?? null,
       evidenceIds: Object.freeze([...(effectiveDecision.evidenceIds ?? [])]),
       state: memory.snapshot(),
