@@ -130,17 +130,9 @@ const conversationMessageRouteSql = `
     a.publication_revision
     FROM conversation_flows f
     JOIN assigned a ON a.id=f.knowledge_base_id
-    JOIN knowledge_document_versions v
-      ON v.tenant_id=f.tenant_id AND v.knowledge_base_id=f.knowledge_base_id
-     AND v.document_id=f.document_id AND v.id=f.document_version_id
-    JOIN knowledge_documents d
-      ON d.tenant_id=f.tenant_id AND d.knowledge_base_id=f.knowledge_base_id
-     AND d.id=f.document_id
    WHERE f.tenant_id=$1 AND f.status='approved'
      AND lower(COALESCE(f.node_type,''))='message'
      AND (f.usage_direction='both' OR f.usage_direction=$3::agent_usage_direction)
-     AND v.is_current=true AND v.status='ready' AND v.deleted_at IS NULL
-     AND d.status='ready' AND d.deleted_at IS NULL
    ORDER BY f.knowledge_base_id,f.sequence_order,f.id
    LIMIT 500`;
 
@@ -1468,23 +1460,23 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
     })),
   });
-  const cacheKey = `zea:rag:hybrid:v26:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:v27:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();
-  const primaryBranch = await retrieveBranch(
-    { ...auth, tenantId }, safeInput, query, scope, runtime,
-  );
+  const [primaryBranch, conversationRoutes] = await Promise.all([
+    retrieveBranch({ ...auth, tenantId }, safeInput, query, scope, runtime),
+    abortable(deadline(
+      loadConversationMessageRoutes({ ...auth, tenantId }, safeInput, scope, runtime),
+      env.RAG_RUNTIME_CHANNEL_DEADLINE_MS, [],
+    ), input.abortSignal, []),
+  ]);
   if (input.abortSignal?.aborted) return {
     operation: 'search_published_knowledge', route: 'hybrid', found: false, sources: [],
     actionEvidence: [], guidanceEvidence: [], entities: [], cancelled: true,
     durationMs: performance.now() - startedAt,
   };
   let strongPrimary = retainStrongCandidates(primaryBranch.ranked, query, 8);
-  const conversationRoutes = await abortable(deadline(
-    loadConversationMessageRoutes({ ...auth, tenantId }, safeInput, scope, runtime),
-    env.RAG_RUNTIME_CHANNEL_DEADLINE_MS, [],
-  ), input.abortSignal, []);
   const routeCandidates = conversationMessageRouteCandidates(conversationRoutes, query);
   const metadataCallerMessage = selectStrongCallerMessage(routeCandidates, query, safeInput);
   if (metadataCallerMessage) {
