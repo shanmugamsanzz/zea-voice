@@ -228,6 +228,23 @@ const documentAlignedSemanticOverview = {
     )),
   },
 };
+const metadataAlignedEnglishOverview = {
+  ...documentAlignedSemanticOverview,
+  authoritativeData: {
+    ...documentAlignedSemanticOverview.authoritativeData,
+    variables: [
+      { key: 'purpose', value: 'Provide the complete package overview for available options.' },
+      { key: 'situation', value: 'The caller asks for a complete overview of all available options.' },
+      { key: 'context', value: 'no_selected_entity' },
+      { key: 'examples', value: ['What packages are available?', 'Explain the options'] },
+    ],
+  },
+};
+assert.equal(strongCallerMessageMatch(
+  metadataAlignedEnglishOverview,
+  'Could you give me a complete overview of the available health screening options?',
+  { knownEntities: [] },
+), true, 'approved purpose and situation metadata must support unseen natural paraphrases');
 const selectedFactEvidence = [{
   recordType: 'CATALOG_ITEM', recordId: 'old-item-id',
   authoritativeData: {

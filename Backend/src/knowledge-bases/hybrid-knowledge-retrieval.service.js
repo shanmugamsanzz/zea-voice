@@ -948,10 +948,15 @@ function publishedExampleCoverage(evidence, query) {
   if (!queryTokens.length) return 0;
   const configured = conversationVariable(evidence, 'examples');
   const examples = Array.isArray(configured) ? configured : [configured];
+  const routingMetadata = [
+    ...examples,
+    conversationVariable(evidence, 'purpose'),
+    conversationVariable(evidence, 'situation'),
+  ];
   const tokenMatches = (left, right) => left === right
     || (Math.min(left.length, right.length) >= 4
       && (left.includes(right) || right.includes(left)));
-  return Math.max(0, ...examples.map((example) => {
+  return Math.max(0, ...routingMetadata.map((example) => {
     const exampleTokens = [...new Set(tokens(example))];
     const matched = queryTokens.filter((queryToken) => (
       exampleTokens.some((exampleToken) => tokenMatches(queryToken, exampleToken))
@@ -1012,7 +1017,7 @@ export function strongCallerMessageMatch(evidence, query, input = {}) {
     && lexicalScore >= 4 && tokenCoverage >= 0.4;
   const documentExampleCoverage = publishedExampleCoverage(evidence, query);
   const documentAlignedSemanticMessage = channels.has('semantic')
-    && semanticScore >= env.RAG_RUNTIME_MIN_SCORE && documentExampleCoverage >= 0.45;
+    && semanticScore >= env.RAG_RUNTIME_MIN_SCORE && documentExampleCoverage >= 0.3;
   const contextualLatestTurn = retrievalContext === 'contextual'
     && contextIsAvailable(input)
     && Boolean(String(input.pendingQuestion ?? '').trim());
@@ -1026,7 +1031,7 @@ export function strongCallerMessageMatch(evidence, query, input = {}) {
     && context === 'no_selected_entity'
     && input.selectedCatalogFactAligned !== true
     && (exactPublishedExample || documentAlignedSemanticMessage
-      || (strongLexicalMessage && documentExampleCoverage >= 0.45));
+      || (strongLexicalMessage && documentExampleCoverage >= 0.3));
   if (selectedEntities.length > 0 && retrievalContext !== 'contextual'
     && !explicitMessageTopicChange) return false;
   if (context === 'no_selected_entity'
@@ -1352,7 +1357,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
     })),
   });
-  const cacheKey = `zea:rag:hybrid:v22:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:v23:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();
