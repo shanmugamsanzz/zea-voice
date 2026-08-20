@@ -14,7 +14,7 @@ assert.match(gateSource, /PRODUCTION_ACCEPTANCE_EXPECTED_REVISIONS/u);
 assert.match(gateSource, /countTenantPointsByKnowledgeBaseRevision/u);
 assert.match(gateSource, /candidateRevisionFingerprint/u);
 assert.match(gateSource, /semantic retrieval returned no candidates/u);
-assert.match(gateSource, /hydrated evidence has no non-zero semantic score/u);
+assert.match(gateSource, /semantic retrieval trace has no genuine non-zero score/u);
 assert.match(gateSource, /unsupported evidence type/u);
 assert.match(gateSource, /personal\/configured fields were collected without authorization/u);
 assert.match(gateSource, /internal JSON reached TTS/u);

@@ -5,7 +5,7 @@ const maximumSources = 10;
 const maximumEntities = 20;
 const decisions = new Set(['answer', 'clarify', 'action']);
 const repairableDecisionReasons = new Set([
-  'invalid_response_shape', 'answer_required', 'unsupported_numeric_fact',
+  'invalid_json', 'invalid_response_shape', 'answer_required', 'unsupported_numeric_fact',
   'unsupported_structured_fact', 'unsupported_technical_term',
 ]);
 
@@ -59,6 +59,43 @@ function exactShape(value) {
     'responseId', 'stateUpdate', 'toolRequest',
   ];
   return Object.keys(value).sort().join('|') === expected.join('|');
+}
+
+const decisionEnvelopeKeys = new Set([
+  'answer', 'clarification', 'decision', 'evidenceIds', 'pendingQuestion',
+  'responseId', 'stateUpdate', 'toolRequest',
+]);
+const compatibleTopLevelStateKeys = new Set([
+  'currentTopic', 'knownEntityKeys', 'knownEntities', 'selectedEntityKeys',
+  'collectedInformation', 'fieldUpdates', 'correctedFields', 'language',
+  'pendingQuestionRelevant', 'activeToolRequest', 'requestType', 'questionType',
+  'requestedFacts', 'constraints', 'contextualReferences', 'contextDependent',
+]);
+
+function normalizeDecisionEnvelope(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const unknown = Object.keys(value).filter((key) => (
+    !decisionEnvelopeKeys.has(key) && !compatibleTopLevelStateKeys.has(key)
+  ));
+  if (unknown.length) return null;
+  const suppliedState = value.stateUpdate === undefined ? {} : value.stateUpdate;
+  if (!suppliedState || typeof suppliedState !== 'object' || Array.isArray(suppliedState)) {
+    return null;
+  }
+  const stateUpdate = { ...suppliedState };
+  for (const key of compatibleTopLevelStateKeys) {
+    if (value[key] !== undefined && stateUpdate[key] === undefined) stateUpdate[key] = value[key];
+  }
+  return {
+    decision: value.decision,
+    answer: value.answer ?? '',
+    responseId: value.responseId ?? null,
+    evidenceIds: value.evidenceIds ?? [],
+    stateUpdate,
+    pendingQuestion: value.pendingQuestion ?? null,
+    toolRequest: value.toolRequest ?? null,
+    clarification: value.clarification ?? null,
+  };
 }
 
 function normalizeFieldValue(value, schema) {
@@ -421,9 +458,12 @@ export function groundedDecisionJsonSchema(envelope, runtime = {}) {
 }
 
 export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
-  const parsed = parseObject(raw);
-  if (!parsed) return Object.freeze({ valid: false, reason: 'invalid_json' });
-  if (!exactShape(parsed)) return Object.freeze({ valid: false, reason: 'invalid_response_shape' });
+  const parsedObject = parseObject(raw);
+  if (!parsedObject) return Object.freeze({ valid: false, reason: 'invalid_json' });
+  const parsed = normalizeDecisionEnvelope(parsedObject);
+  if (!parsed || !exactShape(parsed)) {
+    return Object.freeze({ valid: false, reason: 'invalid_response_shape' });
+  }
   const decision = text(parsed.decision, 20).toLocaleLowerCase();
   if (!decisions.has(decision)) return Object.freeze({ valid: false, reason: 'invalid_decision' });
   const clarification = parsed.clarification === null ? null : (() => {

@@ -184,7 +184,15 @@ assert.equal(invalidJsonTamil.reason, 'invalid_json');
 const missingShapeTanglish = validateGroundedLlmDecision(JSON.stringify({
   decision: 'answer', answer: 'Premium service INR 3200 irukku.', evidenceIds: ['source_1'],
 }), envelope, runtime);
-assert.equal(missingShapeTanglish.reason, 'invalid_response_shape');
+assert.equal(missingShapeTanglish.valid, true,
+  'safe omitted null fields must be normalized before strict semantic validation');
+
+const topLevelRequestType = validateGroundedLlmDecision(JSON.stringify({
+  decision: 'answer', answer: 'The office is on Central Road.', evidenceIds: ['source_2'],
+  requestType: 'side_question',
+}), envelope, runtime);
+assert.equal(topLevelRequestType.valid, true);
+assert.equal(topLevelRequestType.requestType, 'side_question');
 
 const missingAnswerTamil = validateGroundedLlmDecision(decisionJson({
   decision: 'answer', answer: '', evidenceIds: ['source_1'], stateUpdate: {},
@@ -370,7 +378,7 @@ assert.equal(isRepairableGroundedDecisionReason('answer_required'), true);
 assert.equal(isRepairableGroundedDecisionReason('unsupported_numeric_fact'), true);
 assert.equal(isRepairableGroundedDecisionReason('unsupported_structured_fact'), true);
 assert.equal(isRepairableGroundedDecisionReason('unsupported_technical_term'), true);
-assert.equal(isRepairableGroundedDecisionReason('invalid_json'), false);
+assert.equal(isRepairableGroundedDecisionReason('invalid_json'), true);
 assert.match(orchestratorSource, /stage: 'llm\.decision_repair_retry'/u);
 assert.match(orchestratorSource, /deferDecisionRepair: false/u);
 
