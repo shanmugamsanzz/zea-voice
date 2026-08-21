@@ -35,7 +35,10 @@ function sourceContent(source) {
   } catch {
     structured = '';
   }
-  return `${text(source?.content, maximumEvidenceText)} ${text(structured, maximumEvidenceText)}`.trim();
+  // Structured PostgreSQL fields are the canonical fact projection. Keep
+  // them before a potentially long source narrative so bounded validators
+  // cannot truncate attributes such as tests, prices or services.
+  return `${text(structured, maximumEvidenceText)} ${text(source?.content, maximumEvidenceText)}`.trim();
 }
 
 function sameValue(left, right) {
@@ -99,7 +102,9 @@ function unsupportedStructuredIdentifiers(claim, evidenceText) {
   // uppercase. Compare claimed identifiers against all normalized evidence
   // tokens case-insensitively. Require complete hyphen segments so `X-Ray`
   // cannot be misread as the invalid identifier `X-`.
-  const evidence = new Set(identity(evidenceText).split(' ')
+  const normalizedEvidence = text(evidenceText, maximumEvidenceText)
+    .toLocaleLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim();
+  const evidence = new Set(normalizedEvidence.split(' ')
     .filter((entry) => entry.length >= 2 || /\d/u.test(entry))
     .map((entry) => entry.toLocaleUpperCase()));
   const claimed = (String(claim).match(/\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*\b/gu) ?? [])

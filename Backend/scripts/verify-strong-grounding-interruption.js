@@ -101,6 +101,16 @@ assert.equal(validateGroundedClaim(
 assert.equal(validateGroundedClaim(
   'The package includes CBC, RBS, CRP, ESR, ECG and PFT.',
   [{
+    content: `Long approved narrative ${'description '.repeat(1_200)}`,
+    recordType: 'CATALOG_ITEM',
+    authoritativeData: {
+      attributes: [{ key: 'tests', value: ['Cbc', 'rbs', 'Crp', 'esr', 'Ecg', 'pft'] }],
+    },
+  }],
+).valid, true, 'long source narratives must not truncate canonical structured attributes');
+assert.equal(validateGroundedClaim(
+  'The package includes CBC, RBS, CRP, ESR, ECG and PFT.',
+  [{
     content: 'Approved package includes CBC and ECG.', recordType: 'CATALOG_ITEM',
     authoritativeData: {
       sourceText: 'ATTRIBUTES: tests CBC, RBS, CRP, ESR, ECG, PFT',
