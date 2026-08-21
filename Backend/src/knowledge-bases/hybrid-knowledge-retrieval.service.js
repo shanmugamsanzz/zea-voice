@@ -1641,7 +1641,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
     })),
   });
-  const cacheKey = `zea:rag:hybrid:v38:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:v39:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();

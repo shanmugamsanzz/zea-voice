@@ -99,7 +99,9 @@ function unsupportedStructuredIdentifiers(claim, evidenceText) {
   // uppercase. Compare claimed identifiers against all normalized evidence
   // tokens case-insensitively. Require complete hyphen segments so `X-Ray`
   // cannot be misread as the invalid identifier `X-`.
-  const evidence = new Set(tokens(evidenceText).map((entry) => entry.toLocaleUpperCase()));
+  const evidence = new Set(identity(evidenceText).split(' ')
+    .filter((entry) => entry.length >= 2 || /\d/u.test(entry))
+    .map((entry) => entry.toLocaleUpperCase()));
   const claimed = (String(claim).match(/\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*\b/gu) ?? [])
     .filter((entry) => entry.replace(/-/gu, '').length >= 2)
     .map((entry) => entry.toLocaleUpperCase());

@@ -92,6 +92,13 @@ assert.equal(validateGroundedClaim(
   }],
 ).valid, true, 'Catalog identifier validation must be casing-neutral and preserve X-Ray');
 assert.equal(validateGroundedClaim(
+  'The package includes CA 19.9 and CT Scan.',
+  [{
+    content: 'Approved package.', recordType: 'CATALOG_ITEM',
+    authoritativeData: { attributes: [{ key: 'tests', value: ['CA 19.9', 'CT Scan'] }] },
+  }],
+).valid, true, 'two-letter Catalog abbreviations must remain valid evidence');
+assert.equal(validateGroundedClaim(
   'The package includes CBC, RBS, CRP, ESR, ECG and PFT.',
   [{
     content: 'Approved package includes CBC and ECG.', recordType: 'CATALOG_ITEM',
