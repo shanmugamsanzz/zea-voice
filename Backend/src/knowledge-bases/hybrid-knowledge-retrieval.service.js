@@ -1091,11 +1091,17 @@ export function callerMessageOverridesCategoryResolution(message, resolution, qu
     'name', 'item_key', 'alias',
     'category', 'category_key', 'category_alias', 'parent_category_key',
   ]);
+  const identityMethod = String(resolution.method ?? '').toLocaleLowerCase();
+  const weakIdentityMethods = new Set(['phonetic', 'fuzzy']);
+  const directIdentityMatch = directIdentityKinds.has(
+    String(resolution.matchedKind ?? '').toLocaleLowerCase(),
+  ) && !weakIdentityMethods.has(identityMethod);
   // Descriptions and relationships aid discovery but are not explicit caller
-  // selections. A strong tenant-authored Conversation intent must outrank
-  // those broad fields; otherwise generic overview words can hydrate an
-  // arbitrary Catalog item/category and suppress the approved response.
-  if (!directIdentityKinds.has(String(resolution.matchedKind ?? '').toLocaleLowerCase())) {
+  // selections. Phonetic/fuzzy identity matches are also only discovery
+  // signals: shared-sounding tenant aliases can otherwise suppress a strong
+  // multi-token Conversation intent. Exact/normalized names, keys and aliases
+  // remain direct caller selections and retain Catalog priority.
+  if (!directIdentityMatch) {
     return messageCoverage >= 0.45 && messageMatchedTokens >= 3;
   }
 
@@ -1641,7 +1647,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
     })),
   });
-  const cacheKey = `zea:rag:hybrid:v40:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:v41:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();

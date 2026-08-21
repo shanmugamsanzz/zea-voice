@@ -179,6 +179,27 @@ assert.equal(callerMessageOverridesCategoryResolution(
 ), true, 'descriptive Catalog discovery must not suppress published Conversation intent');
 assert.equal(callerMessageOverridesCategoryResolution(
   completeOverviewMessage,
+  {
+    ...overviewCategoryResolution,
+    matchedKind: 'category_alias',
+    method: 'phonetic',
+  },
+  'Could you give me a complete overview of the available health screening options?',
+), true, 'phonetic Catalog alias discovery must not suppress strong Conversation intent');
+assert.equal(callerMessageOverridesCategoryResolution(
+  completeOverviewMessage,
+  {
+    ...overviewCategoryResolution,
+    category: 'Organ Specific Services',
+    categoryKey: 'organ-specific-services',
+    matchedText: 'Organ Specific Services',
+    matchedKind: 'category_alias',
+    method: 'phonetic',
+  },
+  'Please explain the organ specific service package',
+), false, 'an explicit phonetic/STT category request must retain Catalog priority');
+assert.equal(callerMessageOverridesCategoryResolution(
+  completeOverviewMessage,
   { ...overviewCategoryResolution, category: 'Organ Specific Services', categoryKey: 'organ-specific-services', matchedText: 'Organ Specific Services' },
   'What organ specific services are available?',
 ), false);
