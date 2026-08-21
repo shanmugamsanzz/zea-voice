@@ -95,7 +95,7 @@ function matchingCatalogSources(hydrated, turn) {
 
 function verifyTurnExpectations({
   call, index, turn, tenantEvidence, hydrated, envelope, selectedRecordIds,
-  responseId, finalText, safeResponse, memoryState,
+  responseId, finalText, safeResponse, memoryState, memoryBefore, groundedStateUpdate,
 }) {
   const label = `${call.id} turn ${index + 1}`;
   const catalogSources = matchingCatalogSources(hydrated, turn);
@@ -139,9 +139,48 @@ function verifyTurnExpectations({
       `${label}: hydrated Catalog record is missing ${expectedAttribute}`);
   }
   if (turn.expectedMemoryEntityKey) {
+    const memoryDiagnostic = JSON.stringify({
+      expectedMemoryEntityKey: turn.expectedMemoryEntityKey,
+      before: {
+        currentTopic: memoryBefore?.currentTopic ?? null,
+        knownEntities: (memoryBefore?.knownEntities ?? []).map((entity) => ({
+          id: entity?.id ?? null, key: entity?.key ?? null, name: entity?.name ?? null,
+        })),
+      },
+      retrieval: {
+        catalogIdentityResolution: tenantEvidence?.retrieval?.catalogIdentityResolution ?? null,
+        explicitCatalogRecordIds: tenantEvidence?.retrieval?.explicitCatalogRecordIds ?? [],
+        contextualUsed: tenantEvidence?.retrieval?.contextualUsed ?? false,
+        contextualPreferred: tenantEvidence?.retrieval?.contextualPreferred ?? false,
+      },
+      hydratedCatalog: (hydrated ?? []).filter((source) => (
+        String(source?.recordType ?? '').toUpperCase() === 'CATALOG_ITEM'
+      )).map((source) => ({
+        id: source.id ?? null, recordId: sourceRecordId(source),
+        itemKey: source.authoritativeData?.itemKey ?? null,
+        categoryKey: source.authoritativeData?.categoryKey ?? null,
+        retrievalContext: source.retrievalContext ?? null,
+        channels: source.channels ?? [],
+      })),
+      envelopeSources: (envelope?.sources ?? []).map((source) => ({
+        id: source.id, recordId: sourceRecordId(source), recordType: source.recordType,
+        itemKey: source.authoritativeData?.itemKey ?? null,
+      })),
+      decision: {
+        responseId, selectedRecordIds, stateUpdate: groundedStateUpdate ?? null,
+      },
+      after: {
+        currentTopic: memoryState.currentTopic ?? null,
+        knownEntities: (memoryState.knownEntities ?? []).map((entity) => ({
+          id: entity?.id ?? null, key: entity?.key ?? null, name: entity?.name ?? null,
+        })),
+        requestType: memoryState.requestType ?? null,
+        contextDependent: memoryState.contextDependent === true,
+      },
+    });
     assert.ok((memoryState.knownEntities ?? []).some((entity) => (
       normalized(entity?.key) === normalized(turn.expectedMemoryEntityKey)
-    )), `${label}: selected follow-up entity was not preserved in memory`);
+    )), `${label}: selected follow-up entity was not preserved in memory ${memoryDiagnostic}`);
   }
   if ((turn.expectedResponseNodeKeys?.length ?? 0) > 0) {
     const expectedKeys = new Set(turn.expectedResponseNodeKeys.map(normalized));
@@ -420,6 +459,7 @@ try {
         let llmMs = 0;
         let envelope = null;
         let unifiedApplied = false;
+        let groundedStateUpdate = null;
         if (responseRouting.outcome === 'clarify') {
           finalDecision = 'safe_failure';
           finalText = safeResponse;
@@ -499,6 +539,7 @@ try {
           finalDecision = unified.decision;
           finalText = unified.answer;
           unifiedApplied = true;
+          groundedStateUpdate = unified.stateUpdate ?? null;
           selectedEvidenceIds = [...unified.evidenceIds];
           responseId = unified.responseId ?? null;
           selectedRecordIds = selectedEvidenceIds.map((id) => (
@@ -532,7 +573,7 @@ try {
         const expectation = verifyTurnExpectations({
           call, index, turn, tenantEvidence, hydrated, envelope,
           selectedRecordIds, responseId, finalText, safeResponse,
-          memoryState: memory.snapshot(),
+          memoryState: memory.snapshot(), memoryBefore: snapshot, groundedStateUpdate,
         });
         if (!unifiedApplied) {
           memory.append({ role: 'assistant', content: finalText }, { turnToken: token });
