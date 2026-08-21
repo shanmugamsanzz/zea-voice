@@ -1080,10 +1080,41 @@ export function callerMessageOverridesCategoryResolution(message, resolution, qu
   if (!message || resolution?.status !== 'match' || resolution.entityType !== 'category') {
     return false;
   }
-  // A category explicitly resolved from uploaded Catalog identity is always
-  // more specific than a cross-category Conversation overview. Conversation
-  // messages remain eligible when no category identity was resolved.
-  return false;
+  // Exact examples are an explicit tenant-authored route and therefore take
+  // precedence over a category inferred from broad, shared vocabulary.
+  if (publishedExampleMatch(message, query)) return true;
+
+  const queryTokens = [...new Set(tokens(query))];
+  const categoryTokens = [...new Set(tokens(
+    resolution.matchedText ?? resolution.category ?? resolution.categoryKey ?? '',
+  ))];
+  const configured = conversationVariable(message, 'examples');
+  const examples = Array.isArray(configured) ? configured : [configured];
+  const messageTokens = [...new Set(tokens([
+    ...examples,
+    conversationVariable(message, 'purpose'),
+    conversationVariable(message, 'situation'),
+  ].filter(Boolean).join(' ')))];
+  const tokenMatches = (left, right) => left === right
+    || (Math.min(left.length, right.length) >= 4
+      && (left.includes(right) || right.includes(left)));
+  const categoryAligned = new Set(queryTokens.filter((queryToken) => (
+    categoryTokens.some((categoryToken) => tokenMatches(queryToken, categoryToken))
+  )));
+  const messageAligned = queryTokens.filter((queryToken) => (
+    messageTokens.some((messageToken) => tokenMatches(queryToken, messageToken))
+  ));
+  const messageOnlyAligned = messageAligned.filter((queryToken) => (
+    queryToken.length >= 4 && !categoryAligned.has(queryToken)
+  ));
+
+  // Require several independently aligned intent terms, including at least
+  // three that do not come from the Catalog category label. This lets a
+  // published cross-category overview win a weak category inference while an
+  // explicit item/category request continues to win routing priority.
+  return publishedExampleCoverage(message, query) >= 0.65
+    && publishedMessageMatchedTokenCount(message, query) >= 3
+    && new Set(messageOnlyAligned).size >= 3;
 }
 
 export function conversationMessageRouteCandidates(routes = [], query = '') {
@@ -1590,7 +1621,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
     })),
   });
-  const cacheKey = `zea:rag:hybrid:v33:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:v34:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();

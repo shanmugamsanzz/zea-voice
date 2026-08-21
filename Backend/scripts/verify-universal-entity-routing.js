@@ -159,7 +159,7 @@ assert.equal(callerMessageOverridesCategoryResolution(
   completeOverviewMessage,
   overviewCategoryResolution,
   'Could you give me a complete overview of the available health screening options?',
-), false);
+), true);
 assert.equal(callerMessageOverridesCategoryResolution(
   completeOverviewMessage,
   { ...overviewCategoryResolution, category: 'Organ Specific Services', categoryKey: 'organ-specific-services', matchedText: 'Organ Specific Services' },
