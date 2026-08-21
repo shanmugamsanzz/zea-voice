@@ -471,18 +471,21 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
   }
   const decision = text(parsed.decision, 20).toLocaleLowerCase();
   if (!decisions.has(decision)) return Object.freeze({ valid: false, reason: 'invalid_decision' });
-  const clarification = parsed.clarification === null ? null : (() => {
+  const parsedClarification = parsed.clarification === null ? null : (() => {
     if (!parsed.clarification || typeof parsed.clarification !== 'object'
       || Array.isArray(parsed.clarification)
       || Object.keys(parsed.clarification).sort().join('|') !== 'reason') return undefined;
     const reason = text(parsed.clarification.reason, 64).toLocaleLowerCase();
     return clarificationReasons.has(reason) ? Object.freeze({ reason }) : undefined;
   })();
-  if (clarification === undefined
-    || (decision === 'clarify' && clarification === null)
-    || (decision !== 'clarify' && clarification !== null)) {
-    return Object.freeze({ valid: false, reason: 'invalid_clarification' });
-  }
+  // Clarification metadata never authorizes facts, evidence or actions. Treat
+  // it as decision-derived metadata so a provider leaving a stale object on an
+  // answer cannot invalidate otherwise valid grounded speech. For an actual
+  // clarify decision, a missing/invalid reason safely canonicalizes to the
+  // least-assumptive reason; the required question is still validated below.
+  const clarification = decision === 'clarify'
+    ? (parsedClarification ?? Object.freeze({ reason: 'ambiguous_request' }))
+    : null;
   const exactResponseCandidate = (envelope.exactCallerResponses ?? []).length > 0;
   const separated = splitCallerQuestion(parsed.answer, parsed.pendingQuestion, decision);
   // Exact published messages may intentionally end with a caller-facing

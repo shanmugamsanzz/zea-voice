@@ -66,6 +66,15 @@ assert.deepEqual(emptyStateOrdinaryAnswer.selectedEntityKeys, []);
 assert.deepEqual(emptyStateOrdinaryAnswer.fieldUpdates, {});
 assert.equal(emptyStateOrdinaryAnswer.requestType, undefined);
 
+const answerWithStaleClarificationMetadata = validateGroundedLlmDecision(decisionJson({
+  decision: 'answer', answer: 'The office is on Central Road.', evidenceIds: ['source_2'],
+  stateUpdate: {}, pendingQuestion: null, toolRequest: null,
+  clarification: { reason: 'ambiguous_request' },
+}), envelope, runtime);
+assert.equal(answerWithStaleClarificationMetadata.valid, true);
+assert.equal(answerWithStaleClarificationMetadata.clarification, null,
+  'inert clarification metadata must not reject an otherwise grounded answer');
+
 const answerEndingWithQuestion = validateGroundedLlmDecision(decisionJson({
   decision: 'answer',
   answer: 'Available options are Standard and Premium. Which option would you like?',
@@ -244,6 +253,12 @@ const clarification = validateGroundedLlmDecision(decisionJson({
 }), envelope, runtime);
 assert.equal(clarification.valid, true);
 assert.equal(clarification.pendingQuestion, 'Which service do you mean?');
+const clarificationWithoutReason = validateGroundedLlmDecision(decisionJson({
+  decision: 'clarify', answer: '', evidenceIds: [], stateUpdate: {},
+  pendingQuestion: 'Which service do you mean?', toolRequest: null, clarification: null,
+}), envelope, runtime);
+assert.equal(clarificationWithoutReason.valid, true);
+assert.equal(clarificationWithoutReason.clarification.reason, 'ambiguous_request');
 
 const multipleClarifications = validateGroundedLlmDecision(decisionJson({
   decision: 'clarify', answer: 'Which service? Which location?', evidenceIds: [],
