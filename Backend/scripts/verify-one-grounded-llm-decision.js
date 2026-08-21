@@ -173,6 +173,15 @@ const invalidStateField = validateGroundedLlmDecision(decisionJson({
 assert.equal(invalidStateField.valid, true);
 assert.deepEqual(invalidStateField.stateUpdate.knownEntityKeys, []);
 
+const invalidClarificationState = validateGroundedLlmDecision(decisionJson({
+  decision: 'clarify', answer: '', evidenceIds: [],
+  stateUpdate: { internalStage: 'hidden' },
+  pendingQuestion: 'Which option did you mean?', toolRequest: null,
+}), envelope, runtime);
+assert.equal(invalidClarificationState.valid, true,
+  'invalid optional memory metadata must not discard a safe clarification');
+assert.deepEqual(invalidClarificationState.stateUpdate.knownEntityKeys, []);
+
 const partiallyRecoverableState = validateGroundedLlmDecision(decisionJson({
   decision: 'answer', answer: 'The office is on Central Road.', evidenceIds: ['source_2'],
   stateUpdate: {

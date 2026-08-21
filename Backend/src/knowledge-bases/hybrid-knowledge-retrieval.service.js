@@ -1337,7 +1337,7 @@ async function loadCatalogIdentities(auth, input, scope, runtime) {
 async function loadConversationMessageRoutes(auth, input, scope, runtime) {
   if (!scope.length) return [];
   const revisions = scope.map((item) => `${item.id}:${item.publicationRevision}`).sort().join('|');
-  const cacheKey = `zea:rag:conversation-routes:${auth.tenantId}:${input.agentId}:${input.usageDirection}:${hash(revisions)}`;
+  const cacheKey = `zea:rag:conversation-routes:v2:${auth.tenantId}:${input.agentId}:${input.usageDirection}:${hash(revisions)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (Array.isArray(cached)) return cached;
   const manifest = scope.map((item) => ({
@@ -1627,16 +1627,24 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
     })),
   });
-  const cacheKey = `zea:rag:hybrid:v35:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:v36:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();
+  // Published routing metadata is a deterministic control plane, not an
+  // optional semantic signal. Give its small indexed projection enough time
+  // to survive ordinary pool contention while remaining within the voice
+  // first-audio budget. Dropping it at the generic channel deadline makes
+  // identical calls alternate between an approved response and an LLM path.
+  const routingProjectionDeadlineMs = Math.max(
+    env.RAG_RUNTIME_CHANNEL_DEADLINE_MS, 400,
+  );
   const [primaryBranch, conversationRoutes, workflowRoutes,
     loadedCatalogIdentities] = await Promise.all([
     retrieveBranch({ ...auth, tenantId }, safeInput, query, scope, runtime),
     abortable(deadline(
       loadConversationMessageRoutes({ ...auth, tenantId }, safeInput, scope, runtime),
-      env.RAG_RUNTIME_CHANNEL_DEADLINE_MS, [],
+      routingProjectionDeadlineMs, [],
     ), input.abortSignal, []),
     abortable(deadline(
       loadWorkflowActionRoutes({ ...auth, tenantId }, safeInput, scope, runtime),

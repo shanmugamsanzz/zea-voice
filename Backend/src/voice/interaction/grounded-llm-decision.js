@@ -600,11 +600,11 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
   // safety policies and verified tool results before speech.
   let stateUpdate = normalizeStateUpdate(parsed.stateUpdate, envelope, runtime);
   if (!stateUpdate) {
-    // Optional memory metadata must never discard a grounded ordinary answer.
-    // Recover only harmless generic context and discard unverified entities,
-    // caller fields and tool state. Action and clarification decisions remain
-    // strict because their state controls tools or the next interaction.
-    if (decision !== 'answer') return Object.freeze({ valid: false, reason: 'invalid_state_update' });
+    // Optional memory metadata must never discard grounded speech or a valid
+    // clarification question. Recover only harmless generic context and
+    // discard unverified entities, caller fields and tool state. Actions stay
+    // strict because their state can authorize field collection or tools.
+    if (decision === 'action') return Object.freeze({ valid: false, reason: 'invalid_state_update' });
     stateUpdate = recoverSafeAnswerStateUpdate(parsed.stateUpdate, envelope, runtime);
   }
   const toolRequest = normalizeToolRequest(parsed.toolRequest, decision, runtime);
