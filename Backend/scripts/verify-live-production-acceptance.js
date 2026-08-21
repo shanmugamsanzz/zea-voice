@@ -191,6 +191,8 @@ function verifyTurnExpectations({
     const responseDiagnostic = JSON.stringify({
       responseId,
       directNodeKey: direct?.authoritativeData?.nodeKey ?? null,
+      catalogIdentityResolution: tenantEvidence?.retrieval?.catalogIdentityResolution ?? null,
+      conversationRouting: tenantEvidence?.retrieval?.conversationRouting ?? null,
       sources: (envelope?.sources ?? []).map((source) => ({
         id: source.id,
         recordType: source.recordType,

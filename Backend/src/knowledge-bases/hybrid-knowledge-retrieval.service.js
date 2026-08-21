@@ -1085,6 +1085,20 @@ export function callerMessageOverridesCategoryResolution(message, resolution, qu
   // precedence over a category inferred from broad, shared vocabulary.
   if (publishedExampleMatch(message, query)) return true;
 
+  const messageCoverage = publishedExampleCoverage(message, query);
+  const messageMatchedTokens = publishedMessageMatchedTokenCount(message, query);
+  const directIdentityKinds = new Set([
+    'name', 'item_key', 'alias',
+    'category', 'category_key', 'category_alias', 'parent_category_key',
+  ]);
+  // Descriptions and relationships aid discovery but are not explicit caller
+  // selections. A strong tenant-authored Conversation intent must outrank
+  // those broad fields; otherwise generic overview words can hydrate an
+  // arbitrary Catalog item/category and suppress the approved response.
+  if (!directIdentityKinds.has(String(resolution.matchedKind ?? '').toLocaleLowerCase())) {
+    return messageCoverage >= 0.45 && messageMatchedTokens >= 3;
+  }
+
   const queryTokens = [...new Set(tokens(query))];
   const categoryTokens = [...new Set(tokens(
     resolution.matchedText
@@ -1118,8 +1132,8 @@ export function callerMessageOverridesCategoryResolution(message, resolution, qu
   // three that do not come from the Catalog category label. This lets a
   // published cross-category overview win a weak Catalog inference while an
   // explicit item/category request continues to win routing priority.
-  return publishedExampleCoverage(message, query) >= 0.65
-    && publishedMessageMatchedTokenCount(message, query) >= 3
+  return messageCoverage >= 0.65
+    && messageMatchedTokens >= 3
     && new Set(messageOnlyAligned).size >= 3;
 }
 
@@ -1627,7 +1641,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
     })),
   });
-  const cacheKey = `zea:rag:hybrid:v36:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:v37:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();
@@ -2006,7 +2020,19 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
         entityType: catalogIdentityResolution.entityType,
         confidence: catalogIdentityResolution.confidence,
         method: catalogIdentityResolution.method,
+        matchedKind: catalogIdentityResolution.matchedKind ?? null,
       } : null,
+      conversationRouting: {
+        loadedRoutes: conversationRoutes.length,
+        eligibleRouteCandidates: routeCandidates.map((candidate) => ({
+          nodeKey: candidate.authoritativeData?.nodeKey ?? null,
+          coverage: candidate.tokenCoverage,
+        })),
+        unconstrainedNodeKey:
+          unconstrainedMetadataCallerMessage?.authoritativeData?.nodeKey ?? null,
+        catalogOverrideApplied: callerMessageCategoryOverride,
+        selectedNodeKey: metadataCallerMessage?.authoritativeData?.nodeKey ?? null,
+      },
       explicitCatalogRecordIds: Object.freeze([...explicitCatalogRecordIds]),
       vectorBm25Ms, rerankMs, hydrationMs,
       semanticTimedOut: runtime.ragEnabled

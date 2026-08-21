@@ -141,7 +141,7 @@ assert.equal(strongCallerMessageMatch(
 
 const overviewCategoryResolution = {
   status: 'match', entityType: 'category', category: 'Health Screening',
-  categoryKey: 'health-screening', matchedText: 'Health Screening',
+  categoryKey: 'health-screening', matchedText: 'Health Screening', matchedKind: 'category',
 };
 const completeOverviewMessage = {
   ...overview,
@@ -163,11 +163,20 @@ assert.equal(callerMessageOverridesCategoryResolution(
 assert.equal(callerMessageOverridesCategoryResolution(
   completeOverviewMessage,
   {
-    status: 'match', entityType: 'item', matchedText: 'Health Screening Option',
+    status: 'match', entityType: 'item', matchedText: 'Health Screening Option', matchedKind: 'name',
     item: { name: 'Health Screening Option', item_key: 'health-screening-option' },
   },
   'Could you give me a complete overview of the available health screening options?',
 ), true);
+assert.equal(callerMessageOverridesCategoryResolution(
+  completeOverviewMessage,
+  {
+    status: 'match', entityType: 'item', matchedKind: 'description',
+    matchedText: 'Complete overview of available health screening options',
+    item: { name: 'Unrelated Service', item_key: 'unrelated-service' },
+  },
+  'Could you give me a complete overview of the available health screening options?',
+), true, 'descriptive Catalog discovery must not suppress published Conversation intent');
 assert.equal(callerMessageOverridesCategoryResolution(
   completeOverviewMessage,
   { ...overviewCategoryResolution, category: 'Organ Specific Services', categoryKey: 'organ-specific-services', matchedText: 'Organ Specific Services' },
@@ -176,7 +185,7 @@ assert.equal(callerMessageOverridesCategoryResolution(
 assert.equal(callerMessageOverridesCategoryResolution(
   completeOverviewMessage,
   {
-    status: 'match', entityType: 'item', matchedText: 'Advanced Screening',
+    status: 'match', entityType: 'item', matchedText: 'Advanced Screening', matchedKind: 'name',
     item: { name: 'Advanced Screening', item_key: 'advanced-screening' },
   },
   'Tell me about the Advanced Screening option',
