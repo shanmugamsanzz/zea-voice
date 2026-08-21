@@ -464,7 +464,13 @@ function distinctiveItemMentions(items, query) {
     for (const token of distinctiveTokens) {
       for (let index = 0; index < queryTokens.length; index += 1) {
         const similarity = tokenSimilarity(queryTokens[index], token);
-        if (similarity.score < 0.88) continue;
+        // Multi-entity selection must be based on independently named
+        // identities. A fuzzy token is useful for ranking one candidate, but
+        // accepting two fuzzy token collisions turns ordinary follow-up words
+        // into a fabricated comparison/category selection. Normalized and
+        // phonetic matches remain available for exact names, aliases and STT
+        // consonant variations from any tenant Catalog.
+        if (similarity.score < 0.88 || similarity.method === 'fuzzy') continue;
         if (!best || similarity.score > best.confidence
           || (similarity.score === best.confidence && index < best.firstMatchedQueryIndex)) {
           best = {
@@ -489,31 +495,11 @@ function distinctiveItemMentions(items, query) {
 }
 
 export function resolveCatalogEntitiesLocally(items, query, { minimumConfidence = 0.86 } = {}) {
-  const seen = new Set();
-  const rankedMatches = rankCatalogEntities(items, query)
-    .filter((candidate) => candidate.entityType === 'item'
-      && (candidate.score >= minimumConfidence
-        // A comparison naturally divides query coverage between two or more
-        // explicit names. Accept a complete normalized name/key/alias match
-        // even when other named entities lower its whole-query score.
-        || (candidate.method === 'normalized'
-          && ['name', 'item_key', 'alias'].includes(candidate.matchedKind)
-          && Number(candidate.labelCoverage ?? 0) >= 0.8
-          && Number(candidate.matchedQueryTokens ?? 0) >= 1)))
-    .map((candidate) => ({
-      status: 'match', entityType: 'item', item: candidate.item,
-      confidence: Math.round(candidate.score * 10000) / 10000,
-      method: candidate.method, matchedText: candidate.matchedText,
-      matchedKind: candidate.matchedKind,
-      firstMatchedQueryIndex: candidate.firstMatchedQueryIndex,
-    }));
-  const distinctiveMatches = distinctiveItemMentions(items, query);
-  return [...distinctiveMatches, ...rankedMatches]
-    .filter((candidate) => {
-      const id = String(candidate.item.id);
-      if (seen.has(id)) return false;
-      seen.add(id);
-      return true;
-    })
+  void minimumConfidence;
+  // This API exists only for explicit multi-item turns (comparisons and lists).
+  // Single-item fuzzy resolution is handled by classifyCatalogEntityLocally.
+  // Requiring two distinctive identity mentions prevents shared category words
+  // or unrelated fuzzy tokens from manufacturing multiple explicit items.
+  return distinctiveItemMentions(items, query)
     .map(({ firstMatchedQueryIndex: _firstMatchedQueryIndex, ...candidate }) => candidate);
 }

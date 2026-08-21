@@ -104,6 +104,15 @@ assert.deepEqual(
   resolveCatalogEntitiesLocally(catalogItems, 'Lungs and Liver package').map((item) => item.item.id),
   [lungsItemId, liverItemId],
 );
+const fuzzyFollowUpCatalog = [
+  { ...catalogItems[0], aliases: ['இதில'] },
+  { ...catalogItems[1], aliases: ['இதுலே'] },
+];
+assert.deepEqual(
+  resolveCatalogEntitiesLocally(fuzzyFollowUpCatalog, 'இதுல என்னென்ன test scans எல்லாம் வரும்?'),
+  [],
+  'an entity-free contextual follow-up must not fabricate multiple fuzzy item mentions',
+);
 assert.equal(resolveCatalogEntityLocally(catalogItems, 'Singer package'), null);
 
 // No tenant alias is required for this common STT vowel swap. The matcher uses
