@@ -94,10 +94,16 @@ const negativeFactPattern = /(?:\b(?:is|are|was|were)\s+not\s+(?:available|inclu
 const positiveFactPattern = /(?:\b(?:is|are|was|were)\s+(?:available|included|offered|provided|supported|selectable)\b|\b(?:includes?|offers?|provides?|supports?|allows?)\b|\b(?:available|include|offer|provide|support)\s+(?:irukku|undu|yes)\b|\u0B95\u0BBF\u0B9F\u0BC8\u0B95\u0BCD\u0B95\u0BC1\u0BAE\u0BCD|\u0B89\u0BB3\u0BCD\u0BB3\u0BA4\u0BC1)/iu;
 
 function unsupportedStructuredIdentifiers(claim, evidenceText) {
-  const evidence = new Set((String(evidenceText).match(/\b[A-Z][A-Z0-9-]{1,}\b/gu) ?? [])
-    .map((entry) => entry.toLocaleUpperCase()));
-  return [...new Set((String(claim).match(/\b[A-Z][A-Z0-9-]{1,}\b/gu) ?? [])
-    .map((entry) => entry.toLocaleUpperCase()))].filter((entry) => !evidence.has(entry));
+  // Catalog values may arrive with presentation casing (for example `Cbc`
+  // or `rbs`) even though the model naturally speaks their abbreviations in
+  // uppercase. Compare claimed identifiers against all normalized evidence
+  // tokens case-insensitively. Require complete hyphen segments so `X-Ray`
+  // cannot be misread as the invalid identifier `X-`.
+  const evidence = new Set(tokens(evidenceText).map((entry) => entry.toLocaleUpperCase()));
+  const claimed = (String(claim).match(/\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*\b/gu) ?? [])
+    .filter((entry) => entry.replace(/-/gu, '').length >= 2)
+    .map((entry) => entry.toLocaleUpperCase());
+  return [...new Set(claimed)].filter((entry) => !evidence.has(entry));
 }
 
 function matchedPolicyTypes(value, policies) {

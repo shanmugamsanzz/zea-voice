@@ -83,6 +83,15 @@ assert.equal(validateGroundedClaim(
   [{ content: 'Approved package.', recordType: 'CATALOG_ITEM', authoritativeData: { attributes: { tests: ['CBC'] } } }],
 ).reason, 'unsupported_structured_fact');
 assert.equal(validateGroundedClaim(
+  'The package includes CBC, RBS, CRP, ESR, X-Ray, ECG and PFT.',
+  [{
+    content: 'Approved package.', recordType: 'CATALOG_ITEM',
+    authoritativeData: {
+      attributes: [{ key: 'tests', value: ['Cbc', 'rbs', 'Crp', 'esr', 'X-Ray', 'Ecg', 'pft'] }],
+    },
+  }],
+).valid, true, 'Catalog identifier validation must be casing-neutral and preserve X-Ray');
+assert.equal(validateGroundedClaim(
   'The package includes CBC, RBS, CRP, ESR, ECG and PFT.',
   [{
     content: 'Approved package includes CBC and ECG.', recordType: 'CATALOG_ITEM',
