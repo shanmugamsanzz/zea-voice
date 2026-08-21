@@ -327,6 +327,61 @@ const rememberedContextTurn = applyUnifiedGroundedTurn({
 assert.equal(rememberedContextTurn.valid, true,
   'canonical conversation-memory evidence determines contextual follow-up state');
 
+catalogMemory.beginTurn('remembered-multi-citation-turn');
+const distractorCatalogEvidence = {
+  ...catalogEvidence,
+  id: 'distractor-catalog-source', recordId: 'distractor-catalog-record',
+  retrievalContext: 'contextual', channels: ['semantic'],
+  authoritativeData: {
+    ...catalogEvidence.authoritativeData,
+    itemKey: 'distractor-service', name: 'Distractor Service',
+  },
+};
+const rememberedMultiCitationTurn = applyUnifiedGroundedTurn({
+  rawDecision: unifiedDecision({
+    decision: 'answer', answer: catalogEvidence.content,
+    evidenceIds: ['catalog-source', 'distractor-catalog-source'],
+    stateUpdate: {
+      currentTopic: 'distractor-service', knownEntityKeys: ['distractor-service'],
+      collectedInformation: {}, correctedFields: [], contextDependent: false,
+    },
+    pendingQuestion: null, toolRequest: null,
+  }),
+  groundingEnvelope: {
+    found: true,
+    sources: [
+      {
+        id: 'catalog-source', recordId: catalogEvidence.recordId,
+        recordType: catalogEvidence.recordType, content: catalogEvidence.content,
+        authoritativeData: catalogEvidence.authoritativeData,
+      },
+      {
+        id: distractorCatalogEvidence.id, recordId: distractorCatalogEvidence.recordId,
+        recordType: distractorCatalogEvidence.recordType, content: distractorCatalogEvidence.content,
+        authoritativeData: distractorCatalogEvidence.authoritativeData,
+      },
+    ],
+    entities: [
+      {
+        id: catalogEvidence.recordId, key: 'current-service', name: 'Current Service',
+        category: 'Services', categoryKey: 'services', sourceId: 'catalog-source',
+      },
+      {
+        id: distractorCatalogEvidence.recordId, key: 'distractor-service',
+        name: 'Distractor Service', category: 'Services', categoryKey: 'services',
+        sourceId: 'distractor-catalog-source',
+      },
+    ],
+  },
+  memory: catalogMemory, turnToken: 'remembered-multi-citation-turn',
+  evidence: [rememberedContextEvidence, distractorCatalogEvidence],
+  finalizedUtterance: 'What tests does this include?',
+});
+assert.equal(rememberedMultiCitationTurn.valid, true);
+assert.ok(rememberedMultiCitationTurn.state.knownEntities.some((entity) => (
+  entity.key === 'current-service'
+)), 'a contextual multi-citation answer must not replace the memory-selected Catalog entity');
+
 catalogMemory.beginTurn('remembered-citation-turn');
 const duplicateFactEvidence = {
   id: 'duplicate-fact-source', recordId: 'duplicate-fact-record', recordType: 'FAQ',

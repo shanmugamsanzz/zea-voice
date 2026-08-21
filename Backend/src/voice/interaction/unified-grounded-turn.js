@@ -215,25 +215,50 @@ export function applyUnifiedGroundedTurn({
     });
   }
 
+  const rememberedContextEntity = rememberedSource
+    ? catalogEntityFromEvidence(rememberedSource, hydratedEnvelope.entities) : null;
+  const rememberedRuntimeEvidence = rememberedSource ? evidence.find((source) => (
+    source.id === rememberedSource.id
+    || (rememberedSource.recordId && source.recordId === rememberedSource.recordId)
+  )) : null;
   const retainRememberedCatalogCitation = validatedDecision.decision === 'answer'
     && !validatedDecision.responseId
     && rememberedSource
     && !(validatedDecision.evidenceIds ?? []).includes(rememberedSource.id);
-  // The model chooses the wording, while runtime owns traceability. Preserve
-  // the one canonical memory-selected Catalog citation for a contextual fact
-  // answer so repeated pronoun/follow-up turns cannot lose their entity source.
-  const decision = retainRememberedCatalogCitation ? Object.freeze({
+  const retainRememberedCatalogContext = validatedDecision.decision === 'answer'
+    && !validatedDecision.responseId
+    && rememberedContextEntity
+    && String(rememberedRuntimeEvidence?.retrievalContext ?? '').toLocaleLowerCase() === 'contextual'
+    && (rememberedRuntimeEvidence?.channels ?? []).includes('conversation_memory');
+  // The model chooses wording, while runtime owns conversation continuity and
+  // traceability. A contextual follow-up must retain the canonical Catalog
+  // entity even when the model already cited its source and also cited another
+  // candidate. A genuinely different primary identity makes rememberedSource
+  // null above, so an explicit topic change still replaces stale memory.
+  const decision = retainRememberedCatalogCitation || retainRememberedCatalogContext
+    ? Object.freeze({
     ...validatedDecision,
-    evidenceIds: Object.freeze([
-      ...(validatedDecision.evidenceIds ?? []), rememberedSource.id,
-    ].slice(0, 5)),
-    evidenceSourceIds: Object.freeze([
-      ...(validatedDecision.evidenceSourceIds ?? []), rememberedSource.id,
-    ].slice(0, 5)),
-    stateUpdate: Object.freeze({
+    evidenceIds: Object.freeze([...new Set([
+      rememberedSource.id, ...(validatedDecision.evidenceIds ?? []),
+    ])].slice(0, 5)),
+    evidenceSourceIds: Object.freeze([...new Set([
+      rememberedSource.id, ...(validatedDecision.evidenceSourceIds ?? []),
+    ])].slice(0, 5)),
+    stateUpdate: retainRememberedCatalogContext ? Object.freeze({
       ...validatedDecision.stateUpdate,
+      currentTopic: rememberedContextEntity.key,
+      knownEntityKeys: Object.freeze([...new Set([
+        rememberedContextEntity.key,
+        ...(validatedDecision.stateUpdate.knownEntityKeys ?? []),
+      ])].slice(0, 5)),
+      knownEntities: Object.freeze([
+        rememberedContextEntity,
+        ...(validatedDecision.stateUpdate.knownEntities ?? []).filter((entity) => (
+          identity(entity?.key) !== identity(rememberedContextEntity.key)
+        )),
+      ].slice(0, 5)),
       contextDependent: true,
-    }),
+    }) : validatedDecision.stateUpdate,
   }) : validatedDecision;
   const initiallySelectedEvidence = selectedSources(decision, hydratedEnvelope, evidence);
   const citedCatalogEntities = new Map(initiallySelectedEvidence.map((source) => (
