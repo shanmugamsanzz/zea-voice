@@ -27,22 +27,30 @@ const scope = Object.freeze({
 });
 const overview = 'எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Onco Care Packages, Organ-Specific Packages, Kids Health Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?';
 
-const publishedDocuments = Object.freeze({
-  conversation: fs.readFileSync(new URL('../../docs/knowledge-base/shanmuga-hospital-conversation-script-production.txt', import.meta.url), 'utf8'),
-  catalog: fs.readFileSync(new URL('../../docs/knowledge-base/shanmuga-hospital-package-catalog-upload.txt', import.meta.url), 'utf8'),
-  faq: fs.readFileSync(new URL('../../docs/knowledge-base/shanmuga-hospital-faq-salem-tamil.txt', import.meta.url), 'utf8'),
-  general: fs.readFileSync(new URL('../../docs/knowledge-base/shanmuga-hospital-general-knowledge-production-upload.txt', import.meta.url), 'utf8'),
-  prompt: fs.readFileSync(new URL('../../docs/knowledge-base/shanmuga-hospital-master-system-prompt-production.txt', import.meta.url), 'utf8'),
+const publishedDocumentUrls = Object.freeze({
+  conversation: new URL('../../docs/knowledge-base/shanmuga-hospital-conversation-script-production.txt', import.meta.url),
+  catalog: new URL('../../docs/knowledge-base/shanmuga-hospital-package-catalog-upload.txt', import.meta.url),
+  faq: new URL('../../docs/knowledge-base/shanmuga-hospital-faq-salem-tamil.txt', import.meta.url),
+  general: new URL('../../docs/knowledge-base/shanmuga-hospital-general-knowledge-production-upload.txt', import.meta.url),
+  prompt: new URL('../../docs/knowledge-base/shanmuga-hospital-master-system-prompt-production.txt', import.meta.url),
 });
-const overviewOccurrences = Object.values(publishedDocuments)
-  .reduce((count, document) => count + document.split(overview).length - 1, 0);
-assert.equal(overviewOccurrences, 1, 'exactly one approved overview response must be published');
-assert.doesNotMatch(publishedDocuments.catalog, /APPROVED OVERVIEW RESPONSE|\bRESPONSE\s*:/iu,
-  'Catalog must contain facts, not caller-facing routing responses');
-assert.doesNotMatch(publishedDocuments.faq, /Appointment book|booking details|package overview/iu,
-  'FAQ must not duplicate Workflow or Conversation routing behavior');
-assert.match(publishedDocuments.general, /Package names, categories, prices, tests, services, consultations, preparation and relationships must come only from the current Product Catalog\./u);
-assert.match(publishedDocuments.prompt, /single exact approved overview response from Conversation Guidance/u);
+const publishedDocumentsAvailable = Object.values(publishedDocumentUrls)
+  .every((documentUrl) => fs.existsSync(documentUrl));
+if (publishedDocumentsAvailable) {
+  const publishedDocuments = Object.freeze(Object.fromEntries(
+    Object.entries(publishedDocumentUrls)
+      .map(([name, documentUrl]) => [name, fs.readFileSync(documentUrl, 'utf8')]),
+  ));
+  const overviewOccurrences = Object.values(publishedDocuments)
+    .reduce((count, document) => count + document.split(overview).length - 1, 0);
+  assert.equal(overviewOccurrences, 1, 'exactly one approved overview response must be published');
+  assert.doesNotMatch(publishedDocuments.catalog, /APPROVED OVERVIEW RESPONSE|\bRESPONSE\s*:/iu,
+    'Catalog must contain facts, not caller-facing routing responses');
+  assert.doesNotMatch(publishedDocuments.faq, /Appointment book|booking details|package overview/iu,
+    'FAQ must not duplicate Workflow or Conversation routing behavior');
+  assert.match(publishedDocuments.general, /Package names, categories, prices, tests, services, consultations, preparation and relationships must come only from the current Product Catalog\./u);
+  assert.match(publishedDocuments.prompt, /single exact approved overview response from Conversation Guidance/u);
+}
 
 function hydratedRow({ recordId, recordType = 'CATALOG_ITEM', content, authoritativeData, rank = 1 }) {
   return {

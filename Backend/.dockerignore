@@ -5,13 +5,11 @@ env.example
 .gitignore
 coverage
 scripts/*
-!scripts/verify-live-production-acceptance.js
-!scripts/verify-universal-entity-routing.js
-!scripts/verify-grounding-action-runtime.js
-!scripts/verify-tenant-regression-generator.js
-!scripts/verify-tenant-data-regression.js
+!scripts/verify-*.js
 !scripts/lib/
-!scripts/lib/tenant-regression-scenarios.js
+!scripts/lib/**
+!scripts/fixtures/
+!scripts/fixtures/**
 README.md
 MIGRATIONS.md
 docker-compose.yml

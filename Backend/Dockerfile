@@ -9,12 +9,10 @@ RUN npm ci --omit=dev && npm cache clean --force
 
 COPY migrations ./migrations
 COPY src ./src
-COPY scripts/verify-live-production-acceptance.js ./scripts/verify-live-production-acceptance.js
-COPY scripts/verify-universal-entity-routing.js ./scripts/verify-universal-entity-routing.js
-COPY scripts/verify-grounding-action-runtime.js ./scripts/verify-grounding-action-runtime.js
-COPY scripts/verify-tenant-regression-generator.js ./scripts/verify-tenant-regression-generator.js
-COPY scripts/verify-tenant-data-regression.js ./scripts/verify-tenant-data-regression.js
-COPY scripts/lib/tenant-regression-scenarios.js ./scripts/lib/tenant-regression-scenarios.js
+# Verification commands are part of the production activation workflow. Keep
+# this directory-level copy in sync automatically when a new verify-*.js gate
+# is added instead of maintaining a fragile per-file allowlist here.
+COPY scripts ./scripts
 COPY fixtures/failed-call-2026-08-19-production.json ./fixtures/failed-call-2026-08-19-production.json
 COPY fixtures/complete-live-call-2026-08-20-regression.json ./fixtures/complete-live-call-2026-08-20-regression.json
 
