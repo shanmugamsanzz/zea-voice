@@ -1077,7 +1077,8 @@ function publishedMessageMatchedTokenCount(evidence, query) {
 }
 
 export function callerMessageOverridesCategoryResolution(message, resolution, query = '') {
-  if (!message || resolution?.status !== 'match' || resolution.entityType !== 'category') {
+  if (!message || resolution?.status !== 'match'
+    || !['category', 'item'].includes(resolution.entityType)) {
     return false;
   }
   // Exact examples are an explicit tenant-authored route and therefore take
@@ -1086,7 +1087,12 @@ export function callerMessageOverridesCategoryResolution(message, resolution, qu
 
   const queryTokens = [...new Set(tokens(query))];
   const categoryTokens = [...new Set(tokens(
-    resolution.matchedText ?? resolution.category ?? resolution.categoryKey ?? '',
+    resolution.matchedText
+      ?? resolution.item?.name
+      ?? resolution.item?.item_key
+      ?? resolution.category
+      ?? resolution.categoryKey
+      ?? '',
   ))];
   const configured = conversationVariable(message, 'examples');
   const examples = Array.isArray(configured) ? configured : [configured];
@@ -1110,7 +1116,7 @@ export function callerMessageOverridesCategoryResolution(message, resolution, qu
 
   // Require several independently aligned intent terms, including at least
   // three that do not come from the Catalog category label. This lets a
-  // published cross-category overview win a weak category inference while an
+  // published cross-category overview win a weak Catalog inference while an
   // explicit item/category request continues to win routing priority.
   return publishedExampleCoverage(message, query) >= 0.65
     && publishedMessageMatchedTokenCount(message, query) >= 3
@@ -1621,7 +1627,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
     })),
   });
-  const cacheKey = `zea:rag:hybrid:v34:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:v35:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();

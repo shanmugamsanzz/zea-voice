@@ -162,8 +162,24 @@ assert.equal(callerMessageOverridesCategoryResolution(
 ), true);
 assert.equal(callerMessageOverridesCategoryResolution(
   completeOverviewMessage,
+  {
+    status: 'match', entityType: 'item', matchedText: 'Health Screening Option',
+    item: { name: 'Health Screening Option', item_key: 'health-screening-option' },
+  },
+  'Could you give me a complete overview of the available health screening options?',
+), true);
+assert.equal(callerMessageOverridesCategoryResolution(
+  completeOverviewMessage,
   { ...overviewCategoryResolution, category: 'Organ Specific Services', categoryKey: 'organ-specific-services', matchedText: 'Organ Specific Services' },
   'What organ specific services are available?',
+), false);
+assert.equal(callerMessageOverridesCategoryResolution(
+  completeOverviewMessage,
+  {
+    status: 'match', entityType: 'item', matchedText: 'Advanced Screening',
+    item: { name: 'Advanced Screening', item_key: 'advanced-screening' },
+  },
+  'Tell me about the Advanced Screening option',
 ), false);
 
 const actionRoutes = workflowActionRouteCandidates([{
