@@ -11,6 +11,8 @@ const {
   catalogIdentityOverridesRememberedEntity,
   callerMessageOverridesCategoryResolution,
   focusAuthoritativeCatalogEvidence,
+  resolveSemanticCatalogIdentity,
+  selectDeterministicEvidenceResponse,
   strongCallerMessageMatch,
   workflowActionRouteCandidates,
 } = await import('../src/knowledge-bases/hybrid-knowledge-retrieval.service.js');
@@ -60,6 +62,20 @@ assert.equal(catalogIdentityOverridesRememberedEntity(
 assert.equal(catalogIdentityOverridesRememberedEntity({
   status: 'match', entityType: 'item', matchedKind: 'distinctive_identity_token',
 }, [{ key: 'foundation-plan' }]), true);
+assert.equal(catalogIdentityOverridesRememberedEntity({
+  status: 'match', entityType: 'item', matchedKind: 'semantic_identity',
+}, [{ key: 'foundation-plan' }]), true);
+
+const semanticSwitch = resolveSemanticCatalogIdentity(catalog, [{
+  recordType: 'CATALOG_ITEM', recordId: 'advanced', retrievalContext: 'primary',
+  semanticScore: 0.93,
+}, {
+  recordType: 'CATALOG_ITEM', recordId: 'foundation', retrievalContext: 'primary',
+  semanticScore: 0.84,
+}], 'cross-script STT rendering of the uploaded Advanced alias');
+assert.equal(semanticSwitch?.status, 'match');
+assert.equal(semanticSwitch?.item?.item_key, 'advanced-plan');
+assert.equal(semanticSwitch?.matchedKind, 'semantic_identity');
 
 const memory = openGenericConversationState({
   tenantId: 'tenant', workspaceId: 'workspace', agentId: 'agent', callId: 'call',
@@ -138,6 +154,61 @@ assert.equal(strongCallerMessageMatch(overview, 'yes', {}), false);
 assert.equal(strongCallerMessageMatch(
   overview, 'yes', { pendingQuestion: 'Would you like to hear the choices?' },
 ), true);
+assert.equal(strongCallerMessageMatch(
+  overview, 'yes', { pendingQuestion: 'Please confirm your account name.' },
+), false, 'an acknowledgement must not activate an unrelated overview');
+
+const approvedItem = {
+  id: 'published:catalog_item:advanced', recordId: 'advanced',
+  recordType: 'CATALOG_ITEM', callerFacing: true, hydrationValidated: true,
+  retrievalContext: 'primary', content: 'Item: Advanced Plan', authoritativeData: {
+    itemKey: 'advanced-plan', name: 'Advanced Plan',
+    sourceText: 'Advanced Plan includes the uploaded premium service set.',
+  },
+};
+const deterministicItem = selectDeterministicEvidenceResponse({
+  evidence: [approvedItem], query: 'Advanced package details please',
+  catalogIdentityResolution: switched, explicitCatalogRecordIds: ['advanced'],
+  conflict: { detected: false },
+});
+assert.equal(deterministicItem?.recordId, 'advanced');
+assert.match(deterministicItem?.content ?? '', /uploaded premium service set/u);
+
+const approvedCategoryItems = catalogEvidence.map((entry) => ({
+  ...entry, callerFacing: true, hydrationValidated: true,
+  content: `Item: ${entry.authoritativeData.name}`,
+  authoritativeData: {
+    ...entry.authoritativeData, categoryDescription: 'Uploaded service category.',
+  },
+}));
+const deterministicCategory = selectDeterministicEvidenceResponse({
+  evidence: approvedCategoryItems, query: 'General Services',
+  catalogIdentityResolution: {
+    status: 'match', entityType: 'category', category: 'General Services',
+  },
+  explicitCatalogRecordIds: approvedCategoryItems.map((item) => item.recordId),
+  conflict: { detected: false },
+});
+assert.match(deterministicCategory?.content ?? '', /Foundation Plan/u);
+assert.match(deterministicCategory?.content ?? '', /Advanced Plan/u);
+assert.deepEqual(deterministicCategory?.deterministicEvidenceIds,
+  approvedCategoryItems.map((item) => item.id));
+
+const approvedFaq = {
+  id: 'published:faq:hours', recordId: 'hours', recordType: 'FAQ',
+  callerFacing: true, hydrationValidated: true, retrievalContext: 'primary',
+  semanticScore: 0.92, content: 'We are open during the uploaded operating hours.',
+  authoritativeData: {
+    question: 'What are your operating hours?',
+    answer: 'We are open during the uploaded operating hours.',
+  },
+};
+const deterministicFaq = selectDeterministicEvidenceResponse({
+  evidence: [approvedFaq], query: 'What are your operating hours?',
+  conflict: { detected: false },
+});
+assert.equal(deterministicFaq?.recordType, 'FAQ');
+assert.equal(deterministicFaq?.content, approvedFaq.content);
 
 const overviewCategoryResolution = {
   status: 'match', entityType: 'category', category: 'Health Screening',

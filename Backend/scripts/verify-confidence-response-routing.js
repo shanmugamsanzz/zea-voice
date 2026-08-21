@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { resolveConfidenceResponseRoute } from '../src/knowledge-bases/hybrid-knowledge-retrieval.service.js';
+import {
+  groundedLlmReasoningRequired,
+  resolveConfidenceResponseRoute,
+} from '../src/knowledge-bases/hybrid-knowledge-retrieval.service.js';
 
 const callerMessage = {
   recordId: 'message-1', recordType: 'CONVERSATION_NODE', content: 'Approved response.',
@@ -48,14 +51,32 @@ const multipleRelevant = resolveConfidenceResponseRoute({
 assert.equal(multipleRelevant.outcome, 'grounded_llm');
 assert.equal(multipleRelevant.evidenceCount, 2);
 
+const deterministicOnly = resolveConfidenceResponseRoute({
+  evidence: [catalogEvidence], conflict: { detected: false }, reasoningRequired: false,
+});
+assert.equal(deterministicOnly.outcome, 'clarify');
+assert.equal(deterministicOnly.reason, 'deterministic_match_required');
+
+assert.equal(groundedLlmReasoningRequired({
+  evidence: [catalogEvidence], directResponse: catalogEvidence,
+}), false, 'known single-record requests must bypass the LLM');
+assert.equal(groundedLlmReasoningRequired({
+  evidence: [catalogEvidence, { ...catalogEvidence, recordId: 'item-2' }],
+  explicitCatalogRecordIds: ['item-1', 'item-2'],
+}), true, 'comparisons must retain grounded LLM reasoning');
+assert.equal(groundedLlmReasoningRequired({
+  evidence: [catalogEvidence],
+  catalogIdentityResolution: { status: 'uncertain', ambiguous: true },
+}), true, 'ambiguous entity requests must retain grounded LLM reasoning');
+
 const orchestrator = readFileSync(new URL('../src/voice/realtime-conversation-orchestrator.js', import.meta.url), 'utf8');
 const clarificationBranch = orchestrator.indexOf("responseRouting.outcome === 'clarify'");
-const llmBranch = orchestrator.indexOf('response = await this.#llm(query, history, llmKnowledge', clarificationBranch);
+const llmBranch = orchestrator.indexOf('this.#llm(query, history, knowledge', clarificationBranch);
 assert.ok(clarificationBranch >= 0 && llmBranch > clarificationBranch);
 assert.match(orchestrator.slice(clarificationBranch, llmBranch), /configuredSafeFailureResponse/u);
 assert.match(orchestrator, /requireHydratedEvidence:\s*true/u);
 assert.doesNotMatch(orchestrator, /if \(directResponseValidated\)/u);
-assert.match(orchestrator, /select its responseId and cite it/u);
+assert.match(orchestrator, /Resolve only the ambiguity, comparison, action, or multi-source question/u);
 assert.doesNotMatch(orchestrator, /responseRouting\.outcome === 'clarify' \|\| responseRouting\.outcome === 'direct'/u);
 
 console.log(JSON.stringify({

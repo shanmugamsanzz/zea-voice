@@ -9,6 +9,10 @@ import {
   voiceLatencyTargets,
 } from '../src/voice/interaction/voice-latency-slo.js';
 import { env } from '../src/config/env.js';
+import {
+  configuredTechnicalFailureResponse,
+  remainingLiveTurnBudgetMs,
+} from '../src/voice/realtime-conversation-orchestrator.js';
 
 assert.equal(task10Industries.length, 5);
 assert.ok(new Set(task10Industries.map((fixture) => fixture.industry)).size === 5);
@@ -17,11 +21,17 @@ assert.ok(new Set(task10Industries.map((fixture) => fixture.language)).has('en')
 
 let providerRequests = 0;
 let maximumOutputTokens = null;
+let maximumPromptCharacters = 0;
+let maximumHistoryMessages = 0;
 let cancellations = 0;
 const adapter = {
   stream(input) {
     providerRequests += 1;
     maximumOutputTokens = input.maxOutputTokens;
+    maximumPromptCharacters = Math.max(maximumPromptCharacters,
+      String(input.messages?.[0]?.content ?? '').length);
+    maximumHistoryMessages = Math.max(maximumHistoryMessages,
+      Math.max(0, Number(input.messages?.length ?? 0) - 2));
     return (async function* events() {
       yield { type: 'text_delta', delta: '{"evidenceIds":[],' };
       yield { type: 'text_delta', delta: '"stateUpdate":{},"decision":"clarify",' };
@@ -60,7 +70,12 @@ for (const fixture of task10Industries) {
 }
 assert.equal(providerRequests, task10Industries.length,
   'each ordinary turn must make exactly one streamed LLM request');
-assert.equal(maximumOutputTokens, 800, 'grounded output must have room for long structured answers');
+assert.equal(maximumOutputTokens, 384,
+  'live grounded decisions must honor the voice-specific output cap');
+assert.ok(maximumPromptCharacters <= 8_000,
+  'live grounded prompts must honor the compact voice budget');
+assert.ok(maximumHistoryMessages <= 4,
+  'live grounded prompts must retain at most four recent history messages');
 
 const cancelledSession = await createSelectedLlmStream(profile, {
   callId: 'call-cancel', query: 'new topic', history: [], usageDirection: 'inbound',
@@ -95,6 +110,15 @@ assert.equal(env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS, 2_000);
 assert.ok(env.VOICE_KNOWLEDGE_TURN_TIMEOUT_MS < env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS);
 assert.ok(env.VOICE_LLM_TURN_TIMEOUT_MS < env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS);
 assert.ok(env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS < env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS);
+assert.equal(remainingLiveTurnBudgetMs(2_000, 600, 0), 1_400);
+const technicalFallback = configuredTechnicalFailureResponse({
+  agent: {
+    language: 'en',
+    settings: { knowledgeClarificationMessage: "I didn't understand." },
+  },
+});
+assert.doesNotMatch(technicalFallback, /didn'?t understand/iu);
+assert.match(technicalFallback, /temporarily unavailable/iu);
 
 const orchestrator = readFileSync(
   new URL('../src/voice/realtime-conversation-orchestrator.js', import.meta.url), 'utf8',
@@ -105,6 +129,12 @@ assert.match(orchestrator, /LLM_REQUEST_TIMEOUT_MS|#llmAttempt/u);
 assert.match(orchestrator, /VOICE_KNOWLEDGE_TURN_TIMEOUT_MS/u);
 assert.match(orchestrator, /VOICE_LLM_TURN_TIMEOUT_MS/u);
 assert.match(orchestrator, /VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS/u);
+assert.match(orchestrator, /remainingLiveTurnBudgetMs/u);
+assert.match(orchestrator,
+  /Math\.min\(env\.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS, 2_000\)/u,
+  'The live first-audio deadline must stay capped at two seconds even with stale production env');
+assert.match(orchestrator, /configuredTechnicalFailureResponse/u);
+assert.match(orchestrator, /turn_first_audio_deadline/u);
 assert.match(orchestrator, /persistAudible/u,
   'audible assistant speech must survive a confirmed interruption');
 assert.match(orchestrator, /transcript\.audible_partial_persisted/u);

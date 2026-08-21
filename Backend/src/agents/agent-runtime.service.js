@@ -168,7 +168,7 @@ function knowledgeContext(knowledge, maximumChars = env.LLM_KNOWLEDGE_CONTEXT_MA
 function buildCompactGroundedSystemPrompt(agent, {
   usageDirection, context = {}, knowledge, totalBudget,
 }) {
-  const groundingOptions = { includePublishedMap: false, maximumSources: 5 };
+  const groundingOptions = { includePublishedMap: false, maximumSources: 4 };
   const envelope = buildGroundingEnvelope(knowledge, groundingOptions);
   const contract = JSON.stringify(groundedDecisionContract(envelope, {
     fieldSchemas: context.configuredInformationFields ?? [],
@@ -220,7 +220,7 @@ function buildCompactGroundedSystemPrompt(agent, {
     '<knowledge_context>',
   ].filter((line) => line !== null).join('\n');
   const companySource = String(agent.prompt ?? '').trim();
-  let company = companySource.slice(0, 2_400);
+  let company = companySource.slice(0, 1_200);
   const companySection = () => [
     '</knowledge_context>',
     '<company_instructions>',
@@ -287,7 +287,7 @@ export function buildAgentSystemPrompt(agent, { usageDirection, context, knowled
   );
   if (context?.groundedResponseMode === true && context?.compactGrounding === true) {
     return buildCompactGroundedSystemPrompt(agent, {
-      usageDirection, context, knowledge, totalBudget: Math.min(totalBudget, 12_000),
+      usageDirection, context, knowledge, totalBudget: Math.min(totalBudget, 8_000),
     });
   }
   // Reserve room for platform safety rules. The remaining budget is split so

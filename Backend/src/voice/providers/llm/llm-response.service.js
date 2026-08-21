@@ -43,8 +43,20 @@ function toolIdentifiers(tool, runtimeName) {
 
 export function selectedLlmPromptBudget(compactGrounding = false) {
   return compactGrounding
-    ? Math.min(env.VOICE_LLM_PROMPT_BUDGET_CHARS, 12_000)
+    ? Math.min(env.VOICE_LLM_PROMPT_BUDGET_CHARS, 8_000)
     : env.VOICE_LLM_PROMPT_BUDGET_CHARS;
+}
+
+export function selectedVoiceHistoryLimit(requestedLimit) {
+  const configured = Math.min(env.VOICE_LLM_MAX_HISTORY_MESSAGES, 4);
+  return Math.max(0, Math.min(
+    configured,
+    Number.isInteger(requestedLimit) && requestedLimit >= 0 ? requestedLimit : configured,
+  ));
+}
+
+export function selectedGroundedOutputTokenLimit() {
+  return Math.min(env.VOICE_GROUNDED_MAX_OUTPUT_TOKENS, 384);
 }
 
 export function runtimeTools(tools = []) {
@@ -76,10 +88,12 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
   const ownsAdapter = !dependencies.adapter;
   const assignedTools = runtimeTools(runtimeProfile.tools);
   const groundedResponseMode = input.context?.groundedResponseMode === true;
-  const compactGrounding = input.context?.compactGrounding === true;
+  // Every grounded live decision uses the compact voice contract. Callers
+  // cannot accidentally opt back into the larger non-voice prompt path.
+  const compactGrounding = groundedResponseMode;
   const groundingEnvelope = buildGroundingEnvelope(
     input.knowledge ?? { found: false, route: 'none' },
-    compactGrounding ? { includePublishedMap: false, maximumSources: 5 } : {},
+    compactGrounding ? { includePublishedMap: false, maximumSources: 4 } : {},
   );
   const decisionRuntime = {
     fieldSchemas: input.context?.configuredInformationFields ?? [],
@@ -89,19 +103,24 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
     usageDirection: input.usageDirection,
     context: {
       ...(input.context ?? {}),
+      compactGrounding,
       configuredToolSchemas: assignedTools,
     },
     knowledge: input.knowledge ?? { found: false, route: 'none' },
     maxPromptChars: selectedLlmPromptBudget(compactGrounding),
   });
+  const historyLimit = groundedResponseMode
+    ? selectedVoiceHistoryLimit(input.historyLimit)
+    : Math.min(
+      env.LLM_MAX_HISTORY_MESSAGES,
+      Number.isInteger(input.historyLimit) && input.historyLimit >= 0
+        ? input.historyLimit : env.VOICE_LLM_MAX_HISTORY_MESSAGES,
+    );
+  const boundedHistory = historyLimit > 0
+    ? (input.history ?? []).slice(-historyLimit) : [];
   const messages = [
     { role: 'system', content: systemPrompt },
-    ...(input.history ?? []).slice(-Math.min(
-      env.LLM_MAX_HISTORY_MESSAGES,
-      Number.isInteger(input.historyLimit) && input.historyLimit > 0
-        ? input.historyLimit
-        : env.VOICE_LLM_MAX_HISTORY_MESSAGES,
-    )),
+    ...boundedHistory,
     { role: 'user', content: input.query },
   ];
   return {
@@ -113,7 +132,7 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
       // creativity remains available only outside the grounded JSON path.
       temperature: groundedResponseMode ? 0 : runtimeProfile.agent.temperature,
       maxOutputTokens: groundedResponseMode
-        ? env.VOICE_GROUNDED_MAX_OUTPUT_TOKENS
+        ? selectedGroundedOutputTokenLimit()
         : env.LLM_MAX_OUTPUT_TOKENS,
       ...(groundedResponseMode ? {
         responseFormat: {
@@ -123,6 +142,9 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
       } : {}),
     }),
     promptCharacters: systemPrompt.length,
+    historyMessages: boundedHistory.length,
+    maxOutputTokens: groundedResponseMode
+      ? selectedGroundedOutputTokenLimit() : env.LLM_MAX_OUTPUT_TOKENS,
     cancel: (reason = 'barge-in') => llm.cancel(reason),
     close: () => ownsAdapter ? llm.close() : undefined,
   };

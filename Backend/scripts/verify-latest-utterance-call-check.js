@@ -70,7 +70,7 @@ const orchestratorSource = readFileSync(
   new URL('../src/voice/realtime-conversation-orchestrator.js', import.meta.url), 'utf8',
 );
 assert.match(orchestratorSource, /semanticCallCheckResolution/u);
-assert.match(orchestratorSource, /withConfiguredCallCheckEvidence/u);
+assert.match(orchestratorSource, /turnLatency\.route = 'direct_call_check'/u);
 assert.match(orchestratorSource, /callCheckClassification\.shortcut === true/u);
 
 console.log(JSON.stringify({

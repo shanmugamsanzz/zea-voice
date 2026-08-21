@@ -149,16 +149,20 @@ export function configuredSafeFailureResponse(profile) {
     ? configured : callerFacingFallback(profile);
 }
 
-function withConfiguredCallCheckEvidence(knowledge, evidence) {
-  if (!evidence) return knowledge;
-  const existing = knowledge?.tenantEvidence ?? {};
-  const sources = [...(existing.sources ?? [])];
-  if (!sources.some((source) => source.id === evidence.id)) sources.push(evidence);
-  return {
-    ...knowledge,
-    found: true,
-    tenantEvidence: { ...existing, found: true, sources },
-  };
+export function configuredTechnicalFailureResponse(profile) {
+  const configured = String(
+    profile.agent.settings?.technicalFailureMessage
+      ?? profile.agent.settings?.knowledgeTechnicalFailureMessage
+      ?? '',
+  ).trim();
+  if (configured && !isInternalRuntimeText(configured)) return configured;
+  return languageCode(profile.agent.language) === 'ta'
+    ? '\u0bae\u0ba9\u0bcd\u0ba9\u0bbf\u0b95\u0bcd\u0b95\u0bb5\u0bc1\u0bae\u0bcd, \u0ba4\u0b95\u0bb5\u0bb2\u0bcd \u0b9a\u0bc7\u0bb5\u0bc8 \u0ba4\u0bb1\u0bcd\u0b95\u0bbe\u0bb2\u0bbf\u0b95\u0bae\u0bbe\u0b95 \u0b95\u0bbf\u0b9f\u0bc8\u0b95\u0bcd\u0b95\u0bb5\u0bbf\u0bb2\u0bcd\u0bb2\u0bc8. \u0b9a\u0bbf\u0bb1\u0bbf\u0ba4\u0bc1 \u0ba8\u0bc7\u0bb0\u0ba4\u0bcd\u0ba4\u0bbf\u0bb2\u0bcd \u0bae\u0bc0\u0ba3\u0bcd\u0b9f\u0bc1\u0bae\u0bcd \u0bae\u0bc1\u0baf\u0bb1\u0bcd\u0b9a\u0bbf\u0b95\u0bcd\u0b95\u0bb5\u0bc1\u0bae\u0bcd.'
+    : 'Sorry, the information service is temporarily unavailable. Please try again shortly.';
+}
+
+export function remainingLiveTurnBudgetMs(deadlineAt, reserveMs = 0, now = Date.now()) {
+  return Math.max(0, Math.floor(Number(deadlineAt) - Number(now) - Math.max(0, reserveMs)));
 }
 
 function callerFacingText(value, profile) {
@@ -1713,10 +1717,10 @@ export class RealtimeConversationOrchestrator {
     const compactLiveMemory = compactGenericConversationState({
       ...liveMemory,
       collectedInformation: collectedData,
-    }, 1_600);
+    }, 900);
     const groundingEnvelope = buildGroundingEnvelope(
       knowledge,
-      { includePublishedMap: false, maximumSources: 5 },
+      { includePublishedMap: false, maximumSources: 4 },
     );
     const groundingRuntime = {
       pendingQuestion: liveMemory?.pendingQuestion?.text
@@ -1734,16 +1738,19 @@ export class RealtimeConversationOrchestrator {
       liveMemory?.resumeQuestionAfterAnswer,
       context.callCheck?.configuredResponse,
     ];
+    const voiceHistoryLimit = Math.min(env.VOICE_LLM_MAX_HISTORY_MESSAGES, 4);
+    const combinedHistory = [
+      ...(this.previousConversationMemory?.recentMessages ?? []),
+      ...promptHistory,
+    ];
     this.#recordLiveMemoryTiming('prompt_context', memoryPromptStartedAt);
     const session = await createSelectedLlmStream(this.runtimeProfile, {
       callId: this.call.id,
       query,
-      history: [
-        ...(this.previousConversationMemory?.recentMessages ?? []),
-        ...promptHistory,
-      ].slice(-env.LLM_MAX_HISTORY_MESSAGES),
+      history: voiceHistoryLimit > 0 ? combinedHistory.slice(-voiceHistoryLimit) : [],
       historyLimit: Math.min(
-        env.LLM_MAX_HISTORY_MESSAGES,
+        env.VOICE_LLM_MAX_HISTORY_MESSAGES,
+        4,
         Math.max(2, Number(Array.isArray(liveMemory?.recentTurns)
           ? Math.ceil(liveMemory.recentTurns.length / 2)
           : (liveMemory?.recentTurns ?? 5)) * 2),
@@ -1797,7 +1804,8 @@ export class RealtimeConversationOrchestrator {
       effectiveBudgetCharacters: selectedLlmPromptBudget(true),
       evidenceRecords: groundingEnvelope.sources.length,
       publishedMapIncluded: false,
-      historyMessages: Math.min((history ?? []).length, env.LLM_MAX_HISTORY_MESSAGES),
+      historyMessages: session.historyMessages,
+      maximumOutputTokens: session.maxOutputTokens,
     }, 'Voice LLM prompt prepared within the configured runtime budget');
     this.activeLlm = session;
     let text = '';
@@ -2106,7 +2114,7 @@ export class RealtimeConversationOrchestrator {
     });
   }
 
-  #createSentenceTtsPipeline(epoch, turnStartedAt) {
+  #createSentenceTtsPipeline(epoch, turnStartedAt, firstAudioDeadlineAt) {
     let chain = Promise.resolve();
     let beginPromise = null;
     let failure = null;
@@ -2259,6 +2267,8 @@ export class RealtimeConversationOrchestrator {
               kind, startedAt: turnStartedAt, deferDrain: true,
               playbackGroupId, deferBoundaryFlush: true,
               charactersReserved: true, epoch,
+              firstAudioDeadlineAt: currentSentenceNumber === 1
+                ? firstAudioDeadlineAt : undefined,
             });
           } else {
             played = await this.#playPrefetchedTts(prepared.value, generationId, {
@@ -2274,6 +2284,8 @@ export class RealtimeConversationOrchestrator {
         const played = await this.#synthesize(sentence, generationId, {
           kind, startedAt: turnStartedAt, deferDrain: true,
           playbackGroupId, deferBoundaryFlush: true, epoch,
+          firstAudioDeadlineAt: currentSentenceNumber === 1
+            ? firstAudioDeadlineAt : undefined,
           validatedTextAt: firstValidatedTextAt,
           onFirstAudio: () => {
             if (!audibleSentences.includes(sentence)) audibleSentences.push(sentence);
@@ -2401,6 +2413,14 @@ export class RealtimeConversationOrchestrator {
   async #runTurn(query, history, epoch, sttTiming = {}) {
     this.liveCallMemory?.beginTurn?.(epoch);
     const turnStartedAt = Date.now();
+    const firstAudioDeadlineAt = turnStartedAt
+      + Math.min(env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS, 2_000);
+    const knowledgeBudgetMs = Math.max(1, Math.min(
+      env.VOICE_KNOWLEDGE_TURN_TIMEOUT_MS,
+      500,
+      remainingLiveTurnBudgetMs(firstAudioDeadlineAt,
+        Math.min(env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS, 600) + 450),
+    ));
     const turnLatency = {
       epoch,
       queryCharacters: Array.from(String(query ?? '')).length,
@@ -2427,7 +2447,7 @@ export class RealtimeConversationOrchestrator {
     try {
       knowledge = await rejectAfter(
         this.#knowledge(query, retrievalAbortController.signal),
-        env.VOICE_KNOWLEDGE_TURN_TIMEOUT_MS,
+        knowledgeBudgetMs,
         () => new AppError(504, 'Knowledge exceeded the live turn budget', 'VOICE_KNOWLEDGE_TURN_TIMEOUT'),
         () => retrievalAbortController.abort('knowledge_turn_timeout'),
       );
@@ -2435,11 +2455,11 @@ export class RealtimeConversationOrchestrator {
       if (error?.code !== 'VOICE_KNOWLEDGE_TURN_TIMEOUT') throw error;
       this.log.warn({
         stage: 'knowledge.turn_timeout', callId: this.call.id,
-        timeoutMs: env.VOICE_KNOWLEDGE_TURN_TIMEOUT_MS,
-      }, 'Knowledge exceeded its live budget; using the configured clarification response');
+        timeoutMs: knowledgeBudgetMs,
+      }, 'Knowledge exceeded its live budget; using the technical fallback response');
       knowledge = {
         found: false, route: 'timeout', sources: [],
-        retrieval: { parallelDurationMs: env.VOICE_KNOWLEDGE_TURN_TIMEOUT_MS },
+        retrieval: { parallelDurationMs: knowledgeBudgetMs },
         tenantEvidence: {
           found: false, sources: [], evidenceIds: [],
           responseRouting: { outcome: 'clarify', reason: 'knowledge_timeout' },
@@ -2512,7 +2532,9 @@ export class RealtimeConversationOrchestrator {
       knowledgeMessageSources(knowledge),
     );
     if (epoch !== this.epoch || this.finalized) return;
-    const sentencePipeline = this.#createSentenceTtsPipeline(epoch, turnStartedAt);
+    const sentencePipeline = this.#createSentenceTtsPipeline(
+      epoch, turnStartedAt, firstAudioDeadlineAt,
+    );
     // LLM output is deliberately buffered until the complete grounded JSON
     // decision has passed evidence, state and tool validation inside
     // #llmAttempt. The sentence pipeline is fed only below, from the final
@@ -2541,9 +2563,12 @@ export class RealtimeConversationOrchestrator {
       && callCheckClassification.shortcut === true;
     if (responseRouting.outcome === 'clarify' && !semanticCallCheckResolution) {
       const reason = responseRouting.reason;
+      const timedOut = reason === 'knowledge_timeout';
       response = {
         cancelled: false,
-        text: configuredSafeFailureResponse(this.runtimeProfile),
+        text: timedOut
+          ? configuredTechnicalFailureResponse(this.runtimeProfile)
+          : configuredSafeFailureResponse(this.runtimeProfile),
         toolCalls: [],
         sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
           label: 'Configured knowledge clarification', metadata: { reason },
@@ -2553,8 +2578,28 @@ export class RealtimeConversationOrchestrator {
         stage: 'knowledge.clarification_selected', callId: this.call.id, reason,
         conflictType: knowledge.tenantEvidence?.retrieval?.conflictType ?? null,
       }, 'Weak, conflicting or invalid direct evidence routed to configured clarification');
+    } else if (semanticCallCheckResolution) {
+      const callCheckEvidence = configuredCallCheckEvidence(this.callCheckConfiguration, {
+        tenantId: this.runtimeProfile.agent.tenantId,
+        agentId: this.runtimeProfile.agent.id,
+      });
+      response = {
+        cancelled: false,
+        text: this.callCheckConfiguration.response,
+        toolCalls: [],
+        sources: [createMessageSource(messageSourceTypes.KNOWLEDGE, {
+          label: 'Configured call-check response',
+          metadata: {
+            recordId: callCheckEvidence?.recordId ?? 'configured-call-check-response',
+            evidenceIds: callCheckEvidence ? [callCheckEvidence.id] : [],
+          },
+        })],
+      };
+      turnLatency.fastKnowledge = true;
+      turnLatency.route = 'direct_call_check';
     } else if (responseRouting.outcome === 'direct' && directResponse?.content) {
-      // A scoped, hydrated caller-facing message is already approved speech.
+      // A scoped, hydrated caller-facing tenant record is already approved
+      // speech (Conversation, FAQ, Catalog item or Catalog category response).
       // Do not spend another LLM turn paraphrasing it or let stale memory
       // change its meaning.
       response = {
@@ -2563,7 +2608,11 @@ export class RealtimeConversationOrchestrator {
         toolCalls: [],
         sources: [createMessageSource(messageSourceTypes.KNOWLEDGE, {
           label: 'Published caller-facing response',
-          metadata: { recordId: directResponse.recordId, responseId: directResponse.id },
+          metadata: {
+            recordId: directResponse.recordId,
+            responseId: directResponse.id,
+            evidenceIds: directResponse.deterministicEvidenceIds ?? [directResponse.id],
+          },
         })],
       };
       turnLatency.fastKnowledge = true;
@@ -2572,27 +2621,30 @@ export class RealtimeConversationOrchestrator {
     } else {
       try {
         const llmStartedAt = Date.now();
-        const callCheckEvidence = semanticCallCheckResolution
-          ? configuredCallCheckEvidence(this.callCheckConfiguration, {
-            tenantId: this.runtimeProfile.agent.tenantId,
-            agentId: this.runtimeProfile.agent.id,
-          }) : null;
-        const llmKnowledge = withConfiguredCallCheckEvidence(knowledge, callCheckEvidence);
-        const remainingFirstAudioBudgetMs = Math.max(250, Math.min(
+        const ttsReserveMs = Math.min(env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS, 600) + 50;
+        const remainingFirstAudioBudgetMs = Math.min(
           env.VOICE_LLM_TURN_TIMEOUT_MS,
-          env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS
-            - (Date.now() - turnStartedAt) - env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS,
-        ));
-        response = await rejectAfter(this.#llm(query, history, llmKnowledge, {
-          instruction: 'Understand the latest caller utterance from its full natural meaning and answer it first using only approved evidence. Keep the spoken answer short and natural for a live phone call. Return exactly one structured decision: answer, clarify or one authorized action. When an exact caller-facing response matches, select its responseId and cite it; runtime will speak the published RESPONSE exactly. Otherwise set responseId to null. Do not require exact caller wording or use a stage as a gate.',
-          callCheck: semanticCallCheckResolution ? {
-            semanticResolutionRequested: true,
-            configuredResponse: this.callCheckConfiguration.response,
-            referencePhrases: [...this.callCheckConfiguration.phrases],
-          } : null,
-        }, streaming), remainingFirstAudioBudgetMs,
-        () => new AppError(504, 'LLM exceeded the live turn budget', 'VOICE_LLM_TURN_TIMEOUT'),
-        () => this.activeLlm?.cancel?.('llm_turn_timeout'));
+          900,
+          remainingLiveTurnBudgetMs(firstAudioDeadlineAt, ttsReserveMs),
+        );
+        if (remainingFirstAudioBudgetMs < 250) {
+          response = {
+            cancelled: false,
+            text: configuredTechnicalFailureResponse(this.runtimeProfile),
+            toolCalls: [],
+            sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
+              label: 'Live deadline technical fallback',
+              metadata: { reason: 'insufficient_llm_budget' },
+            })],
+          };
+        } else {
+          response = await rejectAfter(this.#llm(query, history, knowledge, {
+            instruction: 'Resolve only the ambiguity, comparison, action, or multi-source question in the latest utterance. Use only cited evidence. Keep answer brief. Return exactly one grounded decision JSON object.',
+            callCheck: null,
+          }, streaming), remainingFirstAudioBudgetMs,
+          () => new AppError(504, 'LLM exceeded the live turn budget', 'VOICE_LLM_TURN_TIMEOUT'),
+          () => this.activeLlm?.cancel?.('llm_turn_timeout'));
+        }
         turnLatency.llmMs += Math.max(0, Date.now() - llmStartedAt);
       } catch (error) {
         this.#recordProviderFailure('llm', error, 'llm.response');
@@ -2602,13 +2654,13 @@ export class RealtimeConversationOrchestrator {
         this.log.warn({
           stage: 'llm.safe_recovery_fallback', code: error.code,
           providerId: this.runtimeProfile.providers.llm.providerId,
-        }, 'Selected LLM failed; using the configured safe failure response');
+        }, 'Selected LLM failed; using the technical fallback response');
         response = {
           cancelled: false,
-          text: configuredSafeFailureResponse(this.runtimeProfile),
+          text: configuredTechnicalFailureResponse(this.runtimeProfile),
           toolCalls: [],
           sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
-            label: 'Configured safe failure response', metadata: { reason: error.code },
+            label: 'Live deadline technical fallback', metadata: { reason: error.code },
           })],
         };
       }
@@ -2617,6 +2669,19 @@ export class RealtimeConversationOrchestrator {
     if (response.cancelled || epoch !== this.epoch) {
       sentencePipeline.cancel();
       return;
+    }
+    if (response.toolCalls.length
+      && remainingLiveTurnBudgetMs(firstAudioDeadlineAt,
+        Math.min(env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS, 600) + 250) < 100) {
+      response = {
+        cancelled: false,
+        text: configuredTechnicalFailureResponse(this.runtimeProfile),
+        toolCalls: [],
+        sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
+          label: 'Live deadline technical fallback',
+          metadata: { reason: 'insufficient_tool_budget' },
+        })],
+      };
     }
     if (response.toolCalls.length) {
       const primaryToolCall = response.toolCalls[0];
@@ -2631,6 +2696,10 @@ export class RealtimeConversationOrchestrator {
         toolResults = await (this.dependencies.executeTools ?? executeAgentTools)(
           this.runtimeProfile, this.call, response.toolCalls, {
             fetchImpl: this.dependencies.fetchImpl,
+            timeoutMs: Math.max(1, remainingLiveTurnBudgetMs(
+              firstAudioDeadlineAt,
+              Math.min(env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS, 600) + 250,
+            )),
             requireWorkflowAuthorization: true,
             workflowAuthorization: {
               recordId: primaryToolCall?.authorizationRecordId ?? null,
@@ -2652,10 +2721,26 @@ export class RealtimeConversationOrchestrator {
           knowledge, toolResults, this.runtimeProfile,
         );
         const llmStartedAt = Date.now();
-        response = await this.#llm(query, history, toolGroundedKnowledge, {
-          toolResults,
-          instruction: 'Answer from the selected verified TOOL_RESULT evidence. Speak success only when its verified and success fields are both true; otherwise state the verified failure accurately.',
-        }, streaming);
+        const toolResultLlmBudgetMs = Math.min(500, remainingLiveTurnBudgetMs(
+          firstAudioDeadlineAt, Math.min(env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS, 600) + 50,
+        ));
+        response = toolResultLlmBudgetMs >= 250
+          ? await rejectAfter(this.#llm(query, history, toolGroundedKnowledge, {
+            toolResults,
+            instruction: 'Answer briefly from the selected verified TOOL_RESULT evidence. Speak success only when verified and success are true.',
+          }, streaming), toolResultLlmBudgetMs,
+          () => new AppError(504, 'Tool result decision exceeded the live turn budget',
+            'VOICE_LLM_TURN_TIMEOUT'),
+          () => this.activeLlm?.cancel?.('tool_result_llm_timeout'))
+          : {
+            cancelled: false,
+            text: configuredTechnicalFailureResponse(this.runtimeProfile),
+            toolCalls: [],
+            sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
+              label: 'Live deadline technical fallback',
+              metadata: { reason: 'insufficient_tool_result_llm_budget' },
+            })],
+          };
         turnLatency.llmMs += Math.max(0, Date.now() - llmStartedAt);
         sourceTrace.add(response.sources);
       } finally {
@@ -2833,9 +2918,24 @@ export class RealtimeConversationOrchestrator {
       const stream = this.adapters.tts.synthesizeStream({ text, generationId });
       const iterator = stream[Symbol.asyncIterator]();
       while (true) {
+        const sharedDeadlineRemainingMs = options.firstAudioDeadlineAt
+          ? remainingLiveTurnBudgetMs(options.firstAudioDeadlineAt) : Number.POSITIVE_INFINITY;
+        if (firstAudio && sharedDeadlineRemainingMs <= 0) {
+          this.adapters.tts.cancel?.('turn_first_audio_deadline');
+          throw new AppError(504, 'Turn exceeded the end-to-end first-audio deadline',
+            'VOICE_TURN_FIRST_AUDIO_DEADLINE');
+        }
+        const firstAudioTimeoutMs = Math.max(1, Math.min(
+          env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS,
+          600,
+          sharedDeadlineRemainingMs,
+        ));
         const next = firstAudio
-          ? await rejectAfter(iterator.next(), env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS,
-            () => new AppError(504, 'TTS produced no audio within the live deadline', 'TTS_FIRST_AUDIO_TIMEOUT'),
+          ? await rejectAfter(iterator.next(), firstAudioTimeoutMs,
+            () => new AppError(504, 'TTS produced no audio within the live deadline',
+              options.firstAudioDeadlineAt && firstAudioTimeoutMs < Math.min(
+                env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS, 600,
+              ) ? 'VOICE_TURN_FIRST_AUDIO_DEADLINE' : 'TTS_FIRST_AUDIO_TIMEOUT'),
             () => this.adapters.tts.cancel?.('first_audio_timeout'))
           : await iterator.next();
         if (next.done) break;
@@ -3165,6 +3265,7 @@ export class RealtimeConversationOrchestrator {
           ? env.TTS_SPEED_MAX_RETRIES : env.VOICE_PROVIDER_MAX_RETRIES;
         const canRetry = error?.retryable === true && error.audioStarted !== true
           && error?.code !== 'TTS_FIRST_AUDIO_TIMEOUT'
+          && error?.code !== 'VOICE_TURN_FIRST_AUDIO_DEADLINE'
           && attempt < retryLimit;
         if (!canRetry) throw error;
         if (error?.code === 'TTS_ABNORMAL_SPEED') this.runtimeMetrics.ttsSpeed.retries += 1;
@@ -3408,7 +3509,9 @@ export class RealtimeConversationOrchestrator {
       }
     }
     await this.#cancelActive(`${stage}_recovery`);
-    const ttsFailed = stage === 'audio_output' || stage.startsWith('tts') || String(error?.code ?? '').startsWith('TTS_');
+    const ttsFailed = stage === 'audio_output' || stage.startsWith('tts')
+      || String(error?.code ?? '').startsWith('TTS_')
+      || error?.code === 'VOICE_TURN_FIRST_AUDIO_DEADLINE';
     if (!ttsFailed && this.controller.state === callStates.LISTENING) {
       try {
         const message = this.#fitTtsMessage(fallbackRecovery(this.runtimeProfile));

@@ -16,6 +16,9 @@ const maximumRepeatMs = 300_000;
 const fixture = JSON.parse(await readFile(new URL(
   '../fixtures/complete-live-call-2026-08-20-regression.json', import.meta.url,
 ), 'utf8'));
+const latestLiveCall = JSON.parse(await readFile(new URL(
+  '../fixtures/latest-live-call-2026-08-21-regression.json', import.meta.url,
+), 'utf8'));
 const expectedBehaviors = new Set(fixture.turns.map((turn) => turn.expect));
 for (const behavior of [
   'contextual_response', 'tenant_entity', 'stt_tenant_entity', 'tenant_category',
@@ -24,6 +27,18 @@ for (const behavior of [
 const actionTurn = fixture.turns.find((turn) => turn.expect === 'configured_action');
 assert.equal(actionTurn?.requiresConfirmation, true);
 assert.equal(actionTurn?.requiresVerifiedSuccess, true);
+assert.ok(latestLiveCall.turns.some((turn) => turn.kind === 'acknowledgement'));
+assert.ok(latestLiveCall.turns.filter((turn) => turn.id.startsWith('onco-')).length >= 4);
+for (const requiredKind of ['category', 'item', 'faq', 'booking', 'confirmation']) {
+  assert.ok(latestLiveCall.turns.some((turn) => turn.kind === requiredKind),
+    `Latest live-call fixture is missing ${requiredKind}`);
+}
+assert.ok(latestLiveCall.turns.some((turn) => turn.expectedItemKey?.includes('silver')));
+assert.ok(latestLiveCall.turns.some((turn) => turn.expectedItemKey?.includes('gold')));
+assert.ok(latestLiveCall.turns.filter((turn) => turn.interruptedPreviousAudio).length >= 4);
+assert.equal(latestLiveCall.requirements.maximumKnownRequestLlmTimeouts, 0);
+assert.equal(latestLiveCall.requirements.maximumFirstAudioMs, 2_000);
+assert.ok(latestLiveCall.requirements.minimumSuccessfulRuns >= minimumRepeats);
 
 assert.equal(configuredCallDurationMs(5), 300_000,
   'A configured five-minute call limit must arm exactly at five minutes');
@@ -32,6 +47,7 @@ assert.equal(env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS, 2_000);
 assert.ok(env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS < env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS);
 
 const suites = Object.freeze([
+  { name: 'latest_live_call', file: 'verify-latest-live-call-equivalent-replay.js' },
   { name: 'complete_call', file: 'verify-complete-health-call-production-replay.js' },
   { name: 'tenant_variations', file: 'verify-tenant-regression-generator.js' },
   { name: 'entity_routing', file: 'verify-universal-entity-routing.js' },
@@ -100,10 +116,23 @@ for (let repeat = 1; repeat <= repeats; repeat += 1) {
   assert.equal(replayReport.passed, true);
   assert.ok(replayReport.localReplayLatencyMs.p95 < 100,
     `Repeat ${repeat} complete-call p95 exceeded 100ms`);
+  const latestCall = results.find((result) => result.name === 'latest_live_call');
+  const latestCallReport = JSON.parse(latestCall.output.trim());
+  assert.equal(latestCallReport.passed, true);
+  assert.equal(latestCallReport.knownRequestLlmTimeouts, 0,
+    `Repeat ${repeat}: a known latest-call request timed out in the LLM`);
+  assert.equal(latestCallReport.genericClarificationsForValidStt, 0,
+    `Repeat ${repeat}: valid STT received generic clarification`);
+  assert.ok(latestCallReport.maximumFirstAudioMs
+    < latestLiveCall.requirements.maximumFirstAudioMs,
+  `Repeat ${repeat}: latest-call first audio exceeded two seconds`);
   runs.push(Object.freeze({
     repeat,
     durationMs: Number(durationMs.toFixed(2)),
     completeCallP95Ms: replayReport.localReplayLatencyMs.p95,
+    latestCallFirstAudioMaxMs: latestCallReport.maximumFirstAudioMs,
+    latestCallKnownRequestLlmTimeouts: latestCallReport.knownRequestLlmTimeouts,
+    latestCallGenericClarifications: latestCallReport.genericClarificationsForValidStt,
     suites: Object.freeze(results.map(({ name, durationMs: suiteDurationMs }) => ({
       name, durationMs: suiteDurationMs,
     }))),
@@ -116,13 +145,19 @@ console.log(JSON.stringify({
   repeats,
   firstAudioDeadlineMs: env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS,
   completeCallP95LimitMs: 100,
+  latestCallFirstAudioLimitMs: latestLiveCall.requirements.maximumFirstAudioMs,
+  latestCallKnownRequestLlmTimeoutLimit: 0,
+  requiredSuccessfulRuns: latestLiveCall.requirements.minimumSuccessfulRuns,
   suiteTimeoutMs,
   maximumRepeatMs,
   coverage: [
-    'complete_call', 'Tamil', 'Tanglish', 'English', 'stt_variation',
+    'latest_live_call', 'acknowledgement', 'Onco_STT_variations',
+    'Kids', 'Silver', 'Gold', 'timing', 'complete_call',
+    'Tamil', 'Tanglish', 'English', 'stt_variation',
     'topic_switching', 'comparison', 'safety', 'booking_confirmation',
     'verified_webhook', 'interruption', 'transcript_persistence',
     'tts_failure', 'five_minute_timeout', 'latency_thresholds',
+    'zero_known_request_llm_timeouts', 'no_generic_clarification_for_valid_stt',
   ],
   runs,
 }, null, 2));

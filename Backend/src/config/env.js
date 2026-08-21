@@ -90,9 +90,9 @@ const envSchema = z.object({
   // holding the caller in silence.  The complete first-audio deadline is
   // intentionally two seconds; individual stages receive smaller budgets.
   VOICE_TURN_FIRST_AUDIO_DEADLINE_MS: z.coerce.number().int().min(1000).max(10000).default(2000),
-  VOICE_KNOWLEDGE_TURN_TIMEOUT_MS: z.coerce.number().int().min(100).max(5000).default(600),
-  VOICE_LLM_TURN_TIMEOUT_MS: z.coerce.number().int().min(250).max(10000).default(1100),
-  VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS: z.coerce.number().int().min(250).max(5000).default(800),
+  VOICE_KNOWLEDGE_TURN_TIMEOUT_MS: z.coerce.number().int().min(100).max(5000).default(500),
+  VOICE_LLM_TURN_TIMEOUT_MS: z.coerce.number().int().min(250).max(10000).default(900),
+  VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS: z.coerce.number().int().min(250).max(5000).default(600),
   VOICE_TTS_MAX_RESPONSE_CHARACTERS: z.coerce.number().int().min(100).max(2000).default(600),
   VOICE_TTS_SENTENCE_GROUPING_ENABLED: booleanFromString.default(true),
   VOICE_TTS_SHORT_SENTENCE_CHARACTERS: z.coerce.number().int().min(20).max(500).default(100),
@@ -171,7 +171,7 @@ const envSchema = z.object({
   LLM_CIRCUIT_FAILURE_THRESHOLD: z.coerce.number().int().min(1).max(20).default(5),
   LLM_CIRCUIT_RESET_TIMEOUT_MS: z.coerce.number().int().min(1000).max(300000).default(30000),
   LLM_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(16).max(8192).default(300),
-  VOICE_GROUNDED_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(128).max(4096).default(800),
+  VOICE_GROUNDED_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(128).max(4096).default(384),
   // Production requires the single generic grounded decision engine. The
   // server refuses to start when this flag is disabled.
   VOICE_UNIFIED_GROUNDED_DECISION_ENABLED: booleanFromString.default(false),
@@ -179,8 +179,8 @@ const envSchema = z.object({
   LLM_SYSTEM_PROMPT_MAX_CHARS: z.coerce.number().int().min(2000).max(100000).default(40000),
   // Unified voice turns reserve the structured contract and cap composition
   // at 12k; legacy/non-voice callers may still explicitly configure more.
-  VOICE_LLM_PROMPT_BUDGET_CHARS: z.coerce.number().int().min(4000).max(40000).default(12000),
-  VOICE_LLM_MAX_HISTORY_MESSAGES: z.coerce.number().int().min(0).max(20).default(6),
+  VOICE_LLM_PROMPT_BUDGET_CHARS: z.coerce.number().int().min(4000).max(40000).default(8000),
+  VOICE_LLM_MAX_HISTORY_MESSAGES: z.coerce.number().int().min(0).max(20).default(4),
   // Used only when a streaming STT provider does not send its own speech-end
   // event.  It finalizes a complete caller turn after genuine quiet, never
   // from sound alone.

@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "description": "Live-equivalent replay of the latest failed call. Expected answers and evidence are resolved from the supplied tenant records; this fixture contains utterances and expectations only.",
+  "requirements": {
+    "maximumFirstAudioMs": 2000,
+    "maximumKnownRequestLlmTimeouts": 0,
+    "minimumSuccessfulRuns": 3,
+    "forbidGenericClarificationForValidStt": true
+  },
+  "pendingQuestion": "May I explain the available packages?",
+  "genericClarifications": [
+    "I didn't understand",
+    "I did not understand",
+    "Please repeat that",
+    "Could you say that again?"
+  ],
+  "turns": [
+    {
+      "id": "acknowledgement",
+      "utterance": "ஆமாங்க",
+      "kind": "acknowledgement",
+      "expectedRecordId": "conversation-package-overview"
+    },
+    {
+      "id": "onco-stt-tamil",
+      "utterance": "ஆண் கோ package பத்தி சொல்லுங்க",
+      "kind": "category",
+      "expectedCategoryKey": "oncology-screening",
+      "interruptedPreviousAudio": true
+    },
+    {
+      "id": "onco-care",
+      "utterance": "Onco Care package பத்தி சொல்லுங்க",
+      "kind": "category",
+      "expectedCategoryKey": "oncology-screening"
+    },
+    {
+      "id": "onco-repeat",
+      "utterance": "Onco Care Package",
+      "kind": "category",
+      "expectedCategoryKey": "oncology-screening"
+    },
+    {
+      "id": "onco-stt-mixed",
+      "utterance": "ஆண் கோ care health package பத்தி சொல்றீங்களா",
+      "kind": "category",
+      "expectedCategoryKey": "oncology-screening"
+    },
+    {
+      "id": "kids",
+      "utterance": "சரி kids health package பத்தி சொல்லுங்க",
+      "kind": "category",
+      "expectedCategoryKey": "pediatric-health-screening",
+      "interruptedPreviousAudio": true
+    },
+    {
+      "id": "silver",
+      "utterance": "சரி silver package பத்தி சொல்லுங்க",
+      "kind": "item",
+      "expectedItemKey": "silver-master-health-checkup",
+      "interruptedPreviousAudio": true
+    },
+    {
+      "id": "gold",
+      "utterance": "Gold package பத்தி சொல்லுங்க",
+      "kind": "item",
+      "expectedItemKey": "gold-master-health-checkup",
+      "interruptedPreviousAudio": true
+    },
+    {
+      "id": "hospital-timing",
+      "utterance": "சரி hospital எந்த timingல openல இருக்கும்",
+      "kind": "faq",
+      "expectedRecordId": "faq-hospital-timing"
+    },
+    {
+      "id": "booking",
+      "utterance": "Silver packageக்கு appointment book பண்ணுங்க",
+      "kind": "booking",
+      "expectedItemKey": "silver-master-health-checkup",
+      "expectedIntent": "booking_request",
+      "requiresConfirmation": true,
+      "requiresVerifiedToolSuccess": true
+    },
+    {
+      "id": "booking-confirmation",
+      "utterance": "ஆமாம் confirm பண்ணுங்க",
+      "kind": "confirmation",
+      "expectedIntent": "confirmation"
+    }
+  ]
+}

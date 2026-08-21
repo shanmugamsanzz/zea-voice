@@ -167,6 +167,7 @@
     "verify:tenant-data-regression": "node scripts/verify-tenant-data-regression.js",
     "verify:comprehensive-regression": "npm run verify:universal-entity-routing && npm run verify:grounding-action-runtime && npm run verify:tenant-regression-generator",
     "verify:realtime-reliability": "node scripts/verify-realtime-reliability-gate.js --repeats=3",
+    "verify:live-equivalent-regression": "node scripts/verify-realtime-reliability-gate.js --repeats=3",
     "verify:production-migration-gate": "node scripts/verify-production-migration-gate.js",
     "verify:live-production-acceptance": "node scripts/verify-live-production-acceptance.js",
     "verify:failed-call-production-gate": "node scripts/verify-live-production-acceptance.js --replay-file=fixtures/failed-call-2026-08-19-production.json --report-file=artifacts/production-acceptance-report.json",

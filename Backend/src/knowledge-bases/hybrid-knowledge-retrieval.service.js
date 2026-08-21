@@ -671,8 +671,30 @@ export function catalogIdentityOverridesRememberedEntity(resolution, knownEntiti
   if (!Array.isArray(knownEntities) || knownEntities.length === 0) return true;
   return new Set([
     'name', 'item_key', 'alias', 'distinctive_identity_token',
+    'semantic_identity',
     'category', 'category_key', 'category_alias', 'parent_category_key',
   ]).has(String(resolution.matchedKind ?? '').toLocaleLowerCase());
+}
+
+export function resolveSemanticCatalogIdentity(identities = [], candidates = [], query = '') {
+  const catalog = candidates.filter((candidate) => candidate.recordType === 'CATALOG_ITEM'
+    && (candidate.retrievalContext ?? 'primary') === 'primary')
+    .sort((left, right) => Number(right.semanticScore ?? 0) - Number(left.semanticScore ?? 0));
+  const first = catalog[0];
+  if (!first) return null;
+  const semantic = Number(first.semanticScore ?? 0);
+  const runnerSemantic = Number(catalog[1]?.semanticScore ?? 0);
+  const semanticFloor = Math.min(0.98, Math.max(0.86, env.RAG_RUNTIME_MIN_SCORE + 0.12));
+  if (semantic < semanticFloor || (catalog[1] && semantic - runnerSemantic < 0.035)) return null;
+  const identity = identities.find((item) => catalogValue(item?.id)
+    === catalogValue(first.recordId));
+  if (!identity) return null;
+  return Object.freeze({
+    status: 'match', entityType: 'item', item: identity,
+    confidence: Math.round(semantic * 10000) / 10000,
+    method: 'semantic', matchedKind: 'semantic_identity',
+    matchedText: String(query ?? '').trim(), alternatives: [], candidates: [], ambiguous: false,
+  });
 }
 
 export function prioritizeCandidates(primary, contextual, useContext, preferContext, limit) {
@@ -707,6 +729,7 @@ export function prioritizeCandidates(primary, contextual, useContext, preferCont
   // the pending question, so retaining only one message would decide too
   // early and make the correct response impossible to select.
   const catalogCandidate = ordered.find((candidate) => candidate.recordType === 'CATALOG_ITEM');
+  const faqCandidate = ordered.find((candidate) => candidate.recordType === 'FAQ');
   // On a contextual turn, several semantically close published messages can
   // be valid retrieval candidates. Preserve every message that fits inside
   // the final evidence budget and let the grounded decision resolve them from
@@ -718,10 +741,12 @@ export function prioritizeCandidates(primary, contextual, useContext, preferCont
   const conversationCandidates = ordered
     .filter((candidate) => candidate.recordType === 'CONVERSATION_NODE')
     .slice(0, conversationLimit);
-  const reservedCount = conversationCandidates.length + (catalogCandidate ? 1 : 0);
+  const reservedCount = conversationCandidates.length + (catalogCandidate ? 1 : 0)
+    + (faqCandidate ? 1 : 0);
   ordered.slice(0, Math.max(1, maximum - reservedCount)).forEach(add);
   conversationCandidates.forEach(add);
   add(catalogCandidate);
+  add(faqCandidate);
   ordered.forEach(add);
   return selected.map((candidate, index) => ({ ...candidate, rank: index + 1 }));
 }
@@ -967,6 +992,7 @@ export function detectEvidenceConflict(evidence = [], margin = 0.06) {
 
 export function resolveConfidenceResponseRoute({
   directMessage = null, evidence = [], conflict = null, rejectedCandidates = 0,
+  reasoningRequired = true,
 } = {}) {
   const relevant = evidence.filter((item) => item?.content || item?.authoritativeData);
   const top = relevant[0];
@@ -981,8 +1007,12 @@ export function resolveConfidenceResponseRoute({
     confidence: Math.max(confidence, Number(directMessage.semanticScore ?? 0)),
     evidenceCount: relevant.length,
   });
-  if (relevant.length > 0) return Object.freeze({
+  if (relevant.length > 0 && reasoningRequired) return Object.freeze({
     outcome: 'grounded_llm', reason: 'reasoning_required',
+    confidence, evidenceCount: relevant.length,
+  });
+  if (relevant.length > 0) return Object.freeze({
+    outcome: 'clarify', reason: 'deterministic_match_required',
     confidence, evidenceCount: relevant.length,
   });
   return Object.freeze({
@@ -1018,6 +1048,153 @@ function conversationVariable(evidence, requestedKey) {
   const variables = evidence?.authoritativeData?.variables;
   if (!Array.isArray(variables)) return null;
   return variables.find((variable) => normalize(variable?.key) === expected)?.value ?? null;
+}
+
+function boundedApprovedText(value, maximum = 560) {
+  const content = String(value ?? '').trim().replace(/\s+/gu, ' ');
+  if (content.length <= maximum) return content;
+  const bounded = content.slice(0, maximum + 1);
+  const boundary = Math.max(bounded.lastIndexOf('. '), bounded.lastIndexOf(', '),
+    bounded.lastIndexOf(' '));
+  return `${bounded.slice(0, boundary > maximum * 0.65 ? boundary : maximum).trim()}…`;
+}
+
+function approvedCatalogItemText(evidence) {
+  const data = evidence?.authoritativeData ?? {};
+  const name = String(data.name ?? '').trim();
+  const approved = String(data.sourceText ?? data.description ?? '').trim();
+  if (approved) {
+    const includesName = name && normalize(approved).includes(normalize(name));
+    return boundedApprovedText(includesName || !name ? approved : `${name}. ${approved}`);
+  }
+  return boundedApprovedText(evidence?.content);
+}
+
+function approvedCatalogCategoryText(evidence = [], resolution = null) {
+  const catalog = evidence.filter((item) => item?.recordType === 'CATALOG_ITEM');
+  if (!catalog.length) return '';
+  const first = catalog[0].authoritativeData ?? {};
+  const category = String(resolution?.category ?? first.category ?? '').trim();
+  const description = String(first.categoryDescription ?? '').trim();
+  const names = [...new Set(catalog.map((item) => (
+    String(item.authoritativeData?.name ?? '').trim()
+  )).filter(Boolean))];
+  const parts = [];
+  if (category) parts.push(category);
+  if (description && normalize(description) !== normalize(category)) parts.push(description);
+  if (names.length) parts.push(names.join(', '));
+  return boundedApprovedText(parts.join('. '));
+}
+
+function faqQuestionCoverage(evidence, query) {
+  const queryTokens = [...new Set(tokens(query))];
+  const questionTokens = [...new Set(tokens(evidence?.authoritativeData?.question))];
+  if (!queryTokens.length || !questionTokens.length) return 0;
+  const matches = queryTokens.filter((queryToken) => questionTokens.some((questionToken) => (
+    queryToken === questionToken
+      || (Math.min(queryToken.length, questionToken.length) >= 4
+        && (queryToken.includes(questionToken) || questionToken.includes(queryToken)))
+  ))).length;
+  return matches / Math.max(1, Math.min(queryTokens.length, questionTokens.length));
+}
+
+function selectStrongFaqResponse(evidence = [], query = '') {
+  const candidates = evidence.filter((item) => item?.recordType === 'FAQ'
+    && item.callerFacing === true && item.hydrationValidated === true
+    && item.retrievalContext === 'primary' && String(item.content ?? '').trim())
+    .sort((left, right) => Number(right.semanticScore ?? 0) - Number(left.semanticScore ?? 0)
+      || Number(right.lexicalScore ?? 0) - Number(left.lexicalScore ?? 0));
+  const first = candidates[0];
+  if (!first) return null;
+  const normalizedQuery = normalize(query);
+  const normalizedQuestion = normalize(first.authoritativeData?.question);
+  const exact = normalizedQuery.length >= 3
+    && (normalizedQuery === normalizedQuestion
+      || normalizedQuery.includes(normalizedQuestion)
+      || normalizedQuestion.includes(normalizedQuery));
+  const coverage = faqQuestionCoverage(first, query);
+  const semantic = Number(first.semanticScore ?? 0);
+  const runnerSemantic = Number(candidates[1]?.semanticScore ?? 0);
+  const semanticFloor = Math.min(0.98, Math.max(0.82, env.RAG_RUNTIME_MIN_SCORE + 0.08));
+  const lexical = Number(first.lexicalScore ?? 0) >= 4 && coverage >= 0.45;
+  const semanticWinner = semantic >= semanticFloor
+    && (!candidates[1] || semantic - runnerSemantic >= 0.025);
+  return exact || coverage >= 0.75 || lexical || semanticWinner ? first : null;
+}
+
+function selectStrongKnowledgeChunkResponse(evidence = [], query = '') {
+  const callerEvidence = evidence.filter((item) => item?.callerFacing === true
+    && item.hydrationValidated === true && String(item.content ?? '').trim());
+  if (callerEvidence.length !== 1 || callerEvidence[0].recordType !== 'KNOWLEDGE_CHUNK'
+    || callerEvidence[0].retrievalContext !== 'primary') return null;
+  const item = callerEvidence[0];
+  const semanticFloor = Math.min(0.98, Math.max(0.82, env.RAG_RUNTIME_MIN_SCORE + 0.08));
+  const strongSemantic = Number(item.semanticScore ?? 0) >= semanticFloor;
+  const strongLexical = Number(item.lexicalScore ?? 0) >= 4
+    && Number(item.tokenCoverage ?? 0) >= 0.5;
+  const normalizedQuery = normalize(query);
+  const exactCoverage = normalizedQuery.length >= 4
+    && normalize(item.content).includes(normalizedQuery);
+  return strongSemantic || strongLexical || exactCoverage ? item : null;
+}
+
+/**
+ * Selects a response that can be spoken without generative reasoning. Every
+ * returned value is derived only from a PostgreSQL-hydrated, approved tenant
+ * record. Comparisons and ambiguous multi-item requests intentionally remain
+ * on the grounded decision path.
+ */
+export function selectDeterministicEvidenceResponse({
+  directMessage = null, evidence = [], query = '', catalogIdentityResolution = null,
+  explicitCatalogRecordIds = [], conflict = null,
+} = {}) {
+  if (conflict?.detected === true) return null;
+  if (directMessage?.hydrationValidated === true && directMessage.callerFacing === true) {
+    return directMessage;
+  }
+
+  const explicitIds = new Set(explicitCatalogRecordIds.map(catalogValue).filter(Boolean));
+  const explicitCatalog = evidence.filter((item) => item.recordType === 'CATALOG_ITEM'
+    && item.callerFacing === true && item.hydrationValidated === true
+    && explicitIds.has(catalogValue(item.recordId)));
+  const matchedCategory = catalogIdentityResolution?.status === 'match'
+    && catalogIdentityResolution.entityType === 'category';
+  if (matchedCategory && explicitCatalog.length) {
+    const content = approvedCatalogCategoryText(explicitCatalog, catalogIdentityResolution);
+    if (content) return Object.freeze({ ...explicitCatalog[0], content,
+      deterministicEvidenceIds: Object.freeze(explicitCatalog.map((item) => item.id)) });
+  }
+  const matchedSingleItem = catalogIdentityResolution?.status === 'match'
+    && catalogIdentityResolution.entityType === 'item'
+    && explicitCatalog.length === 1 && explicitIds.size === 1;
+  if (matchedSingleItem) {
+    const content = approvedCatalogItemText(explicitCatalog[0]);
+    if (content) return Object.freeze({ ...explicitCatalog[0], content,
+      deterministicEvidenceIds: Object.freeze([explicitCatalog[0].id]) });
+  }
+
+  const faq = selectStrongFaqResponse(evidence, query);
+  if (faq) return Object.freeze({ ...faq,
+    content: boundedApprovedText(faq.authoritativeData?.answer ?? faq.content),
+    deterministicEvidenceIds: Object.freeze([faq.id]) });
+  const chunk = selectStrongKnowledgeChunkResponse(evidence, query);
+  return chunk ? Object.freeze({ ...chunk, content: boundedApprovedText(chunk.content),
+    deterministicEvidenceIds: Object.freeze([chunk.id]) }) : null;
+}
+
+export function groundedLlmReasoningRequired({
+  evidence = [], actionEvidence = [], explicitCatalogRecordIds = [],
+  catalogIdentityResolution = null, requestedFacts = [], directResponse = null,
+} = {}) {
+  if (directResponse) return false;
+  if (actionEvidence.some((item) => item?.activationAllowed === true)) return true;
+  if (new Set(explicitCatalogRecordIds.map(catalogValue).filter(Boolean)).size > 1) return true;
+  if (new Set(requestedFacts.map(catalogValue).filter(Boolean)).size > 1) return true;
+  if (catalogIdentityResolution?.status === 'uncertain'
+    || catalogIdentityResolution?.ambiguous === true) return true;
+  const callerEvidence = evidence.filter((item) => item?.callerFacing === true
+    && (item.content || item.authoritativeData));
+  return callerEvidence.length > 1;
 }
 
 function publishedExampleMatch(evidence, query) {
@@ -1074,6 +1251,23 @@ function publishedMessageMatchedTokenCount(evidence, query) {
       (metadataToken) => tokenMatches(queryToken, metadataToken),
     )).length;
   }));
+}
+
+function pendingQuestionSupportsMessage(evidence, pendingQuestion) {
+  const pendingTokens = [...new Set(tokens(pendingQuestion))].filter((token) => token.length >= 5);
+  if (!pendingTokens.length) return false;
+  const configured = conversationVariable(evidence, 'examples');
+  const examples = Array.isArray(configured) ? configured : [configured];
+  const metadataTokens = [...new Set(tokens([
+    ...examples,
+    conversationVariable(evidence, 'purpose'),
+    conversationVariable(evidence, 'situation'),
+  ].filter(Boolean).join(' ')))].filter((token) => token.length >= 5);
+  return pendingTokens.some((pendingToken) => metadataTokens.some((metadataToken) => (
+    pendingToken === metadataToken
+      || (Math.min(pendingToken.length, metadataToken.length) >= 5
+        && (pendingToken.includes(metadataToken) || metadataToken.includes(pendingToken)))
+  )));
 }
 
 export function callerMessageOverridesCategoryResolution(message, resolution, query = '') {
@@ -1239,6 +1433,10 @@ export function strongCallerMessageMatch(evidence, query, input = {}) {
   // when their words also align with the uploaded situation metadata.
   if (queryTokens.length <= 2 && !String(input.pendingQuestion ?? '').trim()
     && !compactSituationAligned) return false;
+  if (queryTokens.length <= 2 && context === 'no_selected_entity'
+    && String(input.pendingQuestion ?? '').trim()
+    && !compactSituationAligned
+    && !pendingQuestionSupportsMessage(evidence, input.pendingQuestion)) return false;
   const semanticScore = Number(evidence.semanticScore ?? 0);
   const lexicalScore = Number(evidence.lexicalScore ?? 0);
   const tokenCoverage = Number(evidence.tokenCoverage ?? 0);
@@ -1260,7 +1458,8 @@ export function strongCallerMessageMatch(evidence, query, input = {}) {
       || channels.has('conversation_metadata'));
   const contextualLatestTurn = retrievalContext === 'contextual'
     && contextIsAvailable(input)
-    && Boolean(String(input.pendingQuestion ?? '').trim());
+    && Boolean(String(input.pendingQuestion ?? '').trim())
+    && pendingQuestionSupportsMessage(evidence, input.pendingQuestion);
   // Specific entity turns must be answered from their hydrated records. A
   // generic caller-facing message cannot replace or follow that answer.
   // With an entity already selected, semantic similarity alone is not enough
@@ -1307,6 +1506,7 @@ export function selectStrongCallerMessage(evidence = [], query = '', input = {})
     - Number(runnerUp.semanticScore ?? 0) : Number.POSITIVE_INFINITY;
   const contextualPendingResolution = Boolean(String(input.pendingQuestion ?? '').trim())
     && first.retrievalContext === 'contextual'
+    && pendingQuestionSupportsMessage(first, input.pendingQuestion)
     && (scoreGap > 0 || semanticGap > 0);
   if (runnerUp && scoreGap < 0.04 && semanticGap < 0.025
     && !contextualPendingResolution && !exactPublishedExample) {
@@ -1449,6 +1649,7 @@ export function callerMessageEligibleForDecision(evidence, query, input = {}) {
   const situation = normalize(conversationVariable(evidence, 'situation'));
   if (!situation || evidence.retrievalContext !== 'contextual'
     || !String(input.pendingQuestion ?? '').trim()) return false;
+  if (!pendingQuestionSupportsMessage(evidence, input.pendingQuestion)) return false;
   const context = normalize(conversationVariable(evidence, 'context') ?? 'any')
     .replace(/\s+/gu, '_');
   const selectedEntities = [
@@ -1647,7 +1848,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
       key: entity?.key ?? null, name: entity?.name ?? null, category: entity?.category ?? null,
     })),
   });
-  const cacheKey = `zea:rag:hybrid:v41:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
+  const cacheKey = `zea:rag:hybrid:v42:${tenantId}:${safeInput.agentId}:${safeInput.usageDirection}:${hash(`${revisions}|${query}|${queries.contextual}|${safeInput.language}|${contextCacheScope}`)}`;
   const cached = await readJson(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
   const retrievalStartedAt = performance.now();
@@ -1713,6 +1914,11 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   if (catalogIdentityDiscoveryNeeded || rememberedEntityHydrationNeeded) {
     if (catalogIdentityDiscoveryNeeded) {
       catalogIdentityResolution = classifyCatalogEntityLocally(catalogIdentities, query);
+      if (catalogIdentityResolution.status !== 'match') {
+        catalogIdentityResolution = resolveSemanticCatalogIdentity(
+          catalogIdentities, strongPrimary, query,
+        ) ?? catalogIdentityResolution;
+      }
       const identityOverridesMemory = catalogIdentityOverridesRememberedEntity(
         catalogIdentityResolution, safeInput.knownEntities,
       );
@@ -1945,6 +2151,16 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
   }));
   const directMessage = evidenceConflict.detected
     ? null : selectStrongCallerMessage(permittedEvidence, query, messageSelectionInput);
+  const deterministicResponse = selectDeterministicEvidenceResponse({
+    directMessage, evidence: permittedEvidence, query, catalogIdentityResolution,
+    explicitCatalogRecordIds, conflict: evidenceConflict,
+  });
+  const reasoningRequired = groundedLlmReasoningRequired({
+    evidence: permittedEvidence, actionEvidence,
+    explicitCatalogRecordIds, catalogIdentityResolution,
+    requestedFacts: Array.isArray(input.requestedFacts) ? input.requestedFacts : [],
+    directResponse: deterministicResponse,
+  });
   const weakCandidatesRejected = primaryBranch.ranked.length + contextualBranch.ranked.length
     - strongPrimary.length - strongContextual.length;
   const rankedKeys = new Set(ranked.map(candidateKey));
@@ -1978,30 +2194,31 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
     }
   }
   const responseRouting = resolveConfidenceResponseRoute({
-    directMessage, evidence: permittedEvidence, conflict: evidenceConflict,
-    rejectedCandidates: weakCandidatesRejected,
+    directMessage: deterministicResponse, evidence: permittedEvidence, conflict: evidenceConflict,
+    rejectedCandidates: weakCandidatesRejected, reasoningRequired,
   });
   const result = {
     operation: 'search_published_knowledge', route: 'hybrid',
     found: permittedEvidence.length > 0, sources, actionEvidence, guidanceEvidence, entities,
     evidenceIds: permittedEvidence.map((item) => item.id),
-    directResponse: directMessage ? {
-      id: directMessage.id,
-      recordId: directMessage.recordId,
-      recordType: directMessage.recordType,
-      tenantId: directMessage.tenantId,
-      agentId: directMessage.agentId,
-      knowledgeBaseId: directMessage.knowledgeBaseId,
-      publicationRevision: directMessage.publicationRevision,
-      documentId: directMessage.documentId,
-      documentVersionId: directMessage.documentVersionId,
-      hydrationValidated: directMessage.hydrationValidated,
-      documentStatus: directMessage.documentStatus,
-      documentVersionStatus: directMessage.documentVersionStatus,
-      documentVersionIsCurrent: directMessage.documentVersionIsCurrent,
-      callerFacing: directMessage.callerFacing,
-      content: directMessage.content,
-      authoritativeData: directMessage.authoritativeData,
+    directResponse: deterministicResponse ? {
+      id: deterministicResponse.id,
+      recordId: deterministicResponse.recordId,
+      recordType: deterministicResponse.recordType,
+      tenantId: deterministicResponse.tenantId,
+      agentId: deterministicResponse.agentId,
+      knowledgeBaseId: deterministicResponse.knowledgeBaseId,
+      publicationRevision: deterministicResponse.publicationRevision,
+      documentId: deterministicResponse.documentId,
+      documentVersionId: deterministicResponse.documentVersionId,
+      hydrationValidated: deterministicResponse.hydrationValidated,
+      documentStatus: deterministicResponse.documentStatus,
+      documentVersionStatus: deterministicResponse.documentVersionStatus,
+      documentVersionIsCurrent: deterministicResponse.documentVersionIsCurrent,
+      callerFacing: deterministicResponse.callerFacing,
+      content: deterministicResponse.content,
+      authoritativeData: deterministicResponse.authoritativeData,
+      deterministicEvidenceIds: deterministicResponse.deterministicEvidenceIds ?? [],
     } : null,
     responseRouting,
     requestedFacts: Array.isArray(input.requestedFacts) ? input.requestedFacts : [],
@@ -2039,6 +2256,7 @@ export async function searchHybridPublishedKnowledge(auth, input, dependencies =
         catalogOverrideApplied: callerMessageCategoryOverride,
         selectedNodeKey: metadataCallerMessage?.authoritativeData?.nodeKey ?? null,
       },
+      groundedLlmReasoningRequired: reasoningRequired,
       explicitCatalogRecordIds: Object.freeze([...explicitCatalogRecordIds]),
       vectorBm25Ms, rerankMs, hydrationMs,
       semanticTimedOut: runtime.ragEnabled
