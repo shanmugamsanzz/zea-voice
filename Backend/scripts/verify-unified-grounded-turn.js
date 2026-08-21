@@ -331,7 +331,7 @@ catalogMemory.beginTurn('remembered-multi-citation-turn');
 const distractorCatalogEvidence = {
   ...catalogEvidence,
   id: 'distractor-catalog-source', recordId: 'distractor-catalog-record',
-  retrievalContext: 'contextual', channels: ['semantic'],
+  retrievalContext: 'primary', channels: ['semantic'],
   authoritativeData: {
     ...catalogEvidence.authoritativeData,
     itemKey: 'distractor-service', name: 'Distractor Service',
@@ -380,7 +380,7 @@ const rememberedMultiCitationTurn = applyUnifiedGroundedTurn({
 assert.equal(rememberedMultiCitationTurn.valid, true);
 assert.ok(rememberedMultiCitationTurn.state.knownEntities.some((entity) => (
   entity.key === 'current-service'
-)), 'a contextual multi-citation answer must not replace the memory-selected Catalog entity');
+)), 'a weak primary semantic candidate must not replace the memory-selected Catalog entity');
 
 catalogMemory.beginTurn('remembered-citation-turn');
 const duplicateFactEvidence = {

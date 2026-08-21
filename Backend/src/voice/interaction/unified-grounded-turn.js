@@ -138,6 +138,7 @@ function rememberedCatalogSource(envelope, beforeState, evidence = []) {
   const differentPrimaryEntity = evidence.some((source) => (
     String(source?.retrievalContext ?? '').toLocaleLowerCase() === 'primary'
     && String(source?.recordType ?? '').toLocaleUpperCase() === 'CATALOG_ITEM'
+    && (source?.channels ?? []).includes('catalog_identity')
     && !matchesRemembered(source)
   ));
   return differentPrimaryEntity ? null : candidates[0];
