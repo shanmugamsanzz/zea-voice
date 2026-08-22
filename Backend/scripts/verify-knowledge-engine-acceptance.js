@@ -297,6 +297,30 @@ for (let pass = 1; pass <= repeats; pass += 1) {
   assert.equal(result.decision.type, knowledgeEngineDecisionTypes.DIRECT);
   assert.equal(result.decision.response.text, fixture.fact);
   assert.equal(result.authoritative.hydrationQueryCount, 1);
+  assert.deepEqual(result.publicationRevisions, [{
+    knowledgeBaseId: fixture.kbId, publicationRevision: fixture.revision,
+  }]);
+}
+
+// An agent without a completed, assigned publication must fail with a stable,
+// actionable diagnostic instead of looking like an ordinary no-match turn.
+{
+  const fixture = task10Industries[0];
+  const input = createKnowledgeEngineInput({
+    tenantId: fixture.tenantId, agentId: fixture.agentId,
+    callId: '90000000-0000-4000-8000-000000000002',
+    utterance: fixture.variants[0], language: fixture.language,
+  });
+  await assert.rejects(
+    retrieveTenantEvidence({ tenantId: fixture.tenantId }, input, {
+      throwOnError: true,
+      contextRunner: async (_auth, operation) => operation({
+        query: async () => ({ rows: [] }),
+      }),
+    }),
+    (error) => error.code === 'KNOWLEDGE_PUBLICATION_NOT_ASSIGNED'
+      && error.details?.agentId === fixture.agentId,
+  );
 }
 
 const runtimeSource = await readFile(new URL('../src/knowledge-engine/runtime-service.js', import.meta.url), 'utf8');

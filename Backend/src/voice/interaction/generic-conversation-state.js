@@ -57,6 +57,7 @@ function recent(messages, turns) {
 }
 
 function cleanEntity(value = {}) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const id = cleanText(value.id ?? value.itemId, 100);
   const key = cleanText(value.key ?? value.itemKey, 160);
   const name = cleanText(value.name, 240);

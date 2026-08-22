@@ -47,6 +47,7 @@ assert.equal(env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS, 2_000);
 assert.ok(env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS < env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS);
 
 const suites = Object.freeze([
+  { name: 'tamil_knowledge_engine', file: 'verify-tamil-live-call-knowledge-engine.js' },
   { name: 'latest_live_call', file: 'verify-latest-live-call-equivalent-replay.js' },
   { name: 'complete_call', file: 'verify-complete-health-call-production-replay.js' },
   { name: 'tenant_variations', file: 'verify-tenant-regression-generator.js' },
@@ -151,7 +152,8 @@ console.log(JSON.stringify({
   suiteTimeoutMs,
   maximumRepeatMs,
   coverage: [
-    'latest_live_call', 'acknowledgement', 'Onco_STT_variations',
+    'tamil_knowledge_engine', 'zero_runtime_exceptions', 'non_empty_known_evidence',
+    'no_technical_fallback', 'latest_live_call', 'acknowledgement', 'Onco_STT_variations',
     'Kids', 'Silver', 'Gold', 'timing', 'complete_call',
     'Tamil', 'Tanglish', 'English', 'stt_variation',
     'topic_switching', 'comparison', 'safety', 'booking_confirmation',

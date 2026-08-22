@@ -156,7 +156,18 @@ function inferredCandidates(input, resolution) {
   if (!inferred.length) inferred.push({
     intentClass: knowledgeQueryClasses.UNKNOWN, candidate: null, source: 'unresolved_utterance',
   });
-  return inferred.sort((left, right) => priority[right.intentClass] - priority[left.intentClass]);
+  return inferred.sort((left, right) => {
+    // Safety, call control, authorized actions and explicit conversational
+    // state keep absolute priority. Among ordinary information routes, the
+    // strongest resolved evidence must win; otherwise a weaker phonetic
+    // category can incorrectly override an exact published response.
+    const leftAbsolute = priority[left.intentClass] >= priority[knowledgeQueryClasses.ACKNOWLEDGEMENT];
+    const rightAbsolute = priority[right.intentClass] >= priority[knowledgeQueryClasses.ACKNOWLEDGEMENT];
+    if (leftAbsolute !== rightAbsolute) return rightAbsolute - leftAbsolute;
+    if (leftAbsolute) return priority[right.intentClass] - priority[left.intentClass];
+    const scoreDifference = Number(right.candidate?.score ?? 0) - Number(left.candidate?.score ?? 0);
+    return scoreDifference || priority[right.intentClass] - priority[left.intentClass];
+  });
 }
 
 function indexesFor(intentClass, candidate) {

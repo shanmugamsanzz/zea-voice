@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { env } from '../config/env.js';
+import { logger } from '../config/logger.js';
 import { redis } from '../infrastructure/redis.js';
 import { withTenantContext } from '../infrastructure/database-context.js';
 import { AppError } from '../middleware/errors.js';
@@ -136,7 +137,11 @@ async function activePublications(auth, input, runtime) {
 export async function loadPublishedEngineArtifacts(auth, input, dependencies = {}) {
   const runtime = { ...defaults, ...dependencies };
   const publications = await activePublications(auth, input, runtime);
-  if (!publications.length) throw unavailable('KNOWLEDGE_PUBLICATION_NOT_ASSIGNED');
+  if (!publications.length) throw unavailable('KNOWLEDGE_PUBLICATION_NOT_ASSIGNED', {
+    tenantId: auth.tenantId,
+    agentId: input.agentId,
+    usageDirection: input.usageDirection,
+  });
   const artifacts = await Promise.all(publications.map((identity) => loadArtifacts(identity, runtime.cache)));
   return Object.freeze({
     publications: Object.freeze(publications),
@@ -146,14 +151,15 @@ export async function loadPublishedEngineArtifacts(auth, input, dependencies = {
   });
 }
 
-function publicResult(observed) {
+function publicationRevisions(publications = []) {
+  return Object.freeze(publications.map((publication) => Object.freeze({
+    knowledgeBaseId: publication.knowledgeBaseId,
+    publicationRevision: publication.publicationRevision,
+  })));
+}
+
+function publicResult(observed, publications) {
   const evidence = observed.authoritative.evidence ?? [];
-  const revisions = observed.authoritative.fusion.candidates.map((candidate) => ({
-    knowledgeBaseId: candidate.knowledgeBaseId, publicationRevision: candidate.publicationRevision,
-  })).filter((entry, index, list) => list.findIndex((candidate) => (
-    candidate.knowledgeBaseId === entry.knowledgeBaseId
-    && candidate.publicationRevision === entry.publicationRevision
-  )) === index);
   return Object.freeze({
     operation: 'knowledge_engine_runtime', engineVersion: KNOWLEDGE_ENGINE_RUNTIME_VERSION,
     route: 'knowledge_engine', found: evidence.length > 0, decision: observed.decision,
@@ -170,7 +176,10 @@ function publicResult(observed) {
         categoryKey: source.authoritativeData?.categoryKey ?? null,
       }))),
     evidenceIds: Object.freeze(evidence.map((source) => source.id)),
-    publicationRevisions: Object.freeze(revisions),
+    // Publication availability is independent of whether this particular
+    // utterance produced a ranked candidate. Reporting only candidate
+    // revisions made healthy assigned publications look unavailable.
+    publicationRevisions: publicationRevisions(publications),
     retrieval: Object.freeze({
       candidateCount: observed.retrieval.candidateCount,
       searchedIndexes: observed.retrieval.searchedIndexes,
@@ -188,8 +197,9 @@ export async function retrieveTenantEvidence(auth, input, dependencies = {}) {
   if (!isKnowledgeEngineInput(input)) {
     throw new AppError(400, 'A versioned knowledge-engine input is required', 'KNOWLEDGE_ENGINE_INPUT_INVALID');
   }
+  let artifacts = null;
   try {
-    const artifacts = await loadPublishedEngineArtifacts(auth, input, dependencies);
+    artifacts = await loadPublishedEngineArtifacts(auth, input, dependencies);
     const observed = await runObservedKnowledgeTurn({
       auth, input, publicationBundles: artifacts.bundles,
       sparseIndexes: artifacts.sparseIndexes, runtimeProfile: dependencies.runtimeProfile,
@@ -199,9 +209,20 @@ export async function retrieveTenantEvidence(auth, input, dependencies = {}) {
       hydrationDependencies: { contextRunner: dependencies.contextRunner ?? withTenantContext },
       cancelRetrieval: dependencies.cancelRetrieval, cancelHydration: dependencies.cancelHydration,
     });
-    return publicResult(observed);
+    return publicResult(observed, artifacts.publications);
   } catch (error) {
     if (dependencies.throwOnError === true) throw error;
+    const diagnostic = Object.freeze({
+      stage: 'knowledge.engine_unavailable',
+      errorCode: error.code ?? 'KNOWLEDGE_ENGINE_UNAVAILABLE',
+      tenantId: auth.tenantId,
+      agentId: input.agentId,
+      callId: input.callId,
+      usageDirection: input.usageDirection,
+      publicationRevisions: publicationRevisions(artifacts?.publications),
+      details: error.details ?? null,
+    });
+    logger.error({ err: error, ...diagnostic }, 'Knowledge engine could not load authoritative evidence');
     return Object.freeze({
       operation: 'knowledge_engine_runtime', route: 'knowledge_engine', found: false,
       cancelled: input.abortSignal?.aborted === true,
@@ -210,6 +231,8 @@ export async function retrieveTenantEvidence(auth, input, dependencies = {}) {
       entities: Object.freeze([]), decision: technicalClarificationDecision(
         input.abortSignal?.aborted ? 'knowledge_cancelled' : (error.code ?? 'knowledge_engine_unavailable'),
       ),
+      publicationRevisions: diagnostic.publicationRevisions,
+      diagnostic,
     });
   }
 }

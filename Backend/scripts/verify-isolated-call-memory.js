@@ -119,6 +119,22 @@ assert.deepEqual(engineInput.memory.citedEvidence.map((source) => source.id), ['
 
 const otherCall = openIsolatedCallMemory({ ...identity, callId: 'call-b' }, settings, snapshot);
 assert.equal(otherCall.snapshot().activeEntity, null, 'A different call must not restore mutable state');
+
+// Decisions without a selected entity are valid. DIRECT/LLM commonly answer
+// FAQ or general evidence, TOOL can collect fields before an entity exists,
+// and CLARIFY intentionally has no resolved entity.
+for (const type of ['DIRECT', 'LLM', 'TOOL', 'CLARIFY']) {
+  assert.doesNotThrow(() => otherCall.applyEngineDecision({
+    type,
+    reason: `${type.toLocaleLowerCase()}_without_entity`,
+    evidenceIds: [],
+    ...(type === 'TOOL' ? { tool: { name: 'configured_action' } } : {}),
+    ...(type === 'CLARIFY' ? {
+      clarification: { kind: 'ambiguity', prompt: 'Which option did you mean?' },
+    } : {}),
+  }, { entity: null, category: null }));
+  assert.equal(otherCall.snapshot().activeEntity, null);
+}
 assert.equal(activeIsolatedCallMemoryCount(), 2);
 otherCall.close();
 memory.close();
