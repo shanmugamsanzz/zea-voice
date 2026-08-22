@@ -120,6 +120,7 @@
     "verify:knowledge-engine-acceptance": "node scripts/verify-knowledge-engine-acceptance.js --repeats=3",
     "verify:tamil-live-call-regression": "node scripts/verify-tamil-live-call-knowledge-engine.js --repeats=3",
     "verify:atomic-knowledge-publication": "node scripts/verify-atomic-knowledge-publication.js",
+    "verify:knowledge-artifact-lifecycle": "node scripts/verify-knowledge-artifact-lifecycle.js --repeats=3",
     "verify:clean-hybrid-retrieval": "node scripts/verify-clean-hybrid-retrieval.js",
     "verify:latest-turn-workflow-gating": "node scripts/verify-latest-turn-workflow-gating.js",
     "verify:authoritative-evidence-hydration": "node scripts/verify-authoritative-evidence-hydration.js",

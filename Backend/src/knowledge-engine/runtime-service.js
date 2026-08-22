@@ -15,6 +15,7 @@ import {
   createKnowledgeEngineInput, isKnowledgeEngineInput, technicalClarificationDecision,
 } from './engine-contract.js';
 import { runObservedKnowledgeTurn } from './voice-turn-latency.js';
+import { enqueueKnowledgeProcessingJob } from '../knowledge-bases/knowledge-processing.queue.js';
 
 export const KNOWLEDGE_ENGINE_RUNTIME_VERSION = 1;
 
@@ -39,7 +40,18 @@ const activePublicationSql = `
      )
    ORDER BY assignment.priority,kb.id`;
 
-const defaults = Object.freeze({ cache: redis, contextRunner: withTenantContext });
+const defaults = Object.freeze({
+  cache: redis,
+  contextRunner: withTenantContext,
+  enqueueProcessingJob: enqueueKnowledgeProcessingJob,
+});
+
+const recoverableArtifactErrors = new Set([
+  'KNOWLEDGE_PUBLICATION_ARTIFACT_MISSING',
+  'KNOWLEDGE_PUBLICATION_ARTIFACT_INVALID',
+  'KNOWLEDGE_PUBLICATION_SCOPE_MISMATCH',
+  'KNOWLEDGE_PUBLICATION_INCOMPLETE',
+]);
 
 function normalizeId(value) {
   return String(value ?? '').trim().toLocaleLowerCase();
@@ -134,6 +146,71 @@ async function activePublications(auth, input, runtime) {
   });
 }
 
+async function enqueueArtifactRecovery(auth, identity, runtime) {
+  const recovery = await runtime.contextRunner(auth, async (client) => {
+    await client.query(
+      'SELECT pg_advisory_xact_lock(hashtext($1))',
+      [`knowledge-artifact-recovery:${identity.tenantId}:${identity.knowledgeBaseId}:${identity.publicationRevision}`],
+    );
+    const existing = await client.query(
+      `SELECT id, max_attempts, bullmq_job_id
+         FROM knowledge_processing_jobs
+        WHERE tenant_id=$1 AND knowledge_base_id=$2 AND job_type='index'
+          AND status IN ('queued','running')
+          AND metadata->>'artifactRecovery'='true'
+          AND metadata->>'publicationRevision'=$3
+        ORDER BY created_at DESC LIMIT 1`,
+      [identity.tenantId, identity.knowledgeBaseId, String(identity.publicationRevision)],
+    );
+    if (existing.rowCount) return { ...existing.rows[0], created: false };
+    const inserted = await client.query(
+      `INSERT INTO knowledge_processing_jobs (
+         tenant_id, knowledge_base_id, job_type, status, queue_name, metadata
+       )
+       SELECT $1,$2,'index','queued','knowledge-processing',$3::jsonb
+        WHERE EXISTS (
+          SELECT 1 FROM knowledge_bases
+           WHERE tenant_id=$1 AND id=$2 AND status='published'
+             AND deleted_at IS NULL AND publication_revision=$4
+        )
+       RETURNING id, max_attempts, bullmq_job_id`,
+      [identity.tenantId, identity.knowledgeBaseId, JSON.stringify({
+        publicationRevision: identity.publicationRevision,
+        artifactRecovery: true,
+        recoveryReason: 'missing_or_invalid_redis_publication_bundle',
+      }), identity.publicationRevision],
+    );
+    return inserted.rowCount ? { ...inserted.rows[0], created: true } : null;
+  });
+  if (!recovery) return Object.freeze({ scheduled: false, reason: 'publication_not_active' });
+  if (recovery.bullmq_job_id) {
+    return Object.freeze({ scheduled: true, queued: true, jobId: String(recovery.id), deduplicated: true });
+  }
+  try {
+    const queued = await runtime.enqueueProcessingJob({
+      processingJobId: recovery.id,
+      maxAttempts: recovery.max_attempts,
+    });
+    await runtime.contextRunner(auth, (client) => client.query(
+      `UPDATE knowledge_processing_jobs SET bullmq_job_id=$3,
+          error_code=NULL, error_message=NULL
+        WHERE tenant_id=$1 AND id=$2 AND status='queued'`,
+      [identity.tenantId, recovery.id, queued.id],
+    ));
+    return Object.freeze({
+      scheduled: true, queued: true, jobId: String(recovery.id), deduplicated: !recovery.created,
+    });
+  } catch (error) {
+    await runtime.contextRunner(auth, (client) => client.query(
+      `UPDATE knowledge_processing_jobs
+          SET error_code='QUEUE_UNAVAILABLE', error_message=$3
+        WHERE tenant_id=$1 AND id=$2 AND status='queued'`,
+      [identity.tenantId, recovery.id, String(error.message ?? error).slice(0, 4000)],
+    )).catch(() => {});
+    return Object.freeze({ scheduled: true, queued: false, jobId: String(recovery.id) });
+  }
+}
+
 export async function loadPublishedEngineArtifacts(auth, input, dependencies = {}) {
   const runtime = { ...defaults, ...dependencies };
   const publications = await activePublications(auth, input, runtime);
@@ -142,7 +219,16 @@ export async function loadPublishedEngineArtifacts(auth, input, dependencies = {
     agentId: input.agentId,
     usageDirection: input.usageDirection,
   });
-  const artifacts = await Promise.all(publications.map((identity) => loadArtifacts(identity, runtime.cache)));
+  const artifacts = await Promise.all(publications.map(async (identity) => {
+    try {
+      return await loadArtifacts(identity, runtime.cache);
+    } catch (error) {
+      if (!recoverableArtifactErrors.has(error?.code)) throw error;
+      const recovery = await enqueueArtifactRecovery(auth, identity, runtime);
+      error.details = { ...(error.details ?? {}), identity, recovery };
+      throw error;
+    }
+  }));
   return Object.freeze({
     publications: Object.freeze(publications),
     bundles: Object.freeze(artifacts.map((entry) => entry.bundle)),
@@ -314,7 +400,62 @@ async function invalidate(tenantId, cache, includeArtifacts) {
 }
 
 export function invalidateTenantKnowledgeCache(tenantId, cache = redis) {
-  return invalidate(tenantId, cache, true);
+  // Publication bundles are immutable and revision-addressed. Tenant-level
+  // lifecycle changes must never erase them; physical removal is exclusively
+  // performed by invalidateKnowledgeBaseArtifacts with an explicit KB scope.
+  return invalidate(tenantId, cache, false);
+}
+
+export async function invalidateKnowledgeBaseArtifacts(
+  tenantId,
+  knowledgeBaseId,
+  publicationRevision = null,
+  cache = redis,
+) {
+  const tenant = requireTenantId(tenantId);
+  const knowledgeBase = String(knowledgeBaseId ?? '').trim().toLocaleLowerCase();
+  if (!knowledgeBase) throw new AppError(400, 'knowledgeBaseId is required', 'KNOWLEDGE_BASE_ID_REQUIRED');
+  if (!cache || (cache.status && cache.status !== 'ready')) {
+    return { deletedKeys: 0, incomplete: true };
+  }
+  const revision = publicationRevision == null ? '*' : String(publicationRevision);
+  const prefixes = [
+    'knowledge-map', 'bm25', 'evidence', 'entity-index',
+    'route-index', 'answer-cards', 'publication-manifest',
+  ];
+  const patterns = prefixes.map((prefix) => `zea:rag:${prefix}:${tenant}:${knowledgeBase}:${revision}`);
+  let deletedKeys = 0;
+  try {
+    for (const pattern of patterns) {
+      if (!pattern.includes('*')) {
+        deletedKeys += Number(await cache.del(pattern) ?? 0);
+        continue;
+      }
+      let cursor = '0';
+      do {
+        const response = await cache.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
+        cursor = String(response?.[0] ?? '0');
+        const keys = Array.isArray(response?.[1]) ? response[1] : [];
+        if (keys.length) deletedKeys += Number(await cache.del(...keys) ?? 0);
+      } while (cursor !== '0');
+    }
+    let remainingKeys = 0;
+    for (const pattern of patterns) {
+      if (!pattern.includes('*')) {
+        remainingKeys += Number(await cache.exists(pattern) ?? 0);
+        continue;
+      }
+      let cursor = '0';
+      do {
+        const response = await cache.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
+        cursor = String(response?.[0] ?? '0');
+        remainingKeys += Array.isArray(response?.[1]) ? response[1].length : 0;
+      } while (cursor !== '0');
+    }
+    return { deletedKeys, verified: remainingKeys === 0, remainingKeys };
+  } catch {
+    return { deletedKeys, incomplete: true };
+  }
 }
 
 export function invalidateTenantRuntimeKnowledgeCache(tenantId, cache = redis) {

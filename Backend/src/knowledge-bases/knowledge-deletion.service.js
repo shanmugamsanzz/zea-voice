@@ -17,7 +17,7 @@ import {
   permanentKnowledgeDeletionAttempts,
   removeKnowledgeProcessingQueueJobs,
 } from './knowledge-processing.queue.js';
-import { invalidateTenantKnowledgeCache } from './knowledge-runtime.service.js';
+import { invalidateKnowledgeBaseArtifacts } from './knowledge-runtime.service.js';
 
 const defaultProcessingDependencies = {
   contextRunner: withPlatformAdminContext,
@@ -29,7 +29,7 @@ const defaultProcessingDependencies = {
   deleteKnowledgeBasePoints: deleteTenantPointsByKnowledgeBase,
   queue: enqueueKnowledgeProcessingJob,
   removeQueueJobs: removeKnowledgeProcessingQueueJobs,
-  invalidateCache: invalidateTenantKnowledgeCache,
+  invalidateCache: invalidateKnowledgeBaseArtifacts,
 };
 
 const runtimeProfileDrainGraceMs = 30_000;
@@ -472,7 +472,7 @@ export async function requestDeleteKnowledgeDocument(
       alreadyRequested: false,
     };
   });
-  await invalidateTenantKnowledgeCache(auth.tenantId);
+  await invalidateKnowledgeBaseArtifacts(auth.tenantId, knowledgeBaseId);
   if (!result.alreadyRequested) await enqueueDeletionJob(auth, result.job, contextRunner, queueAdapter);
   return {
     id: result.id,
@@ -589,7 +589,7 @@ export async function requestDeleteKnowledgeBase(
       ))],
     };
   });
-  await invalidateTenantKnowledgeCache(auth.tenantId);
+  await invalidateKnowledgeBaseArtifacts(auth.tenantId, knowledgeBaseId);
   if (!result.alreadyRequested) {
     try {
       await queueRemovalAdapter(result.relatedQueueJobIds);
@@ -824,7 +824,7 @@ export async function processKnowledgeDeletionJob(jobId, dependencies = defaultP
       }
     }
     cleanupStage = 'REDIS';
-    const cacheCleanup = await runtime.invalidateCache(job.tenant_id);
+    const cacheCleanup = await runtime.invalidateCache(job.tenant_id, job.knowledge_base_id);
     if (cacheCleanup?.incomplete) {
       throw new AppError(503, 'Knowledge Base cache cleanup was incomplete', 'KNOWLEDGE_DELETE_CACHE_INCOMPLETE');
     }
@@ -1095,7 +1095,7 @@ export async function purgePreviouslySoftDeletedKnowledgeBases(
         });
       }
       stage = 'redis';
-      const cacheCleanup = await runtime.invalidateCache(row.tenant_id);
+      const cacheCleanup = await runtime.invalidateCache(row.tenant_id, row.id);
       if (cacheCleanup?.incomplete) throw new Error('Knowledge Base cache cleanup was incomplete');
       if (cacheCleanup?.verified !== true || cacheCleanup?.remainingKeys !== 0) {
         throw Object.assign(new Error('Redis Knowledge Base cache cleanup could not be verified'), {

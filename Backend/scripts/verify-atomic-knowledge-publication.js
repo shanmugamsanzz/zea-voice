@@ -188,7 +188,7 @@ try {
 const root = new URL('../', import.meta.url);
 const publishSource = await readFile(new URL('src/knowledge-bases/knowledge-review.service.js', root), 'utf8');
 const semanticSource = await readFile(new URL('src/knowledge-bases/semantic-index.service.js', root), 'utf8');
-const runtimeSource = await readFile(new URL('src/knowledge-bases/knowledge-runtime.service.js', root), 'utf8');
+const runtimeSource = await readFile(new URL('src/knowledge-engine/runtime-service.js', root), 'utf8');
 const providerSource = await readFile(new URL('src/voice/providers/provider-config.js', root), 'utf8');
 const migrationSource = await readFile(new URL('migrations/1786900000000_atomic-knowledge-publication.js', root), 'utf8');
 assert.match(publishSource, /status = 'processing', pending_publication_revision/u);
@@ -197,7 +197,7 @@ assert.match(publishSource, /SET status='archived'/u);
 assert.match(publishSource, /documentIds: rows\.map/u);
 assert.ok(semanticSource.indexOf('countRevisionPoints(') < semanticSource.lastIndexOf('finishIndexJob(job'));
 assert.match(semanticSource, /pending_publication_revision=NULL/u);
-assert.match(runtimeSource, /j\.metadata->>'publicationRevision'=kb\.publication_revision::text/u);
+assert.match(runtimeSource, /(?:j|job)\.metadata->>'publicationRevision'=kb\.publication_revision::text/u);
 assert.doesNotMatch(runtimeSource, /publicationRevision'\)::int <= kb\.publication_revision/u);
 assert.doesNotMatch(providerSource, /kb\.status IN \('published', 'partially_failed'\)/u);
 assert.match(migrationSource, /pending_publication_revision > publication_revision/u);

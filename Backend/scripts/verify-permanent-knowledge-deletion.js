@@ -14,7 +14,7 @@ import {
   collectionForTenant,
   deleteTenantPointsByKnowledgeBase,
 } from '../src/rag/qdrant.client.js';
-import { invalidateTenantKnowledgeCache } from '../src/knowledge-bases/knowledge-runtime.service.js';
+import { invalidateKnowledgeBaseArtifacts } from '../src/knowledge-bases/knowledge-runtime.service.js';
 import { removeKnowledgeProcessingQueueJobs } from '../src/knowledge-bases/knowledge-processing.queue.js';
 
 const tenantId = '11111111-1111-4111-8111-111111111111';
@@ -282,14 +282,14 @@ try {
 }
 
 const cacheKeys = new Set([
-  `zea:rag:profile:${tenantId}:agent-a:inbound:ta`,
-  `zea:rag:profile:${tenantId}:agent-b:outbound:en`,
-  `zea:rag:result:${tenantId}:agent-a:inbound:query-a`,
-  `zea:rag:result:${tenantId}:agent-b:outbound:query-b`,
-  `zea:rag:profile:${otherTenantId}:agent-c:inbound:en`,
+  `zea:rag:knowledge-map:${tenantId}:${knowledgeBaseId}:1`,
+  `zea:rag:bm25:${tenantId}:${knowledgeBaseId}:1`,
+  `zea:rag:evidence:${tenantId}:${knowledgeBaseId}:2`,
+  `zea:rag:publication-manifest:${tenantId}:${knowledgeBaseId}:2`,
+  `zea:rag:knowledge-map:${otherTenantId}:${knowledgeBaseId}:1`,
 ]);
 const wildcardMatch = (pattern, value) => value.startsWith(pattern.slice(0, -1));
-const cacheCleanup = await invalidateTenantKnowledgeCache(tenantId, {
+const cacheCleanup = await invalidateKnowledgeBaseArtifacts(tenantId, knowledgeBaseId, null, {
   status: 'ready',
   async scan(_cursor, _match, pattern) {
     return ['0', [...cacheKeys].filter((key) => wildcardMatch(pattern, key))];
@@ -301,12 +301,13 @@ const cacheCleanup = await invalidateTenantKnowledgeCache(tenantId, {
     }
     return count;
   },
+  async exists(key) { return cacheKeys.has(key) ? 1 : 0; },
 });
 assert.equal(cacheCleanup.incomplete, undefined);
 assert.equal(cacheCleanup.deletedKeys, 4);
 assert.equal(cacheCleanup.verified, true);
 assert.equal(cacheCleanup.remainingKeys, 0);
-assert.deepEqual([...cacheKeys], [`zea:rag:profile:${otherTenantId}:agent-c:inbound:en`]);
+assert.deepEqual([...cacheKeys], [`zea:rag:knowledge-map:${otherTenantId}:${knowledgeBaseId}:1`]);
 
 const queueJobs = new Map();
 for (const [id, state] of [

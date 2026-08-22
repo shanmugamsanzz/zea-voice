@@ -116,11 +116,14 @@ async function claimIndexJob(jobId, contextRunner) {
     const job = result.rows[0];
     if (job.status === 'completed') return { ...job, alreadyCompleted: true };
     const targetRevision = Number(job.metadata?.publicationRevision);
+    const artifactRecovery = job.metadata?.artifactRecovery === true;
     if (!Number.isInteger(targetRevision) || targetRevision < 1) {
       throw new AppError(409, 'Semantic index job has no valid publication revision', 'KNOWLEDGE_INDEX_REVISION_INVALID');
     }
-    if (job.pending_publication_revision !== targetRevision
-      || job.knowledge_base_status !== 'processing') {
+    const validPublication = artifactRecovery
+      ? (Number(job.publication_revision) === targetRevision && job.knowledge_base_status === 'published')
+      : (Number(job.pending_publication_revision) === targetRevision && job.knowledge_base_status === 'processing');
+    if (!validPublication) {
       await client.query(
         `UPDATE knowledge_processing_jobs
             SET status = 'cancelled', completed_at = now(), error_code = 'KNOWLEDGE_INDEX_STALE',
@@ -140,7 +143,45 @@ async function claimIndexJob(jobId, contextRunner) {
         WHERE id = $1`,
       [jobId],
     );
-    return { ...job, targetRevision, attempt_count: job.attempt_count + 1, alreadyCompleted: false };
+    return {
+      ...job, targetRevision, artifactRecovery,
+      attempt_count: job.attempt_count + 1, alreadyCompleted: false,
+    };
+  });
+}
+
+async function finishArtifactRecoveryJob(job, records, contextRunner, artifacts, verification) {
+  return contextRunner(null, async (client) => {
+    const active = await client.query(
+      `SELECT 1 FROM knowledge_bases
+        WHERE tenant_id=$1 AND id=$2 AND status='published' AND deleted_at IS NULL
+          AND publication_revision=$3 FOR UPDATE`,
+      [job.tenant_id, job.knowledge_base_id, job.targetRevision],
+    );
+    if (!active.rowCount) {
+      throw new AppError(409, 'Published revision changed during artifact recovery', 'KNOWLEDGE_INDEX_STALE');
+    }
+    await client.query(
+      `UPDATE knowledge_processing_jobs
+          SET status='completed', progress=100, completed_at=now(),
+              error_code=NULL, error_message=NULL,
+              metadata=metadata || $2::jsonb
+        WHERE id=$1 AND status='running'`,
+      [job.id, JSON.stringify({
+        indexedRecordCount: records.length,
+        artifactRecoveryCompleted: true,
+        knowledgeMapCacheKey: artifacts.key,
+        redisVerification: { verified: artifacts.verified, keys: artifacts.keys },
+        postgresVerification: verification.postgres,
+        qdrantVerification: verification.qdrant,
+        storageVerification: verification.storage,
+      })],
+    );
+    return {
+      jobId: job.id, tenantId: job.tenant_id, knowledgeBaseId: job.knowledge_base_id,
+      publicationRevision: job.targetRevision, indexedRecordCount: records.length,
+      artifactRecovery: true, status: 'completed',
+    };
   });
 }
 
@@ -542,7 +583,7 @@ async function failIndexJob(job, error, contextRunner) {
         WHERE id = $1 AND status <> 'completed'`,
       [job.id, code, message, retryable ? 'queued' : 'failed'],
     );
-    if (!retryable && code !== 'KNOWLEDGE_INDEX_STALE') {
+    if (!job.artifactRecovery && !retryable && code !== 'KNOWLEDGE_INDEX_STALE') {
       await client.query(
         `UPDATE knowledge_bases
             SET status='ready', pending_publication_revision=NULL,
@@ -590,20 +631,25 @@ export async function processSemanticIndexJob(jobId, dependencies = defaultDepen
     const storageVerification = await verifyPublicationStorage(job, versions, runtime.verifyStorageObject);
 
     await runtime.ensureCollection(job.tenant_id);
-    await runtime.deleteKnowledgeBasePoints(job.tenant_id, job.knowledge_base_id, {
-      publicationRevision: job.targetRevision,
-      revisionMode: 'equal',
-    });
-    qdrantMutated = true;
-    for (let start = 0; start < points.length; start += env.QDRANT_UPSERT_BATCH_SIZE) {
-      await runtime.upsertPoints(job.tenant_id, points.slice(start, start + env.QDRANT_UPSERT_BATCH_SIZE));
-      const progress = 65 + Math.round(((start + Math.min(env.QDRANT_UPSERT_BATCH_SIZE, points.length - start))
-        / Math.max(points.length, 1)) * 30);
-      await updateProgress(jobId, progress, runtime.contextRunner);
-    }
-    const qdrantVerification = await runtime.countRevisionPoints(
+    let qdrantVerification = await runtime.countRevisionPoints(
       job.tenant_id, job.knowledge_base_id, job.targetRevision,
     );
+    if (!job.artifactRecovery || qdrantVerification.count !== points.length) {
+      await runtime.deleteKnowledgeBasePoints(job.tenant_id, job.knowledge_base_id, {
+        publicationRevision: job.targetRevision,
+        revisionMode: 'equal',
+      });
+      qdrantMutated = true;
+      for (let start = 0; start < points.length; start += env.QDRANT_UPSERT_BATCH_SIZE) {
+        await runtime.upsertPoints(job.tenant_id, points.slice(start, start + env.QDRANT_UPSERT_BATCH_SIZE));
+        const progress = 65 + Math.round(((start + Math.min(env.QDRANT_UPSERT_BATCH_SIZE, points.length - start))
+          / Math.max(points.length, 1)) * 30);
+        await updateProgress(jobId, progress, runtime.contextRunner);
+      }
+      qdrantVerification = await runtime.countRevisionPoints(
+        job.tenant_id, job.knowledge_base_id, job.targetRevision,
+      );
+    }
     if (qdrantVerification.count !== points.length) {
       throw new AppError(503, 'Qdrant publication verification count does not match PostgreSQL',
         'KNOWLEDGE_PUBLICATION_QDRANT_UNVERIFIED');
@@ -614,11 +660,14 @@ export async function processSemanticIndexJob(jobId, dependencies = defaultDepen
         'KNOWLEDGE_PUBLICATION_REDIS_UNVERIFIED');
     }
     artifactsCached = true;
-    const result = await finishIndexJob(job, records, runtime.contextRunner, cachedMap, {
+    const verification = {
       storage: storageVerification,
       postgres: postgresVerification,
       qdrant: qdrantVerification,
-    });
+    };
+    const result = job.artifactRecovery
+      ? await finishArtifactRecoveryJob(job, records, runtime.contextRunner, cachedMap, verification)
+      : await finishIndexJob(job, records, runtime.contextRunner, cachedMap, verification);
     activated = true;
     let runtimeCacheInvalidationPending = false;
     try {
