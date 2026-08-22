@@ -65,6 +65,18 @@ export function normalizeLiveCallFrame(value = {}) {
     ...(Array.isArray(value.candidateItems) ? value.candidateItems : []),
   ].filter((entry) => entry && typeof entry === 'object');
   return Object.freeze({
+    memoryVersion: 1,
+    scope: Object.freeze(safeJson(value.scope) ?? {}),
+    activeEntity: Object.freeze(safeJson(value.activeEntity) ?? {}),
+    activeCategory: Object.freeze(safeJson(value.activeCategory) ?? {}),
+    latestIntent: text(value.latestIntent ?? value.requestType, 80) || null,
+    pendingClarification: Object.freeze(safeJson(value.pendingClarification) ?? {}),
+    activeTool: Object.freeze(safeJson(value.activeTool ?? value.activeToolRequest) ?? {}),
+    collectedToolFields: Object.freeze(safeJson(
+      value.collectedToolFields ?? collectedInformation,
+    ) ?? {}),
+    citedEvidence: Object.freeze((Array.isArray(value.citedEvidence)
+      ? value.citedEvidence : []).slice(-20).map((source) => safeJson(source)).filter(Boolean)),
     currentTopic: text(value.currentTopic, 240) || null,
     knownEntities: Object.freeze(legacyEntities.slice(0, 20).map((item) => safeJson(item)).filter(Boolean)),
     pendingQuestion: Object.freeze({
@@ -84,7 +96,7 @@ export function normalizeConversationMemoryState(value = {}) {
   value = objectValue(value);
   const updatedAt = isoDate(value.updatedAt, new Date().toISOString());
   return Object.freeze({
-    schemaVersion: 2,
+    schemaVersion: 3,
     summary: text(value.summary, maxSummaryCharacters),
     recentMessages: Object.freeze(messages(value.recentMessages)),
     collectedData: Object.freeze(safeJson(value.collectedData) ?? {}),
@@ -118,6 +130,20 @@ export function buildConversationMemoryState({
       ? incomingFrame.currentTopic : prior.callFrame.currentTopic,
     knownEntities: owns(incomingFrame, 'knownEntities')
       ? incomingFrame.knownEntities : prior.callFrame.knownEntities,
+    activeEntity: owns(incomingFrame, 'activeEntity')
+      ? incomingFrame.activeEntity : prior.callFrame.activeEntity,
+    activeCategory: owns(incomingFrame, 'activeCategory')
+      ? incomingFrame.activeCategory : prior.callFrame.activeCategory,
+    latestIntent: owns(incomingFrame, 'latestIntent')
+      ? incomingFrame.latestIntent : prior.callFrame.latestIntent,
+    pendingClarification: owns(incomingFrame, 'pendingClarification')
+      ? incomingFrame.pendingClarification : prior.callFrame.pendingClarification,
+    activeTool: owns(incomingFrame, 'activeTool')
+      ? incomingFrame.activeTool : prior.callFrame.activeTool,
+    collectedToolFields: owns(incomingFrame, 'collectedToolFields')
+      ? incomingFrame.collectedToolFields : prior.callFrame.collectedToolFields,
+    citedEvidence: owns(incomingFrame, 'citedEvidence')
+      ? incomingFrame.citedEvidence : prior.callFrame.citedEvidence,
     pendingQuestion: owns(incomingFrame, 'pendingQuestion')
       ? incomingFrame.pendingQuestion : prior.callFrame.pendingQuestion,
     language: owns(incomingFrame, 'language') ? incomingFrame.language : prior.callFrame.language,

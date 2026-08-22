@@ -42,6 +42,7 @@ RESPONSE: Tenant-approved caller-facing response.
 
 RULE: begin_configured_action
 MATCH: tenant-approved action request phrases
+INTENT_CLASS: ACTION_TOOL_REQUEST
 MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 FROM_STAGE: explanation | confirmation
@@ -50,6 +51,12 @@ ACTION: configured-action-key
 REQUIRES_CATALOG_ITEM: true
 BLOCKED_RESPONSE: Tenant-approved item clarification.
 RESPONSE: Tenant-approved action opening.
+
+`INTENT_CLASS` is optional and accepts `KNOWN_INFORMATION`, `DETAILS_OR_PRICE`,
+`CATEGORY_OVERVIEW`, `COMPARISON_COMPLEX`, `ACTION_TOOL_REQUEST`,
+`CLARIFICATION_ANSWER`, `ACKNOWLEDGEMENT`, `CALL_CONTROL`,
+`SAFETY_EMERGENCY`, or `UNKNOWN`. Safety and call-control classes always receive
+runtime priority. Their multilingual phrases remain tenant-owned `MATCH` data.
 
 RULE: ambiguous_evidence_response
 CONFIDENCE_OUTCOME: ambiguous
@@ -72,6 +79,7 @@ Workflow Rules own matching phrases, stages, transitions, actions, safety rules,
 STAGE: overview
 FLOW: main
 LANGUAGE: ta
+INTENT_CLASS: KNOWN_INFORMATION
 ENTRY: true
 PURPOSE: Present approved categories naturally.
 RESPONSE: Tenant-approved spoken overview.
@@ -96,6 +104,7 @@ Use `|` between alternate questions. Each alias is indexed as another question w
 ```text
 QUESTION: What does the selected item include?
 ALIASES: What is covered? | Explain this option | Tell me the details
+INTENT_CLASS: DETAILS_OR_PRICE
 ANSWER: Tenant-approved answer grounded in the selected Catalog item.
 ```
 

@@ -12,6 +12,8 @@ import { withPlatformAdminContext } from '../infrastructure/database-context.js'
 import { AppError } from '../middleware/errors.js';
 import { cacheCompactKnowledgeMap, deleteRevisionKnowledgeArtifacts } from './knowledge-map.service.js';
 import { invalidateTenantRuntimeKnowledgeCache } from './knowledge-runtime.service.js';
+import { buildPublicationIndexes } from '../knowledge-engine/publication-index-builder.js';
+import { SUPPORTED_KNOWLEDGE_DOCUMENT_CONTRACT_VERSIONS } from './knowledge-document-contract.js';
 
 const defaultDependencies = {
   contextRunner: withPlatformAdminContext,
@@ -21,7 +23,9 @@ const defaultDependencies = {
   upsertPoints: upsertTenantPoints,
   countRevisionPoints: countTenantPointsByKnowledgeBaseRevision,
   verifyStorageObject: verifyB2Object,
-  cacheKnowledgeMap: cacheCompactKnowledgeMap,
+  cacheKnowledgeMap: (job, records, publicationBundle) => (
+    cacheCompactKnowledgeMap(job, records, undefined, publicationBundle)
+  ),
   deleteKnowledgeArtifacts: deleteRevisionKnowledgeArtifacts,
   invalidateCache: invalidateTenantRuntimeKnowledgeCache,
 };
@@ -74,6 +78,10 @@ export function buildSemanticPoint(job, record, vector) {
       ...(record.entity_metadata && typeof record.entity_metadata === 'object'
         && !Array.isArray(record.entity_metadata) && Object.keys(record.entity_metadata).length
         ? { entity_metadata: record.entity_metadata } : {}),
+      ...(record.publicationAliases?.length ? { normalized_aliases: record.publicationAliases } : {}),
+      ...(record.publicationSttForms?.length ? { stt_forms: record.publicationSttForms } : {}),
+      ...(record.publicationPhoneticForms?.length ? { phonetic_forms: record.publicationPhoneticForms } : {}),
+      ...(record.approvedAnswerCard ? { approved_answer_card: record.approvedAnswerCard } : {}),
     },
   };
 }
@@ -146,7 +154,7 @@ async function loadSemanticRecords(job, contextRunner) {
           ('Question: ' || f.question || E'\nAnswer: ' || f.answer) AS content,
           NULL::text AS entity_name, NULL::text AS entity_category,
           '[]'::jsonb AS entity_aliases, '[]'::jsonb AS entity_category_aliases,
-          '{}'::jsonb AS entity_metadata
+          f.metadata AS entity_metadata
          FROM faq_entries f
          JOIN knowledge_documents d
            ON d.tenant_id = f.tenant_id AND d.id = f.document_id
@@ -159,7 +167,7 @@ async function loadSemanticRecords(job, contextRunner) {
        SELECT c.id, 'knowledge_chunk'::text,
           c.document_id, c.document_version_id, c.usage_direction,
           COALESCE(NULLIF(d.metadata->>'language', ''), 'und'),
-          c.source_page_start, NULL::text, NULL::text, c.content,
+          c.source_page_start, NULL::text, c.content, c.content,
           NULL::text, NULL::text, '[]'::jsonb, '[]'::jsonb, '{}'::jsonb
          FROM knowledge_chunks c
          JOIN knowledge_documents d
@@ -173,7 +181,11 @@ async function loadSemanticRecords(job, contextRunner) {
        SELECT si.id, 'catalog_item'::text,
           si.document_id, si.document_version_id, kb.usage_direction,
           COALESCE(NULLIF(d.metadata->>'language', ''), 'und'),
-          si.source_page_start, NULL::text, NULL::text,
+          si.source_page_start, si.name,
+          concat_ws(' ', si.name,
+            NULLIF(si.description, ''),
+            CASE WHEN si.price IS NOT NULL
+              THEN concat(si.price::text, ' ', COALESCE(si.currency, '')) END),
           concat_ws(E'\n',
             'Catalog item: ' || si.name,
             CASE WHEN si.item_key IS NOT NULL THEN 'Code: ' || si.item_key END,
@@ -217,7 +229,7 @@ async function loadSemanticRecords(job, contextRunner) {
        SELECT w.id, 'workflow_rule'::text,
           w.document_id, w.document_version_id, w.usage_direction,
           COALESCE(NULLIF(d.metadata->>'language', ''), 'und'),
-          w.source_page_start, NULL::text, NULL::text,
+          w.source_page_start, w.name, w.response_template,
           concat_ws(E'\n',
             'Workflow: ' || w.name,
             'Intent: ' || w.intent,
@@ -230,7 +242,12 @@ async function loadSemanticRecords(job, contextRunner) {
           w.name, w.intent,
           CASE WHEN jsonb_typeof(COALESCE(w.conditions->'examples', w.conditions->'triggerPhrases')) = 'array'
             THEN COALESCE(w.conditions->'examples', w.conditions->'triggerPhrases') ELSE '[]'::jsonb END,
-          '[]'::jsonb, '{}'::jsonb
+          '[]'::jsonb, jsonb_build_object(
+            'conditions', w.conditions,
+            'actionType', w.action_type,
+            'actionConfig', w.action_config,
+            'priority', w.priority
+          )
          FROM workflow_rules w
          JOIN knowledge_documents d
            ON d.tenant_id=w.tenant_id AND d.id=w.document_id
@@ -243,7 +260,7 @@ async function loadSemanticRecords(job, contextRunner) {
        SELECT cf.id, 'conversation_node'::text,
           cf.document_id, cf.document_version_id, cf.usage_direction,
           COALESCE(NULLIF(cf.language, ''), NULLIF(d.metadata->>'language', ''), 'und'),
-          cf.source_page_start, NULL::text, NULL::text,
+          cf.source_page_start, cf.node_key, cf.content,
           concat_ws(E'\n',
             'Conversation guidance: ' || cf.content,
             'Flow: ' || cf.flow_key,
@@ -251,11 +268,28 @@ async function loadSemanticRecords(job, contextRunner) {
             CASE WHEN cf.variables <> '[]'::jsonb THEN 'Variables: ' || cf.variables::text END,
             CASE WHEN cf.transitions <> '[]'::jsonb THEN 'Transitions: ' || cf.transitions::text END
           ),
-          cf.node_key, cf.flow_key, '[]'::jsonb, '[]'::jsonb,
+          cf.node_key, cf.flow_key,
+          COALESCE((
+            SELECT CASE jsonb_typeof(variable->'value')
+              WHEN 'array' THEN variable->'value'
+              WHEN 'string' THEN jsonb_build_array(variable->>'value')
+              ELSE '[]'::jsonb
+            END
+              FROM jsonb_array_elements(cf.variables) variable
+             WHERE variable->>'key' = 'examples'
+             LIMIT 1
+          ), '[]'::jsonb),
+          '[]'::jsonb,
           jsonb_build_object(
             'flowKey', cf.flow_key,
             'nodeKey', cf.node_key,
             'nodeType', cf.node_type,
+            'intentClass', COALESCE((
+              SELECT variable->>'value'
+                FROM jsonb_array_elements(cf.variables) variable
+               WHERE variable->>'key' = 'intentClass'
+               LIMIT 1
+            ), ''),
             'sequenceOrder', cf.sequence_order,
             'isEntry', cf.is_entry
           )
@@ -278,7 +312,10 @@ async function loadPublicationVersions(job, contextRunner) {
   return contextRunner(null, async (client) => {
     const result = await client.query(
       `SELECT d.id AS document_id, d.document_type, v.id AS document_version_id,
-          v.b2_object_key, v.size_bytes, v.extracted_text_object_key
+          v.b2_object_key, v.size_bytes, v.extracted_text_object_key,
+          COALESCE(NULLIF(v.extraction_metadata->>'parserVersion', '')::int, 1) AS parser_version,
+          COALESCE(NULLIF(v.extraction_metadata->>'documentContractVersion', '')::int, 1)
+            AS document_contract_version
          FROM knowledge_documents d
          JOIN knowledge_document_versions v
            ON v.tenant_id=d.tenant_id AND v.document_id=d.id
@@ -307,6 +344,11 @@ export function validatePublicationMetadata(job, records, points, versions) {
   }
   if (versions.some((version) => !version.b2_object_key || !version.extracted_text_object_key)) {
     throw new AppError(409, 'Publication B2 manifest is incomplete', 'KNOWLEDGE_PUBLICATION_B2_MANIFEST_INVALID');
+  }
+  if (versions.some((version) => !SUPPORTED_KNOWLEDGE_DOCUMENT_CONTRACT_VERSIONS
+    .includes(Number(version.parser_version ?? 1)))) {
+    throw new AppError(409, 'Publication uses an unsupported document parser version',
+      'KNOWLEDGE_PUBLICATION_PARSER_VERSION_INVALID');
   }
   if (records.some((record) => !documentIds.has(String(record.document_id).toLowerCase())
     || !versionIds.has(String(record.document_version_id).toLowerCase()))) {
@@ -439,6 +481,11 @@ async function finishIndexJob(job, records, contextRunner, artifacts, verificati
         knowledgeMapCacheKey: artifacts.key,
         sparseIndexCacheKey: artifacts.keys.sparse,
         evidenceCacheKey: artifacts.keys.evidence,
+        entityIndexCacheKey: artifacts.keys.entity,
+        routeIndexCacheKey: artifacts.keys.route,
+        answerCardsCacheKey: artifacts.keys.answers,
+        publicationManifestCacheKey: artifacts.keys.manifest,
+        publicationManifest: artifacts.manifest,
         storageVerification: verification.storage,
         postgresVerification: verification.postgres,
         qdrantVerification: verification.qdrant,
@@ -517,10 +564,15 @@ export async function processSemanticIndexJob(jobId, dependencies = defaultDepen
   let artifactsCached = false;
   let activated = false;
   try {
-    const [records, versions] = await Promise.all([
+    const [sourceRecords, versions] = await Promise.all([
       loadSemanticRecords(job, runtime.contextRunner),
       loadPublicationVersions(job, runtime.contextRunner),
     ]);
+    // Build and validate the complete revision before mutating Qdrant or Redis.
+    // PostgreSQL remains authoritative; this immutable bundle is staged under
+    // the pending revision and becomes visible only when finishIndexJob commits.
+    const publicationBundle = buildPublicationIndexes(job, sourceRecords);
+    const records = publicationBundle.records;
     await updateProgress(jobId, 15, runtime.contextRunner);
     const points = [];
     for (let start = 0; start < records.length; start += env.RAG_EMBEDDING_BATCH_SIZE) {
@@ -556,7 +608,7 @@ export async function processSemanticIndexJob(jobId, dependencies = defaultDepen
       throw new AppError(503, 'Qdrant publication verification count does not match PostgreSQL',
         'KNOWLEDGE_PUBLICATION_QDRANT_UNVERIFIED');
     }
-    const cachedMap = await runtime.cacheKnowledgeMap(job, records);
+    const cachedMap = await runtime.cacheKnowledgeMap(job, records, publicationBundle);
     if (cachedMap?.verified !== true) {
       throw new AppError(503, 'Redis publication artifacts could not be verified',
         'KNOWLEDGE_PUBLICATION_REDIS_UNVERIFIED');

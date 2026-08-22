@@ -90,6 +90,9 @@ const envSchema = z.object({
   // holding the caller in silence.  The complete first-audio deadline is
   // intentionally two seconds; individual stages receive smaller budgets.
   VOICE_TURN_FIRST_AUDIO_DEADLINE_MS: z.coerce.number().int().min(1000).max(10000).default(2000),
+  VOICE_ROUTING_TURN_TIMEOUT_MS: z.coerce.number().int().min(20).max(1000).default(100),
+  VOICE_RETRIEVAL_TURN_TIMEOUT_MS: z.coerce.number().int().min(50).max(2000).default(300),
+  VOICE_HYDRATION_TURN_TIMEOUT_MS: z.coerce.number().int().min(50).max(2000).default(150),
   VOICE_KNOWLEDGE_TURN_TIMEOUT_MS: z.coerce.number().int().min(100).max(5000).default(500),
   VOICE_LLM_TURN_TIMEOUT_MS: z.coerce.number().int().min(250).max(10000).default(900),
   VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS: z.coerce.number().int().min(250).max(5000).default(600),

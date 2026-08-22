@@ -10,6 +10,7 @@ import { loadAgentRuntimeProfile } from '../src/voice/providers/provider-config.
 import { runtimeTools } from '../src/voice/providers/llm/llm-response.service.js';
 import { validateGroundedClaim } from '../src/voice/interaction/grounded-claim-validator.js';
 import { mergeToolFieldSchemas } from '../src/voice/interaction/tool-field-schema.js';
+import { createKnowledgeEngineInput } from '../src/knowledge-engine/engine-contract.js';
 import { generateTenantRegressionScenarios } from './lib/tenant-regression-scenarios.js';
 
 function argument(name, fallback = null) {
@@ -92,13 +93,15 @@ const executable = suite.scenarios.filter((scenario) => !['live_call', 'topic_ch
 const results = [];
 
 async function retrieve(query, language = 'und', memory = {}) {
-  return retrieveTenantEvidence(auth, {
-    agentId: agent.id, query, usageDirection: direction, language,
-    routeHint: 'auto', knownEntities: memory.knownEntities ?? [],
-    currentTopic: memory.currentTopic ?? null,
-    selectedCatalogItemKey: memory.selectedCatalogItemKey ?? null,
-    pendingQuestion: memory.pendingQuestion ?? null,
-  });
+  return retrieveTenantEvidence(auth, createKnowledgeEngineInput({
+    tenantId: auth.tenantId, agentId: agent.id, callId: 'tenant-regression',
+    utterance: query, usageDirection: direction, language,
+    memory: {
+      knownEntities: memory.knownEntities ?? [],
+      pendingQuestion: memory.pendingQuestion ?? null,
+      collectedInformation: memory.collectedInformation ?? {},
+    },
+  }));
 }
 
 try {

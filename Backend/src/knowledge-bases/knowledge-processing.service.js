@@ -5,6 +5,7 @@ import { AppError } from '../middleware/errors.js';
 import { deleteB2Object, getB2Object, putB2Object } from '../rag/b2.client.js';
 import { processExtractedCategory } from './category-processors.js';
 import { extractKnowledgeSource } from './knowledge-source-extractor.js';
+import { KNOWLEDGE_DOCUMENT_CONTRACT_VERSION } from './knowledge-document-contract.js';
 
 const defaultDependencies = {
   extract: extractKnowledgeSource,
@@ -120,12 +121,13 @@ async function persistFaq(client, job, result) {
     await client.query(
       `INSERT INTO faq_entries (
          tenant_id, knowledge_base_id, document_id, document_version_id,
-         question, answer, language, usage_direction, status, source_page_start, source_page_end
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'draft', $9, $10)`,
+         question, answer, language, usage_direction, status, source_page_start, source_page_end, metadata
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'draft', $9, $10, $11::jsonb)`,
       [
         job.tenant_id, job.knowledge_base_id, job.document_id, job.document_version_id,
         record.question, record.answer, record.language ?? job.document_language,
         job.knowledge_base_usage, record.sourcePageStart, record.sourcePageEnd,
+        JSON.stringify(record.metadata ?? {}),
       ],
     );
   }
@@ -265,6 +267,8 @@ async function completeJob(job, extraction, category, storedText, contextRunner)
       characterCount: extraction.characterCount,
       wordCount: extraction.wordCount,
       recordCount: category.recordCount,
+      parserVersion: category.parserVersion,
+      documentContractVersion: KNOWLEDGE_DOCUMENT_CONTRACT_VERSION,
       warnings: category.warnings,
       validationErrors: category.errors ?? [],
       extractedText: {
@@ -399,10 +403,13 @@ export async function processKnowledgeJob(jobId, dependencies = defaultDependenc
     await updateProgress(jobId, 25, runtime.contextRunner);
     const extraction = await runtime.extract(source.body, job.source_mime_type);
     await updateProgress(jobId, 60, runtime.contextRunner);
-    const category = processExtractedCategory(job.document_type, extraction);
+    const category = processExtractedCategory(job.document_type, extraction, {
+      parserVersion: KNOWLEDGE_DOCUMENT_CONTRACT_VERSION,
+    });
     const key = extractedTextKey(job.b2_object_key);
     const body = Buffer.from(JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: KNOWLEDGE_DOCUMENT_CONTRACT_VERSION,
+      parserVersion: category.parserVersion,
       tenantId: job.tenant_id,
       knowledgeBaseId: job.knowledge_base_id,
       documentId: job.document_id,

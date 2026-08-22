@@ -5,10 +5,10 @@ import {
   authoritativeEvidenceFromRow,
   detectEvidenceConflict,
   mergeAndRerankCandidates,
-  resolveConfidenceResponseRoute,
   retainStrongCandidates,
   selectStrongCallerMessage,
 } from '../src/knowledge-bases/hybrid-knowledge-retrieval.service.js';
+import { resolveKnowledgeEngineDecision } from '../src/knowledge-engine/engine-contract.js';
 import {
   classifyFinalCallCheckUtterance,
   resolveCallCheckConfiguration,
@@ -122,10 +122,10 @@ for (const [index, fixture] of fixtures.entries()) {
   assert.equal(evidenceBelongsToRuntime({ ...evidence, publicationRevision: 10 }, scope), false,
     `${fixture.industry}: revision isolation`);
 
-  const route = resolveConfidenceResponseRoute({
+  const route = resolveKnowledgeEngineDecision({
     evidence: [evidence], conflict: detectEvidenceConflict([evidence]),
   });
-  assert.equal(route.outcome, 'grounded_llm', `${fixture.industry}: reasoning route`);
+  assert.equal(route.type, 'LLM', `${fixture.industry}: reasoning route`);
   const envelope = buildGroundingEnvelope({
     found: true, tenantEvidence: {
       sources: [evidence],
@@ -206,8 +206,8 @@ const direct = selectStrongCallerMessage(
   [directEvidence], 'Could you walk me through everything available?', { knownEntities: [] },
 );
 assert.equal(direct?.recordId, 'message-overview', 'unseen wording selects semantic published response');
-assert.equal(resolveConfidenceResponseRoute({ directMessage: direct, evidence: [directEvidence] }).outcome,
-  'direct');
+assert.equal(resolveKnowledgeEngineDecision({ directResponse: direct, evidence: [directEvidence] }).type,
+  'DIRECT');
 assert.equal(direct.content, 'Published overview response.', 'direct response remains verbatim');
 
 const conflicting = [
@@ -218,8 +218,8 @@ const conflicting = [
 ];
 const conflict = detectEvidenceConflict(conflicting);
 assert.equal(conflict.detected, true);
-assert.equal(resolveConfidenceResponseRoute({ evidence: conflicting, conflict }).outcome, 'clarify');
-assert.equal(resolveConfidenceResponseRoute({ evidence: [], rejectedCandidates: 2 }).outcome, 'clarify');
+assert.equal(resolveKnowledgeEngineDecision({ evidence: conflicting, conflict }).type, 'CLARIFY');
+assert.equal(resolveKnowledgeEngineDecision({ evidence: [], rejectedCandidates: 2 }).type, 'CLARIFY');
 
 const callCheck = resolveCallCheckConfiguration({
   callCheckPhrases: ['Hello', 'Are you there?'], callCheckResponse: 'Yes, I am here.',

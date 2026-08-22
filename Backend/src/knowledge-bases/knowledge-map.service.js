@@ -1,5 +1,6 @@
 import { redis } from '../infrastructure/redis.js';
 import { requireEntityId, requireTenantId } from '../rag/tenant-isolation.js';
+import { KNOWLEDGE_PUBLICATION_BUNDLE_VERSION } from '../knowledge-engine/publication-index-builder.js';
 
 const documentTypeByRecordType = Object.freeze({
   faq: 'faq', knowledge_chunk: 'general_knowledge', catalog_item: 'catalog',
@@ -16,6 +17,22 @@ export function sparseIndexCacheKey(tenantId, knowledgeBaseId, publicationRevisi
 
 export function evidenceCacheKey(tenantId, knowledgeBaseId, publicationRevision) {
   return `zea:rag:evidence:${requireTenantId(tenantId)}:${requireEntityId(knowledgeBaseId, 'knowledgeBaseId')}:${publicationRevision}`;
+}
+
+export function entityIndexCacheKey(tenantId, knowledgeBaseId, publicationRevision) {
+  return `zea:rag:entity-index:${requireTenantId(tenantId)}:${requireEntityId(knowledgeBaseId, 'knowledgeBaseId')}:${publicationRevision}`;
+}
+
+export function routeIndexCacheKey(tenantId, knowledgeBaseId, publicationRevision) {
+  return `zea:rag:route-index:${requireTenantId(tenantId)}:${requireEntityId(knowledgeBaseId, 'knowledgeBaseId')}:${publicationRevision}`;
+}
+
+export function answerCardsCacheKey(tenantId, knowledgeBaseId, publicationRevision) {
+  return `zea:rag:answer-cards:${requireTenantId(tenantId)}:${requireEntityId(knowledgeBaseId, 'knowledgeBaseId')}:${publicationRevision}`;
+}
+
+export function publicationManifestCacheKey(tenantId, knowledgeBaseId, publicationRevision) {
+  return `zea:rag:publication-manifest:${requireTenantId(tenantId)}:${requireEntityId(knowledgeBaseId, 'knowledgeBaseId')}:${publicationRevision}`;
 }
 
 export function tenantKnowledgeGenerationCacheKey(tenantId) {
@@ -42,7 +59,8 @@ export function buildRevisionSparseIndex(job, records) {
     content: String(record.answer ?? record.content ?? '').trim(),
     tokens: sparseTokens([
       record.question, record.entity_name, record.entity_category,
-      ...(record.entity_aliases ?? []), ...(record.entity_category_aliases ?? []), record.content,
+      ...(record.entity_aliases ?? []), ...(record.entity_category_aliases ?? []),
+      ...(record.publicationAliases ?? []), ...(record.publicationSttForms ?? []), record.content,
     ].filter(Boolean).join(' ')),
   }));
   const documentFrequency = {};
@@ -50,7 +68,7 @@ export function buildRevisionSparseIndex(job, records) {
     for (const token of new Set(document.tokens)) documentFrequency[token] = (documentFrequency[token] ?? 0) + 1;
   }
   return {
-    version: 1,
+    version: KNOWLEDGE_PUBLICATION_BUNDLE_VERSION,
     algorithm: 'bm25',
     tenantId: requireTenantId(job.tenant_id),
     knowledgeBaseId: requireEntityId(job.knowledge_base_id, 'knowledgeBaseId'),
@@ -63,7 +81,7 @@ export function buildRevisionSparseIndex(job, records) {
 
 export function buildCompactKnowledgeMap(job, records) {
   return {
-    version: 1,
+    version: KNOWLEDGE_PUBLICATION_BUNDLE_VERSION,
     tenantId: requireTenantId(job.tenant_id),
     knowledgeBaseId: requireEntityId(job.knowledge_base_id, 'knowledgeBaseId'),
     publicationRevision: job.targetRevision,
@@ -83,15 +101,19 @@ export function buildCompactKnowledgeMap(job, records) {
       category: record.entity_category ?? null,
       metadata: record.entity_metadata && typeof record.entity_metadata === 'object'
         ? record.entity_metadata : {},
+      aliases: record.publicationAliases ?? [],
+      sttForms: record.publicationSttForms ?? [],
+      phoneticForms: record.publicationPhoneticForms ?? [],
+      answerCard: record.approvedAnswerCard ?? null,
     })),
   };
 }
 
-export async function cacheCompactKnowledgeMap(job, records, cache = redis) {
+export async function cacheCompactKnowledgeMap(job, records, cache = redis, publicationBundle = null) {
   const map = buildCompactKnowledgeMap(job, records);
   const sparseIndex = buildRevisionSparseIndex(job, records);
   const evidence = {
-    version: 1,
+    version: KNOWLEDGE_PUBLICATION_BUNDLE_VERSION,
     tenantId: requireTenantId(job.tenant_id),
     knowledgeBaseId: requireEntityId(job.knowledge_base_id, 'knowledgeBaseId'),
     publicationRevision: job.targetRevision,
@@ -101,11 +123,27 @@ export async function cacheCompactKnowledgeMap(job, records, cache = redis) {
     map: knowledgeMapCacheKey(job.tenant_id, job.knowledge_base_id, job.targetRevision),
     sparse: sparseIndexCacheKey(job.tenant_id, job.knowledge_base_id, job.targetRevision),
     evidence: evidenceCacheKey(job.tenant_id, job.knowledge_base_id, job.targetRevision),
+    entity: entityIndexCacheKey(job.tenant_id, job.knowledge_base_id, job.targetRevision),
+    route: routeIndexCacheKey(job.tenant_id, job.knowledge_base_id, job.targetRevision),
+    answers: answerCardsCacheKey(job.tenant_id, job.knowledge_base_id, job.targetRevision),
+    manifest: publicationManifestCacheKey(job.tenant_id, job.knowledge_base_id, job.targetRevision),
   };
   if (!cache || (cache.status && cache.status !== 'ready')) {
     throw new Error('Redis is not ready to cache publication artifacts');
   }
-  const entries = [[keys.map, map], [keys.sparse, sparseIndex], [keys.evidence, evidence]];
+  const identity = {
+    version: KNOWLEDGE_PUBLICATION_BUNDLE_VERSION,
+    tenantId: requireTenantId(job.tenant_id),
+    knowledgeBaseId: requireEntityId(job.knowledge_base_id, 'knowledgeBaseId'),
+    publicationRevision: job.targetRevision,
+  };
+  const entries = [
+    [keys.map, map], [keys.sparse, sparseIndex], [keys.evidence, evidence],
+    [keys.entity, { ...identity, ...(publicationBundle?.entityIndex ?? { exact: {}, stt: {}, phonetic: {} }) }],
+    [keys.route, { ...identity, ...(publicationBundle?.routeIndex ?? { exact: {}, stt: {}, phonetic: {} }) }],
+    [keys.answers, { ...identity, records: publicationBundle?.answerCards ?? [] }],
+    [keys.manifest, publicationBundle?.manifest ?? { ...identity, recordCount: records.length }],
+  ];
   const generationKey = tenantKnowledgeGenerationCacheKey(job.tenant_id);
   const generation = `${requireEntityId(job.knowledge_base_id, 'knowledgeBaseId')}:${job.targetRevision}`;
   try {
@@ -140,7 +178,14 @@ export async function cacheCompactKnowledgeMap(job, records, cache = redis) {
     await cache.del(...Object.values(keys)).catch(() => undefined);
     throw error;
   }
-  return { key: keys.map, keys, map, sparseIndex, evidence, verified: true };
+  return {
+    key: keys.map, keys, map, sparseIndex, evidence,
+    entityIndex: publicationBundle?.entityIndex ?? null,
+    routeIndex: publicationBundle?.routeIndex ?? null,
+    answerCards: publicationBundle?.answerCards ?? [],
+    manifest: publicationBundle?.manifest ?? null,
+    verified: true,
+  };
 }
 
 export async function deleteRevisionKnowledgeArtifacts(job, cache = redis) {
@@ -149,6 +194,10 @@ export async function deleteRevisionKnowledgeArtifacts(job, cache = redis) {
     knowledgeMapCacheKey(job.tenant_id, job.knowledge_base_id, job.targetRevision),
     sparseIndexCacheKey(job.tenant_id, job.knowledge_base_id, job.targetRevision),
     evidenceCacheKey(job.tenant_id, job.knowledge_base_id, job.targetRevision),
+    entityIndexCacheKey(job.tenant_id, job.knowledge_base_id, job.targetRevision),
+    routeIndexCacheKey(job.tenant_id, job.knowledge_base_id, job.targetRevision),
+    answerCardsCacheKey(job.tenant_id, job.knowledge_base_id, job.targetRevision),
+    publicationManifestCacheKey(job.tenant_id, job.knowledge_base_id, job.targetRevision),
   ];
   const deleted = await cache.del(...keys);
   const remaining = (await Promise.all(keys.map((key) => cache.exists(key)))).reduce((sum, value) => sum + value, 0);

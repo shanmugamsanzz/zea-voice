@@ -53,27 +53,6 @@ function entity(value = {}, sourceId = null) {
 export function buildGroundingEnvelope(knowledge = {}, options = {}) {
   const sources = [];
   const sourceContents = new Set();
-  // A strongly matched published message is still decided by the one
-  // grounded LLM call. Expose it as an exact response candidate; the runtime
-  // validates its scope after selection and replaces model wording with this
-  // authoritative content before speech.
-  const directResponse = knowledge.tenantEvidence?.directResponse;
-  if (directResponse?.content
-    && directResponse.callerFacing === true
-    && String(directResponse.recordType ?? '').toUpperCase() === 'CONVERSATION_NODE'
-    && String(directResponse.authoritativeData?.nodeType ?? '').toLowerCase() === 'message') {
-    addSource(sources, sourceContents, directResponse.content, {
-      recordId: text(directResponse.recordId, 100) || null,
-      recordType: 'CONVERSATION_NODE',
-      nodeType: 'message',
-      callerFacing: true,
-      authoritativeData: directResponse.authoritativeData ?? null,
-      exactCallerResponse: true,
-      retrievalContext: directResponse.retrievalContext ?? 'primary',
-      rank: Number(directResponse.rank ?? 0) || null,
-      score: Number(directResponse.retrievalScore ?? directResponse.semanticScore ?? 0),
-    });
-  }
   // PostgreSQL-hydrated evidence is authoritative and must be added before
   // duplicate Qdrant/BM25 snippets so the LLM receives the complete approved
   // record rather than only the discovery preview.

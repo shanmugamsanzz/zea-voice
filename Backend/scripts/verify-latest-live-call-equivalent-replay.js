@@ -5,10 +5,10 @@ import { resolveCatalogEntityLocally } from '../src/knowledge-bases/catalog-enti
 import {
   authoritativeEvidenceFromRow,
   groundedLlmReasoningRequired,
-  resolveConfidenceResponseRoute,
   selectDeterministicEvidenceResponse,
   selectStrongCallerMessage,
 } from '../src/knowledge-bases/hybrid-knowledge-retrieval.service.js';
+import { resolveKnowledgeEngineDecision } from '../src/knowledge-engine/engine-contract.js';
 import { env } from '../src/config/env.js';
 import { validateFinalCustomerTurn } from '../src/voice/interruption/final-turn-validator.js';
 import { latestTurnWorkflowActivation } from '../src/knowledge-bases/workflow-activation-policy.js';
@@ -153,10 +153,10 @@ function assertApprovedResponse(turn, response, expectedEvidenceIds, startedAt) 
     assert.ok(selectedRecordIds.has(expected),
       `${turn.id}: expected evidence ${expected} was not selected`);
   }
-  const route = resolveConfidenceResponseRoute({
-    directMessage: response, evidence: [response], reasoningRequired: false,
+  const route = resolveKnowledgeEngineDecision({
+    directResponse: response, evidence: [response], reasoningRequired: false,
   });
-  assert.equal(route.outcome, 'direct', `${turn.id}: known request must use direct routing`);
+  assert.equal(route.type, 'DIRECT', `${turn.id}: known request must use direct routing`);
   assert.equal(groundedLlmReasoningRequired({
     evidence: [response], directResponse: response,
   }), false, `${turn.id}: deterministic response must not require the LLM`);

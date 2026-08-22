@@ -5,6 +5,7 @@ process.env.REDIS_HOST ??= '127.0.0.1';
 process.env.RAG_ENABLED = 'true';
 
 const { retrieveTenantEvidence } = await import('../src/knowledge-bases/knowledge-runtime.service.js');
+const { createKnowledgeEngineInput } = await import('../src/knowledge-engine/engine-contract.js');
 
 const tenantId = '11111111-1111-4111-8111-111111111111';
 const knowledgeBaseId = '22222222-2222-4222-8222-222222222222';
@@ -47,12 +48,12 @@ const hydrated = new Map([
     caller_facing: true, authoritative_data: { content: 'The consultation is available during business hours.' },
   }],
 ]);
-const result = await retrieveTenantEvidence({ tenantId }, {
-  agentId, usageDirection: 'inbound', language: 'en',
-  query: 'Does it include consultation?', selectedCatalogItemKey: 'premium-plan',
-  activeCategoryName: 'Plans',
-  understanding: { questionType: 'inclusions', selectedEntityKeys: ['premium-plan'] },
-}, {
+const result = await retrieveTenantEvidence({ tenantId }, createKnowledgeEngineInput({
+  tenantId, agentId, callId: 'test-call', usageDirection: 'inbound', language: 'en',
+  utterance: 'Does it include consultation?',
+  requestedFacts: ['inclusions'],
+  memory: { knownEntities: [{ key: 'premium-plan', name: 'Premium Plan', category: 'Plans' }] },
+}), {
   cache: null,
   contextRunner: async (_auth, callback) => callback({
     query: async (sql, values) => {
@@ -64,7 +65,7 @@ const result = await retrieveTenantEvidence({ tenantId }, {
       }).filter(Boolean) };
     },
   }),
-  embed: async (query) => { assert.match(query, /inclusions/u); return [0.1, 0.2]; },
+  embed: async (query) => { assert.match(query, /consultation/u); return [0.1, 0.2]; },
   search: async (requestedTenantId, _vector, input) => {
     assert.equal(requestedTenantId, tenantId);
     searchInput = input;

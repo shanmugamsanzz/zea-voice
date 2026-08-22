@@ -3,6 +3,12 @@ import { logger } from '../config/logger.js';
 import { AppError } from '../middleware/errors.js';
 import { appendTranscriptEntry } from '../calls/call.service.js';
 import { retrieveTenantEvidence } from '../knowledge-bases/knowledge-runtime.service.js';
+import {
+  createKnowledgeEngineInput,
+  isKnowledgeEngineDecision,
+  knowledgeEngineDecisionTypes,
+  technicalClarificationDecision,
+} from '../knowledge-engine/engine-contract.js';
 import { ProviderIndependentAudioEngine } from './audio/audio-engine.js';
 import { completeVoiceCall, completeVoiceCallWithoutRuntime } from './call-completion.service.js';
 import { CallController } from './call-controller.js';
@@ -42,10 +48,18 @@ import {
 } from './interaction/conversation-memory.service.js';
 import { buildConversationMemoryState } from './interaction/conversation-memory-state.js';
 import {
-  compactGenericConversationState,
-  openGenericConversationState,
   seedConfiguredQuestion,
 } from './interaction/generic-conversation-state.js';
+import {
+  compactIsolatedCallMemory,
+  openIsolatedCallMemory,
+} from '../knowledge-engine/call-memory.js';
+import {
+  awaitLlmWithSafeLatency,
+  safeLatencyAcknowledgement,
+  VoiceTurnLatencyTracker,
+  voiceTurnStages,
+} from '../knowledge-engine/voice-turn-latency.js';
 import {
   buildGroundingEnvelope,
 } from './interaction/grounded-llm-response.js';
@@ -159,6 +173,10 @@ export function configuredTechnicalFailureResponse(profile) {
   return languageCode(profile.agent.language) === 'ta'
     ? '\u0bae\u0ba9\u0bcd\u0ba9\u0bbf\u0b95\u0bcd\u0b95\u0bb5\u0bc1\u0bae\u0bcd, \u0ba4\u0b95\u0bb5\u0bb2\u0bcd \u0b9a\u0bc7\u0bb5\u0bc8 \u0ba4\u0bb1\u0bcd\u0b95\u0bbe\u0bb2\u0bbf\u0b95\u0bae\u0bbe\u0b95 \u0b95\u0bbf\u0b9f\u0bc8\u0b95\u0bcd\u0b95\u0bb5\u0bbf\u0bb2\u0bcd\u0bb2\u0bc8. \u0b9a\u0bbf\u0bb1\u0bbf\u0ba4\u0bc1 \u0ba8\u0bc7\u0bb0\u0ba4\u0bcd\u0ba4\u0bbf\u0bb2\u0bcd \u0bae\u0bc0\u0ba3\u0bcd\u0b9f\u0bc1\u0bae\u0bcd \u0bae\u0bc1\u0baf\u0bb1\u0bcd\u0b9a\u0bbf\u0b95\u0bcd\u0b95\u0bb5\u0bc1\u0bae\u0bcd.'
     : 'Sorry, the information service is temporarily unavailable. Please try again shortly.';
+}
+
+export function configuredLatencyAcknowledgementResponse(profile) {
+  return safeLatencyAcknowledgement(profile.agent.settings?.latencyAcknowledgementMessage);
 }
 
 export function remainingLiveTurnBudgetMs(deadlineAt, reserveMs = 0, now = Date.now()) {
@@ -471,8 +489,11 @@ export class RealtimeConversationOrchestrator {
       ),
     };
     const restoredMemory = this.previousConversationMemory?.lastCall?.id === this.call.id
-      ? this.previousConversationMemory.callFrame : {};
-    this.liveCallMemory = (this.dependencies.openGenericConversationState ?? openGenericConversationState)(
+      ? { ...this.previousConversationMemory.callFrame, scope: memoryIdentity } : {};
+    const openCallMemory = this.dependencies.openIsolatedCallMemory
+      ?? this.dependencies.openGenericConversationState
+      ?? openIsolatedCallMemory;
+    this.liveCallMemory = openCallMemory(
       memoryIdentity, memorySettings, Date.now(), restoredMemory,
     );
     this.liveMemoryMaintenance = new LiveMemoryMaintenanceQueue({ log: this.log, callId: this.call.id });
@@ -661,6 +682,39 @@ export class RealtimeConversationOrchestrator {
           );
           if (metric.slow) continuity.slowWebsocketDeliveries += 1;
           if (metric.backpressured) continuity.websocketBackpressureEvents += 1;
+          const turnMatch = String(metric.playbackGroupId ?? '').match(/^turn-(\d+)$/u);
+          const turnEpoch = Number(turnMatch?.[1]);
+          const turnLatency = Number.isInteger(turnEpoch)
+            ? this.runtimeMetrics.turnLatency.find((entry) => entry.epoch === turnEpoch)
+            : null;
+          if (turnLatency && turnLatency.firstAudioDeliveryMs === null) {
+            const tracker = this.turnLatencyTrackers?.get(turnEpoch);
+            const firstAudioDeliveryMs = tracker
+              ? Math.max(0, Date.now() - tracker.startedAt)
+              : Math.max(0, Number(turnLatency.totalFirstAudioMs ?? 0) + deliveryMs);
+            turnLatency.firstAudioDeliveryMs = firstAudioDeliveryMs;
+            tracker?.record(voiceTurnStages.FIRST_AUDIO_DELIVERY, firstAudioDeliveryMs, {
+              playbackGroupId: metric.playbackGroupId,
+            });
+            const latencySnapshot = tracker?.snapshot();
+            if (latencySnapshot) {
+              turnLatency.firstAudioStatus = latencySnapshot.firstAudioStatus;
+              turnLatency.firstAudioDeadlineMs = latencySnapshot.deadlineMs;
+            }
+            this.log.info({
+              stage: 'voice.first_audio_delivered', callId: this.call.id,
+              epoch: turnEpoch, playbackGroupId: metric.playbackGroupId,
+              firstAudioDeliveryMs, firstAudioDeadlineMs: turnLatency.firstAudioDeadlineMs,
+              firstAudioStatus: turnLatency.firstAudioStatus,
+              sttFinalizationMs: turnLatency.sttFinalizationMs,
+              routingMs: turnLatency.routingMs,
+              retrievalMs: turnLatency.retrievalMs,
+              hydrationMs: turnLatency.hydrationMs,
+              llmMs: turnLatency.llmMs,
+              ttsFirstChunkMs: turnLatency.ttsFirstChunkMs,
+            }, 'First response audio was delivered to the Plivo WebSocket');
+            this.turnLatencyTrackers?.delete(turnEpoch);
+          }
         }
         if (continuity.samples.length < 100) continuity.samples.push({
           type: metric.type, gapMs, bufferedAudioMs,
@@ -1518,31 +1572,47 @@ export class RealtimeConversationOrchestrator {
         userId: null,
         role: 'COMPANY_DEVELOPER',
       };
-      const genericInput = {
+      const engineInput = createKnowledgeEngineInput({
+        tenantId: this.runtimeProfile.agent.tenantId,
         agentId: this.runtimeProfile.agent.id,
-        query,
-        latestCallerUtterance: query,
-        latestRequestPriority: 'primary',
+        callId: this.call.id,
+        utterance: query,
         usageDirection: this.call.direction,
         language: memoryState?.language ?? languageCode(this.runtimeProfile.agent.language),
-        // These two memory fields are follow-up candidates only. Hybrid
-        // retrieval first searches the finalized utterance alone and adds
-        // them only when that primary evidence is insufficient.
-        knownEntities: selectedEntities,
-        pendingQuestion,
-        collectedInformation: memoryState?.collectedInformation ?? {},
+        memory: {
+          activeEntity: memoryState?.activeEntity,
+          activeCategory: memoryState?.activeCategory,
+          latestIntent: memoryState?.latestIntent,
+          recentConversation: memoryState?.recentTurns ?? [],
+          pendingClarification: memoryState?.pendingClarification,
+          activeTool: memoryState?.activeTool,
+          collectedToolFields: memoryState?.collectedToolFields ?? {},
+          citedEvidence: memoryState?.citedEvidence ?? [],
+          knownEntities: selectedEntities,
+          pendingQuestion,
+          collectedInformation: memoryState?.collectedInformation ?? {},
+        },
         abortSignal,
-      };
+      });
       const retrieveEvidence = this.dependencies.retrieveTenantEvidence ?? retrieveTenantEvidence;
       const tenantEvidence = await settleWithin(
-        retrieveEvidence(auth, genericInput),
+        retrieveEvidence(auth, engineInput, {
+          runtimeProfile: this.runtimeProfile,
+          tracker: this.turnLatencyTrackers?.get(this.epoch),
+          cancelRetrieval: () => this.activeRetrievalAbortController?.abort('retrieval_timeout'),
+          cancelHydration: () => this.activeRetrievalAbortController?.abort('hydration_timeout'),
+        }),
         env.RAG_RUNTIME_CHANNEL_DEADLINE_MS
           + env.RAG_RUNTIME_SEMANTIC_DEADLINE_MS
           + env.RAG_RUNTIME_CACHE_TIMEOUT_MS,
-        { found: false, timedOut: true, sources: [], actionEvidence: [], guidanceEvidence: [], entities: [] },
+        {
+          found: false, timedOut: true, sources: [], actionEvidence: [], guidanceEvidence: [], entities: [],
+          decision: technicalClarificationDecision('knowledge_timeout'),
+        },
       ).catch((error) => ({
         found: false, error: error.code ?? 'TENANT_EVIDENCE_UNAVAILABLE',
         sources: [], actionEvidence: [], guidanceEvidence: [], entities: [],
+        decision: technicalClarificationDecision(error.code ?? 'tenant_evidence_unavailable'),
       }));
       const parallelDurationMs = Math.round((performance.now() - startedAt) * 100) / 100;
       const first = tenantEvidence.sources?.[0];
@@ -1703,9 +1773,12 @@ export class RealtimeConversationOrchestrator {
     const llmStartedAt = performance.now();
     const memoryPromptStartedAt = performance.now();
     const liveMemory = this.liveCallMemory?.snapshot();
+    // Tool fields are mutable call state and must never be inherited by a new
+    // call. Cross-call history may still be supplied as read-only context when
+    // the UI policy enables it, but collection always starts in this call.
     const collectedData = {
-      ...(this.previousConversationMemory?.collectedData ?? {}),
-      ...(liveMemory?.collectedInformation ?? liveMemory?.collectedData ?? {}),
+      ...(liveMemory?.collectedToolFields
+        ?? liveMemory?.collectedInformation ?? liveMemory?.collectedData ?? {}),
     };
     const configuredFields = this.liveCallMemory?.fieldSchemas?.() ?? liveMemory?.fields ?? [];
     const liveHistory = this.liveCallMemory?.promptMessages?.() ?? history ?? [];
@@ -1714,7 +1787,7 @@ export class RealtimeConversationOrchestrator {
       && message.role === 'user'
       && String(message.content).trim() === String(query).trim()
     ));
-    const compactLiveMemory = compactGenericConversationState({
+    const compactLiveMemory = compactIsolatedCallMemory({
       ...liveMemory,
       collectedInformation: collectedData,
     }, 900);
@@ -2413,6 +2486,17 @@ export class RealtimeConversationOrchestrator {
   async #runTurn(query, history, epoch, sttTiming = {}) {
     this.liveCallMemory?.beginTurn?.(epoch);
     const turnStartedAt = Date.now();
+    const latencyTracker = new VoiceTurnLatencyTracker({
+      tenantId: this.runtimeProfile.agent.tenantId,
+      agentId: this.runtimeProfile.agent.id,
+      callId: this.call.id,
+      turnId: String(epoch),
+    }, { now: () => Date.now(), startedAt: turnStartedAt, log: this.log });
+    this.turnLatencyTrackers ??= new Map();
+    this.turnLatencyTrackers.set(epoch, latencyTracker);
+    if (Number.isFinite(Number(sttTiming.sttFinalizationMs))) {
+      latencyTracker.record(voiceTurnStages.STT_FINALIZATION, sttTiming.sttFinalizationMs);
+    }
     const firstAudioDeadlineAt = turnStartedAt
       + Math.min(env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS, 2_000);
     const knowledgeBudgetMs = Math.max(1, Math.min(
@@ -2427,13 +2511,19 @@ export class RealtimeConversationOrchestrator {
       sttSpeechDurationMs: sttTiming.sttSpeechDurationMs ?? null,
       sttFinalizationMs: sttTiming.sttFinalizationMs ?? null,
       knowledgeMs: null,
+      routingMs: null,
       retrievalMs: null,
+      hydrationMs: null,
       rankingMs: null,
       llmMs: 0,
       llmFirstTokenMs: null,
       validationMs: 0,
       ttsFirstAudioMs: null,
+      ttsFirstChunkMs: null,
       totalFirstAudioMs: null,
+      firstAudioDeliveryMs: null,
+      firstAudioDeadlineMs: Math.min(env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS, 2_000),
+      latencyAcknowledgement: false,
       route: 'none',
       fastKnowledge: false,
     };
@@ -2462,7 +2552,7 @@ export class RealtimeConversationOrchestrator {
         retrieval: { parallelDurationMs: knowledgeBudgetMs },
         tenantEvidence: {
           found: false, sources: [], evidenceIds: [],
-          responseRouting: { outcome: 'clarify', reason: 'knowledge_timeout' },
+          decision: technicalClarificationDecision('knowledge_timeout'),
         },
       };
     }
@@ -2513,8 +2603,26 @@ export class RealtimeConversationOrchestrator {
       pendingQuestion: memoryState?.pendingQuestion ?? null,
     };
     turnLatency.knowledgeMs = Math.max(0, Date.now() - knowledgeStartedAt);
-    turnLatency.retrievalMs = Number(knowledge.retrieval?.parallelDurationMs ?? turnLatency.knowledgeMs);
+    turnLatency.routingMs = Number.isFinite(Number(knowledge.tenantEvidence?.latency?.stages?.routingMs))
+      ? Number(knowledge.tenantEvidence.latency.stages.routingMs) : null;
+    turnLatency.retrievalMs = Number.isFinite(Number(
+      knowledge.tenantEvidence?.latency?.stages?.retrievalMs,
+    )) ? Number(knowledge.tenantEvidence.latency.stages.retrievalMs)
+      : Number(knowledge.retrieval?.parallelDurationMs ?? turnLatency.knowledgeMs);
+    turnLatency.hydrationMs = Number.isFinite(Number(knowledge.tenantEvidence?.latency?.stages?.hydrationMs))
+      ? Number(knowledge.tenantEvidence.latency.stages.hydrationMs) : null;
     turnLatency.rankingMs = Number(knowledge.rankingValidationDurationMs ?? 0);
+    if (turnLatency.routingMs !== null
+      && latencyTracker.stages[voiceTurnStages.ROUTING] === undefined) {
+      latencyTracker.record(voiceTurnStages.ROUTING, turnLatency.routingMs);
+    }
+    if (latencyTracker.stages[voiceTurnStages.RETRIEVAL] === undefined) {
+      latencyTracker.record(voiceTurnStages.RETRIEVAL, turnLatency.retrievalMs);
+    }
+    if (turnLatency.hydrationMs !== null
+      && latencyTracker.stages[voiceTurnStages.HYDRATION] === undefined) {
+      latencyTracker.record(voiceTurnStages.HYDRATION, turnLatency.hydrationMs);
+    }
     turnLatency.validationMs += turnLatency.rankingMs;
     turnLatency.route = knowledge.route ?? 'none';
     if (turnLatency.retrievalMs > 150) {
@@ -2548,27 +2656,62 @@ export class RealtimeConversationOrchestrator {
       isCurrent: () => !this.#isStaleGeneration(epoch),
     };
     let response;
-    const directResponse = knowledge.tenantEvidence?.directResponse;
-    const responseRouting = knowledge.tenantEvidence?.responseRouting ?? {
-      outcome: directResponse ? 'direct' : (knowledge.found ? 'grounded_llm' : 'clarify'),
-      reason: 'compatibility_route',
-    };
+    const candidateDecision = knowledge.tenantEvidence?.decision;
+    const engineDecision = isKnowledgeEngineDecision(candidateDecision)
+      ? candidateDecision : technicalClarificationDecision('invalid_engine_result');
+    if (engineDecision.type !== knowledgeEngineDecisionTypes.LLM) {
+      const selectedEvidence = (knowledge.tenantEvidence?.sources ?? []).filter((source) => (
+        engineDecision.evidenceIds.includes(source.id)
+        || engineDecision.evidenceIds.includes(source.recordId)
+        || (engineDecision.response?.recordId && source.recordId === engineDecision.response.recordId)
+      ));
+      const selectedSource = selectedEvidence.find((source) => (
+        source.recordId === engineDecision.response?.recordId
+      )) ?? selectedEvidence[0] ?? null;
+      const authoritative = selectedSource?.authoritativeData ?? {};
+      const catalogEntity = String(selectedSource?.recordType ?? '').toLocaleUpperCase() === 'CATALOG_ITEM'
+        ? {
+          id: selectedSource.recordId,
+          key: authoritative.itemKey,
+          name: authoritative.name,
+          category: authoritative.category,
+          categoryKey: authoritative.categoryKey,
+        } : null;
+      const category = authoritative.category || authoritative.categoryKey ? {
+        key: authoritative.categoryKey,
+        name: authoritative.category,
+        parentKey: authoritative.parentCategoryKey,
+      } : null;
+      this.liveCallMemory?.applyEngineDecision?.(engineDecision, {
+        entity: catalogEntity,
+        category,
+        explicitEntity: Boolean(catalogEntity
+          && String(selectedSource?.retrievalContext ?? 'primary').toLocaleLowerCase() === 'primary'),
+        explicitCategory: !catalogEntity && Boolean(category),
+        intent: knowledge.tenantEvidence?.questionType ?? engineDecision.reason,
+        citedEvidence: selectedEvidence.map((source) => ({
+          id: source.id,
+          recordId: source.recordId,
+          recordType: source.recordType,
+        })),
+      });
+    }
     const callCheckClassification = classifyFinalCallCheckUtterance(
       query, this.callCheckConfiguration, { finalized: true },
     );
     const conflictDetected = knowledge.tenantEvidence?.retrieval?.conflictDetected === true
-      || responseRouting.reason === 'conflicting_facts';
+      || engineDecision.reason === 'conflicting_facts';
     const semanticCallCheckResolution = Boolean(this.callCheckConfiguration.response)
       && !conflictDetected
       && callCheckClassification.shortcut === true;
-    if (responseRouting.outcome === 'clarify' && !semanticCallCheckResolution) {
-      const reason = responseRouting.reason;
-      const timedOut = reason === 'knowledge_timeout';
+    if (engineDecision.type === knowledgeEngineDecisionTypes.CLARIFY && !semanticCallCheckResolution) {
+      const reason = engineDecision.reason;
+      const timedOut = engineDecision.clarification?.kind === 'technical';
       response = {
         cancelled: false,
-        text: timedOut
+        text: engineDecision.clarification?.prompt || (timedOut
           ? configuredTechnicalFailureResponse(this.runtimeProfile)
-          : configuredSafeFailureResponse(this.runtimeProfile),
+          : configuredSafeFailureResponse(this.runtimeProfile)),
         toolCalls: [],
         sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
           label: 'Configured knowledge clarification', metadata: { reason },
@@ -2597,27 +2740,55 @@ export class RealtimeConversationOrchestrator {
       };
       turnLatency.fastKnowledge = true;
       turnLatency.route = 'direct_call_check';
-    } else if (responseRouting.outcome === 'direct' && directResponse?.content) {
+      latencyTracker.setKnownAnswer(true);
+      latencyTracker.setResponseClass('direct_call_check');
+    } else if (engineDecision.type === knowledgeEngineDecisionTypes.DIRECT
+      && engineDecision.response?.text) {
       // A scoped, hydrated caller-facing tenant record is already approved
       // speech (Conversation, FAQ, Catalog item or Catalog category response).
       // Do not spend another LLM turn paraphrasing it or let stale memory
       // change its meaning.
       response = {
         cancelled: false,
-        text: directResponse.content,
+        text: engineDecision.response.text,
         toolCalls: [],
         sources: [createMessageSource(messageSourceTypes.KNOWLEDGE, {
           label: 'Published caller-facing response',
           metadata: {
-            recordId: directResponse.recordId,
-            responseId: directResponse.id,
-            evidenceIds: directResponse.deterministicEvidenceIds ?? [directResponse.id],
+            recordId: engineDecision.response.recordId,
+            evidenceIds: engineDecision.evidenceIds,
           },
         })],
       };
       turnLatency.fastKnowledge = true;
       turnLatency.route = 'direct_approved';
+      latencyTracker.setKnownAnswer(true);
+      latencyTracker.setResponseClass('direct_approved');
       this.liveCallMemory?.setPendingQuestion?.(null);
+    } else if (engineDecision.type === knowledgeEngineDecisionTypes.TOOL) {
+      const workflow = engineDecision.toolWorkflow ?? {};
+      const ready = workflow.status === 'READY_TO_EXECUTE';
+      response = {
+        cancelled: false,
+        text: ready ? '' : (workflow.prompt || configuredSafeFailureResponse(this.runtimeProfile)),
+        toolCalls: ready ? [{
+          id: `knowledge-engine-${this.call.id}-${this.epoch}`,
+          name: engineDecision.tool.name,
+          arguments: engineDecision.tool.input,
+          authorizationRecordId: engineDecision.tool.authorizationEvidenceId,
+        }] : [],
+        sources: [createMessageSource(messageSourceTypes.KNOWLEDGE, {
+          label: ready ? 'Authorized published workflow' : 'Published workflow field collection',
+          metadata: {
+            recordId: engineDecision.tool.authorizationEvidenceId,
+            evidenceIds: engineDecision.evidenceIds,
+            workflowStatus: workflow.status ?? null,
+          },
+        })],
+      };
+      turnLatency.route = ready ? 'authorized_tool' : 'tool_dialogue';
+      latencyTracker.setResponseClass(turnLatency.route);
+      if (!ready) latencyTracker.setKnownAnswer(true);
     } else {
       try {
         const llmStartedAt = Date.now();
@@ -2627,23 +2798,43 @@ export class RealtimeConversationOrchestrator {
           900,
           remainingLiveTurnBudgetMs(firstAudioDeadlineAt, ttsReserveMs),
         );
+        latencyTracker.setResponseClass('grounded_llm');
         if (remainingFirstAudioBudgetMs < 250) {
+          const acknowledgementText = configuredLatencyAcknowledgementResponse(this.runtimeProfile);
+          latencyTracker.markLatencyAcknowledgement();
+          turnLatency.latencyAcknowledgement = true;
           response = {
             cancelled: false,
-            text: configuredTechnicalFailureResponse(this.runtimeProfile),
+            text: acknowledgementText,
             toolCalls: [],
             sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
-              label: 'Live deadline technical fallback',
-              metadata: { reason: 'insufficient_llm_budget' },
+              label: 'Safe LLM latency acknowledgement',
+              metadata: { reason: 'insufficient_llm_first_audio_budget' },
             })],
           };
         } else {
-          response = await rejectAfter(this.#llm(query, history, knowledge, {
+          const latencyResult = await awaitLlmWithSafeLatency(this.#llm(query, history, knowledge, {
             instruction: 'Resolve only the ambiguity, comparison, action, or multi-source question in the latest utterance. Use only cited evidence. Keep answer brief. Return exactly one grounded decision JSON object.',
             callCheck: null,
-          }, streaming), remainingFirstAudioBudgetMs,
-          () => new AppError(504, 'LLM exceeded the live turn budget', 'VOICE_LLM_TURN_TIMEOUT'),
-          () => this.activeLlm?.cancel?.('llm_turn_timeout'));
+          }, streaming), {
+            tracker: latencyTracker,
+            acknowledgementAfterMs: remainingFirstAudioBudgetMs,
+            ttsReserveMs,
+            acknowledgementText: configuredLatencyAcknowledgementResponse(this.runtimeProfile),
+            completionTimeoutMs: env.LLM_REQUEST_TIMEOUT_MS,
+            cancel: () => this.activeLlm?.cancel?.('llm_completion_timeout'),
+            onAcknowledgement: async (acknowledgementText) => {
+              turnLatency.latencyAcknowledgement = true;
+              sourceTrace.add([createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
+                label: 'Safe LLM latency acknowledgement',
+                metadata: { reason: 'grounded_llm_still_processing' },
+              })]);
+              sentencePipeline.enqueue(acknowledgementText);
+              sentencePipeline.flushGrouping();
+              await sentencePipeline.waitUntilStarted();
+            },
+          });
+          response = latencyResult.value;
         }
         turnLatency.llmMs += Math.max(0, Date.now() - llmStartedAt);
       } catch (error) {
@@ -2918,8 +3109,13 @@ export class RealtimeConversationOrchestrator {
       const stream = this.adapters.tts.synthesizeStream({ text, generationId });
       const iterator = stream[Symbol.asyncIterator]();
       while (true) {
+        const firstAudioDeliveryReserveMs = firstAudio
+          ? Math.min(200, env.VOICE_AUDIO_PRE_ROLL_MAX_WAIT_MS
+            + env.VOICE_AUDIO_WEBSOCKET_WARN_MS)
+          : 0;
         const sharedDeadlineRemainingMs = options.firstAudioDeadlineAt
-          ? remainingLiveTurnBudgetMs(options.firstAudioDeadlineAt) : Number.POSITIVE_INFINITY;
+          ? remainingLiveTurnBudgetMs(options.firstAudioDeadlineAt, firstAudioDeliveryReserveMs)
+          : Number.POSITIVE_INFINITY;
         if (firstAudio && sharedDeadlineRemainingMs <= 0) {
           this.adapters.tts.cancel?.('turn_first_audio_deadline');
           throw new AppError(504, 'Turn exceeded the end-to-end first-audio deadline',
@@ -2966,6 +3162,7 @@ export class RealtimeConversationOrchestrator {
                 .find((entry) => entry.epoch === (options.epoch ?? this.epoch));
               if (turnLatency && turnLatency.ttsFirstAudioMs === null) {
                 turnLatency.ttsFirstAudioMs = firstAudioLatencyMs;
+                turnLatency.ttsFirstChunkMs = firstAudioLatencyMs;
                 turnLatency.totalFirstAudioMs = latencyMs;
                 turnLatency.validatedTextToAudioMs = Math.max(
                   0, Date.now() - Number(options.validatedTextAt ?? requestStartedAt),
@@ -2977,18 +3174,24 @@ export class RealtimeConversationOrchestrator {
                   ? 'target_met'
                   : (latencyMs <= turnLatency.firstAudioAcceptableMs
                     ? 'acceptable_fallback' : 'target_missed');
+                this.turnLatencyTrackers?.get(options.epoch ?? this.epoch)?.record(
+                  voiceTurnStages.TTS_FIRST_CHUNK, firstAudioLatencyMs,
+                );
                 this.log.info({
                   stage: 'voice.turn_latency', callId: this.call.id,
                   epoch: turnLatency.epoch,
                   sttSpeechDurationMs: turnLatency.sttSpeechDurationMs,
                   sttFinalizationMs: turnLatency.sttFinalizationMs,
                   knowledgeMs: turnLatency.knowledgeMs,
+                  routingMs: turnLatency.routingMs,
                   retrievalMs: turnLatency.retrievalMs,
+                  hydrationMs: turnLatency.hydrationMs,
                   rankingMs: turnLatency.rankingMs,
                   llmMs: turnLatency.llmMs,
                   llmFirstTokenMs: turnLatency.llmFirstTokenMs,
                   validationMs: turnLatency.validationMs,
                   ttsFirstAudioMs: turnLatency.ttsFirstAudioMs,
+                  ttsFirstChunkMs: turnLatency.ttsFirstChunkMs,
                   validatedTextToAudioMs: turnLatency.validatedTextToAudioMs,
                   totalFirstAudioMs: turnLatency.totalFirstAudioMs,
                   route: turnLatency.route,
@@ -3295,6 +3498,7 @@ export class RealtimeConversationOrchestrator {
       await this.activeAssistantPlayback?.persistAudible?.(reason);
       if (this.activeAssistantPlayback?.epoch === cancelledEpoch) this.activeAssistantPlayback = null;
       this.epoch += 1;
+      this.turnLatencyTrackers?.delete(cancelledEpoch);
       this.liveCallMemory?.cancelTurn?.(cancelledEpoch);
       this.runtimeMetrics.interruptions.cancellationEpochs += 1;
       this.runtimeMetrics.interruptions.cancellationCalls += 1;
@@ -3543,6 +3747,7 @@ export class RealtimeConversationOrchestrator {
     this.#clearCallDuration();
     this.interruptionCandidate?.reset();
     this.epoch += 1;
+    this.turnLatencyTrackers?.clear();
     for (const cancelScheduler of this.activeLookaheadSchedulers) cancelScheduler(finalReason);
     this.activeLlm?.cancel(finalReason);
     this.adapters?.llm?.cancel?.(finalReason);

@@ -1,6 +1,11 @@
 import { env } from '../config/env.js';
-import { requireKnowledgeDocumentContract } from './knowledge-document-contract.js';
+import {
+  KNOWLEDGE_DOCUMENT_CONTRACT_VERSION,
+  SUPPORTED_KNOWLEDGE_DOCUMENT_CONTRACT_VERSIONS,
+  requireKnowledgeDocumentContract,
+} from './knowledge-document-contract.js';
 import { normalizeConfiguredToolIdentifier } from './knowledge-record-validation.js';
+import { normalizeKnowledgeIntentClass } from '../knowledge-engine/query-classifier.js';
 
 function nonEmptyLines(extraction) {
   return extraction.pages.flatMap((page) => page.lines.map((text) => ({ pageNumber: page.pageNumber, text })))
@@ -10,6 +15,7 @@ function nonEmptyLines(extraction) {
 function parseFaq(extraction) {
   const lines = nonEmptyLines(extraction);
   const entries = [];
+  const errors = [];
   let current;
   const flush = () => {
     if (current?.question && current.answer.length) {
@@ -20,6 +26,7 @@ function parseFaq(extraction) {
         entries.push({
           question,
           answer,
+          metadata: current.intentClass ? { intentClass: current.intentClass } : {},
           sourcePageStart: current.pageNumber,
           sourcePageEnd: current.lastPageNumber,
         });
@@ -30,9 +37,17 @@ function parseFaq(extraction) {
   for (const line of lines) {
     const explicitQuestion = line.text.match(/^(?:q|question)\s*[:.)-]\s*(.+)$/i);
     const explicitAliases = line.text.match(/^aliases?\s*:\s*(.+)$/i);
+    const explicitIntentClass = line.text.match(/^intent_class\s*:\s*(.+)$/i);
     const explicitAnswer = line.text.match(/^(?:a|answer)\s*[:.)-]\s*(.*)$/i);
     if (explicitAliases && current) {
       current.aliases.push(...explicitAliases[1].split('|').map((value) => value.trim()).filter(Boolean));
+      current.lastPageNumber = line.pageNumber;
+      continue;
+    }
+    if (explicitIntentClass && current) {
+      const intentClass = normalizeKnowledgeIntentClass(explicitIntentClass[1]);
+      if (intentClass) current.intentClass = intentClass;
+      else errors.push(`FAQ question on page ${line.pageNumber} has an unsupported INTENT_CLASS`);
       current.lastPageNumber = line.pageNumber;
       continue;
     }
@@ -42,6 +57,7 @@ function parseFaq(extraction) {
       current = {
         question: (explicitQuestion?.[1] ?? line.text).trim(),
         aliases: [],
+        intentClass: null,
         answer: [],
         pageNumber: line.pageNumber,
         lastPageNumber: line.pageNumber,
@@ -54,7 +70,11 @@ function parseFaq(extraction) {
     }
   }
   flush();
-  return { records: entries, warnings: entries.length ? [] : ['No question-and-answer pairs were detected'] };
+  return {
+    records: entries,
+    warnings: entries.length ? [] : ['No question-and-answer pairs were detected'],
+    errors,
+  };
 }
 
 function legacyPriceFromLine(text) {
@@ -299,9 +319,14 @@ function parseWorkflowRules(extraction) {
     const responseMode = normalizeResponseMode(structuredRule.responseMode || 'instruction');
     const confidenceOutcome = ['ambiguous', 'none'].includes(structuredRule.confidenceOutcome)
       ? structuredRule.confidenceOutcome : '';
+    const intentClass = structuredRule.intentClass
+      ? normalizeKnowledgeIntentClass(structuredRule.intentClass) : null;
 
     if (!name) warnings.push(`Workflow rule on page ${structuredRule.sourcePageStart} has no RULE name and was skipped`);
     else if (!triggerPhrases.length && !confidenceOutcome) warnings.push(`Workflow rule "${name}" has no SITUATION or EXAMPLE text and was skipped`);
+    else if (structuredRule.intentClass && !intentClass) {
+      errors.push(`Workflow rule "${name}" has an unsupported INTENT_CLASS and was blocked`);
+    }
     else if (!responseMode) errors.push(`Workflow rule "${name}" has an unsupported RESPONSE_MODE and was blocked`);
     else if (!response) warnings.push(`Workflow rule "${name}" has no RESPONSE and was skipped`);
     else if (structuredRule.scenario && !structuredRule.targetCategoryKey && !structuredRule.targetItemKey) {
@@ -325,6 +350,7 @@ function parseWorkflowRules(extraction) {
         intent: normalizeIntent(name, `rule_${ruleNumber}`),
         conditions: {
           examples: triggerPhrases,
+          ...(intentClass ? { intentClass } : {}),
           ...(structuredRule.scenario ? { scenarioRouting: true } : {}),
           ...(confidenceOutcome ? { confidenceOutcome } : {}),
         },
@@ -348,7 +374,7 @@ function parseWorkflowRules(extraction) {
   };
 
   for (const line of nonEmptyLines(extraction)) {
-    const structuredField = line.text.match(/^\s*(RULE|MATCH|SITUATION|EXAMPLE|MATCH_MODE|RESPONSE_MODE|RESPONSE|PRIORITY|ACTION|TOOL|REQUIRES_CATALOG_ITEM|BLOCKED_RESPONSE|SCENARIO|TARGET_CATEGORY|TARGET_ITEM|CONFIDENCE_OUTCOME)\s*:\s*(.*)$/i);
+    const structuredField = line.text.match(/^\s*(RULE|MATCH|SITUATION|EXAMPLE|MATCH_MODE|INTENT_CLASS|RESPONSE_MODE|RESPONSE|PRIORITY|ACTION|TOOL|REQUIRES_CATALOG_ITEM|BLOCKED_RESPONSE|SCENARIO|TARGET_CATEGORY|TARGET_ITEM|CONFIDENCE_OUTCOME)\s*:\s*(.*)$/i);
     if (structuredField) {
       const field = structuredField[1].toUpperCase();
       const value = structuredField[2].trim();
@@ -358,7 +384,7 @@ function parseWorkflowRules(extraction) {
           name: value, match: [], matchMode: '', responseMode: '', response: [], priority: null,
           action: '', requiresCatalogItem: false,
           blockedResponse: '', scenario: false, targetCategoryKey: '', targetItemKey: '',
-          confidenceOutcome: '',
+          confidenceOutcome: '', intentClass: '',
           sourceLines: [line.text], sourcePageStart: line.pageNumber, sourcePageEnd: line.pageNumber,
         };
       } else if (structuredRule) {
@@ -366,6 +392,7 @@ function parseWorkflowRules(extraction) {
         structuredRule.sourcePageEnd = line.pageNumber;
         if (['MATCH', 'SITUATION', 'EXAMPLE'].includes(field)) structuredRule.match.push(value);
         else if (field === 'MATCH_MODE') structuredRule.matchMode = value;
+        else if (field === 'INTENT_CLASS') structuredRule.intentClass = value;
         else if (field === 'RESPONSE_MODE') structuredRule.responseMode = value;
         else if (field === 'RESPONSE') structuredRule.response.push(value);
         else if (field === 'ACTION' || field === 'TOOL') structuredRule.action = value;
@@ -430,6 +457,7 @@ function parseConversation(extraction) {
         isEntry: block.entry === true || records.length === 0,
         content,
         variables: [
+          ...(block.intentClass ? [{ key: 'intentClass', value: block.intentClass }] : []),
           ...(block.purpose ? [{ key: 'purpose', value: block.purpose }] : []),
           ...(block.situation ? [{ key: 'situation', value: block.situation }] : []),
           ...(block.examples.length ? [{ key: 'examples', value: block.examples }] : []),
@@ -446,7 +474,7 @@ function parseConversation(extraction) {
     block = null;
   };
   for (const line of lines) {
-    const field = line.text.match(/^\s*(STAGE|FLOW|TYPE|LANGUAGE|ENTRY|PURPOSE|SITUATION|EXAMPLE|EXAMPLES|MATCH_MODE|CONTEXT|RESPONSE|NEXT_QUESTION)\s*:\s*(.*)$/iu);
+    const field = line.text.match(/^\s*(STAGE|FLOW|TYPE|LANGUAGE|ENTRY|PURPOSE|SITUATION|EXAMPLE|EXAMPLES|MATCH_MODE|INTENT_CLASS|CONTEXT|RESPONSE|NEXT_QUESTION)\s*:\s*(.*)$/iu);
     if (field) {
       const name = field[1].toUpperCase();
       const value = field[2].trim();
@@ -455,6 +483,7 @@ function parseConversation(extraction) {
         block = {
           stage: value, flow: 'main', type: 'message', language: 'und', entry: false,
           purpose: '', situation: '', examples: [], matchMode: '', context: '', response: [], nextQuestion: '', sourceLines: [line.text],
+          intentClass: '',
           sourcePageStart: line.pageNumber, sourcePageEnd: line.pageNumber,
         };
       } else if (block) {
@@ -470,6 +499,11 @@ function parseConversation(extraction) {
           block.examples.push(...value.split(/\s*\|\s*/u).map((item) => item.trim()).filter(Boolean));
         }
         else if (name === 'MATCH_MODE') block.matchMode = key(value, 'any_phrase');
+        else if (name === 'INTENT_CLASS') {
+          const intentClass = normalizeKnowledgeIntentClass(value);
+          if (intentClass) block.intentClass = intentClass;
+          else warnings.push(`Conversation stage "${block.stage}" has an unsupported INTENT_CLASS`);
+        }
         else if (name === 'CONTEXT') block.context = key(value, 'any');
         else if (name === 'RESPONSE') block.response.push(value);
         else if (name === 'NEXT_QUESTION') block.nextQuestion = value;
@@ -513,20 +547,31 @@ function parseGeneralKnowledge(extraction) {
   return { records, warnings: [] };
 }
 
-const processors = {
+const currentProcessors = Object.freeze({
   faq: parseFaq,
   catalog: parseCatalog,
   workflow_rules: parseWorkflowRules,
   conversation_script: parseConversation,
   general_knowledge: parseGeneralKnowledge,
-};
+});
 
-export function processExtractedCategory(documentType, extraction) {
+// Parser versions are explicit publication inputs. Version 1 remains readable
+// for already-reviewed records; all new extraction jobs use the current v2
+// contract. A future parser can be added without silently changing old input.
+const processorsByVersion = new Map(
+  SUPPORTED_KNOWLEDGE_DOCUMENT_CONTRACT_VERSIONS.map((version) => [version, currentProcessors]),
+);
+
+export function processExtractedCategory(documentType, extraction, options = {}) {
   requireKnowledgeDocumentContract(documentType);
+  const parserVersion = Number(options.parserVersion ?? KNOWLEDGE_DOCUMENT_CONTRACT_VERSION);
+  const processors = processorsByVersion.get(parserVersion);
+  if (!processors) throw new TypeError(`Unsupported knowledge parser version: ${parserVersion}`);
   const processor = processors[documentType];
   if (!processor) throw new TypeError(`Unsupported knowledge document type: ${documentType}`);
   const result = processor(extraction);
   return {
+    parserVersion,
     documentType,
     ...result,
     warnings: result.warnings ?? [],

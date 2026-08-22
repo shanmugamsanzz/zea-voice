@@ -9,6 +9,8 @@ import { buildConversationMemoryState } from '../src/voice/interaction/conversat
 
 const cleanState = buildConversationMemoryState({ previous: null, call: { id: 'call-null' } });
 assert.deepEqual(Object.keys(cleanState.callFrame).sort(), [
+  'activeCategory', 'activeEntity', 'activeTool', 'citedEvidence', 'collectedToolFields',
+  'latestIntent', 'memoryVersion', 'pendingClarification', 'scope',
   'activeToolRequest', 'collectedInformation', 'currentTopic', 'knownEntities',
   'language', 'lastAnswer', 'pendingQuestion', 'recentTurns',
 ].sort());

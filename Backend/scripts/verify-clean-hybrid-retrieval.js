@@ -201,7 +201,7 @@ const deterministicOverview = await search(
     }],
   },
 );
-assert.equal(deterministicOverview.directResponse?.recordId, ids.overview,
+assert.equal(deterministicOverview.decision.response?.recordId, ids.overview,
   'published Conversation metadata must route an unseen English overview without a vector hit');
 
 const assignmentChangedAfterPublish = await search('How do I find your workplace?', {
@@ -240,8 +240,8 @@ const weakEvidence = await search('uncertain request', {
   points: [semanticPoint(ids.location, 'FAQ', { score: 0.2 })],
 });
 assert.equal(weakEvidence.found, false, 'Weak evidence must be rejected before hydration');
-assert.equal(weakEvidence.responseRouting.outcome, 'clarify');
-assert.equal(weakEvidence.responseRouting.reason, 'weak_evidence');
+assert.equal(weakEvidence.decision.type, 'CLARIFY');
+assert.equal(weakEvidence.decision.reason, 'weak_evidence');
 
 const explicitTopicChange = await search('What is the return window?', {
   currentTopic: 'previous subject term',

@@ -4,10 +4,10 @@ import {
   authoritativeEvidenceFromRow,
   detectEvidenceConflict,
   mergeAndRerankCandidates,
-  resolveConfidenceResponseRoute,
   retainStrongCandidates,
   selectStrongCallerMessage,
 } from '../src/knowledge-bases/hybrid-knowledge-retrieval.service.js';
+import { resolveKnowledgeEngineDecision } from '../src/knowledge-engine/engine-contract.js';
 import {
   classifyFinalCallCheckUtterance,
   configuredCallCheckEvidence,
@@ -151,8 +151,8 @@ for (const [index, turn] of turns.entries()) {
   const direct = turn.kind === 'direct'
     ? selectStrongCallerMessage([turn.evidence], turn.utterance, { knownEntities: [] })
     : null;
-  const route = resolveConfidenceResponseRoute({ directMessage: direct, evidence: evidenceSet, conflict });
-  assert.equal(route.outcome, turn.kind === 'direct' ? 'direct' : 'grounded_llm',
+  const route = resolveKnowledgeEngineDecision({ directResponse: direct, evidence: evidenceSet, conflict });
+  assert.equal(route.type, turn.kind === 'direct' ? 'DIRECT' : 'LLM',
     `turn ${index + 1}: confidence route`);
 
   const turnToken = memory.beginTurn(`replay-turn-${index + 1}`);
@@ -217,9 +217,9 @@ const realConflict = detectEvidenceConflict([
   },
 ]);
 assert.equal(realConflict.detected, true);
-assert.equal(resolveConfidenceResponseRoute({
+assert.equal(resolveKnowledgeEngineDecision({
   evidence: [locationEvidence], conflict: realConflict,
-}).outcome, 'clarify', 'real contradictory facts still clarify');
+}).type, 'CLARIFY', 'real contradictory facts still clarify');
 
 const snapshot = memory.snapshot();
 assert.equal(snapshot.pendingQuestion, null, 'completed introduction question is not repeated');

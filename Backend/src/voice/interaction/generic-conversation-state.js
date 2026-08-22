@@ -5,6 +5,8 @@ const maximumMessages = 2_000;
 const maximumMessageCharacters = 2_000;
 const maximumEntities = 20;
 export const genericConversationStateFields = Object.freeze([
+  'activeEntity', 'activeCategory', 'latestIntent', 'pendingClarification',
+  'activeTool', 'collectedToolFields', 'citedEvidence',
   'currentTopic', 'knownEntities', 'pendingQuestion', 'collectedInformation',
   'recentTurns', 'lastAnswer', 'activeToolRequest', 'language', 'requestType',
   'requestedFacts', 'constraints', 'contextualReferences', 'contextDependent',
@@ -18,9 +20,13 @@ function required(value, name) {
 
 function stateKey(identity) {
   return JSON.stringify([
-    required(identity.tenantId, 'tenantId'), required(identity.workspaceId, 'workspaceId'),
-    required(identity.agentId, 'agentId'), required(identity.callId, 'callId'),
+    required(identity.tenantId, 'tenantId'), required(identity.agentId, 'agentId'),
+    required(identity.callId, 'callId'),
   ]);
+}
+
+export function isolatedCallMemoryKey(identity) {
+  return stateKey(identity);
 }
 
 function cleanText(value, maximum = 500) {
@@ -83,6 +89,32 @@ function cleanPending(value) {
   const text = cleanText(object.text, 500);
   const kind = cleanText(object.kind, 40);
   return key || text ? Object.freeze({ key: key || null, text: text || key, kind: kind || null }) : null;
+}
+
+function cleanCategory(value = {}) {
+  if (!value || typeof value !== 'object') return null;
+  const key = cleanText(value.categoryKey ?? value.key, 160);
+  const name = cleanText(value.category ?? value.name, 240);
+  if (!key && !name) return null;
+  return Object.freeze({ key: key || null, name: name || key, parentKey: cleanText(value.parentKey, 160) || null });
+}
+
+function cleanEvidence(values = []) {
+  const output = [];
+  const seen = new Set();
+  for (const value of Array.isArray(values) ? values : []) {
+    const source = typeof value === 'object' && value !== null ? value : { id: value };
+    const id = cleanText(source.id ?? source.evidenceId, 160);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    output.push(Object.freeze({
+      id,
+      recordId: cleanText(source.recordId, 160) || null,
+      recordType: cleanText(source.recordType, 80) || null,
+    }));
+    if (output.length >= 20) break;
+  }
+  return output;
 }
 
 export function configuredMessageQuestion(message, key = 'configured_message_question') {
@@ -152,14 +184,27 @@ function cleanRequestType(value) {
 }
 
 function publicState(state) {
+  const activeEntity = state.activeEntity ? Object.freeze({ ...state.activeEntity }) : null;
+  const activeCategory = state.activeCategory ? Object.freeze({ ...state.activeCategory }) : null;
+  const pendingClarification = state.pendingClarification
+    ? Object.freeze({ ...state.pendingClarification }) : null;
+  const activeTool = state.activeToolRequest ? Object.freeze({ ...state.activeToolRequest }) : null;
+  const collectedToolFields = Object.freeze({ ...state.collectedInformation });
   return Object.freeze({
+    activeEntity,
+    activeCategory,
+    latestIntent: state.requestType,
+    pendingClarification,
+    activeTool,
+    collectedToolFields,
+    citedEvidence: Object.freeze(state.citedEvidence.map((source) => Object.freeze({ ...source }))),
     currentTopic: state.currentTopic,
     knownEntities: Object.freeze(state.knownEntities.map((entity) => ({ ...entity }))),
     pendingQuestion: state.pendingQuestion ? Object.freeze({ ...state.pendingQuestion }) : null,
-    collectedInformation: Object.freeze({ ...state.collectedInformation }),
+    collectedInformation: collectedToolFields,
     recentTurns: Object.freeze(state.recentTurns.map((turn) => ({ ...turn }))),
     lastAnswer: state.lastAnswer,
-    activeToolRequest: state.activeToolRequest ? Object.freeze({ ...state.activeToolRequest }) : null,
+    activeToolRequest: activeTool,
     language: state.language,
     requestType: state.requestType,
     requestedFacts: Object.freeze([...state.requestedFacts]),
@@ -176,24 +221,35 @@ export function openGenericConversationState(identity, settings = {}, now = Date
   // Cross-call restoration is supplied only by the orchestrator after its UI
   // context policy authorizes it. This store never discovers another call.
   const state = {
+    scope: Object.freeze({
+      tenantId: required(identity.tenantId, 'tenantId'),
+      agentId: required(identity.agentId, 'agentId'),
+      callId: required(identity.callId, 'callId'),
+    }),
     currentTopic: cleanText(initial.currentTopic, 240) || null,
     knownEntities: uniqueEntities(initial.knownEntities),
-    pendingQuestion: cleanPending(initial.pendingQuestion),
+    activeEntity: cleanEntity(initial.activeEntity)
+      ?? uniqueEntities(initial.knownEntities)[0] ?? null,
+    activeCategory: cleanCategory(initial.activeCategory),
+    pendingQuestion: cleanPending(initial.pendingQuestion ?? initial.pendingClarification),
+    pendingClarification: cleanPending(initial.pendingClarification),
     collectedInformation: cleanInformation(
-      initial.collectedInformation ?? initial.collectedData ?? {}, fieldKeys,
+      initial.collectedToolFields ?? initial.collectedInformation ?? initial.collectedData ?? {}, fieldKeys,
     ),
     recentTurns: recent((initial.recentTurns ?? initial.messages ?? []).map(cleanMessage).filter(Boolean),
       configuration.recentTurns),
     lastAnswer: cleanText(initial.lastAnswer, maximumMessageCharacters) || null,
-    activeToolRequest: cleanToolRequest(initial.activeToolRequest),
+    activeToolRequest: cleanToolRequest(initial.activeTool ?? initial.activeToolRequest),
     language: cleanLanguage(initial.language
       ?? settings.conversationLanguage ?? settings.defaultLanguage ?? settings.language),
-    requestType: cleanRequestType(initial.requestType ?? initial.questionType),
+    requestType: cleanRequestType(initial.latestIntent ?? initial.requestType ?? initial.questionType),
+    citedEvidence: cleanEvidence(initial.citedEvidence),
     requestedFacts: cleanList(initial.requestedFacts),
     constraints: cleanList(initial.constraints),
     contextualReferences: cleanList(initial.contextualReferences),
     contextDependent: initial.contextDependent === true,
   };
+  state.activeCategory ??= cleanCategory(state.activeEntity);
   let activeTurnToken = null;
   let resumePending = false;
   activeCalls.set(key, state);
@@ -247,15 +303,46 @@ export function openGenericConversationState(identity, settings = {}, now = Date
         // An explicit latest-turn selection replaces stale entities. A true
         // contextual follow-up may retain earlier entities for comparisons or
         // references. This remains industry-neutral and decision-controlled.
+        const explicitSelection = update.contextDependent !== true;
+        const previousEntityIdentity = cleanText(
+          state.activeEntity?.id ?? state.activeEntity?.key ?? state.activeEntity?.name,
+          240,
+        ).toLocaleLowerCase();
+        const nextEntityIdentity = cleanText(
+          selected[0]?.id ?? selected[0]?.key ?? selected[0]?.name,
+          240,
+        ).toLocaleLowerCase();
         state.knownEntities = update.contextDependent === true
           ? uniqueEntities([...selected, ...state.knownEntities])
           : selected;
+        state.activeEntity = selected[0];
+        state.activeCategory = cleanCategory(selected[0]) ?? state.activeCategory;
+        if (explicitSelection) {
+          state.pendingQuestion = null;
+          state.pendingClarification = null;
+          if (previousEntityIdentity && nextEntityIdentity !== previousEntityIdentity
+            && state.activeToolRequest) {
+            const toolEntity = cleanText(
+              state.activeToolRequest.selectedEntityKey ?? state.activeToolRequest.selectedEntityName,
+              240,
+            ).toLocaleLowerCase();
+            if (!toolEntity || ![nextEntityIdentity, cleanText(selected[0].key, 160).toLocaleLowerCase()]
+              .includes(toolEntity)) {
+              state.activeToolRequest = null;
+              state.collectedInformation = {};
+            }
+          }
+        }
       } else if (update.contextDependent === false
         && cleanRequestType(update.requestType ?? update.questionType) === 'category_overview') {
         // A category is a deterministic browse context, not an arbitrary
         // child selection. Clear the previous item while retaining the
         // category topic supplied by the grounded runtime.
         state.knownEntities = [];
+        state.activeEntity = null;
+        state.activeCategory = cleanCategory({ key: topic, name: topic });
+        state.pendingQuestion = null;
+        state.pendingClarification = null;
       }
       const updates = cleanInformation(
         update.collectedInformation ?? decision.fieldUpdates ?? {}, fieldKeys,
@@ -263,7 +350,11 @@ export function openGenericConversationState(identity, settings = {}, now = Date
       for (const [field, value] of Object.entries(updates)) state.collectedInformation[field] = value;
       if (state.pendingQuestion?.key && Object.hasOwn(updates, state.pendingQuestion.key)) {
         state.pendingQuestion = null;
-      } else if ((update.pendingQuestionRelevant ?? decision.pendingQuestionRelevant) === false) state.pendingQuestion = null;
+        state.pendingClarification = null;
+      } else if ((update.pendingQuestionRelevant ?? decision.pendingQuestionRelevant) === false) {
+        state.pendingQuestion = null;
+        state.pendingClarification = null;
+      }
       else if (decision.flowAction === 'side_question' && state.pendingQuestion) resumePending = true;
       // decision.pendingQuestion is only a proposal. The unified turn policy
       // validates it against published guidance before setPendingQuestion is
@@ -273,6 +364,9 @@ export function openGenericConversationState(identity, settings = {}, now = Date
       }
       if (update.requestType !== undefined || update.questionType !== undefined) {
         state.requestType = cleanRequestType(update.requestType ?? update.questionType);
+      }
+      if (decision.evidenceIds !== undefined || update.citedEvidence !== undefined) {
+        state.citedEvidence = cleanEvidence(update.citedEvidence ?? decision.evidenceIds);
       }
       if (update.requestedFacts !== undefined) state.requestedFacts = cleanList(update.requestedFacts);
       if (update.constraints !== undefined) state.constraints = cleanList(update.constraints);
@@ -307,15 +401,92 @@ export function openGenericConversationState(identity, settings = {}, now = Date
       state.activeToolRequest = cleanToolRequest({ name: actionKey, status: 'collecting_information' });
       return publicState(state);
     },
-    applyKnowledge() { return publicState(state); },
+    applyKnowledge(knowledge = {}) {
+      const selection = knowledge.catalogSelection ?? {};
+      const selectedItem = cleanEntity(selection.item);
+      const selectedCategory = cleanCategory(selection.category);
+      if (selectedItem) {
+        state.activeEntity = selectedItem;
+        state.activeCategory = cleanCategory(selectedItem) ?? selectedCategory ?? state.activeCategory;
+        state.knownEntities = [selectedItem];
+        state.currentTopic = selectedItem.name;
+        state.pendingQuestion = null;
+        state.pendingClarification = null;
+      } else if (selectedCategory) {
+        state.activeEntity = null;
+        state.activeCategory = selectedCategory;
+        state.knownEntities = [];
+        state.currentTopic = selectedCategory.name;
+        state.pendingQuestion = null;
+        state.pendingClarification = null;
+      }
+      return publicState(state);
+    },
+    applyEngineDecision(decision = {}, context = {}) {
+      state.citedEvidence = cleanEvidence(context.citedEvidence ?? decision.evidenceIds);
+      state.requestType = cleanRequestType(context.intent ?? decision.reason) ?? state.requestType;
+      const entity = cleanEntity(context.entity);
+      const category = cleanCategory(context.category ?? entity);
+      if (entity && context.explicitEntity !== false) {
+        const priorIdentity = cleanText(
+          state.activeEntity?.id ?? state.activeEntity?.key ?? state.activeEntity?.name,
+          240,
+        ).toLocaleLowerCase();
+        const nextIdentity = cleanText(entity.id ?? entity.key ?? entity.name, 240).toLocaleLowerCase();
+        state.activeEntity = entity;
+        state.activeCategory = category;
+        state.knownEntities = [entity];
+        state.currentTopic = entity.name;
+        state.pendingQuestion = null;
+        state.pendingClarification = null;
+        if (priorIdentity && priorIdentity !== nextIdentity && state.activeToolRequest) {
+          state.activeToolRequest = null;
+          state.collectedInformation = {};
+        }
+      } else if (category && context.explicitCategory === true) {
+        state.activeEntity = null;
+        state.activeCategory = category;
+        state.knownEntities = [];
+        state.currentTopic = category.name;
+        state.pendingQuestion = null;
+        state.pendingClarification = null;
+      }
+      if (decision.type === 'CLARIFY') {
+        const clarificationPrompt = cleanText(decision.clarification?.prompt, 500) || null;
+        state.pendingClarification = Object.freeze({
+          key: cleanText(decision.reason, 120) || null,
+          text: clarificationPrompt,
+          kind: cleanText(decision.clarification?.kind, 40) || 'ambiguity',
+        });
+        state.pendingQuestion = clarificationPrompt
+          ? cleanPending(state.pendingClarification) : null;
+      }
+      if (decision.type === 'TOOL' && decision.tool) {
+        state.activeToolRequest = cleanToolRequest({
+          name: decision.tool.name,
+          status: 'collecting_information',
+          authorizationRecordId: decision.tool.authorizationEvidenceId,
+          selectedEntityKey: entity?.key,
+          selectedEntityName: entity?.name,
+        });
+        Object.assign(state.collectedInformation, cleanInformation(decision.tool.input, fieldKeys));
+      }
+      return publicState(state);
+    },
     completeQuestion() { return publicState(state); },
     setPosition({ currentTopic, pendingQuestion } = {}) {
       if (currentTopic !== undefined) state.currentTopic = cleanText(currentTopic, 240) || null;
-      if (pendingQuestion !== undefined) state.pendingQuestion = cleanPending(pendingQuestion);
+      if (pendingQuestion !== undefined) {
+        state.pendingQuestion = cleanPending(pendingQuestion);
+        state.pendingClarification = state.pendingQuestion?.kind === 'clarification'
+          ? state.pendingQuestion : null;
+      }
       return publicState(state);
     },
     setPendingQuestion(value) {
       state.pendingQuestion = cleanPending(value);
+      state.pendingClarification = ['clarification', 'ambiguity', 'conflict', 'no_evidence', 'technical']
+        .includes(state.pendingQuestion?.kind) ? state.pendingQuestion : null;
       return publicState(state);
     },
     prepareAssistantResponse(response, { resumePending: shouldResume = true } = {}) {
@@ -352,6 +523,14 @@ export function activeGenericConversationStateCount() {
 
 export function compactGenericConversationState(snapshot = {}, maximumCharacters = 1_000) {
   const context = {
+    memoryVersion: 1,
+    activeEntity: snapshot.activeEntity ?? null,
+    activeCategory: snapshot.activeCategory ?? null,
+    latestIntent: snapshot.latestIntent ?? snapshot.requestType ?? null,
+    pendingClarification: snapshot.pendingClarification ?? null,
+    activeTool: snapshot.activeTool ?? snapshot.activeToolRequest ?? null,
+    collectedToolFields: snapshot.collectedToolFields ?? snapshot.collectedInformation ?? {},
+    citedEvidence: (snapshot.citedEvidence ?? []).slice(0, 20),
     currentTopic: snapshot.currentTopic ?? null,
     knownEntities: (snapshot.knownEntities ?? []).slice(0, 12),
     pendingQuestion: snapshot.pendingQuestion ?? null,
@@ -371,6 +550,9 @@ export function compactGenericConversationState(snapshot = {}, maximumCharacters
   }
   while (JSON.stringify(context).length > maximumCharacters && context.knownEntities.length > 1) {
     context.knownEntities.pop();
+  }
+  while (JSON.stringify(context).length > maximumCharacters && context.citedEvidence.length > 1) {
+    context.citedEvidence.shift();
   }
   return Object.freeze(context);
 }

@@ -12,9 +12,13 @@ import {
   validateGroundedSpokenSentences,
 } from '../src/voice/interaction/grounded-llm-response.js';
 
-const genericKeys = [
+const legacyKeys = [
   'activeToolRequest', 'collectedInformation', 'currentTopic', 'knownEntities',
   'language', 'lastAnswer', 'pendingQuestion', 'recentTurns',
+].sort();
+const genericKeys = [...legacyKeys,
+  'activeCategory', 'activeEntity', 'activeTool', 'citedEvidence', 'collectedToolFields',
+  'latestIntent', 'pendingClarification',
 ].sort();
 const persisted = normalizeLiveCallFrame({
   currentStage: 'legacy-stage', activeCategory: { key: 'group-a', name: 'Group A' },
@@ -55,7 +59,7 @@ memory.setActiveToolRequest(null);
 assert.equal(memory.snapshot().activeToolRequest, null);
 
 const compact = compactLiveCallMemoryContext({ snapshot: memory.snapshot() });
-assert.deepEqual(Object.keys(compact).sort(), genericKeys);
+assert.deepEqual(Object.keys(compact).sort(), legacyKeys);
 
 const knowledge = {
   found: true, route: 'llm_first',

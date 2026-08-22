@@ -123,13 +123,15 @@ const checkpoint = buildConversationMemoryState({
   history: restoredSnapshot.messages,
   callFrame: restoredSnapshot,
 });
-assert.equal(checkpoint.schemaVersion, 2);
+assert.equal(checkpoint.schemaVersion, 3);
 assert.equal(checkpoint.lastCall.id, restorableIdentity.callId);
 assert.equal(checkpoint.callFrame.knownEntities[0].key, 'standard-plan');
 assert.equal(checkpoint.callFrame.recentTurns.length, 2);
 assert.deepEqual(checkpoint.callFrame.collectedInformation, { lead_name: 'Example Caller' });
 assert.equal(checkpoint.callFrame.activeToolRequest.name, 'configured-action');
 assert.deepEqual(Object.keys(checkpoint.callFrame).sort(), [
+  'activeCategory', 'activeEntity', 'activeTool', 'citedEvidence', 'collectedToolFields',
+  'latestIntent', 'memoryVersion', 'pendingClarification', 'scope',
   'activeToolRequest', 'collectedInformation', 'currentTopic', 'knownEntities',
   'language', 'lastAnswer', 'pendingQuestion', 'recentTurns',
 ].sort());

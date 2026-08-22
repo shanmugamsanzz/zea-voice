@@ -1,4 +1,5 @@
-export const KNOWLEDGE_DOCUMENT_CONTRACT_VERSION = 1;
+export const KNOWLEDGE_DOCUMENT_CONTRACT_VERSION = 2;
+export const SUPPORTED_KNOWLEDGE_DOCUMENT_CONTRACT_VERSIONS = Object.freeze([1, 2]);
 
 export const KNOWLEDGE_DOCUMENT_CONTRACTS = Object.freeze({
   catalog: Object.freeze({

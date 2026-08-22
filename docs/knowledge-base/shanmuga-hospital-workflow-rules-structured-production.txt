@@ -4,6 +4,7 @@ LANGUAGE: Tamil, Tanglish and English
 USAGE: Inbound and Outbound
 
 RULE: emergency_support
+INTENT_CLASS: SAFETY_EMERGENCY
 SITUATION: The caller describes severe chest pain, severe breathing difficulty, unconsciousness, stroke symptoms, uncontrolled bleeding or another urgent medical emergency.
 EXAMPLE: நெஞ்சு வலி ரொம்ப அதிகமா இருக்கு | மூச்சு விட முடியல | மயங்கி விழுந்துட்டாங்க | ரத்தம் நிற்காம வருது | severe chest pain | cannot breathe | unconscious | heavy bleeding
 MATCH_MODE: any_phrase
@@ -12,6 +13,7 @@ PRIORITY: 100
 RESPONSE: இது urgent medical situationஆ இருக்கலாம். உடனே அருகிலுள்ள emergency medical help எடுத்துக்கோங்க.
 
 RULE: caller_requests_end
+INTENT_CLASS: CALL_CONTROL
 SITUATION: The caller clearly asks to stop or end the conversation.
 EXAMPLE: call முடிச்சிடுங்க | பேச வேண்டாம் | போதும் | bye | goodbye | end the call | hang up
 MATCH_MODE: any_phrase
@@ -21,6 +23,7 @@ ACTION: end_call
 RESPONSE: Acknowledge the caller politely, use the configured closing message and end the call only after the closing audio completes.
 
 RULE: caller_not_interested
+INTENT_CLASS: CALL_CONTROL
 SITUATION: The caller clearly says they are not interested in the packages or check-up.
 EXAMPLE: வேண்டாம் | interest இல்லை | package வேண்டாம் | checkup வேண்டாம் | not interested
 MATCH_MODE: any_phrase
@@ -30,6 +33,7 @@ ACTION: end_call
 RESPONSE: Acknowledge politely without pressure, use the configured closing message and end the call.
 
 RULE: wrong_number
+INTENT_CLASS: CALL_CONTROL
 SITUATION: The caller says this is a wrong number or that they are not the intended person.
 EXAMPLE: wrong number | தப்பான number | நான் அந்த ஆள் இல்லை | you called the wrong person
 MATCH_MODE: any_phrase
@@ -39,12 +43,13 @@ ACTION: end_call
 RESPONSE: Apologize briefly, note that it is a wrong number, use the configured closing message and end the call without promoting a package.
 
 RULE: create_appointment
+INTENT_CLASS: ACTION_TOOL_REQUEST
 SITUATION: The caller explicitly requests to book an appointment for an already selected approved package.
 EXAMPLE: appointment book பண்ணுங்க | booking பண்ணலாம் | இந்த package book பண்ணுங்க | book an appointment | reserve this package
 MATCH_MODE: any_phrase
 RESPONSE_MODE: instruction
 PRIORITY: 96
-ACTION: create_appointment
+ACTION: create_appointment-1
 REQUIRES_CATALOG_ITEM: true
 BLOCKED_RESPONSE: Appointment book பண்ணலாம். முதல்ல எந்த approved Package வேணும்னு சொல்லுங்க.
 RESPONSE: Preserve the selected Catalog item. Collect only the missing UI-configured fields in their configured order. Read the details back once, request final confirmation, and execute the action only after confirmation. Never claim success without a verified successful tool result.
@@ -55,7 +60,7 @@ EXAMPLE: verified booking success | appointment tool success
 MATCH_MODE: any_phrase
 RESPONSE_MODE: instruction
 PRIORITY: 100
-ACTION: create_appointment
+ACTION: create_appointment-1
 RESPONSE: Confirm only the appointment details returned by the verified tool result. Then ask whether the caller has any other question.
 
 RULE: appointment_failure
@@ -64,7 +69,7 @@ EXAMPLE: booking failed | appointment tool timeout | appointment unavailable
 MATCH_MODE: any_phrase
 RESPONSE_MODE: instruction
 PRIORITY: 100
-ACTION: create_appointment
+ACTION: create_appointment-1
 RESPONSE: State clearly that the appointment was not confirmed. Preserve the collected information and provide only the configured retry or human-support option.
 
 RULE: callback_request

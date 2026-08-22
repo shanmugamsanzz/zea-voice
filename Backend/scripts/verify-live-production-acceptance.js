@@ -17,6 +17,11 @@ import { applyUnifiedGroundedTurn } from '../src/voice/interaction/unified-groun
 import { evidenceBelongsToRuntime } from '../src/voice/interaction/grounded-decision-security.js';
 import { configuredSafeFailureResponse } from '../src/voice/realtime-conversation-orchestrator.js';
 import { countTenantPointsByKnowledgeBaseRevision } from '../src/rag/qdrant.client.js';
+import {
+  createKnowledgeEngineInput,
+  isKnowledgeEngineDecision,
+  knowledgeEngineDecisionTypes,
+} from '../src/knowledge-engine/engine-contract.js';
 
 function argument(name, fallback = null) {
   const prefix = `--${name}=`;
@@ -184,7 +189,11 @@ function verifyTurnExpectations({
   }
   if ((turn.expectedResponseNodeKeys?.length ?? 0) > 0) {
     const expectedKeys = new Set(turn.expectedResponseNodeKeys.map(normalized));
-    const direct = tenantEvidence.directResponse;
+    const directRecordId = tenantEvidence.decision?.type === knowledgeEngineDecisionTypes.DIRECT
+      ? tenantEvidence.decision.response?.recordId : null;
+    const direct = (tenantEvidence.sources ?? []).find((source) => (
+      source.recordId === directRecordId
+    )) ?? null;
     const selectedPublishedResponse = (envelope?.sources ?? [])
       .find((source) => source.id === responseId) ?? null;
     const resolvedPublishedResponse = direct ?? selectedPublishedResponse;
@@ -377,18 +386,19 @@ try {
         const totalStartedAt = performance.now();
         const retrievalStartedAt = performance.now();
         const snapshot = memory.snapshot();
-        const tenantEvidence = await retrieveTenantEvidence(auth, {
+        const tenantEvidence = await retrieveTenantEvidence(auth, createKnowledgeEngineInput({
+          tenantId: auth.tenantId,
           agentId: agent.id,
-          query: utterance,
-          latestCallerUtterance: utterance,
-          latestRequestPriority: 'primary',
+          callId: call.id,
+          utterance,
           usageDirection: direction,
           language: snapshot.language,
-          knownEntities: snapshot.knownEntities,
-          pendingQuestion: snapshot.pendingQuestion?.text ?? null,
-          collectedInformation: snapshot.collectedInformation,
-          topK: 5,
-        });
+          memory: {
+            knownEntities: snapshot.knownEntities,
+            pendingQuestion: snapshot.pendingQuestion?.text ?? null,
+            collectedInformation: snapshot.collectedInformation,
+          },
+        }));
         const retrievalMs = performance.now() - retrievalStartedAt;
         const publicationRevisions = tenantEvidence.publicationRevisions ?? [];
         assert.ok(publicationRevisions.length > 0, `${call.id} turn ${index + 1}: no active publication revision`);
@@ -448,9 +458,9 @@ try {
             answer: source.content, recordType: source.recordType,
           })),
         };
-        const responseRouting = tenantEvidence.responseRouting ?? {
-          outcome: tenantEvidence.found ? 'grounded_llm' : 'clarify', reason: 'missing_evidence',
-        };
+        const engineDecision = tenantEvidence.decision;
+        assert.equal(isKnowledgeEngineDecision(engineDecision), true,
+          `${call.id} turn ${index + 1}: retrieval returned an invalid engine decision`);
         const token = memory.beginTurn(`${call.id}:${index + 1}`);
         memory.append({ role: 'user', content: utterance }, { turnToken: token });
         let finalDecision;
@@ -462,24 +472,24 @@ try {
         let envelope = null;
         let unifiedApplied = false;
         let groundedStateUpdate = null;
-        if (responseRouting.outcome === 'clarify') {
+        if (engineDecision.type === knowledgeEngineDecisionTypes.CLARIFY) {
           finalDecision = 'safe_failure';
           finalText = safeResponse;
           if (turn.allowSafeResponse !== true) {
-            throw new Error(`${call.id} turn ${index + 1}: unexpectedly routed to safe failure (${responseRouting.reason})`);
+            throw new Error(`${call.id} turn ${index + 1}: unexpectedly routed to safe failure (${engineDecision.reason})`);
           }
-        } else if (responseRouting.outcome === 'direct'
-          && tenantEvidence.directResponse?.content) {
+        } else if (engineDecision.type === knowledgeEngineDecisionTypes.DIRECT
+          && engineDecision.response?.text) {
           envelope = buildGroundingEnvelope(
             knowledge, { includePublishedMap: false, maximumSources: 5 },
           );
           const directEnvelopeSource = envelope.sources.find((source) => (
-            source.recordId === tenantEvidence.directResponse.recordId
+            source.recordId === engineDecision.response.recordId
           )) ?? null;
           assert.ok(directEnvelopeSource,
             `${call.id} turn ${index + 1}: directly matched response is missing from the grounding envelope`);
           finalDecision = 'answer';
-          finalText = tenantEvidence.directResponse.content;
+          finalText = engineDecision.response.text;
           responseId = directEnvelopeSource.id;
           selectedEvidenceIds = responseId ? [responseId] : [];
           selectedRecordIds = directEnvelopeSource.recordId
@@ -602,7 +612,7 @@ try {
           publicationRevisions, retrievedRecordIds, selectedEvidenceIds,
           selectedRecordIds, responseId, finalDecision, memory: finalMemory,
           retrievalTrace,
-          routing: responseRouting, expectation,
+          routing: engineDecision, expectation,
           language: replayLanguage,
           positiveSemanticRecordIds: positiveSemanticCandidates.map(sourceRecordId),
           toolSafe: true, ttsText: finalText, latencyMs: { retrievalMs, llmMs, totalMs },

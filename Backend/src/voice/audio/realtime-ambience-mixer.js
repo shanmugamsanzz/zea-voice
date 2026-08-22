@@ -144,6 +144,7 @@ export class RealtimeAmbienceMixer {
         durationMs: packetDurationMs,
         ambience: true,
         packetFrameCount: outputs.length,
+        playbackGroupId: firstSpeech?.playbackGroupId ?? null,
       });
       const deliveryMs = Math.max(0, Number(
         transport?.deliveryMs ?? (this.now() - deliveryStartedAt),
@@ -161,6 +162,8 @@ export class RealtimeAmbienceMixer {
         packetBytes: outputs.reduce((total, output) => total + output.length, 0),
         packetFrameCount: outputs.length,
         ambience: true,
+        playbackGroupId: firstSpeech?.playbackGroupId ?? null,
+        generationId: firstSpeech?.generationId ?? null,
       });
       this.metrics.framesSent += outputs.length;
       this.metrics.speechFramesMixed += speechFrames.length;
