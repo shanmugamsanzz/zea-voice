@@ -128,6 +128,16 @@ classification = classify('alpha');
 assert.equal(classification.intentClass, knowledgeQueryClasses.KNOWN_INFORMATION);
 assert.ok(classification.retrievalPlan.indexes.includes(knowledgeSearchIndexes.ANSWER_CARD));
 
+classification = classify('beta', {
+  memory: {
+    activeEntity: { recordId: alpha.record_id, key: 'alpha' },
+    pendingClarification: { kind: 'ambiguity', candidates: ['alpha', 'beta'] },
+  },
+});
+assert.equal(classification.intentClass, knowledgeQueryClasses.KNOWN_INFORMATION,
+  'A new high-confidence explicit entity must replace stale memory and clarification');
+assert.equal(classification.candidate.itemKey, 'beta');
+
 classification = classify('fact request', {
   memory: { activeEntity: { recordId: alpha.record_id, key: 'alpha' } },
   requestedFacts: ['tenant-defined-fact'],

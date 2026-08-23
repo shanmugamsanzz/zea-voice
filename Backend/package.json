@@ -70,6 +70,7 @@
     "verify:voice-audio-monitoring": "node scripts/verify-voice-audio-monitoring.js",
     "verify:voice-orchestrator": "node scripts/verify-voice-orchestrator.js",
     "verify:message-source-tracing": "node scripts/verify-message-source-tracing.js",
+    "verify:source-display-regression": "node scripts/verify-message-source-tracing.js && node scripts/verify-answer-source-ui-contract.js && node scripts/verify-knowledge-engine-acceptance.js --repeats=3",
     "verify:transcript-source-persistence": "node scripts/verify-transcript-source-persistence.js",
     "verify:call-review-source-isolation": "node scripts/verify-call-review-source-isolation.js",
     "verify:tts-usage-limit-settings": "node scripts/verify-tts-usage-limit-settings.js",

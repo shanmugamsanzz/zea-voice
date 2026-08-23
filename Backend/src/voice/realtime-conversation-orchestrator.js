@@ -1622,17 +1622,37 @@ export class RealtimeConversationOrchestrator {
         content: first?.content ?? null,
         source: first ? {
           recordId: first.recordId, knowledgeBaseId: first.knowledgeBaseId,
-          documentId: first.documentId, pageNumber: first.pageNumber,
+          publicationRevision: first.publicationRevision,
+          documentId: first.documentId, documentVersionId: first.documentVersionId,
+          documentName: first.documentName, documentDisplayName: first.documentDisplayName,
+          documentType: first.documentType, pageNumber: first.pageNumber, pageEnd: first.pageEnd,
+          sourceSection: first.sourceSection, sourceLineStart: first.sourceLineStart,
+          sourceLineEnd: first.sourceLineEnd,
         } : null,
         tenantEvidence,
         matches: (tenantEvidence.sources ?? []).map((source) => ({
-          id: source.recordId ?? source.id,
+          id: source.id,
+          recordId: source.recordId,
           answer: source.content,
           content: source.content,
           recordType: source.recordType,
+          recordName: source.authoritativeData?.name
+            ?? source.authoritativeData?.question
+            ?? source.authoritativeData?.heading
+            ?? source.authoritativeData?.nodeKey
+            ?? null,
           knowledgeBaseId: source.knowledgeBaseId,
+          publicationRevision: source.publicationRevision,
           documentId: source.documentId,
+          documentVersionId: source.documentVersionId,
+          documentName: source.documentName,
+          documentDisplayName: source.documentDisplayName,
+          documentType: source.documentType,
           pageNumber: source.pageNumber,
+          pageEnd: source.pageEnd,
+          sourceSection: source.sourceSection,
+          sourceLineStart: source.sourceLineStart,
+          sourceLineEnd: source.sourceLineEnd,
           score: source.score,
           callerFacing: source.callerFacing,
         })),
@@ -2635,9 +2655,11 @@ export class RealtimeConversationOrchestrator {
     }
     // Tenant evidence is interpreted by one grounded LLM turn. Runtime route
     // labels and Workflow instruction text never bypass that validation.
+    const candidateDecision = knowledge.tenantEvidence?.decision;
+    const engineDecision = isKnowledgeEngineDecision(candidateDecision)
+      ? candidateDecision : technicalClarificationDecision('invalid_engine_result');
     const sourceTrace = new MessageSourceTrace(
-      this.#baseLlmSources(),
-      knowledgeMessageSources(knowledge),
+      knowledgeMessageSources(knowledge, engineDecision.evidenceIds),
     );
     if (epoch !== this.epoch || this.finalized) return;
     const sentencePipeline = this.#createSentenceTtsPipeline(
@@ -2656,9 +2678,6 @@ export class RealtimeConversationOrchestrator {
       isCurrent: () => !this.#isStaleGeneration(epoch),
     };
     let response;
-    const candidateDecision = knowledge.tenantEvidence?.decision;
-    const engineDecision = isKnowledgeEngineDecision(candidateDecision)
-      ? candidateDecision : technicalClarificationDecision('invalid_engine_result');
     if (engineDecision.type !== knowledgeEngineDecisionTypes.LLM) {
       const selectedEvidence = (knowledge.tenantEvidence?.sources ?? []).filter((source) => (
         engineDecision.evidenceIds.includes(source.id)
@@ -2693,6 +2712,11 @@ export class RealtimeConversationOrchestrator {
           id: source.id,
           recordId: source.recordId,
           recordType: source.recordType,
+          recordName: source.authoritativeData?.name
+            ?? source.authoritativeData?.question
+            ?? source.authoritativeData?.heading
+            ?? source.authoritativeData?.nodeKey
+            ?? null,
         })),
       });
     }
@@ -2955,7 +2979,10 @@ export class RealtimeConversationOrchestrator {
         label: 'No-response fallback',
       }));
     }
-    sentencePipeline.setSources(sourceTrace.snapshot());
+    const factualAnswerSources = sourceTrace.snapshot().filter((source) => (
+      source.type === messageSourceTypes.KNOWLEDGE && Boolean(source.metadata?.documentId)
+    ));
+    sentencePipeline.setSources(factualAnswerSources);
     await sentencePipeline.waitUntilStarted();
     const playback = await sentencePipeline.finish();
     // The caller can interrupt while this older LLM/TTS generation is still
@@ -2972,7 +2999,7 @@ export class RealtimeConversationOrchestrator {
     const answer = playback.spokenText
       || sentencePipeline.completedText()
       || this.#fitTtsMessage(unconstrainedAnswer);
-    await this.controller.setAssistantResponse(answer, Date.now(), { sources: sourceTrace.snapshot() });
+    await this.controller.setAssistantResponse(answer, Date.now(), { sources: factualAnswerSources });
     sentencePipeline.markTranscriptCommitted();
     if (this.#isStaleGeneration(epoch) || this.controller.state !== callStates.SPEAKING) return;
     await this.controller.playbackComplete();

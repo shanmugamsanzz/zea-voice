@@ -84,21 +84,45 @@ export class MessageSourceTrace {
   }
 }
 
-export function knowledgeMessageSources(result) {
+export function knowledgeMessageSources(result, selectedEvidenceIds = []) {
   if (!result?.found) return Object.freeze([]);
-  const records = result.matches?.length ? result.matches : [result.source ?? {}];
-  return mergeMessageSources(records.map((record) => createMessageSource(messageSourceTypes.KNOWLEDGE, {
+  const selected = new Set(selectedEvidenceIds.map((value) => String(value ?? '').trim().toLocaleLowerCase()));
+  const records = (result.matches?.length ? result.matches : [result.source ?? {}]).filter((record) => (
+    record.callerFacing !== false && (
+      !selected.size
+      || selected.has(String(record.id ?? '').trim().toLocaleLowerCase())
+      || selected.has(String(record.recordId ?? '').trim().toLocaleLowerCase())
+    )
+  ));
+  const uniqueRecords = new Map();
+  for (const record of records) {
+    const key = [record.recordId ?? record.id, record.documentId ?? record.document_id,
+      record.pageNumber ?? record.page_number, record.pageEnd ?? record.page_end].join(':');
+    if (!uniqueRecords.has(key)) uniqueRecords.set(key, record);
+  }
+  return mergeMessageSources([...uniqueRecords.values()].map((record) => createMessageSource(messageSourceTypes.KNOWLEDGE, {
     id: record.recordId ?? record.id,
-    label: result.route,
+    label: record.documentDisplayName ?? record.document_display_name
+      ?? record.documentName ?? record.document_name ?? 'Published knowledge',
     metadata: {
-      route: result.route,
       knowledgeBaseId: record.knowledgeBaseId ?? record.knowledge_base_id,
       documentId: record.documentId ?? record.document_id,
       documentVersionId: record.documentVersionId ?? record.document_version_id,
       documentName: record.documentName ?? record.document_name,
+      documentDisplayName: record.documentDisplayName ?? record.document_display_name,
+      documentType: record.documentType ?? record.document_type,
       pageNumber: record.pageNumber ?? record.page_number,
       pageEnd: record.pageEnd ?? record.page_end,
+      sourceSection: record.sourceSection ?? record.source_section,
+      sourceLineStart: record.sourceLineStart ?? record.source_line_start,
+      sourceLineEnd: record.sourceLineEnd ?? record.source_line_end,
+      publicationRevision: record.publicationRevision ?? record.publication_revision,
       recordType: record.recordType ?? record.record_type,
+      recordName: record.recordName ?? record.record_name
+        ?? record.authoritativeData?.name ?? record.authoritative_data?.name
+        ?? record.authoritativeData?.question ?? record.authoritative_data?.question
+        ?? record.authoritativeData?.heading ?? record.authoritative_data?.heading
+        ?? record.authoritativeData?.nodeKey ?? record.authoritative_data?.nodeKey,
       score: record.score,
       cacheHit: result.cacheHit === true,
     },

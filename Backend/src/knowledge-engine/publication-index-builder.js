@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { AppError } from '../middleware/errors.js';
 
-export const KNOWLEDGE_PUBLICATION_BUNDLE_VERSION = 2;
+export const KNOWLEDGE_PUBLICATION_BUNDLE_VERSION = 3;
 
 const ROUTABLE_RECORD_TYPES = new Set(['faq', 'catalog_item', 'workflow_rule', 'conversation_node']);
 
@@ -199,8 +199,10 @@ function categoryCandidates(records) {
     const current = categories.get(key) ?? {
       key,
       label: String(record.entity_category ?? metadata.categoryKey ?? '').trim(),
+      description: String(metadata.categoryDescription ?? '').trim() || null,
       phrases: [],
       recordIds: [],
+      children: [],
     };
     current.phrases.push(
       record.entity_category,
@@ -208,6 +210,11 @@ function categoryCandidates(records) {
       ...stringArray(record.entity_category_aliases),
     );
     current.recordIds.push(record.record_id);
+    current.children.push(Object.freeze({
+      recordId: record.record_id,
+      itemKey: metadata.itemKey ?? null,
+      label: String(record.entity_name ?? '').trim() || null,
+    }));
     categories.set(key, current);
   }
   return [...categories.values()].map((category) => ({
@@ -231,6 +238,8 @@ function categoryInvertedIndex(categories, field) {
           label: category.label,
           itemKey: null,
           categoryKey: category.key,
+          categoryDescription: category.description,
+          children: Object.freeze([...category.children]),
           answerCardId: null,
         }));
       }

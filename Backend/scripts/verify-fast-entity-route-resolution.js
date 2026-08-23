@@ -59,7 +59,14 @@ const ambiguousTwo = record(4, {
   entity_name: 'Shared route two', entity_aliases: ['shared'],
   entity_metadata: { itemKey: 'shared-two', categoryKey: 'published-options' },
 });
-const bundle = buildPublicationIndexes(job, [alpha, beta, ambiguousOne, ambiguousTwo]);
+const genericConversation = {
+  ...record(5, {}),
+  record_type: 'conversation_node',
+  question: 'Generic overview', answer: 'Generic overview response.', content: 'Generic overview response.',
+  entity_name: 'Generic overview', entity_aliases: ['Alpha Prime'], entity_category_aliases: [],
+  entity_metadata: { intentClass: 'KNOWN_INFORMATION' },
+};
+const bundle = buildPublicationIndexes(job, [alpha, beta, ambiguousOne, ambiguousTwo, genericConversation]);
 
 function input(utterance, memory = {}) {
   return createKnowledgeEngineInput({ tenantId, agentId, callId, utterance, memory });
@@ -70,6 +77,8 @@ assert.equal(result.confidence, knowledgeResolutionConfidence.HIGH);
 assert.equal(result.action, knowledgeResolutionActions.CONTINUE);
 assert.equal(result.candidate.itemKey, 'alpha-prime');
 assert.equal(result.candidate.method, 'exact');
+assert.equal(result.candidate.recordType, 'CATALOG_ITEM',
+  'A specific Catalog entity must override a colliding generic Conversation route');
 
 result = resolvePublishedEntityRoute(input('Please explain the starter choice'), bundle);
 assert.equal(result.confidence, knowledgeResolutionConfidence.HIGH);
@@ -89,6 +98,7 @@ assert.equal(result.confidence, knowledgeResolutionConfidence.HIGH);
 assert.equal(result.candidate.entityType, 'CATEGORY');
 assert.equal(result.candidate.categoryKey, 'published-options');
 assert.equal(result.candidate.evidenceRecordIds.length, 4);
+assert.equal(result.candidate.children.length, 4);
 
 result = resolvePublishedEntityRoute(input('Beta Voise'), bundle);
 assert.ok([knowledgeResolutionConfidence.HIGH, knowledgeResolutionConfidence.MEDIUM].includes(result.confidence));

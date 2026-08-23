@@ -124,8 +124,8 @@ const sourceDisplay: Record<MessageSourceType, { label: string; icon: typeof Dat
 function sourceDescription(source: MessageSource) {
   const metadata = source.metadata ?? {};
   if (source.type === 'knowledge') {
-    const document = metadata.documentName || source.label || 'Published knowledge';
-    const page = metadata.pageNumber ? ` · page ${metadata.pageNumber}${metadata.pageEnd && metadata.pageEnd !== metadata.pageNumber ? `–${metadata.pageEnd}` : ''}` : '';
+    const document = metadata.documentDisplayName || metadata.documentName || source.label || 'Published knowledge';
+    const page = metadata.pageNumber ? ` · Page ${metadata.pageNumber}${metadata.pageEnd && metadata.pageEnd !== metadata.pageNumber ? `–${metadata.pageEnd}` : ''}` : '';
     return `${document}${page}`;
   }
   if (source.type === 'tool') return `${source.label || 'Assigned tool'} · ${metadata.success === true ? 'successful' : 'used'}`;
@@ -135,8 +135,32 @@ function sourceDescription(source: MessageSource) {
   return String(source.label || sourceDisplay[source.type]?.label || source.type).replaceAll('_', ' ');
 }
 
+function knowledgeRecordDescription(source: MessageSource) {
+  const metadata = source.metadata ?? {};
+  const recordType = String(metadata.recordType ?? '').toLocaleUpperCase();
+  const typeLabel: Record<string, string> = {
+    CATALOG_ITEM: 'Catalog item', CATALOG_CATEGORY: 'Catalog category', FAQ: 'FAQ',
+    CONVERSATION_NODE: 'Conversation', GENERAL_KNOWLEDGE: 'General knowledge',
+  };
+  const name = String(metadata.recordName ?? metadata.sourceSection ?? '').trim();
+  return [name, typeLabel[recordType] ?? 'Published record'].filter(Boolean).join(' · ');
+}
+
+function callerFacingAnswerSources(values: MessageSource[]) {
+  const seen = new Set<string>();
+  return values.filter((source) => {
+    const metadata = source.metadata ?? {};
+    if (source.type !== 'knowledge' || !metadata.documentId
+      || !(metadata.documentDisplayName || metadata.documentName)) return false;
+    const key = [source.id, metadata.documentId, metadata.pageNumber, metadata.pageEnd].join(':');
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function TranscriptMessage({ entry, showSources = true }: { entry: TranscriptEntry; showSources?: boolean }) {
-  const sources = Array.isArray(entry.sources) ? entry.sources : [];
+  const sources = callerFacingAnswerSources(Array.isArray(entry.sources) ? entry.sources : []);
   return <div className={`flex flex-col ${entry.speaker === 'agent' ? 'items-end' : 'items-start'}`}>
     <span className="mb-1 text-[9px] font-black uppercase tracking-wider text-slate-400">{entry.speaker} · {elapsed(entry.offsetMs)}</span>
     <div className={`max-w-[88%] rounded-2xl px-4 py-3 text-xs font-semibold leading-relaxed ${entry.speaker === 'agent' ? 'rounded-tr-none bg-gradient-to-r from-violet-600 to-pink-500 text-white' : entry.speaker === 'system' ? 'border border-amber-200 bg-amber-50 text-amber-800' : 'rounded-tl-none border border-slate-200 bg-slate-50 text-slate-800'}`}>{entry.text}</div>
@@ -147,11 +171,11 @@ function TranscriptMessage({ entry, showSources = true }: { entry: TranscriptEnt
       </summary>
       <div className="space-y-2 border-t border-slate-100 p-3">
         {sources.map((source, index) => {
-          const display = sourceDisplay[source.type] ?? sourceDisplay.runtime_fallback;
+          const display = sourceDisplay.knowledge;
           const Icon = display.icon;
           return <div key={`${source.type}-${String(source.id ?? source.label ?? index)}-${index}`} className="flex items-start gap-2">
             <span className={`mt-0.5 rounded-md border p-1 ${display.style}`}><Icon className="h-3 w-3" /></span>
-            <div className="min-w-0"><p className="text-[9px] font-black uppercase tracking-wider text-slate-500">{display.label}</p><p className="mt-0.5 break-words text-[10px] font-semibold leading-relaxed text-slate-700">{sourceDescription(source)}</p></div>
+            <div className="min-w-0"><p className="break-words text-[10px] font-bold leading-relaxed text-slate-800">{sourceDescription(source)}</p><p className="mt-0.5 break-words text-[10px] font-semibold leading-relaxed text-slate-600">{knowledgeRecordDescription(source)}</p></div>
           </div>;
         })}
       </div>

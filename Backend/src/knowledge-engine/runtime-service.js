@@ -98,6 +98,14 @@ function publicationRecord(record, answerCards) {
   return Object.freeze({
     record_id: recordId, record_type: recordType,
     document_id: record.documentId, document_version_id: record.documentVersionId,
+    document_name: record.documentName ?? null,
+    document_display_name: record.documentDisplayName ?? null,
+    document_type: record.documentType ?? null,
+    source_page_start: record.pageNumber ?? null,
+    source_page_end: record.pageEnd ?? record.pageNumber ?? null,
+    source_section: record.sourceSection ?? null,
+    source_line_start: record.sourceLineStart ?? null,
+    source_line_end: record.sourceLineEnd ?? null,
     language: record.language ?? 'und', usage_direction: record.usageDirection ?? 'both',
     question: recordType === 'faq' ? record.label : null,
     answer: answerCard?.text ?? record.summary, content: record.summary ?? answerCard?.text,
@@ -246,10 +254,13 @@ function publicationRevisions(publications = []) {
 
 function publicResult(observed, publications) {
   const evidence = observed.authoritative.evidence ?? [];
+  const selectedIds = new Set((observed.decision?.evidenceIds ?? []).map(normalizeId));
+  const selectedCallerFacing = evidence.filter((source) => source.callerFacing === true
+    && (selectedIds.has(normalizeId(source.id)) || selectedIds.has(normalizeId(source.recordId))));
   return Object.freeze({
     operation: 'knowledge_engine_runtime', engineVersion: KNOWLEDGE_ENGINE_RUNTIME_VERSION,
     route: 'knowledge_engine', found: evidence.length > 0, decision: observed.decision,
-    sources: Object.freeze(evidence.filter((source) => source.callerFacing === true)),
+    sources: Object.freeze(selectedCallerFacing),
     actionEvidence: Object.freeze(evidence.filter((source) => source.recordType === 'WORKFLOW_RULE')),
     guidanceEvidence: Object.freeze(evidence.filter((source) => (
       source.recordType === 'CONVERSATION_NODE' && source.callerFacing === false
@@ -261,7 +272,7 @@ function publicResult(observed, publications) {
         category: source.authoritativeData?.category ?? null,
         categoryKey: source.authoritativeData?.categoryKey ?? null,
       }))),
-    evidenceIds: Object.freeze(evidence.map((source) => source.id)),
+    evidenceIds: Object.freeze(selectedCallerFacing.map((source) => source.id)),
     // Publication availability is independent of whether this particular
     // utterance produced a ranked candidate. Reporting only candidate
     // revisions made healthy assigned publications look unavailable.

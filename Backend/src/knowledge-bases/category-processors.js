@@ -8,7 +8,9 @@ import { normalizeConfiguredToolIdentifier } from './knowledge-record-validation
 import { normalizeKnowledgeIntentClass } from '../knowledge-engine/query-classifier.js';
 
 function nonEmptyLines(extraction) {
-  return extraction.pages.flatMap((page) => page.lines.map((text) => ({ pageNumber: page.pageNumber, text })))
+  return extraction.pages.flatMap((page) => page.lines.map((text, index) => ({
+    pageNumber: page.pageNumber, lineNumber: index + 1, text,
+  })))
     .filter((line) => line.text.trim());
 }
 
@@ -29,6 +31,9 @@ function parseFaq(extraction) {
           metadata: current.intentClass ? { intentClass: current.intentClass } : {},
           sourcePageStart: current.pageNumber,
           sourcePageEnd: current.lastPageNumber,
+          sourceSection: current.question,
+          sourceLineStart: current.lineNumber,
+          sourceLineEnd: current.lastLineNumber,
         });
       }
     }
@@ -42,6 +47,7 @@ function parseFaq(extraction) {
     if (explicitAliases && current) {
       current.aliases.push(...explicitAliases[1].split('|').map((value) => value.trim()).filter(Boolean));
       current.lastPageNumber = line.pageNumber;
+      current.lastLineNumber = line.lineNumber;
       continue;
     }
     if (explicitIntentClass && current) {
@@ -49,6 +55,7 @@ function parseFaq(extraction) {
       if (intentClass) current.intentClass = intentClass;
       else errors.push(`FAQ question on page ${line.pageNumber} has an unsupported INTENT_CLASS`);
       current.lastPageNumber = line.pageNumber;
+      current.lastLineNumber = line.lineNumber;
       continue;
     }
     const isQuestion = explicitQuestion || line.text.endsWith('?');
@@ -61,12 +68,15 @@ function parseFaq(extraction) {
         answer: [],
         pageNumber: line.pageNumber,
         lastPageNumber: line.pageNumber,
+        lineNumber: line.lineNumber,
+        lastLineNumber: line.lineNumber,
       };
       continue;
     }
     if (current) {
       current.answer.push(explicitAnswer?.[1] ?? line.text);
       current.lastPageNumber = line.pageNumber;
+      current.lastLineNumber = line.lineNumber;
     }
   }
   flush();
@@ -278,6 +288,9 @@ function parseCatalog(extraction) {
       sourceText: lines[index].text,
       sourcePageStart: lines[index].pageNumber,
       sourcePageEnd: lines[index].pageNumber,
+      sourceSection: category?.key ?? itemKey,
+      sourceLineStart: lines[index].lineNumber,
+      sourceLineEnd: lines[index].lineNumber,
       displayOrder: items.length,
     });
   }
@@ -367,6 +380,9 @@ function parseWorkflowRules(extraction) {
         sourceText: structuredRule.sourceLines.join('\n'),
         sourcePageStart: structuredRule.sourcePageStart,
         sourcePageEnd: structuredRule.sourcePageEnd,
+        sourceSection: name,
+        sourceLineStart: structuredRule.sourceLineStart,
+        sourceLineEnd: structuredRule.sourceLineEnd,
         priority: structuredRule.priority ?? (records.length * 10 + 100),
       });
     }
@@ -386,10 +402,12 @@ function parseWorkflowRules(extraction) {
           blockedResponse: '', scenario: false, targetCategoryKey: '', targetItemKey: '',
           confidenceOutcome: '', intentClass: '',
           sourceLines: [line.text], sourcePageStart: line.pageNumber, sourcePageEnd: line.pageNumber,
+          sourceLineStart: line.lineNumber, sourceLineEnd: line.lineNumber,
         };
       } else if (structuredRule) {
         structuredRule.sourceLines.push(line.text);
         structuredRule.sourcePageEnd = line.pageNumber;
+        structuredRule.sourceLineEnd = line.lineNumber;
         if (['MATCH', 'SITUATION', 'EXAMPLE'].includes(field)) structuredRule.match.push(value);
         else if (field === 'MATCH_MODE') structuredRule.matchMode = value;
         else if (field === 'INTENT_CLASS') structuredRule.intentClass = value;
@@ -414,12 +432,14 @@ function parseWorkflowRules(extraction) {
       if (/^\s*[A-Z][A-Z0-9_]*\s*:/u.test(line.text)) {
         structuredRule.sourceLines.push(line.text);
         structuredRule.sourcePageEnd = line.pageNumber;
+        structuredRule.sourceLineEnd = line.lineNumber;
         continue;
       }
       if (structuredRule.response.length) {
         structuredRule.response.push(line.text.trim());
         structuredRule.sourceLines.push(line.text);
         structuredRule.sourcePageEnd = line.pageNumber;
+        structuredRule.sourceLineEnd = line.lineNumber;
       }
       continue;
     }
@@ -469,6 +489,9 @@ function parseConversation(extraction) {
         sourceText: block.sourceLines.join('\n'),
         sourcePageStart: block.sourcePageStart,
         sourcePageEnd: block.sourcePageEnd,
+        sourceSection: block.stage,
+        sourceLineStart: block.sourceLineStart,
+        sourceLineEnd: block.sourceLineEnd,
       });
     }
     block = null;
@@ -485,10 +508,12 @@ function parseConversation(extraction) {
           purpose: '', situation: '', examples: [], matchMode: '', context: '', response: [], nextQuestion: '', sourceLines: [line.text],
           intentClass: '',
           sourcePageStart: line.pageNumber, sourcePageEnd: line.pageNumber,
+          sourceLineStart: line.lineNumber, sourceLineEnd: line.lineNumber,
         };
       } else if (block) {
         block.sourceLines.push(line.text);
         block.sourcePageEnd = line.pageNumber;
+        block.sourceLineEnd = line.lineNumber;
         if (name === 'FLOW') block.flow = value;
         else if (name === 'TYPE') block.type = value;
         else if (name === 'LANGUAGE') block.language = value;
@@ -514,11 +539,13 @@ function parseConversation(extraction) {
       if (/^\s*[A-Z][A-Z0-9_]*\s*:/u.test(line.text)) {
         block.sourceLines.push(line.text);
         block.sourcePageEnd = line.pageNumber;
+        block.sourceLineEnd = line.lineNumber;
         continue;
       }
       if (block.response.length) block.response.push(line.text.trim());
       block.sourceLines.push(line.text);
       block.sourcePageEnd = line.pageNumber;
+      block.sourceLineEnd = line.lineNumber;
     } else {
       // Backward-compatible plain-line scripts remain valid.
       records.push({
@@ -526,6 +553,8 @@ function parseConversation(extraction) {
         sequenceOrder: records.length, isEntry: records.length === 0, content: line.text,
         variables: [], transitions: [], sourceText: line.text,
         sourcePageStart: line.pageNumber, sourcePageEnd: line.pageNumber,
+        sourceSection: `node_${records.length + 1}`,
+        sourceLineStart: line.lineNumber, sourceLineEnd: line.lineNumber,
       });
     }
   }

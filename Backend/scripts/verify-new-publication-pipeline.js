@@ -30,6 +30,13 @@ const common = (index, recordType) => ({
   usage_direction: 'both',
   language: 'en',
   source_page_start: 1,
+  source_page_end: 2,
+  document_name: `uploaded-${index}.pdf`,
+  document_display_name: `Tenant Document ${index}`,
+  document_type: recordType === 'catalog_item' ? 'catalog' : null,
+  source_section: `section-${index}`,
+  source_line_start: 10 + index,
+  source_line_end: 12 + index,
 });
 const records = [
   {
@@ -101,7 +108,11 @@ const extraction = {
   fullText: 'Q: Is this versioned?\nA: Yes.',
   pages: [{ pageNumber: 1, lines: ['Q: Is this versioned?', 'A: Yes.'] }],
 };
-assert.equal(processExtractedCategory('faq', extraction).parserVersion, 2);
+const parsedFaq = processExtractedCategory('faq', extraction);
+assert.equal(parsedFaq.parserVersion, 2);
+assert.equal(parsedFaq.records[0].sourceSection, 'Is this versioned?');
+assert.equal(parsedFaq.records[0].sourceLineStart, 1);
+assert.equal(parsedFaq.records[0].sourceLineEnd, 2);
 assert.equal(processExtractedCategory('faq', extraction, { parserVersion: 1 }).parserVersion, 1);
 assert.throws(() => processExtractedCategory('faq', extraction, { parserVersion: 99 }), /parser version/u);
 
@@ -154,6 +165,13 @@ assert.deepEqual(new Set(Object.keys(artifacts.keys)), new Set([
 ]));
 assert.equal(JSON.parse(await cache.get(artifacts.keys.manifest)).contentHash, bundle.manifest.contentHash);
 assert.ok(JSON.parse(await cache.get(artifacts.keys.entity)).exact['example plan']);
+const cachedEvidence = JSON.parse(await cache.get(artifacts.keys.evidence)).records[0];
+assert.equal(cachedEvidence.documentName, 'uploaded-0.pdf');
+assert.equal(cachedEvidence.documentDisplayName, 'Tenant Document 0');
+assert.equal(cachedEvidence.pageNumber, 1);
+assert.equal(cachedEvidence.pageEnd, 2);
+assert.equal(cachedEvidence.sourceSection, 'section-0');
+assert.equal(cachedEvidence.sourceLineStart, 10);
 
 const implementation = await readFile(
   new URL('../src/knowledge-engine/publication-index-builder.js', import.meta.url),

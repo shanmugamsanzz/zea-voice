@@ -108,6 +108,8 @@ assert.deepEqual(hydrated.evidence.map((entry) => entry.rank),
   [...hydrated.evidence.map((entry) => entry.rank)].sort((left, right) => left - right));
 assert.equal(hydrated.evidence.every((entry) => entry.hydrationValidated
   && entry.publicationValidated), true);
+assert.equal(hydrated.evidence.every((entry) => entry.documentName === 'tenant-source.txt'), true);
+assert.equal(hydrated.evidence.every((entry) => entry.pageNumber === 1), true);
 assert.equal(hydrated.ambiguity.detected, true);
 assert.equal(hydrated.conflict.detected, true);
 assert.equal(hydrated.conflict.conflicts[0].identity, 'catalog:options:shared item');

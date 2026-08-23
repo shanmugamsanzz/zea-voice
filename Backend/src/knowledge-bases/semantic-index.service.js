@@ -62,12 +62,18 @@ export function buildSemanticPoint(job, record, vector) {
     assignedAgentIds: job.assigned_agent_ids ?? [],
     documentType: documentTypeByRecordType[record.record_type],
     ...(record.source_page_start ? { pageNumber: record.source_page_start } : {}),
+    ...(record.source_page_end ? { pageEnd: record.source_page_end } : {}),
   });
   return {
     id: record.record_id,
     vector,
     payload: {
       ...payload,
+      document_name: record.document_name ?? null,
+      document_display_name: record.document_display_name ?? null,
+      source_section: record.source_section ?? null,
+      source_line_start: record.source_line_start ?? null,
+      source_line_end: record.source_line_end ?? null,
       ...(record.question ? { question: record.question, answer: record.answer } : {}),
       ...(record.entity_name ? { entity_name: record.entity_name } : {}),
       ...(record.entity_category ? { entity_category: record.entity_category } : {}),
@@ -191,7 +197,8 @@ async function loadSemanticRecords(job, contextRunner) {
       `SELECT f.id AS record_id, 'faq'::text AS record_type,
           f.document_id, f.document_version_id, f.usage_direction,
           COALESCE(NULLIF(f.language, ''), NULLIF(d.metadata->>'language', ''), 'und') AS language,
-          f.source_page_start, f.question, f.answer,
+          f.source_page_start, f.source_page_end, f.source_section,
+          f.source_line_start, f.source_line_end, f.question, f.answer,
           ('Question: ' || f.question || E'\nAnswer: ' || f.answer) AS content,
           NULL::text AS entity_name, NULL::text AS entity_category,
           '[]'::jsonb AS entity_aliases, '[]'::jsonb AS entity_category_aliases,
@@ -208,7 +215,8 @@ async function loadSemanticRecords(job, contextRunner) {
        SELECT c.id, 'knowledge_chunk'::text,
           c.document_id, c.document_version_id, c.usage_direction,
           COALESCE(NULLIF(d.metadata->>'language', ''), 'und'),
-          c.source_page_start, NULL::text, c.content, c.content,
+          c.source_page_start, c.source_page_end, c.source_section,
+          c.source_line_start, c.source_line_end, NULL::text, c.content, c.content,
           NULL::text, NULL::text, '[]'::jsonb, '[]'::jsonb, '{}'::jsonb
          FROM knowledge_chunks c
          JOIN knowledge_documents d
@@ -222,7 +230,8 @@ async function loadSemanticRecords(job, contextRunner) {
        SELECT si.id, 'catalog_item'::text,
           si.document_id, si.document_version_id, kb.usage_direction,
           COALESCE(NULLIF(d.metadata->>'language', ''), 'und'),
-          si.source_page_start, si.name,
+          si.source_page_start, si.source_page_end, si.source_section,
+          si.source_line_start, si.source_line_end, si.name,
           concat_ws(' ', si.name,
             NULLIF(si.description, ''),
             CASE WHEN si.price IS NOT NULL
@@ -270,7 +279,8 @@ async function loadSemanticRecords(job, contextRunner) {
        SELECT w.id, 'workflow_rule'::text,
           w.document_id, w.document_version_id, w.usage_direction,
           COALESCE(NULLIF(d.metadata->>'language', ''), 'und'),
-          w.source_page_start, w.name, w.response_template,
+          w.source_page_start, w.source_page_end, w.source_section,
+          w.source_line_start, w.source_line_end, w.name, w.response_template,
           concat_ws(E'\n',
             'Workflow: ' || w.name,
             'Intent: ' || w.intent,
@@ -301,7 +311,8 @@ async function loadSemanticRecords(job, contextRunner) {
        SELECT cf.id, 'conversation_node'::text,
           cf.document_id, cf.document_version_id, cf.usage_direction,
           COALESCE(NULLIF(cf.language, ''), NULLIF(d.metadata->>'language', ''), 'und'),
-          cf.source_page_start, cf.node_key, cf.content,
+          cf.source_page_start, cf.source_page_end, cf.source_section,
+          cf.source_line_start, cf.source_line_end, cf.node_key, cf.content,
           concat_ws(E'\n',
             'Conversation guidance: ' || cf.content,
             'Flow: ' || cf.flow_key,
@@ -366,7 +377,29 @@ async function loadPublicationVersions(job, contextRunner) {
         ORDER BY d.id`,
       [job.tenant_id, job.knowledge_base_id],
     );
-    return result.rows;
+    const documents = await client.query(
+      `SELECT id, original_filename, display_name, document_type::text
+         FROM knowledge_documents
+        WHERE tenant_id=$1 AND knowledge_base_id=$2 AND deleted_at IS NULL`,
+      [job.tenant_id, job.knowledge_base_id],
+    );
+    const provenance = new Map(documents.rows.map((document) => [String(document.id), document]));
+    return result.rows.map((record) => {
+      const document = provenance.get(String(record.document_id)) ?? {};
+      const metadata = record.entity_metadata && typeof record.entity_metadata === 'object'
+        ? record.entity_metadata : {};
+      return {
+        ...record,
+        document_name: document.original_filename ?? null,
+        document_display_name: document.display_name ?? null,
+        document_type: document.document_type ?? documentTypeByRecordType[record.record_type],
+        source_page_end: record.source_page_end ?? record.source_page_start ?? null,
+        source_section: record.source_section
+          ?? metadata.nodeKey ?? metadata.itemKey ?? metadata.conditions?.intentClass ?? null,
+        source_line_start: record.source_line_start ?? metadata.sourceLineStart ?? null,
+        source_line_end: record.source_line_end ?? metadata.sourceLineEnd ?? null,
+      };
+    });
   });
 }
 

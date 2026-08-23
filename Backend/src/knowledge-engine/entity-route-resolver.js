@@ -73,12 +73,20 @@ function fuzzyPhraseScore(query, phrase) {
     ...queryTokens.map((queryToken) => stringSimilarity(queryToken, phraseToken)),
   ));
   const matched = bestForPhrase.filter((score) => score >= 0.72);
-  if (!matched.length) return 0;
+  const queryPhonetic = buildPublicationPhraseForms([query]).phonetic[0] ?? '';
+  const phrasePhonetic = buildPublicationPhraseForms([phrase]).phonetic[0] ?? '';
+  const phoneticSimilarity = stringSimilarity(
+    queryPhonetic.replace(/\s+/gu, ''), phrasePhonetic.replace(/\s+/gu, ''),
+  );
+  if (!matched.length) return phoneticSimilarity >= 0.72 ? phoneticSimilarity * 0.94 : 0;
   const coverage = matched.length / phraseTokens.length;
   const average = matched.reduce((total, score) => total + score, 0) / matched.length;
   const lengthCompatibility = Math.min(queryTokens.length, phraseTokens.length)
     / Math.max(queryTokens.length, phraseTokens.length);
-  return boundedScore(average * (0.62 + coverage * 0.28 + lengthCompatibility * 0.1));
+  return boundedScore(Math.max(
+    average * (0.62 + coverage * 0.28 + lengthCompatibility * 0.1),
+    phoneticSimilarity * 0.94,
+  ));
 }
 
 function recordLabel(record) {
@@ -99,6 +107,8 @@ function canonicalRecord(record) {
     label: recordLabel(record),
     itemKey: String(metadata.itemKey ?? record?.itemKey ?? '').trim() || null,
     categoryKey: String(metadata.categoryKey ?? record?.categoryKey ?? '').trim() || null,
+    categoryDescription: String(metadata.categoryDescription ?? record?.categoryDescription ?? '').trim() || null,
+    children: Object.freeze([...(record?.children ?? [])]),
     category: String(record?.entity_category ?? record?.category ?? '').trim() || null,
     answerCard: record?.approvedAnswerCard ?? record?.answerCard ?? null,
     intentClass: String(conditions.intentClass ?? metadata.intentClass ?? record?.intentClass ?? '').trim() || null,
@@ -119,6 +129,8 @@ function indexedCandidate(candidate, records) {
     label: candidate.label ?? record.category ?? record.label,
     itemKey: null,
     categoryKey: candidate.categoryKey ?? record.categoryKey,
+    categoryDescription: candidate.categoryDescription ?? record.categoryDescription,
+    children: Object.freeze([...(candidate.children ?? [])]),
     evidenceRecordIds: candidate.evidenceRecordIds ?? [record.recordId],
     answerCard: null,
   };
@@ -225,8 +237,8 @@ function indexedSignals(accumulator, index, query, queryForms, records) {
   }
 }
 
-function fuzzySignals(accumulator, routeIndex, query, records) {
-  for (const [phrase, indexedCandidates] of Object.entries(routeIndex?.exact ?? {})) {
+function fuzzySignals(accumulator, index, query, records) {
+  for (const [phrase, indexedCandidates] of Object.entries(index?.exact ?? {})) {
     const similarity = fuzzyPhraseScore(query, phrase);
     if (similarity < 0.68) continue;
     for (const candidate of indexedCandidates) {
@@ -294,6 +306,8 @@ function freezeCandidate(candidate) {
     label: candidate.label,
     itemKey: candidate.itemKey,
     categoryKey: candidate.categoryKey,
+    categoryDescription: candidate.categoryDescription,
+    children: Object.freeze([...(candidate.children ?? [])]),
     category: candidate.category,
     answerCard: candidate.answerCard,
     intentClass: candidate.intentClass,
@@ -325,23 +339,34 @@ export function resolvePublishedEntityRoute(input, publicationBundles, options =
   }
   const query = normalizePublicationPhrase(utterance);
   const queryForms = buildPublicationPhraseForms([utterance]);
-  const candidates = new Map();
+  const catalogCandidates = new Map();
+  const routeCandidates = new Map();
   for (const bundle of bundles) {
-    directIndexedSignals(candidates, bundle.entityIndex, query, queryForms, records);
-    directIndexedSignals(candidates, bundle.entityIndex?.categories, query, queryForms, records);
-    directIndexedSignals(candidates, bundle.routeIndex, query, queryForms, records);
+    directIndexedSignals(catalogCandidates, bundle.entityIndex, query, queryForms, records);
+    directIndexedSignals(catalogCandidates, bundle.entityIndex?.categories, query, queryForms, records);
+    directIndexedSignals(routeCandidates, bundle.routeIndex, query, queryForms, records);
   }
-  const directHit = candidates.size > 0;
-  if (!directHit) {
+  if (!catalogCandidates.size) {
     for (const bundle of bundles) {
-      indexedSignals(candidates, bundle.entityIndex, query, queryForms, records);
-      indexedSignals(candidates, bundle.entityIndex?.categories, query, queryForms, records);
-      indexedSignals(candidates, bundle.routeIndex, query, queryForms, records);
-      fuzzySignals(candidates, bundle.routeIndex, query, records);
+      indexedSignals(catalogCandidates, bundle.entityIndex, query, queryForms, records);
+      indexedSignals(catalogCandidates, bundle.entityIndex?.categories, query, queryForms, records);
+      fuzzySignals(catalogCandidates, bundle.entityIndex, query, records);
+      fuzzySignals(catalogCandidates, bundle.entityIndex?.categories, query, records);
     }
   }
-  suppressCategoryChildCollisions(candidates);
-  if (!directHit) semanticSignals(candidates, options.semanticMatches, records);
+  if (!routeCandidates.size) {
+    for (const bundle of bundles) {
+      indexedSignals(routeCandidates, bundle.routeIndex, query, queryForms, records);
+      fuzzySignals(routeCandidates, bundle.routeIndex, query, records);
+    }
+  }
+  suppressCategoryChildCollisions(catalogCandidates);
+  const explicitCatalog = [...catalogCandidates.values()].some((candidate) => candidate.explicit);
+  const candidates = explicitCatalog
+    ? new Map([...routeCandidates].filter(([, candidate]) => candidate.recordType === 'WORKFLOW_RULE'))
+    : new Map(routeCandidates);
+  for (const [key, candidate] of catalogCandidates) candidates.set(key, candidate);
+  if (!candidates.size) semanticSignals(candidates, options.semanticMatches, records);
   contextSignals(candidates, input.memory ?? {}, records,
     [...candidates.values()].some((candidate) => candidate.explicit));
 

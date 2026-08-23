@@ -72,13 +72,59 @@ function clarification(kind, reason, prompt = null, evidence = []) {
   });
 }
 
-function targetedAmbiguityPrompt(ambiguity) {
-  const labels = (ambiguity?.candidates ?? []).map((candidate) => (
-    cleanText(candidate.name ?? candidate.itemKey, 120)
-  )).filter(Boolean).slice(0, 3);
+function targetedAmbiguityPrompt(ambiguity, resolution) {
+  const labels = [
+    ...(ambiguity?.candidates ?? []),
+    resolution?.candidate,
+    ...(resolution?.alternatives ?? []),
+  ].map((candidate) => (
+    cleanText(candidate?.name ?? candidate?.itemKey, 120)
+      || cleanText(candidate?.label ?? candidate?.categoryKey, 120)
+  )).filter(Boolean).filter((value, index, values) => values.indexOf(value) === index).slice(0, 3);
   return labels.length
     ? `Please confirm which one you mean: ${labels.join(', ')}.`
     : 'Please clarify which published option you mean.';
+}
+
+function renderAttributeValue(value) {
+  if (value === null || value === undefined) return null;
+  if (['string', 'number', 'boolean'].includes(typeof value)) return cleanText(value, 300);
+  if (Array.isArray(value)) {
+    const values = value.map(renderAttributeValue).filter(Boolean);
+    return values.length ? values.join(', ') : null;
+  }
+  return null;
+}
+
+function catalogFacts(source) {
+  const data = object(source?.authoritativeData);
+  return Object.freeze({
+    itemKey: data.itemKey ?? null,
+    name: cleanText(data.name, 200),
+    category: cleanText(data.category, 200),
+    categoryKey: data.categoryKey ?? null,
+    description: cleanText(data.description, 800),
+    price: data.price ?? null,
+    currency: cleanText(data.currency, 20),
+    attributes: Object.freeze((Array.isArray(data.attributes) ? data.attributes : []).flatMap((attribute) => {
+      const value = renderAttributeValue(attribute?.value);
+      const name = cleanText(attribute?.name ?? attribute?.key, 160);
+      return name && value ? [Object.freeze({ name, value })] : [];
+    })),
+  });
+}
+
+function renderCatalogItem(source) {
+  const facts = catalogFacts(source);
+  const price = facts.price === null || facts.price === undefined ? null
+    : `${facts.price}${facts.currency ? ` ${facts.currency}` : ''}`;
+  const attributes = facts.attributes.map((attribute) => `${attribute.name}: ${attribute.value}`);
+  return cleanText([
+    facts.name,
+    facts.description,
+    price ? `Price: ${price}.` : null,
+    attributes.length ? attributes.join('. ') : null,
+  ].filter(Boolean).join('. '));
 }
 
 function directText(source) {
@@ -86,14 +132,54 @@ function directText(source) {
   if (source?.recordType === 'FAQ') return cleanText(data.answer ?? source.content);
   if (source?.recordType === 'CONVERSATION_NODE') return cleanText(data.content ?? source.content);
   if (source?.recordType === 'WORKFLOW_RULE') return cleanText(data.responseTemplate ?? source.content);
-  return cleanText(data.sourceText ?? source?.content);
+  if (source?.recordType === 'CATALOG_ITEM') return renderCatalogItem(source);
+  return cleanText(source?.content);
+}
+
+function categoryText(resolution, evidence) {
+  const candidate = resolution?.candidate;
+  if (candidate?.entityType !== 'CATEGORY') return null;
+  const categoryKey = normalizedId(candidate.categoryKey);
+  const items = evidence.filter((source) => source.recordType === 'CATALOG_ITEM'
+    && normalizedId(source.authoritativeData?.categoryKey) === categoryKey);
+  if (!items.length) return null;
+  const names = [...new Set(items.map((source) => cleanText(source.authoritativeData?.name, 160)).filter(Boolean))];
+  const description = cleanText(candidate.categoryDescription
+    ?? items.find((source) => source.authoritativeData?.categoryDescription)
+      ?.authoritativeData?.categoryDescription, 500);
+  return {
+    text: cleanText([
+      candidate.label,
+      description,
+      names.length ? `Available options: ${names.join(', ')}.` : null,
+    ].filter(Boolean).join('. ')),
+    evidence: items,
+  };
 }
 
 function searchableEvidenceText(source) {
+  if (source?.recordType === 'CATALOG_ITEM') {
+    const facts = catalogFacts(source);
+    return cleanText([
+      facts.name, facts.category, facts.description, facts.price, facts.currency,
+      ...facts.attributes.flatMap((attribute) => [attribute.name, attribute.value]),
+    ].filter((value) => value !== null && value !== undefined).join(' '), 32_000)
+      .toLocaleLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim();
+  }
   let structured = '';
   try { structured = JSON.stringify(source?.authoritativeData ?? {}); } catch { structured = ''; }
   return cleanText(`${source?.content ?? ''} ${structured}`, 32_000).toLocaleLowerCase()
     .replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim();
+}
+
+function validationEvidence(source) {
+  if (source?.recordType !== 'CATALOG_ITEM') return source;
+  const facts = catalogFacts(source);
+  return Object.freeze({
+    ...source,
+    content: renderCatalogItem(source),
+    authoritativeData: facts,
+  });
 }
 
 function responseSentences(value) {
@@ -147,12 +233,13 @@ export function validateFinalKnowledgeResponse({
     && String(source.recordType).toUpperCase() !== 'TOOL_RESULT')) {
     return Object.freeze({ valid: false, reason: 'instruction_evidence_selected' });
   }
-  const claims = validateGroundedClaims(text, selected, {
+  const alignedEvidence = selected.map(validationEvidence);
+  const claims = validateGroundedClaims(text, alignedEvidence, {
     finalizedUtterance: input?.utterance,
     knownEntities: knownEntities.length ? knownEntities : input?.memory?.knownEntities,
   });
   if (!claims.valid) return claims;
-  const unsupportedSentence = unsupportedClaimSentence(text, selected);
+  const unsupportedSentence = unsupportedClaimSentence(text, alignedEvidence);
   if (unsupportedSentence) return Object.freeze({
     valid: false, reason: 'unsupported_claim', sentence: unsupportedSentence,
   });
@@ -162,6 +249,15 @@ export function validateFinalKnowledgeResponse({
     evidenceIds: Object.freeze(selected.map((source) => source.id)),
     evidence: Object.freeze(selected),
   });
+}
+
+function explicitComparisonEvidence(resolution, evidence) {
+  const explicitIds = new Set((resolution?.routingCandidates ?? []).filter((candidate) => (
+    candidate.explicit === true && candidate.entityType === 'ITEM'
+  )).flatMap((candidate) => candidate.evidenceRecordIds ?? [candidate.recordId]).map(normalizedId));
+  if (!explicitIds.size) return [];
+  return evidence.filter((source) => source.recordType === 'CATALOG_ITEM'
+    && explicitIds.has(normalizedId(source.recordId)));
 }
 
 function withWorkflow(decision, workflow) {
@@ -285,21 +381,44 @@ export function planSafeKnowledgeResponse({
   if (authoritative.ambiguity?.detected
     || (classification?.requiresConfirmation === true && !isComparison)) {
     return clarification('ambiguity', 'ambiguous_authoritative_entity',
-      targetedAmbiguityPrompt(authoritative.ambiguity), evidence);
+      targetedAmbiguityPrompt(authoritative.ambiguity, resolution), evidence);
   }
   if (classification?.intentClass === knowledgeQueryClasses.ACTION_TOOL_REQUEST) {
     return planAuthorizedToolWorkflow({ input, authoritative, runtimeProfile, confirmation });
   }
   const callerFacing = evidence.filter((source) => source.callerFacing === true);
+  if (classification?.intentClass === knowledgeQueryClasses.CATEGORY_OVERVIEW) {
+    const rendered = categoryText(resolution, callerFacing);
+    if (rendered) {
+      const validation = validateFinalKnowledgeResponse({
+        input,
+        answer: rendered.text,
+        selectedEvidenceIds: evidenceIds(rendered.evidence),
+        evidence,
+      });
+      if (validation.valid) return createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.DIRECT, {
+        reason: 'approved_authoritative_category_response',
+        confidence: classification.confidence,
+        evidenceIds: validation.evidenceIds,
+        response: {
+          text: validation.answer,
+          recordId: resolution.candidate.recordId,
+          recordType: 'CATALOG_CATEGORY',
+        },
+      });
+      return clarification('ambiguity', validation.reason, null, rendered.evidence);
+    }
+  }
   if (classification?.intentClass === knowledgeQueryClasses.COMPARISON_COMPLEX) {
-    if (!callerFacing.length) return clarification(
+    const compared = explicitComparisonEvidence(resolution, callerFacing);
+    if (compared.length < 2) return clarification(
       'no_evidence', 'grounded_reasoning_evidence_unavailable',
       'Please clarify the options you want compared.', evidence,
     );
     return createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.LLM, {
       reason: 'grounded_multi_evidence_reasoning_required',
       confidence: classification.confidence,
-      evidenceIds: evidenceIds(callerFacing),
+      evidenceIds: evidenceIds(compared),
     });
   }
   if (directIntentClasses.has(classification?.intentClass) && callerFacing.length === 1) {

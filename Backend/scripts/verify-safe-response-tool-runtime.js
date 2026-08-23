@@ -45,29 +45,59 @@ assert.equal(direct.type, knowledgeEngineDecisionTypes.DIRECT);
 assert.equal(direct.response.text, 'Support is available on weekdays.');
 assert.deepEqual(direct.evidenceIds, [faq.id]);
 
+const categoryOne = source('published:catalog_item:category-one', 'CATALOG_ITEM',
+  'Starter Option. Approved starter service.', {
+    itemKey: 'starter-option', categoryKey: 'service-options', name: 'Starter Option',
+    category: 'Service Options', categoryDescription: 'Approved service options.',
+    description: 'Approved starter service.',
+  });
+const categoryTwo = source('published:catalog_item:category-two', 'CATALOG_ITEM',
+  'Advanced Option. Approved advanced service.', {
+    itemKey: 'advanced-option', categoryKey: 'service-options', name: 'Advanced Option',
+    category: 'Service Options', categoryDescription: 'Approved service options.',
+    description: 'Approved advanced service.',
+  });
+const categoryDecision = planSafeKnowledgeResponse({
+  input: inputFor(),
+  classification: classification(knowledgeQueryClasses.CATEGORY_OVERVIEW),
+  resolution: { candidate: {
+    recordId: categoryOne.recordId, entityType: 'CATEGORY', categoryKey: 'service-options',
+    label: 'Service Options', categoryDescription: 'Approved service options.',
+  } },
+  authoritative: authoritative([categoryOne, categoryTwo]), runtimeProfile: { tools: [] },
+});
+assert.equal(categoryDecision.type, knowledgeEngineDecisionTypes.DIRECT);
+assert.match(categoryDecision.response.text, /Starter Option.*Advanced Option/u);
+assert.deepEqual(new Set(categoryDecision.evidenceIds), new Set([categoryOne.id, categoryTwo.id]));
+
 const second = source('published:faq:two', 'FAQ', 'Priority support is available.', {
   question: 'What is priority support?', answer: 'Priority support is available.',
 });
 const complex = planSafeKnowledgeResponse({
   input: inputFor(), classification: classification(knowledgeQueryClasses.COMPARISON_COMPLEX),
-  resolution: {}, authoritative: authoritative([faq, second]), runtimeProfile: { tools: [] },
+  resolution: { routingCandidates: [
+    { recordId: categoryOne.recordId, entityType: 'ITEM', explicit: true },
+    { recordId: categoryTwo.recordId, entityType: 'ITEM', explicit: true },
+  ] },
+  authoritative: authoritative([categoryOne, categoryTwo]), runtimeProfile: { tools: [] },
 });
 assert.equal(complex.type, knowledgeEngineDecisionTypes.LLM);
-assert.deepEqual(new Set(complex.evidenceIds), new Set([faq.id, second.id]));
+assert.deepEqual(new Set(complex.evidenceIds), new Set([categoryOne.id, categoryTwo.id]));
 const finalizedComplex = finalizeGroundedLlmResponse({
   input: inputFor(), plan: complex,
-  answer: 'Weekday support is available. Priority support is available.',
-  selectedEvidenceIds: [faq.id, second.id], authoritative: authoritative([faq, second]),
+  answer: 'Starter Option. Approved starter service. Advanced Option. Approved advanced service.',
+  selectedEvidenceIds: [categoryOne.id, categoryTwo.id],
+  authoritative: authoritative([categoryOne, categoryTwo]),
 });
 assert.equal(finalizedComplex.type, knowledgeEngineDecisionTypes.DIRECT);
 assert.equal(finalizedComplex.reason, 'validated_grounded_llm_response');
 assert.equal(finalizeGroundedLlmResponse({
   input: inputFor(), plan: complex, answer: 'A complimentary meal is included.',
-  selectedEvidenceIds: [faq.id], authoritative: authoritative([faq, second]),
+  selectedEvidenceIds: [categoryOne.id], authoritative: authoritative([categoryOne, categoryTwo]),
 }).type, knowledgeEngineDecisionTypes.CLARIFY);
 assert.equal(finalizeGroundedLlmResponse({
-  input: inputFor(), plan: complex, answer: faq.content,
-  selectedEvidenceIds: ['unplanned-source'], authoritative: authoritative([faq, second]),
+  input: inputFor(), plan: complex, answer: categoryOne.content,
+  selectedEvidenceIds: ['unplanned-source'], authoritative: authoritative([categoryOne, categoryTwo]),
 }).reason, 'llm_selected_unplanned_citation');
 
 const weak = planSafeKnowledgeResponse({
@@ -242,5 +272,20 @@ const catalogAuthorized = planAuthorizedToolWorkflow({
 });
 assert.equal(catalogAuthorized.type, knowledgeEngineDecisionTypes.TOOL);
 assert.ok(catalogAuthorized.evidenceIds.includes(selectableItem.id));
+
+const catalogDirect = planSafeKnowledgeResponse({
+  input: inputFor(), classification: classification(knowledgeQueryClasses.KNOWN_INFORMATION),
+  resolution: {}, authoritative: authoritative([source(
+    'published:catalog_item:render', 'CATALOG_ITEM',
+    'ITEM: Tenant Option ITEM KEY: tenant-option ALIASES: option',
+    {
+      name: 'Tenant Option', description: 'Approved tenant description.', price: 25, currency: 'USD',
+      attributes: [{ key: 'support', name: 'Support', value: 'Included' }],
+    },
+  )]), runtimeProfile: { tools: [] },
+});
+assert.equal(catalogDirect.type, knowledgeEngineDecisionTypes.DIRECT);
+assert.doesNotMatch(catalogDirect.response.text, /ITEM KEY|ALIASES/u);
+assert.match(catalogDirect.response.text, /Support: Included/u);
 
 console.log('Safe direct/LLM/clarification routing and verified schema-driven tool execution verified.');

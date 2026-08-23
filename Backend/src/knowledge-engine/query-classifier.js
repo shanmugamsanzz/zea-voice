@@ -139,7 +139,10 @@ function inferredCandidates(input, resolution) {
       source: 'multi_entity_or_fact_structure',
     });
   }
-  if (input.memory?.pendingClarification) {
+  const explicitResolvedEntity = candidates.some((candidate) => candidate.explicit === true
+    && ['ITEM', 'CATEGORY'].includes(candidate.entityType)
+    && Number(candidate.score ?? 0) >= 0.88);
+  if (input.memory?.pendingClarification && !explicitResolvedEntity) {
     inferred.push({
       intentClass: knowledgeQueryClasses.CLARIFICATION_ANSWER,
       candidate: resolution?.candidate ?? null,

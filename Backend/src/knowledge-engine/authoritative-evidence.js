@@ -41,6 +41,7 @@ export const authoritativeHydrationSql = `
     SELECT 'FAQ'::text AS record_type, faq.id AS record_id, faq.knowledge_base_id,
       faq.tenant_id, assigned.publication_revision, faq.document_id, faq.document_version_id,
       document.original_filename AS document_name, faq.source_page_start, faq.source_page_end,
+      faq.source_section, faq.source_line_start, faq.source_line_end,
       COALESCE(NULLIF(faq.language,''),'und') AS language, faq.answer AS content,
       true AS caller_facing,
       jsonb_build_object(
@@ -66,6 +67,7 @@ export const authoritativeHydrationSql = `
     SELECT 'KNOWLEDGE_CHUNK', chunk.id, chunk.knowledge_base_id, chunk.tenant_id,
       assigned.publication_revision, chunk.document_id, chunk.document_version_id,
       document.original_filename, chunk.source_page_start, chunk.source_page_end,
+      chunk.source_section, chunk.source_line_start, chunk.source_line_end,
       COALESCE(NULLIF(document.metadata->>'language',''),'und'), chunk.content, true,
       jsonb_build_object(
         'heading',chunk.source_heading,'content',chunk.content,'chunkIndex',chunk.chunk_index,
@@ -90,6 +92,7 @@ export const authoritativeHydrationSql = `
     SELECT 'CATALOG_ITEM', item.id, item.knowledge_base_id, item.tenant_id,
       assigned.publication_revision, item.document_id, item.document_version_id,
       document.original_filename, item.source_page_start, item.source_page_end,
+      item.source_section, item.source_line_start, item.source_line_end,
       COALESCE(NULLIF(document.metadata->>'language',''),'und'),
       concat_ws(E'\n','Item: '||item.name,
         'Category: '||COALESCE(item.category,catalog.name),
@@ -144,6 +147,7 @@ export const authoritativeHydrationSql = `
     SELECT 'WORKFLOW_RULE', workflow.id, workflow.knowledge_base_id, workflow.tenant_id,
       assigned.publication_revision, workflow.document_id, workflow.document_version_id,
       document.original_filename, workflow.source_page_start, workflow.source_page_end,
+      workflow.source_section, workflow.source_line_start, workflow.source_line_end,
       COALESCE(NULLIF(document.metadata->>'language',''),'und'),
       COALESCE(workflow.response_template,''),
       lower(COALESCE(workflow.action_config->>'responseMode','instruction'))='exact',
@@ -174,6 +178,7 @@ export const authoritativeHydrationSql = `
       conversation.tenant_id, assigned.publication_revision,
       conversation.document_id, conversation.document_version_id,
       document.original_filename, conversation.source_page_start, conversation.source_page_end,
+      conversation.source_section, conversation.source_line_start, conversation.source_line_end,
       COALESCE(NULLIF(conversation.language,''),NULLIF(document.metadata->>'language',''),'und'),
       conversation.content, lower(COALESCE(conversation.node_type,''))<>'guidance',
       jsonb_build_object(
@@ -201,7 +206,15 @@ export const authoritativeHydrationSql = `
          OR conversation.usage_direction=$3::agent_usage_direction)
        AND version.is_current=true AND version.status='ready' AND version.deleted_at IS NULL
        AND document.status='ready' AND document.deleted_at IS NULL
-  ) SELECT * FROM evidence ORDER BY rank,record_type,record_id`;
+  ) SELECT evidence.*,
+      document.display_name AS document_display_name,
+      document.document_type::text AS document_type
+    FROM evidence
+    JOIN knowledge_documents document
+      ON document.tenant_id=evidence.tenant_id
+     AND document.knowledge_base_id=evidence.knowledge_base_id
+     AND document.id=evidence.document_id
+   ORDER BY rank,record_type,record_id`;
 
 function normalizeId(value) {
   return String(value ?? '').trim().toLocaleLowerCase();
@@ -377,8 +390,19 @@ function evidenceFromRow(row, input, fused) {
     documentId: String(row.document_id),
     documentVersionId: String(row.document_version_id),
     documentName: row.document_name ?? null,
+    documentDisplayName: row.document_display_name ?? null,
+    documentType: row.document_type ?? null,
     pageNumber: row.source_page_start ?? null,
     pageEnd: row.source_page_end ?? null,
+    sourceSection: row.source_section ?? row.authoritative_data?.heading
+      ?? row.authoritative_data?.nodeKey
+      ?? row.authoritative_data?.itemKey
+      ?? row.authoritative_data?.name
+      ?? null,
+    sourceLineStart: row.source_line_start
+      ?? row.authoritative_data?.metadata?.sourceLineStart ?? null,
+    sourceLineEnd: row.source_line_end
+      ?? row.authoritative_data?.metadata?.sourceLineEnd ?? null,
     language: row.language ?? 'und',
     content: String(row.content ?? '').trim(),
     callerFacing: row.caller_facing === true,

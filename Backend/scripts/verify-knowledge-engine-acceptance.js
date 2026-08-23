@@ -9,6 +9,7 @@ import { cacheCompactKnowledgeMap } from '../src/knowledge-bases/knowledge-map.s
 import { retrieveTenantEvidence } from '../src/knowledge-engine/runtime-service.js';
 import { finalizeGroundedLlmResponse } from '../src/knowledge-engine/safe-response-tool-runtime.js';
 import { InterruptionCandidateManager } from '../src/voice/interruption/interruption-candidate-manager.js';
+import { knowledgeMessageSources } from '../src/voice/source-trace.js';
 import { task10Industries } from './fixtures/task-10-industries.js';
 
 const repeatsArgument = process.argv.find((value) => value.startsWith('--repeats='));
@@ -23,6 +24,8 @@ function record(fixture, index, type, values) {
     record_type: type,
     document_id: `60000000-0000-4000-8000-${suffix}`,
     document_version_id: `70000000-0000-4000-8000-${suffix}`,
+    document_name: 'tenant-published-knowledge.pdf',
+    document_display_name: 'Tenant Published Knowledge',
     usage_direction: 'both', language: fixture.language ?? 'mul', source_page_start: 1,
     entity_aliases: [], entity_category_aliases: [], entity_metadata: {}, ...values,
   };
@@ -79,8 +82,13 @@ function hydrationDependencies(input, records) {
               knowledge_base_id: candidate.knowledge_base_id,
               publication_revision: candidate.publication_revision,
               document_id: source.document_id, document_version_id: source.document_version_id,
-              document_name: `${recordType.toLowerCase()}.txt`, source_page_start: 1,
-              source_page_end: 1, language: source.language, content: source.answer,
+              document_name: source.document_name,
+              document_display_name: source.document_display_name,
+              document_type: source.document_type ?? String(source.record_type).toLocaleLowerCase(),
+              source_page_start: source.source_page_start ?? 1,
+              source_page_end: source.source_page_end ?? source.source_page_start ?? 1,
+              source_section: source.source_section ?? source.entity_name,
+              language: source.language, content: source.answer,
               caller_facing: callerFacing, authoritative_data: authoritativeData,
               rank: candidate.rank, rrf_score: candidate.rrf_score,
             }];
@@ -116,7 +124,25 @@ async function observed(engine, utterance, options = {}) {
   return { ...result, input, tracker };
 }
 
-const metrics = { direct: 0, clarify: 0, llm: 0, tool: 0, interruptions: 0 };
+const metrics = { direct: 0, category: 0, clarify: 0, llm: 0, tool: 0, interruptions: 0 };
+
+function assertPublishedSources(result, expectedCount = 1) {
+  const sources = knowledgeMessageSources({
+    found: true, matches: result.authoritative.evidence,
+  }, result.decision.evidenceIds);
+  assert.equal(sources.length, expectedCount);
+  assert.ok(sources.every((source) => source.type === 'knowledge'));
+  assert.ok(sources.every((source) => source.label === 'Tenant Published Knowledge'));
+  assert.ok(sources.every((source) => source.metadata.documentName === 'tenant-published-knowledge.pdf'));
+  assert.ok(sources.every((source) => source.metadata.pageNumber === 1));
+  assert.ok(sources.every((source) => source.metadata.documentId));
+  assert.ok(sources.every((source) => source.metadata.recordName));
+  assert.ok(sources.every((source) => source.metadata.route === undefined));
+  assert.equal(new Set(sources.map((source) => [source.id, source.metadata.documentId,
+    source.metadata.pageNumber, source.metadata.pageEnd].join(':'))).size, sources.length);
+  assert.doesNotMatch(JSON.stringify(sources), /System instructions|Agent Instructions|llm_first|Runtime fallback|Configured knowledge clarification/iu);
+  return sources;
+}
 
 for (let pass = 1; pass <= repeats; pass += 1) {
   for (const fixture of task10Industries) {
@@ -127,6 +153,8 @@ for (let pass = 1; pass <= repeats; pass += 1) {
         `${fixture.industry}: ${utterance}`);
       assert.equal(result.decision.response.text, fixture.fact);
       assert.equal(result.authoritative.hydrationQueryCount, 1);
+      assert.doesNotMatch(result.decision.response.text, /ITEM(?:_KEY)?\s*:|ALIASES\s*:|\{\s*"/iu);
+      assertPublishedSources(result);
       assert.deepEqual(result.retrieval.searchedIndexes.includes('WORKFLOW'), false);
       assert.ok(result.latency.stages.routingMs >= 0);
       assert.ok(result.latency.stages.retrievalMs >= 0);
@@ -198,11 +226,20 @@ for (let pass = 1; pass <= repeats; pass += 1) {
   assert.equal(switched.resolution.candidate.itemKey, 'beta');
   assert.equal(switched.decision.type, knowledgeEngineDecisionTypes.DIRECT);
 
+  const category = await observed(engine, 'Services', { turn: pass });
+  assert.equal(category.decision.type, knowledgeEngineDecisionTypes.DIRECT);
+  assert.match(category.decision.response.text, /Alpha Service/iu);
+  assert.match(category.decision.response.text, /Beta Service/iu);
+  assert.doesNotMatch(category.decision.response.text, /ITEM(?:_KEY)?\s*:|ALIASES\s*:|\{\s*"/iu);
+  assertPublishedSources(category, 4);
+  metrics.category += 1;
+
   const comparison = await observed(engine, 'compare Alpha Service and Beta Service', {
     turn: pass, requestedFacts: ['support', 'priority'],
   });
   assert.equal(comparison.decision.type, knowledgeEngineDecisionTypes.LLM);
   assert.ok(comparison.decision.evidenceIds.length >= 2);
+  assertPublishedSources(comparison, 2);
   assert.equal(finalizeGroundedLlmResponse({
     input: comparison.input, plan: comparison.decision,
     answer: 'An unsupported value is 999.',
