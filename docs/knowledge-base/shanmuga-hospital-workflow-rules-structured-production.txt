@@ -108,6 +108,15 @@ PRIORITY: 86
 ACTION: transfer_to_telecaller
 RESPONSE: Do not promise customization. Transfer to the Telecaller using the configured action and report only the verified result.
 
+RULE: non_emergency_symptom_support
+INTENT_CLASS: KNOWN_INFORMATION
+SITUATION: The caller asks which package to choose because of a non-emergency symptom or health concern.
+EXAMPLE: symptomக்கு எந்த package choose பண்ணணும் | stomach painக்கு package சொல்லுங்க | உடம்பு வலிக்கு எந்த checkup | which package for my symptoms
+MATCH_MODE: any_phrase
+RESPONSE_MODE: exact
+PRIORITY: 95
+RESPONSE: உங்களுடைய symptoms வைத்து நான் package recommend பண்ண முடியாது. சரியான medical suitability-ஐ Doctor தான் confirm பண்ண வேண்டும்.
+
 RULE: doctor_advice_support
 SITUATION: The caller asks for diagnosis, treatment, medicine advice, report interpretation or a Doctor's medical decision.
 EXAMPLE: diagnosis சொல்லுங்க | medicine change பண்ணலாமா | report explain பண்ணுங்க | treatment சொல்லுங்க | doctor advice வேண்டும்

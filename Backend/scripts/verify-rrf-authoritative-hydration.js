@@ -60,6 +60,8 @@ const row = (recordId, rank, rrfScore, itemKey, name, price) => ({
   document_id: '91000000-0000-4000-8000-000000000001',
   document_version_id: '92000000-0000-4000-8000-000000000001',
   document_name: 'tenant-source.txt', source_page_start: 1, source_page_end: 1,
+  document_status: 'ready', document_version_status: 'ready',
+  document_version_is_current: true,
   language: 'mul', content: `${name} authoritative content`, caller_facing: true,
   authoritative_data: {
     itemKey, name, categoryKey: 'options', category: 'Options', price, currency: 'USD',
@@ -108,6 +110,9 @@ assert.deepEqual(hydrated.evidence.map((entry) => entry.rank),
   [...hydrated.evidence.map((entry) => entry.rank)].sort((left, right) => left - right));
 assert.equal(hydrated.evidence.every((entry) => entry.hydrationValidated
   && entry.publicationValidated), true);
+assert.equal(hydrated.evidence.every((entry) => entry.documentStatus === 'ready'
+  && entry.documentVersionStatus === 'ready'
+  && entry.documentVersionIsCurrent === true), true);
 assert.equal(hydrated.evidence.every((entry) => entry.documentName === 'tenant-source.txt'), true);
 assert.equal(hydrated.evidence.every((entry) => entry.pageNumber === 1), true);
 assert.equal(hydrated.ambiguity.detected, true);
@@ -124,6 +129,7 @@ assert.match(authoritativeHydrationSql, /assigned\.publication_revision=requeste
 assert.match(authoritativeHydrationSql, /status='approved'/u);
 assert.match(authoritativeHydrationSql, /version\.is_current=true/u);
 assert.match(authoritativeHydrationSql, /agent_knowledge_bases/u);
+assert.match(authoritativeHydrationSql, /document_version_is_current/u);
 
 let emptyQueryCount = 0;
 const empty = await rankAndHydrateAuthoritativeEvidence({

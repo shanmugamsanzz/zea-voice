@@ -64,6 +64,8 @@ function publicationScope(input, bundles) {
         recordType: String(record.record_type ?? record.recordType ?? record.type ?? '').toUpperCase(),
         knowledgeBaseId,
         publicationRevision,
+        itemKey: String(record.entity_metadata?.itemKey ?? record.metadata?.itemKey ?? '').trim() || null,
+        categoryKey: String(record.entity_metadata?.categoryKey ?? record.metadata?.categoryKey ?? '').trim() || null,
       }));
     }
   }
@@ -113,6 +115,49 @@ function structuredCandidates(resolution, recordScope, allowedTypes, limit) {
     }
   }
   return rankChannel(candidates, 'structured', limit);
+}
+
+function activeCatalogCandidate(input, recordScope, allowedTypes) {
+  if (!allowedTypes.has('CATALOG_ITEM')) return null;
+  const active = input?.memory?.activeEntity;
+  if (!active) return null;
+  const recordId = normalizeId(active.recordId ?? active.id);
+  const direct = recordId ? recordScope.get(recordId) : null;
+  if (direct?.recordType === 'CATALOG_ITEM') return direct;
+  const itemKey = normalizeId(active.itemKey ?? active.key);
+  if (!itemKey) return null;
+  return [...recordScope.values()].find((record) => record.recordType === 'CATALOG_ITEM'
+    && normalizeId(record.itemKey) === itemKey) ?? null;
+}
+
+function activeWorkflowCandidate(input, recordScope, allowedTypes) {
+  if (!allowedTypes.has('WORKFLOW_RULE')) return null;
+  const active = input?.memory?.activeTool;
+  if (!active) return null;
+  const recordId = normalizeId(active.authorizationRecordId
+    ?? active.authorizationEvidenceId ?? active.workflowRecordId);
+  const direct = recordId ? recordScope.get(recordId) : null;
+  return direct?.recordType === 'WORKFLOW_RULE' ? direct : null;
+}
+
+function structuredCandidatesForTurn(input, classification, resolution, recordScope, allowedTypes, limit) {
+  const selectedResolution = classification?.intentClass !== 'COMPARISON_COMPLEX'
+    && classification?.candidate
+    ? { routingCandidates: [classification.candidate] }
+    : resolution;
+  const candidates = [...structuredCandidates(selectedResolution, recordScope, allowedTypes, limit)];
+  if (classification?.intentClass === 'ACTION_TOOL_REQUEST') {
+    const remembered = [
+      activeWorkflowCandidate(input, recordScope, allowedTypes),
+      activeCatalogCandidate(input, recordScope, allowedTypes),
+    ].filter(Boolean);
+    for (const active of remembered) {
+      if (candidates.some((candidate) => normalizeId(candidate.recordId) === normalizeId(active.recordId))) continue;
+      candidates.push(freezeCandidate({ ...active, score: 1, matchMethod: 'call_memory' },
+        'structured', candidates.length + 1));
+    }
+  }
+  return Object.freeze(candidates.slice(0, limit));
 }
 
 function validSparseDocuments(indexes, input, scope, allowedTypes) {
@@ -231,7 +276,9 @@ export async function retrieveTargetedCandidates({
   const recordTypes = allowedRecordTypes(indexes);
   const dependencies = { ...defaultDependencies, ...suppliedDependencies };
 
-  const structured = structuredCandidates(resolution, records, recordTypes, limitPerChannel);
+  const structured = structuredCandidatesForTurn(
+    input, classification, resolution, records, recordTypes, limitPerChannel,
+  );
   const bm25Promise = indexes.has(knowledgeSearchIndexes.BM25)
     ? Promise.resolve(bm25Candidates(input, sparseIndexes, scope, recordTypes, limitPerChannel))
     : Promise.resolve(Object.freeze([]));
@@ -252,4 +299,3 @@ export async function retrieveTargetedCandidates({
     candidateCount: structured.length + bm25.length + qdrant.length,
   });
 }
-

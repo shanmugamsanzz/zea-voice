@@ -4,6 +4,7 @@ export {
   invalidateKnowledgeBaseArtifacts,
   invalidateTenantKnowledgeCache,
   invalidateTenantRuntimeKnowledgeCache,
+  ensurePublishedEngineReady,
   loadPublishedKnowledgeMap,
   retrieveTenantEvidence,
   searchPublishedKnowledge,

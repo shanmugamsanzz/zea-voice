@@ -65,6 +65,24 @@ memory.applyEngineDecision({
 snapshot = memory.snapshot();
 assert.equal(snapshot.pendingClarification.text, 'Which option did you mean?');
 
+// A resolved category is first-class state. It replaces a stale child item and
+// clears the clarification that belonged to the previous topic.
+memory.applyEngineDecision({
+  type: 'DIRECT',
+  reason: 'approved_authoritative_category_response',
+  evidenceIds: ['source-category'],
+  response: { recordType: 'CATALOG_CATEGORY' },
+}, {
+  explicitCategory: true,
+  entity: null,
+  category: { key: 'organ-specific', name: 'Organ-Specific Options' },
+  citedEvidence: [{ id: 'source-category', recordId: 'record-category', recordType: 'CATALOG_ITEM' }],
+});
+snapshot = memory.snapshot();
+assert.equal(snapshot.activeEntity, null);
+assert.equal(snapshot.activeCategory.key, 'organ-specific');
+assert.equal(snapshot.pendingClarification, null);
+
 memory.setActiveToolRequest({
   name: 'create_reservation',
   status: 'collecting_information',

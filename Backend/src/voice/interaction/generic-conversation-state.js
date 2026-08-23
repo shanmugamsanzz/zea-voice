@@ -434,13 +434,22 @@ export function openGenericConversationState(identity, settings = {}, now = Date
           240,
         ).toLocaleLowerCase();
         const nextIdentity = cleanText(entity.id ?? entity.key ?? entity.name, 240).toLocaleLowerCase();
+        const toolEntityIdentities = [
+          state.activeToolRequest?.selectedEntityKey,
+          state.activeToolRequest?.selectedEntityName,
+        ].map((value) => cleanText(value, 240).toLocaleLowerCase()).filter(Boolean);
+        const nextEntityIdentities = [entity.id, entity.key, entity.name]
+          .map((value) => cleanText(value, 240).toLocaleLowerCase()).filter(Boolean);
         state.activeEntity = entity;
         state.activeCategory = category;
         state.knownEntities = [entity];
         state.currentTopic = entity.name;
         state.pendingQuestion = null;
         state.pendingClarification = null;
-        if (priorIdentity && priorIdentity !== nextIdentity && state.activeToolRequest) {
+        const toolBelongsToDifferentEntity = toolEntityIdentities.length > 0
+          && !toolEntityIdentities.some((identity) => nextEntityIdentities.includes(identity));
+        if (state.activeToolRequest
+          && ((priorIdentity && priorIdentity !== nextIdentity) || toolBelongsToDifferentEntity)) {
           state.activeToolRequest = null;
           state.collectedInformation = {};
         }
@@ -451,6 +460,10 @@ export function openGenericConversationState(identity, settings = {}, now = Date
         state.currentTopic = category.name;
         state.pendingQuestion = null;
         state.pendingClarification = null;
+        if (state.activeToolRequest?.selectedEntityKey || state.activeToolRequest?.selectedEntityName) {
+          state.activeToolRequest = null;
+          state.collectedInformation = {};
+        }
       }
       if (decision.type === 'CLARIFY') {
         const clarificationPrompt = cleanText(decision.clarification?.prompt, 500) || null;

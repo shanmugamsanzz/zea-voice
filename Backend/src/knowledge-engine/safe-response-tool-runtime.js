@@ -421,6 +421,13 @@ export function planSafeKnowledgeResponse({
       evidenceIds: evidenceIds(compared),
     });
   }
+  if (classification?.intentClass === knowledgeQueryClasses.UNKNOWN && callerFacing.length) {
+    return createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.LLM, {
+      reason: 'grounded_published_reasoning_required',
+      confidence: classification.confidence,
+      evidenceIds: evidenceIds(callerFacing.slice(0, 3)),
+    });
+  }
   if (directIntentClasses.has(classification?.intentClass) && callerFacing.length === 1) {
     const source = callerFacing[0];
     const answer = directText(source);

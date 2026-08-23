@@ -53,6 +53,12 @@ const recoverableArtifactErrors = new Set([
   'KNOWLEDGE_PUBLICATION_INCOMPLETE',
 ]);
 
+const readinessRetryableErrors = new Set([
+  ...recoverableArtifactErrors,
+  'KNOWLEDGE_INDEX_CACHE_UNAVAILABLE',
+  'KNOWLEDGE_INDEX_TIMEOUT',
+]);
+
 function normalizeId(value) {
   return String(value ?? '').trim().toLocaleLowerCase();
 }
@@ -242,6 +248,78 @@ export async function loadPublishedEngineArtifacts(auth, input, dependencies = {
     bundles: Object.freeze(artifacts.map((entry) => entry.bundle)),
     sparseIndexes: Object.freeze(artifacts.map((entry) => entry.sparseIndex)),
     maps: Object.freeze(artifacts.map((entry) => entry.map)),
+  });
+}
+
+function waitForReadiness(delayMs, abortSignal) {
+  if (abortSignal?.aborted) {
+    return Promise.reject(unavailable('KNOWLEDGE_PUBLICATION_READINESS_CANCELLED'));
+  }
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(unavailable('KNOWLEDGE_PUBLICATION_READINESS_CANCELLED'));
+    };
+    const timer = setTimeout(() => {
+      abortSignal?.removeEventListener?.('abort', onAbort);
+      resolve();
+    }, delayMs);
+    timer.unref?.();
+    abortSignal?.addEventListener?.('abort', onAbort, { once: true });
+  });
+}
+
+/**
+ * Block live-call startup until every artifact for every active publication is
+ * present, scoped to the exact tenant/KB/revision and built by this index
+ * version. loadPublishedEngineArtifacts schedules a deduplicated recovery job;
+ * this readiness loop waits for that job to atomically replace all seven keys.
+ */
+export async function ensurePublishedEngineReady(auth, input, dependencies = {}) {
+  const timeoutMs = Math.max(1, Number(
+    dependencies.readinessTimeoutMs ?? env.KNOWLEDGE_ARTIFACT_READINESS_TIMEOUT_MS,
+  ));
+  const pollMs = Math.max(1, Number(
+    dependencies.readinessPollMs ?? env.KNOWLEDGE_ARTIFACT_READINESS_POLL_MS,
+  ));
+  const now = dependencies.now ?? Date.now;
+  const wait = dependencies.wait ?? waitForReadiness;
+  const startedAt = now();
+  let attempts = 0;
+  let lastError = null;
+
+  while (now() - startedAt <= timeoutMs) {
+    attempts += 1;
+    try {
+      const artifacts = await loadPublishedEngineArtifacts(auth, input, dependencies);
+      return Object.freeze({
+        ...artifacts,
+        readiness: Object.freeze({
+          ready: true,
+          attempts,
+          waitedMs: Math.max(0, now() - startedAt),
+          indexVersion: KNOWLEDGE_PUBLICATION_BUNDLE_VERSION,
+          artifactCount: artifacts.publications.length * 7,
+        }),
+      });
+    } catch (error) {
+      if (!readinessRetryableErrors.has(error?.code)) throw error;
+      lastError = error;
+      const remainingMs = timeoutMs - (now() - startedAt);
+      if (remainingMs <= 0) break;
+      await wait(Math.min(pollMs, remainingMs), input.abortSignal);
+    }
+  }
+
+  throw unavailable('KNOWLEDGE_PUBLICATION_RECOVERY_TIMEOUT', {
+    tenantId: auth.tenantId,
+    agentId: input.agentId,
+    usageDirection: input.usageDirection,
+    attempts,
+    timeoutMs,
+    lastErrorCode: lastError?.code ?? null,
+    recovery: lastError?.details?.recovery ?? null,
+    identity: lastError?.details?.identity ?? null,
   });
 }
 

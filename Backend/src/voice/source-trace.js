@@ -122,7 +122,8 @@ export function knowledgeMessageSources(result, selectedEvidenceIds = []) {
         ?? record.authoritativeData?.name ?? record.authoritative_data?.name
         ?? record.authoritativeData?.question ?? record.authoritative_data?.question
         ?? record.authoritativeData?.heading ?? record.authoritative_data?.heading
-        ?? record.authoritativeData?.nodeKey ?? record.authoritative_data?.nodeKey,
+        ?? record.authoritativeData?.nodeKey ?? record.authoritative_data?.nodeKey
+        ?? record.sourceSection ?? record.source_section,
       score: record.score,
       cacheHit: result.cacheHit === true,
     },

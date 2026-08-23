@@ -2,7 +2,10 @@ import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
 import { AppError } from '../middleware/errors.js';
 import { appendTranscriptEntry } from '../calls/call.service.js';
-import { retrieveTenantEvidence } from '../knowledge-bases/knowledge-runtime.service.js';
+import {
+  ensurePublishedEngineReady,
+  retrieveTenantEvidence,
+} from '../knowledge-bases/knowledge-runtime.service.js';
 import {
   createKnowledgeEngineInput,
   isKnowledgeEngineDecision,
@@ -423,6 +426,36 @@ export class RealtimeConversationOrchestrator {
       agentId: this.runtimeProfile.agent.id,
       callId: this.call.id,
     }) ?? this.log;
+    const ensureKnowledgeReady = this.dependencies.ensurePublishedEngineReady
+      ?? (env.NODE_ENV === 'production' ? ensurePublishedEngineReady : null);
+    if (ensureKnowledgeReady) {
+      const readinessInput = createKnowledgeEngineInput({
+        tenantId: this.runtimeProfile.agent.tenantId,
+        agentId: this.runtimeProfile.agent.id,
+        callId: this.call.id,
+        utterance: 'knowledge publication readiness',
+        usageDirection: this.call.direction,
+        language: languageCode(this.runtimeProfile.agent.language),
+      });
+      const readiness = await ensureKnowledgeReady({
+        tenantId: this.runtimeProfile.agent.tenantId,
+        workspaceId: this.runtimeProfile.agent.workspaceId,
+        userId: null,
+        role: 'COMPANY_DEVELOPER',
+      }, readinessInput, this.dependencies.knowledgeReadinessDependencies ?? {});
+      this.log.info({
+        stage: 'knowledge.publication_ready',
+        callId: this.call.id,
+        attempts: readiness?.readiness?.attempts ?? 1,
+        waitedMs: readiness?.readiness?.waitedMs ?? 0,
+        artifactCount: readiness?.readiness?.artifactCount ?? 0,
+        indexVersion: readiness?.readiness?.indexVersion ?? null,
+        publicationRevisions: (readiness?.publications ?? []).map((publication) => ({
+          knowledgeBaseId: publication.knowledgeBaseId,
+          publicationRevision: publication.publicationRevision,
+        })),
+      }, 'All assigned knowledge publication artifacts are ready before call startup');
+    }
     this.preCallContext = this.call.providerMetadata?.preCall?.context ?? {};
     const ttsTemplateContext = welcomeTemplateContext(this.call);
     this.ttsTextProcessor = (this.dependencies.createTtsTextProcessor
@@ -2688,7 +2721,11 @@ export class RealtimeConversationOrchestrator {
         source.recordId === engineDecision.response?.recordId
       )) ?? selectedEvidence[0] ?? null;
       const authoritative = selectedSource?.authoritativeData ?? {};
-      const catalogEntity = String(selectedSource?.recordType ?? '').toLocaleUpperCase() === 'CATALOG_ITEM'
+      const resolvedCandidate = knowledge.tenantEvidence?.resolution?.candidate ?? null;
+      const categoryDecision = engineDecision.response?.recordType === 'CATALOG_CATEGORY'
+        || resolvedCandidate?.entityType === 'CATEGORY';
+      const catalogEntity = !categoryDecision
+        && String(selectedSource?.recordType ?? '').toLocaleUpperCase() === 'CATALOG_ITEM'
         ? {
           id: selectedSource.recordId,
           key: authoritative.itemKey,
@@ -2696,17 +2733,22 @@ export class RealtimeConversationOrchestrator {
           category: authoritative.category,
           categoryKey: authoritative.categoryKey,
         } : null;
-      const category = authoritative.category || authoritative.categoryKey ? {
+      const category = categoryDecision ? {
+        key: resolvedCandidate?.categoryKey,
+        name: resolvedCandidate?.label,
+        description: resolvedCandidate?.categoryDescription,
+      } : (authoritative.category || authoritative.categoryKey ? {
         key: authoritative.categoryKey,
         name: authoritative.category,
         parentKey: authoritative.parentCategoryKey,
-      } : null;
+      } : null);
       this.liveCallMemory?.applyEngineDecision?.(engineDecision, {
         entity: catalogEntity,
         category,
-        explicitEntity: Boolean(catalogEntity
-          && String(selectedSource?.retrievalContext ?? 'primary').toLocaleLowerCase() === 'primary'),
-        explicitCategory: !catalogEntity && Boolean(category),
+        explicitEntity: Boolean(catalogEntity && resolvedCandidate?.explicit === true
+          && resolvedCandidate?.entityType === 'ITEM'
+          && resolvedCandidate?.recordId === selectedSource?.recordId),
+        explicitCategory: Boolean(categoryDecision && category && resolvedCandidate?.explicit === true),
         intent: knowledge.tenantEvidence?.questionType ?? engineDecision.reason,
         citedEvidence: selectedEvidence.map((source) => ({
           id: source.id,

@@ -151,6 +151,41 @@ assert.deepEqual(classification.retrievalPlan.indexes, [
   knowledgeSearchIndexes.GENERAL, knowledgeSearchIndexes.BM25, knowledgeSearchIndexes.SEMANTIC,
 ]);
 
+classification = classifyKnowledgeQuery(createKnowledgeEngineInput({
+  tenantId, agentId, callId, utterance: 'location question',
+}), {
+  tenantId, agentId, callId, action: 'CONFIRM', score: 0.72,
+  routingCandidates: [{
+    recordId: acknowledgement.record_id, recordType: 'CONVERSATION_NODE',
+    entityType: 'ROUTE', score: 0.72, method: 'fuzzy', explicit: true,
+    signals: [{ method: 'fuzzy', score: 0.72, phrase: 'generic conversation', explicit: true }],
+  }],
+});
+assert.equal(classification.intentClass, knowledgeQueryClasses.UNKNOWN,
+  'A weak generic Conversation match must fall through to General/BM25/semantic retrieval');
+assert.ok(classification.retrievalPlan.indexes.includes(knowledgeSearchIndexes.GENERAL));
+assert.equal(classification.requiresConfirmation, false,
+  'An ineligible weak route must not force clarification before targeted retrieval');
+
+classification = classify('tenant field value', {
+  memory: { activeTool: { name: 'tenant_action', authorizationRecordId: action.record_id } },
+});
+assert.equal(classification.intentClass, knowledgeQueryClasses.ACTION_TOOL_REQUEST,
+  'An active tool field response must remain in the authorized tool workflow');
+
+classification = classifyKnowledgeQuery(createKnowledgeEngineInput({
+  tenantId, agentId, callId, utterance: 'ordinary chest pain',
+}), {
+  tenantId, agentId, callId, action: 'CONFIRM', score: 0.78,
+  routingCandidates: [{
+    recordId: safety.record_id, recordType: 'WORKFLOW_RULE', entityType: 'ROUTE',
+    intentClass: 'SAFETY_EMERGENCY', score: 0.78, method: 'fuzzy', explicit: true,
+    signals: [{ method: 'fuzzy', score: 0.78, phrase: 'severe chest pain', explicit: true }],
+  }],
+});
+assert.equal(classification.intentClass, knowledgeQueryClasses.UNKNOWN,
+  'Emergency routing must not activate from fuzzy similarity without an explicit severe trigger');
+
 const workflowExtraction = processExtractedCategory('workflow_rules', {
   fullText: '', pages: [{ pageNumber: 1, lines: [
     'RULE: urgent_route',

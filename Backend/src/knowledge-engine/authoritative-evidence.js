@@ -208,12 +208,20 @@ export const authoritativeHydrationSql = `
        AND document.status='ready' AND document.deleted_at IS NULL
   ) SELECT evidence.*,
       document.display_name AS document_display_name,
-      document.document_type::text AS document_type
+      document.document_type::text AS document_type,
+      document.status::text AS document_status,
+      version.status::text AS document_version_status,
+      version.is_current AS document_version_is_current
     FROM evidence
     JOIN knowledge_documents document
       ON document.tenant_id=evidence.tenant_id
      AND document.knowledge_base_id=evidence.knowledge_base_id
      AND document.id=evidence.document_id
+    JOIN knowledge_document_versions version
+      ON version.tenant_id=evidence.tenant_id
+     AND version.knowledge_base_id=evidence.knowledge_base_id
+     AND version.document_id=evidence.document_id
+     AND version.id=evidence.document_version_id
    ORDER BY rank,record_type,record_id`;
 
 function normalizeId(value) {
@@ -414,6 +422,9 @@ function evidenceFromRow(row, input, fused) {
     providerScores: fused.providerScores,
     hydrationValidated: true,
     publicationValidated: true,
+    documentStatus: row.document_status ?? null,
+    documentVersionStatus: row.document_version_status ?? null,
+    documentVersionIsCurrent: row.document_version_is_current === true,
   });
 }
 

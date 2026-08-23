@@ -107,15 +107,41 @@ function rankedCandidates(resolution) {
   return [resolution?.candidate, ...(resolution?.alternatives ?? [])].filter(Boolean);
 }
 
+const explicitSafetyMethods = new Set(['exact', 'normalized', 'tenant_alias', 'stt', 'phonetic']);
+
+function hasExplicitPublishedSafetyTrigger(candidate) {
+  if (candidate?.explicit !== true) return false;
+  return (candidate.signals ?? []).some((signal) => signal.explicit === true
+    && explicitSafetyMethods.has(signal.method)
+    && Number(signal.score ?? 0) >= 0.89
+    && String(signal.phrase ?? '').trim());
+}
+
+function candidateIsEligible(candidate, intentClass) {
+  if (intentClass === knowledgeQueryClasses.SAFETY_EMERGENCY) {
+    return hasExplicitPublishedSafetyTrigger(candidate);
+  }
+  if ([
+    knowledgeQueryClasses.KNOWN_INFORMATION,
+    knowledgeQueryClasses.DETAILS_OR_PRICE,
+    knowledgeQueryClasses.CATEGORY_OVERVIEW,
+  ].includes(intentClass)) {
+    return Number(candidate?.score ?? 0) >= 0.88;
+  }
+  return true;
+}
+
 function explicitEntityCount(candidates) {
   return new Set(candidates.filter((candidate) => candidate.explicit
+    && Number(candidate.score ?? 0) >= 0.88
     && ['ITEM', 'CATEGORY'].includes(candidate.entityType))
     .map((candidate) => `${candidate.entityType}:${candidate.itemKey ?? candidate.categoryKey ?? candidate.recordId}`))
     .size;
 }
 
 function explicitPhraseSignatureCount(candidates) {
-  return new Set(candidates.filter((candidate) => candidate.explicit).map((candidate) => (
+  return new Set(candidates.filter((candidate) => candidate.explicit
+    && Number(candidate.score ?? 0) >= 0.88).map((candidate) => (
     [...new Set((candidate.signals ?? [])
       .filter((signal) => signal.explicit === true && signal.phrase)
       .map((signal) => String(signal.phrase).normalize('NFKC').trim().toLocaleLowerCase()))]
@@ -128,7 +154,8 @@ function inferredCandidates(input, resolution) {
   const candidates = rankedCandidates(resolution);
   const inferred = candidates.flatMap((candidate) => {
     const intentClass = candidateIntent(candidate);
-    return intentClass ? [{ intentClass, candidate, source: candidate.intentClass
+    return intentClass && candidateIsEligible(candidate, intentClass)
+      ? [{ intentClass, candidate, source: candidate.intentClass
       ? 'published_intent_class' : 'resolved_structure' }] : [];
   });
   if ((explicitEntityCount(candidates) > 1 && explicitPhraseSignatureCount(candidates) > 1)
@@ -154,6 +181,13 @@ function inferredCandidates(input, resolution) {
       intentClass: knowledgeQueryClasses.DETAILS_OR_PRICE,
       candidate: resolution?.candidate ?? null,
       source: 'requested_fact_with_active_entity',
+    });
+  }
+  if (input.memory?.activeTool?.name) {
+    inferred.push({
+      intentClass: knowledgeQueryClasses.ACTION_TOOL_REQUEST,
+      candidate: null,
+      source: 'active_tool_workflow',
     });
   }
   if (!inferred.length) inferred.push({
@@ -210,7 +244,9 @@ export function classifyKnowledgeQuery(input, resolution) {
     confidence: resolution.score ?? 0,
     source: selected.source,
     candidate: selected.candidate,
-    requiresConfirmation: resolution.action === 'CONFIRM',
+    requiresConfirmation: Boolean(selected.candidate)
+      && !input.memory?.activeTool?.name
+      && resolution.action === 'CONFIRM',
     retrievalPlan: Object.freeze({
       indexes: unique(searchIndexes),
       useSemantic: searchIndexes.includes(knowledgeSearchIndexes.SEMANTIC),

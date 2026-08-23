@@ -104,13 +104,20 @@ function unsupportedStructuredIdentifiers(claim, evidenceText) {
   // cannot be misread as the invalid identifier `X-`.
   const normalizedEvidence = text(evidenceText, maximumEvidenceText)
     .toLocaleLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim();
+  const compactEvidence = normalizedEvidence.replace(/\s+/gu, '');
   const evidence = new Set(normalizedEvidence.split(' ')
     .filter((entry) => entry.length >= 2 || /\d/u.test(entry))
     .map((entry) => entry.toLocaleUpperCase()));
   const claimed = (String(claim).match(/\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*\b/gu) ?? [])
     .filter((entry) => entry.replace(/-/gu, '').length >= 2)
     .map((entry) => entry.toLocaleUpperCase());
-  return [...new Set(claimed)].filter((entry) => !evidence.has(entry));
+  return [...new Set(claimed)].filter((entry) => {
+    if (evidence.has(entry)) return false;
+    const normalizedIdentifier = identity(entry);
+    if (normalizedIdentifier && ` ${normalizedEvidence} `.includes(` ${normalizedIdentifier} `)) return false;
+    const compactIdentifier = normalizedIdentifier.replace(/\s+/gu, '');
+    return !compactIdentifier || !compactEvidence.includes(compactIdentifier);
+  });
 }
 
 function matchedPolicyTypes(value, policies) {

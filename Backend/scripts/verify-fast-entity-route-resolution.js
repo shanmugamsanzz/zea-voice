@@ -66,7 +66,46 @@ const genericConversation = {
   entity_name: 'Generic overview', entity_aliases: ['Alpha Prime'], entity_category_aliases: [],
   entity_metadata: { intentClass: 'KNOWN_INFORMATION' },
 };
-const bundle = buildPublicationIndexes(job, [alpha, beta, ambiguousOne, ambiguousTwo, genericConversation]);
+const gold = record(6, {
+  question: 'Gold Master Health Checkup', answer: 'Gold package approved details.',
+  content: 'Gold package approved details.', entity_name: 'Gold Master Health Checkup',
+  entity_aliases: ['gold', 'gold package', 'gold checkup'],
+  entity_category: 'Master Health Check-up',
+  entity_category_aliases: ['master packages'],
+  entity_metadata: { itemKey: 'gold-master-health-checkup', categoryKey: 'master-health-checkup' },
+});
+const oncoMale = record(7, {
+  question: 'Onco Care Male', answer: 'Approved male oncology details.',
+  content: 'Approved male oncology details.', entity_name: 'Onco Care Male',
+  entity_aliases: ['male oncology screening'], entity_category: 'Oncology Screening',
+  entity_category_aliases: ['onco care', 'onco package', 'oncology package'],
+  entity_metadata: { itemKey: 'onco-care-male', categoryKey: 'oncology-screening' },
+});
+const oncoFemale = record(8, {
+  question: 'Onco Care Female', answer: 'Approved female oncology details.',
+  content: 'Approved female oncology details.', entity_name: 'Onco Care Female',
+  entity_aliases: ['female oncology screening'], entity_category: 'Oncology Screening',
+  entity_category_aliases: ['onco care', 'onco package', 'oncology package'],
+  entity_metadata: { itemKey: 'onco-care-female', categoryKey: 'oncology-screening' },
+});
+const renal = record(9, {
+  question: 'Renal Health Checkup', answer: 'Approved renal details.', content: 'Approved renal details.',
+  entity_name: 'Renal Health Checkup', entity_aliases: ['renal package'],
+  entity_category: 'Organ-Specific Health Check-ups',
+  entity_category_aliases: ['organ specific packages', 'organ health packages'],
+  entity_metadata: { itemKey: 'renal-health-checkup', categoryKey: 'organ-specific-health-checkups' },
+});
+const lungs = record(10, {
+  question: 'Lungs Health Checkup', answer: 'Approved lungs details.', content: 'Approved lungs details.',
+  entity_name: 'Lungs Health Checkup', entity_aliases: ['lungs package'],
+  entity_category: 'Organ-Specific Health Check-ups',
+  entity_category_aliases: ['organ specific packages', 'organ health packages'],
+  entity_metadata: { itemKey: 'lungs-health-checkup', categoryKey: 'organ-specific-health-checkups' },
+});
+const bundle = buildPublicationIndexes(job, [
+  alpha, beta, ambiguousOne, ambiguousTwo, genericConversation,
+  gold, oncoMale, oncoFemale, renal, lungs,
+]);
 
 function input(utterance, memory = {}) {
   return createKnowledgeEngineInput({ tenantId, agentId, callId, utterance, memory });
@@ -122,6 +161,43 @@ result = resolvePublishedEntityRoute(input('Beta Voice', {
 }), bundle);
 assert.equal(result.candidate.itemKey, 'beta-voice', 'Explicit new entity must override stale call context');
 assert.equal(result.explicitEntity, true);
+
+const staleAlphaMemory = {
+  activeEntity: { recordId: alpha.record_id, key: 'alpha-prime' },
+  pendingClarification: { kind: 'ambiguity', text: 'Which option?' },
+};
+
+result = resolvePublishedEntityRoute(input('Oncocare package பற்றி சொல்லுங்க', staleAlphaMemory), bundle);
+assert.equal(result.confidence, knowledgeResolutionConfidence.HIGH);
+assert.equal(result.candidate.entityType, 'CATEGORY');
+assert.equal(result.candidate.categoryKey, 'oncology-screening');
+assert.equal(result.explicitEntity, true);
+
+result = resolvePublishedEntityRoute(input('on cooker package pathi sollunga', staleAlphaMemory), bundle);
+assert.equal(result.confidence, knowledgeResolutionConfidence.HIGH);
+assert.equal(result.candidate.entityType, 'CATEGORY');
+assert.equal(result.candidate.categoryKey, 'oncology-screening');
+assert.equal(result.candidate.method, 'phonetic');
+
+result = resolvePublishedEntityRoute(input('Gold package பத்தி சொல்லுங்க', {
+  activeCategory: { recordId: oncoMale.record_id, key: 'oncology-screening' },
+}), bundle);
+assert.equal(result.confidence, knowledgeResolutionConfidence.HIGH);
+assert.equal(result.candidate.entityType, 'ITEM');
+assert.equal(result.candidate.itemKey, 'gold-master-health-checkup');
+
+result = resolvePublishedEntityRoute(input('Organ specific package பற்றி சொல்லுங்க', {
+  activeEntity: { recordId: gold.record_id, key: 'gold-master-health-checkup' },
+}), bundle);
+assert.equal(result.confidence, knowledgeResolutionConfidence.HIGH);
+assert.equal(result.candidate.entityType, 'CATEGORY');
+assert.equal(result.candidate.categoryKey, 'organ-specific-health-checkups');
+assert.equal(result.candidate.evidenceRecordIds.length, 2);
+
+result = resolvePublishedEntityRoute(input('a completely different unresolved topic now', {
+  activeEntity: { recordId: gold.record_id, key: 'gold-master-health-checkup' },
+}), bundle);
+assert.equal(result.candidate, null, 'A long unresolved request must not silently reuse stale item memory');
 
 result = resolvePublishedEntityRoute(input('unmapped complex request'), bundle, {
   semanticMatches: [{ recordId: beta.record_id, score: 0.76 }],

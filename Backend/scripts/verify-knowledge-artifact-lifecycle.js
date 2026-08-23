@@ -6,6 +6,7 @@ import {
 } from '../src/knowledge-bases/knowledge-map.service.js';
 import { processSemanticIndexJob } from '../src/knowledge-bases/semantic-index.service.js';
 import {
+  ensurePublishedEngineReady,
   invalidateKnowledgeBaseArtifacts,
   loadPublishedEngineArtifacts,
 } from '../src/knowledge-engine/runtime-service.js';
@@ -228,7 +229,40 @@ async function runPass(pass) {
   );
   assert.equal(loaded.publications.length, 1);
   assert.equal(loaded.bundles[0].knowledgeBaseId, knowledgeBaseB);
-  return { pass, preservedArtifacts: 7, restoredArtifacts: 7, recoveryJobs: recovery.insertCount };
+
+  const readinessKey = artifactKeys(knowledgeBaseB, 8)[4];
+  const readinessArtifact = cache.values.get(readinessKey);
+  assert.ok(readinessArtifact);
+  await cache.set(readinessKey, JSON.stringify({
+    ...JSON.parse(readinessArtifact),
+    version: publishedB.bundle.version - 1,
+  }));
+  let readinessClock = 0;
+  let readinessWaits = 0;
+  const ready = await ensurePublishedEngineReady(
+    { tenantId }, { agentId, callId: `readiness-${pass}`, usageDirection: 'inbound' },
+    {
+      cache,
+      contextRunner: runtimeContextRunner,
+      readinessTimeoutMs: 1_000,
+      readinessPollMs: 10,
+      now: () => readinessClock,
+      async wait(delayMs) {
+        readinessClock += delayMs;
+        readinessWaits += 1;
+        await cache.set(readinessKey, readinessArtifact);
+      },
+      async enqueueProcessingJob({ processingJobId }) { return { id: processingJobId }; },
+    },
+  );
+  assert.equal(readinessWaits, 1);
+  assert.equal(ready.readiness.ready, true);
+  assert.equal(ready.readiness.attempts, 2);
+  assert.equal(ready.readiness.artifactCount, 7);
+  return {
+    pass, preservedArtifacts: 7, restoredArtifacts: 7,
+    readinessAttempts: ready.readiness.attempts, recoveryJobs: recovery.insertCount,
+  };
 }
 
 const passes = [];

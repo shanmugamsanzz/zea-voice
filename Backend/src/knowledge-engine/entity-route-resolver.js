@@ -225,7 +225,12 @@ function indexedSignals(accumulator, index, query, queryForms, records) {
               .phonetic
           )).flat()
           : [];
-        if (queryForms.phonetic.includes(phrase) || phoneticWindows.includes(phrase)) score = sectionScore;
+        const compactPhrase = phrase.replace(/\s+/gu, '');
+        const compactWindows = phoneticWindows.map((form) => form.replace(/\s+/gu, ''));
+        if (queryForms.phonetic.includes(phrase)
+          || queryForms.phonetic.some((form) => form.replace(/\s+/gu, '').includes(compactPhrase))
+          || phoneticWindows.includes(phrase)
+          || compactWindows.includes(compactPhrase)) score = sectionScore;
       }
       if (!score) continue;
       for (const candidate of indexedCandidates) {
@@ -272,9 +277,11 @@ function contextRecordId(memory, records) {
   return null;
 }
 
-function contextSignals(accumulator, memory, records, hasExplicitCandidate) {
+function contextSignals(accumulator, input, query, records, hasExplicitCandidate) {
+  const memory = input?.memory ?? {};
   const recordId = contextRecordId(memory, records);
-  if (!recordId || hasExplicitCandidate) return;
+  const isCompactFollowUp = tokens(query).length <= 3;
+  if (!recordId || hasExplicitCandidate || !isCompactFollowUp || memory.pendingClarification) return;
   addSignal(accumulator, records.get(recordId), {
     method: 'context', score: 0.64, explicit: false,
   });
@@ -361,13 +368,15 @@ export function resolvePublishedEntityRoute(input, publicationBundles, options =
     }
   }
   suppressCategoryChildCollisions(catalogCandidates);
-  const explicitCatalog = [...catalogCandidates.values()].some((candidate) => candidate.explicit);
+  const explicitCatalog = [...catalogCandidates.values()].some((candidate) => (
+    candidate.explicit && candidate.score >= 0.88
+  ));
   const candidates = explicitCatalog
     ? new Map([...routeCandidates].filter(([, candidate]) => candidate.recordType === 'WORKFLOW_RULE'))
     : new Map(routeCandidates);
   for (const [key, candidate] of catalogCandidates) candidates.set(key, candidate);
   if (!candidates.size) semanticSignals(candidates, options.semanticMatches, records);
-  contextSignals(candidates, input.memory ?? {}, records,
+  contextSignals(candidates, input, query, records,
     [...candidates.values()].some((candidate) => candidate.explicit));
 
   const ranked = [...candidates.values()].sort((left, right) => (

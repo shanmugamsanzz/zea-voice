@@ -107,6 +107,18 @@ const weak = planSafeKnowledgeResponse({
 assert.equal(weak.type, knowledgeEngineDecisionTypes.CLARIFY);
 assert.equal(weak.clarification.kind, 'no_evidence');
 
+const groundedGeneral = source('published:knowledge_chunk:location', 'KNOWLEDGE_CHUNK',
+  'The approved office location is Central City.', {
+    heading: 'Office location', content: 'The approved office location is Central City.',
+  });
+const groundedGeneralPlan = planSafeKnowledgeResponse({
+  input: inputFor(), classification: classification(knowledgeQueryClasses.UNKNOWN),
+  resolution: {}, authoritative: authoritative([groundedGeneral]), runtimeProfile: { tools: [] },
+});
+assert.equal(groundedGeneralPlan.type, knowledgeEngineDecisionTypes.LLM,
+  'Retrieved General Knowledge must use grounded LLM instead of a false clarification');
+assert.deepEqual(groundedGeneralPlan.evidenceIds, [groundedGeneral.id]);
+
 const ambiguity = planSafeKnowledgeResponse({
   input: inputFor(), classification: classification(knowledgeQueryClasses.KNOWN_INFORMATION),
   resolution: {}, authoritative: authoritative([faq, second], {
@@ -287,5 +299,24 @@ const catalogDirect = planSafeKnowledgeResponse({
 assert.equal(catalogDirect.type, knowledgeEngineDecisionTypes.DIRECT);
 assert.doesNotMatch(catalogDirect.response.text, /ITEM KEY|ALIASES/u);
 assert.match(catalogDirect.response.text, /Support: Included/u);
+
+const goldWithStructuredTests = source(
+  'published:catalog_item:gold-structured', 'CATALOG_ITEM', 'Raw source is not spoken.',
+  {
+    itemKey: 'gold-option', name: 'Gold Option', description: 'Approved health screening.',
+    attributes: [{ key: 'tests', name: 'Tests', value: ['CBC', 'HS-CRP', 'ECG'] }],
+  },
+);
+const goldDecision = planSafeKnowledgeResponse({
+  input: inputFor(), classification: classification(knowledgeQueryClasses.KNOWN_INFORMATION),
+  resolution: {}, authoritative: authoritative([goldWithStructuredTests]), runtimeProfile: { tools: [] },
+});
+assert.equal(goldDecision.type, knowledgeEngineDecisionTypes.DIRECT,
+  'A rendered Catalog identifier must validate against the same hydrated structured fields');
+assert.match(goldDecision.response.text, /HS-CRP/u);
+assert.equal(validateFinalKnowledgeResponse({
+  input: inputFor(), answer: goldDecision.response.text,
+  selectedEvidenceIds: [goldWithStructuredTests.id], evidence: [goldWithStructuredTests],
+}).valid, true);
 
 console.log('Safe direct/LLM/clarification routing and verified schema-driven tool execution verified.');

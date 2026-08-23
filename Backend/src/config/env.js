@@ -149,6 +149,8 @@ const envSchema = z.object({
   RAG_RUNTIME_PROFILE_CACHE_TTL_SECONDS: z.coerce.number().int().min(1).max(300).default(30),
   RAG_RUNTIME_RESULT_CACHE_TTL_SECONDS: z.coerce.number().int().min(1).max(300).default(30),
   RAG_RUNTIME_CACHE_TIMEOUT_MS: z.coerce.number().int().min(5).max(1000).default(50),
+  KNOWLEDGE_ARTIFACT_READINESS_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(30000),
+  KNOWLEDGE_ARTIFACT_READINESS_POLL_MS: z.coerce.number().int().min(25).max(5000).default(250),
   RAG_RUNTIME_SEMANTIC_DEADLINE_MS: z.coerce.number().int().min(100).max(1000).default(300),
   RAG_RUNTIME_CHANNEL_DEADLINE_MS: z.coerce.number().int().min(100).max(500).default(150),
   RAG_RUNTIME_TOP_K: z.coerce.number().int().min(1).max(10).default(3),

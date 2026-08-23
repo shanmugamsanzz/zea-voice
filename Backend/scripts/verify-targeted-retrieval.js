@@ -155,6 +155,33 @@ assert.equal(retrieval.channels.bm25.length, 0);
 assert.equal(retrieval.channels.qdrant.length, 0);
 assert.equal(embedCalls, 1);
 
+request = prepared('action phrase', {
+  memory: {
+    activeEntity: { recordId: alpha.record_id, itemKey: 'alpha' },
+    activeTool: { name: 'tenant_action', authorizationRecordId: workflow.record_id },
+  },
+});
+retrieval = await retrieveTargetedCandidates({
+  ...request, publicationBundles: bundle, sparseIndexes: [sparseIndex],
+}, providers);
+assert.deepEqual(new Set(retrieval.channels.structured.map((candidate) => candidate.recordId)),
+  new Set([workflow.record_id, alpha.record_id]),
+  'An authorized action must retrieve its Workflow and the active Catalog item in one turn');
+
+request = prepared('tenant field value', {
+  memory: {
+    activeEntity: { recordId: alpha.record_id, itemKey: 'alpha' },
+    activeTool: { name: 'tenant_action', authorizationRecordId: workflow.record_id },
+  },
+});
+retrieval = await retrieveTargetedCandidates({
+  ...request, publicationBundles: bundle, sparseIndexes: [sparseIndex],
+}, providers);
+assert.equal(request.classification.intentClass, knowledgeQueryClasses.ACTION_TOOL_REQUEST);
+assert.deepEqual(new Set(retrieval.channels.structured.map((candidate) => candidate.recordId)),
+  new Set([workflow.record_id, alpha.record_id]),
+  'Tool field answers must preserve the published Workflow and selected Catalog authorization');
+
 request = prepared('obscure policy words extra');
 retrieval = await retrieveTargetedCandidates({
   ...request, publicationBundles: bundle, sparseIndexes: [sparseIndex],
@@ -186,4 +213,3 @@ await assert.rejects(() => retrieveTargetedCandidates({
 }, providers), /same-tenant/u);
 
 console.log('Targeted structured, BM25 and Qdrant candidate-only retrieval verified.');
-
