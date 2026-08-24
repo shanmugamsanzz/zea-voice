@@ -27,6 +27,12 @@ const methodPriority = Object.freeze({
   phonetic: 3, fuzzy: 2, semantic: 1, context: 0,
 });
 
+const contextualReferenceTokens = new Set([
+  'this', 'that', 'it', 'these', 'those', 'same',
+  '\u0b87\u0ba4\u0bc1', '\u0b87\u0ba4\u0bbf\u0bb2\u0bcd', '\u0b87\u0ba4\u0bc1\u0bb2',
+  '\u0b85\u0ba4\u0bc1', '\u0b85\u0ba4\u0bbf\u0bb2\u0bcd', '\u0b85\u0ba4\u0bc1\u0bb2', 'ithu', 'ithula', 'athula', 'adhu',
+]);
+
 function boundedScore(value) {
   const number = Number(value);
   return Number.isFinite(number) ? Math.max(0, Math.min(1, number)) : 0;
@@ -369,26 +375,53 @@ function semanticSignals(accumulator, semanticMatches, records) {
   }
 }
 
-function contextRecordId(memory, records) {
-  const active = memory?.activeEntity ?? memory?.activeCategory;
-  if (!active) return null;
-  const directId = normalizeId(active.recordId ?? active.id);
-  if (directId && records.has(directId)) return directId;
-  const itemKey = normalizeId(active.itemKey ?? active.key);
-  const categoryKey = normalizeId(active.categoryKey ?? active.key);
-  for (const [recordId, record] of records) {
-    if ((itemKey && normalizeId(record.itemKey) === itemKey)
-      || (categoryKey && normalizeId(record.categoryKey) === categoryKey)) return recordId;
+function contextCandidate(memory, records) {
+  const activeEntity = memory?.activeEntity;
+  if (activeEntity) {
+    const directId = normalizeId(activeEntity.recordId ?? activeEntity.id);
+    if (directId && records.has(directId)) return records.get(directId);
+    const itemKey = normalizeId(activeEntity.itemKey ?? activeEntity.key);
+    if (itemKey) {
+      for (const record of records.values()) {
+        if (normalizeId(record.itemKey) === itemKey) return record;
+      }
+    }
+  }
+  const activeCategory = memory?.activeCategory;
+  const categoryKey = normalizeId(activeCategory?.categoryKey ?? activeCategory?.key);
+  if (categoryKey) {
+    const categoryRecords = [...records.values()].filter((record) => (
+      record.recordType === 'CATALOG_ITEM' && normalizeId(record.categoryKey) === categoryKey
+    ));
+    if (categoryRecords.length) {
+      const first = categoryRecords[0];
+      return {
+        ...first,
+        recordType: 'CATALOG_CATEGORY',
+        entityType: 'CATEGORY',
+        label: activeCategory.name ?? first.category,
+        itemKey: null,
+        categoryKey,
+        categoryDescription: first.categoryDescription,
+        children: Object.freeze(categoryRecords.map((record) => Object.freeze({
+          recordId: record.recordId, itemKey: record.itemKey, label: record.label,
+        }))),
+        evidenceRecordIds: Object.freeze(categoryRecords.map((record) => record.recordId)),
+      };
+    }
   }
   return null;
 }
 
 function contextSignals(accumulator, input, query, records, hasExplicitCandidate) {
   const memory = input?.memory ?? {};
-  const recordId = contextRecordId(memory, records);
-  const isCompactFollowUp = tokens(query).length <= 3;
-  if (!recordId || hasExplicitCandidate || !isCompactFollowUp || memory.pendingClarification) return;
-  addSignal(accumulator, records.get(recordId), {
+  const candidate = contextCandidate(memory, records);
+  const queryTokens = tokens(query);
+  const isSupportedFollowUp = queryTokens.length <= 3
+    || queryTokens.some((token) => contextualReferenceTokens.has(token))
+    || (input?.requestedFacts?.length ?? 0) > 0;
+  if (!candidate || hasExplicitCandidate || !isSupportedFollowUp || memory.pendingClarification) return;
+  addSignal(accumulator, candidate, {
     method: 'context', score: 0.64, explicit: false,
   });
 }
@@ -547,6 +580,15 @@ export function resolvePublishedIntentRoutes(input, publicationBundles) {
 
 const absoluteRouteIntents = new Set(['SAFETY_EMERGENCY', 'CALL_CONTROL', 'ACTION_TOOL_REQUEST']);
 
+const explicitPriorityMethods = new Set(['exact', 'normalized', 'tenant_alias', 'stt', 'phonetic']);
+
+function explicitPriorityRoute(candidate) {
+  return candidate?.explicit === true
+    && Number(candidate?.score ?? 0) >= 0.88
+    && (candidate.signals ?? []).some((signal) => signal.explicit === true
+      && explicitPriorityMethods.has(signal.method)
+      && Number(signal.score ?? 0) >= 0.88);
+}
 const routeIntentPriority = Object.freeze({
   SAFETY_EMERGENCY: 100,
   CALL_CONTROL: 90,
@@ -586,9 +628,11 @@ export function resolvePublishedEntityRoute(input, publicationBundles, options =
   const preliminaryNamespace = candidateNamespace(preliminaryCandidate);
   const preliminaryIntent = normalizedIntentClass(preliminary?.intentClass
     ?? preliminaryCandidate?.intentClass);
-  const lockPublishedRoute = absoluteRouteIntents.has(preliminaryIntent)
-    || (preliminaryCandidate?.recordType === 'WORKFLOW_RULE'
-      && Number(preliminaryCandidate.score ?? 0) >= 0.88);
+  const continuingActiveTool = preliminary?.source === 'active_tool_workflow'
+    && preliminaryIntent === 'ACTION_TOOL_REQUEST';
+  const lockPublishedRoute = continuingActiveTool
+    || (absoluteRouteIntents.has(preliminaryIntent)
+      && explicitPriorityRoute(preliminaryCandidate));
 
   const catalogRanked = rankCandidates(catalog);
   const explicitCatalog = catalogRanked[0]?.explicit === true

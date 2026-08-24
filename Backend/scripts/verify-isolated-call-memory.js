@@ -75,12 +75,13 @@ memory.applyEngineDecision({
 }, {
   explicitCategory: true,
   entity: null,
-  category: { key: 'organ-specific', name: 'Organ-Specific Options' },
+  category: { id: 'category:organ-specific', key: 'organ-specific', name: 'Organ-Specific Options' },
   citedEvidence: [{ id: 'source-category', recordId: 'record-category', recordType: 'CATALOG_ITEM' }],
 });
 snapshot = memory.snapshot();
 assert.equal(snapshot.activeEntity, null);
 assert.equal(snapshot.activeCategory.key, 'organ-specific');
+assert.equal(snapshot.activeCategory.id, 'category:organ-specific');
 assert.equal(snapshot.pendingClarification, null);
 
 memory.setActiveToolRequest({

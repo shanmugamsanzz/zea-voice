@@ -2734,6 +2734,8 @@ export class RealtimeConversationOrchestrator {
           categoryKey: authoritative.categoryKey,
         } : null;
       const category = categoryDecision ? {
+        id: resolvedCandidate?.categoryKey
+          ? `category:${resolvedCandidate.categoryKey}` : null,
         key: resolvedCandidate?.categoryKey,
         name: resolvedCandidate?.label,
         description: resolvedCandidate?.categoryDescription,
@@ -2865,26 +2867,15 @@ export class RealtimeConversationOrchestrator {
           remainingLiveTurnBudgetMs(firstAudioDeadlineAt, ttsReserveMs),
         );
         latencyTracker.setResponseClass('grounded_llm');
-        if (remainingFirstAudioBudgetMs < 250) {
-          const acknowledgementText = configuredLatencyAcknowledgementResponse(this.runtimeProfile);
-          latencyTracker.markLatencyAcknowledgement();
-          turnLatency.latencyAcknowledgement = true;
-          response = {
-            cancelled: false,
-            text: acknowledgementText,
-            toolCalls: [],
-            sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
-              label: 'Safe LLM latency acknowledgement',
-              metadata: { reason: 'insufficient_llm_first_audio_budget' },
-            })],
-          };
-        } else {
-          const latencyResult = await awaitLlmWithSafeLatency(this.#llm(query, history, knowledge, {
+        const latencyResult = await awaitLlmWithSafeLatency(this.#llm(query, history, knowledge, {
             instruction: 'Resolve only the ambiguity, comparison, action, or multi-source question in the latest utterance. Use only cited evidence. Keep answer brief. Return exactly one grounded decision JSON object.',
             callCheck: null,
           }, streaming), {
             tracker: latencyTracker,
-            acknowledgementAfterMs: remainingFirstAudioBudgetMs,
+            // A depleted first-audio budget changes only when the optional
+            // acknowledgement is spoken. It must never replace or cancel the
+            // in-flight grounded answer.
+            acknowledgementAfterMs: Math.max(1, remainingFirstAudioBudgetMs),
             ttsReserveMs,
             acknowledgementText: configuredLatencyAcknowledgementResponse(this.runtimeProfile),
             completionTimeoutMs: env.LLM_REQUEST_TIMEOUT_MS,
@@ -2900,8 +2891,7 @@ export class RealtimeConversationOrchestrator {
               await sentencePipeline.waitUntilStarted();
             },
           });
-          response = latencyResult.value;
-        }
+        response = latencyResult.value;
         turnLatency.llmMs += Math.max(0, Date.now() - llmStartedAt);
       } catch (error) {
         this.#recordProviderFailure('llm', error, 'llm.response');
@@ -3012,10 +3002,12 @@ export class RealtimeConversationOrchestrator {
     const rawAnswer = callerFacingText(
       generatedAnswer || configuredSafeFailureResponse(this.runtimeProfile), this.runtimeProfile,
     );
-    const unconstrainedAnswer = sentencePipeline.sentenceCount() === 0
+    const finalAnswer = sentencePipeline.sentenceCount() === 0
       ? (this.liveCallMemory?.prepareAssistantResponse?.(rawAnswer) || rawAnswer)
       : rawAnswer;
-    if (sentencePipeline.sentenceCount() === 0) sentencePipeline.enqueue(unconstrainedAnswer);
+    // The pipeline may already contain the temporary latency acknowledgement.
+    // The validated final answer must still be delivered unless it became stale.
+    sentencePipeline.enqueue(finalAnswer);
     if (!generatedAnswer) {
       sourceTrace.add(createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
         label: 'No-response fallback',

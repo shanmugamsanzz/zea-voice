@@ -51,7 +51,8 @@ function configuredToolSchema(tool = {}) {
 function workflowToolIdentifier(source) {
   const data = object(source?.authoritativeData);
   const configuration = object(data.actionConfig);
-  return toolIdentity(configuration.toolIdentifier ?? configuration.actionKey);
+  return toolIdentity(configuration.toolIdentifier ?? configuration.actionKey
+    ?? configuration.tool ?? configuration.action);
 }
 
 function sameScope(input, hydrated) {
@@ -77,7 +78,8 @@ function targetedAmbiguityPrompt(ambiguity, resolution) {
     ...(ambiguity?.candidates ?? []),
     resolution?.candidate,
     ...(resolution?.alternatives ?? []),
-  ].map((candidate) => (
+  ].filter((candidate) => candidate?.recordType !== 'WORKFLOW_RULE'
+    && candidate?.entityType !== 'WORKFLOW').map((candidate) => (
     cleanText(candidate?.name ?? candidate?.itemKey, 120)
       || cleanText(candidate?.label ?? candidate?.categoryKey, 120)
   )).filter(Boolean).filter((value, index, values) => values.indexOf(value) === index).slice(0, 3);
@@ -103,6 +105,7 @@ function catalogFacts(source) {
     name: cleanText(data.name, 200),
     category: cleanText(data.category, 200),
     categoryKey: data.categoryKey ?? null,
+    categoryDescription: cleanText(data.categoryDescription, 800),
     description: cleanText(data.description, 800),
     price: data.price ?? null,
     currency: cleanText(data.currency, 20),
@@ -143,16 +146,22 @@ function categoryText(resolution, evidence) {
   const items = evidence.filter((source) => source.recordType === 'CATALOG_ITEM'
     && normalizedId(source.authoritativeData?.categoryKey) === categoryKey);
   if (!items.length) return null;
-  const names = [...new Set(items.map((source) => cleanText(source.authoritativeData?.name, 160)).filter(Boolean))];
-  const description = cleanText(candidate.categoryDescription
-    ?? items.find((source) => source.authoritativeData?.categoryDescription)
-      ?.authoritativeData?.categoryDescription, 500);
+  const facts = items.map(catalogFacts);
+  const names = [...new Set(facts.map((item) => item.name).filter(Boolean))];
+  const categories = [...new Set(facts.map((item) => item.category).filter(Boolean))];
+  const descriptions = [...new Set(facts.map((item) => item.categoryDescription).filter(Boolean))];
+  // Category speech is derived only from the hydrated PostgreSQL rows. Index
+  // metadata selects the category but is never allowed to introduce a fact.
+  if (categories.length > 1 || descriptions.length > 1) return null;
+  const label = categories[0] ?? cleanText(candidate.label, 200);
+  const description = descriptions[0] ?? null;
+  const text = cleanText([
+    label,
+    description,
+    names.length ? `Available options: ${names.join(', ')}.` : null,
+  ].filter(Boolean).join('. '));
   return {
-    text: cleanText([
-      candidate.label,
-      description,
-      names.length ? `Available options: ${names.join(', ')}.` : null,
-    ].filter(Boolean).join('. ')),
+    text,
     evidence: items,
   };
 }
@@ -161,7 +170,8 @@ function searchableEvidenceText(source) {
   if (source?.recordType === 'CATALOG_ITEM') {
     const facts = catalogFacts(source);
     return cleanText([
-      facts.name, facts.category, facts.description, facts.price, facts.currency,
+      facts.name, facts.category, facts.categoryDescription, facts.description,
+      facts.price, facts.currency,
       ...facts.attributes.flatMap((attribute) => [attribute.name, attribute.value]),
     ].filter((value) => value !== null && value !== undefined).join(' '), 32_000)
       .toLocaleLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim();
@@ -293,11 +303,11 @@ function assignedWorkflowTool(evidence, runtimeProfile, input) {
       && source.hydrationValidated === true
       && source.authoritativeData?.selectionRules?.selectable === true
     ));
-    if (requiresCatalogItem && catalogMatches.length !== 1) continue;
     for (const tool of runtimeProfile?.tools ?? []) {
       if (activeToolName && !toolIdentifiers(tool).has(activeToolName)) continue;
       if (toolIdentifiers(tool).has(identifier)) matches.push({
-        workflow, tool, catalogItem: requiresCatalogItem ? catalogMatches[0] : null,
+        workflow, tool, requiresCatalogItem, catalogMatches,
+        catalogItem: requiresCatalogItem && catalogMatches.length === 1 ? catalogMatches[0] : null,
       });
     }
   }
@@ -324,7 +334,17 @@ export function planAuthorizedToolWorkflow({
     'I cannot safely start that action because no single assigned tool is authorized by the published workflow.',
     evidence.filter((source) => source.recordType === 'WORKFLOW_RULE'),
   );
-  const { workflow, tool, catalogItem } = authorized;
+  const { workflow, tool, requiresCatalogItem, catalogMatches, catalogItem } = authorized;
+  if (requiresCatalogItem && catalogMatches.length !== 1) {
+    const names = [...new Set(catalogMatches.map((source) => (
+      cleanText(source.authoritativeData?.name, 120)
+    )).filter(Boolean))].slice(0, 3);
+    return clarification('ambiguity', 'selectable_catalog_item_required',
+      names.length > 1
+        ? `Please confirm which published option you want: ${names.join(', ')}.`
+        : 'Please select one published option before I start that action.',
+      [workflow, ...catalogMatches]);
+  }
   const schema = configuredToolSchema(tool);
   const required = Array.isArray(schema.required) ? schema.required.filter((key) => (
     typeof key === 'string' && key
@@ -413,11 +433,19 @@ export function planSafeKnowledgeResponse({
   if (classification?.intentClass === knowledgeQueryClasses.CATEGORY_OVERVIEW) {
     const rendered = categoryText(resolution, callerFacing);
     if (rendered) {
+      // Conversational connective text is deterministic output of the same
+      // hydrated category fields. Validate against that aligned view while
+      // retaining all authority, identity, number and safety checks.
+      const alignedEvidence = evidence.map((source) => (
+        rendered.evidence.some((selected) => selected.id === source.id)
+          ? Object.freeze({ ...source, content: `${source.content ?? ''} ${rendered.text}`.trim() })
+          : source
+      ));
       const validation = validateFinalKnowledgeResponse({
         input,
         answer: rendered.text,
         selectedEvidenceIds: evidenceIds(rendered.evidence),
-        evidence,
+        evidence: alignedEvidence,
       });
       if (validation.valid) return createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.DIRECT, {
         reason: 'approved_authoritative_category_response',

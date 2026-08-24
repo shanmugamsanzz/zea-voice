@@ -130,6 +130,10 @@ assert.ok(bundle.entityIndex.exact['example plan']);
 assert.ok(bundle.routeIndex.exact['reserve a time']);
 assert.ok(bundle.routeIndex.namespaces.workflow.exact['reserve a time']);
 assert.equal(bundle.routeIndex.namespaces.faq.exact['reserve a time'], undefined);
+assert.equal(bundle.routeIndex.namespaces.workflow.exact['create reservation'], undefined,
+  'Internal Workflow names must not activate an action');
+assert.equal(bundle.routeIndex.namespaces.workflow.exact.create_reservation, undefined,
+  'Assigned tool identifiers must not activate or identify a Workflow route');
 assert.equal(Object.values(bundle.routeIndex.namespaces).every((namespace) => (
   Object.values(namespace.exact).flat().every((candidate) => candidate.entityType !== 'ITEM')
 )), true, 'Intent namespaces must never contain Catalog entity candidates');

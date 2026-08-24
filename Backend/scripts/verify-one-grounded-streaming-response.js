@@ -75,3 +75,12 @@ console.log(JSON.stringify({
   simulatedTtsAfterValidationMs,
   jsonAndInternalTextBlocked: true,
 }, null, 2));
+assert.doesNotMatch(orchestratorSource, /remainingFirstAudioBudgetMs\s*<\s*250/u,
+  'A low first-audio budget must not replace the grounded LLM request');
+assert.match(orchestratorSource,
+  /awaitLlmWithSafeLatency\(this\.#llm[\s\S]+response\s*=\s*latencyResult\.value/u);
+assert.match(orchestratorSource, /sentencePipeline\.enqueue\(finalAnswer\)/u,
+  'The final answer must be queued even after a latency acknowledgement');
+assert.ok(orchestratorSource.indexOf('if (response.cancelled || epoch !== this.epoch')
+  < orchestratorSource.indexOf('sentencePipeline.enqueue(finalAnswer)'),
+  'Only current, non-cancelled generations may enqueue their final answer');

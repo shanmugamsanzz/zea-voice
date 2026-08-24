@@ -154,6 +154,16 @@ assert.deepEqual(retrieval.channels.structured.map((candidate) => candidate.reco
 assert.equal(retrieval.channels.bm25.length, 0);
 assert.equal(retrieval.channels.qdrant.length, 0);
 assert.equal(embedCalls, 1);
+request = prepared('action phrase alpha');
+retrieval = await retrieveTargetedCandidates({
+  ...request, publicationBundles: bundle, sparseIndexes: [sparseIndex],
+}, providers);
+assert.equal(request.classification.intentClass, knowledgeQueryClasses.ACTION_TOOL_REQUEST);
+assert.deepEqual(new Set(retrieval.channels.structured.map((candidate) => candidate.recordId)),
+  new Set([workflow.record_id, alpha.record_id]),
+  'An explicit action and Catalog item in the same utterance must be hydrated together');
+assert.equal(retrieval.channels.bm25.length, 0);
+assert.equal(retrieval.channels.qdrant.length, 0);
 
 request = prepared('action phrase', {
   memory: {

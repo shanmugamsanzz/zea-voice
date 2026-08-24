@@ -58,7 +58,9 @@ const categoryTwo = source('published:catalog_item:category-two', 'CATALOG_ITEM'
     description: 'Approved advanced service.',
   });
 const categoryDecision = planSafeKnowledgeResponse({
-  input: inputFor(),
+  input: inputFor({ knownEntities: [{
+    id: 'stale-record', key: 'stale-option', name: 'Stale Option',
+  }] }),
   classification: classification(knowledgeQueryClasses.CATEGORY_OVERVIEW),
   resolution: { candidate: {
     recordId: categoryOne.recordId, entityType: 'CATEGORY', categoryKey: 'service-options',
@@ -69,6 +71,29 @@ const categoryDecision = planSafeKnowledgeResponse({
 assert.equal(categoryDecision.type, knowledgeEngineDecisionTypes.DIRECT);
 assert.match(categoryDecision.response.text, /Starter Option.*Advanced Option/u);
 assert.deepEqual(new Set(categoryDecision.evidenceIds), new Set([categoryOne.id, categoryTwo.id]));
+
+const categoryWithLongHydratedDescription = source(
+  'published:catalog_item:category-description', 'CATALOG_ITEM', 'Raw publication source.', {
+    itemKey: 'tenant-option', categoryKey: 'tenant-services', name: 'Tenant Option',
+    category: 'Tenant Services',
+    categoryDescription: 'Approved multilingual services for current published customers.',
+    description: 'Approved option details.',
+  },
+);
+const alignedCategoryDecision = planSafeKnowledgeResponse({
+  input: inputFor(),
+  classification: classification(knowledgeQueryClasses.CATEGORY_OVERVIEW),
+  resolution: { candidate: {
+    recordId: categoryWithLongHydratedDescription.recordId,
+    entityType: 'CATEGORY', categoryKey: 'tenant-services',
+    label: 'Untrusted index label', categoryDescription: 'Untrusted index description',
+  } },
+  authoritative: authoritative([categoryWithLongHydratedDescription]), runtimeProfile: { tools: [] },
+});
+assert.equal(alignedCategoryDecision.type, knowledgeEngineDecisionTypes.DIRECT);
+assert.match(alignedCategoryDecision.response.text, /Tenant Services/u);
+assert.match(alignedCategoryDecision.response.text, /Approved multilingual services/u);
+assert.doesNotMatch(alignedCategoryDecision.response.text, /Untrusted index/u);
 
 const second = source('published:faq:two', 'FAQ', 'Priority support is available.', {
   question: 'What is priority support?', answer: 'Priority support is available.',
@@ -127,6 +152,16 @@ const ambiguity = planSafeKnowledgeResponse({
 });
 assert.equal(ambiguity.type, knowledgeEngineDecisionTypes.CLARIFY);
 assert.match(ambiguity.clarification.prompt, /Option One.*Option Two/u);
+const workflowAmbiguity = planSafeKnowledgeResponse({
+  input: inputFor(), classification: classification(knowledgeQueryClasses.KNOWN_INFORMATION),
+  resolution: {}, authoritative: authoritative([faq, second], {
+    ambiguity: { detected: true, candidates: [
+      { name: 'internal_rule_one', recordType: 'WORKFLOW_RULE' },
+      { name: 'internal_rule_two', recordType: 'WORKFLOW_RULE' },
+    ] },
+  }), runtimeProfile: { tools: [] },
+});
+assert.doesNotMatch(workflowAmbiguity.clarification.prompt, /internal_rule/u);
 
 assert.equal(validateFinalKnowledgeResponse({
   input: inputFor(), answer: 'Support is available on 9 weekdays.',

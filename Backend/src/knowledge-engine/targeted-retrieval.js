@@ -152,9 +152,17 @@ function structuredCandidatesForTurn(input, classification, resolution, recordSc
       : resolution;
   const candidates = [...structuredCandidates(selectedResolution, recordScope, allowedTypes, limit)];
   if (classification?.intentClass === 'ACTION_TOOL_REQUEST') {
+    const explicitCatalog = (resolution?.namespaceCandidates?.CATALOG ?? []).filter((candidate) => (
+      candidate.explicit === true && Number(candidate.score ?? 0) >= 0.88
+    )).flatMap((candidate) => (
+      candidate.evidenceRecordIds ?? [candidate.recordId]
+    )).map((recordId) => recordScope.get(normalizeId(recordId))).filter((record) => (
+      record?.recordType === 'CATALOG_ITEM' && allowedTypes.has(record.recordType)
+    ));
     const remembered = [
       activeWorkflowCandidate(input, recordScope, allowedTypes),
       activeCatalogCandidate(input, recordScope, allowedTypes),
+      ...explicitCatalog,
     ].filter(Boolean);
     for (const active of remembered) {
       if (candidates.some((candidate) => normalizeId(candidate.recordId) === normalizeId(active.recordId))) continue;

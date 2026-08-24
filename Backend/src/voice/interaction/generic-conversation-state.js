@@ -94,10 +94,16 @@ function cleanPending(value) {
 
 function cleanCategory(value = {}) {
   if (!value || typeof value !== 'object') return null;
+  const id = cleanText(value.id ?? value.recordId, 100);
   const key = cleanText(value.categoryKey ?? value.key, 160);
   const name = cleanText(value.category ?? value.name, 240);
-  if (!key && !name) return null;
-  return Object.freeze({ key: key || null, name: name || key, parentKey: cleanText(value.parentKey, 160) || null });
+  if (!id && !key && !name) return null;
+  return Object.freeze({
+    id: id || null,
+    key: key || null,
+    name: name || key || id,
+    parentKey: cleanText(value.parentKey, 160) || null,
+  });
 }
 
 function cleanEvidence(values = []) {

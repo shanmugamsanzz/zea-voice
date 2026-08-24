@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { AppError } from '../middleware/errors.js';
 
-export const KNOWLEDGE_PUBLICATION_BUNDLE_VERSION = 4;
+export const KNOWLEDGE_PUBLICATION_BUNDLE_VERSION = 5;
 
 const ROUTABLE_RECORD_TYPES = new Set(['faq', 'catalog_item', 'workflow_rule', 'conversation_node']);
 
@@ -56,6 +56,18 @@ function metadataPhrases(record) {
 }
 
 function recordPhrases(record) {
+  if (record.record_type === 'workflow_rule') {
+    const metadata = plainObject(record.entity_metadata);
+    const conditions = plainObject(metadata.conditions);
+    // Workflow names, rule keys and tool identifiers are implementation
+    // metadata. Only tenant-published caller phrases may activate an action.
+    return [
+      ...(stringArray(conditions.examples)),
+      ...(stringArray(conditions.triggerPhrases)),
+      ...(stringArray(record.entity_aliases)),
+      ...(stringArray(metadata.routePhrases)),
+    ].filter(Boolean);
+  }
   const phrases = [
     record.question,
     record.entity_name,
