@@ -9,6 +9,9 @@ import {
   buildCompactEvidenceBundle,
   compactBundleAsKnowledge,
 } from '../src/knowledge-engine/compact-evidence-bundle.js';
+import { buildGroundingEnvelope } from '../src/voice/interaction/grounded-llm-response.js';
+import { hydrateGroundingEnvelope } from '../src/voice/interaction/grounded-claim-validator.js';
+import { validateEvidenceScope } from '../src/voice/interaction/grounded-decision-security.js';
 
 const tenantId = 'a1000000-0000-4000-8000-000000000001';
 const agentId = 'a1000000-0000-4000-8000-000000000002';
@@ -26,6 +29,10 @@ function source(index, recordType = 'CATALOG_ITEM', callerFacing = true) {
     id: `published:${recordType.toLocaleLowerCase()}:record-${index}`,
     recordId: `record-${index}`, recordType, tenantId, agentId,
     knowledgeBaseId: 'kb-1', publicationRevision: 3,
+    documentId: `document-${index}`, documentVersionId: `version-${index}`,
+    documentStatus: 'ready', documentVersionStatus: 'ready', documentVersionIsCurrent: true,
+    documentName: 'tenant-upload.pdf', documentDisplayName: 'Tenant Upload',
+    documentType: 'pdf', pageNumber: index, pageEnd: index,
     content: `Approved evidence ${index}`, callerFacing, rank: index, rrfScore: 1 / (60 + index),
     hydrationValidated: true, publicationValidated: true,
     authoritativeData: recordType === 'CATALOG_ITEM' ? {
@@ -100,6 +107,36 @@ assert.equal(compactKnowledge.tenantEvidence.sources.length, 5);
 assert.equal(compactKnowledge.tenantEvidence.entities.length, 1);
 assert.equal(compactKnowledge.tenantEvidence.actionEvidence.length, 1);
 assert.doesNotMatch(JSON.stringify(compactKnowledge), /large-runtime-object|internalDebug/u);
+
+const envelope = buildGroundingEnvelope(compactKnowledge, {
+  includePublishedMap: false, maximumSources: 5,
+});
+assert.deepEqual(envelope.sourceMap[0], {
+  sourceId: 'source_1',
+  publishedEvidenceId: callerEvidence[0].id,
+  recordId: callerEvidence[0].recordId,
+});
+const hydratedEnvelope = hydrateGroundingEnvelope(envelope, callerEvidence);
+assert.equal(hydratedEnvelope.sources[0].id, 'source_1');
+assert.equal(hydratedEnvelope.sources[0].publishedEvidenceId, callerEvidence[0].id);
+assert.equal(hydratedEnvelope.sources[0].documentId, callerEvidence[0].documentId);
+assert.equal(hydratedEnvelope.sources[0].documentVersionId, callerEvidence[0].documentVersionId);
+assert.deepEqual(validateEvidenceScope(hydratedEnvelope.sources[0], {
+  tenantId, agentId, requireHydratedEvidence: true,
+  publicationRevisions: [{ knowledgeBaseId: 'kb-1', publicationRevision: 3 }],
+}), { valid: true, reason: null });
+assert.equal(validateEvidenceScope({
+  ...callerEvidence[0], documentVersionId: undefined,
+}, {
+  tenantId, agentId, requireHydratedEvidence: true,
+  publicationRevisions: [{ knowledgeBaseId: 'kb-1', publicationRevision: 3 }],
+}).reason, 'incomplete_evidence_metadata');
+assert.equal(validateEvidenceScope({
+  ...callerEvidence[0], tenantId: 'foreign-tenant',
+}, {
+  tenantId, agentId, requireHydratedEvidence: true,
+  publicationRevisions: [{ knowledgeBaseId: 'kb-1', publicationRevision: 3 }],
+}).reason, 'foreign_evidence_selected');
 
 assert.equal(buildCompactEvidenceBundle({
   input, authoritative: { evidence: callerEvidence },

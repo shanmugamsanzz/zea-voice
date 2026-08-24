@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import { performance } from 'node:perf_hooks';
 import { readFileSync } from 'node:fs';
 import { task10Industries } from './fixtures/task-10-industries.js';
-import { runParallelHybridRetrieval } from '../src/knowledge-bases/parallel-hybrid-retrieval.js';
+import { retrieveTargetedCandidates } from '../src/knowledge-engine/targeted-retrieval.js';
+import { knowledgeSearchIndexes } from '../src/knowledge-engine/query-classifier.js';
+import {
+  VoiceTurnLatencyTracker,
+  voiceTurnStages,
+} from '../src/knowledge-engine/voice-turn-latency.js';
 import { createSelectedLlmStream } from '../src/voice/providers/llm/llm-response.service.js';
 import {
   evaluateFirstAudioSlo,
@@ -84,22 +89,93 @@ const cancelledSession = await createSelectedLlmStream(profile, {
 await cancelledSession.cancel('stale_turn');
 assert.equal(cancellations, 1);
 
+const retrievalIdentity = {
+  tenantId: '50000000-0000-4000-8000-000000000001',
+  agentId: '50000000-0000-4000-8000-000000000002',
+  callId: '50000000-0000-4000-8000-000000000003',
+};
+const retrievalInput = {
+  ...retrievalIdentity, utterance: 'published choice', usageDirection: 'inbound',
+};
+const retrievalClassification = {
+  ...retrievalIdentity,
+  intentClass: 'KNOWN_INFORMATION',
+  retrievalPlan: {
+    indexes: [
+      knowledgeSearchIndexes.CATALOG,
+      knowledgeSearchIndexes.BM25,
+      knowledgeSearchIndexes.SEMANTIC,
+    ],
+  },
+};
+const retrievalBundle = {
+  tenantId: retrievalIdentity.tenantId,
+  knowledgeBaseId: '50000000-0000-4000-8000-000000000004',
+  publicationRevision: 1,
+  assignedAgentIds: [retrievalIdentity.agentId],
+  records: [{
+    record_id: '50000000-0000-4000-8000-000000000005',
+    record_type: 'catalog_item',
+    usage_direction: 'both',
+    entity_metadata: { itemKey: 'published-choice' },
+  }],
+};
+const channelStarts = [];
 const retrievalStartedAt = performance.now();
-const bounded = await runParallelHybridRetrieval({
-  bm25: () => ({ id: 'local-result' }),
-  vector: () => new Promise(() => {}),
-}, { defaultDeadlineMs: 80 });
-assert.equal(bounded.candidates.length, 1);
-assert.ok(bounded.failures.some((failure) => failure.code === 'RETRIEVAL_CHANNEL_DEADLINE'));
+const parallel = await retrieveTargetedCandidates({
+  input: retrievalInput,
+  classification: retrievalClassification,
+  resolution: { routingCandidates: [] },
+  publicationBundles: [retrievalBundle],
+  sparseIndexes: [{
+    documents: [{
+      id: retrievalBundle.records[0].record_id,
+      recordType: 'CATALOG_ITEM',
+      tenantId: retrievalIdentity.tenantId,
+      knowledgeBaseId: retrievalBundle.knowledgeBaseId,
+      publicationRevision: 1,
+      usageDirection: 'both',
+      tokens: ['published', 'choice'],
+    }],
+  }],
+}, {
+  onChannelStart: (channel) => channelStarts.push(channel),
+  embed: async () => [0.1],
+  search: async () => [{
+    id: retrievalBundle.records[0].record_id,
+    score: 0.92,
+    payload: {
+      tenant_id: retrievalIdentity.tenantId,
+      knowledge_base_id: retrievalBundle.knowledgeBaseId,
+      publication_revision: 1,
+      record_type: 'CATALOG_ITEM',
+      record_id: retrievalBundle.records[0].record_id,
+      agent_usage: 'both',
+    },
+  }],
+});
+assert.deepEqual(new Set(channelStarts), new Set(['structured', 'bm25', 'qdrant']));
+assert.ok(parallel.candidateCount >= 2);
 assert.ok(performance.now() - retrievalStartedAt < 250);
 
 const abortController = new AbortController();
-const abortedWork = runParallelHybridRetrieval({
-  vector: () => new Promise(() => {}),
-}, { defaultDeadlineMs: 500, signal: abortController.signal });
-abortController.abort('barge_in');
-const aborted = await abortedWork;
-assert.ok(aborted.failures.some((failure) => failure.code === 'RETRIEVAL_CHANNEL_ABORTED'));
+const retrievalTracker = new VoiceTurnLatencyTracker({
+  ...retrievalIdentity, turnId: 'bounded-retrieval',
+});
+await assert.rejects(() => retrievalTracker.measure(
+  voiceTurnStages.RETRIEVAL,
+  () => retrieveTargetedCandidates({
+    input: { ...retrievalInput, abortSignal: abortController.signal },
+    classification: retrievalClassification,
+    resolution: { routingCandidates: [] },
+    publicationBundles: [retrievalBundle],
+  }, {
+    embed: () => new Promise((resolve) => setTimeout(() => resolve([0.1]), 200)),
+    search: async () => [],
+  }),
+  { timeoutMs: 20, cancel: () => abortController.abort('retrieval_deadline') },
+), (error) => error.code === 'VOICE_TURN_STAGE_TIMEOUT');
+assert.equal(abortController.signal.aborted, true);
 
 const passingSamples = Array.from({ length: 20 }, (_, index) => ({ firstAudioMs: 500 + index * 10 }));
 assert.equal(evaluateFirstAudioSlo(passingSamples).passed, true);

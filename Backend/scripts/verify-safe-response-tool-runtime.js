@@ -156,6 +156,25 @@ const ambiguity = planSafeKnowledgeResponse({
 });
 assert.equal(ambiguity.type, knowledgeEngineDecisionTypes.CLARIFY);
 assert.match(ambiguity.clarification.prompt, /Option One.*Option Two/u);
+const tamilCandidateConfirmation = planSafeKnowledgeResponse({
+  input: createKnowledgeEngineInput({
+    tenantId, agentId, callId, utterance: 'இந்த option-ஐ சொல்றீங்களா?',
+    language: 'ta', usageDirection: 'inbound',
+  }),
+  classification: classification(knowledgeQueryClasses.KNOWN_INFORMATION, {
+    requiresConfirmation: true, confidence: 0.82,
+  }),
+  resolution: {
+    action: 'CONFIRM',
+    candidate: { label: 'Published Choice', recordId: faq.recordId },
+  },
+  authoritative: authoritative([faq], {
+    ambiguity: { detected: true, candidates: [{ name: 'Published Choice' }] },
+  }),
+  runtimeProfile: { tools: [] },
+});
+assert.equal(tamilCandidateConfirmation.type, knowledgeEngineDecisionTypes.CLARIFY);
+assert.equal(tamilCandidateConfirmation.clarification.prompt, 'Published Choice-ஐ சொல்றீங்களா?');
 const workflowAmbiguity = planSafeKnowledgeResponse({
   input: inputFor(), classification: classification(knowledgeQueryClasses.KNOWN_INFORMATION),
   resolution: {}, authoritative: authoritative([faq, second], {

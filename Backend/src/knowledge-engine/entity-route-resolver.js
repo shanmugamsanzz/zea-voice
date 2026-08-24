@@ -172,6 +172,15 @@ function fuzzyPhraseScore(query, phrase) {
   ));
 }
 
+function minimumPhraseTokenSimilarity(query, phrase) {
+  const queryTokens = tokens(query);
+  const phraseTokens = tokens(phrase);
+  if (phraseTokens.length < 2 || !queryTokens.length) return 0;
+  return Math.min(...phraseTokens.map((phraseToken) => Math.max(
+    ...queryTokens.map((queryToken) => stringSimilarity(queryToken, phraseToken)),
+  )));
+}
+
 function leadingEntitySimilarity(query, phrase) {
   const queryTokens = tokens(query);
   const phraseTokens = tokens(phrase);
@@ -272,7 +281,10 @@ function directIndexedSignals(accumulator, index, query, queryForms, records) {
   const lookups = [
     ['exact', index?.exact, [query], 1],
     ['stt', index?.stt, queryForms.stt, 0.96],
-    ['phonetic', index?.phonetic, queryForms.phonetic, 0.89],
+    // Generated phonetic forms are discovery signals, not proof that the
+    // caller named the entity exactly. Keep them below the automatic-accept
+    // threshold so the tenant-published candidate is confirmed first.
+    ['phonetic', index?.phonetic, queryForms.phonetic, 0.84],
   ];
   for (const [method, entries, phrases, score] of lookups) {
     for (const phrase of new Set(phrases)) {
@@ -301,7 +313,7 @@ function suppressCategoryChildCollisions(accumulator) {
 
 function indexedSignals(accumulator, index, query, queryForms, records, statistics) {
   const sections = [
-    ['exact', index?.exact, 1], ['stt', index?.stt, 0.96], ['phonetic', index?.phonetic, 0.89],
+    ['exact', index?.exact, 1], ['stt', index?.stt, 0.96], ['phonetic', index?.phonetic, 0.84],
   ];
   for (const [section, entries, sectionScore] of sections) {
     for (const [phrase, indexedCandidates] of Object.entries(entries ?? {})) {
@@ -314,8 +326,9 @@ function indexedSignals(accumulator, index, query, queryForms, records, statisti
           // tenant-published terms in the utterance. This prevents a generic
           // phrase shared by many entities from beating a more specific fuzzy
           // or phonetic match.
+          const coverage = distinctiveCoverage(query, phrase, statistics);
           score = phraseIsCanonicalDistinctive(phrase, statistics) ? 0.98
-            : 0.72 + distinctiveCoverage(query, phrase, statistics) * 0.26;
+            : (coverage >= 0.98 ? 0.96 : Math.min(0.84, 0.72 + coverage * 0.26));
           method = 'tenant_alias';
         }
       } else if (section === 'stt') {
@@ -325,8 +338,9 @@ function indexedSignals(accumulator, index, query, queryForms, records, statisti
         } else if (query.replace(/\s+/gu, '').startsWith(compactPhrase)) {
           score = sectionScore;
         } else if (queryForms.stt.some((form) => form.length >= 3 && form.includes(compactPhrase))) {
+          const coverage = distinctiveCoverage(query, phrase, statistics);
           score = phraseIsCanonicalDistinctive(phrase, statistics) ? sectionScore
-            : 0.68 + distinctiveCoverage(query, phrase, statistics) * 0.28;
+            : (coverage >= 0.98 ? 0.94 : Math.min(0.84, 0.68 + coverage * 0.28));
         }
       } else {
         const phraseSize = tokens(phrase).length;
@@ -360,9 +374,18 @@ function fuzzySignals(accumulator, index, query, records, statistics) {
     const similarity = fuzzyPhraseScore(query, phrase);
     if (similarity < 0.68) continue;
     const coverage = distinctiveCoverage(query, phrase, statistics);
-    const leadingBonus = leadingEntitySimilarity(query, phrase) >= 0.58 ? 0.1 : 0;
+    const leadingSimilarity = leadingEntitySimilarity(query, phrase);
+    const leadingBonus = leadingSimilarity >= 0.58 ? 0.1 : 0;
+    const completeLexicalMatch = tokens(phrase).length >= 3
+      && minimumPhraseTokenSimilarity(query, phrase) >= 0.84
+      && coverage >= 0.6;
+    const calculatedScore = similarity * (0.7 + coverage * 0.3) + leadingBonus;
+    const distinctiveLead = leadingSimilarity >= 0.9 && coverage >= 0.5;
+    const rawScore = distinctiveLead
+      ? Math.max(0.86, calculatedScore) : calculatedScore;
     const score = query === phrase ? similarity
-      : similarity * (0.7 + coverage * 0.3) + leadingBonus;
+      : (completeLexicalMatch ? Math.min(0.93, rawScore)
+        : Math.min(distinctiveLead ? 0.879 : 0.87, rawScore));
     for (const candidate of indexedCandidates) {
       addSignal(accumulator, indexedCandidate(candidate, records), {
         method: 'fuzzy', score: boundedScore(score), phrase, explicit: true,
@@ -635,13 +658,15 @@ export function resolvePublishedEntityRoute(input, publicationBundles, options =
   const semanticRanked = rankCandidates(semantic);
   const explicitCatalog = catalogRanked[0]?.explicit === true
     && catalogRanked[0].score >= 0.88;
+  const confirmableCatalog = catalogRanked[0]?.explicit === true
+    && catalogRanked[0].score >= 0.68;
   const contextualFollowUp = (input?.contextualReferences?.length ?? 0) > 0;
   let selectedNamespace = null;
   let selected = new Map();
   if (lockPublishedRoute && preliminaryNamespace) {
     selectedNamespace = preliminaryNamespace;
     selected = routeGroups.get(preliminaryNamespace) ?? new Map();
-  } else if (explicitCatalog) {
+  } else if (confirmableCatalog) {
     selectedNamespace = knowledgeCandidateNamespaces.CATALOG;
     selected = catalog;
   } else if (preliminaryCandidate && preliminaryNamespace) {

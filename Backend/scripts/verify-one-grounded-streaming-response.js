@@ -81,6 +81,11 @@ assert.match(orchestratorSource,
   /awaitLlmWithSafeLatency\(this\.#llm[\s\S]+response\s*=\s*latencyResult\.value/u);
 assert.match(orchestratorSource, /sentencePipeline\.enqueue\(finalAnswer\)/u,
   'The final answer must be queued even after a latency acknowledgement');
+assert.match(orchestratorSource, /acknowledgementEnabled:\s*acknowledgementEligible/u,
+  'Latency acknowledgement must be limited to evidence-backed response plans');
+assert.match(orchestratorSource,
+  /latencyAcknowledged\s*&&\s*response\.groundingFailureReason[\s\S]+configuredEvidenceValidationFailureResponse/u,
+  'A latency acknowledgement must not be followed by a generic clarification');
 assert.ok(orchestratorSource.indexOf('if (response.cancelled || epoch !== this.epoch')
   < orchestratorSource.indexOf('sentencePipeline.enqueue(finalAnswer)'),
   'Only current, non-cancelled generations may enqueue their final answer');

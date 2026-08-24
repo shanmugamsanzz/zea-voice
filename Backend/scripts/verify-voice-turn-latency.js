@@ -70,6 +70,23 @@ assert.deepEqual(acknowledgements, ['Please wait while I check.']);
 assert.equal(delayedTracker.snapshot().latencyAcknowledgement, true);
 assert.doesNotMatch(safeLatencyAcknowledgement(), /unclear|understand/iu);
 
+const ineligibleTracker = new VoiceTurnLatencyTracker({ ...identity, turnId: 'turn-3b' });
+const suppressedAcknowledgements = [];
+const ineligible = await awaitLlmWithSafeLatency(
+  new Promise((resolve) => setTimeout(() => resolve('specific safe explanation'), 20)),
+  {
+    tracker: ineligibleTracker,
+    acknowledgementEnabled: false,
+    acknowledgementAfterMs: 2,
+    completionTimeoutMs: 200,
+    onAcknowledgement: async (text) => suppressedAcknowledgements.push(text),
+  },
+);
+assert.equal(ineligible.acknowledged, false);
+assert.equal(ineligible.value, 'specific safe explanation');
+assert.deepEqual(suppressedAcknowledgements, []);
+assert.equal(ineligibleTracker.snapshot().latencyAcknowledgement, false);
+
 let cancelled = false;
 await assert.rejects(() => awaitLlmWithSafeLatency(
   new Promise((resolve) => setTimeout(resolve, 200)),

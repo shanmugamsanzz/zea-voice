@@ -408,15 +408,21 @@ export function detectAuthoritativeConflicts(evidence) {
 }
 
 export function detectEntityAmbiguity(evidence, classification, resolution) {
-  if (classification?.intentClass === knowledgeQueryClasses.COMPARISON_COMPLEX
-    || resolution?.candidate?.entityType === 'CATEGORY') {
+  if (classification?.intentClass === knowledgeQueryClasses.COMPARISON_COMPLEX) {
     return Object.freeze({ detected: false, candidates: Object.freeze([]), reason: null });
   }
   const selectedNamespace = resolution?.candidateNamespace ?? null;
   const hydratedIds = new Set(evidence.map((item) => normalizeId(item.recordId)));
+  const confirmationCandidateId = resolution?.action === 'CONFIRM'
+    ? normalizeId(resolution?.candidate?.recordId) : null;
+  const confirmationScore = Number(resolution?.candidate?.score ?? 0);
+  const confirmationTieWindow = 0.015;
   const candidates = (resolution?.routingCandidates ?? []).filter((candidate) => (
-    candidate.explicit === true
+    (candidate.explicit === true || normalizeId(candidate.recordId) === confirmationCandidateId)
     && hydratedIds.has(normalizeId(candidate.recordId))
+    && (resolution?.action !== 'CONFIRM'
+      || normalizeId(candidate.recordId) === confirmationCandidateId
+      || Number(candidate.score ?? 0) >= confirmationScore - confirmationTieWindow)
   )).map((candidate) => Object.freeze({
     recordId: candidate.recordId,
     recordType: candidate.recordType,
@@ -425,17 +431,26 @@ export function detectEntityAmbiguity(evidence, classification, resolution) {
     categoryKey: candidate.categoryKey ?? null,
     namespace: selectedNamespace,
     score: candidate.score,
+    matchedPhrase: (candidate.signals ?? []).filter((signal) => signal.explicit === true)
+      .sort((left, right) => Number(right.score ?? 0) - Number(left.score ?? 0))[0]?.phrase ?? null,
   }));
   const distinct = new Set(candidates.map((candidate) => (
     candidate.itemKey ?? candidate.categoryKey ?? candidate.recordId
   )));
+  // A single medium-confidence phonetic/fuzzy candidate still requires
+  // confirmation. Ambiguity here means the caller's words were uncertain,
+  // not necessarily that multiple database records tied.
   const detected = (classification?.requiresConfirmation === true || resolution?.action === 'CONFIRM')
-    && distinct.size > 1;
+    && distinct.size > 0;
   return Object.freeze({
     detected,
     candidates: Object.freeze(detected ? candidates.slice(0, 5) : []),
     namespace: detected ? selectedNamespace : null,
-    reason: detected ? 'multiple_authoritative_candidates_in_selected_namespace' : null,
+    reason: detected
+      ? (distinct.size > 1
+        ? 'multiple_authoritative_candidates_in_selected_namespace'
+        : 'medium_confidence_authoritative_candidate')
+      : null,
   });
 }
 

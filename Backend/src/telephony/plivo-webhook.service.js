@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { env } from '../config/env.js';
+import { logger } from '../config/logger.js';
 import { withPlatformAdminContext } from '../infrastructure/database-context.js';
 import { AppError } from '../middleware/errors.js';
 import { voiceCallOwnership } from '../voice/call-ownership.service.js';
@@ -85,6 +86,25 @@ function outcome(payload) {
   return 'failed';
 }
 
+export function describePlivoHangupCause(payload = {}) {
+  const source = String(payload.HangupSource ?? payload.HangupInitiator
+    ?? payload.DisconnectSource ?? '').normalize('NFKC').trim();
+  const normalizedSource = source.toLocaleLowerCase().replace(/[\s-]+/gu, '_');
+  let origin = 'unknown';
+  if (/(?:caller|callee|customer|user|remote_party)/u.test(normalizedSource)) origin = 'caller';
+  else if (/(?:carrier|network|operator|pstn)/u.test(normalizedSource)) origin = 'carrier';
+  else if (/(?:plivo|api|xml|application|platform)/u.test(normalizedSource)) origin = 'plivo';
+  return Object.freeze({
+    hangupOrigin: origin,
+    hangupSource: source || null,
+    hangupCauseName: String(payload.HangupCauseName ?? '').trim() || null,
+    hangupCauseCode: String(payload.HangupCauseCode ?? '').trim() || null,
+    callStatus: String(payload.CallStatus ?? '').trim() || null,
+    event: String(payload.Event ?? '').trim() || null,
+    durationSeconds: Math.max(0, Number(payload.BillDuration ?? payload.Duration ?? 0) || 0),
+  });
+}
+
 async function recordOnce(attemptId, eventType, providerCallId, payload) {
   return withPlatformAdminContext(null, async (client) => {
     const result = await client.query(`INSERT INTO plivo_callback_events
@@ -122,6 +142,14 @@ export async function processPlivoCallback(input) {
   }
   const providerCallId = String(input.payload.CallUUID ?? input.payload.RequestUUID ?? '').trim();
   if (!providerCallId) throw new AppError(400, 'Plivo callback has no call identifier', 'PLIVO_CALL_ID_MISSING');
+  if (input.eventType === 'hangup') {
+    logger.info({
+      stage: 'plivo.hangup_cause',
+      attemptId: input.attemptId,
+      providerCallId,
+      ...describePlivoHangupCause(input.payload),
+    }, 'Plivo hangup cause received for campaign call');
+  }
   if (!await recordOnce(input.attemptId, input.eventType, providerCallId, input.payload)) {
     return { duplicate: true };
   }
@@ -171,6 +199,13 @@ export async function processInboundPlivoHangup(input) {
     })) {
       throw new AppError(401, 'Invalid Plivo webhook signature', 'PLIVO_SIGNATURE_INVALID');
     }
+    logger.info({
+      stage: 'plivo.hangup_cause',
+      callId: call.id,
+      tenantId: call.tenant_id,
+      providerCallId,
+      ...describePlivoHangupCause(input.payload),
+    }, 'Plivo hangup cause received for live call');
     if (call.ended_at) {
       await finalizeCallCreditBilling(client, {
         call, durationSeconds: Number(call.duration_seconds ?? 0),

@@ -1,0 +1,26 @@
+{
+  "id": "exact-live-call-2026-08-24",
+  "language": "ta",
+  "turns": [
+    {
+      "id": "acknowledgement",
+      "utterance": "சொல்லுங்க",
+      "expectedKind": "response"
+    },
+    {
+      "id": "category-overview",
+      "utterance": "என்ன packagesலாம் இருக்கு?",
+      "expectedKind": "response"
+    },
+    {
+      "id": "phonetic-entity",
+      "utterance": "On Cooker package",
+      "expectedKind": "targeted_confirmation"
+    }
+  ],
+  "requirements": {
+    "repeats": 3,
+    "maximumRetrievalMs": 150,
+    "maximumFirstAudioMs": 2000
+  }
+}

@@ -254,7 +254,8 @@ export function hydrateSelectedEvidence(decision, envelope, authoritativeSources
   ]);
   return (envelope?.sources ?? []).filter((source) => selected.has(source.id)).map((source) => (
     authoritativeSources.find((candidate) => (
-      candidate.id === source.id
+      candidate.id === source.publishedEvidenceId
+      || candidate.id === source.id
       || (source.recordId && candidate.recordId === source.recordId)
     )) ?? null
   )).filter(Boolean);
@@ -263,7 +264,8 @@ export function hydrateSelectedEvidence(decision, envelope, authoritativeSources
 export function hydrateGroundingEnvelope(envelope, authoritativeSources = []) {
   const sources = (envelope?.sources ?? []).map((source) => {
     const authoritative = authoritativeSources.find((candidate) => (
-      candidate.id === source.id
+      candidate.id === source.publishedEvidenceId
+      || candidate.id === source.id
       || (source.recordId && candidate.recordId === source.recordId)
     ));
     return authoritative ? Object.freeze({
@@ -273,6 +275,7 @@ export function hydrateGroundingEnvelope(envelope, authoritativeSources = []) {
       // tenant/revision identity and factual fields.
       callerFacing: source.callerFacing === true ? true : authoritative.callerFacing,
       id: source.id,
+      publishedEvidenceId: authoritative.id,
       recordId: source.recordId ?? authoritative.recordId,
     }) : null;
   }).filter(Boolean);

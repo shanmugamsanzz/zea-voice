@@ -2,7 +2,7 @@ import { validateGroundedLlmDecision } from './grounded-llm-decision.js';
 import {
   configuredActionActivation,
   configuredToolAuthorization,
-  evidenceBelongsToRuntime,
+  validateEvidenceScope,
   validateDecisionSecurity,
 } from './grounded-decision-security.js';
 import {
@@ -364,9 +364,12 @@ export function applyUnifiedGroundedTurn({
     });
   }
   const selectedEvidence = selectedSources(effectiveDecision, hydratedEnvelope, evidence);
-  if (selectedEvidence.some((source) => !evidenceBelongsToRuntime(source, evidenceScope))) {
+  const invalidSelectedEvidence = selectedEvidence.map((source) => (
+    validateEvidenceScope(source, evidenceScope)
+  )).find((validation) => !validation.valid);
+  if (invalidSelectedEvidence) {
     return Object.freeze({
-      valid: false, reason: 'foreign_evidence_selected', state: memory.snapshot(),
+      valid: false, reason: invalidSelectedEvidence.reason, state: memory.snapshot(),
     });
   }
   // An explicit latest-turn Catalog match outranks saved conversational

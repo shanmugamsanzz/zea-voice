@@ -72,19 +72,27 @@ function clarification(kind, reason, prompt = null, evidence = []) {
   });
 }
 
-function targetedAmbiguityPrompt(ambiguity, resolution) {
-  const labels = [
-    ...(ambiguity?.candidates ?? []),
-    resolution?.candidate,
-    ...(resolution?.alternatives ?? []),
-  ].filter((candidate) => candidate?.recordType !== 'WORKFLOW_RULE'
-    && candidate?.entityType !== 'WORKFLOW').map((candidate) => (
-    cleanText(candidate?.name ?? candidate?.itemKey, 120)
-      || cleanText(candidate?.label ?? candidate?.categoryKey, 120)
+function targetedAmbiguityPrompt(ambiguity, resolution, input) {
+  const authoritativeCandidates = ambiguity?.candidates ?? [];
+  const candidates = (authoritativeCandidates.length
+    ? authoritativeCandidates
+    : [resolution?.candidate, ...(resolution?.alternatives ?? [])]
+  ).filter((candidate) => candidate?.recordType !== 'WORKFLOW_RULE'
+    && candidate?.entityType !== 'WORKFLOW');
+  const labels = candidates.map((candidate) => (
+    cleanText(candidate?.name ?? candidate?.label, 120)
+      || cleanText(candidate?.matchedPhrase, 120)
+      || cleanText(candidate?.itemKey ?? candidate?.categoryKey, 120)
   )).filter(Boolean).filter((value, index, values) => values.indexOf(value) === index).slice(0, 3);
-  return labels.length
-    ? `Please confirm which one you mean: ${labels.join(', ')}.`
-    : 'Please clarify which published option you mean.';
+  if (!labels.length) return 'Please clarify which published option you mean.';
+  const tamil = String(input?.language ?? '').toLocaleLowerCase().startsWith('ta')
+    || /\p{Script=Tamil}/u.test(String(input?.utterance ?? ''));
+  if (labels.length === 1) {
+    return tamil ? `${labels[0]}-ஐ சொல்றீங்களா?` : `Did you mean ${labels[0]}?`;
+  }
+  return tamil
+    ? `இதில் எதை சொல்றீங்க: ${labels.join(', ')}?`
+    : `Please confirm which one you mean: ${labels.join(', ')}.`;
 }
 
 function renderAttributeValue(value) {
@@ -427,7 +435,7 @@ export function planSafeKnowledgeResponse({
   }
   if (authoritative.ambiguity?.detected && !isComparison) {
     return clarification('ambiguity', 'ambiguous_authoritative_entity',
-      targetedAmbiguityPrompt(authoritative.ambiguity, resolution), evidence);
+      targetedAmbiguityPrompt(authoritative.ambiguity, resolution, input), evidence);
   }
   const allCallerFacing = evidence.filter((source) => source.callerFacing === true);
   const resolvedIds = new Set([

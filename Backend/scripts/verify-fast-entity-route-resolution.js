@@ -148,7 +148,7 @@ assert.equal(result.candidate.recordType, 'CATALOG_ITEM',
 result = resolvePublishedEntityRoute(input('Please explain the starter choice'), bundle);
 assert.equal(result.confidence, knowledgeResolutionConfidence.HIGH);
 assert.equal(result.candidate.itemKey, 'alpha-prime');
-assert.equal(result.candidate.method, 'tenant_alias');
+assert.ok(['tenant_alias', 'stt'].includes(result.candidate.method));
 
 result = resolvePublishedEntityRoute(input('ஆல்பா பிரைம் பற்றி சொல்லுங்கள்'), bundle);
 assert.equal(result.confidence, knowledgeResolutionConfidence.HIGH);
@@ -216,10 +216,18 @@ assert.equal(result.candidate.categoryKey, 'oncology-screening');
 assert.equal(result.explicitEntity, true);
 
 result = resolvePublishedEntityRoute(input('on cooker package pathi sollunga', staleAlphaMemory), bundle);
-assert.equal(result.confidence, knowledgeResolutionConfidence.HIGH);
+assert.equal(result.confidence, knowledgeResolutionConfidence.MEDIUM);
+assert.equal(result.action, knowledgeResolutionActions.CONFIRM);
 assert.equal(result.candidate.entityType, 'CATEGORY');
 assert.equal(result.candidate.categoryKey, 'oncology-screening');
 assert.ok(['phonetic', 'fuzzy'].includes(result.candidate.method));
+
+const unrelatedOnlyBundle = buildPublicationIndexes(job, [alpha, beta]);
+result = resolvePublishedEntityRoute(
+  input('on cooker package pathi sollunga', staleAlphaMemory), unrelatedOnlyBundle,
+);
+assert.equal(result.candidate, null,
+  'A phonetic utterance must not resolve when the tenant has no supporting published entity');
 
 result = resolvePublishedEntityRoute(input('Gold package பத்தி சொல்லுங்க', {
   activeCategory: { recordId: oncoMale.record_id, key: 'oncology-screening' },

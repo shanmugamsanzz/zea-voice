@@ -167,6 +167,28 @@ assert.equal(detectEntityAmbiguity(hydrated.evidence, {
   intentClass: knowledgeQueryClasses.COMPARISON_COMPLEX, requiresConfirmation: true,
 }, resolution).detected, false, 'An intentional comparison must not be treated as ambiguity');
 
+const semanticCandidate = {
+  recordId: hydrated.evidence[0].recordId,
+  recordType: hydrated.evidence[0].recordType,
+  entityType: 'ITEM',
+  label: 'Published semantic candidate',
+  itemKey: 'published-semantic-candidate',
+  score: 0.78,
+  explicit: false,
+  signals: [{ method: 'semantic', score: 0.78, explicit: false }],
+};
+const semanticAmbiguity = detectEntityAmbiguity(hydrated.evidence, {
+  intentClass: knowledgeQueryClasses.KNOWN_INFORMATION, requiresConfirmation: true,
+}, {
+  action: 'CONFIRM',
+  candidateNamespace: 'CATALOG',
+  candidate: semanticCandidate,
+  routingCandidates: [semanticCandidate],
+});
+assert.equal(semanticAmbiguity.detected, true,
+  'A medium tenant-scoped semantic candidate must receive targeted confirmation');
+assert.equal(semanticAmbiguity.candidates[0].name, 'Published semantic candidate');
+
 assert.match(authoritativeHydrationSql, /assigned\.publication_revision=requested\.publication_revision/u);
 assert.match(authoritativeHydrationSql, /status='approved'/u);
 assert.match(authoritativeHydrationSql, /version\.is_current=true/u);

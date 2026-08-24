@@ -6,20 +6,22 @@ function identity(value) {
     .replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim();
 }
 
-export function evidenceBelongsToRuntime(source, scope) {
-  if (!scope) return true;
+export function validateEvidenceScope(source, scope) {
+  if (!scope) return Object.freeze({ valid: true, reason: null });
   if (String(source?.recordType ?? '').toLocaleUpperCase() === 'RUNTIME_CONFIG') {
-    return identity(source?.tenantId) === identity(scope.tenantId)
+    const valid = identity(source?.tenantId) === identity(scope.tenantId)
       && identity(source?.agentId) === identity(scope.agentId)
       && source?.callerFacing === true
       && source?.authoritativeData?.verified === true
       && identity(source?.authoritativeData?.configurationType) === 'call check response';
+    return Object.freeze({ valid, reason: valid ? null : 'foreign_evidence_selected' });
   }
   if (String(source?.recordType ?? '').toLocaleUpperCase() === 'TOOL_RESULT') {
-    return identity(source?.tenantId) === identity(scope.tenantId)
+    const valid = identity(source?.tenantId) === identity(scope.tenantId)
       && identity(source?.agentId) === identity(scope.agentId)
       && source?.authoritativeData?.verified === true
       && typeof source?.authoritativeData?.success === 'boolean';
+    return Object.freeze({ valid, reason: valid ? null : 'foreign_evidence_selected' });
   }
   const revisions = new Map((scope.publicationRevisions ?? []).map((entry) => [
     identity(entry.knowledgeBaseId), Number(entry.publicationRevision ?? entry.revision),
@@ -27,13 +29,31 @@ export function evidenceBelongsToRuntime(source, scope) {
   const identityValid = identity(source?.tenantId) === identity(scope.tenantId)
     && identity(source?.agentId) === identity(scope.agentId)
     && revisions.get(identity(source?.knowledgeBaseId)) === Number(source?.publicationRevision);
-  if (!identityValid) return false;
-  if (scope.requireHydratedEvidence !== true) return true;
-  return source?.hydrationValidated === true
-    && source?.documentStatus === 'ready'
-    && source?.documentVersionStatus === 'ready'
-    && source?.documentVersionIsCurrent === true
-    && Boolean(source?.documentId) && Boolean(source?.documentVersionId);
+  if (!identityValid) return Object.freeze({ valid: false, reason: 'foreign_evidence_selected' });
+  if (scope.requireHydratedEvidence !== true) return Object.freeze({ valid: true, reason: null });
+  const requiredMetadata = [
+    source?.hydrationValidated,
+    source?.documentStatus,
+    source?.documentVersionStatus,
+    source?.documentVersionIsCurrent,
+    source?.documentId,
+    source?.documentVersionId,
+  ];
+  if (requiredMetadata.some((value) => value === null || value === undefined || value === '')) {
+    return Object.freeze({ valid: false, reason: 'incomplete_evidence_metadata' });
+  }
+  const ready = source.hydrationValidated === true
+    && source.documentStatus === 'ready'
+    && source.documentVersionStatus === 'ready'
+    && source.documentVersionIsCurrent === true;
+  return Object.freeze({
+    valid: ready,
+    reason: ready ? null : 'stale_or_unready_evidence',
+  });
+}
+
+export function evidenceBelongsToRuntime(source, scope) {
+  return validateEvidenceScope(source, scope).valid;
 }
 
 function workflowIdentifier(evidence) {
@@ -154,9 +174,8 @@ export function workflowAuthorizesTool(name, runtime = {}) {
 
 export function validateDecisionSecurity({ sources = [], toolRequest = null, runtime = {} } = {}) {
   for (const source of sources) {
-    if (!evidenceBelongsToRuntime(source, runtime.evidenceScope)) {
-      return Object.freeze({ valid: false, reason: 'foreign_evidence_selected' });
-    }
+    const scopeValidation = validateEvidenceScope(source, runtime.evidenceScope);
+    if (!scopeValidation.valid) return scopeValidation;
     if (source.callerFacing === false) {
       return Object.freeze({ valid: false, reason: 'instruction_evidence_selected' });
     }

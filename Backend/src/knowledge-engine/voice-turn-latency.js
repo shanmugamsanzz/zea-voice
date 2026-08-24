@@ -164,6 +164,7 @@ export function safeLatencyAcknowledgement(configuredMessage) {
 
 export async function awaitLlmWithSafeLatency(work, {
   tracker,
+  acknowledgementEnabled = true,
   acknowledgementAfterMs = env.VOICE_LLM_TURN_TIMEOUT_MS,
   ttsReserveMs = env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS,
   acknowledgementText,
@@ -176,6 +177,25 @@ export async function awaitLlmWithSafeLatency(work, {
   }
   const startedAt = tracker.now();
   const promise = Promise.resolve().then(() => work);
+  if (acknowledgementEnabled !== true) {
+    let completionTimer;
+    const completionDeadline = new Promise((_resolve, reject) => {
+      completionTimer = setTimeout(() => {
+        try { cancel?.(); } catch { /* best-effort cancellation */ }
+        reject(timeoutError(voiceTurnStages.LLM));
+      }, Math.max(1, Number(completionTimeoutMs)));
+      completionTimer.unref?.();
+    });
+    try {
+      const value = await Promise.race([promise, completionDeadline]);
+      return Object.freeze({ value, acknowledged: false });
+    } finally {
+      clearTimeout(completionTimer);
+      tracker.record(voiceTurnStages.LLM, tracker.now() - startedAt, {
+        acknowledged: false, acknowledgementEligible: false,
+      });
+    }
+  }
   const softWaitMs = Math.max(1, Math.min(
     Number(acknowledgementAfterMs),
     tracker.remaining(Math.max(1, Number(ttsReserveMs))),

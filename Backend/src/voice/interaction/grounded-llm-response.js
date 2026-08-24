@@ -65,8 +65,14 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
       && nodeType === 'message'
       && evidence.exactCallerResponseEligible !== false;
     addSource(sources, sourceContents, evidence.content, {
+      publishedEvidenceId: text(evidence.id, 240) || null,
       recordId: text(evidence.recordId, 100) || null,
       recordType: text(recordType, 40) || 'tenant_evidence',
+      knowledgeBaseId: text(evidence.knowledgeBaseId, 100) || null,
+      publicationRevision: Number(evidence.publicationRevision) || null,
+      documentId: text(evidence.documentId, 100) || null,
+      documentVersionId: text(evidence.documentVersionId, 100) || null,
+      provenance: evidence.provenance ?? null,
       nodeType: text(nodeType, 80) || null,
       callerFacing: evidence.callerFacing === true,
       authoritativeData: evidence.authoritativeData ?? null,
@@ -178,6 +184,11 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
     found: knowledge.found === true && selectedSources.length > 0,
     route: text(knowledge.route, 40) || 'none',
     sources: Object.freeze(selectedSources),
+    sourceMap: Object.freeze(selectedSources.map((source) => Object.freeze({
+      sourceId: source.id,
+      publishedEvidenceId: source.publishedEvidenceId ?? null,
+      recordId: source.recordId ?? null,
+    }))),
     entities: Object.freeze(entities),
     exactCallerResponses: Object.freeze(exactCallerResponses),
   });

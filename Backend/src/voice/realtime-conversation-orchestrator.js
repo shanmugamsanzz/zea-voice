@@ -176,6 +176,16 @@ export function configuredTechnicalFailureResponse(profile) {
     : 'Sorry, the information service is temporarily unavailable. Please try again shortly.';
 }
 
+export function configuredEvidenceValidationFailureResponse(profile) {
+  const configured = String(
+    profile.agent.settings?.evidenceValidationFailureMessage ?? '',
+  ).trim();
+  if (configured && !isInternalRuntimeText(configured)) return configured;
+  return languageCode(profile.agent.language) === 'ta'
+    ? 'மன்னிக்கவும், இந்த கேள்விக்கான பதிலை வெளியிடப்பட்ட தகவலுடன் பாதுகாப்பாக உறுதிப்படுத்த முடியவில்லை.'
+    : 'Sorry, I could not safely validate an answer to that question from the published information.';
+}
+
 export function configuredLatencyAcknowledgementResponse(profile) {
   return safeLatencyAcknowledgement(profile.agent.settings?.latencyAcknowledgementMessage);
 }
@@ -1911,10 +1921,11 @@ export class RealtimeConversationOrchestrator {
     let completion = {};
     const sentenceBuffer = createStreamingSentenceBuffer();
     const tenantEvidence = promptKnowledge.tenantEvidence ?? {};
+    const fullTenantEvidence = knowledge?.tenantEvidence ?? {};
     const authoritativeEvidence = [
-      ...(tenantEvidence.sources ?? []),
-      ...(tenantEvidence.actionEvidence ?? []),
-      ...(tenantEvidence.guidanceEvidence ?? []),
+      ...(fullTenantEvidence.sources ?? []),
+      ...(fullTenantEvidence.actionEvidence ?? []),
+      ...(fullTenantEvidence.guidanceEvidence ?? []),
     ];
     let firstTokenRecorded = false;
     this.runtimeMetrics.llmStreaming.requests += 1;
@@ -2022,6 +2033,7 @@ export class RealtimeConversationOrchestrator {
         decision: grounded.decision ?? null,
         responseId: grounded.responseId ?? null,
         selectedEvidenceIds: grounded.evidenceIds ?? grounded.evidenceSourceIds ?? [],
+        evidenceSourceMap: groundingEnvelope.sourceMap ?? [],
         selectedEntityKeys: grounded.selectedEntityKeys ?? [],
         toolRequested: Boolean(grounded.toolRequest),
       }, 'Grounded turn decision and selected evidence were traced before speech or action');
@@ -2578,6 +2590,7 @@ export class RealtimeConversationOrchestrator {
       isCurrent: () => !this.#isStaleGeneration(epoch),
     };
     let response;
+    let latencyAcknowledged = false;
     let deterministicMemoryUpdate = null;
     if (engineDecision.type === knowledgeEngineDecisionTypes.RESPONSE
       && engineDecision.mode === knowledgeEngineResponseModes.DETERMINISTIC) {
@@ -2738,11 +2751,14 @@ export class RealtimeConversationOrchestrator {
           remainingLiveTurnBudgetMs(firstAudioDeadlineAt, ttsReserveMs),
         );
         latencyTracker.setResponseClass('grounded_llm');
+        const acknowledgementEligible = engineDecision.type === knowledgeEngineDecisionTypes.RESPONSE
+          && (engineDecision.evidenceIds?.length ?? 0) > 0;
         const latencyResult = await awaitLlmWithSafeLatency(this.#llm(query, history, knowledge, {
             instruction: 'Resolve only the ambiguity, comparison, action, or multi-source question in the latest utterance. Use only cited evidence. Keep answer brief. Return exactly one grounded decision JSON object.',
             callCheck: null,
           }, streaming), {
             tracker: latencyTracker,
+            acknowledgementEnabled: acknowledgementEligible,
             // A depleted first-audio budget changes only when the optional
             // acknowledgement is spoken. It must never replace or cancel the
             // in-flight grounded answer.
@@ -2752,6 +2768,7 @@ export class RealtimeConversationOrchestrator {
             completionTimeoutMs: env.LLM_REQUEST_TIMEOUT_MS,
             cancel: () => this.activeLlm?.cancel?.('llm_completion_timeout'),
             onAcknowledgement: async (acknowledgementText) => {
+              latencyAcknowledged = true;
               turnLatency.latencyAcknowledgement = true;
               sourceTrace.add([createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
                 label: 'Safe LLM latency acknowledgement',
@@ -2762,6 +2779,7 @@ export class RealtimeConversationOrchestrator {
               await sentencePipeline.waitUntilStarted();
             },
           });
+        latencyAcknowledged ||= latencyResult.acknowledged === true;
         response = latencyResult.value;
         turnLatency.llmMs += Math.max(0, Date.now() - llmStartedAt);
       } catch (error) {
@@ -2782,6 +2800,22 @@ export class RealtimeConversationOrchestrator {
           })],
         };
       }
+    }
+    if (latencyAcknowledged && response.groundingFailureReason) {
+      // The acknowledgement has already told the caller that work is still in
+      // progress. Never follow it with the generic clarification message. Give
+      // a specific, evidence-safe outcome for the completed validation instead.
+      response = {
+        ...response,
+        text: configuredEvidenceValidationFailureResponse(this.runtimeProfile),
+        sources: [
+          ...(response.sources ?? []).filter((source) => source.type !== messageSourceTypes.RUNTIME_FALLBACK),
+          createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
+            label: 'Published evidence validation explanation',
+            metadata: { reason: response.groundingFailureReason },
+          }),
+        ],
+      };
     }
     sourceTrace.add(response.sources);
     if (response.cancelled || epoch !== this.epoch) {
