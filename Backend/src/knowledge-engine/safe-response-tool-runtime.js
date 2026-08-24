@@ -272,12 +272,17 @@ function fieldPrompt(key, schema) {
     ?? property.prompt ?? property.description, 600) || `Please provide ${label}.`;
 }
 
-function assignedWorkflowTool(evidence, runtimeProfile) {
+function assignedWorkflowTool(evidence, runtimeProfile, input) {
+  const active = object(input?.memory?.activeTool);
+  const activeAuthorization = normalizedId(active.authorizationRecordId
+    ?? active.authorizationEvidenceId ?? active.workflowRecordId);
+  const activeToolName = toolIdentity(active.name);
   const workflows = evidence.filter((source) => (
     source.recordType === 'WORKFLOW_RULE'
     && source.hydrationValidated === true
     && String(source.authoritativeData?.actionType ?? '').toLocaleLowerCase() === 'configured_tool'
     && workflowToolIdentifier(source)
+    && (!activeAuthorization || normalizedId(source.recordId) === activeAuthorization)
   ));
   const matches = [];
   for (const workflow of workflows) {
@@ -290,6 +295,7 @@ function assignedWorkflowTool(evidence, runtimeProfile) {
     ));
     if (requiresCatalogItem && catalogMatches.length !== 1) continue;
     for (const tool of runtimeProfile?.tools ?? []) {
+      if (activeToolName && !toolIdentifiers(tool).has(activeToolName)) continue;
       if (toolIdentifiers(tool).has(identifier)) matches.push({
         workflow, tool, catalogItem: requiresCatalogItem ? catalogMatches[0] : null,
       });
@@ -312,7 +318,7 @@ export function planAuthorizedToolWorkflow({
   input, authoritative, runtimeProfile, confirmation = false,
 } = {}) {
   const evidence = authoritative?.evidence ?? [];
-  const authorized = assignedWorkflowTool(evidence, runtimeProfile);
+  const authorized = assignedWorkflowTool(evidence, runtimeProfile, input);
   if (!authorized) return clarification(
     'no_evidence', 'authorized_assigned_tool_unavailable',
     'I cannot safely start that action because no single assigned tool is authorized by the published workflow.',
@@ -378,15 +384,32 @@ export function planSafeKnowledgeResponse({
     'I found conflicting published information. Please clarify the requested option.', evidence,
   );
   const isComparison = classification?.intentClass === knowledgeQueryClasses.COMPARISON_COMPLEX;
-  if (authoritative.ambiguity?.detected
-    || (classification?.requiresConfirmation === true && !isComparison)) {
-    return clarification('ambiguity', 'ambiguous_authoritative_entity',
-      targetedAmbiguityPrompt(authoritative.ambiguity, resolution), evidence);
-  }
   if (classification?.intentClass === knowledgeQueryClasses.ACTION_TOOL_REQUEST) {
     return planAuthorizedToolWorkflow({ input, authoritative, runtimeProfile, confirmation });
   }
-  const callerFacing = evidence.filter((source) => source.callerFacing === true);
+  if (authoritative.ambiguity?.detected && !isComparison) {
+    return clarification('ambiguity', 'ambiguous_authoritative_entity',
+      targetedAmbiguityPrompt(authoritative.ambiguity, resolution), evidence);
+  }
+  const allCallerFacing = evidence.filter((source) => source.callerFacing === true);
+  const resolvedIds = new Set([
+    resolution?.candidate?.recordId,
+    ...(resolution?.candidate?.evidenceRecordIds ?? []),
+  ].map(normalizedId).filter(Boolean));
+  const resolvedCallerFacing = resolvedIds.size
+    ? allCallerFacing.filter((source) => resolvedIds.has(normalizedId(source.recordId)))
+    : [];
+  // Once a route/entity is resolved, additional BM25 or semantic records must
+  // not turn that answer into a false clarification. They remain available to
+  // grounded reasoning, but direct rendering uses only the selected record(s).
+  const multiEvidenceIntent = [
+    knowledgeQueryClasses.CATEGORY_OVERVIEW,
+    knowledgeQueryClasses.COMPARISON_COMPLEX,
+    knowledgeQueryClasses.UNKNOWN,
+  ].includes(classification?.intentClass);
+  const callerFacing = multiEvidenceIntent
+    ? allCallerFacing
+    : (resolvedCallerFacing.length ? resolvedCallerFacing : allCallerFacing);
   if (classification?.intentClass === knowledgeQueryClasses.CATEGORY_OVERVIEW) {
     const rendered = categoryText(resolution, callerFacing);
     if (rendered) {

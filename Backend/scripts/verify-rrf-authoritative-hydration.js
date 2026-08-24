@@ -98,7 +98,16 @@ const classification = {
   intentClass: knowledgeQueryClasses.KNOWN_INFORMATION,
   requiresConfirmation: true,
 };
-const resolution = { action: 'CONFIRM', candidate: { entityType: 'ITEM' } };
+const resolution = {
+  action: 'CONFIRM', candidateNamespace: 'CATALOG',
+  candidate: { entityType: 'ITEM', recordId: ids[0] },
+  routingCandidates: [ids[0], ids[1]].map((recordId, index) => ({
+    recordId, recordType: 'CATALOG_ITEM', entityType: 'ITEM',
+    itemKey: index ? 'shared-item-two' : 'shared-item-one',
+    label: index ? 'Shared item two' : 'Shared item one',
+    explicit: true, score: 0.9,
+  })),
+};
 const hydrated = await rankAndHydrateAuthoritativeEvidence({
   auth: { tenantId }, input, classification, resolution, retrieval,
 }, { contextRunner });

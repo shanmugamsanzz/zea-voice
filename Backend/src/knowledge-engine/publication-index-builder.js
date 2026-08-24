@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { AppError } from '../middleware/errors.js';
 
-export const KNOWLEDGE_PUBLICATION_BUNDLE_VERSION = 3;
+export const KNOWLEDGE_PUBLICATION_BUNDLE_VERSION = 4;
 
 const ROUTABLE_RECORD_TYPES = new Set(['faq', 'catalog_item', 'workflow_rule', 'conversation_node']);
 
@@ -189,6 +189,34 @@ function invertedIndex(records, field) {
   return index;
 }
 
+function namespacedRouteIndexes(records) {
+  const workflow = records.filter((record) => record.record_type === 'workflow_rule');
+  const callControl = workflow.filter((record) => {
+    const metadata = plainObject(record.entity_metadata);
+    const conditions = plainObject(metadata.conditions);
+    return String(conditions.intentClass ?? metadata.intentClass ?? '').normalize('NFKC')
+      .trim().toUpperCase().replace(/[\s-]+/gu, '_') === 'CALL_CONTROL';
+  });
+  const namespaces = {
+    faq: records.filter((record) => record.record_type === 'faq'),
+    conversation: records.filter((record) => record.record_type === 'conversation_node'),
+    workflow,
+    callControl,
+    // General Knowledge is intentionally discovered through BM25/Qdrant unless
+    // a future document contract publishes explicit route phrases. Raw chunks
+    // must never become exact-match routes merely because they contain a word.
+    general: [],
+  };
+  return Object.freeze(Object.fromEntries(Object.entries(namespaces).map(([name, entries]) => [
+    name,
+    Object.freeze({
+      exact: invertedIndex(entries, 'publicationAliases'),
+      stt: invertedIndex(entries, 'publicationSttForms'),
+      phonetic: invertedIndex(entries, 'publicationPhoneticForms'),
+    }),
+  ])));
+}
+
 function categoryCandidates(records) {
   const categories = new Map();
   for (const record of records.filter((entry) => entry.record_type === 'catalog_item')) {
@@ -277,6 +305,7 @@ export function buildPublicationIndexes(job, sourceRecords) {
     exact: invertedIndex(records, 'publicationAliases'),
     stt: invertedIndex(records, 'publicationSttForms'),
     phonetic: invertedIndex(records, 'publicationPhoneticForms'),
+    namespaces: namespacedRouteIndexes(records),
   });
   const identity = {
     version: KNOWLEDGE_PUBLICATION_BUNDLE_VERSION,

@@ -141,10 +141,15 @@ function activeWorkflowCandidate(input, recordScope, allowedTypes) {
 }
 
 function structuredCandidatesForTurn(input, classification, resolution, recordScope, allowedTypes, limit) {
-  const selectedResolution = classification?.intentClass !== 'COMPARISON_COMPLEX'
+  const continuingActiveTool = Boolean(input?.memory?.activeTool?.name)
+    && classification?.source === 'active_tool_workflow';
+  const selectedResolution = continuingActiveTool
+    ? { routingCandidates: [] }
+    : classification?.intentClass !== 'COMPARISON_COMPLEX'
     && classification?.candidate
-    ? { routingCandidates: [classification.candidate] }
-    : resolution;
+    && resolution?.action !== 'CONFIRM'
+      ? { routingCandidates: [classification.candidate] }
+      : resolution;
   const candidates = [...structuredCandidates(selectedResolution, recordScope, allowedTypes, limit)];
   if (classification?.intentClass === 'ACTION_TOOL_REQUEST') {
     const remembered = [

@@ -13,6 +13,15 @@ export const knowledgeResolutionActions = Object.freeze({
   CONTINUE: 'CONTINUE', CONFIRM: 'CONFIRM', RETRIEVE: 'RETRIEVE', CLARIFY: 'CLARIFY',
 });
 
+export const knowledgeCandidateNamespaces = Object.freeze({
+  CATALOG: 'CATALOG',
+  FAQ: 'FAQ',
+  CONVERSATION: 'CONVERSATION',
+  WORKFLOW: 'WORKFLOW',
+  CALL_CONTROL: 'CALL_CONTROL',
+  GENERAL: 'GENERAL',
+});
+
 const methodPriority = Object.freeze({
   exact: 7, normalized: 6, tenant_alias: 5, stt: 4,
   phonetic: 3, fuzzy: 2, semantic: 1, context: 0,
@@ -33,6 +42,74 @@ function normalizeId(value) {
 
 function tokens(value) {
   return normalizePublicationPhrase(value).split(' ').filter(Boolean);
+}
+
+function normalizedIntentClass(value) {
+  return String(value ?? '').normalize('NFKC').trim().toUpperCase().replace(/[\s-]+/gu, '_');
+}
+
+function candidateNamespace(candidate) {
+  if (candidate?.entityType === 'ITEM' || candidate?.entityType === 'CATEGORY'
+    || ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(candidate?.recordType)) {
+    return knowledgeCandidateNamespaces.CATALOG;
+  }
+  if (candidate?.recordType === 'FAQ') return knowledgeCandidateNamespaces.FAQ;
+  if (candidate?.recordType === 'CONVERSATION_NODE') return knowledgeCandidateNamespaces.CONVERSATION;
+  if (candidate?.recordType === 'KNOWLEDGE_CHUNK') return knowledgeCandidateNamespaces.GENERAL;
+  if (candidate?.recordType === 'WORKFLOW_RULE') {
+    return normalizedIntentClass(candidate.intentClass) === 'CALL_CONTROL'
+      ? knowledgeCandidateNamespaces.CALL_CONTROL : knowledgeCandidateNamespaces.WORKFLOW;
+  }
+  return null;
+}
+
+function candidateIdentity(candidate) {
+  if (candidate?.entityType === 'CATEGORY') {
+    return `category:${normalizeId(candidate.categoryKey ?? candidate.label)}`;
+  }
+  return `record:${normalizeId(candidate?.recordId)}`;
+}
+
+function tokenStatistics(indexes) {
+  const identities = new Set();
+  const tokenIdentities = new Map();
+  for (const index of indexes) {
+    for (const [phrase, candidates] of Object.entries(index?.exact ?? {})) {
+      const phraseTokens = new Set(tokens(phrase));
+      for (const candidate of candidates) {
+        const identity = candidateIdentity(candidate);
+        identities.add(identity);
+        for (const token of phraseTokens) {
+          const owners = tokenIdentities.get(token) ?? new Set();
+          owners.add(identity);
+          tokenIdentities.set(token, owners);
+        }
+      }
+    }
+  }
+  return Object.freeze({ identities, tokenIdentities });
+}
+
+function distinctiveCoverage(query, phrase, statistics) {
+  const phraseTokens = new Set(tokens(phrase));
+  const recognized = [...new Set(tokens(query))].filter(
+    (token) => statistics.tokenIdentities.has(token),
+  );
+  if (!recognized.length) return 1;
+  const total = Math.max(1, statistics.identities.size);
+  const weight = (token) => 1 + Math.log((total + 1)
+    / ((statistics.tokenIdentities.get(token)?.size ?? total) + 1));
+  const denominator = recognized.reduce((sum, token) => sum + weight(token), 0);
+  const numerator = recognized.filter((token) => phraseTokens.has(token))
+    .reduce((sum, token) => sum + weight(token), 0);
+  return denominator ? boundedScore(numerator / denominator) : 1;
+}
+
+function phraseIsCanonicalDistinctive(phrase, statistics) {
+  const phraseTokens = [...new Set(tokens(phrase))];
+  return phraseTokens.length > 0 && phraseTokens.every(
+    (token) => statistics.tokenIdentities.get(token)?.size === 1,
+  );
 }
 
 function editDistance(left, right) {
@@ -87,6 +164,22 @@ function fuzzyPhraseScore(query, phrase) {
     average * (0.62 + coverage * 0.28 + lengthCompatibility * 0.1),
     phoneticSimilarity * 0.94,
   ));
+}
+
+function leadingEntitySimilarity(query, phrase) {
+  const queryTokens = tokens(query);
+  const phraseTokens = tokens(phrase);
+  if (!queryTokens.length || !phraseTokens.length) return 0;
+  const queryLead = queryTokens.slice(0, Math.min(2, queryTokens.length)).join(' ');
+  const phraseLead = phraseTokens[0];
+  const queryPhonetic = buildPublicationPhraseForms([queryLead]).phonetic[0]
+    ?.replace(/\s+/gu, '') ?? '';
+  const phrasePhonetic = buildPublicationPhraseForms([phraseLead]).phonetic[0]
+    ?.replace(/\s+/gu, '') ?? '';
+  return Math.max(
+    stringSimilarity(queryTokens[0], phraseLead),
+    stringSimilarity(queryPhonetic, phrasePhonetic),
+  );
 }
 
 function recordLabel(record) {
@@ -190,15 +283,12 @@ function suppressCategoryChildCollisions(accumulator) {
     const collision = categories.find(([, category]) => (
       normalizeId(category.categoryKey) === normalizeId(candidate.categoryKey)
       && category.score >= candidate.score
-      && category.signals.some((categorySignal) => candidate.signals.some(
-        (itemSignal) => categorySignal.phrase && categorySignal.phrase === itemSignal.phrase,
-      ))
     ));
     if (collision) accumulator.delete(key);
   }
 }
 
-function indexedSignals(accumulator, index, query, queryForms, records) {
+function indexedSignals(accumulator, index, query, queryForms, records, statistics) {
   const sections = [
     ['exact', index?.exact, 1], ['stt', index?.stt, 0.96], ['phonetic', index?.phonetic, 0.89],
   ];
@@ -209,13 +299,24 @@ function indexedSignals(accumulator, index, query, queryForms, records) {
       if (section === 'exact') {
         if (query === phrase) score = 1;
         else if (phraseContained(query, phrase)) {
-          score = 0.98;
+          // A contained alias is strong only when it covers the distinctive
+          // tenant-published terms in the utterance. This prevents a generic
+          // phrase shared by many entities from beating a more specific fuzzy
+          // or phonetic match.
+          score = phraseIsCanonicalDistinctive(phrase, statistics) ? 0.98
+            : 0.72 + distinctiveCoverage(query, phrase, statistics) * 0.26;
           method = 'tenant_alias';
         }
       } else if (section === 'stt') {
         const compactPhrase = phrase.replace(/\s+/gu, '');
-        if (queryForms.stt.includes(phrase) || queryForms.stt.includes(compactPhrase)
-          || queryForms.stt.some((form) => form.length >= 3 && form.includes(compactPhrase))) score = sectionScore;
+        if (queryForms.stt.includes(phrase) || queryForms.stt.includes(compactPhrase)) {
+          score = sectionScore;
+        } else if (query.replace(/\s+/gu, '').startsWith(compactPhrase)) {
+          score = sectionScore;
+        } else if (queryForms.stt.some((form) => form.length >= 3 && form.includes(compactPhrase))) {
+          score = phraseIsCanonicalDistinctive(phrase, statistics) ? sectionScore
+            : 0.68 + distinctiveCoverage(query, phrase, statistics) * 0.28;
+        }
       } else {
         const phraseSize = tokens(phrase).length;
         const queryTokens = tokens(query);
@@ -227,10 +328,11 @@ function indexedSignals(accumulator, index, query, queryForms, records) {
           : [];
         const compactPhrase = phrase.replace(/\s+/gu, '');
         const compactWindows = phoneticWindows.map((form) => form.replace(/\s+/gu, ''));
-        if (queryForms.phonetic.includes(phrase)
-          || queryForms.phonetic.some((form) => form.replace(/\s+/gu, '').includes(compactPhrase))
-          || phoneticWindows.includes(phrase)
-          || compactWindows.includes(compactPhrase)) score = sectionScore;
+        if (queryForms.phonetic.includes(phrase)) score = sectionScore;
+        else if (phoneticWindows.includes(phrase) || compactWindows.includes(compactPhrase)
+          || queryForms.phonetic.some(
+          (form) => form.replace(/\s+/gu, '').includes(compactPhrase),
+        )) score = 0.66 + distinctiveCoverage(query, phrase, statistics) * 0.23;
       }
       if (!score) continue;
       for (const candidate of indexedCandidates) {
@@ -242,13 +344,17 @@ function indexedSignals(accumulator, index, query, queryForms, records) {
   }
 }
 
-function fuzzySignals(accumulator, index, query, records) {
+function fuzzySignals(accumulator, index, query, records, statistics) {
   for (const [phrase, indexedCandidates] of Object.entries(index?.exact ?? {})) {
     const similarity = fuzzyPhraseScore(query, phrase);
     if (similarity < 0.68) continue;
+    const coverage = distinctiveCoverage(query, phrase, statistics);
+    const leadingBonus = leadingEntitySimilarity(query, phrase) >= 0.58 ? 0.1 : 0;
+    const score = query === phrase ? similarity
+      : similarity * (0.7 + coverage * 0.3) + leadingBonus;
     for (const candidate of indexedCandidates) {
       addSignal(accumulator, indexedCandidate(candidate, records), {
-        method: 'fuzzy', score: similarity, phrase, explicit: true,
+        method: 'fuzzy', score: boundedScore(score), phrase, explicit: true,
       });
     }
   }
@@ -328,7 +434,7 @@ function freezeCandidate(candidate) {
   });
 }
 
-export function resolvePublishedEntityRoute(input, publicationBundles, options = {}) {
+function normalizedBundles(input, publicationBundles) {
   const utterance = String(input?.utterance ?? '').normalize('NFKC').trim();
   if (!utterance) throw new TypeError('Entity resolution requires a finalized utterance');
   const bundles = Array.isArray(publicationBundles) ? publicationBundles : [publicationBundles];
@@ -336,7 +442,6 @@ export function resolvePublishedEntityRoute(input, publicationBundles, options =
     throw new TypeError('Entity resolution requires published indexes');
   }
   bundles.forEach((bundle) => validateBundle(input, bundle));
-
   const records = new Map();
   for (const bundle of bundles) {
     for (const rawRecord of bundle.records ?? []) {
@@ -344,46 +449,71 @@ export function resolvePublishedEntityRoute(input, publicationBundles, options =
       if (record) records.set(normalizeId(record.recordId), record);
     }
   }
-  const query = normalizePublicationPhrase(utterance);
-  const queryForms = buildPublicationPhraseForms([utterance]);
-  const catalogCandidates = new Map();
-  const routeCandidates = new Map();
-  for (const bundle of bundles) {
-    directIndexedSignals(catalogCandidates, bundle.entityIndex, query, queryForms, records);
-    directIndexedSignals(catalogCandidates, bundle.entityIndex?.categories, query, queryForms, records);
-    directIndexedSignals(routeCandidates, bundle.routeIndex, query, queryForms, records);
-  }
-  if (!catalogCandidates.size) {
-    for (const bundle of bundles) {
-      indexedSignals(catalogCandidates, bundle.entityIndex, query, queryForms, records);
-      indexedSignals(catalogCandidates, bundle.entityIndex?.categories, query, queryForms, records);
-      fuzzySignals(catalogCandidates, bundle.entityIndex, query, records);
-      fuzzySignals(catalogCandidates, bundle.entityIndex?.categories, query, records);
-    }
-  }
-  if (!routeCandidates.size) {
-    for (const bundle of bundles) {
-      indexedSignals(routeCandidates, bundle.routeIndex, query, queryForms, records);
-      fuzzySignals(routeCandidates, bundle.routeIndex, query, records);
-    }
-  }
-  suppressCategoryChildCollisions(catalogCandidates);
-  const explicitCatalog = [...catalogCandidates.values()].some((candidate) => (
-    candidate.explicit && candidate.score >= 0.88
-  ));
-  const candidates = explicitCatalog
-    ? new Map([...routeCandidates].filter(([, candidate]) => candidate.recordType === 'WORKFLOW_RULE'))
-    : new Map(routeCandidates);
-  for (const [key, candidate] of catalogCandidates) candidates.set(key, candidate);
-  if (!candidates.size) semanticSignals(candidates, options.semanticMatches, records);
-  contextSignals(candidates, input, query, records,
-    [...candidates.values()].some((candidate) => candidate.explicit));
+  return { utterance, bundles, records };
+}
 
-  const ranked = [...candidates.values()].sort((left, right) => (
+function rankCandidates(candidates) {
+  return [...candidates.values()].sort((left, right) => (
     right.score - left.score
     || (methodPriority[right.method] ?? -1) - (methodPriority[left.method] ?? -1)
     || left.recordId.localeCompare(right.recordId)
   )).map(freezeCandidate);
+}
+
+function groupByNamespace(candidates) {
+  const grouped = new Map(Object.values(knowledgeCandidateNamespaces).map(
+    (namespace) => [namespace, new Map()],
+  ));
+  for (const [key, candidate] of candidates) {
+    const namespace = candidateNamespace(candidate);
+    if (namespace) grouped.get(namespace).set(key, candidate);
+  }
+  return grouped;
+}
+
+function frozenNamespaceCandidates(grouped) {
+  return Object.freeze(Object.fromEntries([...grouped].map(([namespace, candidates]) => [
+    namespace,
+    Object.freeze(rankCandidates(candidates)),
+  ])));
+}
+
+function matchRouteCandidates(bundles, records, query, queryForms) {
+  const candidates = new Map();
+  const indexes = bundles.flatMap((bundle) => {
+    const namespaces = Object.values(bundle.routeIndex?.namespaces ?? {}).filter(Boolean);
+    return namespaces.length > 0 ? namespaces : [bundle.routeIndex].filter(Boolean);
+  });
+  const statistics = tokenStatistics(indexes);
+  for (const index of indexes) {
+    directIndexedSignals(candidates, index, query, queryForms, records);
+    indexedSignals(candidates, index, query, queryForms, records, statistics);
+    fuzzySignals(candidates, index, query, records, statistics);
+  }
+  for (const [key, candidate] of candidates) {
+    if (candidateNamespace(candidate) === knowledgeCandidateNamespaces.CATALOG) {
+      candidates.delete(key);
+    }
+  }
+  return candidates;
+}
+
+function matchCatalogCandidates(bundles, records, query, queryForms) {
+  const candidates = new Map();
+  const indexes = bundles.flatMap((bundle) => [
+    bundle.entityIndex, bundle.entityIndex?.categories,
+  ]).filter(Boolean);
+  const statistics = tokenStatistics(indexes);
+  for (const index of indexes) {
+    directIndexedSignals(candidates, index, query, queryForms, records);
+    indexedSignals(candidates, index, query, queryForms, records, statistics);
+    fuzzySignals(candidates, index, query, records, statistics);
+  }
+  suppressCategoryChildCollisions(candidates);
+  return candidates;
+}
+
+function resolutionResult(input, ranked, namespace, namespaceCandidates, reasonPrefix = null) {
   const { level, margin } = confidenceFor(ranked);
   return Object.freeze({
     version: KNOWLEDGE_RESOLUTION_VERSION,
@@ -393,11 +523,101 @@ export function resolvePublishedEntityRoute(input, publicationBundles, options =
     margin: boundedScore(margin),
     action: actionFor(level, ranked),
     candidate: ranked[0] ?? null,
+    candidateNamespace: namespace,
+    namespaceCandidates,
     routingCandidates: Object.freeze(ranked),
     alternatives: Object.freeze(ranked.slice(1, 4)),
-    explicitEntity: ranked[0]?.explicit === true,
+    explicitEntity: namespace === knowledgeCandidateNamespaces.CATALOG
+      && ranked[0]?.explicit === true,
     reason: ranked[0]
-      ? `${ranked[0].method}_candidate_${level.toLocaleLowerCase()}`
+      ? `${reasonPrefix ?? ranked[0].method}_candidate_${level.toLocaleLowerCase()}`
       : 'no_candidate',
   });
+}
+
+export function resolvePublishedIntentRoutes(input, publicationBundles) {
+  const { utterance, bundles, records } = normalizedBundles(input, publicationBundles);
+  const query = normalizePublicationPhrase(utterance);
+  const queryForms = buildPublicationPhraseForms([utterance]);
+  const routes = matchRouteCandidates(bundles, records, query, queryForms);
+  const grouped = groupByNamespace(routes);
+  return resolutionResult(input, rankCandidates(routes), null, frozenNamespaceCandidates(grouped),
+    'intent_route');
+}
+
+const absoluteRouteIntents = new Set(['SAFETY_EMERGENCY', 'CALL_CONTROL', 'ACTION_TOOL_REQUEST']);
+
+const routeIntentPriority = Object.freeze({
+  SAFETY_EMERGENCY: 100,
+  CALL_CONTROL: 90,
+  ACTION_TOOL_REQUEST: 80,
+  CLARIFICATION_ANSWER: 70,
+  ACKNOWLEDGEMENT: 60,
+});
+
+function bestRouteCandidate(routes) {
+  const eligiblePriority = (candidate) => {
+    const intent = normalizedIntentClass(candidate?.intentClass);
+    const method = String(candidate?.method ?? '');
+    const explicitlyPublished = candidate?.explicit === true
+      && Number(candidate?.score ?? 0) >= 0.88
+      && ['exact', 'normalized', 'tenant_alias', 'stt', 'phonetic'].includes(method);
+    return explicitlyPublished ? (routeIntentPriority[intent] ?? 0) : 0;
+  };
+  return rankCandidates(routes).sort((left, right) => (
+    eligiblePriority(right) - eligiblePriority(left)
+    || right.score - left.score
+  ))[0] ?? null;
+}
+
+export function resolvePublishedEntityRoute(input, publicationBundles, options = {}) {
+  const { utterance, bundles, records } = normalizedBundles(input, publicationBundles);
+  const query = normalizePublicationPhrase(utterance);
+  const queryForms = buildPublicationPhraseForms([utterance]);
+  const catalog = matchCatalogCandidates(bundles, records, query, queryForms);
+  const routes = matchRouteCandidates(bundles, records, query, queryForms);
+  contextSignals(catalog, input, query, records,
+    [...catalog.values()].some((candidate) => candidate.explicit));
+  const routeGroups = groupByNamespace(routes);
+  const preliminary = options.intentClassification ?? null;
+  const fallbackRouteCandidate = bestRouteCandidate(routes);
+  const preliminaryCandidate = preliminary
+    ? (preliminary.candidate ?? null) : fallbackRouteCandidate;
+  const preliminaryNamespace = candidateNamespace(preliminaryCandidate);
+  const preliminaryIntent = normalizedIntentClass(preliminary?.intentClass
+    ?? preliminaryCandidate?.intentClass);
+  const lockPublishedRoute = absoluteRouteIntents.has(preliminaryIntent)
+    || (preliminaryCandidate?.recordType === 'WORKFLOW_RULE'
+      && Number(preliminaryCandidate.score ?? 0) >= 0.88);
+
+  const catalogRanked = rankCandidates(catalog);
+  const explicitCatalog = catalogRanked[0]?.explicit === true
+    && catalogRanked[0].score >= 0.88;
+  let selectedNamespace = null;
+  let selected = new Map();
+  if (lockPublishedRoute && preliminaryNamespace) {
+    selectedNamespace = preliminaryNamespace;
+    selected = routeGroups.get(preliminaryNamespace) ?? new Map();
+  } else if (explicitCatalog) {
+    selectedNamespace = knowledgeCandidateNamespaces.CATALOG;
+    selected = catalog;
+  } else if (preliminaryCandidate && preliminaryNamespace) {
+    selectedNamespace = preliminaryNamespace;
+    selected = routeGroups.get(preliminaryNamespace) ?? new Map();
+  } else if (catalog.size) {
+    selectedNamespace = knowledgeCandidateNamespaces.CATALOG;
+    selected = catalog;
+  }
+
+  if (!selected.size) {
+    const semantic = new Map();
+    semanticSignals(semantic, options.semanticMatches, records);
+    const semanticGroups = groupByNamespace(semantic);
+    const top = rankCandidates(semantic)[0];
+    selectedNamespace = candidateNamespace(top);
+    selected = selectedNamespace ? semanticGroups.get(selectedNamespace) : new Map();
+  }
+  const allGroups = groupByNamespace(new Map([...routes, ...catalog]));
+  return resolutionResult(input, rankCandidates(selected), selectedNamespace,
+    frozenNamespaceCandidates(allGroups));
 }

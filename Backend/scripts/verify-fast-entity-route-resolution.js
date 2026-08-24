@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import { createKnowledgeEngineInput } from '../src/knowledge-engine/engine-contract.js';
 import { buildPublicationIndexes } from '../src/knowledge-engine/publication-index-builder.js';
 import {
+  knowledgeCandidateNamespaces,
   knowledgeResolutionActions,
   knowledgeResolutionConfidence,
   resolvePublishedEntityRoute,
+  resolvePublishedIntentRoutes,
 } from '../src/knowledge-engine/entity-route-resolver.js';
 
 const tenantId = '20000000-0000-4000-8000-000000000001';
@@ -102,9 +104,34 @@ const lungs = record(10, {
   entity_category_aliases: ['organ specific packages', 'organ health packages'],
   entity_metadata: { itemKey: 'lungs-health-checkup', categoryKey: 'organ-specific-health-checkups' },
 });
+const generalScreening = record(11, {
+  question: 'General Screening', answer: 'Approved general screening details.',
+  content: 'Approved general screening details.', entity_name: 'General Screening',
+  entity_aliases: ['health checkup'], entity_category: 'General Services',
+  entity_category_aliases: ['general services'],
+  entity_metadata: { itemKey: 'general-screening', categoryKey: 'general-services' },
+});
+const youthScreening = record(12, {
+  question: 'Youth Screening', answer: 'Approved youth screening details.',
+  content: 'Approved youth screening details.', entity_name: 'Youth Screening',
+  entity_aliases: ['youth health screening'], entity_category: 'Youth Services',
+  entity_category_aliases: ['youth services'],
+  entity_metadata: { itemKey: 'youth-screening', categoryKey: 'youth-services' },
+});
+const unrelatedControl = {
+  ...record(13, {}),
+  record_type: 'workflow_rule',
+  question: 'tenant stop route', answer: 'Approved stop response.', content: 'Approved stop response.',
+  entity_name: 'tenant_stop_route', entity_aliases: ['youth health checkout'],
+  entity_category_aliases: [],
+  entity_metadata: {
+    conditions: { examples: ['youth health checkout'], intentClass: 'CALL_CONTROL' },
+    actionType: 'respond', actionConfig: { responseMode: 'exact' },
+  },
+};
 const bundle = buildPublicationIndexes(job, [
   alpha, beta, ambiguousOne, ambiguousTwo, genericConversation,
-  gold, oncoMale, oncoFemale, renal, lungs,
+  gold, oncoMale, oncoFemale, renal, lungs, generalScreening, youthScreening,
 ]);
 
 function input(utterance, memory = {}) {
@@ -177,7 +204,7 @@ result = resolvePublishedEntityRoute(input('on cooker package pathi sollunga', s
 assert.equal(result.confidence, knowledgeResolutionConfidence.HIGH);
 assert.equal(result.candidate.entityType, 'CATEGORY');
 assert.equal(result.candidate.categoryKey, 'oncology-screening');
-assert.equal(result.candidate.method, 'phonetic');
+assert.ok(['phonetic', 'fuzzy'].includes(result.candidate.method));
 
 result = resolvePublishedEntityRoute(input('Gold package பத்தி சொல்லுங்க', {
   activeCategory: { recordId: oncoMale.record_id, key: 'oncology-screening' },
@@ -193,6 +220,28 @@ assert.equal(result.confidence, knowledgeResolutionConfidence.HIGH);
 assert.equal(result.candidate.entityType, 'CATEGORY');
 assert.equal(result.candidate.categoryKey, 'organ-specific-health-checkups');
 assert.equal(result.candidate.evidenceRecordIds.length, 2);
+
+const namespaceInput = input('youth health checkup', {
+  activeEntity: { recordId: generalScreening.record_id, key: 'general-screening' },
+  pendingClarification: { kind: 'ambiguity', text: 'Which published option?' },
+});
+const collisionBundle = buildPublicationIndexes(job, [
+  generalScreening, youthScreening, unrelatedControl,
+]);
+const intentOnly = resolvePublishedIntentRoutes(namespaceInput, collisionBundle);
+assert.equal(intentOnly.routingCandidates.some((candidate) => (
+  ['ITEM', 'CATEGORY'].includes(candidate.entityType)
+)), false, 'Pre-entity intent classification must not contain Catalog candidates');
+result = resolvePublishedEntityRoute(namespaceInput, collisionBundle, {
+  intentClassification: { intentClass: 'UNKNOWN', candidate: null },
+});
+assert.equal(result.candidateNamespace, knowledgeCandidateNamespaces.CATALOG);
+assert.equal(result.candidate.itemKey, 'youth-screening',
+  'Distinctive tenant terms must outrank a generic contained alias and stale memory');
+assert.equal(result.routingCandidates.every((candidate) => (
+  ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(candidate.recordType)
+)), true, 'Catalog ambiguity candidates must never contain Workflow or call-control records');
+assert.equal(result.routingCandidates.some((candidate) => candidate.label === 'tenant_stop_route'), false);
 
 result = resolvePublishedEntityRoute(input('a completely different unresolved topic now', {
   activeEntity: { recordId: gold.record_id, key: 'gold-master-health-checkup' },

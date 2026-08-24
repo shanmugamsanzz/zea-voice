@@ -1,5 +1,8 @@
 import { env } from '../config/env.js';
-import { resolvePublishedEntityRoute } from './entity-route-resolver.js';
+import {
+  resolvePublishedEntityRoute,
+  resolvePublishedIntentRoutes,
+} from './entity-route-resolver.js';
 import { classifyKnowledgeQuery, knowledgeQueryClasses } from './query-classifier.js';
 import { retrieveTargetedCandidates } from './targeted-retrieval.js';
 import { rankAndHydrateAuthoritativeEvidence } from './authoritative-evidence.js';
@@ -219,6 +222,7 @@ export async function runObservedKnowledgeTurn({
     callId: input?.callId, turnId: input?.callId,
   });
   const resolve = dependencies.resolve ?? resolvePublishedEntityRoute;
+  const resolveIntent = dependencies.resolveIntent ?? resolvePublishedIntentRoutes;
   const classify = dependencies.classify ?? classifyKnowledgeQuery;
   const retrieve = dependencies.retrieve ?? retrieveTargetedCandidates;
   const hydrate = dependencies.hydrate ?? rankAndHydrateAuthoritativeEvidence;
@@ -226,7 +230,14 @@ export async function runObservedKnowledgeTurn({
   let resolution;
   let classification;
   await latency.measure(voiceTurnStages.ROUTING, async () => {
-    resolution = await resolve(input, publicationBundles, { semanticMatches });
+    // Route intent is classified before Catalog entity resolution so Workflow,
+    // call-control, FAQ and Conversation candidates cannot reduce Catalog
+    // confidence or leak into an entity clarification list.
+    const intentResolution = await resolveIntent(input, publicationBundles);
+    const intentClassification = await classify(input, intentResolution);
+    resolution = await resolve(input, publicationBundles, {
+      semanticMatches, intentResolution, intentClassification,
+    });
     classification = await classify(input, resolution);
   }, { timeoutMs: env.VOICE_ROUTING_TURN_TIMEOUT_MS, reserveMs: env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS });
   latency.setKnownAnswer(knownIntentClasses.has(classification.intentClass)

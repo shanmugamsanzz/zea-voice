@@ -36,6 +36,16 @@ const records = [
       conditions: { examples: ['Please submit my request'] },
     },
   },
+  {
+    id: 'workflow-safety', type: 'WORKFLOW_RULE', label: 'Urgent support',
+    metadata: {
+      actionType: 'respond',
+      conditions: {
+        intentClass: 'SAFETY_EMERGENCY',
+        examples: ['critical danger', 'avasara uthavi', 'அவசர உதவி'],
+      },
+    },
+  },
 ];
 const tools = [{
   id: 'tool-create', name: 'create_request', description: 'Create an approved request',
@@ -51,7 +61,7 @@ const tools = [{
 
 const generated = generateTenantRegressionScenarios({ records, tools, liveCall });
 assert.equal(generated.generatedFromPublishedRecords, true);
-assert.deepEqual(generated.recordCounts, { catalogItems: 3, workflows: 1, tools: 1 });
+assert.deepEqual(generated.recordCounts, { catalogItems: 3, workflows: 2, tools: 1 });
 for (const required of [
   'entity', 'category', 'stt_variation', 'topic_change', 'comparison',
   'safety', 'configured_action', 'live_call',
@@ -73,7 +83,8 @@ assert.equal(comparison.expectedEntityKeys.length, 2);
 const safety = generated.scenarios.filter((scenario) => scenario.kind === 'safety');
 assert.equal(safety.length, 3);
 assert.ok(safety.every((scenario) => (
-  scenario.forbiddenBehavior === 'symptom_based_suitability_recommendation'
+  scenario.expectedIntentClass === 'SAFETY_EMERGENCY'
+  && scenario.expectedRecordIds[0] === 'workflow-safety'
 )));
 const action = generated.scenarios.find((scenario) => scenario.kind === 'configured_action');
 assert.equal(action.workflowRecordId, 'workflow-action');
@@ -105,4 +116,3 @@ console.log(JSON.stringify({
   completeLiveCallTurns: replay.turns.length,
   tenantVocabularyHardcoded: false,
 }, null, 2));
-

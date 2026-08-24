@@ -7,7 +7,10 @@ import { runObservedKnowledgeTurn, VoiceTurnLatencyTracker, voiceTurnStages } fr
 import { buildRevisionSparseIndex } from '../src/knowledge-bases/knowledge-map.service.js';
 import { cacheCompactKnowledgeMap } from '../src/knowledge-bases/knowledge-map.service.js';
 import { retrieveTenantEvidence } from '../src/knowledge-engine/runtime-service.js';
-import { finalizeGroundedLlmResponse } from '../src/knowledge-engine/safe-response-tool-runtime.js';
+import {
+  executeAuthorizedToolWorkflow,
+  finalizeGroundedLlmResponse,
+} from '../src/knowledge-engine/safe-response-tool-runtime.js';
 import { InterruptionCandidateManager } from '../src/voice/interruption/interruption-candidate-manager.js';
 import { knowledgeMessageSources } from '../src/voice/source-trace.js';
 import { task10Industries } from './fixtures/task-10-industries.js';
@@ -121,10 +124,18 @@ async function observed(engine, utterance, options = {}) {
     },
     hydrationDependencies: hydrationDependencies(input, engine.bundle.records),
   });
+  tracker.record(voiceTurnStages.TTS_FIRST_CHUNK, 50);
+  tracker.record(voiceTurnStages.FIRST_AUDIO_DELIVERY, 800);
+  assert.equal(tracker.snapshot().firstAudioStatus, 'target_met');
+  assert.ok(tracker.snapshot().firstAudioMs < 1_000);
   return { ...result, input, tracker };
 }
 
-const metrics = { direct: 0, category: 0, clarify: 0, llm: 0, tool: 0, interruptions: 0 };
+const metrics = {
+  direct: 0, category: 0, clarify: 0, llm: 0, tool: 0,
+  verifiedToolExecutions: 0, priorityChecks: 0, interruptions: 0,
+  falseClarifications: 0, runtimeErrors: 0,
+};
 
 function assertPublishedSources(result, expectedCount = 1) {
   const sources = knowledgeMessageSources({
@@ -159,9 +170,6 @@ for (let pass = 1; pass <= repeats; pass += 1) {
       assert.ok(result.latency.stages.routingMs >= 0);
       assert.ok(result.latency.stages.retrievalMs >= 0);
       assert.ok(result.latency.stages.hydrationMs >= 0);
-      result.tracker.record(voiceTurnStages.TTS_FIRST_CHUNK, 50);
-      result.tracker.record(voiceTurnStages.FIRST_AUDIO_DELIVERY, 800);
-      assert.equal(result.tracker.snapshot().firstAudioStatus, 'target_met');
       metrics.direct += 1;
     }
     const foreignInput = createKnowledgeEngineInput({
@@ -217,7 +225,39 @@ for (let pass = 1; pass <= repeats; pass += 1) {
       actionConfig: { responseMode: 'instruction', toolIdentifier: 'tenant_submit' },
     },
   });
-  const bundle = buildPublicationIndexes(job, [alpha, beta, sharedOne, sharedTwo, safety, action]);
+  const callControl = record(fixture, 27, 'workflow_rule', {
+    question: 'stop interaction', answer: 'The interaction will now end.',
+    content: 'The interaction will now end.', entity_name: 'Stop interaction',
+    entity_aliases: ['stop interaction'],
+    entity_metadata: {
+      conditions: { intentClass: 'CALL_CONTROL' }, actionType: 'respond',
+      actionConfig: { responseMode: 'exact' },
+    },
+  });
+  const alternateAction = record(fixture, 28, 'workflow_rule', {
+    question: 'alternate action', answer: 'Collect alternate action fields.',
+    content: 'Collect alternate action fields.', entity_name: 'Alternate action',
+    entity_aliases: ['alternate action'],
+    entity_metadata: {
+      conditions: { intentClass: 'ACTION_TOOL_REQUEST' }, actionType: 'configured_tool',
+      actionConfig: { responseMode: 'instruction', toolIdentifier: 'tenant_alternate' },
+    },
+  });
+  const collidingFaq = record(fixture, 29, 'faq', {
+    question: 'Alpha Service', answer: 'Generic frequently asked answer.',
+    content: 'Generic frequently asked answer.', entity_name: 'Alpha service FAQ',
+    entity_aliases: ['Alpha Service'],
+    entity_metadata: { conditions: { intentClass: 'KNOWN_INFORMATION' } },
+  });
+  const collidingConversation = record(fixture, 30, 'conversation_node', {
+    question: 'Alpha Service', answer: 'Generic conversation answer.',
+    content: 'Generic conversation answer.', entity_name: 'Alpha service conversation',
+    entity_aliases: ['Alpha Service'], entity_metadata: { intentClass: 'KNOWN_INFORMATION' },
+  });
+  const bundle = buildPublicationIndexes(job, [
+    alpha, beta, sharedOne, sharedTwo, safety, action, callControl,
+    alternateAction, collidingFaq, collidingConversation,
+  ]);
   const engine = { job, bundle, sparse: buildRevisionSparseIndex(job, bundle.records) };
 
   const switched = await observed(engine, 'Beta Service', {
@@ -225,6 +265,13 @@ for (let pass = 1; pass <= repeats; pass += 1) {
   });
   assert.equal(switched.resolution.candidate.itemKey, 'beta');
   assert.equal(switched.decision.type, knowledgeEngineDecisionTypes.DIRECT);
+
+  const namespaceCollision = await observed(engine, 'Alpha Service', { turn: pass });
+  assert.equal(namespaceCollision.resolution.candidateNamespace, 'CATALOG');
+  assert.equal(namespaceCollision.resolution.candidate.recordId, alpha.record_id);
+  assert.equal(namespaceCollision.decision.response.recordId, alpha.record_id);
+  assert.doesNotMatch(namespaceCollision.decision.response.text, /Generic/iu);
+  metrics.priorityChecks += 1;
 
   const category = await observed(engine, 'Services', { turn: pass });
   assert.equal(category.decision.type, knowledgeEngineDecisionTypes.DIRECT);
@@ -265,6 +312,13 @@ for (let pass = 1; pass <= repeats; pass += 1) {
           reference: { type: 'string', 'x-question': 'What reference should I use?' },
         }, required: ['reference'], additionalProperties: false,
       } },
+    }, {
+      id: `alternate-tool-${pass}`, name: 'tenant_alternate',
+      configuration: { inputSchema: {
+        type: 'object', properties: {
+          alternateReference: { type: 'string', 'x-question': 'What alternate reference should I use?' },
+        }, required: ['alternateReference'], additionalProperties: false,
+      } },
     }],
   };
   const tool = await observed(engine, 'submit request', { turn: pass, runtimeProfile });
@@ -272,6 +326,48 @@ for (let pass = 1; pass <= repeats; pass += 1) {
   assert.equal(tool.decision.toolWorkflow.status, 'COLLECTING_FIELDS');
   assert.equal(tool.decision.toolWorkflow.prompt, 'What reference should I use?');
   metrics.tool += 1;
+
+  const activeMemory = {
+    activeTool: {
+      name: 'tenant_submit', authorizationRecordId: action.record_id,
+      status: 'COLLECTING_FIELDS',
+    },
+  };
+  const activeBeforeNewAction = await observed(engine, 'alternate action', {
+    turn: pass, runtimeProfile, memory: activeMemory,
+  });
+  assert.equal(activeBeforeNewAction.classification.source, 'active_tool_workflow');
+  assert.equal(activeBeforeNewAction.decision.tool.name, 'tenant_submit');
+  assert.equal(activeBeforeNewAction.decision.toolWorkflow.prompt, 'What reference should I use?');
+
+  const emergencyDuringTool = await observed(engine, 'urgent danger', {
+    turn: pass, runtimeProfile, memory: activeMemory,
+  });
+  assert.equal(emergencyDuringTool.classification.intentClass, 'SAFETY_EMERGENCY');
+  assert.equal(emergencyDuringTool.decision.type, knowledgeEngineDecisionTypes.DIRECT);
+
+  const callControlDuringTool = await observed(engine, 'stop interaction', {
+    turn: pass, runtimeProfile, memory: activeMemory,
+  });
+  assert.equal(callControlDuringTool.classification.intentClass, 'CALL_CONTROL');
+  assert.equal(callControlDuringTool.decision.type, knowledgeEngineDecisionTypes.DIRECT);
+  metrics.priorityChecks += 3;
+
+  const readyTool = await observed(engine, 'confirm configured action', {
+    turn: pass, runtimeProfile, confirmation: true,
+    memory: { ...activeMemory, collectedToolFields: { reference: `REF-${pass}` } },
+  });
+  assert.equal(readyTool.decision.type, knowledgeEngineDecisionTypes.TOOL);
+  assert.equal(readyTool.decision.toolWorkflow.status, 'READY_TO_EXECUTE');
+  const execution = await executeAuthorizedToolWorkflow({
+    input: readyTool.input, plan: readyTool.decision, runtimeProfile,
+    call: { id: readyTool.input.callId },
+  }, { executor: async () => ({
+    id: `verified-${pass}`, toolId: `tool-${pass}`, name: 'tenant_submit',
+    verified: true, success: true, output: { message: 'The configured request was completed.' },
+  }) });
+  assert.equal(execution.decision.reason, 'verified_tool_success');
+  metrics.verifiedToolExecutions += 1;
 
   const typoInput = createKnowledgeEngineInput({
     tenantId: fixture.tenantId, agentId: fixture.agentId, callId: `typo-${pass}`,
@@ -372,6 +468,7 @@ console.log(JSON.stringify({
   guarantees: {
     tenantIsolation: true, multilingualAndStt: true, topicSwitching: true,
     comparisonGrounding: true, ambiguity: true, safety: true, tools: true,
+    verifiedToolExecution: true, universalPriority: true, artifactRecovery: true,
     interruptions: true, knownAnswerFirstAudioTargetMs: 1000,
     hardFirstAudioDeadlineMs: 2000,
   },

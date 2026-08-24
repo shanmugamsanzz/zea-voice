@@ -366,23 +366,30 @@ export function detectEntityAmbiguity(evidence, classification, resolution) {
     || resolution?.candidate?.entityType === 'CATEGORY') {
     return Object.freeze({ detected: false, candidates: Object.freeze([]), reason: null });
   }
-  const candidates = evidence.filter((item) => item.recordType === 'CATALOG_ITEM')
-    .map((item) => Object.freeze({
-      recordId: item.recordId,
-      itemKey: item.authoritativeData?.itemKey ?? null,
-      name: item.authoritativeData?.name ?? null,
-      categoryKey: item.authoritativeData?.categoryKey ?? null,
-      rank: item.rank,
-    }));
+  const selectedNamespace = resolution?.candidateNamespace ?? null;
+  const hydratedIds = new Set(evidence.map((item) => normalizeId(item.recordId)));
+  const candidates = (resolution?.routingCandidates ?? []).filter((candidate) => (
+    candidate.explicit === true
+    && hydratedIds.has(normalizeId(candidate.recordId))
+  )).map((candidate) => Object.freeze({
+    recordId: candidate.recordId,
+    recordType: candidate.recordType,
+    itemKey: candidate.itemKey ?? null,
+    name: candidate.label ?? null,
+    categoryKey: candidate.categoryKey ?? null,
+    namespace: selectedNamespace,
+    score: candidate.score,
+  }));
   const distinct = new Set(candidates.map((candidate) => (
-    candidate.itemKey ?? candidate.recordId
+    candidate.itemKey ?? candidate.categoryKey ?? candidate.recordId
   )));
   const detected = (classification?.requiresConfirmation === true || resolution?.action === 'CONFIRM')
     && distinct.size > 1;
   return Object.freeze({
     detected,
     candidates: Object.freeze(detected ? candidates.slice(0, 5) : []),
-    reason: detected ? 'multiple_authoritative_entities_require_confirmation' : null,
+    namespace: detected ? selectedNamespace : null,
+    reason: detected ? 'multiple_authoritative_candidates_in_selected_namespace' : null,
   });
 }
 

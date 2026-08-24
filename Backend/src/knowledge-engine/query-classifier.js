@@ -107,19 +107,23 @@ function rankedCandidates(resolution) {
   return [resolution?.candidate, ...(resolution?.alternatives ?? [])].filter(Boolean);
 }
 
-const explicitSafetyMethods = new Set(['exact', 'normalized', 'tenant_alias', 'stt', 'phonetic']);
+const explicitPriorityMethods = new Set(['exact', 'normalized', 'tenant_alias', 'stt', 'phonetic']);
 
-function hasExplicitPublishedSafetyTrigger(candidate) {
+function hasExplicitPublishedPriorityTrigger(candidate) {
   if (candidate?.explicit !== true) return false;
   return (candidate.signals ?? []).some((signal) => signal.explicit === true
-    && explicitSafetyMethods.has(signal.method)
+    && explicitPriorityMethods.has(signal.method)
     && Number(signal.score ?? 0) >= 0.89
     && String(signal.phrase ?? '').trim());
 }
 
 function candidateIsEligible(candidate, intentClass) {
-  if (intentClass === knowledgeQueryClasses.SAFETY_EMERGENCY) {
-    return hasExplicitPublishedSafetyTrigger(candidate);
+  if ([
+    knowledgeQueryClasses.SAFETY_EMERGENCY,
+    knowledgeQueryClasses.CALL_CONTROL,
+    knowledgeQueryClasses.ACTION_TOOL_REQUEST,
+  ].includes(intentClass)) {
+    return hasExplicitPublishedPriorityTrigger(candidate);
   }
   if ([
     knowledgeQueryClasses.KNOWN_INFORMATION,
@@ -142,8 +146,12 @@ function explicitEntityCount(candidates) {
 function explicitPhraseSignatureCount(candidates) {
   return new Set(candidates.filter((candidate) => candidate.explicit
     && Number(candidate.score ?? 0) >= 0.88).map((candidate) => (
+    // Only phrases tied with the candidate's winning score identify what the
+    // caller explicitly named. Lower fuzzy matches to each record's label must
+    // not turn one shared alias into a comparison request.
     [...new Set((candidate.signals ?? [])
-      .filter((signal) => signal.explicit === true && signal.phrase)
+      .filter((signal) => signal.explicit === true && signal.phrase
+        && Number(signal.score ?? 0) >= Number(candidate.score ?? 0) - 0.000001)
       .map((signal) => String(signal.phrase).normalize('NFKC').trim().toLocaleLowerCase()))]
       .sort().join('|')
   )).filter(Boolean))
@@ -193,15 +201,26 @@ function inferredCandidates(input, resolution) {
   if (!inferred.length) inferred.push({
     intentClass: knowledgeQueryClasses.UNKNOWN, candidate: null, source: 'unresolved_utterance',
   });
+  const routingTier = (entry) => {
+    if (entry.intentClass === knowledgeQueryClasses.SAFETY_EMERGENCY) return 900;
+    if (entry.intentClass === knowledgeQueryClasses.CALL_CONTROL) return 800;
+    if (entry.source === 'active_tool_workflow') return 700;
+    if (entry.intentClass === knowledgeQueryClasses.ACTION_TOOL_REQUEST) return 600;
+    if (entry.intentClass === knowledgeQueryClasses.COMPARISON_COMPLEX) return 550;
+    if (entry.candidate?.explicit === true
+      && ['ITEM', 'CATEGORY'].includes(entry.candidate?.entityType)) return 500;
+    if (['FAQ', 'CONVERSATION_NODE'].includes(entry.candidate?.recordType)) return 400;
+    if (entry.intentClass === knowledgeQueryClasses.CLARIFICATION_ANSWER) return 350;
+    if (entry.candidate?.recordType === 'KNOWLEDGE_CHUNK') return 300;
+    if (entry.intentClass === knowledgeQueryClasses.ACKNOWLEDGEMENT) return 200;
+    return 100;
+  };
   return inferred.sort((left, right) => {
-    // Safety, call control, authorized actions and explicit conversational
-    // state keep absolute priority. Among ordinary information routes, the
-    // strongest resolved evidence must win; otherwise a weaker phonetic
-    // category can incorrectly override an exact published response.
-    const leftAbsolute = priority[left.intentClass] >= priority[knowledgeQueryClasses.ACKNOWLEDGEMENT];
-    const rightAbsolute = priority[right.intentClass] >= priority[knowledgeQueryClasses.ACKNOWLEDGEMENT];
-    if (leftAbsolute !== rightAbsolute) return rightAbsolute - leftAbsolute;
-    if (leftAbsolute) return priority[right.intentClass] - priority[left.intentClass];
+    // Universal runtime priority:
+    // emergency -> call control -> active tool -> action -> explicit Catalog
+    // -> FAQ/Conversation -> General -> grounded reasoning -> clarification.
+    const tierDifference = routingTier(right) - routingTier(left);
+    if (tierDifference) return tierDifference;
     const scoreDifference = Number(right.candidate?.score ?? 0) - Number(left.candidate?.score ?? 0);
     return scoreDifference || priority[right.intentClass] - priority[left.intentClass];
   });

@@ -186,6 +186,19 @@ classification = classifyKnowledgeQuery(createKnowledgeEngineInput({
 assert.equal(classification.intentClass, knowledgeQueryClasses.UNKNOWN,
   'Emergency routing must not activate from fuzzy similarity without an explicit severe trigger');
 
+classification = classifyKnowledgeQuery(createKnowledgeEngineInput({
+  tenantId, agentId, callId, utterance: 'ordinary information request',
+}), {
+  tenantId, agentId, callId, action: 'CONFIRM', score: 0.8,
+  routingCandidates: [{
+    recordId: control.record_id, recordType: 'WORKFLOW_RULE', entityType: 'ROUTE',
+    intentClass: 'CALL_CONTROL', score: 0.8, method: 'fuzzy', explicit: true,
+    signals: [{ method: 'fuzzy', score: 0.8, phrase: 'control phrase', explicit: true }],
+  }],
+});
+assert.equal(classification.intentClass, knowledgeQueryClasses.UNKNOWN,
+  'A weak call-control similarity must not override a valid information request');
+
 const workflowExtraction = processExtractedCategory('workflow_rules', {
   fullText: '', pages: [{ pageNumber: 1, lines: [
     'RULE: urgent_route',

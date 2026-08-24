@@ -128,6 +128,11 @@ assert.equal(bundle.records.length, 5);
 assert.equal(bundle.answerCards.length, 4);
 assert.ok(bundle.entityIndex.exact['example plan']);
 assert.ok(bundle.routeIndex.exact['reserve a time']);
+assert.ok(bundle.routeIndex.namespaces.workflow.exact['reserve a time']);
+assert.equal(bundle.routeIndex.namespaces.faq.exact['reserve a time'], undefined);
+assert.equal(Object.values(bundle.routeIndex.namespaces).every((namespace) => (
+  Object.values(namespace.exact).flat().every((candidate) => candidate.entityType !== 'ITEM')
+)), true, 'Intent namespaces must never contain Catalog entity candidates');
 assert.equal(bundle.answerCards.find((card) => card.recordType === 'WORKFLOW_RULE').decision, 'TOOL');
 assert.match(bundle.manifest.contentHash, /^[a-f0-9]{64}$/u);
 
