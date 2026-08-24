@@ -146,8 +146,6 @@ const envSchema = z.object({
   RAG_EMBEDDING_BATCH_SIZE: z.coerce.number().int().min(1).max(128).default(16),
   RAG_EMBEDDING_MAX_CHARS: z.coerce.number().int().min(200).max(10000).default(1800),
   QDRANT_UPSERT_BATCH_SIZE: z.coerce.number().int().min(1).max(512).default(64),
-  RAG_RUNTIME_PROFILE_CACHE_TTL_SECONDS: z.coerce.number().int().min(1).max(300).default(30),
-  RAG_RUNTIME_RESULT_CACHE_TTL_SECONDS: z.coerce.number().int().min(1).max(300).default(30),
   RAG_RUNTIME_CACHE_TIMEOUT_MS: z.coerce.number().int().min(5).max(1000).default(50),
   KNOWLEDGE_ARTIFACT_READINESS_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(30000),
   KNOWLEDGE_ARTIFACT_READINESS_POLL_MS: z.coerce.number().int().min(25).max(5000).default(250),
