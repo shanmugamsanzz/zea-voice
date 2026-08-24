@@ -13,8 +13,9 @@ COPY src ./src
 # this directory-level copy in sync automatically when a new verify-*.js gate
 # is added instead of maintaining a fragile per-file allowlist here.
 COPY scripts ./scripts
-COPY fixtures/failed-call-2026-08-19-production.json ./fixtures/failed-call-2026-08-19-production.json
-COPY fixtures/complete-live-call-2026-08-20-regression.json ./fixtures/complete-live-call-2026-08-20-regression.json
+# Regression fixtures follow the same rule: every committed fixture used by a
+# production verification command must be available in the runtime image.
+COPY fixtures ./fixtures
 
 RUN mkdir -p /app/artifacts && chown -R node:node /app/artifacts
 
