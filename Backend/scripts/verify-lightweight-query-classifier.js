@@ -109,7 +109,10 @@ assert.equal(classification.intentClass, knowledgeQueryClasses.CLARIFICATION_ANS
 
 classification = classify('ack phrase');
 assert.equal(classification.intentClass, knowledgeQueryClasses.ACKNOWLEDGEMENT);
-assert.deepEqual(classification.retrievalPlan.indexes, [knowledgeSearchIndexes.CONVERSATION]);
+assert.deepEqual(classification.retrievalPlan.indexes, [
+  knowledgeSearchIndexes.CONVERSATION, knowledgeSearchIndexes.BM25,
+  knowledgeSearchIndexes.SEMANTIC,
+]);
 
 classification = classify('Choices');
 assert.equal(classification.intentClass, knowledgeQueryClasses.CATEGORY_OVERVIEW);
@@ -122,6 +125,7 @@ classification = classify('detail phrase');
 assert.equal(classification.intentClass, knowledgeQueryClasses.DETAILS_OR_PRICE);
 assert.deepEqual(classification.retrievalPlan.indexes, [
   knowledgeSearchIndexes.CATALOG, knowledgeSearchIndexes.FAQ, knowledgeSearchIndexes.BM25,
+  knowledgeSearchIndexes.SEMANTIC,
 ]);
 
 classification = classify('alpha');
@@ -147,7 +151,7 @@ assert.equal(classification.intentClass, knowledgeQueryClasses.DETAILS_OR_PRICE)
 classification = classify('unmapped utterance');
 assert.equal(classification.intentClass, knowledgeQueryClasses.UNKNOWN);
 assert.deepEqual(classification.retrievalPlan.indexes, [
-  knowledgeSearchIndexes.FAQ, knowledgeSearchIndexes.CONVERSATION,
+  knowledgeSearchIndexes.CATALOG, knowledgeSearchIndexes.FAQ, knowledgeSearchIndexes.CONVERSATION,
   knowledgeSearchIndexes.GENERAL, knowledgeSearchIndexes.BM25, knowledgeSearchIndexes.SEMANTIC,
 ]);
 

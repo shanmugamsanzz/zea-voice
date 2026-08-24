@@ -241,6 +241,11 @@ function validateBundle(input, bundle) {
   if (!expectedTenant || !indexedTenant || expectedTenant !== indexedTenant) {
     throw new TypeError('Entity resolution requires publication indexes from the same tenant');
   }
+  const expectedAgent = normalizeId(input?.agentId);
+  const assignedAgents = (bundle?.assignedAgentIds ?? []).map(normalizeId).filter(Boolean);
+  if (assignedAgents.length && !assignedAgents.includes(expectedAgent)) {
+    throw new TypeError('Entity resolution requires publication indexes assigned to the active agent');
+  }
 }
 
 function addSignal(accumulator, entry, signal) {
@@ -419,6 +424,7 @@ function contextSignals(accumulator, input, query, records, hasExplicitCandidate
   const queryTokens = tokens(query);
   const isSupportedFollowUp = queryTokens.length <= 3
     || queryTokens.some((token) => contextualReferenceTokens.has(token))
+    || (input?.contextualReferences?.length ?? 0) > 0
     || (input?.requestedFacts?.length ?? 0) > 0;
   if (!candidate || hasExplicitCandidate || !isSupportedFollowUp || memory.pendingClarification) return;
   addSignal(accumulator, candidate, {
@@ -476,8 +482,12 @@ function normalizedBundles(input, publicationBundles) {
   }
   bundles.forEach((bundle) => validateBundle(input, bundle));
   const records = new Map();
+  const usageDirection = String(input?.usageDirection ?? 'inbound').trim().toLocaleLowerCase();
   for (const bundle of bundles) {
     for (const rawRecord of bundle.records ?? []) {
+      const recordUsage = String(rawRecord?.usage_direction ?? rawRecord?.usageDirection ?? 'both')
+        .trim().toLocaleLowerCase();
+      if (![usageDirection, 'both'].includes(recordUsage)) continue;
       const record = canonicalRecord(rawRecord);
       if (record) records.set(normalizeId(record.recordId), record);
     }
@@ -568,16 +578,6 @@ function resolutionResult(input, ranked, namespace, namespaceCandidates, reasonP
   });
 }
 
-export function resolvePublishedIntentRoutes(input, publicationBundles) {
-  const { utterance, bundles, records } = normalizedBundles(input, publicationBundles);
-  const query = normalizePublicationPhrase(utterance);
-  const queryForms = buildPublicationPhraseForms([utterance]);
-  const routes = matchRouteCandidates(bundles, records, query, queryForms);
-  const grouped = groupByNamespace(routes);
-  return resolutionResult(input, rankCandidates(routes), null, frozenNamespaceCandidates(grouped),
-    'intent_route');
-}
-
 const absoluteRouteIntents = new Set(['SAFETY_EMERGENCY', 'CALL_CONTROL', 'ACTION_TOOL_REQUEST']);
 
 const explicitPriorityMethods = new Set(['exact', 'normalized', 'tenant_alias', 'stt', 'phonetic']);
@@ -618,25 +618,24 @@ export function resolvePublishedEntityRoute(input, publicationBundles, options =
   const queryForms = buildPublicationPhraseForms([utterance]);
   const catalog = matchCatalogCandidates(bundles, records, query, queryForms);
   const routes = matchRouteCandidates(bundles, records, query, queryForms);
+  const semantic = new Map();
+  semanticSignals(semantic, options.semanticMatches, records);
   contextSignals(catalog, input, query, records,
     [...catalog.values()].some((candidate) => candidate.explicit));
   const routeGroups = groupByNamespace(routes);
-  const preliminary = options.intentClassification ?? null;
+  const semanticGroups = groupByNamespace(semantic);
   const fallbackRouteCandidate = bestRouteCandidate(routes);
-  const preliminaryCandidate = preliminary
-    ? (preliminary.candidate ?? null) : fallbackRouteCandidate;
+  const preliminaryCandidate = fallbackRouteCandidate;
   const preliminaryNamespace = candidateNamespace(preliminaryCandidate);
-  const preliminaryIntent = normalizedIntentClass(preliminary?.intentClass
-    ?? preliminaryCandidate?.intentClass);
-  const continuingActiveTool = preliminary?.source === 'active_tool_workflow'
-    && preliminaryIntent === 'ACTION_TOOL_REQUEST';
-  const lockPublishedRoute = continuingActiveTool
-    || (absoluteRouteIntents.has(preliminaryIntent)
-      && explicitPriorityRoute(preliminaryCandidate));
+  const preliminaryIntent = normalizedIntentClass(preliminaryCandidate?.intentClass);
+  const lockPublishedRoute = absoluteRouteIntents.has(preliminaryIntent)
+    && explicitPriorityRoute(preliminaryCandidate);
 
   const catalogRanked = rankCandidates(catalog);
+  const semanticRanked = rankCandidates(semantic);
   const explicitCatalog = catalogRanked[0]?.explicit === true
     && catalogRanked[0].score >= 0.88;
+  const contextualFollowUp = (input?.contextualReferences?.length ?? 0) > 0;
   let selectedNamespace = null;
   let selected = new Map();
   if (lockPublishedRoute && preliminaryNamespace) {
@@ -653,15 +652,24 @@ export function resolvePublishedEntityRoute(input, publicationBundles, options =
     selected = catalog;
   }
 
-  if (!selected.size) {
-    const semantic = new Map();
-    semanticSignals(semantic, options.semanticMatches, records);
-    const semanticGroups = groupByNamespace(semantic);
-    const top = rankCandidates(semantic)[0];
+  const semanticTop = semanticRanked[0] ?? null;
+  const selectedTop = rankCandidates(selected)[0] ?? null;
+  if (semanticTop && !lockPublishedRoute && !explicitCatalog && !contextualFollowUp
+    && (!selectedTop || semanticTop.score > selectedTop.score)) {
+    selectedNamespace = candidateNamespace(semanticTop);
+    selected = selectedNamespace ? semanticGroups.get(selectedNamespace) : new Map();
+  } else if (!selected.size) {
+    const top = semanticTop;
     selectedNamespace = candidateNamespace(top);
     selected = selectedNamespace ? semanticGroups.get(selectedNamespace) : new Map();
   }
-  const allGroups = groupByNamespace(new Map([...routes, ...catalog]));
+  const allCandidates = new Map([...routes, ...catalog]);
+  for (const candidate of semantic.values()) {
+    addSignal(allCandidates, candidate, {
+      method: 'semantic', score: candidate.score, explicit: false,
+    });
+  }
+  const allGroups = groupByNamespace(allCandidates);
   return resolutionResult(input, rankCandidates(selected), selectedNamespace,
     frozenNamespaceCandidates(allGroups));
 }

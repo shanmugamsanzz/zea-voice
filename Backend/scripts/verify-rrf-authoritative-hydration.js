@@ -13,7 +13,7 @@ const agentId = '90000000-0000-4000-8000-000000000002';
 const callId = '90000000-0000-4000-8000-000000000003';
 const knowledgeBaseId = '90000000-0000-4000-8000-000000000004';
 const otherKnowledgeBaseId = '90000000-0000-4000-8000-000000000005';
-const ids = Array.from({ length: 5 }, (_value, index) => (
+const ids = Array.from({ length: 9 }, (_value, index) => (
   `90000000-0000-4000-8000-${String(index + 10).padStart(12, '0')}`
 ));
 
@@ -52,6 +52,29 @@ assert.equal(duplicateFusion.candidates[0].rrfScore, Math.round((1 / 61) * 1e12)
   'A duplicate within one channel must not receive a second RRF contribution');
 assert.deepEqual(duplicateFusion.candidates[0].channels, ['structured']);
 
+const weakFusion = fuseCandidateRankings({
+  tenantId, agentId, callId, recordTypes: ['CATALOG_ITEM'],
+  channels: {
+    qdrant: [candidate(ids[5], 1, 0.1), candidate(ids[6], 2, 0.9)],
+    structured: [{ ...candidate(ids[7], 1, 1), recordType: 'FAQ' }],
+  },
+});
+assert.deepEqual(weakFusion.candidates.map((entry) => entry.recordId), [ids[6]]);
+assert.deepEqual(weakFusion.rejectedWeakIds, [ids[5].toLowerCase()]);
+assert.deepEqual(weakFusion.rejectedNamespaceIds, [ids[7].toLowerCase()]);
+
+const reservedFusion = fuseCandidateRankings({
+  tenantId, agentId, callId, recordTypes: ['CATALOG_ITEM'],
+  channels: {
+    structured: ids.slice(0, 7).map((recordId, index) => candidate(recordId, index + 1, 1)),
+  },
+}, { limit: 5, reservedRecordIds: [ids[5], ids[6]] });
+assert.equal(reservedFusion.candidates.length, 5, 'RRF must retain at most five records');
+assert.ok(reservedFusion.candidates.some((entry) => entry.recordId === ids[5]));
+assert.ok(reservedFusion.candidates.some((entry) => entry.recordId === ids[6]),
+  'Every explicitly requested comparison item must retain a ranking slot');
+assert.deepEqual(reservedFusion.missingReservedRecordIds, []);
+
 let queryCount = 0;
 let requestedIds = [];
 const row = (recordId, rank, rrfScore, itemKey, name, price) => ({
@@ -60,6 +83,8 @@ const row = (recordId, rank, rrfScore, itemKey, name, price) => ({
   document_id: '91000000-0000-4000-8000-000000000001',
   document_version_id: '92000000-0000-4000-8000-000000000001',
   document_name: 'tenant-source.txt', source_page_start: 1, source_page_end: 1,
+  document_display_name: 'Tenant Source', document_type: 'CATALOG',
+  source_section: 'Approved options', source_line_start: 10, source_line_end: 20,
   document_status: 'ready', document_version_status: 'ready',
   document_version_is_current: true,
   language: 'mul', content: `${name} authoritative content`, caller_facing: true,
@@ -124,6 +149,14 @@ assert.equal(hydrated.evidence.every((entry) => entry.documentStatus === 'ready'
   && entry.documentVersionIsCurrent === true), true);
 assert.equal(hydrated.evidence.every((entry) => entry.documentName === 'tenant-source.txt'), true);
 assert.equal(hydrated.evidence.every((entry) => entry.pageNumber === 1), true);
+assert.equal(hydrated.evidence.every((entry) => (
+  entry.provenance.uploadedFilename === 'tenant-source.txt'
+  && entry.provenance.documentDisplayName === 'Tenant Source'
+  && entry.provenance.pageNumber === 1
+  && entry.provenance.sourceSection === 'Approved options'
+  && entry.provenance.sourceLineStart === 10
+  && entry.provenance.sourceLineEnd === 20
+)), true, 'Exact record/document/page/line provenance must survive authoritative hydration');
 assert.equal(hydrated.ambiguity.detected, true);
 assert.equal(hydrated.conflict.detected, true);
 assert.equal(hydrated.conflict.conflicts[0].identity, 'catalog:options:shared item');

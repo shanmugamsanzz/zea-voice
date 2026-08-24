@@ -17,13 +17,8 @@ import { executePostCallSummaryJob } from './voice/postcall-summary/postcall-sum
 import { closeCallReconciliation, startCallReconciliation } from './voice/call-reconciliation.service.js';
 //this is test-2
 async function bootstrap() {
-  if (env.VOICE_UNIFIED_GROUNDED_DECISION_ENABLED !== true) {
-    throw new Error('VOICE_UNIFIED_GROUNDED_DECISION_ENABLED must be true; legacy voice orchestration is disabled');
-  }
   logger.info({
     engine: 'unified_grounded_decision',
-    enabled: env.VOICE_UNIFIED_GROUNDED_DECISION_ENABLED,
-    legacyEngine: false,
   }, 'Voice conversation engine selected');
   await runPendingMigrations();
   const [databaseHealth, redisHealth, ragHealth] = await Promise.all([

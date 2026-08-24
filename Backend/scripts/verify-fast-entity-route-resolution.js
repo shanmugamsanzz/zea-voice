@@ -6,7 +6,6 @@ import {
   knowledgeResolutionActions,
   knowledgeResolutionConfidence,
   resolvePublishedEntityRoute,
-  resolvePublishedIntentRoutes,
 } from '../src/knowledge-engine/entity-route-resolver.js';
 
 const tenantId = '20000000-0000-4000-8000-000000000001';
@@ -244,13 +243,7 @@ const namespaceInput = input('youth health checkup', {
 const collisionBundle = buildPublicationIndexes(job, [
   generalScreening, youthScreening, unrelatedControl,
 ]);
-const intentOnly = resolvePublishedIntentRoutes(namespaceInput, collisionBundle);
-assert.equal(intentOnly.routingCandidates.some((candidate) => (
-  ['ITEM', 'CATEGORY'].includes(candidate.entityType)
-)), false, 'Pre-entity intent classification must not contain Catalog candidates');
-result = resolvePublishedEntityRoute(namespaceInput, collisionBundle, {
-  intentClassification: { intentClass: 'UNKNOWN', candidate: null },
-});
+result = resolvePublishedEntityRoute(namespaceInput, collisionBundle);
 assert.equal(result.candidateNamespace, knowledgeCandidateNamespaces.CATALOG);
 assert.equal(result.candidate.itemKey, 'youth-screening',
   'Distinctive tenant terms must outrank a generic contained alias and stale memory');

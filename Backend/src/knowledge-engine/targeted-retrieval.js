@@ -2,7 +2,7 @@ import { embedQuery } from '../rag/embedding.client.js';
 import { searchTenantPoints } from '../rag/qdrant.client.js';
 import { knowledgeSearchIndexes } from './query-classifier.js';
 
-export const TARGETED_RETRIEVAL_VERSION = 1;
+export const TARGETED_RETRIEVAL_VERSION = 2;
 
 const documentIndexTypes = Object.freeze({
   [knowledgeSearchIndexes.CATALOG]: 'CATALOG_ITEM',
@@ -44,11 +44,17 @@ function allowedRecordTypes(indexes) {
 
 function publicationScope(input, bundles) {
   const tenant = normalizeId(input.tenantId);
+  const agent = normalizeId(input.agentId);
+  const usage = normalizedUsage(input.usageDirection);
   const scope = [];
   const records = new Map();
   for (const bundle of bundles) {
     if (normalizeId(bundle?.tenantId) !== tenant) {
       throw new TypeError('Targeted retrieval requires same-tenant publication bundles');
+    }
+    const assignedAgentIds = (bundle.assignedAgentIds ?? []).map(normalizeId).filter(Boolean);
+    if (assignedAgentIds.length && !assignedAgentIds.includes(agent)) {
+      throw new TypeError('Targeted retrieval requires publication bundles assigned to the active agent');
     }
     const knowledgeBaseId = String(bundle.knowledgeBaseId ?? '').trim();
     const publicationRevision = Number(bundle.publicationRevision);
@@ -57,6 +63,9 @@ function publicationScope(input, bundles) {
     }
     scope.push(Object.freeze({ id: knowledgeBaseId, publicationRevision }));
     for (const record of bundle.records ?? []) {
+      const recordUsage = String(record.usage_direction ?? record.usageDirection ?? 'both')
+        .trim().toLocaleLowerCase();
+      if (!['both', usage].includes(recordUsage)) continue;
       const recordId = String(record.record_id ?? record.recordId ?? record.id ?? '').trim();
       if (!recordId) continue;
       records.set(normalizeId(recordId), Object.freeze({
@@ -289,16 +298,27 @@ export async function retrieveTargetedCandidates({
   const recordTypes = allowedRecordTypes(indexes);
   const dependencies = { ...defaultDependencies, ...suppliedDependencies };
 
-  const structured = structuredCandidatesForTurn(
-    input, classification, resolution, records, recordTypes, limitPerChannel,
-  );
+  const structuredPromise = Promise.resolve().then(() => {
+    dependencies.onChannelStart?.('structured');
+    return structuredCandidatesForTurn(
+      input, classification, resolution, records, recordTypes, limitPerChannel,
+    );
+  });
   const bm25Promise = indexes.has(knowledgeSearchIndexes.BM25)
-    ? Promise.resolve(bm25Candidates(input, sparseIndexes, scope, recordTypes, limitPerChannel))
+    ? Promise.resolve().then(() => {
+      dependencies.onChannelStart?.('bm25');
+      return bm25Candidates(input, sparseIndexes, scope, recordTypes, limitPerChannel);
+    })
     : Promise.resolve(Object.freeze([]));
   const qdrantPromise = indexes.has(knowledgeSearchIndexes.SEMANTIC)
-    ? semanticCandidates(input, scope, recordTypes, limitPerChannel, dependencies)
+    ? Promise.resolve().then(() => {
+      dependencies.onChannelStart?.('qdrant');
+      return semanticCandidates(input, scope, recordTypes, limitPerChannel, dependencies);
+    })
     : Promise.resolve(Object.freeze([]));
-  const [bm25, qdrant] = await Promise.all([bm25Promise, qdrantPromise]);
+  const [structured, bm25, qdrant] = await Promise.all([
+    structuredPromise, bm25Promise, qdrantPromise,
+  ]);
 
   return Object.freeze({
     version: TARGETED_RETRIEVAL_VERSION,

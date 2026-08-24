@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import { knowledgeEngineDecisionTypes } from '../src/knowledge-engine/engine-contract.js';
+import {
+  knowledgeEngineDecisionTypes,
+  knowledgeEngineResponseModes,
+} from '../src/knowledge-engine/engine-contract.js';
 import { knowledgeQueryClasses } from '../src/knowledge-engine/query-classifier.js';
 import {
   awaitLlmWithSafeLatency,
@@ -23,7 +26,9 @@ const tracker = new VoiceTurnLatencyTracker(identity, {
 });
 assert.equal(tracker.firstAudioDeadlineMs, 2_000, 'Hard first-audio deadline must be capped at two seconds');
 tracker.setKnownAnswer(true);
-tracker.setResponseClass(knowledgeEngineDecisionTypes.DIRECT);
+tracker.setResponseClass(
+  `${knowledgeEngineDecisionTypes.RESPONSE}:${knowledgeEngineResponseModes.GROUNDED_LLM}`,
+);
 tracker.record(voiceTurnStages.STT_FINALIZATION, 75);
 tracker.record(voiceTurnStages.ROUTING, 20);
 tracker.record(voiceTurnStages.RETRIEVAL, 80);

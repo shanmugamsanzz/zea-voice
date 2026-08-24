@@ -1,4 +1,8 @@
-import { createKnowledgeEngineDecision, knowledgeEngineDecisionTypes } from './engine-contract.js';
+import {
+  createKnowledgeEngineDecision,
+  knowledgeEngineDecisionTypes,
+  knowledgeEngineResponseModes,
+} from './engine-contract.js';
 import { knowledgeQueryClasses } from './query-classifier.js';
 import { validateGroundedClaims } from '../voice/interaction/grounded-claim-validator.js';
 import { validateToolArguments } from '../voice/tools/tool-security.js';
@@ -6,12 +10,7 @@ import { executeAgentTool } from '../voice/tools/tool-executor.service.js';
 
 export const SAFE_RESPONSE_TOOL_RUNTIME_VERSION = 1;
 
-const directIntentClasses = new Set([
-  knowledgeQueryClasses.KNOWN_INFORMATION,
-  knowledgeQueryClasses.DETAILS_OR_PRICE,
-  knowledgeQueryClasses.CATEGORY_OVERVIEW,
-  knowledgeQueryClasses.CLARIFICATION_ANSWER,
-  knowledgeQueryClasses.ACKNOWLEDGEMENT,
+const deterministicIntentClasses = new Set([
   knowledgeQueryClasses.CALL_CONTROL,
   knowledgeQueryClasses.SAFETY_EMERGENCY,
 ]);
@@ -270,6 +269,16 @@ function explicitComparisonEvidence(resolution, evidence) {
     && explicitIds.has(normalizedId(source.recordId)));
 }
 
+function explicitConversationGuidance(resolution, evidence) {
+  const recordIds = new Set((resolution?.namespaceCandidates?.CONVERSATION ?? [])
+    .filter((candidate) => candidate.explicit === true && Number(candidate.score ?? 0) >= 0.88)
+    .flatMap((candidate) => candidate.evidenceRecordIds ?? [candidate.recordId])
+    .map(normalizedId).filter(Boolean));
+  if (!recordIds.size) return [];
+  return evidence.filter((source) => source.recordType === 'CONVERSATION_NODE'
+    && recordIds.has(normalizedId(source.recordId)));
+}
+
 function withWorkflow(decision, workflow) {
   return Object.freeze({ ...decision, toolWorkflow: Object.freeze(workflow) });
 }
@@ -405,7 +414,16 @@ export function planSafeKnowledgeResponse({
   );
   const isComparison = classification?.intentClass === knowledgeQueryClasses.COMPARISON_COMPLEX;
   if (classification?.intentClass === knowledgeQueryClasses.ACTION_TOOL_REQUEST) {
-    return planAuthorizedToolWorkflow({ input, authoritative, runtimeProfile, confirmation });
+    const authorizedPlan = planAuthorizedToolWorkflow({
+      input, authoritative, runtimeProfile, confirmation,
+    });
+    if (authorizedPlan.type === knowledgeEngineDecisionTypes.CLARIFY) return authorizedPlan;
+    return createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.RESPONSE, {
+      reason: 'grounded_authorized_tool_decision_required',
+      confidence: classification.confidence,
+      evidenceIds: authorizedPlan.evidenceIds,
+      mode: knowledgeEngineResponseModes.GROUNDED_LLM,
+    });
   }
   if (authoritative.ambiguity?.detected && !isComparison) {
     return clarification('ambiguity', 'ambiguous_authoritative_entity',
@@ -433,31 +451,16 @@ export function planSafeKnowledgeResponse({
   if (classification?.intentClass === knowledgeQueryClasses.CATEGORY_OVERVIEW) {
     const rendered = categoryText(resolution, callerFacing);
     if (rendered) {
-      // Conversational connective text is deterministic output of the same
-      // hydrated category fields. Validate against that aligned view while
-      // retaining all authority, identity, number and safety checks.
-      const alignedEvidence = evidence.map((source) => (
-        rendered.evidence.some((selected) => selected.id === source.id)
-          ? Object.freeze({ ...source, content: `${source.content ?? ''} ${rendered.text}`.trim() })
-          : source
-      ));
-      const validation = validateFinalKnowledgeResponse({
-        input,
-        answer: rendered.text,
-        selectedEvidenceIds: evidenceIds(rendered.evidence),
-        evidence: alignedEvidence,
-      });
-      if (validation.valid) return createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.DIRECT, {
-        reason: 'approved_authoritative_category_response',
+      const guidance = explicitConversationGuidance(resolution, callerFacing);
+      return createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.RESPONSE, {
+        reason: 'grounded_category_response_required',
         confidence: classification.confidence,
-        evidenceIds: validation.evidenceIds,
-        response: {
-          text: validation.answer,
-          recordId: resolution.candidate.recordId,
-          recordType: 'CATALOG_CATEGORY',
-        },
+        // Catalog rows remain authoritative for the available children. An
+        // exact tenant-published Conversation match may additionally guide
+        // the spoken overview, but unrelated retrieved guidance is excluded.
+        evidenceIds: evidenceIds([...rendered.evidence, ...guidance]),
+        mode: knowledgeEngineResponseModes.GROUNDED_LLM,
       });
-      return clarification('ambiguity', validation.reason, null, rendered.evidence);
     }
   }
   if (classification?.intentClass === knowledgeQueryClasses.COMPARISON_COMPLEX) {
@@ -466,32 +469,43 @@ export function planSafeKnowledgeResponse({
       'no_evidence', 'grounded_reasoning_evidence_unavailable',
       'Please clarify the options you want compared.', evidence,
     );
-    return createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.LLM, {
+    return createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.RESPONSE, {
       reason: 'grounded_multi_evidence_reasoning_required',
       confidence: classification.confidence,
       evidenceIds: evidenceIds(compared),
+      mode: knowledgeEngineResponseModes.GROUNDED_LLM,
     });
   }
   if (classification?.intentClass === knowledgeQueryClasses.UNKNOWN && callerFacing.length) {
-    return createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.LLM, {
+    return createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.RESPONSE, {
       reason: 'grounded_published_reasoning_required',
       confidence: classification.confidence,
       evidenceIds: evidenceIds(callerFacing.slice(0, 3)),
+      mode: knowledgeEngineResponseModes.GROUNDED_LLM,
     });
   }
-  if (directIntentClasses.has(classification?.intentClass) && callerFacing.length === 1) {
+  if (deterministicIntentClasses.has(classification?.intentClass) && callerFacing.length === 1) {
     const source = callerFacing[0];
     const answer = directText(source);
     const validation = validateFinalKnowledgeResponse({
       input, answer, selectedEvidenceIds: [source.id], evidence,
     });
-    if (validation.valid) return createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.DIRECT, {
-      reason: 'approved_authoritative_direct_response',
+    if (validation.valid) return createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.RESPONSE, {
+      reason: 'approved_deterministic_priority_response',
       confidence: classification.confidence,
       evidenceIds: validation.evidenceIds,
+      mode: knowledgeEngineResponseModes.DETERMINISTIC,
       response: { text: validation.answer, recordId: source.recordId, recordType: source.recordType },
     });
     return clarification('ambiguity', validation.reason, null, [source]);
+  }
+  if (callerFacing.length) {
+    return createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.RESPONSE, {
+      reason: 'grounded_natural_response_required',
+      confidence: classification.confidence,
+      evidenceIds: evidenceIds(callerFacing.slice(0, 5)),
+      mode: knowledgeEngineResponseModes.GROUNDED_LLM,
+    });
   }
   return clarification(callerFacing.length ? 'ambiguity' : 'no_evidence',
     callerFacing.length ? 'single_authoritative_response_not_resolved' : 'weak_or_missing_evidence',
@@ -504,8 +518,9 @@ export function planSafeKnowledgeResponse({
 export function finalizeGroundedLlmResponse({
   input, plan, answer, selectedEvidenceIds, authoritative,
 } = {}) {
-  if (plan?.type !== knowledgeEngineDecisionTypes.LLM) {
-    throw new TypeError('Only an LLM plan may be finalized as a grounded LLM response');
+  if (plan?.type !== knowledgeEngineDecisionTypes.RESPONSE
+    || plan?.mode !== knowledgeEngineResponseModes.GROUNDED_LLM) {
+    throw new TypeError('Only a grounded RESPONSE plan may be finalized');
   }
   const allowed = new Set(plan.evidenceIds ?? []);
   const selected = [...new Set(selectedEvidenceIds ?? [])];
@@ -519,9 +534,10 @@ export function finalizeGroundedLlmResponse({
   });
   if (!validation.valid) return clarification('technical', validation.reason,
     'I could not safely validate that response against the selected published information.');
-  return createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.DIRECT, {
+  return createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.RESPONSE, {
     reason: 'validated_grounded_llm_response',
     evidenceIds: validation.evidenceIds,
+    mode: knowledgeEngineResponseModes.GROUNDED_LLM,
     response: { text: validation.answer, recordId: null, recordType: 'GROUNDED_LLM' },
   });
 }
@@ -539,6 +555,64 @@ function toolResultEvidence(input, plan, result, configuredSuccessMessage) {
     callerFacing: true,
     content: cleanText(`${configuredSuccessMessage ?? ''} ${outputText}`, 8_000),
     authoritativeData: Object.freeze({ verified: true, success: true, output: result.output }),
+  });
+}
+
+export function finalizeVerifiedToolResults({
+  input, results, runtimeProfile,
+} = {}) {
+  const values = Array.isArray(results) ? results : [];
+  if (!values.length || values.some((result) => (
+    result?.verified !== true || result?.success !== true
+  ))) {
+    return Object.freeze({
+      evidence: Object.freeze([]),
+      decision: clarification('technical', 'tool_success_not_verified',
+        'I could not verify that the requested action completed. I have not confirmed success.'),
+    });
+  }
+  const evidence = [];
+  const responseParts = [];
+  for (const result of values) {
+    const assigned = (runtimeProfile?.tools ?? []).find((tool) => (
+      toolIdentifiers(tool).has(toolIdentity(result.name))
+    ));
+    const schema = configuredToolSchema(assigned);
+    const configuredSuccess = cleanText(schema['x-success-message'], 800);
+    const output = object(result.output);
+    const callerMessage = cleanText(output.callerMessage ?? output.message ?? configuredSuccess, 1_200);
+    if (callerMessage) responseParts.push(callerMessage);
+    evidence.push(toolResultEvidence(input, {
+      tool: { name: result.name },
+    }, result, configuredSuccess));
+  }
+  const answer = cleanText(responseParts.join(' '), 1_500)
+    || 'The requested action was completed successfully.';
+  const validation = validateFinalKnowledgeResponse({
+    input,
+    answer,
+    selectedEvidenceIds: evidence.map((source) => source.id),
+    evidence,
+  });
+  if (!validation.valid) {
+    return Object.freeze({
+      evidence: Object.freeze(evidence),
+      decision: clarification('technical', validation.reason,
+        'The action completed, but I could not safely validate the response details.'),
+    });
+  }
+  return Object.freeze({
+    evidence: Object.freeze(evidence),
+    decision: createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.RESPONSE, {
+      reason: 'verified_tool_success',
+      evidenceIds: validation.evidenceIds,
+      mode: knowledgeEngineResponseModes.DETERMINISTIC,
+      response: {
+        text: validation.answer,
+        recordId: evidence[0]?.recordId ?? null,
+        recordType: 'TOOL_RESULT',
+      },
+    }),
   });
 }
 
@@ -567,31 +641,12 @@ export async function executeAuthorizedToolWorkflow({
     decision: clarification('technical', 'tool_success_not_verified',
       'I could not verify that the requested action completed. I have not confirmed success.'),
   });
-  const assigned = (runtimeProfile?.tools ?? []).find((tool) => (
-    toolIdentifiers(tool).has(toolIdentity(plan.tool.name))
-  ));
-  const schema = configuredToolSchema(assigned);
-  const configuredSuccess = cleanText(schema['x-success-message'], 800);
-  const output = object(result.output);
-  const answer = cleanText(output.callerMessage ?? output.message ?? configuredSuccess, 1_200)
-    || 'The requested action was completed successfully.';
-  const source = toolResultEvidence(input, plan, result, configuredSuccess);
-  const validation = validateFinalKnowledgeResponse({
-    input, answer, selectedEvidenceIds: [source.id], evidence: [source],
-  });
-  if (!validation.valid) return Object.freeze({
-    result,
-    decision: clarification('technical', validation.reason,
-      'The action completed, but I could not safely validate the response details.'),
+  const finalized = finalizeVerifiedToolResults({
+    input, results: [{ ...result, name: plan.tool.name }], runtimeProfile,
   });
   return Object.freeze({
     result,
-    evidence: source,
-    decision: createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.DIRECT, {
-      reason: 'verified_tool_success', evidenceIds: validation.evidenceIds,
-      response: {
-        text: validation.answer, recordId: source.recordId, recordType: source.recordType,
-      },
-    }),
+    evidence: finalized.evidence[0] ?? null,
+    decision: finalized.decision,
   });
 }

@@ -338,6 +338,7 @@ function publicResult(observed, publications) {
   return Object.freeze({
     operation: 'knowledge_engine_runtime', engineVersion: KNOWLEDGE_ENGINE_RUNTIME_VERSION,
     route: 'knowledge_engine', found: evidence.length > 0, decision: observed.decision,
+    llmEvidenceBundle: observed.llmEvidenceBundle,
     sources: Object.freeze(selectedCallerFacing),
     actionEvidence: Object.freeze(evidence.filter((source) => source.recordType === 'WORKFLOW_RULE')),
     guidanceEvidence: Object.freeze(evidence.filter((source) => (

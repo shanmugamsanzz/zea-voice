@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { createKnowledgeEngineInput, knowledgeEngineDecisionTypes } from '../src/knowledge-engine/engine-contract.js';
+import {
+  createKnowledgeEngineInput,
+  knowledgeEngineDecisionTypes,
+  knowledgeEngineResponseModes,
+} from '../src/knowledge-engine/engine-contract.js';
 import { buildPublicationIndexes } from '../src/knowledge-engine/publication-index-builder.js';
 import { resolvePublishedEntityRoute } from '../src/knowledge-engine/entity-route-resolver.js';
 import { runObservedKnowledgeTurn, VoiceTurnLatencyTracker, voiceTurnStages } from '../src/knowledge-engine/voice-turn-latency.js';
@@ -10,6 +14,7 @@ import { retrieveTenantEvidence } from '../src/knowledge-engine/runtime-service.
 import {
   executeAuthorizedToolWorkflow,
   finalizeGroundedLlmResponse,
+  planAuthorizedToolWorkflow,
 } from '../src/knowledge-engine/safe-response-tool-runtime.js';
 import { InterruptionCandidateManager } from '../src/voice/interruption/interruption-candidate-manager.js';
 import { knowledgeMessageSources } from '../src/voice/source-trace.js';
@@ -126,15 +131,20 @@ async function observed(engine, utterance, options = {}) {
   });
   tracker.record(voiceTurnStages.TTS_FIRST_CHUNK, 50);
   tracker.record(voiceTurnStages.FIRST_AUDIO_DELIVERY, 800);
-  assert.equal(tracker.snapshot().firstAudioStatus, 'target_met');
-  assert.ok(tracker.snapshot().firstAudioMs < 1_000);
+  const latency = tracker.snapshot();
+  assert.equal(latency.firstAudioStatus, 'target_met');
+  assert.ok(latency.firstAudioMs < 2_000);
+  assert.ok(result.latency.stages.retrievalMs < 150);
+  metrics.firstAudioSamples.push(latency.firstAudioMs);
+  metrics.retrievalSamples.push(result.latency.stages.retrievalMs);
   return { ...result, input, tracker };
 }
 
 const metrics = {
-  direct: 0, category: 0, clarify: 0, llm: 0, tool: 0,
+  groundedResponses: 0, category: 0, clarify: 0, comparisons: 0, tool: 0,
   verifiedToolExecutions: 0, priorityChecks: 0, interruptions: 0,
   falseClarifications: 0, runtimeErrors: 0,
+  firstAudioSamples: [], retrievalSamples: [],
 };
 
 function assertPublishedSources(result, expectedCount = 1) {
@@ -160,17 +170,24 @@ for (let pass = 1; pass <= repeats; pass += 1) {
     const engine = industryEngine(fixture);
     for (const utterance of [fixture.query, ...fixture.variants]) {
       const result = await observed(engine, utterance, { turn: pass, language: fixture.language });
-      assert.equal(result.decision.type, knowledgeEngineDecisionTypes.DIRECT,
+      assert.equal(result.decision.type, knowledgeEngineDecisionTypes.RESPONSE,
         `${fixture.industry}: ${utterance}`);
-      assert.equal(result.decision.response.text, fixture.fact);
+      assert.equal(result.decision.mode, knowledgeEngineResponseModes.GROUNDED_LLM);
+      const finalized = finalizeGroundedLlmResponse({
+        input: result.input, plan: result.decision, answer: fixture.fact,
+        selectedEvidenceIds: result.decision.evidenceIds,
+        authoritative: result.authoritative,
+      });
+      assert.equal(finalized.type, knowledgeEngineDecisionTypes.RESPONSE);
+      assert.equal(finalized.response.text, fixture.fact);
       assert.equal(result.authoritative.hydrationQueryCount, 1);
-      assert.doesNotMatch(result.decision.response.text, /ITEM(?:_KEY)?\s*:|ALIASES\s*:|\{\s*"/iu);
+      assert.doesNotMatch(finalized.response.text, /ITEM(?:_KEY)?\s*:|ALIASES\s*:|\{\s*"/iu);
       assertPublishedSources(result);
       assert.deepEqual(result.retrieval.searchedIndexes.includes('WORKFLOW'), false);
       assert.ok(result.latency.stages.routingMs >= 0);
       assert.ok(result.latency.stages.retrievalMs >= 0);
       assert.ok(result.latency.stages.hydrationMs >= 0);
-      metrics.direct += 1;
+      metrics.groundedResponses += 1;
     }
     const foreignInput = createKnowledgeEngineInput({
       tenantId: task10Industries.find((item) => item.tenantId !== fixture.tenantId).tenantId,
@@ -264,27 +281,29 @@ for (let pass = 1; pass <= repeats; pass += 1) {
     turn: pass, memory: { activeEntity: { recordId: alpha.record_id, key: 'alpha' } },
   });
   assert.equal(switched.resolution.candidate.itemKey, 'beta');
-  assert.equal(switched.decision.type, knowledgeEngineDecisionTypes.DIRECT);
+  assert.equal(switched.decision.type, knowledgeEngineDecisionTypes.RESPONSE);
+  assert.equal(switched.decision.mode, knowledgeEngineResponseModes.GROUNDED_LLM);
 
   const namespaceCollision = await observed(engine, 'Alpha Service', { turn: pass });
   assert.equal(namespaceCollision.resolution.candidateNamespace, 'CATALOG');
   assert.equal(namespaceCollision.resolution.candidate.recordId, alpha.record_id);
-  assert.equal(namespaceCollision.decision.response.recordId, alpha.record_id);
-  assert.doesNotMatch(namespaceCollision.decision.response.text, /Generic/iu);
+  assert.ok(namespaceCollision.decision.evidenceIds.some((id) => id.includes(alpha.record_id)));
+  assert.equal(namespaceCollision.decision.evidenceIds.some((id) => (
+    id.includes(collidingFaq.record_id) || id.includes(collidingConversation.record_id)
+  )), false);
   metrics.priorityChecks += 1;
 
   const category = await observed(engine, 'Services', { turn: pass });
-  assert.equal(category.decision.type, knowledgeEngineDecisionTypes.DIRECT);
-  assert.match(category.decision.response.text, /Alpha Service/iu);
-  assert.match(category.decision.response.text, /Beta Service/iu);
-  assert.doesNotMatch(category.decision.response.text, /ITEM(?:_KEY)?\s*:|ALIASES\s*:|\{\s*"/iu);
+  assert.equal(category.decision.type, knowledgeEngineDecisionTypes.RESPONSE);
+  assert.equal(category.decision.mode, knowledgeEngineResponseModes.GROUNDED_LLM);
   assertPublishedSources(category, 4);
   metrics.category += 1;
 
   const comparison = await observed(engine, 'compare Alpha Service and Beta Service', {
     turn: pass, requestedFacts: ['support', 'priority'],
   });
-  assert.equal(comparison.decision.type, knowledgeEngineDecisionTypes.LLM);
+  assert.equal(comparison.decision.type, knowledgeEngineDecisionTypes.RESPONSE);
+  assert.equal(comparison.decision.mode, knowledgeEngineResponseModes.GROUNDED_LLM);
   assert.ok(comparison.decision.evidenceIds.length >= 2);
   assertPublishedSources(comparison, 2);
   assert.equal(finalizeGroundedLlmResponse({
@@ -293,7 +312,7 @@ for (let pass = 1; pass <= repeats; pass += 1) {
     selectedEvidenceIds: [comparison.decision.evidenceIds[0]],
     authoritative: comparison.authoritative,
   }).type, knowledgeEngineDecisionTypes.CLARIFY);
-  metrics.llm += 1;
+  metrics.comparisons += 1;
 
   const ambiguous = await observed(engine, 'shared', { turn: pass });
   assert.equal(ambiguous.decision.type, knowledgeEngineDecisionTypes.CLARIFY);
@@ -302,7 +321,8 @@ for (let pass = 1; pass <= repeats; pass += 1) {
 
   const safe = await observed(engine, 'urgent danger', { turn: pass });
   assert.equal(safe.classification.intentClass, 'SAFETY_EMERGENCY');
-  assert.equal(safe.decision.type, knowledgeEngineDecisionTypes.DIRECT);
+  assert.equal(safe.decision.type, knowledgeEngineDecisionTypes.RESPONSE);
+  assert.equal(safe.decision.mode, knowledgeEngineResponseModes.DETERMINISTIC);
 
   const runtimeProfile = {
     tools: [{
@@ -322,9 +342,16 @@ for (let pass = 1; pass <= repeats; pass += 1) {
     }],
   };
   const tool = await observed(engine, 'submit request', { turn: pass, runtimeProfile });
-  assert.equal(tool.decision.type, knowledgeEngineDecisionTypes.TOOL);
-  assert.equal(tool.decision.toolWorkflow.status, 'COLLECTING_FIELDS');
-  assert.equal(tool.decision.toolWorkflow.prompt, 'What reference should I use?');
+  assert.equal(tool.decision.type, knowledgeEngineDecisionTypes.RESPONSE);
+  assert.equal(tool.decision.mode, knowledgeEngineResponseModes.GROUNDED_LLM);
+  assert.deepEqual(tool.llmEvidenceBundle.authorizedToolSchemas.map((item) => item.name),
+    ['tenant_submit']);
+  const collectingTool = planAuthorizedToolWorkflow({
+    input: tool.input, authoritative: tool.authoritative, runtimeProfile,
+  });
+  assert.equal(collectingTool.type, knowledgeEngineDecisionTypes.TOOL);
+  assert.equal(collectingTool.toolWorkflow.status, 'COLLECTING_FIELDS');
+  assert.equal(collectingTool.toolWorkflow.prompt, 'What reference should I use?');
   metrics.tool += 1;
 
   const activeMemory = {
@@ -337,30 +364,37 @@ for (let pass = 1; pass <= repeats; pass += 1) {
     turn: pass, runtimeProfile, memory: activeMemory,
   });
   assert.equal(activeBeforeNewAction.classification.source, 'active_tool_workflow');
-  assert.equal(activeBeforeNewAction.decision.tool.name, 'tenant_submit');
-  assert.equal(activeBeforeNewAction.decision.toolWorkflow.prompt, 'What reference should I use?');
+  assert.equal(activeBeforeNewAction.decision.type, knowledgeEngineDecisionTypes.RESPONSE);
+  assert.deepEqual(activeBeforeNewAction.llmEvidenceBundle.authorizedToolSchemas.map((item) => item.name),
+    ['tenant_submit']);
 
   const emergencyDuringTool = await observed(engine, 'urgent danger', {
     turn: pass, runtimeProfile, memory: activeMemory,
   });
   assert.equal(emergencyDuringTool.classification.intentClass, 'SAFETY_EMERGENCY');
-  assert.equal(emergencyDuringTool.decision.type, knowledgeEngineDecisionTypes.DIRECT);
+  assert.equal(emergencyDuringTool.decision.type, knowledgeEngineDecisionTypes.RESPONSE);
+  assert.equal(emergencyDuringTool.decision.mode, knowledgeEngineResponseModes.DETERMINISTIC);
 
   const callControlDuringTool = await observed(engine, 'stop interaction', {
     turn: pass, runtimeProfile, memory: activeMemory,
   });
   assert.equal(callControlDuringTool.classification.intentClass, 'CALL_CONTROL');
-  assert.equal(callControlDuringTool.decision.type, knowledgeEngineDecisionTypes.DIRECT);
+  assert.equal(callControlDuringTool.decision.type, knowledgeEngineDecisionTypes.RESPONSE);
+  assert.equal(callControlDuringTool.decision.mode, knowledgeEngineResponseModes.DETERMINISTIC);
   metrics.priorityChecks += 3;
 
   const readyTool = await observed(engine, 'confirm configured action', {
     turn: pass, runtimeProfile, confirmation: true,
     memory: { ...activeMemory, collectedToolFields: { reference: `REF-${pass}` } },
   });
-  assert.equal(readyTool.decision.type, knowledgeEngineDecisionTypes.TOOL);
-  assert.equal(readyTool.decision.toolWorkflow.status, 'READY_TO_EXECUTE');
+  assert.equal(readyTool.decision.type, knowledgeEngineDecisionTypes.RESPONSE);
+  const readyPlan = planAuthorizedToolWorkflow({
+    input: readyTool.input, authoritative: readyTool.authoritative,
+    runtimeProfile, confirmation: true,
+  });
+  assert.equal(readyPlan.toolWorkflow.status, 'READY_TO_EXECUTE');
   const execution = await executeAuthorizedToolWorkflow({
-    input: readyTool.input, plan: readyTool.decision, runtimeProfile,
+    input: readyTool.input, plan: readyPlan, runtimeProfile,
     call: { id: readyTool.input.callId },
   }, { executor: async () => ({
     id: `verified-${pass}`, toolId: `tool-${pass}`, name: 'tenant_submit',
@@ -427,8 +461,8 @@ for (let pass = 1; pass <= repeats; pass += 1) {
     retrievalDependencies: { embed: async () => [0.1, 0.2], search: async () => [] },
   });
   assert.equal(result.route, 'knowledge_engine');
-  assert.equal(result.decision.type, knowledgeEngineDecisionTypes.DIRECT);
-  assert.equal(result.decision.response.text, fixture.fact);
+  assert.equal(result.decision.type, knowledgeEngineDecisionTypes.RESPONSE);
+  assert.equal(result.decision.mode, knowledgeEngineResponseModes.GROUNDED_LLM);
   assert.equal(result.authoritative.hydrationQueryCount, 1);
   assert.deepEqual(result.publicationRevisions, [{
     knowledgeBaseId: fixture.kbId, publicationRevision: fixture.revision,
@@ -461,10 +495,20 @@ const voiceSource = await readFile(new URL('../src/voice/realtime-conversation-o
 const source = `${runtimeSource}\n${voiceSource}`;
 assert.doesNotMatch(source, /hybrid-knowledge-retrieval|routeKnowledgeQuery|weighted score|compatibility fallback/iu);
 assert.doesNotMatch(source, /Shanmuga|hospital|package/iu);
+const percentile95 = (values) => {
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)] ?? 0;
+};
+const firstAudioP95Ms = percentile95(metrics.firstAudioSamples);
+const retrievalP95Ms = percentile95(metrics.retrievalSamples);
+assert.ok(firstAudioP95Ms < 2_000);
+assert.ok(retrievalP95Ms < 150);
+const { firstAudioSamples: _firstAudioSamples, retrievalSamples: _retrievalSamples, ...reportedMetrics } = metrics;
 
 console.log(JSON.stringify({
   gate: 'knowledge-engine-acceptance', passed: true, repeats,
-  industries: task10Industries.map((fixture) => fixture.industry), metrics,
+  industries: task10Industries.map((fixture) => fixture.industry),
+  metrics: { ...reportedMetrics, firstAudioP95Ms, retrievalP95Ms },
   guarantees: {
     tenantIsolation: true, multilingualAndStt: true, topicSwitching: true,
     comparisonGrounding: true, ambiguity: true, safety: true, tools: true,

@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { buildPublicationIndexes } from '../src/knowledge-engine/publication-index-builder.js';
-import { createKnowledgeEngineInput, knowledgeEngineDecisionTypes } from '../src/knowledge-engine/engine-contract.js';
+import {
+  createKnowledgeEngineInput,
+  knowledgeEngineDecisionTypes,
+  knowledgeEngineResponseModes,
+} from '../src/knowledge-engine/engine-contract.js';
+import { finalizeGroundedLlmResponse } from '../src/knowledge-engine/safe-response-tool-runtime.js';
 import { retrieveTenantEvidence } from '../src/knowledge-engine/runtime-service.js';
 import { buildRevisionSparseIndex, cacheCompactKnowledgeMap } from '../src/knowledge-bases/knowledge-map.service.js';
 import { openIsolatedCallMemory } from '../src/knowledge-engine/call-memory.js';
@@ -72,6 +77,7 @@ const sourceRecords = Object.freeze([
     category: 'Packages', aliases: ['silver', 'silver package'], categoryAliases: ['packages'],
     metadata: {
       itemKey: 'silver-package', categoryKey: 'packages', price: 1000, currency: 'INR',
+      description: 'approved basic screening உள்ளது',
       selectionRules: { selectable: true },
     },
   }),
@@ -107,6 +113,7 @@ function hydratedRow(candidate) {
   const authoritativeData = recordType === 'CATALOG_ITEM' ? {
     itemKey: metadata.itemKey, categoryKey: metadata.categoryKey,
     name: source.entity_name, category: source.entity_category,
+    description: metadata.description,
     price: metadata.price, currency: metadata.currency,
     sourceText: source.answer, selectionRules: metadata.selectionRules,
   } : { content: source.answer, conditions: metadata.conditions };
@@ -156,25 +163,40 @@ for (let pass = 1; pass <= repeats; pass += 1) {
           cache, contextRunner, runtimeProfile: { tools: [] }, throwOnError: true,
           retrievalDependencies: { embed: async () => [0.1, 0.2], search: async () => [] },
         });
-        memory.applyEngineDecision(result.decision, {
-          entity: result.entities[0] ?? null,
-          category: null,
-          explicitEntity: result.entities.length > 0,
-          citedEvidence: result.authoritative.evidence,
-        });
       } catch (error) {
         runtimeExceptions += 1;
         throw new Error(`pass ${pass}, ${turn.id}: runtime exception: ${error.message}`, { cause: error });
       }
-      assert.equal(result.decision.type, knowledgeEngineDecisionTypes.DIRECT,
-        `pass ${pass}, ${turn.id}: known question must return DIRECT ${JSON.stringify({
+      assert.equal(result.decision.type, knowledgeEngineDecisionTypes.RESPONSE,
+        `pass ${pass}, ${turn.id}: known question must return RESPONSE ${JSON.stringify({
           reason: result.decision.reason,
           classification: result.classification,
           resolution: result.resolution,
           evidenceIds: result.evidenceIds,
         })}`);
-      assert.equal(result.decision.response?.text, turn.expectedResponse,
-        `pass ${pass}, ${turn.id}: incorrect response`);
+      assert.equal(result.decision.mode, knowledgeEngineResponseModes.GROUNDED_LLM);
+      const validated = finalizeGroundedLlmResponse({
+        input, plan: result.decision, answer: turn.expectedResponse,
+        selectedEvidenceIds: result.evidenceIds, authoritative: result.authoritative,
+      });
+      assert.equal(validated.response?.text, turn.expectedResponse,
+        `pass ${pass}, ${turn.id}: incorrect response ${JSON.stringify({
+          validated,
+          selectedEvidenceIds: result.evidenceIds,
+          plannedEvidenceIds: result.decision.evidenceIds,
+          evidence: result.authoritative.evidence.map((source) => ({
+            id: source.id,
+            type: source.recordType,
+            content: source.content,
+            authoritativeData: source.authoritativeData,
+          })),
+        })}`);
+      memory.applyEngineDecision(validated, {
+        entity: result.entities[0] ?? null,
+        category: null,
+        explicitEntity: result.entities.length > 0,
+        citedEvidence: result.authoritative.evidence,
+      });
       assert.ok(result.evidenceIds.length > 0,
         `pass ${pass}, ${turn.id}: known question returned empty evidence`);
       assert.ok(result.authoritative.evidence.some((source) => (
@@ -188,7 +210,7 @@ for (let pass = 1; pass <= repeats; pass += 1) {
         `pass ${pass}, ${turn.id}: technical fallback decision was returned`);
       results.push({
         pass, turn: turnIndex + 1, id: turn.id,
-        evidenceIds: result.evidenceIds, response: result.decision.response.text,
+        evidenceIds: result.evidenceIds, response: validated.response.text,
       });
     }
   } finally {

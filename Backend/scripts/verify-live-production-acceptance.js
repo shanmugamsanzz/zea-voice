@@ -9,8 +9,8 @@ import { retrieveTenantEvidence } from '../src/knowledge-bases/knowledge-runtime
 import { loadAgentRuntimeProfile } from '../src/voice/providers/provider-config.js';
 import { createSelectedLlmStream, runtimeTools } from '../src/voice/providers/llm/llm-response.service.js';
 import {
-  compactGenericConversationState, openGenericConversationState,
-} from '../src/voice/interaction/generic-conversation-state.js';
+  compactIsolatedCallMemory, openIsolatedCallMemory,
+} from '../src/knowledge-engine/call-memory.js';
 import { buildGroundingEnvelope } from '../src/voice/interaction/grounded-llm-response.js';
 import { isRepairableGroundedDecisionReason } from '../src/voice/interaction/grounded-llm-decision.js';
 import { applyUnifiedGroundedTurn } from '../src/voice/interaction/unified-grounded-turn.js';
@@ -21,6 +21,7 @@ import {
   createKnowledgeEngineInput,
   isKnowledgeEngineDecision,
   knowledgeEngineDecisionTypes,
+  knowledgeEngineResponseModes,
 } from '../src/knowledge-engine/engine-contract.js';
 
 function argument(name, fallback = null) {
@@ -189,7 +190,8 @@ function verifyTurnExpectations({
   }
   if ((turn.expectedResponseNodeKeys?.length ?? 0) > 0) {
     const expectedKeys = new Set(turn.expectedResponseNodeKeys.map(normalized));
-    const directRecordId = tenantEvidence.decision?.type === knowledgeEngineDecisionTypes.DIRECT
+    const directRecordId = tenantEvidence.decision?.type === knowledgeEngineDecisionTypes.RESPONSE
+      && tenantEvidence.decision?.mode === knowledgeEngineResponseModes.DETERMINISTIC
       ? tenantEvidence.decision.response?.recordId : null;
     const direct = (tenantEvidence.sources ?? []).find((source) => (
       source.recordId === directRecordId
@@ -363,7 +365,7 @@ try {
   for (const call of replay.calls) {
     assert.ok(Array.isArray(call.turns) && call.turns.length > 0, `${call.id}: turns are required`);
     const callId = `production-acceptance:${call.id}`;
-    const memory = openGenericConversationState({
+    const memory = openIsolatedCallMemory({
       tenantId: agent.tenant_id, workspaceId: agent.workspace_id,
       agentId: agent.id, callId,
     }, profile.agent.settings, Date.now(), { language: profile.agent.language });
@@ -478,7 +480,8 @@ try {
           if (turn.allowSafeResponse !== true) {
             throw new Error(`${call.id} turn ${index + 1}: unexpectedly routed to safe failure (${engineDecision.reason})`);
           }
-        } else if (engineDecision.type === knowledgeEngineDecisionTypes.DIRECT
+        } else if (engineDecision.type === knowledgeEngineDecisionTypes.RESPONSE
+          && engineDecision.mode === knowledgeEngineResponseModes.DETERMINISTIC
           && engineDecision.response?.text) {
           envelope = buildGroundingEnvelope(
             knowledge, { includePublishedMap: false, maximumSources: 5 },
@@ -509,7 +512,7 @@ try {
             context: {
               groundedResponseMode: true, compactGrounding: true,
               latestCallerUtterance: utterance, latestRequestPriority: 'primary',
-              liveCallMemory: compactGenericConversationState(memory.snapshot(), 1_600),
+              liveCallMemory: compactIsolatedCallMemory(memory.snapshot(), 1_600),
               configuredInformationFields: memory.fieldSchemas(), configuredToolSchemas: tools,
             },
             usageDirection: direction,

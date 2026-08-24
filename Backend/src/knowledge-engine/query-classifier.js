@@ -56,6 +56,7 @@ const retrievalPlans = Object.freeze({
   ]),
   [knowledgeQueryClasses.ACKNOWLEDGEMENT]: Object.freeze([
     knowledgeSearchIndexes.CONVERSATION,
+    knowledgeSearchIndexes.BM25, knowledgeSearchIndexes.SEMANTIC,
   ]),
   [knowledgeQueryClasses.COMPARISON_COMPLEX]: Object.freeze([
     knowledgeSearchIndexes.CATALOG, knowledgeSearchIndexes.FAQ, knowledgeSearchIndexes.GENERAL,
@@ -63,15 +64,17 @@ const retrievalPlans = Object.freeze({
   ]),
   [knowledgeQueryClasses.CATEGORY_OVERVIEW]: Object.freeze([
     knowledgeSearchIndexes.CATALOG, knowledgeSearchIndexes.CONVERSATION,
+    knowledgeSearchIndexes.BM25, knowledgeSearchIndexes.SEMANTIC,
   ]),
   [knowledgeQueryClasses.DETAILS_OR_PRICE]: Object.freeze([
-    knowledgeSearchIndexes.CATALOG, knowledgeSearchIndexes.FAQ, knowledgeSearchIndexes.BM25,
+    knowledgeSearchIndexes.CATALOG, knowledgeSearchIndexes.FAQ,
+    knowledgeSearchIndexes.BM25, knowledgeSearchIndexes.SEMANTIC,
   ]),
   [knowledgeQueryClasses.KNOWN_INFORMATION]: Object.freeze([
     knowledgeSearchIndexes.ANSWER_CARD,
   ]),
   [knowledgeQueryClasses.UNKNOWN]: Object.freeze([
-    knowledgeSearchIndexes.FAQ, knowledgeSearchIndexes.CONVERSATION,
+    knowledgeSearchIndexes.CATALOG, knowledgeSearchIndexes.FAQ, knowledgeSearchIndexes.CONVERSATION,
     knowledgeSearchIndexes.GENERAL, knowledgeSearchIndexes.BM25, knowledgeSearchIndexes.SEMANTIC,
   ]),
 });
@@ -231,15 +234,19 @@ function indexesFor(intentClass, candidate) {
   if (intentClass !== knowledgeQueryClasses.KNOWN_INFORMATION) return configured;
   if (candidate?.recordType === 'CATALOG_ITEM') return Object.freeze([
     knowledgeSearchIndexes.ANSWER_CARD, knowledgeSearchIndexes.CATALOG,
+    knowledgeSearchIndexes.BM25, knowledgeSearchIndexes.SEMANTIC,
   ]);
   if (candidate?.recordType === 'FAQ') return Object.freeze([
     knowledgeSearchIndexes.ANSWER_CARD, knowledgeSearchIndexes.FAQ,
+    knowledgeSearchIndexes.BM25, knowledgeSearchIndexes.SEMANTIC,
   ]);
   if (candidate?.recordType === 'CONVERSATION_NODE') return Object.freeze([
     knowledgeSearchIndexes.ANSWER_CARD, knowledgeSearchIndexes.CONVERSATION,
+    knowledgeSearchIndexes.BM25, knowledgeSearchIndexes.SEMANTIC,
   ]);
   if (candidate?.recordType === 'KNOWLEDGE_CHUNK') return Object.freeze([
     knowledgeSearchIndexes.GENERAL,
+    knowledgeSearchIndexes.BM25, knowledgeSearchIndexes.SEMANTIC,
   ]);
   return configured;
 }

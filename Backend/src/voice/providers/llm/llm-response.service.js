@@ -88,23 +88,25 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
   const ownsAdapter = !dependencies.adapter;
   const assignedTools = runtimeTools(runtimeProfile.tools);
   const groundedResponseMode = input.context?.groundedResponseMode === true;
+  const decisionTools = groundedResponseMode && Array.isArray(input.context?.authorizedToolSchemas)
+    ? input.context.authorizedToolSchemas : assignedTools;
   // Every grounded live decision uses the compact voice contract. Callers
   // cannot accidentally opt back into the larger non-voice prompt path.
   const compactGrounding = groundedResponseMode;
   const groundingEnvelope = buildGroundingEnvelope(
     input.knowledge ?? { found: false, route: 'none' },
-    compactGrounding ? { includePublishedMap: false, maximumSources: 4 } : {},
+    compactGrounding ? { includePublishedMap: false, maximumSources: 5 } : {},
   );
   const decisionRuntime = {
     fieldSchemas: input.context?.configuredInformationFields ?? [],
-    toolSchemas: assignedTools,
+    toolSchemas: decisionTools,
   };
   const systemPrompt = buildAgentSystemPrompt(runtimeProfile.agent, {
     usageDirection: input.usageDirection,
     context: {
       ...(input.context ?? {}),
       compactGrounding,
-      configuredToolSchemas: assignedTools,
+      configuredToolSchemas: decisionTools,
     },
     knowledge: input.knowledge ?? { found: false, route: 'none' },
     maxPromptChars: selectedLlmPromptBudget(compactGrounding),

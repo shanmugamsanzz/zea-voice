@@ -1,5 +1,6 @@
 // Compose only universal synthetic-tenant suites. Runtime behavior must never
 // depend on one company, document, phrase, workflow, or tool schema.
+await import('./verify-final-engine-cutover.js');
 await import('./verify-knowledge-engine-acceptance.js');
 await import('./verify-tenant-regression-generator.js');
 

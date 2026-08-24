@@ -79,7 +79,9 @@ function prepared(utterance, options = {}) {
 
 let embedCalls = 0;
 let searchCalls = 0;
+let startedChannels = [];
 const providers = {
+  onChannelStart: (channel) => { startedChannels.push(channel); },
   embed: async () => { embedCalls += 1; return [0.1, 0.2]; },
   search: async (_tenant, _vector, options) => {
     searchCalls += 1;
@@ -119,9 +121,12 @@ let retrieval = await retrieveTargetedCandidates({
 }, providers);
 assert.equal(request.classification.intentClass, knowledgeQueryClasses.KNOWN_INFORMATION);
 assert.deepEqual(retrieval.channels.structured.map((candidate) => candidate.recordId), [alpha.record_id]);
-assert.equal(retrieval.channels.bm25.length, 0);
-assert.equal(retrieval.channels.qdrant.length, 0);
-assert.equal(embedCalls, 0, 'Known requests must not invoke embeddings');
+assert.ok(retrieval.channels.bm25.some((candidate) => candidate.recordId === alpha.record_id));
+assert.deepEqual(retrieval.channels.qdrant.map((candidate) => candidate.recordId), [beta.record_id]);
+assert.deepEqual(new Set(startedChannels), new Set(['structured', 'bm25', 'qdrant']),
+  'Structured, BM25 and Qdrant channels must all be scheduled for normal knowledge turns');
+assert.equal(embedCalls, 1);
+assert.equal(searchCalls, 1);
 
 request = prepared('detail phrase');
 retrieval = await retrieveTargetedCandidates({
@@ -130,7 +135,7 @@ retrieval = await retrieveTargetedCandidates({
 assert.equal(request.classification.intentClass, knowledgeQueryClasses.DETAILS_OR_PRICE);
 assert.ok(retrieval.channels.structured.some((candidate) => candidate.recordId === faq.record_id));
 assert.ok(retrieval.channels.bm25.some((candidate) => candidate.recordId === faq.record_id));
-assert.equal(retrieval.channels.qdrant.length, 0);
+assert.deepEqual(retrieval.channels.qdrant.map((candidate) => candidate.recordId), [beta.record_id]);
 
 request = prepared('alpha beta');
 retrieval = await retrieveTargetedCandidates({
@@ -141,8 +146,8 @@ assert.deepEqual(new Set(retrieval.channels.structured.map((candidate) => candid
   new Set([alpha.record_id, beta.record_id]));
 assert.deepEqual(retrieval.channels.qdrant.map((candidate) => candidate.recordId), [beta.record_id],
   'Qdrant results must be tenant, revision and record-type scoped');
-assert.equal(embedCalls, 1);
-assert.equal(searchCalls, 1);
+assert.equal(embedCalls, 3);
+assert.equal(searchCalls, 3);
 assert.ok(!retrieval.recordTypes.includes('WORKFLOW_RULE'));
 
 request = prepared('action phrase');
@@ -153,7 +158,7 @@ assert.equal(request.classification.intentClass, knowledgeQueryClasses.ACTION_TO
 assert.deepEqual(retrieval.channels.structured.map((candidate) => candidate.recordId), [workflow.record_id]);
 assert.equal(retrieval.channels.bm25.length, 0);
 assert.equal(retrieval.channels.qdrant.length, 0);
-assert.equal(embedCalls, 1);
+assert.equal(embedCalls, 3);
 request = prepared('action phrase alpha');
 retrieval = await retrieveTargetedCandidates({
   ...request, publicationBundles: bundle, sparseIndexes: [sparseIndex],
@@ -198,6 +203,7 @@ retrieval = await retrieveTargetedCandidates({
 }, providers);
 assert.equal(request.classification.intentClass, knowledgeQueryClasses.UNKNOWN);
 assert.ok(retrieval.channels.bm25.some((candidate) => candidate.recordId === general.record_id));
+assert.deepEqual(retrieval.channels.qdrant.map((candidate) => candidate.recordId), [beta.record_id]);
 assert.ok(retrieval.recordTypes.includes('KNOWLEDGE_CHUNK'));
 assert.ok(!retrieval.recordTypes.includes('WORKFLOW_RULE'));
 
@@ -221,5 +227,11 @@ await assert.rejects(() => retrieveTargetedCandidates({
   publicationBundles: [{ ...bundle, tenantId: 'different-tenant' }],
   sparseIndexes: [sparseIndex],
 }, providers), /same-tenant/u);
+
+await assert.rejects(() => retrieveTargetedCandidates({
+  ...prepared('alpha'),
+  publicationBundles: [{ ...bundle, assignedAgentIds: ['another-agent'] }],
+  sparseIndexes: [sparseIndex],
+}, providers), /active agent/u);
 
 console.log('Targeted structured, BM25 and Qdrant candidate-only retrieval verified.');

@@ -1,14 +1,30 @@
-export const KNOWLEDGE_ENGINE_CONTRACT_VERSION = 1;
+export const KNOWLEDGE_ENGINE_CONTRACT_VERSION = 2;
 
-export const knowledgeEngineDecisionTypes = Object.freeze({
-  DIRECT: 'DIRECT',
-  LLM: 'LLM',
+export const knowledgeEngineOutputTypes = Object.freeze({
+  RESPONSE: 'RESPONSE',
   TOOL: 'TOOL',
   CLARIFY: 'CLARIFY',
 });
 
+export const knowledgeEngineDecisionTypes = knowledgeEngineOutputTypes;
+
+export const knowledgeEngineResponseModes = Object.freeze({
+  DETERMINISTIC: 'DETERMINISTIC',
+  GROUNDED_LLM: 'GROUNDED_LLM',
+});
+
 const decisionTypes = new Set(Object.values(knowledgeEngineDecisionTypes));
+const responseModes = new Set(Object.values(knowledgeEngineResponseModes));
 const clarificationKinds = new Set(['ambiguity', 'conflict', 'no_evidence', 'technical']);
+
+function cleanString(value, maximum = 120) {
+  return String(value ?? '').normalize('NFKC').replace(/\s+/gu, ' ').trim().slice(0, maximum);
+}
+
+function stringList(value, maximumItems = 20, maximumCharacters = 120) {
+  return Object.freeze([...new Set((Array.isArray(value) ? value : [])
+    .map((item) => cleanString(item, maximumCharacters)).filter(Boolean))].slice(0, maximumItems));
+}
 
 function memoryObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -16,7 +32,7 @@ function memoryObject(value) {
 }
 
 function memoryMessages(value) {
-  return Object.freeze((Array.isArray(value) ? value : []).slice(-12).flatMap((message) => {
+  return Object.freeze((Array.isArray(value) ? value : []).slice(-4).flatMap((message) => {
     const role = message?.role === 'assistant' ? 'assistant' : (message?.role === 'user' ? 'user' : null);
     const content = String(message?.content ?? '').normalize('NFKC').replace(/\s+/gu, ' ').trim().slice(0, 500);
     return role && content ? [Object.freeze({ role, content })] : [];
@@ -44,34 +60,49 @@ export function createKnowledgeEngineInput(value = {}) {
     throw new TypeError('Knowledge-engine input requires tenant, agent, call and finalized utterance');
   }
   const suppliedMemory = value.memory && typeof value.memory === 'object' ? value.memory : {};
+  const requestedFacts = stringList(value.requestedFacts ?? suppliedMemory.requestedFacts);
+  const contextualReferences = stringList(
+    value.contextualReferences ?? suppliedMemory.contextualReferences,
+  );
+  const recentRelevantTurns = memoryMessages(
+    value.recentRelevantTurns
+      ?? suppliedMemory.recentRelevantTurns
+      ?? suppliedMemory.recentConversation
+      ?? suppliedMemory.recentTurns,
+  );
+  const canonicalCallMemory = Object.freeze({
+    activeEntity: memoryObject(suppliedMemory.activeEntity),
+    activeCategory: memoryObject(suppliedMemory.activeCategory),
+    latestIntent: cleanString(suppliedMemory.latestIntent ?? suppliedMemory.requestType, 80) || null,
+    recentConversation: recentRelevantTurns,
+    pendingClarification: memoryObject(suppliedMemory.pendingClarification),
+    activeTool: memoryObject(suppliedMemory.activeTool ?? suppliedMemory.activeToolRequest),
+    collectedToolFields: Object.freeze({
+      ...(suppliedMemory.collectedToolFields ?? suppliedMemory.collectedInformation ?? {}),
+    }),
+    citedEvidence: evidenceMemory(suppliedMemory.citedEvidence),
+    knownEntities: Object.freeze([...(Array.isArray(suppliedMemory.knownEntities)
+      ? suppliedMemory.knownEntities : [])]),
+    pendingQuestion: suppliedMemory.pendingQuestion ?? null,
+    collectedInformation: Object.freeze({ ...(suppliedMemory.collectedInformation ?? {}) }),
+    requestedFacts,
+    contextualReferences,
+  });
   return Object.freeze({
     contractVersion: KNOWLEDGE_ENGINE_CONTRACT_VERSION,
     tenantId,
     agentId,
     callId,
     utterance,
+    latestQuestion: utterance,
     usageDirection: String(value.usageDirection ?? 'inbound').trim().toLowerCase(),
     language: String(value.language ?? 'und').trim().toLowerCase().slice(0, 20) || 'und',
-    requestedFacts: Object.freeze((Array.isArray(value.requestedFacts) ? value.requestedFacts : [])
-      .map((item) => String(item ?? '').trim().slice(0, 120)).filter(Boolean).slice(0, 20)),
-    memory: Object.freeze({
-      activeEntity: memoryObject(suppliedMemory.activeEntity),
-      activeCategory: memoryObject(suppliedMemory.activeCategory),
-      latestIntent: String(suppliedMemory.latestIntent ?? suppliedMemory.requestType ?? '').trim().slice(0, 80) || null,
-      recentConversation: memoryMessages(
-        suppliedMemory.recentConversation ?? suppliedMemory.recentTurns,
-      ),
-      pendingClarification: memoryObject(suppliedMemory.pendingClarification),
-      activeTool: memoryObject(suppliedMemory.activeTool ?? suppliedMemory.activeToolRequest),
-      collectedToolFields: Object.freeze({
-        ...(suppliedMemory.collectedToolFields ?? suppliedMemory.collectedInformation ?? {}),
-      }),
-      citedEvidence: evidenceMemory(suppliedMemory.citedEvidence),
-      knownEntities: Object.freeze([...(Array.isArray(suppliedMemory.knownEntities)
-        ? suppliedMemory.knownEntities : [])]),
-      pendingQuestion: suppliedMemory.pendingQuestion ?? null,
-      collectedInformation: Object.freeze({ ...(suppliedMemory.collectedInformation ?? {}) }),
-    }),
+    requestedFact: requestedFacts[0] ?? null,
+    requestedFacts,
+    contextualReferences,
+    recentRelevantTurns,
+    canonicalCallMemory,
+    memory: canonicalCallMemory,
     abortSignal: value.abortSignal ?? null,
   });
 }
@@ -128,12 +159,19 @@ export function createKnowledgeEngineDecision(type, options = {}) {
   const response = directResponse(options.response);
   const tool = toolRequest(options.tool);
   const clarificationKind = String(options.clarification?.kind ?? '').trim();
+  const mode = type === knowledgeEngineDecisionTypes.RESPONSE
+    ? String(options.mode ?? (response
+      ? knowledgeEngineResponseModes.DETERMINISTIC
+      : knowledgeEngineResponseModes.GROUNDED_LLM)).trim()
+    : null;
 
-  if (type === knowledgeEngineDecisionTypes.DIRECT && (!response || evidenceIds.length === 0)) {
-    throw new TypeError('DIRECT requires caller-facing text and authoritative evidence');
+  if (type === knowledgeEngineDecisionTypes.RESPONSE
+    && (!responseModes.has(mode) || evidenceIds.length === 0)) {
+    throw new TypeError('RESPONSE requires a supported mode and authoritative evidence');
   }
-  if (type === knowledgeEngineDecisionTypes.LLM && evidenceIds.length === 0) {
-    throw new TypeError('LLM requires published evidence');
+  if (type === knowledgeEngineDecisionTypes.RESPONSE
+    && mode === knowledgeEngineResponseModes.DETERMINISTIC && !response) {
+    throw new TypeError('A deterministic RESPONSE requires validated caller-facing text');
   }
   if (type === knowledgeEngineDecisionTypes.TOOL
     && (!tool || !tool.authorizationEvidenceId
@@ -145,19 +183,23 @@ export function createKnowledgeEngineDecision(type, options = {}) {
     throw new TypeError('CLARIFY requires a supported clarification kind');
   }
 
+  const normalizedClarification = type === knowledgeEngineDecisionTypes.CLARIFY
+    ? Object.freeze({
+      kind: clarificationKind,
+      prompt: String(options.clarification?.prompt ?? '').trim() || null,
+    }) : null;
+  const normalizedResponse = type === knowledgeEngineDecisionTypes.RESPONSE ? response : null;
+  const normalizedTool = type === knowledgeEngineDecisionTypes.TOOL ? tool : null;
   return Object.freeze({
     contractVersion: KNOWLEDGE_ENGINE_CONTRACT_VERSION,
     type,
+    mode,
     reason,
     confidence: boundedConfidence(options.confidence),
     evidenceIds,
-    response: type === knowledgeEngineDecisionTypes.DIRECT ? response : null,
-    tool: type === knowledgeEngineDecisionTypes.TOOL ? tool : null,
-    clarification: type === knowledgeEngineDecisionTypes.CLARIFY
-      ? Object.freeze({
-        kind: clarificationKind,
-        prompt: String(options.clarification?.prompt ?? '').trim() || null,
-      }) : null,
+    response: normalizedResponse,
+    tool: normalizedTool,
+    clarification: normalizedClarification,
   });
 }
 
@@ -201,7 +243,7 @@ export function resolveKnowledgeEngineDecision({
   if (tool) return createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.TOOL, {
     reason: 'authorized_tool_request', confidence, evidenceIds, tool,
   });
-  if (selectedResponse) return createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.DIRECT, {
+  if (selectedResponse) return createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.RESPONSE, {
     reason: 'strong_unambiguous_caller_response',
     confidence: Math.max(confidence, Number(selectedResponse.semanticScore ?? 0)),
     evidenceIds: uniqueIds(selectedResponse.deterministicEvidenceIds?.length
@@ -213,8 +255,9 @@ export function resolveKnowledgeEngineDecision({
     },
   });
   if (relevant.length > 0 && reasoningRequired) {
-    return createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.LLM, {
+    return createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.RESPONSE, {
       reason: 'reasoning_required', confidence, evidenceIds,
+      mode: knowledgeEngineResponseModes.GROUNDED_LLM,
     });
   }
   return createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.CLARIFY, {

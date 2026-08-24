@@ -3,6 +3,7 @@ import {
   compactGenericConversationState,
   isolatedCallMemoryKey,
   openGenericConversationState,
+  seedConfiguredQuestion as seedGenericConfiguredQuestion,
 } from '../voice/interaction/generic-conversation-state.js';
 
 export const KNOWLEDGE_CALL_MEMORY_VERSION = 1;
@@ -34,4 +35,8 @@ export function compactIsolatedCallMemory(snapshot = {}, maximumCharacters = 1_0
 
 export function activeIsolatedCallMemoryCount() {
   return activeGenericConversationStateCount();
+}
+
+export function seedConfiguredQuestion(memory, message, key) {
+  return seedGenericConfiguredQuestion(memory, message, key);
 }

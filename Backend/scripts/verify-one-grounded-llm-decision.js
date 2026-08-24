@@ -357,10 +357,10 @@ assert.doesNotMatch(providerSource, /createMeaningResolutionLlmStream/u);
 assert.doesNotMatch(orchestratorSource, /resolvePreRetrievalMeaning|pre_retrieval_meaning/u);
 assert.match(orchestratorSource, /#knowledge\(query, retrievalAbortController\.signal\)/u);
 const ordinaryTurn = orchestratorSource.slice(
-  orchestratorSource.indexOf('response = await this.#llm(query, history, llmKnowledge'),
+  orchestratorSource.indexOf('const latencyResult = await awaitLlmWithSafeLatency(this.#llm(query, history, knowledge'),
   orchestratorSource.indexOf('if (response.toolCalls.length)'),
 );
-assert.equal((ordinaryTurn.match(/await this\.#llm\(/gu) ?? []).length, 1);
+assert.equal((ordinaryTurn.match(/this\.#llm\(/gu) ?? []).length, 1);
 assert.match(orchestratorSource, /grounded\.decision === 'action'/u);
 assert.match(orchestratorSource, /llm\.native_tool_events_rejected/u);
 assert.doesNotMatch(orchestratorSource, /return \{ toolCalls: providerToolCalls/u);
@@ -412,7 +412,14 @@ assert.equal(isRepairableGroundedDecisionReason('unsupported_numeric_fact'), tru
 assert.equal(isRepairableGroundedDecisionReason('unsupported_structured_fact'), true);
 assert.equal(isRepairableGroundedDecisionReason('unsupported_technical_term'), true);
 assert.equal(isRepairableGroundedDecisionReason('invalid_json'), true);
-assert.match(orchestratorSource, /stage: 'llm\.decision_repair_retry'/u);
+assert.doesNotMatch(orchestratorSource, /stage: 'llm\.decision_repair_retry'/u);
+assert.doesNotMatch(orchestratorSource, /stage: 'llm\.retry'/u);
 assert.match(orchestratorSource, /deferDecisionRepair: false/u);
+const toolExecutionBlock = orchestratorSource.slice(
+  orchestratorSource.indexOf('if (response.toolCalls.length) {'),
+  orchestratorSource.indexOf('if (response.cancelled || epoch !== this.epoch || this.finalized)'),
+);
+assert.equal((toolExecutionBlock.match(/this\.#llm\(/gu) ?? []).length, 0,
+  'Verified tool execution must not trigger a second LLM request');
 
 console.log('One grounded LLM decision verification passed.');

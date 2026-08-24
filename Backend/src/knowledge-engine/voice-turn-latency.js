@@ -1,12 +1,10 @@
 import { env } from '../config/env.js';
-import {
-  resolvePublishedEntityRoute,
-  resolvePublishedIntentRoutes,
-} from './entity-route-resolver.js';
-import { classifyKnowledgeQuery, knowledgeQueryClasses } from './query-classifier.js';
+import { knowledgeQueryClasses } from './query-classifier.js';
+import { prepareKnowledgeQuery, refineKnowledgeResolution } from './fast-query-preparation.js';
 import { retrieveTargetedCandidates } from './targeted-retrieval.js';
 import { rankAndHydrateAuthoritativeEvidence } from './authoritative-evidence.js';
 import { planSafeKnowledgeResponse } from './safe-response-tool-runtime.js';
+import { buildCompactEvidenceBundle } from './compact-evidence-bundle.js';
 
 export const VOICE_TURN_LATENCY_VERSION = 1;
 
@@ -221,47 +219,52 @@ export async function runObservedKnowledgeTurn({
     tenantId: input?.tenantId, agentId: input?.agentId,
     callId: input?.callId, turnId: input?.callId,
   });
-  const resolve = dependencies.resolve ?? resolvePublishedEntityRoute;
-  const resolveIntent = dependencies.resolveIntent ?? resolvePublishedIntentRoutes;
-  const classify = dependencies.classify ?? classifyKnowledgeQuery;
+  const prepare = dependencies.prepare ?? prepareKnowledgeQuery;
   const retrieve = dependencies.retrieve ?? retrieveTargetedCandidates;
+  const refineResolution = dependencies.refineResolution ?? refineKnowledgeResolution;
   const hydrate = dependencies.hydrate ?? rankAndHydrateAuthoritativeEvidence;
   const plan = dependencies.plan ?? planSafeKnowledgeResponse;
   let resolution;
   let classification;
+  let turnInput = input;
   await latency.measure(voiceTurnStages.ROUTING, async () => {
-    // Route intent is classified before Catalog entity resolution so Workflow,
-    // call-control, FAQ and Conversation candidates cannot reduce Catalog
-    // confidence or leak into an entity clarification list.
-    const intentResolution = await resolveIntent(input, publicationBundles);
-    const intentClassification = await classify(input, intentResolution);
-    resolution = await resolve(input, publicationBundles, {
-      semanticMatches, intentResolution, intentClassification,
+    const prepared = await prepare(input, publicationBundles, { semanticMatches }, {
+      resolve: dependencies.resolve,
+      classify: dependencies.classify,
     });
-    classification = await classify(input, resolution);
+    turnInput = prepared.input ?? input;
+    resolution = prepared.resolution;
+    classification = prepared.classification;
   }, { timeoutMs: env.VOICE_ROUTING_TURN_TIMEOUT_MS, reserveMs: env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS });
   latency.setKnownAnswer(knownIntentClasses.has(classification.intentClass)
     && classification.requiresConfirmation !== true);
   const retrieval = await latency.measure(voiceTurnStages.RETRIEVAL, () => retrieve({
-    input, classification, resolution, publicationBundles, sparseIndexes,
+    input: turnInput, classification, resolution, publicationBundles, sparseIndexes,
   }, dependencies.retrievalDependencies), {
     timeoutMs: env.VOICE_RETRIEVAL_TURN_TIMEOUT_MS,
     reserveMs: env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS,
     cancel: dependencies.cancelRetrieval,
   });
+  resolution = await refineResolution(
+    turnInput, publicationBundles, resolution, retrieval.channels?.qdrant ?? [],
+    { resolve: dependencies.resolve },
+  );
   const authoritative = await latency.measure(voiceTurnStages.HYDRATION, () => hydrate({
-    auth, input, classification, resolution, retrieval,
+    auth, input: turnInput, classification, resolution, retrieval,
   }, dependencies.hydrationDependencies), {
     timeoutMs: env.VOICE_HYDRATION_TURN_TIMEOUT_MS,
     reserveMs: env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS,
     cancel: dependencies.cancelHydration,
   });
   const decision = plan({
-    input, classification, resolution, authoritative, runtimeProfile, confirmation,
+    input: turnInput, classification, resolution, authoritative, runtimeProfile, confirmation,
+  });
+  const llmEvidenceBundle = buildCompactEvidenceBundle({
+    input: turnInput, classification, resolution, authoritative, runtimeProfile, decision,
   });
   latency.setResponseClass(decision.type);
   return Object.freeze({
-    resolution, classification, retrieval, authoritative, decision,
+    input: turnInput, resolution, classification, retrieval, authoritative, decision, llmEvidenceBundle,
     latency: latency.snapshot(), tracker: latency,
   });
 }

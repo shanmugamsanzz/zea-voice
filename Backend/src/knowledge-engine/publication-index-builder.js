@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { AppError } from '../middleware/errors.js';
 
-export const KNOWLEDGE_PUBLICATION_BUNDLE_VERSION = 5;
+export const KNOWLEDGE_PUBLICATION_BUNDLE_VERSION = 6;
 
 const ROUTABLE_RECORD_TYPES = new Set(['faq', 'catalog_item', 'workflow_rule', 'conversation_node']);
 
@@ -324,6 +324,8 @@ export function buildPublicationIndexes(job, sourceRecords) {
     tenantId: String(job.tenant_id).toLowerCase(),
     knowledgeBaseId: String(job.knowledge_base_id).toLowerCase(),
     publicationRevision: job.targetRevision,
+    assignedAgentIds: Object.freeze([...new Set((job.assigned_agent_ids ?? [])
+      .map((value) => String(value).trim().toLowerCase()).filter(Boolean))].sort()),
   };
   const manifest = Object.freeze({
     ...identity,

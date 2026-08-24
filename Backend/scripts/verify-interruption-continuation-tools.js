@@ -43,8 +43,9 @@ for (const required of [
   /candidate\.cancel\(reason\)/u,
   /audioEngine\?\.cancelStaleAudio\?\.\(reason\)/u,
   /cancelScheduler\(reason\)/u,
-  /withVerifiedToolEvidence/u,
-  /Speak success only when its verified and success fields are both true/u,
+  /finalizeVerifiedToolResults/u,
+  /toolDecision\.type === knowledgeEngineDecisionTypes\.RESPONSE/u,
+  /Verified tool response validation fallback/u,
 ]) assert.match(orchestrator, required);
 
 const frontend = readFileSync(

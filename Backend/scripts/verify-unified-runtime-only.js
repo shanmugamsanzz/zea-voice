@@ -16,36 +16,34 @@ for (const removed of [
   '#workflowInstructionResponse',
   '#tenantEvidence',
   'approvedDocumentFallback',
+  'unifiedGroundedDecisionEnabled',
+  'openGenericConversationState',
+  'createGroundedDecisionStreamDecoder',
+  'validateGroundedSpokenSentences',
 ]) {
   assert.equal(source.includes(removed), false, `Legacy runtime symbol remains: ${removed}`);
 }
 
-assert.equal(
-  source.match(/if\s*\(\s*!this\.unifiedGroundedDecisionEnabled/gu)?.length ?? 0,
-  1,
-  'Only the fail-closed startup guard may check the disabled engine state',
-);
-assert.match(source, /openGenericConversationState/u);
+assert.match(source, /openIsolatedCallMemory/u);
 assert.match(source, /retrieveTenantEvidence/u);
-assert.match(source, /createGroundedDecisionStreamDecoder/u);
 assert.match(source, /applyUnifiedGroundedTurn/u);
-assert.match(source, /validateGroundedClaims/u);
+assert.match(source, /finalizeVerifiedToolResults/u);
 
 const finalStt = source.indexOf('stt.final_turn_assembled');
-const genericMemory = source.indexOf('openGenericConversationState');
+const isolatedMemory = source.indexOf('openIsolatedCallMemory');
 const retrieval = source.indexOf('async #knowledge');
 const decision = source.indexOf('async #llmAttempt');
 const validation = source.indexOf('applyUnifiedGroundedTurn');
 const tts = source.indexOf('streaming.onSentence');
 
 for (const [name, index] of Object.entries({
-  finalStt, genericMemory, retrieval, decision, validation, tts,
+  finalStt, isolatedMemory, retrieval, decision, validation, tts,
 })) assert.notEqual(index, -1, `Unified runtime step missing: ${name}`);
 
 console.log(JSON.stringify({
   task: 'unified-runtime-only',
   legacyRuntimeSymbolsRemoved: true,
-  genericMemoryOnly: true,
+  isolatedCallMemoryOnly: true,
   hybridEvidenceOnly: true,
   unifiedDecisionOnly: true,
   groundedValidationBeforeSpeech: true,

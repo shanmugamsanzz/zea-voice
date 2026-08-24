@@ -6,6 +6,7 @@ import {
   isKnowledgeEngineInput,
   isKnowledgeEngineDecision,
   knowledgeEngineDecisionTypes,
+  knowledgeEngineResponseModes,
   resolveKnowledgeEngineDecision,
   technicalClarificationDecision,
 } from '../src/knowledge-engine/engine-contract.js';
@@ -13,10 +14,23 @@ import {
 const input = createKnowledgeEngineInput({
   tenantId: 'tenant-a', agentId: 'agent-a', callId: 'call-a',
   utterance: '  What options are available?  ', usageDirection: 'INBOUND', language: 'EN',
-  memory: { knownEntities: [], collectedInformation: {} },
+  requestedFacts: ['price'], contextualReferences: ['this'],
+  recentRelevantTurns: Array.from({ length: 6 }, (_value, index) => ({
+    role: index % 2 ? 'assistant' : 'user', content: `turn ${index + 1}`,
+  })),
+  memory: {
+    activeEntity: { recordId: 'catalog-one', itemKey: 'one', name: 'Option One' },
+    knownEntities: [], collectedInformation: {},
+  },
 });
 assert.equal(input.utterance, 'What options are available?');
+assert.equal(input.latestQuestion, input.utterance);
 assert.equal(input.usageDirection, 'inbound');
+assert.equal(input.requestedFact, 'price');
+assert.deepEqual(input.contextualReferences, ['this']);
+assert.equal(input.recentRelevantTurns.length, 4);
+assert.equal(input.canonicalCallMemory.activeEntity.recordId, 'catalog-one');
+assert.equal(input.memory, input.canonicalCallMemory);
 assert.equal(isKnowledgeEngineInput(input), true);
 assert.throws(() => createKnowledgeEngineInput({
   tenantId: 'tenant-a', agentId: 'agent-a', callId: 'call-a', utterance: '   ',
@@ -29,13 +43,15 @@ const source = Object.freeze({
 
 const direct = resolveKnowledgeEngineDecision({ directResponse: source, evidence: [source] });
 assert.equal(direct.contractVersion, KNOWLEDGE_ENGINE_CONTRACT_VERSION);
-assert.equal(direct.type, knowledgeEngineDecisionTypes.DIRECT);
+assert.equal(direct.type, knowledgeEngineDecisionTypes.RESPONSE);
+assert.equal(direct.mode, knowledgeEngineResponseModes.DETERMINISTIC);
 assert.equal(direct.response.text, source.content);
 assert.deepEqual(direct.evidenceIds, [source.id]);
 assert.equal(isKnowledgeEngineDecision(direct), true);
 
 const llm = resolveKnowledgeEngineDecision({ evidence: [source], reasoningRequired: true });
-assert.equal(llm.type, knowledgeEngineDecisionTypes.LLM);
+assert.equal(llm.type, knowledgeEngineDecisionTypes.RESPONSE);
+assert.equal(llm.mode, knowledgeEngineResponseModes.GROUNDED_LLM);
 assert.deepEqual(llm.evidenceIds, [source.id]);
 
 const clarify = resolveKnowledgeEngineDecision({ evidence: [], rejectedCandidates: 2 });
@@ -54,12 +70,13 @@ const tool = createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.TOOL, {
 assert.equal(tool.type, knowledgeEngineDecisionTypes.TOOL);
 assert.equal(isKnowledgeEngineDecision(tool), true);
 
-assert.throws(() => createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.DIRECT, {
-  reason: 'unsafe_direct', response: { text: 'Uncited answer' },
+assert.throws(() => createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.RESPONSE, {
+  reason: 'unsafe_response', mode: knowledgeEngineResponseModes.DETERMINISTIC,
+  response: { text: 'Uncited answer' },
 }), /authoritative evidence/u);
-assert.throws(() => createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.LLM, {
-  reason: 'ungrounded_llm',
-}), /published evidence/u);
+assert.throws(() => createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.RESPONSE, {
+  reason: 'ungrounded_llm', mode: knowledgeEngineResponseModes.GROUNDED_LLM,
+}), /authoritative evidence/u);
 assert.throws(() => createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.TOOL, {
   reason: 'unauthorized_tool', evidenceIds: [], tool: { name: 'tenant.booking.create' },
 }), /Workflow evidence/u);

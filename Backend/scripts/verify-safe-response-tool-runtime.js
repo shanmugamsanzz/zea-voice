@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
-import { createKnowledgeEngineInput, knowledgeEngineDecisionTypes } from '../src/knowledge-engine/engine-contract.js';
+import {
+  createKnowledgeEngineInput,
+  knowledgeEngineDecisionTypes,
+  knowledgeEngineResponseModes,
+} from '../src/knowledge-engine/engine-contract.js';
 import { knowledgeQueryClasses } from '../src/knowledge-engine/query-classifier.js';
 import {
   executeAuthorizedToolWorkflow,
@@ -41,8 +45,9 @@ const direct = planSafeKnowledgeResponse({
   input: inputFor(), classification: classification(knowledgeQueryClasses.KNOWN_INFORMATION),
   resolution: {}, authoritative: authoritative([faq]), runtimeProfile: { tools: [] },
 });
-assert.equal(direct.type, knowledgeEngineDecisionTypes.DIRECT);
-assert.equal(direct.response.text, 'Support is available on weekdays.');
+assert.equal(direct.type, knowledgeEngineDecisionTypes.RESPONSE);
+assert.equal(direct.mode, knowledgeEngineResponseModes.GROUNDED_LLM);
+assert.equal(direct.response, null);
 assert.deepEqual(direct.evidenceIds, [faq.id]);
 
 const categoryOne = source('published:catalog_item:category-one', 'CATALOG_ITEM',
@@ -68,8 +73,8 @@ const categoryDecision = planSafeKnowledgeResponse({
   } },
   authoritative: authoritative([categoryOne, categoryTwo]), runtimeProfile: { tools: [] },
 });
-assert.equal(categoryDecision.type, knowledgeEngineDecisionTypes.DIRECT);
-assert.match(categoryDecision.response.text, /Starter Option.*Advanced Option/u);
+assert.equal(categoryDecision.type, knowledgeEngineDecisionTypes.RESPONSE);
+assert.equal(categoryDecision.mode, knowledgeEngineResponseModes.GROUNDED_LLM);
 assert.deepEqual(new Set(categoryDecision.evidenceIds), new Set([categoryOne.id, categoryTwo.id]));
 
 const categoryWithLongHydratedDescription = source(
@@ -90,10 +95,8 @@ const alignedCategoryDecision = planSafeKnowledgeResponse({
   } },
   authoritative: authoritative([categoryWithLongHydratedDescription]), runtimeProfile: { tools: [] },
 });
-assert.equal(alignedCategoryDecision.type, knowledgeEngineDecisionTypes.DIRECT);
-assert.match(alignedCategoryDecision.response.text, /Tenant Services/u);
-assert.match(alignedCategoryDecision.response.text, /Approved multilingual services/u);
-assert.doesNotMatch(alignedCategoryDecision.response.text, /Untrusted index/u);
+assert.equal(alignedCategoryDecision.type, knowledgeEngineDecisionTypes.RESPONSE);
+assert.equal(alignedCategoryDecision.mode, knowledgeEngineResponseModes.GROUNDED_LLM);
 
 const second = source('published:faq:two', 'FAQ', 'Priority support is available.', {
   question: 'What is priority support?', answer: 'Priority support is available.',
@@ -106,7 +109,8 @@ const complex = planSafeKnowledgeResponse({
   ] },
   authoritative: authoritative([categoryOne, categoryTwo]), runtimeProfile: { tools: [] },
 });
-assert.equal(complex.type, knowledgeEngineDecisionTypes.LLM);
+assert.equal(complex.type, knowledgeEngineDecisionTypes.RESPONSE);
+assert.equal(complex.mode, knowledgeEngineResponseModes.GROUNDED_LLM);
 assert.deepEqual(new Set(complex.evidenceIds), new Set([categoryOne.id, categoryTwo.id]));
 const finalizedComplex = finalizeGroundedLlmResponse({
   input: inputFor(), plan: complex,
@@ -114,7 +118,7 @@ const finalizedComplex = finalizeGroundedLlmResponse({
   selectedEvidenceIds: [categoryOne.id, categoryTwo.id],
   authoritative: authoritative([categoryOne, categoryTwo]),
 });
-assert.equal(finalizedComplex.type, knowledgeEngineDecisionTypes.DIRECT);
+assert.equal(finalizedComplex.type, knowledgeEngineDecisionTypes.RESPONSE);
 assert.equal(finalizedComplex.reason, 'validated_grounded_llm_response');
 assert.equal(finalizeGroundedLlmResponse({
   input: inputFor(), plan: complex, answer: 'A complimentary meal is included.',
@@ -140,7 +144,7 @@ const groundedGeneralPlan = planSafeKnowledgeResponse({
   input: inputFor(), classification: classification(knowledgeQueryClasses.UNKNOWN),
   resolution: {}, authoritative: authoritative([groundedGeneral]), runtimeProfile: { tools: [] },
 });
-assert.equal(groundedGeneralPlan.type, knowledgeEngineDecisionTypes.LLM,
+assert.equal(groundedGeneralPlan.type, knowledgeEngineDecisionTypes.RESPONSE,
   'Retrieved General Knowledge must use grounded LLM instead of a false clarification');
 assert.deepEqual(groundedGeneralPlan.evidenceIds, [groundedGeneral.id]);
 
@@ -239,9 +243,14 @@ const completedInput = inputFor({
   activeTool: { name: tool.name },
   collectedToolFields: { reference: 'tenant-reference', requestedDate: '2026-09-10' },
 });
-const awaiting = planSafeKnowledgeResponse({
+const groundedAction = planSafeKnowledgeResponse({
   input: completedInput, classification: actionClassification, resolution: {},
   authoritative: actionEvidence, runtimeProfile,
+});
+assert.equal(groundedAction.type, knowledgeEngineDecisionTypes.RESPONSE);
+assert.equal(groundedAction.mode, knowledgeEngineResponseModes.GROUNDED_LLM);
+const awaiting = planAuthorizedToolWorkflow({
+  input: completedInput, authoritative: actionEvidence, runtimeProfile,
 });
 assert.equal(awaiting.type, knowledgeEngineDecisionTypes.TOOL);
 assert.equal(awaiting.toolWorkflow.status, 'AWAITING_CONFIRMATION');
@@ -251,9 +260,8 @@ await assert.rejects(() => executeAuthorizedToolWorkflow({
   input: completedInput, plan: awaiting, runtimeProfile, call: { id: callId },
 }), /confirmed, complete TOOL plan/u);
 
-const ready = planSafeKnowledgeResponse({
-  input: completedInput, classification: actionClassification, resolution: {},
-  authoritative: actionEvidence, runtimeProfile, confirmation: true,
+const ready = planAuthorizedToolWorkflow({
+  input: completedInput, authoritative: actionEvidence, runtimeProfile, confirmation: true,
 });
 assert.equal(ready.toolWorkflow.status, 'READY_TO_EXECUTE');
 assert.deepEqual(ready.tool.input, {
@@ -279,7 +287,7 @@ const verified = await executeAuthorizedToolWorkflow({
   },
 });
 assert.equal(executionCount, 1);
-assert.equal(verified.decision.type, knowledgeEngineDecisionTypes.DIRECT);
+assert.equal(verified.decision.type, knowledgeEngineDecisionTypes.RESPONSE);
 assert.equal(verified.decision.reason, 'verified_tool_success');
 assert.equal(verified.evidence.authoritativeData.verified, true);
 
@@ -331,9 +339,9 @@ const catalogDirect = planSafeKnowledgeResponse({
     },
   )]), runtimeProfile: { tools: [] },
 });
-assert.equal(catalogDirect.type, knowledgeEngineDecisionTypes.DIRECT);
-assert.doesNotMatch(catalogDirect.response.text, /ITEM KEY|ALIASES/u);
-assert.match(catalogDirect.response.text, /Support: Included/u);
+assert.equal(catalogDirect.type, knowledgeEngineDecisionTypes.RESPONSE);
+assert.equal(catalogDirect.mode, knowledgeEngineResponseModes.GROUNDED_LLM);
+assert.equal(catalogDirect.response, null);
 
 const goldWithStructuredTests = source(
   'published:catalog_item:gold-structured', 'CATALOG_ITEM', 'Raw source is not spoken.',
@@ -346,11 +354,11 @@ const goldDecision = planSafeKnowledgeResponse({
   input: inputFor(), classification: classification(knowledgeQueryClasses.KNOWN_INFORMATION),
   resolution: {}, authoritative: authoritative([goldWithStructuredTests]), runtimeProfile: { tools: [] },
 });
-assert.equal(goldDecision.type, knowledgeEngineDecisionTypes.DIRECT,
-  'A rendered Catalog identifier must validate against the same hydrated structured fields');
-assert.match(goldDecision.response.text, /HS-CRP/u);
+assert.equal(goldDecision.type, knowledgeEngineDecisionTypes.RESPONSE,
+  'A Catalog record must use the single grounded natural-response path');
+assert.equal(goldDecision.mode, knowledgeEngineResponseModes.GROUNDED_LLM);
 assert.equal(validateFinalKnowledgeResponse({
-  input: inputFor(), answer: goldDecision.response.text,
+  input: inputFor(), answer: 'Gold Option. Approved health screening. Tests: CBC, HS-CRP, ECG.',
   selectedEvidenceIds: [goldWithStructuredTests.id], evidence: [goldWithStructuredTests],
 }).valid, true);
 
