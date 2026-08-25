@@ -105,8 +105,10 @@ for (let repeat = 1; repeat <= repeats; repeat += 1) {
   const exactLiveCallReport = JSON.parse(exactLiveCall.output.trim());
   assert.equal(exactLiveCallReport.passed, true);
   assert.equal(exactLiveCallReport.runtimeExceptions, 0);
-  assert.equal(exactLiveCallReport.callsPerPass, 2);
+  assert.equal(exactLiveCallReport.callsPerPass, 3);
   assert.equal(exactLiveCallReport.falseAmbiguities, 0);
+  assert.equal(exactLiveCallReport.stageTimeouts, 0);
+  assert.equal(exactLiveCallReport.knownLlmInvocations, 0);
   assert.equal(exactLiveCallReport.groundingRejections, 0);
   assert.equal(exactLiveCallReport.audioUnderruns, 0);
   assert.equal(exactLiveCallReport.ttsSentenceFailures, 0);
@@ -114,12 +116,15 @@ for (let repeat = 1; repeat <= repeats; repeat += 1) {
     `Repeat ${repeat}: exact live-call retrieval exceeded 150ms`);
   assert.ok(exactLiveCallReport.firstAudioP95Ms < 2_000,
     `Repeat ${repeat}: exact live-call first audio exceeded two seconds`);
+  assert.ok(exactLiveCallReport.knownFirstAudioP95Ms < 1_000,
+    `Repeat ${repeat}: known-answer first audio exceeded one second`);
   runs.push(Object.freeze({
     repeat,
     durationMs: Number(durationMs.toFixed(2)),
     knowledgeEngineRetrievalP95Ms: engineAcceptanceReport.metrics.retrievalP95Ms,
     exactLiveCallRetrievalP95Ms: exactLiveCallReport.retrievalP95Ms,
     exactLiveCallFirstAudioP95Ms: exactLiveCallReport.firstAudioP95Ms,
+    knownAnswerFirstAudioP95Ms: exactLiveCallReport.knownFirstAudioP95Ms,
     suites: Object.freeze(results.map(({ name, durationMs: suiteDurationMs }) => ({
       name, durationMs: suiteDurationMs,
     }))),
@@ -149,6 +154,8 @@ console.log(JSON.stringify({
     'exact_live_call_2026_08_24', 'full_evidence_validation', 'tenant_driven_phonetic_response',
     'structured_plivo_hangup_cause', 'two_isolated_live_calls',
     'source_id_mapping', 'call_memory_follow_up', 'zero_audio_underruns',
+    'purpose_overview_kids_cardio_lungs_silver_gold',
+    'zero_known_record_llm_invocations', 'known_answer_first_audio_under_one_second',
   ],
   runs,
 }, null, 2));

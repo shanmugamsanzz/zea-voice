@@ -466,6 +466,18 @@ export function detectEntityAmbiguity(evidence, classification, resolution) {
   if (classification?.intentClass === knowledgeQueryClasses.COMPARISON_COMPLEX) {
     return Object.freeze({ detected: false, candidates: Object.freeze([]), reason: null });
   }
+  // A resolved category and its hydrated children are one authoritative answer
+  // set. Child items must never compete with their own parent category merely
+  // because they share a generic category phrase.
+  if (resolution?.candidate?.entityType === 'CATEGORY') {
+    const categoryKey = normalizeId(resolution.candidate.categoryKey);
+    const categoryHydrated = evidence.some((item) => (
+      normalizeId(item.authoritativeData?.categoryKey) === categoryKey
+    ));
+    if (categoryKey && categoryHydrated) {
+      return Object.freeze({ detected: false, candidates: Object.freeze([]), reason: null });
+    }
+  }
   const selectedNamespace = resolution?.candidateNamespace ?? null;
   const hydratedIds = new Set(evidence.map((item) => normalizeId(item.recordId)));
   const namespaceRecordTypes = Object.freeze({
@@ -517,15 +529,21 @@ export function detectEntityAmbiguity(evidence, classification, resolution) {
   });
 }
 
-function explicitComparisonRecordIds(classification, resolution) {
-  if (classification?.intentClass !== knowledgeQueryClasses.COMPARISON_COMPLEX) return [];
-  const candidates = resolution?.namespaceCandidates?.CATALOG
-    ?? resolution?.routingCandidates ?? [];
-  return [...new Set(candidates.filter((candidate) => (
-    candidate?.explicit === true
-    && candidate?.entityType !== 'CATEGORY'
-    && String(candidate?.recordType ?? '').toUpperCase() === 'CATALOG_ITEM'
-  )).map((candidate) => normalizeId(candidate.recordId)).filter(Boolean))];
+function reservedResolutionRecordIds(classification, resolution) {
+  if (classification?.intentClass === knowledgeQueryClasses.COMPARISON_COMPLEX) {
+    const candidates = resolution?.namespaceCandidates?.CATALOG
+      ?? resolution?.routingCandidates ?? [];
+    return [...new Set(candidates.filter((candidate) => (
+      candidate?.explicit === true
+      && candidate?.entityType !== 'CATEGORY'
+      && String(candidate?.recordType ?? '').toUpperCase() === 'CATALOG_ITEM'
+    )).map((candidate) => normalizeId(candidate.recordId)).filter(Boolean))];
+  }
+  const candidate = resolution?.candidate;
+  if (candidate?.explicit !== true) return [];
+  // A category anchor hydrates its current children in the same SQL record;
+  // only the canonical anchor must occupy a reserved RRF slot.
+  return [normalizeId(candidate.recordId)].filter(Boolean);
 }
 
 function evidenceFromRow(row, input, fused) {
@@ -612,8 +630,21 @@ export async function rankAndHydrateAuthoritativeEvidence({
   if (!['inbound', 'outbound'].includes(input.usageDirection)) {
     throw new TypeError('Authoritative hydration requires inbound or outbound usage direction');
   }
-  const reservedRecordIds = explicitComparisonRecordIds(classification, resolution);
-  const fusion = fuseCandidateRankings(retrieval, {
+  const reservedRecordIds = reservedResolutionRecordIds(classification, resolution);
+  const resolvedCategoryKey = resolution?.candidate?.entityType === 'CATEGORY'
+    ? normalizeId(resolution.candidate.categoryKey) : null;
+  const resolvedCategoryAnchorId = resolvedCategoryKey
+    ? normalizeId(resolution.candidate.recordId) : null;
+  const fusionRetrieval = resolvedCategoryKey ? Object.freeze({
+    ...retrieval,
+    channels: Object.freeze(Object.fromEntries(Object.entries(retrieval?.channels ?? {})
+      .map(([channel, candidates]) => [channel, Object.freeze((candidates ?? []).filter((candidate) => !(
+        String(candidate.recordType ?? '').toUpperCase() === 'CATALOG_ITEM'
+        && (normalizeId(candidate.recordId) === resolvedCategoryAnchorId
+          || normalizeId(candidate.categoryKey) === resolvedCategoryKey)
+      ))) ]))),
+  }) : retrieval;
+  const fusion = fuseCandidateRankings(fusionRetrieval, {
     rrfK,
     limit,
     minProviderScore,

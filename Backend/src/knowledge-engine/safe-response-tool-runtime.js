@@ -18,6 +18,8 @@ const deterministicIntentClasses = new Set([
 const approvedDirectRecordTypes = new Set([
   'FAQ',
   'CONVERSATION_NODE',
+  'CATALOG_CATEGORY',
+  'CATALOG_ITEM',
 ]);
 
 function object(value) {
@@ -141,12 +143,12 @@ function renderCatalogItem(source) {
   const price = facts.price === null || facts.price === undefined ? null
     : `${facts.price}${facts.currency ? ` ${facts.currency}` : ''}`;
   const attributes = facts.attributes.map((attribute) => `${attribute.name}: ${attribute.value}`);
-  return cleanText([
+  return joinSpokenFragments([
     facts.name,
     facts.description,
     price ? `Price: ${price}.` : null,
     attributes.length ? attributes.join('. ') : null,
-  ].filter(Boolean).join('. '));
+  ]);
 }
 
 function renderCatalogCategory(source) {
@@ -456,13 +458,7 @@ export function planSafeKnowledgeResponse({
     const authorizedPlan = planAuthorizedToolWorkflow({
       input, authoritative, runtimeProfile, confirmation,
     });
-    if (authorizedPlan.type === knowledgeEngineDecisionTypes.CLARIFY) return authorizedPlan;
-    return createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.RESPONSE, {
-      reason: 'grounded_authorized_tool_decision_required',
-      confidence: classification.confidence,
-      evidenceIds: authorizedPlan.evidenceIds,
-      mode: knowledgeEngineResponseModes.GROUNDED_LLM,
-    });
+    return authorizedPlan;
   }
   if (authoritative.ambiguity?.detected && !isComparison) {
     return clarification('ambiguity', 'ambiguous_authoritative_entity',
@@ -487,8 +483,17 @@ export function planSafeKnowledgeResponse({
   const callerFacing = multiEvidenceIntent
     ? allCallerFacing
     : (resolvedCallerFacing.length ? resolvedCallerFacing : allCallerFacing);
-  if (classification?.intentClass === knowledgeQueryClasses.CATEGORY_OVERVIEW) {
-    const rendered = categoryText(resolution, callerFacing);
+  const resolvedCategoryRequest = resolution?.candidate?.entityType === 'CATEGORY'
+    && (resolution?.candidate?.explicit === true || resolution?.contextDependent === true);
+  if (classification?.intentClass === knowledgeQueryClasses.CATEGORY_OVERVIEW
+    || resolvedCategoryRequest) {
+    const resolvedCategoryKey = normalizedId(resolution?.candidate?.categoryKey);
+    const categoryEvidence = resolvedCategoryKey ? allCallerFacing.filter((source) => (
+      ['CATALOG_CATEGORY', 'CATALOG_ITEM'].includes(source.recordType)
+      && normalizedId(source.authoritativeData?.categoryKey) === resolvedCategoryKey
+    )) : [];
+    const rendered = categoryText(resolution, categoryEvidence.length
+      ? categoryEvidence : (resolvedCallerFacing.length ? resolvedCallerFacing : callerFacing));
     if (rendered) {
       const selectedEvidenceIds = evidenceIds(rendered.evidence);
       const validation = validateFinalKnowledgeResponse({
@@ -536,6 +541,8 @@ export function planSafeKnowledgeResponse({
   }
   const approvedResolvedRoute = resolvedCallerFacing.length === 1
     && resolution?.candidate?.explicit === true
+    && resolution?.confidence === 'HIGH'
+    && resolution?.action === 'CONTINUE'
     && approvedDirectRecordTypes.has(String(resolvedCallerFacing[0]?.recordType).toUpperCase());
   if ((deterministicIntentClasses.has(classification?.intentClass) && callerFacing.length === 1)
     || approvedResolvedRoute) {
@@ -553,9 +560,9 @@ export function planSafeKnowledgeResponse({
     });
     return clarification('ambiguity', validation.reason, null, [source]);
   }
-  if (callerFacing.length) {
+  if (callerFacing.length > 1) {
     return createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.RESPONSE, {
-      reason: 'grounded_natural_response_required',
+      reason: 'grounded_multi_evidence_reasoning_required',
       confidence: classification.confidence,
       evidenceIds: evidenceIds(callerFacing.slice(0, 5)),
       mode: knowledgeEngineResponseModes.GROUNDED_LLM,

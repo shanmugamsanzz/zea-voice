@@ -124,6 +124,7 @@
     "verify:production-equivalent-acceptance": "npm run verify:knowledge-artifact-lifecycle && node scripts/verify-production-equivalent-knowledge-call.js --repeats=3",
     "verify:tamil-live-call-regression": "node scripts/verify-tamil-live-call-knowledge-engine.js --repeats=3",
     "verify:exact-live-call-regression": "node scripts/verify-exact-live-call-regression.js --repeats=3 && node scripts/verify-plivo-hangup-cause-logging.js",
+    "verify:production-call-known-answer-gate": "node scripts/verify-exact-live-call-regression.js --repeats=3",
     "verify:two-call-production-regression": "node scripts/verify-exact-live-call-regression.js --repeats=3 && node scripts/verify-plivo-hangup-cause-logging.js && node scripts/verify-voice-tts.js",
     "verify:atomic-knowledge-publication": "node scripts/verify-atomic-knowledge-publication.js",
     "verify:knowledge-artifact-lifecycle": "node scripts/verify-knowledge-artifact-lifecycle.js --repeats=3",

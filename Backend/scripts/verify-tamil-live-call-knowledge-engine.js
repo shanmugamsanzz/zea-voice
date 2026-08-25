@@ -5,7 +5,6 @@ import {
   knowledgeEngineDecisionTypes,
   knowledgeEngineResponseModes,
 } from '../src/knowledge-engine/engine-contract.js';
-import { finalizeGroundedLlmResponse } from '../src/knowledge-engine/safe-response-tool-runtime.js';
 import { retrieveTenantEvidence } from '../src/knowledge-engine/runtime-service.js';
 import { buildRevisionSparseIndex, cacheCompactKnowledgeMap } from '../src/knowledge-bases/knowledge-map.service.js';
 import { openIsolatedCallMemory } from '../src/knowledge-engine/call-memory.js';
@@ -174,12 +173,13 @@ for (let pass = 1; pass <= repeats; pass += 1) {
           resolution: result.resolution,
           evidenceIds: result.evidenceIds,
         })}`);
-      assert.equal(result.decision.mode, knowledgeEngineResponseModes.GROUNDED_LLM);
-      const validated = finalizeGroundedLlmResponse({
-        input, plan: result.decision, answer: turn.expectedResponse,
-        selectedEvidenceIds: result.evidenceIds, authoritative: result.authoritative,
-      });
-      assert.equal(validated.response?.text, turn.expectedResponse,
+      assert.equal(result.decision.mode, knowledgeEngineResponseModes.DETERMINISTIC,
+        `pass ${pass}, ${turn.id}: known hydrated evidence must bypass the LLM`);
+      const validated = result.decision;
+      if (turn.expectedRecordId === turns[3].expectedRecordId) {
+        assert.match(validated.response?.text ?? '', /Silver Package/iu);
+        assert.match(validated.response?.text ?? '', /1000\s+INR/iu);
+      } else assert.equal(validated.response?.text, turn.expectedResponse,
         `pass ${pass}, ${turn.id}: incorrect response ${JSON.stringify({
           validated,
           selectedEvidenceIds: result.evidenceIds,

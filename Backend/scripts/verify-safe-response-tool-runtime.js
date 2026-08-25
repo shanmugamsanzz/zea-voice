@@ -45,10 +45,19 @@ const direct = planSafeKnowledgeResponse({
   input: inputFor(), classification: classification(knowledgeQueryClasses.KNOWN_INFORMATION),
   resolution: {}, authoritative: authoritative([faq]), runtimeProfile: { tools: [] },
 });
-assert.equal(direct.type, knowledgeEngineDecisionTypes.RESPONSE);
-assert.equal(direct.mode, knowledgeEngineResponseModes.GROUNDED_LLM);
-assert.equal(direct.response, null);
+assert.equal(direct.type, knowledgeEngineDecisionTypes.CLARIFY);
 assert.deepEqual(direct.evidenceIds, [faq.id]);
+
+const resolvedFaqDirect = planSafeKnowledgeResponse({
+  input: inputFor(), classification: classification(knowledgeQueryClasses.KNOWN_INFORMATION),
+  resolution: {
+    confidence: 'HIGH', action: 'CONTINUE',
+    candidate: { recordId: faq.recordId, recordType: 'FAQ', explicit: true },
+  },
+  authoritative: authoritative([faq]), runtimeProfile: { tools: [] },
+});
+assert.equal(resolvedFaqDirect.mode, knowledgeEngineResponseModes.DETERMINISTIC);
+assert.equal(resolvedFaqDirect.response.text, faq.authoritativeData.answer);
 
 const categoryOne = source('published:catalog_item:category-one', 'CATALOG_ITEM',
   'Starter Option. Approved starter service.', {
@@ -62,6 +71,18 @@ const categoryTwo = source('published:catalog_item:category-two', 'CATALOG_ITEM'
     category: 'Service Options', categoryDescription: 'Approved service options.',
     description: 'Approved advanced service.',
   });
+const resolvedItemDirect = planSafeKnowledgeResponse({
+  input: inputFor(), classification: classification(knowledgeQueryClasses.DETAILS_OR_PRICE),
+  resolution: {
+    confidence: 'HIGH', action: 'CONTINUE',
+    candidate: {
+      recordId: categoryOne.recordId, recordType: 'CATALOG_ITEM', entityType: 'ITEM', explicit: true,
+    },
+  },
+  authoritative: authoritative([categoryOne]), runtimeProfile: { tools: [] },
+});
+assert.equal(resolvedItemDirect.mode, knowledgeEngineResponseModes.DETERMINISTIC);
+assert.match(resolvedItemDirect.response.text, /Starter Option/u);
 const categoryDecision = planSafeKnowledgeResponse({
   input: inputFor({ knownEntities: [{
     id: 'stale-record', key: 'stale-option', name: 'Stale Option',
@@ -296,8 +317,8 @@ const groundedAction = planSafeKnowledgeResponse({
   input: completedInput, classification: actionClassification, resolution: {},
   authoritative: actionEvidence, runtimeProfile,
 });
-assert.equal(groundedAction.type, knowledgeEngineDecisionTypes.RESPONSE);
-assert.equal(groundedAction.mode, knowledgeEngineResponseModes.GROUNDED_LLM);
+assert.equal(groundedAction.type, knowledgeEngineDecisionTypes.TOOL);
+assert.equal(groundedAction.toolWorkflow.status, 'AWAITING_CONFIRMATION');
 const awaiting = planAuthorizedToolWorkflow({
   input: completedInput, authoritative: actionEvidence, runtimeProfile,
 });
@@ -388,9 +409,7 @@ const catalogDirect = planSafeKnowledgeResponse({
     },
   )]), runtimeProfile: { tools: [] },
 });
-assert.equal(catalogDirect.type, knowledgeEngineDecisionTypes.RESPONSE);
-assert.equal(catalogDirect.mode, knowledgeEngineResponseModes.GROUNDED_LLM);
-assert.equal(catalogDirect.response, null);
+assert.equal(catalogDirect.type, knowledgeEngineDecisionTypes.CLARIFY);
 
 const goldWithStructuredTests = source(
   'published:catalog_item:gold-structured', 'CATALOG_ITEM', 'Raw source is not spoken.',
@@ -403,9 +422,8 @@ const goldDecision = planSafeKnowledgeResponse({
   input: inputFor(), classification: classification(knowledgeQueryClasses.KNOWN_INFORMATION),
   resolution: {}, authoritative: authoritative([goldWithStructuredTests]), runtimeProfile: { tools: [] },
 });
-assert.equal(goldDecision.type, knowledgeEngineDecisionTypes.RESPONSE,
-  'A Catalog record must use the single grounded natural-response path');
-assert.equal(goldDecision.mode, knowledgeEngineResponseModes.GROUNDED_LLM);
+assert.equal(goldDecision.type, knowledgeEngineDecisionTypes.CLARIFY,
+  'An unresolved single record must not trigger an unnecessary LLM call');
 assert.equal(validateFinalKnowledgeResponse({
   input: inputFor(), answer: 'Gold Option. Approved health screening. Tests: CBC, HS-CRP, ECG.',
   selectedEvidenceIds: [goldWithStructuredTests.id], evidence: [goldWithStructuredTests],

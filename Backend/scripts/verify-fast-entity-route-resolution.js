@@ -144,6 +144,8 @@ assert.equal(result.candidate.itemKey, 'alpha-prime');
 assert.equal(result.candidate.method, 'exact');
 assert.equal(result.candidate.recordType, 'CATALOG_ITEM',
   'A specific Catalog entity must override a colliding generic Conversation route');
+assert.equal(result.routingCandidates.length, 1,
+  'A strong canonical entity must discard weaker discovery candidates');
 
 result = resolvePublishedEntityRoute(input('Please explain the starter choice'), bundle);
 assert.equal(result.confidence, knowledgeResolutionConfidence.HIGH);
@@ -174,6 +176,8 @@ result = resolvePublishedEntityRoute(input('shared'), bundle);
 assert.equal(result.confidence, knowledgeResolutionConfidence.MEDIUM);
 assert.equal(result.action, knowledgeResolutionActions.CONFIRM);
 assert.equal(result.alternatives.length > 0, true);
+assert.equal(result.routingCandidates.length, 2,
+  'Two records sharing an exact published alias must remain genuinely ambiguous');
 
 result = resolvePublishedEntityRoute(input('tell me more', {
   activeEntity: { recordId: alpha.record_id, key: 'alpha-prime' },

@@ -176,6 +176,61 @@ export function configuredTechnicalFailureResponse(profile) {
     : 'Sorry, the information service is temporarily unavailable. Please try again shortly.';
 }
 
+function canonicalResolvedMemoryContext(tenantEvidence = {}) {
+  const resolution = tenantEvidence.resolution ?? {};
+  const candidate = resolution.candidate;
+  if (!candidate || candidate.explicit !== true
+    || resolution.confidence !== 'HIGH' || resolution.action !== 'CONTINUE') return null;
+  const evidence = tenantEvidence.authoritative?.evidence ?? tenantEvidence.sources ?? [];
+  const normalized = (value) => String(value ?? '').normalize('NFKC').trim().toLocaleLowerCase();
+  const hydrated = evidence.filter((source) => source?.hydrationValidated === true
+    && source?.publicationValidated === true);
+  const categorySelection = candidate.entityType === 'CATEGORY'
+    || String(candidate.recordType ?? '').toLocaleUpperCase() === 'CATALOG_CATEGORY';
+  if (categorySelection) {
+    const categoryKey = normalized(candidate.categoryKey);
+    const source = hydrated.find((entry) => (
+      String(entry.recordType ?? '').toLocaleUpperCase() === 'CATALOG_CATEGORY'
+      && (normalized(entry.recordId) === normalized(candidate.recordId)
+        || normalized(entry.authoritativeData?.categoryKey) === categoryKey)
+    )) ?? hydrated.find((entry) => (
+      String(entry.recordType ?? '').toLocaleUpperCase() === 'CATALOG_ITEM'
+      && normalized(entry.authoritativeData?.categoryKey) === categoryKey
+    ));
+    if (!source) return null;
+    const data = source.authoritativeData ?? {};
+    const category = {
+      id: String(source.recordType ?? '').toLocaleUpperCase() === 'CATALOG_CATEGORY'
+        ? source.recordId : null,
+      recordId: String(source.recordType ?? '').toLocaleUpperCase() === 'CATALOG_CATEGORY'
+        ? source.recordId : null,
+      key: data.categoryKey ?? candidate.categoryKey,
+      name: data.category ?? candidate.label,
+      description: data.categoryDescription ?? candidate.categoryDescription,
+    };
+    return category.key && category.name
+      ? Object.freeze({ category: Object.freeze(category), explicitCategory: true }) : null;
+  }
+  if (candidate.entityType !== 'ITEM'
+    && String(candidate.recordType ?? '').toLocaleUpperCase() !== 'CATALOG_ITEM') return null;
+  const source = hydrated.find((entry) => (
+    String(entry.recordType ?? '').toLocaleUpperCase() === 'CATALOG_ITEM'
+    && normalized(entry.recordId) === normalized(candidate.recordId)
+  ));
+  if (!source) return null;
+  const data = source.authoritativeData ?? {};
+  const entity = {
+    id: source.recordId,
+    recordId: source.recordId,
+    key: data.itemKey,
+    name: data.name,
+    category: data.category,
+    categoryKey: data.categoryKey,
+  };
+  return entity.key && entity.name
+    ? Object.freeze({ entity: Object.freeze(entity), explicitEntity: true }) : null;
+}
+
 export function configuredEvidenceValidationFailureResponse(profile) {
   const configured = String(
     profile.agent.settings?.evidenceValidationFailureMessage ?? '',
@@ -2499,8 +2554,9 @@ export class RealtimeConversationOrchestrator {
       this.activeRetrievalAbortController = null;
     }
     if (epoch !== this.epoch || this.finalized) return;
-    // The saved frame is context, not a gate. Ordinary topic/entity state is
-    // updated only after the grounded LLM decision has been validated.
+    // The saved frame is context, not a gate. A newly hydrated, explicit
+    // canonical entity is committed below before optional response generation;
+    // answers and citations still wait for complete validation.
     const memoryState = this.liveCallMemory?.snapshot();
     const retrievalTrace = knowledge.tenantEvidence?.retrievalTrace ?? {};
     this.log.info({
@@ -2577,6 +2633,22 @@ export class RealtimeConversationOrchestrator {
     const candidateDecision = knowledge.tenantEvidence?.decision;
     const engineDecision = isKnowledgeEngineDecision(candidateDecision)
       ? candidateDecision : technicalClarificationDecision('invalid_engine_result');
+    const canonicalMemoryContext = canonicalResolvedMemoryContext(knowledge.tenantEvidence);
+    if (canonicalMemoryContext) {
+      const applied = this.liveCallMemory?.applyResolvedContext?.(
+        canonicalMemoryContext, { turnToken: epoch },
+      );
+      this.log.info({
+        stage: 'knowledge.canonical_memory_committed',
+        callId: this.call.id,
+        turnEpoch: epoch,
+        applied: applied?.applied === true,
+        entityId: canonicalMemoryContext.entity?.id ?? null,
+        categoryId: canonicalMemoryContext.category?.id ?? null,
+        categoryKey: canonicalMemoryContext.category?.key
+          ?? canonicalMemoryContext.entity?.categoryKey ?? null,
+      }, 'Authoritatively hydrated canonical topic committed before optional response generation');
+    }
     const sourceTrace = new MessageSourceTrace(
       knowledgeMessageSources(knowledge, engineDecision.evidenceIds),
     );
@@ -2776,7 +2848,7 @@ export class RealtimeConversationOrchestrator {
             ttsReserveMs,
             acknowledgementText: configuredLatencyAcknowledgementResponse(this.runtimeProfile),
             completionTimeoutMs: env.LLM_REQUEST_TIMEOUT_MS,
-            postAcknowledgementTimeoutMs: env.VOICE_LLM_TURN_TIMEOUT_MS,
+            postAcknowledgementTimeoutMs: env.VOICE_LLM_POST_ACK_TIMEOUT_MS,
             cancel: () => this.activeLlm?.cancel?.('llm_completion_timeout'),
             onAcknowledgement: async (acknowledgementText) => {
               latencyAcknowledged = true;

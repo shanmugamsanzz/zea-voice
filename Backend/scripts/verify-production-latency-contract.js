@@ -185,6 +185,10 @@ assert.equal(voiceLatencyTargets.p90FirstAudioMs, 1_000);
 assert.equal(env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS, 2_000);
 assert.ok(env.VOICE_KNOWLEDGE_TURN_TIMEOUT_MS < env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS);
 assert.ok(env.VOICE_LLM_TURN_TIMEOUT_MS < env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS);
+assert.ok(env.VOICE_LLM_POST_ACK_TIMEOUT_MS > env.VOICE_LLM_TURN_TIMEOUT_MS);
+assert.ok(env.VOICE_LLM_POST_ACK_TIMEOUT_MS >= 3000,
+  'Post-acknowledgement completion needs production-latency headroom, not the fast test mock');
+assert.ok(env.VOICE_LLM_POST_ACK_TIMEOUT_MS <= env.LLM_REQUEST_TIMEOUT_MS);
 assert.ok(env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS < env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS);
 assert.equal(remainingLiveTurnBudgetMs(2_000, 600, 0), 1_400);
 const technicalFallback = configuredTechnicalFailureResponse({
@@ -204,6 +208,7 @@ assert.match(orchestrator, /activeRetrievalAbortController\?\.abort\(reason\)/u)
 assert.match(orchestrator, /LLM_REQUEST_TIMEOUT_MS|#llmAttempt/u);
 assert.match(orchestrator, /VOICE_KNOWLEDGE_TURN_TIMEOUT_MS/u);
 assert.match(orchestrator, /VOICE_LLM_TURN_TIMEOUT_MS/u);
+assert.match(orchestrator, /VOICE_LLM_POST_ACK_TIMEOUT_MS/u);
 assert.match(orchestrator, /VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS/u);
 assert.match(orchestrator, /remainingLiveTurnBudgetMs/u);
 assert.match(orchestrator,

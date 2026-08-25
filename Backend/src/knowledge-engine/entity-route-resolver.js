@@ -467,6 +467,29 @@ function confidenceFor(candidates) {
   return { level: knowledgeResolutionConfidence.LOW, margin };
 }
 
+function hasStrongCanonicalSignal(candidate) {
+  return candidate?.explicit === true
+    && Number(candidate?.score ?? 0) >= 0.88
+    && (candidate.signals ?? []).some((signal) => (
+      signal.explicit === true
+      && ['exact', 'normalized', 'tenant_alias', 'stt'].includes(signal.method)
+      && Number(signal.score ?? 0) >= 0.88
+    ));
+}
+
+function discardDominatedCandidates(candidates) {
+  const ranked = [...candidates];
+  const top = ranked[0];
+  if (!hasStrongCanonicalSignal(top)) return ranked;
+  // Strong published canonical/alias matches outrank discovery-only signals.
+  // Keep an equally authoritative near-tie so shared tenant aliases still
+  // produce a genuine clarification instead of an arbitrary selection.
+  return ranked.filter((candidate, index) => index === 0 || (
+    hasStrongCanonicalSignal(candidate)
+    && Number(top.score ?? 0) - Number(candidate.score ?? 0) <= 0.02
+  ));
+}
+
 function actionFor(level, candidates) {
   if (level === knowledgeResolutionConfidence.HIGH) return knowledgeResolutionActions.CONTINUE;
   if (level === knowledgeResolutionConfidence.MEDIUM) return knowledgeResolutionActions.CONFIRM;
@@ -580,25 +603,26 @@ function matchCatalogCandidates(bundles, records, query, queryForms) {
 }
 
 function resolutionResult(input, ranked, namespace, namespaceCandidates, reasonPrefix = null) {
-  const { level, margin } = confidenceFor(ranked);
-  const contextDependent = ranked[0]?.method === 'context';
+  const authoritativeRanked = discardDominatedCandidates(ranked);
+  const { level, margin } = confidenceFor(authoritativeRanked);
+  const contextDependent = authoritativeRanked[0]?.method === 'context';
   return Object.freeze({
     version: KNOWLEDGE_RESOLUTION_VERSION,
     tenantId: String(input.tenantId),
     confidence: level,
     score: ranked[0]?.score ?? 0,
     margin: boundedScore(margin),
-    action: actionFor(level, ranked),
-    candidate: ranked[0] ?? null,
+    action: actionFor(level, authoritativeRanked),
+    candidate: authoritativeRanked[0] ?? null,
     candidateNamespace: namespace,
     namespaceCandidates,
-    routingCandidates: Object.freeze(ranked),
-    alternatives: Object.freeze(ranked.slice(1, 4)),
+    routingCandidates: Object.freeze(authoritativeRanked),
+    alternatives: Object.freeze(authoritativeRanked.slice(1, 4)),
     explicitEntity: namespace === knowledgeCandidateNamespaces.CATALOG
-      && ranked[0]?.explicit === true,
+      && authoritativeRanked[0]?.explicit === true,
     contextDependent,
-    reason: ranked[0]
-      ? `${reasonPrefix ?? ranked[0].method}_candidate_${level.toLocaleLowerCase()}`
+    reason: authoritativeRanked[0]
+      ? `${reasonPrefix ?? authoritativeRanked[0].method}_candidate_${level.toLocaleLowerCase()}`
       : 'no_candidate',
   });
 }

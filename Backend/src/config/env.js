@@ -95,6 +95,10 @@ const envSchema = z.object({
   VOICE_HYDRATION_TURN_TIMEOUT_MS: z.coerce.number().int().min(50).max(2000).default(150),
   VOICE_KNOWLEDGE_TURN_TIMEOUT_MS: z.coerce.number().int().min(100).max(5000).default(500),
   VOICE_LLM_TURN_TIMEOUT_MS: z.coerce.number().int().min(250).max(10000).default(900),
+  // First audio still uses VOICE_LLM_TURN_TIMEOUT_MS. Once a short
+  // acknowledgement is audible, allow the measured production structured
+  // completion enough time to finish and validate, with a bounded maximum.
+  VOICE_LLM_POST_ACK_TIMEOUT_MS: z.coerce.number().int().min(1000).max(15000).default(4000),
   VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS: z.coerce.number().int().min(250).max(5000).default(600),
   VOICE_TTS_MAX_RESPONSE_CHARACTERS: z.coerce.number().int().min(100).max(2000).default(600),
   VOICE_TTS_SENTENCE_GROUPING_ENABLED: booleanFromString.default(true),

@@ -170,7 +170,7 @@ export async function awaitLlmWithSafeLatency(work, {
   acknowledgementText,
   onAcknowledgement,
   completionTimeoutMs = env.LLM_REQUEST_TIMEOUT_MS,
-  postAcknowledgementTimeoutMs = env.VOICE_LLM_TURN_TIMEOUT_MS,
+  postAcknowledgementTimeoutMs = env.VOICE_LLM_POST_ACK_TIMEOUT_MS,
   cancel,
 } = {}) {
   if (!(tracker instanceof VoiceTurnLatencyTracker)) {

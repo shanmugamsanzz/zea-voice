@@ -290,7 +290,7 @@ for (let pass = 1; pass <= repeats; pass += 1) {
   });
   assert.equal(switched.resolution.candidate.itemKey, 'beta');
   assert.equal(switched.decision.type, knowledgeEngineDecisionTypes.RESPONSE);
-  assert.equal(switched.decision.mode, knowledgeEngineResponseModes.GROUNDED_LLM);
+  assert.equal(switched.decision.mode, knowledgeEngineResponseModes.DETERMINISTIC);
 
   const namespaceCollision = await observed(engine, 'Alpha Service', { turn: pass });
   assert.equal(namespaceCollision.resolution.candidateNamespace, 'CATALOG');
@@ -352,10 +352,9 @@ for (let pass = 1; pass <= repeats; pass += 1) {
     }],
   };
   const tool = await observed(engine, 'submit request', { turn: pass, runtimeProfile });
-  assert.equal(tool.decision.type, knowledgeEngineDecisionTypes.RESPONSE);
-  assert.equal(tool.decision.mode, knowledgeEngineResponseModes.GROUNDED_LLM);
-  assert.deepEqual(tool.llmEvidenceBundle.authorizedToolSchemas.map((item) => item.name),
-    ['tenant_submit']);
+  assert.equal(tool.decision.type, knowledgeEngineDecisionTypes.TOOL);
+  assert.equal(tool.decision.tool.name, 'tenant_submit');
+  assert.equal(tool.decision.toolWorkflow.status, 'COLLECTING_FIELDS');
   const collectingTool = planAuthorizedToolWorkflow({
     input: tool.input, authoritative: tool.authoritative, runtimeProfile,
   });
@@ -374,9 +373,8 @@ for (let pass = 1; pass <= repeats; pass += 1) {
     turn: pass, runtimeProfile, memory: activeMemory,
   });
   assert.equal(activeBeforeNewAction.classification.source, 'active_tool_workflow');
-  assert.equal(activeBeforeNewAction.decision.type, knowledgeEngineDecisionTypes.RESPONSE);
-  assert.deepEqual(activeBeforeNewAction.llmEvidenceBundle.authorizedToolSchemas.map((item) => item.name),
-    ['tenant_submit']);
+  assert.equal(activeBeforeNewAction.decision.type, knowledgeEngineDecisionTypes.TOOL);
+  assert.equal(activeBeforeNewAction.decision.tool.name, 'tenant_submit');
 
   const emergencyDuringTool = await observed(engine, 'urgent danger', {
     turn: pass, runtimeProfile, memory: activeMemory,
@@ -397,7 +395,7 @@ for (let pass = 1; pass <= repeats; pass += 1) {
     turn: pass, runtimeProfile, confirmation: true,
     memory: { ...activeMemory, collectedToolFields: { reference: `REF-${pass}` } },
   });
-  assert.equal(readyTool.decision.type, knowledgeEngineDecisionTypes.RESPONSE);
+  assert.equal(readyTool.decision.type, knowledgeEngineDecisionTypes.TOOL);
   const readyPlan = planAuthorizedToolWorkflow({
     input: readyTool.input, authoritative: readyTool.authoritative,
     runtimeProfile, confirmation: true,

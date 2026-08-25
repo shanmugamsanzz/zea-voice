@@ -36,6 +36,21 @@ const settings = {
 };
 const memory = openIsolatedCallMemory(identity, settings);
 memory.append({ role: 'user', content: 'Tell me about option one.' });
+memory.beginTurn('hydrated-turn');
+memory.applyResolvedContext({
+  explicitEntity: true,
+  entity: {
+    id: 'record-one', key: 'option-one', name: 'Option One',
+    category: 'Options', categoryKey: 'options',
+  },
+}, { turnToken: 'hydrated-turn' });
+let snapshot = memory.snapshot();
+assert.equal(snapshot.activeEntity.key, 'option-one');
+assert.deepEqual(snapshot.citedEvidence, [],
+  'Early canonical resolution must not commit unvalidated citations');
+memory.cancelTurn('hydrated-turn');
+assert.equal(memory.snapshot().activeEntity.key, 'option-one',
+  'A later response timeout must not erase the hydrated canonical topic');
 memory.applyEngineDecision({
   type: 'DIRECT',
   reason: 'catalog_detail',
@@ -48,7 +63,7 @@ memory.applyEngineDecision({
   },
   citedEvidence: [{ id: 'source-one', recordId: 'record-one', recordType: 'CATALOG_ITEM' }],
 });
-let snapshot = memory.snapshot();
+snapshot = memory.snapshot();
 assert.equal(snapshot.activeEntity.key, 'option-one');
 assert.equal(snapshot.activeCategory.key, 'options');
 assert.equal(snapshot.latestIntent, 'catalog_detail');

@@ -151,6 +151,24 @@ function structuredCandidates(resolution, recordScope, allowedTypes, limit) {
 }
 
 function activeCatalogCandidate(input, recordScope, allowedTypes) {
+  const activeCategory = input?.memory?.activeCategory;
+  if (activeCategory && allowedTypes.has('CATALOG_CATEGORY')) {
+    const categoryKey = normalizeId(activeCategory.categoryKey ?? activeCategory.key);
+    const categoryRecordId = normalizeId(activeCategory.recordId ?? activeCategory.id);
+    const directCategory = categoryRecordId ? recordScope.get(categoryRecordId) : null;
+    if (directCategory?.recordType === 'CATALOG_CATEGORY') return directCategory;
+    const children = [...recordScope.values()].filter((record) => (
+      record.recordType === 'CATALOG_ITEM'
+      && normalizeId(record.categoryKey) === categoryKey
+    ));
+    const anchor = children[0] ?? null;
+    if (anchor) return {
+      ...anchor,
+      recordType: 'CATALOG_CATEGORY',
+      categoryKey,
+      evidenceRecordIds: children.map((record) => record.recordId),
+    };
+  }
   if (!allowedTypes.has('CATALOG_ITEM')) return null;
   const active = input?.memory?.activeEntity;
   if (!active) return null;
@@ -201,6 +219,19 @@ function structuredCandidatesForTurn(input, classification, resolution, recordSc
       if (candidates.some((candidate) => normalizeId(candidate.recordId) === normalizeId(active.recordId))) continue;
       candidates.push(freezeCandidate({ ...active, score: 1, matchMethod: 'call_memory' },
         'structured', candidates.length + 1));
+    }
+  }
+  if (resolution?.contextDependent === true) {
+    const rememberedCatalog = activeCatalogCandidate(input, recordScope, allowedTypes);
+    if (rememberedCatalog) {
+      const priorIndex = candidates.findIndex((candidate) => (
+        normalizeId(candidate.recordId) === normalizeId(rememberedCatalog.recordId)
+        && candidate.recordType === rememberedCatalog.recordType
+      ));
+      if (priorIndex >= 0) candidates.splice(priorIndex, 1);
+      candidates.unshift(freezeCandidate({
+        ...rememberedCatalog, score: 1, matchMethod: 'call_memory',
+      }, 'structured', 1));
     }
   }
   return Object.freeze(candidates.slice(0, limit));

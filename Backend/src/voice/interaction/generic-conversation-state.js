@@ -443,6 +443,53 @@ export function openGenericConversationState(identity, settings = {}, now = Date
       }
       return publicState(state);
     },
+    applyResolvedContext(context = {}, options = {}) {
+      if (!current(options.turnToken)) {
+        return Object.freeze({ applied: false, stale: true, state: publicState(state) });
+      }
+      const entity = cleanEntity(context.entity);
+      const category = cleanCategory(context.category ?? entity);
+      if (entity && context.explicitEntity === true) {
+        const priorIdentity = cleanText(
+          state.activeEntity?.id ?? state.activeEntity?.key ?? state.activeEntity?.name,
+          240,
+        ).toLocaleLowerCase();
+        const nextIdentity = cleanText(entity.id ?? entity.key ?? entity.name, 240).toLocaleLowerCase();
+        const toolEntityIdentities = [
+          state.activeToolRequest?.selectedEntityKey,
+          state.activeToolRequest?.selectedEntityName,
+        ].map((value) => cleanText(value, 240).toLocaleLowerCase()).filter(Boolean);
+        const nextEntityIdentities = [entity.id, entity.key, entity.name]
+          .map((value) => cleanText(value, 240).toLocaleLowerCase()).filter(Boolean);
+        state.activeEntity = entity;
+        state.activeCategory = category;
+        state.knownEntities = [entity];
+        state.currentTopic = entity.name;
+        state.pendingQuestion = null;
+        state.pendingClarification = null;
+        const toolBelongsToDifferentEntity = toolEntityIdentities.length > 0
+          && !toolEntityIdentities.some((identity) => nextEntityIdentities.includes(identity));
+        if (state.activeToolRequest
+          && ((priorIdentity && priorIdentity !== nextIdentity) || toolBelongsToDifferentEntity)) {
+          state.activeToolRequest = null;
+          state.collectedInformation = {};
+        }
+      } else if (category && context.explicitCategory === true) {
+        state.activeEntity = null;
+        state.activeCategory = category;
+        state.knownEntities = [];
+        state.currentTopic = category.name;
+        state.pendingQuestion = null;
+        state.pendingClarification = null;
+        if (state.activeToolRequest?.selectedEntityKey || state.activeToolRequest?.selectedEntityName) {
+          state.activeToolRequest = null;
+          state.collectedInformation = {};
+        }
+      }
+      // This early phase intentionally does not mutate lastAnswer,
+      // citedEvidence or requestType. Those belong to the validated decision.
+      return Object.freeze({ applied: true, state: publicState(state) });
+    },
     applyEngineDecision(decision = {}, context = {}) {
       state.citedEvidence = cleanEvidence(context.citedEvidence ?? decision.evidenceIds);
       state.requestType = cleanRequestType(context.intent ?? decision.reason) ?? state.requestType;
