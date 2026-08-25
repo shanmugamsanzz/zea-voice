@@ -2623,11 +2623,14 @@ export class RealtimeConversationOrchestrator {
           categoryKey: authoritative.categoryKey,
         } : null;
       const category = categoryDecision ? {
-        id: resolvedCandidate?.categoryKey
-          ? `category:${resolvedCandidate.categoryKey}` : null,
-        key: resolvedCandidate?.categoryKey,
-        name: resolvedCandidate?.label,
-        description: resolvedCandidate?.categoryDescription,
+        id: String(selectedSource?.recordType ?? '').toLocaleUpperCase() === 'CATALOG_CATEGORY'
+          ? selectedSource.recordId : null,
+        recordId: String(selectedSource?.recordType ?? '').toLocaleUpperCase() === 'CATALOG_CATEGORY'
+          ? selectedSource.recordId : null,
+        key: authoritative.categoryKey ?? resolvedCandidate?.categoryKey,
+        name: authoritative.category ?? resolvedCandidate?.label,
+        description: authoritative.categoryDescription
+          ?? resolvedCandidate?.categoryDescription,
       } : (authoritative.category || authoritative.categoryKey ? {
         key: authoritative.categoryKey,
         name: authoritative.category,
@@ -2773,6 +2776,7 @@ export class RealtimeConversationOrchestrator {
             ttsReserveMs,
             acknowledgementText: configuredLatencyAcknowledgementResponse(this.runtimeProfile),
             completionTimeoutMs: env.LLM_REQUEST_TIMEOUT_MS,
+            postAcknowledgementTimeoutMs: env.VOICE_LLM_TURN_TIMEOUT_MS,
             cancel: () => this.activeLlm?.cancel?.('llm_completion_timeout'),
             onAcknowledgement: async (acknowledgementText) => {
               latencyAcknowledged = true;

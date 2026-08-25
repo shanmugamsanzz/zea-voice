@@ -65,8 +65,9 @@ QUESTION: What does the selected item include?
 ALIASES: What is covered? | Explain this option
 ANSWER: This is the approved answer.
 `));
-assert.equal(faq.recordCount, 3);
-assert.ok(faq.records.every((item) => item.answer === 'This is the approved answer.'));
+assert.equal(faq.recordCount, 1);
+assert.equal(faq.records[0].answer, 'This is the approved answer.');
+assert.deepEqual(faq.records[0].metadata.aliases, ['What is covered?', 'Explain this option']);
 
 const general = processExtractedCategory('general_knowledge', extraction(`
 TOPIC: Company location

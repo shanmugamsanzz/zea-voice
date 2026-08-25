@@ -207,6 +207,20 @@ assert.deepEqual(retrieval.channels.qdrant.map((candidate) => candidate.recordId
 assert.ok(retrieval.recordTypes.includes('KNOWLEDGE_CHUNK'));
 assert.ok(!retrieval.recordTypes.includes('WORKFLOW_RULE'));
 
+request = prepared('Options');
+retrieval = await retrieveTargetedCandidates({
+  ...request, publicationBundles: [bundle], sparseIndexes: [sparseIndex],
+}, providers);
+assert.equal(request.classification.intentClass, knowledgeQueryClasses.CATEGORY_OVERVIEW);
+assert.equal(retrieval.channels.structured.length, 1,
+  'A category must remain one retrieval candidate instead of expanding into competing children');
+assert.equal(retrieval.channels.structured[0].recordType, 'CATALOG_CATEGORY');
+assert.equal(retrieval.channels.structured[0].categoryKey, 'options');
+assert.deepEqual(new Set(retrieval.channels.structured[0].evidenceRecordIds),
+  new Set([alpha.record_id, beta.record_id]));
+assert.equal(retrieval.channels.bm25.length, 0);
+assert.equal(retrieval.channels.qdrant.length, 0);
+
 const serialized = JSON.stringify(retrieval);
 for (const forbidden of [
   'Sensitive alpha fact', 'Sensitive beta fact', 'Sensitive FAQ fact',
@@ -218,6 +232,8 @@ for (const channel of Object.values(retrieval.channels)) {
       'channel', 'knowledgeBaseId', 'publicationRevision', 'rank',
       'recordId', 'recordType', 'score', ...(candidate.tokenCoverage === undefined ? [] : ['tokenCoverage']),
       ...(candidate.matchMethod === undefined ? [] : ['matchMethod']),
+      ...(candidate.categoryKey === undefined ? [] : ['categoryKey']),
+      ...(candidate.evidenceRecordIds === undefined ? [] : ['evidenceRecordIds']),
     ].sort());
   }
 }

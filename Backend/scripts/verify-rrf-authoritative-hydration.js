@@ -215,6 +215,9 @@ assert.match(authoritativeHydrationSql, /status='approved'/u);
 assert.match(authoritativeHydrationSql, /version\.is_current=true/u);
 assert.match(authoritativeHydrationSql, /agent_knowledge_bases/u);
 assert.match(authoritativeHydrationSql, /document_version_is_current/u);
+assert.match(authoritativeHydrationSql, /requested\.record_type='CATALOG_CATEGORY'/u);
+assert.match(authoritativeHydrationSql, /child\.category_key=anchor\.category_key/u);
+assert.match(authoritativeHydrationSql, /'children',children\.values_json/u);
 
 let emptyQueryCount = 0;
 const empty = await rankAndHydrateAuthoritativeEvidence({

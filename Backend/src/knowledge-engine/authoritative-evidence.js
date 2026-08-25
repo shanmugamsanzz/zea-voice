@@ -6,11 +6,12 @@ import { knowledgeQueryClasses } from './query-classifier.js';
 export const AUTHORITATIVE_EVIDENCE_VERSION = 2;
 
 const supportedRecordTypes = new Set([
-  'CATALOG_ITEM', 'FAQ', 'CONVERSATION_NODE', 'WORKFLOW_RULE', 'KNOWLEDGE_CHUNK',
+  'CATALOG_ITEM', 'CATALOG_CATEGORY', 'FAQ', 'CONVERSATION_NODE', 'WORKFLOW_RULE', 'KNOWLEDGE_CHUNK',
 ]);
 
 const recordNamespaces = Object.freeze({
   CATALOG_ITEM: 'CATALOG',
+  CATALOG_CATEGORY: 'CATALOG',
   FAQ: 'FAQ',
   CONVERSATION_NODE: 'CONVERSATION',
   WORKFLOW_RULE: 'WORKFLOW',
@@ -21,10 +22,10 @@ export const authoritativeHydrationSql = `
   WITH requested AS (
     SELECT upper(record_type) AS record_type, record_id::uuid,
       knowledge_base_id::uuid, publication_revision::int,
-      rank::int, rrf_score::double precision
+      rank::int, rrf_score::double precision, category_key::text
       FROM jsonb_to_recordset($4::jsonb) AS candidate(
         record_type text, record_id text, knowledge_base_id text,
-        publication_revision int, rank int, rrf_score double precision
+        publication_revision int, rank int, rrf_score double precision, category_key text
       )
   ), runtime_agent AS (
     SELECT id, usage_direction FROM voice_agents
@@ -95,6 +96,58 @@ export const authoritativeHydrationSql = `
        AND document.id=chunk.document_id
      WHERE chunk.tenant_id=$1 AND chunk.status='approved'
        AND (chunk.usage_direction='both' OR chunk.usage_direction=$3::agent_usage_direction)
+       AND version.is_current=true AND version.status='ready' AND version.deleted_at IS NULL
+       AND document.status='ready' AND document.deleted_at IS NULL
+    UNION ALL
+    SELECT 'CATALOG_CATEGORY', anchor.id, anchor.knowledge_base_id, anchor.tenant_id,
+      assigned.publication_revision, anchor.document_id, anchor.document_version_id,
+      document.original_filename, anchor.source_page_start, anchor.source_page_end,
+      anchor.source_section, anchor.source_line_start, anchor.source_line_end,
+      COALESCE(NULLIF(document.metadata->>'language',''),'und'),
+      concat_ws(E'\n','Category: '||COALESCE(anchor.category,catalog.name),
+        CASE WHEN anchor.category_description IS NOT NULL
+          THEN 'Description: '||anchor.category_description END,
+        CASE WHEN children.values_json <> '[]'::jsonb
+          THEN 'Available items: '||children.values_json::text END),
+      true,
+      jsonb_build_object(
+        'catalogId',catalog.id,'catalogType',catalog.catalog_type,'catalogName',catalog.name,
+        'categoryKey',anchor.category_key,'category',COALESCE(anchor.category,catalog.name),
+        'categoryAliases',anchor.category_aliases,
+        'categoryDescription',anchor.category_description,'children',children.values_json
+      ), requested.rank, requested.rrf_score
+      FROM requested JOIN structured_items anchor
+        ON requested.record_type='CATALOG_CATEGORY' AND anchor.id=requested.record_id
+       AND anchor.category_key=requested.category_key
+      JOIN assigned ON assigned.id=anchor.knowledge_base_id
+        AND assigned.id=requested.knowledge_base_id
+        AND assigned.publication_revision=requested.publication_revision
+      JOIN structured_catalogs catalog
+        ON catalog.tenant_id=anchor.tenant_id AND catalog.knowledge_base_id=anchor.knowledge_base_id
+       AND catalog.document_id=anchor.document_id
+       AND catalog.document_version_id=anchor.document_version_id
+       AND catalog.id=anchor.catalog_id AND catalog.status='approved'
+      JOIN knowledge_document_versions version
+        ON version.tenant_id=anchor.tenant_id AND version.knowledge_base_id=anchor.knowledge_base_id
+       AND version.document_id=anchor.document_id AND version.id=anchor.document_version_id
+      JOIN knowledge_documents document
+        ON document.tenant_id=anchor.tenant_id AND document.knowledge_base_id=anchor.knowledge_base_id
+       AND document.id=anchor.document_id
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(jsonb_agg(jsonb_build_object(
+          'recordId',child.id,'itemKey',child.item_key,'name',child.name,
+          'description',child.description,'price',child.price,'currency',child.currency,
+          'displayOrder',child.display_order
+        ) ORDER BY child.display_order,child.id),'[]'::jsonb) AS values_json
+          FROM structured_items child
+         WHERE child.tenant_id=anchor.tenant_id
+           AND child.knowledge_base_id=anchor.knowledge_base_id
+           AND child.document_id=anchor.document_id
+           AND child.document_version_id=anchor.document_version_id
+           AND child.catalog_id=anchor.catalog_id AND child.category_key=anchor.category_key
+           AND child.status='approved'
+      ) children ON true
+     WHERE anchor.tenant_id=$1 AND anchor.status='approved'
        AND version.is_current=true AND version.status='ready' AND version.deleted_at IS NULL
        AND document.status='ready' AND document.deleted_at IS NULL
     UNION ALL
@@ -279,6 +332,7 @@ export function fuseCandidateRankings(retrieval, {
         knowledgeBaseId: candidate.knowledgeBaseId,
         publicationRevision: Number(candidate.publicationRevision),
         namespace: recordNamespaces[recordType],
+        categoryKey: candidate.categoryKey ?? null,
       };
       const current = fused.get(recordId);
       if (current && !sameScope(current, identity)) {
@@ -431,20 +485,28 @@ export function detectEntityAmbiguity(evidence, classification, resolution) {
   const tied = ranked.filter((candidate) => (
     topScore - Number(candidate.score ?? 0) <= confirmationTieWindow
   ));
+  const evidenceByRecordId = new Map(evidence.map((item) => [normalizeId(item.recordId), item]));
   const candidates = tied.map((candidate) => Object.freeze({
     recordId: candidate.recordId,
     recordType: candidate.recordType,
     itemKey: candidate.itemKey ?? null,
-    name: candidate.label ?? null,
+    name: candidate.recordType === 'FAQ'
+      ? evidenceByRecordId.get(normalizeId(candidate.recordId))?.sourceSection ?? candidate.label ?? null
+      : candidate.label ?? null,
     categoryKey: candidate.categoryKey ?? null,
     namespace: selectedNamespace,
     score: candidate.score,
     matchedPhrase: (candidate.signals ?? []).filter((signal) => signal.explicit === true)
       .sort((left, right) => Number(right.score ?? 0) - Number(left.score ?? 0))[0]?.phrase ?? null,
   }));
-  const distinct = new Set(candidates.map((candidate) => (
-    candidate.itemKey ?? candidate.categoryKey ?? candidate.recordId
-  )));
+  const distinct = new Set(candidates.map((candidate) => {
+    const source = evidenceByRecordId.get(normalizeId(candidate.recordId));
+    if (candidate.recordType === 'FAQ' && source) return [
+      'faq', source.documentId, source.sourceSection,
+      normalizedText(source.authoritativeData?.answer),
+    ].join(':');
+    return candidate.itemKey ?? candidate.categoryKey ?? candidate.recordId;
+  }));
   const detected = (classification?.requiresConfirmation === true || resolution?.action === 'CONFIRM')
     && distinct.size > 1;
   return Object.freeze({
@@ -568,6 +630,7 @@ export async function rankAndHydrateAuthoritativeEvidence({
       publication_revision: candidate.publicationRevision,
       rank: candidate.rank,
       rrf_score: candidate.rrfScore,
+      category_key: candidate.categoryKey ?? null,
     }));
     rows = await contextRunner(auth, async (client) => {
       const result = await client.query(authoritativeHydrationSql, [

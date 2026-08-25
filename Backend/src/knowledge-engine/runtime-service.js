@@ -381,13 +381,20 @@ function publicResult(observed, publications) {
     guidanceEvidence: Object.freeze(evidence.filter((source) => (
       source.recordType === 'CONVERSATION_NODE' && source.callerFacing === false
     ))),
-    entities: Object.freeze(evidence.filter((source) => source.recordType === 'CATALOG_ITEM')
-      .map((source) => ({
-        id: source.recordId, key: source.authoritativeData?.itemKey ?? null,
-        name: source.authoritativeData?.name ?? null,
-        category: source.authoritativeData?.category ?? null,
-        categoryKey: source.authoritativeData?.categoryKey ?? null,
-      }))),
+    entities: Object.freeze(evidence.filter((source) => (
+      ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(source.recordType)
+    )).map((source) => ({
+      id: source.recordId,
+      type: source.recordType === 'CATALOG_CATEGORY' ? 'CATEGORY' : 'ITEM',
+      key: source.recordType === 'CATALOG_CATEGORY'
+        ? source.authoritativeData?.categoryKey ?? null
+        : source.authoritativeData?.itemKey ?? null,
+      name: source.recordType === 'CATALOG_CATEGORY'
+        ? source.authoritativeData?.category ?? null
+        : source.authoritativeData?.name ?? null,
+      category: source.authoritativeData?.category ?? null,
+      categoryKey: source.authoritativeData?.categoryKey ?? null,
+    }))),
     evidenceIds: Object.freeze(selectedCallerFacing.map((source) => source.id)),
     retrievalTrace,
     // Publication availability is independent of whether this particular

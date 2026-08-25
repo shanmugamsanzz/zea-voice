@@ -74,7 +74,7 @@ const categoryDecision = planSafeKnowledgeResponse({
   authoritative: authoritative([categoryOne, categoryTwo]), runtimeProfile: { tools: [] },
 });
 assert.equal(categoryDecision.type, knowledgeEngineDecisionTypes.RESPONSE);
-assert.equal(categoryDecision.mode, knowledgeEngineResponseModes.GROUNDED_LLM);
+assert.equal(categoryDecision.mode, knowledgeEngineResponseModes.DETERMINISTIC);
 assert.deepEqual(new Set(categoryDecision.evidenceIds), new Set([categoryOne.id, categoryTwo.id]));
 
 const categoryWithLongHydratedDescription = source(
@@ -96,7 +96,37 @@ const alignedCategoryDecision = planSafeKnowledgeResponse({
   authoritative: authoritative([categoryWithLongHydratedDescription]), runtimeProfile: { tools: [] },
 });
 assert.equal(alignedCategoryDecision.type, knowledgeEngineDecisionTypes.RESPONSE);
-assert.equal(alignedCategoryDecision.mode, knowledgeEngineResponseModes.GROUNDED_LLM);
+assert.equal(alignedCategoryDecision.mode, knowledgeEngineResponseModes.DETERMINISTIC);
+
+const hydratedCategory = source(
+  'published:catalog_category:service-options', 'CATALOG_CATEGORY',
+  'Service Options. Approved service options. Available items: Starter Option, Advanced Option.', {
+    categoryKey: 'service-options', category: 'Service Options',
+    categoryDescription: 'Approved service options.',
+    children: [
+      { recordId: categoryOne.recordId, itemKey: 'starter-option', name: 'Starter Option' },
+      { recordId: categoryTwo.recordId, itemKey: 'advanced-option', name: 'Advanced Option' },
+    ],
+  },
+);
+const hydratedCategoryPlan = planSafeKnowledgeResponse({
+  input: inputFor(),
+  classification: classification(knowledgeQueryClasses.CATEGORY_OVERVIEW),
+  resolution: { candidate: {
+    recordId: hydratedCategory.recordId, recordType: 'CATALOG_CATEGORY',
+    entityType: 'CATEGORY', categoryKey: 'service-options', label: 'Service Options',
+  } },
+  authoritative: authoritative([hydratedCategory]), runtimeProfile: { tools: [] },
+});
+assert.deepEqual(hydratedCategoryPlan.evidenceIds, [hydratedCategory.id]);
+assert.equal(hydratedCategoryPlan.mode, knowledgeEngineResponseModes.DETERMINISTIC);
+assert.equal(hydratedCategoryPlan.response.text,
+  'Service Options. Approved service options. Available options: Starter Option, Advanced Option.');
+assert.equal(validateFinalKnowledgeResponse({
+  input: inputFor(),
+  answer: 'Service Options include an unpublished option.',
+  selectedEvidenceIds: [categoryOne.id], evidence: [hydratedCategory],
+}).valid, false);
 
 const second = source('published:faq:two', 'FAQ', 'Priority support is available.', {
   question: 'What is priority support?', answer: 'Priority support is available.',

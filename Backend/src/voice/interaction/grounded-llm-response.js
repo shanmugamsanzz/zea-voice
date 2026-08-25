@@ -40,12 +40,15 @@ function addSource(sources, seen, content, metadata = {}) {
 }
 
 function entity(value = {}, sourceId = null) {
-  const key = text(value.key ?? value.itemKey, 160);
-  const name = text(value.name, 240);
+  const entityType = text(value.entityType ?? value.type, 40).toLocaleUpperCase();
+  const categoryEntity = entityType === 'CATEGORY';
+  const key = text(value.key ?? value.itemKey ?? (categoryEntity ? value.categoryKey : null), 160);
+  const name = text(value.name ?? (categoryEntity ? value.category : null), 240);
   if (!key || !name) return null;
   return Object.freeze({
     key, name,
-    id: text(value.id ?? value.itemId, 100) || null,
+    id: text(value.id ?? value.recordId ?? value.itemId, 100) || null,
+    entityType: categoryEntity ? 'CATEGORY' : 'ITEM',
     category: text(value.category, 240) || null,
     categoryKey: text(value.categoryKey, 160) || null,
     sourceId,

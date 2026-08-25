@@ -170,6 +170,7 @@ export async function awaitLlmWithSafeLatency(work, {
   acknowledgementText,
   onAcknowledgement,
   completionTimeoutMs = env.LLM_REQUEST_TIMEOUT_MS,
+  postAcknowledgementTimeoutMs = env.VOICE_LLM_TURN_TIMEOUT_MS,
   cancel,
 } = {}) {
   if (!(tracker instanceof VoiceTurnLatencyTracker)) {
@@ -215,11 +216,15 @@ export async function awaitLlmWithSafeLatency(work, {
   tracker.markLatencyAcknowledgement();
   await onAcknowledgement?.(text);
   let completionTimer;
+  const postAcknowledgementWaitMs = Math.max(1, Math.min(
+    Number(completionTimeoutMs),
+    Number(postAcknowledgementTimeoutMs),
+  ));
   const completionDeadline = new Promise((_resolve, reject) => {
     completionTimer = setTimeout(() => {
       try { cancel?.(); } catch { /* best-effort cancellation */ }
       reject(timeoutError(voiceTurnStages.LLM));
-    }, Math.max(1, Number(completionTimeoutMs)));
+    }, postAcknowledgementWaitMs);
     completionTimer.unref?.();
   });
   try {
@@ -266,7 +271,7 @@ export async function runObservedKnowledgeTurn({
     cancel: dependencies.cancelRetrieval,
   });
   resolution = await refineResolution(
-    turnInput, publicationBundles, resolution, retrieval.channels?.qdrant ?? [],
+    turnInput, publicationBundles, resolution, classification, retrieval.channels?.qdrant ?? [],
     { resolve: dependencies.resolve },
   );
   const authoritative = await latency.measure(voiceTurnStages.HYDRATION, () => hydrate({

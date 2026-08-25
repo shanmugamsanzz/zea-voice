@@ -99,6 +99,22 @@ await assert.rejects(() => awaitLlmWithSafeLatency(
 ), (error) => error.code === 'VOICE_TURN_STAGE_TIMEOUT');
 assert.equal(cancelled, true);
 
+let postAcknowledgementCancelled = false;
+await assert.rejects(() => awaitLlmWithSafeLatency(
+  new Promise((resolve) => setTimeout(resolve, 200)),
+  {
+    tracker: new VoiceTurnLatencyTracker({ ...identity, turnId: 'turn-4b' }),
+    acknowledgementAfterMs: 2,
+    ttsReserveMs: 1,
+    completionTimeoutMs: 500,
+    postAcknowledgementTimeoutMs: 10,
+    onAcknowledgement: async () => {},
+    cancel: () => { postAcknowledgementCancelled = true; },
+  },
+), (error) => error.code === 'VOICE_TURN_STAGE_TIMEOUT');
+assert.equal(postAcknowledgementCancelled, true,
+  'An acknowledged LLM turn must not remain silent until the full provider timeout');
+
 const input = {
   tenantId: identity.tenantId, agentId: identity.agentId, callId: identity.callId,
   utterance: 'finalized tenant question', usageDirection: 'inbound',

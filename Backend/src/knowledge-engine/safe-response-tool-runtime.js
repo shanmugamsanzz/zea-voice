@@ -15,6 +15,11 @@ const deterministicIntentClasses = new Set([
   knowledgeQueryClasses.SAFETY_EMERGENCY,
 ]);
 
+const approvedDirectRecordTypes = new Set([
+  'FAQ',
+  'CONVERSATION_NODE',
+]);
+
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
@@ -26,6 +31,13 @@ function cleanText(value, maximum = 4_000) {
 
 function normalizedId(value) {
   return cleanText(value, 200).toLocaleLowerCase();
+}
+
+function joinSpokenFragments(values) {
+  const parts = values.map((value) => cleanText(value)).filter(Boolean);
+  return cleanText(parts.map((part, index) => (
+    index < parts.length - 1 && !/[.!?…]$/u.test(part) ? `${part}.` : part
+  )).join(' '));
 }
 
 function toolIdentity(value) {
@@ -137,12 +149,24 @@ function renderCatalogItem(source) {
   ].filter(Boolean).join('. '));
 }
 
+function renderCatalogCategory(source) {
+  const data = object(source?.authoritativeData);
+  const names = [...new Set((data.children ?? [])
+    .map((child) => cleanText(child?.name, 200)).filter(Boolean))];
+  return joinSpokenFragments([
+    cleanText(data.category, 200),
+    cleanText(data.categoryDescription, 800),
+    names.length ? `Available options: ${names.join(', ')}.` : null,
+  ]);
+}
+
 function directText(source) {
   const data = object(source?.authoritativeData);
   if (source?.recordType === 'FAQ') return cleanText(data.answer ?? source.content);
   if (source?.recordType === 'CONVERSATION_NODE') return cleanText(data.content ?? source.content);
   if (source?.recordType === 'WORKFLOW_RULE') return cleanText(data.responseTemplate ?? source.content);
   if (source?.recordType === 'CATALOG_ITEM') return renderCatalogItem(source);
+  if (source?.recordType === 'CATALOG_CATEGORY') return renderCatalogCategory(source);
   return cleanText(source?.content);
 }
 
@@ -150,6 +174,9 @@ function categoryText(resolution, evidence) {
   const candidate = resolution?.candidate;
   if (candidate?.entityType !== 'CATEGORY') return null;
   const categoryKey = normalizedId(candidate.categoryKey);
+  const category = evidence.find((source) => source.recordType === 'CATALOG_CATEGORY'
+    && normalizedId(source.authoritativeData?.categoryKey) === categoryKey);
+  if (category) return { text: renderCatalogCategory(category), evidence: [category] };
   const items = evidence.filter((source) => source.recordType === 'CATALOG_ITEM'
     && normalizedId(source.authoritativeData?.categoryKey) === categoryKey);
   if (!items.length) return null;
@@ -162,11 +189,11 @@ function categoryText(resolution, evidence) {
   if (categories.length > 1 || descriptions.length > 1) return null;
   const label = categories[0] ?? cleanText(candidate.label, 200);
   const description = descriptions[0] ?? null;
-  const text = cleanText([
+  const text = joinSpokenFragments([
     label,
     description,
     names.length ? `Available options: ${names.join(', ')}.` : null,
-  ].filter(Boolean).join('. '));
+  ]);
   return {
     text,
     evidence: items,
@@ -174,6 +201,16 @@ function categoryText(resolution, evidence) {
 }
 
 function searchableEvidenceText(source) {
+  if (source?.recordType === 'CATALOG_CATEGORY') {
+    const data = object(source.authoritativeData);
+    return cleanText([
+      data.category, data.categoryDescription,
+      ...(data.children ?? []).flatMap((child) => [
+        child?.name, child?.description, child?.price, child?.currency,
+      ]),
+    ].filter((value) => value !== null && value !== undefined).join(' '), 32_000)
+      .toLocaleLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim();
+  }
   if (source?.recordType === 'CATALOG_ITEM') {
     const facts = catalogFacts(source);
     return cleanText([
@@ -190,6 +227,10 @@ function searchableEvidenceText(source) {
 }
 
 function validationEvidence(source) {
+  if (source?.recordType === 'CATALOG_CATEGORY') return Object.freeze({
+    ...source,
+    content: renderCatalogCategory(source),
+  });
   if (source?.recordType !== 'CATALOG_ITEM') return source;
   const facts = catalogFacts(source);
   return Object.freeze({
@@ -275,16 +316,6 @@ function explicitComparisonEvidence(resolution, evidence) {
   if (!explicitIds.size) return [];
   return evidence.filter((source) => source.recordType === 'CATALOG_ITEM'
     && explicitIds.has(normalizedId(source.recordId)));
-}
-
-function explicitConversationGuidance(resolution, evidence) {
-  const recordIds = new Set((resolution?.namespaceCandidates?.CONVERSATION ?? [])
-    .filter((candidate) => candidate.explicit === true && Number(candidate.score ?? 0) >= 0.88)
-    .flatMap((candidate) => candidate.evidenceRecordIds ?? [candidate.recordId])
-    .map(normalizedId).filter(Boolean));
-  if (!recordIds.size) return [];
-  return evidence.filter((source) => source.recordType === 'CONVERSATION_NODE'
-    && recordIds.has(normalizedId(source.recordId)));
 }
 
 function withWorkflow(decision, workflow) {
@@ -459,16 +490,27 @@ export function planSafeKnowledgeResponse({
   if (classification?.intentClass === knowledgeQueryClasses.CATEGORY_OVERVIEW) {
     const rendered = categoryText(resolution, callerFacing);
     if (rendered) {
-      const guidance = explicitConversationGuidance(resolution, callerFacing);
-      return createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.RESPONSE, {
-        reason: 'grounded_category_response_required',
-        confidence: classification.confidence,
-        // Catalog rows remain authoritative for the available children. An
-        // exact tenant-published Conversation match may additionally guide
-        // the spoken overview, but unrelated retrieved guidance is excluded.
-        evidenceIds: evidenceIds([...rendered.evidence, ...guidance]),
-        mode: knowledgeEngineResponseModes.GROUNDED_LLM,
+      const selectedEvidenceIds = evidenceIds(rendered.evidence);
+      const validation = validateFinalKnowledgeResponse({
+        input, answer: rendered.text, selectedEvidenceIds, evidence,
       });
+      if (validation.valid) {
+        const categorySource = rendered.evidence.find((source) => (
+          source.recordType === 'CATALOG_CATEGORY'
+        )) ?? rendered.evidence[0];
+        return createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.RESPONSE, {
+          reason: 'approved_deterministic_category_response',
+          confidence: classification.confidence,
+          evidenceIds: validation.evidenceIds,
+          mode: knowledgeEngineResponseModes.DETERMINISTIC,
+          response: {
+            text: validation.answer,
+            recordId: categorySource.recordId,
+            recordType: categorySource.recordType,
+          },
+        });
+      }
+      return clarification('ambiguity', validation.reason, null, rendered.evidence);
     }
   }
   if (classification?.intentClass === knowledgeQueryClasses.COMPARISON_COMPLEX) {
@@ -492,8 +534,12 @@ export function planSafeKnowledgeResponse({
       mode: knowledgeEngineResponseModes.GROUNDED_LLM,
     });
   }
-  if (deterministicIntentClasses.has(classification?.intentClass) && callerFacing.length === 1) {
-    const source = callerFacing[0];
+  const approvedResolvedRoute = resolvedCallerFacing.length === 1
+    && resolution?.candidate?.explicit === true
+    && approvedDirectRecordTypes.has(String(resolvedCallerFacing[0]?.recordType).toUpperCase());
+  if ((deterministicIntentClasses.has(classification?.intentClass) && callerFacing.length === 1)
+    || approvedResolvedRoute) {
+    const source = approvedResolvedRoute ? resolvedCallerFacing[0] : callerFacing[0];
     const answer = directText(source);
     const validation = validateFinalKnowledgeResponse({
       input, answer, selectedEvidenceIds: [source.id], evidence,

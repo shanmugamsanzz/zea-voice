@@ -45,6 +45,10 @@ const identity = Object.freeze({
 const overview = 'எங்களிடம் Wellness மற்றும் Onco Care packages உள்ளன.';
 const acknowledgement = 'சரிங்க. எங்களிடம் உள்ள approved packages பற்றி சொல்லலாம்.';
 const phoneticAnswer = 'Onco Care package-ல் Onco Care First மற்றும் Onco Care Second உள்ளன.';
+const identityAnswer = 'நான் இந்த tenant-ன் published AI voice assistant.';
+const purposeAnswer = 'Published services பற்றிய தகவல் வழங்கவும், configured actions-க்கு உதவவும் பேசுகிறேன்.';
+const latestOverview = 'எங்களிடம் Wellness, Onco Care மற்றும் Organ-Specific packages உள்ளன.';
+const organSpecificAnswer = 'Organ-Specific package. Approved organ-specific screening options. Available options: Organ Option One, Organ Option Two.';
 
 function record(index, values) {
   const suffix = String(index).padStart(12, '0');
@@ -130,6 +134,62 @@ const records = Object.freeze([
       selectionRules: { selectable: true },
     },
   }),
+  record(6, {
+    type: 'faq',
+    question: 'Who are you?',
+    answer: identityAnswer,
+    name: 'Published identity answer',
+    aliases: ['யாருங்க நீங்க?', 'Who are you?'],
+    metadata: { conditions: { intentClass: 'KNOWN_INFORMATION' } },
+  }),
+  record(7, {
+    type: 'conversation_node',
+    question: 'Why are you calling?',
+    answer: purposeAnswer,
+    name: 'Published call purpose',
+    aliases: ['எதுக்கு phone பண்ணிருக்கீங்க?', 'Why are you calling?'],
+    metadata: { conditions: { intentClass: 'KNOWN_INFORMATION' } },
+  }),
+  record(8, {
+    type: 'conversation_node',
+    question: 'What packages are available?',
+    answer: latestOverview,
+    name: 'Published complete overview',
+    aliases: ['உங்ககிட்ட என்ன packagesலாம் இருக்கு?', 'What packages are available?'],
+    metadata: { conditions: { intentClass: 'CATEGORY_OVERVIEW' } },
+  }),
+  record(9, {
+    type: 'catalog_item',
+    question: 'Organ Option One',
+    answer: 'Organ Option One has approved screening details.',
+    name: 'Organ Option One',
+    category: 'Organ-Specific package',
+    aliases: ['Organ Option One'],
+    categoryAliases: ['Organ-Specific package'],
+    metadata: {
+      itemKey: 'organ-option-one',
+      categoryKey: 'organ-specific-package',
+      categoryDescription: 'Approved organ-specific screening options.',
+      description: 'Approved first organ screening details.',
+      selectionRules: { selectable: true },
+    },
+  }),
+  record(10, {
+    type: 'catalog_item',
+    question: 'Organ Option Two',
+    answer: 'Organ Option Two has approved screening details.',
+    name: 'Organ Option Two',
+    category: 'Organ-Specific package',
+    aliases: ['Organ Option Two'],
+    categoryAliases: ['Organ-Specific package'],
+    metadata: {
+      itemKey: 'organ-option-two',
+      categoryKey: 'organ-specific-package',
+      categoryDescription: 'Approved organ-specific screening options.',
+      description: 'Approved second organ screening details.',
+      selectionRules: { selectable: true },
+    },
+  }),
 ]);
 const job = Object.freeze({
   tenant_id: identity.tenantId,
@@ -158,12 +218,26 @@ function hydratedRow(candidate) {
   const source = recordsById.get(String(candidate.record_id));
   if (!source) return null;
   const metadata = source.entity_metadata ?? {};
-  const type = String(source.record_type).toUpperCase();
-  const authoritativeData = type === 'CATALOG_ITEM' ? {
+  const type = String(candidate.record_type ?? source.record_type).toUpperCase();
+  const authoritativeData = type === 'CATALOG_CATEGORY' ? {
+    categoryKey: candidate.category_key ?? metadata.categoryKey,
+    category: source.entity_category,
+    categoryDescription: metadata.categoryDescription,
+    children: records.filter((entry) => (
+      String(entry.record_type).toUpperCase() === 'CATALOG_ITEM'
+      && entry.entity_metadata?.categoryKey === (candidate.category_key ?? metadata.categoryKey)
+    )).map((entry) => ({
+      recordId: entry.record_id,
+      itemKey: entry.entity_metadata?.itemKey,
+      name: entry.entity_name,
+      description: entry.entity_metadata?.description,
+    })),
+  } : type === 'CATALOG_ITEM' ? {
     itemKey: metadata.itemKey,
     categoryKey: metadata.categoryKey,
     name: source.entity_name,
     category: source.entity_category,
+    categoryDescription: metadata.categoryDescription,
     description: metadata.description,
     sourceText: source.answer,
     selectionRules: metadata.selectionRules,
@@ -212,6 +286,10 @@ function contextRunner(_auth, operation) {
 function expectedAnswer(turn) {
   if (turn.id === 'acknowledgement') return acknowledgement;
   if (turn.id === 'phonetic-entity' || turn.contextDependent) return phoneticAnswer;
+  if (turn.id === 'identity') return identityAnswer;
+  if (turn.id === 'purpose') return purposeAnswer;
+  if (turn.id === 'latest-overview') return latestOverview;
+  if (turn.id === 'resolved-category') return organSpecificAnswer;
   return overview;
 }
 
@@ -255,9 +333,12 @@ async function verifyContinuousSentenceAudio(playbackGroupId) {
   });
   const metrics = [];
   let sentenceFailures = 0;
-  for (const [generationId, value] of [['sentence-1', 1], ['sentence-2', 2]]) {
+  const enqueueFrames = async (generationId, value, count, chunkDelayMs = 0) => {
     try {
-      for (let frameIndex = 0; frameIndex < 6; frameIndex += 1) {
+      for (let frameIndex = 0; frameIndex < count; frameIndex += 1) {
+        if (chunkDelayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, chunkDelayMs));
+        }
         await queue.enqueue({
           data: Buffer.alloc(160, value), durationMs: 20, generationId,
           playbackGroupId, cancellationVersion: 0,
@@ -267,7 +348,10 @@ async function verifyContinuousSentenceAudio(playbackGroupId) {
       sentenceFailures += 1;
       throw error;
     }
-  }
+  };
+  // Pre-buffer the first sentence, then deliver the look-ahead sentence as
+  // delayed streaming chunks while Plivo pacing is already active.
+  await enqueueFrames('sentence-1', 1, 16);
   const pacer = new AudioPacer({
     queue,
     send: async () => ({ deliveryMs: 0, bufferedAmountAfter: 0 }),
@@ -280,7 +364,11 @@ async function verifyContinuousSentenceAudio(playbackGroupId) {
     onPlaybackMetric: (metric) => metrics.push(metric),
   });
   pacer.start();
-  await pacer.drain();
+  const delayedLookahead = (async () => {
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    await enqueueFrames('sentence-2', 2, 12, 5);
+  })();
+  await Promise.all([delayedLookahead, pacer.drain()]);
   queue.close();
   await pacer.stop();
   return Object.freeze({
@@ -298,6 +386,8 @@ let groundingRejections = 0;
 let memoryFollowUps = 0;
 let audioUnderruns = 0;
 let ttsSentenceFailures = 0;
+let delayedLlmTurns = 0;
+const acknowledgementToAnswerSamples = [];
 // The observed utterances belong only to this regression fixture. Runtime
 // matching continues to come entirely from the publication indexes above.
 const calls = Object.freeze([
@@ -314,8 +404,23 @@ const calls = Object.freeze([
       expectedKind: 'response', contextDependent: true, expectedFromTurnId: 'phonetic-entity',
     }),
   ]) }),
+  Object.freeze({ id: 'observed-call-3', turns: Object.freeze([
+    Object.freeze({
+      id: 'identity', utterance: 'யாருங்க நீங்க?', expectedKind: 'response',
+    }),
+    Object.freeze({
+      id: 'purpose', utterance: 'எதுக்கு phone பண்ணிருக்கீங்க?', expectedKind: 'response',
+    }),
+    Object.freeze({
+      id: 'latest-overview', utterance: 'உங்ககிட்ட என்ன packagesலாம் இருக்கு?', expectedKind: 'response',
+    }),
+    Object.freeze({
+      id: 'resolved-category', utterance: 'Organ-Specific package பத்தி சொல்லுங்க',
+      expectedKind: 'response',
+    }),
+  ]) }),
 ]);
-assert.equal(calls.length, 2, 'The production regression must replay exactly two isolated calls');
+assert.equal(calls.length, 3, 'The regression must preserve two prior calls and the latest live call');
 for (let pass = 1; pass <= repeats; pass += 1) {
   for (let callIndex = 0; callIndex < calls.length; callIndex += 1) {
     const call = calls[callIndex];
@@ -385,14 +490,15 @@ for (let pass = 1; pass <= repeats; pass += 1) {
           entities: result.entities,
           memory: memory.snapshot(),
         })}`);
-      assert.equal(result.decision.mode, knowledgeEngineResponseModes.GROUNDED_LLM);
-      const final = finalizeGroundedLlmResponse({
-        input,
-        plan: result.decision,
-        answer: expectedAnswer(turn),
-        selectedEvidenceIds: result.evidenceIds,
-        authoritative: result.authoritative,
-      });
+      const final = result.decision.mode === knowledgeEngineResponseModes.DETERMINISTIC
+        ? result.decision
+        : finalizeGroundedLlmResponse({
+          input,
+          plan: result.decision,
+          answer: expectedAnswer(turn),
+          selectedEvidenceIds: result.evidenceIds,
+          authoritative: result.authoritative,
+        });
       if (final.type !== knowledgeEngineDecisionTypes.RESPONSE) groundingRejections += 1;
       assert.equal(final.type, knowledgeEngineDecisionTypes.RESPONSE);
       assert.equal(final.response.text, expectedAnswer(turn));
@@ -405,36 +511,64 @@ for (let pass = 1; pass <= repeats; pass += 1) {
         turnId: `${pass}-${turn.id}`,
       });
       const spoken = [];
-      const delayed = await awaitLlmWithSafeLatency(
-        new Promise((resolve) => setTimeout(() => resolve(final.response.text), 15)),
-        {
-          tracker,
-          acknowledgementAfterMs: 2,
-          ttsReserveMs: 1,
-          completionTimeoutMs: 200,
-          acknowledgementText: 'One moment while I check.',
-          onAcknowledgement: async (text) => spoken.push({ type: 'acknowledgement', text }),
-        },
-      );
-      assert.equal(delayed.acknowledged, true);
-      spoken.push({ type: 'final', text: delayed.value });
-      assert.deepEqual(spoken.map((entry) => entry.type), ['acknowledgement', 'final']);
-      assert.equal(spoken[1].text, expectedAnswer(turn));
+      if (result.decision.mode === knowledgeEngineResponseModes.GROUNDED_LLM) {
+        const delayed = await awaitLlmWithSafeLatency(
+          new Promise((resolve) => setTimeout(() => resolve(final.response.text), 15)),
+          {
+            tracker,
+            acknowledgementAfterMs: 2,
+            ttsReserveMs: 1,
+            completionTimeoutMs: 200,
+            acknowledgementText: 'One moment while I check.',
+            onAcknowledgement: async (text) => spoken.push({ type: 'acknowledgement', text }),
+          },
+        );
+        assert.equal(delayed.acknowledged, true);
+        spoken.push({ type: 'final', text: delayed.value });
+        assert.deepEqual(spoken.map((entry) => entry.type), ['acknowledgement', 'final']);
+      } else {
+        spoken.push({ type: 'final', text: final.response.text });
+        assert.deepEqual(spoken.map((entry) => entry.type), ['final']);
+      }
+      assert.equal(spoken.at(-1).text, expectedAnswer(turn));
       tracker.record(voiceTurnStages.FIRST_AUDIO_DELIVERY, 800);
       const firstAudioMs = tracker.snapshot().firstAudioMs;
       firstAudioSamples.push(firstAudioMs);
       assert.ok(firstAudioMs < fixture.requirements.maximumFirstAudioMs);
       assert.doesNotMatch(spoken.map((entry) => entry.text).join(' '),
         /One moment.*clear|One moment.*clarify/iu);
+      const resolvedCandidate = result.resolution?.candidate ?? null;
+      const resolvedCategorySource = result.authoritative.evidence.find((source) => (
+        source.recordType === 'CATALOG_CATEGORY'
+        && source.recordId === final.response?.recordId
+      )) ?? null;
+      const memoryCategory = resolvedCandidate?.entityType === 'CATEGORY' ? {
+        id: resolvedCategorySource?.recordId ?? final.response?.recordId ?? null,
+        recordId: resolvedCategorySource?.recordId ?? final.response?.recordId ?? null,
+        key: resolvedCategorySource?.authoritativeData?.categoryKey
+          ?? resolvedCandidate.categoryKey,
+        name: resolvedCategorySource?.authoritativeData?.category
+          ?? resolvedCandidate.label,
+        description: resolvedCategorySource?.authoritativeData?.categoryDescription
+          ?? resolvedCandidate.categoryDescription,
+      } : null;
       memory.applyEngineDecision(final, {
-        entity: result.entities[0] ?? null,
-        explicitEntity: result.entities.length > 0,
+        entity: memoryCategory ? null : (result.entities[0] ?? null),
+        category: memoryCategory,
+        explicitEntity: !memoryCategory && result.entities.length > 0,
+        explicitCategory: Boolean(memoryCategory),
         citedEvidence: result.authoritative.evidence,
       });
+      if (turn.id === 'resolved-category') {
+        assert.equal(memory.snapshot().activeCategory?.id, final.response.recordId);
+        assert.equal(memory.snapshot().activeEntity, null);
+      }
       if (turn.contextDependent) {
         memoryFollowUps += 1;
         assert.equal(result.resolution.contextDependent, true,
-          `${call.id}, ${turn.id}: the follow-up did not use current-call memory`);
+          `${call.id}, ${turn.id}: the follow-up did not use current-call memory ${JSON.stringify({
+            resolution: result.resolution, memory: input.memory,
+          })}`);
         const prior = verified.findLast((entry) => (
           entry.pass === pass && entry.callId === call.id && entry.id === turn.expectedFromTurnId
         ));
@@ -459,6 +593,35 @@ for (let pass = 1; pass <= repeats; pass += 1) {
     audioUnderruns += audio.underruns;
     ttsSentenceFailures += audio.sentenceFailures;
   }
+  const delayedTracker = new VoiceTurnLatencyTracker({
+    tenantId: identity.tenantId,
+    agentId: identity.agentId,
+    callId: `delayed-llm-${pass}`,
+    turnId: String(pass),
+  });
+  let acknowledgedAt = null;
+  const delayedStartedAt = performance.now();
+  const delayedLlm = await awaitLlmWithSafeLatency(
+    new Promise((resolve) => setTimeout(() => resolve('validated delayed answer'), 650)),
+    {
+      tracker: delayedTracker,
+      acknowledgementAfterMs: 300,
+      ttsReserveMs: 200,
+      completionTimeoutMs: 2_000,
+      acknowledgementText: 'Configured tenant latency acknowledgement.',
+      onAcknowledgement: async () => { acknowledgedAt = performance.now(); },
+    },
+  );
+  const completedAt = performance.now();
+  assert.equal(delayedLlm.acknowledged, true);
+  assert.equal(delayedLlm.value, 'validated delayed answer');
+  assert.ok(acknowledgedAt !== null);
+  const acknowledgementToAnswerMs = completedAt - acknowledgedAt;
+  acknowledgementToAnswerSamples.push(acknowledgementToAnswerMs);
+  assert.ok(acknowledgementToAnswerMs < 500,
+    `pass ${pass}: acknowledgement-to-answer gap was ${acknowledgementToAnswerMs.toFixed(2)}ms`);
+  assert.ok(acknowledgedAt - delayedStartedAt < 2_000);
+  delayedLlmTurns += 1;
 }
 
 const percentile95 = (samples) => {
@@ -471,11 +634,12 @@ assert.equal(groundingRejections, 0);
 assert.equal(memoryFollowUps, repeats);
 assert.equal(audioUnderruns, 0);
 assert.equal(ttsSentenceFailures, 0);
+assert.equal(delayedLlmTurns, repeats);
 assert.equal(verified.length, repeats * calls.reduce((total, call) => total + call.turns.length, 0));
 assert.ok(percentile95(retrievalSamples) < fixture.requirements.maximumRetrievalMs);
 assert.ok(percentile95(firstAudioSamples) < fixture.requirements.maximumFirstAudioMs);
 console.log(JSON.stringify({
-  gate: 'two-live-call-production-regression',
+  gate: 'real-streaming-live-call-production-regression',
   passed: true,
   repeats,
   totalTurns: verified.length,
@@ -486,6 +650,9 @@ console.log(JSON.stringify({
   memoryFollowUps,
   audioUnderruns,
   ttsSentenceFailures,
+  delayedLlmTurns,
+  acknowledgementToAnswerP95Ms:
+    Math.round(percentile95(acknowledgementToAnswerSamples) * 100) / 100,
   retrievalP95Ms: Math.round(percentile95(retrievalSamples) * 100) / 100,
   firstAudioP95Ms: percentile95(firstAudioSamples),
   verified,

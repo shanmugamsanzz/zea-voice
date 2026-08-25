@@ -22,20 +22,24 @@ function parseFaq(extraction) {
   const flush = () => {
     if (current?.question && current.answer.length) {
       const answer = current.answer.join(' ').trim();
-      const questions = [...new Map([current.question, ...current.aliases]
+      const aliases = [...new Map(current.aliases
+        .filter((value) => value.toLocaleLowerCase() !== current.question.toLocaleLowerCase())
         .map((value) => [value.toLocaleLowerCase(), value])).values()];
-      for (const question of questions) {
-        entries.push({
-          question,
-          answer,
-          metadata: current.intentClass ? { intentClass: current.intentClass } : {},
-          sourcePageStart: current.pageNumber,
-          sourcePageEnd: current.lastPageNumber,
-          sourceSection: current.question,
-          sourceLineStart: current.lineNumber,
-          sourceLineEnd: current.lastLineNumber,
-        });
-      }
+      // Aliases are lookup phrases for one authoritative FAQ; they are not
+      // independent questions or caller-facing answer candidates.
+      entries.push({
+        question: current.question,
+        answer,
+        metadata: {
+          ...(current.intentClass ? { intentClass: current.intentClass } : {}),
+          ...(aliases.length ? { aliases } : {}),
+        },
+        sourcePageStart: current.pageNumber,
+        sourcePageEnd: current.lastPageNumber,
+        sourceSection: current.question,
+        sourceLineStart: current.lineNumber,
+        sourceLineEnd: current.lastLineNumber,
+      });
     }
     current = null;
   };

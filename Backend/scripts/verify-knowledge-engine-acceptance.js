@@ -67,12 +67,25 @@ function hydrationDependencies(input, records) {
             const source = byId.get(String(candidate.record_id));
             if (!source) return [];
             const metadata = source.entity_metadata ?? {};
-            const recordType = String(source.record_type).toUpperCase();
+            const recordType = String(candidate.record_type ?? source.record_type).toUpperCase();
             const callerFacing = recordType !== 'WORKFLOW_RULE'
               || String(metadata.actionConfig?.responseMode ?? '').toLowerCase() === 'exact';
             const authoritativeData = recordType === 'FAQ'
               ? { question: source.question, answer: source.answer }
-              : recordType === 'CATALOG_ITEM'
+              : recordType === 'CATALOG_CATEGORY'
+                ? {
+                  categoryKey: candidate.category_key,
+                  category: source.entity_category,
+                  categoryDescription: metadata.categoryDescription ?? null,
+                  children: records.filter((record) => (
+                    String(record.record_type).toUpperCase() === 'CATALOG_ITEM'
+                    && record.entity_metadata?.categoryKey === candidate.category_key
+                  )).map((record) => ({
+                    recordId: record.record_id, itemKey: record.entity_metadata?.itemKey,
+                    name: record.entity_name, description: record.answer,
+                  })),
+                }
+                : recordType === 'CATALOG_ITEM'
                 ? {
                   itemKey: metadata.itemKey, categoryKey: metadata.categoryKey,
                   name: source.entity_name, category: source.entity_category,
@@ -172,13 +185,8 @@ for (let pass = 1; pass <= repeats; pass += 1) {
       const result = await observed(engine, utterance, { turn: pass, language: fixture.language });
       assert.equal(result.decision.type, knowledgeEngineDecisionTypes.RESPONSE,
         `${fixture.industry}: ${utterance}`);
-      assert.equal(result.decision.mode, knowledgeEngineResponseModes.GROUNDED_LLM);
-      const finalized = finalizeGroundedLlmResponse({
-        input: result.input, plan: result.decision, answer: fixture.fact,
-        selectedEvidenceIds: result.decision.evidenceIds,
-        authoritative: result.authoritative,
-      });
-      assert.equal(finalized.type, knowledgeEngineDecisionTypes.RESPONSE);
+      assert.equal(result.decision.mode, knowledgeEngineResponseModes.DETERMINISTIC);
+      const finalized = result.decision;
       assert.equal(finalized.response.text, fixture.fact);
       assert.equal(result.authoritative.hydrationQueryCount, 1);
       assert.doesNotMatch(finalized.response.text, /ITEM(?:_KEY)?\s*:|ALIASES\s*:|\{\s*"/iu);
@@ -295,8 +303,10 @@ for (let pass = 1; pass <= repeats; pass += 1) {
 
   const category = await observed(engine, 'Services', { turn: pass });
   assert.equal(category.decision.type, knowledgeEngineDecisionTypes.RESPONSE);
-  assert.equal(category.decision.mode, knowledgeEngineResponseModes.GROUNDED_LLM);
-  assertPublishedSources(category, 4);
+  assert.equal(category.decision.mode, knowledgeEngineResponseModes.DETERMINISTIC);
+  assertPublishedSources(category, 1);
+  assert.equal(category.authoritative.evidence[0].recordType, 'CATALOG_CATEGORY');
+  assert.equal(category.authoritative.evidence[0].authoritativeData.children.length, 4);
   metrics.category += 1;
 
   const comparison = await observed(engine, 'compare Alpha Service and Beta Service', {
@@ -462,7 +472,7 @@ for (let pass = 1; pass <= repeats; pass += 1) {
   });
   assert.equal(result.route, 'knowledge_engine');
   assert.equal(result.decision.type, knowledgeEngineDecisionTypes.RESPONSE);
-  assert.equal(result.decision.mode, knowledgeEngineResponseModes.GROUNDED_LLM);
+  assert.equal(result.decision.mode, knowledgeEngineResponseModes.DETERMINISTIC);
   assert.equal(result.authoritative.hydrationQueryCount, 1);
   assert.deepEqual(result.publicationRevisions, [{
     knowledgeBaseId: fixture.kbId, publicationRevision: fixture.revision,

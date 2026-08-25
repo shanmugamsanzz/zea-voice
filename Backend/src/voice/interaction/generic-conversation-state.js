@@ -58,9 +58,11 @@ function recent(messages, turns) {
 
 function cleanEntity(value = {}) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const id = cleanText(value.id ?? value.itemId, 100);
-  const key = cleanText(value.key ?? value.itemKey, 160);
-  const name = cleanText(value.name, 240);
+  const id = cleanText(value.id ?? value.recordId ?? value.itemId, 100);
+  const entityType = cleanText(value.entityType ?? value.type, 40).toLocaleUpperCase();
+  const categoryEntity = entityType === 'CATEGORY';
+  const key = cleanText(value.key ?? value.itemKey ?? (categoryEntity ? value.categoryKey : null), 160);
+  const name = cleanText(value.name ?? (categoryEntity ? value.category : null), 240);
   if (!id && !key && !name) return null;
   return Object.freeze({
     id: id || null, key: key || null, name: name || key || id,
@@ -322,8 +324,20 @@ export function openGenericConversationState(identity, settings = {}, now = Date
         state.knownEntities = update.contextDependent === true
           ? uniqueEntities([...selected, ...state.knownEntities])
           : selected;
-        state.activeEntity = selected[0];
-        state.activeCategory = cleanCategory(selected[0]) ?? state.activeCategory;
+        if (selected.length === 1) {
+          state.activeEntity = selected[0];
+          state.activeCategory = cleanCategory(selected[0]) ?? state.activeCategory;
+        } else {
+          // Multi-record evidence (for example a comparison) has no canonical
+          // single winner. Never persist the first array element as though the
+          // caller selected it.
+          state.activeEntity = null;
+          const categories = selected.map(cleanCategory).filter(Boolean);
+          const categoryKeys = new Set(categories.map((entry) => (
+            cleanText(entry.key ?? entry.name, 160).toLocaleLowerCase()
+          )).filter(Boolean));
+          state.activeCategory = categoryKeys.size === 1 ? categories[0] : null;
+        }
         if (explicitSelection) {
           state.pendingQuestion = null;
           state.pendingClarification = null;

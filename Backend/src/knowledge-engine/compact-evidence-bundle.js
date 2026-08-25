@@ -34,6 +34,21 @@ function compactAuthoritativeData(source) {
     relationships: Object.freeze(object(data.relationships)),
     selectionRules: Object.freeze(object(data.selectionRules)),
   });
+  if (source?.recordType === 'CATALOG_CATEGORY') return Object.freeze({
+    categoryKey: data.categoryKey ?? null,
+    category: cleanText(data.category, 240),
+    categoryAliases: Object.freeze((data.categoryAliases ?? []).slice(0, 12)
+      .map((value) => cleanText(value, 160))),
+    categoryDescription: cleanText(data.categoryDescription, 1_200),
+    children: Object.freeze((data.children ?? []).slice(0, 50).map((child) => Object.freeze({
+      recordId: child.recordId ?? null,
+      itemKey: child.itemKey ?? null,
+      name: cleanText(child.name, 240),
+      description: cleanText(child.description, 600),
+      price: child.price ?? null,
+      currency: cleanText(child.currency, 20),
+    }))),
+  });
   if (source?.recordType === 'FAQ') return Object.freeze({
     question: cleanText(data.question, 600), answer: cleanText(data.answer, 2_000),
   });
@@ -100,13 +115,26 @@ function canonicalEntity(resolution, evidence) {
   const hydrated = evidence.find((source) => (
     normalizedId(source.recordId) === normalizedId(candidate.recordId)
   ));
+  if (!hydrated) return null;
   const data = object(hydrated?.authoritativeData);
+  const entityType = candidate.entityType
+    ?? (hydrated.recordType === 'CATALOG_CATEGORY' ? 'CATEGORY' : 'ITEM');
+  const category = entityType === 'CATEGORY';
+  const key = category
+    ? candidate.categoryKey ?? data.categoryKey
+    : candidate.itemKey ?? data.itemKey;
+  const name = category
+    ? candidate.label ?? data.category
+    : candidate.label ?? data.name;
   return Object.freeze({
-    recordId: candidate.recordId ?? hydrated?.recordId ?? null,
-    entityType: candidate.entityType ?? null,
+    id: hydrated.recordId,
+    recordId: hydrated.recordId,
+    key: key ?? null,
+    entityType,
     itemKey: candidate.itemKey ?? data.itemKey ?? null,
     categoryKey: candidate.categoryKey ?? data.categoryKey ?? null,
-    name: cleanText(candidate.label ?? data.name ?? data.category, 240),
+    name: cleanText(name, 240),
+    category: cleanText(data.category, 240) || null,
     explicit: candidate.explicit === true,
   });
 }

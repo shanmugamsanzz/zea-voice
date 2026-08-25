@@ -119,10 +119,24 @@ export async function prepareKnowledgeQuery(input, publicationBundles, options =
 }
 
 export async function refineKnowledgeResolution(
-  input, publicationBundles, currentResolution, semanticMatches = [], dependencies = {},
+  input, publicationBundles, currentResolution, classification, semanticMatches = [], dependencies = {},
 ) {
   if (!Array.isArray(semanticMatches) || semanticMatches.length === 0) return currentResolution;
-  if (currentResolution?.explicitEntity === true) return currentResolution;
+  const selected = classification?.candidate ?? currentResolution?.candidate;
+  // Semantic search may recover an unresolved turn, but it must not replace a
+  // resolved FAQ, Conversation, Workflow or Catalog route with another type.
+  if (selected?.explicit === true && Number(selected.score ?? currentResolution?.score ?? 0) >= 0.88) {
+    return currentResolution;
+  }
+  const expectedTypes = Object.freeze({
+    CATALOG: new Set(['CATALOG_ITEM', 'CATALOG_CATEGORY']),
+    FAQ: new Set(['FAQ']), CONVERSATION: new Set(['CONVERSATION_NODE']),
+    WORKFLOW: new Set(['WORKFLOW_RULE']), GENERAL: new Set(['KNOWLEDGE_CHUNK']),
+  })[classification?.selectedNamespace ?? currentResolution?.candidateNamespace];
+  const scopedSemanticMatches = expectedTypes
+    ? semanticMatches.filter((candidate) => expectedTypes.has(String(candidate.recordType ?? '').toUpperCase()))
+    : semanticMatches;
+  if (!scopedSemanticMatches.length) return currentResolution;
   const resolve = dependencies.resolve ?? resolvePublishedEntityRoute;
-  return resolve(input, publicationBundles, { semanticMatches });
+  return resolve(input, publicationBundles, { semanticMatches: scopedSemanticMatches });
 }

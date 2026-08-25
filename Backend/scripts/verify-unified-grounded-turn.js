@@ -237,6 +237,104 @@ const catalogTurn = applyUnifiedGroundedTurn({
 assert.equal(catalogTurn.valid, true);
 assert.equal(catalogTurn.state.knownEntities[0].key, 'current-service',
   'One cited Catalog item must become the canonical selected entity');
+assert.equal(catalogTurn.state.activeEntity.id, catalogEvidence.recordId,
+  'Validated Catalog identity must retain its authoritative record ID in call memory');
+
+const categoryMemory = openGenericConversationState(
+  { ...identity, callId: 'call-category-memory' }, {}, 1,
+  { activeEntity: { id: 'stale-record', key: 'stale-item', name: 'Stale Item' } },
+);
+categoryMemory.beginTurn('category-turn');
+const categoryEvidence = {
+  id: 'category-source', recordId: 'category-record', recordType: 'CATALOG_CATEGORY',
+  callerFacing: true, retrievalContext: 'primary', channels: ['structured'],
+  content: 'Service Options. Approved services. Available options: Current Service, Alternate Service.',
+  authoritativeData: {
+    categoryKey: 'services', category: 'Service Options', categoryDescription: 'Approved services.',
+    children: [
+      { recordId: catalogEvidence.recordId, itemKey: 'current-service', name: 'Current Service' },
+      { recordId: 'alternate-record', itemKey: 'alternate-service', name: 'Alternate Service' },
+    ],
+  },
+};
+const categoryTurn = applyUnifiedGroundedTurn({
+  rawDecision: unifiedDecision({
+    decision: 'answer', answer: categoryEvidence.content, evidenceIds: ['category-source'],
+    stateUpdate: {
+      requestType: 'category_overview', knownEntityKeys: ['services'], contextDependent: false,
+    },
+    pendingQuestion: null, toolRequest: null,
+  }),
+  groundingEnvelope: {
+    found: true,
+    sources: [{
+      id: 'category-source', recordId: categoryEvidence.recordId,
+      recordType: categoryEvidence.recordType, content: categoryEvidence.content,
+      authoritativeData: categoryEvidence.authoritativeData,
+    }],
+    entities: [{
+      id: categoryEvidence.recordId, key: 'services', name: 'Service Options',
+      entityType: 'CATEGORY', category: 'Service Options', categoryKey: 'services',
+      sourceId: 'category-source',
+    }],
+  },
+  memory: categoryMemory, turnToken: 'category-turn', evidence: [categoryEvidence],
+  finalizedUtterance: 'Tell me about the service options.',
+});
+assert.equal(categoryTurn.valid, true);
+assert.equal(categoryTurn.state.activeEntity, null);
+assert.equal(categoryTurn.state.activeCategory.id, categoryEvidence.recordId);
+assert.equal(categoryTurn.state.activeCategory.key, 'services',
+  'Validated category ID and key must replace stale item memory');
+categoryMemory.close();
+
+const comparisonMemory = openGenericConversationState(
+  { ...identity, callId: 'call-multi-record-memory' }, {}, 1,
+);
+comparisonMemory.beginTurn('comparison-turn');
+const alternateEvidence = {
+  ...catalogEvidence,
+  id: 'alternate-source', recordId: 'alternate-record',
+  content: 'Alternate Service includes approved alternate support.',
+  authoritativeData: {
+    ...catalogEvidence.authoritativeData,
+    itemKey: 'alternate-service', name: 'Alternate Service',
+  },
+};
+const comparisonTurn = applyUnifiedGroundedTurn({
+  rawDecision: unifiedDecision({
+    decision: 'answer',
+    answer: `${catalogEvidence.content} ${alternateEvidence.content}`,
+    evidenceIds: ['catalog-source', 'alternate-source'],
+    stateUpdate: {
+      requestType: 'comparison',
+      knownEntityKeys: ['current-service', 'alternate-service'], contextDependent: false,
+    },
+    pendingQuestion: null, toolRequest: null,
+  }),
+  groundingEnvelope: {
+    found: true,
+    sources: [
+      { id: 'catalog-source', recordId: catalogEvidence.recordId, recordType: 'CATALOG_ITEM',
+        content: catalogEvidence.content, authoritativeData: catalogEvidence.authoritativeData },
+      { id: 'alternate-source', recordId: alternateEvidence.recordId, recordType: 'CATALOG_ITEM',
+        content: alternateEvidence.content, authoritativeData: alternateEvidence.authoritativeData },
+    ],
+    entities: [
+      { id: catalogEvidence.recordId, key: 'current-service', name: 'Current Service',
+        category: 'Services', categoryKey: 'services', sourceId: 'catalog-source' },
+      { id: alternateEvidence.recordId, key: 'alternate-service', name: 'Alternate Service',
+        category: 'Services', categoryKey: 'services', sourceId: 'alternate-source' },
+    ],
+  },
+  memory: comparisonMemory, turnToken: 'comparison-turn',
+  evidence: [catalogEvidence, alternateEvidence], finalizedUtterance: 'Compare both services.',
+});
+assert.equal(comparisonTurn.valid, true);
+assert.equal(comparisonTurn.state.activeEntity, null,
+  'Multi-record evidence must not persist an arbitrary first item as the active entity');
+assert.equal(comparisonTurn.state.knownEntities.length, 2);
+comparisonMemory.close();
 
 const guidanceMemory = openGenericConversationState(
   { ...identity, callId: 'call-selected-guidance' }, {}, 1,

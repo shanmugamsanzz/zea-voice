@@ -672,8 +672,15 @@ export function resolvePublishedEntityRoute(input, publicationBundles, options =
   const preliminaryCandidate = fallbackRouteCandidate;
   const preliminaryNamespace = candidateNamespace(preliminaryCandidate);
   const preliminaryIntent = normalizedIntentClass(preliminaryCandidate?.intentClass);
-  const lockPublishedRoute = absoluteRouteIntents.has(preliminaryIntent)
-    && explicitPriorityRoute(preliminaryCandidate);
+  const strongestCatalog = initialCatalogRanked[0] ?? null;
+  // Resolve a high-confidence published intent namespace before accepting an
+  // entity candidate. A distinctly stronger explicit Catalog entity can still
+  // override a generic route, while identity, call-purpose, acknowledgement
+  // and overview routes cannot be displaced by unrelated entity vocabulary.
+  const publishedRouteOutranksCatalog = !strongestCatalog
+    || Number(preliminaryCandidate?.score ?? 0) > Number(strongestCatalog.score ?? 0) + 0.02;
+  const lockPublishedRoute = explicitPriorityRoute(preliminaryCandidate)
+    && (absoluteRouteIntents.has(preliminaryIntent) || publishedRouteOutranksCatalog);
 
   const catalogRanked = rankCandidates(catalog);
   const semanticRanked = rankCandidates(semantic);
@@ -681,11 +688,19 @@ export function resolvePublishedEntityRoute(input, publicationBundles, options =
     && catalogRanked[0].score >= 0.88;
   const confirmableCatalog = catalogRanked[0]?.explicit === true
     && catalogRanked[0].score >= 0.68;
+  const canonicalContextCandidate = contextualFollowUp
+    && catalogRanked[0]?.method === 'context';
   let selectedNamespace = null;
   let selected = new Map();
   if (lockPublishedRoute && preliminaryNamespace) {
     selectedNamespace = preliminaryNamespace;
     selected = routeGroups.get(preliminaryNamespace) ?? new Map();
+  } else if (canonicalContextCandidate) {
+    // A real contextual reference belongs to the isolated call's canonical
+    // entity/category. Fuzzy FAQ or Conversation vocabulary must not replace
+    // it unless an absolute high-confidence published route was locked above.
+    selectedNamespace = knowledgeCandidateNamespaces.CATALOG;
+    selected = catalog;
   } else if (confirmableCatalog) {
     selectedNamespace = knowledgeCandidateNamespaces.CATALOG;
     selected = catalog;

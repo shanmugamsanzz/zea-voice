@@ -201,7 +201,9 @@ async function loadSemanticRecords(job, contextRunner) {
           f.source_line_start, f.source_line_end, f.question, f.answer,
           ('Question: ' || f.question || E'\nAnswer: ' || f.answer) AS content,
           NULL::text AS entity_name, NULL::text AS entity_category,
-          '[]'::jsonb AS entity_aliases, '[]'::jsonb AS entity_category_aliases,
+          CASE WHEN jsonb_typeof(f.metadata->'aliases')='array'
+            THEN f.metadata->'aliases' ELSE '[]'::jsonb END AS entity_aliases,
+          '[]'::jsonb AS entity_category_aliases,
           f.metadata AS entity_metadata
          FROM faq_entries f
          JOIN knowledge_documents d

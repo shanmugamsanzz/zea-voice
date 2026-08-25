@@ -34,6 +34,12 @@ function selectedSources(decision, groundingEnvelope, evidence) {
   ));
 }
 
+function catalogSources(sources = []) {
+  return sources.filter((source) => ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(
+    String(source?.recordType ?? '').toLocaleUpperCase(),
+  ));
+}
+
 function callerFacingConversationMessage(source) {
   return String(source?.recordType ?? '').toLocaleUpperCase() === 'CONVERSATION_NODE'
     && source?.callerFacing === true
@@ -46,7 +52,7 @@ const overviewRequestTypes = new Set([
 
 const catalogFactRequestTypes = new Set([
   'details', 'item_details', 'price', 'inclusion', 'comparison', 'coverage',
-  'preparation', 'attributes', 'services',
+  'preparation', 'attributes', 'services', 'category_overview',
 ]);
 
 function isOverviewDecision(decision) {
@@ -70,10 +76,35 @@ function identity(value) {
 function entitySupportedBySelectedCatalog(entity, selectedEvidence) {
   const requested = new Set([entity?.id, entity?.key, entity?.name].map(identity).filter(Boolean));
   return selectedEvidence.some((source) => {
-    if (String(source?.recordType ?? '').toLocaleUpperCase() !== 'CATALOG_ITEM') return false;
+    const recordType = String(source?.recordType ?? '').toLocaleUpperCase();
+    if (!['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(recordType)) return false;
     const data = source.authoritativeData ?? {};
-    return [source.recordId, data.itemKey, data.name].map(identity)
+    const identities = recordType === 'CATALOG_CATEGORY'
+      ? [source.recordId, data.categoryKey, data.category]
+      : [source.recordId, data.itemKey, data.name];
+    return identities.map(identity)
       .filter(Boolean).some((candidate) => requested.has(candidate));
+  });
+}
+
+function catalogCategoryFromEvidence(source) {
+  if (String(source?.recordType ?? '').toLocaleUpperCase() !== 'CATALOG_CATEGORY') return null;
+  const data = source.authoritativeData ?? {};
+  const key = String(data.categoryKey ?? '').trim();
+  const name = String(data.category ?? '').trim();
+  if (!key || !name) return null;
+  return Object.freeze({
+    id: source.recordId ?? null,
+    key,
+    name,
+    parentKey: data.parentCategoryKey ?? null,
+    description: data.categoryDescription ?? null,
+    items: Object.freeze((data.children ?? []).map((child) => Object.freeze({
+      id: child.recordId ?? null,
+      key: child.itemKey ?? null,
+      name: child.name ?? null,
+      categoryKey: key,
+    }))),
   });
 }
 
@@ -266,6 +297,10 @@ export function applyUnifiedGroundedTurn({
   const citedCatalogEntities = new Map(initiallySelectedEvidence.map((source) => (
     catalogEntityFromEvidence(source, hydratedEnvelope.entities)
   )).filter(Boolean).map((entity) => [identity(entity.key), entity]));
+  const selectedCategorySource = initiallySelectedEvidence.find((source) => (
+    String(source?.recordType ?? '').toLocaleUpperCase() === 'CATALOG_CATEGORY'
+    && String(source?.retrievalContext ?? 'primary').toLocaleLowerCase() === 'primary'
+  ));
   const exactCatalogIdentitySources = evidence.filter((source) => (
     String(source?.recordType ?? '').toLocaleUpperCase() === 'CATALOG_ITEM'
     && String(source?.retrievalContext ?? '').toLocaleLowerCase() === 'primary'
@@ -274,7 +309,8 @@ export function applyUnifiedGroundedTurn({
   const exactCategoryKeys = new Set(exactCatalogIdentitySources.map((source) => (
     identity(source?.authoritativeData?.categoryKey ?? source?.authoritativeData?.category)
   )).filter(Boolean));
-  const exactCategorySelection = exactCatalogIdentitySources.length > 1
+  const exactCategorySelection = catalogCategoryFromEvidence(selectedCategorySource)
+    ?? (exactCatalogIdentitySources.length > 1
     && exactCategoryKeys.size === 1 ? Object.freeze({
       key: exactCatalogIdentitySources[0].authoritativeData?.categoryKey ?? null,
       name: exactCatalogIdentitySources[0].authoritativeData?.category ?? null,
@@ -287,7 +323,7 @@ export function applyUnifiedGroundedTurn({
         categoryKey: source.authoritativeData?.categoryKey,
         parentCategoryKey: source.authoritativeData?.parentCategoryKey,
       })),
-    }) : null;
+    }) : null);
   // A decision citing one authoritative Catalog item has resolved that item,
   // even if the model omitted optional state metadata. Persist the evidence-
   // derived canonical identity so contextual follow-ups cannot lose it.
@@ -391,9 +427,8 @@ export function applyUnifiedGroundedTurn({
       });
     }
   }
-  const selectedCatalogContexts = selectedEvidence.filter((source) => (
-    String(source?.recordType ?? '').toLocaleUpperCase() === 'CATALOG_ITEM'
-  )).map((source) => source.retrievalContext).filter(Boolean);
+  const selectedCatalogContexts = catalogSources(selectedEvidence)
+    .map((source) => source.retrievalContext).filter(Boolean);
   if (selectedCatalogContexts.length > 0
     && effectiveDecision.stateUpdate.contextDependent !== true
     && !selectedCatalogContexts.includes('primary')) {
@@ -428,9 +463,7 @@ export function applyUnifiedGroundedTurn({
       || primaryEntities.length > 0
       || catalogFactRequestTypes.has(String(effectiveDecision.stateUpdate.requestType
         ?? effectiveDecision.requestType ?? '').toLocaleLowerCase()));
-  if (catalogFactAnswer && !selectedEvidence.some((source) => (
-    String(source?.recordType ?? '').toLocaleUpperCase() === 'CATALOG_ITEM'
-  ))) {
+  if (catalogFactAnswer && catalogSources(selectedEvidence).length === 0) {
     return Object.freeze({
       valid: false, reason: 'catalog_evidence_required', state: beforeState,
     });
@@ -498,9 +531,7 @@ export function applyUnifiedGroundedTurn({
       valid: false, reason: 'explicit_action_request_required', state: beforeState,
     });
   }
-  const claimEvidence = catalogFactAnswer
-    ? sourcesByType(selectedEvidence, 'CATALOG_ITEM')
-    : selectedEvidence;
+  const claimEvidence = catalogFactAnswer ? catalogSources(selectedEvidence) : selectedEvidence;
   const recommendationSanitization = removeUnsupportedRecommendationSentences(
     effectiveDecision.answer,
     claimEvidence,

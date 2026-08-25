@@ -57,7 +57,13 @@ const callControl = record(4, 'workflow_rule', {
     actionType: 'respond', actionConfig: { responseMode: 'exact' }, priority: 90,
   },
 });
-const bundle = buildPublicationIndexes(job, [first, second, safety, callControl]);
+const purpose = record(5, 'conversation_node', {
+  question: 'Tenant purpose route', answer: 'Tenant purpose response.', content: 'Tenant purpose response.',
+  entity_name: 'Tenant purpose route', entity_category: 'main',
+  entity_aliases: ['tenant purpose phrase'],
+  entity_metadata: { intentClass: 'KNOWN_INFORMATION' },
+});
+const bundle = buildPublicationIndexes(job, [first, second, safety, callControl, purpose]);
 
 assert.deepEqual(extractRequestedFacts('இதோட price evlo?'), ['price']);
 assert.ok(extractContextualReferences('இதோட price evlo?').length > 0);
@@ -117,6 +123,7 @@ prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
 }), bundle);
 let refined = await refineKnowledgeResolution(
   prepared.input, bundle, prepared.resolution,
+  prepared.classification,
   [{ recordId: second.record_id, score: 0.82 }],
 );
 assert.equal(refined.candidate.itemKey, 'cirrus',
@@ -127,9 +134,20 @@ prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
 }), bundle);
 refined = await refineKnowledgeResolution(
   prepared.input, bundle, prepared.resolution,
+  prepared.classification,
   [{ recordId: second.record_id, score: 0.99 }],
 );
 assert.equal(refined.candidate.itemKey, 'nimbus',
   'Semantic similarity must never replace the latest explicit published entity');
+
+prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
+  tenantId, agentId, callId, utterance: 'tenant purpose phrase', memory,
+}), bundle);
+refined = await refineKnowledgeResolution(
+  prepared.input, bundle, prepared.resolution, prepared.classification,
+  [{ recordId: second.record_id, recordType: 'CATALOG_ITEM', score: 0.99 }],
+);
+assert.equal(refined.candidate.recordId, purpose.record_id,
+  'Semantic Catalog matches must never replace an explicit Conversation route');
 
 console.log('Fast multilingual query preparation, contextual memory and priority routing verified.');

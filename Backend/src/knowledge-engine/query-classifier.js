@@ -231,6 +231,13 @@ function inferredCandidates(input, resolution) {
 
 function indexesFor(intentClass, candidate) {
   const configured = retrievalPlans[intentClass] ?? retrievalPlans.UNKNOWN;
+  // A resolved category is an authoritative structured record. Searching its
+  // children as independent lexical/semantic candidates creates false
+  // ambiguity, so category hydration starts from the category route only.
+  if (intentClass === knowledgeQueryClasses.CATEGORY_OVERVIEW
+    && (candidate?.entityType === 'CATEGORY' || candidate?.recordType === 'CATALOG_CATEGORY')) {
+    return Object.freeze([knowledgeSearchIndexes.CATALOG]);
+  }
   if (intentClass !== knowledgeQueryClasses.KNOWN_INFORMATION) return configured;
   if (candidate?.recordType === 'CATALOG_ITEM') return Object.freeze([
     knowledgeSearchIndexes.ANSWER_CARD, knowledgeSearchIndexes.CATALOG,
@@ -260,6 +267,11 @@ export function classifyKnowledgeQuery(input, resolution) {
   }
   const selected = inferredCandidates(input, resolution)[0];
   const searchIndexes = indexesFor(selected.intentClass, selected.candidate);
+  const selectedNamespace = resolution.candidateNamespace ?? ({
+    CATALOG_ITEM: 'CATALOG', CATALOG_CATEGORY: 'CATALOG', FAQ: 'FAQ',
+    CONVERSATION_NODE: 'CONVERSATION', WORKFLOW_RULE: 'WORKFLOW',
+    KNOWLEDGE_CHUNK: 'GENERAL',
+  }[String(selected.candidate?.recordType ?? '').toUpperCase()] ?? null);
   return Object.freeze({
     version: KNOWLEDGE_QUERY_CLASSIFIER_VERSION,
     tenantId: input.tenantId,
@@ -270,6 +282,7 @@ export function classifyKnowledgeQuery(input, resolution) {
     confidence: resolution.score ?? 0,
     source: selected.source,
     candidate: selected.candidate,
+    selectedNamespace,
     requiresConfirmation: Boolean(selected.candidate)
       && !input.memory?.activeTool?.name
       && resolution.action === 'CONFIRM',

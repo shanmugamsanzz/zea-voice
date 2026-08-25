@@ -38,7 +38,11 @@ function planIndexes(classification) {
 }
 
 function allowedRecordTypes(indexes) {
-  const selected = [...indexes].map((index) => documentIndexTypes[index]).filter(Boolean);
+  const selected = [...indexes].flatMap((index) => (
+    index === knowledgeSearchIndexes.CATALOG
+      ? ['CATALOG_ITEM', 'CATALOG_CATEGORY']
+      : [documentIndexTypes[index]].filter(Boolean)
+  ));
   return new Set(selected.length ? selected : Object.values(documentIndexTypes));
 }
 
@@ -93,6 +97,9 @@ function freezeCandidate(candidate, channel, rank) {
     ...(candidate.tokenCoverage === undefined
       ? {} : { tokenCoverage: boundedScore(candidate.tokenCoverage) }),
     ...(candidate.matchMethod ? { matchMethod: String(candidate.matchMethod) } : {}),
+    ...(candidate.categoryKey ? { categoryKey: String(candidate.categoryKey) } : {}),
+    ...(Array.isArray(candidate.evidenceRecordIds)
+      ? { evidenceRecordIds: Object.freeze([...candidate.evidenceRecordIds]) } : {}),
   });
 }
 
@@ -113,6 +120,23 @@ function rankChannel(candidates, channel, limit) {
 function structuredCandidates(resolution, recordScope, allowedTypes, limit) {
   const candidates = [];
   for (const resolved of resolution?.routingCandidates ?? []) {
+    if ((resolved.entityType === 'CATEGORY' || resolved.recordType === 'CATALOG_CATEGORY')
+      && allowedTypes.has('CATALOG_CATEGORY')) {
+      const evidenceRecordIds = resolved.evidenceRecordIds ?? [resolved.recordId];
+      const anchor = evidenceRecordIds.map((id) => recordScope.get(normalizeId(id)))
+        .find((record) => record?.recordType === 'CATALOG_ITEM');
+      if (anchor) candidates.push({
+        ...anchor,
+        recordType: 'CATALOG_CATEGORY',
+        categoryKey: resolved.categoryKey ?? anchor.categoryKey,
+        evidenceRecordIds,
+        score: boundedScore(resolved.score),
+        matchMethod: resolved.method,
+      });
+      // Child items belong to the hydrated category aggregate. They must not
+      // compete with their parent as independent retrieval candidates.
+      continue;
+    }
     for (const evidenceId of resolved.evidenceRecordIds ?? [resolved.recordId]) {
       const scoped = recordScope.get(normalizeId(evidenceId));
       if (!scoped || !allowedTypes.has(scoped.recordType)) continue;
