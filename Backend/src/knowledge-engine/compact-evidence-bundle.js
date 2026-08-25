@@ -172,6 +172,14 @@ export function buildCompactEvidenceBundle({
   )).slice(0, 3).map((source) => compactEvidence({
     ...source, activationAllowed: true, retrievalContext: 'primary',
   }));
+  const sourceMap = topEvidence.map((source, index) => Object.freeze({
+    sourceId: `source_${index + 1}`,
+    publishedEvidenceId: source.id,
+    recordId: source.recordId,
+    recordType: source.recordType,
+    knowledgeBaseId: source.knowledgeBaseId,
+    publicationRevision: source.publicationRevision,
+  }));
   return Object.freeze({
     version: COMPACT_EVIDENCE_BUNDLE_VERSION,
     latestQuestion: cleanText(input?.latestQuestion ?? input?.utterance, 2_000),
@@ -181,6 +189,7 @@ export function buildCompactEvidenceBundle({
     recentRelevantTurns: Object.freeze([...(input?.recentRelevantTurns ?? [])].slice(-4)),
     intentClass: classification?.intentClass ?? null,
     topEvidence: Object.freeze(topEvidence),
+    sourceMap: Object.freeze(sourceMap),
     conversationGuidance: Object.freeze(guidance),
     authorizedToolSchemas,
     actionAuthorizationEvidence: Object.freeze(actionAuthorizationEvidence),

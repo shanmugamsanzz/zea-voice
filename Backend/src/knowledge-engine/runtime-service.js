@@ -335,6 +335,43 @@ function publicResult(observed, publications) {
   const selectedIds = new Set((observed.decision?.evidenceIds ?? []).map(normalizeId));
   const selectedCallerFacing = evidence.filter((source) => source.callerFacing === true
     && (selectedIds.has(normalizeId(source.id)) || selectedIds.has(normalizeId(source.recordId))));
+  const retrievedCandidates = (observed.authoritative?.fusion?.candidates ?? []).map((candidate) => ({
+    recordId: candidate.recordId,
+    recordType: candidate.recordType,
+    knowledgeBaseId: candidate.knowledgeBaseId,
+    publicationRevision: candidate.publicationRevision,
+    namespace: candidate.namespace,
+    rank: candidate.rank,
+    channels: candidate.channels,
+  }));
+  const hydratedEvidence = evidence.map((source) => ({
+    evidenceId: source.id,
+    recordId: source.recordId,
+    recordType: source.recordType,
+    knowledgeBaseId: source.knowledgeBaseId,
+    publicationRevision: source.publicationRevision,
+    documentId: source.documentId,
+    documentVersionId: source.documentVersionId,
+    hydrationValidated: source.hydrationValidated === true,
+  }));
+  const permittedEvidenceIds = selectedCallerFacing.map((source) => source.id);
+  if (permittedEvidenceIds.length > 0 && hydratedEvidence.length === 0) {
+    throw new AppError(503,
+      'Permitted evidence cannot be produced without authoritative PostgreSQL hydration',
+      'KNOWLEDGE_EVIDENCE_ALIGNMENT_INVALID', {
+        stage: 'evidence_alignment', permittedEvidenceIds,
+      });
+  }
+  const retrievalTrace = Object.freeze({
+    primaryQuery: observed.input?.utterance ?? null,
+    contextualQuery: null,
+    retrievedCandidates: Object.freeze(retrievedCandidates),
+    hydratedEvidence: Object.freeze(hydratedEvidence),
+    permittedEvidenceIds: Object.freeze(permittedEvidenceIds),
+    sourceMap: observed.llmEvidenceBundle?.sourceMap ?? Object.freeze([]),
+    rejectedCandidates: observed.authoritative?.rejectedRecordIds ?? Object.freeze([]),
+    publicationRevisions: publicationRevisions(publications),
+  });
   return Object.freeze({
     operation: 'knowledge_engine_runtime', engineVersion: KNOWLEDGE_ENGINE_RUNTIME_VERSION,
     route: 'knowledge_engine', found: evidence.length > 0, decision: observed.decision,
@@ -352,6 +389,7 @@ function publicResult(observed, publications) {
         categoryKey: source.authoritativeData?.categoryKey ?? null,
       }))),
     evidenceIds: Object.freeze(selectedCallerFacing.map((source) => source.id)),
+    retrievalTrace,
     // Publication availability is independent of whether this particular
     // utterance produced a ranked candidate. Reporting only candidate
     // revisions made healthy assigned publications look unavailable.

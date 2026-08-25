@@ -27,7 +27,8 @@ function selectedSources(decision, groundingEnvelope, evidence) {
   const envelopeSources = (groundingEnvelope.sources ?? []).filter((source) => selected.has(source.id));
   return envelopeSources.map((source) => (
     evidence.find((candidate) => (
-      candidate.id === source.id
+      candidate.id === source.publishedEvidenceId
+      || candidate.id === source.id
       || (source.recordId && candidate.recordId === source.recordId)
     )) ?? source
   ));

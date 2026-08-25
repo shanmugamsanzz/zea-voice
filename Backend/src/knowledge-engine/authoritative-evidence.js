@@ -1,4 +1,5 @@
 import { withTenantContext } from '../infrastructure/database-context.js';
+import { AppError } from '../middleware/errors.js';
 import { requireEntityId, requireTenantId } from '../rag/tenant-isolation.js';
 import { knowledgeQueryClasses } from './query-classifier.js';
 
@@ -413,17 +414,24 @@ export function detectEntityAmbiguity(evidence, classification, resolution) {
   }
   const selectedNamespace = resolution?.candidateNamespace ?? null;
   const hydratedIds = new Set(evidence.map((item) => normalizeId(item.recordId)));
-  const confirmationCandidateId = resolution?.action === 'CONFIRM'
-    ? normalizeId(resolution?.candidate?.recordId) : null;
-  const confirmationScore = Number(resolution?.candidate?.score ?? 0);
-  const confirmationTieWindow = 0.015;
-  const candidates = (resolution?.routingCandidates ?? []).filter((candidate) => (
-    (candidate.explicit === true || normalizeId(candidate.recordId) === confirmationCandidateId)
+  const namespaceRecordTypes = Object.freeze({
+    CATALOG: new Set(['CATALOG_ITEM', 'CATALOG_CATEGORY']),
+    FAQ: new Set(['FAQ']),
+    CONVERSATION: new Set(['CONVERSATION_NODE']),
+    WORKFLOW: new Set(['WORKFLOW_RULE']),
+    GENERAL: new Set(['KNOWLEDGE_CHUNK']),
+  });
+  const allowedTypes = namespaceRecordTypes[selectedNamespace] ?? new Set();
+  const confirmationTieWindow = 0.02;
+  const ranked = (resolution?.routingCandidates ?? []).filter((candidate) => (
+    allowedTypes.has(String(candidate.recordType ?? '').toUpperCase())
     && hydratedIds.has(normalizeId(candidate.recordId))
-    && (resolution?.action !== 'CONFIRM'
-      || normalizeId(candidate.recordId) === confirmationCandidateId
-      || Number(candidate.score ?? 0) >= confirmationScore - confirmationTieWindow)
-  )).map((candidate) => Object.freeze({
+  )).sort((left, right) => Number(right.score ?? 0) - Number(left.score ?? 0));
+  const topScore = Number(ranked[0]?.score ?? 0);
+  const tied = ranked.filter((candidate) => (
+    topScore - Number(candidate.score ?? 0) <= confirmationTieWindow
+  ));
+  const candidates = tied.map((candidate) => Object.freeze({
     recordId: candidate.recordId,
     recordType: candidate.recordType,
     itemKey: candidate.itemKey ?? null,
@@ -437,20 +445,13 @@ export function detectEntityAmbiguity(evidence, classification, resolution) {
   const distinct = new Set(candidates.map((candidate) => (
     candidate.itemKey ?? candidate.categoryKey ?? candidate.recordId
   )));
-  // A single medium-confidence phonetic/fuzzy candidate still requires
-  // confirmation. Ambiguity here means the caller's words were uncertain,
-  // not necessarily that multiple database records tied.
   const detected = (classification?.requiresConfirmation === true || resolution?.action === 'CONFIRM')
-    && distinct.size > 0;
+    && distinct.size > 1;
   return Object.freeze({
     detected,
     candidates: Object.freeze(detected ? candidates.slice(0, 5) : []),
     namespace: detected ? selectedNamespace : null,
-    reason: detected
-      ? (distinct.size > 1
-        ? 'multiple_authoritative_candidates_in_selected_namespace'
-        : 'medium_confidence_authoritative_candidate')
-      : null,
+    reason: detected ? 'near_tied_authoritative_candidates_in_selected_namespace' : null,
   });
 }
 
@@ -592,6 +593,36 @@ export async function rankAndHydrateAuthoritativeEvidence({
   const rejectedRecordIds = fusion.candidates
     .filter((candidate) => !hydratedIds.has(normalizeId(candidate.recordId)))
     .map((candidate) => candidate.recordId);
+  const selectedCandidateId = normalizeId(resolution?.candidate?.recordId);
+  const selectedCandidateWasRanked = fusion.candidates.some((candidate) => (
+    normalizeId(candidate.recordId) === selectedCandidateId
+  ));
+  const selectedCandidateHydrated = selectedCandidateId && hydratedIds.has(selectedCandidateId);
+  if (fusion.candidates.length > 0 && evidence.length === 0) {
+    throw new AppError(503,
+      'Selected retrieval candidates could not be hydrated from the active PostgreSQL publication',
+      'KNOWLEDGE_AUTHORITATIVE_HYDRATION_EMPTY', {
+        stage: 'authoritative_hydration',
+        selectedCandidates: fusion.candidates.map((candidate) => ({
+          recordId: candidate.recordId,
+          recordType: candidate.recordType,
+          knowledgeBaseId: candidate.knowledgeBaseId,
+          publicationRevision: candidate.publicationRevision,
+        })),
+        rejectedRecordIds,
+      });
+  }
+  if (selectedCandidateWasRanked && !selectedCandidateHydrated) {
+    throw new AppError(503,
+      'The resolved authoritative candidate could not be hydrated from the active PostgreSQL publication',
+      'KNOWLEDGE_SELECTED_CANDIDATE_NOT_HYDRATED', {
+        stage: 'authoritative_hydration',
+        recordId: resolution.candidate.recordId,
+        recordType: resolution.candidate.recordType,
+        candidateNamespace: resolution.candidateNamespace,
+        rejectedRecordIds,
+      });
+  }
   const missingComparisonRecordIds = fusion.reservedRecordIds.filter((recordId) => (
     !hydratedIds.has(normalizeId(recordId))
   ));

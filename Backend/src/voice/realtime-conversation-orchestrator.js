@@ -2122,7 +2122,7 @@ export class RealtimeConversationOrchestrator {
   #createSentenceTtsPipeline(epoch, turnStartedAt, firstAudioDeadlineAt) {
     let chain = Promise.resolve();
     let beginPromise = null;
-    let failure = null;
+    const sentenceFailures = [];
     let sentenceNumber = 0;
     let firstValidatedTextAt = null;
     let spokenCharacters = 0;
@@ -2203,7 +2203,7 @@ export class RealtimeConversationOrchestrator {
     this.activeLookaheadSchedulers.add(cancelScheduler);
 
     const enqueueNow = (rawSentence, groupedSentenceCount = 1) => {
-      if (this.finalized || epoch !== this.epoch || failure) return false;
+      if (this.finalized || epoch !== this.epoch) return false;
       if (isInternalRuntimeText(rawSentence)) {
         this.log.warn({
           stage: 'tts.internal_sentence_blocked', callId: this.call.id,
@@ -2240,7 +2240,7 @@ export class RealtimeConversationOrchestrator {
         : null;
       chain = chain.then(async () => {
         await beginPromise;
-        if (this.finalized || epoch !== this.epoch || failure) return false;
+        if (this.finalized || epoch !== this.epoch) return false;
         this.log.info({
           stage: 'llm.sentence_ready_for_tts', callId: this.call.id,
           generationId, sentenceNumber: currentSentenceNumber, characters: sentenceCharacters,
@@ -2299,7 +2299,9 @@ export class RealtimeConversationOrchestrator {
         if (played) completedSentences.push(sentence);
         return played;
       }).catch((error) => {
-        failure ??= error;
+        sentenceFailures.push(Object.freeze({
+          error, generationId, sentenceNumber: currentSentenceNumber, sentence,
+        }));
         this.runtimeMetrics.ttsLookahead.isolatedFailures += 1;
         this.log.error({
           err: error, stage: 'tts.sentence_failure_isolated', callId: this.call.id,
@@ -2391,19 +2393,24 @@ export class RealtimeConversationOrchestrator {
             await this.audioEngine.flushOutputGroup?.(playbackGroupId);
             await this.audioEngine.drainOutput();
           }
-          if (failure && completedSentences.length === 0 && audibleSentences.length === 0) throw failure;
-          if (failure) {
+          const firstFailure = sentenceFailures[0]?.error ?? null;
+          if (firstFailure && completedSentences.length === 0 && audibleSentences.length === 0) {
+            throw firstFailure;
+          }
+          if (firstFailure) {
             this.runtimeMetrics.ttsLookahead.partialTurnsPreserved += 1;
             this.log.warn({
               stage: 'tts.partial_turn_preserved', callId: this.call.id,
               completedSentences: completedSentences.length,
-              failedCode: failure.code ?? 'TTS_SENTENCE_FAILED',
-            }, 'Completed sentence audio was preserved after a later TTS failure');
+              failedSentences: sentenceFailures.length,
+              failedCode: firstFailure.code ?? 'TTS_SENTENCE_FAILED',
+            }, 'Failed sentence audio was isolated while other completed sentences were preserved');
           }
           return {
             active: epoch === this.epoch && !this.finalized,
-            partial: Boolean(failure),
-            failure,
+            partial: Boolean(firstFailure),
+            failure: firstFailure,
+            failures: Object.freeze([...sentenceFailures]),
             completedSentences: completedSentences.length,
             spokenText: (completedSentences.length ? completedSentences : audibleSentences).join(' ').trim(),
           };

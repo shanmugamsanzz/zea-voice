@@ -103,6 +103,7 @@ class FakeLlm {
     if (query === 'isolate permanent sentence failure') {
       yield { type: 'text_delta', delta: 'The valid sentence must remain audible. ' };
       yield { type: 'text_delta', delta: 'This permanent sentence failure intentionally contains enough descriptive words to exceed the short sentence grouping threshold without being played.' };
+      yield { type: 'text_delta', delta: 'The later valid sentence must still play after the isolated failure and remain part of the same response.' };
       yield { type: 'completed', finishReason: 'stop', toolCalls: [], usage: {} };
       return;
     }
@@ -471,8 +472,11 @@ await waitFor(() => orchestrator.controller.state === 'listening',
 assert.equal(audioEngine.cancelled.length, cancellationsBeforeIsolation,
   'A later permanent sentence failure cleared valid earlier audio');
 assert.ok(transcript.some((entry) => entry.speaker === 'agent'
-  && entry.text === 'The valid sentence must remain audible.'),
-'Only the successfully synthesized sentence should be persisted after isolated failure');
+  && entry.text === 'The valid sentence must remain audible. The later valid sentence must still play after the isolated failure and remain part of the same response.'),
+'Valid sentences before and after one isolated failure must be persisted without the failed sentence');
+assert.ok(tts.texts.includes(
+  'The later valid sentence must still play after the isolated failure and remain part of the same response.',
+), 'A failed sentence incorrectly discarded a later prefetched sentence');
 
 llm.wasCancelled = false;
 stt.publish({ type: 'final_transcript', text: 'slow request', language: 'en', isFinal: true });

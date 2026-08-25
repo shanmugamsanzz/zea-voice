@@ -107,6 +107,33 @@ const exactPublishedResponse = validateGroundedLlmDecision(JSON.stringify({
 assert.equal(exactPublishedResponse.valid, true);
 assert.equal(exactPublishedResponse.responseId, 'source_1');
 assert.equal(exactPublishedResponse.answer, envelope.sources[0].content);
+const exactResponseIdIsEvidenceSelection = validateGroundedLlmDecision(JSON.stringify({
+  decision: 'answer', answer: 'Provider wording is ignored.',
+  responseId: 'source_1', evidenceIds: [], stateUpdate: {},
+  pendingQuestion: null, toolRequest: null, clarification: null,
+}), exactEnvelope, runtime);
+assert.equal(exactResponseIdIsEvidenceSelection.valid, true);
+assert.deepEqual(exactResponseIdIsEvidenceSelection.evidenceIds, ['source_1']);
+
+const selectedEvidenceAlias = validateGroundedLlmDecision(JSON.stringify({
+  decision: 'answer', answer: 'The office is on Central Road.', responseId: null,
+  selectedEvidenceIds: ['source_2'], stateUpdate: {}, pendingQuestion: null,
+  toolRequest: null, clarification: null,
+}), envelope, runtime);
+assert.equal(selectedEvidenceAlias.valid, true);
+assert.deepEqual(selectedEvidenceAlias.evidenceIds, ['source_2']);
+
+const authoritativeDecimalPrice = validateGroundedLlmDecision(decisionJson({
+  decision: 'answer', answer: 'Premium service costs INR 3,200.00.',
+  evidenceIds: ['source_price'], stateUpdate: {}, pendingQuestion: null, toolRequest: null,
+}), {
+  found: true, entities: [], sources: [{
+    id: 'source_price', publishedEvidenceId: 'published-price', recordId: 'price-record',
+    content: 'Approved Premium service.', authoritativeData: { price: 3200, currency: 'INR' },
+  }],
+}, runtime);
+assert.equal(authoritativeDecimalPrice.valid, true,
+  'formatted published prices must validate against complete authoritative fields');
 const missingExactResponseId = validateGroundedLlmDecision(decisionJson({
   decision: 'answer', answer: envelope.sources[0].content,
   evidenceIds: ['source_1'], stateUpdate: {}, pendingQuestion: null, toolRequest: null,

@@ -67,6 +67,9 @@ function exactShape(value) {
 const decisionEnvelopeKeys = new Set([
   'answer', 'clarification', 'decision', 'evidenceIds', 'pendingQuestion',
   'responseId', 'stateUpdate', 'toolRequest',
+  // Rolling-provider aliases. They are normalized into evidenceIds before
+  // exact-shape validation and never escape the validator contract.
+  'selectedEvidenceIds', 'evidenceSourceIds',
 ]);
 const compatibleTopLevelStateKeys = new Set([
   'currentTopic', 'knownEntityKeys', 'knownEntities', 'selectedEntityKeys',
@@ -93,7 +96,8 @@ function normalizeDecisionEnvelope(value) {
     decision: value.decision,
     answer: value.answer ?? '',
     responseId: value.responseId ?? null,
-    evidenceIds: value.evidenceIds ?? [],
+    evidenceIds: value.evidenceIds ?? value.selectedEvidenceIds
+      ?? value.evidenceSourceIds ?? [],
     stateUpdate,
     pendingQuestion: value.pendingQuestion ?? null,
     toolRequest: value.toolRequest ?? null,
@@ -499,7 +503,8 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
     return Object.freeze({ valid: false, reason: 'invalid_pending_question' });
   }
   const allowedSources = new Map((envelope.sources ?? []).flatMap((source) => (
-    [source.id, source.recordId].filter(Boolean).map((candidate) => [identity(candidate), source])
+    [source.id, source.publishedEvidenceId, source.recordId]
+      .filter(Boolean).map((candidate) => [identity(candidate), source])
   )));
   const requiredEvidenceIds = decision === 'answer' && parsed.responseId === null
     ? list(runtime.requiredEvidenceIds, maximumSources) : [];
@@ -521,7 +526,11 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
     return Object.freeze({ valid: false, reason: 'invalid_response_id' });
   }
   if (exactResponseSource && !citedSources.some((source) => source.id === exactResponseSource.id)) {
-    return Object.freeze({ valid: false, reason: 'response_evidence_required' });
+    // responseId itself is an enumerated evidence selection. Canonicalize it
+    // into evidenceIds so exact published speech cannot fail only because a
+    // provider omitted the same ID from the duplicate evidenceIds property.
+    citedSources.push(exactResponseSource);
+    seenSources.add(exactResponseSource.id);
   }
   if (responseId && decision !== 'answer') {
     return Object.freeze({ valid: false, reason: 'invalid_response_id' });
@@ -539,7 +548,7 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
     return Object.freeze({ valid: false, reason: 'clarification_question_required' });
   }
   if (decision === 'answer' && envelope.found && citedSources.length === 0) {
-    return Object.freeze({ valid: false, reason: 'evidence_required' });
+    return Object.freeze({ valid: false, reason: 'selected_evidence_ids_required' });
   }
   if (decision === 'answer' && !envelope.found) {
     return Object.freeze({ valid: false, reason: 'verified_evidence_missing' });

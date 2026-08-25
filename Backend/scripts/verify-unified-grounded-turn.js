@@ -67,6 +67,46 @@ assert.equal(exactTurn.valid, true);
 assert.equal(exactTurn.responseId, 'source-1');
 assert.equal(exactTurn.answer, exactEvidence.content);
 assert.equal(exactTurn.nextQuestion, null);
+
+const priceMemory = openGenericConversationState(
+  { ...identity, callId: 'call-authoritative-price' }, {}, 1,
+);
+priceMemory.beginTurn('turn-authoritative-price');
+const completePriceEvidence = {
+  id: 'published-price-1', recordId: 'catalog-price-1', recordType: 'CATALOG_ITEM',
+  content: 'Approved published option.',
+  tenantId: 'tenant-a', agentId: 'agent-a', knowledgeBaseId: 'kb-a', publicationRevision: 7,
+  documentId: 'document-price', documentVersionId: 'version-price', hydrationValidated: true,
+  publicationValidated: true, documentStatus: 'ready', documentVersionStatus: 'ready',
+  documentVersionIsCurrent: true, callerFacing: true,
+  authoritativeData: { itemKey: 'premium-option', name: 'Premium Option', price: 3200, currency: 'INR' },
+};
+const completePriceTurn = applyUnifiedGroundedTurn({
+  rawDecision: unifiedDecision({
+    decision: 'answer', answer: 'Premium Option costs INR 3,200.00.',
+    selectedEvidenceIds: ['source-price'], stateUpdate: { requestType: 'price' },
+    pendingQuestion: null, toolRequest: null,
+  }),
+  groundingEnvelope: {
+    found: true, sources: [{
+      id: 'source-price', publishedEvidenceId: completePriceEvidence.id,
+      recordId: completePriceEvidence.recordId, recordType: 'CATALOG_ITEM',
+      content: 'Compact approved option.', callerFacing: true,
+    }], entities: [{
+      id: completePriceEvidence.recordId, key: 'premium-option', name: 'Premium Option',
+      sourceId: 'source-price',
+    }],
+  },
+  memory: priceMemory, turnToken: 'turn-authoritative-price', evidence: [completePriceEvidence],
+  finalizedUtterance: 'What is the Premium Option price?',
+  evidenceScope: {
+    tenantId: 'tenant-a', agentId: 'agent-a', requireHydratedEvidence: true,
+    publicationRevisions: [{ knowledgeBaseId: 'kb-a', publicationRevision: 7 }],
+  },
+});
+assert.equal(completePriceTurn.valid, true,
+  'compact LLM evidence must be validated against the complete hydrated PostgreSQL record');
+assert.deepEqual(completePriceTurn.evidenceIds, ['source-price']);
 exactMemory.beginTurn('turn-exact-foreign');
 const foreignExactTurn = applyUnifiedGroundedTurn({
   rawDecision: JSON.stringify({

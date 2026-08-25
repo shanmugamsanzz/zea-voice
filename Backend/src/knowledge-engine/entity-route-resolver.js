@@ -581,6 +581,7 @@ function matchCatalogCandidates(bundles, records, query, queryForms) {
 
 function resolutionResult(input, ranked, namespace, namespaceCandidates, reasonPrefix = null) {
   const { level, margin } = confidenceFor(ranked);
+  const contextDependent = ranked[0]?.method === 'context';
   return Object.freeze({
     version: KNOWLEDGE_RESOLUTION_VERSION,
     tenantId: String(input.tenantId),
@@ -595,6 +596,7 @@ function resolutionResult(input, ranked, namespace, namespaceCandidates, reasonP
     alternatives: Object.freeze(ranked.slice(1, 4)),
     explicitEntity: namespace === knowledgeCandidateNamespaces.CATALOG
       && ranked[0]?.explicit === true,
+    contextDependent,
     reason: ranked[0]
       ? `${reasonPrefix ?? ranked[0].method}_candidate_${level.toLocaleLowerCase()}`
       : 'no_candidate',
@@ -643,8 +645,27 @@ export function resolvePublishedEntityRoute(input, publicationBundles, options =
   const routes = matchRouteCandidates(bundles, records, query, queryForms);
   const semantic = new Map();
   semanticSignals(semantic, options.semanticMatches, records);
-  contextSignals(catalog, input, query, records,
-    [...catalog.values()].some((candidate) => candidate.explicit));
+  const contextualFollowUp = (input?.contextualReferences?.length ?? 0) > 0;
+  const initialCatalogRanked = rankCandidates(catalog);
+  const topExplicit = initialCatalogRanked[0];
+  const secondExplicit = initialCatalogRanked[1];
+  const hasDistinctiveExplicitCandidate = topExplicit?.explicit === true
+    && topExplicit.score >= 0.88
+    && (!secondExplicit || topExplicit.score - secondExplicit.score >= 0.06);
+  if (contextualFollowUp && !hasDistinctiveExplicitCandidate) {
+    // Shared tenant vocabulary (for example a generic product-type word) is
+    // discovery evidence, not a new explicit selection. For a contextual
+    // reference, prefer the isolated call's canonical entity/category unless
+    // the utterance also contains one clearly distinctive published entity.
+    const contextualCatalog = new Map();
+    contextSignals(contextualCatalog, input, query, records, false);
+    if (contextualCatalog.size) {
+      catalog.clear();
+      for (const [key, candidate] of contextualCatalog) catalog.set(key, candidate);
+    }
+  } else {
+    contextSignals(catalog, input, query, records, hasDistinctiveExplicitCandidate);
+  }
   const routeGroups = groupByNamespace(routes);
   const semanticGroups = groupByNamespace(semantic);
   const fallbackRouteCandidate = bestRouteCandidate(routes);
@@ -660,7 +681,6 @@ export function resolvePublishedEntityRoute(input, publicationBundles, options =
     && catalogRanked[0].score >= 0.88;
   const confirmableCatalog = catalogRanked[0]?.explicit === true
     && catalogRanked[0].score >= 0.68;
-  const contextualFollowUp = (input?.contextualReferences?.length ?? 0) > 0;
   let selectedNamespace = null;
   let selected = new Map();
   if (lockPublishedRoute && preliminaryNamespace) {

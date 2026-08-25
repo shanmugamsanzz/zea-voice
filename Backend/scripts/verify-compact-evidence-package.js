@@ -98,6 +98,14 @@ assert.equal(llmEvidenceBundle.actionAuthorizationEvidence.length, 1);
 assert.equal(llmEvidenceBundle.actionAuthorizationEvidence[0].activationAllowed, true);
 assert.doesNotMatch(JSON.stringify(llmEvidenceBundle), /must-not-enter-prompt|Approved evidence 6|unrelated_tool/u);
 assert.equal(llmEvidenceBundle.topEvidence[0].provenance.uploadedFilename, 'tenant-upload.pdf');
+assert.deepEqual(llmEvidenceBundle.sourceMap[0], {
+  sourceId: 'source_1',
+  publishedEvidenceId: callerEvidence[0].id,
+  recordId: callerEvidence[0].recordId,
+  recordType: callerEvidence[0].recordType,
+  knowledgeBaseId: callerEvidence[0].knowledgeBaseId,
+  publicationRevision: callerEvidence[0].publicationRevision,
+});
 
 const compactKnowledge = compactBundleAsKnowledge({
   found: true, route: 'large-runtime-object', internalDebug: 'must-not-enter-prompt',
@@ -116,6 +124,11 @@ assert.deepEqual(envelope.sourceMap[0], {
   publishedEvidenceId: callerEvidence[0].id,
   recordId: callerEvidence[0].recordId,
 });
+assert.deepEqual(envelope.sourceMap, llmEvidenceBundle.sourceMap.map((source) => ({
+  sourceId: source.sourceId,
+  publishedEvidenceId: source.publishedEvidenceId,
+  recordId: source.recordId,
+})));
 const hydratedEnvelope = hydrateGroundingEnvelope(envelope, callerEvidence);
 assert.equal(hydratedEnvelope.sources[0].id, 'source_1');
 assert.equal(hydratedEnvelope.sources[0].publishedEvidenceId, callerEvidence[0].id);

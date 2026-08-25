@@ -23,6 +23,8 @@ import {
   VoiceTurnLatencyTracker,
   voiceTurnStages,
 } from '../src/knowledge-engine/voice-turn-latency.js';
+import { FramedAudioQueue } from '../src/voice/audio/framed-audio-queue.js';
+import { AudioPacer } from '../src/voice/audio/audio-pacer.js';
 
 const fixture = JSON.parse(await readFile(new URL(
   '../fixtures/exact-live-call-2026-08-24-regression.json', import.meta.url,
@@ -42,6 +44,7 @@ const identity = Object.freeze({
 });
 const overview = 'எங்களிடம் Wellness மற்றும் Onco Care packages உள்ளன.';
 const acknowledgement = 'சரிங்க. எங்களிடம் உள்ள approved packages பற்றி சொல்லலாம்.';
+const phoneticAnswer = 'Onco Care package-ல் Onco Care First மற்றும் Onco Care Second உள்ளன.';
 
 function record(index, values) {
   const suffix = String(index).padStart(12, '0');
@@ -207,7 +210,9 @@ function contextRunner(_auth, operation) {
 }
 
 function expectedAnswer(turn) {
-  return turn.id === 'acknowledgement' ? acknowledgement : overview;
+  if (turn.id === 'acknowledgement') return acknowledgement;
+  if (turn.id === 'phonetic-entity' || turn.contextDependent) return phoneticAnswer;
+  return overview;
 }
 
 function validateFullEvidence(result) {
@@ -244,19 +249,84 @@ function validateFullEvidence(result) {
   }
 }
 
+async function verifyContinuousSentenceAudio(playbackGroupId) {
+  const queue = new FramedAudioQueue({
+    maxFrames: 24, maxBytes: 24_000, maxBufferedMs: 2_000,
+  });
+  const metrics = [];
+  let sentenceFailures = 0;
+  for (const [generationId, value] of [['sentence-1', 1], ['sentence-2', 2]]) {
+    try {
+      for (let frameIndex = 0; frameIndex < 6; frameIndex += 1) {
+        await queue.enqueue({
+          data: Buffer.alloc(160, value), durationMs: 20, generationId,
+          playbackGroupId, cancellationVersion: 0,
+        });
+      }
+    } catch (error) {
+      sentenceFailures += 1;
+      throw error;
+    }
+  }
+  const pacer = new AudioPacer({
+    queue,
+    send: async () => ({ deliveryMs: 0, bufferedAmountAfter: 0 }),
+    shouldSend: () => true,
+    packetDurationMs: 80,
+    preRollMs: 120,
+    preRollMaxWaitMs: 20,
+    lowWaterMs: 60,
+    deliveryLeadMs: 160,
+    onPlaybackMetric: (metric) => metrics.push(metric),
+  });
+  pacer.start();
+  await pacer.drain();
+  queue.close();
+  await pacer.stop();
+  return Object.freeze({
+    underruns: metrics.filter((metric) => metric.type === 'underrun').length,
+    sentenceFailures,
+  });
+}
+
 const retrievalSamples = [];
 const firstAudioSamples = [];
 const verified = [];
 let runtimeExceptions = 0;
+let falseAmbiguities = 0;
+let groundingRejections = 0;
+let memoryFollowUps = 0;
+let audioUnderruns = 0;
+let ttsSentenceFailures = 0;
+// The observed utterances belong only to this regression fixture. Runtime
+// matching continues to come entirely from the publication indexes above.
+const calls = Object.freeze([
+  Object.freeze({ id: 'observed-call-1', turns: Object.freeze([...fixture.turns]) }),
+  Object.freeze({ id: 'observed-call-2', turns: Object.freeze([
+    Object.freeze({
+      id: 'category-overview', utterance: fixture.turns[1].utterance, expectedKind: 'response',
+    }),
+    Object.freeze({
+      id: 'phonetic-entity', utterance: fixture.turns[2].utterance, expectedKind: 'response',
+    }),
+    Object.freeze({
+      id: 'contextual-follow-up', utterance: 'What options are in this package?',
+      expectedKind: 'response', contextDependent: true, expectedFromTurnId: 'phonetic-entity',
+    }),
+  ]) }),
+]);
+assert.equal(calls.length, 2, 'The production regression must replay exactly two isolated calls');
 for (let pass = 1; pass <= repeats; pass += 1) {
-  const callId = `85000000-0000-4000-8000-${String(pass).padStart(12, '0')}`;
-  const memory = openIsolatedCallMemory({
-    tenantId: identity.tenantId,
-    agentId: identity.agentId,
-    callId,
-  }, { language: fixture.language });
-  try {
-    for (const turn of fixture.turns) {
+  for (let callIndex = 0; callIndex < calls.length; callIndex += 1) {
+    const call = calls[callIndex];
+    const callId = `85000000-0000-4000-8000-${String(pass * 10 + callIndex).padStart(12, '0')}`;
+    const memory = openIsolatedCallMemory({
+      tenantId: identity.tenantId,
+      agentId: identity.agentId,
+      callId,
+    }, { language: fixture.language });
+    try {
+      for (const turn of call.turns) {
       const input = createKnowledgeEngineInput({
         tenantId: identity.tenantId,
         agentId: identity.agentId,
@@ -289,26 +359,32 @@ for (let pass = 1; pass <= repeats; pass += 1) {
         `pass ${pass}, ${turn.id}: retrieval took ${retrievalMs.toFixed(2)}ms`);
       assert.doesNotMatch(String(result.decision.reason), /foreign_evidence_selected/iu);
       validateFullEvidence(result);
+      assert.ok(result.retrievalTrace.retrievedCandidates.length > 0);
+      assert.ok(result.retrievalTrace.hydratedEvidence.length > 0);
+      assert.deepEqual(result.retrievalTrace.permittedEvidenceIds, result.evidenceIds);
+      assert.equal(result.retrievalTrace.sourceMap.every((entry, index) => (
+        entry.sourceId === `source_${index + 1}`
+        && result.retrievalTrace.hydratedEvidence.some((source) => (
+          source.recordId === entry.recordId && source.evidenceId === entry.publishedEvidenceId
+        ))
+      )), true);
 
-      if (turn.expectedKind === 'targeted_confirmation') {
+      if (turn.id === 'phonetic-entity') {
         assert.equal(result.resolution.confidence, 'MEDIUM');
         assert.equal(result.resolution.action, 'CONFIRM');
         assert.equal(result.resolution.candidate.categoryKey, 'onco-care-package');
-        assert.equal(result.decision.type, knowledgeEngineDecisionTypes.CLARIFY);
-        assert.match(result.decision.clarification.prompt, /Onco Care package.*சொல்றீங்களா/u);
-        assert.doesNotMatch(result.decision.clarification.prompt,
-          /clear|clarify|little more detail|published option/iu);
-        verified.push({
-          pass,
-          id: turn.id,
-          decision: result.decision.type,
-          prompt: result.decision.clarification.prompt,
-          retrievalMs,
-        });
-        continue;
+        assert.equal(result.authoritative.ambiguity.detected, false);
       }
 
-      assert.equal(result.decision.type, knowledgeEngineDecisionTypes.RESPONSE);
+      if (result.authoritative.ambiguity.detected) falseAmbiguities += 1;
+
+      assert.equal(result.decision.type, knowledgeEngineDecisionTypes.RESPONSE,
+        `${call.id}, ${turn.id}: ${JSON.stringify({
+          reason: result.decision.reason,
+          resolution: result.resolution,
+          entities: result.entities,
+          memory: memory.snapshot(),
+        })}`);
       assert.equal(result.decision.mode, knowledgeEngineResponseModes.GROUNDED_LLM);
       const final = finalizeGroundedLlmResponse({
         input,
@@ -317,6 +393,7 @@ for (let pass = 1; pass <= repeats; pass += 1) {
         selectedEvidenceIds: result.evidenceIds,
         authoritative: result.authoritative,
       });
+      if (final.type !== knowledgeEngineDecisionTypes.RESPONSE) groundingRejections += 1;
       assert.equal(final.type, knowledgeEngineDecisionTypes.RESPONSE);
       assert.equal(final.response.text, expectedAnswer(turn));
       assert.doesNotMatch(String(final.reason), /foreign_evidence_selected/iu);
@@ -354,17 +431,33 @@ for (let pass = 1; pass <= repeats; pass += 1) {
         explicitEntity: result.entities.length > 0,
         citedEvidence: result.authoritative.evidence,
       });
+      if (turn.contextDependent) {
+        memoryFollowUps += 1;
+        assert.equal(result.resolution.contextDependent, true,
+          `${call.id}, ${turn.id}: the follow-up did not use current-call memory`);
+        const prior = verified.findLast((entry) => (
+          entry.pass === pass && entry.callId === call.id && entry.id === turn.expectedFromTurnId
+        ));
+        assert.ok(prior, `${call.id}, ${turn.id}: prior entity turn was not retained`);
+        assert.equal(final.response.text, prior.answer,
+          `${call.id}, ${turn.id}: contextual follow-up changed the resolved answer`);
+      }
       verified.push({
         pass,
+        callId: call.id,
         id: turn.id,
         decision: final.type,
         answer: final.response.text,
         retrievalMs,
         firstAudioMs,
       });
+      }
+    } finally {
+      memory.close();
     }
-  } finally {
-    memory.close();
+    const audio = await verifyContinuousSentenceAudio(`${pass}-${call.id}`);
+    audioUnderruns += audio.underruns;
+    ttsSentenceFailures += audio.sentenceFailures;
   }
 }
 
@@ -373,15 +466,26 @@ const percentile95 = (samples) => {
   return sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)] ?? 0;
 };
 assert.equal(runtimeExceptions, 0);
-assert.equal(verified.length, repeats * fixture.turns.length);
+assert.equal(falseAmbiguities, 0);
+assert.equal(groundingRejections, 0);
+assert.equal(memoryFollowUps, repeats);
+assert.equal(audioUnderruns, 0);
+assert.equal(ttsSentenceFailures, 0);
+assert.equal(verified.length, repeats * calls.reduce((total, call) => total + call.turns.length, 0));
 assert.ok(percentile95(retrievalSamples) < fixture.requirements.maximumRetrievalMs);
 assert.ok(percentile95(firstAudioSamples) < fixture.requirements.maximumFirstAudioMs);
 console.log(JSON.stringify({
-  gate: 'exact-live-call-2026-08-24',
+  gate: 'two-live-call-production-regression',
   passed: true,
   repeats,
   totalTurns: verified.length,
+  callsPerPass: calls.length,
   runtimeExceptions,
+  falseAmbiguities,
+  groundingRejections,
+  memoryFollowUps,
+  audioUnderruns,
+  ttsSentenceFailures,
   retrievalP95Ms: Math.round(percentile95(retrievalSamples) * 100) / 100,
   firstAudioP95Ms: percentile95(firstAudioSamples),
   verified,

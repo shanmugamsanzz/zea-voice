@@ -15,7 +15,7 @@
     {
       "id": "phonetic-entity",
       "utterance": "On Cooker package",
-      "expectedKind": "targeted_confirmation"
+      "expectedKind": "response"
     }
   ],
   "requirements": {

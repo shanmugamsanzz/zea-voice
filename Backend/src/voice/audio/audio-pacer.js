@@ -66,18 +66,29 @@ export class AudioPacer {
       const remoteBufferedMs = Math.max(0, this.remotePlaybackEndAt - receivedAt);
       const newPlaybackGroup = !this.lastSentFrame
         || this.lastSentFrame.playbackGroupId !== firstFrame.playbackGroupId;
-      const requiresPreRoll = newPlaybackGroup || remoteBufferedMs <= this.lowWaterMs;
+      const sentenceBoundary = Boolean(this.lastSentFrame)
+        && this.lastSentFrame.playbackGroupId === firstFrame.playbackGroupId
+        && this.lastSentFrame.generationId !== firstFrame.generationId;
+      // Once remote playback has already drained, waiting for more local audio
+      // only makes an existing gap longer. Refill while Plivo still has a
+      // small lead; otherwise send the recovered sentence immediately.
+      const requiresPreRoll = newPlaybackGroup
+        || (remoteBufferedMs > 0 && remoteBufferedMs <= this.lowWaterMs);
+      const targetPreRollMs = sentenceBoundary
+        ? Math.max(this.preRollMs, this.packetDurationMs + this.lowWaterMs)
+        : this.preRollMs;
       if (requiresPreRoll && this.preRollMaxWaitMs > 0
-        && this.preRollMs > firstFrame.durationMs) {
+        && targetPreRollMs > firstFrame.durationMs) {
         const waitStartedAt = this.now();
-        await this.queue.waitForBufferedMs(this.preRollMs - firstFrame.durationMs, {
+        await this.queue.waitForBufferedMs(targetPreRollMs - firstFrame.durationMs, {
           signal, timeoutMs: this.preRollMaxWaitMs,
         });
         this.onPlaybackMetric({
           type: newPlaybackGroup ? 'playback_pre_roll' : 'playback_refill',
           waitMs: Math.max(0, this.now() - waitStartedAt),
           bufferedAudioMs: firstFrame.durationMs + this.queue.bufferedMs,
-          targetBufferedAudioMs: this.preRollMs,
+          targetBufferedAudioMs: targetPreRollMs,
+          sentenceBoundary,
           playbackGroupId: firstFrame.playbackGroupId,
         });
       }

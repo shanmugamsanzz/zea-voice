@@ -185,9 +185,30 @@ const semanticAmbiguity = detectEntityAmbiguity(hydrated.evidence, {
   candidate: semanticCandidate,
   routingCandidates: [semanticCandidate],
 });
-assert.equal(semanticAmbiguity.detected, true,
-  'A medium tenant-scoped semantic candidate must receive targeted confirmation');
-assert.equal(semanticAmbiguity.candidates[0].name, 'Published semantic candidate');
+assert.equal(semanticAmbiguity.detected, false,
+  'One medium tenant-scoped candidate must not be reported as entity ambiguity');
+
+const nearTiedCandidate = {
+  ...semanticCandidate,
+  recordId: hydrated.evidence[1].recordId,
+  label: 'Second published semantic candidate',
+  itemKey: 'second-published-semantic-candidate',
+  score: 0.77,
+};
+const nearTiedAmbiguity = detectEntityAmbiguity(hydrated.evidence, {
+  intentClass: knowledgeQueryClasses.KNOWN_INFORMATION, requiresConfirmation: true,
+}, {
+  action: 'CONFIRM', candidateNamespace: 'CATALOG', candidate: semanticCandidate,
+  routingCandidates: [semanticCandidate, nearTiedCandidate, {
+    ...nearTiedCandidate, recordId: hydrated.evidence[2].recordId,
+    recordType: 'FAQ', label: 'Foreign namespace candidate', score: 0.779,
+  }],
+});
+assert.equal(nearTiedAmbiguity.detected, true,
+  'Two hydrated candidates within the same namespace and tie window require clarification');
+assert.deepEqual(nearTiedAmbiguity.candidates.map((entry) => entry.name), [
+  'Published semantic candidate', 'Second published semantic candidate',
+]);
 
 assert.match(authoritativeHydrationSql, /assigned\.publication_revision=requested\.publication_revision/u);
 assert.match(authoritativeHydrationSql, /status='approved'/u);
@@ -202,6 +223,14 @@ const empty = await rankAndHydrateAuthoritativeEvidence({
 }, { contextRunner: async () => { emptyQueryCount += 1; return []; } });
 assert.equal(emptyQueryCount, 0);
 assert.equal(empty.hydrationQueryCount, 0);
+
+await assert.rejects(() => rankAndHydrateAuthoritativeEvidence({
+  auth: { tenantId }, input, classification, resolution, retrieval,
+}, { contextRunner: async () => [] }), (error) => (
+  error?.code === 'KNOWLEDGE_AUTHORITATIVE_HYDRATION_EMPTY'
+  && error?.details?.stage === 'authoritative_hydration'
+  && error?.details?.selectedCandidates?.length > 0
+));
 
 await assert.rejects(() => rankAndHydrateAuthoritativeEvidence({
   auth: { tenantId: '90000000-0000-4000-8000-000000000099' },

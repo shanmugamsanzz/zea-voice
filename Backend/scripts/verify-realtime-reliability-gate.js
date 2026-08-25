@@ -105,6 +105,11 @@ for (let repeat = 1; repeat <= repeats; repeat += 1) {
   const exactLiveCallReport = JSON.parse(exactLiveCall.output.trim());
   assert.equal(exactLiveCallReport.passed, true);
   assert.equal(exactLiveCallReport.runtimeExceptions, 0);
+  assert.equal(exactLiveCallReport.callsPerPass, 2);
+  assert.equal(exactLiveCallReport.falseAmbiguities, 0);
+  assert.equal(exactLiveCallReport.groundingRejections, 0);
+  assert.equal(exactLiveCallReport.audioUnderruns, 0);
+  assert.equal(exactLiveCallReport.ttsSentenceFailures, 0);
   assert.ok(exactLiveCallReport.retrievalP95Ms < 150,
     `Repeat ${repeat}: exact live-call retrieval exceeded 150ms`);
   assert.ok(exactLiveCallReport.firstAudioP95Ms < 2_000,
@@ -141,8 +146,9 @@ console.log(JSON.stringify({
     'verified_webhook', 'interruption', 'transcript_persistence',
     'tts_failure', 'five_minute_timeout', 'latency_thresholds',
     'zero_known_request_llm_timeouts', 'no_generic_clarification_for_valid_stt',
-    'exact_live_call_2026_08_24', 'full_evidence_validation', 'targeted_phonetic_confirmation',
-    'structured_plivo_hangup_cause',
+    'exact_live_call_2026_08_24', 'full_evidence_validation', 'tenant_driven_phonetic_response',
+    'structured_plivo_hangup_cause', 'two_isolated_live_calls',
+    'source_id_mapping', 'call_memory_follow_up', 'zero_audio_underruns',
   ],
   runs,
 }, null, 2));

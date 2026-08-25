@@ -32,8 +32,10 @@ export function normalizeQuestionType(value) {
 
 function addSource(sources, seen, content, metadata = {}) {
   const normalized = text(content, 6_000);
-  if (!normalized || seen.has(normalized) || sources.length >= maximumSources) return;
-  seen.add(normalized);
+  const evidenceIdentity = text(metadata.publishedEvidenceId ?? metadata.recordId, 240);
+  const dedupeKey = evidenceIdentity ? `evidence:${identity(evidenceIdentity)}` : `content:${normalized}`;
+  if (!normalized || seen.has(dedupeKey) || sources.length >= maximumSources) return;
+  seen.add(dedupeKey);
   sources.push(Object.freeze({ id: `source_${sources.length + 1}`, content: normalized, ...metadata }));
 }
 

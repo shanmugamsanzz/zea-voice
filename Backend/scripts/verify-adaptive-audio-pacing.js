@@ -49,6 +49,19 @@ await pacer.drain();
 assert.equal(sent.reduce((total, packet) => total + packet.durationMs, 0), 120,
   'Packet batching must preserve the complete audio duration');
 
+// If Plivo has already exhausted its remote buffer, a recovered later
+// sentence must be sent immediately. Waiting for another pre-roll at this
+// point would only enlarge the audible sentence gap.
+await new Promise((resolve) => setTimeout(resolve, 150));
+const recoveredAt = performance.now();
+await queue.enqueue({
+  data: Buffer.alloc(640, 9), durationMs: 80, generationId: 'sentence-2',
+  playbackGroupId: 'turn-1', cancellationVersion: 0,
+});
+await waitFor(() => sent.length === 3, 'Recovered sentence packet was not delivered');
+assert.ok(performance.now() - recoveredAt < 80,
+  'Plivo pacing added a new pre-roll delay after playback had already underrun');
+
 queue.close();
 await pacer.stop();
 console.log(JSON.stringify({ success: true, task: 'Adaptive buffered audio pacing' }));
