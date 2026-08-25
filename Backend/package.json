@@ -172,6 +172,7 @@
     "verify:configuration-driven-next-question": "node scripts/verify-configuration-driven-next-question.js",
     "verify:answer-tool-validation": "node scripts/verify-answer-tool-validation.js",
     "verify:grounding-action-runtime": "node scripts/verify-grounding-action-runtime.js",
+    "verify:universal-hardcoding-gate": "node scripts/verify-universal-hardcoding-gate.js",
     "verify:tenant-regression-generator": "node scripts/verify-tenant-regression-generator.js",
     "verify:tenant-data-regression": "node scripts/verify-tenant-data-regression.js",
     "verify:comprehensive-regression": "npm run verify:universal-entity-routing && npm run verify:grounding-action-runtime && npm run verify:tenant-regression-generator",

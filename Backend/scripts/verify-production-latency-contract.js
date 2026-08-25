@@ -15,6 +15,7 @@ import {
 } from '../src/voice/interaction/voice-latency-slo.js';
 import { env } from '../src/config/env.js';
 import {
+  canonicalToolArguments,
   configuredTechnicalFailureResponse,
   remainingLiveTurnBudgetMs,
 } from '../src/voice/realtime-conversation-orchestrator.js';
@@ -198,7 +199,24 @@ const technicalFallback = configuredTechnicalFailureResponse({
   },
 });
 assert.doesNotMatch(technicalFallback, /didn'?t understand/iu);
-assert.match(technicalFallback, /temporarily unavailable/iu);
+assert.equal(technicalFallback, '',
+  'The runtime must not invent caller-facing technical-failure speech');
+assert.equal(configuredTechnicalFailureResponse({
+  agent: { settings: { technicalFailureMessage: 'Configured technical response.' } },
+}), 'Configured technical response.');
+assert.deepEqual(canonicalToolArguments({
+  name: 'tenant_action', arguments: { note: 'keep' },
+}, [{
+  name: 'tenant_action',
+  inputSchema: { properties: {
+    item_id: { type: 'string', format: 'catalog-reference' },
+    item_name: {
+      type: 'string', 'x-catalog-reference': true, 'x-catalog-value': 'name',
+    },
+  } },
+}], { recordId: 'record-42', key: 'tenant-item', name: 'Tenant Item' }), {
+  note: 'keep', item_id: 'record-42', item_name: 'Tenant Item',
+});
 
 const orchestrator = readFileSync(
   new URL('../src/voice/realtime-conversation-orchestrator.js', import.meta.url), 'utf8',
@@ -215,6 +233,9 @@ assert.match(orchestrator,
   /Math\.min\(env\.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS, 2_000\)/u,
   'The live first-audio deadline must stay capped at two seconds even with stale production env');
 assert.match(orchestrator, /configuredTechnicalFailureResponse/u);
+assert.match(orchestrator, /decisionWithoutRuntimeSpeech/u);
+assert.doesNotMatch(orchestrator, /One moment while I check the published information/iu);
+assert.doesNotMatch(orchestrator, /information service is temporarily unavailable/iu);
 assert.match(orchestrator, /turn_first_audio_deadline/u);
 assert.match(orchestrator, /persistAudible/u,
   'audible assistant speech must survive a confirmed interruption');

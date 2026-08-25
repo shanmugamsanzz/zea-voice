@@ -4,7 +4,8 @@ export const conversationContextModes = Object.freeze({
 });
 
 export const memoryFieldTypes = Object.freeze([
-  'text', 'number', 'date', 'time', 'boolean', 'select', 'email', 'phone',
+  'text', 'number', 'integer', 'date', 'time', 'boolean', 'select', 'email', 'phone',
+  'catalog_reference',
 ]);
 
 const maximumFields = 30;
@@ -55,9 +56,25 @@ function normalizeField(input, index, strict) {
     if (strict) throw configurationError('Required Action must use lowercase letters, numbers, underscores or hyphens', `conversationMemoryFields.${index}.requiredAction`);
     return null;
   }
+  const options = Object.freeze((Array.isArray(input?.options) ? input.options : []).flatMap((entry) => {
+    const option = entry && typeof entry === 'object' && !Array.isArray(entry)
+      ? entry : { value: entry, label: entry };
+    const rawValue = option.value;
+    const value = cleanText(rawValue, 160);
+    if (!value || !['string', 'number', 'boolean'].includes(typeof rawValue)) return [];
+    return [Object.freeze({
+      value: rawValue,
+      label: cleanText(option.label, 160) || value,
+      aliases: Object.freeze((Array.isArray(option.aliases) ? option.aliases : [])
+        .map((alias) => cleanText(alias, 160)).filter(Boolean)),
+    })];
+  }));
   return Object.freeze({
     key, label, type, required: input?.required !== false, question,
     ...(requiredAction ? { requiredAction } : {}),
+    ...(options.length ? { options } : {}),
+    ...(type === 'catalog_reference' && input?.catalogReference
+      ? { catalogReference: Object.freeze({ ...input.catalogReference }) } : {}),
   });
 }
 

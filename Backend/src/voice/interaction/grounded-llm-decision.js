@@ -105,7 +105,7 @@ function normalizeDecisionEnvelope(value) {
   };
 }
 
-function normalizeFieldValue(value, schema) {
+function normalizeFieldValue(value, schema, envelope) {
   if (value === undefined || value === null || value === '') return undefined;
   if (schema.type === 'boolean') return typeof value === 'boolean' ? value : undefined;
   if (schema.type === 'number' || schema.type === 'integer') {
@@ -115,6 +115,26 @@ function normalizeFieldValue(value, schema) {
   }
   const normalized = text(value, 500);
   if (!normalized) return undefined;
+  if (schema.type === 'select') {
+    const requested = identity(normalized);
+    const option = (schema.options ?? []).find((candidate) => (
+      [candidate?.value, candidate?.label, ...(Array.isArray(candidate?.aliases)
+        ? candidate.aliases : [])].map(identity).filter(Boolean).includes(requested)
+    ));
+    return option?.value;
+  }
+  if (schema.type === 'catalog_reference') {
+    const requested = identity(normalized);
+    const requiredType = text(schema.catalogReference?.recordType, 80).toLocaleLowerCase();
+    const entity = (envelope.entities ?? []).find((candidate) => {
+      const recordType = text(candidate?.recordType ?? candidate?.type, 80).toLocaleLowerCase();
+      return (!requiredType || recordType === requiredType)
+        && [candidate?.id, candidate?.key, candidate?.name,
+          ...(Array.isArray(candidate?.aliases) ? candidate.aliases : [])]
+          .map(identity).filter(Boolean).includes(requested);
+    });
+    return entity ? text(entity.name ?? entity.key ?? entity.id, 500) : undefined;
+  }
   if (schema.type === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(normalized)) return undefined;
   if (schema.type === 'phone' && !/^\+?[\d\s()-]{8,25}$/u.test(normalized)) return undefined;
   return normalized;
@@ -173,7 +193,7 @@ function normalizeStateUpdate(value, envelope, runtime) {
   for (const [key, fieldValue] of Object.entries(requestedInformation)) {
     const schema = fieldSchemas.get(key);
     if (!schema) return null;
-    const normalized = normalizeFieldValue(fieldValue, schema);
+    const normalized = normalizeFieldValue(fieldValue, schema, envelope);
     if (normalized === undefined) return null;
     collectedInformation[key] = normalized;
   }

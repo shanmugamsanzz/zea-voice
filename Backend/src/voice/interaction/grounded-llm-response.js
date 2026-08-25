@@ -48,9 +48,12 @@ function entity(value = {}, sourceId = null) {
   return Object.freeze({
     key, name,
     id: text(value.id ?? value.recordId ?? value.itemId, 100) || null,
+    recordType: text(value.recordType, 80) || null,
     entityType: categoryEntity ? 'CATEGORY' : 'ITEM',
     category: text(value.category, 240) || null,
     categoryKey: text(value.categoryKey, 160) || null,
+    aliases: Object.freeze((Array.isArray(value.aliases) ? value.aliases : [])
+      .map((alias) => text(alias, 160)).filter(Boolean).slice(0, 20)),
     sourceId,
   });
 }
@@ -204,6 +207,8 @@ export function groundedResponseContract(envelope, runtime = {}) {
     key: field.key, label: field.label, type: field.type,
     required: field.required !== false, question: field.question,
     ...(field.requiredAction ? { requiredAction: field.requiredAction } : {}),
+    ...(Array.isArray(field.options) ? { options: field.options } : {}),
+    ...(field.catalogReference ? { catalogReference: field.catalogReference } : {}),
   }));
   return Object.freeze({
     format: 'json_object',

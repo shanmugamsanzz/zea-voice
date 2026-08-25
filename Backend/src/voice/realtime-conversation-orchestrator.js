@@ -62,7 +62,6 @@ import {
 import { compactBundleAsKnowledge } from '../knowledge-engine/compact-evidence-bundle.js';
 import {
   awaitLlmWithSafeLatency,
-  safeLatencyAcknowledgement,
   VoiceTurnLatencyTracker,
   voiceTurnStages,
 } from '../knowledge-engine/voice-turn-latency.js';
@@ -79,7 +78,9 @@ import { sttEventPolicy } from './interaction/stt-event-policy.js';
 import { LiveMemoryMaintenanceQueue } from './interaction/live-memory-maintenance.js';
 import { resolveCallbackConfiguration } from './interaction/callback-config.js';
 import { mergeToolFieldSchemas } from './interaction/tool-field-schema.js';
+import { resolveRuntimeMessage } from './interaction/configured-runtime-messages.js';
 import {
+  applyCanonicalEntityToTaskCompletionState,
   createTaskCompletionState,
 } from './interaction/task-completion-state.js';
 import {
@@ -121,15 +122,11 @@ function settleWithin(promise, timeoutMs, fallback) {
 }
 
 function fallbackClosing(profile) {
-  return profile.agent.language?.toLowerCase().includes('tamil') || profile.agent.language?.toLowerCase().includes('ta')
-    ? 'அழைத்ததற்கு நன்றி. வணக்கம்.' : 'Thank you for calling. Goodbye.';
+  return resolveRuntimeMessage(profile, 'closing');
 }
 
 function fallbackRecovery(profile) {
-  return String(profile.agent.settings?.errorRecoveryMessage ?? '').trim()
-    || (profile.agent.language?.toLowerCase().includes('tamil')
-      ? 'மன்னிக்கவும், ஒரு சிறிய சிக்கல் ஏற்பட்டது. மீண்டும் சொல்ல முடியுமா?'
-      : 'Sorry, I had a temporary problem. Could you please say that again?');
+  return resolveRuntimeMessage(profile, 'recovery');
 }
 
 export function isInternalRuntimeText(value) {
@@ -141,9 +138,23 @@ export function isInternalRuntimeText(value) {
     || /^\s*(?:instruction|action|workflow|response)\s*:/iu.test(text);
 }
 
-function callerFacingFallback(profile) {
-  const configured = String(profile.agent.settings?.noResponseMessage ?? '').trim();
-  return configured && !isInternalRuntimeText(configured) ? configured : fallbackRecovery(profile);
+function clarificationVariables(knowledge = {}) {
+  const ambiguity = knowledge?.tenantEvidence?.authoritative?.ambiguity
+    ?? knowledge?.tenantEvidence?.ambiguity ?? {};
+  const resolution = knowledge?.tenantEvidence?.resolution ?? {};
+  const labels = [...(ambiguity.candidates ?? []), resolution.candidate,
+    ...(resolution.alternatives ?? [])].flatMap((candidate) => {
+    const label = String(candidate?.name ?? candidate?.label ?? '').trim();
+    return label ? [label] : [];
+  }).filter((value, index, values) => values.indexOf(value) === index).slice(0, 5);
+  return { candidate: labels[0] ?? '', options: labels.join(', ') };
+}
+
+function callerFacingFallback(profile, knowledge = {}) {
+  const configured = resolveRuntimeMessage(
+    profile, 'clarification', knowledge, clarificationVariables(knowledge),
+  );
+  return configured && !isInternalRuntimeText(configured) ? configured : '';
 }
 
 function rejectAfter(promise, timeoutMs, createError, onTimeout = () => {}) {
@@ -158,22 +169,13 @@ function rejectAfter(promise, timeoutMs, createError, onTimeout = () => {}) {
   return Promise.race([Promise.resolve(promise), timeout]).finally(() => clearTimeout(timer));
 }
 
-export function configuredSafeFailureResponse(profile) {
-  const configured = String(profile.agent.settings?.knowledgeClarificationMessage ?? '').trim();
-  return configured && !isInternalRuntimeText(configured)
-    ? configured : callerFacingFallback(profile);
+export function configuredSafeFailureResponse(profile, knowledge = {}) {
+  return callerFacingFallback(profile, knowledge);
 }
 
-export function configuredTechnicalFailureResponse(profile) {
-  const configured = String(
-    profile.agent.settings?.technicalFailureMessage
-      ?? profile.agent.settings?.knowledgeTechnicalFailureMessage
-      ?? '',
-  ).trim();
-  if (configured && !isInternalRuntimeText(configured)) return configured;
-  return languageCode(profile.agent.language) === 'ta'
-    ? '\u0bae\u0ba9\u0bcd\u0ba9\u0bbf\u0b95\u0bcd\u0b95\u0bb5\u0bc1\u0bae\u0bcd, \u0ba4\u0b95\u0bb5\u0bb2\u0bcd \u0b9a\u0bc7\u0bb5\u0bc8 \u0ba4\u0bb1\u0bcd\u0b95\u0bbe\u0bb2\u0bbf\u0b95\u0bae\u0bbe\u0b95 \u0b95\u0bbf\u0b9f\u0bc8\u0b95\u0bcd\u0b95\u0bb5\u0bbf\u0bb2\u0bcd\u0bb2\u0bc8. \u0b9a\u0bbf\u0bb1\u0bbf\u0ba4\u0bc1 \u0ba8\u0bc7\u0bb0\u0ba4\u0bcd\u0ba4\u0bbf\u0bb2\u0bcd \u0bae\u0bc0\u0ba3\u0bcd\u0b9f\u0bc1\u0bae\u0bcd \u0bae\u0bc1\u0baf\u0bb1\u0bcd\u0b9a\u0bbf\u0b95\u0bcd\u0b95\u0bb5\u0bc1\u0bae\u0bcd.'
-    : 'Sorry, the information service is temporarily unavailable. Please try again shortly.';
+export function configuredTechnicalFailureResponse(profile, knowledge = {}) {
+  const configured = resolveRuntimeMessage(profile, 'technical_failure', knowledge);
+  return configured && !isInternalRuntimeText(configured) ? configured : '';
 }
 
 function canonicalResolvedMemoryContext(tenantEvidence = {}) {
@@ -231,27 +233,64 @@ function canonicalResolvedMemoryContext(tenantEvidence = {}) {
     ? Object.freeze({ entity: Object.freeze(entity), explicitEntity: true }) : null;
 }
 
-export function configuredEvidenceValidationFailureResponse(profile) {
-  const configured = String(
-    profile.agent.settings?.evidenceValidationFailureMessage ?? '',
-  ).trim();
-  if (configured && !isInternalRuntimeText(configured)) return configured;
-  return languageCode(profile.agent.language) === 'ta'
-    ? 'மன்னிக்கவும், இந்த கேள்விக்கான பதிலை வெளியிடப்பட்ட தகவலுடன் பாதுகாப்பாக உறுதிப்படுத்த முடியவில்லை.'
-    : 'Sorry, I could not safely validate an answer to that question from the published information.';
+export function configuredEvidenceValidationFailureResponse(profile, knowledge = {}) {
+  const configured = resolveRuntimeMessage(profile, 'evidence_validation_failure', knowledge);
+  return configured && !isInternalRuntimeText(configured) ? configured : '';
 }
 
-export function configuredLatencyAcknowledgementResponse(profile) {
-  return safeLatencyAcknowledgement(profile.agent.settings?.latencyAcknowledgementMessage);
+export function configuredLatencyAcknowledgementResponse(profile, knowledge = {}) {
+  return resolveRuntimeMessage(profile, 'acknowledgement', knowledge);
 }
 
 export function remainingLiveTurnBudgetMs(deadlineAt, reserveMs = 0, now = Date.now()) {
   return Math.max(0, Math.floor(Number(deadlineAt) - Number(now) - Math.max(0, reserveMs)));
 }
 
-function callerFacingText(value, profile) {
+function callerFacingText(value, profile, knowledge = {}) {
   const result = String(value ?? '').trim();
-  return !isInternalRuntimeText(result) ? result : callerFacingFallback(profile);
+  return !isInternalRuntimeText(result) ? result : callerFacingFallback(profile, knowledge);
+}
+
+function configuredToolDialogueResponse(workflow = {}, fieldSchemas = []) {
+  if (workflow.status === 'COLLECTING_FIELDS') {
+    const field = (fieldSchemas ?? []).find((candidate) => (
+      candidate.key === workflow.missingFields?.[0]
+    ));
+    return String(field?.question ?? '').trim();
+  }
+  if (workflow.status === 'AWAITING_CONFIRMATION') {
+    return String(workflow.inputSchema?.['x-confirmation-message'] ?? '').trim();
+  }
+  return '';
+}
+
+export function canonicalToolArguments(toolCall = {}, tools = [], canonical = null) {
+  if (!canonical?.recordId || !canonical?.name) return toolCall.arguments ?? {};
+  const tool = tools.find((candidate) => candidate.name === toolCall.name);
+  const properties = tool?.inputSchema?.properties ?? {};
+  const input = { ...(toolCall.arguments ?? {}) };
+  for (const [key, schema] of Object.entries(properties)) {
+    const format = String(schema?.format ?? '').toLocaleLowerCase().replace(/[_\s]+/gu, '-');
+    if (schema?.['x-catalog-reference'] !== true && format !== 'catalog-reference') continue;
+    if (input[key] !== undefined && input[key] !== null && input[key] !== '') continue;
+    const representation = String(schema?.['x-catalog-value'] ?? 'record_id').toLocaleLowerCase();
+    input[key] = representation === 'name' ? canonical.name
+      : (representation === 'key' ? canonical.key : canonical.recordId);
+  }
+  return input;
+}
+
+function decisionWithoutRuntimeSpeech(decision) {
+  if (!decision || typeof decision !== 'object') return decision;
+  return Object.freeze({
+    ...decision,
+    ...(decision.clarification ? {
+      clarification: Object.freeze({ ...decision.clarification, prompt: null }),
+    } : {}),
+    ...(decision.toolWorkflow ? {
+      toolWorkflow: Object.freeze({ ...decision.toolWorkflow, prompt: null }),
+    } : {}),
+  });
 }
 
 const spokenWordPattern = /[\p{L}\p{N}][\p{L}\p{M}\p{N}'’_-]*/gu;
@@ -504,10 +543,18 @@ export class RealtimeConversationOrchestrator {
     });
     this.callCheckConfiguration = resolveCallCheckConfiguration(this.runtimeProfile.agent.settings);
     this.callbackConfiguration = resolveCallbackConfiguration(this.runtimeProfile.agent.settings);
+    const assignedToolSchemas = runtimeTools(this.runtimeProfile.tools);
+    const configuredToolFields = mergeToolFieldSchemas(
+      this.runtimeProfile.agent.settings?.conversationMemoryFields,
+      assignedToolSchemas,
+    );
     const actionConfigurationState = createTaskCompletionState(this.runtimeProfile.agent.settings, {
       ...(this.call.providerMetadata?.context ?? {}),
       ...(this.call.providerMetadata?.preCall?.context ?? {}),
+    }, {
+      fieldSchemas: configuredToolFields,
     });
+    this.taskCompletionState = actionConfigurationState;
     this.actionConfirmationConfiguration = actionConfigurationState.configuration;
     this.runtimeMetrics.taskCompletion = {
       enabled: this.actionConfirmationConfiguration.enabled === true,
@@ -534,14 +581,10 @@ export class RealtimeConversationOrchestrator {
       agentId: this.runtimeProfile.agent.id ?? this.call.agentId,
       callId: this.call.id,
     };
-    const assignedToolSchemas = runtimeTools(this.runtimeProfile.tools);
     const memorySettings = {
       ...this.runtimeProfile.agent.settings,
       conversationLanguage: languageCode(this.runtimeProfile.agent.language),
-      conversationMemoryFields: mergeToolFieldSchemas(
-        this.runtimeProfile.agent.settings?.conversationMemoryFields,
-        assignedToolSchemas,
-      ),
+      conversationMemoryFields: configuredToolFields,
     };
     const restoredMemory = this.previousConversationMemory?.lastCall?.id === this.call.id
       ? { ...this.previousConversationMemory.callFrame, scope: memoryIdentity } : {};
@@ -2121,7 +2164,7 @@ export class RealtimeConversationOrchestrator {
           }, 'Structured decision was rejected and withheld from TTS pending one repair attempt');
         } else {
           this.runtimeMetrics.grounding.fallbacks += 1;
-          answer = configuredSafeFailureResponse(this.runtimeProfile);
+          answer = configuredSafeFailureResponse(this.runtimeProfile, knowledge);
           sources.push(createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
             label: 'Configured safe failure response', metadata: { reason: grounded.reason },
           }));
@@ -2130,7 +2173,7 @@ export class RealtimeConversationOrchestrator {
           }, 'LLM response was rejected before TTS; using the configured safe failure response');
         }
       }
-      answer = callerFacingText(answer, this.runtimeProfile);
+      answer = callerFacingText(answer, this.runtimeProfile, knowledge);
       // applyUnifiedGroundedTurn validates the complete answer, citations,
       // entities, numbers, fields and action before committing canonical
       // memory. Do not mutate or re-interpret its validated speech afterward.
@@ -2631,13 +2674,21 @@ export class RealtimeConversationOrchestrator {
     // Tenant evidence is interpreted by one grounded LLM turn. Runtime route
     // labels and Workflow instruction text never bypass that validation.
     const candidateDecision = knowledge.tenantEvidence?.decision;
-    const engineDecision = isKnowledgeEngineDecision(candidateDecision)
-      ? candidateDecision : technicalClarificationDecision('invalid_engine_result');
+    const engineDecision = decisionWithoutRuntimeSpeech(
+      isKnowledgeEngineDecision(candidateDecision)
+        ? candidateDecision : technicalClarificationDecision('invalid_engine_result'),
+    );
     const canonicalMemoryContext = canonicalResolvedMemoryContext(knowledge.tenantEvidence);
     if (canonicalMemoryContext) {
       const applied = this.liveCallMemory?.applyResolvedContext?.(
         canonicalMemoryContext, { turnToken: epoch },
       );
+      if (canonicalMemoryContext.entity) {
+        this.taskCompletionState = applyCanonicalEntityToTaskCompletionState(
+          this.taskCompletionState,
+          canonicalMemoryContext.entity,
+        );
+      }
       this.log.info({
         stage: 'knowledge.canonical_memory_committed',
         callId: this.call.id,
@@ -2744,9 +2795,9 @@ export class RealtimeConversationOrchestrator {
       const timedOut = engineDecision.clarification?.kind === 'technical';
       response = {
         cancelled: false,
-        text: engineDecision.clarification?.prompt || (timedOut
-          ? configuredTechnicalFailureResponse(this.runtimeProfile)
-          : configuredSafeFailureResponse(this.runtimeProfile)),
+        text: timedOut
+          ? configuredTechnicalFailureResponse(this.runtimeProfile, knowledge)
+          : configuredSafeFailureResponse(this.runtimeProfile, knowledge),
         toolCalls: [],
         sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
           label: 'Configured knowledge clarification', metadata: { reason },
@@ -2802,13 +2853,34 @@ export class RealtimeConversationOrchestrator {
     } else if (engineDecision.type === knowledgeEngineDecisionTypes.TOOL) {
       const workflow = engineDecision.toolWorkflow ?? {};
       const ready = workflow.status === 'READY_TO_EXECUTE';
+      const canonicalEntity = this.taskCompletionState?.canonicalEntity ?? null;
+      const configuredTools = runtimeTools(this.runtimeProfile.tools);
+      const canonicalInput = canonicalToolArguments({
+        name: engineDecision.tool.name,
+        arguments: engineDecision.tool.input,
+      }, configuredTools, canonicalEntity);
+      const toolDialogue = configuredToolDialogueResponse(
+        workflow, this.liveCallMemory?.fieldSchemas?.() ?? [],
+      );
+      this.liveCallMemory?.setActiveToolRequest?.({
+        name: engineDecision.tool.name,
+        status: ready ? 'ready_to_execute'
+          : (workflow.status === 'AWAITING_CONFIRMATION'
+            ? 'awaiting_confirmation' : 'collecting_information'),
+        authorizationRecordId: engineDecision.tool.authorizationEvidenceId,
+        selectedEntityKey: canonicalEntity?.key ?? null,
+        selectedEntityName: canonicalEntity?.name ?? null,
+        catalogRecordId: canonicalEntity?.recordId ?? null,
+      });
+      this.liveCallMemory?.mergeCollectedData?.(canonicalInput);
       response = {
         cancelled: false,
-        text: ready ? '' : (workflow.prompt || configuredSafeFailureResponse(this.runtimeProfile)),
+        text: ready ? '' : (toolDialogue
+          || configuredSafeFailureResponse(this.runtimeProfile, knowledge)),
         toolCalls: ready ? [{
           id: `knowledge-engine-${this.call.id}-${this.epoch}`,
           name: engineDecision.tool.name,
-          arguments: engineDecision.tool.input,
+          arguments: canonicalInput,
           authorizationRecordId: engineDecision.tool.authorizationEvidenceId,
         }] : [],
         sources: [createMessageSource(messageSourceTypes.KNOWLEDGE, {
@@ -2835,18 +2907,21 @@ export class RealtimeConversationOrchestrator {
         latencyTracker.setResponseClass('grounded_llm');
         const acknowledgementEligible = engineDecision.type === knowledgeEngineDecisionTypes.RESPONSE
           && (engineDecision.evidenceIds?.length ?? 0) > 0;
+        const configuredAcknowledgement = configuredLatencyAcknowledgementResponse(
+          this.runtimeProfile, knowledge,
+        );
         const latencyResult = await awaitLlmWithSafeLatency(this.#llm(query, history, knowledge, {
             instruction: 'Resolve only the ambiguity, comparison, action, or multi-source question in the latest utterance. Use only cited evidence. Keep answer brief. Return exactly one grounded decision JSON object.',
             callCheck: null,
           }, streaming), {
             tracker: latencyTracker,
-            acknowledgementEnabled: acknowledgementEligible,
+            acknowledgementEnabled: acknowledgementEligible && Boolean(configuredAcknowledgement),
             // A depleted first-audio budget changes only when the optional
             // acknowledgement is spoken. It must never replace or cancel the
             // in-flight grounded answer.
             acknowledgementAfterMs: Math.max(1, remainingFirstAudioBudgetMs),
             ttsReserveMs,
-            acknowledgementText: configuredLatencyAcknowledgementResponse(this.runtimeProfile),
+            acknowledgementText: configuredAcknowledgement,
             completionTimeoutMs: env.LLM_REQUEST_TIMEOUT_MS,
             postAcknowledgementTimeoutMs: env.VOICE_LLM_POST_ACK_TIMEOUT_MS,
             cancel: () => this.activeLlm?.cancel?.('llm_completion_timeout'),
@@ -2876,7 +2951,7 @@ export class RealtimeConversationOrchestrator {
         }, 'Selected LLM failed; using the technical fallback response');
         response = {
           cancelled: false,
-          text: configuredTechnicalFailureResponse(this.runtimeProfile),
+          text: configuredTechnicalFailureResponse(this.runtimeProfile, knowledge),
           toolCalls: [],
           sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
             label: 'Live deadline technical fallback', metadata: { reason: error.code },
@@ -2890,7 +2965,7 @@ export class RealtimeConversationOrchestrator {
       // a specific, evidence-safe outcome for the completed validation instead.
       response = {
         ...response,
-        text: configuredEvidenceValidationFailureResponse(this.runtimeProfile),
+        text: configuredEvidenceValidationFailureResponse(this.runtimeProfile, knowledge),
         sources: [
           ...(response.sources ?? []).filter((source) => source.type !== messageSourceTypes.RUNTIME_FALLBACK),
           createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
@@ -2910,7 +2985,7 @@ export class RealtimeConversationOrchestrator {
         Math.min(env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS, 600) + 250) < 100) {
       response = {
         cancelled: false,
-        text: configuredTechnicalFailureResponse(this.runtimeProfile),
+        text: configuredTechnicalFailureResponse(this.runtimeProfile, knowledge),
         toolCalls: [],
         sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
           label: 'Live deadline technical fallback',
@@ -2919,12 +2994,23 @@ export class RealtimeConversationOrchestrator {
       };
     }
     if (response.toolCalls.length) {
-      const primaryToolCall = response.toolCalls[0];
+      const primaryToolCall = {
+        ...response.toolCalls[0],
+        arguments: canonicalToolArguments(
+          response.toolCalls[0],
+          runtimeTools(this.runtimeProfile.tools),
+          this.taskCompletionState?.canonicalEntity,
+        ),
+      };
+      response = { ...response, toolCalls: [primaryToolCall, ...response.toolCalls.slice(1)] };
       this.liveCallMemory?.setActiveToolRequest?.({
         id: primaryToolCall?.id,
         name: primaryToolCall?.name,
         status: 'executing',
         authorizationRecordId: primaryToolCall?.authorizationRecordId ?? null,
+        selectedEntityKey: this.taskCompletionState?.canonicalEntity?.key ?? null,
+        selectedEntityName: this.taskCompletionState?.canonicalEntity?.name ?? null,
+        catalogRecordId: this.taskCompletionState?.canonicalEntity?.recordId ?? null,
       });
       let toolResults;
       try {
@@ -2973,8 +3059,7 @@ export class RealtimeConversationOrchestrator {
             sources: toolMessageSources(toolResults),
           } : {
             cancelled: false,
-            text: toolDecision.clarification?.prompt
-              || configuredTechnicalFailureResponse(this.runtimeProfile),
+            text: configuredTechnicalFailureResponse(this.runtimeProfile, knowledge),
             toolCalls: [],
             sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
               label: 'Verified tool response validation fallback',
@@ -2992,9 +3077,25 @@ export class RealtimeConversationOrchestrator {
     }
     const generatedAnswer = String(response.text ?? '').trim();
     const rawAnswer = callerFacingText(
-      generatedAnswer || configuredSafeFailureResponse(this.runtimeProfile), this.runtimeProfile,
+      generatedAnswer || configuredSafeFailureResponse(this.runtimeProfile, knowledge),
+      this.runtimeProfile,
+      knowledge,
     );
     const finalAnswer = rawAnswer;
+    if (!finalAnswer) {
+      sentencePipeline.cancel();
+      this.log.error({
+        stage: 'voice.runtime_message_unconfigured',
+        callId: this.call.id,
+        decisionType: engineDecision.type,
+        decisionReason: engineDecision.reason,
+      }, 'Caller-facing runtime message is not configured or published; returning to listening');
+      if ([callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) {
+        await this.controller.interrupt('runtime_message_unconfigured');
+      }
+      this.#armInactivity();
+      return;
+    }
     if (deterministicMemoryUpdate) {
       this.liveCallMemory?.applyEngineDecision?.(
         deterministicMemoryUpdate.decision,
@@ -3776,6 +3877,14 @@ export class RealtimeConversationOrchestrator {
     if (!ttsFailed && this.controller.state === callStates.LISTENING) {
       try {
         const message = this.#fitTtsMessage(fallbackRecovery(this.runtimeProfile));
+        if (!message) {
+          this.log.error({
+            stage: 'voice.recovery_message_unconfigured', callId: this.call.id,
+            errorCode: error?.code,
+          }, 'Recovery speech is not configured; continuing without runtime-owned fallback speech');
+          this.#armInactivity();
+          return;
+        }
         await this.controller.beginSystemResponse('error_recovery');
         await this.controller.setAssistantResponse(message, Date.now(), {
           sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
