@@ -194,7 +194,8 @@ memory.applyGroundedDecision({
   }, pendingQuestionRelevant: true,
 }, { turnToken: 'turn-2' });
 assert.deepEqual(memory.snapshot().knownEntities.map((entity) => entity.key), ['new']);
-assert.equal(memory.snapshot().pendingQuestion.text, 'Which option do you prefer?');
+assert.equal(memory.snapshot().pendingQuestion, null,
+  'a validated explicit topic change must discard the obsolete pending question');
 memory.close();
 
 const orchestrator = readFileSync(
@@ -205,6 +206,7 @@ assert.match(orchestrator, /fieldSchemas\?\.\(\)/u);
 assert.match(orchestrator, /pendingField\?\.question \?\? pendingQuestion\?\.text/u);
 assert.match(orchestrator, /configuredSafeFailureResponse/u);
 assert.doesNotMatch(orchestrator, /approvedHydratedEvidenceFallback|approvedDocumentFallback/u);
-assert.match(orchestrator, /hydrateSelectedEvidence\(decoded\.decision, groundingEnvelope, authoritativeEvidence\)/u);
+assert.match(orchestrator, /applyUnifiedGroundedTurn\(\{[\s\S]*?evidence:\s*authoritativeEvidence/u,
+  'the unified validator must receive complete authoritative hydrated evidence');
 
 console.log('Strong grounding and interruption preservation verification passed.');

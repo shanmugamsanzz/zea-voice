@@ -129,9 +129,35 @@ const tenants = [
       },
     },
   }),
+  tenantFixture({
+    prefix: '83',
+    product: {
+      name: 'Harbor Route Beacon', key: 'harbor-route-beacon', aliases: ['dock signal unit'],
+      category: 'Marine Navigation', categoryKey: 'marine-navigation',
+      answer: 'The published navigation unit includes the configured route signalling features.',
+    },
+    tool: {
+      name: 'reserve_navigation_unit',
+      inputSchema: {
+        type: 'object', required: ['unit', 'port_zone', 'quantity'],
+        properties: {
+          unit: {
+            type: 'string', format: 'catalog-reference',
+            title: 'Navigation unit', question: 'Which published navigation unit?',
+          },
+          port_zone: {
+            type: 'string', title: 'Port zone', question: 'Which port zone?',
+            enum: ['north', 'south'],
+            'x-enum-aliases': { north: ['upper port'], south: ['lower port'] },
+          },
+          quantity: { type: 'integer', title: 'Quantity', question: 'How many units?' },
+        },
+      },
+    },
+  }),
 ];
 
-for (const tenant of tenants) {
+for (let repeat = 1; repeat <= 3; repeat += 1) for (const tenant of tenants) {
   const resolution = resolvePublishedEntityRoute(
     engineInput(tenant, tenant.sourceRecord.entity_aliases[0]), tenant.publication,
   );
@@ -251,6 +277,7 @@ assert.deepEqual(violations, [],
 
 console.log(JSON.stringify({
   gate: 'universal-hardcoding', passed: true, syntheticTenants: tenants.length,
+  repeats: 3,
   schemaDrivenTools: tenants.map((tenant) => tenant.tool.name),
   canonicalMemoryVerified: true, crossTenantLeakage: false,
   targetedClarificationVerified: true, sourceFilesScanned: (

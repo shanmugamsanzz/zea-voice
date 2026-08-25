@@ -4,6 +4,18 @@ const maximumAnswerCharacters = 4_000;
 const maximumSources = 10;
 const maximumEntities = 20;
 const decisions = new Set(['answer', 'clarify', 'action']);
+const externalDecisions = Object.freeze(['RESPONSE', 'TOOL', 'CLARIFY']);
+
+function normalizeDecision(value) {
+  const normalized = text(value, 20).toLocaleUpperCase();
+  return ({
+    RESPONSE: 'answer',
+    TOOL: 'action',
+    CLARIFY: 'clarify',
+    ANSWER: 'answer',
+    ACTION: 'action',
+  })[normalized] ?? normalized.toLocaleLowerCase();
+}
 const repairableDecisionReasons = new Set([
   'invalid_json', 'invalid_response_shape', 'invalid_clarification',
   'answer_required', 'unsupported_numeric_fact',
@@ -339,23 +351,23 @@ export function groundedDecisionContract(envelope, runtime = {}) {
     ],
     rules: [
       'Answer the latest caller question first.',
-      'Use clarify only when recent context and approved evidence cannot resolve the meaning.',
+      'Return RESPONSE for grounded caller-facing speech, TOOL for one authorized action, or CLARIFY when evidence is genuinely weak or ambiguous.',
       'Do not put question text in answer. Put at most one proposed clarification in pendingQuestion.',
-      'Use action only for one configured tool and never claim success before its verified result.',
+      'Use TOOL only for one configured tool and never claim success before its verified result.',
       'Never request or collect a configured information field unless the caller explicitly requested the assigned action and the selected Workflow evidence authorizes that tool.',
       'Use only evidenceIds listed below for factual speech.',
       'Do not recommend or claim that an item is suitable for symptoms, conditions, or personal needs unless the selected evidence explicitly authorizes that recommendation.',
       'When a safety-sensitive request requires authorized human support, use only the configured tool authorized by selected Workflow evidence; otherwise give a grounded limitation without inventing an action.',
       'Set responseId only when selecting one exact caller-facing published response; otherwise use null.',
       'When multiple exact caller-facing responses are available, select by the meaning of the complete latest utterance together with the immediately pending question and each source situation/context. A short contextual answer resolves the pending question; do not reinterpret it as a presence check unless that is its complete meaning.',
-      'For clarify, set clarification.reason and pendingQuestion. For answer or action, clarification must be null.',
+      'For CLARIFY, set clarification.reason and pendingQuestion. For RESPONSE or TOOL, clarification must be null.',
       'For an ordinary answer with no memory change, return stateUpdate as an empty object.',
       'Resolve meaning generically in stateUpdate when useful: requestType, currentTopic, knownEntityKeys, requestedFacts, constraints, contextualReferences and contextDependent.',
       'Do not depend on exact caller wording or application-defined business vocabulary.',
     ],
     schema: {
-      decision: 'answer | clarify | action',
-      answer: 'natural caller-facing speech with no question; empty only for action',
+      decision: 'RESPONSE | TOOL | CLARIFY',
+      answer: 'natural caller-facing speech with no question; empty only for TOOL',
       responseId: 'one exact caller-facing published response source ID or null',
       evidenceIds: ['approved source IDs'],
       stateUpdate: {
@@ -406,7 +418,7 @@ export function groundedDecisionJsonSchema(envelope, runtime = {}) {
       'pendingQuestion', 'toolRequest', 'clarification',
     ],
     properties: {
-      decision: { type: 'string', enum: [...decisions] },
+      decision: { type: 'string', enum: [...externalDecisions] },
       answer: { type: 'string', maxLength: maximumAnswerCharacters },
       responseId: exactResponseIds.length ? {
         anyOf: [
@@ -493,7 +505,7 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
   if (!parsed || !exactShape(parsed)) {
     return Object.freeze({ valid: false, reason: 'invalid_response_shape' });
   }
-  const decision = text(parsed.decision, 20).toLocaleLowerCase();
+  const decision = normalizeDecision(parsed.decision);
   if (!decisions.has(decision)) return Object.freeze({ valid: false, reason: 'invalid_decision' });
   const parsedClarification = parsed.clarification === null ? null : (() => {
     if (!parsed.clarification || typeof parsed.clarification !== 'object'

@@ -54,7 +54,7 @@ assert.deepEqual(contract.allowedEvidenceIds, ['source_1', 'source_2']);
 assert.equal(contract.configuredToolSchemas[0].name, 'create_visit');
 assert.equal(jsonSchema.additionalProperties, false);
 assert.deepEqual(jsonSchema.required, contract.exactFields);
-assert.deepEqual(jsonSchema.properties.decision.enum.sort(), ['action', 'answer', 'clarify']);
+assert.deepEqual(jsonSchema.properties.decision.enum.sort(), ['CLARIFY', 'RESPONSE', 'TOOL']);
 
 const emptyStateOrdinaryAnswer = validateGroundedLlmDecision(decisionJson({
   decision: 'answer', answer: 'The office is on Central Road.', evidenceIds: ['source_2'],

@@ -4,7 +4,11 @@ import { AppError } from '../middleware/errors.js';
 import { appendTranscriptEntry } from '../calls/call.service.js';
 import {
   ensurePublishedEngineReady,
+  createGroundedLlmOutput,
+  createNormalTurnInput,
+  groundedLlmOutputTypes,
   retrieveTenantEvidence,
+  toKnowledgeEngineInput,
 } from '../knowledge-bases/knowledge-runtime.service.js';
 import {
   createKnowledgeEngineInput,
@@ -13,9 +17,7 @@ import {
   knowledgeEngineResponseModes,
   technicalClarificationDecision,
 } from '../knowledge-engine/engine-contract.js';
-import {
-  finalizeVerifiedToolResults,
-} from '../knowledge-engine/safe-response-tool-runtime.js';
+import { finalizeConfiguredToolResults } from '../knowledge-bases/verified-tool-result.js';
 import { ProviderIndependentAudioEngine } from './audio/audio-engine.js';
 import { completeVoiceCall, completeVoiceCallWithoutRuntime } from './call-completion.service.js';
 import { CallController } from './call-controller.js';
@@ -42,7 +44,6 @@ import { ShortTurnMerger } from './interruption/short-turn-merger.js';
 import { greetingModes, resolveInteractionConfiguration } from './interaction/interaction-config.js';
 import {
   classifyFinalCallCheckUtterance,
-  configuredCallCheckEvidence,
   resolveCallCheckConfiguration,
 } from './interaction/call-check-config.js';
 import { findLanguageSwitchRequest, languageSwitchAcknowledgement } from './interaction/language-switch.js';
@@ -64,7 +65,7 @@ import {
   awaitLlmWithSafeLatency,
   VoiceTurnLatencyTracker,
   voiceTurnStages,
-} from '../knowledge-engine/voice-turn-latency.js';
+} from './interaction/grounded-turn-latency.js';
 import {
   buildGroundingEnvelope,
 } from './interaction/grounded-llm-response.js';
@@ -249,19 +250,6 @@ export function remainingLiveTurnBudgetMs(deadlineAt, reserveMs = 0, now = Date.
 function callerFacingText(value, profile, knowledge = {}) {
   const result = String(value ?? '').trim();
   return !isInternalRuntimeText(result) ? result : callerFacingFallback(profile, knowledge);
-}
-
-function configuredToolDialogueResponse(workflow = {}, fieldSchemas = []) {
-  if (workflow.status === 'COLLECTING_FIELDS') {
-    const field = (fieldSchemas ?? []).find((candidate) => (
-      candidate.key === workflow.missingFields?.[0]
-    ));
-    return String(field?.question ?? '').trim();
-  }
-  if (workflow.status === 'AWAITING_CONFIRMATION') {
-    return String(workflow.inputSchema?.['x-confirmation-message'] ?? '').trim();
-  }
-  return '';
 }
 
 export function canonicalToolArguments(toolCall = {}, tools = [], canonical = null) {
@@ -1658,38 +1646,23 @@ export class RealtimeConversationOrchestrator {
     try {
       const startedAt = performance.now();
       const memoryState = this.liveCallMemory?.snapshot();
-      const pendingQuestion = memoryState?.pendingQuestion?.text
-        ?? memoryState?.pendingQuestionText ?? memoryState?.pendingQuestion ?? undefined;
-      const selectedEntities = Array.isArray(memoryState?.knownEntities)
-        ? memoryState.knownEntities : [];
       const auth = {
         tenantId: this.runtimeProfile.agent.tenantId,
         workspaceId: this.runtimeProfile.agent.workspaceId,
         userId: null,
         role: 'COMPANY_DEVELOPER',
       };
-      const engineInput = createKnowledgeEngineInput({
+      const normalTurnInput = createNormalTurnInput({
         tenantId: this.runtimeProfile.agent.tenantId,
         agentId: this.runtimeProfile.agent.id,
         callId: this.call.id,
-        utterance: query,
+        finalizedQuestion: query,
         usageDirection: this.call.direction,
         language: memoryState?.language ?? languageCode(this.runtimeProfile.agent.language),
-        memory: {
-          activeEntity: memoryState?.activeEntity,
-          activeCategory: memoryState?.activeCategory,
-          latestIntent: memoryState?.latestIntent,
-          recentConversation: memoryState?.recentTurns ?? [],
-          pendingClarification: memoryState?.pendingClarification,
-          activeTool: memoryState?.activeTool,
-          collectedToolFields: memoryState?.collectedToolFields ?? {},
-          citedEvidence: memoryState?.citedEvidence ?? [],
-          knownEntities: selectedEntities,
-          pendingQuestion,
-          collectedInformation: memoryState?.collectedInformation ?? {},
-        },
+        memory: memoryState,
         abortSignal,
       });
+      const engineInput = toKnowledgeEngineInput(normalTurnInput);
       const retrieveEvidence = this.dependencies.retrieveTenantEvidence ?? retrieveTenantEvidence;
       const tenantEvidence = await settleWithin(
         retrieveEvidence(auth, engineInput, {
@@ -1831,12 +1804,9 @@ export class RealtimeConversationOrchestrator {
       ?? this.runtimeProfile.agent.settings?.ttsLimitFallbackMessage
       ?? '',
     ).trim();
-    const defaultFallback = languageCode(this.runtimeProfile.agent.language) === 'ta'
-      ? 'இந்த தகவலை சுருக்கமாகச் சொல்றேன். மீண்டும் கேட்க முடியுமா?'
-      : 'Please ask me again and I will answer briefly.';
     const fitted = this.ttsCharacterBudget.fitMessage(
-      prepared.text || configuredFallback || defaultFallback,
-      configuredFallback || defaultFallback,
+      prepared.text || configuredFallback,
+      configuredFallback,
       { maximumCharacters, locale: languageCode(this.runtimeProfile.agent.language) },
     );
     if (fitted !== prepared.text) {
@@ -2143,6 +2113,14 @@ export class RealtimeConversationOrchestrator {
         if (streaming.isCurrent && !streaming.isCurrent()) {
           return { cancelled: true, text: '', toolCalls: [], sources: [] };
         }
+        const validatedEntity = grounded.state?.activeEntity
+          ?? grounded.state?.knownEntities?.at?.(-1) ?? null;
+        if (validatedEntity) {
+          this.taskCompletionState = applyCanonicalEntityToTaskCompletionState(
+            this.taskCompletionState,
+            validatedEntity,
+          );
+        }
         if (grounded.decision === 'action' && grounded.toolRequest) {
           toolCalls = [{
             id: `decision-${streaming.epoch ?? Date.now()}`,
@@ -2174,6 +2152,35 @@ export class RealtimeConversationOrchestrator {
         }
       }
       answer = callerFacingText(answer, this.runtimeProfile, knowledge);
+      let normalTurnOutput = null;
+      if (grounded.valid) {
+        const selectedEvidenceIds = grounded.evidenceIds ?? grounded.evidenceSourceIds ?? [];
+        const activeTool = grounded.state?.activeToolRequest ?? null;
+        if (grounded.decision === 'action') {
+          normalTurnOutput = createGroundedLlmOutput(groundedLlmOutputTypes.TOOL, {
+            text: answer || null,
+            selectedEvidenceIds,
+            tool: {
+              name: grounded.toolRequest?.name ?? activeTool?.name,
+              authorizationEvidenceId: activeTool?.authorizationRecordId,
+              input: grounded.toolRequest?.arguments
+                ?? grounded.state?.collectedInformation ?? {},
+            },
+          });
+        } else if (grounded.decision === 'clarify') {
+          normalTurnOutput = createGroundedLlmOutput(groundedLlmOutputTypes.CLARIFY, {
+            text: answer || grounded.pendingQuestion?.text
+              || (typeof grounded.pendingQuestion === 'string' ? grounded.pendingQuestion : '')
+              || grounded.nextQuestion?.question,
+            selectedEvidenceIds,
+          });
+        } else {
+          normalTurnOutput = createGroundedLlmOutput(groundedLlmOutputTypes.RESPONSE, {
+            text: answer,
+            selectedEvidenceIds,
+          });
+        }
+      }
       // applyUnifiedGroundedTurn validates the complete answer, citations,
       // entities, numbers, fields and action before committing canonical
       // memory. Do not mutate or re-interpret its validated speech afterward.
@@ -2193,6 +2200,7 @@ export class RealtimeConversationOrchestrator {
           identifiers: grounded.identifiers ?? [],
           numbers: grounded.numbers ?? [],
         },
+        normalTurnOutput,
         toolCalls,
         sources,
       };
@@ -2597,9 +2605,9 @@ export class RealtimeConversationOrchestrator {
       this.activeRetrievalAbortController = null;
     }
     if (epoch !== this.epoch || this.finalized) return;
-    // The saved frame is context, not a gate. A newly hydrated, explicit
-    // canonical entity is committed below before optional response generation;
-    // answers and citations still wait for complete validation.
+    // The saved frame is context, not a gate. Newly hydrated canonical context
+    // is supplied to the grounded decision, but no topic, answer or citation is
+    // committed until that complete decision passes validation.
     const memoryState = this.liveCallMemory?.snapshot();
     const retrievalTrace = knowledge.tenantEvidence?.retrievalTrace ?? {};
     this.log.info({
@@ -2680,25 +2688,15 @@ export class RealtimeConversationOrchestrator {
     );
     const canonicalMemoryContext = canonicalResolvedMemoryContext(knowledge.tenantEvidence);
     if (canonicalMemoryContext) {
-      const applied = this.liveCallMemory?.applyResolvedContext?.(
-        canonicalMemoryContext, { turnToken: epoch },
-      );
-      if (canonicalMemoryContext.entity) {
-        this.taskCompletionState = applyCanonicalEntityToTaskCompletionState(
-          this.taskCompletionState,
-          canonicalMemoryContext.entity,
-        );
-      }
       this.log.info({
-        stage: 'knowledge.canonical_memory_committed',
+        stage: 'knowledge.canonical_context_prepared',
         callId: this.call.id,
         turnEpoch: epoch,
-        applied: applied?.applied === true,
         entityId: canonicalMemoryContext.entity?.id ?? null,
         categoryId: canonicalMemoryContext.category?.id ?? null,
         categoryKey: canonicalMemoryContext.category?.key
           ?? canonicalMemoryContext.entity?.categoryKey ?? null,
-      }, 'Authoritatively hydrated canonical topic committed before optional response generation');
+      }, 'Authoritatively hydrated canonical context prepared for grounded validation');
     }
     const sourceTrace = new MessageSourceTrace(
       knowledgeMessageSources(knowledge, engineDecision.evidenceIds),
@@ -2721,118 +2719,20 @@ export class RealtimeConversationOrchestrator {
     };
     let response;
     let latencyAcknowledged = false;
-    let deterministicMemoryUpdate = null;
-    if (engineDecision.type === knowledgeEngineDecisionTypes.RESPONSE
-      && engineDecision.mode === knowledgeEngineResponseModes.DETERMINISTIC) {
-      const selectedEvidence = (knowledge.tenantEvidence?.sources ?? []).filter((source) => (
-        engineDecision.evidenceIds.includes(source.id)
-        || engineDecision.evidenceIds.includes(source.recordId)
-        || (engineDecision.response?.recordId && source.recordId === engineDecision.response.recordId)
-      ));
-      const selectedSource = selectedEvidence.find((source) => (
-        source.recordId === engineDecision.response?.recordId
-      )) ?? selectedEvidence[0] ?? null;
-      const authoritative = selectedSource?.authoritativeData ?? {};
-      const resolvedCandidate = knowledge.tenantEvidence?.resolution?.candidate ?? null;
-      const categoryDecision = engineDecision.response?.recordType === 'CATALOG_CATEGORY'
-        || resolvedCandidate?.entityType === 'CATEGORY';
-      const catalogEntity = !categoryDecision
-        && String(selectedSource?.recordType ?? '').toLocaleUpperCase() === 'CATALOG_ITEM'
-        ? {
-          id: selectedSource.recordId,
-          key: authoritative.itemKey,
-          name: authoritative.name,
-          category: authoritative.category,
-          categoryKey: authoritative.categoryKey,
-        } : null;
-      const category = categoryDecision ? {
-        id: String(selectedSource?.recordType ?? '').toLocaleUpperCase() === 'CATALOG_CATEGORY'
-          ? selectedSource.recordId : null,
-        recordId: String(selectedSource?.recordType ?? '').toLocaleUpperCase() === 'CATALOG_CATEGORY'
-          ? selectedSource.recordId : null,
-        key: authoritative.categoryKey ?? resolvedCandidate?.categoryKey,
-        name: authoritative.category ?? resolvedCandidate?.label,
-        description: authoritative.categoryDescription
-          ?? resolvedCandidate?.categoryDescription,
-      } : (authoritative.category || authoritative.categoryKey ? {
-        key: authoritative.categoryKey,
-        name: authoritative.category,
-        parentKey: authoritative.parentCategoryKey,
-      } : null);
-      deterministicMemoryUpdate = {
-        decision: engineDecision,
-        context: {
-          entity: catalogEntity,
-          category,
-          explicitEntity: Boolean(catalogEntity && resolvedCandidate?.explicit === true
-            && resolvedCandidate?.entityType === 'ITEM'
-            && resolvedCandidate?.recordId === selectedSource?.recordId),
-          explicitCategory: Boolean(categoryDecision && category && resolvedCandidate?.explicit === true),
-          intent: knowledge.tenantEvidence?.questionType ?? engineDecision.reason,
-          citedEvidence: selectedEvidence.map((source) => ({
-            id: source.id,
-            recordId: source.recordId,
-            recordType: source.recordType,
-            recordName: source.authoritativeData?.name
-              ?? source.authoritativeData?.question
-              ?? source.authoritativeData?.heading
-              ?? source.authoritativeData?.nodeKey
-              ?? null,
-          })),
-        },
-      };
-    }
-    const callCheckClassification = classifyFinalCallCheckUtterance(
-      query, this.callCheckConfiguration, { finalized: true },
-    );
-    const conflictDetected = knowledge.tenantEvidence?.retrieval?.conflictDetected === true
-      || engineDecision.reason === 'conflicting_facts';
-    const semanticCallCheckResolution = Boolean(this.callCheckConfiguration.response)
-      && !conflictDetected
-      && callCheckClassification.shortcut === true;
-    if (engineDecision.type === knowledgeEngineDecisionTypes.CLARIFY && !semanticCallCheckResolution) {
-      const reason = engineDecision.reason;
-      const timedOut = engineDecision.clarification?.kind === 'technical';
-      response = {
-        cancelled: false,
-        text: timedOut
-          ? configuredTechnicalFailureResponse(this.runtimeProfile, knowledge)
-          : configuredSafeFailureResponse(this.runtimeProfile, knowledge),
-        toolCalls: [],
-        sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
-          label: 'Configured knowledge clarification', metadata: { reason },
-        })],
-      };
-      this.log.info({
-        stage: 'knowledge.clarification_selected', callId: this.call.id, reason,
-        conflictType: knowledge.tenantEvidence?.retrieval?.conflictType ?? null,
-      }, 'Weak, conflicting or invalid direct evidence routed to configured clarification');
-    } else if (semanticCallCheckResolution) {
-      const callCheckEvidence = configuredCallCheckEvidence(this.callCheckConfiguration, {
-        tenantId: this.runtimeProfile.agent.tenantId,
-        agentId: this.runtimeProfile.agent.id,
-      });
-      response = {
-        cancelled: false,
-        text: this.callCheckConfiguration.response,
-        toolCalls: [],
-        sources: [createMessageSource(messageSourceTypes.KNOWLEDGE, {
-          label: 'Configured call-check response',
-          metadata: {
-            recordId: callCheckEvidence?.recordId ?? 'configured-call-check-response',
-            evidenceIds: callCheckEvidence ? [callCheckEvidence.id] : [],
-          },
-        })],
-      };
-      turnLatency.fastKnowledge = true;
-      turnLatency.route = 'direct_call_check';
-      latencyTracker.setKnownAnswer(true);
-      latencyTracker.setResponseClass('direct_call_check');
-    } else if (engineDecision.type === knowledgeEngineDecisionTypes.RESPONSE
+    let validatedNormalTurn = false;
+    const intentClass = String(
+      knowledge.tenantEvidence?.classification?.intentClass
+      ?? knowledge.tenantEvidence?.queryPreparation?.intentClass
+      ?? '',
+    ).trim().toLocaleUpperCase();
+    const deterministicPriority = ['SAFETY_EMERGENCY', 'CALL_CONTROL'].includes(intentClass)
+      && engineDecision.type === knowledgeEngineDecisionTypes.RESPONSE
       && engineDecision.mode === knowledgeEngineResponseModes.DETERMINISTIC
-      && engineDecision.response?.text) {
-      // Only priority safety and call-control responses use deterministic
-      // speech. Normal published knowledge always uses one grounded LLM call.
+      && Boolean(engineDecision.response?.text);
+    if (deterministicPriority) {
+      // Emergency and call-control are protocol-level exceptions. Every other
+      // finalized caller turn, including known knowledge, tools and ambiguity,
+      // is decided by exactly one grounded LLM request below.
       response = {
         cancelled: false,
         text: engineDecision.response.text,
@@ -2850,51 +2750,6 @@ export class RealtimeConversationOrchestrator {
       latencyTracker.setKnownAnswer(true);
       latencyTracker.setResponseClass('deterministic_priority');
       this.liveCallMemory?.setPendingQuestion?.(null);
-    } else if (engineDecision.type === knowledgeEngineDecisionTypes.TOOL) {
-      const workflow = engineDecision.toolWorkflow ?? {};
-      const ready = workflow.status === 'READY_TO_EXECUTE';
-      const canonicalEntity = this.taskCompletionState?.canonicalEntity ?? null;
-      const configuredTools = runtimeTools(this.runtimeProfile.tools);
-      const canonicalInput = canonicalToolArguments({
-        name: engineDecision.tool.name,
-        arguments: engineDecision.tool.input,
-      }, configuredTools, canonicalEntity);
-      const toolDialogue = configuredToolDialogueResponse(
-        workflow, this.liveCallMemory?.fieldSchemas?.() ?? [],
-      );
-      this.liveCallMemory?.setActiveToolRequest?.({
-        name: engineDecision.tool.name,
-        status: ready ? 'ready_to_execute'
-          : (workflow.status === 'AWAITING_CONFIRMATION'
-            ? 'awaiting_confirmation' : 'collecting_information'),
-        authorizationRecordId: engineDecision.tool.authorizationEvidenceId,
-        selectedEntityKey: canonicalEntity?.key ?? null,
-        selectedEntityName: canonicalEntity?.name ?? null,
-        catalogRecordId: canonicalEntity?.recordId ?? null,
-      });
-      this.liveCallMemory?.mergeCollectedData?.(canonicalInput);
-      response = {
-        cancelled: false,
-        text: ready ? '' : (toolDialogue
-          || configuredSafeFailureResponse(this.runtimeProfile, knowledge)),
-        toolCalls: ready ? [{
-          id: `knowledge-engine-${this.call.id}-${this.epoch}`,
-          name: engineDecision.tool.name,
-          arguments: canonicalInput,
-          authorizationRecordId: engineDecision.tool.authorizationEvidenceId,
-        }] : [],
-        sources: [createMessageSource(messageSourceTypes.KNOWLEDGE, {
-          label: ready ? 'Authorized published workflow' : 'Published workflow field collection',
-          metadata: {
-            recordId: engineDecision.tool.authorizationEvidenceId,
-            evidenceIds: engineDecision.evidenceIds,
-            workflowStatus: workflow.status ?? null,
-          },
-        })],
-      };
-      turnLatency.route = ready ? 'authorized_tool' : 'tool_dialogue';
-      latencyTracker.setResponseClass(turnLatency.route);
-      if (!ready) latencyTracker.setKnownAnswer(true);
     } else {
       try {
         const llmStartedAt = Date.now();
@@ -2905,13 +2760,12 @@ export class RealtimeConversationOrchestrator {
           remainingLiveTurnBudgetMs(firstAudioDeadlineAt, ttsReserveMs),
         );
         latencyTracker.setResponseClass('grounded_llm');
-        const acknowledgementEligible = engineDecision.type === knowledgeEngineDecisionTypes.RESPONSE
-          && (engineDecision.evidenceIds?.length ?? 0) > 0;
+        const acknowledgementEligible = (knowledge.tenantEvidence?.evidenceIds?.length ?? 0) > 0;
         const configuredAcknowledgement = configuredLatencyAcknowledgementResponse(
           this.runtimeProfile, knowledge,
         );
         const latencyResult = await awaitLlmWithSafeLatency(this.#llm(query, history, knowledge, {
-            instruction: 'Resolve only the ambiguity, comparison, action, or multi-source question in the latest utterance. Use only cited evidence. Keep answer brief. Return exactly one grounded decision JSON object.',
+            instruction: 'Decide this finalized normal turn using only the supplied question, relevant isolated call memory, hydrated evidence, applicable workflow authorization, permitted source mapping and assigned tool schemas. Return exactly one grounded RESPONSE, TOOL, or CLARIFY JSON decision. Never guess when evidence is weak.',
             callCheck: null,
           }, streaming), {
             tracker: latencyTracker,
@@ -2939,6 +2793,17 @@ export class RealtimeConversationOrchestrator {
           });
         latencyAcknowledged ||= latencyResult.acknowledged === true;
         response = latencyResult.value;
+        validatedNormalTurn = Boolean(response?.normalTurnOutput);
+        if (validatedNormalTurn) {
+          this.log.info({
+            stage: 'llm.normal_turn_output_validated',
+            callId: this.call.id,
+            turnEpoch: epoch,
+            outputType: response.normalTurnOutput.type,
+            selectedEvidenceIds: response.normalTurnOutput.selectedEvidenceIds,
+            toolName: response.normalTurnOutput.tool?.name ?? null,
+          }, 'The single grounded LLM decision passed unified validation');
+        }
         turnLatency.llmMs += Math.max(0, Date.now() - llmStartedAt);
       } catch (error) {
         this.#recordProviderFailure('llm', error, 'llm.response');
@@ -3038,7 +2903,7 @@ export class RealtimeConversationOrchestrator {
         })));
         sourceTrace.add(toolMessageSources(toolResults));
         if (epoch !== this.epoch) return;
-        const finalizedTool = finalizeVerifiedToolResults({
+        const finalizedTool = finalizeConfiguredToolResults({
           input: {
             tenantId: this.runtimeProfile.agent.tenantId,
             agentId: this.runtimeProfile.agent.id,
@@ -3066,6 +2931,9 @@ export class RealtimeConversationOrchestrator {
               metadata: { reason: toolDecision.reason },
             })],
           };
+        validatedNormalTurn = validatedNormalTurn
+          && toolDecision.type === knowledgeEngineDecisionTypes.RESPONSE
+          && toolDecision.reason === 'verified_tool_success';
         sourceTrace.add(response.sources);
       } finally {
         this.liveCallMemory?.setActiveToolRequest?.(null);
@@ -3096,12 +2964,7 @@ export class RealtimeConversationOrchestrator {
       this.#armInactivity();
       return;
     }
-    if (deterministicMemoryUpdate) {
-      this.liveCallMemory?.applyEngineDecision?.(
-        deterministicMemoryUpdate.decision,
-        deterministicMemoryUpdate.context,
-      );
-    }
+    if (validatedNormalTurn) this.#scheduleLiveMemoryCheckpoint('validated_normal_turn');
     // The pipeline may already contain the temporary latency acknowledgement.
     // The validated final answer must still be delivered unless it became stale.
     sentencePipeline.enqueue(finalAnswer);

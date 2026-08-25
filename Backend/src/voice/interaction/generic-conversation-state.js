@@ -5,7 +5,7 @@ const maximumMessages = 2_000;
 const maximumMessageCharacters = 2_000;
 const maximumEntities = 20;
 export const genericConversationStateFields = Object.freeze([
-  'activeEntity', 'activeCategory', 'latestIntent', 'pendingClarification',
+  'scope', 'activeEntity', 'activeCategory', 'latestIntent', 'pendingClarification',
   'activeTool', 'collectedToolFields', 'citedEvidence',
   'currentTopic', 'knownEntities', 'pendingQuestion', 'collectedInformation',
   'recentTurns', 'lastAnswer', 'activeToolRequest', 'language', 'requestType',
@@ -200,6 +200,7 @@ function publicState(state) {
   const activeTool = state.activeToolRequest ? Object.freeze({ ...state.activeToolRequest }) : null;
   const collectedToolFields = Object.freeze({ ...state.collectedInformation });
   return Object.freeze({
+    scope: state.scope,
     activeEntity,
     activeCategory,
     latestIntent: state.requestType,

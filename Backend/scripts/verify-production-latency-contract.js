@@ -7,7 +7,7 @@ import { knowledgeSearchIndexes } from '../src/knowledge-engine/query-classifier
 import {
   VoiceTurnLatencyTracker,
   voiceTurnStages,
-} from '../src/knowledge-engine/voice-turn-latency.js';
+} from '../src/voice/interaction/grounded-turn-latency.js';
 import { createSelectedLlmStream } from '../src/voice/providers/llm/llm-response.service.js';
 import {
   evaluateFirstAudioSlo,
@@ -40,8 +40,8 @@ const adapter = {
       Math.max(0, Number(input.messages?.length ?? 0) - 2));
     return (async function* events() {
       yield { type: 'text_delta', delta: '{"evidenceIds":[],' };
-      yield { type: 'text_delta', delta: '"stateUpdate":{},"decision":"clarify",' };
-      yield { type: 'text_delta', delta: '"answer":"I need one detail.","pendingQuestion":"Please clarify.","toolRequest":null}' };
+      yield { type: 'text_delta', delta: '"stateUpdate":{},"decision":"CLARIFY",' };
+      yield { type: 'text_delta', delta: '"answer":"","pendingQuestion":"Please clarify.","toolRequest":null,"clarification":{"reason":"missing_evidence"},"responseId":null}' };
       yield { type: 'completed', toolCalls: [], usage: {} };
     }());
   },
@@ -58,7 +58,7 @@ const profile = {
   },
   tools: [],
 };
-for (const fixture of task10Industries) {
+for (let repeat = 1; repeat <= 3; repeat += 1) for (const fixture of task10Industries) {
   const session = await createSelectedLlmStream(profile, {
     callId: `call-${fixture.industry}`,
     query: fixture.query,
@@ -71,10 +71,10 @@ for (const fixture of task10Industries) {
   for await (const event of session.events) {
     if (event.type === 'text_delta') streamed += event.delta;
   }
-  assert.match(streamed, /"decision":"clarify"/u);
+  assert.match(streamed, /"decision":"CLARIFY"/u);
   await session.close();
 }
-assert.equal(providerRequests, task10Industries.length,
+assert.equal(providerRequests, task10Industries.length * 3,
   'each ordinary turn must make exactly one streamed LLM request');
 assert.equal(maximumOutputTokens, 384,
   'live grounded decisions must honor the voice-specific output cap');
@@ -180,6 +180,7 @@ assert.equal(abortController.signal.aborted, true);
 
 const passingSamples = Array.from({ length: 20 }, (_, index) => ({ firstAudioMs: 500 + index * 10 }));
 assert.equal(evaluateFirstAudioSlo(passingSamples).passed, true);
+assert.ok(evaluateFirstAudioSlo(passingSamples).observed.p95 < 2_000);
 assert.equal(evaluateFirstAudioSlo(passingSamples.slice(0, 5)).reason,
   'insufficient_production_samples');
 assert.equal(voiceLatencyTargets.p90FirstAudioMs, 1_000);
