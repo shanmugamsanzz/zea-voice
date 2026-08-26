@@ -27,12 +27,6 @@ const methodPriority = Object.freeze({
   phonetic: 3, fuzzy: 2, semantic: 1, context: 0,
 });
 
-const contextualReferenceTokens = new Set([
-  'this', 'that', 'it', 'these', 'those', 'same',
-  '\u0b87\u0ba4\u0bc1', '\u0b87\u0ba4\u0bbf\u0bb2\u0bcd', '\u0b87\u0ba4\u0bc1\u0bb2',
-  '\u0b85\u0ba4\u0bc1', '\u0b85\u0ba4\u0bbf\u0bb2\u0bcd', '\u0b85\u0ba4\u0bc1\u0bb2', 'ithu', 'ithula', 'athula', 'adhu',
-]);
-
 function boundedScore(value) {
   const number = Number(value);
   return Number.isFinite(number) ? Math.max(0, Math.min(1, number)) : 0;
@@ -403,58 +397,6 @@ function semanticSignals(accumulator, semanticMatches, records) {
   }
 }
 
-function contextCandidate(memory, records) {
-  const activeEntity = memory?.activeEntity;
-  if (activeEntity) {
-    const directId = normalizeId(activeEntity.recordId ?? activeEntity.id);
-    if (directId && records.has(directId)) return records.get(directId);
-    const itemKey = normalizeId(activeEntity.itemKey ?? activeEntity.key);
-    if (itemKey) {
-      for (const record of records.values()) {
-        if (normalizeId(record.itemKey) === itemKey) return record;
-      }
-    }
-  }
-  const activeCategory = memory?.activeCategory;
-  const categoryKey = normalizeId(activeCategory?.categoryKey ?? activeCategory?.key);
-  if (categoryKey) {
-    const categoryRecords = [...records.values()].filter((record) => (
-      record.recordType === 'CATALOG_ITEM' && normalizeId(record.categoryKey) === categoryKey
-    ));
-    if (categoryRecords.length) {
-      const first = categoryRecords[0];
-      return {
-        ...first,
-        recordType: 'CATALOG_CATEGORY',
-        entityType: 'CATEGORY',
-        label: activeCategory.name ?? first.category,
-        itemKey: null,
-        categoryKey,
-        categoryDescription: first.categoryDescription,
-        children: Object.freeze(categoryRecords.map((record) => Object.freeze({
-          recordId: record.recordId, itemKey: record.itemKey, label: record.label,
-        }))),
-        evidenceRecordIds: Object.freeze(categoryRecords.map((record) => record.recordId)),
-      };
-    }
-  }
-  return null;
-}
-
-function contextSignals(accumulator, input, query, records, hasExplicitCandidate) {
-  const memory = input?.memory ?? {};
-  const candidate = contextCandidate(memory, records);
-  const queryTokens = tokens(query);
-  const isSupportedFollowUp = queryTokens.length <= 3
-    || queryTokens.some((token) => contextualReferenceTokens.has(token))
-    || (input?.contextualReferences?.length ?? 0) > 0
-    || (input?.requestedFacts?.length ?? 0) > 0;
-  if (!candidate || hasExplicitCandidate || !isSupportedFollowUp || memory.pendingClarification) return;
-  addSignal(accumulator, candidate, {
-    method: 'context', score: 0.64, explicit: false,
-  });
-}
-
 function confidenceFor(candidates) {
   const top = candidates[0];
   const second = candidates[1];
@@ -669,42 +611,20 @@ export function resolvePublishedEntityRoute(input, publicationBundles, options =
   const routes = matchRouteCandidates(bundles, records, query, queryForms);
   const semantic = new Map();
   semanticSignals(semantic, options.semanticMatches, records);
-  const contextualFollowUp = (input?.contextualReferences?.length ?? 0) > 0;
-  const initialCatalogRanked = rankCandidates(catalog);
-  const topExplicit = initialCatalogRanked[0];
-  const secondExplicit = initialCatalogRanked[1];
-  const hasDistinctiveExplicitCandidate = topExplicit?.explicit === true
-    && topExplicit.score >= 0.88
-    && (!secondExplicit || topExplicit.score - secondExplicit.score >= 0.06);
-  if (contextualFollowUp && !hasDistinctiveExplicitCandidate) {
-    // Shared tenant vocabulary (for example a generic product-type word) is
-    // discovery evidence, not a new explicit selection. For a contextual
-    // reference, prefer the isolated call's canonical entity/category unless
-    // the utterance also contains one clearly distinctive published entity.
-    const contextualCatalog = new Map();
-    contextSignals(contextualCatalog, input, query, records, false);
-    if (contextualCatalog.size) {
-      catalog.clear();
-      for (const [key, candidate] of contextualCatalog) catalog.set(key, candidate);
-    }
-  } else {
-    contextSignals(catalog, input, query, records, hasDistinctiveExplicitCandidate);
-  }
+  // Call memory is supplied to retrieval and the grounded LLM. It is not an
+  // entity match for the current question; only current published signals may
+  // produce an explicit resolution here.
   const routeGroups = groupByNamespace(routes);
   const semanticGroups = groupByNamespace(semantic);
   const fallbackRouteCandidate = bestRouteCandidate(routes);
   const preliminaryCandidate = fallbackRouteCandidate;
   const preliminaryNamespace = candidateNamespace(preliminaryCandidate);
   const preliminaryIntent = normalizedIntentClass(preliminaryCandidate?.intentClass);
-  const strongestCatalog = initialCatalogRanked[0] ?? null;
-  // Resolve a high-confidence published intent namespace before accepting an
-  // entity candidate. A distinctly stronger explicit Catalog entity can still
-  // override a generic route, while identity, call-purpose, acknowledgement
-  // and overview routes cannot be displaced by unrelated entity vocabulary.
-  const publishedRouteOutranksCatalog = !strongestCatalog
-    || Number(preliminaryCandidate?.score ?? 0) > Number(strongestCatalog.score ?? 0) + 0.02;
+  // Protocol-level routes are deterministic. Normal published namespaces
+  // remain independently eligible so explicit Catalog entities can outrank
+  // generic FAQ or Conversation guidance.
   const lockPublishedRoute = explicitPriorityRoute(preliminaryCandidate)
-    && (absoluteRouteIntents.has(preliminaryIntent) || publishedRouteOutranksCatalog);
+    && absoluteRouteIntents.has(preliminaryIntent);
 
   const catalogRanked = rankCandidates(catalog);
   const semanticRanked = rankCandidates(semantic);
@@ -712,19 +632,11 @@ export function resolvePublishedEntityRoute(input, publicationBundles, options =
     && catalogRanked[0].score >= 0.88;
   const confirmableCatalog = catalogRanked[0]?.explicit === true
     && catalogRanked[0].score >= 0.68;
-  const canonicalContextCandidate = contextualFollowUp
-    && catalogRanked[0]?.method === 'context';
   let selectedNamespace = null;
   let selected = new Map();
   if (lockPublishedRoute && preliminaryNamespace) {
     selectedNamespace = preliminaryNamespace;
     selected = routeGroups.get(preliminaryNamespace) ?? new Map();
-  } else if (canonicalContextCandidate) {
-    // A real contextual reference belongs to the isolated call's canonical
-    // entity/category. Fuzzy FAQ or Conversation vocabulary must not replace
-    // it unless an absolute high-confidence published route was locked above.
-    selectedNamespace = knowledgeCandidateNamespaces.CATALOG;
-    selected = catalog;
   } else if (confirmableCatalog) {
     selectedNamespace = knowledgeCandidateNamespaces.CATALOG;
     selected = catalog;
@@ -738,7 +650,7 @@ export function resolvePublishedEntityRoute(input, publicationBundles, options =
 
   const semanticTop = semanticRanked[0] ?? null;
   const selectedTop = rankCandidates(selected)[0] ?? null;
-  if (semanticTop && !lockPublishedRoute && !explicitCatalog && !contextualFollowUp
+  if (semanticTop && !lockPublishedRoute && !explicitCatalog
     && (!selectedTop || semanticTop.score > selectedTop.score)) {
     selectedNamespace = candidateNamespace(semanticTop);
     selected = selectedNamespace ? semanticGroups.get(selectedNamespace) : new Map();

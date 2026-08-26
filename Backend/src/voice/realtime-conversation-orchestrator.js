@@ -1910,7 +1910,8 @@ export class RealtimeConversationOrchestrator {
       && String(message.content).trim() === String(query).trim()
     ));
     const compactLiveMemory = llmEvidenceBundle ? Object.freeze({
-      activeEntity: llmEvidenceBundle.canonicalEntity,
+      ...llmEvidenceBundle.callMemory,
+      resolvedCurrentEntity: llmEvidenceBundle.canonicalEntity,
       requestedFact: llmEvidenceBundle.requestedFact,
       requestedFacts: llmEvidenceBundle.requestedFacts,
     }) : compactIsolatedCallMemory({
@@ -1954,9 +1955,10 @@ export class RealtimeConversationOrchestrator {
         configuredInformationFields: configuredFields,
         authorizedToolSchemas: groundingRuntime.toolSchemas,
         latestCallerUtterance: llmEvidenceBundle.latestQuestion,
+        relevantCallMemory: llmEvidenceBundle.callMemory,
         canonicalEntity: llmEvidenceBundle.canonicalEntity,
         requestedFact: llmEvidenceBundle.requestedFact,
-        conversationGuidance: llmEvidenceBundle.conversationGuidance,
+        permittedSourceMap: llmEvidenceBundle.sourceMap,
         groundedResponseMode: true,
         compactGrounding: true,
         ...context,

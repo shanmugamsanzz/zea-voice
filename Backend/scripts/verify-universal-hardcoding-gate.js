@@ -204,11 +204,14 @@ for (let repeat = 1; repeat <= 3; repeat += 1) for (const tenant of tenants) {
       categoryKey: tenant.sourceRecord.entity_metadata.categoryKey,
     },
   }, { turnToken: 'canonical-turn' });
+  const memorySnapshot = memory.snapshot();
+  assert.equal(memorySnapshot.activeEntity.id, tenant.sourceRecord.record_id,
+    'Contextual follow-up memory must retain the canonical tenant record');
   const followUp = resolvePublishedEntityRoute(engineInput(
-    tenant, 'Tell me more about this', memory.snapshot(),
+    tenant, 'Tell me more about this', memorySnapshot,
   ), tenant.publication);
-  assert.equal(followUp.candidate.recordId, tenant.sourceRecord.record_id,
-    'Contextual follow-up must use canonical call memory');
+  assert.equal(followUp.candidate, null,
+    'The resolver must not guess that a current question refers to stale memory');
   memory.close();
 
   const unknown = resolvePublishedEntityRoute(

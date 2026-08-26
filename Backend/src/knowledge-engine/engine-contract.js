@@ -60,10 +60,10 @@ export function createKnowledgeEngineInput(value = {}) {
     throw new TypeError('Knowledge-engine input requires tenant, agent, call and finalized utterance');
   }
   const suppliedMemory = value.memory && typeof value.memory === 'object' ? value.memory : {};
-  const requestedFacts = stringList(value.requestedFacts ?? suppliedMemory.requestedFacts);
-  const contextualReferences = stringList(
-    value.contextualReferences ?? suppliedMemory.contextualReferences,
-  );
+  // These describe the latest finalized question. Historical values remain in
+  // canonical memory but must not silently classify a new caller turn.
+  const requestedFacts = stringList(value.requestedFacts);
+  const contextualReferences = stringList(value.contextualReferences);
   const recentRelevantTurns = memoryMessages(
     value.recentRelevantTurns
       ?? suppliedMemory.recentRelevantTurns

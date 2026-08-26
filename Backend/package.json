@@ -177,6 +177,7 @@
     "verify:grounded-turn-evidence-pipeline": "node scripts/verify-grounded-turn-evidence-pipeline.js",
     "verify:single-grounded-llm-live-cutover": "node scripts/verify-single-grounded-llm-live-cutover.js",
     "verify:final-grounded-engine-cutover": "node scripts/verify-final-grounded-engine-cutover.js && node scripts/verify-grounded-turn-evidence-pipeline.js && node scripts/verify-production-latency-contract.js && node scripts/verify-universal-hardcoding-gate.js",
+    "verify:universal-multitenant-acceptance": "node scripts/verify-universal-multitenant-acceptance.js --repeats=3 && node scripts/verify-universal-hardcoding-gate.js",
     "verify:browser-test-transport": "node scripts/verify-browser-test-session-isolation.js && node scripts/verify-browser-test-media.js && node scripts/verify-voice-task-6.js",
     "verify:tenant-regression-generator": "node scripts/verify-tenant-regression-generator.js",
     "verify:tenant-data-regression": "node scripts/verify-tenant-data-regression.js",

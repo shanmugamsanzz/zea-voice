@@ -2,8 +2,6 @@ import assert from 'node:assert/strict';
 import { createKnowledgeEngineInput } from '../src/knowledge-engine/engine-contract.js';
 import { buildPublicationIndexes } from '../src/knowledge-engine/publication-index-builder.js';
 import {
-  extractContextualReferences,
-  extractRequestedFacts,
   prepareKnowledgeQuery,
   refineKnowledgeResolution,
 } from '../src/knowledge-engine/fast-query-preparation.js';
@@ -65,9 +63,6 @@ const purpose = record(5, 'conversation_node', {
 });
 const bundle = buildPublicationIndexes(job, [first, second, safety, callControl, purpose]);
 
-assert.deepEqual(extractRequestedFacts('இதோட price evlo?'), ['price']);
-assert.ok(extractContextualReferences('இதோட price evlo?').length > 0);
-
 const memory = {
   activeEntity: { recordId: first.record_id, itemKey: 'nimbus', name: 'Nimbus plan' },
   recentConversation: [
@@ -75,13 +70,16 @@ const memory = {
     { role: 'assistant', content: 'Nimbus information.' },
   ],
 };
+
 let prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
-  tenantId, agentId, callId, utterance: 'இதோட price evlo?', memory,
+  tenantId, agentId, callId, utterance: 'arbitrary contextual follow-up', memory,
+  requestedFacts: ['price'], contextualReferences: ['active published entity'],
 }), bundle);
 assert.equal(prepared.requestedFact, 'price');
-assert.equal(prepared.usesCallMemory, true);
+assert.equal(prepared.usesCallMemory, false);
 assert.equal(prepared.classification.intentClass, knowledgeQueryClasses.DETAILS_OR_PRICE);
-assert.equal(prepared.resolution.candidate.itemKey, 'nimbus');
+assert.equal(prepared.resolution.candidate, null,
+  'Call memory must not be misrepresented as an explicit current-turn entity match');
 
 prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
   tenantId, agentId, callId, utterance: 'Cirrus', memory,
@@ -89,6 +87,20 @@ prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
 assert.equal(prepared.resolution.candidate.itemKey, 'cirrus');
 assert.equal(prepared.resolution.explicitEntity, true);
 assert.equal(prepared.usesCallMemory, false);
+
+prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
+  tenantId, agentId, callId, utterance: 'Nimbus Cirrus', memory,
+}), bundle);
+assert.equal(prepared.intentClass, knowledgeQueryClasses.COMPARISON_COMPLEX);
+assert.equal(prepared.classification.selectedNamespace, 'CATALOG');
+assert.deepEqual(new Set(prepared.resolution.routingCandidates.map((candidate) => candidate.itemKey)),
+  new Set(['nimbus', 'cirrus']));
+
+prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
+  tenantId, agentId, callId, utterance: 'tenant purpose phrase Nimbus', memory,
+}), bundle);
+assert.equal(prepared.resolution.candidate.itemKey, 'nimbus',
+  'An explicit Catalog entity must override generic Conversation guidance and stale memory');
 
 prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
   tenantId, agentId, callId, utterance: 'tenant urgent phrase', memory,
@@ -124,7 +136,7 @@ prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
 let refined = await refineKnowledgeResolution(
   prepared.input, bundle, prepared.resolution,
   prepared.classification,
-  [{ recordId: second.record_id, score: 0.82 }],
+  [{ recordId: second.record_id, recordType: 'CATALOG_ITEM', score: 0.82 }],
 );
 assert.equal(refined.candidate.itemKey, 'cirrus',
   'Semantic meaning must recover an entity when tenant lexical forms do not match');
@@ -135,7 +147,7 @@ prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
 refined = await refineKnowledgeResolution(
   prepared.input, bundle, prepared.resolution,
   prepared.classification,
-  [{ recordId: second.record_id, score: 0.99 }],
+  [{ recordId: second.record_id, recordType: 'CATALOG_ITEM', score: 0.99 }],
 );
 assert.equal(refined.candidate.itemKey, 'nimbus',
   'Semantic similarity must never replace the latest explicit published entity');
@@ -150,4 +162,4 @@ refined = await refineKnowledgeResolution(
 assert.equal(refined.candidate.recordId, purpose.record_id,
   'Semantic Catalog matches must never replace an explicit Conversation route');
 
-console.log('Fast multilingual query preparation, contextual memory and priority routing verified.');
+console.log('Tenant-driven query preparation, memory and namespace priority routing verified.');

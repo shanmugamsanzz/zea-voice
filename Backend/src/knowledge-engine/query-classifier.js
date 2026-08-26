@@ -169,7 +169,8 @@ function inferredCandidates(input, resolution) {
       ? [{ intentClass, candidate, source: candidate.intentClass
       ? 'published_intent_class' : 'resolved_structure' }] : [];
   });
-  if ((explicitEntityCount(candidates) > 1 && explicitPhraseSignatureCount(candidates) > 1)
+  if ((input.requestedFacts ?? []).some((fact) => String(fact).toLocaleLowerCase() === 'comparison')
+    || (explicitEntityCount(candidates) > 1 && explicitPhraseSignatureCount(candidates) > 1)
     || (input.requestedFacts?.length ?? 0) > 1) {
     inferred.push({
       intentClass: knowledgeQueryClasses.COMPARISON_COMPLEX,
@@ -237,6 +238,13 @@ function indexesFor(intentClass, candidate) {
   if (intentClass === knowledgeQueryClasses.CATEGORY_OVERVIEW
     && (candidate?.entityType === 'CATEGORY' || candidate?.recordType === 'CATALOG_CATEGORY')) {
     return Object.freeze([knowledgeSearchIndexes.CATALOG]);
+  }
+  if (intentClass === knowledgeQueryClasses.COMPARISON_COMPLEX
+    && ['ITEM', 'CATEGORY'].includes(candidate?.entityType)) {
+    return Object.freeze([
+      knowledgeSearchIndexes.CATALOG,
+      knowledgeSearchIndexes.BM25, knowledgeSearchIndexes.SEMANTIC,
+    ]);
   }
   if (intentClass !== knowledgeQueryClasses.KNOWN_INFORMATION) return configured;
   if (candidate?.recordType === 'CATALOG_ITEM') return Object.freeze([

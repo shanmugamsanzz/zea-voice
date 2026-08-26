@@ -78,6 +78,7 @@ function catalogIdentity(source) {
   const data = source?.authoritativeData ?? {};
   return new Set([
     source?.recordId, data.itemKey, data.name,
+    ...(Array.isArray(data.aliases) ? data.aliases : []),
   ].map(identity).filter(Boolean));
 }
 

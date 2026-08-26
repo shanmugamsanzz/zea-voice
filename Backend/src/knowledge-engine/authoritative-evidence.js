@@ -296,12 +296,20 @@ function sameScope(left, right) {
     && Number(left.publicationRevision) === Number(right.publicationRevision);
 }
 
+function recordKey(value = {}) {
+  if (!value || typeof value !== 'object') return null;
+  const recordId = normalizeId(value.recordId);
+  const recordType = String(value.recordType ?? '').toUpperCase();
+  return recordId && recordType ? `${recordType}:${recordId}` : null;
+}
+
 export function fuseCandidateRankings(retrieval, {
   rrfK = 60,
   limit = 5,
   minProviderScore = 0.68,
   allowedRecordTypes = retrieval?.recordTypes ?? null,
   reservedRecordIds = [],
+  reservedRecordKeys = [],
 } = {}) {
   if (!Number.isFinite(rrfK) || rrfK <= 0) throw new TypeError('rrfK must be positive');
   if (!Number.isInteger(limit) || limit < 1 || limit > 5) {
@@ -314,7 +322,12 @@ export function fuseCandidateRankings(retrieval, {
     ? new Set(allowedRecordTypes.map((value) => String(value).toUpperCase())) : null;
   const reservedIds = [...new Set(reservedRecordIds.map(normalizeId).filter(Boolean))];
   const reservedSet = new Set(reservedIds);
+  const reservedKeys = new Set(reservedRecordKeys.map((value) => String(value ?? '').trim())
+    .filter(Boolean));
+  const reservedCandidate = (candidate) => reservedKeys.has(recordKey(candidate))
+    || (!reservedKeys.size && reservedSet.has(normalizeId(candidate.recordId)));
   const fused = new Map();
+  const conflictedKeys = new Set();
   const conflictedIds = new Set();
   const rejectedNamespaceIds = new Set();
   for (const [channel, candidates] of Object.entries(retrieval?.channels ?? {})) {
@@ -334,8 +347,10 @@ export function fuseCandidateRankings(retrieval, {
         namespace: recordNamespaces[recordType],
         categoryKey: candidate.categoryKey ?? null,
       };
-      const current = fused.get(recordId);
+      const key = recordKey(identity);
+      const current = fused.get(key);
       if (current && !sameScope(current, identity)) {
+        conflictedKeys.add(key);
         conflictedIds.add(recordId);
         continue;
       }
@@ -351,29 +366,30 @@ export function fuseCandidateRankings(retrieval, {
       next.channelRanks[channel] = rank;
       next.providerScores[channel] = Number(candidate.score ?? 0);
       next.channels.push(channel);
-      fused.set(recordId, next);
+      fused.set(key, next);
     }
   }
-  for (const recordId of conflictedIds) fused.delete(recordId);
+  for (const key of conflictedKeys) fused.delete(key);
   const ranked = [...fused.values()].sort((left, right) => right.rrfScore - left.rrfScore
       || left.recordType.localeCompare(right.recordType)
       || normalizeId(left.recordId).localeCompare(normalizeId(right.recordId)));
   const rejectedWeakIds = [];
   const accepted = ranked.filter((candidate) => {
     const strongestProviderScore = Math.max(0, ...Object.values(candidate.providerScores));
-    const strong = reservedSet.has(normalizeId(candidate.recordId))
+    const strong = reservedCandidate(candidate)
       || candidate.channels.length > 1
       || strongestProviderScore >= minProviderScore;
     if (!strong) rejectedWeakIds.push(normalizeId(candidate.recordId));
     return strong;
   });
-  const reserved = accepted.filter((candidate) => reservedSet.has(normalizeId(candidate.recordId)));
-  const ordinary = accepted.filter((candidate) => !reservedSet.has(normalizeId(candidate.recordId)));
+  const reserved = accepted.filter(reservedCandidate);
+  const ordinary = accepted.filter((candidate) => !reservedCandidate(candidate));
   const selected = [...reserved, ...ordinary].slice(0, limit)
     .sort((left, right) => right.rrfScore - left.rrfScore
       || left.recordType.localeCompare(right.recordType)
       || normalizeId(left.recordId).localeCompare(normalizeId(right.recordId)));
   const selectedIds = new Set(selected.map((candidate) => normalizeId(candidate.recordId)));
+  const selectedKeys = new Set(selected.map(recordKey));
   const candidates = selected
     .map((candidate, index) => Object.freeze({
       ...candidate,
@@ -395,6 +411,8 @@ export function fuseCandidateRankings(retrieval, {
     rejectedWeakIds: Object.freeze(rejectedWeakIds),
     reservedRecordIds: Object.freeze(reservedIds),
     missingReservedRecordIds: Object.freeze(reservedIds.filter((id) => !selectedIds.has(id))),
+    reservedRecordKeys: Object.freeze([...reservedKeys]),
+    missingReservedRecordKeys: Object.freeze([...reservedKeys].filter((key) => !selectedKeys.has(key))),
   });
 }
 
@@ -529,21 +547,46 @@ export function detectEntityAmbiguity(evidence, classification, resolution) {
   });
 }
 
-function reservedResolutionRecordIds(classification, resolution) {
+function rememberedContextCandidate(input) {
+  const hasContextSignal = (input?.requestedFacts?.length ?? 0) > 0
+    || (input?.contextualReferences?.length ?? 0) > 0;
+  if (!hasContextSignal) return null;
+  const activeCategory = input?.memory?.activeCategory;
+  if (activeCategory) {
+    const recordId = normalizeId(activeCategory.recordId ?? activeCategory.id);
+    if (recordId) return { recordId, recordType: 'CATALOG_CATEGORY' };
+  }
+  const activeEntity = input?.memory?.activeEntity;
+  const recordId = normalizeId(activeEntity?.recordId ?? activeEntity?.id);
+  return recordId ? { recordId, recordType: 'CATALOG_ITEM' } : null;
+}
+
+function reservedResolutionCandidates(input, classification, resolution) {
   if (classification?.intentClass === knowledgeQueryClasses.COMPARISON_COMPLEX) {
     const candidates = resolution?.namespaceCandidates?.CATALOG
       ?? resolution?.routingCandidates ?? [];
-    return [...new Set(candidates.filter((candidate) => (
+    const selected = candidates.filter((candidate) => (
       candidate?.explicit === true
-      && candidate?.entityType !== 'CATEGORY'
-      && String(candidate?.recordType ?? '').toUpperCase() === 'CATALOG_ITEM'
-    )).map((candidate) => normalizeId(candidate.recordId)).filter(Boolean))];
+      && ['ITEM', 'CATEGORY'].includes(candidate?.entityType)
+      && ['CATALOG_ITEM', 'CATALOG_CATEGORY']
+        .includes(String(candidate?.recordType ?? '').toUpperCase())
+    )).map((candidate) => ({
+      recordId: normalizeId(candidate.recordId),
+      recordType: String(candidate.recordType).toUpperCase(),
+    })).filter((candidate) => candidate.recordId);
+    return [...new Map(selected.map((candidate) => [recordKey(candidate), candidate])).values()];
   }
   const candidate = resolution?.candidate;
-  if (candidate?.explicit !== true) return [];
+  if (candidate?.explicit !== true) {
+    const remembered = rememberedContextCandidate(input);
+    return remembered ? [remembered] : [];
+  }
   // A category anchor hydrates its current children in the same SQL record;
   // only the canonical anchor must occupy a reserved RRF slot.
-  return [normalizeId(candidate.recordId)].filter(Boolean);
+  return [{
+    recordId: normalizeId(candidate.recordId),
+    recordType: String(candidate.recordType ?? '').toUpperCase(),
+  }].filter((value) => value.recordId && value.recordType);
 }
 
 function evidenceFromRow(row, input, fused) {
@@ -630,7 +673,9 @@ export async function rankAndHydrateAuthoritativeEvidence({
   if (!['inbound', 'outbound'].includes(input.usageDirection)) {
     throw new TypeError('Authoritative hydration requires inbound or outbound usage direction');
   }
-  const reservedRecordIds = reservedResolutionRecordIds(classification, resolution);
+  const reservedCandidates = reservedResolutionCandidates(input, classification, resolution);
+  const reservedRecordIds = reservedCandidates.map((candidate) => candidate.recordId);
+  const reservedRecordKeys = reservedCandidates.map(recordKey);
   const resolvedCategoryKey = resolution?.candidate?.entityType === 'CATEGORY'
     ? normalizeId(resolution.candidate.categoryKey) : null;
   const resolvedCategoryAnchorId = resolvedCategoryKey
@@ -650,6 +695,7 @@ export async function rankAndHydrateAuthoritativeEvidence({
     minProviderScore,
     allowedRecordTypes: retrieval?.recordTypes,
     reservedRecordIds,
+    reservedRecordKeys,
   });
   const contextRunner = dependencies.contextRunner ?? withTenantContext;
   let rows = [];
@@ -670,10 +716,10 @@ export async function rankAndHydrateAuthoritativeEvidence({
       return result.rows;
     });
   }
-  const fusedById = new Map(fusion.candidates.map((candidate) => [normalizeId(candidate.recordId), candidate]));
+  const fusedById = new Map(fusion.candidates.map((candidate) => [recordKey(candidate), candidate]));
   const evidenceById = new Map();
   for (const row of rows) {
-    const fused = fusedById.get(normalizeId(row.record_id));
+    const fused = fusedById.get(recordKey({ recordId: row.record_id, recordType: row.record_type }));
     if (!fused || !sameScope(fused, {
       recordType: String(row.record_type).toUpperCase(),
       knowledgeBaseId: row.knowledge_base_id,
@@ -683,13 +729,13 @@ export async function rankAndHydrateAuthoritativeEvidence({
     if (!evidenceById.has(key)) evidenceById.set(key, evidenceFromRow(row, input, fused));
   }
   const evidence = [...evidenceById.values()].sort((left, right) => left.rank - right.rank);
-  const hydratedIds = new Set(evidence.map((item) => normalizeId(item.recordId)));
+  const hydratedIds = new Set(evidence.map(recordKey));
   const rejectedRecordIds = fusion.candidates
-    .filter((candidate) => !hydratedIds.has(normalizeId(candidate.recordId)))
+    .filter((candidate) => !hydratedIds.has(recordKey(candidate)))
     .map((candidate) => candidate.recordId);
-  const selectedCandidateId = normalizeId(resolution?.candidate?.recordId);
+  const selectedCandidateId = recordKey(resolution?.candidate);
   const selectedCandidateWasRanked = fusion.candidates.some((candidate) => (
-    normalizeId(candidate.recordId) === selectedCandidateId
+    recordKey(candidate) === selectedCandidateId
   ));
   const selectedCandidateHydrated = selectedCandidateId && hydratedIds.has(selectedCandidateId);
   if (fusion.candidates.length > 0 && evidence.length === 0) {
@@ -717,9 +763,10 @@ export async function rankAndHydrateAuthoritativeEvidence({
         rejectedRecordIds,
       });
   }
-  const missingComparisonRecordIds = fusion.reservedRecordIds.filter((recordId) => (
-    !hydratedIds.has(normalizeId(recordId))
-  ));
+  const missingComparisonRecordKeys = fusion.reservedRecordKeys.filter((key) => !hydratedIds.has(key));
+  const missingComparisonRecordIds = reservedCandidates.filter((candidate) => (
+    missingComparisonRecordKeys.includes(recordKey(candidate))
+  )).map((candidate) => candidate.recordId);
   const detectedAmbiguity = detectEntityAmbiguity(evidence, classification, resolution);
   const ambiguity = missingComparisonRecordIds.length
     ? Object.freeze({
@@ -742,8 +789,10 @@ export async function rankAndHydrateAuthoritativeEvidence({
     rejectedRecordIds: Object.freeze(rejectedRecordIds),
     comparisonCoverage: Object.freeze({
       requestedRecordIds: fusion.reservedRecordIds,
+      requestedRecordKeys: fusion.reservedRecordKeys,
       missingRecordIds: Object.freeze(missingComparisonRecordIds),
-      complete: missingComparisonRecordIds.length === 0,
+      missingRecordKeys: Object.freeze(missingComparisonRecordKeys),
+      complete: missingComparisonRecordKeys.length === 0,
     }),
     hydrationQueryCount: fusion.candidates.length ? 1 : 0,
   });

@@ -35,6 +35,12 @@ const authoritative = (evidence, extra = {}) => ({
   tenantId, agentId, callId, evidence,
   ambiguity: { detected: false, candidates: [] },
   conflict: { detected: false, conflicts: [] },
+  comparisonCoverage: {
+    requestedRecordIds: evidence.filter((item) => (
+      ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(item.recordType)
+    )).map((item) => item.recordId),
+    missingRecordIds: [], complete: true,
+  },
   ...extra,
 });
 
@@ -163,6 +169,22 @@ const complex = planSafeKnowledgeResponse({
 assert.equal(complex.type, knowledgeEngineDecisionTypes.RESPONSE);
 assert.equal(complex.mode, knowledgeEngineResponseModes.GROUNDED_LLM);
 assert.deepEqual(new Set(complex.evidenceIds), new Set([categoryOne.id, categoryTwo.id]));
+const incompleteComplex = planSafeKnowledgeResponse({
+  input: inputFor(), classification: classification(knowledgeQueryClasses.COMPARISON_COMPLEX),
+  resolution: { routingCandidates: [
+    { recordId: categoryOne.recordId, entityType: 'ITEM', explicit: true },
+    { recordId: categoryTwo.recordId, entityType: 'ITEM', explicit: true },
+  ] },
+  authoritative: authoritative([categoryOne], {
+    comparisonCoverage: {
+      requestedRecordIds: [categoryOne.recordId, categoryTwo.recordId],
+      missingRecordIds: [categoryTwo.recordId], complete: false,
+    },
+  }), runtimeProfile: { tools: [] },
+});
+assert.equal(incompleteComplex.type, knowledgeEngineDecisionTypes.CLARIFY,
+  'Incomplete explicitly requested comparison evidence must never reach the LLM');
+assert.equal(incompleteComplex.reason, 'comparison_evidence_incomplete');
 const finalizedComplex = finalizeGroundedLlmResponse({
   input: inputFor(), plan: complex,
   answer: 'Starter Option. Approved starter service. Advanced Option. Approved advanced service.',

@@ -118,6 +118,72 @@ const contextRunner = async (auth, callback) => {
   });
 };
 
+let comparisonHydrationQueries = 0;
+const categoryComparisonCandidate = candidate(ids[5], 6, 0.2, {
+  recordType: 'CATALOG_CATEGORY', categoryKey: 'published-group',
+});
+// Published categories can use an item row as their anchor. Record type must
+// therefore remain part of the authoritative identity even when IDs match.
+const itemComparisonCandidate = candidate(ids[5], 7, 0.2);
+const comparisonRetrieval = {
+  tenantId, agentId, callId,
+  recordTypes: ['CATALOG_ITEM', 'CATALOG_CATEGORY'],
+  channels: {
+    structured: [
+      ...ids.slice(0, 5).map((recordId, index) => candidate(recordId, index + 1, 1)),
+      categoryComparisonCandidate, itemComparisonCandidate,
+    ],
+    bm25: [], qdrant: [],
+  },
+};
+const comparisonResolution = {
+  candidate: categoryComparisonCandidate,
+  candidateNamespace: 'CATALOG',
+  namespaceCandidates: { CATALOG: [
+    { ...categoryComparisonCandidate, entityType: 'CATEGORY', explicit: true },
+    { ...itemComparisonCandidate, entityType: 'ITEM', explicit: true },
+  ] },
+  routingCandidates: [],
+};
+const comparisonHydrated = await rankAndHydrateAuthoritativeEvidence({
+  auth: { tenantId }, input,
+  classification: {
+    tenantId, agentId, callId,
+    intentClass: knowledgeQueryClasses.COMPARISON_COMPLEX,
+  },
+  resolution: comparisonResolution, retrieval: comparisonRetrieval,
+}, {
+  contextRunner: async (_auth, callback) => callback({
+    query: async (_sql, parameters) => {
+      comparisonHydrationQueries += 1;
+      const requested = JSON.parse(parameters[3]);
+      return { rows: requested.map((entry) => ({
+        ...row(entry.record_id, entry.rank, entry.rrf_score,
+          `key-${entry.record_id}`, `Name ${entry.record_id}`, entry.rank * 10),
+        record_type: entry.record_type,
+        authoritative_data: entry.record_type === 'CATALOG_CATEGORY' ? {
+          categoryKey: entry.category_key, category: 'Published Group',
+          categoryAliases: ['Translated Group'], children: [],
+        } : {
+          itemKey: `key-${entry.record_id}`, name: `Name ${entry.record_id}`,
+          aliases: ['Translated Item'], categoryKey: 'options', category: 'Options',
+          price: entry.rank * 10, currency: 'USD', attributes: [],
+          relationships: {}, selectionRules: {},
+        },
+      })) };
+    },
+  }),
+});
+assert.equal(comparisonHydrationQueries, 1);
+assert.equal(comparisonHydrated.evidence.length, 5);
+assert.equal(comparisonHydrated.comparisonCoverage.complete, true);
+assert.equal(comparisonHydrated.comparisonCoverage.requestedRecordKeys.length, 2);
+assert.ok(comparisonHydrated.evidence.some((entry) => entry.recordId === ids[5]
+  && entry.recordType === 'CATALOG_CATEGORY'));
+assert.ok(comparisonHydrated.evidence.some((entry) => entry.recordId === ids[5]
+  && entry.recordType === 'CATALOG_ITEM'),
+  'Every explicitly requested item/category must survive RRF and one-pass hydration');
+
 const classification = {
   tenantId, agentId, callId,
   intentClass: knowledgeQueryClasses.KNOWN_INFORMATION,

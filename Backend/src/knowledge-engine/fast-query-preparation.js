@@ -6,60 +6,10 @@ import {
 import { resolvePublishedEntityRoute } from './entity-route-resolver.js';
 import { classifyKnowledgeQuery, knowledgeQueryClasses } from './query-classifier.js';
 
-export const FAST_QUERY_PREPARATION_VERSION = 1;
-
-const contextualReferencePhrases = Object.freeze([
-  'this', 'that', 'it', 'these', 'those', 'same',
-  'this one', 'that one', 'this option', 'that option',
-  'ithu', 'idhu', 'ithula', 'idhula', 'ithoda', 'idhoda',
-  'adhu', 'athu', 'athula', 'athoda',
-  'இது', 'இதில்', 'இதுல', 'இதோட', 'இந்த',
-  'அது', 'அதில்', 'அதுல', 'அதோட', 'அந்த',
-]);
-
-const requestedFactPhrases = Object.freeze({
-  price: Object.freeze([
-    'price', 'cost', 'rate', 'amount', 'how much',
-    'விலை', 'எவ்வளவு', 'evlo', 'evalavu', 'evvalavu',
-  ]),
-  details: Object.freeze([
-    'detail', 'details', 'information', 'tell me about', 'include', 'includes',
-    'included', 'tests', 'services', 'benefits', 'விவரம்', 'என்ன இருக்கு',
-    'enna irukku', 'enna tests',
-  ]),
-  availability: Object.freeze([
-    'available', 'availability', 'in stock', 'இருக்கா', 'கிடைக்குமா',
-    'irukka', 'kidaikkuma',
-  ]),
-  preparation: Object.freeze([
-    'prepare', 'preparation', 'fasting', 'before the', 'தயாராக', 'நோன்பு',
-    'fasting venuma',
-  ]),
-  comparison: Object.freeze([
-    'compare', 'comparison', 'difference', 'different', 'versus', ' vs ',
-    'வேறுபாடு', 'difference enna',
-  ]),
-});
+export const FAST_QUERY_PREPARATION_VERSION = 2;
 
 function unique(values) {
   return Object.freeze([...new Set(values.filter(Boolean))]);
-}
-
-function phrasePresent(query, phrase) {
-  const normalized = normalizePublicationPhrase(phrase);
-  return normalized && ` ${query} `.includes(` ${normalized} `);
-}
-
-export function extractContextualReferences(question) {
-  const query = normalizePublicationPhrase(question);
-  return unique(contextualReferencePhrases.filter((phrase) => phrasePresent(query, phrase)));
-}
-
-export function extractRequestedFacts(question) {
-  const query = normalizePublicationPhrase(question);
-  return Object.freeze(Object.entries(requestedFactPhrases).flatMap(([fact, phrases]) => (
-    phrases.some((phrase) => phrasePresent(query, phrase)) ? [fact] : []
-  )));
 }
 
 function enrichedInput(input, requestedFacts, contextualReferences) {
@@ -83,14 +33,11 @@ export async function prepareKnowledgeQuery(input, publicationBundles, options =
     throw new TypeError('Fast query preparation requires a finalized knowledge-engine input');
   }
   const normalizedQuestion = normalizePublicationPhrase(input.latestQuestion ?? input.utterance);
-  const requestedFacts = unique([
-    ...(input.requestedFacts ?? []),
-    ...extractRequestedFacts(normalizedQuestion),
-  ]);
-  const contextualReferences = unique([
-    ...(input.contextualReferences ?? []),
-    ...extractContextualReferences(normalizedQuestion),
-  ]);
+  // Requested facts, contextual meaning, action intent and ambiguity belong
+  // to the one grounded LLM decision. Pre-retrieval code accepts only explicit
+  // caller/API signals and never guesses from fixed language or business words.
+  const requestedFacts = unique([...(input.requestedFacts ?? [])]);
+  const contextualReferences = unique([...(input.contextualReferences ?? [])]);
   const preparedInput = enrichedInput(input, requestedFacts, contextualReferences);
   const resolve = dependencies.resolve ?? resolvePublishedEntityRoute;
   const classify = dependencies.classify ?? classifyKnowledgeQuery;
@@ -112,7 +59,7 @@ export async function prepareKnowledgeQuery(input, publicationBundles, options =
     contextualReferences: preparedInput.contextualReferences,
     intentClass: classification.intentClass,
     priorityIntent,
-    usesCallMemory: contextualReferences.length > 0 && resolution.explicitEntity !== true,
+    usesCallMemory: resolution.contextDependent === true,
     resolution,
     classification,
   });
@@ -124,19 +71,13 @@ export async function refineKnowledgeResolution(
   if (!Array.isArray(semanticMatches) || semanticMatches.length === 0) return currentResolution;
   const selected = classification?.candidate ?? currentResolution?.candidate;
   // Semantic search may recover an unresolved turn, but it must not replace a
-  // resolved FAQ, Conversation, Workflow or Catalog route with another type.
+  // high-confidence entity or route resolved from published tenant metadata.
   if (selected?.explicit === true && Number(selected.score ?? currentResolution?.score ?? 0) >= 0.88) {
     return currentResolution;
   }
-  const expectedTypes = Object.freeze({
-    CATALOG: new Set(['CATALOG_ITEM', 'CATALOG_CATEGORY']),
-    FAQ: new Set(['FAQ']), CONVERSATION: new Set(['CONVERSATION_NODE']),
-    WORKFLOW: new Set(['WORKFLOW_RULE']), GENERAL: new Set(['KNOWLEDGE_CHUNK']),
-  })[classification?.selectedNamespace ?? currentResolution?.candidateNamespace];
-  const scopedSemanticMatches = expectedTypes
-    ? semanticMatches.filter((candidate) => expectedTypes.has(String(candidate.recordType ?? '').toUpperCase()))
-    : semanticMatches;
-  if (!scopedSemanticMatches.length) return currentResolution;
   const resolve = dependencies.resolve ?? resolvePublishedEntityRoute;
-  return resolve(input, publicationBundles, { semanticMatches: scopedSemanticMatches });
+  // A weak lexical match must not constrain semantic recovery to its namespace.
+  // Every candidate is already publication-scoped; the resolver applies final
+  // namespace and explicit-entity priority across the independent results.
+  return resolve(input, publicationBundles, { semanticMatches });
 }

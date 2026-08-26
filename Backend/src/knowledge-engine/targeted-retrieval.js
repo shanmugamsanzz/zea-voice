@@ -2,7 +2,7 @@ import { embedQuery } from '../rag/embedding.client.js';
 import { searchTenantPoints } from '../rag/qdrant.client.js';
 import { knowledgeSearchIndexes } from './query-classifier.js';
 
-export const TARGETED_RETRIEVAL_VERSION = 2;
+export const TARGETED_RETRIEVAL_VERSION = 3;
 
 const documentIndexTypes = Object.freeze({
   [knowledgeSearchIndexes.CATALOG]: 'CATALOG_ITEM',
@@ -13,6 +13,20 @@ const documentIndexTypes = Object.freeze({
 });
 
 const defaultDependencies = Object.freeze({ embed: embedQuery, search: searchTenantPoints });
+
+const namespaceTypes = Object.freeze({
+  CATALOG: Object.freeze(['CATALOG_ITEM', 'CATALOG_CATEGORY']),
+  FAQ: Object.freeze(['FAQ']),
+  CONVERSATION: Object.freeze(['CONVERSATION_NODE']),
+  WORKFLOW: Object.freeze(['WORKFLOW_RULE']),
+  GENERAL: Object.freeze(['KNOWLEDGE_CHUNK']),
+});
+
+const namespaceByRecordType = Object.freeze(Object.fromEntries(
+  Object.entries(namespaceTypes).flatMap(([namespace, recordTypes]) => (
+    recordTypes.map((recordType) => [recordType, namespace])
+  )),
+));
 
 function normalizeId(value) {
   return String(value ?? '').trim().toLocaleLowerCase();
@@ -103,6 +117,15 @@ function freezeCandidate(candidate, channel, rank) {
   });
 }
 
+function selectedNamespaceTypes(recordTypes) {
+  return Object.freeze(Object.fromEntries(Object.entries(namespaceTypes).flatMap(
+    ([namespace, types]) => {
+      const selected = types.filter((type) => recordTypes.has(type));
+      return selected.length ? [[namespace, new Set(selected)]] : [];
+    },
+  )));
+}
+
 function rankChannel(candidates, channel, limit) {
   const unique = new Map();
   for (const candidate of candidates) {
@@ -115,6 +138,40 @@ function rankChannel(candidates, channel, limit) {
       || normalizeId(left.recordId).localeCompare(normalizeId(right.recordId)))
     .slice(0, limit)
     .map((candidate, index) => freezeCandidate(candidate, channel, index + 1)));
+}
+
+function interleaveNamespaceRanks(namespaceRanks, channel, limit) {
+  const orderedNamespaces = Object.keys(namespaceRanks);
+  const merged = [];
+  const seen = new Set();
+  for (let rank = 0; merged.length < limit; rank += 1) {
+    let appended = false;
+    for (const namespace of orderedNamespaces) {
+      const candidate = namespaceRanks[namespace]?.[rank];
+      if (!candidate) continue;
+      appended = true;
+      const key = `${normalizeId(candidate.knowledgeBaseId)}:${normalizeId(candidate.recordId)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(candidate);
+      if (merged.length >= limit) break;
+    }
+    if (!appended) break;
+  }
+  return Object.freeze(merged.map((candidate, index) => (
+    freezeCandidate(candidate, channel, index + 1)
+  )));
+}
+
+function groupRankedCandidates(candidates, channel, limit) {
+  const groups = {};
+  for (const [namespace, types] of Object.entries(namespaceTypes)) {
+    const allowed = new Set(types);
+    groups[namespace] = rankChannel(candidates.filter((candidate) => (
+      allowed.has(String(candidate.recordType ?? '').toUpperCase())
+    )), channel, limit);
+  }
+  return Object.freeze(groups);
 }
 
 function structuredCandidates(resolution, recordScope, allowedTypes, limit) {
@@ -221,6 +278,21 @@ function structuredCandidatesForTurn(input, classification, resolution, recordSc
         'structured', candidates.length + 1));
     }
   }
+  if (resolution?.explicitEntity !== true
+    && !['SAFETY_EMERGENCY', 'CALL_CONTROL', 'ACTION_TOOL_REQUEST']
+      .includes(classification?.intentClass)) {
+    // Hydrate the isolated call's canonical topic as supporting context. It
+    // is deliberately lower-ranked than current-turn matches; the grounded
+    // LLM decides whether the latest question actually refers to it.
+    const rememberedCatalog = activeCatalogCandidate(input, recordScope, allowedTypes);
+    if (rememberedCatalog && !candidates.some((candidate) => (
+      normalizeId(candidate.recordId) === normalizeId(rememberedCatalog.recordId)
+    ))) {
+      candidates.push(freezeCandidate({
+        ...rememberedCatalog, score: 0.35, matchMethod: 'call_memory_context',
+      }, 'structured', candidates.length + 1));
+    }
+  }
   if (resolution?.contextDependent === true) {
     const rememberedCatalog = activeCatalogCandidate(input, recordScope, allowedTypes);
     if (rememberedCatalog) {
@@ -252,8 +324,14 @@ function validSparseDocuments(indexes, input, scope, allowedTypes) {
 function bm25Candidates(input, sparseIndexes, scope, allowedTypes, limit) {
   const queryTokens = [...new Set(tokens(input.utterance))];
   if (!queryTokens.length) return Object.freeze([]);
-  const documents = validSparseDocuments(sparseIndexes, input, scope, allowedTypes);
-  if (!documents.length) return Object.freeze([]);
+  const groups = selectedNamespaceTypes(allowedTypes);
+  const namespaceRanks = {};
+  for (const [namespace, namespaceAllowedTypes] of Object.entries(groups)) {
+    const documents = validSparseDocuments(sparseIndexes, input, scope, namespaceAllowedTypes);
+    if (!documents.length) {
+      namespaceRanks[namespace] = Object.freeze([]);
+      continue;
+    }
   const documentFrequency = {};
   for (const document of documents) {
     for (const token of new Set(document.tokens ?? [])) {
@@ -263,7 +341,7 @@ function bm25Candidates(input, sparseIndexes, scope, allowedTypes, limit) {
   const averageLength = documents.reduce(
     (sum, document) => sum + Math.max(1, document.tokens?.length ?? 0), 0,
   ) / documents.length;
-  const ranked = documents.flatMap((document) => {
+    const ranked = documents.flatMap((document) => {
     const frequencies = new Map();
     for (const token of document.tokens ?? []) {
       frequencies.set(token, (frequencies.get(token) ?? 0) + 1);
@@ -290,8 +368,10 @@ function bm25Candidates(input, sparseIndexes, scope, allowedTypes, limit) {
       score,
       tokenCoverage: matched / queryTokens.length,
     }];
-  });
-  return rankChannel(ranked, 'bm25', limit);
+    });
+    namespaceRanks[namespace] = rankChannel(ranked, 'bm25', limit);
+  }
+  return interleaveNamespaceRanks(namespaceRanks, 'bm25', limit);
 }
 
 function semanticPayloadCandidate(match, scope, input, allowedTypes) {
@@ -319,13 +399,29 @@ async function semanticCandidates(input, scope, allowedTypes, limit, dependencie
     usageDirection: input.usageDirection,
     agentId: input.agentId,
     abortSignal: input.abortSignal,
-    limit,
+    // Fetch enough candidates for independent namespace ranking so a dense
+    // namespace cannot crowd every other published source out of the result.
+    limit: Math.min(50, limit * Math.max(1, Object.keys(selectedNamespaceTypes(allowedTypes)).length)),
     scoreThreshold: 0,
     recordTypes: [...allowedTypes],
   });
-  return rankChannel((matches ?? []).map(
+  const scoped = (matches ?? []).map(
     (match) => semanticPayloadCandidate(match, scope, input, allowedTypes),
-  ).filter(Boolean), 'qdrant', limit);
+  ).filter(Boolean);
+  return interleaveNamespaceRanks(
+    groupRankedCandidates(scoped, 'qdrant', limit), 'qdrant', limit,
+  );
+}
+
+function namespaceChannelView(channelCandidates) {
+  const grouped = Object.fromEntries(Object.keys(namespaceTypes).map((namespace) => [namespace, []]));
+  for (const candidate of channelCandidates) {
+    const namespace = namespaceByRecordType[candidate.recordType];
+    if (namespace) grouped[namespace].push(candidate);
+  }
+  return Object.freeze(Object.fromEntries(Object.entries(grouped).map(
+    ([namespace, candidates]) => [namespace, Object.freeze(candidates)],
+  )));
 }
 
 export async function retrieveTargetedCandidates({
@@ -384,6 +480,11 @@ export async function retrieveTargetedCandidates({
     searchedIndexes: Object.freeze([...indexes]),
     recordTypes: Object.freeze([...recordTypes]),
     channels: Object.freeze({ structured, bm25, qdrant }),
+    namespaceChannels: Object.freeze({
+      structured: namespaceChannelView(structured),
+      bm25: namespaceChannelView(bm25),
+      qdrant: namespaceChannelView(qdrant),
+    }),
     candidateCount: structured.length + bm25.length + qdrant.length,
   });
 }

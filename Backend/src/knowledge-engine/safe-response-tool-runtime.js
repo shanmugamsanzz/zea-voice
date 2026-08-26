@@ -312,11 +312,12 @@ export function validateFinalKnowledgeResponse({
 }
 
 function explicitComparisonEvidence(resolution, evidence) {
-  const explicitIds = new Set((resolution?.routingCandidates ?? []).filter((candidate) => (
-    candidate.explicit === true && candidate.entityType === 'ITEM'
-  )).flatMap((candidate) => candidate.evidenceRecordIds ?? [candidate.recordId]).map(normalizedId));
+  const explicitIds = new Set((resolution?.namespaceCandidates?.CATALOG
+    ?? resolution?.routingCandidates ?? []).filter((candidate) => (
+    candidate.explicit === true && ['ITEM', 'CATEGORY'].includes(candidate.entityType)
+  )).map((candidate) => candidate.recordId).map(normalizedId));
   if (!explicitIds.size) return [];
-  return evidence.filter((source) => source.recordType === 'CATALOG_ITEM'
+  return evidence.filter((source) => ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(source.recordType)
     && explicitIds.has(normalizedId(source.recordId)));
 }
 
@@ -454,6 +455,10 @@ export function planSafeKnowledgeResponse({
     'I found conflicting published information. Please clarify the requested option.', evidence,
   );
   const isComparison = classification?.intentClass === knowledgeQueryClasses.COMPARISON_COMPLEX;
+  if (isComparison && authoritative.comparisonCoverage?.complete !== true) {
+    return clarification('no_evidence', 'comparison_evidence_incomplete',
+      null, evidence);
+  }
   if (classification?.intentClass === knowledgeQueryClasses.ACTION_TOOL_REQUEST) {
     const authorizedPlan = planAuthorizedToolWorkflow({
       input, authoritative, runtimeProfile, confirmation,
@@ -520,7 +525,10 @@ export function planSafeKnowledgeResponse({
   }
   if (classification?.intentClass === knowledgeQueryClasses.COMPARISON_COMPLEX) {
     const compared = explicitComparisonEvidence(resolution, callerFacing);
-    if (compared.length < 2) return clarification(
+    const requestedComparisonCount = authoritative.comparisonCoverage?.requestedRecordKeys?.length
+      ?? authoritative.comparisonCoverage?.requestedRecordIds?.length
+      ?? 0;
+    if (requestedComparisonCount < 2 || compared.length !== requestedComparisonCount) return clarification(
       'no_evidence', 'grounded_reasoning_evidence_unavailable',
       'Please clarify the options you want compared.', evidence,
     );

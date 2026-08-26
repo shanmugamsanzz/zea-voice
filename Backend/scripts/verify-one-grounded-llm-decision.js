@@ -16,7 +16,10 @@ const envelope = Object.freeze({
     Object.freeze({ id: 'source_2', recordId: 'record-2', content: 'The office is on Central Road.' }),
   ]),
   entities: Object.freeze([
-    Object.freeze({ id: 'item-1', key: 'premium-service', name: 'Premium service', sourceId: 'source_1' }),
+    Object.freeze({
+      id: 'item-1', key: 'premium-service', name: 'Premium service',
+      aliases: ['Translated premium name'], sourceId: 'source_1',
+    }),
   ]),
 });
 const runtime = Object.freeze({
@@ -65,6 +68,15 @@ assert.equal(emptyStateOrdinaryAnswer.currentTopic, null);
 assert.deepEqual(emptyStateOrdinaryAnswer.selectedEntityKeys, []);
 assert.deepEqual(emptyStateOrdinaryAnswer.fieldUpdates, {});
 assert.equal(emptyStateOrdinaryAnswer.requestType, undefined);
+
+const translatedAliasSelection = validateGroundedLlmDecision(decisionJson({
+  decision: 'answer', answer: 'Premium service costs INR 3200.', evidenceIds: ['source_1'],
+  stateUpdate: { knownEntityKeys: ['Translated premium name'] },
+  pendingQuestion: null, toolRequest: null,
+}), envelope, runtime);
+assert.equal(translatedAliasSelection.valid, true);
+assert.deepEqual(translatedAliasSelection.selectedEntityKeys, ['premium-service'],
+  'A published translated alias must canonicalize instead of being rejected');
 
 const answerWithStaleClarificationMetadata = validateGroundedLlmDecision(decisionJson({
   decision: 'answer', answer: 'The office is on Central Road.', evidenceIds: ['source_2'],

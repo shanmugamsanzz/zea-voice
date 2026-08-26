@@ -408,12 +408,16 @@ function normalizeFlowAction(value, runtime = {}) {
 }
 
 function canonicalSources(envelope, requestedIds) {
-  const lookup = canonicalLookup(envelope.sources ?? [], (source) => [source.id, source.recordId]);
+  const lookup = canonicalLookup(envelope.sources ?? [], (source) => [
+    source.id, source.publishedEvidenceId, source.recordId,
+  ]);
   return canonicalizeList(requestedIds, lookup);
 }
 
 function canonicalEntities(envelope, requestedKeys) {
-  const lookup = canonicalLookup(envelope.entities ?? [], (item) => [item.key, item.name, item.id]);
+  const lookup = canonicalLookup(envelope.entities ?? [], (item) => [
+    item.key, item.name, item.id, ...(Array.isArray(item.aliases) ? item.aliases : []),
+  ]);
   return canonicalizeList(requestedKeys, lookup);
 }
 

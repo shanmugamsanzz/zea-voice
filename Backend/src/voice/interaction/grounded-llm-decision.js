@@ -172,7 +172,8 @@ function normalizeStateUpdate(value, envelope, runtime) {
     collectedInformation: value.collectedInformation ?? value.fieldUpdates ?? {},
   };
   const entityLookup = new Map((envelope.entities ?? []).flatMap((entity) => (
-    [entity.key, entity.name, entity.id].filter(Boolean).map((candidate) => [identity(candidate), entity])
+    [entity.key, entity.name, entity.id, ...(Array.isArray(entity.aliases) ? entity.aliases : [])]
+      .filter(Boolean).map((candidate) => [identity(candidate), entity])
   )));
   const requestedEntities = list(canonical.knownEntityKeys, maximumEntities);
   const knownEntities = [];
@@ -362,6 +363,10 @@ export function groundedDecisionContract(envelope, runtime = {}) {
       'When multiple exact caller-facing responses are available, select by the meaning of the complete latest utterance together with the immediately pending question and each source situation/context. A short contextual answer resolves the pending question; do not reinterpret it as a presence check unless that is its complete meaning.',
       'For CLARIFY, set clarification.reason and pendingQuestion. For RESPONSE or TOOL, clarification must be null.',
       'For an ordinary answer with no memory change, return stateUpdate as an empty object.',
+      'Interpret the complete current question with only the supplied relevant call memory and published evidence.',
+      'Identify the requested fact, every explicit entity or category, every comparison entity, contextual references, and action intent. Put all resolved entity keys in knownEntityKeys and all requested facts in requestedFacts.',
+      'The latest explicit entity or category replaces a stale remembered topic. Use remembered entities only when the current question genuinely depends on context.',
+      'Return CLARIFY only for genuine ambiguity between supported candidates or genuinely missing/conflicting evidence; never clarify merely because caller wording differs from a published phrase.',
       'Resolve meaning generically in stateUpdate when useful: requestType, currentTopic, knownEntityKeys, requestedFacts, constraints, contextualReferences and contextDependent.',
       'Do not depend on exact caller wording or application-defined business vocabulary.',
     ],

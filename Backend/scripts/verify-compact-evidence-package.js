@@ -19,6 +19,10 @@ const callId = 'a1000000-0000-4000-8000-000000000003';
 const input = createKnowledgeEngineInput({
   tenantId, agentId, callId, utterance: 'Compare this option price',
   requestedFacts: ['price'], contextualReferences: ['this'],
+  memory: {
+    activeEntity: { recordId: 'record-2', itemKey: 'item-2', name: 'Item 2' },
+    latestIntent: 'prior_information',
+  },
   recentRelevantTurns: Array.from({ length: 6 }, (_value, index) => ({
     role: index % 2 ? 'assistant' : 'user', content: `Relevant turn ${index + 1}`,
   })),
@@ -37,6 +41,7 @@ function source(index, recordType = 'CATALOG_ITEM', callerFacing = true) {
     hydrationValidated: true, publicationValidated: true,
     authoritativeData: recordType === 'CATALOG_ITEM' ? {
       itemKey: `item-${index}`, name: `Item ${index}`, category: 'Options',
+      aliases: [`Translated Item ${index}`],
       categoryKey: 'options', description: `Approved description ${index}`,
       price: index * 100, currency: 'INR', attributes: [], relationships: {},
       selectionRules: {}, internalSecret: 'must-not-enter-prompt',
@@ -88,6 +93,8 @@ const llmEvidenceBundle = buildCompactEvidenceBundle({
 });
 
 assert.equal(llmEvidenceBundle.latestQuestion, 'Compare this option price');
+assert.equal(llmEvidenceBundle.callMemory.activeEntity.recordId, 'record-2');
+assert.equal(llmEvidenceBundle.callMemory.latestIntent, 'prior_information');
 assert.equal(llmEvidenceBundle.canonicalEntity.itemKey, 'item-1');
 assert.equal(llmEvidenceBundle.requestedFact, 'price');
 assert.equal(llmEvidenceBundle.recentRelevantTurns.length, 4);
@@ -112,7 +119,10 @@ const compactKnowledge = compactBundleAsKnowledge({
   tenantEvidence: { llmEvidenceBundle, publicationRevisions: [{ knowledgeBaseId: 'kb-1', publicationRevision: 3 }] },
 });
 assert.equal(compactKnowledge.tenantEvidence.sources.length, 5);
-assert.equal(compactKnowledge.tenantEvidence.entities.length, 1);
+assert.equal(compactKnowledge.tenantEvidence.entities.length, 5);
+assert.ok(compactKnowledge.tenantEvidence.entities[0].aliases.includes('Translated Item 1'));
+assert.equal(compactKnowledge.tenantEvidence.guidanceEvidence.length, 0,
+  'Operational Conversation guidance must not enter the grounded LLM evidence payload');
 assert.equal(compactKnowledge.tenantEvidence.actionEvidence.length, 1);
 assert.doesNotMatch(JSON.stringify(compactKnowledge), /large-runtime-object|internalDebug/u);
 
@@ -134,6 +144,16 @@ assert.equal(hydratedEnvelope.sources[0].id, 'source_1');
 assert.equal(hydratedEnvelope.sources[0].publishedEvidenceId, callerEvidence[0].id);
 assert.equal(hydratedEnvelope.sources[0].documentId, callerEvidence[0].documentId);
 assert.equal(hydratedEnvelope.sources[0].documentVersionId, callerEvidence[0].documentVersionId);
+const duplicateRecordSource = {
+  ...callerEvidence[0], id: 'published:catalog_item:foreign-duplicate',
+  documentId: 'foreign-document', knowledgeBaseId: 'foreign-kb',
+};
+const deterministicallyHydrated = hydrateGroundingEnvelope(envelope, [
+  duplicateRecordSource, ...callerEvidence,
+]);
+assert.equal(deterministicallyHydrated.sources[0].publishedEvidenceId, callerEvidence[0].id);
+assert.equal(deterministicallyHydrated.sources[0].documentId, callerEvidence[0].documentId,
+  'source_1 must map through its published evidence ID, never a loose duplicate record ID');
 assert.deepEqual(validateEvidenceScope(hydratedEnvelope.sources[0], {
   tenantId, agentId, requireHydratedEvidence: true,
   publicationRevisions: [{ knowledgeBaseId: 'kb-1', publicationRevision: 3 }],

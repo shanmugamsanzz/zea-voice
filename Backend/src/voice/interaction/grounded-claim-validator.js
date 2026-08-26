@@ -171,11 +171,21 @@ export function validateGroundedClaim(sentence, sources = [], options = {}) {
   }
   const selectedCatalogIdentities = new Set(sources.flatMap((source) => {
     const data = source?.authoritativeData ?? {};
-    return [source?.recordId, data.itemKey, data.name, data.categoryKey, data.category]
+    return [
+      source?.recordId, data.itemKey, data.name, data.categoryKey, data.category,
+      ...(Array.isArray(data.aliases) ? data.aliases : []),
+      ...(Array.isArray(data.categoryAliases) ? data.categoryAliases : []),
+      ...(Array.isArray(data.children) ? data.children.flatMap((child) => [
+        child?.recordId, child?.itemKey, child?.name,
+      ]) : []),
+    ]
       .map(identity).filter(Boolean);
   }));
   const unsupportedEntity = (options.knownEntities ?? []).find((entity) => {
-    const candidates = [entity?.id, entity?.key, entity?.name].map(identity).filter(Boolean);
+    const candidates = [
+      entity?.id, entity?.key, entity?.name,
+      ...(Array.isArray(entity?.aliases) ? entity.aliases : []),
+    ].map(identity).filter(Boolean);
     const mentioned = candidates.some((candidate) => candidate.length >= 3 && identity(claim).includes(candidate));
     return mentioned && !candidates.some((candidate) => selectedCatalogIdentities.has(candidate));
   });
@@ -247,27 +257,47 @@ export function removeUnsupportedRecommendationSentences(value, sources = [], op
   });
 }
 
+function canonicalEvidenceKey(value = {}) {
+  const recordId = identity(value.recordId);
+  const recordType = String(value.recordType ?? '').trim().toLocaleUpperCase();
+  const knowledgeBaseId = identity(value.knowledgeBaseId);
+  const revision = Number(value.publicationRevision);
+  return recordId && recordType && knowledgeBaseId && Number.isInteger(revision)
+    ? `${recordType}:${recordId}:${knowledgeBaseId}:${revision}` : null;
+}
+
+function authoritativeSourceFor(source, authoritativeSources) {
+  const publishedId = identity(source?.publishedEvidenceId);
+  if (publishedId) {
+    return authoritativeSources.find((candidate) => identity(candidate.id) === publishedId) ?? null;
+  }
+  const canonicalKey = canonicalEvidenceKey(source);
+  if (canonicalKey) {
+    return authoritativeSources.find((candidate) => canonicalEvidenceKey(candidate) === canonicalKey) ?? null;
+  }
+  // Compatibility for non-publication test/runtime sources: accept a record
+  // ID only when it identifies exactly one authoritative source.
+  const recordId = identity(source?.recordId);
+  const matches = recordId ? authoritativeSources.filter((candidate) => (
+    identity(candidate.recordId) === recordId
+  )) : [];
+  return matches.length === 1 ? matches[0] : null;
+}
+
 export function hydrateSelectedEvidence(decision, envelope, authoritativeSources = []) {
   const selected = new Set([
     ...(decision?.evidenceIds ?? []),
     ...(decision?.evidenceSourceIds ?? []),
-  ]);
-  return (envelope?.sources ?? []).filter((source) => selected.has(source.id)).map((source) => (
-    authoritativeSources.find((candidate) => (
-      candidate.id === source.publishedEvidenceId
-      || candidate.id === source.id
-      || (source.recordId && candidate.recordId === source.recordId)
-    )) ?? null
-  )).filter(Boolean);
+  ].map(identity));
+  return (envelope?.sources ?? []).filter((source) => (
+    [source.id, source.publishedEvidenceId, source.recordId]
+      .map(identity).some((candidate) => selected.has(candidate))
+  )).map((source) => authoritativeSourceFor(source, authoritativeSources)).filter(Boolean);
 }
 
 export function hydrateGroundingEnvelope(envelope, authoritativeSources = []) {
   const sources = (envelope?.sources ?? []).map((source) => {
-    const authoritative = authoritativeSources.find((candidate) => (
-      candidate.id === source.publishedEvidenceId
-      || candidate.id === source.id
-      || (source.recordId && candidate.recordId === source.recordId)
-    ));
+    const authoritative = authoritativeSourceFor(source, authoritativeSources);
     return authoritative ? Object.freeze({
       ...source, ...authoritative,
       // The envelope may explicitly mark the retrieval-selected guidance

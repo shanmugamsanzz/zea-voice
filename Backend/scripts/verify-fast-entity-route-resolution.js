@@ -182,25 +182,21 @@ assert.equal(result.routingCandidates.length, 2,
 result = resolvePublishedEntityRoute(input('tell me more', {
   activeEntity: { recordId: alpha.record_id, key: 'alpha-prime' },
 }), bundle);
-assert.equal(result.candidate.itemKey, 'alpha-prime');
-assert.equal(result.candidate.method, 'context');
-assert.equal(result.action, knowledgeResolutionActions.RETRIEVE);
+assert.equal(result.candidate, null,
+  'Memory must not be converted into a current-turn entity match before grounded understanding');
 
 result = resolvePublishedEntityRoute(input('What details are included in this?', {
   activeEntity: { recordId: alpha.record_id, key: 'alpha-prime' },
 }), bundle);
-assert.equal(result.candidate.itemKey, 'alpha-prime');
-assert.equal(result.candidate.method, 'context');
+assert.equal(result.candidate, null);
 
 result = resolvePublishedEntityRoute(input('\u0b85\u0ba4\u0bc1\u0bb2 \u0b8e\u0ba9\u0bcd\u0ba9 details \u0b87\u0bb0\u0bc1\u0b95\u0bcd\u0b95\u0bc1?', {
   activeCategory: {
     id: oncoMale.record_id, key: 'oncology-screening', name: 'Oncology Screening',
   },
 }), bundle);
-assert.equal(result.candidate.categoryKey, 'oncology-screening');
-assert.equal(result.candidate.entityType, 'CATEGORY');
-assert.equal(result.candidate.evidenceRecordIds.length, 2);
-assert.equal(result.candidate.method, 'context');
+assert.equal(result.candidate, null,
+  'Language-specific contextual phrases must not be required by the resolver');
 
 result = resolvePublishedEntityRoute(input('Beta Voice', {
   activeEntity: { recordId: alpha.record_id, key: 'alpha-prime' },

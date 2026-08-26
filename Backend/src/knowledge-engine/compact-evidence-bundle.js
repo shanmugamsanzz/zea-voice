@@ -3,7 +3,7 @@ import {
   knowledgeEngineResponseModes,
 } from './engine-contract.js';
 
-export const COMPACT_EVIDENCE_BUNDLE_VERSION = 1;
+export const COMPACT_EVIDENCE_BUNDLE_VERSION = 2;
 
 function cleanText(value, maximum = 2_000) {
   return String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
@@ -16,6 +16,42 @@ function normalizedId(value) {
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function compactMemoryEntity(value) {
+  const entity = object(value);
+  const recordId = cleanText(entity.recordId ?? entity.id, 160);
+  const key = cleanText(entity.itemKey ?? entity.categoryKey ?? entity.key, 160);
+  const name = cleanText(entity.name ?? entity.label, 240);
+  if (!recordId && !key && !name) return null;
+  return Object.freeze({
+    recordId: recordId || null,
+    key: key || null,
+    name: name || null,
+  });
+}
+
+function compactCallMemory(input) {
+  const memory = object(input?.canonicalCallMemory ?? input?.memory);
+  const pending = object(memory.pendingClarification);
+  const tool = object(memory.activeTool);
+  return Object.freeze({
+    activeEntity: compactMemoryEntity(memory.activeEntity),
+    activeCategory: compactMemoryEntity(memory.activeCategory),
+    latestIntent: cleanText(memory.latestIntent, 80) || null,
+    pendingClarification: Object.keys(pending).length ? Object.freeze({
+      kind: cleanText(pending.kind ?? pending.reason, 80) || null,
+      question: cleanText(pending.question ?? pending.prompt, 500) || null,
+      candidateRecordIds: Object.freeze((Array.isArray(pending.candidateRecordIds)
+        ? pending.candidateRecordIds
+        : (Array.isArray(pending.recordIds) ? pending.recordIds : []))
+        .slice(0, 5).map((id) => cleanText(id, 160)).filter(Boolean)),
+    }) : null,
+    activeTool: Object.keys(tool).length ? Object.freeze({
+      name: cleanText(tool.name, 100) || null,
+      status: cleanText(tool.status, 80) || null,
+    }) : null,
+  });
 }
 
 function compactAuthoritativeData(source) {
@@ -134,9 +170,44 @@ function canonicalEntity(resolution, evidence) {
     itemKey: candidate.itemKey ?? data.itemKey ?? null,
     categoryKey: candidate.categoryKey ?? data.categoryKey ?? null,
     name: cleanText(name, 240),
+    aliases: Object.freeze((entityType === 'CATEGORY'
+      ? (data.categoryAliases ?? []) : (data.aliases ?? []))
+      .slice(0, 20).map((alias) => cleanText(alias, 160)).filter(Boolean)),
     category: cleanText(data.category, 240) || null,
     explicit: candidate.explicit === true,
   });
+}
+
+function catalogEntities(evidence, resolvedEntity) {
+  const entities = [];
+  const seen = new Set();
+  const append = (value) => {
+    const key = normalizedId(value?.key ?? value?.recordId);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    entities.push(Object.freeze(value));
+  };
+  if (resolvedEntity) append(resolvedEntity);
+  for (const source of evidence) {
+    const data = object(source.authoritativeData);
+    if (source.recordType === 'CATALOG_ITEM') append({
+      id: source.recordId, recordId: source.recordId, recordType: source.recordType,
+      entityType: 'ITEM', key: data.itemKey ?? source.recordId,
+      itemKey: data.itemKey ?? null, categoryKey: data.categoryKey ?? null,
+      name: cleanText(data.name, 240), category: cleanText(data.category, 240) || null,
+      aliases: Object.freeze((data.aliases ?? []).slice(0, 20)
+        .map((alias) => cleanText(alias, 160)).filter(Boolean)),
+    });
+    if (source.recordType === 'CATALOG_CATEGORY') append({
+      id: source.recordId, recordId: source.recordId, recordType: source.recordType,
+      entityType: 'CATEGORY', key: data.categoryKey ?? source.recordId,
+      itemKey: null, categoryKey: data.categoryKey ?? null,
+      name: cleanText(data.category, 240), category: cleanText(data.category, 240) || null,
+      aliases: Object.freeze((data.categoryAliases ?? []).slice(0, 20)
+        .map((alias) => cleanText(alias, 160)).filter(Boolean)),
+    });
+  }
+  return Object.freeze(entities.slice(0, 20));
 }
 
 function toolIdentifier(source) {
@@ -208,10 +279,13 @@ export function buildCompactEvidenceBundle({
     knowledgeBaseId: source.knowledgeBaseId,
     publicationRevision: source.publicationRevision,
   }));
+  const resolvedEntity = canonicalEntity(resolution, allEvidence);
   return Object.freeze({
     version: COMPACT_EVIDENCE_BUNDLE_VERSION,
     latestQuestion: cleanText(input?.latestQuestion ?? input?.utterance, 2_000),
-    canonicalEntity: canonicalEntity(resolution, allEvidence),
+    callMemory: compactCallMemory(input),
+    canonicalEntity: resolvedEntity,
+    entities: catalogEntities(topEvidence, resolvedEntity),
     requestedFact: input?.requestedFact ?? null,
     requestedFacts: Object.freeze([...(input?.requestedFacts ?? [])].slice(0, 8)),
     recentRelevantTurns: Object.freeze([...(input?.recentRelevantTurns ?? [])].slice(-4)),
@@ -236,9 +310,11 @@ export function compactBundleAsKnowledge(knowledge = {}) {
     tenantEvidence: Object.freeze({
       found: evidenceBundle.topEvidence.length > 0,
       sources: evidenceBundle.topEvidence,
-      guidanceEvidence: evidenceBundle.conversationGuidance,
+      // Applicable guidance already influences publication/retrieval. The LLM
+      // receives only hydrated answer evidence plus authorized Workflow data.
+      guidanceEvidence: Object.freeze([]),
       actionEvidence: evidenceBundle.actionAuthorizationEvidence,
-      entities: Object.freeze(evidenceBundle.canonicalEntity ? [evidenceBundle.canonicalEntity] : []),
+      entities: evidenceBundle.entities,
       evidenceIds: Object.freeze(evidenceBundle.topEvidence.map((source) => source.id)),
       publicationRevisions: knowledge.tenantEvidence?.publicationRevisions ?? [],
       llmEvidenceBundle: evidenceBundle,
