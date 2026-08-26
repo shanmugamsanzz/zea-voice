@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { AppError } from '../middleware/errors.js';
 
-export const KNOWLEDGE_PUBLICATION_BUNDLE_VERSION = 6;
+export const KNOWLEDGE_PUBLICATION_BUNDLE_VERSION = 7;
 
 const ROUTABLE_RECORD_TYPES = new Set(['faq', 'catalog_item', 'workflow_rule', 'conversation_node']);
 
@@ -52,6 +52,8 @@ function metadataPhrases(record) {
     ...(stringArray(conditions.examples)),
     ...(stringArray(conditions.triggerPhrases)),
     ...(stringArray(metadata.routePhrases)),
+    ...(stringArray(metadata.crossDocumentAliases)),
+    ...(stringArray(metadata.crossDocumentCategoryAliases)),
   ];
 }
 
@@ -116,6 +118,88 @@ function validationIssue(code, message, record = null) {
   return Object.freeze({ code, message, ...(record ? { recordId: record.record_id } : {}) });
 }
 
+function catalogKey(value) {
+  return normalizePublicationPhrase(value).replace(/\s+/gu, '-');
+}
+
+function catalogReferenceSpecs(record) {
+  return stringArray(plainObject(record.entity_metadata).catalogReferences).map((raw) => {
+    const parts = raw.split(/\s*(?:=>|->)\s*/u).map((value) => value.trim()).filter(Boolean);
+    const targetValue = parts.at(-1) ?? '';
+    const scoped = targetValue.match(/^(item|category)\s*:\s*(.+)$/iu);
+    return Object.freeze({
+      raw,
+      phrase: parts.length > 1 ? parts.slice(0, -1).join(' => ') : null,
+      scope: scoped?.[1]?.toLocaleLowerCase() ?? null,
+      targetKey: catalogKey(scoped?.[2] ?? targetValue),
+    });
+  });
+}
+
+function applyCrossDocumentCatalogReferences(sourceRecords) {
+  const itemTargets = new Map();
+  const categoryTargets = new Map();
+  for (const record of sourceRecords.filter((entry) => entry.record_type === 'catalog_item')) {
+    const metadata = plainObject(record.entity_metadata);
+    const itemKey = catalogKey(metadata.itemKey);
+    const categoryKey = catalogKey(metadata.categoryKey);
+    if (itemKey) {
+      const entries = itemTargets.get(itemKey) ?? [];
+      entries.push(record.record_id);
+      itemTargets.set(itemKey, entries);
+    }
+    if (categoryKey) {
+      const entries = categoryTargets.get(categoryKey) ?? [];
+      entries.push(record.record_id);
+      categoryTargets.set(categoryKey, entries);
+    }
+  }
+  const additions = new Map();
+  const issues = [];
+  const warnings = [];
+  for (const record of sourceRecords.filter(
+    (entry) => ['faq', 'conversation_node'].includes(entry.record_type),
+  )) {
+    const references = catalogReferenceSpecs(record);
+    const metadata = plainObject(record.entity_metadata);
+    const intentClass = String(metadata.intentClass ?? '').trim().toUpperCase();
+    if (intentClass === 'CATEGORY_OVERVIEW' && !references.length) {
+      warnings.push(validationIssue('CATALOG_OVERVIEW_REFERENCES_MISSING',
+        'Category overview has no declared Catalog references; its option names cannot be consistency-checked', record));
+    }
+    for (const reference of references) {
+      const itemMatches = reference.scope === 'category' ? [] : (itemTargets.get(reference.targetKey) ?? []);
+      const categoryMatches = reference.scope === 'item' ? [] : (categoryTargets.get(reference.targetKey) ?? []);
+      if (!reference.targetKey || (!itemMatches.length && !categoryMatches.length)) {
+        issues.push(validationIssue('UNKNOWN_CATALOG_REFERENCE',
+          `Catalog reference ${reference.raw} does not resolve to a published item or category`, record));
+        continue;
+      }
+      if ((itemMatches.length > 1) || (itemMatches.length && categoryMatches.length)) {
+        issues.push(validationIssue('AMBIGUOUS_CATALOG_REFERENCE',
+          `Catalog reference ${reference.raw} resolves to more than one authoritative target`, record));
+        continue;
+      }
+      if (!reference.phrase) continue;
+      const targetIds = itemMatches.length ? itemMatches : categoryMatches;
+      const field = itemMatches.length ? 'crossDocumentAliases' : 'crossDocumentCategoryAliases';
+      for (const recordId of targetIds) {
+        const current = additions.get(String(recordId)) ?? {};
+        current[field] = [...new Set([...(current[field] ?? []), reference.phrase])];
+        additions.set(String(recordId), current);
+      }
+    }
+  }
+  const records = sourceRecords.map((record) => {
+    const addition = additions.get(String(record.record_id));
+    return addition ? {
+      ...record,
+      entity_metadata: { ...plainObject(record.entity_metadata), ...addition },
+    } : record;
+  });
+  return Object.freeze({ records, issues: Object.freeze(issues), warnings: Object.freeze(warnings) });
+}
+
 export function validatePublicationRecords(records) {
   const issues = [];
   const ids = new Set();
@@ -173,7 +257,9 @@ export function validatePublicationRecords(records) {
       issues.push(validationIssue('ROUTE_WITHOUT_ANSWER', 'Routable published evidence has no approved answer', record));
     }
   }
-  return Object.freeze({ valid: issues.length === 0, issues: Object.freeze(issues) });
+  return Object.freeze({
+    valid: issues.length === 0, issues: Object.freeze(issues), warnings: Object.freeze([]),
+  });
 }
 
 function candidate(record) {
@@ -248,6 +334,7 @@ function categoryCandidates(records) {
       record.entity_category,
       metadata.categoryKey,
       ...stringArray(record.entity_category_aliases),
+      ...stringArray(metadata.crossDocumentCategoryAliases),
     );
     current.recordIds.push(record.record_id);
     current.children.push(Object.freeze({
@@ -293,11 +380,17 @@ function stableHash(value) {
 }
 
 export function buildPublicationIndexes(job, sourceRecords) {
-  const records = sourceRecords.map(enrichPublicationRecord);
-  const validation = validatePublicationRecords(records);
+  const crossDocument = applyCrossDocumentCatalogReferences(sourceRecords);
+  const records = crossDocument.records.map(enrichPublicationRecord);
+  const baseValidation = validatePublicationRecords(records);
+  const issues = Object.freeze([...crossDocument.issues, ...baseValidation.issues]);
+  const warnings = Object.freeze([...crossDocument.warnings, ...(baseValidation.warnings ?? [])]);
+  const validation = Object.freeze({ valid: issues.length === 0, issues, warnings });
   if (!validation.valid) {
     throw new AppError(409, 'Published documents failed schema or cross-document validation',
-      'KNOWLEDGE_PUBLICATION_VALIDATION_FAILED', { issues: validation.issues });
+      'KNOWLEDGE_PUBLICATION_VALIDATION_FAILED', {
+        issues: validation.issues, warnings: validation.warnings,
+      });
   }
   const answerCards = records.map((record) => record.approvedAnswerCard).filter(Boolean);
   const categories = categoryCandidates(records);
@@ -333,6 +426,7 @@ export function buildPublicationIndexes(job, sourceRecords) {
     answerCardCount: answerCards.length,
     entityRouteCount: Object.keys(entityIndex.exact).length,
     routeCount: Object.keys(routeIndex.exact).length,
+    validationWarningCount: validation.warnings.length,
     documentVersionIds: [...new Set(records.map((record) => String(record.document_version_id).toLowerCase()))].sort(),
     contentHash: stableHash(records.map((record) => ({
       id: record.record_id,

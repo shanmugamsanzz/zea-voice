@@ -2256,6 +2256,7 @@ export class RealtimeConversationOrchestrator {
   }
 
   #createSentenceTtsPipeline(epoch, turnStartedAt, firstAudioDeadlineAt) {
+    const memoryBeforeValidatedResponse = this.liveCallMemory?.snapshot?.() ?? {};
     let chain = Promise.resolve();
     let beginPromise = null;
     const sentenceFailures = [];
@@ -2494,6 +2495,11 @@ export class RealtimeConversationOrchestrator {
       epoch,
       persistAudible: async (reason) => {
         const audibleText = audibleSentences.join(' ').trim();
+        this.liveCallMemory?.reconcileInterruptedAssistantResponse?.(
+          audibleText,
+          memoryBeforeValidatedResponse,
+          { turnToken: epoch },
+        );
         if (!audibleText || transcriptCommitted || this.controller.terminal) return false;
         transcriptCommitted = true;
         await this.controller.recordAssistantMessage(audibleText, Date.now(), {

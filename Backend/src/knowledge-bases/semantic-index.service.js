@@ -344,6 +344,16 @@ async function loadSemanticRecords(job, contextRunner) {
                WHERE variable->>'key' = 'intentClass'
                LIMIT 1
             ), ''),
+            'catalogReferences', COALESCE((
+              SELECT CASE jsonb_typeof(variable->'value')
+                WHEN 'array' THEN variable->'value'
+                WHEN 'string' THEN jsonb_build_array(variable->>'value')
+                ELSE '[]'::jsonb
+              END
+                FROM jsonb_array_elements(cf.variables) variable
+               WHERE variable->>'key' = 'catalogReferences'
+               LIMIT 1
+            ), '[]'::jsonb),
             'sequenceOrder', cf.sequence_order,
             'isEntry', cf.is_entry
           )

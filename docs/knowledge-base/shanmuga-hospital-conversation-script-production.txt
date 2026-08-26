@@ -26,6 +26,7 @@ SITUATION: The caller positively confirms the immediately preceding configured w
 EXAMPLES: ஆமாங்க | சரி சொல்லுங்க | package details சொல்லுங்க | உங்ககிட்ட என்ன packagesலாம் இருக்கு | வேற என்ன options இருக்கு | மொத்த overview சொல்லுங்க | yes please | yes, speaking | okay, explain the options | what packages are available | what other options do you have
 MATCH_MODE: semantic
 CONTEXT: no_selected_entity
+CATALOG_REFERENCES: Master Health Checkup => category:master-health-checkup | Silver => item:silver-master-health-checkup | Gold => item:gold-master-health-checkup | Platinum => item:platinum-master-health-checkup | Diabetic Health Checkup => category:diabetes-health-checkup | Onco Care Packages => category:oncology-screening | Organ-Specific Packages => category:organ-specific-health-checkups | Kids Health Packages => category:pediatric-health-screening
 RESPONSE: எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Onco Care Packages, Organ-Specific Packages, Kids Health Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?
 NEXT_QUESTION:
 

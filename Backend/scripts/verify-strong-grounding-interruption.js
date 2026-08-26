@@ -75,6 +75,34 @@ assert.equal(validateGroundedClaim(
   [{ content: 'The screening detects cancer indicators.', recordType: 'CATALOG_ITEM' }],
 ).valid, true);
 assert.equal(validateGroundedClaim(
+  'The published relationship recommends the Mobility Review option, but a qualified professional must confirm personal suitability.',
+  [{
+    content: 'Mobility Review is a published screening option.',
+    recordType: 'CATALOG_ITEM',
+    authoritativeData: {
+      name: 'Mobility Review',
+      relationships: { recommendedFor: ['joint discomfort'] },
+    },
+  }],
+  {
+    finalizedUtterance: 'I have joint discomfort; which option is related?',
+    knownEntities: [{ key: 'mobility-review', name: 'Mobility Review' }],
+  },
+).valid, true, 'Published structured relationships must support qualified recommendations');
+assert.equal(validateGroundedClaim(
+  'The Mobility Review option is best for headaches.',
+  [{
+    content: 'Mobility Review is a published screening option.',
+    recordType: 'CATALOG_ITEM',
+    authoritativeData: {
+      name: 'Mobility Review',
+      relationships: { recommendedFor: ['breathing concern'] },
+    },
+  }],
+  { finalizedUtterance: 'I have joint pain; which option is best?' },
+).reason, 'unsupported_suitability_recommendation',
+'A relationship for a different concern must not authorize a recommendation');
+assert.equal(validateGroundedClaim(
   'The package includes CBC.',
   [{ content: 'Approved package.', recordType: 'CATALOG_ITEM', authoritativeData: { attributes: { tests: ['CBC'] } } }],
 ).valid, true);
@@ -184,6 +212,21 @@ const memory = openGenericConversationState({
 memory.beginTurn('turn-1');
 memory.cancelTurn('turn-1');
 assert.equal(memory.snapshot().pendingQuestion.text, 'Which option do you prefer?');
+memory.beginTurn('interrupted-answer');
+const beforeInterruptedAnswer = memory.snapshot();
+memory.observeAssistantResponse('First audible sentence. Second sentence was never played.', {
+  turnToken: 'interrupted-answer',
+});
+memory.append({
+  role: 'assistant', content: 'First audible sentence. Second sentence was never played.',
+}, { turnToken: 'interrupted-answer' });
+memory.reconcileInterruptedAssistantResponse('First audible sentence.', beforeInterruptedAnswer, {
+  turnToken: 'interrupted-answer',
+});
+memory.cancelTurn('interrupted-answer');
+assert.equal(memory.snapshot().lastAnswer, 'First audible sentence.');
+assert.equal(memory.snapshot().recentTurns.at(-1).content, 'First audible sentence.',
+  'Interrupted memory must retain only validated speech that was actually audible');
 memory.beginTurn('turn-2');
 memory.append({ role: 'user', content: 'Can you hear me?' }, { turnToken: 'turn-2' });
 assert.equal(memory.snapshot().pendingQuestion.text, 'Which option do you prefer?');

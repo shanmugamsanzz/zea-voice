@@ -33,6 +33,8 @@ function parseFaq(extraction) {
         metadata: {
           ...(current.intentClass ? { intentClass: current.intentClass } : {}),
           ...(aliases.length ? { aliases } : {}),
+          ...(current.catalogReferences.length
+            ? { catalogReferences: current.catalogReferences } : {}),
         },
         sourcePageStart: current.pageNumber,
         sourcePageEnd: current.lastPageNumber,
@@ -46,10 +48,18 @@ function parseFaq(extraction) {
   for (const line of lines) {
     const explicitQuestion = line.text.match(/^(?:q|question)\s*[:.)-]\s*(.+)$/i);
     const explicitAliases = line.text.match(/^aliases?\s*:\s*(.+)$/i);
+    const explicitCatalogReferences = line.text.match(/^catalog_references?\s*:\s*(.+)$/i);
     const explicitIntentClass = line.text.match(/^intent_class\s*:\s*(.+)$/i);
     const explicitAnswer = line.text.match(/^(?:a|answer)\s*[:.)-]\s*(.*)$/i);
     if (explicitAliases && current) {
       current.aliases.push(...explicitAliases[1].split('|').map((value) => value.trim()).filter(Boolean));
+      current.lastPageNumber = line.pageNumber;
+      current.lastLineNumber = line.lineNumber;
+      continue;
+    }
+    if (explicitCatalogReferences && current) {
+      current.catalogReferences.push(...explicitCatalogReferences[1]
+        .split('|').map((value) => value.trim()).filter(Boolean));
       current.lastPageNumber = line.pageNumber;
       current.lastLineNumber = line.lineNumber;
       continue;
@@ -68,6 +78,7 @@ function parseFaq(extraction) {
       current = {
         question: (explicitQuestion?.[1] ?? line.text).trim(),
         aliases: [],
+        catalogReferences: [],
         intentClass: null,
         answer: [],
         pageNumber: line.pageNumber,
@@ -488,6 +499,8 @@ function parseConversation(extraction) {
           ...(block.matchMode ? [{ key: 'matchMode', value: block.matchMode }] : []),
           ...(block.context ? [{ key: 'context', value: block.context }] : []),
           ...(block.nextQuestion ? [{ key: 'nextQuestion', value: block.nextQuestion }] : []),
+          ...(block.catalogReferences.length
+            ? [{ key: 'catalogReferences', value: block.catalogReferences }] : []),
         ],
         transitions: [],
         sourceText: block.sourceLines.join('\n'),
@@ -501,7 +514,7 @@ function parseConversation(extraction) {
     block = null;
   };
   for (const line of lines) {
-    const field = line.text.match(/^\s*(STAGE|FLOW|TYPE|LANGUAGE|ENTRY|PURPOSE|SITUATION|EXAMPLE|EXAMPLES|MATCH_MODE|INTENT_CLASS|CONTEXT|RESPONSE|NEXT_QUESTION)\s*:\s*(.*)$/iu);
+    const field = line.text.match(/^\s*(STAGE|FLOW|TYPE|LANGUAGE|ENTRY|PURPOSE|SITUATION|EXAMPLE|EXAMPLES|MATCH_MODE|INTENT_CLASS|CONTEXT|RESPONSE|NEXT_QUESTION|CATALOG_REFERENCE|CATALOG_REFERENCES)\s*:\s*(.*)$/iu);
     if (field) {
       const name = field[1].toUpperCase();
       const value = field[2].trim();
@@ -510,6 +523,7 @@ function parseConversation(extraction) {
         block = {
           stage: value, flow: 'main', type: 'message', language: 'und', entry: false,
           purpose: '', situation: '', examples: [], matchMode: '', context: '', response: [], nextQuestion: '', sourceLines: [line.text],
+          catalogReferences: [],
           intentClass: '',
           sourcePageStart: line.pageNumber, sourcePageEnd: line.pageNumber,
           sourceLineStart: line.lineNumber, sourceLineEnd: line.lineNumber,
@@ -536,6 +550,10 @@ function parseConversation(extraction) {
         else if (name === 'CONTEXT') block.context = key(value, 'any');
         else if (name === 'RESPONSE') block.response.push(value);
         else if (name === 'NEXT_QUESTION') block.nextQuestion = value;
+        else if (name === 'CATALOG_REFERENCE' || name === 'CATALOG_REFERENCES') {
+          block.catalogReferences.push(...value.split(/\s*\|\s*/u)
+            .map((item) => item.trim()).filter(Boolean));
+        }
       }
       continue;
     }

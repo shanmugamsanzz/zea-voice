@@ -43,7 +43,10 @@ function toolIdentifiers(tool, runtimeName) {
 
 export function selectedLlmPromptBudget(compactGrounding = false) {
   return compactGrounding
-    ? Math.min(env.VOICE_LLM_PROMPT_BUDGET_CHARS, 8_000)
+    // The grounded JSON contract is mandatory safety context. Never let an
+    // older voice budget truncate it; optional tenant/evidence prose is still
+    // reduced by the prompt builder within this bounded voice ceiling.
+    ? Math.min(Math.max(env.VOICE_LLM_PROMPT_BUDGET_CHARS, 12_000), env.LLM_SYSTEM_PROMPT_MAX_CHARS)
     : env.VOICE_LLM_PROMPT_BUDGET_CHARS;
 }
 

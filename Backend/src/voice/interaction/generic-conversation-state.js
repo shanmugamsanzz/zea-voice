@@ -336,6 +336,20 @@ export function openGenericConversationState(identity, settings = {}, now = Date
       // fallback text from contaminating later turns.
       return publicState(state);
     },
+    reconcileInterruptedAssistantResponse(response, previous = {}, options = {}) {
+      if (!current(options.turnToken)) {
+        return Object.freeze({ applied: false, stale: true, state: publicState(state) });
+      }
+      const audible = cleanText(response, maximumMessageCharacters);
+      state.lastAnswer = audible || cleanText(previous.lastAnswer, maximumMessageCharacters) || null;
+      const priorTurns = (previous.recentTurns ?? []).map(cleanMessage).filter(Boolean);
+      state.recentTurns = audible
+        ? [...priorTurns, { role: 'assistant', content: audible }]
+        : priorTurns;
+      state.recentTurns = configuration.mode === 'full_current_call'
+        ? state.recentTurns.slice(-maximumMessages) : recent(state.recentTurns, configuration.recentTurns);
+      return Object.freeze({ applied: true, audible: Boolean(audible), state: publicState(state) });
+    },
     applyGroundedDecision(decision = {}, options = {}) {
       if (!current(options.turnToken)) return Object.freeze({ applied: false, stale: true, state: publicState(state) });
       const update = decision.stateUpdate && typeof decision.stateUpdate === 'object'

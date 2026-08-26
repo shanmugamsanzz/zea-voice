@@ -140,6 +140,32 @@ function verifiedActionSource(source) {
   return type.includes('TOOL') && data.verified === true && data.success === true;
 }
 
+function relationshipRecommendationSupport(sources, utterance) {
+  const utteranceTokens = new Set(tokens(utterance));
+  if (!utteranceTokens.size) return false;
+  const relatedValues = [];
+  const visit = (value, eligible = false) => {
+    if (value === null || value === undefined) return;
+    if (Array.isArray(value)) {
+      value.forEach((entry) => visit(entry, eligible));
+      return;
+    }
+    if (typeof value !== 'object') {
+      if (eligible) relatedValues.push(text(value, 1_000));
+      return;
+    }
+    for (const [key, entry] of Object.entries(value)) {
+      const relationshipKey = identity(key);
+      visit(entry, eligible || /(?:recommend|suit|intend|concern|related|use)/u.test(relationshipKey));
+    }
+  };
+  for (const source of sources) visit(source?.authoritativeData?.relationships);
+  return relatedValues.some((value) => {
+    const valueTokens = tokens(value);
+    return valueTokens.length > 0 && valueTokens.some((token) => utteranceTokens.has(token));
+  });
+}
+
 export function containsInternalGuidance(value) {
   return internalGuidancePattern.test(text(value))
     || /^\s*(?:instruction|workflow|debug|json|response|action)\s*:/iu.test(text(value));
@@ -207,15 +233,19 @@ export function validateGroundedClaim(sentence, sources = [], options = {}) {
   }
   const makesRecommendation = unsupportedRecommendationPattern.test(claim)
     && !recommendationRefusalPattern.test(claim);
+  const relationshipSupported = makesRecommendation
+    && relationshipRecommendationSupport(sources, options.finalizedUtterance);
   if (makesRecommendation
     && medicalConcernPattern.test(text(options.finalizedUtterance))) {
-    const explicitlySupported = explicitRecommendationSupportPattern.test(evidenceText);
+    const explicitlySupported = explicitRecommendationSupportPattern.test(evidenceText)
+      || relationshipSupported;
     if (!explicitlySupported) {
       return Object.freeze({ valid: false, reason: 'unsupported_suitability_recommendation' });
     }
   }
   if (makesRecommendation
-    && !explicitRecommendationSupportPattern.test(evidenceText)) {
+    && !explicitRecommendationSupportPattern.test(evidenceText)
+    && !relationshipSupported) {
     return Object.freeze({ valid: false, reason: 'unsupported_recommendation' });
   }
   if (negativeFactPattern.test(claim) && !negativeFactPattern.test(evidenceText)) {

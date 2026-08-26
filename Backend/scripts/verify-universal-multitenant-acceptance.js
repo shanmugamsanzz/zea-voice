@@ -33,7 +33,28 @@ function itemRecord(tenant, suffix, item) {
     entity_metadata: {
       itemKey: item.key, categoryKey: tenant.categoryKey,
       price: item.price, currency: tenant.currency,
-      attributes: item.attributes ?? [], selectionRules: { selectable: true },
+      attributes: item.attributes ?? [], relationships: item.relationships ?? {},
+      selectionRules: { selectable: true },
+    },
+  };
+}
+
+function categoryRecord(tenant, suffix) {
+  return {
+    record_id: uuid(tenant.prefix, suffix), record_type: 'catalog_category',
+    document_id: uuid(tenant.prefix + 100, suffix),
+    document_version_id: uuid(tenant.prefix + 200, suffix),
+    document_name: `${tenant.industry}-catalog.txt`,
+    document_display_name: `${tenant.industry} catalog`, document_type: 'catalog',
+    usage_direction: 'both', language: tenant.language, source_page_start: 1,
+    source_section: tenant.category, question: tenant.categoryQuestion,
+    answer: tenant.categoryDescription, content: tenant.categoryDescription,
+    entity_name: tenant.category, entity_aliases: tenant.categoryAliases,
+    entity_category: tenant.category, entity_category_aliases: tenant.categoryAliases,
+    entity_metadata: {
+      categoryKey: tenant.categoryKey, name: tenant.category,
+      aliases: tenant.categoryAliases, description: tenant.categoryDescription,
+      childItemKeys: tenant.items.map((item) => item.key),
     },
   };
 }
@@ -62,6 +83,9 @@ const tenantDefinitions = [
   {
     prefix: 41, industry: 'industrial', language: 'en', currency: 'credits',
     category: 'Assembly Units', categoryKey: 'assembly-units', categoryAliases: ['factory units'],
+    categoryQuestion: 'What factory units are available?',
+    categoryDescription: 'Assembly Units contains the currently published factory options.',
+    concern: 'rotating assembly instability',
     items: [
       { key: 'nebula-drive', name: 'Nebula Drive', aliases: ['nebla dryv'], price: 41,
         fact: 'Nebula Drive costs 41 credits and supports rotating assembly work.' },
@@ -82,6 +106,9 @@ const tenantDefinitions = [
   {
     prefix: 52, industry: 'education', language: 'ta', currency: 'tokens',
     category: 'கற்றல் பாதைகள்', categoryKey: 'learning-paths', categoryAliases: ['learning routes'],
+    categoryQuestion: 'What learning routes are available?',
+    categoryDescription: 'The learning routes contain the currently published study options.',
+    concern: 'language learning difficulty',
     items: [
       { key: 'மொழி-ஆய்வகம்', name: 'மொழி ஆய்வகம்', aliases: ['mozhi aivagam'], price: 26,
         fact: 'மொழி ஆய்வகம் 26 tokens விலையில் வழிகாட்டப்பட்ட மொழிப் பயிற்சியை வழங்குகிறது.' },
@@ -102,6 +129,9 @@ const tenantDefinitions = [
   {
     prefix: 63, industry: 'logistics', language: 'es', currency: 'EUR',
     category: 'Rutas de carga', categoryKey: 'cargo-routes', categoryAliases: ['rutas logísticas'],
+    categoryQuestion: '¿Qué rutas logísticas están disponibles?',
+    categoryDescription: 'Rutas de carga contiene las opciones de transporte publicadas.',
+    concern: 'night tracking concern',
     items: [
       { key: 'ruta-aurora', name: 'Ruta Aurora', aliases: ['rutta aurorra'], price: 73,
         fact: 'Ruta Aurora cuesta 73 EUR e incluye seguimiento nocturno.' },
@@ -123,6 +153,9 @@ const tenantDefinitions = [
     prefix: 74, industry: 'screening', language: 'ta', currency: 'INR',
     category: 'Screening Options', categoryKey: 'screening-options',
     categoryAliases: ['screening packages'],
+    categoryQuestion: 'What screening packages are available?',
+    categoryDescription: 'Screening Options contains the currently published screening choices.',
+    concern: 'joint discomfort',
     items: [
       { key: 'silver-option', name: 'Silver Package', aliases: ['Silver package'], price: 1500,
         attributes: ['CBC', 'ECG'],
@@ -152,9 +185,16 @@ function createTenant(definition) {
     tenantId: uuid(definition.prefix, 1), agentId: uuid(definition.prefix, 2),
     callId: uuid(definition.prefix, 3), knowledgeBaseId: uuid(definition.prefix, 4),
   };
-  const records = definition.items.map((item, index) => itemRecord(definition, index + 11, item));
+  const publishedItems = definition.items.map((item, index) => ({
+    ...item,
+    relationships: index === 0
+      ? { ...(item.relationships ?? {}), recommendedFor: [definition.concern] }
+      : (item.relationships ?? {}),
+  }));
+  const records = publishedItems.map((item, index) => itemRecord(definition, index + 11, item));
+  const publishedCategory = categoryRecord(definition, 30);
   const workflow = workflowRecord(definition, 31);
-  records.push(workflow);
+  records.push(publishedCategory, workflow);
   const job = {
     tenant_id: identity.tenantId, knowledge_base_id: identity.knowledgeBaseId,
     targetRevision: 1, knowledge_base_usage: 'both', assigned_agent_ids: [identity.agentId],
@@ -169,7 +209,11 @@ function createTenant(definition) {
       'x-success-message': definition.action.success,
     },
   };
-  return { ...definition, identity, records, workflow, job, bundle, sparse, tool };
+  return {
+    ...definition, items: publishedItems,
+    symptomQuestion: `I have ${definition.concern}; which published option is related?`,
+    identity, records, categoryRecord: publishedCategory, workflow, job, bundle, sparse, tool,
+  };
 }
 
 const tenants = tenantDefinitions.map(createTenant);
@@ -180,10 +224,17 @@ function authoritativeData(record, requested) {
     conditions: metadata.conditions, actionType: metadata.actionType,
     actionConfig: metadata.actionConfig, responseTemplate: record.answer,
   };
+  if (requested.record_type === 'CATALOG_CATEGORY') return {
+    categoryKey: metadata.categoryKey, name: metadata.name ?? record.entity_name,
+    aliases: metadata.aliases ?? record.entity_aliases,
+    description: metadata.description ?? record.answer,
+    childItemKeys: metadata.childItemKeys ?? [],
+  };
   return {
     itemKey: metadata.itemKey, name: record.entity_name, aliases: record.entity_aliases,
     categoryKey: metadata.categoryKey, category: record.entity_category,
     price: metadata.price, currency: metadata.currency, attributes: metadata.attributes,
+    relationships: metadata.relationships ?? {},
     description: record.answer, sourceText: record.answer,
     selectionRules: metadata.selectionRules ?? {},
   };
@@ -271,6 +322,10 @@ async function runTurn(tenant, utterance, options = {}) {
   assert.equal(turn.authoritative.evidence.some((source) => (
     source.knowledgeBaseId === foreignTenant.identity.knowledgeBaseId
   )), false, 'Cross-tenant semantic evidence must be rejected');
+  const retrievalDuration = Number(turn.latency?.retrievalMs);
+  assert.ok(Number.isFinite(retrievalDuration) && retrievalDuration >= 0,
+    'Retrieval latency must be measured');
+  retrievalSamples.push(retrievalDuration);
   return { input: prepared.input, prepared, turn };
 }
 
@@ -281,10 +336,13 @@ function validationEnvelope(turn) {
     publicationRevision: source.provenance.publicationRevision,
     hydrationValidated: true, publicationValidated: true,
   }));
-  const entities = sources.filter((source) => source.recordType === 'CATALOG_ITEM')
+  const entities = sources.filter((source) => (
+    source.recordType === 'CATALOG_ITEM' || source.recordType === 'CATALOG_CATEGORY'
+  ))
     .map((source) => ({
       id: source.recordId, recordId: source.recordId, recordType: source.recordType,
-      key: source.authoritativeData.itemKey, name: source.authoritativeData.name,
+      key: source.authoritativeData.itemKey ?? source.authoritativeData.categoryKey,
+      name: source.authoritativeData.name,
       aliases: source.authoritativeData.aliases ?? [],
     }));
   return {
@@ -350,6 +408,12 @@ const coverage = new Set();
 let runtimeErrors = 0;
 let validatedResponses = 0;
 let verifiedTools = 0;
+const retrievalSamples = [];
+
+function percentile95(values) {
+  const ordered = [...values].sort((left, right) => left - right);
+  return ordered[Math.max(0, Math.ceil(ordered.length * 0.95) - 1)] ?? 0;
+}
 
 for (let pass = 1; pass <= repeats; pass += 1) {
   for (const tenant of tenants) {
@@ -361,11 +425,58 @@ for (let pass = 1; pass <= repeats; pass += 1) {
       const naturalSource = sourceForRecord(naturalEnvelope, first.record_id);
       assert.ok(naturalSource, 'Natural semantic question must hydrate its authoritative record');
       responseDecision(naturalEnvelope, [naturalSource], first.answer, {
-        currentTopic: first.entity_name, knownEntityKeys: [first.entity_aliases[0]],
+        currentTopic: first.entity_name, knownEntityKeys: [first.entity_metadata.itemKey],
         requestedFacts: ['details'], contextDependent: false,
       });
       coverage.add('natural_non_exact');
       validatedResponses += 1;
+
+      const category = await runTurn(tenant, tenant.categoryQuestion, {
+        semanticRecords: [tenant.categoryRecord], requestedFacts: ['overview'],
+      });
+      const categoryEnvelope = validationEnvelope(category.turn);
+      const categorySource = sourceForRecord(categoryEnvelope, tenant.categoryRecord.record_id);
+      assert.ok(categorySource, 'Published category must hydrate as an authoritative record');
+      assert.equal(categorySource.authoritativeData.name, tenant.category,
+        'Category response must use its canonical published name');
+      responseDecision(categoryEnvelope, [categorySource], tenant.categoryDescription, {
+        currentTopic: tenant.category,
+        knownEntityKeys: [tenant.categoryKey], requestedFacts: ['overview'],
+      });
+      coverage.add('canonical_category_answer');
+      validatedResponses += 1;
+
+      const symptom = await runTurn(tenant, tenant.symptomQuestion, {
+        semanticRecords: [first], requestedFacts: ['relationship'],
+      });
+      const symptomEnvelope = validationEnvelope(symptom.turn);
+      const symptomSource = sourceForRecord(symptomEnvelope, first.record_id);
+      assert.ok(symptomSource, 'A published relationship request must hydrate its Catalog record');
+      const relationshipAnswer = `${first.entity_name} has a published relationship to ${tenant.concern}; a qualified professional must confirm suitability.`;
+      const relationshipDecision = responseDecision(
+        symptomEnvelope, [symptomSource], relationshipAnswer, {
+          currentTopic: first.entity_name,
+          knownEntityKeys: [first.entity_metadata.itemKey], requestedFacts: ['relationship'],
+        },
+      );
+      assert.equal(validateGroundedClaim(
+        relationshipDecision.answer,
+        symptom.turn.authoritative.evidence,
+        { finalizedUtterance: tenant.symptomQuestion },
+      ).valid, true, 'A supported qualified relationship must not be falsely rejected');
+      coverage.add('symptom_to_published_relationship');
+      validatedResponses += 1;
+
+      const weak = await runTurn(tenant, 'Unpublished subject with no matching option.');
+      const weakEnvelope = validationEnvelope(weak.turn);
+      const weakDecision = validateGroundedLlmDecision(JSON.stringify({
+        decision: 'CLARIFY', answer: '', responseId: null, evidenceIds: [], stateUpdate: {},
+        pendingQuestion: 'Which published option or topic should I check?', toolRequest: null,
+        clarification: { reason: 'missing_evidence' },
+      }), weakEnvelope, { fieldSchemas: [], toolSchemas: [] });
+      assert.equal(weakDecision.valid, true, weakDecision.reason);
+      assert.match(weakDecision.pendingQuestion, /published option|topic/iu);
+      coverage.add('targeted_weak_evidence');
 
       const phonetic = await runTurn(tenant, tenant.phoneticQuestion);
       assert.equal(phonetic.prepared.resolution.candidate.recordId, first.record_id);
@@ -420,7 +531,7 @@ for (let pass = 1; pass <= repeats; pass += 1) {
       assert.ok(comparedSources.every(Boolean), 'Every compared entity must be hydrated');
       responseDecision(comparisonEnvelope, comparedSources,
         `${first.answer} ${second.answer}`, {
-          knownEntityKeys: [first.entity_aliases[0], second.entity_aliases[0]],
+          knownEntityKeys: [first.entity_metadata.itemKey, second.entity_metadata.itemKey],
           requestedFacts: ['comparison'], requestType: 'comparison', contextDependent: false,
         });
       coverage.add('multi_entity_comparison');
@@ -590,9 +701,14 @@ const requiredCoverage = [
   'price_and_details', 'multi_entity_comparison', 'verified_tool',
   'genuine_ambiguity', 'false_ambiguity_rejected', 'cross_tenant_isolation',
   'unsupported_claim_rejection', 'isolated_memory', 'production_order_context',
+  'canonical_category_answer', 'symptom_to_published_relationship',
+  'targeted_weak_evidence',
 ];
 for (const requirement of requiredCoverage) assert.ok(coverage.has(requirement), requirement);
 assert.equal(runtimeErrors, 0);
+const retrievalP95Ms = percentile95(retrievalSamples);
+assert.ok(retrievalP95Ms < 150,
+  `Synthetic production-call retrieval p95 ${retrievalP95Ms.toFixed(2)}ms exceeded 150ms`);
 
 console.log(JSON.stringify({
   gate: 'universal-multitenant-acceptance', passed: true, repeats,
@@ -600,5 +716,5 @@ console.log(JSON.stringify({
   languages: [...new Set(tenants.map((tenant) => tenant.language))],
   coverage: requiredCoverage, validatedResponses, verifiedTools,
   falseClarifications: 0, staleAnswers: 0, unsupportedClaimsAccepted: 0,
-  crossTenantLeakage: false, runtimeErrors,
+  crossTenantLeakage: false, retrievalP95Ms, runtimeErrors,
 }, null, 2));

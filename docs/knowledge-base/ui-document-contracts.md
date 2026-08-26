@@ -82,6 +82,7 @@ LANGUAGE: ta
 INTENT_CLASS: KNOWN_INFORMATION
 ENTRY: true
 PURPOSE: Present approved categories naturally.
+CATALOG_REFERENCES: Caller-facing option name => category:service-plans
 RESPONSE: Tenant-approved spoken overview.
 NEXT_QUESTION: Tenant-approved next question?
 NEXT_STAGE: explanation
@@ -105,8 +106,15 @@ Use `|` between alternate questions. Each alias is indexed as another question w
 QUESTION: What does the selected item include?
 ALIASES: What is covered? | Explain this option | Tell me the details
 INTENT_CLASS: DETAILS_OR_PRICE
+CATALOG_REFERENCE: Caller-facing item name => item:standard-plan
 ANSWER: Tenant-approved answer grounded in the selected Catalog item.
 ```
+
+`CATALOG_REFERENCE` and `CATALOG_REFERENCES` link caller-facing wording to a
+published Catalog `item` or `category` key. Use `|` for multiple mappings. An
+unknown or ambiguous target blocks publication; a category overview without
+declared references produces a publication warning. The caller-facing phrase
+is indexed as a tenant-owned alias for the referenced Catalog record.
 
 ## 6. General Knowledge document
 

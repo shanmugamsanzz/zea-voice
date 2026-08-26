@@ -89,7 +89,9 @@ const records = [
     entity_category: 'main',
     entity_aliases: ['hello'],
     entity_category_aliases: [],
-    entity_metadata: {},
+    entity_metadata: {
+      catalogReferences: ['Caller sample => item:example-plan'],
+    },
   },
   {
     ...common(4, 'knowledge_chunk'),
@@ -116,6 +118,29 @@ assert.equal(parsedFaq.records[0].sourceLineEnd, 2);
 assert.equal(processExtractedCategory('faq', extraction, { parserVersion: 1 }).parserVersion, 1);
 assert.throws(() => processExtractedCategory('faq', extraction, { parserVersion: 99 }), /parser version/u);
 
+const linkedFaq = processExtractedCategory('faq', {
+  fullText: 'Q: Which choice?\nCATALOG_REFERENCE: Caller sample => item:example-plan\nA: Use the published choice.',
+  pages: [{ pageNumber: 1, lines: [
+    'Q: Which choice?',
+    'CATALOG_REFERENCE: Caller sample => item:example-plan',
+    'A: Use the published choice.',
+  ] }],
+});
+assert.deepEqual(linkedFaq.records[0].metadata.catalogReferences,
+  ['Caller sample => item:example-plan']);
+
+const linkedConversation = processExtractedCategory('conversation_script', {
+  fullText: 'STAGE: overview\nCATALOG_REFERENCES: Caller sample => item:example-plan\nRESPONSE: Choose one.',
+  pages: [{ pageNumber: 1, lines: [
+    'STAGE: overview',
+    'CATALOG_REFERENCES: Caller sample => item:example-plan',
+    'RESPONSE: Choose one.',
+  ] }],
+});
+assert.deepEqual(linkedConversation.records[0].variables.find(
+  (variable) => variable.key === 'catalogReferences',
+)?.value, ['Caller sample => item:example-plan']);
+
 const forms = buildPublicationPhraseForms(['On-co Plan', 'ON CO plan']);
 assert.ok(forms.normalized.includes('on co plan'));
 assert.ok(forms.stt.includes('oncoplan'));
@@ -127,6 +152,7 @@ assert.equal(bundle.validation.valid, true);
 assert.equal(bundle.records.length, 5);
 assert.equal(bundle.answerCards.length, 4);
 assert.ok(bundle.entityIndex.exact['example plan']);
+assert.equal(bundle.entityIndex.exact['caller sample'][0].itemKey, 'example-plan');
 assert.ok(bundle.routeIndex.exact['reserve a time']);
 assert.ok(bundle.routeIndex.namespaces.workflow.exact['reserve a time']);
 assert.equal(bundle.routeIndex.namespaces.faq.exact['reserve a time'], undefined);
@@ -153,6 +179,20 @@ assert.throws(() => buildPublicationIndexes(job, records.map((record) => (
     } }
     : record
 ))), (error) => error?.details.issues.some((issue) => issue.code === 'UNKNOWN_WORKFLOW_ITEM'));
+assert.throws(() => buildPublicationIndexes(job, records.map((record) => (
+  record.record_type === 'conversation_node'
+    ? { ...record, entity_metadata: { catalogReferences: ['Unknown choice => item:missing-record'] } }
+    : record
+))), (error) => error?.details.issues.some((issue) => issue.code === 'UNKNOWN_CATALOG_REFERENCE'));
+
+const warningBundle = buildPublicationIndexes(job, records.map((record) => (
+  record.record_type === 'conversation_node'
+    ? { ...record, entity_metadata: { intentClass: 'CATEGORY_OVERVIEW' } }
+    : record
+)));
+assert.equal(warningBundle.validation.warnings.some(
+  (warning) => warning.code === 'CATALOG_OVERVIEW_REFERENCES_MISSING',
+), true);
 
 class FakeRedis {
   status = 'ready';

@@ -25,13 +25,9 @@ function sourcesByType(sources = [], recordType) {
 function selectedSources(decision, groundingEnvelope, evidence) {
   const selected = new Set(decision.evidenceIds ?? []);
   const envelopeSources = (groundingEnvelope.sources ?? []).filter((source) => selected.has(source.id));
-  return envelopeSources.map((source) => (
-    evidence.find((candidate) => (
-      candidate.id === source.publishedEvidenceId
-      || candidate.id === source.id
-      || (source.recordId && candidate.recordId === source.recordId)
-    )) ?? source
-  ));
+  return envelopeSources.map((source) => evidence.find((candidate) => (
+    source.publishedEvidenceId && candidate.id === source.publishedEvidenceId
+  ))).filter(Boolean);
 }
 
 function catalogSources(sources = []) {

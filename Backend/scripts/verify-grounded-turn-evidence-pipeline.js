@@ -3,6 +3,7 @@ import { buildPublicationIndexes } from '../src/knowledge-engine/publication-ind
 import { buildRevisionSparseIndex } from '../src/knowledge-bases/knowledge-map.service.js';
 import { createKnowledgeEngineInput } from '../src/knowledge-engine/engine-contract.js';
 import {
+  buildGroundedLlmInput,
   retrieveRankHydrateGroundedTurn,
 } from '../src/knowledge-bases/grounded-turn-evidence.js';
 
@@ -173,6 +174,37 @@ assert.ok(llm.permittedSourceIds.response.length > 0);
 assert.equal(llm.permittedSourceIds.tool.length, 1);
 assert.equal(JSON.stringify(llm).includes('routingCandidates'), false);
 assert.equal(JSON.stringify(llm).includes('providerScores'), false);
+
+const namespaceFiltered = buildGroundedLlmInput({
+  input,
+  classification: { intentClass: 'DETAILS_OR_PRICE' },
+  resolution: {
+    candidateNamespace: 'CATALOG',
+    candidate: { recordId: 'catalog-1', evidenceRecordIds: ['catalog-1'] },
+  },
+  authoritative: {
+    evidence: [
+      {
+        id: 'catalog-source', recordId: 'catalog-1', recordType: 'CATALOG_ITEM',
+        callerFacing: true, hydrationValidated: true, publicationValidated: true,
+        authoritativeData: { itemKey: 'tenant-item', name: 'Tenant Item' },
+      },
+      {
+        id: 'faq-source', recordId: 'faq-1', recordType: 'FAQ',
+        callerFacing: true, hydrationValidated: true, publicationValidated: true,
+        authoritativeData: { question: 'Unrelated question', answer: 'Unrelated answer' },
+      },
+      {
+        id: 'workflow-source', recordId: 'workflow-1', recordType: 'WORKFLOW_RULE',
+        callerFacing: false, hydrationValidated: true, publicationValidated: true,
+        authoritativeData: { actionType: 'configured_tool', actionConfig: { toolIdentifier: 'other' } },
+      },
+    ],
+  },
+  runtimeProfile: { tools: [] },
+});
+assert.deepEqual(namespaceFiltered.evidence.map((source) => source.recordType), ['CATALOG_ITEM'],
+  'An explicit Catalog turn must not send unrelated FAQ or Workflow evidence to the LLM');
 
 console.log(JSON.stringify({
   tasks: [4, 5, 6], passed: true,

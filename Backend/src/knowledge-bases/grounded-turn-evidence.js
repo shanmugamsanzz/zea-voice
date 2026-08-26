@@ -6,6 +6,49 @@ import { searchParallelHybridCandidates } from './parallel-hybrid-search.js';
 export const GROUNDED_TURN_EVIDENCE_VERSION = 1;
 const maximumEvidenceRecords = 5;
 
+const namespaceRecordTypes = Object.freeze({
+  CATALOG: new Set(['CATALOG_ITEM', 'CATALOG_CATEGORY']),
+  FAQ: new Set(['FAQ']),
+  CONVERSATION: new Set(['CONVERSATION_NODE']),
+  WORKFLOW: new Set(['WORKFLOW_RULE']),
+  CALL_CONTROL: new Set(['WORKFLOW_RULE']),
+  GENERAL: new Set(['KNOWLEDGE_CHUNK', 'GENERAL_KNOWLEDGE']),
+});
+
+const catalogIntentClasses = new Set([
+  'DETAILS_OR_PRICE', 'CATEGORY_OVERVIEW', 'COMPARISON_COMPLEX',
+]);
+
+function relevantHydratedEvidence(sources, classification = {}, resolution = {}, input = {}) {
+  const intentClass = String(classification.intentClass ?? '').trim().toUpperCase();
+  const namespace = String(resolution.candidateNamespace ?? '').trim().toUpperCase();
+  const selectedTypes = namespaceRecordTypes[namespace]
+    ?? (catalogIntentClasses.has(intentClass) ? namespaceRecordTypes.CATALOG : null);
+  const rememberedTool = input?.memory?.activeTool ?? input?.canonicalCallMemory?.activeTool;
+  const actionTurn = intentClass === 'ACTION_TOOL_REQUEST'
+    || (!namespace && Boolean(rememberedTool));
+  const protocolTurn = ['SAFETY_EMERGENCY', 'CALL_CONTROL'].includes(intentClass);
+  const selectedRecordIds = new Set([
+    resolution?.candidate?.recordId,
+    ...(resolution?.candidate?.evidenceRecordIds ?? []),
+    ...(resolution?.routingCandidates ?? []).filter((candidate) => candidate.explicit === true)
+      .map((candidate) => candidate.recordId),
+  ].map(identity).filter(Boolean));
+  return sources.filter((source) => {
+    const recordType = String(source.recordType ?? '').toUpperCase();
+    if (selectedRecordIds.has(identity(source.recordId))) return true;
+    if (recordType === 'WORKFLOW_RULE') return actionTurn || protocolTurn;
+    if (selectedTypes) return selectedTypes.has(recordType);
+    if (intentClass === 'ACKNOWLEDGEMENT') {
+      return ['CONVERSATION_NODE', 'FAQ'].includes(recordType);
+    }
+    // With no resolved namespace, retain caller-facing discovery evidence.
+    // Internal Workflow records are admitted only by the action/protocol rule
+    // above, so unrelated authorization cannot influence a normal answer.
+    return source.callerFacing === true;
+  });
+}
+
 function clean(value, maximum = 2_000) {
   return String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
     .replace(/\s+/gu, ' ').trim().slice(0, maximum);
@@ -113,10 +156,15 @@ function applicableTools(evidence, runtimeProfile = {}) {
   return Object.freeze(results.slice(0, 3));
 }
 
-export function buildGroundedLlmInput({ input, authoritative, runtimeProfile } = {}) {
-  const hydrated = (authoritative?.evidence ?? []).filter((source) => (
+export function buildGroundedLlmInput({
+  input, classification, resolution, authoritative, runtimeProfile,
+} = {}) {
+  const allHydrated = (authoritative?.evidence ?? []).filter((source) => (
     source.hydrationValidated === true && source.publicationValidated === true
-  )).slice(0, maximumEvidenceRecords);
+  ));
+  const hydrated = relevantHydratedEvidence(
+    allHydrated, classification, resolution, input,
+  ).slice(0, maximumEvidenceRecords);
   if (hydrated.length > maximumEvidenceRecords) {
     throw new TypeError('Grounded LLM input cannot contain more than five hydrated records');
   }
@@ -180,7 +228,9 @@ export async function retrieveRankHydrateGroundedTurn({
   if (authoritative.hydrationQueryCount > 1) {
     throw new TypeError('Grounded turn performed more than one PostgreSQL hydration query');
   }
-  const llmInput = buildGroundedLlmInput({ input, authoritative, runtimeProfile });
+  const llmInput = buildGroundedLlmInput({
+    input, classification, resolution, authoritative, runtimeProfile,
+  });
   return Object.freeze({
     retrieval,
     authoritative,
