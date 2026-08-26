@@ -10,6 +10,7 @@ import { closeCampaignWorkers, startCampaignWorkers } from './campaigns/campaign
 import { assertRagInfrastructure } from './rag/rag-infrastructure.js';
 import { closeKnowledgeProcessingWorker, startKnowledgeProcessingWorker } from './knowledge-bases/knowledge-processing.worker.js';
 import { attachPlivoMediaWebSocket } from './voice/plivo-media.socket.js';
+import { attachBrowserTestMediaWebSocket } from './voice/browser-test-media.socket.js';
 import { attachRealtimeConversationOrchestrator } from './voice/realtime-conversation-orchestrator.js';
 import { closeRecordingWorker, startRecordingWorker } from './telephony/recording.worker.js';
 import { closePostCallSummaryWorker, startPostCallSummaryWorker } from './voice/postcall-summary/postcall-summary.worker.js';
@@ -42,6 +43,7 @@ async function bootstrap() {
       attachRealtimeConversationOrchestrator(session);
     },
   });
+  const browserTestMediaWebSocket = attachBrowserTestMediaWebSocket(server);
   server.listen(env.PORT, env.HOST, () => {
     logger.info({ host: env.HOST, port: env.PORT }, 'Zea Voice API is running');
     logger.info({
@@ -56,7 +58,7 @@ async function bootstrap() {
     shuttingDown = true;
     logger.info({ signal }, 'Graceful shutdown started');
 
-    await mediaWebSocket.close();
+    await Promise.all([mediaWebSocket.close(), browserTestMediaWebSocket.close()]);
 
     server.close(async (serverError) => {
       await closeCallReconciliation();

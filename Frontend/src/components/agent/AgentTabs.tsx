@@ -11,6 +11,7 @@ import { apiRequest, isAbortError, uploadApiFormData } from '../../lib/api';
 import { KnowledgeReviewPanel } from './KnowledgeReviewPanel';
 import { KnowledgePublishPanel } from './KnowledgePublishPanel';
 import { DocumentVersionPanel } from './DocumentVersionPanel';
+import { knowledgeDocumentMetric } from './knowledgeDocumentMetric';
 import { PronunciationGroupManager } from './PronunciationGroupManager';
 import { AmbienceManager } from './AmbienceManager';
 import { TableActionsMenu } from '../common/TableActionsMenu';
@@ -211,6 +212,7 @@ interface KnowledgeDocumentApiData {
     status: string;
     pageCount: number | null;
     chunkCount: number;
+    recordCount: number;
     createdAt: string;
   } | null;
   processingJob: {
@@ -4332,7 +4334,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
 
                   {(processing || document.processingJob) && <div className="mt-3"><div className="mb-1.5 flex items-center justify-between text-[9px] font-bold text-slate-400"><span>{processing ? 'Processing' : knowledgeStatusLabel(document.processingJob?.status ?? document.status)}</span><span>{progress}%</span></div><div className="h-1.5 overflow-hidden rounded-full bg-slate-200"><div className={`h-full rounded-full transition-all duration-500 ${document.status === 'failed' ? 'bg-red-500' : 'bg-gradient-to-r from-violet-500 to-amber-500'}`} style={{ width: `${progress}%` }} /></div></div>}
 
-                  <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[9px] font-semibold text-slate-400"><span>{document.currentVersion?.pageCount ?? 0} pages</span><span>{document.currentVersion?.chunkCount ?? 0} chunks</span><span>Attempt {document.processingJob?.attemptCount ?? 0}/{document.processingJob?.maxAttempts ?? 0}</span><span>Uploaded {new Date(document.createdAt).toLocaleString()}</span></div>
+                  <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[9px] font-semibold text-slate-400"><span>{document.currentVersion?.pageCount ?? 0} pages</span><span>{knowledgeDocumentMetric(document.documentType, document.currentVersion ?? {})}</span><span>Attempt {document.processingJob?.attemptCount ?? 0}/{document.processingJob?.maxAttempts ?? 0}</span><span>Uploaded {new Date(document.createdAt).toLocaleString()}</span></div>
                   {(document.status === 'failed' || errorMessage) && <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-[10px] font-semibold text-red-700">{errorMessage || 'Document processing failed. Select the PDF again to retry with a new upload.'}</div>}
                   {document.status === 'review_required' && <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-[10px] font-semibold text-amber-700">Extraction completed. Developer review is required before publishing.</div>}
                   {document.status === 'deleting' && <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-red-700">
@@ -4350,7 +4352,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
 
             {selectedKnowledgeBase && versionDocument && <DocumentVersionPanel
               knowledgeBaseId={selectedKnowledgeBase.id}
-              document={{ id: versionDocument.id, displayName: versionDocument.displayName, status: versionDocument.status }}
+              document={{ id: versionDocument.id, displayName: versionDocument.displayName, status: versionDocument.status, documentType: versionDocument.documentType }}
               readOnly={isReadOnly}
               refreshKey={knowledgeDocumentPollTick}
               onClose={() => setVersionDocumentId(null)}

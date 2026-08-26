@@ -2,10 +2,11 @@ import React, { useEffect, useState } from 'react';
 import { AlertCircle, CheckCircle, History, RefreshCw, RotateCcw, Trash2, Upload, X } from 'lucide-react';
 import { apiRequest } from '../../lib/api';
 import { knowledgeSourceUploadError, validateKnowledgeSourceFile } from './knowledgeSourceFile';
+import { knowledgeDocumentMetric, type KnowledgeDocumentMetricType } from './knowledgeDocumentMetric';
 
 interface DocumentVersion {
   id: string; documentId: string; versionNumber: number; status: string; isCurrent: boolean;
-  checksumSha256: string; sizeBytes: number; pageCount: number | null; chunkCount: number;
+  checksumSha256: string; sizeBytes: number; pageCount: number | null; chunkCount: number; recordCount: number;
   embeddingModel: string | null; embeddingDimensions: number | null; processedAt: string | null;
   activatedAt: string | null; createdAt: string;
 }
@@ -13,7 +14,7 @@ interface DocumentVersion {
 function size(bytes: number) { return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / (1024 * 1024)).toFixed(2)} MB`; }
 export function DocumentVersionPanel({ knowledgeBaseId, document, readOnly, refreshKey, onClose, onUpdated }: {
   knowledgeBaseId: string;
-  document: { id: string; displayName: string; status: string };
+  document: { id: string; displayName: string; status: string; documentType: KnowledgeDocumentMetricType };
   readOnly: boolean;
   refreshKey: number;
   onClose: () => void;
@@ -88,7 +89,7 @@ export function DocumentVersionPanel({ knowledgeBaseId, document, readOnly, refr
     {!loading && versions.length === 0 && !error && <div className="mt-4 rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center text-xs font-semibold text-slate-400">No version history was returned.</div>}
     {versions.length > 0 && <div className="mt-4 space-y-3">{versions.map((version) => {
       const canActivate = !version.isCurrent && ['ready', 'archived'].includes(version.status) && Boolean(version.processedAt);
-      return <article key={version.id} className={`rounded-xl border p-4 ${version.isCurrent ? 'border-emerald-200 bg-emerald-50/60' : 'border-slate-200 bg-white'}`}><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><div className="flex flex-wrap items-center gap-2"><span className="text-sm font-bold text-slate-800">Version {version.versionNumber}</span>{version.isCurrent && <span className="inline-flex items-center gap-1 rounded-md bg-emerald-100 px-2 py-1 text-[9px] font-black uppercase text-emerald-700"><CheckCircle className="h-3 w-3" />Current</span>}<span className="rounded-md bg-slate-100 px-2 py-1 text-[9px] font-black uppercase text-slate-600">{version.status}</span></div><p className="mt-1 text-[9px] font-semibold text-slate-400">{size(version.sizeBytes)} · {version.pageCount ?? 0} pages · {version.chunkCount} chunks · {new Date(version.createdAt).toLocaleString()}</p><p className="mt-1 font-mono text-[8px] text-slate-400" title={version.checksumSha256}>SHA-256 {version.checksumSha256.slice(0, 12)}…</p></div>{!readOnly && <div className="flex flex-wrap gap-2">{canActivate && <button type="button" onClick={() => void activate(version)} disabled={Boolean(busyVersionId)} className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 px-3 py-2 text-[10px] font-bold text-blue-700 hover:bg-blue-50 disabled:opacity-50"><RotateCcw className="h-3.5 w-3.5" />Activate</button>}{!version.isCurrent && <button type="button" onClick={() => void remove(version)} disabled={Boolean(busyVersionId)} className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-2 text-[10px] font-bold text-red-600 hover:bg-red-50 disabled:opacity-50"><Trash2 className="h-3.5 w-3.5" />Delete</button>}</div>}</div>{version.activatedAt && <p className="mt-2 text-[9px] font-semibold text-blue-600"><History className="mr-1 inline h-3 w-3" />Activated {new Date(version.activatedAt).toLocaleString()}</p>}</article>;
+      return <article key={version.id} className={`rounded-xl border p-4 ${version.isCurrent ? 'border-emerald-200 bg-emerald-50/60' : 'border-slate-200 bg-white'}`}><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><div className="flex flex-wrap items-center gap-2"><span className="text-sm font-bold text-slate-800">Version {version.versionNumber}</span>{version.isCurrent && <span className="inline-flex items-center gap-1 rounded-md bg-emerald-100 px-2 py-1 text-[9px] font-black uppercase text-emerald-700"><CheckCircle className="h-3 w-3" />Current</span>}<span className="rounded-md bg-slate-100 px-2 py-1 text-[9px] font-black uppercase text-slate-600">{version.status}</span></div><p className="mt-1 text-[9px] font-semibold text-slate-400">{size(version.sizeBytes)} · {version.pageCount ?? 0} pages · {knowledgeDocumentMetric(document.documentType, version)} · {new Date(version.createdAt).toLocaleString()}</p><p className="mt-1 font-mono text-[8px] text-slate-400" title={version.checksumSha256}>SHA-256 {version.checksumSha256.slice(0, 12)}…</p></div>{!readOnly && <div className="flex flex-wrap gap-2">{canActivate && <button type="button" onClick={() => void activate(version)} disabled={Boolean(busyVersionId)} className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 px-3 py-2 text-[10px] font-bold text-blue-700 hover:bg-blue-50 disabled:opacity-50"><RotateCcw className="h-3.5 w-3.5" />Activate</button>}{!version.isCurrent && <button type="button" onClick={() => void remove(version)} disabled={Boolean(busyVersionId)} className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-2 text-[10px] font-bold text-red-600 hover:bg-red-50 disabled:opacity-50"><Trash2 className="h-3.5 w-3.5" />Delete</button>}</div>}</div>{version.activatedAt && <p className="mt-2 text-[9px] font-semibold text-blue-600"><History className="mr-1 inline h-3 w-3" />Activated {new Date(version.activatedAt).toLocaleString()}</p>}</article>;
     })}</div>}
   </section>;
 }

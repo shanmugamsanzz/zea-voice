@@ -50,9 +50,11 @@ import {
   XCircle,
   ArrowLeft,
   RefreshCw,
-  LayoutGrid
+  LayoutGrid,
+  Mic
 } from 'lucide-react';
 import { AgentTabs } from '../agent/AgentTabs';
+import { BrowserAgentTestPanel } from '../agent/BrowserAgentTestPanel';
 import { DeveloperReportsView } from '../reports/DeveloperReportsView';
 import { DeveloperVqaView } from '../vqa/DeveloperVqaView';
 import { DeveloperAiInsightsView } from '../insights/DeveloperAiInsightsView';
@@ -1804,6 +1806,7 @@ function AgentsListView({ agents, setAgents, onEditAgent, onAddAgent }: { agents
   const [isRefreshing, setIsRefreshing] = useState(true);
   const [agentError, setAgentError] = useState('');
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
+  const [testAgent, setTestAgent] = useState<VoiceAgent | null>(null);
 
   const userAgents = agents.map((agent) => ({ ...agent, statusLabel: agent.status === 'active' ? 'Live' : agent.status }));
 
@@ -1984,6 +1987,7 @@ function AgentsListView({ agents, setAgents, onEditAgent, onAddAgent }: { agents
 
   return (
     <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+      {testAgent && <BrowserAgentTestPanel agent={testAgent} onClose={() => setTestAgent(null)} />}
       <div className="mb-5 flex items-center justify-between gap-4 border-b border-slate-200 pb-5">
         <h2 className="text-lg font-bold tracking-tight text-slate-800">Agent List</h2>
         {!isReadOnly ? (
@@ -2057,6 +2061,17 @@ function AgentsListView({ agents, setAgents, onEditAgent, onAddAgent }: { agents
                 </div>
               </div>
             </div>
+
+            <button
+              type="button"
+              disabled={agent.status !== 'active'}
+              onClick={() => setTestAgent(agent)}
+              className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-xs font-black text-indigo-700 transition hover:border-indigo-300 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-40"
+              title={agent.status === 'active' ? `Test ${agent.name} in this browser` : 'Activate this agent before testing'}
+            >
+              <Mic className="h-4 w-4" />
+              Test Agent
+            </button>
 
             </div>
           ))}

@@ -305,7 +305,7 @@ function isPauseOnlyUtterance(text, matchedPhrase) {
 
 export class RealtimeConversationOrchestrator {
   constructor(mediaSession, dependencies = {}) {
-    if (!mediaSession?.callId) throw new TypeError('A Plivo media session is required');
+    if (!mediaSession?.callId) throw new TypeError('A realtime voice media session is required');
     this.mediaSession = mediaSession;
     this.call = mediaSession.call;
     this.dependencies = dependencies;
@@ -359,6 +359,7 @@ export class RealtimeConversationOrchestrator {
   }
 
   #attach() {
+    const transport = this.mediaSession.transport ?? 'plivo';
     const bind = (event, handler) => {
       this.mediaSession.on(event, handler);
       this.listeners.push([event, handler]);
@@ -366,11 +367,19 @@ export class RealtimeConversationOrchestrator {
     bind('start', () => void this.#guard('start', () => this.#onStart()));
     bind('media', ({ audio }) => void this.#guard('media', () => this.#onMedia(audio)));
     bind('dtmf', ({ digit }) => void this.#guard('dtmf', () => this.#onDtmf(digit)));
-    bind('stop', () => void this.#finalize('completed', 'plivo_stream_stopped'));
-    bind('failure', ({ error }) => void this.#recover(error, 'plivo_media'));
+    bind('stop', () => void this.#finalize('completed', `${transport}_stream_stopped`));
+    bind('failure', ({ error }) => void this.#recover(error, `${transport}_media`));
     bind('closed', ({ code, reason }) => void this.#finalize(
       code === 1000 ? 'completed' : 'failed', reason || 'media_closed',
     ));
+  }
+
+  #browserDiagnostic(type, details = {}) {
+    if (this.mediaSession.transport !== 'browser_test'
+      || typeof this.mediaSession.sendDiagnostic !== 'function') return;
+    void this.mediaSession.sendDiagnostic(type, details).catch((error) => this.log.debug({
+      err: error, stage: 'browser_test.diagnostic_delivery', callId: this.call.id, type,
+    }, 'Browser test diagnostic delivery was skipped'));
   }
 
   async #prepare() {
@@ -667,15 +676,24 @@ export class RealtimeConversationOrchestrator {
             // The initial welcome contains no caller state to checkpoint.
             if (entry.sequenceNumber > 1) this.#scheduleLiveMemoryCheckpoint('assistant_response');
           }
+          this.#browserDiagnostic('transcript', {
+            sequenceNumber: entry.sequenceNumber,
+            speaker: entry.speaker,
+            text: entry.text,
+            offsetMs: Math.max(0, entry.at - this.startedAt),
+            sources: entry.speaker === 'agent' ? mergeMessageSources(entry.sources ?? []) : [],
+          });
           return this.transcriptPersistence.enqueue({
             ...entry,
             offsetMs: Math.max(0, entry.at - this.startedAt),
           });
         },
-        onInterrupt: async ({ reason }) => this.log.info({
+        onInterrupt: async ({ reason }) => this.#browserDiagnostic('barge_in', { reason }) || this.log.info({
           icon: '🛑', stage: 'conversation.barge_in', callId: this.call.id, reason,
         }, '🛑 Caller interrupted active agent output'),
-        onStateChange: async ({ previous, current, reason }) => this.log.info({
+        onStateChange: async ({ previous, current, reason }) => this.#browserDiagnostic('state', {
+          previous, current, reason,
+        }) || this.log.info({
           icon: '🔄', stage: 'conversation.state', callId: this.call.id, previous, current, reason,
         }, `🔄 Voice call state: ${previous} → ${current}`),
       },
@@ -2901,6 +2919,13 @@ export class RealtimeConversationOrchestrator {
         this.runtimeMetrics.tools.push(...toolResults.map((result) => ({
           name: result.name, success: result.success, durationMs: Number(result.durationMs ?? 0),
         })));
+        for (const result of toolResults) this.#browserDiagnostic('tool_result', {
+          name: result.name,
+          success: result.success === true,
+          durationMs: Number(result.durationMs ?? 0),
+          warning: result.success === true ? null : 'The tool did not return a verified success result.',
+          errorCode: result.errorCode ?? result.code ?? null,
+        });
         sourceTrace.add(toolMessageSources(toolResults));
         if (epoch !== this.epoch) return;
         const finalizedTool = finalizeConfiguredToolResults({
@@ -3195,6 +3220,17 @@ export class RealtimeConversationOrchestrator {
                   ? 'target_met'
                   : (latencyMs <= turnLatency.firstAudioAcceptableMs
                     ? 'acceptable_fallback' : 'target_missed');
+                this.#browserDiagnostic('latency', {
+                  epoch: turnLatency.epoch,
+                  routingMs: turnLatency.routingMs,
+                  retrievalMs: turnLatency.retrievalMs,
+                  hydrationMs: turnLatency.hydrationMs,
+                  llmMs: turnLatency.llmMs,
+                  validationMs: turnLatency.validationMs,
+                  ttsFirstChunkMs: turnLatency.ttsFirstChunkMs,
+                  totalFirstAudioMs: turnLatency.totalFirstAudioMs,
+                  firstAudioStatus: turnLatency.firstAudioStatus,
+                });
                 this.turnLatencyTrackers?.get(options.epoch ?? this.epoch)?.record(
                   voiceTurnStages.TTS_FIRST_CHUNK, firstAudioLatencyMs,
                 );
@@ -3686,6 +3722,12 @@ export class RealtimeConversationOrchestrator {
 
   async #recover(error, stage) {
     if (this.finalized) return;
+    this.#browserDiagnostic('error', {
+      stage,
+      code: error?.code ?? null,
+      message: String(error?.message ?? 'Voice runtime error').slice(0, 500),
+      retryable: error?.retryable !== false,
+    });
     this.errorCount += 1;
     const kind = stage === 'stt' ? 'stt' : (stage.startsWith('tts') || stage === 'audio_output' ? 'tts' : (stage.startsWith('llm') || stage === 'turn' ? 'llm' : null));
     this.#recordProviderFailure(

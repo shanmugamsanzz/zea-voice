@@ -19,6 +19,7 @@ const storage = {
 };
 
 function mapDocument(row) {
+  const recordCount = Number(row.version_extraction_metadata?.recordCount);
   return {
     id: row.id,
     knowledgeBaseId: row.knowledge_base_id,
@@ -36,6 +37,7 @@ function mapDocument(row) {
       checksumSha256: row.content_sha256,
       pageCount: row.page_count,
       chunkCount: row.chunk_count,
+      recordCount: Number.isInteger(recordCount) && recordCount >= 0 ? recordCount : 0,
       createdAt: row.version_created_at,
     } : null,
     processingJob: row.processing_job_id ? {
@@ -58,7 +60,9 @@ function mapDocument(row) {
 
 const documentSelect = `
   SELECT d.*, v.id AS version_id, v.version_number, v.status AS version_status,
-    v.content_sha256, v.page_count, v.chunk_count, v.created_at AS version_created_at,
+    v.content_sha256, v.page_count, v.chunk_count,
+    v.extraction_metadata AS version_extraction_metadata,
+    v.created_at AS version_created_at,
     latest_job.*
   FROM knowledge_documents d
   LEFT JOIN knowledge_document_versions v
@@ -368,6 +372,7 @@ export async function uploadKnowledgeDocument(
 }
 
 function mapVersion(row) {
+  const recordCount = Number(row.extraction_metadata?.recordCount);
   return {
     id: row.id,
     documentId: row.document_id,
@@ -378,6 +383,7 @@ function mapVersion(row) {
     sizeBytes: Number(row.size_bytes),
     pageCount: row.page_count,
     chunkCount: row.chunk_count,
+    recordCount: Number.isInteger(recordCount) && recordCount >= 0 ? recordCount : 0,
     embeddingModel: row.embedding_model,
     embeddingDimensions: row.embedding_dimensions,
     processedAt: row.processed_at,

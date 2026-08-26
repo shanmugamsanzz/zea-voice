@@ -42,6 +42,7 @@ function mapCall(row, includeTranscript = false) {
     campaignId: row.campaign_id, campaignName: row.campaign_name,
     contactName: contactName(row),
     phoneNumberId: row.phone_number_id, fromNumber: row.from_number, toNumber: row.to_number,
+    transport: row.provider_metadata?.source === 'browser_test' ? 'browser_test' : 'telephony',
     direction: row.direction, status: row.status, sentiment: row.sentiment,
     startedAt: row.started_at, ringingAt: row.ringing_at, answeredAt: row.answered_at,
     endedAt: row.ended_at, durationSeconds: row.live_duration_seconds === undefined
@@ -53,6 +54,11 @@ function mapCall(row, includeTranscript = false) {
         ? row.duration_seconds : number(row.live_duration_seconds),
     }),
     taskCompletion: runtime?.metrics?.taskCompletion ?? null,
+    runtimeObservability: runtime ? {
+      turnLatency: runtime.metrics?.turnLatency ?? [],
+      tools: runtime.metrics?.tools ?? [],
+      providerFailures: runtime.metrics?.providerFailures ?? null,
+    } : null,
     aiSummary: row.ai_summary_id ? {
       id: row.ai_summary_id,
       status: row.ai_summary_status,
