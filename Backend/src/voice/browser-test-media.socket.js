@@ -202,9 +202,20 @@ export class BrowserTestMediaSession extends EventEmitter {
   sendDiagnostic(type, details = {}) {
     const diagnosticType = String(type ?? '').trim();
     if (!diagnosticType || diagnosticType.length > 80) return Promise.resolve(null);
-    return sendSocket(this.socket, {
+    // Diagnostics are observability only. A browser can close between the
+    // ready-state check and socket.send(), especially while call completion is
+    // emitting its final state. Never let that race abort transcript, memory,
+    // report, or session finalization.
+    if (this.closed || this.socket.readyState !== WebSocket.OPEN) return Promise.resolve(null);
+    return Promise.resolve().then(() => sendSocket(this.socket, {
       event: 'diagnostic',
       diagnostic: { type: diagnosticType, at: new Date().toISOString(), ...details },
+    })).catch((error) => {
+      this.log.debug({
+        err: error, stage: 'browser_test.diagnostic_delivery', callId: this.callId,
+        type: diagnosticType,
+      }, 'Browser test diagnostic delivery was skipped');
+      return null;
     });
   }
 
@@ -227,7 +238,12 @@ export class BrowserTestMediaSession extends EventEmitter {
     this.closed = true;
     clearTimeout(this.#idleTimer);
     clearTimeout(this.#maximumTimer);
-    this.onClosed(this);
+    try {
+      this.onClosed(this);
+    } catch (error) {
+      this.log.warn({ err: error, stage: 'browser_test.session_cleanup', callId: this.callId },
+        'Browser test transport cleanup failed; call finalization will continue');
+    }
     this.emit('closed', { session: this, code, reason });
     this.removeAllListeners();
   }

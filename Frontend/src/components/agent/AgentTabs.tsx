@@ -435,6 +435,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       knowledgeClarificationConfidence: base.knowledgeClarificationConfidence ?? 0.64,
       knowledgeAmbiguityMargin: base.knowledgeAmbiguityMargin ?? 0.06,
       knowledgeClarificationMessage: base.knowledgeClarificationMessage || 'I may not have heard the item correctly. Did you mean {{candidates}}?',
+      latencyAcknowledgementMessage: base.latencyAcknowledgementMessage || 'One moment while I check the information.',
       conversationMemoryFields: base.conversationMemoryFields || [],
       callbackEnabled: base.callbackEnabled !== undefined ? base.callbackEnabled : true,
       callbackMinimumDelaySeconds: base.callbackMinimumDelaySeconds ?? 30,
@@ -959,6 +960,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     const knowledgeClarificationConfidence = Number(agent.knowledgeClarificationConfidence ?? 0.64);
     const knowledgeAmbiguityMargin = Number(agent.knowledgeAmbiguityMargin ?? 0.06);
     const knowledgeClarificationMessage = String(agent.knowledgeClarificationMessage ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
+    const latencyAcknowledgementMessage = String(agent.latencyAcknowledgementMessage ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
     if (knowledgeHighConfidence < 0.7 || knowledgeHighConfidence > 1) {
       setError('High Confidence must be between 0.70 and 1.00.'); return;
     }
@@ -970,6 +972,9 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     }
     if (!knowledgeClarificationMessage || knowledgeClarificationMessage.length > 500) {
       setError('Clarification Message is required and cannot exceed 500 characters.'); return;
+    }
+    if (!latencyAcknowledgementMessage || latencyAcknowledgementMessage.length > 500) {
+      setError('Latency Acknowledgement is required and cannot exceed 500 characters.'); return;
     }
     if (!Array.isArray(agent.conversationMemoryFields) || agent.conversationMemoryFields.length > 30) {
       setError('Important Information Fields must be a list with no more than 30 fields.'); return;
@@ -1067,6 +1072,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         knowledgeClarificationConfidence,
         knowledgeAmbiguityMargin,
         knowledgeClarificationMessage,
+        latencyAcknowledgementMessage,
         conversationMemoryFields: normalizedMemoryFields,
       };
       const payload = {
@@ -2429,6 +2435,19 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                         className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold outline-none focus:border-violet-500"
                       />
                       <p className="mt-1 text-[10px] font-semibold text-slate-400">Use {'{{candidates}}'} where the matched Workflow or Catalog names should appear.</p>
+                    </div>
+                    <div className="mt-3">
+                      <label className="mb-1 block text-[10px] font-bold text-slate-500">Latency Acknowledgement</label>
+                      <textarea
+                        rows={2}
+                        maxLength={500}
+                        value={agent.latencyAcknowledgementMessage || ''}
+                        disabled={isReadOnly}
+                        onChange={(event) => setAgent({ ...agent, latencyAcknowledgementMessage: event.target.value })}
+                        placeholder="One moment while I check the information."
+                        className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold outline-none focus:border-violet-500"
+                      />
+                      <p className="mt-1 text-[10px] font-semibold text-slate-400">Spoken only when the grounded answer cannot begin before the first-audio deadline.</p>
                     </div>
                   </div>
                   <div>

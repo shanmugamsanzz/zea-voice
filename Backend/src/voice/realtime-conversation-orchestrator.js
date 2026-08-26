@@ -377,9 +377,19 @@ export class RealtimeConversationOrchestrator {
   #browserDiagnostic(type, details = {}) {
     if (this.mediaSession.transport !== 'browser_test'
       || typeof this.mediaSession.sendDiagnostic !== 'function') return;
-    void this.mediaSession.sendDiagnostic(type, details).catch((error) => this.log.debug({
-      err: error, stage: 'browser_test.diagnostic_delivery', callId: this.call.id, type,
-    }, 'Browser test diagnostic delivery was skipped'));
+    try {
+      void Promise.resolve(this.mediaSession.sendDiagnostic(type, details)).catch((error) => {
+        this.log.debug({
+          err: error, stage: 'browser_test.diagnostic_delivery', callId: this.call.id, type,
+        }, 'Browser test diagnostic delivery was skipped');
+      });
+    } catch (error) {
+      // Custom transports may throw before returning a Promise. Diagnostics
+      // remain best-effort and must never interrupt the shared call lifecycle.
+      this.log.debug({
+        err: error, stage: 'browser_test.diagnostic_delivery', callId: this.call.id, type,
+      }, 'Browser test diagnostic delivery was skipped');
+    }
   }
 
   async #prepare() {
@@ -2397,7 +2407,7 @@ export class RealtimeConversationOrchestrator {
               playbackGroupId, deferBoundaryFlush: true,
               charactersReserved: true, epoch,
               firstAudioDeadlineAt: currentSentenceNumber === 1
-                ? firstAudioDeadlineAt : undefined,
+                && Date.now() < firstAudioDeadlineAt ? firstAudioDeadlineAt : undefined,
             });
           } else {
             played = await this.#playPrefetchedTts(prepared.value, generationId, {
@@ -2414,7 +2424,7 @@ export class RealtimeConversationOrchestrator {
           kind, startedAt: turnStartedAt, deferDrain: true,
           playbackGroupId, deferBoundaryFlush: true, epoch,
           firstAudioDeadlineAt: currentSentenceNumber === 1
-            ? firstAudioDeadlineAt : undefined,
+            && Date.now() < firstAudioDeadlineAt ? firstAudioDeadlineAt : undefined,
           validatedTextAt: firstValidatedTextAt,
           onFirstAudio: () => {
             if (!audibleSentences.includes(sentence)) audibleSentences.push(sentence);
@@ -2778,10 +2788,10 @@ export class RealtimeConversationOrchestrator {
           remainingLiveTurnBudgetMs(firstAudioDeadlineAt, ttsReserveMs),
         );
         latencyTracker.setResponseClass('grounded_llm');
-        const acknowledgementEligible = (knowledge.tenantEvidence?.evidenceIds?.length ?? 0) > 0;
         const configuredAcknowledgement = configuredLatencyAcknowledgementResponse(
           this.runtimeProfile, knowledge,
         );
+        const acknowledgementEligible = Boolean(configuredAcknowledgement);
         const latencyResult = await awaitLlmWithSafeLatency(this.#llm(query, history, knowledge, {
             instruction: 'Decide this finalized normal turn using only the supplied question, relevant isolated call memory, hydrated evidence, applicable workflow authorization, permitted source mapping and assigned tool schemas. Return exactly one grounded RESPONSE, TOOL, or CLARIFY JSON decision. Never guess when evidence is weak.',
             callCheck: null,
@@ -2992,6 +3002,12 @@ export class RealtimeConversationOrchestrator {
     if (validatedNormalTurn) this.#scheduleLiveMemoryCheckpoint('validated_normal_turn');
     // The pipeline may already contain the temporary latency acknowledgement.
     // The validated final answer must still be delivered unless it became stale.
+    if (sentencePipeline.sentenceCount() === 0 && Date.now() >= firstAudioDeadlineAt) {
+      this.log.warn({
+        stage: 'voice.late_validated_answer_continued', callId: this.call.id,
+        turnEpoch: epoch, elapsedMs: Date.now() - turnStartedAt,
+      }, 'Validated answer completed after the first-audio deadline and will be delivered');
+    }
     sentencePipeline.enqueue(finalAnswer);
     if (!generatedAnswer) {
       sourceTrace.add(createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
@@ -3831,16 +3847,36 @@ export class RealtimeConversationOrchestrator {
       cacheHit: this.runtimeAmbience?.cacheHit ?? false,
       ...(this.audioEngine?.ambienceMetrics?.() ?? {}),
     };
-    await this.audioEngine?.close?.();
-    const transcriptPersistence = await this.transcriptPersistence?.flush?.();
-    if (transcriptPersistence) {
-      this.runtimeMetrics.transcriptPersistence = transcriptPersistence;
+    try {
+      await this.audioEngine?.close?.();
+    } catch (error) {
+      this.log.warn({ err: error, stage: 'call.finalize_audio_cleanup', callId: this.call.id },
+        'Audio cleanup failed during call finalization');
     }
-    await this.liveMemoryMaintenance?.flush();
+    try {
+      const transcriptPersistence = await this.transcriptPersistence?.flush?.();
+      if (transcriptPersistence) {
+        this.runtimeMetrics.transcriptPersistence = transcriptPersistence;
+      }
+    } catch (error) {
+      this.log.warn({ err: error, stage: 'call.finalize_transcript_flush', callId: this.call.id },
+        'Transcript flush failed during call finalization');
+    }
+    try {
+      await this.liveMemoryMaintenance?.flush();
+    } catch (error) {
+      this.log.warn({ err: error, stage: 'call.finalize_memory_flush', callId: this.call.id },
+        'Live memory flush failed during call finalization');
+    }
     if (this.runtimeMetrics.liveCallMemory) {
       this.runtimeMetrics.liveCallMemory.background = this.liveMemoryMaintenance?.snapshot();
     }
-    await this.#saveConversationMemory(finalOutcome, finalReason);
+    try {
+      await this.#saveConversationMemory(finalOutcome, finalReason);
+    } catch (error) {
+      this.log.warn({ err: error, stage: 'call.finalize_memory_save', callId: this.call.id },
+        'Conversation memory save failed during call finalization');
+    }
     this.liveMemoryMaintenance?.close();
     this.liveCallMemory?.close();
     this.liveCallMemory = null;

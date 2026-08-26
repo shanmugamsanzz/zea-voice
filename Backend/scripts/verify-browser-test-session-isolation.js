@@ -37,7 +37,10 @@ async function contextRunner(_auth, operation) {
         const agent = agents.get(`${parameters[0]}:${parameters[1]}:${parameters[2]}`);
         return { rowCount: agent ? 1 : 0, rows: agent ? [agent] : [] };
       }
-      if (sql.includes("SET status='failed'")) return { rowCount: 0, rows: [] };
+      if (sql.includes("SET status='failed'")) {
+        assert.match(sql, /jsonb_set\(provider_metadata,'\{browserTest,expired\}'/u);
+        return { rowCount: 0, rows: [] };
+      }
       if (sql.includes('SELECT count(*)::int AS count')) {
         const count = [...calls.values()].filter((call) => call.tenant_id === parameters[0]
           && ['ringing', 'connected'].includes(call.status) && !call.ended_at).length;
@@ -64,7 +67,12 @@ async function contextRunner(_auth, operation) {
       }
       if (sql.includes('UPDATE call_sessions') && sql.includes("'canceled'::call_status")) {
         const row = calls.get(parameters[0]);
+        assert.match(sql, /jsonb_set\(provider_metadata,'\{browserTest,endedByUser\}'/u);
+        const initiatingUserId = row.provider_metadata.browserTest.userId;
         row.status = 'canceled'; row.ended_at = now; row.credit_billing_finalized = true;
+        row.provider_metadata.browserTest.endedByUser = true;
+        assert.equal(row.provider_metadata.browserTest.userId, initiatingUserId,
+          'ending a test must preserve the RLS-scoped initiating user');
         return { rowCount: 1, rows: [row] };
       }
       throw new Error(`Unexpected session-isolation query: ${sql}`);
@@ -116,6 +124,9 @@ const ended = await endBrowserTestSession(owner.auth, owner.agent.id,
   owner.session.testCallId, { contextRunner });
 assert.equal(ended.status, 'canceled');
 assert.ok(calls.get(owner.session.testCallId).ended_at);
+assert.equal(calls.get(owner.session.testCallId).provider_metadata.browserTest.userId,
+  owner.auth.userId);
+assert.equal(calls.get(owner.session.testCallId).provider_metadata.browserTest.endedByUser, true);
 
 console.log(JSON.stringify({ success: true, task: 'browser test session isolation',
   companies: companies.length, agentsTested: created.length, concurrentPerCompany: 2,

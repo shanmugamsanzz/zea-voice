@@ -69,7 +69,7 @@ export function createBrowserTestSession(auth, agentId, input = {}, dependencies
     }
     await client.query(`UPDATE call_sessions
       SET status='failed',ended_at=now(),duration_seconds=0,
-          provider_metadata=provider_metadata||'{"browserTest":{"expired":true}}'::jsonb
+          provider_metadata=jsonb_set(provider_metadata,'{browserTest,expired}','true'::jsonb,true)
       WHERE tenant_id=$1 AND status IN ('ringing','connected') AND ended_at IS NULL
         AND provider_metadata->>'source'=$2
         AND (provider_metadata->'browserTest'->>'expiresAt')::timestamptz <= now()`,
@@ -169,7 +169,7 @@ export function endBrowserTestSession(auth, agentId, testCallId, dependencies = 
             THEN GREATEST(duration_seconds,floor(extract(epoch FROM (now()-COALESCE(answered_at,started_at))))::int)
             ELSE duration_seconds END,
           credit_billing_finalized=true,reserved_credits=0,credits_charged=0,
-          provider_metadata=provider_metadata||'{"browserTest":{"endedByUser":true}}'::jsonb
+          provider_metadata=jsonb_set(provider_metadata,'{browserTest,endedByUser}','true'::jsonb,true)
       WHERE id=$1 RETURNING *`, [testCallId]);
     return publicSession(ended.rows[0]);
   });

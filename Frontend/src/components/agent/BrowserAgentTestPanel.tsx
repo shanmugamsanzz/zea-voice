@@ -140,6 +140,8 @@ export function BrowserAgentTestPanel({ agent, onClose }: BrowserAgentTestPanelP
   const end = async () => {
     if (ending) return;
     setEnding(true);
+    setState('closed');
+    setRuntimeState('ending');
     try {
       const recording = await mediaRef.current?.disconnect();
       if (recording?.size) {

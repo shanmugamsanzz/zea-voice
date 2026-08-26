@@ -35,7 +35,10 @@ const sessionStore = new ActiveCallSessionStore({ ttlSeconds: 300 });
 let mediaSession;
 let resolveSession;
 const sessionReady = new Promise((resolve) => { resolveSession = resolve; });
-const quietLogger = { child() { return this; }, info() {}, warn() {}, error() {}, debug() {} };
+let runtimeExceptions = 0;
+let audioExceptions = 0;
+const quietLogger = { child() { return this; }, info() {}, warn() {},
+  error() { runtimeExceptions += 1; }, debug() {} };
 const ownershipEvents = [];
 const ownership = {
   async claimMedia(input) { ownershipEvents.push(['claim', input]); return true; },
@@ -63,6 +66,7 @@ const client = new WebSocket(
 );
 await once(client, 'open');
 await sessionReady;
+mediaSession.on('failure', () => { audioExceptions += 1; });
 assert.equal(client.protocol, 'audio.drachtio.org');
 assert.equal(sessionStore.get(call.id), mediaSession);
 assert.equal(runtime.sessionCount, 1);
@@ -112,6 +116,8 @@ await new Promise((resolve) => setTimeout(resolve, 20));
 assert.deepEqual(outbound.map((event) => event.event), ['playAudio', 'checkpoint', 'clearAudio']);
 assert.equal(Buffer.from(outbound[0].media.payload, 'base64').length, 160);
 assert.equal(outbound[2].streamId, mediaSession.streamId);
+assert.equal(runtimeExceptions, 0);
+assert.equal(audioExceptions, 0);
 
 const closed = once(client, 'close');
 client.send(JSON.stringify({ event: 'stop', sequenceNumber: 4, streamId: mediaSession.streamId }));
@@ -131,4 +137,5 @@ response.destroy();
 
 await runtime.close();
 await new Promise((resolve) => httpServer.close(resolve));
-console.log(JSON.stringify({ success: true, task: 'Voice Task 6 - authenticated Plivo media WebSocket' }));
+console.log(JSON.stringify({ success: true, task: 'Voice Task 6 - authenticated Plivo media WebSocket',
+  mobileResponseAudioVerified: true, runtimeExceptions, audioExceptions }));

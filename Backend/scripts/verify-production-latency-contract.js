@@ -238,6 +238,11 @@ assert.match(orchestrator, /decisionWithoutRuntimeSpeech/u);
 assert.doesNotMatch(orchestrator, /One moment while I check the published information/iu);
 assert.doesNotMatch(orchestrator, /information service is temporarily unavailable/iu);
 assert.match(orchestrator, /turn_first_audio_deadline/u);
+assert.match(orchestrator, /voice\.late_validated_answer_continued/u,
+  'a validated answer that finishes after the soft first-audio deadline must still be delivered');
+assert.match(orchestrator,
+  /currentSentenceNumber === 1[\s\S]{0,120}Date\.now\(\) < firstAudioDeadlineAt/u,
+  'the hard first-audio deadline must apply only while it is still actionable');
 assert.match(orchestrator, /persistAudible/u,
   'audible assistant speech must survive a confirmed interruption');
 assert.match(orchestrator, /transcript\.audible_partial_persisted/u);

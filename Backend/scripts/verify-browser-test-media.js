@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { once } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import { WebSocket } from 'ws';
 
 process.env.NODE_ENV = 'test';
@@ -10,7 +10,8 @@ process.env.REDIS_HOST ??= 'localhost';
 const { createBrowserTestMediaToken, validateBrowserTestMediaToken } =
   await import('../src/voice/browser-test-token.js');
 const { ActiveCallSessionStore } = await import('../src/voice/call-session-store.js');
-const { attachBrowserTestMediaWebSocket } = await import('../src/voice/browser-test-media.socket.js');
+const { BrowserTestMediaSession, attachBrowserTestMediaWebSocket } =
+  await import('../src/voice/browser-test-media.socket.js');
 
 const secret = 'browser-test-signing-secret-at-least-32-characters';
 const now = Date.now();
@@ -113,6 +114,47 @@ await closed;
 assert.equal(sessionStore.get(identity.callId, { touch: false }), null);
 assert.equal(server.browserRuntime.sessionCount, 0);
 assert.equal(audioExceptions, 0);
+assert.equal(await mediaSession.sendDiagnostic('closed_session_summary', { finalized: true }), null,
+  'A diagnostic after browser closure must be ignored');
+
+// An abnormal network disconnect must still emit the lifecycle close event and
+// allow finalization observers to run. Subsequent diagnostics remain optional.
+class UnexpectedDisconnectSocket extends EventEmitter {
+  constructor() {
+    super();
+    this.readyState = WebSocket.OPEN;
+    this.bufferedAmount = 0;
+    this.sent = [];
+  }
+  send(payload, callback) {
+    this.sent.push(JSON.parse(payload));
+    callback?.();
+  }
+  close(code, reason) {
+    this.readyState = WebSocket.CLOSED;
+    this.emit('close', code, Buffer.from(reason));
+  }
+}
+const disconnectSocket = new UnexpectedDisconnectSocket();
+let disconnectCleanup = 0;
+const disconnectSession = new BrowserTestMediaSession({
+  socket: disconnectSocket,
+  call: { ...call, id: '10000000-0000-4000-8000-000000000006' },
+  log: { info() {}, warn() {}, error() { runtimeExceptions += 1; }, debug() {} },
+  maximumSessionMs: 30_000,
+  onClosed: () => {
+    disconnectCleanup += 1;
+    throw new Error('simulated transport registry cleanup failure');
+  },
+});
+disconnectSession.accept();
+const unexpectedClosed = once(disconnectSession, 'closed');
+disconnectSocket.readyState = WebSocket.CLOSED;
+disconnectSocket.emit('close', 1006, Buffer.from('network disconnected'));
+const [unexpectedCloseEvent] = await unexpectedClosed;
+assert.equal(unexpectedCloseEvent.code, 1006);
+assert.equal(disconnectCleanup, 1);
+assert.equal(await disconnectSession.sendDiagnostic('finalization_status', { persisted: true }), null);
 
 const replay = new WebSocket(
   `ws://127.0.0.1:${port}/voice/browser-test/media?call_id=${identity.callId}&token=${encodeURIComponent(token)}`,
@@ -153,5 +195,6 @@ await new Promise((resolve) => server.close(resolve));
 console.log(JSON.stringify({ success: true, task: 'isolated browser test media transport',
   sameOrchestratorContract: true, crossTenantRejected: true, tokenReplayRejected: true,
   missingTokenRejected: true, wrongProtocolRejected: true, disconnectCleanup: true,
+  unexpectedDisconnectFinalizationSafe: true, closedSocketDiagnosticsOptional: true,
   microphoneMulawPreserved: true, interruptionClearVerified: true,
   runtimeExceptions, audioExceptions }));
