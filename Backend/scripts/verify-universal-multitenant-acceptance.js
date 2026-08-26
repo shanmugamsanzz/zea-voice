@@ -6,6 +6,7 @@ import { buildRevisionSparseIndex } from '../src/knowledge-bases/knowledge-map.s
 import { retrieveRankHydrateGroundedTurn } from '../src/knowledge-bases/grounded-turn-evidence.js';
 import { validateGroundedLlmDecision } from '../src/voice/interaction/grounded-llm-decision.js';
 import { validateGroundedClaim } from '../src/voice/interaction/grounded-claim-validator.js';
+import { applyUnifiedGroundedTurn } from '../src/voice/interaction/unified-grounded-turn.js';
 import { finalizeConfiguredToolResults } from '../src/knowledge-bases/verified-tool-result.js';
 import { openIsolatedCallMemory } from '../src/knowledge-engine/call-memory.js';
 
@@ -118,6 +119,32 @@ const tenantDefinitions = [
       toolName: 'reserve_cargo_route', instruction: 'Recoge los campos configurados.',
       field: 'cargo_reference', success: 'La solicitud de carga está verificada.' },
   },
+  {
+    prefix: 74, industry: 'screening', language: 'ta', currency: 'INR',
+    category: 'Screening Options', categoryKey: 'screening-options',
+    categoryAliases: ['screening packages'],
+    items: [
+      { key: 'silver-option', name: 'Silver Package', aliases: ['Silver package'], price: 1500,
+        attributes: ['CBC', 'ECG'],
+        fact: 'Silver Package costs 1500 INR and includes CBC and ECG.' },
+      { key: 'gold-option', name: 'Gold Package', aliases: ['Gold package'], price: 2500,
+        attributes: ['CBC', 'ECG', 'Thyroid'],
+        fact: 'Gold Package costs 2500 INR and includes CBC, ECG and Thyroid.' },
+      { key: 'shared-screen-one', name: 'Amber Screen', aliases: ['shared screen'], price: 900,
+        fact: 'Amber Screen costs 900 INR.' },
+      { key: 'shared-screen-two', name: 'Azure Screen', aliases: ['shared screen'], price: 950,
+        fact: 'Azure Screen costs 950 INR.' },
+    ],
+    naturalQuestion: 'Which published option includes CBC and ECG?',
+    phoneticQuestion: 'silvar package details', followUp: 'இதோட price என்ன?',
+    firstDetailsQuestion: 'Silver package பற்றி சொல்லுங்க',
+    secondPriceQuestion: 'Gold price என்ன?', secondDetailsQuestion: 'இதில் என்ன tests?',
+    isolatedPriceQuestion: 'Price என்ன?',
+    comparisonQuestion: 'Compare Silver Package and Gold Package.',
+    action: { name: 'Screening request', phrase: 'Submit this screening request',
+      toolName: 'submit_screening_request', instruction: 'Collect configured request fields.',
+      field: 'request_reference', success: 'The screening request is verified.' },
+  },
 ];
 
 function createTenant(definition) {
@@ -182,6 +209,8 @@ function hydrationDependencies(tenant, counter) {
             document_name: record.document_name, document_display_name: record.document_display_name,
             document_type: record.document_type, source_page_start: record.source_page_start,
             source_page_end: record.source_page_start, source_section: record.source_section,
+            document_status: 'ready', document_version_status: 'ready',
+            document_version_is_current: true,
             language: record.language, content: record.answer, caller_facing: callerFacing,
             authoritative_data: authoritativeData(record, entry),
             rank: entry.rank, rrf_score: entry.rrf_score,
@@ -275,6 +304,45 @@ function responseDecision(envelope, sources, answer, stateUpdate = {}) {
     pendingQuestion: null, toolRequest: null, clarification: null,
   }), envelope, { fieldSchemas: [], toolSchemas: [] });
   assert.equal(result.valid, true, result.reason);
+  return result;
+}
+
+function applyContextualResponse({ tenant, retrieval, memory, turnToken, record, answer,
+  requestedFacts = [], contextDependent = false }) {
+  memory.beginTurn(turnToken);
+  const envelope = validationEnvelope(retrieval.turn);
+  const source = sourceForRecord(envelope, record.record_id);
+  assert.ok(source, `Expected hydrated record ${record.record_id}`);
+  const result = applyUnifiedGroundedTurn({
+    rawDecision: JSON.stringify({
+      decision: 'RESPONSE', answer, responseId: null,
+      evidenceIds: [source.id], selectedEvidenceIds: [source.id],
+      stateUpdate: {
+        currentTopic: record.entity_name,
+        knownEntityKeys: [record.entity_metadata.itemKey],
+        requestedFacts,
+        contextualReferences: contextDependent ? ['active entity'] : [],
+        contextDependent,
+      },
+      pendingQuestion: null, toolRequest: null, clarification: null,
+    }),
+    groundingEnvelope: envelope,
+    memory,
+    turnToken,
+    evidence: retrieval.turn.authoritative.evidence,
+    evidenceScope: {
+      tenantId: tenant.identity.tenantId,
+      agentId: tenant.identity.agentId,
+      requireHydratedEvidence: true,
+      publicationRevisions: [{
+        knowledgeBaseId: tenant.identity.knowledgeBaseId,
+        publicationRevision: 1,
+      }],
+    },
+    finalizedUtterance: retrieval.input.latestQuestion ?? retrieval.input.utterance,
+  });
+  assert.equal(result.valid, true, result.reason);
+  assert.equal(result.state.activeEntity.id, record.record_id);
   return result;
 }
 
@@ -410,18 +478,100 @@ for (let pass = 1; pass <= repeats; pass += 1) {
       assert.equal(unsupported.valid, false, 'Unsupported numeric claims must be rejected');
       coverage.add('unsupported_claim_rejection');
 
+      const contextualCallId = `${tenant.identity.callId}-context-${pass}`;
       const memory = openIsolatedCallMemory({
         tenantId: tenant.identity.tenantId, agentId: tenant.identity.agentId,
-        callId: `${tenant.identity.callId}-${pass}`,
+        callId: contextualCallId,
       }, {});
-      memory.beginTurn(`turn-${pass}`);
-      memory.applyResolvedContext({ explicitEntity: true, entity: {
-        id: first.record_id, recordId: first.record_id,
-        key: first.entity_metadata.itemKey, name: first.entity_name,
-      } }, { turnToken: `turn-${pass}` });
-      assert.equal(memory.snapshot().activeEntity.id, first.record_id);
+      const firstDetailsQuestion = tenant.firstDetailsQuestion ?? first.entity_name;
+      const firstDetails = await runTurn(tenant, firstDetailsQuestion, {
+        callId: contextualCallId, memory: memory.snapshot(), semanticRecords: [first],
+      });
+      applyContextualResponse({
+        tenant, retrieval: firstDetails, memory, turnToken: `details-${pass}`,
+        record: first, answer: first.answer, requestedFacts: ['details'],
+      });
+
+      const firstPrice = await runTurn(tenant, tenant.followUp, {
+        callId: contextualCallId, memory: memory.snapshot(), requestedFacts: ['price'],
+        contextualReferences: ['active entity'],
+      });
+      assert.ok(sourceForRecord(validationEnvelope(firstPrice.turn), first.record_id),
+        'A contextual price turn must reserve the remembered canonical record');
+      applyContextualResponse({
+        tenant, retrieval: firstPrice, memory, turnToken: `price-${pass}`,
+        record: first,
+        answer: `${first.entity_name} costs ${first.entity_metadata.price} ${tenant.currency}.`,
+        requestedFacts: ['price'], contextDependent: true,
+      });
+
+      const secondPriceQuestion = tenant.secondPriceQuestion ?? `${second.entity_name} price`;
+      const secondPrice = await runTurn(tenant, secondPriceQuestion, {
+        callId: contextualCallId, memory: memory.snapshot(), semanticRecords: [second],
+      });
+      assert.equal(secondPrice.prepared.resolution.candidate.recordId, second.record_id,
+        'A latest explicit entity must replace stale canonical memory');
+      applyContextualResponse({
+        tenant, retrieval: secondPrice, memory, turnToken: `switch-${pass}`,
+        record: second,
+        answer: `${second.entity_name} costs ${second.entity_metadata.price} ${tenant.currency}.`,
+        requestedFacts: ['price'], contextDependent: false,
+      });
+
+      const secondDetailsQuestion = tenant.secondDetailsQuestion ?? 'What is included?';
+      const secondDetails = await runTurn(tenant, secondDetailsQuestion, {
+        callId: contextualCallId, memory: memory.snapshot(), requestedFacts: ['attributes'],
+        contextualReferences: ['active entity'],
+      });
+      assert.ok(sourceForRecord(validationEnvelope(secondDetails.turn), second.record_id),
+        'A contextual details turn must use the replacement entity');
+      applyContextualResponse({
+        tenant, retrieval: secondDetails, memory, turnToken: `attributes-${pass}`,
+        record: second, answer: second.answer,
+        requestedFacts: ['attributes'], contextDependent: true,
+      });
+      assert.equal(memory.snapshot().activeEntity.id, second.record_id);
+
+      const isolatedCallId = `${tenant.identity.callId}-new-${pass}`;
+      const isolatedMemory = openIsolatedCallMemory({
+        tenantId: tenant.identity.tenantId, agentId: tenant.identity.agentId,
+        callId: isolatedCallId,
+      }, {});
+      const isolatedPriceQuestion = tenant.isolatedPriceQuestion ?? 'What is the price?';
+      const isolatedPrice = await runTurn(tenant, isolatedPriceQuestion, {
+        callId: isolatedCallId, memory: isolatedMemory.snapshot(), requestedFacts: ['price'],
+      });
+      isolatedMemory.beginTurn(`clarify-${pass}`);
+      const isolatedClarification = applyUnifiedGroundedTurn({
+        rawDecision: JSON.stringify({
+          decision: 'CLARIFY', answer: '', responseId: null, evidenceIds: [],
+          selectedEvidenceIds: [],
+          stateUpdate: { requestedFacts: ['price'], contextDependent: false },
+          pendingQuestion: 'Which published option do you mean?', toolRequest: null,
+          clarification: { reason: 'missing_entity' },
+        }),
+        groundingEnvelope: validationEnvelope(isolatedPrice.turn),
+        memory: isolatedMemory,
+        turnToken: `clarify-${pass}`,
+        evidence: isolatedPrice.turn.authoritative.evidence,
+        evidenceScope: {
+          tenantId: tenant.identity.tenantId,
+          agentId: tenant.identity.agentId,
+          requireHydratedEvidence: true,
+          publicationRevisions: [{
+            knowledgeBaseId: tenant.identity.knowledgeBaseId, publicationRevision: 1,
+          }],
+        },
+        finalizedUtterance: isolatedPriceQuestion,
+      });
+      assert.equal(isolatedClarification.valid, true, isolatedClarification.reason);
+      assert.equal(isolatedClarification.decision, 'clarify');
+      assert.equal(isolatedClarification.state.activeEntity, null,
+        'A new call must never inherit the previous call entity');
+      isolatedMemory.close();
       memory.close();
       coverage.add('isolated_memory');
+      coverage.add('production_order_context');
 
       const foreign = tenants.find((candidate) => candidate !== tenant);
       await assert.rejects(() => prepareKnowledgeQuery(
@@ -439,7 +589,7 @@ const requiredCoverage = [
   'natural_non_exact', 'phonetic_stt', 'contextual_follow_up', 'topic_switching',
   'price_and_details', 'multi_entity_comparison', 'verified_tool',
   'genuine_ambiguity', 'false_ambiguity_rejected', 'cross_tenant_isolation',
-  'unsupported_claim_rejection', 'isolated_memory',
+  'unsupported_claim_rejection', 'isolated_memory', 'production_order_context',
 ];
 for (const requirement of requiredCoverage) assert.ok(coverage.has(requirement), requirement);
 assert.equal(runtimeErrors, 0);

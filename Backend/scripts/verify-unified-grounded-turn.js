@@ -933,7 +933,9 @@ const invalidArguments = applyUnifiedGroundedTurn({
 });
 assert.equal(invalidArguments.valid, false);
 assert.equal(invalidArguments.reason, 'invalid_tool_arguments');
-assert.equal(invalidArguments.state.knownEntities[0].key, 'priority-service');
+assert.deepEqual(invalidArguments.state.knownEntities, [],
+  'A rejected decision must not commit even a hydrated canonical entity');
+assert.equal(invalidArguments.state.currentTopic, null);
 assert.equal(invalidArguments.state.activeToolRequest, null);
 
 const inventedMemory = openGenericConversationState(

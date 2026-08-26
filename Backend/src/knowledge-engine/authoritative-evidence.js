@@ -548,9 +548,11 @@ export function detectEntityAmbiguity(evidence, classification, resolution) {
 }
 
 function rememberedContextCandidate(input) {
-  const hasContextSignal = (input?.requestedFacts?.length ?? 0) > 0
-    || (input?.contextualReferences?.length ?? 0) > 0;
-  if (!hasContextSignal) return null;
+  // Requested facts and contextual references are interpreted by the single
+  // grounded LLM after retrieval. Therefore they cannot be prerequisites for
+  // retaining the call's canonical topic in the evidence package. The
+  // remembered record is only a reserved context candidate; an explicit
+  // current-turn entity still takes priority in reservedResolutionCandidates.
   const activeCategory = input?.memory?.activeCategory;
   if (activeCategory) {
     const recordId = normalizeId(activeCategory.recordId ?? activeCategory.id);
@@ -567,6 +569,7 @@ function reservedResolutionCandidates(input, classification, resolution) {
       ?? resolution?.routingCandidates ?? [];
     const selected = candidates.filter((candidate) => (
       candidate?.explicit === true
+      && Number(candidate.score ?? 0) >= 0.88
       && ['ITEM', 'CATEGORY'].includes(candidate?.entityType)
       && ['CATALOG_ITEM', 'CATALOG_CATEGORY']
         .includes(String(candidate?.recordType ?? '').toUpperCase())
@@ -589,7 +592,11 @@ function reservedResolutionCandidates(input, classification, resolution) {
   }].filter((value) => value.recordId && value.recordType);
 }
 
-function evidenceFromRow(row, input, fused) {
+function evidenceFromRow(row, input, fused, context = {}) {
+  const key = recordKey({ recordId: row.record_id, recordType: row.record_type });
+  const contextual = Boolean(context.rememberedRecordKey
+    && key === context.rememberedRecordKey);
+  const explicit = Boolean(context.explicitRecordKey && key === context.explicitRecordKey);
   const provenance = Object.freeze({
     tenantId: input.tenantId,
     agentId: input.agentId,
@@ -640,7 +647,12 @@ function evidenceFromRow(row, input, fused) {
     authoritativeData: Object.freeze(stableValue(row.authoritative_data ?? {})),
     rank: fused.rank,
     rrfScore: fused.rrfScore,
-    channels: fused.channels,
+    channels: Object.freeze([...new Set([
+      ...fused.channels,
+      ...(contextual ? ['conversation_memory'] : []),
+      ...(explicit ? ['catalog_identity'] : []),
+    ])]),
+    retrievalContext: contextual ? 'contextual' : 'primary',
     channelRanks: fused.channelRanks,
     providerScores: fused.providerScores,
     hydrationValidated: true,
@@ -717,6 +729,11 @@ export async function rankAndHydrateAuthoritativeEvidence({
     });
   }
   const fusedById = new Map(fusion.candidates.map((candidate) => [recordKey(candidate), candidate]));
+  const remembered = resolution?.candidate?.explicit === true
+    ? null : rememberedContextCandidate(input);
+  const rememberedRecordKey = recordKey(remembered);
+  const explicitRecordKey = resolution?.candidate?.explicit === true
+    ? recordKey(resolution.candidate) : null;
   const evidenceById = new Map();
   for (const row of rows) {
     const fused = fusedById.get(recordKey({ recordId: row.record_id, recordType: row.record_type }));
@@ -726,7 +743,9 @@ export async function rankAndHydrateAuthoritativeEvidence({
       publicationRevision: Number(row.publication_revision),
     })) continue;
     const key = `${String(row.record_type).toUpperCase()}:${normalizeId(row.record_id)}`;
-    if (!evidenceById.has(key)) evidenceById.set(key, evidenceFromRow(row, input, fused));
+    if (!evidenceById.has(key)) evidenceById.set(key, evidenceFromRow(row, input, fused, {
+      rememberedRecordKey, explicitRecordKey,
+    }));
   }
   const evidence = [...evidenceById.values()].sort((left, right) => left.rank - right.rank);
   const hydratedIds = new Set(evidence.map(recordKey));

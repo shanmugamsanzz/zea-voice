@@ -215,7 +215,7 @@ export function applyUnifiedGroundedTurn({
   finalizedUtterance = '',
   confirmationConfiguration = null,
 } = {}) {
-  if (!memory?.snapshot || !memory?.applyGroundedDecision) {
+  if (!memory?.snapshot || !memory?.applyGroundedDecision || !memory?.restoreValidatedState) {
     throw new TypeError('A generic conversation memory instance is required');
   }
   const beforeState = memory.snapshot();
@@ -585,6 +585,10 @@ export function applyUnifiedGroundedTurn({
   if (applied?.stale) {
     return Object.freeze({ valid: false, reason: 'stale_turn', state: applied.state });
   }
+  const rollbackMemory = () => {
+    const restored = memory.restoreValidatedState(beforeState, { turnToken });
+    return restored?.state ?? memory.snapshot();
+  };
   let afterState = memory.snapshot();
   if (exactCategorySelection) {
     afterState = memory.applyKnowledge({
@@ -604,14 +608,13 @@ export function applyUnifiedGroundedTurn({
       requireCurrentActionEvidence: !beforeState.activeToolRequest?.authorizationRecordId,
     });
     if (!actionContext.valid) {
-      memory.setActiveToolRequest(null, { turnToken });
       return Object.freeze({
         valid: false,
         reason: actionContext.reason === 'exact_selectable_catalog_item_required'
           ? actionContext.reason : 'unauthorized_tool_request',
         toolRequest: null,
         evidenceIds: effectiveDecision.evidenceIds, stateUpdate: effectiveDecision.stateUpdate,
-        state: memory.snapshot(),
+        state: rollbackMemory(),
       });
     }
     const activeRequest = {
@@ -666,29 +669,24 @@ export function applyUnifiedGroundedTurn({
   });
   const awaitingConfirmation = security.reason === 'confirmation_required' && actionContext?.valid;
   if (!security.valid) {
-    // Entity, topic and collected-information updates remain valid. An
-    // unverified action request itself must not remain active in memory.
     if (awaitingConfirmation) {
       afterState = memory.setActiveToolRequest({
         ...afterState.activeToolRequest,
         status: 'collecting_information',
       }, { turnToken });
-    } else if (effectiveDecision.toolRequest || effectiveDecision.activeToolRequest) {
-      memory.setActiveToolRequest(null, { turnToken });
-      afterState = memory.snapshot();
     }
     if (awaitingConfirmation) {
       // The same-turn fields and Catalog selection remain committed, but the
       // external operation is suppressed until a later confirmed turn.
     } else {
-    return Object.freeze({
-      valid: false,
-      reason: security.reason,
-      evidenceIds: effectiveDecision.evidenceIds,
-      stateUpdate: effectiveDecision.stateUpdate,
-      toolRequest: null,
-      state: afterState,
-    });
+      return Object.freeze({
+        valid: false,
+        reason: security.reason,
+        evidenceIds: effectiveDecision.evidenceIds,
+        stateUpdate: effectiveDecision.stateUpdate,
+        toolRequest: null,
+        state: rollbackMemory(),
+      });
     }
   }
   const nextQuestion = effectiveDecision.responseId ? null : resolveNextConfiguredQuestion({
@@ -710,7 +708,7 @@ export function applyUnifiedGroundedTurn({
   if (!nextQuestionValidation.valid) {
     return Object.freeze({
       valid: false, reason: nextQuestionValidation.reason,
-      field: nextQuestionValidation.field, state: afterState,
+      field: nextQuestionValidation.field, state: rollbackMemory(),
     });
   }
   const durableNextQuestion = nextQuestion?.source !== 'grounded_clarification';

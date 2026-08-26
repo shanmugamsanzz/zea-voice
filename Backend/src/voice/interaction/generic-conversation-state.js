@@ -276,6 +276,40 @@ export function openGenericConversationState(identity, settings = {}, now = Date
     },
     fieldSchemas: () => configuration.fields.map((field) => ({ ...field })),
     configuration: () => Object.freeze({ mode: configuration.mode, recentTurns: configuration.recentTurns }),
+    restoreValidatedState(snapshot = {}, options = {}) {
+      if (!current(options.turnToken)) {
+        return Object.freeze({ applied: false, stale: true, state: publicState(state) });
+      }
+      const scope = snapshot.scope ?? {};
+      if (scope.tenantId !== state.scope.tenantId
+        || scope.agentId !== state.scope.agentId
+        || scope.callId !== state.scope.callId) {
+        throw new Error('Conversation state rollback scope mismatch');
+      }
+      state.currentTopic = cleanText(snapshot.currentTopic, 240) || null;
+      state.knownEntities = uniqueEntities(snapshot.knownEntities);
+      state.activeEntity = cleanEntity(snapshot.activeEntity);
+      state.activeCategory = cleanCategory(snapshot.activeCategory);
+      state.pendingQuestion = cleanPending(snapshot.pendingQuestion);
+      state.pendingClarification = cleanPending(snapshot.pendingClarification);
+      state.collectedInformation = cleanInformation(
+        snapshot.collectedToolFields ?? snapshot.collectedInformation ?? {}, fieldKeys,
+      );
+      const restoredTurns = (snapshot.recentTurns ?? []).map(cleanMessage).filter(Boolean);
+      state.recentTurns = configuration.mode === 'full_current_call'
+        ? restoredTurns.slice(-maximumMessages) : recent(restoredTurns, configuration.recentTurns);
+      state.lastAnswer = cleanText(snapshot.lastAnswer, maximumMessageCharacters) || null;
+      state.activeToolRequest = cleanToolRequest(snapshot.activeTool ?? snapshot.activeToolRequest);
+      state.language = cleanLanguage(snapshot.language, state.language);
+      state.requestType = cleanRequestType(snapshot.latestIntent ?? snapshot.requestType);
+      state.citedEvidence = cleanEvidence(snapshot.citedEvidence);
+      state.requestedFacts = cleanList(snapshot.requestedFacts);
+      state.constraints = cleanList(snapshot.constraints);
+      state.contextualReferences = cleanList(snapshot.contextualReferences);
+      state.contextDependent = snapshot.contextDependent === true;
+      resumePending = false;
+      return Object.freeze({ applied: true, state: publicState(state) });
+    },
     append(message, options = {}) {
       if (!current(options.turnToken)) return Object.freeze({ applied: false, stale: true, state: publicState(state) });
       const entry = cleanMessage(message);

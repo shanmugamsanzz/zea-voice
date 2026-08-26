@@ -314,7 +314,8 @@ export function validateFinalKnowledgeResponse({
 function explicitComparisonEvidence(resolution, evidence) {
   const explicitIds = new Set((resolution?.namespaceCandidates?.CATALOG
     ?? resolution?.routingCandidates ?? []).filter((candidate) => (
-    candidate.explicit === true && ['ITEM', 'CATEGORY'].includes(candidate.entityType)
+    candidate.explicit === true && Number(candidate.score ?? 0) >= 0.88
+    && ['ITEM', 'CATEGORY'].includes(candidate.entityType)
   )).map((candidate) => candidate.recordId).map(normalizedId));
   if (!explicitIds.size) return [];
   return evidence.filter((source) => ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(source.recordType)

@@ -207,6 +207,16 @@ assert.deepEqual(retrieval.channels.qdrant.map((candidate) => candidate.recordId
 assert.ok(retrieval.recordTypes.includes('KNOWLEDGE_CHUNK'));
 assert.ok(!retrieval.recordTypes.includes('WORKFLOW_RULE'));
 
+request = prepared('context-only follow-up without preclassified facts', {
+  memory: { activeEntity: { recordId: alpha.record_id, itemKey: 'alpha' } },
+});
+retrieval = await retrieveTargetedCandidates({
+  ...request, publicationBundles: bundle, sparseIndexes: [sparseIndex],
+}, providers);
+assert.ok(retrieval.channels.structured.some((candidate) => (
+  candidate.recordId === alpha.record_id && candidate.matchMethod === 'call_memory_context'
+)), 'canonical call memory must enter retrieval before the LLM identifies the requested fact');
+
 request = prepared('Options');
 retrieval = await retrieveTargetedCandidates({
   ...request, publicationBundles: [bundle], sparseIndexes: [sparseIndex],

@@ -221,8 +221,12 @@ function normalizeStateUpdate(value, envelope, runtime) {
     ? null : requestType(canonical.requestType ?? canonical.questionType);
   if ((canonical.requestType !== undefined || canonical.questionType !== undefined)
     && !resolvedRequestType) return null;
+  const canonicalTopic = knownEntities.length > 0
+    ? knownEntities[0].key : (text(canonical.currentTopic, 240) || null);
   return Object.freeze({
-    currentTopic: text(canonical.currentTopic, 240) || null,
+    // Once the model selects a published entity, the runtime owns its topic
+    // identity. Free-form model labels must never replace canonical memory.
+    currentTopic: canonicalTopic,
     knownEntityKeys: Object.freeze(knownEntities.map((entity) => entity.key)),
     knownEntities: Object.freeze(knownEntities.map((entity) => ({ ...entity }))),
     collectedInformation: Object.freeze(collectedInformation),
@@ -365,6 +369,8 @@ export function groundedDecisionContract(envelope, runtime = {}) {
       'For an ordinary answer with no memory change, return stateUpdate as an empty object.',
       'Interpret the complete current question with only the supplied relevant call memory and published evidence.',
       'Identify the requested fact, every explicit entity or category, every comparison entity, contextual references, and action intent. Put all resolved entity keys in knownEntityKeys and all requested facts in requestedFacts.',
+      'If the latest question omits an entity but relevant call memory contains an active canonical entity or category, interpret contextual requested facts against that remembered record and select its permitted source.',
+      'If a requested fact requires an entity and neither the latest question nor relevant call memory and evidence identify one, return a targeted CLARIFY question; never select an arbitrary evidence record.',
       'The latest explicit entity or category replaces a stale remembered topic. Use remembered entities only when the current question genuinely depends on context.',
       'Return CLARIFY only for genuine ambiguity between supported candidates or genuinely missing/conflicting evidence; never clarify merely because caller wording differs from a published phrase.',
       'Resolve meaning generically in stateUpdate when useful: requestType, currentTopic, knownEntityKeys, requestedFacts, constraints, contextualReferences and contextDependent.',

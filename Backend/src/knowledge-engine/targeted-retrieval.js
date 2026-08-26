@@ -285,11 +285,15 @@ function structuredCandidatesForTurn(input, classification, resolution, recordSc
     // is deliberately lower-ranked than current-turn matches; the grounded
     // LLM decides whether the latest question actually refers to it.
     const rememberedCatalog = activeCatalogCandidate(input, recordScope, allowedTypes);
+    const explicitlyContextual = (input?.contextualReferences?.length ?? 0) > 0
+      || ((input?.requestedFacts?.length ?? 0) > 0 && Boolean(input?.memory?.activeEntity));
     if (rememberedCatalog && !candidates.some((candidate) => (
       normalizeId(candidate.recordId) === normalizeId(rememberedCatalog.recordId)
     ))) {
       candidates.push(freezeCandidate({
-        ...rememberedCatalog, score: 0.35, matchMethod: 'call_memory_context',
+        ...rememberedCatalog,
+        score: explicitlyContextual ? 1 : 0.35,
+        matchMethod: explicitlyContextual ? 'call_memory' : 'call_memory_context',
       }, 'structured', candidates.length + 1));
     }
   }
