@@ -67,8 +67,14 @@ export function resampleToMuLaw(input: Float32Array, sourceRate: number) {
   return output;
 }
 
-function websocketUrl(baseUrl: string, session: BrowserTestSessionContract) {
-  const url = new URL(session.mediaPath, baseUrl || window.location.origin);
+export function browserTestWebsocketUrl(
+  baseUrl: string,
+  session: BrowserTestSessionContract,
+  origin = window.location.origin,
+) {
+  const apiBase = new URL(baseUrl || origin, origin);
+  const url = new URL(apiBase.origin);
+  url.pathname = `${apiBase.pathname.replace(/\/$/, '')}/${session.mediaPath.replace(/^\/+/, '')}`;
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   url.searchParams.set('call_id', session.callId);
   url.searchParams.set('token', session.token);
@@ -111,7 +117,7 @@ export class BrowserAgentMediaClient extends EventTarget {
       await this.context.resume();
       this.setState('connecting');
       await new Promise<void>((resolve, reject) => {
-        const socket = new WebSocket(websocketUrl(apiBaseUrl, session), session.protocol);
+        const socket = new WebSocket(browserTestWebsocketUrl(apiBaseUrl, session), session.protocol);
         let settled = false;
         this.socket = socket;
         socket.onmessage = (message) => this.handleMessage(String(message.data));

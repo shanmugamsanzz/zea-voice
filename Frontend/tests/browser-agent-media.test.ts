@@ -1,8 +1,25 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  linearToMuLaw, muLawToLinear, resampleToMuLaw,
+  browserTestWebsocketUrl, linearToMuLaw, muLawToLinear, resampleToMuLaw,
 } from '../src/lib/browserAgentMedia';
+
+const session = {
+  testCallId: 'test-call', callId: 'test-call', token: 'signed-token',
+  mediaPath: '/voice/browser-test/media', protocol: 'zea.browser-voice.v1',
+  expiresAt: '2026-08-26T12:00:00.000Z',
+};
+
+test('browser test websocket preserves the API proxy prefix', () => {
+  assert.equal(
+    browserTestWebsocketUrl('/api', session, 'https://voice.example.com'),
+    'wss://voice.example.com/api/voice/browser-test/media?call_id=test-call&token=signed-token',
+  );
+  assert.equal(
+    browserTestWebsocketUrl('https://api.example.com', session, 'https://voice.example.com'),
+    'wss://api.example.com/voice/browser-test/media?call_id=test-call&token=signed-token',
+  );
+});
 
 test('browser microphone PCM is converted to 8 kHz mu-law deterministically', () => {
   const source = new Float32Array(480);
