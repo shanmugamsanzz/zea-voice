@@ -2,7 +2,7 @@
 
 These formats are tenant data. Runtime code must not contain company names, product names, aliases, prices, stages, spoken sentences or business rules. A company configures one Master Prompt and uploads the five document types below.
 
-## 1. Master Prompt (Agent UI)
+## 1. Master Prompt (Agent USER IINTERFACE)
 
 ```text
 ROLE: {{tenant-defined role}}
