@@ -1,5 +1,6 @@
 import { embedQuery } from '../rag/embedding.client.js';
-import { searchTenantPoints } from '../rag/qdrant.client.js';
+import { QDRANT_SEARCH_LIMIT_MAX, searchTenantPoints } from '../rag/qdrant.client.js';
+import { logger } from '../config/logger.js';
 import { knowledgeSearchIndexes } from './query-classifier.js';
 
 export const TARGETED_RETRIEVAL_VERSION = 4;
@@ -518,7 +519,10 @@ async function semanticCandidates(input, scope, allowedTypes, limit, dependencie
     abortSignal: input.abortSignal,
     // Fetch enough candidates for independent namespace ranking so a dense
     // namespace cannot crowd every other published source out of the result.
-    limit: Math.min(50, limit * Math.max(1, Object.keys(selectedNamespaceTypes(allowedTypes)).length)),
+    limit: Math.min(
+      QDRANT_SEARCH_LIMIT_MAX,
+      limit * Math.max(1, Object.keys(selectedNamespaceTypes(allowedTypes)).length),
+    ),
     scoreThreshold: 0,
     recordTypes: [...allowedTypes],
   });
@@ -566,21 +570,44 @@ export async function retrieveTargetedCandidates({
   const recordTypes = allowedRecordTypes(indexes);
   const dependencies = { ...defaultDependencies, ...suppliedDependencies };
   const queryContext = buildContextEnrichedRetrievalQuery(input, classification, resolution, scope);
+  const channelFailures = [];
 
-  const structuredPromise = Promise.resolve().then(() => {
+  async function isolateChannel(channel, operation) {
+    try {
+      return await operation();
+    } catch (error) {
+      const diagnostic = Object.freeze({
+        channel,
+        code: String(error?.code ?? error?.name ?? 'RETRIEVAL_CHANNEL_FAILED'),
+        message: String(error?.message ?? error).slice(0, 500),
+      });
+      channelFailures.push(diagnostic);
+      logger.warn({
+        err: error,
+        stage: 'knowledge.retrieval_channel_failed',
+        tenantId: input.tenantId,
+        agentId: input.agentId,
+        callId: input.callId,
+        ...diagnostic,
+      }, 'A hybrid retrieval channel failed; healthy channels will continue');
+      return Object.freeze([]);
+    }
+  }
+
+  const structuredPromise = isolateChannel('structured', async () => {
     dependencies.onChannelStart?.('structured');
     return structuredCandidatesForTurn(
       input, classification, resolution, records, recordTypes, limitPerChannel, queryContext,
     );
   });
   const bm25Promise = indexes.has(knowledgeSearchIndexes.BM25)
-    ? Promise.resolve().then(() => {
+    ? isolateChannel('bm25', async () => {
       dependencies.onChannelStart?.('bm25');
       return bm25Candidates(input, sparseIndexes, scope, recordTypes, limitPerChannel, queryContext);
     })
     : Promise.resolve(Object.freeze([]));
   const qdrantPromise = indexes.has(knowledgeSearchIndexes.SEMANTIC)
-    ? Promise.resolve().then(() => {
+    ? isolateChannel('qdrant', async () => {
       dependencies.onChannelStart?.('qdrant');
       return semanticCandidates(input, scope, recordTypes, limitPerChannel, dependencies, queryContext);
     })
@@ -604,6 +631,7 @@ export async function retrieveTargetedCandidates({
       bm25: namespaceChannelView(bm25),
       qdrant: namespaceChannelView(qdrant),
     }),
+    channelFailures: Object.freeze([...channelFailures]),
     candidateCount: structured.length + bm25.length + qdrant.length,
   });
 }

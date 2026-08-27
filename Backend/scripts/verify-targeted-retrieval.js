@@ -5,6 +5,7 @@ import { resolvePublishedEntityRoute } from '../src/knowledge-engine/entity-rout
 import { classifyKnowledgeQuery, knowledgeQueryClasses } from '../src/knowledge-engine/query-classifier.js';
 import { retrieveTargetedCandidates } from '../src/knowledge-engine/targeted-retrieval.js';
 import { buildRevisionSparseIndex } from '../src/knowledge-bases/knowledge-map.service.js';
+import { QDRANT_SEARCH_LIMIT_MAX } from '../src/rag/qdrant.client.js';
 
 const tenantId = '80000000-0000-4000-8000-000000000001';
 const agentId = '80000000-0000-4000-8000-000000000002';
@@ -342,6 +343,25 @@ for (const channel of Object.values(retrieval.channels)) {
     ].sort());
   }
 }
+
+let observedSemanticLimit = null;
+const channelIsolated = await retrieveTargetedCandidates({
+  ...prepared('detail phrase'), publicationBundles: [bundle], sparseIndexes: [sparseIndex],
+}, {
+  embed: async () => [0.1, 0.2],
+  search: async (_tenant, _vector, options) => {
+    observedSemanticLimit = options.limit;
+    throw new TypeError('Synthetic Qdrant channel failure');
+  },
+});
+assert.ok(observedSemanticLimit > 0 && observedSemanticLimit <= QDRANT_SEARCH_LIMIT_MAX,
+  'Semantic retrieval must never request more than the Qdrant client maximum');
+assert.ok(channelIsolated.channels.bm25.length > 0,
+  'A Qdrant failure must not discard healthy BM25 results');
+assert.deepEqual(channelIsolated.channels.qdrant, []);
+assert.equal(channelIsolated.channelFailures.length, 1);
+assert.equal(channelIsolated.channelFailures[0].channel, 'qdrant');
+assert.match(channelIsolated.channelFailures[0].message, /Synthetic Qdrant channel failure/u);
 
 await assert.rejects(() => retrieveTargetedCandidates({
   ...prepared('alpha'),
