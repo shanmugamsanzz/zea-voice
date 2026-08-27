@@ -309,8 +309,8 @@ retrieval = await retrieveTargetedCandidates({
   ...request, publicationBundles: bundle, sparseIndexes: [sparseIndex],
 }, providers);
 assert.equal(retrieval.queryContext.canonicalEntity.recordId, beta.record_id);
-assert.equal(retrieval.queryContext.reservedRecords.length, 0,
-  'A latest explicit entity must not reserve stale canonical memory');
+assert.deepEqual(retrieval.queryContext.reservedRecords.map((candidate) => candidate.recordId),
+  [beta.record_id], 'A latest explicit entity must reserve itself, never stale canonical memory');
 assert.equal(retrieval.channels.structured[0].recordId, beta.record_id);
 
 request = prepared('Options');

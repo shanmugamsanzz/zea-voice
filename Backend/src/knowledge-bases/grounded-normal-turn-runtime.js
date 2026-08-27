@@ -70,7 +70,8 @@ function compactEvidence(source) {
 function canonicalEntity(resolution, evidence) {
   const candidate = resolution?.candidate;
   if (!candidate) return null;
-  const source = evidence.find((item) => item.recordId === candidate.recordId);
+  const source = evidence.find((item) => item.recordId === candidate.recordId
+    && item.recordType === candidate.recordType);
   const data = source?.authoritativeData ?? {};
   const category = candidate.entityType === 'CATEGORY';
   const key = clean(category

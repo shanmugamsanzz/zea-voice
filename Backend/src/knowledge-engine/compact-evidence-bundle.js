@@ -194,6 +194,8 @@ function canonicalEntity(resolution, evidence) {
   if (!candidate) return null;
   const hydrated = evidence.find((source) => (
     normalizedId(source.recordId) === normalizedId(candidate.recordId)
+    && String(source.recordType ?? '').toUpperCase()
+      === String(candidate.recordType ?? '').toUpperCase()
   ));
   if (!hydrated) return null;
   const data = object(hydrated?.authoritativeData);

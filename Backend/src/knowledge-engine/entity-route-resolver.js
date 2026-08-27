@@ -2,6 +2,7 @@ import {
   buildPublicationPhraseForms,
   normalizePublicationPhrase,
 } from './publication-index-builder.js';
+import { typedRecordIdentityKey } from './canonical-record-identity.js';
 
 export const KNOWLEDGE_RESOLUTION_VERSION = 1;
 
@@ -64,10 +65,7 @@ function candidateNamespace(candidate) {
 }
 
 function candidateIdentity(candidate) {
-  if (candidate?.entityType === 'CATEGORY') {
-    return `category:${normalizeId(candidate.categoryKey ?? candidate.label)}`;
-  }
-  return `record:${normalizeId(candidate?.recordId)}`;
+  return typedRecordIdentityKey(candidate);
 }
 
 function tokenStatistics(indexes) {
@@ -253,9 +251,8 @@ function validateBundle(input, bundle) {
 
 function addSignal(accumulator, entry, signal) {
   if (!entry?.recordId || signal.score <= 0) return;
-  const key = entry.entityType === 'CATEGORY'
-    ? `category:${normalizeId(entry.categoryKey ?? entry.label)}`
-    : `record:${normalizeId(entry.recordId)}`;
+  const key = candidateIdentity(entry);
+  if (!key) return;
   const current = accumulator.get(key) ?? {
     ...entry, score: 0, method: 'context', explicit: false, signals: [],
   };
@@ -611,6 +608,16 @@ export function resolvePublishedEntityRoute(input, publicationBundles, options =
   const routes = matchRouteCandidates(bundles, records, query, queryForms);
   const semantic = new Map();
   semanticSignals(semantic, options.semanticMatches, records);
+  // Merge semantic support into an existing tenant-published Catalog identity
+  // before choosing a winner. Otherwise the same record can appear once as an
+  // explicit lexical match and again as a semantic-only match, causing the
+  // higher semantic score to erase the fact that the caller named it.
+  for (const candidate of semantic.values()) {
+    if (candidateNamespace(candidate) !== knowledgeCandidateNamespaces.CATALOG) continue;
+    addSignal(catalog, candidate, {
+      method: 'semantic', score: candidate.score, explicit: false,
+    });
+  }
   // Call memory is supplied to retrieval and the grounded LLM. It is not an
   // entity match for the current question; only current published signals may
   // produce an explicit resolution here.

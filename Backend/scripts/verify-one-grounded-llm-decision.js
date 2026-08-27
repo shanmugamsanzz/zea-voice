@@ -481,7 +481,20 @@ const session = await createSelectedLlmStream({
 }, {
   callId: 'call-1', query: 'நாளைக்கு appointment book பண்ணுங்க', history: [], usageDirection: 'inbound',
   knowledge: { found: true, route: 'semantic', content: envelope.sources[0].content },
-  context: { groundedResponseMode: true, configuredInformationFields: runtime.fieldSchemas },
+  context: {
+    groundedResponseMode: true,
+    configuredInformationFields: runtime.fieldSchemas,
+    groundedDecisionInput: {
+      currentQuestion: 'Book the selected published option.',
+      recentRelevantTurns: [], canonicalMemory: {},
+      hydratedRecords: envelope.sources.map((source) => ({
+        sourceId: source.id, recordId: source.recordId,
+        recordType: 'CATALOG_ITEM', content: source.content,
+      })),
+      workflowAuthorization: [{ workflowEvidenceId: 'workflow-1', toolName: 'create_visit' }],
+      toolSchemas: runtime.toolSchemas,
+    },
+  },
 }, { adapter, skipDefaultRegistration: true });
 for await (const _event of session.events) { /* consume the single provider stream */ }
 await session.close();

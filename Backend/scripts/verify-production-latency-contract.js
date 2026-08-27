@@ -227,7 +227,8 @@ assert.match(orchestrator, /activeRetrievalAbortController\?\.abort\(reason\)/u)
 assert.match(orchestrator, /LLM_REQUEST_TIMEOUT_MS|#llmAttempt/u);
 assert.match(orchestrator, /VOICE_KNOWLEDGE_TURN_TIMEOUT_MS/u);
 assert.match(orchestrator, /VOICE_LLM_TURN_TIMEOUT_MS/u);
-assert.match(orchestrator, /VOICE_LLM_POST_ACK_TIMEOUT_MS/u);
+assert.doesNotMatch(orchestrator, /postAcknowledgementTimeoutMs:\s*env\.VOICE_LLM_POST_ACK_TIMEOUT_MS/u,
+  'The post-acknowledgement phase must retain the independent full completion deadline');
 assert.match(orchestrator, /VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS/u);
 assert.match(orchestrator, /remainingLiveTurnBudgetMs/u);
 assert.match(orchestrator,

@@ -100,16 +100,36 @@ function relevantHydratedEvidence(sources, classification = {}, resolution = {},
   const actionTurn = intentClass === 'ACTION_TOOL_REQUEST'
     || (!namespace && Boolean(rememberedTool));
   const protocolTurn = ['SAFETY_EMERGENCY', 'CALL_CONTROL'].includes(intentClass);
+  const understanding = input?.queryUnderstanding ?? {};
+  const explicitCandidates = [
+    ...(understanding.explicitEntities ?? []),
+    ...(understanding.explicitCategories ?? []),
+    ...(understanding.comparisonEntities ?? []),
+    ...(resolution?.routingCandidates ?? []).filter((candidate) => candidate.explicit === true),
+    ...(resolution?.candidate?.explicit === true ? [resolution.candidate] : []),
+  ];
   const selectedRecordIds = new Set([
     resolution?.candidate?.recordId,
     ...(resolution?.candidate?.evidenceRecordIds ?? []),
-    ...(resolution?.routingCandidates ?? []).filter((candidate) => candidate.explicit === true)
-      .map((candidate) => candidate.recordId),
+    ...explicitCandidates.map((candidate) => candidate?.recordId),
   ].map(identity).filter(Boolean));
-  return sources.filter((source) => {
+  const hasExplicitCurrentEntity = explicitCandidates.length > 0;
+  const contextDependent = understanding.contextDependent === true
+    || resolution?.contextDependent === true;
+  if (!hasExplicitCurrentEntity && contextDependent) {
+    for (const remembered of [
+      input?.canonicalCallMemory?.activeCategory, input?.canonicalCallMemory?.activeEntity,
+      input?.memory?.activeCategory, input?.memory?.activeEntity,
+    ]) {
+      const recordId = identity(remembered?.recordId ?? remembered?.id);
+      if (recordId) selectedRecordIds.add(recordId);
+    }
+  }
+  const filtered = sources.filter((source) => {
     const recordType = String(source.recordType ?? '').toUpperCase();
     if (selectedRecordIds.has(identity(source.recordId))) return true;
     if (recordType === 'WORKFLOW_RULE') return actionTurn || protocolTurn;
+    if (selectedRecordIds.size > 0) return false;
     if (selectedTypes) return selectedTypes.has(recordType);
     if (intentClass === 'ACKNOWLEDGEMENT') {
       return ['CONVERSATION_NODE', 'FAQ'].includes(recordType);
@@ -118,6 +138,11 @@ function relevantHydratedEvidence(sources, classification = {}, resolution = {},
     // Internal Workflow records are admitted only by the action/protocol rule
     // above, so unrelated authorization cannot influence a normal answer.
     return source.callerFacing === true;
+  });
+  return filtered.sort((left, right) => {
+    const leftSelected = selectedRecordIds.has(identity(left.recordId)) ? 0 : 1;
+    const rightSelected = selectedRecordIds.has(identity(right.recordId)) ? 0 : 1;
+    return leftSelected - rightSelected || Number(left.rank ?? 999) - Number(right.rank ?? 999);
   });
 }
 

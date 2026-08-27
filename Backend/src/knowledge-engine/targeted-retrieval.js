@@ -111,6 +111,16 @@ export function buildContextEnrichedRetrievalQuery(input, classification, resolu
     80,
   ).toUpperCase() || null;
   const reserved = [];
+  for (const entity of explicit) {
+    if (!entity.recordId) continue;
+    reserved.push(Object.freeze({ ...entity, reason: 'explicit_current_entity' }));
+  }
+  if (!explicit.length && resolution?.candidate?.explicit === true) {
+    const resolved = compactEntity(resolution.candidate);
+    if (resolved?.recordId) {
+      reserved.push(Object.freeze({ ...resolved, reason: 'explicit_current_entity' }));
+    }
+  }
   if (!hasExplicitCurrentEntity && contextDependent && canonicalEntity?.recordId) {
     reserved.push(Object.freeze({ ...canonicalEntity, reason: 'canonical_memory' }));
   }

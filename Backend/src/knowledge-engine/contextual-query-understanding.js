@@ -1,3 +1,5 @@
+import { typedRecordIdentityKey } from './canonical-record-identity.js';
+
 export const CONTEXTUAL_QUERY_UNDERSTANDING_VERSION = 1;
 
 const catalogRecordTypes = new Set(['CATALOG_ITEM', 'CATALOG_CATEGORY']);
@@ -29,8 +31,8 @@ function isCatalogCandidate(candidate) {
 }
 
 function candidateIdentity(candidate) {
-  return clean(candidate?.recordId ?? candidate?.id ?? candidate?.itemKey
-    ?? candidate?.categoryKey ?? candidate?.label ?? candidate?.name, 160);
+  return typedRecordIdentityKey(candidate)
+    ?? clean(candidate?.itemKey ?? candidate?.categoryKey ?? candidate?.label ?? candidate?.name, 160);
 }
 
 

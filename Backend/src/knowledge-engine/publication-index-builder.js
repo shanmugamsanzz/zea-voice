@@ -1,5 +1,10 @@
 import crypto from 'node:crypto';
 import { AppError } from '../middleware/errors.js';
+import {
+  canonicalRecordIdentity,
+  canonicalRecordIdentityKey,
+  canonicalRecordNamespace,
+} from './canonical-record-identity.js';
 
 export const KNOWLEDGE_PUBLICATION_BUNDLE_VERSION = 7;
 
@@ -157,6 +162,7 @@ function applyCrossDocumentCatalogReferences(sourceRecords) {
   const additions = new Map();
   const issues = [];
   const warnings = [];
+  const phraseTargets = new Map();
   for (const record of sourceRecords.filter(
     (entry) => ['faq', 'conversation_node'].includes(entry.record_type),
   )) {
@@ -183,6 +189,15 @@ function applyCrossDocumentCatalogReferences(sourceRecords) {
       if (!reference.phrase) continue;
       const targetIds = itemMatches.length ? itemMatches : categoryMatches;
       const field = itemMatches.length ? 'crossDocumentAliases' : 'crossDocumentCategoryAliases';
+      const phrase = normalizePublicationPhrase(reference.phrase);
+      const targetIdentity = `${itemMatches.length ? 'CATALOG_ITEM' : 'CATALOG_CATEGORY'}:${reference.targetKey}`;
+      const priorTarget = phraseTargets.get(phrase);
+      if (phrase && priorTarget && priorTarget !== targetIdentity) {
+        issues.push(validationIssue('INCONSISTENT_CROSS_DOCUMENT_CATALOG_NAME',
+          `Caller-facing name ${reference.phrase} resolves to inconsistent Catalog targets`, record));
+        continue;
+      }
+      if (phrase) phraseTargets.set(phrase, targetIdentity);
       for (const recordId of targetIds) {
         const current = additions.get(String(recordId)) ?? {};
         current[field] = [...new Set([...(current[field] ?? []), reference.phrase])];
@@ -202,9 +217,24 @@ function applyCrossDocumentCatalogReferences(sourceRecords) {
 
 export function validatePublicationRecords(records) {
   const issues = [];
+  const warnings = [];
   const ids = new Set();
   const itemKeys = new Map();
   const categoryKeys = new Set();
+  const categoryNames = new Map();
+  const itemAliasOwners = new Map();
+  const categoryAliasOwners = new Map();
+  const claimAlias = (owners, phrase, identity, code, record) => {
+    const alias = normalizePublicationPhrase(phrase);
+    if (!alias) return;
+    const owner = owners.get(alias);
+    if (owner && owner !== identity) {
+      warnings.push(validationIssue(code,
+        `Published alias ${phrase} resolves to more than one canonical identity`, record));
+      return;
+    }
+    owners.set(alias, identity);
+  };
   for (const record of records) {
     if (!record.record_id || ids.has(String(record.record_id))) {
       issues.push(validationIssue('DUPLICATE_RECORD_ID', 'Published records must have unique identifiers', record));
@@ -223,8 +253,35 @@ export function validatePublicationRecords(records) {
             `Catalog item key ${itemKey} is published by more than one record`, record));
         }
         itemKeys.set(itemKey, record.record_id);
+        for (const phrase of [
+          record.entity_name, metadata.itemKey, ...stringArray(record.entity_aliases),
+          ...stringArray(metadata.crossDocumentAliases),
+        ]) claimAlias(itemAliasOwners, phrase, itemKey, 'AMBIGUOUS_CATALOG_ITEM_ALIAS', record);
       }
-      if (categoryKey) categoryKeys.add(categoryKey);
+      if (categoryKey) {
+        categoryKeys.add(categoryKey);
+        const categoryName = normalizePublicationPhrase(record.entity_category);
+        const priorName = categoryNames.get(categoryKey);
+        if (categoryName && priorName && priorName !== categoryName) {
+          issues.push(validationIssue('INCONSISTENT_CATALOG_CATEGORY_NAME',
+            `Catalog category key ${categoryKey} has inconsistent canonical names`, record));
+        } else if (categoryName) categoryNames.set(categoryKey, categoryName);
+        for (const phrase of [
+          record.entity_category, metadata.categoryKey,
+          ...stringArray(record.entity_category_aliases),
+          ...stringArray(metadata.crossDocumentCategoryAliases),
+        ]) claimAlias(categoryAliasOwners, phrase, categoryKey,
+          'AMBIGUOUS_CATALOG_CATEGORY_ALIAS', record);
+      }
+    }
+  }
+  for (const [alias, itemIdentity] of itemAliasOwners) {
+    const categoryIdentity = categoryAliasOwners.get(alias);
+    if (categoryIdentity && categoryIdentity !== itemIdentity) {
+      warnings.push(Object.freeze({
+        code: 'CROSS_TYPE_CATALOG_ALIAS_COLLISION',
+        message: `Published alias ${alias} names both a Catalog item and category; runtime type context is required`,
+      }));
     }
   }
   for (const record of records.filter((value) => value.record_type === 'workflow_rule')) {
@@ -258,7 +315,7 @@ export function validatePublicationRecords(records) {
     }
   }
   return Object.freeze({
-    valid: issues.length === 0, issues: Object.freeze(issues), warnings: Object.freeze([]),
+    valid: issues.length === 0, issues: Object.freeze(issues), warnings: Object.freeze(warnings),
   });
 }
 
@@ -380,8 +437,25 @@ function stableHash(value) {
 }
 
 export function buildPublicationIndexes(job, sourceRecords) {
+  const identity = {
+    version: KNOWLEDGE_PUBLICATION_BUNDLE_VERSION,
+    tenantId: String(job.tenant_id).toLowerCase(),
+    knowledgeBaseId: String(job.knowledge_base_id).toLowerCase(),
+    publicationRevision: job.targetRevision,
+    assignedAgentIds: Object.freeze([...new Set((job.assigned_agent_ids ?? [])
+      .map((value) => String(value).trim().toLowerCase()).filter(Boolean))].sort()),
+  };
   const crossDocument = applyCrossDocumentCatalogReferences(sourceRecords);
-  const records = crossDocument.records.map(enrichPublicationRecord);
+  const records = crossDocument.records.map((record) => {
+    const enriched = enrichPublicationRecord(record);
+    const canonicalIdentity = canonicalRecordIdentity(enriched, identity);
+    return Object.freeze({
+      ...enriched,
+      namespace: canonicalRecordNamespace(canonicalIdentity.recordType),
+      canonicalIdentity,
+      canonicalIdentityKey: canonicalRecordIdentityKey(enriched, identity),
+    });
+  });
   const baseValidation = validatePublicationRecords(records);
   const issues = Object.freeze([...crossDocument.issues, ...baseValidation.issues]);
   const warnings = Object.freeze([...crossDocument.warnings, ...(baseValidation.warnings ?? [])]);
@@ -412,14 +486,6 @@ export function buildPublicationIndexes(job, sourceRecords) {
     phonetic: invertedIndex(records, 'publicationPhoneticForms'),
     namespaces: namespacedRouteIndexes(records),
   });
-  const identity = {
-    version: KNOWLEDGE_PUBLICATION_BUNDLE_VERSION,
-    tenantId: String(job.tenant_id).toLowerCase(),
-    knowledgeBaseId: String(job.knowledge_base_id).toLowerCase(),
-    publicationRevision: job.targetRevision,
-    assignedAgentIds: Object.freeze([...new Set((job.assigned_agent_ids ?? [])
-      .map((value) => String(value).trim().toLowerCase()).filter(Boolean))].sort()),
-  };
   const manifest = Object.freeze({
     ...identity,
     recordCount: records.length,

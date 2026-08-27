@@ -197,6 +197,11 @@ const namespaceFiltered = buildGroundedLlmInput({
         authoritativeData: { question: 'Unrelated question', answer: 'Unrelated answer' },
       },
       {
+        id: 'catalog-source-2', recordId: 'catalog-2', recordType: 'CATALOG_ITEM',
+        callerFacing: true, hydrationValidated: true, publicationValidated: true,
+        authoritativeData: { itemKey: 'other-item', name: 'Other Item' },
+      },
+      {
         id: 'workflow-source', recordId: 'workflow-1', recordType: 'WORKFLOW_RULE',
         callerFacing: false, hydrationValidated: true, publicationValidated: true,
         authoritativeData: { actionType: 'configured_tool', actionConfig: { toolIdentifier: 'other' } },
@@ -207,6 +212,8 @@ const namespaceFiltered = buildGroundedLlmInput({
 });
 assert.deepEqual(namespaceFiltered.hydratedRecords.map((source) => source.recordType), ['CATALOG_ITEM'],
   'An explicit Catalog turn must not send unrelated FAQ or Workflow evidence to the LLM');
+assert.deepEqual(namespaceFiltered.hydratedRecords.map((source) => source.recordId), ['catalog-1'],
+  'An explicit Catalog turn must not send unrelated Catalog records to the LLM');
 
 console.log(JSON.stringify({
   tasks: [4, 5, 6], passed: true,

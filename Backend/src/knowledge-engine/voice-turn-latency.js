@@ -170,7 +170,6 @@ export async function awaitLlmWithSafeLatency(work, {
   acknowledgementText,
   onAcknowledgement,
   completionTimeoutMs = env.LLM_REQUEST_TIMEOUT_MS,
-  postAcknowledgementTimeoutMs = env.VOICE_LLM_POST_ACK_TIMEOUT_MS,
   cancel,
 } = {}) {
   if (!(tracker instanceof VoiceTurnLatencyTracker)) {
@@ -216,10 +215,9 @@ export async function awaitLlmWithSafeLatency(work, {
   tracker.markLatencyAcknowledgement();
   await onAcknowledgement?.(text);
   let completionTimer;
-  const postAcknowledgementWaitMs = Math.max(1, Math.min(
-    Number(completionTimeoutMs),
-    Number(postAcknowledgementTimeoutMs),
-  ));
+  const postAcknowledgementWaitMs = Math.max(
+    1, Number(completionTimeoutMs) - Math.max(0, tracker.now() - startedAt),
+  );
   const completionDeadline = new Promise((_resolve, reject) => {
     completionTimer = setTimeout(() => {
       try { cancel?.(); } catch { /* best-effort cancellation */ }

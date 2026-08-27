@@ -81,6 +81,10 @@ assert.match(orchestratorSource,
   /awaitLlmWithSafeLatency\(this\.#llm[\s\S]+response\s*=\s*latencyResult\.value/u);
 assert.match(orchestratorSource, /sentencePipeline\.enqueue\(finalAnswer\)/u,
   'The final answer must be queued even after a latency acknowledgement');
+assert.match(orchestratorSource, /sentencePipeline\.enqueueAcknowledgement\(acknowledgementText\)/u,
+  'Acknowledgement audio must use a pipeline path separate from final response sentences');
+assert.match(orchestratorSource, /activeGroundedTurnEpochs\.size\s*>\s*0/u,
+  'Inactivity prompts must remain disabled while a grounded answer is processing');
 assert.match(orchestratorSource, /acknowledgementEnabled:\s*acknowledgementEligible/u,
   'Latency acknowledgement must be limited to evidence-backed response plans');
 assert.match(orchestratorSource,

@@ -455,7 +455,12 @@ function applyContextualResponse({ tenant, retrieval, memory, turnToken, record,
     finalizedUtterance: retrieval.input.latestQuestion ?? retrieval.input.utterance,
   });
   assert.equal(result.valid, true, result.reason);
-  assert.equal(result.state.activeEntity.id, record.record_id);
+  assert.equal(result.state.activeEntity?.id, record.record_id,
+    JSON.stringify({ recordId: record.record_id, utterance: retrieval.input.latestQuestion,
+      resolution: retrieval.prepared?.resolution ?? retrieval.turn?.resolution,
+      evidence: retrieval.turn.authoritative.evidence.map((entry) => ({
+        recordId: entry.recordId, recordType: entry.recordType, channels: entry.channels,
+      })), state: result.state }));
   return result;
 }
 

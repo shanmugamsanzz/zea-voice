@@ -2,6 +2,7 @@ import { withTenantContext } from '../infrastructure/database-context.js';
 import { AppError } from '../middleware/errors.js';
 import { requireEntityId, requireTenantId } from '../rag/tenant-isolation.js';
 import { knowledgeQueryClasses } from './query-classifier.js';
+import { canonicalRecordIdentityKey, typedRecordIdentityKey } from './canonical-record-identity.js';
 
 export const AUTHORITATIVE_EVIDENCE_VERSION = 2;
 
@@ -297,10 +298,7 @@ function sameScope(left, right) {
 }
 
 function recordKey(value = {}) {
-  if (!value || typeof value !== 'object') return null;
-  const recordId = normalizeId(value.recordId);
-  const recordType = String(value.recordType ?? '').toUpperCase();
-  return recordId && recordType ? `${recordType}:${recordId}` : null;
+  return typedRecordIdentityKey(value);
 }
 
 export function fuseCandidateRankings(retrieval, {
@@ -347,7 +345,8 @@ export function fuseCandidateRankings(retrieval, {
         namespace: recordNamespaces[recordType],
         categoryKey: candidate.categoryKey ?? null,
       };
-      const key = recordKey(identity);
+      const key = canonicalRecordIdentityKey(identity, { tenantId: retrieval?.tenantId });
+      if (!key) continue;
       const current = fused.get(key);
       if (current && !sameScope(current, identity)) {
         conflictedKeys.add(key);
@@ -382,12 +381,14 @@ export function fuseCandidateRankings(retrieval, {
     if (!strong) rejectedWeakIds.push(normalizeId(candidate.recordId));
     return strong;
   });
-  const reserved = accepted.filter(reservedCandidate);
+  const reservedOrder = new Map([...reservedKeys].map((key, index) => [key, index]));
+  const reserved = accepted.filter(reservedCandidate).sort((left, right) => {
+    const leftOrder = reservedOrder.get(recordKey(left)) ?? Number.MAX_SAFE_INTEGER;
+    const rightOrder = reservedOrder.get(recordKey(right)) ?? Number.MAX_SAFE_INTEGER;
+    return leftOrder - rightOrder || right.rrfScore - left.rrfScore;
+  });
   const ordinary = accepted.filter((candidate) => !reservedCandidate(candidate));
-  const selected = [...reserved, ...ordinary].slice(0, limit)
-    .sort((left, right) => right.rrfScore - left.rrfScore
-      || left.recordType.localeCompare(right.recordType)
-      || normalizeId(left.recordId).localeCompare(normalizeId(right.recordId)));
+  const selected = [...reserved, ...ordinary].slice(0, limit);
   const selectedIds = new Set(selected.map((candidate) => normalizeId(candidate.recordId)));
   const selectedKeys = new Set(selected.map(recordKey));
   const candidates = selected
@@ -590,7 +591,7 @@ function reservedResolutionCandidates(input, classification, resolution, retriev
       recordId: normalizeId(candidate.recordId),
       recordType: String(candidate.recordType).toUpperCase(),
     })).filter((candidate) => candidate.recordId);
-    return [...new Map([...contextReserved, ...selected]
+    return [...new Map([...selected, ...contextReserved]
       .map((candidate) => [recordKey(candidate), candidate])).values()];
   }
   const candidate = resolution?.candidate;

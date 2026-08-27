@@ -10,6 +10,7 @@ import {
   buildPublicationIndexes,
   buildPublicationPhraseForms,
 } from '../src/knowledge-engine/publication-index-builder.js';
+import { typedRecordIdentityKey } from '../src/knowledge-engine/canonical-record-identity.js';
 import { cacheCompactKnowledgeMap } from '../src/knowledge-bases/knowledge-map.service.js';
 
 const ids = Array.from({ length: 16 }, (_value, index) => (
@@ -150,6 +151,16 @@ const bundle = buildPublicationIndexes(job, records);
 assert.equal(bundle.version, KNOWLEDGE_PUBLICATION_BUNDLE_VERSION);
 assert.equal(bundle.validation.valid, true);
 assert.equal(bundle.records.length, 5);
+assert.equal(bundle.records[0].canonicalIdentity.tenantId, job.tenant_id);
+assert.equal(bundle.records[0].canonicalIdentity.knowledgeBaseId, job.knowledge_base_id);
+assert.equal(bundle.records[0].canonicalIdentity.publicationRevision, 4);
+assert.equal(bundle.records[0].canonicalIdentity.namespace, 'CATALOG');
+assert.match(bundle.records[0].canonicalIdentityKey,
+  new RegExp(`${job.tenant_id}:${job.knowledge_base_id}:4:CATALOG:CATALOG_ITEM:`, 'u'));
+const itemIdentity = typedRecordIdentityKey(bundle.entityIndex.exact['example plan'][0]);
+const categoryIdentity = typedRecordIdentityKey(bundle.entityIndex.categories.exact.options[0]);
+assert.notEqual(itemIdentity, categoryIdentity,
+  'A Catalog item and category anchored to the same record must retain separate identities');
 assert.equal(bundle.answerCards.length, 4);
 assert.ok(bundle.entityIndex.exact['example plan']);
 assert.equal(bundle.entityIndex.exact['caller sample'][0].itemKey, 'example-plan');
@@ -171,6 +182,27 @@ assert.throws(() => buildPublicationIndexes(job, [
   { ...records[0], record_id: ids[15] },
 ]), (error) => error?.code === 'KNOWLEDGE_PUBLICATION_VALIDATION_FAILED'
   && error.details.issues.some((issue) => issue.code === 'DUPLICATE_CATALOG_ITEM_KEY'));
+const ambiguousAliasBundle = buildPublicationIndexes(job, [
+  ...records,
+  {
+    ...records[0], record_id: ids[15], entity_name: 'Distinct choice',
+    entity_aliases: ['Sample plan'],
+    entity_metadata: { ...records[0].entity_metadata, itemKey: 'distinct-choice' },
+  },
+]);
+assert.equal(ambiguousAliasBundle.validation.warnings.some(
+  (warning) => warning.code === 'AMBIGUOUS_CATALOG_ITEM_ALIAS',
+), true);
+assert.throws(() => buildPublicationIndexes(job, [
+  ...records,
+  {
+    ...records[0], record_id: ids[15], entity_name: 'Distinct choice',
+    entity_category: 'Different canonical category name', entity_aliases: ['distinct choice'],
+    entity_metadata: { ...records[0].entity_metadata, itemKey: 'distinct-choice' },
+  },
+]), (error) => error?.details.issues.some(
+  (issue) => issue.code === 'INCONSISTENT_CATALOG_CATEGORY_NAME',
+));
 assert.throws(() => buildPublicationIndexes(job, records.map((record) => (
   record.record_type === 'workflow_rule'
     ? { ...record, entity_metadata: {

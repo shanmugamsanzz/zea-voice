@@ -228,6 +228,7 @@ function compactGroundedContract(context = {}) {
       .map((record) => record?.sourceId).filter(Boolean).slice(0, 5),
     authorizedTools: (decisionInput.toolSchemas ?? [])
       .map((tool) => tool?.name).filter(Boolean).slice(0, 3),
+    toolRequest: 'Required for TOOL; null for RESPONSE or CLARIFY.',
     rule: 'Return the provider JSON schema. Cite only selectedEvidenceIds. TOOL requires an authorized tool. CLARIFY requires one targeted question.',
   });
 }

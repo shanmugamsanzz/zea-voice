@@ -697,6 +697,36 @@ const primaryMismatch = applyUnifiedGroundedTurn({
 });
 assert.equal(primaryMismatch.valid, false);
 assert.equal(primaryMismatch.reason, 'latest_request_evidence_mismatch');
+
+catalogMemory.beginTurn('new-primary-valid-turn');
+const currentPrimaryItem = {
+  ...primaryItem, content: 'New Item details.',
+};
+const validPrimaryWithStaleSupport = applyUnifiedGroundedTurn({
+  rawDecision: unifiedDecision({
+    decision: 'answer', answer: 'New Item details.', evidenceIds: ['catalog-primary'],
+    stateUpdate: {
+      currentTopic: 'new-item', knownEntityKeys: ['new-item'], collectedInformation: {},
+      correctedFields: [], contextDependent: false,
+    }, pendingQuestion: null, toolRequest: null,
+  }),
+  groundingEnvelope: {
+    found: true,
+    sources: [
+      { id: 'catalog-primary', recordId: 'catalog-primary', recordType: 'CATALOG_ITEM', content: 'New Item details.' },
+      { id: 'catalog-stale', recordId: 'catalog-stale', recordType: 'CATALOG_ITEM', content: 'Old Item details.' },
+    ],
+    entities: [
+      { id: 'catalog-primary', key: 'new-item', name: 'New Item' },
+      { id: 'catalog-stale', key: 'old-item', name: 'Old Item' },
+    ],
+  },
+  memory: catalogMemory, turnToken: 'new-primary-valid-turn',
+  evidence: [currentPrimaryItem, staleItem], finalizedUtterance: 'Tell me about New Item.',
+});
+assert.equal(validPrimaryWithStaleSupport.valid, true,
+  'stale supporting evidence must not turn a valid latest-request answer into an evidence mismatch');
+assert.notEqual(validPrimaryWithStaleSupport.reason, 'latest_request_evidence_mismatch');
 catalogMemory.close();
 const sideAnswer = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({

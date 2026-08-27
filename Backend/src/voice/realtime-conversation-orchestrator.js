@@ -351,6 +351,7 @@ export class RealtimeConversationOrchestrator {
     this.activeCancellationPromise = null;
     this.activeAssistantPlayback = null;
     this.inactivityTimer = null;
+    this.activeGroundedTurnEpochs = new Set();
     this.callDurationTimer = null;
     this.listeners = [];
     this.runtimeMetrics = {
@@ -2039,11 +2040,13 @@ export class RealtimeConversationOrchestrator {
     const sentenceBuffer = createStreamingSentenceBuffer();
     const tenantEvidence = promptKnowledge.tenantEvidence ?? {};
     const fullTenantEvidence = knowledge?.tenantEvidence ?? {};
+    const permittedHydratedIds = new Set((llmEvidenceBundle?.decisionInput?.hydratedRecords ?? [])
+      .map((source) => source.publishedEvidenceId).filter(Boolean));
     const authoritativeEvidence = [
       ...(fullTenantEvidence.sources ?? []),
       ...(fullTenantEvidence.actionEvidence ?? []),
       ...(fullTenantEvidence.guidanceEvidence ?? []),
-    ];
+    ].filter((source) => permittedHydratedIds.has(source.id));
     let firstTokenRecorded = false;
     this.runtimeMetrics.llmStreaming.requests += 1;
     try {
@@ -2332,6 +2335,7 @@ export class RealtimeConversationOrchestrator {
     let beginPromise = null;
     const sentenceFailures = [];
     let sentenceNumber = 0;
+    let acknowledgementNumber = 0;
     let firstValidatedTextAt = null;
     let spokenCharacters = 0;
     let pendingShortSentence = '';
@@ -2410,8 +2414,9 @@ export class RealtimeConversationOrchestrator {
     };
     this.activeLookaheadSchedulers.add(cancelScheduler);
 
-    const enqueueNow = (rawSentence, groupedSentenceCount = 1) => {
+    const enqueueNow = (rawSentence, groupedSentenceCount = 1, options = {}) => {
       if (this.finalized || epoch !== this.epoch) return false;
+      const acknowledgement = options.acknowledgement === true;
       if (isInternalRuntimeText(rawSentence)) {
         this.log.warn({
           stage: 'tts.internal_sentence_blocked', callId: this.call.id,
@@ -2421,7 +2426,7 @@ export class RealtimeConversationOrchestrator {
       const sentence = this.#fitTtsMessage(rawSentence);
       if (!sentence) return false;
       const sentenceCharacters = Array.from(sentence).length;
-      if (maximumResponseCharacters > 0
+      if (!acknowledgement && maximumResponseCharacters > 0
         && spokenCharacters + sentenceCharacters > maximumResponseCharacters) {
         this.log.warn({
           stage: 'llm.sentence_stream_response_limit', callId: this.call.id,
@@ -2429,18 +2434,26 @@ export class RealtimeConversationOrchestrator {
         }, 'Remaining LLM sentences were not sent to TTS because the response limit was reached');
         return false;
       }
-      sentenceNumber += 1;
-      firstValidatedTextAt ??= Date.now();
+      if (acknowledgement) acknowledgementNumber += 1;
+      else sentenceNumber += 1;
+      if (!acknowledgement) firstValidatedTextAt ??= Date.now();
       const currentSentenceNumber = sentenceNumber;
-      spokenCharacters += sentenceCharacters;
-      spokenSentences.push(sentence);
+      if (!acknowledgement) {
+        spokenCharacters += sentenceCharacters;
+        spokenSentences.push(sentence);
+      }
       this.runtimeMetrics.sentenceGrouping.groupsQueued += 1;
       this.runtimeMetrics.sentenceGrouping.sentencesGrouped += groupedSentenceCount;
       if (groupedSentenceCount > 1) this.runtimeMetrics.sentenceGrouping.multiSentenceGroups += 1;
       beginPromise ??= this.controller.beginAssistantResponse();
-      const generationId = `turn-${epoch}-sentence-${currentSentenceNumber}`;
-      const kind = currentSentenceNumber === 1 ? 'response' : 'response_sentence';
-      const useLookahead = env.VOICE_TTS_LOOKAHEAD_ENABLED && currentSentenceNumber > 1;
+      const generationId = acknowledgement
+        ? `turn-${epoch}-acknowledgement-${acknowledgementNumber}`
+        : `turn-${epoch}-sentence-${currentSentenceNumber}`;
+      const kind = acknowledgement
+        ? 'acknowledgement'
+        : currentSentenceNumber === 1 ? 'response' : 'response_sentence';
+      const useLookahead = !acknowledgement
+        && env.VOICE_TTS_LOOKAHEAD_ENABLED && currentSentenceNumber > 1;
       let lookaheadReady = false;
       const lookahead = useLookahead
         ? scheduleLookahead(() => this.#prefetchTts(sentence, generationId, { epoch }))
@@ -2489,7 +2502,7 @@ export class RealtimeConversationOrchestrator {
             });
           }
           if (played) {
-            completedSentences.push(sentence);
+            if (!acknowledgement) completedSentences.push(sentence);
             this.runtimeMetrics.ttsLookahead.successfulHandoffs += 1;
           }
           return played;
@@ -2497,14 +2510,14 @@ export class RealtimeConversationOrchestrator {
         const played = await this.#synthesize(sentence, generationId, {
           kind, startedAt: turnStartedAt, deferDrain: true,
           playbackGroupId, deferBoundaryFlush: true, epoch,
-          firstAudioDeadlineAt: currentSentenceNumber === 1
+          firstAudioDeadlineAt: (acknowledgement || currentSentenceNumber === 1)
             && Date.now() < firstAudioDeadlineAt ? firstAudioDeadlineAt : undefined,
-          validatedTextAt: firstValidatedTextAt,
+          validatedTextAt: acknowledgement ? undefined : firstValidatedTextAt,
           onFirstAudio: () => {
             if (!audibleSentences.includes(sentence)) audibleSentences.push(sentence);
           },
         });
-        if (played) completedSentences.push(sentence);
+        if (played && !acknowledgement) completedSentences.push(sentence);
         return played;
       }).catch((error) => {
         sentenceFailures.push(Object.freeze({
@@ -2561,6 +2574,10 @@ export class RealtimeConversationOrchestrator {
       armGroupingTimer();
       return true;
     };
+    const enqueueAcknowledgement = (rawSentence) => {
+      flushGrouping();
+      return enqueueNow(rawSentence, 1, { acknowledgement: true });
+    };
 
     const playbackTracker = {
       epoch,
@@ -2587,6 +2604,7 @@ export class RealtimeConversationOrchestrator {
 
     return {
       enqueue,
+      enqueueAcknowledgement,
       setSources: (sources) => { transcriptSources = mergeMessageSources(sources ?? []); },
       markTranscriptCommitted: () => {
         transcriptCommitted = true;
@@ -2636,6 +2654,17 @@ export class RealtimeConversationOrchestrator {
   }
 
   async #runTurn(query, history, epoch, sttTiming = {}) {
+    this.activeGroundedTurnEpochs.add(epoch);
+    this.#clearInactivity();
+    try {
+      return await this.#runGroundedTurn(query, history, epoch, sttTiming);
+    } finally {
+      this.activeGroundedTurnEpochs.delete(epoch);
+      if (!this.finalized && this.controller.state === callStates.LISTENING) this.#armInactivity();
+    }
+  }
+
+  async #runGroundedTurn(query, history, epoch, sttTiming = {}) {
     this.liveCallMemory?.beginTurn?.(epoch);
     const turnStartedAt = Date.now();
     const latencyTracker = new VoiceTurnLatencyTracker({
@@ -2906,7 +2935,6 @@ export class RealtimeConversationOrchestrator {
             ttsReserveMs,
             acknowledgementText: configuredAcknowledgement,
             completionTimeoutMs: env.LLM_REQUEST_TIMEOUT_MS,
-            postAcknowledgementTimeoutMs: env.VOICE_LLM_POST_ACK_TIMEOUT_MS,
             cancel: () => this.activeLlm?.cancel?.('llm_completion_timeout'),
             onAcknowledgement: async (acknowledgementText) => {
               latencyAcknowledged = true;
@@ -2915,8 +2943,7 @@ export class RealtimeConversationOrchestrator {
                 label: 'Safe LLM latency acknowledgement',
                 metadata: { reason: 'grounded_llm_still_processing' },
               })]);
-              sentencePipeline.enqueue(acknowledgementText);
-              sentencePipeline.flushGrouping();
+              sentencePipeline.enqueueAcknowledgement(acknowledgementText);
               await sentencePipeline.waitUntilStarted();
             },
           });
@@ -2978,19 +3005,6 @@ export class RealtimeConversationOrchestrator {
       sentencePipeline.cancel();
       return;
     }
-    if (response.toolCalls.length
-      && remainingLiveTurnBudgetMs(firstAudioDeadlineAt,
-        Math.min(env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS, 600) + 250) < 100) {
-      response = {
-        cancelled: false,
-        text: configuredTechnicalFailureResponse(this.runtimeProfile, knowledge),
-        toolCalls: [],
-        sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
-          label: 'Live deadline technical fallback',
-          metadata: { reason: 'insufficient_tool_budget' },
-        })],
-      };
-    }
     if (response.toolCalls.length) {
       const primaryToolCall = {
         ...response.toolCalls[0],
@@ -3015,10 +3029,7 @@ export class RealtimeConversationOrchestrator {
         toolResults = await (this.dependencies.executeTools ?? executeAgentTools)(
           this.runtimeProfile, this.call, response.toolCalls, {
             fetchImpl: this.dependencies.fetchImpl,
-            timeoutMs: Math.max(1, remainingLiveTurnBudgetMs(
-              firstAudioDeadlineAt,
-              Math.min(env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS, 600) + 250,
-            )),
+            timeoutMs: env.VOICE_TOOL_TIMEOUT_MS,
             requireWorkflowAuthorization: true,
             workflowAuthorization: {
               recordId: primaryToolCall?.authorizationRecordId ?? null,
@@ -3758,6 +3769,7 @@ export class RealtimeConversationOrchestrator {
 
   #armInactivity() {
     this.#clearInactivity();
+    if (this.activeGroundedTurnEpochs.size > 0) return;
     if (this.finalized || this.controller.state !== callStates.LISTENING) return;
     const seconds = Number(this.runtimeProfile.agent.inactivityTimeoutSeconds ?? 0);
     if (!Number.isFinite(seconds) || seconds <= 0) return;

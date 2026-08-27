@@ -100,7 +100,7 @@ await assert.rejects(() => awaitLlmWithSafeLatency(
 assert.equal(cancelled, true);
 
 let postAcknowledgementCancelled = false;
-await assert.rejects(() => awaitLlmWithSafeLatency(
+const completedAfterAcknowledgement = await awaitLlmWithSafeLatency(
   new Promise((resolve) => setTimeout(resolve, 200)),
   {
     tracker: new VoiceTurnLatencyTracker({ ...identity, turnId: 'turn-4b' }),
@@ -111,9 +111,10 @@ await assert.rejects(() => awaitLlmWithSafeLatency(
     onAcknowledgement: async () => {},
     cancel: () => { postAcknowledgementCancelled = true; },
   },
-), (error) => error.code === 'VOICE_TURN_STAGE_TIMEOUT');
-assert.equal(postAcknowledgementCancelled, true,
-  'An acknowledged LLM turn must not remain silent until the full provider timeout');
+);
+assert.equal(completedAfterAcknowledgement.acknowledged, true);
+assert.equal(postAcknowledgementCancelled, false,
+  'Acknowledgement must not replace the independent LLM completion deadline');
 
 const input = {
   tenantId: identity.tenantId, agentId: identity.agentId, callId: identity.callId,

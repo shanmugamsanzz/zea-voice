@@ -134,7 +134,6 @@ export async function awaitLlmWithSafeLatency(work, {
   acknowledgementText = '',
   onAcknowledgement,
   completionTimeoutMs = env.LLM_REQUEST_TIMEOUT_MS,
-  postAcknowledgementTimeoutMs = env.VOICE_LLM_POST_ACK_TIMEOUT_MS,
   cancel,
 } = {}) {
   if (!(tracker instanceof VoiceTurnLatencyTracker)) {
@@ -173,11 +172,9 @@ export async function awaitLlmWithSafeLatency(work, {
   }
   tracker.markLatencyAcknowledgement();
   await onAcknowledgement?.(acknowledgement);
-  const deadline = completionDeadline(
-    Math.min(Number(completionTimeoutMs), Number(postAcknowledgementTimeoutMs)),
-    voiceTurnStages.LLM,
-    cancel,
-  );
+  const elapsedMs = Math.max(0, tracker.now() - startedAt);
+  const remainingCompletionMs = Math.max(1, Number(completionTimeoutMs) - elapsedMs);
+  const deadline = completionDeadline(remainingCompletionMs, voiceTurnStages.LLM, cancel);
   try {
     const value = await Promise.race([workPromise, deadline.promise]);
     return Object.freeze({ value, acknowledged: true, acknowledgementText: acknowledgement });

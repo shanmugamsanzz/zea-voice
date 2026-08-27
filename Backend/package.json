@@ -177,6 +177,7 @@
     "verify:universal-hardcoding-gate": "node scripts/verify-universal-hardcoding-gate.js",
     "verify:unified-normal-turn-foundation": "node scripts/verify-unified-normal-turn-foundation.js",
     "verify:grounded-turn-evidence-pipeline": "node scripts/verify-grounded-turn-evidence-pipeline.js",
+    "verify:evidence-stream-lifecycle-acceptance": "node scripts/verify-grounded-turn-evidence-pipeline.js && node scripts/verify-one-grounded-llm-decision.js && node scripts/verify-unified-grounded-turn.js && node scripts/verify-one-grounded-streaming-response.js && node scripts/verify-voice-turn-latency.js && node scripts/verify-strong-grounding-interruption.js && node scripts/verify-production-latency-contract.js",
     "verify:authoritative-hydration-readiness": "node scripts/verify-authoritative-hydration-readiness.js",
     "verify:namespace-aware-reservation": "node scripts/verify-namespace-aware-reservation.js",
     "verify:single-grounded-llm-live-cutover": "node scripts/verify-single-grounded-llm-live-cutover.js",

@@ -42,7 +42,16 @@ assert.equal(fusion.candidates[0].recordId, ids[1], 'Multi-channel RRF candidate
 assert.equal(fusion.candidates.filter((entry) => entry.recordId === ids[1]).length, 1,
   'Record IDs must be deduplicated');
 assert.deepEqual(new Set(fusion.candidates[0].channels), new Set(['structured', 'bm25', 'qdrant']));
-assert.deepEqual(fusion.rejectedScopeConflictIds, [ids[4].toLowerCase()]);
+assert.deepEqual(fusion.rejectedScopeConflictIds, []);
+const scopedIdentityFusion = fuseCandidateRankings({
+  tenantId, agentId, callId,
+  channels: { structured: [
+    candidate(ids[4], 1, 1),
+    candidate(ids[4], 2, 1, { knowledgeBaseId: otherKnowledgeBaseId }),
+  ] },
+});
+assert.equal(scopedIdentityFusion.candidates.length, 2,
+  'The same record ID in different KB scopes must remain separate canonical identities');
 
 const duplicateFusion = fuseCandidateRankings({
   tenantId, agentId, callId,
@@ -74,6 +83,8 @@ assert.ok(reservedFusion.candidates.some((entry) => entry.recordId === ids[5]));
 assert.ok(reservedFusion.candidates.some((entry) => entry.recordId === ids[6]),
   'Every explicitly requested comparison item must retain a ranking slot');
 assert.deepEqual(reservedFusion.missingReservedRecordIds, []);
+assert.deepEqual(reservedFusion.candidates.slice(0, 2).map((entry) => entry.recordId),
+  [ids[5], ids[6]], 'Explicit reservations must remain ahead of ordinary RRF results');
 
 let queryCount = 0;
 let requestedIds = [];
@@ -233,7 +244,10 @@ assert.equal(hydrated.ambiguity.detected, true);
 assert.equal(hydrated.conflict.detected, true);
 assert.equal(hydrated.conflict.conflicts[0].identity, 'catalog:options:shared item');
 assert.ok(hydrated.rejectedRecordIds.includes(ids[3]));
-assert.ok(!requestedIds.includes(ids[4]), 'Scope-conflicted ID must not reach PostgreSQL');
+assert.ok(requestedIds.includes(ids[4]),
+  'A separately scoped canonical identity must reach authoritative PostgreSQL validation');
+assert.ok(hydrated.rejectedRecordIds.includes(ids[4]),
+  'An unhydrated KB-scoped identity must be rejected after authoritative validation');
 
 assert.equal(detectEntityAmbiguity(hydrated.evidence, {
   intentClass: knowledgeQueryClasses.COMPARISON_COMPLEX, requiresConfirmation: true,

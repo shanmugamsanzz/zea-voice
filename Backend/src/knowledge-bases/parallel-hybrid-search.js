@@ -33,6 +33,10 @@ function requiredReservations(request) {
     ...(understanding.explicitEntities ?? []),
     ...(understanding.explicitCategories ?? []),
   ].map((value) => compactReservation(value, 'explicit_entity')).filter(Boolean);
+  if (!explicit.length && resolution.candidate?.explicit === true) {
+    const resolved = compactReservation(resolution.candidate, 'explicit_entity');
+    if (resolved) explicit.push(resolved);
+  }
   const comparisons = (understanding.comparisonEntities ?? [])
     .map((value) => compactReservation(value, 'explicit_comparison')).filter(Boolean);
   const overview = classification.intentClass === 'CATEGORY_OVERVIEW'
@@ -51,7 +55,7 @@ function requiredReservations(request) {
       : compactReservation(request.input?.memory?.activeEntity, 'canonical_memory'),
   ].filter(Boolean);
   const ordered = classification.intentClass === 'COMPARISON_COMPLEX'
-    ? comparisons : [...overview, ...explicit, ...remembered, ...comparisons];
+    ? [...comparisons, ...explicit] : [...explicit, ...overview, ...comparisons, ...remembered];
   return Object.freeze([...new Map(ordered.map((entry) => (
     [`${entry.recordType}:${normalized(entry.recordId)}`, entry]
   ))).values()].slice(0, 5));
