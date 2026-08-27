@@ -2,7 +2,7 @@ import { embedQuery } from '../rag/embedding.client.js';
 import { searchTenantPoints } from '../rag/qdrant.client.js';
 import { knowledgeSearchIndexes } from './query-classifier.js';
 
-export const TARGETED_RETRIEVAL_VERSION = 3;
+export const TARGETED_RETRIEVAL_VERSION = 4;
 
 const documentIndexTypes = Object.freeze({
   [knowledgeSearchIndexes.CATALOG]: 'CATALOG_ITEM',
@@ -42,6 +42,27 @@ function tokens(value) {
     .replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim().split(/\s+/u).filter(Boolean);
 }
 
+function clean(value, maximum = 2_000) {
+  return String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
+    .replace(/\s+/gu, ' ').trim().slice(0, maximum);
+}
+
+function uniqueText(values, maximum = 20) {
+  return Object.freeze([...new Set((Array.isArray(values) ? values : [])
+    .map((value) => clean(value, 240)).filter(Boolean))].slice(0, maximum));
+}
+
+function compactEntity(value, fallbackRecordType = 'CATALOG_ITEM') {
+  if (!value || typeof value !== 'object') return null;
+  const recordId = clean(value.recordId ?? value.id, 160);
+  const name = clean(value.name ?? value.label ?? value.category, 240);
+  const recordType = String(value.recordType ?? (value.entityType === 'CATEGORY'
+    ? 'CATALOG_CATEGORY' : fallbackRecordType)).trim().toUpperCase();
+  return recordId || name ? Object.freeze({
+    recordId: recordId || null, name: name || null, recordType,
+  }) : null;
+}
+
 function boundedScore(value) {
   const score = Number(value);
   return Number.isFinite(score) ? Math.max(0, score) : 0;
@@ -58,6 +79,73 @@ function allowedRecordTypes(indexes) {
       : [documentIndexTypes[index]].filter(Boolean)
   ));
   return new Set(selected.length ? selected : Object.values(documentIndexTypes));
+}
+
+export function buildContextEnrichedRetrievalQuery(input, classification, resolution, scope = []) {
+  const understanding = input?.queryUnderstanding ?? {};
+  const explicit = [
+    ...(understanding.explicitEntities ?? []),
+    ...(understanding.explicitCategories ?? []),
+  ].map(compactEntity).filter(Boolean);
+  const comparisons = (understanding.comparisonEntities ?? [])
+    .map(compactEntity).filter(Boolean).slice(0, 5);
+  const memoryEntity = input?.memory?.activeEntity
+    ? compactEntity(input.memory.activeEntity, 'CATALOG_ITEM')
+    : compactEntity(input?.memory?.activeCategory, 'CATALOG_CATEGORY');
+  const understoodContext = compactEntity(understanding.canonicalContext);
+  const hasExplicitCurrentEntity = explicit.length > 0;
+  const contextDependent = understanding.contextDependent === true
+    || resolution?.contextDependent === true;
+  const canonicalEntity = hasExplicitCurrentEntity
+    ? (understoodContext ?? explicit[0])
+    : (contextDependent ? (understoodContext ?? memoryEntity) : null);
+  const requestedFacts = uniqueText([
+    ...(understanding.requestedFacts ?? []),
+    ...(input?.requestedFacts ?? []),
+  ]);
+  const relevantNamespace = clean(
+    classification?.selectedNamespace
+      ?? classification?.retrievalPlan?.namespace
+      ?? resolution?.candidateNamespace,
+    80,
+  ).toUpperCase() || null;
+  const reserved = [];
+  if (!hasExplicitCurrentEntity && contextDependent && canonicalEntity?.recordId) {
+    reserved.push(Object.freeze({ ...canonicalEntity, reason: 'canonical_memory' }));
+  }
+  for (const entity of comparisons) {
+    if (!entity.recordId) continue;
+    reserved.push(Object.freeze({ ...entity, reason: 'explicit_comparison' }));
+  }
+  const reservedRecords = Object.freeze([...new Map(reserved.map((entry) => (
+    [`${normalizeId(entry.recordType)}:${normalizeId(entry.recordId)}`, entry]
+  ))).values()]);
+  const currentQuestion = clean(input?.latestQuestion ?? input?.utterance);
+  const queryParts = uniqueText([
+    currentQuestion,
+    canonicalEntity?.name,
+    ...requestedFacts,
+    ...comparisons.map((entity) => entity.name),
+  ]);
+  const searchText = queryParts.join(' ');
+  return Object.freeze({
+    currentQuestion,
+    canonicalEntity,
+    requestedFacts,
+    relevantNamespace,
+    comparisonEntities: Object.freeze(comparisons),
+    contextDependent,
+    sparseText: searchText,
+    semanticText: searchText,
+    reservedRecords,
+    filters: Object.freeze({
+      tenantId: input.tenantId,
+      agentId: input.agentId,
+      knowledgeBases: Object.freeze(scope.map((entry) => Object.freeze({ ...entry }))),
+      usageDirection: input.usageDirection,
+      namespace: relevantNamespace,
+    }),
+  });
 }
 
 function publicationScope(input, bundles) {
@@ -248,7 +336,7 @@ function activeWorkflowCandidate(input, recordScope, allowedTypes) {
   return direct?.recordType === 'WORKFLOW_RULE' ? direct : null;
 }
 
-function structuredCandidatesForTurn(input, classification, resolution, recordScope, allowedTypes, limit) {
+function structuredCandidatesForTurn(input, classification, resolution, recordScope, allowedTypes, limit, queryContext) {
   const continuingActiveTool = Boolean(input?.memory?.activeTool?.name)
     && classification?.source === 'active_tool_workflow';
   const selectedResolution = continuingActiveTool
@@ -310,7 +398,30 @@ function structuredCandidatesForTurn(input, classification, resolution, recordSc
       }, 'structured', 1));
     }
   }
-  return Object.freeze(candidates.slice(0, limit));
+  for (const reserved of [...(queryContext?.reservedRecords ?? [])].reverse()) {
+    const existingIndex = candidates.findIndex((candidate) => (
+      normalizeId(candidate.recordId) === normalizeId(reserved.recordId)
+      && String(candidate.recordType).toUpperCase() === reserved.recordType
+    ));
+    let selected = existingIndex >= 0 ? candidates.splice(existingIndex, 1)[0] : null;
+    if (!selected) {
+      const scoped = recordScope.get(normalizeId(reserved.recordId));
+      if (scoped && allowedTypes.has(reserved.recordType)
+        && (scoped.recordType === reserved.recordType
+          || reserved.recordType === 'CATALOG_CATEGORY')) {
+        selected = {
+          ...scoped,
+          recordType: reserved.recordType,
+          score: 1,
+          matchMethod: reserved.reason,
+        };
+      }
+    }
+    if (selected) candidates.unshift(selected);
+  }
+  return Object.freeze(candidates.slice(0, limit).map((candidate, index) => (
+    freezeCandidate(candidate, 'structured', index + 1)
+  )));
 }
 
 function validSparseDocuments(indexes, input, scope, allowedTypes) {
@@ -325,8 +436,8 @@ function validSparseDocuments(indexes, input, scope, allowedTypes) {
   ));
 }
 
-function bm25Candidates(input, sparseIndexes, scope, allowedTypes, limit) {
-  const queryTokens = [...new Set(tokens(input.utterance))];
+function bm25Candidates(input, sparseIndexes, scope, allowedTypes, limit, queryContext) {
+  const queryTokens = [...new Set(tokens(queryContext?.sparseText ?? input.utterance))];
   if (!queryTokens.length) return Object.freeze([]);
   const groups = selectedNamespaceTypes(allowedTypes);
   const namespaceRanks = {};
@@ -395,9 +506,11 @@ function semanticPayloadCandidate(match, scope, input, allowedTypes) {
   } : null;
 }
 
-async function semanticCandidates(input, scope, allowedTypes, limit, dependencies) {
+async function semanticCandidates(input, scope, allowedTypes, limit, dependencies, queryContext) {
   if (!scope.length || input.abortSignal?.aborted) return Object.freeze([]);
-  const vector = await dependencies.embed(input.utterance, { signal: input.abortSignal });
+  const vector = await dependencies.embed(
+    queryContext?.semanticText ?? input.utterance, { signal: input.abortSignal },
+  );
   const matches = await dependencies.search(input.tenantId, vector, {
     knowledgeBases: scope,
     usageDirection: input.usageDirection,
@@ -452,23 +565,24 @@ export async function retrieveTargetedCandidates({
   const indexes = planIndexes(classification);
   const recordTypes = allowedRecordTypes(indexes);
   const dependencies = { ...defaultDependencies, ...suppliedDependencies };
+  const queryContext = buildContextEnrichedRetrievalQuery(input, classification, resolution, scope);
 
   const structuredPromise = Promise.resolve().then(() => {
     dependencies.onChannelStart?.('structured');
     return structuredCandidatesForTurn(
-      input, classification, resolution, records, recordTypes, limitPerChannel,
+      input, classification, resolution, records, recordTypes, limitPerChannel, queryContext,
     );
   });
   const bm25Promise = indexes.has(knowledgeSearchIndexes.BM25)
     ? Promise.resolve().then(() => {
       dependencies.onChannelStart?.('bm25');
-      return bm25Candidates(input, sparseIndexes, scope, recordTypes, limitPerChannel);
+      return bm25Candidates(input, sparseIndexes, scope, recordTypes, limitPerChannel, queryContext);
     })
     : Promise.resolve(Object.freeze([]));
   const qdrantPromise = indexes.has(knowledgeSearchIndexes.SEMANTIC)
     ? Promise.resolve().then(() => {
       dependencies.onChannelStart?.('qdrant');
-      return semanticCandidates(input, scope, recordTypes, limitPerChannel, dependencies);
+      return semanticCandidates(input, scope, recordTypes, limitPerChannel, dependencies, queryContext);
     })
     : Promise.resolve(Object.freeze([]));
   const [structured, bm25, qdrant] = await Promise.all([
@@ -483,6 +597,7 @@ export async function retrieveTargetedCandidates({
     intentClass: classification.intentClass,
     searchedIndexes: Object.freeze([...indexes]),
     recordTypes: Object.freeze([...recordTypes]),
+    queryContext,
     channels: Object.freeze({ structured, bm25, qdrant }),
     namespaceChannels: Object.freeze({
       structured: namespaceChannelView(structured),

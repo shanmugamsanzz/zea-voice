@@ -364,7 +364,9 @@ function publicResult(observed, publications) {
   }
   const retrievalTrace = Object.freeze({
     primaryQuery: observed.input?.utterance ?? null,
-    contextualQuery: null,
+    contextualQuery: observed.input?.queryUnderstanding?.contextDependent === true
+      ? observed.input.queryUnderstanding.canonicalContext ?? null
+      : null,
     retrievedCandidates: Object.freeze(retrievedCandidates),
     hydratedEvidence: Object.freeze(hydratedEvidence),
     permittedEvidenceIds: Object.freeze(permittedEvidenceIds),

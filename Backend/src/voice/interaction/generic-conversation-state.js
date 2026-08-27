@@ -9,7 +9,7 @@ export const genericConversationStateFields = Object.freeze([
   'activeTool', 'collectedToolFields', 'citedEvidence',
   'currentTopic', 'knownEntities', 'pendingQuestion', 'collectedInformation',
   'recentTurns', 'lastAnswer', 'activeToolRequest', 'language', 'requestType',
-  'requestedFacts', 'constraints', 'contextualReferences', 'contextDependent',
+  'requestedFacts', 'constraints', 'contextualReferences', 'contextDependent', 'comparisonEntities',
 ]);
 
 function required(value, name) {
@@ -65,7 +65,8 @@ function cleanEntity(value = {}) {
   const name = cleanText(value.name ?? (categoryEntity ? value.category : null), 240);
   if (!id && !key && !name) return null;
   return Object.freeze({
-    id: id || null, key: key || null, name: name || key || id,
+    id: id || null, recordId: id || null,
+    key: key || null, name: name || key || id,
     category: cleanText(value.category, 240) || null,
     categoryKey: cleanText(value.categoryKey, 160) || null,
   });
@@ -118,6 +119,7 @@ function cleanCategory(value = {}) {
   if (!id && !key && !name) return null;
   return Object.freeze({
     id: id || null,
+    recordId: id || null,
     key: key || null,
     name: name || key || id,
     parentKey: cleanText(value.parentKey, 160) || null,
@@ -226,6 +228,8 @@ function publicState(state) {
     citedEvidence: Object.freeze(state.citedEvidence.map((source) => Object.freeze({ ...source }))),
     currentTopic: state.currentTopic,
     knownEntities: Object.freeze(state.knownEntities.map((entity) => ({ ...entity }))),
+    comparisonEntities: Object.freeze(state.comparisonEntities
+      .map((entity) => ({ ...entity }))),
     pendingQuestion: state.pendingQuestion ? Object.freeze({ ...state.pendingQuestion }) : null,
     collectedInformation: collectedToolFields,
     recentTurns: Object.freeze(state.recentTurns.map((turn) => ({ ...turn }))),
@@ -254,6 +258,7 @@ export function openGenericConversationState(identity, settings = {}, now = Date
     }),
     currentTopic: cleanText(initial.currentTopic, 240) || null,
     knownEntities: uniqueEntities(initial.knownEntities),
+    comparisonEntities: uniqueEntities(initial.comparisonEntities),
     activeEntity: cleanEntity(initial.activeEntity)
       ?? uniqueEntities(initial.knownEntities)[0] ?? null,
     activeCategory: cleanCategory(initial.activeCategory),
@@ -304,6 +309,7 @@ export function openGenericConversationState(identity, settings = {}, now = Date
       }
       state.currentTopic = cleanText(snapshot.currentTopic, 240) || null;
       state.knownEntities = uniqueEntities(snapshot.knownEntities);
+      state.comparisonEntities = uniqueEntities(snapshot.comparisonEntities);
       state.activeEntity = cleanEntity(snapshot.activeEntity);
       state.activeCategory = cleanCategory(snapshot.activeCategory);
       state.pendingQuestion = cleanPending(snapshot.pendingQuestion);
@@ -378,6 +384,7 @@ export function openGenericConversationState(identity, settings = {}, now = Date
         // contextual follow-up may retain earlier entities for comparisons or
         // references. This remains industry-neutral and decision-controlled.
         const explicitSelection = update.contextDependent !== true;
+        const singleExplicitSelection = explicitSelection && selected.length === 1;
         const previousEntityIdentity = cleanText(
           state.activeEntity?.id ?? state.activeEntity?.key ?? state.activeEntity?.name,
           240,
@@ -392,18 +399,20 @@ export function openGenericConversationState(identity, settings = {}, now = Date
         if (selected.length === 1) {
           state.activeEntity = selected[0];
           state.activeCategory = cleanCategory(selected[0]) ?? state.activeCategory;
+          state.comparisonEntities = [];
         } else {
           // Multi-record evidence (for example a comparison) has no canonical
           // single winner. Never persist the first array element as though the
           // caller selected it.
           state.activeEntity = null;
           const categories = selected.map(cleanCategory).filter(Boolean);
+          state.comparisonEntities = selected;
           const categoryKeys = new Set(categories.map((entry) => (
             cleanText(entry.key ?? entry.name, 160).toLocaleLowerCase()
           )).filter(Boolean));
           state.activeCategory = categoryKeys.size === 1 ? categories[0] : null;
         }
-        if (explicitSelection) {
+        if (singleExplicitSelection) {
           state.pendingQuestion = null;
           state.pendingClarification = null;
           if (previousEntityIdentity && nextEntityIdentity !== previousEntityIdentity
@@ -412,8 +421,8 @@ export function openGenericConversationState(identity, settings = {}, now = Date
               state.activeToolRequest.selectedEntityKey ?? state.activeToolRequest.selectedEntityName,
               240,
             ).toLocaleLowerCase();
-            if (!toolEntity || ![nextEntityIdentity, cleanText(selected[0].key, 160).toLocaleLowerCase()]
-              .includes(toolEntity)) {
+            if (toolEntity
+              && ![nextEntityIdentity, cleanText(selected[0].key, 160).toLocaleLowerCase()].includes(toolEntity)) {
               state.activeToolRequest = null;
               state.collectedInformation = {};
             }
@@ -547,6 +556,71 @@ export function openGenericConversationState(identity, settings = {}, now = Date
       }
       return publicState(state);
     },
+    applyCanonicalTopicResolution(resolution = {}, options = {}) {
+      if (!current(options.turnToken)) {
+        return Object.freeze({ applied: false, stale: true, state: publicState(state) });
+      }
+      const scope = resolution.scope ?? {};
+      if (scope.tenantId !== state.scope.tenantId
+        || scope.agentId !== state.scope.agentId
+        || scope.callId !== state.scope.callId) {
+        throw new Error('Canonical topic resolution scope mismatch');
+      }
+      const mode = cleanText(resolution.mode, 40).toLocaleUpperCase();
+      const comparisons = uniqueEntities(resolution.comparisonEntities)
+        .filter((entity) => Boolean(entity.id));
+      if (mode === 'COMPARISON') {
+        if (comparisons.length < 2) {
+          return Object.freeze({ applied: false, reason: 'canonical_comparison_required', state: publicState(state) });
+        }
+        state.comparisonEntities = comparisons;
+        state.knownEntities = comparisons;
+        state.activeEntity = null;
+        const categories = comparisons.map((entity) => cleanCategory({
+          categoryKey: entity.categoryKey, category: entity.category,
+        })).filter(Boolean);
+        const categoryKeys = new Set(categories.map((category) => (
+          cleanText(category.key, 160).toLocaleLowerCase()
+        )));
+        state.activeCategory = categoryKeys.size === 1 ? categories[0] : null;
+        state.currentTopic = comparisons.map((entity) => entity.name).join(' / ');
+      } else if (mode === 'EXPLICIT') {
+        const entity = cleanEntity(resolution.activeEntity);
+        const category = cleanCategory(resolution.activeCategory);
+        if (entity?.id) {
+          state.activeEntity = entity;
+          state.activeCategory = cleanCategory({
+            categoryKey: entity.categoryKey, category: entity.category,
+          });
+          state.knownEntities = [entity];
+          state.comparisonEntities = [];
+          state.currentTopic = entity.name;
+        } else if (category?.id) {
+          state.activeEntity = null;
+          state.activeCategory = category;
+          state.knownEntities = [];
+          state.comparisonEntities = [];
+          state.currentTopic = category.name;
+        }
+      } else if (mode === 'CONTEXTUAL') {
+        const entity = cleanEntity(resolution.activeEntity);
+        const category = cleanCategory(resolution.activeCategory);
+        if (entity?.id) {
+          state.activeEntity = entity;
+          state.activeCategory = cleanCategory({
+            categoryKey: entity.categoryKey, category: entity.category,
+          }) ?? state.activeCategory;
+          state.currentTopic = entity.name;
+        } else if (category?.id) {
+          state.activeEntity = null;
+          state.activeCategory = category;
+          state.currentTopic = category.name;
+        }
+        if (comparisons.length) state.comparisonEntities = comparisons;
+      }
+      return Object.freeze({ applied: true, mode, state: publicState(state) });
+    },
+
     applyResolvedContext(context = {}, options = {}) {
       if (!current(options.turnToken)) {
         return Object.freeze({ applied: false, stale: true, state: publicState(state) });
@@ -717,6 +791,7 @@ export function compactGenericConversationState(snapshot = {}, maximumCharacters
     collectedToolFields: snapshot.collectedToolFields ?? snapshot.collectedInformation ?? {},
     citedEvidence: (snapshot.citedEvidence ?? []).slice(0, 20),
     currentTopic: snapshot.currentTopic ?? null,
+    comparisonEntities: (snapshot.comparisonEntities ?? []).slice(0, 5),
     knownEntities: (snapshot.knownEntities ?? []).slice(0, 12),
     pendingQuestion: snapshot.pendingQuestion ?? null,
     collectedInformation: snapshot.collectedInformation ?? {},

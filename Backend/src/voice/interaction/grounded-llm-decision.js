@@ -28,8 +28,9 @@ export function isRepairableGroundedDecisionReason(reason) {
   return repairableDecisionReasons.has(String(reason ?? '').trim());
 }
 const clarificationReasons = new Set([
-  'ambiguous_request', 'missing_evidence', 'conflicting_evidence',
-  'missing_required_information',
+  'missing_entity', 'missing_fact', 'authoritative_ambiguity',
+  'missing_evidence', 'conflicting_evidence', 'missing_required_information',
+  'ambiguous_request',
 ]);
 const exactResponseRequestTypes = new Set([
   'overview', 'options', 'available_options', 'list_options', 'category_overview',
@@ -53,6 +54,21 @@ function list(value, maximum = 20) {
   return Array.isArray(value)
     ? [...new Set(value.map((entry) => text(entry, 160)).filter(Boolean))].slice(0, maximum)
     : [];
+}
+
+function inferredClarificationReason(runtime = {}) {
+  const context = runtime.clarificationContext ?? {};
+  const candidates = Array.isArray(context.ambiguityCandidates)
+    ? context.ambiguityCandidates.filter(Boolean) : [];
+  if (candidates.length > 1) return 'authoritative_ambiguity';
+  const memory = context.canonicalMemory ?? {};
+  const hasEntity = Boolean(
+    memory.activeEntityId || memory.activeCategoryId || memory.activeEntity?.recordId
+    || memory.activeCategory?.recordId,
+  );
+  if (!hasEntity && context.requestedFact) return 'missing_entity';
+  if (hasEntity && !context.requestedFact) return 'missing_fact';
+  return 'missing_evidence';
 }
 
 function parseObject(value) {
@@ -368,6 +384,8 @@ export function groundedDecisionContract(envelope, runtime = {}) {
       'Set responseId only when selecting one exact caller-facing published response; otherwise use null.',
       'When multiple exact caller-facing responses are available, select by the meaning of the complete latest utterance together with the immediately pending question and each source situation/context. A short contextual answer resolves the pending question; do not reinterpret it as a presence check unless that is its complete meaning.',
       'For CLARIFY, set clarification.reason and pendingQuestion. For RESPONSE or TOOL, clarification must be null.',
+      'Use missing_entity when a requested fact has no explicit or remembered canonical entity. Use missing_fact when an entity is known but the caller has not identified the fact needed.',
+      'Use authoritative_ambiguity only when supplied ambiguityCandidates contain multiple genuinely close authoritative records; pendingQuestion must name the closest canonical candidates.',
       'For an ordinary answer with no memory change, return stateUpdate as an empty object.',
       'Interpret the complete current question with only the supplied relevant call memory and published evidence.',
       'Identify the requested fact, every explicit entity or category, every comparison entity, contextual references, and action intent. Put all resolved entity keys in knownEntityKeys and all requested facts in requestedFacts.',
@@ -401,7 +419,7 @@ export function groundedDecisionContract(envelope, runtime = {}) {
       },
       pendingQuestion: 'one proposed short question string or null; runtime speaks only configured text',
       toolRequest: 'null or {name, arguments}',
-      clarification: 'null or {reason: ambiguous_request | missing_evidence | conflicting_evidence | missing_required_information}',
+      clarification: 'null or {reason: missing_entity | missing_fact | authoritative_ambiguity | missing_evidence | conflicting_evidence | missing_required_information | ambiguous_request}',
     },
     allowedEvidenceIds: (envelope.sources ?? []).map((source) => source.id),
     exactCallerResponseSourceIds: envelope.exactCallerResponses ?? [],
@@ -534,10 +552,10 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
   // Clarification metadata never authorizes facts, evidence or actions. Treat
   // it as decision-derived metadata so a provider leaving a stale object on an
   // answer cannot invalidate otherwise valid grounded speech. For an actual
-  // clarify decision, a missing/invalid reason safely canonicalizes to the
-  // least-assumptive reason; the required question is still validated below.
+  // clarify decision, infer the narrowest safe reason from the bounded input;
+  // the required question is still validated below.
   const clarification = decision === 'clarify'
-    ? (parsedClarification ?? Object.freeze({ reason: 'ambiguous_request' }))
+    ? (parsedClarification ?? Object.freeze({ reason: inferredClarificationReason(runtime) }))
     : null;
   const exactResponseCandidate = (envelope.exactCallerResponses ?? []).length > 0;
   const separated = splitCallerQuestion(parsed.answer, parsed.pendingQuestion, decision);
@@ -603,6 +621,20 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
   if (internalSpeech(answer)) return Object.freeze({ valid: false, reason: 'internal_text' });
   if (decision === 'clarify' && !pendingQuestion) {
     return Object.freeze({ valid: false, reason: 'clarification_question_required' });
+  }
+  if (decision === 'clarify' && clarification.reason === 'authoritative_ambiguity') {
+    const candidates = (runtime.clarificationContext?.ambiguityCandidates ?? [])
+      .map((candidate) => text(
+        candidate.canonicalName ?? candidate.name ?? candidate.displayName, 200,
+      ))
+      .filter(Boolean);
+    if (candidates.length < 2) {
+      return Object.freeze({ valid: false, reason: 'invalid_clarification_reason' });
+    }
+    const normalizedQuestion = identity(pendingQuestion);
+    if (!candidates.some((candidate) => normalizedQuestion.includes(identity(candidate)))) {
+      return Object.freeze({ valid: false, reason: 'candidate_specific_clarification_required' });
+    }
   }
   if (decision === 'answer' && envelope.found && citedSources.length === 0) {
     return Object.freeze({ valid: false, reason: 'selected_evidence_ids_required' });

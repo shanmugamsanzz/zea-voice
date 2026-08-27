@@ -8,6 +8,7 @@ import {
   technicalClarificationDecision,
 } from '../knowledge-engine/engine-contract.js';
 import { prepareKnowledgeQuery } from '../knowledge-engine/fast-query-preparation.js';
+import { resolveCanonicalTopicMemory } from '../knowledge-engine/canonical-topic-memory.js';
 import { loadPublishedEngineArtifacts } from '../knowledge-engine/runtime-service.js';
 import { retrieveRankHydrateGroundedTurn } from './grounded-turn-evidence.js';
 
@@ -27,7 +28,8 @@ function revisions(publications = []) {
 
 function compactEvidence(source) {
   return Object.freeze({
-    id: source.publishedEvidenceId,
+    id: source.sourceId ?? source.publishedEvidenceId,
+    publishedEvidenceId: source.publishedEvidenceId,
     recordId: source.recordId,
     recordType: source.recordType,
     content: source.content,
@@ -79,21 +81,53 @@ function canonicalEntity(resolution, evidence) {
 }
 
 function compactBundle(prepared, turn, publicationRevisions) {
-  const evidence = turn.llmInput.evidence.map(compactEvidence);
+  const evidence = turn.llmInput.hydratedRecords.map(compactEvidence);
   const callerFacing = evidence.filter((source) => source.callerFacing === true);
   const workflowIds = new Set(turn.llmInput.workflowAuthorization
     .map((authorization) => authorization.workflowEvidenceId));
-  const workflow = evidence.filter((source) => workflowIds.has(source.id));
-  const guidance = evidence.filter((source) => (
-    source.recordType === 'CONVERSATION_NODE' && source.callerFacing === false
-  )).slice(0, 1);
+  const workflow = evidence.filter((source) => workflowIds.has(source.publishedEvidenceId));
+  const canonicalMemoryResolution = resolveCanonicalTopicMemory({
+    scope: {
+      tenantId: prepared.input.tenantId,
+      agentId: prepared.input.agentId,
+      callId: prepared.input.callId,
+    },
+    understanding: prepared.understanding,
+    evidence: turn.authoritative.evidence,
+    memory: prepared.input.canonicalCallMemory ?? prepared.input.memory,
+  });
+  const resolvedEntity = canonicalMemoryResolution.activeEntity
+    ?? canonicalMemoryResolution.activeCategory
+    ?? canonicalEntity(prepared.resolution, evidence);
+  const entities = evidence.flatMap((source) => {
+    const data = source.authoritativeData ?? {};
+    if (source.recordType === 'CATALOG_ITEM' && data.itemKey && data.name) return [{
+      id: source.recordId, recordId: source.recordId, recordType: source.recordType,
+      entityType: 'ITEM', key: data.itemKey, name: data.name,
+      category: data.category ?? null, categoryKey: data.categoryKey ?? null,
+      aliases: data.aliases ?? [],
+    }];
+    if (source.recordType === 'CATALOG_CATEGORY' && data.categoryKey && data.category) return [{
+      id: source.recordId, recordId: source.recordId, recordType: source.recordType,
+      entityType: 'CATEGORY', key: data.categoryKey, name: data.category,
+      category: data.category, categoryKey: data.categoryKey,
+      aliases: data.categoryAliases ?? [],
+    }];
+    return [];
+  });
   return Object.freeze({
     version: GROUNDED_NORMAL_TURN_RUNTIME_VERSION,
+    decisionInput: turn.llmInput,
     latestQuestion: turn.llmInput.currentQuestion,
-    canonicalEntity: canonicalEntity(prepared.resolution, evidence),
-    requestedFact: prepared.requestedFact,
-    requestedFacts: prepared.requestedFacts,
-    recentRelevantTurns: turn.llmInput.memory.recentTurns,
+    callMemory: turn.llmInput.canonicalMemory,
+    canonicalMemoryResolution,
+    canonicalEntity: resolvedEntity,
+    entities: Object.freeze(entities.slice(0, 5)),
+    requestedFact: turn.llmInput.requestedFact,
+    requestedFacts: Object.freeze(turn.llmInput.requestedFact
+      ? [turn.llmInput.requestedFact] : []),
+    ambiguityCandidates: turn.llmInput.ambiguityCandidates,
+    recentRelevantTurns: turn.llmInput.recentRelevantTurns,
     intentClass: prepared.intentClass,
     topEvidence: Object.freeze(callerFacing),
     sourceMap: Object.freeze(callerFacing.map((source, index) => Object.freeze({
@@ -104,8 +138,9 @@ function compactBundle(prepared, turn, publicationRevisions) {
       knowledgeBaseId: source.knowledgeBaseId,
       publicationRevision: source.publicationRevision,
     }))),
-    conversationGuidance: Object.freeze(guidance),
-    authorizedToolSchemas: turn.llmInput.assignedToolSchemas,
+    conversationGuidance: Object.freeze([]),
+    workflowAuthorization: turn.llmInput.workflowAuthorization,
+    authorizedToolSchemas: turn.llmInput.toolSchemas,
     actionAuthorizationEvidence: Object.freeze(workflow.map((source) => Object.freeze({
       ...source, activationAllowed: true, retrievalContext: 'primary',
     }))),

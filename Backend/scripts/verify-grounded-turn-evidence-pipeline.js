@@ -157,21 +157,23 @@ assert.ok(result.authoritative.evidence.every((source) => (
 
 const llm = result.llmInput;
 assert.deepEqual(Object.keys(llm).sort(), [
-  'assignedToolSchemas', 'contractVersion', 'currentQuestion', 'evidence', 'memory',
-  'permittedSourceIds', 'sourceMap', 'workflowAuthorization',
+  'ambiguityCandidates', 'canonicalMemory', 'currentQuestion', 'hydratedRecords',
+  'recentRelevantTurns', 'requestedFact', 'toolSchemas', 'workflowAuthorization',
 ].sort());
 assert.equal(llm.currentQuestion, input.latestQuestion);
-assert.ok(llm.evidence.length <= 5);
-assert.equal(llm.sourceMap.length, llm.evidence.length);
-assert.ok(llm.sourceMap.every((source, index) => source.sourceId === `source_${index + 1}`));
-assert.equal(llm.memory.recentTurns.length, 2);
-assert.equal(llm.memory.collectedToolFields.reference, 'A-10');
+assert.ok(llm.hydratedRecords.length <= 5);
+assert.deepEqual(llm.hydratedRecords.filter((source) => source.callerFacing)
+  .map((source) => source.sourceId), llm.hydratedRecords
+  .filter((source) => source.callerFacing)
+  .map((_source, index) => `source_${index + 1}`));
+assert.equal(llm.hydratedRecords.filter((source) => !source.callerFacing)
+  .every((source) => source.sourceId === null), true);
+assert.equal(llm.recentRelevantTurns.length, 2);
+assert.equal(llm.canonicalMemory.collectedToolFields.reference, 'A-10');
 assert.equal(llm.workflowAuthorization.length, 1);
-assert.equal(llm.assignedToolSchemas[0].name, 'submit_tenant_request');
-assert.equal(llm.assignedToolSchemas[0].authorizationEvidenceId,
+assert.equal(llm.toolSchemas[0].name, 'submit_tenant_request');
+assert.equal(llm.toolSchemas[0].authorizationEvidenceId,
   llm.workflowAuthorization[0].workflowEvidenceId);
-assert.ok(llm.permittedSourceIds.response.length > 0);
-assert.equal(llm.permittedSourceIds.tool.length, 1);
 assert.equal(JSON.stringify(llm).includes('routingCandidates'), false);
 assert.equal(JSON.stringify(llm).includes('providerScores'), false);
 
@@ -203,7 +205,7 @@ const namespaceFiltered = buildGroundedLlmInput({
   },
   runtimeProfile: { tools: [] },
 });
-assert.deepEqual(namespaceFiltered.evidence.map((source) => source.recordType), ['CATALOG_ITEM'],
+assert.deepEqual(namespaceFiltered.hydratedRecords.map((source) => source.recordType), ['CATALOG_ITEM'],
   'An explicit Catalog turn must not send unrelated FAQ or Workflow evidence to the LLM');
 
 console.log(JSON.stringify({
@@ -211,6 +213,6 @@ console.log(JSON.stringify({
   fusedRecords: result.authoritative.fusion.candidates.length,
   hydratedRecords: result.authoritative.evidence.length,
   hydrationQueries,
-  llmEvidenceRecords: llm.evidence.length,
+  llmEvidenceRecords: llm.hydratedRecords.length,
   workflowAuthorizations: llm.workflowAuthorization.length,
 }, null, 2));

@@ -83,6 +83,8 @@ export function createKnowledgeEngineInput(value = {}) {
     citedEvidence: evidenceMemory(suppliedMemory.citedEvidence),
     knownEntities: Object.freeze([...(Array.isArray(suppliedMemory.knownEntities)
       ? suppliedMemory.knownEntities : [])]),
+    comparisonEntities: Object.freeze([...(Array.isArray(suppliedMemory.comparisonEntities)
+      ? suppliedMemory.comparisonEntities : [])].slice(0, 5)),
     pendingQuestion: suppliedMemory.pendingQuestion ?? null,
     collectedInformation: Object.freeze({ ...(suppliedMemory.collectedInformation ?? {}) }),
     requestedFacts,
@@ -103,6 +105,7 @@ export function createKnowledgeEngineInput(value = {}) {
     recentRelevantTurns,
     canonicalCallMemory,
     memory: canonicalCallMemory,
+    queryUnderstanding: memoryObject(value.queryUnderstanding),
     abortSignal: value.abortSignal ?? null,
   });
 }

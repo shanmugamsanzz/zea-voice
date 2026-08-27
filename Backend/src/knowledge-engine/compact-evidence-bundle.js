@@ -2,6 +2,7 @@ import {
   knowledgeEngineDecisionTypes,
   knowledgeEngineResponseModes,
 } from './engine-contract.js';
+import { resolveCanonicalTopicMemory } from './canonical-topic-memory.js';
 
 export const COMPACT_EVIDENCE_BUNDLE_VERSION = 2;
 
@@ -38,6 +39,8 @@ function compactCallMemory(input) {
   return Object.freeze({
     activeEntity: compactMemoryEntity(memory.activeEntity),
     activeCategory: compactMemoryEntity(memory.activeCategory),
+    comparisonEntities: Object.freeze((memory.comparisonEntities ?? []).slice(0, 5)
+      .map(compactMemoryEntity).filter(Boolean)),
     latestIntent: cleanText(memory.latestIntent, 80) || null,
     pendingClarification: Object.keys(pending).length ? Object.freeze({
       kind: cleanText(pending.kind ?? pending.reason, 80) || null,
@@ -60,6 +63,41 @@ function compactCallMemory(input) {
   });
 }
 
+
+function compactQueryUnderstanding(input) {
+  const understanding = object(input?.queryUnderstanding);
+  if (!Object.keys(understanding).length) return null;
+  const candidates = (values) => Object.freeze((Array.isArray(values) ? values : [])
+    .slice(0, 5).map((candidate) => Object.freeze({
+      recordId: cleanText(candidate?.recordId, 160) || null,
+      entityType: cleanText(candidate?.entityType, 40) || null,
+      key: cleanText(candidate?.key, 160) || null,
+      name: cleanText(candidate?.name, 240) || null,
+      score: Number.isFinite(Number(candidate?.score)) ? Number(candidate.score) : null,
+    })));
+  return Object.freeze({
+    contextDependent: understanding.contextDependent === true,
+    explicitEntities: candidates(understanding.explicitEntities),
+    explicitCategories: candidates(understanding.explicitCategories),
+    comparisonEntities: candidates(understanding.comparisonEntities),
+    contextualReferences: Object.freeze([...(understanding.contextualReferences ?? [])].slice(0, 8)),
+    requestedFact: cleanText(understanding.requestedFact, 80) || null,
+    requestedFactSource: cleanText(understanding.requestedFactSource, 40) || null,
+    requiresGroundedFactInterpretation:
+      understanding.requiresGroundedFactInterpretation === true,
+    actionIntent: Object.freeze({
+      detected: understanding.actionIntent?.detected === true,
+      source: cleanText(understanding.actionIntent?.source, 80) || null,
+      authorizationRecordId:
+        cleanText(understanding.actionIntent?.authorizationRecordId, 160) || null,
+    }),
+    ambiguity: Object.freeze({
+      detected: understanding.ambiguity?.detected === true,
+      reason: cleanText(understanding.ambiguity?.reason, 80) || null,
+      candidates: candidates(understanding.ambiguity?.candidates),
+    }),
+  });
+}
 function compactAuthoritativeData(source) {
   const data = object(source?.authoritativeData);
   if (source?.recordType === 'CATALOG_ITEM') return Object.freeze({
@@ -286,10 +324,18 @@ export function buildCompactEvidenceBundle({
     publicationRevision: source.publicationRevision,
   }));
   const resolvedEntity = canonicalEntity(resolution, allEvidence);
+  const canonicalMemoryResolution = resolveCanonicalTopicMemory({
+    scope: { tenantId: input.tenantId, agentId: input.agentId, callId: input.callId },
+    understanding: input.queryUnderstanding,
+    evidence: allEvidence,
+    memory: input.canonicalCallMemory ?? input.memory,
+  });
   return Object.freeze({
     version: COMPACT_EVIDENCE_BUNDLE_VERSION,
     latestQuestion: cleanText(input?.latestQuestion ?? input?.utterance, 2_000),
     callMemory: compactCallMemory(input),
+    queryUnderstanding: compactQueryUnderstanding(input),
+    canonicalMemoryResolution,
     canonicalEntity: resolvedEntity,
     entities: catalogEntities(topEvidence, resolvedEntity),
     requestedFact: input?.requestedFact ?? null,

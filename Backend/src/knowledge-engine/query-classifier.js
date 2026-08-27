@@ -163,13 +163,15 @@ function explicitPhraseSignatureCount(candidates) {
 
 function inferredCandidates(input, resolution) {
   const candidates = rankedCandidates(resolution);
+  const understanding = input.queryUnderstanding ?? {};
   const inferred = candidates.flatMap((candidate) => {
     const intentClass = candidateIntent(candidate);
     return intentClass && candidateIsEligible(candidate, intentClass)
       ? [{ intentClass, candidate, source: candidate.intentClass
       ? 'published_intent_class' : 'resolved_structure' }] : [];
   });
-  if ((input.requestedFacts ?? []).some((fact) => String(fact).toLocaleLowerCase() === 'comparison')
+  if ((understanding.comparisonEntities?.length ?? 0) > 1
+    || (input.requestedFacts ?? []).some((fact) => String(fact).toLocaleLowerCase() === 'comparison')
     || (explicitEntityCount(candidates) > 1 && explicitPhraseSignatureCount(candidates) > 1)
     || (input.requestedFacts?.length ?? 0) > 1) {
     inferred.push({
@@ -195,6 +197,24 @@ function inferredCandidates(input, resolution) {
       source: 'requested_fact_with_active_entity',
     });
   }
+  if (understanding.contextDependent === true
+    && (input.memory?.activeEntity || input.memory?.activeCategory)) {
+    inferred.push({
+      intentClass: knowledgeQueryClasses.DETAILS_OR_PRICE,
+      candidate: null,
+      source: 'contextual_call_memory',
+    });
+  }
+  if (understanding.actionIntent?.detected === true && !input.memory?.activeTool?.name) {
+    inferred.push({
+      intentClass: knowledgeQueryClasses.ACTION_TOOL_REQUEST,
+      candidate: (resolution?.namespaceCandidates?.WORKFLOW ?? []).find((candidate) => (
+        String(candidate?.recordId ?? candidate?.id) === String(
+          understanding.actionIntent.authorizationRecordId,
+        ))) ?? null,
+      source: 'published_action_understanding',
+    });
+  }
   if (input.memory?.activeTool?.name) {
     inferred.push({
       intentClass: knowledgeQueryClasses.ACTION_TOOL_REQUEST,
@@ -213,6 +233,7 @@ function inferredCandidates(input, resolution) {
     if (entry.intentClass === knowledgeQueryClasses.COMPARISON_COMPLEX) return 550;
     if (entry.candidate?.explicit === true
       && ['ITEM', 'CATEGORY'].includes(entry.candidate?.entityType)) return 500;
+    if (entry.source === 'contextual_call_memory') return 475;
     if (['FAQ', 'CONVERSATION_NODE'].includes(entry.candidate?.recordType)) return 400;
     if (entry.intentClass === knowledgeQueryClasses.CLARIFICATION_ANSWER) return 350;
     if (entry.candidate?.recordType === 'KNOWLEDGE_CHUNK') return 300;
@@ -275,7 +296,8 @@ export function classifyKnowledgeQuery(input, resolution) {
   }
   const selected = inferredCandidates(input, resolution)[0];
   const searchIndexes = indexesFor(selected.intentClass, selected.candidate);
-  const selectedNamespace = resolution.candidateNamespace ?? ({
+  const selectedNamespace = selected.source === 'contextual_call_memory' ? 'CATALOG'
+    : resolution.candidateNamespace ?? ({
     CATALOG_ITEM: 'CATALOG', CATALOG_CATEGORY: 'CATALOG', FAQ: 'FAQ',
     CONVERSATION_NODE: 'CONVERSATION', WORKFLOW_RULE: 'WORKFLOW',
     KNOWLEDGE_CHUNK: 'GENERAL',
@@ -291,9 +313,10 @@ export function classifyKnowledgeQuery(input, resolution) {
     source: selected.source,
     candidate: selected.candidate,
     selectedNamespace,
-    requiresConfirmation: Boolean(selected.candidate)
-      && !input.memory?.activeTool?.name
-      && resolution.action === 'CONFIRM',
+    requiresConfirmation: !input.memory?.activeTool?.name && (
+      input.queryUnderstanding?.ambiguity?.detected === true
+      || (Boolean(selected.candidate) && resolution.action === 'CONFIRM')
+    ),
     retrievalPlan: Object.freeze({
       indexes: unique(searchIndexes),
       useSemantic: searchIndexes.includes(knowledgeSearchIndexes.SEMANTIC),

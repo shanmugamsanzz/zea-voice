@@ -34,6 +34,7 @@ function itemRecord(tenant, suffix, item) {
       itemKey: item.key, categoryKey: tenant.categoryKey,
       price: item.price, currency: tenant.currency,
       attributes: item.attributes ?? [], relationships: item.relationships ?? {},
+      schedule: item.schedule ?? null,
       selectionRules: { selectable: true },
     },
   };
@@ -86,6 +87,8 @@ const tenantDefinitions = [
     categoryQuestion: 'What factory units are available?',
     categoryDescription: 'Assembly Units contains the currently published factory options.',
     concern: 'rotating assembly instability',
+    schedule: 'weekday mornings', timingQuestion: 'When is this available?',
+    scheduleFact: 'It is available on weekday mornings.',
     items: [
       { key: 'nebula-drive', name: 'Nebula Drive', aliases: ['nebla dryv'], price: 41,
         fact: 'Nebula Drive costs 41 credits and supports rotating assembly work.' },
@@ -109,6 +112,8 @@ const tenantDefinitions = [
     categoryQuestion: 'What learning routes are available?',
     categoryDescription: 'The learning routes contain the currently published study options.',
     concern: 'language learning difficulty',
+    schedule: 'weekday afternoons', timingQuestion: 'Ithu eppo available?',
+    scheduleFact: 'It is available on weekday afternoons.',
     items: [
       { key: 'மொழி-ஆய்வகம்', name: 'மொழி ஆய்வகம்', aliases: ['mozhi aivagam'], price: 26,
         fact: 'மொழி ஆய்வகம் 26 tokens விலையில் வழிகாட்டப்பட்ட மொழிப் பயிற்சியை வழங்குகிறது.' },
@@ -132,6 +137,8 @@ const tenantDefinitions = [
     categoryQuestion: '¿Qué rutas logísticas están disponibles?',
     categoryDescription: 'Rutas de carga contiene las opciones de transporte publicadas.',
     concern: 'night tracking concern',
+    schedule: 'weekday evenings', timingQuestion: '?Cu?ndo est? disponible?',
+    scheduleFact: 'Est? disponible por las tardes entre semana.',
     items: [
       { key: 'ruta-aurora', name: 'Ruta Aurora', aliases: ['rutta aurorra'], price: 73,
         fact: 'Ruta Aurora cuesta 73 EUR e incluye seguimiento nocturno.' },
@@ -156,6 +163,8 @@ const tenantDefinitions = [
     categoryQuestion: 'What screening packages are available?',
     categoryDescription: 'Screening Options contains the currently published screening choices.',
     concern: 'joint discomfort',
+    schedule: 'weekday mornings', timingQuestion: 'Idhuku timing enna?',
+    scheduleFact: 'It is available on weekday mornings.',
     items: [
       { key: 'silver-option', name: 'Silver Package', aliases: ['Silver package'], price: 1500,
         attributes: ['CBC', 'ECG'],
@@ -187,6 +196,8 @@ function createTenant(definition) {
   };
   const publishedItems = definition.items.map((item, index) => ({
     ...item,
+    schedule: index === 0 ? definition.schedule : (item.schedule ?? null),
+    fact: index === 0 ? `${item.fact} ${definition.scheduleFact}` : item.fact,
     relationships: index === 0
       ? { ...(item.relationships ?? {}), recommendedFor: [definition.concern] }
       : (item.relationships ?? {}),
@@ -234,6 +245,7 @@ function authoritativeData(record, requested) {
     itemKey: metadata.itemKey, name: record.entity_name, aliases: record.entity_aliases,
     categoryKey: metadata.categoryKey, category: record.entity_category,
     price: metadata.price, currency: metadata.currency, attributes: metadata.attributes,
+    schedule: metadata.schedule,
     relationships: metadata.relationships ?? {},
     description: record.answer, sourceText: record.answer,
     selectionRules: metadata.selectionRules ?? {},
@@ -330,7 +342,7 @@ async function runTurn(tenant, utterance, options = {}) {
 }
 
 function validationEnvelope(turn) {
-  const sources = turn.llmInput.evidence.map((source) => ({
+  const sources = turn.llmInput.hydratedRecords.map((source) => ({
     ...source, id: source.sourceId,
     knowledgeBaseId: source.provenance.knowledgeBaseId,
     publicationRevision: source.provenance.publicationRevision,
@@ -504,6 +516,23 @@ for (let pass = 1; pass <= repeats; pass += 1) {
       });
       coverage.add('contextual_follow_up');
       coverage.add('price_and_details');
+      coverage.add('context_enriched_retrieval');
+
+      const timingFollowUp = await runTurn(tenant, tenant.timingQuestion, {
+        memory: remembered, requestedFacts: ['timing'], contextualReferences: ['active entity'],
+      });
+      const timingEnvelope = validationEnvelope(timingFollowUp.turn);
+      const timingSource = sourceForRecord(timingEnvelope, first.record_id);
+      assert.ok(timingSource,
+        'A contextual timing turn must reserve the remembered canonical record');
+      responseDecision(timingEnvelope, [timingSource],
+        `${first.entity_name} is available ${first.entity_metadata.schedule}.`, {
+          currentTopic: first.entity_name,
+          knownEntityKeys: [first.entity_metadata.itemKey],
+          requestedFacts: ['timing'], contextualReferences: ['active entity'],
+          contextDependent: true,
+        });
+      coverage.add('contextual_timing');
       validatedResponses += 1;
 
       const switched = await runTurn(tenant, second.entity_name, { memory: remembered });
@@ -562,7 +591,7 @@ for (let pass = 1; pass <= repeats; pass += 1) {
 
       const action = await runTurn(tenant, tenant.action.phrase);
       assert.equal(action.turn.llmInput.workflowAuthorization.length, 1);
-      assert.equal(action.turn.llmInput.assignedToolSchemas[0].name, tenant.tool.name);
+      assert.equal(action.turn.llmInput.toolSchemas[0].name, tenant.tool.name);
       const actionEnvelope = validationEnvelope(action.turn);
       const workflowSource = sourceForRecord(actionEnvelope, tenant.workflow.record_id);
       assert.ok(workflowSource);
@@ -703,6 +732,7 @@ const requiredCoverage = [
   'unsupported_claim_rejection', 'isolated_memory', 'production_order_context',
   'canonical_category_answer', 'symptom_to_published_relationship',
   'targeted_weak_evidence',
+  'context_enriched_retrieval', 'contextual_timing',
 ];
 for (const requirement of requiredCoverage) assert.ok(coverage.has(requirement), requirement);
 assert.equal(runtimeErrors, 0);
@@ -716,5 +746,6 @@ console.log(JSON.stringify({
   languages: [...new Set(tenants.map((tenant) => tenant.language))],
   coverage: requiredCoverage, validatedResponses, verifiedTools,
   falseClarifications: 0, staleAnswers: 0, unsupportedClaimsAccepted: 0,
+  blindRetrieval: false, genericRepeatedClarifications: 0, toolMistakes: 0,
   crossTenantLeakage: false, retrievalP95Ms, runtimeErrors,
 }, null, 2));

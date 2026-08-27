@@ -306,7 +306,58 @@ const clarificationWithoutReason = validateGroundedLlmDecision(decisionJson({
   pendingQuestion: 'Which service do you mean?', toolRequest: null, clarification: null,
 }), envelope, runtime);
 assert.equal(clarificationWithoutReason.valid, true);
-assert.equal(clarificationWithoutReason.clarification.reason, 'ambiguous_request');
+assert.equal(clarificationWithoutReason.clarification.reason, 'missing_evidence');
+
+const missingEntityClarification = validateGroundedLlmDecision(decisionJson({
+  decision: 'clarify', answer: '', evidenceIds: [], stateUpdate: {},
+  pendingQuestion: 'Which published service do you mean?', toolRequest: null,
+  clarification: { reason: 'missing_entity' },
+}), envelope, {
+  ...runtime,
+  clarificationContext: {
+    requestedFact: 'price',
+    canonicalMemory: { activeEntity: null, activeCategory: null },
+    ambiguityCandidates: [],
+  },
+});
+assert.equal(missingEntityClarification.valid, true);
+assert.equal(missingEntityClarification.clarification.reason, 'missing_entity');
+
+const missingFactClarification = validateGroundedLlmDecision(decisionJson({
+  decision: 'clarify', answer: '', evidenceIds: [], stateUpdate: {},
+  pendingQuestion: 'What would you like to know about Premium service?', toolRequest: null,
+  clarification: { reason: 'missing_fact' },
+}), envelope, {
+  ...runtime,
+  clarificationContext: {
+    requestedFact: null,
+    canonicalMemory: {
+      activeEntity: { recordId: 'record-1', name: 'Premium service' },
+      activeCategory: null,
+    },
+    ambiguityCandidates: [],
+  },
+});
+assert.equal(missingFactClarification.valid, true);
+assert.equal(missingFactClarification.clarification.reason, 'missing_fact');
+
+const authoritativeAmbiguity = validateGroundedLlmDecision(decisionJson({
+  decision: 'clarify', answer: '', evidenceIds: [], stateUpdate: {},
+  pendingQuestion: 'Do you mean Premium service or Standard service?', toolRequest: null,
+  clarification: { reason: 'authoritative_ambiguity' },
+}), envelope, {
+  ...runtime,
+  clarificationContext: {
+    requestedFact: 'details',
+    canonicalMemory: {},
+    ambiguityCandidates: [
+      { recordId: 'record-1', name: 'Premium service' },
+      { recordId: 'record-3', name: 'Standard service' },
+    ],
+  },
+});
+assert.equal(authoritativeAmbiguity.valid, true);
+assert.equal(authoritativeAmbiguity.clarification.reason, 'authoritative_ambiguity');
 
 const multipleClarifications = validateGroundedLlmDecision(decisionJson({
   decision: 'clarify', answer: 'Which service? Which location?', evidenceIds: [],

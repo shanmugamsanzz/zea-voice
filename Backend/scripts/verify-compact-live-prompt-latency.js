@@ -48,16 +48,26 @@ const prompt = buildAgentSystemPrompt({
   context: {
     groundedResponseMode: true,
     compactGrounding: true,
-    liveCallMemory: {
-      currentTopic: 'current request', knownEntities: [], pendingQuestion: null,
-      collectedInformation: {}, recentTurns: [], lastAnswer: '', activeToolRequest: null,
+    groundedDecisionInput: {
+      currentQuestion: 'What is available?',
+      recentRelevantTurns: [],
+      canonicalMemory: {
+        activeEntity: null, activeCategory: null, comparisonEntities: [],
+        pendingClarification: null, activeTool: null, collectedToolFields: {},
+      },
+      hydratedRecords: [],
+      requestedFact: 'options',
+      ambiguityCandidates: [],
+      workflowAuthorization: [],
+      toolSchemas: [],
     },
   },
 });
 assert.ok(prompt.length <= 12_000);
 assert.doesNotMatch(prompt, /DUPLICATED_MAP_TEXT/u);
-assert.ok(prompt.indexOf('<runtime_context>') < prompt.indexOf('<knowledge_context>'));
-assert.ok(prompt.indexOf('<knowledge_context>') < prompt.indexOf('<company_instructions>'));
+assert.doesNotMatch(prompt, /<runtime_context>|<knowledge_context>|<company_instructions>/u);
+assert.match(prompt, /<grounded_turn_input>/u);
+assert.match(prompt, /<\/grounded_turn_input>/u);
 assert.match(prompt, /<\/grounded_response_contract>/u);
 assert.match(prompt, /Only answer contains caller-facing speech/u);
 

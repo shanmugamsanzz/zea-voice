@@ -79,6 +79,8 @@ export function normalizeLiveCallFrame(value = {}) {
       ? value.citedEvidence : []).slice(-20).map((source) => safeJson(source)).filter(Boolean)),
     currentTopic: text(value.currentTopic, 240) || null,
     knownEntities: Object.freeze(legacyEntities.slice(0, 20).map((item) => safeJson(item)).filter(Boolean)),
+    comparisonEntities: Object.freeze((Array.isArray(value.comparisonEntities)
+      ? value.comparisonEntities : []).slice(0, 5).map((item) => safeJson(item)).filter(Boolean)),
     pendingQuestion: Object.freeze({
       key: text(pending?.key, 500) || null,
       text: text(pending?.text, 500) || null,
@@ -132,6 +134,8 @@ export function buildConversationMemoryState({
       ? incomingFrame.knownEntities : prior.callFrame.knownEntities,
     activeEntity: owns(incomingFrame, 'activeEntity')
       ? incomingFrame.activeEntity : prior.callFrame.activeEntity,
+    comparisonEntities: owns(incomingFrame, 'comparisonEntities')
+      ? incomingFrame.comparisonEntities : prior.callFrame.comparisonEntities,
     activeCategory: owns(incomingFrame, 'activeCategory')
       ? incomingFrame.activeCategory : prior.callFrame.activeCategory,
     latestIntent: owns(incomingFrame, 'latestIntent')

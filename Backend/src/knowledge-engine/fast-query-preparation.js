@@ -5,6 +5,7 @@ import {
 } from './publication-index-builder.js';
 import { resolvePublishedEntityRoute } from './entity-route-resolver.js';
 import { classifyKnowledgeQuery, knowledgeQueryClasses } from './query-classifier.js';
+import { understandContextualKnowledgeQuery } from './contextual-query-understanding.js';
 
 export const FAST_QUERY_PREPARATION_VERSION = 2;
 
@@ -12,7 +13,7 @@ function unique(values) {
   return Object.freeze([...new Set(values.filter(Boolean))]);
 }
 
-function enrichedInput(input, requestedFacts, contextualReferences) {
+function enrichedInput(input, requestedFacts, contextualReferences, queryUnderstanding = null) {
   return createKnowledgeEngineInput({
     tenantId: input.tenantId,
     agentId: input.agentId,
@@ -24,6 +25,7 @@ function enrichedInput(input, requestedFacts, contextualReferences) {
     contextualReferences,
     recentRelevantTurns: input.recentRelevantTurns,
     memory: input.canonicalCallMemory ?? input.memory,
+    queryUnderstanding,
     abortSignal: input.abortSignal,
   });
 }
@@ -33,16 +35,25 @@ export async function prepareKnowledgeQuery(input, publicationBundles, options =
     throw new TypeError('Fast query preparation requires a finalized knowledge-engine input');
   }
   const normalizedQuestion = normalizePublicationPhrase(input.latestQuestion ?? input.utterance);
-  // Requested facts, contextual meaning, action intent and ambiguity belong
-  // to the one grounded LLM decision. Pre-retrieval code accepts only explicit
-  // caller/API signals and never guesses from fixed language or business words.
-  const requestedFacts = unique([...(input.requestedFacts ?? [])]);
-  const contextualReferences = unique([...(input.contextualReferences ?? [])]);
-  const preparedInput = enrichedInput(input, requestedFacts, contextualReferences);
+  const initialInput = enrichedInput(
+    input,
+    unique([...(input.requestedFacts ?? [])]),
+    unique([...(input.contextualReferences ?? [])]),
+  );
   const resolve = dependencies.resolve ?? resolvePublishedEntityRoute;
+  const understand = dependencies.understand ?? understandContextualKnowledgeQuery;
   const classify = dependencies.classify ?? classifyKnowledgeQuery;
-  const resolution = await resolve(preparedInput, publicationBundles, {
+  const initialResolution = await resolve(initialInput, publicationBundles, {
     semanticMatches: options.semanticMatches ?? [],
+  });
+  const understanding = await understand(initialInput, initialResolution);
+  const preparedInput = enrichedInput(
+    input, understanding.requestedFacts, understanding.contextualReferences, understanding,
+  );
+  const resolution = Object.freeze({
+    ...initialResolution,
+    contextDependent: understanding.contextDependent === true,
+    contextualEntity: understanding.contextDependent ? understanding.canonicalContext : null,
   });
   const classification = await classify(preparedInput, resolution);
   const priorityIntent = [
@@ -57,9 +68,10 @@ export async function prepareKnowledgeQuery(input, publicationBundles, options =
     requestedFact: preparedInput.requestedFact,
     requestedFacts: preparedInput.requestedFacts,
     contextualReferences: preparedInput.contextualReferences,
+    understanding,
     intentClass: classification.intentClass,
     priorityIntent,
-    usesCallMemory: resolution.contextDependent === true,
+    usesCallMemory: understanding.contextDependent === true,
     resolution,
     classification,
   });

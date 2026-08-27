@@ -563,7 +563,11 @@ function rememberedContextCandidate(input) {
   return recordId ? { recordId, recordType: 'CATALOG_ITEM' } : null;
 }
 
-function reservedResolutionCandidates(input, classification, resolution) {
+function reservedResolutionCandidates(input, classification, resolution, retrieval) {
+  const contextReserved = (retrieval?.queryContext?.reservedRecords ?? []).map((candidate) => ({
+    recordId: normalizeId(candidate.recordId),
+    recordType: String(candidate.recordType ?? '').toUpperCase(),
+  })).filter((candidate) => candidate.recordId && candidate.recordType);
   if (classification?.intentClass === knowledgeQueryClasses.COMPARISON_COMPLEX) {
     const candidates = resolution?.namespaceCandidates?.CATALOG
       ?? resolution?.routingCandidates ?? [];
@@ -586,12 +590,16 @@ function reservedResolutionCandidates(input, classification, resolution) {
       recordId: normalizeId(candidate.recordId),
       recordType: String(candidate.recordType).toUpperCase(),
     })).filter((candidate) => candidate.recordId);
-    return [...new Map(selected.map((candidate) => [recordKey(candidate), candidate])).values()];
+    return [...new Map([...contextReserved, ...selected]
+      .map((candidate) => [recordKey(candidate), candidate])).values()];
   }
   const candidate = resolution?.candidate;
   if (candidate?.explicit !== true) {
     const remembered = rememberedContextCandidate(input);
-    return remembered ? [remembered] : [];
+    return [...new Map([
+      ...contextReserved,
+      ...(remembered ? [remembered] : []),
+    ].map((value) => [recordKey(value), value])).values()];
   }
   // A category anchor hydrates its current children in the same SQL record;
   // only the canonical anchor must occupy a reserved RRF slot.
@@ -694,7 +702,7 @@ export async function rankAndHydrateAuthoritativeEvidence({
   if (!['inbound', 'outbound'].includes(input.usageDirection)) {
     throw new TypeError('Authoritative hydration requires inbound or outbound usage direction');
   }
-  const reservedCandidates = reservedResolutionCandidates(input, classification, resolution);
+  const reservedCandidates = reservedResolutionCandidates(input, classification, resolution, retrieval);
   const reservedRecordIds = reservedCandidates.map((candidate) => candidate.recordId);
   const reservedRecordKeys = reservedCandidates.map(recordKey);
   const resolvedCategoryKey = resolution?.candidate?.entityType === 'CATEGORY'

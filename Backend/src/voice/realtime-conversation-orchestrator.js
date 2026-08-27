@@ -1928,6 +1928,8 @@ export class RealtimeConversationOrchestrator {
       resolvedCurrentEntity: llmEvidenceBundle.canonicalEntity,
       requestedFact: llmEvidenceBundle.requestedFact,
       requestedFacts: llmEvidenceBundle.requestedFacts,
+      queryUnderstanding: llmEvidenceBundle.queryUnderstanding,
+      canonicalMemoryResolution: llmEvidenceBundle.canonicalMemoryResolution,
     }) : compactIsolatedCallMemory({
       ...liveMemory, collectedInformation: collectedData,
     }, 900);
@@ -1946,7 +1948,7 @@ export class RealtimeConversationOrchestrator {
       collectedInformation: collectedData,
     };
     const voiceHistoryLimit = Math.min(env.VOICE_LLM_MAX_HISTORY_MESSAGES, 4);
-    const combinedHistory = llmEvidenceBundle ? promptHistory : [
+    const combinedHistory = llmEvidenceBundle ? [] : [
       ...(this.previousConversationMemory?.recentMessages ?? []), ...promptHistory,
     ];
     this.#recordLiveMemoryTiming('prompt_context', memoryPromptStartedAt);
@@ -1963,16 +1965,9 @@ export class RealtimeConversationOrchestrator {
       ),
       knowledge: promptKnowledge,
       context: llmEvidenceBundle ? {
-        callId: this.call.id,
-        direction: this.call.direction,
-        liveCallMemory: compactLiveMemory,
+        groundedDecisionInput: llmEvidenceBundle.decisionInput,
         configuredInformationFields: configuredFields,
-        authorizedToolSchemas: groundingRuntime.toolSchemas,
-        latestCallerUtterance: llmEvidenceBundle.latestQuestion,
-        relevantCallMemory: llmEvidenceBundle.callMemory,
-        canonicalEntity: llmEvidenceBundle.canonicalEntity,
-        requestedFact: llmEvidenceBundle.requestedFact,
-        permittedSourceMap: llmEvidenceBundle.sourceMap,
+        configuredToolSchemas: groundingRuntime.toolSchemas,
         groundedResponseMode: true,
         compactGrounding: true,
         ...context,
@@ -2109,8 +2104,14 @@ export class RealtimeConversationOrchestrator {
           clarificationRecovery: configuredClarificationRecovery(
             this.runtimeProfile, knowledge,
           ),
+          clarificationContext: llmEvidenceBundle?.decisionInput ? {
+            requestedFact: llmEvidenceBundle.decisionInput.requestedFact,
+            canonicalMemory: llmEvidenceBundle.decisionInput.canonicalMemory,
+            ambiguityCandidates: llmEvidenceBundle.decisionInput.ambiguityCandidates,
+            hydratedRecordCount: llmEvidenceBundle.decisionInput.hydratedRecords?.length ?? 0,
+          } : null,
         });
-      const grounded = unifiedTurn.valid
+      let grounded = unifiedTurn.valid
         ? {
           ...unifiedTurn,
           valid: true,
@@ -2121,6 +2122,36 @@ export class RealtimeConversationOrchestrator {
           pendingQuestionRelevant: unifiedTurn.stateUpdate?.pendingQuestionRelevant ?? true,
         }
         : unifiedTurn;
+      if (grounded.valid && llmEvidenceBundle?.canonicalMemoryResolution
+        && this.liveCallMemory?.applyCanonicalTopicResolution) {
+        const canonicalApplied = this.liveCallMemory.applyCanonicalTopicResolution(
+          llmEvidenceBundle.canonicalMemoryResolution,
+          { turnToken: streaming.epoch },
+        );
+        if (canonicalApplied?.stale) {
+          return { cancelled: true, text: '', toolCalls: [], sources: [] };
+        }
+        if (canonicalApplied?.applied) {
+          grounded = {
+            ...grounded,
+            state: canonicalApplied.state,
+            currentTopic: canonicalApplied.state?.currentTopic ?? grounded.currentTopic,
+            selectedEntityKeys: (canonicalApplied.state?.knownEntities ?? [])
+              .map((entity) => entity.key ?? entity.id).filter(Boolean),
+          };
+          this.log.info({
+            stage: 'memory.canonical_topic_committed',
+            callId: this.call.id,
+            turnEpoch: streaming.epoch,
+            mode: canonicalApplied.mode,
+            activeRecordId: canonicalApplied.state?.activeEntity?.id
+              ?? canonicalApplied.state?.activeCategory?.id ?? null,
+            comparisonRecordIds: (canonicalApplied.state?.comparisonEntities ?? [])
+              .map((entity) => entity.id).filter(Boolean),
+          }, 'Validated PostgreSQL-backed topic state was committed');
+        }
+      }
+
       const groundingMetric = {
         valid: grounded.valid, reason: grounded.reason ?? null,
         decision: grounded.decision ?? null,

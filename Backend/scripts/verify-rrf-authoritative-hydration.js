@@ -128,6 +128,12 @@ const itemComparisonCandidate = candidate(ids[5], 7, 0.2);
 const comparisonRetrieval = {
   tenantId, agentId, callId,
   recordTypes: ['CATALOG_ITEM', 'CATALOG_CATEGORY'],
+  queryContext: {
+    reservedRecords: [
+      { recordId: ids[5], recordType: 'CATALOG_CATEGORY', reason: 'explicit_comparison' },
+      { recordId: ids[5], recordType: 'CATALOG_ITEM', reason: 'explicit_comparison' },
+    ],
+  },
   channels: {
     structured: [
       ...ids.slice(0, 5).map((recordId, index) => candidate(recordId, index + 1, 1)),

@@ -43,7 +43,7 @@ for (const required of [
   /candidate\.cancel\(reason\)/u,
   /audioEngine\?\.cancelStaleAudio\?\.\(reason\)/u,
   /cancelScheduler\(reason\)/u,
-  /finalizeVerifiedToolResults/u,
+  /finalizeConfiguredToolResults/u,
   /toolDecision\.type === knowledgeEngineDecisionTypes\.RESPONSE/u,
   /Verified tool response validation fallback/u,
 ]) assert.match(orchestrator, required);

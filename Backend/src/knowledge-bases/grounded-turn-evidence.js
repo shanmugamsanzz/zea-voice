@@ -2,8 +2,9 @@ import {
   rankAndHydrateAuthoritativeEvidence,
 } from '../knowledge-engine/authoritative-evidence.js';
 import { searchParallelHybridCandidates } from './parallel-hybrid-search.js';
+import { resolveCanonicalTopicMemory } from '../knowledge-engine/canonical-topic-memory.js';
 
-export const GROUNDED_TURN_EVIDENCE_VERSION = 1;
+export const GROUNDED_TURN_EVIDENCE_VERSION = 2;
 const maximumEvidenceRecords = 5;
 
 const namespaceRecordTypes = Object.freeze({
@@ -73,18 +74,49 @@ function compactValue(value, depth = 0) {
     .map(([key, entry]) => [clean(key, 100), compactValue(entry, depth + 1)])));
 }
 
-function compactMemory(input = {}) {
+function compactCanonicalMemory(input = {}, canonicalResolution = {}) {
   const memory = input.canonicalCallMemory ?? input.memory ?? {};
   return Object.freeze({
-    activeEntity: memory.activeEntity ?? null,
-    activeCategory: memory.activeCategory ?? null,
-    requestedFact: input.requestedFact ?? memory.requestedFact ?? null,
-    recentTurns: Object.freeze([...(input.recentRelevantTurns
-      ?? memory.recentConversation ?? memory.recentTurns ?? [])].slice(-4)),
-    pendingClarification: memory.pendingClarification ?? null,
-    activeTool: memory.activeTool ?? null,
+    activeEntity: canonicalResolution.activeEntity ?? null,
+    activeCategory: canonicalResolution.activeCategory ?? null,
+    comparisonEntities: Object.freeze([...(canonicalResolution.comparisonEntities ?? [])]
+      .slice(0, maximumEvidenceRecords)),
+    pendingClarification: compactValue(memory.pendingClarification),
+    activeTool: compactValue(memory.activeTool),
     collectedToolFields: Object.freeze({ ...(memory.collectedToolFields ?? {}) }),
   });
+}
+
+function compactRelevantTurns(input = {}) {
+  const memory = input.canonicalCallMemory ?? input.memory ?? {};
+  return Object.freeze([...(input.recentRelevantTurns
+    ?? memory.recentConversation ?? memory.recentTurns ?? [])].slice(-4)
+    .map((turn) => Object.freeze({
+      role: turn?.role === 'assistant' ? 'assistant' : 'user',
+      content: clean(turn?.content, 500),
+    })).filter((turn) => turn.content));
+}
+
+function ambiguityCandidates(input = {}, authoritative = {}) {
+  const candidates = [
+    ...(authoritative?.ambiguity?.candidates ?? []),
+    ...(input?.queryUnderstanding?.ambiguity?.candidates ?? []),
+  ];
+  const seen = new Set();
+  return Object.freeze(candidates.flatMap((candidate) => {
+    const recordId = clean(candidate?.recordId ?? candidate?.id, 160);
+    const name = clean(candidate?.name ?? candidate?.label, 240);
+    const recordType = clean(candidate?.recordType, 80).toUpperCase() || null;
+    const key = `${recordType ?? ''}:${recordId || name.toLocaleLowerCase()}`;
+    if ((!recordId && !name) || seen.has(key)) return [];
+    seen.add(key);
+    return [Object.freeze({
+      recordId: recordId || null,
+      recordType,
+      name: name || null,
+      score: Number.isFinite(Number(candidate?.score)) ? Number(candidate.score) : null,
+    })];
+  }).slice(0, maximumEvidenceRecords));
 }
 
 function compactEvidence(source, sourceId) {
@@ -168,38 +200,46 @@ export function buildGroundedLlmInput({
   if (hydrated.length > maximumEvidenceRecords) {
     throw new TypeError('Grounded LLM input cannot contain more than five hydrated records');
   }
-  const evidence = Object.freeze(hydrated.map((source, index) => (
-    compactEvidence(source, `source_${index + 1}`)
+  let callerSourceIndex = 0;
+  const hydratedRecords = Object.freeze(hydrated.map((source) => (
+    compactEvidence(source, source.callerFacing === true
+      ? `source_${callerSourceIndex += 1}` : null)
   )));
-  const sourceMap = Object.freeze(evidence.map((source) => Object.freeze({
-    sourceId: source.sourceId,
-    publishedEvidenceId: source.publishedEvidenceId,
-    recordId: source.recordId,
-    recordType: source.recordType,
-    ...source.provenance,
-  })));
-  const workflowAuthorization = applicableTools(hydrated, runtimeProfile);
-  const workflowIds = new Set(workflowAuthorization.map((entry) => entry.workflowEvidenceId));
-  const responseSourceIds = evidence.filter((source) => source.callerFacing)
-    .map((source) => source.sourceId);
-  const toolSourceIds = evidence.filter((source) => workflowIds.has(source.publishedEvidenceId))
-    .map((source) => source.sourceId);
+
+  const authorizedTools = applicableTools(hydrated, runtimeProfile);
+  const canonicalResolution = resolveCanonicalTopicMemory({
+    scope: {
+      tenantId: input.tenantId,
+      agentId: input.agentId,
+      callId: input.callId,
+    },
+    understanding: input.queryUnderstanding,
+    evidence: allHydrated,
+    memory: input.canonicalCallMemory ?? input.memory,
+  });
+  const requestedFact = clean(
+    input?.queryUnderstanding?.requestedFact
+      ?? input?.requestedFact
+      ?? input?.memory?.pendingClarification?.missingFactType,
+    160,
+  ) || null;
   return Object.freeze({
-    contractVersion: GROUNDED_TURN_EVIDENCE_VERSION,
     currentQuestion: clean(input?.latestQuestion ?? input?.utterance, 2_000),
-    memory: compactMemory(input),
-    evidence,
-    workflowAuthorization,
-    assignedToolSchemas: Object.freeze(workflowAuthorization.map((entry) => Object.freeze({
+    recentRelevantTurns: compactRelevantTurns(input),
+    canonicalMemory: compactCanonicalMemory(input, canonicalResolution),
+    hydratedRecords,
+    requestedFact,
+    ambiguityCandidates: ambiguityCandidates(input, authoritative),
+    workflowAuthorization: Object.freeze(authorizedTools.map((entry) => Object.freeze({
+      workflowEvidenceId: entry.workflowEvidenceId,
+      workflowRecordId: entry.workflowRecordId,
+      toolName: entry.toolName,
+    }))),
+    toolSchemas: Object.freeze(authorizedTools.map((entry) => Object.freeze({
       name: entry.toolName,
       authorizationEvidenceId: entry.workflowEvidenceId,
       inputSchema: entry.inputSchema,
     }))),
-    permittedSourceIds: Object.freeze({
-      response: Object.freeze(responseSourceIds),
-      tool: Object.freeze(toolSourceIds),
-    }),
-    sourceMap,
   });
 }
 

@@ -61,7 +61,17 @@ const purpose = record(5, 'conversation_node', {
   entity_aliases: ['tenant purpose phrase'],
   entity_metadata: { intentClass: 'KNOWN_INFORMATION' },
 });
-const bundle = buildPublicationIndexes(job, [first, second, safety, callControl, purpose]);
+const action = record(6, 'workflow_rule', {
+  question: 'tenant configured action', answer: 'Use assigned tenant tool.', content: 'Action guidance.',
+  entity_name: 'tenant configured action', entity_category: 'action',
+  entity_aliases: ['tenant action phrase'],
+  entity_metadata: {
+    conditions: { examples: ['tenant action phrase'], intentClass: 'ACTION_TOOL_REQUEST' },
+    actionType: 'configured_tool',
+    actionConfig: { actionKey: 'tenant_action', toolIdentifier: 'tenant_action' }, priority: 80,
+  },
+});
+const bundle = buildPublicationIndexes(job, [first, second, safety, callControl, purpose, action]);
 
 const memory = {
   activeEntity: { recordId: first.record_id, itemKey: 'nimbus', name: 'Nimbus plan' },
@@ -76,7 +86,22 @@ let prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
   requestedFacts: ['price'], contextualReferences: ['active published entity'],
 }), bundle);
 assert.equal(prepared.requestedFact, 'price');
-assert.equal(prepared.usesCallMemory, false);
+assert.equal(prepared.usesCallMemory, true);
+assert.equal(prepared.understanding.contextDependent, true);
+assert.equal(prepared.understanding.canonicalContext.recordId, first.record_id);
+assert.equal(prepared.understanding.requestedFact, 'price');
+assert.ok(prepared.contextualReferences.includes('active_entity'));
+assert.equal(prepared.classification.selectedNamespace, 'CATALOG');
+prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
+  tenantId, agentId, callId, utterance: 'unstructured contextual continuation', memory,
+}), bundle);
+assert.equal(prepared.understanding.contextDependent, true);
+assert.equal(prepared.understanding.requestedFact, null);
+assert.equal(prepared.understanding.requiresGroundedFactInterpretation, true);
+assert.equal(prepared.classification.intentClass, knowledgeQueryClasses.DETAILS_OR_PRICE);
+assert.equal(prepared.classification.source, 'contextual_call_memory');
+assert.equal(prepared.classification.selectedNamespace, 'CATALOG');
+
 assert.equal(prepared.classification.intentClass, knowledgeQueryClasses.DETAILS_OR_PRICE);
 assert.equal(prepared.resolution.candidate, null,
   'Call memory must not be misrepresented as an explicit current-turn entity match');
@@ -84,6 +109,9 @@ assert.equal(prepared.resolution.candidate, null,
 prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
   tenantId, agentId, callId, utterance: 'Cirrus', memory,
 }), bundle);
+assert.equal(prepared.understanding.contextDependent, false);
+assert.equal(prepared.understanding.explicitEntities[0].recordId, second.record_id);
+assert.equal(prepared.understanding.canonicalContext.recordId, second.record_id);
 assert.equal(prepared.resolution.candidate.itemKey, 'cirrus');
 assert.equal(prepared.resolution.explicitEntity, true);
 assert.equal(prepared.usesCallMemory, false);
@@ -91,6 +119,9 @@ assert.equal(prepared.usesCallMemory, false);
 prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
   tenantId, agentId, callId, utterance: 'Nimbus Cirrus', memory,
 }), bundle);
+assert.deepEqual(new Set(prepared.understanding.comparisonEntities.map((entity) => entity.recordId)),
+  new Set([first.record_id, second.record_id]));
+
 assert.equal(prepared.intentClass, knowledgeQueryClasses.COMPARISON_COMPLEX);
 assert.equal(prepared.classification.selectedNamespace, 'CATALOG');
 assert.deepEqual(new Set(prepared.resolution.routingCandidates.map((candidate) => candidate.itemKey)),
@@ -115,6 +146,13 @@ assert.equal(prepared.intentClass, knowledgeQueryClasses.CALL_CONTROL);
 assert.equal(prepared.priorityIntent, true);
 
 let classifyCalls = 0;
+prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
+  tenantId, agentId, callId, utterance: 'tenant action phrase', memory,
+}), bundle);
+assert.equal(prepared.intentClass, knowledgeQueryClasses.ACTION_TOOL_REQUEST);
+assert.equal(prepared.understanding.actionIntent.detected, true);
+assert.equal(prepared.understanding.actionIntent.source, 'published_workflow');
+
 await prepareKnowledgeQuery(createKnowledgeEngineInput({
   tenantId, agentId, callId, utterance: 'Nimbus', memory,
 }), bundle, {}, {

@@ -71,6 +71,7 @@ function prepared(utterance, options = {}) {
   const input = createKnowledgeEngineInput({
     tenantId, agentId, callId, utterance,
     memory: options.memory ?? {}, requestedFacts: options.requestedFacts ?? [],
+    queryUnderstanding: options.queryUnderstanding ?? null,
   });
   const resolution = resolvePublishedEntityRoute(input, bundle);
   const classification = classifyKnowledgeQuery(input, resolution);
@@ -79,13 +80,16 @@ function prepared(utterance, options = {}) {
 
 let embedCalls = 0;
 let searchCalls = 0;
+let embeddedText = null;
+let qdrantOptions = null;
 let startedChannels = [];
 const providers = {
   onChannelStart: (channel) => { startedChannels.push(channel); },
-  embed: async () => { embedCalls += 1; return [0.1, 0.2]; },
+  embed: async (text) => { embedCalls += 1; embeddedText = text; return [0.1, 0.2]; },
   search: async (_tenant, _vector, options) => {
     searchCalls += 1;
     assert.ok(options.recordTypes.length > 0);
+    qdrantOptions = options;
     return [
       {
         id: beta.record_id, score: 0.91,
@@ -216,6 +220,97 @@ retrieval = await retrieveTargetedCandidates({
 assert.ok(retrieval.channels.structured.some((candidate) => (
   candidate.recordId === alpha.record_id && candidate.matchMethod === 'call_memory_context'
 )), 'canonical call memory must enter retrieval before the LLM identifies the requested fact');
+request = prepared('contextual follow-up', {
+  memory: {
+    activeEntity: {
+      recordId: alpha.record_id, itemKey: 'alpha', name: 'Alpha option',
+    },
+  },
+  requestedFacts: ['approved_metric'],
+  queryUnderstanding: {
+    contextDependent: true,
+    canonicalContext: {
+      recordId: alpha.record_id, recordType: 'CATALOG_ITEM',
+      entityType: 'ITEM', name: 'Alpha option',
+    },
+    requestedFacts: ['approved_metric'],
+    explicitEntities: [],
+    explicitCategories: [],
+    comparisonEntities: [],
+  },
+});
+retrieval = await retrieveTargetedCandidates({
+  ...request, publicationBundles: bundle, sparseIndexes: [sparseIndex],
+}, providers);
+assert.equal(retrieval.queryContext.canonicalEntity.recordId, alpha.record_id);
+assert.equal(retrieval.queryContext.relevantNamespace, 'CATALOG');
+assert.deepEqual(retrieval.queryContext.filters, {
+  tenantId, agentId,
+  knowledgeBases: [{ id: knowledgeBaseId, publicationRevision: 7 }],
+  usageDirection: 'inbound', namespace: 'CATALOG',
+});
+assert.equal(retrieval.queryContext.reservedRecords[0].recordId, alpha.record_id);
+assert.equal(retrieval.channels.structured[0].recordId, alpha.record_id);
+assert.ok(retrieval.channels.bm25.some((candidate) => candidate.recordId === alpha.record_id));
+assert.match(embeddedText, /contextual follow-up Alpha option approved_metric/u);
+assert.equal(qdrantOptions.agentId, agentId);
+assert.deepEqual(qdrantOptions.knowledgeBases,
+  [{ id: knowledgeBaseId, publicationRevision: 7 }]);
+assert.equal(qdrantOptions.usageDirection, 'inbound');
+assert.deepEqual(new Set(qdrantOptions.recordTypes),
+  new Set(retrieval.recordTypes));
+
+request = prepared('alpha beta', {
+  queryUnderstanding: {
+    contextDependent: false,
+    canonicalContext: null,
+    requestedFacts: ['comparison'],
+    explicitEntities: [
+      { recordId: alpha.record_id, recordType: 'CATALOG_ITEM', entityType: 'ITEM', name: 'Alpha option' },
+      { recordId: beta.record_id, recordType: 'CATALOG_ITEM', entityType: 'ITEM', name: 'Beta option' },
+    ],
+    explicitCategories: [],
+    comparisonEntities: [
+      { recordId: alpha.record_id, recordType: 'CATALOG_ITEM', entityType: 'ITEM', name: 'Alpha option' },
+      { recordId: beta.record_id, recordType: 'CATALOG_ITEM', entityType: 'ITEM', name: 'Beta option' },
+    ],
+  },
+});
+retrieval = await retrieveTargetedCandidates({
+  ...request, publicationBundles: bundle, sparseIndexes: [sparseIndex],
+}, providers);
+assert.deepEqual(new Set(retrieval.queryContext.reservedRecords
+  .map((candidate) => candidate.recordId)), new Set([alpha.record_id, beta.record_id]));
+assert.deepEqual(new Set(retrieval.channels.structured.slice(0, 2)
+  .map((candidate) => candidate.recordId)), new Set([alpha.record_id, beta.record_id]));
+
+request = prepared('beta', {
+  memory: {
+    activeEntity: {
+      recordId: alpha.record_id, itemKey: 'alpha', name: 'Alpha option',
+    },
+  },
+  queryUnderstanding: {
+    contextDependent: false,
+    canonicalContext: {
+      recordId: beta.record_id, recordType: 'CATALOG_ITEM',
+      entityType: 'ITEM', name: 'Beta option',
+    },
+    requestedFacts: [],
+    explicitEntities: [
+      { recordId: beta.record_id, recordType: 'CATALOG_ITEM', entityType: 'ITEM', name: 'Beta option' },
+    ],
+    explicitCategories: [],
+    comparisonEntities: [],
+  },
+});
+retrieval = await retrieveTargetedCandidates({
+  ...request, publicationBundles: bundle, sparseIndexes: [sparseIndex],
+}, providers);
+assert.equal(retrieval.queryContext.canonicalEntity.recordId, beta.record_id);
+assert.equal(retrieval.queryContext.reservedRecords.length, 0,
+  'A latest explicit entity must not reserve stale canonical memory');
+assert.equal(retrieval.channels.structured[0].recordId, beta.record_id);
 
 request = prepared('Options');
 retrieval = await retrieveTargetedCandidates({

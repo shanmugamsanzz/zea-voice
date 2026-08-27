@@ -211,6 +211,7 @@ export function applyUnifiedGroundedTurn({
   finalizedUtterance = '',
   confirmationConfiguration = null,
   clarificationRecovery = null,
+  clarificationContext = null,
 } = {}) {
   if (!memory?.snapshot || !memory?.applyGroundedDecision || !memory?.restoreValidatedState) {
     throw new TypeError('A generic conversation memory instance is required');
@@ -232,6 +233,7 @@ export function applyUnifiedGroundedTurn({
     })),
     activeToolRequest: memory.snapshot().activeToolRequest,
     requiredEvidenceIds: requiredCatalogSource ? [requiredCatalogSource.id] : [],
+    clarificationContext,
   };
   const validatedDecision = validateGroundedLlmDecision(rawDecision, hydratedEnvelope, runtime);
   if (!validatedDecision.valid) {
@@ -414,7 +416,8 @@ export function applyUnifiedGroundedTurn({
   const selectedEntities = selectedEvidence.map((source) => catalogEntityFromEvidence(
     source, hydratedEnvelope.entities,
   )).filter(Boolean);
-  if (primaryEntities.length > 0
+  if (effectiveDecision.decision === 'answer'
+    && primaryEntities.length > 0
     && effectiveDecision.stateUpdate.contextDependent !== true
     && !effectiveDecision.responseId) {
     const primaryKeys = new Set(primaryEntities.map((entity) => identity(entity.key)));
@@ -426,7 +429,8 @@ export function applyUnifiedGroundedTurn({
   }
   const selectedCatalogContexts = catalogSources(selectedEvidence)
     .map((source) => source.retrievalContext).filter(Boolean);
-  if (selectedCatalogContexts.length > 0
+  if (effectiveDecision.decision === 'answer'
+    && selectedCatalogContexts.length > 0
     && effectiveDecision.stateUpdate.contextDependent !== true
     && !selectedCatalogContexts.includes('primary')) {
     return Object.freeze({
