@@ -24,6 +24,27 @@ const recoverableHydrationErrors = new Set([
   'KNOWLEDGE_COMPARISON_HYDRATION_INCOMPLETE',
 ]);
 
+export function assertNonEmptyGroundedPackage(authoritative = {}, llmInput = {}) {
+  const hydratedCallerFacing = (authoritative.evidence ?? []).filter((source) => (
+    source?.callerFacing === true
+    && source?.hydrationValidated === true
+    && source?.publicationValidated === true
+  ));
+  const packagedCallerFacing = (llmInput.hydratedRecords ?? []).filter((source) => (
+    source?.callerFacing === true
+  ));
+  if (!hydratedCallerFacing.length || packagedCallerFacing.length) {
+    return Object.freeze(packagedCallerFacing);
+  }
+  throw new AppError(503,
+    'Relevant caller-facing evidence was removed while building the grounded decision package',
+    'KNOWLEDGE_GROUNDED_PACKAGE_EMPTY', {
+      stage: 'grounded_evidence_packaging',
+      hydratedCallerFacingRecordIds: hydratedCallerFacing.map((source) => source.recordId),
+      hydratedCallerFacingEvidenceIds: hydratedCallerFacing.map((source) => source.id),
+    });
+}
+
 function clean(value, maximum = 4_000) {
   return String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
     .replace(/\s+/gu, ' ').trim().slice(0, maximum);
@@ -185,7 +206,9 @@ function normalDecision(prepared, evidence) {
   return createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.RESPONSE, {
     reason: 'single_grounded_llm_required',
     confidence: prepared.classification.confidence,
-    evidenceIds: callerFacing.map((source) => source.id),
+    evidenceIds: callerFacing
+      .map((source) => source.id ?? source.publishedEvidenceId)
+      .filter(Boolean),
     mode: knowledgeEngineResponseModes.GROUNDED_LLM,
   });
 }
@@ -221,9 +244,18 @@ export async function retrieveGroundedNormalTurn(auth, input, dependencies = {})
     });
     const publicationRevisions = revisions(artifacts.publications);
     const evidence = turn.authoritative.evidence;
-    const decision = priorityDecision(prepared, evidence) ?? normalDecision(prepared, evidence);
+    const packagedCallerFacing = assertNonEmptyGroundedPackage(
+      turn.authoritative, turn.llmInput,
+    );
+    const decision = priorityDecision(prepared, evidence)
+      ?? normalDecision(prepared, packagedCallerFacing);
     const llmEvidenceBundle = compactBundle(prepared, turn, publicationRevisions);
-    const sources = Object.freeze(evidence.filter((source) => source.callerFacing === true));
+    const packagedEvidenceIds = new Set(packagedCallerFacing
+      .map((source) => source.publishedEvidenceId)
+      .filter(Boolean));
+    const sources = Object.freeze(evidence.filter((source) => (
+      source.callerFacing === true && packagedEvidenceIds.has(source.id)
+    )));
     const authorizedWorkflowIds = new Set(turn.llmInput.workflowAuthorization
       .map((authorization) => authorization.workflowEvidenceId));
     const actionEvidence = Object.freeze(evidence
@@ -316,7 +348,7 @@ export async function retrieveGroundedNormalTurn(auth, input, dependencies = {})
         input.abortSignal?.aborted ? 'knowledge_cancelled' : (error.code ?? 'knowledge_engine_unavailable'),
       ),
       diagnostic: Object.freeze({
-        stage: 'grounded_normal_turn_unavailable',
+        stage: error.details?.stage ?? 'grounded_normal_turn_unavailable',
         errorCode: error.code ?? 'KNOWLEDGE_ENGINE_UNAVAILABLE',
         details: Object.freeze({ ...(error.details ?? {}), recovery }),
       }),

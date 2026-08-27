@@ -261,6 +261,16 @@ export function configuredEvidenceValidationFailureResponse(profile, knowledge =
   return configured && !isInternalRuntimeText(configured) ? configured : '';
 }
 
+export function configuredOperationalFailureResponse(
+  profile, knowledge = {}, { validation = false } = {},
+) {
+  if (validation) {
+    const validationResponse = configuredEvidenceValidationFailureResponse(profile, knowledge);
+    if (validationResponse) return validationResponse;
+  }
+  return configuredTechnicalFailureResponse(profile, knowledge);
+}
+
 export function configuredLatencyAcknowledgementResponse(profile, knowledge = {}) {
   return resolveRuntimeMessage(profile, 'acknowledgement', knowledge);
 }
@@ -269,9 +279,12 @@ export function remainingLiveTurnBudgetMs(deadlineAt, reserveMs = 0, now = Date.
   return Math.max(0, Math.floor(Number(deadlineAt) - Number(now) - Math.max(0, reserveMs)));
 }
 
-function callerFacingText(value, profile, knowledge = {}) {
+function callerFacingText(
+  value, profile, knowledge = {}, { allowClarificationFallback = true } = {},
+) {
   const result = String(value ?? '').trim();
-  return !isInternalRuntimeText(result) ? result : callerFacingFallback(profile, knowledge);
+  if (!isInternalRuntimeText(result)) return result;
+  return allowClarificationFallback ? callerFacingFallback(profile, knowledge) : '';
 }
 
 export function canonicalToolArguments(toolCall = {}, tools = [], canonical = null) {
@@ -1728,11 +1741,19 @@ export class RealtimeConversationOrchestrator {
         {
           found: false, timedOut: true, sources: [], actionEvidence: [], guidanceEvidence: [], entities: [],
           decision: technicalClarificationDecision('knowledge_timeout'),
+          diagnostic: {
+            stage: 'knowledge_retrieval', errorCode: 'KNOWLEDGE_TIMEOUT', details: {},
+          },
         },
       ).catch((error) => ({
         found: false, error: error.code ?? 'TENANT_EVIDENCE_UNAVAILABLE',
         sources: [], actionEvidence: [], guidanceEvidence: [], entities: [],
         decision: technicalClarificationDecision(error.code ?? 'tenant_evidence_unavailable'),
+        diagnostic: {
+          stage: 'knowledge_retrieval',
+          errorCode: error.code ?? 'TENANT_EVIDENCE_UNAVAILABLE',
+          details: {},
+        },
       }));
       const parallelDurationMs = Math.round((performance.now() - startedAt) * 100) / 100;
       const first = tenantEvidence.sources?.[0];
@@ -2233,19 +2254,24 @@ export class RealtimeConversationOrchestrator {
           }, 'Structured decision was rejected and withheld from TTS pending one repair attempt');
         } else {
           this.runtimeMetrics.grounding.fallbacks += 1;
-          answer = configuredSafeFailureResponse(this.runtimeProfile, knowledge);
+          answer = configuredOperationalFailureResponse(
+            this.runtimeProfile, knowledge, { validation: true },
+          );
           sources.push(createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
-            label: 'Configured safe failure response', metadata: { reason: grounded.reason },
+            label: 'Configured evidence validation response',
+            metadata: { reason: grounded.reason, ambiguity: false },
           }));
           this.log.warn({
             stage: 'llm.grounding_rejected', callId: this.call.id, reason: grounded.reason,
-          }, 'LLM response was rejected before TTS; using the configured safe failure response');
+          }, 'LLM response was rejected before TTS; using the configured operational response');
         }
       }
       const clarificationSuppressed = grounded.valid
         && grounded.clarificationRecovery?.mode === 'suppressed';
       answer = clarificationSuppressed
-        ? '' : callerFacingText(answer, this.runtimeProfile, knowledge);
+        ? '' : callerFacingText(answer, this.runtimeProfile, knowledge, {
+          allowClarificationFallback: grounded.valid === true,
+        });
       if (grounded.valid
         && grounded.clarificationRecovery?.mode === 'configured_support') {
         sources.push(createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
@@ -2734,6 +2760,11 @@ export class RealtimeConversationOrchestrator {
         tenantEvidence: {
           found: false, sources: [], evidenceIds: [],
           decision: technicalClarificationDecision('knowledge_timeout'),
+          diagnostic: {
+            stage: 'knowledge_retrieval',
+            errorCode: 'VOICE_KNOWLEDGE_TURN_TIMEOUT',
+            details: {},
+          },
         },
       };
     }
@@ -2869,7 +2900,7 @@ export class RealtimeConversationOrchestrator {
     if (operationalKnowledgeFailure) {
       response = {
         cancelled: false,
-        text: configuredTechnicalFailureResponse(this.runtimeProfile, knowledge),
+        text: configuredOperationalFailureResponse(this.runtimeProfile, knowledge),
         toolCalls: [],
         sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
           label: 'Knowledge operational diagnostic',
@@ -2975,6 +3006,7 @@ export class RealtimeConversationOrchestrator {
         response = {
           cancelled: false,
           text: configuredTechnicalFailureResponse(this.runtimeProfile, knowledge),
+          operationalFailureReason: error.code ?? 'LLM_PROVIDER_FAILURE',
           toolCalls: [],
           sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
             label: 'LLM operational technical fallback', metadata: {
@@ -2990,7 +3022,9 @@ export class RealtimeConversationOrchestrator {
       // a specific, evidence-safe outcome for the completed validation instead.
       response = {
         ...response,
-        text: configuredEvidenceValidationFailureResponse(this.runtimeProfile, knowledge),
+        text: configuredOperationalFailureResponse(
+          this.runtimeProfile, knowledge, { validation: true },
+        ),
         sources: [
           ...(response.sources ?? []).filter((source) => source.type !== messageSourceTypes.RUNTIME_FALLBACK),
           createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
@@ -3095,10 +3129,24 @@ export class RealtimeConversationOrchestrator {
       return;
     }
     const generatedAnswer = String(response.text ?? '').trim();
+    const operationalFallback = response.groundingFailureReason
+      ? configuredOperationalFailureResponse(
+        this.runtimeProfile, knowledge, { validation: true },
+      )
+      : operationalKnowledgeFailure || response.operationalFailureReason
+        ? configuredOperationalFailureResponse(this.runtimeProfile, knowledge)
+        : configuredSafeFailureResponse(this.runtimeProfile, knowledge);
     const rawAnswer = callerFacingText(
-      generatedAnswer || configuredSafeFailureResponse(this.runtimeProfile, knowledge),
+      generatedAnswer || operationalFallback,
       this.runtimeProfile,
       knowledge,
+      {
+        allowClarificationFallback: !(
+          response.groundingFailureReason
+          || operationalKnowledgeFailure
+          || response.operationalFailureReason
+        ),
+      },
     );
     const finalAnswer = rawAnswer;
     if (!finalAnswer) {

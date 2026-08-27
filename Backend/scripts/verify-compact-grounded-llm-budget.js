@@ -7,6 +7,7 @@ import {
 import {
   configuredSafeFailureResponse,
   configuredTechnicalFailureResponse,
+  configuredOperationalFailureResponse,
   llmOperationalFailureClass,
 } from '../src/voice/realtime-conversation-orchestrator.js';
 
@@ -98,6 +99,7 @@ assert.equal(llmOperationalFailureClass({ code: 'LLM_PROVIDER_UNAVAILABLE' }), '
 const operationalProfile = { agent: { settings: {
   knowledgeClarificationMessage: 'Please choose one published option.',
   technicalFailureMessage: 'The information service is temporarily unavailable.',
+  evidenceValidationFailureMessage: 'The published answer could not be validated.',
 } } };
 assert.equal(configuredSafeFailureResponse(operationalProfile),
   'Please choose one published option.');
@@ -106,6 +108,15 @@ assert.equal(configuredTechnicalFailureResponse(operationalProfile),
 assert.notEqual(configuredTechnicalFailureResponse(operationalProfile),
   configuredSafeFailureResponse(operationalProfile),
   'Operational failures must never use the generic ambiguity fallback');
+assert.equal(configuredOperationalFailureResponse(operationalProfile),
+  'The information service is temporarily unavailable.');
+assert.equal(configuredOperationalFailureResponse(
+  operationalProfile, {}, { validation: true },
+), 'The published answer could not be validated.');
+assert.notEqual(configuredOperationalFailureResponse(
+  operationalProfile, {}, { validation: true },
+), configuredSafeFailureResponse(operationalProfile),
+'Evidence validation failure must never use the ambiguity response');
 
 await session.close();
 console.log('Compact grounded LLM input, budgets and timeout separation verified.');

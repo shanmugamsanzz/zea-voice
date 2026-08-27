@@ -101,6 +101,12 @@ function relevantHydratedEvidence(sources, classification = {}, resolution = {},
     || (!namespace && Boolean(rememberedTool));
   const protocolTurn = ['SAFETY_EMERGENCY', 'CALL_CONTROL'].includes(intentClass);
   const understanding = input?.queryUnderstanding ?? {};
+  const currentRoute = understanding.explicitCurrentRoute
+    ?? understanding.currentRouteSignal
+    ?? null;
+  const currentRouteType = String(currentRoute?.recordType ?? '').toUpperCase();
+  const currentNonCatalogRequest = Boolean(currentRouteType)
+    && !['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(currentRouteType);
   const explicitCandidates = [
     ...(understanding.explicitEntities ?? []),
     ...(understanding.explicitCategories ?? []),
@@ -109,8 +115,9 @@ function relevantHydratedEvidence(sources, classification = {}, resolution = {},
     ...(resolution?.candidate?.explicit === true ? [resolution.candidate] : []),
   ];
   const selectedRecordIds = new Set([
-    resolution?.candidate?.recordId,
-    ...(resolution?.candidate?.evidenceRecordIds ?? []),
+    ...(resolution?.candidate?.explicit === true
+      ? [resolution.candidate.recordId, ...(resolution.candidate.evidenceRecordIds ?? [])]
+      : []),
     ...explicitCandidates.map((candidate) => candidate?.recordId),
   ].map(identity).filter(Boolean));
   const hasExplicitCurrentEntity = explicitCandidates.length > 0;
@@ -127,8 +134,19 @@ function relevantHydratedEvidence(sources, classification = {}, resolution = {},
   }
   const filtered = sources.filter((source) => {
     const recordType = String(source.recordType ?? '').toUpperCase();
+    const actionType = String(source.authoritativeData?.actionType ?? '').toLowerCase();
+    const callerFacingWorkflowResponse = recordType === 'WORKFLOW_RULE'
+      && source.callerFacing === true && actionType === 'respond';
     if (selectedRecordIds.has(identity(source.recordId))) return true;
+    if (callerFacingWorkflowResponse) return !hasExplicitCurrentEntity
+      || currentNonCatalogRequest;
     if (recordType === 'WORKFLOW_RULE') return actionTurn || protocolTurn;
+    if (currentNonCatalogRequest
+      && ['KNOWLEDGE_CHUNK', 'GENERAL_KNOWLEDGE'].includes(recordType)) {
+      return source.callerFacing === true;
+    }
+    if (currentNonCatalogRequest
+      && ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(recordType)) return false;
     if (selectedRecordIds.size > 0) return false;
     if (selectedTypes) return selectedTypes.has(recordType);
     if (intentClass === 'ACKNOWLEDGEMENT') {

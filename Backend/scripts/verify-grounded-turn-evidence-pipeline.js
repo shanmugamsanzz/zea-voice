@@ -182,7 +182,7 @@ const namespaceFiltered = buildGroundedLlmInput({
   classification: { intentClass: 'DETAILS_OR_PRICE' },
   resolution: {
     candidateNamespace: 'CATALOG',
-    candidate: { recordId: 'catalog-1', evidenceRecordIds: ['catalog-1'] },
+    candidate: { recordId: 'catalog-1', evidenceRecordIds: ['catalog-1'], explicit: true },
   },
   authoritative: {
     evidence: [
@@ -214,6 +214,53 @@ assert.deepEqual(namespaceFiltered.hydratedRecords.map((source) => source.record
   'An explicit Catalog turn must not send unrelated FAQ or Workflow evidence to the LLM');
 assert.deepEqual(namespaceFiltered.hydratedRecords.map((source) => source.recordId), ['catalog-1'],
   'An explicit Catalog turn must not send unrelated Catalog records to the LLM');
+
+const currentConcernEvidence = buildGroundedLlmInput({
+  input: {
+    ...input,
+    latestQuestion: 'A current tenant concern without a Catalog entity.',
+    queryUnderstanding: {
+      explicitEntities: [], explicitCategories: [], comparisonEntities: [],
+      contextDependent: false,
+      currentRouteSignal: { recordId: 'support-1', recordType: 'WORKFLOW_RULE' },
+    },
+    memory: {
+      ...input.memory,
+      activeTool: null,
+      activeEntity: { recordId: 'stale-catalog', key: 'stale-item', name: 'Stale Item' },
+    },
+  },
+  classification: { intentClass: 'KNOWN_INFORMATION' },
+  resolution: {
+    candidateNamespace: 'CATALOG', contextDependent: false,
+    candidate: { recordId: 'stale-catalog', recordType: 'CATALOG_ITEM', explicit: false },
+  },
+  authoritative: {
+    evidence: [
+      {
+        id: 'stale-source', recordId: 'stale-catalog', recordType: 'CATALOG_ITEM',
+        callerFacing: true, hydrationValidated: true, publicationValidated: true,
+        authoritativeData: { itemKey: 'stale-item', name: 'Stale Item' },
+      },
+      {
+        id: 'support-source', recordId: 'support-1', recordType: 'WORKFLOW_RULE',
+        callerFacing: true, hydrationValidated: true, publicationValidated: true,
+        authoritativeData: { actionType: 'respond', responseTemplate: 'Published support response.' },
+      },
+      {
+        id: 'general-source', recordId: 'general-1', recordType: 'KNOWLEDGE_CHUNK',
+        callerFacing: true, hydrationValidated: true, publicationValidated: true,
+        authoritativeData: { content: 'Published general support boundary.' },
+      },
+    ],
+  },
+  runtimeProfile: { tools: [] },
+});
+assert.deepEqual(currentConcernEvidence.hydratedRecords.map((source) => source.recordId),
+  ['support-1', 'general-1'],
+  'Current Workflow response and General Knowledge must replace stale Catalog evidence');
+assert.ok(currentConcernEvidence.hydratedRecords.every((source) => source.sourceId),
+  'Every caller-facing current-concern record must receive an LLM source ID');
 
 console.log(JSON.stringify({
   tasks: [4, 5, 6], passed: true,

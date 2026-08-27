@@ -136,6 +136,12 @@ function explicitCurrentRoute(resolution) {
   )) ?? null;
 }
 
+function currentNonCatalogSignal(resolution) {
+  return routeCandidates(resolution).find((candidate) => (
+    candidate?.explicit === true && boundedScore(candidate.score) >= 0.68
+  )) ?? null;
+}
+
 function activeMemoryEntity(memory = {}) {
   const entity = memory.activeEntity;
   if (entity && typeof entity === 'object') return Object.freeze({
@@ -215,12 +221,14 @@ export function understandContextualKnowledgeQuery(input, resolution) {
     input.memory?.pendingClarification?.missingFactType,
   ]);
   const route = explicitCurrentRoute(resolution);
+  const currentRouteSignal = route ?? currentNonCatalogSignal(resolution);
   const protocolRoute = protocolIntentClasses.has(
-    String(route?.intentClass ?? '').toLocaleUpperCase(),
+    String(currentRouteSignal?.intentClass ?? '').toLocaleUpperCase(),
   );
   const memoryEntity = activeMemoryEntity(input.memory);
   const hasCurrentEntitySignal = explicitCandidates.length > 0;
-  const contextDependent = !hasCurrentEntitySignal && !route && Boolean(
+  const hasCurrentNonCatalogSignal = Boolean(currentRouteSignal);
+  const contextDependent = !hasCurrentEntitySignal && !hasCurrentNonCatalogSignal && Boolean(
     memoryEntity || input.memory?.pendingClarification || input.memory?.activeTool,
   );
   const contextualReferences = unique([
@@ -261,6 +269,7 @@ export function understandContextualKnowledgeQuery(input, resolution) {
     contextDependent,
     canonicalContext,
     explicitCurrentRoute: route ? candidateSummary(route) : null,
+    currentRouteSignal: currentRouteSignal ? candidateSummary(currentRouteSignal) : null,
     protocolPriority: protocolRoute,
   });
 }

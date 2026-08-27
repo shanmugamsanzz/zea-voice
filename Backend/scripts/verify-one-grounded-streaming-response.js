@@ -88,7 +88,7 @@ assert.match(orchestratorSource, /activeGroundedTurnEpochs\.size\s*>\s*0/u,
 assert.match(orchestratorSource, /acknowledgementEnabled:\s*acknowledgementEligible/u,
   'Latency acknowledgement must be limited to evidence-backed response plans');
 assert.match(orchestratorSource,
-  /latencyAcknowledged\s*&&\s*response\.groundingFailureReason[\s\S]+configuredEvidenceValidationFailureResponse/u,
+  /latencyAcknowledged\s*&&\s*response\.groundingFailureReason[\s\S]+configuredOperationalFailureResponse/u,
   'A latency acknowledgement must not be followed by a generic clarification');
 assert.ok(orchestratorSource.indexOf('if (response.cancelled || epoch !== this.epoch')
   < orchestratorSource.indexOf('sentencePipeline.enqueue(finalAnswer)'),
