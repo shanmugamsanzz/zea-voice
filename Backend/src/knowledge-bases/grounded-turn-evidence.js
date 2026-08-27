@@ -91,27 +91,29 @@ export function assertCompleteAuthoritativeHydration(authoritative, input, class
     });
 }
 
-function relevantHydratedEvidence(sources, classification = {}, resolution = {}, input = {}) {
+function relevantHydratedEvidence(
+  sources, classification = {}, resolution = {}, input = {}, authoritative = {},
+) {
   const intentClass = String(classification.intentClass ?? '').trim().toUpperCase();
-  const namespace = String(resolution.candidateNamespace ?? '').trim().toUpperCase();
+  const understanding = input?.queryUnderstanding ?? {};
+  const namespace = intendedNamespace(classification, resolution, understanding);
   const selectedTypes = namespaceRecordTypes[namespace]
     ?? (catalogIntentClasses.has(intentClass) ? namespaceRecordTypes.CATALOG : null);
   const rememberedTool = input?.memory?.activeTool ?? input?.canonicalCallMemory?.activeTool;
   const actionTurn = intentClass === 'ACTION_TOOL_REQUEST'
     || (!namespace && Boolean(rememberedTool));
   const protocolTurn = ['SAFETY_EMERGENCY', 'CALL_CONTROL'].includes(intentClass);
-  const understanding = input?.queryUnderstanding ?? {};
   const currentRoute = understanding.explicitCurrentRoute
     ?? understanding.currentRouteSignal
     ?? null;
-  const currentRouteType = String(currentRoute?.recordType ?? '').toUpperCase();
+  const authoritativeCurrentRoute = authoritativeRoute(understanding, currentRoute);
+  const currentRouteType = String(authoritativeCurrentRoute?.recordType ?? '').toUpperCase();
   const currentNonCatalogRequest = Boolean(currentRouteType)
     && !['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(currentRouteType);
   const explicitCandidates = [
     ...(understanding.explicitEntities ?? []),
     ...(understanding.explicitCategories ?? []),
     ...(understanding.comparisonEntities ?? []),
-    ...(resolution?.routingCandidates ?? []).filter((candidate) => candidate.explicit === true),
     ...(resolution?.candidate?.explicit === true ? [resolution.candidate] : []),
   ];
   const selectedRecordIds = new Set([
@@ -119,6 +121,8 @@ function relevantHydratedEvidence(sources, classification = {}, resolution = {},
       ? [resolution.candidate.recordId, ...(resolution.candidate.evidenceRecordIds ?? [])]
       : []),
     ...explicitCandidates.map((candidate) => candidate?.recordId),
+    ...requiredReservations(authoritative).map((candidate) => candidate.recordId),
+    authoritativeCurrentRoute?.recordId,
   ].map(identity).filter(Boolean));
   const hasExplicitCurrentEntity = explicitCandidates.length > 0;
   const contextDependent = understanding.contextDependent === true
@@ -147,6 +151,8 @@ function relevantHydratedEvidence(sources, classification = {}, resolution = {},
     }
     if (currentNonCatalogRequest
       && ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(recordType)) return false;
+    if (intentClass === 'CATEGORY_OVERVIEW'
+      && recordType === 'CATALOG_CATEGORY' && source.callerFacing === true) return true;
     if (selectedRecordIds.size > 0) return false;
     if (selectedTypes) return selectedTypes.has(recordType);
     if (intentClass === 'ACKNOWLEDGEMENT') {
@@ -171,6 +177,82 @@ function clean(value, maximum = 2_000) {
 
 function identity(value) {
   return clean(value, 240).toLocaleLowerCase();
+}
+
+function namespaceForRecordType(value) {
+  const recordType = clean(value, 80).toUpperCase();
+  if (['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(recordType)) return 'CATALOG';
+  if (recordType === 'FAQ') return 'FAQ';
+  if (recordType === 'CONVERSATION_NODE') return 'CONVERSATION';
+  if (recordType === 'WORKFLOW_RULE') return 'WORKFLOW';
+  if (['KNOWLEDGE_CHUNK', 'GENERAL_KNOWLEDGE'].includes(recordType)) return 'GENERAL';
+  return null;
+}
+
+function authoritativeRoute(understanding = {}, route = null) {
+  if (!route?.recordId || !route?.recordType) return null;
+  if (route === understanding.explicitCurrentRoute) return route;
+  if (route.explicit === true && Number(route.score ?? 0) >= 0.88) return route;
+  // A prevalidated route may omit scoring metadata in internal callers. A
+  // scored medium route is never promoted by this compatibility branch.
+  if (route.explicit === undefined && route.score === undefined) return route;
+  return null;
+}
+
+function intendedNamespace(classification = {}, resolution = {}, understanding = {}) {
+  if ((understanding.explicitEntities?.length ?? 0) > 0
+    || (understanding.explicitCategories?.length ?? 0) > 0
+    || (understanding.comparisonEntities?.length ?? 0) > 0) return 'CATALOG';
+  const currentRoute = understanding.explicitCurrentRoute
+    ?? understanding.currentRouteSignal ?? null;
+  const authoritativeCurrentRoute = authoritativeRoute(understanding, currentRoute);
+  const explicitNamespace = namespaceForRecordType(authoritativeCurrentRoute?.recordType);
+  if (explicitNamespace) return explicitNamespace;
+  const intentClass = clean(classification.intentClass, 80).toUpperCase();
+  if (catalogIntentClasses.has(intentClass)) return 'CATALOG';
+  if (['ACTION_TOOL_REQUEST', 'SAFETY_EMERGENCY', 'CALL_CONTROL'].includes(intentClass)) {
+    return 'WORKFLOW';
+  }
+  // A weak resolver namespace is not sufficient to discard evidence from the
+  // other independently searched namespaces. The grounded decision receives
+  // the fused caller-facing candidates and may clarify genuine ambiguity.
+  return null;
+}
+
+function reservationKey(value) {
+  const recordId = identity(value?.recordId ?? value?.id);
+  const recordType = clean(value?.recordType, 80).toUpperCase();
+  return recordId && recordType ? `${recordType}:${recordId}` : null;
+}
+
+function requiredReservations(authoritative = {}) {
+  const requiredReasons = new Set([
+    'explicit_current_entity', 'explicit_entity', 'explicit_comparison',
+    'canonical_memory', 'published_overview',
+  ]);
+  return (authoritative.reservations ?? []).filter((entry) => (
+    requiredReasons.has(entry.reason)
+  ));
+}
+
+function assertRequiredEvidenceInvariant(authoritative, hydratedRecords = null) {
+  const required = requiredReservations(authoritative);
+  if (!required.length) return;
+  const available = new Set((hydratedRecords ?? authoritative?.evidence ?? [])
+    .map(reservationKey).filter(Boolean));
+  const missing = required.filter((entry) => !available.has(reservationKey(entry)));
+  if (!missing.length) return;
+  const rememberedMissing = missing.some((entry) => entry.reason === 'canonical_memory');
+  throw new AppError(503, rememberedMissing
+    ? 'The canonical call-memory record could not be hydrated from the active PostgreSQL publication'
+    : 'A required current-request record disappeared from grounded evidence',
+  rememberedMissing ? 'KNOWLEDGE_CONTEXT_RECORD_NOT_HYDRATED'
+    : 'KNOWLEDGE_REQUIRED_EVIDENCE_NOT_PACKAGED', {
+    stage: hydratedRecords ? 'grounded_evidence_packaging' : 'authoritative_hydration',
+    missingRecords: missing.map((entry) => ({
+      recordId: entry.recordId, recordType: entry.recordType, reason: entry.reason,
+    })),
+  });
 }
 
 function object(value) {
@@ -311,8 +393,9 @@ export function buildGroundedLlmInput({
     source.hydrationValidated === true && source.publicationValidated === true
   ));
   const hydrated = relevantHydratedEvidence(
-    allHydrated, classification, resolution, input,
+    allHydrated, classification, resolution, input, authoritative,
   ).slice(0, maximumEvidenceRecords);
+  assertRequiredEvidenceInvariant(authoritative, hydrated);
   if (hydrated.length > maximumEvidenceRecords) {
     throw new TypeError('Grounded LLM input cannot contain more than five hydrated records');
   }
@@ -385,6 +468,7 @@ export async function retrieveRankHydrateGroundedTurn({
     throw new TypeError('Grounded turn performed more than one PostgreSQL hydration query');
   }
   assertCompleteAuthoritativeHydration(authoritative, input, classification);
+  assertRequiredEvidenceInvariant(authoritative);
   const llmInput = buildGroundedLlmInput({
     input, classification, resolution, authoritative, runtimeProfile,
   });

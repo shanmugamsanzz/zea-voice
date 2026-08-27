@@ -554,14 +554,15 @@ function rememberedContextCandidate(input) {
   // retaining the call's canonical topic in the evidence package. The
   // remembered record is only a reserved context candidate; an explicit
   // current-turn entity still takes priority in reservedResolutionCandidates.
-  const activeCategory = input?.memory?.activeCategory;
-  if (activeCategory) {
-    const recordId = normalizeId(activeCategory.recordId ?? activeCategory.id);
-    if (recordId) return { recordId, recordType: 'CATALOG_CATEGORY' };
-  }
-  const activeEntity = input?.memory?.activeEntity;
+  const memory = input?.canonicalCallMemory ?? input?.memory ?? {};
+  const activeEntity = memory.activeEntity
+    ?? ((memory.knownEntities ?? []).length === 1 ? memory.knownEntities[0] : null);
   const recordId = normalizeId(activeEntity?.recordId ?? activeEntity?.id);
-  return recordId ? { recordId, recordType: 'CATALOG_ITEM' } : null;
+  if (recordId) return { recordId, recordType: 'CATALOG_ITEM' };
+  const activeCategory = memory.activeCategory;
+  const categoryRecordId = normalizeId(activeCategory?.recordId ?? activeCategory?.id);
+  return categoryRecordId
+    ? { recordId: categoryRecordId, recordType: 'CATALOG_CATEGORY' } : null;
 }
 
 function reservedResolutionCandidates(input, classification, resolution, retrieval) {
@@ -824,6 +825,13 @@ export async function rankAndHydrateAuthoritativeEvidence({
     ambiguity,
     conflict,
     rejectedRecordIds: Object.freeze(rejectedRecordIds),
+    reservations: Object.freeze((retrieval?.queryContext?.reservedRecords ?? []).map((entry) => (
+      Object.freeze({
+        recordId: String(entry.recordId),
+        recordType: String(entry.recordType).toUpperCase(),
+        reason: String(entry.reason ?? 'reserved'),
+      })
+    ))),
     comparisonCoverage: Object.freeze({
       requestedRecordIds: fusion.reservedRecordIds,
       requestedRecordKeys: fusion.reservedRecordKeys,

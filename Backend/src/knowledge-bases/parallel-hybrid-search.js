@@ -49,11 +49,14 @@ function requiredReservations(request) {
     : [];
   const contextDependent = understanding.contextDependent === true
     || resolution.contextDependent === true;
-  const remembered = explicit.length || !contextDependent ? [] : [
-    request.input?.memory?.activeCategory
-      ? compactReservation(request.input.memory.activeCategory, 'canonical_memory', 'CATALOG_CATEGORY')
-      : compactReservation(request.input?.memory?.activeEntity, 'canonical_memory'),
-  ].filter(Boolean);
+  const memory = request.input?.canonicalCallMemory ?? request.input?.memory ?? {};
+  const activeMemory = memory.activeEntity
+    ? compactReservation(memory.activeEntity, 'canonical_memory')
+    : compactReservation(memory.activeCategory, 'canonical_memory', 'CATALOG_CATEGORY');
+  const knownMemory = (memory.knownEntities ?? [])
+    .map((entry) => compactReservation(entry, 'canonical_memory')).filter(Boolean);
+  const remembered = explicit.length || !contextDependent ? []
+    : [activeMemory ?? (knownMemory.length === 1 ? knownMemory[0] : null)].filter(Boolean);
   const ordered = classification.intentClass === 'COMPARISON_COMPLEX'
     ? [...comparisons, ...explicit] : [...explicit, ...overview, ...comparisons, ...remembered];
   return Object.freeze([...new Map(ordered.map((entry) => (

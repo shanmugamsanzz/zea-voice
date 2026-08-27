@@ -95,6 +95,9 @@ function exactShape(value) {
 const decisionEnvelopeKeys = new Set([
   'answer', 'clarification', 'decision', 'evidenceIds', 'pendingQuestion',
   'responseId', 'stateUpdate', 'toolRequest',
+  // Compact provider contract. Runtime normalization converts these fields
+  // into the established internal envelope before semantic validation.
+  'toolName', 'toolArguments', 'clarificationReason',
   // Rolling-provider aliases. They are normalized into evidenceIds before
   // exact-shape validation and never escape the validator contract.
   'selectedEvidenceIds', 'evidenceSourceIds',
@@ -120,16 +123,35 @@ function normalizeDecisionEnvelope(value) {
   for (const key of compatibleTopLevelStateKeys) {
     if (value[key] !== undefined && stateUpdate[key] === undefined) stateUpdate[key] = value[key];
   }
+  const normalizedDecision = normalizeDecision(value.decision);
+  let compactToolRequest = null;
+  if (value.toolName !== undefined && value.toolName !== null) {
+    const toolName = text(value.toolName, 160);
+    if (!toolName || typeof value.toolArguments !== 'string') return null;
+    try {
+      const argumentsObject = JSON.parse(value.toolArguments);
+      if (!argumentsObject || typeof argumentsObject !== 'object' || Array.isArray(argumentsObject)) {
+        return null;
+      }
+      compactToolRequest = { name: toolName, arguments: argumentsObject };
+    } catch {
+      return null;
+    }
+  } else if (value.toolArguments !== undefined && value.toolArguments !== null) return null;
+  const compactClarificationReason = value.clarificationReason === undefined
+    || value.clarificationReason === null ? null : { reason: value.clarificationReason };
+  const compactClarificationQuestion = normalizedDecision === 'clarify'
+    && value.pendingQuestion === undefined ? value.answer : undefined;
   return {
     decision: value.decision,
-    answer: value.answer ?? '',
+    answer: compactClarificationQuestion === undefined ? (value.answer ?? '') : '',
     responseId: value.responseId ?? null,
     evidenceIds: value.evidenceIds ?? value.selectedEvidenceIds
       ?? value.evidenceSourceIds ?? [],
     stateUpdate,
-    pendingQuestion: value.pendingQuestion ?? null,
-    toolRequest: value.toolRequest ?? null,
-    clarification: value.clarification ?? null,
+    pendingQuestion: value.pendingQuestion ?? compactClarificationQuestion ?? null,
+    toolRequest: value.toolRequest ?? compactToolRequest,
+    clarification: value.clarification ?? compactClarificationReason,
   };
 }
 
@@ -363,17 +385,15 @@ export function groundedDecisionContract(envelope, runtime = {}) {
   return Object.freeze({
     format: 'json_object',
     exactFields: [
-      'decision', 'answer', 'responseId', 'evidenceIds', 'stateUpdate',
-      'pendingQuestion', 'toolRequest', 'clarification',
+      'decision', 'answer', 'responseId', 'evidenceIds', 'toolName',
+      'toolArguments', 'clarificationReason',
     ],
-    fieldOrder: [
-      'evidenceIds', 'responseId', 'stateUpdate', 'decision', 'answer',
-      'pendingQuestion', 'clarification', 'toolRequest',
-    ],
+    fieldOrder: ['decision', 'answer', 'evidenceIds', 'responseId', 'toolName',
+      'toolArguments', 'clarificationReason'],
     rules: [
       'Answer the latest caller question first.',
       'Return RESPONSE for grounded caller-facing speech, TOOL for one authorized action, or CLARIFY when evidence is genuinely weak or ambiguous.',
-      'Do not put question text in answer. Put at most one proposed clarification in pendingQuestion.',
+      'For CLARIFY, put one targeted caller-facing question in answer and set clarificationReason.',
       'Use TOOL only for one configured tool and never claim success before its verified result.',
       'Never request or collect a configured information field unless the caller explicitly requested the assigned action and the selected Workflow evidence authorizes that tool.',
       'Use only evidenceIds listed below for factual speech.',
@@ -383,12 +403,13 @@ export function groundedDecisionContract(envelope, runtime = {}) {
       'When a safety-sensitive request requires authorized human support, use only the configured tool authorized by selected Workflow evidence; otherwise give a grounded limitation without inventing an action.',
       'Set responseId only when selecting one exact caller-facing published response; otherwise use null.',
       'When multiple exact caller-facing responses are available, select by the meaning of the complete latest utterance together with the immediately pending question and each source situation/context. A short contextual answer resolves the pending question; do not reinterpret it as a presence check unless that is its complete meaning.',
-      'For CLARIFY, set clarification.reason and pendingQuestion. For RESPONSE or TOOL, clarification must be null.',
+      'For RESPONSE, toolName, toolArguments and clarificationReason must be null.',
+      'For TOOL, set toolName and toolArguments as a JSON-object string; clarificationReason must be null.',
+      'For CLARIFY, set clarificationReason; toolName and toolArguments must be null.',
       'Use missing_entity when a requested fact has no explicit or remembered canonical entity. Use missing_fact when an entity is known but the caller has not identified the fact needed.',
       'Use authoritative_ambiguity only when supplied ambiguityCandidates contain multiple genuinely close authoritative records; pendingQuestion must name the closest canonical candidates.',
-      'For an ordinary answer with no memory change, return stateUpdate as an empty object.',
       'Interpret the complete current question with only the supplied relevant call memory and published evidence.',
-      'Identify the requested fact, every explicit entity or category, every comparison entity, contextual references, and action intent. Put all resolved entity keys in knownEntityKeys and all requested facts in requestedFacts.',
+      'Interpret the requested fact, explicit entities, comparison entities, contextual references and action intent from the supplied input; do not echo internal interpretation state.',
       'If the latest question omits an entity but relevant call memory contains an active canonical entity or category, interpret contextual requested facts against that remembered record and select its permitted source.',
       'If a requested fact requires an entity and neither the latest question nor relevant call memory and evidence identify one, return a targeted CLARIFY question; never select an arbitrary evidence record.',
       'The latest explicit entity or category replaces a stale remembered topic. Use remembered entities only when the current question genuinely depends on context.',
@@ -397,7 +418,6 @@ export function groundedDecisionContract(envelope, runtime = {}) {
       'Use pendingClarification attemptCount, previousQuestions, candidateRecordIds and missingFactType as recovery context. Never repeat an earlier clarification verbatim; narrow the next question using remaining published candidates or the missing fact.',
       'Do not invent a support channel or support promise after unresolved attempts. Runtime may use only an explicitly tenant-configured clarification recovery response.',
       'For comparisons, cover every explicitly requested hydrated entity. Describe each difference with positively supported fields from its record. Do not infer that an item lacks something unless its selected evidence explicitly states that negative fact.',
-      'Resolve meaning generically in stateUpdate when useful: requestType, currentTopic, knownEntityKeys, requestedFacts, constraints, contextualReferences and contextDependent.',
       'Do not depend on exact caller wording or application-defined business vocabulary.',
     ],
     schema: {
@@ -405,21 +425,9 @@ export function groundedDecisionContract(envelope, runtime = {}) {
       answer: 'natural caller-facing speech with no question; empty only for TOOL',
       responseId: 'one exact caller-facing published response source ID or null',
       evidenceIds: ['approved source IDs'],
-      stateUpdate: {
-        currentTopic: 'optional topic', knownEntityKeys: ['approved entity keys'],
-        collectedInformation: Object.fromEntries(fields.map((field) => [field.key, `optional ${field.type}`])),
-        correctedFields: ['corrected collectedInformation keys'], language: 'optional language code',
-        pendingQuestionRelevant: 'optional boolean',
-        activeToolRequest: 'optional null or {name} for one configured tool whose fields are being collected',
-        requestType: 'optional generic snake_case request type',
-        requestedFacts: ['optional facts requested by the caller'],
-        constraints: ['optional caller constraints'],
-        contextualReferences: ['optional references such as this, that, it or the previous item'],
-        contextDependent: 'optional boolean; true only when recent context is required',
-      },
-      pendingQuestion: 'one proposed short question string or null; runtime speaks only configured text',
-      toolRequest: 'null or {name, arguments}',
-      clarification: 'null or {reason: missing_entity | missing_fact | authoritative_ambiguity | missing_evidence | conflicting_evidence | missing_required_information | ambiguous_request}',
+      toolName: 'configured tool name or null',
+      toolArguments: 'JSON-object string for TOOL or null',
+      clarificationReason: 'clarification reason or null',
     },
     allowedEvidenceIds: (envelope.sources ?? []).map((source) => source.id),
     exactCallerResponseSourceIds: envelope.exactCallerResponses ?? [],
@@ -429,32 +437,21 @@ export function groundedDecisionContract(envelope, runtime = {}) {
   });
 }
 
-function jsonSchemaType(type) {
-  if (type === 'integer' || type === 'number' || type === 'boolean') return type;
-  if (type === 'array' || type === 'object') return type;
-  return 'string';
-}
-
 export function groundedDecisionJsonSchema(envelope, runtime = {}) {
   const evidenceIds = (envelope.sources ?? []).map((source) => source.id).filter(Boolean);
-  const entityKeys = (envelope.entities ?? []).map((entity) => entity.key).filter(Boolean);
-  const fields = runtime.fieldSchemas ?? [];
   const tools = runtime.toolSchemas ?? [];
-  const collectedProperties = Object.fromEntries(fields.map((field) => [field.key, {
-    type: [jsonSchemaType(field.type), 'null'],
-  }]));
   const toolNames = tools.map((tool) => tool.name).filter(Boolean);
   const exactResponseIds = (envelope.exactCallerResponses ?? []).filter(Boolean);
   return Object.freeze({
     type: 'object',
     additionalProperties: false,
     required: [
-      'decision', 'answer', 'responseId', 'evidenceIds', 'stateUpdate',
-      'pendingQuestion', 'toolRequest', 'clarification',
+      'decision', 'answer', 'responseId', 'evidenceIds', 'toolName',
+      'toolArguments', 'clarificationReason',
     ],
     properties: {
       decision: { type: 'string', enum: [...externalDecisions] },
-      answer: { type: 'string', maxLength: maximumAnswerCharacters },
+      answer: { type: 'string' },
       responseId: exactResponseIds.length ? {
         anyOf: [
           { type: 'null' },
@@ -462,73 +459,27 @@ export function groundedDecisionJsonSchema(envelope, runtime = {}) {
         ],
       } : { type: 'null' },
       evidenceIds: {
-        type: 'array', uniqueItems: true, maxItems: maximumSources,
+        type: 'array',
         items: { type: 'string', ...(evidenceIds.length ? { enum: evidenceIds } : {}) },
       },
-      stateUpdate: {
-        type: 'object', additionalProperties: false,
-        properties: {
-          currentTopic: { type: ['string', 'null'] },
-          knownEntityKeys: {
-            type: 'array', uniqueItems: true, maxItems: maximumEntities,
-            items: { type: 'string', ...(entityKeys.length ? { enum: entityKeys } : {}) },
-          },
-          collectedInformation: {
-            type: 'object', additionalProperties: false, properties: collectedProperties,
-          },
-          correctedFields: {
-            type: 'array', uniqueItems: true,
-            items: { type: 'string', enum: fields.map((field) => field.key) },
-          },
-          language: { type: ['string', 'null'] },
-          pendingQuestionRelevant: { type: 'boolean' },
-          requestType: { type: ['string', 'null'], pattern: '^[a-z][a-z0-9_]{0,63}$' },
-          requestedFacts: {
-            type: 'array', uniqueItems: true, maxItems: 20,
-            items: { type: 'string', maxLength: 160 },
-          },
-          constraints: {
-            type: 'array', uniqueItems: true, maxItems: 20,
-            items: { type: 'string', maxLength: 160 },
-          },
-          contextualReferences: {
-            type: 'array', uniqueItems: true, maxItems: 20,
-            items: { type: 'string', maxLength: 160 },
-          },
-          contextDependent: { type: 'boolean' },
-          activeToolRequest: toolNames.length ? {
-            anyOf: [
-              { type: 'null' },
-              {
-                type: 'object', additionalProperties: false, required: ['name'],
-                properties: { name: { type: 'string', enum: toolNames } },
-              },
-            ],
-          } : { type: 'null' },
-        },
-      },
-      pendingQuestion: { type: ['string', 'null'], maxLength: 500 },
-      clarification: {
+      toolName: toolNames.length ? {
         anyOf: [
           { type: 'null' },
-          {
-            type: 'object', additionalProperties: false, required: ['reason'],
-            properties: { reason: { type: 'string', enum: [...clarificationReasons] } },
-          },
-        ],
-      },
-      toolRequest: toolNames.length ? {
-        anyOf: [
-          { type: 'null' },
-          {
-            type: 'object', additionalProperties: false, required: ['name', 'arguments'],
-            properties: {
-              name: { type: 'string', enum: toolNames },
-              arguments: { type: 'object' },
-            },
-          },
+          { type: 'string', enum: toolNames },
         ],
       } : { type: 'null' },
+      toolArguments: toolNames.length ? {
+        anyOf: [
+          { type: 'null' },
+          { type: 'string' },
+        ],
+      } : { type: 'null' },
+      clarificationReason: {
+        anyOf: [
+          { type: 'null' },
+          { type: 'string', enum: [...clarificationReasons] },
+        ],
+      },
     },
   });
 }

@@ -29,6 +29,34 @@ function safeToolName(tool, index) {
   return name || `tool_${index + 1}`;
 }
 
+const truncatedFinishReasons = new Set([
+  'length', 'max_tokens', 'max_output_tokens', 'max_tokens_reached', 'incomplete',
+]);
+
+export function assertGroundedStructuredCompletion(completion, output) {
+  const finishReason = String(completion?.finishReason ?? '').trim().toLocaleLowerCase();
+  if (completion?.type !== 'completed') {
+    throw new AppError(502, 'The grounded LLM stream ended without a completion event',
+      'LLM_STRUCTURED_OUTPUT_INCOMPLETE', { finishReason: finishReason || null });
+  }
+  if (truncatedFinishReasons.has(finishReason)) {
+    throw new AppError(502, 'The grounded LLM structured response was truncated',
+      'LLM_STRUCTURED_OUTPUT_TRUNCATED', { finishReason });
+  }
+  const serialized = String(output ?? '').trim();
+  if (!serialized) {
+    throw new AppError(502, 'The grounded LLM returned no structured response',
+      'LLM_STRUCTURED_OUTPUT_EMPTY', { finishReason: finishReason || null });
+  }
+  try {
+    const parsed = JSON.parse(serialized);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new TypeError();
+  } catch {
+    throw new AppError(502, 'The grounded LLM returned malformed JSON',
+      'LLM_STRUCTURED_OUTPUT_INVALID_JSON', { finishReason: finishReason || null });
+  }
+}
+
 function toolIdentifiers(tool, runtimeName) {
   const configuration = tool.configuration ?? {};
   return [...new Set([
@@ -177,7 +205,7 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
         : env.LLM_MAX_OUTPUT_TOKENS,
       ...(groundedResponseMode ? {
         responseFormat: {
-          type: 'json_schema', name: 'grounded_voice_decision', strict: false,
+          type: 'json_schema', name: 'grounded_voice_decision', strict: true,
           schema: groundedDecisionJsonSchema(groundingEnvelope, decisionRuntime),
         },
       } : {}),
@@ -199,6 +227,9 @@ export async function generateSelectedLlmResponse(runtimeProfile, input, depende
     completion = await collectCompletion(session.events);
   } finally {
     await session.close();
+  }
+  if (input.context?.groundedResponseMode === true) {
+    assertGroundedStructuredCompletion(completion, completion.answer);
   }
   return {
     answer: completion.answer,

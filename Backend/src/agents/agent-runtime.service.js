@@ -228,8 +228,16 @@ function compactGroundedContract(context = {}) {
       .map((record) => record?.sourceId).filter(Boolean).slice(0, 5),
     authorizedTools: (decisionInput.toolSchemas ?? [])
       .map((tool) => tool?.name).filter(Boolean).slice(0, 3),
-    toolRequest: 'Required for TOOL; null for RESPONSE or CLARIFY.',
-    rule: 'Return the provider JSON schema. Cite only selectedEvidenceIds. TOOL requires an authorized tool. CLARIFY requires one targeted question.',
+    fields: {
+      decision: 'RESPONSE | TOOL | CLARIFY',
+      answer: 'Caller-facing response or targeted clarification question.',
+      evidenceIds: 'Selected source IDs only.',
+      responseId: 'Exact published response ID or null.',
+      toolName: 'Authorized tool name or null.',
+      toolArguments: 'JSON-object string for TOOL or null.',
+      clarificationReason: 'Reason for CLARIFY or null.',
+    },
+    rule: 'Return only the provider JSON schema. TOOL requires an authorized tool. CLARIFY requires one targeted question. Do not emit memory or reasoning fields.',
   });
 }
 

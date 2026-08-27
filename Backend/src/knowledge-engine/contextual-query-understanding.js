@@ -106,7 +106,7 @@ function catalogCandidates(resolution) {
 function explicitCatalogCandidates(resolution) {
   return catalogCandidates(resolution).filter((candidate) => (
     candidate.explicit === true
-      && boundedScore(candidate.score) >= 0.68
+      && boundedScore(candidate.score) >= 0.88
       && explicitSignalPhrases(candidate).length > 0
   ));
 }
@@ -207,7 +207,11 @@ export function understandContextualKnowledgeQuery(input, resolution) {
     throw new TypeError('Contextual query understanding requires same-tenant resolution');
   }
   const explicitCandidates = explicitCatalogCandidates(resolution);
-  const mentionedCandidates = distinctMentionCandidates(explicitCandidates);
+  const mentionedCandidates = distinctMentionCandidates(catalogCandidates(resolution).filter((candidate) => (
+    candidate.explicit === true
+      && boundedScore(candidate.score) >= 0.68
+      && explicitSignalPhrases(candidate).length > 0
+  )));
   const explicitEntities = explicitCandidates.filter((candidate) => (
     String(candidate.entityType ?? '').toLocaleUpperCase() !== 'CATEGORY'
       && String(candidate.recordType ?? '').toLocaleUpperCase() !== 'CATALOG_CATEGORY'
@@ -238,9 +242,26 @@ export function understandContextualKnowledgeQuery(input, resolution) {
     ...(contextDependent && input.memory?.pendingClarification ? ['pending_clarification'] : []),
     ...(contextDependent && input.memory?.activeTool ? ['active_tool'] : []),
   ]);
-  const comparisonRequested = requestedFacts.map(normalized).includes('comparison');
+  const currentQuestion = normalized(input.latestQuestion ?? input.utterance);
+  const canonicalNameMentions = catalogCandidates(resolution).filter((candidate) => {
+    const label = normalized(candidateLabel(candidate));
+    return candidate.explicit === true && label && currentQuestion.includes(label);
+  });
+  const comparisonRequested = requestedFacts.map(normalized).includes('comparison')
+    || canonicalNameMentions.length > 1 || explicitCandidates.length > 1;
+  const comparisonTopScore = Math.max(0, ...mentionedCandidates.map((candidate) => (
+    boundedScore(candidate.score)
+  )));
+  const comparisonMentions = mentionedCandidates.filter((candidate) => (
+    boundedScore(candidate.score) >= comparisonTopScore - 0.08
+      || currentQuestion.includes(normalized(candidateLabel(candidate)))
+      || explicitSignalPhrases(candidate).some((phrase) => currentQuestion.includes(phrase))
+  ));
+  const comparisonPool = [...new Map([
+    ...comparisonMentions, ...canonicalNameMentions,
+  ].map((candidate) => [normalized(candidateIdentity(candidate)), candidate])).values()];
   const comparisonCandidates = comparisonRequested
-    ? (mentionedCandidates.length > 1 ? mentionedCandidates : explicitCandidates)
+    ? (comparisonPool.length > 1 ? comparisonPool : explicitCandidates)
     : [];
   const ambiguity = ambiguityFor(resolution, explicitCandidates);
   const actionIntent = actionUnderstanding(input, resolution);

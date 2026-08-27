@@ -7,7 +7,10 @@ import {
   isRepairableGroundedDecisionReason,
   validateGroundedLlmDecision,
 } from '../src/voice/interaction/grounded-llm-decision.js';
-import { createSelectedLlmStream } from '../src/voice/providers/llm/llm-response.service.js';
+import {
+  assertGroundedStructuredCompletion,
+  createSelectedLlmStream,
+} from '../src/voice/providers/llm/llm-response.service.js';
 
 const envelope = Object.freeze({
   found: true,
@@ -50,14 +53,68 @@ function decisionJson(value) {
 const contract = groundedDecisionContract(envelope, runtime);
 const jsonSchema = groundedDecisionJsonSchema(envelope, runtime);
 assert.deepEqual(contract.exactFields, [
-  'decision', 'answer', 'responseId', 'evidenceIds', 'stateUpdate',
-  'pendingQuestion', 'toolRequest', 'clarification',
+  'decision', 'answer', 'responseId', 'evidenceIds', 'toolName',
+  'toolArguments', 'clarificationReason',
 ]);
 assert.deepEqual(contract.allowedEvidenceIds, ['source_1', 'source_2']);
 assert.equal(contract.configuredToolSchemas[0].name, 'create_visit');
 assert.equal(jsonSchema.additionalProperties, false);
 assert.deepEqual(jsonSchema.required, contract.exactFields);
 assert.deepEqual(jsonSchema.properties.decision.enum.sort(), ['CLARIFY', 'RESPONSE', 'TOOL']);
+
+const compactResponse = validateGroundedLlmDecision(JSON.stringify({
+  decision: 'RESPONSE', answer: 'The office is on Central Road.',
+  responseId: null, evidenceIds: ['source_2'], toolName: null,
+  toolArguments: null, clarificationReason: null,
+}), envelope, runtime);
+assert.equal(compactResponse.valid, true);
+
+const compactClarification = validateGroundedLlmDecision(JSON.stringify({
+  decision: 'CLARIFY', answer: 'Which published service do you mean?',
+  responseId: null, evidenceIds: [], toolName: null,
+  toolArguments: null, clarificationReason: 'missing_entity',
+}), envelope, {
+  ...runtime, clarificationContext: { requestedFact: 'price', canonicalMemory: {} },
+});
+assert.equal(compactClarification.valid, true);
+assert.equal(compactClarification.pendingQuestion, 'Which published service do you mean?');
+
+const malformedCompactTool = validateGroundedLlmDecision(JSON.stringify({
+  decision: 'TOOL', answer: '', responseId: null, evidenceIds: [],
+  toolName: 'create_visit', toolArguments: '{', clarificationReason: null,
+}), envelope, runtime);
+assert.equal(malformedCompactTool.valid, false);
+assert.equal(malformedCompactTool.reason, 'invalid_response_shape');
+const compactTool = validateGroundedLlmDecision(JSON.stringify({
+  decision: 'TOOL', answer: '', responseId: null, evidenceIds: [],
+  toolName: 'create_visit',
+  toolArguments: JSON.stringify({ customer_name: 'Asha', visit_date: '2030-04-05' }),
+  clarificationReason: null,
+}), envelope, runtime);
+assert.equal(compactTool.valid, true);
+assert.equal(compactTool.toolRequest.name, 'create_visit');
+assert.deepEqual(compactTool.toolRequest.arguments, {
+  customer_name: 'Asha', visit_date: '2030-04-05',
+});
+assert.doesNotThrow(() => assertGroundedStructuredCompletion(
+  { type: 'completed', finishReason: 'stop' }, JSON.stringify({
+    decision: 'RESPONSE', answer: 'Grounded.', responseId: null,
+    evidenceIds: [], toolName: null, toolArguments: null,
+    clarificationReason: null,
+  }),
+));
+assert.throws(
+  () => assertGroundedStructuredCompletion({ type: 'completed', finishReason: 'length' }, '{}'),
+  (error) => error.code === 'LLM_STRUCTURED_OUTPUT_TRUNCATED',
+);
+assert.throws(
+  () => assertGroundedStructuredCompletion({ type: 'completed', finishReason: 'stop' }, '{'),
+  (error) => error.code === 'LLM_STRUCTURED_OUTPUT_INVALID_JSON',
+);
+assert.throws(
+  () => assertGroundedStructuredCompletion({ finishReason: 'stop' }, '{}'),
+  (error) => error.code === 'LLM_STRUCTURED_OUTPUT_INCOMPLETE',
+);
 
 const emptyStateOrdinaryAnswer = validateGroundedLlmDecision(decisionJson({
   decision: 'answer', answer: 'The office is on Central Road.', evidenceIds: ['source_2'],
@@ -502,9 +559,10 @@ assert.equal(providerRequests, 1);
 assert.deepEqual(providerInput.tools, []);
 assert.equal(providerInput.responseFormat.type, 'json_schema');
 assert.equal(providerInput.responseFormat.name, 'grounded_voice_decision');
+assert.equal(providerInput.responseFormat.strict, true);
 assert.equal(providerInput.responseFormat.schema.additionalProperties, false);
 assert.deepEqual(providerInput.responseFormat.schema.required, contract.exactFields);
-assert.match(providerInput.messages[0].content, /"toolRequest"/u);
+assert.match(providerInput.messages[0].content, /"toolArguments"/u);
 assert.match(providerInput.messages[0].content, /"create_visit"/u);
 assert.ok(providerInput.messages[0].content.length <= 12_000);
 assert.match(providerInput.messages[0].content, /<\/grounded_response_contract>/u);

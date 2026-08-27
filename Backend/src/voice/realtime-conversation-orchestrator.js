@@ -29,6 +29,7 @@ import { loadAgentRuntimeProfile } from './providers/provider-config.js';
 import { createRuntimeAdapters, providerAdapterRegistry } from './providers/registry.js';
 import { registerImplementedProviderAdapters } from './providers/defaults.js';
 import {
+  assertGroundedStructuredCompletion,
   createSelectedLlmStream, runtimeTools, selectedLlmPromptBudget,
 } from './providers/llm/llm-response.service.js';
 import { executeAgentTools } from './tools/tool-executor.service.js';
@@ -184,6 +185,7 @@ export function llmOperationalFailureClass(error) {
   if (code === 'LLM_PROVIDER_TIMEOUT' || code === 'VOICE_TURN_STAGE_TIMEOUT'
     || code === 'LLM_REQUEST_TIMEOUT') return 'timeout';
   if (code === 'LLM_GROUNDED_PROMPT_BUDGET_EXCEEDED') return 'prompt_budget';
+  if (code.startsWith('LLM_STRUCTURED_OUTPUT_')) return 'structured_output';
   return 'provider_failure';
 }
 
@@ -2106,6 +2108,7 @@ export class RealtimeConversationOrchestrator {
           });
         }
       }
+      assertGroundedStructuredCompletion(completion, text);
       if (toolCalls.length) {
         // Grounded mode deliberately exposes no provider-native tools. A raw
         // tool event is therefore a protocol violation, not an executable
@@ -3826,7 +3829,11 @@ export class RealtimeConversationOrchestrator {
   }
 
   async #handleInactivity() {
-    if (this.finalized || this.controller.state !== callStates.LISTENING) return;
+    // A previously queued timer may already be runnable when a new grounded
+    // turn clears it. Re-check the active turn at callback time so silence
+    // prompts cannot interrupt retrieval, LLM, validation or final TTS.
+    if (this.activeGroundedTurnEpochs.size > 0
+      || this.finalized || this.controller.state !== callStates.LISTENING) return;
     const action = await this.controller.handleSilence();
     if (action.action === 'close') return this.#close(action.reason);
     if (action.action !== 'inactivity_response') return;

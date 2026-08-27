@@ -141,6 +141,11 @@ export async function awaitLlmWithSafeLatency(work, {
   }
   const startedAt = tracker.now();
   const workPromise = Promise.resolve().then(() => work);
+  let workSettled = false;
+  workPromise.then(
+    () => { workSettled = true; },
+    () => { workSettled = true; },
+  );
   const acknowledgement = clean(acknowledgementText);
   if (acknowledgementEnabled !== true || !acknowledgement) {
     const deadline = completionDeadline(completionTimeoutMs, voiceTurnStages.LLM, cancel);
@@ -169,6 +174,14 @@ export async function awaitLlmWithSafeLatency(work, {
   if (first !== marker) {
     tracker.record(voiceTurnStages.LLM, tracker.now() - startedAt, { acknowledged: false });
     return Object.freeze({ value: first, acknowledged: false });
+  }
+  // The completion and soft-deadline callbacks can become runnable in the
+  // same event-loop turn. Do not play an acknowledgement once the final
+  // grounded decision has already settled.
+  if (workSettled) {
+    const value = await workPromise;
+    tracker.record(voiceTurnStages.LLM, tracker.now() - startedAt, { acknowledged: false });
+    return Object.freeze({ value, acknowledged: false });
   }
   tracker.markLatencyAcknowledgement();
   await onAcknowledgement?.(acknowledgement);

@@ -64,6 +64,20 @@ function compactEntity(value, fallbackRecordType = 'CATALOG_ITEM') {
   }) : null;
 }
 
+function canonicalMemoryEntity(input = {}) {
+  // Prefer the active typed record and only fall back to one unambiguous
+  // known record. Names without PostgreSQL IDs are not reservations.
+  const memory = input.canonicalCallMemory ?? input.memory ?? {};
+  const active = memory.activeEntity
+    ? compactEntity(memory.activeEntity, 'CATALOG_ITEM')
+    : compactEntity(memory.activeCategory, 'CATALOG_CATEGORY');
+  if (active?.recordId) return active;
+  const known = (memory.knownEntities ?? [])
+    .map((entry) => compactEntity(entry, 'CATALOG_ITEM'))
+    .filter((entry) => entry?.recordId);
+  return known.length === 1 ? known[0] : null;
+}
+
 function boundedScore(value) {
   const score = Number(value);
   return Number.isFinite(score) ? Math.max(0, score) : 0;
@@ -90,9 +104,7 @@ export function buildContextEnrichedRetrievalQuery(input, classification, resolu
   ].map(compactEntity).filter(Boolean);
   const comparisons = (understanding.comparisonEntities ?? [])
     .map(compactEntity).filter(Boolean).slice(0, 5);
-  const memoryEntity = input?.memory?.activeEntity
-    ? compactEntity(input.memory.activeEntity, 'CATALOG_ITEM')
-    : compactEntity(input?.memory?.activeCategory, 'CATALOG_CATEGORY');
+  const memoryEntity = canonicalMemoryEntity(input);
   const understoodContext = compactEntity(understanding.canonicalContext);
   const hasExplicitCurrentEntity = explicit.length > 0;
   const contextDependent = understanding.contextDependent === true
@@ -113,12 +125,12 @@ export function buildContextEnrichedRetrievalQuery(input, classification, resolu
   const reserved = [];
   for (const entity of explicit) {
     if (!entity.recordId) continue;
-    reserved.push(Object.freeze({ ...entity, reason: 'explicit_current_entity' }));
+    reserved.push(Object.freeze({ ...entity, reason: 'explicit_entity' }));
   }
   if (!explicit.length && resolution?.candidate?.explicit === true) {
     const resolved = compactEntity(resolution.candidate);
     if (resolved?.recordId) {
-      reserved.push(Object.freeze({ ...resolved, reason: 'explicit_current_entity' }));
+      reserved.push(Object.freeze({ ...resolved, reason: 'explicit_entity' }));
     }
   }
   if (!hasExplicitCurrentEntity && contextDependent && canonicalEntity?.recordId) {
@@ -146,6 +158,8 @@ export function buildContextEnrichedRetrievalQuery(input, classification, resolu
     relevantNamespace,
     comparisonEntities: Object.freeze(comparisons),
     contextDependent,
+    requiresCanonicalHydration: !hasExplicitCurrentEntity
+      && contextDependent && Boolean(canonicalEntity?.recordId),
     sparseText: searchText,
     semanticText: searchText,
     reservedRecords,
@@ -307,6 +321,17 @@ function structuredCandidates(resolution, recordScope, allowedTypes, limit) {
 }
 
 function activeCatalogCandidate(input, recordScope, allowedTypes) {
+  const active = input?.canonicalCallMemory?.activeEntity ?? input?.memory?.activeEntity;
+  if (active && allowedTypes.has('CATALOG_ITEM')) {
+    const recordId = normalizeId(active.recordId ?? active.id);
+    const direct = recordId ? recordScope.get(recordId) : null;
+    if (direct?.recordType === 'CATALOG_ITEM') return direct;
+    const itemKey = normalizeId(active.itemKey ?? active.key);
+    const matched = itemKey ? [...recordScope.values()].find((record) => (
+      record.recordType === 'CATALOG_ITEM' && normalizeId(record.itemKey) === itemKey
+    )) : null;
+    if (matched) return matched;
+  }
   const activeCategory = input?.memory?.activeCategory;
   if (activeCategory && allowedTypes.has('CATALOG_CATEGORY')) {
     const categoryKey = normalizeId(activeCategory.categoryKey ?? activeCategory.key);
@@ -325,16 +350,7 @@ function activeCatalogCandidate(input, recordScope, allowedTypes) {
       evidenceRecordIds: children.map((record) => record.recordId),
     };
   }
-  if (!allowedTypes.has('CATALOG_ITEM')) return null;
-  const active = input?.memory?.activeEntity;
-  if (!active) return null;
-  const recordId = normalizeId(active.recordId ?? active.id);
-  const direct = recordId ? recordScope.get(recordId) : null;
-  if (direct?.recordType === 'CATALOG_ITEM') return direct;
-  const itemKey = normalizeId(active.itemKey ?? active.key);
-  if (!itemKey) return null;
-  return [...recordScope.values()].find((record) => record.recordType === 'CATALOG_ITEM'
-    && normalizeId(record.itemKey) === itemKey) ?? null;
+  return null;
 }
 
 function activeWorkflowCandidate(input, recordScope, allowedTypes) {
