@@ -73,9 +73,14 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
       && nodeType === 'message'
       && evidence.exactCallerResponseEligible !== false;
     addSource(sources, sourceContents, evidence.content, {
-      publishedEvidenceId: text(evidence.id, 240) || null,
+      // `id` is the short source ID in compact normal-turn packages. Keep
+      // publication identity separate so source_1 can always be resolved
+      // back through the authoritative PostgreSQL record.
+      publishedEvidenceId: text(evidence.publishedEvidenceId ?? evidence.id, 240) || null,
       recordId: text(evidence.recordId, 100) || null,
       recordType: text(recordType, 40) || 'tenant_evidence',
+      tenantId: text(evidence.tenantId, 100) || null,
+      agentId: text(evidence.agentId, 100) || null,
       knowledgeBaseId: text(evidence.knowledgeBaseId, 100) || null,
       publicationRevision: Number(evidence.publicationRevision) || null,
       documentId: text(evidence.documentId, 100) || null,

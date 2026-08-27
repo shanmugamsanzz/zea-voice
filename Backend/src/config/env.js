@@ -185,8 +185,9 @@ const envSchema = z.object({
   LLM_MAX_HISTORY_MESSAGES: z.coerce.number().int().min(0).max(50).default(12),
   LLM_SYSTEM_PROMPT_MAX_CHARS: z.coerce.number().int().min(2000).max(100000).default(40000),
   // Unified voice turns reserve the structured contract and cap composition
-  // at 12k; legacy/non-voice callers may still explicitly configure more.
+  // before provider invocation; legacy/non-voice callers may configure more.
   VOICE_LLM_PROMPT_BUDGET_CHARS: z.coerce.number().int().min(4000).max(40000).default(8000),
+  VOICE_LLM_PROMPT_BUDGET_TOKENS: z.coerce.number().int().min(1000).max(32000).default(4000),
   VOICE_LLM_MAX_HISTORY_MESSAGES: z.coerce.number().int().min(0).max(20).default(4),
   // Used only when a streaming STT provider does not send its own speech-end
   // event.  It finalizes a complete caller turn after genuine quiet, never

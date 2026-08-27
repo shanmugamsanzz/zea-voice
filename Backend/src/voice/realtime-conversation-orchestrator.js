@@ -179,6 +179,14 @@ export function configuredTechnicalFailureResponse(profile, knowledge = {}) {
   return configured && !isInternalRuntimeText(configured) ? configured : '';
 }
 
+export function llmOperationalFailureClass(error) {
+  const code = String(error?.code ?? '').trim().toUpperCase();
+  if (code === 'LLM_PROVIDER_TIMEOUT' || code === 'VOICE_TURN_STAGE_TIMEOUT'
+    || code === 'LLM_REQUEST_TIMEOUT') return 'timeout';
+  if (code === 'LLM_GROUNDED_PROMPT_BUDGET_EXCEEDED') return 'prompt_budget';
+  return 'provider_failure';
+}
+
 export function configuredClarificationRecovery(profile, knowledge = {}) {
   const supportMessage = resolveRuntimeMessage(
     profile, 'clarification_recovery_support', knowledge,
@@ -2015,7 +2023,9 @@ export class RealtimeConversationOrchestrator {
     this.log.info({
       stage: 'llm.prompt_prepared', callId: this.call.id,
       promptCharacters: session.promptCharacters,
+      estimatedPromptTokens: session.estimatedPromptTokens,
       configuredBudgetCharacters: env.VOICE_LLM_PROMPT_BUDGET_CHARS,
+      configuredBudgetTokens: env.VOICE_LLM_PROMPT_BUDGET_TOKENS,
       effectiveBudgetCharacters: selectedLlmPromptBudget(true),
       evidenceRecords: groundingEnvelope.sources.length,
       publishedMapIncluded: false,
@@ -2826,7 +2836,29 @@ export class RealtimeConversationOrchestrator {
       && engineDecision.type === knowledgeEngineDecisionTypes.RESPONSE
       && engineDecision.mode === knowledgeEngineResponseModes.DETERMINISTIC
       && Boolean(engineDecision.response?.text);
-    if (deterministicPriority) {
+    const operationalKnowledgeFailure = knowledge.tenantEvidence?.diagnostic ?? null;
+    if (operationalKnowledgeFailure) {
+      response = {
+        cancelled: false,
+        text: configuredTechnicalFailureResponse(this.runtimeProfile, knowledge),
+        toolCalls: [],
+        sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
+          label: 'Knowledge operational diagnostic',
+          metadata: {
+            reason: operationalKnowledgeFailure.errorCode ?? 'knowledge_operational_failure',
+            stage: operationalKnowledgeFailure.stage ?? 'authoritative_hydration',
+          },
+        })],
+      };
+      turnLatency.route = 'knowledge_operational_failure';
+      latencyTracker.setResponseClass('knowledge_operational_failure');
+      this.log.error({
+        stage: 'knowledge.pre_llm_operational_failure',
+        callId: this.call.id,
+        turnEpoch: epoch,
+        diagnostic: operationalKnowledgeFailure,
+      }, 'Grounded LLM invocation skipped because authoritative evidence was incomplete');
+    } else if (deterministicPriority) {
       // Emergency and call-control are protocol-level exceptions. Every other
       // finalized caller turn, including known knowledge, tools and ambiguity,
       // is decided by exactly one grounded LLM request below.
@@ -2903,20 +2935,24 @@ export class RealtimeConversationOrchestrator {
         }
         turnLatency.llmMs += Math.max(0, Date.now() - llmStartedAt);
       } catch (error) {
+        const operationalFailure = llmOperationalFailureClass(error);
         this.#recordProviderFailure('llm', error, 'llm.response');
         this.providerHealth.record(this.runtimeProfile.agent.tenantId, 'llm', this.runtimeProfile.providers.llm, 'failure', {
           code: error.code,
         });
         this.log.warn({
           stage: 'llm.safe_recovery_fallback', code: error.code,
+          operationalFailure,
           providerId: this.runtimeProfile.providers.llm.providerId,
-        }, 'Selected LLM failed; using the technical fallback response');
+        }, 'Selected LLM failed operationally; using the technical fallback response');
         response = {
           cancelled: false,
           text: configuredTechnicalFailureResponse(this.runtimeProfile, knowledge),
           toolCalls: [],
           sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
-            label: 'Live deadline technical fallback', metadata: { reason: error.code },
+            label: 'LLM operational technical fallback', metadata: {
+              reason: error.code, operationalFailure, ambiguity: false,
+            },
           })],
         };
       }

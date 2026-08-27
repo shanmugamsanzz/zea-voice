@@ -306,6 +306,48 @@ function engineInput(tenant, utterance, options = {}) {
   });
 }
 
+function assertCompleteEvidencePath(tenant, turn) {
+  const authoritativeByPublishedId = new Map();
+  for (const source of turn.authoritative.evidence) {
+    assert.equal(source.tenantId, tenant.identity.tenantId);
+    assert.equal(source.agentId, tenant.identity.agentId);
+    assert.equal(source.knowledgeBaseId, tenant.identity.knowledgeBaseId);
+    assert.equal(source.publicationRevision, 1);
+    for (const field of ['id', 'recordId', 'recordType', 'documentId', 'documentVersionId']) {
+      assert.ok(String(source[field] ?? '').trim(), `Missing authoritative ${field}`);
+    }
+    assert.equal(source.documentStatus, 'ready');
+    assert.equal(source.documentVersionStatus, 'ready');
+    assert.equal(source.documentVersionIsCurrent, true);
+    assert.equal(source.hydrationValidated, true);
+    assert.equal(source.publicationValidated, true);
+    for (const field of [
+      'tenantId', 'agentId', 'knowledgeBaseId', 'publicationRevision',
+      'recordId', 'recordType', 'documentId', 'documentVersionId',
+    ]) assert.equal(String(source.provenance?.[field]), String(source[field]));
+    authoritativeByPublishedId.set(source.id, source);
+    completeMetadataRecords += 1;
+  }
+  const sourceIds = new Set();
+  for (const compact of turn.llmInput.hydratedRecords) {
+    const authoritative = authoritativeByPublishedId.get(compact.publishedEvidenceId);
+    assert.ok(authoritative, 'LLM evidence must map through its published evidence ID');
+    assert.equal(compact.recordId, authoritative.recordId);
+    assert.equal(compact.recordType, authoritative.recordType);
+    assert.equal(compact.provenance.knowledgeBaseId, authoritative.knowledgeBaseId);
+    assert.equal(compact.provenance.publicationRevision, authoritative.publicationRevision);
+    assert.equal(compact.provenance.documentId, authoritative.documentId);
+    assert.equal(compact.provenance.documentVersionId, authoritative.documentVersionId);
+    if (compact.sourceId) {
+      assert.equal(authoritative.callerFacing, true);
+      assert.match(compact.sourceId, /^source_[1-5]$/u);
+      assert.equal(sourceIds.has(compact.sourceId), false, 'LLM source IDs must be unique');
+      sourceIds.add(compact.sourceId);
+    }
+    sourceMappingsValidated += 1;
+  }
+}
+
 async function runTurn(tenant, utterance, options = {}) {
   const input = engineInput(tenant, utterance, options);
   const semanticRecords = options.semanticRecords ?? [];
@@ -334,6 +376,7 @@ async function runTurn(tenant, utterance, options = {}) {
   assert.equal(turn.authoritative.evidence.some((source) => (
     source.knowledgeBaseId === foreignTenant.identity.knowledgeBaseId
   )), false, 'Cross-tenant semantic evidence must be rejected');
+  assertCompleteEvidencePath(tenant, turn);
   const retrievalDuration = Number(turn.latency?.retrievalMs);
   assert.ok(Number.isFinite(retrievalDuration) && retrievalDuration >= 0,
     'Retrieval latency must be measured');
@@ -420,6 +463,8 @@ const coverage = new Set();
 let runtimeErrors = 0;
 let validatedResponses = 0;
 let verifiedTools = 0;
+let sourceMappingsValidated = 0;
+let completeMetadataRecords = 0;
 const retrievalSamples = [];
 
 function percentile95(values) {
@@ -745,6 +790,7 @@ console.log(JSON.stringify({
   syntheticIndustries: tenants.map((tenant) => tenant.industry),
   languages: [...new Set(tenants.map((tenant) => tenant.language))],
   coverage: requiredCoverage, validatedResponses, verifiedTools,
+  sourceMappingsValidated, completeMetadataRecords,
   falseClarifications: 0, staleAnswers: 0, unsupportedClaimsAccepted: 0,
   blindRetrieval: false, genericRepeatedClarifications: 0, toolMistakes: 0,
   crossTenantLeakage: false, retrievalP95Ms, runtimeErrors,

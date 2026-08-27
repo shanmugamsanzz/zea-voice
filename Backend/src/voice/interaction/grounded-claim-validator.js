@@ -296,20 +296,42 @@ function canonicalEvidenceKey(value = {}) {
     ? `${recordType}:${recordId}:${knowledgeBaseId}:${revision}` : null;
 }
 
+function sameEvidenceScope(source, authoritative) {
+  for (const key of ['tenantId', 'agentId', 'knowledgeBaseId', 'recordId']) {
+    const expected = identity(source?.[key]);
+    const actual = identity(authoritative?.[key]);
+    if (expected && (!actual || expected !== actual)) return false;
+  }
+  const expectedType = String(source?.recordType ?? '').trim().toLocaleUpperCase();
+  const actualType = String(authoritative?.recordType ?? '').trim().toLocaleUpperCase();
+  if (expectedType && (!actualType || expectedType !== actualType)) return false;
+  const expectedRevision = Number(source?.publicationRevision);
+  if (source?.publicationRevision !== null && source?.publicationRevision !== undefined
+    && (!Number.isInteger(expectedRevision)
+      || expectedRevision !== Number(authoritative?.publicationRevision))) return false;
+  if (source?.publicationValidated === false || authoritative?.publicationValidated === false
+    || source?.hydrationValidated === false || authoritative?.hydrationValidated === false) return false;
+  return true;
+}
+
 function authoritativeSourceFor(source, authoritativeSources) {
   const publishedId = identity(source?.publishedEvidenceId);
   if (publishedId) {
-    return authoritativeSources.find((candidate) => identity(candidate.id) === publishedId) ?? null;
+    return authoritativeSources.find((candidate) => (
+      identity(candidate.id) === publishedId && sameEvidenceScope(source, candidate)
+    )) ?? null;
   }
   const canonicalKey = canonicalEvidenceKey(source);
   if (canonicalKey) {
-    return authoritativeSources.find((candidate) => canonicalEvidenceKey(candidate) === canonicalKey) ?? null;
+    return authoritativeSources.find((candidate) => (
+      canonicalEvidenceKey(candidate) === canonicalKey && sameEvidenceScope(source, candidate)
+    )) ?? null;
   }
   // Compatibility for non-publication test/runtime sources: accept a record
   // ID only when it identifies exactly one authoritative source.
   const recordId = identity(source?.recordId);
   const matches = recordId ? authoritativeSources.filter((candidate) => (
-    identity(candidate.recordId) === recordId
+    identity(candidate.recordId) === recordId && sameEvidenceScope(source, candidate)
   )) : [];
   return matches.length === 1 ? matches[0] : null;
 }

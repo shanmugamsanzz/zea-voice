@@ -9,10 +9,20 @@ import {
 } from '../knowledge-engine/engine-contract.js';
 import { prepareKnowledgeQuery } from '../knowledge-engine/fast-query-preparation.js';
 import { resolveCanonicalTopicMemory } from '../knowledge-engine/canonical-topic-memory.js';
-import { loadPublishedEngineArtifacts } from '../knowledge-engine/runtime-service.js';
+import {
+  loadPublishedEngineArtifacts,
+} from '../knowledge-engine/runtime-service.js';
+import { schedulePublishedArtifactRecovery } from './authoritative-artifact-recovery.js';
 import { retrieveRankHydrateGroundedTurn } from './grounded-turn-evidence.js';
 
 export const GROUNDED_NORMAL_TURN_RUNTIME_VERSION = 1;
+
+const recoverableHydrationErrors = new Set([
+  'KNOWLEDGE_AUTHORITATIVE_HYDRATION_EMPTY',
+  'KNOWLEDGE_SELECTED_CANDIDATE_NOT_HYDRATED',
+  'KNOWLEDGE_AUTHORITATIVE_PROVENANCE_INCOMPLETE',
+  'KNOWLEDGE_COMPARISON_HYDRATION_INCOMPLETE',
+]);
 
 function clean(value, maximum = 4_000) {
   return String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
@@ -32,6 +42,8 @@ function compactEvidence(source) {
     publishedEvidenceId: source.publishedEvidenceId,
     recordId: source.recordId,
     recordType: source.recordType,
+    tenantId: source.tenantId,
+    agentId: source.agentId,
     content: source.content,
     callerFacing: source.callerFacing,
     rank: source.rank,
@@ -132,7 +144,7 @@ function compactBundle(prepared, turn, publicationRevisions) {
     topEvidence: Object.freeze(callerFacing),
     sourceMap: Object.freeze(callerFacing.map((source, index) => Object.freeze({
       sourceId: `source_${index + 1}`,
-      publishedEvidenceId: source.id,
+      publishedEvidenceId: source.publishedEvidenceId,
       recordId: source.recordId,
       recordType: source.recordType,
       knowledgeBaseId: source.knowledgeBaseId,
@@ -269,6 +281,23 @@ export async function retrieveGroundedNormalTurn(auth, input, dependencies = {})
     });
   } catch (error) {
     if (dependencies.throwOnError === true) throw error;
+    let recovery = null;
+    if (artifacts?.publications?.length && recoverableHydrationErrors.has(error?.code)) {
+      const affectedKnowledgeBases = new Set([
+        ...(error.details?.selectedCandidates ?? []).map((candidate) => candidate.knowledgeBaseId),
+        ...(error.details?.records ?? []).map((record) => record.knowledgeBaseId),
+      ].filter(Boolean).map((value) => String(value).toLocaleLowerCase()));
+      const affectedPublications = affectedKnowledgeBases.size
+        ? artifacts.publications.filter((publication) => (
+          affectedKnowledgeBases.has(String(publication.knowledgeBaseId).toLocaleLowerCase())
+        )) : artifacts.publications;
+      recovery = await schedulePublishedArtifactRecovery(
+        auth, affectedPublications, error.code, dependencies,
+      ).catch((recoveryError) => Object.freeze([{
+        scheduled: false,
+        reason: recoveryError.code ?? 'artifact_recovery_schedule_failed',
+      }]));
+    }
     return Object.freeze({
       operation: 'grounded_normal_turn',
       engineVersion: GROUNDED_NORMAL_TURN_RUNTIME_VERSION,
@@ -288,7 +317,7 @@ export async function retrieveGroundedNormalTurn(auth, input, dependencies = {})
       diagnostic: Object.freeze({
         stage: 'grounded_normal_turn_unavailable',
         errorCode: error.code ?? 'KNOWLEDGE_ENGINE_UNAVAILABLE',
-        details: error.details ?? null,
+        details: Object.freeze({ ...(error.details ?? {}), recovery }),
       }),
     });
   }

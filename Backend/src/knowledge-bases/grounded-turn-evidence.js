@@ -3,6 +3,7 @@ import {
 } from '../knowledge-engine/authoritative-evidence.js';
 import { searchParallelHybridCandidates } from './parallel-hybrid-search.js';
 import { resolveCanonicalTopicMemory } from '../knowledge-engine/canonical-topic-memory.js';
+import { AppError } from '../middleware/errors.js';
 
 export const GROUNDED_TURN_EVIDENCE_VERSION = 2;
 const maximumEvidenceRecords = 5;
@@ -19,6 +20,76 @@ const namespaceRecordTypes = Object.freeze({
 const catalogIntentClasses = new Set([
   'DETAILS_OR_PRICE', 'CATEGORY_OVERVIEW', 'COMPARISON_COMPLEX',
 ]);
+
+function normalizedId(value) {
+  return String(value ?? '').trim().toLocaleLowerCase();
+}
+
+function missingProvenanceFields(source, input) {
+  const missing = [];
+  for (const field of [
+    'tenantId', 'agentId', 'knowledgeBaseId', 'publicationRevision',
+    'recordId', 'recordType', 'documentId', 'documentVersionId',
+  ]) {
+    const value = source?.[field];
+    if (value === null || value === undefined || String(value).trim() === '') missing.push(field);
+  }
+  if (!Number.isInteger(Number(source?.publicationRevision))
+    || Number(source.publicationRevision) < 1) missing.push('publicationRevision');
+  if (normalizedId(source?.tenantId) !== normalizedId(input?.tenantId)) missing.push('tenantScope');
+  if (normalizedId(source?.agentId) !== normalizedId(input?.agentId)) missing.push('agentScope');
+  if (source?.hydrationValidated !== true) missing.push('hydrationValidated');
+  if (source?.publicationValidated !== true) missing.push('publicationValidated');
+  if (String(source?.documentStatus ?? '').toLocaleLowerCase() !== 'ready') {
+    missing.push('documentStatus');
+  }
+  if (String(source?.documentVersionStatus ?? '').toLocaleLowerCase() !== 'ready') {
+    missing.push('documentVersionStatus');
+  }
+  if (source?.documentVersionIsCurrent !== true) missing.push('documentVersionIsCurrent');
+  const provenance = source?.provenance ?? {};
+  for (const field of [
+    'tenantId', 'agentId', 'knowledgeBaseId', 'publicationRevision',
+    'recordId', 'recordType', 'documentId', 'documentVersionId',
+  ]) {
+    if (normalizedId(provenance[field]) !== normalizedId(source?.[field])) {
+      missing.push(`provenance.${field}`);
+    }
+  }
+  return [...new Set(missing)];
+}
+
+export function assertCompleteAuthoritativeHydration(authoritative, input, classification = {}) {
+  if (Number(authoritative?.hydrationQueryCount ?? 0) > 1) {
+    throw new AppError(503, 'Authoritative evidence used more than one PostgreSQL hydration query',
+      'KNOWLEDGE_AUTHORITATIVE_HYDRATION_QUERY_INVALID', {
+        stage: 'authoritative_hydration',
+        hydrationQueryCount: authoritative.hydrationQueryCount,
+      });
+  }
+  const incomplete = (authoritative?.evidence ?? []).map((source) => ({
+    source,
+    missingFields: missingProvenanceFields(source, input),
+  })).filter((entry) => entry.missingFields.length > 0);
+  const comparisonTurn = String(classification?.intentClass ?? '').toLocaleUpperCase()
+    === 'COMPARISON_COMPLEX';
+  const missingComparisonIds = comparisonTurn
+    ? authoritative?.comparisonCoverage?.missingRecordIds ?? [] : [];
+  if (!incomplete.length && !missingComparisonIds.length) return;
+  throw new AppError(503,
+    'Authoritative PostgreSQL evidence is incomplete for the selected publication records',
+    'KNOWLEDGE_AUTHORITATIVE_PROVENANCE_INCOMPLETE', {
+      stage: 'authoritative_hydration',
+      records: incomplete.map(({ source, missingFields }) => ({
+        recordId: source.recordId,
+        recordType: source.recordType,
+        knowledgeBaseId: source.knowledgeBaseId,
+        publicationRevision: source.publicationRevision,
+        missingFields,
+      })),
+      missingComparisonRecordIds: [...missingComparisonIds],
+    });
+}
 
 function relevantHydratedEvidence(sources, classification = {}, resolution = {}, input = {}) {
   const intentClass = String(classification.intentClass ?? '').trim().toUpperCase();
@@ -126,6 +197,8 @@ function compactEvidence(source, sourceId) {
     publishedEvidenceId: source.id,
     recordId: source.recordId,
     recordType: source.recordType,
+    tenantId: source.tenantId,
+    agentId: source.agentId,
     content: clean(source.content, 2_500),
     callerFacing: source.callerFacing === true,
     rank: source.rank,
@@ -268,6 +341,7 @@ export async function retrieveRankHydrateGroundedTurn({
   if (authoritative.hydrationQueryCount > 1) {
     throw new TypeError('Grounded turn performed more than one PostgreSQL hydration query');
   }
+  assertCompleteAuthoritativeHydration(authoritative, input, classification);
   const llmInput = buildGroundedLlmInput({
     input, classification, resolution, authoritative, runtimeProfile,
   });

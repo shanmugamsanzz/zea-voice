@@ -144,6 +144,38 @@ assert.equal(hydratedEnvelope.sources[0].id, 'source_1');
 assert.equal(hydratedEnvelope.sources[0].publishedEvidenceId, callerEvidence[0].id);
 assert.equal(hydratedEnvelope.sources[0].documentId, callerEvidence[0].documentId);
 assert.equal(hydratedEnvelope.sources[0].documentVersionId, callerEvidence[0].documentVersionId);
+const preassignedLlmSourceEnvelope = buildGroundingEnvelope({
+  found: true, route: 'knowledge_engine',
+  tenantEvidence: {
+    sources: [{
+      ...callerEvidence[0],
+      id: 'source_1',
+      publishedEvidenceId: callerEvidence[0].id,
+    }],
+  },
+}, { includePublishedMap: false, maximumSources: 5 });
+assert.equal(preassignedLlmSourceEnvelope.sources[0].id, 'source_1');
+assert.equal(preassignedLlmSourceEnvelope.sources[0].publishedEvidenceId, callerEvidence[0].id,
+  'A synthetic LLM source ID must never overwrite the published evidence ID');
+assert.equal(hydrateGroundingEnvelope(
+  preassignedLlmSourceEnvelope, callerEvidence,
+).sources[0].recordId, callerEvidence[0].recordId);
+const wrongRevisionEnvelope = {
+  ...preassignedLlmSourceEnvelope,
+  sources: preassignedLlmSourceEnvelope.sources.map((item) => ({
+    ...item, publicationRevision: item.publicationRevision + 1,
+  })),
+};
+assert.equal(hydrateGroundingEnvelope(wrongRevisionEnvelope, callerEvidence).sources.length, 0,
+  'A source from the wrong publication revision must not hydrate');
+const foreignTenantEnvelope = {
+  ...preassignedLlmSourceEnvelope,
+  sources: preassignedLlmSourceEnvelope.sources.map((item) => ({
+    ...item, tenantId: 'foreign-tenant',
+  })),
+};
+assert.equal(hydrateGroundingEnvelope(foreignTenantEnvelope, callerEvidence).sources.length, 0,
+  'A cross-tenant source must not hydrate');
 const duplicateRecordSource = {
   ...callerEvidence[0], id: 'published:catalog_item:foreign-duplicate',
   documentId: 'foreign-document', knowledgeBaseId: 'foreign-kb',

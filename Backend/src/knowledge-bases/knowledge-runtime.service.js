@@ -9,6 +9,7 @@ export {
   searchPublishedKnowledge,
   searchPublishedKnowledgeOperation,
 } from '../knowledge-engine/runtime-service.js';
+export { schedulePublishedArtifactRecovery } from './authoritative-artifact-recovery.js';
 
 // The live normal-turn entry point. It performs one query preparation, one
 // parallel hybrid retrieval, one RRF/hydration pass and never plans a normal
