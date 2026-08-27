@@ -307,7 +307,16 @@ export function validatePublicationRecords(records) {
     }
   }
   for (const record of records.filter((value) => ROUTABLE_RECORD_TYPES.has(value.record_type))) {
-    if (!record.publicationAliases?.length) {
+    const conditions = plainObject(plainObject(record.entity_metadata).conditions);
+    const confidenceOutcome = String(conditions.confidenceOutcome ?? '').trim().toLowerCase();
+    const isConfidenceOutcomeWorkflow = record.record_type === 'workflow_rule'
+      && ['ambiguous', 'none'].includes(confidenceOutcome);
+    // Confidence-outcome rules are selected by the evidence ranker after
+    // retrieval, not by matching caller phrases. Requiring a trigger here
+    // contradicts the Workflow document contract and blocks otherwise valid
+    // publications. All ordinary routable records must still publish at least
+    // one tenant-owned trigger phrase.
+    if (!record.publicationAliases?.length && !isConfidenceOutcomeWorkflow) {
       issues.push(validationIssue('ROUTE_WITHOUT_TRIGGER', 'Routable published evidence has no trigger phrase', record));
     }
     if (!record.approvedAnswerCard) {

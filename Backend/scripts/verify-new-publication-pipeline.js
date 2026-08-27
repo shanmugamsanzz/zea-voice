@@ -177,6 +177,37 @@ assert.equal(Object.values(bundle.routeIndex.namespaces).every((namespace) => (
 assert.equal(bundle.answerCards.find((card) => card.recordType === 'WORKFLOW_RULE').decision, 'TOOL');
 assert.match(bundle.manifest.contentHash, /^[a-f0-9]{64}$/u);
 
+const confidenceOutcomeRecords = ['ambiguous', 'none'].map((confidenceOutcome, index) => ({
+  ...common(index + 1, 'workflow_rule'),
+  record_id: ids[index + 3],
+  question: `${confidenceOutcome} evidence response`,
+  answer: `Approved ${confidenceOutcome} evidence response.`,
+  content: `Approved ${confidenceOutcome} evidence response.`,
+  entity_name: `${confidenceOutcome} evidence response`,
+  entity_category: 'confidence',
+  entity_aliases: [],
+  entity_category_aliases: [],
+  entity_metadata: {
+    conditions: { confidenceOutcome },
+    actionType: 'respond',
+    actionConfig: { responseMode: 'exact' },
+  },
+}));
+const confidenceOutcomeBundle = buildPublicationIndexes(job, confidenceOutcomeRecords);
+assert.equal(confidenceOutcomeBundle.validation.valid, true,
+  'Confidence-outcome Workflow rules must publish without phrase triggers');
+assert.equal(confidenceOutcomeBundle.answerCards.length, 2);
+
+assert.throws(() => buildPublicationIndexes(job, [{
+  ...confidenceOutcomeRecords[0],
+  entity_metadata: {
+    ...confidenceOutcomeRecords[0].entity_metadata,
+    conditions: {},
+  },
+}]), (error) => error?.code === 'KNOWLEDGE_PUBLICATION_VALIDATION_FAILED'
+  && error.details.issues.some((issue) => issue.code === 'ROUTE_WITHOUT_TRIGGER'),
+'Ordinary Workflow rules must still require a tenant-published trigger');
+
 assert.throws(() => buildPublicationIndexes(job, [
   ...records,
   { ...records[0], record_id: ids[15] },
