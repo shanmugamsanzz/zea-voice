@@ -278,6 +278,30 @@ assert.equal(result.confidence, knowledgeResolutionConfidence.LOW);
 assert.equal(result.action, knowledgeResolutionActions.CLARIFY);
 assert.equal(result.candidate, null);
 
+const exactPublishedRoute = {
+  ...record(14, {}),
+  record_type: 'faq',
+  question: 'Where is the support desk?',
+  answer: 'The approved support desk location is published.',
+  content: 'The approved support desk location is published.',
+  entity_name: 'Support desk location',
+  entity_aliases: ['support desk location'],
+  entity_category_aliases: [],
+  entity_metadata: { intentClass: 'KNOWN_INFORMATION' },
+};
+const fuzzyCatalogCollision = record(15, {
+  question: 'Support Desk Location Plus',
+  answer: 'A different published option.',
+  content: 'A different published option.',
+  entity_name: 'Support Desk Location Plus',
+  entity_aliases: [],
+  entity_metadata: { itemKey: 'support-desk-location-plus', categoryKey: 'published-options' },
+});
+result = resolvePublishedEntityRoute(input('support desk location'),
+  buildPublicationIndexes(job, [exactPublishedRoute, fuzzyCatalogCollision]));
+assert.equal(result.candidateNamespace, knowledgeCandidateNamespaces.FAQ,
+  'An exact current published route must outrank a merely fuzzy Catalog collision');
+
 assert.throws(() => resolvePublishedEntityRoute({
   ...input('Alpha Prime'), tenantId: 'another-tenant',
 }, bundle), /same tenant/u);

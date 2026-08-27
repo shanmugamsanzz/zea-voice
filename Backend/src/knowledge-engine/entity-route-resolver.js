@@ -632,9 +632,19 @@ export function resolvePublishedEntityRoute(input, publicationBundles, options =
     && catalogRanked[0].score >= 0.88;
   const confirmableCatalog = catalogRanked[0]?.explicit === true
     && catalogRanked[0].score >= 0.68;
+  const explicitPublishedRoute = explicitPriorityRoute(preliminaryCandidate);
   let selectedNamespace = null;
   let selected = new Map();
   if (lockPublishedRoute && preliminaryNamespace) {
+    selectedNamespace = preliminaryNamespace;
+    selected = routeGroups.get(preliminaryNamespace) ?? new Map();
+  } else if (explicitCatalog) {
+    selectedNamespace = knowledgeCandidateNamespaces.CATALOG;
+    selected = catalog;
+  } else if (explicitPublishedRoute && preliminaryNamespace) {
+    // Current-turn exact/normalized published routes outrank merely fuzzy
+    // Catalog discovery. A strong explicit Catalog entity still wins above,
+    // preserving specific-entity priority over generic guidance.
     selectedNamespace = preliminaryNamespace;
     selected = routeGroups.get(preliminaryNamespace) ?? new Map();
   } else if (confirmableCatalog) {
@@ -650,7 +660,7 @@ export function resolvePublishedEntityRoute(input, publicationBundles, options =
 
   const semanticTop = semanticRanked[0] ?? null;
   const selectedTop = rankCandidates(selected)[0] ?? null;
-  if (semanticTop && !lockPublishedRoute && !explicitCatalog
+  if (semanticTop && !lockPublishedRoute && !explicitCatalog && !explicitPublishedRoute
     && (!selectedTop || semanticTop.score > selectedTop.score)) {
     selectedNamespace = candidateNamespace(semanticTop);
     selected = selectedNamespace ? semanticGroups.get(selectedNamespace) : new Map();

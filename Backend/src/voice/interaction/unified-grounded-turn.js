@@ -210,6 +210,7 @@ export function applyUnifiedGroundedTurn({
   safetyPolicies = [],
   finalizedUtterance = '',
   confirmationConfiguration = null,
+  clarificationRecovery = null,
 } = {}) {
   if (!memory?.snapshot || !memory?.applyGroundedDecision || !memory?.restoreValidatedState) {
     throw new TypeError('A generic conversation memory instance is required');
@@ -707,20 +708,51 @@ export function applyUnifiedGroundedTurn({
       field: nextQuestionValidation.field, state: rollbackMemory(),
     });
   }
-  const durableNextQuestion = nextQuestion?.source !== 'grounded_clarification';
-  if (nextQuestion && durableNextQuestion) {
-    afterState = memory.setPendingQuestion({
-      key: nextQuestion.key,
-      text: nextQuestion.question,
-      kind: nextQuestion.kind,
-    });
-    if (nextQuestion.activeToolRequest) {
-      afterState = memory.setActiveToolRequest(nextQuestion.activeToolRequest, { turnToken });
+  const groundedClarification = nextQuestion?.source === 'grounded_clarification';
+  let effectiveNextQuestion = nextQuestion;
+  let recovery = null;
+  if (groundedClarification && memory.recordClarification) {
+    const record = memory.recordClarification({
+      key: effectiveDecision.clarification?.reason,
+      question: nextQuestion.question,
+      kind: 'clarification',
+      reason: effectiveDecision.clarification?.reason,
+      candidateRecordIds: (hydratedEnvelope.entities ?? [])
+        .map((entity) => entity.recordId ?? entity.id).filter(Boolean).slice(0, 5),
+      missingFactType: effectiveDecision.stateUpdate?.requestedFacts?.[0]
+        ?? effectiveDecision.stateUpdate?.requestType ?? null,
+    }, { turnToken });
+    afterState = record.state ?? memory.snapshot();
+    const maximumAttempts = Math.max(1, Math.min(5,
+      Number.parseInt(clarificationRecovery?.maximumAttempts ?? 2, 10) || 2));
+    if (record.repeated === true || record.attemptCount > maximumAttempts) {
+      const configuredSupport = String(clarificationRecovery?.supportMessage ?? '').trim();
+      effectiveNextQuestion = null;
+      recovery = Object.freeze({
+        mode: configuredSupport ? 'configured_support' : 'suppressed',
+        attemptCount: record.attemptCount,
+        repeated: record.repeated === true,
+      });
+      if (configuredSupport) memory.clearClarification?.({ turnToken });
     }
   }
-  const answer = effectiveDecision.responseId
-    ? effectiveDecision.answer
-    : composeConfiguredTurnResponse(effectiveDecision.answer, nextQuestion);
+  const durableNextQuestion = effectiveNextQuestion
+    && effectiveNextQuestion.source !== 'grounded_clarification';
+  if (effectiveNextQuestion && durableNextQuestion) {
+    afterState = memory.setPendingQuestion({
+      key: effectiveNextQuestion.key,
+      text: effectiveNextQuestion.question,
+      kind: effectiveNextQuestion.kind,
+    });
+    if (effectiveNextQuestion.activeToolRequest) {
+      afterState = memory.setActiveToolRequest(effectiveNextQuestion.activeToolRequest, { turnToken });
+    }
+  }
+  const answer = recovery?.mode === 'configured_support'
+    ? String(clarificationRecovery.supportMessage).trim()
+    : (recovery?.mode === 'suppressed' ? '' : (effectiveDecision.responseId
+      ? effectiveDecision.answer
+      : composeConfiguredTurnResponse(effectiveDecision.answer, effectiveNextQuestion)));
   if (answer) {
     memory.observeAssistantResponse?.(answer, { turnToken });
     memory.append?.({ role: 'assistant', content: answer }, { turnToken });
@@ -735,7 +767,8 @@ export function applyUnifiedGroundedTurn({
     evidenceIds: effectiveDecision.evidenceIds,
     stateUpdate: effectiveDecision.stateUpdate,
     pendingQuestion: afterState.pendingQuestion,
-    nextQuestion,
+    nextQuestion: effectiveNextQuestion,
+    clarificationRecovery: recovery,
     toolRequest: awaitingConfirmation ? null : effectiveDecision.toolRequest,
     state: afterState,
   });

@@ -91,7 +91,23 @@ function cleanPending(value) {
   const key = cleanText(object.key, 120);
   const text = cleanText(object.text, 500);
   const kind = cleanText(object.kind, 40);
-  return key || text ? Object.freeze({ key: key || null, text: text || key, kind: kind || null }) : null;
+  const attemptCount = Math.max(0, Math.min(20, Number.parseInt(object.attemptCount ?? 0, 10) || 0));
+  const previousQuestions = cleanList(object.previousQuestions, 5);
+  const candidateRecordIds = cleanList(object.candidateRecordIds, 5);
+  const missingFactType = cleanText(object.missingFactType, 80) || null;
+  const reason = cleanText(object.reason, 80) || null;
+  return key || text ? Object.freeze({
+    key: key || null, text: text || key, kind: kind || null,
+    attemptCount,
+    previousQuestions: Object.freeze(previousQuestions),
+    candidateRecordIds: Object.freeze(candidateRecordIds),
+    missingFactType,
+    reason,
+  }) : null;
+}
+
+function clarificationIdentity(value) {
+  return cleanText(value, 500).toLocaleLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim();
 }
 
 function cleanCategory(value = {}) {
@@ -426,9 +442,11 @@ export function openGenericConversationState(identity, settings = {}, now = Date
         state.pendingClarification = null;
       }
       else if (decision.flowAction === 'side_question' && state.pendingQuestion) resumePending = true;
+      if (String(decision.decision ?? '').toLocaleLowerCase() !== 'clarify'
+        && decision.clarification == null) state.pendingClarification = null;
       // decision.pendingQuestion is only a proposal. The unified turn policy
-      // validates it against published guidance before setPendingQuestion is
-      // called, and clarification questions are intentionally turn-local.
+      // validates it before persisting either configured workflow state or
+      // bounded clarification-recovery context.
       if (update.language ?? decision.language) {
         state.language = cleanLanguage(update.language ?? decision.language, state.language);
       }
@@ -452,6 +470,43 @@ export function openGenericConversationState(identity, settings = {}, now = Date
         );
       }
       return Object.freeze({ applied: true, updates: Object.freeze({ ...updates }), state: publicState(state) });
+    },
+    recordClarification(value = {}, options = {}) {
+      if (!current(options.turnToken)) {
+        return Object.freeze({ applied: false, stale: true, state: publicState(state) });
+      }
+      const question = cleanText(value.question ?? value.text, 500);
+      if (!question) return Object.freeze({ applied: false, reason: 'question_required', state: publicState(state) });
+      const previous = cleanPending(state.pendingClarification);
+      const history = cleanList([
+        ...(previous?.previousQuestions ?? []), previous?.text, question,
+      ].filter(Boolean), 5);
+      const currentIdentity = clarificationIdentity(question);
+      const repeated = [previous?.text, ...(previous?.previousQuestions ?? [])]
+        .some((entry) => clarificationIdentity(entry) === currentIdentity);
+      state.pendingClarification = cleanPending({
+        key: value.key ?? value.reason ?? 'grounded_clarification',
+        text: question,
+        kind: value.kind ?? 'clarification',
+        attemptCount: (previous?.attemptCount ?? 0) + 1,
+        previousQuestions: history,
+        candidateRecordIds: value.candidateRecordIds,
+        missingFactType: value.missingFactType,
+        reason: value.reason,
+      });
+      return Object.freeze({
+        applied: true, repeated, attemptCount: state.pendingClarification.attemptCount,
+        state: publicState(state),
+      });
+    },
+    clearClarification(options = {}) {
+      if (!current(options.turnToken)) {
+        return Object.freeze({ applied: false, stale: true, state: publicState(state) });
+      }
+      state.pendingClarification = null;
+      if (['clarification', 'ambiguity', 'conflict', 'no_evidence']
+        .includes(state.pendingQuestion?.kind)) state.pendingQuestion = null;
+      return Object.freeze({ applied: true, state: publicState(state) });
     },
     // Transitional API guards keep rolling workers safe while the orchestrator
     // is upgraded. They do not perform text/keyword field extraction.

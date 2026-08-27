@@ -567,9 +567,18 @@ function reservedResolutionCandidates(input, classification, resolution) {
   if (classification?.intentClass === knowledgeQueryClasses.COMPARISON_COMPLEX) {
     const candidates = resolution?.namespaceCandidates?.CATALOG
       ?? resolution?.routingCandidates ?? [];
+    const explicitlyRequested = (candidate) => {
+      if (candidate?.explicit !== true) return false;
+      const signals = Array.isArray(candidate.signals) ? candidate.signals : [];
+      if (!signals.length) return true;
+      return signals.some((signal) => (
+        signal?.explicit === true
+        && Number(signal.score ?? 0) >= 0.68
+        && Number(signal.score ?? 0) >= Number(candidate.score ?? 0) - 0.000001
+      ));
+    };
     const selected = candidates.filter((candidate) => (
-      candidate?.explicit === true
-      && Number(candidate.score ?? 0) >= 0.88
+      explicitlyRequested(candidate)
       && ['ITEM', 'CATEGORY'].includes(candidate?.entityType)
       && ['CATALOG_ITEM', 'CATALOG_CATEGORY']
         .includes(String(candidate?.recordType ?? '').toUpperCase())

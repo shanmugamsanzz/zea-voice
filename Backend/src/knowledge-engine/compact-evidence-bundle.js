@@ -41,7 +41,13 @@ function compactCallMemory(input) {
     latestIntent: cleanText(memory.latestIntent, 80) || null,
     pendingClarification: Object.keys(pending).length ? Object.freeze({
       kind: cleanText(pending.kind ?? pending.reason, 80) || null,
-      question: cleanText(pending.question ?? pending.prompt, 500) || null,
+      question: cleanText(pending.question ?? pending.text ?? pending.prompt, 500) || null,
+      attemptCount: Math.max(0, Math.min(20,
+        Number.parseInt(pending.attemptCount ?? 0, 10) || 0)),
+      previousQuestions: Object.freeze((Array.isArray(pending.previousQuestions)
+        ? pending.previousQuestions : []).slice(-5)
+        .map((question) => cleanText(question, 500)).filter(Boolean)),
+      missingFactType: cleanText(pending.missingFactType, 80) || null,
       candidateRecordIds: Object.freeze((Array.isArray(pending.candidateRecordIds)
         ? pending.candidateRecordIds
         : (Array.isArray(pending.recordIds) ? pending.recordIds : []))

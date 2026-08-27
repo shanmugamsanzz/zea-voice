@@ -385,7 +385,7 @@ const clarificationMemory = openGenericConversationState(
 clarificationMemory.beginTurn('clarification-turn');
 const clarificationTurn = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'clarify', answer: '', evidenceIds: [], stateUpdate: {},
+    decision: 'clarify', answer: '', evidenceIds: ['stale-provider-source'], stateUpdate: {},
     pendingQuestion: 'Which approved option do you mean?', toolRequest: null,
   }),
   groundingEnvelope: { found: false, sources: [], entities: [] },
@@ -395,8 +395,35 @@ const clarificationTurn = applyUnifiedGroundedTurn({
 assert.equal(clarificationTurn.valid, true);
 assert.equal(clarificationTurn.answer, 'Which approved option do you mean?');
 assert.equal(clarificationTurn.state.pendingQuestion, null,
-  'clarification speech must remain turn-local and never become conversation memory');
+  'clarification recovery context must not become a configured workflow question');
+assert.equal(clarificationTurn.state.pendingClarification.text,
+  'Which approved option do you mean?');
+assert.equal(clarificationTurn.state.pendingClarification.attemptCount, 1);
 clarificationMemory.close();
+
+const incompleteMemory = openGenericConversationState(
+  { ...identity, callId: 'call-incomplete-evidence' }, {}, 1,
+);
+incompleteMemory.beginTurn('incomplete-evidence-turn');
+const incompleteTurn = applyUnifiedGroundedTurn({
+  rawDecision: unifiedDecision({
+    decision: 'answer', answer: 'Unverified response.',
+    evidenceIds: ['source-missing'], stateUpdate: {},
+    pendingQuestion: null, toolRequest: null,
+  }),
+  groundingEnvelope: {
+    found: true,
+    sources: [{
+      id: 'source-missing', publishedEvidenceId: 'published-missing',
+      recordId: 'record-missing', recordType: 'FAQ', content: 'Compact evidence.',
+    }],
+    entities: [],
+  },
+  memory: incompleteMemory, turnToken: 'incomplete-evidence-turn', evidence: [],
+  finalizedUtterance: 'What is the approved response?',
+});
+assert.equal(incompleteTurn.reason, 'incomplete_evidence_metadata');
+incompleteMemory.close();
 
 const mismatchedEvidenceMemory = openGenericConversationState(
   { ...identity, callId: 'call-latest-entity-alignment' }, {}, 1,

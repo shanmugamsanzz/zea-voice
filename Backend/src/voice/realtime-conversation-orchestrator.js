@@ -179,6 +179,20 @@ export function configuredTechnicalFailureResponse(profile, knowledge = {}) {
   return configured && !isInternalRuntimeText(configured) ? configured : '';
 }
 
+export function configuredClarificationRecovery(profile, knowledge = {}) {
+  const supportMessage = resolveRuntimeMessage(
+    profile, 'clarification_recovery_support', knowledge,
+  );
+  const configuredAttempts = Number.parseInt(
+    profile?.agent?.settings?.clarificationRecoveryMaxAttempts ?? 2, 10,
+  );
+  return Object.freeze({
+    supportMessage: supportMessage && !isInternalRuntimeText(supportMessage)
+      ? supportMessage : '',
+    maximumAttempts: Math.max(1, Math.min(5, configuredAttempts || 2)),
+  });
+}
+
 function canonicalResolvedMemoryContext(tenantEvidence = {}) {
   const resolution = tenantEvidence.resolution ?? {};
   const candidate = resolution.candidate;
@@ -2092,6 +2106,9 @@ export class RealtimeConversationOrchestrator {
           safetyPolicies: this.runtimeProfile.agent.settings?.safetyPolicies ?? [],
           finalizedUtterance: query,
           confirmationConfiguration: this.actionConfirmationConfiguration,
+          clarificationRecovery: configuredClarificationRecovery(
+            this.runtimeProfile, knowledge,
+          ),
         });
       const grounded = unifiedTurn.valid
         ? {
@@ -2181,9 +2198,22 @@ export class RealtimeConversationOrchestrator {
           }, 'LLM response was rejected before TTS; using the configured safe failure response');
         }
       }
-      answer = callerFacingText(answer, this.runtimeProfile, knowledge);
+      const clarificationSuppressed = grounded.valid
+        && grounded.clarificationRecovery?.mode === 'suppressed';
+      answer = clarificationSuppressed
+        ? '' : callerFacingText(answer, this.runtimeProfile, knowledge);
+      if (grounded.valid
+        && grounded.clarificationRecovery?.mode === 'configured_support') {
+        sources.push(createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
+          label: 'Configured clarification recovery',
+          metadata: {
+            role: 'clarification_recovery_support',
+            attemptCount: grounded.clarificationRecovery.attemptCount,
+          },
+        }));
+      }
       let normalTurnOutput = null;
-      if (grounded.valid) {
+      if (grounded.valid && !clarificationSuppressed) {
         const selectedEvidenceIds = grounded.evidenceIds ?? grounded.evidenceSourceIds ?? [];
         const activeTool = grounded.state?.activeToolRequest ?? null;
         if (grounded.decision === 'action') {

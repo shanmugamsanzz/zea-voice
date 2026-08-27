@@ -375,6 +375,10 @@ export function groundedDecisionContract(envelope, runtime = {}) {
       'If a requested fact requires an entity and neither the latest question nor relevant call memory and evidence identify one, return a targeted CLARIFY question; never select an arbitrary evidence record.',
       'The latest explicit entity or category replaces a stale remembered topic. Use remembered entities only when the current question genuinely depends on context.',
       'Return CLARIFY only for genuine ambiguity between supported candidates or genuinely missing/conflicting evidence; never clarify merely because caller wording differs from a published phrase.',
+      'For medium-confidence entity resolution, ask one candidate-specific confirmation using the canonical published name. For low confidence, ask which published category or option the caller means; do not reuse a generic unclear-message sentence.',
+      'Use pendingClarification attemptCount, previousQuestions, candidateRecordIds and missingFactType as recovery context. Never repeat an earlier clarification verbatim; narrow the next question using remaining published candidates or the missing fact.',
+      'Do not invent a support channel or support promise after unresolved attempts. Runtime may use only an explicitly tenant-configured clarification recovery response.',
+      'For comparisons, cover every explicitly requested hydrated entity. Describe each difference with positively supported fields from its record. Do not infer that an item lacks something unless its selected evidence explicitly states that negative fact.',
       'Resolve meaning generically in stateUpdate when useful: requestType, currentTopic, knownEntityKeys, requestedFacts, constraints, contextualReferences and contextDependent.',
       'Do not depend on exact caller wording or application-defined business vocabulary.',
     ],
@@ -547,13 +551,20 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
   if (parsed.pendingQuestion !== null && !candidatePendingQuestion) {
     return Object.freeze({ valid: false, reason: 'invalid_pending_question' });
   }
+  if (decision === 'answer' && envelope.incompleteEvidenceMetadata === true
+    && envelope.found !== true) {
+    return Object.freeze({ valid: false, reason: 'incomplete_evidence_metadata' });
+  }
   const allowedSources = new Map((envelope.sources ?? []).flatMap((source) => (
     [source.id, source.publishedEvidenceId, source.recordId]
       .filter(Boolean).map((candidate) => [identity(candidate), source])
   )));
   const requiredEvidenceIds = decision === 'answer' && parsed.responseId === null
     ? list(runtime.requiredEvidenceIds, maximumSources) : [];
-  const evidenceIds = list([
+  // CLARIFY is a fact-free question. Providers sometimes retain a stale
+  // source ID while correctly choosing CLARIFY; discard that residue instead
+  // of converting a useful targeted question into an operational fallback.
+  const evidenceIds = decision === 'clarify' ? [] : list([
     ...requiredEvidenceIds,
     ...(Array.isArray(parsed.evidenceIds) ? parsed.evidenceIds : []),
   ], maximumSources);
@@ -565,7 +576,8 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
     if (!seenSources.has(source.id)) citedSources.push(source);
     seenSources.add(source.id);
   }
-  const responseId = parsed.responseId === null ? null : text(parsed.responseId, 160);
+  const responseId = decision === 'clarify' || parsed.responseId === null
+    ? null : text(parsed.responseId, 160);
   const exactResponseSource = responseId ? allowedSources.get(identity(responseId)) : null;
   if (responseId && (!exactResponseSource || exactResponseSource.exactCallerResponse !== true)) {
     return Object.freeze({ valid: false, reason: 'invalid_response_id' });

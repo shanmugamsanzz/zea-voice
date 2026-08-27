@@ -326,7 +326,8 @@ export function hydrateSelectedEvidence(decision, envelope, authoritativeSources
 }
 
 export function hydrateGroundingEnvelope(envelope, authoritativeSources = []) {
-  const sources = (envelope?.sources ?? []).map((source) => {
+  const requestedSources = envelope?.sources ?? [];
+  const sources = requestedSources.map((source) => {
     const authoritative = authoritativeSourceFor(source, authoritativeSources);
     return authoritative ? Object.freeze({
       ...source, ...authoritative,
@@ -342,6 +343,7 @@ export function hydrateGroundingEnvelope(envelope, authoritativeSources = []) {
   return Object.freeze({
     ...envelope,
     found: envelope?.found === true && sources.length > 0,
+    incompleteEvidenceMetadata: requestedSources.length > sources.length,
     sources: Object.freeze(sources),
   });
 }

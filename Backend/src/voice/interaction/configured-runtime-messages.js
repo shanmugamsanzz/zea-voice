@@ -1,6 +1,7 @@
 const settingKeys = Object.freeze({
   acknowledgement: Object.freeze(['latencyAcknowledgementMessage']),
   clarification: Object.freeze(['knowledgeClarificationMessage', 'noResponseMessage']),
+  clarification_recovery_support: Object.freeze(['clarificationRecoverySupportMessage']),
   technical_failure: Object.freeze([
     'technicalFailureMessage', 'knowledgeTechnicalFailureMessage', 'errorRecoveryMessage',
   ]),
