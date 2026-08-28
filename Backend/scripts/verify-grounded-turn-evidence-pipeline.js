@@ -169,7 +169,7 @@ assert.ok(result.authoritative.evidence.every((source) => (
 const llm = result.llmInput;
 assert.deepEqual(Object.keys(llm).sort(), [
   'ambiguityCandidates', 'canonicalMemory', 'currentQuestion', 'hydratedRecords',
-  'clarificationContext', 'recentRelevantTurns', 'requestedFact', 'sourceMap',
+  'clarificationContext', 'need', 'recentRelevantTurns', 'requestedFact', 'sourceMap',
   'toolSchemas', 'workflowAuthorization',
 ].sort());
 assert.equal(llm.currentQuestion, input.latestQuestion);

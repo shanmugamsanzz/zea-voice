@@ -341,7 +341,7 @@ function matchingCanonicalEvidenceKeys(candidate, sources, input = {}) {
 function requiredReservations(authoritative = {}) {
   const requiredReasons = new Set([
     'explicit_current_entity', 'explicit_entity', 'explicit_comparison',
-    'canonical_memory', 'published_overview',
+    'canonical_memory', 'published_overview', 'published_use_case',
   ]);
   return (authoritative.reservations ?? []).filter((entry) => (
     requiredReasons.has(entry.reason)
@@ -594,13 +594,37 @@ export function buildGroundedLlmInput({
   const collected = memory.collectedInformation ?? memory.collectedToolFields ?? {};
   const relevantCollectedFields = Object.freeze(Object.fromEntries(Object.entries(collected)
     .filter(([key]) => permittedCollectedKeys.has(key))));
+  const canonicalMemory = Object.freeze({
+    ...compactCanonicalMemory(input, canonicalResolution),
+    collectedInformation: relevantCollectedFields,
+  });
   return Object.freeze({
     currentQuestion: clean(input?.latestQuestion ?? input?.utterance, 2_000),
     recentRelevantTurns: compactRelevantTurns(input),
-    canonicalMemory: compactCanonicalMemory(input, canonicalResolution),
+    canonicalMemory,
     hydratedRecords,
     sourceMap,
     requestedFact,
+    need: Object.freeze({
+      detected: input?.queryUnderstanding?.need?.detected === true,
+      interpretationMode: clean(
+        input?.queryUnderstanding?.need?.interpretationMode, 80,
+      ) || null,
+      businessContext: Object.freeze(object(
+        input?.queryUnderstanding?.need?.businessContext,
+      )),
+      customerProblem: clean(
+        input?.queryUnderstanding?.need?.customerProblem, 800,
+      ) || null,
+      desiredOutcome: clean(
+        input?.queryUnderstanding?.need?.desiredOutcome, 500,
+      ) || null,
+      requestedRecommendation: input?.queryUnderstanding?.need?.requestedRecommendation === true
+        ? true : (input?.queryUnderstanding?.need?.requestedRecommendation === false
+          ? false : null),
+      missingDetails: Object.freeze((input?.queryUnderstanding?.need?.missingDetails ?? [])
+        .slice(0, 10).map((value) => clean(value, 160)).filter(Boolean)),
+    }),
     ambiguityCandidates: candidates,
     clarificationContext: Object.freeze({
       heardText: clean(input?.latestQuestion ?? input?.utterance, 2_000),

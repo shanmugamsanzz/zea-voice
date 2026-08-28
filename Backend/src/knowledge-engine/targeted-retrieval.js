@@ -181,11 +181,22 @@ export function buildContextEnrichedRetrievalQuery(input, classification, resolu
     [`${normalizeId(entry.recordType)}:${normalizeId(entry.recordId)}`, entry]
   ))).values()]);
   const currentQuestion = clean(input?.latestQuestion ?? input?.utterance);
+  const need = understanding.need ?? {};
+  const recentNeedContext = need.detected === true
+    ? (input?.recentRelevantTurns ?? []).slice(-4).map((turn) => clean(turn?.content, 500))
+      .filter(Boolean)
+    : [];
   const queryParts = uniqueText([
     currentQuestion,
     currentSearchEntity?.name,
     ...requestedFacts,
     ...comparisons.map((entity) => entity.name),
+    ...(need.detected === true ? [
+      need.customerProblem,
+      need.desiredOutcome,
+      ...Object.values(need.businessContext ?? {}),
+      ...recentNeedContext,
+    ] : []),
   ]);
   const searchText = queryParts.join(' ');
   return Object.freeze({
@@ -196,6 +207,14 @@ export function buildContextEnrichedRetrievalQuery(input, classification, resolu
     relevantNamespace,
     relevantNamespaces,
     comparisonEntities: Object.freeze(comparisons),
+    need: Object.freeze({
+      detected: need.detected === true,
+      customerProblem: clean(need.customerProblem, 800) || null,
+      desiredOutcome: clean(need.desiredOutcome, 500) || null,
+      requestedRecommendation: need.requestedRecommendation === true
+        ? true : (need.requestedRecommendation === false ? false : null),
+      missingDetails: Object.freeze([...(need.missingDetails ?? [])].slice(0, 10)),
+    }),
     contextDependent,
     requiresCanonicalHydration: !hasCurrentEntityMention
       && contextDependent && Boolean(canonicalEntity?.recordId),
@@ -246,6 +265,10 @@ function publicationScope(input, bundles) {
         publicationRevision,
         itemKey: String(record.entity_metadata?.itemKey ?? record.metadata?.itemKey ?? '').trim() || null,
         categoryKey: String(record.entity_metadata?.categoryKey ?? record.metadata?.categoryKey ?? '').trim() || null,
+        useCasePhrases: Object.freeze([...(record.publicationUseCasePhrases
+          ?? record.useCasePhrases ?? [])]),
+        useCaseTokens: Object.freeze([...(record.publicationUseCaseTokens
+          ?? record.useCaseTokens ?? [])]),
       }));
     }
   }
@@ -393,6 +416,36 @@ function activeCatalogCandidate(input, recordScope, allowedTypes) {
   return null;
 }
 
+function structuredUseCaseCandidates(recordScope, allowedTypes, limit, queryContext) {
+  if (queryContext?.need?.detected !== true || !allowedTypes.has('CATALOG_ITEM')) {
+    return Object.freeze([]);
+  }
+  const queryTokens = new Set(tokens(queryContext.sparseText));
+  if (!queryTokens.size) return Object.freeze([]);
+  const candidates = [];
+  for (const record of recordScope.values()) {
+    if (record.recordType !== 'CATALOG_ITEM') continue;
+    let bestScore = 0;
+    for (const phrase of record.useCasePhrases ?? []) {
+      const phraseTokens = [...new Set(tokens(phrase))];
+      if (!phraseTokens.length) continue;
+      const matched = phraseTokens.filter((token) => queryTokens.has(token)).length;
+      const coverage = matched / phraseTokens.length;
+      const sufficient = phraseTokens.length === 1 ? matched === 1
+        : matched >= 2 && coverage >= 0.5;
+      if (!sufficient) continue;
+      bestScore = Math.max(bestScore, Math.min(0.98, 0.6 + (coverage * 0.35)));
+    }
+    if (!bestScore) continue;
+    candidates.push({
+      ...record,
+      score: bestScore,
+      matchMethod: 'published_use_case',
+    });
+  }
+  return rankChannel(candidates, 'structured', limit);
+}
+
 function activeWorkflowCandidate(input, recordScope, allowedTypes) {
   if (!allowedTypes.has('WORKFLOW_RULE')) return null;
   const active = input?.memory?.activeTool;
@@ -417,6 +470,17 @@ function structuredCandidatesForTurn(input, classification, resolution, recordSc
       ? { routingCandidates: [classification.candidate] }
       : resolution;
   const candidates = [...structuredCandidates(selectedResolution, recordScope, allowedTypes, limit)];
+  for (const candidate of structuredUseCaseCandidates(
+    recordScope, allowedTypes, limit, queryContext,
+  )) {
+    const existing = candidates.findIndex((entry) => (
+      normalizeId(entry.recordId) === normalizeId(candidate.recordId)
+      && entry.recordType === candidate.recordType
+    ));
+    if (existing >= 0) {
+      if (candidate.score > candidates[existing].score) candidates[existing] = candidate;
+    } else candidates.push(candidate);
+  }
   if (classification?.intentClass === 'ACTION_TOOL_REQUEST') {
     const explicitCatalog = (resolution?.namespaceCandidates?.CATALOG ?? []).filter((candidate) => (
       candidate.explicit === true

@@ -1,5 +1,6 @@
 import { knowledgeSearchIndexes } from '../knowledge-engine/query-classifier.js';
 import { retrieveTargetedCandidates } from '../knowledge-engine/targeted-retrieval.js';
+import { resolveKnowledgeConfidenceConfiguration } from './knowledge-confidence-config.js';
 
 export const PARALLEL_HYBRID_SEARCH_VERSION = 1;
 
@@ -101,8 +102,24 @@ function scopedPublicationRecord(reservation, bundles = []) {
 
 function reserveBeforeFusion(result, request) {
   const requested = requiredReservations(request);
+  const confidence = resolveKnowledgeConfidenceConfiguration(
+    request.classification?.confidenceConfiguration
+      ?? request.resolution?.confidenceConfiguration,
+  );
+  const useCaseReservation = request.input?.queryUnderstanding?.need?.detected === true
+    ? (result.channels?.structured ?? []).find((candidate) => (
+      candidate.matchMethod === 'published_use_case'
+      && Number(candidate.score ?? 0) >= confidence.highConfidence
+    ))
+    : null;
+  const needReserved = useCaseReservation
+    ? [compactReservation(useCaseReservation, 'published_use_case')]
+      .filter(Boolean)
+    : [];
   const existing = result.queryContext?.reservedRecords ?? [];
-  const reservedRecords = Object.freeze([...new Map([...requested, ...existing].map((entry) => (
+  const reservedRecords = Object.freeze([...new Map([
+    ...requested, ...needReserved, ...existing,
+  ].map((entry) => (
     [`${String(entry.recordType).toUpperCase()}:${normalized(entry.recordId)}`, entry]
   ))).values()].slice(0, 5));
   const reservedCandidates = reservedRecords

@@ -252,7 +252,8 @@ async function loadSemanticRecords(job, contextRunner) {
             CASE WHEN si.price IS NOT NULL
               THEN 'Price: ' || si.price::text || ' ' || COALESCE(si.currency, '') END,
             CASE WHEN si.relationships <> '{}'::jsonb THEN 'Relationships: ' || si.relationships::text END,
-            CASE WHEN si.selection_rules <> '{}'::jsonb THEN 'Selection rules: ' || si.selection_rules::text END
+            CASE WHEN si.selection_rules <> '{}'::jsonb THEN 'Selection rules: ' || si.selection_rules::text END,
+            CASE WHEN attributes.values_json <> '{}'::jsonb THEN 'Attributes: ' || attributes.values_json::text END
           ),
           si.name, COALESCE(si.category, sc.name), si.aliases, si.category_aliases,
           jsonb_build_object(
@@ -262,7 +263,8 @@ async function loadSemanticRecords(job, contextRunner) {
             'categoryDescription', si.category_description,
             'categorySelectionRules', si.category_selection_rules,
             'relationships', si.relationships,
-            'selectionRules', si.selection_rules
+            'selectionRules', si.selection_rules,
+            'attributes', attributes.values_json
           )
          FROM structured_items si
          JOIN structured_catalogs sc
@@ -274,6 +276,12 @@ async function loadSemanticRecords(job, contextRunner) {
            ON d.tenant_id=si.tenant_id AND d.id=si.document_id
          JOIN knowledge_document_versions v
            ON v.tenant_id=si.tenant_id AND v.id=si.document_version_id
+         LEFT JOIN LATERAL (
+           SELECT COALESCE(jsonb_object_agg(a.attribute_key, a.value), '{}'::jsonb) AS values_json
+             FROM structured_item_attributes a
+            WHERE a.tenant_id=si.tenant_id AND a.knowledge_base_id=si.knowledge_base_id
+              AND a.item_id=si.id
+         ) attributes ON true
         WHERE si.tenant_id=$1 AND si.knowledge_base_id=$2
           AND si.status='approved' AND d.status='ready'
           AND v.is_current=true AND v.status='ready' AND v.deleted_at IS NULL

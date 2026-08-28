@@ -158,6 +158,35 @@ function normalizeDecisionEnvelope(value) {
   };
 }
 
+function compactDecisionBranchError(value) {
+  const compactKeys = ['toolName', 'toolArguments', 'clarificationReason'];
+  if (!compactKeys.some((key) => Object.hasOwn(value, key))) return null;
+  const decision = text(value.decision, 20).toLocaleUpperCase();
+  if (!externalDecisions.includes(decision)) return 'invalid_decision';
+  const answer = text(value.answer, maximumAnswerCharacters);
+  const responseId = value.responseId ?? null;
+  const evidenceIds = Array.isArray(value.evidenceIds) ? value.evidenceIds : [];
+  const toolName = value.toolName ?? null;
+  const toolArguments = value.toolArguments ?? null;
+  const clarificationReason = value.clarificationReason ?? null;
+
+  if (decision === 'RESPONSE') {
+    return toolName !== null || toolArguments !== null || clarificationReason !== null
+      ? 'mixed_decision_payload' : null;
+  }
+  if (decision === 'TOOL') {
+    return answer || responseId !== null || clarificationReason !== null
+      || typeof toolName !== 'string' || !toolName.trim()
+      || typeof toolArguments !== 'string'
+      ? 'mixed_decision_payload' : null;
+  }
+  return !answer || responseId !== null || evidenceIds.length > 0
+    || toolName !== null || toolArguments !== null
+    || typeof clarificationReason !== 'string'
+    || !clarificationReasons.has(text(clarificationReason, 64).toLocaleLowerCase())
+    ? 'mixed_decision_payload' : null;
+}
+
 function normalizeFieldValue(value, schema, envelope) {
   if (value === undefined || value === null || value === '') return undefined;
   if (schema.type === 'boolean') return typeof value === 'boolean' ? value : undefined;
@@ -395,7 +424,10 @@ export function groundedDecisionContract(envelope, runtime = {}) {
       'toolArguments', 'clarificationReason'],
     rules: [
       'Answer the latest caller question first.',
-      'Return RESPONSE for grounded caller-facing speech, TOOL for one authorized action, or CLARIFY when evidence is genuinely weak or ambiguous.',
+      'Return exactly one decision: RESPONSE, TOOL, or CLARIFY. Never mix fields from different decision branches.',
+      'Return RESPONSE only when selected published evidence clearly supports the answer or recommendation.',
+      'Return TOOL only when the caller requests an action, applicable Workflow authorizes it, and one assigned tool schema permits its arguments.',
+      'Return CLARIFY only when one genuinely required detail is missing or authoritative candidates remain genuinely ambiguous.',
       'For CLARIFY, put one targeted caller-facing question in answer and set clarificationReason.',
       'A CLARIFY decision must always contain one audible question. Never return empty speech or silently wait for another caller utterance.',
       'Use TOOL only for one configured tool and never claim success before its verified result.',
@@ -413,6 +445,7 @@ export function groundedDecisionContract(envelope, runtime = {}) {
       'Use missing_entity when a requested fact has no explicit or remembered canonical entity. Use missing_fact when an entity is known but the caller has not identified the fact needed.',
       'Use authoritative_ambiguity only when supplied ambiguityCandidates contain multiple genuinely close authoritative records; pendingQuestion must name the closest canonical candidates.',
       'Interpret the complete current question with only the supplied relevant call memory and published evidence.',
+      'For need-based questions without a named entity, infer the caller context, problem, desired outcome and whether a recommendation is requested from the supplied need context and recent turns. Select an option only when its hydrated Catalog metadata explicitly supports that use case; otherwise ask one targeted question for the missing detail.',
       'Interpret the requested fact, explicit entities, comparison entities, contextual references and action intent from the supplied input; do not echo internal interpretation state.',
       'If the latest question omits an entity but relevant call memory contains an active canonical entity or category, interpret contextual requested facts against that remembered record and select its permitted source.',
       'If a requested fact requires an entity and neither the latest question nor relevant call memory and evidence identify one, return a targeted CLARIFY question; never select an arbitrary evidence record.',
@@ -492,6 +525,8 @@ export function groundedDecisionJsonSchema(envelope, runtime = {}) {
 export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
   const parsedObject = parseObject(raw);
   if (!parsedObject) return Object.freeze({ valid: false, reason: 'invalid_json' });
+  const compactBranchError = compactDecisionBranchError(parsedObject);
+  if (compactBranchError) return Object.freeze({ valid: false, reason: compactBranchError });
   const parsed = normalizeDecisionEnvelope(parsedObject);
   if (!parsed || !exactShape(parsed)) {
     return Object.freeze({ valid: false, reason: 'invalid_response_shape' });

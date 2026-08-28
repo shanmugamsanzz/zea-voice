@@ -68,6 +68,7 @@ export function buildRevisionSparseIndex(job, records) {
       record.question, record.entity_name, record.entity_category,
       ...(record.entity_aliases ?? []), ...(record.entity_category_aliases ?? []),
       ...(record.publicationAliases ?? []), ...(record.publicationSttForms ?? []), record.content,
+      ...(record.publicationUseCasePhrases ?? []),
     ].filter(Boolean).join(' ')),
   }));
   const documentFrequency = {};
@@ -118,6 +119,8 @@ export function buildCompactKnowledgeMap(job, records) {
       aliases: record.publicationAliases ?? [],
       sttForms: record.publicationSttForms ?? [],
       phoneticForms: record.publicationPhoneticForms ?? [],
+      useCasePhrases: record.publicationUseCasePhrases ?? [],
+      useCaseTokens: record.publicationUseCaseTokens ?? [],
       answerCard: record.approvedAnswerCard ?? null,
     })),
   };

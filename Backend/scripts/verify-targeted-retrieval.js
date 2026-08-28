@@ -248,7 +248,7 @@ assert.equal(retrieval.queryContext.relevantNamespace, 'CATALOG');
 assert.deepEqual(retrieval.queryContext.filters, {
   tenantId, agentId,
   knowledgeBases: [{ id: knowledgeBaseId, publicationRevision: 7 }],
-  usageDirection: 'inbound', namespace: 'CATALOG',
+  usageDirection: 'inbound', namespace: 'CATALOG', namespaces: ['CATALOG'],
 });
 assert.equal(retrieval.queryContext.reservedRecords[0].recordId, alpha.record_id);
 assert.equal(retrieval.channels.structured[0].recordId, alpha.record_id);

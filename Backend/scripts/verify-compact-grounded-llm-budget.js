@@ -60,7 +60,10 @@ const session = await createSelectedLlmStream(profile, {
     groundedDecisionInput: {
       currentQuestion,
       recentRelevantTurns,
-      canonicalMemory: { activeEntity: { recordId: 'record_1', name: 'Published heading 1' } },
+      canonicalMemory: {
+        activeEntity: { recordId: 'record_1', name: 'Published heading 1' },
+        collectedInformation: { contact_name: 'Asha' },
+      },
       requestedFact: 'details',
       ambiguityCandidates: [{
         recordId: 'record_1', name: 'Published canonical option', confidenceBand: 'MEDIUM',
@@ -94,20 +97,18 @@ const match = /<grounded_turn_input>\n([\s\S]+)\n<\/grounded_turn_input>/u.exec(
 assert.ok(match, 'The complete grounded input must be present');
 const groundedInput = JSON.parse(match[1]);
 assert.deepEqual(Object.keys(groundedInput), [
-  'currentQuestion', 'recentRelevantTurns', 'canonicalMemory', 'requestedFact',
-  'ambiguityCandidates', 'clarificationContext', 'hydratedRecords',
-  'workflowAuthorization', 'toolSchemas',
+  'currentQuestion', 'relevantRecentTurns', 'canonicalCallMemory', 'identifiedNeed',
+  'requestedFact', 'hydratedRecords', 'authorizedWorkflow', 'toolSchemas',
 ]);
-assert.equal(groundedInput.recentRelevantTurns.length, 10,
+assert.equal(groundedInput.relevantRecentTurns.length, 10,
   'Recent Turns 5 must send five complete caller-agent pairs when the prompt budget permits');
 assert.equal(groundedInput.hydratedRecords.length, 5);
 assert.equal(groundedInput.requestedFact, 'details');
-assert.equal(groundedInput.ambiguityCandidates[0].name, 'Published canonical option');
-assert.deepEqual(groundedInput.toolSchemas.map((tool) => tool.name), ['configured_action']);
-assert.equal(groundedInput.clarificationContext.heardText, 'Zea-like spoken option');
-assert.equal(groundedInput.clarificationContext.candidates[0].name,
+assert.equal(groundedInput.identifiedNeed.ambiguityCandidates[0].name,
   'Published canonical option');
-assert.equal(groundedInput.clarificationContext.collectedFields.contact_name, 'Asha');
+assert.deepEqual(groundedInput.toolSchemas.map((tool) => tool.name), ['configured_action']);
+assert.equal(groundedInput.currentQuestion, currentQuestion);
+assert.equal(groundedInput.canonicalCallMemory.collectedInformation.contact_name, 'Asha');
 assert.doesNotMatch(systemPrompt, /duplicate external history|unrelated_assigned_tool|must-not-enter-compact-input/u);
 
 assert.equal(llmOperationalFailureClass({ code: 'LLM_PROVIDER_TIMEOUT' }), 'timeout');

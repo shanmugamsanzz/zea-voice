@@ -120,6 +120,8 @@ function publicationRecord(record, answerCards) {
     entity_category_aliases: metadata.categoryAliases ?? [], entity_metadata: metadata,
     publicationAliases: record.aliases ?? [], publicationSttForms: record.sttForms ?? [],
     publicationPhoneticForms: record.phoneticForms ?? [], approvedAnswerCard: answerCard,
+    publicationUseCasePhrases: record.useCasePhrases ?? [],
+    publicationUseCaseTokens: record.useCaseTokens ?? [],
   });
 }
 

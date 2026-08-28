@@ -219,6 +219,7 @@
     "verify:clarification-information-ui-contract": "node scripts/verify-clarification-information-ui-contract.js && node scripts/verify-compact-grounded-llm-budget.js",
     "verify:semantic-workflow-routing": "node scripts/verify-semantic-workflow-routing.js",
     "verify:welcome-acknowledgement-memory": "node scripts/verify-welcome-acknowledgement-memory.js",
+    "verify:need-based-use-case-retrieval": "node scripts/verify-need-based-use-case-retrieval.js",
     "seed:super-admin": "node scripts/create-super-admin.js",
     "db:migrate": "node-pg-migrate up --migrations-dir migrations",
     "db:rollback": "node-pg-migrate down --migrations-dir migrations",

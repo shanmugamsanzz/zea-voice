@@ -5,8 +5,12 @@ import {
   canonicalRecordIdentityKey,
   canonicalRecordNamespace,
 } from './canonical-record-identity.js';
+import {
+  publishedUseCasePhrases,
+  publishedUseCaseTokens,
+} from './published-use-case-signals.js';
 
-export const KNOWLEDGE_PUBLICATION_BUNDLE_VERSION = 7;
+export const KNOWLEDGE_PUBLICATION_BUNDLE_VERSION = 8;
 
 const ROUTABLE_RECORD_TYPES = new Set(['faq', 'catalog_item', 'workflow_rule', 'conversation_node']);
 
@@ -110,11 +114,15 @@ function answerCardForRecord(record) {
 
 export function enrichPublicationRecord(record) {
   const phrases = buildPublicationPhraseForms(recordPhrases(record));
+  const useCasePhrases = publishedUseCasePhrases(record);
+  const useCaseTokens = publishedUseCaseTokens(record);
   return Object.freeze({
     ...record,
     publicationAliases: phrases.normalized,
     publicationSttForms: phrases.stt,
     publicationPhoneticForms: phrases.phonetic,
+    publicationUseCasePhrases: useCasePhrases,
+    publicationUseCaseTokens: useCaseTokens,
     approvedAnswerCard: answerCardForRecord(record),
   });
 }

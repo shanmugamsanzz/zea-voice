@@ -188,6 +188,7 @@ function compactBundle(prepared, turn, publicationRevisions) {
     requestedFact: turn.llmInput.requestedFact,
     requestedFacts: Object.freeze(turn.llmInput.requestedFact
       ? [turn.llmInput.requestedFact] : []),
+    need: turn.llmInput.need,
     ambiguityCandidates: turn.llmInput.ambiguityCandidates,
     recentRelevantTurns: turn.llmInput.recentRelevantTurns,
     intentClass: prepared.intentClass,

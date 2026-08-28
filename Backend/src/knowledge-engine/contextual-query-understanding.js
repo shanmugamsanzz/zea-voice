@@ -1,5 +1,6 @@
 import { typedRecordIdentityKey } from './canonical-record-identity.js';
 import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/knowledge-confidence-config.js';
+import { compactNeedContext } from './published-use-case-signals.js';
 
 export const CONTEXTUAL_QUERY_UNDERSTANDING_VERSION = 1;
 
@@ -306,6 +307,11 @@ export function understandContextualKnowledgeQuery(input, resolution) {
     : [];
   const ambiguity = ambiguityFor(resolution, explicitCandidates, confidenceConfiguration);
   const actionIntent = actionUnderstanding(input, resolution, confidenceConfiguration);
+  const need = compactNeedContext({
+    input,
+    hasCurrentEntitySignal,
+    hasCurrentRouteSignal: hasCurrentNonCatalogSignal,
+  });
   const canonicalContext = explicitCandidates.length > 0 && !ambiguity.detected
     ? candidateSummary(explicitCandidates[0], confidenceConfiguration)
     : (contextDependent ? memoryEntity : null);
@@ -331,6 +337,7 @@ export function understandContextualKnowledgeQuery(input, resolution) {
       : 'grounded_llm',
     requiresGroundedFactInterpretation: requestedFacts.length === 0,
     actionIntent,
+    need,
     ambiguity,
     contextDependent,
     canonicalContext,

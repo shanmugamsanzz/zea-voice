@@ -87,6 +87,19 @@ function compactQueryUnderstanding(input) {
     requestedFactSource: cleanText(understanding.requestedFactSource, 40) || null,
     requiresGroundedFactInterpretation:
       understanding.requiresGroundedFactInterpretation === true,
+    need: Object.freeze({
+      detected: understanding.need?.detected === true,
+      interpretationMode: cleanText(understanding.need?.interpretationMode, 80) || null,
+      businessContext: Object.freeze(object(understanding.need?.businessContext)),
+      customerProblem: cleanText(understanding.need?.customerProblem, 800) || null,
+      desiredOutcome: cleanText(understanding.need?.desiredOutcome, 500) || null,
+      requestedRecommendation: understanding.need?.requestedRecommendation === true
+        ? true : (understanding.need?.requestedRecommendation === false ? false : null),
+      missingDetails: Object.freeze((understanding.need?.missingDetails ?? [])
+        .slice(0, 10).map((value) => cleanText(value, 160)).filter(Boolean)),
+      requiresGroundedInterpretation:
+        understanding.need?.requiresGroundedInterpretation === true,
+    }),
     actionIntent: Object.freeze({
       detected: understanding.actionIntent?.detected === true,
       source: cleanText(understanding.actionIntent?.source, 80) || null,
