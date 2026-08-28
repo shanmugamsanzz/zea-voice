@@ -1,5 +1,6 @@
 import { validateGroundedLlmDecision } from './grounded-llm-decision.js';
 import { groundedNumbers as numbers } from './grounded-number-validator.js';
+import { deterministicSourceEntry } from '../../knowledge-engine/deterministic-source-mapping.js';
 
 const maximumIntentCharacters = 160;
 const maximumAnswerCharacters = 4_000;
@@ -197,11 +198,9 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
     found: knowledge.found === true && selectedSources.length > 0,
     route: text(knowledge.route, 40) || 'none',
     sources: Object.freeze(selectedSources),
-    sourceMap: Object.freeze(selectedSources.map((source) => Object.freeze({
-      sourceId: source.id,
-      publishedEvidenceId: source.publishedEvidenceId ?? null,
-      recordId: source.recordId ?? null,
-    }))),
+    sourceMap: Object.freeze(selectedSources.map((source) => (
+      deterministicSourceEntry(source, source.id)
+    ))),
     entities: Object.freeze(entities),
     exactCallerResponses: Object.freeze(exactCallerResponses),
   });

@@ -122,6 +122,9 @@ export function buildContextEnrichedRetrievalQuery(input, classification, resolu
       ?? resolution?.candidateNamespace,
     80,
   ).toUpperCase() || null;
+  const relevantNamespaces = Object.freeze([...(classification?.relevantNamespaces ?? (
+    relevantNamespace ? [relevantNamespace] : []
+  ))].map((value) => clean(value, 80).toUpperCase()).filter(Boolean));
   const reserved = [];
   for (const entity of explicit) {
     if (!entity.recordId) continue;
@@ -156,6 +159,7 @@ export function buildContextEnrichedRetrievalQuery(input, classification, resolu
     canonicalEntity,
     requestedFacts,
     relevantNamespace,
+    relevantNamespaces,
     comparisonEntities: Object.freeze(comparisons),
     contextDependent,
     requiresCanonicalHydration: !hasExplicitCurrentEntity
@@ -169,6 +173,7 @@ export function buildContextEnrichedRetrievalQuery(input, classification, resolu
       knowledgeBases: Object.freeze(scope.map((entry) => Object.freeze({ ...entry }))),
       usageDirection: input.usageDirection,
       namespace: relevantNamespace,
+      namespaces: relevantNamespaces,
     }),
   });
 }
@@ -650,6 +655,7 @@ export async function retrieveTargetedCandidates({
     intentClass: classification.intentClass,
     searchedIndexes: Object.freeze([...indexes]),
     recordTypes: Object.freeze([...recordTypes]),
+    relevantNamespaces: Object.freeze([...(classification?.relevantNamespaces ?? [])]),
     queryContext,
     channels: Object.freeze({ structured, bm25, qdrant }),
     namespaceChannels: Object.freeze({

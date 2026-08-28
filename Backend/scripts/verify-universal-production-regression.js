@@ -180,6 +180,8 @@ const runTurn = orchestratorSource.slice(runTurnStart, groundedTurnStart);
 assert.match(runTurn, /activeGroundedTurnEpochs\.add\(epoch\)/u);
 assert.match(runTurn, /#clearInactivity\(\)/u);
 assert.match(runTurn, /activeGroundedTurnEpochs\.delete\(epoch\)/u);
+assert.match(runTurn, /outcome\?\.suppressInactivity\s*!==\s*true/u,
+  'Operational response configuration failures must suppress inactivity fallback');
 const inactivityStart = orchestratorSource.indexOf('async #handleInactivity()');
 const inactivityEnd = orchestratorSource.indexOf('async #closingMessage(', inactivityStart);
 const inactivity = orchestratorSource.slice(inactivityStart, inactivityEnd);
@@ -189,6 +191,13 @@ const finalPlayback = orchestratorSource.indexOf('await this.controller.playback
 const finalGroundedEnd = orchestratorSource.indexOf('async #synthesizeWelcome(', groundedTurnStart);
 assert.ok(finalPlayback > groundedTurnStart && finalPlayback < finalGroundedEnd,
   'Grounded turn must remain active through final playback');
+const missingRuntimeMessageStart = orchestratorSource.indexOf('if (!finalAnswer)', groundedTurnStart);
+const missingRuntimeMessageEnd = orchestratorSource.indexOf('if (validatedNormalTurn)', missingRuntimeMessageStart);
+const missingRuntimeMessage = orchestratorSource.slice(
+  missingRuntimeMessageStart, missingRuntimeMessageEnd,
+);
+assert.match(missingRuntimeMessage, /operational_response_unconfigured/u);
+assert.match(missingRuntimeMessage, /suppressInactivity:\s*true/u);
 
 const hardcoding = JSON.parse(run(
   'universal runtime hardcoding scan',

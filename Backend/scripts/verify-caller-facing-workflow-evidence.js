@@ -1,13 +1,18 @@
 import assert from 'node:assert/strict';
 import { understandContextualKnowledgeQuery } from '../src/knowledge-engine/contextual-query-understanding.js';
 import { buildGroundedLlmInput } from '../src/knowledge-bases/grounded-turn-evidence.js';
-import { assertNonEmptyGroundedPackage } from '../src/knowledge-bases/grounded-normal-turn-runtime.js';
+import {
+  assertNonEmptyGroundedPackage,
+  isRecoverableGroundedEvidenceFailure,
+  scheduleGroundedEvidenceRecovery,
+} from '../src/knowledge-bases/grounded-normal-turn-runtime.js';
 
 const scope = {
   tenantId: '97000000-0000-4000-8000-000000000001',
   agentId: '97000000-0000-4000-8000-000000000002',
   callId: '97000000-0000-4000-8000-000000000003',
 };
+const knowledgeBaseId = '97000000-0000-4000-8000-000000000008';
 const staleEntity = {
   recordId: '97000000-0000-4000-8000-000000000004',
   key: 'prior-option', name: 'Prior Option',
@@ -63,7 +68,15 @@ const llmInput = buildGroundedLlmInput({
         hydrationValidated: true, publicationValidated: true,
         authoritativeData: { content: 'Published support boundary.' },
       },
-    ],
+    ].map((source, index) => ({
+      ...source,
+      tenantId: scope.tenantId,
+      agentId: scope.agentId,
+      knowledgeBaseId,
+      publicationRevision: 4,
+      documentId: `97000000-0000-4000-8100-00000000000${index + 1}`,
+      documentVersionId: `97000000-0000-4000-8200-00000000000${index + 1}`,
+    })),
   },
   runtimeProfile: { tools: [] },
 });
@@ -90,6 +103,26 @@ assert.throws(() => assertNonEmptyGroundedPackage({
   error.code === 'KNOWLEDGE_GROUNDED_PACKAGE_EMPTY'
   && error.details?.stage === 'grounded_evidence_packaging'
 ));
+assert.equal(isRecoverableGroundedEvidenceFailure('KNOWLEDGE_GROUNDED_PACKAGE_EMPTY'), true,
+  'An empty package after valid hydration must trigger publication artifact recovery');
+let scheduledRecovery = null;
+const recovery = await scheduleGroundedEvidenceRecovery(
+  { tenantId: scope.tenantId },
+  [{ knowledgeBaseId, publicationRevision: 4 }],
+  {
+    code: 'KNOWLEDGE_GROUNDED_PACKAGE_EMPTY',
+    details: { stage: 'grounded_evidence_packaging' },
+  },
+  {
+    schedulePublishedArtifactRecovery: async (_auth, publications, reason) => {
+      scheduledRecovery = { publications, reason };
+      return [{ scheduled: true, knowledgeBaseId, publicationRevision: 4 }];
+    },
+  },
+);
+assert.equal(scheduledRecovery.reason, 'KNOWLEDGE_GROUNDED_PACKAGE_EMPTY');
+assert.deepEqual(scheduledRecovery.publications, [{ knowledgeBaseId, publicationRevision: 4 }]);
+assert.equal(recovery[0].scheduled, true);
 
 console.log(JSON.stringify({
   task: 'caller-facing-workflow-evidence', passed: true,

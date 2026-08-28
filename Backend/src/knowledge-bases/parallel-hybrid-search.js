@@ -9,6 +9,16 @@ const namespaceByType = Object.freeze({
   KNOWLEDGE_CHUNK: 'GENERAL',
 });
 
+const namespaceIndexes = Object.freeze({
+  CATALOG: knowledgeSearchIndexes.CATALOG,
+  FAQ: knowledgeSearchIndexes.FAQ,
+  CONVERSATION: knowledgeSearchIndexes.CONVERSATION,
+  WORKFLOW: knowledgeSearchIndexes.WORKFLOW,
+  GENERAL: knowledgeSearchIndexes.GENERAL,
+});
+
+const allNamespaces = Object.freeze(Object.keys(namespaceIndexes));
+
 function normalized(value) {
   return String(value ?? '').trim().toLocaleLowerCase();
 }
@@ -116,19 +126,43 @@ function reserveBeforeFusion(result, request) {
   });
 }
 
-function forcedParallelClassification(classification = {}) {
-  const indexes = new Set(classification.retrievalPlan?.indexes ?? []);
-  for (const namespaceIndex of [
-    knowledgeSearchIndexes.CATALOG,
-    knowledgeSearchIndexes.FAQ,
-    knowledgeSearchIndexes.CONVERSATION,
-    knowledgeSearchIndexes.WORKFLOW,
-    knowledgeSearchIndexes.GENERAL,
-  ]) indexes.add(namespaceIndex);
+function candidateNamespace(value) {
+  const direct = String(value?.namespace ?? '').trim().toUpperCase();
+  if (namespaceIndexes[direct]) return direct;
+  return namespaceByType[String(value?.recordType ?? '').trim().toUpperCase()] ?? null;
+}
+
+function relevantNamespacesForTurn(request = {}) {
+  const classification = request.classification ?? {};
+  const planned = new Set((classification.retrievalPlan?.indexes ?? []).map((index) => (
+    Object.entries(namespaceIndexes).find(([, value]) => value === index)?.[0]
+  )).filter(Boolean));
+  const required = requiredReservations(request);
+  const signalled = new Set([
+    String(classification.selectedNamespace ?? '').trim().toUpperCase(),
+    candidateNamespace(classification.candidate),
+    candidateNamespace(request.resolution?.candidate),
+    ...required.map(candidateNamespace),
+  ].filter((namespace) => namespaceIndexes[namespace]));
+  const intentClass = String(classification.intentClass ?? 'UNKNOWN').toUpperCase();
+  if (intentClass === 'UNKNOWN' && signalled.size > 0) return signalled;
+  for (const namespace of signalled) planned.add(namespace);
+  if (planned.size > 0) return planned;
+  return new Set(allNamespaces);
+}
+
+function forcedParallelClassification(request = {}) {
+  const classification = request.classification ?? {};
+  const relevantNamespaces = relevantNamespacesForTurn(request);
+  const indexes = new Set((classification.retrievalPlan?.indexes ?? []).filter((index) => (
+    !Object.values(namespaceIndexes).includes(index)
+  )));
+  for (const namespace of relevantNamespaces) indexes.add(namespaceIndexes[namespace]);
   indexes.add(knowledgeSearchIndexes.BM25);
   indexes.add(knowledgeSearchIndexes.SEMANTIC);
   return Object.freeze({
     ...classification,
+    relevantNamespaces: Object.freeze([...relevantNamespaces]),
     retrievalPlan: Object.freeze({
       ...(classification.retrievalPlan ?? {}),
       indexes: Object.freeze([...indexes]),
@@ -138,7 +172,7 @@ function forcedParallelClassification(classification = {}) {
 }
 
 export async function searchParallelHybridCandidates(request = {}, dependencies = {}) {
-  const classification = forcedParallelClassification(request.classification);
+  const classification = forcedParallelClassification(request);
   const result = await retrieveTargetedCandidates({
     ...request,
     classification,

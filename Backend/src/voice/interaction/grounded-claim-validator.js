@@ -1,4 +1,8 @@
 import { groundedNumbers as numbers } from './grounded-number-validator.js';
+import {
+  deterministicSourceEntry,
+  resolveDeterministicSource,
+} from '../../knowledge-engine/deterministic-source-mapping.js';
 
 const maximumText = 8_000;
 const maximumEvidenceText = 32_000;
@@ -314,18 +318,19 @@ function sameEvidenceScope(source, authoritative) {
   return true;
 }
 
-function authoritativeSourceFor(source, authoritativeSources) {
+function authoritativeResolutionFor(source, authoritativeSources) {
   const publishedId = identity(source?.publishedEvidenceId);
   if (publishedId) {
-    return authoritativeSources.find((candidate) => (
-      identity(candidate.id) === publishedId && sameEvidenceScope(source, candidate)
-    )) ?? null;
+    return resolveDeterministicSource(
+      deterministicSourceEntry(source, source.id), authoritativeSources,
+    );
   }
   const canonicalKey = canonicalEvidenceKey(source);
   if (canonicalKey) {
-    return authoritativeSources.find((candidate) => (
+    const record = authoritativeSources.find((candidate) => (
       canonicalEvidenceKey(candidate) === canonicalKey && sameEvidenceScope(source, candidate)
     )) ?? null;
+    return Object.freeze({ valid: Boolean(record), reason: record ? null : 'missing_evidence', record });
   }
   // Compatibility for non-publication test/runtime sources: accept a record
   // ID only when it identifies exactly one authoritative source.
@@ -333,7 +338,12 @@ function authoritativeSourceFor(source, authoritativeSources) {
   const matches = recordId ? authoritativeSources.filter((candidate) => (
     identity(candidate.recordId) === recordId && sameEvidenceScope(source, candidate)
   )) : [];
-  return matches.length === 1 ? matches[0] : null;
+  const record = matches.length === 1 ? matches[0] : null;
+  return Object.freeze({ valid: Boolean(record), reason: record ? null : 'missing_evidence', record });
+}
+
+function authoritativeSourceFor(source, authoritativeSources) {
+  return authoritativeResolutionFor(source, authoritativeSources).record;
 }
 
 export function hydrateSelectedEvidence(decision, envelope, authoritativeSources = []) {
@@ -349,8 +359,17 @@ export function hydrateSelectedEvidence(decision, envelope, authoritativeSources
 
 export function hydrateGroundingEnvelope(envelope, authoritativeSources = []) {
   const requestedSources = envelope?.sources ?? [];
+  const mappingFailures = [];
   const sources = requestedSources.map((source) => {
-    const authoritative = authoritativeSourceFor(source, authoritativeSources);
+    const resolution = authoritativeResolutionFor(source, authoritativeSources);
+    const authoritative = resolution.record;
+    if (!authoritative) {
+      mappingFailures.push(Object.freeze({
+        sourceId: source.id ?? null,
+        publishedEvidenceId: source.publishedEvidenceId ?? null,
+        reason: resolution.reason,
+      }));
+    }
     return authoritative ? Object.freeze({
       ...source, ...authoritative,
       // The envelope may explicitly mark the retrieval-selected guidance
@@ -366,6 +385,7 @@ export function hydrateGroundingEnvelope(envelope, authoritativeSources = []) {
     ...envelope,
     found: envelope?.found === true && sources.length > 0,
     incompleteEvidenceMetadata: requestedSources.length > sources.length,
+    mappingFailures: Object.freeze(mappingFailures),
     sources: Object.freeze(sources),
   });
 }

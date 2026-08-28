@@ -9,6 +9,7 @@ import {
 } from '../knowledge-engine/engine-contract.js';
 import { prepareKnowledgeQuery } from '../knowledge-engine/fast-query-preparation.js';
 import { resolveCanonicalTopicMemory } from '../knowledge-engine/canonical-topic-memory.js';
+import { buildDeterministicSourceMap } from '../knowledge-engine/deterministic-source-mapping.js';
 import {
   loadPublishedEngineArtifacts,
 } from '../knowledge-engine/runtime-service.js';
@@ -22,7 +23,33 @@ const recoverableHydrationErrors = new Set([
   'KNOWLEDGE_SELECTED_CANDIDATE_NOT_HYDRATED',
   'KNOWLEDGE_AUTHORITATIVE_PROVENANCE_INCOMPLETE',
   'KNOWLEDGE_COMPARISON_HYDRATION_INCOMPLETE',
+  'KNOWLEDGE_GROUNDED_PACKAGE_EMPTY',
 ]);
+
+export function isRecoverableGroundedEvidenceFailure(value) {
+  return recoverableHydrationErrors.has(String(value?.code ?? value ?? '').trim());
+}
+
+export async function scheduleGroundedEvidenceRecovery(
+  auth, publications = [], error = {}, dependencies = {},
+) {
+  if (!publications.length || !isRecoverableGroundedEvidenceFailure(error)) return null;
+  const affectedKnowledgeBases = new Set([
+    ...(error.details?.selectedCandidates ?? []).map((candidate) => candidate.knowledgeBaseId),
+    ...(error.details?.records ?? []).map((record) => record.knowledgeBaseId),
+  ].filter(Boolean).map((value) => String(value).toLocaleLowerCase()));
+  const affectedPublications = affectedKnowledgeBases.size
+    ? publications.filter((publication) => (
+      affectedKnowledgeBases.has(String(publication.knowledgeBaseId).toLocaleLowerCase())
+    )) : publications;
+  const scheduleRecovery = dependencies.schedulePublishedArtifactRecovery
+    ?? schedulePublishedArtifactRecovery;
+  return scheduleRecovery(auth, affectedPublications, error.code, dependencies)
+    .catch((recoveryError) => Object.freeze([{
+      scheduled: false,
+      reason: recoveryError.code ?? 'artifact_recovery_schedule_failed',
+    }]));
+}
 
 export function assertNonEmptyGroundedPackage(authoritative = {}, llmInput = {}) {
   const hydratedCallerFacing = (authoritative.evidence ?? []).filter((source) => (
@@ -164,14 +191,7 @@ function compactBundle(prepared, turn, publicationRevisions) {
     recentRelevantTurns: turn.llmInput.recentRelevantTurns,
     intentClass: prepared.intentClass,
     topEvidence: Object.freeze(callerFacing),
-    sourceMap: Object.freeze(callerFacing.map((source, index) => Object.freeze({
-      sourceId: `source_${index + 1}`,
-      publishedEvidenceId: source.publishedEvidenceId,
-      recordId: source.recordId,
-      recordType: source.recordType,
-      knowledgeBaseId: source.knowledgeBaseId,
-      publicationRevision: source.publicationRevision,
-    }))),
+    sourceMap: buildDeterministicSourceMap(callerFacing),
     conversationGuidance: Object.freeze([]),
     workflowAuthorization: turn.llmInput.workflowAuthorization,
     authorizedToolSchemas: turn.llmInput.toolSchemas,
@@ -315,22 +335,9 @@ export async function retrieveGroundedNormalTurn(auth, input, dependencies = {})
   } catch (error) {
     if (dependencies.throwOnError === true) throw error;
     let recovery = null;
-    if (artifacts?.publications?.length && recoverableHydrationErrors.has(error?.code)) {
-      const affectedKnowledgeBases = new Set([
-        ...(error.details?.selectedCandidates ?? []).map((candidate) => candidate.knowledgeBaseId),
-        ...(error.details?.records ?? []).map((record) => record.knowledgeBaseId),
-      ].filter(Boolean).map((value) => String(value).toLocaleLowerCase()));
-      const affectedPublications = affectedKnowledgeBases.size
-        ? artifacts.publications.filter((publication) => (
-          affectedKnowledgeBases.has(String(publication.knowledgeBaseId).toLocaleLowerCase())
-        )) : artifacts.publications;
-      recovery = await schedulePublishedArtifactRecovery(
-        auth, affectedPublications, error.code, dependencies,
-      ).catch((recoveryError) => Object.freeze([{
-        scheduled: false,
-        reason: recoveryError.code ?? 'artifact_recovery_schedule_failed',
-      }]));
-    }
+    recovery = await scheduleGroundedEvidenceRecovery(
+      auth, artifacts?.publications ?? [], error, dependencies,
+    );
     return Object.freeze({
       operation: 'grounded_normal_turn',
       engineVersion: GROUNDED_NORMAL_TURN_RUNTIME_VERSION,
@@ -350,6 +357,9 @@ export async function retrieveGroundedNormalTurn(auth, input, dependencies = {})
       diagnostic: Object.freeze({
         stage: error.details?.stage ?? 'grounded_normal_turn_unavailable',
         errorCode: error.code ?? 'KNOWLEDGE_ENGINE_UNAVAILABLE',
+        operationalFailure: true,
+        ambiguity: false,
+        artifactRecoveryTriggered: Array.isArray(recovery),
         details: Object.freeze({ ...(error.details ?? {}), recovery }),
       }),
     });

@@ -188,6 +188,7 @@
     "verify:universal-contextual-reliability": "node scripts/verify-universal-contextual-reliability.js --repeats=3",
     "verify:universal-evidence-path-regression": "node scripts/verify-universal-evidence-path-regression.js --repeats=3",
     "verify:universal-production-regression": "node scripts/verify-universal-production-regression.js --repeats=3",
+    "verify:universal-multitenant-runtime-regression": "node scripts/verify-universal-multitenant-runtime-regression.js --repeats=3",
     "verify:production-call-reliability": "node scripts/verify-production-clarification-reliability.js --repeats=3 && node scripts/verify-universal-multitenant-acceptance.js --repeats=3 && node scripts/verify-production-latency-contract.js && node scripts/verify-voice-tts.js && node scripts/verify-voice-audio-monitoring.js && node scripts/verify-universal-hardcoding-gate.js",
     "verify:production-grounded-call-regression": "node scripts/verify-universal-production-regression.js --repeats=3 && node scripts/verify-production-latency-contract.js && node scripts/verify-voice-tts.js && node scripts/verify-strong-grounding-interruption.js",
     "verify:browser-test-transport": "node scripts/verify-browser-test-session-isolation.js && node scripts/verify-browser-test-media.js && node scripts/verify-voice-task-6.js",

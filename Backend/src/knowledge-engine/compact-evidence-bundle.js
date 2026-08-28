@@ -3,6 +3,7 @@ import {
   knowledgeEngineResponseModes,
 } from './engine-contract.js';
 import { resolveCanonicalTopicMemory } from './canonical-topic-memory.js';
+import { buildDeterministicSourceMap } from './deterministic-source-mapping.js';
 
 export const COMPACT_EVIDENCE_BUNDLE_VERSION = 2;
 
@@ -192,10 +193,21 @@ function compactEvidence(source) {
 function canonicalEntity(resolution, evidence) {
   const candidate = resolution?.candidate;
   if (!candidate) return null;
+  const candidateRecordType = String(candidate.recordType
+    ?? (String(candidate.entityType ?? '').toUpperCase() === 'CATEGORY'
+      ? 'CATALOG_CATEGORY'
+      : (String(candidate.entityType ?? '').toUpperCase() === 'ITEM'
+        ? 'CATALOG_ITEM' : ''))).toUpperCase();
   const hydrated = evidence.find((source) => (
     normalizedId(source.recordId) === normalizedId(candidate.recordId)
-    && String(source.recordType ?? '').toUpperCase()
-      === String(candidate.recordType ?? '').toUpperCase()
+    && (!candidateRecordType
+      || String(source.recordType ?? '').toUpperCase() === candidateRecordType)
+    && (!candidate.tenantId
+      || normalizedId(source.tenantId) === normalizedId(candidate.tenantId))
+    && (!candidate.knowledgeBaseId
+      || normalizedId(source.knowledgeBaseId) === normalizedId(candidate.knowledgeBaseId))
+    && (!candidate.publicationRevision
+      || Number(source.publicationRevision) === Number(candidate.publicationRevision))
   ));
   if (!hydrated) return null;
   const data = object(hydrated?.authoritativeData);
@@ -317,14 +329,7 @@ export function buildCompactEvidenceBundle({
   )).slice(0, 3).map((source) => compactEvidence({
     ...source, activationAllowed: true, retrievalContext: 'primary',
   }));
-  const sourceMap = topEvidence.map((source, index) => Object.freeze({
-    sourceId: `source_${index + 1}`,
-    publishedEvidenceId: source.id,
-    recordId: source.recordId,
-    recordType: source.recordType,
-    knowledgeBaseId: source.knowledgeBaseId,
-    publicationRevision: source.publicationRevision,
-  }));
+  const sourceMap = buildDeterministicSourceMap(topEvidence);
   const resolvedEntity = canonicalEntity(resolution, allEvidence);
   const canonicalMemoryResolution = resolveCanonicalTopicMemory({
     scope: { tenantId: input.tenantId, agentId: input.agentId, callId: input.callId },

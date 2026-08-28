@@ -108,10 +108,16 @@ assert.equal(llmEvidenceBundle.topEvidence[0].provenance.uploadedFilename, 'tena
 assert.deepEqual(llmEvidenceBundle.sourceMap[0], {
   sourceId: 'source_1',
   publishedEvidenceId: callerEvidence[0].id,
+  authoritativeRecordId: callerEvidence[0].recordId,
   recordId: callerEvidence[0].recordId,
   recordType: callerEvidence[0].recordType,
+  tenantId,
+  agentId,
   knowledgeBaseId: callerEvidence[0].knowledgeBaseId,
   publicationRevision: callerEvidence[0].publicationRevision,
+  documentId: callerEvidence[0].documentId,
+  documentVersionId: callerEvidence[0].documentVersionId,
+  canonicalRecordIdentityKey: `${tenantId}:kb-1:3:CATALOG:CATALOG_ITEM:record-1`,
 });
 
 const compactKnowledge = compactBundleAsKnowledge({
@@ -132,13 +138,18 @@ const envelope = buildGroundingEnvelope(compactKnowledge, {
 assert.deepEqual(envelope.sourceMap[0], {
   sourceId: 'source_1',
   publishedEvidenceId: callerEvidence[0].id,
+  authoritativeRecordId: callerEvidence[0].recordId,
   recordId: callerEvidence[0].recordId,
+  recordType: callerEvidence[0].recordType,
+  tenantId,
+  agentId,
+  knowledgeBaseId: callerEvidence[0].knowledgeBaseId,
+  publicationRevision: callerEvidence[0].publicationRevision,
+  documentId: callerEvidence[0].documentId,
+  documentVersionId: callerEvidence[0].documentVersionId,
+  canonicalRecordIdentityKey: `${tenantId}:kb-1:3:CATALOG:CATALOG_ITEM:record-1`,
 });
-assert.deepEqual(envelope.sourceMap, llmEvidenceBundle.sourceMap.map((source) => ({
-  sourceId: source.sourceId,
-  publishedEvidenceId: source.publishedEvidenceId,
-  recordId: source.recordId,
-})));
+assert.deepEqual(envelope.sourceMap, llmEvidenceBundle.sourceMap);
 const hydratedEnvelope = hydrateGroundingEnvelope(envelope, callerEvidence);
 assert.equal(hydratedEnvelope.sources[0].id, 'source_1');
 assert.equal(hydratedEnvelope.sources[0].publishedEvidenceId, callerEvidence[0].id);
@@ -168,6 +179,9 @@ const wrongRevisionEnvelope = {
 };
 assert.equal(hydrateGroundingEnvelope(wrongRevisionEnvelope, callerEvidence).sources.length, 0,
   'A source from the wrong publication revision must not hydrate');
+assert.equal(hydrateGroundingEnvelope(
+  wrongRevisionEnvelope, callerEvidence,
+).mappingFailures[0].reason, 'wrong_revision_evidence');
 const foreignTenantEnvelope = {
   ...preassignedLlmSourceEnvelope,
   sources: preassignedLlmSourceEnvelope.sources.map((item) => ({
@@ -176,6 +190,22 @@ const foreignTenantEnvelope = {
 };
 assert.equal(hydrateGroundingEnvelope(foreignTenantEnvelope, callerEvidence).sources.length, 0,
   'A cross-tenant source must not hydrate');
+assert.equal(hydrateGroundingEnvelope(
+  foreignTenantEnvelope, callerEvidence,
+).mappingFailures[0].reason, 'cross_tenant_evidence');
+const missingEvidenceEnvelope = {
+  ...preassignedLlmSourceEnvelope,
+  sources: preassignedLlmSourceEnvelope.sources.map((item) => ({
+    ...item, publishedEvidenceId: 'published:missing:evidence',
+  })),
+};
+assert.equal(hydrateGroundingEnvelope(
+  missingEvidenceEnvelope, callerEvidence,
+).mappingFailures[0].reason, 'missing_evidence');
+const staleEvidence = [{ ...callerEvidence[0], documentVersionIsCurrent: false }];
+assert.equal(hydrateGroundingEnvelope(
+  preassignedLlmSourceEnvelope, staleEvidence,
+).mappingFailures[0].reason, 'stale_evidence');
 const duplicateRecordSource = {
   ...callerEvidence[0], id: 'published:catalog_item:foreign-duplicate',
   documentId: 'foreign-document', knowledgeBaseId: 'foreign-kb',
@@ -186,6 +216,15 @@ const deterministicallyHydrated = hydrateGroundingEnvelope(envelope, [
 assert.equal(deterministicallyHydrated.sources[0].publishedEvidenceId, callerEvidence[0].id);
 assert.equal(deterministicallyHydrated.sources[0].documentId, callerEvidence[0].documentId,
   'source_1 must map through its published evidence ID, never a loose duplicate record ID');
+const crossTenantPublishedCollision = {
+  ...callerEvidence[0], tenantId: 'foreign-tenant', documentId: 'foreign-tenant-document',
+};
+const tenantScopedCollision = hydrateGroundingEnvelope(envelope, [
+  crossTenantPublishedCollision, ...callerEvidence,
+]);
+assert.equal(tenantScopedCollision.sources[0].tenantId, tenantId);
+assert.equal(tenantScopedCollision.sources[0].documentId, callerEvidence[0].documentId,
+  'Published evidence ID collisions must resolve inside the active tenant and agent scope');
 assert.deepEqual(validateEvidenceScope(hydratedEnvelope.sources[0], {
   tenantId, agentId, requireHydratedEvidence: true,
   publicationRevisions: [{ knowledgeBaseId: 'kb-1', publicationRevision: 3 }],

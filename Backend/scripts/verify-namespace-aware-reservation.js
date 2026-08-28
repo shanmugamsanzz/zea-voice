@@ -76,6 +76,29 @@ for (const namespace of ['CATALOG', 'FAQ', 'CONVERSATION', 'WORKFLOW', 'GENERAL'
   assert.ok(independent.namespaceChannels.qdrant[namespace].length > 0);
 }
 
+const expectedTypesByNamespace = {
+  CATALOG: ['CATALOG_ITEM', 'CATALOG_CATEGORY'],
+  FAQ: ['FAQ'],
+  CONVERSATION: ['CONVERSATION_NODE'],
+  WORKFLOW: ['WORKFLOW_RULE'],
+  GENERAL: ['KNOWLEDGE_CHUNK'],
+};
+for (const [namespace, expectedTypes] of Object.entries(expectedTypesByNamespace)) {
+  const isolated = await retrieve(baseInput, {
+    ...baseClassification,
+    intentClass: 'KNOWN_INFORMATION',
+    selectedNamespace: namespace,
+    retrievalPlan: { indexes: [namespace] },
+  }, emptyResolution);
+  assert.deepEqual(isolated.relevantNamespaces, [namespace]);
+  assert.deepEqual(new Set(isolated.recordTypes), new Set(expectedTypes));
+  for (const channel of ['structured', 'bm25', 'qdrant']) {
+    assert.equal((isolated.channels[channel] ?? []).every((candidate) => (
+      expectedTypes.includes(candidate.recordType)
+    )), true, `${namespace} intent leaked unrelated ${channel} evidence`);
+  }
+}
+
 const overviewRecord = records[3];
 const overviewCandidate = {
   recordId: overviewRecord.record_id,
@@ -84,12 +107,21 @@ const overviewCandidate = {
 };
 const overview = await retrieve(baseInput, {
   ...baseClassification, intentClass: 'CATEGORY_OVERVIEW', candidate: overviewCandidate,
+  selectedNamespace: 'CATALOG',
+  retrievalPlan: { indexes: ['CATALOG', 'CONVERSATION'] },
 }, {
   ...emptyResolution,
   namespaceCandidates: { CONVERSATION: [overviewCandidate] },
 });
 assert.equal(overview.queryContext.reservedRecords[0].recordId, overviewRecord.record_id);
 assert.equal(overview.queryContext.reservedRecords[0].reason, 'published_overview');
+assert.deepEqual(overview.relevantNamespaces, ['CATALOG', 'CONVERSATION']);
+assert.deepEqual(new Set(overview.recordTypes), new Set([
+  'CATALOG_ITEM', 'CATALOG_CATEGORY', 'CONVERSATION_NODE',
+]));
+assert.equal(overview.channels.bm25.some((candidate) => (
+  ['FAQ', 'WORKFLOW_RULE', 'KNOWLEDGE_CHUNK'].includes(candidate.recordType)
+)), false, 'Overview retrieval must remove unrelated namespaces before hydration');
 
 const explicit = await retrieve({
   ...baseInput,
@@ -99,6 +131,8 @@ const explicit = await retrieve({
 }, baseClassification, emptyResolution);
 assert.equal(explicit.queryContext.reservedRecords[0].recordId, records[0].record_id);
 assert.equal(explicit.queryContext.reservedRecords[0].reason, 'explicit_entity');
+assert.deepEqual(explicit.relevantNamespaces, ['CATALOG']);
+assert.deepEqual(new Set(explicit.recordTypes), new Set(['CATALOG_ITEM', 'CATALOG_CATEGORY']));
 
 const contextual = await retrieve({
   ...baseInput,

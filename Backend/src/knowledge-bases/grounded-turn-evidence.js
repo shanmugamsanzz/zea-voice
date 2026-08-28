@@ -3,6 +3,10 @@ import {
 } from '../knowledge-engine/authoritative-evidence.js';
 import { searchParallelHybridCandidates } from './parallel-hybrid-search.js';
 import { resolveCanonicalTopicMemory } from '../knowledge-engine/canonical-topic-memory.js';
+import {
+  canonicalRecordIdentityKey,
+} from '../knowledge-engine/canonical-record-identity.js';
+import { buildDeterministicSourceMap } from '../knowledge-engine/deterministic-source-mapping.js';
 import { AppError } from '../middleware/errors.js';
 
 export const GROUNDED_TURN_EVIDENCE_VERSION = 2;
@@ -107,8 +111,14 @@ function relevantHydratedEvidence(
     ?? understanding.currentRouteSignal
     ?? null;
   const authoritativeCurrentRoute = authoritativeRoute(understanding, currentRoute);
-  const currentRouteType = String(authoritativeCurrentRoute?.recordType ?? '').toUpperCase();
-  const currentNonCatalogRequest = Boolean(currentRouteType)
+  const currentRouteType = String(
+    authoritativeCurrentRoute?.recordType ?? currentRoute?.recordType ?? '',
+  ).toUpperCase();
+  const currentRouteKey = reservationKey(authoritativeCurrentRoute ?? currentRoute);
+  const currentRouteHydrated = Boolean(currentRouteKey)
+    && sources.some((source) => reservationKey(source) === currentRouteKey);
+  const currentNonCatalogRequest = currentRouteHydrated
+    && Boolean(currentRouteType)
     && !['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(currentRouteType);
   const explicitCandidates = [
     ...(understanding.explicitEntities ?? []),
@@ -116,32 +126,63 @@ function relevantHydratedEvidence(
     ...(understanding.comparisonEntities ?? []),
     ...(resolution?.candidate?.explicit === true ? [resolution.candidate] : []),
   ];
-  const selectedRecordIds = new Set([
+  const selectedCandidates = [
     ...(resolution?.candidate?.explicit === true
       ? [resolution.candidate.recordId, ...(resolution.candidate.evidenceRecordIds ?? [])]
-      : []),
-    ...explicitCandidates.map((candidate) => candidate?.recordId),
-    ...requiredReservations(authoritative).map((candidate) => candidate.recordId),
-    authoritativeCurrentRoute?.recordId,
-  ].map(identity).filter(Boolean));
+        .map((recordId) => ({
+          ...resolution.candidate,
+          recordId,
+          recordType: resolution.candidate.recordType
+            ?? (resolution.candidate.entityType === 'CATEGORY'
+              ? 'CATALOG_CATEGORY' : 'CATALOG_ITEM'),
+        })) : []),
+    ...explicitCandidates,
+    ...requiredReservations(authoritative),
+    ...(authoritativeCurrentRoute ? [authoritativeCurrentRoute] : []),
+  ].filter(Boolean);
   const hasExplicitCurrentEntity = explicitCandidates.length > 0;
   const contextDependent = understanding.contextDependent === true
     || resolution?.contextDependent === true;
   if (!hasExplicitCurrentEntity && contextDependent) {
     for (const remembered of [
-      input?.canonicalCallMemory?.activeCategory, input?.canonicalCallMemory?.activeEntity,
-      input?.memory?.activeCategory, input?.memory?.activeEntity,
+      [input?.canonicalCallMemory?.activeCategory, 'CATALOG_CATEGORY'],
+      [input?.canonicalCallMemory?.activeEntity, 'CATALOG_ITEM'],
+      [input?.memory?.activeCategory, 'CATALOG_CATEGORY'],
+      [input?.memory?.activeEntity, 'CATALOG_ITEM'],
     ]) {
-      const recordId = identity(remembered?.recordId ?? remembered?.id);
-      if (recordId) selectedRecordIds.add(recordId);
+      const [value, recordType] = remembered;
+      if (value?.recordId ?? value?.id) selectedCandidates.push({ ...value, recordType });
+    }
+  }
+  const sourceKeys = new Map(sources.map((source) => [canonicalEvidenceKey(source, input), source]));
+  const selectedKeys = new Set();
+  const unscopedTypedKeys = new Set(sources.filter((source) => (
+    !canonicalRecordIdentityKey(source, {
+      tenantId: source?.tenantId ?? input?.tenantId,
+      knowledgeBaseId: source?.knowledgeBaseId,
+      publicationRevision: source?.publicationRevision,
+    })
+  )).map(reservationKey).filter(Boolean));
+  const selectedUnscopedTypedKeys = new Set();
+  const selectedPriority = new Map();
+  for (const [priority, candidate] of selectedCandidates.entries()) {
+    const typedKey = reservationKey(candidate);
+    if (typedKey && unscopedTypedKeys.has(typedKey)) selectedUnscopedTypedKeys.add(typedKey);
+    for (const key of matchingCanonicalEvidenceKeys(candidate, sources, input)) {
+      selectedKeys.add(key);
+      if (!selectedPriority.has(key)) selectedPriority.set(key, priority);
     }
   }
   const filtered = sources.filter((source) => {
     const recordType = String(source.recordType ?? '').toUpperCase();
+    const sourceKey = canonicalEvidenceKey(source, input);
+    const sourceTypedKey = reservationKey(source);
     const actionType = String(source.authoritativeData?.actionType ?? '').toLowerCase();
     const callerFacingWorkflowResponse = recordType === 'WORKFLOW_RULE'
       && source.callerFacing === true && actionType === 'respond';
-    if (selectedRecordIds.has(identity(source.recordId))) return true;
+    if (selectedKeys.has(sourceKey)
+      || (sourceKey?.includes(':unscoped:')
+        && selectedUnscopedTypedKeys.has(sourceTypedKey))) return true;
     if (callerFacingWorkflowResponse) return !hasExplicitCurrentEntity
       || currentNonCatalogRequest;
     if (recordType === 'WORKFLOW_RULE') return actionTurn || protocolTurn;
@@ -153,7 +194,11 @@ function relevantHydratedEvidence(
       && ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(recordType)) return false;
     if (intentClass === 'CATEGORY_OVERVIEW'
       && recordType === 'CATALOG_CATEGORY' && source.callerFacing === true) return true;
-    if (selectedRecordIds.size > 0) return false;
+    // A resolver route that was not part of the authoritative hydrated set
+    // must not discard every valid record. Restrictive selection applies only
+    // to canonical identities that are present in this same tenant-scoped
+    // PostgreSQL result.
+    if (selectedKeys.size > 0 || selectedUnscopedTypedKeys.size > 0) return false;
     if (selectedTypes) return selectedTypes.has(recordType);
     if (intentClass === 'ACKNOWLEDGEMENT') {
       return ['CONVERSATION_NODE', 'FAQ'].includes(recordType);
@@ -164,9 +209,18 @@ function relevantHydratedEvidence(
     return source.callerFacing === true;
   });
   return filtered.sort((left, right) => {
-    const leftSelected = selectedRecordIds.has(identity(left.recordId)) ? 0 : 1;
-    const rightSelected = selectedRecordIds.has(identity(right.recordId)) ? 0 : 1;
-    return leftSelected - rightSelected || Number(left.rank ?? 999) - Number(right.rank ?? 999);
+    const leftKey = canonicalEvidenceKey(left, input);
+    const rightKey = canonicalEvidenceKey(right, input);
+    const leftSelected = selectedKeys.has(leftKey)
+      || (leftKey?.includes(':unscoped:')
+        && selectedUnscopedTypedKeys.has(reservationKey(left))) ? 0 : 1;
+    const rightSelected = selectedKeys.has(rightKey)
+      || (rightKey?.includes(':unscoped:')
+        && selectedUnscopedTypedKeys.has(reservationKey(right))) ? 0 : 1;
+    return leftSelected - rightSelected
+      || Number(selectedPriority.get(leftKey) ?? 999) - Number(selectedPriority.get(rightKey) ?? 999)
+      || Number(sourceKeys.get(leftKey)?.rank ?? left.rank ?? 999)
+        - Number(sourceKeys.get(rightKey)?.rank ?? right.rank ?? 999);
   });
 }
 
@@ -221,8 +275,40 @@ function intendedNamespace(classification = {}, resolution = {}, understanding =
 
 function reservationKey(value) {
   const recordId = identity(value?.recordId ?? value?.id);
-  const recordType = clean(value?.recordType, 80).toUpperCase();
+  const inferredRecordType = value?.recordType
+    ?? (String(value?.entityType ?? '').toUpperCase() === 'CATEGORY'
+      ? 'CATALOG_CATEGORY'
+      : (String(value?.entityType ?? '').toUpperCase() === 'ITEM' ? 'CATALOG_ITEM' : ''));
+  const recordType = clean(inferredRecordType, 80).toUpperCase();
   return recordId && recordType ? `${recordType}:${recordId}` : null;
+}
+
+function canonicalEvidenceKey(value, input = {}) {
+  const canonical = canonicalRecordIdentityKey(value, {
+    tenantId: value?.tenantId ?? input?.tenantId,
+    knowledgeBaseId: value?.knowledgeBaseId,
+    publicationRevision: value?.publicationRevision,
+  });
+  if (canonical) return canonical;
+  const typedKey = reservationKey(value);
+  const tenantId = normalizedId(value?.tenantId ?? input?.tenantId);
+  return typedKey ? `${tenantId || 'tenant-unavailable'}:unscoped:${typedKey}` : null;
+}
+
+function matchingCanonicalEvidenceKeys(candidate, sources, input = {}) {
+  const typedKey = reservationKey(candidate);
+  if (!typedKey) return [];
+  const scopedKey = canonicalEvidenceKey(candidate, input);
+  const matches = sources.filter((source) => (
+    reservationKey(source) === typedKey
+    && normalizedId(source.tenantId) === normalizedId(input.tenantId)
+    && (!candidate?.knowledgeBaseId
+      || normalizedId(source.knowledgeBaseId) === normalizedId(candidate.knowledgeBaseId))
+    && (!candidate?.publicationRevision
+      || Number(source.publicationRevision) === Number(candidate.publicationRevision))
+  )).map((source) => canonicalEvidenceKey(source, input)).filter(Boolean);
+  if (scopedKey && matches.includes(scopedKey)) return [scopedKey];
+  return [...new Set(matches)];
 }
 
 function requiredReservations(authoritative = {}) {
@@ -238,9 +324,15 @@ function requiredReservations(authoritative = {}) {
 function assertRequiredEvidenceInvariant(authoritative, hydratedRecords = null) {
   const required = requiredReservations(authoritative);
   if (!required.length) return;
-  const available = new Set((hydratedRecords ?? authoritative?.evidence ?? [])
-    .map(reservationKey).filter(Boolean));
-  const missing = required.filter((entry) => !available.has(reservationKey(entry)));
+  const evidence = hydratedRecords ?? authoritative?.evidence ?? [];
+  const inputScope = {
+    tenantId: authoritative?.tenantId,
+    agentId: authoritative?.agentId,
+    callId: authoritative?.callId,
+  };
+  const missing = required.filter((entry) => (
+    matchingCanonicalEvidenceKeys(entry, evidence, inputScope).length === 0
+  ));
   if (!missing.length) return;
   const rememberedMissing = missing.some((entry) => entry.reason === 'canonical_memory');
   throw new AppError(503, rememberedMissing
@@ -404,6 +496,7 @@ export function buildGroundedLlmInput({
     compactEvidence(source, source.callerFacing === true
       ? `source_${callerSourceIndex += 1}` : null)
   )));
+  const sourceMap = buildDeterministicSourceMap(hydratedRecords.filter((source) => source.sourceId));
 
   const authorizedTools = applicableTools(hydrated, runtimeProfile);
   const canonicalResolution = resolveCanonicalTopicMemory({
@@ -427,6 +520,7 @@ export function buildGroundedLlmInput({
     recentRelevantTurns: compactRelevantTurns(input),
     canonicalMemory: compactCanonicalMemory(input, canonicalResolution),
     hydratedRecords,
+    sourceMap,
     requestedFact,
     ambiguityCandidates: ambiguityCandidates(input, authoritative),
     workflowAuthorization: Object.freeze(authorizedTools.map((entry) => Object.freeze({

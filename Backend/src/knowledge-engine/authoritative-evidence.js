@@ -825,13 +825,22 @@ export async function rankAndHydrateAuthoritativeEvidence({
     ambiguity,
     conflict,
     rejectedRecordIds: Object.freeze(rejectedRecordIds),
-    reservations: Object.freeze((retrieval?.queryContext?.reservedRecords ?? []).map((entry) => (
-      Object.freeze({
+    reservations: Object.freeze((retrieval?.queryContext?.reservedRecords ?? []).map((entry) => {
+      const fused = fusion.candidates.find((candidate) => recordKey(candidate) === recordKey(entry));
+      const scoped = {
+        tenantId,
+        knowledgeBaseId: fused?.knowledgeBaseId ?? entry.knowledgeBaseId,
+        publicationRevision: fused?.publicationRevision ?? entry.publicationRevision,
         recordId: String(entry.recordId),
         recordType: String(entry.recordType).toUpperCase(),
+      };
+      return Object.freeze({
+        ...scoped,
+        namespace: recordNamespaces[scoped.recordType] ?? 'UNKNOWN',
+        canonicalIdentityKey: canonicalRecordIdentityKey(scoped),
         reason: String(entry.reason ?? 'reserved'),
-      })
-    ))),
+      });
+    })),
     comparisonCoverage: Object.freeze({
       requestedRecordIds: fusion.reservedRecordIds,
       requestedRecordKeys: fusion.reservedRecordKeys,

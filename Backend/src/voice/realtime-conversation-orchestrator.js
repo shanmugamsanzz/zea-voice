@@ -2685,11 +2685,16 @@ export class RealtimeConversationOrchestrator {
   async #runTurn(query, history, epoch, sttTiming = {}) {
     this.activeGroundedTurnEpochs.add(epoch);
     this.#clearInactivity();
+    let outcome;
     try {
-      return await this.#runGroundedTurn(query, history, epoch, sttTiming);
+      outcome = await this.#runGroundedTurn(query, history, epoch, sttTiming);
+      return outcome;
     } finally {
       this.activeGroundedTurnEpochs.delete(epoch);
-      if (!this.finalized && this.controller.state === callStates.LISTENING) this.#armInactivity();
+      if (outcome?.suppressInactivity !== true
+        && !this.finalized && this.controller.state === callStates.LISTENING) {
+        this.#armInactivity();
+      }
     }
   }
 
@@ -3163,8 +3168,21 @@ export class RealtimeConversationOrchestrator {
       if ([callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) {
         await this.controller.interrupt('runtime_message_unconfigured');
       }
+      if (operationalKnowledgeFailure || response.operationalFailureReason
+        || response.groundingFailureReason) {
+        this.log.error({
+          stage: 'voice.operational_response_unconfigured',
+          callId: this.call.id,
+          turnEpoch: epoch,
+          diagnostic: operationalKnowledgeFailure,
+        }, 'Operational failure remained separate from inactivity because technical speech is unconfigured');
+        return Object.freeze({
+          suppressInactivity: true,
+          reason: 'operational_response_unconfigured',
+        });
+      }
       this.#armInactivity();
-      return;
+      return undefined;
     }
     if (validatedNormalTurn) this.#scheduleLiveMemoryCheckpoint('validated_normal_turn');
     // The pipeline may already contain the temporary latency acknowledgement.

@@ -158,7 +158,7 @@ assert.ok(result.authoritative.evidence.every((source) => (
 const llm = result.llmInput;
 assert.deepEqual(Object.keys(llm).sort(), [
   'ambiguityCandidates', 'canonicalMemory', 'currentQuestion', 'hydratedRecords',
-  'recentRelevantTurns', 'requestedFact', 'toolSchemas', 'workflowAuthorization',
+  'recentRelevantTurns', 'requestedFact', 'sourceMap', 'toolSchemas', 'workflowAuthorization',
 ].sort());
 assert.equal(llm.currentQuestion, input.latestQuestion);
 assert.ok(llm.hydratedRecords.length <= 5);
@@ -168,6 +168,13 @@ assert.deepEqual(llm.hydratedRecords.filter((source) => source.callerFacing)
   .map((_source, index) => `source_${index + 1}`));
 assert.equal(llm.hydratedRecords.filter((source) => !source.callerFacing)
   .every((source) => source.sourceId === null), true);
+assert.deepEqual(llm.sourceMap.map((mapping) => mapping.sourceId),
+  llm.hydratedRecords.filter((source) => source.callerFacing).map((source) => source.sourceId));
+assert.ok(llm.sourceMap.every((mapping) => (
+  mapping.publishedEvidenceId
+  && mapping.authoritativeRecordId === mapping.recordId
+  && mapping.canonicalRecordIdentityKey
+)));
 assert.equal(llm.recentRelevantTurns.length, 2);
 assert.equal(llm.canonicalMemory.collectedToolFields.reference, 'A-10');
 assert.equal(llm.workflowAuthorization.length, 1);
@@ -206,7 +213,11 @@ const namespaceFiltered = buildGroundedLlmInput({
         callerFacing: false, hydrationValidated: true, publicationValidated: true,
         authoritativeData: { actionType: 'configured_tool', actionConfig: { toolIdentifier: 'other' } },
       },
-    ],
+    ].map((source, index) => ({
+      ...source, tenantId, agentId, knowledgeBaseId, publicationRevision: 9,
+      documentId: `namespace-document-${index}`,
+      documentVersionId: `namespace-version-${index}`,
+    })),
   },
   runtimeProfile: { tools: [] },
 });
@@ -252,7 +263,11 @@ const currentConcernEvidence = buildGroundedLlmInput({
         callerFacing: true, hydrationValidated: true, publicationValidated: true,
         authoritativeData: { content: 'Published general support boundary.' },
       },
-    ],
+    ].map((source, index) => ({
+      ...source, tenantId, agentId, knowledgeBaseId, publicationRevision: 9,
+      documentId: `concern-document-${index}`,
+      documentVersionId: `concern-version-${index}`,
+    })),
   },
   runtimeProfile: { tools: [] },
 });
@@ -261,6 +276,105 @@ assert.deepEqual(currentConcernEvidence.hydratedRecords.map((source) => source.r
   'Current Workflow response and General Knowledge must replace stale Catalog evidence');
 assert.ok(currentConcernEvidence.hydratedRecords.every((source) => source.sourceId),
   'Every caller-facing current-concern record must receive an LLM source ID');
+
+const scopedCatalogEvidence = [
+  ['reserved-item-a', 'CATALOG_ITEM', { itemKey: 'item-a', name: 'Item A' }],
+  ['reserved-item-b', 'CATALOG_ITEM', { itemKey: 'item-b', name: 'Item B' }],
+  ['reserved-category', 'CATALOG_CATEGORY', {
+    categoryKey: 'category-a', category: 'Category A', children: [],
+  }],
+].map(([recordId, recordType, authoritativeData], index) => ({
+  id: `published:${recordType.toLocaleLowerCase()}:${recordId}`,
+  recordId, recordType, tenantId, agentId, knowledgeBaseId, publicationRevision: 9,
+  callerFacing: true, hydrationValidated: true, publicationValidated: true,
+  rank: index + 1, authoritativeData,
+}));
+const scopedReservation = (recordId, recordType, reason) => ({
+  tenantId, knowledgeBaseId, publicationRevision: 9, recordId, recordType, reason,
+});
+const packagedIds = (options) => buildGroundedLlmInput({
+  input: {
+    ...input,
+    queryUnderstanding: options.understanding,
+    canonicalCallMemory: options.memory ?? {},
+    memory: options.memory ?? {},
+  },
+  classification: { intentClass: options.intentClass ?? 'KNOWN_INFORMATION' },
+  resolution: options.resolution ?? {
+    candidate: null, candidateNamespace: null, contextDependent: false,
+  },
+  authoritative: {
+    tenantId, agentId, callId,
+    evidence: scopedCatalogEvidence,
+    reservations: options.reservations,
+  },
+  runtimeProfile: { tools: [] },
+}).hydratedRecords.map((source) => source.recordId);
+
+assert.deepEqual(packagedIds({
+  understanding: {
+    explicitEntities: [{ recordId: 'reserved-item-a', recordType: 'CATALOG_ITEM' }],
+    explicitCategories: [], comparisonEntities: [], contextDependent: false,
+  },
+  resolution: {
+    candidate: {
+      recordId: 'reserved-item-a', recordType: 'CATALOG_ITEM',
+      entityType: 'ITEM', explicit: true,
+    },
+    candidateNamespace: 'CATALOG', contextDependent: false,
+  },
+  reservations: [scopedReservation('reserved-item-a', 'CATALOG_ITEM', 'explicit_entity')],
+}), ['reserved-item-a'], 'An explicitly selected canonical item must survive packaging');
+
+assert.deepEqual(packagedIds({
+  understanding: {
+    explicitEntities: [],
+    explicitCategories: [{
+      recordId: 'reserved-category', recordType: 'CATALOG_CATEGORY', entityType: 'CATEGORY',
+    }],
+    comparisonEntities: [], contextDependent: false,
+  },
+  resolution: {
+    candidate: {
+      recordId: 'reserved-category', recordType: 'CATALOG_CATEGORY',
+      entityType: 'CATEGORY', explicit: true,
+    },
+    candidateNamespace: 'CATALOG', contextDependent: false,
+  },
+  reservations: [scopedReservation(
+    'reserved-category', 'CATALOG_CATEGORY', 'explicit_entity',
+  )],
+}), ['reserved-category'], 'An explicitly selected canonical category must survive packaging');
+
+assert.deepEqual(packagedIds({
+  understanding: {
+    explicitEntities: [], explicitCategories: [], comparisonEntities: [], contextDependent: true,
+  },
+  memory: {
+    activeEntity: {
+      recordId: 'reserved-item-a', recordType: 'CATALOG_ITEM',
+      key: 'item-a', name: 'Item A',
+    },
+  },
+  resolution: { candidate: null, candidateNamespace: null, contextDependent: true },
+  reservations: [scopedReservation('reserved-item-a', 'CATALOG_ITEM', 'canonical_memory')],
+}), ['reserved-item-a'], 'A contextual canonical-memory item must survive packaging');
+
+assert.deepEqual(packagedIds({
+  understanding: {
+    explicitEntities: [], explicitCategories: [], contextDependent: false,
+    comparisonEntities: [
+      { recordId: 'reserved-item-a', recordType: 'CATALOG_ITEM', entityType: 'ITEM' },
+      { recordId: 'reserved-item-b', recordType: 'CATALOG_ITEM', entityType: 'ITEM' },
+    ],
+  },
+  intentClass: 'COMPARISON_COMPLEX',
+  reservations: [
+    scopedReservation('reserved-item-a', 'CATALOG_ITEM', 'explicit_comparison'),
+    scopedReservation('reserved-item-b', 'CATALOG_ITEM', 'explicit_comparison'),
+  ],
+}), ['reserved-item-a', 'reserved-item-b'],
+'Every explicitly compared canonical record must survive packaging');
 
 console.log(JSON.stringify({
   tasks: [4, 5, 6], passed: true,
