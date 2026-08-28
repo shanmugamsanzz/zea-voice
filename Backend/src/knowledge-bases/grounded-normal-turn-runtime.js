@@ -15,6 +15,7 @@ import {
 } from '../knowledge-engine/runtime-service.js';
 import { schedulePublishedArtifactRecovery } from './authoritative-artifact-recovery.js';
 import { retrieveRankHydrateGroundedTurn } from './grounded-turn-evidence.js';
+import { resolveKnowledgeConfidenceConfiguration } from './knowledge-confidence-config.js';
 
 export const GROUNDED_NORMAL_TURN_RUNTIME_VERSION = 1;
 
@@ -242,8 +243,13 @@ export async function retrieveGroundedNormalTurn(auth, input, dependencies = {})
   const startedAt = performance.now();
   try {
     artifacts = await loadPublishedEngineArtifacts(auth, input, dependencies);
+    const confidenceConfiguration = resolveKnowledgeConfidenceConfiguration(
+      dependencies.runtimeProfile?.agent?.settings ?? {},
+    );
     const routingStartedAt = performance.now();
-    const prepared = await prepareKnowledgeQuery(input, artifacts.bundles, {}, {
+    const prepared = await prepareKnowledgeQuery(input, artifacts.bundles, {
+      confidenceConfiguration,
+    }, {
       resolve: dependencies.resolve,
       classify: dependencies.classify,
     });

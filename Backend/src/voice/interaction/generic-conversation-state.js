@@ -10,6 +10,7 @@ export const genericConversationStateFields = Object.freeze([
   'currentTopic', 'knownEntities', 'pendingQuestion', 'collectedInformation',
   'recentTurns', 'lastAnswer', 'activeToolRequest', 'language', 'requestType',
   'requestedFacts', 'constraints', 'contextualReferences', 'contextDependent', 'comparisonEntities',
+  'conversationContextMode', 'conversationContextTurns',
 ]);
 
 function required(value, name) {
@@ -46,12 +47,17 @@ function cleanMessage(value) {
 }
 
 function recent(messages, turns) {
-  let users = 0;
+  let completeTurns = 0;
+  let assistantSeen = false;
   let start = messages.length;
   while (start > 0) {
     start -= 1;
-    if (messages[start].role === 'user') users += 1;
-    if (users >= turns) break;
+    if (messages[start].role === 'assistant') assistantSeen = true;
+    else if (messages[start].role === 'user' && assistantSeen) {
+      completeTurns += 1;
+      assistantSeen = false;
+    }
+    if (completeTurns >= turns) break;
   }
   return messages.slice(start);
 }
@@ -241,6 +247,8 @@ function publicState(state) {
     constraints: Object.freeze([...state.constraints]),
     contextualReferences: Object.freeze([...state.contextualReferences]),
     contextDependent: state.contextDependent,
+    conversationContextMode: state.conversationContextMode,
+    conversationContextTurns: state.conversationContextTurns,
   });
 }
 
@@ -267,8 +275,11 @@ export function openGenericConversationState(identity, settings = {}, now = Date
     collectedInformation: cleanInformation(
       initial.collectedToolFields ?? initial.collectedInformation ?? initial.collectedData ?? {}, fieldKeys,
     ),
-    recentTurns: recent((initial.recentTurns ?? initial.messages ?? []).map(cleanMessage).filter(Boolean),
-      configuration.recentTurns),
+    recentTurns: configuration.mode === 'full_current_call'
+      ? (initial.recentTurns ?? initial.messages ?? []).map(cleanMessage).filter(Boolean)
+        .slice(-maximumMessages)
+      : recent((initial.recentTurns ?? initial.messages ?? []).map(cleanMessage).filter(Boolean),
+        configuration.recentTurns),
     lastAnswer: cleanText(initial.lastAnswer, maximumMessageCharacters) || null,
     activeToolRequest: cleanToolRequest(initial.activeTool ?? initial.activeToolRequest),
     language: cleanLanguage(initial.language
@@ -279,6 +290,8 @@ export function openGenericConversationState(identity, settings = {}, now = Date
     constraints: cleanList(initial.constraints),
     contextualReferences: cleanList(initial.contextualReferences),
     contextDependent: initial.contextDependent === true,
+    conversationContextMode: configuration.mode,
+    conversationContextTurns: configuration.recentTurns,
   };
   state.activeCategory ??= cleanCategory(state.activeEntity);
   let activeTurnToken = null;

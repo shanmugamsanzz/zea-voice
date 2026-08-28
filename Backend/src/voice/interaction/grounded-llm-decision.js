@@ -61,6 +61,9 @@ function inferredClarificationReason(runtime = {}) {
   const candidates = Array.isArray(context.ambiguityCandidates)
     ? context.ambiguityCandidates.filter(Boolean) : [];
   if (candidates.length > 1) return 'authoritative_ambiguity';
+  if (candidates.length === 1 && candidates[0]?.confidenceBand === 'MEDIUM') {
+    return 'ambiguous_request';
+  }
   const memory = context.canonicalMemory ?? {};
   const hasEntity = Boolean(
     memory.activeEntityId || memory.activeCategoryId || memory.activeEntity?.recordId
@@ -395,7 +398,7 @@ export function groundedDecisionContract(envelope, runtime = {}) {
       'Return RESPONSE for grounded caller-facing speech, TOOL for one authorized action, or CLARIFY when evidence is genuinely weak or ambiguous.',
       'For CLARIFY, put one targeted caller-facing question in answer and set clarificationReason.',
       'Use TOOL only for one configured tool and never claim success before its verified result.',
-      'Never request or collect a configured information field unless the caller explicitly requested the assigned action and the selected Workflow evidence authorizes that tool.',
+      'Current-call information fields without requiredAction may be remembered when the caller provides them. Fields with requiredAction may be requested or collected only after that action is explicitly requested and its Workflow authorizes the assigned tool.',
       'Use only evidenceIds listed below for factual speech.',
       'When naming a resolved Catalog entity or category, use its canonical name from authoritativeData; caller aliases are for understanding, not factual display names.',
       'Do not recommend or claim that an item is suitable for symptoms, conditions, or personal needs unless the selected evidence explicitly authorizes that recommendation.',
@@ -414,7 +417,7 @@ export function groundedDecisionContract(envelope, runtime = {}) {
       'If a requested fact requires an entity and neither the latest question nor relevant call memory and evidence identify one, return a targeted CLARIFY question; never select an arbitrary evidence record.',
       'The latest explicit entity or category replaces a stale remembered topic. Use remembered entities only when the current question genuinely depends on context.',
       'Return CLARIFY only for genuine ambiguity between supported candidates or genuinely missing/conflicting evidence; never clarify merely because caller wording differs from a published phrase.',
-      'For medium-confidence entity resolution, ask one candidate-specific confirmation using the canonical published name. For low confidence, ask which published category or option the caller means; do not reuse a generic unclear-message sentence.',
+      'Use clarificationContext.heardText, candidates, canonicalNames and collectedFields when deciding CLARIFY. For medium-confidence entity resolution, ask one candidate-specific confirmation using the canonical published name. For low confidence, ask which published category or option the caller means; do not reuse a generic unclear-message sentence.',
       'Use pendingClarification attemptCount, previousQuestions, candidateRecordIds and missingFactType as recovery context. Never repeat an earlier clarification verbatim; narrow the next question using remaining published candidates or the missing fact.',
       'Do not invent a support channel or support promise after unresolved attempts. Runtime may use only an explicitly tenant-configured clarification recovery response.',
       'For comparisons, cover every explicitly requested hydrated entity. Describe each difference with positively supported fields from its record. Do not infer that an item lacks something unless its selected evidence explicitly states that negative fact.',
@@ -584,6 +587,19 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
     }
     const normalizedQuestion = identity(pendingQuestion);
     if (!candidates.some((candidate) => normalizedQuestion.includes(identity(candidate)))) {
+      return Object.freeze({ valid: false, reason: 'candidate_specific_clarification_required' });
+    }
+  }
+  if (decision === 'clarify' && clarification.reason === 'ambiguous_request') {
+    const mediumCandidates = [
+      ...(runtime.clarificationContext?.candidates ?? []),
+      ...(runtime.clarificationContext?.ambiguityCandidates ?? []),
+    ].filter((candidate) => String(candidate?.confidenceBand ?? '').toUpperCase() === 'MEDIUM');
+    const names = [...new Set(mediumCandidates.map((candidate) => text(
+      candidate.canonicalName ?? candidate.name ?? candidate.displayName, 200,
+    )).filter(Boolean))];
+    if (names.length === 1
+      && !identity(pendingQuestion).includes(identity(names[0]))) {
       return Object.freeze({ valid: false, reason: 'candidate_specific_clarification_required' });
     }
   }

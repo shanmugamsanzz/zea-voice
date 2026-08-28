@@ -193,9 +193,9 @@ const noToolCollection = applyUnifiedGroundedTurn({
   fieldSchemas: settings.conversationMemoryFields, tools: [],
   evidence: envelope.sources, finalizedUtterance: 'Asha asked for the office location.',
 });
-assert.equal(noToolCollection.valid, false);
-assert.equal(noToolCollection.reason, 'unauthorized_information_collection');
-assert.deepEqual(noToolCollection.state.collectedInformation, {});
+assert.equal(noToolCollection.valid, true,
+  'UI-configured current-call fields must remain usable without an external tool');
+assert.deepEqual(noToolCollection.state.collectedInformation, { contact_name: 'Asha' });
 noToolMemory.close();
 const catalogMemory = openGenericConversationState(
   { ...identity, callId: 'call-catalog-memory' }, {}, 1,

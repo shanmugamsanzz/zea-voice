@@ -17,9 +17,18 @@ function configurationError(message, field) {
 }
 
 export function resolveKnowledgeConfidenceConfiguration(settings = {}, { strict = false } = {}) {
-  let highConfidence = number(settings.knowledgeHighConfidence, defaults.highConfidence);
-  let clarificationConfidence = number(settings.knowledgeClarificationConfidence, defaults.clarificationConfidence);
-  let ambiguityMargin = number(settings.knowledgeAmbiguityMargin, defaults.ambiguityMargin);
+  let highConfidence = number(
+    settings.highConfidence ?? settings.knowledgeHighConfidence,
+    defaults.highConfidence,
+  );
+  let clarificationConfidence = number(
+    settings.clarificationConfidence ?? settings.knowledgeClarificationConfidence,
+    defaults.clarificationConfidence,
+  );
+  let ambiguityMargin = number(
+    settings.ambiguityMargin ?? settings.knowledgeAmbiguityMargin,
+    defaults.ambiguityMargin,
+  );
   const clarificationMessageRaw = String(settings.knowledgeClarificationMessage ?? defaults.clarificationMessage)
     .normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/gu, ' ').trim();
   if (strict && (highConfidence < 0.7 || highConfidence > 1)) {

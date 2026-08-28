@@ -1,4 +1,5 @@
 import { typedRecordIdentityKey } from './canonical-record-identity.js';
+import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/knowledge-confidence-config.js';
 
 export const CONTEXTUAL_QUERY_UNDERSTANDING_VERSION = 1;
 
@@ -75,17 +76,19 @@ function candidateSummary(candidate) {
   });
 }
 
-function explicitSignalPhrases(candidate) {
+function explicitSignalPhrases(candidate, confidenceConfiguration) {
   const score = boundedScore(candidate?.score);
   return unique((candidate?.signals ?? []).filter((signal) => (
     signal?.explicit === true
       && clean(signal.phrase)
-      && boundedScore(signal.score) >= Math.max(0.68, score - 0.01)
+      && boundedScore(signal.score) >= Math.max(
+        confidenceConfiguration.clarificationConfidence, score - 0.01,
+      )
   )).map((signal) => normalized(signal.phrase)), 8);
 }
 
-function phraseSignature(candidate) {
-  return [...explicitSignalPhrases(candidate)].sort().join('|');
+function phraseSignature(candidate, confidenceConfiguration) {
+  return [...explicitSignalPhrases(candidate, confidenceConfiguration)].sort().join('|');
 }
 
 function catalogCandidates(resolution) {
@@ -103,18 +106,18 @@ function catalogCandidates(resolution) {
   return output.sort((left, right) => boundedScore(right.score) - boundedScore(left.score));
 }
 
-function explicitCatalogCandidates(resolution) {
+function explicitCatalogCandidates(resolution, confidenceConfiguration) {
   return catalogCandidates(resolution).filter((candidate) => (
     candidate.explicit === true
-      && boundedScore(candidate.score) >= 0.88
-      && explicitSignalPhrases(candidate).length > 0
+      && boundedScore(candidate.score) >= confidenceConfiguration.highConfidence
+      && explicitSignalPhrases(candidate, confidenceConfiguration).length > 0
   ));
 }
 
-function distinctMentionCandidates(candidates) {
+function distinctMentionCandidates(candidates, confidenceConfiguration) {
   const selected = new Map();
   for (const candidate of candidates) {
-    const signature = phraseSignature(candidate);
+    const signature = phraseSignature(candidate, confidenceConfiguration);
     if (!signature) continue;
     const current = selected.get(signature);
     if (!current || boundedScore(candidate.score) > boundedScore(current.score)) {
@@ -130,15 +133,17 @@ function routeCandidates(resolution) {
   ));
 }
 
-function explicitCurrentRoute(resolution) {
+function explicitCurrentRoute(resolution, confidenceConfiguration) {
   return routeCandidates(resolution).find((candidate) => (
-    candidate?.explicit === true && boundedScore(candidate.score) >= 0.88
+    candidate?.explicit === true
+      && boundedScore(candidate.score) >= confidenceConfiguration.highConfidence
   )) ?? null;
 }
 
-function currentNonCatalogSignal(resolution) {
+function currentNonCatalogSignal(resolution, confidenceConfiguration) {
   return routeCandidates(resolution).find((candidate) => (
-    candidate?.explicit === true && boundedScore(candidate.score) >= 0.68
+    candidate?.explicit === true
+      && boundedScore(candidate.score) >= confidenceConfiguration.clarificationConfidence
   )) ?? null;
 }
 
@@ -160,7 +165,7 @@ function activeMemoryEntity(memory = {}) {
   return null;
 }
 
-function ambiguityFor(resolution, explicitCandidates) {
+function ambiguityFor(resolution, explicitCandidates, confidenceConfiguration) {
   const relevant = explicitCandidates.length
     ? explicitCandidates
     : (resolution?.routingCandidates ?? []).filter((candidate) => candidate?.explicit === true);
@@ -169,7 +174,8 @@ function ambiguityFor(resolution, explicitCandidates) {
   const namespace = candidateNamespace(top);
   const sameNamespace = Boolean(namespace) && namespace === candidateNamespace(second);
   const closeScores = top && second
-    && Math.abs(boundedScore(top.score) - boundedScore(second.score)) <= 0.08;
+    && Math.abs(boundedScore(top.score) - boundedScore(second.score))
+      <= confidenceConfiguration.ambiguityMargin;
   const detected = resolution?.action === 'CONFIRM'
     && Boolean(top) && Boolean(second) && sameNamespace && closeScores;
   return Object.freeze({
@@ -180,14 +186,15 @@ function ambiguityFor(resolution, explicitCandidates) {
   });
 }
 
-function actionUnderstanding(input, resolution) {
+function actionUnderstanding(input, resolution, confidenceConfiguration) {
   const memoryTool = input?.memory?.activeTool;
   const workflow = [
     resolution?.candidate,
     ...(resolution?.namespaceCandidates?.WORKFLOW ?? []),
   ].find((candidate) => (
     String(candidate?.intentClass ?? '').toLocaleUpperCase() === 'ACTION_TOOL_REQUEST'
-      && candidate?.explicit === true && boundedScore(candidate.score) >= 0.88
+      && candidate?.explicit === true
+      && boundedScore(candidate.score) >= confidenceConfiguration.highConfidence
   ));
   const detected = Boolean(memoryTool?.name || workflow);
   return Object.freeze({
@@ -206,12 +213,15 @@ export function understandContextualKnowledgeQuery(input, resolution) {
   if (!resolution || normalized(resolution.tenantId) !== normalized(input.tenantId)) {
     throw new TypeError('Contextual query understanding requires same-tenant resolution');
   }
-  const explicitCandidates = explicitCatalogCandidates(resolution);
+  const confidenceConfiguration = resolveKnowledgeConfidenceConfiguration(
+    resolution.confidenceConfiguration ?? {},
+  );
+  const explicitCandidates = explicitCatalogCandidates(resolution, confidenceConfiguration);
   const mentionedCandidates = distinctMentionCandidates(catalogCandidates(resolution).filter((candidate) => (
     candidate.explicit === true
-      && boundedScore(candidate.score) >= 0.68
-      && explicitSignalPhrases(candidate).length > 0
-  )));
+      && boundedScore(candidate.score) >= confidenceConfiguration.clarificationConfidence
+      && explicitSignalPhrases(candidate, confidenceConfiguration).length > 0
+  )), confidenceConfiguration);
   const explicitEntities = explicitCandidates.filter((candidate) => (
     String(candidate.entityType ?? '').toLocaleUpperCase() !== 'CATEGORY'
       && String(candidate.recordType ?? '').toLocaleUpperCase() !== 'CATALOG_CATEGORY'
@@ -224,8 +234,9 @@ export function understandContextualKnowledgeQuery(input, resolution) {
     ...(input.requestedFacts ?? []),
     input.memory?.pendingClarification?.missingFactType,
   ]);
-  const route = explicitCurrentRoute(resolution);
-  const currentRouteSignal = route ?? currentNonCatalogSignal(resolution);
+  const route = explicitCurrentRoute(resolution, confidenceConfiguration);
+  const currentRouteSignal = route
+    ?? currentNonCatalogSignal(resolution, confidenceConfiguration);
   const protocolRoute = protocolIntentClasses.has(
     String(currentRouteSignal?.intentClass ?? '').toLocaleUpperCase(),
   );
@@ -253,9 +264,10 @@ export function understandContextualKnowledgeQuery(input, resolution) {
     boundedScore(candidate.score)
   )));
   const comparisonMentions = mentionedCandidates.filter((candidate) => (
-    boundedScore(candidate.score) >= comparisonTopScore - 0.08
+    boundedScore(candidate.score) >= comparisonTopScore - confidenceConfiguration.ambiguityMargin
       || currentQuestion.includes(normalized(candidateLabel(candidate)))
-      || explicitSignalPhrases(candidate).some((phrase) => currentQuestion.includes(phrase))
+      || explicitSignalPhrases(candidate, confidenceConfiguration)
+        .some((phrase) => currentQuestion.includes(phrase))
   ));
   const comparisonPool = [...new Map([
     ...comparisonMentions, ...canonicalNameMentions,
@@ -263,8 +275,8 @@ export function understandContextualKnowledgeQuery(input, resolution) {
   const comparisonCandidates = comparisonRequested
     ? (comparisonPool.length > 1 ? comparisonPool : explicitCandidates)
     : [];
-  const ambiguity = ambiguityFor(resolution, explicitCandidates);
-  const actionIntent = actionUnderstanding(input, resolution);
+  const ambiguity = ambiguityFor(resolution, explicitCandidates, confidenceConfiguration);
+  const actionIntent = actionUnderstanding(input, resolution, confidenceConfiguration);
   const canonicalContext = hasCurrentEntitySignal && !ambiguity.detected
     ? candidateSummary(mentionedCandidates[0] ?? explicitCandidates[0])
     : (contextDependent ? memoryEntity : null);
@@ -274,6 +286,7 @@ export function understandContextualKnowledgeQuery(input, resolution) {
     agentId: String(input.agentId),
     callId: String(input.callId),
     latestQuestion: clean(input.latestQuestion ?? input.utterance, 2_000),
+    confidenceConfiguration,
     explicitEntities: Object.freeze(explicitEntities),
     explicitCategories: Object.freeze(explicitCategories),
     comparisonEntities: Object.freeze(comparisonCandidates

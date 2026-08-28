@@ -3,8 +3,15 @@ import {
   normalizePublicationPhrase,
 } from './publication-index-builder.js';
 import { typedRecordIdentityKey } from './canonical-record-identity.js';
+import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/knowledge-confidence-config.js';
 
 export const KNOWLEDGE_RESOLUTION_VERSION = 1;
+
+// These shape a candidate score only. The selected agent configuration below
+// determines whether the resulting score is high, confirmable, or weak.
+const fuzzyCoverageCeiling = 0.84;
+const fuzzyCoverageScale = 0.28;
+const fuzzyCoverageBase = fuzzyCoverageCeiling - 0.16;
 
 export const knowledgeResolutionConfidence = Object.freeze({
   HIGH: 'HIGH', MEDIUM: 'MEDIUM', LOW: 'LOW',
@@ -331,7 +338,9 @@ function indexedSignals(accumulator, index, query, queryForms, records, statisti
         } else if (queryForms.stt.some((form) => form.length >= 3 && form.includes(compactPhrase))) {
           const coverage = distinctiveCoverage(query, phrase, statistics);
           score = phraseIsCanonicalDistinctive(phrase, statistics) ? sectionScore
-            : (coverage >= 0.98 ? 0.94 : Math.min(0.84, 0.68 + coverage * 0.28));
+            : (coverage >= 0.98 ? 0.94 : Math.min(
+              fuzzyCoverageCeiling, fuzzyCoverageBase + coverage * fuzzyCoverageScale,
+            ));
         }
       } else {
         const phraseSize = tokens(phrase).length;
@@ -360,10 +369,10 @@ function indexedSignals(accumulator, index, query, queryForms, records, statisti
   }
 }
 
-function fuzzySignals(accumulator, index, query, records, statistics) {
+function fuzzySignals(accumulator, index, query, records, statistics, confidenceConfiguration) {
   for (const [phrase, indexedCandidates] of Object.entries(index?.exact ?? {})) {
     const similarity = fuzzyPhraseScore(query, phrase);
-    if (similarity < 0.68) continue;
+    if (similarity < confidenceConfiguration.clarificationConfidence) continue;
     const coverage = distinctiveCoverage(query, phrase, statistics);
     const leadingSimilarity = leadingEntitySimilarity(query, phrase);
     const leadingBonus = leadingSimilarity >= 0.58 ? 0.1 : 0;
@@ -394,38 +403,42 @@ function semanticSignals(accumulator, semanticMatches, records) {
   }
 }
 
-function confidenceFor(candidates) {
+function confidenceFor(candidates, confidenceConfiguration) {
   const top = candidates[0];
   const second = candidates[1];
   if (!top) return { level: knowledgeResolutionConfidence.LOW, margin: 0 };
   const margin = top.score - (second?.score ?? 0);
-  if (top.score >= 0.88 && (margin >= 0.06 || !second)) {
+  if (top.score >= confidenceConfiguration.highConfidence
+    && (margin >= confidenceConfiguration.ambiguityMargin || !second)) {
     return { level: knowledgeResolutionConfidence.HIGH, margin };
   }
-  if (top.score >= 0.68) return { level: knowledgeResolutionConfidence.MEDIUM, margin };
+  if (top.score >= confidenceConfiguration.clarificationConfidence) {
+    return { level: knowledgeResolutionConfidence.MEDIUM, margin };
+  }
   return { level: knowledgeResolutionConfidence.LOW, margin };
 }
 
-function hasStrongCanonicalSignal(candidate) {
+function hasStrongCanonicalSignal(candidate, confidenceConfiguration) {
   return candidate?.explicit === true
-    && Number(candidate?.score ?? 0) >= 0.88
+    && Number(candidate?.score ?? 0) >= confidenceConfiguration.highConfidence
     && (candidate.signals ?? []).some((signal) => (
       signal.explicit === true
       && ['exact', 'normalized', 'tenant_alias', 'stt'].includes(signal.method)
-      && Number(signal.score ?? 0) >= 0.88
+      && Number(signal.score ?? 0) >= confidenceConfiguration.highConfidence
     ));
 }
 
-function discardDominatedCandidates(candidates) {
+function discardDominatedCandidates(candidates, confidenceConfiguration) {
   const ranked = [...candidates];
   const top = ranked[0];
-  if (!hasStrongCanonicalSignal(top)) return ranked;
+  if (!hasStrongCanonicalSignal(top, confidenceConfiguration)) return ranked;
   // Strong published canonical/alias matches outrank discovery-only signals.
   // Keep an equally authoritative near-tie so shared tenant aliases still
   // produce a genuine clarification instead of an arbitrary selection.
   return ranked.filter((candidate, index) => index === 0 || (
-    hasStrongCanonicalSignal(candidate)
-    && Number(top.score ?? 0) - Number(candidate.score ?? 0) <= 0.02
+    hasStrongCanonicalSignal(candidate, confidenceConfiguration)
+    && Number(top.score ?? 0) - Number(candidate.score ?? 0)
+      <= confidenceConfiguration.ambiguityMargin
   ));
 }
 
@@ -506,7 +519,7 @@ function frozenNamespaceCandidates(grouped) {
   ])));
 }
 
-function matchRouteCandidates(bundles, records, query, queryForms) {
+function matchRouteCandidates(bundles, records, query, queryForms, confidenceConfiguration) {
   const candidates = new Map();
   const indexes = bundles.flatMap((bundle) => {
     const namespaces = Object.values(bundle.routeIndex?.namespaces ?? {}).filter(Boolean);
@@ -516,7 +529,7 @@ function matchRouteCandidates(bundles, records, query, queryForms) {
   for (const index of indexes) {
     directIndexedSignals(candidates, index, query, queryForms, records);
     indexedSignals(candidates, index, query, queryForms, records, statistics);
-    fuzzySignals(candidates, index, query, records, statistics);
+    fuzzySignals(candidates, index, query, records, statistics, confidenceConfiguration);
   }
   for (const [key, candidate] of candidates) {
     if (candidateNamespace(candidate) === knowledgeCandidateNamespaces.CATALOG) {
@@ -526,7 +539,7 @@ function matchRouteCandidates(bundles, records, query, queryForms) {
   return candidates;
 }
 
-function matchCatalogCandidates(bundles, records, query, queryForms) {
+function matchCatalogCandidates(bundles, records, query, queryForms, confidenceConfiguration) {
   const candidates = new Map();
   const indexes = bundles.flatMap((bundle) => [
     bundle.entityIndex, bundle.entityIndex?.categories,
@@ -535,19 +548,22 @@ function matchCatalogCandidates(bundles, records, query, queryForms) {
   for (const index of indexes) {
     directIndexedSignals(candidates, index, query, queryForms, records);
     indexedSignals(candidates, index, query, queryForms, records, statistics);
-    fuzzySignals(candidates, index, query, records, statistics);
+    fuzzySignals(candidates, index, query, records, statistics, confidenceConfiguration);
   }
   suppressCategoryChildCollisions(candidates);
   return candidates;
 }
 
-function resolutionResult(input, ranked, namespace, namespaceCandidates, reasonPrefix = null) {
-  const authoritativeRanked = discardDominatedCandidates(ranked);
-  const { level, margin } = confidenceFor(authoritativeRanked);
+function resolutionResult(
+  input, ranked, namespace, namespaceCandidates, confidenceConfiguration, reasonPrefix = null,
+) {
+  const authoritativeRanked = discardDominatedCandidates(ranked, confidenceConfiguration);
+  const { level, margin } = confidenceFor(authoritativeRanked, confidenceConfiguration);
   const contextDependent = authoritativeRanked[0]?.method === 'context';
   return Object.freeze({
     version: KNOWLEDGE_RESOLUTION_VERSION,
     tenantId: String(input.tenantId),
+    confidenceConfiguration,
     confidence: level,
     score: ranked[0]?.score ?? 0,
     margin: boundedScore(margin),
@@ -570,12 +586,12 @@ const absoluteRouteIntents = new Set(['SAFETY_EMERGENCY', 'CALL_CONTROL', 'ACTIO
 
 const explicitPriorityMethods = new Set(['exact', 'normalized', 'tenant_alias', 'stt', 'phonetic']);
 
-function explicitPriorityRoute(candidate) {
+function explicitPriorityRoute(candidate, confidenceConfiguration) {
   return candidate?.explicit === true
-    && Number(candidate?.score ?? 0) >= 0.88
+    && Number(candidate?.score ?? 0) >= confidenceConfiguration.highConfidence
     && (candidate.signals ?? []).some((signal) => signal.explicit === true
       && explicitPriorityMethods.has(signal.method)
-      && Number(signal.score ?? 0) >= 0.88);
+      && Number(signal.score ?? 0) >= confidenceConfiguration.highConfidence);
 }
 const routeIntentPriority = Object.freeze({
   SAFETY_EMERGENCY: 100,
@@ -585,12 +601,12 @@ const routeIntentPriority = Object.freeze({
   ACKNOWLEDGEMENT: 60,
 });
 
-function bestRouteCandidate(routes) {
+function bestRouteCandidate(routes, confidenceConfiguration) {
   const eligiblePriority = (candidate) => {
     const intent = normalizedIntentClass(candidate?.intentClass);
     const method = String(candidate?.method ?? '');
     const explicitlyPublished = candidate?.explicit === true
-      && Number(candidate?.score ?? 0) >= 0.88
+      && Number(candidate?.score ?? 0) >= confidenceConfiguration.highConfidence
       && ['exact', 'normalized', 'tenant_alias', 'stt', 'phonetic'].includes(method);
     return explicitlyPublished ? (routeIntentPriority[intent] ?? 0) : 0;
   };
@@ -601,11 +617,18 @@ function bestRouteCandidate(routes) {
 }
 
 export function resolvePublishedEntityRoute(input, publicationBundles, options = {}) {
+  const confidenceConfiguration = resolveKnowledgeConfidenceConfiguration(
+    options.confidenceConfiguration ?? options.confidenceSettings ?? {},
+  );
   const { utterance, bundles, records } = normalizedBundles(input, publicationBundles);
   const query = normalizePublicationPhrase(utterance);
   const queryForms = buildPublicationPhraseForms([utterance]);
-  const catalog = matchCatalogCandidates(bundles, records, query, queryForms);
-  const routes = matchRouteCandidates(bundles, records, query, queryForms);
+  const catalog = matchCatalogCandidates(
+    bundles, records, query, queryForms, confidenceConfiguration,
+  );
+  const routes = matchRouteCandidates(
+    bundles, records, query, queryForms, confidenceConfiguration,
+  );
   const semantic = new Map();
   semanticSignals(semantic, options.semanticMatches, records);
   // Merge semantic support into an existing tenant-published Catalog identity
@@ -623,26 +646,38 @@ export function resolvePublishedEntityRoute(input, publicationBundles, options =
   // produce an explicit resolution here.
   const routeGroups = groupByNamespace(routes);
   const semanticGroups = groupByNamespace(semantic);
-  const fallbackRouteCandidate = bestRouteCandidate(routes);
+  const fallbackRouteCandidate = bestRouteCandidate(routes, confidenceConfiguration);
   const preliminaryCandidate = fallbackRouteCandidate;
   const preliminaryNamespace = candidateNamespace(preliminaryCandidate);
   const preliminaryIntent = normalizedIntentClass(preliminaryCandidate?.intentClass);
   // Protocol-level routes are deterministic. Normal published namespaces
   // remain independently eligible so explicit Catalog entities can outrank
   // generic FAQ or Conversation guidance.
-  const lockPublishedRoute = explicitPriorityRoute(preliminaryCandidate)
+  const lockPublishedRoute = explicitPriorityRoute(preliminaryCandidate, confidenceConfiguration)
     && absoluteRouteIntents.has(preliminaryIntent);
 
   const catalogRanked = rankCandidates(catalog);
   const semanticRanked = rankCandidates(semantic);
   const explicitCatalog = catalogRanked[0]?.explicit === true
-    && catalogRanked[0].score >= 0.88;
+    && catalogRanked[0].score >= confidenceConfiguration.highConfidence;
+  const canonicalCatalog = hasStrongCanonicalSignal(
+    catalogRanked[0], confidenceConfiguration,
+  );
   const confirmableCatalog = catalogRanked[0]?.explicit === true
-    && catalogRanked[0].score >= 0.68;
-  const explicitPublishedRoute = explicitPriorityRoute(preliminaryCandidate);
+    && catalogRanked[0].score >= confidenceConfiguration.clarificationConfidence;
+  const explicitPublishedRoute = explicitPriorityRoute(
+    preliminaryCandidate, confidenceConfiguration,
+  );
   let selectedNamespace = null;
   let selected = new Map();
   if (lockPublishedRoute && preliminaryNamespace) {
+    selectedNamespace = preliminaryNamespace;
+    selected = routeGroups.get(preliminaryNamespace) ?? new Map();
+  } else if (explicitPublishedRoute && preliminaryNamespace && !canonicalCatalog) {
+    // An exact published FAQ/Conversation route outranks a Catalog candidate
+    // that crossed the configured high threshold through fuzzy/phonetic
+    // discovery alone. Exact Catalog names and aliases still retain entity
+    // priority through the canonical branch below.
     selectedNamespace = preliminaryNamespace;
     selected = routeGroups.get(preliminaryNamespace) ?? new Map();
   } else if (explicitCatalog) {
@@ -684,5 +719,5 @@ export function resolvePublishedEntityRoute(input, publicationBundles, options =
   }
   const allGroups = groupByNamespace(allCandidates);
   return resolutionResult(input, rankCandidates(selected), selectedNamespace,
-    frozenNamespaceCandidates(allGroups));
+    frozenNamespaceCandidates(allGroups), confidenceConfiguration);
 }

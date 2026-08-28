@@ -514,12 +514,20 @@ export function applyUnifiedGroundedTurn({
     activeToolRequest: beforeState.activeToolRequest,
     requireCurrentActionEvidence: !beforeState.activeToolRequest?.authorizationRecordId,
   }) : null;
-  const collectedInformationUpdate = Object.keys(
+  const collectedInformationKeys = Object.keys(
     effectiveDecision.stateUpdate.collectedInformation ?? {},
-  ).length > 0;
+  );
+  const collectedInformationUpdate = collectedInformationKeys.length > 0;
+  const configuredInformationFields = new Map((fieldSchemas ?? [])
+    .map((field) => [field?.key, field]).filter(([key]) => Boolean(key)));
+  const currentCallInformationOnly = collectedInformationUpdate
+    && collectedInformationKeys.every((key) => {
+      const field = configuredInformationFields.get(key);
+      return field && !field.requiredAction;
+    });
   const startsToolCollection = Boolean(effectiveDecision.stateUpdate.activeToolRequest)
     && !beforeState.activeToolRequest;
-  if ((collectedInformationUpdate || startsToolCollection)
+  if (((collectedInformationUpdate && !currentCallInformationOnly) || startsToolCollection)
     && (!proposedToolName || preliminaryAction?.valid !== true)) {
     return Object.freeze({
       valid: false,

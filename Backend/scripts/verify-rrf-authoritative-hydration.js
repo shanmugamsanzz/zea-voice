@@ -283,6 +283,9 @@ const nearTiedCandidate = {
 };
 const nearTiedAmbiguity = detectEntityAmbiguity(hydrated.evidence, {
   intentClass: knowledgeQueryClasses.KNOWN_INFORMATION, requiresConfirmation: true,
+  confidenceConfiguration: {
+    highConfidence: 0.86, clarificationConfidence: 0.64, ambiguityMargin: 0.06,
+  },
 }, {
   action: 'CONFIRM', candidateNamespace: 'CATALOG', candidate: semanticCandidate,
   routingCandidates: [semanticCandidate, nearTiedCandidate, {
@@ -295,6 +298,16 @@ assert.equal(nearTiedAmbiguity.detected, true,
 assert.deepEqual(nearTiedAmbiguity.candidates.map((entry) => entry.name), [
   'Published semantic candidate', 'Second published semantic candidate',
 ]);
+
+assert.equal(detectEntityAmbiguity(hydrated.evidence, {
+  intentClass: knowledgeQueryClasses.KNOWN_INFORMATION, requiresConfirmation: true,
+  confidenceConfiguration: {
+    highConfidence: 0.86, clarificationConfidence: 0.64, ambiguityMargin: 0.01,
+  },
+}, {
+  action: 'CONFIRM', candidateNamespace: 'CATALOG', candidate: semanticCandidate,
+  routingCandidates: [semanticCandidate, { ...nearTiedCandidate, score: 0.76 }],
+}).detected, false, 'The selected agent ambiguity margin must control hydrated ambiguity');
 
 assert.match(authoritativeHydrationSql, /assigned\.publication_revision=requested\.publication_revision/u);
 assert.match(authoritativeHydrationSql, /status='approved'/u);

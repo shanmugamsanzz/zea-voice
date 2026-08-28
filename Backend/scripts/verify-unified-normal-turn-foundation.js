@@ -40,7 +40,7 @@ const normalTurn = createNormalTurnInput({
 assert.equal(normalTurn.currentQuestion, 'Tell me more about this option');
 assert.equal(normalTurn.memory.activeEntity.recordId,
   '91000000-0000-4000-8000-000000000011');
-assert.equal(normalTurn.memory.recentTurns.length, 4);
+assert.equal(normalTurn.memory.recentTurns.length, 8);
 assert.equal(normalTurn.memory.knownEntities, undefined);
 assert.deepEqual(normalTurn.memory.collectedToolFields, { quantity: 3 });
 const engineInput = toKnowledgeEngineInput(normalTurn);

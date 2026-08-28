@@ -149,7 +149,8 @@ function clarificationVariables(knowledge = {}) {
     const label = String(candidate?.name ?? candidate?.label ?? '').trim();
     return label ? [label] : [];
   }).filter((value, index, values) => values.indexOf(value) === index).slice(0, 5);
-  return { candidate: labels[0] ?? '', options: labels.join(', ') };
+  const candidates = labels.join(', ');
+  return { candidate: labels[0] ?? '', candidates, options: candidates };
 }
 
 function callerFacingFallback(profile, knowledge = {}) {
@@ -1943,11 +1944,10 @@ export class RealtimeConversationOrchestrator {
         ?? liveMemory?.collectedInformation ?? liveMemory?.collectedData ?? {}),
     };
     const allConfiguredFields = this.liveCallMemory?.fieldSchemas?.() ?? liveMemory?.fields ?? [];
-    const authorizedFieldKeys = new Set((llmEvidenceBundle?.authorizedToolSchemas ?? [])
-      .flatMap((tool) => Object.keys(tool.inputSchema?.properties ?? {})));
-    const configuredFields = llmEvidenceBundle
-      ? allConfiguredFields.filter((field) => authorizedFieldKeys.has(field.key))
-      : allConfiguredFields;
+    // Important Information Fields are isolated current-call memory and remain
+    // available even when cross-call caching is disabled. External actions are
+    // still constrained independently by authorizedToolSchemas below.
+    const configuredFields = allConfiguredFields;
     const liveHistory = llmEvidenceBundle?.recentRelevantTurns
       ?? this.liveCallMemory?.promptMessages?.() ?? history ?? [];
     const promptHistory = liveHistory.filter((message, index, messages) => !(
@@ -2142,6 +2142,7 @@ export class RealtimeConversationOrchestrator {
             this.runtimeProfile, knowledge,
           ),
           clarificationContext: llmEvidenceBundle?.decisionInput ? {
+            ...llmEvidenceBundle.decisionInput.clarificationContext,
             requestedFact: llmEvidenceBundle.decisionInput.requestedFact,
             canonicalMemory: llmEvidenceBundle.decisionInput.canonicalMemory,
             ambiguityCandidates: llmEvidenceBundle.decisionInput.ambiguityCandidates,

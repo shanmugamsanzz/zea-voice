@@ -3,6 +3,7 @@ import {
   knowledgeEngineResponseModes,
 } from './engine-contract.js';
 import { resolveCanonicalTopicMemory } from './canonical-topic-memory.js';
+import { selectCompleteConversationTurns } from './conversation-turn-context.js';
 import { buildDeterministicSourceMap } from './deterministic-source-mapping.js';
 
 export const COMPACT_EVIDENCE_BUNDLE_VERSION = 2;
@@ -347,7 +348,12 @@ export function buildCompactEvidenceBundle({
     entities: catalogEntities(topEvidence, resolvedEntity),
     requestedFact: input?.requestedFact ?? null,
     requestedFacts: Object.freeze([...(input?.requestedFacts ?? [])].slice(0, 8)),
-    recentRelevantTurns: Object.freeze([...(input?.recentRelevantTurns ?? [])].slice(-4)),
+    recentRelevantTurns: selectCompleteConversationTurns(input?.recentRelevantTurns ?? [], {
+      mode: input?.memory?.conversationContextMode,
+      recentTurns: input?.memory?.conversationContextTurns,
+      currentQuestion: input?.latestQuestion ?? input?.utterance,
+      contextTerms: [resolvedEntity?.name, input?.requestedFact].filter(Boolean),
+    }),
     intentClass: classification?.intentClass ?? null,
     topEvidence: Object.freeze(topEvidence),
     sourceMap: Object.freeze(sourceMap),

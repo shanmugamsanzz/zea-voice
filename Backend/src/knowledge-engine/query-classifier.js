@@ -1,3 +1,5 @@
+import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/knowledge-confidence-config.js';
+
 export const KNOWLEDGE_QUERY_CLASSIFIER_VERSION = 1;
 
 export const knowledgeQueryClasses = Object.freeze({
@@ -112,43 +114,43 @@ function rankedCandidates(resolution) {
 
 const explicitPriorityMethods = new Set(['exact', 'normalized', 'tenant_alias', 'stt', 'phonetic']);
 
-function hasExplicitPublishedPriorityTrigger(candidate) {
+function hasExplicitPublishedPriorityTrigger(candidate, confidenceConfiguration) {
   if (candidate?.explicit !== true) return false;
   return (candidate.signals ?? []).some((signal) => signal.explicit === true
     && explicitPriorityMethods.has(signal.method)
-    && Number(signal.score ?? 0) >= 0.89
+    && Number(signal.score ?? 0) >= confidenceConfiguration.highConfidence
     && String(signal.phrase ?? '').trim());
 }
 
-function candidateIsEligible(candidate, intentClass) {
+function candidateIsEligible(candidate, intentClass, confidenceConfiguration) {
   if ([
     knowledgeQueryClasses.SAFETY_EMERGENCY,
     knowledgeQueryClasses.CALL_CONTROL,
     knowledgeQueryClasses.ACTION_TOOL_REQUEST,
   ].includes(intentClass)) {
-    return hasExplicitPublishedPriorityTrigger(candidate);
+    return hasExplicitPublishedPriorityTrigger(candidate, confidenceConfiguration);
   }
   if ([
     knowledgeQueryClasses.KNOWN_INFORMATION,
     knowledgeQueryClasses.DETAILS_OR_PRICE,
     knowledgeQueryClasses.CATEGORY_OVERVIEW,
   ].includes(intentClass)) {
-    return Number(candidate?.score ?? 0) >= 0.88;
+    return Number(candidate?.score ?? 0) >= confidenceConfiguration.highConfidence;
   }
   return true;
 }
 
-function explicitEntityCount(candidates) {
+function explicitEntityCount(candidates, confidenceConfiguration) {
   return new Set(candidates.filter((candidate) => candidate.explicit
-    && Number(candidate.score ?? 0) >= 0.88
+    && Number(candidate.score ?? 0) >= confidenceConfiguration.highConfidence
     && ['ITEM', 'CATEGORY'].includes(candidate.entityType))
     .map((candidate) => `${candidate.entityType}:${candidate.itemKey ?? candidate.categoryKey ?? candidate.recordId}`))
     .size;
 }
 
-function explicitPhraseSignatureCount(candidates) {
+function explicitPhraseSignatureCount(candidates, confidenceConfiguration) {
   return new Set(candidates.filter((candidate) => candidate.explicit
-    && Number(candidate.score ?? 0) >= 0.88).map((candidate) => (
+    && Number(candidate.score ?? 0) >= confidenceConfiguration.highConfidence).map((candidate) => (
     // Only phrases tied with the candidate's winning score identify what the
     // caller explicitly named. Lower fuzzy matches to each record's label must
     // not turn one shared alias into a comparison request.
@@ -161,18 +163,19 @@ function explicitPhraseSignatureCount(candidates) {
     .size;
 }
 
-function inferredCandidates(input, resolution) {
+function inferredCandidates(input, resolution, confidenceConfiguration) {
   const candidates = rankedCandidates(resolution);
   const understanding = input.queryUnderstanding ?? {};
   const inferred = candidates.flatMap((candidate) => {
     const intentClass = candidateIntent(candidate);
-    return intentClass && candidateIsEligible(candidate, intentClass)
+    return intentClass && candidateIsEligible(candidate, intentClass, confidenceConfiguration)
       ? [{ intentClass, candidate, source: candidate.intentClass
       ? 'published_intent_class' : 'resolved_structure' }] : [];
   });
   if ((understanding.comparisonEntities?.length ?? 0) > 1
     || (input.requestedFacts ?? []).some((fact) => String(fact).toLocaleLowerCase() === 'comparison')
-    || (explicitEntityCount(candidates) > 1 && explicitPhraseSignatureCount(candidates) > 1)
+    || (explicitEntityCount(candidates, confidenceConfiguration) > 1
+      && explicitPhraseSignatureCount(candidates, confidenceConfiguration) > 1)
     || (input.requestedFacts?.length ?? 0) > 1) {
     inferred.push({
       intentClass: knowledgeQueryClasses.COMPARISON_COMPLEX,
@@ -182,7 +185,7 @@ function inferredCandidates(input, resolution) {
   }
   const explicitResolvedEntity = candidates.some((candidate) => candidate.explicit === true
     && ['ITEM', 'CATEGORY'].includes(candidate.entityType)
-    && Number(candidate.score ?? 0) >= 0.88);
+    && Number(candidate.score ?? 0) >= confidenceConfiguration.highConfidence);
   if (input.memory?.pendingClarification && !explicitResolvedEntity) {
     inferred.push({
       intentClass: knowledgeQueryClasses.CLARIFICATION_ANSWER,
@@ -294,7 +297,10 @@ export function classifyKnowledgeQuery(input, resolution) {
   if (!resolution || resolution.tenantId !== input.tenantId) {
     throw new TypeError('Query classification requires same-tenant entity resolution');
   }
-  const selected = inferredCandidates(input, resolution)[0];
+  const confidenceConfiguration = resolveKnowledgeConfidenceConfiguration(
+    resolution.confidenceConfiguration ?? {},
+  );
+  const selected = inferredCandidates(input, resolution, confidenceConfiguration)[0];
   const searchIndexes = indexesFor(selected.intentClass, selected.candidate);
   const selectedNamespace = selected.source === 'contextual_call_memory' ? 'CATALOG'
     : resolution.candidateNamespace ?? ({
@@ -310,6 +316,7 @@ export function classifyKnowledgeQuery(input, resolution) {
     intentClass: selected.intentClass,
     priority: priority[selected.intentClass],
     confidence: resolution.score ?? 0,
+    confidenceConfiguration,
     source: selected.source,
     candidate: selected.candidate,
     selectedNamespace,

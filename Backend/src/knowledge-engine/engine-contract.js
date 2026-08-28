@@ -1,3 +1,5 @@
+import { selectCompleteConversationTurns } from './conversation-turn-context.js';
+
 export const KNOWLEDGE_ENGINE_CONTRACT_VERSION = 2;
 
 export const knowledgeEngineOutputTypes = Object.freeze({
@@ -32,11 +34,13 @@ function memoryObject(value) {
 }
 
 function memoryMessages(value) {
-  return Object.freeze((Array.isArray(value) ? value : []).slice(-4).flatMap((message) => {
-    const role = message?.role === 'assistant' ? 'assistant' : (message?.role === 'user' ? 'user' : null);
-    const content = String(message?.content ?? '').normalize('NFKC').replace(/\s+/gu, ' ').trim().slice(0, 500);
-    return role && content ? [Object.freeze({ role, content })] : [];
-  }));
+  return Object.freeze(selectCompleteConversationTurns(value, {
+    recentTurns: 10, maximumPairs: 10,
+  }).map((message) => Object.freeze({
+    role: message.role,
+    content: String(message.content ?? '').normalize('NFKC')
+      .replace(/\s+/gu, ' ').trim().slice(0, 500),
+  })).filter((message) => message.content));
 }
 
 function evidenceMemory(value) {
@@ -75,6 +79,12 @@ export function createKnowledgeEngineInput(value = {}) {
     activeCategory: memoryObject(suppliedMemory.activeCategory),
     latestIntent: cleanString(suppliedMemory.latestIntent ?? suppliedMemory.requestType, 80) || null,
     recentConversation: recentRelevantTurns,
+    conversationContextMode: cleanString(
+      suppliedMemory.conversationContextMode ?? 'last_n_turns', 40,
+    ).toLocaleLowerCase(),
+    conversationContextTurns: Math.max(1, Math.min(
+      10, Number(suppliedMemory.conversationContextTurns) || 5,
+    )),
     pendingClarification: memoryObject(suppliedMemory.pendingClarification),
     activeTool: memoryObject(suppliedMemory.activeTool ?? suppliedMemory.activeToolRequest),
     collectedToolFields: Object.freeze({

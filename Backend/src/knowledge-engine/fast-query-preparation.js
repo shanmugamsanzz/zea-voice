@@ -6,6 +6,7 @@ import {
 import { resolvePublishedEntityRoute } from './entity-route-resolver.js';
 import { classifyKnowledgeQuery, knowledgeQueryClasses } from './query-classifier.js';
 import { understandContextualKnowledgeQuery } from './contextual-query-understanding.js';
+import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/knowledge-confidence-config.js';
 
 export const FAST_QUERY_PREPARATION_VERSION = 2;
 
@@ -45,6 +46,7 @@ export async function prepareKnowledgeQuery(input, publicationBundles, options =
   const classify = dependencies.classify ?? classifyKnowledgeQuery;
   const initialResolution = await resolve(initialInput, publicationBundles, {
     semanticMatches: options.semanticMatches ?? [],
+    confidenceConfiguration: options.confidenceConfiguration,
   });
   const understanding = await understand(initialInput, initialResolution);
   const preparedInput = enrichedInput(
@@ -81,15 +83,23 @@ export async function refineKnowledgeResolution(
   input, publicationBundles, currentResolution, classification, semanticMatches = [], dependencies = {},
 ) {
   if (!Array.isArray(semanticMatches) || semanticMatches.length === 0) return currentResolution;
+  const confidenceConfiguration = resolveKnowledgeConfidenceConfiguration(
+    currentResolution?.confidenceConfiguration,
+  );
   const selected = classification?.candidate ?? currentResolution?.candidate;
   // Semantic search may recover an unresolved turn, but it must not replace a
   // high-confidence entity or route resolved from published tenant metadata.
-  if (selected?.explicit === true && Number(selected.score ?? currentResolution?.score ?? 0) >= 0.88) {
+  if (selected?.explicit === true
+    && Number(selected.score ?? currentResolution?.score ?? 0)
+      >= confidenceConfiguration.highConfidence) {
     return currentResolution;
   }
   const resolve = dependencies.resolve ?? resolvePublishedEntityRoute;
   // A weak lexical match must not constrain semantic recovery to its namespace.
   // Every candidate is already publication-scoped; the resolver applies final
   // namespace and explicit-entity priority across the independent results.
-  return resolve(input, publicationBundles, { semanticMatches });
+  return resolve(input, publicationBundles, {
+    semanticMatches,
+    confidenceConfiguration,
+  });
 }

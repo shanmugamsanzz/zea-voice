@@ -216,11 +216,24 @@ assert.equal(result.candidate.categoryKey, 'oncology-screening');
 assert.equal(result.explicitEntity, true);
 
 result = resolvePublishedEntityRoute(input('on cooker package pathi sollunga', staleAlphaMemory), bundle);
-assert.equal(result.confidence, knowledgeResolutionConfidence.MEDIUM);
-assert.equal(result.action, knowledgeResolutionActions.CONFIRM);
+assert.equal(result.confidence, knowledgeResolutionConfidence.HIGH,
+  'The default agent high-confidence setting must control phonetic resolution');
+assert.equal(result.action, knowledgeResolutionActions.CONTINUE);
 assert.equal(result.candidate.entityType, 'CATEGORY');
 assert.equal(result.candidate.categoryKey, 'oncology-screening');
 assert.ok(['phonetic', 'fuzzy'].includes(result.candidate.method));
+
+result = resolvePublishedEntityRoute(
+  input('on cooker package pathi sollunga', staleAlphaMemory), bundle,
+  { confidenceSettings: {
+    knowledgeHighConfidence: 0.90,
+    knowledgeClarificationConfidence: 0.64,
+    knowledgeAmbiguityMargin: 0.06,
+  } },
+);
+assert.equal(result.confidence, knowledgeResolutionConfidence.MEDIUM,
+  'A stricter selected-agent setting must request confirmation for the same score');
+assert.equal(result.action, knowledgeResolutionActions.CONFIRM);
 
 const unrelatedOnlyBundle = buildPublicationIndexes(job, [alpha, beta]);
 result = resolvePublishedEntityRoute(

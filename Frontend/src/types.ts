@@ -164,6 +164,7 @@ export interface VoiceAgent {
   callbackFollowUpOpeningInstructions?: string;
   welcomeMessage?: string;
   inactivityTimeout?: number;
+  maxInactivityPrompts?: number;
   silentMessage?: string;
   ttsModel?: string;
   ttsAmbienceType?: string;

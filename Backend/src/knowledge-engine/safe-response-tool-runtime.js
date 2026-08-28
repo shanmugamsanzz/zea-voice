@@ -7,6 +7,7 @@ import { knowledgeQueryClasses } from './query-classifier.js';
 import { validateGroundedClaims } from '../voice/interaction/grounded-claim-validator.js';
 import { validateToolArguments } from '../voice/tools/tool-security.js';
 import { executeAgentTool } from '../voice/tools/tool-executor.service.js';
+import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/knowledge-confidence-config.js';
 
 export const SAFE_RESPONSE_TOOL_RUNTIME_VERSION = 1;
 
@@ -312,9 +313,13 @@ export function validateFinalKnowledgeResponse({
 }
 
 function explicitComparisonEvidence(resolution, evidence) {
+  const confidenceConfiguration = resolveKnowledgeConfidenceConfiguration(
+    resolution?.confidenceConfiguration,
+  );
   const explicitIds = new Set((resolution?.namespaceCandidates?.CATALOG
     ?? resolution?.routingCandidates ?? []).filter((candidate) => (
-    candidate.explicit === true && Number(candidate.score ?? 0) >= 0.88
+    candidate.explicit === true
+    && Number(candidate.score ?? 0) >= confidenceConfiguration.highConfidence
     && ['ITEM', 'CATEGORY'].includes(candidate.entityType)
   )).map((candidate) => candidate.recordId).map(normalizedId));
   if (!explicitIds.size) return [];

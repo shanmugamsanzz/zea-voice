@@ -1,4 +1,5 @@
 import { createKnowledgeEngineInput } from '../knowledge-engine/engine-contract.js';
+import { selectCompleteConversationTurns } from '../knowledge-engine/conversation-turn-context.js';
 
 export const NORMAL_TURN_CONTRACT_VERSION = 1;
 
@@ -72,12 +73,11 @@ function activeTool(value) {
   });
 }
 
-function recentTurns(value) {
-  return Object.freeze((Array.isArray(value) ? value : []).slice(-4).flatMap((turn) => {
-    const role = turn?.role === 'assistant' ? 'assistant' : (turn?.role === 'user' ? 'user' : null);
-    const content = clean(turn?.content, 600);
-    return role && content ? [Object.freeze({ role, content })] : [];
-  }));
+function recentTurns(value, options = {}) {
+  return Object.freeze(selectCompleteConversationTurns(value, options).map((turn) => Object.freeze({
+    role: turn.role,
+    content: clean(turn.content, 600),
+  })).filter((turn) => turn.content));
 }
 
 function scalarFields(value) {
@@ -143,6 +143,17 @@ export function createNormalTurnInput(value = {}) {
   const references = [...new Set((value.contextualReferences
     ?? sourceMemory.contextualReferences ?? []).map((reference) => clean(reference, 120))
     .filter(Boolean))].slice(0, 10);
+  const conversationContextMode = clean(
+    sourceMemory.conversationContextMode ?? 'last_n_turns', 40,
+  ).toLocaleLowerCase();
+  const conversationContextTurns = Math.max(1, Math.min(
+    10, Number(sourceMemory.conversationContextTurns) || 5,
+  ));
+  const contextTerms = [
+    sourceMemory.activeEntity?.name, sourceMemory.activeEntity?.key,
+    sourceMemory.activeCategory?.name, sourceMemory.activeCategory?.key,
+    value.requestedFact, ...facts,
+  ].filter(Boolean);
   const memory = Object.freeze({
     scope: Object.freeze({
       tenantId: scope.tenantId, agentId: scope.agentId, callId: scope.callId,
@@ -153,7 +164,14 @@ export function createNormalTurnInput(value = {}) {
     requestedFact: clean(value.requestedFact ?? facts[0], 120) || null,
     requestedFacts: Object.freeze(facts),
     contextualReferences: Object.freeze(references),
-    recentTurns: recentTurns(sourceMemory.recentTurns ?? sourceMemory.recentConversation),
+    recentTurns: recentTurns(sourceMemory.recentTurns ?? sourceMemory.recentConversation, {
+      mode: conversationContextMode,
+      recentTurns: conversationContextTurns,
+      currentQuestion: finalizedQuestion,
+      contextTerms,
+    }),
+    conversationContextMode,
+    conversationContextTurns,
     pendingClarification: pending(sourceMemory.pendingClarification),
     activeTool: activeTool(sourceMemory.activeTool ?? sourceMemory.activeToolRequest),
     collectedToolFields: scalarFields(

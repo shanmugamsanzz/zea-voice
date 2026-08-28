@@ -28,7 +28,7 @@ assert.equal(input.latestQuestion, input.utterance);
 assert.equal(input.usageDirection, 'inbound');
 assert.equal(input.requestedFact, 'price');
 assert.deepEqual(input.contextualReferences, ['this']);
-assert.equal(input.recentRelevantTurns.length, 4);
+assert.equal(input.recentRelevantTurns.length, 6);
 assert.equal(input.canonicalCallMemory.activeEntity.recordId, 'catalog-one');
 assert.equal(input.memory, input.canonicalCallMemory);
 assert.equal(isKnowledgeEngineInput(input), true);

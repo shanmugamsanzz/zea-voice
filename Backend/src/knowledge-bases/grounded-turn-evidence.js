@@ -8,6 +8,9 @@ import {
 } from '../knowledge-engine/canonical-record-identity.js';
 import { buildDeterministicSourceMap } from '../knowledge-engine/deterministic-source-mapping.js';
 import { AppError } from '../middleware/errors.js';
+import { resolveKnowledgeConfidenceConfiguration } from './knowledge-confidence-config.js';
+import { selectCompleteConversationTurns } from '../knowledge-engine/conversation-turn-context.js';
+import { resolveLiveMemoryConfiguration } from '../voice/interaction/live-memory-config.js';
 
 export const GROUNDED_TURN_EVIDENCE_VERSION = 2;
 const maximumEvidenceRecords = 5;
@@ -244,9 +247,13 @@ function namespaceForRecordType(value) {
 }
 
 function authoritativeRoute(understanding = {}, route = null) {
+  const confidenceConfiguration = resolveKnowledgeConfidenceConfiguration(
+    understanding?.confidenceConfiguration,
+  );
   if (!route?.recordId || !route?.recordType) return null;
   if (route === understanding.explicitCurrentRoute) return route;
-  if (route.explicit === true && Number(route.score ?? 0) >= 0.88) return route;
+  if (route.explicit === true
+    && Number(route.score ?? 0) >= confidenceConfiguration.highConfidence) return route;
   // A prevalidated route may omit scoring metadata in internal callers. A
   // scored medium route is never promoted by this compatibility branch.
   if (route.explicit === undefined && route.score === undefined) return route;
@@ -377,23 +384,53 @@ function compactCanonicalMemory(input = {}, canonicalResolution = {}) {
 
 function compactRelevantTurns(input = {}) {
   const memory = input.canonicalCallMemory ?? input.memory ?? {};
-  return Object.freeze([...(input.recentRelevantTurns
-    ?? memory.recentConversation ?? memory.recentTurns ?? [])].slice(-4)
+  return Object.freeze(selectCompleteConversationTurns(input.recentRelevantTurns
+    ?? memory.recentConversation ?? memory.recentTurns ?? [], {
+    mode: memory.conversationContextMode,
+    recentTurns: memory.conversationContextTurns,
+    currentQuestion: input.currentQuestion ?? input.latestQuestion ?? input.utterance,
+    contextTerms: [memory.activeEntity?.name, memory.activeCategory?.name].filter(Boolean),
+  })
     .map((turn) => Object.freeze({
       role: turn?.role === 'assistant' ? 'assistant' : 'user',
       content: clean(turn?.content, 500),
     })).filter((turn) => turn.content));
 }
 
-function ambiguityCandidates(input = {}, authoritative = {}) {
+function canonicalCandidateName(candidate = {}, evidenceByRecordId = new Map()) {
+  const source = evidenceByRecordId.get(normalizedId(candidate.recordId));
+  const data = source?.authoritativeData ?? {};
+  if (String(candidate.recordType ?? '').toUpperCase() === 'CATALOG_CATEGORY') {
+    return clean(data.category ?? candidate.name ?? candidate.label, 240);
+  }
+  if (String(candidate.recordType ?? '').toUpperCase() === 'CATALOG_ITEM') {
+    return clean(data.name ?? candidate.name ?? candidate.label, 240);
+  }
+  return clean(candidate.name ?? candidate.label ?? data.question ?? data.name, 240);
+}
+
+function ambiguityCandidates(input = {}, authoritative = {}, resolution = {}, classification = {}) {
+  const confidenceConfiguration = resolveKnowledgeConfidenceConfiguration(
+    classification?.confidenceConfiguration ?? resolution?.confidenceConfiguration,
+  );
+  const evidenceByRecordId = new Map((authoritative?.evidence ?? []).map((source) => (
+    [normalizedId(source.recordId), source]
+  )));
+  const mediumCandidates = (resolution?.routingCandidates ?? []).filter((candidate) => (
+    evidenceByRecordId.has(normalizedId(candidate?.recordId))
+    &&
+    Number(candidate?.score ?? 0) >= confidenceConfiguration.clarificationConfidence
+    && Number(candidate?.score ?? 0) < confidenceConfiguration.highConfidence
+  ));
   const candidates = [
     ...(authoritative?.ambiguity?.candidates ?? []),
     ...(input?.queryUnderstanding?.ambiguity?.candidates ?? []),
+    ...mediumCandidates,
   ];
   const seen = new Set();
   return Object.freeze(candidates.flatMap((candidate) => {
     const recordId = clean(candidate?.recordId ?? candidate?.id, 160);
-    const name = clean(candidate?.name ?? candidate?.label, 240);
+    const name = canonicalCandidateName(candidate, evidenceByRecordId);
     const recordType = clean(candidate?.recordType, 80).toUpperCase() || null;
     const key = `${recordType ?? ''}:${recordId || name.toLocaleLowerCase()}`;
     if ((!recordId && !name) || seen.has(key)) return [];
@@ -403,6 +440,7 @@ function ambiguityCandidates(input = {}, authoritative = {}) {
       recordType,
       name: name || null,
       score: Number.isFinite(Number(candidate?.score)) ? Number(candidate.score) : null,
+      confidenceBand: mediumCandidates.includes(candidate) ? 'MEDIUM' : null,
     })];
   }).slice(0, maximumEvidenceRecords));
 }
@@ -515,6 +553,18 @@ export function buildGroundedLlmInput({
       ?? input?.memory?.pendingClarification?.missingFactType,
     160,
   ) || null;
+  const candidates = ambiguityCandidates(input, authoritative, resolution, classification);
+  const configuredInformationFields = resolveLiveMemoryConfiguration(
+    runtimeProfile?.agent?.settings ?? {},
+  ).fields;
+  const permittedCollectedKeys = new Set([
+    ...configuredInformationFields.map((field) => field.key),
+    ...authorizedTools.flatMap((tool) => Object.keys(tool.inputSchema?.properties ?? {})),
+  ]);
+  const memory = input.canonicalCallMemory ?? input.memory ?? {};
+  const collected = memory.collectedInformation ?? memory.collectedToolFields ?? {};
+  const relevantCollectedFields = Object.freeze(Object.fromEntries(Object.entries(collected)
+    .filter(([key]) => permittedCollectedKeys.has(key))));
   return Object.freeze({
     currentQuestion: clean(input?.latestQuestion ?? input?.utterance, 2_000),
     recentRelevantTurns: compactRelevantTurns(input),
@@ -522,7 +572,14 @@ export function buildGroundedLlmInput({
     hydratedRecords,
     sourceMap,
     requestedFact,
-    ambiguityCandidates: ambiguityCandidates(input, authoritative),
+    ambiguityCandidates: candidates,
+    clarificationContext: Object.freeze({
+      heardText: clean(input?.latestQuestion ?? input?.utterance, 2_000),
+      requestedFact,
+      candidates,
+      canonicalNames: Object.freeze(candidates.map((candidate) => candidate.name).filter(Boolean)),
+      collectedFields: relevantCollectedFields,
+    }),
     workflowAuthorization: Object.freeze(authorizedTools.map((entry) => Object.freeze({
       workflowEvidenceId: entry.workflowEvidenceId,
       workflowRecordId: entry.workflowRecordId,
@@ -540,6 +597,9 @@ export async function retrieveRankHydrateGroundedTurn({
   auth, input, classification, resolution, publicationBundles,
   sparseIndexes = [], runtimeProfile,
 } = {}, dependencies = {}) {
+  const confidenceConfiguration = resolveKnowledgeConfidenceConfiguration(
+    classification?.confidenceConfiguration ?? resolution?.confidenceConfiguration,
+  );
   const retrievalStartedAt = performance.now();
   const retrieval = await searchParallelHybridCandidates({
     input, classification, resolution, publicationBundles, sparseIndexes,
@@ -551,7 +611,9 @@ export async function retrieveRankHydrateGroundedTurn({
     auth, input, classification, resolution, retrieval,
     rrfK: dependencies.rrfK ?? 60,
     limit: maximumEvidenceRecords,
-    minProviderScore: dependencies.minProviderScore ?? 0.68,
+    confidenceConfiguration,
+    minProviderScore: dependencies.minProviderScore
+      ?? confidenceConfiguration.clarificationConfidence,
   }, dependencies.hydration);
   const hydrationMs = Math.max(0, performance.now() - hydrationStartedAt);
   if (authoritative.fusion.candidates.length > maximumEvidenceRecords

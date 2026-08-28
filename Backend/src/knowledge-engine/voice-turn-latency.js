@@ -5,6 +5,7 @@ import { retrieveTargetedCandidates } from './targeted-retrieval.js';
 import { rankAndHydrateAuthoritativeEvidence } from './authoritative-evidence.js';
 import { planSafeKnowledgeResponse } from './safe-response-tool-runtime.js';
 import { buildCompactEvidenceBundle } from './compact-evidence-bundle.js';
+import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/knowledge-confidence-config.js';
 
 export const VOICE_TURN_LATENCY_VERSION = 1;
 
@@ -238,6 +239,9 @@ export async function runObservedKnowledgeTurn({
   auth, input, publicationBundles, sparseIndexes = [], runtimeProfile,
   semanticMatches = [], confirmation = false, tracker,
 } = {}, dependencies = {}) {
+  const confidenceConfiguration = resolveKnowledgeConfidenceConfiguration(
+    runtimeProfile?.agent?.settings,
+  );
   const latency = tracker ?? new VoiceTurnLatencyTracker({
     tenantId: input?.tenantId, agentId: input?.agentId,
     callId: input?.callId, turnId: input?.callId,
@@ -251,7 +255,10 @@ export async function runObservedKnowledgeTurn({
   let classification;
   let turnInput = input;
   await latency.measure(voiceTurnStages.ROUTING, async () => {
-    const prepared = await prepare(input, publicationBundles, { semanticMatches }, {
+    const prepared = await prepare(input, publicationBundles, {
+      semanticMatches,
+      confidenceConfiguration,
+    }, {
       resolve: dependencies.resolve,
       classify: dependencies.classify,
     });
@@ -274,6 +281,7 @@ export async function runObservedKnowledgeTurn({
   );
   const authoritative = await latency.measure(voiceTurnStages.HYDRATION, () => hydrate({
     auth, input: turnInput, classification, resolution, retrieval,
+    confidenceConfiguration,
   }, dependencies.hydrationDependencies), {
     timeoutMs: env.VOICE_HYDRATION_TURN_TIMEOUT_MS,
     reserveMs: env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS,

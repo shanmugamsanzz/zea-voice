@@ -447,6 +447,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       callbackFollowUpOpeningInstructions: base.callbackFollowUpOpeningInstructions || 'Mention that the caller requested this callback and ask whether now is a good time to continue.',
       welcomeMessage: base.welcomeMessage || '',
       inactivityTimeout: base.inactivityTimeout !== undefined ? base.inactivityTimeout : 5,
+      maxInactivityPrompts: base.maxInactivityPrompts ?? 1,
       silentMessage: base.silentMessage || "I can't hear you.Are you still on the call?",
       ttsProvider: base.ttsProvider || 'ElevenLabs Premium',
       ttsModel: base.ttsModel || 'eleven_flash_v2_5',
@@ -526,6 +527,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       llmProvider: value.llm.providerName, llmModel: value.llm.modelName,
       ttsProvider: value.tts.providerName, ttsModel: value.tts.modelName,
       welcomeMessage: value.welcomeMessage ?? '', inactivityTimeout: value.inactivityTimeoutSeconds,
+      maxInactivityPrompts: Number(savedSettings.maxInactivityPrompts ?? 1),
       createdAt: value.createdAt, updatedAt: value.updatedAt,
       totalCalls: value.metrics.totalCalls, avgDuration: value.metrics.averageDurationSeconds, successRate: value.metrics.successRate,
       greetingMode: normalizeGreetingMode(savedSettings.greetingMode),
@@ -951,6 +953,11 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       || (maximumCallMinutes !== 0 && (maximumCallMinutes < 1 || maximumCallMinutes > 120))) {
       setError('Maximum Minutes Per Call must be 0 (unlimited) or between 1 and 120.'); return;
     }
+    const maxInactivityPrompts = Number(agent.maxInactivityPrompts ?? 1);
+    if (!Number.isInteger(maxInactivityPrompts)
+      || maxInactivityPrompts < 1 || maxInactivityPrompts > 10) {
+      setError('Maximum Inactivity Prompts must be between 1 and 10.'); return;
+    }
     const conversationContextMode = normalizeConversationContextMode(agent.conversationContextMode);
     const conversationContextTurns = Number(agent.conversationContextTurns ?? 5);
     if (!Number.isInteger(conversationContextTurns) || conversationContextTurns < 1 || conversationContextTurns > 10) {
@@ -1073,6 +1080,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         knowledgeAmbiguityMargin,
         knowledgeClarificationMessage,
         latencyAcknowledgementMessage,
+        maxInactivityPrompts,
         conversationMemoryFields: normalizedMemoryFields,
       };
       const payload = {
@@ -2717,17 +2725,34 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   <h4 className="text-sm font-extrabold text-slate-800 tracking-tight">Silent Message</h4>
                 </div>
 
-                <div className="flex items-center space-x-2">
-                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Inactivity Timeout (s)</span>
-                  <input
-                    type="number"
-                    min="1"
-                    max="60"
-                    value={agent.inactivityTimeout !== undefined ? agent.inactivityTimeout : 5}
-                    disabled={isReadOnly}
-                    onChange={(e) => setAgent({ ...agent, inactivityTimeout: parseInt(e.target.value) || 5 })}
-                    className="w-16 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-xs font-bold text-center text-slate-800 outline-none focus:border-amber-500 transition"
-                  />
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <label className="flex items-center space-x-2">
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Inactivity Timeout (s)</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="60"
+                      value={agent.inactivityTimeout !== undefined ? agent.inactivityTimeout : 5}
+                      disabled={isReadOnly}
+                      onChange={(e) => setAgent({ ...agent, inactivityTimeout: parseInt(e.target.value) || 5 })}
+                      className="w-16 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-xs font-bold text-center text-slate-800 outline-none focus:border-amber-500 transition"
+                    />
+                  </label>
+                  <label className="flex items-center justify-end space-x-2">
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Maximum Prompts</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="10"
+                      value={agent.maxInactivityPrompts ?? 1}
+                      disabled={isReadOnly}
+                      onChange={(e) => setAgent({
+                        ...agent,
+                        maxInactivityPrompts: Number.parseInt(e.target.value, 10) || 1,
+                      })}
+                      className="w-16 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-xs font-bold text-center text-slate-800 outline-none focus:border-amber-500 transition"
+                    />
+                  </label>
                 </div>
               </div>
 
@@ -2742,6 +2767,9 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   placeholder="e.g. I can't hear you. Are you still on the call?"
                 />
               </div>
+              <p className="text-[10px] font-semibold leading-relaxed text-slate-400">
+                The agent repeats this message up to Maximum Prompts times. If the caller remains silent, the next timeout ends the call.
+              </p>
             </div>
 
             {/* System Prompt / Instructions Section */}

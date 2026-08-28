@@ -3,6 +3,7 @@ import { AppError } from '../middleware/errors.js';
 import { requireEntityId, requireTenantId } from '../rag/tenant-isolation.js';
 import { knowledgeQueryClasses } from './query-classifier.js';
 import { canonicalRecordIdentityKey, typedRecordIdentityKey } from './canonical-record-identity.js';
+import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/knowledge-confidence-config.js';
 
 export const AUTHORITATIVE_EVIDENCE_VERSION = 2;
 
@@ -304,7 +305,7 @@ function recordKey(value = {}) {
 export function fuseCandidateRankings(retrieval, {
   rrfK = 60,
   limit = 5,
-  minProviderScore = 0.68,
+  minProviderScore = resolveKnowledgeConfidenceConfiguration().clarificationConfidence,
   allowedRecordTypes = retrieval?.recordTypes ?? null,
   reservedRecordIds = [],
   reservedRecordKeys = [],
@@ -482,6 +483,9 @@ export function detectAuthoritativeConflicts(evidence) {
 }
 
 export function detectEntityAmbiguity(evidence, classification, resolution) {
+  const confidenceConfiguration = resolveKnowledgeConfidenceConfiguration(
+    classification?.confidenceConfiguration ?? resolution?.confidenceConfiguration,
+  );
   if (classification?.intentClass === knowledgeQueryClasses.COMPARISON_COMPLEX) {
     return Object.freeze({ detected: false, candidates: Object.freeze([]), reason: null });
   }
@@ -507,7 +511,7 @@ export function detectEntityAmbiguity(evidence, classification, resolution) {
     GENERAL: new Set(['KNOWLEDGE_CHUNK']),
   });
   const allowedTypes = namespaceRecordTypes[selectedNamespace] ?? new Set();
-  const confirmationTieWindow = 0.02;
+  const confirmationTieWindow = confidenceConfiguration.ambiguityMargin;
   const ranked = (resolution?.routingCandidates ?? []).filter((candidate) => (
     allowedTypes.has(String(candidate.recordType ?? '').toUpperCase())
     && hydratedIds.has(normalizeId(candidate.recordId))
@@ -566,6 +570,9 @@ function rememberedContextCandidate(input) {
 }
 
 function reservedResolutionCandidates(input, classification, resolution, retrieval) {
+  const confidenceConfiguration = resolveKnowledgeConfidenceConfiguration(
+    classification?.confidenceConfiguration ?? resolution?.confidenceConfiguration,
+  );
   const contextReserved = (retrieval?.queryContext?.reservedRecords ?? []).map((candidate) => ({
     recordId: normalizeId(candidate.recordId),
     recordType: String(candidate.recordType ?? '').toUpperCase(),
@@ -579,7 +586,7 @@ function reservedResolutionCandidates(input, classification, resolution, retriev
       if (!signals.length) return true;
       return signals.some((signal) => (
         signal?.explicit === true
-        && Number(signal.score ?? 0) >= 0.68
+        && Number(signal.score ?? 0) >= confidenceConfiguration.clarificationConfidence
         && Number(signal.score ?? 0) >= Number(candidate.score ?? 0) - 0.000001
       ));
     };
@@ -691,10 +698,18 @@ export async function rankAndHydrateAuthoritativeEvidence({
   retrieval,
   rrfK = 60,
   limit = 5,
-  minProviderScore = 0.68,
+  minProviderScore,
+  confidenceConfiguration: suppliedConfidenceConfiguration,
 }, dependencies = {}) {
   const tenantId = requireTenantId(auth?.tenantId);
   const agentId = requireEntityId(input?.agentId, 'agentId');
+  const confidenceConfiguration = resolveKnowledgeConfidenceConfiguration(
+    suppliedConfidenceConfiguration
+      ?? classification?.confidenceConfiguration
+      ?? resolution?.confidenceConfiguration,
+  );
+  const effectiveMinProviderScore = Number.isFinite(minProviderScore)
+    ? minProviderScore : confidenceConfiguration.clarificationConfidence;
   if (normalizeId(tenantId) !== normalizeId(requireTenantId(input?.tenantId))
     || normalizeId(retrieval?.tenantId) !== normalizeId(input.tenantId)
     || normalizeId(retrieval?.agentId) !== normalizeId(agentId)
@@ -723,7 +738,7 @@ export async function rankAndHydrateAuthoritativeEvidence({
   const fusion = fuseCandidateRankings(fusionRetrieval, {
     rrfK,
     limit,
-    minProviderScore,
+    minProviderScore: effectiveMinProviderScore,
     allowedRecordTypes: retrieval?.recordTypes,
     reservedRecordIds,
     reservedRecordKeys,

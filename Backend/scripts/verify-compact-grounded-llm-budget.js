@@ -35,7 +35,7 @@ const records = Array.from({ length: 6 }, (_, index) => ({
   },
   provenance: { documentId: `document_${index + 1}` },
 }));
-const recentRelevantTurns = Array.from({ length: 7 }, (_, index) => ({
+const recentRelevantTurns = Array.from({ length: 10 }, (_, index) => ({
   role: index % 2 ? 'assistant' : 'user', content: `Relevant turn ${index + 1}`,
 }));
 const applicableSchema = {
@@ -65,7 +65,13 @@ const session = await createSelectedLlmStream(profile, {
       workflowAuthorization: [{ workflowEvidenceId: 'workflow_source_1', toolName: 'configured_action' }],
       toolSchemas: [applicableSchema],
       forbiddenInternalRouting: 'must-not-enter-compact-input',
-      ambiguityCandidates: [{ name: 'must-not-enter-compact-input' }],
+      clarificationContext: {
+        heardText: 'Zea-like spoken option',
+        requestedFact: 'details',
+        candidates: [{ recordId: 'record_1', name: 'Published canonical option', confidenceBand: 'MEDIUM' }],
+        canonicalNames: ['Published canonical option'],
+        collectedFields: { contact_name: 'Asha' },
+      },
     },
   },
   usageDirection: 'inbound',
@@ -84,12 +90,17 @@ const match = /<grounded_turn_input>\n([\s\S]+)\n<\/grounded_turn_input>/u.exec(
 assert.ok(match, 'The complete grounded input must be present');
 const groundedInput = JSON.parse(match[1]);
 assert.deepEqual(Object.keys(groundedInput), [
-  'currentQuestion', 'recentRelevantTurns', 'canonicalMemory', 'hydratedRecords',
-  'workflowAuthorization', 'toolSchemas',
+  'currentQuestion', 'recentRelevantTurns', 'canonicalMemory', 'clarificationContext',
+  'hydratedRecords', 'workflowAuthorization', 'toolSchemas',
 ]);
-assert.equal(groundedInput.recentRelevantTurns.length, 4);
+assert.equal(groundedInput.recentRelevantTurns.length, 10,
+  'Recent Turns 5 must send five complete caller-agent pairs when the prompt budget permits');
 assert.equal(groundedInput.hydratedRecords.length, 5);
 assert.deepEqual(groundedInput.toolSchemas.map((tool) => tool.name), ['configured_action']);
+assert.equal(groundedInput.clarificationContext.heardText, 'Zea-like spoken option');
+assert.equal(groundedInput.clarificationContext.candidates[0].name,
+  'Published canonical option');
+assert.equal(groundedInput.clarificationContext.collectedFields.contact_name, 'Asha');
 assert.doesNotMatch(systemPrompt, /duplicate external history|unrelated_assigned_tool|must-not-enter-compact-input/u);
 
 assert.equal(llmOperationalFailureClass({ code: 'LLM_PROVIDER_TIMEOUT' }), 'timeout');

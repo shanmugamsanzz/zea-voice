@@ -13,6 +13,10 @@ import {
   validateGroundedLlmResponse,
 } from '../voice/interaction/grounded-llm-response.js';
 import { groundedDecisionContract } from '../voice/interaction/grounded-llm-decision.js';
+import {
+  completeConversationTurnPairs,
+  flattenConversationTurnPairs,
+} from '../knowledge-engine/conversation-turn-context.js';
 const defaultDependencies = {
   contextRunner: withTenantContext,
   searchKnowledge: searchPublishedKnowledge,
@@ -182,14 +186,16 @@ function compactGroundedValue(value, stringLimit, depth = 0) {
 
 function compactGroundedDecisionInput(value, maximumCharacters) {
   const input = value && typeof value === 'object' ? value : {};
-  const build = (stringLimit) => ({
+  const completePairs = completeConversationTurnPairs(input.recentRelevantTurns ?? []).slice(-10);
+  const build = (stringLimit, retainedPairCount) => ({
     currentQuestion: compactGroundedValue(input.currentQuestion, Math.min(1_200, stringLimit)),
-    recentRelevantTurns: (Array.isArray(input.recentRelevantTurns)
-      ? input.recentRelevantTurns : []).slice(-4).map((turn) => ({
+    recentRelevantTurns: flattenConversationTurnPairs(retainedPairCount > 0
+      ? completePairs.slice(-retainedPairCount) : []).map((turn) => ({
       role: turn?.role === 'assistant' ? 'assistant' : 'user',
       content: compactGroundedValue(turn?.content, Math.min(500, stringLimit)),
     })).filter((turn) => turn.content),
     canonicalMemory: compactGroundedValue(input.canonicalMemory ?? {}, stringLimit),
+    clarificationContext: compactGroundedValue(input.clarificationContext ?? {}, stringLimit),
     hydratedRecords: (Array.isArray(input.hydratedRecords)
       ? input.hydratedRecords : []).slice(0, 5).map((record) => ({
       sourceId: record?.sourceId ?? null,
@@ -206,17 +212,19 @@ function compactGroundedDecisionInput(value, maximumCharacters) {
       (Array.isArray(input.toolSchemas) ? input.toolSchemas : []).slice(0, 3), stringLimit,
     ),
   });
-  for (const stringLimit of [800, 500, 320, 200, 120, 80]) {
-    const compact = build(stringLimit);
-    const serialized = JSON.stringify(compact);
-    if (serialized.length <= maximumCharacters) return serialized;
+  for (let retainedPairCount = completePairs.length; retainedPairCount >= 0; retainedPairCount -= 1) {
+    for (const stringLimit of [800, 500, 320, 200, 120, 80]) {
+      const compact = build(stringLimit, retainedPairCount);
+      const serialized = JSON.stringify(compact);
+      if (serialized.length <= maximumCharacters) return serialized;
+    }
   }
   throw new AppError(413,
     'The compact grounded LLM input exceeds the configured prompt budget',
     'LLM_GROUNDED_PROMPT_BUDGET_EXCEEDED', {
       maximumCharacters,
       hydratedRecordCount: Math.min(5, input.hydratedRecords?.length ?? 0),
-      recentTurnCount: Math.min(4, input.recentRelevantTurns?.length ?? 0),
+      recentTurnCount: completePairs.length,
     });
 }
 

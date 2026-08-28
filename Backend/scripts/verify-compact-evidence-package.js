@@ -97,7 +97,7 @@ assert.equal(llmEvidenceBundle.callMemory.activeEntity.recordId, 'record-2');
 assert.equal(llmEvidenceBundle.callMemory.latestIntent, 'prior_information');
 assert.equal(llmEvidenceBundle.canonicalEntity.itemKey, 'item-1');
 assert.equal(llmEvidenceBundle.requestedFact, 'price');
-assert.equal(llmEvidenceBundle.recentRelevantTurns.length, 4);
+assert.equal(llmEvidenceBundle.recentRelevantTurns.length, 6);
 assert.equal(llmEvidenceBundle.topEvidence.length, 5);
 assert.equal(llmEvidenceBundle.conversationGuidance.length, 1);
 assert.deepEqual(llmEvidenceBundle.authorizedToolSchemas.map((tool) => tool.name), ['tenant_tool']);

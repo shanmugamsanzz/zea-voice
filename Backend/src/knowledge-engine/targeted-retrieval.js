@@ -2,6 +2,7 @@ import { embedQuery } from '../rag/embedding.client.js';
 import { QDRANT_SEARCH_LIMIT_MAX, searchTenantPoints } from '../rag/qdrant.client.js';
 import { logger } from '../config/logger.js';
 import { knowledgeSearchIndexes } from './query-classifier.js';
+import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/knowledge-confidence-config.js';
 
 export const TARGETED_RETRIEVAL_VERSION = 4;
 
@@ -369,6 +370,9 @@ function activeWorkflowCandidate(input, recordScope, allowedTypes) {
 }
 
 function structuredCandidatesForTurn(input, classification, resolution, recordScope, allowedTypes, limit, queryContext) {
+  const confidenceConfiguration = resolveKnowledgeConfidenceConfiguration(
+    classification?.confidenceConfiguration ?? resolution?.confidenceConfiguration,
+  );
   const continuingActiveTool = Boolean(input?.memory?.activeTool?.name)
     && classification?.source === 'active_tool_workflow';
   const selectedResolution = continuingActiveTool
@@ -381,7 +385,8 @@ function structuredCandidatesForTurn(input, classification, resolution, recordSc
   const candidates = [...structuredCandidates(selectedResolution, recordScope, allowedTypes, limit)];
   if (classification?.intentClass === 'ACTION_TOOL_REQUEST') {
     const explicitCatalog = (resolution?.namespaceCandidates?.CATALOG ?? []).filter((candidate) => (
-      candidate.explicit === true && Number(candidate.score ?? 0) >= 0.88
+      candidate.explicit === true
+      && Number(candidate.score ?? 0) >= confidenceConfiguration.highConfidence
     )).flatMap((candidate) => (
       candidate.evidenceRecordIds ?? [candidate.recordId]
     )).map((recordId) => recordScope.get(normalizeId(recordId))).filter((record) => (
