@@ -185,7 +185,12 @@ assert.equal(evaluateFirstAudioSlo(passingSamples.slice(0, 5)).reason,
   'insufficient_production_samples');
 assert.equal(voiceLatencyTargets.p90FirstAudioMs, 1_000);
 assert.equal(env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS, 2_000);
-assert.ok(env.VOICE_KNOWLEDGE_TURN_TIMEOUT_MS < env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS);
+assert.equal(env.VOICE_RETRIEVAL_TARGET_MS, 150);
+assert.ok(env.VOICE_RETRIEVAL_TURN_TIMEOUT_MS > env.VOICE_RETRIEVAL_TARGET_MS);
+assert.ok(env.VOICE_HYDRATION_TURN_TIMEOUT_MS > env.VOICE_RETRIEVAL_TARGET_MS);
+assert.ok(env.VOICE_KNOWLEDGE_TURN_TIMEOUT_MS
+  >= env.VOICE_RETRIEVAL_TURN_TIMEOUT_MS + env.VOICE_HYDRATION_TURN_TIMEOUT_MS,
+  'The overall knowledge deadline must allow retrieval and hydration to complete');
 assert.ok(env.VOICE_LLM_TURN_TIMEOUT_MS < env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS);
 assert.ok(env.VOICE_LLM_POST_ACK_TIMEOUT_MS > env.VOICE_LLM_TURN_TIMEOUT_MS);
 assert.ok(env.VOICE_LLM_POST_ACK_TIMEOUT_MS >= 3000,
@@ -226,6 +231,13 @@ assert.match(orchestrator, /streaming\.onSentence\?\.\(sentence\)/u);
 assert.match(orchestrator, /activeRetrievalAbortController\?\.abort\(reason\)/u);
 assert.match(orchestrator, /LLM_REQUEST_TIMEOUT_MS|#llmAttempt/u);
 assert.match(orchestrator, /VOICE_KNOWLEDGE_TURN_TIMEOUT_MS/u);
+assert.match(orchestrator, /VOICE_RETRIEVAL_TARGET_MS/u);
+assert.doesNotMatch(orchestrator,
+  /RAG_RUNTIME_CHANNEL_DEADLINE_MS\s*\+\s*env\.RAG_RUNTIME_SEMANTIC_DEADLINE_MS/u,
+  'Channel limits must not be added together as an artificial overall deadline');
+assert.doesNotMatch(orchestrator,
+  /VOICE_KNOWLEDGE_TURN_TIMEOUT_MS,[\s\S]{0,80}\b500\b/u,
+  'Knowledge completion must not retain the obsolete 500 ms hard cap');
 assert.match(orchestrator, /VOICE_LLM_TURN_TIMEOUT_MS/u);
 assert.doesNotMatch(orchestrator, /postAcknowledgementTimeoutMs:\s*env\.VOICE_LLM_POST_ACK_TIMEOUT_MS/u,
   'The post-acknowledgement phase must retain the independent full completion deadline');
@@ -241,6 +253,20 @@ assert.doesNotMatch(orchestrator, /information service is temporarily unavailabl
 assert.match(orchestrator, /turn_first_audio_deadline/u);
 assert.match(orchestrator, /voice\.late_validated_answer_continued/u,
   'a validated answer that finishes after the soft first-audio deadline must still be delivered');
+assert.match(orchestrator, /options\.acknowledgement === true/u,
+  'acknowledgement audio must be tracked independently from final response speech');
+assert.match(orchestrator, /!acknowledgement && maximumResponseCharacters/u,
+  'acknowledgement speech must not consume the validated response character budget');
+assert.match(orchestrator, /activeGroundedTurnEpochs\.size > 0/u,
+  'inactivity prompts must remain disabled throughout retrieval, LLM, validation and TTS');
+const finalPipelineIndex = orchestrator.indexOf('const playback = await sentencePipeline.finish();');
+const finalPlaybackCompleteIndex = orchestrator.indexOf(
+  'await this.controller.playbackComplete();', finalPipelineIndex,
+);
+assert.ok(finalPipelineIndex >= 0 && finalPlaybackCompleteIndex > finalPipelineIndex,
+  'listening and inactivity may resume only after final validated audio playback completes');
+assert.doesNotMatch(orchestrator, /clarificationRecovery\?\.mode === 'suppressed'/u,
+  'a valid grounded clarification must never be converted into silent listening');
 assert.match(orchestrator,
   /currentSentenceNumber === 1[\s\S]{0,120}Date\.now\(\) < firstAudioDeadlineAt/u,
   'the hard first-audio deadline must apply only while it is still actionable');

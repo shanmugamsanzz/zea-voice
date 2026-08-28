@@ -49,7 +49,9 @@ const clarificationOutput = run(
 );
 const clarification = JSON.parse(clarificationOutput);
 assert.equal(clarification.success, true);
-assert.ok(clarification.repeatedClarificationsSuppressed > 0);
+assert.ok(clarification.repeatedClarificationsRecovered > 0);
+assert.ok(clarification.audibleUnconfiguredRecoveries > 0,
+  'genuine ambiguity must produce audible targeted clarification even without support speech');
 assert.equal(clarification.crossTenantLeakage, 0);
 assert.equal(clarification.runtimeExceptions, 0);
 
@@ -79,7 +81,8 @@ console.log(JSON.stringify({
   languages: contextual.languages,
   contextualCoverage: contextual.coverage,
   verifiedTools: contextual.verifiedTools,
-  repeatedClarificationsSuppressed: clarification.repeatedClarificationsSuppressed,
+  repeatedClarificationsRecovered: clarification.repeatedClarificationsRecovered,
+  audibleTargetedClarifications: clarification.audibleUnconfiguredRecoveries,
   interruptionsVerified: true,
   crossTenantLeakage: false,
   crossCallLeakage: false,

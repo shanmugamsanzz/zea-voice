@@ -111,7 +111,9 @@ export class VoiceTurnLatencyTracker {
   async measure(stage, operation, options = {}) {
     const startedAt = this.now();
     const stageLimit = Math.max(1, Number(options.timeoutMs ?? this.remaining(options.reserveMs)));
-    const timeoutMs = Math.min(stageLimit, this.remaining(options.reserveMs));
+    const timeoutMs = options.completionDeadline === true
+      ? stageLimit
+      : Math.min(stageLimit, this.remaining(options.reserveMs));
     if (timeoutMs <= 0) throw deadlineError(stage);
     let timer;
     const timeout = new Promise((_resolve, reject) => {
@@ -272,7 +274,7 @@ export async function runObservedKnowledgeTurn({
     input: turnInput, classification, resolution, publicationBundles, sparseIndexes,
   }, dependencies.retrievalDependencies), {
     timeoutMs: env.VOICE_RETRIEVAL_TURN_TIMEOUT_MS,
-    reserveMs: env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS,
+    completionDeadline: true,
     cancel: dependencies.cancelRetrieval,
   });
   resolution = await refineResolution(
@@ -284,7 +286,7 @@ export async function runObservedKnowledgeTurn({
     confidenceConfiguration,
   }, dependencies.hydrationDependencies), {
     timeoutMs: env.VOICE_HYDRATION_TURN_TIMEOUT_MS,
-    reserveMs: env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS,
+    completionDeadline: true,
     cancel: dependencies.cancelHydration,
   });
   const decision = plan({

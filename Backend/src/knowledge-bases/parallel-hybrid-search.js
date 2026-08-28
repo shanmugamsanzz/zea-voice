@@ -42,6 +42,12 @@ function requiredReservations(request) {
   const explicit = [
     ...(understanding.explicitEntities ?? []),
     ...(understanding.explicitCategories ?? []),
+    ...((understanding.explicitEntities?.length ?? 0) > 0
+      || (understanding.explicitCategories?.length ?? 0) > 0 ? [] : [
+      ...(understanding.ambiguity?.detected === true
+        ? understanding.ambiguity.candidates ?? [] : []),
+      understanding.confirmationCandidate,
+    ]),
   ].map((value) => compactReservation(value, 'explicit_entity')).filter(Boolean);
   if (!explicit.length && resolution.candidate?.explicit === true) {
     const resolved = compactReservation(resolution.candidate, 'explicit_entity');

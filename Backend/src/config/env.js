@@ -89,14 +89,15 @@ const envSchema = z.object({
   VOICE_AUDIO_WEBSOCKET_WARN_MS: z.coerce.number().int().min(5).max(5000).default(40),
   VOICE_AUDIO_WEBSOCKET_BUFFER_WARN_BYTES: z.coerce.number().int().min(1024).max(16777216).default(262144),
   VOICE_FIRST_AUDIO_TARGET_MS: z.coerce.number().int().min(100).max(10000).default(1000),
-  // Hard live-turn budgets keep a slow Knowledge/LLM/TTS provider from
-  // holding the caller in silence.  The complete first-audio deadline is
-  // intentionally two seconds; individual stages receive smaller budgets.
+  // The first-audio target is an observability/SLO boundary. Knowledge work
+  // has separate production completion deadlines so a target breach does not
+  // cancel valid retrieval before authoritative hydration finishes.
   VOICE_TURN_FIRST_AUDIO_DEADLINE_MS: z.coerce.number().int().min(1000).max(10000).default(2000),
   VOICE_ROUTING_TURN_TIMEOUT_MS: z.coerce.number().int().min(20).max(1000).default(100),
-  VOICE_RETRIEVAL_TURN_TIMEOUT_MS: z.coerce.number().int().min(50).max(2000).default(300),
-  VOICE_HYDRATION_TURN_TIMEOUT_MS: z.coerce.number().int().min(50).max(2000).default(150),
-  VOICE_KNOWLEDGE_TURN_TIMEOUT_MS: z.coerce.number().int().min(100).max(5000).default(500),
+  VOICE_RETRIEVAL_TARGET_MS: z.coerce.number().int().min(25).max(1000).default(150),
+  VOICE_RETRIEVAL_TURN_TIMEOUT_MS: z.coerce.number().int().min(100).max(5000).default(1250),
+  VOICE_HYDRATION_TURN_TIMEOUT_MS: z.coerce.number().int().min(100).max(5000).default(1000),
+  VOICE_KNOWLEDGE_TURN_TIMEOUT_MS: z.coerce.number().int().min(500).max(10000).default(3000),
   VOICE_LLM_TURN_TIMEOUT_MS: z.coerce.number().int().min(250).max(10000).default(900),
   // First audio still uses VOICE_LLM_TURN_TIMEOUT_MS. Once a short
   // acknowledgement is audible, allow the measured production structured
@@ -156,8 +157,8 @@ const envSchema = z.object({
   RAG_RUNTIME_CACHE_TIMEOUT_MS: z.coerce.number().int().min(5).max(1000).default(50),
   KNOWLEDGE_ARTIFACT_READINESS_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(30000),
   KNOWLEDGE_ARTIFACT_READINESS_POLL_MS: z.coerce.number().int().min(25).max(5000).default(250),
-  RAG_RUNTIME_SEMANTIC_DEADLINE_MS: z.coerce.number().int().min(100).max(1000).default(300),
-  RAG_RUNTIME_CHANNEL_DEADLINE_MS: z.coerce.number().int().min(100).max(500).default(150),
+  RAG_RUNTIME_SEMANTIC_DEADLINE_MS: z.coerce.number().int().min(100).max(3000).default(1000),
+  RAG_RUNTIME_CHANNEL_DEADLINE_MS: z.coerce.number().int().min(100).max(2000).default(500),
   RAG_RUNTIME_TOP_K: z.coerce.number().int().min(1).max(10).default(3),
   RAG_RUNTIME_MIN_SCORE: z.coerce.number().min(0).max(1).default(0.72),
 

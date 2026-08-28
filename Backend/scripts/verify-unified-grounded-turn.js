@@ -775,9 +775,9 @@ const corrected = applyUnifiedGroundedTurn({
   evidence: envelope.sources,
   finalizedUtterance: 'Friday works for me.',
 });
-assert.equal(corrected.valid, false);
-assert.equal(corrected.reason, 'unauthorized_information_collection');
-assert.equal(corrected.state.collectedInformation.preferred_date, undefined);
+assert.equal(corrected.valid, true,
+  'A caller-provided current-call field without requiredAction remains valid');
+assert.equal(corrected.state.collectedInformation.preferred_date, 'Friday');
 assert.equal(corrected.state.pendingQuestion, null);
 
 const stale = applyUnifiedGroundedTurn({

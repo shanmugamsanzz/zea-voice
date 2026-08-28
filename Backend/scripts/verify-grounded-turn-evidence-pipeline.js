@@ -32,6 +32,7 @@ function faq(index) {
 }
 
 const records = Array.from({ length: 7 }, (_, index) => faq(index + 1));
+const wait = (durationMs) => new Promise((resolve) => setTimeout(resolve, durationMs));
 const workflow = {
   ...faq(20), record_type: 'workflow_rule',
   question: 'Submit tenant request', content: 'tenant lookup submit request',
@@ -86,7 +87,10 @@ const result = await retrieveRankHydrateGroundedTurn({
 }, {
   minProviderScore: 0,
   retrieval: {
-    embed: async () => [0.1, 0.2],
+    embed: async () => {
+      await wait(220);
+      return [0.1, 0.2];
+    },
     search: async () => records.map((record, index) => ({
       id: record.record_id, score: 0.99 - index * 0.01,
       payload: {
@@ -100,6 +104,7 @@ const result = await retrieveRankHydrateGroundedTurn({
     contextRunner: async (_auth, callback) => callback({
       query: async (_sql, parameters) => {
         hydrationQueries += 1;
+        await wait(180);
         const requested = JSON.parse(parameters[3]);
         return { rows: requested.map((candidate) => {
           const published = records.find((record) => record.record_id === candidate.record_id);
@@ -138,6 +143,12 @@ const result = await retrieveRankHydrateGroundedTurn({
 });
 
 assert.equal(hydrationQueries, 1, 'All selected IDs must be hydrated in one PostgreSQL query');
+assert.ok(result.latency.retrievalMs > 150,
+  'A retrieval target breach must still complete and proceed to hydration');
+assert.ok(result.latency.retrievalMs < 1250,
+  'The delayed retrieval must remain inside the production completion deadline');
+assert.ok(result.latency.hydrationMs >= 180,
+  'The authoritative PostgreSQL hydration must complete before evidence is evaluated');
 assert.equal(result.authoritative.hydrationQueryCount, 1);
 assert.ok(result.authoritative.fusion.candidates.length <= 5);
 assert.ok(result.authoritative.evidence.length <= 5);

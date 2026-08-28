@@ -166,6 +166,11 @@ function explicitPhraseSignatureCount(candidates, confidenceConfiguration) {
 function inferredCandidates(input, resolution, confidenceConfiguration) {
   const candidates = rankedCandidates(resolution);
   const understanding = input.queryUnderstanding ?? {};
+  const explicitCurrentEntity = candidates.find((candidate) => (
+    candidate?.explicit === true
+      && ['ITEM', 'CATEGORY'].includes(candidate.entityType)
+      && Number(candidate.score ?? 0) >= confidenceConfiguration.clarificationConfidence
+  )) ?? null;
   const inferred = candidates.flatMap((candidate) => {
     const intentClass = candidateIntent(candidate);
     return intentClass && candidateIsEligible(candidate, intentClass, confidenceConfiguration)
@@ -183,17 +188,17 @@ function inferredCandidates(input, resolution, confidenceConfiguration) {
       source: 'multi_entity_or_fact_structure',
     });
   }
-  const explicitResolvedEntity = candidates.some((candidate) => candidate.explicit === true
-    && ['ITEM', 'CATEGORY'].includes(candidate.entityType)
-    && Number(candidate.score ?? 0) >= confidenceConfiguration.highConfidence);
-  if (input.memory?.pendingClarification && !explicitResolvedEntity) {
+  const explicitResolvedEntity = Boolean(explicitCurrentEntity)
+    && Number(explicitCurrentEntity.score ?? 0) >= confidenceConfiguration.highConfidence;
+  if (input.memory?.pendingClarification && !explicitCurrentEntity) {
     inferred.push({
       intentClass: knowledgeQueryClasses.CLARIFICATION_ANSWER,
       candidate: resolution?.candidate ?? null,
       source: 'pending_call_clarification',
     });
   }
-  if ((input.requestedFacts?.length ?? 0) > 0 && input.memory?.activeEntity) {
+  if ((input.requestedFacts?.length ?? 0) > 0 && input.memory?.activeEntity
+    && !explicitCurrentEntity) {
     inferred.push({
       intentClass: knowledgeQueryClasses.DETAILS_OR_PRICE,
       candidate: resolution?.candidate ?? null,
@@ -206,6 +211,13 @@ function inferredCandidates(input, resolution, confidenceConfiguration) {
       intentClass: knowledgeQueryClasses.DETAILS_OR_PRICE,
       candidate: null,
       source: 'contextual_call_memory',
+    });
+  }
+  if (explicitCurrentEntity && !explicitResolvedEntity) {
+    inferred.push({
+      intentClass: knowledgeQueryClasses.UNKNOWN,
+      candidate: explicitCurrentEntity,
+      source: 'candidate_confirmation',
     });
   }
   if (understanding.actionIntent?.detected === true && !input.memory?.activeTool?.name) {
@@ -236,6 +248,7 @@ function inferredCandidates(input, resolution, confidenceConfiguration) {
     if (entry.intentClass === knowledgeQueryClasses.COMPARISON_COMPLEX) return 550;
     if (entry.candidate?.explicit === true
       && ['ITEM', 'CATEGORY'].includes(entry.candidate?.entityType)) return 500;
+    if (entry.source === 'candidate_confirmation') return 490;
     if (entry.source === 'contextual_call_memory') return 475;
     if (['FAQ', 'CONVERSATION_NODE'].includes(entry.candidate?.recordType)) return 400;
     if (entry.intentClass === knowledgeQueryClasses.CLARIFICATION_ANSWER) return 350;
@@ -301,6 +314,11 @@ export function classifyKnowledgeQuery(input, resolution) {
     resolution.confidenceConfiguration ?? {},
   );
   const selected = inferredCandidates(input, resolution, confidenceConfiguration)[0];
+  const confirmationCandidate = resolution.action === 'CONFIRM'
+    && resolution.candidate?.explicit === true
+    && Number(resolution.candidate?.score ?? 0)
+      >= confidenceConfiguration.clarificationConfidence
+    ? resolution.candidate : null;
   const searchIndexes = indexesFor(selected.intentClass, selected.candidate);
   const selectedNamespace = selected.source === 'contextual_call_memory' ? 'CATALOG'
     : resolution.candidateNamespace ?? ({
@@ -318,11 +336,11 @@ export function classifyKnowledgeQuery(input, resolution) {
     confidence: resolution.score ?? 0,
     confidenceConfiguration,
     source: selected.source,
-    candidate: selected.candidate,
+    candidate: selected.candidate ?? confirmationCandidate,
     selectedNamespace,
     requiresConfirmation: !input.memory?.activeTool?.name && (
       input.queryUnderstanding?.ambiguity?.detected === true
-      || (Boolean(selected.candidate) && resolution.action === 'CONFIRM')
+      || Boolean(confirmationCandidate)
     ),
     retrievalPlan: Object.freeze({
       indexes: unique(searchIndexes),

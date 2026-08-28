@@ -168,7 +168,11 @@ assert.equal(evidenceBelongsToRuntime({ ...fullCatalog, publicationRevision: 6 }
 const orchestratorSource = await readFile(new URL(
   '../src/voice/realtime-conversation-orchestrator.js', import.meta.url,
 ), 'utf8');
-assert.match(orchestratorSource, /settleWithin\(/u, 'Retrieval/provider operations must remain bounded');
+assert.match(orchestratorSource, /VOICE_KNOWLEDGE_TURN_TIMEOUT_MS/u,
+  'The complete retrieval and hydration operation must remain bounded');
+assert.doesNotMatch(orchestratorSource,
+  /RAG_RUNTIME_CHANNEL_DEADLINE_MS\s*\+\s*env\.RAG_RUNTIME_SEMANTIC_DEADLINE_MS/u,
+  'Parallel channel deadlines must not become an artificial overall cutoff');
 assert.match(orchestratorSource, /caller_barge_in/u, 'Barge-in must cancel stale work');
 assert.doesNotMatch(orchestratorSource, /for \(const candidate of \[\.\.\.exact/u);
 

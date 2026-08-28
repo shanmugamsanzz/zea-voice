@@ -23,11 +23,16 @@ function sourcesByType(sources = [], recordType) {
 }
 
 function selectedSources(decision, groundingEnvelope, evidence) {
-  const selected = new Set(decision.evidenceIds ?? []);
-  const envelopeSources = (groundingEnvelope.sources ?? []).filter((source) => selected.has(source.id));
-  return envelopeSources.map((source) => evidence.find((candidate) => (
-    source.publishedEvidenceId && candidate.id === source.publishedEvidenceId
-  ))).filter(Boolean);
+  void evidence;
+  const selected = new Set((decision.evidenceIds ?? []).map(identity));
+  // hydrateGroundingEnvelope has already replaced every compact prompt source
+  // with its authoritative PostgreSQL record while preserving the short LLM
+  // source ID. Validate claims against that exact hydrated object instead of
+  // performing a second source lookup through a different path.
+  return (groundingEnvelope.sources ?? []).filter((source) => (
+    [source.id, source.publishedEvidenceId, source.recordId]
+      .map(identity).some((candidate) => selected.has(candidate))
+  ));
 }
 
 function catalogSources(sources = []) {
@@ -739,9 +744,14 @@ export function applyUnifiedGroundedTurn({
       Number.parseInt(clarificationRecovery?.maximumAttempts ?? 2, 10) || 2));
     if (record.repeated === true || record.attemptCount > maximumAttempts) {
       const configuredSupport = String(clarificationRecovery?.supportMessage ?? '').trim();
-      effectiveNextQuestion = null;
+      // A genuine ambiguity must always leave the caller with audible speech.
+      // If the tenant configured an escalation/support response, use it after
+      // the allowed attempts. Otherwise retain the grounded LLM's targeted
+      // question; an absent optional support message must never turn a valid
+      // CLARIFY decision into silence or an inactivity prompt.
+      if (configuredSupport) effectiveNextQuestion = null;
       recovery = Object.freeze({
-        mode: configuredSupport ? 'configured_support' : 'suppressed',
+        mode: configuredSupport ? 'configured_support' : 'grounded_clarification_retained',
         attemptCount: record.attemptCount,
         repeated: record.repeated === true,
       });
@@ -762,9 +772,9 @@ export function applyUnifiedGroundedTurn({
   }
   const answer = recovery?.mode === 'configured_support'
     ? String(clarificationRecovery.supportMessage).trim()
-    : (recovery?.mode === 'suppressed' ? '' : (effectiveDecision.responseId
+    : (effectiveDecision.responseId
       ? effectiveDecision.answer
-      : composeConfiguredTurnResponse(effectiveDecision.answer, effectiveNextQuestion)));
+      : composeConfiguredTurnResponse(effectiveDecision.answer, effectiveNextQuestion));
   if (answer) {
     memory.observeAssistantResponse?.(answer, { turnToken });
     memory.append?.({ role: 'assistant', content: answer }, { turnToken });

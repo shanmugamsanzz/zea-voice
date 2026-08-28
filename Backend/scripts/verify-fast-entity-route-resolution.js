@@ -7,6 +7,8 @@ import {
   knowledgeResolutionConfidence,
   resolvePublishedEntityRoute,
 } from '../src/knowledge-engine/entity-route-resolver.js';
+import { prepareKnowledgeQuery } from '../src/knowledge-engine/fast-query-preparation.js';
+import { buildContextEnrichedRetrievalQuery } from '../src/knowledge-engine/targeted-retrieval.js';
 
 const tenantId = '20000000-0000-4000-8000-000000000001';
 const agentId = '20000000-0000-4000-8000-000000000002';
@@ -234,6 +236,48 @@ result = resolvePublishedEntityRoute(
 assert.equal(result.confidence, knowledgeResolutionConfidence.MEDIUM,
   'A stricter selected-agent setting must request confirmation for the same score');
 assert.equal(result.action, knowledgeResolutionActions.CONFIRM);
+
+const mediumTopicInput = input('Beta Voise details', {
+  activeEntity: { recordId: alpha.record_id, key: 'alpha-prime', name: 'Alpha Prime' },
+  pendingClarification: { kind: 'ambiguity', text: 'Which previous option?' },
+});
+const mediumTopic = await prepareKnowledgeQuery(mediumTopicInput, bundle, {
+  confidenceConfiguration: {
+    highConfidence: 0.95, clarificationConfidence: 0.64, ambiguityMargin: 0.06,
+  },
+});
+assert.equal(mediumTopic.understanding.contextDependent, false,
+  'A current medium-confidence entity mention must block stale topic memory');
+assert.equal(mediumTopic.understanding.canonicalContext, null,
+  'A medium-confidence candidate must not be committed as canonical before confirmation');
+assert.equal(mediumTopic.understanding.requiresCandidateConfirmation, true);
+assert.equal(mediumTopic.understanding.confirmationCandidate.canonicalName, 'Beta Voice');
+assert.equal(mediumTopic.understanding.confirmationCandidate.confidenceBand, 'MEDIUM');
+assert.equal(mediumTopic.classification.requiresConfirmation, true);
+assert.equal(mediumTopic.classification.candidate.itemKey, 'beta-voice');
+const mediumRetrievalQuery = buildContextEnrichedRetrievalQuery(
+  mediumTopic.input, mediumTopic.classification, mediumTopic.resolution, [{
+    tenantId, knowledgeBaseId: job.knowledge_base_id, publicationRevision: 1,
+  }],
+);
+assert.equal(mediumRetrievalQuery.contextDependent, false);
+assert.deepEqual(mediumRetrievalQuery.reservedRecords.map((entry) => entry.recordId),
+  [beta.record_id],
+  'Only the current confirmable candidate may be reserved; stale memory must not enter search');
+assert.match(mediumRetrievalQuery.semanticText, /Beta Voice/u,
+  'The semantic query must include the tenant-published canonical candidate name');
+
+const contextualInput = createKnowledgeEngineInput({
+  tenantId, agentId, callId, utterance: 'What details are included in this?',
+  requestedFacts: ['details'],
+  memory: { activeEntity: {
+    recordId: alpha.record_id, key: 'alpha-prime', name: 'Alpha Prime',
+  } },
+});
+const contextualTopic = await prepareKnowledgeQuery(contextualInput, bundle);
+assert.equal(contextualTopic.understanding.contextDependent, true);
+assert.equal(contextualTopic.understanding.canonicalContext.recordId, alpha.record_id,
+  'A contextual question with no new entity must reuse canonical call memory');
 
 const unrelatedOnlyBundle = buildPublicationIndexes(job, [alpha, beta]);
 result = resolvePublishedEntityRoute(

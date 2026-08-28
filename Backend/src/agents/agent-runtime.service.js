@@ -195,6 +195,11 @@ function compactGroundedDecisionInput(value, maximumCharacters) {
       content: compactGroundedValue(turn?.content, Math.min(500, stringLimit)),
     })).filter((turn) => turn.content),
     canonicalMemory: compactGroundedValue(input.canonicalMemory ?? {}, stringLimit),
+    requestedFact: compactGroundedValue(input.requestedFact, Math.min(160, stringLimit)),
+    ambiguityCandidates: compactGroundedValue(
+      (Array.isArray(input.ambiguityCandidates) ? input.ambiguityCandidates : []).slice(0, 5),
+      stringLimit,
+    ),
     clarificationContext: compactGroundedValue(input.clarificationContext ?? {}, stringLimit),
     hydratedRecords: (Array.isArray(input.hydratedRecords)
       ? input.hydratedRecords : []).slice(0, 5).map((record) => ({

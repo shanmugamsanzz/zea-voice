@@ -38,12 +38,18 @@ assert.equal(contextual.repeats, repeats);
 for (const requirement of [
   'natural_non_exact', 'contextual_follow_up', 'topic_switching',
   'price_and_details', 'multi_entity_comparison', 'phonetic_stt',
+  'genuine_ambiguity', 'targeted_weak_evidence', 'verified_tool',
   'cross_tenant_isolation',
 ]) assert.ok(contextual.contextualCoverage.includes(requirement), requirement);
 assert.ok(contextual.syntheticIndustries.length >= 3);
 assert.ok(contextual.languages.length >= 3);
 assert.equal(contextual.staleAnswers, 0);
 assert.equal(contextual.genericRepeatedClarifications, 0);
+assert.ok(contextual.audibleTargetedClarifications > 0,
+  'unknown or ambiguous caller meaning must produce targeted speech, never silence');
+assert.ok(contextual.verifiedTools > 0, 'authorized action scenarios must execute and verify tools');
+assert.equal(contextual.unsupportedClaims, 0,
+  'supported grounded answers must not be falsely rejected');
 assert.equal(contextual.crossTenantLeakage, false);
 assert.equal(contextual.runtimeErrors, 0);
 
@@ -98,6 +104,8 @@ let timeoutFailures = 0;
 let missingEvidenceFailures = 0;
 let technicalRecoveries = 0;
 let processingAcknowledgements = 0;
+let finalAnswersAfterAcknowledgement = 0;
+let delayedTtsCompletions = 0;
 
 for (let pass = 1; pass <= repeats; pass += 1) {
   for (const fixture of tenantFixtures) {
@@ -167,6 +175,39 @@ for (let pass = 1; pass <= repeats; pass += 1) {
     });
     assert.equal(acknowledged, true);
     assert.equal(cancelled, true);
+
+    const lifecycleEvents = [];
+    const delayedDecision = await awaitLlmWithSafeLatency(
+      new Promise((resolve) => setTimeout(
+        () => resolve(`validated-final-${fixture.language}-${pass}`), 20,
+      )),
+      {
+        tracker: new VoiceTurnLatencyTracker({
+          tenantId: fixture.tenantId,
+          agentId: fixture.agentId,
+          callId: `delayed-success-call-${pass}`,
+          turnId: `delayed-success-turn-${pass}`,
+        }),
+        acknowledgementEnabled: true,
+        acknowledgementAfterMs: 2,
+        ttsReserveMs: 1,
+        acknowledgementText: `configured-ack-${fixture.language}`,
+        completionTimeoutMs: 200,
+        onAcknowledgement: async (text) => lifecycleEvents.push({ type: 'acknowledgement', text }),
+      },
+    );
+    assert.equal(delayedDecision.acknowledged, true);
+    assert.match(delayedDecision.value, /^validated-final-/u);
+    lifecycleEvents.push({ type: 'validated_final', text: delayedDecision.value });
+    // Model a slow but successful selected TTS provider. This is a completion
+    // delay, not an audio failure and must not reopen listening/inactivity.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    lifecycleEvents.push({ type: 'tts_playback_complete', text: delayedDecision.value });
+    assert.deepEqual(lifecycleEvents.map((event) => event.type), [
+      'acknowledgement', 'validated_final', 'tts_playback_complete',
+    ]);
+    finalAnswersAfterAcknowledgement += 1;
+    delayedTtsCompletions += 1;
   }
 }
 
@@ -207,11 +248,21 @@ assert.equal(hardcoding.passed, true);
 assert.equal(hardcoding.prohibitedBusinessLiteralMatches, 0);
 assert.equal(hardcoding.crossTenantLeakage, false);
 
+run('retrieval, hydration and latency lifecycle',
+  'scripts/verify-production-latency-contract.js', [],
+  /Production latency contract verification passed/u);
+run('streaming TTS provider lifecycle', 'scripts/verify-voice-tts.js', [],
+  /"success":true/u);
+run('audio pacing and underrun monitoring', 'scripts/verify-voice-audio-monitoring.js', [],
+  /"success":true/u);
+
 assert.equal(malformedJsonFailures, tenantFixtures.length * repeats);
 assert.equal(timeoutFailures, tenantFixtures.length * repeats);
 assert.equal(missingEvidenceFailures, tenantFixtures.length * repeats);
 assert.equal(technicalRecoveries, tenantFixtures.length * repeats);
 assert.equal(processingAcknowledgements, tenantFixtures.length * repeats);
+assert.equal(finalAnswersAfterAcknowledgement, tenantFixtures.length * repeats);
+assert.equal(delayedTtsCompletions, tenantFixtures.length * repeats);
 
 console.log(JSON.stringify({
   gate: 'universal-production-regression',
@@ -225,11 +276,19 @@ console.log(JSON.stringify({
   pricesAndDetails: true,
   comparisons: true,
   phoneticSttVariations: true,
+  unknownQuestionsProduceTargetedClarification: true,
+  authorizedActionsVerified: contextual.verifiedTools,
+  retrievalDelaysCompletedWithoutFalseFailure: true,
+  validationFailuresRecoveredOperationally: true,
+  delayedTtsCompletions,
+  finalAnswersAfterAcknowledgement,
   malformedJsonOperationalFailures: malformedJsonFailures,
   timeoutOperationalFailures: timeoutFailures,
   missingEvidenceOperationalFailures: missingEvidenceFailures,
   configuredTechnicalRecoveries: technicalRecoveries,
   processingTimeInactivityPrompts: 0,
+  runtimeFailures: 0,
+  audioFailures: 0,
   hardcodedBusinessVocabulary: false,
   staleAnswers: 0,
   emptyEvidenceAccepted: 0,

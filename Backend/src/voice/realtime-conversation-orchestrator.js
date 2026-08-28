@@ -63,6 +63,10 @@ import {
 } from '../knowledge-engine/call-memory.js';
 import { compactBundleAsKnowledge } from '../knowledge-engine/compact-evidence-bundle.js';
 import {
+  deterministicSourceEntry,
+  resolveDeterministicSource,
+} from '../knowledge-engine/deterministic-source-mapping.js';
+import {
   awaitLlmWithSafeLatency,
   VoiceTurnLatencyTracker,
   voiceTurnStages,
@@ -112,15 +116,6 @@ function languageCode(value) {
   const names = { english: 'en', tamil: 'ta', hindi: 'hi', telugu: 'te', kannada: 'kn', malayalam: 'ml' };
   const lower = String(value ?? '').toLowerCase();
   return Object.entries(names).find(([name]) => lower.includes(name))?.[1] ?? 'en';
-}
-
-function settleWithin(promise, timeoutMs, fallback) {
-  let timer;
-  const timeout = new Promise((resolve) => {
-    timer = setTimeout(() => resolve(fallback), timeoutMs);
-    timer.unref?.();
-  });
-  return Promise.race([Promise.resolve(promise), timeout]).finally(() => clearTimeout(timer));
 }
 
 function fallbackClosing(profile) {
@@ -1731,24 +1726,15 @@ export class RealtimeConversationOrchestrator {
       });
       const engineInput = toKnowledgeEngineInput(normalTurnInput);
       const retrieveEvidence = this.dependencies.retrieveTenantEvidence ?? retrieveTenantEvidence;
-      const tenantEvidence = await settleWithin(
-        retrieveEvidence(auth, engineInput, {
+      // Retrieval and PostgreSQL hydration form one authoritative operation.
+      // Their production completion deadlines decide genuine failures; the
+      // retrieval SLO is observability only and cannot discard late evidence.
+      const tenantEvidence = await retrieveEvidence(auth, engineInput, {
           runtimeProfile: this.runtimeProfile,
           tracker: this.turnLatencyTrackers?.get(this.epoch),
           cancelRetrieval: () => this.activeRetrievalAbortController?.abort('retrieval_timeout'),
           cancelHydration: () => this.activeRetrievalAbortController?.abort('hydration_timeout'),
-        }),
-        env.RAG_RUNTIME_CHANNEL_DEADLINE_MS
-          + env.RAG_RUNTIME_SEMANTIC_DEADLINE_MS
-          + env.RAG_RUNTIME_CACHE_TIMEOUT_MS,
-        {
-          found: false, timedOut: true, sources: [], actionEvidence: [], guidanceEvidence: [], entities: [],
-          decision: technicalClarificationDecision('knowledge_timeout'),
-          diagnostic: {
-            stage: 'knowledge_retrieval', errorCode: 'KNOWLEDGE_TIMEOUT', details: {},
-          },
-        },
-      ).catch((error) => ({
+        }).catch((error) => ({
         found: false, error: error.code ?? 'TENANT_EVIDENCE_UNAVAILABLE',
         sources: [], actionEvidence: [], guidanceEvidence: [], entities: [],
         decision: technicalClarificationDecision(error.code ?? 'tenant_evidence_unavailable'),
@@ -1969,6 +1955,49 @@ export class RealtimeConversationOrchestrator {
       promptKnowledge,
       { includePublishedMap: false, maximumSources: 5 },
     );
+    const fullTenantEvidence = knowledge?.tenantEvidence ?? {};
+    const completeAuthoritativeEvidence = [
+      ...(fullTenantEvidence.sources ?? []),
+      ...(fullTenantEvidence.actionEvidence ?? []),
+      ...(fullTenantEvidence.guidanceEvidence ?? []),
+    ];
+    const decisionHydratedRecords = llmEvidenceBundle?.decisionInput?.hydratedRecords ?? [];
+    const authoritativeEvidence = decisionHydratedRecords.map((record, index) => {
+      const mapping = deterministicSourceEntry(
+        record, record.sourceId ?? `internal_${index + 1}`,
+      );
+      const resolved = resolveDeterministicSource(mapping, completeAuthoritativeEvidence, {
+        tenantId: this.runtimeProfile.agent.tenantId,
+        agentId: this.runtimeProfile.agent.id,
+        publicationRevisions: fullTenantEvidence.publicationRevisions ?? [],
+      });
+      if (!resolved.valid) {
+        throw new AppError(503,
+          'The grounded LLM record no longer aligns with authoritative PostgreSQL evidence',
+          'KNOWLEDGE_LLM_EVIDENCE_ALIGNMENT_FAILED', {
+            stage: 'grounded_llm_input_alignment',
+            reason: resolved.reason,
+            sourceId: record.sourceId ?? null,
+            publishedEvidenceId: record.publishedEvidenceId ?? null,
+            recordId: record.recordId ?? null,
+          });
+      }
+      return resolved.record;
+    });
+    const mappedCallerSourceIds = new Set(groundingEnvelope.sourceMap
+      .map((mapping) => String(mapping.sourceId ?? '').toLocaleLowerCase()));
+    const missingCallerSources = decisionHydratedRecords.filter((record) => (
+      record.sourceId
+        && !mappedCallerSourceIds.has(String(record.sourceId).toLocaleLowerCase())
+    ));
+    if (missingCallerSources.length) {
+      throw new AppError(503,
+        'The grounded LLM source IDs do not align with the hydrated decision records',
+        'KNOWLEDGE_LLM_SOURCE_ALIGNMENT_FAILED', {
+          stage: 'grounded_llm_input_alignment',
+          sourceIds: missingCallerSources.map((record) => record.sourceId),
+        });
+    }
     const groundingRuntime = {
       pendingQuestion: liveMemory?.pendingQuestion?.text
         ?? liveMemory?.pendingQuestion ?? liveMemory?.pendingQuestionText,
@@ -2061,15 +2090,6 @@ export class RealtimeConversationOrchestrator {
     let toolCalls = [];
     let completion = {};
     const sentenceBuffer = createStreamingSentenceBuffer();
-    const tenantEvidence = promptKnowledge.tenantEvidence ?? {};
-    const fullTenantEvidence = knowledge?.tenantEvidence ?? {};
-    const permittedHydratedIds = new Set((llmEvidenceBundle?.decisionInput?.hydratedRecords ?? [])
-      .map((source) => source.publishedEvidenceId).filter(Boolean));
-    const authoritativeEvidence = [
-      ...(fullTenantEvidence.sources ?? []),
-      ...(fullTenantEvidence.actionEvidence ?? []),
-      ...(fullTenantEvidence.guidanceEvidence ?? []),
-    ].filter((source) => permittedHydratedIds.has(source.id));
     let firstTokenRecorded = false;
     this.runtimeMetrics.llmStreaming.requests += 1;
     try {
@@ -2132,7 +2152,7 @@ export class RealtimeConversationOrchestrator {
           evidenceScope: {
             tenantId: this.runtimeProfile.agent.tenantId,
             agentId: this.runtimeProfile.agent.id,
-            publicationRevisions: tenantEvidence.publicationRevisions ?? [],
+            publicationRevisions: promptKnowledge.tenantEvidence?.publicationRevisions ?? [],
             requireHydratedEvidence: true,
           },
           safetyPolicies: this.runtimeProfile.agent.settings?.safetyPolicies ?? [],
@@ -2270,12 +2290,9 @@ export class RealtimeConversationOrchestrator {
           }, 'LLM response was rejected before TTS; using the configured operational response');
         }
       }
-      const clarificationSuppressed = grounded.valid
-        && grounded.clarificationRecovery?.mode === 'suppressed';
-      answer = clarificationSuppressed
-        ? '' : callerFacingText(answer, this.runtimeProfile, knowledge, {
-          allowClarificationFallback: grounded.valid === true,
-        });
+      answer = callerFacingText(answer, this.runtimeProfile, knowledge, {
+        allowClarificationFallback: grounded.valid === true,
+      });
       if (grounded.valid
         && grounded.clarificationRecovery?.mode === 'configured_support') {
         sources.push(createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
@@ -2287,7 +2304,7 @@ export class RealtimeConversationOrchestrator {
         }));
       }
       let normalTurnOutput = null;
-      if (grounded.valid && !clarificationSuppressed) {
+      if (grounded.valid) {
         const selectedEvidenceIds = grounded.evidenceIds ?? grounded.evidenceSourceIds ?? [];
         const activeTool = grounded.state?.activeToolRequest ?? null;
         if (grounded.decision === 'action') {
@@ -2715,12 +2732,10 @@ export class RealtimeConversationOrchestrator {
     }
     const firstAudioDeadlineAt = turnStartedAt
       + Math.min(env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS, 2_000);
-    const knowledgeBudgetMs = Math.max(1, Math.min(
-      env.VOICE_KNOWLEDGE_TURN_TIMEOUT_MS,
-      500,
-      remainingLiveTurnBudgetMs(firstAudioDeadlineAt,
-        Math.min(env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS, 600) + 450),
-    ));
+    // This operational completion deadline is independent of the soft
+    // first-audio target. A target breach must not cancel retrieval or the
+    // authoritative hydration that follows it.
+    const knowledgeBudgetMs = env.VOICE_KNOWLEDGE_TURN_TIMEOUT_MS;
     const turnLatency = {
       epoch,
       queryCharacters: Array.from(String(query ?? '')).length,
@@ -2762,7 +2777,7 @@ export class RealtimeConversationOrchestrator {
       this.log.warn({
         stage: 'knowledge.turn_timeout', callId: this.call.id,
         timeoutMs: knowledgeBudgetMs,
-      }, 'Knowledge exceeded its live budget; using the technical fallback response');
+      }, 'Knowledge exceeded its production completion deadline; using the technical fallback response');
       knowledge = {
         found: false, route: 'timeout', sources: [],
         retrieval: { parallelDurationMs: knowledgeBudgetMs },
@@ -2847,13 +2862,14 @@ export class RealtimeConversationOrchestrator {
     }
     turnLatency.validationMs += turnLatency.rankingMs;
     turnLatency.route = knowledge.route ?? 'none';
-    if (turnLatency.retrievalMs > 150) {
+    if (turnLatency.retrievalMs > env.VOICE_RETRIEVAL_TARGET_MS) {
       this.log.warn({
         stage: 'knowledge.retrieval_target_breached', callId: this.call.id,
-        retrievalMs: turnLatency.retrievalMs, targetMs: 150,
+        retrievalMs: turnLatency.retrievalMs, targetMs: env.VOICE_RETRIEVAL_TARGET_MS,
+        operationalFailure: false,
         semanticTimedOut: knowledge.tenantEvidence?.retrieval?.semanticTimedOut
           ?? knowledge.retrieval?.semanticTimedOut ?? false,
-      }, 'Hybrid retrieval exceeded the live voice target');
+      }, 'Hybrid retrieval exceeded its performance target but completed normally');
     }
     // Tenant evidence is interpreted by one grounded LLM turn. Runtime route
     // labels and Workflow instruction text never bypass that validation.

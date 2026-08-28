@@ -61,6 +61,10 @@ const session = await createSelectedLlmStream(profile, {
       currentQuestion,
       recentRelevantTurns,
       canonicalMemory: { activeEntity: { recordId: 'record_1', name: 'Published heading 1' } },
+      requestedFact: 'details',
+      ambiguityCandidates: [{
+        recordId: 'record_1', name: 'Published canonical option', confidenceBand: 'MEDIUM',
+      }],
       hydratedRecords: records,
       workflowAuthorization: [{ workflowEvidenceId: 'workflow_source_1', toolName: 'configured_action' }],
       toolSchemas: [applicableSchema],
@@ -90,12 +94,15 @@ const match = /<grounded_turn_input>\n([\s\S]+)\n<\/grounded_turn_input>/u.exec(
 assert.ok(match, 'The complete grounded input must be present');
 const groundedInput = JSON.parse(match[1]);
 assert.deepEqual(Object.keys(groundedInput), [
-  'currentQuestion', 'recentRelevantTurns', 'canonicalMemory', 'clarificationContext',
-  'hydratedRecords', 'workflowAuthorization', 'toolSchemas',
+  'currentQuestion', 'recentRelevantTurns', 'canonicalMemory', 'requestedFact',
+  'ambiguityCandidates', 'clarificationContext', 'hydratedRecords',
+  'workflowAuthorization', 'toolSchemas',
 ]);
 assert.equal(groundedInput.recentRelevantTurns.length, 10,
   'Recent Turns 5 must send five complete caller-agent pairs when the prompt budget permits');
 assert.equal(groundedInput.hydratedRecords.length, 5);
+assert.equal(groundedInput.requestedFact, 'details');
+assert.equal(groundedInput.ambiguityCandidates[0].name, 'Published canonical option');
 assert.deepEqual(groundedInput.toolSchemas.map((tool) => tool.name), ['configured_action']);
 assert.equal(groundedInput.clarificationContext.heardText, 'Zea-like spoken option');
 assert.equal(groundedInput.clarificationContext.candidates[0].name,

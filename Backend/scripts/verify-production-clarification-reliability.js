@@ -110,6 +110,7 @@ const retrievalSamples = [];
 let turns = 0;
 let configuredRecoveries = 0;
 let repeatedClarifications = 0;
+let audibleUnconfiguredRecoveries = 0;
 
 for (let repeat = 1; repeat <= repeats; repeat += 1) {
   for (const fixture of tenants) {
@@ -194,6 +195,33 @@ for (let repeat = 1; repeat <= repeats; repeat += 1) {
     repeatedClarifications += 1;
     turns += 1;
 
+    const noSupportMemory = openGenericConversationState({
+      tenantId: fixture.tenantId,
+      agentId: fixture.agentId,
+      callId: `${fixture.tenantId}-no-support-${repeat}`,
+    }, { conversationLanguage: fixture.language });
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const noSupport = applyUnifiedGroundedTurn({
+        rawDecision: clarificationDecision(fixture.alternativeQuestion),
+        groundingEnvelope: envelope,
+        memory: noSupportMemory,
+        turnToken: noSupportMemory.beginTurn(`no-support-${repeat}-${attempt}`),
+        evidence,
+        evidenceScope: scope,
+        finalizedUtterance: 'Still genuinely ambiguous',
+        clarificationRecovery: { supportMessage: '', maximumAttempts: 1 },
+      });
+      assert.equal(noSupport.valid, true);
+      assert.equal(noSupport.answer, fixture.alternativeQuestion,
+        'a valid grounded clarification must never be suppressed when support speech is absent');
+      if (attempt === 2) {
+        assert.equal(noSupport.clarificationRecovery.mode,
+          'grounded_clarification_retained');
+        audibleUnconfiguredRecoveries += 1;
+      }
+    }
+    noSupportMemory.close();
+
     const isolated = openGenericConversationState({
       tenantId: fixture.tenantId,
       agentId: fixture.agentId,
@@ -237,7 +265,8 @@ console.log(JSON.stringify({
   languages: [...new Set(tenants.map((fixture) => fixture.language))],
   turns,
   configuredRecoveries,
-  repeatedClarificationsSuppressed: repeatedClarifications,
+  repeatedClarificationsRecovered: repeatedClarifications,
+  audibleUnconfiguredRecoveries,
   retrievalP95Ms: Number(p95.toFixed(2)),
   crossTenantLeakage: 0,
   runtimeExceptions: 0,

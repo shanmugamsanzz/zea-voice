@@ -97,7 +97,7 @@ const unsupportedRecommendationPattern = /(?:\b(?:recommend(?:ed|ation)?|best|id
 const recommendationRefusalPattern = /(?:\b(?:cannot|can't|can\s+not|do\s+not|don't|unable\s+to|not\s+able\s+to)\s+(?:recommend|determine|say|choose|select)\b|\bnot\s+(?:enough|authorized)\s+(?:information\s+)?to\s+(?:recommend|determine|choose|select)\b)/iu;
 const medicalConcernPattern = /(?:\b(?:symptom|pain|fever|cough|breath(?:ing|lessness)?|condition|disease|diagnos|medical|health\s+(?:issue|problem|concern))\b|\b(?:vali|kaichal|irumal|moochu|udambu)\b|\u0BA8\u0BCB\u0BAF\u0BCD|\u0BB5\u0BB2\u0BBF|\u0B95\u0BBE\u0BAF\u0BCD\u0B9A\u0BCD\u0B9A\u0BB2\u0BCD|\u0B87\u0BB0\u0BC1\u0BAE\u0BB2\u0BCD|\u0BAE\u0BC2\u0B9A\u0BCD\u0B9A\u0BC1)/iu;
 const explicitRecommendationSupportPattern = /(?:\b(?:recommend(?:ed|ation)?|suitable|suitability|appropriate|eligib(?:le|ility)|selection\s+rule|best\s+for|intended\s+for)\b|\b(?:recommend|suitable)\s+(?:pann|aag|irukk)\b)/iu;
-const negativeFactPattern = /(?:\b(?:is|are|was|were)\s+not\s+(?:available|included|offered|provided|supported|selectable)\b|\b(?:does|do|did)\s+not\s+(?:include|offer|provide|support|allow)\b|\bwithout\s+(?:a\s+)?(?:test|service|consultation|benefit|feature)\b|\b(?:unavailable|excluded|unsupported|not\s+selectable)\b|\b(?:available|include|offer|provide|support)\s+(?:illa|illai|kidayathu)\b|\u0B87\u0BB2\u0BCD\u0BB2\u0BC8|\u0B95\u0BBF\u0B9F\u0BC8\u0BAF\u0BBE\u0BA4\u0BC1)/iu;
+const negativeFactPattern = /(?:\b(?:is|are|was|were)\s+not\s+(?:available|included|offered|provided|supported|selectable)\b|\b(?:does|do|did)\s+not\s+(?:include|offer|provide|support|allow)\b|\bwithout\s+(?:a\s+)?(?:test|service|consultation|benefit|feature)\b|\b(?:unavailable|excluded|unsupported|not\s+selectable)\b|\b(?:available|include|offer|provide|support)\s+(?:illa|illai|kidayathu)\b|(?:^|\s)(?:\u0B87\u0BB2\u0BCD\u0BB2\u0BC8|\u0B95\u0BBF\u0B9F\u0BC8\u0BAF\u0BBE\u0BA4\u0BC1)\s*[.!?\u0964]*$)/iu;
 const positiveFactPattern = /(?:\b(?:is|are|was|were)\s+(?:available|included|offered|provided|supported|selectable)\b|\b(?:includes?|offers?|provides?|supports?|allows?)\b|\b(?:available|include|offer|provide|support)\s+(?:irukku|undu|yes)\b|\u0B95\u0BBF\u0B9F\u0BC8\u0B95\u0BCD\u0B95\u0BC1\u0BAE\u0BCD|\u0B89\u0BB3\u0BCD\u0BB3\u0BA4\u0BC1)/iu;
 
 function unsupportedStructuredIdentifiers(claim, evidenceText) {
@@ -252,11 +252,14 @@ export function validateGroundedClaim(sentence, sources = [], options = {}) {
     && !relationshipSupported) {
     return Object.freeze({ valid: false, reason: 'unsupported_recommendation' });
   }
-  if (negativeFactPattern.test(claim) && !negativeFactPattern.test(evidenceText)) {
+  const negativeClaim = negativeFactPattern.test(claim);
+  const positiveClaim = positiveFactPattern.test(claim);
+  const negativeEvidence = evidencePolaritySupport(claim, sources, negativeFactPattern);
+  const positiveEvidence = evidencePolaritySupport(claim, sources, positiveFactPattern);
+  if (negativeClaim && !negativeEvidence && evidenceMentionsClaimSubject(claim, sources)) {
     return Object.freeze({ valid: false, reason: 'unsupported_claim_polarity' });
   }
-  if (positiveFactPattern.test(claim) && negativeFactPattern.test(evidenceText)
-    && !positiveFactPattern.test(evidenceText)) {
+  if (positiveClaim && negativeEvidence && !positiveEvidence) {
     return Object.freeze({ valid: false, reason: 'unsupported_claim_polarity' });
   }
   return Object.freeze({
@@ -300,6 +303,27 @@ function canonicalEvidenceKey(value = {}) {
     ? `${recordType}:${recordId}:${knowledgeBaseId}:${revision}` : null;
 }
 
+function sharesClaimSubject(claim, evidence) {
+  const claimTokens = [...new Set(tokens(claim))];
+  const evidenceTokens = [...new Set(tokens(evidence))];
+  return claimTokens.some((claimToken) => evidenceTokens.some((evidenceToken) => (
+    claimToken === evidenceToken
+      || (claimToken.length >= 5 && evidenceToken.length >= 5
+        && (claimToken.startsWith(evidenceToken) || evidenceToken.startsWith(claimToken)))
+  )));
+}
+
+function evidencePolaritySupport(claim, sources, pattern) {
+  return sources.some((source) => {
+    const content = sourceContent(source);
+    return pattern.test(content) && sharesClaimSubject(claim, content);
+  });
+}
+
+function evidenceMentionsClaimSubject(claim, sources) {
+  return sources.some((source) => sharesClaimSubject(claim, sourceContent(source)));
+}
+
 function sameEvidenceScope(source, authoritative) {
   for (const key of ['tenantId', 'agentId', 'knowledgeBaseId', 'recordId']) {
     const expected = identity(source?.[key]);
@@ -321,9 +345,26 @@ function sameEvidenceScope(source, authoritative) {
 function authoritativeResolutionFor(source, authoritativeSources) {
   const publishedId = identity(source?.publishedEvidenceId);
   if (publishedId) {
-    return resolveDeterministicSource(
+    const deterministic = resolveDeterministicSource(
       deterministicSourceEntry(source, source.id), authoritativeSources,
     );
+    if (deterministic.valid) return deterministic;
+    // Older in-process callers may provide the short source ID, publication
+    // evidence ID and typed record identity without duplicating publication
+    // scope metadata. Preserve that compatibility only when the identity maps
+    // to exactly one authoritative hydrated record. The final unified scope
+    // check still rejects a foreign tenant, agent or revision.
+    const recordId = identity(source?.recordId);
+    const recordType = String(source?.recordType ?? '').trim().toLocaleUpperCase();
+    const unique = authoritativeSources.filter((candidate) => (
+      identity(candidate?.id) === publishedId
+        && (!recordId || identity(candidate?.recordId) === recordId)
+        && (!recordType || String(candidate?.recordType ?? '').trim().toLocaleUpperCase() === recordType)
+    ));
+    if (deterministic.reason === 'missing_evidence' && unique.length === 1) {
+      return Object.freeze({ valid: true, reason: null, record: unique[0] });
+    }
+    return deterministic;
   }
   const canonicalKey = canonicalEvidenceKey(source);
   if (canonicalKey) {
@@ -383,7 +424,10 @@ export function hydrateGroundingEnvelope(envelope, authoritativeSources = []) {
   }).filter(Boolean);
   return Object.freeze({
     ...envelope,
-    found: envelope?.found === true && sources.length > 0,
+    // Successfully mapped PostgreSQL records are authoritative proof that
+    // evidence exists. An earlier discovery/package flag must not turn a
+    // hydrated answer into verified_evidence_missing.
+    found: sources.length > 0,
     incompleteEvidenceMetadata: requestedSources.length > sources.length,
     mappingFailures: Object.freeze(mappingFailures),
     sources: Object.freeze(sources),

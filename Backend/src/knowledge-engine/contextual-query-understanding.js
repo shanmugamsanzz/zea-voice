@@ -55,12 +55,19 @@ function candidateLabel(candidate) {
     ?? candidate?.recordId, 240);
 }
 
-function candidateSummary(candidate) {
+function candidateSummary(candidate, suppliedConfidenceConfiguration = {}) {
   if (!candidate || !candidateIdentity(candidate)) return null;
   const entityType = String(candidate.entityType
     ?? (String(candidate.recordType).toLocaleUpperCase() === 'CATALOG_CATEGORY'
       ? 'CATEGORY' : (isCatalogCandidate(candidate) ? 'ITEM' : 'ROUTE')))
     .toLocaleUpperCase();
+  const score = boundedScore(candidate.score);
+  const confidenceConfiguration = resolveKnowledgeConfidenceConfiguration(
+    suppliedConfidenceConfiguration,
+  );
+  const matchedSignal = [...(candidate.signals ?? [])]
+    .filter((signal) => signal?.explicit === true && clean(signal.phrase))
+    .sort((left, right) => boundedScore(right.score) - boundedScore(left.score))[0] ?? null;
   return Object.freeze({
     recordId: clean(candidate.recordId ?? candidate.id, 160) || null,
     recordType: clean(candidate.recordType, 80).toLocaleUpperCase() || null,
@@ -69,8 +76,13 @@ function candidateSummary(candidate) {
       ? candidate.categoryKey ?? candidate.key
       : candidate.itemKey ?? candidate.key, 160) || null,
     name: candidateLabel(candidate) || null,
+    canonicalName: candidateLabel(candidate) || null,
     categoryKey: clean(candidate.categoryKey, 160) || null,
-    score: boundedScore(candidate.score),
+    score,
+    confidenceBand: score >= confidenceConfiguration.highConfidence ? 'HIGH'
+      : (score >= confidenceConfiguration.clarificationConfidence ? 'MEDIUM' : 'LOW'),
+    matchMethod: clean(candidate.method, 80) || null,
+    matchedPhrase: clean(matchedSignal?.phrase, 240) || null,
     explicit: candidate.explicit === true,
     intentClass: clean(candidate.intentClass, 80).toLocaleUpperCase() || null,
   });
@@ -106,12 +118,13 @@ function catalogCandidates(resolution) {
   return output.sort((left, right) => boundedScore(right.score) - boundedScore(left.score));
 }
 
-function explicitCatalogCandidates(resolution, confidenceConfiguration) {
-  return catalogCandidates(resolution).filter((candidate) => (
-    candidate.explicit === true
-      && boundedScore(candidate.score) >= confidenceConfiguration.highConfidence
-      && explicitSignalPhrases(candidate, confidenceConfiguration).length > 0
-  ));
+function hasStrongPublishedCatalogSignal(candidate, confidenceConfiguration) {
+  return candidate?.explicit === true
+    && (candidate?.signals ?? []).some((signal) => (
+      signal?.explicit === true
+        && ['exact', 'normalized', 'tenant_alias', 'stt'].includes(String(signal.method ?? ''))
+        && boundedScore(signal.score) >= confidenceConfiguration.highConfidence
+    ));
 }
 
 function distinctMentionCandidates(candidates, confidenceConfiguration) {
@@ -182,7 +195,7 @@ function ambiguityFor(resolution, explicitCandidates, confidenceConfiguration) {
     detected,
     reason: detected ? 'close_authoritative_candidates' : null,
     candidates: Object.freeze((detected ? [top, second] : [])
-      .map(candidateSummary).filter(Boolean)),
+      .map((candidate) => candidateSummary(candidate, confidenceConfiguration)).filter(Boolean)),
   });
 }
 
@@ -216,8 +229,22 @@ export function understandContextualKnowledgeQuery(input, resolution) {
   const confidenceConfiguration = resolveKnowledgeConfidenceConfiguration(
     resolution.confidenceConfiguration ?? {},
   );
-  const explicitCandidates = explicitCatalogCandidates(resolution, confidenceConfiguration);
-  const mentionedCandidates = distinctMentionCandidates(catalogCandidates(resolution).filter((candidate) => (
+  const route = explicitCurrentRoute(resolution, confidenceConfiguration);
+  const currentRouteSignal = route
+    ?? currentNonCatalogSignal(resolution, confidenceConfiguration);
+  const currentRouteIntent = String(currentRouteSignal?.intentClass ?? '').toLocaleUpperCase();
+  const actionRouteWithoutCatalogReference = currentRouteIntent === 'ACTION_TOOL_REQUEST'
+    && currentRouteSignal?.requiresCatalogItem !== true;
+  const relevantCatalogCandidates = catalogCandidates(resolution).filter((candidate) => (
+    !actionRouteWithoutCatalogReference
+      || hasStrongPublishedCatalogSignal(candidate, confidenceConfiguration)
+  ));
+  const explicitCandidates = relevantCatalogCandidates.filter((candidate) => (
+    candidate.explicit === true
+      && boundedScore(candidate.score) >= confidenceConfiguration.highConfidence
+      && explicitSignalPhrases(candidate, confidenceConfiguration).length > 0
+  ));
+  const mentionedCandidates = distinctMentionCandidates(relevantCatalogCandidates.filter((candidate) => (
     candidate.explicit === true
       && boundedScore(candidate.score) >= confidenceConfiguration.clarificationConfidence
       && explicitSignalPhrases(candidate, confidenceConfiguration).length > 0
@@ -225,23 +252,25 @@ export function understandContextualKnowledgeQuery(input, resolution) {
   const explicitEntities = explicitCandidates.filter((candidate) => (
     String(candidate.entityType ?? '').toLocaleUpperCase() !== 'CATEGORY'
       && String(candidate.recordType ?? '').toLocaleUpperCase() !== 'CATALOG_CATEGORY'
-  )).map(candidateSummary).filter(Boolean).slice(0, 5);
+  )).map((candidate) => candidateSummary(candidate, confidenceConfiguration))
+    .filter(Boolean).slice(0, 5);
   const explicitCategories = explicitCandidates.filter((candidate) => (
     String(candidate.entityType ?? '').toLocaleUpperCase() === 'CATEGORY'
       || String(candidate.recordType ?? '').toLocaleUpperCase() === 'CATALOG_CATEGORY'
-  )).map(candidateSummary).filter(Boolean).slice(0, 5);
+  )).map((candidate) => candidateSummary(candidate, confidenceConfiguration))
+    .filter(Boolean).slice(0, 5);
   const requestedFacts = unique([
     ...(input.requestedFacts ?? []),
     input.memory?.pendingClarification?.missingFactType,
   ]);
-  const route = explicitCurrentRoute(resolution, confidenceConfiguration);
-  const currentRouteSignal = route
-    ?? currentNonCatalogSignal(resolution, confidenceConfiguration);
   const protocolRoute = protocolIntentClasses.has(
     String(currentRouteSignal?.intentClass ?? '').toLocaleUpperCase(),
   );
   const memoryEntity = activeMemoryEntity(input.memory);
-  const hasCurrentEntitySignal = explicitCandidates.length > 0;
+  // A confirmable current mention is still a new topic signal. It must block
+  // stale memory even though it cannot become canonical memory until the
+  // caller confirms it and validation succeeds.
+  const hasCurrentEntitySignal = mentionedCandidates.length > 0;
   const hasCurrentNonCatalogSignal = Boolean(currentRouteSignal);
   const contextDependent = !hasCurrentEntitySignal && !hasCurrentNonCatalogSignal && Boolean(
     memoryEntity || input.memory?.pendingClarification || input.memory?.activeTool,
@@ -277,9 +306,11 @@ export function understandContextualKnowledgeQuery(input, resolution) {
     : [];
   const ambiguity = ambiguityFor(resolution, explicitCandidates, confidenceConfiguration);
   const actionIntent = actionUnderstanding(input, resolution, confidenceConfiguration);
-  const canonicalContext = hasCurrentEntitySignal && !ambiguity.detected
-    ? candidateSummary(mentionedCandidates[0] ?? explicitCandidates[0])
+  const canonicalContext = explicitCandidates.length > 0 && !ambiguity.detected
+    ? candidateSummary(explicitCandidates[0], confidenceConfiguration)
     : (contextDependent ? memoryEntity : null);
+  const confirmationCandidate = !ambiguity.detected && explicitCandidates.length === 0
+    ? candidateSummary(mentionedCandidates[0], confidenceConfiguration) : null;
   return Object.freeze({
     version: CONTEXTUAL_QUERY_UNDERSTANDING_VERSION,
     tenantId: String(input.tenantId),
@@ -290,7 +321,8 @@ export function understandContextualKnowledgeQuery(input, resolution) {
     explicitEntities: Object.freeze(explicitEntities),
     explicitCategories: Object.freeze(explicitCategories),
     comparisonEntities: Object.freeze(comparisonCandidates
-      .map(candidateSummary).filter(Boolean).slice(0, 5)),
+      .map((candidate) => candidateSummary(candidate, confidenceConfiguration))
+      .filter(Boolean).slice(0, 5)),
     contextualReferences,
     requestedFact: requestedFacts[0] ?? null,
     requestedFacts,
@@ -302,8 +334,14 @@ export function understandContextualKnowledgeQuery(input, resolution) {
     ambiguity,
     contextDependent,
     canonicalContext,
-    explicitCurrentRoute: route ? candidateSummary(route) : null,
-    currentRouteSignal: currentRouteSignal ? candidateSummary(currentRouteSignal) : null,
+    currentEntityCandidates: Object.freeze(mentionedCandidates
+      .map((candidate) => candidateSummary(candidate, confidenceConfiguration))
+      .filter(Boolean).slice(0, 5)),
+    confirmationCandidate,
+    requiresCandidateConfirmation: Boolean(confirmationCandidate),
+    explicitCurrentRoute: route ? candidateSummary(route, confidenceConfiguration) : null,
+    currentRouteSignal: currentRouteSignal
+      ? candidateSummary(currentRouteSignal, confidenceConfiguration) : null,
     protocolPriority: protocolRoute,
   });
 }

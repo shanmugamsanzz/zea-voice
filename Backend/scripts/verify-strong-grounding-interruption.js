@@ -59,6 +59,9 @@ for (const [claim, content] of [
 assert.equal(validateGroundedClaim(
   'Priority service \u0B87\u0BB2\u0BCD\u0BB2\u0BC8.', factualSources,
 ).reason, 'unsupported_claim_polarity');
+assert.equal(validateGroundedClaim(
+  '\u0B87\u0BB2\u0BCD\u0BB2\u0BC8, Priority service costs INR 3200.', factualSources,
+).valid, true, 'a conversational correction marker must not become a negative factual claim');
 const multilingualGrounding = validateGroundedClaim(
   'இந்த சேவையில் standard support கிடைக்கும்.', factualSources,
 );
@@ -179,6 +182,12 @@ const hydratedEnvelope = hydrateGroundingEnvelope(
   [{ id: 'postgres-1', recordId: 'record-1', content: 'complete authoritative record' }],
 );
 assert.equal(hydratedEnvelope.sources[0].content, 'complete authoritative record');
+const mappedDespiteStaleDiscoveryFlag = hydrateGroundingEnvelope(
+  { found: false, sources: [{ id: 'envelope-1', recordId: 'record-1', content: 'partial' }], entities: [] },
+  [{ id: 'postgres-1', recordId: 'record-1', content: 'complete authoritative record' }],
+);
+assert.equal(mappedDespiteStaleDiscoveryFlag.found, true,
+  'PostgreSQL hydration must prevent false verified_evidence_missing rejection');
 assert.equal(validateCallerProvidedState(
   { collectedInformation: { contact_name: 'Asha', age: 21 } },
   'My name is Asha and age is 21', { collectedInformation: {} },

@@ -1,6 +1,7 @@
 import { embedQuery } from '../rag/embedding.client.js';
 import { QDRANT_SEARCH_LIMIT_MAX, searchTenantPoints } from '../rag/qdrant.client.js';
 import { logger } from '../config/logger.js';
+import { env } from '../config/env.js';
 import { knowledgeSearchIndexes } from './query-classifier.js';
 import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/knowledge-confidence-config.js';
 
@@ -15,6 +16,23 @@ const documentIndexTypes = Object.freeze({
 });
 
 const defaultDependencies = Object.freeze({ embed: embedQuery, search: searchTenantPoints });
+
+async function completeChannelWithin(channel, operation, timeoutMs) {
+  const deadlineMs = Math.max(1, Number(timeoutMs));
+  let timer;
+  const timeout = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => reject(Object.assign(
+      new Error(`Retrieval channel exceeded its completion deadline: ${channel}`),
+      { code: 'RETRIEVAL_CHANNEL_TIMEOUT', channel, timeoutMs: deadlineMs },
+    )), deadlineMs);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([Promise.resolve().then(operation), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 const namespaceTypes = Object.freeze({
   CATALOG: Object.freeze(['CATALOG_ITEM', 'CATALOG_CATEGORY']),
@@ -103,16 +121,24 @@ export function buildContextEnrichedRetrievalQuery(input, classification, resolu
     ...(understanding.explicitEntities ?? []),
     ...(understanding.explicitCategories ?? []),
   ].map(compactEntity).filter(Boolean);
+  const currentMentions = (understanding.explicitEntities?.length
+    || understanding.explicitCategories?.length) ? [] : [
+    ...(understanding.ambiguity?.detected === true
+      ? understanding.ambiguity.candidates ?? [] : []),
+    understanding.confirmationCandidate,
+  ].map(compactEntity).filter(Boolean);
   const comparisons = (understanding.comparisonEntities ?? [])
     .map(compactEntity).filter(Boolean).slice(0, 5);
   const memoryEntity = canonicalMemoryEntity(input);
   const understoodContext = compactEntity(understanding.canonicalContext);
   const hasExplicitCurrentEntity = explicit.length > 0;
+  const hasCurrentEntityMention = hasExplicitCurrentEntity || currentMentions.length > 0;
   const contextDependent = understanding.contextDependent === true
     || resolution?.contextDependent === true;
   const canonicalEntity = hasExplicitCurrentEntity
     ? (understoodContext ?? explicit[0])
     : (contextDependent ? (understoodContext ?? memoryEntity) : null);
+  const currentSearchEntity = canonicalEntity ?? currentMentions[0] ?? null;
   const requestedFacts = uniqueText([
     ...(understanding.requestedFacts ?? []),
     ...(input?.requestedFacts ?? []),
@@ -131,13 +157,20 @@ export function buildContextEnrichedRetrievalQuery(input, classification, resolu
     if (!entity.recordId) continue;
     reserved.push(Object.freeze({ ...entity, reason: 'explicit_entity' }));
   }
+  for (const entity of currentMentions) {
+    if (!entity.recordId || explicit.some((value) => (
+      normalizeId(value.recordId) === normalizeId(entity.recordId)
+      && value.recordType === entity.recordType
+    ))) continue;
+    reserved.push(Object.freeze({ ...entity, reason: 'candidate_confirmation' }));
+  }
   if (!explicit.length && resolution?.candidate?.explicit === true) {
     const resolved = compactEntity(resolution.candidate);
     if (resolved?.recordId) {
       reserved.push(Object.freeze({ ...resolved, reason: 'explicit_entity' }));
     }
   }
-  if (!hasExplicitCurrentEntity && contextDependent && canonicalEntity?.recordId) {
+  if (!hasCurrentEntityMention && contextDependent && canonicalEntity?.recordId) {
     reserved.push(Object.freeze({ ...canonicalEntity, reason: 'canonical_memory' }));
   }
   for (const entity of comparisons) {
@@ -150,7 +183,7 @@ export function buildContextEnrichedRetrievalQuery(input, classification, resolu
   const currentQuestion = clean(input?.latestQuestion ?? input?.utterance);
   const queryParts = uniqueText([
     currentQuestion,
-    canonicalEntity?.name,
+    currentSearchEntity?.name,
     ...requestedFacts,
     ...comparisons.map((entity) => entity.name),
   ]);
@@ -158,12 +191,13 @@ export function buildContextEnrichedRetrievalQuery(input, classification, resolu
   return Object.freeze({
     currentQuestion,
     canonicalEntity,
+    currentEntityCandidate: currentMentions[0] ?? null,
     requestedFacts,
     relevantNamespace,
     relevantNamespaces,
     comparisonEntities: Object.freeze(comparisons),
     contextDependent,
-    requiresCanonicalHydration: !hasExplicitCurrentEntity
+    requiresCanonicalHydration: !hasCurrentEntityMention
       && contextDependent && Boolean(canonicalEntity?.recordId),
     sparseText: searchText,
     semanticText: searchText,
@@ -605,6 +639,12 @@ export async function retrieveTargetedCandidates({
   const indexes = planIndexes(classification);
   const recordTypes = allowedRecordTypes(indexes);
   const dependencies = { ...defaultDependencies, ...suppliedDependencies };
+  const channelDeadlineMs = Number(
+    dependencies.channelDeadlineMs ?? env.RAG_RUNTIME_CHANNEL_DEADLINE_MS,
+  );
+  const semanticDeadlineMs = Number(
+    dependencies.semanticDeadlineMs ?? env.RAG_RUNTIME_SEMANTIC_DEADLINE_MS,
+  );
   const queryContext = buildContextEnrichedRetrievalQuery(input, classification, resolution, scope);
   const channelFailures = [];
 
@@ -632,20 +672,24 @@ export async function retrieveTargetedCandidates({
 
   const structuredPromise = isolateChannel('structured', async () => {
     dependencies.onChannelStart?.('structured');
-    return structuredCandidatesForTurn(
+    return completeChannelWithin('structured', () => structuredCandidatesForTurn(
       input, classification, resolution, records, recordTypes, limitPerChannel, queryContext,
-    );
+    ), channelDeadlineMs);
   });
   const bm25Promise = indexes.has(knowledgeSearchIndexes.BM25)
     ? isolateChannel('bm25', async () => {
       dependencies.onChannelStart?.('bm25');
-      return bm25Candidates(input, sparseIndexes, scope, recordTypes, limitPerChannel, queryContext);
+      return completeChannelWithin('bm25', () => bm25Candidates(
+        input, sparseIndexes, scope, recordTypes, limitPerChannel, queryContext,
+      ), channelDeadlineMs);
     })
     : Promise.resolve(Object.freeze([]));
   const qdrantPromise = indexes.has(knowledgeSearchIndexes.SEMANTIC)
     ? isolateChannel('qdrant', async () => {
       dependencies.onChannelStart?.('qdrant');
-      return semanticCandidates(input, scope, recordTypes, limitPerChannel, dependencies, queryContext);
+      return completeChannelWithin('qdrant', () => semanticCandidates(
+        input, scope, recordTypes, limitPerChannel, dependencies, queryContext,
+      ), semanticDeadlineMs);
     })
     : Promise.resolve(Object.freeze([]));
   const [structured, bm25, qdrant] = await Promise.all([
@@ -669,6 +713,11 @@ export async function retrieveTargetedCandidates({
       qdrant: namespaceChannelView(qdrant),
     }),
     channelFailures: Object.freeze([...channelFailures]),
+    channelDeadlines: Object.freeze({
+      structuredMs: channelDeadlineMs,
+      bm25Ms: channelDeadlineMs,
+      qdrantMs: semanticDeadlineMs,
+    }),
     candidateCount: structured.length + bm25.length + qdrant.length,
   });
 }

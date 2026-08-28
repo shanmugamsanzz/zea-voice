@@ -11,9 +11,29 @@ import { AppError } from '../middleware/errors.js';
 import { resolveKnowledgeConfidenceConfiguration } from './knowledge-confidence-config.js';
 import { selectCompleteConversationTurns } from '../knowledge-engine/conversation-turn-context.js';
 import { resolveLiveMemoryConfiguration } from '../voice/interaction/live-memory-config.js';
+import { env } from '../config/env.js';
 
 export const GROUNDED_TURN_EVIDENCE_VERSION = 2;
 const maximumEvidenceRecords = 5;
+
+async function completeStageWithin(stage, operation, timeoutMs) {
+  const deadlineMs = Math.max(1, Number(timeoutMs));
+  let timer;
+  const timeout = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => reject(new AppError(
+      504,
+      `Knowledge ${stage} exceeded its production completion deadline`,
+      stage === 'retrieval' ? 'KNOWLEDGE_RETRIEVAL_TIMEOUT' : 'KNOWLEDGE_HYDRATION_TIMEOUT',
+      { stage: `authoritative_${stage}`, timeoutMs: deadlineMs, operationalFailure: true },
+    )), deadlineMs);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([Promise.resolve().then(operation), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 const namespaceRecordTypes = Object.freeze({
   CATALOG: new Set(['CATALOG_ITEM', 'CATALOG_CATEGORY']),
@@ -371,12 +391,17 @@ function compactValue(value, depth = 0) {
 
 function compactCanonicalMemory(input = {}, canonicalResolution = {}) {
   const memory = input.canonicalCallMemory ?? input.memory ?? {};
+  const understanding = input.queryUnderstanding ?? {};
+  const hasCurrentEntityMention = (understanding.currentEntityCandidates?.length ?? 0) > 0
+    || (understanding.explicitEntities?.length ?? 0) > 0
+    || (understanding.explicitCategories?.length ?? 0) > 0;
   return Object.freeze({
     activeEntity: canonicalResolution.activeEntity ?? null,
     activeCategory: canonicalResolution.activeCategory ?? null,
     comparisonEntities: Object.freeze([...(canonicalResolution.comparisonEntities ?? [])]
       .slice(0, maximumEvidenceRecords)),
-    pendingClarification: compactValue(memory.pendingClarification),
+    pendingClarification: hasCurrentEntityMention
+      ? null : compactValue(memory.pendingClarification),
     activeTool: compactValue(memory.activeTool),
     collectedToolFields: Object.freeze({ ...(memory.collectedToolFields ?? {}) }),
   });
@@ -384,12 +409,16 @@ function compactCanonicalMemory(input = {}, canonicalResolution = {}) {
 
 function compactRelevantTurns(input = {}) {
   const memory = input.canonicalCallMemory ?? input.memory ?? {};
+  const understanding = input.queryUnderstanding ?? {};
+  const currentEntityTerms = (understanding.currentEntityCandidates ?? [])
+    .flatMap((candidate) => [candidate?.name, candidate?.canonicalName]).filter(Boolean);
   return Object.freeze(selectCompleteConversationTurns(input.recentRelevantTurns
     ?? memory.recentConversation ?? memory.recentTurns ?? [], {
     mode: memory.conversationContextMode,
     recentTurns: memory.conversationContextTurns,
     currentQuestion: input.currentQuestion ?? input.latestQuestion ?? input.utterance,
-    contextTerms: [memory.activeEntity?.name, memory.activeCategory?.name].filter(Boolean),
+    contextTerms: currentEntityTerms.length ? currentEntityTerms
+      : [memory.activeEntity?.name, memory.activeCategory?.name].filter(Boolean),
   })
     .map((turn) => Object.freeze({
       role: turn?.role === 'assistant' ? 'assistant' : 'user',
@@ -601,20 +630,26 @@ export async function retrieveRankHydrateGroundedTurn({
     classification?.confidenceConfiguration ?? resolution?.confidenceConfiguration,
   );
   const retrievalStartedAt = performance.now();
-  const retrieval = await searchParallelHybridCandidates({
-    input, classification, resolution, publicationBundles, sparseIndexes,
-    limitPerChannel: dependencies.limitPerChannel ?? 12,
-  }, dependencies.retrieval);
+  const retrieval = await completeStageWithin('retrieval', () => (
+    searchParallelHybridCandidates({
+      input, classification, resolution, publicationBundles, sparseIndexes,
+      limitPerChannel: dependencies.limitPerChannel ?? 12,
+    }, dependencies.retrieval)
+  ), dependencies.retrievalTimeoutMs ?? env.VOICE_RETRIEVAL_TURN_TIMEOUT_MS);
   const retrievalMs = Math.max(0, performance.now() - retrievalStartedAt);
   const hydrationStartedAt = performance.now();
-  const authoritative = await rankAndHydrateAuthoritativeEvidence({
-    auth, input, classification, resolution, retrieval,
-    rrfK: dependencies.rrfK ?? 60,
-    limit: maximumEvidenceRecords,
-    confidenceConfiguration,
-    minProviderScore: dependencies.minProviderScore
-      ?? confidenceConfiguration.clarificationConfidence,
-  }, dependencies.hydration);
+  // Evidence can be declared missing only after this single authoritative
+  // PostgreSQL hydration operation has completed successfully.
+  const authoritative = await completeStageWithin('hydration', () => (
+    rankAndHydrateAuthoritativeEvidence({
+      auth, input, classification, resolution, retrieval,
+      rrfK: dependencies.rrfK ?? 60,
+      limit: maximumEvidenceRecords,
+      confidenceConfiguration,
+      minProviderScore: dependencies.minProviderScore
+        ?? confidenceConfiguration.clarificationConfidence,
+    }, dependencies.hydration)
+  ), dependencies.hydrationTimeoutMs ?? env.VOICE_HYDRATION_TURN_TIMEOUT_MS);
   const hydrationMs = Math.max(0, performance.now() - hydrationStartedAt);
   if (authoritative.fusion.candidates.length > maximumEvidenceRecords
     || authoritative.evidence.length > maximumEvidenceRecords) {

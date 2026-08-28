@@ -62,6 +62,10 @@ assert.equal(
   'Every missing-evidence failure must use configured technical recovery',
 );
 assert.equal(productionRuntime.processingTimeInactivityPrompts, 0);
+assert.ok(productionRuntime.finalAnswersAfterAcknowledgement > 0);
+assert.ok(productionRuntime.delayedTtsCompletions > 0);
+assert.equal(productionRuntime.runtimeFailures, 0);
+assert.equal(productionRuntime.audioFailures, 0);
 
 for (const result of [evidencePath, productionRuntime]) {
   assert.equal(result.hardcodedBusinessVocabulary, false);
@@ -89,6 +93,9 @@ console.log(JSON.stringify({
   hardcodedBusinessVocabulary: false,
   crossTenantLeakage: false,
   falseInactivityPrompts: 0,
+  finalAnswerAfterAcknowledgement: true,
+  delayedTtsVerified: true,
+  audioFailures: 0,
   validationExceptions: 0,
   runtimeExceptions: 0,
 }, null, 2));
