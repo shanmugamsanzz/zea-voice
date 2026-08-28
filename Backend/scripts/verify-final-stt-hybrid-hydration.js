@@ -168,7 +168,10 @@ assert.equal(contextualResult.retrievalTrace.primaryQuery, latestUtterance);
 assert.match(contextualResult.retrievalTrace.contextualQuery, /Premium Plan/u);
 assert.equal(contextualResult.retrievalTrace.hydratedEvidence[0].recordId, recordId);
 assert.equal(contextualResult.retrievalTrace.publicationRevisions[0].publicationRevision, 7);
-assert.deepEqual(contextualResult.retrievalTrace.permittedEvidenceIds, contextualResult.evidenceIds);
+assert.deepEqual(
+  contextualResult.retrievalTrace.sourceMap.map((entry) => entry.publishedEvidenceId),
+  contextualResult.evidenceIds,
+);
 
 const category = dependencies({ primaryStrong: true });
 await searchHybridPublishedKnowledge(

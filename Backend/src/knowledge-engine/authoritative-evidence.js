@@ -4,8 +4,9 @@ import { requireEntityId, requireTenantId } from '../rag/tenant-isolation.js';
 import { knowledgeQueryClasses } from './query-classifier.js';
 import { canonicalRecordIdentityKey, typedRecordIdentityKey } from './canonical-record-identity.js';
 import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/knowledge-confidence-config.js';
+import { collectCanonicalRetrievalReservations } from './canonical-retrieval-reservations.js';
 
-export const AUTHORITATIVE_EVIDENCE_VERSION = 2;
+export const AUTHORITATIVE_EVIDENCE_VERSION = 3;
 
 const supportedRecordTypes = new Set([
   'CATALOG_ITEM', 'CATALOG_CATEGORY', 'FAQ', 'CONVERSATION_NODE', 'WORKFLOW_RULE', 'KNOWLEDGE_CHUNK',
@@ -395,6 +396,9 @@ export function fuseCandidateRankings(retrieval, {
   const candidates = selected
     .map((candidate, index) => Object.freeze({
       ...candidate,
+      canonicalIdentityKey: canonicalRecordIdentityKey(candidate, {
+        tenantId: retrieval?.tenantId,
+      }),
       rank: index + 1,
       rrfScore: Math.round(candidate.rrfScore * 1e12) / 1e12,
       channels: Object.freeze([...new Set(candidate.channels)]),
@@ -570,52 +574,14 @@ function rememberedContextCandidate(input) {
 }
 
 function reservedResolutionCandidates(input, classification, resolution, retrieval) {
-  const confidenceConfiguration = resolveKnowledgeConfidenceConfiguration(
-    classification?.confidenceConfiguration ?? resolution?.confidenceConfiguration,
-  );
-  const contextReserved = (retrieval?.queryContext?.reservedRecords ?? []).map((candidate) => ({
+  return collectCanonicalRetrievalReservations({
+    input, classification, resolution,
+  }, retrieval).map((candidate) => ({
     recordId: normalizeId(candidate.recordId),
     recordType: String(candidate.recordType ?? '').toUpperCase(),
-  })).filter((candidate) => candidate.recordId && candidate.recordType);
-  if (classification?.intentClass === knowledgeQueryClasses.COMPARISON_COMPLEX) {
-    const candidates = resolution?.namespaceCandidates?.CATALOG
-      ?? resolution?.routingCandidates ?? [];
-    const explicitlyRequested = (candidate) => {
-      if (candidate?.explicit !== true) return false;
-      const signals = Array.isArray(candidate.signals) ? candidate.signals : [];
-      if (!signals.length) return true;
-      return signals.some((signal) => (
-        signal?.explicit === true
-        && Number(signal.score ?? 0) >= confidenceConfiguration.clarificationConfidence
-        && Number(signal.score ?? 0) >= Number(candidate.score ?? 0) - 0.000001
-      ));
-    };
-    const selected = candidates.filter((candidate) => (
-      explicitlyRequested(candidate)
-      && ['ITEM', 'CATEGORY'].includes(candidate?.entityType)
-      && ['CATALOG_ITEM', 'CATALOG_CATEGORY']
-        .includes(String(candidate?.recordType ?? '').toUpperCase())
-    )).map((candidate) => ({
-      recordId: normalizeId(candidate.recordId),
-      recordType: String(candidate.recordType).toUpperCase(),
-    })).filter((candidate) => candidate.recordId);
-    return [...new Map([...selected, ...contextReserved]
-      .map((candidate) => [recordKey(candidate), candidate])).values()];
-  }
-  const candidate = resolution?.candidate;
-  if (candidate?.explicit !== true) {
-    const remembered = rememberedContextCandidate(input);
-    return [...new Map([
-      ...contextReserved,
-      ...(remembered ? [remembered] : []),
-    ].map((value) => [recordKey(value), value])).values()];
-  }
-  // A category anchor hydrates its current children in the same SQL record;
-  // only the canonical anchor must occupy a reserved RRF slot.
-  return [{
-    recordId: normalizeId(candidate.recordId),
-    recordType: String(candidate.recordType ?? '').toUpperCase(),
-  }].filter((value) => value.recordId && value.recordType);
+    categoryKey: candidate.categoryKey ?? null,
+    reason: candidate.reason,
+  }));
 }
 
 function evidenceFromRow(row, input, fused, context = {}) {
@@ -690,6 +656,43 @@ function evidenceFromRow(row, input, fused, context = {}) {
   });
 }
 
+function verifyHydratedEvidenceRecord(source, input) {
+  const invalid = [];
+  if (normalizeId(source?.tenantId) !== normalizeId(input?.tenantId)) invalid.push('tenantId');
+  if (normalizeId(source?.agentId) !== normalizeId(input?.agentId)) invalid.push('agentId');
+  if (!source?.knowledgeBaseId || !Number.isInteger(source?.publicationRevision)
+    || source.publicationRevision < 1) invalid.push('publicationScope');
+  if (!source?.recordId || !supportedRecordTypes.has(source?.recordType)) {
+    invalid.push('recordIdentity');
+  }
+  if (!source?.documentId || !source?.documentVersionId) invalid.push('documentProvenance');
+  if (String(source?.documentStatus ?? '').toLowerCase() !== 'ready') {
+    invalid.push('documentStatus');
+  }
+  if (String(source?.documentVersionStatus ?? '').toLowerCase() !== 'ready'
+    || source?.documentVersionIsCurrent !== true) invalid.push('documentVersionStatus');
+  const provenance = source?.provenance ?? {};
+  for (const field of [
+    'tenantId', 'agentId', 'knowledgeBaseId', 'publicationRevision',
+    'recordId', 'recordType', 'documentId', 'documentVersionId',
+  ]) {
+    if (normalizeId(provenance[field]) !== normalizeId(source?.[field])) {
+      invalid.push(`provenance.${field}`);
+    }
+  }
+  if (invalid.length) {
+    throw new AppError(503,
+      'PostgreSQL hydration returned evidence with invalid publication provenance',
+      'KNOWLEDGE_AUTHORITATIVE_PROVENANCE_INCOMPLETE', {
+        stage: 'authoritative_hydration',
+        recordId: source?.recordId ?? null,
+        recordType: source?.recordType ?? null,
+        invalidFields: [...new Set(invalid)],
+      });
+  }
+  return source;
+}
+
 export async function rankAndHydrateAuthoritativeEvidence({
   auth,
   input,
@@ -762,7 +765,9 @@ export async function rankAndHydrateAuthoritativeEvidence({
       return result.rows;
     });
   }
-  const fusedById = new Map(fusion.candidates.map((candidate) => [recordKey(candidate), candidate]));
+  const fusedById = new Map(fusion.candidates.map((candidate) => (
+    [candidate.canonicalIdentityKey, candidate]
+  )));
   const remembered = resolution?.candidate?.explicit === true
     ? null : rememberedContextCandidate(input);
   const rememberedRecordKey = recordKey(remembered);
@@ -770,27 +775,35 @@ export async function rankAndHydrateAuthoritativeEvidence({
     ? recordKey(resolution.candidate) : null;
   const evidenceById = new Map();
   for (const row of rows) {
-    const fused = fusedById.get(recordKey({ recordId: row.record_id, recordType: row.record_type }));
+    const hydratedIdentityKey = canonicalRecordIdentityKey({
+      tenantId: input.tenantId,
+      knowledgeBaseId: row.knowledge_base_id,
+      publicationRevision: Number(row.publication_revision),
+      recordId: row.record_id,
+      recordType: row.record_type,
+    });
+    const fused = fusedById.get(hydratedIdentityKey);
     if (!fused || !sameScope(fused, {
       recordType: String(row.record_type).toUpperCase(),
       knowledgeBaseId: row.knowledge_base_id,
       publicationRevision: Number(row.publication_revision),
     })) continue;
-    const key = `${String(row.record_type).toUpperCase()}:${normalizeId(row.record_id)}`;
+    const key = hydratedIdentityKey;
     if (!evidenceById.has(key)) evidenceById.set(key, evidenceFromRow(row, input, fused, {
       rememberedRecordKey, explicitRecordKey,
     }));
   }
   const evidence = [...evidenceById.values()].sort((left, right) => left.rank - right.rank);
-  const hydratedIds = new Set(evidence.map(recordKey));
+  const hydratedIdentityKeys = new Set(evidence.map((source) => canonicalRecordIdentityKey(source)));
+  const hydratedTypedKeys = new Set(evidence.map(recordKey));
   const rejectedRecordIds = fusion.candidates
-    .filter((candidate) => !hydratedIds.has(recordKey(candidate)))
+    .filter((candidate) => !hydratedIdentityKeys.has(candidate.canonicalIdentityKey))
     .map((candidate) => candidate.recordId);
   const selectedCandidateId = recordKey(resolution?.candidate);
   const selectedCandidateWasRanked = fusion.candidates.some((candidate) => (
     recordKey(candidate) === selectedCandidateId
   ));
-  const selectedCandidateHydrated = selectedCandidateId && hydratedIds.has(selectedCandidateId);
+  const selectedCandidateHydrated = selectedCandidateId && hydratedTypedKeys.has(selectedCandidateId);
   if (fusion.candidates.length > 0 && evidence.length === 0) {
     throw new AppError(503,
       'Selected retrieval candidates could not be hydrated from the active PostgreSQL publication',
@@ -816,7 +829,21 @@ export async function rankAndHydrateAuthoritativeEvidence({
         rejectedRecordIds,
       });
   }
-  const missingComparisonRecordKeys = fusion.reservedRecordKeys.filter((key) => !hydratedIds.has(key));
+  if (rejectedRecordIds.length > 0) {
+    throw new AppError(503,
+      'Not every top-ranked candidate was hydrated from the active PostgreSQL publication',
+      'KNOWLEDGE_AUTHORITATIVE_HYDRATION_INCOMPLETE', {
+        stage: 'authoritative_hydration',
+        selectedRecordCount: fusion.candidates.length,
+        hydratedRecordCount: evidence.length,
+        rejectedRecordIds,
+      });
+  }
+  const verifiedRecords = Object.freeze(evidence.map((source) => (
+    verifyHydratedEvidenceRecord(source, input)
+  )));
+  const missingComparisonRecordKeys = fusion.reservedRecordKeys
+    .filter((key) => !hydratedTypedKeys.has(key));
   const missingComparisonRecordIds = reservedCandidates.filter((candidate) => (
     missingComparisonRecordKeys.includes(recordKey(candidate))
   )).map((candidate) => candidate.recordId);
@@ -836,7 +863,8 @@ export async function rankAndHydrateAuthoritativeEvidence({
     agentId,
     callId: input.callId,
     fusion,
-    evidence: Object.freeze(evidence),
+    evidence: verifiedRecords,
+    verifiedRecords,
     ambiguity,
     conflict,
     rejectedRecordIds: Object.freeze(rejectedRecordIds),

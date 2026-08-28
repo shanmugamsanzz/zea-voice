@@ -3,7 +3,7 @@ import {
   knowledgeEngineDecisionTypes,
   knowledgeEngineResponseModes,
 } from '../knowledge-engine/engine-contract.js';
-import { validateFinalKnowledgeResponse } from '../knowledge-engine/safe-response-tool-runtime.js';
+import { validateGroundedClaims } from '../voice/interaction/grounded-claim-validator.js';
 
 function clean(value, maximum = 1_500) {
   return String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
@@ -60,6 +60,35 @@ function resultEvidence(input, result, configuredMessage) {
   });
 }
 
+function validateVerifiedToolSpeech({ input, answer, selectedEvidenceIds, evidence }) {
+  const text = clean(answer, 1_500);
+  if (!text) return Object.freeze({ valid: false, reason: 'empty_response' });
+  const available = new Map(evidence.map((source) => [identity(source.id), source]));
+  const citations = [...new Set((selectedEvidenceIds ?? []).map(identity).filter(Boolean))];
+  if (!citations.length) return Object.freeze({ valid: false, reason: 'citations_required' });
+  const selected = citations.map((id) => available.get(id));
+  if (selected.some((source) => !source)) {
+    return Object.freeze({ valid: false, reason: 'unknown_citation' });
+  }
+  if (selected.some((source) => (
+    identity(source.tenantId) !== identity(input?.tenantId)
+    || identity(source.agentId) !== identity(input?.agentId)
+    || source.recordType !== 'TOOL_RESULT'
+    || source.authoritativeData?.verified !== true
+    || source.authoritativeData?.success !== true
+  ))) return Object.freeze({ valid: false, reason: 'unverified_tool_result_evidence' });
+  const claims = validateGroundedClaims(text, selected, {
+    finalizedUtterance: input?.utterance,
+    knownEntities: input?.memory?.knownEntities,
+  });
+  if (!claims.valid) return claims;
+  return Object.freeze({
+    valid: true,
+    answer: text,
+    evidenceIds: Object.freeze(selected.map((source) => source.id)),
+  });
+}
+
 export function finalizeConfiguredToolResults({ input, results, runtimeProfile } = {}) {
   const values = Array.isArray(results) ? results : [];
   if (!values.length || values.some((result) => (
@@ -87,7 +116,7 @@ export function finalizeConfiguredToolResults({ input, results, runtimeProfile }
   }
 
   const answer = clean(messages.join(' '), 1_500);
-  const validation = validateFinalKnowledgeResponse({
+  const validation = validateVerifiedToolSpeech({
     input,
     answer,
     selectedEvidenceIds: evidence.map((source) => source.id),

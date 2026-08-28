@@ -98,9 +98,8 @@ function answerCardForRecord(record) {
   if (!text || record.record_type === 'knowledge_chunk') return null;
   const metadata = plainObject(record.entity_metadata);
   const actionType = String(metadata.actionType ?? '').toLowerCase();
-  const responseMode = String(plainObject(metadata.actionConfig).responseMode ?? '').toLowerCase();
   const decision = record.record_type === 'workflow_rule' && actionType === 'configured_tool'
-    ? 'TOOL' : 'DIRECT';
+    ? 'TOOL' : 'EVIDENCE';
   return Object.freeze({
     version: KNOWLEDGE_PUBLICATION_BUNDLE_VERSION,
     recordId: record.record_id,
@@ -108,7 +107,7 @@ function answerCardForRecord(record) {
     decision,
     text,
     approved: true,
-    directSafe: decision === 'DIRECT' && (record.record_type !== 'workflow_rule' || responseMode === 'exact'),
+    directSafe: false,
   });
 }
 

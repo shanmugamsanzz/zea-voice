@@ -9,7 +9,28 @@ export const groundedLlmOutputTypes = Object.freeze({
   CLARIFY: 'CLARIFY',
 });
 
+export const deterministicProtocolExceptionTypes = Object.freeze({
+  SAFETY_EMERGENCY: 'SAFETY_EMERGENCY',
+  EXPLICIT_HANGUP: 'EXPLICIT_HANGUP',
+});
+
+export const unifiedNormalTurnContract = Object.freeze({
+  version: NORMAL_TURN_CONTRACT_VERSION,
+  input: Object.freeze(['question', 'memory', 'scope']),
+  output: Object.freeze(Object.values(groundedLlmOutputTypes)),
+  deterministicProtocolExceptions: Object.freeze(
+    Object.values(deterministicProtocolExceptionTypes),
+  ),
+});
+
 const supportedOutputTypes = new Set(Object.values(groundedLlmOutputTypes));
+const supportedProtocolExceptions = new Set(
+  Object.values(deterministicProtocolExceptionTypes),
+);
+
+export function isDeterministicProtocolException(value) {
+  return supportedProtocolExceptions.has(String(value ?? '').trim().toLocaleUpperCase());
+}
 
 function clean(value, maximum = 500) {
   return String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
@@ -181,6 +202,9 @@ export function createNormalTurnInput(value = {}) {
   return Object.freeze({
     contractVersion: NORMAL_TURN_CONTRACT_VERSION,
     scope,
+    question: finalizedQuestion,
+    // Compatibility aliases are read-only adapters for existing retrieval
+    // modules. `question` is the single canonical contract field.
     finalizedQuestion,
     currentQuestion: finalizedQuestion,
     language: clean(value.language ?? sourceMemory.language ?? 'und', 20).toLocaleLowerCase() || 'und',
@@ -192,7 +216,7 @@ export function createNormalTurnInput(value = {}) {
 export function isNormalTurnInput(value) {
   return Boolean(value && value.contractVersion === NORMAL_TURN_CONTRACT_VERSION
     && value.scope?.tenantId && value.scope?.agentId && value.scope?.callId
-    && value.finalizedQuestion && value.memory?.scope);
+    && value.question && value.memory?.scope);
 }
 
 export function toKnowledgeEngineInput(normalTurn) {
@@ -202,7 +226,7 @@ export function toKnowledgeEngineInput(normalTurn) {
     agentId: normalTurn.scope.agentId,
     callId: normalTurn.scope.callId,
     usageDirection: normalTurn.scope.usageDirection,
-    utterance: normalTurn.finalizedQuestion,
+    utterance: normalTurn.question,
     language: normalTurn.language,
     requestedFacts: normalTurn.memory.requestedFacts,
     contextualReferences: normalTurn.memory.contextualReferences,

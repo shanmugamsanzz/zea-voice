@@ -30,8 +30,7 @@ function selectedSources(decision, groundingEnvelope, evidence) {
   // source ID. Validate claims against that exact hydrated object instead of
   // performing a second source lookup through a different path.
   return (groundingEnvelope.sources ?? []).filter((source) => (
-    [source.id, source.publishedEvidenceId, source.recordId]
-      .map(identity).some((candidate) => selected.has(candidate))
+    selected.has(identity(source.id))
   ));
 }
 
@@ -196,6 +195,83 @@ function memoryResolvedContext(decision, selectedEvidence, beforeState, envelope
   const proposedTopic = identity(decision?.stateUpdate?.currentTopic);
   // An explicitly different topic must never be reinterpreted as contextual.
   return !proposedTopic || remembered.has(proposedTopic);
+}
+
+/**
+ * The single post-LLM validation boundary for both spoken responses and tools.
+ * Parsing/normalization has already selected one decision branch; this function
+ * validates that branch against the same hydrated records and runtime schemas.
+ */
+export function validatePostLlmResponseAndTool({
+  decision,
+  selectedEvidence = [],
+  evidenceScope = null,
+  fieldSchemas = [],
+  claimEvidence = [],
+  envelopeEntities = [],
+  finalizedUtterance = '',
+  securityRuntime = {},
+} = {}) {
+  const invalidScope = selectedEvidence.map((source) => (
+    validateEvidenceScope(source, evidenceScope)
+  )).find((validation) => !validation.valid);
+  if (invalidScope) return Object.freeze({ valid: false, reason: invalidScope.reason });
+
+  if ((decision?.stateUpdate?.knownEntities ?? []).some((entity) => (
+    !entitySupportedBySelectedCatalog(entity, selectedEvidence)
+  ))) return Object.freeze({ valid: false, reason: 'unsupported_selected_entity' });
+
+  const recommendation = removeUnsupportedRecommendationSentences(
+    decision?.answer,
+    claimEvidence,
+    { knownEntities: envelopeEntities, finalizedUtterance },
+  );
+  if (recommendation.removed.length > 0 && !recommendation.answer) {
+    return Object.freeze({
+      valid: false,
+      reason: 'unsupported_recommendation',
+      rejectedSentence: recommendation.removed[0],
+    });
+  }
+  const normalizedDecision = recommendation.removed.length > 0
+    ? Object.freeze({ ...decision, answer: recommendation.answer }) : decision;
+
+  const fieldCollection = validateConfiguredFieldCollectionSpeech(
+    [normalizedDecision?.answer, normalizedDecision?.pendingQuestion]
+      .filter(Boolean).join(' '),
+    {
+      fieldSchemas,
+      activeToolAuthorized: securityRuntime.activeToolAuthorized === true,
+    },
+  );
+  if (!fieldCollection.valid) return Object.freeze({
+    valid: false, reason: fieldCollection.reason, field: fieldCollection.field,
+  });
+
+  const claims = validateGroundedClaims(
+    normalizedDecision?.answer,
+    claimEvidence,
+    { knownEntities: envelopeEntities, finalizedUtterance },
+  );
+  if (!claims.valid) return Object.freeze({
+    valid: false,
+    reason: claims.reason,
+    identifiers: Object.freeze([...(claims.identifiers ?? [])]),
+    numbers: Object.freeze([...(claims.numbers ?? [])]),
+    rejectedSentence: claims.sentence ?? null,
+  });
+
+  const security = validateDecisionSecurity({
+    sources: selectedEvidence,
+    toolRequest: normalizedDecision?.toolRequest,
+    runtime: securityRuntime,
+  });
+  return Object.freeze({
+    valid: security.valid === true,
+    reason: security.reason ?? null,
+    decision: normalizedDecision,
+    security,
+  });
 }
 
 /**
@@ -405,14 +481,6 @@ export function applyUnifiedGroundedTurn({
     });
   }
   const selectedEvidence = selectedSources(effectiveDecision, hydratedEnvelope, evidence);
-  const invalidSelectedEvidence = selectedEvidence.map((source) => (
-    validateEvidenceScope(source, evidenceScope)
-  )).find((validation) => !validation.valid);
-  if (invalidSelectedEvidence) {
-    return Object.freeze({
-      valid: false, reason: invalidSelectedEvidence.reason, state: memory.snapshot(),
-    });
-  }
   // An explicit latest-turn Catalog match outranks saved conversational
   // context. A contextual record may answer a pronoun/follow-up only when
   // the primary query did not resolve a Catalog item. This prevents a prior
@@ -440,13 +508,6 @@ export function applyUnifiedGroundedTurn({
     && !selectedCatalogContexts.includes('primary')) {
     return Object.freeze({
       valid: false, reason: 'latest_request_evidence_mismatch', state: beforeState,
-    });
-  }
-  if (effectiveDecision.stateUpdate.knownEntities.some((entity) => (
-    !entitySupportedBySelectedCatalog(entity, selectedEvidence)
-  ))) {
-    return Object.freeze({
-      valid: false, reason: 'unsupported_selected_entity', state: beforeState,
     });
   }
   // Evidence ownership is an invariant at the final speech boundary. General
@@ -546,53 +607,66 @@ export function applyUnifiedGroundedTurn({
     });
   }
   const claimEvidence = catalogFactAnswer ? catalogSources(selectedEvidence) : selectedEvidence;
-  const recommendationSanitization = removeUnsupportedRecommendationSentences(
-    effectiveDecision.answer,
+  const preValidationToolName = effectiveDecision.toolRequest?.name
+    ?? effectiveDecision.stateUpdate.activeToolRequest?.name
+    ?? beforeState.activeToolRequest?.name;
+  const preValidationToolSchema = (runtime.toolSchemas ?? []).find((tool) => (
+    identity(tool?.name) === identity(preValidationToolName)
+  ));
+  const schemaRequiresConfirmation = preValidationToolSchema
+    ?.inputSchema?.['x-requires-confirmation'] === true;
+  const confirmationRequired = schemaRequiresConfirmation || (confirmationConfiguration?.enabled === true
+    && preValidationToolName
+    && String(confirmationConfiguration.intent ?? '').normalize('NFKC').toLocaleLowerCase()
+      .replace(/[^a-z0-9]+/gu, '_').replace(/^_+|_+$/gu, '')
+      === String(preValidationToolName).normalize('NFKC').toLocaleLowerCase()
+        .replace(/[^a-z0-9]+/gu, '_').replace(/^_+|_+$/gu, ''));
+  const postLlmValidation = validatePostLlmResponseAndTool({
+    decision: effectiveDecision,
+    selectedEvidence,
+    evidenceScope,
+    fieldSchemas,
     claimEvidence,
-    { knownEntities: hydratedEnvelope.entities, finalizedUtterance },
-  );
-  if (recommendationSanitization.removed.length > 0) {
-    if (!recommendationSanitization.answer) {
-      return Object.freeze({
-        valid: false,
-        reason: 'unsupported_recommendation',
-        rejectedSentence: recommendationSanitization.removed[0],
-        evidenceIds: Object.freeze([...(effectiveDecision.evidenceIds ?? [])]),
-        state: memory.snapshot(),
-      });
-    }
-    effectiveDecision = Object.freeze({
-      ...effectiveDecision,
-      answer: recommendationSanitization.answer,
-    });
-  }
-  const fieldCollection = validateConfiguredFieldCollectionSpeech(
-    [effectiveDecision.answer, effectiveDecision.pendingQuestion].filter(Boolean).join(' '),
-    {
-      fieldSchemas,
+    envelopeEntities: hydratedEnvelope.entities,
+    finalizedUtterance,
+    securityRuntime: {
+      answer: effectiveDecision.answer,
+      evidenceScope,
+      toolSchemas: runtime.toolSchemas,
+      actionEvidence,
+      catalogEvidence: sourcesByType(selectedEvidence, 'CATALOG_ITEM'),
+      selectedEntities: exactSelectedEntities,
+      activeToolRequest: beforeState.activeToolRequest?.authorizationRecordId
+        ? beforeState.activeToolRequest : effectiveDecision.stateUpdate.activeToolRequest,
+      knownEntities: effectiveDecision.stateUpdate.knownEntities,
+      collectedInformation: {
+        ...(beforeState.collectedInformation ?? {}),
+        ...(effectiveDecision.stateUpdate.collectedInformation ?? {}),
+      },
+      configuredFieldKeys: fieldSchemas.map((field) => field.key),
+      confirmationRequired,
+      requireCurrentActionEvidence: effectiveDecision.toolRequest !== null
+        && !beforeState.activeToolRequest?.authorizationRecordId,
+      safetyPolicies,
       activeToolAuthorized: preliminaryAction?.valid === true,
     },
-  );
-  if (!fieldCollection.valid) {
-    return Object.freeze({
-      valid: false, reason: fieldCollection.reason, field: fieldCollection.field, state: beforeState,
-    });
-  }
-  const claimValidation = validateGroundedClaims(
-    effectiveDecision.answer,
-    claimEvidence,
-    { knownEntities: hydratedEnvelope.entities, finalizedUtterance },
-  );
-  if (!claimValidation.valid) {
+  });
+  const awaitingConfirmation = postLlmValidation.reason === 'confirmation_required'
+    && preliminaryAction?.valid === true;
+  if (!postLlmValidation.valid && !awaitingConfirmation) {
     return Object.freeze({
       valid: false,
-      reason: claimValidation.reason,
-      identifiers: Object.freeze([...(claimValidation.identifiers ?? [])]),
-      numbers: Object.freeze([...(claimValidation.numbers ?? [])]),
-      rejectedSentence: claimValidation.sentence ?? null,
-      evidenceIds: Object.freeze([...(effectiveDecision.evidenceIds ?? [])]),
-      state: memory.snapshot(),
+      reason: postLlmValidation.reason,
+      identifiers: postLlmValidation.identifiers ?? Object.freeze([]),
+      numbers: postLlmValidation.numbers ?? Object.freeze([]),
+      rejectedSentence: postLlmValidation.rejectedSentence ?? null,
+      evidenceIds: effectiveDecision.evidenceIds,
+      toolRequest: null,
+      state: beforeState,
     });
+  }
+  if (postLlmValidation.valid && postLlmValidation.decision !== effectiveDecision) {
+    effectiveDecision = postLlmValidation.decision;
   }
 
   const applied = memory.applyGroundedDecision(effectiveDecision, { turnToken });
@@ -650,58 +724,13 @@ export function applyUnifiedGroundedTurn({
       });
     }
   }
-  const requestedToolSchema = (runtime.toolSchemas ?? []).find((tool) => (
-    identity(tool?.name) === identity(requestedToolName)
-  ));
-  const schemaRequiresConfirmation = requestedToolSchema?.inputSchema?.['x-requires-confirmation'] === true;
-  const confirmationRequired = schemaRequiresConfirmation || (confirmationConfiguration?.enabled === true
-    && requestedToolName
-    && String(confirmationConfiguration.intent ?? '').normalize('NFKC').toLocaleLowerCase()
-      .replace(/[^a-z0-9]+/gu, '_').replace(/^_+|_+$/gu, '')
-      === String(requestedToolName).normalize('NFKC').toLocaleLowerCase()
-        .replace(/[^a-z0-9]+/gu, '_').replace(/^_+|_+$/gu, ''));
-  const security = validateDecisionSecurity({
-    sources: selectedEvidence,
-    toolRequest: effectiveDecision.toolRequest,
-    runtime: {
-      answer: effectiveDecision.answer,
-      evidenceScope,
-      toolSchemas: runtime.toolSchemas,
-      actionEvidence,
-      catalogEvidence: sourcesByType(selectedEvidence, 'CATALOG_ITEM'),
-      selectedEntities: exactSelectedEntities,
-      activeToolRequest: beforeState.activeToolRequest?.authorizationRecordId
-        ? beforeState.activeToolRequest : afterState.activeToolRequest,
-      knownEntities: afterState.knownEntities,
-      collectedInformation: afterState.collectedInformation,
-      configuredFieldKeys: fieldSchemas.map((field) => field.key),
-      confirmationRequired,
-      requireCurrentActionEvidence: effectiveDecision.toolRequest !== null
-        && !beforeState.activeToolRequest?.authorizationRecordId,
-      safetyPolicies,
-    },
-  });
-  const awaitingConfirmation = security.reason === 'confirmation_required' && actionContext?.valid;
-  if (!security.valid) {
-    if (awaitingConfirmation) {
-      afterState = memory.setActiveToolRequest({
-        ...afterState.activeToolRequest,
-        status: 'collecting_information',
-      }, { turnToken });
-    }
-    if (awaitingConfirmation) {
-      // The same-turn fields and Catalog selection remain committed, but the
-      // external operation is suppressed until a later confirmed turn.
-    } else {
-      return Object.freeze({
-        valid: false,
-        reason: security.reason,
-        evidenceIds: effectiveDecision.evidenceIds,
-        stateUpdate: effectiveDecision.stateUpdate,
-        toolRequest: null,
-        state: rollbackMemory(),
-      });
-    }
+  if (awaitingConfirmation) {
+    afterState = memory.setActiveToolRequest({
+      ...afterState.activeToolRequest,
+      status: 'collecting_information',
+    }, { turnToken });
+    // Same-turn fields and the Catalog selection remain committed, while the
+    // external operation is suppressed until a later confirmed turn.
   }
   const nextQuestion = effectiveDecision.responseId ? null : resolveNextConfiguredQuestion({
     decision: effectiveDecision,

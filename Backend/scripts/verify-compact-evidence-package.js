@@ -173,7 +173,7 @@ assert.equal(hydrateGroundingEnvelope(
 ).sources[0].recordId, callerEvidence[0].recordId);
 const wrongRevisionEnvelope = {
   ...preassignedLlmSourceEnvelope,
-  sources: preassignedLlmSourceEnvelope.sources.map((item) => ({
+  sourceMap: preassignedLlmSourceEnvelope.sourceMap.map((item) => ({
     ...item, publicationRevision: item.publicationRevision + 1,
   })),
 };
@@ -184,7 +184,7 @@ assert.equal(hydrateGroundingEnvelope(
 ).mappingFailures[0].reason, 'wrong_revision_evidence');
 const foreignTenantEnvelope = {
   ...preassignedLlmSourceEnvelope,
-  sources: preassignedLlmSourceEnvelope.sources.map((item) => ({
+  sourceMap: preassignedLlmSourceEnvelope.sourceMap.map((item) => ({
     ...item, tenantId: 'foreign-tenant',
   })),
 };
@@ -195,7 +195,7 @@ assert.equal(hydrateGroundingEnvelope(
 ).mappingFailures[0].reason, 'cross_tenant_evidence');
 const missingEvidenceEnvelope = {
   ...preassignedLlmSourceEnvelope,
-  sources: preassignedLlmSourceEnvelope.sources.map((item) => ({
+  sourceMap: preassignedLlmSourceEnvelope.sourceMap.map((item) => ({
     ...item, publishedEvidenceId: 'published:missing:evidence',
   })),
 };

@@ -2,8 +2,11 @@ import assert from 'node:assert/strict';
 import {
   createGroundedLlmOutput,
   createNormalTurnInput,
+  deterministicProtocolExceptionTypes,
   groundedLlmOutputTypes,
+  isDeterministicProtocolException,
   toKnowledgeEngineInput,
+  unifiedNormalTurnContract,
 } from '../src/knowledge-bases/normal-turn-contract.js';
 import { searchParallelHybridCandidates } from '../src/knowledge-bases/parallel-hybrid-search.js';
 import { buildPublicationIndexes } from '../src/knowledge-engine/publication-index-builder.js';
@@ -37,6 +40,13 @@ const normalTurn = createNormalTurnInput({
     knownEntities: [{ name: 'must not be copied as unbounded memory' }],
   },
 });
+assert.deepEqual(unifiedNormalTurnContract.input, ['question', 'memory', 'scope']);
+assert.deepEqual(unifiedNormalTurnContract.output, ['RESPONSE', 'TOOL', 'CLARIFY']);
+assert.deepEqual(unifiedNormalTurnContract.deterministicProtocolExceptions,
+  ['SAFETY_EMERGENCY', 'EXPLICIT_HANGUP']);
+assert.equal(Object.isFrozen(unifiedNormalTurnContract), true);
+assert.equal(Object.isFrozen(unifiedNormalTurnContract.input), true);
+assert.equal(normalTurn.question, 'Tell me more about this option');
 assert.equal(normalTurn.currentQuestion, 'Tell me more about this option');
 assert.equal(normalTurn.memory.activeEntity.recordId,
   '91000000-0000-4000-8000-000000000011');
@@ -62,6 +72,13 @@ for (const type of Object.values(groundedLlmOutputTypes)) {
   assert.equal(output.origin, 'GROUNDED_LLM');
 }
 assert.throws(() => createGroundedLlmOutput('DIRECT', { text: 'invalid' }), /Unsupported/u);
+assert.equal(isDeterministicProtocolException(
+  deterministicProtocolExceptionTypes.SAFETY_EMERGENCY,
+), true);
+assert.equal(isDeterministicProtocolException(
+  deterministicProtocolExceptionTypes.EXPLICIT_HANGUP,
+), true);
+assert.equal(isDeterministicProtocolException('CALL_CONTROL'), false);
 
 const knowledgeBaseId = '91000000-0000-4000-8000-000000000004';
 const job = {

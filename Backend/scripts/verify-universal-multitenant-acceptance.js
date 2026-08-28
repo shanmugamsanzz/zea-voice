@@ -402,6 +402,7 @@ function validationEnvelope(turn) {
     }));
   return {
     found: sources.some((source) => source.callerFacing), sources, entities,
+    sourceMap: turn.llmInput.sourceMap,
     exactCallerResponses: [],
   };
 }

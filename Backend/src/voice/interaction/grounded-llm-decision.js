@@ -128,7 +128,8 @@ function normalizeDecisionEnvelope(value) {
   }
   const normalizedDecision = normalizeDecision(value.decision);
   let compactToolRequest = null;
-  if (value.toolName !== undefined && value.toolName !== null) {
+  if (normalizedDecision === 'action'
+    && value.toolName !== undefined && value.toolName !== null) {
     const toolName = text(value.toolName, 160);
     if (!toolName || typeof value.toolArguments !== 'string') return null;
     try {
@@ -140,51 +141,29 @@ function normalizeDecisionEnvelope(value) {
     } catch {
       return null;
     }
-  } else if (value.toolArguments !== undefined && value.toolArguments !== null) return null;
-  const compactClarificationReason = value.clarificationReason === undefined
+  }
+  const compactClarificationReason = normalizedDecision !== 'clarify'
+    || value.clarificationReason === undefined
     || value.clarificationReason === null ? null : { reason: value.clarificationReason };
   const compactClarificationQuestion = normalizedDecision === 'clarify'
     && value.pendingQuestion === undefined ? value.answer : undefined;
   return {
     decision: value.decision,
-    answer: compactClarificationQuestion === undefined ? (value.answer ?? '') : '',
-    responseId: value.responseId ?? null,
-    evidenceIds: value.evidenceIds ?? value.selectedEvidenceIds
-      ?? value.evidenceSourceIds ?? [],
+    answer: normalizedDecision === 'action' ? ''
+      : (compactClarificationQuestion === undefined ? (value.answer ?? '') : ''),
+    responseId: normalizedDecision === 'answer' ? (value.responseId ?? null) : null,
+    evidenceIds: normalizedDecision === 'clarify' ? []
+      : (value.evidenceIds ?? value.selectedEvidenceIds
+        ?? value.evidenceSourceIds ?? []),
     stateUpdate,
-    pendingQuestion: value.pendingQuestion ?? compactClarificationQuestion ?? null,
-    toolRequest: value.toolRequest ?? compactToolRequest,
-    clarification: value.clarification ?? compactClarificationReason,
+    pendingQuestion: normalizedDecision === 'clarify'
+      ? (value.pendingQuestion ?? compactClarificationQuestion ?? null)
+      : (normalizedDecision === 'answer' ? (value.pendingQuestion ?? null) : null),
+    toolRequest: normalizedDecision === 'action'
+      ? (value.toolRequest ?? compactToolRequest) : null,
+    clarification: normalizedDecision === 'clarify'
+      ? (value.clarification ?? compactClarificationReason) : null,
   };
-}
-
-function compactDecisionBranchError(value) {
-  const compactKeys = ['toolName', 'toolArguments', 'clarificationReason'];
-  if (!compactKeys.some((key) => Object.hasOwn(value, key))) return null;
-  const decision = text(value.decision, 20).toLocaleUpperCase();
-  if (!externalDecisions.includes(decision)) return 'invalid_decision';
-  const answer = text(value.answer, maximumAnswerCharacters);
-  const responseId = value.responseId ?? null;
-  const evidenceIds = Array.isArray(value.evidenceIds) ? value.evidenceIds : [];
-  const toolName = value.toolName ?? null;
-  const toolArguments = value.toolArguments ?? null;
-  const clarificationReason = value.clarificationReason ?? null;
-
-  if (decision === 'RESPONSE') {
-    return toolName !== null || toolArguments !== null || clarificationReason !== null
-      ? 'mixed_decision_payload' : null;
-  }
-  if (decision === 'TOOL') {
-    return answer || responseId !== null || clarificationReason !== null
-      || typeof toolName !== 'string' || !toolName.trim()
-      || typeof toolArguments !== 'string'
-      ? 'mixed_decision_payload' : null;
-  }
-  return !answer || responseId !== null || evidenceIds.length > 0
-    || toolName !== null || toolArguments !== null
-    || typeof clarificationReason !== 'string'
-    || !clarificationReasons.has(text(clarificationReason, 64).toLocaleLowerCase())
-    ? 'mixed_decision_payload' : null;
 }
 
 function normalizeFieldValue(value, schema, envelope) {
@@ -525,8 +504,6 @@ export function groundedDecisionJsonSchema(envelope, runtime = {}) {
 export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
   const parsedObject = parseObject(raw);
   if (!parsedObject) return Object.freeze({ valid: false, reason: 'invalid_json' });
-  const compactBranchError = compactDecisionBranchError(parsedObject);
-  if (compactBranchError) return Object.freeze({ valid: false, reason: compactBranchError });
   const parsed = normalizeDecisionEnvelope(parsedObject);
   if (!parsed || !exactShape(parsed)) {
     return Object.freeze({ valid: false, reason: 'invalid_response_shape' });
@@ -564,9 +541,8 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
     && envelope.found !== true) {
     return Object.freeze({ valid: false, reason: 'incomplete_evidence_metadata' });
   }
-  const allowedSources = new Map((envelope.sources ?? []).flatMap((source) => (
-    [source.id, source.publishedEvidenceId, source.recordId]
-      .filter(Boolean).map((candidate) => [identity(candidate), source])
+  const allowedSources = new Map((envelope.sources ?? []).map((source) => (
+    [identity(source.id), source]
   )));
   const requiredEvidenceIds = decision === 'answer' && parsed.responseId === null
     ? list(runtime.requiredEvidenceIds, maximumSources) : [];

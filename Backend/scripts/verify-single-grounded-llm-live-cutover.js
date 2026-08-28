@@ -18,8 +18,15 @@ assert.equal((runTurn.match(/this\.#llm\(/gu) ?? []).length, 1,
   'each normal live turn must contain exactly one grounded LLM invocation');
 assert.doesNotMatch(runTurn, /engineDecision\.type\s*===\s*knowledgeEngineDecisionTypes\.(?:TOOL|CLARIFY)/u,
   'normal TOOL and CLARIFY decisions must not execute before the grounded LLM');
-assert.match(runTurn, /\['SAFETY_EMERGENCY', 'CALL_CONTROL'\]\.includes\(intentClass\)/u,
-  'only priority protocol intents may use deterministic speech');
+assert.match(runTurn,
+  /intentClass\s*\n\s*=== deterministicProtocolExceptionTypes\.SAFETY_EMERGENCY/u,
+  'only a safety emergency may use deterministic response speech');
+assert.doesNotMatch(runTurn, /deterministicPriority[^;]+CALL_CONTROL/su,
+  'generic call-control routing must not bypass the normal-turn LLM');
+assert.match(orchestrator, /classifyFinalCallEndUtterance\(/u,
+  'configured explicit hang-up must remain a deterministic protocol exception');
+assert.match(orchestrator, /caller_requested_hangup/u,
+  'explicit hang-up must close the call without invoking the normal-turn LLM');
 assert.match(runTurn, /validatedNormalTurn\s*=\s*Boolean\(response\?\.normalTurnOutput\)/u,
   'the live turn must recognize only validated unified LLM output');
 assert.doesNotMatch(runTurn, /applyResolvedContext/u,

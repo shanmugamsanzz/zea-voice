@@ -322,13 +322,14 @@ function authorizedTools(evidence, runtimeProfile) {
 export function buildCompactEvidenceBundle({
   input, classification, resolution, authoritative, runtimeProfile, decision,
 } = {}) {
-  if (decision?.type !== knowledgeEngineDecisionTypes.RESPONSE
-    || decision?.mode !== knowledgeEngineResponseModes.GROUNDED_LLM) return null;
   const allEvidence = authoritative?.evidence ?? [];
-  const allowedIds = new Set((decision.evidenceIds ?? []).map(normalizedId));
+  const allowedIds = decision?.type === knowledgeEngineDecisionTypes.RESPONSE
+    && decision?.mode === knowledgeEngineResponseModes.GROUNDED_LLM
+    ? new Set((decision.evidenceIds ?? []).map(normalizedId)) : null;
   const topEvidence = allEvidence.filter((source) => (
     source.callerFacing === true
-    && (allowedIds.has(normalizedId(source.id)) || allowedIds.has(normalizedId(source.recordId)))
+    && (!allowedIds || allowedIds.has(normalizedId(source.id))
+      || allowedIds.has(normalizedId(source.recordId)))
   )).slice(0, 5).map(compactEvidence);
   const guidance = allEvidence.filter((source) => (
     source.recordType === 'CONVERSATION_NODE' && source.callerFacing === false
@@ -394,6 +395,7 @@ export function compactBundleAsKnowledge(knowledge = {}) {
       actionEvidence: evidenceBundle.actionAuthorizationEvidence,
       entities: evidenceBundle.entities,
       evidenceIds: Object.freeze(evidenceBundle.topEvidence.map((source) => source.id)),
+      sourceMap: evidenceBundle.sourceMap,
       publicationRevisions: knowledge.tenantEvidence?.publicationRevisions ?? [],
       llmEvidenceBundle: evidenceBundle,
     }),

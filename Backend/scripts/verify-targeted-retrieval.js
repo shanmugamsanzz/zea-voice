@@ -84,8 +84,12 @@ let searchCalls = 0;
 let embeddedText = null;
 let qdrantOptions = null;
 let startedChannels = [];
+let observedChannelScopes = [];
 const providers = {
-  onChannelStart: (channel) => { startedChannels.push(channel); },
+  onChannelStart: (channel, scope) => {
+    startedChannels.push(channel);
+    observedChannelScopes.push(scope);
+  },
   embed: async (text) => { embedCalls += 1; embeddedText = text; return [0.1, 0.2]; },
   search: async (_tenant, _vector, options) => {
     searchCalls += 1;
@@ -130,6 +134,17 @@ assert.ok(retrieval.channels.bm25.some((candidate) => candidate.recordId === alp
 assert.deepEqual(retrieval.channels.qdrant.map((candidate) => candidate.recordId), [beta.record_id]);
 assert.deepEqual(new Set(startedChannels), new Set(['structured', 'bm25', 'qdrant']),
   'Structured, BM25 and Qdrant channels must all be scheduled for normal knowledge turns');
+assert.equal(new Set(observedChannelScopes).size, 1,
+  'Every parallel channel must receive the same immutable retrieval scope');
+assert.ok(Object.isFrozen(observedChannelScopes[0]));
+assert.equal(observedChannelScopes[0].tenantId, tenantId);
+assert.equal(observedChannelScopes[0].agentId, agentId);
+assert.equal(observedChannelScopes[0], retrieval.retrievalScope);
+assert.deepEqual(observedChannelScopes[0].knowledgeBases,
+  [{ id: knowledgeBaseId, publicationRevision: 7 }]);
+assert.equal(observedChannelScopes[0].usageDirection, 'inbound');
+assert.deepEqual(observedChannelScopes[0].namespaces, ['CATALOG']);
+assert.deepEqual(new Set(observedChannelScopes[0].recordTypes), new Set(retrieval.recordTypes));
 assert.equal(embedCalls, 1);
 assert.equal(searchCalls, 1);
 
@@ -334,8 +349,14 @@ for (const forbidden of [
 ]) assert.doesNotMatch(serialized, new RegExp(forbidden, 'u'));
 for (const channel of Object.values(retrieval.channels)) {
   for (const candidate of channel) {
+    assert.equal(candidate.canonicalIdentity.tenantId, tenantId.toLowerCase());
+    assert.equal(candidate.canonicalIdentity.knowledgeBaseId, knowledgeBaseId.toLowerCase());
+    assert.equal(candidate.canonicalIdentity.publicationRevision, 7);
+    assert.equal(candidate.canonicalIdentity.recordId, candidate.recordId.toLowerCase());
+    assert.ok(candidate.canonicalIdentityKey);
     assert.deepEqual(Object.keys(candidate).sort(), [
-      'channel', 'knowledgeBaseId', 'publicationRevision', 'rank',
+      'canonicalIdentity', 'canonicalIdentityKey', 'channel', 'knowledgeBaseId',
+      'namespace', 'publicationRevision', 'rank',
       'recordId', 'recordType', 'score', ...(candidate.tokenCoverage === undefined ? [] : ['tokenCoverage']),
       ...(candidate.matchMethod === undefined ? [] : ['matchMethod']),
       ...(candidate.categoryKey === undefined ? [] : ['categoryKey']),

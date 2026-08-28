@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import {
   createGroundedLlmOutput,
   groundedLlmOutputTypes,
@@ -18,6 +18,15 @@ const facade = await readFile(
 const runtime = await readFile(
   new URL('../src/knowledge-bases/grounded-normal-turn-runtime.js', import.meta.url), 'utf8',
 );
+const artifactRuntime = await readFile(
+  new URL('../src/knowledge-engine/runtime-service.js', import.meta.url), 'utf8',
+);
+const publicationBuilder = await readFile(
+  new URL('../src/knowledge-engine/publication-index-builder.js', import.meta.url), 'utf8',
+);
+const verifiedToolResult = await readFile(
+  new URL('../src/knowledge-bases/verified-tool-result.js', import.meta.url), 'utf8',
+);
 const runTurn = orchestrator.slice(
   orchestrator.indexOf('async #runTurn('),
   orchestrator.indexOf('async #synthesizeWelcome('),
@@ -26,14 +35,40 @@ const runTurn = orchestrator.slice(
 assert.equal((runTurn.match(/this\.#llm\(/gu) ?? []).length, 1);
 assert.doesNotMatch(runTurn,
   /engineDecision\.type\s*===\s*knowledgeEngineDecisionTypes\.(?:TOOL|CLARIFY)/u);
-assert.match(runTurn, /\['SAFETY_EMERGENCY', 'CALL_CONTROL'\]\.includes\(intentClass\)/u);
+assert.match(runTurn,
+  /intentClass\s*\n\s*=== deterministicProtocolExceptionTypes\.SAFETY_EMERGENCY/u);
+assert.doesNotMatch(runTurn, /deterministicPriority[^;]+CALL_CONTROL/su);
 assert.match(facade, /retrieveGroundedNormalTurn as retrieveTenantEvidence/u);
+assert.match(facade,
+  /searchPublishedKnowledge[\s\S]+retrieveGroundedNormalTurn\(auth, engineInput/u,
+  'runtime-query API must use the live grounded normal-turn runtime');
 assert.doesNotMatch(runtime, /runObservedKnowledgeTurn|planSafeKnowledgeResponse|refineKnowledgeResolution/u);
+assert.doesNotMatch(artifactRuntime,
+  /export (?:async )?function (?:retrieveTenantEvidence|searchPublishedKnowledge)|runObservedKnowledgeTurn/u,
+  'artifact cache service must not expose a second turn engine');
+assert.doesNotMatch(publicationBuilder, /['"]DIRECT['"]|directSafe:\s*true/u,
+  'publication metadata must never authorize a legacy direct answer');
+assert.doesNotMatch(verifiedToolResult, /safe-response-tool-runtime/u,
+  'verified tool speech must not depend on the removed legacy validator');
+await assert.rejects(access(new URL(
+  '../src/knowledge-engine/safe-response-tool-runtime.js', import.meta.url,
+)));
+await assert.rejects(access(new URL(
+  '../src/knowledge-engine/voice-turn-latency.js', import.meta.url,
+)));
 assert.equal((runtime.match(/prepareKnowledgeQuery\(/gu) ?? []).length, 1,
   'normal-turn runtime must classify once through query preparation');
+assert.match(runtime, /classification:\s*prepared\.retrievalHints/u,
+  'normal-turn retrieval must consume classifier output only as retrieval hints');
+assert.doesNotMatch(runtime,
+  /prepared\.retrievalHints[^;]+knowledgeEngineDecisionTypes\.(?:RESPONSE|TOOL|CLARIFY)/su,
+  'retrieval hints must never select a caller-facing decision');
 assert.match(runtime, /retrieveRankHydrateGroundedTurn\(/u);
 assert.match(runtime, /\['structured', 'bm25', 'qdrant'\]/u);
-assert.match(runtime, /mode:\s*knowledgeEngineResponseModes\.GROUNDED_LLM/u);
+assert.match(runtime, /const protocolDecision = priorityDecision\(prepared, evidence\)/u);
+assert.match(runtime, /decision:\s*protocolDecision/u);
+assert.doesNotMatch(runtime, /function normalDecision\(/u);
+assert.doesNotMatch(runtime, /single_grounded_llm_required/u);
 assert.doesNotMatch(orchestrator, /Please ask me again and I will answer briefly/u);
 assert.doesNotMatch(orchestrator, /finalizeVerifiedToolResults/u);
 

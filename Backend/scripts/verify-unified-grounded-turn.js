@@ -1,6 +1,38 @@
 import assert from 'node:assert/strict';
 import { genericConversationStateFields, openGenericConversationState } from '../src/voice/interaction/generic-conversation-state.js';
-import { applyUnifiedGroundedTurn } from '../src/voice/interaction/unified-grounded-turn.js';
+import { deterministicSourceEntry } from '../src/knowledge-engine/deterministic-source-mapping.js';
+import { applyUnifiedGroundedTurn as applyVerifiedGroundedTurn } from '../src/voice/interaction/unified-grounded-turn.js';
+
+function applyUnifiedGroundedTurn(input) {
+  const scopedRevision = input.evidenceScope?.publicationRevisions?.[0] ?? {};
+  const authoritative = (input.evidence ?? []).map((record, index) => ({
+    tenantId: input.evidenceScope?.tenantId ?? 'tenant-a',
+    agentId: input.evidenceScope?.agentId ?? 'agent-a',
+    knowledgeBaseId: scopedRevision.knowledgeBaseId ?? 'kb-test',
+    publicationRevision: scopedRevision.publicationRevision ?? 1,
+    documentId: `document-${index + 1}`,
+    documentVersionId: `version-${index + 1}`,
+    hydrationValidated: true,
+    documentStatus: 'ready',
+    documentVersionStatus: 'ready',
+    documentVersionIsCurrent: true,
+    ...record,
+  }));
+  const sourceMap = input.groundingEnvelope?.sourceMap
+    ?? (input.groundingEnvelope?.sources ?? []).map((source) => {
+      const record = authoritative.find((candidate) => (
+        candidate.id === source.publishedEvidenceId
+        || candidate.recordId === source.recordId
+        || candidate.id === source.id
+      ));
+      return deterministicSourceEntry(record ?? source, source.id);
+    });
+  return applyVerifiedGroundedTurn({
+    ...input,
+    evidence: authoritative,
+    groundingEnvelope: { ...input.groundingEnvelope, sourceMap },
+  });
+}
 
 function unifiedDecision(value) {
   return JSON.stringify({

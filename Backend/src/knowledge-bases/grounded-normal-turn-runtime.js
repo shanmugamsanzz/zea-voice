@@ -5,11 +5,9 @@ import {
   isKnowledgeEngineInput,
   knowledgeEngineDecisionTypes,
   knowledgeEngineResponseModes,
-  technicalClarificationDecision,
 } from '../knowledge-engine/engine-contract.js';
 import { prepareKnowledgeQuery } from '../knowledge-engine/fast-query-preparation.js';
 import { resolveCanonicalTopicMemory } from '../knowledge-engine/canonical-topic-memory.js';
-import { buildDeterministicSourceMap } from '../knowledge-engine/deterministic-source-mapping.js';
 import {
   loadPublishedEngineArtifacts,
 } from '../knowledge-engine/runtime-service.js';
@@ -22,6 +20,7 @@ export const GROUNDED_NORMAL_TURN_RUNTIME_VERSION = 1;
 const recoverableHydrationErrors = new Set([
   'KNOWLEDGE_AUTHORITATIVE_HYDRATION_EMPTY',
   'KNOWLEDGE_SELECTED_CANDIDATE_NOT_HYDRATED',
+  'KNOWLEDGE_AUTHORITATIVE_HYDRATION_INCOMPLETE',
   'KNOWLEDGE_AUTHORITATIVE_PROVENANCE_INCOMPLETE',
   'KNOWLEDGE_COMPARISON_HYDRATION_INCOMPLETE',
   'KNOWLEDGE_GROUNDED_PACKAGE_EMPTY',
@@ -193,7 +192,7 @@ function compactBundle(prepared, turn, publicationRevisions) {
     recentRelevantTurns: turn.llmInput.recentRelevantTurns,
     intentClass: prepared.intentClass,
     topEvidence: Object.freeze(callerFacing),
-    sourceMap: buildDeterministicSourceMap(callerFacing),
+    sourceMap: turn.llmInput.sourceMap,
     conversationGuidance: Object.freeze([]),
     workflowAuthorization: turn.llmInput.workflowAuthorization,
     authorizedToolSchemas: turn.llmInput.toolSchemas,
@@ -205,33 +204,25 @@ function compactBundle(prepared, turn, publicationRevisions) {
 }
 
 function priorityDecision(prepared, evidence) {
-  if (!prepared.priorityIntent) return null;
-  const preferredRecordType = prepared.intentClass === 'SAFETY_EMERGENCY'
-    ? 'WORKFLOW_RULE' : 'CONVERSATION_NODE';
+  if (prepared.deterministicProtocolException !== 'SAFETY_EMERGENCY') return null;
+  const preferredRecordType = 'WORKFLOW_RULE';
   const source = evidence.find((item) => item.recordType === preferredRecordType)
     ?? evidence.find((item) => ['WORKFLOW_RULE', 'CONVERSATION_NODE'].includes(item.recordType));
   const data = source?.authoritativeData ?? {};
   const text = clean(data.responseTemplate ?? data.response ?? data.content ?? source?.content);
-  if (!source || !text) return technicalClarificationDecision('priority_protocol_evidence_missing');
+  if (!source || !text) {
+    throw new AppError(503,
+      'Published emergency protocol evidence is unavailable',
+      'KNOWLEDGE_PRIORITY_PROTOCOL_EVIDENCE_MISSING', {
+        stage: 'priority_protocol_evidence',
+      });
+  }
   return createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.RESPONSE, {
     reason: 'published_priority_protocol_response',
     confidence: prepared.classification.confidence,
     evidenceIds: [source.id],
     mode: knowledgeEngineResponseModes.DETERMINISTIC,
     response: { text, recordId: source.recordId, recordType: source.recordType },
-  });
-}
-
-function normalDecision(prepared, evidence) {
-  const callerFacing = evidence.filter((source) => source.callerFacing === true);
-  if (!callerFacing.length) return technicalClarificationDecision('grounded_evidence_unavailable');
-  return createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.RESPONSE, {
-    reason: 'single_grounded_llm_required',
-    confidence: prepared.classification.confidence,
-    evidenceIds: callerFacing
-      .map((source) => source.id ?? source.publishedEvidenceId)
-      .filter(Boolean),
-    mode: knowledgeEngineResponseModes.GROUNDED_LLM,
   });
 }
 
@@ -258,7 +249,7 @@ export async function retrieveGroundedNormalTurn(auth, input, dependencies = {})
     const turn = await retrieveRankHydrateGroundedTurn({
       auth,
       input: prepared.input,
-      classification: prepared.classification,
+      classification: prepared.retrievalHints,
       resolution: prepared.resolution,
       publicationBundles: artifacts.bundles,
       sparseIndexes: artifacts.sparseIndexes,
@@ -274,8 +265,9 @@ export async function retrieveGroundedNormalTurn(auth, input, dependencies = {})
     const packagedCallerFacing = assertNonEmptyGroundedPackage(
       turn.authoritative, turn.llmInput,
     );
-    const decision = priorityDecision(prepared, evidence)
-      ?? normalDecision(prepared, packagedCallerFacing);
+    // Retrieval has no normal-turn decision authority. Only a deterministic
+    // emergency protocol may be selected before the single grounded LLM.
+    const protocolDecision = priorityDecision(prepared, evidence);
     const llmEvidenceBundle = compactBundle(prepared, turn, publicationRevisions);
     const packagedEvidenceIds = new Set(packagedCallerFacing
       .map((source) => source.publishedEvidenceId)
@@ -308,9 +300,9 @@ export async function retrieveGroundedNormalTurn(auth, input, dependencies = {})
         ? [llmEvidenceBundle.canonicalEntity] : []),
       evidenceIds: Object.freeze(sources.map((source) => source.id)),
       publicationRevisions,
-      decision,
+      decision: protocolDecision,
       llmEvidenceBundle,
-      classification: prepared.classification,
+      classification: prepared.retrievalHints,
       resolution: prepared.resolution,
       authoritative: turn.authoritative,
       retrieval: Object.freeze({
@@ -325,7 +317,6 @@ export async function retrieveGroundedNormalTurn(auth, input, dependencies = {})
         primaryQuery: prepared.input.utterance,
         retrievedCandidates: turn.authoritative.fusion.candidates,
         hydratedEvidence: evidence,
-        permittedEvidenceIds: sources.map((source) => source.id),
         sourceMap: llmEvidenceBundle.sourceMap,
         rejectedCandidates: turn.authoritative.rejectedRecordIds ?? [],
         publicationRevisions,
@@ -358,9 +349,7 @@ export async function retrieveGroundedNormalTurn(auth, input, dependencies = {})
       entities: Object.freeze([]),
       evidenceIds: Object.freeze([]),
       publicationRevisions: revisions(artifacts?.publications),
-      decision: technicalClarificationDecision(
-        input.abortSignal?.aborted ? 'knowledge_cancelled' : (error.code ?? 'knowledge_engine_unavailable'),
-      ),
+      decision: null,
       diagnostic: Object.freeze({
         stage: error.details?.stage ?? 'grounded_normal_turn_unavailable',
         errorCode: error.code ?? 'KNOWLEDGE_ENGINE_UNAVAILABLE',

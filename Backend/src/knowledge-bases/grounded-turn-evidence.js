@@ -13,7 +13,7 @@ import { selectCompleteConversationTurns } from '../knowledge-engine/conversatio
 import { resolveLiveMemoryConfiguration } from '../voice/interaction/live-memory-config.js';
 import { env } from '../config/env.js';
 
-export const GROUNDED_TURN_EVIDENCE_VERSION = 2;
+export const GROUNDED_TURN_EVIDENCE_VERSION = 3;
 const maximumEvidenceRecords = 5;
 
 async function completeStageWithin(stage, operation, timeoutMs) {
@@ -34,19 +34,6 @@ async function completeStageWithin(stage, operation, timeoutMs) {
     clearTimeout(timer);
   }
 }
-
-const namespaceRecordTypes = Object.freeze({
-  CATALOG: new Set(['CATALOG_ITEM', 'CATALOG_CATEGORY']),
-  FAQ: new Set(['FAQ']),
-  CONVERSATION: new Set(['CONVERSATION_NODE']),
-  WORKFLOW: new Set(['WORKFLOW_RULE']),
-  CALL_CONTROL: new Set(['WORKFLOW_RULE']),
-  GENERAL: new Set(['KNOWLEDGE_CHUNK', 'GENERAL_KNOWLEDGE']),
-});
-
-const catalogIntentClasses = new Set([
-  'DETAILS_OR_PRICE', 'CATEGORY_OVERVIEW', 'COMPARISON_COMPLEX',
-]);
 
 function normalizedId(value) {
   return String(value ?? '').trim().toLocaleLowerCase();
@@ -118,135 +105,6 @@ export function assertCompleteAuthoritativeHydration(authoritative, input, class
     });
 }
 
-function relevantHydratedEvidence(
-  sources, classification = {}, resolution = {}, input = {}, authoritative = {},
-) {
-  const intentClass = String(classification.intentClass ?? '').trim().toUpperCase();
-  const understanding = input?.queryUnderstanding ?? {};
-  const namespace = intendedNamespace(classification, resolution, understanding);
-  const selectedTypes = namespaceRecordTypes[namespace]
-    ?? (catalogIntentClasses.has(intentClass) ? namespaceRecordTypes.CATALOG : null);
-  const rememberedTool = input?.memory?.activeTool ?? input?.canonicalCallMemory?.activeTool;
-  const actionTurn = intentClass === 'ACTION_TOOL_REQUEST'
-    || (!namespace && Boolean(rememberedTool));
-  const protocolTurn = ['SAFETY_EMERGENCY', 'CALL_CONTROL'].includes(intentClass);
-  const currentRoute = understanding.explicitCurrentRoute
-    ?? understanding.currentRouteSignal
-    ?? null;
-  const authoritativeCurrentRoute = authoritativeRoute(understanding, currentRoute);
-  const currentRouteType = String(
-    authoritativeCurrentRoute?.recordType ?? currentRoute?.recordType ?? '',
-  ).toUpperCase();
-  const currentRouteKey = reservationKey(authoritativeCurrentRoute ?? currentRoute);
-  const currentRouteHydrated = Boolean(currentRouteKey)
-    && sources.some((source) => reservationKey(source) === currentRouteKey);
-  const currentNonCatalogRequest = currentRouteHydrated
-    && Boolean(currentRouteType)
-    && !['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(currentRouteType);
-  const explicitCandidates = [
-    ...(understanding.explicitEntities ?? []),
-    ...(understanding.explicitCategories ?? []),
-    ...(understanding.comparisonEntities ?? []),
-    ...(resolution?.candidate?.explicit === true ? [resolution.candidate] : []),
-  ];
-  const selectedCandidates = [
-    ...(resolution?.candidate?.explicit === true
-      ? [resolution.candidate.recordId, ...(resolution.candidate.evidenceRecordIds ?? [])]
-        .map((recordId) => ({
-          ...resolution.candidate,
-          recordId,
-          recordType: resolution.candidate.recordType
-            ?? (resolution.candidate.entityType === 'CATEGORY'
-              ? 'CATALOG_CATEGORY' : 'CATALOG_ITEM'),
-        })) : []),
-    ...explicitCandidates,
-    ...requiredReservations(authoritative),
-    ...(authoritativeCurrentRoute ? [authoritativeCurrentRoute] : []),
-  ].filter(Boolean);
-  const hasExplicitCurrentEntity = explicitCandidates.length > 0;
-  const contextDependent = understanding.contextDependent === true
-    || resolution?.contextDependent === true;
-  if (!hasExplicitCurrentEntity && contextDependent) {
-    for (const remembered of [
-      [input?.canonicalCallMemory?.activeCategory, 'CATALOG_CATEGORY'],
-      [input?.canonicalCallMemory?.activeEntity, 'CATALOG_ITEM'],
-      [input?.memory?.activeCategory, 'CATALOG_CATEGORY'],
-      [input?.memory?.activeEntity, 'CATALOG_ITEM'],
-    ]) {
-      const [value, recordType] = remembered;
-      if (value?.recordId ?? value?.id) selectedCandidates.push({ ...value, recordType });
-    }
-  }
-  const sourceKeys = new Map(sources.map((source) => [canonicalEvidenceKey(source, input), source]));
-  const selectedKeys = new Set();
-  const unscopedTypedKeys = new Set(sources.filter((source) => (
-    !canonicalRecordIdentityKey(source, {
-      tenantId: source?.tenantId ?? input?.tenantId,
-      knowledgeBaseId: source?.knowledgeBaseId,
-      publicationRevision: source?.publicationRevision,
-    })
-  )).map(reservationKey).filter(Boolean));
-  const selectedUnscopedTypedKeys = new Set();
-  const selectedPriority = new Map();
-  for (const [priority, candidate] of selectedCandidates.entries()) {
-    const typedKey = reservationKey(candidate);
-    if (typedKey && unscopedTypedKeys.has(typedKey)) selectedUnscopedTypedKeys.add(typedKey);
-    for (const key of matchingCanonicalEvidenceKeys(candidate, sources, input)) {
-      selectedKeys.add(key);
-      if (!selectedPriority.has(key)) selectedPriority.set(key, priority);
-    }
-  }
-  const filtered = sources.filter((source) => {
-    const recordType = String(source.recordType ?? '').toUpperCase();
-    const sourceKey = canonicalEvidenceKey(source, input);
-    const sourceTypedKey = reservationKey(source);
-    const actionType = String(source.authoritativeData?.actionType ?? '').toLowerCase();
-    const callerFacingWorkflowResponse = recordType === 'WORKFLOW_RULE'
-      && source.callerFacing === true && actionType === 'respond';
-    if (selectedKeys.has(sourceKey)
-      || (sourceKey?.includes(':unscoped:')
-        && selectedUnscopedTypedKeys.has(sourceTypedKey))) return true;
-    if (callerFacingWorkflowResponse) return !hasExplicitCurrentEntity
-      || currentNonCatalogRequest;
-    if (recordType === 'WORKFLOW_RULE') return actionTurn || protocolTurn;
-    if (currentNonCatalogRequest
-      && ['KNOWLEDGE_CHUNK', 'GENERAL_KNOWLEDGE'].includes(recordType)) {
-      return source.callerFacing === true;
-    }
-    if (currentNonCatalogRequest
-      && ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(recordType)) return false;
-    if (intentClass === 'CATEGORY_OVERVIEW'
-      && recordType === 'CATALOG_CATEGORY' && source.callerFacing === true) return true;
-    // A resolver route that was not part of the authoritative hydrated set
-    // must not discard every valid record. Restrictive selection applies only
-    // to canonical identities that are present in this same tenant-scoped
-    // PostgreSQL result.
-    if (selectedKeys.size > 0 || selectedUnscopedTypedKeys.size > 0) return false;
-    if (selectedTypes) return selectedTypes.has(recordType);
-    if (intentClass === 'ACKNOWLEDGEMENT') {
-      return ['CONVERSATION_NODE', 'FAQ'].includes(recordType);
-    }
-    // With no resolved namespace, retain caller-facing discovery evidence.
-    // Internal Workflow records are admitted only by the action/protocol rule
-    // above, so unrelated authorization cannot influence a normal answer.
-    return source.callerFacing === true;
-  });
-  return filtered.sort((left, right) => {
-    const leftKey = canonicalEvidenceKey(left, input);
-    const rightKey = canonicalEvidenceKey(right, input);
-    const leftSelected = selectedKeys.has(leftKey)
-      || (leftKey?.includes(':unscoped:')
-        && selectedUnscopedTypedKeys.has(reservationKey(left))) ? 0 : 1;
-    const rightSelected = selectedKeys.has(rightKey)
-      || (rightKey?.includes(':unscoped:')
-        && selectedUnscopedTypedKeys.has(reservationKey(right))) ? 0 : 1;
-    return leftSelected - rightSelected
-      || Number(selectedPriority.get(leftKey) ?? 999) - Number(selectedPriority.get(rightKey) ?? 999)
-      || Number(sourceKeys.get(leftKey)?.rank ?? left.rank ?? 999)
-        - Number(sourceKeys.get(rightKey)?.rank ?? right.rank ?? 999);
-  });
-}
-
 function clean(value, maximum = 2_000) {
   return String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
     .replace(/\s+/gu, ' ').trim().slice(0, maximum);
@@ -254,50 +112,6 @@ function clean(value, maximum = 2_000) {
 
 function identity(value) {
   return clean(value, 240).toLocaleLowerCase();
-}
-
-function namespaceForRecordType(value) {
-  const recordType = clean(value, 80).toUpperCase();
-  if (['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(recordType)) return 'CATALOG';
-  if (recordType === 'FAQ') return 'FAQ';
-  if (recordType === 'CONVERSATION_NODE') return 'CONVERSATION';
-  if (recordType === 'WORKFLOW_RULE') return 'WORKFLOW';
-  if (['KNOWLEDGE_CHUNK', 'GENERAL_KNOWLEDGE'].includes(recordType)) return 'GENERAL';
-  return null;
-}
-
-function authoritativeRoute(understanding = {}, route = null) {
-  const confidenceConfiguration = resolveKnowledgeConfidenceConfiguration(
-    understanding?.confidenceConfiguration,
-  );
-  if (!route?.recordId || !route?.recordType) return null;
-  if (route === understanding.explicitCurrentRoute) return route;
-  if (route.explicit === true
-    && Number(route.score ?? 0) >= confidenceConfiguration.highConfidence) return route;
-  // A prevalidated route may omit scoring metadata in internal callers. A
-  // scored medium route is never promoted by this compatibility branch.
-  if (route.explicit === undefined && route.score === undefined) return route;
-  return null;
-}
-
-function intendedNamespace(classification = {}, resolution = {}, understanding = {}) {
-  if ((understanding.explicitEntities?.length ?? 0) > 0
-    || (understanding.explicitCategories?.length ?? 0) > 0
-    || (understanding.comparisonEntities?.length ?? 0) > 0) return 'CATALOG';
-  const currentRoute = understanding.explicitCurrentRoute
-    ?? understanding.currentRouteSignal ?? null;
-  const authoritativeCurrentRoute = authoritativeRoute(understanding, currentRoute);
-  const explicitNamespace = namespaceForRecordType(authoritativeCurrentRoute?.recordType);
-  if (explicitNamespace) return explicitNamespace;
-  const intentClass = clean(classification.intentClass, 80).toUpperCase();
-  if (catalogIntentClasses.has(intentClass)) return 'CATALOG';
-  if (['ACTION_TOOL_REQUEST', 'SAFETY_EMERGENCY', 'CALL_CONTROL'].includes(intentClass)) {
-    return 'WORKFLOW';
-  }
-  // A weak resolver namespace is not sufficient to discard evidence from the
-  // other independently searched namespaces. The grounded decision receives
-  // the fused caller-facing candidates and may clarify genuine ambiguity.
-  return null;
 }
 
 function reservationKey(value) {
@@ -548,12 +362,8 @@ function applicableTools(evidence, runtimeProfile = {}) {
 export function buildGroundedLlmInput({
   input, classification, resolution, authoritative, runtimeProfile,
 } = {}) {
-  const allHydrated = (authoritative?.evidence ?? []).filter((source) => (
-    source.hydrationValidated === true && source.publicationValidated === true
-  ));
-  const hydrated = relevantHydratedEvidence(
-    allHydrated, classification, resolution, input, authoritative,
-  ).slice(0, maximumEvidenceRecords);
+  const allHydrated = authoritative?.verifiedRecords ?? authoritative?.evidence ?? [];
+  const hydrated = allHydrated;
   assertRequiredEvidenceInvariant(authoritative, hydrated);
   if (hydrated.length > maximumEvidenceRecords) {
     throw new TypeError('Grounded LLM input cannot contain more than five hydrated records');

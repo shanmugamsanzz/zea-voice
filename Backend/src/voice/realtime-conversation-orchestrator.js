@@ -6,6 +6,7 @@ import {
   ensurePublishedEngineReady,
   createGroundedLlmOutput,
   createNormalTurnInput,
+  deterministicProtocolExceptionTypes,
   groundedLlmOutputTypes,
   retrieveTenantEvidence,
   toKnowledgeEngineInput,
@@ -15,7 +16,6 @@ import {
   isKnowledgeEngineDecision,
   knowledgeEngineDecisionTypes,
   knowledgeEngineResponseModes,
-  technicalClarificationDecision,
 } from '../knowledge-engine/engine-contract.js';
 import { finalizeConfiguredToolResults } from '../knowledge-bases/verified-tool-result.js';
 import { ProviderIndependentAudioEngine } from './audio/audio-engine.js';
@@ -63,7 +63,6 @@ import {
 } from '../knowledge-engine/call-memory.js';
 import { compactBundleAsKnowledge } from '../knowledge-engine/compact-evidence-bundle.js';
 import {
-  deterministicSourceEntry,
   resolveDeterministicSource,
 } from '../knowledge-engine/deterministic-source-mapping.js';
 import {
@@ -1737,7 +1736,7 @@ export class RealtimeConversationOrchestrator {
         }).catch((error) => ({
         found: false, error: error.code ?? 'TENANT_EVIDENCE_UNAVAILABLE',
         sources: [], actionEvidence: [], guidanceEvidence: [], entities: [],
-        decision: technicalClarificationDecision(error.code ?? 'tenant_evidence_unavailable'),
+        decision: null,
         diagnostic: {
           stage: 'knowledge_retrieval',
           errorCode: error.code ?? 'TENANT_EVIDENCE_UNAVAILABLE',
@@ -1799,8 +1798,19 @@ export class RealtimeConversationOrchestrator {
       });
       return result;
     } catch (error) {
-      this.log.warn({ err: error, callId: this.call.id }, 'Knowledge retrieval failed; continuing without unverified context');
-      return { route: 'none', found: false, content: null, source: null, error: error.code ?? 'KNOWLEDGE_UNAVAILABLE' };
+      this.log.warn({ err: error, callId: this.call.id },
+        'Knowledge retrieval failed operationally; using tenant-configured technical speech');
+      const errorCode = error.code ?? 'KNOWLEDGE_UNAVAILABLE';
+      return {
+        route: 'operational_failure', found: false, content: null, source: null, error: errorCode,
+        retrieval: { parallelDurationMs: 0 },
+        tenantEvidence: {
+          found: false, sources: [], evidenceIds: [], decision: null,
+          diagnostic: {
+            stage: 'knowledge_retrieval', errorCode, details: {},
+          },
+        },
+      };
     }
   }
 
@@ -1962,10 +1972,8 @@ export class RealtimeConversationOrchestrator {
       ...(fullTenantEvidence.guidanceEvidence ?? []),
     ];
     const decisionHydratedRecords = llmEvidenceBundle?.decisionInput?.hydratedRecords ?? [];
-    const authoritativeEvidence = decisionHydratedRecords.map((record, index) => {
-      const mapping = deterministicSourceEntry(
-        record, record.sourceId ?? `internal_${index + 1}`,
-      );
+    const canonicalSourceMap = llmEvidenceBundle?.sourceMap ?? groundingEnvelope.sourceMap;
+    for (const mapping of canonicalSourceMap) {
       const resolved = resolveDeterministicSource(mapping, completeAuthoritativeEvidence, {
         tenantId: this.runtimeProfile.agent.tenantId,
         agentId: this.runtimeProfile.agent.id,
@@ -1977,19 +1985,20 @@ export class RealtimeConversationOrchestrator {
           'KNOWLEDGE_LLM_EVIDENCE_ALIGNMENT_FAILED', {
             stage: 'grounded_llm_input_alignment',
             reason: resolved.reason,
-            sourceId: record.sourceId ?? null,
-            publishedEvidenceId: record.publishedEvidenceId ?? null,
-            recordId: record.recordId ?? null,
+            sourceId: mapping.sourceId ?? null,
+            publishedEvidenceId: mapping.publishedEvidenceId ?? null,
+            recordId: mapping.authoritativeRecordId ?? null,
           });
       }
-      return resolved.record;
-    });
-    const mappedCallerSourceIds = new Set(groundingEnvelope.sourceMap
+    }
+    const authoritativeEvidence = completeAuthoritativeEvidence;
+    const mappedCallerSourceIds = new Set(canonicalSourceMap
       .map((mapping) => String(mapping.sourceId ?? '').toLocaleLowerCase()));
-    const missingCallerSources = decisionHydratedRecords.filter((record) => (
-      record.sourceId
-        && !mappedCallerSourceIds.has(String(record.sourceId).toLocaleLowerCase())
-    ));
+    const envelopeSourceIds = new Set(groundingEnvelope.sources
+      .map((source) => String(source.id ?? '').toLocaleLowerCase()));
+    const missingCallerSources = decisionHydratedRecords.filter((record) => record.sourceId
+      && (!mappedCallerSourceIds.has(String(record.sourceId).toLocaleLowerCase())
+        || !envelopeSourceIds.has(String(record.sourceId).toLocaleLowerCase())));
     if (missingCallerSources.length) {
       throw new AppError(503,
         'The grounded LLM source IDs do not align with the hydrated decision records',
@@ -2710,6 +2719,7 @@ export class RealtimeConversationOrchestrator {
     } finally {
       this.activeGroundedTurnEpochs.delete(epoch);
       if (outcome?.suppressInactivity !== true
+        && outcome?.playbackCompleted === true
         && !this.finalized && this.controller.state === callStates.LISTENING) {
         this.#armInactivity();
       }
@@ -2783,7 +2793,7 @@ export class RealtimeConversationOrchestrator {
         retrieval: { parallelDurationMs: knowledgeBudgetMs },
         tenantEvidence: {
           found: false, sources: [], evidenceIds: [],
-          decision: technicalClarificationDecision('knowledge_timeout'),
+          decision: null,
           diagnostic: {
             stage: 'knowledge_retrieval',
             errorCode: 'VOICE_KNOWLEDGE_TURN_TIMEOUT',
@@ -2825,8 +2835,8 @@ export class RealtimeConversationOrchestrator {
       },
       retrievedCandidates: retrievalTrace.retrievedCandidates ?? [],
       hydratedEvidence: retrievalTrace.hydratedEvidence ?? [],
-      permittedEvidenceIds: retrievalTrace.permittedEvidenceIds
-        ?? knowledge.tenantEvidence?.evidenceIds ?? [],
+      sourceMap: retrievalTrace.sourceMap
+        ?? knowledge.tenantEvidence?.llmEvidenceBundle?.sourceMap ?? [],
       rejectedCandidates: retrievalTrace.rejectedCandidates ?? [],
       publicationRevisions: retrievalTrace.publicationRevisions
         ?? knowledge.tenantEvidence?.publicationRevisions ?? [],
@@ -2874,10 +2884,8 @@ export class RealtimeConversationOrchestrator {
     // Tenant evidence is interpreted by one grounded LLM turn. Runtime route
     // labels and Workflow instruction text never bypass that validation.
     const candidateDecision = knowledge.tenantEvidence?.decision;
-    const engineDecision = decisionWithoutRuntimeSpeech(
-      isKnowledgeEngineDecision(candidateDecision)
-        ? candidateDecision : technicalClarificationDecision('invalid_engine_result'),
-    );
+    const engineDecision = isKnowledgeEngineDecision(candidateDecision)
+      ? decisionWithoutRuntimeSpeech(candidateDecision) : null;
     const canonicalMemoryContext = canonicalResolvedMemoryContext(knowledge.tenantEvidence);
     if (canonicalMemoryContext) {
       this.log.info({
@@ -2891,7 +2899,10 @@ export class RealtimeConversationOrchestrator {
       }, 'Authoritatively hydrated canonical context prepared for grounded validation');
     }
     const sourceTrace = new MessageSourceTrace(
-      knowledgeMessageSources(knowledge, engineDecision.evidenceIds),
+      knowledgeMessageSources(
+        knowledge,
+        engineDecision?.evidenceIds ?? knowledge.tenantEvidence?.evidenceIds ?? [],
+      ),
     );
     if (epoch !== this.epoch || this.finalized) return;
     const sentencePipeline = this.#createSentenceTtsPipeline(
@@ -2917,10 +2928,11 @@ export class RealtimeConversationOrchestrator {
       ?? knowledge.tenantEvidence?.queryPreparation?.intentClass
       ?? '',
     ).trim().toLocaleUpperCase();
-    const deterministicPriority = ['SAFETY_EMERGENCY', 'CALL_CONTROL'].includes(intentClass)
-      && engineDecision.type === knowledgeEngineDecisionTypes.RESPONSE
-      && engineDecision.mode === knowledgeEngineResponseModes.DETERMINISTIC
-      && Boolean(engineDecision.response?.text);
+    const deterministicPriority = intentClass
+      === deterministicProtocolExceptionTypes.SAFETY_EMERGENCY
+      && engineDecision?.type === knowledgeEngineDecisionTypes.RESPONSE
+      && engineDecision?.mode === knowledgeEngineResponseModes.DETERMINISTIC
+      && Boolean(engineDecision?.response?.text);
     const operationalKnowledgeFailure = knowledge.tenantEvidence?.diagnostic ?? null;
     if (operationalKnowledgeFailure) {
       response = {
@@ -3179,8 +3191,8 @@ export class RealtimeConversationOrchestrator {
       this.log.error({
         stage: 'voice.runtime_message_unconfigured',
         callId: this.call.id,
-        decisionType: engineDecision.type,
-        decisionReason: engineDecision.reason,
+        decisionType: engineDecision?.type ?? null,
+        decisionReason: engineDecision?.reason ?? null,
       }, 'Caller-facing runtime message is not configured or published; returning to listening');
       if ([callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) {
         await this.controller.interrupt('runtime_message_unconfigured');
@@ -3198,8 +3210,10 @@ export class RealtimeConversationOrchestrator {
           reason: 'operational_response_unconfigured',
         });
       }
-      this.#armInactivity();
-      return undefined;
+      return Object.freeze({
+        suppressInactivity: true,
+        reason: 'runtime_message_unconfigured',
+      });
     }
     if (validatedNormalTurn) this.#scheduleLiveMemoryCheckpoint('validated_normal_turn');
     // The pipeline may already contain the temporary latency acknowledgement.
@@ -3241,7 +3255,7 @@ export class RealtimeConversationOrchestrator {
     if (this.#isStaleGeneration(epoch) || this.controller.state !== callStates.SPEAKING) return;
     await this.controller.playbackComplete();
     this.errorCount = 0;
-    this.#armInactivity();
+    return Object.freeze({ playbackCompleted: true });
   }
 
   async #synthesizeWelcome(text, generationId) {

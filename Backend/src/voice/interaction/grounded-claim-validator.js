@@ -1,6 +1,5 @@
 import { groundedNumbers as numbers } from './grounded-number-validator.js';
 import {
-  deterministicSourceEntry,
   resolveDeterministicSource,
 } from '../../knowledge-engine/deterministic-source-mapping.js';
 
@@ -294,15 +293,6 @@ export function removeUnsupportedRecommendationSentences(value, sources = [], op
   });
 }
 
-function canonicalEvidenceKey(value = {}) {
-  const recordId = identity(value.recordId);
-  const recordType = String(value.recordType ?? '').trim().toLocaleUpperCase();
-  const knowledgeBaseId = identity(value.knowledgeBaseId);
-  const revision = Number(value.publicationRevision);
-  return recordId && recordType && knowledgeBaseId && Number.isInteger(revision)
-    ? `${recordType}:${recordId}:${knowledgeBaseId}:${revision}` : null;
-}
-
 function sharesClaimSubject(claim, evidence) {
   const claimTokens = [...new Set(tokens(claim))];
   const evidenceTokens = [...new Set(tokens(evidence))];
@@ -324,67 +314,11 @@ function evidenceMentionsClaimSubject(claim, sources) {
   return sources.some((source) => sharesClaimSubject(claim, sourceContent(source)));
 }
 
-function sameEvidenceScope(source, authoritative) {
-  for (const key of ['tenantId', 'agentId', 'knowledgeBaseId', 'recordId']) {
-    const expected = identity(source?.[key]);
-    const actual = identity(authoritative?.[key]);
-    if (expected && (!actual || expected !== actual)) return false;
-  }
-  const expectedType = String(source?.recordType ?? '').trim().toLocaleUpperCase();
-  const actualType = String(authoritative?.recordType ?? '').trim().toLocaleUpperCase();
-  if (expectedType && (!actualType || expectedType !== actualType)) return false;
-  const expectedRevision = Number(source?.publicationRevision);
-  if (source?.publicationRevision !== null && source?.publicationRevision !== undefined
-    && (!Number.isInteger(expectedRevision)
-      || expectedRevision !== Number(authoritative?.publicationRevision))) return false;
-  if (source?.publicationValidated === false || authoritative?.publicationValidated === false
-    || source?.hydrationValidated === false || authoritative?.hydrationValidated === false) return false;
-  return true;
-}
-
-function authoritativeResolutionFor(source, authoritativeSources) {
-  const publishedId = identity(source?.publishedEvidenceId);
-  if (publishedId) {
-    const deterministic = resolveDeterministicSource(
-      deterministicSourceEntry(source, source.id), authoritativeSources,
-    );
-    if (deterministic.valid) return deterministic;
-    // Older in-process callers may provide the short source ID, publication
-    // evidence ID and typed record identity without duplicating publication
-    // scope metadata. Preserve that compatibility only when the identity maps
-    // to exactly one authoritative hydrated record. The final unified scope
-    // check still rejects a foreign tenant, agent or revision.
-    const recordId = identity(source?.recordId);
-    const recordType = String(source?.recordType ?? '').trim().toLocaleUpperCase();
-    const unique = authoritativeSources.filter((candidate) => (
-      identity(candidate?.id) === publishedId
-        && (!recordId || identity(candidate?.recordId) === recordId)
-        && (!recordType || String(candidate?.recordType ?? '').trim().toLocaleUpperCase() === recordType)
-    ));
-    if (deterministic.reason === 'missing_evidence' && unique.length === 1) {
-      return Object.freeze({ valid: true, reason: null, record: unique[0] });
-    }
-    return deterministic;
-  }
-  const canonicalKey = canonicalEvidenceKey(source);
-  if (canonicalKey) {
-    const record = authoritativeSources.find((candidate) => (
-      canonicalEvidenceKey(candidate) === canonicalKey && sameEvidenceScope(source, candidate)
-    )) ?? null;
-    return Object.freeze({ valid: Boolean(record), reason: record ? null : 'missing_evidence', record });
-  }
-  // Compatibility for non-publication test/runtime sources: accept a record
-  // ID only when it identifies exactly one authoritative source.
-  const recordId = identity(source?.recordId);
-  const matches = recordId ? authoritativeSources.filter((candidate) => (
-    identity(candidate.recordId) === recordId && sameEvidenceScope(source, candidate)
-  )) : [];
-  const record = matches.length === 1 ? matches[0] : null;
-  return Object.freeze({ valid: Boolean(record), reason: record ? null : 'missing_evidence', record });
-}
-
-function authoritativeSourceFor(source, authoritativeSources) {
-  return authoritativeResolutionFor(source, authoritativeSources).record;
+function sourceMappingFor(envelope, sourceId) {
+  const normalizedSourceId = identity(sourceId);
+  return (envelope?.sourceMap ?? []).find((mapping) => (
+    identity(mapping?.sourceId) === normalizedSourceId
+  )) ?? null;
 }
 
 export function hydrateSelectedEvidence(decision, envelope, authoritativeSources = []) {
@@ -392,17 +326,23 @@ export function hydrateSelectedEvidence(decision, envelope, authoritativeSources
     ...(decision?.evidenceIds ?? []),
     ...(decision?.evidenceSourceIds ?? []),
   ].map(identity));
-  return (envelope?.sources ?? []).filter((source) => (
-    [source.id, source.publishedEvidenceId, source.recordId]
-      .map(identity).some((candidate) => selected.has(candidate))
-  )).map((source) => authoritativeSourceFor(source, authoritativeSources)).filter(Boolean);
+  return (envelope?.sources ?? []).filter((source) => selected.has(identity(source.id)))
+    .map((source) => {
+      const mapping = sourceMappingFor(envelope, source.id);
+      return mapping
+        ? resolveDeterministicSource(mapping, authoritativeSources).record
+        : null;
+    }).filter(Boolean);
 }
 
 export function hydrateGroundingEnvelope(envelope, authoritativeSources = []) {
   const requestedSources = envelope?.sources ?? [];
   const mappingFailures = [];
   const sources = requestedSources.map((source) => {
-    const resolution = authoritativeResolutionFor(source, authoritativeSources);
+    const mapping = sourceMappingFor(envelope, source.id);
+    const resolution = mapping
+      ? resolveDeterministicSource(mapping, authoritativeSources)
+      : Object.freeze({ valid: false, reason: 'missing_evidence', record: null });
     const authoritative = resolution.record;
     if (!authoritative) {
       mappingFailures.push(Object.freeze({

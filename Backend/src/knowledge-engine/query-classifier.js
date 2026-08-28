@@ -303,7 +303,7 @@ function indexesFor(intentClass, candidate) {
   return configured;
 }
 
-export function classifyKnowledgeQuery(input, resolution) {
+export function buildKnowledgeRetrievalHints(input, resolution) {
   if (!input?.utterance || !input?.tenantId || !input?.agentId || !input?.callId) {
     throw new TypeError('Query classification requires a versioned finalized-utterance input');
   }
@@ -328,6 +328,10 @@ export function classifyKnowledgeQuery(input, resolution) {
   }[String(selected.candidate?.recordType ?? '').toUpperCase()] ?? null);
   return Object.freeze({
     version: KNOWLEDGE_QUERY_CLASSIFIER_VERSION,
+    role: 'RETRIEVAL_HINTS',
+    decisionAuthority: false,
+    clarificationAuthority: false,
+    toolExecutionAuthority: false,
     tenantId: input.tenantId,
     agentId: input.agentId,
     callId: input.callId,
@@ -349,3 +353,7 @@ export function classifyKnowledgeQuery(input, resolution) {
     }),
   });
 }
+
+// Compatibility export for callers that have not yet adopted the clearer
+// name. The returned object is retrieval guidance only and never a decision.
+export const classifyKnowledgeQuery = buildKnowledgeRetrievalHints;

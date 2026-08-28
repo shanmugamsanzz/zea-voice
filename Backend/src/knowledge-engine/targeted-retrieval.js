@@ -4,8 +4,13 @@ import { logger } from '../config/logger.js';
 import { env } from '../config/env.js';
 import { knowledgeSearchIndexes } from './query-classifier.js';
 import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/knowledge-confidence-config.js';
+import {
+  canonicalRecordIdentity,
+  canonicalRecordIdentityKey,
+  canonicalRecordNamespace,
+} from './canonical-record-identity.js';
 
-export const TARGETED_RETRIEVAL_VERSION = 4;
+export const TARGETED_RETRIEVAL_VERSION = 5;
 
 const documentIndexTypes = Object.freeze({
   [knowledgeSearchIndexes.CATALOG]: 'CATALOG_ITEM',
@@ -113,6 +118,21 @@ function allowedRecordTypes(indexes) {
       : [documentIndexTypes[index]].filter(Boolean)
   ));
   return new Set(selected.length ? selected : Object.values(documentIndexTypes));
+}
+
+function buildParallelRetrievalScope(input, scope, recordTypes, relevantNamespaces = []) {
+  const namespaces = [...new Set((relevantNamespaces.length
+    ? relevantNamespaces
+    : [...recordTypes].map((recordType) => canonicalRecordNamespace(recordType)))
+    .map((value) => String(value).trim().toUpperCase()).filter(Boolean))];
+  return Object.freeze({
+    tenantId: String(input.tenantId),
+    agentId: String(input.agentId),
+    knowledgeBases: Object.freeze(scope.map((entry) => Object.freeze({ ...entry }))),
+    usageDirection: String(input.usageDirection),
+    namespaces: Object.freeze(namespaces),
+    recordTypes: Object.freeze([...recordTypes]),
+  });
 }
 
 export function buildContextEnrichedRetrievalQuery(input, classification, resolution, scope = []) {
@@ -259,8 +279,13 @@ function publicationScope(input, bundles) {
       const recordId = String(record.record_id ?? record.recordId ?? record.id ?? '').trim();
       if (!recordId) continue;
       records.set(normalizeId(recordId), Object.freeze({
+        tenantId: input.tenantId,
+        agentId: input.agentId,
         recordId,
         recordType: String(record.record_type ?? record.recordType ?? record.type ?? '').toUpperCase(),
+        namespace: canonicalRecordNamespace(
+          record.record_type ?? record.recordType ?? record.type,
+        ),
         knowledgeBaseId,
         publicationRevision,
         itemKey: String(record.entity_metadata?.itemKey ?? record.metadata?.itemKey ?? '').trim() || null,
@@ -276,11 +301,22 @@ function publicationScope(input, bundles) {
 }
 
 function freezeCandidate(candidate, channel, rank) {
+  const canonicalIdentity = candidate.canonicalIdentity
+    ? Object.freeze({ ...candidate.canonicalIdentity })
+    : canonicalRecordIdentity(candidate);
+  const identityKey = candidate.canonicalIdentityKey
+    ?? canonicalRecordIdentityKey(canonicalIdentity);
+  if (!identityKey) {
+    throw new TypeError(`Retrieval channel ${channel} returned a candidate without canonical identity`);
+  }
   return Object.freeze({
     recordId: String(candidate.recordId),
     recordType: String(candidate.recordType).toUpperCase(),
     knowledgeBaseId: String(candidate.knowledgeBaseId),
     publicationRevision: Number(candidate.publicationRevision),
+    namespace: canonicalIdentity.namespace,
+    canonicalIdentity,
+    canonicalIdentityKey: identityKey,
     channel,
     rank,
     score: boundedScore(candidate.score),
@@ -611,8 +647,11 @@ function bm25Candidates(input, sparseIndexes, scope, allowedTypes, limit, queryC
     }
     if (!matched || score <= 0) return [];
     return [{
+      tenantId: input.tenantId,
+      agentId: input.agentId,
       recordId: document.id,
       recordType: document.recordType,
+      namespace: canonicalRecordNamespace(document.recordType),
       knowledgeBaseId: document.knowledgeBaseId,
       publicationRevision: document.publicationRevision,
       score,
@@ -637,7 +676,14 @@ function semanticPayloadCandidate(match, scope, input, allowedTypes) {
     || ![normalizedUsage(input.usageDirection), 'both'].includes(usage)) return null;
   const recordId = String(payload.record_id ?? match.id ?? '').trim();
   return recordId ? {
-    recordId, recordType, knowledgeBaseId, publicationRevision, score: boundedScore(match.score),
+    tenantId: input.tenantId,
+    agentId: input.agentId,
+    recordId,
+    recordType,
+    namespace: canonicalRecordNamespace(recordType),
+    knowledgeBaseId,
+    publicationRevision,
+    score: boundedScore(match.score),
   } : null;
 }
 
@@ -710,6 +756,9 @@ export async function retrieveTargetedCandidates({
     dependencies.semanticDeadlineMs ?? env.RAG_RUNTIME_SEMANTIC_DEADLINE_MS,
   );
   const queryContext = buildContextEnrichedRetrievalQuery(input, classification, resolution, scope);
+  const parallelScope = buildParallelRetrievalScope(
+    input, scope, recordTypes, classification?.relevantNamespaces ?? [],
+  );
   const channelFailures = [];
 
   async function isolateChannel(channel, operation) {
@@ -735,14 +784,14 @@ export async function retrieveTargetedCandidates({
   }
 
   const structuredPromise = isolateChannel('structured', async () => {
-    dependencies.onChannelStart?.('structured');
+    dependencies.onChannelStart?.('structured', parallelScope);
     return completeChannelWithin('structured', () => structuredCandidatesForTurn(
       input, classification, resolution, records, recordTypes, limitPerChannel, queryContext,
     ), channelDeadlineMs);
   });
   const bm25Promise = indexes.has(knowledgeSearchIndexes.BM25)
     ? isolateChannel('bm25', async () => {
-      dependencies.onChannelStart?.('bm25');
+      dependencies.onChannelStart?.('bm25', parallelScope);
       return completeChannelWithin('bm25', () => bm25Candidates(
         input, sparseIndexes, scope, recordTypes, limitPerChannel, queryContext,
       ), channelDeadlineMs);
@@ -750,7 +799,7 @@ export async function retrieveTargetedCandidates({
     : Promise.resolve(Object.freeze([]));
   const qdrantPromise = indexes.has(knowledgeSearchIndexes.SEMANTIC)
     ? isolateChannel('qdrant', async () => {
-      dependencies.onChannelStart?.('qdrant');
+      dependencies.onChannelStart?.('qdrant', parallelScope);
       return completeChannelWithin('qdrant', () => semanticCandidates(
         input, scope, recordTypes, limitPerChannel, dependencies, queryContext,
       ), semanticDeadlineMs);
@@ -769,6 +818,7 @@ export async function retrieveTargetedCandidates({
     searchedIndexes: Object.freeze([...indexes]),
     recordTypes: Object.freeze([...recordTypes]),
     relevantNamespaces: Object.freeze([...(classification?.relevantNamespaces ?? [])]),
+    retrievalScope: parallelScope,
     queryContext,
     channels: Object.freeze({ structured, bm25, qdrant }),
     namespaceChannels: Object.freeze({

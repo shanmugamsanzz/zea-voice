@@ -5,7 +5,7 @@ import {
   knowledgeEngineDecisionTypes,
   knowledgeEngineResponseModes,
 } from '../src/knowledge-engine/engine-contract.js';
-import { retrieveTenantEvidence } from '../src/knowledge-engine/runtime-service.js';
+import { retrieveTenantEvidence } from '../src/knowledge-bases/knowledge-runtime.service.js';
 import { buildRevisionSparseIndex, cacheCompactKnowledgeMap } from '../src/knowledge-bases/knowledge-map.service.js';
 import { openIsolatedCallMemory } from '../src/knowledge-engine/call-memory.js';
 

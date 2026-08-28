@@ -42,6 +42,8 @@ assert.equal(fusion.candidates[0].recordId, ids[1], 'Multi-channel RRF candidate
 assert.equal(fusion.candidates.filter((entry) => entry.recordId === ids[1]).length, 1,
   'Record IDs must be deduplicated');
 assert.deepEqual(new Set(fusion.candidates[0].channels), new Set(['structured', 'bm25', 'qdrant']));
+assert.equal(new Set(fusion.candidates.map((entry) => entry.canonicalIdentityKey)).size,
+  fusion.candidates.length, 'RRF must deduplicate by canonical PostgreSQL publication identity');
 assert.deepEqual(fusion.rejectedScopeConflictIds, []);
 const scopedIdentityFusion = fuseCandidateRankings({
   tenantId, agentId, callId,
@@ -52,6 +54,8 @@ const scopedIdentityFusion = fuseCandidateRankings({
 });
 assert.equal(scopedIdentityFusion.candidates.length, 2,
   'The same record ID in different KB scopes must remain separate canonical identities');
+assert.notEqual(scopedIdentityFusion.candidates[0].canonicalIdentityKey,
+  scopedIdentityFusion.candidates[1].canonicalIdentityKey);
 
 const duplicateFusion = fuseCandidateRankings({
   tenantId, agentId, callId,
@@ -121,9 +125,11 @@ const contextRunner = async (auth, callback) => {
         row(ids[2], byId.get(ids[2]).rank, byId.get(ids[2]).rrf_score, 'different-item', 'Different item', 30),
         row(ids[0], byId.get(ids[0]).rank, byId.get(ids[0]).rrf_score, 'shared-item', 'Shared item', 10),
         row(ids[1], byId.get(ids[1]).rank, byId.get(ids[1]).rrf_score, 'shared-item', 'Shared item', 20),
-        // A row with a mismatched active revision must still be rejected in the JS boundary.
-        { ...row(ids[3], byId.get(ids[3]).rank, byId.get(ids[3]).rrf_score,
-          'missing-item', 'Missing item', 40), publication_revision: 3 },
+        row(ids[3], byId.get(ids[3]).rank, byId.get(ids[3]).rrf_score,
+          'fourth-item', 'Fourth item', 40),
+        { ...row(ids[4], byId.get(ids[4]).rank, byId.get(ids[4]).rrf_score,
+          'fifth-item', 'Fifth item', 50),
+        knowledge_base_id: byId.get(ids[4]).knowledge_base_id },
       ] };
     },
   });
@@ -222,7 +228,9 @@ const hydrated = await rankAndHydrateAuthoritativeEvidence({
 
 assert.equal(queryCount, 1, 'Hydration must execute exactly one PostgreSQL query');
 assert.equal(hydrated.hydrationQueryCount, 1);
-assert.equal(hydrated.evidence.length, 3);
+assert.equal(hydrated.evidence.length, 5);
+assert.equal(hydrated.verifiedRecords, hydrated.evidence,
+  'The verified hydration result must be the evidence package source');
 assert.deepEqual(hydrated.evidence.map((entry) => entry.rank),
   [...hydrated.evidence.map((entry) => entry.rank)].sort((left, right) => left - right));
 assert.equal(hydrated.evidence.every((entry) => entry.hydrationValidated
@@ -243,11 +251,26 @@ assert.equal(hydrated.evidence.every((entry) => (
 assert.equal(hydrated.ambiguity.detected, true);
 assert.equal(hydrated.conflict.detected, true);
 assert.equal(hydrated.conflict.conflicts[0].identity, 'catalog:options:shared item');
-assert.ok(hydrated.rejectedRecordIds.includes(ids[3]));
 assert.ok(requestedIds.includes(ids[4]),
   'A separately scoped canonical identity must reach authoritative PostgreSQL validation');
-assert.ok(hydrated.rejectedRecordIds.includes(ids[4]),
-  'An unhydrated KB-scoped identity must be rejected after authoritative validation');
+assert.deepEqual(hydrated.rejectedRecordIds, [],
+  'Every selected top-five identity must hydrate and verify in the same query');
+
+await assert.rejects(() => rankAndHydrateAuthoritativeEvidence({
+  auth: { tenantId }, input, classification, resolution, retrieval,
+}, {
+  contextRunner: async (_auth, callback) => callback({
+    query: async (_sql, parameters) => {
+      const requested = JSON.parse(parameters[3]);
+      return { rows: requested.slice(0, -1).map((entry, index) => ({
+        ...row(entry.record_id, entry.rank, entry.rrf_score,
+          `partial-${index}`, `Partial ${index}`, index + 1),
+        knowledge_base_id: entry.knowledge_base_id,
+      })) };
+    },
+  }),
+}), (error) => error?.code === 'KNOWLEDGE_AUTHORITATIVE_HYDRATION_INCOMPLETE',
+'Missing any selected top-five PostgreSQL record must fail hydration before packaging');
 
 assert.equal(detectEntityAmbiguity(hydrated.evidence, {
   intentClass: knowledgeQueryClasses.COMPARISON_COMPLEX, requiresConfirmation: true,

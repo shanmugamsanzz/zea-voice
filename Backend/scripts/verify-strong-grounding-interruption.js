@@ -9,6 +9,7 @@ import {
   validateCallerProvidedState,
 } from '../src/voice/interaction/grounded-claim-validator.js';
 import { openGenericConversationState } from '../src/voice/interaction/generic-conversation-state.js';
+import { deterministicSourceEntry } from '../src/knowledge-engine/deterministic-source-mapping.js';
 
 const factualSources = [{
   id: 'fact-1', recordType: 'GENERAL_KNOWLEDGE',
@@ -165,26 +166,37 @@ assert.equal(validateGroundedClaim(
   [{ content: 'Standard Plan costs INR 1200.', recordType: 'CATALOG_ITEM' }],
   { knownEntities: [{ key: 'premium', name: 'Premium Plan' }] },
 ).reason, 'unsupported_numeric_fact');
+const authoritativeFixture = {
+  id: 'postgres-1', recordId: 'record-1', recordType: 'GENERAL_KNOWLEDGE',
+  tenantId: 'tenant-a', agentId: 'agent-a', knowledgeBaseId: 'kb-a', publicationRevision: 1,
+  documentId: 'document-1', documentVersionId: 'version-1', hydrationValidated: true,
+  documentStatus: 'ready', documentVersionStatus: 'ready', documentVersionIsCurrent: true,
+  content: 'complete authoritative record',
+};
+const mappedEnvelopeFixture = {
+  sources: [{ id: 'envelope-1', recordId: 'record-1', content: 'partial snippet' }],
+  sourceMap: [deterministicSourceEntry(authoritativeFixture, 'envelope-1')],
+};
 const hydrated = hydrateSelectedEvidence(
   { evidenceIds: ['envelope-1'] },
-  { sources: [{ id: 'envelope-1', recordId: 'record-1', content: 'partial snippet' }] },
-  [{ id: 'postgres-1', recordId: 'record-1', content: 'complete authoritative record' }],
+  mappedEnvelopeFixture,
+  [authoritativeFixture],
 );
 assert.equal(hydrated.length, 1);
 assert.equal(hydrated[0].content, 'complete authoritative record');
 assert.equal(hydrateSelectedEvidence(
   { evidenceIds: ['envelope-1'] },
-  { sources: [{ id: 'envelope-1', recordId: 'record-1', content: 'partial snippet' }] },
+  mappedEnvelopeFixture,
   [],
 ).length, 0, 'A discovery snippet must never substitute for PostgreSQL hydration');
 const hydratedEnvelope = hydrateGroundingEnvelope(
-  { found: true, sources: [{ id: 'envelope-1', recordId: 'record-1', content: 'partial' }], entities: [] },
-  [{ id: 'postgres-1', recordId: 'record-1', content: 'complete authoritative record' }],
+  { ...mappedEnvelopeFixture, found: true, entities: [] },
+  [authoritativeFixture],
 );
 assert.equal(hydratedEnvelope.sources[0].content, 'complete authoritative record');
 const mappedDespiteStaleDiscoveryFlag = hydrateGroundingEnvelope(
-  { found: false, sources: [{ id: 'envelope-1', recordId: 'record-1', content: 'partial' }], entities: [] },
-  [{ id: 'postgres-1', recordId: 'record-1', content: 'complete authoritative record' }],
+  { ...mappedEnvelopeFixture, found: false, entities: [] },
+  [authoritativeFixture],
 );
 assert.equal(mappedDespiteStaleDiscoveryFlag.found, true,
   'PostgreSQL hydration must prevent false verified_evidence_missing rejection');

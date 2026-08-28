@@ -103,8 +103,9 @@ const responseWithToolFields = validateGroundedLlmDecision(JSON.stringify({
   toolArguments: JSON.stringify({ customer_name: 'Asha', visit_date: '2030-04-05' }),
   clarificationReason: null,
 }), envelope, runtime);
-assert.equal(responseWithToolFields.valid, false);
-assert.equal(responseWithToolFields.reason, 'mixed_decision_payload');
+assert.equal(responseWithToolFields.valid, true);
+assert.equal(responseWithToolFields.toolRequest, null,
+  'unused TOOL fields must be discarded from a valid RESPONSE');
 
 const toolWithCallerSpeech = validateGroundedLlmDecision(JSON.stringify({
   decision: 'TOOL', answer: 'Your visit is booked.', responseId: null, evidenceIds: [],
@@ -112,16 +113,18 @@ const toolWithCallerSpeech = validateGroundedLlmDecision(JSON.stringify({
   toolArguments: JSON.stringify({ customer_name: 'Asha', visit_date: '2030-04-05' }),
   clarificationReason: null,
 }), envelope, runtime);
-assert.equal(toolWithCallerSpeech.valid, false);
-assert.equal(toolWithCallerSpeech.reason, 'mixed_decision_payload');
+assert.equal(toolWithCallerSpeech.valid, true);
+assert.equal(toolWithCallerSpeech.answer, '',
+  'unverified caller speech must be discarded from a TOOL decision');
 
 const clarifyWithStaleEvidence = validateGroundedLlmDecision(JSON.stringify({
   decision: 'CLARIFY', answer: 'Which published service do you mean?',
   responseId: null, evidenceIds: ['source_1'], toolName: null,
   toolArguments: null, clarificationReason: 'missing_entity',
 }), envelope, runtime);
-assert.equal(clarifyWithStaleEvidence.valid, false);
-assert.equal(clarifyWithStaleEvidence.reason, 'mixed_decision_payload');
+assert.equal(clarifyWithStaleEvidence.valid, true);
+assert.deepEqual(clarifyWithStaleEvidence.evidenceIds, [],
+  'unused evidence must be discarded from a fact-free CLARIFY decision');
 assert.doesNotThrow(() => assertGroundedStructuredCompletion(
   { type: 'completed', finishReason: 'stop' }, JSON.stringify({
     decision: 'RESPONSE', answer: 'Grounded.', responseId: null,

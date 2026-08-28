@@ -36,8 +36,14 @@ function addSource(sources, seen, content, metadata = {}) {
   const evidenceIdentity = text(metadata.publishedEvidenceId ?? metadata.recordId, 240);
   const dedupeKey = evidenceIdentity ? `evidence:${identity(evidenceIdentity)}` : `content:${normalized}`;
   if (!normalized || seen.has(dedupeKey) || sources.length >= maximumSources) return;
+  const assignedSourceId = text(metadata.sourceId, 80) || `source_${sources.length + 1}`;
+  if (!/^source_[1-9]\d*$/u.test(assignedSourceId)
+    || sources.some((source) => source.id === assignedSourceId)) {
+    throw new TypeError('Grounding sources require unique deterministic source IDs');
+  }
+  const { sourceId: _sourceId, ...sourceMetadata } = metadata;
   seen.add(dedupeKey);
-  sources.push(Object.freeze({ id: `source_${sources.length + 1}`, content: normalized, ...metadata }));
+  sources.push(Object.freeze({ id: assignedSourceId, content: normalized, ...sourceMetadata }));
 }
 
 function entity(value = {}, sourceId = null) {
@@ -78,6 +84,8 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
       // publication identity separate so source_1 can always be resolved
       // back through the authoritative PostgreSQL record.
       publishedEvidenceId: text(evidence.publishedEvidenceId ?? evidence.id, 240) || null,
+      sourceId: text(evidence.sourceId
+        ?? (/^source_[1-9]\d*$/u.test(String(evidence.id ?? '')) ? evidence.id : null), 80) || null,
       recordId: text(evidence.recordId, 100) || null,
       recordType: text(recordType, 40) || 'tenant_evidence',
       tenantId: text(evidence.tenantId, 100) || null,
@@ -194,13 +202,33 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
   const exactCallerResponses = selectedSources
     .filter((source) => source.exactCallerResponse === true)
     .map((source) => source.id);
+  const suppliedSourceMap = knowledge.tenantEvidence?.llmEvidenceBundle?.sourceMap
+    ?? knowledge.tenantEvidence?.sourceMap ?? null;
+  const suppliedBySourceId = new Map((suppliedSourceMap ?? []).map((mapping) => (
+    [mapping.sourceId, mapping]
+  )));
+  if (suppliedSourceMap && (suppliedBySourceId.size !== suppliedSourceMap.length
+    || suppliedSourceMap.length !== selectedSources.length)) {
+    throw new TypeError('Grounding requires one canonical mapping for every selected source');
+  }
+  const sourceMap = selectedSources.map((source) => {
+    const supplied = suppliedBySourceId.get(source.id);
+    const generated = deterministicSourceEntry(source, source.id);
+    if (suppliedSourceMap && !supplied) {
+      throw new TypeError('Grounding source is missing from the canonical source map');
+    }
+    if (supplied && (supplied.publishedEvidenceId !== generated.publishedEvidenceId
+      || supplied.authoritativeRecordId !== generated.authoritativeRecordId
+      || supplied.canonicalRecordIdentityKey !== generated.canonicalRecordIdentityKey)) {
+      throw new TypeError('Grounding source does not match the canonical source map');
+    }
+    return supplied ?? generated;
+  });
   return Object.freeze({
     found: knowledge.found === true && selectedSources.length > 0,
     route: text(knowledge.route, 40) || 'none',
     sources: Object.freeze(selectedSources),
-    sourceMap: Object.freeze(selectedSources.map((source) => (
-      deterministicSourceEntry(source, source.id)
-    ))),
+    sourceMap: Object.freeze(sourceMap),
     entities: Object.freeze(entities),
     exactCallerResponses: Object.freeze(exactCallerResponses),
   });
@@ -412,9 +440,7 @@ function normalizeFlowAction(value, runtime = {}) {
 }
 
 function canonicalSources(envelope, requestedIds) {
-  const lookup = canonicalLookup(envelope.sources ?? [], (source) => [
-    source.id, source.publishedEvidenceId, source.recordId,
-  ]);
+  const lookup = canonicalLookup(envelope.sources ?? [], (source) => [source.id]);
   return canonicalizeList(requestedIds, lookup);
 }
 

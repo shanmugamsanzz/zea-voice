@@ -233,10 +233,9 @@ const namespaceFiltered = buildGroundedLlmInput({
   },
   runtimeProfile: { tools: [] },
 });
-assert.deepEqual(namespaceFiltered.hydratedRecords.map((source) => source.recordType), ['CATALOG_ITEM'],
-  'An explicit Catalog turn must not send unrelated FAQ or Workflow evidence to the LLM');
-assert.deepEqual(namespaceFiltered.hydratedRecords.map((source) => source.recordId), ['catalog-1'],
-  'An explicit Catalog turn must not send unrelated Catalog records to the LLM');
+assert.deepEqual(namespaceFiltered.hydratedRecords.map((source) => source.recordId),
+  ['catalog-1', 'faq-1', 'catalog-2', 'workflow-1'],
+  'Grounded packaging must preserve the verified hydration result without a second filter');
 
 const currentConcernEvidence = buildGroundedLlmInput({
   input: {
@@ -284,8 +283,8 @@ const currentConcernEvidence = buildGroundedLlmInput({
   runtimeProfile: { tools: [] },
 });
 assert.deepEqual(currentConcernEvidence.hydratedRecords.map((source) => source.recordId),
-  ['support-1', 'general-1'],
-  'Current Workflow response and General Knowledge must replace stale Catalog evidence');
+  ['stale-catalog', 'support-1', 'general-1'],
+  'Packaging must not reinterpret or remove the verified hydration result');
 assert.ok(currentConcernEvidence.hydratedRecords.every((source) => source.sourceId),
   'Every caller-facing current-concern record must receive an LLM source ID');
 
@@ -336,7 +335,8 @@ assert.deepEqual(packagedIds({
     candidateNamespace: 'CATALOG', contextDependent: false,
   },
   reservations: [scopedReservation('reserved-item-a', 'CATALOG_ITEM', 'explicit_entity')],
-}), ['reserved-item-a'], 'An explicitly selected canonical item must survive packaging');
+}), ['reserved-item-a', 'reserved-item-b', 'reserved-category'],
+'Verified records must pass through packaging unchanged after explicit-item retrieval');
 
 assert.deepEqual(packagedIds({
   understanding: {
@@ -356,7 +356,8 @@ assert.deepEqual(packagedIds({
   reservations: [scopedReservation(
     'reserved-category', 'CATALOG_CATEGORY', 'explicit_entity',
   )],
-}), ['reserved-category'], 'An explicitly selected canonical category must survive packaging');
+}), ['reserved-item-a', 'reserved-item-b', 'reserved-category'],
+'Verified records must pass through packaging unchanged after category retrieval');
 
 assert.deepEqual(packagedIds({
   understanding: {
@@ -370,7 +371,8 @@ assert.deepEqual(packagedIds({
   },
   resolution: { candidate: null, candidateNamespace: null, contextDependent: true },
   reservations: [scopedReservation('reserved-item-a', 'CATALOG_ITEM', 'canonical_memory')],
-}), ['reserved-item-a'], 'A contextual canonical-memory item must survive packaging');
+}), ['reserved-item-a', 'reserved-item-b', 'reserved-category'],
+'Verified records must pass through packaging unchanged after contextual retrieval');
 
 assert.deepEqual(packagedIds({
   understanding: {
@@ -385,8 +387,8 @@ assert.deepEqual(packagedIds({
     scopedReservation('reserved-item-a', 'CATALOG_ITEM', 'explicit_comparison'),
     scopedReservation('reserved-item-b', 'CATALOG_ITEM', 'explicit_comparison'),
   ],
-}), ['reserved-item-a', 'reserved-item-b'],
-'Every explicitly compared canonical record must survive packaging');
+}), ['reserved-item-a', 'reserved-item-b', 'reserved-category'],
+'Verified comparison records must pass through packaging without a destructive filter');
 
 console.log(JSON.stringify({
   tasks: [4, 5, 6], passed: true,

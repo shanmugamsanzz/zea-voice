@@ -187,36 +187,40 @@ function compactGroundedValue(value, stringLimit, depth = 0) {
 function compactGroundedDecisionInput(value, maximumCharacters) {
   const input = value && typeof value === 'object' ? value : {};
   const completePairs = completeConversationTurnPairs(input.recentRelevantTurns ?? []).slice(-10);
-  const build = (stringLimit, retainedPairCount) => ({
-    currentQuestion: compactGroundedValue(input.currentQuestion, Math.min(1_200, stringLimit)),
-    relevantRecentTurns: flattenConversationTurnPairs(retainedPairCount > 0
+  const build = (stringLimit, retainedPairCount) => {
+    const recentTurns = flattenConversationTurnPairs(retainedPairCount > 0
       ? completePairs.slice(-retainedPairCount) : []).map((turn) => ({
       role: turn?.role === 'assistant' ? 'assistant' : 'user',
       content: compactGroundedValue(turn?.content, Math.min(500, stringLimit)),
-    })).filter((turn) => turn.content),
-    canonicalCallMemory: compactGroundedValue(input.canonicalMemory ?? {}, stringLimit),
-    identifiedNeed: compactGroundedValue({
-      ...(input.need ?? {}),
-      ambiguityCandidates: (Array.isArray(input.ambiguityCandidates)
-        ? input.ambiguityCandidates : []).slice(0, 5),
-    }, stringLimit),
-    requestedFact: compactGroundedValue(input.requestedFact, Math.min(160, stringLimit)),
-    hydratedRecords: (Array.isArray(input.hydratedRecords)
-      ? input.hydratedRecords : []).slice(0, 5).map((record) => ({
-      sourceId: record?.sourceId ?? null,
-      recordId: record?.recordId ?? null,
-      recordType: record?.recordType ?? null,
-      content: compactGroundedValue(record?.content, stringLimit),
-      authoritativeData: compactGroundedValue(record?.authoritativeData ?? {}, stringLimit),
-    })),
-    authorizedWorkflow: compactGroundedValue(
-      (Array.isArray(input.workflowAuthorization) ? input.workflowAuthorization : []).slice(0, 3),
-      stringLimit,
-    ),
-    toolSchemas: compactGroundedValue(
-      (Array.isArray(input.toolSchemas) ? input.toolSchemas : []).slice(0, 3), stringLimit,
-    ),
-  });
+    })).filter((turn) => turn.content);
+    return {
+      currentQuestion: compactGroundedValue(input.currentQuestion, Math.min(1_200, stringLimit)),
+      relevantMemory: compactGroundedValue({
+        canonical: input.canonicalMemory ?? {},
+        recentTurns,
+        requestedFact: input.requestedFact ?? null,
+        need: input.need ?? null,
+        ambiguityCandidates: (Array.isArray(input.ambiguityCandidates)
+          ? input.ambiguityCandidates : []).slice(0, 5),
+        clarification: input.clarificationContext ?? null,
+      }, stringLimit),
+      verifiedRecords: (Array.isArray(input.hydratedRecords)
+        ? input.hydratedRecords : []).slice(0, 5).map((record) => ({
+        sourceId: record?.sourceId ?? null,
+        recordId: record?.recordId ?? null,
+        recordType: record?.recordType ?? null,
+        content: compactGroundedValue(record?.content, stringLimit),
+        authoritativeData: compactGroundedValue(record?.authoritativeData ?? {}, stringLimit),
+      })),
+      applicableWorkflow: compactGroundedValue(
+        (Array.isArray(input.workflowAuthorization) ? input.workflowAuthorization : []).slice(0, 3),
+        stringLimit,
+      ),
+      assignedToolSchemas: compactGroundedValue(
+        (Array.isArray(input.toolSchemas) ? input.toolSchemas : []).slice(0, 3), stringLimit,
+      ),
+    };
+  };
   for (let retainedPairCount = completePairs.length; retainedPairCount >= 0; retainedPairCount -= 1) {
     for (const stringLimit of [800, 500, 320, 200, 120, 80]) {
       const compact = build(stringLimit, retainedPairCount);

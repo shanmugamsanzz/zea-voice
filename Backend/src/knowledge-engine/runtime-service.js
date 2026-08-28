@@ -12,9 +12,8 @@ import {
 } from '../knowledge-bases/knowledge-map.service.js';
 import { KNOWLEDGE_PUBLICATION_BUNDLE_VERSION } from './publication-index-builder.js';
 import {
-  createKnowledgeEngineInput, isKnowledgeEngineInput, technicalClarificationDecision,
+  createKnowledgeEngineInput, isKnowledgeEngineInput,
 } from './engine-contract.js';
-import { runObservedKnowledgeTurn } from './voice-turn-latency.js';
 import { enqueueKnowledgeProcessingJob } from '../knowledge-bases/knowledge-processing.queue.js';
 
 export const KNOWLEDGE_ENGINE_RUNTIME_VERSION = 1;
@@ -332,136 +331,6 @@ function publicationRevisions(publications = []) {
   })));
 }
 
-function publicResult(observed, publications) {
-  const evidence = observed.authoritative.evidence ?? [];
-  const selectedIds = new Set((observed.decision?.evidenceIds ?? []).map(normalizeId));
-  const selectedCallerFacing = evidence.filter((source) => source.callerFacing === true
-    && (selectedIds.has(normalizeId(source.id)) || selectedIds.has(normalizeId(source.recordId))));
-  const retrievedCandidates = (observed.authoritative?.fusion?.candidates ?? []).map((candidate) => ({
-    recordId: candidate.recordId,
-    recordType: candidate.recordType,
-    knowledgeBaseId: candidate.knowledgeBaseId,
-    publicationRevision: candidate.publicationRevision,
-    namespace: candidate.namespace,
-    rank: candidate.rank,
-    channels: candidate.channels,
-  }));
-  const hydratedEvidence = evidence.map((source) => ({
-    evidenceId: source.id,
-    recordId: source.recordId,
-    recordType: source.recordType,
-    knowledgeBaseId: source.knowledgeBaseId,
-    publicationRevision: source.publicationRevision,
-    documentId: source.documentId,
-    documentVersionId: source.documentVersionId,
-    hydrationValidated: source.hydrationValidated === true,
-  }));
-  const permittedEvidenceIds = selectedCallerFacing.map((source) => source.id);
-  if (permittedEvidenceIds.length > 0 && hydratedEvidence.length === 0) {
-    throw new AppError(503,
-      'Permitted evidence cannot be produced without authoritative PostgreSQL hydration',
-      'KNOWLEDGE_EVIDENCE_ALIGNMENT_INVALID', {
-        stage: 'evidence_alignment', permittedEvidenceIds,
-      });
-  }
-  const retrievalTrace = Object.freeze({
-    primaryQuery: observed.input?.utterance ?? null,
-    contextualQuery: observed.input?.queryUnderstanding?.contextDependent === true
-      ? observed.input.queryUnderstanding.canonicalContext ?? null
-      : null,
-    retrievedCandidates: Object.freeze(retrievedCandidates),
-    hydratedEvidence: Object.freeze(hydratedEvidence),
-    permittedEvidenceIds: Object.freeze(permittedEvidenceIds),
-    sourceMap: observed.llmEvidenceBundle?.sourceMap ?? Object.freeze([]),
-    rejectedCandidates: observed.authoritative?.rejectedRecordIds ?? Object.freeze([]),
-    publicationRevisions: publicationRevisions(publications),
-  });
-  return Object.freeze({
-    operation: 'knowledge_engine_runtime', engineVersion: KNOWLEDGE_ENGINE_RUNTIME_VERSION,
-    route: 'knowledge_engine', found: evidence.length > 0, decision: observed.decision,
-    llmEvidenceBundle: observed.llmEvidenceBundle,
-    sources: Object.freeze(selectedCallerFacing),
-    actionEvidence: Object.freeze(evidence.filter((source) => source.recordType === 'WORKFLOW_RULE')),
-    guidanceEvidence: Object.freeze(evidence.filter((source) => (
-      source.recordType === 'CONVERSATION_NODE' && source.callerFacing === false
-    ))),
-    entities: Object.freeze(evidence.filter((source) => (
-      ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(source.recordType)
-    )).map((source) => ({
-      id: source.recordId,
-      type: source.recordType === 'CATALOG_CATEGORY' ? 'CATEGORY' : 'ITEM',
-      key: source.recordType === 'CATALOG_CATEGORY'
-        ? source.authoritativeData?.categoryKey ?? null
-        : source.authoritativeData?.itemKey ?? null,
-      name: source.recordType === 'CATALOG_CATEGORY'
-        ? source.authoritativeData?.category ?? null
-        : source.authoritativeData?.name ?? null,
-      category: source.authoritativeData?.category ?? null,
-      categoryKey: source.authoritativeData?.categoryKey ?? null,
-    }))),
-    evidenceIds: Object.freeze(selectedCallerFacing.map((source) => source.id)),
-    retrievalTrace,
-    // Publication availability is independent of whether this particular
-    // utterance produced a ranked candidate. Reporting only candidate
-    // revisions made healthy assigned publications look unavailable.
-    publicationRevisions: publicationRevisions(publications),
-    retrieval: Object.freeze({
-      candidateCount: observed.retrieval.candidateCount,
-      searchedIndexes: observed.retrieval.searchedIndexes,
-      channels: Object.freeze(Object.fromEntries(Object.entries(observed.retrieval.channels)
-        .map(([channel, candidates]) => [channel, candidates.length]))),
-      conflictDetected: observed.authoritative.conflict.detected,
-      ambiguityDetected: observed.authoritative.ambiguity.detected,
-    }),
-    latency: observed.latency, classification: observed.classification,
-    resolution: observed.resolution, authoritative: observed.authoritative,
-  });
-}
-
-export async function retrieveTenantEvidence(auth, input, dependencies = {}) {
-  if (!isKnowledgeEngineInput(input)) {
-    throw new AppError(400, 'A versioned knowledge-engine input is required', 'KNOWLEDGE_ENGINE_INPUT_INVALID');
-  }
-  let artifacts = null;
-  try {
-    artifacts = await loadPublishedEngineArtifacts(auth, input, dependencies);
-    const observed = await runObservedKnowledgeTurn({
-      auth, input, publicationBundles: artifacts.bundles,
-      sparseIndexes: artifacts.sparseIndexes, runtimeProfile: dependencies.runtimeProfile,
-      tracker: dependencies.tracker,
-    }, {
-      retrievalDependencies: dependencies.retrievalDependencies,
-      hydrationDependencies: { contextRunner: dependencies.contextRunner ?? withTenantContext },
-      cancelRetrieval: dependencies.cancelRetrieval, cancelHydration: dependencies.cancelHydration,
-    });
-    return publicResult(observed, artifacts.publications);
-  } catch (error) {
-    if (dependencies.throwOnError === true) throw error;
-    const diagnostic = Object.freeze({
-      stage: 'knowledge.engine_unavailable',
-      errorCode: error.code ?? 'KNOWLEDGE_ENGINE_UNAVAILABLE',
-      tenantId: auth.tenantId,
-      agentId: input.agentId,
-      callId: input.callId,
-      usageDirection: input.usageDirection,
-      publicationRevisions: publicationRevisions(artifacts?.publications),
-      details: error.details ?? null,
-    });
-    logger.error({ err: error, ...diagnostic }, 'Knowledge engine could not load authoritative evidence');
-    return Object.freeze({
-      operation: 'knowledge_engine_runtime', route: 'knowledge_engine', found: false,
-      cancelled: input.abortSignal?.aborted === true,
-      error: error.code ?? 'KNOWLEDGE_ENGINE_UNAVAILABLE', sources: Object.freeze([]),
-      actionEvidence: Object.freeze([]), guidanceEvidence: Object.freeze([]),
-      entities: Object.freeze([]), decision: technicalClarificationDecision(
-        input.abortSignal?.aborted ? 'knowledge_cancelled' : (error.code ?? 'knowledge_engine_unavailable'),
-      ),
-      publicationRevisions: diagnostic.publicationRevisions,
-      diagnostic,
-    });
-  }
-}
-
 export const searchPublishedKnowledgeOperation = Object.freeze({
   name: 'search_published_knowledge',
   description: 'Search current published knowledge assigned to this agent.',
@@ -492,10 +361,6 @@ function adaptInput(auth, input, prefix) {
       pendingQuestion: input.pendingQuestion, collectedInformation: input.collectedInformation,
     },
   });
-}
-
-export function searchPublishedKnowledge(auth, input, dependencies = {}) {
-  return retrieveTenantEvidence(auth, adaptInput(auth, input, 'search'), dependencies);
 }
 
 export async function loadPublishedKnowledgeMap(auth, input, dependencies = {}) {

@@ -4,7 +4,7 @@ import {
   normalizePublicationPhrase,
 } from './publication-index-builder.js';
 import { resolvePublishedEntityRoute } from './entity-route-resolver.js';
-import { classifyKnowledgeQuery, knowledgeQueryClasses } from './query-classifier.js';
+import { buildKnowledgeRetrievalHints, knowledgeQueryClasses } from './query-classifier.js';
 import { understandContextualKnowledgeQuery } from './contextual-query-understanding.js';
 import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/knowledge-confidence-config.js';
 
@@ -43,7 +43,7 @@ export async function prepareKnowledgeQuery(input, publicationBundles, options =
   );
   const resolve = dependencies.resolve ?? resolvePublishedEntityRoute;
   const understand = dependencies.understand ?? understandContextualKnowledgeQuery;
-  const classify = dependencies.classify ?? classifyKnowledgeQuery;
+  const classify = dependencies.classify ?? buildKnowledgeRetrievalHints;
   const initialResolution = await resolve(initialInput, publicationBundles, {
     semanticMatches: options.semanticMatches ?? [],
     confidenceConfiguration: options.confidenceConfiguration,
@@ -57,11 +57,17 @@ export async function prepareKnowledgeQuery(input, publicationBundles, options =
     contextDependent: understanding.contextDependent === true,
     contextualEntity: understanding.contextDependent ? understanding.canonicalContext : null,
   });
-  const classification = await classify(preparedInput, resolution);
-  const priorityIntent = [
-    knowledgeQueryClasses.SAFETY_EMERGENCY,
-    knowledgeQueryClasses.CALL_CONTROL,
-  ].includes(classification.intentClass);
+  const classified = await classify(preparedInput, resolution);
+  const retrievalHints = Object.freeze({
+    ...classified,
+    role: 'RETRIEVAL_HINTS',
+    decisionAuthority: false,
+    clarificationAuthority: false,
+    toolExecutionAuthority: false,
+  });
+  const deterministicProtocolException = retrievalHints.intentClass
+    === knowledgeQueryClasses.SAFETY_EMERGENCY
+    ? knowledgeQueryClasses.SAFETY_EMERGENCY : null;
   return Object.freeze({
     version: FAST_QUERY_PREPARATION_VERSION,
     input: preparedInput,
@@ -71,11 +77,15 @@ export async function prepareKnowledgeQuery(input, publicationBundles, options =
     requestedFacts: preparedInput.requestedFacts,
     contextualReferences: preparedInput.contextualReferences,
     understanding,
-    intentClass: classification.intentClass,
-    priorityIntent,
+    intentClass: retrievalHints.intentClass,
+    deterministicProtocolException,
+    priorityIntent: Boolean(deterministicProtocolException),
     usesCallMemory: understanding.contextDependent === true,
     resolution,
-    classification,
+    retrievalHints,
+    // Compatibility alias. This object has no response, clarification, or
+    // tool authority and is consumed only to improve retrieval.
+    classification: retrievalHints,
   });
 }
 

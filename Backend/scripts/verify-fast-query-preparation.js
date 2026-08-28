@@ -138,18 +138,25 @@ prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
 }), bundle);
 assert.equal(prepared.intentClass, knowledgeQueryClasses.SAFETY_EMERGENCY);
 assert.equal(prepared.priorityIntent, true);
+assert.equal(prepared.deterministicProtocolException, knowledgeQueryClasses.SAFETY_EMERGENCY);
+assert.equal(prepared.retrievalHints.role, 'RETRIEVAL_HINTS');
+assert.equal(prepared.retrievalHints.decisionAuthority, false);
+assert.equal(prepared.retrievalHints.clarificationAuthority, false);
+assert.equal(prepared.retrievalHints.toolExecutionAuthority, false);
 
 prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
   tenantId, agentId, callId, utterance: 'tenant end phrase', memory,
 }), bundle);
 assert.equal(prepared.intentClass, knowledgeQueryClasses.CALL_CONTROL);
-assert.equal(prepared.priorityIntent, true);
+assert.equal(prepared.priorityIntent, false);
+assert.equal(prepared.deterministicProtocolException, null);
 
 let classifyCalls = 0;
 prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
   tenantId, agentId, callId, utterance: 'tenant action phrase', memory,
 }), bundle);
 assert.equal(prepared.intentClass, knowledgeQueryClasses.ACTION_TOOL_REQUEST);
+assert.equal(prepared.retrievalHints.toolExecutionAuthority, false);
 assert.equal(prepared.understanding.actionIntent.detected, true);
 assert.equal(prepared.understanding.actionIntent.source, 'published_workflow');
 
