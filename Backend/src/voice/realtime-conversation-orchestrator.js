@@ -180,6 +180,9 @@ export function llmOperationalFailureClass(error) {
   if (code === 'LLM_PROVIDER_TIMEOUT' || code === 'VOICE_TURN_STAGE_TIMEOUT'
     || code === 'LLM_REQUEST_TIMEOUT') return 'timeout';
   if (code === 'LLM_GROUNDED_PROMPT_BUDGET_EXCEEDED') return 'prompt_budget';
+  if (code === 'LLM_GROUNDED_INITIALIZATION_FAILED'
+    || code === 'LLM_GROUNDED_INPUT_INVALID'
+    || code === 'LLM_GROUNDED_STREAM_INVALID') return 'initialization';
   if (code.startsWith('LLM_STRUCTURED_OUTPUT_')) return 'structured_output';
   return 'provider_failure';
 }
@@ -3039,6 +3042,10 @@ export class RealtimeConversationOrchestrator {
           stage: 'llm.safe_recovery_fallback', code: error.code,
           operationalFailure,
           providerId: this.runtimeProfile.providers.llm.providerId,
+          initializationStage: error?.details?.initializationStage ?? null,
+          errorName: String(error?.details?.errorName ?? error?.name ?? 'Error').slice(0, 120),
+          errorMessage: String(error?.details?.errorMessage ?? error?.message ?? '').slice(0, 1_000),
+          errorStack: String(error?.cause?.stack ?? error?.stack ?? '').slice(0, 4_000),
         }, 'Selected LLM failed operationally; using the technical fallback response');
         response = {
           cancelled: false,

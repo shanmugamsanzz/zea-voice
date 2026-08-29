@@ -149,6 +149,12 @@ assert.equal(constrainedInput.currentQuestion, currentQuestion);
 assert.equal(llmOperationalFailureClass({ code: 'LLM_PROVIDER_TIMEOUT' }), 'timeout');
 assert.equal(llmOperationalFailureClass({ code: 'VOICE_TURN_STAGE_TIMEOUT' }), 'timeout');
 assert.equal(llmOperationalFailureClass({ code: 'LLM_GROUNDED_PROMPT_BUDGET_EXCEEDED' }), 'prompt_budget');
+assert.equal(llmOperationalFailureClass({ code: 'LLM_GROUNDED_INITIALIZATION_FAILED' }),
+  'initialization');
+assert.equal(llmOperationalFailureClass({ code: 'LLM_GROUNDED_INPUT_INVALID' }),
+  'initialization');
+assert.equal(llmOperationalFailureClass({ code: 'LLM_GROUNDED_STREAM_INVALID' }),
+  'initialization');
 assert.equal(llmOperationalFailureClass({ code: 'LLM_STRUCTURED_OUTPUT_INVALID_JSON' }),
   'structured_output');
 assert.equal(llmOperationalFailureClass({ code: 'LLM_PROVIDER_UNAVAILABLE' }), 'provider_failure');
@@ -173,6 +179,47 @@ assert.notEqual(configuredOperationalFailureResponse(
   operationalProfile, {}, { validation: true },
 ), configuredSafeFailureResponse(operationalProfile),
 'Evidence validation failure must never use the ambiguity response');
+
+await assert.rejects(createSelectedLlmStream(profile, {
+  callId: 'invalid-tool-contract', query: currentQuestion,
+  knowledge: { found: false, route: 'none', tenantEvidence: { sources: [] } },
+  context: {
+    groundedResponseMode: true,
+    groundedDecisionInput: { currentQuestion, toolSchemas: { invalid: true } },
+  },
+  usageDirection: 'inbound',
+}, { adapter, skipDefaultRegistration: true }), (error) => (
+  error.code === 'LLM_GROUNDED_INPUT_INVALID'
+  && error.details?.initializationStage === 'input_contract'
+  && error.details?.field === 'authorized tool schemas'
+));
+
+await assert.rejects(createSelectedLlmStream(profile, {
+  callId: 'invalid-source-contract', query: currentQuestion,
+  knowledge: {
+    found: true, route: 'knowledge_engine',
+    tenantEvidence: { sources: [], sourceMap: { invalid: true } },
+  },
+  context: { groundedResponseMode: true, groundedDecisionInput: { currentQuestion } },
+  usageDirection: 'inbound',
+}, { adapter, skipDefaultRegistration: true }), (error) => (
+  error.code === 'LLM_GROUNDED_INITIALIZATION_FAILED'
+  && error.details?.initializationStage === 'grounding_envelope'
+  && /map/u.test(error.details?.errorMessage ?? '')
+));
+
+await assert.rejects(createSelectedLlmStream(profile, {
+  callId: 'invalid-provider-stream', query: currentQuestion,
+  knowledge: { found: false, route: 'none', tenantEvidence: { sources: [] } },
+  context: { groundedResponseMode: true, groundedDecisionInput: { currentQuestion } },
+  usageDirection: 'inbound',
+}, {
+  adapter: { stream: () => null, cancel() {}, close() {} },
+  skipDefaultRegistration: true,
+}), (error) => (
+  error.code === 'LLM_GROUNDED_STREAM_INVALID'
+  && error.details?.initializationStage === 'provider_stream'
+));
 
 await session.close();
 console.log('Compact grounded LLM input, budgets and timeout separation verified.');

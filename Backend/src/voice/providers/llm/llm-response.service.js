@@ -29,6 +29,37 @@ function safeToolName(tool, index) {
   return name || `tool_${index + 1}`;
 }
 
+function initializationFailure(error, stage) {
+  if (error instanceof AppError) return error;
+  const failure = new AppError(500,
+    'The grounded LLM request could not be initialized',
+    'LLM_GROUNDED_INITIALIZATION_FAILED', {
+      initializationStage: stage,
+      errorName: String(error?.name ?? 'Error').slice(0, 120),
+      errorMessage: String(error?.message ?? 'Unknown initialization error').slice(0, 1_000),
+    });
+  failure.cause = error;
+  return failure;
+}
+
+function initialize(stage, operation) {
+  try {
+    return operation();
+  } catch (error) {
+    throw initializationFailure(error, stage);
+  }
+}
+
+function configuredArray(value, field) {
+  if (value === undefined || value === null) return [];
+  if (Array.isArray(value)) return value;
+  throw new AppError(500,
+    `The grounded LLM ${field} configuration must be an array`,
+    'LLM_GROUNDED_INPUT_INVALID', {
+      initializationStage: 'input_contract', field, receivedType: typeof value,
+    });
+}
+
 const truncatedFinishReasons = new Set([
   'length', 'max_tokens', 'max_output_tokens', 'max_tokens_reached', 'incomplete',
 ]);
@@ -113,7 +144,7 @@ export function selectedGroundedOutputTokenLimit() {
 }
 
 export function runtimeTools(tools = []) {
-  return tools.map((tool, index) => {
+  return configuredArray(tools, 'assigned tools').map((tool, index) => {
     const configuration = tool.configuration ?? {};
     const name = safeToolName(tool, index);
     const inputSchema = configuration.inputSchema ?? configuration.input_schema
@@ -139,23 +170,27 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
     breaker: dependencies.breaker,
   });
   const ownsAdapter = !dependencies.adapter;
-  const assignedTools = runtimeTools(runtimeProfile.tools);
+  const assignedTools = initialize('assigned_tools', () => runtimeTools(runtimeProfile.tools));
   const groundedResponseMode = input.context?.groundedResponseMode === true;
   const decisionTools = groundedResponseMode
     ? (input.context?.groundedDecisionInput?.toolSchemas
       ?? input.context?.authorizedToolSchemas
       ?? [])
     : assignedTools;
+  const validatedDecisionTools = configuredArray(decisionTools, 'authorized tool schemas');
+  const configuredFields = configuredArray(
+    input.context?.configuredInformationFields, 'information fields',
+  );
   // Every grounded live decision uses the compact voice contract. Callers
   // cannot accidentally opt back into the larger non-voice prompt path.
   const compactGrounding = groundedResponseMode;
-  const groundingEnvelope = buildGroundingEnvelope(
+  const groundingEnvelope = initialize('grounding_envelope', () => buildGroundingEnvelope(
     input.knowledge ?? { found: false, route: 'none' },
     compactGrounding ? { includePublishedMap: false, maximumSources: 5 } : {},
-  );
+  ));
   const decisionRuntime = {
-    fieldSchemas: input.context?.configuredInformationFields ?? [],
-    toolSchemas: decisionTools,
+    fieldSchemas: configuredFields,
+    toolSchemas: validatedDecisionTools,
   };
   const providerQuery = groundedResponseMode
     ? String(input.context?.groundedDecisionInput?.currentQuestion ?? input.query ?? '').slice(0, 2_000)
@@ -163,16 +198,16 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
   const characterBudget = selectedLlmPromptBudget(compactGrounding);
   const systemCharacterBudget = Math.max(4_000,
     characterBudget - Array.from(String(providerQuery ?? '')).length);
-  const systemPrompt = buildAgentSystemPrompt(runtimeProfile.agent, {
+  const systemPrompt = initialize('system_prompt', () => buildAgentSystemPrompt(runtimeProfile.agent, {
     usageDirection: input.usageDirection,
     context: {
       ...(input.context ?? {}),
       compactGrounding,
-      configuredToolSchemas: decisionTools,
+      configuredToolSchemas: validatedDecisionTools,
     },
     knowledge: input.knowledge ?? { found: false, route: 'none' },
     maxPromptChars: systemCharacterBudget,
-  });
+  }));
   const historyLimit = groundedResponseMode
     ? 0
     : Math.min(
@@ -192,8 +227,11 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
     characterBudget,
     env.VOICE_LLM_PROMPT_BUDGET_TOKENS,
   );
-  return {
-    events: llm.stream({
+  const responseSchema = groundedResponseMode
+    ? initialize('response_schema', () => groundedDecisionJsonSchema(
+      groundingEnvelope, decisionRuntime,
+    )) : null;
+  const events = initialize('provider_stream', () => llm.stream({
       messages,
       tools: groundedResponseMode ? [] : assignedTools,
       // Evidence selection, state mutation and tool authorization are control
@@ -206,10 +244,17 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
       ...(groundedResponseMode ? {
         responseFormat: {
           type: 'json_schema', name: 'grounded_voice_decision', strict: true,
-          schema: groundedDecisionJsonSchema(groundingEnvelope, decisionRuntime),
+          schema: responseSchema,
         },
       } : {}),
-    }),
+    }));
+  if (!events || typeof events[Symbol.asyncIterator] !== 'function') {
+    throw new AppError(500,
+      'The selected LLM adapter did not create an asynchronous response stream',
+      'LLM_GROUNDED_STREAM_INVALID', { initializationStage: 'provider_stream' });
+  }
+  return {
+    events,
     promptCharacters: budget.characters,
     estimatedPromptTokens: budget.estimatedTokens,
     historyMessages: boundedHistory.length,
