@@ -433,6 +433,43 @@ assert.equal(clarificationTurn.state.pendingClarification.text,
 assert.equal(clarificationTurn.state.pendingClarification.attemptCount, 1);
 clarificationMemory.close();
 
+const unavailableSpeech = 'That information is not available in my published knowledge.';
+const unavailableMemory = openGenericConversationState(
+  { ...identity, callId: 'call-zero-evidence-unavailable' }, {}, 1,
+);
+unavailableMemory.beginTurn('zero-evidence-unavailable-turn');
+const unavailableTurn = applyUnifiedGroundedTurn({
+  rawDecision: unifiedDecision({
+    decision: 'answer', answer: unavailableSpeech, evidenceIds: [], stateUpdate: {},
+    pendingQuestion: null, toolRequest: null,
+  }),
+  groundingEnvelope: { found: false, sources: [], entities: [] },
+  memory: unavailableMemory, turnToken: 'zero-evidence-unavailable-turn', evidence: [],
+  finalizedUtterance: 'What is the unsupported published fact?',
+  zeroEvidenceResponse: unavailableSpeech,
+});
+assert.equal(unavailableTurn.valid, true);
+assert.equal(unavailableTurn.answer, unavailableSpeech);
+unavailableMemory.close();
+
+const zeroEvidenceInventedMemory = openGenericConversationState(
+  { ...identity, callId: 'call-zero-evidence-invented' }, {}, 1,
+);
+zeroEvidenceInventedMemory.beginTurn('zero-evidence-invented-turn');
+const inventedTurn = applyUnifiedGroundedTurn({
+  rawDecision: unifiedDecision({
+    decision: 'answer', answer: 'An invented factual response.', evidenceIds: [], stateUpdate: {},
+    pendingQuestion: null, toolRequest: null,
+  }),
+  groundingEnvelope: { found: false, sources: [], entities: [] },
+  memory: zeroEvidenceInventedMemory, turnToken: 'zero-evidence-invented-turn', evidence: [],
+  finalizedUtterance: 'What is the unsupported published fact?',
+  zeroEvidenceResponse: unavailableSpeech,
+});
+assert.equal(inventedTurn.valid, false);
+assert.equal(inventedTurn.reason, 'verified_evidence_missing');
+zeroEvidenceInventedMemory.close();
+
 const incompleteMemory = openGenericConversationState(
   { ...identity, callId: 'call-incomplete-evidence' }, {}, 1,
 );

@@ -62,8 +62,12 @@ assert.ok(finalPlayback >= 0 && playbackResult > finalPlayback,
   'the grounded turn must report completion only after final TTS playback');
 assert.doesNotMatch(groundedTurn.slice(finalPlayback, playbackResult), /#armInactivity\(\)/u,
   'the grounded turn wrapper—not TTS processing—must arm inactivity');
-assert.match(groundedTurn, /operational_response_unconfigured[\s\S]*suppressInactivity:\s*true/u,
-  'missing technical configuration must not fall through to an inactivity prompt');
+assert.match(groundedTurn, /configuredTechnicalFailureResponse/u,
+  'operational failures must resolve through tenant-configured technical speech');
+assert.match(groundedTurn, /VOICE_TECHNICAL_RESPONSE_UNCONFIGURED/u,
+  'missing required technical speech must fail explicitly');
+assert.doesNotMatch(groundedTurn, /operational_response_unconfigured[\s\S]*suppressInactivity/u,
+  'operational failures must not silently return to listening');
 
 const armStart = source.indexOf('#armInactivity()');
 const armEnd = source.indexOf('async #handleInactivity()', armStart);

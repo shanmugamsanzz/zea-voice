@@ -6,6 +6,10 @@ import {
 } from '../src/voice/providers/llm/llm-response.service.js';
 import { compactGroundedDecisionInput } from '../src/agents/agent-runtime.service.js';
 import {
+  groundedDecisionJsonSchema,
+  validateGroundedLlmDecision,
+} from '../src/voice/interaction/grounded-llm-decision.js';
+import {
   configuredSafeFailureResponse,
   configuredTechnicalFailureResponse,
   configuredOperationalFailureResponse,
@@ -105,7 +109,7 @@ assert.ok(match, 'The complete grounded input must be present');
 const groundedInput = JSON.parse(match[1]);
 assert.deepEqual(Object.keys(groundedInput), [
   'currentQuestion', 'relevantMemory', 'verifiedRecords',
-  'applicableWorkflow', 'assignedToolSchemas',
+  'applicableWorkflow', 'assignedToolSchemas', 'zeroEvidencePolicy',
 ]);
 assert.equal(groundedInput.relevantMemory.recentTurns.length, 10,
   'Recent Turns 5 must send five complete caller-agent pairs when the prompt budget permits');
@@ -204,6 +208,68 @@ const legacySourceMapSession = await createSelectedLlmStream(profile, {
   usageDirection: 'inbound',
 }, { adapter, skipDefaultRegistration: true });
 await legacySourceMapSession.close();
+
+const zeroEvidenceEnvelope = Object.freeze({
+  found: false, route: 'knowledge_engine', sources: Object.freeze([]),
+  sourceMap: Object.freeze([]), entities: Object.freeze([]),
+  exactCallerResponses: Object.freeze([]),
+});
+const unavailableSpeech = 'That information is not available in my published knowledge.';
+assert.deepEqual(
+  groundedDecisionJsonSchema(zeroEvidenceEnvelope, {}).properties.decision.enum,
+  ['CLARIFY'],
+  'Zero evidence without an authorized tool or configured response must permit only CLARIFY',
+);
+assert.deepEqual(groundedDecisionJsonSchema(zeroEvidenceEnvelope, {
+  zeroEvidenceResponse: unavailableSpeech,
+}).properties.decision.enum, ['RESPONSE', 'CLARIFY']);
+const zeroEvidenceClarification = validateGroundedLlmDecision(JSON.stringify({
+  decision: 'CLARIFY', answer: 'Which published option did you mean?',
+  responseId: null, evidenceIds: [], toolName: null, toolArguments: null,
+  clarificationReason: 'missing_evidence',
+}), zeroEvidenceEnvelope, {});
+assert.equal(zeroEvidenceClarification.valid, true);
+const configuredUnavailableDecision = validateGroundedLlmDecision(JSON.stringify({
+  decision: 'RESPONSE', answer: unavailableSpeech,
+  responseId: null, evidenceIds: [], toolName: null, toolArguments: null,
+  clarificationReason: null,
+}), zeroEvidenceEnvelope, { zeroEvidenceResponse: unavailableSpeech });
+assert.equal(configuredUnavailableDecision.valid, true);
+assert.equal(configuredUnavailableDecision.approvedZeroEvidenceResponse, true);
+assert.equal(validateGroundedLlmDecision(JSON.stringify({
+  decision: 'RESPONSE', answer: 'An invented factual answer.',
+  responseId: null, evidenceIds: [], toolName: null, toolArguments: null,
+  clarificationReason: null,
+}), zeroEvidenceEnvelope, { zeroEvidenceResponse: unavailableSpeech }).reason,
+'verified_evidence_missing');
+
+const zeroEvidenceSession = await createSelectedLlmStream(profile, {
+  callId: 'zero-evidence-normal-turn', query: 'What does the unknown option include?',
+  knowledge: { found: false, route: 'knowledge_engine', tenantEvidence: { sources: [] } },
+  context: {
+    groundedResponseMode: true,
+    zeroEvidenceResponse: unavailableSpeech,
+    groundedDecisionInput: {
+      currentQuestion: 'What does the unknown option include?',
+      recentRelevantTurns: [
+        { role: 'user', content: 'Tell me about the earlier option.' },
+        { role: 'assistant', content: 'Which option do you mean?' },
+      ],
+      canonicalMemory: { pendingClarification: { reason: 'missing_entity' } },
+      hydratedRecords: [], workflowAuthorization: [], toolSchemas: [],
+      zeroEvidencePolicy: {
+        callerFacingEvidenceAvailable: false,
+        informationUnavailableResponse: unavailableSpeech,
+      },
+    },
+  },
+  usageDirection: 'inbound',
+}, { adapter, skipDefaultRegistration: true });
+assert.match(providerRequest.messages[0].content, /Tell me about the earlier option/u);
+assert.match(providerRequest.messages[0].content, /pendingClarification/u);
+assert.deepEqual(providerRequest.responseFormat.schema.properties.decision.enum,
+  ['RESPONSE', 'CLARIFY']);
+await zeroEvidenceSession.close();
 
 await assert.rejects(createSelectedLlmStream(profile, {
   callId: 'invalid-provider-stream', query: currentQuestion,

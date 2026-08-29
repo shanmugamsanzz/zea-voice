@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { env } from '../config/env.js';
+import { publishedRecordCallerFacingHint } from './evidence-audience.js';
 import { logger } from '../config/logger.js';
 import { redis } from '../infrastructure/redis.js';
 import { withTenantContext } from '../infrastructure/database-context.js';
@@ -100,6 +101,9 @@ function publicationRecord(record, answerCards) {
   const recordType = String(record.type ?? record.recordType ?? '').toLocaleLowerCase();
   const metadata = record.metadata && typeof record.metadata === 'object' ? record.metadata : {};
   const answerCard = answerCards.get(normalizeId(recordId)) ?? record.answerCard ?? null;
+  const callerFacingHint = publishedRecordCallerFacingHint({
+    ...record, recordType, metadata,
+  });
   return Object.freeze({
     record_id: recordId, record_type: recordType,
     document_id: record.documentId, document_version_id: record.documentVersionId,
@@ -121,6 +125,7 @@ function publicationRecord(record, answerCards) {
     publicationPhoneticForms: record.phoneticForms ?? [], approvedAnswerCard: answerCard,
     publicationUseCasePhrases: record.useCasePhrases ?? [],
     publicationUseCaseTokens: record.useCaseTokens ?? [],
+    caller_facing_hint: callerFacingHint,
   });
 }
 

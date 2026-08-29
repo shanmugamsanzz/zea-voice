@@ -218,6 +218,21 @@ assert.equal(production.runtimeFailures, 0);
 assert.equal(production.runtimeErrors, 0);
 assert.equal(production.audioFailures, 0);
 
+const zeroEvidence = JSON.parse(run(
+  'zero-evidence multi-tenant regression',
+  'scripts/verify-zero-evidence-multitenant.js',
+  [`--repeats=${repeats}`],
+));
+assert.equal(zeroEvidence.passed, true);
+assert.equal(zeroEvidence.llmDecisions, zeroEvidence.turns);
+assert.ok(zeroEvidence.targetedClarifications > 0);
+assert.ok(zeroEvidence.configuredSupportResponses > 0);
+assert.ok(zeroEvidence.authorizedTools > 0);
+assert.equal(zeroEvidence.hallucinationsAccepted, 0);
+assert.equal(zeroEvidence.falseValidationRejections, 0);
+assert.equal(zeroEvidence.silentTurns, 0);
+assert.equal(zeroEvidence.crossTenantLeakage, false);
+
 console.log(JSON.stringify({
   gate: 'universal-engine-acceptance',
   passed: true,
@@ -229,6 +244,8 @@ console.log(JSON.stringify({
   largeRecordPromptCases: promptCases,
   mandatoryRecordsVerified,
   toolSchemasVerified,
+  zeroEvidenceTurns: zeroEvidence.turns,
+  zeroEvidenceLlmDecisions: zeroEvidence.llmDecisions,
   maximumPromptCharacters: 4_000,
   duplicateEvidence: 0,
   hardcodedBusinessVocabulary: false,

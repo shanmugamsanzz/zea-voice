@@ -9,6 +9,7 @@ import {
   canonicalRecordIdentityKey,
   canonicalRecordNamespace,
 } from './canonical-record-identity.js';
+import { publishedRecordCallerFacingHint } from './evidence-audience.js';
 
 export const TARGETED_RETRIEVAL_VERSION = 5;
 
@@ -288,6 +289,14 @@ function publicationScope(input, bundles) {
         ),
         knowledgeBaseId,
         publicationRevision,
+        callerFacingHint: publishedRecordCallerFacingHint(record),
+        toolIdentifier: String(
+          record.entity_metadata?.actionConfig?.toolIdentifier
+            ?? record.entity_metadata?.action_config?.tool_identifier
+            ?? record.metadata?.actionConfig?.toolIdentifier
+            ?? record.metadata?.action_config?.tool_identifier
+            ?? '',
+        ).trim() || null,
         itemKey: String(record.entity_metadata?.itemKey ?? record.metadata?.itemKey ?? '').trim() || null,
         categoryKey: String(record.entity_metadata?.categoryKey ?? record.metadata?.categoryKey ?? '').trim() || null,
         useCasePhrases: Object.freeze([...(record.publicationUseCasePhrases
@@ -320,6 +329,8 @@ function freezeCandidate(candidate, channel, rank) {
     channel,
     rank,
     score: boundedScore(candidate.score),
+    callerFacingHint: candidate.callerFacingHint === true,
+    authorizationHint: candidate.authorizationHint === true,
     ...(candidate.tokenCoverage === undefined
       ? {} : { tokenCoverage: boundedScore(candidate.tokenCoverage) }),
     ...(candidate.matchMethod ? { matchMethod: String(candidate.matchMethod) } : {}),
@@ -489,7 +500,12 @@ function activeWorkflowCandidate(input, recordScope, allowedTypes) {
   const recordId = normalizeId(active.authorizationRecordId
     ?? active.authorizationEvidenceId ?? active.workflowRecordId);
   const direct = recordId ? recordScope.get(recordId) : null;
-  return direct?.recordType === 'WORKFLOW_RULE' ? direct : null;
+  if (direct?.recordType === 'WORKFLOW_RULE') return direct;
+  const activeName = normalizeId(active.name);
+  return activeName ? [...recordScope.values()].find((record) => (
+    record.recordType === 'WORKFLOW_RULE'
+    && normalizeId(record.toolIdentifier) === activeName
+  )) ?? null : null;
 }
 
 function structuredCandidatesForTurn(input, classification, resolution, recordScope, allowedTypes, limit, queryContext) {
@@ -516,6 +532,18 @@ function structuredCandidatesForTurn(input, classification, resolution, recordSc
     if (existing >= 0) {
       if (candidate.score > candidates[existing].score) candidates[existing] = candidate;
     } else candidates.push(candidate);
+  }
+  const activeWorkflow = activeWorkflowCandidate(input, recordScope, allowedTypes);
+  if (activeWorkflow && !candidates.some((candidate) => (
+    normalizeId(candidate.recordId) === normalizeId(activeWorkflow.recordId)
+    && candidate.recordType === 'WORKFLOW_RULE'
+  ))) {
+    candidates.push({
+      ...activeWorkflow,
+      score: 1,
+      matchMethod: 'active_tool_authorization',
+      authorizationHint: true,
+    });
   }
   if (classification?.intentClass === 'ACTION_TOOL_REQUEST') {
     const explicitCatalog = (resolution?.namespaceCandidates?.CATALOG ?? []).filter((candidate) => (
@@ -607,7 +635,9 @@ function validSparseDocuments(indexes, input, scope, allowedTypes) {
   ));
 }
 
-function bm25Candidates(input, sparseIndexes, scope, allowedTypes, limit, queryContext) {
+function bm25Candidates(
+  input, sparseIndexes, scope, allowedTypes, limit, queryContext, recordScope,
+) {
   const queryTokens = [...new Set(tokens(queryContext?.sparseText ?? input.utterance))];
   if (!queryTokens.length) return Object.freeze([]);
   const groups = selectedNamespaceTypes(allowedTypes);
@@ -654,6 +684,7 @@ function bm25Candidates(input, sparseIndexes, scope, allowedTypes, limit, queryC
       namespace: canonicalRecordNamespace(document.recordType),
       knowledgeBaseId: document.knowledgeBaseId,
       publicationRevision: document.publicationRevision,
+      callerFacingHint: recordScope.get(normalizeId(document.id))?.callerFacingHint === true,
       score,
       tokenCoverage: matched / queryTokens.length,
     }];
@@ -663,7 +694,7 @@ function bm25Candidates(input, sparseIndexes, scope, allowedTypes, limit, queryC
   return interleaveNamespaceRanks(namespaceRanks, 'bm25', limit);
 }
 
-function semanticPayloadCandidate(match, scope, input, allowedTypes) {
+function semanticPayloadCandidate(match, scope, input, allowedTypes, recordScope) {
   const payload = match?.payload ?? {};
   const allowedScope = new Map(scope.map((entry) => [normalizeId(entry.id), entry.publicationRevision]));
   const knowledgeBaseId = String(payload.knowledge_base_id ?? '').trim();
@@ -683,11 +714,14 @@ function semanticPayloadCandidate(match, scope, input, allowedTypes) {
     namespace: canonicalRecordNamespace(recordType),
     knowledgeBaseId,
     publicationRevision,
+    callerFacingHint: recordScope.get(normalizeId(recordId))?.callerFacingHint === true,
     score: boundedScore(match.score),
   } : null;
 }
 
-async function semanticCandidates(input, scope, allowedTypes, limit, dependencies, queryContext) {
+async function semanticCandidates(
+  input, scope, allowedTypes, limit, dependencies, queryContext, recordScope,
+) {
   if (!scope.length || input.abortSignal?.aborted) return Object.freeze([]);
   const vector = await dependencies.embed(
     queryContext?.semanticText ?? input.utterance, { signal: input.abortSignal },
@@ -707,7 +741,7 @@ async function semanticCandidates(input, scope, allowedTypes, limit, dependencie
     recordTypes: [...allowedTypes],
   });
   const scoped = (matches ?? []).map(
-    (match) => semanticPayloadCandidate(match, scope, input, allowedTypes),
+    (match) => semanticPayloadCandidate(match, scope, input, allowedTypes, recordScope),
   ).filter(Boolean);
   return interleaveNamespaceRanks(
     groupRankedCandidates(scoped, 'qdrant', limit), 'qdrant', limit,
@@ -793,7 +827,7 @@ export async function retrieveTargetedCandidates({
     ? isolateChannel('bm25', async () => {
       dependencies.onChannelStart?.('bm25', parallelScope);
       return completeChannelWithin('bm25', () => bm25Candidates(
-        input, sparseIndexes, scope, recordTypes, limitPerChannel, queryContext,
+        input, sparseIndexes, scope, recordTypes, limitPerChannel, queryContext, records,
       ), channelDeadlineMs);
     })
     : Promise.resolve(Object.freeze([]));
@@ -801,7 +835,7 @@ export async function retrieveTargetedCandidates({
     ? isolateChannel('qdrant', async () => {
       dependencies.onChannelStart?.('qdrant', parallelScope);
       return completeChannelWithin('qdrant', () => semanticCandidates(
-        input, scope, recordTypes, limitPerChannel, dependencies, queryContext,
+        input, scope, recordTypes, limitPerChannel, dependencies, queryContext, records,
       ), semanticDeadlineMs);
     })
     : Promise.resolve(Object.freeze([]));

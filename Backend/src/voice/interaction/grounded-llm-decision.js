@@ -393,6 +393,15 @@ export function groundedDecisionContract(envelope, runtime = {}) {
   const tools = (runtime.toolSchemas ?? []).map((tool) => ({
     name: tool.name, description: tool.description, inputSchema: tool.inputSchema,
   }));
+  const callerEvidenceAvailable = (envelope.sources ?? []).length > 0;
+  const unavailableResponse = text(runtime.zeroEvidenceResponse, maximumAnswerCharacters);
+  const allowedDecisions = callerEvidenceAvailable
+    ? [...externalDecisions]
+    : [
+      ...(unavailableResponse ? ['RESPONSE'] : []),
+      ...(tools.length ? ['TOOL'] : []),
+      'CLARIFY',
+    ];
   return Object.freeze({
     format: 'json_object',
     exactFields: [
@@ -412,6 +421,11 @@ export function groundedDecisionContract(envelope, runtime = {}) {
       'Use TOOL only for one configured tool and never claim success before its verified result.',
       'Current-call information fields without requiredAction may be remembered when the caller provides them. Fields with requiredAction may be requested or collected only after that action is explicitly requested and its Workflow authorizes the assigned tool.',
       'Use only evidenceIds listed below for factual speech.',
+      callerEvidenceAvailable
+        ? 'Caller-facing verified evidence is available; factual RESPONSE speech must cite it.'
+        : (unavailableResponse
+          ? `No caller-facing evidence is available. RESPONSE is permitted only with this exact configured information-unavailable speech: ${JSON.stringify(unavailableResponse)}`
+          : 'No caller-facing evidence is available. Do not return RESPONSE; use a targeted CLARIFY or an authorized TOOL.'),
       'When naming a resolved Catalog entity or category, use its canonical name from authoritativeData; caller aliases are for understanding, not factual display names.',
       'Do not recommend or claim that an item is suitable for symptoms, conditions, or personal needs unless the selected evidence explicitly authorizes that recommendation.',
       'A relationship-backed screening suggestion must be presented as a published relationship, not a diagnosis or guarantee, and must say that a qualified professional must confirm personal medical suitability.',
@@ -438,7 +452,7 @@ export function groundedDecisionContract(envelope, runtime = {}) {
       'Do not depend on exact caller wording or application-defined business vocabulary.',
     ],
     schema: {
-      decision: 'RESPONSE | TOOL | CLARIFY',
+      decision: allowedDecisions.join(' | '),
       answer: 'natural caller-facing speech with no question; empty only for TOOL',
       responseId: 'one exact caller-facing published response source ID or null',
       evidenceIds: ['approved source IDs'],
@@ -451,6 +465,10 @@ export function groundedDecisionContract(envelope, runtime = {}) {
     allowedEntityKeys: (envelope.entities ?? []).map((entity) => entity.key),
     configuredInformationFields: fields,
     configuredToolSchemas: tools,
+    zeroEvidencePolicy: Object.freeze({
+      callerEvidenceAvailable,
+      informationUnavailableResponse: unavailableResponse || null,
+    }),
   });
 }
 
@@ -459,6 +477,14 @@ export function groundedDecisionJsonSchema(envelope, runtime = {}) {
   const tools = runtime.toolSchemas ?? [];
   const toolNames = tools.map((tool) => tool.name).filter(Boolean);
   const exactResponseIds = (envelope.exactCallerResponses ?? []).filter(Boolean);
+  const unavailableResponse = text(runtime.zeroEvidenceResponse, maximumAnswerCharacters);
+  const allowedDecisions = evidenceIds.length
+    ? [...externalDecisions]
+    : [
+      ...(unavailableResponse ? ['RESPONSE'] : []),
+      ...(toolNames.length ? ['TOOL'] : []),
+      'CLARIFY',
+    ];
   return Object.freeze({
     type: 'object',
     additionalProperties: false,
@@ -467,7 +493,7 @@ export function groundedDecisionJsonSchema(envelope, runtime = {}) {
       'toolArguments', 'clarificationReason',
     ],
     properties: {
-      decision: { type: 'string', enum: [...externalDecisions] },
+      decision: { type: 'string', enum: allowedDecisions },
       answer: { type: 'string' },
       responseId: exactResponseIds.length ? {
         anyOf: [
@@ -619,7 +645,14 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
   if (decision === 'answer' && envelope.found && citedSources.length === 0) {
     return Object.freeze({ valid: false, reason: 'selected_evidence_ids_required' });
   }
-  if (decision === 'answer' && !envelope.found) {
+  const configuredZeroEvidenceResponse = text(
+    runtime.zeroEvidenceResponse, maximumAnswerCharacters,
+  );
+  const approvedZeroEvidenceResponse = decision === 'answer'
+    && !envelope.found
+    && configuredZeroEvidenceResponse
+    && answer === configuredZeroEvidenceResponse;
+  if (decision === 'answer' && !envelope.found && !approvedZeroEvidenceResponse) {
     return Object.freeze({ valid: false, reason: 'verified_evidence_missing' });
   }
   // A published caller-facing message is an exact response contract. Once
@@ -661,7 +694,7 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
     return `${source.content ?? ''} ${structured}`;
   }).join(' ');
   const evidenceNumbers = numbers(evidenceText);
-  const unsupportedNumbers = answer
+  const unsupportedNumbers = answer && !approvedZeroEvidenceResponse
     ? [...numbers(answer)].filter((number) => !evidenceNumbers.has(number)) : [];
   if (unsupportedNumbers.length) {
     return Object.freeze({
@@ -708,6 +741,7 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
     constraints: stateUpdate.constraints,
     contextualReferences: stateUpdate.contextualReferences,
     contextDependent: stateUpdate.contextDependent,
+    approvedZeroEvidenceResponse: approvedZeroEvidenceResponse === true,
     flowAction: decision === 'clarify' ? 'clarify' : 'continue',
   });
 }

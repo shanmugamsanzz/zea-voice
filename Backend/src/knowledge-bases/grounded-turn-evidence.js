@@ -429,6 +429,7 @@ export function buildGroundedLlmInput({
     clarificationContext: Object.freeze({
       heardText: clean(input?.latestQuestion ?? input?.utterance, 2_000),
       requestedFact,
+      genuineAmbiguity: input?.queryUnderstanding?.ambiguity?.detected === true,
       candidates,
       canonicalNames: Object.freeze(candidates.map((candidate) => candidate.name).filter(Boolean)),
       collectedFields: relevantCollectedFields,

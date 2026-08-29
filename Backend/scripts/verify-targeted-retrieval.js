@@ -355,7 +355,8 @@ for (const channel of Object.values(retrieval.channels)) {
     assert.equal(candidate.canonicalIdentity.recordId, candidate.recordId.toLowerCase());
     assert.ok(candidate.canonicalIdentityKey);
     assert.deepEqual(Object.keys(candidate).sort(), [
-      'canonicalIdentity', 'canonicalIdentityKey', 'channel', 'knowledgeBaseId',
+      'authorizationHint', 'callerFacingHint', 'canonicalIdentity', 'canonicalIdentityKey',
+      'channel', 'knowledgeBaseId',
       'namespace', 'publicationRevision', 'rank',
       'recordId', 'recordType', 'score', ...(candidate.tokenCoverage === undefined ? [] : ['tokenCoverage']),
       ...(candidate.matchMethod === undefined ? [] : ['matchMethod']),

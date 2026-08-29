@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { searchParallelHybridCandidates } from '../src/knowledge-bases/parallel-hybrid-search.js';
+import { fuseCandidateRankings } from '../src/knowledge-engine/authoritative-evidence.js';
 
 const tenantId = 'b8000000-0000-4000-8000-000000000001';
 const agentId = 'b8000000-0000-4000-8000-000000000002';
@@ -75,6 +76,13 @@ for (const namespace of ['CATALOG', 'FAQ', 'CONVERSATION', 'WORKFLOW', 'GENERAL'
   assert.ok(independent.namespaceChannels.bm25[namespace].length > 0);
   assert.ok(independent.namespaceChannels.qdrant[namespace].length > 0);
 }
+const callerFacingFusion = fuseCandidateRankings(independent, {
+  limit: 5, minProviderScore: 0,
+});
+assert.equal(callerFacingFusion.candidates.length, 5);
+assert.equal(callerFacingFusion.candidates.every(
+  (candidate) => candidate.callerFacingHint === true,
+), true, 'Unrelated internal guidance must not occupy caller-facing top-five positions');
 
 const expectedTypesByNamespace = {
   CATALOG: ['CATALOG_ITEM', 'CATALOG_CATEGORY'],
@@ -90,12 +98,14 @@ for (const [namespace, expectedTypes] of Object.entries(expectedTypesByNamespace
     selectedNamespace: namespace,
     retrievalPlan: { indexes: [namespace] },
   }, emptyResolution);
-  assert.deepEqual(isolated.relevantNamespaces, [namespace]);
-  assert.deepEqual(new Set(isolated.recordTypes), new Set(expectedTypes));
+  assert.equal(isolated.relevantNamespaces[0], namespace);
+  assert.deepEqual(new Set(isolated.relevantNamespaces), new Set([
+    'CATALOG', 'FAQ', 'CONVERSATION', 'WORKFLOW', 'GENERAL',
+  ]));
   for (const channel of ['structured', 'bm25', 'qdrant']) {
-    assert.equal((isolated.channels[channel] ?? []).every((candidate) => (
+    assert.equal((isolated.namespaceChannels[channel]?.[namespace] ?? []).every((candidate) => (
       expectedTypes.includes(candidate.recordType)
-    )), true, `${namespace} intent leaked unrelated ${channel} evidence`);
+    )), true, `${namespace} namespace mixed unrelated ${channel} evidence`);
   }
 }
 
@@ -115,13 +125,12 @@ const overview = await retrieve(baseInput, {
 });
 assert.equal(overview.queryContext.reservedRecords[0].recordId, overviewRecord.record_id);
 assert.equal(overview.queryContext.reservedRecords[0].reason, 'published_overview');
-assert.deepEqual(overview.relevantNamespaces, ['CATALOG', 'CONVERSATION']);
-assert.deepEqual(new Set(overview.recordTypes), new Set([
-  'CATALOG_ITEM', 'CATALOG_CATEGORY', 'CONVERSATION_NODE',
+assert.deepEqual(new Set(overview.relevantNamespaces), new Set([
+  'CATALOG', 'FAQ', 'CONVERSATION', 'WORKFLOW', 'GENERAL',
 ]));
-assert.equal(overview.channels.bm25.some((candidate) => (
-  ['FAQ', 'WORKFLOW_RULE', 'KNOWLEDGE_CHUNK'].includes(candidate.recordType)
-)), false, 'Overview retrieval must remove unrelated namespaces before hydration');
+assert.equal(overview.namespaceChannels.bm25.CONVERSATION.every((candidate) => (
+  candidate.recordType === 'CONVERSATION_NODE'
+)), true, 'Overview retrieval must preserve independent namespace channels');
 
 const explicit = await retrieve({
   ...baseInput,
@@ -131,8 +140,10 @@ const explicit = await retrieve({
 }, baseClassification, emptyResolution);
 assert.equal(explicit.queryContext.reservedRecords[0].recordId, records[0].record_id);
 assert.equal(explicit.queryContext.reservedRecords[0].reason, 'explicit_entity');
-assert.deepEqual(explicit.relevantNamespaces, ['CATALOG']);
-assert.deepEqual(new Set(explicit.recordTypes), new Set(['CATALOG_ITEM', 'CATALOG_CATEGORY']));
+assert.equal(explicit.relevantNamespaces[0], 'CATALOG');
+assert.deepEqual(new Set(explicit.relevantNamespaces), new Set([
+  'CATALOG', 'FAQ', 'CONVERSATION', 'WORKFLOW', 'GENERAL',
+]));
 
 const contextual = await retrieve({
   ...baseInput,

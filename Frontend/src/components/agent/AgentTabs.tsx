@@ -437,6 +437,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       knowledgeClarificationMessage: base.knowledgeClarificationMessage || 'I may not have heard the item correctly. Did you mean {{candidates}}?',
       latencyAcknowledgementMessage: base.latencyAcknowledgementMessage || 'One moment while I check the information.',
       technicalFailureMessage: base.technicalFailureMessage || '',
+      informationUnavailableMessage: base.informationUnavailableMessage || '',
       conversationMemoryFields: base.conversationMemoryFields || [],
       callbackEnabled: base.callbackEnabled !== undefined ? base.callbackEnabled : true,
       callbackMinimumDelaySeconds: base.callbackMinimumDelaySeconds ?? 30,
@@ -970,6 +971,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     const knowledgeClarificationMessage = String(agent.knowledgeClarificationMessage ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
     const latencyAcknowledgementMessage = String(agent.latencyAcknowledgementMessage ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
     const technicalFailureMessage = String(agent.technicalFailureMessage ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
+    const informationUnavailableMessage = String(agent.informationUnavailableMessage ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
     if (knowledgeHighConfidence < 0.7 || knowledgeHighConfidence > 1) {
       setError('High Confidence must be between 0.70 and 1.00.'); return;
     }
@@ -988,6 +990,9 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     if (technicalFailureMessage.length > 500
       || (agent.status === 'active' && !technicalFailureMessage)) {
       setError('Technical Failure Message is required for an active agent and cannot exceed 500 characters.'); return;
+    }
+    if (informationUnavailableMessage.length > 500) {
+      setError('Information Unavailable Message cannot exceed 500 characters.'); return;
     }
     if (!Array.isArray(agent.conversationMemoryFields) || agent.conversationMemoryFields.length > 30) {
       setError('Important Information Fields must be a list with no more than 30 fields.'); return;
@@ -1087,6 +1092,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         knowledgeClarificationMessage,
         latencyAcknowledgementMessage,
         technicalFailureMessage,
+        informationUnavailableMessage,
         maxInactivityPrompts,
         conversationMemoryFields: normalizedMemoryFields,
       };
@@ -2476,6 +2482,19 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                         className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold outline-none focus:border-violet-500"
                       />
                       <p className="mt-1 text-[10px] font-semibold text-slate-400">Used only for retrieval, hydration, prompt, provider, JSON, or validation failures. It is never used as clarification.</p>
+                    </div>
+                    <div className="mt-3">
+                      <label className="mb-1 block text-[10px] font-bold text-slate-500">Information Unavailable Message</label>
+                      <textarea
+                        rows={2}
+                        maxLength={500}
+                        value={agent.informationUnavailableMessage || ''}
+                        disabled={isReadOnly}
+                        onChange={(event) => setAgent({ ...agent, informationUnavailableMessage: event.target.value })}
+                        placeholder="Configured speech when the question is clear but published knowledge has no answer"
+                        className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold outline-none focus:border-violet-500"
+                      />
+                      <p className="mt-1 text-[10px] font-semibold text-slate-400">Used only when no caller-facing evidence answers a clear question. It is not a technical failure or inactivity prompt.</p>
                     </div>
                   </div>
                   <div>

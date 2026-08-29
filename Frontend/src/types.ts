@@ -147,6 +147,7 @@ export interface VoiceAgent {
   knowledgeClarificationMessage?: string;
   latencyAcknowledgementMessage?: string;
   technicalFailureMessage?: string;
+  informationUnavailableMessage?: string;
   conversationMemoryFields?: Array<{
     key: string;
     label: string;

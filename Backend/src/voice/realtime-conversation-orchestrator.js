@@ -172,6 +172,11 @@ export function configuredTechnicalFailureResponse(profile, knowledge = {}) {
   return configured && !isInternalRuntimeText(configured) ? configured : '';
 }
 
+export function configuredInformationUnavailableResponse(profile, knowledge = {}) {
+  const configured = resolveRuntimeMessage(profile, 'information_unavailable', knowledge);
+  return configured && !isInternalRuntimeText(configured) ? configured : '';
+}
+
 export function llmOperationalFailureClass(error) {
   const code = String(error?.code ?? '').trim().toUpperCase();
   if (code === 'LLM_PROVIDER_TIMEOUT' || code === 'VOICE_TURN_STAGE_TIMEOUT'
@@ -1965,6 +1970,16 @@ export class RealtimeConversationOrchestrator {
       promptKnowledge,
       { includePublishedMap: false, maximumSources: 5 },
     );
+    const informationUnavailableResponse = configuredInformationUnavailableResponse(
+      this.runtimeProfile, knowledge,
+    );
+    const groundedDecisionInput = llmEvidenceBundle ? Object.freeze({
+      ...llmEvidenceBundle.decisionInput,
+      zeroEvidencePolicy: Object.freeze({
+        callerFacingEvidenceAvailable: groundingEnvelope.found === true,
+        informationUnavailableResponse: informationUnavailableResponse || null,
+      }),
+    }) : null;
     const fullTenantEvidence = knowledge?.tenantEvidence ?? {};
     const completeAuthoritativeEvidence = [
       ...(fullTenantEvidence.sources ?? []),
@@ -2001,8 +2016,9 @@ export class RealtimeConversationOrchestrator {
       knowledge: promptKnowledge,
       context: llmEvidenceBundle ? {
         ...context,
-        groundedDecisionInput: llmEvidenceBundle.decisionInput,
+        groundedDecisionInput,
         groundingEnvelope,
+        zeroEvidenceResponse: informationUnavailableResponse,
         configuredInformationFields: configuredFields,
         configuredToolSchemas: groundingRuntime.toolSchemas,
         groundedResponseMode: true,
@@ -2136,6 +2152,7 @@ export class RealtimeConversationOrchestrator {
           clarificationRecovery: configuredClarificationRecovery(
             this.runtimeProfile, knowledge,
           ),
+          zeroEvidenceResponse: informationUnavailableResponse,
           clarificationContext: llmEvidenceBundle?.decisionInput ? {
             ...llmEvidenceBundle.decisionInput.clarificationContext,
             requestedFact: llmEvidenceBundle.decisionInput.requestedFact,
@@ -3155,35 +3172,35 @@ export class RealtimeConversationOrchestrator {
         ),
       },
     );
-    const finalAnswer = rawAnswer;
+    let finalAnswer = rawAnswer;
     if (!finalAnswer) {
-      sentencePipeline.cancel();
+      finalAnswer = configuredTechnicalFailureResponse(this.runtimeProfile, knowledge);
+      if (!finalAnswer) {
+        sentencePipeline.cancel();
+        throw new AppError(503,
+          'The active agent has no tenant-configured technical failure speech',
+          'VOICE_TECHNICAL_RESPONSE_UNCONFIGURED', {
+            stage: 'operational_response_configuration',
+            operationalFailure: true,
+            decisionType: engineDecision?.type ?? null,
+            decisionReason: engineDecision?.reason ?? null,
+          });
+      }
+      response = {
+        ...response,
+        operationalFailureReason: response.operationalFailureReason
+          ?? response.groundingFailureReason ?? 'EMPTY_CALLER_RESPONSE',
+      };
+      sourceTrace.add(createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
+        label: 'Configured technical failure response',
+        metadata: { reason: response.operationalFailureReason },
+      }));
       this.log.error({
-        stage: 'voice.runtime_message_unconfigured',
+        stage: 'voice.empty_turn_recovered_with_technical_speech',
         callId: this.call.id,
-        decisionType: engineDecision?.type ?? null,
-        decisionReason: engineDecision?.reason ?? null,
-      }, 'Caller-facing runtime message is not configured or published; returning to listening');
-      if ([callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) {
-        await this.controller.interrupt('runtime_message_unconfigured');
-      }
-      if (operationalKnowledgeFailure || response.operationalFailureReason
-        || response.groundingFailureReason) {
-        this.log.error({
-          stage: 'voice.operational_response_unconfigured',
-          callId: this.call.id,
-          turnEpoch: epoch,
-          diagnostic: operationalKnowledgeFailure,
-        }, 'Operational failure remained separate from inactivity because technical speech is unconfigured');
-        return Object.freeze({
-          suppressInactivity: true,
-          reason: 'operational_response_unconfigured',
-        });
-      }
-      return Object.freeze({
-        suppressInactivity: true,
-        reason: 'runtime_message_unconfigured',
-      });
+        turnEpoch: epoch,
+        reason: response.operationalFailureReason,
+      }, 'An empty operational turn was converted to configured technical speech');
     }
     if (validatedNormalTurn) this.#scheduleLiveMemoryCheckpoint('validated_normal_turn');
     // The pipeline may already contain the temporary latency acknowledgement.
@@ -3988,13 +4005,19 @@ export class RealtimeConversationOrchestrator {
       || error?.code === 'VOICE_TURN_FIRST_AUDIO_DEADLINE';
     if (!ttsFailed && this.controller.state === callStates.LISTENING) {
       try {
-        const message = this.#fitTtsMessage(fallbackRecovery(this.runtimeProfile));
+        const message = this.#fitTtsMessage(
+          configuredTechnicalFailureResponse(this.runtimeProfile)
+            || fallbackRecovery(this.runtimeProfile),
+        );
         if (!message) {
           this.log.error({
             stage: 'voice.recovery_message_unconfigured', callId: this.call.id,
             errorCode: error?.code,
-          }, 'Recovery speech is not configured; continuing without runtime-owned fallback speech');
-          this.#armInactivity();
+          }, 'Recovery speech is not configured; ending instead of silently returning to listening');
+          await this.#finalize('failed', 'technical_response_unconfigured');
+          if (!this.mediaSession.closed) {
+            this.mediaSession.close(1011, 'technical response unconfigured');
+          }
           return;
         }
         await this.controller.beginSystemResponse('error_recovery');

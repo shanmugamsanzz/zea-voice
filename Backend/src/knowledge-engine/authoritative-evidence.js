@@ -346,6 +346,8 @@ export function fuseCandidateRankings(retrieval, {
         publicationRevision: Number(candidate.publicationRevision),
         namespace: recordNamespaces[recordType],
         categoryKey: candidate.categoryKey ?? null,
+        callerFacingHint: candidate.callerFacingHint === true,
+        authorizationHint: candidate.authorizationHint === true,
       };
       const key = canonicalRecordIdentityKey(identity, { tenantId: retrieval?.tenantId });
       if (!key) continue;
@@ -389,7 +391,13 @@ export function fuseCandidateRankings(retrieval, {
     const rightOrder = reservedOrder.get(recordKey(right)) ?? Number.MAX_SAFE_INTEGER;
     return leftOrder - rightOrder || right.rrfScore - left.rrfScore;
   });
-  const ordinary = accepted.filter((candidate) => !reservedCandidate(candidate));
+  const ordinary = accepted.filter((candidate) => !reservedCandidate(candidate))
+    .sort((left, right) => Number(
+      right.callerFacingHint === true || right.authorizationHint === true,
+    ) - Number(left.callerFacingHint === true || left.authorizationHint === true)
+      || right.rrfScore - left.rrfScore
+      || left.recordType.localeCompare(right.recordType)
+      || normalizeId(left.recordId).localeCompare(normalizeId(right.recordId)));
   const selected = [...reserved, ...ordinary].slice(0, limit);
   const selectedIds = new Set(selected.map((candidate) => normalizeId(candidate.recordId)));
   const selectedKeys = new Set(selected.map(recordKey));

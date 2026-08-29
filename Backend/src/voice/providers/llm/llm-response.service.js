@@ -195,6 +195,9 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
   const decisionRuntime = {
     fieldSchemas: configuredFields,
     toolSchemas: validatedDecisionTools,
+    zeroEvidenceResponse: input.context?.zeroEvidenceResponse
+      ?? input.context?.groundedDecisionInput?.zeroEvidencePolicy
+        ?.informationUnavailableResponse ?? '',
   };
   const providerQuery = groundedResponseMode
     ? String(input.context?.groundedDecisionInput?.currentQuestion ?? input.query ?? '').slice(0, 2_000)

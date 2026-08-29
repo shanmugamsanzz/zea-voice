@@ -211,6 +211,7 @@ export function validatePostLlmResponseAndTool({
   envelopeEntities = [],
   finalizedUtterance = '',
   securityRuntime = {},
+  approvedZeroEvidenceResponse = false,
 } = {}) {
   const invalidScope = selectedEvidence.map((source) => (
     validateEvidenceScope(source, evidenceScope)
@@ -221,11 +222,13 @@ export function validatePostLlmResponseAndTool({
     !entitySupportedBySelectedCatalog(entity, selectedEvidence)
   ))) return Object.freeze({ valid: false, reason: 'unsupported_selected_entity' });
 
-  const recommendation = removeUnsupportedRecommendationSentences(
-    decision?.answer,
-    claimEvidence,
-    { knownEntities: envelopeEntities, finalizedUtterance },
-  );
+  const recommendation = approvedZeroEvidenceResponse
+    ? Object.freeze({ answer: decision?.answer ?? '', removed: Object.freeze([]) })
+    : removeUnsupportedRecommendationSentences(
+      decision?.answer,
+      claimEvidence,
+      { knownEntities: envelopeEntities, finalizedUtterance },
+    );
   if (recommendation.removed.length > 0 && !recommendation.answer) {
     return Object.freeze({
       valid: false,
@@ -248,11 +251,13 @@ export function validatePostLlmResponseAndTool({
     valid: false, reason: fieldCollection.reason, field: fieldCollection.field,
   });
 
-  const claims = validateGroundedClaims(
-    normalizedDecision?.answer,
-    claimEvidence,
-    { knownEntities: envelopeEntities, finalizedUtterance },
-  );
+  const claims = approvedZeroEvidenceResponse
+    ? Object.freeze({ valid: true })
+    : validateGroundedClaims(
+      normalizedDecision?.answer,
+      claimEvidence,
+      { knownEntities: envelopeEntities, finalizedUtterance },
+    );
   if (!claims.valid) return Object.freeze({
     valid: false,
     reason: claims.reason,
@@ -293,6 +298,7 @@ export function applyUnifiedGroundedTurn({
   confirmationConfiguration = null,
   clarificationRecovery = null,
   clarificationContext = null,
+  zeroEvidenceResponse = '',
 } = {}) {
   if (!memory?.snapshot || !memory?.applyGroundedDecision || !memory?.restoreValidatedState) {
     throw new TypeError('A generic conversation memory instance is required');
@@ -315,6 +321,7 @@ export function applyUnifiedGroundedTurn({
     activeToolRequest: memory.snapshot().activeToolRequest,
     requiredEvidenceIds: requiredCatalogSource ? [requiredCatalogSource.id] : [],
     clarificationContext,
+    zeroEvidenceResponse,
   };
   const validatedDecision = validateGroundedLlmDecision(rawDecision, hydratedEnvelope, runtime);
   if (!validatedDecision.valid) {
@@ -650,6 +657,7 @@ export function applyUnifiedGroundedTurn({
       safetyPolicies,
       activeToolAuthorized: preliminaryAction?.valid === true,
     },
+    approvedZeroEvidenceResponse: effectiveDecision.approvedZeroEvidenceResponse === true,
   });
   const awaitingConfirmation = postLlmValidation.reason === 'confirmation_required'
     && preliminaryAction?.valid === true;

@@ -5,6 +5,9 @@ import {
   canonicalRecordIdentity,
   canonicalRecordIdentityKey,
 } from '../knowledge-engine/canonical-record-identity.js';
+import {
+  publishedRecordCallerFacingHint,
+} from '../knowledge-engine/evidence-audience.js';
 
 export const PARALLEL_HYBRID_SEARCH_VERSION = 2;
 
@@ -41,6 +44,7 @@ function scopedPublicationRecord(reservation, bundles = []) {
       namespace: namespaceByType[reservation.recordType] ?? null,
       knowledgeBaseId: String(bundle.knowledgeBaseId),
       publicationRevision: Number(bundle.publicationRevision),
+      callerFacingHint: publishedRecordCallerFacingHint(record),
     };
     const canonicalIdentity = canonicalRecordIdentity(candidate);
     return Object.freeze({
@@ -102,11 +106,12 @@ function relevantNamespacesForTurn(request = {}) {
     candidateNamespace(request.resolution?.candidate),
     ...required.map(candidateNamespace),
   ].filter((namespace) => namespaceIndexes[namespace]));
-  const intentClass = String(classification.intentClass ?? 'UNKNOWN').toUpperCase();
-  if (intentClass === 'UNKNOWN' && signalled.size > 0) return signalled;
   for (const namespace of signalled) planned.add(namespace);
-  if (planned.size > 0) return planned;
-  return new Set(allNamespaces);
+  // Classification is a search hint, not a gate. Search every published
+  // namespace independently so an imperfect intent hint cannot hide the
+  // caller-facing answer. Signalled namespaces retain the first positions.
+  for (const namespace of allNamespaces) planned.add(namespace);
+  return planned;
 }
 
 function forcedParallelClassification(request = {}) {
