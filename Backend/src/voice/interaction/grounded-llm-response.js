@@ -202,28 +202,14 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
   const exactCallerResponses = selectedSources
     .filter((source) => source.exactCallerResponse === true)
     .map((source) => source.id);
-  const suppliedSourceMap = knowledge.tenantEvidence?.llmEvidenceBundle?.sourceMap
-    ?? knowledge.tenantEvidence?.sourceMap ?? null;
-  const suppliedBySourceId = new Map((suppliedSourceMap ?? []).map((mapping) => (
-    [mapping.sourceId, mapping]
-  )));
-  if (suppliedSourceMap && (suppliedBySourceId.size !== suppliedSourceMap.length
-    || suppliedSourceMap.length !== selectedSources.length)) {
-    throw new TypeError('Grounding requires one canonical mapping for every selected source');
-  }
-  const sourceMap = selectedSources.map((source) => {
-    const supplied = suppliedBySourceId.get(source.id);
-    const generated = deterministicSourceEntry(source, source.id);
-    if (suppliedSourceMap && !supplied) {
-      throw new TypeError('Grounding source is missing from the canonical source map');
-    }
-    if (supplied && (supplied.publishedEvidenceId !== generated.publishedEvidenceId
-      || supplied.authoritativeRecordId !== generated.authoritativeRecordId
-      || supplied.canonicalRecordIdentityKey !== generated.canonicalRecordIdentityKey)) {
-      throw new TypeError('Grounding source does not match the canonical source map');
-    }
-    return supplied ?? generated;
-  });
+  // The source map is an inseparable view of the final evidence envelope.
+  // Generate it here, after the last relevance/size selection, rather than
+  // aligning the envelope against an earlier package that may contain a
+  // different number or order of records. PostgreSQL scope and publication
+  // verification has already happened during authoritative hydration.
+  const sourceMap = selectedSources.map((source) => (
+    deterministicSourceEntry(source, source.id)
+  ));
   return Object.freeze({
     found: knowledge.found === true && selectedSources.length > 0,
     route: text(knowledge.route, 40) || 'none',

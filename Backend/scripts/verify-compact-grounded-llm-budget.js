@@ -194,19 +194,16 @@ await assert.rejects(createSelectedLlmStream(profile, {
   && error.details?.field === 'authorized tool schemas'
 ));
 
-await assert.rejects(createSelectedLlmStream(profile, {
-  callId: 'invalid-source-contract', query: currentQuestion,
+const legacySourceMapSession = await createSelectedLlmStream(profile, {
+  callId: 'legacy-source-map-is-ignored', query: currentQuestion,
   knowledge: {
     found: true, route: 'knowledge_engine',
     tenantEvidence: { sources: [], sourceMap: { invalid: true } },
   },
   context: { groundedResponseMode: true, groundedDecisionInput: { currentQuestion } },
   usageDirection: 'inbound',
-}, { adapter, skipDefaultRegistration: true }), (error) => (
-  error.code === 'LLM_GROUNDED_INITIALIZATION_FAILED'
-  && error.details?.initializationStage === 'grounding_envelope'
-  && /map/u.test(error.details?.errorMessage ?? '')
-));
+}, { adapter, skipDefaultRegistration: true });
+await legacySourceMapSession.close();
 
 await assert.rejects(createSelectedLlmStream(profile, {
   callId: 'invalid-provider-stream', query: currentQuestion,

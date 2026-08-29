@@ -150,6 +150,25 @@ assert.deepEqual(envelope.sourceMap[0], {
   canonicalRecordIdentityKey: `${tenantId}:kb-1:3:CATALOG:CATALOG_ITEM:record-1`,
 });
 assert.deepEqual(envelope.sourceMap, llmEvidenceBundle.sourceMap);
+const staleEarlierMapEnvelope = buildGroundingEnvelope({
+  ...compactKnowledge,
+  tenantEvidence: {
+    ...compactKnowledge.tenantEvidence,
+    // A previous package may have contained additional candidates. The final
+    // envelope must atomically map only the records actually sent to the LLM.
+    sourceMap: [...llmEvidenceBundle.sourceMap, {
+      ...llmEvidenceBundle.sourceMap[0], sourceId: 'source_6',
+    }],
+    llmEvidenceBundle: {
+      ...compactKnowledge.tenantEvidence.llmEvidenceBundle,
+      sourceMap: [...llmEvidenceBundle.sourceMap, {
+        ...llmEvidenceBundle.sourceMap[0], sourceId: 'source_6',
+      }],
+    },
+  },
+}, { includePublishedMap: false, maximumSources: 5 });
+assert.deepEqual(staleEarlierMapEnvelope.sourceMap, envelope.sourceMap,
+  'The final evidence envelope must not be rejected by a stale pre-filter source map');
 const hydratedEnvelope = hydrateGroundingEnvelope(envelope, callerEvidence);
 assert.equal(hydratedEnvelope.sources[0].id, 'source_1');
 assert.equal(hydratedEnvelope.sources[0].publishedEvidenceId, callerEvidence[0].id);
@@ -242,13 +261,15 @@ assert.equal(validateEvidenceScope({
   publicationRevisions: [{ knowledgeBaseId: 'kb-1', publicationRevision: 3 }],
 }).reason, 'foreign_evidence_selected');
 
-assert.equal(buildCompactEvidenceBundle({
+const legacyModeBundle = buildCompactEvidenceBundle({
   input, authoritative: { evidence: callerEvidence },
   decision: createKnowledgeEngineDecision(knowledgeEngineDecisionTypes.RESPONSE, {
     reason: 'deterministic', evidenceIds: [callerEvidence[0].id],
     mode: knowledgeEngineResponseModes.DETERMINISTIC,
     response: { text: 'Approved evidence 1', recordId: 'record-1', recordType: 'CATALOG_ITEM' },
   }),
-}), null, 'Deterministic emergency/call-control/direct turns must not create an LLM package');
+});
+assert.equal(legacyModeBundle.topEvidence.length, 5,
+  'A legacy decision-mode label must not bypass the unified normal-turn evidence package');
 
 console.log('Compact evidence-only LLM package and authorized tool schema verified.');

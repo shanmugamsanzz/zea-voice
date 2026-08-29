@@ -63,9 +63,6 @@ import {
 } from '../knowledge-engine/call-memory.js';
 import { compactBundleAsKnowledge } from '../knowledge-engine/compact-evidence-bundle.js';
 import {
-  resolveDeterministicSource,
-} from '../knowledge-engine/deterministic-source-mapping.js';
-import {
   awaitLlmWithSafeLatency,
   VoiceTurnLatencyTracker,
   voiceTurnStages,
@@ -1974,42 +1971,7 @@ export class RealtimeConversationOrchestrator {
       ...(fullTenantEvidence.actionEvidence ?? []),
       ...(fullTenantEvidence.guidanceEvidence ?? []),
     ];
-    const decisionHydratedRecords = llmEvidenceBundle?.decisionInput?.hydratedRecords ?? [];
-    const canonicalSourceMap = llmEvidenceBundle?.sourceMap ?? groundingEnvelope.sourceMap;
-    for (const mapping of canonicalSourceMap) {
-      const resolved = resolveDeterministicSource(mapping, completeAuthoritativeEvidence, {
-        tenantId: this.runtimeProfile.agent.tenantId,
-        agentId: this.runtimeProfile.agent.id,
-        publicationRevisions: fullTenantEvidence.publicationRevisions ?? [],
-      });
-      if (!resolved.valid) {
-        throw new AppError(503,
-          'The grounded LLM record no longer aligns with authoritative PostgreSQL evidence',
-          'KNOWLEDGE_LLM_EVIDENCE_ALIGNMENT_FAILED', {
-            stage: 'grounded_llm_input_alignment',
-            reason: resolved.reason,
-            sourceId: mapping.sourceId ?? null,
-            publishedEvidenceId: mapping.publishedEvidenceId ?? null,
-            recordId: mapping.authoritativeRecordId ?? null,
-          });
-      }
-    }
     const authoritativeEvidence = completeAuthoritativeEvidence;
-    const mappedCallerSourceIds = new Set(canonicalSourceMap
-      .map((mapping) => String(mapping.sourceId ?? '').toLocaleLowerCase()));
-    const envelopeSourceIds = new Set(groundingEnvelope.sources
-      .map((source) => String(source.id ?? '').toLocaleLowerCase()));
-    const missingCallerSources = decisionHydratedRecords.filter((record) => record.sourceId
-      && (!mappedCallerSourceIds.has(String(record.sourceId).toLocaleLowerCase())
-        || !envelopeSourceIds.has(String(record.sourceId).toLocaleLowerCase())));
-    if (missingCallerSources.length) {
-      throw new AppError(503,
-        'The grounded LLM source IDs do not align with the hydrated decision records',
-        'KNOWLEDGE_LLM_SOURCE_ALIGNMENT_FAILED', {
-          stage: 'grounded_llm_input_alignment',
-          sourceIds: missingCallerSources.map((record) => record.sourceId),
-        });
-    }
     const groundingRuntime = {
       pendingQuestion: liveMemory?.pendingQuestion?.text
         ?? liveMemory?.pendingQuestion ?? liveMemory?.pendingQuestionText,
@@ -2038,12 +2000,13 @@ export class RealtimeConversationOrchestrator {
       ),
       knowledge: promptKnowledge,
       context: llmEvidenceBundle ? {
+        ...context,
         groundedDecisionInput: llmEvidenceBundle.decisionInput,
+        groundingEnvelope,
         configuredInformationFields: configuredFields,
         configuredToolSchemas: groundingRuntime.toolSchemas,
         groundedResponseMode: true,
         compactGrounding: true,
-        ...context,
       } : {
         callId: this.call.id,
         direction: this.call.direction,

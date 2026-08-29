@@ -184,10 +184,14 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
   // Every grounded live decision uses the compact voice contract. Callers
   // cannot accidentally opt back into the larger non-voice prompt path.
   const compactGrounding = groundedResponseMode;
-  const groundingEnvelope = initialize('grounding_envelope', () => buildGroundingEnvelope(
-    input.knowledge ?? { found: false, route: 'none' },
-    compactGrounding ? { includePublishedMap: false, maximumSources: 5 } : {},
-  ));
+  // The orchestrator constructs the final evidence envelope once. Reuse that
+  // exact immutable object for the prompt contract and post-LLM validation so
+  // a second filtering/mapping pass cannot drift from the LLM input.
+  const groundingEnvelope = input.context?.groundingEnvelope
+    ?? initialize('grounding_envelope', () => buildGroundingEnvelope(
+      input.knowledge ?? { found: false, route: 'none' },
+      compactGrounding ? { includePublishedMap: false, maximumSources: 5 } : {},
+    ));
   const decisionRuntime = {
     fieldSchemas: configuredFields,
     toolSchemas: validatedDecisionTools,
