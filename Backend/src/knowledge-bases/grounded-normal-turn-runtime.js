@@ -85,6 +85,7 @@ function revisions(publications = []) {
 }
 
 function compactEvidence(source) {
+  const facts = source.facts ?? source.authoritativeData ?? {};
   return Object.freeze({
     id: source.sourceId ?? source.publishedEvidenceId,
     publishedEvidenceId: source.publishedEvidenceId,
@@ -92,11 +93,17 @@ function compactEvidence(source) {
     recordType: source.recordType,
     tenantId: source.tenantId,
     agentId: source.agentId,
+    // Canonical grounded records intentionally carry one schema-driven facts
+    // object instead of duplicating the same payload into `content`. Preserve
+    // that representation through the runtime boundary; the grounding
+    // envelope renders it for the provider when needed.
     content: source.content,
+    canonicalName: source.canonicalName ?? null,
+    facts,
     callerFacing: source.callerFacing,
     rank: source.rank,
     rrfScore: source.rrfScore,
-    authoritativeData: source.authoritativeData,
+    authoritativeData: facts,
     knowledgeBaseId: source.provenance.knowledgeBaseId,
     publicationRevision: source.provenance.publicationRevision,
     documentId: source.provenance.documentId,

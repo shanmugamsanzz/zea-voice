@@ -114,9 +114,23 @@ function relevantNamespacesForTurn(request = {}) {
   return planned;
 }
 
+function primaryNamespacesForTurn(request = {}) {
+  const classification = request.classification ?? {};
+  return new Set([
+    String(classification.selectedNamespace ?? '').trim().toUpperCase(),
+    candidateNamespace(classification.candidate),
+    candidateNamespace(request.resolution?.candidate),
+    ...(classification.retrievalPlan?.indexes ?? []).map((index) => (
+      Object.entries(namespaceIndexes).find(([, value]) => value === index)?.[0]
+    )),
+    ...collectCanonicalRetrievalReservations(request).map(candidateNamespace),
+  ].filter((namespace) => namespaceIndexes[namespace]));
+}
+
 function forcedParallelClassification(request = {}) {
   const classification = request.classification ?? {};
   const relevantNamespaces = relevantNamespacesForTurn(request);
+  const primaryNamespaces = primaryNamespacesForTurn(request);
   const indexes = new Set((classification.retrievalPlan?.indexes ?? []).filter((index) => (
     !Object.values(namespaceIndexes).includes(index)
   )));
@@ -126,6 +140,7 @@ function forcedParallelClassification(request = {}) {
   return Object.freeze({
     ...classification,
     relevantNamespaces: Object.freeze([...relevantNamespaces]),
+    primaryNamespaces: Object.freeze([...primaryNamespaces]),
     retrievalPlan: Object.freeze({
       ...(classification.retrievalPlan ?? {}),
       indexes: Object.freeze([...indexes]),

@@ -69,6 +69,7 @@ import {
 } from './interaction/grounded-turn-latency.js';
 import {
   buildGroundingEnvelope,
+  assertGroundingEnvelopePreservesEvidence,
 } from './interaction/grounded-llm-response.js';
 import {
   isRepairableGroundedDecisionReason,
@@ -1970,6 +1971,9 @@ export class RealtimeConversationOrchestrator {
       promptKnowledge,
       { includePublishedMap: false, maximumSources: 5 },
     );
+    assertGroundingEnvelopePreservesEvidence(
+      llmEvidenceBundle?.decisionInput?.hydratedRecords ?? [], groundingEnvelope,
+    );
     const informationUnavailableResponse = configuredInformationUnavailableResponse(
       this.runtimeProfile, knowledge,
     );
@@ -2375,6 +2379,7 @@ export class RealtimeConversationOrchestrator {
     const sentenceFailures = [];
     let sentenceNumber = 0;
     let acknowledgementNumber = 0;
+    let acknowledgementAudioPlayed = false;
     let firstValidatedTextAt = null;
     let spokenCharacters = 0;
     let pendingShortSentence = '';
@@ -2549,13 +2554,23 @@ export class RealtimeConversationOrchestrator {
         const played = await this.#synthesize(sentence, generationId, {
           kind, startedAt: turnStartedAt, deferDrain: true,
           playbackGroupId, deferBoundaryFlush: true, epoch,
-          firstAudioDeadlineAt: (acknowledgement || currentSentenceNumber === 1)
+          // The acknowledgement satisfies the turn's first-audio contract.
+          // Once it is audible, final TTS uses its independent provider timeout.
+          firstAudioDeadlineAt: (acknowledgement
+            || (currentSentenceNumber === 1 && !acknowledgementAudioPlayed))
             && Date.now() < firstAudioDeadlineAt ? firstAudioDeadlineAt : undefined,
           validatedTextAt: acknowledgement ? undefined : firstValidatedTextAt,
           onFirstAudio: () => {
             if (!audibleSentences.includes(sentence)) audibleSentences.push(sentence);
           },
         });
+        if (played && acknowledgement) {
+          acknowledgementAudioPlayed = true;
+          this.log.info({
+            stage: 'voice.acknowledgement_first_audio_completed',
+            callId: this.call.id, turnEpoch: epoch, generationId,
+          }, 'Acknowledgement satisfied first audio; final TTS now uses its independent timeout');
+        }
         if (played && !acknowledgement) completedSentences.push(sentence);
         return played;
       }).catch((error) => {

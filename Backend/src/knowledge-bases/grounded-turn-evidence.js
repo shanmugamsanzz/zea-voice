@@ -158,7 +158,7 @@ function matchingCanonicalEvidenceKeys(candidate, sources, input = {}) {
 function requiredReservations(authoritative = {}) {
   const requiredReasons = new Set([
     'explicit_current_entity', 'explicit_entity', 'explicit_comparison',
-    'canonical_memory', 'published_overview', 'published_use_case',
+    'canonical_memory', 'published_overview', 'published_use_case', 'latest_request_record',
   ]);
   return (authoritative.reservations ?? []).filter((entry) => (
     requiredReasons.has(entry.reason)

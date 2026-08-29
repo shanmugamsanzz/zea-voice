@@ -99,6 +99,7 @@ for (const [namespace, expectedTypes] of Object.entries(expectedTypesByNamespace
     retrievalPlan: { indexes: [namespace] },
   }, emptyResolution);
   assert.equal(isolated.relevantNamespaces[0], namespace);
+  assert.equal(isolated.primaryNamespaces[0], namespace);
   assert.deepEqual(new Set(isolated.relevantNamespaces), new Set([
     'CATALOG', 'FAQ', 'CONVERSATION', 'WORKFLOW', 'GENERAL',
   ]));
@@ -108,6 +109,28 @@ for (const [namespace, expectedTypes] of Object.entries(expectedTypesByNamespace
     )), true, `${namespace} namespace mixed unrelated ${channel} evidence`);
   }
 }
+
+const faqFocused = await retrieve(baseInput, {
+  ...baseClassification,
+  intentClass: 'KNOWN_INFORMATION',
+  selectedNamespace: 'FAQ',
+  retrievalPlan: { indexes: ['FAQ'] },
+}, emptyResolution);
+const faqFocusedFusion = fuseCandidateRankings(faqFocused, { limit: 5, minProviderScore: 0 });
+assert.equal(faqFocusedFusion.candidates[0].recordType, 'FAQ',
+  'The latest-request primary namespace must rank before unrelated fallback namespaces');
+
+const latestFaqCandidate = {
+  recordId: records[2].record_id, recordType: 'FAQ', score: 0.95,
+};
+const latestFaq = await retrieve(baseInput, {
+  ...baseClassification,
+  intentClass: 'KNOWN_INFORMATION', candidate: latestFaqCandidate,
+  selectedNamespace: 'FAQ', confidenceConfiguration: { highConfidence: 0.86 },
+  retrievalPlan: { indexes: ['FAQ'] },
+}, { ...emptyResolution, candidate: latestFaqCandidate, candidateNamespace: 'FAQ' });
+assert.equal(latestFaq.queryContext.reservedRecords[0].recordId, records[2].record_id);
+assert.equal(latestFaq.queryContext.reservedRecords[0].reason, 'latest_request_record');
 
 const overviewRecord = records[3];
 const overviewCandidate = {

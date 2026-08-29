@@ -73,6 +73,14 @@ export function collectCanonicalRetrievalReservations(request = {}, retrieval = 
   const confidence = resolveKnowledgeConfidenceConfiguration(
     classification.confidenceConfiguration ?? resolution.confidenceConfiguration,
   );
+  const latestCandidate = classification.candidate;
+  const latestCandidateType = String(latestCandidate?.recordType ?? '').toUpperCase();
+  const latestRequest = latestCandidate?.recordId
+    && (latestCandidate.explicit === true
+      || Number(latestCandidate.score ?? 0) >= confidence.highConfidence)
+    && (latestCandidateType !== 'WORKFLOW_RULE'
+      || classification.intentClass === 'ACTION_TOOL_REQUEST')
+    ? [compact(latestCandidate, 'latest_request_record')].filter(Boolean) : [];
   const useCase = request.input?.queryUnderstanding?.need?.detected === true
     ? (retrieval?.channels?.structured ?? []).find((candidate) => (
       candidate.matchMethod === 'published_use_case'
@@ -84,7 +92,8 @@ export function collectCanonicalRetrievalReservations(request = {}, retrieval = 
     ?? request.queryContext?.reservedRecords ?? [];
   const ordered = classification.intentClass === 'COMPARISON_COMPLEX'
     ? [...comparisons, ...explicit, ...existing, ...remembered]
-    : [...explicit, ...overview, ...comparisons, ...remembered, ...useCaseReservations, ...existing];
+    : [...explicit, ...overview, ...latestRequest, ...comparisons, ...remembered,
+      ...useCaseReservations, ...existing];
   return Object.freeze([...new Map(ordered.map((entry) => (
     [reservationKey(entry), Object.freeze({ ...entry })]
   ))).values()].slice(0, 5));

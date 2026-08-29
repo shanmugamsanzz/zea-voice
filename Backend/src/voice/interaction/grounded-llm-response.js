@@ -1,6 +1,7 @@
 import { validateGroundedLlmDecision } from './grounded-llm-decision.js';
 import { groundedNumbers as numbers } from './grounded-number-validator.js';
 import { deterministicSourceEntry } from '../../knowledge-engine/deterministic-source-mapping.js';
+import { AppError } from '../../middleware/errors.js';
 
 const maximumIntentCharacters = 160;
 const maximumAnswerCharacters = 4_000;
@@ -29,6 +30,43 @@ export function normalizeQuestionType(value) {
   const raw = text(value, 80).toLocaleLowerCase();
   const key = raw.replace(/[\s\-./]+/gu, '_').replace(/_+/gu, '_').replace(/^_|_$/gu, '');
   return questionTypes.has(key) ? key : 'unclear';
+}
+
+function object(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function canonicalEvidenceContent(evidence = {}) {
+  const direct = text(evidence.content, 6_000);
+  if (direct) return direct;
+  const facts = object(evidence.facts ?? evidence.authoritativeData);
+  if (!Object.keys(facts).length) return '';
+  return text(JSON.stringify({
+    canonicalName: text(evidence.canonicalName, 240) || undefined,
+    facts,
+  }), 6_000);
+}
+
+export function assertGroundingEnvelopePreservesEvidence(records = [], envelope = {}) {
+  const expected = records.filter((record) => record?.callerFacing === true
+    && text(record?.sourceId, 80));
+  if (!expected.length) return envelope;
+  const actualIds = new Set((envelope.sources ?? []).map((source) => text(source.id, 80))
+    .filter(Boolean));
+  const missing = expected.filter((record) => !actualIds.has(text(record.sourceId, 80)));
+  if (!missing.length) return envelope;
+  throw new AppError(503,
+    'Hydrated caller-facing evidence was lost while building the LLM grounding envelope',
+    'KNOWLEDGE_GROUNDED_ENVELOPE_EVIDENCE_LOST', {
+      stage: 'grounding_envelope_packaging',
+      expectedSourceIds: expected.map((record) => record.sourceId),
+      actualSourceIds: [...actualIds],
+      missingRecords: missing.map((record) => ({
+        sourceId: record.sourceId,
+        recordId: record.recordId,
+        recordType: record.recordType,
+      })),
+    });
 }
 
 function addSource(sources, seen, content, metadata = {}) {
@@ -79,7 +117,7 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
       && recordType === 'CONVERSATION_NODE'
       && nodeType === 'message'
       && evidence.exactCallerResponseEligible !== false;
-    addSource(sources, sourceContents, evidence.content, {
+    addSource(sources, sourceContents, canonicalEvidenceContent(evidence), {
       // `id` is the short source ID in compact normal-turn packages. Keep
       // publication identity separate so source_1 can always be resolved
       // back through the authoritative PostgreSQL record.
@@ -98,6 +136,8 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
       nodeType: text(nodeType, 80) || null,
       callerFacing: evidence.callerFacing === true,
       authoritativeData: evidence.authoritativeData ?? null,
+      canonicalName: text(evidence.canonicalName, 240) || null,
+      facts: evidence.facts ?? evidence.authoritativeData ?? null,
       exactCallerResponse,
       retrievalContext: evidence.retrievalContext ?? 'primary',
       rank: Number(evidence.rank ?? 0) || null,

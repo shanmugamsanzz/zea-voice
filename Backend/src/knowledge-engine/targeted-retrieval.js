@@ -852,6 +852,7 @@ export async function retrieveTargetedCandidates({
     searchedIndexes: Object.freeze([...indexes]),
     recordTypes: Object.freeze([...recordTypes]),
     relevantNamespaces: Object.freeze([...(classification?.relevantNamespaces ?? [])]),
+    primaryNamespaces: Object.freeze([...(classification?.primaryNamespaces ?? [])]),
     retrievalScope: parallelScope,
     queryContext,
     channels: Object.freeze({ structured, bm25, qdrant }),

@@ -268,8 +268,10 @@ assert.ok(finalPipelineIndex >= 0 && finalPlaybackCompleteIndex > finalPipelineI
 assert.doesNotMatch(orchestrator, /clarificationRecovery\?\.mode === 'suppressed'/u,
   'a valid grounded clarification must never be converted into silent listening');
 assert.match(orchestrator,
-  /currentSentenceNumber === 1[\s\S]{0,120}Date\.now\(\) < firstAudioDeadlineAt/u,
-  'the hard first-audio deadline must apply only while it is still actionable');
+  /currentSentenceNumber === 1 && !acknowledgementAudioPlayed/u,
+  'the original first-audio deadline must not constrain final TTS after acknowledgement');
+assert.match(orchestrator, /voice\.acknowledgement_first_audio_completed/u,
+  'audible acknowledgement must explicitly complete the turn first-audio phase');
 assert.match(orchestrator, /persistAudible/u,
   'audible assistant speech must survive a confirmed interruption');
 assert.match(orchestrator, /transcript\.audible_partial_persisted/u);

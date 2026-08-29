@@ -391,10 +391,15 @@ export function fuseCandidateRankings(retrieval, {
     const rightOrder = reservedOrder.get(recordKey(right)) ?? Number.MAX_SAFE_INTEGER;
     return leftOrder - rightOrder || right.rrfScore - left.rrfScore;
   });
+  const primaryNamespaceOrder = new Map((retrieval?.primaryNamespaces ?? [])
+    .map((namespace, index) => [String(namespace).trim().toUpperCase(), index]));
+  const namespaceOrder = (candidate) => primaryNamespaceOrder.get(candidate.namespace)
+    ?? Number.MAX_SAFE_INTEGER;
   const ordinary = accepted.filter((candidate) => !reservedCandidate(candidate))
     .sort((left, right) => Number(
       right.callerFacingHint === true || right.authorizationHint === true,
     ) - Number(left.callerFacingHint === true || left.authorizationHint === true)
+      || namespaceOrder(left) - namespaceOrder(right)
       || right.rrfScore - left.rrfScore
       || left.recordType.localeCompare(right.recordType)
       || normalizeId(left.recordId).localeCompare(normalizeId(right.recordId)));

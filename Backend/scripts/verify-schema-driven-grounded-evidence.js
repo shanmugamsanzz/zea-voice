@@ -3,6 +3,10 @@ import {
   createCanonicalGroundedEvidence,
   selectRelevantAuthoritativeFacts,
 } from '../src/knowledge-engine/grounded-evidence-representation.js';
+import {
+  assertGroundingEnvelopePreservesEvidence,
+  buildGroundingEnvelope,
+} from '../src/voice/interaction/grounded-llm-response.js';
 
 const base = {
   id: 'published:catalog_item:record-a',
@@ -58,6 +62,24 @@ assert.equal(canonical.canonicalName, 'Published Option A');
 assert.equal('content' in canonical, false);
 assert.equal('sourceText' in canonical.facts, false);
 assert.deepEqual(canonical.facts, canonical.authoritativeData);
+
+const canonicalEnvelope = buildGroundingEnvelope({
+  found: true,
+  tenantEvidence: { sources: [canonical] },
+}, { includePublishedMap: false, maximumSources: 5 });
+assert.equal(canonicalEnvelope.sources.length, 1);
+assert.equal(canonicalEnvelope.sources[0].id, 'source_1');
+assert.equal(canonicalEnvelope.sources[0].recordId, 'record-a');
+assert.equal(canonicalEnvelope.sources[0].canonicalName, 'Published Option A');
+assert.match(canonicalEnvelope.sources[0].content, /Published Option A/u);
+assert.match(canonicalEnvelope.sources[0].content, /Arrival Timing/u);
+assert.equal(assertGroundingEnvelopePreservesEvidence(
+  [canonical], canonicalEnvelope,
+), canonicalEnvelope);
+assert.throws(() => assertGroundingEnvelopePreservesEvidence([canonical], {
+  found: false, sources: [],
+}), (error) => error?.code === 'KNOWLEDGE_GROUNDED_ENVELOPE_EVIDENCE_LOST'
+  && error?.details?.missingRecords?.[0]?.recordId === 'record-a');
 
 const comparison = [
   canonical,
