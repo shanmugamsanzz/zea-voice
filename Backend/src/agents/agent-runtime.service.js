@@ -169,76 +169,162 @@ function knowledgeContext(knowledge, maximumChars = env.LLM_KNOWLEDGE_CONTEXT_MA
   return serialized;
 }
 
-function compactGroundedValue(value, stringLimit, depth = 0) {
+const groundedCompactionProfiles = Object.freeze([
+  Object.freeze({ stringLimit: 800, arrayLimit: 20, objectLimit: 30 }),
+  Object.freeze({ stringLimit: 500, arrayLimit: 12, objectLimit: 20 }),
+  Object.freeze({ stringLimit: 320, arrayLimit: 8, objectLimit: 16 }),
+  Object.freeze({ stringLimit: 200, arrayLimit: 6, objectLimit: 12 }),
+  Object.freeze({ stringLimit: 120, arrayLimit: 4, objectLimit: 8 }),
+  Object.freeze({ stringLimit: 80, arrayLimit: 2, objectLimit: 6 }),
+  Object.freeze({ stringLimit: 48, arrayLimit: 1, objectLimit: 4 }),
+]);
+
+function compactBudgetedValue(value, profile, depth = 0) {
   if (value === null || value === undefined) return value ?? null;
   if (typeof value === 'string') return value.normalize('NFKC')
-    .replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/gu, ' ').trim().slice(0, stringLimit);
+    .replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/gu, ' ').trim()
+    .slice(0, profile.stringLimit);
   if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) {
     return value;
   }
-  if (depth >= 5) return null;
-  if (Array.isArray(value)) return value.slice(0, 30)
-    .map((entry) => compactGroundedValue(entry, stringLimit, depth + 1));
+  if (depth >= 4) return null;
+  if (Array.isArray(value)) return value.slice(0, profile.arrayLimit)
+    .map((entry) => compactBudgetedValue(entry, profile, depth + 1));
   if (typeof value !== 'object') return null;
-  return Object.fromEntries(Object.entries(value).slice(0, 50)
-    .map(([key, entry]) => [key, compactGroundedValue(entry, stringLimit, depth + 1)]));
+  return Object.fromEntries(Object.entries(value).slice(0, profile.objectLimit)
+    .map(([key, entry]) => [key, compactBudgetedValue(entry, profile, depth + 1)]));
 }
 
-function compactGroundedDecisionInput(value, maximumCharacters) {
+function compactVerifiedRecord(record, profile) {
+  return {
+    sourceId: record?.sourceId ?? null,
+    recordId: record?.recordId ?? null,
+    recordType: record?.recordType ?? null,
+    canonicalName: compactBudgetedValue(record?.canonicalName, {
+      ...profile, stringLimit: Math.min(240, profile.stringLimit),
+    }),
+    required: record?.required === true,
+    reservationReasons: compactBudgetedValue(record?.reservationReasons ?? [], profile),
+    facts: compactBudgetedValue(record?.facts ?? record?.authoritativeData ?? {}, profile),
+  };
+}
+
+function mandatoryEvidenceFloor(record) {
+  const firstFacts = Object.fromEntries(Object.entries(
+    record?.facts ?? record?.authoritativeData ?? {},
+  ).slice(0, 2).map(([key, value]) => [
+    String(key).slice(0, 48),
+    typeof value === 'string' ? value.slice(0, 80) : value,
+  ]));
+  return {
+    sourceId: record?.sourceId ?? null,
+    recordId: record?.recordId ?? null,
+    recordType: record?.recordType ?? null,
+    canonicalName: String(record?.canonicalName ?? '').slice(0, 80) || null,
+    required: true,
+    reservationReasons: (record?.reservationReasons ?? []).slice(0, 2),
+    facts: firstFacts,
+  };
+}
+
+function compactCanonicalMemory(memory, profile) {
+  const canonical = memory && typeof memory === 'object' ? memory : {};
+  return compactBudgetedValue({
+    activeEntity: canonical.activeEntity ?? null,
+    activeCategory: canonical.activeCategory ?? null,
+    comparisonEntities: canonical.comparisonEntities ?? [],
+    currentTopic: canonical.currentTopic ?? null,
+    collectedInformation: canonical.collectedInformation ?? {},
+    pendingClarification: canonical.pendingClarification ?? null,
+    activeToolRequest: canonical.activeToolRequest ?? null,
+  }, profile);
+}
+
+export function compactGroundedDecisionInput(value, maximumCharacters) {
   const input = value && typeof value === 'object' ? value : {};
   const completePairs = completeConversationTurnPairs(input.recentRelevantTurns ?? []).slice(-10);
-  const build = (stringLimit, retainedPairCount) => {
+  const allRecords = (Array.isArray(input.hydratedRecords)
+    ? input.hydratedRecords : []).slice(0, 5);
+  const explicitlyRequired = allRecords.filter((record) => record?.required === true);
+  const mandatoryRecords = explicitlyRequired.length > 0
+    ? explicitlyRequired : allRecords.slice(0, 1);
+  const mandatorySet = new Set(mandatoryRecords);
+  const optionalRecords = allRecords.filter((record) => !mandatorySet.has(record));
+  const build = (profile, retainedPairCount, retainedOptionalCount) => {
     const recentTurns = flattenConversationTurnPairs(retainedPairCount > 0
       ? completePairs.slice(-retainedPairCount) : []).map((turn) => ({
       role: turn?.role === 'assistant' ? 'assistant' : 'user',
-      content: compactGroundedValue(turn?.content, Math.min(500, stringLimit)),
+      content: compactBudgetedValue(turn?.content, {
+        ...profile, stringLimit: Math.min(500, profile.stringLimit),
+      }),
     })).filter((turn) => turn.content);
+    const retainedRecords = [
+      ...mandatoryRecords,
+      ...optionalRecords.slice(0, retainedOptionalCount),
+    ].sort((left, right) => allRecords.indexOf(left) - allRecords.indexOf(right));
     return {
-      currentQuestion: compactGroundedValue(input.currentQuestion, Math.min(1_200, stringLimit)),
-      relevantMemory: compactGroundedValue({
-        canonical: input.canonicalMemory ?? {},
+      currentQuestion: compactBudgetedValue(input.currentQuestion, {
+        ...profile, stringLimit: 1_200,
+      }),
+      relevantMemory: compactBudgetedValue({
+        canonical: compactCanonicalMemory(input.canonicalMemory, profile),
         recentTurns,
         requestedFact: input.requestedFact ?? null,
         need: input.need ?? null,
         ambiguityCandidates: (Array.isArray(input.ambiguityCandidates)
           ? input.ambiguityCandidates : []).slice(0, 5),
         clarification: input.clarificationContext ?? null,
-      }, stringLimit),
-      verifiedRecords: (Array.isArray(input.hydratedRecords)
-        ? input.hydratedRecords : []).slice(0, 5).map((record) => ({
-        sourceId: record?.sourceId ?? null,
-        recordId: record?.recordId ?? null,
-        recordType: record?.recordType ?? null,
-        content: compactGroundedValue(record?.content, stringLimit),
-        authoritativeData: compactGroundedValue(record?.authoritativeData ?? {}, stringLimit),
-      })),
-      applicableWorkflow: compactGroundedValue(
+      }, profile),
+      verifiedRecords: retainedRecords.map((record) => compactVerifiedRecord(record, profile)),
+      applicableWorkflow: compactBudgetedValue(
         (Array.isArray(input.workflowAuthorization) ? input.workflowAuthorization : []).slice(0, 3),
-        stringLimit,
+        profile,
       ),
-      assignedToolSchemas: compactGroundedValue(
-        (Array.isArray(input.toolSchemas) ? input.toolSchemas : []).slice(0, 3), stringLimit,
+      assignedToolSchemas: compactBudgetedValue(
+        (Array.isArray(input.toolSchemas) ? input.toolSchemas : []).slice(0, 3), profile,
       ),
     };
   };
-  for (let retainedPairCount = completePairs.length; retainedPairCount >= 0; retainedPairCount -= 1) {
-    for (const stringLimit of [800, 500, 320, 200, 120, 80]) {
-      const compact = build(stringLimit, retainedPairCount);
-      const serialized = JSON.stringify(compact);
-      if (serialized.length <= maximumCharacters) return serialized;
+  for (let retainedOptionalCount = optionalRecords.length;
+    retainedOptionalCount >= 0; retainedOptionalCount -= 1) {
+    for (let retainedPairCount = completePairs.length;
+      retainedPairCount >= 0; retainedPairCount -= 1) {
+      for (const profile of groundedCompactionProfiles) {
+        const serialized = JSON.stringify(build(
+          profile, retainedPairCount, retainedOptionalCount,
+        ));
+        if (serialized.length <= maximumCharacters) return serialized;
+      }
     }
   }
+  const floor = {
+    currentQuestion: compactBudgetedValue(input.currentQuestion, {
+      ...groundedCompactionProfiles.at(-1), stringLimit: 1_200,
+    }),
+    relevantMemory: compactBudgetedValue({
+      canonical: compactCanonicalMemory(
+        input.canonicalMemory, groundedCompactionProfiles.at(-1),
+      ),
+      requestedFact: input.requestedFact ?? null,
+    }, groundedCompactionProfiles.at(-1)),
+    verifiedRecords: mandatoryRecords.map(mandatoryEvidenceFloor),
+    applicableWorkflow: [],
+    assignedToolSchemas: [],
+  };
+  const serializedFloor = JSON.stringify(floor);
+  if (serializedFloor.length <= maximumCharacters) return serializedFloor;
   throw new AppError(413,
     'The compact grounded LLM input exceeds the configured prompt budget',
     'LLM_GROUNDED_PROMPT_BUDGET_EXCEEDED', {
       maximumCharacters,
-      hydratedRecordCount: Math.min(5, input.hydratedRecords?.length ?? 0),
+      mandatoryEvidenceCount: mandatoryRecords.length,
+      minimumRequiredCharacters: serializedFloor.length,
       recentTurnCount: completePairs.length,
     });
 }
 
-function compactGroundedContract(context = {}) {
-  const decisionInput = context.groundedDecisionInput ?? {};
+function compactGroundedContract(context = {}, retainedInput = null) {
+  const decisionInput = retainedInput ?? context.groundedDecisionInput ?? {};
   return JSON.stringify({
     outputs: ['RESPONSE', 'TOOL', 'CLARIFY'],
     selectedEvidenceIds: (decisionInput.hydratedRecords ?? [])
@@ -261,10 +347,9 @@ function compactGroundedContract(context = {}) {
 function buildCompactGroundedSystemPrompt(agent, {
   usageDirection, context = {}, totalBudget,
 }) {
-  const contract = compactGroundedContract(context);
   const responseCharacterLimit = Number(context.ttsResponseCharacterLimit ?? 0);
   const activeLanguage = String(context.liveCallMemory?.language ?? agent.language ?? '').trim() || agent.language;
-  const rules = [
+  const rulesForContract = (contract) => [
     `You are ${agent.name}, a real-time AI voice agent.`,
     `Required response language: ${activeLanguage}. Call direction: ${usageDirection}.`,
     '<platform_rules>',
@@ -284,14 +369,40 @@ function buildCompactGroundedSystemPrompt(agent, {
     '<grounded_turn_input>',
   ].filter((line) => line !== null).join('\n');
   const closing = '\n</grounded_turn_input>';
-  const runtimeBudget = totalBudget - rules.length - closing.length - 1;
-  if (runtimeBudget < 500) {
-    throw new AppError(413, 'The grounded response contract exceeds the configured prompt budget',
-      'LLM_GROUNDED_PROMPT_BUDGET_EXCEEDED', { maximumCharacters: totalBudget });
+  let contract = compactGroundedContract(context);
+  let rules = '';
+  let runtimeContext = '';
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    rules = rulesForContract(contract);
+    const runtimeBudget = totalBudget - rules.length - closing.length - 1;
+    if (runtimeBudget < 500) {
+      throw new AppError(413, 'The grounded response contract exceeds the configured prompt budget',
+        'LLM_GROUNDED_PROMPT_BUDGET_EXCEEDED', { maximumCharacters: totalBudget });
+    }
+    runtimeContext = compactGroundedDecisionInput(
+      context.groundedDecisionInput, runtimeBudget,
+    );
+    const retained = JSON.parse(runtimeContext);
+    const alignedContract = compactGroundedContract(context, {
+      hydratedRecords: retained.verifiedRecords,
+      toolSchemas: retained.assignedToolSchemas,
+    });
+    if (alignedContract === contract) break;
+    contract = alignedContract;
   }
-  const runtimeContext = compactGroundedDecisionInput(
-    context.groundedDecisionInput, runtimeBudget,
+  rules = rulesForContract(contract);
+  const finalRuntimeBudget = totalBudget - rules.length - closing.length - 1;
+  runtimeContext = compactGroundedDecisionInput(
+    context.groundedDecisionInput, finalRuntimeBudget,
   );
+  const retainedSourceIds = new Set(JSON.parse(runtimeContext).verifiedRecords
+    .map((record) => record.sourceId).filter(Boolean));
+  const contractedSourceIds = new Set(JSON.parse(contract).selectedEvidenceIds);
+  if (retainedSourceIds.size !== contractedSourceIds.size
+    || [...retainedSourceIds].some((sourceId) => !contractedSourceIds.has(sourceId))) {
+    throw new AppError(500, 'The grounded response contract does not match packaged evidence',
+      'LLM_GROUNDED_SOURCE_CONTRACT_MISMATCH');
+  }
   const prompt = `${rules}\n${runtimeContext}${closing}`;
   if (prompt.length > totalBudget) {
     throw new AppError(413, 'The grounded LLM prompt exceeds the configured character budget',

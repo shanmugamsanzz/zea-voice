@@ -11,6 +11,9 @@ import { AppError } from '../middleware/errors.js';
 import { resolveKnowledgeConfidenceConfiguration } from './knowledge-confidence-config.js';
 import { selectCompleteConversationTurns } from '../knowledge-engine/conversation-turn-context.js';
 import { resolveLiveMemoryConfiguration } from '../voice/interaction/live-memory-config.js';
+import {
+  createCanonicalGroundedEvidence,
+} from '../knowledge-engine/grounded-evidence-representation.js';
 import { env } from '../config/env.js';
 
 export const GROUNDED_TURN_EVIDENCE_VERSION = 3;
@@ -288,37 +291,6 @@ function ambiguityCandidates(input = {}, authoritative = {}, resolution = {}, cl
   }).slice(0, maximumEvidenceRecords));
 }
 
-function compactEvidence(source, sourceId) {
-  const provenance = source.provenance ?? {};
-  return Object.freeze({
-    sourceId,
-    publishedEvidenceId: source.id,
-    recordId: source.recordId,
-    recordType: source.recordType,
-    tenantId: source.tenantId,
-    agentId: source.agentId,
-    content: clean(source.content, 2_500),
-    callerFacing: source.callerFacing === true,
-    rank: source.rank,
-    rrfScore: source.rrfScore,
-    authoritativeData: compactValue(source.authoritativeData),
-    provenance: Object.freeze({
-      knowledgeBaseId: source.knowledgeBaseId,
-      publicationRevision: source.publicationRevision,
-      documentId: source.documentId,
-      documentVersionId: source.documentVersionId,
-      uploadedFilename: provenance.uploadedFilename ?? source.documentName ?? null,
-      documentDisplayName: provenance.documentDisplayName ?? source.documentDisplayName ?? null,
-      documentType: provenance.documentType ?? source.documentType ?? null,
-      pageNumber: provenance.pageNumber ?? source.pageNumber ?? null,
-      pageEnd: provenance.pageEnd ?? source.pageEnd ?? null,
-      sourceSection: provenance.sourceSection ?? source.sourceSection ?? null,
-      sourceLineStart: provenance.sourceLineStart ?? source.sourceLineStart ?? null,
-      sourceLineEnd: provenance.sourceLineEnd ?? source.sourceLineEnd ?? null,
-    }),
-  });
-}
-
 function toolIdentifiers(tool = {}) {
   const configuration = object(tool.configuration);
   return new Set([
@@ -368,11 +340,29 @@ export function buildGroundedLlmInput({
   if (hydrated.length > maximumEvidenceRecords) {
     throw new TypeError('Grounded LLM input cannot contain more than five hydrated records');
   }
+  const mandatoryReservations = requiredReservations(authoritative);
+  const reservationReasons = (source) => mandatoryReservations.filter((reservation) => (
+    reservationKey(reservation) === reservationKey(source)
+    && normalizedId(reservation.tenantId ?? input.tenantId)
+      === normalizedId(source.tenantId ?? input.tenantId)
+    && (!reservation.knowledgeBaseId
+      || normalizedId(reservation.knowledgeBaseId) === normalizedId(source.knowledgeBaseId))
+    && (!reservation.publicationRevision
+      || Number(reservation.publicationRevision) === Number(source.publicationRevision))
+  )).map((reservation) => reservation.reason);
   let callerSourceIndex = 0;
-  const hydratedRecords = Object.freeze(hydrated.map((source) => (
-    compactEvidence(source, source.callerFacing === true
-      ? `source_${callerSourceIndex += 1}` : null)
-  )));
+  const hydratedRecords = Object.freeze(hydrated.map((source) => {
+    const reasons = reservationReasons(source);
+    return createCanonicalGroundedEvidence(source, source.callerFacing === true
+      ? `source_${callerSourceIndex += 1}` : null, {
+      requestedFact: input?.queryUnderstanding?.requestedFact ?? input?.requestedFact,
+      requestedFacts: input?.queryUnderstanding?.requestedFacts ?? input?.requestedFacts,
+      intentClass: classification?.intentClass,
+      need: input?.queryUnderstanding?.need,
+      required: reasons.length > 0,
+      reservationReasons: reasons,
+    });
+  }));
   const sourceMap = buildDeterministicSourceMap(hydratedRecords.filter((source) => source.sourceId));
 
   const authorizedTools = applicableTools(hydrated, runtimeProfile);

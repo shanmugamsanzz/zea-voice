@@ -44,6 +44,23 @@ function normalizedAgentSettings(settings, interruptionSensitivity) {
   }
 }
 
+function validateOperationalResponseSettings(status, settings = {}) {
+  if (status !== 'active') return;
+  const configured = [
+    settings.technicalFailureMessage,
+    settings.knowledgeTechnicalFailureMessage,
+    settings.errorRecoveryMessage,
+  ].map((value) => String(value ?? '').normalize('NFKC').trim())
+    .find(Boolean);
+  if (!configured || configured.length > 500) {
+    throw new AppError(400,
+      'Technical Failure Message is required for an active agent and cannot exceed 500 characters',
+      'AGENT_TECHNICAL_FAILURE_MESSAGE_REQUIRED', {
+        field: 'settings.technicalFailureMessage',
+      });
+  }
+}
+
 const select = `SELECT a.*, pn.e164 AS phone_number,
   sp.name AS stt_provider_name, sm.display_name AS stt_model_name,
   lp.name AS llm_provider_name, lm.display_name AS llm_model_name,
@@ -145,6 +162,7 @@ export function createAgent(auth, input) { return withTenantContext(auth, async 
   await validatePhone(client, auth.tenantId, input.phoneNumberId);
   try {
     const settings = normalizedAgentSettings(input.settings, input.interruptionSensitivity);
+    validateOperationalResponseSettings(input.status, settings);
     const created = (await client.query(`INSERT INTO voice_agents (tenant_id,workspace_id,name,description,goal,language,usage_direction,status,phone_number_id,
       stt_model_id,llm_model_id,tts_model_id,voice_id,prompt,welcome_message,temperature,interruption_sensitivity,
       silence_timeout_ms,inactivity_timeout_seconds,settings,created_by,updated_by)
@@ -169,6 +187,7 @@ export function updateAgent(auth, id, input) { return withTenantContext(auth, as
     silenceTimeoutMs:input.silenceTimeoutMs??before.silence_timeout_ms,inactivityTimeoutSeconds:input.inactivityTimeoutSeconds??before.inactivity_timeout_seconds,
     settings:normalizedAgentSettings(input.settings??before.settings,
       input.interruptionSensitivity??Number(before.interruption_sensitivity)) };
+  validateOperationalResponseSettings(value.status, value.settings);
   await withPlatformAdminContext(auth.userId, (platformClient) => validateAgentRuntimeModels(platformClient, value));
   await validatePhone(client,auth.tenantId,value.phoneNumberId);
   try { await client.query(`UPDATE voice_agents SET name=$3,description=$4,goal=$5,language=$6,usage_direction=$7,status=$8,phone_number_id=$9,
