@@ -1,6 +1,5 @@
 import { validateGroundedLlmDecision } from './grounded-llm-decision.js';
 import { groundedNumbers as numbers } from './grounded-number-validator.js';
-import { deterministicSourceEntry } from '../../knowledge-engine/deterministic-source-mapping.js';
 import { AppError } from '../../middleware/errors.js';
 
 const maximumIntentCharacters = 160;
@@ -106,10 +105,12 @@ function entity(value = {}, sourceId = null) {
 export function buildGroundingEnvelope(knowledge = {}, options = {}) {
   const sources = [];
   const sourceContents = new Set();
+  const unifiedBundle = knowledge.tenantEvidence?.llmEvidenceBundle ?? null;
+  const unifiedRecords = unifiedBundle?.decisionInput?.hydratedRecords ?? null;
   // PostgreSQL-hydrated evidence is authoritative and must be added before
   // duplicate Qdrant/BM25 snippets so the LLM receives the complete approved
   // record rather than only the discovery preview.
-  for (const evidence of knowledge.tenantEvidence?.sources ?? []) {
+  for (const evidence of unifiedRecords ?? knowledge.tenantEvidence?.sources ?? []) {
     if (evidence.callerFacing === false) continue;
     const recordType = String(evidence.recordType ?? '').toUpperCase();
     const nodeType = String(evidence.authoritativeData?.nodeType ?? '').toLowerCase();
@@ -210,7 +211,7 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
       hint.catalogSelection?.item,
       ...(hint.catalogSelections ?? []).map((selection) => selection.item),
     ]),
-    ...(knowledge.tenantEvidence?.entities ?? []),
+    ...(unifiedBundle?.entities ?? knowledge.tenantEvidence?.entities ?? []),
     ...(knowledge.compactKnowledgeMap?.records ?? []).filter((record) => (
       record.type === 'CATALOG_ITEM' && record.metadata?.key && record.label
     )).map((record) => ({
@@ -247,9 +248,19 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
   // aligning the envelope against an earlier package that may contain a
   // different number or order of records. PostgreSQL scope and publication
   // verification has already happened during authoritative hydration.
-  const sourceMap = selectedSources.map((source) => (
-    deterministicSourceEntry(source, source.id)
-  ));
+  const suppliedSourceMapValue = unifiedBundle?.sourceMap ?? knowledge.tenantEvidence?.sourceMap;
+  const suppliedSourceMap = Array.isArray(suppliedSourceMapValue) ? suppliedSourceMapValue : [];
+  const sourceMapById = new Map(suppliedSourceMap.map((mapping) => [mapping.sourceId, mapping]));
+  const sourceMap = selectedSources.map((source) => sourceMapById.get(source.id)).filter(Boolean);
+  if (selectedSources.length && sourceMap.length !== selectedSources.length) {
+    throw new AppError(503,
+      'The unified grounded evidence package has an incomplete source map',
+      'KNOWLEDGE_GROUNDED_SOURCE_MAP_INCOMPLETE', {
+        stage: 'grounding_envelope_source_map',
+        expectedSourceIds: selectedSources.map((source) => source.id),
+        actualSourceIds: sourceMap.map((mapping) => mapping.sourceId),
+      });
+  }
   return Object.freeze({
     found: knowledge.found === true && selectedSources.length > 0,
     route: text(knowledge.route, 40) || 'none',

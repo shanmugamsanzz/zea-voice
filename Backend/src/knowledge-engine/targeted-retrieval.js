@@ -11,7 +11,7 @@ import {
 } from './canonical-record-identity.js';
 import { publishedRecordCallerFacingHint } from './evidence-audience.js';
 
-export const TARGETED_RETRIEVAL_VERSION = 5;
+export const TARGETED_RETRIEVAL_VERSION = 6;
 
 const documentIndexTypes = Object.freeze({
   [knowledgeSearchIndexes.CATALOG]: 'CATALOG_ITEM',
@@ -136,7 +136,37 @@ function buildParallelRetrievalScope(input, scope, recordTypes, relevantNamespac
   });
 }
 
-export function buildContextEnrichedRetrievalQuery(input, classification, resolution, scope = []) {
+function activeWorkflowRecord(input, recordScope) {
+  if (!(recordScope instanceof Map)) return null;
+  const memory = input?.canonicalCallMemory ?? input?.memory ?? {};
+  const active = memory.activeTool ?? memory.activeToolRequest;
+  if (!active) return null;
+  const recordId = normalizeId(active.authorizationRecordId
+    ?? active.authorizationEvidenceId ?? active.workflowRecordId);
+  const direct = recordId ? recordScope.get(recordId) : null;
+  if (direct?.recordType === 'WORKFLOW_RULE') return direct;
+  const activeName = normalizeId(active.name);
+  return activeName ? [...recordScope.values()].find((record) => (
+    record.recordType === 'WORKFLOW_RULE'
+    && normalizeId(record.toolIdentifier) === activeName
+  )) ?? null : null;
+}
+
+function tenantSearchForms(entities, recordScope) {
+  if (!(recordScope instanceof Map)) return Object.freeze([]);
+  const forms = [];
+  for (const entity of entities) {
+    if (!entity?.recordId) continue;
+    const record = recordScope.get(normalizeId(entity.recordId));
+    if (!record) continue;
+    forms.push(record.canonicalName, ...(record.searchForms ?? []));
+  }
+  return uniqueText(forms, 30);
+}
+
+export function buildContextEnrichedRetrievalQuery(
+  input, classification, resolution, scope = [], recordScope = new Map(),
+) {
   const understanding = input?.queryUnderstanding ?? {};
   const explicit = [
     ...(understanding.explicitEntities ?? []),
@@ -198,6 +228,15 @@ export function buildContextEnrichedRetrievalQuery(input, classification, resolu
     if (!entity.recordId) continue;
     reserved.push(Object.freeze({ ...entity, reason: 'explicit_comparison' }));
   }
+  const activeWorkflow = activeWorkflowRecord(input, recordScope);
+  if (activeWorkflow?.recordId) {
+    reserved.push(Object.freeze({
+      recordId: activeWorkflow.recordId,
+      recordType: 'WORKFLOW_RULE',
+      name: activeWorkflow.canonicalName ?? null,
+      reason: 'active_tool_authorization',
+    }));
+  }
   const reservedRecords = Object.freeze([...new Map(reserved.map((entry) => (
     [`${normalizeId(entry.recordType)}:${normalizeId(entry.recordId)}`, entry]
   ))).values()]);
@@ -207,10 +246,17 @@ export function buildContextEnrichedRetrievalQuery(input, classification, resolu
     ? (input?.recentRelevantTurns ?? []).slice(-4).map((turn) => clean(turn?.content, 500))
       .filter(Boolean)
     : [];
+  const tenantForms = tenantSearchForms([
+    ...explicit,
+    ...currentMentions,
+    ...(canonicalEntity ? [canonicalEntity] : []),
+    ...comparisons,
+  ], recordScope);
   const queryParts = uniqueText([
     currentQuestion,
     currentSearchEntity?.name,
     ...requestedFacts,
+    ...tenantForms,
     ...comparisons.map((entity) => entity.name),
     ...(need.detected === true ? [
       need.customerProblem,
@@ -239,6 +285,7 @@ export function buildContextEnrichedRetrievalQuery(input, classification, resolu
     contextDependent,
     requiresCanonicalHydration: !hasCurrentEntityMention
       && contextDependent && Boolean(canonicalEntity?.recordId),
+    tenantSearchForms: tenantForms,
     sparseText: searchText,
     semanticText: searchText,
     reservedRecords,
@@ -299,6 +346,18 @@ function publicationScope(input, bundles) {
         ).trim() || null,
         itemKey: String(record.entity_metadata?.itemKey ?? record.metadata?.itemKey ?? '').trim() || null,
         categoryKey: String(record.entity_metadata?.categoryKey ?? record.metadata?.categoryKey ?? '').trim() || null,
+        canonicalName: String(
+          record.entity_name ?? record.entity_category ?? record.question
+            ?? record.entity_metadata?.name ?? record.entity_metadata?.category ?? '',
+        ).trim() || null,
+        searchForms: uniqueText([
+          record.entity_name,
+          record.entity_category,
+          record.question,
+          ...(record.publicationAliases ?? record.entity_aliases ?? []),
+          ...(record.publicationSttForms ?? []),
+          ...(record.publicationPhoneticForms ?? []),
+        ], 30),
         useCasePhrases: Object.freeze([...(record.publicationUseCasePhrases
           ?? record.useCasePhrases ?? [])]),
         useCaseTokens: Object.freeze([...(record.publicationUseCaseTokens
@@ -495,7 +554,8 @@ function structuredUseCaseCandidates(recordScope, allowedTypes, limit, queryCont
 
 function activeWorkflowCandidate(input, recordScope, allowedTypes) {
   if (!allowedTypes.has('WORKFLOW_RULE')) return null;
-  const active = input?.memory?.activeTool;
+  const memory = input?.canonicalCallMemory ?? input?.memory ?? {};
+  const active = memory.activeTool ?? memory.activeToolRequest;
   if (!active) return null;
   const recordId = normalizeId(active.authorizationRecordId
     ?? active.authorizationEvidenceId ?? active.workflowRecordId);
@@ -789,7 +849,9 @@ export async function retrieveTargetedCandidates({
   const semanticDeadlineMs = Number(
     dependencies.semanticDeadlineMs ?? env.RAG_RUNTIME_SEMANTIC_DEADLINE_MS,
   );
-  const queryContext = buildContextEnrichedRetrievalQuery(input, classification, resolution, scope);
+  const queryContext = buildContextEnrichedRetrievalQuery(
+    input, classification, resolution, scope, records,
+  );
   const parallelScope = buildParallelRetrievalScope(
     input, scope, recordTypes, classification?.relevantNamespaces ?? [],
   );

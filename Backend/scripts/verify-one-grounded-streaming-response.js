@@ -7,10 +7,24 @@ import {
   validateGroundedSpokenSentences,
 } from '../src/voice/interaction/grounded-llm-response.js';
 import { createStreamingSentenceBuffer } from '../src/voice/streaming-sentence-buffer.js';
+import { buildDeterministicSourceMap } from '../src/knowledge-engine/deterministic-source-mapping.js';
 
+const evidence = Object.freeze({
+  id: 'evidence-1', publishedEvidenceId: 'evidence-1', sourceId: 'source_1',
+  recordId: 'faq-1', recordType: 'FAQ', tenantId: 'tenant-1', agentId: 'agent-1',
+  knowledgeBaseId: 'kb-1', publicationRevision: 1, callerFacing: true,
+  hydrationValidated: true, publicationValidated: true,
+  content: 'The office opens at 9 AM. The approved fee is 100.',
+});
+const sourceMap = buildDeterministicSourceMap([evidence]);
 const knowledge = {
-  route: 'faq', found: true, content: 'The office opens at 9 AM. The approved fee is 100.',
-  source: { recordId: 'faq-1', recordType: 'FAQ', knowledgeBaseId: 'kb-1' },
+  route: 'knowledge_engine', found: true,
+  tenantEvidence: {
+    sources: [evidence], sourceMap,
+    llmEvidenceBundle: {
+      decisionInput: { hydratedRecords: [evidence] }, sourceMap, entities: [],
+    },
+  },
 };
 const envelope = buildGroundingEnvelope(knowledge);
 assert.equal(envelope.sources.length, 1);

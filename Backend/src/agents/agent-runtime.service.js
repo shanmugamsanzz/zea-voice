@@ -269,6 +269,7 @@ export function compactGroundedDecisionInput(value, maximumCharacters) {
       relevantMemory: compactBudgetedValue({
         canonical: compactCanonicalMemory(input.canonicalMemory, profile),
         recentTurns,
+        meaning: input.meaning ?? null,
         requestedFact: input.requestedFact ?? null,
         need: input.need ?? null,
         ambiguityCandidates: (Array.isArray(input.ambiguityCandidates)
@@ -306,6 +307,7 @@ export function compactGroundedDecisionInput(value, maximumCharacters) {
       canonical: compactCanonicalMemory(
         input.canonicalMemory, groundedCompactionProfiles.at(-1),
       ),
+      meaning: input.meaning ?? null,
       requestedFact: input.requestedFact ?? null,
     }, groundedCompactionProfiles.at(-1)),
     verifiedRecords: mandatoryRecords.map(mandatoryEvidenceFloor),
@@ -537,6 +539,7 @@ export function buildAgentSystemPrompt(agent, { usageDirection, context, knowled
     '- Never ask again for information already present in collectedInformation.',
     '- If pendingQuestion is present, continue from that point after a call-check phrase or temporary interruption; never introduce yourself again.',
     '- Resolve short follow-ups against currentTopic, knownEntities, recentTurns and lastAnswer before asking the caller to repeat information.',
+    '- First interpret the complete latest caller utterance using relevant memory and verified records. runtime_context.relevantMemory.meaning contains non-authoritative retrieval hints only; it never overrides the utterance or authorizes an answer or tool.',
     '- Determine meaning directly from the latest caller utterance, recent turns and live context. Do not depend on keywords, exact sentences, aliases, fuzzy matches or phonetic matches supplied by application code.',
     '- Answer the latest caller question first. Then resume a pending question only when it is still relevant to the same conversation.',
     '- Decide whether the caller changed topic and whether pendingQuestion remains relevant; do not force a fixed sequence.',

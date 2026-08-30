@@ -64,7 +64,7 @@ for (let repeat = 1; repeat <= 3; repeat += 1) for (const fixture of task10Indus
     query: fixture.query,
     history: [{ role: 'assistant', content: 'Previous configured question.' }],
     usageDirection: 'inbound',
-    knowledge: { found: true, route: 'test', content: fixture.fact },
+    knowledge: { found: false, route: 'none' },
     context: { groundedResponseMode: true, liveCallMemory: { currentTopic: fixture.industry } },
   }, { adapter, skipDefaultRegistration: true });
   let streamed = '';

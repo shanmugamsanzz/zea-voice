@@ -2,7 +2,7 @@ import { typedRecordIdentityKey } from './canonical-record-identity.js';
 import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/knowledge-confidence-config.js';
 import { compactNeedContext } from './published-use-case-signals.js';
 
-export const CONTEXTUAL_QUERY_UNDERSTANDING_VERSION = 1;
+export const CONTEXTUAL_QUERY_UNDERSTANDING_VERSION = 2;
 
 const catalogRecordTypes = new Set(['CATALOG_ITEM', 'CATALOG_CATEGORY']);
 const catalogEntityTypes = new Set(['ITEM', 'CATEGORY']);
@@ -283,25 +283,18 @@ export function understandContextualKnowledgeQuery(input, resolution) {
     ...(contextDependent && input.memory?.pendingClarification ? ['pending_clarification'] : []),
     ...(contextDependent && input.memory?.activeTool ? ['active_tool'] : []),
   ]);
-  const currentQuestion = normalized(input.latestQuestion ?? input.utterance);
-  const canonicalNameMentions = catalogCandidates(resolution).filter((candidate) => {
-    const label = normalized(candidateLabel(candidate));
-    return candidate.explicit === true && label && currentQuestion.includes(label);
-  });
   const comparisonRequested = requestedFacts.map(normalized).includes('comparison')
-    || canonicalNameMentions.length > 1 || explicitCandidates.length > 1;
+    || mentionedCandidates.length > 1 || explicitCandidates.length > 1;
   const comparisonTopScore = Math.max(0, ...mentionedCandidates.map((candidate) => (
     boundedScore(candidate.score)
   )));
   const comparisonMentions = mentionedCandidates.filter((candidate) => (
     boundedScore(candidate.score) >= comparisonTopScore - confidenceConfiguration.ambiguityMargin
-      || currentQuestion.includes(normalized(candidateLabel(candidate)))
-      || explicitSignalPhrases(candidate, confidenceConfiguration)
-        .some((phrase) => currentQuestion.includes(phrase))
+      || explicitSignalPhrases(candidate, confidenceConfiguration).length > 0
   ));
-  const comparisonPool = [...new Map([
-    ...comparisonMentions, ...canonicalNameMentions,
-  ].map((candidate) => [normalized(candidateIdentity(candidate)), candidate])).values()];
+  const comparisonPool = [...new Map(comparisonMentions.map((candidate) => (
+    [normalized(candidateIdentity(candidate)), candidate]
+  ))).values()];
   const comparisonCandidates = comparisonRequested
     ? (comparisonPool.length > 1 ? comparisonPool : explicitCandidates)
     : [];
@@ -317,8 +310,18 @@ export function understandContextualKnowledgeQuery(input, resolution) {
     : (contextDependent ? memoryEntity : null);
   const confirmationCandidate = !ambiguity.detected && explicitCandidates.length === 0
     ? candidateSummary(mentionedCandidates[0], confidenceConfiguration) : null;
+  const intentHint = protocolRoute ? currentRouteIntent
+    : (actionIntent.detected ? 'ACTION'
+      : (comparisonRequested ? 'COMPARISON'
+        : (hasCurrentEntitySignal ? 'ENTITY_REQUEST'
+          : (contextDependent ? 'CONTEXTUAL_FOLLOW_UP'
+            : (need.detected ? 'NEED_BASED_REQUEST' : 'UNRESOLVED')))));
   return Object.freeze({
     version: CONTEXTUAL_QUERY_UNDERSTANDING_VERSION,
+    role: 'RETRIEVAL_MEANING_HINTS',
+    decisionAuthority: false,
+    meaningAuthority: 'GROUNDED_LLM',
+    intentHint,
     tenantId: String(input.tenantId),
     agentId: String(input.agentId),
     callId: String(input.callId),

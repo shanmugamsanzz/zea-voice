@@ -61,7 +61,6 @@ import {
   openIsolatedCallMemory,
   seedConfiguredQuestion,
 } from '../knowledge-engine/call-memory.js';
-import { compactBundleAsKnowledge } from '../knowledge-engine/compact-evidence-bundle.js';
 import {
   awaitLlmWithSafeLatency,
   VoiceTurnLatencyTracker,
@@ -1937,7 +1936,7 @@ export class RealtimeConversationOrchestrator {
     const memoryPromptStartedAt = performance.now();
     const liveMemory = this.liveCallMemory?.snapshot();
     const llmEvidenceBundle = knowledge?.tenantEvidence?.llmEvidenceBundle ?? null;
-    const promptKnowledge = compactBundleAsKnowledge(knowledge);
+    const promptKnowledge = knowledge;
     // Tool fields are mutable call state and must never be inherited by a new
     // call. Cross-call history may still be supplied as read-only context when
     // the UI policy enables it, but collection always starts in this call.
@@ -2679,7 +2678,10 @@ export class RealtimeConversationOrchestrator {
             await this.audioEngine.drainOutput();
           }
           const firstFailure = sentenceFailures[0]?.error ?? null;
-          if (firstFailure && completedSentences.length === 0 && audibleSentences.length === 0) {
+          // An acknowledgement is temporary progress audio, not the final
+          // caller-facing result. It must never hide failure of every final
+          // response sentence.
+          if (firstFailure && completedSentences.length === 0) {
             throw firstFailure;
           }
           if (firstFailure) {
@@ -2697,7 +2699,7 @@ export class RealtimeConversationOrchestrator {
             failure: firstFailure,
             failures: Object.freeze([...sentenceFailures]),
             completedSentences: completedSentences.length,
-            spokenText: (completedSentences.length ? completedSentences : audibleSentences).join(' ').trim(),
+            spokenText: completedSentences.join(' ').trim(),
           };
         } finally {
           clearGroupingTimer();
@@ -3226,7 +3228,17 @@ export class RealtimeConversationOrchestrator {
         turnEpoch: epoch, elapsedMs: Date.now() - turnStartedAt,
       }, 'Validated answer completed after the first-audio deadline and will be delivered');
     }
-    sentencePipeline.enqueue(finalAnswer);
+    const finalAnswerQueued = sentencePipeline.enqueue(finalAnswer);
+    if (!finalAnswerQueued) {
+      sentencePipeline.cancel();
+      throw new AppError(503,
+        'The validated final response could not be queued for speech',
+        'VOICE_FINAL_RESPONSE_NOT_QUEUED', {
+          stage: 'final_response_tts_queue',
+          operationalFailure: true,
+          acknowledgementPlayed: latencyAcknowledged,
+        });
+    }
     if (!generatedAnswer) {
       sourceTrace.add(createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
         label: 'No-response fallback',
@@ -3552,6 +3564,21 @@ export class RealtimeConversationOrchestrator {
         generationMs: Date.now() - requestStartedAt, firstAudioLatencyMs, error,
       });
       generationRecorded = true;
+      this.#recordProviderFailure('tts', error, 'tts.direct');
+      throw error;
+    }
+    if (completed && firstAudio) {
+      const error = Object.assign(new AppError(502,
+        'TTS completed without producing caller-audible audio',
+        'TTS_EMPTY_AUDIO_STREAM', { generationId }), {
+        retryable: true,
+        audioStarted: false,
+      });
+      if (!generationRecorded) this.#recordTtsGeneration({
+        generationId, attempt: options.attempt,
+        bufferedLookahead: false, outcome: 'failed',
+        generationMs: Date.now() - requestStartedAt, firstAudioLatencyMs, error,
+      });
       this.#recordProviderFailure('tts', error, 'tts.direct');
       throw error;
     }

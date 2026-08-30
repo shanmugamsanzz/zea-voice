@@ -34,7 +34,7 @@ assert.ok(multitenant.completeMetadataRecords >= multitenant.sourceMappingsValid
 assert.equal(multitenant.crossTenantLeakage, false);
 assert.equal(multitenant.runtimeErrors, 0);
 
-run('deterministic source mapping', 'scripts/verify-compact-evidence-package.js');
+run('unified hydrated evidence and source mapping', 'scripts/verify-grounded-turn-evidence-pipeline.js');
 run('complete authoritative metadata', 'scripts/verify-authoritative-hydration-readiness.js');
 run('compact prompt and operational failure separation',
   'scripts/verify-compact-grounded-llm-budget.js');

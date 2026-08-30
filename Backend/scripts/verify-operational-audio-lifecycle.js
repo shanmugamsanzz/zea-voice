@@ -66,6 +66,23 @@ assert.match(groundedTurn, /configuredTechnicalFailureResponse/u,
   'operational failures must resolve through tenant-configured technical speech');
 assert.match(groundedTurn, /VOICE_TECHNICAL_RESPONSE_UNCONFIGURED/u,
   'missing required technical speech must fail explicitly');
+assert.match(groundedTurn, /finalAnswerQueued[\s\S]*VOICE_FINAL_RESPONSE_NOT_QUEUED/u,
+  'a finalized response that cannot enter TTS must become an operational failure');
+
+const sentencePipelineStart = source.indexOf('#createSentenceTtsPipeline(');
+const runTurnBoundary = source.indexOf('async #runTurn(', sentencePipelineStart);
+const sentencePipeline = source.slice(sentencePipelineStart, runTurnBoundary);
+assert.match(sentencePipeline,
+  /firstFailure\s*&&\s*completedSentences\.length\s*===\s*0/u,
+  'acknowledgement audio must not hide failure of every final response sentence');
+assert.doesNotMatch(sentencePipeline,
+  /firstFailure\s*&&\s*completedSentences\.length\s*===\s*0\s*&&\s*audibleSentences/u,
+  'acknowledgement audibility must not count as successful final playback');
+assert.match(source, /TTS_EMPTY_AUDIO_STREAM/u,
+  'a completed TTS stream without audio must fail rather than produce a silent turn');
+assert.match(sentencePipeline,
+  /currentSentenceNumber\s*===\s*1\s*&&\s*!acknowledgementAudioPlayed/u,
+  'final TTS after acknowledgement must not reuse the original first-audio deadline');
 assert.doesNotMatch(groundedTurn, /operational_response_unconfigured[\s\S]*suppressInactivity/u,
   'operational failures must not silently return to listening');
 

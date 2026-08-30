@@ -528,7 +528,7 @@ assert.match(agentRuntimeSource, /groundedDecisionContract/u);
 assert.match(agentRuntimeSource, /Answer the latest caller question first/u);
 assert.match(providerSource, /tools:\s*groundedResponseMode\s*\?\s*\[\]\s*:\s*assignedTools/u);
 assert.match(providerSource, /responseFormat:\s*\{\s*type:\s*'json_schema'/u);
-assert.match(providerSource, /schema:\s*groundedDecisionJsonSchema/u);
+assert.match(providerSource, /schema:\s*responseSchema/u);
 assert.doesNotMatch(providerSource, /createMeaningResolutionLlmStream/u);
 assert.doesNotMatch(orchestratorSource, /resolvePreRetrievalMeaning|pre_retrieval_meaning/u);
 assert.match(orchestratorSource, /#knowledge\(query, retrievalAbortController\.signal\)/u);
@@ -569,6 +569,7 @@ const session = await createSelectedLlmStream({
   knowledge: { found: true, route: 'semantic', content: envelope.sources[0].content },
   context: {
     groundedResponseMode: true,
+    groundingEnvelope: envelope,
     configuredInformationFields: runtime.fieldSchemas,
     groundedDecisionInput: {
       currentQuestion: 'Book the selected published option.',

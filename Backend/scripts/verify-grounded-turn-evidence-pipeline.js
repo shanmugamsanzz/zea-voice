@@ -169,10 +169,12 @@ assert.ok(result.authoritative.evidence.every((source) => (
 const llm = result.llmInput;
 assert.deepEqual(Object.keys(llm).sort(), [
   'ambiguityCandidates', 'canonicalMemory', 'currentQuestion', 'hydratedRecords',
-  'clarificationContext', 'need', 'recentRelevantTurns', 'requestedFact', 'sourceMap',
+  'clarificationContext', 'meaning', 'need', 'recentRelevantTurns', 'requestedFact', 'sourceMap',
   'toolSchemas', 'workflowAuthorization',
 ].sort());
 assert.equal(llm.currentQuestion, input.latestQuestion);
+assert.equal(llm.meaning.authority, 'GROUNDED_LLM');
+assert.equal(llm.meaning.interpretationRequired, true);
 assert.ok(llm.hydratedRecords.length <= 5);
 assert.deepEqual(llm.hydratedRecords.filter((source) => source.callerFacing)
   .map((source) => source.sourceId), llm.hydratedRecords

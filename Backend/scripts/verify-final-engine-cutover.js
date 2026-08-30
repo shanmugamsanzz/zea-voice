@@ -19,7 +19,7 @@ assert.doesNotMatch(activeRuntime, /interaction\/live-call-memory/u);
 assert.doesNotMatch(orchestrator, /openGenericConversationState/u);
 assert.match(orchestrator, /openIsolatedCallMemory/u);
 assert.match(orchestrator, /applyUnifiedGroundedTurn/u);
-assert.match(orchestrator, /finalizeVerifiedToolResults/u);
+assert.match(orchestrator, /finalizeConfiguredToolResults/u);
 
 const obsoleteFiles = [
   'src/voice/interaction/live-call-memory.js',
@@ -27,6 +27,21 @@ const obsoleteFiles = [
   'scripts/verify-grounded-llm-response.js',
   'scripts/verify-hybrid-production-engine.js',
   'scripts/verify-llm-first-understanding.js',
+  'src/knowledge-engine/compact-evidence-bundle.js',
+  'src/knowledge-bases/hybrid-knowledge-retrieval.service.js',
+  'scripts/verify-final-stt-hybrid-hydration.js',
+  'scripts/verify-concurrent-hybrid-retrieval.js',
+  'scripts/verify-complete-health-call-production-replay.js',
+  'scripts/verify-clean-hybrid-retrieval.js',
+  'scripts/verify-direct-conversation-message.js',
+  'scripts/verify-document-driven-conversation-runtime.js',
+  'scripts/verify-exact-guidance-priority.js',
+  'scripts/verify-failed-production-replay.js',
+  'scripts/verify-guidance-continuation-grounding.js',
+  'scripts/verify-generic-meaning-resolution.js',
+  'scripts/verify-production-migration-gate.js',
+  'scripts/verify-production-activation-gate-contract.js',
+  'scripts/verify-welcome-acknowledgement-memory.js',
 ];
 for (const path of obsoleteFiles) {
   await assert.rejects(access(new URL(path, root)), undefined, `${path} must remain removed`);
