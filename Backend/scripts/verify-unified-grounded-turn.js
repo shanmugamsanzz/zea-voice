@@ -289,6 +289,21 @@ const categoryEvidence = {
     ],
   },
 };
+const categoryChildEvidence = categoryEvidence.authoritativeData.children.map((child, index) => ({
+  id: `category-child-source-${index + 1}`,
+  recordId: child.recordId,
+  recordType: 'CATALOG_ITEM',
+  callerFacing: true,
+  retrievalContext: 'primary',
+  channels: ['semantic'],
+  content: `${child.name} details.`,
+  authoritativeData: {
+    itemKey: child.itemKey,
+    name: child.name,
+    category: categoryEvidence.authoritativeData.category,
+    categoryKey: categoryEvidence.authoritativeData.categoryKey,
+  },
+}));
 const categoryTurn = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
     decision: 'answer', answer: categoryEvidence.content, evidenceIds: ['category-source'],
@@ -299,21 +314,40 @@ const categoryTurn = applyUnifiedGroundedTurn({
   }),
   groundingEnvelope: {
     found: true,
-    sources: [{
-      id: 'category-source', recordId: categoryEvidence.recordId,
-      recordType: categoryEvidence.recordType, content: categoryEvidence.content,
-      authoritativeData: categoryEvidence.authoritativeData,
-    }],
-    entities: [{
-      id: categoryEvidence.recordId, key: 'services', name: 'Service Options',
-      entityType: 'CATEGORY', category: 'Service Options', categoryKey: 'services',
-      sourceId: 'category-source',
-    }],
+    sources: [
+      {
+        id: 'category-source', recordId: categoryEvidence.recordId,
+        recordType: categoryEvidence.recordType, content: categoryEvidence.content,
+        authoritativeData: categoryEvidence.authoritativeData,
+      },
+      ...categoryChildEvidence.map((source) => ({
+        id: source.id, recordId: source.recordId, recordType: source.recordType,
+        content: source.content, authoritativeData: source.authoritativeData,
+      })),
+    ],
+    entities: [
+      {
+        id: categoryEvidence.recordId, key: 'services', name: 'Service Options',
+        entityType: 'CATEGORY', category: 'Service Options', categoryKey: 'services',
+        sourceId: 'category-source',
+      },
+      ...categoryChildEvidence.map((source) => ({
+        id: source.recordId,
+        key: source.authoritativeData.itemKey,
+        name: source.authoritativeData.name,
+        category: source.authoritativeData.category,
+        categoryKey: source.authoritativeData.categoryKey,
+        sourceId: source.id,
+      })),
+    ],
   },
-  memory: categoryMemory, turnToken: 'category-turn', evidence: [categoryEvidence],
+  memory: categoryMemory, turnToken: 'category-turn',
+  evidence: [categoryEvidence, ...categoryChildEvidence],
   finalizedUtterance: 'Tell me about the service options.',
 });
 assert.equal(categoryTurn.valid, true);
+assert.notEqual(categoryTurn.reason, 'latest_request_evidence_mismatch',
+  'a selected primary category must not require an unrelated child-item citation');
 assert.equal(categoryTurn.state.activeEntity, null);
 assert.equal(categoryTurn.state.activeCategory.id, categoryEvidence.recordId);
 assert.equal(categoryTurn.state.activeCategory.key, 'services',

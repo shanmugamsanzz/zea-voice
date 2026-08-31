@@ -498,6 +498,7 @@ export function applyUnifiedGroundedTurn({
   )).filter(Boolean);
   if (effectiveDecision.decision === 'answer'
     && primaryEntities.length > 0
+    && !exactCategorySelection
     && effectiveDecision.stateUpdate.contextDependent !== true
     && !effectiveDecision.responseId) {
     const primaryKeys = new Set(primaryEntities.map((entity) => identity(entity.key)));
