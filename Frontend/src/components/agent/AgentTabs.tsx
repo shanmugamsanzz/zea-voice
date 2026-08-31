@@ -75,6 +75,10 @@ interface AgentApiData {
   metrics: { totalCalls: number; averageDurationSeconds: number; successRate: number };
 }
 
+interface AgentConfigurationApiData {
+  limits: { systemPromptMaxCharacters: number };
+}
+
 interface ProviderModelOption {
   id: string; providerId: string; providerName: string; providerType: 'stt' | 'llm' | 'tts';
   modelKey: string; displayName: string; capabilities: Record<string, unknown>; settings: Record<string, unknown>;
@@ -498,6 +502,11 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const [activeTab, setActiveTab] = useState<'overview' | 'listener' | 'brain' | 'speaker' | 'precall' | 'postcall' | 'tools' | 'knowledge' | 'analytics'>('overview');
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const [systemPromptMaxCharacters, setSystemPromptMaxCharacters] = useState<number | null>(null);
+  const promptCharacterCount = Array.from(agent.prompt).length;
+  const promptLimitError = systemPromptMaxCharacters !== null && promptCharacterCount > systemPromptMaxCharacters
+    ? `System Prompt cannot exceed ${systemPromptMaxCharacters.toLocaleString()} characters. Current: ${promptCharacterCount.toLocaleString()}.`
+    : '';
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [models, setModels] = useState<ProviderModelOption[]>([]);
@@ -565,19 +574,22 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     const load = async () => {
       setLoading(true); setError('');
       try {
-        const [catalogResult, phonesResult, existingResult, ambienceResult] = await Promise.allSettled([
+        const [catalogResult, phonesResult, existingResult, ambienceResult, configurationResult] = await Promise.allSettled([
           apiRequest<ProviderModelOption[]>('/catalog/providers', { zeaCache: 'reload' }),
           apiRequest<AgentPhoneOption[]>('/phone-numbers'),
           agentId ? apiRequest<AgentApiData>(`/agents/${agentId}`) : Promise.resolve(null),
           agentId ? apiRequest<{ ambienceAssetId: string | null }>(`/agents/${agentId}/ambience`, { zeaCache: 'reload' }) : Promise.resolve(null),
+          apiRequest<AgentConfigurationApiData>('/agents/configuration', { zeaCache: 'reload' }),
         ]);
         if (catalogResult.status === 'rejected') throw catalogResult.reason;
         if (existingResult.status === 'rejected') throw existingResult.reason;
+        if (configurationResult.status === 'rejected') throw configurationResult.reason;
         const catalog = catalogResult.value;
         const phones = phonesResult.status === 'fulfilled' ? phonesResult.value : [];
         const existing = existingResult.value;
         if (stopped) return;
         setModels(catalog); setPhoneNumbers(phones.filter((phone) => phone.status === 'active'));
+        setSystemPromptMaxCharacters(configurationResult.value.limits.systemPromptMaxCharacters);
         if (phonesResult.status === 'rejected') setError('Models loaded, but assigned phone numbers could not be loaded.');
         if (existing) applyApiAgent(existing);
         else {
@@ -850,6 +862,15 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
 
   const saveAgent = async () => {
     if (isReadOnly || saving) return;
+    if (!Number.isInteger(systemPromptMaxCharacters) || Number(systemPromptMaxCharacters) <= 0) {
+      setActiveTab('brain');
+      setError('The System Prompt character limit could not be loaded. Refresh the page and try again.'); return;
+    }
+    const systemPromptCharacterCount = Array.from(agent.prompt.trim()).length;
+    if (systemPromptCharacterCount > Number(systemPromptMaxCharacters)) {
+      setActiveTab('brain');
+      setError(`System Prompt cannot exceed ${Number(systemPromptMaxCharacters).toLocaleString()} characters. Current: ${systemPromptCharacterCount.toLocaleString()}.`); return;
+    }
     if (!sttModelId || !llmModelId || !ttsModelId) { setError('Connected STT, LLM and TTS models are required.'); return; }
     const postCallMessageType = agent.postCallMessageType || 'Dynamic';
     if (postCallMessageType === 'Dynamic' && !agent.postCallPrompt?.trim()) {
@@ -2830,10 +2851,19 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   rows={10}
                   value={agent.prompt}
                   disabled={isReadOnly}
+                  aria-invalid={Boolean(promptLimitError)}
                   onChange={(e) => setAgent({ ...agent, prompt: e.target.value })}
-                  className="w-full bg-slate-950 p-5 text-xs text-[#38bdf8] font-mono leading-relaxed outline-none resize-y"
+                  className={`w-full bg-slate-950 p-5 text-xs text-[#38bdf8] font-mono leading-relaxed outline-none resize-y ${promptLimitError ? 'ring-2 ring-inset ring-red-500' : ''}`}
                   placeholder="Define the core system instructions and guidelines for your AI voice agent here..."
                 />
+              </div>
+              <div className="flex items-start justify-between gap-4 text-[11px] font-semibold">
+                <p className={promptLimitError ? 'text-red-600' : 'text-slate-500'}>
+                  {promptLimitError || 'The maximum is loaded from the backend runtime configuration.'}
+                </p>
+                <span className={promptLimitError ? 'shrink-0 text-red-600' : 'shrink-0 text-slate-500'}>
+                  {promptCharacterCount.toLocaleString()} / {systemPromptMaxCharacters?.toLocaleString() ?? '...'} characters
+                </span>
               </div>
             </div>
           </div>

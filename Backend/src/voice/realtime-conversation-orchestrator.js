@@ -47,7 +47,6 @@ import {
   classifyFinalCallCheckUtterance,
   resolveCallCheckConfiguration,
 } from './interaction/call-check-config.js';
-import { findLanguageSwitchRequest, languageSwitchAcknowledgement } from './interaction/language-switch.js';
 import { resolveCallContextId } from './interaction/context-id-resolver.js';
 import { createContextCachePolicy, publicContextCacheMetadata } from './interaction/context-cache-policy.js';
 import { conversationContextCache } from './interaction/conversation-context-cache.service.js';
@@ -1324,11 +1323,6 @@ export class RealtimeConversationOrchestrator {
         matchedPhrase: callCheckPhrase,
       }, 'Call-check candidate contains additional content; sending the complete turn to unified understanding');
     }
-    const requestedLanguage = findLanguageSwitchRequest(completedTurn);
-    if (requestedLanguage) {
-      await this.#handleLanguageSwitch(completedTurn, requestedLanguage);
-      return;
-    }
     const outputWasActive = [callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state);
     const agentAudioWasPlaying = [callStates.GREETING, callStates.SPEAKING].includes(this.controller.state);
     if (outputWasActive || this.interruptionCandidate.active) {
@@ -1592,40 +1586,6 @@ export class RealtimeConversationOrchestrator {
     this.#scheduleLiveMemoryCheckpoint('call_check_side_action');
     this.runtimeMetrics.callChecks.spoken += 1;
     this.errorCount = 0;
-    this.#armInactivity();
-  }
-
-  async #handleLanguageSwitch(customerText, language) {
-    if (this.finalized) return;
-    this.#clearInactivity();
-    this.liveCallMemory?.setLanguage?.(language);
-    if ([callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) {
-      await this.#cancelActive('caller_language_switch');
-    }
-    if (this.controller.state !== callStates.LISTENING) {
-      this.customerUtterance.reset();
-      return;
-    }
-    const liveMemory = this.liveCallMemory?.snapshot();
-    const questionToResume = liveMemory?.pendingQuestion?.text ?? liveMemory?.pendingQuestionText;
-    const acknowledgement = languageSwitchAcknowledgement(language);
-    const response = this.#fitTtsMessage([acknowledgement, questionToResume].filter(Boolean).join(' '));
-    await this.controller.receiveFinalTranscript(customerText);
-    this.customerUtterance.reset();
-    this.shortTurnMerger.clear();
-    await this.controller.setAssistantResponse(response, Date.now(), {
-      sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
-        id: this.runtimeProfile.agent.id,
-        label: 'Language switch side action', metadata: { language },
-      })],
-    });
-    const epoch = ++this.epoch;
-    const spoken = await this.#synthesize(response, `language-switch-${epoch}`, { epoch });
-    if (!spoken || this.#isStaleGeneration(epoch) || this.controller.state !== callStates.SPEAKING) return;
-    await this.audioEngine.drainOutput();
-    if (this.#isStaleGeneration(epoch) || this.controller.state !== callStates.SPEAKING) return;
-    await this.controller.playbackComplete();
-    this.#scheduleLiveMemoryCheckpoint('language_switch_side_action');
     this.#armInactivity();
   }
 
@@ -2007,7 +1967,7 @@ export class RealtimeConversationOrchestrator {
       toolSchemas: llmEvidenceBundle?.authorizedToolSchemas ?? runtimeTools(this.runtimeProfile.tools),
       collectedInformation: collectedData,
     };
-    const voiceHistoryLimit = Math.min(env.VOICE_LLM_MAX_HISTORY_MESSAGES, 4);
+    const voiceHistoryLimit = env.VOICE_LLM_MAX_HISTORY_MESSAGES;
     const combinedHistory = llmEvidenceBundle ? [] : [
       ...(this.previousConversationMemory?.recentMessages ?? []), ...promptHistory,
     ];
@@ -2018,7 +1978,6 @@ export class RealtimeConversationOrchestrator {
       history: voiceHistoryLimit > 0 ? combinedHistory.slice(-voiceHistoryLimit) : [],
       historyLimit: Math.min(
         env.VOICE_LLM_MAX_HISTORY_MESSAGES,
-        4,
         Math.max(2, Number(Array.isArray(liveMemory?.recentTurns)
           ? Math.ceil(liveMemory.recentTurns.length / 2)
           : (liveMemory?.recentTurns ?? 5)) * 2),

@@ -1,4 +1,10 @@
 import { z } from 'zod';
+import { env } from '../config/env.js';
+
+const systemPromptSchema = z.string().trim().min(1).refine(
+  (value) => Array.from(value).length <= env.LLM_SYSTEM_PROMPT_MAX_CHARS,
+  { message: `System Prompt cannot exceed ${env.LLM_SYSTEM_PROMPT_MAX_CHARS.toLocaleString('en-US')} characters` },
+);
 
 const fields = {
   name: z.string().trim().min(1).max(160),
@@ -10,7 +16,7 @@ const fields = {
   phoneNumberId: z.string().uuid().nullable().optional(),
   sttModelId: z.string().uuid(), llmModelId: z.string().uuid(), ttsModelId: z.string().uuid(),
   voiceId: z.string().trim().min(1).max(240),
-  prompt: z.string().trim().min(1).max(100000),
+  prompt: systemPromptSchema,
   welcomeMessage: z.string().max(10000).nullable().optional(),
   temperature: z.number().min(0).max(2).default(0.7),
   interruptionSensitivity: z.number().min(0).max(1).default(0.3),

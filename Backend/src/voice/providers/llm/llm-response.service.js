@@ -5,6 +5,11 @@ import { groundedDecisionJsonSchema } from '../../interaction/grounded-llm-decis
 import { buildUnifiedGroundingEnvelope } from '../../interaction/grounded-llm-response.js';
 import { providerAdapterRegistry } from '../registry.js';
 import { registerImplementedProviderAdapters } from '../defaults.js';
+import {
+  estimatePromptTextTokens,
+  estimatePromptTokens,
+  promptCharacterCount,
+} from '../../../llm/prompt-budget.js';
 
 function ensureDefaultLlmAdapters(registry) {
   registerImplementedProviderAdapters(registry);
@@ -108,13 +113,7 @@ export function selectedLlmPromptBudget(compactGrounding = false) {
 }
 
 export function estimateLlmPromptTokens(messages = []) {
-  const content = messages.map((message) => String(message?.content ?? '')).join('\n');
-  const codePoints = Array.from(content).length;
-  const lexicalUnits = content.match(/[\p{L}\p{M}\p{N}]+|[^\s\p{L}\p{M}\p{N}]/gu)?.length ?? 0;
-  // Provider tokenizers differ. This conservative provider-independent
-  // estimate protects multilingual prompts without adding a model-specific
-  // tokenizer to the universal runtime.
-  return Math.max(Math.ceil(codePoints / 3), Math.ceil(lexicalUnits * 1.25));
+  return estimatePromptTokens(messages);
 }
 
 function assertPromptBudget(messages, characterBudget, tokenBudget) {
@@ -132,7 +131,7 @@ function assertPromptBudget(messages, characterBudget, tokenBudget) {
 }
 
 export function selectedVoiceHistoryLimit(requestedLimit) {
-  const configured = Math.min(env.VOICE_LLM_MAX_HISTORY_MESSAGES, 4);
+  const configured = env.VOICE_LLM_MAX_HISTORY_MESSAGES;
   return Math.max(0, Math.min(
     configured,
     Number.isInteger(requestedLimit) && requestedLimit >= 0 ? requestedLimit : configured,
@@ -140,7 +139,7 @@ export function selectedVoiceHistoryLimit(requestedLimit) {
 }
 
 export function selectedGroundedOutputTokenLimit() {
-  return Math.min(env.VOICE_GROUNDED_MAX_OUTPUT_TOKENS, 384);
+  return env.VOICE_GROUNDED_MAX_OUTPUT_TOKENS;
 }
 
 export function runtimeTools(tools = []) {
@@ -203,8 +202,16 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
     ? String(input.context?.groundedDecisionInput?.currentQuestion ?? input.query ?? '').slice(0, 2_000)
     : input.query;
   const characterBudget = selectedLlmPromptBudget(compactGrounding);
-  const systemCharacterBudget = Math.max(4_000,
-    characterBudget - Array.from(String(providerQuery ?? '')).length);
+  const systemCharacterBudget = characterBudget - promptCharacterCount(providerQuery);
+  const systemTokenBudget = env.VOICE_LLM_PROMPT_BUDGET_TOKENS
+    - estimatePromptTextTokens(providerQuery);
+  if (systemCharacterBudget <= 0 || systemTokenBudget <= 0) {
+    throw new AppError(413, 'The caller question exceeds the configured prompt budget',
+      'LLM_GROUNDED_PROMPT_BUDGET_EXCEEDED', {
+        characterBudget,
+        tokenBudget: env.VOICE_LLM_PROMPT_BUDGET_TOKENS,
+      });
+  }
   const systemPrompt = initialize('system_prompt', () => buildAgentSystemPrompt(runtimeProfile.agent, {
     usageDirection: input.usageDirection,
     context: {
@@ -214,6 +221,7 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
     },
     knowledge: input.knowledge ?? { found: false, route: 'none' },
     maxPromptChars: systemCharacterBudget,
+    maxPromptTokens: systemTokenBudget,
   }));
   const historyLimit = groundedResponseMode
     ? 0
