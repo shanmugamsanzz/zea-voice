@@ -58,13 +58,24 @@ const profile = {
   },
   tools: [],
 };
+const zeroEvidenceKnowledge = {
+  found: false,
+  route: 'none',
+  tenantEvidence: {
+    llmEvidenceBundle: {
+      decisionInput: { hydratedRecords: [] },
+      sourceMap: [],
+      entities: [],
+    },
+  },
+};
 for (let repeat = 1; repeat <= 3; repeat += 1) for (const fixture of task10Industries) {
   const session = await createSelectedLlmStream(profile, {
     callId: `call-${fixture.industry}`,
     query: fixture.query,
     history: [{ role: 'assistant', content: 'Previous configured question.' }],
     usageDirection: 'inbound',
-    knowledge: { found: false, route: 'none' },
+    knowledge: zeroEvidenceKnowledge,
     context: { groundedResponseMode: true, liveCallMemory: { currentTopic: fixture.industry } },
   }, { adapter, skipDefaultRegistration: true });
   let streamed = '';
@@ -85,7 +96,7 @@ assert.ok(maximumHistoryMessages <= 4,
 
 const cancelledSession = await createSelectedLlmStream(profile, {
   callId: 'call-cancel', query: 'new topic', history: [], usageDirection: 'inbound',
-  knowledge: { found: false }, context: { groundedResponseMode: true },
+  knowledge: zeroEvidenceKnowledge, context: { groundedResponseMode: true },
 }, { adapter, skipDefaultRegistration: true });
 await cancelledSession.cancel('stale_turn');
 assert.equal(cancellations, 1);

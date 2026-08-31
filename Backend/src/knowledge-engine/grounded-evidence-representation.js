@@ -131,6 +131,8 @@ export function createCanonicalGroundedEvidence(source = {}, sourceId = null, co
     sourceId, publishedEvidenceId: source.id, recordId: source.recordId,
     recordType: source.recordType, canonicalName: canonicalName(source), facts,
     authoritativeData: facts, callerFacing: source.callerFacing === true,
+    hydrationValidated: source.hydrationValidated === true,
+    publicationValidated: source.publicationValidated === true,
     rank: source.rank, rrfScore: source.rrfScore,
     required: context.required === true,
     reservationReasons: Object.freeze((context.reservationReasons ?? [])

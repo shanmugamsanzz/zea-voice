@@ -3,6 +3,10 @@ import { buildPublicationIndexes } from '../src/knowledge-engine/publication-ind
 import { buildRevisionSparseIndex } from '../src/knowledge-bases/knowledge-map.service.js';
 import { createKnowledgeEngineInput } from '../src/knowledge-engine/engine-contract.js';
 import {
+  buildGroundingEnvelope,
+  buildUnifiedGroundingEnvelope,
+} from '../src/voice/interaction/grounded-llm-response.js';
+import {
   buildGroundedLlmInput,
   retrieveRankHydrateGroundedTurn,
 } from '../src/knowledge-bases/grounded-turn-evidence.js';
@@ -198,6 +202,63 @@ assert.equal(llm.toolSchemas[0].authorizationEvidenceId,
 assert.equal(JSON.stringify(llm).includes('routingCandidates'), false);
 assert.equal(JSON.stringify(llm).includes('providerScores'), false);
 
+const strictUnifiedKnowledge = {
+  found: true, route: 'knowledge_engine',
+  content: 'Legacy content must not enter unified grounding.',
+  matches: [{ id: 'legacy-match', content: 'Legacy match must not enter.' }],
+  workflowHints: [{ responseMode: 'exact', content: 'Legacy workflow hint.' }],
+  rankedEvidence: [{ content: 'Legacy ranked evidence.', route: 'legacy' }],
+  tenantEvidence: {
+    guidanceEvidence: [{
+      recordId: 'legacy-guidance', recordType: 'CONVERSATION_NODE',
+      callerFacing: true, content: 'Legacy guidance must not enter.',
+      authoritativeData: { responseMode: 'exact' },
+    }],
+    llmEvidenceBundle: {
+      decisionInput: { hydratedRecords: llm.hydratedRecords },
+      sourceMap: llm.sourceMap, entities: [],
+    },
+  },
+};
+const strictEnvelope = buildUnifiedGroundingEnvelope(strictUnifiedKnowledge, {
+  includePublishedMap: false, maximumSources: 5,
+});
+assert.deepEqual(strictEnvelope.sources.map((source) => source.id),
+  llm.sourceMap.map((mapping) => mapping.sourceId),
+  'Unified grounding must contain only mapped hydrated caller-facing records');
+assert.equal(JSON.stringify(strictEnvelope).includes('Legacy'), false,
+  'Legacy supplemental content must not enter a unified grounding envelope');
+assert.throws(() => buildUnifiedGroundingEnvelope({
+  found: true,
+  content: 'A legacy content-only result must never enter a normal voice prompt.',
+  matches: [{ content: 'Legacy supplemental result.' }],
+  tenantEvidence: { sources: llm.hydratedRecords },
+}), (error) => error.code === 'KNOWLEDGE_UNIFIED_EVIDENCE_BUNDLE_REQUIRED',
+'Normal voice packaging must reject every non-unified legacy evidence shape');
+
+const tamperedSourceMap = llm.sourceMap.map((mapping, index) => index === 0
+  ? { ...mapping, tenantId: 'wrong-tenant' } : mapping);
+assert.throws(() => buildGroundingEnvelope({
+  ...strictUnifiedKnowledge,
+  tenantEvidence: {
+    llmEvidenceBundle: {
+      ...strictUnifiedKnowledge.tenantEvidence.llmEvidenceBundle,
+      sourceMap: tamperedSourceMap,
+    },
+  },
+}), (error) => error.code === 'KNOWLEDGE_GROUNDED_SOURCE_MAP_INVALID',
+'Cross-tenant or wrong-scope source mappings must fail closed');
+
+assert.throws(() => buildGroundingEnvelope({
+  ...strictUnifiedKnowledge,
+  tenantEvidence: {
+    llmEvidenceBundle: {
+      ...strictUnifiedKnowledge.tenantEvidence.llmEvidenceBundle,
+      sourceMap: [...llm.sourceMap, llm.sourceMap[0]],
+    },
+  },
+}), (error) => error.code === 'KNOWLEDGE_GROUNDED_SOURCE_MAP_INCOMPLETE',
+'Duplicate source mappings must fail one-to-one validation');
 const namespaceFiltered = buildGroundedLlmInput({
   input,
   classification: { intentClass: 'DETAILS_OR_PRICE' },

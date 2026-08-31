@@ -2,7 +2,7 @@ import { env } from '../../../config/env.js';
 import { buildAgentSystemPrompt } from '../../../agents/agent-runtime.service.js';
 import { AppError } from '../../../middleware/errors.js';
 import { groundedDecisionJsonSchema } from '../../interaction/grounded-llm-decision.js';
-import { buildGroundingEnvelope } from '../../interaction/grounded-llm-response.js';
+import { buildUnifiedGroundingEnvelope } from '../../interaction/grounded-llm-response.js';
 import { providerAdapterRegistry } from '../registry.js';
 import { registerImplementedProviderAdapters } from '../defaults.js';
 
@@ -188,7 +188,7 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
   // exact immutable object for the prompt contract and post-LLM validation so
   // a second filtering/mapping pass cannot drift from the LLM input.
   const groundingEnvelope = input.context?.groundingEnvelope
-    ?? initialize('grounding_envelope', () => buildGroundingEnvelope(
+    ?? initialize('grounding_envelope', () => buildUnifiedGroundingEnvelope(
       input.knowledge ?? { found: false, route: 'none' },
       compactGrounding ? { includePublishedMap: false, maximumSources: 5 } : {},
     ));

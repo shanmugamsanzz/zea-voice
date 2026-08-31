@@ -67,7 +67,7 @@ import {
   voiceTurnStages,
 } from './interaction/grounded-turn-latency.js';
 import {
-  buildGroundingEnvelope,
+  buildUnifiedGroundingEnvelope,
   assertGroundingEnvelopePreservesEvidence,
 } from './interaction/grounded-llm-response.js';
 import {
@@ -1966,7 +1966,7 @@ export class RealtimeConversationOrchestrator {
     }) : compactIsolatedCallMemory({
       ...liveMemory, collectedInformation: collectedData,
     }, 900);
-    const groundingEnvelope = buildGroundingEnvelope(
+    const groundingEnvelope = buildUnifiedGroundingEnvelope(
       promptKnowledge,
       { includePublishedMap: false, maximumSources: 5 },
     );
@@ -1976,6 +1976,13 @@ export class RealtimeConversationOrchestrator {
     const informationUnavailableResponse = configuredInformationUnavailableResponse(
       this.runtimeProfile, knowledge,
     );
+    if (groundingEnvelope.found !== true && !informationUnavailableResponse) {
+      throw new AppError(503,
+        'The active agent has no tenant-configured information-unavailable speech',
+        'VOICE_INFORMATION_UNAVAILABLE_RESPONSE_UNCONFIGURED', {
+          stage: 'operational_response_configuration', operationalFailure: true,
+        });
+    }
     const groundedDecisionInput = llmEvidenceBundle ? Object.freeze({
       ...llmEvidenceBundle.decisionInput,
       zeroEvidencePolicy: Object.freeze({

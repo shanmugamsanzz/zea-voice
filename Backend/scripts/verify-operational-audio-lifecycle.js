@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
   configuredOperationalFailureResponse,
+  configuredInformationUnavailableResponse,
   configuredTechnicalFailureResponse,
   llmOperationalFailureClass,
 } from '../src/voice/realtime-conversation-orchestrator.js';
@@ -18,6 +19,10 @@ for (const settings of tenants) {
   assert.equal(configuredOperationalFailureResponse(profile),
     configuredTechnicalFailureResponse(profile));
 }
+
+assert.equal(configuredInformationUnavailableResponse({
+  agent: { settings: { informationUnavailableMessage: 'Configured unavailable response.' } },
+}), 'Configured unavailable response.');
 
 assert.equal(configuredOperationalFailureResponse({
   agent: { settings: {
@@ -66,6 +71,8 @@ assert.match(groundedTurn, /configuredTechnicalFailureResponse/u,
   'operational failures must resolve through tenant-configured technical speech');
 assert.match(groundedTurn, /VOICE_TECHNICAL_RESPONSE_UNCONFIGURED/u,
   'missing required technical speech must fail explicitly');
+assert.match(source, /VOICE_INFORMATION_UNAVAILABLE_RESPONSE_UNCONFIGURED/u,
+  'missing information-unavailable speech must become an operational failure');
 assert.match(groundedTurn, /finalAnswerQueued[\s\S]*VOICE_FINAL_RESPONSE_NOT_QUEUED/u,
   'a finalized response that cannot enter TTS must become an operational failure');
 

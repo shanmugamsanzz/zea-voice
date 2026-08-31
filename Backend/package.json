@@ -169,6 +169,7 @@
     "verify:deterministic-prompt-recovery": "node scripts/verify-compact-grounded-llm-budget.js && node scripts/verify-operational-audio-lifecycle.js",
     "verify:universal-engine-acceptance": "node scripts/verify-universal-engine-acceptance.js --repeats=3",
     "verify:grounded-voice-e2e": "node scripts/verify-grounded-voice-e2e.js --repeats=3",
+    "verify:production-shaped-mixed-evidence": "node scripts/verify-production-shaped-mixed-evidence-call.js --repeats=3",
     "verify:interruption-continuation-tools": "node scripts/verify-interruption-continuation-tools.js",
     "verify:configuration-driven-next-question": "node scripts/verify-configuration-driven-next-question.js",
     "verify:answer-tool-validation": "node scripts/verify-answer-tool-validation.js",

@@ -991,8 +991,9 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       || (agent.status === 'active' && !technicalFailureMessage)) {
       setError('Technical Failure Message is required for an active agent and cannot exceed 500 characters.'); return;
     }
-    if (informationUnavailableMessage.length > 500) {
-      setError('Information Unavailable Message cannot exceed 500 characters.'); return;
+    if (informationUnavailableMessage.length > 500
+      || (agent.status === 'active' && !informationUnavailableMessage)) {
+      setError('Information Unavailable Message is required for an active agent and cannot exceed 500 characters.'); return;
     }
     if (!Array.isArray(agent.conversationMemoryFields) || agent.conversationMemoryFields.length > 30) {
       setError('Important Information Fields must be a list with no more than 30 fields.'); return;
@@ -2475,6 +2476,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       <textarea
                         rows={2}
                         maxLength={500}
+                        required={agent.status === 'active'}
                         value={agent.technicalFailureMessage || ''}
                         disabled={isReadOnly}
                         onChange={(event) => setAgent({ ...agent, technicalFailureMessage: event.target.value })}
@@ -2488,6 +2490,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       <textarea
                         rows={2}
                         maxLength={500}
+                        required={agent.status === 'active'}
                         value={agent.informationUnavailableMessage || ''}
                         disabled={isReadOnly}
                         onChange={(event) => setAgent({ ...agent, informationUnavailableMessage: event.target.value })}

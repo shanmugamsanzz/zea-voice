@@ -1,5 +1,6 @@
 import { validateGroundedLlmDecision } from './grounded-llm-decision.js';
 import { groundedNumbers as numbers } from './grounded-number-validator.js';
+import { deterministicSourceEntry } from '../../knowledge-engine/deterministic-source-mapping.js';
 import { AppError } from '../../middleware/errors.js';
 
 const maximumIntentCharacters = 160;
@@ -46,6 +47,55 @@ function canonicalEvidenceContent(evidence = {}) {
   }), 6_000);
 }
 
+function unifiedEvidenceIdentity(value = {}) {
+  return [
+    text(value.tenantId, 100).toLocaleLowerCase(),
+    text(value.agentId, 100).toLocaleLowerCase(),
+    text(value.knowledgeBaseId, 100).toLocaleLowerCase(),
+    Number(value.publicationRevision),
+    text(value.recordType, 80).toUpperCase(),
+    text(value.recordId ?? value.authoritativeRecordId, 160).toLocaleLowerCase(),
+  ].join(':');
+}
+
+function validateUnifiedSourceMapping(records = [], mappings = []) {
+  const callerFacing = records.filter((record) => record?.callerFacing === true);
+  const sourceIds = callerFacing.map((record) => text(record.sourceId, 80));
+  const mappedIds = mappings.map((mapping) => text(mapping.sourceId, 80));
+  if (sourceIds.some((sourceId) => !sourceId)
+    || new Set(sourceIds).size !== sourceIds.length
+    || mappedIds.some((sourceId) => !sourceId)
+    || new Set(mappedIds).size !== mappedIds.length
+    || mappings.length !== callerFacing.length) {
+    throw new AppError(503,
+      'The unified grounded evidence package requires a one-to-one source map',
+      'KNOWLEDGE_GROUNDED_SOURCE_MAP_INCOMPLETE', {
+        stage: 'grounding_envelope_source_map', sourceIds, mappedIds,
+      });
+  }
+  const mappingById = new Map(mappings.map((mapping) => [mapping.sourceId, mapping]));
+  for (const record of callerFacing) {
+    const mapping = mappingById.get(record.sourceId);
+    const expected = deterministicSourceEntry(record, record.sourceId);
+    const stale = record.hydrationValidated !== true || record.publicationValidated !== true;
+    const mismatched = !mapping
+      || mapping.publishedEvidenceId !== expected.publishedEvidenceId
+      || mapping.authoritativeRecordId !== expected.authoritativeRecordId
+      || mapping.recordId !== expected.recordId
+      || mapping.recordType !== expected.recordType
+      || mapping.canonicalRecordIdentityKey !== expected.canonicalRecordIdentityKey
+      || unifiedEvidenceIdentity(mapping) !== unifiedEvidenceIdentity(expected);
+    if (stale || mismatched) {
+      throw new AppError(503,
+        'The unified grounded evidence source map does not match verified publication scope',
+        'KNOWLEDGE_GROUNDED_SOURCE_MAP_INVALID', {
+          stage: 'grounding_envelope_source_map', sourceId: record.sourceId,
+          recordId: record.recordId, stale, scopeMismatch: mismatched,
+        });
+    }
+  }
+  return Object.freeze(mappingById);
+}
 export function assertGroundingEnvelopePreservesEvidence(records = [], envelope = {}) {
   const expected = records.filter((record) => record?.callerFacing === true
     && text(record?.sourceId, 80));
@@ -107,6 +157,11 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
   const sourceContents = new Set();
   const unifiedBundle = knowledge.tenantEvidence?.llmEvidenceBundle ?? null;
   const unifiedRecords = unifiedBundle?.decisionInput?.hydratedRecords ?? null;
+  const unifiedMode = unifiedBundle !== null;
+  const unifiedSourceMap = unifiedMode && Array.isArray(unifiedBundle.sourceMap)
+    ? unifiedBundle.sourceMap : [];
+  const unifiedSourceMapById = unifiedMode
+    ? validateUnifiedSourceMapping(unifiedRecords ?? [], unifiedSourceMap) : null;
   // PostgreSQL-hydrated evidence is authoritative and must be added before
   // duplicate Qdrant/BM25 snippets so the LLM receives the complete approved
   // record rather than only the discovery preview.
@@ -150,7 +205,7 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
   // document parser maps caller-facing TYPE: message records into sources;
   // this branch supports an explicit future callerFacing/responseMode field
   // without embedding any business wording in runtime code.
-  for (const evidence of (knowledge.tenantEvidence?.guidanceEvidence ?? [])
+  for (const evidence of (unifiedMode ? [] : knowledge.tenantEvidence?.guidanceEvidence ?? [])
     .filter((item) => item.callerFacing === true
       || item.authoritativeData?.callerFacing === true
       || String(item.authoritativeData?.responseMode ?? '').toLowerCase() === 'exact')
@@ -164,13 +219,13 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
       exactCallerResponse: false,
     });
   }
-  for (const match of knowledge.matches ?? []) {
+  for (const match of unifiedMode ? [] : knowledge.matches ?? []) {
     addSource(sources, sourceContents, match.answer ?? match.content, {
       recordId: text(match.id, 100) || null,
       recordType: text(match.recordType, 40) || null,
     });
   }
-  for (const hint of knowledge.workflowHints ?? []) {
+  for (const hint of unifiedMode ? [] : knowledge.workflowHints ?? []) {
     const responseMode = String(hint.workflow?.responseMode ?? hint.responseMode ?? '').toLowerCase();
     if (responseMode !== 'exact') continue;
     addSource(sources, sourceContents, hint.content, {
@@ -178,7 +233,7 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
       recordType: 'workflow_hint',
     });
   }
-  for (const record of options.includePublishedMap === false
+  for (const record of (unifiedMode || options.includePublishedMap === false)
     ? [] : (knowledge.compactKnowledgeMap?.records ?? [])) {
     const recordType = String(record.type ?? '').toUpperCase();
     if (recordType === 'WORKFLOW_RULE'
@@ -189,18 +244,18 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
       recordType: text(record.type, 40) || 'knowledge_map',
     });
   }
-  for (const evidence of knowledge.rankedEvidence ?? []) {
+  for (const evidence of unifiedMode ? [] : knowledge.rankedEvidence ?? []) {
     addSource(sources, sourceContents, evidence.content, {
       recordId: text(evidence.source?.recordId, 100) || null,
       recordType: text(evidence.route, 40) || 'ranked_evidence',
       evidenceScore: Number(evidence.score ?? 0),
     });
   }
-  addSource(sources, sourceContents, knowledge.content, {
+  if (!unifiedMode) addSource(sources, sourceContents, knowledge.content, {
     recordId: text(knowledge.source?.recordId, 100) || null,
     recordType: text(knowledge.route, 40) || null,
   });
-  const values = [
+  const values = unifiedMode ? [...(unifiedBundle.entities ?? [])] : [
     knowledge.item,
     ...(knowledge.category?.items ?? []),
     knowledge.catalogSelection?.item,
@@ -211,7 +266,7 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
       hint.catalogSelection?.item,
       ...(hint.catalogSelections ?? []).map((selection) => selection.item),
     ]),
-    ...(unifiedBundle?.entities ?? knowledge.tenantEvidence?.entities ?? []),
+    ...(knowledge.tenantEvidence?.entities ?? []),
     ...(knowledge.compactKnowledgeMap?.records ?? []).filter((record) => (
       record.type === 'CATALOG_ITEM' && record.metadata?.key && record.label
     )).map((record) => ({
@@ -248,9 +303,11 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
   // aligning the envelope against an earlier package that may contain a
   // different number or order of records. PostgreSQL scope and publication
   // verification has already happened during authoritative hydration.
-  const suppliedSourceMapValue = unifiedBundle?.sourceMap ?? knowledge.tenantEvidence?.sourceMap;
+  const suppliedSourceMapValue = unifiedMode
+    ? unifiedSourceMap : knowledge.tenantEvidence?.sourceMap;
   const suppliedSourceMap = Array.isArray(suppliedSourceMapValue) ? suppliedSourceMapValue : [];
-  const sourceMapById = new Map(suppliedSourceMap.map((mapping) => [mapping.sourceId, mapping]));
+  const sourceMapById = unifiedSourceMapById
+    ?? new Map(suppliedSourceMap.map((mapping) => [mapping.sourceId, mapping]));
   const sourceMap = selectedSources.map((source) => sourceMapById.get(source.id)).filter(Boolean);
   if (selectedSources.length && sourceMap.length !== selectedSources.length) {
     throw new AppError(503,
@@ -269,6 +326,21 @@ export function buildGroundingEnvelope(knowledge = {}, options = {}) {
     entities: Object.freeze(entities),
     exactCallerResponses: Object.freeze(exactCallerResponses),
   });
+}
+
+// Normal voice turns must never fall back to the historical content-only or
+// supplemental conversion branches above. They enter through this strict
+// boundary, which accepts only the unified PostgreSQL-hydrated bundle.
+export function buildUnifiedGroundingEnvelope(knowledge = {}, options = {}) {
+  const unifiedBundle = knowledge?.tenantEvidence?.llmEvidenceBundle;
+  if (!unifiedBundle || !Array.isArray(unifiedBundle?.decisionInput?.hydratedRecords)) {
+    throw new AppError(503,
+      'A normal voice turn requires the unified hydrated evidence bundle',
+      'KNOWLEDGE_UNIFIED_EVIDENCE_BUNDLE_REQUIRED', {
+        stage: 'grounding_envelope_initialization', operationalFailure: true,
+      });
+  }
+  return buildGroundingEnvelope(knowledge, options);
 }
 
 export function groundedResponseContract(envelope, runtime = {}) {

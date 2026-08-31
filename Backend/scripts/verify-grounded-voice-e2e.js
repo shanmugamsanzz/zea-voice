@@ -177,6 +177,15 @@ run('acknowledgement and final audio deadlines',
   'scripts/verify-production-latency-contract.js');
 run('processing-time inactivity suppression',
   'scripts/verify-operational-audio-lifecycle.js');
+const mixedEvidence = JSON.parse(run(
+  'production-shaped FAQ Workflow General Knowledge replay',
+  'scripts/verify-production-shaped-mixed-evidence-call.js',
+  [`--repeats=${repeats}`],
+));
+assert.equal(mixedEvidence.passed, true);
+assert.equal(mixedEvidence.failedCalls, 0);
+assert.equal(mixedEvidence.silentCalls, 0);
+assert.equal(mixedEvidence.llmInvocations, repeats);
 
 const orchestrator = await readFile(
   new URL('../src/voice/realtime-conversation-orchestrator.js', import.meta.url),
@@ -202,6 +211,7 @@ console.log(JSON.stringify({
     ...knownScenarios.map((scenario) => scenario.key),
     'phonetic_name', 'zero_evidence_response', 'zero_evidence_clarify',
     'zero_evidence_tool', 'acknowledgement_final_audio', 'processing_inactivity',
+    'mixed_faq_workflow_general_knowledge',
   ],
   knownTurns,
   nonEmptyEvidenceTurns,
