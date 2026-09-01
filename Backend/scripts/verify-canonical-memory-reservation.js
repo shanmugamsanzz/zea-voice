@@ -3,6 +3,9 @@ import {
   confirmCanonicalTopicResolution,
 } from '../src/knowledge-engine/canonical-topic-memory.js';
 import {
+  understandContextualKnowledgeQuery,
+} from '../src/knowledge-engine/contextual-query-understanding.js';
+import {
   buildContextEnrichedRetrievalQuery,
 } from '../src/knowledge-engine/targeted-retrieval.js';
 import { createNormalTurnInput } from '../src/knowledge-bases/normal-turn-contract.js';
@@ -33,6 +36,20 @@ const hydratedAlternative = Object.freeze({
   ...alternative, sourceId: 'source_2', hydrationValidated: true, publicationValidated: true,
   reservationReasons: Object.freeze([]),
 });
+const category = Object.freeze({
+  ...entity, id: 'record-category', recordId: 'record-category',
+  recordType: 'CATALOG_CATEGORY', entityType: 'CATEGORY',
+  key: 'published-category', name: 'Published Category',
+  categoryKey: 'published-category', category: 'Published Category',
+});
+const explicitCategoryResolution = Object.freeze({
+  version: 1, scope, mode: 'EXPLICIT', activeEntity: null,
+  activeCategory: category, comparisonEntities: Object.freeze([]),
+});
+const hydratedCategory = Object.freeze({
+  ...category, sourceId: 'source_category', hydrationValidated: true,
+  publicationValidated: true, reservationReasons: Object.freeze(['explicit_entity']),
+});
 
 const confirmedExplicit = confirmCanonicalTopicResolution(explicitResolution, {
   decision: {
@@ -43,6 +60,17 @@ const confirmedExplicit = confirmCanonicalTopicResolution(explicitResolution, {
 });
 assert.equal(confirmedExplicit.mode, 'EXPLICIT');
 assert.equal(confirmedExplicit.activeEntity.recordId, entity.recordId);
+const confirmedCategory = confirmCanonicalTopicResolution(explicitCategoryResolution, {
+  decision: {
+    valid: true, decision: 'answer', evidenceIds: ['source_category'],
+    currentTopic: category.key,
+    stateUpdate: { currentTopic: category.key, knownEntities: [] },
+  },
+  hydratedRecords: [hydratedCategory],
+});
+assert.equal(confirmedCategory.mode, 'EXPLICIT');
+assert.equal(confirmedCategory.activeCategory.recordId, category.recordId,
+  'A cited, explicitly reserved published category must be committed as activeCategory');
 assert.equal(confirmCanonicalTopicResolution(explicitResolution, {
   decision: {
     valid: true, decision: 'answer', evidenceIds: [],
@@ -105,6 +133,91 @@ assert.equal(reservation.knowledgeBaseId, 'published-kb');
 assert.equal(reservation.publicationRevision, 7);
 assert.ok(contextualQuery.tenantSearchForms.includes('Published Alias'),
   'Search forms must come from the tenant publication');
+const followUpTurns = Object.freeze([
+  Object.freeze({ role: 'user', content: 'Earlier selection question.' }),
+  Object.freeze({ role: 'assistant', content: 'Published response context.' }),
+]);
+const followUpInput = Object.freeze({
+  ...scope,
+  utterance: 'Please continue with that.',
+  latestQuestion: 'Please continue with that.',
+  usageDirection: 'inbound',
+  requestedFacts: Object.freeze([]),
+  contextualReferences: Object.freeze([]),
+  recentRelevantTurns: followUpTurns,
+  memory: normalTurn.memory,
+  canonicalCallMemory: normalTurn.memory,
+});
+const noCurrentEntityResolution = Object.freeze({
+  tenantId: scope.tenantId,
+  candidate: null,
+  candidateNamespace: null,
+  namespaceCandidates: Object.freeze({}),
+  routingCandidates: Object.freeze([]),
+  alternatives: Object.freeze([]),
+});
+const followUpUnderstanding = understandContextualKnowledgeQuery(
+  followUpInput, noCurrentEntityResolution,
+);
+assert.equal(followUpUnderstanding.contextDependent, true,
+  'An entity-less turn must retain the validated canonical topic for grounded interpretation');
+assert.equal(followUpUnderstanding.canonicalContext.recordId, entity.recordId);
+const inferredFollowUpQuery = buildContextEnrichedRetrievalQuery({
+  ...followUpInput, queryUnderstanding: followUpUnderstanding,
+}, {}, { ...noCurrentEntityResolution, contextDependent: true }, [{
+  knowledgeBaseId: 'published-kb', publicationRevision: 7,
+}], recordScope);
+assert.equal(inferredFollowUpQuery.reservedRecords[0].reason, 'canonical_memory');
+assert.equal(inferredFollowUpQuery.reservedRecords[0].recordId, entity.recordId);
+assert.match(inferredFollowUpQuery.semanticText, /Earlier selection question/u,
+  'Contextual semantic retrieval must include relevant complete caller-agent turns');
+assert.match(inferredFollowUpQuery.semanticText, /Published response context/u);
+
+recordScope.set(alternative.recordId, Object.freeze({
+  ...alternative, canonicalName: alternative.name,
+  searchForms: Object.freeze(['Tenant Published Alternative']),
+}));
+const explicitAlternativeCandidate = Object.freeze({
+  ...alternative,
+  itemKey: alternative.key,
+  label: alternative.name,
+  score: 1,
+  explicit: true,
+  signals: Object.freeze([Object.freeze({
+    explicit: true, phrase: 'Tenant Published Alternative', method: 'tenant_alias', score: 1,
+  })]),
+});
+const explicitAlternativeResolution = Object.freeze({
+  tenantId: scope.tenantId,
+  candidate: explicitAlternativeCandidate,
+  candidateNamespace: 'CATALOG',
+  namespaceCandidates: Object.freeze({
+    CATALOG: Object.freeze([explicitAlternativeCandidate]),
+  }),
+  routingCandidates: Object.freeze([explicitAlternativeCandidate]),
+  alternatives: Object.freeze([]),
+});
+const explicitAlternativeUnderstanding = understandContextualKnowledgeQuery(Object.freeze({
+  ...followUpInput,
+  utterance: 'Tenant Published Alternative',
+  latestQuestion: 'Tenant Published Alternative',
+}), explicitAlternativeResolution);
+assert.equal(explicitAlternativeUnderstanding.contextDependent, false,
+  'A new explicit tenant-published entity must replace contextual retrieval');
+const explicitAlternativeQuery = buildContextEnrichedRetrievalQuery({
+  ...followUpInput,
+  latestQuestion: 'Tenant Published Alternative',
+  queryUnderstanding: explicitAlternativeUnderstanding,
+}, {}, explicitAlternativeResolution, [{
+  knowledgeBaseId: 'published-kb', publicationRevision: 7,
+}], recordScope);
+assert.deepEqual(explicitAlternativeQuery.reservedRecords.map((entry) => entry.recordId),
+  [alternative.recordId], 'Explicit selection must reserve only the new published entity');
+assert.doesNotMatch(
+  explicitAlternativeQuery.semanticText,
+  /Earlier selection question/u,
+  'A new explicit entity must not carry stale contextual conversation into retrieval',
+);
 const knownOnlyQuery = buildContextEnrichedRetrievalQuery({
   tenantId: scope.tenantId, agentId: scope.agentId,
   latestQuestion: 'What is its published value?',

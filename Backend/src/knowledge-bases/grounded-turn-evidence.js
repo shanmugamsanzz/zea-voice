@@ -16,7 +16,7 @@ import {
 } from '../knowledge-engine/grounded-evidence-representation.js';
 import { env } from '../config/env.js';
 
-export const GROUNDED_TURN_EVIDENCE_VERSION = 7;
+export const GROUNDED_TURN_EVIDENCE_VERSION = 9;
 const maximumEvidenceRecords = 5;
 
 async function completeStageWithin(stage, operation, timeoutMs) {
@@ -158,7 +158,8 @@ function matchingCanonicalEvidenceKeys(candidate, sources, input = {}) {
 function requiredReservations(authoritative = {}) {
   const requiredReasons = new Set([
     'explicit_current_entity', 'explicit_entity', 'explicit_comparison',
-    'canonical_memory', 'published_overview', 'published_use_case', 'latest_request_record',
+    'canonical_memory', 'category_unique_child', 'published_overview',
+    'published_use_case', 'latest_request_record',
   ]);
   return (authoritative.reservations ?? []).filter((entry) => (
     requiredReasons.has(entry.reason)
@@ -274,7 +275,62 @@ function canonicalCandidateName(candidate = {}, evidenceByRecordId = new Map()) 
   return clean(candidate.name ?? candidate.label ?? data.question ?? data.name, 240);
 }
 
-function ambiguityCandidates(input = {}, authoritative = {}, resolution = {}, classification = {}) {
+function activeCategoryChildren(input = {}, authoritative = {}) {
+  const memory = input?.canonicalCallMemory ?? input?.memory ?? {};
+  if (memory.activeEntity || !memory.activeCategory) return Object.freeze([]);
+  const active = memory.activeCategory;
+  const activeRecordId = normalizedId(active.recordId ?? active.id);
+  const activeCategoryKey = normalizedId(active.categoryKey ?? active.key);
+  const activeKnowledgeBaseId = normalizedId(active.knowledgeBaseId);
+  const activeRevision = Number(active.publicationRevision);
+  const category = (authoritative?.evidence ?? []).find((source) => {
+    if (String(source?.recordType ?? '').toUpperCase() !== 'CATALOG_CATEGORY') return false;
+    if (activeKnowledgeBaseId
+      && normalizedId(source.knowledgeBaseId) !== activeKnowledgeBaseId) return false;
+    if (Number.isInteger(activeRevision)
+      && Number(source.publicationRevision) !== activeRevision) return false;
+    return (activeRecordId && normalizedId(source.recordId) === activeRecordId)
+      || (activeCategoryKey
+        && normalizedId(source.authoritativeData?.categoryKey) === activeCategoryKey);
+  });
+  if (!category) return Object.freeze([]);
+  return Object.freeze((category.authoritativeData?.children ?? []).filter((child) => (
+    child && typeof child === 'object' && child.selectionRules?.selectable === true
+  )).map((child) => Object.freeze({
+    recordId: clean(child.recordId, 160) || null,
+    recordType: 'CATALOG_ITEM',
+    name: clean(child.name, 240) || null,
+    itemKey: clean(child.itemKey, 160) || null,
+    categoryKey: clean(category.authoritativeData?.categoryKey, 160) || null,
+    knowledgeBaseId: category.knowledgeBaseId,
+    publicationRevision: category.publicationRevision,
+  })).filter((child) => child.recordId && child.name));
+}
+
+function categorySelectionContext(input = {}, classification = {}, children = []) {
+  const understanding = input?.queryUnderstanding ?? {};
+  const noCurrentItem = (understanding.explicitEntities?.length ?? 0) === 0;
+  const contextual = understanding.contextDependent === true;
+  const overview = String(classification?.intentClass ?? '').toUpperCase()
+    === 'CATEGORY_OVERVIEW';
+  const requestedFact = Boolean(clean(
+    understanding.requestedFact ?? understanding.requestedFacts?.[0], 160,
+  ));
+  const actionRequested = understanding.actionIntent?.detected === true
+    || understanding.actionIntent?.requested === true;
+  const comparisonRequested = understanding.meaning?.comparisonRequested === true
+    || (understanding.comparisonEntities?.length ?? 0) > 0;
+  const requiresSelection = noCurrentItem && contextual && !overview
+    && (requestedFact || actionRequested || comparisonRequested);
+  return Object.freeze({
+    detected: requiresSelection && children.length > 1,
+    uniqueChild: requiresSelection && children.length === 1 ? children[0] : null,
+  });
+}
+
+function ambiguityCandidates(
+  input = {}, authoritative = {}, resolution = {}, classification = {}, categoryChildren = [],
+) {
   const confidenceConfiguration = resolveKnowledgeConfidenceConfiguration(
     classification?.confidenceConfiguration ?? resolution?.confidenceConfiguration,
   );
@@ -291,6 +347,7 @@ function ambiguityCandidates(input = {}, authoritative = {}, resolution = {}, cl
     ...(authoritative?.ambiguity?.candidates ?? []),
     ...(input?.queryUnderstanding?.ambiguity?.candidates ?? []),
     ...mediumCandidates,
+    ...categoryChildren,
   ];
   const seen = new Set();
   return Object.freeze(candidates.flatMap((candidate) => {
@@ -359,10 +416,23 @@ function selectHydratedRecordsForCurrentTurn(allHydrated = [], input = {}, autho
     .map((entry) => reservationKey(entry)).filter(Boolean));
   // Defense in depth: an unreserved Conversation node is never caller evidence.
   // Exact current-turn messages survive because their reservation is canonical.
-  const relevantHydrated = allHydrated.filter((source) => (
+  let relevantHydrated = allHydrated.filter((source) => (
     String(source?.recordType ?? '').toUpperCase() !== 'CONVERSATION_NODE'
       || requiredKeys.has(reservationKey(source))
   ));
+  const memory = input?.canonicalCallMemory ?? input?.memory ?? {};
+  const activeCategoryKey = normalizedId(
+    memory.activeCategory?.categoryKey ?? memory.activeCategory?.key,
+  );
+  const explicitItemIds = new Set((understanding.explicitEntities ?? [])
+    .map((entry) => normalizedId(entry?.recordId ?? entry?.id)).filter(Boolean));
+  if (activeCategoryKey && !memory.activeEntity && understanding.contextDependent === true
+    && explicitItemIds.size === 0) {
+    relevantHydrated = relevantHydrated.filter((source) => {
+      if (String(source?.recordType ?? '').toUpperCase() !== 'CATALOG_ITEM') return true;
+      return normalizedId(source.authoritativeData?.categoryKey) === activeCategoryKey;
+    });
+  }
   const currentRouteId = normalizedId(understanding?.currentRouteSignal?.recordId);
   const currentRouteHydrated = currentRouteId && relevantHydrated.some((source) => (
     normalizedId(source?.recordId) === currentRouteId
@@ -376,7 +446,6 @@ function selectHydratedRecordsForCurrentTurn(allHydrated = [], input = {}, autho
     ...(understanding.explicitCategories ?? []),
     ...(understanding.comparisonEntities ?? []),
   ].map((entry) => normalizedId(entry?.recordId ?? entry?.id)).filter(Boolean));
-  const memory = input?.canonicalCallMemory ?? input?.memory ?? {};
   const staleMemoryIds = new Set([memory.activeEntity, memory.activeCategory]
     .map((entry) => normalizedId(entry?.recordId ?? entry?.id)).filter(Boolean));
   if (!staleMemoryIds.size) return relevantHydrated;
@@ -409,7 +478,12 @@ export function buildGroundedLlmInput({
   )).map((reservation) => reservation.reason);
   let callerSourceIndex = 0;
   const hydratedRecords = Object.freeze(hydrated.map((source) => {
-    const reasons = reservationReasons(source);
+    const reasons = [...new Set([
+      ...(source.reservationReasons ?? []).filter((reason) => (
+        requiredReservations({ reservations: [{ reason }] }).length > 0
+      )),
+      ...reservationReasons(source),
+    ])];
     return createCanonicalGroundedEvidence(source, source.callerFacing === true
       ? `source_${callerSourceIndex += 1}` : null, {
       requestedFact: input?.queryUnderstanding?.requestedFact ?? input?.requestedFact,
@@ -439,7 +513,12 @@ export function buildGroundedLlmInput({
       ?? input?.memory?.pendingClarification?.missingFactType,
     160,
   ) || null;
-  const candidates = ambiguityCandidates(input, authoritative, resolution, classification);
+  const categoryChildren = activeCategoryChildren(input, authoritative);
+  const categorySelection = categorySelectionContext(input, classification, categoryChildren);
+  const candidates = ambiguityCandidates(
+    input, authoritative, resolution, classification,
+    categorySelection.detected ? categoryChildren : [],
+  );
   const configuredInformationFields = resolveLiveMemoryConfiguration(
     runtimeProfile?.agent?.settings ?? {},
   ).fields;
@@ -523,7 +602,10 @@ export function buildGroundedLlmInput({
     clarificationContext: Object.freeze({
       heardText: clean(input?.latestQuestion ?? input?.utterance, 2_000),
       requestedFact,
-      genuineAmbiguity: input?.queryUnderstanding?.ambiguity?.detected === true,
+      genuineAmbiguity: input?.queryUnderstanding?.ambiguity?.detected === true
+        || categorySelection.detected,
+      categorySelectionRequired: categorySelection.detected,
+      uniqueCategoryChild: categorySelection.uniqueChild,
       candidates,
       canonicalNames: Object.freeze(candidates.map((candidate) => candidate.name).filter(Boolean)),
       collectedFields: relevantCollectedFields,

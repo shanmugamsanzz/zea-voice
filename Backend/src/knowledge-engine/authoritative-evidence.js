@@ -7,7 +7,7 @@ import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/know
 import { collectCanonicalRetrievalReservations } from './canonical-retrieval-reservations.js';
 import { publicationDuplicateKeys } from './publication-deduplication.js';
 
-export const AUTHORITATIVE_EVIDENCE_VERSION = 7;
+export const AUTHORITATIVE_EVIDENCE_VERSION = 9;
 
 const supportedRecordTypes = new Set([
   'CATALOG_ITEM', 'CATALOG_CATEGORY', 'FAQ', 'CONVERSATION_NODE', 'WORKFLOW_RULE', 'KNOWLEDGE_CHUNK',
@@ -141,7 +141,7 @@ export const authoritativeHydrationSql = `
         SELECT COALESCE(jsonb_agg(jsonb_build_object(
           'recordId',child.id,'itemKey',child.item_key,'name',child.name,
           'description',child.description,'price',child.price,'currency',child.currency,
-          'displayOrder',child.display_order
+          'displayOrder',child.display_order,'selectionRules',child.selection_rules
         ) ORDER BY child.display_order,child.id),'[]'::jsonb) AS values_json
           FROM structured_items child
          WHERE child.tenant_id=anchor.tenant_id
@@ -304,6 +304,23 @@ function recordKey(value = {}) {
   return typedRecordIdentityKey(value);
 }
 
+function unitScore(value) {
+  const score = Number(value);
+  return Number.isFinite(score) ? Math.max(0, Math.min(1, score)) : 0;
+}
+
+function latestRequestRelevance(candidate = {}) {
+  const providerScores = candidate.providerScores ?? {};
+  const tokenCoverages = candidate.tokenCoverages ?? {};
+  const lexicalScore = tokenCoverages.bm25 === undefined
+    ? unitScore(providerScores.bm25) : unitScore(tokenCoverages.bm25);
+  return Math.max(
+    unitScore(providerScores.qdrant),
+    unitScore(providerScores.structured),
+    lexicalScore,
+  );
+}
+
 export function fuseCandidateRankings(retrieval, {
   rrfK = 60,
   limit = 5,
@@ -380,11 +397,15 @@ export function fuseCandidateRankings(retrieval, {
       if (current?.channelRanks[channel]) continue;
       const rank = Number(candidate.namespaceRank ?? position + 1);
       const next = current ?? {
-        ...identity, rrfScore: 0, channelRanks: {}, providerScores: {}, channels: [],
+        ...identity, rrfScore: 0, channelRanks: {}, providerScores: {},
+        tokenCoverages: {}, channels: [],
       };
       next.rrfScore += 1 / (rrfK + rank);
       next.channelRanks[channel] = rank;
       next.providerScores[channel] = Number(candidate.score ?? 0);
+      if (candidate.tokenCoverage !== undefined) {
+        next.tokenCoverages[channel] = unitScore(candidate.tokenCoverage);
+      }
       next.channels.push(channel);
       fused.set(key, next);
     }
@@ -429,17 +450,21 @@ export function fuseCandidateRankings(retrieval, {
   const broadCatalogRequest = ['CATEGORY_OVERVIEW', 'COMPARISON_COMPLEX'].includes(
     String(retrieval?.intentClass ?? '').toUpperCase(),
   ) || retrieval?.queryContext?.need?.requestedRecommendation === true;
-  const strongestProviderScore = (candidate) => Math.max(
-    0, ...Object.values(candidate.providerScores),
-  );
-  const bestScoreByNamespace = new Map();
+  let bestLatestRequestScore = 0;
   for (const candidate of accepted) {
     if (reservedCandidate(candidate) || candidate.callerFacingHint !== true
-      || candidate.recordType === 'WORKFLOW_RULE') continue;
-    bestScoreByNamespace.set(candidate.namespace, Math.max(
-      bestScoreByNamespace.get(candidate.namespace) ?? 0,
-      strongestProviderScore(candidate),
-    ));
+      || ['WORKFLOW_RULE', 'CONVERSATION_NODE'].includes(candidate.recordType)) continue;
+    if (['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(candidate.recordType)
+      && hasFocusedCatalogRecord && !broadCatalogRequest) continue;
+    const requestRelevance = latestRequestRelevance(candidate);
+    const inPrimaryNamespace = primaryNamespaceOrder.size === 0
+      || primaryNamespaceOrder.has(candidate.namespace);
+    const stronglyCorroboratedFallback = candidate.channels.length > 1
+      && requestRelevance >= highProviderScore;
+    if (!inPrimaryNamespace && !stronglyCorroboratedFallback) continue;
+    bestLatestRequestScore = Math.max(
+      bestLatestRequestScore, requestRelevance,
+    );
   }
   const ordinary = accepted.filter((candidate) => {
     if (reservedCandidate(candidate)) return false;
@@ -448,12 +473,12 @@ export function fuseCandidateRankings(retrieval, {
       rejectedUnrelatedCatalogIds.push(normalizeId(candidate.recordId));
       return false;
     }
-    const providerScore = strongestProviderScore(candidate);
+    const requestRelevance = latestRequestRelevance(candidate);
     const inPrimaryNamespace = primaryNamespaceOrder.size === 0
       || primaryNamespaceOrder.has(candidate.namespace);
     const stronglyCorroboratedFallback = candidate.callerFacingHint === true
       && candidate.channels.length > 1
-      && providerScore >= highProviderScore;
+      && requestRelevance >= highProviderScore;
     // Internal guidance and Workflow instructions are authorization context,
     // not spare caller-facing evidence. They enter the five-record package
     // only through an explicit/latest action reservation or an active-tool
@@ -476,11 +501,10 @@ export function fuseCandidateRankings(retrieval, {
       rejectedUnrelatedNamespaceIds.push(normalizeId(candidate.recordId));
       return false;
     }
-    const namespaceBestScore = bestScoreByNamespace.get(candidate.namespace) ?? providerScore;
-    const insideLatestRequestBand = providerScore
-      >= Math.max(minProviderScore, namespaceBestScore - relevanceScoreMargin);
-    const independentlyRelevant = providerScore >= highProviderScore
-      || (candidate.channels.length > 1 && providerScore >= minProviderScore);
+    const insideLatestRequestBand = requestRelevance
+      >= Math.max(minProviderScore, bestLatestRequestScore - relevanceScoreMargin);
+    const independentlyRelevant = requestRelevance >= highProviderScore
+      || (candidate.channels.length > 1 && requestRelevance >= minProviderScore);
     if (!insideLatestRequestBand || !independentlyRelevant) {
       rejectedBelowRelevanceBandIds.push(normalizeId(candidate.recordId));
       return false;
@@ -499,6 +523,7 @@ export function fuseCandidateRankings(retrieval, {
     ) - Number(left.callerFacingHint === true || left.authorizationHint === true)
       || namespaceOrder(left) - namespaceOrder(right)
       || right.rrfScore - left.rrfScore
+      || latestRequestRelevance(right) - latestRequestRelevance(left)
       || left.recordType.localeCompare(right.recordType)
       || normalizeId(left.recordId).localeCompare(normalizeId(right.recordId)));
   // Explicit, contextual and comparison reservations are never collapsed.
@@ -529,6 +554,8 @@ export function fuseCandidateRankings(retrieval, {
       channels: Object.freeze([...new Set(candidate.channels)]),
       channelRanks: Object.freeze({ ...candidate.channelRanks }),
       providerScores: Object.freeze({ ...candidate.providerScores }),
+      tokenCoverages: Object.freeze({ ...candidate.tokenCoverages }),
+      latestRequestRelevance: Math.round(latestRequestRelevance(candidate) * 1e6) / 1e6,
       deduplicationIdentity: Object.freeze({ ...(candidate.deduplicationIdentity ?? {}) }),
     }));
   return Object.freeze({
@@ -776,6 +803,10 @@ function evidenceFromRow(row, input, fused, context = {}) {
       ...(contextual ? ['conversation_memory'] : []),
       ...(explicit ? ['catalog_identity'] : []),
     ])]),
+    reservationReasons: Object.freeze([...new Set(
+      (context.reservationReasons ?? []).map((reason) => String(reason ?? '').trim())
+        .filter(Boolean),
+    )]),
     retrievalContext: contextual ? 'contextual' : 'primary',
     channelRanks: fused.channelRanks,
     providerScores: fused.providerScores,
@@ -855,6 +886,14 @@ export async function rankAndHydrateAuthoritativeEvidence({
     throw new TypeError('Authoritative hydration requires inbound or outbound usage direction');
   }
   const reservedCandidates = reservedResolutionCandidates(input, classification, resolution, retrieval);
+  const reservationReasonsByRecordKey = new Map();
+  for (const candidate of reservedCandidates) {
+    const key = recordKey(candidate);
+    if (!key) continue;
+    const reasons = reservationReasonsByRecordKey.get(key) ?? new Set();
+    if (candidate.reason) reasons.add(String(candidate.reason));
+    reservationReasonsByRecordKey.set(key, reasons);
+  }
   const reservedRecordIds = reservedCandidates.map((candidate) => candidate.recordId);
   const reservedRecordKeys = reservedCandidates.map(recordKey);
   const resolvedCategoryKey = resolution?.candidate?.entityType === 'CATEGORY'
@@ -925,6 +964,9 @@ export async function rankAndHydrateAuthoritativeEvidence({
     const key = hydratedIdentityKey;
     if (!evidenceById.has(key)) evidenceById.set(key, evidenceFromRow(row, input, fused, {
       rememberedRecordKey, explicitRecordKey,
+      reservationReasons: [...(reservationReasonsByRecordKey.get(recordKey({
+        recordId: row.record_id, recordType: row.record_type,
+      })) ?? [])],
     }));
   }
   const evidence = [...evidenceById.values()].sort((left, right) => left.rank - right.rank);
@@ -1002,7 +1044,7 @@ export async function rankAndHydrateAuthoritativeEvidence({
     ambiguity,
     conflict,
     rejectedRecordIds: Object.freeze(rejectedRecordIds),
-    reservations: Object.freeze((retrieval?.queryContext?.reservedRecords ?? []).map((entry) => {
+    reservations: Object.freeze(reservedCandidates.map((entry) => {
       const fused = fusion.candidates.find((candidate) => recordKey(candidate) === recordKey(entry));
       const scoped = {
         tenantId,

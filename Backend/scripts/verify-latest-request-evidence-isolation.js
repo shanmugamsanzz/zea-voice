@@ -133,6 +133,40 @@ assert.deepEqual(latestIntentFusion.rejectedBelowRelevanceBandIds, [
   unrelatedFaq.recordId,
 ]);
 
+const secondaryNamespaceCandidate = candidate(
+  'general-secondary-local-winner', 'KNOWLEDGE_CHUNK', 0.7,
+);
+const crossNamespaceFusion = fuseCandidateRankings(Object.freeze({
+  ...scope,
+  intentClass: 'KNOWN_INFORMATION',
+  recordTypes: Object.freeze(['FAQ', 'KNOWLEDGE_CHUNK']),
+  primaryNamespaces: Object.freeze(['FAQ', 'GENERAL']),
+  queryContext: Object.freeze({ reservedRecords: Object.freeze([]), need: Object.freeze({}) }),
+  channels: Object.freeze({
+    structured: Object.freeze([]),
+    bm25: Object.freeze([
+      Object.freeze({ ...topFaq, channel: 'bm25', rank: 1, namespaceRank: 1 }),
+      Object.freeze({
+        ...secondaryNamespaceCandidate, channel: 'bm25', rank: 2, namespaceRank: 1,
+      }),
+    ]),
+    qdrant: Object.freeze([
+      Object.freeze({ ...topFaq, channel: 'qdrant', rank: 1, namespaceRank: 1 }),
+      Object.freeze({
+        ...secondaryNamespaceCandidate, channel: 'qdrant', rank: 2, namespaceRank: 1,
+      }),
+    ]),
+  }),
+}), {
+  limit: 5, minProviderScore: 0.64, highProviderScore: 0.86, relevanceScoreMargin: 0.06,
+});
+assert.deepEqual(crossNamespaceFusion.candidates.map((entry) => entry.recordId), [
+  topFaq.recordId,
+], 'A weak secondary namespace winner must not fill an unused evidence position');
+assert.ok(crossNamespaceFusion.rejectedBelowRelevanceBandIds.includes(
+  secondaryNamespaceCandidate.recordId,
+));
+
 const comparisonFusion = fuseCandidateRankings(retrieval({
   intentClass: 'COMPARISON_COMPLEX',
   reservations: [
@@ -161,6 +195,7 @@ console.log(JSON.stringify({
   exactConversationReservation: true,
   applicableWorkflowReservation: true,
   latestRequestRelevanceBand: true,
+  crossNamespaceRelevanceBand: true,
   comparisonReservationsPreserved: true,
   recommendationCandidatesPreserved: true,
   maximumVerifiedRecords: 5,

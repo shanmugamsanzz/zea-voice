@@ -1,7 +1,7 @@
 import { typedRecordIdentityKey } from './canonical-record-identity.js';
 import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/knowledge-confidence-config.js';
 
-export const CANONICAL_RETRIEVAL_RESERVATIONS_VERSION = 3;
+export const CANONICAL_RETRIEVAL_RESERVATIONS_VERSION = 4;
 
 function normalized(value) {
   return String(value ?? '').trim().toLocaleLowerCase();
@@ -119,7 +119,15 @@ export function collectCanonicalRetrievalReservations(request = {}, retrieval = 
     && String(resolution.candidate?.recordType ?? '').toUpperCase() === 'CATALOG_CATEGORY'
     ? resolution.candidate : classification.candidate;
   const latestCandidateType = String(latestCandidate?.recordType ?? '').toUpperCase();
+  const activeCategoryKey = normalized(memory.activeCategory?.categoryKey
+    ?? memory.activeCategory?.key);
+  const latestCategoryKey = normalized(latestCandidate?.categoryKey);
+  const categoryScopedCandidate = !(contextDependent && activeCategoryKey
+    && !memory.activeEntity && latestCandidateType === 'CATALOG_ITEM')
+    || (latestCategoryKey && latestCategoryKey === activeCategoryKey)
+    || latestCandidate?.explicit === true;
   const latestRequest = latestCandidate?.recordId
+    && categoryScopedCandidate
     && (latestCandidate.explicit === true
       || Number(latestCandidate.score ?? 0) >= confidence.highConfidence)
     && (latestCandidateType !== 'WORKFLOW_RULE'

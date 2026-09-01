@@ -13,7 +13,7 @@ import { publishedRecordCallerFacingHint } from './evidence-audience.js';
 import { selectCompleteConversationTurns } from './conversation-turn-context.js';
 import { buildPublicationDeduplicationIdentity } from './publication-deduplication.js';
 
-export const TARGETED_RETRIEVAL_VERSION = 8;
+export const TARGETED_RETRIEVAL_VERSION = 10;
 
 const documentIndexTypes = Object.freeze({
   [knowledgeSearchIndexes.CATALOG]: 'CATALOG_ITEM',
@@ -104,6 +104,33 @@ function canonicalMemoryEntity(input = {}) {
     ? compactEntity(memory.activeEntity, 'CATALOG_ITEM')
     : compactEntity(memory.activeCategory, 'CATALOG_CATEGORY');
   return active?.recordId ? active : null;
+}
+
+function selectableCatalogItem(record = {}) {
+  return record.recordType === 'CATALOG_ITEM'
+    && record.selectionRules?.selectable === true;
+}
+
+function activeCategorySelectableChildren(input, recordScope) {
+  if (!(recordScope instanceof Map)) return Object.freeze([]);
+  const memory = input?.canonicalCallMemory ?? input?.memory ?? {};
+  const activeCategory = memory.activeCategory;
+  if (!activeCategory) return Object.freeze([]);
+  const categoryKey = normalizeId(activeCategory.categoryKey ?? activeCategory.key);
+  const knowledgeBaseId = normalizeId(activeCategory.knowledgeBaseId);
+  const publicationRevision = Number(activeCategory.publicationRevision);
+  if (!categoryKey) return Object.freeze([]);
+  return Object.freeze([...recordScope.values()].filter((record) => (
+    selectableCatalogItem(record)
+    && normalizeId(record.categoryKey) === categoryKey
+    && (!knowledgeBaseId || normalizeId(record.knowledgeBaseId) === knowledgeBaseId)
+    && (!Number.isInteger(publicationRevision)
+      || Number(record.publicationRevision) === publicationRevision)
+  )).sort((left, right) => (
+    Number(left.displayOrder ?? Number.MAX_SAFE_INTEGER)
+      - Number(right.displayOrder ?? Number.MAX_SAFE_INTEGER)
+    || normalizeId(left.recordId).localeCompare(normalizeId(right.recordId))
+  )));
 }
 
 function boundedScore(value) {
@@ -227,6 +254,17 @@ export function buildContextEnrichedRetrievalQuery(
   if (!hasCurrentEntityMention && contextDependent && canonicalEntity?.recordId) {
     reserved.push(Object.freeze({ ...canonicalEntity, reason: 'canonical_memory' }));
   }
+  const categoryChildren = !hasCurrentEntityMention && contextDependent
+    && canonicalEntity?.recordType === 'CATALOG_CATEGORY'
+    ? activeCategorySelectableChildren(input, recordScope) : [];
+  // A category may supply item facts only when its current publication has one
+  // selectable child. Multiple children remain candidates for clarification;
+  // retrieval must never choose one merely because it ranked first.
+  if (categoryChildren.length === 1) {
+    reserved.push(Object.freeze({
+      ...compactEntity(categoryChildren[0]), reason: 'category_unique_child',
+    }));
+  }
   for (const entity of comparisons) {
     if (!entity.recordId) continue;
     reserved.push(Object.freeze({ ...entity, reason: 'explicit_comparison' }));
@@ -299,7 +337,7 @@ export function buildContextEnrichedRetrievalQuery(
     tenantSearchForms: tenantForms,
     latestRequestText: searchText,
     sparseText: searchText,
-    semanticText: searchText,
+    semanticText: contextualText ?? searchText,
     reservedRecords,
     filters: Object.freeze({
       tenantId: input.tenantId,
@@ -378,6 +416,24 @@ function publicationScope(input, bundles) {
           ?? record.useCasePhrases ?? [])]),
         useCaseTokens: Object.freeze([...(record.publicationUseCaseTokens
           ?? record.useCaseTokens ?? [])]),
+        selectionRules: Object.freeze({ ...(
+          record.entity_metadata?.selectionRules
+            ?? record.entity_metadata?.selection_rules
+            ?? record.metadata?.selectionRules
+            ?? record.metadata?.selection_rules
+            ?? {}
+        ) }),
+        displayOrder: Number.isFinite(Number(
+          record.entity_metadata?.displayOrder
+            ?? record.entity_metadata?.display_order
+            ?? record.metadata?.displayOrder
+            ?? record.metadata?.display_order,
+        )) ? Number(
+            record.entity_metadata?.displayOrder
+              ?? record.entity_metadata?.display_order
+              ?? record.metadata?.displayOrder
+              ?? record.metadata?.display_order
+          ) : null,
       }));
     }
   }

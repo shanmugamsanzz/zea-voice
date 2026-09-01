@@ -669,6 +669,16 @@ export function openGenericConversationState(identity, settings = {}, now = Date
         state.activeCategory = categoryKeys.size === 1 ? categories[0] : null;
         state.currentTopic = comparisons.map((entity) => entity.name).join(' / ');
       } else if (mode === 'EXPLICIT') {
+        const previousRecordId = cleanText(
+          state.activeEntity?.recordId ?? state.activeEntity?.id
+            ?? state.activeCategory?.recordId ?? state.activeCategory?.id,
+          160,
+        ).toLocaleLowerCase();
+        const nextRecordId = cleanText(
+          resolution.activeEntity?.recordId ?? resolution.activeEntity?.id
+            ?? resolution.activeCategory?.recordId ?? resolution.activeCategory?.id,
+          160,
+        ).toLocaleLowerCase();
         const entity = cleanText(resolution.activeEntity?.recordType, 80).toLocaleUpperCase()
           === 'CATALOG_ITEM' ? cleanEntity(resolution.activeEntity) : null;
         const category = cleanText(resolution.activeCategory?.recordType, 80).toLocaleUpperCase()
@@ -691,6 +701,11 @@ export function openGenericConversationState(identity, settings = {}, now = Date
           return Object.freeze({
             applied: false, reason: 'canonical_explicit_selection_required', state: publicState(state),
           });
+        }
+        if (previousRecordId && nextRecordId && previousRecordId !== nextRecordId
+          && state.activeToolRequest) {
+          state.activeToolRequest = null;
+          state.collectedInformation = {};
         }
       } else if (mode === 'CONTEXTUAL') {
         const entity = cleanText(resolution.activeEntity?.recordType, 80).toLocaleUpperCase()

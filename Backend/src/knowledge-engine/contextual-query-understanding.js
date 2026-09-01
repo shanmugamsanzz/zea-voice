@@ -2,7 +2,7 @@ import { typedRecordIdentityKey } from './canonical-record-identity.js';
 import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/knowledge-confidence-config.js';
 import { compactNeedContext } from './published-use-case-signals.js';
 
-export const CONTEXTUAL_QUERY_UNDERSTANDING_VERSION = 5;
+export const CONTEXTUAL_QUERY_UNDERSTANDING_VERSION = 6;
 
 const catalogRecordTypes = new Set(['CATALOG_ITEM', 'CATALOG_CATEGORY']);
 const catalogEntityTypes = new Set(['ITEM', 'CATEGORY']);
@@ -314,8 +314,8 @@ export function understandContextualKnowledgeQuery(input, resolution) {
   const suppliedContextSignal = requestedFacts.length > 0
     || (input.contextualReferences?.length ?? 0) > 0;
   // Published workflows can describe the fact/action requested for the active
-  // entity. They are retrieval hints, not replacement business topics. A
-  // standalone FAQ/conversation/general record still prevents stale memory.
+  // entity. They are retrieval hints, not replacement business topics. The
+  // active record remains evidence until another published entity is selected.
   const workflowContextSignal = String(currentRouteSignal?.recordType ?? '').toLocaleUpperCase()
       === 'WORKFLOW_RULE'
     && !protocolRoute
@@ -323,10 +323,15 @@ export function understandContextualKnowledgeQuery(input, resolution) {
   const hasRememberedContext = Boolean(
     memoryEntity || input.memory?.pendingClarification || input.memory?.activeTool,
   );
+  // The grounded LLM owns reference interpretation. Retaining a validated
+  // canonical topic when no new entity was mentioned supports every tenant
+  // and language without enumerating follow-up words or requested fact names.
+  // A successful explicit selection remains the only topic-replacement path.
   const contextDependent = !hasCurrentEntitySignal
     && !protocolRoute
     && hasRememberedContext
-    && (suppliedContextSignal
+    && (Boolean(memoryEntity)
+      || suppliedContextSignal
       || workflowContextSignal
       || !hasAuthoritativeCurrentRoute
       || Boolean(input.memory?.pendingClarification)
