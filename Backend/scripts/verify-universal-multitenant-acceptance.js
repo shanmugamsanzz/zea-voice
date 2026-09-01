@@ -499,7 +499,16 @@ for (let pass = 1; pass <= repeats; pass += 1) {
       });
       const categoryEnvelope = validationEnvelope(category.turn);
       const categorySource = sourceForRecord(categoryEnvelope, tenant.categoryRecord.record_id);
-      assert.ok(categorySource, 'Published category must hydrate as an authoritative record');
+      assert.ok(categorySource, JSON.stringify({
+        message: 'Published category must hydrate as an authoritative record',
+        classification: category.prepared.classification,
+        resolution: category.prepared.resolution,
+        reservations: category.turn.authoritative.fusion?.reservedRecordKeys,
+        selected: category.turn.authoritative.evidence.map((source) => ({
+          recordId: source.recordId, recordType: source.recordType,
+          channels: source.channels, retrievalContext: source.retrievalContext,
+        })),
+      }));
       assert.equal(categorySource.authoritativeData.name, tenant.category,
         'Category response must use its canonical published name');
       responseDecision(categoryEnvelope, [categorySource], tenant.categoryDescription, {

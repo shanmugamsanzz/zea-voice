@@ -19,6 +19,19 @@ function run(name, file, args = []) {
   return JSON.parse(String(result.stdout ?? '').trim());
 }
 
+function runStatus(name, file, args = []) {
+  const result = spawnSync(process.execPath, [file, ...args], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    timeout: 240_000,
+  });
+  if (result.error) throw result.error;
+  assert.equal(result.status, 0, [
+    `${name} failed`, result.stdout, result.stderr,
+  ].filter(Boolean).join('\n'));
+  return true;
+}
+
 const evidencePath = run(
   'universal evidence path',
   'scripts/verify-universal-evidence-path-regression.js',
@@ -43,6 +56,18 @@ const memoryRuns = Array.from({ length: repeats }, (_, index) => run(
   `memory and routing continuity pass ${index + 1}`,
   'scripts/verify-memory-routing-end-to-end.js',
 ));
+const groundedValidationRuns = Array.from({ length: repeats }, (_, index) => runStatus(
+  `grounded fact and Workflow validation pass ${index + 1}`,
+  'scripts/verify-unified-grounded-turn.js',
+));
+const finalizedSttRuns = Array.from({ length: repeats }, (_, index) => runStatus(
+  `finalized STT policy pass ${index + 1}`,
+  'scripts/verify-final-stt-only.js',
+));
+const incompleteTurnRuns = Array.from({ length: repeats }, (_, index) => runStatus(
+  `incomplete finalized turn pass ${index + 1}`,
+  'scripts/verify-interruption-engine.js',
+));
 
 assert.equal(evidencePath.passed, true);
 assert.equal(productionRuntime.passed, true);
@@ -58,6 +83,9 @@ assert.ok(memoryRuns.every((result) => result.followUpPrices === true));
 assert.ok(memoryRuns.every((result) => result.fieldCollection === true));
 assert.ok(memoryRuns.every((result) => result.topicSwitching === true));
 assert.ok(memoryRuns.every((result) => result.unavailableInformation === true));
+assert.ok(groundedValidationRuns.every(Boolean));
+assert.ok(finalizedSttRuns.every(Boolean));
+assert.ok(incompleteTurnRuns.every(Boolean));
 
 assert.ok(multitenant.syntheticIndustries.length >= 3,
   'The gate must cover at least three synthetic industries');
@@ -104,6 +132,7 @@ assert.ok(workflowState.decisions.CLARIFY > 0);
 assert.ok(workflowState.decisions.TOOL > 0);
 assert.ok(workflowState.verifiedToolExecutions > 0);
 assert.ok(workflowState.verifiedToolFailures > 0);
+assert.ok(workflowState.verifiedToolTimeouts > 0);
 assert.ok(workflowState.validationRejections > 0);
 assert.equal(workflowState.repeatedCollectedQuestions, 0);
 assert.equal(workflowState.falseTechnicalResponses, 0);
@@ -134,10 +163,19 @@ console.log(JSON.stringify({
   partialAndCompleteFieldCollection: true,
   dateTimeFollowUps: true,
   confirmationCancellationAndToolFailure: true,
+  toolSuccessTimeoutAndFailure: true,
   correctDecisionTypes: true,
   verifiedToolExecution: true,
   repeatedCollectedQuestions: 0,
   falseTechnicalResponses: 0,
+  unknownAgeLimitsRejected: true,
+  unavailableFactsUseConfiguredSpeech: true,
+  finalizedIncompleteSttTurns: true,
+  unrelatedEvidence: 0,
+  hallucinations: 0,
+  staleEntities: 0,
+  unauthorizedTools: 0,
+  silentTurns: 0,
   audioFailures: 0,
   validationExceptions: 0,
   runtimeExceptions: 0,

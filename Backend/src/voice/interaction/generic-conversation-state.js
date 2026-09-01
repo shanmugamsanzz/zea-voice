@@ -651,7 +651,10 @@ export function openGenericConversationState(identity, settings = {}, now = Date
       const comparisons = uniqueEntities(resolution.comparisonEntities)
         .filter((entity) => Boolean(entity.id));
       if (mode === 'COMPARISON') {
-        if (comparisons.length < 2) {
+        const invalidComparisonType = (resolution.comparisonEntities ?? []).some((entity) => (
+          cleanText(entity?.recordType, 80).toLocaleUpperCase() !== 'CATALOG_ITEM'
+        ));
+        if (comparisons.length < 2 || invalidComparisonType) {
           return Object.freeze({ applied: false, reason: 'canonical_comparison_required', state: publicState(state) });
         }
         state.comparisonEntities = comparisons;
@@ -666,8 +669,10 @@ export function openGenericConversationState(identity, settings = {}, now = Date
         state.activeCategory = categoryKeys.size === 1 ? categories[0] : null;
         state.currentTopic = comparisons.map((entity) => entity.name).join(' / ');
       } else if (mode === 'EXPLICIT') {
-        const entity = cleanEntity(resolution.activeEntity);
-        const category = cleanCategory(resolution.activeCategory);
+        const entity = cleanText(resolution.activeEntity?.recordType, 80).toLocaleUpperCase()
+          === 'CATALOG_ITEM' ? cleanEntity(resolution.activeEntity) : null;
+        const category = cleanText(resolution.activeCategory?.recordType, 80).toLocaleUpperCase()
+          === 'CATALOG_CATEGORY' ? cleanCategory(resolution.activeCategory) : null;
         if (entity?.id) {
           state.activeEntity = entity;
           state.activeCategory = cleanCategory({
@@ -682,10 +687,16 @@ export function openGenericConversationState(identity, settings = {}, now = Date
           state.knownEntities = [];
           state.comparisonEntities = [];
           state.currentTopic = category.name;
+        } else {
+          return Object.freeze({
+            applied: false, reason: 'canonical_explicit_selection_required', state: publicState(state),
+          });
         }
       } else if (mode === 'CONTEXTUAL') {
-        const entity = cleanEntity(resolution.activeEntity);
-        const category = cleanCategory(resolution.activeCategory);
+        const entity = cleanText(resolution.activeEntity?.recordType, 80).toLocaleUpperCase()
+          === 'CATALOG_ITEM' ? cleanEntity(resolution.activeEntity) : null;
+        const category = cleanText(resolution.activeCategory?.recordType, 80).toLocaleUpperCase()
+          === 'CATALOG_CATEGORY' ? cleanCategory(resolution.activeCategory) : null;
         if (entity?.id) {
           state.activeEntity = entity;
           state.activeCategory = cleanCategory({
@@ -698,6 +709,15 @@ export function openGenericConversationState(identity, settings = {}, now = Date
           state.currentTopic = category.name;
         }
         if (comparisons.length) state.comparisonEntities = comparisons;
+        if (!entity?.id && !category?.id) {
+          return Object.freeze({
+            applied: false, reason: 'canonical_context_selection_required', state: publicState(state),
+          });
+        }
+      } else {
+        return Object.freeze({
+          applied: false, reason: 'canonical_resolution_unresolved', state: publicState(state),
+        });
       }
       return Object.freeze({ applied: true, mode, state: publicState(state) });
     },

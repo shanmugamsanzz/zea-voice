@@ -65,6 +65,36 @@ export function collectCanonicalRetrievalReservations(request = {}, retrieval = 
       )).map((value) => compact(value, 'published_overview', 'CONVERSATION_NODE'))
       .filter(Boolean)
     : [];
+  const overviewCatalog = classification.intentClass === 'CATEGORY_OVERVIEW'
+    ? [...new Map([
+      ...(resolution.namespaceCandidates?.CATALOG ?? []),
+      classification.candidate,
+      resolution.candidate,
+    ]
+      .filter((candidate) => (
+        String(candidate?.recordType ?? '').toUpperCase() === 'CATALOG_CATEGORY'
+        && (candidate === resolution.candidate
+          || candidate === classification.candidate || candidate?.explicit === true)
+      ))
+      // Prefer the resolved authoritative category route over a synthetic
+      // category projection derived from one of its child Catalog items.
+      .map((candidate) => [
+        normalized(candidate?.categoryKey) || normalized(candidate?.recordId),
+        candidate,
+      ])).values()]
+      .map((value) => compact(value, 'published_overview', 'CATALOG_CATEGORY'))
+      .filter(Boolean)
+    : [];
+  const overviewCategoryKeys = new Set(overviewCatalog
+    .map((entry) => normalized(entry.categoryKey)).filter(Boolean));
+  const effectiveExplicit = classification.intentClass === 'CATEGORY_OVERVIEW'
+    ? explicit.filter((entry) => (
+      !overviewCategoryKeys.has(normalized(entry.categoryKey))
+      || overviewCatalog.some((overviewEntry) => (
+        normalized(overviewEntry.recordId) === normalized(entry.recordId)
+      ))
+    ))
+    : explicit;
   const contextDependent = understanding.contextDependent === true
     || resolution.contextDependent === true;
   const memory = request.input?.canonicalCallMemory ?? request.input?.memory ?? {};
@@ -78,7 +108,9 @@ export function collectCanonicalRetrievalReservations(request = {}, retrieval = 
   const confidence = resolveKnowledgeConfidenceConfiguration(
     classification.confidenceConfiguration ?? resolution.confidenceConfiguration,
   );
-  const latestCandidate = classification.candidate;
+  const latestCandidate = classification.intentClass === 'CATEGORY_OVERVIEW'
+    && String(resolution.candidate?.recordType ?? '').toUpperCase() === 'CATALOG_CATEGORY'
+    ? resolution.candidate : classification.candidate;
   const latestCandidateType = String(latestCandidate?.recordType ?? '').toUpperCase();
   const latestRequest = latestCandidate?.recordId
     && (latestCandidate.explicit === true
@@ -97,7 +129,8 @@ export function collectCanonicalRetrievalReservations(request = {}, retrieval = 
     ?? request.queryContext?.reservedRecords ?? [];
   const ordered = classification.intentClass === 'COMPARISON_COMPLEX'
     ? [...comparisons, ...explicit, ...existing, ...remembered]
-    : [...explicit, ...overview, ...latestRequest, ...comparisons, ...remembered,
+    : [...effectiveExplicit, ...overviewCatalog, ...overview, ...latestRequest,
+      ...comparisons, ...remembered,
       ...useCaseReservations, ...existing];
   return Object.freeze([...new Map(ordered.map((entry) => (
     [reservationKey(entry), Object.freeze({ ...entry })]

@@ -79,7 +79,7 @@ function nextQuestion({ activeRequest, fieldSchemas, collectedInformation, tool,
 const counts = {
   partialCollections: 0, completeCollections: 0, dateTimeFollowUps: 0, confirmations: 0,
   cancellations: 0, toolDecisions: 0, verifiedExecutions: 0,
-  verifiedFailures: 0, validationRejections: 0,
+  verifiedFailures: 0, verifiedTimeouts: 0, validationRejections: 0,
   repeatedCollectedQuestions: 0, silentTurns: 0,
 };
 
@@ -196,6 +196,24 @@ for (let pass = 1; pass <= repeats; pass += 1) {
     assert.equal(finalizedFailure.decision.clarification?.kind, 'technical');
     counts.verifiedFailures += 1;
 
+    const timeout = await executeAgentTools(runtimeProfile, call, [toolCall], {
+      ...executionOptions,
+      fetchImpl: async () => {
+        const error = new Error(`configured-timeout-${pass}`);
+        error.name = 'TimeoutError';
+        throw error;
+      },
+    });
+    assert.equal(timeout[0].verified, true);
+    assert.equal(timeout[0].success, false);
+    assert.equal(timeout[0].error.code, 'VOICE_TOOL_TIMEOUT');
+    const finalizedTimeout = finalizeConfiguredToolResults({
+      input: { ...identity, utterance: 'configured action' }, results: timeout, runtimeProfile,
+    });
+    assert.equal(finalizedTimeout.decision.type, 'CLARIFY');
+    assert.equal(finalizedTimeout.decision.clarification?.kind, 'technical');
+    counts.verifiedTimeouts += 1;
+
     const authoritativeEvidence = [{ tenantId: fixture.tenantId,
       agentId: fixture.agentId, recordType: 'CATALOG_ITEM',
       content: `Configured value is ${100 + pass}.`,
@@ -214,7 +232,7 @@ assert.equal(counts.silentTurns, 0);
 const expected = fixtures.length * repeats;
 for (const count of [counts.partialCollections, counts.completeCollections, counts.dateTimeFollowUps,
   counts.confirmations, counts.cancellations, counts.toolDecisions,
-  counts.verifiedExecutions, counts.verifiedFailures,
+  counts.verifiedExecutions, counts.verifiedFailures, counts.verifiedTimeouts,
   counts.validationRejections]) assert.equal(count, expected);
 
 console.log(JSON.stringify({
@@ -231,6 +249,7 @@ console.log(JSON.stringify({
     TOOL: counts.toolDecisions },
   verifiedToolExecutions: counts.verifiedExecutions,
   verifiedToolFailures: counts.verifiedFailures,
+  verifiedToolTimeouts: counts.verifiedTimeouts,
   validationRejections: counts.validationRejections,
   preservedWorkflowState: true,
   repeatedCollectedQuestions: counts.repeatedCollectedQuestions,

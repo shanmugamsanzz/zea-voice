@@ -20,7 +20,14 @@ function source(recordId, itemKey, name, categoryKey = 'group-a', category = 'Gr
 
 const first = source('record-a', 'option-a', 'Option A');
 const second = source('record-b', 'option-b', 'Option B');
-const evidence = Object.freeze([first, second]);
+const category = Object.freeze({
+  recordId: 'category-a',
+  recordType: 'CATALOG_CATEGORY',
+  hydrationValidated: true,
+  publicationValidated: true,
+  authoritativeData: Object.freeze({ categoryKey: 'group-a', category: 'Group A' }),
+});
+const evidence = Object.freeze([first, second, category]);
 const memory = openIsolatedCallMemory(scope);
 memory.beginTurn('turn-a');
 memory.setPendingQuestion({
@@ -49,6 +56,21 @@ assert.equal(applied.state.pendingClarification.text, 'Which published option?',
 assert.equal(applied.state.activeTool.name, 'configured_action',
   'Canonical topic enforcement must not independently erase active tool state');
 
+const ambiguous = resolveCanonicalTopicMemory({
+  scope,
+  understanding: {
+    explicitEntities: [{ recordId: first.recordId }, { recordId: second.recordId }],
+    ambiguity: { detected: true },
+  },
+  evidence,
+  memory: memory.snapshot(),
+});
+assert.equal(ambiguous.mode, 'UNRESOLVED');
+assert.equal(ambiguous.requiresTargetedClarification, true);
+assert.equal(memory.applyCanonicalTopicResolution(ambiguous, { turnToken: 'turn-a' }).applied, false);
+assert.equal(memory.snapshot().activeEntity.id, first.recordId,
+  'Ambiguous catalog candidates must not replace the selected item');
+
 memory.beginTurn('turn-b');
 resolution = resolveCanonicalTopicMemory({
   scope,
@@ -61,6 +83,21 @@ assert.equal(resolution.activeEntity.recordId, first.recordId);
 applied = memory.applyCanonicalTopicResolution(resolution, { turnToken: 'turn-b' });
 assert.equal(applied.state.activeEntity.id, first.recordId,
   'Contextual reference must reuse the active canonical PostgreSQL record');
+
+memory.beginTurn('turn-category');
+resolution = resolveCanonicalTopicMemory({
+  scope,
+  understanding: { explicitCategories: [{ recordId: category.recordId }] },
+  evidence,
+  memory: memory.snapshot(),
+});
+assert.equal(resolution.mode, 'EXPLICIT');
+assert.equal(resolution.activeEntity, null);
+assert.equal(resolution.activeCategory.recordId, category.recordId);
+applied = memory.applyCanonicalTopicResolution(resolution, { turnToken: 'turn-category' });
+assert.equal(applied.state.activeEntity, null);
+assert.equal(applied.state.activeCategory.id, category.recordId,
+  'Categories must be stored separately from selectable catalog items');
 
 memory.beginTurn('turn-c');
 resolution = resolveCanonicalTopicMemory({

@@ -40,6 +40,13 @@ const confirmedExplicit = confirmCanonicalTopicResolution(explicitResolution, {
 });
 assert.equal(confirmedExplicit.mode, 'EXPLICIT');
 assert.equal(confirmedExplicit.activeEntity.recordId, entity.recordId);
+assert.equal(confirmCanonicalTopicResolution({
+  ...explicitResolution,
+  activeEntity: { ...entity, recordType: 'CATALOG_CATEGORY', entityType: 'CATEGORY' },
+}, {
+  decision: { valid: true, decision: 'answer', evidenceIds: ['source_1'] },
+  hydratedRecords: [hydratedSelected],
+}).mode, 'UNRESOLVED', 'A category must never be committed as the active selectable item');
 
 const memory = openGenericConversationState(scope, {
   conversationContextMode: 'full_current_call', conversationContextTurns: 5,
@@ -56,6 +63,12 @@ assert.equal(memory.snapshot().activeEntity, null,
 memory.applyCanonicalTopicResolution(confirmedExplicit, { turnToken: 'candidate-noise' });
 assert.equal(memory.snapshot().activeEntity.recordId, entity.recordId);
 assert.equal(memory.snapshot().knownEntities.length, 1);
+const priorSelectedRecordId = memory.snapshot().activeEntity.recordId;
+assert.equal(memory.applyCanonicalTopicResolution({
+  ...explicitResolution, mode: 'UNRESOLVED', activeEntity: alternative,
+}, { turnToken: 'candidate-noise' }).applied, false);
+assert.equal(memory.snapshot().activeEntity.recordId, priorSelectedRecordId,
+  'Unresolved ranked alternatives must not replace the selected item');
 
 const normalTurn = createNormalTurnInput({
   ...scope, finalizedQuestion: 'What is its published value?', memory: memory.snapshot(),

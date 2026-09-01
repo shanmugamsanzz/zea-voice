@@ -16,7 +16,7 @@ import {
 } from '../knowledge-engine/grounded-evidence-representation.js';
 import { env } from '../config/env.js';
 
-export const GROUNDED_TURN_EVIDENCE_VERSION = 6;
+export const GROUNDED_TURN_EVIDENCE_VERSION = 7;
 const maximumEvidenceRecords = 5;
 
 async function completeStageWithin(stage, operation, timeoutMs) {
@@ -470,11 +470,19 @@ export function buildGroundedLlmInput({
         (input?.queryUnderstanding?.contextualReferences ?? [])
           .slice(0, 10).map((value) => clean(value, 160)).filter(Boolean),
       ),
+      contextualEntity: input?.queryUnderstanding?.meaning?.contextualEntity ?? null,
       requestedFactHint: requestedFact,
+      requestedFactInterpretationRequired:
+        input?.queryUnderstanding?.meaning?.requestedFactInterpretationRequired !== false,
       comparisonEntities: Object.freeze(
         (input?.queryUnderstanding?.comparisonEntities ?? []).slice(0, 5),
       ),
+      comparisonRequested:
+        input?.queryUnderstanding?.meaning?.comparisonRequested === true,
       actionHint: Object.freeze(object(input?.queryUnderstanding?.actionIntent)),
+      correctionHint: Object.freeze(object(
+        input?.queryUnderstanding?.meaning?.correction,
+      )),
       ambiguityHint: Object.freeze(object(input?.queryUnderstanding?.ambiguity)),
       needHint: Object.freeze(object(input?.queryUnderstanding?.need)),
     }),

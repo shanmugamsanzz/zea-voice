@@ -1,5 +1,5 @@
 SHANMUGA HOSPITAL - APPROVED WORKFLOW AND ACTION RULES
-FORMAT VERSION: 4
+FORMAT VERSION: 5
 LANGUAGE: Tamil, Tanglish and English
 USAGE: Inbound and Outbound
 
@@ -12,36 +12,6 @@ RESPONSE_MODE: exact
 PRIORITY: 100
 RESPONSE: இது urgent medical situationஆ இருக்கலாம். உடனே அருகிலுள்ள emergency medical help எடுத்துக்கோங்க.
 
-RULE: caller_requests_end
-INTENT_CLASS: CALL_CONTROL
-SITUATION: The caller clearly asks to stop or end the conversation.
-EXAMPLE: call முடிச்சிடுங்க | பேச வேண்டாம் | போதும் | bye | goodbye | end the call | hang up
-MATCH_MODE: any_phrase
-RESPONSE_MODE: instruction
-PRIORITY: 100
-ACTION: end_call
-RESPONSE: Acknowledge the caller politely, use the configured closing message and end the call only after the closing audio completes.
-
-RULE: caller_not_interested
-INTENT_CLASS: CALL_CONTROL
-SITUATION: The caller clearly says they are not interested in the packages or check-up.
-EXAMPLE: வேண்டாம் | interest இல்லை | package வேண்டாம் | checkup வேண்டாம் | not interested
-MATCH_MODE: any_phrase
-RESPONSE_MODE: instruction
-PRIORITY: 97
-ACTION: end_call
-RESPONSE: Acknowledge politely without pressure, use the configured closing message and end the call.
-
-RULE: wrong_number
-INTENT_CLASS: CALL_CONTROL
-SITUATION: The caller says this is a wrong number or that they are not the intended person.
-EXAMPLE: wrong number | தப்பான number | நான் அந்த ஆள் இல்லை | you called the wrong person
-MATCH_MODE: any_phrase
-RESPONSE_MODE: instruction
-PRIORITY: 97
-ACTION: end_call
-RESPONSE: Apologize briefly, note that it is a wrong number, use the configured closing message and end the call without promoting a package.
-
 RULE: create_appointment
 INTENT_CLASS: ACTION_TOOL_REQUEST
 SITUATION: The caller explicitly requests to book an appointment for an already selected approved package.
@@ -49,64 +19,10 @@ EXAMPLE: appointment book பண்ணுங்க | booking பண்ணலா�
 MATCH_MODE: any_phrase
 RESPONSE_MODE: instruction
 PRIORITY: 96
-ACTION: create_appointment-1
+ACTION: create_appointment
 REQUIRES_CATALOG_ITEM: true
 BLOCKED_RESPONSE: Appointment book பண்ணலாம். முதல்ல எந்த approved Package வேணும்னு சொல்லுங்க.
-RESPONSE: Preserve the selected Catalog item. Collect only the missing UI-configured fields in their configured order. Read the details back once, request final confirmation, and execute the action only after confirmation. Never claim success without a verified successful tool result.
-
-RULE: appointment_success
-SITUATION: The create appointment tool returns a verified successful result.
-EXAMPLE: verified booking success | appointment tool success
-MATCH_MODE: any_phrase
-RESPONSE_MODE: instruction
-PRIORITY: 100
-ACTION: create_appointment-1
-RESPONSE: Confirm only the appointment details returned by the verified tool result. Then ask whether the caller has any other question.
-
-RULE: appointment_failure
-SITUATION: The create appointment tool fails, times out or returns an unsuccessful result.
-EXAMPLE: booking failed | appointment tool timeout | appointment unavailable
-MATCH_MODE: any_phrase
-RESPONSE_MODE: instruction
-PRIORITY: 100
-ACTION: create_appointment-1
-RESPONSE: State clearly that the appointment was not confirmed. Preserve the collected information and provide only the configured retry or human-support option.
-
-RULE: callback_request
-SITUATION: The caller asks to be called later or says they are currently busy.
-EXAMPLE: later call பண்ணுங்க | இப்ப busy | பிறகு பேசலாம் | call me later | callback வேண்டும்
-MATCH_MODE: any_phrase
-RESPONSE_MODE: instruction
-PRIORITY: 90
-ACTION: schedule_callback
-RESPONSE: Ask only for the next missing callback field defined by the active UI tool and published policy. Execute the configured callback action and confirm it only after verified success.
-
-RULE: whatsapp_package_information
-SITUATION: The caller asks for approved package or hospital information through WhatsApp.
-EXAMPLE: WhatsAppல அனுப்புங்க | brochure share பண்ணுங்க | send package details | WhatsApp details
-MATCH_MODE: any_phrase
-RESPONSE_MODE: instruction
-PRIORITY: 88
-ACTION: send_whatsapp_brochure
-RESPONSE: Send only the requested approved information through the configured WhatsApp action. Never say it was sent until the tool confirms success.
-
-RULE: human_support_request
-SITUATION: The caller explicitly asks to speak with a human, staff member or Telecaller.
-EXAMPLE: human agent கிட்ட பேசணும் | staff connect பண்ணுங்க | telecaller வேண்டும் | connect me to a person | transfer the call
-MATCH_MODE: any_phrase
-RESPONSE_MODE: instruction
-PRIORITY: 95
-ACTION: transfer_to_telecaller
-RESPONSE: Attempt the configured transfer. Say the transfer succeeded only after the tool confirms success; otherwise provide the configured follow-up option.
-
-RULE: package_customization_support
-SITUATION: The caller asks to customize a package or select individual tests outside the published package.
-EXAMPLE: package customize பண்ணலாமா | tests மட்டும் எடுக்கலாமா | custom package | modify package
-MATCH_MODE: any_phrase
-RESPONSE_MODE: instruction
-PRIORITY: 86
-ACTION: transfer_to_telecaller
-RESPONSE: Do not promise customization. Transfer to the Telecaller using the configured action and report only the verified result.
+RESPONSE: Preserve the selected Catalog item. Collect only the missing UI-configured fields in their configured order. Read the details back once, request final confirmation, and execute the action only after confirmation. Confirm only details returned by a verified successful result. On failure or timeout, state that the appointment was not confirmed, preserve the collected values and offer only a configured recovery option.
 
 RULE: non_emergency_symptom_support
 INTENT_CLASS: KNOWN_INFORMATION
@@ -116,57 +32,3 @@ MATCH_MODE: any_phrase
 RESPONSE_MODE: exact
 PRIORITY: 95
 RESPONSE: உங்களுடைய symptoms வைத்து நான் package recommend பண்ண முடியாது. சரியான medical suitability-ஐ Doctor தான் confirm பண்ண வேண்டும்.
-
-RULE: doctor_advice_support
-SITUATION: The caller asks for diagnosis, treatment, medicine advice, report interpretation or a Doctor's medical decision.
-EXAMPLE: diagnosis சொல்லுங்க | medicine change பண்ணலாமா | report explain பண்ணுங்க | treatment சொல்லுங்க | doctor advice வேண்டும்
-MATCH_MODE: any_phrase
-RESPONSE_MODE: instruction
-PRIORITY: 94
-ACTION: transfer_to_telecaller
-RESPONSE: Do not diagnose or provide treatment or medicine advice. Explain briefly that a Doctor must confirm it, then use the configured Telecaller transfer action.
-
-RULE: insurance_support
-SITUATION: The caller asks whether insurance covers a package or asks about an insurance claim.
-EXAMPLE: insurance cover ஆகுமா | insurance claim | insurance accept பண்றீங்களா | package insurance
-MATCH_MODE: any_phrase
-RESPONSE_MODE: instruction
-PRIORITY: 85
-ACTION: transfer_to_telecaller
-RESPONSE: Do not confirm coverage. Use the configured Telecaller transfer action for verified insurance information.
-
-RULE: refund_support
-SITUATION: The caller asks for a refund or payment reversal.
-EXAMPLE: refund வேண்டும் | money refund | payment திருப்பி வேண்டும் | refund request
-MATCH_MODE: any_phrase
-RESPONSE_MODE: instruction
-PRIORITY: 85
-ACTION: transfer_to_telecaller
-RESPONSE: Do not promise a refund. Use the configured Telecaller transfer action and report only the verified transfer result.
-
-RULE: complaint_support
-SITUATION: The caller wants to register a complaint or grievance.
-EXAMPLE: complaint பண்ணணும் | service complaint | grievance | issue report பண்ணணும்
-MATCH_MODE: any_phrase
-RESPONSE_MODE: instruction
-PRIORITY: 85
-ACTION: transfer_to_telecaller
-RESPONSE: Acknowledge briefly and use the configured Telecaller transfer action for complaint handling.
-
-RULE: doctor_availability_support
-SITUATION: The caller asks for Doctor availability, a Doctor's phone number or contact details.
-EXAMPLE: doctor available ஆ | doctor number | doctor contact | specialist availability
-MATCH_MODE: any_phrase
-RESPONSE_MODE: instruction
-PRIORITY: 85
-ACTION: transfer_to_telecaller
-RESPONSE: Do not invent availability or contact information. Use the configured Telecaller transfer action.
-
-RULE: unknown_information_support
-SITUATION: The caller asks for information that is not supported by the published Catalog, FAQ or General Knowledge.
-EXAMPLE: unsupported information | approved answer unavailable | no verified evidence
-MATCH_MODE: any_phrase
-RESPONSE_MODE: instruction
-PRIORITY: 70
-ACTION: transfer_to_telecaller
-RESPONSE: Do not guess. Explain briefly that the information must be verified and use the configured Telecaller transfer action.

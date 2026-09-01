@@ -73,6 +73,51 @@ function identity(value) {
     .replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim();
 }
 
+function missingPublishedValue(value) {
+  if (value === null || value === undefined) return true;
+  if (typeof value === 'string') return value.trim() === '';
+  // Empty structured values can be an authoritative statement that a list or
+  // object has no members. Only an explicitly absent scalar is unpublished.
+  // This distinction prevents valid descriptions from being replaced merely
+  // because an optional structured projection is empty.
+  return false;
+}
+
+function requestedFactSignals(decision) {
+  return [...new Set([
+    decision?.requestType,
+    decision?.stateUpdate?.requestType,
+    ...(decision?.requestedFacts ?? []),
+    ...(decision?.stateUpdate?.requestedFacts ?? []),
+  ].map(identity).filter(Boolean))];
+}
+
+function requestedPublishedFactStatus(decision, selectedEvidence = []) {
+  const signals = requestedFactSignals(decision);
+  if (!signals.length) return Object.freeze({ known: false, unpublished: false });
+  const catalog = catalogSources(selectedEvidence);
+  if (!catalog.length) return Object.freeze({ known: false, unpublished: false });
+
+  const matchingValues = [];
+  for (const source of catalog) {
+    const data = source?.authoritativeData ?? source?.facts ?? {};
+    for (const [key, value] of Object.entries(data)) {
+      const normalizedKey = identity(key);
+      if (!normalizedKey) continue;
+      const matches = signals.some((signal) => (
+        signal === normalizedKey
+        || signal.split(' ').includes(normalizedKey)
+        || normalizedKey.split(' ').includes(signal)
+      ));
+      if (matches) matchingValues.push(value);
+    }
+  }
+  return Object.freeze({
+    known: matchingValues.length > 0,
+    unpublished: matchingValues.length > 0 && matchingValues.every(missingPublishedValue),
+  });
+}
+
 function entitySupportedBySelectedCatalog(entity, selectedEvidence) {
   const requested = new Set([entity?.id, entity?.key, entity?.name].map(identity).filter(Boolean));
   return selectedEvidence.some((source) => {
@@ -244,6 +289,7 @@ export function validatePostLlmResponseAndTool({
   finalizedUtterance = '',
   securityRuntime = {},
   approvedZeroEvidenceResponse = false,
+  approvedConfiguredUnavailableResponse = false,
 } = {}) {
   const invalidScope = selectedEvidence.map((source) => (
     validateEvidenceScope(source, evidenceScope)
@@ -279,9 +325,14 @@ export function validatePostLlmResponseAndTool({
     knownEntities: envelopeEntities,
     finalizedUtterance,
     callerProvidedFields: Object.freeze(callerProvidedFields),
+    allowCrossRecordComparison: String(decision?.stateUpdate?.requestType
+      ?? decision?.requestType ?? '').toLocaleLowerCase() === 'comparison',
   });
 
-  const recommendation = approvedZeroEvidenceResponse
+  const approvedConfiguredSpeech = approvedZeroEvidenceResponse
+    || approvedConfiguredUnavailableResponse;
+
+  const recommendation = approvedConfiguredSpeech
     ? Object.freeze({ answer: decision?.answer ?? '', removed: Object.freeze([]) })
     : removeUnsupportedRecommendationSentences(
       decision?.answer,
@@ -327,7 +378,7 @@ export function validatePostLlmResponseAndTool({
     });
   }
 
-  const claims = approvedZeroEvidenceResponse
+  const claims = approvedConfiguredSpeech
     ? Object.freeze({ valid: true })
     : validateGroundedClaims(
       normalizedDecision?.answer,
@@ -571,6 +622,32 @@ export function applyUnifiedGroundedTurn({
     });
   }
   const selectedEvidence = selectedSources(effectiveDecision, hydratedEnvelope, evidence);
+  const publishedFactStatus = requestedPublishedFactStatus(effectiveDecision, selectedEvidence);
+  if (publishedFactStatus.unpublished
+    && effectiveDecision.decision !== 'action'
+    && !effectiveDecision.toolRequest) {
+    if (!String(zeroEvidenceResponse ?? '').trim()) {
+      return Object.freeze({
+        valid: false, reason: 'information_unavailable_response_unconfigured', state: beforeState,
+      });
+    }
+    effectiveDecision = Object.freeze({
+      ...effectiveDecision,
+      decision: 'answer',
+      answer: String(zeroEvidenceResponse).trim(),
+      spokenAnswer: String(zeroEvidenceResponse).trim(),
+      responseId: null,
+      pendingQuestion: null,
+      toolRequest: null,
+      clarification: null,
+      approvedConfiguredUnavailableResponse: true,
+      flowAction: 'continue',
+      stateUpdate: Object.freeze({
+        ...effectiveDecision.stateUpdate,
+        pendingQuestionRelevant: false,
+      }),
+    });
+  }
   // An explicit latest-turn Catalog match outranks saved conversational
   // context. A contextual record may answer a pronoun/follow-up only when
   // the primary query did not resolve a Catalog item. This prevents a prior
@@ -712,6 +789,8 @@ export function applyUnifiedGroundedTurn({
       activeToolAuthorized: preliminaryAction?.valid === true,
     },
     approvedZeroEvidenceResponse: effectiveDecision.approvedZeroEvidenceResponse === true,
+    approvedConfiguredUnavailableResponse:
+      effectiveDecision.approvedConfiguredUnavailableResponse === true,
   });
   const awaitingConfirmation = postLlmValidation.reason === 'confirmation_required'
     && preliminaryAction?.valid === true;

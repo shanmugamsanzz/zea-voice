@@ -1,7 +1,9 @@
-Q: Hospital எங்க இருக்கு?
+QUESTION: Hospital எங்க இருக்கு?
+INTENT_CLASS: KNOWN_INFORMATION
 ALIASES: location சொல்லுங்க | address என்ன? | hospital எப்படி வரணும்? | where is the hospital?
-A: Shanmuga Hospital, 24 Sarada College Road, LRN Colony, Chinna Pudur, Salem 636007ல இருக்கு; Hasthampatti bridgeக்கு கீழே left side.
+ANSWER: Shanmuga Hospital, 24 Sarada College Road, LRN Colony, Chinna Pudur, Salem 636007ல இருக்கு; Hasthampatti bridgeக்கு கீழே left side.
 
-Q: நீங்க AIயா?
+QUESTION: நீங்க AIயா?
+INTENT_CLASS: KNOWN_INFORMATION
 ALIASES: AI agent ஆ? | human ஆ? | robot ஆ? | real person ஆ?
-A: ஆமாங்க, நான் Shanmuga Hospital AI agent கார்த்திகா பேசுறேன்.
+ANSWER: ஆமாங்க, நான் Shanmuga Hospital AI agent கார்த்திகா பேசுறேன்.

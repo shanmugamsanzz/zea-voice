@@ -31,8 +31,8 @@ const candidate = (recordId, rank, score, overrides = {}) => ({
 const retrieval = {
   tenantId, agentId, callId,
   channels: {
-    structured: [candidate(ids[0], 1, 1), candidate(ids[1], 2, 0.9), candidate(ids[2], 3, 0.8)],
-    bm25: [candidate(ids[1], 1, 7), candidate(ids[0], 2, 6), candidate(ids[3], 3, 5)],
+    structured: [candidate(ids[0], 1, 1), candidate(ids[1], 2, 0.98), candidate(ids[2], 3, 0.8)],
+    bm25: [candidate(ids[1], 1, 0.99), candidate(ids[0], 2, 0.97), candidate(ids[3], 3, 0.7)],
     qdrant: [
       candidate(ids[1], 1, 0.95),
       candidate(ids[4], 2, 0.9),
@@ -157,8 +157,23 @@ const relevantWorkflowFusion = fuseCandidateRankings({
     qdrant: [{ ...unrelatedWorkflow, score: 0.95 }],
   },
 });
-assert.equal(relevantWorkflowFusion.candidates.length, 1,
-  'A caller-facing Workflow with strong independent retrieval support must remain eligible');
+assert.equal(relevantWorkflowFusion.candidates.length, 0,
+  'A Workflow must not become applicable from semantic corroboration alone');
+
+const reservedWorkflowFusion = fuseCandidateRankings({
+  tenantId, agentId, callId, recordTypes: ['WORKFLOW_RULE'],
+  primaryNamespaces: ['WORKFLOW'],
+  queryContext: { reservedRecords: [{
+    recordId: ids[3], recordType: 'WORKFLOW_RULE', reason: 'latest_request_record',
+  }] },
+  channels: {
+    structured: [unrelatedWorkflow],
+    bm25: [unrelatedWorkflow],
+    qdrant: [{ ...unrelatedWorkflow, score: 0.95 }],
+  },
+});
+assert.equal(reservedWorkflowFusion.candidates.length, 1,
+  'An explicitly applicable Workflow reservation must survive fusion');
 
 const namespaceRankFusion = fuseCandidateRankings({
   tenantId, agentId, callId, recordTypes: ['CATALOG_ITEM'],
@@ -227,16 +242,20 @@ const contextRunner = async (auth, callback) => {
       assert.equal(new Set(requestedIds).size, requestedIds.length);
       assert.ok(requested.every((entry) => entry.publication_revision === 4));
       const byId = new Map(requested.map((entry) => [entry.record_id, entry]));
-      return { rows: [
-        row(ids[2], byId.get(ids[2]).rank, byId.get(ids[2]).rrf_score, 'different-item', 'Different item', 30),
-        row(ids[0], byId.get(ids[0]).rank, byId.get(ids[0]).rrf_score, 'shared-item', 'Shared item', 10),
-        row(ids[1], byId.get(ids[1]).rank, byId.get(ids[1]).rrf_score, 'shared-item', 'Shared item', 20),
-        row(ids[3], byId.get(ids[3]).rank, byId.get(ids[3]).rrf_score,
-          'fourth-item', 'Fourth item', 40),
-        { ...row(ids[4], byId.get(ids[4]).rank, byId.get(ids[4]).rrf_score,
-          'fifth-item', 'Fifth item', 50),
-        knowledge_base_id: byId.get(ids[4]).knowledge_base_id },
-      ] };
+      const definitions = new Map([
+        [ids[0], ['shared-item', 'Shared item', 10]],
+        [ids[1], ['shared-item', 'Shared item', 20]],
+        [ids[2], ['different-item', 'Different item', 30]],
+        [ids[3], ['fourth-item', 'Fourth item', 40]],
+        [ids[4], ['fifth-item', 'Fifth item', 50]],
+      ]);
+      return { rows: requested.map((entry) => {
+        const [itemKey, name, price] = definitions.get(entry.record_id);
+        return {
+          ...row(entry.record_id, entry.rank, entry.rrf_score, itemKey, name, price),
+          knowledge_base_id: entry.knowledge_base_id,
+        };
+      }) };
     },
   });
 };
@@ -334,7 +353,8 @@ const hydrated = await rankAndHydrateAuthoritativeEvidence({
 
 assert.equal(queryCount, 1, 'Hydration must execute exactly one PostgreSQL query');
 assert.equal(hydrated.hydrationQueryCount, 1);
-assert.equal(hydrated.evidence.length, 5);
+assert.equal(hydrated.evidence.length, 2,
+  'Hydration must receive only the relevant subset, not five padded records');
 assert.equal(hydrated.verifiedRecords, hydrated.evidence,
   'The verified hydration result must be the evidence package source');
 assert.deepEqual(hydrated.evidence.map((entry) => entry.rank),
@@ -357,8 +377,8 @@ assert.equal(hydrated.evidence.every((entry) => (
 assert.equal(hydrated.ambiguity.detected, true);
 assert.equal(hydrated.conflict.detected, true);
 assert.equal(hydrated.conflict.conflicts[0].identity, 'catalog:options:shared item');
-assert.ok(requestedIds.includes(ids[4]),
-  'A separately scoped canonical identity must reach authoritative PostgreSQL validation');
+assert.equal(requestedIds.includes(ids[4]), false,
+  'A lower-relevance candidate must not be hydrated merely to fill five positions');
 assert.deepEqual(hydrated.rejectedRecordIds, [],
   'Every selected top-five identity must hydrate and verify in the same query');
 
@@ -418,7 +438,7 @@ const nearTiedAmbiguity = detectEntityAmbiguity(hydrated.evidence, {
 }, {
   action: 'CONFIRM', candidateNamespace: 'CATALOG', candidate: semanticCandidate,
   routingCandidates: [semanticCandidate, nearTiedCandidate, {
-    ...nearTiedCandidate, recordId: hydrated.evidence[2].recordId,
+    ...nearTiedCandidate, recordId: ids[8],
     recordType: 'FAQ', label: 'Foreign namespace candidate', score: 0.779,
   }],
 });

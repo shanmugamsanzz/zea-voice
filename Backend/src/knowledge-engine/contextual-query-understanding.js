@@ -2,7 +2,7 @@ import { typedRecordIdentityKey } from './canonical-record-identity.js';
 import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/knowledge-confidence-config.js';
 import { compactNeedContext } from './published-use-case-signals.js';
 
-export const CONTEXTUAL_QUERY_UNDERSTANDING_VERSION = 3;
+export const CONTEXTUAL_QUERY_UNDERSTANDING_VERSION = 4;
 
 const catalogRecordTypes = new Set(['CATALOG_ITEM', 'CATALOG_CATEGORY']);
 const catalogEntityTypes = new Set(['ITEM', 'CATEGORY']);
@@ -189,6 +189,18 @@ function activeMemoryEntity(memory = {}) {
   return null;
 }
 
+function sameCanonicalEntity(left, right) {
+  if (!left || !right) return false;
+  const leftRecordId = normalized(left.recordId ?? left.id);
+  const rightRecordId = normalized(right.recordId ?? right.id);
+  if (leftRecordId && rightRecordId) return leftRecordId === rightRecordId;
+  const leftKey = normalized(left.key ?? left.itemKey ?? left.categoryKey);
+  const rightKey = normalized(right.key ?? right.itemKey ?? right.categoryKey);
+  return Boolean(leftKey && rightKey && leftKey === rightKey
+    && String(left.entityType ?? '').toLocaleUpperCase()
+      === String(right.entityType ?? '').toLocaleUpperCase());
+}
+
 function ambiguityFor(resolution, explicitCandidates, confidenceConfiguration) {
   const relevant = explicitCandidates.length
     ? explicitCandidates
@@ -282,7 +294,10 @@ export function understandContextualKnowledgeQuery(input, resolution) {
   // stale memory even though it cannot become canonical memory until the
   // caller confirms it and validation succeeds.
   const hasCurrentEntitySignal = mentionedCandidates.length > 0;
-  const hasCurrentNonCatalogSignal = Boolean(currentRouteSignal);
+  // Medium-confidence fuzzy routes are retrieval candidates, not proof that
+  // the caller changed topic. Only a high-confidence published route may
+  // displace canonical memory before the grounded LLM interprets the turn.
+  const hasAuthoritativeCurrentRoute = Boolean(route);
   const suppliedContextSignal = requestedFacts.length > 0
     || (input.contextualReferences?.length ?? 0) > 0;
   // Published workflows can describe the fact/action requested for the active
@@ -300,7 +315,7 @@ export function understandContextualKnowledgeQuery(input, resolution) {
     && hasRememberedContext
     && (suppliedContextSignal
       || workflowContextSignal
-      || !hasCurrentNonCatalogSignal
+      || !hasAuthoritativeCurrentRoute
       || Boolean(input.memory?.pendingClarification)
       || Boolean(input.memory?.activeTool));
   const contextualReferences = unique([
@@ -330,7 +345,7 @@ export function understandContextualKnowledgeQuery(input, resolution) {
   const need = compactNeedContext({
     input,
     hasCurrentEntitySignal,
-    hasCurrentRouteSignal: hasCurrentNonCatalogSignal,
+    hasCurrentRouteSignal: hasAuthoritativeCurrentRoute,
   });
   const canonicalContext = explicitCandidates.length > 0 && !ambiguity.detected
     ? candidateSummary(explicitCandidates[0], confidenceConfiguration)
@@ -343,6 +358,36 @@ export function understandContextualKnowledgeQuery(input, resolution) {
         : (hasCurrentEntitySignal ? 'ENTITY_REQUEST'
           : (contextDependent ? 'CONTEXTUAL_FOLLOW_UP'
             : (need.detected ? 'NEED_BASED_REQUEST' : 'UNRESOLVED')))));
+  const currentCanonicalCandidates = mentionedCandidates
+    .map((candidate) => candidateSummary(candidate, confidenceConfiguration))
+    .filter(Boolean).slice(0, 5);
+  const explicitCanonicalCandidate = explicitEntities[0] ?? explicitCategories[0] ?? null;
+  const possibleCorrection = Boolean(
+    memoryEntity && explicitCanonicalCandidate
+      && !sameCanonicalEntity(memoryEntity, explicitCanonicalCandidate),
+  );
+  const meaning = Object.freeze({
+    interpretationAuthority: 'GROUNDED_LLM',
+    latestQuestion: clean(input.latestQuestion ?? input.utterance, 2_000),
+    intentHint,
+    explicitEntity: explicitEntities[0] ?? null,
+    explicitCategory: explicitCategories[0] ?? null,
+    contextualEntity: contextDependent ? memoryEntity : null,
+    requestedFact: requestedFacts[0] ?? null,
+    requestedFactInterpretationRequired: requestedFacts.length === 0,
+    comparisonRequested,
+    comparisonEntities: Object.freeze(comparisonCandidates
+      .map((candidate) => candidateSummary(candidate, confidenceConfiguration))
+      .filter(Boolean).slice(0, 5)),
+    actionIntent,
+    correction: Object.freeze({
+      possible: possibleCorrection,
+      interpretationRequired: possibleCorrection,
+      previousEntity: possibleCorrection ? memoryEntity : null,
+      currentCandidates: possibleCorrection
+        ? Object.freeze(currentCanonicalCandidates) : Object.freeze([]),
+    }),
+  });
   return Object.freeze({
     version: CONTEXTUAL_QUERY_UNDERSTANDING_VERSION,
     role: 'RETRIEVAL_MEANING_HINTS',
@@ -380,6 +425,7 @@ export function understandContextualKnowledgeQuery(input, resolution) {
     currentRouteSignal: currentRouteSignal
       ? candidateSummary(currentRouteSignal, confidenceConfiguration) : null,
     protocolPriority: protocolRoute,
+    meaning,
   });
 }
 

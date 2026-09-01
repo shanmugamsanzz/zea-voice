@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { genericConversationStateFields, openGenericConversationState } from '../src/voice/interaction/generic-conversation-state.js';
 import { deterministicSourceEntry } from '../src/knowledge-engine/deterministic-source-mapping.js';
 import { applyUnifiedGroundedTurn as applyVerifiedGroundedTurn } from '../src/voice/interaction/unified-grounded-turn.js';
+import { validateGroundedClaim } from '../src/voice/interaction/grounded-claim-validator.js';
 
 function applyUnifiedGroundedTurn(input) {
   const scopedRevision = input.evidenceScope?.publicationRevisions?.[0] ?? {};
@@ -139,6 +140,74 @@ const completePriceTurn = applyUnifiedGroundedTurn({
 assert.equal(completePriceTurn.valid, true,
   'compact LLM evidence must be validated against the complete hydrated PostgreSQL record');
 assert.deepEqual(completePriceTurn.evidenceIds, ['source-price']);
+
+assert.equal(validateGroundedClaim(
+  'Premium Option costs INR 9,999.', [completePriceEvidence],
+).reason, 'unsupported_numeric_fact');
+assert.equal(validateGroundedClaim(
+  'Premium Option has a minimum age of 18.', [completePriceEvidence],
+).reason, 'unsupported_numeric_fact');
+assert.equal(validateGroundedClaim(
+  'Premium Option includes MRI.', [completePriceEvidence],
+).reason, 'unsupported_structured_fact');
+const separateCatalogEvidence = [{
+  ...completePriceEvidence,
+}, {
+  ...completePriceEvidence,
+  id: 'published-standard-1', recordId: 'catalog-standard-1',
+  authoritativeData: { itemKey: 'standard-option', name: 'Standard Option' },
+}];
+assert.equal(validateGroundedClaim(
+  'Premium Option includes Standard Option.', separateCatalogEvidence,
+).reason, 'unsupported_catalog_relationship');
+assert.equal(validateGroundedClaim(
+  'Premium Option and Standard Option are different options.', separateCatalogEvidence,
+  { allowCrossRecordComparison: true },
+).valid, true);
+
+const unavailableFactMemory = openGenericConversationState(
+  { ...identity, callId: 'call-unpublished-price' }, {}, 1,
+);
+unavailableFactMemory.beginTurn('turn-unpublished-price');
+const unpublishedPriceEvidence = {
+  ...completePriceEvidence,
+  id: 'published-price-unavailable', recordId: 'catalog-price-unavailable',
+  authoritativeData: {
+    ...completePriceEvidence.authoritativeData,
+    itemKey: 'unpriced-option', name: 'Unpriced Option', price: null,
+  },
+};
+const unavailableFactTurn = applyUnifiedGroundedTurn({
+  rawDecision: unifiedDecision({
+    decision: 'answer', answer: 'Unpriced Option costs INR 9,999.',
+    evidenceIds: ['source-unpriced'],
+    stateUpdate: { requestType: 'price', requestedFacts: ['price'] },
+    pendingQuestion: null, toolRequest: null,
+  }),
+  groundingEnvelope: {
+    found: true,
+    sources: [{
+      id: 'source-unpriced', publishedEvidenceId: unpublishedPriceEvidence.id,
+      recordId: unpublishedPriceEvidence.recordId, recordType: 'CATALOG_ITEM',
+      content: 'Approved option with no published price.', callerFacing: true,
+    }],
+    entities: [{
+      id: unpublishedPriceEvidence.recordId, key: 'unpriced-option',
+      name: 'Unpriced Option', sourceId: 'source-unpriced',
+    }],
+  },
+  memory: unavailableFactMemory, turnToken: 'turn-unpublished-price',
+  evidence: [unpublishedPriceEvidence],
+  finalizedUtterance: 'What is the Unpriced Option price?',
+  zeroEvidenceResponse: 'That requested information is not published.',
+  evidenceScope: {
+    tenantId: 'tenant-a', agentId: 'agent-a', requireHydratedEvidence: true,
+    publicationRevisions: [{ knowledgeBaseId: 'kb-a', publicationRevision: 7 }],
+  },
+});
+assert.equal(unavailableFactTurn.valid, true);
+assert.equal(unavailableFactTurn.answer, 'That requested information is not published.');
+unavailableFactMemory.close();
 
 const clarifyMemory = openGenericConversationState(
   { ...identity, callId: 'call-genuine-ambiguity' }, {}, 1,
@@ -1207,14 +1276,15 @@ assert.equal(inventedField.reason, 'unsupported_caller_value');
 assert.deepEqual(inventedField.state.collectedInformation, {});
 
 const bookingFields = [
-  { key: 'contact_name', label: 'Name', type: 'text', required: true, requiredAction: 'create_request', question: 'Name?' },
-  { key: 'age', label: 'Age', type: 'number', required: true, requiredAction: 'create_request', question: 'Age?' },
-  { key: 'visit_date', label: 'Date', type: 'text', required: true, requiredAction: 'create_request', question: 'Date?' },
-  { key: 'visit_time', label: 'Time', type: 'text', required: true, requiredAction: 'create_request', question: 'Time?' },
-  { key: 'selected_service', label: 'Service', type: 'text', required: true, requiredAction: 'create_request', question: 'Service?' },
+  { key: 'contact_name', label: 'Name', type: 'text', required: true, requiredAction: 'create_appointment', question: 'Name?' },
+  { key: 'age', label: 'Age', type: 'number', required: true, requiredAction: 'create_appointment', question: 'Age?' },
+  { key: 'visit_date', label: 'Date', type: 'text', required: true, requiredAction: 'create_appointment', question: 'Date?' },
+  { key: 'visit_time', label: 'Time', type: 'text', required: true, requiredAction: 'create_appointment', question: 'Time?' },
+  { key: 'selected_service', label: 'Service', type: 'text', required: true, requiredAction: 'create_appointment', question: 'Service?' },
 ];
 const bookingTool = {
   ...actionTool,
+  id: 'appointment-tool', name: 'create_appointment',
   configuration: {
     inputSchema: {
       type: 'object', additionalProperties: false,
@@ -1225,8 +1295,22 @@ const bookingTool = {
     },
   },
 };
+const bookingActionEvidence = actionEvidence.map((source) => (
+  source.recordType === 'WORKFLOW_RULE'
+    ? {
+      ...source,
+      authoritativeData: {
+        ...source.authoritativeData,
+        actionConfig: {
+          ...source.authoritativeData.actionConfig,
+          toolIdentifier: 'create_appointment',
+        },
+      },
+    }
+    : source
+));
 const confirmationConfiguration = {
-  enabled: true, intent: 'create_request',
+  enabled: true, intent: 'create_appointment',
   requiredFields: bookingFields.map((field) => field.key),
   confirmationMessage: 'Are these details correct?',
   requiresCatalogItem: true, catalogField: 'selected_service',
@@ -1245,18 +1329,18 @@ const sameTurnDetails = applyUnifiedGroundedTurn({
         selected_service: 'Priority service',
       },
       correctedFields: [], pendingQuestionRelevant: false,
-      activeToolRequest: { name: 'create_request' },
+      activeToolRequest: { name: 'create_appointment' },
     },
     pendingQuestion: null,
     toolRequest: {
-      name: 'create_request', arguments: {
+      name: 'create_appointment', arguments: {
         contact_name: 'Asha', age: 21, visit_date: 'tomorrow', visit_time: '11 AM',
         selected_service: 'Priority service',
       },
     },
   }),
   groundingEnvelope: actionEnvelope, memory: bookingMemory, turnToken: 'booking-details-turn',
-  fieldSchemas: bookingFields, tools: [bookingTool], evidence: actionEvidence, evidenceScope,
+  fieldSchemas: bookingFields, tools: [bookingTool], evidence: bookingActionEvidence, evidenceScope,
   finalizedUtterance: 'Book Priority service for Asha age 21 tomorrow at 11 AM.',
   confirmationConfiguration,
 });
@@ -1276,11 +1360,11 @@ const confirmedAction = applyUnifiedGroundedTurn({
     stateUpdate: {
       currentTopic: 'priority service request', knownEntityKeys: [],
       collectedInformation: {}, correctedFields: [], pendingQuestionRelevant: false,
-      activeToolRequest: { name: 'create_request' },
+      activeToolRequest: { name: 'create_appointment' },
     },
     pendingQuestion: null,
     toolRequest: {
-      name: 'create_request', arguments: {
+      name: 'create_appointment', arguments: {
         contact_name: 'Asha', age: 21, visit_date: 'tomorrow', visit_time: '11 AM',
         selected_service: 'Priority service',
       },
@@ -1292,7 +1376,7 @@ const confirmedAction = applyUnifiedGroundedTurn({
   finalizedUtterance: 'Yes, confirm it.', confirmationConfiguration,
 });
 assert.equal(confirmedAction.valid, true);
-assert.equal(confirmedAction.toolRequest.name, 'create_request');
+assert.equal(confirmedAction.toolRequest.name, 'create_appointment');
 assert.deepEqual(confirmedAction.toolRequest.arguments, {
   contact_name: 'Asha', age: 21, visit_date: 'tomorrow', visit_time: '11 AM',
   selected_service: 'Priority service',

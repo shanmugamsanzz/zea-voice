@@ -430,6 +430,9 @@ export function groundedDecisionContract(envelope, runtime = {}) {
         : (unavailableResponse
           ? `No caller-facing evidence is available. RESPONSE is permitted only with this exact configured information-unavailable speech: ${JSON.stringify(unavailableResponse)}`
           : 'No caller-facing evidence is available. Do not return RESPONSE; use a targeted CLARIFY or an authorized TOOL.'),
+      unavailableResponse
+        ? `If the caller requests a fact whose authoritative field is absent or unpublished, use this exact configured information-unavailable speech and do not invent a value or ask an unrelated clarification: ${JSON.stringify(unavailableResponse)}`
+        : 'If a requested authoritative fact is absent or unpublished, do not invent it.',
       'When naming a resolved Catalog entity or category, use its canonical name from authoritativeData; caller aliases are for understanding, not factual display names.',
       'Do not recommend or claim that an item is suitable for symptoms, conditions, or personal needs unless the selected evidence explicitly authorizes that recommendation.',
       'A relationship-backed screening suggestion must be presented as a published relationship, not a diagnosis or guarantee, and must say that a qualified professional must confirm personal medical suitability.',
@@ -444,6 +447,7 @@ export function groundedDecisionContract(envelope, runtime = {}) {
       'Interpret the complete current question with only the supplied relevant call memory and published evidence.',
       'For need-based questions without a named entity, infer the caller context, problem, desired outcome and whether a recommendation is requested from the supplied need context and recent turns. Select an option only when its hydrated Catalog metadata explicitly supports that use case; otherwise ask one targeted question for the missing detail.',
       'Interpret the requested fact, explicit entities, comparison entities, contextual references and action intent from the supplied input; do not echo internal interpretation state.',
+      'Interpret the latest finalized utterance before using older turns. Distinguish a correction of the active entity or collected value from a new topic, and distinguish both from a contextual follow-up. Use correctedFields only for configured values the caller actually corrected.',
       'If the latest question omits an entity but relevant call memory contains an active canonical entity or category, interpret contextual requested facts against that remembered record and select its permitted source.',
       'If a requested fact requires an entity and neither the latest question nor relevant call memory and evidence identify one, return a targeted CLARIFY question; never select an arbitrary evidence record.',
       'The latest explicit entity or category replaces a stale remembered topic. Use remembered entities only when the current question genuinely depends on context.',

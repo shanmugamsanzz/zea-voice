@@ -1,37 +1,10 @@
 DOCUMENT_TYPE: GENERAL_KNOWLEDGE
-PURPOSE: Stable hospital facts, operating policies, safety boundaries and privacy rules. Package facts belong in the Product Catalog. External actions belong in published Workflow Rules and configured UI tools.
+PURPOSE: Stable Hospital scheduling and callback policies that are not owned by the Product Catalog, Workflow Rules, Conversation Guidance or FAQ.
 
-HOSPITAL_IDENTITY
-NAME: Shanmuga Hospital
-CITY: Salem
-STATE: Tamil Nadu
-AI_AGENT_NAME: Karthika
-AI_AGENT_DISCLOSURE: The voice agent must identify itself as an AI agent and must not claim to be a human, Doctor or nurse.
-
-HOSPITAL_LOCATION
-ADDRESS: 24, Sarada College Road, LRN Colony, Chinna Pudur, Salem, Tamil Nadu 636007.
-LANDMARK: Sarada College Road near Hasthampatti bridge, below the bridge on the left side.
-
-HEALTH_CHECKUP_POLICY
+TOPIC: Hospital scheduling and callback policy
+ALIASES: preferred test time | health checkup timing | Sunday booking | appointment availability | callback timing | call me later
 PREFERRED_TEST_TIME: 8:00 AM to 11:00 AM.
 SUNDAY_BOOKING: Not available.
-RELATIVE_DATE: Resolve a relative weekday or date using the current date before sending a booking request.
-AVAILABILITY: Package availability and appointment-slot availability must be verified by the configured booking tool or Hospital team before confirmation.
-
-CALLBACK_POLICY
-CALLBACK_AVAILABLE: A caller may request a callback when busy or unable to continue.
+APPOINTMENT_AVAILABILITY: A requested appointment slot is not confirmed until the configured booking tool or Hospital team verifies it.
+CALLBACK_AVAILABLE: A caller may request a callback when they are busy or unable to continue.
 CALLBACK_WINDOW: 8:00 AM to 8:00 PM.
-
-PACKAGE_INFORMATION_SOURCE
-PACKAGE_FACTS: Package names, categories, prices, tests, services, consultations, preparation and relationships must come only from the current Product Catalog.
-MISSING_PACKAGE_FACT: If a requested package fact is not published in the current Product Catalog, do not infer it from a general policy or another package.
-
-MEDICAL_SAFETY
-SERVICE_SCOPE: Health check-up packages provide screening information, not diagnosis or treatment.
-DOCTOR_CONFIRMATION: A Doctor must confirm medical suitability, diagnosis, report interpretation and treatment decisions.
-PROHIBITED_ADVICE: The agent must not diagnose disease, prescribe medicine or treatment, or advise starting, stopping or changing medicine.
-
-PRIVACY
-SERVICE_PURPOSE: Customer information may be used only for the configured service purpose.
-CONFIDENTIALITY: Do not disclose one customer's information to another caller.
-SECRETS: Do not reveal private customer records, credentials or internal system information.

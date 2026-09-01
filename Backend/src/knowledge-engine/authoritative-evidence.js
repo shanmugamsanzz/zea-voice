@@ -7,7 +7,7 @@ import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/know
 import { collectCanonicalRetrievalReservations } from './canonical-retrieval-reservations.js';
 import { publicationDuplicateKeys } from './publication-deduplication.js';
 
-export const AUTHORITATIVE_EVIDENCE_VERSION = 5;
+export const AUTHORITATIVE_EVIDENCE_VERSION = 6;
 
 const supportedRecordTypes = new Set([
   'CATALOG_ITEM', 'CATALOG_CATEGORY', 'FAQ', 'CONVERSATION_NODE', 'WORKFLOW_RULE', 'KNOWLEDGE_CHUNK',
@@ -309,6 +309,7 @@ export function fuseCandidateRankings(retrieval, {
   limit = 5,
   minProviderScore = resolveKnowledgeConfidenceConfiguration().clarificationConfidence,
   highProviderScore = resolveKnowledgeConfidenceConfiguration().highConfidence,
+  relevanceScoreMargin = resolveKnowledgeConfidenceConfiguration().ambiguityMargin,
   allowedRecordTypes = retrieval?.recordTypes ?? null,
   reservedRecordIds = [],
   reservedRecordKeys = [],
@@ -322,6 +323,10 @@ export function fuseCandidateRankings(retrieval, {
   }
   if (!Number.isFinite(highProviderScore) || highProviderScore < minProviderScore) {
     throw new TypeError('RRF high provider score must be at least the minimum provider score');
+  }
+  if (!Number.isFinite(relevanceScoreMargin)
+    || relevanceScoreMargin < 0 || relevanceScoreMargin > 1) {
+    throw new TypeError('RRF relevance score margin must be between zero and one');
   }
   const allowedTypes = Array.isArray(allowedRecordTypes) && allowedRecordTypes.length
     ? new Set(allowedRecordTypes.map((value) => String(value).toUpperCase())) : null;
@@ -410,6 +415,7 @@ export function fuseCandidateRankings(retrieval, {
   const rejectedUnrelatedWorkflowIds = [];
   const rejectedUnrelatedCatalogIds = [];
   const rejectedUnrelatedNamespaceIds = [];
+  const rejectedBelowRelevanceBandIds = [];
   const reservations = retrieval?.queryContext?.reservedRecords ?? [];
   const focusedCatalogReasons = new Set([
     'explicit_entity', 'explicit_current_entity', 'canonical_memory', 'latest_request_record',
@@ -422,6 +428,18 @@ export function fuseCandidateRankings(retrieval, {
   const broadCatalogRequest = ['CATEGORY_OVERVIEW', 'COMPARISON_COMPLEX'].includes(
     String(retrieval?.intentClass ?? '').toUpperCase(),
   ) || retrieval?.queryContext?.need?.requestedRecommendation === true;
+  const strongestProviderScore = (candidate) => Math.max(
+    0, ...Object.values(candidate.providerScores),
+  );
+  const bestScoreByNamespace = new Map();
+  for (const candidate of accepted) {
+    if (reservedCandidate(candidate) || candidate.callerFacingHint !== true
+      || candidate.recordType === 'WORKFLOW_RULE') continue;
+    bestScoreByNamespace.set(candidate.namespace, Math.max(
+      bestScoreByNamespace.get(candidate.namespace) ?? 0,
+      strongestProviderScore(candidate),
+    ));
+  }
   const ordinary = accepted.filter((candidate) => {
     if (reservedCandidate(candidate)) return false;
     if (['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(candidate.recordType)
@@ -429,19 +447,18 @@ export function fuseCandidateRankings(retrieval, {
       rejectedUnrelatedCatalogIds.push(normalizeId(candidate.recordId));
       return false;
     }
-    const strongestProviderScore = Math.max(0, ...Object.values(candidate.providerScores));
+    const providerScore = strongestProviderScore(candidate);
     const inPrimaryNamespace = primaryNamespaceOrder.size === 0
       || primaryNamespaceOrder.has(candidate.namespace);
     const stronglyCorroboratedFallback = candidate.callerFacingHint === true
       && candidate.channels.length > 1
-      && strongestProviderScore >= highProviderScore;
+      && providerScore >= highProviderScore;
     // Internal guidance and Workflow instructions are authorization context,
     // not spare caller-facing evidence. They enter the five-record package
-    // only through an explicit/latest action reservation or when strongly
-    // corroborated by independent retrieval channels.
+    // only through an explicit/latest action reservation or an active-tool
+    // authorization hint. Similar wording alone must never activate a rule.
     if (candidate.recordType === 'WORKFLOW_RULE') {
-      const relevantCallerWorkflow = candidate.authorizationHint === true
-        || stronglyCorroboratedFallback;
+      const relevantCallerWorkflow = candidate.authorizationHint === true;
       if (!relevantCallerWorkflow) {
         rejectedUnrelatedWorkflowIds.push(normalizeId(candidate.recordId));
       }
@@ -449,6 +466,15 @@ export function fuseCandidateRankings(retrieval, {
     }
     if (candidate.callerFacingHint !== true) {
       rejectedUnrelatedNamespaceIds.push(normalizeId(candidate.recordId));
+      return false;
+    }
+    const namespaceBestScore = bestScoreByNamespace.get(candidate.namespace) ?? providerScore;
+    const insideLatestRequestBand = providerScore
+      >= Math.max(minProviderScore, namespaceBestScore - relevanceScoreMargin);
+    const independentlyRelevant = providerScore >= highProviderScore
+      || (candidate.channels.length > 1 && providerScore >= minProviderScore);
+    if (!insideLatestRequestBand || !independentlyRelevant) {
+      rejectedBelowRelevanceBandIds.push(normalizeId(candidate.recordId));
       return false;
     }
     // Namespaces not signalled by the latest interpreted request are recovery
@@ -511,6 +537,7 @@ export function fuseCandidateRankings(retrieval, {
     rejectedUnrelatedCatalogIds: Object.freeze(rejectedUnrelatedCatalogIds),
     rejectedUnrelatedWorkflowIds: Object.freeze(rejectedUnrelatedWorkflowIds),
     rejectedUnrelatedNamespaceIds: Object.freeze(rejectedUnrelatedNamespaceIds),
+    rejectedBelowRelevanceBandIds: Object.freeze(rejectedBelowRelevanceBandIds),
     reservedRecordIds: Object.freeze(reservedIds),
     missingReservedRecordIds: Object.freeze(reservedIds.filter((id) => !selectedIds.has(id))),
     reservedRecordKeys: Object.freeze([...reservedKeys]),
@@ -839,6 +866,7 @@ export async function rankAndHydrateAuthoritativeEvidence({
     limit,
     minProviderScore: effectiveMinProviderScore,
     highProviderScore: confidenceConfiguration.highConfidence,
+    relevanceScoreMargin: confidenceConfiguration.ambiguityMargin,
     allowedRecordTypes: retrieval?.recordTypes,
     reservedRecordIds,
     reservedRecordKeys,

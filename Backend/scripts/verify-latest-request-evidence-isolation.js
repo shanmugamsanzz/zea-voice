@@ -69,10 +69,49 @@ assert.equal(focusedFusion.candidates.some((entry) => (
 )), false, 'Internal Workflow evidence must not enter the caller-facing top five');
 assert.equal(focusedFusion.candidates.some((entry) => (
   entry.recordId === callerWorkflow.recordId
-)), true, 'Strong caller-facing Workflow evidence may support the latest request');
+)), false, 'Unreserved Workflow evidence must not enter the grounded package');
 assert.deepEqual(focusedFusion.rejectedUnrelatedCatalogIds, [unrelatedCatalog.recordId]);
-assert.deepEqual(focusedFusion.rejectedUnrelatedWorkflowIds, [internalWorkflow.recordId]);
-assert.ok(focusedFusion.candidates.length <= 5);
+assert.deepEqual(focusedFusion.rejectedUnrelatedWorkflowIds, [
+  internalWorkflow.recordId, callerWorkflow.recordId,
+]);
+assert.ok(focusedFusion.candidates.length < 5,
+  'Five records are a maximum; unrelated records must not be used as padding');
+
+const applicableWorkflowFusion = fuseCandidateRankings(retrieval({
+  reservations: [
+    focusedReservation,
+    { recordId: callerWorkflow.recordId, recordType: 'WORKFLOW_RULE', reason: 'latest_request_record' },
+  ],
+}), { limit: 5, minProviderScore: 0, highProviderScore: 0.86 });
+assert.equal(applicableWorkflowFusion.candidates.some((entry) => (
+  entry.recordId === callerWorkflow.recordId
+)), true, 'An applicable reserved Workflow must remain available for authorization');
+
+const topFaq = candidate('faq-latest', 'FAQ', 0.99);
+const unrelatedFaq = candidate('faq-unrelated', 'FAQ', 0.88);
+const latestIntentFusion = fuseCandidateRankings(Object.freeze({
+  ...scope,
+  intentClass: 'KNOWN_INFORMATION',
+  recordTypes: Object.freeze(['FAQ']),
+  primaryNamespaces: Object.freeze(['FAQ']),
+  queryContext: Object.freeze({ reservedRecords: Object.freeze([]), need: Object.freeze({}) }),
+  channels: Object.freeze({
+    structured: Object.freeze([]),
+    bm25: Object.freeze([]),
+    qdrant: Object.freeze([
+      Object.freeze({ ...topFaq, channel: 'qdrant', rank: 1, namespaceRank: 1 }),
+      Object.freeze({ ...unrelatedFaq, channel: 'qdrant', rank: 2, namespaceRank: 2 }),
+    ]),
+  }),
+}), {
+  limit: 5, minProviderScore: 0.64, highProviderScore: 0.86, relevanceScoreMargin: 0.06,
+});
+assert.deepEqual(latestIntentFusion.candidates.map((entry) => entry.recordId), [
+  topFaq.recordId,
+], 'Only records inside the latest-request relevance band may reach hydration');
+assert.deepEqual(latestIntentFusion.rejectedBelowRelevanceBandIds, [
+  unrelatedFaq.recordId,
+]);
 
 const comparisonFusion = fuseCandidateRankings(retrieval({
   intentClass: 'COMPARISON_COMPLEX',
@@ -98,6 +137,8 @@ console.log(JSON.stringify({
   passed: true,
   focusedCatalogIsolation: true,
   workflowIsolation: true,
+  applicableWorkflowReservation: true,
+  latestRequestRelevanceBand: true,
   comparisonReservationsPreserved: true,
   recommendationCandidatesPreserved: true,
   maximumVerifiedRecords: 5,

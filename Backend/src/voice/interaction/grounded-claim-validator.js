@@ -203,6 +203,44 @@ function relationshipRecommendationSupport(sources, utterance) {
   });
 }
 
+function catalogIdentityGroups(sources = []) {
+  return sources.flatMap((source) => {
+    const recordType = String(source?.recordType ?? '').toLocaleUpperCase();
+    if (!['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(recordType)) return [];
+    const data = source?.authoritativeData ?? source?.facts ?? {};
+    const identities = [
+      source?.recordId,
+      data.itemKey, data.name, data.categoryKey, data.category,
+      ...(Array.isArray(data.aliases) ? data.aliases : []),
+      ...(Array.isArray(data.categoryAliases) ? data.categoryAliases : []),
+      ...(Array.isArray(data.children) ? data.children.flatMap((child) => [
+        child?.recordId, child?.itemKey, child?.name,
+        ...(Array.isArray(child?.aliases) ? child.aliases : []),
+      ]) : []),
+    ].map(identity).filter((value) => value.length >= 3);
+    return identities.length ? [{ source, identities: [...new Set(identities)] }] : [];
+  });
+}
+
+function unsupportedCatalogRelationship(claim, sources, options = {}) {
+  if (options.allowCrossRecordComparison === true) return false;
+  const normalizedClaim = identity(claim);
+  const mentionedGroups = catalogIdentityGroups(sources).filter((group) => (
+    group.identities.some((candidate) => normalizedClaim.includes(candidate))
+  ));
+  if (mentionedGroups.length < 2) return false;
+
+  // Two independently retrieved records do not prove a relationship. Permit
+  // the combined claim only when one selected authoritative record explicitly
+  // contains every mentioned identity (for example in its relationships).
+  return !sources.some((source) => {
+    const content = identity(sourceContent(source));
+    return mentionedGroups.every((group) => (
+      group.identities.some((candidate) => content.includes(candidate))
+    ));
+  });
+}
+
 export function containsInternalGuidance(value) {
   return internalGuidancePattern.test(text(value))
     || /^\s*(?:instruction|workflow|debug|json|response|action)\s*:/iu.test(text(value));
@@ -259,6 +297,9 @@ export function validateGroundedClaim(sentence, sources = [], options = {}) {
   });
   if (unsupportedEntity) {
     return Object.freeze({ valid: false, reason: 'unsupported_entity', entity: unsupportedEntity.key ?? unsupportedEntity.name });
+  }
+  if (unsupportedCatalogRelationship(claim, sources, options)) {
+    return Object.freeze({ valid: false, reason: 'unsupported_catalog_relationship' });
   }
   if (claimsActionSuccess(claim)
     && !sources.some(verifiedActionSource)

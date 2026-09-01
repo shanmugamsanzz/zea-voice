@@ -1,4 +1,4 @@
-export const CANONICAL_TOPIC_MEMORY_VERSION = 1;
+export const CANONICAL_TOPIC_MEMORY_VERSION = 2;
 
 const catalogTypes = new Set(['CATALOG_ITEM', 'CATALOG_CATEGORY']);
 
@@ -86,6 +86,15 @@ export function confirmCanonicalTopicResolution(resolution = {}, {
   const targets = mode === 'COMPARISON'
     ? resolution.comparisonEntities ?? []
     : [resolution.activeEntity ?? resolution.activeCategory].filter(Boolean);
+  const structurallyValid = targets.length > 0 && targets.every((target) => {
+    const recordType = clean(target?.recordType, 80).toLocaleUpperCase();
+    if (mode === 'COMPARISON') return recordType === 'CATALOG_ITEM';
+    if (target === resolution.activeEntity) return recordType === 'CATALOG_ITEM';
+    return recordType === 'CATALOG_CATEGORY';
+  });
+  if (!structurallyValid) {
+    return unresolvedResolution(resolution, 'canonical_entity_type_mismatch');
+  }
   const byRecordId = new Map((Array.isArray(hydratedRecords) ? hydratedRecords : [])
     .filter((record) => record?.recordId)
     .map((record) => [normalized(record.recordId), record]));
@@ -94,6 +103,8 @@ export function confirmCanonicalTopicResolution(resolution = {}, {
   const supported = targets.length > 0 && targets.every((target) => {
     const record = byRecordId.get(normalized(target.recordId ?? target.id));
     if (!record || record.hydrationValidated !== true || record.publicationValidated !== true) return false;
+    if (clean(record.recordType, 80).toLocaleUpperCase()
+      !== clean(target.recordType, 80).toLocaleUpperCase()) return false;
     const sameValue = (expected, actual) => !expected || normalized(expected) === normalized(actual);
     if (!sameValue(resolution.scope?.tenantId, record.tenantId)
       || !sameValue(resolution.scope?.agentId, record.agentId)
@@ -166,7 +177,20 @@ export function resolveCanonicalTopicMemory({
       requiresTargetedClarification: false,
     });
   }
-  const explicit = explicitEntities[0] ?? explicitCategories[0] ?? null;
+  const explicitSelections = uniqueRecords([...explicitEntities, ...explicitCategories]);
+  if (understanding.ambiguity?.detected === true || explicitSelections.length > 1) {
+    return Object.freeze({
+      version: CANONICAL_TOPIC_MEMORY_VERSION,
+      scope: isolatedScope,
+      mode: 'UNRESOLVED',
+      activeEntity: null,
+      activeCategory: null,
+      comparisonEntities: uniqueRecords(memory.comparisonEntities),
+      requiresTargetedClarification: true,
+      reason: 'explicit_catalog_selection_ambiguous',
+    });
+  }
+  const explicit = explicitSelections[0] ?? null;
   if (explicit) {
     return Object.freeze({
       version: CANONICAL_TOPIC_MEMORY_VERSION,

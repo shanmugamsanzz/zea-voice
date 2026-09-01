@@ -129,6 +129,43 @@ prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
 assert.equal(prepared.classification.intentClass, knowledgeQueryClasses.DETAILS_OR_PRICE);
 assert.equal(prepared.resolution.candidate, null,
   'Call memory must not be misrepresented as an explicit current-turn entity match');
+assert.equal(prepared.understanding.meaning.contextualEntity.recordId, first.record_id);
+assert.equal(prepared.understanding.meaning.requestedFactInterpretationRequired, true);
+
+const weakUnrelatedRoute = {
+  recordId: purpose.record_id,
+  recordType: 'CONVERSATION_NODE',
+  entityType: 'ROUTE',
+  label: 'Weak unrelated route',
+  score: 0.7,
+  explicit: true,
+  intentClass: 'KNOWN_INFORMATION',
+  signals: [{ method: 'fuzzy', score: 0.7, phrase: 'weak route', explicit: true }],
+};
+prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
+  tenantId, agentId, callId, utterance: 'natural contextual follow-up', memory,
+}), bundle, {}, {
+  resolve: async () => ({
+    tenantId,
+    agentId,
+    callId,
+    candidate: weakUnrelatedRoute,
+    candidateNamespace: 'CONVERSATION',
+    routingCandidates: [weakUnrelatedRoute],
+    namespaceCandidates: { CATALOG: [], CONVERSATION: [weakUnrelatedRoute] },
+    alternatives: [],
+    action: 'CONFIRM',
+    score: 0.7,
+    confidenceConfiguration: {
+      highConfidence: 0.88,
+      clarificationConfidence: 0.64,
+      ambiguityMargin: 0.06,
+    },
+  }),
+});
+assert.equal(prepared.understanding.contextDependent, true,
+  'A weak fuzzy route must not erase the active canonical entity');
+assert.equal(prepared.understanding.canonicalContext.recordId, first.record_id);
 
 prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
   tenantId, agentId, callId, utterance: 'Cirrus', memory,
@@ -139,6 +176,9 @@ assert.equal(prepared.understanding.canonicalContext.recordId, second.record_id)
 assert.equal(prepared.resolution.candidate.itemKey, 'cirrus');
 assert.equal(prepared.resolution.explicitEntity, true);
 assert.equal(prepared.usesCallMemory, false);
+assert.equal(prepared.understanding.meaning.explicitEntity.recordId, second.record_id);
+assert.equal(prepared.understanding.meaning.correction.possible, true);
+assert.equal(prepared.understanding.meaning.correction.previousEntity.recordId, first.record_id);
 
 prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
   tenantId, agentId, callId, utterance: 'Nimbus Cirrus', memory,
@@ -148,6 +188,7 @@ assert.deepEqual(new Set(prepared.understanding.comparisonEntities.map((entity) 
 
 assert.equal(prepared.intentClass, knowledgeQueryClasses.COMPARISON_COMPLEX);
 assert.equal(prepared.classification.selectedNamespace, 'CATALOG');
+assert.equal(prepared.understanding.meaning.comparisonRequested, true);
 assert.deepEqual(new Set(prepared.resolution.routingCandidates.map((candidate) => candidate.itemKey)),
   new Set(['nimbus', 'cirrus']));
 
@@ -183,6 +224,7 @@ assert.equal(prepared.intentClass, knowledgeQueryClasses.ACTION_TOOL_REQUEST);
 assert.equal(prepared.retrievalHints.toolExecutionAuthority, false);
 assert.equal(prepared.understanding.actionIntent.detected, true);
 assert.equal(prepared.understanding.actionIntent.source, 'published_workflow');
+assert.equal(prepared.understanding.meaning.actionIntent.detected, true);
 
 await prepareKnowledgeQuery(createKnowledgeEngineInput({
   tenantId, agentId, callId, utterance: 'Nimbus', memory,
