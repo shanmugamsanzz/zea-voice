@@ -208,17 +208,21 @@ function catalogIdentityGroups(sources = []) {
     const recordType = String(source?.recordType ?? '').toLocaleUpperCase();
     if (!['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(recordType)) return [];
     const data = source?.authoritativeData ?? source?.facts ?? {};
-    const identities = [
-      source?.recordId,
-      data.itemKey, data.name, data.categoryKey, data.category,
+    // An item identity is distinct from its category and siblings. Shared
+    // category metadata must not make one mentioned item look like several
+    // independently asserted entities.
+    const identities = recordType === 'CATALOG_ITEM' ? [
+      source?.recordId, data.itemKey, data.name,
+      ...(Array.isArray(data.aliases) ? data.aliases : []),
+    ] : [
+      source?.recordId, data.categoryKey, data.name, data.category,
       ...(Array.isArray(data.aliases) ? data.aliases : []),
       ...(Array.isArray(data.categoryAliases) ? data.categoryAliases : []),
-      ...(Array.isArray(data.children) ? data.children.flatMap((child) => [
-        child?.recordId, child?.itemKey, child?.name,
-        ...(Array.isArray(child?.aliases) ? child.aliases : []),
-      ]) : []),
-    ].map(identity).filter((value) => value.length >= 3);
-    return identities.length ? [{ source, identities: [...new Set(identities)] }] : [];
+    ];
+    const normalizedIdentities = identities.map(identity)
+      .filter((value) => value.length >= 3);
+    return normalizedIdentities.length
+      ? [{ source, identities: [...new Set(normalizedIdentities)] }] : [];
   });
 }
 
@@ -276,24 +280,31 @@ export function validateGroundedClaim(sentence, sources = [], options = {}) {
     });
   }
   const selectedCatalogIdentities = new Set(sources.flatMap((source) => {
-    const data = source?.authoritativeData ?? {};
+    const data = source?.authoritativeData ?? source?.facts ?? {};
     return [
       source?.recordId, data.itemKey, data.name, data.categoryKey, data.category,
       ...(Array.isArray(data.aliases) ? data.aliases : []),
       ...(Array.isArray(data.categoryAliases) ? data.categoryAliases : []),
       ...(Array.isArray(data.children) ? data.children.flatMap((child) => [
         child?.recordId, child?.itemKey, child?.name,
+        ...(Array.isArray(child?.aliases) ? child.aliases : []),
       ]) : []),
-    ]
-      .map(identity).filter(Boolean);
+    ].map(identity).filter(Boolean);
   }));
+  const selectedEvidenceIdentity = identity(sources.map(sourceContent).join(' '));
   const unsupportedEntity = (options.knownEntities ?? []).find((entity) => {
     const candidates = [
       entity?.id, entity?.key, entity?.name,
       ...(Array.isArray(entity?.aliases) ? entity.aliases : []),
     ].map(identity).filter(Boolean);
-    const mentioned = candidates.some((candidate) => candidate.length >= 3 && identity(claim).includes(candidate));
-    return mentioned && !candidates.some((candidate) => selectedCatalogIdentities.has(candidate));
+    const mentioned = candidates.some((candidate) => (
+      candidate.length >= 3 && identity(claim).includes(candidate)
+    ));
+    const supported = candidates.some((candidate) => (
+      selectedCatalogIdentities.has(candidate)
+      || (candidate.length >= 3 && selectedEvidenceIdentity.includes(candidate))
+    ));
+    return mentioned && !supported;
   });
   if (unsupportedEntity) {
     return Object.freeze({ valid: false, reason: 'unsupported_entity', entity: unsupportedEntity.key ?? unsupportedEntity.name });
@@ -335,7 +346,7 @@ export function validateGroundedClaim(sentence, sources = [], options = {}) {
   const positiveClaim = positiveFactPattern.test(claim);
   const negativeEvidence = evidencePolaritySupport(claim, sources, negativeFactPattern);
   const positiveEvidence = evidencePolaritySupport(claim, sources, positiveFactPattern);
-  if (negativeClaim && !negativeEvidence && evidenceMentionsClaimSubject(claim, sources)) {
+  if (negativeClaim && positiveEvidence && !negativeEvidence) {
     return Object.freeze({ valid: false, reason: 'unsupported_claim_polarity' });
   }
   if (positiveClaim && negativeEvidence && !positiveEvidence) {
@@ -390,9 +401,6 @@ function evidencePolaritySupport(claim, sources, pattern) {
   });
 }
 
-function evidenceMentionsClaimSubject(claim, sources) {
-  return sources.some((source) => sharesClaimSubject(claim, sourceContent(source)));
-}
 
 function sourceMappingFor(envelope, sourceId) {
   const normalizedSourceId = identity(sourceId);

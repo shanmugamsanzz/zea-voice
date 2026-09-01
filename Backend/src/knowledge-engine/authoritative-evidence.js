@@ -7,7 +7,7 @@ import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/know
 import { collectCanonicalRetrievalReservations } from './canonical-retrieval-reservations.js';
 import { publicationDuplicateKeys } from './publication-deduplication.js';
 
-export const AUTHORITATIVE_EVIDENCE_VERSION = 6;
+export const AUTHORITATIVE_EVIDENCE_VERSION = 7;
 
 const supportedRecordTypes = new Set([
   'CATALOG_ITEM', 'CATALOG_CATEGORY', 'FAQ', 'CONVERSATION_NODE', 'WORKFLOW_RULE', 'KNOWLEDGE_CHUNK',
@@ -414,6 +414,7 @@ export function fuseCandidateRankings(retrieval, {
     ?? Number.MAX_SAFE_INTEGER;
   const rejectedUnrelatedWorkflowIds = [];
   const rejectedUnrelatedCatalogIds = [];
+  const rejectedUnrelatedConversationIds = [];
   const rejectedUnrelatedNamespaceIds = [];
   const rejectedBelowRelevanceBandIds = [];
   const reservations = retrieval?.queryContext?.reservedRecords ?? [];
@@ -463,6 +464,13 @@ export function fuseCandidateRankings(retrieval, {
         rejectedUnrelatedWorkflowIds.push(normalizeId(candidate.recordId));
       }
       return relevantCallerWorkflow;
+    }
+    // Conversation nodes control sequencing. Only an exact current-turn route
+    // reserved above may enter the grounding package; semantic similarity must
+    // never use unrelated guidance or another scripted response as padding.
+    if (candidate.recordType === 'CONVERSATION_NODE') {
+      rejectedUnrelatedConversationIds.push(normalizeId(candidate.recordId));
+      return false;
     }
     if (candidate.callerFacingHint !== true) {
       rejectedUnrelatedNamespaceIds.push(normalizeId(candidate.recordId));
@@ -536,6 +544,7 @@ export function fuseCandidateRankings(retrieval, {
     rejectedDuplicateIds: Object.freeze(rejectedDuplicateIds),
     rejectedUnrelatedCatalogIds: Object.freeze(rejectedUnrelatedCatalogIds),
     rejectedUnrelatedWorkflowIds: Object.freeze(rejectedUnrelatedWorkflowIds),
+    rejectedUnrelatedConversationIds: Object.freeze(rejectedUnrelatedConversationIds),
     rejectedUnrelatedNamespaceIds: Object.freeze(rejectedUnrelatedNamespaceIds),
     rejectedBelowRelevanceBandIds: Object.freeze(rejectedBelowRelevanceBandIds),
     reservedRecordIds: Object.freeze(reservedIds),

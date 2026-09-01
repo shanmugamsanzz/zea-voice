@@ -35,16 +35,30 @@ const hydratedAlternative = Object.freeze({
 });
 
 const confirmedExplicit = confirmCanonicalTopicResolution(explicitResolution, {
-  decision: { valid: true, decision: 'answer', evidenceIds: ['source_1', 'source_2'] },
+  decision: {
+    valid: true, decision: 'answer', evidenceIds: ['source_1', 'source_2'],
+    stateUpdate: { knownEntities: [entity] },
+  },
   hydratedRecords: [hydratedSelected, hydratedAlternative],
 });
 assert.equal(confirmedExplicit.mode, 'EXPLICIT');
 assert.equal(confirmedExplicit.activeEntity.recordId, entity.recordId);
+assert.equal(confirmCanonicalTopicResolution(explicitResolution, {
+  decision: {
+    valid: true, decision: 'answer', evidenceIds: [],
+    stateUpdate: { knownEntities: [entity] },
+  },
+  hydratedRecords: [hydratedSelected],
+}).mode, 'UNRESOLVED',
+  'An explicitly retrieved candidate must not enter memory unless the grounded decision selected its source');
 assert.equal(confirmCanonicalTopicResolution({
   ...explicitResolution,
   activeEntity: { ...entity, recordType: 'CATALOG_CATEGORY', entityType: 'CATEGORY' },
 }, {
-  decision: { valid: true, decision: 'answer', evidenceIds: ['source_1'] },
+  decision: {
+    valid: true, decision: 'answer', evidenceIds: ['source_1'],
+    stateUpdate: { knownEntities: [entity] },
+  },
   hydratedRecords: [hydratedSelected],
 }).mode, 'UNRESOLVED', 'A category must never be committed as the active selectable item');
 
@@ -91,6 +105,15 @@ assert.equal(reservation.knowledgeBaseId, 'published-kb');
 assert.equal(reservation.publicationRevision, 7);
 assert.ok(contextualQuery.tenantSearchForms.includes('Published Alias'),
   'Search forms must come from the tenant publication');
+const knownOnlyQuery = buildContextEnrichedRetrievalQuery({
+  tenantId: scope.tenantId, agentId: scope.agentId,
+  latestQuestion: 'What is its published value?',
+  canonicalCallMemory: { activeEntity: null, activeCategory: null, knownEntities: [alternative] },
+  recentRelevantTurns: [],
+  queryUnderstanding: { contextDependent: true, requestedFacts: ['published_value'] },
+}, {}, { contextDependent: true }, [{ knowledgeBaseId: 'published-kb', publicationRevision: 7 }], recordScope);
+assert.equal(knownOnlyQuery.reservedRecords.some((entry) => entry.reason === 'canonical_memory'), false,
+  'A non-active known entity must never be promoted to canonical memory');
 
 const contextualResolution = Object.freeze({
   ...explicitResolution, mode: 'CONTEXTUAL',
@@ -99,15 +122,31 @@ const contextualRecord = Object.freeze({
   ...hydratedSelected, reservationReasons: Object.freeze(['canonical_memory']),
 });
 assert.equal(confirmCanonicalTopicResolution(contextualResolution, {
-  decision: { valid: true, decision: 'answer', evidenceIds: ['source_2'] },
+  decision: {
+    valid: true, decision: 'answer', evidenceIds: ['source_2'],
+    stateUpdate: { knownEntities: [entity], contextDependent: true },
+  },
   hydratedRecords: [contextualRecord, hydratedAlternative],
 }).mode, 'UNRESOLVED', 'Contextual memory requires selection of the remembered source');
 assert.equal(confirmCanonicalTopicResolution(contextualResolution, {
-  decision: { valid: true, decision: 'answer', evidenceIds: ['source_1'] },
+  decision: {
+    valid: true, decision: 'answer', evidenceIds: ['source_1'],
+    stateUpdate: { knownEntities: [entity] },
+  },
   hydratedRecords: [contextualRecord],
 }).mode, 'CONTEXTUAL');
+const contextualSwitch = memory.applyCanonicalTopicResolution({
+  ...contextualResolution, activeEntity: alternative,
+}, { turnToken: 'candidate-noise' });
+assert.equal(contextualSwitch.applied, false,
+  'Contextual reuse must never replace the active PostgreSQL record');
+assert.equal(contextualSwitch.reason, 'canonical_context_record_mismatch');
+assert.equal(memory.snapshot().activeEntity.recordId, entity.recordId);
 assert.equal(confirmCanonicalTopicResolution(explicitResolution, {
-  decision: { valid: true, decision: 'answer', evidenceIds: ['source_1'] },
+  decision: {
+    valid: true, decision: 'answer', evidenceIds: ['source_1'],
+    stateUpdate: { knownEntities: [entity] },
+  },
   hydratedRecords: [{ ...hydratedSelected, publicationRevision: 8 }],
 }).mode, 'UNRESOLVED', 'A wrong publication revision must not update canonical memory');
 

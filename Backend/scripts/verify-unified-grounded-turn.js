@@ -164,6 +164,27 @@ assert.equal(validateGroundedClaim(
   'Premium Option and Standard Option are different options.', separateCatalogEvidence,
   { allowCrossRecordComparison: true },
 ).valid, true);
+const sharedCategoryEvidence = separateCatalogEvidence.map((source) => ({
+  ...source,
+  authoritativeData: {
+    ...source.authoritativeData,
+    categoryKey: 'shared-category', category: 'Shared Category',
+  },
+}));
+assert.equal(validateGroundedClaim(
+  'Premium Option is in Shared Category.', sharedCategoryEvidence,
+).valid, true, 'Shared category metadata must not create a false cross-item relationship');
+assert.equal(validateGroundedClaim(
+  'Premium spoken alias is available.', [{
+    ...completePriceEvidence,
+    authoritativeData: {
+      ...completePriceEvidence.authoritativeData,
+      aliases: ['Premium spoken alias'], availability: 'available',
+    },
+  }], {
+    knownEntities: [{ key: 'premium-option', name: 'Premium Option', aliases: ['Premium spoken alias'] }],
+  },
+).valid, true, 'An alias in the exact hydrated record must not be rejected as unsupported');
 
 const unavailableFactMemory = openGenericConversationState(
   { ...identity, callId: 'call-unpublished-price' }, {}, 1,

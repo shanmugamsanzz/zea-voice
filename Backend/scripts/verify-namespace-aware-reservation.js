@@ -89,10 +89,15 @@ for (const namespace of ['CATALOG', 'FAQ', 'CONVERSATION', 'WORKFLOW', 'GENERAL'
 const callerFacingFusion = fuseCandidateRankings(independent, {
   limit: 5, minProviderScore: 0,
 });
-assert.equal(callerFacingFusion.candidates.length, 5);
+assert.ok(callerFacingFusion.candidates.length > 0
+  && callerFacingFusion.candidates.length <= 5,
+  'Five is a maximum; the ranker must not pad the envelope with unrelated records');
 assert.equal(callerFacingFusion.candidates.every(
   (candidate) => candidate.callerFacingHint === true,
 ), true, 'Unrelated internal guidance must not occupy caller-facing top-five positions');
+assert.equal(callerFacingFusion.candidates.some((candidate) => (
+  candidate.recordType === 'CONVERSATION_NODE'
+)), false, 'An unreserved Conversation record must not enter the LLM envelope');
 
 const channelCandidate = (channel, recordType) => independent.channels[channel]
   .find((candidate) => candidate.recordType === recordType);
@@ -125,7 +130,7 @@ assert.ok(isolatedLatestIntentFusion.candidates.some((candidate) => (
 assert.equal(isolatedLatestIntentFusion.candidates.some((candidate) => (
   candidate.recordId === unrelatedConversation.recordId
 )), false, 'A lone unrelated fallback match must not occupy a top-five slot');
-assert.ok(isolatedLatestIntentFusion.rejectedUnrelatedNamespaceIds.includes(
+assert.ok(isolatedLatestIntentFusion.rejectedUnrelatedConversationIds.includes(
   unrelatedConversation.recordId.toLocaleLowerCase(),
 ));
 

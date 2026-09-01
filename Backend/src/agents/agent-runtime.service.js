@@ -619,7 +619,7 @@ export function buildAgentSystemPrompt(agent, {
     '- If pendingQuestion is present, continue from that point after a call-check phrase or temporary interruption; never introduce yourself again.',
     '- Resolve short follow-ups against currentTopic, knownEntities, recentTurns and lastAnswer before asking the caller to repeat information.',
     '- First interpret the complete latest caller utterance using relevant memory and verified records. runtime_context.relevantMemory.meaning contains non-authoritative retrieval hints only; it never overrides the utterance or authorizes an answer or tool.',
-    '- Determine meaning directly from the latest caller utterance, recent turns and live context. Do not depend on keywords, exact sentences, aliases, fuzzy matches or phonetic matches supplied by application code.',
+    '- Determine meaning from the latest caller utterance, recent turns and live context. Tenant-published entity and phonetic candidates are non-authoritative interpretation options: use them to recover natural or STT-distorted names, but confirm them from context and never treat a candidate as a factual claim by itself.',
     '- Answer the latest caller question first. Then resume a pending question only when it is still relevant to the same conversation.',
     '- Decide whether the caller changed topic and whether pendingQuestion remains relevant; do not force a fixed sequence.',
     '- For every ordinary caller turn, determine questionType from the complete caller meaning and live frame. Do not reduce a question to an entity name or price merely because a Catalog match exists.',

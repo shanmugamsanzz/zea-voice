@@ -445,6 +445,25 @@ const authoritativeAmbiguity = validateGroundedLlmDecision(decisionJson({
 assert.equal(authoritativeAmbiguity.valid, true);
 assert.equal(authoritativeAmbiguity.clarification.reason, 'authoritative_ambiguity');
 
+const forcedPhoneticClarification = validateGroundedLlmDecision(decisionJson({
+  decision: 'answer', answer: 'Premium service is selected.', evidenceIds: ['source_1'],
+  stateUpdate: {}, pendingQuestion: null, toolRequest: null,
+}), envelope, {
+  ...runtime,
+  clarificationContext: {
+    genuineAmbiguity: true,
+    ambiguityCandidates: [
+      { recordId: 'record-1', name: 'Premium service' },
+      { recordId: 'record-3', name: 'Standard service' },
+    ],
+  },
+});
+assert.equal(forcedPhoneticClarification.valid, true);
+assert.equal(forcedPhoneticClarification.decision, 'clarify');
+assert.equal(forcedPhoneticClarification.clarification.reason, 'authoritative_ambiguity');
+assert.match(forcedPhoneticClarification.pendingQuestion, /Premium service/u);
+assert.match(forcedPhoneticClarification.pendingQuestion, /Standard service/u);
+
 const multipleClarifications = validateGroundedLlmDecision(decisionJson({
   decision: 'clarify', answer: 'Which service? Which location?', evidenceIds: [],
   stateUpdate: { currentTopic: 'clarification', knownEntityKeys: [], collectedInformation: {}, correctedFields: [] },
@@ -619,6 +638,7 @@ assert.equal(isRepairableGroundedDecisionReason('answer_required'), true);
 assert.equal(isRepairableGroundedDecisionReason('unsupported_numeric_fact'), true);
 assert.equal(isRepairableGroundedDecisionReason('unsupported_structured_fact'), true);
 assert.equal(isRepairableGroundedDecisionReason('unsupported_technical_term'), true);
+assert.equal(isRepairableGroundedDecisionReason('authoritative_ambiguity'), true);
 assert.equal(isRepairableGroundedDecisionReason('invalid_json'), true);
 assert.doesNotMatch(orchestratorSource, /stage: 'llm\.decision_repair_retry'/u);
 assert.doesNotMatch(orchestratorSource, /stage: 'llm\.retry'/u);

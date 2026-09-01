@@ -2,11 +2,13 @@ import { typedRecordIdentityKey } from './canonical-record-identity.js';
 import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/knowledge-confidence-config.js';
 import { compactNeedContext } from './published-use-case-signals.js';
 
-export const CONTEXTUAL_QUERY_UNDERSTANDING_VERSION = 4;
+export const CONTEXTUAL_QUERY_UNDERSTANDING_VERSION = 5;
 
 const catalogRecordTypes = new Set(['CATALOG_ITEM', 'CATALOG_CATEGORY']);
 const catalogEntityTypes = new Set(['ITEM', 'CATEGORY']);
 const protocolIntentClasses = new Set(['SAFETY_EMERGENCY', 'CALL_CONTROL']);
+const authoritativeMentionMethods = new Set(['exact', 'normalized', 'tenant_alias', 'stt']);
+const approximateMentionMethods = new Set(['phonetic', 'fuzzy']);
 
 function clean(value, maximum = 240) {
   return String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
@@ -69,6 +71,8 @@ function candidateSummary(candidate, suppliedConfidenceConfiguration = {}) {
   const matchedSignal = [...(candidate.signals ?? [])]
     .filter((signal) => signal?.explicit === true && clean(signal.phrase))
     .sort((left, right) => boundedScore(right.score) - boundedScore(left.score))[0] ?? null;
+  const matchMethod = clean(matchedSignal?.method ?? candidate.method, 80).toLocaleLowerCase()
+    || null;
   return Object.freeze({
     recordId: clean(candidate.recordId ?? candidate.id, 160) || null,
     recordType: clean(candidate.recordType, 80).toLocaleUpperCase() || null,
@@ -82,8 +86,11 @@ function candidateSummary(candidate, suppliedConfidenceConfiguration = {}) {
     score,
     confidenceBand: score >= confidenceConfiguration.highConfidence ? 'HIGH'
       : (score >= confidenceConfiguration.clarificationConfidence ? 'MEDIUM' : 'LOW'),
-    matchMethod: clean(candidate.method, 80) || null,
+    matchMethod,
     matchedPhrase: clean(matchedSignal?.phrase, 240) || null,
+    mentionKind: authoritativeMentionMethods.has(matchMethod) ? 'AUTHORITATIVE_MENTION'
+      : (approximateMentionMethods.has(matchMethod) ? 'PHONETIC_CANDIDATE'
+        : 'RETRIEVAL_CANDIDATE'),
     explicit: candidate.explicit === true,
     intentClass: clean(candidate.intentClass, 80).toLocaleUpperCase() || null,
     actionType: clean(candidate.actionType, 80).toLocaleLowerCase() || null,
@@ -125,7 +132,7 @@ function hasStrongPublishedCatalogSignal(candidate, confidenceConfiguration) {
   return candidate?.explicit === true
     && (candidate?.signals ?? []).some((signal) => (
       signal?.explicit === true
-        && ['exact', 'normalized', 'tenant_alias', 'stt'].includes(String(signal.method ?? ''))
+        && authoritativeMentionMethods.has(String(signal.method ?? '').toLocaleLowerCase())
         && boundedScore(signal.score) >= confidenceConfiguration.highConfidence
     ));
 }
@@ -272,6 +279,12 @@ export function understandContextualKnowledgeQuery(input, resolution) {
       && boundedScore(candidate.score) >= confidenceConfiguration.clarificationConfidence
       && explicitSignalPhrases(candidate, confidenceConfiguration).length > 0
   )), confidenceConfiguration);
+  const interpretationCandidates = mentionedCandidates
+    .map((candidate) => candidateSummary(candidate, confidenceConfiguration))
+    .filter(Boolean).slice(0, 5);
+  const phoneticCandidates = interpretationCandidates.filter((candidate) => (
+    candidate.mentionKind === 'PHONETIC_CANDIDATE'
+  ));
   const explicitEntities = explicitCandidates.filter((candidate) => (
     String(candidate.entityType ?? '').toLocaleUpperCase() !== 'CATEGORY'
       && String(candidate.recordType ?? '').toLocaleUpperCase() !== 'CATALOG_CATEGORY'
@@ -358,13 +371,12 @@ export function understandContextualKnowledgeQuery(input, resolution) {
         : (hasCurrentEntitySignal ? 'ENTITY_REQUEST'
           : (contextDependent ? 'CONTEXTUAL_FOLLOW_UP'
             : (need.detected ? 'NEED_BASED_REQUEST' : 'UNRESOLVED')))));
-  const currentCanonicalCandidates = mentionedCandidates
-    .map((candidate) => candidateSummary(candidate, confidenceConfiguration))
-    .filter(Boolean).slice(0, 5);
+  const currentCanonicalCandidates = interpretationCandidates;
   const explicitCanonicalCandidate = explicitEntities[0] ?? explicitCategories[0] ?? null;
+  const correctionCandidate = explicitCanonicalCandidate ?? confirmationCandidate;
   const possibleCorrection = Boolean(
-    memoryEntity && explicitCanonicalCandidate
-      && !sameCanonicalEntity(memoryEntity, explicitCanonicalCandidate),
+    memoryEntity && correctionCandidate
+      && !sameCanonicalEntity(memoryEntity, correctionCandidate),
   );
   const meaning = Object.freeze({
     interpretationAuthority: 'GROUNDED_LLM',
@@ -372,6 +384,8 @@ export function understandContextualKnowledgeQuery(input, resolution) {
     intentHint,
     explicitEntity: explicitEntities[0] ?? null,
     explicitCategory: explicitCategories[0] ?? null,
+    entityCandidates: Object.freeze(interpretationCandidates),
+    phoneticCandidates: Object.freeze(phoneticCandidates),
     contextualEntity: contextDependent ? memoryEntity : null,
     requestedFact: requestedFacts[0] ?? null,
     requestedFactInterpretationRequired: requestedFacts.length === 0,
@@ -383,6 +397,8 @@ export function understandContextualKnowledgeQuery(input, resolution) {
     correction: Object.freeze({
       possible: possibleCorrection,
       interpretationRequired: possibleCorrection,
+      confidence: possibleCorrection
+        ? (explicitCanonicalCandidate ? 'AUTHORITATIVE' : 'CANDIDATE') : null,
       previousEntity: possibleCorrection ? memoryEntity : null,
       currentCandidates: possibleCorrection
         ? Object.freeze(currentCanonicalCandidates) : Object.freeze([]),
@@ -416,9 +432,8 @@ export function understandContextualKnowledgeQuery(input, resolution) {
     ambiguity,
     contextDependent,
     canonicalContext,
-    currentEntityCandidates: Object.freeze(mentionedCandidates
-      .map((candidate) => candidateSummary(candidate, confidenceConfiguration))
-      .filter(Boolean).slice(0, 5)),
+    currentEntityCandidates: Object.freeze(interpretationCandidates),
+    phoneticCandidates: Object.freeze(phoneticCandidates),
     confirmationCandidate,
     requiresCandidateConfirmation: Boolean(confirmationCandidate),
     explicitCurrentRoute: route ? candidateSummary(route, confidenceConfiguration) : null,

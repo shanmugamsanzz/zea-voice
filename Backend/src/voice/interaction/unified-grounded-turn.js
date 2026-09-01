@@ -303,13 +303,11 @@ export function validatePostLlmResponseAndTool({
   // The validator may be reused by tests and non-voice callers, so enforce
   // the selected-turn boundary here instead of trusting the supplied claim
   // array. No unselected hydrated record may authorize a generated claim.
-  const selectedClaimIdentities = new Set(selectedEvidence.flatMap((source) => [
-    source?.id, source?.recordId, source?.publishedEvidenceId,
-  ]).map(identity).filter(Boolean));
-  const exactClaimEvidence = claimEvidence.filter((source) => (
-    [source?.id, source?.recordId, source?.publishedEvidenceId]
-      .map(identity).filter(Boolean).some((value) => selectedClaimIdentities.has(value))
-  ));
+  // selectedEvidence is already the exact hydrated subset resolved from the
+  // source IDs chosen by the model. Reusing any separately supplied claim
+  // collection risks validating against a broader or stale record set.
+  void claimEvidence;
+  const exactClaimEvidence = selectedEvidence;
   const collectedInformation = {
     ...(securityRuntime.collectedInformation ?? {}),
     ...(decision?.fieldUpdates ?? {}),

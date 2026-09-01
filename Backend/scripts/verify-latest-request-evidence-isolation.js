@@ -21,6 +21,7 @@ const unrelatedCatalog = candidate('catalog-unrelated', 'CATALOG_ITEM', 0.99);
 const relevantFaq = candidate('faq-relevant', 'FAQ', 0.96);
 const relevantGeneral = candidate('general-relevant', 'KNOWLEDGE_CHUNK', 0.95);
 const internalWorkflow = candidate('workflow-internal', 'WORKFLOW_RULE', 0.99);
+const unrelatedConversation = candidate('conversation-unrelated', 'CONVERSATION_NODE', 0.98);
 const callerWorkflow = candidate('workflow-caller', 'WORKFLOW_RULE', 0.97, {
   callerFacingHint: true,
 });
@@ -33,7 +34,7 @@ function retrieval({ reservations, intentClass = 'DETAILS_OR_PRICE', need = {} }
     ...scope,
     intentClass,
     recordTypes: Object.freeze([
-      'CATALOG_ITEM', 'FAQ', 'WORKFLOW_RULE', 'KNOWLEDGE_CHUNK',
+      'CATALOG_ITEM', 'FAQ', 'CONVERSATION_NODE', 'WORKFLOW_RULE', 'KNOWLEDGE_CHUNK',
     ]),
     primaryNamespaces: Object.freeze(['CATALOG']),
     queryContext: Object.freeze({
@@ -43,10 +44,12 @@ function retrieval({ reservations, intentClass = 'DETAILS_OR_PRICE', need = {} }
     channels: Object.freeze({
       structured: channel('structured', [focused]),
       bm25: channel('bm25', [
-        unrelatedCatalog, relevantFaq, relevantGeneral, internalWorkflow, callerWorkflow,
+        unrelatedCatalog, relevantFaq, relevantGeneral, unrelatedConversation,
+        internalWorkflow, callerWorkflow,
       ]),
       qdrant: channel('qdrant', [
-        unrelatedCatalog, relevantFaq, relevantGeneral, internalWorkflow, callerWorkflow,
+        unrelatedCatalog, relevantFaq, relevantGeneral, unrelatedConversation,
+        internalWorkflow, callerWorkflow,
       ]),
     }),
   });
@@ -68,6 +71,12 @@ assert.equal(focusedFusion.candidates.some((entry) => (
   entry.recordId === internalWorkflow.recordId
 )), false, 'Internal Workflow evidence must not enter the caller-facing top five');
 assert.equal(focusedFusion.candidates.some((entry) => (
+  entry.recordId === unrelatedConversation.recordId
+)), false, 'An unrelated Conversation response must not enter the LLM envelope');
+assert.deepEqual(focusedFusion.rejectedUnrelatedConversationIds, [
+  unrelatedConversation.recordId,
+]);
+assert.equal(focusedFusion.candidates.some((entry) => (
   entry.recordId === callerWorkflow.recordId
 )), false, 'Unreserved Workflow evidence must not enter the grounded package');
 assert.deepEqual(focusedFusion.rejectedUnrelatedCatalogIds, [unrelatedCatalog.recordId]);
@@ -76,6 +85,17 @@ assert.deepEqual(focusedFusion.rejectedUnrelatedWorkflowIds, [
 ]);
 assert.ok(focusedFusion.candidates.length < 5,
   'Five records are a maximum; unrelated records must not be used as padding');
+
+const exactConversationFusion = fuseCandidateRankings(retrieval({
+  reservations: [{
+    recordId: unrelatedConversation.recordId,
+    recordType: 'CONVERSATION_NODE',
+    reason: 'latest_request_record',
+  }],
+}), { limit: 5, minProviderScore: 0, highProviderScore: 0.86 });
+assert.equal(exactConversationFusion.candidates.some((entry) => (
+  entry.recordId === unrelatedConversation.recordId
+)), true, 'The exact reserved latest Conversation response must remain available');
 
 const applicableWorkflowFusion = fuseCandidateRankings(retrieval({
   reservations: [
@@ -137,6 +157,8 @@ console.log(JSON.stringify({
   passed: true,
   focusedCatalogIsolation: true,
   workflowIsolation: true,
+  conversationIsolation: true,
+  exactConversationReservation: true,
   applicableWorkflowReservation: true,
   latestRequestRelevanceBand: true,
   comparisonReservationsPreserved: true,

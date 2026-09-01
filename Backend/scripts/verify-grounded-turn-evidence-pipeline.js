@@ -179,6 +179,8 @@ assert.deepEqual(Object.keys(llm).sort(), [
 assert.equal(llm.currentQuestion, input.latestQuestion);
 assert.equal(llm.meaning.authority, 'GROUNDED_LLM');
 assert.equal(llm.meaning.interpretationRequired, true);
+assert.ok(Array.isArray(llm.meaning.entityCandidates));
+assert.ok(Array.isArray(llm.meaning.phoneticCandidates));
 assert.ok(llm.hydratedRecords.length <= 5);
 assert.deepEqual(llm.hydratedRecords.filter((source) => source.callerFacing)
   .map((source) => source.sourceId), llm.hydratedRecords

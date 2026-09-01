@@ -355,12 +355,20 @@ function applicableTools(evidence, runtimeProfile = {}) {
 
 function selectHydratedRecordsForCurrentTurn(allHydrated = [], input = {}, authoritative = {}) {
   const understanding = input?.queryUnderstanding ?? {};
+  const requiredKeys = new Set(requiredReservations(authoritative)
+    .map((entry) => reservationKey(entry)).filter(Boolean));
+  // Defense in depth: an unreserved Conversation node is never caller evidence.
+  // Exact current-turn messages survive because their reservation is canonical.
+  const relevantHydrated = allHydrated.filter((source) => (
+    String(source?.recordType ?? '').toUpperCase() !== 'CONVERSATION_NODE'
+      || requiredKeys.has(reservationKey(source))
+  ));
   const currentRouteId = normalizedId(understanding?.currentRouteSignal?.recordId);
-  const currentRouteHydrated = currentRouteId && allHydrated.some((source) => (
+  const currentRouteHydrated = currentRouteId && relevantHydrated.some((source) => (
     normalizedId(source?.recordId) === currentRouteId
     && String(source?.recordType ?? '').toUpperCase() === 'WORKFLOW_RULE'
   ));
-  if (!currentRouteHydrated || understanding.contextDependent === true) return allHydrated;
+  if (!currentRouteHydrated || understanding.contextDependent === true) return relevantHydrated;
 
   const currentRecordIds = new Set([
     ...(understanding.currentEntityCandidates ?? []),
@@ -368,14 +376,12 @@ function selectHydratedRecordsForCurrentTurn(allHydrated = [], input = {}, autho
     ...(understanding.explicitCategories ?? []),
     ...(understanding.comparisonEntities ?? []),
   ].map((entry) => normalizedId(entry?.recordId ?? entry?.id)).filter(Boolean));
-  const requiredKeys = new Set(requiredReservations(authoritative)
-    .map((entry) => reservationKey(entry)).filter(Boolean));
   const memory = input?.canonicalCallMemory ?? input?.memory ?? {};
   const staleMemoryIds = new Set([memory.activeEntity, memory.activeCategory]
     .map((entry) => normalizedId(entry?.recordId ?? entry?.id)).filter(Boolean));
-  if (!staleMemoryIds.size) return allHydrated;
+  if (!staleMemoryIds.size) return relevantHydrated;
 
-  return allHydrated.filter((source) => {
+  return relevantHydrated.filter((source) => {
     const recordId = normalizedId(source?.recordId);
     if (!staleMemoryIds.has(recordId) || currentRecordIds.has(recordId)) return true;
     return requiredKeys.has(reservationKey(source));
@@ -466,6 +472,13 @@ export function buildGroundedLlmInput({
       explicitCategories: Object.freeze(
         (input?.queryUnderstanding?.explicitCategories ?? []).slice(0, 5),
       ),
+      entityCandidates: Object.freeze(
+        (input?.queryUnderstanding?.currentEntityCandidates ?? []).slice(0, 5),
+      ),
+      phoneticCandidates: Object.freeze(
+        (input?.queryUnderstanding?.phoneticCandidates ?? []).slice(0, 5),
+      ),
+      confirmationCandidate: input?.queryUnderstanding?.confirmationCandidate ?? null,
       contextualReferences: Object.freeze(
         (input?.queryUnderstanding?.contextualReferences ?? [])
           .slice(0, 10).map((value) => clean(value, 160)).filter(Boolean),

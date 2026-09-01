@@ -1,7 +1,7 @@
 import { typedRecordIdentityKey } from './canonical-record-identity.js';
 import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/knowledge-confidence-config.js';
 
-export const CANONICAL_RETRIEVAL_RESERVATIONS_VERSION = 1;
+export const CANONICAL_RETRIEVAL_RESERVATIONS_VERSION = 3;
 
 function normalized(value) {
   return String(value ?? '').trim().toLocaleLowerCase();
@@ -49,6 +49,13 @@ export function collectCanonicalRetrievalReservations(request = {}, retrieval = 
   }
   const comparisons = (understanding.comparisonEntities ?? [])
     .map((value) => compact(value, 'explicit_comparison')).filter(Boolean);
+  const retrievedCandidates = Object.values(retrieval?.channels ?? {}).flat();
+  const callerFacingConversation = (candidate) => candidate?.callerFacingHint === true
+    || retrievedCandidates.some((retrieved) => (
+      normalized(retrieved?.recordId) === normalized(candidate?.recordId)
+      && String(retrieved?.recordType ?? '').toUpperCase() === 'CONVERSATION_NODE'
+      && retrieved?.callerFacingHint === true
+    ));
   if (classification.intentClass === 'COMPARISON_COMPLEX') {
     for (const candidate of resolution.namespaceCandidates?.CATALOG
       ?? resolution.routingCandidates ?? []) {
@@ -62,7 +69,9 @@ export function collectCanonicalRetrievalReservations(request = {}, retrieval = 
       .filter((candidate) => (
         String(candidate?.recordType ?? '').toUpperCase() === 'CONVERSATION_NODE'
         && String(candidate?.intentClass ?? '').toUpperCase() === 'CATEGORY_OVERVIEW'
-      )).map((value) => compact(value, 'published_overview', 'CONVERSATION_NODE'))
+        && callerFacingConversation(candidate)
+      )).slice(0, 1)
+      .map((value) => compact(value, 'published_overview', 'CONVERSATION_NODE'))
       .filter(Boolean)
     : [];
   const overviewCatalog = classification.intentClass === 'CATEGORY_OVERVIEW'
@@ -101,10 +110,8 @@ export function collectCanonicalRetrievalReservations(request = {}, retrieval = 
   const activeMemory = memory.activeEntity
     ? compact(memory.activeEntity, 'canonical_memory')
     : compact(memory.activeCategory, 'canonical_memory', 'CATALOG_CATEGORY');
-  const knownMemory = (memory.knownEntities ?? [])
-    .map((entry) => compact(entry, 'canonical_memory')).filter(Boolean);
   const remembered = explicit.length || !contextDependent ? []
-    : [activeMemory ?? (knownMemory.length === 1 ? knownMemory[0] : null)].filter(Boolean);
+    : [activeMemory].filter(Boolean);
   const confidence = resolveKnowledgeConfidenceConfiguration(
     classification.confidenceConfiguration ?? resolution.confidenceConfiguration,
   );

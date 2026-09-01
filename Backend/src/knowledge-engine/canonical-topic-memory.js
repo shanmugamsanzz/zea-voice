@@ -1,4 +1,4 @@
-export const CANONICAL_TOPIC_MEMORY_VERSION = 2;
+export const CANONICAL_TOPIC_MEMORY_VERSION = 3;
 
 const catalogTypes = new Set(['CATALOG_ITEM', 'CATALOG_CATEGORY']);
 
@@ -100,6 +100,18 @@ export function confirmCanonicalTopicResolution(resolution = {}, {
     .map((record) => [normalized(record.recordId), record]));
   const selectedSourceIds = new Set((decision.evidenceIds ?? [])
     .map((sourceId) => normalized(sourceId)).filter(Boolean));
+  const selectedEntityIdentities = new Set([
+    ...(decision.selectedEntityKeys ?? []),
+    ...(decision.stateUpdate?.knownEntityKeys ?? []),
+    ...(decision.selectedEntities ?? []).flatMap((entity) => (
+      [entity?.id, entity?.recordId, entity?.key, entity?.name]
+    )),
+    ...(decision.stateUpdate?.knownEntities ?? []).flatMap((entity) => (
+      [entity?.id, entity?.recordId, entity?.key, entity?.name]
+    )),
+    decision.currentTopic,
+    decision.stateUpdate?.currentTopic,
+  ].map((value) => normalized(value)).filter(Boolean));
   const supported = targets.length > 0 && targets.every((target) => {
     const record = byRecordId.get(normalized(target.recordId ?? target.id));
     if (!record || record.hydrationValidated !== true || record.publicationValidated !== true) return false;
@@ -114,9 +126,15 @@ export function confirmCanonicalTopicResolution(resolution = {}, {
       || (revision(target.publicationRevision) !== null
         && revision(target.publicationRevision) !== revision(record.publicationRevision))) return false;
     const reasons = new Set((record.reservationReasons ?? []).map((reason) => normalized(reason)));
+    const selectedSameSource = normalized(record.sourceId)
+      && selectedSourceIds.has(normalized(record.sourceId));
+    if (!selectedSameSource) return false;
+    const selectedSameEntity = [target.id, target.recordId, target.key, target.name]
+      .map((value) => normalized(value)).filter(Boolean)
+      .some((value) => selectedEntityIdentities.has(value));
+    if (!selectedSameEntity) return false;
     if (mode === 'CONTEXTUAL') {
-      return reasons.has('canonical_memory')
-        && selectedSourceIds.has(normalized(record.sourceId));
+      return reasons.has('canonical_memory');
     }
     const requiredReason = mode === 'COMPARISON' ? 'explicit_comparison' : 'explicit_entity';
     return reasons.has(requiredReason) || reasons.has('explicit_current_entity');

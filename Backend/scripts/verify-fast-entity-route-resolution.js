@@ -253,6 +253,11 @@ assert.equal(mediumTopic.understanding.canonicalContext, null,
 assert.equal(mediumTopic.understanding.requiresCandidateConfirmation, true);
 assert.equal(mediumTopic.understanding.confirmationCandidate.canonicalName, 'Beta Voice');
 assert.equal(mediumTopic.understanding.confirmationCandidate.confidenceBand, 'MEDIUM');
+assert.equal(mediumTopic.understanding.meaning.entityCandidates[0].canonicalName, 'Beta Voice');
+assert.equal(mediumTopic.understanding.meaning.phoneticCandidates[0].canonicalName, 'Beta Voice');
+assert.equal(mediumTopic.understanding.meaning.correction.possible, true,
+  'A new tenant-published phonetic candidate must be exposed as a possible topic correction');
+assert.equal(mediumTopic.understanding.meaning.correction.confidence, 'CANDIDATE');
 assert.equal(mediumTopic.classification.requiresConfirmation, true);
 assert.equal(mediumTopic.classification.candidate.itemKey, 'beta-voice');
 const mediumRetrievalQuery = buildContextEnrichedRetrievalQuery(

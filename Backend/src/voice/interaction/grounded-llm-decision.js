@@ -18,7 +18,7 @@ const repairableDecisionReasons = new Set([
   'invalid_json', 'invalid_response_shape', 'invalid_clarification',
   'answer_required', 'unsupported_numeric_fact',
   'unsupported_structured_fact', 'unsupported_technical_term',
-  'unsupported_claim_polarity', 'unsupported_recommendation',
+  'unsupported_claim_polarity', 'authoritative_ambiguity', 'unsupported_recommendation',
   'unsupported_suitability_recommendation',
 ]);
 
@@ -447,6 +447,7 @@ export function groundedDecisionContract(envelope, runtime = {}) {
       'Interpret the complete current question with only the supplied relevant call memory and published evidence.',
       'For need-based questions without a named entity, infer the caller context, problem, desired outcome and whether a recommendation is requested from the supplied need context and recent turns. Select an option only when its hydrated Catalog metadata explicitly supports that use case; otherwise ask one targeted question for the missing detail.',
       'Interpret the requested fact, explicit entities, comparison entities, contextual references and action intent from the supplied input; do not echo internal interpretation state.',
+      'Use tenant-published entityCandidates and phoneticCandidates to resolve natural or STT-distorted names with the latest utterance and recent context. A medium candidate may support a candidate-specific CLARIFY, but it is not a selected canonical entity until the caller meaning confirms it.',
       'Interpret the latest finalized utterance before using older turns. Distinguish a correction of the active entity or collected value from a new topic, and distinguish both from a contextual follow-up. Use correctedFields only for configured values the caller actually corrected.',
       'If the latest question omits an entity but relevant call memory contains an active canonical entity or category, interpret contextual requested facts against that remembered record and select its permitted source.',
       'If a requested fact requires an entity and neither the latest question nor relevant call memory and evidence identify one, return a targeted CLARIFY question; never select an arbitrary evidence record.',
@@ -542,8 +543,18 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
   if (!parsed || !exactShape(parsed)) {
     return Object.freeze({ valid: false, reason: 'invalid_response_shape' });
   }
-  const decision = normalizeDecision(parsed.decision);
+  let decision = normalizeDecision(parsed.decision);
   if (!decisions.has(decision)) return Object.freeze({ valid: false, reason: 'invalid_decision' });
+  const ambiguityCandidates = (runtime.clarificationContext?.ambiguityCandidates ?? [])
+    .filter(Boolean);
+  const genuineAmbiguity = runtime.clarificationContext?.genuineAmbiguity === true
+    || runtime.clarificationContext?.ambiguity?.detected === true;
+  // A genuinely ambiguous phonetic resolution is never allowed to select one
+  // candidate as fact. Convert a provider answer into a deterministic CLARIFY
+  // decision using only tenant-published canonical candidate names.
+  const forcedAuthoritativeAmbiguity = decision !== 'clarify'
+    && genuineAmbiguity && ambiguityCandidates.length > 1;
+  if (forcedAuthoritativeAmbiguity) decision = 'clarify';
   const parsedClarification = parsed.clarification === null ? null : (() => {
     if (!parsed.clarification || typeof parsed.clarification !== 'object'
       || Array.isArray(parsed.clarification)
@@ -564,10 +575,18 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
   // Exact published messages may intentionally end with a caller-facing
   // question. Preserve that punctuation/content instead of treating it as a
   // runtime pending question and altering the approved response.
-  const candidateAnswer = exactResponseCandidate ? text(parsed.answer, maximumAnswerCharacters) : separated.answer;
-  const candidatePendingQuestion = exactResponseCandidate
+  let candidateAnswer = exactResponseCandidate
+    ? text(parsed.answer, maximumAnswerCharacters) : separated.answer;
+  let candidatePendingQuestion = exactResponseCandidate
     ? (parsed.pendingQuestion === null ? null : text(parsed.pendingQuestion, 500))
     : separated.pendingQuestion;
+  if (forcedAuthoritativeAmbiguity) {
+    candidateAnswer = '';
+    const names = [...new Set(ambiguityCandidates.map((candidate) => text(
+      candidate.canonicalName ?? candidate.name ?? candidate.displayName, 200,
+    )).filter(Boolean))].slice(0, maximumSources);
+    candidatePendingQuestion = names.length > 1 ? `${names.join(' / ')}?` : null;
+  }
   if (parsed.pendingQuestion !== null && !candidatePendingQuestion) {
     return Object.freeze({ valid: false, reason: 'invalid_pending_question' });
   }

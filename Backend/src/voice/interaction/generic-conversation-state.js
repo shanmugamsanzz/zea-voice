@@ -697,15 +697,31 @@ export function openGenericConversationState(identity, settings = {}, now = Date
           === 'CATALOG_ITEM' ? cleanEntity(resolution.activeEntity) : null;
         const category = cleanText(resolution.activeCategory?.recordType, 80).toLocaleUpperCase()
           === 'CATALOG_CATEGORY' ? cleanCategory(resolution.activeCategory) : null;
+        const currentRecordId = cleanText(
+          state.activeEntity?.recordId ?? state.activeEntity?.id
+            ?? state.activeCategory?.recordId ?? state.activeCategory?.id,
+          160,
+        ).toLocaleLowerCase();
+        const contextualRecordId = cleanText(
+          entity?.recordId ?? entity?.id ?? category?.recordId ?? category?.id,
+          160,
+        ).toLocaleLowerCase();
+        if (!currentRecordId || !contextualRecordId || currentRecordId !== contextualRecordId) {
+          return Object.freeze({
+            applied: false, reason: 'canonical_context_record_mismatch', state: publicState(state),
+          });
+        }
         if (entity?.id) {
           state.activeEntity = entity;
           state.activeCategory = cleanCategory({
             categoryKey: entity.categoryKey, category: entity.category,
           }) ?? state.activeCategory;
+          state.knownEntities = [entity];
           state.currentTopic = entity.name;
         } else if (category?.id) {
           state.activeEntity = null;
           state.activeCategory = category;
+          state.knownEntities = [];
           state.currentTopic = category.name;
         }
         if (comparisons.length) state.comparisonEntities = comparisons;

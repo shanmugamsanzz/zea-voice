@@ -83,6 +83,15 @@ assert.ok(memoryRuns.every((result) => result.followUpPrices === true));
 assert.ok(memoryRuns.every((result) => result.fieldCollection === true));
 assert.ok(memoryRuns.every((result) => result.topicSwitching === true));
 assert.ok(memoryRuns.every((result) => result.unavailableInformation === true));
+assert.ok(memoryRuns.every((result) => result.authorizedBooking === true));
+assert.ok(memoryRuns.every((result) => result.lastDiscussedEntities === true));
+assert.ok(memoryRuns.every((result) => result.staleMemory === false));
+assert.ok(memoryRuns.every((result) => result.duplicateEvidence === false));
+assert.ok(memoryRuns.every((result) => result.unauthorizedTools === false));
+assert.ok(memoryRuns.every((result) => result.technicalFallbacks === 0));
+assert.ok(memoryRuns.every((result) => result.silentTurns === 0));
+assert.ok(memoryRuns.every((result) => result.unsupportedNumericFactFalsePositives === 0));
+assert.ok(memoryRuns.every((result) => result.crossTenantLeakage === false));
 assert.ok(groundedValidationRuns.every(Boolean));
 assert.ok(finalizedSttRuns.every(Boolean));
 assert.ok(incompleteTurnRuns.every(Boolean));
@@ -94,10 +103,19 @@ assert.ok(multitenant.languages.length >= 3,
 assert.equal(multitenant.directQuestions, true);
 assert.equal(multitenant.overviews, true);
 assert.equal(multitenant.knownEvidencePackagesNonEmpty, true);
-assert.ok(multitenant.coverage.includes('contextual_follow_up'));
-assert.ok(multitenant.coverage.includes('multi_entity_comparison'));
+for (const requirement of [
+  'phonetic_stt', 'contextual_follow_up', 'price_and_details',
+  'multi_entity_comparison', 'topic_switching', 'verified_tool',
+  'genuine_ambiguity', 'false_ambiguity_rejected', 'unsupported_claim_rejection',
+  'targeted_weak_evidence',
+]) assert.ok(multitenant.coverage.includes(requirement), requirement);
 assert.ok(multitenant.sourceMappingsValidated > 0);
 assert.ok(multitenant.completeMetadataRecords >= multitenant.sourceMappingsValidated);
+assert.equal(multitenant.falseClarifications, 0);
+assert.equal(multitenant.staleAnswers, 0);
+assert.equal(multitenant.unsupportedClaimsAccepted, 0);
+assert.equal(multitenant.blindRetrieval, false);
+assert.equal(multitenant.toolMistakes, 0);
 
 assert.ok(productionRuntime.missingEvidenceOperationalFailures > 0,
   'Missing evidence must exercise operational recovery');
@@ -138,6 +156,8 @@ assert.equal(workflowState.repeatedCollectedQuestions, 0);
 assert.equal(workflowState.falseTechnicalResponses, 0);
 assert.equal(workflowState.silentTurns, 0);
 assert.equal(workflowState.crossTenantLeakage, false);
+assert.ok(workflowState.syntheticIndustries.length >= 3);
+assert.ok(workflowState.languages.length >= 3);
 
 console.log(JSON.stringify({
   gate: 'universal-multitenant-runtime-regression',
@@ -147,8 +167,15 @@ console.log(JSON.stringify({
   languages: multitenant.languages,
   directQuestions: true,
   overviews: true,
+  phoneticNames: true,
   contextualFollowUps: true,
+  contextualDetails: true,
+  contextualPrices: true,
   comparisons: true,
+  callerCorrections: true,
+  topicChanges: true,
+  unavailableFacts: true,
+  bookingAcrossTenantsAndLanguages: true,
   missingEvidenceOperationalRecovery: true,
   knownEvidencePackagesNonEmpty: true,
   sourceMappingsValidated: multitenant.sourceMappingsValidated,
@@ -172,6 +199,8 @@ console.log(JSON.stringify({
   unavailableFactsUseConfiguredSpeech: true,
   finalizedIncompleteSttTurns: true,
   unrelatedEvidence: 0,
+  falseValidationRejections: 0,
+  validTurnTechnicalFallbacks: 0,
   hallucinations: 0,
   staleEntities: 0,
   unauthorizedTools: 0,

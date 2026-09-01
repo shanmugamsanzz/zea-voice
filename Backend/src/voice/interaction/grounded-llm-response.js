@@ -645,12 +645,24 @@ function internalSpeech(value) {
 // policy or action in a later sentence. Configured flow questions may be
 // supplied explicitly because they originate in tenant call-state, not the LLM.
 export function validateGroundedSpokenSentences(value, envelope, decision, options = {}) {
-  const sourceIds = new Set(decision?.evidenceSourceIds ?? []);
-  const citedSources = (envelope?.sources ?? []).filter((source) => sourceIds.has(source.id));
-  const evidenceText = citedSources.map((source) => source.content).join(' ');
+  const sourceIds = new Set([
+    ...(decision?.evidenceIds ?? []), ...(decision?.evidenceSourceIds ?? []),
+  ].map(identity));
+  const citedSources = (envelope?.sources ?? []).filter((source) => (
+    sourceIds.has(identity(source.id))
+  ));
+  const evidenceText = citedSources.map((source) => {
+    let structured = '';
+    try {
+      structured = JSON.stringify(source?.authoritativeData ?? source?.facts ?? {});
+    } catch {
+      structured = '';
+    }
+    return [source?.canonicalName, structured, source?.content].filter(Boolean).join(' ');
+  }).join(' ');
+  const normalizedEvidence = identity(evidenceText);
   const evidenceNumbers = numbers(evidenceText);
   const evidenceAbbreviations = abbreviations(evidenceText);
-  const selectedKeys = new Set((decision?.selectedEntityKeys ?? []).map(identity));
   const configuredSpeech = (options.configuredSpeech ?? []).map(identity).filter(Boolean);
   const approved = [];
   const rejected = [];
@@ -664,9 +676,13 @@ export function validateGroundedSpokenSentences(value, envelope, decision, optio
       reason = 'unsupported_numeric_fact';
     } else if (!configured && [...abbreviations(sentence)].some((term) => !evidenceAbbreviations.has(term))) {
       reason = 'unsupported_technical_term';
-    } else if (!configured && (envelope?.entities ?? []).some((item) => (
-      !selectedKeys.has(identity(item.key)) && normalized.includes(identity(item.name))
-    ))) {
+    } else if (!configured && (envelope?.entities ?? []).some((item) => {
+      const identities = [item?.key, item?.name, ...(item?.aliases ?? [])]
+        .map(identity).filter((candidate) => candidate.length >= 3);
+      const mentioned = identities.some((candidate) => normalized.includes(candidate));
+      const supported = identities.some((candidate) => normalizedEvidence.includes(candidate));
+      return mentioned && !supported;
+    })) {
       reason = 'unsupported_entity';
     } else if (!configured && supportRatio(sentence, evidenceText) < 0.2) {
       reason = 'insufficient_sentence_evidence';

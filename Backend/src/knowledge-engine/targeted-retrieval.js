@@ -97,17 +97,13 @@ function compactEntity(value, fallbackRecordType = 'CATALOG_ITEM') {
 }
 
 function canonicalMemoryEntity(input = {}) {
-  // Prefer the active typed record and only fall back to one unambiguous
-  // known record. Names without PostgreSQL IDs are not reservations.
+  // Only the explicitly committed active typed record is canonical memory.
+  // Retrieved/known alternatives must never be promoted by retrieval.
   const memory = input.canonicalCallMemory ?? input.memory ?? {};
   const active = memory.activeEntity
     ? compactEntity(memory.activeEntity, 'CATALOG_ITEM')
     : compactEntity(memory.activeCategory, 'CATALOG_CATEGORY');
-  if (active?.recordId) return active;
-  const known = (memory.knownEntities ?? [])
-    .map((entry) => compactEntity(entry, 'CATALOG_ITEM'))
-    .filter((entry) => entry?.recordId);
-  return known.length === 1 ? known[0] : null;
+  return active?.recordId ? active : null;
 }
 
 function boundedScore(value) {
