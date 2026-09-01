@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import { env } from '../src/config/env.js';
 import { processKnowledgeDeletionJob } from '../src/knowledge-bases/knowledge-deletion.service.js';
 import { routeKnowledgeQuery } from '../src/knowledge-bases/knowledge-runtime.service.js';
 
@@ -240,7 +241,7 @@ async function assertRuntimeCannotRetrieveDeletedContent(scenario) {
   }, {
     contextRunner: scenario.contextRunner,
     cache: new NullRuntimeCache(),
-    async embed() { return Array(384).fill(0); },
+    async embed() { return Array(env.EMBEDDING_DIMENSIONS).fill(0); },
     async search() {
       return [...scenario.stores.qdrant].map((point) => ({
         id: crypto.randomUUID(),

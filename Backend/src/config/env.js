@@ -167,15 +167,16 @@ const envSchema = z.object({
   RAG_HEALTH_CACHE_TTL_MS: z.coerce.number().int().min(1000).max(300000).default(60000),
   EMBEDDING_BASE_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
   EMBEDDING_API_KEY: z.preprocess(emptyToUndefined, z.string().min(16).optional()),
-  EMBEDDING_MODEL: z.string().min(1).default('intfloat/multilingual-e5-small'),
-  EMBEDDING_DIMENSIONS: z.coerce.number().int().positive().default(384),
+  EMBEDDING_MODEL: z.string().min(1).default('intfloat/multilingual-e5-base'),
+  EMBEDDING_DIMENSIONS: z.coerce.number().int().positive().default(768),
   EMBEDDING_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(100).max(30000).default(5000),
   EMBEDDING_BENCHMARK_ITERATIONS: z.coerce.number().int().min(3).max(100).default(10),
   EMBEDDING_BENCHMARK_TARGET_P95_MS: z.coerce.number().int().min(10).max(10000).default(250),
   QDRANT_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
   QDRANT_API_KEY: z.preprocess(emptyToUndefined, z.string().min(16).optional()),
-  QDRANT_COLLECTION_PREFIX: z.string().regex(/^[a-z0-9_]+$/).default('zea_voice_company'),
-  QDRANT_VECTOR_SIZE: z.coerce.number().int().positive().default(384),
+  QDRANT_COLLECTION_PREFIX: z.string().regex(/^[a-z0-9_]+$/)
+    .default('zea_voice_company_e5_base'),
+  QDRANT_VECTOR_SIZE: z.coerce.number().int().positive().default(768),
   QDRANT_DISTANCE: z.enum(['Cosine', 'Dot', 'Euclid', 'Manhattan']).default('Cosine'),
   QDRANT_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(100).max(30000).default(3000),
   LLM_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(250).max(120000).default(15000),
@@ -246,8 +247,8 @@ if (parsed.data.VOICE_CALL_RECONCILIATION_FALLBACK_SECONDS <= parsed.data.VOICE_
   throw new Error('Invalid environment configuration: VOICE_CALL_RECONCILIATION_FALLBACK_SECONDS must exceed VOICE_CALL_RECONCILIATION_MIN_AGE_SECONDS');
 }
 
-const frozenEmbeddingModel = 'intfloat/multilingual-e5-small';
-const frozenEmbeddingDimensions = 384;
+const frozenEmbeddingModel = 'intfloat/multilingual-e5-base';
+const frozenEmbeddingDimensions = 768;
 
 if (parsed.data.RAG_ENABLED) {
   const missingRagVariables = [

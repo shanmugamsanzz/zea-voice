@@ -13,7 +13,7 @@ const documentVersionId = '0ede12b3-765c-475f-bacd-5b2787b34d37';
 const tenantOneCollection = collectionForTenant(tenantOne);
 const tenantTwoCollection = collectionForTenant(tenantTwo);
 assert.notEqual(tenantOneCollection, tenantTwoCollection);
-assert.match(tenantOneCollection, /^zea_voice_company_[a-f0-9_]+$/);
+assert.match(tenantOneCollection, /^zea_voice_company_e5_base_[a-f0-9_]+$/);
 assert.throws(() => collectionForTenant('../shared'), /valid tenant UUID/);
 
 const payload = tenantVectorPayload({
@@ -54,7 +54,7 @@ globalThis.fetch = async (_url, options) => {
 
 try {
   const queryVector = await embedQuery('Where is the hospital?');
-  assert.equal(queryVector.length, 384);
+  assert.equal(queryVector.length, embeddingModelSpec.dimensions);
   assert.match(receivedAuthorization, /^Bearer .{16,}$/);
   assert.deepEqual(receivedInputs, ['query: Where is the hospital?']);
 

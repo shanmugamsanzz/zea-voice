@@ -1,6 +1,6 @@
 export const embeddingModelSpec = Object.freeze({
-  id: 'intfloat/multilingual-e5-small',
-  dimensions: 384,
+  id: 'intfloat/multilingual-e5-base',
+  dimensions: 768,
   distance: 'Cosine',
   queryPrefix: 'query: ',
   passagePrefix: 'passage: ',

@@ -42,11 +42,13 @@ async function verifyQdrantClientContract() {
     assert.equal(collection.collectionName, collectionForTenant(tenantId));
     assert.equal(calls.filter((call) => call.url.includes('/index?wait=true')).length, 11);
     const create = calls.find((call) => call.method === 'PUT' && call.body?.vectors);
-    assert.deepEqual(create.body.vectors, { size: 384, distance: 'Cosine' });
+    assert.deepEqual(create.body.vectors, {
+      size: env.QDRANT_VECTOR_SIZE, distance: 'Cosine',
+    });
 
     await upsertTenantPoints(tenantId, [{
       id: knowledgeBaseId,
-      vector: Array(384).fill(0),
+      vector: Array(env.QDRANT_VECTOR_SIZE).fill(0),
       payload: { tenant_id: tenantId },
     }]);
     await deleteTenantPointsByKnowledgeBase(tenantId, knowledgeBaseId, {
@@ -219,7 +221,7 @@ async function verifyLiveSemanticIndexing() {
       new Set(['FAQ', 'KNOWLEDGE_CHUNK']));
     assert.ok(indexedPoints.every((point) => point.payload.tenant_id === tenant.tenantId));
     assert.ok(indexedPoints.every((point) => point.payload.publication_revision === 1));
-    assert.ok(indexedPoints.every((point) => point.vector.length === 384));
+    assert.ok(indexedPoints.every((point) => point.vector.length === env.EMBEDDING_DIMENSIONS));
     assert.deepEqual(ensuredTenants, [tenant.tenantId]);
     assert.deepEqual(deletedFilters.map((entry) => entry.options.revisionMode), ['equal', 'older']);
 
@@ -236,7 +238,7 @@ async function verifyLiveSemanticIndexing() {
     assert.equal(persisted.rows[0].chunk_point_id, fixture.chunkId);
     assert.equal(persisted.rows[0].job_status, 'completed');
     assert.equal(persisted.rows[0].faq_model, env.EMBEDDING_MODEL);
-    assert.equal(persisted.rows[0].chunk_dimensions, 384);
+    assert.equal(persisted.rows[0].chunk_dimensions, env.EMBEDDING_DIMENSIONS);
 
     const failedJob = await client.query(
       `INSERT INTO knowledge_processing_jobs (

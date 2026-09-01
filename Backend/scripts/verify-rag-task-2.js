@@ -70,7 +70,7 @@ async function insertTenant(label) {
        b2_bucket, b2_object_key, content_sha256, size_bytes,
        embedding_model, embedding_dimensions, chunk_size_tokens, chunk_overlap_tokens
      ) VALUES ($1, $2, $3, 1, 'ready', true, 'zea-voice', $4, $5, 1024,
-       'intfloat/multilingual-e5-small', 384, 400, 50)
+       $6, $7, 400, 50)
      RETURNING id`,
     [
       tenantId,
@@ -78,6 +78,8 @@ async function insertTenant(label) {
       document.rows[0].id,
       `verification/${tenantId}/${document.rows[0].id}/v1.pdf`,
       label === 'a' ? 'a'.repeat(64) : 'b'.repeat(64),
+      env.EMBEDDING_MODEL,
+      env.EMBEDDING_DIMENSIONS,
     ],
   );
 
