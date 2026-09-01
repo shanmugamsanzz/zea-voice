@@ -161,6 +161,29 @@ assert.equal(validateGroundedClaim(
     },
   }],
 ).valid, true, 'Catalog attributes must remain visible after large descriptive fields');
+const structuredContactEvidence = [{
+  content: 'Published contact details.', recordType: 'GENERAL_KNOWLEDGE',
+  canonicalName: 'North Service Centre',
+  authoritativeData: {
+    translatedNames: ['CENTRO NORTE'],
+    address: '18 Market Road, District Centre, 063600',
+    postalCode: '063600',
+    price: 4950,
+    currency: 'INR',
+    timings: '08:00 AM - 11:00 AM; alternate desk 08:00-11:00',
+  },
+}];
+assert.equal(validateGroundedClaim(
+  'CENTRO NORTE is at 18 Market Road, District Centre, postal code 063600.',
+  structuredContactEvidence,
+).valid, true, 'translated names, addresses and postal codes must use authoritative fields');
+assert.equal(validateGroundedClaim(
+  'The price is INR 4,950 and the timing is 8 AM to 11 AM.',
+  structuredContactEvidence,
+).valid, true, 'spoken prices and zero-minute clock formats must match authoritative facts');
+assert.equal(validateGroundedClaim(
+  'The postal code is 063601.', structuredContactEvidence,
+).reason, 'unsupported_numeric_fact', 'an invented postal code must remain blocked');
 assert.equal(validateGroundedClaim(
   'Premium Plan costs INR 3200.',
   [{ content: 'Standard Plan costs INR 1200.', recordType: 'CATALOG_ITEM' }],

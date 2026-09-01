@@ -72,6 +72,7 @@ function prepared(utterance, options = {}) {
   const input = createKnowledgeEngineInput({
     tenantId, agentId, callId, utterance,
     memory: options.memory ?? {}, requestedFacts: options.requestedFacts ?? [],
+    recentRelevantTurns: options.recentRelevantTurns ?? [],
     queryUnderstanding: options.queryUnderstanding ?? null,
   });
   const resolution = resolvePublishedEntityRoute(input, bundle);
@@ -229,13 +230,20 @@ assert.ok(!retrieval.recordTypes.includes('WORKFLOW_RULE'));
 
 request = prepared('context-only follow-up without preclassified facts', {
   memory: { activeEntity: { recordId: alpha.record_id, itemKey: 'alpha' } },
+  queryUnderstanding: {
+    contextDependent: true,
+    canonicalContext: {
+      recordId: alpha.record_id, recordType: 'CATALOG_ITEM',
+      entityType: 'ITEM', name: 'Alpha option',
+    },
+  },
 });
 retrieval = await retrieveTargetedCandidates({
   ...request, publicationBundles: bundle, sparseIndexes: [sparseIndex],
 }, providers);
 assert.ok(retrieval.channels.structured.some((candidate) => (
-  candidate.recordId === alpha.record_id && candidate.matchMethod === 'call_memory_context'
-)), 'canonical call memory must enter retrieval before the LLM identifies the requested fact');
+  candidate.recordId === alpha.record_id && candidate.matchMethod === 'call_memory'
+)), 'a genuinely contextual turn must reserve canonical call memory before retrieval ranking');
 request = prepared('contextual follow-up', {
   memory: {
     activeEntity: {
@@ -243,6 +251,10 @@ request = prepared('contextual follow-up', {
     },
   },
   requestedFacts: ['approved_metric'],
+  recentRelevantTurns: [
+    { role: 'user', content: 'Earlier caller question about Alpha option.' },
+    { role: 'assistant', content: 'Earlier grounded answer about Alpha option.' },
+  ],
   queryUnderstanding: {
     contextDependent: true,
     canonicalContext: {
@@ -266,6 +278,9 @@ assert.deepEqual(retrieval.queryContext.filters, {
   usageDirection: 'inbound', namespace: 'CATALOG', namespaces: ['CATALOG'],
 });
 assert.equal(retrieval.queryContext.reservedRecords[0].recordId, alpha.record_id);
+assert.equal(retrieval.queryContext.reservedRecords[0].reason, 'canonical_memory');
+assert.match(retrieval.queryContext.contextualText, /Earlier caller question about Alpha option/u);
+assert.match(retrieval.queryContext.contextualText, /Earlier grounded answer about Alpha option/u);
 assert.equal(retrieval.channels.structured[0].recordId, alpha.record_id);
 assert.ok(retrieval.channels.bm25.some((candidate) => candidate.recordId === alpha.record_id));
 assert.match(embeddedText, /contextual follow-up Alpha option approved_metric/u);
@@ -356,8 +371,8 @@ for (const channel of Object.values(retrieval.channels)) {
     assert.ok(candidate.canonicalIdentityKey);
     assert.deepEqual(Object.keys(candidate).sort(), [
       'authorizationHint', 'callerFacingHint', 'canonicalIdentity', 'canonicalIdentityKey',
-      'channel', 'knowledgeBaseId',
-      'namespace', 'publicationRevision', 'rank',
+      'channel', 'deduplicationIdentity', 'knowledgeBaseId',
+      'namespace', 'namespaceRank', 'publicationRevision', 'rank',
       'recordId', 'recordType', 'score', ...(candidate.tokenCoverage === undefined ? [] : ['tokenCoverage']),
       ...(candidate.matchMethod === undefined ? [] : ['matchMethod']),
       ...(candidate.categoryKey === undefined ? [] : ['categoryKey']),

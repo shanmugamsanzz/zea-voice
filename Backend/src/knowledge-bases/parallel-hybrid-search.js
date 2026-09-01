@@ -8,8 +8,11 @@ import {
 import {
   publishedRecordCallerFacingHint,
 } from '../knowledge-engine/evidence-audience.js';
+import {
+  buildPublicationDeduplicationIdentity,
+} from '../knowledge-engine/publication-deduplication.js';
 
-export const PARALLEL_HYBRID_SEARCH_VERSION = 2;
+export const PARALLEL_HYBRID_SEARCH_VERSION = 3;
 
 const namespaceByType = Object.freeze({
   CATALOG_ITEM: 'CATALOG', CATALOG_CATEGORY: 'CATALOG', FAQ: 'FAQ',
@@ -44,6 +47,11 @@ function scopedPublicationRecord(reservation, bundles = []) {
       namespace: namespaceByType[reservation.recordType] ?? null,
       knowledgeBaseId: String(bundle.knowledgeBaseId),
       publicationRevision: Number(bundle.publicationRevision),
+      deduplicationIdentity: buildPublicationDeduplicationIdentity(record, {
+        tenantId: bundle.tenantId,
+        knowledgeBaseId: bundle.knowledgeBaseId,
+        publicationRevision: bundle.publicationRevision,
+      }),
       callerFacingHint: publishedRecordCallerFacingHint(record),
     };
     const canonicalIdentity = canonicalRecordIdentity(candidate);

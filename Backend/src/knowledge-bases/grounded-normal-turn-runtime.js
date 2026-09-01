@@ -15,7 +15,7 @@ import { schedulePublishedArtifactRecovery } from './authoritative-artifact-reco
 import { retrieveRankHydrateGroundedTurn } from './grounded-turn-evidence.js';
 import { resolveKnowledgeConfidenceConfiguration } from './knowledge-confidence-config.js';
 
-export const GROUNDED_NORMAL_TURN_RUNTIME_VERSION = 1;
+export const GROUNDED_NORMAL_TURN_RUNTIME_VERSION = 2;
 
 const recoverableHydrationErrors = new Set([
   'KNOWLEDGE_AUTHORITATIVE_HYDRATION_EMPTY',
@@ -294,6 +294,15 @@ export async function retrieveGroundedNormalTurn(auth, input, dependencies = {})
     const guidanceEvidence = Object.freeze(evidence.filter((source) => (
       source.recordType === 'CONVERSATION_NODE' && source.callerFacing === false
     )));
+    const contextualReservation = turn.retrieval.queryContext.reservedRecords.find((record) => (
+      record.reason === 'canonical_memory'
+    ));
+    const contextualUsed = Boolean(contextualReservation && evidence.some((source) => (
+      String(source.recordId).toLocaleLowerCase()
+        === String(contextualReservation.recordId).toLocaleLowerCase()
+      && String(source.recordType).toLocaleUpperCase()
+        === String(contextualReservation.recordType).toLocaleUpperCase()
+    )));
     return Object.freeze({
       operation: 'grounded_normal_turn',
       engineVersion: GROUNDED_NORMAL_TURN_RUNTIME_VERSION,
@@ -319,9 +328,15 @@ export async function retrieveGroundedNormalTurn(auth, input, dependencies = {})
           .map((channel) => [channel, turn.retrieval.channels[channel].length]))),
         conflictDetected: turn.authoritative.conflict.detected,
         ambiguityDetected: turn.authoritative.ambiguity.detected,
+        contextualUsed,
+        contextualPreferred: contextualUsed
+          && turn.retrieval.queryContext.contextDependent === true,
       }),
       retrievalTrace: Object.freeze({
         primaryQuery: prepared.input.utterance,
+        contextualQuery: contextualUsed
+          ? turn.retrieval.queryContext.contextualText ?? null
+          : null,
         retrievedCandidates: turn.authoritative.fusion.candidates,
         hydratedEvidence: evidence,
         sourceMap: llmEvidenceBundle.sourceMap,

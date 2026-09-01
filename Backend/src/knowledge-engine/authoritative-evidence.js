@@ -5,8 +5,9 @@ import { knowledgeQueryClasses } from './query-classifier.js';
 import { canonicalRecordIdentityKey, typedRecordIdentityKey } from './canonical-record-identity.js';
 import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/knowledge-confidence-config.js';
 import { collectCanonicalRetrievalReservations } from './canonical-retrieval-reservations.js';
+import { publicationDuplicateKeys } from './publication-deduplication.js';
 
-export const AUTHORITATIVE_EVIDENCE_VERSION = 3;
+export const AUTHORITATIVE_EVIDENCE_VERSION = 4;
 
 const supportedRecordTypes = new Set([
   'CATALOG_ITEM', 'CATALOG_CATEGORY', 'FAQ', 'CONVERSATION_NODE', 'WORKFLOW_RULE', 'KNOWLEDGE_CHUNK',
@@ -307,6 +308,7 @@ export function fuseCandidateRankings(retrieval, {
   rrfK = 60,
   limit = 5,
   minProviderScore = resolveKnowledgeConfidenceConfiguration().clarificationConfidence,
+  highProviderScore = resolveKnowledgeConfidenceConfiguration().highConfidence,
   allowedRecordTypes = retrieval?.recordTypes ?? null,
   reservedRecordIds = [],
   reservedRecordKeys = [],
@@ -317,6 +319,9 @@ export function fuseCandidateRankings(retrieval, {
   }
   if (!Number.isFinite(minProviderScore) || minProviderScore < 0) {
     throw new TypeError('RRF minimum provider score must be non-negative');
+  }
+  if (!Number.isFinite(highProviderScore) || highProviderScore < minProviderScore) {
+    throw new TypeError('RRF high provider score must be at least the minimum provider score');
   }
   const allowedTypes = Array.isArray(allowedRecordTypes) && allowedRecordTypes.length
     ? new Set(allowedRecordTypes.map((value) => String(value).toUpperCase())) : null;
@@ -348,6 +353,7 @@ export function fuseCandidateRankings(retrieval, {
         categoryKey: candidate.categoryKey ?? null,
         callerFacingHint: candidate.callerFacingHint === true,
         authorizationHint: candidate.authorizationHint === true,
+        deduplicationIdentity: Object.freeze({ ...(candidate.deduplicationIdentity ?? {}) }),
       };
       const key = canonicalRecordIdentityKey(identity, { tenantId: retrieval?.tenantId });
       if (!key) continue;
@@ -361,7 +367,7 @@ export function fuseCandidateRankings(retrieval, {
       // RRF grants at most one contribution per channel so duplicate rows cannot
       // inflate a record's fused rank.
       if (current?.channelRanks[channel]) continue;
-      const rank = position + 1;
+      const rank = Number(candidate.namespaceRank ?? position + 1);
       const next = current ?? {
         ...identity, rrfScore: 0, channelRanks: {}, providerScores: {}, channels: [],
       };
@@ -395,15 +401,40 @@ export function fuseCandidateRankings(retrieval, {
     .map((namespace, index) => [String(namespace).trim().toUpperCase(), index]));
   const namespaceOrder = (candidate) => primaryNamespaceOrder.get(candidate.namespace)
     ?? Number.MAX_SAFE_INTEGER;
-  const ordinary = accepted.filter((candidate) => !reservedCandidate(candidate))
-    .sort((left, right) => Number(
+  const rejectedUnrelatedWorkflowIds = [];
+  const ordinary = accepted.filter((candidate) => {
+    if (reservedCandidate(candidate)) return false;
+    if (candidate.recordType !== 'WORKFLOW_RULE'
+      || primaryNamespaceOrder.has('WORKFLOW')
+      || candidate.authorizationHint === true) return true;
+    const strongestProviderScore = Math.max(0, ...Object.values(candidate.providerScores));
+    const relevantCallerWorkflow = candidate.callerFacingHint === true
+      && candidate.channels.length > 1
+      && strongestProviderScore >= highProviderScore;
+    if (!relevantCallerWorkflow) rejectedUnrelatedWorkflowIds.push(normalizeId(candidate.recordId));
+    return relevantCallerWorkflow;
+  }).sort((left, right) => Number(
       right.callerFacingHint === true || right.authorizationHint === true,
     ) - Number(left.callerFacingHint === true || left.authorizationHint === true)
       || namespaceOrder(left) - namespaceOrder(right)
       || right.rrfScore - left.rrfScore
       || left.recordType.localeCompare(right.recordType)
       || normalizeId(left.recordId).localeCompare(normalizeId(right.recordId)));
-  const selected = [...reserved, ...ordinary].slice(0, limit);
+  // Explicit, contextual and comparison reservations are never collapsed.
+  // Ordinary candidates are duplicates when either their exact publication
+  // coordinates or their tenant-scoped semantic identity has already won.
+  const claimedDuplicateKeys = new Set(reserved.flatMap(publicationDuplicateKeys));
+  const rejectedDuplicateIds = [];
+  const deduplicatedOrdinary = ordinary.filter((candidate) => {
+    const keys = publicationDuplicateKeys(candidate);
+    if (keys.some((key) => claimedDuplicateKeys.has(key))) {
+      rejectedDuplicateIds.push(normalizeId(candidate.recordId));
+      return false;
+    }
+    for (const key of keys) claimedDuplicateKeys.add(key);
+    return true;
+  });
+  const selected = [...reserved, ...deduplicatedOrdinary].slice(0, limit);
   const selectedIds = new Set(selected.map((candidate) => normalizeId(candidate.recordId)));
   const selectedKeys = new Set(selected.map(recordKey));
   const candidates = selected
@@ -417,6 +448,7 @@ export function fuseCandidateRankings(retrieval, {
       channels: Object.freeze([...new Set(candidate.channels)]),
       channelRanks: Object.freeze({ ...candidate.channelRanks }),
       providerScores: Object.freeze({ ...candidate.providerScores }),
+      deduplicationIdentity: Object.freeze({ ...(candidate.deduplicationIdentity ?? {}) }),
     }));
   return Object.freeze({
     version: AUTHORITATIVE_EVIDENCE_VERSION,
@@ -428,6 +460,8 @@ export function fuseCandidateRankings(retrieval, {
     rejectedScopeConflictIds: Object.freeze([...conflictedIds]),
     rejectedNamespaceIds: Object.freeze([...rejectedNamespaceIds]),
     rejectedWeakIds: Object.freeze(rejectedWeakIds),
+    rejectedDuplicateIds: Object.freeze(rejectedDuplicateIds),
+    rejectedUnrelatedWorkflowIds: Object.freeze(rejectedUnrelatedWorkflowIds),
     reservedRecordIds: Object.freeze(reservedIds),
     missingReservedRecordIds: Object.freeze(reservedIds.filter((id) => !selectedIds.has(id))),
     reservedRecordKeys: Object.freeze([...reservedKeys]),
@@ -755,6 +789,7 @@ export async function rankAndHydrateAuthoritativeEvidence({
     rrfK,
     limit,
     minProviderScore: effectiveMinProviderScore,
+    highProviderScore: confidenceConfiguration.highConfidence,
     allowedRecordTypes: retrieval?.recordTypes,
     reservedRecordIds,
     reservedRecordKeys,

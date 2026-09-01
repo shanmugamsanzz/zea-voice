@@ -1,5 +1,8 @@
 import { withTenantContext } from '../infrastructure/database-context.js';
 import { invalidateTenantKnowledgeCache } from '../knowledge-bases/knowledge-runtime.service.js';
+import {
+  assertKnowledgeBaseWorkflowToolsAssigned,
+} from '../knowledge-bases/workflow-tool-authorization.js';
 import { AppError } from '../middleware/errors.js';
 
 function mapAssignment(row) {
@@ -153,6 +156,11 @@ export async function assignKnowledgeBaseToAgent(
         'AGENT_KNOWLEDGE_BASE_DIRECTION_MISMATCH',
       );
     }
+    await assertKnowledgeBaseWorkflowToolsAssigned(client, {
+      tenantId: auth.tenantId,
+      knowledgeBaseId,
+      agentIds: [agentId],
+    });
 
     const inserted = await client.query(
       `INSERT INTO agent_knowledge_bases (

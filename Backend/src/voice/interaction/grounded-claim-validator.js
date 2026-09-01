@@ -1,4 +1,7 @@
-import { groundedNumbers as numbers } from './grounded-number-validator.js';
+import {
+  groundedNumbers as numbers,
+  groundedNumbersFromSources,
+} from './grounded-number-validator.js';
 import {
   resolveDeterministicSource,
 } from '../../knowledge-engine/deterministic-source-mapping.js';
@@ -22,7 +25,7 @@ function tokens(value) {
 function sourceContent(source) {
   let structured = '';
   try {
-    const data = source?.authoritativeData;
+    const data = source?.authoritativeData ?? source?.facts;
     if (data && typeof data === 'object') {
       const priorityKeys = [
         'attributes', 'tests', 'services', 'consultations', 'benefits',
@@ -41,7 +44,11 @@ function sourceContent(source) {
   // Structured PostgreSQL fields are the canonical fact projection. Keep
   // them before a potentially long source narrative so bounded validators
   // cannot truncate attributes such as tests, prices or services.
-  return `${text(structured, maximumEvidenceText)} ${text(source?.content, maximumEvidenceText)}`.trim();
+  return [
+    text(source?.canonicalName, 1_000),
+    text(structured, maximumEvidenceText),
+    text(source?.content, maximumEvidenceText),
+  ].filter(Boolean).join(' ').trim();
 }
 
 function sameValue(left, right) {
@@ -184,7 +191,7 @@ export function validateGroundedClaim(sentence, sources = [], options = {}) {
     return Object.freeze({ valid: false, reason: 'selected_evidence_missing' });
   }
   const evidenceText = sources.map(sourceContent).join(' ');
-  const evidenceNumbers = numbers(evidenceText);
+  const evidenceNumbers = groundedNumbersFromSources(sources);
   const unsupportedNumbers = [...numbers(claim)].filter((number) => !evidenceNumbers.has(number));
   if (unsupportedNumbers.length) {
     return Object.freeze({

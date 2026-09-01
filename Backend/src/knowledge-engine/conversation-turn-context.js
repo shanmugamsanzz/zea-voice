@@ -61,13 +61,20 @@ export function selectCompleteConversationTurns(values = [], {
     const overlap = [...queryWords].filter((word) => pairWords.has(word)).length;
     return { pair, index, score: overlap * 100 + index / Math.max(1, pairs.length) };
   }).sort((left, right) => right.score - left.score);
-  const selected = ranked.filter((entry) => entry.score >= 100).slice(0, boundedMaximum);
+  const selected = [];
   // Contextual follow-ups may share no lexical token with the earlier topic.
-  // Always retain the two most recent complete pairs as the natural reference anchor.
-  for (let index = pairs.length - 1; index >= 0 && selected.length < Math.min(2, pairs.length); index -= 1) {
+  // Reserve the two most recent complete pairs before relevance ranking so a
+  // large number of older lexical matches cannot evict the natural reference
+  // anchor for "its price", "the last one", or an action follow-up.
+  for (let index = pairs.length - 1; index >= 0
+    && selected.length < Math.min(2, pairs.length, boundedMaximum); index -= 1) {
     if (!selected.some((entry) => entry.index === index)) {
       selected.push({ pair: pairs[index], index, score: index / Math.max(1, pairs.length) });
     }
+  }
+  for (const entry of ranked) {
+    if (entry.score < 100 || selected.length >= boundedMaximum) break;
+    if (!selected.some((candidate) => candidate.index === entry.index)) selected.push(entry);
   }
   return flattenConversationTurnPairs(selected.slice(0, boundedMaximum)
     .sort((left, right) => left.index - right.index).map((entry) => entry.pair));

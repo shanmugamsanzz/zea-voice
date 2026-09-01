@@ -7,6 +7,9 @@ import {
   fuseCandidateRankings,
   rankAndHydrateAuthoritativeEvidence,
 } from '../src/knowledge-engine/authoritative-evidence.js';
+import {
+  buildPublicationDeduplicationIdentity,
+} from '../src/knowledge-engine/publication-deduplication.js';
 
 const tenantId = '90000000-0000-4000-8000-000000000001';
 const agentId = '90000000-0000-4000-8000-000000000002';
@@ -64,6 +67,108 @@ const duplicateFusion = fuseCandidateRankings({
 assert.equal(duplicateFusion.candidates[0].rrfScore, Math.round((1 / 61) * 1e12) / 1e12,
   'A duplicate within one channel must not receive a second RRF contribution');
 assert.deepEqual(duplicateFusion.candidates[0].channels, ['structured']);
+
+const publicationScope = { tenantId, knowledgeBaseId, publicationRevision: 4 };
+const duplicateFaqOne = buildPublicationDeduplicationIdentity({
+  record_type: 'faq', document_id: '91000000-0000-4000-8000-000000000010',
+  source_section: 'support', source_line_start: 12, source_line_end: 14,
+  question: 'How does the published option work?', answer: 'Use the approved process.',
+}, publicationScope);
+const duplicateFaqTwo = buildPublicationDeduplicationIdentity({
+  record_type: 'faq', document_id: '91000000-0000-4000-8000-000000000011',
+  source_section: 'translated support', source_line_start: 40, source_line_end: 42,
+  question: 'How does the published option work?', answer: 'Use the approved process.',
+}, publicationScope);
+const distinctFaq = buildPublicationDeduplicationIdentity({
+  record_type: 'faq', document_id: '91000000-0000-4000-8000-000000000011',
+  source_section: 'other support', source_line_start: 45, source_line_end: 47,
+  question: 'What is another published fact?', answer: 'Another approved answer.',
+}, publicationScope);
+assert.notEqual(duplicateFaqOne.provenanceKey, duplicateFaqTwo.provenanceKey);
+assert.equal(duplicateFaqOne.semanticKey, duplicateFaqTwo.semanticKey,
+  'Semantic publication identity must collapse duplicate facts across source locations');
+const sameFaqOtherRevision = buildPublicationDeduplicationIdentity({
+  record_type: 'faq', document_id: '91000000-0000-4000-8000-000000000010',
+  source_section: 'support', source_line_start: 12, source_line_end: 14,
+  question: 'How does the published option work?', answer: 'Use the approved process.',
+}, { ...publicationScope, publicationRevision: 5 });
+const sameFaqOtherTenant = buildPublicationDeduplicationIdentity({
+  record_type: 'faq', document_id: '91000000-0000-4000-8000-000000000010',
+  source_section: 'support', source_line_start: 12, source_line_end: 14,
+  question: 'How does the published option work?', answer: 'Use the approved process.',
+}, { ...publicationScope, tenantId: '90000000-0000-4000-8000-000000000099' });
+assert.notEqual(duplicateFaqOne.semanticKey, sameFaqOtherRevision.semanticKey,
+  'Semantic deduplication must not cross publication revisions');
+assert.notEqual(duplicateFaqOne.semanticKey, sameFaqOtherTenant.semanticKey,
+  'Semantic deduplication must not cross tenants');
+const sameSourceCoordinates = buildPublicationDeduplicationIdentity({
+  record_type: 'faq', document_id: '91000000-0000-4000-8000-000000000010',
+  source_section: 'support', source_line_start: 12, source_line_end: 14,
+  question: 'A repeated extraction variant?', answer: 'A repeated extraction variant.',
+}, publicationScope);
+assert.equal(duplicateFaqOne.provenanceKey, sameSourceCoordinates.provenanceKey,
+  'Repeated extraction from the same published source coordinates must deduplicate');
+
+const faqCandidate = (recordId, identity, overrides = {}) => candidate(recordId, 1, 1, {
+  recordType: 'FAQ', callerFacingHint: true, deduplicationIdentity: identity, ...overrides,
+});
+const publicationDedupFusion = fuseCandidateRankings({
+  tenantId, agentId, callId, recordTypes: ['FAQ'], primaryNamespaces: ['FAQ'],
+  channels: { structured: [
+    faqCandidate(ids[0], duplicateFaqOne),
+    faqCandidate(ids[1], duplicateFaqTwo),
+    faqCandidate(ids[2], distinctFaq),
+  ] },
+});
+assert.deepEqual(publicationDedupFusion.candidates.map((entry) => entry.recordId),
+  [ids[0], ids[2]], 'Duplicate FAQ records must consume only one top-five slot');
+assert.deepEqual(publicationDedupFusion.rejectedDuplicateIds, [ids[1].toLowerCase()]);
+
+const reservedPublicationDuplicates = fuseCandidateRankings({
+  tenantId, agentId, callId, recordTypes: ['FAQ'], primaryNamespaces: ['FAQ'],
+  channels: { structured: [
+    faqCandidate(ids[0], duplicateFaqOne),
+    faqCandidate(ids[1], duplicateFaqTwo),
+  ] },
+}, { reservedRecordIds: [ids[0], ids[1]] });
+assert.deepEqual(reservedPublicationDuplicates.candidates.map((entry) => entry.recordId),
+  [ids[0], ids[1]], 'Reserved entities must never be removed by semantic deduplication');
+
+const unrelatedWorkflow = candidate(ids[3], 1, 0.99, {
+  recordType: 'WORKFLOW_RULE', callerFacingHint: true,
+  deduplicationIdentity: distinctFaq,
+});
+const unrelatedWorkflowFusion = fuseCandidateRankings({
+  tenantId, agentId, callId, recordTypes: ['WORKFLOW_RULE'],
+  primaryNamespaces: ['CATALOG'],
+  channels: { structured: [], bm25: [], qdrant: [unrelatedWorkflow] },
+});
+assert.equal(unrelatedWorkflowFusion.candidates.length, 0);
+assert.deepEqual(unrelatedWorkflowFusion.rejectedUnrelatedWorkflowIds,
+  [ids[3].toLowerCase()]);
+
+const relevantWorkflowFusion = fuseCandidateRankings({
+  tenantId, agentId, callId, recordTypes: ['WORKFLOW_RULE'],
+  primaryNamespaces: ['CATALOG'],
+  channels: {
+    structured: [],
+    bm25: [unrelatedWorkflow],
+    qdrant: [{ ...unrelatedWorkflow, score: 0.95 }],
+  },
+});
+assert.equal(relevantWorkflowFusion.candidates.length, 1,
+  'A caller-facing Workflow with strong independent retrieval support must remain eligible');
+
+const namespaceRankFusion = fuseCandidateRankings({
+  tenantId, agentId, callId, recordTypes: ['CATALOG_ITEM'],
+  primaryNamespaces: ['CATALOG'],
+  channels: { qdrant: [
+    candidate(ids[4], 1, 0.9, { namespaceRank: 3 }),
+    candidate(ids[5], 2, 0.9, { namespaceRank: 1 }),
+  ] },
+});
+assert.equal(namespaceRankFusion.candidates[0].recordId, ids[5],
+  'RRF must use each namespace-local rank instead of flattened channel position');
 
 const weakFusion = fuseCandidateRankings({
   tenantId, agentId, callId, recordTypes: ['CATALOG_ITEM'],

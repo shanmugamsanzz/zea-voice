@@ -126,10 +126,42 @@ function catalogEntityFromEvidence(source, envelopeEntities = []) {
 function primaryCatalogEntities(evidence = []) {
   return evidence
     .filter((source) => String(source?.recordType ?? '').toLocaleUpperCase() === 'CATALOG_ITEM'
-      && String(source?.retrievalContext ?? 'primary').toLocaleLowerCase() === 'primary')
+      && String(source?.retrievalContext ?? 'primary').toLocaleLowerCase() === 'primary'
+      && ((source?.channels ?? []).includes('catalog_identity')
+        || (source?.reservationReasons ?? []).some((reason) => (
+          ['explicit_entity', 'explicit_comparison'].includes(String(reason))
+        ))))
     .sort((left, right) => Number(left.rank ?? 0) - Number(right.rank ?? 0))
     .map((source) => catalogEntityFromEvidence(source, []))
     .filter(Boolean);
+}
+
+function rawEvidenceFor(source, evidence = []) {
+  return evidence.find((candidate) => (
+    candidate?.recordId && candidate.recordId === source?.recordId
+  )) ?? null;
+}
+
+function explicitlySelectedCatalogEntities(selectedEvidence = [], evidence = [], envelopeEntities = []) {
+  const entities = [];
+  const seen = new Set();
+  for (const source of selectedEvidence) {
+    const entity = catalogEntityFromEvidence(source, envelopeEntities);
+    if (!entity) continue;
+    const raw = rawEvidenceFor(source, evidence);
+    const reasons = new Set([
+      ...(source?.reservationReasons ?? []), ...(raw?.reservationReasons ?? []),
+    ].map(String));
+    const explicit = String(raw?.retrievalContext ?? source?.retrievalContext ?? 'primary')
+      .toLocaleLowerCase() === 'primary'
+      && (((raw?.channels ?? source?.channels ?? []).includes('catalog_identity'))
+        || reasons.has('explicit_entity') || reasons.has('explicit_comparison'));
+    const key = identity(entity.key ?? entity.id ?? entity.name);
+    if (!explicit || !key || seen.has(key)) continue;
+    seen.add(key);
+    entities.push(entity);
+  }
+  return entities;
 }
 
 function exactPrimaryCatalogSource(envelope, evidence = []) {
@@ -250,6 +282,23 @@ export function validatePostLlmResponseAndTool({
   if (!fieldCollection.valid) return Object.freeze({
     valid: false, reason: fieldCollection.reason, field: fieldCollection.field,
   });
+
+  // CLARIFY is a question about missing or ambiguous meaning, not a factual
+  // answer. It still passes evidence scope, configured-field and tool security
+  // checks, but must not be rejected by factual claim validation.
+  if (normalizedDecision?.decision === 'clarify') {
+    const security = validateDecisionSecurity({
+      sources: selectedEvidence,
+      toolRequest: normalizedDecision.toolRequest,
+      runtime: securityRuntime,
+    });
+    return Object.freeze({
+      valid: security.valid === true,
+      reason: security.reason ?? null,
+      decision: normalizedDecision,
+      security,
+    });
+  }
 
   const claims = approvedZeroEvidenceResponse
     ? Object.freeze({ valid: true })
@@ -381,9 +430,6 @@ export function applyUnifiedGroundedTurn({
     }) : validatedDecision.stateUpdate,
   }) : validatedDecision;
   const initiallySelectedEvidence = selectedSources(decision, hydratedEnvelope, evidence);
-  const citedCatalogEntities = new Map(initiallySelectedEvidence.map((source) => (
-    catalogEntityFromEvidence(source, hydratedEnvelope.entities)
-  )).filter(Boolean).map((entity) => [identity(entity.key), entity]));
   const selectedCategorySource = initiallySelectedEvidence.find((source) => (
     String(source?.recordType ?? '').toLocaleUpperCase() === 'CATALOG_CATEGORY'
     && String(source?.retrievalContext ?? 'primary').toLocaleLowerCase() === 'primary'
@@ -411,23 +457,32 @@ export function applyUnifiedGroundedTurn({
         parentCategoryKey: source.authoritativeData?.parentCategoryKey,
       })),
     }) : null);
-  // A decision citing one authoritative Catalog item has resolved that item,
-  // even if the model omitted optional state metadata. Persist the evidence-
-  // derived canonical identity so contextual follow-ups cannot lose it.
-  const evidenceResolvedEntity = !exactCategorySelection && citedCatalogEntities.size === 1
-    ? [...citedCatalogEntities.values()][0] : null;
   const resolvedFromMemory = memoryResolvedContext(
     decision, initiallySelectedEvidence, beforeState, hydratedEnvelope.entities,
   );
-  const decisionWithEvidenceState = evidenceResolvedEntity && decision.decision === 'answer'
+  const explicitMemoryEntities = exactCategorySelection ? []
+    : explicitlySelectedCatalogEntities(
+      initiallySelectedEvidence, evidence, hydratedEnvelope.entities,
+    );
+  const contextualMemoryEntity = resolvedFromMemory ? rememberedContextEntity : null;
+  const memoryEntities = explicitMemoryEntities.length
+    ? explicitMemoryEntities : (contextualMemoryEntity ? [contextualMemoryEntity] : []);
+  const modelProposedEntities = decision.stateUpdate.knownEntities.length > 0;
+  // Citations prove claims, not caller selection. Persist only entities tied
+  // to explicit latest-turn identity/comparison reservations, or the exact
+  // remembered record confirmed by contextual retrieval.
+  const decisionWithEvidenceState = decision.decision !== 'clarify'
     ? Object.freeze({
       ...decision,
       stateUpdate: Object.freeze({
         ...decision.stateUpdate,
-        currentTopic: evidenceResolvedEntity.key,
-        knownEntityKeys: Object.freeze([evidenceResolvedEntity.key]),
-        knownEntities: Object.freeze([{ ...evidenceResolvedEntity }]),
-        contextDependent: decision.stateUpdate.contextDependent === true || resolvedFromMemory,
+        currentTopic: memoryEntities.length
+          ? memoryEntities.map((entity) => entity.key).join(' / ')
+          : (modelProposedEntities ? beforeState.currentTopic : decision.stateUpdate.currentTopic),
+        knownEntityKeys: Object.freeze(memoryEntities.map((entity) => entity.key)),
+        knownEntities: Object.freeze(memoryEntities.map((entity) => ({ ...entity }))),
+        contextDependent: contextualMemoryEntity ? true
+          : (explicitMemoryEntities.length ? false : decision.stateUpdate.contextDependent),
       }),
     })
     : decision;

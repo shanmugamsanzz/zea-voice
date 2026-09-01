@@ -63,8 +63,10 @@ function workflowIdentifier(evidence) {
 }
 
 function toolIdentifiers(tool = {}) {
+  const configuration = tool?.configuration ?? {};
   return new Set([
-    tool.id, tool.name, ...(tool.identifiers ?? []),
+    tool.id, tool.name, configuration.identifier, configuration.toolIdentifier,
+    configuration.actionKey, configuration.key, ...(tool.identifiers ?? []),
   ].map(identity).filter(Boolean));
 }
 

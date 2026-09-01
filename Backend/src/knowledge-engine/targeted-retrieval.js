@@ -10,8 +10,10 @@ import {
   canonicalRecordNamespace,
 } from './canonical-record-identity.js';
 import { publishedRecordCallerFacingHint } from './evidence-audience.js';
+import { selectCompleteConversationTurns } from './conversation-turn-context.js';
+import { buildPublicationDeduplicationIdentity } from './publication-deduplication.js';
 
-export const TARGETED_RETRIEVAL_VERSION = 6;
+export const TARGETED_RETRIEVAL_VERSION = 8;
 
 const documentIndexTypes = Object.freeze({
   [knowledgeSearchIndexes.CATALOG]: 'CATALOG_ITEM',
@@ -242,9 +244,13 @@ export function buildContextEnrichedRetrievalQuery(
   ))).values()]);
   const currentQuestion = clean(input?.latestQuestion ?? input?.utterance);
   const need = understanding.need ?? {};
-  const recentNeedContext = need.detected === true
-    ? (input?.recentRelevantTurns ?? []).slice(-4).map((turn) => clean(turn?.content, 500))
-      .filter(Boolean)
+  const recentCompleteContext = (contextDependent || need.detected === true)
+    ? selectCompleteConversationTurns(input?.recentRelevantTurns ?? [], {
+      mode: 'full_current_call',
+      currentQuestion,
+      contextTerms: [currentSearchEntity?.name, ...requestedFacts].filter(Boolean),
+      maximumPairs: 2,
+    }).map((turn) => clean(turn?.content, 500)).filter(Boolean)
     : [];
   const tenantForms = tenantSearchForms([
     ...explicit,
@@ -258,14 +264,22 @@ export function buildContextEnrichedRetrievalQuery(
     ...requestedFacts,
     ...tenantForms,
     ...comparisons.map((entity) => entity.name),
+    ...(contextDependent ? recentCompleteContext : []),
     ...(need.detected === true ? [
       need.customerProblem,
       need.desiredOutcome,
       ...Object.values(need.businessContext ?? {}),
-      ...recentNeedContext,
+      ...recentCompleteContext,
     ] : []),
   ]);
   const searchText = queryParts.join(' ');
+  const contextualText = contextDependent ? uniqueText([
+    currentQuestion,
+    currentSearchEntity?.name,
+    ...requestedFacts,
+    ...tenantForms,
+    ...recentCompleteContext,
+  ]).join(' ') : null;
   return Object.freeze({
     currentQuestion,
     canonicalEntity,
@@ -283,6 +297,7 @@ export function buildContextEnrichedRetrievalQuery(
       missingDetails: Object.freeze([...(need.missingDetails ?? [])].slice(0, 10)),
     }),
     contextDependent,
+    contextualText,
     requiresCanonicalHydration: !hasCurrentEntityMention
       && contextDependent && Boolean(canonicalEntity?.recordId),
     tenantSearchForms: tenantForms,
@@ -326,6 +341,9 @@ function publicationScope(input, bundles) {
       if (!['both', usage].includes(recordUsage)) continue;
       const recordId = String(record.record_id ?? record.recordId ?? record.id ?? '').trim();
       if (!recordId) continue;
+      const deduplicationIdentity = buildPublicationDeduplicationIdentity(record, {
+        tenantId: input.tenantId, knowledgeBaseId, publicationRevision,
+      });
       records.set(normalizeId(recordId), Object.freeze({
         tenantId: input.tenantId,
         agentId: input.agentId,
@@ -336,6 +354,7 @@ function publicationScope(input, bundles) {
         ),
         knowledgeBaseId,
         publicationRevision,
+        deduplicationIdentity,
         callerFacingHint: publishedRecordCallerFacingHint(record),
         toolIdentifier: String(
           record.entity_metadata?.actionConfig?.toolIdentifier
@@ -387,8 +406,10 @@ function freezeCandidate(candidate, channel, rank) {
     canonicalIdentityKey: identityKey,
     channel,
     rank,
+    namespaceRank: Number(candidate.namespaceRank ?? rank),
     score: boundedScore(candidate.score),
     callerFacingHint: candidate.callerFacingHint === true,
+    deduplicationIdentity: Object.freeze({ ...(candidate.deduplicationIdentity ?? {}) }),
     authorizationHint: candidate.authorizationHint === true,
     ...(candidate.tokenCoverage === undefined
       ? {} : { tokenCoverage: boundedScore(candidate.tokenCoverage) }),
@@ -441,7 +462,9 @@ function interleaveNamespaceRanks(namespaceRanks, channel, limit) {
     if (!appended) break;
   }
   return Object.freeze(merged.map((candidate, index) => (
-    freezeCandidate(candidate, channel, index + 1)
+    freezeCandidate({
+      ...candidate, namespaceRank: candidate.namespaceRank ?? candidate.rank,
+    }, channel, index + 1)
   )));
 }
 
@@ -625,26 +648,7 @@ function structuredCandidatesForTurn(input, classification, resolution, recordSc
         'structured', candidates.length + 1));
     }
   }
-  if (resolution?.explicitEntity !== true
-    && !['SAFETY_EMERGENCY', 'CALL_CONTROL', 'ACTION_TOOL_REQUEST']
-      .includes(classification?.intentClass)) {
-    // Hydrate the isolated call's canonical topic as supporting context. It
-    // is deliberately lower-ranked than current-turn matches; the grounded
-    // LLM decides whether the latest question actually refers to it.
-    const rememberedCatalog = activeCatalogCandidate(input, recordScope, allowedTypes);
-    const explicitlyContextual = (input?.contextualReferences?.length ?? 0) > 0
-      || ((input?.requestedFacts?.length ?? 0) > 0 && Boolean(input?.memory?.activeEntity));
-    if (rememberedCatalog && !candidates.some((candidate) => (
-      normalizeId(candidate.recordId) === normalizeId(rememberedCatalog.recordId)
-    ))) {
-      candidates.push(freezeCandidate({
-        ...rememberedCatalog,
-        score: explicitlyContextual ? 1 : 0.35,
-        matchMethod: explicitlyContextual ? 'call_memory' : 'call_memory_context',
-      }, 'structured', candidates.length + 1));
-    }
-  }
-  if (resolution?.contextDependent === true) {
+  if (queryContext?.contextDependent === true) {
     const rememberedCatalog = activeCatalogCandidate(input, recordScope, allowedTypes);
     if (rememberedCatalog) {
       const priorIndex = candidates.findIndex((candidate) => (
@@ -745,6 +749,7 @@ function bm25Candidates(
       knowledgeBaseId: document.knowledgeBaseId,
       publicationRevision: document.publicationRevision,
       callerFacingHint: recordScope.get(normalizeId(document.id))?.callerFacingHint === true,
+      deduplicationIdentity: recordScope.get(normalizeId(document.id))?.deduplicationIdentity,
       score,
       tokenCoverage: matched / queryTokens.length,
     }];
@@ -766,6 +771,7 @@ function semanticPayloadCandidate(match, scope, input, allowedTypes, recordScope
     || !allowedTypes.has(recordType)
     || ![normalizedUsage(input.usageDirection), 'both'].includes(usage)) return null;
   const recordId = String(payload.record_id ?? match.id ?? '').trim();
+  const scopedRecord = recordScope.get(normalizeId(recordId));
   return recordId ? {
     tenantId: input.tenantId,
     agentId: input.agentId,
@@ -774,7 +780,8 @@ function semanticPayloadCandidate(match, scope, input, allowedTypes, recordScope
     namespace: canonicalRecordNamespace(recordType),
     knowledgeBaseId,
     publicationRevision,
-    callerFacingHint: recordScope.get(normalizeId(recordId))?.callerFacingHint === true,
+    callerFacingHint: scopedRecord?.callerFacingHint === true,
+    deduplicationIdentity: scopedRecord?.deduplicationIdentity,
     score: boundedScore(match.score),
   } : null;
 }

@@ -71,7 +71,19 @@ const action = record(6, 'workflow_rule', {
     actionConfig: { actionKey: 'tenant_action', toolIdentifier: 'tenant_action' }, priority: 80,
   },
 });
-const bundle = buildPublicationIndexes(job, [first, second, safety, callControl, purpose, action]);
+const contextualFact = record(7, 'workflow_rule', {
+  question: 'tenant metric route', answer: 'Use the active item metric.', content: 'Metric guidance.',
+  entity_name: 'tenant metric route', entity_category: 'information',
+  entity_aliases: ['tenant metric phrase'],
+  entity_metadata: {
+    conditions: { examples: ['tenant metric phrase'], intentClass: 'DETAILS_OR_PRICE' },
+    actionType: 'respond',
+    actionConfig: { responseMode: 'grounded', requiresCatalogItem: true }, priority: 70,
+  },
+});
+const bundle = buildPublicationIndexes(
+  job, [first, second, safety, callControl, purpose, action, contextualFact],
+);
 
 const memory = {
   activeEntity: { recordId: first.record_id, itemKey: 'nimbus', name: 'Nimbus plan' },
@@ -102,6 +114,18 @@ assert.equal(prepared.classification.intentClass, knowledgeQueryClasses.DETAILS_
 assert.equal(prepared.classification.source, 'contextual_call_memory');
 assert.equal(prepared.classification.selectedNamespace, 'CATALOG');
 
+prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
+  tenantId, agentId, callId, utterance: 'tenant metric phrase', memory,
+}), bundle);
+assert.equal(prepared.understanding.contextDependent, true,
+  'A published fact workflow must retain the active canonical entity');
+assert.equal(prepared.understanding.canonicalContext.recordId, first.record_id);
+assert.equal(prepared.usesCallMemory, true);
+assert.equal(prepared.understanding.currentRouteSignal.actionType, 'respond');
+
+prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
+  tenantId, agentId, callId, utterance: 'unstructured contextual continuation', memory,
+}), bundle);
 assert.equal(prepared.classification.intentClass, knowledgeQueryClasses.DETAILS_OR_PRICE);
 assert.equal(prepared.resolution.candidate, null,
   'Call memory must not be misrepresented as an explicit current-turn entity match');

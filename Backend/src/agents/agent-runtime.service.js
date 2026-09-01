@@ -252,8 +252,10 @@ export function compactGroundedDecisionInput(
 ) {
   const input = value && typeof value === 'object' ? value : {};
   const completePairs = completeConversationTurnPairs(input.recentRelevantTurns ?? []).slice(-10);
+  // Internal Workflow authorization remains in applicableWorkflow. Only
+  // caller-citable records with deterministic source IDs enter verifiedRecords.
   const allRecords = (Array.isArray(input.hydratedRecords)
-    ? input.hydratedRecords : []).slice(0, 5);
+    ? input.hydratedRecords : []).filter((record) => Boolean(record?.sourceId)).slice(0, 5);
   const explicitlyRequired = allRecords.filter((record) => record?.required === true);
   const mandatoryRecords = explicitlyRequired.length > 0
     ? explicitlyRequired : allRecords.slice(0, 1);
@@ -322,8 +324,14 @@ export function compactGroundedDecisionInput(
       requestedFact: input.requestedFact ?? null,
     }, groundedCompactionProfiles.at(-1)),
     verifiedRecords: mandatoryRecords.map(mandatoryEvidenceFloor),
-    applicableWorkflow: [],
-    assignedToolSchemas: [],
+    applicableWorkflow: compactBudgetedValue(
+      (Array.isArray(input.workflowAuthorization) ? input.workflowAuthorization : []).slice(0, 3),
+      groundedCompactionProfiles.at(-1),
+    ),
+    assignedToolSchemas: compactBudgetedValue(
+      (Array.isArray(input.toolSchemas) ? input.toolSchemas : []).slice(0, 3),
+      groundedCompactionProfiles.at(-1),
+    ),
     zeroEvidencePolicy: compactBudgetedValue(
       input.zeroEvidencePolicy ?? {}, groundedCompactionProfiles.at(-1),
     ),

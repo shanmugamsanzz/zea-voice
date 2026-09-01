@@ -49,6 +49,9 @@ assert.equal(fullTurn.memory.recentTurns.length % 2, 0);
 assert.equal(completeConversationTurnPairs(fullTurn.memory.recentTurns).length,
   fullTurn.memory.recentTurns.length / 2);
 assert.ok(fullTurn.memory.recentTurns.some((entry) => entry.content.includes('unique-retention-topic')));
+assert.ok(fullTurn.memory.recentTurns.some((entry) => entry.content === 'caller full 12'),
+  'The latest complete pair must remain available for contextual follow-ups');
+assert.ok(fullTurn.memory.recentTurns.some((entry) => entry.content === 'agent full 12'));
 full.close();
 
 console.log(JSON.stringify({

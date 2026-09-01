@@ -18,10 +18,25 @@ function canonicalNumber(value) {
   normalized = normalized.replace(/[.,]$/u, '');
   // Dates, ratios and times are facts too. Preserve their component
   // boundaries instead of collapsing 20/08 into the unrelated number 2008.
-  if (/[/:\-]/u.test(normalized)) {
-    return normalized.split(/([/:\-])/u).map((part) => (
+  if (normalized.includes('/')) {
+    return normalized.split(/([/])/u).map((part) => (
       /^\d+$/u.test(part) ? String(Number(part)) : part
     )).join('') + suffix;
+  }
+  if (normalized.includes('-')) {
+    const endpoints = normalized.split('-').map((part) => canonicalNumber(part)).filter(Boolean);
+    return endpoints.length > 1 ? `${endpoints.join('-')}${suffix}` : endpoints[0] ?? null;
+  }
+  // Spoken time commonly omits zero minutes ("8 AM") while published
+  // evidence uses clock notation ("08:00 AM"). Canonicalize only an exact
+  // zero-minute clock to its hour; non-zero minutes remain exact facts.
+  if (normalized.includes(':')) {
+    const parts = normalized.split(':');
+    if (parts.length === 2 && /^\d+$/u.test(parts[0]) && /^\d+$/u.test(parts[1])) {
+      const hour = String(Number(parts[0]));
+      const minute = String(Number(parts[1]));
+      return `${hour}${minute === '0' ? '' : `:${minute}`}${suffix}`;
+    }
   }
   const lastComma = normalized.lastIndexOf(',');
   const lastDot = normalized.lastIndexOf('.');
@@ -57,6 +72,41 @@ export function stripOrderedListMarkers(value) {
 }
 
 export function groundedNumbers(value) {
-  return new Set((stripOrderedListMarkers(value).match(/\p{Sc}?\s*\d[\d,.:%/-]*/gu) ?? [])
-    .map(canonicalNumber).filter(Boolean));
+  const result = new Set();
+  for (const matched of stripOrderedListMarkers(value).match(/\p{Sc}?\s*\d[\d,.:%/-]*/gu) ?? []) {
+    const canonical = canonicalNumber(matched);
+    if (!canonical) continue;
+    result.add(canonical);
+    // A published range contains two independently speakable authoritative
+    // values. Preserve the range and expose its endpoints without deriving
+    // any new number.
+    if (canonical.includes('-')) {
+      for (const endpoint of canonical.split('-')) if (endpoint) result.add(endpoint);
+    }
+  }
+  return result;
+}
+
+/**
+ * Extract numeric facts only from the caller-facing fields of the exact
+ * hydrated records supplied to the LLM. Runtime IDs and revision metadata are
+ * deliberately excluded so they can never authorize a spoken number.
+ */
+export function groundedNumbersFromSources(sources = []) {
+  const result = new Set();
+  for (const source of sources) {
+    let structured = '';
+    try {
+      structured = JSON.stringify({
+        canonicalName: source?.canonicalName ?? null,
+        content: source?.content ?? null,
+        facts: source?.facts ?? null,
+        authoritativeData: source?.authoritativeData ?? null,
+      });
+    } catch {
+      structured = String(source?.content ?? '');
+    }
+    for (const number of groundedNumbers(structured)) result.add(number);
+  }
+  return result;
 }

@@ -139,6 +139,40 @@ const completePriceTurn = applyUnifiedGroundedTurn({
 assert.equal(completePriceTurn.valid, true,
   'compact LLM evidence must be validated against the complete hydrated PostgreSQL record');
 assert.deepEqual(completePriceTurn.evidenceIds, ['source-price']);
+
+const clarifyMemory = openGenericConversationState(
+  { ...identity, callId: 'call-genuine-ambiguity' }, {}, 1,
+);
+clarifyMemory.beginTurn('turn-genuine-ambiguity');
+const genuineClarification = applyUnifiedGroundedTurn({
+  rawDecision: unifiedDecision({
+    decision: 'clarify', answer: '', selectedEvidenceIds: [], stateUpdate: {},
+    pendingQuestion: 'Did you mean Premium Option?', toolRequest: null,
+  }),
+  groundingEnvelope: {
+    found: true,
+    sources: [{
+      id: 'source-price', publishedEvidenceId: completePriceEvidence.id,
+      recordId: completePriceEvidence.recordId, recordType: 'CATALOG_ITEM',
+      content: 'Compact approved option.', callerFacing: true,
+    }],
+    entities: [],
+  },
+  memory: clarifyMemory,
+  turnToken: 'turn-genuine-ambiguity',
+  evidence: [completePriceEvidence],
+  finalizedUtterance: 'Was that premium?',
+  clarificationContext: {
+    candidates: [{ canonicalName: 'Premium Option', confidenceBand: 'MEDIUM' }],
+  },
+  evidenceScope: {
+    tenantId: 'tenant-a', agentId: 'agent-a', requireHydratedEvidence: true,
+    publicationRevisions: [{ knowledgeBaseId: 'kb-a', publicationRevision: 7 }],
+  },
+});
+assert.equal(genuineClarification.valid, true,
+  'genuine candidate-specific ambiguity must remain CLARIFY instead of technical failure');
+assert.equal(genuineClarification.decision, 'clarify');
 exactMemory.beginTurn('turn-exact-foreign');
 const foreignExactTurn = applyUnifiedGroundedTurn({
   rawDecision: JSON.stringify({
@@ -236,7 +270,7 @@ catalogMemory.beginTurn('catalog-turn');
 const catalogEvidence = {
   id: 'catalog-source', recordId: 'catalog-record', recordType: 'CATALOG_ITEM',
   callerFacing: true, content: 'Current service includes approved support.',
-  retrievalContext: 'primary',
+  retrievalContext: 'primary', channels: ['catalog_identity'],
   authoritativeData: {
     itemKey: 'current-service', name: 'Current Service', category: 'Services',
     categoryKey: 'services', attributes: [{ key: 'support', value: 'Included' }],
@@ -268,9 +302,45 @@ const catalogTurn = applyUnifiedGroundedTurn({
 });
 assert.equal(catalogTurn.valid, true);
 assert.equal(catalogTurn.state.knownEntities[0].key, 'current-service',
-  'One cited Catalog item must become the canonical selected entity');
+  'One explicitly resolved Catalog item must become the canonical selected entity');
 assert.equal(catalogTurn.state.activeEntity.id, catalogEvidence.recordId,
   'Validated Catalog identity must retain its authoritative record ID in call memory');
+
+const candidateOnlyMemory = openGenericConversationState(
+  { ...identity, callId: 'call-candidate-only-memory' }, {}, 1,
+);
+candidateOnlyMemory.beginTurn('candidate-only-turn');
+const candidateOnlyTurn = applyUnifiedGroundedTurn({
+  rawDecision: unifiedDecision({
+    decision: 'answer', answer: catalogEvidence.content, evidenceIds: ['catalog-source'],
+    stateUpdate: {
+      currentTopic: 'current-service', knownEntityKeys: ['current-service'],
+      contextDependent: false,
+    },
+    pendingQuestion: null, toolRequest: null,
+  }),
+  groundingEnvelope: {
+    found: true,
+    sources: [{
+      id: 'catalog-source', recordId: catalogEvidence.recordId,
+      recordType: catalogEvidence.recordType, content: catalogEvidence.content,
+      authoritativeData: catalogEvidence.authoritativeData,
+    }],
+    entities: [{
+      id: catalogEvidence.recordId, key: 'current-service', name: 'Current Service',
+      sourceId: 'catalog-source',
+    }],
+  },
+  memory: candidateOnlyMemory,
+  turnToken: 'candidate-only-turn',
+  evidence: [{ ...catalogEvidence, channels: ['semantic'], reservationReasons: [] }],
+  finalizedUtterance: 'Which option may be relevant?',
+});
+assert.equal(candidateOnlyTurn.valid, true);
+assert.deepEqual(candidateOnlyTurn.state.knownEntities, [],
+  'A cited retrieval candidate must not become canonical memory without explicit or contextual selection');
+assert.equal(candidateOnlyTurn.state.activeEntity, null);
+candidateOnlyMemory.close();
 
 const categoryMemory = openGenericConversationState(
   { ...identity, callId: 'call-category-memory' }, {}, 1,
@@ -394,7 +464,10 @@ const comparisonTurn = applyUnifiedGroundedTurn({
     ],
   },
   memory: comparisonMemory, turnToken: 'comparison-turn',
-  evidence: [catalogEvidence, alternateEvidence], finalizedUtterance: 'Compare both services.',
+  evidence: [catalogEvidence, alternateEvidence].map((source) => ({
+    ...source, channels: ['semantic'], reservationReasons: ['explicit_comparison'],
+  })),
+  finalizedUtterance: 'Compare both services.',
 });
 assert.equal(comparisonTurn.valid, true);
 assert.equal(comparisonTurn.state.activeEntity, null,
@@ -556,7 +629,10 @@ const mismatchedEvidenceTurn = applyUnifiedGroundedTurn({
     }],
   },
   memory: mismatchedEvidenceMemory, turnToken: 'entity-alignment-turn',
-  evidence: [catalogEvidence, genericEvidence], finalizedUtterance: 'Explain the current service.',
+  evidence: [{
+    ...catalogEvidence, channels: ['semantic'], reservationReasons: ['explicit_entity'],
+  }, genericEvidence],
+  finalizedUtterance: 'Explain the current service.',
 });
 assert.equal(mismatchedEvidenceTurn.valid, false);
 assert.equal(mismatchedEvidenceTurn.reason, 'latest_request_evidence_mismatch');
@@ -768,7 +844,8 @@ assert.equal(staleCatalogTurn.reason, 'latest_request_evidence_mismatch');
 catalogMemory.beginTurn('new-primary-item-turn');
 const primaryItem = {
   ...catalogEvidence, id: 'catalog-primary', recordId: 'catalog-primary',
-  retrievalContext: 'primary', rank: 1,
+  retrievalContext: 'primary', rank: 1, channels: ['semantic'],
+  reservationReasons: ['explicit_entity'],
   authoritativeData: { ...catalogEvidence.authoritativeData, itemKey: 'new-item', name: 'New Item' },
 };
 const staleItem = {
@@ -950,6 +1027,7 @@ const actionEvidence = [
     id: 'item-source', recordId: 'item-record', recordType: 'CATALOG_ITEM',
     tenantId: 'tenant-a', agentId: 'agent-a', knowledgeBaseId: 'kb-a', publicationRevision: 3,
     callerFacing: true, content: 'Priority service is an approved selectable service.',
+    channels: ['catalog_identity'], retrievalContext: 'primary',
     authoritativeData: {
       itemKey: 'priority-service', name: 'Priority service',
       selectionRules: { selectable: true },

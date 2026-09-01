@@ -4,6 +4,9 @@ import { logger } from '../config/logger.js';
 import { enqueueKnowledgeProcessingJob } from './knowledge-processing.queue.js';
 import { invalidateTenantKnowledgeCache } from './knowledge-runtime.service.js';
 import { normalizeConfiguredToolIdentifier, validateKnowledgeRecord } from './knowledge-record-validation.js';
+import {
+  assertKnowledgeBaseWorkflowToolsAssigned,
+} from './workflow-tool-authorization.js';
 
 const reviewSource = `
   WITH review_records AS (
@@ -560,6 +563,20 @@ export function getKnowledgeBaseReviewSummary(auth, knowledgeBaseId, contextRunn
     if (!knowledgeBase.rowCount) throw new AppError(404, 'Knowledge Base was not found', 'KNOWLEDGE_BASE_NOT_FOUND');
     const rows = await documentReviewRows(client, auth, knowledgeBaseId);
     const blockers = blockersForDocuments(rows);
+    try {
+      await assertKnowledgeBaseWorkflowToolsAssigned(client, {
+        tenantId: auth.tenantId,
+        knowledgeBaseId,
+        documentVersionIds: rows.map((row) => row.version_id),
+      });
+    } catch (error) {
+      if (error?.code !== 'KNOWLEDGE_WORKFLOW_TOOL_NOT_ASSIGNED') throw error;
+      blockers.push({
+        code: error.code,
+        message: error.message,
+        details: error.details,
+      });
+    }
     if (knowledgeBase.rows[0].status === 'published') {
       blockers.push({ code: 'ALREADY_PUBLISHED', message: 'Knowledge Base is already published' });
     }
@@ -625,6 +642,11 @@ export async function publishKnowledgeBase(
     if (blockers.length) {
       throw new AppError(409, 'Knowledge Base cannot be published until review is complete', 'KNOWLEDGE_BASE_REVIEW_INCOMPLETE', { blockers });
     }
+    await assertKnowledgeBaseWorkflowToolsAssigned(client, {
+      tenantId: auth.tenantId,
+      knowledgeBaseId,
+      documentVersionIds: rows.map((row) => row.version_id),
+    });
     if (deactivatedDocumentIds.length) {
       await client.query(
         `UPDATE knowledge_document_versions

@@ -1,4 +1,7 @@
-import { groundedNumbers as numbers } from './grounded-number-validator.js';
+import {
+  groundedNumbers as numbers,
+  groundedNumbersFromSources,
+} from './grounded-number-validator.js';
 
 const maximumAnswerCharacters = 4_000;
 const maximumSources = 10;
@@ -682,18 +685,7 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
     && !responseId) {
     return Object.freeze({ valid: false, reason: 'response_id_required' });
   }
-  const evidenceText = citedSources.map((source) => {
-    let structured = '';
-    try {
-      structured = source.authoritativeData && typeof source.authoritativeData === 'object'
-        ? JSON.stringify(source.authoritativeData)
-        : '';
-    } catch {
-      structured = '';
-    }
-    return `${source.content ?? ''} ${structured}`;
-  }).join(' ');
-  const evidenceNumbers = numbers(evidenceText);
+  const evidenceNumbers = groundedNumbersFromSources(citedSources);
   const unsupportedNumbers = answer && !approvedZeroEvidenceResponse
     ? [...numbers(answer)].filter((number) => !evidenceNumbers.has(number)) : [];
   if (unsupportedNumbers.length) {

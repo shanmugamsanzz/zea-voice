@@ -16,7 +16,7 @@ import {
 } from '../knowledge-engine/grounded-evidence-representation.js';
 import { env } from '../config/env.js';
 
-export const GROUNDED_TURN_EVIDENCE_VERSION = 4;
+export const GROUNDED_TURN_EVIDENCE_VERSION = 6;
 const maximumEvidenceRecords = 5;
 
 async function completeStageWithin(stage, operation, timeoutMs) {
@@ -323,7 +323,10 @@ function applicableTools(evidence, runtimeProfile = {}) {
       results.push(Object.freeze({
         workflowEvidenceId: workflow.id,
         workflowRecordId: workflow.recordId,
+        toolId: clean(tool.id, 160) || null,
         toolName: clean(tool.name, 160),
+        conditions: compactValue(workflow.authoritativeData?.conditions ?? {}),
+        actionConfig: compactValue(workflow.authoritativeData?.actionConfig ?? {}),
         inputSchema: compactValue(inputSchema),
       }));
     }
@@ -331,11 +334,40 @@ function applicableTools(evidence, runtimeProfile = {}) {
   return Object.freeze(results.slice(0, 3));
 }
 
+function selectHydratedRecordsForCurrentTurn(allHydrated = [], input = {}, authoritative = {}) {
+  const understanding = input?.queryUnderstanding ?? {};
+  const currentRouteId = normalizedId(understanding?.currentRouteSignal?.recordId);
+  const currentRouteHydrated = currentRouteId && allHydrated.some((source) => (
+    normalizedId(source?.recordId) === currentRouteId
+    && String(source?.recordType ?? '').toUpperCase() === 'WORKFLOW_RULE'
+  ));
+  if (!currentRouteHydrated || understanding.contextDependent === true) return allHydrated;
+
+  const currentRecordIds = new Set([
+    ...(understanding.currentEntityCandidates ?? []),
+    ...(understanding.explicitEntities ?? []),
+    ...(understanding.explicitCategories ?? []),
+    ...(understanding.comparisonEntities ?? []),
+  ].map((entry) => normalizedId(entry?.recordId ?? entry?.id)).filter(Boolean));
+  const requiredKeys = new Set(requiredReservations(authoritative)
+    .map((entry) => reservationKey(entry)).filter(Boolean));
+  const memory = input?.canonicalCallMemory ?? input?.memory ?? {};
+  const staleMemoryIds = new Set([memory.activeEntity, memory.activeCategory]
+    .map((entry) => normalizedId(entry?.recordId ?? entry?.id)).filter(Boolean));
+  if (!staleMemoryIds.size) return allHydrated;
+
+  return allHydrated.filter((source) => {
+    const recordId = normalizedId(source?.recordId);
+    if (!staleMemoryIds.has(recordId) || currentRecordIds.has(recordId)) return true;
+    return requiredKeys.has(reservationKey(source));
+  });
+}
+
 export function buildGroundedLlmInput({
   input, classification, resolution, authoritative, runtimeProfile,
 } = {}) {
   const allHydrated = authoritative?.verifiedRecords ?? authoritative?.evidence ?? [];
-  const hydrated = allHydrated;
+  const hydrated = selectHydratedRecordsForCurrentTurn(allHydrated, input, authoritative);
   assertRequiredEvidenceInvariant(authoritative, hydrated);
   if (hydrated.length > maximumEvidenceRecords) {
     throw new TypeError('Grounded LLM input cannot contain more than five hydrated records');
@@ -459,7 +491,10 @@ export function buildGroundedLlmInput({
     workflowAuthorization: Object.freeze(authorizedTools.map((entry) => Object.freeze({
       workflowEvidenceId: entry.workflowEvidenceId,
       workflowRecordId: entry.workflowRecordId,
+      toolId: entry.toolId,
       toolName: entry.toolName,
+      conditions: entry.conditions,
+      actionConfig: entry.actionConfig,
     }))),
     toolSchemas: Object.freeze(authorizedTools.map((entry) => Object.freeze({
       name: entry.toolName,

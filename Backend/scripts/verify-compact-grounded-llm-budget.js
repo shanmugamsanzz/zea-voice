@@ -67,6 +67,13 @@ const session = await createSelectedLlmStream(profile, {
   knowledge: { found: true, route: 'knowledge_engine', tenantEvidence: { sources: [] } },
   context: {
     groundedResponseMode: true,
+    groundingEnvelope: {
+      found: true, route: 'knowledge_engine',
+      sources: records.slice(0, 5).map((record) => ({
+        ...record, id: record.sourceId,
+      })),
+      sourceMap: [], entities: [], exactCallerResponses: [],
+    },
     groundedDecisionInput: {
       currentQuestion,
       recentRelevantTurns,
@@ -204,7 +211,14 @@ const legacySourceMapSession = await createSelectedLlmStream(profile, {
     found: true, route: 'knowledge_engine',
     tenantEvidence: { sources: [], sourceMap: { invalid: true } },
   },
-  context: { groundedResponseMode: true, groundedDecisionInput: { currentQuestion } },
+  context: {
+    groundedResponseMode: true,
+    groundingEnvelope: {
+      found: false, route: 'knowledge_engine', sources: [], sourceMap: [],
+      entities: [], exactCallerResponses: [],
+    },
+    groundedDecisionInput: { currentQuestion },
+  },
   usageDirection: 'inbound',
 }, { adapter, skipDefaultRegistration: true });
 await legacySourceMapSession.close();
@@ -248,6 +262,7 @@ const zeroEvidenceSession = await createSelectedLlmStream(profile, {
   knowledge: { found: false, route: 'knowledge_engine', tenantEvidence: { sources: [] } },
   context: {
     groundedResponseMode: true,
+    groundingEnvelope: zeroEvidenceEnvelope,
     zeroEvidenceResponse: unavailableSpeech,
     groundedDecisionInput: {
       currentQuestion: 'What does the unknown option include?',
@@ -274,7 +289,10 @@ await zeroEvidenceSession.close();
 await assert.rejects(createSelectedLlmStream(profile, {
   callId: 'invalid-provider-stream', query: currentQuestion,
   knowledge: { found: false, route: 'none', tenantEvidence: { sources: [] } },
-  context: { groundedResponseMode: true, groundedDecisionInput: { currentQuestion } },
+  context: {
+    groundedResponseMode: true, groundingEnvelope: zeroEvidenceEnvelope,
+    groundedDecisionInput: { currentQuestion },
+  },
   usageDirection: 'inbound',
 }, {
   adapter: { stream: () => null, cancel() {}, close() {} },

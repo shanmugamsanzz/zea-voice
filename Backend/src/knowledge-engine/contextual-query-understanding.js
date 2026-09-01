@@ -2,7 +2,7 @@ import { typedRecordIdentityKey } from './canonical-record-identity.js';
 import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/knowledge-confidence-config.js';
 import { compactNeedContext } from './published-use-case-signals.js';
 
-export const CONTEXTUAL_QUERY_UNDERSTANDING_VERSION = 2;
+export const CONTEXTUAL_QUERY_UNDERSTANDING_VERSION = 3;
 
 const catalogRecordTypes = new Set(['CATALOG_ITEM', 'CATALOG_CATEGORY']);
 const catalogEntityTypes = new Set(['ITEM', 'CATEGORY']);
@@ -86,6 +86,8 @@ function candidateSummary(candidate, suppliedConfidenceConfiguration = {}) {
     matchedPhrase: clean(matchedSignal?.phrase, 240) || null,
     explicit: candidate.explicit === true,
     intentClass: clean(candidate.intentClass, 80).toLocaleUpperCase() || null,
+    actionType: clean(candidate.actionType, 80).toLocaleLowerCase() || null,
+    requiresCatalogItem: candidate.requiresCatalogItem === true,
   });
 }
 
@@ -147,15 +149,23 @@ function routeCandidates(resolution) {
   ));
 }
 
+function rankedCurrentRoutes(resolution) {
+  const resolved = !isCatalogCandidate(resolution?.candidate)
+    ? resolution?.candidate : null;
+  const routes = [resolved, ...routeCandidates(resolution)].filter(Boolean);
+  return [...new Map(routes.map((candidate) => [candidateIdentity(candidate), candidate])).values()]
+    .sort((left, right) => boundedScore(right.score) - boundedScore(left.score));
+}
+
 function explicitCurrentRoute(resolution, confidenceConfiguration) {
-  return routeCandidates(resolution).find((candidate) => (
+  return rankedCurrentRoutes(resolution).find((candidate) => (
     candidate?.explicit === true
       && boundedScore(candidate.score) >= confidenceConfiguration.highConfidence
   )) ?? null;
 }
 
 function currentNonCatalogSignal(resolution, confidenceConfiguration) {
-  return routeCandidates(resolution).find((candidate) => (
+  return rankedCurrentRoutes(resolution).find((candidate) => (
     candidate?.explicit === true
       && boundedScore(candidate.score) >= confidenceConfiguration.clarificationConfidence
   )) ?? null;
@@ -273,9 +283,26 @@ export function understandContextualKnowledgeQuery(input, resolution) {
   // caller confirms it and validation succeeds.
   const hasCurrentEntitySignal = mentionedCandidates.length > 0;
   const hasCurrentNonCatalogSignal = Boolean(currentRouteSignal);
-  const contextDependent = !hasCurrentEntitySignal && !hasCurrentNonCatalogSignal && Boolean(
+  const suppliedContextSignal = requestedFacts.length > 0
+    || (input.contextualReferences?.length ?? 0) > 0;
+  // Published workflows can describe the fact/action requested for the active
+  // entity. They are retrieval hints, not replacement business topics. A
+  // standalone FAQ/conversation/general record still prevents stale memory.
+  const workflowContextSignal = String(currentRouteSignal?.recordType ?? '').toLocaleUpperCase()
+      === 'WORKFLOW_RULE'
+    && !protocolRoute
+    && currentRouteSignal?.requiresCatalogItem === true;
+  const hasRememberedContext = Boolean(
     memoryEntity || input.memory?.pendingClarification || input.memory?.activeTool,
   );
+  const contextDependent = !hasCurrentEntitySignal
+    && !protocolRoute
+    && hasRememberedContext
+    && (suppliedContextSignal
+      || workflowContextSignal
+      || !hasCurrentNonCatalogSignal
+      || Boolean(input.memory?.pendingClarification)
+      || Boolean(input.memory?.activeTool));
   const contextualReferences = unique([
     ...(input.contextualReferences ?? []),
     ...(contextDependent && memoryEntity
