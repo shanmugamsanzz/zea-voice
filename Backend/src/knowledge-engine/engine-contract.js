@@ -85,7 +85,9 @@ export function createKnowledgeEngineInput(value = {}) {
     conversationContextTurns: Math.max(1, Math.min(
       10, Number(suppliedMemory.conversationContextTurns) || 5,
     )),
-    pendingClarification: memoryObject(suppliedMemory.pendingClarification),
+    pendingClarification: memoryObject(
+      suppliedMemory.pendingClarification ?? suppliedMemory.pendingQuestion,
+    ),
     activeTool: memoryObject(suppliedMemory.activeTool ?? suppliedMemory.activeToolRequest),
     collectedToolFields: Object.freeze({
       ...(suppliedMemory.collectedToolFields ?? suppliedMemory.collectedInformation ?? {}),

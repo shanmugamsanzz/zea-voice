@@ -52,6 +52,16 @@ const missing = validateWorkflowToolAssignments({
 });
 assert.equal(missing.length, 1);
 assert.equal(missing[0].reason, 'tool_not_assigned');
+const invalidSchema = validateWorkflowToolAssignments({
+  workflows: [workflow],
+  agents: [{ agentId, tools: [{ id: 'schema-less', name: 'tenant.request.submit_v1' }] }],
+});
+assert.equal(invalidSchema[0].reason, 'tool_schema_root_must_be_object');
+const ambiguousAssignment = validateWorkflowToolAssignments({
+  workflows: [workflow],
+  agents: [{ agentId, tools: [tool, { ...tool, id: 'duplicate-tool' }] }],
+});
+assert.equal(ambiguousAssignment[0].reason, 'tool_identifier_ambiguous');
 
 const matchingClient = {
   async query(sql) {
@@ -158,6 +168,8 @@ console.log(JSON.stringify({
   task: 'workflow-tool-authorization',
   passed: true,
   publicationAssignmentValidation: true,
+  assignedSchemaValidation: true,
+  ambiguousIdentifierRejection: true,
   internalEvidenceSeparated: true,
   authorizedSchemaDelivered: true,
   verifiedToolResult: true,

@@ -1,3 +1,5 @@
+import { toolArgumentsMatchSchema } from '../tools/tool-security.js';
+
 const maximumQuestionCharacters = 500;
 
 function text(value, maximum = maximumQuestionCharacters) {
@@ -72,6 +74,21 @@ function fieldBelongsToTool(field, tool) {
   return Array.isArray(required) && required.includes(field.key);
 }
 
+function completedField(field, value, inputSchema) {
+  if (value === undefined || value === null || String(value).trim() === '') return false;
+  const property = object(inputSchema.properties)[field.key];
+  if (property && !toolArgumentsMatchSchema(value, property)) return false;
+  if (field.type === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(String(value))) return false;
+  if (field.type === 'phone' && !/^\+?[\d\s()-]{8,25}$/u.test(String(value))) return false;
+  if (field.type === 'select') {
+    const accepted = (field.options ?? []).flatMap((option) => (
+      [option?.value, option?.label, ...(Array.isArray(option?.aliases) ? option.aliases : [])]
+    )).map(identity).filter(Boolean);
+    if (accepted.length && !accepted.includes(identity(value))) return false;
+  }
+  return true;
+}
+
 function confirmationForTool({
   activeRequest, fieldSchemas, collectedInformation, tools, actionEvidence, configuration,
 }) {
@@ -89,10 +106,10 @@ function confirmationForTool({
   const required = configuredConfirmation
     ? (configuration.requiredFields ?? [])
     : (Array.isArray(inputSchema.required) ? inputSchema.required : []);
-  if (!required.length || required.some((key) => (
-    collected[key] === undefined || collected[key] === null || String(collected[key]).trim() === ''
-  ))) return null;
   const fields = new Map((fieldSchemas ?? []).map((field) => [field.key, field]));
+  if (!required.length || required.some((key) => (
+    !completedField(fields.get(key) ?? { key }, collected[key], inputSchema)
+  ))) return null;
   const details = required.map((key) => {
     const label = text(fields.get(key)?.label ?? key.replace(/_/gu, ' '), 120);
     return `${label}: ${text(collected[key], 500)}`;
@@ -135,8 +152,7 @@ function nextToolField({ activeRequest, fieldSchemas, collectedInformation, tool
   const field = candidates.find((candidate) => (
     candidate.required !== false
     && fieldBelongsToTool(candidate, authorization.tool)
-    && (collected[candidate.key] === undefined || collected[candidate.key] === null
-      || String(collected[candidate.key]).trim() === '')
+    && !completedField(candidate, collected[candidate.key], inputSchema)
   ));
   const question = text(field?.question);
   if (!field || !question) return null;

@@ -7,7 +7,7 @@ import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/know
 import { collectCanonicalRetrievalReservations } from './canonical-retrieval-reservations.js';
 import { publicationDuplicateKeys } from './publication-deduplication.js';
 
-export const AUTHORITATIVE_EVIDENCE_VERSION = 4;
+export const AUTHORITATIVE_EVIDENCE_VERSION = 5;
 
 const supportedRecordTypes = new Set([
   'CATALOG_ITEM', 'CATALOG_CATEGORY', 'FAQ', 'CONVERSATION_NODE', 'WORKFLOW_RULE', 'KNOWLEDGE_CHUNK',
@@ -325,10 +325,16 @@ export function fuseCandidateRankings(retrieval, {
   }
   const allowedTypes = Array.isArray(allowedRecordTypes) && allowedRecordTypes.length
     ? new Set(allowedRecordTypes.map((value) => String(value).toUpperCase())) : null;
-  const reservedIds = [...new Set(reservedRecordIds.map(normalizeId).filter(Boolean))];
+  const retrievalReservations = retrieval?.queryContext?.reservedRecords ?? [];
+  const reservedIds = [...new Set([
+    ...reservedRecordIds,
+    ...retrievalReservations.map((reservation) => reservation?.recordId),
+  ].map(normalizeId).filter(Boolean))];
   const reservedSet = new Set(reservedIds);
-  const reservedKeys = new Set(reservedRecordKeys.map((value) => String(value ?? '').trim())
-    .filter(Boolean));
+  const reservedKeys = new Set([
+    ...reservedRecordKeys,
+    ...retrievalReservations.map(recordKey),
+  ].map((value) => String(value ?? '').trim()).filter(Boolean));
   const reservedCandidate = (candidate) => reservedKeys.has(recordKey(candidate))
     || (!reservedKeys.size && reservedSet.has(normalizeId(candidate.recordId)));
   const fused = new Map();
@@ -402,11 +408,27 @@ export function fuseCandidateRankings(retrieval, {
   const namespaceOrder = (candidate) => primaryNamespaceOrder.get(candidate.namespace)
     ?? Number.MAX_SAFE_INTEGER;
   const rejectedUnrelatedWorkflowIds = [];
+  const rejectedUnrelatedCatalogIds = [];
+  const reservations = retrieval?.queryContext?.reservedRecords ?? [];
+  const focusedCatalogReasons = new Set([
+    'explicit_entity', 'explicit_current_entity', 'canonical_memory', 'latest_request_record',
+  ]);
+  const hasFocusedCatalogRecord = reservations.some((reservation) => (
+    ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(
+      String(reservation?.recordType ?? '').toUpperCase(),
+    ) && focusedCatalogReasons.has(String(reservation?.reason ?? '').toLowerCase())
+  ));
+  const broadCatalogRequest = ['CATEGORY_OVERVIEW', 'COMPARISON_COMPLEX'].includes(
+    String(retrieval?.intentClass ?? '').toUpperCase(),
+  ) || retrieval?.queryContext?.need?.requestedRecommendation === true;
   const ordinary = accepted.filter((candidate) => {
     if (reservedCandidate(candidate)) return false;
-    if (candidate.recordType !== 'WORKFLOW_RULE'
-      || primaryNamespaceOrder.has('WORKFLOW')
-      || candidate.authorizationHint === true) return true;
+    if (['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(candidate.recordType)
+      && hasFocusedCatalogRecord && !broadCatalogRequest) {
+      rejectedUnrelatedCatalogIds.push(normalizeId(candidate.recordId));
+      return false;
+    }
+    if (candidate.recordType !== 'WORKFLOW_RULE' || candidate.authorizationHint === true) return true;
     const strongestProviderScore = Math.max(0, ...Object.values(candidate.providerScores));
     const relevantCallerWorkflow = candidate.callerFacingHint === true
       && candidate.channels.length > 1
@@ -461,6 +483,7 @@ export function fuseCandidateRankings(retrieval, {
     rejectedNamespaceIds: Object.freeze([...rejectedNamespaceIds]),
     rejectedWeakIds: Object.freeze(rejectedWeakIds),
     rejectedDuplicateIds: Object.freeze(rejectedDuplicateIds),
+    rejectedUnrelatedCatalogIds: Object.freeze(rejectedUnrelatedCatalogIds),
     rejectedUnrelatedWorkflowIds: Object.freeze(rejectedUnrelatedWorkflowIds),
     reservedRecordIds: Object.freeze(reservedIds),
     missingReservedRecordIds: Object.freeze(reservedIds.filter((id) => !selectedIds.has(id))),

@@ -159,6 +159,7 @@
     "verify:unified-grounded-turn": "node scripts/verify-unified-grounded-turn.js",
     "verify:unified-runtime-only": "node scripts/verify-unified-runtime-only.js",
     "verify:strong-grounding-interruption": "node scripts/verify-strong-grounding-interruption.js",
+    "verify:task5-grounded-lifecycle": "node scripts/verify-strong-grounding-interruption.js && node scripts/verify-memory-routing-end-to-end.js && node scripts/verify-universal-multitenant-acceptance.js --repeats=3 && node scripts/verify-zero-evidence-multitenant.js --repeats=3",
     "verify:production-latency-contract": "node scripts/verify-production-latency-contract.js",
     "verify:operational-audio-lifecycle": "node scripts/verify-operational-audio-lifecycle.js",
     "verify:retrieval-completion-policy": "node scripts/verify-grounded-turn-evidence-pipeline.js && node scripts/verify-production-latency-contract.js",

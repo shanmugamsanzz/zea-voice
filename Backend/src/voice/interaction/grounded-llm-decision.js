@@ -1,8 +1,3 @@
-import {
-  groundedNumbers as numbers,
-  groundedNumbersFromSources,
-} from './grounded-number-validator.js';
-
 const maximumAnswerCharacters = 4_000;
 const maximumSources = 10;
 const maximumEntities = 20;
@@ -259,11 +254,17 @@ function normalizeStateUpdate(value, envelope, runtime) {
     const schema = fieldSchemas.get(key);
     if (!schema) return null;
     const normalized = normalizeFieldValue(fieldValue, schema, envelope);
-    if (normalized === undefined) return null;
+    // Partial action input remains missing so the configured field question
+    // can request completion. It is not an operational engine failure.
+    if (normalized === undefined) {
+      if (schema.requiredAction && activeTool) continue;
+      return null;
+    }
     collectedInformation[key] = normalized;
   }
-  const correctedFields = list(canonical.correctedFields, 30);
-  if (correctedFields.some((key) => !Object.hasOwn(collectedInformation, key))) return null;
+  const correctedFields = list(canonical.correctedFields, 30).filter((key) => (
+    Object.hasOwn(collectedInformation, key)
+  ));
   if (canonical.pendingQuestionRelevant !== undefined
     && typeof canonical.pendingQuestionRelevant !== 'boolean') return null;
   if (canonical.contextDependent !== undefined
@@ -685,18 +686,10 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
     && !responseId) {
     return Object.freeze({ valid: false, reason: 'response_id_required' });
   }
-  const evidenceNumbers = groundedNumbersFromSources(citedSources);
-  const unsupportedNumbers = answer && !approvedZeroEvidenceResponse
-    ? [...numbers(answer)].filter((number) => !evidenceNumbers.has(number)) : [];
-  if (unsupportedNumbers.length) {
-    return Object.freeze({
-      valid: false,
-      reason: 'unsupported_numeric_fact',
-      numbers: Object.freeze(unsupportedNumbers),
-      rejectedAnswer: answer,
-      evidenceIds: Object.freeze(citedSources.map((source) => source.id)),
-    });
-  }
+  // Numeric and structured claims are validated once at the post-LLM
+  // boundary, after caller-provided fields have been normalized. Performing
+  // the same check here cannot distinguish a caller phone/date from a KB fact
+  // and previously converted valid field collection into a technical failure.
   // Surface-token overlap is not a reliable evidence test for Tamil,
   // Tanglish, translations, or natural spoken paraphrases. The hydrated
   // claim validator still enforces selected evidence, numbers, entities,

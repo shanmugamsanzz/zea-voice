@@ -11,6 +11,11 @@ function normalized(value) {
   return clean(value, 200).toLocaleLowerCase();
 }
 
+function revision(value) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) ? parsed : null;
+}
+
 function scoped(scope = {}) {
   const result = Object.freeze({
     tenantId: clean(scope.tenantId, 160),
@@ -37,6 +42,10 @@ function canonicalRecord(source, scope) {
   return Object.freeze({
     id: recordId,
     recordId,
+    tenantId: clean(source.tenantId, 160),
+    agentId: clean(source.agentId, 160),
+    knowledgeBaseId: clean(source.knowledgeBaseId, 160),
+    publicationRevision: revision(source.publicationRevision),
     recordType: category ? 'CATALOG_CATEGORY' : 'CATALOG_ITEM',
     entityType: category ? 'CATEGORY' : 'ITEM',
     key,
@@ -44,6 +53,65 @@ function canonicalRecord(source, scope) {
     category: clean(data.category, 240) || null,
     categoryKey: clean(data.categoryKey, 160) || null,
   });
+}
+
+function unresolvedResolution(resolution, reason) {
+  return Object.freeze({
+    version: CANONICAL_TOPIC_MEMORY_VERSION,
+    scope: resolution.scope,
+    mode: 'UNRESOLVED',
+    activeEntity: null,
+    activeCategory: null,
+    comparisonEntities: Object.freeze([]),
+    requiresTargetedClarification: false,
+    reason,
+  });
+}
+
+/**
+ * Confirms that a proposed memory change is backed by the same tenant-published
+ * PostgreSQL records used for the validated turn. Retrieved alternatives never
+ * become memory merely because they appeared in the top five.
+ */
+export function confirmCanonicalTopicResolution(resolution = {}, {
+  decision = {}, hydratedRecords = [],
+} = {}) {
+  const mode = clean(resolution.mode, 40).toLocaleUpperCase();
+  if (!['EXPLICIT', 'CONTEXTUAL', 'COMPARISON'].includes(mode)) {
+    return unresolvedResolution(resolution, resolution.reason ?? 'canonical_selection_unconfirmed');
+  }
+  if (decision.valid !== true || String(decision.decision ?? '').toLocaleLowerCase() === 'clarify') {
+    return unresolvedResolution(resolution, 'grounded_decision_did_not_confirm_entity');
+  }
+  const targets = mode === 'COMPARISON'
+    ? resolution.comparisonEntities ?? []
+    : [resolution.activeEntity ?? resolution.activeCategory].filter(Boolean);
+  const byRecordId = new Map((Array.isArray(hydratedRecords) ? hydratedRecords : [])
+    .filter((record) => record?.recordId)
+    .map((record) => [normalized(record.recordId), record]));
+  const selectedSourceIds = new Set((decision.evidenceIds ?? [])
+    .map((sourceId) => normalized(sourceId)).filter(Boolean));
+  const supported = targets.length > 0 && targets.every((target) => {
+    const record = byRecordId.get(normalized(target.recordId ?? target.id));
+    if (!record || record.hydrationValidated !== true || record.publicationValidated !== true) return false;
+    const sameValue = (expected, actual) => !expected || normalized(expected) === normalized(actual);
+    if (!sameValue(resolution.scope?.tenantId, record.tenantId)
+      || !sameValue(resolution.scope?.agentId, record.agentId)
+      || !sameValue(target.tenantId, record.tenantId)
+      || !sameValue(target.agentId, record.agentId)
+      || !sameValue(target.knowledgeBaseId, record.knowledgeBaseId)
+      || (revision(target.publicationRevision) !== null
+        && revision(target.publicationRevision) !== revision(record.publicationRevision))) return false;
+    const reasons = new Set((record.reservationReasons ?? []).map((reason) => normalized(reason)));
+    if (mode === 'CONTEXTUAL') {
+      return reasons.has('canonical_memory')
+        && selectedSourceIds.has(normalized(record.sourceId));
+    }
+    const requiredReason = mode === 'COMPARISON' ? 'explicit_comparison' : 'explicit_entity';
+    return reasons.has(requiredReason) || reasons.has('explicit_current_entity');
+  });
+  return supported ? resolution
+    : unresolvedResolution(resolution, `${mode.toLocaleLowerCase()}_entity_not_confirmed`);
 }
 
 function uniqueRecords(values = []) {

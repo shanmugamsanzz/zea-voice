@@ -28,6 +28,24 @@ assert.equal(completeConversationTurnPairs(limitedTurn.memory.recentTurns).lengt
 assert.equal(limitedTurn.memory.recentTurns[0].content, 'caller 2');
 limited.close();
 
+const pendingScope = Object.freeze({ ...scope, callId: 'c1000000-0000-4000-8000-000000000005' });
+const pending = openGenericConversationState(pendingScope, {
+  conversationContextMode: 'last_n_turns', conversationContextTurns: 2,
+  conversationMemoryFields: [{
+    key: 'contact_number', label: 'Contact Number', type: 'phone', required: true,
+    question: 'What is your contact number?',
+  }],
+});
+pending.setPendingQuestion({
+  key: 'contact_number', text: 'What is your contact number?', kind: 'field',
+});
+const pendingTurn = createNormalTurnInput({
+  ...pendingScope, finalizedQuestion: 'It is 9360235493', memory: pending.snapshot(),
+});
+assert.equal(pendingTurn.memory.pendingClarification.key, 'contact_number',
+  'A configured active question must cross the normal-turn boundary');
+pending.close();
+
 const fullScope = Object.freeze({ ...scope, callId: 'c1000000-0000-4000-8000-000000000004' });
 const full = openGenericConversationState(fullScope, {
   conversationContextMode: 'full_current_call', conversationContextTurns: 5,

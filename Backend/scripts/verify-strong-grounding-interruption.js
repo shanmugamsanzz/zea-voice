@@ -8,6 +8,7 @@ import {
   rankRelevantHydratedEvidence,
   validateCallerProvidedState,
 } from '../src/voice/interaction/grounded-claim-validator.js';
+import { validatePostLlmResponseAndTool } from '../src/voice/interaction/unified-grounded-turn.js';
 import { openGenericConversationState } from '../src/voice/interaction/generic-conversation-state.js';
 import { deterministicSourceEntry } from '../src/knowledge-engine/deterministic-source-mapping.js';
 
@@ -182,6 +183,22 @@ assert.equal(validateGroundedClaim(
   structuredContactEvidence,
 ).valid, true, 'spoken prices and zero-minute clock formats must match authoritative facts');
 assert.equal(validateGroundedClaim(
+  'Contact number: 9360235493; requested date: 2030-04-05.',
+  [{ content: 'Configured caller details may be collected.', recordType: 'GENERAL_KNOWLEDGE' }],
+  { callerProvidedFields: [
+    { key: 'contact_number', label: 'Contact number', value: '9360235493' },
+    { key: 'requested_date', label: 'Requested date', value: '2030-04-05' },
+  ] },
+).valid, true, 'caller-provided phone numbers and dates are state values, not KB claims');
+assert.equal(validateGroundedClaim(
+  'The price is INR 9360235493.',
+  [{ content: 'Configured caller details may be collected.', recordType: 'GENERAL_KNOWLEDGE' }],
+  { callerProvidedFields: [
+    { key: 'contact_number', label: 'Contact number', value: '9360235493' },
+  ] },
+).reason, 'unsupported_numeric_fact',
+'a caller phone number must not authorize an unrelated price claim');
+assert.equal(validateGroundedClaim(
   'The postal code is 063601.', structuredContactEvidence,
 ).reason, 'unsupported_numeric_fact', 'an invented postal code must remain blocked');
 assert.equal(validateGroundedClaim(
@@ -189,6 +206,28 @@ assert.equal(validateGroundedClaim(
   [{ content: 'Standard Plan costs INR 1200.', recordType: 'CATALOG_ITEM' }],
   { knownEntities: [{ key: 'premium', name: 'Premium Plan' }] },
 ).reason, 'unsupported_numeric_fact');
+const selectedPriceEvidence = [{
+  id: 'selected-price', recordId: 'selected-record', recordType: 'CATALOG_ITEM',
+  callerFacing: true, content: 'Selected option costs INR 1200.',
+  authoritativeData: { name: 'Selected option', price: 1200, currency: 'INR' },
+}];
+const unrelatedPriceEvidence = [{
+  id: 'unselected-price', recordId: 'unselected-record', recordType: 'CATALOG_ITEM',
+  callerFacing: true, content: 'Another option costs INR 9900.',
+  authoritativeData: { name: 'Another option', price: 9900, currency: 'INR' },
+}];
+const isolatedValidation = validatePostLlmResponseAndTool({
+  decision: {
+    decision: 'answer', answer: 'Selected option costs INR 9900.',
+    stateUpdate: { knownEntities: [] }, toolRequest: null,
+  },
+  selectedEvidence: selectedPriceEvidence,
+  claimEvidence: [...selectedPriceEvidence, ...unrelatedPriceEvidence],
+  envelopeEntities: [], finalizedUtterance: 'What is the selected option price?',
+});
+assert.equal(isolatedValidation.valid, false);
+assert.equal(isolatedValidation.reason, 'unsupported_numeric_fact',
+  'unselected hydrated records must never authorize an LLM claim');
 const authoritativeFixture = {
   id: 'postgres-1', recordId: 'record-1', recordType: 'GENERAL_KNOWLEDGE',
   tenantId: 'tenant-a', agentId: 'agent-a', knowledgeBaseId: 'kb-a', publicationRevision: 1,

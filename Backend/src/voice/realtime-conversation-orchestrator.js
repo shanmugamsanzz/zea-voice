@@ -17,6 +17,8 @@ import {
   knowledgeEngineDecisionTypes,
   knowledgeEngineResponseModes,
 } from '../knowledge-engine/engine-contract.js';
+import { completeConversationTurnPairs } from '../knowledge-engine/conversation-turn-context.js';
+import { confirmCanonicalTopicResolution } from '../knowledge-engine/canonical-topic-memory.js';
 import { finalizeConfiguredToolResults } from '../knowledge-bases/verified-tool-result.js';
 import { ProviderIndependentAudioEngine } from './audio/audio-engine.js';
 import { completeVoiceCall, completeVoiceCallWithoutRuntime } from './call-completion.service.js';
@@ -2033,6 +2035,10 @@ export class RealtimeConversationOrchestrator {
       },
       usageDirection: this.call.direction,
     }, { registry: this.registry, adapter: this.adapters.llm, skipDefaultRegistration: true });
+    const storedCompleteTurnPairs = completeConversationTurnPairs(
+      liveMemory?.recentTurns ?? [],
+    ).length;
+    const selectedContextMessages = groundedDecisionInput?.recentRelevantTurns?.length ?? 0;
     this.log.info({
       stage: 'llm.prompt_prepared', callId: this.call.id,
       promptCharacters: session.promptCharacters,
@@ -2042,9 +2048,30 @@ export class RealtimeConversationOrchestrator {
       effectiveBudgetCharacters: selectedLlmPromptBudget(true),
       evidenceRecords: groundingEnvelope.sources.length,
       publishedMapIncluded: false,
+      // Provider history is intentionally zero for grounded turns because the
+      // selected complete pairs are embedded once in grounded_turn_input.
       historyMessages: session.historyMessages,
+      providerHistoryMessages: session.historyMessages,
+      storedCompleteTurnPairs,
+      selectedContextMessages,
+      groundedContextMessages: session.groundedContextMessages,
+      groundedContextPairs: session.groundedContextPairs,
+      conversationContextMode: liveMemory?.conversationContextMode ?? null,
+      conversationContextTurns: liveMemory?.conversationContextTurns ?? null,
       maximumOutputTokens: session.maxOutputTokens,
     }, 'Voice LLM prompt prepared within the configured runtime budget');
+    if (storedCompleteTurnPairs > 0 && session.groundedContextMessages === 0) {
+      this.log.error({
+        stage: 'llm.conversation_context_missing', callId: this.call.id,
+        storedCompleteTurnPairs,
+        selectedContextMessages,
+        conversationContextMode: liveMemory?.conversationContextMode ?? null,
+        conversationContextTurns: liveMemory?.conversationContextTurns ?? null,
+        promptCharacters: session.promptCharacters,
+        configuredBudgetCharacters: env.VOICE_LLM_PROMPT_BUDGET_CHARS,
+        configuredBudgetTokens: env.VOICE_LLM_PROMPT_BUDGET_TOKENS,
+      }, 'Stored current-call history produced zero grounded LLM context messages');
+    }
     this.activeLlm = session;
     let text = '';
     let toolCalls = [];
@@ -2122,6 +2149,7 @@ export class RealtimeConversationOrchestrator {
             this.runtimeProfile, knowledge,
           ),
           zeroEvidenceResponse: informationUnavailableResponse,
+          canonicalEntityAuthority: true,
           clarificationContext: llmEvidenceBundle?.decisionInput ? {
             ...llmEvidenceBundle.decisionInput.clarificationContext,
             requestedFact: llmEvidenceBundle.decisionInput.requestedFact,
@@ -2141,10 +2169,15 @@ export class RealtimeConversationOrchestrator {
           pendingQuestionRelevant: unifiedTurn.stateUpdate?.pendingQuestionRelevant ?? true,
         }
         : unifiedTurn;
-      if (grounded.valid && llmEvidenceBundle?.canonicalMemoryResolution
+      const confirmedCanonicalResolution = llmEvidenceBundle?.canonicalMemoryResolution
+        ? confirmCanonicalTopicResolution(llmEvidenceBundle.canonicalMemoryResolution, {
+          decision: grounded,
+          hydratedRecords: llmEvidenceBundle.decisionInput?.hydratedRecords ?? [],
+        }) : null;
+      if (grounded.valid && confirmedCanonicalResolution?.mode !== 'UNRESOLVED'
         && this.liveCallMemory?.applyCanonicalTopicResolution) {
         const canonicalApplied = this.liveCallMemory.applyCanonicalTopicResolution(
-          llmEvidenceBundle.canonicalMemoryResolution,
+          confirmedCanonicalResolution,
           { turnToken: streaming.epoch },
         );
         if (canonicalApplied?.stale) {

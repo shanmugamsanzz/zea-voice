@@ -72,6 +72,18 @@ function callerSupportsValue(value, utterance) {
   return valueTokens.length > 0 && valueTokens.every((token) => utteranceTokens.has(token));
 }
 
+function callerFieldSupportsNumber(claim, number, fields = []) {
+  const claimTokens = new Set(tokens(claim));
+  return fields.some((field) => {
+    const fieldNumbers = numbers(String(field?.value ?? ''));
+    if (!fieldNumbers.has(number)) return false;
+    const descriptors = tokens([
+      field?.key, field?.label, field?.question,
+    ].filter(Boolean).join(' '));
+    return descriptors.length > 0 && descriptors.some((token) => claimTokens.has(token));
+  });
+}
+
 function sentences(value) {
   const normalized = text(value);
   if (!normalized) return [];
@@ -192,7 +204,10 @@ export function validateGroundedClaim(sentence, sources = [], options = {}) {
   }
   const evidenceText = sources.map(sourceContent).join(' ');
   const evidenceNumbers = groundedNumbersFromSources(sources);
-  const unsupportedNumbers = [...numbers(claim)].filter((number) => !evidenceNumbers.has(number));
+  const unsupportedNumbers = [...numbers(claim)].filter((number) => (
+    !evidenceNumbers.has(number)
+    && !callerFieldSupportsNumber(claim, number, options.callerProvidedFields)
+  ));
   if (unsupportedNumbers.length) {
     return Object.freeze({
       valid: false, reason: 'unsupported_numeric_fact',

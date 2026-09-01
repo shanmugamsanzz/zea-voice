@@ -59,6 +59,11 @@ function entity(value) {
   if (!recordId && !key && !name) return null;
   return Object.freeze({
     recordId: recordId || null,
+    tenantId: clean(value.tenantId, 160) || null,
+    agentId: clean(value.agentId, 160) || null,
+    knowledgeBaseId: clean(value.knowledgeBaseId, 160) || null,
+    publicationRevision: Number.isInteger(Number(value.publicationRevision))
+      ? Number(value.publicationRevision) : null,
     key: key || null,
     name: name || null,
     recordType: clean(value.recordType ?? value.type, 80) || null,
@@ -193,7 +198,13 @@ export function createNormalTurnInput(value = {}) {
     }),
     conversationContextMode,
     conversationContextTurns,
-    pendingClarification: pending(sourceMemory.pendingClarification),
+    // A configured field/workflow question is durable current-call context even
+    // when it has not been represented as an ambiguity clarification. Preserve
+    // either shape through the normal-turn boundary so the grounded LLM can
+    // understand the caller's next answer or correction.
+    pendingClarification: pending(
+      sourceMemory.pendingClarification ?? sourceMemory.pendingQuestion,
+    ),
     activeTool: activeTool(sourceMemory.activeTool ?? sourceMemory.activeToolRequest),
     collectedToolFields: scalarFields(
       sourceMemory.collectedToolFields ?? sourceMemory.collectedInformation,

@@ -72,6 +72,12 @@ function cleanEntity(value = {}) {
   if (!id && !key && !name) return null;
   return Object.freeze({
     id: id || null, recordId: id || null,
+    tenantId: cleanText(value.tenantId, 160) || null,
+    agentId: cleanText(value.agentId, 160) || null,
+    knowledgeBaseId: cleanText(value.knowledgeBaseId, 160) || null,
+    publicationRevision: Number.isInteger(Number(value.publicationRevision))
+      ? Number(value.publicationRevision) : null,
+    recordType: cleanText(value.recordType, 80).toLocaleUpperCase() || null,
     key: key || null, name: name || key || id,
     category: cleanText(value.category, 240) || null,
     categoryKey: cleanText(value.categoryKey, 160) || null,
@@ -126,6 +132,12 @@ function cleanCategory(value = {}) {
   return Object.freeze({
     id: id || null,
     recordId: id || null,
+    tenantId: cleanText(value.tenantId, 160) || null,
+    agentId: cleanText(value.agentId, 160) || null,
+    knowledgeBaseId: cleanText(value.knowledgeBaseId, 160) || null,
+    publicationRevision: Number.isInteger(Number(value.publicationRevision))
+      ? Number(value.publicationRevision) : null,
+    recordType: cleanText(value.recordType, 80).toLocaleUpperCase() || 'CATALOG_CATEGORY',
     key: key || null,
     name: name || key || id,
     parentKey: cleanText(value.parentKey, 160) || null,
@@ -389,10 +401,11 @@ export function openGenericConversationState(identity, settings = {}, now = Date
       if (!current(options.turnToken)) return Object.freeze({ applied: false, stale: true, state: publicState(state) });
       const update = decision.stateUpdate && typeof decision.stateUpdate === 'object'
         ? decision.stateUpdate : decision;
-      const topic = cleanText(update.currentTopic ?? decision.currentTopic, 240);
-      if (topic) state.currentTopic = topic;
-      const selected = uniqueEntities(update.knownEntities ?? decision.selectedEntities ?? []);
-      if (selected.length) {
+      if (options.canonicalEntityAuthority !== true) {
+        const topic = cleanText(update.currentTopic ?? decision.currentTopic, 240);
+        if (topic) state.currentTopic = topic;
+        const selected = uniqueEntities(update.knownEntities ?? decision.selectedEntities ?? []);
+        if (selected.length) {
         // An explicit latest-turn selection replaces stale entities. A true
         // contextual follow-up may retain earlier entities for comparisons or
         // references. This remains industry-neutral and decision-controlled.
@@ -441,8 +454,8 @@ export function openGenericConversationState(identity, settings = {}, now = Date
             }
           }
         }
-      } else if (update.contextDependent === false
-        && cleanRequestType(update.requestType ?? update.questionType) === 'category_overview') {
+        } else if (update.contextDependent === false
+          && cleanRequestType(update.requestType ?? update.questionType) === 'category_overview') {
         // A category is a deterministic browse context, not an arbitrary
         // child selection. Clear the previous item while retaining the
         // category topic supplied by the grounded runtime.
@@ -451,11 +464,19 @@ export function openGenericConversationState(identity, settings = {}, now = Date
         state.activeCategory = cleanCategory({ key: topic, name: topic });
         state.pendingQuestion = null;
         state.pendingClarification = null;
+        }
       }
       const updates = cleanInformation(
         update.collectedInformation ?? decision.fieldUpdates ?? {}, fieldKeys,
       );
-      for (const [field, value] of Object.entries(updates)) state.collectedInformation[field] = value;
+      const correctedFields = new Set(cleanList(
+        update.correctedFields ?? decision.correctedFields,
+      ).map((field) => field.toLocaleLowerCase()));
+      for (const [field, value] of Object.entries(updates)) {
+        if (!Object.hasOwn(state.collectedInformation, field) || correctedFields.has(field)) {
+          state.collectedInformation[field] = value;
+        }
+      }
       if (state.pendingQuestion?.key && Object.hasOwn(updates, state.pendingQuestion.key)) {
         state.pendingQuestion = null;
         state.pendingClarification = null;

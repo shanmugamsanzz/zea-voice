@@ -15,6 +15,11 @@ function compact(value, reason, fallbackType = 'CATALOG_ITEM') {
     recordType: String(value?.recordType ?? (value?.entityType === 'CATEGORY'
       ? 'CATALOG_CATEGORY' : fallbackType)).trim().toUpperCase(),
     categoryKey: value?.categoryKey ?? null,
+    tenantId: value?.tenantId ?? null,
+    agentId: value?.agentId ?? null,
+    knowledgeBaseId: value?.knowledgeBaseId ?? null,
+    publicationRevision: Number.isInteger(Number(value?.publicationRevision))
+      ? Number(value.publicationRevision) : null,
     reason,
   });
 }

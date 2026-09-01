@@ -4,6 +4,7 @@ import {
   composeConfiguredTurnResponse,
   resolveNextConfiguredQuestion,
 } from '../src/voice/interaction/next-question-policy.js';
+import { openGenericConversationState } from '../src/voice/interaction/generic-conversation-state.js';
 
 const tools = [{
   id: 'tool-1',
@@ -125,6 +126,66 @@ const authorizedContinuation = resolve({
   actionEvidence: [],
 });
 assert.equal(authorizedContinuation.key, 'visit_date');
+
+// Partial action values stay missing until they satisfy the assigned schema.
+const contactTool = {
+  id: 'tool-2', name: 'send_request',
+  inputSchema: {
+    type: 'object', required: ['contact_number'],
+    properties: {
+      contact_number: { type: 'string', format: 'phone', minLength: 8 },
+    },
+    'x-requires-confirmation': true,
+    'x-confirmation-message': 'Continue with these details?',
+  },
+};
+const contactFields = [{
+  key: 'contact_number', label: 'Contact number', type: 'phone', required: true,
+  requiredAction: 'send_request', question: 'Please provide the complete contact number.',
+}];
+const contactEvidence = [{
+  recordId: 'workflow-record-2', activationAllowed: true,
+  authoritativeData: {
+    actionType: 'configured_tool', actionConfig: { toolIdentifier: 'send_request' },
+  },
+}];
+const partialContact = resolve({
+  decision: { activeToolRequest: { name: 'send_request' } },
+  afterState: { collectedInformation: { contact_number: '96' } },
+  fieldSchemas: contactFields, tools: [contactTool], actionEvidence: contactEvidence,
+});
+assert.equal(partialContact.key, 'contact_number');
+assert.equal(partialContact.kind, 'field');
+const completeContact = resolve({
+  decision: { activeToolRequest: { name: 'send_request' } },
+  afterState: { collectedInformation: { contact_number: '9360235493' } },
+  fieldSchemas: contactFields, tools: [contactTool], actionEvidence: contactEvidence,
+});
+assert.equal(completeContact.kind, 'confirmation');
+assert.match(completeContact.question, /9360235493/u);
+
+// Completed values are retained. Only a decision-declared correction may
+// replace a value that was already confirmed by the caller.
+const state = openGenericConversationState({
+  tenantId: 'tenant-action', agentId: 'agent-action', callId: 'call-action',
+}, {
+  cachePolicy: 'current_call_only', conversationMemoryFields: contactFields,
+});
+const firstTurn = state.beginTurn();
+state.applyGroundedDecision({ stateUpdate: {
+  collectedInformation: { contact_number: '9360235493' }, correctedFields: [],
+} }, { turnToken: firstTurn });
+const unchangedTurn = state.beginTurn();
+state.applyGroundedDecision({ stateUpdate: {
+  collectedInformation: { contact_number: '9000000000' }, correctedFields: [],
+} }, { turnToken: unchangedTurn });
+assert.equal(state.snapshot().collectedInformation.contact_number, '9360235493');
+const correctionTurn = state.beginTurn();
+state.applyGroundedDecision({ stateUpdate: {
+  collectedInformation: { contact_number: '9000000000' },
+  correctedFields: ['contact_number'],
+} }, { turnToken: correctionTurn });
+assert.equal(state.snapshot().collectedInformation.contact_number, '9000000000');
 
 // Conversation Guidance is the final configured source before waiting.
 const guidance = resolve({

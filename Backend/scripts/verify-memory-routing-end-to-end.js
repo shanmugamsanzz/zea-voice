@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { deterministicSourceEntry } from '../src/knowledge-engine/deterministic-source-mapping.js';
 import { openGenericConversationState } from '../src/voice/interaction/generic-conversation-state.js';
 import { applyUnifiedGroundedTurn } from '../src/voice/interaction/unified-grounded-turn.js';
+import { selectCompleteConversationTurns } from '../src/knowledge-engine/conversation-turn-context.js';
 
 const tenants = [
   { tenantId: 'memory-tenant-a', agentId: 'memory-agent-a', language: 'en' },
@@ -43,26 +44,32 @@ function envelope(sources) {
 }
 
 function decision({ type = 'answer', answer = '', evidenceIds = [], entityKeys = [],
-  requestType = null, contextDependent = false, toolRequest = null }) {
+  requestType = null, contextDependent = false, toolRequest = null,
+  collectedInformation = {}, correctedFields = [], pendingQuestion = null }) {
   return JSON.stringify({
     decision: type, answer, responseId: null, evidenceIds,
     stateUpdate: {
       currentTopic: entityKeys[0] ?? requestType,
-      knownEntityKeys: entityKeys, collectedInformation: {}, correctedFields: [],
+      knownEntityKeys: entityKeys, collectedInformation, correctedFields,
       requestType, contextDependent, pendingQuestionRelevant: false,
       ...(toolRequest ? { activeToolRequest: { name: toolRequest.name } } : {}),
     },
-    pendingQuestion: null, toolRequest,
+    pendingQuestion, toolRequest,
     clarification: null,
   });
 }
 
-function runTurn({ scope, memory, token, question, records, rawDecision, tools = [] }) {
+function runTurn({
+  scope, memory, token, question, records, rawDecision, tools = [],
+  fieldSchemas = [], zeroEvidenceResponse = '',
+}) {
   const groundingEnvelope = envelope(records);
   memory.beginTurn(token);
-  return applyUnifiedGroundedTurn({
+  memory.append({ role: 'user', content: question }, { turnToken: token });
+  const result = applyUnifiedGroundedTurn({
     rawDecision, groundingEnvelope, memory, turnToken: token,
-    evidence: records, finalizedUtterance: question, tools,
+    evidence: records, finalizedUtterance: question, tools, fieldSchemas,
+    zeroEvidenceResponse,
     evidenceScope: {
       tenantId: scope.tenantId, agentId: scope.agentId, requireHydratedEvidence: true,
       publicationRevisions: [{
@@ -70,6 +77,7 @@ function runTurn({ scope, memory, token, question, records, rawDecision, tools =
       }],
     },
   });
+  return result;
 }
 
 let validatedTurns = 0;
@@ -77,7 +85,17 @@ for (const [tenantIndex, scope] of tenants.entries()) {
   const callId = `memory-call-${tenantIndex}`;
   const memory = openGenericConversationState(
     { ...scope, callId },
-    { conversationContextMode: 'full_current_call', conversationContextTurns: 5 },
+    {
+      conversationContextMode: 'full_current_call', conversationContextTurns: 5,
+      conversationMemoryFields: [
+        { key: 'contact_name', label: 'Contact name', type: 'text', required: false,
+          question: 'What contact name should I use?' },
+        { key: 'contact_number', label: 'Contact number', type: 'phone', required: false,
+          question: 'What contact number should I use?' },
+        { key: 'requested_date', label: 'Requested date', type: 'date', required: false,
+          question: 'What date should I use?' },
+      ],
+    },
   );
   const first = record(scope, `first-${tenantIndex}`, 'CATALOG_ITEM',
     `Option ${tenantIndex} costs ${1100 + tenantIndex}.`, {
@@ -115,6 +133,41 @@ for (const [tenantIndex, scope] of tenants.entries()) {
   assert.equal(price.valid, true);
   assert.equal(price.state.activeEntity.recordId, first.recordId);
   assert.deepEqual(price.evidenceIds, ['source_1']);
+
+  const callerDetails = record(scope, `caller-details-${tenantIndex}`, 'GENERAL_KNOWLEDGE',
+    'Configured caller details may be collected for the current conversation.', {
+      answer: 'Configured caller details may be collected for the current conversation.',
+    });
+  const phone = `9360235${String(400 + tenantIndex)}`;
+  const correctedPhone = `9360236${String(400 + tenantIndex)}`;
+  const details = runTurn({
+    scope, memory, token: `details-${tenantIndex}`,
+    question: `My name is Caller ${tenantIndex}, contact number ${phone}, requested date 2030-04-05.`,
+    records: [callerDetails], fieldSchemas: memory.fieldSchemas(),
+    rawDecision: decision({
+      answer: `Contact name: Caller ${tenantIndex}; contact number: ${phone}; requested date: 2030-04-05.`,
+      evidenceIds: ['source_1'], requestType: 'information_collection',
+      collectedInformation: {
+        contact_name: `Caller ${tenantIndex}`, contact_number: phone, requested_date: '2030-04-05',
+      },
+    }),
+  });
+  assert.equal(details.valid, true, JSON.stringify(details));
+  assert.equal(details.reason, undefined);
+  assert.equal(details.state.collectedInformation.contact_number, phone);
+  const correction = runTurn({
+    scope, memory, token: `correction-${tenantIndex}`,
+    question: `Correct the contact number to ${correctedPhone}.`,
+    records: [callerDetails], fieldSchemas: memory.fieldSchemas(),
+    rawDecision: decision({
+      answer: `Contact number: ${correctedPhone}.`, evidenceIds: ['source_1'],
+      requestType: 'information_collection',
+      collectedInformation: { contact_number: correctedPhone },
+      correctedFields: ['contact_number'],
+    }),
+  });
+  assert.equal(correction.valid, true, JSON.stringify(correction));
+  assert.equal(correction.state.collectedInformation.contact_number, correctedPhone);
 
   for (const [kind, content] of [
     ['location_question', `Office ${tenantIndex} is at 10 Central Road, 60000${tenantIndex}.`],
@@ -191,6 +244,25 @@ for (const [tenantIndex, scope] of tenants.entries()) {
   assert.equal(switched.valid, true);
   assert.equal(switched.state.activeEntity.recordId, second.recordId);
   assert.equal(switched.state.knownEntities.some((entity) => entity.recordId === first.recordId), false);
+
+  const unavailableResponse = `Configured unavailable response ${tenantIndex}.`;
+  const unavailable = runTurn({
+    scope, memory, token: `unavailable-${tenantIndex}`,
+    question: `Unknown published fact ${tenantIndex}?`, records: [],
+    zeroEvidenceResponse: unavailableResponse,
+    rawDecision: decision({
+      answer: unavailableResponse, evidenceIds: [], requestType: 'unavailable_information',
+    }),
+  });
+  assert.equal(unavailable.valid, true, JSON.stringify(unavailable));
+  assert.equal(unavailable.answer, unavailableResponse);
+
+  const relevantHistory = selectCompleteConversationTurns(memory.snapshot().recentTurns, {
+    mode: 'full_current_call', currentQuestion: 'What was the corrected contact and selected option?',
+    contextTerms: [correctedPhone, second.authoritativeData.name], maximumPairs: 5,
+  });
+  assert.ok(relevantHistory.length >= 2, 'relevant complete history must be nonzero');
+  assert.equal(relevantHistory.length % 2, 0, 'history must contain complete caller-agent pairs');
   const foreign = record(tenants[(tenantIndex + 1) % tenants.length],
     `foreign-${tenantIndex}`, 'GENERAL_KNOWLEDGE', 'Foreign tenant content.',
     { answer: 'Foreign tenant content.' });
@@ -201,7 +273,7 @@ for (const [tenantIndex, scope] of tenants.entries()) {
   });
   assert.equal(leaked.valid, false);
 
-  validatedTurns += 6;
+  validatedTurns += 9;
   memory.close();
 }
 
@@ -209,7 +281,9 @@ console.log(JSON.stringify({
   gate: 'memory-routing-end-to-end', passed: true,
   tenants: tenants.length, languages: tenants.map((tenant) => tenant.language),
   validatedTurns, followUpPrices: true, lastDiscussedEntities: true,
+  relevantHistory: true, callerCorrections: true, fieldCollection: true,
   locationAndDirections: true, authorizedBooking: true, topicSwitching: true,
+  unavailableInformation: true, unsupportedNumericFactFalsePositives: 0,
   staleMemory: false, duplicateEvidence: false, unauthorizedTools: false,
   technicalFallbacks: 0, silentTurns: 0, crossTenantLeakage: false,
 }, null, 2));

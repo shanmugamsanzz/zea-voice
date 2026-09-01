@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   removeUnsupportedRecommendationSentences,
   validateGroundedClaim,
@@ -149,5 +150,11 @@ const unverifiedSuccess = await executeAgentTools(runtimeProfile, call, [{
 });
 assert.equal(unverifiedSuccess[0].success, false);
 assert.equal(unverifiedSuccess[0].error.code, 'VOICE_TOOL_REPORTED_FAILURE');
+
+const unifiedTurnSource = readFileSync(
+  new URL('../src/voice/interaction/unified-grounded-turn.js', import.meta.url), 'utf8',
+);
+assert.doesNotMatch(unifiedTurnSource, /configuredActionActivation/u,
+  'retrieved Workflow evidence must not auto-start a tool lifecycle');
 
 console.log('Grounding and schema-driven action runtime verification passed');

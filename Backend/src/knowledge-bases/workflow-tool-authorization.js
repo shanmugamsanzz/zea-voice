@@ -1,7 +1,7 @@
 import { AppError } from '../middleware/errors.js';
 import { normalizeConfiguredToolIdentifier } from './knowledge-record-validation.js';
 
-export const WORKFLOW_TOOL_AUTHORIZATION_VERSION = 1;
+export const WORKFLOW_TOOL_AUTHORIZATION_VERSION = 2;
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -22,6 +22,27 @@ export function assignedToolIdentifiers(tool = {}) {
     configuration.key,
     ...(Array.isArray(tool.identifiers) ? tool.identifiers : []),
   ].map(identity).filter(Boolean)));
+}
+
+export function assignedToolInputSchema(tool = {}) {
+  const configuration = object(tool.configuration);
+  return object(tool.inputSchema ?? configuration.inputSchema ?? configuration.input_schema);
+}
+
+function toolSchemaIssue(tool = {}) {
+  const schema = assignedToolInputSchema(tool);
+  if (schema.type !== 'object') return 'tool_schema_root_must_be_object';
+  if (!schema.properties || typeof schema.properties !== 'object'
+    || Array.isArray(schema.properties)) return 'tool_schema_properties_invalid';
+  const required = schema.required ?? [];
+  if (!Array.isArray(required) || required.some((key) => (
+    typeof key !== 'string' || !Object.hasOwn(schema.properties, key)
+  ))) return 'tool_schema_required_invalid';
+  if (Object.entries(schema.properties).some(([key, property]) => (
+    !/^[A-Za-z][A-Za-z0-9_]{0,63}$/u.test(key)
+    || !property || typeof property !== 'object' || Array.isArray(property)
+  ))) return 'tool_schema_property_invalid';
+  return null;
 }
 
 export function configuredWorkflowToolIdentifier(workflow = {}) {
@@ -46,17 +67,20 @@ export function validateWorkflowToolAssignments({ workflows = [], agents = [] } 
   });
   const issues = [];
   for (const agent of agents) {
-    const toolIdentities = (agent.tools ?? []).map(assignedToolIdentifiers);
     for (const workflow of configuredWorkflows) {
-      if (workflow.toolIdentifier && toolIdentities.some((values) => (
-        values.has(identity(workflow.toolIdentifier))
-      ))) continue;
+      const matches = workflow.toolIdentifier ? (agent.tools ?? []).filter((tool) => (
+        assignedToolIdentifiers(tool).has(identity(workflow.toolIdentifier))
+      )) : [];
+      const schemaReason = matches.length === 1 ? toolSchemaIssue(matches[0]) : null;
+      if (matches.length === 1 && !schemaReason) continue;
       issues.push(Object.freeze({
         agentId: String(agent.agentId ?? agent.id ?? ''),
         workflowRecordId: workflow.workflowRecordId,
         workflowName: workflow.workflowName || null,
         toolIdentifier: workflow.toolIdentifier ?? null,
-        reason: workflow.toolIdentifier ? 'tool_not_assigned' : 'tool_identifier_invalid',
+        reason: !workflow.toolIdentifier ? 'tool_identifier_invalid'
+          : (matches.length === 0 ? 'tool_not_assigned'
+            : (matches.length > 1 ? 'tool_identifier_ambiguous' : schemaReason)),
       }));
     }
   }
@@ -131,7 +155,7 @@ export async function assertKnowledgeBaseWorkflowToolsAssigned(client, {
   if (issues.length) {
     throw new AppError(
       409,
-      'A published Workflow references a tool that is not active and assigned to the agent',
+      'A published Workflow must reference one active assigned tool with a valid input schema',
       'KNOWLEDGE_WORKFLOW_TOOL_NOT_ASSIGNED',
       { knowledgeBaseId, issues },
     );

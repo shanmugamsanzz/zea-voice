@@ -1069,6 +1069,7 @@ const deterministicAction = applyUnifiedGroundedTurn({
     stateUpdate: {
       currentTopic: 'priority service', knownEntityKeys: ['priority-service'],
       collectedInformation: {}, correctedFields: [], pendingQuestionRelevant: false,
+      activeToolRequest: { name: 'create_request-1' },
     },
     pendingQuestion: null, toolRequest: null,
   }),

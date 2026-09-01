@@ -88,6 +88,11 @@ function compactEntity(value, fallbackRecordType = 'CATALOG_ITEM') {
     ? 'CATALOG_CATEGORY' : fallbackRecordType)).trim().toUpperCase();
   return recordId || name ? Object.freeze({
     recordId: recordId || null, name: name || null, recordType,
+    tenantId: clean(value.tenantId, 160) || null,
+    agentId: clean(value.agentId, 160) || null,
+    knowledgeBaseId: clean(value.knowledgeBaseId, 160) || null,
+    publicationRevision: Number.isInteger(Number(value.publicationRevision))
+      ? Number(value.publicationRevision) : null,
   }) : null;
 }
 

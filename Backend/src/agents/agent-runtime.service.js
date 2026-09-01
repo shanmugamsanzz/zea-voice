@@ -298,10 +298,13 @@ export function compactGroundedDecisionInput(
       zeroEvidencePolicy: compactBudgetedValue(input.zeroEvidencePolicy ?? {}, profile),
     };
   };
-  for (let retainedOptionalCount = optionalRecords.length;
-    retainedOptionalCount >= 0; retainedOptionalCount -= 1) {
-    for (let retainedPairCount = completePairs.length;
-      retainedPairCount >= 0; retainedPairCount -= 1) {
+  // Complete caller-agent pairs are the continuity contract selected by the UI.
+  // Prefer removing optional evidence before removing those pairs. Mandatory
+  // explicit/contextual evidence still survives through mandatoryRecords.
+  for (let retainedPairCount = completePairs.length;
+    retainedPairCount >= 0; retainedPairCount -= 1) {
+    for (let retainedOptionalCount = optionalRecords.length;
+      retainedOptionalCount >= 0; retainedOptionalCount -= 1) {
       for (const profile of groundedCompactionProfiles) {
         const serialized = JSON.stringify(build(
           profile, retainedPairCount, retainedOptionalCount,
@@ -320,6 +323,12 @@ export function compactGroundedDecisionInput(
       canonical: compactCanonicalMemory(
         input.canonicalMemory, groundedCompactionProfiles.at(-1),
       ),
+      recentTurns: flattenConversationTurnPairs(completePairs.slice(-1)).map((turn) => ({
+        role: turn.role,
+        content: compactBudgetedValue(turn.content, {
+          ...groundedCompactionProfiles.at(-1), stringLimit: 240,
+        }),
+      })),
       meaning: input.meaning ?? null,
       requestedFact: input.requestedFact ?? null,
     }, groundedCompactionProfiles.at(-1)),

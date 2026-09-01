@@ -1,6 +1,5 @@
 import { validateGroundedLlmDecision } from './grounded-llm-decision.js';
 import {
-  configuredActionActivation,
   configuredToolAuthorization,
   validateEvidenceScope,
   validateDecisionSecurity,
@@ -254,12 +253,39 @@ export function validatePostLlmResponseAndTool({
     !entitySupportedBySelectedCatalog(entity, selectedEvidence)
   ))) return Object.freeze({ valid: false, reason: 'unsupported_selected_entity' });
 
+  // The validator may be reused by tests and non-voice callers, so enforce
+  // the selected-turn boundary here instead of trusting the supplied claim
+  // array. No unselected hydrated record may authorize a generated claim.
+  const selectedClaimIdentities = new Set(selectedEvidence.flatMap((source) => [
+    source?.id, source?.recordId, source?.publishedEvidenceId,
+  ]).map(identity).filter(Boolean));
+  const exactClaimEvidence = claimEvidence.filter((source) => (
+    [source?.id, source?.recordId, source?.publishedEvidenceId]
+      .map(identity).filter(Boolean).some((value) => selectedClaimIdentities.has(value))
+  ));
+  const collectedInformation = {
+    ...(securityRuntime.collectedInformation ?? {}),
+    ...(decision?.fieldUpdates ?? {}),
+    ...(decision?.stateUpdate?.collectedInformation ?? {}),
+  };
+  const callerProvidedFields = fieldSchemas.flatMap((field) => (
+    Object.hasOwn(collectedInformation, field.key) ? [Object.freeze({
+      key: field.key, label: field.label, question: field.question,
+      value: collectedInformation[field.key],
+    })] : []
+  ));
+  const claimOptions = Object.freeze({
+    knownEntities: envelopeEntities,
+    finalizedUtterance,
+    callerProvidedFields: Object.freeze(callerProvidedFields),
+  });
+
   const recommendation = approvedZeroEvidenceResponse
     ? Object.freeze({ answer: decision?.answer ?? '', removed: Object.freeze([]) })
     : removeUnsupportedRecommendationSentences(
       decision?.answer,
-      claimEvidence,
-      { knownEntities: envelopeEntities, finalizedUtterance },
+      exactClaimEvidence,
+      claimOptions,
     );
   if (recommendation.removed.length > 0 && !recommendation.answer) {
     return Object.freeze({
@@ -304,8 +330,8 @@ export function validatePostLlmResponseAndTool({
     ? Object.freeze({ valid: true })
     : validateGroundedClaims(
       normalizedDecision?.answer,
-      claimEvidence,
-      { knownEntities: envelopeEntities, finalizedUtterance },
+      exactClaimEvidence,
+      claimOptions,
     );
   if (!claims.valid) return Object.freeze({
     valid: false,
@@ -348,6 +374,7 @@ export function applyUnifiedGroundedTurn({
   clarificationRecovery = null,
   clarificationContext = null,
   zeroEvidenceResponse = '',
+  canonicalEntityAuthority = false,
 } = {}) {
   if (!memory?.snapshot || !memory?.applyGroundedDecision || !memory?.restoreValidatedState) {
     throw new TypeError('A generic conversation memory instance is required');
@@ -604,30 +631,8 @@ export function applyUnifiedGroundedTurn({
   const actionEvidence = sourcesByType(evidence, 'WORKFLOW_RULE').filter((source) => (
     String(source?.retrievalContext ?? 'primary').toLocaleLowerCase() === 'primary'
   ));
-  const configuredActivation = !beforeState.activeToolRequest
-    && !effectiveDecision.toolRequest
-    && !effectiveDecision.stateUpdate.activeToolRequest
-    ? configuredActionActivation({
-      evidenceScope,
-      toolSchemas: runtime.toolSchemas,
-      actionEvidence,
-    }) : null;
-  if (configuredActivation?.valid) {
-    effectiveDecision = Object.freeze({
-      ...effectiveDecision,
-      stateUpdate: Object.freeze({
-        ...effectiveDecision.stateUpdate,
-        activeToolRequest: Object.freeze({
-          name: configuredActivation.tool.name,
-          status: 'collecting_information',
-        }),
-      }),
-      activeToolRequest: Object.freeze({
-        name: configuredActivation.tool.name,
-        status: 'collecting_information',
-      }),
-    });
-  }
+  // Workflow retrieval supplies authorization, never intent. Only the
+  // grounded decision may explicitly start the configured action lifecycle.
   const exactSelectedEntities = effectiveDecision.stateUpdate.knownEntities.length
     ? effectiveDecision.stateUpdate.knownEntities
     : (beforeState.knownEntities?.length === 1 ? beforeState.knownEntities : []);
@@ -733,7 +738,9 @@ export function applyUnifiedGroundedTurn({
     effectiveDecision = postLlmValidation.decision;
   }
 
-  const applied = memory.applyGroundedDecision(effectiveDecision, { turnToken });
+  const applied = memory.applyGroundedDecision(effectiveDecision, {
+    turnToken, canonicalEntityAuthority,
+  });
   if (applied?.stale) {
     return Object.freeze({ valid: false, reason: 'stale_turn', state: applied.state });
   }
@@ -742,7 +749,7 @@ export function applyUnifiedGroundedTurn({
     return restored?.state ?? memory.snapshot();
   };
   let afterState = memory.snapshot();
-  if (exactCategorySelection) {
+  if (exactCategorySelection && canonicalEntityAuthority !== true) {
     afterState = memory.applyKnowledge({
       catalogSelection: { category: exactCategorySelection },
     });

@@ -104,6 +104,9 @@ const session = await createSelectedLlmStream(profile, {
 assert.ok(providerRequest, 'The provider should receive a request within budget');
 assert.equal(providerCalls, 1, 'A normal grounded turn must make exactly one provider request');
 assert.equal(session.historyMessages, 0, 'Relevant turns must not be duplicated as provider history');
+assert.equal(session.groundedContextMessages, 10,
+  'Five complete UI-configured turn pairs must be embedded in grounded input');
+assert.equal(session.groundedContextPairs, 5);
 assert.ok(session.promptCharacters <= env.VOICE_LLM_PROMPT_BUDGET_CHARS);
 assert.ok(session.estimatedPromptTokens <= env.VOICE_LLM_PROMPT_BUDGET_TOKENS);
 assert.equal(estimateLlmPromptTokens(providerRequest.messages), session.estimatedPromptTokens);

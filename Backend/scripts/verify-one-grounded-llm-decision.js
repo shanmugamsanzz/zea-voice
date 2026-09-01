@@ -476,6 +476,23 @@ const missingActionField = validateGroundedLlmDecision(decisionJson({
 assert.equal(missingActionField.valid, true);
 assert.equal(missingActionField.activeToolRequest.name, 'create_visit');
 
+const partialActionField = validateGroundedLlmDecision(decisionJson({
+  decision: 'clarify', answer: '', evidenceIds: [],
+  stateUpdate: {
+    currentTopic: 'visit booking', knownEntityKeys: [],
+    collectedInformation: { contact_number: '96' }, correctedFields: [],
+    activeToolRequest: { name: 'create_visit' },
+  },
+  pendingQuestion: 'Please provide the complete contact number.', toolRequest: null,
+}), envelope, {
+  ...runtime,
+  fieldSchemas: [{
+    key: 'contact_number', type: 'phone', required: true, requiredAction: 'create_visit',
+  }],
+});
+assert.equal(partialActionField.valid, true);
+assert.deepEqual(partialActionField.fieldUpdates, {});
+
 const action = validateGroundedLlmDecision(decisionJson({
   decision: 'action', answer: '', evidenceIds: [],
   stateUpdate: {

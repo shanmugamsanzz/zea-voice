@@ -223,6 +223,22 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
     maxPromptChars: systemCharacterBudget,
     maxPromptTokens: systemTokenBudget,
   }));
+  let groundedContextMessages = 0;
+  let groundedContextPairs = 0;
+  if (groundedResponseMode) {
+    const serializedInput = /<grounded_turn_input>\n([\s\S]+?)\n<\/grounded_turn_input>/u
+      .exec(systemPrompt)?.[1];
+    if (serializedInput) {
+      try {
+        const retainedTurns = JSON.parse(serializedInput)?.relevantMemory?.recentTurns;
+        groundedContextMessages = Array.isArray(retainedTurns) ? retainedTurns.length : 0;
+        groundedContextPairs = Math.floor(groundedContextMessages / 2);
+      } catch {
+        // Prompt validation owns malformed input handling. These counters are
+        // observability only and must never alter a grounded decision.
+      }
+    }
+  }
   const historyLimit = groundedResponseMode
     ? 0
     : Math.min(
@@ -273,6 +289,8 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
     promptCharacters: budget.characters,
     estimatedPromptTokens: budget.estimatedTokens,
     historyMessages: boundedHistory.length,
+    groundedContextMessages,
+    groundedContextPairs,
     maxOutputTokens: groundedResponseMode
       ? selectedGroundedOutputTokenLimit() : env.LLM_MAX_OUTPUT_TOKENS,
     cancel: (reason = 'barge-in') => llm.cancel(reason),
