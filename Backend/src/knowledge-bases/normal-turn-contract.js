@@ -86,6 +86,33 @@ function activeTool(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const name = clean(value.name, 160);
   if (!name) return null;
+  const workflow = value.workflowState && typeof value.workflowState === 'object'
+    && !Array.isArray(value.workflowState) ? value.workflowState : {};
+  const selectedRecord = workflow.selectedRecord
+    && typeof workflow.selectedRecord === 'object' ? workflow.selectedRecord : {};
+  const workflowState = (clean(workflow.toolIdentifier, 160)
+    || clean(selectedRecord.recordId, 160)) ? Object.freeze({
+      version: 1,
+      selectedRecord: Object.freeze({
+        recordId: clean(selectedRecord.recordId, 160) || null,
+        recordType: clean(selectedRecord.recordType, 80).toLocaleUpperCase()
+          || 'WORKFLOW_RULE',
+        knowledgeBaseId: clean(selectedRecord.knowledgeBaseId, 160) || null,
+        publicationRevision: Number.isInteger(Number(selectedRecord.publicationRevision))
+          ? Number(selectedRecord.publicationRevision) : null,
+        sourceId: clean(selectedRecord.sourceId, 160) || null,
+      }),
+      toolIdentifier: clean(workflow.toolIdentifier ?? name, 160),
+      requiredFields: Object.freeze((workflow.requiredFields ?? [])
+        .map((field) => clean(field, 64)).filter(Boolean).slice(0, 50)),
+      missingFields: Object.freeze((workflow.missingFields ?? [])
+        .map((field) => clean(field, 64)).filter(Boolean).slice(0, 50)),
+      collectedFields: scalarFields(workflow.collectedFields),
+      confirmationRequired: workflow.confirmationRequired === true,
+      confirmationStatus: clean(
+        workflow.confirmationStatus ?? value.confirmationStatus, 40,
+      ) || 'not_required',
+    }) : null;
   return Object.freeze({
     id: clean(value.id, 160) || null,
     name,
@@ -96,6 +123,8 @@ function activeTool(value) {
     selectedEntityKey: clean(value.selectedEntityKey, 160) || null,
     selectedEntityName: clean(value.selectedEntityName, 240) || null,
     catalogRecordId: clean(value.catalogRecordId, 160) || null,
+    confirmationStatus: clean(value.confirmationStatus, 40) || null,
+    workflowState,
   });
 }
 
@@ -175,10 +204,20 @@ export function createNormalTurnInput(value = {}) {
   const conversationContextTurns = Math.max(1, Math.min(
     10, Number(sourceMemory.conversationContextTurns) || 5,
   ));
+  const pendingContext = sourceMemory.pendingClarification ?? sourceMemory.pendingQuestion ?? {};
+  const activeToolContext = sourceMemory.activeTool ?? sourceMemory.activeToolRequest ?? {};
+  const collectedContext = scalarFields(
+    sourceMemory.collectedToolFields ?? sourceMemory.collectedInformation,
+  );
   const contextTerms = [
     sourceMemory.activeEntity?.name, sourceMemory.activeEntity?.key,
     sourceMemory.activeCategory?.name, sourceMemory.activeCategory?.key,
     value.requestedFact, ...facts,
+    pendingContext?.key, pendingContext?.text, pendingContext?.kind,
+    activeToolContext?.name, activeToolContext?.status,
+    activeToolContext?.selectedEntityKey, activeToolContext?.selectedEntityName,
+    ...(activeToolContext?.workflowState?.missingFields ?? []),
+    ...Object.entries(collectedContext).flatMap(([key, fieldValue]) => [key, fieldValue]),
   ].filter(Boolean);
   const memory = Object.freeze({
     scope: Object.freeze({
@@ -206,9 +245,13 @@ export function createNormalTurnInput(value = {}) {
       sourceMemory.pendingClarification ?? sourceMemory.pendingQuestion,
     ),
     activeTool: activeTool(sourceMemory.activeTool ?? sourceMemory.activeToolRequest),
-    collectedToolFields: scalarFields(
-      sourceMemory.collectedToolFields ?? sourceMemory.collectedInformation,
-    ),
+    collectedToolFields: collectedContext,
+    // The finalized utterance is authoritative for this turn. The stored
+    // value is retained in call history, but must never outrank the latest
+    // question crossing the normal-turn boundary.
+    latestCallerQuestion: finalizedQuestion,
+    correctedFields: Object.freeze([...new Set((sourceMemory.correctedFields ?? [])
+      .map((field) => clean(field, 64)).filter(Boolean))].slice(0, 30)),
   });
   return Object.freeze({
     contractVersion: NORMAL_TURN_CONTRACT_VERSION,

@@ -207,7 +207,20 @@ for (const [tenantIndex, scope] of tenants.entries()) {
   assert.equal(booking.valid, true, JSON.stringify({
     reason: booking.reason, state: booking.state, evidenceIds: booking.evidenceIds,
   }));
-  assert.equal(booking.toolRequest.name, `reserve_${tenantIndex}`);
+  assert.equal(booking.toolRequest, null);
+  assert.equal(booking.nextQuestion?.kind, 'confirmation');
+  assert.equal(booking.state.activeToolRequest?.status, 'awaiting_confirmation');
+  const confirmedBooking = runTurn({
+    scope, memory, token: `booking-confirmed-${tenantIndex}`, question: 'Confirm the action',
+    records: [contextualFirst], tools: [tool],
+    rawDecision: decision({
+      type: 'action', evidenceIds: ['source_1'], entityKeys: [`option-${tenantIndex}`],
+      requestType: 'action_request', contextDependent: true,
+      toolRequest: { name: `reserve_${tenantIndex}`, arguments: {} },
+    }),
+  });
+  assert.equal(confirmedBooking.valid, true, JSON.stringify(confirmedBooking));
+  assert.equal(confirmedBooking.toolRequest.name, `reserve_${tenantIndex}`);
 
   const unauthorizedMemory = openGenericConversationState(
     { ...scope, callId: `${callId}-unauthorized` },

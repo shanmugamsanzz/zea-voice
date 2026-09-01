@@ -54,11 +54,39 @@ const toolRuntime = {
       actionType: 'configured_tool', actionConfig: { toolIdentifier: 'configured_action' },
     },
   }],
+  activeToolRequest: {
+    name: 'configured_action', status: 'awaiting_confirmation',
+    workflowState: {
+      missingFields: [], confirmationStatus: 'awaiting_confirmation',
+    },
+  },
 };
 assert.equal(validateDecisionSecurity({
   toolRequest: { name: 'configured_action', arguments: { email: 'a@b.com', count: 2 } },
   runtime: toolRuntime,
 }).valid, true);
+assert.equal(validateDecisionSecurity({
+  toolRequest: { name: 'configured_action', arguments: { email: 'a@b.com', count: 2 } },
+  runtime: {
+    ...toolRuntime,
+    activeToolRequest: {
+      ...toolRuntime.activeToolRequest,
+      workflowState: {
+        missingFields: ['count'], confirmationStatus: 'pending_fields',
+      },
+    },
+  },
+}).reason, 'required_tool_fields_missing');
+assert.equal(validateDecisionSecurity({
+  toolRequest: { name: 'configured_action', arguments: { email: 'a@b.com', count: 2 } },
+  runtime: {
+    ...toolRuntime,
+    activeToolRequest: {
+      ...toolRuntime.activeToolRequest, status: 'collecting_information',
+      workflowState: { missingFields: [], confirmationStatus: 'pending_fields' },
+    },
+  },
+}).reason, 'confirmation_required');
 assert.equal(validateDecisionSecurity({
   toolRequest: { name: 'configured_action', arguments: { email: 'a@b.com', count: 2 } },
   runtime: {

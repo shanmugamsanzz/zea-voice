@@ -10,6 +10,7 @@ export const genericConversationStateFields = Object.freeze([
   'currentTopic', 'knownEntities', 'pendingQuestion', 'collectedInformation',
   'recentTurns', 'lastAnswer', 'activeToolRequest', 'language', 'requestType',
   'requestedFacts', 'constraints', 'contextualReferences', 'contextDependent', 'comparisonEntities',
+  'latestCallerQuestion', 'correctedFields',
   'conversationContextMode', 'conversationContextTurns',
 ]);
 
@@ -194,12 +195,44 @@ function cleanToolRequest(value) {
   const selectedEntityKey = cleanText(value.selectedEntityKey, 160);
   const selectedEntityName = cleanText(value.selectedEntityName, 240);
   const catalogRecordId = cleanText(value.catalogRecordId, 120);
+  const workflow = value.workflowState && typeof value.workflowState === 'object'
+    && !Array.isArray(value.workflowState) ? value.workflowState : {};
+  const selectedRecordSource = workflow.selectedRecord
+    && typeof workflow.selectedRecord === 'object' ? workflow.selectedRecord : {};
+  const selectedRecordId = cleanText(
+    selectedRecordSource.recordId ?? authorizationRecordId, 120,
+  );
+  const workflowState = selectedRecordId || cleanText(workflow.toolIdentifier, 160)
+    ? Object.freeze({
+      version: 1,
+      selectedRecord: Object.freeze({
+        recordId: selectedRecordId || null,
+        recordType: cleanText(selectedRecordSource.recordType, 80).toLocaleUpperCase()
+          || 'WORKFLOW_RULE',
+        knowledgeBaseId: cleanText(selectedRecordSource.knowledgeBaseId, 120) || null,
+        publicationRevision: Number.isInteger(Number(selectedRecordSource.publicationRevision))
+          ? Number(selectedRecordSource.publicationRevision) : null,
+        sourceId: cleanText(selectedRecordSource.sourceId, 120) || null,
+      }),
+      toolIdentifier: cleanText(workflow.toolIdentifier ?? name, 160) || null,
+      requiredFields: Object.freeze(cleanList(workflow.requiredFields, 50)),
+      missingFields: Object.freeze(cleanList(workflow.missingFields, 50)),
+      collectedFields: Object.freeze(cleanInformation(workflow.collectedFields)),
+      confirmationRequired: workflow.confirmationRequired === true,
+      confirmationStatus: cleanText(
+        workflow.confirmationStatus ?? value.confirmationStatus, 40,
+      ) || 'not_required',
+    }) : null;
   return id || name ? Object.freeze({
     id: id || null, name: name || null, status,
     ...(authorizationRecordId ? { authorizationRecordId } : {}),
     ...(selectedEntityKey ? { selectedEntityKey } : {}),
     ...(selectedEntityName ? { selectedEntityName } : {}),
     ...(catalogRecordId ? { catalogRecordId } : {}),
+    ...(workflowState ? {
+      confirmationStatus: workflowState.confirmationStatus,
+      workflowState,
+    } : {}),
   }) : null;
 }
 
@@ -259,6 +292,8 @@ function publicState(state) {
     constraints: Object.freeze([...state.constraints]),
     contextualReferences: Object.freeze([...state.contextualReferences]),
     contextDependent: state.contextDependent,
+    latestCallerQuestion: state.latestCallerQuestion,
+    correctedFields: Object.freeze([...state.correctedFields]),
     conversationContextMode: state.conversationContextMode,
     conversationContextTurns: state.conversationContextTurns,
   });
@@ -302,6 +337,8 @@ export function openGenericConversationState(identity, settings = {}, now = Date
     constraints: cleanList(initial.constraints),
     contextualReferences: cleanList(initial.contextualReferences),
     contextDependent: initial.contextDependent === true,
+    latestCallerQuestion: cleanText(initial.latestCallerQuestion, maximumMessageCharacters) || null,
+    correctedFields: cleanList(initial.correctedFields, 30),
     conversationContextMode: configuration.mode,
     conversationContextTurns: configuration.recentTurns,
   };
@@ -354,6 +391,10 @@ export function openGenericConversationState(identity, settings = {}, now = Date
       state.constraints = cleanList(snapshot.constraints);
       state.contextualReferences = cleanList(snapshot.contextualReferences);
       state.contextDependent = snapshot.contextDependent === true;
+      state.latestCallerQuestion = cleanText(
+        snapshot.latestCallerQuestion, maximumMessageCharacters,
+      ) || null;
+      state.correctedFields = cleanList(snapshot.correctedFields, 30);
       resumePending = false;
       return Object.freeze({ applied: true, state: publicState(state) });
     },
@@ -361,6 +402,7 @@ export function openGenericConversationState(identity, settings = {}, now = Date
       if (!current(options.turnToken)) return Object.freeze({ applied: false, stale: true, state: publicState(state) });
       const entry = cleanMessage(message);
       if (!entry) return publicState(state);
+      if (entry.role === 'user') state.latestCallerQuestion = entry.content;
       state.recentTurns.push(entry);
       state.recentTurns = configuration.mode === 'full_current_call'
         ? state.recentTurns.slice(-maximumMessages) : recent(state.recentTurns, configuration.recentTurns);
@@ -476,6 +518,11 @@ export function openGenericConversationState(identity, settings = {}, now = Date
         if (!Object.hasOwn(state.collectedInformation, field) || correctedFields.has(field)) {
           state.collectedInformation[field] = value;
         }
+      }
+      if (correctedFields.size > 0) {
+        state.correctedFields = cleanList([
+          ...state.correctedFields, ...correctedFields,
+        ], 30);
       }
       if (state.pendingQuestion?.key && Object.hasOwn(updates, state.pendingQuestion.key)) {
         state.pendingQuestion = null;
@@ -838,6 +885,8 @@ export function compactGenericConversationState(snapshot = {}, maximumCharacters
     constraints: (snapshot.constraints ?? []).slice(0, 20),
     contextualReferences: (snapshot.contextualReferences ?? []).slice(0, 20),
     contextDependent: snapshot.contextDependent === true,
+    latestCallerQuestion: snapshot.latestCallerQuestion ?? null,
+    correctedFields: (snapshot.correctedFields ?? []).slice(0, 30),
   };
   while (JSON.stringify(context).length > maximumCharacters && context.recentTurns.length > 2) {
     context.recentTurns.shift();

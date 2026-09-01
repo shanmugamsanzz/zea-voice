@@ -63,6 +63,18 @@ function authorizedTool(activeRequest, tools, actionEvidence) {
   return Object.freeze({
     tool: assigned,
     authorizationRecordId: text(authorization?.recordId, 120) || storedAuthorization,
+    workflowRecord: Object.freeze(authorization ? {
+      recordId: text(authorization.recordId, 120),
+      recordType: 'WORKFLOW_RULE',
+      knowledgeBaseId: text(authorization.knowledgeBaseId, 120) || null,
+      publicationRevision: Number.isInteger(Number(authorization.publicationRevision))
+        ? Number(authorization.publicationRevision) : null,
+      sourceId: text(authorization.id, 120) || null,
+    } : {
+      ...(object(activeRequest?.workflowState?.selectedRecord)),
+      recordId: storedAuthorization,
+      recordType: 'WORKFLOW_RULE',
+    }),
   });
 }
 
@@ -89,25 +101,104 @@ function completedField(field, value, inputSchema) {
   return true;
 }
 
+function schemaForTool(tool = {}) {
+  return object(tool.inputSchema
+    ?? tool.configuration?.inputSchema
+    ?? tool.configuration?.input_schema);
+}
+
+function configuredFieldsForTool(fieldSchemas, tool, inputSchema) {
+  const requiredOrder = Array.isArray(inputSchema.required) ? inputSchema.required : [];
+  const positions = new Map(requiredOrder.map((key, index) => [key, index]));
+  return [...(fieldSchemas ?? [])].filter((field) => (
+    field?.key && field.required !== false && fieldBelongsToTool(field, tool)
+  )).sort((left, right) => (
+    (positions.get(left.key) ?? Number.MAX_SAFE_INTEGER)
+    - (positions.get(right.key) ?? Number.MAX_SAFE_INTEGER)
+    || (fieldSchemas ?? []).indexOf(left) - (fieldSchemas ?? []).indexOf(right)
+  ));
+}
+
+export function advanceSchemaDrivenWorkflowState({
+  activeRequest, fieldSchemas = [], collectedInformation = {}, tools = [],
+  actionEvidence = [], confirmationConfiguration = null, confirmationAccepted = false,
+} = {}) {
+  if (!activeRequest) return Object.freeze({ valid: false, reason: 'workflow_not_active' });
+  const authorization = authorizedTool(activeRequest, tools, actionEvidence);
+  if (!authorization) {
+    return Object.freeze({ valid: false, reason: 'workflow_tool_not_authorized' });
+  }
+  const inputSchema = schemaForTool(authorization.tool);
+  const configuredFields = configuredFieldsForTool(
+    fieldSchemas, authorization.tool, inputSchema,
+  );
+  const collected = object(collectedInformation);
+  const requiredFields = configuredFields.map((field) => field.key);
+  const missingFields = configuredFields.filter((field) => (
+    !completedField(field, collected[field.key], inputSchema)
+  )).map((field) => field.key);
+  const collectedFields = Object.fromEntries(requiredFields.flatMap((key) => (
+    completedField(configuredFields.find((field) => field.key === key) ?? { key },
+      collected[key], inputSchema) ? [[key, collected[key]]] : []
+  )));
+  // Every external action requires an explicit confirmation turn. The schema
+  // and UI control the read-back wording; neither can opt an action out of the
+  // confirmation boundary.
+  const confirmationRequired = true;
+  const priorConfirmation = text(
+    activeRequest.workflowState?.confirmationStatus
+      ?? activeRequest.confirmationStatus, 40,
+  ).toLocaleLowerCase();
+  const confirmationStatus = !confirmationRequired ? 'not_required'
+    : (confirmationAccepted || priorConfirmation === 'confirmed'
+      ? 'confirmed' : (missingFields.length ? 'pending_fields' : 'awaiting_confirmation'));
+  const status = missingFields.length ? 'collecting_information'
+    : (confirmationStatus === 'awaiting_confirmation' ? 'awaiting_confirmation' : 'ready');
+  const workflowState = Object.freeze({
+    version: 1,
+    selectedRecord: authorization.workflowRecord,
+    toolIdentifier: text(authorization.tool.name, 160),
+    requiredFields: Object.freeze(requiredFields),
+    missingFields: Object.freeze(missingFields),
+    collectedFields: Object.freeze(collectedFields),
+    confirmationRequired,
+    confirmationStatus,
+  });
+  return Object.freeze({
+    valid: true,
+    tool: authorization.tool,
+    inputSchema,
+    configuredFields: Object.freeze(configuredFields),
+    workflowState,
+    activeToolRequest: Object.freeze({
+      ...activeRequest,
+      name: authorization.tool.name,
+      status,
+      authorizationRecordId: authorization.authorizationRecordId,
+      confirmationStatus,
+      workflowState,
+    }),
+  });
+}
+
 function confirmationForTool({
   activeRequest, fieldSchemas, collectedInformation, tools, actionEvidence, configuration,
 }) {
-  if (!activeRequest) return null;
-  const authorization = authorizedTool(activeRequest, tools, actionEvidence);
-  if (!authorization) return null;
-  const inputSchema = object(authorization.tool.inputSchema
-    ?? authorization.tool.configuration?.inputSchema
-    ?? authorization.tool.configuration?.input_schema);
-  const schemaConfirmation = inputSchema['x-requires-confirmation'] === true;
+  const transition = advanceSchemaDrivenWorkflowState({
+    activeRequest, fieldSchemas, collectedInformation, tools, actionEvidence,
+    confirmationConfiguration: configuration,
+  });
+  if (!transition.valid) return null;
+  const authorization = { tool: transition.tool,
+    authorizationRecordId: transition.activeToolRequest.authorizationRecordId };
+  const inputSchema = transition.inputSchema;
   const configuredConfirmation = configuration?.enabled === true
     && toolIdentifiers(authorization.tool).has(toolIdentity(configuration.intent));
-  if (!schemaConfirmation && !configuredConfirmation) return null;
   const collected = object(collectedInformation);
-  const required = configuredConfirmation
-    ? (configuration.requiredFields ?? [])
-    : (Array.isArray(inputSchema.required) ? inputSchema.required : []);
+  const required = transition.workflowState.requiredFields;
   const fields = new Map((fieldSchemas ?? []).map((field) => [field.key, field]));
-  if (!required.length || required.some((key) => (
+  if (transition.workflowState.confirmationStatus !== 'awaiting_confirmation'
+    || required.some((key) => (
     !completedField(fields.get(key) ?? { key }, collected[key], inputSchema)
   ))) return null;
   const details = required.map((key) => {
@@ -127,43 +218,23 @@ function confirmationForTool({
   return Object.freeze({
     key: `confirm_${toolIdentity(authorization.tool.name)}`,
     question, kind: 'confirmation', source: 'ui_action_confirmation',
-    activeToolRequest: Object.freeze({
-      ...activeRequest,
-      name: authorization.tool.name,
-      status: 'awaiting_confirmation',
-      authorizationRecordId: authorization.authorizationRecordId,
-    }),
+    activeToolRequest: transition.activeToolRequest,
   });
 }
 
 function nextToolField({ activeRequest, fieldSchemas, collectedInformation, tools, actionEvidence }) {
-  const authorization = authorizedTool(activeRequest, tools, actionEvidence);
-  if (!authorization) return null;
-  const collected = object(collectedInformation);
-  const inputSchema = object(authorization.tool.inputSchema
-    ?? authorization.tool.configuration?.inputSchema
-    ?? authorization.tool.configuration?.input_schema);
-  const requiredOrder = Array.isArray(inputSchema.required) ? inputSchema.required : [];
-  const positions = new Map(requiredOrder.map((key, index) => [key, index]));
-  const candidates = [...(fieldSchemas ?? [])].sort((left, right) => (
-    (positions.get(left.key) ?? Number.MAX_SAFE_INTEGER)
-    - (positions.get(right.key) ?? Number.MAX_SAFE_INTEGER)
-  ));
-  const field = candidates.find((candidate) => (
-    candidate.required !== false
-    && fieldBelongsToTool(candidate, authorization.tool)
-    && !completedField(candidate, collected[candidate.key], inputSchema)
+  const transition = advanceSchemaDrivenWorkflowState({
+    activeRequest, fieldSchemas, collectedInformation, tools, actionEvidence,
+  });
+  if (!transition.valid) return null;
+  const field = transition.configuredFields.find((candidate) => (
+    candidate.key === transition.workflowState.missingFields[0]
   ));
   const question = text(field?.question);
   if (!field || !question) return null;
   return Object.freeze({
     key: field.key, question, kind: 'field', source: 'ui_tool_field_question',
-    activeToolRequest: Object.freeze({
-      id: activeRequest?.id ?? null,
-      name: authorization.tool.name,
-      status: 'collecting_information',
-      authorizationRecordId: authorization.authorizationRecordId,
-    }),
+    activeToolRequest: transition.activeToolRequest,
   });
 }
 

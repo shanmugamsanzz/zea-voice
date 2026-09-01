@@ -409,6 +409,7 @@ export function fuseCandidateRankings(retrieval, {
     ?? Number.MAX_SAFE_INTEGER;
   const rejectedUnrelatedWorkflowIds = [];
   const rejectedUnrelatedCatalogIds = [];
+  const rejectedUnrelatedNamespaceIds = [];
   const reservations = retrieval?.queryContext?.reservedRecords ?? [];
   const focusedCatalogReasons = new Set([
     'explicit_entity', 'explicit_current_entity', 'canonical_memory', 'latest_request_record',
@@ -428,13 +429,37 @@ export function fuseCandidateRankings(retrieval, {
       rejectedUnrelatedCatalogIds.push(normalizeId(candidate.recordId));
       return false;
     }
-    if (candidate.recordType !== 'WORKFLOW_RULE' || candidate.authorizationHint === true) return true;
     const strongestProviderScore = Math.max(0, ...Object.values(candidate.providerScores));
-    const relevantCallerWorkflow = candidate.callerFacingHint === true
+    const inPrimaryNamespace = primaryNamespaceOrder.size === 0
+      || primaryNamespaceOrder.has(candidate.namespace);
+    const stronglyCorroboratedFallback = candidate.callerFacingHint === true
       && candidate.channels.length > 1
       && strongestProviderScore >= highProviderScore;
-    if (!relevantCallerWorkflow) rejectedUnrelatedWorkflowIds.push(normalizeId(candidate.recordId));
-    return relevantCallerWorkflow;
+    // Internal guidance and Workflow instructions are authorization context,
+    // not spare caller-facing evidence. They enter the five-record package
+    // only through an explicit/latest action reservation or when strongly
+    // corroborated by independent retrieval channels.
+    if (candidate.recordType === 'WORKFLOW_RULE') {
+      const relevantCallerWorkflow = candidate.authorizationHint === true
+        || stronglyCorroboratedFallback;
+      if (!relevantCallerWorkflow) {
+        rejectedUnrelatedWorkflowIds.push(normalizeId(candidate.recordId));
+      }
+      return relevantCallerWorkflow;
+    }
+    if (candidate.callerFacingHint !== true) {
+      rejectedUnrelatedNamespaceIds.push(normalizeId(candidate.recordId));
+      return false;
+    }
+    // Namespaces not signalled by the latest interpreted request are recovery
+    // channels. Admit them only when independent retrieval channels strongly
+    // corroborate the same canonical record; a lone generic match cannot fill
+    // a top-five slot ahead of relevant evidence.
+    if (!inPrimaryNamespace && !stronglyCorroboratedFallback) {
+      rejectedUnrelatedNamespaceIds.push(normalizeId(candidate.recordId));
+      return false;
+    }
+    return true;
   }).sort((left, right) => Number(
       right.callerFacingHint === true || right.authorizationHint === true,
     ) - Number(left.callerFacingHint === true || left.authorizationHint === true)
@@ -485,6 +510,7 @@ export function fuseCandidateRankings(retrieval, {
     rejectedDuplicateIds: Object.freeze(rejectedDuplicateIds),
     rejectedUnrelatedCatalogIds: Object.freeze(rejectedUnrelatedCatalogIds),
     rejectedUnrelatedWorkflowIds: Object.freeze(rejectedUnrelatedWorkflowIds),
+    rejectedUnrelatedNamespaceIds: Object.freeze(rejectedUnrelatedNamespaceIds),
     reservedRecordIds: Object.freeze(reservedIds),
     missingReservedRecordIds: Object.freeze(reservedIds.filter((id) => !selectedIds.has(id))),
     reservedRecordKeys: Object.freeze([...reservedKeys]),

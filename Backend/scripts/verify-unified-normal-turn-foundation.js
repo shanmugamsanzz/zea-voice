@@ -35,7 +35,20 @@ const normalTurn = createNormalTurnInput({
       role: index % 2 ? 'assistant' : 'user', content: `turn ${index}`,
     })),
     pendingClarification: { kind: 'ambiguity', text: 'Which option?' },
-    activeTool: { name: 'tenant_action', status: 'collecting_information' },
+    activeTool: {
+      name: 'tenant_action', status: 'collecting_information',
+      authorizationRecordId: 'workflow-record-1',
+      workflowState: {
+        version: 1,
+        selectedRecord: { recordId: 'workflow-record-1', recordType: 'WORKFLOW_RULE' },
+        toolIdentifier: 'tenant_action',
+        requiredFields: ['quantity', 'delivery_window'],
+        missingFields: ['delivery_window'],
+        collectedFields: { quantity: 3 },
+        confirmationRequired: true,
+        confirmationStatus: 'pending_fields',
+      },
+    },
     collectedToolFields: { quantity: 3 },
     knownEntities: [{ name: 'must not be copied as unbounded memory' }],
   },
@@ -53,6 +66,10 @@ assert.equal(normalTurn.memory.activeEntity.recordId,
 assert.equal(normalTurn.memory.recentTurns.length, 8);
 assert.equal(normalTurn.memory.knownEntities, undefined);
 assert.deepEqual(normalTurn.memory.collectedToolFields, { quantity: 3 });
+assert.equal(normalTurn.memory.activeTool.workflowState.selectedRecord.recordId,
+  'workflow-record-1');
+assert.deepEqual(normalTurn.memory.activeTool.workflowState.missingFields,
+  ['delivery_window']);
 const engineInput = toKnowledgeEngineInput(normalTurn);
 assert.equal(engineInput.latestQuestion, normalTurn.currentQuestion);
 assert.equal(engineInput.memory.activeEntity.key, 'tenant-option');

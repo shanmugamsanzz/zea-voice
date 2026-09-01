@@ -18,11 +18,32 @@ function words(value) {
 }
 
 export function completeConversationTurnPairs(values = []) {
-  const pairs = [];
-  let caller = null;
+  const dialogue = [];
   for (const entry of Array.isArray(values) ? values : []) {
     const normalized = message(entry);
     if (!normalized) continue;
+    const previous = dialogue.at(-1);
+    if (previous?.role === normalized.role) {
+      // STT and barge-in can finalize one human utterance as several adjacent
+      // transcript entries. Retain every fragment (including corrections)
+      // inside the same conversational side instead of silently replacing all
+      // but the last fragment before the response.
+      const remainingPriorCharacters = Math.max(
+        0, 2_000 - normalized.content.length - 1,
+      );
+      const retainedPrior = remainingPriorCharacters > 0
+        ? previous.content.slice(-remainingPriorCharacters) : '';
+      dialogue[dialogue.length - 1] = Object.freeze({
+        role: normalized.role,
+        // If the merged side reaches its safety bound, retain the newest
+        // fragment in full because it may correct an earlier value.
+        content: clean(`${retainedPrior} ${normalized.content}`),
+      });
+    } else dialogue.push(normalized);
+  }
+  const pairs = [];
+  let caller = null;
+  for (const normalized of dialogue) {
     if (normalized.role === 'user') {
       caller = normalized;
     } else if (caller) {

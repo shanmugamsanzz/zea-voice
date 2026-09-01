@@ -39,12 +39,56 @@ const pending = openGenericConversationState(pendingScope, {
 pending.setPendingQuestion({
   key: 'contact_number', text: 'What is your contact number?', kind: 'field',
 });
+pending.append({ role: 'user', content: 'It is 9360' });
+pending.append({ role: 'user', content: 'Correction, use 9360235493' });
+pending.append({ role: 'assistant', content: 'I will use the corrected number.' });
 const pendingTurn = createNormalTurnInput({
   ...pendingScope, finalizedQuestion: 'It is 9360235493', memory: pending.snapshot(),
 });
 assert.equal(pendingTurn.memory.pendingClarification.key, 'contact_number',
   'A configured active question must cross the normal-turn boundary');
+assert.equal(pendingTurn.memory.recentTurns[0].content,
+  'It is 9360 Correction, use 9360235493',
+  'Adjacent finalized caller fragments and corrections must remain in one complete pair');
+const boundedCorrection = completeConversationTurnPairs([
+  { role: 'user', content: 'x'.repeat(2_000) },
+  { role: 'user', content: 'use-final-value' },
+  { role: 'assistant', content: 'confirmed' },
+]);
+assert.ok(boundedCorrection[0].caller.content.endsWith('use-final-value'),
+  'The newest correction must survive the per-message context bound');
 pending.close();
+
+const stateScope = Object.freeze({ ...scope, callId: 'c1000000-0000-4000-8000-000000000006' });
+const stateful = openGenericConversationState(stateScope, {
+  conversationContextMode: 'full_current_call', conversationContextTurns: 5,
+  conversationMemoryFields: [{
+    key: 'reference_value', label: 'Reference Value', type: 'text', required: true,
+    question: 'What value should be used?',
+  }],
+});
+stateful.beginTurn('correction');
+stateful.append({ role: 'user', content: 'Use the first value' }, { turnToken: 'correction' });
+stateful.applyGroundedDecision({ stateUpdate: {
+  collectedInformation: { reference_value: 'first value' },
+  requestedFacts: ['configured_detail'],
+} }, { turnToken: 'correction', canonicalEntityAuthority: true });
+stateful.applyGroundedDecision({ stateUpdate: {
+  collectedInformation: { reference_value: 'corrected value' },
+  correctedFields: ['reference_value'],
+  requestedFacts: ['configured_detail'],
+} }, { turnToken: 'correction', canonicalEntityAuthority: true });
+const statefulSnapshot = stateful.snapshot();
+assert.equal(statefulSnapshot.latestCallerQuestion, 'Use the first value');
+assert.equal(statefulSnapshot.collectedInformation.reference_value, 'corrected value');
+assert.deepEqual(statefulSnapshot.correctedFields, ['reference_value']);
+const statefulTurn = createNormalTurnInput({
+  ...stateScope, finalizedQuestion: 'Continue with that correction', memory: statefulSnapshot,
+});
+assert.deepEqual(statefulTurn.memory.correctedFields, ['reference_value']);
+assert.equal(statefulTurn.memory.latestCallerQuestion, 'Continue with that correction');
+assert.deepEqual(statefulTurn.memory.requestedFacts, ['configured_detail']);
+stateful.close();
 
 const fullScope = Object.freeze({ ...scope, callId: 'c1000000-0000-4000-8000-000000000004' });
 const full = openGenericConversationState(fullScope, {

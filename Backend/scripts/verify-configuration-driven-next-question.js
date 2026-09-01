@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
+  advanceSchemaDrivenWorkflowState,
   composeConfiguredTurnResponse,
   resolveNextConfiguredQuestion,
 } from '../src/voice/interaction/next-question-policy.js';
 import { openGenericConversationState } from '../src/voice/interaction/generic-conversation-state.js';
+import { normalizeLiveCallFrame } from '../src/voice/interaction/conversation-memory-state.js';
 
 const tools = [{
   id: 'tool-1',
@@ -80,12 +82,21 @@ assert.equal(firstField.source, 'ui_tool_field_question');
 assert.equal(firstField.key, 'customer_name');
 assert.equal(firstField.question, 'Please tell me your name.');
 assert.equal(firstField.activeToolRequest.authorizationRecordId, 'workflow-record-1');
+assert.equal(firstField.activeToolRequest.workflowState.selectedRecord.recordId,
+  'workflow-record-1');
+assert.deepEqual(firstField.activeToolRequest.workflowState.requiredFields,
+  ['customer_name', 'visit_date']);
+assert.deepEqual(firstField.activeToolRequest.workflowState.missingFields,
+  ['customer_name', 'visit_date']);
 
 const secondField = resolve({
   decision: { activeToolRequest: { name: 'create_visit' } },
   afterState: { collectedInformation: { customer_name: 'Ravi' } },
 });
 assert.equal(secondField.key, 'visit_date');
+assert.deepEqual(secondField.activeToolRequest.workflowState.collectedFields,
+  { customer_name: 'Ravi' });
+assert.deepEqual(secondField.activeToolRequest.workflowState.missingFields, ['visit_date']);
 
 // Completed fields cannot be asked again, including through saved pending state.
 const completed = resolve({
@@ -95,7 +106,10 @@ const completed = resolve({
   },
   afterState: { collectedInformation: { customer_name: 'Ravi', visit_date: '2026-08-20' } },
 });
-assert.equal(completed, null);
+assert.equal(completed.kind, 'confirmation');
+assert.match(completed.question, /Ravi/u);
+assert.match(completed.question, /2026-08-20/u);
+assert.deepEqual(completed.activeToolRequest.workflowState.missingFields, []);
 
 // A UI tool can never start field collection without published Workflow
 // authorization, even if the model names the assigned tool.
@@ -163,6 +177,45 @@ const completeContact = resolve({
 });
 assert.equal(completeContact.kind, 'confirmation');
 assert.match(completeContact.question, /9360235493/u);
+assert.equal(completeContact.activeToolRequest.workflowState.confirmationStatus,
+  'awaiting_confirmation');
+assert.deepEqual(completeContact.activeToolRequest.workflowState.missingFields, []);
+
+// The complete schema-derived Workflow snapshot survives the persistent call
+// frame boundary and can continue on the next turn without reactivating from
+// arbitrary text.
+const persistedWorkflow = normalizeLiveCallFrame({
+  activeToolRequest: completeContact.activeToolRequest,
+  collectedInformation: { contact_number: '9360235493' },
+});
+assert.equal(persistedWorkflow.activeToolRequest.workflowState.selectedRecord.recordId,
+  'workflow-record-2');
+assert.deepEqual(persistedWorkflow.activeToolRequest.workflowState.requiredFields,
+  ['contact_number']);
+assert.deepEqual(persistedWorkflow.activeToolRequest.workflowState.missingFields, []);
+assert.equal(persistedWorkflow.activeToolRequest.workflowState.confirmationStatus,
+  'awaiting_confirmation');
+const confirmedWorkflow = advanceSchemaDrivenWorkflowState({
+  activeRequest: completeContact.activeToolRequest,
+  fieldSchemas: contactFields,
+  collectedInformation: { contact_number: '9360235493' },
+  tools: [contactTool],
+  actionEvidence: [],
+  confirmationAccepted: true,
+});
+assert.equal(confirmedWorkflow.valid, true);
+assert.equal(confirmedWorkflow.activeToolRequest.status, 'ready');
+assert.equal(confirmedWorkflow.workflowState.confirmationStatus, 'confirmed');
+
+const restoredState = openGenericConversationState({
+  tenantId: 'tenant-persisted', agentId: 'agent-persisted', callId: 'call-persisted',
+}, {
+  cachePolicy: 'current_call_only', conversationMemoryFields: contactFields,
+}, Date.now(), persistedWorkflow);
+assert.equal(restoredState.snapshot().activeToolRequest.workflowState.selectedRecord.recordId,
+  'workflow-record-2');
+assert.deepEqual(restoredState.snapshot().activeToolRequest.workflowState.missingFields, []);
+restoredState.close();
 
 // Completed values are retained. Only a decision-declared correction may
 // replace a value that was already confirmed by the caller.

@@ -191,6 +191,16 @@ assert.equal(validateGroundedClaim(
   ] },
 ).valid, true, 'caller-provided phone numbers and dates are state values, not KB claims');
 assert.equal(validateGroundedClaim(
+  'Contact name: SHANMUGAM; contact number: 9360235493; requested date: 2030-04-05; preferred time: 11:00.',
+  [{ content: 'Configured caller details may be collected.', recordType: 'GENERAL_KNOWLEDGE' }],
+  { callerProvidedFields: [
+    { key: 'contact_name', label: 'Contact name', value: 'SHANMUGAM' },
+    { key: 'contact_number', label: 'Contact number', value: '9360235493' },
+    { key: 'requested_date', label: 'Requested date', value: '2030-04-05' },
+    { key: 'preferred_time', label: 'Preferred time', value: '11:00' },
+  ] },
+).valid, true, 'caller-provided names, phones, dates and times must remain state values');
+assert.equal(validateGroundedClaim(
   'The price is INR 9360235493.',
   [{ content: 'Configured caller details may be collected.', recordType: 'GENERAL_KNOWLEDGE' }],
   { callerProvidedFields: [

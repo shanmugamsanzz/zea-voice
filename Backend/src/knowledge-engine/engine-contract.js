@@ -99,6 +99,10 @@ export function createKnowledgeEngineInput(value = {}) {
       ? suppliedMemory.comparisonEntities : [])].slice(0, 5)),
     pendingQuestion: suppliedMemory.pendingQuestion ?? null,
     collectedInformation: Object.freeze({ ...(suppliedMemory.collectedInformation ?? {}) }),
+    latestCallerQuestion: cleanString(
+      suppliedMemory.latestCallerQuestion ?? utterance, 2_000,
+    ) || utterance,
+    correctedFields: stringList(suppliedMemory.correctedFields, 30, 64),
     requestedFacts,
     contextualReferences,
   });

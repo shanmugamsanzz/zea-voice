@@ -118,7 +118,21 @@ const explicitRecommendationSupportPattern = /(?:\b(?:recommend(?:ed|ation)?|sui
 const negativeFactPattern = /(?:\b(?:is|are|was|were)\s+not\s+(?:available|included|offered|provided|supported|selectable)\b|\b(?:does|do|did)\s+not\s+(?:include|offer|provide|support|allow)\b|\bwithout\s+(?:a\s+)?(?:test|service|consultation|benefit|feature)\b|\b(?:unavailable|excluded|unsupported|not\s+selectable)\b|\b(?:available|include|offer|provide|support)\s+(?:illa|illai|kidayathu)\b|(?:^|\s)(?:\u0B87\u0BB2\u0BCD\u0BB2\u0BC8|\u0B95\u0BBF\u0B9F\u0BC8\u0BAF\u0BBE\u0BA4\u0BC1)\s*[.!?\u0964]*$)/iu;
 const positiveFactPattern = /(?:\b(?:is|are|was|were)\s+(?:available|included|offered|provided|supported|selectable)\b|\b(?:includes?|offers?|provides?|supports?|allows?)\b|\b(?:available|include|offer|provide|support)\s+(?:irukku|undu|yes)\b|\u0B95\u0BBF\u0B9F\u0BC8\u0B95\u0BCD\u0B95\u0BC1\u0BAE\u0BCD|\u0B89\u0BB3\u0BCD\u0BB3\u0BA4\u0BC1)/iu;
 
-function unsupportedStructuredIdentifiers(claim, evidenceText) {
+function callerFieldSupportsIdentifier(claim, identifier, fields = []) {
+  const normalizedIdentifier = identity(identifier);
+  const claimTokens = new Set(tokens(claim));
+  if (!normalizedIdentifier) return false;
+  return fields.some((field) => {
+    const normalizedValue = identity(field?.value);
+    if (!normalizedValue || !normalizedValue.includes(normalizedIdentifier)) return false;
+    const descriptors = tokens([
+      field?.key, field?.label, field?.question,
+    ].filter(Boolean).join(' '));
+    return descriptors.length > 0 && descriptors.some((token) => claimTokens.has(token));
+  });
+}
+
+function unsupportedStructuredIdentifiers(claim, evidenceText, callerProvidedFields = []) {
   // Catalog values may arrive with presentation casing (for example `Cbc`
   // or `rbs`) even though the model naturally speaks their abbreviations in
   // uppercase. Compare claimed identifiers against all normalized evidence
@@ -134,6 +148,7 @@ function unsupportedStructuredIdentifiers(claim, evidenceText) {
     .filter((entry) => entry.replace(/-/gu, '').length >= 2)
     .map((entry) => entry.toLocaleUpperCase());
   return [...new Set(claimed)].filter((entry) => {
+    if (callerFieldSupportsIdentifier(claim, entry, callerProvidedFields)) return false;
     if (evidence.has(entry)) return false;
     const normalizedIdentifier = identity(entry);
     if (normalizedIdentifier && ` ${normalizedEvidence} `.includes(` ${normalizedIdentifier} `)) return false;
@@ -214,7 +229,9 @@ export function validateGroundedClaim(sentence, sources = [], options = {}) {
       numbers: Object.freeze(unsupportedNumbers),
     });
   }
-  const unsupportedIdentifiers = unsupportedStructuredIdentifiers(claim, evidenceText);
+  const unsupportedIdentifiers = unsupportedStructuredIdentifiers(
+    claim, evidenceText, options.callerProvidedFields,
+  );
   if (unsupportedIdentifiers.length) {
     return Object.freeze({
       valid: false, reason: 'unsupported_structured_fact', identifiers: unsupportedIdentifiers,

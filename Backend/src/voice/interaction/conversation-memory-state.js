@@ -91,6 +91,8 @@ export function normalizeLiveCallFrame(value = {}) {
     recentTurns: Object.freeze(messages(Array.isArray(value.recentTurns) ? value.recentTurns : value.messages)),
     lastAnswer: text(value.lastAnswer, maxMessageCharacters) || null,
     activeToolRequest: Object.freeze(safeJson(value.activeToolRequest) ?? {}),
+    latestCallerQuestion: text(value.latestCallerQuestion, maxMessageCharacters) || null,
+    correctedFields: Object.freeze(stringList(value.correctedFields).slice(0, 30)),
   });
 }
 
@@ -157,6 +159,10 @@ export function buildConversationMemoryState({
     lastAnswer: owns(incomingFrame, 'lastAnswer') ? incomingFrame.lastAnswer : prior.callFrame.lastAnswer,
     activeToolRequest: owns(incomingFrame, 'activeToolRequest')
       ? incomingFrame.activeToolRequest : prior.callFrame.activeToolRequest,
+    latestCallerQuestion: owns(incomingFrame, 'latestCallerQuestion')
+      ? incomingFrame.latestCallerQuestion : prior.callFrame.latestCallerQuestion,
+    correctedFields: owns(incomingFrame, 'correctedFields')
+      ? incomingFrame.correctedFields : prior.callFrame.correctedFields,
   }) : prior.callFrame;
   const currentMessages = messages(history);
   const recentSummary = currentMessages.slice(-6)

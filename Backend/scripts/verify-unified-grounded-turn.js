@@ -1113,7 +1113,11 @@ const sameTurnAction = applyUnifiedGroundedTurn({
   finalizedUtterance: 'Create the priority service request for Asha.',
 });
 assert.equal(sameTurnAction.valid, true);
-assert.equal(sameTurnAction.toolRequest.name, 'create_request');
+assert.equal(sameTurnAction.toolRequest, null,
+  'A TOOL decision in the collection turn must wait for final confirmation');
+assert.equal(sameTurnAction.nextQuestion?.kind, 'confirmation');
+assert.match(sameTurnAction.answer, /Asha/u);
+assert.equal(sameTurnAction.state.activeToolRequest.status, 'awaiting_confirmation');
 assert.equal(sameTurnAction.state.knownEntities[0].key, 'priority-service');
 assert.equal(sameTurnAction.state.collectedInformation.contact_name, 'Asha');
 

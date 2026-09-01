@@ -43,9 +43,14 @@ const baseClassification = {
 const emptyResolution = {
   candidate: null, candidateNamespace: null, routingCandidates: [], namespaceCandidates: {},
 };
+const semanticSearchScopes = [];
 const dependencies = {
   embed: async () => [0.1, 0.2],
-  search: async () => records.map((record, index) => ({
+  search: async (_tenant, _vector, options = {}) => {
+    semanticSearchScopes.push([...(options.recordTypes ?? [])].sort());
+    return records.filter((record) => (options.recordTypes ?? []).includes(
+      record.record_type,
+    )).map((record, index) => ({
     id: record.record_id,
     score: 0.99 - index * 0.01,
     payload: {
@@ -56,7 +61,8 @@ const dependencies = {
       record_id: record.record_id,
       agent_usage: 'both',
     },
-  })),
+    }));
+  },
 };
 
 async function retrieve(input, classification, resolution) {
@@ -67,6 +73,10 @@ async function retrieve(input, classification, resolution) {
 }
 
 const independent = await retrieve(baseInput, baseClassification, emptyResolution);
+assert.deepEqual(semanticSearchScopes.slice(0, 5), [
+  ['CATALOG_CATEGORY', 'CATALOG_ITEM'], ['FAQ'], ['CONVERSATION_NODE'],
+  ['WORKFLOW_RULE'], ['KNOWLEDGE_CHUNK'],
+], 'Qdrant must be searched independently with one namespace-scoped filter per call');
 for (const channel of ['structured', 'bm25', 'qdrant']) {
   assert.deepEqual(Object.keys(independent.namespaceChannels[channel]), [
     'CATALOG', 'FAQ', 'CONVERSATION', 'WORKFLOW', 'GENERAL',
@@ -83,6 +93,41 @@ assert.equal(callerFacingFusion.candidates.length, 5);
 assert.equal(callerFacingFusion.candidates.every(
   (candidate) => candidate.callerFacingHint === true,
 ), true, 'Unrelated internal guidance must not occupy caller-facing top-five positions');
+
+const channelCandidate = (channel, recordType) => independent.channels[channel]
+  .find((candidate) => candidate.recordType === recordType);
+const reservedCatalogCandidate = channelCandidate('bm25', 'CATALOG_ITEM');
+const corroboratedFaq = channelCandidate('bm25', 'FAQ');
+const semanticFaq = channelCandidate('qdrant', 'FAQ');
+const unrelatedConversation = channelCandidate('qdrant', 'CONVERSATION_NODE');
+const isolatedLatestIntentFusion = fuseCandidateRankings({
+  ...independent,
+  primaryNamespaces: ['CATALOG'],
+  queryContext: {
+    ...independent.queryContext,
+    reservedRecords: [{
+      recordId: reservedCatalogCandidate.recordId,
+      recordType: 'CATALOG_ITEM', reason: 'explicit_entity',
+    }],
+  },
+  channels: {
+    structured: [{ ...reservedCatalogCandidate, score: 1, rank: 1, namespaceRank: 1 }],
+    bm25: [corroboratedFaq],
+    qdrant: [semanticFaq, unrelatedConversation],
+  },
+}, { limit: 5, minProviderScore: 0, highProviderScore: 0.86 });
+assert.ok(isolatedLatestIntentFusion.candidates.some((candidate) => (
+  candidate.recordId === reservedCatalogCandidate.recordId
+)), 'The explicit latest entity must be reserved');
+assert.ok(isolatedLatestIntentFusion.candidates.some((candidate) => (
+  candidate.recordId === corroboratedFaq.recordId
+)), 'Strongly corroborated caller-facing fallback evidence may remain');
+assert.equal(isolatedLatestIntentFusion.candidates.some((candidate) => (
+  candidate.recordId === unrelatedConversation.recordId
+)), false, 'A lone unrelated fallback match must not occupy a top-five slot');
+assert.ok(isolatedLatestIntentFusion.rejectedUnrelatedNamespaceIds.includes(
+  unrelatedConversation.recordId.toLocaleLowerCase(),
+));
 
 const expectedTypesByNamespace = {
   CATALOG: ['CATALOG_ITEM', 'CATALOG_CATEGORY'],
@@ -170,11 +215,21 @@ assert.deepEqual(new Set(explicit.relevantNamespaces), new Set([
 
 const contextual = await retrieve({
   ...baseInput,
-  memory: { activeEntity: { recordId: records[0].record_id } },
-  queryUnderstanding: { contextDependent: true },
+  memory: { activeEntity: { recordId: records[0].record_id, name: 'Published Option' } },
+  recentRelevantTurns: [
+    { role: 'user', content: 'obsolete unrelated historical wording' },
+    { role: 'assistant', content: 'obsolete historical response' },
+  ],
+  queryUnderstanding: { contextDependent: true, requestedFacts: ['configured_value'] },
 }, baseClassification, { ...emptyResolution, contextDependent: true });
 assert.equal(contextual.queryContext.reservedRecords[0].recordId, records[0].record_id);
 assert.equal(contextual.queryContext.reservedRecords[0].reason, 'canonical_memory');
+assert.match(contextual.queryContext.latestRequestText, /Published Option/u);
+assert.match(contextual.queryContext.latestRequestText, /configured_value/u);
+assert.doesNotMatch(contextual.queryContext.latestRequestText, /obsolete unrelated/u,
+  'Historical dialogue must not dilute the latest-request retrieval query');
+assert.match(contextual.queryContext.contextualText, /obsolete unrelated/u,
+  'Relevant memory remains available as contextual trace without becoming the primary query');
 
 const comparison = await retrieve({
   ...baseInput,

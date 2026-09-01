@@ -243,7 +243,10 @@ for (let pass = 1; pass <= repeats; pass += 1) {
         assert.match(result.answer, /\?$/u);
         targetedClarifications += 1;
       } else if (scenario === 'authorized_support_tool') {
-        assert.equal(result.toolRequest?.name, `${tenant.key}_support`);
+        assert.equal(result.toolRequest, null,
+          'Even a zero-evidence authorized tool must wait for caller confirmation');
+        assert.equal(result.nextQuestion?.kind, 'confirmation');
+        assert.equal(result.state.activeToolRequest?.name, `${tenant.key}_support`);
         authorizedTools += 1;
       } else {
         assert.equal(result.answer, tenant.support);

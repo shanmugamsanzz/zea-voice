@@ -237,11 +237,16 @@ function compactCanonicalMemory(memory, profile) {
   return compactBudgetedValue({
     activeEntity: canonical.activeEntity ?? null,
     activeCategory: canonical.activeCategory ?? null,
-    comparisonEntities: canonical.comparisonEntities ?? [],
-    currentTopic: canonical.currentTopic ?? null,
-    collectedInformation: canonical.collectedInformation ?? {},
-    pendingClarification: canonical.pendingClarification ?? null,
     activeToolRequest: canonical.activeToolRequest ?? null,
+    collectedInformation: canonical.collectedInformation ?? {},
+    currentTopic: canonical.currentTopic ?? null,
+    requestedFacts: canonical.requestedFacts ?? [],
+    pendingQuestion: canonical.pendingQuestion ?? null,
+    latestCallerQuestion: canonical.latestCallerQuestion ?? null,
+    pendingClarification: canonical.pendingClarification ?? null,
+    comparisonEntities: canonical.comparisonEntities ?? [],
+    contextualReferences: canonical.contextualReferences ?? [],
+    correctedFields: canonical.correctedFields ?? [],
   }, profile);
 }
 

@@ -190,6 +190,10 @@ export function validateDecisionSecurity({ sources = [], toolRequest = null, run
         ? authorization.reason : 'unauthorized_tool_request',
     });
     const tool = authorization.tool;
+    const activeWorkflow = runtime.activeToolRequest?.workflowState;
+    if (activeWorkflow && (activeWorkflow.missingFields ?? []).length > 0) {
+      return Object.freeze({ valid: false, reason: 'required_tool_fields_missing' });
+    }
     if (!toolArgumentsMatchSchema(toolRequest.arguments ?? {}, tool.inputSchema)) {
       return Object.freeze({ valid: false, reason: 'invalid_tool_arguments' });
     }
@@ -202,14 +206,14 @@ export function validateDecisionSecurity({ sources = [], toolRequest = null, run
         return Object.freeze({ valid: false, reason: 'tool_argument_not_collected' });
       }
     }
-    if (runtime.confirmationRequired === true) {
-      const active = runtime.activeToolRequest ?? {};
-      if (active.status !== 'awaiting_confirmation'
-        || identity(active.name) !== identity(toolRequest.name)) {
-        return Object.freeze({
-          valid: false, reason: 'confirmation_required', authorization,
-        });
-      }
+    const active = runtime.activeToolRequest ?? {};
+    if (active.status !== 'awaiting_confirmation'
+      || (active.workflowState
+        && active.workflowState.confirmationStatus !== 'awaiting_confirmation')
+      || identity(active.name) !== identity(toolRequest.name)) {
+      return Object.freeze({
+        valid: false, reason: 'confirmation_required', authorization,
+      });
     }
   }
   const safety = validateConfiguredSafety({

@@ -11,6 +11,7 @@ import {
   validateGroundedClaims,
 } from './grounded-claim-validator.js';
 import {
+  advanceSchemaDrivenWorkflowState,
   composeConfiguredTurnResponse,
   resolveNextConfiguredQuestion,
   validateConfiguredFieldCollectionSpeech,
@@ -678,17 +679,9 @@ export function applyUnifiedGroundedTurn({
   const preValidationToolName = effectiveDecision.toolRequest?.name
     ?? effectiveDecision.stateUpdate.activeToolRequest?.name
     ?? beforeState.activeToolRequest?.name;
-  const preValidationToolSchema = (runtime.toolSchemas ?? []).find((tool) => (
-    identity(tool?.name) === identity(preValidationToolName)
-  ));
-  const schemaRequiresConfirmation = preValidationToolSchema
-    ?.inputSchema?.['x-requires-confirmation'] === true;
-  const confirmationRequired = schemaRequiresConfirmation || (confirmationConfiguration?.enabled === true
-    && preValidationToolName
-    && String(confirmationConfiguration.intent ?? '').normalize('NFKC').toLocaleLowerCase()
-      .replace(/[^a-z0-9]+/gu, '_').replace(/^_+|_+$/gu, '')
-      === String(preValidationToolName).normalize('NFKC').toLocaleLowerCase()
-        .replace(/[^a-z0-9]+/gu, '_').replace(/^_+|_+$/gu, ''));
+  // Every external action uses a second-turn TOOL boundary after the caller
+  // hears the collected values and explicitly confirms them.
+  const confirmationRequired = Boolean(preValidationToolName);
   const postLlmValidation = validatePostLlmResponseAndTool({
     decision: effectiveDecision,
     selectedEvidence,
@@ -788,18 +781,32 @@ export function applyUnifiedGroundedTurn({
         catalogRecordId: actionContext.catalogItem.recordId,
       } : {}),
     };
-    afterState = memory.setActiveToolRequest(activeRequest, { turnToken });
     if (actionContext.catalogItem && confirmationConfiguration?.catalogField) {
       afterState = memory.mergeCollectedData({
         [confirmationConfiguration.catalogField]: actionContext.catalogItem.name,
       });
     }
+    const workflowTransition = advanceSchemaDrivenWorkflowState({
+      activeRequest,
+      fieldSchemas,
+      collectedInformation: afterState.collectedInformation,
+      tools,
+      actionEvidence,
+      confirmationConfiguration,
+      confirmationAccepted: Boolean(effectiveDecision.toolRequest
+        && beforeState.activeToolRequest?.status === 'awaiting_confirmation'),
+    });
+    if (!workflowTransition.valid) {
+      return Object.freeze({
+        valid: false, reason: workflowTransition.reason,
+        toolRequest: null, state: rollbackMemory(),
+      });
+    }
+    afterState = memory.setActiveToolRequest(
+      workflowTransition.activeToolRequest, { turnToken },
+    );
   }
   if (awaitingConfirmation) {
-    afterState = memory.setActiveToolRequest({
-      ...afterState.activeToolRequest,
-      status: 'collecting_information',
-    }, { turnToken });
     // Same-turn fields and the Catalog selection remain committed, while the
     // external operation is suppressed until a later confirmed turn.
   }

@@ -84,6 +84,7 @@ let embedCalls = 0;
 let searchCalls = 0;
 let embeddedText = null;
 let qdrantOptions = null;
+let qdrantOptionCalls = [];
 let startedChannels = [];
 let observedChannelScopes = [];
 const providers = {
@@ -96,6 +97,7 @@ const providers = {
     searchCalls += 1;
     assert.ok(options.recordTypes.length > 0);
     qdrantOptions = options;
+    qdrantOptionCalls.push(options);
     return [
       {
         id: beta.record_id, score: 0.91,
@@ -168,7 +170,8 @@ assert.deepEqual(new Set(retrieval.channels.structured.map((candidate) => candid
 assert.deepEqual(retrieval.channels.qdrant.map((candidate) => candidate.recordId), [beta.record_id],
   'Qdrant results must be tenant, revision and record-type scoped');
 assert.equal(embedCalls, 3);
-assert.equal(searchCalls, 3);
+assert.equal(searchCalls, 4,
+  'Semantic retrieval must query each selected namespace independently');
 assert.ok(!retrieval.recordTypes.includes('WORKFLOW_RULE'));
 
 request = prepared('action phrase');
@@ -244,6 +247,7 @@ retrieval = await retrieveTargetedCandidates({
 assert.ok(retrieval.channels.structured.some((candidate) => (
   candidate.recordId === alpha.record_id && candidate.matchMethod === 'call_memory'
 )), 'a genuinely contextual turn must reserve canonical call memory before retrieval ranking');
+qdrantOptionCalls = [];
 request = prepared('contextual follow-up', {
   memory: {
     activeEntity: {
@@ -288,8 +292,11 @@ assert.equal(qdrantOptions.agentId, agentId);
 assert.deepEqual(qdrantOptions.knowledgeBases,
   [{ id: knowledgeBaseId, publicationRevision: 7 }]);
 assert.equal(qdrantOptions.usageDirection, 'inbound');
-assert.deepEqual(new Set(qdrantOptions.recordTypes),
-  new Set(retrieval.recordTypes));
+assert.ok(qdrantOptionCalls.every((options) => options.recordTypes.length <= 2),
+  'Each semantic search must remain isolated to one namespace');
+assert.deepEqual(new Set(qdrantOptionCalls.flatMap((options) => options.recordTypes)),
+  new Set(retrieval.recordTypes),
+  'Independent semantic namespace searches must cover the complete retrieval scope');
 
 request = prepared('alpha beta', {
   queryUnderstanding: {

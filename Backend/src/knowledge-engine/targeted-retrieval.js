@@ -263,26 +263,21 @@ export function buildContextEnrichedRetrievalQuery(
     ...(canonicalEntity ? [canonicalEntity] : []),
     ...comparisons,
   ], recordScope);
-  const queryParts = uniqueText([
+  const primaryQueryParts = uniqueText([
     currentQuestion,
     currentSearchEntity?.name,
     ...requestedFacts,
     ...tenantForms,
     ...comparisons.map((entity) => entity.name),
-    ...(contextDependent ? recentCompleteContext : []),
     ...(need.detected === true ? [
       need.customerProblem,
       need.desiredOutcome,
       ...Object.values(need.businessContext ?? {}),
-      ...recentCompleteContext,
     ] : []),
   ]);
-  const searchText = queryParts.join(' ');
+  const searchText = primaryQueryParts.join(' ');
   const contextualText = contextDependent ? uniqueText([
-    currentQuestion,
-    currentSearchEntity?.name,
-    ...requestedFacts,
-    ...tenantForms,
+    ...primaryQueryParts,
     ...recentCompleteContext,
   ]).join(' ') : null;
   return Object.freeze({
@@ -306,6 +301,7 @@ export function buildContextEnrichedRetrievalQuery(
     requiresCanonicalHydration: !hasCurrentEntityMention
       && contextDependent && Boolean(canonicalEntity?.recordId),
     tenantSearchForms: tenantForms,
+    latestRequestText: searchText,
     sparseText: searchText,
     semanticText: searchText,
     reservedRecords,
@@ -687,9 +683,9 @@ function structuredCandidatesForTurn(input, classification, resolution, recordSc
     }
     if (selected) candidates.unshift(selected);
   }
-  return Object.freeze(candidates.slice(0, limit).map((candidate, index) => (
-    freezeCandidate(candidate, 'structured', index + 1)
-  )));
+  return interleaveNamespaceRanks(
+    groupRankedCandidates(candidates, 'structured', limit), 'structured', limit,
+  );
 }
 
 function validSparseDocuments(indexes, input, scope, allowedTypes) {
@@ -798,25 +794,43 @@ async function semanticCandidates(
   const vector = await dependencies.embed(
     queryContext?.semanticText ?? input.utterance, { signal: input.abortSignal },
   );
-  const matches = await dependencies.search(input.tenantId, vector, {
-    knowledgeBases: scope,
-    usageDirection: input.usageDirection,
-    agentId: input.agentId,
-    abortSignal: input.abortSignal,
-    // Fetch enough candidates for independent namespace ranking so a dense
-    // namespace cannot crowd every other published source out of the result.
-    limit: Math.min(
-      QDRANT_SEARCH_LIMIT_MAX,
-      limit * Math.max(1, Object.keys(selectedNamespaceTypes(allowedTypes)).length),
-    ),
-    scoreThreshold: 0,
-    recordTypes: [...allowedTypes],
-  });
-  const scoped = (matches ?? []).map(
-    (match) => semanticPayloadCandidate(match, scope, input, allowedTypes, recordScope),
-  ).filter(Boolean);
+  const namespaceGroups = selectedNamespaceTypes(allowedTypes);
+  const namespaceEntries = Object.entries(namespaceGroups);
+  const settledNamespaces = await Promise.allSettled(namespaceEntries
+    .map(async ([namespace, namespaceAllowedTypes]) => {
+      const matches = await dependencies.search(input.tenantId, vector, {
+        knowledgeBases: scope,
+        usageDirection: input.usageDirection,
+        agentId: input.agentId,
+        abortSignal: input.abortSignal,
+        limit: Math.min(QDRANT_SEARCH_LIMIT_MAX, limit),
+        scoreThreshold: 0,
+        recordTypes: [...namespaceAllowedTypes],
+      });
+      const scoped = (matches ?? []).map((match) => semanticPayloadCandidate(
+        match, scope, input, namespaceAllowedTypes, recordScope,
+      )).filter(Boolean);
+      return [namespace, rankChannel(scoped, 'qdrant', limit)];
+    }));
+  const failedNamespaces = settledNamespaces
+    .map((result, index) => ({ result, namespace: namespaceEntries[index][0] }))
+    .filter(({ result }) => result.status === 'rejected');
+  for (const { result, namespace } of failedNamespaces) {
+    logger.warn({
+      err: result.reason,
+      stage: 'knowledge.retrieval_namespace_failed',
+      channel: 'qdrant',
+      namespace,
+    }, 'Knowledge retrieval namespace failed; retaining successful namespaces');
+  }
+  if (failedNamespaces.length === namespaceEntries.length && failedNamespaces.length > 0) {
+    throw failedNamespaces[0].result.reason;
+  }
+  const namespaceResults = settledNamespaces.map((result, index) => (
+    result.status === 'fulfilled' ? result.value : [namespaceEntries[index][0], []]
+  ));
   return interleaveNamespaceRanks(
-    groupRankedCandidates(scoped, 'qdrant', limit), 'qdrant', limit,
+    Object.fromEntries(namespaceResults), 'qdrant', limit,
   );
 }
 

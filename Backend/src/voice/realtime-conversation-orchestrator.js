@@ -2301,7 +2301,7 @@ export class RealtimeConversationOrchestrator {
       if (grounded.valid) {
         const selectedEvidenceIds = grounded.evidenceIds ?? grounded.evidenceSourceIds ?? [];
         const activeTool = grounded.state?.activeToolRequest ?? null;
-        if (grounded.decision === 'action') {
+        if (grounded.decision === 'action' && grounded.toolRequest) {
           normalTurnOutput = createGroundedLlmOutput(groundedLlmOutputTypes.TOOL, {
             text: answer || null,
             selectedEvidenceIds,
@@ -2320,6 +2320,9 @@ export class RealtimeConversationOrchestrator {
             selectedEvidenceIds,
           });
         } else {
+          // A model-proposed action withheld for field collection or final
+          // confirmation is caller-facing speech, not an executable TOOL
+          // output. Only the validated request above may cross the tool gate.
           normalTurnOutput = createGroundedLlmOutput(groundedLlmOutputTypes.RESPONSE, {
             text: answer,
             selectedEvidenceIds,

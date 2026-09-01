@@ -104,7 +104,7 @@ LANGUAGE: ta
 ENTRY: false
 PURPOSE: Handle a selected Catalog item that requires another approved related item.
 RESPONSE: Read the current Catalog relationship. If the required related item is missing, use the next question with only valid Catalog candidates. After selection, preserve both items and use only their hydrated facts and published prices.
-NEXT_QUESTION: எந்த approved base Package choose பண்ண விரும்புறீங்க?
+NEXT_QUESTION: எந்த approved base Package choose பண்ண விருபுறீங்க?
 
 STAGE: health_concern
 FLOW: main

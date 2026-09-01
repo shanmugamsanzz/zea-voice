@@ -25,7 +25,8 @@ const input = createKnowledgeEngineInput({
 });
 const candidate = (recordId, rank, score, overrides = {}) => ({
   recordId, recordType: 'CATALOG_ITEM', knowledgeBaseId,
-  publicationRevision: 4, channel: 'test', rank, score, ...overrides,
+  publicationRevision: 4, channel: 'test', rank, score,
+  callerFacingHint: true, ...overrides,
 });
 const retrieval = {
   tenantId, agentId, callId,

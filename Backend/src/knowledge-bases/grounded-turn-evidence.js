@@ -221,6 +221,13 @@ function compactCanonicalMemory(input = {}, canonicalResolution = {}) {
       ? null : compactValue(memory.pendingClarification),
     activeTool: compactValue(memory.activeTool),
     collectedToolFields: Object.freeze({ ...(memory.collectedToolFields ?? {}) }),
+    pendingQuestion: compactValue(memory.pendingQuestion),
+    latestCallerQuestion: clean(memory.latestCallerQuestion, 2_000) || null,
+    requestedFacts: Object.freeze([...(understanding.requestedFacts
+      ?? memory.requestedFacts ?? [])].slice(0, 20)),
+    contextualReferences: Object.freeze([...(understanding.contextualReferences
+      ?? memory.contextualReferences ?? [])].slice(0, 20)),
+    correctedFields: Object.freeze([...(memory.correctedFields ?? [])].slice(0, 30)),
   });
 }
 
@@ -229,13 +236,25 @@ function compactRelevantTurns(input = {}) {
   const understanding = input.queryUnderstanding ?? {};
   const currentEntityTerms = (understanding.currentEntityCandidates ?? [])
     .flatMap((candidate) => [candidate?.name, candidate?.canonicalName]).filter(Boolean);
+  const pending = memory.pendingQuestion ?? memory.pendingClarification ?? {};
+  const activeTool = memory.activeTool ?? memory.activeToolRequest ?? {};
+  const collected = memory.collectedInformation ?? memory.collectedToolFields ?? {};
+  const continuityTerms = [
+    ...currentEntityTerms,
+    memory.activeEntity?.name, memory.activeEntity?.key,
+    memory.activeCategory?.name, memory.activeCategory?.key,
+    pending?.key, pending?.text, pending?.kind,
+    activeTool?.name, activeTool?.status,
+    activeTool?.selectedEntityKey, activeTool?.selectedEntityName,
+    ...(understanding.requestedFacts ?? memory.requestedFacts ?? []),
+    ...Object.entries(collected).flatMap(([key, value]) => [key, value]),
+  ].filter(Boolean);
   return Object.freeze(selectCompleteConversationTurns(input.recentRelevantTurns
     ?? memory.recentConversation ?? memory.recentTurns ?? [], {
     mode: memory.conversationContextMode,
     recentTurns: memory.conversationContextTurns,
     currentQuestion: input.currentQuestion ?? input.latestQuestion ?? input.utterance,
-    contextTerms: currentEntityTerms.length ? currentEntityTerms
-      : [memory.activeEntity?.name, memory.activeCategory?.name].filter(Boolean),
+    contextTerms: continuityTerms,
   })
     .map((turn) => Object.freeze({
       role: turn?.role === 'assistant' ? 'assistant' : 'user',
