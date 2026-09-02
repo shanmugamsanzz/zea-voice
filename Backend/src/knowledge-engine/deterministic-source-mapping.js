@@ -51,7 +51,9 @@ export function buildDeterministicSourceMap(sources = []) {
     if (!mapping.sourceId || !mapping.publishedEvidenceId || !mapping.authoritativeRecordId
       || !mapping.recordType || !mapping.tenantId || !mapping.agentId || !mapping.knowledgeBaseId
       || !Number.isInteger(mapping.publicationRevision)
-      || mapping.publicationRevision < 1 || !mapping.canonicalRecordIdentityKey) {
+      || mapping.publicationRevision < 1 || !mapping.canonicalRecordIdentityKey
+      || (source.canonicalIdentityKey
+        && source.canonicalIdentityKey !== mapping.canonicalRecordIdentityKey)) {
       throw new TypeError('Deterministic source mapping requires complete publication identity');
     }
     if (sourceIds.has(normalized(mapping.sourceId))
@@ -70,7 +72,8 @@ export function resolveDeterministicSource(mapping, authoritativeRecords = [], s
     return Object.freeze({ valid: false, reason: 'missing_evidence', record: null });
   }
   const publishedMatches = authoritativeRecords.filter((candidate) => (
-    normalized(candidate?.id) === normalized(mapping.publishedEvidenceId)
+    normalized(candidate?.publishedEvidenceId ?? candidate?.id)
+      === normalized(mapping.publishedEvidenceId)
   ));
   if (!publishedMatches.length) {
     return Object.freeze({ valid: false, reason: 'missing_evidence', record: null });

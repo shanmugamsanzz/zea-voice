@@ -144,6 +144,10 @@ assert.equal(result.confidence, knowledgeResolutionConfidence.HIGH);
 assert.equal(result.action, knowledgeResolutionActions.CONTINUE);
 assert.equal(result.candidate.itemKey, 'alpha-prime');
 assert.equal(result.candidate.method, 'exact');
+assert.equal(result.candidate.tenantId, tenantId);
+assert.equal(result.candidate.knowledgeBaseId, job.knowledge_base_id);
+assert.equal(result.candidate.publicationRevision, 1);
+assert.equal(result.candidate.recordId, alpha.record_id);
 assert.equal(result.candidate.recordType, 'CATALOG_ITEM',
   'A specific Catalog entity must override a colliding generic Conversation route');
 assert.equal(result.routingCandidates.length, 1,
@@ -180,6 +184,23 @@ assert.equal(result.action, knowledgeResolutionActions.CONFIRM);
 assert.equal(result.alternatives.length > 0, true);
 assert.equal(result.routingCandidates.length, 2,
   'Two records sharing an exact published alias must remain genuinely ambiguous');
+assert.equal(result.ambiguity.detected, true);
+assert.deepEqual(new Set(result.ambiguity.candidates.map((candidate) => candidate.recordId)),
+  new Set([ambiguousOne.record_id, ambiguousTwo.record_id]));
+assert.equal(result.ambiguity.candidates.every((candidate) => (
+  candidate.tenantId === tenantId
+    && candidate.knowledgeBaseId === job.knowledge_base_id
+    && candidate.publicationRevision === 1
+)), true, 'Every clarification candidate must preserve its exact publication scope');
+
+const ambiguousPrepared = await prepareKnowledgeQuery(input('shared'), bundle);
+assert.equal(ambiguousPrepared.understanding.ambiguity.detected, true);
+assert.deepEqual(new Set(ambiguousPrepared.understanding.ambiguity.candidates
+  .map((candidate) => candidate.canonicalName)),
+new Set(['Shared route one', 'Shared route two']));
+assert.equal(ambiguousPrepared.understanding.canonicalContext, null,
+  'An ambiguous published match must never become canonical state');
+assert.equal(ambiguousPrepared.structuredMeaning.ambiguity.detected, true);
 
 result = resolvePublishedEntityRoute(input('tell me more', {
   activeEntity: { recordId: alpha.record_id, key: 'alpha-prime' },
@@ -276,13 +297,17 @@ const contextualInput = createKnowledgeEngineInput({
   tenantId, agentId, callId, utterance: 'What details are included in this?',
   requestedFacts: ['details'],
   memory: { activeEntity: {
-    recordId: alpha.record_id, key: 'alpha-prime', name: 'Alpha Prime',
+    tenantId, knowledgeBaseId: job.knowledge_base_id, publicationRevision: 1,
+    recordType: 'CATALOG_ITEM', recordId: alpha.record_id, itemKey: 'alpha-prime',
+    key: 'alpha-prime', canonicalName: 'Alpha Prime', name: 'Alpha Prime',
   } },
 });
 const contextualTopic = await prepareKnowledgeQuery(contextualInput, bundle);
 assert.equal(contextualTopic.understanding.contextDependent, true);
 assert.equal(contextualTopic.understanding.canonicalContext.recordId, alpha.record_id,
   'A contextual question with no new entity must reuse canonical call memory');
+assert.equal(contextualTopic.canonicalMemoryTransition.mode, 'CONTEXTUAL_REUSE');
+assert.equal(contextualTopic.input.memory.activeEntity.recordId, alpha.record_id);
 
 const unrelatedOnlyBundle = buildPublicationIndexes(job, [alpha, beta]);
 result = resolvePublishedEntityRoute(

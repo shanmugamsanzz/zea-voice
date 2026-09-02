@@ -13,7 +13,7 @@ import { publishedRecordCallerFacingHint } from './evidence-audience.js';
 import { selectCompleteConversationTurns } from './conversation-turn-context.js';
 import { buildPublicationDeduplicationIdentity } from './publication-deduplication.js';
 
-export const TARGETED_RETRIEVAL_VERSION = 12;
+export const TARGETED_RETRIEVAL_VERSION = 14;
 
 const documentIndexTypes = Object.freeze({
   [knowledgeSearchIndexes.CATALOG]: 'CATALOG_ITEM',
@@ -288,12 +288,13 @@ export function buildContextEnrichedRetrievalQuery(
   ))).values()]);
   const currentQuestion = clean(input?.latestQuestion ?? input?.utterance);
   const need = understanding.need ?? {};
-  const recentCompleteContext = (contextDependent || need.detected === true)
+  const usePreviousTurnContext = contextDependent && !hasCurrentEntityMention;
+  const recentCompleteContext = usePreviousTurnContext
     ? selectCompleteConversationTurns(input?.recentRelevantTurns ?? [], {
       mode: 'full_current_call',
       currentQuestion,
       contextTerms: [currentSearchEntity?.name, ...requestedFacts].filter(Boolean),
-      maximumPairs: 2,
+      maximumPairs: 3,
     }).map((turn) => clean(turn?.content, 500)).filter(Boolean)
     : [];
   const tenantForms = tenantSearchForms([
@@ -315,10 +316,19 @@ export function buildContextEnrichedRetrievalQuery(
     ] : []),
   ]);
   const searchText = primaryQueryParts.join(' ');
-  const contextualText = (contextDependent || need.detected === true) ? uniqueText([
+  const contextualText = usePreviousTurnContext ? uniqueText([
     ...primaryQueryParts,
     ...recentCompleteContext,
   ]).join(' ') : null;
+  const exactRecordLookup = !hasCurrentEntityMention && contextDependent
+    && canonicalEntity?.recordId ? Object.freeze({
+      tenantId: canonicalEntity.tenantId ?? input.tenantId,
+      knowledgeBaseId: canonicalEntity.knowledgeBaseId,
+      publicationRevision: canonicalEntity.publicationRevision,
+      recordType: canonicalEntity.recordType,
+      recordId: canonicalEntity.recordId,
+      requestedFacts,
+    }) : null;
   return Object.freeze({
     currentQuestion,
     canonicalEntity,
@@ -336,7 +346,9 @@ export function buildContextEnrichedRetrievalQuery(
       missingDetails: Object.freeze([...(need.missingDetails ?? [])].slice(0, 10)),
     }),
     contextDependent,
+    previousTurnContextUsed: usePreviousTurnContext,
     contextualText,
+    exactRecordLookup,
     requiresCanonicalHydration: !hasCurrentEntityMention
       && contextDependent && Boolean(canonicalEntity?.recordId),
     tenantSearchForms: tenantForms,
@@ -374,7 +386,11 @@ function publicationScope(input, bundles) {
     if (!knowledgeBaseId || !Number.isInteger(publicationRevision) || publicationRevision < 1) {
       throw new TypeError('Targeted retrieval requires revision-scoped publication bundles');
     }
-    scope.push(Object.freeze({ id: knowledgeBaseId, publicationRevision }));
+    const existingScope = scope.find((entry) => normalizeId(entry.id) === normalizeId(knowledgeBaseId));
+    if (existingScope && existingScope.publicationRevision !== publicationRevision) {
+      throw new TypeError('Targeted retrieval cannot mix publication revisions for one Knowledge Base');
+    }
+    if (!existingScope) scope.push(Object.freeze({ id: knowledgeBaseId, publicationRevision }));
     for (const record of bundle.records ?? []) {
       const recordUsage = String(record.usage_direction ?? record.usageDirection ?? 'both')
         .trim().toLocaleLowerCase();
@@ -384,7 +400,7 @@ function publicationScope(input, bundles) {
       const deduplicationIdentity = buildPublicationDeduplicationIdentity(record, {
         tenantId: input.tenantId, knowledgeBaseId, publicationRevision,
       });
-      records.set(normalizeId(recordId), Object.freeze({
+      const scopedRecord = Object.freeze({
         tenantId: input.tenantId,
         agentId: input.agentId,
         recordId,
@@ -439,7 +455,16 @@ function publicationScope(input, bundles) {
               ?? record.metadata?.displayOrder
               ?? record.metadata?.display_order
           ) : null,
-      }));
+      });
+      const existingRecord = records.get(normalizeId(recordId));
+      if (existingRecord && (
+        normalizeId(existingRecord.knowledgeBaseId) !== normalizeId(knowledgeBaseId)
+        || existingRecord.publicationRevision !== publicationRevision
+        || existingRecord.recordType !== scopedRecord.recordType
+      )) {
+        throw new TypeError('Targeted retrieval found a conflicting record identity in publication scope');
+      }
+      records.set(normalizeId(recordId), scopedRecord);
     }
   }
   return { scope: Object.freeze(scope), records };
@@ -745,16 +770,23 @@ function structuredCandidatesForTurn(input, classification, resolution, recordSc
   );
 }
 
-function validSparseDocuments(indexes, input, scope, allowedTypes) {
+function validSparseDocuments(indexes, input, scope, allowedTypes, recordScope) {
   const allowedScope = new Map(scope.map((entry) => [normalizeId(entry.id), entry.publicationRevision]));
   const tenant = normalizeId(input.tenantId);
   const usage = normalizedUsage(input.usageDirection);
-  return indexes.flatMap((index) => index?.documents ?? []).filter((document) => (
-    normalizeId(document.tenantId) === tenant
-    && allowedScope.get(normalizeId(document.knowledgeBaseId)) === Number(document.publicationRevision)
-    && allowedTypes.has(String(document.recordType ?? '').toUpperCase())
-    && ['both', usage].includes(String(document.usageDirection ?? 'both').toLocaleLowerCase())
-  ));
+  return indexes.flatMap((index) => index?.documents ?? []).filter((document) => {
+    const scopedRecord = recordScope.get(normalizeId(document.id));
+    return normalizeId(document.tenantId) === tenant
+      && allowedScope.get(normalizeId(document.knowledgeBaseId)) === Number(document.publicationRevision)
+      && allowedTypes.has(String(document.recordType ?? '').toUpperCase())
+      && ['both', usage].includes(String(document.usageDirection ?? 'both').toLocaleLowerCase())
+      && scopedRecord
+      && normalizeId(scopedRecord.tenantId) === tenant
+      && normalizeId(scopedRecord.agentId) === normalizeId(input.agentId)
+      && normalizeId(scopedRecord.knowledgeBaseId) === normalizeId(document.knowledgeBaseId)
+      && scopedRecord.publicationRevision === Number(document.publicationRevision)
+      && scopedRecord.recordType === String(document.recordType ?? '').toUpperCase();
+  });
 }
 
 function bm25Candidates(
@@ -765,7 +797,9 @@ function bm25Candidates(
   const groups = selectedNamespaceTypes(allowedTypes);
   const namespaceRanks = {};
   for (const [namespace, namespaceAllowedTypes] of Object.entries(groups)) {
-    const documents = validSparseDocuments(sparseIndexes, input, scope, namespaceAllowedTypes);
+    const documents = validSparseDocuments(
+      sparseIndexes, input, scope, namespaceAllowedTypes, recordScope,
+    );
     if (!documents.length) {
       namespaceRanks[namespace] = Object.freeze([]);
       continue;
@@ -830,7 +864,13 @@ function semanticPayloadCandidate(match, scope, input, allowedTypes, recordScope
     || ![normalizedUsage(input.usageDirection), 'both'].includes(usage)) return null;
   const recordId = String(payload.record_id ?? match.id ?? '').trim();
   const scopedRecord = recordScope.get(normalizeId(recordId));
-  return recordId ? {
+  if (!recordId || !scopedRecord
+    || normalizeId(scopedRecord.tenantId) !== normalizeId(input.tenantId)
+    || normalizeId(scopedRecord.agentId) !== normalizeId(input.agentId)
+    || normalizeId(scopedRecord.knowledgeBaseId) !== normalizeId(knowledgeBaseId)
+    || scopedRecord.publicationRevision !== publicationRevision
+    || scopedRecord.recordType !== recordType) return null;
+  return {
     tenantId: input.tenantId,
     agentId: input.agentId,
     recordId,
@@ -841,7 +881,7 @@ function semanticPayloadCandidate(match, scope, input, allowedTypes, recordScope
     callerFacingHint: scopedRecord?.callerFacingHint === true,
     deduplicationIdentity: scopedRecord?.deduplicationIdentity,
     score: boundedScore(match.score),
-  } : null;
+  };
 }
 
 async function semanticCandidates(

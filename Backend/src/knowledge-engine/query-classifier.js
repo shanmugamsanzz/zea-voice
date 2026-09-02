@@ -180,8 +180,7 @@ function inferredCandidates(input, resolution, confidenceConfiguration) {
   if ((understanding.comparisonEntities?.length ?? 0) > 1
     || (input.requestedFacts ?? []).some((fact) => String(fact).toLocaleLowerCase() === 'comparison')
     || (explicitEntityCount(candidates, confidenceConfiguration) > 1
-      && explicitPhraseSignatureCount(candidates, confidenceConfiguration) > 1)
-    || (input.requestedFacts?.length ?? 0) > 1) {
+      && explicitPhraseSignatureCount(candidates, confidenceConfiguration) > 1)) {
     inferred.push({
       intentClass: knowledgeQueryClasses.COMPARISON_COMPLEX,
       candidate: resolution?.candidate ?? null,

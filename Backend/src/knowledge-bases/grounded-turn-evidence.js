@@ -9,7 +9,10 @@ import {
 import {
   canonicalRecordIdentityKey,
 } from '../knowledge-engine/canonical-record-identity.js';
-import { buildDeterministicSourceMap } from '../knowledge-engine/deterministic-source-mapping.js';
+import {
+  buildDeterministicSourceMap,
+  resolveDeterministicSource,
+} from '../knowledge-engine/deterministic-source-mapping.js';
 import { AppError } from '../middleware/errors.js';
 import { resolveKnowledgeConfidenceConfiguration } from './knowledge-confidence-config.js';
 import {
@@ -22,7 +25,7 @@ import {
 } from '../knowledge-engine/grounded-evidence-representation.js';
 import { env } from '../config/env.js';
 
-export const GROUNDED_TURN_EVIDENCE_VERSION = 12;
+export const GROUNDED_TURN_EVIDENCE_VERSION = 13;
 const maximumEvidenceRecords = 5;
 
 function directRememberedFollowupRetrieval(input = {}, classification = {}, resolution = {}) {
@@ -574,6 +577,35 @@ export function buildGroundedLlmInput({
     });
   }));
   const sourceMap = buildDeterministicSourceMap(hydratedRecords.filter((source) => source.sourceId));
+  const publicationRevisions = [...new Map(hydratedRecords.map((source) => [
+    normalizedId(source.knowledgeBaseId),
+    Object.freeze({
+      knowledgeBaseId: source.knowledgeBaseId,
+      publicationRevision: source.publicationRevision,
+    }),
+  ])).values()];
+  // Production hydration exposes verifiedRecords. Resolve every source map
+  // entry against that exact immutable set before it can reach the LLM.
+  // The evidence fallback remains available only to isolated unit fixtures.
+  if (Array.isArray(authoritative?.verifiedRecords)) {
+    for (const mapping of sourceMap) {
+      const resolved = resolveDeterministicSource(mapping, hydratedRecords, {
+        tenantId: input.tenantId,
+        agentId: input.agentId,
+        publicationRevisions,
+      });
+      if (resolved.valid !== true) {
+        throw new AppError(503,
+          'The verified grounding envelope source map could not be resolved',
+          'KNOWLEDGE_GROUNDED_SOURCE_MAP_INVALID', {
+            stage: 'grounded_evidence_packaging',
+            sourceId: mapping.sourceId,
+            recordId: mapping.recordId,
+            reason: resolved.reason,
+          });
+      }
+    }
+  }
 
   const authorizedTools = applicableTools(hydrated, runtimeProfile);
   const canonicalResolution = resolveCanonicalTopicMemory({
@@ -625,6 +657,9 @@ export function buildGroundedLlmInput({
     meaning: Object.freeze({
       authority: 'GROUNDED_LLM',
       interpretationRequired: true,
+      structuredExtract: Object.freeze(object(
+        input?.queryUnderstanding?.structuredMeaning,
+      )),
       intentHint: clean(input?.queryUnderstanding?.intentHint, 80) || null,
       explicitEntities: Object.freeze(
         (input?.queryUnderstanding?.explicitEntities ?? []).slice(0, 5),

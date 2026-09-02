@@ -7,6 +7,7 @@ export const groundedLlmOutputTypes = Object.freeze({
   RESPONSE: 'RESPONSE',
   TOOL: 'TOOL',
   CLARIFY: 'CLARIFY',
+  NO_MATCH: 'NO_MATCH',
 });
 
 export const deterministicProtocolExceptionTypes = Object.freeze({
@@ -193,7 +194,9 @@ export function createNormalTurnInput(value = {}) {
   );
   const sourceMemory = value.memory && typeof value.memory === 'object' ? value.memory : {};
   validateMemoryScope(scope, sourceMemory.scope);
-  const facts = [...new Set((value.requestedFacts ?? sourceMemory.requestedFacts ?? [])
+  // Requested facts describe this finalized utterance. Values produced for a
+  // previous turn remain in history but must not be relabelled as current.
+  const facts = [...new Set((value.requestedFacts ?? [])
     .map((fact) => clean(fact, 120)).filter(Boolean))].slice(0, 10);
   const references = [...new Set((value.contextualReferences
     ?? sourceMemory.contextualReferences ?? []).map((reference) => clean(reference, 120))
@@ -313,6 +316,10 @@ export function createGroundedLlmOutput(type, value = {}) {
   }
   if (type === groundedLlmOutputTypes.CLARIFY && !text) {
     throw new TypeError('CLARIFY requires a targeted caller-facing question');
+  }
+  if (type === groundedLlmOutputTypes.NO_MATCH
+    && (text || selectedEvidenceIds.length || tool)) {
+    throw new TypeError('NO_MATCH must not contain speech, evidence or a tool request');
   }
   return Object.freeze({
     contractVersion: NORMAL_TURN_CONTRACT_VERSION,

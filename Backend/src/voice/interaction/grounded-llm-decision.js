@@ -1,8 +1,8 @@
 const maximumAnswerCharacters = 4_000;
 const maximumSources = 10;
 const maximumEntities = 20;
-const decisions = new Set(['answer', 'clarify', 'action']);
-const externalDecisions = Object.freeze(['RESPONSE', 'TOOL', 'CLARIFY']);
+const decisions = new Set(['answer', 'clarify', 'action', 'no_match']);
+const externalDecisions = Object.freeze(['RESPONSE', 'TOOL', 'CLARIFY', 'NO_MATCH']);
 
 function normalizeDecision(value) {
   const normalized = text(value, 20).toLocaleUpperCase();
@@ -10,6 +10,7 @@ function normalizeDecision(value) {
     RESPONSE: 'answer',
     TOOL: 'action',
     CLARIFY: 'clarify',
+    NO_MATCH: 'no_match',
     ANSWER: 'answer',
     ACTION: 'action',
   })[normalized] ?? normalized.toLocaleLowerCase();
@@ -125,6 +126,18 @@ function normalizeDecisionEnvelope(value) {
     if (value[key] !== undefined && stateUpdate[key] === undefined) stateUpdate[key] = value[key];
   }
   const normalizedDecision = normalizeDecision(value.decision);
+  if (normalizedDecision === 'no_match') {
+    const mixedBranch = text(value.answer, maximumAnswerCharacters)
+      || text(value.responseId, 160)
+      || list(value.evidenceIds ?? value.selectedEvidenceIds ?? value.evidenceSourceIds).length
+      || value.toolRequest !== undefined && value.toolRequest !== null
+      || value.toolName !== undefined && value.toolName !== null
+      || value.toolArguments !== undefined && value.toolArguments !== null
+      || value.clarification !== undefined && value.clarification !== null
+      || value.clarificationReason !== undefined && value.clarificationReason !== null
+      || value.pendingQuestion !== undefined && value.pendingQuestion !== null;
+    if (mixedBranch) return null;
+  }
   let compactToolRequest = null;
   if (normalizedDecision === 'action'
     && value.toolName !== undefined && value.toolName !== null) {
@@ -150,10 +163,10 @@ function normalizeDecisionEnvelope(value) {
     answer: normalizedDecision === 'action' ? ''
       : (compactClarificationQuestion === undefined ? (value.answer ?? '') : ''),
     responseId: normalizedDecision === 'answer' ? (value.responseId ?? null) : null,
-    evidenceIds: normalizedDecision === 'clarify' ? []
+    evidenceIds: normalizedDecision === 'clarify' || normalizedDecision === 'no_match' ? []
       : (value.evidenceIds ?? value.selectedEvidenceIds
         ?? value.evidenceSourceIds ?? []),
-    stateUpdate,
+    stateUpdate: normalizedDecision === 'no_match' ? {} : stateUpdate,
     pendingQuestion: normalizedDecision === 'clarify'
       ? (value.pendingQuestion ?? compactClarificationQuestion ?? null)
       : (normalizedDecision === 'answer' ? (value.pendingQuestion ?? null) : null),
@@ -405,6 +418,7 @@ export function groundedDecisionContract(envelope, runtime = {}) {
       ...(unavailableResponse ? ['RESPONSE'] : []),
       ...(tools.length ? ['TOOL'] : []),
       'CLARIFY',
+      'NO_MATCH',
     ];
   return Object.freeze({
     format: 'json_object',
@@ -416,10 +430,12 @@ export function groundedDecisionContract(envelope, runtime = {}) {
       'toolArguments', 'clarificationReason'],
     rules: [
       'Answer the latest caller question first.',
-      'Return exactly one decision: RESPONSE, TOOL, or CLARIFY. Never mix fields from different decision branches.',
+      'Return exactly one decision: RESPONSE, TOOL, CLARIFY, or NO_MATCH. Never mix fields from different decision branches.',
       'Return RESPONSE only when selected published evidence clearly supports the answer or recommendation.',
       'Return TOOL only when the caller requests an action, applicable Workflow authorizes it, and one assigned tool schema permits its arguments.',
       'Return CLARIFY only when one genuinely required detail is missing or authoritative candidates remain genuinely ambiguous.',
+      'Return NO_MATCH only when the latest clear request cannot be answered from supplied caller-facing evidence. NO_MATCH is fact-free: answer must be empty and responseId, toolName, toolArguments and clarificationReason must be null; evidenceIds must be empty.',
+      'Never use NO_MATCH for ambiguity. Runtime converts NO_MATCH to the tenant-configured information-unavailable response.',
       'For CLARIFY, put one targeted caller-facing question in answer and set clarificationReason.',
       'A CLARIFY decision must always contain one audible question. Never return empty speech or silently wait for another caller utterance.',
       'Use TOOL only for one configured tool and never claim success before its verified result.',
@@ -429,7 +445,7 @@ export function groundedDecisionContract(envelope, runtime = {}) {
         ? 'Caller-facing verified evidence is available; factual RESPONSE speech must cite it.'
         : (unavailableResponse
           ? `No caller-facing evidence is available. RESPONSE is permitted only with this exact configured information-unavailable speech: ${JSON.stringify(unavailableResponse)}`
-          : 'No caller-facing evidence is available. Do not return RESPONSE; use a targeted CLARIFY or an authorized TOOL.'),
+          : 'No caller-facing evidence is available. Do not return RESPONSE; use NO_MATCH for a clear unsupported request, a targeted CLARIFY for genuine ambiguity, or an authorized TOOL.'),
       unavailableResponse
         ? `If the caller requests a fact whose authoritative field is absent or unpublished, use this exact configured information-unavailable speech and do not invent a value or ask an unrelated clarification: ${JSON.stringify(unavailableResponse)}`
         : 'If a requested authoritative fact is absent or unpublished, do not invent it.',
@@ -442,6 +458,7 @@ export function groundedDecisionContract(envelope, runtime = {}) {
       'For RESPONSE, toolName, toolArguments and clarificationReason must be null.',
       'For TOOL, set toolName and toolArguments as a JSON-object string; clarificationReason must be null.',
       'For CLARIFY, set clarificationReason; toolName and toolArguments must be null.',
+      'For NO_MATCH, answer must be empty, evidenceIds must be empty, and responseId, toolName, toolArguments and clarificationReason must be null.',
       'Use missing_entity when a requested fact has no explicit or remembered canonical entity. Use missing_fact when an entity is known but the caller has not identified the fact needed.',
       'Use authoritative_ambiguity only when supplied ambiguityCandidates contain multiple genuinely close authoritative records; pendingQuestion must name the closest canonical candidates.',
       'Interpret the complete current question with only the supplied relevant call memory and published evidence.',
@@ -494,6 +511,7 @@ export function groundedDecisionJsonSchema(envelope, runtime = {}) {
       ...(unavailableResponse ? ['RESPONSE'] : []),
       ...(toolNames.length ? ['TOOL'] : []),
       'CLARIFY',
+      'NO_MATCH',
     ];
   return Object.freeze({
     type: 'object',
@@ -603,7 +621,7 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
   // CLARIFY is a fact-free question. Providers sometimes retain a stale
   // source ID while correctly choosing CLARIFY; discard that residue instead
   // of converting a useful targeted question into an operational fallback.
-  const evidenceIds = decision === 'clarify' ? [] : list([
+  const evidenceIds = decision === 'clarify' || decision === 'no_match' ? [] : list([
     ...requiredEvidenceIds,
     ...(Array.isArray(parsed.evidenceIds) ? parsed.evidenceIds : []),
   ], maximumSources);
@@ -615,7 +633,7 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
     if (!seenSources.has(source.id)) citedSources.push(source);
     seenSources.add(source.id);
   }
-  const responseId = decision === 'clarify' || parsed.responseId === null
+  const responseId = decision === 'clarify' || decision === 'no_match' || parsed.responseId === null
     ? null : text(parsed.responseId, 160);
   const exactResponseSource = responseId ? allowedSources.get(identity(responseId)) : null;
   if (responseId && (!exactResponseSource || exactResponseSource.exactCallerResponse !== true)) {
@@ -642,6 +660,10 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
   if (internalSpeech(answer)) return Object.freeze({ valid: false, reason: 'internal_text' });
   if (decision === 'clarify' && !pendingQuestion) {
     return Object.freeze({ valid: false, reason: 'clarification_question_required' });
+  }
+  if (decision === 'no_match' && (answer || pendingQuestion || responseId
+    || evidenceIds.length || parsed.toolRequest)) {
+    return Object.freeze({ valid: false, reason: 'invalid_no_match' });
   }
   if (decision === 'clarify' && clarification.reason === 'authoritative_ambiguity') {
     const candidates = (runtime.clarificationContext?.ambiguityCandidates ?? [])
@@ -751,7 +773,8 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
     contextualReferences: stateUpdate.contextualReferences,
     contextDependent: stateUpdate.contextDependent,
     approvedZeroEvidenceResponse: approvedZeroEvidenceResponse === true,
-    flowAction: decision === 'clarify' ? 'clarify' : 'continue',
+    flowAction: decision === 'clarify' ? 'clarify'
+      : (decision === 'no_match' ? 'no_match' : 'continue'),
   });
 }
 
@@ -787,10 +810,11 @@ export function createGroundedDecisionStreamDecoder(envelope) {
       raw += String(delta ?? '');
       const sourceIds = jsonArrayField(raw, 'evidenceIds');
       const decisionValue = partialJsonStringField(raw, 'decision');
-      if (sourceIds && decisions.has(decisionValue)
+      const normalizedDecision = normalizeDecision(decisionValue);
+      if (sourceIds && decisions.has(normalizedDecision)
         && sourceIds.every((sourceId) => allowedSources.has(sourceId))) {
         decision = Object.freeze({
-          decision: decisionValue,
+          decision: normalizedDecision,
           evidenceIds: Object.freeze([...sourceIds]),
           evidenceSourceIds: Object.freeze([...sourceIds]),
           selectedEntityKeys: Object.freeze([]),

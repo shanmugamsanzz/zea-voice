@@ -76,7 +76,10 @@ const contextualFact = record(7, 'workflow_rule', {
   entity_name: 'tenant metric route', entity_category: 'information',
   entity_aliases: ['tenant metric phrase'],
   entity_metadata: {
-    conditions: { examples: ['tenant metric phrase'], intentClass: 'DETAILS_OR_PRICE' },
+    conditions: {
+      examples: ['tenant metric phrase'], intentClass: 'DETAILS_OR_PRICE',
+      requestedFacts: ['configured_metric'],
+    },
     actionType: 'respond',
     actionConfig: { responseMode: 'grounded', requiresCatalogItem: true }, priority: 70,
   },
@@ -86,7 +89,11 @@ const bundle = buildPublicationIndexes(
 );
 
 const memory = {
-  activeEntity: { recordId: first.record_id, itemKey: 'nimbus', name: 'Nimbus plan' },
+  activeEntity: {
+    tenantId, knowledgeBaseId: job.knowledge_base_id, publicationRevision: 1,
+    recordType: 'CATALOG_ITEM', recordId: first.record_id, itemKey: 'nimbus',
+    canonicalName: 'Nimbus plan', name: 'Nimbus plan',
+  },
   recentConversation: [
     { role: 'user', content: 'Tell me about Nimbus.' },
     { role: 'assistant', content: 'Nimbus information.' },
@@ -122,6 +129,8 @@ assert.equal(prepared.understanding.contextDependent, true,
 assert.equal(prepared.understanding.canonicalContext.recordId, first.record_id);
 assert.equal(prepared.usesCallMemory, true);
 assert.equal(prepared.understanding.currentRouteSignal.actionType, 'respond');
+assert.deepEqual(prepared.understanding.requestedFacts, ['configured_metric']);
+assert.equal(prepared.understanding.requestedFactSource, 'tenant_published_route');
 
 prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
   tenantId, agentId, callId, utterance: 'unstructured contextual continuation', memory,
@@ -131,6 +140,14 @@ assert.equal(prepared.resolution.candidate, null,
   'Call memory must not be misrepresented as an explicit current-turn entity match');
 assert.equal(prepared.understanding.meaning.contextualEntity.recordId, first.record_id);
 assert.equal(prepared.understanding.meaning.requestedFactInterpretationRequired, true);
+assert.equal(prepared.structuredMeaning.contractVersion, 1);
+assert.equal(prepared.structuredMeaning.stage, 'LIGHTWEIGHT_STRUCTURED_EXTRACT');
+assert.equal(prepared.structuredMeaning.decisionAuthority, false);
+assert.deepEqual(prepared.structuredMeaning.relevantTurnPairs, [{
+  caller: 'Tell me about Nimbus.', agent: 'Nimbus information.',
+}]);
+assert.equal(prepared.structuredMeaning.contextualReferences[0].entity.recordId, first.record_id);
+assert.doesNotThrow(() => JSON.stringify(prepared.structuredMeaning));
 
 const weakUnrelatedRoute = {
   recordId: purpose.record_id,
@@ -179,6 +196,11 @@ assert.equal(prepared.usesCallMemory, false);
 assert.equal(prepared.understanding.meaning.explicitEntity.recordId, second.record_id);
 assert.equal(prepared.understanding.meaning.correction.possible, true);
 assert.equal(prepared.understanding.meaning.correction.previousEntity.recordId, first.record_id);
+assert.equal(prepared.canonicalMemoryTransition.mode, 'EXPLICIT_REPLACEMENT');
+assert.equal(prepared.input.memory.activeEntity.recordId, second.record_id);
+assert.equal(prepared.input.memory.activeCategory, null);
+assert.deepEqual(prepared.input.memory.comparisonEntities, []);
+assert.equal(prepared.input.memory.pendingQuestion, null);
 
 prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
   tenantId, agentId, callId, utterance: 'Nimbus Cirrus', memory,
@@ -191,6 +213,14 @@ assert.equal(prepared.classification.selectedNamespace, 'CATALOG');
 assert.equal(prepared.understanding.meaning.comparisonRequested, true);
 assert.deepEqual(new Set(prepared.resolution.routingCandidates.map((candidate) => candidate.itemKey)),
   new Set(['nimbus', 'cirrus']));
+
+prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
+  tenantId, agentId, callId, utterance: 'Nimbus', memory,
+  requestedFacts: ['published_value', 'published_timing'],
+}), bundle);
+assert.equal(prepared.structuredMeaning.comparison.detected, false,
+  'Multiple requested facts must not manufacture a comparison');
+assert.notEqual(prepared.intentClass, knowledgeQueryClasses.COMPARISON_COMPLEX);
 
 prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
   tenantId, agentId, callId, utterance: 'tenant purpose phrase Nimbus', memory,
@@ -225,6 +255,8 @@ assert.equal(prepared.retrievalHints.toolExecutionAuthority, false);
 assert.equal(prepared.understanding.actionIntent.detected, true);
 assert.equal(prepared.understanding.actionIntent.source, 'published_workflow');
 assert.equal(prepared.understanding.meaning.actionIntent.detected, true);
+assert.equal(prepared.structuredMeaning.action.detected, true);
+assert.equal(prepared.structuredMeaning.action.source, 'published_workflow');
 
 await prepareKnowledgeQuery(createKnowledgeEngineInput({
   tenantId, agentId, callId, utterance: 'Nimbus', memory,

@@ -13,6 +13,7 @@ assert.deepEqual(Object.keys(cleanState.callFrame).sort(), [
   'latestIntent', 'memoryVersion', 'pendingClarification', 'scope',
   'activeToolRequest', 'collectedInformation', 'currentTopic', 'knownEntities',
   'language', 'lastAnswer', 'pendingQuestion', 'recentTurns',
+  'comparisonEntities', 'correctedFields', 'latestCallerQuestion',
 ].sort());
 assert.deepEqual(cleanState.collectedData, {});
 
@@ -82,7 +83,8 @@ const liveState = buildConversationMemoryState({
   callFrame: { currentStage: 'booking_details', fields: { patient_age: '30' } },
   collectedData: { preferred_date: '2026-08-14' },
 });
-assert.equal(liveState.callFrame.knownEntities.some((item) => item.key === 'silver'), true);
+assert.deepEqual(liveState.callFrame.knownEntities, [],
+  'stale selectedItem aliases must not be converted into canonical entity memory');
 assert.equal(liveState.callFrame.pendingQuestion.key, 'patient_age');
 assert.equal(liveState.callFrame.language, 'ta');
 assert.deepEqual(liveState.callFrame.collectedInformation, {

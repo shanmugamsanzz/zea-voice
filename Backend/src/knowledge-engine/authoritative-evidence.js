@@ -10,7 +10,7 @@ import {
 } from './canonical-retrieval-reservations.js';
 import { publicationDuplicateKeys } from './publication-deduplication.js';
 
-export const AUTHORITATIVE_EVIDENCE_VERSION = 10;
+export const AUTHORITATIVE_EVIDENCE_VERSION = 11;
 
 const supportedRecordTypes = new Set([
   'CATALOG_ITEM', 'CATALOG_CATEGORY', 'FAQ', 'CONVERSATION_NODE', 'WORKFLOW_RULE', 'KNOWLEDGE_CHUNK',
@@ -324,6 +324,41 @@ function latestRequestRelevance(candidate = {}) {
   );
 }
 
+function candidateMatchesRetrievalScope(candidate = {}, retrieval = {}) {
+  const canonical = candidate.canonicalIdentity ?? {};
+  const expectedTenant = normalizeId(retrieval.tenantId);
+  const expectedAgent = normalizeId(retrieval.agentId);
+  const candidateTenant = normalizeId(canonical.tenantId ?? candidate.tenantId);
+  const candidateAgent = normalizeId(candidate.agentId);
+  const retrievalScope = retrieval.retrievalScope ?? {};
+  if (normalizeId(retrievalScope.tenantId)
+    && normalizeId(retrievalScope.tenantId) !== expectedTenant) return false;
+  if (normalizeId(retrievalScope.agentId)
+    && normalizeId(retrievalScope.agentId) !== expectedAgent) return false;
+  if (candidateTenant && candidateTenant !== expectedTenant) return false;
+  if (candidateAgent && candidateAgent !== expectedAgent) return false;
+
+  const recordId = normalizeId(candidate.recordId);
+  const recordType = String(candidate.recordType ?? '').toUpperCase();
+  const knowledgeBaseId = normalizeId(candidate.knowledgeBaseId);
+  const publicationRevision = Number(candidate.publicationRevision);
+  if (normalizeId(canonical.recordId)
+    && normalizeId(canonical.recordId) !== recordId) return false;
+  if (String(canonical.recordType ?? '').toUpperCase()
+    && String(canonical.recordType).toUpperCase() !== recordType) return false;
+  if (normalizeId(canonical.knowledgeBaseId)
+    && normalizeId(canonical.knowledgeBaseId) !== knowledgeBaseId) return false;
+  if (Number(canonical.publicationRevision)
+    && Number(canonical.publicationRevision) !== publicationRevision) return false;
+
+  const publications = retrievalScope.knowledgeBases ?? [];
+  if (!publications.length) return true;
+  return publications.some((publication) => (
+    normalizeId(publication.id ?? publication.knowledgeBaseId) === knowledgeBaseId
+    && Number(publication.publicationRevision) === publicationRevision
+  ));
+}
+
 export function fuseCandidateRankings(retrieval, {
   rrfK = 60,
   limit = 5,
@@ -366,11 +401,16 @@ export function fuseCandidateRankings(retrieval, {
   const conflictedKeys = new Set();
   const conflictedIds = new Set();
   const rejectedNamespaceIds = new Set();
+  const rejectedIsolationIds = new Set();
   for (const [channel, candidates] of Object.entries(retrieval?.channels ?? {})) {
     for (const [position, candidate] of (candidates ?? []).entries()) {
       const recordId = normalizeId(candidate.recordId);
       const recordType = String(candidate.recordType ?? '').toUpperCase();
       if (!recordId || !supportedRecordTypes.has(recordType)) continue;
+      if (!candidateMatchesRetrievalScope(candidate, retrieval)) {
+        rejectedIsolationIds.add(recordId);
+        continue;
+      }
       if (allowedTypes && !allowedTypes.has(recordType)) {
         rejectedNamespaceIds.add(recordId);
         continue;
@@ -569,6 +609,7 @@ export function fuseCandidateRankings(retrieval, {
     rrfK,
     candidates: Object.freeze(candidates),
     rejectedScopeConflictIds: Object.freeze([...conflictedIds]),
+    rejectedIsolationIds: Object.freeze([...rejectedIsolationIds]),
     rejectedNamespaceIds: Object.freeze([...rejectedNamespaceIds]),
     rejectedWeakIds: Object.freeze(rejectedWeakIds),
     rejectedDuplicateIds: Object.freeze(rejectedDuplicateIds),

@@ -7,6 +7,7 @@ import {
   assertGroundingEnvelopePreservesEvidence,
   buildGroundingEnvelope,
 } from '../src/voice/interaction/grounded-llm-response.js';
+import { buildDeterministicSourceMap } from '../src/knowledge-engine/deterministic-source-mapping.js';
 
 const base = {
   id: 'published:catalog_item:record-a',
@@ -65,7 +66,10 @@ assert.deepEqual(canonical.facts, canonical.authoritativeData);
 
 const canonicalEnvelope = buildGroundingEnvelope({
   found: true,
-  tenantEvidence: { sources: [canonical] },
+  tenantEvidence: {
+    sources: [canonical],
+    sourceMap: buildDeterministicSourceMap([canonical]),
+  },
 }, { includePublishedMap: false, maximumSources: 5 });
 assert.equal(canonicalEnvelope.sources.length, 1);
 assert.equal(canonicalEnvelope.sources[0].id, 'source_1');

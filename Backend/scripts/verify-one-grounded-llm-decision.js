@@ -60,7 +60,32 @@ assert.deepEqual(contract.allowedEvidenceIds, ['source_1', 'source_2']);
 assert.equal(contract.configuredToolSchemas[0].name, 'create_visit');
 assert.equal(jsonSchema.additionalProperties, false);
 assert.deepEqual(jsonSchema.required, contract.exactFields);
-assert.deepEqual(jsonSchema.properties.decision.enum.sort(), ['CLARIFY', 'RESPONSE', 'TOOL']);
+assert.deepEqual(jsonSchema.properties.decision.enum.sort(), ['CLARIFY', 'NO_MATCH', 'RESPONSE', 'TOOL']);
+
+const noMatch = validateGroundedLlmDecision(JSON.stringify({
+  decision: 'NO_MATCH', answer: '', responseId: null, evidenceIds: [],
+  toolName: null, toolArguments: null, clarificationReason: null,
+}), envelope, runtime);
+assert.equal(noMatch.valid, true);
+assert.equal(noMatch.decision, 'no_match');
+assert.deepEqual(noMatch.evidenceIds, []);
+assert.equal(noMatch.answer, '');
+
+const invalidNoMatchSpeech = validateGroundedLlmDecision(JSON.stringify({
+  decision: 'NO_MATCH', answer: 'The price is 3200.', responseId: null,
+  evidenceIds: ['source_1'], toolName: null, toolArguments: null,
+  clarificationReason: null,
+}), envelope, runtime);
+assert.equal(invalidNoMatchSpeech.valid, false);
+assert.equal(invalidNoMatchSpeech.reason, 'invalid_response_shape');
+
+const uncitedFactualResponse = validateGroundedLlmDecision(JSON.stringify({
+  decision: 'RESPONSE', answer: 'The office is on Central Road.',
+  responseId: null, evidenceIds: [], toolName: null,
+  toolArguments: null, clarificationReason: null,
+}), envelope, runtime);
+assert.equal(uncitedFactualResponse.valid, false);
+assert.equal(uncitedFactualResponse.reason, 'selected_evidence_ids_required');
 
 const compactResponse = validateGroundedLlmDecision(JSON.stringify({
   decision: 'RESPONSE', answer: 'The office is on Central Road.',

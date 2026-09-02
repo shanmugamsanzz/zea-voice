@@ -678,6 +678,8 @@ export function openGenericConversationState(identity, settings = {}, now = Date
         // category's PostgreSQL record identity.
         state.activeCategory = null;
         state.currentTopic = comparisons.map((entity) => entity.name).join(' / ');
+        state.pendingQuestion = null;
+        state.pendingClarification = null;
       } else if (mode === 'EXPLICIT') {
         const previousRecordId = cleanText(
           state.activeEntity?.recordId ?? state.activeEntity?.id
@@ -789,6 +791,8 @@ export function openGenericConversationState(identity, settings = {}, now = Date
           state.activeToolRequest = null;
           state.collectedInformation = {};
         }
+        state.pendingQuestion = null;
+        state.pendingClarification = null;
       } else if (category && context.explicitCategory === true) {
         state.activeEntity = null;
         state.activeCategory = category;

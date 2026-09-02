@@ -13,6 +13,9 @@ const evidence = Object.freeze({
   id: 'evidence-1', publishedEvidenceId: 'evidence-1', sourceId: 'source_1',
   recordId: 'faq-1', recordType: 'FAQ', tenantId: 'tenant-1', agentId: 'agent-1',
   knowledgeBaseId: 'kb-1', publicationRevision: 1, callerFacing: true,
+  documentId: 'document-1', documentVersionId: 'version-1',
+  documentStatus: 'ready', documentVersionStatus: 'ready',
+  documentVersionIsCurrent: true,
   hydrationValidated: true, publicationValidated: true,
   content: 'The office opens at 9 AM. The approved fee is 100.',
 });

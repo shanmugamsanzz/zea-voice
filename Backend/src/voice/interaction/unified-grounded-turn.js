@@ -330,6 +330,23 @@ export function validatePostLlmResponseAndTool({
   const approvedConfiguredSpeech = approvedZeroEvidenceResponse
     || approvedConfiguredUnavailableResponse;
 
+  const factualResponse = ['answer', 'response'].includes(
+    String(decision?.decision ?? '').trim().toLocaleLowerCase(),
+  )
+    && String(decision?.answer ?? '').trim() !== '';
+  if (factualResponse && !approvedConfiguredSpeech) {
+    const citedIds = [...new Set((decision?.evidenceIds ?? decision?.evidenceSourceIds ?? [])
+      .map(identity).filter(Boolean))];
+    const selectedIds = new Set(selectedEvidence.map((source) => identity(source?.id)).filter(Boolean));
+    if (!citedIds.length) {
+      return Object.freeze({ valid: false, reason: 'selected_evidence_ids_required' });
+    }
+    if (citedIds.some((sourceId) => !selectedIds.has(sourceId))
+      || selectedIds.size !== citedIds.length) {
+      return Object.freeze({ valid: false, reason: 'citation_evidence_mismatch' });
+    }
+  }
+
   const recommendation = approvedConfiguredSpeech
     ? Object.freeze({ answer: decision?.answer ?? '', removed: Object.freeze([]) })
     : removeUnsupportedRecommendationSentences(
@@ -457,6 +474,41 @@ export function applyUnifiedGroundedTurn({
       numbers: Object.freeze([...(validatedDecision.numbers ?? [])]),
       rejectedSentence: validatedDecision.rejectedAnswer ?? null,
       evidenceIds: Object.freeze([...(validatedDecision.evidenceIds ?? [])]),
+      state: memory.snapshot(),
+    });
+  }
+  const clearUnsupportedRequest = validatedDecision.decision === 'clarify'
+    && validatedDecision.clarification?.reason === 'missing_evidence'
+    && hydratedEnvelope.found !== true
+    && runtime.clarificationContext?.genuineAmbiguity !== true
+    && runtime.clarificationContext?.ambiguity?.detected !== true
+    && (runtime.clarificationContext?.ambiguityCandidates ?? []).length < 2;
+  if (validatedDecision.decision === 'no_match' || clearUnsupportedRequest) {
+    const unavailableAnswer = String(zeroEvidenceResponse ?? '').trim();
+    if (!unavailableAnswer) {
+      return Object.freeze({
+        valid: false,
+        reason: 'information_unavailable_response_unconfigured',
+        evidenceIds: Object.freeze([]),
+        state: beforeState,
+      });
+    }
+    memory.observeAssistantResponse?.(unavailableAnswer, { turnToken });
+    memory.append?.({ role: 'assistant', content: unavailableAnswer }, { turnToken });
+    return Object.freeze({
+      valid: true,
+      decision: 'answer',
+      answer: unavailableAnswer,
+      responseId: null,
+      evidenceIds: Object.freeze([]),
+      stateUpdate: validatedDecision.stateUpdate,
+      pendingQuestion: beforeState.pendingQuestion,
+      nextQuestion: null,
+      clarificationRecovery: null,
+      toolRequest: null,
+      noMatch: validatedDecision.decision === 'no_match',
+      clearUnsupportedRequest,
+      approvedConfiguredUnavailableResponse: true,
       state: memory.snapshot(),
     });
   }
@@ -976,6 +1028,9 @@ export function applyUnifiedGroundedTurn({
     nextQuestion: effectiveNextQuestion,
     clarificationRecovery: recovery,
     toolRequest: awaitingConfirmation ? null : effectiveDecision.toolRequest,
+    approvedZeroEvidenceResponse: effectiveDecision.approvedZeroEvidenceResponse === true,
+    approvedConfiguredUnavailableResponse:
+      effectiveDecision.approvedConfiguredUnavailableResponse === true,
     state: afterState,
   });
 }

@@ -3,11 +3,17 @@ import { readFileSync } from 'node:fs';
 import { buildAgentSystemPrompt } from '../src/agents/agent-runtime.service.js';
 import { buildGroundingEnvelope } from '../src/voice/interaction/grounded-llm-response.js';
 import { evaluateFirstAudioSlo, percentile } from '../src/voice/interaction/voice-latency-slo.js';
+import { buildDeterministicSourceMap } from '../src/knowledge-engine/deterministic-source-mapping.js';
 
 const sources = Array.from({ length: 8 }, (_, index) => ({
   id: `record-${index + 1}`,
   recordId: `record-${index + 1}`,
   recordType: 'KNOWLEDGE_CHUNK',
+  publishedEvidenceId: 'published-' + (index + 1),
+  tenantId: 'tenant-1', agentId: 'agent-1',
+  knowledgeBaseId: 'kb-1', publicationRevision: 9,
+  documentId: 'document-' + (index + 1),
+  documentVersionId: 'version-' + (index + 1),
   content: `Approved evidence record ${index + 1}.`,
   authoritativeData: { content: `Approved evidence record ${index + 1}.` },
 }));
@@ -17,6 +23,7 @@ const knowledge = {
   tenantEvidence: {
     found: true,
     sources,
+    sourceMap: buildDeterministicSourceMap(sources),
     actionEvidence: [],
     guidanceEvidence: [{
       recordId: 'guidance-1', content: 'Keep the answer short.',
@@ -65,7 +72,8 @@ const prompt = buildAgentSystemPrompt({
 });
 assert.ok(prompt.length <= 12_000);
 assert.doesNotMatch(prompt, /DUPLICATED_MAP_TEXT/u);
-assert.doesNotMatch(prompt, /<runtime_context>|<knowledge_context>|<company_instructions>/u);
+assert.doesNotMatch(prompt, /<runtime_context>|<knowledge_context>/u);
+assert.match(prompt, /<company_instructions>/u);
 assert.match(prompt, /<grounded_turn_input>/u);
 assert.match(prompt, /<\/grounded_turn_input>/u);
 assert.match(prompt, /<\/grounded_response_contract>/u);

@@ -77,13 +77,18 @@ function validateUnifiedSourceMapping(records = [], mappings = []) {
   for (const record of callerFacing) {
     const mapping = mappingById.get(record.sourceId);
     const expected = deterministicSourceEntry(record, record.sourceId);
-    const stale = record.hydrationValidated !== true || record.publicationValidated !== true;
+    const stale = record.hydrationValidated !== true || record.publicationValidated !== true
+      || String(record.documentStatus ?? '').toLowerCase() !== 'ready'
+      || String(record.documentVersionStatus ?? '').toLowerCase() !== 'ready'
+      || record.documentVersionIsCurrent !== true;
     const mismatched = !mapping
       || mapping.publishedEvidenceId !== expected.publishedEvidenceId
       || mapping.authoritativeRecordId !== expected.authoritativeRecordId
       || mapping.recordId !== expected.recordId
       || mapping.recordType !== expected.recordType
       || mapping.canonicalRecordIdentityKey !== expected.canonicalRecordIdentityKey
+      || (record.canonicalIdentityKey
+        && record.canonicalIdentityKey !== expected.canonicalRecordIdentityKey)
       || unifiedEvidenceIdentity(mapping) !== unifiedEvidenceIdentity(expected);
     if (stale || mismatched) {
       throw new AppError(503,

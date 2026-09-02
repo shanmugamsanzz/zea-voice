@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import { createKnowledgeEngineInput } from '../src/knowledge-engine/engine-contract.js';
 import { buildPublicationIndexes } from '../src/knowledge-engine/publication-index-builder.js';
 import { resolvePublishedEntityRoute } from '../src/knowledge-engine/entity-route-resolver.js';
-import { classifyKnowledgeQuery, knowledgeQueryClasses } from '../src/knowledge-engine/query-classifier.js';
+import {
+  classifyKnowledgeQuery,
+  knowledgeQueryClasses,
+  knowledgeSearchIndexes,
+} from '../src/knowledge-engine/query-classifier.js';
 import { retrieveTargetedCandidates } from '../src/knowledge-engine/targeted-retrieval.js';
 import { buildRevisionSparseIndex } from '../src/knowledge-bases/knowledge-map.service.js';
 import { QDRANT_SEARCH_LIMIT_MAX } from '../src/rag/qdrant.client.js';
@@ -123,6 +127,23 @@ const providers = {
           record_id: faq.record_id, agent_usage: 'BOTH',
         },
       },
+      {
+        id: '83000000-0000-4000-8000-000000000099', score: 1,
+        payload: {
+          tenant_id: tenantId, knowledge_base_id: knowledgeBaseId,
+          publication_revision: 7, record_type: 'CATALOG_ITEM',
+          record_id: '83000000-0000-4000-8000-000000000099',
+          agent_usage: 'BOTH',
+        },
+      },
+      {
+        id: alpha.record_id, score: 1,
+        payload: {
+          tenant_id: tenantId, knowledge_base_id: knowledgeBaseId,
+          publication_revision: 6, record_type: 'CATALOG_ITEM',
+          record_id: alpha.record_id, agent_usage: 'BOTH',
+        },
+      },
     ];
   },
 };
@@ -150,6 +171,9 @@ assert.deepEqual(observedChannelScopes[0].namespaces, ['CATALOG']);
 assert.deepEqual(new Set(observedChannelScopes[0].recordTypes), new Set(retrieval.recordTypes));
 assert.equal(embedCalls, 1);
 assert.equal(searchCalls, 1);
+assert.ok(retrieval.channels.qdrant.every((candidate) => (
+  candidate.recordId !== '83000000-0000-4000-8000-000000000099'
+)), 'Qdrant hits absent from the authoritative publication scope must be rejected');
 
 request = prepared('detail phrase');
 retrieval = await retrieveTargetedCandidates({
@@ -297,6 +321,44 @@ assert.ok(qdrantOptionCalls.every((options) => options.recordTypes.length <= 2),
 assert.deepEqual(new Set(qdrantOptionCalls.flatMap((options) => options.recordTypes)),
   new Set(retrieval.recordTypes),
   'Independent semantic namespace searches must cover the complete retrieval scope');
+
+qdrantOptionCalls = [];
+const allNamespaceRequest = prepared('tenant-wide published information');
+const allNamespaceClassification = Object.freeze({
+  ...allNamespaceRequest.classification,
+  selectedNamespace: 'GENERAL',
+  relevantNamespaces: Object.freeze([
+    'CATALOG', 'FAQ', 'GENERAL', 'CONVERSATION', 'WORKFLOW',
+  ]),
+  retrievalPlan: Object.freeze({
+    ...allNamespaceRequest.classification.retrievalPlan,
+    indexes: Object.freeze([
+      knowledgeSearchIndexes.CATALOG,
+      knowledgeSearchIndexes.FAQ,
+      knowledgeSearchIndexes.GENERAL,
+      knowledgeSearchIndexes.CONVERSATION,
+      knowledgeSearchIndexes.WORKFLOW,
+      knowledgeSearchIndexes.BM25,
+      knowledgeSearchIndexes.SEMANTIC,
+    ]),
+  }),
+});
+const allNamespaceRetrieval = await retrieveTargetedCandidates({
+  input: allNamespaceRequest.input,
+  resolution: allNamespaceRequest.resolution,
+  classification: allNamespaceClassification,
+  publicationBundles: [bundle],
+  sparseIndexes: [sparseIndex],
+}, providers);
+assert.equal(qdrantOptionCalls.length, 5,
+  'Catalog, FAQ, General, Conversation and Workflow must be searched independently');
+assert.deepEqual(Object.keys(allNamespaceRetrieval.namespaceChannels.qdrant).sort(),
+  ['CATALOG', 'CONVERSATION', 'FAQ', 'GENERAL', 'WORKFLOW']);
+assert.ok(Object.values(allNamespaceRetrieval.channels).flat().every((candidate) => (
+  candidate.canonicalIdentity.tenantId === tenantId.toLowerCase()
+  && candidate.canonicalIdentity.knowledgeBaseId === knowledgeBaseId.toLowerCase()
+  && candidate.canonicalIdentity.publicationRevision === 7
+)), 'Every channel result must retain the active tenant and publication identity');
 
 request = prepared('alpha beta', {
   queryUnderstanding: {

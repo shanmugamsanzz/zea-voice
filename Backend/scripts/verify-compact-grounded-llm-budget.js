@@ -234,12 +234,18 @@ const zeroEvidenceEnvelope = Object.freeze({
 const unavailableSpeech = 'That information is not available in my published knowledge.';
 assert.deepEqual(
   groundedDecisionJsonSchema(zeroEvidenceEnvelope, {}).properties.decision.enum,
-  ['CLARIFY'],
-  'Zero evidence without an authorized tool or configured response must permit only CLARIFY',
+  ['CLARIFY', 'NO_MATCH'],
+  'Zero evidence must permit fact-free NO_MATCH and targeted CLARIFY',
 );
 assert.deepEqual(groundedDecisionJsonSchema(zeroEvidenceEnvelope, {
   zeroEvidenceResponse: unavailableSpeech,
-}).properties.decision.enum, ['RESPONSE', 'CLARIFY']);
+}).properties.decision.enum, ['RESPONSE', 'CLARIFY', 'NO_MATCH']);
+const zeroEvidenceNoMatch = validateGroundedLlmDecision(JSON.stringify({
+  decision: 'NO_MATCH', answer: '', responseId: null, evidenceIds: [],
+  toolName: null, toolArguments: null, clarificationReason: null,
+}), zeroEvidenceEnvelope, {});
+assert.equal(zeroEvidenceNoMatch.valid, true);
+assert.equal(zeroEvidenceNoMatch.decision, 'no_match');
 const zeroEvidenceClarification = validateGroundedLlmDecision(JSON.stringify({
   decision: 'CLARIFY', answer: 'Which published option did you mean?',
   responseId: null, evidenceIds: [], toolName: null, toolArguments: null,
@@ -286,7 +292,7 @@ const zeroEvidenceSession = await createSelectedLlmStream(profile, {
 assert.match(providerRequest.messages[0].content, /Tell me about the earlier option/u);
 assert.match(providerRequest.messages[0].content, /pendingClarification/u);
 assert.deepEqual(providerRequest.responseFormat.schema.properties.decision.enum,
-  ['RESPONSE', 'CLARIFY']);
+  ['RESPONSE', 'CLARIFY', 'NO_MATCH']);
 await zeroEvidenceSession.close();
 
 await assert.rejects(createSelectedLlmStream(profile, {

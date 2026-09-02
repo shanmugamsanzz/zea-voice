@@ -25,6 +25,12 @@ const unrelatedConversation = candidate('conversation-unrelated', 'CONVERSATION_
 const callerWorkflow = candidate('workflow-caller', 'WORKFLOW_RULE', 0.97, {
   callerFacingHint: true,
 });
+const foreignFaq = candidate('faq-foreign', 'FAQ', 1, {
+  tenantId: 'foreign-tenant',
+});
+const staleFaq = candidate('faq-stale', 'FAQ', 1, {
+  publicationRevision: 8,
+});
 
 function retrieval({ reservations, intentClass = 'DETAILS_OR_PRICE', need = {} } = {}) {
   const channel = (name, values) => Object.freeze(values.map((value, index) => Object.freeze({
@@ -37,6 +43,13 @@ function retrieval({ reservations, intentClass = 'DETAILS_OR_PRICE', need = {} }
       'CATALOG_ITEM', 'FAQ', 'CONVERSATION_NODE', 'WORKFLOW_RULE', 'KNOWLEDGE_CHUNK',
     ]),
     primaryNamespaces: Object.freeze(['CATALOG']),
+    retrievalScope: Object.freeze({
+      tenantId: scope.tenantId,
+      agentId: scope.agentId,
+      knowledgeBases: Object.freeze([{
+        id: 'latest-request-kb', publicationRevision: 9,
+      }]),
+    }),
     queryContext: Object.freeze({
       reservedRecords: Object.freeze(reservations),
       need: Object.freeze(need),
@@ -45,11 +58,11 @@ function retrieval({ reservations, intentClass = 'DETAILS_OR_PRICE', need = {} }
       structured: channel('structured', [focused]),
       bm25: channel('bm25', [
         unrelatedCatalog, relevantFaq, relevantGeneral, unrelatedConversation,
-        internalWorkflow, callerWorkflow,
+        internalWorkflow, callerWorkflow, foreignFaq, staleFaq,
       ]),
       qdrant: channel('qdrant', [
         unrelatedCatalog, relevantFaq, relevantGeneral, unrelatedConversation,
-        internalWorkflow, callerWorkflow,
+        internalWorkflow, callerWorkflow, foreignFaq, staleFaq,
       ]),
     }),
   });
@@ -85,6 +98,9 @@ assert.deepEqual(focusedFusion.rejectedUnrelatedWorkflowIds, [
 ]);
 assert.ok(focusedFusion.candidates.length < 5,
   'Five records are a maximum; unrelated records must not be used as padding');
+assert.deepEqual(new Set(focusedFusion.rejectedIsolationIds), new Set([
+  foreignFaq.recordId, staleFaq.recordId,
+]), 'Cross-tenant and stale-revision candidates must be rejected before ranking');
 
 const exactConversationFusion = fuseCandidateRankings(retrieval({
   reservations: [{

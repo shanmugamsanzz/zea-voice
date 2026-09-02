@@ -87,7 +87,8 @@ const statefulTurn = createNormalTurnInput({
 });
 assert.deepEqual(statefulTurn.memory.correctedFields, ['reference_value']);
 assert.equal(statefulTurn.memory.latestCallerQuestion, 'Continue with that correction');
-assert.deepEqual(statefulTurn.memory.requestedFacts, ['configured_detail']);
+assert.deepEqual(statefulTurn.memory.requestedFacts, [],
+  'A previous turn fact must not be relabelled as the latest question fact');
 stateful.close();
 
 const fullScope = Object.freeze({ ...scope, callId: 'c1000000-0000-4000-8000-000000000004' });

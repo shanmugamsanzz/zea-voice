@@ -7,8 +7,9 @@ import { resolvePublishedEntityRoute } from './entity-route-resolver.js';
 import { buildKnowledgeRetrievalHints, knowledgeQueryClasses } from './query-classifier.js';
 import { understandContextualKnowledgeQuery } from './contextual-query-understanding.js';
 import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/knowledge-confidence-config.js';
+import { prepareCanonicalRetrievalMemory } from './canonical-topic-memory.js';
 
-export const FAST_QUERY_PREPARATION_VERSION = 2;
+export const FAST_QUERY_PREPARATION_VERSION = 4;
 
 function unique(values) {
   return Object.freeze([...new Set(values.filter(Boolean))]);
@@ -49,8 +50,18 @@ export async function prepareKnowledgeQuery(input, publicationBundles, options =
     confidenceConfiguration: options.confidenceConfiguration,
   });
   const understanding = await understand(initialInput, initialResolution);
+  const canonicalMemoryTransition = prepareCanonicalRetrievalMemory({
+    scope: { tenantId: input.tenantId, agentId: input.agentId, callId: input.callId },
+    memory: initialInput.canonicalCallMemory,
+    understanding,
+  });
   const preparedInput = enrichedInput(
-    input, understanding.requestedFacts, understanding.contextualReferences, understanding,
+    {
+      ...input,
+      memory: canonicalMemoryTransition.memory,
+      canonicalCallMemory: canonicalMemoryTransition.memory,
+    },
+    understanding.requestedFacts, understanding.contextualReferences, understanding,
   );
   const resolution = Object.freeze({
     ...initialResolution,
@@ -77,6 +88,8 @@ export async function prepareKnowledgeQuery(input, publicationBundles, options =
     requestedFacts: preparedInput.requestedFacts,
     contextualReferences: preparedInput.contextualReferences,
     understanding,
+    structuredMeaning: understanding.structuredMeaning,
+    canonicalMemoryTransition,
     intentClass: retrievalHints.intentClass,
     deterministicProtocolException,
     priorityIntent: Boolean(deterministicProtocolException),

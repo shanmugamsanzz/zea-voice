@@ -2301,7 +2301,13 @@ export class RealtimeConversationOrchestrator {
       if (grounded.valid) {
         const selectedEvidenceIds = grounded.evidenceIds ?? grounded.evidenceSourceIds ?? [];
         const activeTool = grounded.state?.activeToolRequest ?? null;
-        if (grounded.decision === 'action' && grounded.toolRequest) {
+        const configuredUnavailable = grounded.noMatch === true
+          || grounded.clearUnsupportedRequest === true
+          || grounded.approvedZeroEvidenceResponse === true
+          || grounded.approvedConfiguredUnavailableResponse === true;
+        if (configuredUnavailable) {
+          normalTurnOutput = createGroundedLlmOutput(groundedLlmOutputTypes.NO_MATCH);
+        } else if (grounded.decision === 'action' && grounded.toolRequest) {
           normalTurnOutput = createGroundedLlmOutput(groundedLlmOutputTypes.TOOL, {
             text: answer || null,
             selectedEvidenceIds,
@@ -2993,7 +2999,7 @@ export class RealtimeConversationOrchestrator {
         );
         const acknowledgementEligible = Boolean(configuredAcknowledgement);
         const latencyResult = await awaitLlmWithSafeLatency(this.#llm(query, history, knowledge, {
-            instruction: 'Decide this finalized normal turn using only the supplied question, relevant isolated call memory, hydrated evidence, applicable workflow authorization, permitted source mapping and assigned tool schemas. Return exactly one grounded RESPONSE, TOOL, or CLARIFY JSON decision. Never guess when evidence is weak.',
+            instruction: 'Decide this finalized normal turn using only the supplied question, relevant isolated call memory, hydrated evidence, applicable workflow authorization, permitted source mapping and assigned tool schemas. Return exactly one grounded RESPONSE, TOOL, CLARIFY, or NO_MATCH JSON decision. Every factual RESPONSE must cite supplied evidence IDs. NO_MATCH must be fact-free. Never guess when evidence is weak.',
             callCheck: null,
           }, streaming), {
             tracker: latencyTracker,
@@ -4047,7 +4053,25 @@ export class RealtimeConversationOrchestrator {
     const ttsFailed = stage === 'audio_output' || stage.startsWith('tts')
       || String(error?.code ?? '').startsWith('TTS_')
       || error?.code === 'VOICE_TURN_FIRST_AUDIO_DEADLINE';
-    if (!ttsFailed && this.controller.state === callStates.LISTENING) {
+    if (ttsFailed) {
+      this.log.error({
+        stage: 'voice.audible_recovery_unavailable', callId: this.call.id,
+        errorCode: error?.code, failureStage: stage,
+      }, 'TTS recovery is unavailable; ending instead of silently returning to listening');
+      await this.#finalize('failed', error?.code ?? 'tts_recovery_unavailable');
+      if (!this.mediaSession.closed) this.mediaSession.close(1011, 'audible recovery unavailable');
+      return;
+    }
+    if (this.controller.state !== callStates.LISTENING) {
+      this.log.error({
+        stage: 'voice.recovery_state_invalid', callId: this.call.id,
+        errorCode: error?.code, controllerState: this.controller.state,
+      }, 'Operational recovery could not enter listening state; ending without a silent retry');
+      await this.#finalize('failed', 'operational_recovery_state_invalid');
+      if (!this.mediaSession.closed) this.mediaSession.close(1011, 'recovery state invalid');
+      return;
+    }
+    if (this.controller.state === callStates.LISTENING) {
       try {
         const message = this.#fitTtsMessage(
           configuredTechnicalFailureResponse(this.runtimeProfile)
@@ -4074,6 +4098,9 @@ export class RealtimeConversationOrchestrator {
         if (this.controller.state === callStates.SPEAKING) await this.controller.playbackComplete();
       } catch (recoveryError) {
         this.log.error({ err: recoveryError, callId: this.call.id }, 'Voice error recovery message failed');
+        await this.#finalize('failed', recoveryError?.code ?? 'recovery_speech_failed');
+        if (!this.mediaSession.closed) this.mediaSession.close(1011, 'recovery speech failed');
+        return;
       }
     }
     this.#armInactivity();

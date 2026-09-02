@@ -131,6 +131,10 @@ const reservation = contextualQuery.reservedRecords.find((entry) => entry.reason
 assert.equal(reservation.recordId, entity.recordId);
 assert.equal(reservation.knowledgeBaseId, 'published-kb');
 assert.equal(reservation.publicationRevision, 7);
+assert.equal(contextualQuery.exactRecordLookup.recordId, entity.recordId);
+assert.equal(contextualQuery.exactRecordLookup.knowledgeBaseId, 'published-kb');
+assert.deepEqual(contextualQuery.exactRecordLookup.requestedFacts, ['published_value']);
+assert.equal(contextualQuery.previousTurnContextUsed, true);
 assert.ok(contextualQuery.tenantSearchForms.includes('Published Alias'),
   'Search forms must come from the tenant publication');
 const followUpTurns = Object.freeze([
@@ -218,6 +222,9 @@ assert.doesNotMatch(
   /Earlier selection question/u,
   'A new explicit entity must not carry stale contextual conversation into retrieval',
 );
+assert.equal(explicitAlternativeQuery.previousTurnContextUsed, false);
+assert.equal(explicitAlternativeQuery.contextualText, null);
+assert.equal(explicitAlternativeQuery.exactRecordLookup, null);
 const knownOnlyQuery = buildContextEnrichedRetrievalQuery({
   tenantId: scope.tenantId, agentId: scope.agentId,
   latestQuestion: 'What is its published value?',

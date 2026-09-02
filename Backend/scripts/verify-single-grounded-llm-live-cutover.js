@@ -48,7 +48,7 @@ const envelope = Object.freeze({
   entities: Object.freeze([]),
 });
 const schema = groundedDecisionJsonSchema(envelope, { fieldSchemas: [], toolSchemas: [] });
-assert.deepEqual(schema.properties.decision.enum.sort(), ['CLARIFY', 'RESPONSE', 'TOOL']);
+assert.deepEqual(schema.properties.decision.enum.sort(), ['CLARIFY', 'NO_MATCH', 'RESPONSE', 'TOOL']);
 const validated = validateGroundedLlmDecision(JSON.stringify({
   decision: 'RESPONSE',
   answer: 'The approved service costs 25 credits.',

@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { genericConversationStateFields, openGenericConversationState } from '../src/voice/interaction/generic-conversation-state.js';
 import { deterministicSourceEntry } from '../src/knowledge-engine/deterministic-source-mapping.js';
-import { applyUnifiedGroundedTurn as applyVerifiedGroundedTurn } from '../src/voice/interaction/unified-grounded-turn.js';
+import {
+  applyUnifiedGroundedTurn as applyVerifiedGroundedTurn,
+  validatePostLlmResponseAndTool,
+} from '../src/voice/interaction/unified-grounded-turn.js';
 import { validateGroundedClaim } from '../src/voice/interaction/grounded-claim-validator.js';
 
 function applyUnifiedGroundedTurn(input) {
@@ -648,6 +651,61 @@ const unavailableTurn = applyUnifiedGroundedTurn({
 assert.equal(unavailableTurn.valid, true);
 assert.equal(unavailableTurn.answer, unavailableSpeech);
 unavailableMemory.close();
+
+const noMatchMemory = openGenericConversationState(
+  { ...identity, callId: 'call-zero-evidence-no-match' }, {}, 1,
+  { currentTopic: 'preserved-topic', knownEntityKeys: [], knownEntities: [] },
+);
+noMatchMemory.beginTurn('zero-evidence-no-match-turn');
+const noMatchTurn = applyUnifiedGroundedTurn({
+  rawDecision: JSON.stringify({
+    decision: 'NO_MATCH', answer: '', responseId: null, evidenceIds: [],
+    toolName: null, toolArguments: null, clarificationReason: null,
+  }),
+  groundingEnvelope: { found: false, sources: [], entities: [] },
+  memory: noMatchMemory, turnToken: 'zero-evidence-no-match-turn', evidence: [],
+  finalizedUtterance: 'What is the unsupported published fact?',
+  zeroEvidenceResponse: unavailableSpeech,
+});
+assert.equal(noMatchTurn.valid, true);
+assert.equal(noMatchTurn.decision, 'answer');
+assert.equal(noMatchTurn.answer, unavailableSpeech);
+assert.equal(noMatchTurn.noMatch, true);
+assert.deepEqual(noMatchTurn.evidenceIds, []);
+assert.equal(noMatchTurn.state.currentTopic, 'preserved-topic',
+  'NO_MATCH must not replace canonical memory');
+noMatchMemory.close();
+
+const clearUnsupportedMemory = openGenericConversationState(
+  { ...identity, callId: 'call-clear-unsupported' }, {}, 1,
+);
+clearUnsupportedMemory.beginTurn('clear-unsupported-turn');
+const clearUnsupportedTurn = applyUnifiedGroundedTurn({
+  rawDecision: JSON.stringify({
+    decision: 'CLARIFY', answer: 'Can you clarify?', responseId: null, evidenceIds: [],
+    toolName: null, toolArguments: null, clarificationReason: 'missing_evidence',
+  }),
+  groundingEnvelope: { found: false, sources: [], entities: [] },
+  memory: clearUnsupportedMemory, turnToken: 'clear-unsupported-turn', evidence: [],
+  finalizedUtterance: 'What is the unpublished price?',
+  zeroEvidenceResponse: unavailableSpeech,
+  clarificationContext: { genuineAmbiguity: false, ambiguityCandidates: [] },
+});
+assert.equal(clearUnsupportedTurn.valid, true);
+assert.equal(clearUnsupportedTurn.answer, unavailableSpeech);
+assert.equal(clearUnsupportedTurn.clearUnsupportedRequest, true);
+assert.equal(clearUnsupportedTurn.nextQuestion, null);
+clearUnsupportedMemory.close();
+
+const mismatchedCitation = validatePostLlmResponseAndTool({
+  decision: {
+    decision: 'answer', answer: 'Published fact.', evidenceIds: ['source-other'],
+    stateUpdate: { knownEntities: [], collectedInformation: {} },
+  },
+  selectedEvidence: [{ id: 'source-selected', content: 'Published fact.' }],
+});
+assert.equal(mismatchedCitation.valid, false);
+assert.equal(mismatchedCitation.reason, 'citation_evidence_mismatch');
 
 const zeroEvidenceInventedMemory = openGenericConversationState(
   { ...identity, callId: 'call-zero-evidence-invented' }, {}, 1,

@@ -42,6 +42,9 @@ const obsoleteFiles = [
   'scripts/verify-production-migration-gate.js',
   'scripts/verify-production-activation-gate-contract.js',
   'scripts/verify-welcome-acknowledgement-memory.js',
+  'src/knowledge-bases/hybrid-evidence-ranker.js',
+  'scripts/verify-confidence-routing.js',
+  'scripts/verify-parallel-hybrid-ranking.js',
 ];
 for (const path of obsoleteFiles) {
   await assert.rejects(access(new URL(path, root)), undefined, `${path} must remain removed`);
@@ -59,7 +62,7 @@ for (const [name, command] of Object.entries(scripts)) {
 console.log(JSON.stringify({
   success: true,
   task: 'Final unified knowledge-engine cutover',
-  outputTypes: ['RESPONSE', 'TOOL', 'CLARIFY'],
+  outputTypes: ['RESPONSE', 'TOOL', 'CLARIFY', 'NO_MATCH'],
   obsoleteRuntimePaths: 0,
   missingScriptTargets: 0,
 }));

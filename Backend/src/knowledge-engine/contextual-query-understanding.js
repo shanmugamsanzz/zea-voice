@@ -2,7 +2,8 @@ import { typedRecordIdentityKey } from './canonical-record-identity.js';
 import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/knowledge-confidence-config.js';
 import { compactNeedContext } from './published-use-case-signals.js';
 
-export const CONTEXTUAL_QUERY_UNDERSTANDING_VERSION = 6;
+export const CONTEXTUAL_QUERY_UNDERSTANDING_VERSION = 7;
+export const STRUCTURED_MEANING_CONTRACT_VERSION = 1;
 
 const catalogRecordTypes = new Set(['CATALOG_ITEM', 'CATALOG_CATEGORY']);
 const catalogEntityTypes = new Set(['ITEM', 'CATEGORY']);
@@ -22,6 +23,37 @@ function normalized(value) {
 function unique(values, maximum = 20) {
   return Object.freeze([...new Set((Array.isArray(values) ? values : [])
     .map((value) => clean(value)).filter(Boolean))].slice(0, maximum));
+}
+
+function scalarConstraints(value) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  return Object.freeze(Object.entries(source).flatMap(([key, constraintValue]) => {
+    const normalizedKey = clean(key, 80);
+    if (!normalizedKey || constraintValue === null || constraintValue === undefined) return [];
+    if (typeof constraintValue === 'boolean' || (typeof constraintValue === 'number'
+      && Number.isFinite(constraintValue))) {
+      return [Object.freeze({ key: normalizedKey, value: constraintValue, source: 'call_state' })];
+    }
+    const normalizedValue = clean(constraintValue, 500);
+    return normalizedValue
+      ? [Object.freeze({ key: normalizedKey, value: normalizedValue, source: 'call_state' })]
+      : [];
+  }).slice(0, 50));
+}
+
+function completeTurnPairs(messages = []) {
+  const pairs = [];
+  for (let index = 0; index < messages.length - 1; index += 1) {
+    const caller = messages[index];
+    const agent = messages[index + 1];
+    if (caller?.role !== 'user' || agent?.role !== 'assistant') continue;
+    const callerText = clean(caller.content, 600);
+    const agentText = clean(agent.content, 600);
+    if (!callerText || !agentText) continue;
+    pairs.push(Object.freeze({ caller: callerText, agent: agentText }));
+    index += 1;
+  }
+  return Object.freeze(pairs.slice(-5));
 }
 
 function boundedScore(value) {
@@ -74,6 +106,9 @@ function candidateSummary(candidate, suppliedConfidenceConfiguration = {}) {
   const matchMethod = clean(matchedSignal?.method ?? candidate.method, 80).toLocaleLowerCase()
     || null;
   return Object.freeze({
+    tenantId: clean(candidate.tenantId, 160) || null,
+    knowledgeBaseId: clean(candidate.knowledgeBaseId, 160) || null,
+    publicationRevision: Number(candidate.publicationRevision) || null,
     recordId: clean(candidate.recordId ?? candidate.id, 160) || null,
     recordType: clean(candidate.recordType, 80).toLocaleUpperCase() || null,
     entityType,
@@ -93,6 +128,8 @@ function candidateSummary(candidate, suppliedConfidenceConfiguration = {}) {
         : 'RETRIEVAL_CANDIDATE'),
     explicit: candidate.explicit === true,
     intentClass: clean(candidate.intentClass, 80).toLocaleUpperCase() || null,
+    requestedFacts: Object.freeze([...(candidate.requestedFacts ?? [])
+      .map((value) => clean(value, 120)).filter(Boolean)].slice(0, 20)),
     actionType: clean(candidate.actionType, 80).toLocaleLowerCase() || null,
     requiresCatalogItem: candidate.requiresCatalogItem === true,
   });
@@ -181,6 +218,10 @@ function currentNonCatalogSignal(resolution, confidenceConfiguration) {
 function activeMemoryEntity(memory = {}) {
   const entity = memory.activeEntity;
   if (entity && typeof entity === 'object') return Object.freeze({
+    tenantId: clean(entity.tenantId, 160) || null,
+    knowledgeBaseId: clean(entity.knowledgeBaseId, 160) || null,
+    publicationRevision: Number(entity.publicationRevision) || null,
+    recordType: 'CATALOG_ITEM',
     recordId: clean(entity.recordId ?? entity.id, 160) || null,
     key: clean(entity.itemKey ?? entity.key, 160) || null,
     name: clean(entity.name ?? entity.label, 240) || null,
@@ -188,6 +229,10 @@ function activeMemoryEntity(memory = {}) {
   });
   const category = memory.activeCategory;
   if (category && typeof category === 'object') return Object.freeze({
+    tenantId: clean(category.tenantId, 160) || null,
+    knowledgeBaseId: clean(category.knowledgeBaseId, 160) || null,
+    publicationRevision: Number(category.publicationRevision) || null,
+    recordType: 'CATALOG_CATEGORY',
     recordId: clean(category.recordId ?? category.id, 160) || null,
     key: clean(category.categoryKey ?? category.key, 160) || null,
     name: clean(category.name ?? category.category, 240) || null,
@@ -209,6 +254,19 @@ function sameCanonicalEntity(left, right) {
 }
 
 function ambiguityFor(resolution, explicitCandidates, confidenceConfiguration) {
+  if (resolution?.ambiguity?.detected === true) {
+    const candidates = (resolution.ambiguity.candidates ?? [])
+      .map((candidate) => candidateSummary(candidate, confidenceConfiguration)).filter(Boolean);
+    return Object.freeze({
+      detected: candidates.length > 1,
+      reason: candidates.length > 1
+        ? (clean(resolution.ambiguity.reason, 120) || 'close_published_entity_candidates')
+        : null,
+      confidence: candidates.length > 1
+        ? Math.max(...candidates.map((candidate) => boundedScore(candidate.score))) : 0,
+      candidates: Object.freeze(candidates.slice(0, 5)),
+    });
+  }
   const relevant = explicitCandidates.length
     ? explicitCandidates
     : (resolution?.routingCandidates ?? []).filter((candidate) => candidate?.explicit === true);
@@ -224,6 +282,7 @@ function ambiguityFor(resolution, explicitCandidates, confidenceConfiguration) {
   return Object.freeze({
     detected,
     reason: detected ? 'close_authoritative_candidates' : null,
+    confidence: detected ? boundedScore(top?.score) : 0,
     candidates: Object.freeze((detected ? [top, second] : [])
       .map((candidate) => candidateSummary(candidate, confidenceConfiguration)).filter(Boolean)),
   });
@@ -297,6 +356,7 @@ export function understandContextualKnowledgeQuery(input, resolution) {
     .filter(Boolean).slice(0, 5);
   const requestedFacts = unique([
     ...(input.requestedFacts ?? []),
+    ...(currentRouteSignal?.requestedFacts ?? []),
     input.memory?.pendingClarification?.missingFactType,
   ]);
   const protocolRoute = protocolIntentClasses.has(
@@ -330,8 +390,7 @@ export function understandContextualKnowledgeQuery(input, resolution) {
   const contextDependent = !hasCurrentEntitySignal
     && !protocolRoute
     && hasRememberedContext
-    && (Boolean(memoryEntity)
-      || suppliedContextSignal
+    && (suppliedContextSignal
       || workflowContextSignal
       || !hasAuthoritativeCurrentRoute
       || Boolean(input.memory?.pendingClarification)
@@ -343,8 +402,18 @@ export function understandContextualKnowledgeQuery(input, resolution) {
     ...(contextDependent && input.memory?.pendingClarification ? ['pending_clarification'] : []),
     ...(contextDependent && input.memory?.activeTool ? ['active_tool'] : []),
   ]);
+  const publishedComparisonRoute = currentRouteIntent === 'COMPARISON_COMPLEX'
+    && currentRouteSignal?.explicit === true
+    && boundedScore(currentRouteSignal.score) >= confidenceConfiguration.highConfidence;
+  const distinctAuthoritativeMentions = distinctMentionCandidates(
+    explicitCandidates.filter((candidate) => (
+      hasStrongPublishedCatalogSignal(candidate, confidenceConfiguration)
+    )),
+    confidenceConfiguration,
+  );
+  // Retrieval candidates do not prove that the caller compared them.
   const comparisonRequested = requestedFacts.map(normalized).includes('comparison')
-    || mentionedCandidates.length > 1 || explicitCandidates.length > 1;
+    || publishedComparisonRoute || distinctAuthoritativeMentions.length > 1;
   const comparisonTopScore = Math.max(0, ...mentionedCandidates.map((candidate) => (
     boundedScore(candidate.score)
   )));
@@ -356,7 +425,9 @@ export function understandContextualKnowledgeQuery(input, resolution) {
     [normalized(candidateIdentity(candidate)), candidate]
   ))).values()];
   const comparisonCandidates = comparisonRequested
-    ? (comparisonPool.length > 1 ? comparisonPool : explicitCandidates)
+    ? (distinctAuthoritativeMentions.length > 1
+      ? distinctAuthoritativeMentions
+      : (comparisonPool.length > 1 ? comparisonPool : explicitCandidates))
     : [];
   const ambiguity = ambiguityFor(resolution, explicitCandidates, confidenceConfiguration);
   const actionIntent = actionUnderstanding(input, resolution, confidenceConfiguration);
@@ -383,6 +454,55 @@ export function understandContextualKnowledgeQuery(input, resolution) {
     memoryEntity && correctionCandidate
       && !sameCanonicalEntity(memoryEntity, correctionCandidate),
   );
+  const recentTurnPairs = completeTurnPairs(input.recentRelevantTurns);
+  const constraints = scalarConstraints({
+    ...(input.constraints ?? {}),
+    ...(input.memory?.collectedToolFields ?? {}),
+  });
+  const intentConfidence = boundedScore(
+    currentRouteSignal?.score
+      ?? explicitCandidates[0]?.score
+      ?? mentionedCandidates[0]?.score
+      ?? (contextDependent ? confidenceConfiguration.clarificationConfidence : 0),
+  );
+  const structuredContextualReferences = Object.freeze(contextualReferences.map((reference) => (
+    Object.freeze({
+      type: reference,
+      entity: ['active_entity', 'active_category'].includes(reference) ? memoryEntity : null,
+    })
+  )));
+  const structuredMeaning = Object.freeze({
+    contractVersion: STRUCTURED_MEANING_CONTRACT_VERSION,
+    stage: 'LIGHTWEIGHT_STRUCTURED_EXTRACT',
+    decisionAuthority: false,
+    latestUtterance: clean(input.latestQuestion ?? input.utterance, 2_000),
+    relevantTurnPairs: recentTurnPairs,
+    intent: Object.freeze({
+      class: intentHint,
+      confidence: intentConfidence,
+      source: protocolRoute || hasAuthoritativeCurrentRoute
+        ? 'tenant_published_signal' : (contextDependent ? 'canonical_call_state' : 'unresolved'),
+    }),
+    explicitEntities: Object.freeze([
+      ...explicitEntities, ...explicitCategories,
+    ].slice(0, 5)),
+    contextualReferences: structuredContextualReferences,
+    requestedFacts,
+    comparison: Object.freeze({
+      detected: comparisonRequested,
+      entities: Object.freeze(comparisonCandidates
+        .map((candidate) => candidateSummary(candidate, confidenceConfiguration))
+        .filter(Boolean).slice(0, 5)),
+      source: publishedComparisonRoute ? 'tenant_published_signal'
+        : (distinctAuthoritativeMentions.length > 1 ? 'multiple_explicit_entities'
+          : (requestedFacts.map(normalized).includes('comparison') ? 'caller_signal' : null)),
+    }),
+    constraints,
+    action: actionIntent,
+    ambiguity,
+    requiresGroundedInterpretation: requestedFacts.length === 0
+      || intentHint === 'UNRESOLVED' || ambiguity.detected,
+  });
   const meaning = Object.freeze({
     interpretationAuthority: 'GROUNDED_LLM',
     latestQuestion: clean(input.latestQuestion ?? input.utterance, 2_000),
@@ -408,6 +528,7 @@ export function understandContextualKnowledgeQuery(input, resolution) {
       currentCandidates: possibleCorrection
         ? Object.freeze(currentCanonicalCandidates) : Object.freeze([]),
     }),
+    structured: structuredMeaning,
   });
   return Object.freeze({
     version: CONTEXTUAL_QUERY_UNDERSTANDING_VERSION,
@@ -429,7 +550,9 @@ export function understandContextualKnowledgeQuery(input, resolution) {
     requestedFact: requestedFacts[0] ?? null,
     requestedFacts,
     requestedFactSource: requestedFacts.length
-      ? (input.requestedFacts?.length ? 'caller_signal' : 'pending_clarification')
+      ? (input.requestedFacts?.length ? 'caller_signal'
+        : (currentRouteSignal?.requestedFacts?.length
+          ? 'tenant_published_route' : 'pending_clarification'))
       : 'grounded_llm',
     requiresGroundedFactInterpretation: requestedFacts.length === 0,
     actionIntent,
@@ -446,6 +569,7 @@ export function understandContextualKnowledgeQuery(input, resolution) {
       ? candidateSummary(currentRouteSignal, confidenceConfiguration) : null,
     protocolPriority: protocolRoute,
     meaning,
+    structuredMeaning,
   });
 }
 

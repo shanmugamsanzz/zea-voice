@@ -186,7 +186,7 @@ console.log(JSON.stringify({
   normalTurnLlmCalls: 'exactly_one',
   parallelRetrieval: ['structured', 'bm25', 'qdrant'],
   maximumHydratedRecords: 5,
-  outputs: ['RESPONSE', 'TOOL', 'CLARIFY'],
+  outputs: ['RESPONSE', 'TOOL', 'CLARIFY', 'NO_MATCH'],
   validatedResponses,
   verifiedTools,
   crossTenantLeakage: false,

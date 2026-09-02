@@ -58,12 +58,11 @@ export function normalizeLiveCallFrame(value = {}) {
   const collectedInformation = Object.freeze(safeJson(
     value.collectedInformation ?? value.collectedData ?? value.collectedFields ?? value.fields,
   ) ?? {});
-  const legacyEntities = [
-    ...(Array.isArray(value.knownEntities) ? value.knownEntities : []),
-    value.selectedItem ?? value.selectedCatalogItem,
-    value.activeCategory,
-    ...(Array.isArray(value.candidateItems) ? value.candidateItems : []),
-  ].filter((entry) => entry && typeof entry === 'object');
+  // Canonical entities are committed explicitly by the unified turn. Never
+  // rebuild active memory from stale selected-item aliases, categories or
+  // ordinary retrieval candidates when serializing the call frame.
+  const canonicalEntities = (Array.isArray(value.knownEntities) ? value.knownEntities : [])
+    .filter((entry) => entry && typeof entry === 'object');
   return Object.freeze({
     memoryVersion: 1,
     scope: Object.freeze(safeJson(value.scope) ?? {}),
@@ -78,7 +77,8 @@ export function normalizeLiveCallFrame(value = {}) {
     citedEvidence: Object.freeze((Array.isArray(value.citedEvidence)
       ? value.citedEvidence : []).slice(-20).map((source) => safeJson(source)).filter(Boolean)),
     currentTopic: text(value.currentTopic, 240) || null,
-    knownEntities: Object.freeze(legacyEntities.slice(0, 20).map((item) => safeJson(item)).filter(Boolean)),
+    knownEntities: Object.freeze(canonicalEntities.slice(0, 20)
+      .map((item) => safeJson(item)).filter(Boolean)),
     comparisonEntities: Object.freeze((Array.isArray(value.comparisonEntities)
       ? value.comparisonEntities : []).slice(0, 5).map((item) => safeJson(item)).filter(Boolean)),
     pendingQuestion: Object.freeze({

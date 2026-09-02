@@ -127,6 +127,7 @@ export function selectRelevantAuthoritativeFacts(source = {}, context = {}, opti
 
 export function createCanonicalGroundedEvidence(source = {}, sourceId = null, context = {}) {
   const facts = selectRelevantAuthoritativeFacts(source, context);
+  const canonicalIdentityKey = canonicalRecordIdentityKey(source);
   return Object.freeze({
     sourceId, publishedEvidenceId: source.id, recordId: source.recordId,
     recordType: source.recordType, canonicalName: canonicalName(source), facts,
@@ -142,6 +143,10 @@ export function createCanonicalGroundedEvidence(source = {}, sourceId = null, co
     publicationRevision: source.publicationRevision,
     documentId: source.documentId,
     documentVersionId: source.documentVersionId,
+    documentStatus: source.documentStatus ?? null,
+    documentVersionStatus: source.documentVersionStatus ?? null,
+    documentVersionIsCurrent: source.documentVersionIsCurrent === true,
+    canonicalIdentityKey,
     provenance: Object.freeze({
       knowledgeBaseId: source.knowledgeBaseId,
       publicationRevision: source.publicationRevision,
@@ -150,3 +155,4 @@ export function createCanonicalGroundedEvidence(source = {}, sourceId = null, co
     }),
   });
 }
+import { canonicalRecordIdentityKey } from './canonical-record-identity.js';

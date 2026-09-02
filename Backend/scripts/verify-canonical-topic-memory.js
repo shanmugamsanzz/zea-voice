@@ -172,7 +172,8 @@ assert.deepEqual(new Set(applied.state.comparisonEntities.map((entity) => entity
   new Set([first.recordId, second.recordId]));
 assert.equal(applied.state.activeTool, null,
   'Changing the canonical record must clear a tool bound to the previous selection');
-assert.equal(applied.state.pendingClarification.text, 'Which published option?');
+assert.equal(applied.state.pendingClarification, null,
+  'A new comparison must clear a clarification belonging to the previous topic');
 
 const unresolved = resolveCanonicalTopicMemory({
   scope,

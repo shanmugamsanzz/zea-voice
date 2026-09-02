@@ -2,10 +2,14 @@ import {
   buildPublicationPhraseForms,
   normalizePublicationPhrase,
 } from './publication-index-builder.js';
-import { typedRecordIdentityKey } from './canonical-record-identity.js';
+import {
+  canonicalRecordIdentity,
+  canonicalRecordIdentityKey,
+  typedRecordIdentityKey,
+} from './canonical-record-identity.js';
 import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/knowledge-confidence-config.js';
 
-export const KNOWLEDGE_RESOLUTION_VERSION = 1;
+export const KNOWLEDGE_RESOLUTION_VERSION = 2;
 
 // These shape a candidate score only. The selected agent configuration below
 // determines whether the resulting score is high, confirmable, or weak.
@@ -44,6 +48,12 @@ function plainObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
+function stringList(value) {
+  return Object.freeze([...new Set((Array.isArray(value) ? value : [value])
+    .map((entry) => String(entry ?? '').normalize('NFKC').trim())
+    .filter(Boolean))].slice(0, 20));
+}
+
 function normalizeId(value) {
   return String(value ?? '').trim().toLocaleLowerCase();
 }
@@ -72,7 +82,7 @@ function candidateNamespace(candidate) {
 }
 
 function candidateIdentity(candidate) {
-  return typedRecordIdentityKey(candidate);
+  return canonicalRecordIdentityKey(candidate) ?? typedRecordIdentityKey(candidate);
 }
 
 function tokenStatistics(indexes) {
@@ -206,7 +216,12 @@ function canonicalRecord(record) {
   const conditions = plainObject(metadata.conditions);
   const recordId = String(record?.record_id ?? record?.recordId ?? record?.id ?? '').trim();
   if (!recordId) return null;
+  const identity = canonicalRecordIdentity(record, record?.canonicalIdentity);
   return Object.freeze({
+    tenantId: identity.tenantId || null,
+    knowledgeBaseId: identity.knowledgeBaseId || null,
+    publicationRevision: identity.publicationRevision || null,
+    namespace: identity.namespace || null,
     recordId,
     recordType: String(record?.record_type ?? record?.recordType ?? record?.type ?? '').toUpperCase(),
     entityType: String(record?.entityType ?? (String(record?.record_type ?? '').toLowerCase() === 'catalog_item'
@@ -219,6 +234,12 @@ function canonicalRecord(record) {
     category: String(record?.entity_category ?? record?.category ?? '').trim() || null,
     answerCard: record?.approvedAnswerCard ?? record?.answerCard ?? null,
     intentClass: String(conditions.intentClass ?? metadata.intentClass ?? record?.intentClass ?? '').trim() || null,
+    requestedFacts: stringList([
+      ...(Array.isArray(conditions.requestedFacts) ? conditions.requestedFacts : []),
+      conditions.requestedFact,
+      ...(Array.isArray(metadata.requestedFacts) ? metadata.requestedFacts : []),
+      metadata.requestedFact,
+    ]),
     actionType: String(metadata.actionType ?? record?.actionType ?? '').trim().toLowerCase() || null,
     requiresCatalogItem: plainObject(metadata.actionConfig).requiresCatalogItem === true,
     evidenceRecordIds: Object.freeze([String(recordId)]),
@@ -450,6 +471,10 @@ function actionFor(level, candidates) {
 
 function freezeCandidate(candidate) {
   return Object.freeze({
+    tenantId: candidate.tenantId ?? null,
+    knowledgeBaseId: candidate.knowledgeBaseId ?? null,
+    publicationRevision: Number(candidate.publicationRevision) || null,
+    namespace: candidate.namespace ?? candidateNamespace(candidate),
     recordId: candidate.recordId,
     recordType: candidate.recordType,
     entityType: candidate.entityType,
@@ -461,6 +486,7 @@ function freezeCandidate(candidate) {
     category: candidate.category,
     answerCard: candidate.answerCard,
     intentClass: candidate.intentClass,
+    requestedFacts: Object.freeze([...(candidate.requestedFacts ?? [])]),
     actionType: candidate.actionType,
     requiresCatalogItem: candidate.requiresCatalogItem === true,
     evidenceRecordIds: Object.freeze([...(candidate.evidenceRecordIds ?? [candidate.recordId])]),
@@ -560,6 +586,12 @@ function resolutionResult(
   const authoritativeRanked = discardDominatedCandidates(ranked, confidenceConfiguration);
   const { level, margin } = confidenceFor(authoritativeRanked, confidenceConfiguration);
   const contextDependent = authoritativeRanked[0]?.method === 'context';
+  const closeCandidates = authoritativeRanked.filter((candidate) => (
+    Number(authoritativeRanked[0]?.score ?? 0) - Number(candidate.score ?? 0)
+      <= confidenceConfiguration.ambiguityMargin
+  ));
+  const ambiguityDetected = level === knowledgeResolutionConfidence.MEDIUM
+    && closeCandidates.length > 1;
   return Object.freeze({
     version: KNOWLEDGE_RESOLUTION_VERSION,
     tenantId: String(input.tenantId),
@@ -573,6 +605,12 @@ function resolutionResult(
     namespaceCandidates,
     routingCandidates: Object.freeze(authoritativeRanked),
     alternatives: Object.freeze(authoritativeRanked.slice(1, 4)),
+    ambiguity: Object.freeze({
+      detected: ambiguityDetected,
+      reason: ambiguityDetected ? 'close_published_entity_candidates' : null,
+      candidates: Object.freeze((ambiguityDetected ? closeCandidates : []).slice(0, 5)),
+    }),
+    requiresCandidateConfirmation: level === knowledgeResolutionConfidence.MEDIUM,
     explicitEntity: namespace === knowledgeCandidateNamespaces.CATALOG
       && authoritativeRanked[0]?.explicit === true,
     contextDependent,

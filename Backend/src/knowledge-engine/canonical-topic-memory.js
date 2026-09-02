@@ -1,4 +1,4 @@
-export const CANONICAL_TOPIC_MEMORY_VERSION = 4;
+export const CANONICAL_TOPIC_MEMORY_VERSION = 5;
 
 const catalogTypes = new Set(['CATALOG_ITEM', 'CATALOG_CATEGORY']);
 
@@ -68,6 +68,106 @@ export function normalizeCanonicalRecordMemory(value = {}, {
     name: canonicalName,
     category: clean(value.category, 240) || (category ? canonicalName : null),
     agentId: clean(value.agentId ?? scope.agentId, 160) || null,
+  });
+}
+
+function cleanRetrievalMemory(memory = {}) {
+  return {
+    ...memory,
+    knownEntities: Object.freeze([...(memory.knownEntities ?? [])]),
+    comparisonEntities: Object.freeze([...(memory.comparisonEntities ?? [])]),
+  };
+}
+
+/**
+ * Creates the transaction-local canonical state used by retrieval. It never
+ * writes ranked/search candidates into durable call memory. Durable state is
+ * still committed only after the grounded decision selects hydrated evidence.
+ */
+export function prepareCanonicalRetrievalMemory({
+  scope, memory = {}, understanding = {},
+} = {}) {
+  const isolatedScope = scoped(scope);
+  const next = cleanRetrievalMemory(memory);
+  const normalizedCandidates = (values, expectedRecordType) => (values ?? [])
+    .map((value) => normalizeCanonicalRecordMemory(value, {
+      scope: isolatedScope, expectedRecordType,
+    })).filter(Boolean);
+  const ambiguous = understanding.ambiguity?.detected === true;
+  const comparison = normalizedCandidates(
+    understanding.comparisonEntities, 'CATALOG_ITEM',
+  );
+  const explicitItems = normalizedCandidates(
+    understanding.explicitEntities, 'CATALOG_ITEM',
+  );
+  const explicitCategories = normalizedCandidates(
+    understanding.explicitCategories, 'CATALOG_CATEGORY',
+  );
+  const explicit = [...explicitItems, ...explicitCategories];
+  let mode = 'CLEARED_STALE_CONTEXT';
+
+  if (!ambiguous && comparison.length > 1) {
+    next.activeEntity = null;
+    next.activeCategory = null;
+    next.knownEntities = Object.freeze([...comparison]);
+    next.comparisonEntities = Object.freeze([...comparison]);
+    next.pendingQuestion = null;
+    next.pendingClarification = null;
+    mode = 'EXPLICIT_COMPARISON';
+  } else if (!ambiguous && explicit.length === 1) {
+    const selected = explicit[0];
+    const previous = normalizeCanonicalRecordMemory(
+      memory.activeEntity ?? memory.activeCategory, { scope: isolatedScope },
+    );
+    next.activeEntity = selected.recordType === 'CATALOG_ITEM' ? selected : null;
+    next.activeCategory = selected.recordType === 'CATALOG_CATEGORY' ? selected : null;
+    next.knownEntities = selected.recordType === 'CATALOG_ITEM'
+      ? Object.freeze([selected]) : Object.freeze([]);
+    next.comparisonEntities = Object.freeze([]);
+    next.currentTopic = selected.canonicalName;
+    next.pendingQuestion = null;
+    next.pendingClarification = null;
+    if (previous && normalized(previous.recordId) !== normalized(selected.recordId)) {
+      next.activeTool = null;
+      next.activeToolRequest = null;
+      next.collectedToolFields = Object.freeze({});
+      next.collectedInformation = Object.freeze({});
+    }
+    mode = previous && normalized(previous.recordId) !== normalized(selected.recordId)
+      ? 'EXPLICIT_REPLACEMENT' : 'EXPLICIT_SELECTION';
+  } else if (!ambiguous && understanding.contextDependent === true) {
+    const remembered = normalizeCanonicalRecordMemory(
+      memory.activeEntity ?? memory.activeCategory, { scope: isolatedScope },
+    );
+    if (remembered) {
+      next.activeEntity = remembered.recordType === 'CATALOG_ITEM' ? remembered : null;
+      next.activeCategory = remembered.recordType === 'CATALOG_CATEGORY' ? remembered : null;
+      next.knownEntities = remembered.recordType === 'CATALOG_ITEM'
+        ? Object.freeze([remembered]) : Object.freeze([]);
+      next.comparisonEntities = Object.freeze([]);
+      next.currentTopic = remembered.canonicalName;
+      mode = 'CONTEXTUAL_REUSE';
+    }
+  }
+
+  if (mode === 'CLEARED_STALE_CONTEXT') {
+    next.activeEntity = null;
+    next.activeCategory = null;
+    next.knownEntities = Object.freeze([]);
+    next.comparisonEntities = Object.freeze([]);
+    next.currentTopic = null;
+    if (ambiguous || explicit.length > 1) {
+      next.pendingQuestion = null;
+      next.pendingClarification = null;
+      mode = 'AMBIGUOUS_CURRENT_SELECTION';
+    }
+  }
+
+  return Object.freeze({
+    version: CANONICAL_TOPIC_MEMORY_VERSION,
+    scope: isolatedScope,
+    mode,
+    memory: Object.freeze(next),
   });
 }
 

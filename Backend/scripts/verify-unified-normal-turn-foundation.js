@@ -54,7 +54,7 @@ const normalTurn = createNormalTurnInput({
   },
 });
 assert.deepEqual(unifiedNormalTurnContract.input, ['question', 'memory', 'scope']);
-assert.deepEqual(unifiedNormalTurnContract.output, ['RESPONSE', 'TOOL', 'CLARIFY']);
+assert.deepEqual(unifiedNormalTurnContract.output, ['RESPONSE', 'TOOL', 'CLARIFY', 'NO_MATCH']);
 assert.deepEqual(unifiedNormalTurnContract.deterministicProtocolExceptions,
   ['SAFETY_EMERGENCY', 'EXPLICIT_HANGUP']);
 assert.equal(Object.isFrozen(unifiedNormalTurnContract), true);
@@ -84,10 +84,13 @@ for (const type of Object.values(groundedLlmOutputTypes)) {
   } : type === 'TOOL' ? {
     selectedEvidenceIds: ['source_2'],
     tool: { name: 'tenant_action', authorizationEvidenceId: 'source_2', input: { quantity: 3 } },
-  } : { text: 'Which published option do you mean?' });
+  } : type === 'CLARIFY' ? { text: 'Which published option do you mean?' } : {});
   assert.equal(output.type, type);
   assert.equal(output.origin, 'GROUNDED_LLM');
 }
+assert.throws(() => createGroundedLlmOutput('NO_MATCH', {
+  text: 'Invented unavailable answer.', selectedEvidenceIds: ['source_1'],
+}), /must not contain speech/u);
 assert.throws(() => createGroundedLlmOutput('DIRECT', { text: 'invalid' }), /Unsupported/u);
 assert.equal(isDeterministicProtocolException(
   deterministicProtocolExceptionTypes.SAFETY_EMERGENCY,

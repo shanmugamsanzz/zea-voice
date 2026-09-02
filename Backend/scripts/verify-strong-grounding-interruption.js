@@ -229,7 +229,7 @@ const unrelatedPriceEvidence = [{
 const isolatedValidation = validatePostLlmResponseAndTool({
   decision: {
     decision: 'answer', answer: 'Selected option costs INR 9900.',
-    stateUpdate: { knownEntities: [] }, toolRequest: null,
+    evidenceIds: ['selected-price'], stateUpdate: { knownEntities: [] }, toolRequest: null,
   },
   selectedEvidence: selectedPriceEvidence,
   claimEvidence: [...selectedPriceEvidence, ...unrelatedPriceEvidence],
