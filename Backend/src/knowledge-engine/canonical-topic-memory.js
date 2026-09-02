@@ -1,4 +1,4 @@
-export const CANONICAL_TOPIC_MEMORY_VERSION = 5;
+export const CANONICAL_TOPIC_MEMORY_VERSION = 6;
 
 const catalogTypes = new Set(['CATALOG_ITEM', 'CATALOG_CATEGORY']);
 
@@ -106,7 +106,9 @@ export function prepareCanonicalRetrievalMemory({
   const explicit = [...explicitItems, ...explicitCategories];
   let mode = 'CLEARED_STALE_CONTEXT';
 
-  if (!ambiguous && comparison.length > 1) {
+  // Two explicitly requested comparison records are the target set, not an
+  // ambiguous single-item selection. Preserve the exact set before search.
+  if (comparison.length > 1) {
     next.activeEntity = null;
     next.activeCategory = null;
     next.knownEntities = Object.freeze([...comparison]);
@@ -136,10 +138,22 @@ export function prepareCanonicalRetrievalMemory({
     mode = previous && normalized(previous.recordId) !== normalized(selected.recordId)
       ? 'EXPLICIT_REPLACEMENT' : 'EXPLICIT_SELECTION';
   } else if (!ambiguous && understanding.contextDependent === true) {
+    const rememberedComparison = normalizedCandidates(
+      memory.comparisonEntities, 'CATALOG_ITEM',
+    );
+    if (rememberedComparison.length > 1) {
+      next.activeEntity = null;
+      next.activeCategory = null;
+      next.knownEntities = Object.freeze([...rememberedComparison]);
+      next.comparisonEntities = Object.freeze([...rememberedComparison]);
+      next.currentTopic = rememberedComparison
+        .map((record) => record.canonicalName).join(' / ');
+      mode = 'CONTEXTUAL_COMPARISON_REUSE';
+    }
     const remembered = normalizeCanonicalRecordMemory(
       memory.activeEntity ?? memory.activeCategory, { scope: isolatedScope },
     );
-    if (remembered) {
+    if (remembered && rememberedComparison.length < 2) {
       next.activeEntity = remembered.recordType === 'CATALOG_ITEM' ? remembered : null;
       next.activeCategory = remembered.recordType === 'CATALOG_CATEGORY' ? remembered : null;
       next.knownEntities = remembered.recordType === 'CATALOG_ITEM'
@@ -277,7 +291,10 @@ export function confirmCanonicalTopicResolution(resolution = {}, {
     if (mode === 'CONTEXTUAL') {
       return reasons.has('canonical_memory');
     }
-    const requiredReason = mode === 'COMPARISON' ? 'explicit_comparison' : 'explicit_entity';
+    const requiredReason = mode === 'COMPARISON'
+      ? (resolution.comparisonContextual === true
+        ? 'contextual_comparison' : 'explicit_comparison')
+      : 'explicit_entity';
     return reasons.has(requiredReason) || reasons.has('explicit_current_entity')
       || (mode === 'EXPLICIT' && reasons.has('category_unique_child'));
   });
@@ -399,6 +416,33 @@ export function resolveCanonicalTopicMemory({
     });
   }
   if (understanding.contextDependent === true) {
+    const rememberedComparison = uniqueRecords(memory.comparisonEntities);
+    if (rememberedComparison.length > 1) {
+      const canonicalComparisons = uniqueRecords(rememberedComparison
+        .map((entry) => byId.get(normalized(entry?.recordId ?? entry?.id))).filter(Boolean));
+      if (canonicalComparisons.length === rememberedComparison.length) {
+        return Object.freeze({
+          version: CANONICAL_TOPIC_MEMORY_VERSION,
+          scope: isolatedScope,
+          mode: 'COMPARISON',
+          activeEntity: null,
+          activeCategory: null,
+          comparisonEntities: canonicalComparisons,
+          comparisonContextual: true,
+          requiresTargetedClarification: false,
+        });
+      }
+      return Object.freeze({
+        version: CANONICAL_TOPIC_MEMORY_VERSION,
+        scope: isolatedScope,
+        mode: 'UNRESOLVED',
+        activeEntity: null,
+        activeCategory: null,
+        comparisonEntities: rememberedComparison,
+        requiresTargetedClarification: true,
+        reason: 'contextual_comparison_records_not_fully_hydrated',
+      });
+    }
     const remembered = memory.activeEntity ?? memory.activeCategory;
     const canonical = byId.get(normalized(remembered?.recordId ?? remembered?.id)) ?? null;
     if (canonical) {

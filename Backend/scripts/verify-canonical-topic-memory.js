@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import { resolveCanonicalTopicMemory } from '../src/knowledge-engine/canonical-topic-memory.js';
+import {
+  confirmCanonicalTopicResolution,
+  resolveCanonicalTopicMemory,
+} from '../src/knowledge-engine/canonical-topic-memory.js';
 import { createKnowledgeEngineInput } from '../src/knowledge-engine/engine-contract.js';
 import {
   activeIsolatedCallMemoryCount,
@@ -25,6 +28,7 @@ function source(recordId, itemKey, name, categoryKey = 'group-a', category = 'Gr
 
 const first = source('record-a', 'option-a', 'Option A');
 const second = source('record-b', 'option-b', 'Option B');
+const stale = source('record-c', 'option-c', 'Option C');
 const category = Object.freeze({
   tenantId: scope.tenantId,
   agentId: scope.agentId,
@@ -36,7 +40,7 @@ const category = Object.freeze({
   publicationValidated: true,
   authoritativeData: Object.freeze({ categoryKey: 'group-a', category: 'Group A' }),
 });
-const evidence = Object.freeze([first, second, category]);
+const evidence = Object.freeze([first, second, stale, category]);
 const memory = openIsolatedCallMemory(scope);
 memory.beginTurn('turn-a');
 memory.setPendingQuestion({
@@ -156,6 +160,14 @@ assert.equal(incompleteApplied.state.activeCategory.recordId, category.recordId,
   'Rejecting incomplete memory must preserve the last verified canonical record');
 
 memory.beginTurn('turn-c');
+const staleResolution = resolveCanonicalTopicMemory({
+  scope,
+  understanding: { explicitEntities: [{ recordId: stale.recordId }] },
+  evidence,
+  memory: memory.snapshot(),
+});
+memory.applyCanonicalTopicResolution(staleResolution, { turnToken: 'turn-c' });
+assert.equal(memory.snapshot().activeEntity.id, stale.recordId);
 resolution = resolveCanonicalTopicMemory({
   scope,
   understanding: {
@@ -170,10 +182,45 @@ applied = memory.applyCanonicalTopicResolution(resolution, { turnToken: 'turn-c'
 assert.equal(applied.state.activeEntity, null);
 assert.deepEqual(new Set(applied.state.comparisonEntities.map((entity) => entity.id)),
   new Set([first.recordId, second.recordId]));
+assert.equal(applied.state.comparisonEntities.some((entity) => entity.id === stale.recordId), false,
+  'The previously selected item must not be reintroduced into comparison state');
 assert.equal(applied.state.activeTool, null,
   'Changing the canonical record must clear a tool bound to the previous selection');
 assert.equal(applied.state.pendingClarification, null,
   'A new comparison must clear a clarification belonging to the previous topic');
+
+memory.beginTurn('turn-comparison-follow-up');
+resolution = resolveCanonicalTopicMemory({
+  scope,
+  understanding: { contextDependent: true },
+  evidence: [first, second],
+  memory: memory.snapshot(),
+});
+assert.equal(resolution.mode, 'COMPARISON');
+assert.equal(resolution.comparisonContextual, true);
+const contextualComparisonEvidence = [first, second].map((entry) => ({
+  ...entry,
+  sourceId: `source-${entry.recordId}`,
+  reservationReasons: ['contextual_comparison'],
+}));
+const confirmedContextualComparison = confirmCanonicalTopicResolution(resolution, {
+  decision: {
+    valid: true,
+    decision: 'answer',
+    evidenceIds: contextualComparisonEvidence.map((entry) => entry.sourceId),
+    selectedEntities: resolution.comparisonEntities,
+  },
+  hydratedRecords: contextualComparisonEvidence,
+});
+assert.equal(confirmedContextualComparison.mode, 'COMPARISON',
+  'A validated follow-up must accept contextual comparison reservations');
+applied = memory.applyCanonicalTopicResolution(
+  confirmedContextualComparison, { turnToken: 'turn-comparison-follow-up' },
+);
+assert.equal(applied.state.activeEntity, null);
+assert.deepEqual(new Set(applied.state.comparisonEntities.map((entity) => entity.id)),
+  new Set([first.recordId, second.recordId]),
+  'A comparison follow-up must retain exactly the temporary comparison pair');
 
 const unresolved = resolveCanonicalTopicMemory({
   scope,
@@ -199,7 +246,7 @@ assert.equal(unhydrated.mode, 'UNRESOLVED',
 
 assert.throws(() => memory.applyCanonicalTopicResolution({
   ...resolution, scope: otherScope,
-}, { turnToken: 'turn-c' }), /scope mismatch/u);
+}, { turnToken: 'turn-comparison-follow-up' }), /scope mismatch/u);
 
 const otherCall = openIsolatedCallMemory(otherScope);
 assert.equal(otherCall.snapshot().activeEntity, null);

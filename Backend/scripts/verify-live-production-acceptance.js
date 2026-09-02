@@ -15,7 +15,10 @@ import { buildGroundingEnvelope } from '../src/voice/interaction/grounded-llm-re
 import { isRepairableGroundedDecisionReason } from '../src/voice/interaction/grounded-llm-decision.js';
 import { applyUnifiedGroundedTurn } from '../src/voice/interaction/unified-grounded-turn.js';
 import { evidenceBelongsToRuntime } from '../src/voice/interaction/grounded-decision-security.js';
-import { configuredSafeFailureResponse } from '../src/voice/realtime-conversation-orchestrator.js';
+import {
+  configuredSafeFailureResponse,
+  configuredTechnicalFailureResponse,
+} from '../src/voice/realtime-conversation-orchestrator.js';
 import { streamSelectedTtsToPlivo } from '../src/voice/providers/tts/tts-playback.service.js';
 import { ProviderAdapterRegistry } from '../src/voice/providers/registry.js';
 import { registerImplementedProviderAdapters } from '../src/voice/providers/defaults.js';
@@ -507,8 +510,24 @@ const reportPath = resolve(argument(
   'report-file', process.env.PRODUCTION_ACCEPTANCE_REPORT
     ?? 'artifacts/production-acceptance-report.json',
 ));
-const replay = JSON.parse(await readFile(replayPath, 'utf8'));
+let replay = JSON.parse(await readFile(replayPath, 'utf8'));
+if (enabled(argument('include-live-routing-workflow', false))) {
+  replay = {
+    ...replay,
+    calls: [...(replay.calls ?? []), {
+      id: 'shanmuga-live-routing-workflow', language: 'ta', turns: [
+        { utterance: 'உங்ககிட்ட என்ன packagesலாம் இருக்கு?', expectedResponseNodeKeys: ['complete_package_overview'], forbidConfiguredTechnicalFailure: true },
+        { utterance: 'ஆன் cooker package பத்தி சொல்லுங்க', expectedAnyCategoryKeys: ['oncology-screening'], allowTargetedClarification: true, requireNoUnrelatedEvidence: true, forbidConfiguredTechnicalFailure: true },
+        { utterance: 'Gold-க்கும் Platinum-க்கும் என்ன difference?', expectedExactCatalogEntityKeys: ['gold-master-health-checkup', 'platinum-master-health-checkup'], requireNoUnrelatedEvidence: true, forbidConfiguredTechnicalFailure: true },
+        { utterance: 'அதுதான் என்ன வித்தியாசம்?', expectedExactCatalogEntityKeys: ['gold-master-health-checkup', 'platinum-master-health-checkup'], requireNoUnrelatedEvidence: true, forbidConfiguredTechnicalFailure: true },
+        { utterance: 'Lungs package பத்தி சொல்லுங்க', expectedAnyEntityKeys: ['lungs-health-checkup'], expectedMemoryEntityKey: 'lungs-health-checkup', expectedActiveEntityKey: 'lungs-health-checkup', rememberRecordAs: 'lungs', requireNoUnrelatedEvidence: true, forbidConfiguredTechnicalFailure: true },
+        { utterance: 'சரி இதுக்கு appointment book பண்ணுங்க', expectedAnyEntityKeys: ['lungs-health-checkup'], expectedSameRecordAs: 'lungs', expectedActiveToolName: 'create_appointment', expectFirstMissingConfiguredField: true, allowInformationCollection: true, requireNoUnrelatedEvidence: true, forbidConfiguredTechnicalFailure: true },
+      ],
+    }],
+  };
+}
 assert.ok(Array.isArray(replay.calls) && replay.calls.length > 0, 'At least one failed call replay is required');
+const repeats = Math.max(1, Number.parseInt(argument('repeats', '1'), 10) || 1);
 
 const agent = await resolveAgent(agentId);
 const candidateRevisions = await verifyCandidateRevisions(agent, expectedRevisions);
@@ -530,12 +549,14 @@ const results = [];
 let qdrantCandidates = 0;
 const replayLanguages = new Set();
 const safeResponse = configuredSafeFailureResponse(profile);
+const technicalResponse = configuredTechnicalFailureResponse(profile);
 const providerRegistry = registerImplementedProviderAdapters(new ProviderAdapterRegistry());
 
 try {
-  for (const call of replay.calls) {
+  for (let repeat = 1; repeat <= repeats; repeat += 1) {
+   for (const call of replay.calls) {
     assert.ok(Array.isArray(call.turns) && call.turns.length > 0, `${call.id}: turns are required`);
-    const callId = `production-acceptance:${call.id}`;
+    const callId = `production-acceptance:${call.id}:pass-${repeat}`;
     const memory = openIsolatedCallMemory({
       tenantId: agent.tenant_id, workspaceId: agent.workspace_id,
       agentId: agent.id, callId,
@@ -760,12 +781,34 @@ try {
             assert.equal(unified.toolRequest?.name, turn.expectedToolName,
               `${call.id} turn ${index + 1}: expected tool was not selected`);
           }
+          if (turn.expectedActiveToolName) {
+            assert.equal(unified.state?.activeToolRequest?.name, turn.expectedActiveToolName,
+              `${call.id} turn ${index + 1}: expected Workflow was not activated`);
+            assert.equal(unified.toolRequest, null,
+              `${call.id} turn ${index + 1}: Workflow must collect and confirm before execution`);
+          }
+          if (turn.expectedNextField) {
+            assert.equal(unified.nextQuestion?.key, turn.expectedNextField,
+              `${call.id} turn ${index + 1}: did not ask the first missing UI field`);
+          }
+          if (turn.expectFirstMissingConfiguredField === true) {
+            const firstMissing = unified.state?.activeToolRequest
+              ?.workflowState?.missingFields?.[0];
+            assert.ok(firstMissing,
+              `${call.id} turn ${index + 1}: active Workflow has no missing configured field`);
+            assert.equal(unified.nextQuestion?.key, firstMissing,
+              `${call.id} turn ${index + 1}: did not ask only the first missing UI field`);
+          }
           if (turn.allowInformationCollection !== true) {
             assert.deepEqual(unified.stateUpdate?.collectedInformation ?? {}, {},
               `${call.id} turn ${index + 1}: personal/configured fields were collected without authorization`);
           }
         }
         assert.ok(String(finalText ?? '').trim(), `${call.id} turn ${index + 1}: empty TTS text`);
+        if (turn.forbidConfiguredTechnicalFailure === true) {
+          assert.notEqual(normalized(finalText), normalized(technicalResponse),
+            `${call.id} turn ${index + 1}: false Technical Failure Message was spoken`);
+        }
         assert.doesNotMatch(String(finalText), /(?:"evidenceIds"|"stateUpdate"|"toolRequest")/u,
           `${call.id} turn ${index + 1}: internal JSON reached TTS`);
         const retrievedRecordIds = hydrated.map((source) => source.recordId).filter(Boolean);
@@ -817,6 +860,7 @@ try {
     } finally {
       memory.close();
     }
+   }
   }
   assert.ok(qdrantCandidates > 0, 'No Qdrant semantic candidates were observed in the live replay');
   for (const language of replay.requiredLanguages ?? ['ta', 'tanglish', 'en']) {
@@ -855,7 +899,7 @@ try {
     replayVersion: replay.version ?? 1,
     replayFile: replayPath,
     sourceCallIds: replay.calls.map((call) => call.sourceCallId).filter(Boolean),
-    callCount: replay.calls.length, turnCount: results.length,
+    callCount: replay.calls.length * repeats, turnCount: results.length, repeats,
     qdrantCandidates, latency, thresholds,
     candidateRevisions, candidateRevisionFingerprint,
     extractionArtifacts,

@@ -214,6 +214,26 @@ assert.equal(prepared.understanding.meaning.comparisonRequested, true);
 assert.deepEqual(new Set(prepared.resolution.routingCandidates.map((candidate) => candidate.itemKey)),
   new Set(['nimbus', 'cirrus']));
 
+const comparisonMemory = prepared.input.memory;
+assert.deepEqual(new Set(comparisonMemory.comparisonEntities.map((entity) => entity.recordId)),
+  new Set([first.record_id, second.record_id]));
+prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
+  tenantId, agentId, callId, utterance: 'Explain that difference',
+  memory: comparisonMemory,
+  recentRelevantTurns: [
+    { role: 'user', content: 'Nimbus Cirrus' },
+    { role: 'assistant', content: 'Which differences should I explain?' },
+  ],
+}), bundle);
+assert.equal(prepared.understanding.contextDependent, true);
+assert.equal(prepared.understanding.comparisonContextSource, 'temporary_call_state');
+assert.deepEqual(new Set(prepared.understanding.comparisonEntities.map((entity) => entity.recordId)),
+  new Set([first.record_id, second.record_id]));
+assert.equal(prepared.input.memory.activeEntity, null);
+assert.deepEqual(new Set(prepared.input.memory.comparisonEntities.map((entity) => entity.recordId)),
+  new Set([first.record_id, second.record_id]),
+  'A follow-up must retain exactly the comparison pair without restoring stale singular memory');
+
 prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
   tenantId, agentId, callId, utterance: 'Nimbus', memory,
   requestedFacts: ['published_value', 'published_timing'],

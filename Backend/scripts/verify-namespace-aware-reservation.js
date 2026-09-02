@@ -179,8 +179,8 @@ const latestFaq = await retrieve(baseInput, {
   selectedNamespace: 'FAQ', confidenceConfiguration: { highConfidence: 0.86 },
   retrievalPlan: { indexes: ['FAQ'] },
 }, { ...emptyResolution, candidate: latestFaqCandidate, candidateNamespace: 'FAQ' });
-assert.equal(latestFaq.queryContext.reservedRecords[0].recordId, records[2].record_id);
-assert.equal(latestFaq.queryContext.reservedRecords[0].reason, 'latest_request_record');
+assert.deepEqual(latestFaq.queryContext.reservedRecords, [],
+  'A relevant FAQ may rank as ordinary evidence but must not become canonical reservation state');
 
 const actionWorkflowCandidate = {
   recordId: records[4].record_id, recordType: 'WORKFLOW_RULE', score: 0.95,
@@ -211,8 +211,8 @@ const overview = await retrieve(baseInput, {
   ...emptyResolution,
   namespaceCandidates: { CONVERSATION: [overviewCandidate] },
 });
-assert.equal(overview.queryContext.reservedRecords[0].recordId, overviewRecord.record_id);
-assert.equal(overview.queryContext.reservedRecords[0].reason, 'published_overview');
+assert.deepEqual(overview.queryContext.reservedRecords, [],
+  'A published overview route may rank as current-intent evidence but is not canonical memory');
 assert.deepEqual(new Set(overview.relevantNamespaces), new Set([
   'CATALOG', 'FAQ', 'CONVERSATION', 'WORKFLOW', 'GENERAL',
 ]));

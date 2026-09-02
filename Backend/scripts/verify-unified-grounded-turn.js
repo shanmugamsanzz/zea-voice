@@ -1322,12 +1322,16 @@ const invalidArguments = applyUnifiedGroundedTurn({
   tools: [actionTool], evidence: actionEvidence, evidenceScope,
   finalizedUtterance: 'Create the priority service request for A.',
 });
-assert.equal(invalidArguments.valid, false);
-assert.equal(invalidArguments.reason, 'invalid_tool_arguments');
-assert.deepEqual(invalidArguments.state.knownEntities, [],
-  'A rejected decision must not commit even a hydrated canonical entity');
-assert.equal(invalidArguments.state.currentTopic, null);
-assert.equal(invalidArguments.state.activeToolRequest, null);
+assert.equal(invalidArguments.valid, true);
+assert.equal(invalidArguments.toolRequest, null,
+  'An invalid premature TOOL payload must never execute');
+assert.equal(invalidArguments.nextQuestion?.key, 'contact_name',
+  'Runtime must start the authorized Workflow and ask the first missing schema field');
+assert.equal(invalidArguments.state.knownEntities[0].key, 'priority-service');
+assert.equal(invalidArguments.state.currentTopic, 'priority-service');
+assert.equal(invalidArguments.state.activeToolRequest.name, 'create_request');
+assert.deepEqual(invalidArguments.state.collectedInformation, {},
+  'An invalid provider argument must not be committed as collected caller data');
 
 const inventedMemory = openGenericConversationState(
   { ...identity, callId: 'call-invented-field' }, actionSettings,

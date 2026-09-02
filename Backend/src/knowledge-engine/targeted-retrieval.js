@@ -215,6 +215,7 @@ export function buildContextEnrichedRetrievalQuery(
   ].map(compactEntity).filter(Boolean);
   const comparisons = (understanding.comparisonEntities ?? [])
     .map(compactEntity).filter(Boolean).slice(0, 5);
+  const hasActiveComparison = comparisons.length > 1;
   const memoryEntity = canonicalMemoryEntity(input);
   const understoodContext = compactEntity(understanding.canonicalContext);
   const hasExplicitCurrentEntity = explicit.length > 0;
@@ -223,7 +224,8 @@ export function buildContextEnrichedRetrievalQuery(
     || resolution?.contextDependent === true;
   const canonicalEntity = hasExplicitCurrentEntity
     ? (understoodContext ?? explicit[0])
-    : (contextDependent ? (understoodContext ?? memoryEntity) : null);
+    : (contextDependent && !hasActiveComparison
+      ? (understoodContext ?? memoryEntity) : null);
   const currentSearchEntity = canonicalEntity ?? currentMentions[0] ?? null;
   const requestedFacts = uniqueText([
     ...(understanding.requestedFacts ?? []),
@@ -256,7 +258,8 @@ export function buildContextEnrichedRetrievalQuery(
       reserved.push(Object.freeze({ ...resolved, reason: 'explicit_entity' }));
     }
   }
-  if (!hasCurrentEntityMention && contextDependent && canonicalEntity?.recordId) {
+  if (!hasActiveComparison && !hasCurrentEntityMention
+    && contextDependent && canonicalEntity?.recordId) {
     reserved.push(Object.freeze({ ...canonicalEntity, reason: 'canonical_memory' }));
   }
   const categoryChildren = canonicalEntity?.recordType === 'CATALOG_CATEGORY'
@@ -272,7 +275,11 @@ export function buildContextEnrichedRetrievalQuery(
   }
   for (const entity of comparisons) {
     if (!entity.recordId) continue;
-    reserved.push(Object.freeze({ ...entity, reason: 'explicit_comparison' }));
+    reserved.push(Object.freeze({
+      ...entity,
+      reason: understanding.comparisonContextSource === 'temporary_call_state'
+        ? 'contextual_comparison' : 'explicit_comparison',
+    }));
   }
   const activeWorkflow = activeWorkflowRecord(input, recordScope);
   if (activeWorkflow?.recordId) {
@@ -320,7 +327,7 @@ export function buildContextEnrichedRetrievalQuery(
     ...primaryQueryParts,
     ...recentCompleteContext,
   ]).join(' ') : null;
-  const exactRecordLookup = !hasCurrentEntityMention && contextDependent
+  const exactRecordLookup = !hasActiveComparison && !hasCurrentEntityMention && contextDependent
     && canonicalEntity?.recordId ? Object.freeze({
       tenantId: canonicalEntity.tenantId ?? input.tenantId,
       knowledgeBaseId: canonicalEntity.knowledgeBaseId,
@@ -329,6 +336,15 @@ export function buildContextEnrichedRetrievalQuery(
       recordId: canonicalEntity.recordId,
       requestedFacts,
     }) : null;
+  const exactComparisonLookups = !hasCurrentEntityMention && contextDependent
+    ? Object.freeze(comparisons.map((entity) => Object.freeze({
+      tenantId: entity.tenantId ?? input.tenantId,
+      knowledgeBaseId: entity.knowledgeBaseId,
+      publicationRevision: entity.publicationRevision,
+      recordType: entity.recordType,
+      recordId: entity.recordId,
+      requestedFacts,
+    }))) : Object.freeze([]);
   return Object.freeze({
     currentQuestion,
     canonicalEntity,
@@ -349,8 +365,10 @@ export function buildContextEnrichedRetrievalQuery(
     previousTurnContextUsed: usePreviousTurnContext,
     contextualText,
     exactRecordLookup,
+    exactComparisonLookups,
     requiresCanonicalHydration: !hasCurrentEntityMention
-      && contextDependent && Boolean(canonicalEntity?.recordId),
+      && contextDependent && (Boolean(canonicalEntity?.recordId)
+        || exactComparisonLookups.length > 1),
     tenantSearchForms: tenantForms,
     latestRequestText: searchText,
     sparseText: searchText,

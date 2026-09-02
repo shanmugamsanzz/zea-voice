@@ -621,6 +621,11 @@ export function openGenericConversationState(identity, settings = {}, now = Date
       Object.assign(state.collectedInformation, updates);
       return publicState(state);
     },
+    replaceCollectedData(values = {}, options = {}) {
+      if (!current(options.turnToken)) return publicState(state);
+      state.collectedInformation = cleanInformation(values, fieldKeys);
+      return publicState(state);
+    },
     canRunAction(actionKey) {
       return cleanText(state.activeToolRequest?.name, 100).toLocaleLowerCase()
         === cleanText(actionKey, 100).toLocaleLowerCase();

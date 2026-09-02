@@ -241,6 +241,37 @@ function activeMemoryEntity(memory = {}) {
   return null;
 }
 
+function activeMemoryComparison(memory = {}) {
+  const values = Array.isArray(memory.comparisonEntities) ? memory.comparisonEntities : [];
+  const records = [];
+  const seen = new Set();
+  for (const value of values) {
+    if (!value || typeof value !== 'object') continue;
+    const recordId = clean(value.recordId ?? value.id, 160);
+    const key = clean(value.itemKey ?? value.key, 160);
+    const name = clean(value.canonicalName ?? value.name, 240);
+    const identity = normalized(recordId || key);
+    if (!recordId || !key || !name || !identity || seen.has(identity)
+      || String(value.recordType ?? '').toLocaleUpperCase() !== 'CATALOG_ITEM') continue;
+    seen.add(identity);
+    records.push(Object.freeze({
+      tenantId: clean(value.tenantId, 160) || null,
+      agentId: clean(value.agentId, 160) || null,
+      knowledgeBaseId: clean(value.knowledgeBaseId, 160) || null,
+      publicationRevision: Number(value.publicationRevision) || null,
+      recordType: 'CATALOG_ITEM',
+      recordId,
+      key,
+      itemKey: key,
+      categoryKey: clean(value.categoryKey, 160) || null,
+      name,
+      canonicalName: name,
+      entityType: 'ITEM',
+    }));
+  }
+  return Object.freeze(records.slice(0, 5));
+}
+
 function sameCanonicalEntity(left, right) {
   if (!left || !right) return false;
   const leftRecordId = normalized(left.recordId ?? left.id);
@@ -344,6 +375,7 @@ export function understandContextualKnowledgeQuery(input, resolution) {
   const phoneticCandidates = interpretationCandidates.filter((candidate) => (
     candidate.mentionKind === 'PHONETIC_CANDIDATE'
   ));
+  const ambiguity = ambiguityFor(resolution, explicitCandidates, confidenceConfiguration);
   const explicitEntities = explicitCandidates.filter((candidate) => (
     String(candidate.entityType ?? '').toLocaleUpperCase() !== 'CATEGORY'
       && String(candidate.recordType ?? '').toLocaleUpperCase() !== 'CATALOG_CATEGORY'
@@ -363,10 +395,12 @@ export function understandContextualKnowledgeQuery(input, resolution) {
     String(currentRouteSignal?.intentClass ?? '').toLocaleUpperCase(),
   );
   const memoryEntity = activeMemoryEntity(input.memory);
+  const memoryComparison = activeMemoryComparison(input.memory);
   // A confirmable current mention is still a new topic signal. It must block
   // stale memory even though it cannot become canonical memory until the
   // caller confirms it and validation succeeds.
-  const hasCurrentEntitySignal = mentionedCandidates.length > 0;
+  const hasCurrentEntitySignal = explicitCandidates.length > 0
+    || phoneticCandidates.length > 0 || ambiguity.detected === true;
   // Medium-confidence fuzzy routes are retrieval candidates, not proof that
   // the caller changed topic. Only a high-confidence published route may
   // displace canonical memory before the grounded LLM interprets the turn.
@@ -381,7 +415,8 @@ export function understandContextualKnowledgeQuery(input, resolution) {
     && !protocolRoute
     && currentRouteSignal?.requiresCatalogItem === true;
   const hasRememberedContext = Boolean(
-    memoryEntity || input.memory?.pendingClarification || input.memory?.activeTool,
+    memoryEntity || memoryComparison.length > 1
+      || input.memory?.pendingClarification || input.memory?.activeTool,
   );
   // The grounded LLM owns reference interpretation. Retaining a validated
   // canonical topic when no new entity was mentioned supports every tenant
@@ -399,6 +434,7 @@ export function understandContextualKnowledgeQuery(input, resolution) {
     ...(input.contextualReferences ?? []),
     ...(contextDependent && memoryEntity
       ? [memoryEntity.entityType === 'CATEGORY' ? 'active_category' : 'active_entity'] : []),
+    ...(contextDependent && memoryComparison.length > 1 ? ['active_comparison'] : []),
     ...(contextDependent && input.memory?.pendingClarification ? ['pending_clarification'] : []),
     ...(contextDependent && input.memory?.activeTool ? ['active_tool'] : []),
   ]);
@@ -413,7 +449,8 @@ export function understandContextualKnowledgeQuery(input, resolution) {
   );
   // Retrieval candidates do not prove that the caller compared them.
   const comparisonRequested = requestedFacts.map(normalized).includes('comparison')
-    || publishedComparisonRoute || distinctAuthoritativeMentions.length > 1;
+    || publishedComparisonRoute || distinctAuthoritativeMentions.length > 1
+    || (contextDependent && memoryComparison.length > 1);
   const comparisonTopScore = Math.max(0, ...mentionedCandidates.map((candidate) => (
     boundedScore(candidate.score)
   )));
@@ -427,9 +464,10 @@ export function understandContextualKnowledgeQuery(input, resolution) {
   const comparisonCandidates = comparisonRequested
     ? (distinctAuthoritativeMentions.length > 1
       ? distinctAuthoritativeMentions
-      : (comparisonPool.length > 1 ? comparisonPool : explicitCandidates))
+      : (comparisonPool.length > 1 ? comparisonPool
+        : (contextDependent && memoryComparison.length > 1
+          ? memoryComparison : explicitCandidates)))
     : [];
-  const ambiguity = ambiguityFor(resolution, explicitCandidates, confidenceConfiguration);
   const actionIntent = actionUnderstanding(input, resolution, confidenceConfiguration);
   const need = compactNeedContext({
     input,
@@ -495,7 +533,9 @@ export function understandContextualKnowledgeQuery(input, resolution) {
         .filter(Boolean).slice(0, 5)),
       source: publishedComparisonRoute ? 'tenant_published_signal'
         : (distinctAuthoritativeMentions.length > 1 ? 'multiple_explicit_entities'
-          : (requestedFacts.map(normalized).includes('comparison') ? 'caller_signal' : null)),
+          : (contextDependent && memoryComparison.length > 1
+            ? 'temporary_call_state'
+            : (requestedFacts.map(normalized).includes('comparison') ? 'caller_signal' : null))),
     }),
     constraints,
     action: actionIntent,
@@ -512,12 +552,17 @@ export function understandContextualKnowledgeQuery(input, resolution) {
     entityCandidates: Object.freeze(interpretationCandidates),
     phoneticCandidates: Object.freeze(phoneticCandidates),
     contextualEntity: contextDependent ? memoryEntity : null,
+    contextualComparison: contextDependent && memoryComparison.length > 1
+      ? memoryComparison : Object.freeze([]),
     requestedFact: requestedFacts[0] ?? null,
     requestedFactInterpretationRequired: requestedFacts.length === 0,
     comparisonRequested,
     comparisonEntities: Object.freeze(comparisonCandidates
       .map((candidate) => candidateSummary(candidate, confidenceConfiguration))
       .filter(Boolean).slice(0, 5)),
+    comparisonContextSource: contextDependent && memoryComparison.length > 1
+      && distinctAuthoritativeMentions.length < 2 && comparisonPool.length < 2
+      ? 'temporary_call_state' : 'current_utterance',
     actionIntent,
     correction: Object.freeze({
       possible: possibleCorrection,
@@ -546,6 +591,7 @@ export function understandContextualKnowledgeQuery(input, resolution) {
     comparisonEntities: Object.freeze(comparisonCandidates
       .map((candidate) => candidateSummary(candidate, confidenceConfiguration))
       .filter(Boolean).slice(0, 5)),
+    comparisonContextSource: meaning.comparisonContextSource,
     contextualReferences,
     requestedFact: requestedFacts[0] ?? null,
     requestedFacts,

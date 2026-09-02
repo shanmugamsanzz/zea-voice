@@ -130,9 +130,26 @@ const unrelatedControl = {
     actionType: 'respond', actionConfig: { responseMode: 'exact' },
   },
 };
+const publishedOverview = {
+  ...record(14, {}),
+  record_type: 'conversation_node',
+  question: 'Published package overview',
+  answer: 'Approved published package overview.',
+  content: 'Approved published package overview.',
+  entity_name: 'published_package_overview',
+  entity_aliases: [],
+  entity_category_aliases: [],
+  entity_metadata: {
+    conditions: {
+      examples: ['what published packages are available'],
+      intentClass: 'CATEGORY_OVERVIEW',
+    },
+  },
+};
 const bundle = buildPublicationIndexes(job, [
   alpha, beta, ambiguousOne, ambiguousTwo, genericConversation,
   gold, oncoMale, oncoFemale, renal, lungs, generalScreening, youthScreening,
+  unrelatedControl, publishedOverview,
 ]);
 
 function input(utterance, memory = {}) {
@@ -165,6 +182,15 @@ assert.equal(result.candidate.itemKey, 'alpha-prime');
 result = resolvePublishedEntityRoute(input('aalpaa prime details'), bundle);
 assert.equal(result.confidence, knowledgeResolutionConfidence.HIGH);
 assert.equal(result.candidate.itemKey, 'alpha-prime');
+
+result = resolvePublishedEntityRoute(
+  input('so what published packagez are available'), bundle,
+);
+assert.equal(result.candidate.recordId, publishedOverview.record_id);
+assert.equal(result.candidate.recordType, 'CONVERSATION_NODE');
+assert.equal(result.candidate.intentClass, 'CATEGORY_OVERVIEW');
+assert.equal(result.confidence, knowledgeResolutionConfidence.HIGH,
+  'A near-complete published intent example must survive one STT token error');
 
 result = resolvePublishedEntityRoute(input('Published options'), bundle);
 assert.equal(result.confidence, knowledgeResolutionConfidence.HIGH);

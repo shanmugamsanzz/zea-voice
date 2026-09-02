@@ -1,5 +1,6 @@
 import { validateGroundedLlmDecision } from './grounded-llm-decision.js';
 import {
+  configuredActionActivation,
   configuredToolAuthorization,
   validateEvidenceScope,
   validateDecisionSecurity,
@@ -466,7 +467,96 @@ export function applyUnifiedGroundedTurn({
     clarificationContext,
     zeroEvidenceResponse,
   };
-  const validatedDecision = validateGroundedLlmDecision(rawDecision, hydratedEnvelope, runtime);
+  let validatedDecision = validateGroundedLlmDecision(rawDecision, hydratedEnvelope, runtime);
+  const actionEvidence = sourcesByType(evidence, 'WORKFLOW_RULE').filter((source) => (
+    String(source?.retrievalContext ?? 'primary').toLocaleLowerCase() === 'primary'
+  ));
+  const exactSelectedEntity = requiredCatalogSource
+    ? catalogEntityFromEvidence(requiredCatalogSource, hydratedEnvelope.entities) : null;
+  const providerProposedAction = validatedDecision.valid
+    ? Boolean(validatedDecision.decision === 'action'
+      || validatedDecision.toolRequest
+      || validatedDecision.stateUpdate?.activeToolRequest)
+    : Boolean(validatedDecision.structuralDiagnostic?.normalizedDecision === 'action'
+      || validatedDecision.structuralDiagnostic?.hasToolBranch === true);
+  const actionActivation = providerProposedAction
+    && !beforeState.activeToolRequest
+    && runtime.clarificationContext?.genuineAmbiguity !== true
+    && runtime.clarificationContext?.ambiguity?.detected !== true
+    ? configuredActionActivation({
+      evidenceScope,
+      toolSchemas: runtime.toolSchemas,
+      actionEvidence,
+    }) : null;
+  const activatedAction = actionActivation?.valid === true
+    ? configuredToolAuthorization(actionActivation.tool.name, {
+      evidenceScope,
+      toolSchemas: runtime.toolSchemas,
+      actionEvidence,
+      catalogEvidence: requiredCatalogSource ? [requiredCatalogSource] : [],
+      selectedEntities: exactSelectedEntity ? [exactSelectedEntity] : [],
+      activeToolRequest: null,
+      requireCurrentActionEvidence: true,
+    }) : null;
+  // The current primary Workflow evidence is the runtime's authenticated
+  // action-intent signal. Once it resolves to exactly one assigned schema and
+  // one selected Catalog item, start collection deterministically instead of
+  // depending on the provider to emit a complete TOOL object prematurely.
+  // No tool executes here: the existing field/readback/confirmation boundary
+  // remains authoritative.
+  if (activatedAction?.valid === true) {
+    const safeState = validatedDecision.valid ? validatedDecision.stateUpdate : Object.freeze({
+      currentTopic: exactSelectedEntity.key,
+      knownEntityKeys: Object.freeze([exactSelectedEntity.key]),
+      knownEntities: Object.freeze([exactSelectedEntity]),
+      collectedInformation: Object.freeze({}),
+      correctedFields: Object.freeze([]),
+      language: null,
+      pendingQuestionRelevant: false,
+      activeToolRequest: null,
+      requestType: 'action',
+      requestedFacts: Object.freeze([]),
+      constraints: Object.freeze([]),
+      contextualReferences: Object.freeze([]),
+      contextDependent: false,
+    });
+    validatedDecision = Object.freeze({
+      ...(validatedDecision.valid ? validatedDecision : {}),
+      valid: true,
+      decision: 'action',
+      answer: '',
+      spokenAnswer: '',
+      responseId: null,
+      evidenceIds: Object.freeze(requiredCatalogSource ? [requiredCatalogSource.id] : []),
+      evidenceSourceIds: Object.freeze(requiredCatalogSource ? [requiredCatalogSource.id] : []),
+      stateUpdate: Object.freeze({
+        ...safeState,
+        currentTopic: exactSelectedEntity.key,
+        knownEntityKeys: Object.freeze([exactSelectedEntity.key]),
+        knownEntities: Object.freeze([exactSelectedEntity]),
+        activeToolRequest: Object.freeze({
+          name: activatedAction.tool.name,
+          status: 'collecting_information',
+        }),
+        contextDependent: true,
+      }),
+      pendingQuestion: null,
+      pendingQuestionRelevant: false,
+      toolRequest: null,
+      clarification: null,
+      selectedEntityKeys: Object.freeze([exactSelectedEntity.key]),
+      selectedEntities: Object.freeze([exactSelectedEntity]),
+      currentTopic: exactSelectedEntity.key,
+      fieldUpdates: safeState.collectedInformation ?? Object.freeze({}),
+      correctedFields: safeState.correctedFields ?? Object.freeze([]),
+      activeToolRequest: Object.freeze({
+        name: activatedAction.tool.name,
+        status: 'collecting_information',
+      }),
+      flowAction: 'continue',
+      workflowActivatedByRuntime: true,
+    });
+  }
   if (!validatedDecision.valid) {
     return Object.freeze({
       valid: false,
@@ -474,6 +564,7 @@ export function applyUnifiedGroundedTurn({
       numbers: Object.freeze([...(validatedDecision.numbers ?? [])]),
       rejectedSentence: validatedDecision.rejectedAnswer ?? null,
       evidenceIds: Object.freeze([...(validatedDecision.evidenceIds ?? [])]),
+      structuralDiagnostic: validatedDecision.structuralDiagnostic ?? null,
       state: memory.snapshot(),
     });
   }
@@ -756,9 +847,6 @@ export function applyUnifiedGroundedTurn({
   // Workflow rules are internal authorization evidence and therefore are not
   // caller-citable. They must nevertheless come from the current primary
   // retrieval, never merely from saved or expanded context.
-  const actionEvidence = sourcesByType(evidence, 'WORKFLOW_RULE').filter((source) => (
-    String(source?.retrievalContext ?? 'primary').toLocaleLowerCase() === 'primary'
-  ));
   // Workflow retrieval supplies authorization, never intent. Only the
   // grounded decision may explicitly start the configured action lifecycle.
   const exactSelectedEntities = effectiveDecision.stateUpdate.knownEntities.length
@@ -937,6 +1025,14 @@ export function applyUnifiedGroundedTurn({
         toolRequest: null, state: rollbackMemory(),
       });
     }
+    if (memory.replaceCollectedData) {
+      const toolFieldKeys = new Set(workflowTransition.configuredFields.map((field) => field.key));
+      const sanitizedInformation = Object.fromEntries(Object.entries(
+        afterState.collectedInformation ?? {},
+      ).filter(([key]) => !toolFieldKeys.has(key)));
+      Object.assign(sanitizedInformation, workflowTransition.workflowState.collectedFields);
+      afterState = memory.replaceCollectedData(sanitizedInformation, { turnToken });
+    }
     afterState = memory.setActiveToolRequest(
       workflowTransition.activeToolRequest, { turnToken },
     );
@@ -971,13 +1067,25 @@ export function applyUnifiedGroundedTurn({
   let effectiveNextQuestion = nextQuestion;
   let recovery = null;
   if (groundedClarification && memory.recordClarification) {
+    const clarificationCandidateIds = [
+      ...(runtime.clarificationContext?.ambiguityCandidates ?? []),
+      ...(runtime.clarificationContext?.ambiguity?.candidates ?? []),
+      ...(runtime.clarificationContext?.categoryCandidates ?? []),
+    ].map((candidate) => (
+      typeof candidate === 'string' ? candidate : candidate?.recordId ?? candidate?.id
+    )).filter(Boolean);
     const record = memory.recordClarification({
       key: effectiveDecision.clarification?.reason,
       question: nextQuestion.question,
       kind: 'clarification',
       reason: effectiveDecision.clarification?.reason,
-      candidateRecordIds: (hydratedEnvelope.entities ?? [])
-        .map((entity) => entity.recordId ?? entity.id).filter(Boolean).slice(0, 5),
+      // Candidate state is temporary and precise. Never copy every hydrated
+      // record into clarification state or promote a candidate to active topic.
+      candidateRecordIds: clarificationCandidateIds.length
+        ? clarificationCandidateIds.slice(0, 5)
+        : (hydratedEnvelope.entities ?? [])
+          .filter((entity) => entity.ambiguous === true || entity.clarificationCandidate === true)
+          .map((entity) => entity.recordId ?? entity.id).filter(Boolean).slice(0, 5),
       missingFactType: effectiveDecision.stateUpdate?.requestedFacts?.[0]
         ?? effectiveDecision.stateUpdate?.requestType ?? null,
     }, { turnToken });

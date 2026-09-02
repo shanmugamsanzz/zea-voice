@@ -116,6 +116,11 @@ for (let repeat = 1; repeat <= repeats; repeat += 1) {
   for (const fixture of tenants) {
     const evidence = fixture.candidates.map((name, index) => evidenceFor(fixture, name, index));
     const envelope = envelopeFor(evidence);
+    const clarificationContext = Object.freeze({
+      genuineAmbiguity: true,
+      ambiguityCandidates: Object.freeze(evidence
+        .map((source) => Object.freeze({ recordId: source.recordId }))),
+    });
     const scope = {
       tenantId: fixture.tenantId,
       agentId: fixture.agentId,
@@ -140,6 +145,7 @@ for (let repeat = 1; repeat <= repeats; repeat += 1) {
       evidence,
       evidenceScope: scope,
       finalizedUtterance: 'A phonetic or incomplete tenant option',
+      clarificationContext,
       clarificationRecovery: { supportMessage: fixture.support, maximumAttempts: 2 },
     });
     retrievalSamples.push(performance.now() - started);
@@ -164,6 +170,7 @@ for (let repeat = 1; repeat <= repeats; repeat += 1) {
       evidence,
       evidenceScope: scope,
       finalizedUtterance: 'Still ambiguous',
+      clarificationContext,
       clarificationRecovery: { supportMessage: fixture.support, maximumAttempts: 2 },
     });
     retrievalSamples.push(performance.now() - started);
@@ -183,6 +190,7 @@ for (let repeat = 1; repeat <= repeats; repeat += 1) {
       evidence,
       evidenceScope: scope,
       finalizedUtterance: 'Still unresolved',
+      clarificationContext,
       clarificationRecovery: { supportMessage: fixture.support, maximumAttempts: 2 },
     });
     retrievalSamples.push(performance.now() - started);
@@ -209,6 +217,7 @@ for (let repeat = 1; repeat <= repeats; repeat += 1) {
         evidence,
         evidenceScope: scope,
         finalizedUtterance: 'Still genuinely ambiguous',
+        clarificationContext,
         clarificationRecovery: { supportMessage: '', maximumAttempts: 1 },
       });
       assert.equal(noSupport.valid, true);

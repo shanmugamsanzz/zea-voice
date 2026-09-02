@@ -154,7 +154,10 @@ assert.equal(unverifiedSuccess[0].error.code, 'VOICE_TOOL_REPORTED_FAILURE');
 const unifiedTurnSource = readFileSync(
   new URL('../src/voice/interaction/unified-grounded-turn.js', import.meta.url), 'utf8',
 );
-assert.doesNotMatch(unifiedTurnSource, /configuredActionActivation/u,
-  'retrieved Workflow evidence must not auto-start a tool lifecycle');
+assert.match(unifiedTurnSource,
+  /const actionActivation = providerProposedAction[\s\S]*configuredActionActivation/u,
+  'Workflow activation must require a provider action decision before schema authorization');
+assert.match(unifiedTurnSource, /configuredToolAuthorization\(actionActivation\.tool\.name/u,
+  'A provider action must still resolve through the assigned tool and published Workflow');
 
 console.log('Grounding and schema-driven action runtime verification passed');

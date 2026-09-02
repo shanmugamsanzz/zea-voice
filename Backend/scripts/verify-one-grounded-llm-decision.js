@@ -4,6 +4,7 @@ import {
   createGroundedDecisionStreamDecoder,
   groundedDecisionContract,
   groundedDecisionJsonSchema,
+  isOperationalGroundedDecisionFailure,
   isRepairableGroundedDecisionReason,
   validateGroundedLlmDecision,
 } from '../src/voice/interaction/grounded-llm-decision.js';
@@ -78,6 +79,71 @@ const invalidNoMatchSpeech = validateGroundedLlmDecision(JSON.stringify({
 }), envelope, runtime);
 assert.equal(invalidNoMatchSpeech.valid, false);
 assert.equal(invalidNoMatchSpeech.reason, 'invalid_response_shape');
+assert.equal(invalidNoMatchSpeech.structuralDiagnostic.parsed, true);
+assert.equal(invalidNoMatchSpeech.structuralDiagnostic.normalizedDecision, 'no_match');
+assert.equal(JSON.stringify(invalidNoMatchSpeech.structuralDiagnostic).includes('3200'), false,
+  'Structural diagnostics must not contain provider answer values');
+
+const providerParsedAliasResponse = validateGroundedLlmDecision({
+  output_parsed: {
+    decision_type: 'RESPONSE',
+    response_text: 'Premium service costs INR 3200.',
+    response_id: null,
+    evidence_ids: ['source_1'],
+    state_update: {},
+    pending_question: null,
+  },
+}, envelope, runtime);
+assert.equal(providerParsedAliasResponse.valid, true);
+assert.equal(providerParsedAliasResponse.decision, 'answer');
+assert.deepEqual(providerParsedAliasResponse.evidenceIds, ['source_1']);
+
+const providerObjectTool = validateGroundedLlmDecision({
+  decision: 'TOOL_CALL', answer: '', responseId: null, evidenceIds: ['source_1'],
+  tool_name: 'create_visit',
+  tool_arguments: { customer_name: 'Asha', visit_date: '2026-09-03' },
+  clarification_reason: null,
+  state_update: {
+    collectedInformation: { customer_name: 'Asha', visit_date: '2026-09-03' },
+    activeToolRequest: { name: 'create_visit' },
+  },
+}, envelope, runtime);
+assert.equal(providerObjectTool.valid, true);
+assert.equal(providerObjectTool.decision, 'action');
+assert.equal(providerObjectTool.toolRequest.name, 'create_visit');
+
+const phoneticClarificationRuntime = {
+  ...runtime,
+  clarificationContext: {
+    genuineAmbiguity: false,
+    candidates: [{
+      canonicalName: 'Published Gamma Service',
+      confidenceBand: 'MEDIUM',
+      recordId: 'published-gamma-service',
+    }],
+    ambiguityCandidates: [],
+  },
+};
+const recoveredInvalidJsonClarification = validateGroundedLlmDecision(
+  'provider returned malformed output', envelope, phoneticClarificationRuntime,
+);
+assert.equal(recoveredInvalidJsonClarification.valid, true);
+assert.equal(recoveredInvalidJsonClarification.decision, 'clarify');
+assert.match(recoveredInvalidJsonClarification.pendingQuestion, /Published Gamma Service/u);
+assert.equal(recoveredInvalidJsonClarification.clarification.reason, 'ambiguous_request');
+
+const recoveredInvalidShapeClarification = validateGroundedLlmDecision(JSON.stringify({
+  decision: 'RESPONSE', unexpectedProviderField: true,
+}), envelope, phoneticClarificationRuntime);
+assert.equal(recoveredInvalidShapeClarification.valid, true);
+assert.equal(recoveredInvalidShapeClarification.decision, 'clarify');
+assert.match(recoveredInvalidShapeClarification.pendingQuestion, /Published Gamma Service/u);
+
+const unrecoverableInvalidJson = validateGroundedLlmDecision(
+  'provider returned malformed output', envelope, runtime,
+);
+assert.equal(unrecoverableInvalidJson.valid, false);
+assert.equal(unrecoverableInvalidJson.reason, 'invalid_json');
 
 const uncitedFactualResponse = validateGroundedLlmDecision(JSON.stringify({
   decision: 'RESPONSE', answer: 'The office is on Central Road.',
@@ -665,6 +731,10 @@ assert.equal(isRepairableGroundedDecisionReason('unsupported_structured_fact'), 
 assert.equal(isRepairableGroundedDecisionReason('unsupported_technical_term'), true);
 assert.equal(isRepairableGroundedDecisionReason('authoritative_ambiguity'), true);
 assert.equal(isRepairableGroundedDecisionReason('invalid_json'), true);
+assert.equal(isOperationalGroundedDecisionFailure('invalid_json'), true);
+assert.equal(isOperationalGroundedDecisionFailure('invalid_response_shape'), true);
+assert.equal(isOperationalGroundedDecisionFailure('unsupported_numeric_fact'), false);
+assert.equal(isOperationalGroundedDecisionFailure('unsupported_entity'), false);
 assert.doesNotMatch(orchestratorSource, /stage: 'llm\.decision_repair_retry'/u);
 assert.doesNotMatch(orchestratorSource, /stage: 'llm\.retry'/u);
 assert.match(orchestratorSource, /deferDecisionRepair: false/u);

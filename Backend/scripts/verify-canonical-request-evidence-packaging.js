@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { collectCanonicalRetrievalReservations } from '../src/knowledge-engine/canonical-retrieval-reservations.js';
 import { buildContextEnrichedRetrievalQuery } from '../src/knowledge-engine/targeted-retrieval.js';
 import { buildGroundedLlmInput } from '../src/knowledge-bases/grounded-turn-evidence.js';
 
@@ -72,8 +73,8 @@ const packaged = buildGroundedLlmInput({
   authoritative, runtimeProfile: { tools: [] },
 });
 assert.deepEqual(packaged.hydratedRecords.map((entry) => entry.recordId), [
-  memoryRecord.recordId, 'unrelated-faq', 'unrelated-workflow',
-], 'Packaging must preserve the already verified authoritative hydration result');
+  memoryRecord.recordId,
+], 'A contextual entity turn must exclude unrelated hydrated FAQ and Workflow records');
 
 const optionalUseCaseRecord = 'unrelated-published-use-case';
 const optionalUseCasePackage = buildGroundedLlmInput({
@@ -121,9 +122,8 @@ const hydratedOptionalUseCasePackage = buildGroundedLlmInput({
 });
 const optionalSupportingEvidence = hydratedOptionalUseCasePackage.hydratedRecords
   .find((entry) => entry.recordId === optionalUseCaseRecord);
-assert.equal(optionalSupportingEvidence.required, false,
-  'A hydrated published use case must remain optional supporting evidence');
-assert.deepEqual(optionalSupportingEvidence.reservationReasons, []);
+assert.equal(optionalSupportingEvidence, undefined,
+  'An unreserved published use case must not dilute a focused contextual turn');
 
 assert.throws(() => buildGroundedLlmInput({
   input: baseInput,
@@ -158,6 +158,82 @@ const comparisonPackage = buildGroundedLlmInput({
   runtimeProfile: { tools: [] },
 });
 assert.deepEqual(comparisonPackage.hydratedRecords.map((entry) => entry.recordId), comparisonRecords);
+
+const contextualComparisonInput = {
+  ...baseInput,
+  memory: {
+    activeEntity: memoryRecord,
+    comparisonEntities: comparisonInput.queryUnderstanding.comparisonEntities,
+  },
+  canonicalCallMemory: {
+    activeEntity: memoryRecord,
+    comparisonEntities: comparisonInput.queryUnderstanding.comparisonEntities,
+  },
+  queryUnderstanding: {
+    ...comparisonInput.queryUnderstanding,
+    contextDependent: true,
+    comparisonContextSource: 'temporary_call_state',
+  },
+};
+const contextualComparison = buildContextEnrichedRetrievalQuery(
+  contextualComparisonInput,
+  { ...classification, intentClass: 'COMPARISON_COMPLEX' },
+  { candidateNamespace: 'CATALOG', contextDependent: true },
+  scope,
+);
+assert.equal(contextualComparison.canonicalEntity, null);
+assert.deepEqual(contextualComparison.reservedRecords.map((entry) => ({
+  recordId: entry.recordId, reason: entry.reason,
+})), comparisonRecords.map((recordId) => ({
+  recordId, reason: 'contextual_comparison',
+})), 'Temporary comparison records must exclude a stale singular active record');
+assert.deepEqual(contextualComparison.exactComparisonLookups
+  .map((entry) => entry.recordId), comparisonRecords);
+const contextualComparisonReservations = collectCanonicalRetrievalReservations({
+  input: contextualComparisonInput,
+  classification: { ...classification, intentClass: 'COMPARISON_COMPLEX' },
+  resolution: { candidateNamespace: 'CATALOG', contextDependent: true },
+});
+assert.deepEqual(contextualComparisonReservations.map((entry) => ({
+  recordId: entry.recordId, reason: entry.reason,
+})), comparisonRecords.map((recordId) => ({
+  recordId, reason: 'contextual_comparison',
+})));
+
+const explicitIsolationInput = {
+  ...baseInput,
+  latestQuestion: 'Explain Published Beta',
+  utterance: 'Explain Published Beta',
+  queryUnderstanding: {
+    explicitEntities: [explicitRecord], explicitCategories: [], comparisonEntities: [],
+    currentEntityCandidates: [explicitRecord], contextDependent: false,
+    canonicalContext: explicitRecord,
+  },
+};
+const explicitIsolationPackage = buildGroundedLlmInput({
+  input: explicitIsolationInput,
+  classification: { intentClass: 'KNOWN_INFORMATION' },
+  resolution: { candidateNamespace: 'CATALOG', candidate: explicitRecord },
+  authoritative: {
+    tenantId: 'tenant-a', agentId: 'agent-a', callId: 'call-a',
+    reservations: [{
+      tenantId: 'tenant-a', knowledgeBaseId: 'kb-a', publicationRevision: 4,
+      recordId: explicitRecord.recordId, recordType: 'CATALOG_ITEM',
+      reason: 'explicit_entity',
+    }],
+    evidence: [
+      evidence(explicitRecord.recordId),
+      evidence(memoryRecord.recordId),
+      evidence('unrelated-faq', 'FAQ'),
+      evidence('unrelated-general', 'KNOWLEDGE_CHUNK'),
+      evidence('unrelated-category', 'CATALOG_CATEGORY'),
+    ],
+  },
+  runtimeProfile: { tools: [] },
+});
+assert.deepEqual(explicitIsolationPackage.hydratedRecords.map((entry) => entry.recordId), [
+  explicitRecord.recordId,
+], 'Explicit selection must remove stale memory and unrelated hydrated namespaces');
 
 console.log(JSON.stringify({
   success: true,

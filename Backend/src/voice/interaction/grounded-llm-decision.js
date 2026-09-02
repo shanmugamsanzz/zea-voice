@@ -13,6 +13,7 @@ function normalizeDecision(value) {
     NO_MATCH: 'no_match',
     ANSWER: 'answer',
     ACTION: 'action',
+    TOOL_CALL: 'action',
   })[normalized] ?? normalized.toLocaleLowerCase();
 }
 const repairableDecisionReasons = new Set([
@@ -25,6 +26,16 @@ const repairableDecisionReasons = new Set([
 
 export function isRepairableGroundedDecisionReason(reason) {
   return repairableDecisionReasons.has(String(reason ?? '').trim());
+}
+const operationalDecisionReasons = new Set([
+  'invalid_json', 'invalid_response_shape', 'invalid_decision',
+  'invalid_state_update', 'invalid_tool_request', 'stale_turn',
+  'foreign_evidence_selected', 'incomplete_evidence_metadata',
+  'unpublished_evidence_selected', 'information_unavailable_response_unconfigured',
+]);
+
+export function isOperationalGroundedDecisionFailure(reason) {
+  return operationalDecisionReasons.has(String(reason ?? '').trim());
 }
 const clarificationReasons = new Set([
   'missing_entity', 'missing_fact', 'authoritative_ambiguity',
@@ -73,7 +84,41 @@ function inferredClarificationReason(runtime = {}) {
   return 'missing_evidence';
 }
 
+function recoverablePublishedClarification(runtime = {}) {
+  if (runtime.candidateClarificationRecoveryAttempted === true) return null;
+  const context = runtime.clarificationContext ?? {};
+  const candidates = [...(context.candidates ?? []), ...(context.ambiguityCandidates ?? [])]
+    .filter(Boolean);
+  const genuineAmbiguity = context.genuineAmbiguity === true
+    || context.ambiguity?.detected === true;
+  const eligible = candidates.filter((candidate) => (
+    genuineAmbiguity
+    || String(candidate?.confidenceBand ?? '').toUpperCase() === 'MEDIUM'
+  ));
+  const names = [...new Set(eligible.map((candidate) => text(
+    candidate.canonicalName ?? candidate.name ?? candidate.displayName, 200,
+  )).filter(Boolean))].slice(0, maximumSources);
+  if (!names.length || (genuineAmbiguity && names.length < 2)) return null;
+  return JSON.stringify({
+    decision: 'CLARIFY',
+    answer: `${names.join(' / ')}?`,
+    responseId: null,
+    evidenceIds: [],
+    toolName: null,
+    toolArguments: null,
+    clarificationReason: names.length > 1 ? 'authoritative_ambiguity' : 'ambiguous_request',
+  });
+}
+
 function parseObject(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const providerParsed = value.output_parsed ?? value.outputParsed
+      ?? value.parsed ?? value.message?.parsed ?? value.response?.parsed;
+    if (providerParsed && typeof providerParsed === 'object' && !Array.isArray(providerParsed)) {
+      return providerParsed;
+    }
+    return value;
+  }
   const raw = String(value ?? '').trim().replace(/^```(?:json)?\s*/iu, '').replace(/\s*```$/u, '');
   const start = raw.indexOf('{');
   const end = raw.lastIndexOf('}');
@@ -104,6 +149,19 @@ const decisionEnvelopeKeys = new Set([
   // exact-shape validation and never escape the validator contract.
   'selectedEvidenceIds', 'evidenceSourceIds',
 ]);
+const providerEnvelopeAliases = Object.freeze({
+  decision_type: 'decision',
+  response_text: 'answer',
+  response_id: 'responseId',
+  evidence_ids: 'evidenceIds',
+  source_ids: 'evidenceIds',
+  selected_evidence_ids: 'evidenceIds',
+  tool_name: 'toolName',
+  tool_arguments: 'toolArguments',
+  clarification_reason: 'clarificationReason',
+  pending_question: 'pendingQuestion',
+  state_update: 'stateUpdate',
+});
 const compatibleTopLevelStateKeys = new Set([
   'currentTopic', 'knownEntityKeys', 'knownEntities', 'selectedEntityKeys',
   'collectedInformation', 'fieldUpdates', 'correctedFields', 'language',
@@ -113,68 +171,108 @@ const compatibleTopLevelStateKeys = new Set([
 
 function normalizeDecisionEnvelope(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const unknown = Object.keys(value).filter((key) => (
+  const canonicalValue = {};
+  for (const [key, entry] of Object.entries(value)) {
+    const canonicalKey = providerEnvelopeAliases[key] ?? key;
+    if (canonicalValue[canonicalKey] !== undefined && canonicalValue[canonicalKey] !== entry) {
+      return null;
+    }
+    canonicalValue[canonicalKey] = entry;
+  }
+  const unknown = Object.keys(canonicalValue).filter((key) => (
     !decisionEnvelopeKeys.has(key) && !compatibleTopLevelStateKeys.has(key)
   ));
   if (unknown.length) return null;
-  const suppliedState = value.stateUpdate === undefined ? {} : value.stateUpdate;
+  const suppliedState = canonicalValue.stateUpdate === undefined ? {} : canonicalValue.stateUpdate;
   if (!suppliedState || typeof suppliedState !== 'object' || Array.isArray(suppliedState)) {
     return null;
   }
   const stateUpdate = { ...suppliedState };
   for (const key of compatibleTopLevelStateKeys) {
-    if (value[key] !== undefined && stateUpdate[key] === undefined) stateUpdate[key] = value[key];
+    if (canonicalValue[key] !== undefined && stateUpdate[key] === undefined) {
+      stateUpdate[key] = canonicalValue[key];
+    }
   }
-  const normalizedDecision = normalizeDecision(value.decision);
+  const normalizedDecision = normalizeDecision(canonicalValue.decision);
   if (normalizedDecision === 'no_match') {
-    const mixedBranch = text(value.answer, maximumAnswerCharacters)
-      || text(value.responseId, 160)
-      || list(value.evidenceIds ?? value.selectedEvidenceIds ?? value.evidenceSourceIds).length
-      || value.toolRequest !== undefined && value.toolRequest !== null
-      || value.toolName !== undefined && value.toolName !== null
-      || value.toolArguments !== undefined && value.toolArguments !== null
-      || value.clarification !== undefined && value.clarification !== null
-      || value.clarificationReason !== undefined && value.clarificationReason !== null
-      || value.pendingQuestion !== undefined && value.pendingQuestion !== null;
+    const mixedBranch = text(canonicalValue.answer, maximumAnswerCharacters)
+      || text(canonicalValue.responseId, 160)
+      || list(canonicalValue.evidenceIds ?? canonicalValue.selectedEvidenceIds
+        ?? canonicalValue.evidenceSourceIds).length
+      || canonicalValue.toolRequest !== undefined && canonicalValue.toolRequest !== null
+      || canonicalValue.toolName !== undefined && canonicalValue.toolName !== null
+      || canonicalValue.toolArguments !== undefined && canonicalValue.toolArguments !== null
+      || canonicalValue.clarification !== undefined && canonicalValue.clarification !== null
+      || canonicalValue.clarificationReason !== undefined
+        && canonicalValue.clarificationReason !== null
+      || canonicalValue.pendingQuestion !== undefined && canonicalValue.pendingQuestion !== null;
     if (mixedBranch) return null;
   }
   let compactToolRequest = null;
   if (normalizedDecision === 'action'
-    && value.toolName !== undefined && value.toolName !== null) {
-    const toolName = text(value.toolName, 160);
-    if (!toolName || typeof value.toolArguments !== 'string') return null;
-    try {
-      const argumentsObject = JSON.parse(value.toolArguments);
-      if (!argumentsObject || typeof argumentsObject !== 'object' || Array.isArray(argumentsObject)) {
-        return null;
-      }
-      compactToolRequest = { name: toolName, arguments: argumentsObject };
-    } catch {
+    && canonicalValue.toolName !== undefined && canonicalValue.toolName !== null) {
+    const toolName = text(canonicalValue.toolName, 160);
+    if (!toolName) return null;
+    let argumentsObject = canonicalValue.toolArguments;
+    if (typeof argumentsObject === 'string') {
+      try { argumentsObject = JSON.parse(argumentsObject); } catch { return null; }
+    }
+    if (!argumentsObject || typeof argumentsObject !== 'object' || Array.isArray(argumentsObject)) {
       return null;
     }
+    compactToolRequest = { name: toolName, arguments: argumentsObject };
   }
   const compactClarificationReason = normalizedDecision !== 'clarify'
-    || value.clarificationReason === undefined
-    || value.clarificationReason === null ? null : { reason: value.clarificationReason };
+    || canonicalValue.clarificationReason === undefined
+    || canonicalValue.clarificationReason === null
+    ? null : { reason: canonicalValue.clarificationReason };
   const compactClarificationQuestion = normalizedDecision === 'clarify'
-    && value.pendingQuestion === undefined ? value.answer : undefined;
+    && canonicalValue.pendingQuestion === undefined ? canonicalValue.answer : undefined;
   return {
-    decision: value.decision,
+    decision: canonicalValue.decision,
     answer: normalizedDecision === 'action' ? ''
-      : (compactClarificationQuestion === undefined ? (value.answer ?? '') : ''),
-    responseId: normalizedDecision === 'answer' ? (value.responseId ?? null) : null,
+      : (compactClarificationQuestion === undefined ? (canonicalValue.answer ?? '') : ''),
+    responseId: normalizedDecision === 'answer' ? (canonicalValue.responseId ?? null) : null,
     evidenceIds: normalizedDecision === 'clarify' || normalizedDecision === 'no_match' ? []
-      : (value.evidenceIds ?? value.selectedEvidenceIds
-        ?? value.evidenceSourceIds ?? []),
+      : (canonicalValue.evidenceIds ?? canonicalValue.selectedEvidenceIds
+        ?? canonicalValue.evidenceSourceIds ?? []),
     stateUpdate: normalizedDecision === 'no_match' ? {} : stateUpdate,
     pendingQuestion: normalizedDecision === 'clarify'
-      ? (value.pendingQuestion ?? compactClarificationQuestion ?? null)
-      : (normalizedDecision === 'answer' ? (value.pendingQuestion ?? null) : null),
+      ? (canonicalValue.pendingQuestion ?? compactClarificationQuestion ?? null)
+      : (normalizedDecision === 'answer' ? (canonicalValue.pendingQuestion ?? null) : null),
     toolRequest: normalizedDecision === 'action'
-      ? (value.toolRequest ?? compactToolRequest) : null,
+      ? (canonicalValue.toolRequest ?? compactToolRequest) : null,
     clarification: normalizedDecision === 'clarify'
-      ? (value.clarification ?? compactClarificationReason) : null,
+      ? (canonicalValue.clarification ?? compactClarificationReason) : null,
   };
+}
+
+function structuralDecisionDiagnostic(raw) {
+  const parsed = parseObject(raw);
+  const rawLength = typeof raw === 'string' ? raw.length : null;
+  if (!parsed) return Object.freeze({
+    inputKind: Array.isArray(raw) ? 'array' : typeof raw,
+    characterCount: rawLength,
+    parsed: false,
+    topLevelKeys: Object.freeze([]),
+  });
+  const keys = Object.keys(parsed).slice(0, 24);
+  const canonicalKeys = keys.map((key) => providerEnvelopeAliases[key] ?? key);
+  return Object.freeze({
+    inputKind: typeof raw === 'string' ? 'string' : 'object',
+    characterCount: rawLength,
+    parsed: true,
+    topLevelKeys: Object.freeze(keys),
+    canonicalKeys: Object.freeze(canonicalKeys),
+    normalizedDecision: normalizeDecision(parsed.decision ?? parsed.decision_type) || null,
+    evidenceIdCount: Array.isArray(parsed.evidenceIds ?? parsed.evidence_ids
+      ?? parsed.source_ids ?? parsed.selectedEvidenceIds ?? parsed.selected_evidence_ids)
+      ? (parsed.evidenceIds ?? parsed.evidence_ids ?? parsed.source_ids
+        ?? parsed.selectedEvidenceIds ?? parsed.selected_evidence_ids).length : 0,
+    hasToolBranch: Boolean(parsed.toolRequest ?? parsed.toolName ?? parsed.tool_name),
+    hasClarificationBranch: Boolean(parsed.clarification ?? parsed.clarificationReason
+      ?? parsed.clarification_reason ?? parsed.pendingQuestion ?? parsed.pending_question),
+  });
 }
 
 function normalizeFieldValue(value, schema, envelope) {
@@ -555,12 +653,20 @@ export function groundedDecisionJsonSchema(envelope, runtime = {}) {
   });
 }
 
-export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
+function validateGroundedLlmDecisionInternal(raw, envelope, runtime = {}) {
   const parsedObject = parseObject(raw);
-  if (!parsedObject) return Object.freeze({ valid: false, reason: 'invalid_json' });
+  if (!parsedObject) {
+    const clarification = recoverablePublishedClarification(runtime);
+    return clarification ? validateGroundedLlmDecisionInternal(clarification, envelope, {
+      ...runtime, candidateClarificationRecoveryAttempted: true,
+    }) : Object.freeze({ valid: false, reason: 'invalid_json' });
+  }
   const parsed = normalizeDecisionEnvelope(parsedObject);
   if (!parsed || !exactShape(parsed)) {
-    return Object.freeze({ valid: false, reason: 'invalid_response_shape' });
+    const clarification = recoverablePublishedClarification(runtime);
+    return clarification ? validateGroundedLlmDecisionInternal(clarification, envelope, {
+      ...runtime, candidateClarificationRecoveryAttempted: true,
+    }) : Object.freeze({ valid: false, reason: 'invalid_response_shape' });
   }
   let decision = normalizeDecision(parsed.decision);
   if (!decisions.has(decision)) return Object.freeze({ valid: false, reason: 'invalid_decision' });
@@ -775,6 +881,15 @@ export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
     approvedZeroEvidenceResponse: approvedZeroEvidenceResponse === true,
     flowAction: decision === 'clarify' ? 'clarify'
       : (decision === 'no_match' ? 'no_match' : 'continue'),
+  });
+}
+
+export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
+  const result = validateGroundedLlmDecisionInternal(raw, envelope, runtime);
+  if (result.valid) return result;
+  return Object.freeze({
+    ...result,
+    structuralDiagnostic: structuralDecisionDiagnostic(raw),
   });
 }
 

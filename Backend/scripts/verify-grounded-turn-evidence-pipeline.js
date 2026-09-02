@@ -325,13 +325,15 @@ assert.throws(() => buildUnifiedGroundingEnvelope({
 }), (error) => error.code === 'KNOWLEDGE_UNIFIED_EVIDENCE_BUNDLE_REQUIRED',
 'Normal voice packaging must reject every non-unified legacy evidence shape');
 
-const tamperedSourceMap = llm.sourceMap.map((mapping, index) => index === 0
+const mappedCallerEvidence = llm.sourceMap.length ? llm : rememberedFollowup.llmInput;
+const tamperedSourceMap = mappedCallerEvidence.sourceMap.map((mapping, index) => index === 0
   ? { ...mapping, tenantId: 'wrong-tenant' } : mapping);
 assert.throws(() => buildGroundingEnvelope({
   ...strictUnifiedKnowledge,
   tenantEvidence: {
     llmEvidenceBundle: {
       ...strictUnifiedKnowledge.tenantEvidence.llmEvidenceBundle,
+      decisionInput: { hydratedRecords: mappedCallerEvidence.hydratedRecords },
       sourceMap: tamperedSourceMap,
     },
   },
@@ -343,7 +345,8 @@ assert.throws(() => buildGroundingEnvelope({
   tenantEvidence: {
     llmEvidenceBundle: {
       ...strictUnifiedKnowledge.tenantEvidence.llmEvidenceBundle,
-      sourceMap: [...llm.sourceMap, llm.sourceMap[0]],
+      decisionInput: { hydratedRecords: mappedCallerEvidence.hydratedRecords },
+      sourceMap: [...mappedCallerEvidence.sourceMap, mappedCallerEvidence.sourceMap[0]],
     },
   },
 }), (error) => error.code === 'KNOWLEDGE_GROUNDED_SOURCE_MAP_INCOMPLETE',
@@ -386,8 +389,8 @@ const namespaceFiltered = buildGroundedLlmInput({
   runtimeProfile: { tools: [] },
 });
 assert.deepEqual(namespaceFiltered.hydratedRecords.map((source) => source.recordId),
-  ['catalog-1', 'faq-1', 'catalog-2', 'workflow-1'],
-  'Grounded packaging must preserve the verified hydration result without a second filter');
+  ['catalog-1'],
+  'Explicit Catalog grounding must exclude unrelated hydrated namespaces');
 
 const currentConcernEvidence = buildGroundedLlmInput({
   input: {
@@ -435,8 +438,8 @@ const currentConcernEvidence = buildGroundedLlmInput({
   runtimeProfile: { tools: [] },
 });
 assert.deepEqual(currentConcernEvidence.hydratedRecords.map((source) => source.recordId),
-  ['stale-catalog', 'support-1', 'general-1'],
-  'Packaging must not reinterpret or remove the verified hydration result');
+  ['support-1'],
+  'The applicable current Workflow must exclude stale memory and unrelated General evidence');
 assert.ok(currentConcernEvidence.hydratedRecords.every((source) => source.sourceId),
   'Every caller-facing current-concern record must receive an LLM source ID');
 
@@ -487,8 +490,8 @@ assert.deepEqual(packagedIds({
     candidateNamespace: 'CATALOG', contextDependent: false,
   },
   reservations: [scopedReservation('reserved-item-a', 'CATALOG_ITEM', 'explicit_entity')],
-}), ['reserved-item-a', 'reserved-item-b', 'reserved-category'],
-'Verified records must pass through packaging unchanged after explicit-item retrieval');
+}), ['reserved-item-a'],
+'Only the explicit item may enter focused grounding');
 
 assert.deepEqual(packagedIds({
   understanding: {
@@ -508,8 +511,8 @@ assert.deepEqual(packagedIds({
   reservations: [scopedReservation(
     'reserved-category', 'CATALOG_CATEGORY', 'explicit_entity',
   )],
-}), ['reserved-item-a', 'reserved-item-b', 'reserved-category'],
-'Verified records must pass through packaging unchanged after category retrieval');
+}), ['reserved-category'],
+'Only the explicit category may enter focused grounding');
 
 assert.deepEqual(packagedIds({
   understanding: {
@@ -523,8 +526,8 @@ assert.deepEqual(packagedIds({
   },
   resolution: { candidate: null, candidateNamespace: null, contextDependent: true },
   reservations: [scopedReservation('reserved-item-a', 'CATALOG_ITEM', 'canonical_memory')],
-}), ['reserved-item-a', 'reserved-item-b', 'reserved-category'],
-'Verified records must pass through packaging unchanged after contextual retrieval');
+}), ['reserved-item-a'],
+'Only the active contextual record may enter focused grounding');
 
 assert.deepEqual(packagedIds({
   understanding: {
@@ -539,8 +542,8 @@ assert.deepEqual(packagedIds({
     scopedReservation('reserved-item-a', 'CATALOG_ITEM', 'explicit_comparison'),
     scopedReservation('reserved-item-b', 'CATALOG_ITEM', 'explicit_comparison'),
   ],
-}), ['reserved-item-a', 'reserved-item-b', 'reserved-category'],
-'Verified comparison records must pass through packaging without a destructive filter');
+}), ['reserved-item-a', 'reserved-item-b'],
+'Only the explicit comparison records may enter comparison grounding');
 
 console.log(JSON.stringify({
   tasks: [4, 5, 6], passed: true,

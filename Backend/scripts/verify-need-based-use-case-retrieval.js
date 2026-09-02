@@ -136,10 +136,11 @@ assert.equal(retrieval.channels.structured[0].recordId, recordId);
 assert.ok(retrieval.channels.bm25.some((candidate) => candidate.recordId === recordId));
 assert.ok(retrieval.channels.qdrant.some((candidate) => candidate.recordId === recordId));
 assert.match(retrieval.queryContext.semanticText, /distributed sites/u);
-assert.match(retrieval.queryContext.semanticText, /separate locations/u);
+assert.doesNotMatch(retrieval.queryContext.semanticText, /separate locations/u,
+  'A new standalone need must not inherit unrelated prior-turn wording');
 assert.equal(retrieval.queryContext.need.detected, true);
-assert.equal(retrieval.queryContext.reservedRecords[0].recordId, recordId);
-assert.equal(retrieval.queryContext.reservedRecords[0].reason, 'published_use_case');
+assert.deepEqual(retrieval.queryContext.reservedRecords, [],
+  'Use-case discovery remains ranked evidence and must not become canonical reservation state');
 assert.deepEqual(retrieval.channelFailures, []);
 
 console.log('Universal need understanding and tenant-driven use-case retrieval verified.');

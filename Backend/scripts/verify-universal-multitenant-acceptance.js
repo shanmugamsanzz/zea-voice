@@ -486,7 +486,16 @@ for (let pass = 1; pass <= repeats; pass += 1) {
       const natural = await runTurn(tenant, tenant.naturalQuestion, { semanticRecords: [first] });
       const naturalEnvelope = validationEnvelope(natural.turn);
       const naturalSource = sourceForRecord(naturalEnvelope, first.record_id);
-      assert.ok(naturalSource, 'Natural semantic question must hydrate its authoritative record');
+      assert.ok(naturalSource, JSON.stringify({
+        message: 'Natural semantic question must hydrate its authoritative record',
+        classification: natural.prepared.classification,
+        resolution: natural.prepared.resolution,
+        reservations: natural.turn.authoritative.fusion?.reservedRecordKeys,
+        selected: natural.turn.authoritative.evidence.map((source) => ({
+          recordId: source.recordId, recordType: source.recordType,
+          channels: source.channels, retrievalContext: source.retrievalContext,
+        })),
+      }));
       responseDecision(naturalEnvelope, [naturalSource], first.answer, {
         currentTopic: first.entity_name, knownEntityKeys: [first.entity_metadata.itemKey],
         requestedFacts: ['details'], contextDependent: false,

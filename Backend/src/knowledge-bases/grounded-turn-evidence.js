@@ -492,50 +492,69 @@ function applicableTools(evidence, runtimeProfile = {}) {
   return Object.freeze(results.slice(0, 3));
 }
 
-function selectHydratedRecordsForCurrentTurn(allHydrated = [], input = {}, authoritative = {}) {
+function selectHydratedRecordsForCurrentTurn(
+  allHydrated = [], input = {}, authoritative = {}, classification = {}, resolution = {},
+) {
   const understanding = input?.queryUnderstanding ?? {};
-  const requiredKeys = new Set(requiredReservations(authoritative)
+  const mandatory = requiredReservations(authoritative);
+  const requiredKeys = new Set(mandatory
     .map((entry) => reservationKey(entry)).filter(Boolean));
-  // Defense in depth: an unreserved Conversation node is never caller evidence.
-  // Exact current-turn messages survive because their reservation is canonical.
-  let relevantHydrated = allHydrated.filter((source) => (
-    String(source?.recordType ?? '').toUpperCase() !== 'CONVERSATION_NODE'
-      || requiredKeys.has(reservationKey(source))
-  ));
   const memory = input?.canonicalCallMemory ?? input?.memory ?? {};
-  const activeCategoryKey = normalizedId(
-    memory.activeCategory?.categoryKey ?? memory.activeCategory?.key,
-  );
-  const explicitItemIds = new Set((understanding.explicitEntities ?? [])
-    .map((entry) => normalizedId(entry?.recordId ?? entry?.id)).filter(Boolean));
-  if (activeCategoryKey && !memory.activeEntity && understanding.contextDependent === true
-    && explicitItemIds.size === 0) {
-    relevantHydrated = relevantHydrated.filter((source) => {
-      if (String(source?.recordType ?? '').toUpperCase() !== 'CATALOG_ITEM') return true;
-      return normalizedId(source.authoritativeData?.categoryKey) === activeCategoryKey;
-    });
-  }
-  const currentRouteId = normalizedId(understanding?.currentRouteSignal?.recordId);
-  const currentRouteHydrated = currentRouteId && relevantHydrated.some((source) => (
-    normalizedId(source?.recordId) === currentRouteId
-    && String(source?.recordType ?? '').toUpperCase() === 'WORKFLOW_RULE'
-  ));
-  if (!currentRouteHydrated || understanding.contextDependent === true) return relevantHydrated;
-
   const currentRecordIds = new Set([
     ...(understanding.currentEntityCandidates ?? []),
     ...(understanding.explicitEntities ?? []),
     ...(understanding.explicitCategories ?? []),
     ...(understanding.comparisonEntities ?? []),
   ].map((entry) => normalizedId(entry?.recordId ?? entry?.id)).filter(Boolean));
+  if (resolution?.candidate?.explicit === true) {
+    currentRecordIds.add(normalizedId(resolution.candidate.recordId));
+  }
+  const permittedKeys = new Set(requiredKeys);
+  for (const candidate of [
+    ...(understanding.explicitEntities ?? []),
+    ...(understanding.explicitCategories ?? []),
+    ...(understanding.comparisonEntities ?? []),
+    ...(String(understanding.currentRouteSignal?.recordType ?? '').toUpperCase()
+      === 'WORKFLOW_RULE' ? [understanding.currentRouteSignal] : []),
+    ...(resolution?.candidate?.explicit === true ? [{
+      ...resolution.candidate,
+      recordType: resolution.candidate.recordType
+        ?? (String(resolution.candidateNamespace ?? '').toUpperCase() === 'CATALOG'
+          ? (String(resolution.candidate.entityType ?? '').toUpperCase() === 'CATEGORY'
+            ? 'CATALOG_CATEGORY' : 'CATALOG_ITEM') : null),
+    }] : []),
+  ]) {
+    const key = reservationKey(candidate);
+    if (key) permittedKeys.add(key);
+  }
   const staleMemoryIds = new Set([memory.activeEntity, memory.activeCategory]
     .map((entry) => normalizedId(entry?.recordId ?? entry?.id)).filter(Boolean));
-  if (!staleMemoryIds.size) return relevantHydrated;
+  const focusedTurn = permittedKeys.size > 0 || mandatory.some((entry) => [
+    'explicit_current_entity', 'explicit_entity', 'explicit_comparison',
+    'canonical_memory', 'category_unique_child', 'applicable_workflow',
+    'authorized_workflow',
+  ].includes(String(entry.reason ?? '').toLocaleLowerCase()));
+  const currentRouteId = normalizedId(understanding?.currentRouteSignal?.recordId);
+  const overviewTurn = String(classification?.intentClass ?? '').toUpperCase()
+    === 'CATEGORY_OVERVIEW';
 
-  return relevantHydrated.filter((source) => {
+  return allHydrated.filter((source) => {
+    const key = reservationKey(source);
+    if (permittedKeys.has(key)) return true;
+    // Once the turn has an explicit entity, contextual entity, comparison, or
+    // authorized action, no ordinary retrieval result may dilute that bounded
+    // grounding set. Relevant facts must come from those hydrated records.
+    if (focusedTurn) return false;
+    const recordType = String(source?.recordType ?? '').toUpperCase();
+    if (recordType === 'WORKFLOW_RULE') return false;
+    if (recordType === 'CONVERSATION_NODE') {
+      return Boolean(currentRouteId)
+        && normalizedId(source.recordId) === currentRouteId;
+    }
+    if (recordType === 'CATALOG_CATEGORY' && !overviewTurn) return false;
     const recordId = normalizedId(source?.recordId);
-    if (!staleMemoryIds.has(recordId) || currentRecordIds.has(recordId)) return true;
-    return requiredKeys.has(reservationKey(source));
+    if (staleMemoryIds.has(recordId) && !currentRecordIds.has(recordId)) return false;
+    return true;
   });
 }
 
@@ -543,7 +562,9 @@ export function buildGroundedLlmInput({
   input, classification, resolution, authoritative, runtimeProfile,
 } = {}) {
   const allHydrated = authoritative?.verifiedRecords ?? authoritative?.evidence ?? [];
-  const hydrated = selectHydratedRecordsForCurrentTurn(allHydrated, input, authoritative);
+  const hydrated = selectHydratedRecordsForCurrentTurn(
+    allHydrated, input, authoritative, classification, resolution,
+  );
   assertRequiredEvidenceInvariant(authoritative, hydrated);
   if (hydrated.length > maximumEvidenceRecords) {
     throw new TypeError('Grounded LLM input cannot contain more than five hydrated records');

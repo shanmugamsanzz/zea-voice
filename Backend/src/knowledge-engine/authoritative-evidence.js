@@ -483,7 +483,8 @@ export function fuseCandidateRankings(retrieval, {
   const rejectedBelowRelevanceBandIds = [];
   const reservations = retrieval?.queryContext?.reservedRecords ?? [];
   const focusedCatalogReasons = new Set([
-    'explicit_entity', 'explicit_current_entity', 'canonical_memory', 'latest_request_record',
+    'explicit_entity', 'explicit_current_entity', 'canonical_memory',
+    'explicit_comparison', 'category_unique_child',
   ]);
   const hasFocusedCatalogRecord = reservations.some((reservation) => (
     ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(
@@ -533,12 +534,18 @@ export function fuseCandidateRankings(retrieval, {
       }
       return relevantCallerWorkflow;
     }
-    // Conversation nodes control sequencing. Only an exact current-turn route
-    // reserved above may enter the grounding package; semantic similarity must
-    // never use unrelated guidance or another scripted response as padding.
+    // Conversation nodes control sequencing. They are not canonical entity
+    // reservations, but one exact caller-facing current-intent route may be
+    // admitted as ordinary evidence. Semantic-only guidance cannot fill an
+    // unused slot.
     if (candidate.recordType === 'CONVERSATION_NODE') {
-      rejectedUnrelatedConversationIds.push(normalizeId(candidate.recordId));
-      return false;
+      const exactCurrentIntent = candidate.callerFacingHint === true
+        && String(retrieval?.intentClass ?? '').toUpperCase() !== 'UNKNOWN'
+        && inPrimaryNamespace && requestRelevance >= highProviderScore;
+      if (!exactCurrentIntent) {
+        rejectedUnrelatedConversationIds.push(normalizeId(candidate.recordId));
+      }
+      return exactCurrentIntent;
     }
     if (candidate.callerFacingHint !== true) {
       rejectedUnrelatedNamespaceIds.push(normalizeId(candidate.recordId));

@@ -73,6 +73,7 @@ import {
 } from './interaction/grounded-llm-response.js';
 import {
   isRepairableGroundedDecisionReason,
+  isOperationalGroundedDecisionFailure,
 } from './interaction/grounded-llm-decision.js';
 import { applyUnifiedGroundedTurn } from './interaction/unified-grounded-turn.js';
 import { evaluateFirstAudioSlo, percentile } from './interaction/voice-latency-slo.js';
@@ -2241,10 +2242,13 @@ export class RealtimeConversationOrchestrator {
         evidenceSourceMap: groundingEnvelope.sourceMap ?? [],
         selectedEntityKeys: grounded.selectedEntityKeys ?? [],
         toolRequested: Boolean(grounded.toolRequest),
+        structuralDiagnostic: grounded.valid === true
+          ? null : grounded.structuralDiagnostic ?? null,
       }, 'Grounded turn decision and selected evidence were traced before speech or action');
       let answer;
       const sources = [llmMessageSource(this.runtimeProfile.providers.llm, completion)];
       const repairableDecisionFailure = isRepairableGroundedDecisionReason(grounded.reason);
+      const operationalDecisionFailure = isOperationalGroundedDecisionFailure(grounded.reason);
       if (grounded.valid) {
         this.runtimeMetrics.grounding.validated += 1;
         if (streaming.isCurrent && !streaming.isCurrent()) {
@@ -2279,16 +2283,28 @@ export class RealtimeConversationOrchestrator {
           }, 'Structured decision was rejected and withheld from TTS pending one repair attempt');
         } else {
           this.runtimeMetrics.grounding.fallbacks += 1;
-          answer = configuredOperationalFailureResponse(
-            this.runtimeProfile, knowledge, { validation: true },
-          );
+          answer = operationalDecisionFailure
+            ? configuredOperationalFailureResponse(
+              this.runtimeProfile, knowledge, { validation: true },
+            )
+            : configuredInformationUnavailableResponse(this.runtimeProfile, knowledge);
           sources.push(createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
-            label: 'Configured evidence validation response',
-            metadata: { reason: grounded.reason, ambiguity: false },
+            label: operationalDecisionFailure
+              ? 'Configured operational decision response'
+              : 'Configured information unavailable response',
+            metadata: {
+              reason: grounded.reason,
+              ambiguity: false,
+              operational: operationalDecisionFailure,
+            },
           }));
           this.log.warn({
             stage: 'llm.grounding_rejected', callId: this.call.id, reason: grounded.reason,
-          }, 'LLM response was rejected before TTS; using the configured operational response');
+            operational: operationalDecisionFailure,
+            structuralDiagnostic: grounded.structuralDiagnostic ?? null,
+          }, operationalDecisionFailure
+            ? 'Provider decision contract failed; using configured operational recovery'
+            : 'Unsupported grounded decision was converted to configured NO_MATCH speech');
         }
       }
       answer = callerFacingText(answer, this.runtimeProfile, knowledge, {
@@ -2304,7 +2320,8 @@ export class RealtimeConversationOrchestrator {
           },
         }));
       }
-      let normalTurnOutput = null;
+      let normalTurnOutput = !grounded.valid && !operationalDecisionFailure
+        ? createGroundedLlmOutput(groundedLlmOutputTypes.NO_MATCH) : null;
       if (grounded.valid) {
         const selectedEvidenceIds = grounded.evidenceIds ?? grounded.evidenceSourceIds ?? [];
         const activeTool = grounded.state?.activeToolRequest ?? null;
@@ -2356,10 +2373,14 @@ export class RealtimeConversationOrchestrator {
         cancelled: false,
         text: answer,
         understanding: grounded.valid ? grounded : undefined,
-        groundingFailureReason: grounded.valid ? null : grounded.reason,
+        groundingFailureReason: grounded.valid || !operationalDecisionFailure
+          ? null : grounded.reason,
+        groundingRejectionReason: grounded.valid || operationalDecisionFailure
+          ? null : grounded.reason,
         groundingFailureDetails: grounded.valid ? null : {
           identifiers: grounded.identifiers ?? [],
           numbers: grounded.numbers ?? [],
+          structuralDiagnostic: grounded.structuralDiagnostic ?? null,
         },
         normalTurnOutput,
         // RESPONSE commits above after complete validation. TOOL keeps the

@@ -390,26 +390,45 @@ function indexedSignals(accumulator, index, query, queryForms, records, statisti
   }
 }
 
-function fuzzySignals(accumulator, index, query, records, statistics, confidenceConfiguration) {
+function fuzzySignals(
+  accumulator, index, query, records, statistics, confidenceConfiguration, options = {},
+) {
   for (const [phrase, indexedCandidates] of Object.entries(index?.exact ?? {})) {
     const similarity = fuzzyPhraseScore(query, phrase);
     if (similarity < confidenceConfiguration.clarificationConfidence) continue;
     const coverage = distinctiveCoverage(query, phrase, statistics);
     const leadingSimilarity = leadingEntitySimilarity(query, phrase);
     const leadingBonus = leadingSimilarity >= 0.58 ? 0.1 : 0;
+    const minimumTokenSimilarity = minimumPhraseTokenSimilarity(query, phrase);
     const completeLexicalMatch = tokens(phrase).length >= 3
-      && minimumPhraseTokenSimilarity(query, phrase) >= 0.84
+      && minimumTokenSimilarity >= 0.84
       && coverage >= 0.6;
+    // Published Conversation/Workflow examples describe caller intent, so a
+    // near-complete multi-token match remains authoritative when STT changes
+    // one inflection or phonetic token. Catalog names do not receive this
+    // promotion: an approximate product/entity name must still be confirmed.
+    const highFidelityPublishedRoute = options.publishedRoute === true
+      && tokens(phrase).length >= 4
+      && minimumTokenSimilarity >= 0.72
+      && coverage >= 0.75;
+    if (options.publishedRoute === true && !highFidelityPublishedRoute
+      && minimumTokenSimilarity < 0.55) continue;
     const calculatedScore = similarity * (0.7 + coverage * 0.3) + leadingBonus;
     const distinctiveLead = leadingSimilarity >= 0.9 && coverage >= 0.5;
     const rawScore = distinctiveLead
       ? Math.max(0.86, calculatedScore) : calculatedScore;
     const score = query === phrase ? similarity
-      : (completeLexicalMatch ? Math.min(0.93, rawScore)
+      : (highFidelityPublishedRoute ? Math.max(
+        confidenceConfiguration.highConfidence + confidenceConfiguration.ambiguityMargin,
+        rawScore,
+      )
+        : completeLexicalMatch ? Math.min(0.93, rawScore)
         : Math.min(distinctiveLead ? 0.879 : 0.87, rawScore));
     for (const candidate of indexedCandidates) {
       addSignal(accumulator, indexedCandidate(candidate, records), {
-        method: 'fuzzy', score: boundedScore(score), phrase, explicit: true,
+        method: highFidelityPublishedRoute && options.publishedRoute === true
+          ? 'normalized' : 'fuzzy',
+        score: boundedScore(score), phrase, explicit: true,
       });
     }
   }
@@ -555,7 +574,9 @@ function matchRouteCandidates(bundles, records, query, queryForms, confidenceCon
   for (const index of indexes) {
     directIndexedSignals(candidates, index, query, queryForms, records);
     indexedSignals(candidates, index, query, queryForms, records, statistics);
-    fuzzySignals(candidates, index, query, records, statistics, confidenceConfiguration);
+    fuzzySignals(candidates, index, query, records, statistics, confidenceConfiguration, {
+      publishedRoute: true,
+    });
   }
   for (const [key, candidate] of candidates) {
     if (candidateNamespace(candidate) === knowledgeCandidateNamespaces.CATALOG) {

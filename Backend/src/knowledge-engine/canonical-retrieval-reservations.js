@@ -1,21 +1,22 @@
 import { typedRecordIdentityKey } from './canonical-record-identity.js';
-import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/knowledge-confidence-config.js';
 
-export const CANONICAL_RETRIEVAL_RESERVATIONS_VERSION = 5;
+export const CANONICAL_RETRIEVAL_RESERVATIONS_VERSION = 7;
 
 const mandatoryReservationReasons = new Set([
   'explicit_current_entity',
   'explicit_entity',
   'explicit_comparison',
+  'contextual_comparison',
   'canonical_memory',
   'category_unique_child',
+  'applicable_workflow',
   'authorized_workflow',
 ]);
 
 export function isMandatoryCanonicalReservation(value = {}) {
   const reason = normalized(value.reason);
   if (!mandatoryReservationReasons.has(reason)) return false;
-  return reason !== 'authorized_workflow'
+  return !['applicable_workflow', 'authorized_workflow'].includes(reason)
     || String(value.recordType ?? '').trim().toUpperCase() === 'WORKFLOW_RULE';
 }
 
@@ -49,29 +50,54 @@ export function collectCanonicalRetrievalReservations(request = {}, retrieval = 
   const understanding = request.input?.queryUnderstanding ?? {};
   const classification = request.classification ?? {};
   const resolution = request.resolution ?? {};
+  const publishedCategory = (value) => {
+    const categoryKey = normalized(value?.categoryKey);
+    if (!categoryKey) return value;
+    return (resolution.namespaceCandidates?.CATALOG ?? []).find((candidate) => (
+      String(candidate?.recordType ?? '').toUpperCase() === 'CATALOG_CATEGORY'
+      && String(candidate?.entityType ?? '').toUpperCase() === 'ROUTE'
+      && normalized(candidate?.categoryKey) === categoryKey
+    )) ?? value;
+  };
+  const finalCandidate = resolution.candidate ?? null;
+  const finalCandidateId = normalized(finalCandidate?.recordId);
+  const highConfidence = Number(resolution.confidenceConfiguration?.highConfidence ?? 0.86);
+  const finalStrongExplicit = (finalCandidate?.signals ?? []).some((signal) => (
+    signal?.explicit === true
+    && ['exact', 'normalized', 'tenant_alias', 'stt', 'phonetic'].includes(
+      normalized(signal.method),
+    )
+    && Number(signal.score ?? 0) >= highConfidence
+  ));
+  const semanticReplacement = Boolean(finalCandidateId)
+    && String(finalCandidate?.method ?? '').toLocaleLowerCase() === 'semantic'
+    && !finalStrongExplicit;
+  const survivesFinalResolution = (value) => !semanticReplacement
+    || normalized(value?.recordId) === finalCandidateId
+    || (String(value?.recordType ?? '').toUpperCase() === 'CATALOG_CATEGORY'
+      && normalized(value?.categoryKey) === normalized(finalCandidate?.categoryKey));
+  const explicitEntities = (understanding.explicitEntities ?? [])
+    .filter(survivesFinalResolution);
+  const explicitCategories = (understanding.explicitCategories ?? [])
+    .map(publishedCategory).filter(survivesFinalResolution);
   const explicit = [
-    ...(understanding.explicitEntities ?? []),
-    ...(understanding.explicitCategories ?? []),
-    ...((understanding.explicitEntities?.length ?? 0) > 0
-      || (understanding.explicitCategories?.length ?? 0) > 0 ? [] : [
+    ...explicitEntities,
+    ...explicitCategories,
+    ...(explicitEntities.length > 0 || explicitCategories.length > 0
+      || semanticReplacement ? [] : [
       ...(understanding.ambiguity?.detected === true
         ? understanding.ambiguity.candidates ?? [] : []),
       understanding.confirmationCandidate,
     ]),
   ].map((value) => compact(value, 'explicit_entity')).filter(Boolean);
-  if (!explicit.length && resolution.candidate?.explicit === true) {
+  if (!explicit.length && finalStrongExplicit) {
     const resolved = compact(resolution.candidate, 'explicit_entity');
     if (resolved) explicit.push(resolved);
   }
+  const comparisonReason = understanding.comparisonContextSource === 'temporary_call_state'
+    ? 'contextual_comparison' : 'explicit_comparison';
   const comparisons = (understanding.comparisonEntities ?? [])
-    .map((value) => compact(value, 'explicit_comparison')).filter(Boolean);
-  const retrievedCandidates = Object.values(retrieval?.channels ?? {}).flat();
-  const callerFacingConversation = (candidate) => candidate?.callerFacingHint === true
-    || retrievedCandidates.some((retrieved) => (
-      normalized(retrieved?.recordId) === normalized(candidate?.recordId)
-      && String(retrieved?.recordType ?? '').toUpperCase() === 'CONVERSATION_NODE'
-      && retrieved?.callerFacingHint === true
-    ));
+    .map((value) => compact(value, comparisonReason)).filter(Boolean);
   if (classification.intentClass === 'COMPARISON_COMPLEX') {
     for (const candidate of resolution.namespaceCandidates?.CATALOG
       ?? resolution.routingCandidates ?? []) {
@@ -80,46 +106,6 @@ export function collectCanonicalRetrievalReservations(request = {}, retrieval = 
       if (selected) comparisons.push(selected);
     }
   }
-  const overview = classification.intentClass === 'CATEGORY_OVERVIEW'
-    ? [classification.candidate, ...(resolution.namespaceCandidates?.CONVERSATION ?? [])]
-      .filter((candidate) => (
-        String(candidate?.recordType ?? '').toUpperCase() === 'CONVERSATION_NODE'
-        && String(candidate?.intentClass ?? '').toUpperCase() === 'CATEGORY_OVERVIEW'
-        && callerFacingConversation(candidate)
-      )).slice(0, 1)
-      .map((value) => compact(value, 'published_overview', 'CONVERSATION_NODE'))
-      .filter(Boolean)
-    : [];
-  const overviewCatalog = classification.intentClass === 'CATEGORY_OVERVIEW'
-    ? [...new Map([
-      ...(resolution.namespaceCandidates?.CATALOG ?? []),
-      classification.candidate,
-      resolution.candidate,
-    ]
-      .filter((candidate) => (
-        String(candidate?.recordType ?? '').toUpperCase() === 'CATALOG_CATEGORY'
-        && (candidate === resolution.candidate
-          || candidate === classification.candidate || candidate?.explicit === true)
-      ))
-      // Prefer the resolved authoritative category route over a synthetic
-      // category projection derived from one of its child Catalog items.
-      .map((candidate) => [
-        normalized(candidate?.categoryKey) || normalized(candidate?.recordId),
-        candidate,
-      ])).values()]
-      .map((value) => compact(value, 'published_overview', 'CATALOG_CATEGORY'))
-      .filter(Boolean)
-    : [];
-  const overviewCategoryKeys = new Set(overviewCatalog
-    .map((entry) => normalized(entry.categoryKey)).filter(Boolean));
-  const effectiveExplicit = classification.intentClass === 'CATEGORY_OVERVIEW'
-    ? explicit.filter((entry) => (
-      !overviewCategoryKeys.has(normalized(entry.categoryKey))
-      || overviewCatalog.some((overviewEntry) => (
-        normalized(overviewEntry.recordId) === normalized(entry.recordId)
-      ))
-    ))
-    : explicit;
   const contextDependent = understanding.contextDependent === true
     || resolution.contextDependent === true;
   const memory = request.input?.canonicalCallMemory ?? request.input?.memory ?? {};
@@ -128,44 +114,29 @@ export function collectCanonicalRetrievalReservations(request = {}, retrieval = 
     : compact(memory.activeCategory, 'canonical_memory', 'CATALOG_CATEGORY');
   const remembered = explicit.length || !contextDependent ? []
     : [activeMemory].filter(Boolean);
-  const confidence = resolveKnowledgeConfidenceConfiguration(
-    classification.confidenceConfiguration ?? resolution.confidenceConfiguration,
-  );
-  const latestCandidate = classification.intentClass === 'CATEGORY_OVERVIEW'
-    && String(resolution.candidate?.recordType ?? '').toUpperCase() === 'CATALOG_CATEGORY'
-    ? resolution.candidate : classification.candidate;
-  const latestCandidateType = String(latestCandidate?.recordType ?? '').toUpperCase();
-  const activeCategoryKey = normalized(memory.activeCategory?.categoryKey
-    ?? memory.activeCategory?.key);
-  const latestCategoryKey = normalized(latestCandidate?.categoryKey);
-  const categoryScopedCandidate = !(contextDependent && activeCategoryKey
-    && !memory.activeEntity && latestCandidateType === 'CATALOG_ITEM')
-    || (latestCategoryKey && latestCategoryKey === activeCategoryKey)
-    || latestCandidate?.explicit === true;
-  const latestRequestReason = latestCandidateType === 'WORKFLOW_RULE'
-    && classification.intentClass === 'ACTION_TOOL_REQUEST'
-    ? 'authorized_workflow' : 'latest_request_record';
-  const latestRequest = latestCandidate?.recordId
-    && categoryScopedCandidate
-    && (latestCandidate.explicit === true
-      || Number(latestCandidate.score ?? 0) >= confidence.highConfidence)
-    && (latestCandidateType !== 'WORKFLOW_RULE'
-      || classification.intentClass === 'ACTION_TOOL_REQUEST')
-    ? [compact(latestCandidate, latestRequestReason)].filter(Boolean) : [];
-  const useCase = request.input?.queryUnderstanding?.need?.detected === true
-    ? (retrieval?.channels?.structured ?? []).find((candidate) => (
-      candidate.matchMethod === 'published_use_case'
-      && Number(candidate.score ?? 0) >= confidence.highConfidence
-    )) : null;
-  const useCaseReservations = useCase
-    ? [compact(useCase, 'published_use_case')].filter(Boolean) : [];
   const existing = retrieval?.queryContext?.reservedRecords
     ?? request.queryContext?.reservedRecords ?? [];
+  const actionRequested = classification.intentClass === 'ACTION_TOOL_REQUEST'
+    || understanding.actionIntent?.detected === true
+    || Boolean(memory.activeTool?.name ?? memory.activeToolRequest?.name);
+  const workflowCandidate = actionRequested
+    && String(classification.candidate?.recordType ?? '').toUpperCase() === 'WORKFLOW_RULE'
+    ? compact(classification.candidate, 'authorized_workflow', 'WORKFLOW_RULE') : null;
+  const applicableWorkflow = !actionRequested
+    && String(understanding.currentRouteSignal?.recordType ?? '').toUpperCase() === 'WORKFLOW_RULE'
+    ? compact(understanding.currentRouteSignal, 'applicable_workflow', 'WORKFLOW_RULE') : null;
+  const categoryChildren = existing.filter((entry) => (
+    normalized(entry.reason) === 'category_unique_child'
+    && String(entry.recordType ?? '').toUpperCase() === 'CATALOG_ITEM'
+  )).map((entry) => compact(entry, 'category_unique_child')).filter(Boolean);
+  const activeWorkflows = actionRequested ? existing.filter((entry) => (
+    normalized(entry.reason) === 'authorized_workflow'
+    && String(entry.recordType ?? '').toUpperCase() === 'WORKFLOW_RULE'
+  )).map((entry) => compact(entry, 'authorized_workflow', 'WORKFLOW_RULE')).filter(Boolean) : [];
   const ordered = classification.intentClass === 'COMPARISON_COMPLEX'
-    ? [...comparisons, ...explicit, ...existing, ...remembered]
-    : [...effectiveExplicit, ...overviewCatalog, ...overview, ...latestRequest,
-      ...comparisons, ...remembered,
-      ...useCaseReservations, ...existing];
+    ? [...comparisons, ...explicit]
+    : [...explicit, ...categoryChildren, ...comparisons, ...remembered,
+      ...activeWorkflows, workflowCandidate, applicableWorkflow].filter(Boolean);
   return Object.freeze([...new Map(ordered.map((entry) => (
     [reservationKey(entry), Object.freeze({ ...entry })]
   ))).values()].slice(0, 5));
