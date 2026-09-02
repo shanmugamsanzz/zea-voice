@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { buildContextEnrichedRetrievalQuery } from '../src/knowledge-engine/targeted-retrieval.js';
 import { collectCanonicalRetrievalReservations } from '../src/knowledge-engine/canonical-retrieval-reservations.js';
 import { buildGroundedLlmInput } from '../src/knowledge-bases/grounded-turn-evidence.js';
+import { resolveCanonicalTopicMemory } from '../src/knowledge-engine/canonical-topic-memory.js';
+import { openIsolatedCallMemory } from '../src/knowledge-engine/call-memory.js';
 
 const scope = Object.freeze({
   tenantId: 'category-tenant', agentId: 'category-agent', callId: 'category-call',
@@ -52,6 +54,28 @@ assert.equal(uniqueQuery.reservedRecords.find((entry) => (
   entry.reason === 'category_unique_child'
 ))?.recordId, uniqueChild.recordId,
 'A category with one selectable published child must reserve that child');
+
+const explicitCategoryInput = Object.freeze({
+  ...queryInput,
+  canonicalCallMemory: Object.freeze({ activeEntity: null, activeCategory: null }),
+  memory: Object.freeze({ activeEntity: null, activeCategory: null }),
+  queryUnderstanding: Object.freeze({
+    contextDependent: false,
+    explicitEntities: Object.freeze([]),
+    explicitCategories: Object.freeze([activeCategory]),
+    requestedFacts: Object.freeze([]),
+  }),
+});
+const explicitUniqueQuery = buildContextEnrichedRetrievalQuery(
+  explicitCategoryInput, {}, {}, publicationScope,
+  new Map([
+    [categoryRecord.recordId, categoryRecord], [uniqueChild.recordId, uniqueChild],
+  ]),
+);
+assert.equal(explicitUniqueQuery.reservedRecords.find((entry) => (
+  entry.reason === 'category_unique_child'
+))?.recordId, uniqueChild.recordId,
+'A newly selected category must hydrate its unique selectable child before memory commitment');
 
 const secondChild = child('second-child', 'Second Published Child');
 const ambiguousQuery = buildContextEnrichedRetrievalQuery(
@@ -123,6 +147,148 @@ const unrelatedSource = hydratedSource({
     selectionRules: Object.freeze({ selectable: true }),
   }),
 });
+
+const uniqueCategorySource = hydratedSource({
+  recordId: activeCategory.recordId, recordType: 'CATALOG_CATEGORY',
+  publishedEvidenceId: 'published-unique-category-evidence',
+  reservationReasons: ['explicit_entity'],
+  authoritativeData: Object.freeze({
+    categoryKey: activeCategory.categoryKey, category: activeCategory.name,
+    children: Object.freeze([Object.freeze({
+      recordId: uniqueChild.recordId, itemKey: uniqueChild.itemKey,
+      name: uniqueChild.canonicalName, selectionRules: Object.freeze({ selectable: true }),
+    })]),
+  }),
+});
+const uniqueChildSource = hydratedSource({
+  recordId: uniqueChild.recordId, recordType: 'CATALOG_ITEM',
+  publishedEvidenceId: 'published-unique-child-evidence',
+  reservationReasons: ['category_unique_child'],
+  authoritativeData: Object.freeze({
+    itemKey: uniqueChild.itemKey, name: uniqueChild.canonicalName,
+    categoryKey: activeCategory.categoryKey, category: activeCategory.name,
+    selectionRules: Object.freeze({ selectable: true }),
+  }),
+});
+const uniqueResolution = resolveCanonicalTopicMemory({
+  scope,
+  understanding: explicitCategoryInput.queryUnderstanding,
+  evidence: [uniqueCategorySource, uniqueChildSource],
+  memory: {},
+});
+assert.equal(uniqueResolution.mode, 'EXPLICIT');
+assert.equal(uniqueResolution.activeCategory, null);
+assert.equal(uniqueResolution.activeEntity.recordId, uniqueChild.recordId,
+  'A one-child category must resolve to the exact hydrated PostgreSQL item');
+
+const memory = openIsolatedCallMemory(scope);
+memory.beginTurn('unique-category-turn');
+let committed = memory.applyCanonicalTopicResolution(uniqueResolution, {
+  turnToken: 'unique-category-turn',
+});
+assert.equal(committed.applied, true);
+assert.equal(committed.state.activeEntity.recordId, uniqueChild.recordId);
+assert.equal(committed.state.activeEntity.canonicalName, uniqueChild.canonicalName);
+assert.equal(committed.state.activeCategory, null);
+
+const multiResolution = resolveCanonicalTopicMemory({
+  scope,
+  understanding: explicitCategoryInput.queryUnderstanding,
+  evidence: [categorySource, uniqueChildSource, hydratedSource({
+    recordId: secondChild.recordId, recordType: 'CATALOG_ITEM',
+    publishedEvidenceId: 'published-second-child-evidence',
+    authoritativeData: Object.freeze({
+      itemKey: secondChild.itemKey, name: secondChild.canonicalName,
+      categoryKey: activeCategory.categoryKey, category: activeCategory.name,
+      selectionRules: Object.freeze({ selectable: true }),
+    }),
+  })],
+  memory: committed.state,
+});
+assert.equal(multiResolution.requiresTargetedClarification, true);
+assert.equal(multiResolution.activeEntity, null);
+assert.equal(multiResolution.activeCategory.recordId, activeCategory.recordId);
+assert.deepEqual(multiResolution.categoryCandidates.map((entry) => entry.recordId),
+  [uniqueChild.recordId, secondChild.recordId]);
+
+const multiChildSource = hydratedSource({
+  recordId: secondChild.recordId, recordType: 'CATALOG_ITEM',
+  publishedEvidenceId: 'published-multi-second-evidence',
+  authoritativeData: Object.freeze({
+    itemKey: secondChild.itemKey, name: secondChild.canonicalName,
+    categoryKey: activeCategory.categoryKey, category: activeCategory.name,
+    selectionRules: Object.freeze({ selectable: true }),
+  }),
+});
+const explicitMultiGrounded = buildGroundedLlmInput({
+  input: explicitCategoryInput,
+  classification: Object.freeze({ intentClass: 'DIRECT_FACT' }),
+  resolution: Object.freeze({ routingCandidates: Object.freeze([]) }),
+  authoritative: Object.freeze({
+    ...scope,
+    evidence: Object.freeze([categorySource, uniqueChildSource, multiChildSource]),
+    verifiedRecords: Object.freeze([categorySource, uniqueChildSource, multiChildSource]),
+    reservations: Object.freeze([Object.freeze({
+      ...activeCategory, reason: 'explicit_entity',
+    })]),
+  }),
+  runtimeProfile: Object.freeze({ tools: Object.freeze([]), agent: Object.freeze({ settings: {} }) }),
+});
+assert.equal(explicitMultiGrounded.clarificationContext.categorySelectionRequired, true);
+assert.deepEqual(explicitMultiGrounded.ambiguityCandidates.map((entry) => entry.recordId),
+  [uniqueChild.recordId, secondChild.recordId],
+  'A newly selected multi-child category must expose only published children for CLARIFY');
+
+const phoneticAmbiguity = resolveCanonicalTopicMemory({
+  scope,
+  understanding: {
+    explicitEntities: [
+      { recordId: uniqueChild.recordId }, { recordId: secondChild.recordId },
+    ],
+    ambiguity: { detected: true, kind: 'phonetic' },
+  },
+  evidence: [uniqueChildSource, hydratedSource({
+    recordId: secondChild.recordId, recordType: 'CATALOG_ITEM',
+    publishedEvidenceId: 'published-phonetic-second-evidence',
+    authoritativeData: Object.freeze({
+      itemKey: secondChild.itemKey, name: secondChild.canonicalName,
+      categoryKey: activeCategory.categoryKey, category: activeCategory.name,
+      selectionRules: Object.freeze({ selectable: true }),
+    }),
+  })],
+  memory: committed.state,
+});
+assert.equal(phoneticAmbiguity.mode, 'UNRESOLVED');
+assert.equal(phoneticAmbiguity.requiresTargetedClarification, true);
+assert.equal(memory.snapshot().activeEntity.recordId, uniqueChild.recordId,
+  'A phonetic ambiguity must never replace the last confirmed canonical item');
+
+const secondChildSource = hydratedSource({
+  recordId: secondChild.recordId, recordType: 'CATALOG_ITEM',
+  publishedEvidenceId: 'published-explicit-second-evidence',
+  authoritativeData: Object.freeze({
+    itemKey: secondChild.itemKey, name: secondChild.canonicalName,
+    categoryKey: activeCategory.categoryKey, category: activeCategory.name,
+    selectionRules: Object.freeze({ selectable: true }),
+  }),
+});
+const switchedResolution = resolveCanonicalTopicMemory({
+  scope,
+  understanding: {
+    explicitEntities: [{ recordId: secondChild.recordId }],
+    explicitCategories: [],
+  },
+  evidence: [secondChildSource],
+  memory: memory.snapshot(),
+});
+memory.beginTurn('explicit-item-switch');
+committed = memory.applyCanonicalTopicResolution(switchedResolution, {
+  turnToken: 'explicit-item-switch',
+});
+assert.equal(committed.applied, true);
+assert.equal(committed.state.activeEntity.recordId, secondChild.recordId,
+  'An explicit verified item must replace the previous canonical item');
+memory.close();
 const authoritative = Object.freeze({
   ...scope, evidence: Object.freeze([categorySource, unrelatedSource]),
   verifiedRecords: Object.freeze([categorySource, unrelatedSource]),
@@ -150,6 +316,8 @@ console.log(JSON.stringify({
   gate: 'category-item-handling', passed: true,
   uniqueChildReserved: true,
   multipleChildrenClarified: true,
+  explicitUniqueCategoryPromoted: true,
+  phoneticAmbiguityNeverGuessed: true,
   nonSelectableChildExcluded: true,
   unrelatedItemExcluded: true,
 }, null, 2));

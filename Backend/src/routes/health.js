@@ -6,6 +6,7 @@ import { checkB2 } from '../rag/b2.client.js';
 import { checkEmbedding } from '../rag/embedding.client.js';
 import { checkQdrant } from '../rag/qdrant.client.js';
 import { checkRagInfrastructure } from '../rag/rag-infrastructure.js';
+import { runtimeReleaseMetadata } from '../release/runtime-release-metadata.js';
 
 export const healthRouter = Router();
 
@@ -23,6 +24,7 @@ healthRouter.get('/', async (_request, response) => {
     success: healthy,
     status: healthy ? 'healthy' : 'degraded',
     timestamp: new Date().toISOString(),
+    release: runtimeReleaseMetadata(),
     services: {
       database: database.status === 'fulfilled' ? database.value : { ok: false },
       redis: redis.status === 'fulfilled' ? redis.value : { ok: false },
@@ -30,6 +32,10 @@ healthRouter.get('/', async (_request, response) => {
       rag: rag.status === 'fulfilled' ? rag.value : { ok: false },
     },
   });
+});
+
+healthRouter.get('/release', (_request, response) => {
+  response.json({ success: true, release: runtimeReleaseMetadata() });
 });
 
 healthRouter.get('/database', async (_request, response, next) => {

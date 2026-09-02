@@ -16,6 +16,10 @@ import { isRepairableGroundedDecisionReason } from '../src/voice/interaction/gro
 import { applyUnifiedGroundedTurn } from '../src/voice/interaction/unified-grounded-turn.js';
 import { evidenceBelongsToRuntime } from '../src/voice/interaction/grounded-decision-security.js';
 import { configuredSafeFailureResponse } from '../src/voice/realtime-conversation-orchestrator.js';
+import { streamSelectedTtsToPlivo } from '../src/voice/providers/tts/tts-playback.service.js';
+import { ProviderAdapterRegistry } from '../src/voice/providers/registry.js';
+import { registerImplementedProviderAdapters } from '../src/voice/providers/defaults.js';
+import { runtimeReleaseMetadata } from '../src/release/runtime-release-metadata.js';
 import { countTenantPointsByKnowledgeBaseRevision } from '../src/rag/qdrant.client.js';
 import {
   createKnowledgeEngineInput,
@@ -57,6 +61,27 @@ function catalogAttributeKeys(source) {
 
 function sourceRecordId(source) {
   return String(source?.recordId ?? source?.id ?? '').trim();
+}
+
+function canonicalItemKey(source) {
+  return normalized(source?.authoritativeData?.itemKey);
+}
+
+function numericValues(value, results = []) {
+  if (typeof value === 'number' && Number.isFinite(value)) results.push(value);
+  else if (typeof value === 'string' && /^\s*\d[\d,]*(?:\.\d+)?\s*$/u.test(value)) {
+    results.push(Number(value.replaceAll(',', '').trim()));
+  }
+  else if (Array.isArray(value)) value.forEach((entry) => numericValues(entry, results));
+  else if (value && typeof value === 'object') {
+    Object.values(value).forEach((entry) => numericValues(entry, results));
+  }
+  return results;
+}
+
+function spokenNumbers(value) {
+  return [...String(value ?? '').matchAll(/\d[\d,]*/gu)]
+    .map((match) => Number(match[0].replaceAll(',', ''))).filter(Number.isFinite);
 }
 
 const allowedEvidenceTypes = new Set([
@@ -101,7 +126,8 @@ function matchingCatalogSources(hydrated, turn) {
 
 function verifyTurnExpectations({
   call, index, turn, tenantEvidence, hydrated, envelope, selectedRecordIds,
-  responseId, finalText, safeResponse, memoryState, memoryBefore, groundedStateUpdate,
+  responseId, finalText, finalDecision, safeResponse, memoryState, memoryBefore, groundedStateUpdate,
+  recordAliases,
 }) {
   const label = `${call.id} turn ${index + 1}`;
   const catalogSources = matchingCatalogSources(hydrated, turn);
@@ -131,8 +157,79 @@ function verifyTurnExpectations({
         knownEntityKeys: (memoryState.knownEntities ?? []).map((entity) => entity?.key),
       },
     });
-    assert.ok(selectedRecordIds.some((id) => catalogRecordIds.has(id)),
-      `${label}: grounded decision did not cite the expected Catalog evidence ${citationDiagnostic}`);
+    if (finalDecision === 'clarify' && turn.allowTargetedClarification === true) {
+      assert.ok(catalogSources.every((source) => (
+        (turn.expectedAnyCategoryKeys ?? []).map(normalized)
+          .includes(normalized(source.authoritativeData?.categoryKey))
+      )), `${label}: clarification candidates are not isolated to the expected category`);
+    } else {
+      assert.ok(selectedRecordIds.some((id) => catalogRecordIds.has(id)),
+        `${label}: grounded decision did not cite the expected Catalog evidence ${citationDiagnostic}`);
+    }
+  }
+  if (turn.rememberRecordAs) {
+    const recordIds = [...new Set(catalogSources.map(sourceRecordId).filter(Boolean))];
+    assert.equal(recordIds.length, 1, `${label}: record alias requires exactly one Catalog item`);
+    assert.equal(sourceRecordId(memoryState.activeEntity), recordIds[0],
+      `${label}: canonical memory did not store the selected PostgreSQL record ID`);
+    recordAliases.set(String(turn.rememberRecordAs), recordIds[0]);
+  }
+  if (turn.expectedSameRecordAs) {
+    const expectedRecordId = recordAliases.get(String(turn.expectedSameRecordAs));
+    assert.ok(expectedRecordId, `${label}: expected record alias was not established`);
+    assert.ok(catalogSources.some((source) => sourceRecordId(source) === expectedRecordId),
+      `${label}: contextual follow-up did not hydrate the remembered PostgreSQL record`);
+    assert.equal(sourceRecordId(memoryState.activeEntity), expectedRecordId,
+      `${label}: canonical active memory does not contain the remembered record ID`);
+  }
+  if (turn.expectedActiveEntityKey) {
+    assert.equal(normalized(memoryState.activeEntity?.key), normalized(turn.expectedActiveEntityKey),
+      `${label}: active canonical entity was not replaced correctly`);
+  }
+  if (turn.expectedPriceAmount !== undefined) {
+    const expectedPrice = Number(turn.expectedPriceAmount);
+    assert.ok(catalogSources.some((source) => (
+      numericValues(source.authoritativeData).includes(expectedPrice)
+    )), `${label}: authoritative Catalog evidence does not contain the expected price`);
+    assert.ok(spokenNumbers(finalText).includes(expectedPrice),
+      `${label}: grounded answer did not return the expected published price`);
+  }
+  if ((turn.expectedExactCatalogEntityKeys?.length ?? 0) > 0) {
+    const expectedKeys = new Set(turn.expectedExactCatalogEntityKeys.map(normalized));
+    const actualKeys = new Set(hydrated.filter((source) => (
+      String(source?.recordType ?? '').toUpperCase() === 'CATALOG_ITEM'
+    )).map(canonicalItemKey).filter(Boolean));
+    assert.deepEqual(actualKeys, expectedKeys, `${label}: unrelated Catalog evidence entered the turn`);
+    const expectedIds = new Set(hydrated.filter((source) => (
+      expectedKeys.has(canonicalItemKey(source))
+    )).map(sourceRecordId));
+    const comparisonIds = new Set((tenantEvidence.authoritative?.reservations ?? [])
+      .filter((entry) => entry.reason === 'explicit_comparison').map(sourceRecordId));
+    assert.deepEqual(comparisonIds, expectedIds,
+      `${label}: comparison did not reserve exactly the requested PostgreSQL records`);
+  }
+  if (turn.requireNoUnrelatedEvidence === true) {
+    const allowedKeys = new Set([
+      ...(turn.expectedAnyEntityKeys ?? []),
+      ...(turn.expectedExactCatalogEntityKeys ?? []),
+    ].map(normalized));
+    const allowedCategoryKeys = new Set(
+      (turn.expectedAnyCategoryKeys ?? []).map(normalized),
+    );
+    const unrelated = hydrated.filter((source) => source.callerFacing === true).filter((source) => (
+      !(
+        String(source.recordType).toUpperCase() === 'CATALOG_ITEM'
+          && (allowedKeys.has(canonicalItemKey(source))
+            || allowedCategoryKeys.has(normalized(source.authoritativeData?.categoryKey)))
+      )
+      && !(
+        String(source.recordType).toUpperCase() === 'CATALOG_CATEGORY'
+          && allowedCategoryKeys.has(normalized(source.authoritativeData?.categoryKey))
+      )
+    ));
+    assert.deepEqual(unrelated.map((source) => ({
+      recordId: sourceRecordId(source), recordType: source.recordType,
+    })), [], `${label}: unrelated caller-facing evidence entered the LLM envelope`);
   }
   for (const source of catalogSources) {
     const data = source.authoritativeData ?? {};
@@ -304,8 +401,66 @@ async function verifyCandidateRevisions(agent, expected) {
   return verified;
 }
 
-async function collectDecision(profile, input) {
-  const session = await createSelectedLlmStream(profile, input);
+async function verifyExtractionArtifacts(agent, expected) {
+  const rows = await withPlatformAdminContext(null, async (client) => {
+    const result = await client.query(
+      `SELECT d.knowledge_base_id, d.id AS document_id, d.status AS document_status,
+          v.id AS document_version_id, v.status AS version_status, v.is_current,
+          v.extracted_text_object_key, v.extraction_metadata
+         FROM knowledge_documents d
+         JOIN knowledge_document_versions v
+           ON v.tenant_id=d.tenant_id AND v.knowledge_base_id=d.knowledge_base_id
+          AND v.document_id=d.id AND v.is_current=true
+        WHERE d.tenant_id=$1 AND d.knowledge_base_id = ANY($2::uuid[])
+          AND d.deleted_at IS NULL`,
+      [agent.tenant_id, [...expected.keys()]],
+    );
+    return result.rows;
+  });
+  assert.ok(rows.length > 0, 'The release candidate has no real extracted source documents');
+  for (const row of rows) {
+    assert.equal(row.document_status, 'ready', `${row.document_id}: source document is not ready`);
+    assert.equal(row.version_status, 'ready', `${row.document_id}: extracted version is not ready`);
+    assert.equal(row.is_current, true, `${row.document_id}: extracted version is not current`);
+    assert.ok(String(row.extracted_text_object_key ?? '').trim(),
+      `${row.document_id}: real extracted-text artifact is missing`);
+    assert.ok(row.extraction_metadata && Object.keys(row.extraction_metadata).length > 0,
+      `${row.document_id}: extraction metadata is missing`);
+  }
+  return rows.map((row) => ({
+    knowledgeBaseId: row.knowledge_base_id,
+    documentId: row.document_id,
+    documentVersionId: row.document_version_id,
+    extracted: true,
+  }));
+}
+
+async function synthesizeLiveTts(profile, text, registry) {
+  let audioBytes = 0;
+  let audioChunks = 0;
+  const result = await streamSelectedTtsToPlivo(profile, text, {
+    registry,
+    audioEngine: {
+      beginOutputGeneration() {},
+      async enqueueSynthesized(audio) {
+        audioBytes += audio.length;
+        audioChunks += 1;
+        return true;
+      },
+      async flushSynthesized() { return true; },
+      cancelStaleAudio() {},
+    },
+  });
+  assert.equal(result.cancelled, false, 'Live TTS synthesis was cancelled');
+  assert.ok(audioBytes > 0 && audioChunks > 0, 'Live TTS returned no audio');
+  return { audioBytes, audioChunks };
+}
+
+async function collectDecision(profile, input, registry) {
+  const session = await createSelectedLlmStream(profile, input, {
+    registry,
+    skipDefaultRegistration: true,
+  });
   let raw = '';
   try {
     for await (const event of session.events) {
@@ -330,6 +485,20 @@ const agentId = required(
 const expectedRevisions = expectedRevisionMap(argument(
   'expected-revisions', process.env.PRODUCTION_ACCEPTANCE_EXPECTED_REVISIONS,
 ));
+const requireLiveTts = enabled(argument(
+  'require-live-tts', process.env.PRODUCTION_ACCEPTANCE_REQUIRE_LIVE_TTS,
+));
+const requireReleaseIdentity = enabled(argument('require-release-identity', false));
+const expectedGitSha = argument(
+  'expected-git-sha', process.env.PRODUCTION_ACCEPTANCE_EXPECTED_GIT_SHA,
+);
+const release = runtimeReleaseMetadata();
+if (requireReleaseIdentity) {
+  assert.match(String(expectedGitSha ?? ''), /^[0-9a-f]{40}$/iu,
+    'A full --expected-git-sha is required for the production release gate');
+  assert.equal(release.gitSha, expectedGitSha,
+    'The running container Git SHA does not match the deployment candidate');
+}
 const replayPath = resolve(argument(
   'replay-file', process.env.PRODUCTION_ACCEPTANCE_REPLAY_FILE
     ?? 'fixtures/failed-call-2026-08-19-production.json',
@@ -343,6 +512,7 @@ assert.ok(Array.isArray(replay.calls) && replay.calls.length > 0, 'At least one 
 
 const agent = await resolveAgent(agentId);
 const candidateRevisions = await verifyCandidateRevisions(agent, expectedRevisions);
+const extractionArtifacts = await verifyExtractionArtifacts(agent, expectedRevisions);
 const candidateRevisionFingerprint = revisionFingerprint(candidateRevisions);
 const direction = agent.usage_direction === 'outbound' ? 'outbound' : 'inbound';
 const resolvedAgent = {
@@ -357,9 +527,10 @@ const auth = {
 const tools = runtimeTools(profile.tools);
 const samples = [];
 const results = [];
-let semanticCandidates = 0;
+let qdrantCandidates = 0;
 const replayLanguages = new Set();
 const safeResponse = configuredSafeFailureResponse(profile);
+const providerRegistry = registerImplementedProviderAdapters(new ProviderAdapterRegistry());
 
 try {
   for (const call of replay.calls) {
@@ -369,6 +540,7 @@ try {
       tenantId: agent.tenant_id, workspaceId: agent.workspace_id,
       agentId: agent.id, callId,
     }, profile.agent.settings, Date.now(), { language: profile.agent.language });
+    const recordAliases = new Map();
     try {
       if (call.initialAssistantTurn) {
         memory.append({ role: 'assistant', content: String(call.initialAssistantTurn) });
@@ -396,8 +568,14 @@ try {
           usageDirection: direction,
           language: snapshot.language,
           memory: {
+            activeEntity: snapshot.activeEntity,
+            activeCategory: snapshot.activeCategory,
             knownEntities: snapshot.knownEntities,
+            comparisonEntities: snapshot.comparisonEntities,
+            recentConversation: snapshot.recentTurns,
             pendingQuestion: snapshot.pendingQuestion?.text ?? null,
+            pendingClarification: snapshot.pendingClarification,
+            latestIntent: snapshot.latestIntent,
             collectedInformation: snapshot.collectedInformation,
           },
         }));
@@ -438,15 +616,18 @@ try {
           assert.equal(evidenceBelongsToRuntime(source, scope), true,
             `${call.id} turn ${index + 1}: foreign, stale or unhydrated evidence ${source.recordId}`);
         }
-        semanticCandidates += Number(tenantEvidence.retrieval?.semanticCandidates ?? 0);
+        const qdrantCandidateCount = Number(tenantEvidence.retrieval?.channels?.qdrant ?? 0);
+        qdrantCandidates += qdrantCandidateCount;
         // Qdrant validates semantic discovery. Authoritative hydration may then
         // replace a matching category seed with complete PostgreSQL children;
         // those children must not inherit a fabricated vector score.
         const positiveSemanticCandidates = (retrievalTrace.retrievedCandidates ?? [])
-          .filter((candidate) => Number(candidate.semanticScore) > 0
-            && (candidate.channels ?? []).includes('semantic'));
-        if (turn.allowSafeResponse !== true) {
-          assert.ok(Number(tenantEvidence.retrieval?.semanticCandidates ?? 0) > 0,
+          .filter((candidate) => Number(candidate.providerScores?.qdrant) > 0
+            && (candidate.channels ?? []).includes('qdrant'));
+        const directCanonicalMemory = (tenantEvidence.retrieval?.searchedIndexes ?? [])
+          .includes('direct_canonical_memory');
+        if (turn.allowSafeResponse !== true && !directCanonicalMemory) {
+          assert.ok(qdrantCandidateCount > 0,
             `${call.id} turn ${index + 1}: semantic retrieval returned no candidates`);
           assert.ok(positiveSemanticCandidates.length > 0,
             `${call.id} turn ${index + 1}: semantic retrieval trace has no genuine non-zero score`);
@@ -475,9 +656,16 @@ try {
         let unifiedApplied = false;
         let groundedStateUpdate = null;
         if (engineDecision.type === knowledgeEngineDecisionTypes.CLARIFY) {
-          finalDecision = 'safe_failure';
-          finalText = safeResponse;
-          if (turn.allowSafeResponse !== true) {
+          if (turn.allowTargetedClarification === true) {
+            finalDecision = 'clarify';
+            finalText = engineDecision.clarification?.prompt;
+            assert.ok(String(finalText ?? '').trim(),
+              `${call.id} turn ${index + 1}: targeted clarification has no prompt`);
+          } else {
+            finalDecision = 'safe_failure';
+            finalText = safeResponse;
+          }
+          if (turn.allowSafeResponse !== true && turn.allowTargetedClarification !== true) {
             throw new Error(`${call.id} turn ${index + 1}: unexpectedly routed to safe failure (${engineDecision.reason})`);
           }
         } else if (engineDecision.type === knowledgeEngineDecisionTypes.RESPONSE
@@ -517,7 +705,7 @@ try {
             },
             usageDirection: direction,
           };
-          let rawDecision = await collectDecision(profile, decisionInput);
+          let rawDecision = await collectDecision(profile, decisionInput, providerRegistry);
           let unified = applyUnifiedGroundedTurn({
             rawDecision, groundingEnvelope: envelope, memory, turnToken: token,
             fieldSchemas: memory.fieldSchemas(), tools, evidence: hydrated, evidenceScope: scope,
@@ -535,7 +723,7 @@ try {
                   numbers: unified.numbers ?? [],
                 },
               },
-            });
+            }, providerRegistry);
             unified = applyUnifiedGroundedTurn({
               rawDecision, groundingEnvelope: envelope, memory, turnToken: token,
               fieldSchemas: memory.fieldSchemas(), tools, evidence: hydrated, evidenceScope: scope,
@@ -587,9 +775,12 @@ try {
         }
         const expectation = verifyTurnExpectations({
           call, index, turn, tenantEvidence, hydrated, envelope,
-          selectedRecordIds, responseId, finalText, safeResponse,
+          selectedRecordIds, responseId, finalText, finalDecision, safeResponse,
           memoryState: memory.snapshot(), memoryBefore: snapshot, groundedStateUpdate,
+          recordAliases,
         });
+        const tts = requireLiveTts
+          ? await synthesizeLiveTts(profile, finalText, providerRegistry) : null;
         if (!unifiedApplied) {
           memory.append({ role: 'assistant', content: finalText }, { turnToken: token });
         }
@@ -618,15 +809,17 @@ try {
           routing: engineDecision, expectation,
           language: replayLanguage,
           positiveSemanticRecordIds: positiveSemanticCandidates.map(sourceRecordId),
+          directCanonicalMemory,
           toolSafe: true, ttsText: finalText, latencyMs: { retrievalMs, llmMs, totalMs },
+          tts,
         });
       }
     } finally {
       memory.close();
     }
   }
-  assert.ok(semanticCandidates > 0, 'No Qdrant semantic candidates were observed in the live replay');
-  for (const language of ['ta', 'tanglish', 'en']) {
+  assert.ok(qdrantCandidates > 0, 'No Qdrant semantic candidates were observed in the live replay');
+  for (const language of replay.requiredLanguages ?? ['ta', 'tanglish', 'en']) {
     assert.ok(replayLanguages.has(language), `Live replay is missing unseen ${language} coverage`);
   }
   const latency = Object.fromEntries(['retrievalMs', 'llmMs', 'totalMs'].map((field) => [field, {
@@ -663,8 +856,10 @@ try {
     replayFile: replayPath,
     sourceCallIds: replay.calls.map((call) => call.sourceCallId).filter(Boolean),
     callCount: replay.calls.length, turnCount: results.length,
-    semanticCandidates, latency, thresholds,
+    qdrantCandidates, latency, thresholds,
     candidateRevisions, candidateRevisionFingerprint,
+    extractionArtifacts,
+    release,
     replayLanguages: [...replayLanguages].sort(),
     verification: {
       allHydratedEvidenceScopeValidated: true,
@@ -686,6 +881,9 @@ try {
       catalogDetailsValidated: true,
       fallbackValidated: true,
       finalTtsTextValidated: results.length,
+      liveTtsAudioValidated: requireLiveTts ? results.length : 0,
+      extractionArtifactsValidated: extractionArtifacts.length,
+      deployedReleaseIdentityValidated: requireReleaseIdentity,
     },
     results,
   };
@@ -693,7 +891,7 @@ try {
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
   console.log(JSON.stringify({
     passed: true, mode: report.mode, callCount: report.callCount,
-    turnCount: report.turnCount, semanticCandidates, latency, thresholds,
+    turnCount: report.turnCount, qdrantCandidates, latency, thresholds,
     verification: report.verification, reportPath,
   }));
 } finally {

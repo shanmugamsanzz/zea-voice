@@ -1,4 +1,4 @@
-export const CANONICAL_TOPIC_MEMORY_VERSION = 3;
+export const CANONICAL_TOPIC_MEMORY_VERSION = 4;
 
 const catalogTypes = new Set(['CATALOG_ITEM', 'CATALOG_CATEGORY']);
 
@@ -28,6 +28,49 @@ function scoped(scope = {}) {
   return result;
 }
 
+/**
+ * Normalizes the only Catalog identity shape that may be persisted as active
+ * call memory. Display text is deliberately insufficient: a remembered topic
+ * must point back to one tenant-published PostgreSQL record and revision.
+ */
+export function normalizeCanonicalRecordMemory(value = {}, {
+  scope = {}, expectedRecordType = null,
+} = {}) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const recordType = clean(value.recordType, 80).toLocaleUpperCase();
+  if (!catalogTypes.has(recordType)
+    || (expectedRecordType && recordType !== String(expectedRecordType).toLocaleUpperCase())) return null;
+  const tenantId = clean(value.tenantId ?? scope.tenantId, 160);
+  const knowledgeBaseId = clean(value.knowledgeBaseId, 160);
+  const publicationRevision = revision(value.publicationRevision);
+  const recordId = clean(value.recordId ?? value.id, 160);
+  const category = recordType === 'CATALOG_CATEGORY';
+  const itemKey = category ? null : clean(value.itemKey ?? value.key, 160);
+  const categoryKey = clean(value.categoryKey ?? (category ? value.key : null), 160);
+  const canonicalName = clean(
+    value.canonicalName ?? value.name ?? (category ? value.category : null), 240,
+  );
+  if (!tenantId || !knowledgeBaseId || publicationRevision === null || !recordId
+    || !canonicalName || (category ? !categoryKey : !itemKey)) return null;
+  if (scope.tenantId && normalized(tenantId) !== normalized(scope.tenantId)) return null;
+  return Object.freeze({
+    tenantId,
+    knowledgeBaseId,
+    publicationRevision,
+    recordType,
+    recordId,
+    ...(itemKey ? { itemKey } : {}),
+    ...(categoryKey ? { categoryKey } : {}),
+    canonicalName,
+    id: recordId,
+    entityType: category ? 'CATEGORY' : 'ITEM',
+    key: category ? categoryKey : itemKey,
+    name: canonicalName,
+    category: clean(value.category, 240) || (category ? canonicalName : null),
+    agentId: clean(value.agentId ?? scope.agentId, 160) || null,
+  });
+}
+
 function canonicalRecord(source, scope) {
   if (source?.tenantId && normalized(source.tenantId) !== normalized(scope.tenantId)) return null;
   if (source?.agentId && normalized(source.agentId) !== normalized(scope.agentId)) return null;
@@ -39,20 +82,18 @@ function canonicalRecord(source, scope) {
   const key = clean(category ? data.categoryKey : data.itemKey, 160);
   const name = clean(category ? data.category : data.name, 240);
   if (!recordId || !key || !name) return null;
-  return Object.freeze({
-    id: recordId,
-    recordId,
-    tenantId: clean(source.tenantId, 160),
-    agentId: clean(source.agentId, 160),
-    knowledgeBaseId: clean(source.knowledgeBaseId, 160),
-    publicationRevision: revision(source.publicationRevision),
+  return normalizeCanonicalRecordMemory({
+    tenantId: source.tenantId ?? scope.tenantId,
+    agentId: source.agentId ?? scope.agentId,
+    knowledgeBaseId: source.knowledgeBaseId,
+    publicationRevision: source.publicationRevision,
     recordType: category ? 'CATALOG_CATEGORY' : 'CATALOG_ITEM',
-    entityType: category ? 'CATEGORY' : 'ITEM',
-    key,
-    name,
+    recordId,
+    itemKey: category ? null : key,
+    categoryKey: clean(data.categoryKey, 160) || (category ? key : null),
+    canonicalName: name,
     category: clean(data.category, 240) || null,
-    categoryKey: clean(data.categoryKey, 160) || null,
-  });
+  }, { scope });
 }
 
 function unresolvedResolution(resolution, reason) {
@@ -137,7 +178,8 @@ export function confirmCanonicalTopicResolution(resolution = {}, {
       return reasons.has('canonical_memory');
     }
     const requiredReason = mode === 'COMPARISON' ? 'explicit_comparison' : 'explicit_entity';
-    return reasons.has(requiredReason) || reasons.has('explicit_current_entity');
+    return reasons.has(requiredReason) || reasons.has('explicit_current_entity')
+      || (mode === 'EXPLICIT' && reasons.has('category_unique_child'));
   });
   return supported ? resolution
     : unresolvedResolution(resolution, `${mode.toLocaleLowerCase()}_entity_not_confirmed`);
@@ -153,6 +195,25 @@ function uniqueRecords(values = []) {
     records.push(value);
   }
   return Object.freeze(records.slice(0, 5));
+}
+
+function selectableCategoryChildren(category, records, evidence) {
+  if (!category || category.recordType !== 'CATALOG_CATEGORY') return Object.freeze([]);
+  const source = (Array.isArray(evidence) ? evidence : []).find((entry) => (
+    normalized(entry?.recordId) === normalized(category.recordId)
+    && String(entry?.recordType ?? '').toLocaleUpperCase() === 'CATALOG_CATEGORY'
+  ));
+  const publishedChildIds = new Set((source?.authoritativeData?.children ?? [])
+    .filter((child) => child?.selectionRules?.selectable === true)
+    .map((child) => normalized(child?.recordId)).filter(Boolean));
+  if (!publishedChildIds.size) return Object.freeze([]);
+  return uniqueRecords(records.filter((record) => (
+    record.recordType === 'CATALOG_ITEM'
+    && publishedChildIds.has(normalized(record.recordId))
+    && normalized(record.categoryKey) === normalized(category.categoryKey)
+    && normalized(record.knowledgeBaseId) === normalized(category.knowledgeBaseId)
+    && record.publicationRevision === category.publicationRevision
+  )));
 }
 
 export function resolveCanonicalTopicMemory({
@@ -208,7 +269,24 @@ export function resolveCanonicalTopicMemory({
       reason: 'explicit_catalog_selection_ambiguous',
     });
   }
-  const explicit = explicitSelections[0] ?? null;
+  let explicit = explicitSelections[0] ?? null;
+  if (explicit?.recordType === 'CATALOG_CATEGORY') {
+    const selectableChildren = selectableCategoryChildren(explicit, records, evidence);
+    if (selectableChildren.length === 1) [explicit] = selectableChildren;
+    else if (selectableChildren.length > 1) {
+      return Object.freeze({
+        version: CANONICAL_TOPIC_MEMORY_VERSION,
+        scope: isolatedScope,
+        mode: 'EXPLICIT',
+        activeEntity: null,
+        activeCategory: explicit,
+        comparisonEntities: Object.freeze([]),
+        categoryCandidates: selectableChildren,
+        requiresTargetedClarification: true,
+        reason: 'category_item_selection_required',
+      });
+    }
+  }
   if (explicit) {
     return Object.freeze({
       version: CANONICAL_TOPIC_MEMORY_VERSION,

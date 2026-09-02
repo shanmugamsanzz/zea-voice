@@ -16,11 +16,10 @@ import { closeRecordingWorker, startRecordingWorker } from './telephony/recordin
 import { closePostCallSummaryWorker, startPostCallSummaryWorker } from './voice/postcall-summary/postcall-summary.worker.js';
 import { executePostCallSummaryJob } from './voice/postcall-summary/postcall-summary.processor.js';
 import { closeCallReconciliation, startCallReconciliation } from './voice/call-reconciliation.service.js';
+import { runtimeReleaseMetadata } from './release/runtime-release-metadata.js';
 //this is test-2
 async function bootstrap() {
-  logger.info({
-    engine: 'unified_grounded_decision',
-  }, 'Voice conversation engine selected');
+    logger.info(runtimeReleaseMetadata(), 'Voice conversation engine selected');
   await runPendingMigrations();
   const [databaseHealth, redisHealth, ragHealth] = await Promise.all([
     checkDatabase(),

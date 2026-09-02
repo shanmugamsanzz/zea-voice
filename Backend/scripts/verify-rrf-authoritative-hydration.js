@@ -382,7 +382,7 @@ assert.equal(requestedIds.includes(ids[4]), false,
 assert.deepEqual(hydrated.rejectedRecordIds, [],
   'Every selected top-five identity must hydrate and verify in the same query');
 
-await assert.rejects(() => rankAndHydrateAuthoritativeEvidence({
+const partiallyHydrated = await rankAndHydrateAuthoritativeEvidence({
   auth: { tenantId }, input, classification, resolution, retrieval,
 }, {
   contextRunner: async (_auth, callback) => callback({
@@ -395,8 +395,11 @@ await assert.rejects(() => rankAndHydrateAuthoritativeEvidence({
       })) };
     },
   }),
-}), (error) => error?.code === 'KNOWLEDGE_AUTHORITATIVE_HYDRATION_INCOMPLETE',
-'Missing any selected top-five PostgreSQL record must fail hydration before packaging');
+});
+assert.equal(partiallyHydrated.evidence.length, 1,
+  'Successfully hydrated evidence must survive when an optional ranked record is stale');
+assert.equal(partiallyHydrated.rejectedRecordIds.length, 1,
+  'A missing optional ranked record must remain observable without failing the turn');
 
 assert.equal(detectEntityAmbiguity(hydrated.evidence, {
   intentClass: knowledgeQueryClasses.COMPARISON_COMPLEX, requiresConfirmation: true,
@@ -475,13 +478,12 @@ const empty = await rankAndHydrateAuthoritativeEvidence({
 assert.equal(emptyQueryCount, 0);
 assert.equal(empty.hydrationQueryCount, 0);
 
-await assert.rejects(() => rankAndHydrateAuthoritativeEvidence({
+const optionalEmpty = await rankAndHydrateAuthoritativeEvidence({
   auth: { tenantId }, input, classification, resolution, retrieval,
-}, { contextRunner: async () => [] }), (error) => (
-  error?.code === 'KNOWLEDGE_AUTHORITATIVE_HYDRATION_EMPTY'
-  && error?.details?.stage === 'authoritative_hydration'
-  && error?.details?.selectedCandidates?.length > 0
-));
+}, { contextRunner: async () => [] });
+assert.equal(optionalEmpty.evidence.length, 0,
+  'Missing optional retrieval candidates must become zero evidence, not technical failure');
+assert.ok(optionalEmpty.rejectedRecordIds.length > 0);
 
 await assert.rejects(() => rankAndHydrateAuthoritativeEvidence({
   auth: { tenantId: '90000000-0000-4000-8000-000000000099' },

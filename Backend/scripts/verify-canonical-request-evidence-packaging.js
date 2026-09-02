@@ -43,6 +43,8 @@ function evidence(recordId, recordType = 'CATALOG_ITEM') {
   return {
     id: `published:${recordType.toLowerCase()}:${recordId}`,
     recordId, recordType, tenantId: 'tenant-a', agentId: 'agent-a',
+    knowledgeBaseId: 'kb-a', publicationRevision: 4,
+    documentId: `document-${recordId}`, documentVersionId: `version-${recordId}`,
     hydrationValidated: true, publicationValidated: true, callerFacing: true,
     authoritativeData: recordType === 'CATALOG_ITEM'
       ? { itemKey: recordId, name: recordId }
@@ -51,7 +53,9 @@ function evidence(recordId, recordType = 'CATALOG_ITEM') {
 }
 
 const authoritative = {
+  tenantId: 'tenant-a', agentId: 'agent-a', callId: 'call-a',
   reservations: [{
+    tenantId: 'tenant-a', knowledgeBaseId: 'kb-a', publicationRevision: 4,
     recordId: memoryRecord.recordId, recordType: 'CATALOG_ITEM', reason: 'canonical_memory',
   }],
   evidence: [
@@ -67,7 +71,59 @@ const packaged = buildGroundedLlmInput({
   resolution: { candidateNamespace: 'CATALOG', contextDependent: true },
   authoritative, runtimeProfile: { tools: [] },
 });
-assert.deepEqual(packaged.hydratedRecords.map((entry) => entry.recordId), [memoryRecord.recordId]);
+assert.deepEqual(packaged.hydratedRecords.map((entry) => entry.recordId), [
+  memoryRecord.recordId, 'unrelated-faq', 'unrelated-workflow',
+], 'Packaging must preserve the already verified authoritative hydration result');
+
+const optionalUseCaseRecord = 'unrelated-published-use-case';
+const optionalUseCasePackage = buildGroundedLlmInput({
+  input: baseInput,
+  classification: { intentClass: 'DETAILS_OR_PRICE' },
+  resolution: { candidateNamespace: 'CATALOG', contextDependent: true },
+  authoritative: {
+    ...authoritative,
+    reservations: [
+      authoritative.reservations[0],
+      {
+        tenantId: 'tenant-a', knowledgeBaseId: 'kb-a', publicationRevision: 4,
+        recordId: optionalUseCaseRecord, recordType: 'CATALOG_ITEM',
+        reason: 'published_use_case',
+      },
+    ],
+    evidence: [evidence(memoryRecord.recordId)],
+  },
+  runtimeProfile: { tools: [] },
+});
+assert.deepEqual(optionalUseCasePackage.hydratedRecords.map((entry) => entry.recordId), [
+  memoryRecord.recordId,
+], 'A missing published use-case record must not block a contextual price package');
+assert.equal(optionalUseCasePackage.hydratedRecords[0].required, true);
+assert.deepEqual(optionalUseCasePackage.hydratedRecords[0].reservationReasons, [
+  'canonical_memory',
+]);
+const hydratedOptionalUseCasePackage = buildGroundedLlmInput({
+  input: baseInput,
+  classification: { intentClass: 'DETAILS_OR_PRICE' },
+  resolution: { candidateNamespace: 'CATALOG', contextDependent: true },
+  authoritative: {
+    ...authoritative,
+    reservations: [
+      authoritative.reservations[0],
+      {
+        tenantId: 'tenant-a', knowledgeBaseId: 'kb-a', publicationRevision: 4,
+        recordId: optionalUseCaseRecord, recordType: 'CATALOG_ITEM',
+        reason: 'published_use_case',
+      },
+    ],
+    evidence: [evidence(memoryRecord.recordId), evidence(optionalUseCaseRecord)],
+  },
+  runtimeProfile: { tools: [] },
+});
+const optionalSupportingEvidence = hydratedOptionalUseCasePackage.hydratedRecords
+  .find((entry) => entry.recordId === optionalUseCaseRecord);
+assert.equal(optionalSupportingEvidence.required, false,
+  'A hydrated published use case must remain optional supporting evidence');
+assert.deepEqual(optionalSupportingEvidence.reservationReasons, []);
 
 assert.throws(() => buildGroundedLlmInput({
   input: baseInput,
@@ -92,7 +148,9 @@ const comparisonPackage = buildGroundedLlmInput({
   classification: { intentClass: 'COMPARISON_COMPLEX' },
   resolution: { candidateNamespace: 'CATALOG' },
   authoritative: {
+    tenantId: 'tenant-a', agentId: 'agent-a', callId: 'call-a',
     reservations: comparisonRecords.map((recordId) => ({
+      tenantId: 'tenant-a', knowledgeBaseId: 'kb-a', publicationRevision: 4,
       recordId, recordType: 'CATALOG_ITEM', reason: 'explicit_comparison',
     })),
     evidence: comparisonRecords.map((recordId) => evidence(recordId)),
@@ -103,5 +161,5 @@ assert.deepEqual(comparisonPackage.hydratedRecords.map((entry) => entry.recordId
 
 console.log(JSON.stringify({
   success: true,
-  task: 'Canonical request retrieval and namespace-isolated evidence packaging',
+  task: 'Canonical request retrieval and mandatory-only evidence packaging',
 }));

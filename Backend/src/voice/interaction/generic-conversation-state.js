@@ -1,4 +1,5 @@
 import { resolveLiveMemoryConfiguration } from './live-memory-config.js';
+import { normalizeCanonicalRecordMemory } from '../../knowledge-engine/canonical-topic-memory.js';
 
 const activeCalls = new Map();
 const maximumMessages = 2_000;
@@ -79,7 +80,9 @@ function cleanEntity(value = {}) {
     publicationRevision: Number.isInteger(Number(value.publicationRevision))
       ? Number(value.publicationRevision) : null,
     recordType: cleanText(value.recordType, 80).toLocaleUpperCase() || null,
+    itemKey: cleanText(value.itemKey ?? (!categoryEntity ? key : null), 160) || null,
     key: key || null, name: name || key || id,
+    canonicalName: cleanText(value.canonicalName ?? name, 240) || name || key || id,
     category: cleanText(value.category, 240) || null,
     categoryKey: cleanText(value.categoryKey, 160) || null,
   });
@@ -126,6 +129,8 @@ function clarificationIdentity(value) {
 
 function cleanCategory(value = {}) {
   if (!value || typeof value !== 'object') return null;
+  const suppliedRecordType = cleanText(value.recordType, 80).toLocaleUpperCase();
+  if (suppliedRecordType && suppliedRecordType !== 'CATALOG_CATEGORY') return null;
   const id = cleanText(value.id ?? value.recordId, 100);
   const key = cleanText(value.categoryKey ?? value.key, 160);
   const name = cleanText(value.category ?? value.name, 240);
@@ -138,10 +143,18 @@ function cleanCategory(value = {}) {
     knowledgeBaseId: cleanText(value.knowledgeBaseId, 160) || null,
     publicationRevision: Number.isInteger(Number(value.publicationRevision))
       ? Number(value.publicationRevision) : null,
-    recordType: cleanText(value.recordType, 80).toLocaleUpperCase() || 'CATALOG_CATEGORY',
+    recordType: 'CATALOG_CATEGORY',
+    categoryKey: key || null,
     key: key || null,
     name: name || key || id,
+    canonicalName: cleanText(value.canonicalName ?? name, 240) || name || key || id,
     parentKey: cleanText(value.parentKey, 160) || null,
+  });
+}
+
+function canonicalEntity(value, scope, recordType) {
+  return normalizeCanonicalRecordMemory(value, {
+    scope, expectedRecordType: recordType,
   });
 }
 
@@ -648,8 +661,9 @@ export function openGenericConversationState(identity, settings = {}, now = Date
         throw new Error('Canonical topic resolution scope mismatch');
       }
       const mode = cleanText(resolution.mode, 40).toLocaleUpperCase();
-      const comparisons = uniqueEntities(resolution.comparisonEntities)
-        .filter((entity) => Boolean(entity.id));
+      const comparisons = (resolution.comparisonEntities ?? [])
+        .map((entity) => canonicalEntity(entity, state.scope, 'CATALOG_ITEM'))
+        .filter(Boolean);
       if (mode === 'COMPARISON') {
         const invalidComparisonType = (resolution.comparisonEntities ?? []).some((entity) => (
           cleanText(entity?.recordType, 80).toLocaleUpperCase() !== 'CATALOG_ITEM'
@@ -660,13 +674,9 @@ export function openGenericConversationState(identity, settings = {}, now = Date
         state.comparisonEntities = comparisons;
         state.knownEntities = comparisons;
         state.activeEntity = null;
-        const categories = comparisons.map((entity) => cleanCategory({
-          categoryKey: entity.categoryKey, category: entity.category,
-        })).filter(Boolean);
-        const categoryKeys = new Set(categories.map((category) => (
-          cleanText(category.key, 160).toLocaleLowerCase()
-        )));
-        state.activeCategory = categoryKeys.size === 1 ? categories[0] : null;
+        // Comparison items may share a category key, but that key is not the
+        // category's PostgreSQL record identity.
+        state.activeCategory = null;
         state.currentTopic = comparisons.map((entity) => entity.name).join(' / ');
       } else if (mode === 'EXPLICIT') {
         const previousRecordId = cleanText(
@@ -679,15 +689,14 @@ export function openGenericConversationState(identity, settings = {}, now = Date
             ?? resolution.activeCategory?.recordId ?? resolution.activeCategory?.id,
           160,
         ).toLocaleLowerCase();
-        const entity = cleanText(resolution.activeEntity?.recordType, 80).toLocaleUpperCase()
-          === 'CATALOG_ITEM' ? cleanEntity(resolution.activeEntity) : null;
-        const category = cleanText(resolution.activeCategory?.recordType, 80).toLocaleUpperCase()
-          === 'CATALOG_CATEGORY' ? cleanCategory(resolution.activeCategory) : null;
+        const entity = canonicalEntity(resolution.activeEntity, state.scope, 'CATALOG_ITEM');
+        const category = canonicalEntity(resolution.activeCategory, state.scope, 'CATALOG_CATEGORY');
         if (entity?.id) {
           state.activeEntity = entity;
-          state.activeCategory = cleanCategory({
-            categoryKey: entity.categoryKey, category: entity.category,
-          });
+          // An item's record ID is never a category record ID. Category scope
+          // remains available on activeEntity.categoryKey without fabricating
+          // a second canonical record.
+          state.activeCategory = null;
           state.knownEntities = [entity];
           state.comparisonEntities = [];
           state.currentTopic = entity.name;
@@ -708,10 +717,8 @@ export function openGenericConversationState(identity, settings = {}, now = Date
           state.collectedInformation = {};
         }
       } else if (mode === 'CONTEXTUAL') {
-        const entity = cleanText(resolution.activeEntity?.recordType, 80).toLocaleUpperCase()
-          === 'CATALOG_ITEM' ? cleanEntity(resolution.activeEntity) : null;
-        const category = cleanText(resolution.activeCategory?.recordType, 80).toLocaleUpperCase()
-          === 'CATALOG_CATEGORY' ? cleanCategory(resolution.activeCategory) : null;
+        const entity = canonicalEntity(resolution.activeEntity, state.scope, 'CATALOG_ITEM');
+        const category = canonicalEntity(resolution.activeCategory, state.scope, 'CATALOG_CATEGORY');
         const currentRecordId = cleanText(
           state.activeEntity?.recordId ?? state.activeEntity?.id
             ?? state.activeCategory?.recordId ?? state.activeCategory?.id,
@@ -728,9 +735,7 @@ export function openGenericConversationState(identity, settings = {}, now = Date
         }
         if (entity?.id) {
           state.activeEntity = entity;
-          state.activeCategory = cleanCategory({
-            categoryKey: entity.categoryKey, category: entity.category,
-          }) ?? state.activeCategory;
+          state.activeCategory = null;
           state.knownEntities = [entity];
           state.currentTopic = entity.name;
         } else if (category?.id) {

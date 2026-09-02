@@ -4,10 +4,13 @@ import { requireEntityId, requireTenantId } from '../rag/tenant-isolation.js';
 import { knowledgeQueryClasses } from './query-classifier.js';
 import { canonicalRecordIdentityKey, typedRecordIdentityKey } from './canonical-record-identity.js';
 import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/knowledge-confidence-config.js';
-import { collectCanonicalRetrievalReservations } from './canonical-retrieval-reservations.js';
+import {
+  collectCanonicalRetrievalReservations,
+  isMandatoryCanonicalReservation,
+} from './canonical-retrieval-reservations.js';
 import { publicationDuplicateKeys } from './publication-deduplication.js';
 
-export const AUTHORITATIVE_EVIDENCE_VERSION = 9;
+export const AUTHORITATIVE_EVIDENCE_VERSION = 10;
 
 const supportedRecordTypes = new Set([
   'CATALOG_ITEM', 'CATALOG_CATEGORY', 'FAQ', 'CONVERSATION_NODE', 'WORKFLOW_RULE', 'KNOWLEDGE_CHUNK',
@@ -886,6 +889,9 @@ export async function rankAndHydrateAuthoritativeEvidence({
     throw new TypeError('Authoritative hydration requires inbound or outbound usage direction');
   }
   const reservedCandidates = reservedResolutionCandidates(input, classification, resolution, retrieval);
+  const mandatoryReservedCandidates = reservedCandidates.filter(
+    isMandatoryCanonicalReservation,
+  );
   const reservationReasonsByRecordKey = new Map();
   for (const candidate of reservedCandidates) {
     const key = recordKey(candidate);
@@ -975,52 +981,15 @@ export async function rankAndHydrateAuthoritativeEvidence({
   const rejectedRecordIds = fusion.candidates
     .filter((candidate) => !hydratedIdentityKeys.has(candidate.canonicalIdentityKey))
     .map((candidate) => candidate.recordId);
-  const selectedCandidateId = recordKey(resolution?.candidate);
-  const selectedCandidateWasRanked = fusion.candidates.some((candidate) => (
-    recordKey(candidate) === selectedCandidateId
-  ));
-  const selectedCandidateHydrated = selectedCandidateId && hydratedTypedKeys.has(selectedCandidateId);
-  if (fusion.candidates.length > 0 && evidence.length === 0) {
-    throw new AppError(503,
-      'Selected retrieval candidates could not be hydrated from the active PostgreSQL publication',
-      'KNOWLEDGE_AUTHORITATIVE_HYDRATION_EMPTY', {
-        stage: 'authoritative_hydration',
-        selectedCandidates: fusion.candidates.map((candidate) => ({
-          recordId: candidate.recordId,
-          recordType: candidate.recordType,
-          knowledgeBaseId: candidate.knowledgeBaseId,
-          publicationRevision: candidate.publicationRevision,
-        })),
-        rejectedRecordIds,
-      });
-  }
-  if (selectedCandidateWasRanked && !selectedCandidateHydrated) {
-    throw new AppError(503,
-      'The resolved authoritative candidate could not be hydrated from the active PostgreSQL publication',
-      'KNOWLEDGE_SELECTED_CANDIDATE_NOT_HYDRATED', {
-        stage: 'authoritative_hydration',
-        recordId: resolution.candidate.recordId,
-        recordType: resolution.candidate.recordType,
-        candidateNamespace: resolution.candidateNamespace,
-        rejectedRecordIds,
-      });
-  }
-  if (rejectedRecordIds.length > 0) {
-    throw new AppError(503,
-      'Not every top-ranked candidate was hydrated from the active PostgreSQL publication',
-      'KNOWLEDGE_AUTHORITATIVE_HYDRATION_INCOMPLETE', {
-        stage: 'authoritative_hydration',
-        selectedRecordCount: fusion.candidates.length,
-        hydratedRecordCount: evidence.length,
-        rejectedRecordIds,
-      });
-  }
   const verifiedRecords = Object.freeze(evidence.map((source) => (
     verifyHydratedEvidenceRecord(source, input)
   )));
-  const missingComparisonRecordKeys = fusion.reservedRecordKeys
+  const comparisonReservedCandidates = mandatoryReservedCandidates.filter((candidate) => (
+    candidate.reason === 'explicit_comparison'
+  ));
+  const missingComparisonRecordKeys = comparisonReservedCandidates.map(recordKey)
     .filter((key) => !hydratedTypedKeys.has(key));
-  const missingComparisonRecordIds = reservedCandidates.filter((candidate) => (
+  const missingComparisonRecordIds = comparisonReservedCandidates.filter((candidate) => (
     missingComparisonRecordKeys.includes(recordKey(candidate))
   )).map((candidate) => candidate.recordId);
   const detectedAmbiguity = detectEntityAmbiguity(evidence, classification, resolution);

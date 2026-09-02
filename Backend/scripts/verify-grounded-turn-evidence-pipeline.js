@@ -170,6 +170,93 @@ assert.ok(result.authoritative.evidence.every((source) => (
   && source.provenance.pageNumber
 )));
 
+const rememberedItemId = '94000000-0000-4000-8010-000000000001';
+const rememberedDocumentId = '94000000-0000-4000-8011-000000000001';
+const rememberedVersionId = '94000000-0000-4000-8012-000000000001';
+const rememberedFollowupInput = createKnowledgeEngineInput({
+  tenantId, agentId, callId, usageDirection: 'inbound',
+  utterance: 'What is its price?', requestedFacts: ['price'],
+  queryUnderstanding: {
+    explicitEntities: [], explicitCategories: [], comparisonEntities: [],
+    contextDependent: true,
+    requestedFact: 'price',
+    actionIntent: { detected: false, requested: false },
+  },
+  memory: {
+    activeEntity: {
+      tenantId, agentId, knowledgeBaseId, publicationRevision: 9,
+      recordType: 'CATALOG_ITEM', recordId: rememberedItemId,
+      itemKey: 'remembered-item', categoryKey: 'remembered-category',
+      canonicalName: 'Remembered Item',
+    },
+  },
+});
+let rememberedHydrationQueries = 0;
+let hybridSearchCalls = 0;
+const rememberedFollowup = await retrieveRankHydrateGroundedTurn({
+  auth: { tenantId }, input: rememberedFollowupInput,
+  classification: {
+    tenantId, agentId, callId, intentClass: 'KNOWN_INFORMATION',
+    retrievalPlan: { indexes: ['CATALOG', 'BM25', 'SEMANTIC'] },
+  },
+  resolution: {
+    candidate: null, candidateNamespace: null, routingCandidates: [],
+    namespaceCandidates: {}, action: 'RETRIEVE', contextDependent: true,
+  },
+  publicationBundles: [], sparseIndexes: [], runtimeProfile: { tools: [] },
+}, {
+  minProviderScore: 0,
+  retrieval: {
+    embed: async () => {
+      hybridSearchCalls += 1;
+      throw new Error('Semantic search must not rediscover remembered entities');
+    },
+    search: async () => {
+      hybridSearchCalls += 1;
+      throw new Error('Vector search must not rediscover remembered entities');
+    },
+  },
+  hydration: {
+    contextRunner: async (_auth, callback) => callback({
+      query: async (_sql, parameters) => {
+        rememberedHydrationQueries += 1;
+        const requested = JSON.parse(parameters[3]);
+        assert.deepEqual(requested.map((candidate) => candidate.record_id), [rememberedItemId]);
+        assert.equal(requested[0].knowledge_base_id, knowledgeBaseId);
+        assert.equal(requested[0].publication_revision, 9);
+        return { rows: [{
+          record_type: 'CATALOG_ITEM', record_id: rememberedItemId,
+          knowledge_base_id: knowledgeBaseId, tenant_id: tenantId,
+          publication_revision: 9, document_id: rememberedDocumentId,
+          document_version_id: rememberedVersionId,
+          document_name: 'remembered-catalog.txt',
+          document_display_name: 'Remembered Catalog', document_type: 'txt',
+          document_status: 'ready', document_version_status: 'ready',
+          document_version_is_current: true, source_page_start: 1, source_page_end: 1,
+          source_section: 'Remembered Item', source_line_start: 1, source_line_end: 4,
+          language: 'mul', content: 'Remembered Item has a published price.',
+          caller_facing: true,
+          authoritative_data: {
+            itemKey: 'remembered-item', categoryKey: 'remembered-category',
+            name: 'Remembered Item', price: { amount: 2000, currency: 'INR' },
+          },
+        }] };
+      },
+    }),
+  },
+});
+assert.equal(hybridSearchCalls, 0,
+  'A canonical single-entity follow-up must not call BM25, embedding or Qdrant search');
+assert.equal(rememberedHydrationQueries, 1,
+  'The remembered PostgreSQL record must be hydrated in one authoritative query');
+assert.equal(rememberedFollowup.retrieval.retrievalMode, 'direct_canonical_memory');
+assert.deepEqual(rememberedFollowup.authoritative.evidence
+  .map((source) => source.recordId), [rememberedItemId]);
+assert.deepEqual(rememberedFollowup.llmInput.hydratedRecords
+  .map((source) => source.recordId), [rememberedItemId]);
+assert.ok(rememberedFollowup.authoritative.evidence[0]
+  .reservationReasons.includes('canonical_memory'));
+
 const llm = result.llmInput;
 assert.deepEqual(Object.keys(llm).sort(), [
   'ambiguityCandidates', 'canonicalMemory', 'currentQuestion', 'hydratedRecords',

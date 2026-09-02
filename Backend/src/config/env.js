@@ -16,6 +16,7 @@ const envSchema = z.object({
   CORS_ORIGINS: z.string().default('http://localhost:3000'),
   PERFORMANCE_MEASUREMENT_ENABLED: booleanFromString.default(true),
   PERFORMANCE_SLOW_REQUEST_MS: z.coerce.number().int().min(100).max(120000).default(2000),
+  DEPLOY_GIT_SHA: z.preprocess(emptyToUndefined, z.string().max(64).optional()),
 
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
   AUTO_MIGRATE: booleanFromString.default(true),

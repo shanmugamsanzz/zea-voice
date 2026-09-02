@@ -20,7 +20,28 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
+            set -eu
             cd /opt/zea-voice-app
             git pull origin main
-            docker compose down
-            docker compose up -d --build
+            export DEPLOY_GIT_SHA="$(git rev-parse HEAD)"
+            docker compose build
+            docker compose up -d embedding
+            release_attempt=1
+            while [ "$release_attempt" -le 3 ]; do
+              echo "Running production release gate attempt $release_attempt/3 for $DEPLOY_GIT_SHA"
+              docker compose run --rm \
+                -e PRODUCTION_ACCEPTANCE_EXPECTED_GIT_SHA="$DEPLOY_GIT_SHA" \
+                backend npm run verify:shanmuga-production-release-gate
+              release_attempt=$((release_attempt + 1))
+            done
+            docker compose up -d --remove-orphans
+            attempt=0
+            until docker exec zea-voice-backend node -e "fetch('http://127.0.0.1:1112/health/release').then(async r=>{if(!r.ok)process.exit(1);const x=(await r.json()).release;if(!x||x.gitSha!==process.env.DEPLOY_GIT_SHA||!x.versions||Object.keys(x.versions).length===0)process.exit(1)}).catch(()=>process.exit(1))"; do
+              attempt=$((attempt + 1))
+              if [ "$attempt" -ge 30 ]; then
+                docker logs --tail 200 zea-voice-backend
+                exit 1
+              fi
+              sleep 2
+            done
+            docker logs --tail 200 zea-voice-backend | grep -F "$DEPLOY_GIT_SHA"

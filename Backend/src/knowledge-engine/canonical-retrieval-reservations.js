@@ -1,7 +1,23 @@
 import { typedRecordIdentityKey } from './canonical-record-identity.js';
 import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/knowledge-confidence-config.js';
 
-export const CANONICAL_RETRIEVAL_RESERVATIONS_VERSION = 4;
+export const CANONICAL_RETRIEVAL_RESERVATIONS_VERSION = 5;
+
+const mandatoryReservationReasons = new Set([
+  'explicit_current_entity',
+  'explicit_entity',
+  'explicit_comparison',
+  'canonical_memory',
+  'category_unique_child',
+  'authorized_workflow',
+]);
+
+export function isMandatoryCanonicalReservation(value = {}) {
+  const reason = normalized(value.reason);
+  if (!mandatoryReservationReasons.has(reason)) return false;
+  return reason !== 'authorized_workflow'
+    || String(value.recordType ?? '').trim().toUpperCase() === 'WORKFLOW_RULE';
+}
 
 function normalized(value) {
   return String(value ?? '').trim().toLocaleLowerCase();
@@ -126,13 +142,16 @@ export function collectCanonicalRetrievalReservations(request = {}, retrieval = 
     && !memory.activeEntity && latestCandidateType === 'CATALOG_ITEM')
     || (latestCategoryKey && latestCategoryKey === activeCategoryKey)
     || latestCandidate?.explicit === true;
+  const latestRequestReason = latestCandidateType === 'WORKFLOW_RULE'
+    && classification.intentClass === 'ACTION_TOOL_REQUEST'
+    ? 'authorized_workflow' : 'latest_request_record';
   const latestRequest = latestCandidate?.recordId
     && categoryScopedCandidate
     && (latestCandidate.explicit === true
       || Number(latestCandidate.score ?? 0) >= confidence.highConfidence)
     && (latestCandidateType !== 'WORKFLOW_RULE'
       || classification.intentClass === 'ACTION_TOOL_REQUEST')
-    ? [compact(latestCandidate, 'latest_request_record')].filter(Boolean) : [];
+    ? [compact(latestCandidate, latestRequestReason)].filter(Boolean) : [];
   const useCase = request.input?.queryUnderstanding?.need?.detected === true
     ? (retrieval?.channels?.structured ?? []).find((candidate) => (
       candidate.matchMethod === 'published_use_case'

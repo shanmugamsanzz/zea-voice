@@ -182,6 +182,21 @@ const latestFaq = await retrieve(baseInput, {
 assert.equal(latestFaq.queryContext.reservedRecords[0].recordId, records[2].record_id);
 assert.equal(latestFaq.queryContext.reservedRecords[0].reason, 'latest_request_record');
 
+const actionWorkflowCandidate = {
+  recordId: records[4].record_id, recordType: 'WORKFLOW_RULE', score: 0.95,
+};
+const actionWorkflow = await retrieve(baseInput, {
+  ...baseClassification,
+  intentClass: 'ACTION_TOOL_REQUEST', candidate: actionWorkflowCandidate,
+  selectedNamespace: 'WORKFLOW', confidenceConfiguration: { highConfidence: 0.86 },
+  retrievalPlan: { indexes: ['WORKFLOW'] },
+}, {
+  ...emptyResolution,
+  candidate: actionWorkflowCandidate, candidateNamespace: 'WORKFLOW',
+});
+assert.equal(actionWorkflow.queryContext.reservedRecords[0].recordId, records[4].record_id);
+assert.equal(actionWorkflow.queryContext.reservedRecords[0].reason, 'authorized_workflow');
+
 const overviewRecord = records[3];
 const overviewCandidate = {
   recordId: overviewRecord.record_id,

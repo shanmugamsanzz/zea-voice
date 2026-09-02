@@ -2,13 +2,19 @@ import {
   rankAndHydrateAuthoritativeEvidence,
 } from '../knowledge-engine/authoritative-evidence.js';
 import { searchParallelHybridCandidates } from './parallel-hybrid-search.js';
-import { resolveCanonicalTopicMemory } from '../knowledge-engine/canonical-topic-memory.js';
+import {
+  normalizeCanonicalRecordMemory,
+  resolveCanonicalTopicMemory,
+} from '../knowledge-engine/canonical-topic-memory.js';
 import {
   canonicalRecordIdentityKey,
 } from '../knowledge-engine/canonical-record-identity.js';
 import { buildDeterministicSourceMap } from '../knowledge-engine/deterministic-source-mapping.js';
 import { AppError } from '../middleware/errors.js';
 import { resolveKnowledgeConfidenceConfiguration } from './knowledge-confidence-config.js';
+import {
+  isMandatoryCanonicalReservation,
+} from '../knowledge-engine/canonical-retrieval-reservations.js';
 import { selectCompleteConversationTurns } from '../knowledge-engine/conversation-turn-context.js';
 import { resolveLiveMemoryConfiguration } from '../voice/interaction/live-memory-config.js';
 import {
@@ -16,8 +22,86 @@ import {
 } from '../knowledge-engine/grounded-evidence-representation.js';
 import { env } from '../config/env.js';
 
-export const GROUNDED_TURN_EVIDENCE_VERSION = 9;
+export const GROUNDED_TURN_EVIDENCE_VERSION = 12;
 const maximumEvidenceRecords = 5;
+
+function directRememberedFollowupRetrieval(input = {}, classification = {}, resolution = {}) {
+  const understanding = input.queryUnderstanding ?? {};
+  const memory = input.canonicalCallMemory ?? input.memory ?? {};
+  const explicitCount = (understanding.explicitEntities?.length ?? 0)
+    + (understanding.explicitCategories?.length ?? 0)
+    + (understanding.comparisonEntities?.length ?? 0);
+  const actionRequested = understanding.actionIntent?.detected === true
+    || understanding.actionIntent?.requested === true
+    || Boolean(memory.activeTool)
+    || String(understanding.currentRouteSignal?.recordType ?? '').toUpperCase()
+      === 'WORKFLOW_RULE'
+    || String(classification.intentClass ?? '').toUpperCase() === 'ACTION_TOOL_REQUEST';
+  const ambiguous = understanding.ambiguity?.detected === true
+    || classification.requiresConfirmation === true
+    || resolution.action === 'CONFIRM';
+  const contextual = understanding.contextDependent === true
+    || resolution.contextDependent === true;
+  if (!contextual || explicitCount > 0 || actionRequested || ambiguous
+    || String(classification.intentClass ?? '').toUpperCase() === 'COMPARISON_COMPLEX') return null;
+
+  const scope = { tenantId: input.tenantId, agentId: input.agentId, callId: input.callId };
+  const remembered = normalizeCanonicalRecordMemory(
+    memory.activeEntity,
+    { scope, expectedRecordType: 'CATALOG_ITEM' },
+  );
+  if (!remembered) return null;
+
+  const reservation = Object.freeze({
+    tenantId: remembered.tenantId,
+    agentId: remembered.agentId ?? input.agentId,
+    knowledgeBaseId: remembered.knowledgeBaseId,
+    publicationRevision: remembered.publicationRevision,
+    recordType: remembered.recordType,
+    recordId: remembered.recordId,
+    itemKey: remembered.itemKey,
+    categoryKey: remembered.categoryKey ?? null,
+    canonicalName: remembered.canonicalName,
+    reason: 'canonical_memory',
+  });
+  const candidate = Object.freeze({
+    ...reservation,
+    namespace: 'CATALOG',
+    channel: 'structured',
+    rank: 1,
+    namespaceRank: 1,
+    score: 1,
+    tokenCoverage: 1,
+    callerFacingHint: true,
+    authorizationHint: false,
+    matchMethod: 'canonical_memory',
+  });
+  return Object.freeze({
+    tenantId: input.tenantId,
+    agentId: input.agentId,
+    callId: input.callId,
+    intentClass: classification.intentClass ?? 'KNOWN_INFORMATION',
+    retrievalMode: 'direct_canonical_memory',
+    directCanonicalMemory: true,
+    searchedIndexes: Object.freeze(['direct_canonical_memory']),
+    relevantNamespaces: Object.freeze(['CATALOG']),
+    primaryNamespaces: Object.freeze(['CATALOG']),
+    recordTypes: Object.freeze(['CATALOG_ITEM']),
+    queryContext: Object.freeze({
+      contextDependent: true,
+      contextualText: [remembered.canonicalName, input.requestedFact]
+        .filter(Boolean).join(' '),
+      reservedRecords: Object.freeze([reservation]),
+    }),
+    channels: Object.freeze({
+      structured: Object.freeze([candidate]),
+      bm25: Object.freeze([]),
+      qdrant: Object.freeze([]),
+    }),
+    channelFailures: Object.freeze([]),
+    candidateCount: 1,
+  });
+}
 
 async function completeStageWithin(stage, operation, timeoutMs) {
   const deadlineMs = Math.max(1, Number(timeoutMs));
@@ -156,14 +240,7 @@ function matchingCanonicalEvidenceKeys(candidate, sources, input = {}) {
 }
 
 function requiredReservations(authoritative = {}) {
-  const requiredReasons = new Set([
-    'explicit_current_entity', 'explicit_entity', 'explicit_comparison',
-    'canonical_memory', 'category_unique_child', 'published_overview',
-    'published_use_case', 'latest_request_record',
-  ]);
-  return (authoritative.reservations ?? []).filter((entry) => (
-    requiredReasons.has(entry.reason)
-  ));
+  return (authoritative.reservations ?? []).filter(isMandatoryCanonicalReservation);
 }
 
 function assertRequiredEvidenceInvariant(authoritative, hydratedRecords = null) {
@@ -275,10 +352,10 @@ function canonicalCandidateName(candidate = {}, evidenceByRecordId = new Map()) 
   return clean(candidate.name ?? candidate.label ?? data.question ?? data.name, 240);
 }
 
-function activeCategoryChildren(input = {}, authoritative = {}) {
+function activeCategoryChildren(input = {}, authoritative = {}, resolvedCategory = null) {
   const memory = input?.canonicalCallMemory ?? input?.memory ?? {};
-  if (memory.activeEntity || !memory.activeCategory) return Object.freeze([]);
-  const active = memory.activeCategory;
+  if (!resolvedCategory && (memory.activeEntity || !memory.activeCategory)) return Object.freeze([]);
+  const active = resolvedCategory ?? memory.activeCategory;
   const activeRecordId = normalizedId(active.recordId ?? active.id);
   const activeCategoryKey = normalizedId(active.categoryKey ?? active.key);
   const activeKnowledgeBaseId = normalizedId(active.knowledgeBaseId);
@@ -310,6 +387,7 @@ function activeCategoryChildren(input = {}, authoritative = {}) {
 function categorySelectionContext(input = {}, classification = {}, children = []) {
   const understanding = input?.queryUnderstanding ?? {};
   const noCurrentItem = (understanding.explicitEntities?.length ?? 0) === 0;
+  const explicitCategory = (understanding.explicitCategories?.length ?? 0) === 1;
   const contextual = understanding.contextDependent === true;
   const overview = String(classification?.intentClass ?? '').toUpperCase()
     === 'CATEGORY_OVERVIEW';
@@ -320,8 +398,9 @@ function categorySelectionContext(input = {}, classification = {}, children = []
     || understanding.actionIntent?.requested === true;
   const comparisonRequested = understanding.meaning?.comparisonRequested === true
     || (understanding.comparisonEntities?.length ?? 0) > 0;
-  const requiresSelection = noCurrentItem && contextual && !overview
-    && (requestedFact || actionRequested || comparisonRequested);
+  const requiresSelection = noCurrentItem && !overview
+    && (explicitCategory || (contextual
+      && (requestedFact || actionRequested || comparisonRequested)));
   return Object.freeze({
     detected: requiresSelection && children.length > 1,
     uniqueChild: requiresSelection && children.length === 1 ? children[0] : null,
@@ -513,7 +592,9 @@ export function buildGroundedLlmInput({
       ?? input?.memory?.pendingClarification?.missingFactType,
     160,
   ) || null;
-  const categoryChildren = activeCategoryChildren(input, authoritative);
+  const categoryChildren = activeCategoryChildren(
+    input, authoritative, canonicalResolution.activeCategory,
+  );
   const categorySelection = categorySelectionContext(input, classification, categoryChildren);
   const candidates = ambiguityCandidates(
     input, authoritative, resolution, classification,
@@ -634,7 +715,10 @@ export async function retrieveRankHydrateGroundedTurn({
     classification?.confidenceConfiguration ?? resolution?.confidenceConfiguration,
   );
   const retrievalStartedAt = performance.now();
-  const retrieval = await completeStageWithin('retrieval', () => (
+  const directRememberedRetrieval = directRememberedFollowupRetrieval(
+    input, classification, resolution,
+  );
+  const retrieval = directRememberedRetrieval ?? await completeStageWithin('retrieval', () => (
     searchParallelHybridCandidates({
       input, classification, resolution, publicationBundles, sparseIndexes,
       limitPerChannel: dependencies.limitPerChannel ?? 12,

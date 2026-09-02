@@ -32,9 +32,12 @@ services:
     build:
       context: ./Backend
       dockerfile: Dockerfile
+      args:
+        DEPLOY_GIT_SHA: ${DEPLOY_GIT_SHA:-unknown}
     env_file:
       - ./Backend/.env
     environment:
+      DEPLOY_GIT_SHA: ${DEPLOY_GIT_SHA:-unknown}
       EMBEDDING_BASE_URL: http://embedding:80
     depends_on:
       embedding:

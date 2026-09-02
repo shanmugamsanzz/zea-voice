@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "description": "Release-blocking replay of the canonical Shanmuga Hospital production failure. Expected vocabulary exists only in test data.",
+  "requiredLanguages": ["ta"],
+  "calls": [
+    {
+      "id": "shanmuga-canonical-release",
+      "language": "ta",
+      "turns": [
+        {
+          "utterance": "Diabetic package பத்தி சொல்லுங்க",
+          "expectedAnyEntityKeys": ["diabetes-health-checkup-package"],
+          "expectedMemoryEntityKey": "diabetes-health-checkup-package",
+          "expectedActiveEntityKey": "diabetes-health-checkup-package",
+          "rememberRecordAs": "diabetes",
+          "requireNoUnrelatedEvidence": true
+        },
+        {
+          "utterance": "இதோட price எவ்ளோ?",
+          "expectedAnyEntityKeys": ["diabetes-health-checkup-package"],
+          "expectedMemoryEntityKey": "diabetes-health-checkup-package",
+          "expectedActiveEntityKey": "diabetes-health-checkup-package",
+          "expectedSameRecordAs": "diabetes",
+          "expectedPriceAmount": 3200,
+          "requireNoUnrelatedEvidence": true
+        },
+        {
+          "utterance": "Heart package பத்தி சொல்லுங்க",
+          "expectedAnyEntityKeys": ["cardiac-health-checkup"],
+          "expectedMemoryEntityKey": "cardiac-health-checkup",
+          "expectedActiveEntityKey": "cardiac-health-checkup",
+          "rememberRecordAs": "cardiac",
+          "requireNoUnrelatedEvidence": true
+        },
+        {
+          "utterance": "Goldக்கும் Silverக்கும் என்ன வித்தியாசம்?",
+          "expectedAnyEntityKeys": [
+            "gold-master-health-checkup",
+            "silver-master-health-checkup"
+          ],
+          "expectedExactCatalogEntityKeys": [
+            "gold-master-health-checkup",
+            "silver-master-health-checkup"
+          ],
+          "requireNoUnrelatedEvidence": true
+        },
+        {
+          "utterance": "Oncare package பத்தி சொல்லுங்க",
+          "expectedAnyCategoryKeys": ["oncology-screening"],
+          "allowTargetedClarification": true,
+          "requireNoUnrelatedEvidence": true
+        }
+      ]
+    }
+  ]
+}

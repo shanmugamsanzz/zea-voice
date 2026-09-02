@@ -202,6 +202,7 @@
     "verify:realtime-reliability": "node scripts/verify-realtime-reliability-gate.js --repeats=3",
     "verify:live-equivalent-regression": "node scripts/verify-realtime-reliability-gate.js --repeats=3",
     "verify:live-production-acceptance": "node scripts/verify-live-production-acceptance.js",
+    "verify:shanmuga-production-release-gate": "node scripts/verify-live-production-acceptance.js --allow-live-transcript-processing=true --require-live-tts=true --require-release-identity=true --replay-file=fixtures/shanmuga-canonical-production-release.json --report-file=artifacts/shanmuga-production-release-report.json",
     "verify:failed-call-production-gate": "node scripts/verify-live-production-acceptance.js --replay-file=fixtures/failed-call-2026-08-19-production.json --report-file=artifacts/production-acceptance-report.json",
     "verify:production-activation-gate": "npm run verify:realtime-reliability && node scripts/verify-live-production-acceptance.js --replay-file=fixtures/failed-call-2026-08-19-production.json --report-file=artifacts/production-acceptance-report.json",
     "report:production-latency": "node scripts/build-production-latency-report.js",

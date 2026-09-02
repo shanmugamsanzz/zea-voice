@@ -1,5 +1,9 @@
 FROM node:22-alpine
 
+ARG DEPLOY_GIT_SHA=unknown
+ENV DEPLOY_GIT_SHA=${DEPLOY_GIT_SHA}
+LABEL org.opencontainers.image.revision=${DEPLOY_GIT_SHA}
+
 WORKDIR /app
 ENV NODE_ENV=production
 RUN apk add --no-cache ffmpeg

@@ -13,7 +13,7 @@ import { publishedRecordCallerFacingHint } from './evidence-audience.js';
 import { selectCompleteConversationTurns } from './conversation-turn-context.js';
 import { buildPublicationDeduplicationIdentity } from './publication-deduplication.js';
 
-export const TARGETED_RETRIEVAL_VERSION = 10;
+export const TARGETED_RETRIEVAL_VERSION = 12;
 
 const documentIndexTypes = Object.freeze({
   [knowledgeSearchIndexes.CATALOG]: 'CATALOG_ITEM',
@@ -83,7 +83,7 @@ function uniqueText(values, maximum = 20) {
 function compactEntity(value, fallbackRecordType = 'CATALOG_ITEM') {
   if (!value || typeof value !== 'object') return null;
   const recordId = clean(value.recordId ?? value.id, 160);
-  const name = clean(value.name ?? value.label ?? value.category, 240);
+  const name = clean(value.canonicalName ?? value.name ?? value.label ?? value.category, 240);
   const recordType = String(value.recordType ?? (value.entityType === 'CATEGORY'
     ? 'CATALOG_CATEGORY' : fallbackRecordType)).trim().toUpperCase();
   return recordId || name ? Object.freeze({
@@ -93,6 +93,11 @@ function compactEntity(value, fallbackRecordType = 'CATALOG_ITEM') {
     knowledgeBaseId: clean(value.knowledgeBaseId, 160) || null,
     publicationRevision: Number.isInteger(Number(value.publicationRevision))
       ? Number(value.publicationRevision) : null,
+    itemKey: clean(value.itemKey ?? (recordType === 'CATALOG_ITEM' ? value.key : null), 160)
+      || null,
+    categoryKey: clean(value.categoryKey
+      ?? (recordType === 'CATALOG_CATEGORY' ? value.key : null), 160) || null,
+    canonicalName: name || null,
   }) : null;
 }
 
@@ -111,10 +116,10 @@ function selectableCatalogItem(record = {}) {
     && record.selectionRules?.selectable === true;
 }
 
-function activeCategorySelectableChildren(input, recordScope) {
+function categorySelectableChildren(input, recordScope, categoryCandidate = null) {
   if (!(recordScope instanceof Map)) return Object.freeze([]);
   const memory = input?.canonicalCallMemory ?? input?.memory ?? {};
-  const activeCategory = memory.activeCategory;
+  const activeCategory = categoryCandidate ?? memory.activeCategory;
   if (!activeCategory) return Object.freeze([]);
   const categoryKey = normalizeId(activeCategory.categoryKey ?? activeCategory.key);
   const knowledgeBaseId = normalizeId(activeCategory.knowledgeBaseId);
@@ -254,9 +259,9 @@ export function buildContextEnrichedRetrievalQuery(
   if (!hasCurrentEntityMention && contextDependent && canonicalEntity?.recordId) {
     reserved.push(Object.freeze({ ...canonicalEntity, reason: 'canonical_memory' }));
   }
-  const categoryChildren = !hasCurrentEntityMention && contextDependent
-    && canonicalEntity?.recordType === 'CATALOG_CATEGORY'
-    ? activeCategorySelectableChildren(input, recordScope) : [];
+  const categoryChildren = canonicalEntity?.recordType === 'CATALOG_CATEGORY'
+    && (hasExplicitCurrentEntity || (!hasCurrentEntityMention && contextDependent))
+    ? categorySelectableChildren(input, recordScope, canonicalEntity) : [];
   // A category may supply item facts only when its current publication has one
   // selectable child. Multiple children remain candidates for clarification;
   // retrieval must never choose one merely because it ranked first.
@@ -275,7 +280,7 @@ export function buildContextEnrichedRetrievalQuery(
       recordId: activeWorkflow.recordId,
       recordType: 'WORKFLOW_RULE',
       name: activeWorkflow.canonicalName ?? null,
-      reason: 'active_tool_authorization',
+      reason: 'authorized_workflow',
     }));
   }
   const reservedRecords = Object.freeze([...new Map(reserved.map((entry) => (
@@ -310,7 +315,7 @@ export function buildContextEnrichedRetrievalQuery(
     ] : []),
   ]);
   const searchText = primaryQueryParts.join(' ');
-  const contextualText = contextDependent ? uniqueText([
+  const contextualText = (contextDependent || need.detected === true) ? uniqueText([
     ...primaryQueryParts,
     ...recentCompleteContext,
   ]).join(' ') : null;
