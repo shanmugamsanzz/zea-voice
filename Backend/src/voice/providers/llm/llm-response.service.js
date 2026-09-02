@@ -65,6 +65,98 @@ function configuredArray(value, field) {
     });
 }
 
+function parseGroundedTurnInput(systemPrompt) {
+  const serialized = /<grounded_turn_input>\n([\s\S]+?)\n<\/grounded_turn_input>/u
+    .exec(String(systemPrompt ?? ''))?.[1];
+  if (!serialized) {
+    throw new AppError(500, 'The grounded system prompt has no turn input envelope',
+      'LLM_GROUNDED_INPUT_INVALID', {
+        initializationStage: 'single_grounded_envelope', field: 'grounded_turn_input',
+      });
+  }
+  try {
+    const parsed = JSON.parse(serialized);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new TypeError();
+    return parsed;
+  } catch {
+    throw new AppError(500, 'The grounded system prompt turn input is invalid',
+      'LLM_GROUNDED_INPUT_INVALID', {
+        initializationStage: 'single_grounded_envelope', field: 'grounded_turn_input',
+      });
+  }
+}
+
+export function buildSingleGroundedLlmEnvelope({
+  systemPrompt, groundingEnvelope, authorizedToolSchemas,
+} = {}) {
+  const retained = parseGroundedTurnInput(systemPrompt);
+  const retainedRecords = configuredArray(retained.verifiedRecords, 'verified evidence').slice(0, 5);
+  const retainedSourceIds = new Set(retainedRecords
+    .map((record) => String(record?.sourceId ?? '').trim()).filter(Boolean));
+  if (retainedRecords.length !== retainedSourceIds.size) {
+    throw new AppError(500, 'The grounded LLM evidence IDs are incomplete or duplicated',
+      'LLM_GROUNDED_INPUT_INVALID', {
+        initializationStage: 'single_grounded_envelope', field: 'verifiedEvidence',
+      });
+  }
+  const sourceById = new Map((groundingEnvelope?.sources ?? [])
+    .map((source) => [String(source?.id ?? '').trim(), source]).filter(([id]) => id));
+  const sourceMapById = new Map((groundingEnvelope?.sourceMap ?? [])
+    .map((source) => [String(source?.sourceId ?? '').trim(), source]).filter(([id]) => id));
+  const verifiedSources = [...retainedSourceIds].map((sourceId) => sourceById.get(sourceId));
+  const verifiedSourceMap = [...retainedSourceIds].map((sourceId) => sourceMapById.get(sourceId));
+  if (verifiedSources.some((source) => !source) || verifiedSourceMap.some((source) => !source)) {
+    throw new AppError(500, 'The grounded LLM evidence does not match its verified source map',
+      'LLM_GROUNDED_SOURCE_CONTRACT_MISMATCH', {
+        retainedSourceIds: [...retainedSourceIds],
+        availableSourceIds: [...sourceById.keys()],
+        mappedSourceIds: [...sourceMapById.keys()],
+      });
+  }
+  const retainedToolNames = new Set(configuredArray(
+    retained.assignedToolSchemas, 'authorized tool schemas',
+  ).map((tool) => String(tool?.name ?? '').trim()).filter(Boolean));
+  const tools = configuredArray(authorizedToolSchemas, 'authorized tool schemas')
+    .filter((tool) => retainedToolNames.has(String(tool?.name ?? '').trim()));
+  if (tools.length !== retainedToolNames.size) {
+    throw new AppError(500, 'The grounded prompt tools do not match authorized runtime schemas',
+      'LLM_GROUNDED_INPUT_INVALID', {
+        initializationStage: 'single_grounded_envelope', field: 'authorizedToolSchemas',
+      });
+  }
+  const currentQuestion = String(retained.currentQuestion ?? '').trim();
+  if (!currentQuestion) {
+    throw new AppError(500, 'The grounded LLM envelope has no current question',
+      'LLM_GROUNDED_INPUT_INVALID', {
+        initializationStage: 'single_grounded_envelope', field: 'currentQuestion',
+      });
+  }
+  const relevantMemory = retained.relevantMemory && typeof retained.relevantMemory === 'object'
+    ? retained.relevantMemory : {};
+  const finalGroundingEnvelope = Object.freeze({
+    ...(groundingEnvelope ?? {}),
+    found: verifiedSources.length > 0,
+    sources: Object.freeze(verifiedSources),
+    sourceMap: Object.freeze(verifiedSourceMap),
+  });
+  return Object.freeze({
+    version: 1,
+    systemPrompt: String(systemPrompt),
+    currentQuestion,
+    relevantHistory: Object.freeze(configuredArray(
+      relevantMemory.recentTurns, 'relevant conversation history',
+    )),
+    canonicalMemory: Object.freeze(relevantMemory.canonical ?? {}),
+    verifiedEvidence: Object.freeze(retainedRecords),
+    authorizedToolSchemas: Object.freeze(tools),
+    workflowAuthorization: Object.freeze(configuredArray(
+      retained.applicableWorkflow, 'workflow authorization',
+    )),
+    zeroEvidencePolicy: Object.freeze(retained.zeroEvidencePolicy ?? {}),
+    groundingEnvelope: finalGroundingEnvelope,
+  });
+}
+
 const truncatedFinishReasons = new Set([
   'length', 'max_tokens', 'max_output_tokens', 'max_tokens_reached', 'incomplete',
 ]);
@@ -191,20 +283,20 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
       input.knowledge ?? { found: false, route: 'none' },
       compactGrounding ? { includePublishedMap: false, maximumSources: 5 } : {},
     ));
-  const decisionRuntime = {
+  const promptDecisionRuntime = {
     fieldSchemas: configuredFields,
     toolSchemas: validatedDecisionTools,
     zeroEvidenceResponse: input.context?.zeroEvidenceResponse
       ?? input.context?.groundedDecisionInput?.zeroEvidencePolicy
         ?.informationUnavailableResponse ?? '',
   };
-  const providerQuery = groundedResponseMode
+  const initialProviderQuery = groundedResponseMode
     ? String(input.context?.groundedDecisionInput?.currentQuestion ?? input.query ?? '').slice(0, 2_000)
     : input.query;
   const characterBudget = selectedLlmPromptBudget(compactGrounding);
-  const systemCharacterBudget = characterBudget - promptCharacterCount(providerQuery);
+  const systemCharacterBudget = characterBudget - promptCharacterCount(initialProviderQuery);
   const systemTokenBudget = env.VOICE_LLM_PROMPT_BUDGET_TOKENS
-    - estimatePromptTextTokens(providerQuery);
+    - estimatePromptTextTokens(initialProviderQuery);
   if (systemCharacterBudget <= 0 || systemTokenBudget <= 0) {
     throw new AppError(413, 'The caller question exceeds the configured prompt budget',
       'LLM_GROUNDED_PROMPT_BUDGET_EXCEEDED', {
@@ -223,22 +315,23 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
     maxPromptChars: systemCharacterBudget,
     maxPromptTokens: systemTokenBudget,
   }));
-  let groundedContextMessages = 0;
-  let groundedContextPairs = 0;
-  if (groundedResponseMode) {
-    const serializedInput = /<grounded_turn_input>\n([\s\S]+?)\n<\/grounded_turn_input>/u
-      .exec(systemPrompt)?.[1];
-    if (serializedInput) {
-      try {
-        const retainedTurns = JSON.parse(serializedInput)?.relevantMemory?.recentTurns;
-        groundedContextMessages = Array.isArray(retainedTurns) ? retainedTurns.length : 0;
-        groundedContextPairs = Math.floor(groundedContextMessages / 2);
-      } catch {
-        // Prompt validation owns malformed input handling. These counters are
-        // observability only and must never alter a grounded decision.
-      }
-    }
-  }
+  const singleGroundedEnvelope = groundedResponseMode
+    ? initialize('single_grounded_envelope', () => buildSingleGroundedLlmEnvelope({
+      systemPrompt,
+      groundingEnvelope,
+      authorizedToolSchemas: validatedDecisionTools,
+    })) : null;
+  const providerQuery = singleGroundedEnvelope?.currentQuestion ?? initialProviderQuery;
+  const effectiveGroundingEnvelope = singleGroundedEnvelope?.groundingEnvelope
+    ?? groundingEnvelope;
+  const decisionRuntime = singleGroundedEnvelope ? {
+    fieldSchemas: configuredFields,
+    toolSchemas: singleGroundedEnvelope.authorizedToolSchemas,
+    zeroEvidenceResponse: singleGroundedEnvelope.zeroEvidencePolicy
+      ?.informationUnavailableResponse ?? '',
+  } : promptDecisionRuntime;
+  const groundedContextMessages = singleGroundedEnvelope?.relevantHistory.length ?? 0;
+  const groundedContextPairs = Math.floor(groundedContextMessages / 2);
   const historyLimit = groundedResponseMode
     ? 0
     : Math.min(
@@ -249,7 +342,7 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
   const boundedHistory = historyLimit > 0
     ? (input.history ?? []).slice(-historyLimit) : [];
   const messages = [
-    { role: 'system', content: systemPrompt },
+    { role: 'system', content: singleGroundedEnvelope?.systemPrompt ?? systemPrompt },
     ...boundedHistory,
     { role: 'user', content: providerQuery },
   ];
@@ -260,7 +353,7 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
   );
   const responseSchema = groundedResponseMode
     ? initialize('response_schema', () => groundedDecisionJsonSchema(
-      groundingEnvelope, decisionRuntime,
+      effectiveGroundingEnvelope, decisionRuntime,
     )) : null;
   const events = initialize('provider_stream', () => llm.stream({
       messages,
@@ -291,6 +384,9 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
     historyMessages: boundedHistory.length,
     groundedContextMessages,
     groundedContextPairs,
+    groundedEnvelopeVersion: singleGroundedEnvelope?.version ?? null,
+    groundedEvidenceRecords: singleGroundedEnvelope?.verifiedEvidence.length ?? 0,
+    groundedAuthorizedTools: singleGroundedEnvelope?.authorizedToolSchemas.length ?? 0,
     maxOutputTokens: groundedResponseMode
       ? selectedGroundedOutputTokenLimit() : env.LLM_MAX_OUTPUT_TOKENS,
     cancel: (reason = 'barge-in') => llm.cancel(reason),

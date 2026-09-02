@@ -72,7 +72,12 @@ const session = await createSelectedLlmStream(profile, {
       sources: records.slice(0, 5).map((record) => ({
         ...record, id: record.sourceId,
       })),
-      sourceMap: [], entities: [], exactCallerResponses: [],
+      sourceMap: records.slice(0, 5).map((record) => ({
+        sourceId: record.sourceId,
+        publishedEvidenceId: record.publishedEvidenceId,
+        recordId: record.recordId,
+      })),
+      entities: [], exactCallerResponses: [],
     },
     groundedDecisionInput: {
       currentQuestion,

@@ -19,6 +19,7 @@ const tools = [{
         customer_name: { type: 'string' },
         visit_date: { type: 'string' },
       },
+      'x-confirmation-message': 'Are these visit details correct?',
     },
   },
 }];
@@ -110,6 +111,36 @@ assert.equal(completed.kind, 'confirmation');
 assert.match(completed.question, /Ravi/u);
 assert.match(completed.question, /2026-08-20/u);
 assert.deepEqual(completed.activeToolRequest.workflowState.missingFields, []);
+
+// Runtime never invents field or confirmation wording when the assigned UI
+// schema is incomplete.
+const missingFieldQuestion = advanceSchemaDrivenWorkflowState({
+  activeRequest: { name: 'create_visit' },
+  fieldSchemas: fieldSchemas.map((field) => (
+    field.key === 'customer_name' ? { ...field, question: '' } : field
+  )),
+  collectedInformation: {}, tools, actionEvidence,
+});
+assert.equal(missingFieldQuestion.valid, false);
+assert.equal(missingFieldQuestion.reason, 'workflow_field_question_missing');
+
+const toolWithoutConfirmation = [{
+  ...tools[0],
+  configuration: {
+    ...tools[0].configuration,
+    inputSchema: {
+      ...tools[0].configuration.inputSchema,
+      'x-confirmation-message': '',
+    },
+  },
+}];
+const missingConfirmation = advanceSchemaDrivenWorkflowState({
+  activeRequest: { name: 'create_visit' }, fieldSchemas,
+  collectedInformation: { customer_name: 'Ravi', visit_date: '2026-08-20' },
+  tools: toolWithoutConfirmation, actionEvidence,
+});
+assert.equal(missingConfirmation.valid, false);
+assert.equal(missingConfirmation.reason, 'workflow_confirmation_message_missing');
 
 // A UI tool can never start field collection without published Workflow
 // authorization, even if the model names the assigned tool.

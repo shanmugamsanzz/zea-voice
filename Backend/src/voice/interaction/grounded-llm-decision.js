@@ -5,19 +5,18 @@ const decisions = new Set(['answer', 'clarify', 'action', 'no_match']);
 const externalDecisions = Object.freeze(['RESPONSE', 'TOOL', 'CLARIFY', 'NO_MATCH']);
 
 function normalizeDecision(value) {
-  const normalized = text(value, 20).toLocaleUpperCase();
+  const normalized = text(value, 20);
   return ({
     RESPONSE: 'answer',
     TOOL: 'action',
     CLARIFY: 'clarify',
     NO_MATCH: 'no_match',
-    ANSWER: 'answer',
-    ACTION: 'action',
-    TOOL_CALL: 'action',
-  })[normalized] ?? normalized.toLocaleLowerCase();
+  })[normalized] ?? '';
 }
 const repairableDecisionReasons = new Set([
   'invalid_json', 'invalid_response_shape', 'invalid_clarification',
+  'clarification_question_required', 'invalid_clarification_reason',
+  'candidate_specific_clarification_required',
   'answer_required', 'unsupported_numeric_fact',
   'unsupported_structured_fact', 'unsupported_technical_term',
   'unsupported_claim_polarity', 'authoritative_ambiguity', 'unsupported_recommendation',
@@ -99,9 +98,13 @@ function recoverablePublishedClarification(runtime = {}) {
     candidate.canonicalName ?? candidate.name ?? candidate.displayName, 200,
   )).filter(Boolean))].slice(0, maximumSources);
   if (!names.length || (genuineAmbiguity && names.length < 2)) return null;
+  const configuredQuestion = text(runtime.clarificationPrompt, 500);
+  const candidateSpecificConfiguredQuestion = configuredQuestion
+    && names.some((name) => identity(configuredQuestion).includes(identity(name)))
+    ? configuredQuestion : '';
   return JSON.stringify({
     decision: 'CLARIFY',
-    answer: `${names.join(' / ')}?`,
+    answer: candidateSpecificConfiguredQuestion || `${names.join(' / ')}?`,
     responseId: null,
     evidenceIds: [],
     toolName: null,
@@ -887,6 +890,19 @@ function validateGroundedLlmDecisionInternal(raw, envelope, runtime = {}) {
 export function validateGroundedLlmDecision(raw, envelope, runtime = {}) {
   const result = validateGroundedLlmDecisionInternal(raw, envelope, runtime);
   if (result.valid) return result;
+  if (repairableDecisionReasons.has(result.reason)
+    && runtime.candidateClarificationRecoveryAttempted !== true) {
+    const clarification = recoverablePublishedClarification(runtime);
+    if (clarification) {
+      const recovered = validateGroundedLlmDecisionInternal(clarification, envelope, {
+        ...runtime, candidateClarificationRecoveryAttempted: true,
+      });
+      if (recovered.valid) return Object.freeze({
+        ...recovered,
+        recoveredFrom: result.reason,
+      });
+    }
+  }
   return Object.freeze({
     ...result,
     structuralDiagnostic: structuralDecisionDiagnostic(raw),

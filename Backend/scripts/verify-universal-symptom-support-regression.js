@@ -57,6 +57,7 @@ function evidenceRecord(definition, currentScope, type) {
     id: `published:${currentScope.knowledgeBaseId}:${currentScope.publicationRevision}:${recordId}`,
     publishedEvidenceId: `published:${currentScope.knowledgeBaseId}:${currentScope.publicationRevision}:${recordId}`,
     recordId, recordType: type, content, callerFacing: true,
+    callerFacingHint: true, callerFacingValidated: true,
     tenantId: currentScope.tenantId, agentId: currentScope.agentId,
     knowledgeBaseId: currentScope.knowledgeBaseId,
     publicationRevision: currentScope.publicationRevision,
@@ -146,7 +147,14 @@ function validateAnswer({ definition, currentScope, llmInput, originalEvidence, 
   assert.equal(validationEvidence.length, llmInput.hydratedRecords.length,
     'Validation must use exactly the authoritative records permitted by packaging');
   const envelope = buildGroundingEnvelope({
-    found: true, tenantEvidence: { sources: envelopeSources(llmInput.hydratedRecords) },
+    found: true,
+    tenantEvidence: {
+      llmEvidenceBundle: {
+        decisionInput: llmInput,
+        sourceMap: llmInput.sourceMap,
+        entities: [],
+      },
+    },
   }, { includePublishedMap: false });
   assert.ok(envelope.sources.length > 0, 'Grounding envelope must contain caller-facing evidence');
   for (const source of envelope.sources) {
@@ -166,7 +174,7 @@ function validateAnswer({ definition, currentScope, llmInput, originalEvidence, 
   const selected = envelope.sources[0];
   const result = applyUnifiedGroundedTurn({
     rawDecision: JSON.stringify({
-      decision: 'answer', answer, responseId: null,
+      decision: 'RESPONSE', answer, responseId: null,
       evidenceIds: [selected.id], stateUpdate: {
         currentTopic: null, knownEntityKeys: [], collectedInformation: {}, correctedFields: [],
       },

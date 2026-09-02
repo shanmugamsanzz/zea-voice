@@ -46,8 +46,11 @@ function envelope(sources) {
 function decision({ type = 'answer', answer = '', evidenceIds = [], entityKeys = [],
   requestType = null, contextDependent = false, toolRequest = null,
   collectedInformation = {}, correctedFields = [], pendingQuestion = null }) {
+  const externalDecision = ({
+    answer: 'RESPONSE', action: 'TOOL', clarify: 'CLARIFY', no_match: 'NO_MATCH',
+  })[type] ?? type;
   return JSON.stringify({
-    decision: type, answer, responseId: null, evidenceIds,
+    decision: externalDecision, answer, responseId: null, evidenceIds,
     stateUpdate: {
       currentTopic: entityKeys[0] ?? requestType,
       knownEntityKeys: entityKeys, collectedInformation, correctedFields,
@@ -193,7 +196,10 @@ for (const [tenantIndex, scope] of tenants.entries()) {
   const tool = {
     id: `tool-${tenantIndex}`, name: `reserve_${tenantIndex}`,
     identifiers: [`reserve_${tenantIndex}`], description: 'Authorized configured action',
-    configuration: { inputSchema: { type: 'object', additionalProperties: false, properties: {} } },
+    configuration: { inputSchema: {
+      type: 'object', additionalProperties: false, properties: {},
+      'x-confirmation-message': 'Do you want me to continue with this configured action?',
+    } },
   };
   const booking = runTurn({
     scope, memory, token: `booking-${tenantIndex}`, question: 'Please reserve the selected option',

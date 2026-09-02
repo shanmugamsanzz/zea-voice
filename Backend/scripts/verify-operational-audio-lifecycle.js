@@ -23,6 +23,9 @@ for (const settings of tenants) {
 assert.equal(configuredInformationUnavailableResponse({
   agent: { settings: { informationUnavailableMessage: 'Configured unavailable response.' } },
 }), 'Configured unavailable response.');
+assert.equal(configuredInformationUnavailableResponse({
+  agent: { settings: { clarificationRecoverySupportMessage: 'Clarification support only.' } },
+}), '', 'clarification support must never substitute for unavailable information speech');
 
 assert.equal(configuredOperationalFailureResponse({
   agent: { settings: {

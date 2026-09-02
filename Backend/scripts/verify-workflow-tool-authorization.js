@@ -128,16 +128,29 @@ const callerFaq = {
 const llmInput = buildGroundedLlmInput({
   input: {
     tenantId, agentId, callId: '73000000-0000-4000-8000-000000000009',
-    latestQuestion: 'Please submit the request.', queryUnderstanding: {}, memory: {},
+    latestQuestion: 'Please submit the request.',
+    queryUnderstanding: {
+      currentRouteSignal: { recordId: workflowRecordId, recordType: 'WORKFLOW_RULE' },
+      actionIntent: { detected: true, authorizationRecordId: workflowRecordId },
+    },
+    memory: {},
   },
   classification: { intentClass: 'ACTION_TOOL_REQUEST' },
   resolution: {},
-  authoritative: { evidence: [callerFaq, internalWorkflow] },
+  authoritative: {
+    tenantId, agentId, callId: '73000000-0000-4000-8000-000000000009',
+    reservations: [{
+      tenantId, knowledgeBaseId, publicationRevision: 2,
+      recordId: workflowRecordId, recordType: 'WORKFLOW_RULE',
+      reason: 'authorized_workflow',
+    }],
+    evidence: [callerFaq, internalWorkflow],
+  },
   runtimeProfile: { tools: [tool], agent: { settings: {} } },
 });
-assert.equal(llmInput.hydratedRecords.length, 2);
-assert.equal(llmInput.sourceMap.length, 1);
-assert.equal(llmInput.sourceMap[0].authoritativeRecordId, faqRecordId);
+assert.equal(llmInput.hydratedRecords.length, 1);
+assert.equal(llmInput.sourceMap.length, 0,
+  'Internal Workflow authorization must remain separate from caller-facing evidence');
 assert.equal(llmInput.workflowAuthorization.length, 1);
 assert.equal(llmInput.workflowAuthorization[0].workflowRecordId, workflowRecordId);
 assert.equal(llmInput.workflowAuthorization[0].toolId, toolId);
@@ -145,7 +158,7 @@ assert.equal(llmInput.toolSchemas[0].name, tool.name);
 assert.deepEqual(llmInput.toolSchemas[0].inputSchema.required, ['contact_name']);
 
 const compact = JSON.parse(compactGroundedDecisionInput(llmInput, 8_000, 4_000));
-assert.deepEqual(compact.verifiedRecords.map((record) => record.recordType), ['FAQ']);
+assert.deepEqual(compact.verifiedRecords.map((record) => record.recordType), []);
 assert.equal(compact.applicableWorkflow[0].workflowRecordId, workflowRecordId);
 assert.equal(compact.assignedToolSchemas[0].name, tool.name);
 

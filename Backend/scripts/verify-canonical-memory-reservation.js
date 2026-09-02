@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   confirmCanonicalTopicResolution,
+  prepareCanonicalRetrievalMemory,
 } from '../src/knowledge-engine/canonical-topic-memory.js';
 import {
   understandContextualKnowledgeQuery,
@@ -111,6 +112,46 @@ assert.equal(memory.applyCanonicalTopicResolution({
 }, { turnToken: 'candidate-noise' }).applied, false);
 assert.equal(memory.snapshot().activeEntity.recordId, priorSelectedRecordId,
   'Unresolved ranked alternatives must not replace the selected item');
+
+const candidateNoiseTransition = prepareCanonicalRetrievalMemory({
+  scope,
+  memory: memory.snapshot(),
+  understanding: {
+    contextDependent: false,
+    currentEntityCandidates: [alternative],
+  },
+});
+assert.equal(candidateNoiseTransition.mode, 'PRESERVED_CANONICAL_CONTEXT');
+assert.equal(candidateNoiseTransition.memory.activeEntity.recordId, entity.recordId,
+  'Ordinary ranked candidates must never replace canonical memory');
+assert.equal(candidateNoiseTransition.memory.activeEntity.tenantId, scope.tenantId);
+assert.equal(candidateNoiseTransition.memory.activeEntity.knowledgeBaseId, 'published-kb');
+assert.equal(candidateNoiseTransition.memory.activeEntity.publicationRevision, 7);
+assert.equal(candidateNoiseTransition.memory.activeEntity.recordType, 'CATALOG_ITEM');
+assert.equal(candidateNoiseTransition.memory.activeEntity.itemKey, entity.key);
+
+const ambiguousTransition = prepareCanonicalRetrievalMemory({
+  scope,
+  memory: memory.snapshot(),
+  understanding: {
+    ambiguity: { detected: true },
+    currentEntityCandidates: [alternative],
+  },
+});
+assert.equal(ambiguousTransition.mode, 'AMBIGUOUS_CURRENT_SELECTION');
+assert.equal(ambiguousTransition.memory.activeEntity.recordId, entity.recordId,
+  'Ambiguous current candidates must preserve the last confirmed record');
+
+const explicitTransition = prepareCanonicalRetrievalMemory({
+  scope,
+  memory: memory.snapshot(),
+  understanding: { explicitEntities: [alternative] },
+});
+assert.equal(explicitTransition.mode, 'EXPLICIT_REPLACEMENT');
+assert.equal(explicitTransition.memory.activeEntity.recordId, alternative.recordId,
+  'Only a complete explicit published identity may replace the active record');
+assert.equal(memory.snapshot().activeEntity.recordId, entity.recordId,
+  'Pre-retrieval transitions must remain transaction-local until grounded confirmation');
 
 const normalTurn = createNormalTurnInput({
   ...scope, finalizedQuestion: 'What is its published value?', memory: memory.snapshot(),

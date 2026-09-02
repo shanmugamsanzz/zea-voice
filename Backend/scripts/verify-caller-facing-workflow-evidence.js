@@ -21,7 +21,7 @@ const supportRoute = {
   recordId: '97000000-0000-4000-8000-000000000005',
   recordType: 'WORKFLOW_RULE', entityType: 'ROUTE',
   label: 'Published support route', intentClass: 'KNOWN_INFORMATION',
-  actionType: 'respond', explicit: true, score: 0.75,
+  actionType: 'respond', explicit: true, score: 0.95,
 };
 const memory = { activeEntity: staleEntity };
 const understanding = understandContextualKnowledgeQuery({
@@ -82,7 +82,7 @@ const llmInput = buildGroundedLlmInput({
 });
 
 assert.deepEqual(llmInput.hydratedRecords.map((source) => source.recordType),
-  ['WORKFLOW_RULE', 'KNOWLEDGE_CHUNK']);
+  ['WORKFLOW_RULE']);
 assert.equal(llmInput.hydratedRecords.some((source) => source.recordType === 'CATALOG_ITEM'), false);
 assert.ok(llmInput.hydratedRecords.every((source) => source.sourceId));
 assert.ok(llmInput.hydratedRecords.length > 0);
@@ -91,7 +91,7 @@ assert.equal(assertNonEmptyGroundedPackage({
     ...source, id: source.publishedEvidenceId,
     hydrationValidated: true, publicationValidated: true,
   })),
-}, llmInput).length, 2);
+}, llmInput).length, 1);
 assert.throws(() => assertNonEmptyGroundedPackage({
   evidence: [{
     id: 'published:workflow_rule:removed',

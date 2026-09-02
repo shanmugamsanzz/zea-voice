@@ -41,7 +41,8 @@ function applyUnifiedGroundedTurn(input) {
 function unifiedDecision(value) {
   return JSON.stringify({
     responseId: null,
-    clarification: value.decision === 'clarify' ? { reason: 'ambiguous_request' } : null,
+    clarification: ['clarify', 'CLARIFY'].includes(value.decision)
+      ? { reason: 'ambiguous_request' } : null,
     ...value,
   });
 }
@@ -80,7 +81,7 @@ const exactEvidence = {
 };
 const exactTurn = applyUnifiedGroundedTurn({
   rawDecision: JSON.stringify({
-    decision: 'answer', answer: 'Generated paraphrase must be discarded.', responseId: 'source-1',
+    decision: 'RESPONSE', answer: 'Generated paraphrase must be discarded.', responseId: 'source-1',
     evidenceIds: ['source-1'], stateUpdate: {}, pendingQuestion: null,
     toolRequest: null, clarification: null,
   }),
@@ -119,7 +120,7 @@ const completePriceEvidence = {
 };
 const completePriceTurn = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'answer', answer: 'Premium Option costs INR 3,200.00.',
+    decision: 'RESPONSE', answer: 'Premium Option costs INR 3,200.00.',
     selectedEvidenceIds: ['source-price'], stateUpdate: { requestType: 'price' },
     pendingQuestion: null, toolRequest: null,
   }),
@@ -203,7 +204,7 @@ const unpublishedPriceEvidence = {
 };
 const unavailableFactTurn = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'answer', answer: 'Unpriced Option costs INR 9,999.',
+    decision: 'RESPONSE', answer: 'Unpriced Option costs INR 9,999.',
     evidenceIds: ['source-unpriced'],
     stateUpdate: { requestType: 'price', requestedFacts: ['price'] },
     pendingQuestion: null, toolRequest: null,
@@ -239,7 +240,7 @@ const clarifyMemory = openGenericConversationState(
 clarifyMemory.beginTurn('turn-genuine-ambiguity');
 const genuineClarification = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'clarify', answer: '', selectedEvidenceIds: [], stateUpdate: {},
+    decision: 'CLARIFY', answer: '', selectedEvidenceIds: [], stateUpdate: {},
     pendingQuestion: 'Did you mean Premium Option?', toolRequest: null,
   }),
   groundingEnvelope: {
@@ -269,7 +270,7 @@ assert.equal(genuineClarification.decision, 'clarify');
 exactMemory.beginTurn('turn-exact-foreign');
 const foreignExactTurn = applyUnifiedGroundedTurn({
   rawDecision: JSON.stringify({
-    decision: 'answer', answer: '', responseId: 'source-1', evidenceIds: ['source-1'],
+    decision: 'RESPONSE', answer: '', responseId: 'source-1', evidenceIds: ['source-1'],
     stateUpdate: {}, pendingQuestion: null, toolRequest: null, clarification: null,
   }),
   groundingEnvelope: {
@@ -297,7 +298,7 @@ const overviewMemory = openGenericConversationState(
 overviewMemory.beginTurn('overview-wrong-source');
 const overviewFromFaq = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'answer', answer: 'Several options are available.', evidenceIds: ['faq-source'],
+    decision: 'RESPONSE', answer: 'Several options are available.', evidenceIds: ['faq-source'],
     stateUpdate: { requestType: 'overview' }, pendingQuestion: null, toolRequest: null,
   }),
   groundingEnvelope: {
@@ -318,7 +319,7 @@ assert.equal(overviewFromFaq.reason, 'overview_conversation_evidence_required');
 overviewMemory.beginTurn('overview-message-source');
 const overviewFromGuidance = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'answer', answer: 'Approved options are available.', evidenceIds: ['message-source'],
+    decision: 'RESPONSE', answer: 'Approved options are available.', evidenceIds: ['message-source'],
     stateUpdate: { requestType: 'overview' }, pendingQuestion: null, toolRequest: null,
   }),
   groundingEnvelope: {
@@ -344,7 +345,7 @@ const noToolMemory = openGenericConversationState(
 noToolMemory.beginTurn('no-tool-collection');
 const noToolCollection = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'answer', answer: 'The office is on Central Road.', evidenceIds: ['source-1'],
+    decision: 'RESPONSE', answer: 'The office is on Central Road.', evidenceIds: ['source-1'],
     stateUpdate: { collectedInformation: { contact_name: 'Asha' } },
     pendingQuestion: null, toolRequest: null,
   }),
@@ -371,7 +372,7 @@ const catalogEvidence = {
 };
 const catalogTurn = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'answer', answer: catalogEvidence.content, evidenceIds: ['catalog-source'],
+    decision: 'RESPONSE', answer: catalogEvidence.content, evidenceIds: ['catalog-source'],
     stateUpdate: {
       currentTopic: null, knownEntityKeys: [], collectedInformation: {}, correctedFields: [],
       contextDependent: false,
@@ -405,7 +406,7 @@ const candidateOnlyMemory = openGenericConversationState(
 candidateOnlyMemory.beginTurn('candidate-only-turn');
 const candidateOnlyTurn = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'answer', answer: catalogEvidence.content, evidenceIds: ['catalog-source'],
+    decision: 'RESPONSE', answer: catalogEvidence.content, evidenceIds: ['catalog-source'],
     stateUpdate: {
       currentTopic: 'current-service', knownEntityKeys: ['current-service'],
       contextDependent: false,
@@ -469,7 +470,7 @@ const categoryChildEvidence = categoryEvidence.authoritativeData.children.map((c
 }));
 const categoryTurn = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'answer', answer: categoryEvidence.content, evidenceIds: ['category-source'],
+    decision: 'RESPONSE', answer: categoryEvidence.content, evidenceIds: ['category-source'],
     stateUpdate: {
       requestType: 'category_overview', knownEntityKeys: ['services'], contextDependent: false,
     },
@@ -532,7 +533,7 @@ const alternateEvidence = {
 };
 const comparisonTurn = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'answer',
+    decision: 'RESPONSE',
     answer: `${catalogEvidence.content} ${alternateEvidence.content}`,
     evidenceIds: ['catalog-source', 'alternate-source'],
     stateUpdate: {
@@ -582,7 +583,7 @@ const guidanceEvidence = {
 };
 const selectedGuidanceTurn = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'answer', answer: catalogEvidence.content, evidenceIds: ['catalog-source'],
+    decision: 'RESPONSE', answer: catalogEvidence.content, evidenceIds: ['catalog-source'],
     stateUpdate: {
       knownEntityKeys: ['current-service'], collectedInformation: {}, correctedFields: [],
       contextDependent: false,
@@ -617,7 +618,7 @@ const clarificationMemory = openGenericConversationState(
 clarificationMemory.beginTurn('clarification-turn');
 const clarificationTurn = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'clarify', answer: '', evidenceIds: ['stale-provider-source'], stateUpdate: {},
+    decision: 'CLARIFY', answer: '', evidenceIds: ['stale-provider-source'], stateUpdate: {},
     pendingQuestion: 'Which approved option do you mean?', toolRequest: null,
   }),
   groundingEnvelope: { found: false, sources: [], entities: [] },
@@ -640,7 +641,7 @@ const unavailableMemory = openGenericConversationState(
 unavailableMemory.beginTurn('zero-evidence-unavailable-turn');
 const unavailableTurn = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'answer', answer: unavailableSpeech, evidenceIds: [], stateUpdate: {},
+    decision: 'RESPONSE', answer: unavailableSpeech, evidenceIds: [], stateUpdate: {},
     pendingQuestion: null, toolRequest: null,
   }),
   groundingEnvelope: { found: false, sources: [], entities: [] },
@@ -699,7 +700,7 @@ clearUnsupportedMemory.close();
 
 const mismatchedCitation = validatePostLlmResponseAndTool({
   decision: {
-    decision: 'answer', answer: 'Published fact.', evidenceIds: ['source-other'],
+    decision: 'RESPONSE', answer: 'Published fact.', evidenceIds: ['source-other'],
     stateUpdate: { knownEntities: [], collectedInformation: {} },
   },
   selectedEvidence: [{ id: 'source-selected', content: 'Published fact.' }],
@@ -713,7 +714,7 @@ const zeroEvidenceInventedMemory = openGenericConversationState(
 zeroEvidenceInventedMemory.beginTurn('zero-evidence-invented-turn');
 const inventedTurn = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'answer', answer: 'An invented factual response.', evidenceIds: [], stateUpdate: {},
+    decision: 'RESPONSE', answer: 'An invented factual response.', evidenceIds: [], stateUpdate: {},
     pendingQuestion: null, toolRequest: null,
   }),
   groundingEnvelope: { found: false, sources: [], entities: [] },
@@ -731,7 +732,7 @@ const incompleteMemory = openGenericConversationState(
 incompleteMemory.beginTurn('incomplete-evidence-turn');
 const incompleteTurn = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'answer', answer: 'Unverified response.',
+    decision: 'RESPONSE', answer: 'Unverified response.',
     evidenceIds: ['source-missing'], stateUpdate: {},
     pendingQuestion: null, toolRequest: null,
   }),
@@ -760,7 +761,7 @@ const genericEvidence = {
 };
 const mismatchedEvidenceTurn = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'answer', answer: genericEvidence.content, evidenceIds: ['generic-source'],
+    decision: 'RESPONSE', answer: genericEvidence.content, evidenceIds: ['generic-source'],
     stateUpdate: { contextDependent: false }, pendingQuestion: null, toolRequest: null,
   }),
   groundingEnvelope: {
@@ -794,7 +795,7 @@ const rememberedContextEvidence = {
 };
 const rememberedContextTurn = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'answer', answer: catalogEvidence.content, evidenceIds: ['catalog-source'],
+    decision: 'RESPONSE', answer: catalogEvidence.content, evidenceIds: ['catalog-source'],
     stateUpdate: {
       currentTopic: 'current-service', knownEntityKeys: ['current-service'],
       collectedInformation: {}, correctedFields: [], contextDependent: false,
@@ -831,7 +832,7 @@ const distractorCatalogEvidence = {
 };
 const rememberedMultiCitationTurn = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'answer', answer: catalogEvidence.content,
+    decision: 'RESPONSE', answer: catalogEvidence.content,
     evidenceIds: ['catalog-source', 'distractor-catalog-source'],
     stateUpdate: {
       currentTopic: 'distractor-service', knownEntityKeys: ['distractor-service'],
@@ -884,7 +885,7 @@ const selectedCatalogEvidenceWithoutMemoryChannel = {
 };
 const rememberedCitationTurn = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'answer', answer: catalogEvidence.content,
+    decision: 'RESPONSE', answer: catalogEvidence.content,
     evidenceIds: ['duplicate-fact-source'],
     stateUpdate: { collectedInformation: {}, correctedFields: [], contextDependent: false },
     pendingQuestion: null, toolRequest: null,
@@ -922,7 +923,7 @@ const exactCatalogMemory = openGenericConversationState({
 exactCatalogMemory.beginTurn('exact-catalog-citation-turn');
 const exactCatalogCitationTurn = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'answer', answer: catalogEvidence.content,
+    decision: 'RESPONSE', answer: catalogEvidence.content,
     evidenceIds: ['duplicate-fact-source'],
     stateUpdate: { collectedInformation: {}, correctedFields: [], contextDependent: false },
     pendingQuestion: null, toolRequest: null,
@@ -963,7 +964,7 @@ const staleContextEvidence = {
 };
 const staleCatalogTurn = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'answer', answer: catalogEvidence.content, evidenceIds: ['catalog-source'],
+    decision: 'RESPONSE', answer: catalogEvidence.content, evidenceIds: ['catalog-source'],
     stateUpdate: {
       currentTopic: 'different request', knownEntityKeys: [], collectedInformation: {},
       correctedFields: [], contextDependent: false,
@@ -1003,7 +1004,7 @@ const staleItem = {
 };
 const primaryMismatch = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'answer', answer: 'Old Item details.', evidenceIds: ['catalog-stale'],
+    decision: 'RESPONSE', answer: 'Old Item details.', evidenceIds: ['catalog-stale'],
     stateUpdate: {
       currentTopic: 'old-item', knownEntityKeys: ['old-item'], collectedInformation: {},
       correctedFields: [], contextDependent: false,
@@ -1032,7 +1033,7 @@ const currentPrimaryItem = {
 };
 const validPrimaryWithStaleSupport = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'answer', answer: 'New Item details.', evidenceIds: ['catalog-primary'],
+    decision: 'RESPONSE', answer: 'New Item details.', evidenceIds: ['catalog-primary'],
     stateUpdate: {
       currentTopic: 'new-item', knownEntityKeys: ['new-item'], collectedInformation: {},
       correctedFields: [], contextDependent: false,
@@ -1058,7 +1059,7 @@ assert.notEqual(validPrimaryWithStaleSupport.reason, 'latest_request_evidence_mi
 catalogMemory.close();
 const sideAnswer = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'answer', answer: 'The office is on Central Road.', evidenceIds: ['source-1'],
+    decision: 'RESPONSE', answer: 'The office is on Central Road.', evidenceIds: ['source-1'],
     stateUpdate: {
       currentTopic: 'office location', knownEntityKeys: [], collectedInformation: {},
       correctedFields: [], language: 'en', pendingQuestionRelevant: true,
@@ -1088,7 +1089,7 @@ assert.deepEqual(Object.keys(sideAnswer.state).sort(), [...genericConversationSt
 memory.beginTurn('turn-2');
 const corrected = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'answer', answer: 'The office is on Central Road.', evidenceIds: ['source-1'],
+    decision: 'RESPONSE', answer: 'The office is on Central Road.', evidenceIds: ['source-1'],
     stateUpdate: {
       currentTopic: 'office location', knownEntityKeys: [],
       collectedInformation: { preferred_date: 'Friday' }, correctedFields: ['preferred_date'],
@@ -1110,7 +1111,7 @@ assert.equal(corrected.state.pendingQuestion, null);
 
 const stale = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'answer', answer: 'The office is on Central Road.', evidenceIds: ['source-1'],
+    decision: 'RESPONSE', answer: 'The office is on Central Road.', evidenceIds: ['source-1'],
     stateUpdate: { currentTopic: 'stale topic', knownEntityKeys: [], collectedInformation: {}, correctedFields: [] },
     pendingQuestion: null, toolRequest: null,
   }),
@@ -1128,7 +1129,7 @@ assert.equal(memory.snapshot().currentTopic, 'office location');
 memory.beginTurn('turn-3');
 const naturalNegation = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'answer', answer: 'The office is not on Central Road.', evidenceIds: ['source-1'],
+    decision: 'RESPONSE', answer: 'The office is not on Central Road.', evidenceIds: ['source-1'],
     stateUpdate: { currentTopic: 'incorrect location', knownEntityKeys: [], collectedInformation: {}, correctedFields: [] },
     pendingQuestion: null, toolRequest: null,
   }),
@@ -1155,6 +1156,7 @@ const actionTool = {
     inputSchema: {
       type: 'object', additionalProperties: false, required: ['contact_name'],
       properties: { contact_name: { type: 'string', minLength: 2 } },
+      'x-confirmation-message': 'Are these request details correct?',
     },
   },
 };
@@ -1211,13 +1213,13 @@ const deterministicActionMemory = openGenericConversationState(
 deterministicActionMemory.beginTurn('deterministic-action-turn');
 const deterministicAction = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'answer',
+    decision: 'RESPONSE',
     answer: 'Priority service is an approved selectable service.',
     evidenceIds: ['item-source'],
     stateUpdate: {
       currentTopic: 'priority service', knownEntityKeys: ['priority-service'],
       collectedInformation: {}, correctedFields: [], pendingQuestionRelevant: false,
-      activeToolRequest: { name: 'create_request-1' },
+      activeToolRequest: null,
     },
     pendingQuestion: null, toolRequest: null,
   }),
@@ -1242,7 +1244,7 @@ const actionMemory = openGenericConversationState(
 actionMemory.beginTurn('action-turn');
 const sameTurnAction = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'action', answer: '', evidenceIds: ['item-source'],
+    decision: 'TOOL', answer: '', evidenceIds: ['item-source'],
     stateUpdate: {
       currentTopic: 'priority service', knownEntityKeys: ['priority-service'],
       collectedInformation: { contact_name: 'Asha' }, correctedFields: [],
@@ -1275,7 +1277,7 @@ const unauthorizedMemory = openGenericConversationState(
 unauthorizedMemory.beginTurn('unauthorized-turn');
 const unauthorizedAction = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'action', answer: '', evidenceIds: ['item-source'],
+    decision: 'TOOL', answer: '', evidenceIds: ['item-source'],
     stateUpdate: {
       currentTopic: 'priority service', knownEntityKeys: ['priority-service'],
       collectedInformation: { contact_name: 'Asha' }, correctedFields: [],
@@ -1306,7 +1308,7 @@ const invalidArgumentsMemory = openGenericConversationState(
 invalidArgumentsMemory.beginTurn('invalid-arguments-turn');
 const invalidArguments = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'action', answer: '', evidenceIds: ['item-source'],
+    decision: 'TOOL', answer: '', evidenceIds: ['item-source'],
     stateUpdate: {
       currentTopic: 'priority service', knownEntityKeys: ['priority-service'],
       collectedInformation: { contact_name: 'A' }, correctedFields: [],
@@ -1339,7 +1341,7 @@ const inventedMemory = openGenericConversationState(
 inventedMemory.beginTurn('invented-turn');
 const inventedField = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'action', answer: '',
+    decision: 'TOOL', answer: '',
     evidenceIds: ['item-source'],
     stateUpdate: {
       currentTopic: 'priority service', knownEntityKeys: ['priority-service'],
@@ -1404,7 +1406,7 @@ const bookingMemory = openGenericConversationState(
 bookingMemory.beginTurn('booking-details-turn');
 const sameTurnDetails = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'action', answer: '', evidenceIds: ['item-source'],
+    decision: 'TOOL', answer: '', evidenceIds: ['item-source'],
     stateUpdate: {
       currentTopic: 'priority service request', knownEntityKeys: ['priority-service'],
       collectedInformation: {
@@ -1439,7 +1441,7 @@ assert.match(sameTurnDetails.answer, /Are these details correct\?/u);
 bookingMemory.beginTurn('booking-confirm-turn');
 const confirmedAction = applyUnifiedGroundedTurn({
   rawDecision: unifiedDecision({
-    decision: 'action', answer: '', evidenceIds: [],
+    decision: 'TOOL', answer: '', evidenceIds: [],
     stateUpdate: {
       currentTopic: 'priority service request', knownEntityKeys: [],
       collectedInformation: {}, correctedFields: [], pendingQuestionRelevant: false,

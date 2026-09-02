@@ -110,19 +110,20 @@ function toolFor(tenant) {
       additionalProperties: false,
       required: Object.freeze([]),
       properties: Object.freeze({}),
+      'x-confirmation-message': 'Do you want me to continue with this configured action?',
     }),
   });
 }
 
 function expectedDecision(tenant, scenario) {
   if (scenario === 'ambiguous_name') return decision({
-    decision: 'clarify',
+    decision: 'CLARIFY',
     answer: '',
     pendingQuestion: `Did you mean ${tenant.candidate}?`,
     clarificationReason: 'ambiguous_request',
   });
   if (scenario === 'authorized_support_tool') return decision({
-    decision: 'action',
+    decision: 'TOOL',
     answer: '',
     toolRequest: { name: `${tenant.key}_support`, arguments: {} },
     stateUpdate: {
@@ -131,7 +132,7 @@ function expectedDecision(tenant, scenario) {
     },
   });
   return decision({
-    decision: 'answer',
+    decision: 'RESPONSE',
     answer: tenant.support,
   });
 }
@@ -256,7 +257,7 @@ for (let pass = 1; pass <= repeats; pass += 1) {
       if (!result.answer && !result.toolRequest) silentTurns += 1;
 
       const invented = validateGroundedLlmDecision(decision({
-        decision: 'answer',
+        decision: 'RESPONSE',
         answer: `${tenant.key} invented factual answer ${pass}.`,
       }), { found: false, sources: [], entities: [] }, runtime);
       if (invented.valid) hallucinationsAccepted += 1;

@@ -1,4 +1,4 @@
-export const CANONICAL_TOPIC_MEMORY_VERSION = 6;
+export const CANONICAL_TOPIC_MEMORY_VERSION = 7;
 
 const catalogTypes = new Set(['CATALOG_ITEM', 'CATALOG_CATEGORY']);
 
@@ -71,11 +71,22 @@ export function normalizeCanonicalRecordMemory(value = {}, {
   });
 }
 
-function cleanRetrievalMemory(memory = {}) {
+function cleanRetrievalMemory(memory = {}, scope = {}) {
+  const activeEntity = normalizeCanonicalRecordMemory(memory.activeEntity, {
+    scope, expectedRecordType: 'CATALOG_ITEM',
+  });
+  const activeCategory = activeEntity ? null : normalizeCanonicalRecordMemory(
+    memory.activeCategory, { scope, expectedRecordType: 'CATALOG_CATEGORY' },
+  );
+  const normalizeItems = (values = []) => Object.freeze(values.map((value) => (
+    normalizeCanonicalRecordMemory(value, { scope, expectedRecordType: 'CATALOG_ITEM' })
+  )).filter(Boolean));
   return {
     ...memory,
-    knownEntities: Object.freeze([...(memory.knownEntities ?? [])]),
-    comparisonEntities: Object.freeze([...(memory.comparisonEntities ?? [])]),
+    activeEntity,
+    activeCategory,
+    knownEntities: activeEntity ? Object.freeze([activeEntity]) : Object.freeze([]),
+    comparisonEntities: normalizeItems(memory.comparisonEntities),
   };
 }
 
@@ -88,7 +99,7 @@ export function prepareCanonicalRetrievalMemory({
   scope, memory = {}, understanding = {},
 } = {}) {
   const isolatedScope = scoped(scope);
-  const next = cleanRetrievalMemory(memory);
+  const next = cleanRetrievalMemory(memory, isolatedScope);
   const normalizedCandidates = (values, expectedRecordType) => (values ?? [])
     .map((value) => normalizeCanonicalRecordMemory(value, {
       scope: isolatedScope, expectedRecordType,
@@ -104,7 +115,7 @@ export function prepareCanonicalRetrievalMemory({
     understanding.explicitCategories, 'CATALOG_CATEGORY',
   );
   const explicit = [...explicitItems, ...explicitCategories];
-  let mode = 'CLEARED_STALE_CONTEXT';
+  let mode = 'PRESERVED_CANONICAL_CONTEXT';
 
   // Two explicitly requested comparison records are the target set, not an
   // ambiguous single-item selection. Preserve the exact set before search.
@@ -164,17 +175,12 @@ export function prepareCanonicalRetrievalMemory({
     }
   }
 
-  if (mode === 'CLEARED_STALE_CONTEXT') {
-    next.activeEntity = null;
-    next.activeCategory = null;
-    next.knownEntities = Object.freeze([]);
-    next.comparisonEntities = Object.freeze([]);
-    next.currentTopic = null;
-    if (ambiguous || explicit.length > 1) {
-      next.pendingQuestion = null;
-      next.pendingClarification = null;
-      mode = 'AMBIGUOUS_CURRENT_SELECTION';
-    }
+  // A turn that does not explicitly select a different published record must
+  // not erase or replace the canonical record. Retrieval/classification still
+  // decides independently whether that record is relevant to the latest turn;
+  // preserving it here does not reserve it unless contextDependent is true.
+  if (mode === 'PRESERVED_CANONICAL_CONTEXT' && (ambiguous || explicit.length > 1)) {
+    mode = 'AMBIGUOUS_CURRENT_SELECTION';
   }
 
   return Object.freeze({

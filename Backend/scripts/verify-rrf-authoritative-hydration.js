@@ -254,6 +254,7 @@ const contextRunner = async (auth, callback) => {
         return {
           ...row(entry.record_id, entry.rank, entry.rrf_score, itemKey, name, price),
           knowledge_base_id: entry.knowledge_base_id,
+          caller_facing: entry.record_id === ids[0] ? false : true,
         };
       }) };
     },
@@ -323,7 +324,9 @@ const comparisonHydrated = await rankAndHydrateAuthoritativeEvidence({
   }),
 });
 assert.equal(comparisonHydrationQueries, 1);
-assert.equal(comparisonHydrated.evidence.length, 5);
+assert.ok(comparisonHydrated.evidence.length >= 2
+  && comparisonHydrated.evidence.length <= 5,
+  'Comparison hydration must retain required records without padding the package');
 assert.equal(comparisonHydrated.comparisonCoverage.complete, true);
 assert.equal(comparisonHydrated.comparisonCoverage.requestedRecordKeys.length, 2);
 assert.ok(comparisonHydrated.evidence.some((entry) => entry.recordId === ids[5]
@@ -361,6 +364,9 @@ assert.deepEqual(hydrated.evidence.map((entry) => entry.rank),
   [...hydrated.evidence.map((entry) => entry.rank)].sort((left, right) => left - right));
 assert.equal(hydrated.evidence.every((entry) => entry.hydrationValidated
   && entry.publicationValidated), true);
+assert.equal(hydrated.evidence.every((entry) => entry.callerFacing
+  && entry.callerFacingValidated), true,
+  'Verified caller-facing Catalog metadata must survive hydration even when a stale row flag is absent');
 assert.equal(hydrated.evidence.every((entry) => entry.documentStatus === 'ready'
   && entry.documentVersionStatus === 'ready'
   && entry.documentVersionIsCurrent === true), true);

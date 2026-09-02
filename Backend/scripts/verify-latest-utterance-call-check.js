@@ -57,10 +57,15 @@ assert.equal(evidenceBelongsToRuntime(semanticEvidence, {
 }), false);
 
 const semanticEnvelope = buildGroundingEnvelope({
-  found: true, tenantEvidence: { sources: [semanticEvidence], entities: [] },
+  found: true,
+  tenantEvidence: {
+    sources: [{ ...semanticEvidence, sourceId: 'source_1' }],
+    sourceMap: [{ sourceId: 'source_1', recordId: semanticEvidence.recordId }],
+    entities: [],
+  },
 }, { includePublishedMap: false });
 const semanticDecision = validateGroundedLlmDecision(JSON.stringify({
-  decision: 'answer', answer: configuration.response, evidenceIds: ['source_1'],
+  decision: 'RESPONSE', answer: configuration.response, evidenceIds: ['source_1'],
   responseId: null, stateUpdate: {}, pendingQuestion: null, toolRequest: null, clarification: null,
 }), semanticEnvelope);
 assert.equal(semanticDecision.valid, true);

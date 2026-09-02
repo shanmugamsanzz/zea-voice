@@ -98,7 +98,7 @@ function clarificationDecision(question, reason = 'ambiguous_request') {
       correctedFields: [],
       pendingQuestionRelevant: true,
     },
-    decision: 'clarify',
+    decision: 'CLARIFY',
     answer: '',
     pendingQuestion: question,
     clarification: { reason },

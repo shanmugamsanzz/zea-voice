@@ -5,14 +5,21 @@ process.env.DATABASE_URL ??= 'postgresql://test:test@localhost:5432/test';
 process.env.REDIS_HOST ??= 'localhost';
 
 const { buildGroundedLlmInput } = await import('../src/knowledge-bases/grounded-turn-evidence.js');
+const { deterministicSourceEntry } = await import('../src/knowledge-engine/deterministic-source-mapping.js');
 const { createContextCachePolicy } = await import('../src/voice/interaction/context-cache-policy.js');
 const { openGenericConversationState } = await import('../src/voice/interaction/generic-conversation-state.js');
 const { resolveLiveMemoryConfiguration } = await import('../src/voice/interaction/live-memory-config.js');
-const { validateGroundedLlmDecision } = await import('../src/voice/interaction/grounded-llm-decision.js');
+const {
+  isOperationalGroundedDecisionFailure,
+  validateGroundedLlmDecision,
+} = await import('../src/voice/interaction/grounded-llm-decision.js');
 const { applyUnifiedGroundedTurn } = await import('../src/voice/interaction/unified-grounded-turn.js');
 const {
+  configuredClarificationRecovery,
+  configuredInformationUnavailableResponse,
   configuredLatencyAcknowledgementResponse,
   configuredSafeFailureResponse,
+  configuredTechnicalFailureResponse,
 } = await import('../src/voice/realtime-conversation-orchestrator.js');
 
 const scope = Object.freeze({
@@ -29,6 +36,8 @@ const settings = Object.freeze({
   knowledgeClarificationConfidence: 0.64,
   knowledgeAmbiguityMargin: 0.06,
   knowledgeClarificationMessage: 'Did you mean {{candidates}}?',
+  informationUnavailableMessage: 'That information is not available right now.',
+  technicalFailureMessage: 'The service is temporarily unavailable.',
   latencyAcknowledgementMessage: 'Configured acknowledgement.',
   conversationMemoryFields: Object.freeze([
     Object.freeze({
@@ -56,6 +65,14 @@ assert.equal(configuredLatencyAcknowledgementResponse(runtimeProfile),
 assert.equal(configuredSafeFailureResponse(runtimeProfile, {
   tenantEvidence: { ambiguity: { candidates: [{ name: 'Canonical Option' }] } },
 }), 'Did you mean Canonical Option?');
+const configuredRecovery = configuredClarificationRecovery(runtimeProfile, {
+  tenantEvidence: { ambiguity: { candidates: [{ name: 'Canonical Option' }] } },
+});
+assert.equal(configuredRecovery.question, 'Did you mean Canonical Option?');
+assert.equal(configuredInformationUnavailableResponse(runtimeProfile),
+  'That information is not available right now.');
+assert.equal(configuredTechnicalFailureResponse(runtimeProfile),
+  'The service is temporarily unavailable.');
 const cachePolicy = createContextCachePolicy({
   runtimeProfile, call: { id: scope.callId },
   contextResolution: { contextId: 'current-caller', source: 'test' },
@@ -71,7 +88,9 @@ const record = Object.freeze({
   knowledgeBaseId: '51000000-0000-4000-8000-000000000005', publicationRevision: 3,
   documentId: '51000000-0000-4000-8000-000000000006',
   documentVersionId: '51000000-0000-4000-8000-000000000007',
-  hydrationValidated: true, publicationValidated: true, callerFacing: true,
+  hydrationValidated: true, publicationValidated: true,
+  documentStatus: 'ready', documentVersionStatus: 'ready', documentVersionIsCurrent: true,
+  callerFacing: true, callerFacingHint: true, callerFacingValidated: true,
   content: 'Published canonical option includes approved support.',
   authoritativeData: Object.freeze({ itemKey: 'canonical-option', name: 'Canonical Option' }),
 });
@@ -112,9 +131,10 @@ assert.deepEqual(groundedInput.clarificationContext.collectedFields, { contact_n
 const envelope = Object.freeze({
   found: true,
   sources: Object.freeze([Object.freeze({
-    id: 'source_1', recordId: record.recordId, recordType: record.recordType,
-    content: record.content,
+    ...record,
+    id: 'source_1', publishedEvidenceId: record.id,
   })]),
+  sourceMap: Object.freeze([deterministicSourceEntry(record, 'source_1')]),
   entities: Object.freeze([]),
 });
 const targetedClarification = validateGroundedLlmDecision(JSON.stringify({
@@ -134,15 +154,18 @@ const genericMediumClarification = validateGroundedLlmDecision(JSON.stringify({
 }), envelope, {
   fieldSchemas: liveConfiguration.fields, toolSchemas: [],
   clarificationContext: groundedInput.clarificationContext,
+  clarificationPrompt: 'Did you mean Canonical Option?',
 });
-assert.equal(genericMediumClarification.valid, false);
-assert.equal(genericMediumClarification.reason, 'candidate_specific_clarification_required');
+assert.equal(genericMediumClarification.valid, true);
+assert.equal(genericMediumClarification.recoveredFrom,
+  'candidate_specific_clarification_required');
+assert.equal(genericMediumClarification.pendingQuestion, 'Did you mean Canonical Option?');
 
 const memory = openGenericConversationState(scope, settings, Date.now());
 memory.beginTurn('current-call-field');
 const currentCallField = applyUnifiedGroundedTurn({
   rawDecision: JSON.stringify({
-    decision: 'answer', answer: record.content, responseId: null,
+    decision: 'RESPONSE', answer: record.content, responseId: null,
     evidenceIds: ['source_1'], toolName: null, toolArguments: null,
     clarificationReason: null,
     stateUpdate: { collectedInformation: { contact_name: 'Asha' } },
@@ -151,13 +174,13 @@ const currentCallField = applyUnifiedGroundedTurn({
   fieldSchemas: liveConfiguration.fields, tools: [], evidence: [record],
   finalizedUtterance: 'My name is Asha.',
 });
-assert.equal(currentCallField.valid, true);
+assert.equal(currentCallField.valid, true, JSON.stringify(currentCallField));
 assert.equal(currentCallField.state.collectedInformation.contact_name, 'Asha');
 
 memory.beginTurn('action-field-without-tool');
 const actionFieldWithoutAuthorizedTool = applyUnifiedGroundedTurn({
   rawDecision: JSON.stringify({
-    decision: 'answer', answer: record.content, responseId: null,
+    decision: 'RESPONSE', answer: record.content, responseId: null,
     evidenceIds: ['source_1'], toolName: null, toolArguments: null,
     clarificationReason: null,
     stateUpdate: { collectedInformation: { requested_date: '2030-04-05' } },
@@ -177,6 +200,23 @@ const unauthorizedTool = validateGroundedLlmDecision(JSON.stringify({
 }), envelope, { fieldSchemas: liveConfiguration.fields, toolSchemas: [] });
 assert.equal(unauthorizedTool.valid, false);
 assert.equal(unauthorizedTool.reason, 'invalid_tool_request');
+
+memory.beginTurn('configured-unavailable');
+const configuredUnavailable = applyUnifiedGroundedTurn({
+  rawDecision: JSON.stringify({
+    decision: 'NO_MATCH', answer: '', responseId: null, evidenceIds: [],
+    toolName: null, toolArguments: null, clarificationReason: null,
+  }),
+  groundingEnvelope: { found: false, sources: [], sourceMap: [], entities: [] },
+  memory, turnToken: 'configured-unavailable', evidence: [],
+  finalizedUtterance: 'Ask for an unpublished fact.',
+  zeroEvidenceResponse: settings.informationUnavailableMessage,
+});
+assert.equal(configuredUnavailable.valid, true);
+assert.equal(configuredUnavailable.answer, settings.informationUnavailableMessage);
+assert.equal(configuredUnavailable.approvedConfiguredUnavailableResponse, true);
+assert.equal(isOperationalGroundedDecisionFailure('unsupported_numeric_fact'), false);
+assert.equal(isOperationalGroundedDecisionFailure('invalid_json'), true);
 memory.close();
 
 console.log(JSON.stringify({

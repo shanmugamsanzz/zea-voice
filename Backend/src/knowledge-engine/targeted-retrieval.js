@@ -13,7 +13,7 @@ import { publishedRecordCallerFacingHint } from './evidence-audience.js';
 import { selectCompleteConversationTurns } from './conversation-turn-context.js';
 import { buildPublicationDeduplicationIdentity } from './publication-deduplication.js';
 
-export const TARGETED_RETRIEVAL_VERSION = 14;
+export const TARGETED_RETRIEVAL_VERSION = 15;
 
 const documentIndexTypes = Object.freeze({
   [knowledgeSearchIndexes.CATALOG]: 'CATALOG_ITEM',
@@ -99,6 +99,25 @@ function compactEntity(value, fallbackRecordType = 'CATALOG_ITEM') {
       ?? (recordType === 'CATALOG_CATEGORY' ? value.key : null), 160) || null,
     canonicalName: name || null,
   }) : null;
+}
+
+function matchesScopedRecordIdentity(record, identity = {}, input = {}) {
+  if (!record) return false;
+  const expectedRevision = Number(identity.publicationRevision);
+  return normalizeId(record.tenantId) === normalizeId(input.tenantId)
+    && normalizeId(record.agentId) === normalizeId(input.agentId)
+    && (!identity.tenantId
+      || normalizeId(identity.tenantId) === normalizeId(record.tenantId))
+    && (!identity.agentId
+      || normalizeId(identity.agentId) === normalizeId(record.agentId))
+    && (!identity.knowledgeBaseId
+      || normalizeId(identity.knowledgeBaseId) === normalizeId(record.knowledgeBaseId))
+    && (!Number.isInteger(expectedRevision)
+      || expectedRevision === Number(record.publicationRevision))
+    && (!identity.recordType
+      || String(identity.recordType).toUpperCase() === String(record.recordType).toUpperCase())
+    && (!(identity.recordId ?? identity.id)
+      || normalizeId(identity.recordId ?? identity.id) === normalizeId(record.recordId));
 }
 
 function canonicalMemoryEntity(input = {}) {
@@ -193,7 +212,9 @@ function tenantSearchForms(entities, recordScope) {
   for (const entity of entities) {
     if (!entity?.recordId) continue;
     const record = recordScope.get(normalizeId(entity.recordId));
-    if (!record) continue;
+    if (!record || !matchesScopedRecordIdentity(record, entity, {
+      tenantId: record.tenantId, agentId: record.agentId,
+    })) continue;
     forms.push(record.canonicalName, ...(record.searchForms ?? []));
   }
   return uniqueText(forms, 30);
@@ -618,10 +639,12 @@ function activeCatalogCandidate(input, recordScope, allowedTypes) {
   if (active && allowedTypes.has('CATALOG_ITEM')) {
     const recordId = normalizeId(active.recordId ?? active.id);
     const direct = recordId ? recordScope.get(recordId) : null;
-    if (direct?.recordType === 'CATALOG_ITEM') return direct;
+    if (direct?.recordType === 'CATALOG_ITEM'
+      && matchesScopedRecordIdentity(direct, active, input)) return direct;
     const itemKey = normalizeId(active.itemKey ?? active.key);
     const matched = itemKey ? [...recordScope.values()].find((record) => (
       record.recordType === 'CATALOG_ITEM' && normalizeId(record.itemKey) === itemKey
+      && matchesScopedRecordIdentity(record, active, input)
     )) : null;
     if (matched) return matched;
   }
@@ -630,10 +653,12 @@ function activeCatalogCandidate(input, recordScope, allowedTypes) {
     const categoryKey = normalizeId(activeCategory.categoryKey ?? activeCategory.key);
     const categoryRecordId = normalizeId(activeCategory.recordId ?? activeCategory.id);
     const directCategory = categoryRecordId ? recordScope.get(categoryRecordId) : null;
-    if (directCategory?.recordType === 'CATALOG_CATEGORY') return directCategory;
+    if (directCategory?.recordType === 'CATALOG_CATEGORY'
+      && matchesScopedRecordIdentity(directCategory, activeCategory, input)) return directCategory;
     const children = [...recordScope.values()].filter((record) => (
       record.recordType === 'CATALOG_ITEM'
       && normalizeId(record.categoryKey) === categoryKey
+      && matchesScopedRecordIdentity(record, activeCategory, input)
     ));
     const anchor = children[0] ?? null;
     if (anchor) return {
@@ -770,7 +795,8 @@ function structuredCandidatesForTurn(input, classification, resolution, recordSc
     let selected = existingIndex >= 0 ? candidates.splice(existingIndex, 1)[0] : null;
     if (!selected) {
       const scoped = recordScope.get(normalizeId(reserved.recordId));
-      if (scoped && allowedTypes.has(reserved.recordType)
+      if (scoped && matchesScopedRecordIdentity(scoped, reserved, input)
+        && allowedTypes.has(reserved.recordType)
         && (scoped.recordType === reserved.recordType
           || reserved.recordType === 'CATALOG_CATEGORY')) {
         selected = {
@@ -900,6 +926,36 @@ function semanticPayloadCandidate(match, scope, input, allowedTypes, recordScope
     deduplicationIdentity: scopedRecord?.deduplicationIdentity,
     score: boundedScore(match.score),
   };
+}
+
+function assertTenantIsolatedChannels(channels, input, scope, recordScope, recordTypes) {
+  const allowedPublications = new Map(scope.map((entry) => (
+    [normalizeId(entry.id), Number(entry.publicationRevision)]
+  )));
+  for (const [channel, candidates] of Object.entries(channels)) {
+    for (const candidate of candidates) {
+      const scoped = recordScope.get(normalizeId(candidate.recordId));
+      const categoryAggregate = String(candidate.recordType).toUpperCase() === 'CATALOG_CATEGORY'
+        && (candidate.evidenceRecordIds ?? []).length > 0
+        && candidate.evidenceRecordIds.every((recordId) => {
+          const child = recordScope.get(normalizeId(recordId));
+          return child?.recordType === 'CATALOG_ITEM'
+            && matchesScopedRecordIdentity(child, {
+              ...candidate, recordId, recordType: 'CATALOG_ITEM',
+            }, input);
+        });
+      const scopedIdentityMatches = categoryAggregate
+        ? matchesScopedRecordIdentity(scoped, { ...candidate, recordType: null }, input)
+        : matchesScopedRecordIdentity(scoped, candidate, input);
+      const valid = scopedIdentityMatches
+        && allowedPublications.get(normalizeId(candidate.knowledgeBaseId))
+          === Number(candidate.publicationRevision)
+        && recordTypes.has(String(candidate.recordType).toUpperCase());
+      if (!valid) {
+        throw new TypeError(`The ${channel} retrieval channel returned an out-of-scope publication record`);
+      }
+    }
+  }
 }
 
 async function semanticCandidates(
@@ -1045,6 +1101,9 @@ export async function retrieveTargetedCandidates({
   const [structured, bm25, qdrant] = await Promise.all([
     structuredPromise, bm25Promise, qdrantPromise,
   ]);
+  assertTenantIsolatedChannels(
+    { structured, bm25, qdrant }, input, scope, records, recordTypes,
+  );
 
   return Object.freeze({
     version: TARGETED_RETRIEVAL_VERSION,

@@ -2,7 +2,7 @@ import { typedRecordIdentityKey } from './canonical-record-identity.js';
 import { resolveKnowledgeConfidenceConfiguration } from '../knowledge-bases/knowledge-confidence-config.js';
 import { compactNeedContext } from './published-use-case-signals.js';
 
-export const CONTEXTUAL_QUERY_UNDERSTANDING_VERSION = 7;
+export const CONTEXTUAL_QUERY_UNDERSTANDING_VERSION = 8;
 export const STRUCTURED_MEANING_CONTRACT_VERSION = 1;
 
 const catalogRecordTypes = new Set(['CATALOG_ITEM', 'CATALOG_CATEGORY']);
@@ -321,14 +321,18 @@ function ambiguityFor(resolution, explicitCandidates, confidenceConfiguration) {
 
 function actionUnderstanding(input, resolution, confidenceConfiguration) {
   const memoryTool = input?.memory?.activeTool;
-  const workflow = [
+  const workflows = [...new Map([
     resolution?.candidate,
     ...(resolution?.namespaceCandidates?.WORKFLOW ?? []),
-  ].find((candidate) => (
+  ].filter((candidate) => (
     String(candidate?.intentClass ?? '').toLocaleUpperCase() === 'ACTION_TOOL_REQUEST'
       && candidate?.explicit === true
-      && boundedScore(candidate.score) >= confidenceConfiguration.highConfidence
-  ));
+      && boundedScore(candidate.score) >= confidenceConfiguration.clarificationConfidence
+  )).map((candidate) => [candidateIdentity(candidate), candidate])).values()]
+    .sort((left, right) => boundedScore(right.score) - boundedScore(left.score));
+  const workflow = workflows[0] ?? null;
+  const score = boundedScore(workflow?.score);
+  const summary = candidateSummary(workflow, confidenceConfiguration);
   const detected = Boolean(memoryTool?.name || workflow);
   return Object.freeze({
     detected,
@@ -336,6 +340,30 @@ function actionUnderstanding(input, resolution, confidenceConfiguration) {
     actionKey: clean(memoryTool?.name ?? workflow?.actionKey ?? workflow?.action, 120) || null,
     authorizationRecordId: clean(memoryTool?.authorizationRecordId
       ?? workflow?.recordId, 160) || null,
+    confidence: memoryTool?.name ? 1 : score,
+    confidenceBand: memoryTool?.name ? 'HIGH' : (summary?.confidenceBand ?? null),
+    interpretationRequired: Boolean(workflow)
+      && (score < confidenceConfiguration.highConfidence
+        || summary?.mentionKind === 'PHONETIC_CANDIDATE'),
+    candidates: Object.freeze(workflows.map((candidate) => (
+      candidateSummary(candidate, confidenceConfiguration)
+    )).filter(Boolean).slice(0, 5)),
+  });
+}
+
+function acknowledgementUnderstanding(currentRouteSignal, confidenceConfiguration) {
+  const intentClass = String(currentRouteSignal?.intentClass ?? '').toLocaleUpperCase();
+  const score = boundedScore(currentRouteSignal?.score);
+  const detected = intentClass === 'ACKNOWLEDGEMENT'
+    && currentRouteSignal?.explicit === true
+    && score >= confidenceConfiguration.clarificationConfidence;
+  return Object.freeze({
+    detected,
+    source: detected ? 'tenant_published_route' : null,
+    routeRecordId: detected
+      ? (clean(currentRouteSignal?.recordId ?? currentRouteSignal?.id, 160) || null) : null,
+    confidence: detected ? score : 0,
+    interpretationRequired: detected && score < confidenceConfiguration.highConfidence,
   });
 }
 
@@ -393,6 +421,9 @@ export function understandContextualKnowledgeQuery(input, resolution) {
   ]);
   const protocolRoute = protocolIntentClasses.has(
     String(currentRouteSignal?.intentClass ?? '').toLocaleUpperCase(),
+  );
+  const acknowledgement = acknowledgementUnderstanding(
+    currentRouteSignal, confidenceConfiguration,
   );
   const memoryEntity = activeMemoryEntity(input.memory);
   const memoryComparison = activeMemoryComparison(input.memory);
@@ -479,7 +510,7 @@ export function understandContextualKnowledgeQuery(input, resolution) {
     : (contextDependent ? memoryEntity : null);
   const confirmationCandidate = !ambiguity.detected && explicitCandidates.length === 0
     ? candidateSummary(mentionedCandidates[0], confidenceConfiguration) : null;
-  const intentHint = protocolRoute ? currentRouteIntent
+  const intentHint = protocolRoute || acknowledgement.detected ? currentRouteIntent
     : (actionIntent.detected ? 'ACTION'
       : (comparisonRequested ? 'COMPARISON'
         : (hasCurrentEntitySignal ? 'ENTITY_REQUEST'
@@ -539,6 +570,14 @@ export function understandContextualKnowledgeQuery(input, resolution) {
     }),
     constraints,
     action: actionIntent,
+    acknowledgement,
+    correction: Object.freeze({
+      detected: possibleCorrection,
+      interpretationRequired: possibleCorrection,
+      previousEntity: possibleCorrection ? memoryEntity : null,
+      currentCandidates: possibleCorrection
+        ? Object.freeze(currentCanonicalCandidates) : Object.freeze([]),
+    }),
     ambiguity,
     requiresGroundedInterpretation: requestedFacts.length === 0
       || intentHint === 'UNRESOLVED' || ambiguity.detected,
@@ -564,6 +603,7 @@ export function understandContextualKnowledgeQuery(input, resolution) {
       && distinctAuthoritativeMentions.length < 2 && comparisonPool.length < 2
       ? 'temporary_call_state' : 'current_utterance',
     actionIntent,
+    acknowledgement,
     correction: Object.freeze({
       possible: possibleCorrection,
       interpretationRequired: possibleCorrection,

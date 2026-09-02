@@ -84,8 +84,16 @@ const contextualFact = record(7, 'workflow_rule', {
     actionConfig: { responseMode: 'grounded', requiresCatalogItem: true }, priority: 70,
   },
 });
+const acknowledgement = record(8, 'conversation_node', {
+  question: 'Tenant acknowledgement route', answer: 'Continue naturally.',
+  content: 'Continue naturally.', entity_name: 'Tenant acknowledgement route',
+  entity_category: 'conversation', entity_aliases: ['tenant acknowledgement phrase'],
+  entity_metadata: { intentClass: 'ACKNOWLEDGEMENT' },
+});
 const bundle = buildPublicationIndexes(
-  job, [first, second, safety, callControl, purpose, action, contextualFact],
+  job, [
+    first, second, safety, callControl, purpose, action, contextualFact, acknowledgement,
+  ],
 );
 
 const memory = {
@@ -195,6 +203,8 @@ assert.equal(prepared.resolution.explicitEntity, true);
 assert.equal(prepared.usesCallMemory, false);
 assert.equal(prepared.understanding.meaning.explicitEntity.recordId, second.record_id);
 assert.equal(prepared.understanding.meaning.correction.possible, true);
+assert.equal(prepared.structuredMeaning.correction.detected, true);
+assert.equal(prepared.structuredMeaning.correction.previousEntity.recordId, first.record_id);
 assert.equal(prepared.understanding.meaning.correction.previousEntity.recordId, first.record_id);
 assert.equal(prepared.canonicalMemoryTransition.mode, 'EXPLICIT_REPLACEMENT');
 assert.equal(prepared.input.memory.activeEntity.recordId, second.record_id);
@@ -277,6 +287,45 @@ assert.equal(prepared.understanding.actionIntent.source, 'published_workflow');
 assert.equal(prepared.understanding.meaning.actionIntent.detected, true);
 assert.equal(prepared.structuredMeaning.action.detected, true);
 assert.equal(prepared.structuredMeaning.action.source, 'published_workflow');
+assert.equal(prepared.structuredMeaning.action.interpretationRequired, false);
+assert.equal(prepared.structuredMeaning.action.candidates.length, 1);
+
+const mediumActionCandidate = {
+  ...prepared.resolution.candidate,
+  score: 0.72,
+  signals: [{
+    method: 'phonetic', score: 0.72, phrase: 'tenant action sound', explicit: true,
+  }],
+};
+prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
+  tenantId, agentId, callId, utterance: 'tenant action sound', memory,
+}), bundle, {}, {
+  resolve: async () => ({
+    tenantId, agentId, callId,
+    candidate: mediumActionCandidate,
+    candidateNamespace: 'WORKFLOW',
+    routingCandidates: [mediumActionCandidate],
+    namespaceCandidates: { CATALOG: [], WORKFLOW: [mediumActionCandidate] },
+    alternatives: [], action: 'CONFIRM', score: 0.72,
+    confidenceConfiguration: {
+      highConfidence: 0.88, clarificationConfidence: 0.64, ambiguityMargin: 0.06,
+    },
+  }),
+});
+assert.equal(prepared.intentClass, knowledgeQueryClasses.ACTION_TOOL_REQUEST);
+assert.equal(prepared.structuredMeaning.action.detected, true);
+assert.equal(prepared.structuredMeaning.action.confidenceBand, 'MEDIUM');
+assert.equal(prepared.structuredMeaning.action.interpretationRequired, true);
+
+prepared = await prepareKnowledgeQuery(createKnowledgeEngineInput({
+  tenantId, agentId, callId, utterance: 'tenant acknowledgement phrase', memory,
+}), bundle);
+assert.equal(prepared.intentClass, knowledgeQueryClasses.ACKNOWLEDGEMENT);
+assert.equal(prepared.understanding.contextDependent, false);
+assert.equal(prepared.structuredMeaning.intent.class, knowledgeQueryClasses.ACKNOWLEDGEMENT);
+assert.equal(prepared.structuredMeaning.acknowledgement.detected, true);
+assert.equal(prepared.structuredMeaning.acknowledgement.source, 'tenant_published_route');
+assert.equal(prepared.structuredMeaning.acknowledgement.routeRecordId, acknowledgement.record_id);
 
 await prepareKnowledgeQuery(createKnowledgeEngineInput({
   tenantId, agentId, callId, utterance: 'Nimbus', memory,

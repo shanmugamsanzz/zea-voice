@@ -12,7 +12,7 @@ import {
   buildPublicationDeduplicationIdentity,
 } from '../knowledge-engine/publication-deduplication.js';
 
-export const PARALLEL_HYBRID_SEARCH_VERSION = 3;
+export const PARALLEL_HYBRID_SEARCH_VERSION = 4;
 
 const namespaceByType = Object.freeze({
   CATALOG_ITEM: 'CATALOG', CATALOG_CATEGORY: 'CATALOG', FAQ: 'FAQ',
@@ -34,14 +34,35 @@ function normalized(value) {
   return String(value ?? '').trim().toLocaleLowerCase();
 }
 
-function scopedPublicationRecord(reservation, bundles = []) {
+function scopedPublicationRecord(reservation, bundles = [], input = {}) {
+  const tenantId = normalized(input.tenantId);
+  const agentId = normalized(input.agentId);
+  const usageDirection = normalized(input.usageDirection);
   for (const bundle of bundles) {
-    const record = (bundle?.records ?? []).find((candidate) => normalized(
-      candidate.record_id ?? candidate.recordId ?? candidate.id,
-    ) === normalized(reservation.recordId));
+    const assignedAgentIds = (bundle?.assignedAgentIds ?? [])
+      .map(normalized).filter(Boolean);
+    const expectedRevision = Number(reservation.publicationRevision);
+    if (normalized(bundle?.tenantId) !== tenantId
+      || (assignedAgentIds.length && !assignedAgentIds.includes(agentId))
+      || (reservation.tenantId && normalized(reservation.tenantId) !== tenantId)
+      || (reservation.agentId && normalized(reservation.agentId) !== agentId)
+      || (reservation.knowledgeBaseId
+        && normalized(reservation.knowledgeBaseId) !== normalized(bundle.knowledgeBaseId))
+      || (Number.isInteger(expectedRevision)
+        && expectedRevision !== Number(bundle.publicationRevision))) continue;
+    const record = (bundle?.records ?? []).find((candidate) => (
+      normalized(candidate.record_id ?? candidate.recordId ?? candidate.id)
+        === normalized(reservation.recordId)
+      && String(candidate.record_type ?? candidate.recordType ?? candidate.type ?? '')
+        .trim().toUpperCase() === String(reservation.recordType).trim().toUpperCase()
+      && ['both', usageDirection].includes(normalized(
+        candidate.usage_direction ?? candidate.usageDirection ?? 'both',
+      ))
+    ));
     if (!record) continue;
     const candidate = {
       tenantId: bundle.tenantId,
+      agentId: input.agentId,
       recordId: reservation.recordId,
       recordType: reservation.recordType,
       namespace: namespaceByType[reservation.recordType] ?? null,
@@ -70,7 +91,9 @@ function scopedPublicationRecord(reservation, bundles = []) {
 function reserveBeforeFusion(result, request) {
   const reservedRecords = collectCanonicalRetrievalReservations(request, result);
   const reservedCandidates = reservedRecords
-    .map((entry) => scopedPublicationRecord(entry, request.publicationBundles)).filter(Boolean);
+    .map((entry) => scopedPublicationRecord(
+      entry, request.publicationBundles, request.input,
+    )).filter(Boolean);
   const structured = Object.freeze([...new Map([
     ...reservedCandidates, ...(result.channels?.structured ?? []),
   ].map((candidate) => (

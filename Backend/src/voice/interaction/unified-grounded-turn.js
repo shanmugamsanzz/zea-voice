@@ -465,6 +465,7 @@ export function applyUnifiedGroundedTurn({
     activeToolRequest: memory.snapshot().activeToolRequest,
     requiredEvidenceIds: requiredCatalogSource ? [requiredCatalogSource.id] : [],
     clarificationContext,
+    clarificationPrompt: clarificationRecovery?.question ?? '',
     zeroEvidenceResponse,
   };
   let validatedDecision = validateGroundedLlmDecision(rawDecision, hydratedEnvelope, runtime);
@@ -479,8 +480,7 @@ export function applyUnifiedGroundedTurn({
       || validatedDecision.stateUpdate?.activeToolRequest)
     : Boolean(validatedDecision.structuralDiagnostic?.normalizedDecision === 'action'
       || validatedDecision.structuralDiagnostic?.hasToolBranch === true);
-  const actionActivation = providerProposedAction
-    && !beforeState.activeToolRequest
+  const candidateActionActivation = !beforeState.activeToolRequest
     && runtime.clarificationContext?.genuineAmbiguity !== true
     && runtime.clarificationContext?.ambiguity?.detected !== true
     ? configuredActionActivation({
@@ -488,6 +488,14 @@ export function applyUnifiedGroundedTurn({
       toolSchemas: runtime.toolSchemas,
       actionEvidence,
     }) : null;
+  // Applicable Workflow evidence is already filtered for the caller's latest
+  // action request before this boundary. A single published Workflow that
+  // resolves to one assigned UI tool is therefore sufficient to begin field
+  // collection even when the provider returned RESPONSE instead of TOOL.
+  // Ambiguous or unmatched Workflow evidence is never activated.
+  const actionActivation = (
+    providerProposedAction || candidateActionActivation?.valid === true
+  ) ? candidateActionActivation : null;
   const activatedAction = actionActivation?.valid === true
     ? configuredToolAuthorization(actionActivation.tool.name, {
       evidenceScope,
@@ -505,10 +513,16 @@ export function applyUnifiedGroundedTurn({
   // No tool executes here: the existing field/readback/confirmation boundary
   // remains authoritative.
   if (activatedAction?.valid === true) {
+    const selectedEntityKeys = exactSelectedEntity
+      ? Object.freeze([exactSelectedEntity.key]) : Object.freeze([]);
+    const selectedEntities = exactSelectedEntity
+      ? Object.freeze([exactSelectedEntity]) : Object.freeze([]);
     const safeState = validatedDecision.valid ? validatedDecision.stateUpdate : Object.freeze({
-      currentTopic: exactSelectedEntity.key,
-      knownEntityKeys: Object.freeze([exactSelectedEntity.key]),
-      knownEntities: Object.freeze([exactSelectedEntity]),
+      currentTopic: exactSelectedEntity?.key ?? beforeState.currentTopic ?? null,
+      knownEntityKeys: selectedEntityKeys.length
+        ? selectedEntityKeys : Object.freeze([...(beforeState.knownEntityKeys ?? [])]),
+      knownEntities: selectedEntities.length
+        ? selectedEntities : Object.freeze([...(beforeState.knownEntities ?? [])]),
       collectedInformation: Object.freeze({}),
       correctedFields: Object.freeze([]),
       language: null,
@@ -531,9 +545,11 @@ export function applyUnifiedGroundedTurn({
       evidenceSourceIds: Object.freeze(requiredCatalogSource ? [requiredCatalogSource.id] : []),
       stateUpdate: Object.freeze({
         ...safeState,
-        currentTopic: exactSelectedEntity.key,
-        knownEntityKeys: Object.freeze([exactSelectedEntity.key]),
-        knownEntities: Object.freeze([exactSelectedEntity]),
+        currentTopic: exactSelectedEntity?.key ?? safeState.currentTopic ?? null,
+        knownEntityKeys: selectedEntityKeys.length
+          ? selectedEntityKeys : safeState.knownEntityKeys,
+        knownEntities: selectedEntities.length
+          ? selectedEntities : safeState.knownEntities,
         activeToolRequest: Object.freeze({
           name: activatedAction.tool.name,
           status: 'collecting_information',
@@ -544,9 +560,9 @@ export function applyUnifiedGroundedTurn({
       pendingQuestionRelevant: false,
       toolRequest: null,
       clarification: null,
-      selectedEntityKeys: Object.freeze([exactSelectedEntity.key]),
-      selectedEntities: Object.freeze([exactSelectedEntity]),
-      currentTopic: exactSelectedEntity.key,
+      selectedEntityKeys,
+      selectedEntities,
+      currentTopic: exactSelectedEntity?.key ?? safeState.currentTopic ?? null,
       fieldUpdates: safeState.collectedInformation ?? Object.freeze({}),
       correctedFields: safeState.correctedFields ?? Object.freeze([]),
       activeToolRequest: Object.freeze({
@@ -847,8 +863,10 @@ export function applyUnifiedGroundedTurn({
   // Workflow rules are internal authorization evidence and therefore are not
   // caller-citable. They must nevertheless come from the current primary
   // retrieval, never merely from saved or expanded context.
-  // Workflow retrieval supplies authorization, never intent. Only the
-  // grounded decision may explicitly start the configured action lifecycle.
+  // Workflow evidence authorizes the action and may start collection only
+  // when upstream latest-intent retrieval marked that exact Workflow as
+  // applicable. Stored authorization alone can continue an existing flow but
+  // can never activate a new one.
   const exactSelectedEntities = effectiveDecision.stateUpdate.knownEntities.length
     ? effectiveDecision.stateUpdate.knownEntities
     : (beforeState.knownEntities?.length === 1 ? beforeState.knownEntities : []);

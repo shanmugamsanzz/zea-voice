@@ -19,6 +19,10 @@ const envelope = Object.freeze({
     Object.freeze({ id: 'source_1', recordId: 'record-1', content: 'Premium service costs INR 3200 and includes priority support.' }),
     Object.freeze({ id: 'source_2', recordId: 'record-2', content: 'The office is on Central Road.' }),
   ]),
+  sourceMap: Object.freeze([
+    Object.freeze({ sourceId: 'source_1', recordId: 'record-1' }),
+    Object.freeze({ sourceId: 'source_2', recordId: 'record-2' }),
+  ]),
   entities: Object.freeze([
     Object.freeze({
       id: 'item-1', key: 'premium-service', name: 'Premium service',
@@ -44,10 +48,15 @@ const runtime = Object.freeze({
 });
 
 function decisionJson(value) {
+  const externalDecision = ({
+    answer: 'RESPONSE', action: 'TOOL', clarify: 'CLARIFY', no_match: 'NO_MATCH',
+  })[value.decision] ?? value.decision;
   return JSON.stringify({
     responseId: null,
-    clarification: value.decision === 'clarify' ? { reason: 'ambiguous_request' } : null,
+    clarification: ['clarify', 'CLARIFY'].includes(value.decision)
+      ? { reason: 'ambiguous_request' } : null,
     ...value,
+    decision: externalDecision,
   });
 }
 
@@ -108,9 +117,19 @@ const providerObjectTool = validateGroundedLlmDecision({
     activeToolRequest: { name: 'create_visit' },
   },
 }, envelope, runtime);
-assert.equal(providerObjectTool.valid, true);
-assert.equal(providerObjectTool.decision, 'action');
-assert.equal(providerObjectTool.toolRequest.name, 'create_visit');
+assert.equal(providerObjectTool.valid, false);
+assert.equal(providerObjectTool.reason, 'invalid_decision');
+for (const unsupportedDecision of [
+  'ANSWER', 'ACTION', 'TOOL_CALL', 'response', 'tool', 'clarify', 'no_match',
+]) {
+  const rejected = validateGroundedLlmDecision(JSON.stringify({
+    decision: unsupportedDecision,
+    answer: '', responseId: null, evidenceIds: [],
+    toolName: null, toolArguments: null, clarificationReason: null,
+  }), envelope, runtime);
+  assert.equal(rejected.valid, false, `${unsupportedDecision} must be rejected`);
+  assert.equal(rejected.reason, 'invalid_decision');
+}
 
 const phoneticClarificationRuntime = {
   ...runtime,
@@ -237,7 +256,7 @@ assert.throws(
 );
 
 const emptyStateOrdinaryAnswer = validateGroundedLlmDecision(decisionJson({
-  decision: 'answer', answer: 'The office is on Central Road.', evidenceIds: ['source_2'],
+  decision: 'RESPONSE', answer: 'The office is on Central Road.', evidenceIds: ['source_2'],
   stateUpdate: {}, pendingQuestion: null, toolRequest: null,
 }), envelope, runtime);
 assert.equal(emptyStateOrdinaryAnswer.valid, true);
@@ -247,7 +266,7 @@ assert.deepEqual(emptyStateOrdinaryAnswer.fieldUpdates, {});
 assert.equal(emptyStateOrdinaryAnswer.requestType, undefined);
 
 const translatedAliasSelection = validateGroundedLlmDecision(decisionJson({
-  decision: 'answer', answer: 'Premium service costs INR 3200.', evidenceIds: ['source_1'],
+  decision: 'RESPONSE', answer: 'Premium service costs INR 3200.', evidenceIds: ['source_1'],
   stateUpdate: { knownEntityKeys: ['Translated premium name'] },
   pendingQuestion: null, toolRequest: null,
 }), envelope, runtime);
@@ -256,7 +275,7 @@ assert.deepEqual(translatedAliasSelection.selectedEntityKeys, ['premium-service'
   'A published translated alias must canonicalize instead of being rejected');
 
 const answerWithStaleClarificationMetadata = validateGroundedLlmDecision(decisionJson({
-  decision: 'answer', answer: 'The office is on Central Road.', evidenceIds: ['source_2'],
+  decision: 'RESPONSE', answer: 'The office is on Central Road.', evidenceIds: ['source_2'],
   stateUpdate: {}, pendingQuestion: null, toolRequest: null,
   clarification: { reason: 'ambiguous_request' },
 }), envelope, runtime);
@@ -265,7 +284,7 @@ assert.equal(answerWithStaleClarificationMetadata.clarification, null,
   'inert clarification metadata must not reject an otherwise grounded answer');
 
 const answerEndingWithQuestion = validateGroundedLlmDecision(decisionJson({
-  decision: 'answer',
+  decision: 'RESPONSE',
   answer: 'Available options are Standard and Premium. Which option would you like?',
   evidenceIds: ['source_1'], stateUpdate: {}, pendingQuestion: null, toolRequest: null,
 }), {
@@ -289,7 +308,7 @@ const exactEnvelope = Object.freeze({
   })]),
 });
 const exactPublishedResponse = validateGroundedLlmDecision(JSON.stringify({
-  decision: 'answer', answer: 'Model-authored wording that must never be spoken.',
+  decision: 'RESPONSE', answer: 'Model-authored wording that must never be spoken.',
   responseId: 'source_1', evidenceIds: ['source_1'], stateUpdate: {},
   pendingQuestion: null, toolRequest: null, clarification: null,
 }), exactEnvelope, runtime);
@@ -297,7 +316,7 @@ assert.equal(exactPublishedResponse.valid, true);
 assert.equal(exactPublishedResponse.responseId, 'source_1');
 assert.equal(exactPublishedResponse.answer, envelope.sources[0].content);
 const exactResponseIdIsEvidenceSelection = validateGroundedLlmDecision(JSON.stringify({
-  decision: 'answer', answer: 'Provider wording is ignored.',
+  decision: 'RESPONSE', answer: 'Provider wording is ignored.',
   responseId: 'source_1', evidenceIds: [], stateUpdate: {},
   pendingQuestion: null, toolRequest: null, clarification: null,
 }), exactEnvelope, runtime);
@@ -305,7 +324,7 @@ assert.equal(exactResponseIdIsEvidenceSelection.valid, true);
 assert.deepEqual(exactResponseIdIsEvidenceSelection.evidenceIds, ['source_1']);
 
 const selectedEvidenceAlias = validateGroundedLlmDecision(JSON.stringify({
-  decision: 'answer', answer: 'The office is on Central Road.', responseId: null,
+  decision: 'RESPONSE', answer: 'The office is on Central Road.', responseId: null,
   selectedEvidenceIds: ['source_2'], stateUpdate: {}, pendingQuestion: null,
   toolRequest: null, clarification: null,
 }), envelope, runtime);
@@ -313,7 +332,7 @@ assert.equal(selectedEvidenceAlias.valid, true);
 assert.deepEqual(selectedEvidenceAlias.evidenceIds, ['source_2']);
 
 const authoritativeDecimalPrice = validateGroundedLlmDecision(decisionJson({
-  decision: 'answer', answer: 'Premium service costs INR 3,200.00.',
+  decision: 'RESPONSE', answer: 'Premium service costs INR 3,200.00.',
   evidenceIds: ['source_price'], stateUpdate: {}, pendingQuestion: null, toolRequest: null,
 }), {
   found: true, entities: [], sources: [{
@@ -324,7 +343,7 @@ const authoritativeDecimalPrice = validateGroundedLlmDecision(decisionJson({
 assert.equal(authoritativeDecimalPrice.valid, true,
   'formatted published prices must validate against complete authoritative fields');
 const missingExactResponseId = validateGroundedLlmDecision(decisionJson({
-  decision: 'answer', answer: envelope.sources[0].content,
+  decision: 'RESPONSE', answer: envelope.sources[0].content,
   evidenceIds: ['source_1'], stateUpdate: {}, pendingQuestion: null, toolRequest: null,
 }), exactEnvelope, runtime);
 assert.equal(missingExactResponseId.valid, false);
@@ -343,14 +362,14 @@ const mixedExactEnvelope = Object.freeze({
   ]),
 });
 const catalogAnswerWithUnrelatedExactAlternative = validateGroundedLlmDecision(decisionJson({
-  decision: 'answer', answer: 'Current Item includes complete approved attributes.',
+  decision: 'RESPONSE', answer: 'Current Item includes complete approved attributes.',
   evidenceIds: ['source_1', 'source_2'], responseId: null,
   stateUpdate: { requestType: 'item_details' }, pendingQuestion: null, toolRequest: null,
 }), mixedExactEnvelope, runtime);
 assert.equal(catalogAnswerWithUnrelatedExactAlternative.valid, true);
 
 const genericMeaning = validateGroundedLlmDecision(decisionJson({
-  decision: 'answer', answer: 'Premium service costs INR 3200.', evidenceIds: ['source_1'],
+  decision: 'RESPONSE', answer: 'Premium service costs INR 3200.', evidenceIds: ['source_1'],
   stateUpdate: {
     requestType: 'item_details', currentTopic: 'premium service',
     knownEntityKeys: ['premium-service'], requestedFacts: ['price', 'included support'],
@@ -367,7 +386,7 @@ assert.deepEqual(genericMeaning.contextualReferences, ['that service']);
 assert.equal(genericMeaning.contextDependent, true);
 
 const runtimeRequiredCatalogEvidence = validateGroundedLlmDecision(decisionJson({
-  decision: 'answer', answer: 'Premium service costs INR 3200.', evidenceIds: ['source_2'],
+  decision: 'RESPONSE', answer: 'Premium service costs INR 3200.', evidenceIds: ['source_2'],
   stateUpdate: { contextDependent: true }, pendingQuestion: null, toolRequest: null,
 }), envelope, { ...runtime, requiredEvidenceIds: ['source_1'] });
 assert.equal(runtimeRequiredCatalogEvidence.valid, true);
@@ -375,7 +394,7 @@ assert.deepEqual(runtimeRequiredCatalogEvidence.evidenceIds, ['source_1', 'sourc
   'runtime-required canonical evidence must take priority over model-selected evidence');
 
 const invalidMeaning = validateGroundedLlmDecision(decisionJson({
-  decision: 'answer', answer: 'The office is on Central Road.', evidenceIds: ['source_2'],
+  decision: 'RESPONSE', answer: 'The office is on Central Road.', evidenceIds: ['source_2'],
   stateUpdate: { requestType: 'NOT VALID!' }, pendingQuestion: null, toolRequest: null,
 }), envelope, runtime);
 assert.equal(invalidMeaning.valid, true);
@@ -383,14 +402,14 @@ assert.deepEqual(invalidMeaning.stateUpdate.knownEntityKeys, []);
 assert.equal(invalidMeaning.requestType, undefined);
 
 const invalidStateField = validateGroundedLlmDecision(decisionJson({
-  decision: 'answer', answer: 'The office is on Central Road.', evidenceIds: ['source_2'],
+  decision: 'RESPONSE', answer: 'The office is on Central Road.', evidenceIds: ['source_2'],
   stateUpdate: { internalStage: 'hidden' }, pendingQuestion: null, toolRequest: null,
 }), envelope, runtime);
 assert.equal(invalidStateField.valid, true);
 assert.deepEqual(invalidStateField.stateUpdate.knownEntityKeys, []);
 
 const invalidClarificationState = validateGroundedLlmDecision(decisionJson({
-  decision: 'clarify', answer: '', evidenceIds: [],
+  decision: 'CLARIFY', answer: '', evidenceIds: [],
   stateUpdate: { internalStage: 'hidden' },
   pendingQuestion: 'Which option did you mean?', toolRequest: null,
 }), envelope, runtime);
@@ -399,7 +418,7 @@ assert.equal(invalidClarificationState.valid, true,
 assert.deepEqual(invalidClarificationState.stateUpdate.knownEntityKeys, []);
 
 const partiallyRecoverableState = validateGroundedLlmDecision(decisionJson({
-  decision: 'answer', answer: 'The office is on Central Road.', evidenceIds: ['source_2'],
+  decision: 'RESPONSE', answer: 'The office is on Central Road.', evidenceIds: ['source_2'],
   stateUpdate: {
     knownEntityKeys: ['not-published'], pendingQuestionRelevant: false,
     currentTopic: 'office location', requestType: 'location_details',
@@ -413,7 +432,7 @@ assert.equal(partiallyRecoverableState.requestType, 'location_details');
 assert.deepEqual(partiallyRecoverableState.selectedEntityKeys, []);
 
 const invalidActionState = validateGroundedLlmDecision(decisionJson({
-  decision: 'action', answer: '', evidenceIds: [], stateUpdate: { internalStage: 'hidden' },
+  decision: 'TOOL', answer: '', evidenceIds: [], stateUpdate: { internalStage: 'hidden' },
   pendingQuestion: null,
   toolRequest: { name: 'create_visit', arguments: { customer_name: 'Ravi', visit_date: '2026-08-20' } },
 }), envelope, runtime);
@@ -424,26 +443,26 @@ const invalidJsonTamil = validateGroundedLlmDecision('Premium service பற்�
 assert.equal(invalidJsonTamil.reason, 'invalid_json');
 
 const missingShapeTanglish = validateGroundedLlmDecision(JSON.stringify({
-  decision: 'answer', answer: 'Premium service INR 3200 irukku.', evidenceIds: ['source_1'],
+  decision: 'RESPONSE', answer: 'Premium service INR 3200 irukku.', evidenceIds: ['source_1'],
 }), envelope, runtime);
 assert.equal(missingShapeTanglish.valid, true,
   'safe omitted null fields must be normalized before strict semantic validation');
 
 const topLevelRequestType = validateGroundedLlmDecision(JSON.stringify({
-  decision: 'answer', answer: 'The office is on Central Road.', evidenceIds: ['source_2'],
+  decision: 'RESPONSE', answer: 'The office is on Central Road.', evidenceIds: ['source_2'],
   requestType: 'side_question',
 }), envelope, runtime);
 assert.equal(topLevelRequestType.valid, true);
 assert.equal(topLevelRequestType.requestType, 'side_question');
 
 const missingAnswerTamil = validateGroundedLlmDecision(decisionJson({
-  decision: 'answer', answer: '', evidenceIds: ['source_1'], stateUpdate: {},
+  decision: 'RESPONSE', answer: '', evidenceIds: ['source_1'], stateUpdate: {},
   pendingQuestion: null, toolRequest: null,
 }), envelope, runtime);
 assert.equal(missingAnswerTamil.reason, 'answer_required');
 
 const tamil = validateGroundedLlmDecision(decisionJson({
-  decision: 'answer',
+  decision: 'RESPONSE',
   answer: 'Premium service விலை INR 3200.',
   evidenceIds: ['source_1'],
   stateUpdate: {
@@ -464,7 +483,7 @@ for (const answer of [
   'Premium service விலை INR 3200.',
 ]) {
   const result = validateGroundedLlmDecision(decisionJson({
-    decision: 'answer', answer, evidenceIds: ['source_1'],
+    decision: 'RESPONSE', answer, evidenceIds: ['source_1'],
     stateUpdate: { currentTopic: 'premium service', knownEntityKeys: ['premium-service'], collectedInformation: {}, correctedFields: [] },
     pendingQuestion: null, toolRequest: null,
   }), envelope, runtime);
@@ -472,21 +491,21 @@ for (const answer of [
 }
 
 const clarification = validateGroundedLlmDecision(decisionJson({
-  decision: 'clarify', answer: 'I need one detail.', evidenceIds: [],
+  decision: 'CLARIFY', answer: 'I need one detail.', evidenceIds: [],
   stateUpdate: { currentTopic: 'service choice', knownEntityKeys: [], collectedInformation: {}, correctedFields: [] },
   pendingQuestion: 'Which service do you mean?', toolRequest: null,
 }), envelope, runtime);
 assert.equal(clarification.valid, true);
 assert.equal(clarification.pendingQuestion, 'Which service do you mean?');
 const clarificationWithoutReason = validateGroundedLlmDecision(decisionJson({
-  decision: 'clarify', answer: '', evidenceIds: [], stateUpdate: {},
+  decision: 'CLARIFY', answer: '', evidenceIds: [], stateUpdate: {},
   pendingQuestion: 'Which service do you mean?', toolRequest: null, clarification: null,
 }), envelope, runtime);
 assert.equal(clarificationWithoutReason.valid, true);
 assert.equal(clarificationWithoutReason.clarification.reason, 'missing_evidence');
 
 const missingEntityClarification = validateGroundedLlmDecision(decisionJson({
-  decision: 'clarify', answer: '', evidenceIds: [], stateUpdate: {},
+  decision: 'CLARIFY', answer: '', evidenceIds: [], stateUpdate: {},
   pendingQuestion: 'Which published service do you mean?', toolRequest: null,
   clarification: { reason: 'missing_entity' },
 }), envelope, {
@@ -501,7 +520,7 @@ assert.equal(missingEntityClarification.valid, true);
 assert.equal(missingEntityClarification.clarification.reason, 'missing_entity');
 
 const missingFactClarification = validateGroundedLlmDecision(decisionJson({
-  decision: 'clarify', answer: '', evidenceIds: [], stateUpdate: {},
+  decision: 'CLARIFY', answer: '', evidenceIds: [], stateUpdate: {},
   pendingQuestion: 'What would you like to know about Premium service?', toolRequest: null,
   clarification: { reason: 'missing_fact' },
 }), envelope, {
@@ -519,7 +538,7 @@ assert.equal(missingFactClarification.valid, true);
 assert.equal(missingFactClarification.clarification.reason, 'missing_fact');
 
 const authoritativeAmbiguity = validateGroundedLlmDecision(decisionJson({
-  decision: 'clarify', answer: '', evidenceIds: [], stateUpdate: {},
+  decision: 'CLARIFY', answer: '', evidenceIds: [], stateUpdate: {},
   pendingQuestion: 'Do you mean Premium service or Standard service?', toolRequest: null,
   clarification: { reason: 'authoritative_ambiguity' },
 }), envelope, {
@@ -537,7 +556,7 @@ assert.equal(authoritativeAmbiguity.valid, true);
 assert.equal(authoritativeAmbiguity.clarification.reason, 'authoritative_ambiguity');
 
 const forcedPhoneticClarification = validateGroundedLlmDecision(decisionJson({
-  decision: 'answer', answer: 'Premium service is selected.', evidenceIds: ['source_1'],
+  decision: 'RESPONSE', answer: 'Premium service is selected.', evidenceIds: ['source_1'],
   stateUpdate: {}, pendingQuestion: null, toolRequest: null,
 }), envelope, {
   ...runtime,
@@ -556,7 +575,7 @@ assert.match(forcedPhoneticClarification.pendingQuestion, /Premium service/u);
 assert.match(forcedPhoneticClarification.pendingQuestion, /Standard service/u);
 
 const multipleClarifications = validateGroundedLlmDecision(decisionJson({
-  decision: 'clarify', answer: 'Which service? Which location?', evidenceIds: [],
+  decision: 'CLARIFY', answer: 'Which service? Which location?', evidenceIds: [],
   stateUpdate: { currentTopic: 'clarification', knownEntityKeys: [], collectedInformation: {}, correctedFields: [] },
   pendingQuestion: 'Which service?', toolRequest: null,
 }), envelope, runtime);
@@ -565,7 +584,7 @@ assert.equal(multipleClarifications.answer, '');
 assert.equal(multipleClarifications.pendingQuestion, 'Which service?');
 
 const rollingStateAliases = validateGroundedLlmDecision(decisionJson({
-  decision: 'answer', answer: 'Premium service costs INR 3200.', evidenceIds: ['source_1'],
+  decision: 'RESPONSE', answer: 'Premium service costs INR 3200.', evidenceIds: ['source_1'],
   stateUpdate: {
     currentTopic: 'premium service', selectedEntityKeys: ['premium-service'],
     fieldUpdates: {}, correctedFields: [], pendingQuestionRelevant: false,
@@ -576,7 +595,7 @@ assert.equal(rollingStateAliases.valid, true);
 assert.deepEqual(rollingStateAliases.selectedEntityKeys, ['premium-service']);
 
 const missingActionField = validateGroundedLlmDecision(decisionJson({
-  decision: 'clarify', answer: 'I need the visit date.', evidenceIds: [],
+  decision: 'CLARIFY', answer: 'I need the visit date.', evidenceIds: [],
   stateUpdate: {
     currentTopic: 'visit booking', knownEntityKeys: [], collectedInformation: {}, correctedFields: [],
     activeToolRequest: { name: 'create_visit' },
@@ -587,7 +606,7 @@ assert.equal(missingActionField.valid, true);
 assert.equal(missingActionField.activeToolRequest.name, 'create_visit');
 
 const partialActionField = validateGroundedLlmDecision(decisionJson({
-  decision: 'clarify', answer: '', evidenceIds: [],
+  decision: 'CLARIFY', answer: '', evidenceIds: [],
   stateUpdate: {
     currentTopic: 'visit booking', knownEntityKeys: [],
     collectedInformation: { contact_number: '96' }, correctedFields: [],
@@ -604,7 +623,7 @@ assert.equal(partialActionField.valid, true);
 assert.deepEqual(partialActionField.fieldUpdates, {});
 
 const action = validateGroundedLlmDecision(decisionJson({
-  decision: 'action', answer: '', evidenceIds: [],
+  decision: 'TOOL', answer: '', evidenceIds: [],
   stateUpdate: {
     currentTopic: 'visit booking', knownEntityKeys: [],
     collectedInformation: { customer_name: 'Ravi', visit_date: '2026-08-20' },
@@ -619,7 +638,7 @@ assert.equal(action.toolRequest.name, 'create_visit');
 assert.deepEqual(action.fieldUpdates, { customer_name: 'Ravi', visit_date: '2026-08-20' });
 
 const unknownTool = validateGroundedLlmDecision(decisionJson({
-  decision: 'action', answer: '', evidenceIds: [],
+  decision: 'TOOL', answer: '', evidenceIds: [],
   stateUpdate: { currentTopic: 'action', knownEntityKeys: [], collectedInformation: {}, correctedFields: [] },
   pendingQuestion: null, toolRequest: { name: 'invented_tool', arguments: {} },
 }), envelope, runtime);
@@ -627,7 +646,7 @@ assert.equal(unknownTool.valid, false);
 assert.equal(unknownTool.reason, 'invalid_tool_request');
 
 const internal = validateGroundedLlmDecision(decisionJson({
-  decision: 'answer', answer: 'JSON: {"toolRequest":null}', evidenceIds: ['source_1'],
+  decision: 'RESPONSE', answer: 'JSON: {"toolRequest":null}', evidenceIds: ['source_1'],
   stateUpdate: { currentTopic: 'debug', knownEntityKeys: [], collectedInformation: {}, correctedFields: [] },
   pendingQuestion: null, toolRequest: null,
 }), envelope, runtime);
@@ -635,7 +654,7 @@ assert.equal(internal.valid, false);
 assert.equal(internal.reason, 'internal_text');
 
 const extraInternalField = validateGroundedLlmDecision(decisionJson({
-  decision: 'answer', answer: 'Premium service costs INR 3200.', evidenceIds: ['source_1'],
+  decision: 'RESPONSE', answer: 'Premium service costs INR 3200.', evidenceIds: ['source_1'],
   stateUpdate: { currentTopic: 'premium service', knownEntityKeys: ['premium-service'], collectedInformation: {}, correctedFields: [] },
   pendingQuestion: null, toolRequest: null, reasoning: 'hidden',
 }), envelope, runtime);
@@ -644,7 +663,7 @@ assert.equal(extraInternalField.reason, 'invalid_response_shape');
 
 const decoder = createGroundedDecisionStreamDecoder(envelope);
 assert.equal(decoder.push('{"evidenceIds":["source_1"],"stateUpdate":{},').delta, '');
-assert.equal(decoder.push('"decision":"answer","answer":"Premium service costs INR 3200.').delta,
+assert.equal(decoder.push('"decision":"RESPONSE","answer":"Premium service costs INR 3200.').delta,
   '');
 assert.equal(decoder.push('","responseId":null,"pendingQuestion":null,"clarification":null,"toolRequest":null}').delta, '');
 
@@ -700,7 +719,13 @@ const session = await createSelectedLlmStream({
     configuredInformationFields: runtime.fieldSchemas,
     groundedDecisionInput: {
       currentQuestion: 'Book the selected published option.',
-      recentRelevantTurns: [], canonicalMemory: {},
+      recentRelevantTurns: [
+        { role: 'user', content: 'Tell me about the published option.' },
+        { role: 'assistant', content: 'It is available in the verified catalog.' },
+      ],
+      canonicalMemory: {
+        activeEntity: { recordId: 'record-1', name: 'Published option' },
+      },
       hydratedRecords: envelope.sources.map((source) => ({
         sourceId: source.id, recordId: source.recordId,
         recordType: 'CATALOG_ITEM', content: source.content,
@@ -713,7 +738,12 @@ const session = await createSelectedLlmStream({
 for await (const _event of session.events) { /* consume the single provider stream */ }
 await session.close();
 assert.equal(providerRequests, 1);
+assert.equal(session.groundedEnvelopeVersion, 1);
+assert.equal(session.groundedEvidenceRecords, 2);
+assert.equal(session.groundedAuthorizedTools, 1);
+assert.equal(session.groundedContextMessages, 2);
 assert.deepEqual(providerInput.tools, []);
+assert.equal(providerInput.messages.at(-1).content, 'Book the selected published option.');
 assert.equal(providerInput.responseFormat.type, 'json_schema');
 assert.equal(providerInput.responseFormat.name, 'grounded_voice_decision');
 assert.equal(providerInput.responseFormat.strict, true);
@@ -721,6 +751,8 @@ assert.equal(providerInput.responseFormat.schema.additionalProperties, false);
 assert.deepEqual(providerInput.responseFormat.schema.required, contract.exactFields);
 assert.match(providerInput.messages[0].content, /"toolArguments"/u);
 assert.match(providerInput.messages[0].content, /"create_visit"/u);
+assert.match(providerInput.messages[0].content, /"Published option"/u);
+assert.match(providerInput.messages[0].content, /"Tell me about the published option\."/u);
 assert.ok(providerInput.messages[0].content.length <= 12_000);
 assert.match(providerInput.messages[0].content, /<\/grounded_response_contract>/u);
 assert.equal(isRepairableGroundedDecisionReason('invalid_response_shape'), true);

@@ -47,6 +47,7 @@ function evidence(recordId, recordType = 'CATALOG_ITEM') {
     knowledgeBaseId: 'kb-a', publicationRevision: 4,
     documentId: `document-${recordId}`, documentVersionId: `version-${recordId}`,
     hydrationValidated: true, publicationValidated: true, callerFacing: true,
+    callerFacingHint: true, callerFacingValidated: true,
     authoritativeData: recordType === 'CATALOG_ITEM'
       ? { itemKey: recordId, name: recordId }
       : { question: recordId, answer: recordId },
@@ -234,6 +235,34 @@ const explicitIsolationPackage = buildGroundedLlmInput({
 assert.deepEqual(explicitIsolationPackage.hydratedRecords.map((entry) => entry.recordId), [
   explicitRecord.recordId,
 ], 'Explicit selection must remove stale memory and unrelated hydrated namespaces');
+
+const boundedPackage = buildGroundedLlmInput({
+  input: {
+    ...baseInput,
+    memory: {}, canonicalCallMemory: {},
+    queryUnderstanding: {
+      explicitEntities: [], explicitCategories: [], comparisonEntities: [],
+      currentEntityCandidates: [], contextDependent: false,
+    },
+  },
+  classification: { intentClass: 'UNKNOWN' },
+  resolution: { candidate: null, candidateNamespace: null },
+  authoritative: {
+    tenantId: 'tenant-a', agentId: 'agent-a', callId: 'call-a',
+    evidence: Array.from({ length: 7 }, (_value, index) => (
+      evidence(`bounded-${index + 1}`, 'FAQ')
+    )),
+  },
+  runtimeProfile: { tools: [] },
+});
+assert.equal(boundedPackage.hydratedRecords.length, 5,
+  'Grounded packaging must cap valid relevant records at five without becoming empty');
+assert.ok(boundedPackage.hydratedRecords.every((entry) => (
+  entry.callerFacing === true
+  && entry.callerFacingHint === true
+  && entry.callerFacingValidated === true
+  && entry.sourceId
+)), 'Verified caller-facing metadata must survive canonical packaging');
 
 console.log(JSON.stringify({
   success: true,

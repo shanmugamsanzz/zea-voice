@@ -157,6 +157,44 @@ for (const channel of Object.values(retrieval.channels)) {
   )));
 }
 
+const staleReservationInput = Object.freeze({
+  ...retrievalInput,
+  utterance: 'unmatched reservation phrase',
+  latestQuestion: 'unmatched reservation phrase',
+  queryUnderstanding: Object.freeze({
+    contextDependent: false,
+    explicitEntities: Object.freeze([Object.freeze({
+      tenantId: scope.tenantId,
+      agentId: scope.agentId,
+      knowledgeBaseId: 'foreign-kb',
+      publicationRevision: 99,
+      recordType: 'CATALOG_ITEM',
+      recordId: record.record_id,
+      canonicalName: 'Stale reservation',
+    })]),
+    explicitCategories: Object.freeze([]),
+    comparisonEntities: Object.freeze([]),
+  }),
+});
+const staleReservationRetrieval = await searchParallelHybridCandidates({
+  input: staleReservationInput,
+  classification: Object.freeze({
+    ...classification,
+    intentClass: 'UNKNOWN', candidate: null,
+    retrievalPlan: Object.freeze({ indexes: Object.freeze([]) }),
+  }),
+  resolution: Object.freeze({
+    tenantId: scope.tenantId, candidate: null, candidateNamespace: null,
+    routingCandidates: Object.freeze([]), namespaceCandidates: Object.freeze({}),
+  }),
+  publicationBundles: [bundle], sparseIndexes: [sparseIndex],
+}, {
+  embed: async () => [0.1, 0.2],
+  search: async () => [],
+});
+assert.deepEqual(staleReservationRetrieval.channels.structured, [],
+  'A stale KB/revision identity must not be injected by record ID alone');
+
 await assert.rejects(() => searchParallelHybridCandidates({
   input: retrievalInput, classification, resolution,
   publicationBundles: [{ ...bundle, tenantId: 'another-tenant' }],

@@ -192,6 +192,8 @@ export function llmOperationalFailureClass(error) {
 }
 
 export function configuredClarificationRecovery(profile, knowledge = {}) {
+  const variables = clarificationVariables(knowledge);
+  const question = resolveRuntimeMessage(profile, 'clarification', knowledge, variables);
   const supportMessage = resolveRuntimeMessage(
     profile, 'clarification_recovery_support', knowledge,
   );
@@ -199,6 +201,7 @@ export function configuredClarificationRecovery(profile, knowledge = {}) {
     profile?.agent?.settings?.clarificationRecoveryMaxAttempts ?? 2, 10,
   );
   return Object.freeze({
+    question: question && !isInternalRuntimeText(question) ? question : '',
     supportMessage: supportMessage && !isInternalRuntimeText(supportMessage)
       ? supportMessage : '',
     maximumAttempts: Math.max(1, Math.min(5, configuredAttempts || 2)),
@@ -2057,6 +2060,9 @@ export class RealtimeConversationOrchestrator {
       selectedContextMessages,
       groundedContextMessages: session.groundedContextMessages,
       groundedContextPairs: session.groundedContextPairs,
+      groundedEnvelopeVersion: session.groundedEnvelopeVersion,
+      groundedEnvelopeEvidenceRecords: session.groundedEvidenceRecords,
+      groundedEnvelopeAuthorizedTools: session.groundedAuthorizedTools,
       conversationContextMode: liveMemory?.conversationContextMode ?? null,
       conversationContextTurns: liveMemory?.conversationContextTurns ?? null,
       maximumOutputTokens: session.maxOutputTokens,

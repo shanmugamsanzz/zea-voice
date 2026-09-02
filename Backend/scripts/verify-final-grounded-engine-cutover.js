@@ -118,12 +118,12 @@ for (let repeat = 1; repeat <= 3; repeat += 1) for (const tenant of tenants) {
     }, {});
     memory.beginTurn(`turn-${repeat}`);
     memory.applyGroundedDecision({
-      decision: 'answer', answer: tenant.fact, evidenceIds: ['source_1'],
+      decision: 'RESPONSE', answer: tenant.fact, evidenceIds: ['source_1'],
       stateUpdate: { currentTopic: tenant.recordId, knownEntityKeys: [] },
       pendingQuestion: null, toolRequest: null,
     }, { turnToken: `turn-${repeat}` });
     const stale = memory.applyGroundedDecision({
-      decision: 'clarify', answer: '', evidenceIds: [], stateUpdate: {},
+      decision: 'CLARIFY', answer: '', evidenceIds: [], stateUpdate: {},
       pendingQuestion: 'obsolete', toolRequest: null,
     }, { turnToken: 'obsolete-turn' });
     assert.equal(stale.stale, true);

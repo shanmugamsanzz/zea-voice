@@ -176,6 +176,11 @@ const rememberedVersionId = '94000000-0000-4000-8012-000000000001';
 const rememberedFollowupInput = createKnowledgeEngineInput({
   tenantId, agentId, callId, usageDirection: 'inbound',
   utterance: 'What is its price?', requestedFacts: ['price'],
+  recentRelevantTurns: [
+    { role: 'user', content: 'Tell me about Remembered Item.' },
+    { role: 'assistant', content: 'Remembered Item is the selected published option.' },
+    { role: 'user', content: 'An unrelated incomplete caller fragment.' },
+  ],
   queryUnderstanding: {
     explicitEntities: [], explicitCategories: [], comparisonEntities: [],
     contextDependent: true,
@@ -250,6 +255,22 @@ assert.equal(hybridSearchCalls, 0,
 assert.equal(rememberedHydrationQueries, 1,
   'The remembered PostgreSQL record must be hydrated in one authoritative query');
 assert.equal(rememberedFollowup.retrieval.retrievalMode, 'direct_canonical_memory');
+assert.equal(rememberedFollowup.retrieval.queryContext.currentQuestion, 'What is its price?');
+assert.equal(rememberedFollowup.retrieval.queryContext.canonicalEntity.recordId,
+  rememberedItemId);
+assert.deepEqual(rememberedFollowup.retrieval.queryContext.requestedFacts, ['price']);
+assert.equal(rememberedFollowup.retrieval.queryContext.exactRecordLookup.recordId,
+  rememberedItemId);
+assert.equal(rememberedFollowup.retrieval.queryContext.exactRecordLookup.knowledgeBaseId,
+  knowledgeBaseId);
+assert.equal(rememberedFollowup.retrieval.queryContext.exactRecordLookup.publicationRevision, 9);
+assert.match(rememberedFollowup.retrieval.queryContext.contextualText,
+  /What is its price\?/u);
+assert.match(rememberedFollowup.retrieval.queryContext.contextualText,
+  /Remembered Item is the selected published option\./u);
+assert.doesNotMatch(rememberedFollowup.retrieval.queryContext.contextualText,
+  /unrelated incomplete caller fragment/u,
+  'Only complete caller-agent pairs may enter contextual retrieval text');
 assert.deepEqual(rememberedFollowup.authoritative.evidence
   .map((source) => source.recordId), [rememberedItemId]);
 assert.deepEqual(rememberedFollowup.llmInput.hydratedRecords

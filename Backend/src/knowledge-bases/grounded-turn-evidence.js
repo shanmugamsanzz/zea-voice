@@ -25,8 +25,13 @@ import {
 } from '../knowledge-engine/grounded-evidence-representation.js';
 import { env } from '../config/env.js';
 
-export const GROUNDED_TURN_EVIDENCE_VERSION = 13;
+export const GROUNDED_TURN_EVIDENCE_VERSION = 15;
 const maximumEvidenceRecords = 5;
+
+function uniqueContextText(values = [], maximum = 20) {
+  return Object.freeze([...new Set(values.map((value) => clean(value, 500))
+    .filter(Boolean))].slice(0, maximum));
+}
 
 function directRememberedFollowupRetrieval(input = {}, classification = {}, resolution = {}) {
   const understanding = input.queryUnderstanding ?? {};
@@ -54,6 +59,32 @@ function directRememberedFollowupRetrieval(input = {}, classification = {}, reso
     { scope, expectedRecordType: 'CATALOG_ITEM' },
   );
   if (!remembered) return null;
+
+  const currentQuestion = clean(input.latestQuestion ?? input.utterance, 2_000);
+  const requestedFacts = uniqueContextText([
+    understanding.requestedFact,
+    ...(understanding.requestedFacts ?? []),
+    input.requestedFact,
+    ...(input.requestedFacts ?? []),
+    memory.pendingClarification?.missingFactType,
+  ], 20);
+  const recentCompleteContext = selectCompleteConversationTurns(
+    input.recentRelevantTurns ?? [], {
+      mode: 'full_current_call',
+      currentQuestion,
+      contextTerms: [remembered.canonicalName, ...requestedFacts].filter(Boolean),
+      maximumPairs: 3,
+    },
+  ).map((turn) => clean(turn.content, 500)).filter(Boolean);
+  const queryParts = uniqueContextText([
+    currentQuestion,
+    remembered.canonicalName,
+    ...requestedFacts,
+  ]);
+  const contextualText = uniqueContextText([
+    ...queryParts,
+    ...recentCompleteContext,
+  ]).join(' ');
 
   const reservation = Object.freeze({
     tenantId: remembered.tenantId,
@@ -91,9 +122,24 @@ function directRememberedFollowupRetrieval(input = {}, classification = {}, reso
     primaryNamespaces: Object.freeze(['CATALOG']),
     recordTypes: Object.freeze(['CATALOG_ITEM']),
     queryContext: Object.freeze({
+      currentQuestion,
+      canonicalEntity: remembered,
+      requestedFacts,
       contextDependent: true,
-      contextualText: [remembered.canonicalName, input.requestedFact]
-        .filter(Boolean).join(' '),
+      previousTurnContextUsed: recentCompleteContext.length > 0,
+      contextualText,
+      latestRequestText: queryParts.join(' '),
+      sparseText: queryParts.join(' '),
+      semanticText: contextualText,
+      exactRecordLookup: Object.freeze({
+        tenantId: remembered.tenantId,
+        knowledgeBaseId: remembered.knowledgeBaseId,
+        publicationRevision: remembered.publicationRevision,
+        recordType: remembered.recordType,
+        recordId: remembered.recordId,
+        requestedFacts,
+      }),
+      requiresCanonicalHydration: true,
       reservedRecords: Object.freeze([reservation]),
     }),
     channels: Object.freeze({
@@ -562,13 +608,11 @@ export function buildGroundedLlmInput({
   input, classification, resolution, authoritative, runtimeProfile,
 } = {}) {
   const allHydrated = authoritative?.verifiedRecords ?? authoritative?.evidence ?? [];
-  const hydrated = selectHydratedRecordsForCurrentTurn(
+  const selectedHydrated = selectHydratedRecordsForCurrentTurn(
     allHydrated, input, authoritative, classification, resolution,
   );
+  const hydrated = selectedHydrated.slice(0, maximumEvidenceRecords);
   assertRequiredEvidenceInvariant(authoritative, hydrated);
-  if (hydrated.length > maximumEvidenceRecords) {
-    throw new TypeError('Grounded LLM input cannot contain more than five hydrated records');
-  }
   const mandatoryReservations = requiredReservations(authoritative);
   const reservationReasons = (source) => mandatoryReservations.filter((reservation) => (
     reservationKey(reservation) === reservationKey(source)

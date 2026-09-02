@@ -155,9 +155,9 @@ const unifiedTurnSource = readFileSync(
   new URL('../src/voice/interaction/unified-grounded-turn.js', import.meta.url), 'utf8',
 );
 assert.match(unifiedTurnSource,
-  /const actionActivation = providerProposedAction[\s\S]*configuredActionActivation/u,
-  'Workflow activation must require a provider action decision before schema authorization');
+  /const candidateActionActivation =[\s\S]*configuredActionActivation[\s\S]*providerProposedAction[\s\S]*candidateActionActivation\?\.valid === true/u,
+  'A unique applicable Workflow may recover a missed provider TOOL decision');
 assert.match(unifiedTurnSource, /configuredToolAuthorization\(actionActivation\.tool\.name/u,
-  'A provider action must still resolve through the assigned tool and published Workflow');
+  'Every action must still resolve through the assigned tool and published Workflow');
 
 console.log('Grounding and schema-driven action runtime verification passed');

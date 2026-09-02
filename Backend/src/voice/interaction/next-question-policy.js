@@ -119,6 +119,14 @@ function configuredFieldsForTool(fieldSchemas, tool, inputSchema) {
   ));
 }
 
+function configuredConfirmationMessage(configuration, tool, inputSchema) {
+  const uiConfigured = configuration?.enabled === true
+    && toolIdentifiers(tool).has(toolIdentity(configuration.intent));
+  return text(uiConfigured
+    ? configuration.confirmationMessage
+    : inputSchema['x-confirmation-message'], 2_000);
+}
+
 export function advanceSchemaDrivenWorkflowState({
   activeRequest, fieldSchemas = [], collectedInformation = {}, tools = [],
   actionEvidence = [], confirmationConfiguration = null, confirmationAccepted = false,
@@ -132,11 +140,30 @@ export function advanceSchemaDrivenWorkflowState({
   const configuredFields = configuredFieldsForTool(
     fieldSchemas, authorization.tool, inputSchema,
   );
+  const schemaRequiredFields = Array.isArray(inputSchema.required)
+    ? inputSchema.required.map((key) => text(key, 64)).filter(Boolean) : [];
+  const configuredFieldKeys = new Set(configuredFields.map((field) => field.key));
+  const unconfiguredRequiredFields = schemaRequiredFields.filter((key) => (
+    !configuredFieldKeys.has(key)
+  ));
+  if (unconfiguredRequiredFields.length) return Object.freeze({
+    valid: false,
+    reason: 'workflow_required_field_configuration_missing',
+    missingConfiguration: Object.freeze(unconfiguredRequiredFields),
+  });
   const collected = object(collectedInformation);
   const requiredFields = configuredFields.map((field) => field.key);
   const missingFields = configuredFields.filter((field) => (
     !completedField(field, collected[field.key], inputSchema)
   )).map((field) => field.key);
+  const missingQuestionFields = configuredFields.filter((field) => (
+    missingFields.includes(field.key) && !text(field.question)
+  )).map((field) => field.key);
+  if (missingQuestionFields.length) return Object.freeze({
+    valid: false,
+    reason: 'workflow_field_question_missing',
+    missingConfiguration: Object.freeze(missingQuestionFields),
+  });
   const collectedFields = Object.fromEntries(requiredFields.flatMap((key) => (
     completedField(configuredFields.find((field) => field.key === key) ?? { key },
       collected[key], inputSchema) ? [[key, collected[key]]] : []
@@ -154,6 +181,16 @@ export function advanceSchemaDrivenWorkflowState({
       ? 'confirmed' : (missingFields.length ? 'pending_fields' : 'awaiting_confirmation'));
   const status = missingFields.length ? 'collecting_information'
     : (confirmationStatus === 'awaiting_confirmation' ? 'awaiting_confirmation' : 'ready');
+  const confirmationMessage = configuredConfirmationMessage(
+    confirmationConfiguration, authorization.tool, inputSchema,
+  );
+  if (!missingFields.length && confirmationRequired && !confirmationMessage) {
+    return Object.freeze({
+      valid: false,
+      reason: 'workflow_confirmation_message_missing',
+      missingConfiguration: Object.freeze(['confirmationMessage']),
+    });
+  }
   const workflowState = Object.freeze({
     version: 1,
     selectedRecord: authorization.workflowRecord,
@@ -163,6 +200,7 @@ export function advanceSchemaDrivenWorkflowState({
     collectedFields: Object.freeze(collectedFields),
     confirmationRequired,
     confirmationStatus,
+    confirmationMessage,
   });
   return Object.freeze({
     valid: true,
@@ -192,8 +230,6 @@ function confirmationForTool({
   const authorization = { tool: transition.tool,
     authorizationRecordId: transition.activeToolRequest.authorizationRecordId };
   const inputSchema = transition.inputSchema;
-  const configuredConfirmation = configuration?.enabled === true
-    && toolIdentifiers(authorization.tool).has(toolIdentity(configuration.intent));
   const collected = object(collectedInformation);
   const required = transition.workflowState.requiredFields;
   const fields = new Map((fieldSchemas ?? []).map((field) => [field.key, field]));
@@ -205,10 +241,7 @@ function confirmationForTool({
     const label = text(fields.get(key)?.label ?? key.replace(/_/gu, ' '), 120);
     return `${label}: ${text(collected[key], 500)}`;
   });
-  const confirmationMessage = configuredConfirmation
-    ? configuration.confirmationMessage
-    : (inputSchema['x-confirmation-message']
-      ?? 'Would you like me to continue with this action?');
+  const confirmationMessage = transition.workflowState.confirmationMessage;
   const rendered = text(confirmationMessage, 2_000).replace(
     /\{\{\s*([a-z][a-z0-9_]{0,63})\s*\}\}/giu,
     (match, key) => text(collected[String(key).toLocaleLowerCase()], 500) || match,

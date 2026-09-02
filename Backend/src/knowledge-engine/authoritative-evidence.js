@@ -9,8 +9,9 @@ import {
   isMandatoryCanonicalReservation,
 } from './canonical-retrieval-reservations.js';
 import { publicationDuplicateKeys } from './publication-deduplication.js';
+import { publishedRecordCallerFacingHint } from './evidence-audience.js';
 
-export const AUTHORITATIVE_EVIDENCE_VERSION = 11;
+export const AUTHORITATIVE_EVIDENCE_VERSION = 12;
 
 const supportedRecordTypes = new Set([
   'CATALOG_ITEM', 'CATALOG_CATEGORY', 'FAQ', 'CONVERSATION_NODE', 'WORKFLOW_RULE', 'KNOWLEDGE_CHUNK',
@@ -799,6 +800,11 @@ function evidenceFromRow(row, input, fused, context = {}) {
   const contextual = Boolean(context.rememberedRecordKey
     && key === context.rememberedRecordKey);
   const explicit = Boolean(context.explicitRecordKey && key === context.explicitRecordKey);
+  const callerFacing = publishedRecordCallerFacingHint({
+    recordType: row.record_type,
+    callerFacing: row.caller_facing === true,
+    metadata: row.authoritative_data,
+  });
   const provenance = Object.freeze({
     tenantId: input.tenantId,
     agentId: input.agentId,
@@ -845,7 +851,9 @@ function evidenceFromRow(row, input, fused, context = {}) {
       ?? row.authoritative_data?.metadata?.sourceLineEnd ?? null,
     language: row.language ?? 'und',
     content: String(row.content ?? '').trim(),
-    callerFacing: row.caller_facing === true,
+    callerFacing,
+    callerFacingHint: fused.callerFacingHint === true,
+    callerFacingValidated: true,
     authoritativeData: Object.freeze(stableValue(row.authoritative_data ?? {})),
     rank: fused.rank,
     rrfScore: fused.rrfScore,
@@ -880,6 +888,8 @@ function verifyHydratedEvidenceRecord(source, input) {
     invalid.push('recordIdentity');
   }
   if (!source?.documentId || !source?.documentVersionId) invalid.push('documentProvenance');
+  if (source?.callerFacingValidated !== true
+    || typeof source?.callerFacing !== 'boolean') invalid.push('callerFacingMetadata');
   if (String(source?.documentStatus ?? '').toLowerCase() !== 'ready') {
     invalid.push('documentStatus');
   }

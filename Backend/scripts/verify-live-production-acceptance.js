@@ -16,6 +16,7 @@ import { isRepairableGroundedDecisionReason } from '../src/voice/interaction/gro
 import { applyUnifiedGroundedTurn } from '../src/voice/interaction/unified-grounded-turn.js';
 import { evidenceBelongsToRuntime } from '../src/voice/interaction/grounded-decision-security.js';
 import {
+  canonicalToolArguments,
   configuredSafeFailureResponse,
   configuredTechnicalFailureResponse,
 } from '../src/voice/realtime-conversation-orchestrator.js';
@@ -24,6 +25,8 @@ import { ProviderAdapterRegistry } from '../src/voice/providers/registry.js';
 import { registerImplementedProviderAdapters } from '../src/voice/providers/defaults.js';
 import { runtimeReleaseMetadata } from '../src/release/runtime-release-metadata.js';
 import { countTenantPointsByKnowledgeBaseRevision } from '../src/rag/qdrant.client.js';
+import { executeAgentTools } from '../src/voice/tools/tool-executor.service.js';
+import { finalizeConfiguredToolResults } from '../src/knowledge-bases/verified-tool-result.js';
 import {
   createKnowledgeEngineInput,
   isKnowledgeEngineDecision,
@@ -45,6 +48,24 @@ function required(value, name) {
 
 function enabled(value) {
   return ['1', 'true', 'yes'].includes(String(value ?? '').trim().toLocaleLowerCase());
+}
+
+function sandboxToolTransport(outcome, tool) {
+  assert.ok(['success', 'timeout', 'failure'].includes(outcome),
+    'Sandbox tool outcome must be success, timeout or failure');
+  if (outcome === 'timeout') return async () => {
+    throw Object.assign(new Error('Release-test sandbox timeout'), { name: 'TimeoutError' });
+  };
+  const inputSchema = tool?.configuration?.inputSchema
+    ?? tool?.configuration?.input_schema ?? {};
+  const successMessage = String(inputSchema['x-success-message'] ?? '').trim();
+  return async () => new Response(JSON.stringify(outcome === 'success' ? {
+    success: true,
+    ...(successMessage ? { message: successMessage } : {}),
+  } : {
+    success: false,
+    error: { code: 'RELEASE_TEST_REPORTED_FAILURE' },
+  }), { status: 200, headers: { 'content-type': 'application/json' } });
 }
 
 function percentile(values, ratio) {
@@ -491,6 +512,7 @@ const expectedRevisions = expectedRevisionMap(argument(
 const requireLiveTts = enabled(argument(
   'require-live-tts', process.env.PRODUCTION_ACCEPTANCE_REQUIRE_LIVE_TTS,
 ));
+const allowSandboxToolExecution = enabled(argument('allow-sandbox-tool-execution', false));
 const requireReleaseIdentity = enabled(argument('require-release-identity', false));
 const expectedGitSha = argument(
   'expected-git-sha', process.env.PRODUCTION_ACCEPTANCE_EXPECTED_GIT_SHA,
@@ -547,7 +569,9 @@ const tools = runtimeTools(profile.tools);
 const samples = [];
 const results = [];
 let qdrantCandidates = 0;
+let bm25Candidates = 0;
 const replayLanguages = new Set();
+const scenarioCoverage = new Set();
 const safeResponse = configuredSafeFailureResponse(profile);
 const technicalResponse = configuredTechnicalFailureResponse(profile);
 const providerRegistry = registerImplementedProviderAdapters(new ProviderAdapterRegistry());
@@ -578,6 +602,7 @@ try {
           `${call.id} turn ${index + 1} language`)
           .toLocaleLowerCase();
         replayLanguages.add(replayLanguage);
+        if (turn.scenario) scenarioCoverage.add(normalized(turn.scenario));
         const totalStartedAt = performance.now();
         const retrievalStartedAt = performance.now();
         const snapshot = memory.snapshot();
@@ -639,6 +664,7 @@ try {
         }
         const qdrantCandidateCount = Number(tenantEvidence.retrieval?.channels?.qdrant ?? 0);
         qdrantCandidates += qdrantCandidateCount;
+        bm25Candidates += Number(tenantEvidence.retrieval?.channels?.bm25 ?? 0);
         // Qdrant validates semantic discovery. Authoritative hydration may then
         // replace a matching category seed with complete PostgreSQL children;
         // those children must not inherit a fabricated vector score.
@@ -676,6 +702,7 @@ try {
         let envelope = null;
         let unifiedApplied = false;
         let groundedStateUpdate = null;
+        let toolExecution = null;
         if (engineDecision.type === knowledgeEngineDecisionTypes.CLARIFY) {
           if (turn.allowTargetedClarification === true) {
             finalDecision = 'clarify';
@@ -803,6 +830,79 @@ try {
             assert.deepEqual(unified.stateUpdate?.collectedInformation ?? {}, {},
               `${call.id} turn ${index + 1}: personal/configured fields were collected without authorization`);
           }
+          if (unified.toolRequest) {
+            const expectedToolOutcome = normalized(turn.expectedToolOutcome);
+            assert.ok(['success', 'timeout', 'failure'].includes(expectedToolOutcome),
+              `${call.id} turn ${index + 1}: test-safe tool execution requires expectedToolOutcome`);
+            assert.equal(allowSandboxToolExecution, true,
+              `${call.id} turn ${index + 1}: sandbox tool execution was not explicitly enabled`);
+            const assignedTool = (profile.tools ?? []).find((tool) => (
+              normalized(tool.name) === normalized(unified.toolRequest.name)
+            ));
+            assert.ok(assignedTool,
+              `${call.id} turn ${index + 1}: assigned tool was not found`);
+            const activeRequest = unified.state?.activeToolRequest
+              ?? memory.snapshot().activeToolRequest;
+            const canonical = unified.state?.activeEntity ?? memory.snapshot().activeEntity;
+            const executableToolCall = {
+              id: `release-test-tool:${call.id}:${repeat}:${index + 1}`,
+              name: unified.toolRequest.name,
+              arguments: canonicalToolArguments(unified.toolRequest, tools, canonical),
+              authorizationRecordId: activeRequest?.authorizationRecordId ?? null,
+            };
+            const executionResults = await executeAgentTools(profile, {
+              id: callId,
+              providerCallId: call.sourceCallId ?? callId,
+              direction,
+            }, [executableToolCall], {
+              fetchImpl: sandboxToolTransport(expectedToolOutcome, assignedTool),
+              resolveDns: false,
+              requireWorkflowAuthorization: true,
+              workflowAuthorization: {
+                recordId: executableToolCall.authorizationRecordId,
+                toolName: executableToolCall.name,
+              },
+            });
+            const actualToolOutcome = executionResults.every((result) => (
+              result.verified === true && result.success === true
+            )) ? 'success' : executionResults.some((result) => (
+              result?.error?.code === 'VOICE_TOOL_TIMEOUT'
+            )) ? 'timeout' : 'failure';
+            assert.equal(actualToolOutcome, expectedToolOutcome,
+              `${call.id} turn ${index + 1}: test-safe tool outcome did not match fixture`);
+            if (actualToolOutcome === 'success') {
+              const finalized = finalizeConfiguredToolResults({
+                input: {
+                  tenantId: agent.tenant_id, agentId: agent.id, callId,
+                  utterance, memory: memory.snapshot(),
+                },
+                results: executionResults,
+                runtimeProfile: profile,
+              });
+              assert.equal(finalized.decision.type, knowledgeEngineDecisionTypes.RESPONSE,
+                `${call.id} turn ${index + 1}: verified tool result was rejected`);
+              assert.equal(finalized.decision.reason, 'verified_tool_success',
+                `${call.id} turn ${index + 1}: success was not based on a verified result`);
+              finalText = finalized.decision.response?.text;
+              finalDecision = 'tool_success';
+            } else {
+              finalText = technicalResponse;
+              finalDecision = `tool_${actualToolOutcome}`;
+            }
+            memory.setActiveToolRequest?.(null, { turnToken: token });
+            toolExecution = {
+              expected: expectedToolOutcome,
+              actual: actualToolOutcome,
+              toolName: executableToolCall.name,
+              authorizationRecordId: executableToolCall.authorizationRecordId,
+              results: executionResults.map((result) => ({
+                name: result.name,
+                verified: result.verified === true,
+                success: result.success === true,
+                errorCode: result.error?.code ?? null,
+              })),
+            };
+          }
         }
         assert.ok(String(finalText ?? '').trim(), `${call.id} turn ${index + 1}: empty TTS text`);
         if (turn.forbidConfiguredTechnicalFailure === true) {
@@ -824,7 +924,8 @@ try {
         });
         const tts = requireLiveTts
           ? await synthesizeLiveTts(profile, finalText, providerRegistry) : null;
-        if (!unifiedApplied) {
+        if (!unifiedApplied || toolExecution) {
+          memory.observeAssistantResponse?.(finalText, { turnToken: token });
           memory.append({ role: 'assistant', content: finalText }, { turnToken: token });
         }
         const finalMemory = memory.snapshot();
@@ -846,6 +947,7 @@ try {
         });
         results.push({
           callId: call.id, turn: index + 1, utterance,
+          scenario: turn.scenario ? normalized(turn.scenario) : null,
           publicationRevisions, retrievedRecordIds, selectedEvidenceIds,
           selectedRecordIds, responseId, finalDecision, memory: finalMemory,
           retrievalTrace,
@@ -853,7 +955,8 @@ try {
           language: replayLanguage,
           positiveSemanticRecordIds: positiveSemanticCandidates.map(sourceRecordId),
           directCanonicalMemory,
-          toolSafe: true, ttsText: finalText, latencyMs: { retrievalMs, llmMs, totalMs },
+          toolSafe: true, toolExecution, ttsText: finalText,
+          latencyMs: { retrievalMs, llmMs, totalMs },
           tts,
         });
       }
@@ -863,8 +966,13 @@ try {
    }
   }
   assert.ok(qdrantCandidates > 0, 'No Qdrant semantic candidates were observed in the live replay');
+  assert.ok(bm25Candidates > 0, 'No BM25 candidates were observed in the live replay');
   for (const language of replay.requiredLanguages ?? ['ta', 'tanglish', 'en']) {
     assert.ok(replayLanguages.has(language), `Live replay is missing unseen ${language} coverage`);
+  }
+  for (const scenario of replay.requiredScenarios ?? []) {
+    assert.ok(scenarioCoverage.has(normalized(scenario)),
+      `Live replay is missing required scenario coverage: ${scenario}`);
   }
   const latency = Object.fromEntries(['retrievalMs', 'llmMs', 'totalMs'].map((field) => [field, {
     p50: percentile(samples.map((sample) => sample[field]), 0.50),
@@ -896,15 +1004,17 @@ try {
   const report = {
     version: 3, mode: 'live_candidate_revision_postgresql_qdrant', passed: true,
     generatedAt: new Date().toISOString(), agentId: agent.id,
+    tenantId: agent.tenant_id,
     replayVersion: replay.version ?? 1,
     replayFile: replayPath,
     sourceCallIds: replay.calls.map((call) => call.sourceCallId).filter(Boolean),
     callCount: replay.calls.length * repeats, turnCount: results.length, repeats,
-    qdrantCandidates, latency, thresholds,
+    qdrantCandidates, bm25Candidates, latency, thresholds,
     candidateRevisions, candidateRevisionFingerprint,
     extractionArtifacts,
     release,
     replayLanguages: [...replayLanguages].sort(),
+    scenarioCoverage: [...scenarioCoverage].sort(),
     verification: {
       allHydratedEvidenceScopeValidated: true,
       retrievedIdsRecorded: true,
@@ -916,6 +1026,16 @@ try {
       evidenceTypesValidated: true,
       memoryValidated: true,
       toolSafetyValidated: true,
+      liveToolExecutionsValidated: results.filter((result) => result.toolExecution).length,
+      liveToolSuccessesValidated: results.filter((result) => (
+        result.toolExecution?.actual === 'success'
+      )).length,
+      liveToolTimeoutsValidated: results.filter((result) => (
+        result.toolExecution?.actual === 'timeout'
+      )).length,
+      liveToolFailuresValidated: results.filter((result) => (
+        result.toolExecution?.actual === 'failure'
+      )).length,
       overviewResponsesValidated: results.filter((result) => (
         result.expectation.exactPublishedResponse
       )).length,
@@ -935,7 +1055,7 @@ try {
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
   console.log(JSON.stringify({
     passed: true, mode: report.mode, callCount: report.callCount,
-    turnCount: report.turnCount, qdrantCandidates, latency, thresholds,
+    turnCount: report.turnCount, qdrantCandidates, bm25Candidates, latency, thresholds,
     verification: report.verification, reportPath,
   }));
 } finally {
