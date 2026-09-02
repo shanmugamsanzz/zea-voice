@@ -2174,7 +2174,14 @@ export class RealtimeConversationOrchestrator {
           decision: grounded,
           hydratedRecords: llmEvidenceBundle.decisionInput?.hydratedRecords ?? [],
         }) : null;
-      if (grounded.valid && confirmedCanonicalResolution?.mode !== 'UNRESOLVED'
+      const canonicalResponseCommitAllowed = grounded.valid === true
+        && grounded.decision === 'answer'
+        && grounded.noMatch !== true
+        && grounded.clearUnsupportedRequest !== true
+        && grounded.approvedZeroEvidenceResponse !== true
+        && grounded.approvedConfiguredUnavailableResponse !== true;
+      if (canonicalResponseCommitAllowed
+        && confirmedCanonicalResolution?.mode !== 'UNRESOLVED'
         && this.liveCallMemory?.applyCanonicalTopicResolution) {
         const canonicalApplied = this.liveCallMemory.applyCanonicalTopicResolution(
           confirmedCanonicalResolution,
@@ -2355,6 +2362,13 @@ export class RealtimeConversationOrchestrator {
           numbers: grounded.numbers ?? [],
         },
         normalTurnOutput,
+        // RESPONSE commits above after complete validation. TOOL keeps the
+        // evidence-backed proposal transaction-local until verified execution
+        // succeeds; CLARIFY and NO_MATCH never receive a durable proposal.
+        pendingCanonicalResolution: grounded.valid === true
+          && grounded.decision === 'action'
+          && confirmedCanonicalResolution?.mode !== 'UNRESOLVED'
+          ? confirmedCanonicalResolution : null,
         toolCalls,
         sources,
       };
@@ -3089,6 +3103,7 @@ export class RealtimeConversationOrchestrator {
       return;
     }
     if (response.toolCalls.length) {
+      const pendingCanonicalResolution = response.pendingCanonicalResolution ?? null;
       const primaryToolCall = {
         ...response.toolCalls[0],
         arguments: canonicalToolArguments(
@@ -3168,6 +3183,26 @@ export class RealtimeConversationOrchestrator {
         validatedNormalTurn = validatedNormalTurn
           && toolDecision.type === knowledgeEngineDecisionTypes.RESPONSE
           && toolDecision.reason === 'verified_tool_success';
+        if (validatedNormalTurn && pendingCanonicalResolution
+          && this.liveCallMemory?.applyCanonicalTopicResolution) {
+          const canonicalApplied = this.liveCallMemory.applyCanonicalTopicResolution(
+            pendingCanonicalResolution, { turnToken: epoch },
+          );
+          if (canonicalApplied?.stale) return;
+          if (canonicalApplied?.applied) {
+            this.log.info({
+              stage: 'memory.canonical_topic_committed',
+              callId: this.call.id,
+              turnEpoch: epoch,
+              mode: canonicalApplied.mode,
+              commitBoundary: 'verified_tool_result',
+              activeRecordId: canonicalApplied.state?.activeEntity?.id
+                ?? canonicalApplied.state?.activeCategory?.id ?? null,
+              comparisonRecordIds: (canonicalApplied.state?.comparisonEntities ?? [])
+                .map((entity) => entity.id).filter(Boolean),
+            }, 'Verified TOOL result committed PostgreSQL-backed canonical topic state');
+          }
+        }
         sourceTrace.add(response.sources);
       } finally {
         this.liveCallMemory?.setActiveToolRequest?.(null);

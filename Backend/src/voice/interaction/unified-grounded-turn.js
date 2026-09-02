@@ -860,9 +860,15 @@ export function applyUnifiedGroundedTurn({
     effectiveDecision = postLlmValidation.decision;
   }
 
-  const applied = memory.applyGroundedDecision(effectiveDecision, {
-    turnToken, canonicalEntityAuthority,
-  });
+  // CLARIFY carries only temporary ambiguity state. It must never commit the
+  // model's proposed topic, entity, field values or workflow state as durable
+  // call memory. A later RESPONSE or TOOL decision may commit only after the
+  // complete decision has passed the evidence and authorization gates above.
+  const applied = effectiveDecision.decision === 'clarify'
+    ? Object.freeze({ applied: false, stale: false, state: beforeState })
+    : memory.applyGroundedDecision(effectiveDecision, {
+      turnToken, canonicalEntityAuthority,
+    });
   if (applied?.stale) {
     return Object.freeze({ valid: false, reason: 'stale_turn', state: applied.state });
   }
