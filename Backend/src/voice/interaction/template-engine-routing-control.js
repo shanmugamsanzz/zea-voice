@@ -58,6 +58,8 @@ export function buildTemplateEngineRoutingPrompt({
     '- Apply the tenant main prompt to map caller actions to TOOL.',
     '- Apply the tenant main prompt for response language, tone, style, missing-information behavior and verified tool-result phrasing.',
     '- Do not infer tenant behavior from runtime source code or fixed industry vocabulary.',
+    '- A purely social greeting, courtesy, acknowledgement or conversational confirmation that requests no fact and no action must use RESPONSE; do not send it to SEARCH or turn it into missing-information speech.',
+    '- A request for an externally verifiable fact must use SEARCH. When uncertain whether a requested answer is factual, use SEARCH rather than an unsupported RESPONSE.',
     '- Resolve natural follow-up references from recentCompleteTurns and the latest utterance.',
     '- Treat lastReferencedRecordIds and comparisonRecordIds only as optional retrieval preferences, never as independent intent or factual evidence.',
     '- For SEARCH, create a self-contained query from the latest utterance and recentCompleteTurns; include requestedFact, contextualReference and only known preferredRecordIds.',
@@ -70,6 +72,9 @@ export function buildTemplateEngineRoutingPrompt({
       : null,
     postSearch
       ? '- RESPONSE must cite supplied evidence IDs. CLARIFY asks one natural relevant question. NO_MATCH speaks the tenant-configured natural unavailable-information response.'
+      : null,
+    postSearch
+      ? '- Use NO_MATCH only after inspecting all supplied evidence and determining that it cannot answer the current request. Never use NO_MATCH to repair missing, malformed or invalid citations.'
       : null,
     '</tenant_routing_authority>',
     '<tenant_main_prompt_json>',

@@ -22,6 +22,12 @@ assert.match(prompt, /<tenant_main_prompt_json>/u);
 assert.match(prompt, /<orchestrator_output_schema>/u);
 assert.match(prompt, /Use RESPONSE for greetings/u);
 assert.match(prompt, /optional retrieval preferences/u);
+assert.match(prompt, /purely social greeting, courtesy, acknowledgement/u);
+assert.match(prompt, /externally verifiable fact must use SEARCH/u);
+const postSearchPrompt = buildTemplateEngineRoutingPrompt({
+  mainPrompt: tenantPrompt, phase: 'post_search',
+});
+assert.match(postSearchPrompt, /Never use NO_MATCH to repair missing, malformed or invalid citations/u);
 assert.equal(templateEngineRuntimeInvariants.length, 4);
 assert.throws(() => buildTemplateEngineRoutingPrompt({ mainPrompt: '' }),
   /tenant main prompt is required/u);

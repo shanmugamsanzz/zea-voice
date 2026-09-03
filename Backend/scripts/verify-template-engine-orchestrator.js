@@ -83,6 +83,26 @@ assert.match(providerRequest.messages[0].content, /<orchestrator_turn_input>/u);
 assert.doesNotMatch(providerRequest.messages[0].content, /incomplete caller turn/u);
 assert.doesNotMatch(providerRequest.messages[0].content, /currentTopic|knownEntities/u);
 
+let socialRequest;
+const socialTurn = await routeTemplateEngineUtterance({
+  mainPrompt: 'Use RESPONSE for non-factual social conversation and SEARCH for facts.',
+  latestUtterance: 'Hello, thank you.',
+}, {
+  tenantBoundaryVerified: true,
+  nonFactualResponseAllowed: true,
+  invokeStructuredLlm: async (request) => {
+    socialRequest = request;
+    return {
+      decision: 'RESPONSE', response: 'Hello! You are welcome.', clarification: null,
+      search: null, tool: null, stateUpdate: null,
+    };
+  },
+});
+assert.equal(socialTurn.decision.decision, 'RESPONSE');
+assert.equal(socialTurn.outputValidation.route, 'TTS');
+assert.match(socialRequest.messages[0].content,
+  /purely social greeting, courtesy, acknowledgement/u);
+
 await assert.rejects(() => routeTemplateEngineUtterance({
   mainPrompt: 'Use RESPONSE for greetings.',
   latestUtterance: 'Hello',

@@ -39,11 +39,19 @@ const retrieval = await retrieveTemplateEngineEvidence({
 assert.equal(channelCalls, 1);
 assert.equal(retrieval.evidence.length, 1);
 assert.equal(retrieval.evidence[0].verified, true);
+assert.deepEqual(retrieval.diagnostics.channelCounts, {
+  structured: 1, bm25: 1, qdrant: 1,
+});
+assert.equal(retrieval.diagnostics.retrievalCount, 1);
+assert.equal(retrieval.diagnostics.hydrationCount, 1);
+assert.equal(retrieval.diagnostics.verifiedEvidenceCount, 1);
 
 const decisions = [searchDecision, {
   decision: 'RESPONSE', response: 'Tenant Item costs 125.', clarification: null,
-  evidenceIds: ['evidence-1'], stateUpdate: null,
+  evidenceIds: ['E1'], stateUpdate: null,
 }];
+let retrievalDiagnostics;
+let postSearchDiagnostics;
 const turn = await runTemplateEngineProductionTurn({
   auth: { tenantId }, scope, callId: 'call-1', usageDirection: 'inbound', language: 'en',
   mainPrompt: 'Answer in English. Search for factual requests.',
@@ -57,11 +65,52 @@ const turn = await runTemplateEngineProductionTurn({
   executeAuthorizedTool: async () => { throw new Error('must not execute'); },
   validateGroundedClaims: async () => ({ supported: true, successClaimed: false }),
   validateToolResultSpeechClaims: async () => ({ supported: true, successClaimed: false }),
+  onRetrievalDiagnostics: (details) => { retrievalDiagnostics = details; },
+  onPostSearchDiagnostics: (details) => { postSearchDiagnostics = details; },
 });
 assert.equal(turn.speech, 'Tenant Item costs 125.');
 assert.deepEqual(turn.evidenceIds, ['evidence-1']);
 assert.deepEqual(turn.state.lastReferencedRecordIds, ['record-1']);
 assert.equal(decisions.length, 0);
+assert.equal(retrievalDiagnostics.retrievalCount, 1);
+assert.deepEqual(postSearchDiagnostics.allowedAliases, ['E1']);
+assert.deepEqual(postSearchDiagnostics.returnedAliases, ['E1']);
+assert.equal(postSearchDiagnostics.finalDecision, 'RESPONSE');
+
+const guardedDecisions = [{
+  decision: 'RESPONSE', response: 'Tenant Item costs 125.', clarification: null,
+  search: null, tool: null, stateUpdate: null,
+}, {
+  decision: 'RESPONSE', response: 'Tenant Item costs 125.', clarification: null,
+  evidenceIds: ['E1'], stateUpdate: null,
+}];
+let guardedClaimChecks = 0;
+let guardedRetrievalCalls = 0;
+const guardedTurn = await runTemplateEngineProductionTurn({
+  auth: { tenantId }, scope, callId: 'call-guarded', usageDirection: 'inbound', language: 'en',
+  mainPrompt: 'Use RESPONSE only for non-factual speech and SEARCH for facts.',
+  latestUtterance: 'What is the tenant item price?', conversationHistory: [], state: {},
+  runtimeProfile: {}, authorizedWorkflowTools: [], assignedTools: [], informationFields: [],
+}, {
+  invokeStructuredLlm: async () => guardedDecisions.shift(),
+  loadPublishedContext: async () => ({ scope, publishedWorkflows: [], artifacts: {} }),
+  retrieveEvidence: async () => {
+    guardedRetrievalCalls += 1;
+    return retrieval;
+  },
+  persistWorkflowState: async () => {},
+  executeAuthorizedTool: async () => { throw new Error('must not execute'); },
+  validateGroundedClaims: async () => {
+    guardedClaimChecks += 1;
+    return { supported: guardedClaimChecks > 1, successClaimed: false };
+  },
+  validateToolResultSpeechClaims: async () => ({ supported: true, successClaimed: false }),
+});
+assert.equal(guardedRetrievalCalls, 1,
+  'A factual direct RESPONSE rejected by grounding must be forced through SEARCH');
+assert.equal(guardedTurn.decision.decision, 'RESPONSE');
+assert.deepEqual(guardedTurn.evidenceIds, ['evidence-1']);
+assert.equal(guardedDecisions.length, 0);
 
 const tool = {
   id: 'tool-1', name: 'perform_action', status: 'active', type: 'webhook_api',

@@ -2327,6 +2327,32 @@ export class RealtimeConversationOrchestrator {
             ...details,
           }, 'Invalid post-search decision was repaired without exposing unvalidated speech');
         },
+        onRetrievalDiagnostics: (details) => {
+          this.log.info({
+            stage: 'template_engine.retrieval_completed',
+            callId: this.call.id,
+            turnEpoch: epoch,
+            channelCounts: details.channelCounts,
+            retrievalCount: details.retrievalCount,
+            hydrationCount: details.hydrationCount,
+            verifiedEvidenceCount: details.verifiedEvidenceCount,
+            failedChannels: details.failedChannels,
+          }, 'Template-engine retrieval and hydration completed');
+        },
+        onPostSearchDiagnostics: (details) => {
+          this.log.info({
+            stage: 'template_engine.post_search_validated',
+            callId: this.call.id,
+            turnEpoch: epoch,
+            evidenceCount: details.evidenceCount,
+            allowedAliases: details.allowedAliases,
+            returnedAliases: details.returnedAliases,
+            initialValidationReason: details.initialValidationReason,
+            validationReason: details.validationReason,
+            finalDecision: details.finalDecision,
+            repairAttempted: details.repairAttempted,
+          }, 'Template-engine post-search decision validated');
+        },
       });
     } catch (error) {
       this.#recordProviderFailure('llm', error, 'template_engine.turn');

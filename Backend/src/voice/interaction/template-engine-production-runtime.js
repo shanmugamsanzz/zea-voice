@@ -220,6 +220,15 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     runtimeProfile: input.runtimeProfile,
     preloadedArtifacts: publishedContext.artifacts,
   });
+  if (typeof dependencies.onRetrievalDiagnostics === 'function') {
+    dependencies.onRetrievalDiagnostics(retrieval.diagnostics ?? Object.freeze({
+      channelCounts: Object.freeze({}),
+      retrievalCount: 0,
+      hydrationCount: 0,
+      verifiedEvidenceCount: retrieval.evidence?.length ?? 0,
+      failedChannels: Object.freeze([]),
+    }));
+  }
   const answered = await respondToTemplateEngineSearch({
     ...common,
     state,
@@ -236,6 +245,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       dependencies.validateGroundedClaims({ response, selectedEvidence })
     ),
     onDecisionRepair: dependencies.onPostSearchDecisionRepair,
+    onPostSearchDiagnostics: dependencies.onPostSearchDiagnostics,
   });
   if (answered.decision.decision === 'SEARCH') {
     throw new AppError(502, 'Grounded answer failed validation after one search',
@@ -249,6 +259,10 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     state: applyDecisionState(state, answered.decision, retrieval.evidence),
     evidence: retrieval.evidence,
     evidenceIds: Object.freeze(evidenceIds(answered.decision)),
+    diagnostics: Object.freeze({
+      retrieval: retrieval.diagnostics ?? null,
+      postSearch: answered.diagnostics ?? null,
+    }),
     workflow: null,
     toolExecuted: false,
   });

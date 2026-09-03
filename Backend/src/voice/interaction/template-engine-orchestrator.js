@@ -4,6 +4,7 @@ import { createMinimalTemplateEngineState } from './template-engine-state.js';
 import { normalizeTemplateEngineSearchDecision } from './template-engine-search-request.js';
 import {
   templateEnginePostSearchJsonSchema,
+  templateEnginePostSearchJsonSchemaForEvidenceAliases,
   templateEnginePostSearchDecisionDiagnostics,
   validateTemplateEnginePostSearchDecision,
 } from './template-engine-post-search-contract.js';
@@ -269,6 +270,44 @@ function verifiedEvidenceForPostSearch(values, scope = {}) {
   return Object.freeze(evidence);
 }
 
+function aliasPostSearchEvidence(evidence) {
+  const aliasToEvidenceId = new Map();
+  const aliasedEvidence = evidence.map((entry, index) => {
+    const evidenceId = `E${index + 1}`;
+    aliasToEvidenceId.set(evidenceId, entry.evidenceId);
+    return Object.freeze({
+      ...entry,
+      // Provider-facing citations are intentionally short and turn-scoped.
+      // The real identifier never has to be reproduced by the LLM.
+      evidenceId,
+    });
+  });
+  return Object.freeze({
+    evidence: Object.freeze(aliasedEvidence),
+    aliases: Object.freeze([...aliasToEvidenceId.keys()]),
+    aliasToEvidenceId,
+  });
+}
+
+function restorePostSearchEvidenceIds(decision, aliasToEvidenceId) {
+  const restored = decision.evidenceIds.map((alias) => aliasToEvidenceId.get(alias));
+  if (restored.some((evidenceId) => !evidenceId)) {
+    throw new AppError(500, 'A post-search citation alias could not be resolved',
+      'TEMPLATE_ENGINE_EVIDENCE_ALIAS_INVALID');
+  }
+  return Object.freeze({
+    ...decision,
+    evidenceIds: Object.freeze(restored),
+  });
+}
+
+function citationRepairRequired(reason, diagnostics, evidenceCount) {
+  return evidenceCount > 0
+    && diagnostics.decision === 'RESPONSE'
+    && diagnostics.responsePresent === true
+    && ['unknown_evidence_id', 'mixed_decision_payload', 'invalid_payload'].includes(reason);
+}
+
 export async function respondToTemplateEngineSearch(input = {}, dependencies = {}) {
   if (dependencies.tenantBoundaryVerified !== true) {
     throw new AppError(500, 'The post-search tenant boundary is not verified',
@@ -291,6 +330,11 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     throw new TypeError('The post-search Orchestrator requires a valid SEARCH interpretation');
   }
   const evidence = verifiedEvidenceForPostSearch(input.verifiedEvidence, input.scope);
+  const citations = aliasPostSearchEvidence(evidence);
+  const allowedEvidenceIds = citations.aliases;
+  const responseSchema = templateEnginePostSearchJsonSchemaForEvidenceAliases(
+    allowedEvidenceIds,
+  );
   const invokeStructuredLlm = dependencies.invokeStructuredLlm;
   if (typeof invokeStructuredLlm !== 'function') {
     throw new TypeError('The post-search Orchestrator requires one structured LLM invoker');
@@ -299,7 +343,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     latestUtterance: base.latestUtterance,
     state: base.state,
     searchInterpretation: search.value.search,
-    verifiedEvidence: evidence,
+    verifiedEvidence: citations.evidence,
   });
   const systemPrompt = [
     buildTemplateEngineRoutingPrompt({
@@ -322,35 +366,48 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       type: 'json_schema',
       name: 'template_engine_post_search_decision',
       strict: true,
-      schema: templateEnginePostSearchJsonSchema,
+      schema: responseSchema,
     }),
   });
-  const allowedEvidenceIds = evidence.map((entry) => entry.evidenceId);
   let completion = await invokeStructuredLlm(request(baseMessages));
   let output = completionOutput(completion);
   let validated = validateTemplateEnginePostSearchDecision(output, allowedEvidenceIds);
   const firstDiagnostics = templateEnginePostSearchDecisionDiagnostics(output);
   let firstInvalidReason = null;
+  let repairingCitation = false;
   let configuredFallbackApplied = false;
   if (!validated.valid) {
     firstInvalidReason = validated.reason;
+    repairingCitation = citationRepairRequired(
+      validated.reason, firstDiagnostics, evidence.length,
+    );
     const repairInstruction = [
       `Your previous JSON object was rejected: ${validated.reason}.`,
       'Return one corrected JSON object matching the supplied schema.',
       'RESPONSE requires non-empty response, null clarification, and one or more supplied evidenceIds.',
       'CLARIFY requires empty response, one clarification object, and no evidenceIds.',
       'NO_MATCH requires a natural non-empty unavailable response, null clarification, and no evidenceIds.',
+      `Allowed evidenceIds for this turn: ${allowedEvidenceIds.join(', ') || 'none'}.`,
+      repairingCitation
+        ? 'This is a citation-only repair. Keep decision RESPONSE and cite only the allowed evidenceIds that support the response; do not change it to NO_MATCH.'
+        : null,
       'Do not add facts, citations, or candidates that were not supplied.',
-    ].join(' ');
+    ].filter(Boolean).join(' ');
     completion = await invokeStructuredLlm(request([
       ...baseMessages,
       Object.freeze({ role: 'user', content: repairInstruction }),
     ]));
     output = completionOutput(completion);
     validated = validateTemplateEnginePostSearchDecision(output, allowedEvidenceIds);
+    if (repairingCitation && validated.valid && validated.value.decision !== 'RESPONSE') {
+      validated = Object.freeze({
+        valid: false,
+        reason: 'citation_repair_changed_decision',
+      });
+    }
   }
   const finalDiagnostics = templateEnginePostSearchDecisionDiagnostics(output);
-  if (!validated.valid) {
+  if (!validated.valid && evidence.length === 0) {
     const unavailableResponse = cleanText(input.informationUnavailableResponse, 4_000);
     if (unavailableResponse) {
       validated = validateTemplateEnginePostSearchDecision({
@@ -371,6 +428,17 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     }));
   }
   if (!validated.valid) {
+    if (typeof dependencies.onPostSearchDiagnostics === 'function') {
+      dependencies.onPostSearchDiagnostics(Object.freeze({
+        evidenceCount: evidence.length,
+        allowedAliases: citations.aliases,
+        returnedAliases: finalDiagnostics.evidenceAliases,
+        initialValidationReason: firstInvalidReason,
+        validationReason: validated.reason,
+        finalDecision: finalDiagnostics.decision,
+        repairAttempted: Boolean(firstInvalidReason),
+      }));
+    }
     throw new AppError(502, 'The post-search Orchestrator returned an invalid decision',
       'TEMPLATE_ENGINE_POST_SEARCH_DECISION_INVALID', {
         reason: validated.reason,
@@ -379,26 +447,40 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
         final: finalDiagnostics,
       });
   }
+  const groundedDecision = restorePostSearchEvidenceIds(
+    validated.value, citations.aliasToEvidenceId,
+  );
   let semanticClaimValidation = dependencies.semanticClaimValidation ?? null;
-  if (validated.value.decision === 'RESPONSE'
+  if (groundedDecision.decision === 'RESPONSE'
     && typeof dependencies.validateGroundedClaims === 'function') {
     semanticClaimValidation = await dependencies.validateGroundedClaims(Object.freeze({
-      response: validated.value.response,
-      evidenceIds: validated.value.evidenceIds,
+      response: groundedDecision.response,
+      evidenceIds: groundedDecision.evidenceIds,
       selectedEvidence: evidence,
       latestUtterance: base.latestUtterance,
       searchInterpretation: search.value.search,
     }));
   }
   const outputValidation = validateTemplateEngineOutput(outputValidationInput(
-    validated.value, base, dependencies, {
+    groundedDecision, base, dependencies, {
       phase: 'post_search',
-      factualClaimsPresent: validated.value.decision === 'RESPONSE',
+      factualClaimsPresent: groundedDecision.decision === 'RESPONSE',
       selectedEvidence: evidence,
       semanticClaimValidation,
     },
   ));
   if (!outputValidation.valid) {
+    if (typeof dependencies.onPostSearchDiagnostics === 'function') {
+      dependencies.onPostSearchDiagnostics(Object.freeze({
+        evidenceCount: evidence.length,
+        allowedAliases: citations.aliases,
+        returnedAliases: finalDiagnostics.evidenceAliases,
+        initialValidationReason: firstInvalidReason,
+        validationReason: outputValidation.reason,
+        finalDecision: outputValidation.retrySearch ? 'SEARCH' : groundedDecision.decision,
+        repairAttempted: Boolean(firstInvalidReason),
+      }));
+    }
     if (outputValidation.retrySearch) {
       return Object.freeze({
         decision: search.value,
@@ -409,9 +491,22 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     throw new AppError(502, 'The post-search output failed delivery validation',
       'TEMPLATE_ENGINE_OUTPUT_INVALID', { reason: outputValidation.reason });
   }
+  const diagnostics = Object.freeze({
+    evidenceCount: evidence.length,
+    allowedAliases: citations.aliases,
+    returnedAliases: finalDiagnostics.evidenceAliases,
+    initialValidationReason: firstInvalidReason,
+    validationReason: null,
+    finalDecision: groundedDecision.decision,
+    repairAttempted: Boolean(firstInvalidReason),
+  });
+  if (typeof dependencies.onPostSearchDiagnostics === 'function') {
+    dependencies.onPostSearchDiagnostics(diagnostics);
+  }
   return Object.freeze({
-    decision: validated.value,
+    decision: groundedDecision,
     input: turnInput,
     outputValidation,
+    diagnostics,
   });
 }

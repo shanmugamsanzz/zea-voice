@@ -194,7 +194,7 @@ const postSearch = await respondToTemplateEngineSearch({
   tenantBoundaryVerified: true,
   validateGroundedClaims: async () => ({ supported: true }),
   invokeStructuredLlm: async () => ({ outputParsed: response(
-    'Service Alpha costs 9999 units.', ['e-1'],
+    'Service Alpha costs 9999 units.', ['E1'],
   ) }),
 });
 assert.equal(postSearch.decision.decision, 'SEARCH');

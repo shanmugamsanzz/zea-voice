@@ -48,6 +48,24 @@ export const templateEnginePostSearchJsonSchema = Object.freeze({
   }),
 });
 
+export function templateEnginePostSearchJsonSchemaForEvidenceAliases(aliases = []) {
+  const allowed = [...new Set((Array.isArray(aliases) ? aliases : [])
+    .map((alias) => String(alias ?? '').trim()).filter(Boolean))].slice(0, 5);
+  const evidenceItems = allowed.length
+    ? Object.freeze({ type: 'string', enum: Object.freeze(allowed) })
+    : templateEnginePostSearchJsonSchema.properties.evidenceIds.items;
+  return Object.freeze({
+    ...templateEnginePostSearchJsonSchema,
+    properties: Object.freeze({
+      ...templateEnginePostSearchJsonSchema.properties,
+      evidenceIds: Object.freeze({
+        ...templateEnginePostSearchJsonSchema.properties.evidenceIds,
+        items: evidenceItems,
+      }),
+    }),
+  });
+}
+
 function isObject(value) {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
@@ -103,12 +121,17 @@ function normalizeInactiveBranchFields(parsed) {
 
 export function templateEnginePostSearchDecisionDiagnostics(value) {
   const parsed = parse(value);
+  const evidenceAliases = Array.isArray(parsed?.evidenceIds)
+    ? [...new Set(parsed.evidenceIds.filter((id) => (
+      typeof id === 'string' && /^E[1-5]$/u.test(id)
+    )))].slice(0, 5) : [];
   return Object.freeze({
     parsed: Boolean(parsed),
     decision: decisions.has(parsed?.decision) ? parsed.decision : null,
     responsePresent: typeof parsed?.response === 'string' && parsed.response.trim().length > 0,
     clarificationPresent: isObject(parsed?.clarification),
     evidenceIdCount: Array.isArray(parsed?.evidenceIds) ? parsed.evidenceIds.length : null,
+    evidenceAliases: Object.freeze(evidenceAliases),
     stateUpdateNull: parsed?.stateUpdate === null,
   });
 }

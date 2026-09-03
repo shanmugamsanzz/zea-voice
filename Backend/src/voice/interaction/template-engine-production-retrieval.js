@@ -181,13 +181,27 @@ export async function retrieveTemplateEngineEvidence({
     limit: 5,
     minProviderScore: 0,
   }, dependencies.hydration);
+  const hydratedEvidence = Array.isArray(authoritative.evidence)
+    ? authoritative.evidence : [];
+  const evidence = Object.freeze(hydratedEvidence.map(evidenceRecord)
+    .filter((source) => source.verified && source.callerFacing).slice(0, 5));
   return Object.freeze({
     version: TEMPLATE_ENGINE_PRODUCTION_RETRIEVAL_VERSION,
     search,
     scope: Object.freeze({ ...scope, publications: artifacts.publications }),
     retrieval,
-    evidence: Object.freeze(authoritative.evidence.map(evidenceRecord)
-      .filter((source) => source.verified && source.callerFacing).slice(0, 5)),
+    evidence,
+    diagnostics: Object.freeze({
+      channelCounts: Object.freeze(Object.fromEntries(
+        Object.entries(hybrid.channels).map(([channel, candidates]) => [
+          channel, Array.isArray(candidates) ? candidates.length : 0,
+        ]),
+      )),
+      retrievalCount: hybrid.candidates.length,
+      hydrationCount: hydratedEvidence.length,
+      verifiedEvidenceCount: evidence.length,
+      failedChannels: Object.freeze(hybrid.failures.map((failure) => failure.channel)),
+    }),
     authoritative,
     artifacts,
   });

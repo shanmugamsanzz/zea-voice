@@ -46,31 +46,45 @@ assert.equal(Object.hasOwn(templateEnginePostSearchJsonSchema.properties, 'searc
 
 let calls = 0;
 let providerRequest;
+let groundedClaimInput;
+let postSearchDiagnostics;
 const result = await respondToTemplateEngineSearch({
   mainPrompt, latestUtterance, state, searchDecision, verifiedEvidence, scope,
 }, {
   tenantBoundaryVerified: true,
-  validateGroundedClaims: async () => ({ supported: true }),
+  validateGroundedClaims: async (input) => {
+    groundedClaimInput = input;
+    return { supported: true };
+  },
   invokeStructuredLlm: async (request) => {
     calls += 1;
     providerRequest = request;
     return {
       outputParsed: {
         decision: 'RESPONSE', response: 'The current price is 3200 currency units.',
-        clarification: null, evidenceIds: ['evidence-1'], stateUpdate: null,
+        clarification: null, evidenceIds: ['E1'], stateUpdate: null,
       },
     };
   },
+  onPostSearchDiagnostics: (details) => { postSearchDiagnostics = details; },
 });
 assert.equal(calls, 1);
 assert.equal(result.decision.decision, 'RESPONSE');
 assert.deepEqual(result.decision.evidenceIds, ['evidence-1']);
+assert.deepEqual(groundedClaimInput.evidenceIds, ['evidence-1']);
+assert.deepEqual(postSearchDiagnostics.allowedAliases, ['E1']);
+assert.deepEqual(postSearchDiagnostics.returnedAliases, ['E1']);
+assert.equal(postSearchDiagnostics.validationReason, null);
+assert.equal(postSearchDiagnostics.finalDecision, 'RESPONSE');
 assert.equal(result.input.verifiedEvidence.length, 1);
 assert.equal(result.input.searchInterpretation.requestedFact, 'price');
 assert.match(providerRequest.messages[0].content, /template_engine_post_search_decision|post-search phase/u);
 assert.match(providerRequest.messages[0].content, /Explain the selected service/u);
 assert.match(providerRequest.messages[0].content, /The selected service currently costs/u);
-assert.equal(providerRequest.responseFormat.schema, templateEnginePostSearchJsonSchema);
+assert.match(providerRequest.messages[0].content, /"evidenceId":"E1"/u);
+assert.doesNotMatch(providerRequest.messages[0].content, /evidence-1/u,
+  'Real evidence IDs must not be exposed as provider-facing citation tokens');
+assert.deepEqual(providerRequest.responseFormat.schema.properties.evidenceIds.items.enum, ['E1']);
 
 assert.equal(validateTemplateEnginePostSearchDecision({
   decision: 'RESPONSE', response: 'Unsupported.', clarification: null,
@@ -128,13 +142,13 @@ const repaired = await respondToTemplateEngineSearch({
     repairCalls += 1;
     return repairCalls === 1 ? {
       outputParsed: {
-        decision: 'RESPONSE', response: 'A factual answer without a citation.',
-        clarification: null, evidenceIds: [], stateUpdate: null,
+        decision: 'RESPONSE', response: 'A factual answer with a forbidden real identifier.',
+        clarification: null, evidenceIds: ['evidence-1'], stateUpdate: null,
       },
     } : {
       outputParsed: {
         decision: 'RESPONSE', response: 'The current price is 3200 currency units.',
-        clarification: null, evidenceIds: ['evidence-1'], stateUpdate: null,
+        clarification: null, evidenceIds: ['E1'], stateUpdate: null,
       },
     };
   },
@@ -145,7 +159,7 @@ assert.deepEqual(repaired.decision.evidenceIds, ['evidence-1']);
 
 let fallbackCalls = 0;
 let fallbackDiagnostics;
-const safeFallback = await respondToTemplateEngineSearch({
+await assert.rejects(() => respondToTemplateEngineSearch({
   mainPrompt, latestUtterance, state, searchDecision, verifiedEvidence, scope,
   informationUnavailableResponse: 'That information is not available right now.',
 }, {
@@ -160,13 +174,46 @@ const safeFallback = await respondToTemplateEngineSearch({
     };
   },
   onDecisionRepair: (details) => { fallbackDiagnostics = details; },
-});
+}), (error) => error.code === 'TEMPLATE_ENGINE_POST_SEARCH_DECISION_INVALID'
+  && error.details?.reason === 'mixed_decision_payload');
 assert.equal(fallbackCalls, 2);
-assert.equal(safeFallback.decision.decision, 'NO_MATCH');
-assert.equal(safeFallback.decision.response, 'That information is not available right now.');
-assert.equal(fallbackDiagnostics.recovered, true);
-assert.equal(fallbackDiagnostics.configuredFallbackApplied, true);
+assert.equal(fallbackDiagnostics.recovered, false);
+assert.equal(fallbackDiagnostics.configuredFallbackApplied, false);
 assert.equal(fallbackDiagnostics.first.responsePresent, true);
 assert.equal(fallbackDiagnostics.first.evidenceIdCount, 0);
+
+let changedDecisionCalls = 0;
+await assert.rejects(() => respondToTemplateEngineSearch({
+  mainPrompt, latestUtterance, state, searchDecision, verifiedEvidence, scope,
+  informationUnavailableResponse: 'That information is not available right now.',
+}, {
+  tenantBoundaryVerified: true,
+  invokeStructuredLlm: async () => {
+    changedDecisionCalls += 1;
+    return changedDecisionCalls === 1 ? { outputParsed: {
+      decision: 'RESPONSE', response: 'A supported answer without its citation.',
+      clarification: null, evidenceIds: [], stateUpdate: null,
+    } } : { outputParsed: {
+      decision: 'NO_MATCH', response: 'That information is unavailable.',
+      clarification: null, evidenceIds: [], stateUpdate: null,
+    } };
+  },
+}), (error) => error.code === 'TEMPLATE_ENGINE_POST_SEARCH_DECISION_INVALID'
+  && error.details?.reason === 'citation_repair_changed_decision');
+assert.equal(changedDecisionCalls, 2);
+
+const emptyEvidenceFallback = await respondToTemplateEngineSearch({
+  mainPrompt, latestUtterance, state, searchDecision, verifiedEvidence: [], scope,
+  informationUnavailableResponse: 'That information is not available right now.',
+}, {
+  tenantBoundaryVerified: true,
+  invokeStructuredLlm: async () => ({ outputParsed: {
+    decision: 'RESPONSE', response: 'An unsupported answer.',
+    clarification: null, evidenceIds: [], stateUpdate: null,
+  } }),
+});
+assert.equal(emptyEvidenceFallback.decision.decision, 'NO_MATCH');
+assert.equal(emptyEvidenceFallback.decision.response,
+  'That information is not available right now.');
 
 console.log('Template-engine post-search Orchestrator verification passed.');
