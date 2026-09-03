@@ -519,6 +519,8 @@ function freezeCandidate(candidate, channel, rank) {
     throw new TypeError(`Retrieval channel ${channel} returned a candidate without canonical identity`);
   }
   return Object.freeze({
+    tenantId: String(candidate.tenantId),
+    agentId: String(candidate.agentId),
     recordId: String(candidate.recordId),
     recordType: String(candidate.recordType).toUpperCase(),
     knowledgeBaseId: String(candidate.knowledgeBaseId),

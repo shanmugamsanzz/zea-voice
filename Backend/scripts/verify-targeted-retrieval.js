@@ -433,16 +433,21 @@ for (const forbidden of [
 ]) assert.doesNotMatch(serialized, new RegExp(forbidden, 'u'));
 for (const channel of Object.values(retrieval.channels)) {
   for (const candidate of channel) {
+    assert.equal(candidate.tenantId, tenantId,
+      'Every frozen retrieval candidate must preserve its tenant scope');
+    assert.equal(candidate.agentId, agentId,
+      'Every frozen retrieval candidate must preserve its agent scope');
     assert.equal(candidate.canonicalIdentity.tenantId, tenantId.toLowerCase());
     assert.equal(candidate.canonicalIdentity.knowledgeBaseId, knowledgeBaseId.toLowerCase());
     assert.equal(candidate.canonicalIdentity.publicationRevision, 7);
     assert.equal(candidate.canonicalIdentity.recordId, candidate.recordId.toLowerCase());
     assert.ok(candidate.canonicalIdentityKey);
     assert.deepEqual(Object.keys(candidate).sort(), [
-      'authorizationHint', 'callerFacingHint', 'canonicalIdentity', 'canonicalIdentityKey',
+      'agentId', 'authorizationHint', 'callerFacingHint', 'canonicalIdentity', 'canonicalIdentityKey',
       'channel', 'deduplicationIdentity', 'knowledgeBaseId',
       'namespace', 'namespaceRank', 'publicationRevision', 'rank',
-      'recordId', 'recordType', 'score', ...(candidate.tokenCoverage === undefined ? [] : ['tokenCoverage']),
+      'recordId', 'recordType', 'score', 'tenantId',
+      ...(candidate.tokenCoverage === undefined ? [] : ['tokenCoverage']),
       ...(candidate.matchMethod === undefined ? [] : ['matchMethod']),
       ...(candidate.categoryKey === undefined ? [] : ['categoryKey']),
       ...(candidate.evidenceRecordIds === undefined ? [] : ['evidenceRecordIds']),
