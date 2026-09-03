@@ -226,6 +226,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     searchDecision: first,
     verifiedEvidence: retrieval.evidence,
     scope: retrieval.scope,
+    informationUnavailableResponse: input.informationUnavailableResponse,
   }, {
     invokeStructuredLlm: dependencies.invokeStructuredLlm,
     tenantBoundaryVerified: true,
@@ -234,6 +235,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     validateGroundedClaims: ({ response, selectedEvidence }) => (
       dependencies.validateGroundedClaims({ response, selectedEvidence })
     ),
+    onDecisionRepair: dependencies.onPostSearchDecisionRepair,
   });
   if (answered.decision.decision === 'SEARCH') {
     throw new AppError(502, 'Grounded answer failed validation after one search',

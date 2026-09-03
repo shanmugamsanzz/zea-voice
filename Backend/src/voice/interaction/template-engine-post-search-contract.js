@@ -90,13 +90,37 @@ function normalizeClarification(value) {
   return Object.freeze({ question, reason, candidates: Object.freeze(candidates) });
 }
 
-export function validateTemplateEnginePostSearchDecision(value, allowedEvidenceIds = []) {
+function normalizeInactiveBranchFields(parsed) {
+  if (!decisions.has(parsed?.decision)) return parsed;
+  if (parsed.decision === templateEnginePostSearchDecisionTypes.RESPONSE) {
+    return Object.freeze({ ...parsed, clarification: null });
+  }
+  if (parsed.decision === templateEnginePostSearchDecisionTypes.CLARIFY) {
+    return Object.freeze({ ...parsed, response: '', evidenceIds: [] });
+  }
+  return Object.freeze({ ...parsed, clarification: null, evidenceIds: [] });
+}
+
+export function templateEnginePostSearchDecisionDiagnostics(value) {
   const parsed = parse(value);
-  if (!parsed) return Object.freeze({ valid: false, reason: 'invalid_json' });
-  if (!exactKeys(parsed, rootKeys)) return Object.freeze({ valid: false, reason: 'invalid_shape' });
-  if (!decisions.has(parsed.decision)) {
+  return Object.freeze({
+    parsed: Boolean(parsed),
+    decision: decisions.has(parsed?.decision) ? parsed.decision : null,
+    responsePresent: typeof parsed?.response === 'string' && parsed.response.trim().length > 0,
+    clarificationPresent: isObject(parsed?.clarification),
+    evidenceIdCount: Array.isArray(parsed?.evidenceIds) ? parsed.evidenceIds.length : null,
+    stateUpdateNull: parsed?.stateUpdate === null,
+  });
+}
+
+export function validateTemplateEnginePostSearchDecision(value, allowedEvidenceIds = []) {
+  const received = parse(value);
+  if (!received) return Object.freeze({ valid: false, reason: 'invalid_json' });
+  if (!exactKeys(received, rootKeys)) return Object.freeze({ valid: false, reason: 'invalid_shape' });
+  if (!decisions.has(received.decision)) {
     return Object.freeze({ valid: false, reason: 'invalid_decision' });
   }
+  const parsed = normalizeInactiveBranchFields(received);
   const response = text(parsed.response, 4_000);
   const clarification = parsed.clarification === null
     ? null : normalizeClarification(parsed.clarification);

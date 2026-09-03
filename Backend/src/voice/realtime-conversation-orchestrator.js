@@ -2267,6 +2267,7 @@ export class RealtimeConversationOrchestrator {
         assignedTools: this.runtimeProfile.tools,
         informationFields,
         confirmationMessage: this.actionConfirmationConfiguration?.confirmationMessage,
+        informationUnavailableResponse: configuredInformationUnavailableResponse(this.runtimeProfile),
       }, {
         invokeStructuredLlm,
         loadPublishedContext: (input) => loadTemplateEnginePublishedContext(
@@ -2318,6 +2319,14 @@ export class RealtimeConversationOrchestrator {
             callerValues: this.templateEngineState.collectedToolFields,
           }, { invokeStructuredLlm })
         ),
+        onPostSearchDecisionRepair: (details) => {
+          this.log.warn({
+            stage: 'template_engine.post_search_decision_repaired',
+            callId: this.call.id,
+            turnEpoch: epoch,
+            ...details,
+          }, 'Invalid post-search decision was repaired without exposing unvalidated speech');
+        },
       });
     } catch (error) {
       this.#recordProviderFailure('llm', error, 'template_engine.turn');

@@ -4,6 +4,7 @@ import { createMinimalTemplateEngineState } from './template-engine-state.js';
 import { normalizeTemplateEngineSearchDecision } from './template-engine-search-request.js';
 import {
   templateEnginePostSearchJsonSchema,
+  templateEnginePostSearchDecisionDiagnostics,
   validateTemplateEnginePostSearchDecision,
 } from './template-engine-post-search-contract.js';
 import {
@@ -310,11 +311,12 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     JSON.stringify(turnInput),
     '</orchestrator_turn_input>',
   ].join('\n');
-  const completion = await invokeStructuredLlm(Object.freeze({
-    messages: Object.freeze([
-      Object.freeze({ role: 'system', content: systemPrompt }),
-      Object.freeze({ role: 'user', content: base.latestUtterance }),
-    ]),
+  const baseMessages = Object.freeze([
+    Object.freeze({ role: 'system', content: systemPrompt }),
+    Object.freeze({ role: 'user', content: base.latestUtterance }),
+  ]);
+  const request = (messages) => Object.freeze({
+    messages: Object.freeze(messages),
     temperature: 0,
     responseFormat: Object.freeze({
       type: 'json_schema',
@@ -322,13 +324,60 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       strict: true,
       schema: templateEnginePostSearchJsonSchema,
     }),
-  }));
-  const validated = validateTemplateEnginePostSearchDecision(
-    completionOutput(completion), evidence.map((entry) => entry.evidenceId),
-  );
+  });
+  const allowedEvidenceIds = evidence.map((entry) => entry.evidenceId);
+  let completion = await invokeStructuredLlm(request(baseMessages));
+  let output = completionOutput(completion);
+  let validated = validateTemplateEnginePostSearchDecision(output, allowedEvidenceIds);
+  const firstDiagnostics = templateEnginePostSearchDecisionDiagnostics(output);
+  let firstInvalidReason = null;
+  let configuredFallbackApplied = false;
+  if (!validated.valid) {
+    firstInvalidReason = validated.reason;
+    const repairInstruction = [
+      `Your previous JSON object was rejected: ${validated.reason}.`,
+      'Return one corrected JSON object matching the supplied schema.',
+      'RESPONSE requires non-empty response, null clarification, and one or more supplied evidenceIds.',
+      'CLARIFY requires empty response, one clarification object, and no evidenceIds.',
+      'NO_MATCH requires a natural non-empty unavailable response, null clarification, and no evidenceIds.',
+      'Do not add facts, citations, or candidates that were not supplied.',
+    ].join(' ');
+    completion = await invokeStructuredLlm(request([
+      ...baseMessages,
+      Object.freeze({ role: 'user', content: repairInstruction }),
+    ]));
+    output = completionOutput(completion);
+    validated = validateTemplateEnginePostSearchDecision(output, allowedEvidenceIds);
+  }
+  const finalDiagnostics = templateEnginePostSearchDecisionDiagnostics(output);
+  if (!validated.valid) {
+    const unavailableResponse = cleanText(input.informationUnavailableResponse, 4_000);
+    if (unavailableResponse) {
+      validated = validateTemplateEnginePostSearchDecision({
+        decision: 'NO_MATCH', response: unavailableResponse,
+        clarification: null, evidenceIds: [], stateUpdate: null,
+      }, allowedEvidenceIds);
+      configuredFallbackApplied = validated.valid;
+    }
+  }
+  if (firstInvalidReason && typeof dependencies.onDecisionRepair === 'function') {
+    dependencies.onDecisionRepair(Object.freeze({
+      initialReason: firstInvalidReason,
+      finalReason: validated.valid ? null : validated.reason,
+      recovered: validated.valid,
+      configuredFallbackApplied,
+      first: firstDiagnostics,
+      final: finalDiagnostics,
+    }));
+  }
   if (!validated.valid) {
     throw new AppError(502, 'The post-search Orchestrator returned an invalid decision',
-      'TEMPLATE_ENGINE_POST_SEARCH_DECISION_INVALID', { reason: validated.reason });
+      'TEMPLATE_ENGINE_POST_SEARCH_DECISION_INVALID', {
+        reason: validated.reason,
+        attempts: 2,
+        first: firstDiagnostics,
+        final: finalDiagnostics,
+      });
   }
   let semanticClaimValidation = dependencies.semanticClaimValidation ?? null;
   if (validated.value.decision === 'RESPONSE'

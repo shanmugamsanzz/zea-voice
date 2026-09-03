@@ -89,6 +89,22 @@ assert.equal(validateTemplateEnginePostSearchDecision({
   clarification: { question: 'Which service do you mean?', reason: null, candidates: [] },
   evidenceIds: [], stateUpdate: null,
 }, []).valid, true);
+const normalizedResponse = validateTemplateEnginePostSearchDecision({
+  decision: 'RESPONSE', response: 'The current price is supported.',
+  clarification: { question: 'Ignore this?', reason: null, candidates: [] },
+  evidenceIds: ['evidence-1'], stateUpdate: null,
+}, ['evidence-1']);
+assert.equal(normalizedResponse.valid, true);
+assert.equal(normalizedResponse.value.clarification, null,
+  'Inactive clarification payload must not invalidate a grounded RESPONSE');
+const normalizedClarification = validateTemplateEnginePostSearchDecision({
+  decision: 'CLARIFY', response: 'Inactive response text.',
+  clarification: { question: 'Which service do you mean?', reason: null, candidates: [] },
+  evidenceIds: ['evidence-1'], stateUpdate: null,
+}, ['evidence-1']);
+assert.equal(normalizedClarification.valid, true);
+assert.equal(normalizedClarification.value.response, '');
+assert.deepEqual(normalizedClarification.value.evidenceIds, []);
 assert.equal(validateTemplateEnginePostSearchDecision({
   decision: 'TOOL', response: '', clarification: null,
   evidenceIds: [], stateUpdate: null,
@@ -101,5 +117,56 @@ await assert.rejects(() => respondToTemplateEngineSearch({
   tenantBoundaryVerified: true,
   invokeStructuredLlm: async () => { throw new Error('must not be invoked'); },
 }), (error) => error.code === 'TEMPLATE_ENGINE_POST_SEARCH_SCOPE_VIOLATION');
+
+let repairCalls = 0;
+const repaired = await respondToTemplateEngineSearch({
+  mainPrompt, latestUtterance, state, searchDecision, verifiedEvidence, scope,
+}, {
+  tenantBoundaryVerified: true,
+  validateGroundedClaims: async () => ({ supported: true }),
+  invokeStructuredLlm: async () => {
+    repairCalls += 1;
+    return repairCalls === 1 ? {
+      outputParsed: {
+        decision: 'RESPONSE', response: 'A factual answer without a citation.',
+        clarification: null, evidenceIds: [], stateUpdate: null,
+      },
+    } : {
+      outputParsed: {
+        decision: 'RESPONSE', response: 'The current price is 3200 currency units.',
+        clarification: null, evidenceIds: ['evidence-1'], stateUpdate: null,
+      },
+    };
+  },
+});
+assert.equal(repairCalls, 2, 'An invalid post-search branch must receive one repair attempt');
+assert.equal(repaired.decision.decision, 'RESPONSE');
+assert.deepEqual(repaired.decision.evidenceIds, ['evidence-1']);
+
+let fallbackCalls = 0;
+let fallbackDiagnostics;
+const safeFallback = await respondToTemplateEngineSearch({
+  mainPrompt, latestUtterance, state, searchDecision, verifiedEvidence, scope,
+  informationUnavailableResponse: 'That information is not available right now.',
+}, {
+  tenantBoundaryVerified: true,
+  invokeStructuredLlm: async () => {
+    fallbackCalls += 1;
+    return {
+      outputParsed: {
+        decision: 'RESPONSE', response: 'Unsupported factual response.',
+        clarification: null, evidenceIds: [], stateUpdate: null,
+      },
+    };
+  },
+  onDecisionRepair: (details) => { fallbackDiagnostics = details; },
+});
+assert.equal(fallbackCalls, 2);
+assert.equal(safeFallback.decision.decision, 'NO_MATCH');
+assert.equal(safeFallback.decision.response, 'That information is not available right now.');
+assert.equal(fallbackDiagnostics.recovered, true);
+assert.equal(fallbackDiagnostics.configuredFallbackApplied, true);
+assert.equal(fallbackDiagnostics.first.responsePresent, true);
+assert.equal(fallbackDiagnostics.first.evidenceIdCount, 0);
 
 console.log('Template-engine post-search Orchestrator verification passed.');
