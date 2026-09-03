@@ -2,24 +2,8 @@ import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
 import { AppError } from '../middleware/errors.js';
 import { appendTranscriptEntry } from '../calls/call.service.js';
-import {
-  ensurePublishedEngineReady,
-  createGroundedLlmOutput,
-  createNormalTurnInput,
-  deterministicProtocolExceptionTypes,
-  groundedLlmOutputTypes,
-  retrieveTenantEvidence,
-  toKnowledgeEngineInput,
-} from '../knowledge-bases/knowledge-runtime.service.js';
-import {
-  createKnowledgeEngineInput,
-  isKnowledgeEngineDecision,
-  knowledgeEngineDecisionTypes,
-  knowledgeEngineResponseModes,
-} from '../knowledge-engine/engine-contract.js';
-import { completeConversationTurnPairs } from '../knowledge-engine/conversation-turn-context.js';
-import { confirmCanonicalTopicResolution } from '../knowledge-engine/canonical-topic-memory.js';
-import { finalizeConfiguredToolResults } from '../knowledge-bases/verified-tool-result.js';
+import { createKnowledgeEngineInput } from '../knowledge-engine/engine-contract.js';
+import { ensurePublishedEngineReady } from '../knowledge-engine/runtime-service.js';
 import { ProviderIndependentAudioEngine } from './audio/audio-engine.js';
 import { completeVoiceCall, completeVoiceCallWithoutRuntime } from './call-completion.service.js';
 import { CallController } from './call-controller.js';
@@ -30,10 +14,7 @@ import { ProviderUsageTracker } from './provider-usage-tracker.js';
 import { loadAgentRuntimeProfile } from './providers/provider-config.js';
 import { createRuntimeAdapters, providerAdapterRegistry } from './providers/registry.js';
 import { registerImplementedProviderAdapters } from './providers/defaults.js';
-import {
-  assertGroundedStructuredCompletion,
-  createSelectedLlmStream, runtimeTools, selectedLlmPromptBudget,
-} from './providers/llm/llm-response.service.js';
+import { templateEngineToolSchemas } from './interaction/template-engine-tool-schemas.js';
 import { executeAgentTools } from './tools/tool-executor.service.js';
 import { LlmCircuitBreaker } from './providers/llm/streaming-runtime.js';
 import { welcomeAudioCache } from './welcome-audio-cache.service.js';
@@ -67,15 +48,13 @@ import {
   VoiceTurnLatencyTracker,
   voiceTurnStages,
 } from './interaction/grounded-turn-latency.js';
+import { createMinimalTemplateEngineState } from './interaction/template-engine-state.js';
+import { runTemplateEngineProductionTurn } from './interaction/template-engine-production-runtime.js';
 import {
-  buildUnifiedGroundingEnvelope,
-  assertGroundingEnvelopePreservesEvidence,
-} from './interaction/grounded-llm-response.js';
-import {
-  isRepairableGroundedDecisionReason,
-  isOperationalGroundedDecisionFailure,
-} from './interaction/grounded-llm-decision.js';
-import { applyUnifiedGroundedTurn } from './interaction/unified-grounded-turn.js';
+  loadTemplateEnginePublishedContext,
+  retrieveTemplateEngineEvidence,
+} from './interaction/template-engine-production-retrieval.js';
+import { validateTemplateEngineClaims } from './interaction/template-engine-claim-validator.js';
 import { evaluateFirstAudioSlo, percentile } from './interaction/voice-latency-slo.js';
 import { configuredCallDurationMs } from './interaction/call-duration-policy.js';
 import { sttEventPolicy } from './interaction/stt-event-policy.js';
@@ -100,12 +79,9 @@ import { resolvePostCallClosingConfiguration } from './integrations/postcall-clo
 import { classifyFinalCallEndUtterance } from './integrations/postcall-end-trigger-config.js';
 import {
   createMessageSource,
-  knowledgeMessageSources,
   llmMessageSource,
-  MessageSourceTrace,
   mergeMessageSources,
   messageSourceTypes,
-  toolMessageSources,
 } from './source-trace.js';
 
 function languageCode(value) {
@@ -114,6 +90,40 @@ function languageCode(value) {
   const names = { english: 'en', tamil: 'ta', hindi: 'hi', telugu: 'te', kannada: 'kn', malayalam: 'ml' };
   const lower = String(value ?? '').toLowerCase();
   return Object.entries(names).find(([name]) => lower.includes(name))?.[1] ?? 'en';
+}
+
+function createTemplateEngineStructuredInvoker(adapter, options = {}) {
+  return async (request) => {
+    let text = '';
+    let completion = {};
+    const stream = adapter.stream({
+      messages: request.messages,
+      tools: [],
+      temperature: request.temperature ?? 0,
+      maxOutputTokens: env.VOICE_GROUNDED_MAX_OUTPUT_TOKENS,
+      responseFormat: request.responseFormat,
+    });
+    options.onActive?.({ cancel: (reason) => adapter.cancel(reason) });
+    for await (const event of stream) {
+      if (event.type === 'text_delta') text += String(event.delta ?? '');
+      if (event.type === 'completed' && event.usage) options.onUsage?.(event);
+      if (event.type === 'completed') completion = event;
+      if (event.type === 'error') {
+        throw Object.assign(new Error(event.message), {
+          code: event.code ?? 'LLM_PROVIDER_ERROR', retryable: event.retryable === true,
+        });
+      }
+    }
+    const raw = text.trim();
+    if (!raw) throw new AppError(502, 'The template-engine LLM returned no decision',
+      'TEMPLATE_ENGINE_LLM_EMPTY');
+    try {
+      return { ...completion, outputParsed: JSON.parse(raw) };
+    } catch (error) {
+      throw new AppError(502, 'The template-engine LLM returned malformed JSON',
+        'TEMPLATE_ENGINE_LLM_INVALID_JSON', { message: error.message });
+    }
+  };
 }
 
 function fallbackClosing(profile) {
@@ -391,6 +401,10 @@ export class RealtimeConversationOrchestrator {
       llmStreaming: { requests: 0, firstTokenSamples: [], firstTokenTargetMinMs: 250, firstTokenTargetMaxMs: 500 },
       turnLatency: [],
     };
+    this.runtimeMetrics.templateEngine = {
+      version: 1, mode: 'active', turns: 0, searches: 0, workflows: 0,
+    };
+    this.templateEngineState = createMinimalTemplateEngineState();
     this.followUpOpeningSources = [];
     this.llmCircuitBreaker = new LlmCircuitBreaker();
     this.providerHealth = dependencies.providerHealth ?? tenantProviderHealth;
@@ -593,7 +607,7 @@ export class RealtimeConversationOrchestrator {
     });
     this.callCheckConfiguration = resolveCallCheckConfiguration(this.runtimeProfile.agent.settings);
     this.callbackConfiguration = resolveCallbackConfiguration(this.runtimeProfile.agent.settings);
-    const assignedToolSchemas = runtimeTools(this.runtimeProfile.tools);
+    const assignedToolSchemas = templateEngineToolSchemas(this.runtimeProfile.tools);
     const configuredToolFields = mergeToolFieldSchemas(
       this.runtimeProfile.agent.settings?.conversationMemoryFields,
       assignedToolSchemas,
@@ -623,8 +637,8 @@ export class RealtimeConversationOrchestrator {
     await this.#loadConversationMemory();
     this.log.info({
       stage: 'voice.engine_selected', callId: this.call.id,
-      engine: 'unified_grounded_decision',
-    }, 'Live call using unified grounded voice engine');
+      engine: 'template_engine_v1',
+    }, 'Live call using the template-engine runtime');
     const memoryIdentity = {
       tenantId: this.runtimeProfile.agent.tenantId ?? this.call.tenantId,
       workspaceId: this.runtimeProfile.agent.workspaceId ?? this.call.workspaceId,
@@ -1098,11 +1112,9 @@ export class RealtimeConversationOrchestrator {
     if (this.followUpOpeningRequired
       && this.interactionConfiguration.greetingMode === greetingModes.AGENT_INITIATES) {
       try {
-        const response = await this.#llm(
+        const response = await this.#generateUtilitySpeech(
           `Open this follow-up call in one short natural spoken sentence. The caller previously requested this callback. Do not repeat the original introduction or invent details. Follow-up instruction: ${this.callbackConfiguration.followUpOpeningInstructions}`,
           [],
-          { route: 'none', found: false },
-          { continuationOpening: true },
         );
         followUpOpening = response.text ? this.#fitTtsMessage(response.text) : null;
         this.followUpOpeningSources = mergeMessageSources(
@@ -1674,116 +1686,6 @@ export class RealtimeConversationOrchestrator {
     await this.#cancelActive('caller_barge_in');
   }
 
-  async #knowledge(query, abortSignal = null) {
-    try {
-      const startedAt = performance.now();
-      const memoryState = this.liveCallMemory?.snapshot();
-      const auth = {
-        tenantId: this.runtimeProfile.agent.tenantId,
-        workspaceId: this.runtimeProfile.agent.workspaceId,
-        userId: null,
-        role: 'COMPANY_DEVELOPER',
-      };
-      const normalTurnInput = createNormalTurnInput({
-        tenantId: this.runtimeProfile.agent.tenantId,
-        agentId: this.runtimeProfile.agent.id,
-        callId: this.call.id,
-        finalizedQuestion: query,
-        usageDirection: this.call.direction,
-        language: memoryState?.language ?? languageCode(this.runtimeProfile.agent.language),
-        memory: memoryState,
-        abortSignal,
-      });
-      const engineInput = toKnowledgeEngineInput(normalTurnInput);
-      const retrieveEvidence = this.dependencies.retrieveTenantEvidence ?? retrieveTenantEvidence;
-      // Retrieval and PostgreSQL hydration form one authoritative operation.
-      // Their production completion deadlines decide genuine failures; the
-      // retrieval SLO is observability only and cannot discard late evidence.
-      const tenantEvidence = await retrieveEvidence(auth, engineInput, {
-          runtimeProfile: this.runtimeProfile,
-          tracker: this.turnLatencyTrackers?.get(this.epoch),
-          cancelRetrieval: () => this.activeRetrievalAbortController?.abort('retrieval_timeout'),
-          cancelHydration: () => this.activeRetrievalAbortController?.abort('hydration_timeout'),
-        }).catch((error) => ({
-        found: false, error: error.code ?? 'TENANT_EVIDENCE_UNAVAILABLE',
-        sources: [], actionEvidence: [], guidanceEvidence: [], entities: [],
-        decision: null,
-        diagnostic: {
-          stage: 'knowledge_retrieval',
-          errorCode: error.code ?? 'TENANT_EVIDENCE_UNAVAILABLE',
-          details: {},
-        },
-      }));
-      const parallelDurationMs = Math.round((performance.now() - startedAt) * 100) / 100;
-      const first = tenantEvidence.sources?.[0];
-      const result = {
-        route: 'llm_first',
-        found: tenantEvidence.found === true,
-        content: first?.content ?? null,
-        source: first ? {
-          recordId: first.recordId, knowledgeBaseId: first.knowledgeBaseId,
-          publicationRevision: first.publicationRevision,
-          documentId: first.documentId, documentVersionId: first.documentVersionId,
-          documentName: first.documentName, documentDisplayName: first.documentDisplayName,
-          documentType: first.documentType, pageNumber: first.pageNumber, pageEnd: first.pageEnd,
-          sourceSection: first.sourceSection, sourceLineStart: first.sourceLineStart,
-          sourceLineEnd: first.sourceLineEnd,
-        } : null,
-        tenantEvidence,
-        matches: (tenantEvidence.sources ?? []).map((source) => ({
-          id: source.id,
-          recordId: source.recordId,
-          answer: source.content,
-          content: source.content,
-          recordType: source.recordType,
-          recordName: source.authoritativeData?.name
-            ?? source.authoritativeData?.question
-            ?? source.authoritativeData?.heading
-            ?? source.authoritativeData?.nodeKey
-            ?? null,
-          knowledgeBaseId: source.knowledgeBaseId,
-          publicationRevision: source.publicationRevision,
-          documentId: source.documentId,
-          documentVersionId: source.documentVersionId,
-          documentName: source.documentName,
-          documentDisplayName: source.documentDisplayName,
-          documentType: source.documentType,
-          pageNumber: source.pageNumber,
-          pageEnd: source.pageEnd,
-          sourceSection: source.sourceSection,
-          sourceLineStart: source.sourceLineStart,
-          sourceLineEnd: source.sourceLineEnd,
-          score: source.score,
-          callerFacing: source.callerFacing,
-        })),
-        retrieval: {
-          mode: 'llm_first',
-          parallelDurationMs,
-          semanticDurationMs: tenantEvidence.durationMs,
-          publicationRevisions: tenantEvidence.publicationRevisions ?? [],
-        },
-      };
-      this.runtimeMetrics.knowledge.push({
-        route: result.route, found: result.found === true, durationMs: Number(result.durationMs ?? 0),
-        intent: null, intentConfidence: null,
-      });
-      return result;
-    } catch (error) {
-      this.log.warn({ err: error, callId: this.call.id },
-        'Knowledge retrieval failed operationally; using tenant-configured technical speech');
-      const errorCode = error.code ?? 'KNOWLEDGE_UNAVAILABLE';
-      return {
-        route: 'operational_failure', found: false, content: null, source: null, error: errorCode,
-        retrieval: { parallelDurationMs: 0 },
-        tenantEvidence: {
-          found: false, sources: [], evidenceIds: [], decision: null,
-          diagnostic: {
-            stage: 'knowledge_retrieval', errorCode, details: {},
-          },
-        },
-      };
-    }
-  }
 
   #preCallSource() {
     const keys = Object.keys(this.preCallContext ?? {});
@@ -1861,6 +1763,35 @@ export class RealtimeConversationOrchestrator {
     return fitted;
   }
 
+  async #generateUtilitySpeech(instruction, history = []) {
+    let text = '';
+    let completion = {};
+    const messages = [
+      { role: 'system', content: this.runtimeProfile.agent.prompt },
+      ...(Array.isArray(history) ? history.slice(-6) : []),
+      { role: 'user', content: instruction },
+    ];
+    for await (const event of this.adapters.llm.stream({
+      messages,
+      tools: [],
+      temperature: this.runtimeProfile.agent.temperature,
+      maxOutputTokens: Math.min(256, env.VOICE_GROUNDED_MAX_OUTPUT_TOKENS),
+    })) {
+      if (event.type === 'text_delta') text += String(event.delta ?? '');
+      if (event.type === 'completed' && event.usage) {
+        this.usageTracker.record('llm', event.usage);
+      }
+      if (event.type === 'completed') completion = event;
+      if (event.type === 'error') throw Object.assign(new Error(event.message), {
+        code: event.code ?? 'LLM_PROVIDER_ERROR', retryable: event.retryable === true,
+      });
+    }
+    return Object.freeze({
+      text: text.trim(),
+      sources: [llmMessageSource(this.runtimeProfile.providers.llm, completion)],
+    });
+  }
+
   async #reserveTtsCharacters(text, generationId) {
     if (!this.ttsCharacterBudget.enabled) {
       // Retain accurate usage telemetry even though live calls never wait for
@@ -1897,528 +1828,6 @@ export class RealtimeConversationOrchestrator {
     return false;
   }
 
-  async #llmAttempt(query, history, knowledge, context = {}, streaming = {}) {
-    const llmStartedAt = performance.now();
-    const memoryPromptStartedAt = performance.now();
-    const liveMemory = this.liveCallMemory?.snapshot();
-    const llmEvidenceBundle = knowledge?.tenantEvidence?.llmEvidenceBundle ?? null;
-    const promptKnowledge = knowledge;
-    // Tool fields are mutable call state and must never be inherited by a new
-    // call. Cross-call history may still be supplied as read-only context when
-    // the UI policy enables it, but collection always starts in this call.
-    const collectedData = {
-      ...(liveMemory?.collectedToolFields
-        ?? liveMemory?.collectedInformation ?? liveMemory?.collectedData ?? {}),
-    };
-    const allConfiguredFields = this.liveCallMemory?.fieldSchemas?.() ?? liveMemory?.fields ?? [];
-    // Important Information Fields are isolated current-call memory and remain
-    // available even when cross-call caching is disabled. External actions are
-    // still constrained independently by authorizedToolSchemas below.
-    const configuredFields = allConfiguredFields;
-    const liveHistory = llmEvidenceBundle?.recentRelevantTurns
-      ?? this.liveCallMemory?.promptMessages?.() ?? history ?? [];
-    const promptHistory = liveHistory.filter((message, index, messages) => !(
-      index === messages.length - 1
-      && message.role === 'user'
-      && String(message.content).trim() === String(query).trim()
-    ));
-    const compactLiveMemory = llmEvidenceBundle ? Object.freeze({
-      ...llmEvidenceBundle.callMemory,
-      resolvedCurrentEntity: llmEvidenceBundle.canonicalEntity,
-      requestedFact: llmEvidenceBundle.requestedFact,
-      requestedFacts: llmEvidenceBundle.requestedFacts,
-      queryUnderstanding: llmEvidenceBundle.queryUnderstanding,
-      canonicalMemoryResolution: llmEvidenceBundle.canonicalMemoryResolution,
-    }) : compactIsolatedCallMemory({
-      ...liveMemory, collectedInformation: collectedData,
-    }, 900);
-    const groundingEnvelope = buildUnifiedGroundingEnvelope(
-      promptKnowledge,
-      { includePublishedMap: false, maximumSources: 5 },
-    );
-    assertGroundingEnvelopePreservesEvidence(
-      llmEvidenceBundle?.decisionInput?.hydratedRecords ?? [], groundingEnvelope,
-    );
-    const informationUnavailableResponse = configuredInformationUnavailableResponse(
-      this.runtimeProfile, knowledge,
-    );
-    if (groundingEnvelope.found !== true && !informationUnavailableResponse) {
-      throw new AppError(503,
-        'The active agent has no tenant-configured information-unavailable speech',
-        'VOICE_INFORMATION_UNAVAILABLE_RESPONSE_UNCONFIGURED', {
-          stage: 'operational_response_configuration', operationalFailure: true,
-        });
-    }
-    const groundedDecisionInput = llmEvidenceBundle ? Object.freeze({
-      ...llmEvidenceBundle.decisionInput,
-      zeroEvidencePolicy: Object.freeze({
-        callerFacingEvidenceAvailable: groundingEnvelope.found === true,
-        informationUnavailableResponse: informationUnavailableResponse || null,
-      }),
-    }) : null;
-    const fullTenantEvidence = knowledge?.tenantEvidence ?? {};
-    const completeAuthoritativeEvidence = [
-      ...(fullTenantEvidence.sources ?? []),
-      ...(fullTenantEvidence.actionEvidence ?? []),
-      ...(fullTenantEvidence.guidanceEvidence ?? []),
-    ];
-    const authoritativeEvidence = completeAuthoritativeEvidence;
-    const groundingRuntime = {
-      pendingQuestion: liveMemory?.pendingQuestion?.text
-        ?? liveMemory?.pendingQuestion ?? liveMemory?.pendingQuestionText,
-      currentTopic: liveMemory?.currentTopic,
-      activeActions: liveMemory?.activeActions ?? [],
-      activeToolRequest: liveMemory?.activeToolRequest ?? null,
-      fieldSchemas: configuredFields,
-      toolSchemas: llmEvidenceBundle?.authorizedToolSchemas ?? runtimeTools(this.runtimeProfile.tools),
-      collectedInformation: collectedData,
-    };
-    const voiceHistoryLimit = env.VOICE_LLM_MAX_HISTORY_MESSAGES;
-    const combinedHistory = llmEvidenceBundle ? [] : [
-      ...(this.previousConversationMemory?.recentMessages ?? []), ...promptHistory,
-    ];
-    this.#recordLiveMemoryTiming('prompt_context', memoryPromptStartedAt);
-    const session = await createSelectedLlmStream(this.runtimeProfile, {
-      callId: this.call.id,
-      query,
-      history: voiceHistoryLimit > 0 ? combinedHistory.slice(-voiceHistoryLimit) : [],
-      historyLimit: Math.min(
-        env.VOICE_LLM_MAX_HISTORY_MESSAGES,
-        Math.max(2, Number(Array.isArray(liveMemory?.recentTurns)
-          ? Math.ceil(liveMemory.recentTurns.length / 2)
-          : (liveMemory?.recentTurns ?? 5)) * 2),
-      ),
-      knowledge: promptKnowledge,
-      context: llmEvidenceBundle ? {
-        ...context,
-        groundedDecisionInput,
-        groundingEnvelope,
-        zeroEvidenceResponse: informationUnavailableResponse,
-        configuredInformationFields: configuredFields,
-        configuredToolSchemas: groundingRuntime.toolSchemas,
-        groundedResponseMode: true,
-        compactGrounding: true,
-      } : {
-        callId: this.call.id,
-        direction: this.call.direction,
-        liveCallMemory: compactLiveMemory,
-        configuredInformationFields: configuredFields,
-        configuredToolSchemas: groundingRuntime.toolSchemas,
-        conversationMemory: {
-          policy: this.contextCachePolicy.policy,
-          scope: this.contextCachePolicy.scope,
-          previousSummary: this.previousConversationMemory?.summary || undefined,
-          collectedData,
-          completedQuestions: [
-            ...(this.previousConversationMemory?.completedQuestions ?? []),
-            ...(liveMemory?.completedQuestions
-              ?? Object.keys(liveMemory?.collectedInformation ?? {})),
-          ],
-          pendingQuestions: this.previousConversationMemory?.pendingQuestions,
-          callback: this.previousConversationMemory?.callback,
-          currentCallbackRequest: this.currentCallbackRequest,
-          lastCall: this.previousConversationMemory?.lastCall,
-        },
-        preCall: this.preCallContext,
-        ...context,
-        latestCallerUtterance: query,
-        latestRequestPriority: 'primary',
-        groundedResponseMode: true,
-        compactGrounding: true,
-        actionConfirmation: this.actionConfirmationConfiguration?.enabled === true ? {
-          intent: this.actionConfirmationConfiguration.intent,
-          requiredFields: this.actionConfirmationConfiguration.requiredFields,
-          requiresCatalogItem: this.actionConfirmationConfiguration.requiresCatalogItem,
-        } : null,
-        ttsResponseCharacterLimit: (() => {
-          const limits = [
-          Number(this.runtimeProfile.limits?.ttsMaxCharactersPerResponse ?? 0),
-          ].filter((value) => Number.isFinite(value) && value > 0);
-          return limits.length ? Math.min(...limits) : undefined;
-        })(),
-      },
-      usageDirection: this.call.direction,
-    }, { registry: this.registry, adapter: this.adapters.llm, skipDefaultRegistration: true });
-    const storedCompleteTurnPairs = completeConversationTurnPairs(
-      liveMemory?.recentTurns ?? [],
-    ).length;
-    const selectedContextMessages = groundedDecisionInput?.recentRelevantTurns?.length ?? 0;
-    this.log.info({
-      stage: 'llm.prompt_prepared', callId: this.call.id,
-      promptCharacters: session.promptCharacters,
-      estimatedPromptTokens: session.estimatedPromptTokens,
-      configuredBudgetCharacters: env.VOICE_LLM_PROMPT_BUDGET_CHARS,
-      configuredBudgetTokens: env.VOICE_LLM_PROMPT_BUDGET_TOKENS,
-      effectiveBudgetCharacters: selectedLlmPromptBudget(true),
-      evidenceRecords: groundingEnvelope.sources.length,
-      publishedMapIncluded: false,
-      // Provider history is intentionally zero for grounded turns because the
-      // selected complete pairs are embedded once in grounded_turn_input.
-      historyMessages: session.historyMessages,
-      providerHistoryMessages: session.historyMessages,
-      storedCompleteTurnPairs,
-      selectedContextMessages,
-      groundedContextMessages: session.groundedContextMessages,
-      groundedContextPairs: session.groundedContextPairs,
-      groundedEnvelopeVersion: session.groundedEnvelopeVersion,
-      groundedEnvelopeEvidenceRecords: session.groundedEvidenceRecords,
-      groundedEnvelopeAuthorizedTools: session.groundedAuthorizedTools,
-      conversationContextMode: liveMemory?.conversationContextMode ?? null,
-      conversationContextTurns: liveMemory?.conversationContextTurns ?? null,
-      maximumOutputTokens: session.maxOutputTokens,
-    }, 'Voice LLM prompt prepared within the configured runtime budget');
-    if (storedCompleteTurnPairs > 0 && session.groundedContextMessages === 0) {
-      this.log.error({
-        stage: 'llm.conversation_context_missing', callId: this.call.id,
-        storedCompleteTurnPairs,
-        selectedContextMessages,
-        conversationContextMode: liveMemory?.conversationContextMode ?? null,
-        conversationContextTurns: liveMemory?.conversationContextTurns ?? null,
-        promptCharacters: session.promptCharacters,
-        configuredBudgetCharacters: env.VOICE_LLM_PROMPT_BUDGET_CHARS,
-        configuredBudgetTokens: env.VOICE_LLM_PROMPT_BUDGET_TOKENS,
-      }, 'Stored current-call history produced zero grounded LLM context messages');
-    }
-    this.activeLlm = session;
-    let text = '';
-    let toolCalls = [];
-    let completion = {};
-    const sentenceBuffer = createStreamingSentenceBuffer();
-    let firstTokenRecorded = false;
-    this.runtimeMetrics.llmStreaming.requests += 1;
-    try {
-      for await (const event of session.events) {
-        if (streaming.isCurrent && !streaming.isCurrent()) {
-          this.#rejectLateGenerationEvent('llm.late_event_rejected', streaming.epoch, {
-            eventType: event.type,
-          });
-          try { await session.cancel?.('stale_generation'); } catch { /* already cancelled */ }
-          return { cancelled: true, text: '', toolCalls: [], sources: [] };
-        }
-        if (event.type === 'text_delta') {
-          if (!firstTokenRecorded && String(event.delta ?? '').length) {
-            firstTokenRecorded = true;
-            const firstTokenMs = Math.round((performance.now() - llmStartedAt) * 100) / 100;
-            if (this.runtimeMetrics.llmStreaming.firstTokenSamples.length < 100) {
-              this.runtimeMetrics.llmStreaming.firstTokenSamples.push(firstTokenMs);
-            }
-            const turnLatency = this.runtimeMetrics.turnLatency
-              .find((entry) => entry.epoch === streaming.epoch);
-            if (turnLatency && turnLatency.llmFirstTokenMs === null) turnLatency.llmFirstTokenMs = firstTokenMs;
-          }
-          text += event.delta;
-        }
-        else if (event.type === 'tool_call') toolCalls.push({ id: event.id, name: event.name, arguments: event.arguments });
-        else if (event.type === 'usage') this.usageTracker.record('llm', event.usage);
-        else if (event.type === 'error') throw Object.assign(new Error(event.message), { code: event.code, retryable: event.retryable });
-        else if (event.type === 'response_started') completion.providerRequestId = event.providerRequestId ?? completion.providerRequestId;
-        else if (event.type === 'cancelled') return { cancelled: true, text: '', toolCalls: [], sources: [] };
-        else if (event.type === 'completed') {
-          completion = { ...completion, ...event };
-          toolCalls = event.toolCalls?.length ? event.toolCalls : toolCalls;
-          if (event.durationMs) this.usageTracker.record('llm', { requests: 0, durationMs: event.durationMs });
-          this.providerHealth.record(this.runtimeProfile.agent.tenantId, 'llm', this.runtimeProfile.providers.llm, 'success', {
-            latencyMs: event.durationMs,
-          });
-        }
-      }
-      assertGroundedStructuredCompletion(completion, text);
-      if (toolCalls.length) {
-        // Grounded mode deliberately exposes no provider-native tools. A raw
-        // tool event is therefore a protocol violation, not an executable
-        // request. Only the fully parsed and validated JSON decision below may
-        // create toolCalls after evidence, state, permission and confirmation
-        // checks have all passed.
-        this.log.warn({
-          stage: 'llm.native_tool_events_rejected', callId: this.call.id,
-          count: toolCalls.length,
-        }, 'Provider-native tool events were rejected before unified decision validation');
-        toolCalls = [];
-      }
-      const unifiedTurn = applyUnifiedGroundedTurn({
-          rawDecision: text,
-          groundingEnvelope,
-          memory: this.liveCallMemory,
-          turnToken: streaming.epoch,
-          fieldSchemas: configuredFields,
-          tools: groundingRuntime.toolSchemas,
-          evidence: authoritativeEvidence,
-          evidenceScope: {
-            tenantId: this.runtimeProfile.agent.tenantId,
-            agentId: this.runtimeProfile.agent.id,
-            publicationRevisions: promptKnowledge.tenantEvidence?.publicationRevisions ?? [],
-            requireHydratedEvidence: true,
-          },
-          safetyPolicies: this.runtimeProfile.agent.settings?.safetyPolicies ?? [],
-          finalizedUtterance: query,
-          confirmationConfiguration: this.actionConfirmationConfiguration,
-          clarificationRecovery: configuredClarificationRecovery(
-            this.runtimeProfile, knowledge,
-          ),
-          zeroEvidenceResponse: informationUnavailableResponse,
-          canonicalEntityAuthority: true,
-          clarificationContext: llmEvidenceBundle?.decisionInput ? {
-            ...llmEvidenceBundle.decisionInput.clarificationContext,
-            requestedFact: llmEvidenceBundle.decisionInput.requestedFact,
-            canonicalMemory: llmEvidenceBundle.decisionInput.canonicalMemory,
-            ambiguityCandidates: llmEvidenceBundle.decisionInput.ambiguityCandidates,
-            hydratedRecordCount: llmEvidenceBundle.decisionInput.hydratedRecords?.length ?? 0,
-          } : null,
-        });
-      let grounded = unifiedTurn.valid
-        ? {
-          ...unifiedTurn,
-          valid: true,
-          spokenAnswer: unifiedTurn.answer,
-          evidenceSourceIds: unifiedTurn.evidenceIds,
-          selectedEntityKeys: unifiedTurn.stateUpdate?.knownEntityKeys ?? [],
-          currentTopic: unifiedTurn.stateUpdate?.currentTopic ?? null,
-          pendingQuestionRelevant: unifiedTurn.stateUpdate?.pendingQuestionRelevant ?? true,
-        }
-        : unifiedTurn;
-      const confirmedCanonicalResolution = llmEvidenceBundle?.canonicalMemoryResolution
-        ? confirmCanonicalTopicResolution(llmEvidenceBundle.canonicalMemoryResolution, {
-          decision: grounded,
-          hydratedRecords: llmEvidenceBundle.decisionInput?.hydratedRecords ?? [],
-        }) : null;
-      const canonicalResponseCommitAllowed = grounded.valid === true
-        && grounded.decision === 'answer'
-        && grounded.noMatch !== true
-        && grounded.clearUnsupportedRequest !== true
-        && grounded.approvedZeroEvidenceResponse !== true
-        && grounded.approvedConfiguredUnavailableResponse !== true;
-      if (canonicalResponseCommitAllowed
-        && confirmedCanonicalResolution?.mode !== 'UNRESOLVED'
-        && this.liveCallMemory?.applyCanonicalTopicResolution) {
-        const canonicalApplied = this.liveCallMemory.applyCanonicalTopicResolution(
-          confirmedCanonicalResolution,
-          { turnToken: streaming.epoch },
-        );
-        if (canonicalApplied?.stale) {
-          return { cancelled: true, text: '', toolCalls: [], sources: [] };
-        }
-        if (canonicalApplied?.applied) {
-          grounded = {
-            ...grounded,
-            state: canonicalApplied.state,
-            currentTopic: canonicalApplied.state?.currentTopic ?? grounded.currentTopic,
-            selectedEntityKeys: (canonicalApplied.state?.knownEntities ?? [])
-              .map((entity) => entity.key ?? entity.id).filter(Boolean),
-          };
-          this.log.info({
-            stage: 'memory.canonical_topic_committed',
-            callId: this.call.id,
-            turnEpoch: streaming.epoch,
-            mode: canonicalApplied.mode,
-            activeRecordId: canonicalApplied.state?.activeEntity?.id
-              ?? canonicalApplied.state?.activeCategory?.id ?? null,
-            comparisonRecordIds: (canonicalApplied.state?.comparisonEntities ?? [])
-              .map((entity) => entity.id).filter(Boolean),
-          }, 'Validated PostgreSQL-backed topic state was committed');
-        }
-      }
-
-      const groundingMetric = {
-        valid: grounded.valid, reason: grounded.reason ?? null,
-        decision: grounded.decision ?? null,
-        intent: grounded.intent ?? null,
-        questionType: grounded.questionType ?? null,
-        currentTopic: grounded.currentTopic ?? null,
-        topicChanged: grounded.topicChanged ?? null,
-        pendingQuestionRelevant: grounded.pendingQuestionRelevant ?? null,
-        flowAction: grounded.flowAction ?? null,
-        selectedEntityKeys: grounded.selectedEntityKeys ?? [],
-        evidenceSourceIds: grounded.evidenceSourceIds ?? [],
-        assertedFactCount: grounded.assertedFacts?.length ?? 0,
-      };
-      if (this.runtimeMetrics.grounding.samples.length < 100) {
-        this.runtimeMetrics.grounding.samples.push(groundingMetric);
-      }
-      this.log.info({
-        stage: 'llm.turn_decision_trace',
-        callId: this.call.id,
-        turnEpoch: streaming.epoch,
-        valid: grounded.valid === true,
-        rejectionReason: grounded.valid === true ? null : grounded.reason ?? 'unknown',
-        rejectedIdentifiers: grounded.valid === true ? [] : grounded.identifiers ?? [],
-        rejectedNumbers: grounded.valid === true ? [] : grounded.numbers ?? [],
-        decision: grounded.decision ?? null,
-        responseId: grounded.responseId ?? null,
-        selectedEvidenceIds: grounded.evidenceIds ?? grounded.evidenceSourceIds ?? [],
-        evidenceSourceMap: groundingEnvelope.sourceMap ?? [],
-        selectedEntityKeys: grounded.selectedEntityKeys ?? [],
-        toolRequested: Boolean(grounded.toolRequest),
-        structuralDiagnostic: grounded.valid === true
-          ? null : grounded.structuralDiagnostic ?? null,
-      }, 'Grounded turn decision and selected evidence were traced before speech or action');
-      let answer;
-      const sources = [llmMessageSource(this.runtimeProfile.providers.llm, completion)];
-      const repairableDecisionFailure = isRepairableGroundedDecisionReason(grounded.reason);
-      const operationalDecisionFailure = isOperationalGroundedDecisionFailure(grounded.reason);
-      if (grounded.valid) {
-        this.runtimeMetrics.grounding.validated += 1;
-        if (streaming.isCurrent && !streaming.isCurrent()) {
-          return { cancelled: true, text: '', toolCalls: [], sources: [] };
-        }
-        const validatedEntity = grounded.state?.activeEntity
-          ?? grounded.state?.knownEntities?.at?.(-1) ?? null;
-        if (validatedEntity) {
-          this.taskCompletionState = applyCanonicalEntityToTaskCompletionState(
-            this.taskCompletionState,
-            validatedEntity,
-          );
-        }
-        if (grounded.decision === 'action' && grounded.toolRequest) {
-          toolCalls = [{
-            id: `decision-${streaming.epoch ?? Date.now()}`,
-            name: grounded.toolRequest.name,
-            arguments: grounded.toolRequest.arguments,
-            authorizationRecordId: grounded.state?.activeToolRequest?.authorizationRecordId ?? null,
-          }];
-          answer = '';
-        } else answer = grounded.answer ?? grounded.spokenAnswer;
-      } else {
-        this.runtimeMetrics.grounding.rejected += 1;
-        // A locally claim-valid sentence is not sufficient: the complete JSON
-        // decision, state update and tool request must also validate before
-        // anything is eligible for TTS. Never reuse partial streamed text.
-        if (repairableDecisionFailure && context.deferDecisionRepair === true) {
-          answer = '';
-          this.log.warn({
-            stage: 'llm.decision_repair_required', callId: this.call.id, reason: grounded.reason,
-          }, 'Structured decision was rejected and withheld from TTS pending one repair attempt');
-        } else {
-          this.runtimeMetrics.grounding.fallbacks += 1;
-          answer = operationalDecisionFailure
-            ? configuredOperationalFailureResponse(
-              this.runtimeProfile, knowledge, { validation: true },
-            )
-            : configuredInformationUnavailableResponse(this.runtimeProfile, knowledge);
-          sources.push(createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
-            label: operationalDecisionFailure
-              ? 'Configured operational decision response'
-              : 'Configured information unavailable response',
-            metadata: {
-              reason: grounded.reason,
-              ambiguity: false,
-              operational: operationalDecisionFailure,
-            },
-          }));
-          this.log.warn({
-            stage: 'llm.grounding_rejected', callId: this.call.id, reason: grounded.reason,
-            operational: operationalDecisionFailure,
-            structuralDiagnostic: grounded.structuralDiagnostic ?? null,
-          }, operationalDecisionFailure
-            ? 'Provider decision contract failed; using configured operational recovery'
-            : 'Unsupported grounded decision was converted to configured NO_MATCH speech');
-        }
-      }
-      answer = callerFacingText(answer, this.runtimeProfile, knowledge, {
-        allowClarificationFallback: grounded.valid === true,
-      });
-      if (grounded.valid
-        && grounded.clarificationRecovery?.mode === 'configured_support') {
-        sources.push(createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
-          label: 'Configured clarification recovery',
-          metadata: {
-            role: 'clarification_recovery_support',
-            attemptCount: grounded.clarificationRecovery.attemptCount,
-          },
-        }));
-      }
-      let normalTurnOutput = !grounded.valid && !operationalDecisionFailure
-        ? createGroundedLlmOutput(groundedLlmOutputTypes.NO_MATCH) : null;
-      if (grounded.valid) {
-        const selectedEvidenceIds = grounded.evidenceIds ?? grounded.evidenceSourceIds ?? [];
-        const activeTool = grounded.state?.activeToolRequest ?? null;
-        const configuredUnavailable = grounded.noMatch === true
-          || grounded.clearUnsupportedRequest === true
-          || grounded.approvedZeroEvidenceResponse === true
-          || grounded.approvedConfiguredUnavailableResponse === true;
-        if (configuredUnavailable) {
-          normalTurnOutput = createGroundedLlmOutput(groundedLlmOutputTypes.NO_MATCH);
-        } else if (grounded.decision === 'action' && grounded.toolRequest) {
-          normalTurnOutput = createGroundedLlmOutput(groundedLlmOutputTypes.TOOL, {
-            text: answer || null,
-            selectedEvidenceIds,
-            tool: {
-              name: grounded.toolRequest?.name ?? activeTool?.name,
-              authorizationEvidenceId: activeTool?.authorizationRecordId,
-              input: grounded.toolRequest?.arguments
-                ?? grounded.state?.collectedInformation ?? {},
-            },
-          });
-        } else if (grounded.decision === 'clarify') {
-          normalTurnOutput = createGroundedLlmOutput(groundedLlmOutputTypes.CLARIFY, {
-            text: answer || grounded.pendingQuestion?.text
-              || (typeof grounded.pendingQuestion === 'string' ? grounded.pendingQuestion : '')
-              || grounded.nextQuestion?.question,
-            selectedEvidenceIds,
-          });
-        } else {
-          // A model-proposed action withheld for field collection or final
-          // confirmation is caller-facing speech, not an executable TOOL
-          // output. Only the validated request above may cross the tool gate.
-          normalTurnOutput = createGroundedLlmOutput(groundedLlmOutputTypes.RESPONSE, {
-            text: answer,
-            selectedEvidenceIds,
-          });
-        }
-      }
-      // applyUnifiedGroundedTurn validates the complete answer, citations,
-      // entities, numbers, fields and action before committing canonical
-      // memory. Do not mutate or re-interpret its validated speech afterward.
-      for (const sentence of sentenceBuffer.push(answer)) {
-        streaming.onSentence?.(sentence);
-      }
-      for (const sentence of sentenceBuffer.flush()) {
-        streaming.onSentence?.(sentence);
-      }
-      streaming.flush?.();
-      return {
-        cancelled: false,
-        text: answer,
-        understanding: grounded.valid ? grounded : undefined,
-        groundingFailureReason: grounded.valid || !operationalDecisionFailure
-          ? null : grounded.reason,
-        groundingRejectionReason: grounded.valid || operationalDecisionFailure
-          ? null : grounded.reason,
-        groundingFailureDetails: grounded.valid ? null : {
-          identifiers: grounded.identifiers ?? [],
-          numbers: grounded.numbers ?? [],
-          structuralDiagnostic: grounded.structuralDiagnostic ?? null,
-        },
-        normalTurnOutput,
-        // RESPONSE commits above after complete validation. TOOL keeps the
-        // evidence-backed proposal transaction-local until verified execution
-        // succeeds; CLARIFY and NO_MATCH never receive a durable proposal.
-        pendingCanonicalResolution: grounded.valid === true
-          && grounded.decision === 'action'
-          && confirmedCanonicalResolution?.mode !== 'UNRESOLVED'
-          ? confirmedCanonicalResolution : null,
-        toolCalls,
-        sources,
-      };
-    } catch (error) {
-      sentenceBuffer.clear();
-      streaming.flush?.();
-      error.partialText = text.trim();
-      error.streamedSentenceCount = streaming.sentenceCount?.() ?? 0;
-      throw error;
-    } finally {
-      if (this.activeLlm === session) this.activeLlm = null;
-      await session.close();
-    }
-  }
-
-  async #llm(query, history, knowledge, context = {}, streaming = {}) {
-    // A live turn owns exactly one provider request. Invalid structured output,
-    // transient provider failure or timeout is handled by the safe caller-facing
-    // fallback; it must never trigger a hidden second LLM request.
-    return this.#llmAttempt(query, history, knowledge, {
-      ...context, deferDecisionRepair: false,
-    }, streaming);
-  }
 
   #createSentenceTtsPipeline(epoch, turnStartedAt, firstAudioDeadlineAt) {
     const memoryBeforeValidatedResponse = this.liveCallMemory?.snapshot?.() ?? {};
@@ -2763,7 +2172,7 @@ export class RealtimeConversationOrchestrator {
     this.#clearInactivity();
     let outcome;
     try {
-      outcome = await this.#runGroundedTurn(query, history, epoch, sttTiming);
+      outcome = await this.#runTemplateEngineTurn(query, history, epoch, sttTiming);
       return outcome;
     } finally {
       this.activeGroundedTurnEpochs.delete(epoch);
@@ -2775,572 +2184,181 @@ export class RealtimeConversationOrchestrator {
     }
   }
 
-  async #runGroundedTurn(query, history, epoch, sttTiming = {}) {
+  async #runTemplateEngineTurn(query, history, epoch, sttTiming = {}) {
     this.liveCallMemory?.beginTurn?.(epoch);
     const turnStartedAt = Date.now();
-    const latencyTracker = new VoiceTurnLatencyTracker({
-      tenantId: this.runtimeProfile.agent.tenantId,
-      agentId: this.runtimeProfile.agent.id,
-      callId: this.call.id,
-      turnId: String(epoch),
-    }, { now: () => Date.now(), startedAt: turnStartedAt, log: this.log });
-    this.turnLatencyTrackers ??= new Map();
-    this.turnLatencyTrackers.set(epoch, latencyTracker);
-    if (Number.isFinite(Number(sttTiming.sttFinalizationMs))) {
-      latencyTracker.record(voiceTurnStages.STT_FINALIZATION, sttTiming.sttFinalizationMs);
-    }
     const firstAudioDeadlineAt = turnStartedAt
       + Math.min(env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS, 2_000);
-    // This operational completion deadline is independent of the soft
-    // first-audio target. A target breach must not cancel retrieval or the
-    // authoritative hydration that follows it.
-    const knowledgeBudgetMs = env.VOICE_KNOWLEDGE_TURN_TIMEOUT_MS;
-    const turnLatency = {
-      epoch,
-      queryCharacters: Array.from(String(query ?? '')).length,
-      sttSpeechDurationMs: sttTiming.sttSpeechDurationMs ?? null,
-      sttFinalizationMs: sttTiming.sttFinalizationMs ?? null,
-      knowledgeMs: null,
-      routingMs: null,
-      retrievalMs: null,
-      hydrationMs: null,
-      rankingMs: null,
-      llmMs: 0,
-      llmFirstTokenMs: null,
-      validationMs: 0,
-      ttsFirstAudioMs: null,
-      ttsFirstChunkMs: null,
-      totalFirstAudioMs: null,
-      firstAudioDeliveryMs: null,
-      firstAudioDeadlineMs: Math.min(env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS, 2_000),
-      latencyAcknowledgement: false,
-      route: 'none',
-      fastKnowledge: false,
-    };
-    if (this.runtimeMetrics.turnLatency.length < 100) this.runtimeMetrics.turnLatency.push(turnLatency);
-    const retrievalAbortController = new AbortController();
-    this.activeRetrievalAbortController = retrievalAbortController;
-    const knowledgeStartedAt = Date.now();
-    // Finalized STT is the only primary retrieval query. Conversational
-    // meaning and state are resolved once, inside the grounded turn decision.
-    let knowledge;
-    try {
-      knowledge = await rejectAfter(
-        this.#knowledge(query, retrievalAbortController.signal),
-        knowledgeBudgetMs,
-        () => new AppError(504, 'Knowledge exceeded the live turn budget', 'VOICE_KNOWLEDGE_TURN_TIMEOUT'),
-        () => retrievalAbortController.abort('knowledge_turn_timeout'),
-      );
-    } catch (error) {
-      if (error?.code !== 'VOICE_KNOWLEDGE_TURN_TIMEOUT') throw error;
-      this.log.warn({
-        stage: 'knowledge.turn_timeout', callId: this.call.id,
-        timeoutMs: knowledgeBudgetMs,
-      }, 'Knowledge exceeded its production completion deadline; using the technical fallback response');
-      knowledge = {
-        found: false, route: 'timeout', sources: [],
-        retrieval: { parallelDurationMs: knowledgeBudgetMs },
-        tenantEvidence: {
-          found: false, sources: [], evidenceIds: [],
-          decision: null,
-          diagnostic: {
-            stage: 'knowledge_retrieval',
-            errorCode: 'VOICE_KNOWLEDGE_TURN_TIMEOUT',
-            details: {},
-          },
-        },
-      };
-    }
-    if (this.activeRetrievalAbortController === retrievalAbortController) {
-      this.activeRetrievalAbortController = null;
-    }
-    if (epoch !== this.epoch || this.finalized) return;
-    // The saved frame is context, not a gate. Newly hydrated canonical context
-    // is supplied to the grounded decision, but no topic, answer or citation is
-    // committed until that complete decision passes validation.
-    const memoryState = this.liveCallMemory?.snapshot();
-    const retrievalTrace = knowledge.tenantEvidence?.retrievalTrace ?? {};
-    this.log.info({
-      stage: 'knowledge.turn_retrieval_trace',
-      callId: this.call.id,
-      turnEpoch: epoch,
-      finalizedUtterance: query,
-      memoryContext: {
-        currentTopic: memoryState?.currentTopic ?? null,
-        knownEntities: (memoryState?.knownEntities ?? []).map((entity) => ({
-          key: entity?.key ?? null,
-          name: entity?.name ?? null,
-          category: entity?.category ?? null,
-        })),
-        pendingQuestion: memoryState?.pendingQuestion?.text
-          ?? memoryState?.pendingQuestionText ?? memoryState?.pendingQuestion ?? null,
-        recentTurnCount: Array.isArray(memoryState?.recentTurns)
-          ? memoryState.recentTurns.length : 0,
-        collectedFieldKeys: Object.keys(memoryState?.collectedInformation ?? {}).sort(),
-      },
-      retrievalQueries: {
-        primary: retrievalTrace.primaryQuery ?? query,
-        contextual: retrievalTrace.contextualQuery ?? null,
-      },
-      retrievedCandidates: retrievalTrace.retrievedCandidates ?? [],
-      hydratedEvidence: retrievalTrace.hydratedEvidence ?? [],
-      sourceMap: retrievalTrace.sourceMap
-        ?? knowledge.tenantEvidence?.llmEvidenceBundle?.sourceMap ?? [],
-      rejectedCandidates: retrievalTrace.rejectedCandidates ?? [],
-      publicationRevisions: retrievalTrace.publicationRevisions
-        ?? knowledge.tenantEvidence?.publicationRevisions ?? [],
-      contextualUsed: knowledge.tenantEvidence?.retrieval?.contextualUsed ?? false,
-      contextualPreferred: knowledge.tenantEvidence?.retrieval?.contextualPreferred ?? false,
-      cacheHit: knowledge.tenantEvidence?.cacheHit === true,
-    }, 'Finalized utterance, memory and authoritative retrieval selection were traced');
-    this.runtimeMetrics.conversationFlow = {
-      ...this.runtimeMetrics.conversationFlow,
-      currentTopic: memoryState?.currentTopic ?? null,
-      pendingQuestion: memoryState?.pendingQuestion ?? null,
-    };
-    turnLatency.knowledgeMs = Math.max(0, Date.now() - knowledgeStartedAt);
-    turnLatency.routingMs = Number.isFinite(Number(knowledge.tenantEvidence?.latency?.stages?.routingMs))
-      ? Number(knowledge.tenantEvidence.latency.stages.routingMs) : null;
-    turnLatency.retrievalMs = Number.isFinite(Number(
-      knowledge.tenantEvidence?.latency?.stages?.retrievalMs,
-    )) ? Number(knowledge.tenantEvidence.latency.stages.retrievalMs)
-      : Number(knowledge.retrieval?.parallelDurationMs ?? turnLatency.knowledgeMs);
-    turnLatency.hydrationMs = Number.isFinite(Number(knowledge.tenantEvidence?.latency?.stages?.hydrationMs))
-      ? Number(knowledge.tenantEvidence.latency.stages.hydrationMs) : null;
-    turnLatency.rankingMs = Number(knowledge.rankingValidationDurationMs ?? 0);
-    if (turnLatency.routingMs !== null
-      && latencyTracker.stages[voiceTurnStages.ROUTING] === undefined) {
-      latencyTracker.record(voiceTurnStages.ROUTING, turnLatency.routingMs);
-    }
-    if (latencyTracker.stages[voiceTurnStages.RETRIEVAL] === undefined) {
-      latencyTracker.record(voiceTurnStages.RETRIEVAL, turnLatency.retrievalMs);
-    }
-    if (turnLatency.hydrationMs !== null
-      && latencyTracker.stages[voiceTurnStages.HYDRATION] === undefined) {
-      latencyTracker.record(voiceTurnStages.HYDRATION, turnLatency.hydrationMs);
-    }
-    turnLatency.validationMs += turnLatency.rankingMs;
-    turnLatency.route = knowledge.route ?? 'none';
-    if (turnLatency.retrievalMs > env.VOICE_RETRIEVAL_TARGET_MS) {
-      this.log.warn({
-        stage: 'knowledge.retrieval_target_breached', callId: this.call.id,
-        retrievalMs: turnLatency.retrievalMs, targetMs: env.VOICE_RETRIEVAL_TARGET_MS,
-        operationalFailure: false,
-        semanticTimedOut: knowledge.tenantEvidence?.retrieval?.semanticTimedOut
-          ?? knowledge.retrieval?.semanticTimedOut ?? false,
-      }, 'Hybrid retrieval exceeded its performance target but completed normally');
-    }
-    // Tenant evidence is interpreted by one grounded LLM turn. Runtime route
-    // labels and Workflow instruction text never bypass that validation.
-    const candidateDecision = knowledge.tenantEvidence?.decision;
-    const engineDecision = isKnowledgeEngineDecision(candidateDecision)
-      ? decisionWithoutRuntimeSpeech(candidateDecision) : null;
-    const canonicalMemoryContext = canonicalResolvedMemoryContext(knowledge.tenantEvidence);
-    if (canonicalMemoryContext) {
-      this.log.info({
-        stage: 'knowledge.canonical_context_prepared',
-        callId: this.call.id,
-        turnEpoch: epoch,
-        entityId: canonicalMemoryContext.entity?.id ?? null,
-        categoryId: canonicalMemoryContext.category?.id ?? null,
-        categoryKey: canonicalMemoryContext.category?.key
-          ?? canonicalMemoryContext.entity?.categoryKey ?? null,
-      }, 'Authoritatively hydrated canonical context prepared for grounded validation');
-    }
-    const sourceTrace = new MessageSourceTrace(
-      knowledgeMessageSources(
-        knowledge,
-        engineDecision?.evidenceIds ?? knowledge.tenantEvidence?.evidenceIds ?? [],
-      ),
-    );
-    if (epoch !== this.epoch || this.finalized) return;
     const sentencePipeline = this.#createSentenceTtsPipeline(
       epoch, turnStartedAt, firstAudioDeadlineAt,
     );
-    // LLM output is deliberately buffered until the complete grounded JSON
-    // decision has passed evidence, state and tool validation inside
-    // #llmAttempt. The sentence pipeline is fed only below, from the final
-    // validated response or configured fallback; partial JSON can never reach
-    // TTS.
-    const streaming = {
-      onSentence: () => {},
-      flush: sentencePipeline.flushGrouping,
-      sentenceCount: sentencePipeline.sentenceCount,
-      epoch,
-      isCurrent: () => !this.#isStaleGeneration(epoch),
+    const assignedTools = templateEngineToolSchemas(this.runtimeProfile.tools);
+    const informationFields = this.liveCallMemory?.fieldSchemas?.() ?? [];
+    const auth = {
+      tenantId: this.runtimeProfile.agent.tenantId,
+      workspaceId: this.runtimeProfile.agent.workspaceId,
+      userId: null,
+      role: 'COMPANY_DEVELOPER',
     };
-    let response;
-    let latencyAcknowledged = false;
-    let validatedNormalTurn = false;
-    const intentClass = String(
-      knowledge.tenantEvidence?.classification?.intentClass
-      ?? knowledge.tenantEvidence?.queryPreparation?.intentClass
-      ?? '',
-    ).trim().toLocaleUpperCase();
-    const deterministicPriority = intentClass
-      === deterministicProtocolExceptionTypes.SAFETY_EMERGENCY
-      && engineDecision?.type === knowledgeEngineDecisionTypes.RESPONSE
-      && engineDecision?.mode === knowledgeEngineResponseModes.DETERMINISTIC
-      && Boolean(engineDecision?.response?.text);
-    const operationalKnowledgeFailure = knowledge.tenantEvidence?.diagnostic ?? null;
-    if (operationalKnowledgeFailure) {
-      response = {
-        cancelled: false,
-        text: configuredOperationalFailureResponse(this.runtimeProfile, knowledge),
-        toolCalls: [],
-        sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
-          label: 'Knowledge operational diagnostic',
-          metadata: {
-            reason: operationalKnowledgeFailure.errorCode ?? 'knowledge_operational_failure',
-            stage: operationalKnowledgeFailure.stage ?? 'authoritative_hydration',
-          },
-        })],
-      };
-      turnLatency.route = 'knowledge_operational_failure';
-      latencyTracker.setResponseClass('knowledge_operational_failure');
-      this.log.error({
-        stage: 'knowledge.pre_llm_operational_failure',
-        callId: this.call.id,
-        turnEpoch: epoch,
-        diagnostic: operationalKnowledgeFailure,
-      }, 'Grounded LLM invocation skipped because authoritative evidence was incomplete');
-    } else if (deterministicPriority) {
-      // Emergency and call-control are protocol-level exceptions. Every other
-      // finalized caller turn, including known knowledge, tools and ambiguity,
-      // is decided by exactly one grounded LLM request below.
-      response = {
-        cancelled: false,
-        text: engineDecision.response.text,
-        toolCalls: [],
-        sources: [createMessageSource(messageSourceTypes.KNOWLEDGE, {
-          label: 'Published caller-facing response',
-          metadata: {
-            recordId: engineDecision.response.recordId,
-            evidenceIds: engineDecision.evidenceIds,
-          },
-        })],
-      };
-      turnLatency.fastKnowledge = true;
-      turnLatency.route = 'deterministic_priority';
-      latencyTracker.setKnownAnswer(true);
-      latencyTracker.setResponseClass('deterministic_priority');
-      this.liveCallMemory?.setPendingQuestion?.(null);
-    } else {
-      try {
-        const llmStartedAt = Date.now();
-        const ttsReserveMs = Math.min(env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS, 600) + 50;
-        const remainingFirstAudioBudgetMs = Math.min(
-          env.VOICE_LLM_TURN_TIMEOUT_MS,
-          900,
-          remainingLiveTurnBudgetMs(firstAudioDeadlineAt, ttsReserveMs),
-        );
-        latencyTracker.setResponseClass('grounded_llm');
-        const configuredAcknowledgement = configuredLatencyAcknowledgementResponse(
-          this.runtimeProfile, knowledge,
-        );
-        const acknowledgementEligible = Boolean(configuredAcknowledgement);
-        const latencyResult = await awaitLlmWithSafeLatency(this.#llm(query, history, knowledge, {
-            instruction: 'Decide this finalized normal turn using only the supplied question, relevant isolated call memory, hydrated evidence, applicable workflow authorization, permitted source mapping and assigned tool schemas. Return exactly one grounded RESPONSE, TOOL, CLARIFY, or NO_MATCH JSON decision. Every factual RESPONSE must cite supplied evidence IDs. NO_MATCH must be fact-free. Never guess when evidence is weak.',
-            callCheck: null,
-          }, streaming), {
-            tracker: latencyTracker,
-            acknowledgementEnabled: acknowledgementEligible && Boolean(configuredAcknowledgement),
-            // A depleted first-audio budget changes only when the optional
-            // acknowledgement is spoken. It must never replace or cancel the
-            // in-flight grounded answer.
-            acknowledgementAfterMs: Math.max(1, remainingFirstAudioBudgetMs),
-            ttsReserveMs,
-            acknowledgementText: configuredAcknowledgement,
-            completionTimeoutMs: env.LLM_REQUEST_TIMEOUT_MS,
-            cancel: () => this.activeLlm?.cancel?.('llm_completion_timeout'),
-            onAcknowledgement: async (acknowledgementText) => {
-              latencyAcknowledged = true;
-              turnLatency.latencyAcknowledgement = true;
-              sourceTrace.add([createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
-                label: 'Safe LLM latency acknowledgement',
-                metadata: { reason: 'grounded_llm_still_processing' },
-              })]);
-              sentencePipeline.enqueueAcknowledgement(acknowledgementText);
-              await sentencePipeline.waitUntilStarted();
-            },
-          });
-        latencyAcknowledged ||= latencyResult.acknowledged === true;
-        response = latencyResult.value;
-        validatedNormalTurn = Boolean(response?.normalTurnOutput);
-        if (validatedNormalTurn) {
-          this.log.info({
-            stage: 'llm.normal_turn_output_validated',
-            callId: this.call.id,
-            turnEpoch: epoch,
-            outputType: response.normalTurnOutput.type,
-            selectedEvidenceIds: response.normalTurnOutput.selectedEvidenceIds,
-            toolName: response.normalTurnOutput.tool?.name ?? null,
-          }, 'The single grounded LLM decision passed unified validation');
-        }
-        turnLatency.llmMs += Math.max(0, Date.now() - llmStartedAt);
-      } catch (error) {
-        const operationalFailure = llmOperationalFailureClass(error);
-        this.#recordProviderFailure('llm', error, 'llm.response');
-        this.providerHealth.record(this.runtimeProfile.agent.tenantId, 'llm', this.runtimeProfile.providers.llm, 'failure', {
-          code: error.code,
-        });
-        this.log.warn({
-          stage: 'llm.safe_recovery_fallback', code: error.code,
-          operationalFailure,
-          providerId: this.runtimeProfile.providers.llm.providerId,
-          initializationStage: error?.details?.initializationStage ?? null,
-          errorName: String(error?.details?.errorName ?? error?.name ?? 'Error').slice(0, 120),
-          errorMessage: String(error?.details?.errorMessage ?? error?.message ?? '').slice(0, 1_000),
-          errorStack: String(error?.cause?.stack ?? error?.stack ?? '').slice(0, 4_000),
-        }, 'Selected LLM failed operationally; using the technical fallback response');
-        response = {
-          cancelled: false,
-          text: configuredTechnicalFailureResponse(this.runtimeProfile, knowledge),
-          operationalFailureReason: error.code ?? 'LLM_PROVIDER_FAILURE',
-          toolCalls: [],
-          sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
-            label: 'LLM operational technical fallback', metadata: {
-              reason: error.code, operationalFailure, ambiguity: false,
-            },
-          })],
-        };
-      }
-    }
-    if (latencyAcknowledged && response.groundingFailureReason) {
-      // The acknowledgement has already told the caller that work is still in
-      // progress. Never follow it with the generic clarification message. Give
-      // a specific, evidence-safe outcome for the completed validation instead.
-      response = {
-        ...response,
-        text: configuredOperationalFailureResponse(
-          this.runtimeProfile, knowledge, { validation: true },
-        ),
-        sources: [
-          ...(response.sources ?? []).filter((source) => source.type !== messageSourceTypes.RUNTIME_FALLBACK),
-          createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
-            label: 'Published evidence validation explanation',
-            metadata: { reason: response.groundingFailureReason },
-          }),
-        ],
-      };
-    }
-    sourceTrace.add(response.sources);
-    if (response.cancelled || epoch !== this.epoch) {
-      sentencePipeline.cancel();
-      return;
-    }
-    if (response.toolCalls.length) {
-      const pendingCanonicalResolution = response.pendingCanonicalResolution ?? null;
-      const primaryToolCall = {
-        ...response.toolCalls[0],
-        arguments: canonicalToolArguments(
-          response.toolCalls[0],
-          runtimeTools(this.runtimeProfile.tools),
-          this.taskCompletionState?.canonicalEntity,
-        ),
-      };
-      response = { ...response, toolCalls: [primaryToolCall, ...response.toolCalls.slice(1)] };
-      this.liveCallMemory?.setActiveToolRequest?.({
-        id: primaryToolCall?.id,
-        name: primaryToolCall?.name,
-        status: 'executing',
-        authorizationRecordId: primaryToolCall?.authorizationRecordId ?? null,
-        selectedEntityKey: this.taskCompletionState?.canonicalEntity?.key ?? null,
-        selectedEntityName: this.taskCompletionState?.canonicalEntity?.name ?? null,
-        catalogRecordId: this.taskCompletionState?.canonicalEntity?.recordId ?? null,
-      });
-      let toolResults;
-      try {
-        toolResults = await (this.dependencies.executeTools ?? executeAgentTools)(
-          this.runtimeProfile, this.call, response.toolCalls, {
-            fetchImpl: this.dependencies.fetchImpl,
-            timeoutMs: env.VOICE_TOOL_TIMEOUT_MS,
-            requireWorkflowAuthorization: true,
-            workflowAuthorization: {
-              recordId: primaryToolCall?.authorizationRecordId ?? null,
-              toolName: primaryToolCall?.name ?? null,
-            },
-          },
-        );
-      } catch (error) {
-        this.liveCallMemory?.setActiveToolRequest?.(null);
-        throw error;
-      }
-      try {
-        this.runtimeMetrics.tools.push(...toolResults.map((result) => ({
-          name: result.name, success: result.success, durationMs: Number(result.durationMs ?? 0),
-        })));
-        for (const result of toolResults) this.#browserDiagnostic('tool_result', {
-          name: result.name,
-          success: result.success === true,
-          durationMs: Number(result.durationMs ?? 0),
-          warning: result.success === true ? null : 'The tool did not return a verified success result.',
-          errorCode: result.errorCode ?? result.code ?? null,
-        });
-        sourceTrace.add(toolMessageSources(toolResults));
-        if (epoch !== this.epoch) return;
-        const finalizedTool = finalizeConfiguredToolResults({
-          input: {
-            tenantId: this.runtimeProfile.agent.tenantId,
-            agentId: this.runtimeProfile.agent.id,
-            callId: this.call.id,
-            utterance: query,
-            memory: this.liveCallMemory?.snapshot(),
-          },
-          results: toolResults,
-          runtimeProfile: this.runtimeProfile,
-        });
-        const toolDecision = finalizedTool.decision;
-        response = toolDecision.type === knowledgeEngineDecisionTypes.RESPONSE
-          && toolDecision.response?.text
-          ? {
-            cancelled: false,
-            text: toolDecision.response.text,
-            toolCalls: [],
-            sources: toolMessageSources(toolResults),
-          } : {
-            cancelled: false,
-            text: configuredTechnicalFailureResponse(this.runtimeProfile, knowledge),
-            toolCalls: [],
-            sources: [createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
-              label: 'Verified tool response validation fallback',
-              metadata: { reason: toolDecision.reason },
-            })],
-          };
-        validatedNormalTurn = validatedNormalTurn
-          && toolDecision.type === knowledgeEngineDecisionTypes.RESPONSE
-          && toolDecision.reason === 'verified_tool_success';
-        if (validatedNormalTurn && pendingCanonicalResolution
-          && this.liveCallMemory?.applyCanonicalTopicResolution) {
-          const canonicalApplied = this.liveCallMemory.applyCanonicalTopicResolution(
-            pendingCanonicalResolution, { turnToken: epoch },
-          );
-          if (canonicalApplied?.stale) return;
-          if (canonicalApplied?.applied) {
-            this.log.info({
-              stage: 'memory.canonical_topic_committed',
-              callId: this.call.id,
-              turnEpoch: epoch,
-              mode: canonicalApplied.mode,
-              commitBoundary: 'verified_tool_result',
-              activeRecordId: canonicalApplied.state?.activeEntity?.id
-                ?? canonicalApplied.state?.activeCategory?.id ?? null,
-              comparisonRecordIds: (canonicalApplied.state?.comparisonEntities ?? [])
-                .map((entity) => entity.id).filter(Boolean),
-            }, 'Verified TOOL result committed PostgreSQL-backed canonical topic state');
-          }
-        }
-        sourceTrace.add(response.sources);
-      } finally {
-        this.liveCallMemory?.setActiveToolRequest?.(null);
-      }
-    }
-    if (response.cancelled || epoch !== this.epoch || this.finalized) {
-      sentencePipeline.cancel();
-      return;
-    }
-    const generatedAnswer = String(response.text ?? '').trim();
-    const operationalFallback = response.groundingFailureReason
-      ? configuredOperationalFailureResponse(
-        this.runtimeProfile, knowledge, { validation: true },
-      )
-      : operationalKnowledgeFailure || response.operationalFailureReason
-        ? configuredOperationalFailureResponse(this.runtimeProfile, knowledge)
-        : configuredSafeFailureResponse(this.runtimeProfile, knowledge);
-    const rawAnswer = callerFacingText(
-      generatedAnswer || operationalFallback,
-      this.runtimeProfile,
-      knowledge,
-      {
-        allowClarificationFallback: !(
-          response.groundingFailureReason
-          || operationalKnowledgeFailure
-          || response.operationalFailureReason
-        ),
+    const scope = {
+      tenantId: this.runtimeProfile.agent.tenantId,
+      agentId: this.runtimeProfile.agent.id,
+      publications: [],
+    };
+    const invokeStructuredLlm = createTemplateEngineStructuredInvoker(this.adapters.llm, {
+      onActive: (session) => { this.activeLlm = session; },
+      onUsage: (event) => {
+        if (event.usage) this.usageTracker.record('llm', event.usage);
       },
-    );
-    let finalAnswer = rawAnswer;
-    if (!finalAnswer) {
-      finalAnswer = configuredTechnicalFailureResponse(this.runtimeProfile, knowledge);
-      if (!finalAnswer) {
-        sentencePipeline.cancel();
-        throw new AppError(503,
-          'The active agent has no tenant-configured technical failure speech',
-          'VOICE_TECHNICAL_RESPONSE_UNCONFIGURED', {
-            stage: 'operational_response_configuration',
-            operationalFailure: true,
-            decisionType: engineDecision?.type ?? null,
-            decisionReason: engineDecision?.reason ?? null,
+    });
+    let result;
+    try {
+      result = await runTemplateEngineProductionTurn({
+        auth,
+        scope,
+        callId: this.call.id,
+        usageDirection: this.call.direction,
+        language: languageCode(this.runtimeProfile.agent.language),
+        mainPrompt: this.runtimeProfile.agent.prompt,
+        latestUtterance: query,
+        conversationHistory: history,
+        state: this.templateEngineState,
+        runtimeProfile: this.runtimeProfile,
+        authorizedWorkflowTools: assignedTools,
+        assignedTools: this.runtimeProfile.tools,
+        informationFields,
+        confirmationMessage: this.actionConfirmationConfiguration?.confirmationMessage,
+      }, {
+        invokeStructuredLlm,
+        loadPublishedContext: (input) => loadTemplateEnginePublishedContext(
+          input, this.dependencies.templateEngineKnowledgeDependencies,
+        ),
+        retrieveEvidence: (input) => retrieveTemplateEngineEvidence(
+          input, this.dependencies.templateEngineKnowledgeDependencies,
+        ),
+        persistWorkflowState: async (state) => { this.templateEngineState = {
+          ...this.templateEngineState, ...state,
+        }; },
+        executeAuthorizedTool: async (toolCall) => {
+          const results = await (this.dependencies.executeTools ?? executeAgentTools)(
+            this.runtimeProfile,
+            this.call,
+            [{
+              id: `template-${epoch}`,
+              name: toolCall.name,
+              arguments: toolCall.arguments,
+              authorizationRecordId: toolCall.authorizationRecordId,
+            }],
+            {
+              fetchImpl: this.dependencies.fetchImpl,
+              timeoutMs: env.VOICE_TOOL_TIMEOUT_MS,
+              requireWorkflowAuthorization: true,
+              workflowAuthorization: {
+                recordId: toolCall.authorizationRecordId,
+                toolName: toolCall.name,
+              },
+            },
+          );
+          const verified = results[0];
+          this.runtimeMetrics.tools.push({
+            name: verified.name,
+            success: verified.success,
+            durationMs: Number(verified.durationMs ?? 0),
           });
-      }
-      response = {
-        ...response,
-        operationalFailureReason: response.operationalFailureReason
-          ?? response.groundingFailureReason ?? 'EMPTY_CALLER_RESPONSE',
-      };
-      sourceTrace.add(createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
-        label: 'Configured technical failure response',
-        metadata: { reason: response.operationalFailureReason },
-      }));
+          return verified;
+        },
+        validateGroundedClaims: ({ response, selectedEvidence }) => (
+          validateTemplateEngineClaims({ speech: response, evidence: selectedEvidence }, {
+            invokeStructuredLlm,
+          })
+        ),
+        validateToolResultSpeechClaims: ({ speech, verifiedResult }) => (
+          validateTemplateEngineClaims({
+            speech,
+            verifiedToolResult: verifiedResult,
+            callerValues: this.templateEngineState.collectedToolFields,
+          }, { invokeStructuredLlm })
+        ),
+      });
+    } catch (error) {
+      this.#recordProviderFailure('llm', error, 'template_engine.turn');
       this.log.error({
-        stage: 'voice.empty_turn_recovered_with_technical_speech',
+        err: error,
+        stage: 'template_engine.operational_failure',
         callId: this.call.id,
         turnEpoch: epoch,
-        reason: response.operationalFailureReason,
-      }, 'An empty operational turn was converted to configured technical speech');
+      }, 'Template-engine turn failed operationally');
+      const technical = configuredTechnicalFailureResponse(this.runtimeProfile);
+      if (!technical) throw error;
+      result = {
+        speech: technical,
+        state: this.templateEngineState,
+        evidence: [], evidenceIds: [], toolExecuted: false,
+        operationalFailure: error.code ?? 'TEMPLATE_ENGINE_OPERATIONAL_FAILURE',
+      };
+    } finally {
+      this.activeLlm = null;
     }
-    if (validatedNormalTurn) this.#scheduleLiveMemoryCheckpoint('validated_normal_turn');
-    // The pipeline may already contain the temporary latency acknowledgement.
-    // The validated final answer must still be delivered unless it became stale.
-    if (sentencePipeline.sentenceCount() === 0 && Date.now() >= firstAudioDeadlineAt) {
-      this.log.warn({
-        stage: 'voice.late_validated_answer_continued', callId: this.call.id,
-        turnEpoch: epoch, elapsedMs: Date.now() - turnStartedAt,
-      }, 'Validated answer completed after the first-audio deadline and will be delivered');
-    }
-    const finalAnswerQueued = sentencePipeline.enqueue(finalAnswer);
-    if (!finalAnswerQueued) {
+    if (epoch !== this.epoch || this.finalized) {
       sentencePipeline.cancel();
-      throw new AppError(503,
-        'The validated final response could not be queued for speech',
-        'VOICE_FINAL_RESPONSE_NOT_QUEUED', {
-          stage: 'final_response_tts_queue',
-          operationalFailure: true,
-          acknowledgementPlayed: latencyAcknowledged,
-        });
+      return;
     }
-    if (!generatedAnswer) {
-      sourceTrace.add(createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
-        label: 'No-response fallback',
-      }));
+    this.templateEngineState = result.state;
+    this.runtimeMetrics.templateEngine.turns += 1;
+    if (result.evidence?.length) this.runtimeMetrics.templateEngine.searches += 1;
+    if (result.workflow) this.runtimeMetrics.templateEngine.workflows += 1;
+    const selectedIds = new Set(result.evidenceIds ?? []);
+    const factualAnswerSources = (result.evidence ?? []).filter((source) => (
+      selectedIds.has(source.evidenceId)
+    )).map((source) => createMessageSource(messageSourceTypes.KNOWLEDGE, {
+      label: source.canonicalName ?? source.sourceSection ?? 'Published knowledge',
+      metadata: {
+        recordId: source.recordId,
+        evidenceId: source.evidenceId,
+        recordType: source.recordType,
+        knowledgeBaseId: source.knowledgeBaseId,
+        publicationRevision: source.publicationRevision,
+        documentId: source.documentId,
+        documentVersionId: source.documentVersionId,
+        sourceSection: source.sourceSection,
+        sourceLineStart: source.sourceLine,
+      },
+    }));
+    const finalAnswer = this.#fitTtsMessage(result.speech);
+    if (!finalAnswer || !sentencePipeline.enqueue(finalAnswer)) {
+      sentencePipeline.cancel();
+      throw new AppError(503, 'The template-engine response could not be queued for speech',
+        'VOICE_FINAL_RESPONSE_NOT_QUEUED');
     }
-    const factualAnswerSources = sourceTrace.snapshot().filter((source) => (
-      source.type === messageSourceTypes.KNOWLEDGE && Boolean(source.metadata?.documentId)
-    ));
     sentencePipeline.setSources(factualAnswerSources);
     await sentencePipeline.waitUntilStarted();
     const playback = await sentencePipeline.finish();
-    // The caller can interrupt while this older LLM/TTS generation is still
-    // completing. Do not commit that stale response into the new turn state.
-    // Otherwise CallController throws VOICE_CALL_NOT_THINKING and the caller
-    // hears the generic recovery message even though their speech was valid.
     if (this.#isStaleGeneration(epoch)
-      || ![callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) {
-      this.#rejectLateGenerationEvent('llm.response_commit_rejected', epoch, {
-        state: this.controller.state,
-      });
-      return;
-    }
+      || ![callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) return;
     const answer = playback.spokenText
       || sentencePipeline.completedText()
-      || this.#fitTtsMessage(finalAnswer);
+      || finalAnswer;
     await this.controller.setAssistantResponse(answer, Date.now(), { sources: factualAnswerSources });
     sentencePipeline.markTranscriptCommitted();
     if (this.#isStaleGeneration(epoch) || this.controller.state !== callStates.SPEAKING) return;
     await this.controller.playbackComplete();
     this.errorCount = 0;
+    this.#scheduleLiveMemoryCheckpoint('template_engine_validated_turn');
+    this.log.info({
+      stage: 'template_engine.turn_completed',
+      callId: this.call.id,
+      turnEpoch: epoch,
+      decision: result.decision?.decision ?? null,
+      evidenceIds: result.evidenceIds ?? [],
+      workflowStatus: result.workflow?.status ?? null,
+      toolExecuted: result.toolExecuted === true,
+      operationalFailure: result.operationalFailure ?? null,
+      sttFinalizationMs: sttTiming.sttFinalizationMs ?? null,
+      durationMs: Date.now() - turnStartedAt,
+    }, 'Pure template-engine turn completed');
     return Object.freeze({ playbackCompleted: true });
   }
+
 
   async #synthesizeWelcome(text, generationId) {
     const cached = await this.cachedWelcomePromise;
@@ -4013,11 +3031,9 @@ export class RealtimeConversationOrchestrator {
     });
     if (closing.messageType === 'Static') return { text: closing.staticMessage, sources: [closingSource] };
     try {
-      const response = await this.#llm(
+      const response = await this.#generateUtilitySpeech(
         `End the call now. Reason: ${reason}. Generate exactly one brief natural closing sentence. Closing instruction: ${closing.prompt}`,
         this.controller.history,
-        { route: 'none', found: false },
-        { closingReason: reason },
       );
       return {
         text: response.text || fallbackClosing(this.runtimeProfile),
