@@ -9,6 +9,7 @@ import {
 import { apiBlobRequest, apiRequest, isAbortError } from '../../lib/api';
 import { useAppState } from '../../store/AppState';
 import {
+  buildDeveloperResponseTrace,
   canViewDeveloperResponseTrace,
   latestFiniteMetric,
   type TraceMetadataValue,
@@ -178,20 +179,21 @@ function callerFacingAnswerSources(values: MessageSource[]) {
 export function TranscriptMessage({ entry, showDeveloperDiagnostics = true }: {
   entry: TranscriptEntry; showDeveloperDiagnostics?: boolean;
 }) {
-  const sources = callerFacingAnswerSources(Array.isArray(entry.sources) ? entry.sources : []);
+  const allSources = Array.isArray(entry.sources) ? entry.sources : [];
+  const sources = callerFacingAnswerSources(allSources);
+  const decisionTrace = buildDeveloperResponseTrace(allSources);
+  const showAnswerSources = showDeveloperDiagnostics && entry.speaker === 'agent'
+    && (sources.length > 0 || decisionTrace !== null);
   return <div className={`flex flex-col ${entry.speaker === 'agent' ? 'items-end' : 'items-start'}`}>
     <span className="mb-1 text-[9px] font-black uppercase tracking-wider text-slate-400">{entry.speaker} · {elapsed(entry.offsetMs)}</span>
     <div className={`max-w-[88%] rounded-2xl px-4 py-3 text-xs font-semibold leading-relaxed ${entry.speaker === 'agent' ? 'rounded-tr-none bg-gradient-to-r from-violet-600 to-pink-500 text-white' : entry.speaker === 'system' ? 'border border-amber-200 bg-amber-50 text-amber-800' : 'rounded-tl-none border border-slate-200 bg-slate-50 text-slate-800'}`}>{entry.text}</div>
-    {entry.speaker === 'agent' && <DeveloperResponseTracePanel
-      sources={Array.isArray(entry.sources) ? entry.sources : []}
-      visible={showDeveloperDiagnostics}
-    />}
-    {showDeveloperDiagnostics && entry.speaker === 'agent' && sources.length > 0 && <details className="group mt-2 w-full max-w-[88%] rounded-xl border border-slate-200 bg-white shadow-sm">
+    {showAnswerSources && <details className="group mt-2 w-full max-w-[88%] rounded-xl border border-slate-200 bg-white shadow-sm">
       <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-slate-500">
         <span className="flex items-center gap-1.5"><Database className="h-3.5 w-3.5 text-violet-500" />Answer sources ({sources.length})</span>
         <ChevronDown className="h-3.5 w-3.5 transition group-open:rotate-180" />
       </summary>
       <div className="space-y-2 border-t border-slate-100 p-3">
+        <DeveloperResponseTracePanel sources={allSources} visible={showDeveloperDiagnostics} />
         {sources.map((source, index) => {
           const display = sourceDisplay.knowledge;
           const Icon = display.icon;

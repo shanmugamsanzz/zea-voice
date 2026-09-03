@@ -16,7 +16,7 @@ export function DeveloperResponseTracePanel({
     const record = String(source.metadata.recordName ?? source.metadata.sourceSection ?? '').trim();
     return [document, record].filter(Boolean).join(' · ');
   }).join(', ');
-  return <div data-testid="developer-response-trace" className="mt-2 w-full max-w-[88%] rounded-xl border border-violet-200 bg-violet-50/70 px-3 py-2 text-[10px] font-semibold text-slate-700">
+  return <div data-testid="developer-response-trace" className="rounded-lg bg-violet-50/70 px-3 py-2 text-[10px] font-semibold text-slate-700">
     <p><span className="font-black uppercase tracking-wider text-violet-700">Route:</span> {trace.route}</p>
     {trace.knowledgeSources.length > 0
       && <p className="mt-1"><span className="font-black text-slate-600">Sources ({trace.knowledgeSources.length}):</span> {sourceSummary}</p>}
