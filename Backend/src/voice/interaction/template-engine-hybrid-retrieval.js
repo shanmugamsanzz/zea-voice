@@ -1,4 +1,9 @@
 import { AppError } from '../../middleware/errors.js';
+import {
+  canonicalRecordIdentity,
+  canonicalRecordIdentityKey,
+  canonicalRecordNamespace,
+} from '../../knowledge-engine/canonical-record-identity.js';
 import { normalizeTemplateEngineSearchDecision } from './template-engine-search-request.js';
 
 export const TEMPLATE_ENGINE_HYBRID_RETRIEVAL_VERSION = 1;
@@ -74,6 +79,16 @@ function same(value, expected) {
     === cleanText(expected, 160).toLocaleLowerCase();
 }
 
+function boundedScore(value) {
+  const score = Number(value);
+  return Number.isFinite(score) ? Math.max(0, Math.min(1, score)) : 0;
+}
+
+function plainMetadata(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return Object.freeze({});
+  return Object.freeze({ ...value });
+}
+
 function normalizeCandidate(candidate, channel, rank, scope, allowedPublications) {
   if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return null;
   const tenantId = cleanText(candidate.tenantId ?? candidate.tenant_id, 160);
@@ -99,19 +114,50 @@ function normalizeCandidate(candidate, channel, rank, scope, allowedPublications
       });
   }
   const providerScore = Number(candidate.score ?? candidate.similarity ?? 0);
-  return Object.freeze({
+  const normalized = {
     tenantId,
     agentId: agentId || scope.agentId,
     knowledgeBaseId,
     publicationRevision,
     recordId,
     recordType,
+    namespace: canonicalRecordNamespace(recordType),
     channel,
     rank,
+    namespaceRank: Number.isInteger(Number(candidate.namespaceRank))
+      && Number(candidate.namespaceRank) > 0 ? Number(candidate.namespaceRank) : rank,
+    score: Number.isFinite(providerScore) ? providerScore : 0,
     providerScore: Number.isFinite(providerScore) ? providerScore : 0,
+    callerFacingHint: candidate.callerFacingHint === true,
+    authorizationHint: candidate.authorizationHint === true,
+    deduplicationIdentity: plainMetadata(candidate.deduplicationIdentity),
     sourceSection: cleanText(candidate.sourceSection ?? candidate.source_section, 300) || null,
     sourceLine: Number.isInteger(Number(candidate.sourceLine ?? candidate.source_line))
       ? Number(candidate.sourceLine ?? candidate.source_line) : null,
+    ...(candidate.tokenCoverage === undefined ? {} : {
+      tokenCoverage: boundedScore(candidate.tokenCoverage),
+    }),
+    ...(cleanText(candidate.categoryKey ?? candidate.category_key, 160) ? {
+      categoryKey: cleanText(candidate.categoryKey ?? candidate.category_key, 160),
+    } : {}),
+    ...(cleanText(candidate.matchMethod, 160) ? {
+      matchMethod: cleanText(candidate.matchMethod, 160),
+    } : {}),
+    ...(Array.isArray(candidate.evidenceRecordIds) ? {
+      evidenceRecordIds: Object.freeze([...new Set(candidate.evidenceRecordIds
+        .map((id) => cleanText(id, 160)).filter(Boolean))].slice(0, 50)),
+    } : {}),
+  };
+  const canonicalIdentity = canonicalRecordIdentity(normalized);
+  const identityKey = canonicalRecordIdentityKey(canonicalIdentity);
+  if (!identityKey) {
+    throw new AppError(500, 'A retrieval candidate has no canonical identity',
+      'TEMPLATE_ENGINE_RETRIEVAL_IDENTITY_INVALID', { channel, recordId });
+  }
+  return Object.freeze({
+    ...normalized,
+    canonicalIdentity,
+    canonicalIdentityKey: identityKey,
   });
 }
 

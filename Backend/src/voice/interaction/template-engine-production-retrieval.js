@@ -1,5 +1,7 @@
 import { createKnowledgeEngineInput } from '../../knowledge-engine/engine-contract.js';
+import { canonicalRecordIdentityKey } from '../../knowledge-engine/canonical-record-identity.js';
 import { rankAndHydrateAuthoritativeEvidence } from '../../knowledge-engine/authoritative-evidence.js';
+import { AppError } from '../../middleware/errors.js';
 import { knowledgeSearchIndexes } from '../../knowledge-engine/query-classifier.js';
 import { loadPublishedEngineArtifacts } from '../../knowledge-engine/runtime-service.js';
 import { searchParallelHybridCandidates } from '../../knowledge-bases/parallel-hybrid-search.js';
@@ -61,6 +63,40 @@ function evidenceRecord(source) {
     relationships: source.authoritativeData?.relationships ?? [],
     authoritativeData: source.authoritativeData ?? source.facts ?? {},
   });
+}
+
+function normalized(value) {
+  return String(value ?? '').trim().toLocaleLowerCase();
+}
+
+function verifyTemplateEngineEvidence(evidence, selectedCandidates, scope) {
+  const publications = new Set(scope.publications.map((entry) => (
+    `${normalized(entry.knowledgeBaseId)}:${Number(entry.publicationRevision)}`
+  )));
+  const selectedKeys = new Set(selectedCandidates.map((candidate) => (
+    canonicalRecordIdentityKey(candidate, { tenantId: scope.tenantId })
+  )).filter(Boolean));
+  for (const source of evidence) {
+    const publicationKey = `${normalized(source.knowledgeBaseId)}:${source.publicationRevision}`;
+    const identityKey = canonicalRecordIdentityKey(source);
+    const crossScope = normalized(source.tenantId) !== normalized(scope.tenantId)
+      || (source.agentId && normalized(source.agentId) !== normalized(scope.agentId))
+      || !publications.has(publicationKey);
+    if (crossScope) {
+      throw new AppError(500, 'PostgreSQL evidence is outside the template-engine scope',
+        'TEMPLATE_ENGINE_HYDRATION_SCOPE_VIOLATION', {
+          recordType: source.recordType || null,
+        });
+    }
+    if (source.verified !== true || source.callerFacing !== true
+      || !identityKey || !selectedKeys.has(identityKey) || !source.content) {
+      throw new AppError(503, 'PostgreSQL evidence failed template-engine verification',
+        'TEMPLATE_ENGINE_HYDRATED_EVIDENCE_INVALID', {
+          recordType: source.recordType || null,
+        });
+    }
+  }
+  return Object.freeze(evidence);
 }
 
 function publishedWorkflowRecord(record, publication, agentId) {
@@ -180,11 +216,24 @@ export async function retrieveTemplateEngineEvidence({
     retrieval,
     limit: 5,
     minProviderScore: 0,
+    requireAtLeastOneHydratedEvidence: true,
   }, dependencies.hydration);
   const hydratedEvidence = Array.isArray(authoritative.evidence)
     ? authoritative.evidence : [];
-  const evidence = Object.freeze(hydratedEvidence.map(evidenceRecord)
-    .filter((source) => source.verified && source.callerFacing).slice(0, 5));
+  const selectedCandidates = Array.isArray(authoritative?.fusion?.candidates)
+    ? authoritative.fusion.candidates : retrieval.candidates;
+  const evidence = verifyTemplateEngineEvidence(
+    hydratedEvidence.map(evidenceRecord).slice(0, 5), selectedCandidates,
+    { ...scope, publications: artifacts.publications },
+  );
+  if (selectedCandidates.length > 0 && evidence.length === 0) {
+    throw new AppError(503,
+      'Selected published records produced no verified template-engine evidence',
+      'TEMPLATE_ENGINE_AUTHORITATIVE_EVIDENCE_EMPTY', {
+        selectedCount: selectedCandidates.length,
+        rejectedCount: Number(authoritative?.rejectedRecordIds?.length ?? 0),
+      });
+  }
   return Object.freeze({
     version: TEMPLATE_ENGINE_PRODUCTION_RETRIEVAL_VERSION,
     search,

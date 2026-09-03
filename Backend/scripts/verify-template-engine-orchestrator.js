@@ -103,6 +103,32 @@ assert.equal(socialTurn.outputValidation.route, 'TTS');
 assert.match(socialRequest.messages[0].content,
   /purely social greeting, courtesy, acknowledgement/u);
 
+let reviewedCalls = 0;
+const reviewedSocialTurn = await routeTemplateEngineUtterance({
+  mainPrompt: 'Use RESPONSE for non-factual conversation and SEARCH for factual requests.',
+  latestUtterance: 'Okay, please continue.',
+}, {
+  tenantBoundaryVerified: true,
+  nonFactualResponseAllowed: true,
+  invokeStructuredLlm: async () => {
+    reviewedCalls += 1;
+    return reviewedCalls === 1 ? {
+      decision: 'SEARCH', response: '', clarification: null,
+      search: {
+        query: 'continue', requestedFact: null, contextualReference: null,
+        preferredRecordIds: [],
+      },
+      tool: null, stateUpdate: null,
+    } : {
+      decision: 'RESPONSE', response: 'Certainly, please continue.', clarification: null,
+      search: null, tool: null, stateUpdate: null,
+    };
+  },
+});
+assert.equal(reviewedCalls, 2);
+assert.equal(reviewedSocialTurn.routingReviewAttempted, true);
+assert.equal(reviewedSocialTurn.decision.decision, 'RESPONSE');
+
 await assert.rejects(() => routeTemplateEngineUtterance({
   mainPrompt: 'Use RESPONSE for greetings.',
   latestUtterance: 'Hello',

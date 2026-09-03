@@ -70,6 +70,15 @@ function forcedSearchDecision(orchestratorInput, dependencies = {}) {
   });
 }
 
+function searchNeedsRoutingReview(decision, state) {
+  if (decision?.decision !== 'SEARCH') return false;
+  const search = decision.search ?? {};
+  return !cleanText(search.requestedFact, 500)
+    && !cleanText(search.contextualReference, 500)
+    && cleanList(search.preferredRecordIds, 20).length === 0
+    && cleanList(state?.lastReferencedRecordIds, 20).length === 0;
+}
+
 function outputValidationInput(decision, orchestratorInput, dependencies, additions = {}) {
   return Object.freeze({
     decision,
@@ -155,11 +164,12 @@ export async function routeTemplateEngineUtterance(input = {}, dependencies = {}
     JSON.stringify(turnInput),
     '</orchestrator_turn_input>',
   ].join('\n');
-  const completion = await invokeStructuredLlm(Object.freeze({
-    messages: Object.freeze([
-      Object.freeze({ role: 'system', content: systemPrompt }),
-      Object.freeze({ role: 'user', content: orchestratorInput.latestUtterance }),
-    ]),
+  const baseMessages = Object.freeze([
+    Object.freeze({ role: 'system', content: systemPrompt }),
+    Object.freeze({ role: 'user', content: orchestratorInput.latestUtterance }),
+  ]);
+  const request = (messages) => Object.freeze({
+    messages: Object.freeze(messages),
     temperature: 0,
     responseFormat: Object.freeze({
       type: 'json_schema',
@@ -167,11 +177,12 @@ export async function routeTemplateEngineUtterance(input = {}, dependencies = {}
       strict: true,
       schema: templateEngineDecisionJsonSchema,
     }),
-  }));
+  });
 
   const authorizedNames = orchestratorInput.authorizedWorkflowTools
     .map((summary) => summary.toolName);
-  const validated = enforceTemplateEngineRuntimeInvariants(completionOutput(completion), {
+  const validateCompletion = (completion) => enforceTemplateEngineRuntimeInvariants(
+    completionOutput(completion), {
     tenantBoundaryVerified: dependencies.tenantBoundaryVerified === true,
     factualClaimsPresent: dependencies.factualClaimsPresent === true,
     verifiedEvidence: dependencies.verifiedEvidence ?? [],
@@ -179,12 +190,38 @@ export async function routeTemplateEngineUtterance(input = {}, dependencies = {}
     assignedToolSchemas: dependencies.assignedToolSchemas ?? authorizedNames,
     toolSuccessClaimed: dependencies.toolSuccessClaimed === true,
     verifiedToolResult: dependencies.verifiedToolResult ?? null,
-  });
+    },
+  );
+  let completion = await invokeStructuredLlm(request(baseMessages));
+  let validated = validateCompletion(completion);
   if (!validated.valid) {
     throw new AppError(502, 'The template-engine Orchestrator returned an invalid decision',
       'TEMPLATE_ENGINE_ORCHESTRATOR_DECISION_INVALID', {
         reason: validated.reason,
       });
+  }
+  let routingReviewAttempted = false;
+  if (searchNeedsRoutingReview(validated.value, orchestratorInput.state)) {
+    routingReviewAttempted = true;
+    completion = await invokeStructuredLlm(request([
+      ...baseMessages,
+      Object.freeze({
+        role: 'user',
+        content: [
+          'Review the route because SEARCH contains no requested fact, contextual reference, or preferred record.',
+          'If the caller utterance is purely non-factual conversation, return RESPONSE with natural speech.',
+          'If it requests an externally verifiable fact, keep SEARCH and populate requestedFact or contextualReference from meaning and recent context.',
+          'Do not use phrase matching or invent a fact, entity, action, or context.',
+        ].join(' '),
+      }),
+    ]));
+    validated = validateCompletion(completion);
+    if (!validated.valid) {
+      throw new AppError(502, 'The template-engine routing review returned an invalid decision',
+        'TEMPLATE_ENGINE_ORCHESTRATOR_DECISION_INVALID', {
+          reason: validated.reason,
+        });
+    }
   }
   const contextualDecision = normalizeTemplateEngineSearchDecision(
     validated.value, orchestratorInput.state,
@@ -205,6 +242,7 @@ export async function routeTemplateEngineUtterance(input = {}, dependencies = {}
         input: turnInput,
         verifiedEvidenceIds: validated.verifiedEvidenceIds,
         outputValidation,
+        routingReviewAttempted,
       });
     }
     throw new AppError(502, 'The template-engine output failed delivery validation',
@@ -215,6 +253,7 @@ export async function routeTemplateEngineUtterance(input = {}, dependencies = {}
     input: turnInput,
     verifiedEvidenceIds: validated.verifiedEvidenceIds,
     outputValidation,
+    routingReviewAttempted,
   });
 }
 

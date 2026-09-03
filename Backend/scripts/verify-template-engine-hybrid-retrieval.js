@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fuseCandidateRankings } from '../src/knowledge-engine/authoritative-evidence.js';
 import { runTemplateEngineHybridRetrieval } from '../src/voice/interaction/template-engine-hybrid-retrieval.js';
 
 const decision = Object.freeze({
@@ -22,7 +23,15 @@ const scope = Object.freeze({
 function candidate(recordId, score = 0.8) {
   return {
     tenantId: 'tenant-a', agentId: 'agent-a', knowledgeBaseId: 'kb-a',
-    publicationRevision: 3, recordId, recordType: 'ITEM', score,
+    publicationRevision: 3, recordId, recordType: 'CATALOG_ITEM', score,
+    callerFacingHint: true,
+    authorizationHint: false,
+    categoryKey: 'category-a',
+    tokenCoverage: 0.75,
+    namespaceRank: 2,
+    deduplicationIdentity: { canonicalKey: `key-${recordId}` },
+    evidenceRecordIds: [`child-${recordId}`],
+    canonicalIdentity: { tenantId: 'untrusted-tenant' },
   };
 }
 
@@ -53,8 +62,35 @@ assert.deepEqual(Object.keys(retrieval.channels), ['structured', 'bm25', 'qdrant
 assert.equal(retrieval.candidates.length, 3);
 assert.equal(retrieval.candidates[0].recordId, 'record-1');
 assert.equal(retrieval.candidates[0].preferredRecord, true);
+assert.equal(retrieval.channels.structured[0].callerFacingHint, true);
+assert.equal(retrieval.channels.structured[0].authorizationHint, false);
+assert.equal(retrieval.channels.structured[0].categoryKey, 'category-a');
+assert.equal(retrieval.channels.structured[0].tokenCoverage, 0.75);
+assert.equal(retrieval.channels.structured[0].score, 0.8);
+assert.equal(retrieval.channels.structured[0].providerScore, 0.8);
+assert.equal(retrieval.channels.structured[0].namespaceRank, 2);
+assert.deepEqual(retrieval.channels.structured[0].deduplicationIdentity,
+  { canonicalKey: 'key-record-1' });
+assert.deepEqual(retrieval.channels.structured[0].evidenceRecordIds, ['child-record-1']);
+assert.equal(retrieval.channels.structured[0].canonicalIdentity.tenantId, 'tenant-a',
+  'Canonical identity must be rebuilt from the validated tenant scope');
+assert.equal(retrieval.channels.structured[0].canonicalIdentity.recordType, 'CATALOG_ITEM');
+assert.ok(retrieval.channels.structured[0].canonicalIdentityKey);
 assert.deepEqual(retrieval.candidates.find((entry) => entry.recordId === 'record-2').channels,
   ['structured', 'bm25']);
+const authoritativeSelection = fuseCandidateRankings({
+  ...retrieval,
+  tenantId: scope.tenantId,
+  agentId: scope.agentId,
+  recordTypes: ['CATALOG_ITEM'],
+}, {
+  minProviderScore: 0.1,
+  highProviderScore: 0.7,
+  relevanceScoreMargin: 0.2,
+});
+assert.ok(authoritativeSelection.candidates.length > 0,
+  'Preserved caller-facing metadata and scores must survive authoritative selection');
+assert.ok(authoritativeSelection.candidates.some((entry) => entry.recordId === 'record-1'));
 
 const partial = await runTemplateEngineHybridRetrieval({ decision, state, scope }, {
   searchStructuredPostgres: async () => [candidate('record-1')],

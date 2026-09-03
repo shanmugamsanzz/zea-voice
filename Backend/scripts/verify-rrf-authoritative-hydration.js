@@ -492,6 +492,14 @@ assert.equal(optionalEmpty.evidence.length, 0,
 assert.ok(optionalEmpty.rejectedRecordIds.length > 0);
 
 await assert.rejects(() => rankAndHydrateAuthoritativeEvidence({
+  auth: { tenantId }, input, classification, resolution, retrieval,
+  requireAtLeastOneHydratedEvidence: true,
+}, { contextRunner: async () => [] }), (error) => (
+  error.code === 'KNOWLEDGE_AUTHORITATIVE_HYDRATION_EMPTY'
+  && error.details?.selectedCount > 0
+));
+
+await assert.rejects(() => rankAndHydrateAuthoritativeEvidence({
   auth: { tenantId: '90000000-0000-4000-8000-000000000099' },
   input, classification, resolution, retrieval,
 }, { contextRunner }), /same-tenant/u);

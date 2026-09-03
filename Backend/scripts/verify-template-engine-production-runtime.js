@@ -26,8 +26,17 @@ const retrieval = await retrieveTemplateEngineEvidence({
     channelCalls += 1;
     return { channels: { structured: [candidate], bm25: [candidate], qdrant: [candidate] } };
   },
-  hydrateEvidence: async ({ retrieval: selected }) => {
+  hydrateEvidence: async ({ retrieval: selected, requireAtLeastOneHydratedEvidence }) => {
     assert.equal(selected.candidates.length, 1);
+    assert.equal(requireAtLeastOneHydratedEvidence, true);
+    for (const channelCandidates of Object.values(selected.channels)) {
+      assert.equal(channelCandidates[0].tenantId, tenantId);
+      assert.equal(channelCandidates[0].agentId, agentId);
+      assert.equal(channelCandidates[0].knowledgeBaseId, knowledgeBaseId);
+      assert.equal(channelCandidates[0].publicationRevision, 4);
+      assert.equal(channelCandidates[0].recordType, 'CATALOG_ITEM');
+      assert.equal(channelCandidates[0].recordId, 'record-1');
+    }
     return { evidence: [{
       ...candidate, id: 'evidence-1', hydrationValidated: true,
       publicationValidated: true, callerFacing: true,
@@ -45,6 +54,39 @@ assert.deepEqual(retrieval.diagnostics.channelCounts, {
 assert.equal(retrieval.diagnostics.retrievalCount, 1);
 assert.equal(retrieval.diagnostics.hydrationCount, 1);
 assert.equal(retrieval.diagnostics.verifiedEvidenceCount, 1);
+
+await assert.rejects(() => retrieveTemplateEngineEvidence({
+  auth: { tenantId }, scope, callId: 'call-empty', usageDirection: 'inbound',
+  language: 'en', searchDecision, state: {},
+}, {
+  loadArtifacts: async () => ({ publications: [publication], bundles: [], sparseIndexes: [] }),
+  searchCandidates: async () => ({
+    channels: { structured: [candidate], bm25: [candidate], qdrant: [candidate] },
+  }),
+  hydrateEvidence: async ({ retrieval: selected }) => ({
+    evidence: [], fusion: { candidates: selected.candidates }, rejectedRecordIds: [],
+  }),
+}), (error) => error.code === 'TEMPLATE_ENGINE_AUTHORITATIVE_EVIDENCE_EMPTY'
+  && error.details?.selectedCount === 1);
+
+await assert.rejects(() => retrieveTemplateEngineEvidence({
+  auth: { tenantId }, scope, callId: 'call-cross-scope', usageDirection: 'inbound',
+  language: 'en', searchDecision, state: {},
+}, {
+  loadArtifacts: async () => ({ publications: [publication], bundles: [], sparseIndexes: [] }),
+  searchCandidates: async () => ({
+    channels: { structured: [candidate], bm25: [candidate], qdrant: [] },
+  }),
+  hydrateEvidence: async ({ retrieval: selected }) => ({
+    fusion: { candidates: selected.candidates },
+    evidence: [{
+      ...candidate, tenantId: 'foreign-tenant', id: 'foreign-evidence',
+      hydrationValidated: true, publicationValidated: true, callerFacing: true,
+      content: 'Foreign content.', provenance: { knowledgeBaseId, publicationRevision: 4 },
+    }],
+  }),
+}), (error) => error.code === 'TEMPLATE_ENGINE_RETRIEVAL_SCOPE_VIOLATION'
+  || error.code === 'TEMPLATE_ENGINE_HYDRATION_SCOPE_VIOLATION');
 
 const decisions = [searchDecision, {
   decision: 'RESPONSE', response: 'Tenant Item costs 125.', clarification: null,

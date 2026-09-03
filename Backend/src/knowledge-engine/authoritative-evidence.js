@@ -927,6 +927,7 @@ export async function rankAndHydrateAuthoritativeEvidence({
   limit = 5,
   minProviderScore,
   confidenceConfiguration: suppliedConfidenceConfiguration,
+  requireAtLeastOneHydratedEvidence = false,
 }, dependencies = {}) {
   const tenantId = requireTenantId(auth?.tenantId);
   const agentId = requireEntityId(input?.agentId, 'agentId');
@@ -1042,6 +1043,17 @@ export async function rankAndHydrateAuthoritativeEvidence({
   const verifiedRecords = Object.freeze(evidence.map((source) => (
     verifyHydratedEvidenceRecord(source, input)
   )));
+  if (requireAtLeastOneHydratedEvidence === true
+    && fusion.candidates.length > 0 && verifiedRecords.length === 0) {
+    throw new AppError(503,
+      'Selected published records could not be hydrated from PostgreSQL',
+      'KNOWLEDGE_AUTHORITATIVE_HYDRATION_EMPTY', {
+        stage: 'authoritative_hydration',
+        selectedCount: fusion.candidates.length,
+        rejectedCount: fusion.candidates.length,
+        recordTypes: [...new Set(fusion.candidates.map((candidate) => candidate.recordType))],
+      });
+  }
   const comparisonReservedCandidates = mandatoryReservedCandidates.filter((candidate) => (
     candidate.reason === 'explicit_comparison'
   ));
