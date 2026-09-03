@@ -50,8 +50,15 @@ function evidenceRecord(source) {
     publicationRevision: Number(provenance.publicationRevision ?? source.publicationRevision),
     documentId: provenance.documentId ?? source.documentId,
     documentVersionId: provenance.documentVersionId ?? source.documentVersionId,
+    documentName: provenance.uploadedFilename ?? provenance.documentName
+      ?? source.uploadedFilename ?? source.documentName,
+    documentDisplayName: provenance.documentDisplayName ?? source.documentDisplayName,
+    documentType: provenance.documentType ?? source.documentType,
+    pageNumber: provenance.pageNumber ?? source.pageNumber,
+    pageEnd: provenance.pageEnd ?? source.pageEnd,
     sourceSection: provenance.sourceSection ?? source.sourceSection,
-    sourceLine: provenance.sourceLineStart ?? source.sourceLineStart,
+    sourceLineStart: provenance.sourceLineStart ?? source.sourceLineStart ?? source.sourceLine,
+    sourceLineEnd: provenance.sourceLineEnd ?? source.sourceLineEnd,
     content: source.content ?? JSON.stringify(source.authoritativeData ?? source.facts ?? {}),
     canonicalName: source.canonicalName
       ?? source.authoritativeData?.name
@@ -151,6 +158,7 @@ export async function retrieveTemplateEngineEvidence({
   auth, scope, callId, usageDirection, language, searchDecision, state = {}, runtimeProfile,
   preloadedArtifacts = null,
 } = {}, dependencies = {}) {
+  const startedAt = performance.now();
   const search = searchDecision?.search;
   if (!search?.query) throw new TypeError('Template-engine retrieval requires SEARCH output');
   const input = createKnowledgeEngineInput({
@@ -250,6 +258,7 @@ export async function retrieveTemplateEngineEvidence({
       hydrationCount: hydratedEvidence.length,
       verifiedEvidenceCount: evidence.length,
       failedChannels: Object.freeze(hybrid.failures.map((failure) => failure.channel)),
+      durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
     }),
     authoritative,
     artifacts,

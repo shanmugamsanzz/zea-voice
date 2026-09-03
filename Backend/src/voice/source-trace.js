@@ -28,11 +28,19 @@ function scalar(value) {
   return null;
 }
 
+function metadataValue(value) {
+  if (Array.isArray(value)) {
+    const values = value.map(scalar).filter((item) => item !== null).slice(0, 50);
+    return Object.freeze(values);
+  }
+  return scalar(value);
+}
+
 function metadata(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return Object.freeze({});
   return Object.freeze(Object.fromEntries(Object.entries(value)
     .filter(([key]) => !sensitiveMetadataKey.test(String(key)))
-    .map(([key, item]) => [String(key).slice(0, 120), scalar(item)])
+    .map(([key, item]) => [String(key).slice(0, 120), metadataValue(item)])
     .filter(([, item]) => item !== null)));
 }
 
@@ -155,4 +163,61 @@ export function llmMessageSource(provider, completion = {}) {
       finishReason: completion.finishReason,
     },
   });
+}
+
+export function templateEngineMessageSources(result = {}, { turnId = null } = {}) {
+  const provenance = result.provenance && typeof result.provenance === 'object'
+    ? result.provenance : {};
+  const selectedIds = new Set(Array.isArray(result.evidenceIds) ? result.evidenceIds : []);
+  const knowledgeSources = (Array.isArray(result.evidence) ? result.evidence : [])
+    .filter((source) => selectedIds.has(source.evidenceId))
+    .map((source) => createMessageSource(messageSourceTypes.KNOWLEDGE, {
+      id: source.evidenceId ?? source.recordId,
+      label: source.documentDisplayName ?? source.documentName
+        ?? source.canonicalName ?? source.sourceSection ?? 'Published knowledge',
+      metadata: {
+        evidenceId: source.evidenceId,
+        recordId: source.recordId,
+        recordType: source.recordType,
+        recordName: source.canonicalName,
+        knowledgeBaseId: source.knowledgeBaseId,
+        publicationRevision: source.publicationRevision,
+        documentId: source.documentId,
+        documentVersionId: source.documentVersionId,
+        documentName: source.documentName,
+        documentDisplayName: source.documentDisplayName,
+        documentType: source.documentType,
+        pageNumber: source.pageNumber,
+        pageEnd: source.pageEnd,
+        sourceSection: source.sourceSection,
+        sourceLineStart: source.sourceLineStart,
+        sourceLineEnd: source.sourceLineEnd,
+      },
+    }));
+  const decisionSource = createMessageSource(messageSourceTypes.LLM, {
+    id: turnId,
+    label: 'Template engine decision',
+    metadata: {
+      engine: 'template_engine_v1',
+      initialDecision: provenance.initialDecision,
+      finalDecision: provenance.finalDecision,
+      evidenceIds: provenance.evidenceIds ?? result.evidenceIds ?? [],
+      workflowId: provenance.workflowId,
+      toolId: provenance.toolId,
+      validationResult: provenance.validationResult,
+      searchPerformed: provenance.searchPerformed === true,
+      clarificationReason: provenance.clarificationReason,
+    },
+  });
+  const toolSource = provenance.toolId ? createMessageSource(messageSourceTypes.TOOL, {
+    id: provenance.toolId,
+    label: provenance.toolId,
+    metadata: {
+      workflowId: provenance.workflowId,
+      status: result.workflow?.status,
+      success: result.workflow?.verifiedResult?.success,
+      validationResult: provenance.validationResult,
+    },
+  }) : null;
+  return mergeMessageSources(decisionSource, knowledgeSources, toolSource);
 }

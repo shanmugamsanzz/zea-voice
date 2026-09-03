@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { retrieveTemplateEngineEvidence } from '../src/voice/interaction/template-engine-production-retrieval.js';
 import { runTemplateEngineProductionTurn } from '../src/voice/interaction/template-engine-production-runtime.js';
+import { recordTemplateEngineTurnMetrics } from '../src/voice/interaction/template-engine-observability.js';
 
 const tenantId = '11111111-1111-4111-8111-111111111111';
 const agentId = '22222222-2222-4222-8222-222222222222';
@@ -41,19 +42,32 @@ const retrieval = await retrieveTemplateEngineEvidence({
       ...candidate, id: 'evidence-1', hydrationValidated: true,
       publicationValidated: true, callerFacing: true,
       content: 'Tenant Item costs 125.', authoritativeData: { name: 'Tenant Item', price: 125 },
-      provenance: { knowledgeBaseId, publicationRevision: 4 },
+      provenance: {
+        knowledgeBaseId, publicationRevision: 4,
+        documentId: 'document-1', documentVersionId: 'document-version-1',
+        uploadedFilename: 'tenant-source.txt', documentDisplayName: 'Tenant Source',
+        documentType: 'catalog', pageNumber: 1, pageEnd: 1,
+        sourceSection: 'Approved values', sourceLineStart: 10, sourceLineEnd: 12,
+      },
     }] };
   },
 });
 assert.equal(channelCalls, 1);
 assert.equal(retrieval.evidence.length, 1);
 assert.equal(retrieval.evidence[0].verified, true);
+assert.equal(retrieval.evidence[0].documentName, 'tenant-source.txt');
+assert.equal(retrieval.evidence[0].documentDisplayName, 'Tenant Source');
+assert.equal(retrieval.evidence[0].pageNumber, 1);
+assert.equal(retrieval.evidence[0].sourceLineStart, 10);
+assert.equal(retrieval.evidence[0].sourceLineEnd, 12);
 assert.deepEqual(retrieval.diagnostics.channelCounts, {
   structured: 1, bm25: 1, qdrant: 1,
 });
 assert.equal(retrieval.diagnostics.retrievalCount, 1);
 assert.equal(retrieval.diagnostics.hydrationCount, 1);
 assert.equal(retrieval.diagnostics.verifiedEvidenceCount, 1);
+assert.equal(Number.isFinite(retrieval.diagnostics.durationMs), true);
+assert.equal(retrieval.diagnostics.durationMs >= 0, true);
 
 await assert.rejects(() => retrieveTemplateEngineEvidence({
   auth: { tenantId }, scope, callId: 'call-empty', usageDirection: 'inbound',
@@ -118,6 +132,10 @@ assert.equal(retrievalDiagnostics.retrievalCount, 1);
 assert.deepEqual(postSearchDiagnostics.allowedAliases, ['E1']);
 assert.deepEqual(postSearchDiagnostics.returnedAliases, ['E1']);
 assert.equal(postSearchDiagnostics.finalDecision, 'RESPONSE');
+assert.equal(turn.provenance.initialDecision, 'SEARCH');
+assert.equal(turn.provenance.finalDecision, 'RESPONSE');
+assert.deepEqual(turn.provenance.evidenceIds, ['evidence-1']);
+assert.equal(turn.provenance.searchPerformed, true);
 
 const guardedDecisions = [{
   decision: 'RESPONSE', response: 'Tenant Item costs 125.', clarification: null,
@@ -196,6 +214,11 @@ const workflowTurn = await runTemplateEngineProductionTurn({
 assert.equal(workflowTurn.workflow.status, 'AWAITING_FIELD');
 assert.equal(workflowTurn.state.activeWorkflowId, 'workflow-1');
 assert.equal(workflowTurn.toolExecuted, false);
+assert.equal(workflowTurn.provenance.initialDecision, 'TOOL');
+assert.equal(workflowTurn.provenance.finalDecision, 'CLARIFY');
+assert.equal(workflowTurn.provenance.workflowId, 'workflow-1');
+assert.equal(workflowTurn.provenance.toolId, 'tool-1');
+assert.equal(workflowTurn.provenance.clarificationReason, 'missing_workflow_field');
 assert.equal(workflowDecisions.length, 0);
 
 const confirmationDecisions = [{
@@ -232,6 +255,32 @@ const confirmedTurn = await runTemplateEngineProductionTurn({
 assert.equal(executed, 1);
 assert.equal(confirmedTurn.workflow.status, 'SUCCEEDED');
 assert.equal(confirmedTurn.state.activeWorkflowId, null);
+assert.equal(confirmedTurn.provenance.finalDecision, 'TOOL_RESULT');
+assert.equal(confirmedTurn.provenance.validationResult, 'verified_tool_result');
 assert.equal(confirmationDecisions.length, 0);
+
+const runtimeMetrics = {
+  templateEngine: { version: 1, mode: 'active', turns: 0, searches: 0, workflows: 0 },
+  turnLatency: [],
+};
+const searchMetric = recordTemplateEngineTurnMetrics(runtimeMetrics, {
+  epoch: 1, result: turn, retrievalDiagnostics: retrieval.diagnostics,
+  turnStartedAt: 1_000, firstAudioAt: 1_400, firstAudioDeadlineMs: 2_000,
+});
+recordTemplateEngineTurnMetrics(runtimeMetrics, {
+  epoch: 2, result: workflowTurn, turnStartedAt: 2_000,
+  firstAudioAt: 4_500, firstAudioDeadlineMs: 2_000,
+});
+assert.equal(runtimeMetrics.templateEngine.turns, 2);
+assert.equal(runtimeMetrics.templateEngine.searches, 1);
+assert.equal(runtimeMetrics.templateEngine.workflows, 1);
+assert.equal(runtimeMetrics.turnLatency.length, 2);
+assert.equal(searchMetric.route, 'SEARCH');
+assert.equal(searchMetric.responseClass, 'RESPONSE');
+assert.equal(searchMetric.retrievalMs, retrieval.diagnostics.durationMs);
+assert.equal(searchMetric.totalFirstAudioMs, 400);
+assert.equal(searchMetric.firstAudioStatus, 'passed');
+assert.equal(runtimeMetrics.turnLatency[1].retrievalMs, null);
+assert.equal(runtimeMetrics.turnLatency[1].firstAudioStatus, 'missed');
 
 console.log('Template-engine production retrieval and turn runtime verification passed.');

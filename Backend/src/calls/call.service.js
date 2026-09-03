@@ -26,14 +26,14 @@ function contactName(row) {
   return null;
 }
 
-function mapTranscriptEntry(entry) {
+function mapTranscriptEntry(entry, includeDeveloperMetadata = true) {
   return {
     ...entry,
-    sources: mergeMessageSources(entry.sources ?? []),
+    sources: includeDeveloperMetadata ? mergeMessageSources(entry.sources ?? []) : [],
   };
 }
 
-function mapCall(row, includeTranscript = false) {
+function mapCall(row, includeTranscript = false, includeDeveloperMetadata = true) {
   const runtime = row.provider_metadata?.voiceRuntime;
   const call = {
     id: row.id, companyId: row.tenant_id, workspaceId: row.workspace_id,
@@ -54,7 +54,7 @@ function mapCall(row, includeTranscript = false) {
         ? row.duration_seconds : number(row.live_duration_seconds),
     }),
     taskCompletion: runtime?.metrics?.taskCompletion ?? null,
-    runtimeObservability: runtime ? {
+    runtimeObservability: includeDeveloperMetadata && runtime ? {
       turnLatency: runtime.metrics?.turnLatency ?? [],
       tools: runtime.metrics?.tools ?? [],
       providerFailures: runtime.metrics?.providerFailures ?? null,
@@ -77,7 +77,9 @@ function mapCall(row, includeTranscript = false) {
     } : null,
     createdAt: row.created_at, updatedAt: row.updated_at,
   };
-  if (includeTranscript) call.transcript = (row.transcript ?? []).map(mapTranscriptEntry);
+  if (includeTranscript) call.transcript = (row.transcript ?? []).map((entry) => (
+    mapTranscriptEntry(entry, includeDeveloperMetadata)
+  ));
   return call;
 }
 
@@ -116,7 +118,8 @@ export function listCalls(auth, filters) {
       FROM (${callSelect} ${where}) listed
       ORDER BY listed.started_at DESC LIMIT $6 OFFSET $7`, [...values, filters.pageSize, offset]);
     const total = result.rows[0]?.full_count ?? 0;
-    return { items: result.rows.map((row) => mapCall(row)), pagination: {
+    const includeDeveloperMetadata = ['SUPER_ADMIN', 'COMPANY_DEVELOPER'].includes(auth.role);
+    return { items: result.rows.map((row) => mapCall(row, false, includeDeveloperMetadata)), pagination: {
       page: filters.page, pageSize: filters.pageSize, total,
       totalPages: Math.ceil(total / filters.pageSize),
     } };
@@ -135,7 +138,8 @@ export function getCall(auth, callId, dependencies = {}) {
       FROM call_transcript_entries
       WHERE call_session_id = $1 AND tenant_id = $2
       ORDER BY sequence_number`, [callId, result.rows[0].tenant_id]);
-    return mapCall({ ...result.rows[0], transcript: transcript.rows }, true);
+    const includeDeveloperMetadata = ['SUPER_ADMIN', 'COMPANY_DEVELOPER'].includes(auth.role);
+    return mapCall({ ...result.rows[0], transcript: transcript.rows }, true, includeDeveloperMetadata);
   });
 }
 

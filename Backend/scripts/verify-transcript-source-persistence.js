@@ -15,9 +15,16 @@ const queue = new TranscriptPersistenceQueue({
 
 const combinedSources = [
   { type: 'system_prompt', id: 'agent-1', label: 'Instructions', metadata: {} },
-  { type: 'knowledge', id: 'record-1', label: 'catalog', metadata: { documentName: 'packages.pdf' } },
+  { type: 'knowledge', id: 'evidence-1', label: 'Published Packages', metadata: {
+    evidenceId: 'evidence-1', recordId: 'record-1', documentId: 'document-1',
+    documentName: 'packages.pdf', documentDisplayName: 'Published Packages',
+    sourceSection: 'Approved values', pageNumber: 1,
+  } },
   { type: 'tool', id: 'tool-1', label: 'appointment_slots', metadata: { success: true } },
-  { type: 'llm', id: 'model-1', label: 'GPT', metadata: { finishReason: 'stop' } },
+  { type: 'llm', id: 'call-1:turn-1', label: 'Template engine decision', metadata: {
+    initialDecision: 'SEARCH', finalDecision: 'RESPONSE', evidenceIds: ['evidence-1'],
+    validationResult: 'valid',
+  } },
 ];
 
 const first = queue.enqueue({ callId: 'call-1', sequenceNumber: 1, text: 'First', sources: combinedSources });
@@ -64,5 +71,9 @@ assert.deepEqual(storedSources.map((source) => source.type), [
   'system_prompt', 'knowledge', 'tool', 'llm',
 ]);
 assert.equal(storedSources.length, 4, 'duplicate combined sources must not be persisted');
+assert.equal(storedSources[1].metadata.documentDisplayName, 'Published Packages');
+assert.equal(storedSources[1].metadata.recordId, 'record-1');
+assert.equal(storedSources[3].metadata.initialDecision, 'SEARCH');
+assert.deepEqual(storedSources[3].metadata.evidenceIds, ['evidence-1']);
 
 console.log(JSON.stringify({ success: true, task: 'Asynchronous combined transcript source persistence' }));

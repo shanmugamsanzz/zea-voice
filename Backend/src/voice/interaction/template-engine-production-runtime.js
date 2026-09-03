@@ -58,6 +58,23 @@ function decisionSpeech(decision) {
   return '';
 }
 
+function responseProvenance({
+  initialDecision, finalDecision, evidenceIds: citedEvidenceIds = [], workflowId = null,
+  toolId = null, validationResult = 'valid', searchPerformed = false,
+  clarificationReason = null,
+} = {}) {
+  return Object.freeze({
+    initialDecision,
+    finalDecision,
+    evidenceIds: Object.freeze([...new Set(citedEvidenceIds)]),
+    workflowId,
+    toolId,
+    validationResult,
+    searchPerformed,
+    clarificationReason,
+  });
+}
+
 function authorizedWorkflowSummaries(workflows, tools) {
   return workflows.flatMap((workflow) => {
     const identifier = configuredWorkflowToolIdentifier(workflow);
@@ -110,6 +127,13 @@ async function runWorkflow(input, decision, state, context, dependencies) {
     executeAuthorizedTool: dependencies.executeAuthorizedTool,
     validateToolResultSpeechClaims: dependencies.validateToolResultSpeechClaims,
   });
+  const workflow = context.publishedWorkflows.find((entry) => (
+    configuredWorkflowToolIdentifier(entry) === decision.tool?.name
+  ));
+  const assignedTool = input.assignedTools.find((entry) => (
+    assignedToolIdentifiers(entry).has(decision.tool?.name)
+  ));
+  const finished = ['SUCCEEDED', 'FAILED'].includes(transition.status);
   return Object.freeze({
     decision,
     speech: transition.speech,
@@ -125,7 +149,22 @@ async function runWorkflow(input, decision, state, context, dependencies) {
     evidence: Object.freeze([]),
     evidenceIds: [],
     workflow: transition,
-    toolExecuted: ['SUCCEEDED', 'FAILED'].includes(transition.status),
+    toolExecuted: finished,
+    provenance: responseProvenance({
+      initialDecision: 'TOOL',
+      finalDecision: finished ? 'TOOL_RESULT' : 'CLARIFY',
+      workflowId: workflow?.recordId ?? state.activeWorkflowId ?? transition.state.activeWorkflowId,
+      toolId: assignedTool?.id ?? decision.tool?.name,
+      validationResult: finished
+        ? (transition.verifiedResult?.verified === true ? 'verified_tool_result' : 'unverified_tool_result')
+        : 'workflow_state_valid',
+      clarificationReason: finished ? null
+        : transition.status === 'AWAITING_FIELD'
+          ? 'missing_workflow_field'
+          : transition.status === 'AWAITING_CONFIRMATION'
+            ? 'workflow_confirmation_required'
+            : 'workflow_input_required',
+    }),
   });
 }
 
@@ -178,12 +217,14 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     ambiguity: { required: true },
   });
   let first = routed.decision;
+  let initialValidationResult = routed.outputValidation?.reason ?? 'valid';
   if (first.decision === 'RESPONSE') {
     const directValidation = await dependencies.validateGroundedClaims({
       response: first.response,
       selectedEvidence: Object.freeze([]),
     });
     if (directValidation?.supported !== true) {
+      initialValidationResult = directValidation?.reason ?? 'factual_response_requires_search';
       first = Object.freeze({
         decision: 'SEARCH', response: '', clarification: null,
         search: Object.freeze({
@@ -206,6 +247,12 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       decision: first, speech, state: applyDecisionState(state, first),
       evidence: Object.freeze([]), evidenceIds: Object.freeze([]),
       workflow: null, toolExecuted: false,
+      provenance: responseProvenance({
+        initialDecision: first.decision,
+        finalDecision: first.decision,
+        validationResult: initialValidationResult,
+        clarificationReason: first.clarification?.reason ?? null,
+      }),
     });
   }
 
@@ -265,6 +312,14 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     }),
     workflow: null,
     toolExecuted: false,
+    provenance: responseProvenance({
+      initialDecision: 'SEARCH',
+      finalDecision: answered.decision.decision,
+      evidenceIds: evidenceIds(answered.decision),
+      validationResult: answered.outputValidation?.reason ?? 'valid',
+      searchPerformed: true,
+      clarificationReason: answered.decision.clarification?.reason ?? null,
+    }),
   });
 }
 

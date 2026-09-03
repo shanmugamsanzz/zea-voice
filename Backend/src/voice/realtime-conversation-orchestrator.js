@@ -50,6 +50,7 @@ import {
 } from './interaction/grounded-turn-latency.js';
 import { createMinimalTemplateEngineState } from './interaction/template-engine-state.js';
 import { runTemplateEngineProductionTurn } from './interaction/template-engine-production-runtime.js';
+import { recordTemplateEngineTurnMetrics } from './interaction/template-engine-observability.js';
 import {
   loadTemplateEnginePublishedContext,
   retrieveTemplateEngineEvidence,
@@ -82,6 +83,7 @@ import {
   llmMessageSource,
   mergeMessageSources,
   messageSourceTypes,
+  templateEngineMessageSources,
 } from './source-trace.js';
 
 function languageCode(value) {
@@ -1868,6 +1870,7 @@ export class RealtimeConversationOrchestrator {
     let acknowledgementNumber = 0;
     let acknowledgementAudioPlayed = false;
     let firstValidatedTextAt = null;
+    let firstAudioAt = null;
     let spokenCharacters = 0;
     let pendingShortSentence = '';
     let groupingTimer = null;
@@ -2048,6 +2051,7 @@ export class RealtimeConversationOrchestrator {
             && Date.now() < firstAudioDeadlineAt ? firstAudioDeadlineAt : undefined,
           validatedTextAt: acknowledgement ? undefined : firstValidatedTextAt,
           onFirstAudio: () => {
+            firstAudioAt ??= Date.now();
             if (!audibleSentences.includes(sentence)) audibleSentences.push(sentence);
           },
         });
@@ -2188,6 +2192,7 @@ export class RealtimeConversationOrchestrator {
             failures: Object.freeze([...sentenceFailures]),
             completedSentences: completedSentences.length,
             spokenText: completedSentences.join(' ').trim(),
+            firstAudioAt,
           };
         } finally {
           clearGroupingTimer();
@@ -2251,6 +2256,7 @@ export class RealtimeConversationOrchestrator {
       },
     });
     let result;
+    let retrievalDiagnostics = null;
     try {
       result = await runTemplateEngineProductionTurn({
         auth,
@@ -2328,6 +2334,7 @@ export class RealtimeConversationOrchestrator {
           }, 'Invalid post-search decision was repaired without exposing unvalidated speech');
         },
         onRetrievalDiagnostics: (details) => {
+          retrievalDiagnostics = details;
           this.log.info({
             stage: 'template_engine.retrieval_completed',
             callId: this.call.id,
@@ -2378,26 +2385,9 @@ export class RealtimeConversationOrchestrator {
       return;
     }
     this.templateEngineState = result.state;
-    this.runtimeMetrics.templateEngine.turns += 1;
-    if (result.evidence?.length) this.runtimeMetrics.templateEngine.searches += 1;
-    if (result.workflow) this.runtimeMetrics.templateEngine.workflows += 1;
-    const selectedIds = new Set(result.evidenceIds ?? []);
-    const factualAnswerSources = (result.evidence ?? []).filter((source) => (
-      selectedIds.has(source.evidenceId)
-    )).map((source) => createMessageSource(messageSourceTypes.KNOWLEDGE, {
-      label: source.canonicalName ?? source.sourceSection ?? 'Published knowledge',
-      metadata: {
-        recordId: source.recordId,
-        evidenceId: source.evidenceId,
-        recordType: source.recordType,
-        knowledgeBaseId: source.knowledgeBaseId,
-        publicationRevision: source.publicationRevision,
-        documentId: source.documentId,
-        documentVersionId: source.documentVersionId,
-        sourceSection: source.sourceSection,
-        sourceLineStart: source.sourceLine,
-      },
-    }));
+    const factualAnswerSources = templateEngineMessageSources(result, {
+      turnId: `${this.call.id}:${epoch}`,
+    });
     const finalAnswer = this.#fitTtsMessage(result.speech);
     if (!finalAnswer || !sentencePipeline.enqueue(finalAnswer)) {
       sentencePipeline.cancel();
@@ -2412,6 +2402,11 @@ export class RealtimeConversationOrchestrator {
     const answer = playback.spokenText
       || sentencePipeline.completedText()
       || finalAnswer;
+    recordTemplateEngineTurnMetrics(this.runtimeMetrics, {
+      epoch, result, retrievalDiagnostics, turnStartedAt,
+      firstAudioAt: playback.firstAudioAt,
+      firstAudioDeadlineMs: Math.min(env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS, 2_000),
+    });
     await this.controller.setAssistantResponse(answer, Date.now(), { sources: factualAnswerSources });
     sentencePipeline.markTranscriptCommitted();
     if (this.#isStaleGeneration(epoch) || this.controller.state !== callStates.SPEAKING) return;

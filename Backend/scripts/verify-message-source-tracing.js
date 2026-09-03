@@ -7,6 +7,7 @@ import {
   maximumMessageSources,
   mergeMessageSources,
   messageSourceTypes,
+  templateEngineMessageSources,
   toolMessageSources,
 } from '../src/voice/source-trace.js';
 
@@ -61,6 +62,41 @@ const llm = llmMessageSource({
 }, { providerRequestId: 'request-1', finishReason: 'stop' });
 assert.equal(llm.type, 'llm');
 assert.equal(llm.metadata.providerRequestId, 'request-1');
+
+const templateSources = templateEngineMessageSources({
+  provenance: {
+    initialDecision: 'SEARCH', finalDecision: 'RESPONSE',
+    evidenceIds: ['published:catalog_item:item-1'], validationResult: 'valid',
+    searchPerformed: true,
+  },
+  evidenceIds: ['published:catalog_item:item-1'],
+  evidence: [{
+    evidenceId: 'published:catalog_item:item-1', recordId: 'item-1',
+    recordType: 'CATALOG_ITEM', canonicalName: 'Gold Master Health Checkup',
+    knowledgeBaseId: 'kb-1', publicationRevision: 4,
+    documentId: 'document-1', documentVersionId: 'version-1',
+    documentName: 'packages.pdf', documentDisplayName: 'Published Packages',
+    documentType: 'catalog', pageNumber: 2, pageEnd: 3,
+    sourceSection: 'service-plans', sourceLineStart: 14, sourceLineEnd: 18,
+  }],
+}, { turnId: 'call-1:turn-1' });
+assert.deepEqual(templateSources.map((source) => source.type), ['llm', 'knowledge']);
+assert.equal(templateSources[0].metadata.initialDecision, 'SEARCH');
+assert.equal(templateSources[0].metadata.finalDecision, 'RESPONSE');
+assert.deepEqual(templateSources[0].metadata.evidenceIds, ['published:catalog_item:item-1']);
+assert.equal(templateSources[1].id, 'published:catalog_item:item-1');
+assert.equal(templateSources[1].metadata.documentDisplayName, 'Published Packages');
+assert.equal(templateSources[1].metadata.sourceLineEnd, 18);
+
+const nonFactualTemplateSources = templateEngineMessageSources({
+  provenance: {
+    initialDecision: 'RESPONSE', finalDecision: 'RESPONSE',
+    evidenceIds: [], validationResult: 'valid', searchPerformed: false,
+  },
+  evidenceIds: [], evidence: [],
+}, { turnId: 'call-1:turn-2' });
+assert.deepEqual(nonFactualTemplateSources.map((source) => source.type), ['llm']);
+assert.deepEqual(nonFactualTemplateSources[0].metadata.evidenceIds, []);
 
 const merged = mergeMessageSources(prompt, prompt, knowledge, tools, llm);
 assert.equal(merged.length, 4);
