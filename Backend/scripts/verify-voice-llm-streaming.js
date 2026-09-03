@@ -90,6 +90,31 @@ const openAi = createOpenAiCompatibleLlmAdapter({
 assert.equal((await collect(openAi.stream(input))).at(-1).finishReason, 'stop');
 assert.equal(openAiAuthorization, 'Bearer openai-secret');
 
+const rejected = createOpenAiCompatibleLlmAdapter({
+  providerConfig: {
+    providerId: 'rejected-provider', providerName: 'OpenAI',
+    modelId: 'rejected-model', modelKey: 'gpt-4.1-mini',
+    baseUrl: 'https://api.openai.com/v1', modelSettings: {},
+    parameters: { OPENAI_API_KEY: 'secret' },
+  },
+  runtimeContext: { fetchImpl: async () => new Response(JSON.stringify({
+    error: { type: 'invalid_request_error', code: 'invalid_json_schema', param: 'response_format' },
+  }), { status: 400, headers: { 'content-type': 'application/json' } }) },
+});
+const rejectedIterator = rejected.stream(input);
+const rejectedEvent = await rejectedIterator.next();
+assert.equal(rejectedEvent.value.type, 'error');
+assert.equal(rejectedEvent.value.code, 'LLM_PROVIDER_REQUEST_FAILED');
+assert.equal(rejectedEvent.value.retryable, false);
+assert.deepEqual(rejectedEvent.value.details, {
+  providerId: 'rejected-provider', modelId: 'rejected-model',
+  providerCode: 'invalid_json_schema', providerParam: 'response_format', status: 400,
+});
+await assert.rejects(() => rejectedIterator.next(), (error) => (
+  error.code === 'LLM_PROVIDER_REQUEST_FAILED'
+  && error.details?.providerCode === 'invalid_json_schema'
+));
+
 let geminiRequest;
 const gemini = createGeminiLlmAdapter({
   providerConfig: {

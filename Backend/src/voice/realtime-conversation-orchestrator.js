@@ -92,36 +92,66 @@ function languageCode(value) {
   return Object.entries(names).find(([name]) => lower.includes(name))?.[1] ?? 'en';
 }
 
-function createTemplateEngineStructuredInvoker(adapter, options = {}) {
+export function createTemplateEngineStructuredInvoker(adapter, options = {}) {
   return async (request) => {
-    let text = '';
-    let completion = {};
-    const stream = adapter.stream({
-      messages: request.messages,
-      tools: [],
-      temperature: request.temperature ?? 0,
-      maxOutputTokens: env.VOICE_GROUNDED_MAX_OUTPUT_TOKENS,
-      responseFormat: request.responseFormat,
-    });
-    options.onActive?.({ cancel: (reason) => adapter.cancel(reason) });
-    for await (const event of stream) {
-      if (event.type === 'text_delta') text += String(event.delta ?? '');
-      if (event.type === 'completed' && event.usage) options.onUsage?.(event);
-      if (event.type === 'completed') completion = event;
-      if (event.type === 'error') {
-        throw Object.assign(new Error(event.message), {
-          code: event.code ?? 'LLM_PROVIDER_ERROR', retryable: event.retryable === true,
+    let transientRetries = 0;
+    let responseFormat = request.responseFormat;
+    let schemaFallbackUsed = false;
+    while (true) {
+      try {
+        let text = '';
+        let completion = {};
+        const stream = adapter.stream({
+          messages: request.messages,
+          tools: [],
+          temperature: request.temperature ?? 0,
+          maxOutputTokens: env.VOICE_GROUNDED_MAX_OUTPUT_TOKENS,
+          responseFormat,
         });
+        options.onActive?.({ cancel: (reason) => adapter.cancel(reason) });
+        for await (const event of stream) {
+          if (event.type === 'text_delta') text += String(event.delta ?? '');
+          if (event.type === 'completed' && event.usage) options.onUsage?.(event);
+          if (event.type === 'completed') completion = event;
+          if (event.type === 'error') {
+            throw Object.assign(new AppError(
+              Number(event.details?.status) === 429 ? 429 : 502,
+              event.message,
+              event.code ?? 'LLM_PROVIDER_ERROR',
+              event.details ?? undefined,
+            ), { retryable: event.retryable === true });
+          }
+        }
+        const raw = text.trim();
+        if (!raw) throw new AppError(502, 'The template-engine LLM returned no decision',
+          'TEMPLATE_ENGINE_LLM_EMPTY');
+        try {
+          return { ...completion, outputParsed: JSON.parse(raw) };
+        } catch (error) {
+          throw new AppError(502, 'The template-engine LLM returned malformed JSON',
+            'TEMPLATE_ENGINE_LLM_INVALID_JSON', { message: error.message });
+        }
+      } catch (error) {
+        const providerCode = String(error?.details?.providerCode ?? '').toLocaleLowerCase();
+        const providerParam = String(error?.details?.providerParam ?? '').toLocaleLowerCase();
+        const schemaRejected = !schemaFallbackUsed
+          && responseFormat?.type === 'json_schema'
+          && Number(error?.details?.status) === 400
+          && (providerParam.includes('response_format')
+            || providerCode.includes('json_schema') || providerCode.includes('response_format'));
+        if (schemaRejected) {
+          schemaFallbackUsed = true;
+          responseFormat = Object.freeze({ type: 'json_object' });
+          options.onResponseFormatFallback?.(error.details);
+          continue;
+        }
+        const canRetry = error?.retryable === true
+          && transientRetries < env.VOICE_PROVIDER_MAX_RETRIES;
+        if (!canRetry) throw error;
+        const delayMs = env.VOICE_PROVIDER_RETRY_BASE_MS * (2 ** transientRetries);
+        transientRetries += 1;
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
       }
-    }
-    const raw = text.trim();
-    if (!raw) throw new AppError(502, 'The template-engine LLM returned no decision',
-      'TEMPLATE_ENGINE_LLM_EMPTY');
-    try {
-      return { ...completion, outputParsed: JSON.parse(raw) };
-    } catch (error) {
-      throw new AppError(502, 'The template-engine LLM returned malformed JSON',
-        'TEMPLATE_ENGINE_LLM_INVALID_JSON', { message: error.message });
     }
   };
 }
@@ -2209,6 +2239,15 @@ export class RealtimeConversationOrchestrator {
       onActive: (session) => { this.activeLlm = session; },
       onUsage: (event) => {
         if (event.usage) this.usageTracker.record('llm', event.usage);
+      },
+      onResponseFormatFallback: (details) => {
+        this.log.warn({
+          stage: 'template_engine.llm_schema_fallback',
+          callId: this.call.id,
+          providerCode: details?.providerCode ?? null,
+          providerParam: details?.providerParam ?? null,
+          providerStatus: details?.status ?? null,
+        }, 'LLM provider rejected strict schema; retrying with JSON-object mode');
       },
     });
     let result;

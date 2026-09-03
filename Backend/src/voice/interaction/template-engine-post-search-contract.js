@@ -8,53 +8,43 @@ const rootKeys = Object.freeze([
   'decision', 'response', 'clarification', 'evidenceIds', 'stateUpdate',
 ]);
 const clarificationKeys = Object.freeze(['question', 'reason', 'candidates']);
-const stateUpdateKeys = Object.freeze(['set', 'clear']);
 const decisions = new Set(Object.values(templateEnginePostSearchDecisionTypes));
 
 export const templateEnginePostSearchJsonSchema = Object.freeze({
-  $schema: 'https://json-schema.org/draft/2020-12/schema',
-  title: 'TemplateEnginePostSearchDecision',
   type: 'object',
   additionalProperties: false,
   required: rootKeys,
   properties: Object.freeze({
-    decision: Object.freeze({ enum: Object.values(templateEnginePostSearchDecisionTypes) }),
-    response: Object.freeze({ type: 'string', maxLength: 4_000 }),
+    decision: Object.freeze({
+      type: 'string', enum: Object.values(templateEnginePostSearchDecisionTypes),
+    }),
+    response: Object.freeze({ type: 'string' }),
     clarification: Object.freeze({
-      oneOf: Object.freeze([
+      anyOf: Object.freeze([
         Object.freeze({ type: 'null' }),
         Object.freeze({
           type: 'object', additionalProperties: false, required: clarificationKeys,
           properties: Object.freeze({
-            question: Object.freeze({ type: 'string', minLength: 1, maxLength: 1_000 }),
-            reason: Object.freeze({ type: ['string', 'null'], maxLength: 500 }),
+            question: Object.freeze({ type: 'string' }),
+            reason: Object.freeze({
+              anyOf: Object.freeze([
+                Object.freeze({ type: 'string' }),
+                Object.freeze({ type: 'null' }),
+              ]),
+            }),
             candidates: Object.freeze({
-              type: 'array', maxItems: 10, uniqueItems: true,
-              items: Object.freeze({ type: 'string', minLength: 1, maxLength: 300 }),
+              type: 'array', items: Object.freeze({ type: 'string' }),
             }),
           }),
         }),
       ]),
     }),
     evidenceIds: Object.freeze({
-      type: 'array', maxItems: 5, uniqueItems: true,
-      items: Object.freeze({ type: 'string', minLength: 1, maxLength: 160 }),
+      type: 'array', items: Object.freeze({ type: 'string' }),
     }),
-    stateUpdate: Object.freeze({
-      oneOf: Object.freeze([
-        Object.freeze({ type: 'null' }),
-        Object.freeze({
-          type: 'object', additionalProperties: false, required: stateUpdateKeys,
-          properties: Object.freeze({
-            set: Object.freeze({ type: 'object' }),
-            clear: Object.freeze({
-              type: 'array', maxItems: 50, uniqueItems: true,
-              items: Object.freeze({ type: 'string', minLength: 1, maxLength: 160 }),
-            }),
-          }),
-        }),
-      ]),
-    }),
+    // Post-search state is derived deterministically from citations and
+    // clarification output; the LLM cannot write arbitrary state here.
+    stateUpdate: Object.freeze({ type: 'null' }),
   }),
 });
 
@@ -100,21 +90,6 @@ function normalizeClarification(value) {
   return Object.freeze({ question, reason, candidates: Object.freeze(candidates) });
 }
 
-function normalizeStateUpdate(value) {
-  if (value === null) return null;
-  if (!exactKeys(value, stateUpdateKeys) || !isObject(value.set) || !Array.isArray(value.clear)
-    || value.clear.length > 50) return undefined;
-  const clear = value.clear.map((entry) => text(entry, 160));
-  if (clear.some((entry) => !entry) || new Set(clear).size !== clear.length) return undefined;
-  try {
-    const set = JSON.parse(JSON.stringify(value.set));
-    if (!isObject(set) || JSON.stringify(set).length > 20_000) return undefined;
-    return Object.freeze({ set: Object.freeze(set), clear: Object.freeze(clear) });
-  } catch {
-    return undefined;
-  }
-}
-
 export function validateTemplateEnginePostSearchDecision(value, allowedEvidenceIds = []) {
   const parsed = parse(value);
   if (!parsed) return Object.freeze({ valid: false, reason: 'invalid_json' });
@@ -127,7 +102,7 @@ export function validateTemplateEnginePostSearchDecision(value, allowedEvidenceI
     ? null : normalizeClarification(parsed.clarification);
   const evidenceIds = Array.isArray(parsed.evidenceIds)
     ? parsed.evidenceIds.map((id) => text(id, 160)) : null;
-  const stateUpdate = normalizeStateUpdate(parsed.stateUpdate);
+  const stateUpdate = parsed.stateUpdate === null ? null : undefined;
   if (response === null || (parsed.clarification !== null && !clarification)
     || !evidenceIds || evidenceIds.length > 5 || evidenceIds.some((id) => !id)
     || new Set(evidenceIds).size !== evidenceIds.length || stateUpdate === undefined) {

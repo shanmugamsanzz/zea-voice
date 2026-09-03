@@ -11,6 +11,7 @@ STAGE: introduction
 FLOW: main
 TYPE: guidance
 LANGUAGE: ta
+INTENT_CLASS: ACKNOWLEDGEMENT
 ENTRY: false
 PURPOSE: Start the configured Shanmuga Hospital health check-up enquiry call.
 RESPONSE: Introduce Karthika as the Shanmuga Hospital AI Agent, use verified pre-call context for the Facebook Master Health Check-up enquiry and ask permission to explain the packages. Do not repeat this introduction later in the call.
@@ -20,6 +21,7 @@ STAGE: complete_package_overview
 FLOW: main
 TYPE: message
 LANGUAGE: ta
+INTENT_CLASS: CATEGORY_OVERVIEW
 ENTRY: false
 PURPOSE: Use the single approved package overview after the caller positively confirms the configured welcome or identity question, accepts the introduction offer, or asks for all, other or available package options.
 SITUATION: The caller positively confirms the immediately preceding configured welcome or identity question without asking a different question; accepts the immediately preceding package-information offer; or asks for the complete package overview, all available options or other options.
@@ -34,6 +36,7 @@ STAGE: call_purpose
 FLOW: main
 TYPE: message
 LANGUAGE: ta
+INTENT_CLASS: KNOWN_INFORMATION
 ENTRY: false
 PURPOSE: Answer when the caller asks why the agent called or what assistance this call provides.
 SITUATION: The caller asks the reason for the call, why the agent is speaking with them, or what help is available.
@@ -47,6 +50,7 @@ STAGE: category_selection
 FLOW: main
 TYPE: guidance
 LANGUAGE: ta
+INTENT_CLASS: CATEGORY_OVERVIEW
 ENTRY: false
 PURPOSE: Explain the approved options inside a selected category.
 RESPONSE: List only the selected category's current approved Catalog child items. Do not copy category membership into this guidance or treat the category itself as a selectable item.
@@ -56,6 +60,7 @@ STAGE: selected_package_explanation
 FLOW: main
 TYPE: guidance
 LANGUAGE: ta
+INTENT_CLASS: DETAILS_OR_PRICE
 ENTRY: false
 PURPOSE: Give a complete natural explanation of one exact selected package.
 RESPONSE: Use only the selected Product Catalog item. Speak in this order: package name, exact price when published, complete approved tests or services, and consultation. Give preparation or preferred test time here only when the caller explicitly asks; otherwise reserve preparation for the booking confirmation stage so it is spoken once. Split a long test list into natural spoken groups without dropping facts. Do not restart the introduction and do not substitute another item.
@@ -65,6 +70,7 @@ STAGE: selected_package_price
 FLOW: main
 TYPE: guidance
 LANGUAGE: ta
+INTENT_CLASS: DETAILS_OR_PRICE
 ENTRY: false
 PURPOSE: Answer a price-only question about the current or named package.
 RESPONSE: Give only the canonical package name and exact approved Catalog price. Preserve the selected item so a follow-up such as அதை detailஆ சொல்லுங்க resolves to the same item.
@@ -74,6 +80,7 @@ STAGE: package_comparison
 FLOW: main
 TYPE: guidance
 LANGUAGE: ta
+INTENT_CLASS: COMPARISON_COMPLEX
 ENTRY: false
 PURPOSE: Compare two or three caller-selected Master Health Checkup packages.
 RESPONSE: Hydrate all requested items from the Product Catalog. Explain the tests common to them, then the additional tests and benefits in each package, then consultation differences. Never claim a test is common unless it exists in every compared item. Do not invent package superiority or medical suitability.
@@ -83,6 +90,7 @@ STAGE: another_package
 FLOW: main
 TYPE: guidance
 LANGUAGE: ta
+INTENT_CLASS: CATEGORY_OVERVIEW
 ENTRY: false
 PURPOSE: Handle a request to hear about another package after an explanation.
 RESPONSE: If the caller names another package, explain it immediately. If no package is named, use the next question. Do not restart the introduction. Give the complete top-level overview only when the caller asks what other packages are available.
@@ -92,6 +100,7 @@ STAGE: required_related_item_selection
 FLOW: main
 TYPE: guidance
 LANGUAGE: ta
+INTENT_CLASS: CLARIFICATION_ANSWER
 ENTRY: false
 PURPOSE: Handle a selected Catalog item that requires another approved related item.
 RESPONSE: Read the current Catalog relationship. If the required related item is missing, use the next question with only valid Catalog candidates. After selection, preserve both items and use only their hydrated facts and published prices.
@@ -101,51 +110,17 @@ STAGE: health_concern
 FLOW: main
 TYPE: guidance
 LANGUAGE: ta
+INTENT_CLASS: KNOWN_INFORMATION
 ENTRY: false
 PURPOSE: Handle a non-emergency health concern or screening requirement.
 RESPONSE: Use only current Catalog relationships to mention a related screening option. Clearly distinguish screening information from diagnosis, suitability and treatment. Emergency Workflow Rules take priority.
 NEXT_QUESTION: இந்த Package details explain பண்ணட்டுமா?
 
-STAGE: booking_start
-FLOW: booking
-TYPE: guidance
-LANGUAGE: ta
-ENTRY: false
-PURPOSE: Start booking only after an explicit caller request and one exact approved selected package.
-RESPONSE: Preserve the selected package. Start the active configured booking tool only after an explicit request and one exact selectable Catalog item. If the item is missing, clarify it before collecting booking fields. Ask the next missing configured field; never repeat a field already supplied.
-NEXT_QUESTION:
-
-STAGE: booking_information_order
-FLOW: booking
-TYPE: guidance
-LANGUAGE: ta
-ENTRY: false
-PURPOSE: Collect all required booking fields in order, handling multi-field utterances.
-RESPONSE: Collect only the configured missing fields, one question at a time. Preserve values already collected in the current call. Never ask the same completed field again. If the caller gives multiple valid fields in one utterance, store all of them together and ask only the next missing field.
-NEXT_QUESTION:
-
-STAGE: booking_field_missing
-FLOW: booking
-TYPE: guidance
-LANGUAGE: ta
-ENTRY: false
-PURPOSE: Handle a configured field that remains missing after an extraction attempt.
-RESPONSE: Use the active UI field schema to ask its configured question again. Never invent a missing value and never ask about a field that is already complete.
-NEXT_QUESTION:
-
-STAGE: booking_preparation_and_confirmation
-FLOW: booking
-TYPE: guidance
-LANGUAGE: ta
-ENTRY: false
-PURPOSE: Prepare the final configured-action confirmation.
-RESPONSE: If the selected Catalog item's approved preparation has not already been spoken in the current call, read it once when present. Read back the selected canonical item and every completed field required by the active UI tool schema exactly once, then use the tool schema's configured confirmation question. Do not introduce, omit or reorder fields independently of the UI schema.
-NEXT_QUESTION:
-
 STAGE: side_question
 FLOW: recovery
 TYPE: guidance
 LANGUAGE: ta
+INTENT_CLASS: UNKNOWN
 ENTRY: false
 PURPOSE: Handle a new or interrupted question during package explanation or booking.
 RESPONSE: Answer the latest question first using approved evidence. Preserve selected package and collected booking information. Then resume only the still-relevant pending question. Never repeat a completed question.
@@ -155,6 +130,7 @@ STAGE: call_check
 FLOW: recovery
 TYPE: message
 LANGUAGE: ta
+INTENT_CLASS: CALL_CONTROL
 ENTRY: false
 PURPOSE: Respond when the caller checks whether the agent is present.
 RESPONSE: ஆமாங்க, நான் இருக்கேங்க. நீங்க பேசுறது கேக்குது, சொல்லுங்க.
@@ -164,6 +140,7 @@ STAGE: completion
 FLOW: main
 TYPE: guidance
 LANGUAGE: ta
+INTENT_CLASS: CALL_CONTROL
 ENTRY: false
 PURPOSE: Close only when the caller clearly finishes.
 RESPONSE: Use the configured closing message. Do not automatically promote another package after the caller finishes.

@@ -139,9 +139,14 @@ export function providerFailure(error, request, providerConfig) {
 }
 
 export function errorEvent(error, providerConfig) {
+  const upstreamStatus = Number(error.details?.status ?? 0) || null;
+  const retryableStatus = upstreamStatus === null
+    || upstreamStatus === 408 || upstreamStatus === 429 || upstreamStatus >= 500;
   return normalizeLlmEvent({
     type: 'error', code: error.code, message: error.message,
-    retryable: error.statusCode >= 500 && error.code !== 'LLM_CIRCUIT_OPEN',
+    retryable: error.statusCode >= 500 && error.code !== 'LLM_CIRCUIT_OPEN'
+      && retryableStatus,
+    details: error.details ?? null,
   }, providerConfig);
 }
 
@@ -149,9 +154,10 @@ export async function requireStreamingResponse(response, providerConfig) {
   if (response.ok) return response;
   const payload = await response.json().catch(() => null);
   const providerCode = payload?.error?.code ?? payload?.error?.type ?? `HTTP_${response.status}`;
+  const providerParam = String(payload?.error?.param ?? '').trim().slice(0, 160) || null;
   throw new AppError(502, 'Selected LLM provider request failed', 'LLM_PROVIDER_REQUEST_FAILED', {
     providerId: providerConfig.providerId, modelId: providerConfig.modelId,
-    providerCode: String(providerCode), status: response.status,
+    providerCode: String(providerCode), providerParam, status: response.status,
   });
 }
 

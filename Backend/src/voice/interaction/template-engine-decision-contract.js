@@ -16,109 +16,108 @@ const searchRequiredKeys = Object.freeze(['query', 'requestedFact', 'contextualR
 const searchKeys = Object.freeze([...searchRequiredKeys, 'preferredRecordIds']);
 const toolKeys = Object.freeze(['name', 'arguments']);
 const stateUpdateKeys = Object.freeze(['set', 'clear']);
+const clearableStateKeys = Object.freeze([
+  'lastReferencedRecordIds', 'comparisonRecordIds', 'pendingClarification',
+  'activeWorkflowId', 'collectedToolFields', 'confirmationStatus',
+]);
 
-const nullableTextSchema = Object.freeze({ type: ['string', 'null'], maxLength: 500 });
+// OpenAI-compatible strict structured output supports only a bounded JSON Schema
+// subset. Length/item constraints and open-ended objects are enforced below by
+// the runtime validator instead of being sent to the provider.
+const nullableTextSchema = Object.freeze({
+  anyOf: Object.freeze([
+    Object.freeze({ type: 'string' }),
+    Object.freeze({ type: 'null' }),
+  ]),
+});
 
 export const templateEngineDecisionJsonSchema = Object.freeze({
-  $schema: 'https://json-schema.org/draft/2020-12/schema',
-  title: 'TemplateEngineDecision',
   type: 'object',
   additionalProperties: false,
   required: rootKeys,
   properties: Object.freeze({
-    decision: Object.freeze({ enum: Object.values(templateEngineDecisionTypes) }),
-    response: Object.freeze({ type: 'string', maxLength: 4_000 }),
+    decision: Object.freeze({
+      type: 'string', enum: Object.values(templateEngineDecisionTypes),
+    }),
+    response: Object.freeze({ type: 'string' }),
     clarification: Object.freeze({
-      oneOf: Object.freeze([
+      anyOf: Object.freeze([
         Object.freeze({ type: 'null' }),
         Object.freeze({
           type: 'object',
           additionalProperties: false,
           required: clarificationKeys,
           properties: Object.freeze({
-            question: Object.freeze({ type: 'string', minLength: 1, maxLength: 1_000 }),
+            question: Object.freeze({ type: 'string' }),
             reason: nullableTextSchema,
             candidates: Object.freeze({
-              type: 'array', maxItems: 10, uniqueItems: true,
-              items: Object.freeze({ type: 'string', minLength: 1, maxLength: 300 }),
+              type: 'array', items: Object.freeze({ type: 'string' }),
             }),
           }),
         }),
       ]),
     }),
     search: Object.freeze({
-      oneOf: Object.freeze([
+      anyOf: Object.freeze([
         Object.freeze({ type: 'null' }),
         Object.freeze({
           type: 'object',
           additionalProperties: false,
           required: searchKeys,
           properties: Object.freeze({
-            query: Object.freeze({ type: 'string', minLength: 1, maxLength: 2_000 }),
+            query: Object.freeze({ type: 'string' }),
             requestedFact: nullableTextSchema,
             contextualReference: nullableTextSchema,
             preferredRecordIds: Object.freeze({
-              type: 'array', maxItems: 20, uniqueItems: true,
-              items: Object.freeze({ type: 'string', minLength: 1, maxLength: 160 }),
+              type: 'array', items: Object.freeze({ type: 'string' }),
             }),
           }),
         }),
       ]),
     }),
     tool: Object.freeze({
-      oneOf: Object.freeze([
+      anyOf: Object.freeze([
         Object.freeze({ type: 'null' }),
         Object.freeze({
           type: 'object',
           additionalProperties: false,
           required: toolKeys,
           properties: Object.freeze({
-            name: Object.freeze({ type: 'string', minLength: 1, maxLength: 160 }),
-            arguments: Object.freeze({ type: 'object' }),
+            name: Object.freeze({ type: 'string' }),
+            // Dynamic UI tool fields cannot be represented as an unrestricted
+            // object in a strict provider schema. The provider returns JSON in
+            // this string and normalizeTool parses it before authorization.
+            arguments: Object.freeze({ type: 'string' }),
           }),
         }),
       ]),
     }),
     stateUpdate: Object.freeze({
-      oneOf: Object.freeze([
+      anyOf: Object.freeze([
         Object.freeze({ type: 'null' }),
         Object.freeze({
           type: 'object',
           additionalProperties: false,
           required: stateUpdateKeys,
           properties: Object.freeze({
-            set: Object.freeze({ type: 'object' }),
+            set: Object.freeze({
+              type: 'object',
+              additionalProperties: false,
+              required: Object.freeze(['confirmationStatus']),
+              properties: Object.freeze({
+                confirmationStatus: Object.freeze({ type: 'string', enum: ['confirmed'] }),
+              }),
+            }),
             clear: Object.freeze({
-              type: 'array', maxItems: 50, uniqueItems: true,
-              items: Object.freeze({ type: 'string', minLength: 1, maxLength: 160 }),
+              type: 'array', items: Object.freeze({
+                type: 'string', enum: clearableStateKeys,
+              }),
             }),
           }),
         }),
       ]),
     }),
   }),
-  allOf: Object.freeze(Object.values(templateEngineDecisionTypes).map((decision) => {
-    const activeProperty = ({
-      RESPONSE: 'response', CLARIFY: 'clarification', SEARCH: 'search', TOOL: 'tool',
-    })[decision];
-    const inactiveProperties = ['clarification', 'search', 'tool']
-      .filter((property) => property !== activeProperty);
-    return Object.freeze({
-      if: Object.freeze({ properties: Object.freeze({ decision: Object.freeze({ const: decision }) }) }),
-      then: Object.freeze({
-        properties: Object.freeze({
-          response: decision === 'RESPONSE'
-            ? Object.freeze({ type: 'string', minLength: 1 })
-            : Object.freeze({ const: '' }),
-          ...Object.fromEntries(inactiveProperties.map((property) => [
-            property, Object.freeze({ type: 'null' }),
-          ])),
-          ...(activeProperty !== 'response'
-            ? { [activeProperty]: Object.freeze({ type: 'object' }) } : {}),
-        }),
-      }),
-    });
-  })),
 });
 
 function isObject(value) {
@@ -194,7 +193,11 @@ function jsonSafeObject(value) {
 function normalizeTool(value) {
   if (!hasExactKeys(value, toolKeys)) return null;
   const name = cleanText(value.name, 160);
-  const argumentsObject = jsonSafeObject(value.arguments);
+  let rawArguments = value.arguments;
+  if (typeof rawArguments === 'string') {
+    try { rawArguments = JSON.parse(rawArguments); } catch { return null; }
+  }
+  const argumentsObject = jsonSafeObject(rawArguments);
   return name && argumentsObject ? Object.freeze({ name, arguments: argumentsObject }) : null;
 }
 
@@ -204,7 +207,10 @@ function normalizeStateUpdate(value) {
     || value.clear.length > 50) return undefined;
   const set = jsonSafeObject(value.set);
   const clear = value.clear.map((key) => cleanText(key, 160));
-  if (!set || clear.some((key) => !key) || new Set(clear).size !== clear.length) return undefined;
+  if (!set || Object.keys(set).some((key) => key !== 'confirmationStatus')
+    || (Object.hasOwn(set, 'confirmationStatus') && set.confirmationStatus !== 'confirmed')
+    || clear.some((key) => !key || !clearableStateKeys.includes(key))
+    || new Set(clear).size !== clear.length) return undefined;
   return Object.freeze({ set, clear: Object.freeze(clear) });
 }
 

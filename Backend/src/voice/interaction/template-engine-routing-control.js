@@ -63,6 +63,7 @@ export function buildTemplateEngineRoutingPrompt({
     '- For SEARCH, create a self-contained query from the latest utterance and recentCompleteTurns; include requestedFact, contextualReference and only known preferredRecordIds.',
     '- Use contextual CLARIFY only when recentCompleteTurns contains at least two genuinely possible references, and name the candidates.',
     '- When activeWorkflowId matches an authorized Workflow summary, use TOOL with that tool name to submit caller-provided field values or explicit confirmation; preserve the Workflow during unrelated side questions.',
+    '- Encode TOOL arguments as one JSON-object string in tool.arguments exactly as required by the provider schema. The runtime parses and validates it against the assigned UI tool schema.',
     '- For an explicit final Workflow confirmation, return TOOL and set stateUpdate.set.confirmationStatus to confirmed. Do not set it for field values, corrections, tentative agreement or unrelated speech.',
     postSearch
       ? '- This is the post-search phase. Return only RESPONSE, CLARIFY or NO_MATCH; never return SEARCH or TOOL.'

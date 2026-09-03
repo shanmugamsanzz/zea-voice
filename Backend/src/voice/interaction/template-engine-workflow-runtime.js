@@ -210,14 +210,12 @@ export function collectTemplateEngineWorkflowFields(input = {}) {
   });
 }
 
-const workflowSpeechJsonSchema = Object.freeze({
-  $schema: 'https://json-schema.org/draft/2020-12/schema',
-  title: 'TemplateEngineWorkflowSpeech',
+export const templateEngineWorkflowSpeechJsonSchema = Object.freeze({
   type: 'object',
   additionalProperties: false,
   required: Object.freeze(['speech']),
   properties: Object.freeze({
-    speech: Object.freeze({ type: 'string', minLength: 1, maxLength: 4_000 }),
+    speech: Object.freeze({ type: 'string' }),
   }),
 });
 
@@ -332,7 +330,7 @@ export async function phraseTemplateEngineWorkflowSpeech({ mainPrompt, task } = 
     temperature: 0,
     responseFormat: Object.freeze({
       type: 'json_schema', name: 'template_engine_workflow_speech', strict: true,
-      schema: workflowSpeechJsonSchema,
+      schema: templateEngineWorkflowSpeechJsonSchema,
     }),
   }));
   const output = speechOutput(completion);

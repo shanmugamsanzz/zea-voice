@@ -219,6 +219,7 @@
     "verify:template-engine-live-acceptance": "node scripts/verify-template-engine-live-acceptance.js",
     "verify:template-engine-production-runtime": "node scripts/verify-template-engine-production-runtime.js",
     "verify:template-engine-direct-cutover": "node scripts/verify-template-engine-direct-cutover.js",
+    "verify:template-engine-provider-runtime": "node scripts/verify-template-engine-provider-runtime.js",
     "verify:generic-intent-detection": "node scripts/verify-generic-intent-detection.js",
     "verify:scenario-routing": "node scripts/verify-document-driven-scenario-routing.js",
     "verify:knowledge-confidence-routing": "node scripts/verify-fast-entity-route-resolution.js && node scripts/verify-clarification-information-ui-contract.js",

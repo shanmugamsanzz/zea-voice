@@ -2,16 +2,19 @@ import { AppError } from '../../middleware/errors.js';
 
 export const TEMPLATE_ENGINE_CLAIM_VALIDATOR_VERSION = 1;
 
-const claimValidationSchema = Object.freeze({
-  $schema: 'https://json-schema.org/draft/2020-12/schema',
-  title: 'TemplateEngineClaimValidation',
+export const templateEngineClaimValidationJsonSchema = Object.freeze({
   type: 'object',
   additionalProperties: false,
   required: Object.freeze(['supported', 'successClaimed', 'reason']),
   properties: Object.freeze({
     supported: Object.freeze({ type: 'boolean' }),
     successClaimed: Object.freeze({ type: 'boolean' }),
-    reason: Object.freeze({ type: ['string', 'null'], maxLength: 500 }),
+    reason: Object.freeze({
+      anyOf: Object.freeze([
+        Object.freeze({ type: 'string' }),
+        Object.freeze({ type: 'null' }),
+      ]),
+    }),
   }),
 });
 
@@ -48,7 +51,7 @@ export async function validateTemplateEngineClaims({
     temperature: 0,
     responseFormat: Object.freeze({
       type: 'json_schema', name: 'template_engine_claim_validation', strict: true,
-      schema: claimValidationSchema,
+      schema: templateEngineClaimValidationJsonSchema,
     }),
   }));
   const result = parsed(completion);
