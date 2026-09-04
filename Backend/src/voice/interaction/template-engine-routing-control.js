@@ -4,7 +4,7 @@ import {
 } from './template-engine-decision-contract.js';
 
 const maximumMainPromptCharacters = 24_000;
-//test
+
 export const templateEngineRuntimeInvariants = Object.freeze([
   'Factual caller-facing claims require verified evidence from the current tenant scope.',
   'A tool decision requires a published Workflow authorization and a matching assigned tool schema.',
