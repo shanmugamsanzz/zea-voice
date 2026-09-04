@@ -16,7 +16,7 @@ ENTRY: false
 PURPOSE: Handle ordinary non-factual conversation naturally without unnecessary retrieval.
 SITUATION: The caller greets, acknowledges, thanks, asks the agent to wait, checks conversational presence, or gives a courtesy response without requesting a business fact or external action.
 MATCH_MODE: semantic
-RESPONSE: Respond briefly and naturally in the caller's active language using the relevant recent turn. Do not search merely to answer a greeting, acknowledgement, courtesy response, pause request or presence check. If the acknowledgement accepts an immediately preceding offer or answers a pending question, continue that accepted flow instead of treating it as isolated chitchat. Do not use an information-unavailable or technical-failure message for normal conversation.
+RESPONSE: Respond briefly and naturally in the caller's active language using the relevant recent turn. Do not search merely to answer a greeting, acknowledgement, courtesy response, pause request or presence check. If the acknowledgement follows the configured introduction, welcome or identity question and contains no separate request, continue to the complete_package_overview guidance instead of asking a generic "How can I help?" question. If the acknowledgement accepts an immediately preceding offer or answers another pending question, continue that accepted flow instead of treating it as isolated chitchat. Do not use an information-unavailable or technical-failure message for normal conversation.
 NEXT_QUESTION:
 
 STAGE: introduction
@@ -35,8 +35,8 @@ TYPE: message
 LANGUAGE: ta
 INTENT_CLASS: CATEGORY_OVERVIEW
 ENTRY: false
-PURPOSE: Use the single approved package overview after the caller positively confirms the configured welcome or identity question, accepts the introduction offer, or asks for all, other or available package options.
-SITUATION: The caller positively confirms the immediately preceding configured welcome or identity question without asking a different question; accepts the immediately preceding package-information offer; or asks for the complete package overview, all available options or other options.
+PURPOSE: Use the single approved package overview after the caller responds to the configured welcome or identity question without ending the call, accepts the introduction offer, or asks for all, other or available package options.
+SITUATION: The caller gives a positive, neutral or non-cancelling negative response to the immediately preceding configured welcome, introduction or identity question without asking a different question; accepts the immediately preceding package-information offer; or asks for the complete package overview, all available options or other options. A wrong-person response, refusal, not-interested response, stop request, cancellation or clear call completion must not enter this stage.
 EXAMPLES: ஆமாங்க | சரி சொல்லுங்க | package details சொல்லுங்க | உங்ககிட்ட என்ன packagesலாம் இருக்கு | வேற என்ன options இருக்கு | மொத்த overview சொல்லுங்க | yes please | yes, speaking | okay, explain the options | what packages are available | what other options do you have
 MATCH_MODE: semantic
 CONTEXT: no_selected_entity
