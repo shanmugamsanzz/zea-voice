@@ -244,14 +244,6 @@ for (const invalidOutput of [
   '',
   '{"decision":',
   { decision: 'RESPONSE' },
-  {
-    decision: 'RESPONSE', response: 'Certainly.', clarification: null,
-    search: {
-      query: 'not allowed', requestedFact: null,
-      contextualReference: null, preferredRecordIds: [],
-    },
-    tool: null, nextQuestion: null, stateUpdate: null,
-  },
 ]) {
   const requests = [];
   let retryDetails = null;
@@ -281,6 +273,35 @@ for (const invalidOutput of [
   assert.equal(requests[1].messages.at(-1).role, 'system');
 }
 
+let harmlessMixedCalls = 0;
+const harmlessMixed = await routeTemplateEngineUtterance({
+  mainPrompt: 'Use RESPONSE for conversational acknowledgement and SEARCH for facts.',
+  latestUtterance: 'Yes, please continue.',
+}, {
+  tenantBoundaryVerified: true,
+  nonFactualResponseAllowed: true,
+  invokeStructuredLlm: async () => {
+    harmlessMixedCalls += 1;
+    return {
+      decision: 'response', response: 'Certainly.',
+      clarification: { question: 'Inactive?', reason: null, candidates: [] },
+      search: {
+        query: 'inactive query', requestedFact: null,
+        contextualReference: null, preferredRecordIds: [],
+      },
+      tool: { name: 'inactive_action', arguments: '{}' },
+      nextQuestion: null, stateUpdate: null, providerAnnotation: 'ignored',
+    };
+  },
+});
+assert.equal(harmlessMixedCalls, 1,
+  'Harmless inactive fields must be normalized without an LLM retry');
+assert.equal(harmlessMixed.decision.decision, 'RESPONSE');
+assert.equal(harmlessMixed.decision.response, 'Certainly.');
+assert.equal(harmlessMixed.decision.search, null);
+assert.equal(harmlessMixed.decision.tool, null);
+assert.equal(harmlessMixed.decisionRepairAttempted, false);
+
 let exhaustedDecisionAttempts = 0;
 await assert.rejects(() => routeTemplateEngineUtterance({
   mainPrompt: 'Use RESPONSE for conversational acknowledgement.',
@@ -290,17 +311,10 @@ await assert.rejects(() => routeTemplateEngineUtterance({
   nonFactualResponseAllowed: true,
   invokeStructuredLlm: async () => {
     exhaustedDecisionAttempts += 1;
-    return {
-      decision: 'RESPONSE', response: 'Certainly.', clarification: null,
-      search: {
-        query: 'not allowed', requestedFact: null,
-        contextualReference: null, preferredRecordIds: [],
-      },
-      tool: null, nextQuestion: null, stateUpdate: null,
-    };
+    return { decision: 'RESPONSE' };
   },
 }), (error) => error.code === 'TEMPLATE_ENGINE_ORCHESTRATOR_DECISION_INVALID'
-  && error.details?.reason === 'mixed_decision_payload'
+  && error.details?.reason === 'invalid_active_branch'
   && error.details?.attempts === 2);
 assert.equal(exhaustedDecisionAttempts, 2);
 

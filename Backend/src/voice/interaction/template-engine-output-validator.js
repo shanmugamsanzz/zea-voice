@@ -4,7 +4,7 @@ import { validateTemplateEnginePostSearchDecision } from './template-engine-post
 import { activateTemplateEngineWorkflow } from './template-engine-workflow-runtime.js';
 export { validateTemplateEngineToolResultSpeech } from './template-engine-tool-result-validator.js';
 
-export const TEMPLATE_ENGINE_OUTPUT_VALIDATOR_VERSION = 3;
+export const TEMPLATE_ENGINE_OUTPUT_VALIDATOR_VERSION = 4;
 
 function cleanText(value, maximum = 8_000) {
   return String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
@@ -123,6 +123,20 @@ function selectedEvidenceFor(decision, evidence) {
   return citations.map((id) => byId.get(cleanText(id, 160)));
 }
 
+function normalizedRecordIds(values = []) {
+  return new Set((Array.isArray(values) ? values : [])
+    .map((value) => cleanText(value, 160).toLocaleLowerCase()).filter(Boolean));
+}
+
+function sameRecordSet(evidence, requiredValues) {
+  const required = normalizedRecordIds(requiredValues);
+  if (required.size < 2) return true;
+  const cited = normalizedRecordIds(evidence.map((source) => source?.recordId));
+  if (required.size !== cited.size) return false;
+  for (const value of required) if (!cited.has(value)) return false;
+  return true;
+}
+
 function validateResponse(decision, input) {
   const factual = input.factualClaimsPresent === true;
   const requestedFact = cleanText(input.searchInterpretation?.requestedFact, 500);
@@ -139,6 +153,11 @@ function validateResponse(decision, input) {
   }
   if (!selectedEvidence.length) {
     return invalid('factual_response_requires_evidence', {
+      factual: true, retryCount: input.retryCount,
+    });
+  }
+  if (!sameRecordSet(selectedEvidence, input.requiredEvidenceRecordIds)) {
+    return invalid('comparison_requires_exact_requested_records', {
       factual: true, retryCount: input.retryCount,
     });
   }
@@ -272,6 +291,11 @@ export function validateTemplateEngineOutput(input = {}) {
       && input.semanticClaimValidation?.supported !== true) {
       return invalid(input.semanticClaimValidation
         ? 'unsupported_no_match_claim' : 'grounding_validation_missing', {
+        factual: true, retryCount: input.retryCount,
+      });
+    }
+    if (input.requestedFactAvailable === true) {
+      return invalid('no_match_rejected_when_requested_fact_is_available', {
         factual: true, retryCount: input.retryCount,
       });
     }

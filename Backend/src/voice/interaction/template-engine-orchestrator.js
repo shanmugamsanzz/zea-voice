@@ -142,6 +142,8 @@ function outputValidationInput(decision, orchestratorInput, dependencies, additi
     scope: dependencies.scope ?? {},
     confirmation: dependencies.confirmation ?? null,
     toolExecutionRequested: dependencies.toolExecutionRequested === true,
+    requiredEvidenceRecordIds: dependencies.requiredEvidenceRecordIds ?? [],
+    requestedFactAvailable: dependencies.requestedFactAvailable === true,
     ...additions,
   });
 }
@@ -420,6 +422,23 @@ function candidateIdentity(value) {
     .replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim();
 }
 
+function evidenceProvidesRequestedFact(evidence, requestedFact) {
+  const normalizedFact = candidateIdentity(requestedFact);
+  if (!normalizedFact) return false;
+  const wanted = new Set(normalizedFact.split(/\s+/u).filter(Boolean));
+  return evidence.some((source) => {
+    const searchable = candidateIdentity([
+      ...(source?.publishedAttributePaths ?? []),
+      source?.content,
+      JSON.stringify(source?.authoritativeData ?? {}),
+    ].join(' '));
+    const available = new Set(searchable.split(/\s+/u).filter(Boolean));
+    let matches = 0;
+    for (const token of wanted) if (available.has(token)) matches += 1;
+    return matches > 0 && matches / wanted.size >= 0.5;
+  });
+}
+
 function evidenceCandidateNames(source) {
   return cleanList([source?.canonicalName, ...(source?.aliases ?? [])], 60)
     .map(candidateIdentity).filter(Boolean);
@@ -669,6 +688,11 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       semanticClaimValidation,
       searchInterpretation: search.value.search,
       ambiguity: clarificationAmbiguity,
+      requiredEvidenceRecordIds: base.state.comparisonRecordIds.length > 1
+        ? base.state.comparisonRecordIds : [],
+      requestedFactAvailable: evidenceProvidesRequestedFact(
+        evidence, search.value.search.requestedFact,
+      ),
     },
   ));
   if (!outputValidation.valid && !firstInvalidReason) {
@@ -709,6 +733,11 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
           semanticClaimValidation,
           searchInterpretation: search.value.search,
           ambiguity: clarificationAmbiguity,
+          requiredEvidenceRecordIds: base.state.comparisonRecordIds.length > 1
+            ? base.state.comparisonRecordIds : [],
+          requestedFactAvailable: evidenceProvidesRequestedFact(
+            evidence, search.value.search.requestedFact,
+          ),
           retryCount: 1,
         },
       ));
@@ -736,6 +765,11 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
             selectedEvidence: evidence,
             semanticClaimValidation: await validateClaims(groundedDecision),
             searchInterpretation: search.value.search,
+            requiredEvidenceRecordIds: base.state.comparisonRecordIds.length > 1
+              ? base.state.comparisonRecordIds : [],
+            requestedFactAvailable: evidenceProvidesRequestedFact(
+              evidence, search.value.search.requestedFact,
+            ),
             ambiguity: verifiedClarificationAmbiguity(
               groundedDecision, evidence, search.value.search, dependencies.ambiguity,
             ),

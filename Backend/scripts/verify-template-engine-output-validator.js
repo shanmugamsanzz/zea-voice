@@ -31,6 +31,8 @@ const evidence = [{
   knowledgeBaseId: 'kb-a', publicationRevision: 7,
   canonicalName: 'Service Alpha', aliases: ['Alpha'],
   requestedFact: 'price',
+  publishedAttributePaths: ['price'],
+  authoritativeData: { price: 3200, includedFeature: 'Delta' },
   content: 'Service Alpha costs 3200 units and includes feature Delta.',
 }];
 const entities = [{ recordId: 'r-1', canonicalName: 'Service Alpha', aliases: ['Alpha'] }];
@@ -305,7 +307,7 @@ result = validateTemplateEngineToolResultSpeech({
 assert.equal(result.reason, 'tool_result_unverified');
 
 let invalidGroundingCalls = 0;
-const postSearch = await respondToTemplateEngineSearch({
+await assert.rejects(() => respondToTemplateEngineSearch({
   mainPrompt: 'Use evidence for facts.', latestUtterance: 'What is the price?',
   state: {
     recentCompleteTurns: [], lastReferencedRecordIds: ['r-1'], comparisonRecordIds: [],
@@ -329,11 +331,30 @@ const postSearch = await respondToTemplateEngineSearch({
     invalidGroundingCalls += 1;
     return { outputParsed: response('Service Alpha costs 9999 units.', ['E1']) };
   },
-});
+}), (error) => error.code === 'TEMPLATE_ENGINE_OUTPUT_INVALID'
+  && error.details?.reason === 'no_match_rejected_when_requested_fact_is_available');
 assert.equal(invalidGroundingCalls, 2);
-assert.equal(postSearch.decision.decision, 'NO_MATCH');
-assert.equal(postSearch.outputValidation.valid, true);
-assert.equal(postSearch.outputValidation.ttsAllowed, true);
+
+result = validateTemplateEngineOutput({
+  phase: 'post_search', factualClaimsPresent: true, claimValidationRequired: true,
+  decision: response('Service Alpha and Service Beta are configured.', ['e-1']),
+  selectedEvidence: comparisonEvidence,
+  requiredEvidenceRecordIds: ['r-1', 'r-2'],
+  semanticClaimValidation: { supported: true, requestedFactAddressed: true },
+});
+assert.equal(result.reason, 'comparison_requires_exact_requested_records');
+
+result = validateTemplateEngineOutput({
+  phase: 'post_search', factualClaimsPresent: true, claimValidationRequired: true,
+  decision: {
+    decision: 'NO_MATCH', response: 'That published detail is unavailable.',
+    clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
+  },
+  selectedEvidence: evidence,
+  requestedFactAvailable: true,
+  semanticClaimValidation: { supported: true, requestedFactAddressed: true },
+});
+assert.equal(result.reason, 'no_match_rejected_when_requested_fact_is_available');
 
 const sources = [
   '../src/voice/interaction/template-engine-output-validator.js',

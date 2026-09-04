@@ -5,6 +5,8 @@ import { AppError } from '../../middleware/errors.js';
 import { knowledgeSearchIndexes } from '../../knowledge-engine/query-classifier.js';
 import { loadPublishedEngineArtifacts } from '../../knowledge-engine/runtime-service.js';
 import { searchParallelHybridCandidates } from '../../knowledge-bases/parallel-hybrid-search.js';
+import { publishedRecordCallerFacingHint } from '../../knowledge-engine/evidence-audience.js';
+import { buildPublicationDeduplicationIdentity } from '../../knowledge-engine/publication-deduplication.js';
 import { runTemplateEngineHybridRetrieval } from './template-engine-hybrid-retrieval.js';
 import { normalizePublishedConversationGuidance } from './template-engine-conversation-guidance.js';
 
@@ -20,6 +22,174 @@ const indexes = Object.freeze([
   knowledgeSearchIndexes.BM25,
   knowledgeSearchIndexes.SEMANTIC,
 ]);
+
+function cleanText(value, maximum = 2_000) {
+  return String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
+    .replace(/\s+/gu, ' ').trim().slice(0, maximum);
+}
+
+function textList(values, maximum = 80) {
+  return [...new Set((Array.isArray(values) ? values : [])
+    .map((value) => cleanText(value, 500)).filter(Boolean))].slice(0, maximum);
+}
+
+function recordMetadata(record) {
+  const value = record?.entity_metadata ?? record?.metadata;
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function searchableTokens(value) {
+  return [...new Set(cleanText(value, 4_000).toLocaleLowerCase()
+    .match(/[\p{L}\p{M}\p{N}]+/gu) ?? [])];
+}
+
+function publishedFormScore(query, forms) {
+  const queryText = cleanText(query, 4_000).toLocaleLowerCase()
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim();
+  const queryTokens = new Set(searchableTokens(queryText));
+  let best = 0;
+  for (const form of forms) {
+    const formText = cleanText(form, 500).toLocaleLowerCase()
+      .replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim();
+    const formTokens = searchableTokens(formText);
+    if (!formText || !formTokens.length) continue;
+    if (queryText === formText) best = Math.max(best, 1);
+    else if (queryText.includes(formText)) best = Math.max(best, 0.98);
+    else {
+      const matched = formTokens.filter((token) => queryTokens.has(token)).length;
+      const coverage = matched / formTokens.length;
+      const sufficient = formTokens.length === 1
+        ? matched === 1 && formText.length >= 4
+        : matched >= 2 && coverage >= 0.6;
+      if (sufficient) best = Math.max(best, 0.72 + (coverage * 0.22));
+    }
+  }
+  return best;
+}
+
+function publishedRecordCandidate(record, bundle, input, overrides = {}) {
+  const metadata = recordMetadata(record);
+  const recordId = cleanText(record?.record_id ?? record?.recordId ?? record?.id, 160);
+  const recordType = cleanText(
+    overrides.recordType ?? record?.record_type ?? record?.recordType ?? record?.type, 80,
+  ).toUpperCase();
+  if (!recordId || !recordType) return null;
+  return Object.freeze({
+    tenantId: input.tenantId,
+    agentId: input.agentId,
+    knowledgeBaseId: cleanText(bundle.knowledgeBaseId, 160),
+    publicationRevision: Number(bundle.publicationRevision),
+    recordId,
+    recordType,
+    score: Number(overrides.score ?? 1),
+    namespaceRank: 1,
+    callerFacingHint: publishedRecordCallerFacingHint(record),
+    authorizationHint: false,
+    deduplicationIdentity: buildPublicationDeduplicationIdentity(record, {
+      tenantId: input.tenantId,
+      knowledgeBaseId: bundle.knowledgeBaseId,
+      publicationRevision: bundle.publicationRevision,
+    }),
+    canonicalName: cleanText(overrides.canonicalName
+      ?? record.entity_name ?? record.entity_category ?? record.question
+      ?? metadata.name ?? metadata.category, 300) || null,
+    itemKey: cleanText(metadata.itemKey ?? metadata.item_key, 160) || null,
+    categoryKey: cleanText(metadata.categoryKey ?? metadata.category_key, 160) || null,
+    searchForms: Object.freeze(textList(overrides.searchForms ?? [
+      record.entity_name, record.entity_category, record.question,
+      ...(record.publicationAliases ?? record.entity_aliases ?? []),
+      ...(record.publicationSttForms ?? []),
+      ...(record.publicationPhoneticForms ?? []),
+    ])),
+    tokenCoverage: Number(overrides.score ?? 1),
+    matchMethod: cleanText(overrides.matchMethod ?? 'published_exact', 100),
+    ...(Array.isArray(overrides.evidenceRecordIds) ? {
+      evidenceRecordIds: Object.freeze([...new Set(overrides.evidenceRecordIds)]),
+    } : {}),
+  });
+}
+
+function exactPublishedCandidates(artifacts, input, search, limit = 20) {
+  const candidates = [];
+  const categoryMatches = new Map();
+  for (const bundle of artifacts.bundles ?? []) {
+    if (normalized(bundle?.tenantId) !== normalized(input.tenantId)) continue;
+    for (const record of bundle.records ?? []) {
+      const metadata = recordMetadata(record);
+      const recordType = cleanText(
+        record.record_type ?? record.recordType ?? record.type, 80,
+      ).toUpperCase();
+      const usage = cleanText(record.usage_direction ?? record.usageDirection ?? 'both', 20)
+        .toLocaleLowerCase();
+      if (!['both', cleanText(input.usageDirection, 20).toLocaleLowerCase()].includes(usage)) continue;
+      const itemForms = textList([
+        record.entity_name, metadata.itemKey, metadata.item_key,
+        ...(record.entity_aliases ?? []),
+        ...(metadata.crossDocumentAliases ?? []),
+      ]);
+      const categoryForms = textList([
+        record.entity_category, metadata.categoryKey, metadata.category_key,
+        ...(record.entity_category_aliases ?? []),
+        ...(metadata.categoryAliases ?? []),
+        ...(metadata.crossDocumentCategoryAliases ?? []),
+      ]);
+      const routeForms = textList([
+        record.question, record.entity_name,
+        ...(record.publicationAliases ?? record.entity_aliases ?? []),
+        ...(record.publicationSttForms ?? []),
+        ...(record.publicationPhoneticForms ?? []),
+      ]);
+      const directForms = recordType === 'CATALOG_ITEM' ? itemForms : routeForms;
+      const directScore = publishedFormScore(search.query, directForms);
+      if (directScore > 0) {
+        const candidate = publishedRecordCandidate(record, bundle, input, {
+          score: directScore, searchForms: directForms,
+        });
+        if (candidate) candidates.push(candidate);
+      }
+      if (recordType !== 'CATALOG_ITEM') continue;
+      const categoryScore = publishedFormScore(search.query, categoryForms);
+      const categoryKey = cleanText(metadata.categoryKey ?? metadata.category_key, 160);
+      if (!categoryScore || !categoryKey) continue;
+      const key = `${normalized(bundle.knowledgeBaseId)}:${bundle.publicationRevision}:${normalized(categoryKey)}`;
+      const aggregate = categoryMatches.get(key) ?? {
+        bundle, record, score: categoryScore, recordIds: [], categoryForms,
+      };
+      aggregate.score = Math.max(aggregate.score, categoryScore);
+      aggregate.recordIds.push(cleanText(record.record_id ?? record.recordId ?? record.id, 160));
+      categoryMatches.set(key, aggregate);
+    }
+  }
+  for (const aggregate of categoryMatches.values()) {
+    const metadata = recordMetadata(aggregate.record);
+    const candidate = publishedRecordCandidate(aggregate.record, aggregate.bundle, input, {
+      recordType: 'CATALOG_CATEGORY',
+      canonicalName: aggregate.record.entity_category ?? metadata.category,
+      score: aggregate.score,
+      searchForms: aggregate.categoryForms,
+      matchMethod: 'published_category_exact',
+      evidenceRecordIds: aggregate.recordIds.filter(Boolean),
+    });
+    if (candidate) candidates.push(candidate);
+  }
+  return Object.freeze([...new Map(candidates.sort((left, right) => right.score - left.score)
+    .map((candidate) => [`${candidate.recordType}:${normalized(candidate.recordId)}`, candidate]))
+    .values()].slice(0, limit));
+}
+
+function addExactStructuredCandidates(result, exact, limit = 20) {
+  const merged = [...exact, ...(result.channels?.structured ?? [])];
+  const structured = Object.freeze([...new Map(merged.map((candidate) => [
+    `${cleanText(candidate.recordType, 80).toUpperCase()}:${normalized(candidate.recordId)}`,
+    candidate,
+  ])).values()].slice(0, limit).map((candidate, index) => Object.freeze({
+    ...candidate, channel: 'structured', rank: index + 1,
+  })));
+  return Object.freeze({
+    ...result,
+    channels: Object.freeze({ ...(result.channels ?? {}), structured }),
+  });
+}
 
 function classification(input, search) {
   return Object.freeze({
@@ -139,6 +309,14 @@ function publishedWorkflowRecord(record, publication, agentId) {
     ? record.entity_metadata : {};
   const recordId = String(record.record_id ?? record.recordId ?? '').trim();
   if (!recordId) return null;
+  const authoritativeData = metadata.authoritativeData
+    && typeof metadata.authoritativeData === 'object'
+    && !Array.isArray(metadata.authoritativeData)
+    ? metadata.authoritativeData : metadata;
+  const actionConfig = metadata.actionConfig ?? metadata.action_config
+    ?? authoritativeData.actionConfig ?? authoritativeData.action_config ?? null;
+  const actionType = metadata.actionType ?? metadata.action_type
+    ?? authoritativeData.actionType ?? authoritativeData.action_type ?? null;
   return Object.freeze({
     ...metadata,
     id: recordId,
@@ -150,7 +328,9 @@ function publishedWorkflowRecord(record, publication, agentId) {
     publicationRevision: publication.publicationRevision,
     published: true,
     status: 'published',
-    authoritativeData: metadata,
+    actionType,
+    actionConfig,
+    authoritativeData,
   });
 }
 
@@ -218,14 +398,19 @@ export async function retrieveTemplateEngineEvidence({
   const route = classification(input, search);
   let channelPromise;
   const searchChannels = () => {
-    channelPromise ??= (dependencies.searchCandidates ?? searchParallelHybridCandidates)({
-      input,
-      classification: route,
-      resolution: null,
-      publicationBundles: artifacts.bundles,
-      sparseIndexes: artifacts.sparseIndexes,
-      limitPerChannel: 20,
-    }, dependencies.retrieval);
+    channelPromise ??= (async () => {
+      const result = await (dependencies.searchCandidates ?? searchParallelHybridCandidates)({
+        input,
+        classification: route,
+        resolution: null,
+        publicationBundles: artifacts.bundles,
+        sparseIndexes: artifacts.sparseIndexes,
+        limitPerChannel: 20,
+      }, dependencies.retrieval);
+      return addExactStructuredCandidates(
+        result, exactPublishedCandidates(artifacts, input, search, 20), 20,
+      );
+    })();
     return channelPromise;
   };
   const hybrid = await runTemplateEngineHybridRetrieval({

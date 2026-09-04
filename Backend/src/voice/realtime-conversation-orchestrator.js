@@ -1904,6 +1904,7 @@ export class RealtimeConversationOrchestrator {
     let acknowledgementAudioPlayed = false;
     let firstValidatedTextAt = null;
     let firstAudioAt = null;
+    let firstFinalAudioAt = null;
     let spokenCharacters = 0;
     let pendingShortSentence = '';
     let groupingTimer = null;
@@ -2043,6 +2044,7 @@ export class RealtimeConversationOrchestrator {
           this.audioEngine.beginOutputGeneration(generationId, playbackGroupId);
           firstAudioAt ??= Date.now();
           if (!acknowledgement && !audibleSentences.includes(sentence)) {
+            firstFinalAudioAt ??= Date.now();
             audibleSentences.push(sentence);
           }
           const latencyMs = Math.max(0, firstAudioAt - turnStartedAt);
@@ -2129,6 +2131,7 @@ export class RealtimeConversationOrchestrator {
           onFirstAudio: () => {
             firstAudioAt ??= Date.now();
             if (!acknowledgement && !audibleSentences.includes(sentence)) {
+              firstFinalAudioAt ??= Date.now();
               audibleSentences.push(sentence);
             }
           },
@@ -2297,6 +2300,7 @@ export class RealtimeConversationOrchestrator {
             completedSentences: completedSentences.length,
             spokenText: completedSentences.join(' ').trim(),
             firstAudioAt,
+            firstFinalAudioAt,
           };
         } finally {
           clearGroupingTimer();
@@ -2421,6 +2425,7 @@ export class RealtimeConversationOrchestrator {
     });
     let result;
     let retrievalDiagnostics = null;
+    let finalResponseReadyAt = null;
     try {
       result = await runTemplateEngineProductionTurn({
         auth,
@@ -2463,6 +2468,14 @@ export class RealtimeConversationOrchestrator {
             turnEpoch: epoch,
             ...details,
           }, 'Template-engine follow-up generation and validation completed');
+        },
+        onWorkflowDiagnostics: (details) => {
+          this.log.info({
+            stage: 'template_engine.workflow_transition',
+            callId: this.call.id,
+            turnEpoch: epoch,
+            ...details,
+          }, 'Authorized template-engine Workflow transition completed');
         },
         loadPublishedContext: (input) => loadTemplateEnginePublishedContext(
           input, this.dependencies.templateEngineKnowledgeDependencies,
@@ -2592,6 +2605,7 @@ export class RealtimeConversationOrchestrator {
       };
     } finally {
       finalResponseReady = true;
+      finalResponseReadyAt = Date.now();
       const acknowledgement = latencyAcknowledgement.snapshot();
       latencyAcknowledgement.cancel();
       this.log.debug({
@@ -2630,6 +2644,8 @@ export class RealtimeConversationOrchestrator {
     recordTemplateEngineTurnMetrics(this.runtimeMetrics, {
       epoch, result, retrievalDiagnostics, turnStartedAt,
       firstAudioAt: playback.firstAudioAt,
+      firstFinalAudioAt: playback.firstFinalAudioAt,
+      finalResponseReadyAt,
       firstAudioDeadlineMs: Math.min(env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS, 2_000),
     });
     await this.controller.setAssistantResponse(answer, Date.now(), { sources: factualAnswerSources });

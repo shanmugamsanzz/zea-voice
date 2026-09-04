@@ -119,6 +119,26 @@ assert.ok(Object.values(comparison.channels).flat().every((entry) => (
   ['alpha', 'beta'].includes(entry.recordId)
 )), 'Comparison channels must contain only the explicitly requested records');
 
+const exactEntity = await runTemplateEngineHybridRetrieval({
+  decision: {
+    ...comparisonDecision,
+    search: {
+      query: 'Alpha Option details', requestedFact: 'details',
+      contextualReference: 'Alpha Option', preferredRecordIds: [],
+    },
+  },
+  state: {}, scope, candidateLimit: 5,
+}, {
+  searchStructuredPostgres: async () => [{
+    ...namedCandidate('alpha', 'Alpha Option', 0.98),
+    searchForms: ['Alpha Option'], matchMethod: 'published_exact',
+  }],
+  searchBm25: async () => [namedCandidate('unrelated', 'Gamma Option', 0.99)],
+  searchQdrantE5: async () => [namedCandidate('unrelated', 'Gamma Option', 0.99)],
+});
+assert.deepEqual(exactEntity.candidates.map((entry) => entry.recordId), ['alpha'],
+  'An exact published entity must exclude semantically similar unrelated records');
+
 const overviewDecision = Object.freeze({
   decision: 'SEARCH', response: '', clarification: null,
   search: Object.freeze({

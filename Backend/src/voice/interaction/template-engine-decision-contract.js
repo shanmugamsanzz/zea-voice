@@ -1,4 +1,4 @@
-export const TEMPLATE_ENGINE_DECISION_CONTRACT_VERSION = 3;
+export const TEMPLATE_ENGINE_DECISION_CONTRACT_VERSION = 4;
 
 export const templateEngineDecisionTypes = Object.freeze({
   RESPONSE: 'RESPONSE',
@@ -256,14 +256,94 @@ function parseStrictObject(value) {
   }
 }
 
-export function validateTemplateEngineDecision(value) {
+function decisionName(value) {
+  const name = cleanText(value, 40)?.toUpperCase() ?? null;
+  return decisionTypes.has(name) ? name : null;
+}
+
+export function normalizeTemplateEngineProviderEnvelope(value) {
   const parsed = parseStrictObject(value);
-  if (!parsed) return Object.freeze({ valid: false, reason: 'invalid_json' });
-  if (!hasExactKeys(parsed, rootKeys)) {
-    return Object.freeze({ valid: false, reason: 'invalid_shape' });
+  if (!parsed) return null;
+  const decision = decisionName(parsed.decision);
+  if (!decision) return null;
+  const envelope = {
+    decision,
+    response: decision === 'RESPONSE' && typeof parsed.response === 'string'
+      ? parsed.response : '',
+    clarification: decision === 'CLARIFY' ? parsed.clarification ?? null : null,
+    search: decision === 'SEARCH' ? parsed.search ?? null : null,
+    tool: decision === 'TOOL' ? parsed.tool ?? null : null,
+    nextQuestion: decision === 'RESPONSE' ? parsed.nextQuestion ?? null : null,
+    stateUpdate: parsed.stateUpdate ?? null,
+  };
+  if (isObject(envelope.clarification)) {
+    envelope.clarification = {
+      question: envelope.clarification.question,
+      reason: envelope.clarification.reason ?? null,
+      candidates: envelope.clarification.candidates ?? [],
+    };
   }
-  if (!decisionTypes.has(parsed.decision)) {
-    return Object.freeze({ valid: false, reason: 'invalid_decision' });
+  if (isObject(envelope.search)) {
+    envelope.search = {
+      query: envelope.search.query,
+      requestedFact: envelope.search.requestedFact ?? null,
+      contextualReference: envelope.search.contextualReference ?? null,
+      preferredRecordIds: envelope.search.preferredRecordIds ?? [],
+    };
+  }
+  if (isObject(envelope.tool) && isObject(envelope.tool.arguments)) {
+    envelope.tool = {
+      name: envelope.tool.name,
+      arguments: JSON.stringify(envelope.tool.arguments),
+    };
+  } else if (isObject(envelope.tool)) {
+    envelope.tool = {
+      name: envelope.tool.name,
+      arguments: envelope.tool.arguments,
+    };
+  }
+  if (isObject(envelope.nextQuestion)) {
+    envelope.nextQuestion = {
+      question: envelope.nextQuestion.question,
+      reason: envelope.nextQuestion.reason ?? null,
+    };
+  }
+  return envelope;
+}
+
+export function validateTemplateEngineDecision(value) {
+  const supplied = parseStrictObject(value);
+  const parsed = normalizeTemplateEngineProviderEnvelope(supplied);
+  if (!supplied) return Object.freeze({ valid: false, reason: 'invalid_json' });
+  if (!parsed) return Object.freeze({ valid: false, reason: 'invalid_decision' });
+  const repairs = [];
+  if (!hasExactKeys(supplied, rootKeys)) repairs.push('root_shape_normalized');
+  if (supplied.decision !== parsed.decision) repairs.push('decision_normalized');
+  const activeBranches = new Set({
+    RESPONSE: ['response', 'nextQuestion'], CLARIFY: ['clarification'],
+    SEARCH: ['search'], TOOL: ['tool'],
+  }[parsed.decision]);
+  for (const branch of ['response', 'clarification', 'search', 'tool', 'nextQuestion']) {
+    if (Object.hasOwn(supplied, branch) && supplied[branch] !== null
+      && supplied[branch] !== '' && !activeBranches.has(branch)) {
+      repairs.push(`inactive_${branch}_cleared`);
+    }
+  }
+  if (isObject(supplied.clarification) && parsed.decision === 'CLARIFY'
+    && !hasExactKeys(supplied.clarification, clarificationKeys)) {
+    repairs.push('clarification_shape_normalized');
+  }
+  if (isObject(supplied.search) && parsed.decision === 'SEARCH'
+    && !hasExactKeys(supplied.search, searchKeys)) {
+    repairs.push('search_shape_normalized');
+  }
+  if (isObject(supplied.tool) && parsed.decision === 'TOOL'
+    && !hasExactKeys(supplied.tool, toolKeys)) {
+    repairs.push('tool_shape_normalized');
+  }
+  if (isObject(supplied.nextQuestion) && parsed.decision === 'RESPONSE'
+    && !hasExactKeys(supplied.nextQuestion, nextQuestionKeys)) {
+    repairs.push('next_question_shape_normalized');
   }
   const response = cleanText(parsed.response, 4_000);
   if (response === null) return Object.freeze({ valid: false, reason: 'invalid_response' });
@@ -292,7 +372,7 @@ export function validateTemplateEngineDecision(value) {
     TOOL: response === '' && clarification === null && search === null && tool !== null
       && nextQuestion === null,
   })[parsed.decision];
-  if (!branchValid) return Object.freeze({ valid: false, reason: 'mixed_decision_payload' });
+  if (!branchValid) return Object.freeze({ valid: false, reason: 'invalid_active_branch' });
 
   const clearsWorkflow = stateUpdate?.clear.includes('activeWorkflowId') === true;
   if (clearsWorkflow) {
@@ -306,6 +386,8 @@ export function validateTemplateEngineDecision(value) {
 
   return Object.freeze({
     valid: true,
+    repaired: repairs.length > 0,
+    repairs: Object.freeze([...new Set(repairs)]),
     value: Object.freeze({
       decision: parsed.decision,
       response,

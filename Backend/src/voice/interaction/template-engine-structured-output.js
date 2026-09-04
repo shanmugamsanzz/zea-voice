@@ -1,4 +1,8 @@
 import { AppError } from '../../middleware/errors.js';
+import {
+  normalizeTemplateEngineProviderEnvelope,
+  validateTemplateEngineDecision,
+} from './template-engine-decision-contract.js';
 
 const truncatedFinishReasons = new Set([
   'length', 'max_tokens', 'max_output_tokens', 'max_tokens_reached', 'incomplete',
@@ -63,6 +67,13 @@ function validateSchema(value, schema, path = '$') {
   return { valid: true };
 }
 
+function isInitialDecisionSchema(schema) {
+  const properties = schema?.properties;
+  return schema?.type === 'object'
+    && properties && Object.hasOwn(properties, 'decision')
+    && Object.hasOwn(properties, 'search') && Object.hasOwn(properties, 'tool');
+}
+
 export function parseTemplateEngineStructuredOutput({ completion, output, schema } = {}) {
   const finishReason = String(completion?.finishReason ?? '').trim().toLocaleLowerCase();
   if (completion?.type !== 'completed') {
@@ -88,6 +99,9 @@ export function parseTemplateEngineStructuredOutput({ completion, output, schema
         message: String(error?.message ?? '').slice(0, 240),
       });
   }
+  if (isInitialDecisionSchema(schema)) {
+    parsed = normalizeTemplateEngineProviderEnvelope(parsed) ?? parsed;
+  }
   const validation = validateSchema(parsed, schema);
   if (!validation.valid) {
     throw new AppError(502, 'The template-engine LLM response did not match its schema',
@@ -96,6 +110,18 @@ export function parseTemplateEngineStructuredOutput({ completion, output, schema
         reason: validation.reason,
         path: validation.path,
       });
+  }
+  if (isInitialDecisionSchema(schema)) {
+    const decisionValidation = validateTemplateEngineDecision(parsed);
+    if (!decisionValidation.valid) {
+      throw new AppError(502, 'The template-engine LLM response has no usable active route',
+        'TEMPLATE_ENGINE_LLM_SCHEMA_INVALID', {
+          finishReason: finishReason || null,
+          reason: decisionValidation.reason,
+          path: '$',
+        });
+    }
+    return decisionValidation.value;
   }
   return parsed;
 }

@@ -167,7 +167,7 @@ const noEvidence = await respondToTemplateEngineSearch({
 assert.equal(noEvidence.decision.decision, 'NO_MATCH');
 
 let hallucinationRepairCalls = 0;
-const hallucinationBlocked = await respondToTemplateEngineSearch({
+await assert.rejects(() => respondToTemplateEngineSearch({
   mainPrompt: 'Answer facts only from supplied evidence.',
   latestUtterance: configurations[0].factualQuestion, state: first.state,
   searchDecision: {
@@ -190,11 +190,9 @@ const hallucinationBlocked = await respondToTemplateEngineSearch({
       clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
     } };
   },
-});
+}), (error) => error.code === 'TEMPLATE_ENGINE_OUTPUT_INVALID'
+  && error.details?.reason === 'no_match_rejected_when_requested_fact_is_available');
 assert.equal(hallucinationRepairCalls, 2);
-assert.equal(hallucinationBlocked.decision.decision, 'NO_MATCH');
-assert.equal(hallucinationBlocked.outputValidation.ttsAllowed, true);
-assert.equal(hallucinationBlocked.outputValidation.valid, true);
 
 const providerFailure = new Error('provider unavailable');
 await assert.rejects(() => respondToTemplateEngineSearch({

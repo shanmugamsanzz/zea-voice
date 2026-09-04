@@ -107,7 +107,11 @@ function candidateForms(candidate) {
 }
 
 function entityForms(candidate) {
-  return textList([
+  const scopedForms = candidate.recordType === 'CATALOG_ITEM'
+    ? candidate.itemSearchForms
+    : candidate.recordType === 'CATALOG_CATEGORY'
+      ? candidate.categorySearchForms : null;
+  return textList(scopedForms?.length ? scopedForms : [
     candidate.canonicalName,
     candidate.itemKey,
     ...(candidate.searchForms ?? []),
@@ -220,6 +224,12 @@ function normalizeCandidate(candidate, channel, rank, scope, allowedPublications
     ...(Array.isArray(candidate.searchForms) ? {
       searchForms: textList(candidate.searchForms),
     } : {}),
+    ...(Array.isArray(candidate.itemSearchForms) ? {
+      itemSearchForms: textList(candidate.itemSearchForms),
+    } : {}),
+    ...(Array.isArray(candidate.categorySearchForms) ? {
+      categorySearchForms: textList(candidate.categorySearchForms),
+    } : {}),
     ...(Array.isArray(candidate.useCaseTokens) ? {
       useCaseTokens: textList(candidate.useCaseTokens),
     } : {}),
@@ -297,10 +307,18 @@ function fuseAndRank(channels, request) {
   const explicitlyRequested = ranked.filter((candidate) => explicitlyNamed(
     candidate, request.search,
   ));
+  const exactStructured = ranked.filter((candidate) => (
+    candidate.channels.includes('structured')
+      && ['published_exact', 'published_category_exact'].includes(candidate.matchMethod)
+  ));
   const inferredComparisonIds = new Set(explicitlyRequested.length > 1
     ? explicitlyRequested.map((candidate) => candidate.recordId.toLocaleLowerCase()) : []);
-  const strictIds = preferred.size > 1 ? preferred : inferredComparisonIds;
-  if (strictIds.size > 1) {
+  const exactIds = new Set(exactStructured.map((candidate) => candidate.recordId.toLocaleLowerCase()));
+  const strictIds = preferred.size > 1
+    ? preferred
+    : inferredComparisonIds.size > 1
+      ? inferredComparisonIds : exactIds;
+  if (strictIds.size > 0) {
     return Object.freeze(ranked.filter((candidate) => (
       strictIds.has(candidate.recordId.toLocaleLowerCase())
     )).slice(0, request.candidateLimit));

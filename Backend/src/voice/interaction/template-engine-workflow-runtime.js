@@ -9,7 +9,7 @@ import { validateTemplateEngineDecision } from './template-engine-decision-contr
 import { validateTemplateEngineToolResultSpeech } from './template-engine-tool-result-validator.js';
 import { validateAndComposeTemplateEngineSpeech } from './template-engine-follow-up.js';
 
-export const TEMPLATE_ENGINE_WORKFLOW_RUNTIME_VERSION = 3;
+export const TEMPLATE_ENGINE_WORKFLOW_RUNTIME_VERSION = 4;
 
 const speechTasks = new Set(['ASK_FIELD', 'CONFIRM', 'RESULT']);
 
@@ -62,10 +62,12 @@ function fieldAssignedToTool(field, tool) {
 
 function fieldsForTool(informationFields, tool, schema) {
   const required = Array.isArray(schema.required) ? schema.required.map((key) => cleanText(key, 64)) : [];
+  const requiredSet = new Set(required);
   const properties = object(schema.properties);
-  const byKey = new Map((informationFields ?? []).filter((field) => (
-    fieldAssignedToTool(field, tool)
-  )).map((field) => [fieldKey(field), field]));
+  const configured = (informationFields ?? []).filter((field) => (
+    fieldAssignedToTool(field, tool) && requiredSet.has(fieldKey(field))
+  ));
+  const byKey = new Map(configured.map((field) => [fieldKey(field), field]));
   const missingConfiguration = required.filter((key) => !Object.hasOwn(properties, key)
     || !byKey.has(key)
     || !cleanText(byKey.get(key)?.question, 1_000));
@@ -75,11 +77,14 @@ function fieldsForTool(informationFields, tool, schema) {
         fields: missingConfiguration,
       });
   }
-  return Object.freeze(required.map((key) => Object.freeze({
-    ...byKey.get(key), key,
-    label: cleanText(byKey.get(key)?.label ?? key, 160),
-    question: cleanText(byKey.get(key)?.question, 1_000),
-  })));
+  return Object.freeze(configured.map((field) => {
+    const key = fieldKey(field);
+    return Object.freeze({
+      ...field, key,
+      label: cleanText(field?.label ?? key, 160),
+      question: cleanText(field?.question, 1_000),
+    });
+  }));
 }
 
 function resolveConfiguration({

@@ -106,10 +106,14 @@ for (const [route, elapsedMs] of [
     result: { provenance: { initialDecision: route, finalDecision: route } },
     turnStartedAt: 10_000,
     firstAudioAt: 10_000 + elapsedMs,
+    finalResponseReadyAt: 10_000 + Math.max(1, elapsedMs - 200),
+    firstFinalAudioAt: 10_000 + elapsedMs + 150,
     firstAudioDeadlineMs: 9_999,
   });
   assert.equal(sample.firstAudioStatus, 'passed', `${route} must pass below its route target`);
   assert.equal(sample.firstAudioTargetMs, templateEngineFirstAudioTargets[route]);
+  assert.equal(sample.finalAnswerFirstAudioMs, elapsedMs + 150);
+  assert.equal(sample.finalAnswerReadyMs, Math.max(1, elapsedMs - 200));
 }
 for (const route of ['RESPONSE', 'SEARCH', 'TOOL']) {
   const targetMs = templateEngineFirstAudioTargets[route];

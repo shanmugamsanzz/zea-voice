@@ -490,7 +490,7 @@ const hallucinationOutputs = [
   unsupportedDecision,
   unsupportedDecision,
 ];
-const hallucinationBlocked = await runTemplateEngineProductionTurn({
+await assert.rejects(() => runTemplateEngineProductionTurn({
   auth: { tenantId: hallucinationIdentity.tenantId }, scope: hallucinationIdentity.scope,
   callId: 'hallucination-gate', usageDirection: 'inbound', language: 'en',
   mainPrompt: 'Never invent factual values.', latestUtterance: hallucinationConfiguration.price,
@@ -512,9 +512,8 @@ const hallucinationBlocked = await runTemplateEngineProductionTurn({
     supported: true, successClaimed: false, requestedFactAddressed: true,
   }),
   validateToolResultSpeechClaims: async () => ({ supported: true, successClaimed: false }),
-});
-assert.equal(hallucinationBlocked.decision.decision, 'NO_MATCH');
-assert.equal(hallucinationBlocked.speech.includes('999'), false);
+}), (error) => error.code === 'TEMPLATE_ENGINE_OUTPUT_INVALID'
+  && error.details?.reason === 'no_match_rejected_when_requested_fact_is_available');
 assert.equal(hallucinationOutputs.length, 0);
 
 const productionSources = [

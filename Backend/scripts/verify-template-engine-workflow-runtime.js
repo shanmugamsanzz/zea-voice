@@ -27,7 +27,7 @@ const tool = Object.freeze({
   id: 'tool-1', name: 'create_record', status: 'active', type: 'webhook_api',
   inputSchema: Object.freeze({
     type: 'object', additionalProperties: false,
-    required: Object.freeze(['full_name', 'quantity']),
+    required: Object.freeze(['quantity', 'full_name']),
     properties: Object.freeze({
       full_name: Object.freeze({ type: 'string', minLength: 2 }),
       quantity: Object.freeze({ type: 'integer', minimum: 1 }),
@@ -87,6 +87,33 @@ const aliasActivated = activateTemplateEngineWorkflow({
 assert.equal(aliasActivated.configuration.workflowId, 'workflow-alias',
   'A published Workflow identifier must resolve through the assigned UI tool identity set');
 assert.equal(aliasActivated.configuration.tool.id, 'tool-1');
+
+const snakeCaseActivated = activateTemplateEngineWorkflow({
+  ...common,
+  publishedWorkflows: [{
+    ...workflow,
+    recordId: 'workflow-snake-case',
+    actionConfig: null,
+    authoritativeData: {
+      action_type: 'configured_tool',
+      action_config: { tool_identifier: 'create_appointment' },
+    },
+  }],
+  assignedTools: [{
+    ...tool,
+    id: 'appointment-tool', name: 'create_appointment',
+  }],
+  informationFields: fields.map((field) => ({
+    ...field, requiredAction: 'create_appointment',
+  })),
+  toolDecision: {
+    ...toolDecision, tool: { name: 'create_appointment', arguments: {} },
+  },
+  state: { activeWorkflowId: null, collectedToolFields: {}, confirmationStatus: null },
+});
+assert.equal(snakeCaseActivated.configuration.workflowId, 'workflow-snake-case');
+assert.equal(snakeCaseActivated.configuration.tool.name, 'create_appointment');
+assert.equal(snakeCaseActivated.progress.nextField.key, 'full_name');
 
 const firstTask = createTemplateEngineWorkflowSpeechTask({
   configuration: activated.configuration, state: activated.state,

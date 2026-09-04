@@ -301,6 +301,20 @@ async function runWorkflow(input, decision, state, context, dependencies) {
     cacheWorkflowSpeech: dependencies.cacheWorkflowSpeech,
   });
   const finished = ['SUCCEEDED', 'FAILED'].includes(transition.status);
+  dependencies.onWorkflowDiagnostics?.(Object.freeze({
+    status: transition.status,
+    workflowRecordId: transition.workflowRecordId ?? null,
+    toolId: transition.toolId ?? null,
+    selectedRecordIds: Object.freeze([...state.lastReferencedRecordIds]),
+    acceptedFields: transition.acceptedFields ?? Object.freeze([]),
+    rejectedFields: transition.rejectedFields ?? Object.freeze([]),
+    collectedFieldKeys: Object.freeze(Object.keys(
+      transition.state?.collectedToolFields ?? {},
+    )),
+    confirmationStatus: transition.state?.confirmationStatus ?? null,
+    verifiedResult: transition.verifiedResult?.verified === true,
+    success: transition.verifiedResult?.success ?? null,
+  }));
   return Object.freeze({
     decision,
     speech: transition.speech,

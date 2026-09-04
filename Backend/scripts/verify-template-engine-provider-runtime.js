@@ -79,6 +79,29 @@ assert.deepEqual((await schemaFallbackInvoker({
 assert.deepEqual(formats, ['json_schema', 'json_object']);
 assert.equal(fallbackDetails.providerCode, 'invalid_json_schema');
 
+let mixedAttempts = 0;
+const harmlessMixedAdapter = {
+  async *stream() {
+    mixedAttempts += 1;
+    yield { type: 'text_delta', delta: JSON.stringify({
+      decision: 'response', response: 'Hello.',
+      clarification: { question: 'Inactive?', reason: null, candidates: [] },
+      search: { query: 'inactive', requestedFact: null, contextualReference: null },
+      tool: { name: 'inactive_action', arguments: {} },
+      nextQuestion: null,
+      providerAnnotation: 'ignored',
+    }) };
+    yield { type: 'completed', finishReason: 'stop', usage: { totalTokens: 10 } };
+  },
+  cancel() {},
+};
+const normalizedMixed = await createTemplateEngineStructuredInvoker(harmlessMixedAdapter)({
+  messages: [], responseFormat: { type: 'json_schema', schema: decisionSchema },
+});
+assert.equal(mixedAttempts, 1,
+  'A recoverable mixed provider envelope must not consume the malformed-output retry');
+assert.deepEqual(normalizedMixed.outputParsed, decision);
+
 let rejectedAttempts = 0;
 const rejectedAdapter = {
   async *stream() {

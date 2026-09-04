@@ -104,6 +104,65 @@ const evidenceSelected = selectApplicableConversationGuidance({
 });
 assert.equal(evidenceSelected.recordId, 'guidance-overview');
 
+// Production publication bundles expose compact records with `metadata` and
+// generated caller-language aliases. Selection must preserve and use those
+// published signals instead of depending on a test-only `entity_metadata` shape.
+const publishedBundleGuidance = normalizePublishedConversationGuidance({
+  record_id: 'guidance-published-shape',
+  record_type: 'conversation_node',
+  language: 'ta',
+  content: 'Present the configured overview and invite the caller to select an option.',
+  publicationAliases: ['ஆம் சொல்லுங்கள்', 'yes continue'],
+  publicationSttForms: ['ஆம்சொல்லுங்கள்'],
+  metadata: {
+    flowKey: 'main', nodeKey: 'configured_overview', nodeType: 'message',
+    sequenceOrder: 2, isEntry: false,
+    variables: {
+      intentClass: 'CATEGORY_OVERVIEW',
+      purpose: 'Continue the configured overview after caller acceptance.',
+      nextQuestion: 'Which configured option would you like to explore?',
+    },
+  },
+}, publication, agentId);
+assert.equal(publishedBundleGuidance.nextQuestion, 'Which configured option would you like to explore?');
+assert.equal(publishedBundleGuidance.sequenceOrder, 2);
+const multilingualSelection = selectApplicableConversationGuidance({
+  publishedConversationGuidance: [detailGuidance, publishedBundleGuidance],
+  scope,
+  latestUtterance: 'ஆம் சொல்லுங்க',
+  finalDecision: 'RESPONSE',
+  recentCompleteTurns: [{ role: 'assistant', content: 'May I continue?' }],
+  conversationStage: 'conversation',
+  language: 'ta-IN',
+});
+assert.equal(multilingualSelection.recordId, 'guidance-published-shape');
+assert.equal(multilingualSelection.selectionReasons.includes('semantic_example_compatible'), true);
+
+const contentMatchedGuidance = normalizePublishedConversationGuidance({
+  record_id: 'guidance-content-match', record_type: 'conversation_node', language: 'en',
+  content: 'Explain the selected option including its complete configured attributes.',
+  metadata: {
+    flowKey: 'main', nodeKey: 'configured_details', nodeType: 'guidance',
+    variables: [
+      { key: 'purpose', value: 'Explain one selected option.' },
+      { key: 'nextQuestion', value: 'Would you like the next configured action?' },
+    ],
+  },
+}, publication, agentId);
+const contentSelection = selectApplicableConversationGuidance({
+  publishedConversationGuidance: [overviewGuidance, contentMatchedGuidance],
+  scope,
+  latestUtterance: 'What are all of its configured attributes?',
+  finalDecision: 'SEARCH',
+  searchInterpretation: {
+    query: 'selected option configured attributes', requestedFact: 'attributes',
+    contextualReference: 'selected option',
+  },
+  recentCompleteTurns: [{ role: 'assistant', content: 'The selected option is available.' }],
+  conversationStage: 'SEARCH attributes', language: 'en',
+});
+assert.equal(contentSelection.recordId, 'guidance-content-match');
+
 let request;
 await routeTemplateEngineUtterance({
   mainPrompt: 'Use RESPONSE for non-factual conversation.',

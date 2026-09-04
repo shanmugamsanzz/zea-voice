@@ -1,4 +1,4 @@
-export const TEMPLATE_ENGINE_TURN_LATENCY_VERSION = 1;
+export const TEMPLATE_ENGINE_TURN_LATENCY_VERSION = 2;
 
 function cleanText(value, maximum = 500) {
   return String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')

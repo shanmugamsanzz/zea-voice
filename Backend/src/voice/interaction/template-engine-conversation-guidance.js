@@ -16,9 +16,15 @@ function textList(value, maximum = 100) {
 }
 
 function variableMap(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return Object.fromEntries(Object.entries(value).flatMap(([rawKey, entry]) => {
+      const key = normalized(rawKey).replace(/[^\p{L}\p{M}\p{N}]+/gu, '');
+      return key ? [[key, entry]] : [];
+    }));
+  }
   if (!Array.isArray(value)) return {};
   return Object.fromEntries(value.flatMap((entry) => {
-    const key = cleanText(entry?.key, 100);
+    const key = normalized(entry?.key).replace(/[^\p{L}\p{M}\p{N}]+/gu, '');
     return key ? [[key, entry?.value]] : [];
   }));
 }
@@ -37,6 +43,28 @@ function overlapScore(source, target) {
   return shared / Math.sqrt(sourceTokens.size * targetTokens.size);
 }
 
+function characterNgrams(value, size = 3) {
+  const compact = normalized(value).replace(/[^\p{L}\p{M}\p{N}]+/gu, '');
+  if (!compact) return new Set();
+  if (compact.length <= size) return new Set([compact]);
+  return new Set(Array.from({ length: compact.length - size + 1 }, (_, index) => (
+    compact.slice(index, index + size)
+  )));
+}
+
+function fuzzyPhraseScore(source, target) {
+  // Character similarity is useful for short STT/phonetic variants, but on
+  // longer sentences it can reward unrelated phrases that merely share
+  // common character sequences. Long requests use semantic token coverage.
+  if (tokens(source).size > 4 || tokens(target).size > 4) return 0;
+  const left = characterNgrams(source);
+  const right = characterNgrams(target);
+  if (!left.size || !right.size) return 0;
+  let shared = 0;
+  for (const value of left) if (right.has(value)) shared += 1;
+  return (2 * shared) / (left.size + right.size);
+}
+
 function scoped(record, scope) {
   if (!record || typeof record !== 'object' || record.published !== true) return false;
   if (normalized(record.tenantId) !== normalized(scope?.tenantId)) return false;
@@ -51,11 +79,17 @@ export function normalizePublishedConversationGuidance(record, publication, agen
   const recordType = cleanText(record?.record_type ?? record?.recordType, 80).toUpperCase();
   if (!['CONVERSATION', 'CONVERSATION_NODE'].includes(recordType)) return null;
   const metadata = record?.entity_metadata && typeof record.entity_metadata === 'object'
-    ? record.entity_metadata : record?.authoritativeData ?? {};
+    ? record.entity_metadata
+    : record?.entityMetadata && typeof record.entityMetadata === 'object'
+      ? record.entityMetadata
+      : record?.metadata && typeof record.metadata === 'object'
+        ? record.metadata : record?.authoritativeData ?? {};
   const variables = variableMap(metadata.variables);
   const recordId = cleanText(record?.record_id ?? record?.recordId ?? record?.id, 200);
   const purpose = cleanText(variables.purpose ?? metadata.purpose, 1_500);
-  const nextQuestion = cleanText(variables.nextQuestion ?? metadata.nextQuestion, 1_500) || null;
+  const nextQuestion = cleanText(
+    variables.nextquestion ?? metadata.nextQuestion ?? metadata.next_question, 1_500,
+  ) || null;
   if (!recordId || (!purpose && !nextQuestion)) return null;
   return Object.freeze({
     recordId,
@@ -68,14 +102,26 @@ export function normalizePublishedConversationGuidance(record, publication, agen
     flowKey: cleanText(metadata.flowKey, 160) || null,
     nodeKey: cleanText(metadata.nodeKey, 160) || null,
     nodeType: cleanText(metadata.nodeType, 80) || null,
+    sequenceOrder: Number.isFinite(Number(metadata.sequenceOrder))
+      ? Number(metadata.sequenceOrder) : null,
+    isEntry: metadata.isEntry === true,
+    content: cleanText(record?.content ?? record?.answer ?? metadata.content, 4_000) || null,
     language: cleanText(metadata.language ?? record?.language, 30) || 'und',
-    intentClass: cleanText(variables.intentClass ?? metadata.intentClass, 160) || null,
+    intentClass: cleanText(
+      variables.intentclass ?? metadata.intentClass ?? metadata.intent_class, 160,
+    ) || null,
     purpose: purpose || null,
     situation: cleanText(variables.situation ?? metadata.situation, 2_000) || null,
-    examples: Object.freeze(textList(variables.examples ?? metadata.examples, 40)),
+    examples: Object.freeze(textList([
+      ...textList(variables.examples ?? metadata.examples, 40),
+      ...textList(record?.publicationAliases ?? record?.publication_aliases, 100),
+      ...textList(record?.publicationSttForms ?? record?.publication_stt_forms, 100),
+      ...textList(record?.publicationPhoneticForms ?? record?.publication_phonetic_forms, 100),
+      ...textList(record?.publicationUseCasePhrases ?? record?.publication_use_case_phrases, 100),
+    ], 200)),
     context: cleanText(variables.context ?? metadata.context, 300) || null,
     catalogReferences: Object.freeze(textList(
-      variables.catalogReferences ?? metadata.catalogReferences, 100,
+      variables.catalogreferences ?? metadata.catalogReferences ?? metadata.catalog_references, 100,
     )),
     nextQuestion,
   });
@@ -104,6 +150,7 @@ function candidateText(candidate) {
     candidate.purpose,
     candidate.situation,
     candidate.context,
+    candidate.content,
     ...candidate.examples,
     ...candidate.catalogReferences,
   ].filter(Boolean).join(' ');
@@ -151,10 +198,18 @@ export function selectApplicableConversationGuidance({
       return normalizedExample && (normalizedRequest.includes(normalizedExample)
         || normalizedExample.includes(normalizedRequest));
     });
+    const exampleCompatibility = candidate.examples.reduce((maximum, example) => Math.max(
+      maximum,
+      overlapScore(requestText, example),
+      fuzzyPhraseScore(latestUtterance, example),
+    ), 0);
     const reasons = [];
     const evidenceRecordMatch = evidenceRecordIds.has(candidate.recordId);
     const intentCompatibility = signalScore(
       currentIntent ?? searchInterpretation?.requestedFact, candidate,
+    );
+    const requestedFactCompatibility = overlapScore(
+      searchInterpretation?.requestedFact, semanticText,
     );
     const stageCompatibility = signalScore(conversationStage, candidate);
     const requestCompatibility = overlapScore(requestText, semanticText);
@@ -166,14 +221,18 @@ export function selectApplicableConversationGuidance({
       && normalized(language).split('-')[0] === normalized(candidate.language).split('-')[0];
     if (evidenceRecordMatch) reasons.push('retrieved_guidance_record');
     if (exampleMatch) reasons.push('semantic_example_match');
+    else if (exampleCompatibility > 0.2) reasons.push('semantic_example_compatible');
     if (intentCompatibility > 0) reasons.push('intent_compatible');
+    if (requestedFactCompatibility > 0) reasons.push('requested_fact_compatible');
     if (stageCompatibility > 0) reasons.push('stage_compatible');
     if (evidenceCompatibility > 0) reasons.push('evidence_compatible');
     if (contextCompatibility > 0) reasons.push('recent_turn_compatible');
     if (languageMatch) reasons.push('language_compatible');
     const score = (evidenceRecordMatch ? 40 : 0)
       + (exampleMatch ? 20 : 0)
+      + exampleCompatibility * 18
       + intentCompatibility * 24
+      + requestedFactCompatibility * 24
       + stageCompatibility * 20
       + requestCompatibility * 12
       + evidenceCompatibility * 12
@@ -190,6 +249,7 @@ export function selectApplicableConversationGuidance({
     intentClass: ranked[0].candidate.intentClass,
     nodeKey: ranked[0].candidate.nodeKey,
     flowKey: ranked[0].candidate.flowKey,
+    sequenceOrder: ranked[0].candidate.sequenceOrder,
     conversationStage: cleanText(conversationStage, 160) || null,
     selectionScore: Number(ranked[0].score.toFixed(4)),
     selectionReasons: Object.freeze(ranked[0].reasons),

@@ -17,6 +17,8 @@ export function recordTemplateEngineTurnMetrics(runtimeMetrics, {
   retrievalDiagnostics = null,
   turnStartedAt,
   firstAudioAt = null,
+  finalResponseReadyAt = null,
+  firstFinalAudioAt = null,
   firstAudioDeadlineMs,
 } = {}) {
   if (!runtimeMetrics || typeof runtimeMetrics !== 'object') {
@@ -30,6 +32,12 @@ export function recordTemplateEngineTurnMetrics(runtimeMetrics, {
   const totalFirstAudioMs = Number.isFinite(firstAudioAt) && Number.isFinite(turnStartedAt)
     ? Math.max(0, firstAudioAt - turnStartedAt) : null;
   const targetMs = templateEngineFirstAudioTarget(result, firstAudioDeadlineMs);
+  const finalAnswerReadyMs = Number.isFinite(finalResponseReadyAt)
+    && Number.isFinite(turnStartedAt)
+    ? Math.max(0, finalResponseReadyAt - turnStartedAt) : null;
+  const finalAnswerFirstAudioMs = Number.isFinite(firstFinalAudioAt)
+    && Number.isFinite(turnStartedAt)
+    ? Math.max(0, firstFinalAudioAt - turnStartedAt) : null;
   const sample = {
     epoch,
     route: result?.provenance?.initialDecision ?? result?.decision?.decision ?? null,
@@ -37,6 +45,8 @@ export function recordTemplateEngineTurnMetrics(runtimeMetrics, {
     retrievalMs: Number.isFinite(retrievalDiagnostics?.durationMs)
       ? retrievalDiagnostics.durationMs : null,
     totalFirstAudioMs,
+    finalAnswerReadyMs,
+    finalAnswerFirstAudioMs,
     firstAudioTargetMs: targetMs,
     firstAudioStatus: totalFirstAudioMs === null || targetMs === null
       ? 'not_measured' : totalFirstAudioMs < targetMs ? 'passed' : 'missed',

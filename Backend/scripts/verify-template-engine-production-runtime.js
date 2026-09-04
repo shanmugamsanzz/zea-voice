@@ -77,6 +77,58 @@ assert.equal(retrieval.diagnostics.verifiedEvidenceCount, 1);
 assert.equal(Number.isFinite(retrieval.diagnostics.durationMs), true);
 assert.equal(retrieval.diagnostics.durationMs >= 0, true);
 
+const exactRecord = {
+  record_id: 'record-exact', record_type: 'catalog_item',
+  entity_name: 'Configured Alpha', entity_category: 'Configured Group',
+  entity_aliases: ['Alpha Alias'], entity_category_aliases: ['Group Alias'],
+  usage_direction: 'both', content: 'Configured Alpha approved details.',
+  entity_metadata: { itemKey: 'configured-alpha', categoryKey: 'configured-group' },
+};
+const exactArtifacts = {
+  publications: [publication], sparseIndexes: [],
+  bundles: [{
+    tenantId, knowledgeBaseId, publicationRevision: 4, assignedAgentIds: [agentId],
+    records: [exactRecord],
+  }],
+};
+let exactStructuredRecords = [];
+const exactRetrieval = await retrieveTemplateEngineEvidence({
+  auth: { tenantId }, scope, callId: 'call-exact', usageDirection: 'inbound',
+  language: 'en', searchDecision: {
+    ...searchDecision,
+    search: {
+      query: 'Explain Alpha Alias', requestedFact: 'details',
+      contextualReference: 'Alpha Alias', preferredRecordIds: [],
+    },
+  }, state: {},
+}, {
+  loadArtifacts: async () => exactArtifacts,
+  searchCandidates: async () => ({
+    channels: {
+      structured: [],
+      bm25: [{ ...candidate, recordId: 'unrelated-record', canonicalName: 'Other Record' }],
+      qdrant: [{ ...candidate, recordId: 'unrelated-record', canonicalName: 'Other Record' }],
+    },
+  }),
+  hydrateEvidence: async ({ retrieval: selected }) => {
+    exactStructuredRecords = selected.channels.structured;
+    assert.deepEqual(selected.candidates.map((entry) => entry.recordId), ['record-exact']);
+    const selectedRecord = selected.candidates[0];
+    return { evidence: [{
+      ...selectedRecord, id: 'evidence-exact', hydrationValidated: true,
+      publicationValidated: true, callerFacing: true,
+      content: 'Configured Alpha approved details.',
+      authoritativeData: { name: 'Configured Alpha', detail: 'approved' },
+      provenance: { knowledgeBaseId, publicationRevision: 4 },
+    }] };
+  },
+});
+assert.equal(exactStructuredRecords.length, 1,
+  'Published exact matching must populate the structured channel');
+assert.equal(exactStructuredRecords[0].recordId, 'record-exact');
+assert.equal(exactStructuredRecords[0].matchMethod, 'published_exact');
+assert.equal(exactRetrieval.evidence[0].recordId, 'record-exact');
+
 await assert.rejects(() => retrieveTemplateEngineEvidence({
   auth: { tenantId }, scope, callId: 'call-empty', usageDirection: 'inbound',
   language: 'en', searchDecision, state: {},
@@ -393,7 +445,8 @@ const runtimeMetrics = {
 };
 const searchMetric = recordTemplateEngineTurnMetrics(runtimeMetrics, {
   epoch: 1, result: turn, retrievalDiagnostics: retrieval.diagnostics,
-  turnStartedAt: 1_000, firstAudioAt: 1_400, firstAudioDeadlineMs: 2_000,
+  turnStartedAt: 1_000, firstAudioAt: 1_750, finalResponseReadyAt: 2_900,
+  firstFinalAudioAt: 3_200, firstAudioDeadlineMs: 2_000,
 });
 recordTemplateEngineTurnMetrics(runtimeMetrics, {
   epoch: 2, result: workflowTurn, turnStartedAt: 2_000,
@@ -406,7 +459,9 @@ assert.equal(runtimeMetrics.turnLatency.length, 2);
 assert.equal(searchMetric.route, 'SEARCH');
 assert.equal(searchMetric.responseClass, 'RESPONSE');
 assert.equal(searchMetric.retrievalMs, retrieval.diagnostics.durationMs);
-assert.equal(searchMetric.totalFirstAudioMs, 400);
+assert.equal(searchMetric.totalFirstAudioMs, 750);
+assert.equal(searchMetric.finalAnswerReadyMs, 1900);
+assert.equal(searchMetric.finalAnswerFirstAudioMs, 2200);
 assert.equal(searchMetric.firstAudioStatus, 'passed');
 assert.equal(runtimeMetrics.turnLatency[1].retrievalMs, null);
 assert.equal(runtimeMetrics.turnLatency[1].firstAudioStatus, 'missed');

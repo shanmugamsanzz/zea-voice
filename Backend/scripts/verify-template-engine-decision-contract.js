@@ -10,7 +10,7 @@ import { templateEnginePostSearchJsonSchema } from '../src/voice/interaction/tem
 import { templateEngineClaimValidationJsonSchema } from '../src/voice/interaction/template-engine-claim-validator.js';
 import { templateEngineWorkflowSpeechJsonSchema } from '../src/voice/interaction/template-engine-workflow-runtime.js';
 
-assert.equal(TEMPLATE_ENGINE_DECISION_CONTRACT_VERSION, 3);
+assert.equal(TEMPLATE_ENGINE_DECISION_CONTRACT_VERSION, 4);
 assert.deepEqual(Object.values(templateEngineDecisionTypes), [
   'RESPONSE', 'CLARIFY', 'SEARCH', 'TOOL',
 ]);
@@ -65,24 +65,33 @@ for (const decision of [
   assert.equal(validateTemplateEngineDecision(decision).valid, true);
 }
 
-assert.equal(validateTemplateEngineDecision({ ...searchDecision, decision: 'search' }).reason,
-  'invalid_decision');
-assert.equal(validateTemplateEngineDecision({ ...searchDecision, extra: true }).reason,
-  'invalid_shape');
-assert.equal(validateTemplateEngineDecision({ ...searchDecision, response: 'unsupported branch' }).reason,
-  'mixed_decision_payload');
+const normalizedDecisionName = validateTemplateEngineDecision({
+  ...searchDecision, decision: 'search',
+});
+assert.equal(normalizedDecisionName.valid, true);
+assert.equal(normalizedDecisionName.value.decision, 'SEARCH');
+assert.equal(normalizedDecisionName.repairs.includes('decision_normalized'), true);
+const normalizedRoot = validateTemplateEngineDecision({ ...searchDecision, extra: true });
+assert.equal(normalizedRoot.valid, true);
+assert.equal(normalizedRoot.repairs.includes('root_shape_normalized'), true);
+const normalizedMixed = validateTemplateEngineDecision({
+  ...searchDecision, response: 'inactive branch content',
+});
+assert.equal(normalizedMixed.valid, true);
+assert.equal(normalizedMixed.value.response, '');
+assert.equal(normalizedMixed.repairs.includes('inactive_response_cleared'), true);
 assert.equal(validateTemplateEngineDecision({ ...searchDecision, search: null }).reason,
-  'mixed_decision_payload');
+  'invalid_active_branch');
 assert.equal(validateTemplateEngineDecision({
   ...searchDecision,
   nextQuestion: { question: 'Unsupported branch question?', reason: null },
-}).reason, 'mixed_decision_payload');
+}).valid, true);
 assert.equal(validateTemplateEngineDecision('```json\n{}\n```').reason, 'invalid_json');
 assert.equal(validateTemplateEngineDecision({
   decision: 'TOOL', response: '', clarification: null, search: null,
   tool: { name: 'assigned_action', arguments: {}, unexpected: true },
   nextQuestion: null, stateUpdate: null,
-}).reason, 'invalid_payload');
+}).valid, true);
 assert.equal(validateTemplateEngineDecision({
   decision: 'RESPONSE', response: 'Cancelled.', clarification: null,
   search: null, tool: null, nextQuestion: null,

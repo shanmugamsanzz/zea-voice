@@ -1,7 +1,7 @@
 import { AppError } from '../middleware/errors.js';
 import { normalizeConfiguredToolIdentifier } from './knowledge-record-validation.js';
 
-export const WORKFLOW_TOOL_AUTHORIZATION_VERSION = 2;
+export const WORKFLOW_TOOL_AUTHORIZATION_VERSION = 3;
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -47,9 +47,12 @@ function toolSchemaIssue(tool = {}) {
 
 export function configuredWorkflowToolIdentifier(workflow = {}) {
   const actionConfig = object(workflow.actionConfig ?? workflow.action_config
-    ?? workflow.authoritativeData?.actionConfig);
+    ?? workflow.authoritativeData?.actionConfig
+    ?? workflow.authoritativeData?.action_config);
   return normalizeConfiguredToolIdentifier(
-    actionConfig.toolIdentifier ?? actionConfig.actionKey,
+    actionConfig.toolIdentifier ?? actionConfig.tool_identifier
+      ?? actionConfig.actionKey ?? actionConfig.action_key
+      ?? workflow.toolIdentifier ?? workflow.tool_identifier,
   );
 }
 
