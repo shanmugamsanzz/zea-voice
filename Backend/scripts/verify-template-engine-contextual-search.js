@@ -70,7 +70,64 @@ const inventedPreference = normalizeTemplateEngineSearchDecision({
   },
   tool: null, nextQuestion: null, stateUpdate: null,
 }, state);
-assert.equal(inventedPreference.reason, 'unknown_preferred_record_id');
+assert.equal(inventedPreference.valid, true);
+assert.deepEqual(inventedPreference.value.search.preferredRecordIds, [],
+  'An unknown optional preference must be ignored without failing SEARCH');
+
+const mixedPreferences = normalizeTemplateEngineSearchDecision({
+  decision: 'SEARCH', response: '', clarification: null,
+  search: {
+    query: 'current fact', requestedFact: 'fact', contextualReference: 'selected item',
+    preferredRecordIds: ['invented-record', 'silver-record'],
+  },
+  tool: null, nextQuestion: null, stateUpdate: null,
+}, state);
+assert.equal(mixedPreferences.valid, true);
+assert.deepEqual(mixedPreferences.value.search.preferredRecordIds, ['silver-record'],
+  'Only preferences from the scoped runtime allowlist may survive');
+
+const explicitNewEntity = normalizeTemplateEngineSearchDecision({
+  decision: 'SEARCH', response: '', clarification: null,
+  search: {
+    query: 'Beta Option details', requestedFact: 'details',
+    contextualReference: 'Beta Option', preferredRecordIds: ['silver-record'],
+  },
+  tool: null, nextQuestion: null, stateUpdate: null,
+}, state, { latestUtterance: 'Tell me about Beta Option' });
+assert.equal(explicitNewEntity.valid, true);
+assert.deepEqual(explicitNewEntity.value.search.preferredRecordIds, [],
+  'An explicitly named new entity must clear stale record preferences');
+
+const genuineReference = normalizeTemplateEngineSearchDecision({
+  decision: 'SEARCH', response: '', clarification: null,
+  search: {
+    query: 'Silver Master Health Checkup price', requestedFact: 'price',
+    contextualReference: 'Silver Master Health Checkup', preferredRecordIds: ['silver-record'],
+  },
+  tool: null, nextQuestion: null, stateUpdate: null,
+}, state, { latestUtterance: 'What is its price?' });
+assert.equal(genuineReference.valid, true);
+assert.deepEqual(genuineReference.value.search.preferredRecordIds, ['silver-record'],
+  'A genuine contextual follow-up must preserve its verified prior record');
+
+for (const transition of [
+  { label: 'overview to named category', previous: 'overview-record', reference: 'Beta Group' },
+  { label: 'overview to named item', previous: 'overview-record', reference: 'Beta Option' },
+  { label: 'one item to another item', previous: 'alpha-record', reference: 'Beta Option' },
+]) {
+  const result = normalizeTemplateEngineSearchDecision({
+    decision: 'SEARCH', response: '', clarification: null,
+    search: {
+      query: `${transition.reference} details`, requestedFact: 'details',
+      contextualReference: transition.reference, preferredRecordIds: [transition.previous],
+    },
+    tool: null, nextQuestion: null, stateUpdate: null,
+  }, {
+    lastReferencedRecordIds: [transition.previous], comparisonRecordIds: [],
+  }, { latestUtterance: `Explain ${transition.reference}` });
+  assert.equal(result.valid, true, transition.label);
+  assert.deepEqual(result.value.search.preferredRecordIds, [], transition.label);
+}
 
 const unsupportedClarification = normalizeTemplateEngineSearchDecision({
   decision: 'CLARIFY', response: '',

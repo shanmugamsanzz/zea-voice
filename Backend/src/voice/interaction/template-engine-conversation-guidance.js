@@ -169,6 +169,38 @@ function signalScore(signal, candidate) {
   ].filter(Boolean).join(' '));
 }
 
+function tokenCoverage(source, target) {
+  const sourceTokens = tokens(source);
+  if (!sourceTokens.size) return 0;
+  const targetTokens = tokens(target);
+  let shared = 0;
+  for (const token of sourceTokens) if (targetTokens.has(token)) shared += 1;
+  return shared / sourceTokens.size;
+}
+
+function overviewGuidance(candidate) {
+  const structuralSignals = [
+    identifierText(candidate.intentClass), identifierText(candidate.nodeKey),
+    identifierText(candidate.nodeType), identifierText(candidate.context),
+  ].filter(Boolean).join(' ');
+  return tokens(structuralSignals).has('overview');
+}
+
+function explicitEntityRequest(latestUtterance, searchInterpretation) {
+  const reference = cleanText(searchInterpretation?.contextualReference, 500);
+  return Boolean(reference) && tokenCoverage(reference, latestUtterance) >= 0.67;
+}
+
+function evidenceIdentityText(evidence) {
+  return (Array.isArray(evidence) ? evidence : []).filter((entry) => (
+    entry?.recordType !== 'CONVERSATION_NODE'
+  )).flatMap((entry) => [
+    entry?.recordId, entry?.canonicalName, entry?.authoritativeData?.name,
+    entry?.authoritativeData?.category, entry?.authoritativeData?.categoryKey,
+    entry?.authoritativeData?.itemKey,
+  ]).filter(Boolean).join(' ');
+}
+
 export function selectApplicableConversationGuidance({
   publishedConversationGuidance = [], scope = {}, latestUtterance, finalDecision = null,
   searchInterpretation = null, evidence = [], recentCompleteTurns = [],
@@ -187,11 +219,21 @@ export function selectApplicableConversationGuidance({
   ].filter(Boolean).join(' ');
   const contextualText = recentTurnText(recentCompleteTurns);
   const evidenceText = evidenceSearchText(evidence);
+  const evidenceIdentities = evidenceIdentityText(evidence);
+  const namedEntityRequest = explicitEntityRequest(latestUtterance, searchInterpretation);
   const normalizedRequest = normalized(requestText);
   const evidenceRecordIds = new Set((Array.isArray(evidence) ? evidence : [])
     .filter((entry) => entry?.recordType === 'CONVERSATION_NODE')
     .map((entry) => cleanText(entry.recordId ?? entry.id, 200)).filter(Boolean));
-  const ranked = candidates.map((candidate) => {
+  const compatibleCandidates = candidates.filter((candidate) => {
+    if (namedEntityRequest && overviewGuidance(candidate)) return false;
+    if (!namedEntityRequest || !candidate.catalogReferences.length || !evidenceIdentities) {
+      return true;
+    }
+    return overlapScore(candidate.catalogReferences.join(' '), evidenceIdentities) > 0;
+  });
+  if (!compatibleCandidates.length) return null;
+  const ranked = compatibleCandidates.map((candidate) => {
     const semanticText = candidateText(candidate);
     const exampleMatch = candidate.examples.some((example) => {
       const normalizedExample = normalized(example);

@@ -11,7 +11,21 @@ function contextualAmbiguity(value) {
     .replace(/[\s-]+/gu, '_') === 'contextual_reference_ambiguous';
 }
 
-export function normalizeTemplateEngineSearchDecision(decision, state = {}) {
+function tokens(value) {
+  return new Set(String(value ?? '').normalize('NFKC').toLocaleLowerCase()
+    .split(/[^\p{L}\p{M}\p{N}]+/gu).filter((token) => token.length > 1));
+}
+
+function explicitlyNamesReference(latestUtterance, contextualReference) {
+  const referenceTokens = tokens(contextualReference);
+  if (!referenceTokens.size) return false;
+  const utteranceTokens = tokens(latestUtterance);
+  let matches = 0;
+  for (const token of referenceTokens) if (utteranceTokens.has(token)) matches += 1;
+  return matches / referenceTokens.size >= 0.67;
+}
+
+export function normalizeTemplateEngineSearchDecision(decision, state = {}, context = {}) {
   const validated = validateTemplateEngineDecision(decision);
   if (!validated.valid) return validated;
   const value = validated.value;
@@ -27,12 +41,18 @@ export function normalizeTemplateEngineSearchDecision(decision, state = {}) {
     ...recordIds(state.comparisonRecordIds),
   ]);
   const requestedPreferences = recordIds(value.search.preferredRecordIds);
-  if (requestedPreferences.some((recordId) => !knownRecordIds.has(recordId))) {
-    return Object.freeze({ valid: false, reason: 'unknown_preferred_record_id' });
-  }
-
-  let preferredRecordIds = requestedPreferences;
-  if (!preferredRecordIds.length && value.search.contextualReference) {
+  const explicitReference = explicitlyNamesReference(
+    context.latestUtterance, value.search.contextualReference,
+  );
+  // Preferred IDs are optional retrieval hints supplied by the model. The
+  // minimal runtime state is the allowlist of records already verified for
+  // this tenant, assigned KB and published revision. Drop anything outside
+  // that allowlist instead of turning an otherwise valid SEARCH into an
+  // operational failure.
+  let preferredRecordIds = explicitReference ? [] : requestedPreferences
+    .filter((recordId) => knownRecordIds.has(recordId));
+  if (!explicitReference && !requestedPreferences.length && !preferredRecordIds.length
+    && value.search.contextualReference) {
     const comparisonIds = recordIds(state.comparisonRecordIds);
     preferredRecordIds = comparisonIds.length > 1
       ? comparisonIds

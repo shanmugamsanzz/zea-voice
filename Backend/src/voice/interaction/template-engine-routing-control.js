@@ -73,6 +73,7 @@ export function buildTemplateEngineRoutingPrompt({
     '- Resolve natural follow-up references from recentCompleteTurns and the latest utterance.',
     '- Treat lastReferencedRecordIds and comparisonRecordIds only as optional retrieval preferences, never as independent intent or factual evidence.',
     '- For SEARCH, create a self-contained query from the latest utterance and recentCompleteTurns; include requestedFact, contextualReference and only known preferredRecordIds.',
+    '- Use preferredRecordIds only when the latest utterance genuinely refers back to prior context. When the caller explicitly names a new entity, do not carry prior record IDs into that SEARCH.',
     '- Use contextual CLARIFY only when recentCompleteTurns contains at least two genuinely possible references, and name the candidates.',
     '- When activeWorkflowId matches an authorized Workflow summary, use TOOL with that tool name to submit caller-provided field values or explicit confirmation; preserve the Workflow during unrelated side questions.',
     '- Encode TOOL arguments as one JSON-object string in tool.arguments exactly as required by the provider schema. The runtime parses and validates it against the assigned UI tool schema.',

@@ -293,6 +293,7 @@ export async function routeTemplateEngineUtterance(input = {}, dependencies = {}
   }
   const contextualDecision = normalizeTemplateEngineSearchDecision(
     validated.value, orchestratorInput.state,
+    { latestUtterance: orchestratorInput.latestUtterance },
   );
   if (!contextualDecision.valid) {
     throw new AppError(502, 'The template-engine Orchestrator returned an invalid search decision',

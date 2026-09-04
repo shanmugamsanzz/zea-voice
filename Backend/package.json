@@ -211,6 +211,7 @@
     "verify:template-engine-orchestrator": "node scripts/verify-template-engine-orchestrator.js",
     "verify:template-engine-minimal-state": "node scripts/verify-template-engine-minimal-state.js",
     "verify:template-engine-contextual-search": "node scripts/verify-template-engine-contextual-search.js",
+    "verify:template-engine-context-transitions": "node scripts/verify-template-engine-contextual-search.js && node scripts/verify-template-engine-conversation-guidance.js && node scripts/verify-template-engine-production-runtime.js",
     "verify:template-engine-conversation-guidance": "node scripts/verify-template-engine-conversation-guidance.js",
     "verify:template-engine-follow-up": "node scripts/verify-template-engine-follow-up.js",
     "verify:template-engine-multilingual-e2e": "node scripts/verify-template-engine-multilingual-e2e.js",

@@ -84,6 +84,17 @@ const exactRecord = {
   usage_direction: 'both', content: 'Configured Alpha approved details.',
   entity_metadata: { itemKey: 'configured-alpha', categoryKey: 'configured-group' },
 };
+const sttVariantRecord = {
+  record_id: 'record-stt-variant', record_type: 'catalog_item',
+  entity_name: 'Configured Beta', entity_category: 'Configured Group',
+  publicationSttForms: ['Betacopy'], publicationPhoneticForms: ['Beta copy'],
+  usage_direction: 'both', content: 'Configured Beta approved details.',
+  entity_metadata: { itemKey: 'configured-beta', categoryKey: 'configured-group' },
+};
+const foreignSttVariantRecord = {
+  ...sttVariantRecord, record_id: 'foreign-record-stt-variant',
+  entity_name: 'Foreign Beta', content: 'Foreign tenant content.',
+};
 const exactArtifacts = {
   publications: [publication], sparseIndexes: [],
   bundles: [{
@@ -128,6 +139,47 @@ assert.equal(exactStructuredRecords.length, 1,
 assert.equal(exactStructuredRecords[0].recordId, 'record-exact');
 assert.equal(exactStructuredRecords[0].matchMethod, 'published_exact');
 assert.equal(exactRetrieval.evidence[0].recordId, 'record-exact');
+
+let sttSelectedIds = [];
+const sttVariantRetrieval = await retrieveTemplateEngineEvidence({
+  auth: { tenantId }, scope, callId: 'call-stt-variant', usageDirection: 'inbound',
+  language: 'en', searchDecision: {
+    ...searchDecision,
+    search: {
+      query: 'Explain Betacopy', requestedFact: 'details',
+      contextualReference: 'Betacopy', preferredRecordIds: ['stale-record'],
+    },
+  }, state: {},
+}, {
+  loadArtifacts: async () => ({
+    publications: [publication], sparseIndexes: [],
+    bundles: [
+      { ...exactArtifacts.bundles[0], records: [exactRecord, sttVariantRecord] },
+      {
+        tenantId: '99999999-9999-4999-8999-999999999999', knowledgeBaseId,
+        publicationRevision: 4, assignedAgentIds: [agentId], records: [foreignSttVariantRecord],
+      },
+    ],
+  }),
+  searchCandidates: async () => ({ channels: { structured: [], bm25: [], qdrant: [] } }),
+  hydrateEvidence: async ({ retrieval: selected }) => {
+    sttSelectedIds = selected.candidates.map((entry) => entry.recordId);
+    assert.deepEqual(sttSelectedIds, ['record-stt-variant']);
+    const selectedRecord = selected.candidates[0];
+    return { evidence: [{
+      ...selectedRecord, id: 'evidence-stt-variant', hydrationValidated: true,
+      publicationValidated: true, callerFacing: true,
+      content: sttVariantRecord.content,
+      authoritativeData: { name: sttVariantRecord.entity_name, detail: 'approved' },
+      provenance: { knowledgeBaseId, publicationRevision: 4 },
+    }] };
+  },
+});
+assert.deepEqual(sttSelectedIds, ['record-stt-variant']);
+assert.equal(sttVariantRetrieval.evidence[0].recordId, 'record-stt-variant');
+assert.equal(sttVariantRetrieval.evidence.some((entry) => (
+  entry.tenantId !== tenantId || entry.recordId === 'foreign-record-stt-variant'
+)), false, 'STT variants must never admit cross-tenant evidence');
 
 const guidanceRecord = {
   record_id: 'guidance-overview', record_type: 'conversation_node',

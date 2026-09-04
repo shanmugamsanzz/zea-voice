@@ -104,6 +104,33 @@ const evidenceSelected = selectApplicableConversationGuidance({
 });
 assert.equal(evidenceSelected.recordId, 'guidance-overview');
 
+const namedEntityMustNotReuseOverview = selectApplicableConversationGuidance({
+  publishedConversationGuidance: [overviewGuidance], scope,
+  latestUtterance: 'Explain Beta Option', finalDecision: 'SEARCH',
+  searchInterpretation: {
+    query: 'Beta Option details', requestedFact: 'details', contextualReference: 'Beta Option',
+  },
+  evidence: [
+    { recordType: 'CONVERSATION_NODE', recordId: 'guidance-overview' },
+    { recordType: 'CATALOG_ITEM', recordId: 'beta-record', canonicalName: 'Beta Option' },
+  ],
+  currentIntent: 'DETAILS', conversationStage: 'SEARCH details', language: 'en',
+});
+assert.equal(namedEntityMustNotReuseOverview, null,
+  'A named entity request must not reuse overview guidance even when it was retrieved');
+
+const namedEntitySelectsDetails = selectApplicableConversationGuidance({
+  publishedConversationGuidance: [overviewGuidance, detailGuidance], scope,
+  latestUtterance: 'Explain Beta Option', finalDecision: 'SEARCH',
+  searchInterpretation: {
+    query: 'Beta Option details', requestedFact: 'details', contextualReference: 'Beta Option',
+  },
+  evidence: [{ recordType: 'CATALOG_ITEM', recordId: 'beta-record', canonicalName: 'Beta Option' }],
+  currentIntent: 'DETAILS', conversationStage: 'SEARCH details', language: 'en',
+});
+assert.equal(namedEntitySelectsDetails.recordId, 'guidance-detail',
+  'A named entity request must select compatible details guidance');
+
 // Production publication bundles expose compact records with `metadata` and
 // generated caller-language aliases. Selection must preserve and use those
 // published signals instead of depending on a test-only `entity_metadata` shape.

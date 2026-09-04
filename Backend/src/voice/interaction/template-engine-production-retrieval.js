@@ -138,6 +138,9 @@ function exactPublishedCandidates(artifacts, input, search, limit = 20, guidance
         record.entity_name, metadata.itemKey, metadata.item_key,
         ...(record.entity_aliases ?? []),
         ...(metadata.crossDocumentAliases ?? []),
+        ...(record.publicationAliases ?? []),
+        ...(record.publicationSttForms ?? []),
+        ...(record.publicationPhoneticForms ?? []),
       ]);
       const categoryForms = textList([
         record.entity_category, metadata.categoryKey, metadata.category_key,
