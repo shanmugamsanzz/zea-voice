@@ -177,9 +177,65 @@ const sttVariantRetrieval = await retrieveTemplateEngineEvidence({
 });
 assert.deepEqual(sttSelectedIds, ['record-stt-variant']);
 assert.equal(sttVariantRetrieval.evidence[0].recordId, 'record-stt-variant');
+assert.equal(sttVariantRetrieval.evidence[0].verified, true);
 assert.equal(sttVariantRetrieval.evidence.some((entry) => (
   entry.tenantId !== tenantId || entry.recordId === 'foreign-record-stt-variant'
 )), false, 'STT variants must never admit cross-tenant evidence');
+
+let phoneticSelectedIds = [];
+const phoneticVariantRetrieval = await retrieveTemplateEngineEvidence({
+  auth: { tenantId }, scope, callId: 'call-phonetic-variant', usageDirection: 'inbound',
+  language: 'en', searchDecision: {
+    ...searchDecision,
+    search: {
+      query: 'Explain Beta copy', requestedFact: 'details',
+      contextualReference: 'Beta copy', preferredRecordIds: [],
+    },
+  }, state: {},
+}, {
+  loadArtifacts: async () => ({
+    publications: [publication], sparseIndexes: [],
+    bundles: [{ ...exactArtifacts.bundles[0], records: [exactRecord, sttVariantRecord] }],
+  }),
+  searchCandidates: async () => ({ channels: { structured: [], bm25: [], qdrant: [] } }),
+  hydrateEvidence: async ({ retrieval: selected }) => {
+    phoneticSelectedIds = selected.candidates.map((entry) => entry.recordId);
+    const selectedRecord = selected.candidates[0];
+    return { evidence: [{
+      ...selectedRecord, id: 'evidence-phonetic-variant', hydrationValidated: true,
+      publicationValidated: true, callerFacing: true, content: sttVariantRecord.content,
+      authoritativeData: { name: sttVariantRecord.entity_name, detail: 'approved' },
+      provenance: { knowledgeBaseId, publicationRevision: 4 },
+    }] };
+  },
+});
+assert.deepEqual(phoneticSelectedIds, ['record-stt-variant']);
+assert.equal(phoneticVariantRetrieval.evidence[0].verified, true);
+
+let unpublishedAliasCandidates = null;
+const unpublishedAliasRetrieval = await retrieveTemplateEngineEvidence({
+  auth: { tenantId }, scope, callId: 'call-unpublished-alias', usageDirection: 'inbound',
+  language: 'en', searchDecision: {
+    ...searchDecision,
+    search: {
+      query: 'Explain Betacopi', requestedFact: 'details',
+      contextualReference: 'Betacopi', preferredRecordIds: [],
+    },
+  }, state: {},
+}, {
+  loadArtifacts: async () => ({
+    publications: [publication], sparseIndexes: [],
+    bundles: [{ ...exactArtifacts.bundles[0], records: [exactRecord, sttVariantRecord] }],
+  }),
+  searchCandidates: async () => ({ channels: { structured: [], bm25: [], qdrant: [] } }),
+  hydrateEvidence: async ({ retrieval: selected }) => {
+    unpublishedAliasCandidates = selected.candidates;
+    return { evidence: [], fusion: { candidates: selected.candidates } };
+  },
+});
+assert.deepEqual(unpublishedAliasCandidates, [],
+  'An unpublished lookalike must not become an exact alias match');
+assert.deepEqual(unpublishedAliasRetrieval.evidence, []);
 
 const guidanceRecord = {
   record_id: 'guidance-overview', record_type: 'conversation_node',

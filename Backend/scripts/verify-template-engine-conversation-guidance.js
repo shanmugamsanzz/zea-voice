@@ -49,6 +49,18 @@ const overviewGuidance = publishedRecord({
   nextQuestion: 'Which option would you like to explore?',
   intentClass: 'OVERVIEW', nodeKey: 'available_options_overview',
 });
+const priceGuidance = publishedRecord({
+  recordId: 'guidance-price', purpose: 'Answer the requested value only.',
+  situation: 'The caller asks for the price of one selected offering.',
+  examples: ['What is its price?'], nextQuestion: null,
+  intentClass: 'DETAILS_OR_PRICE', nodeKey: 'selected_option_price',
+});
+const comparisonGuidance = publishedRecord({
+  recordId: 'guidance-comparison', purpose: 'Compare the caller-selected offerings.',
+  situation: 'The caller asks for differences between selected offerings.',
+  examples: ['Compare these options'], nextQuestion: 'Would you like another detail?',
+  intentClass: 'COMPARISON_COMPLEX', nodeKey: 'option_comparison',
+});
 const crossTenant = Object.freeze({
   ...overviewGuidance,
   recordId: 'cross-tenant-guidance',
@@ -130,6 +142,36 @@ const namedEntitySelectsDetails = selectApplicableConversationGuidance({
 });
 assert.equal(namedEntitySelectsDetails.recordId, 'guidance-detail',
   'A named entity request must select compatible details guidance');
+
+for (const scenario of [
+  {
+    requestedFact: 'price', utterance: 'What is the price of Beta Option?',
+    query: 'Beta Option price', expected: 'guidance-price',
+  },
+  {
+    requestedFact: 'differences', utterance: 'Compare Alpha Option and Beta Option',
+    query: 'Alpha Option Beta Option comparison', expected: 'guidance-comparison',
+  },
+  {
+    requestedFact: 'details', utterance: 'Explain Beta Option in detail',
+    query: 'Beta Option details', expected: 'guidance-detail',
+  },
+]) {
+  const compatible = selectApplicableConversationGuidance({
+    publishedConversationGuidance: [overviewGuidance, detailGuidance, priceGuidance,
+      comparisonGuidance],
+    scope, latestUtterance: scenario.utterance, finalDecision: 'SEARCH',
+    searchInterpretation: {
+      query: scenario.query, requestedFact: scenario.requestedFact,
+      contextualReference: 'Beta Option',
+    },
+    evidence: [{ recordType: 'CATALOG_ITEM', canonicalName: 'Beta Option' }],
+    currentIntent: scenario.requestedFact,
+    conversationStage: `SEARCH ${scenario.requestedFact}`, language: 'en',
+  });
+  assert.equal(compatible.recordId, scenario.expected);
+  assert.equal(compatible.selectionReasons.includes('requested_fact_kind_compatible'), true);
+}
 
 // Production publication bundles expose compact records with `metadata` and
 // generated caller-language aliases. Selection must preserve and use those

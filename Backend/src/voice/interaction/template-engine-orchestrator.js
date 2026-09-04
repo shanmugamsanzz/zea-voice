@@ -525,6 +525,9 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     throw new TypeError('The post-search Orchestrator requires a valid SEARCH interpretation');
   }
   const evidence = verifiedEvidenceForPostSearch(input.verifiedEvidence, input.scope);
+  const requestedFactAvailable = evidenceProvidesRequestedFact(
+    evidence, search.value.search.requestedFact,
+  );
   const citations = aliasPostSearchEvidence(evidence);
   const allowedEvidenceIds = citations.aliases;
   const responseSchema = templateEnginePostSearchJsonSchemaForEvidenceAliases(
@@ -549,6 +552,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     }),
     'Runtime grounding rules: authoritativeData, content, and publishedAttributePaths contain the only published facts available for each record.',
     'Answer the requestedFact only when it is explicitly supported by those supplied facts.',
+    'A RESPONSE must directly answer searchInterpretation.requestedFact before adding any other supported information. A true answer about a different attribute is incomplete.',
     'An absent attribute means the published evidence does not provide that information. Absence never proves a negative value, non-existence, non-requirement, non-availability, or zero.',
     'For NO_MATCH, describe only that the requested information is not present in the supplied published evidence; do not assert that the underlying real-world attribute is false.',
     'CLARIFY speech may identify supplied ambiguity candidates but must not introduce any unsupported factual claim.',
@@ -597,6 +601,9 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       repairingCitation
         ? 'This is a citation-only repair. Keep decision RESPONSE and cite only the allowed evidenceIds that support the response; do not change it to NO_MATCH.'
         : null,
+      requestedFactAvailable
+        ? 'Verified evidence contains the requested fact. The corrected decision must be RESPONSE, must directly answer it, and must cite the exact supporting allowed aliases. Do not return CLARIFY or NO_MATCH.'
+        : null,
       'Do not add facts, citations, or candidates that were not supplied.',
     ].filter(Boolean).join(' ');
     completion = await invokeStructuredLlm(request([
@@ -611,11 +618,18 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
         reason: 'citation_repair_changed_decision',
       });
     }
+    if (requestedFactAvailable && validated.valid
+      && validated.value.decision !== 'RESPONSE') {
+      validated = Object.freeze({
+        valid: false,
+        reason: 'grounded_repair_requires_response',
+      });
+    }
   }
   let finalDiagnostics = templateEnginePostSearchDecisionDiagnostics(output);
   if (!validated.valid) {
     const unavailableResponse = cleanText(input.informationUnavailableResponse, 4_000);
-    if (unavailableResponse) {
+    if (!requestedFactAvailable && unavailableResponse) {
       validated = validateTemplateEnginePostSearchDecision({
         decision: 'NO_MATCH', response: unavailableResponse,
         clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
@@ -702,9 +716,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       ambiguity: clarificationAmbiguity,
       requiredEvidenceRecordIds: base.state.comparisonRecordIds.length > 1
         ? base.state.comparisonRecordIds : [],
-      requestedFactAvailable: !configuredFallbackApplied && evidenceProvidesRequestedFact(
-        evidence, search.value.search.requestedFact,
-      ),
+      requestedFactAvailable: !configuredFallbackApplied && requestedFactAvailable,
     },
   ));
   if (!outputValidation.valid && !firstInvalidReason) {
@@ -718,9 +730,12 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       'Cite every evidence alias used for an entity, number, attribute or relationship.',
       'Generate any applicable nextQuestion in the same corrected response; do not add unsupported facts.',
       'Remove unsupported claims. If the supplied evidence cannot answer the request, return NO_MATCH with natural unavailable-information speech.',
+      requestedFactAvailable
+        ? 'The verified evidence does answer the requested fact. Return RESPONSE and cite its exact supporting aliases; NO_MATCH is forbidden for this repair.'
+        : null,
       `Allowed evidenceIds for this turn: ${allowedEvidenceIds.join(', ') || 'none'}.`,
       'Do not invent facts, identifiers or citations.',
-    ].join(' ');
+    ].filter(Boolean).join(' ');
     completion = await invokeStructuredLlm(request([
       ...baseMessages,
       Object.freeze({ role: 'user', content: groundingRepairInstruction }),
@@ -747,9 +762,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
           ambiguity: clarificationAmbiguity,
           requiredEvidenceRecordIds: base.state.comparisonRecordIds.length > 1
             ? base.state.comparisonRecordIds : [],
-          requestedFactAvailable: evidenceProvidesRequestedFact(
-            evidence, search.value.search.requestedFact,
-          ),
+          requestedFactAvailable,
           retryCount: 1,
         },
       ));
@@ -761,7 +774,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
   }
   if (!outputValidation.valid) {
     const unavailableResponse = cleanText(input.informationUnavailableResponse, 4_000);
-    if (unavailableResponse) {
+    if (!requestedFactAvailable && unavailableResponse) {
       const noMatch = validateTemplateEnginePostSearchDecision({
         decision: 'NO_MATCH', response: unavailableResponse,
         clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,

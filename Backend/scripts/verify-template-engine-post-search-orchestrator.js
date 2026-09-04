@@ -37,6 +37,7 @@ const verifiedEvidence = Object.freeze([
     knowledgeBaseId: 'kb-a', publicationRevision: 2,
     canonicalName: 'First Service', aliases: Object.freeze(['First']),
     content: 'The selected service currently costs 3200 currency units.',
+    publishedAttributePaths: Object.freeze(['price']),
   }),
 ]);
 
@@ -143,6 +144,7 @@ assert.equal(relevantAnswer.decision.response,
 assert.deepEqual(relevanceFacts, ['included feature', 'included feature']);
 assert.equal(relevanceDiagnostics.initialValidationReason, 'requested_fact_not_addressed');
 assert.equal(relevanceDiagnostics.repairAttempted, true);
+assert.equal(relevanceDiagnostics.finalDecision, 'RESPONSE');
 
 const secondEvidence = Object.freeze({
   ...verifiedEvidence[0],
@@ -274,16 +276,15 @@ assert.deepEqual(repaired.decision.evidenceIds, ['evidence-1']);
 
 let groundedRepairCalls = 0;
 let groundedValidationCalls = 0;
-const groundedNoMatch = await respondToTemplateEngineSearch({
+const groundedRecovery = await respondToTemplateEngineSearch({
   mainPrompt, latestUtterance, state, searchDecision, verifiedEvidence, scope,
 }, {
   tenantBoundaryVerified: true,
   validateGroundedClaims: async (input) => {
     groundedValidationCalls += 1;
-    return input.decision === 'NO_MATCH'
-      ? { supported: true, requestedFactAddressed: true, reason: null }
-      : { supported: false, requestedFactAddressed: false,
-        reason: 'attribute_not_supported' };
+    return groundedValidationCalls === 1
+      ? { supported: false, requestedFactAddressed: false, reason: 'attribute_not_supported' }
+      : { supported: true, requestedFactAddressed: true, reason: null };
   },
   invokeStructuredLlm: async () => {
     groundedRepairCalls += 1;
@@ -291,16 +292,16 @@ const groundedNoMatch = await respondToTemplateEngineSearch({
       decision: 'RESPONSE', response: 'The service includes an unpublished attribute.',
       clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
     } } : { outputParsed: {
-      decision: 'NO_MATCH', response: 'That detail is not available in the published information.',
-      clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
+      decision: 'RESPONSE', response: 'The current price is 3200 currency units.',
+      clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
     } };
   },
 });
 assert.equal(groundedRepairCalls, 2,
   'An unsupported grounded response must receive exactly one repair attempt');
 assert.equal(groundedValidationCalls, 2,
-  'Both factual RESPONSE and NO_MATCH recovery speech must be grounded');
-assert.equal(groundedNoMatch.decision.decision, 'NO_MATCH');
+  'Both the original and repaired factual responses must be grounded');
+assert.equal(groundedRecovery.decision.decision, 'RESPONSE');
 
 let negativeNoMatchCalls = 0;
 const safeMissingAttribute = await respondToTemplateEngineSearch({
@@ -404,7 +405,7 @@ assert.deepEqual(resolvedContext.decision.evidenceIds, ['evidence-1']);
 
 let fallbackCalls = 0;
 let fallbackDiagnostics;
-const malformedFallback = await respondToTemplateEngineSearch({
+await assert.rejects(() => respondToTemplateEngineSearch({
   mainPrompt, latestUtterance, state, searchDecision, verifiedEvidence, scope,
   informationUnavailableResponse: 'That information is not available right now.',
 }, {
@@ -419,18 +420,15 @@ const malformedFallback = await respondToTemplateEngineSearch({
     };
   },
   onDecisionRepair: (details) => { fallbackDiagnostics = details; },
-});
+}), (error) => error.code === 'TEMPLATE_ENGINE_POST_SEARCH_DECISION_INVALID');
 assert.equal(fallbackCalls, 2);
-assert.equal(fallbackDiagnostics.recovered, true);
-assert.equal(fallbackDiagnostics.configuredFallbackApplied, true);
+assert.equal(fallbackDiagnostics.recovered, false);
+assert.equal(fallbackDiagnostics.configuredFallbackApplied, false);
 assert.equal(fallbackDiagnostics.first.responsePresent, true);
 assert.equal(fallbackDiagnostics.first.evidenceIdCount, 0);
-assert.equal(malformedFallback.decision.decision, 'NO_MATCH');
-assert.equal(malformedFallback.decision.response,
-  'That information is not available right now.');
 
 let changedDecisionCalls = 0;
-const citationFallback = await respondToTemplateEngineSearch({
+await assert.rejects(() => respondToTemplateEngineSearch({
   mainPrompt, latestUtterance, state, searchDecision, verifiedEvidence, scope,
   informationUnavailableResponse: 'That information is not available right now.',
 }, {
@@ -445,11 +443,35 @@ const citationFallback = await respondToTemplateEngineSearch({
       clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
     } };
   },
-});
+}), (error) => error.code === 'TEMPLATE_ENGINE_POST_SEARCH_DECISION_INVALID'
+  && error.details?.reason === 'citation_repair_changed_decision');
 assert.equal(changedDecisionCalls, 2);
-assert.equal(citationFallback.decision.decision, 'NO_MATCH');
-assert.equal(citationFallback.decision.response,
-  'That information is not available right now.');
+
+let malformedRepairCalls = 0;
+let malformedRepairDiagnostics;
+const malformedRepair = await respondToTemplateEngineSearch({
+  mainPrompt, latestUtterance, state, searchDecision, verifiedEvidence, scope,
+  informationUnavailableResponse: 'That information is not available right now.',
+}, {
+  tenantBoundaryVerified: true,
+  validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
+  invokeStructuredLlm: async () => {
+    malformedRepairCalls += 1;
+    return malformedRepairCalls === 1 ? { outputParsed: {
+      decision: 'RESPONSE', response: 'A supported answer.', clarification: null,
+      evidenceIds: [], nextQuestion: null, stateUpdate: null,
+    } } : { outputParsed: {
+      decision: 'RESPONSE', response: 'The selected service costs 3200 currency units.',
+      clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
+    } };
+  },
+  onDecisionRepair: (details) => { malformedRepairDiagnostics = details; },
+});
+assert.equal(malformedRepairCalls, 2);
+assert.equal(malformedRepair.decision.decision, 'RESPONSE');
+assert.deepEqual(malformedRepair.decision.evidenceIds, ['evidence-1']);
+assert.equal(malformedRepairDiagnostics.recovered, true);
+assert.equal(malformedRepairDiagnostics.configuredFallbackApplied, false);
 
 const emptyEvidenceFallback = await respondToTemplateEngineSearch({
   mainPrompt, latestUtterance, state, searchDecision, verifiedEvidence: [], scope,

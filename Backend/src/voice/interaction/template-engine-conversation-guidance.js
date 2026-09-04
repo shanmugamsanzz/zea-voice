@@ -186,6 +186,40 @@ function overviewGuidance(candidate) {
   return tokens(structuralSignals).has('overview');
 }
 
+const guidanceKinds = Object.freeze({
+  comparison: Object.freeze(['comparison', 'compare', 'difference', 'differences']),
+  price: Object.freeze(['price', 'cost', 'fee', 'amount']),
+  details: Object.freeze([
+    'detail', 'details', 'explain', 'explanation', 'attribute', 'attributes',
+    'feature', 'features', 'include', 'included', 'contents',
+  ]),
+});
+
+function semanticKind(value) {
+  const values = tokens(identifierText(value));
+  for (const [kind, signals] of Object.entries(guidanceKinds)) {
+    if (signals.some((signal) => values.has(signal))) return kind;
+  }
+  return null;
+}
+
+function requestedGuidanceKind(latestUtterance, searchInterpretation) {
+  return semanticKind([
+    searchInterpretation?.requestedFact,
+    searchInterpretation?.query,
+    latestUtterance,
+  ].filter(Boolean).join(' '));
+}
+
+function candidateGuidanceKind(candidate) {
+  // Published structural fields take precedence over prose because purpose
+  // text can legitimately mention several later stages in one instruction.
+  return semanticKind([
+    candidate.nodeKey, candidate.context, candidate.intentClass,
+  ].filter(Boolean).join(' ')) ?? semanticKind([candidate.purpose, candidate.situation]
+    .filter(Boolean).join(' '));
+}
+
 function explicitEntityRequest(latestUtterance, searchInterpretation) {
   const reference = cleanText(searchInterpretation?.contextualReference, 500);
   return Boolean(reference) && tokenCoverage(reference, latestUtterance) >= 0.67;
@@ -221,12 +255,15 @@ export function selectApplicableConversationGuidance({
   const evidenceText = evidenceSearchText(evidence);
   const evidenceIdentities = evidenceIdentityText(evidence);
   const namedEntityRequest = explicitEntityRequest(latestUtterance, searchInterpretation);
+  const requestedKind = requestedGuidanceKind(latestUtterance, searchInterpretation);
   const normalizedRequest = normalized(requestText);
   const evidenceRecordIds = new Set((Array.isArray(evidence) ? evidence : [])
     .filter((entry) => entry?.recordType === 'CONVERSATION_NODE')
     .map((entry) => cleanText(entry.recordId ?? entry.id, 200)).filter(Boolean));
   const compatibleCandidates = candidates.filter((candidate) => {
     if (namedEntityRequest && overviewGuidance(candidate)) return false;
+    const candidateKind = candidateGuidanceKind(candidate);
+    if (requestedKind && candidateKind && requestedKind !== candidateKind) return false;
     if (!namedEntityRequest || !candidate.catalogReferences.length || !evidenceIdentities) {
       return true;
     }
@@ -270,6 +307,8 @@ export function selectApplicableConversationGuidance({
     if (evidenceCompatibility > 0) reasons.push('evidence_compatible');
     if (contextCompatibility > 0) reasons.push('recent_turn_compatible');
     if (languageMatch) reasons.push('language_compatible');
+    const kindMatch = requestedKind && candidateGuidanceKind(candidate) === requestedKind;
+    if (kindMatch) reasons.push('requested_fact_kind_compatible');
     const score = (evidenceRecordMatch ? 40 : 0)
       + (exampleMatch ? 20 : 0)
       + exampleCompatibility * 18
@@ -279,6 +318,7 @@ export function selectApplicableConversationGuidance({
       + requestCompatibility * 12
       + evidenceCompatibility * 12
       + contextCompatibility * 3
+      + (kindMatch ? 45 : 0)
       + (languageMatch ? 2 : 0);
     return { candidate, score, reasons };
   }).sort((left, right) => right.score - left.score
