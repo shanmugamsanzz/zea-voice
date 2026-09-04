@@ -11,6 +11,13 @@ function appendWithOverlap(left, right) {
   const lowerIncoming = incoming.toLocaleLowerCase();
   if (lowerIncoming.startsWith(lowerExisting)) return incoming;
   if (lowerExisting.endsWith(lowerIncoming)) return existing;
+  const maximumOverlap = Math.min(existing.length, incoming.length);
+  for (let length = maximumOverlap; length > 0; length -= 1) {
+    if (existing.slice(-length).toLocaleLowerCase()
+      === incoming.slice(0, length).toLocaleLowerCase()) {
+      return `${existing}${incoming.slice(length)}`.trim();
+    }
+  }
   return `${existing} ${incoming}`.trim();
 }
 

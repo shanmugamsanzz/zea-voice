@@ -15,6 +15,7 @@ const scope = { tenantId, agentId, publications: [publication] };
 
 function publishedRecord({
   recordId, purpose, situation, examples, nextQuestion, intentClass = null, nodeKey = null,
+  catalogReferences = [],
 }) {
   return normalizePublishedConversationGuidance({
     record_id: recordId,
@@ -27,6 +28,7 @@ function publishedRecord({
         { key: 'purpose', value: purpose },
         { key: 'situation', value: situation },
         { key: 'examples', value: examples },
+        { key: 'catalogReferences', value: catalogReferences },
         { key: 'nextQuestion', value: nextQuestion },
       ],
     },
@@ -60,6 +62,20 @@ const comparisonGuidance = publishedRecord({
   situation: 'The caller asks for differences between selected offerings.',
   examples: ['Compare these options'], nextQuestion: 'Would you like another detail?',
   intentClass: 'COMPARISON_COMPLEX', nodeKey: 'option_comparison',
+});
+const categoryGuidance = publishedRecord({
+  recordId: 'guidance-category', purpose: 'Explain the selected configured group.',
+  situation: 'The caller selects one configured group.',
+  examples: ['Explain this configured group'], nextQuestion: 'Which member should follow?',
+  intentClass: 'DETAILS', nodeKey: 'selected_category_details',
+  catalogReferences: ['Configured Group => category:configured-group'],
+});
+const itemOnlyGuidance = publishedRecord({
+  recordId: 'guidance-item-only', purpose: 'Explain one selected configured member.',
+  situation: 'The caller selects one configured member.',
+  examples: ['Explain this configured group'], nextQuestion: 'What should follow?',
+  intentClass: 'DETAILS', nodeKey: 'selected_item_details',
+  catalogReferences: ['Configured Member => item:configured-member'],
 });
 const crossTenant = Object.freeze({
   ...overviewGuidance,
@@ -142,6 +158,23 @@ const namedEntitySelectsDetails = selectApplicableConversationGuidance({
 });
 assert.equal(namedEntitySelectsDetails.recordId, 'guidance-detail',
   'A named entity request must select compatible details guidance');
+
+const namedCategorySelectsCategoryGuidance = selectApplicableConversationGuidance({
+  publishedConversationGuidance: [itemOnlyGuidance, categoryGuidance], scope,
+  latestUtterance: 'Explain Configured Group', finalDecision: 'SEARCH',
+  searchInterpretation: {
+    query: 'Configured Group details', requestedFact: 'details',
+    contextualReference: 'Configured Group',
+  },
+  evidence: [{
+    recordType: 'CATALOG_CATEGORY', recordId: 'configured-group-record',
+    canonicalName: 'Configured Group', authoritativeData: { categoryKey: 'configured-group' },
+  }],
+  currentIntent: 'DETAILS', conversationStage: 'SEARCH details', language: 'en',
+});
+assert.equal(namedCategorySelectsCategoryGuidance.recordId, 'guidance-category');
+assert.equal(namedCategorySelectsCategoryGuidance.selectionReasons
+  .includes('requested_entity_kind_compatible'), true);
 
 for (const scenario of [
   {

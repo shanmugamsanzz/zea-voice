@@ -473,6 +473,62 @@ assert.deepEqual(malformedRepair.decision.evidenceIds, ['evidence-1']);
 assert.equal(malformedRepairDiagnostics.recovered, true);
 assert.equal(malformedRepairDiagnostics.configuredFallbackApplied, false);
 
+for (const [tenantId, languageText] of [
+  ['tenant-a', 'விவரங்களை சொல்லுங்கள்'],
+  ['tenant-a', 'details sollunga'],
+  ['tenant-b', 'Please provide the details'],
+]) {
+  const scopedEvidenceId = `evidence-${tenantId}`;
+  const scopedRecordId = `record-${tenantId}`;
+  const scopedScope = Object.freeze({
+    tenantId, agentId: `agent-${tenantId}`,
+    publications: Object.freeze([Object.freeze({
+      knowledgeBaseId: `kb-${tenantId}`, publicationRevision: 1,
+    })]),
+  });
+  const scopedState = Object.freeze({
+    ...state, lastReferencedRecordIds: Object.freeze([scopedRecordId]),
+  });
+  const scopedSearch = Object.freeze({
+    ...searchDecision,
+    search: Object.freeze({
+      query: languageText, requestedFact: 'details',
+      contextualReference: 'Configured Service', preferredRecordIds: [scopedRecordId],
+    }),
+  });
+  const scopedEvidence = Object.freeze([Object.freeze({
+    verified: true, callerFacing: true, evidenceId: scopedEvidenceId,
+    recordId: scopedRecordId, recordType: 'CATALOG_ITEM', tenantId,
+    agentId: scopedScope.agentId, knowledgeBaseId: `kb-${tenantId}`,
+    publicationRevision: 1, canonicalName: 'Configured Service',
+    content: 'Configured Service has the published detail Delta.',
+    publishedAttributePaths: Object.freeze(['details']),
+  })]);
+  let attempts = 0;
+  const recovered = await respondToTemplateEngineSearch({
+    mainPrompt, latestUtterance: languageText, state: scopedState,
+    searchDecision: scopedSearch, verifiedEvidence: scopedEvidence, scope: scopedScope,
+    informationUnavailableResponse: 'Published information is unavailable.',
+  }, {
+    tenantBoundaryVerified: true,
+    validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
+    invokeStructuredLlm: async () => {
+      attempts += 1;
+      return { outputParsed: attempts === 1 ? {
+        decision: 'RESPONSE', response: 'Incomplete citation payload.',
+        clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
+      } : {
+        decision: 'RESPONSE', response: 'The published detail is Delta.',
+        clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
+      } };
+    },
+  });
+  assert.equal(attempts, 2);
+  assert.equal(recovered.decision.decision, 'RESPONSE',
+    'Answerable malformed output must recover to RESPONSE, never NO_MATCH');
+  assert.deepEqual(recovered.decision.evidenceIds, [scopedEvidenceId]);
+}
+
 const emptyEvidenceFallback = await respondToTemplateEngineSearch({
   mainPrompt, latestUtterance, state, searchDecision, verifiedEvidence: [], scope,
   informationUnavailableResponse: 'That information is not available right now.',

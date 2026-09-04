@@ -220,6 +220,29 @@ function candidateGuidanceKind(candidate) {
     .filter(Boolean).join(' '));
 }
 
+function evidenceTargetKind(evidence) {
+  const catalog = (Array.isArray(evidence) ? evidence : []).filter((entry) => (
+    ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(String(entry?.recordType ?? '').toUpperCase())
+  ));
+  if (!catalog.length) return null;
+  const types = new Set(catalog.map((entry) => String(entry.recordType).toUpperCase()));
+  if (types.size !== 1) return null;
+  return types.has('CATALOG_CATEGORY') ? 'category' : 'item';
+}
+
+function candidateTargetKind(candidate) {
+  const references = candidate.catalogReferences.map(normalized);
+  const category = references.some((reference) => /(?:^|=>\s*)category\s*:/u.test(reference));
+  const item = references.some((reference) => /(?:^|=>\s*)item\s*:/u.test(reference));
+  if (category !== item) return category ? 'category' : 'item';
+  const structural = tokens(identifierText([
+    candidate.nodeKey, candidate.context, candidate.intentClass,
+  ].filter(Boolean).join(' ')));
+  if (structural.has('category') && !structural.has('item')) return 'category';
+  if (structural.has('item') && !structural.has('category')) return 'item';
+  return null;
+}
+
 function explicitEntityRequest(latestUtterance, searchInterpretation) {
   const reference = cleanText(searchInterpretation?.contextualReference, 500);
   return Boolean(reference) && tokenCoverage(reference, latestUtterance) >= 0.67;
@@ -256,6 +279,7 @@ export function selectApplicableConversationGuidance({
   const evidenceIdentities = evidenceIdentityText(evidence);
   const namedEntityRequest = explicitEntityRequest(latestUtterance, searchInterpretation);
   const requestedKind = requestedGuidanceKind(latestUtterance, searchInterpretation);
+  const requestedTarget = evidenceTargetKind(evidence);
   const normalizedRequest = normalized(requestText);
   const evidenceRecordIds = new Set((Array.isArray(evidence) ? evidence : [])
     .filter((entry) => entry?.recordType === 'CONVERSATION_NODE')
@@ -264,6 +288,8 @@ export function selectApplicableConversationGuidance({
     if (namedEntityRequest && overviewGuidance(candidate)) return false;
     const candidateKind = candidateGuidanceKind(candidate);
     if (requestedKind && candidateKind && requestedKind !== candidateKind) return false;
+    const candidateTarget = candidateTargetKind(candidate);
+    if (requestedTarget && candidateTarget && requestedTarget !== candidateTarget) return false;
     if (!namedEntityRequest || !candidate.catalogReferences.length || !evidenceIdentities) {
       return true;
     }
@@ -309,6 +335,8 @@ export function selectApplicableConversationGuidance({
     if (languageMatch) reasons.push('language_compatible');
     const kindMatch = requestedKind && candidateGuidanceKind(candidate) === requestedKind;
     if (kindMatch) reasons.push('requested_fact_kind_compatible');
+    const targetMatch = requestedTarget && candidateTargetKind(candidate) === requestedTarget;
+    if (targetMatch) reasons.push('requested_entity_kind_compatible');
     const score = (evidenceRecordMatch ? 40 : 0)
       + (exampleMatch ? 20 : 0)
       + exampleCompatibility * 18
@@ -319,6 +347,7 @@ export function selectApplicableConversationGuidance({
       + evidenceCompatibility * 12
       + contextCompatibility * 3
       + (kindMatch ? 45 : 0)
+      + (targetMatch ? 35 : 0)
       + (languageMatch ? 2 : 0);
     return { candidate, score, reasons };
   }).sort((left, right) => right.score - left.score

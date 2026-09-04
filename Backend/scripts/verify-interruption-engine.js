@@ -113,8 +113,12 @@ const merger = new ShortTurnMerger({ windowMs: 1200, now: () => mergeNow });
 merger.defer('silver package');
 mergeNow = 700;
 assert.equal(merger.combine('price sollunga'), 'silver package price sollunga');
+merger.defer('configured ser');
+mergeNow = 900;
+assert.equal(merger.combine('service details'), 'configured service details',
+  'Overlapping provider-finalized fragments must assemble without duplicated text');
 merger.defer('old fragment');
-mergeNow = 2000;
+mergeNow = 2200;
 assert.equal(merger.combine('new question'), 'new question');
 
 console.log(JSON.stringify({

@@ -93,8 +93,14 @@ function publishedRecordCandidate(record, bundle, input, overrides = {}) {
     canonicalName: cleanText(overrides.canonicalName
       ?? record.entity_name ?? record.entity_category ?? record.question
       ?? metadata.name ?? metadata.category, 300) || null,
-    itemKey: cleanText(metadata.itemKey ?? metadata.item_key, 160) || null,
-    categoryKey: cleanText(metadata.categoryKey ?? metadata.category_key, 160) || null,
+    itemKey: cleanText(
+      overrides.itemKey ?? record.itemKey ?? record.item_key
+      ?? metadata.itemKey ?? metadata.item_key, 160,
+    ) || null,
+    categoryKey: cleanText(
+      overrides.categoryKey ?? record.categoryKey ?? record.category_key
+      ?? metadata.categoryKey ?? metadata.category_key, 160,
+    ) || null,
     searchForms: Object.freeze(textList(overrides.searchForms ?? [
       record.entity_name, record.entity_category, record.question,
       ...(record.publicationAliases ?? record.entity_aliases ?? []),
@@ -119,7 +125,7 @@ function publishedReferenceSelectors(values = []) {
   });
 }
 
-function exactPublishedCandidates(artifacts, input, search, limit = 20, guidance = null) {
+export function exactPublishedCandidates(artifacts, input, search, limit = 20, guidance = null) {
   const candidates = [];
   const categoryMatches = new Map();
   const guidanceRecordId = normalized(guidance?.recordId);
@@ -135,7 +141,8 @@ function exactPublishedCandidates(artifacts, input, search, limit = 20, guidance
         .toLocaleLowerCase();
       if (!['both', cleanText(input.usageDirection, 20).toLocaleLowerCase()].includes(usage)) continue;
       const itemForms = textList([
-        record.entity_name, metadata.itemKey, metadata.item_key,
+        record.entity_name, record.itemKey, record.item_key,
+        metadata.itemKey, metadata.item_key,
         ...(record.entity_aliases ?? []),
         ...(metadata.crossDocumentAliases ?? []),
         ...(record.publicationAliases ?? []),
@@ -143,9 +150,12 @@ function exactPublishedCandidates(artifacts, input, search, limit = 20, guidance
         ...(record.publicationPhoneticForms ?? []),
       ]);
       const categoryForms = textList([
-        record.entity_category, metadata.categoryKey, metadata.category_key,
+        record.entity_category, record.categoryKey, record.category_key,
+        metadata.categoryKey, metadata.category_key,
         ...(record.entity_category_aliases ?? []),
         ...(metadata.categoryAliases ?? []),
+        ...(metadata.categorySttForms ?? []),
+        ...(metadata.categoryPhoneticForms ?? []),
         ...(metadata.crossDocumentCategoryAliases ?? []),
       ]);
       const routeForms = textList([
@@ -183,14 +193,18 @@ function exactPublishedCandidates(artifacts, input, search, limit = 20, guidance
       ));
       const categoryScore = categoryReference ? 0.99
         : publishedFormScore(search.query, categoryForms);
-      const categoryKey = cleanText(metadata.categoryKey ?? metadata.category_key, 160);
-      if (!categoryScore || !categoryKey) continue;
+      const categoryKey = cleanText(
+        record.categoryKey ?? record.category_key
+        ?? metadata.categoryKey ?? metadata.category_key, 160,
+      );
+      const anchorRecordId = cleanText(record.record_id ?? record.recordId ?? record.id, 160);
+      if (!categoryScore || !categoryKey || !anchorRecordId) continue;
       const key = `${normalized(bundle.knowledgeBaseId)}:${bundle.publicationRevision}:${normalized(categoryKey)}`;
       const aggregate = categoryMatches.get(key) ?? {
-        bundle, record, score: categoryScore, recordIds: [], categoryForms,
+        bundle, record, categoryKey, score: categoryScore, recordIds: [], categoryForms,
       };
       aggregate.score = Math.max(aggregate.score, categoryScore);
-      aggregate.recordIds.push(cleanText(record.record_id ?? record.recordId ?? record.id, 160));
+      aggregate.recordIds.push(anchorRecordId);
       categoryMatches.set(key, aggregate);
     }
   }
@@ -199,9 +213,13 @@ function exactPublishedCandidates(artifacts, input, search, limit = 20, guidance
     const candidate = publishedRecordCandidate(aggregate.record, aggregate.bundle, input, {
       recordType: 'CATALOG_CATEGORY',
       canonicalName: aggregate.record.entity_category ?? metadata.category,
+      categoryKey: aggregate.categoryKey,
       score: aggregate.score,
       searchForms: aggregate.categoryForms,
-      matchMethod: 'published_category_exact',
+      matchMethod: referenceSelectors.some((reference) => (
+        reference.type === 'category'
+        && reference.key === normalized(aggregate.categoryKey)
+      )) ? 'published_reference_exact' : 'published_category_exact',
       evidenceRecordIds: aggregate.recordIds.filter(Boolean),
     });
     if (candidate) candidates.push(candidate);
@@ -238,6 +256,85 @@ function classification(input, search) {
     retrievalPlan: Object.freeze({ indexes, parallelChannels: Object.freeze([
       'structured', 'bm25', 'qdrant',
     ]) }),
+  });
+}
+
+function candidateIdentityKey(candidate, tenantId) {
+  return canonicalRecordIdentityKey(candidate, { tenantId });
+}
+
+export function constrainHybridToRequestedEntities(hybrid, tenantId) {
+  const candidates = Array.isArray(hybrid?.candidates) ? hybrid.candidates : [];
+  const existing = Array.isArray(hybrid?.queryContext?.reservedRecords)
+    ? hybrid.queryContext.reservedRecords : [];
+  const comparison = existing.filter((entry) => [
+    'explicit_comparison', 'contextual_comparison',
+  ].includes(String(entry?.reason ?? '').toLocaleLowerCase()));
+  let requested = comparison;
+  if (!requested.length) {
+    const exactCatalog = candidates.filter((candidate) => (
+      ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(String(candidate?.recordType ?? '').toUpperCase())
+      && ['published_exact', 'published_category_exact'].includes(candidate?.matchMethod)
+    ));
+    const exactItems = exactCatalog.filter((candidate) => candidate.recordType === 'CATALOG_ITEM');
+    requested = (exactItems.length ? exactItems : exactCatalog).map((candidate) => Object.freeze({
+      tenantId: candidate.tenantId,
+      agentId: candidate.agentId,
+      knowledgeBaseId: candidate.knowledgeBaseId,
+      publicationRevision: candidate.publicationRevision,
+      recordId: candidate.recordId,
+      recordType: candidate.recordType,
+      categoryKey: candidate.categoryKey ?? null,
+      reason: 'explicit_entity',
+    }));
+  }
+  const requestedByIdentity = new Map(requested.map((entry) => (
+    [candidateIdentityKey(entry, tenantId), entry]
+  )).filter(([key]) => Boolean(key)));
+  if (!requestedByIdentity.size) return Object.freeze({
+    hybrid, constrained: false, comparison: false,
+    requestedIdentities: Object.freeze([]),
+  });
+  const requestedIdentities = new Set(requestedByIdentity.keys());
+  const constrainedCandidates = candidates.filter((candidate) => requestedIdentities.has(
+    candidateIdentityKey(candidate, tenantId),
+  ));
+  const selectedIdentities = new Set(constrainedCandidates.map((candidate) => (
+    candidateIdentityKey(candidate, tenantId)
+  )).filter(Boolean));
+  const missing = [...requestedIdentities].filter((key) => !selectedIdentities.has(key));
+  if (missing.length) {
+    throw new AppError(503, 'Requested published entities were not retained by retrieval',
+      'TEMPLATE_ENGINE_REQUESTED_ENTITY_COVERAGE_INCOMPLETE', {
+        requestedCount: requestedIdentities.size,
+        retainedCount: selectedIdentities.size,
+      });
+  }
+  const constrainedChannels = Object.freeze(Object.fromEntries(
+    Object.entries(hybrid.channels ?? {}).map(([channel, values]) => [
+      channel,
+      Object.freeze((values ?? []).filter((candidate) => requestedIdentities.has(
+        candidateIdentityKey(candidate, tenantId),
+      ))),
+    ]),
+  ));
+  const reservations = Object.freeze([...requestedByIdentity.values()].map((entry) => (
+    Object.freeze({ ...entry })
+  )));
+  return Object.freeze({
+    constrained: true,
+    comparison: reservations.length > 1 && reservations.every((entry) => [
+      'explicit_comparison', 'contextual_comparison',
+    ].includes(String(entry.reason).toLocaleLowerCase())),
+    requestedIdentities: Object.freeze([...requestedIdentities]),
+    hybrid: Object.freeze({
+      ...hybrid,
+      channels: constrainedChannels,
+      candidates: Object.freeze(constrainedCandidates),
+      queryContext: Object.freeze({
+        ...(hybrid.queryContext ?? {}), reservedRecords: reservations,
+      }),
+    }),
   });
 }
 
@@ -449,7 +546,7 @@ export async function retrieveTemplateEngineEvidence({
     })();
     return channelPromise;
   };
-  const hybrid = await runTemplateEngineHybridRetrieval({
+  const rawHybrid = await runTemplateEngineHybridRetrieval({
     decision: searchDecision,
     state,
     scope: { ...scope, publications: artifacts.publications },
@@ -460,6 +557,8 @@ export async function retrieveTemplateEngineEvidence({
     searchBm25: async () => (await searchChannels()).channels.bm25,
     searchQdrantE5: async () => (await searchChannels()).channels.qdrant,
   });
+  const entityConstraint = constrainHybridToRequestedEntities(rawHybrid, input.tenantId);
+  const hybrid = entityConstraint.hybrid;
   const retrieval = Object.freeze({
     ...hybrid,
     tenantId: input.tenantId,
@@ -485,8 +584,22 @@ export async function retrieveTemplateEngineEvidence({
     ? authoritative.evidence : [];
   const selectedCandidates = Array.isArray(authoritative?.fusion?.candidates)
     ? authoritative.fusion.candidates : retrieval.candidates;
+  const requestedIdentities = new Set(entityConstraint.requestedIdentities);
+  const entityMatchedEvidence = entityConstraint.constrained
+    ? hydratedEvidence.filter((source) => requestedIdentities.has(
+      candidateIdentityKey(source, input.tenantId),
+    )) : hydratedEvidence;
+  if (entityConstraint.constrained
+    && entityMatchedEvidence.length !== requestedIdentities.size) {
+    throw new AppError(503, 'Requested published entities were not completely hydrated',
+      'TEMPLATE_ENGINE_REQUESTED_ENTITY_HYDRATION_INCOMPLETE', {
+        requestedCount: requestedIdentities.size,
+        hydratedCount: entityMatchedEvidence.length,
+        comparison: entityConstraint.comparison,
+      });
+  }
   const evidence = verifyTemplateEngineEvidence(
-    hydratedEvidence.map((source) => evidenceRecord(source, search.requestedFact)).slice(0, 5),
+    entityMatchedEvidence.map((source) => evidenceRecord(source, search.requestedFact)).slice(0, 5),
     selectedCandidates,
     { ...scope, publications: artifacts.publications },
   );

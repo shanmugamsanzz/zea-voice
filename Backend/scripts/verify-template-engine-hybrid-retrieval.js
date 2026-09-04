@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fuseCandidateRankings } from '../src/knowledge-engine/authoritative-evidence.js';
 import { runTemplateEngineHybridRetrieval } from '../src/voice/interaction/template-engine-hybrid-retrieval.js';
+import {
+  constrainHybridToRequestedEntities,
+  exactPublishedCandidates,
+} from '../src/voice/interaction/template-engine-production-retrieval.js';
 
 const decision = Object.freeze({
   decision: 'SEARCH', response: '', clarification: null,
@@ -20,6 +24,126 @@ const scope = Object.freeze({
     Object.freeze({ knowledgeBaseId: 'kb-a', publicationRevision: 3 }),
   ]),
 });
+
+const publishedArtifacts = Object.freeze({ bundles: Object.freeze([
+  Object.freeze({
+    tenantId: 'tenant-a', knowledgeBaseId: 'kb-a', publicationRevision: 3,
+    records: Object.freeze([
+      Object.freeze({
+        record_id: 'published-alpha', record_type: 'catalog_item',
+        entity_name: 'Alpha Service', entity_category: 'Configured Group',
+        entity_aliases: Object.freeze(['Alpha Alias']),
+        publicationSttForms: Object.freeze(['Alfa Service']),
+        entity_metadata: Object.freeze({
+          itemKey: 'alpha-service', categoryKey: 'configured-group',
+          categoryAliases: Object.freeze(['Group Alias']),
+          categorySttForms: Object.freeze(['Spoken Group']),
+        }),
+      }),
+      Object.freeze({
+        record_id: 'published-beta', record_type: 'catalog_item',
+        entity_name: 'Beta Service', entity_category: 'Configured Group',
+        entity_metadata: Object.freeze({
+          itemKey: 'beta-service', categoryKey: 'configured-group',
+          categoryAliases: Object.freeze(['Group Alias']),
+          categorySttForms: Object.freeze(['Spoken Group']),
+        }),
+      }),
+    ]),
+  }),
+  Object.freeze({
+    tenantId: 'tenant-b', knowledgeBaseId: 'kb-b', publicationRevision: 9,
+    records: Object.freeze([Object.freeze({
+      record_id: 'foreign-alpha', record_type: 'catalog_item',
+      entity_name: 'Alpha Service', entity_category: 'Configured Group',
+      entity_metadata: Object.freeze({ itemKey: 'alpha-service', categoryKey: 'configured-group' }),
+    })]),
+  }),
+]) });
+const exactInput = Object.freeze({
+  tenantId: 'tenant-a', agentId: 'agent-a', usageDirection: 'inbound',
+});
+const canonicalMatch = exactPublishedCandidates(publishedArtifacts, exactInput, {
+  query: 'Explain Alpha Service',
+});
+assert.deepEqual(canonicalMatch.filter((entry) => entry.recordType === 'CATALOG_ITEM')
+  .map((entry) => entry.recordId), ['published-alpha']);
+assert.equal(canonicalMatch[0].itemKey, 'alpha-service');
+
+const aliasMatch = exactPublishedCandidates(publishedArtifacts, exactInput, {
+  query: 'Alpha Alias details',
+});
+assert.equal(aliasMatch[0].recordId, 'published-alpha');
+const sttMatch = exactPublishedCandidates(publishedArtifacts, exactInput, {
+  query: 'Alfa Service details',
+});
+assert.equal(sttMatch[0].recordId, 'published-alpha');
+
+const categoryMatch = exactPublishedCandidates(publishedArtifacts, exactInput, {
+  query: 'Spoken Group details',
+});
+const categoryProjection = categoryMatch.find((entry) => entry.recordType === 'CATALOG_CATEGORY');
+assert.ok(categoryProjection, 'A tenant-published category STT form must resolve');
+assert.equal(categoryProjection.categoryKey, 'configured-group');
+assert.ok(['published-alpha', 'published-beta'].includes(categoryProjection.recordId),
+  'A synthetic category must be anchored by a real published record');
+assert.deepEqual([...categoryProjection.evidenceRecordIds].sort(),
+  ['published-alpha', 'published-beta']);
+assert.equal(categoryMatch.some((entry) => entry.recordId === 'foreign-alpha'), false,
+  'Exact resolution must not admit another tenant record');
+
+const scopedCandidate = (recordId, recordType, matchMethod) => Object.freeze({
+  tenantId: 'tenant-a', agentId: 'agent-a', knowledgeBaseId: 'kb-a',
+  publicationRevision: 3, recordId, recordType, matchMethod,
+});
+const entityConstrained = constrainHybridToRequestedEntities({
+  candidates: Object.freeze([
+    scopedCandidate('published-alpha', 'CATALOG_ITEM', 'published_exact'),
+    scopedCandidate('unrelated', 'CATALOG_ITEM', 'semantic'),
+  ]),
+  channels: Object.freeze({
+    structured: Object.freeze([
+      scopedCandidate('published-alpha', 'CATALOG_ITEM', 'published_exact'),
+      scopedCandidate('unrelated', 'CATALOG_ITEM', 'semantic'),
+    ]),
+    bm25: Object.freeze([scopedCandidate('unrelated', 'CATALOG_ITEM', 'semantic')]),
+    qdrant: Object.freeze([scopedCandidate('unrelated', 'CATALOG_ITEM', 'semantic')]),
+  }),
+  queryContext: Object.freeze({ reservedRecords: Object.freeze([]) }),
+}, 'tenant-a');
+assert.equal(entityConstrained.constrained, true);
+assert.deepEqual(entityConstrained.hybrid.candidates.map((entry) => entry.recordId),
+  ['published-alpha']);
+assert.ok(Object.values(entityConstrained.hybrid.channels).flat().every((entry) => (
+  entry.recordId === 'published-alpha'
+)), 'Unrelated records must be removed before authoritative hydration');
+assert.equal(entityConstrained.hybrid.queryContext.reservedRecords[0].reason,
+  'explicit_entity');
+
+const comparisonReservations = Object.freeze([
+  Object.freeze({ ...scopedCandidate('published-alpha', 'CATALOG_ITEM'),
+    reason: 'explicit_comparison' }),
+  Object.freeze({ ...scopedCandidate('published-beta', 'CATALOG_ITEM'),
+    reason: 'explicit_comparison' }),
+]);
+const comparisonConstrained = constrainHybridToRequestedEntities({
+  candidates: Object.freeze([
+    scopedCandidate('published-alpha', 'CATALOG_ITEM', 'published_exact'),
+    scopedCandidate('published-beta', 'CATALOG_ITEM', 'published_exact'),
+    scopedCandidate('unrelated', 'CATALOG_ITEM', 'semantic'),
+  ]),
+  channels: Object.freeze({ structured: Object.freeze([
+    scopedCandidate('published-alpha', 'CATALOG_ITEM', 'published_exact'),
+    scopedCandidate('published-beta', 'CATALOG_ITEM', 'published_exact'),
+    scopedCandidate('unrelated', 'CATALOG_ITEM', 'semantic'),
+  ]) }),
+  queryContext: Object.freeze({ reservedRecords: comparisonReservations }),
+}, 'tenant-a');
+assert.equal(comparisonConstrained.comparison, true);
+assert.deepEqual(comparisonConstrained.hybrid.candidates.map((entry) => entry.recordId),
+  ['published-alpha', 'published-beta']);
+assert.deepEqual(comparisonConstrained.hybrid.queryContext.reservedRecords
+  .map((entry) => entry.recordId), ['published-alpha', 'published-beta']);
 function candidate(recordId, score = 0.8) {
   return {
     tenantId: 'tenant-a', agentId: 'agent-a', knowledgeBaseId: 'kb-a',
