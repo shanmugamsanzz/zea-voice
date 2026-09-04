@@ -612,7 +612,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     }
   }
   let finalDiagnostics = templateEnginePostSearchDecisionDiagnostics(output);
-  if (!validated.valid && evidence.length === 0) {
+  if (!validated.valid) {
     const unavailableResponse = cleanText(input.informationUnavailableResponse, 4_000);
     if (unavailableResponse) {
       validated = validateTemplateEnginePostSearchDecision({
@@ -620,6 +620,9 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
         clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
       }, allowedEvidenceIds);
       configuredFallbackApplied = validated.valid;
+      if (validated.valid) {
+        finalDiagnostics = templateEnginePostSearchDecisionDiagnostics(validated.value);
+      }
     }
   }
   if (firstInvalidReason && typeof dependencies.onDecisionRepair === 'function') {
@@ -657,6 +660,14 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
   );
   let semanticClaimValidation = dependencies.semanticClaimValidation ?? null;
   const validateClaims = async (decision) => {
+    if (configuredFallbackApplied && decision.decision === 'NO_MATCH') {
+      return Object.freeze({
+        supported: true,
+        successClaimed: false,
+        requestedFactAddressed: true,
+        reason: 'configured_validation_recovery',
+      });
+    }
     if (typeof dependencies.validateGroundedClaims !== 'function') {
       return dependencies.semanticClaimValidation ?? null;
     }
@@ -690,7 +701,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       ambiguity: clarificationAmbiguity,
       requiredEvidenceRecordIds: base.state.comparisonRecordIds.length > 1
         ? base.state.comparisonRecordIds : [],
-      requestedFactAvailable: evidenceProvidesRequestedFact(
+      requestedFactAvailable: !configuredFallbackApplied && evidenceProvidesRequestedFact(
         evidence, search.value.search.requestedFact,
       ),
     },
@@ -755,6 +766,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
         clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
       }, allowedEvidenceIds);
       if (noMatch.valid) {
+        configuredFallbackApplied = true;
         groundedDecision = restorePostSearchEvidenceIds(
           noMatch.value, citations.aliasToEvidenceId,
         );
@@ -767,9 +779,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
             searchInterpretation: search.value.search,
             requiredEvidenceRecordIds: base.state.comparisonRecordIds.length > 1
               ? base.state.comparisonRecordIds : [],
-            requestedFactAvailable: evidenceProvidesRequestedFact(
-              evidence, search.value.search.requestedFact,
-            ),
+            requestedFactAvailable: false,
             ambiguity: verifiedClarificationAmbiguity(
               groundedDecision, evidence, search.value.search, dependencies.ambiguity,
             ),

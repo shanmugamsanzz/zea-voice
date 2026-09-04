@@ -129,6 +129,63 @@ assert.equal(exactStructuredRecords[0].recordId, 'record-exact');
 assert.equal(exactStructuredRecords[0].matchMethod, 'published_exact');
 assert.equal(exactRetrieval.evidence[0].recordId, 'record-exact');
 
+const guidanceRecord = {
+  record_id: 'guidance-overview', record_type: 'conversation_node',
+  content: 'Approved overview of Configured Group.', usage_direction: 'both',
+  entity_metadata: {
+    nodeKey: 'configured_overview', nodeType: 'message',
+    purpose: 'Provide the configured overview.',
+    catalogReferences: ['Configured Group => category:configured-group'],
+  },
+};
+const guidanceArtifacts = {
+  ...exactArtifacts,
+  bundles: [{ ...exactArtifacts.bundles[0], records: [guidanceRecord, exactRecord] }],
+};
+let guidanceSelectedIds = [];
+const guidanceRetrieval = await retrieveTemplateEngineEvidence({
+  auth: { tenantId }, scope, callId: 'call-guidance', usageDirection: 'inbound',
+  language: 'en', searchDecision: {
+    ...searchDecision,
+    search: {
+      query: 'Show the configured overview', requestedFact: 'available options',
+      contextualReference: null, preferredRecordIds: [],
+    },
+  }, state: {}, conversationGuidance: {
+    recordId: 'guidance-overview', knowledgeBaseId, publicationRevision: 4,
+    catalogReferences: ['Configured Group => category:configured-group'],
+    nextQuestion: 'Which configured option would you like?',
+  },
+}, {
+  loadArtifacts: async () => guidanceArtifacts,
+  searchCandidates: async () => ({
+    channels: { structured: [], bm25: [], qdrant: [] },
+  }),
+  hydrateEvidence: async ({ retrieval: selected }) => {
+    guidanceSelectedIds = selected.candidates.map((entry) => entry.recordId);
+    assert.equal(guidanceSelectedIds.includes('guidance-overview'), true);
+    assert.equal(guidanceSelectedIds.includes('record-exact'), true);
+    const selectedGuidance = selected.candidates.find((entry) => (
+      entry.recordId === 'guidance-overview'
+    ));
+    return { evidence: [{
+      ...selectedGuidance, id: 'evidence-guidance', hydrationValidated: true,
+      publicationValidated: true, callerFacing: true,
+      content: guidanceRecord.content,
+      authoritativeData: guidanceRecord.entity_metadata,
+      provenance: {
+        knowledgeBaseId, publicationRevision: 4, documentId: 'guidance-document',
+        uploadedFilename: 'tenant-conversation.txt',
+        documentDisplayName: 'Tenant Conversation Guidance', sourceSection: 'Overview',
+      },
+    }] };
+  },
+});
+assert.equal(guidanceRetrieval.evidence[0].recordId, 'guidance-overview');
+assert.equal(guidanceRetrieval.evidence[0].documentId, 'guidance-document');
+assert.equal(guidanceRetrieval.evidence[0].documentDisplayName,
+  'Tenant Conversation Guidance');
+
 await assert.rejects(() => retrieveTemplateEngineEvidence({
   auth: { tenantId }, scope, callId: 'call-empty', usageDirection: 'inbound',
   language: 'en', searchDecision, state: {},

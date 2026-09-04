@@ -109,9 +109,21 @@ function publishedRecordCandidate(record, bundle, input, overrides = {}) {
   });
 }
 
-function exactPublishedCandidates(artifacts, input, search, limit = 20) {
+function publishedReferenceSelectors(values = []) {
+  return textList(values, 100).flatMap((value) => value.split(/\s*\|\s*/u)).flatMap((value) => {
+    const [label, reference = ''] = value.split(/\s*=>\s*/u, 2);
+    const separator = reference.indexOf(':');
+    const type = separator >= 0 ? normalized(reference.slice(0, separator)) : null;
+    const key = separator >= 0 ? normalized(reference.slice(separator + 1)) : normalized(reference);
+    return key ? [Object.freeze({ label: normalized(label), type, key })] : [];
+  });
+}
+
+function exactPublishedCandidates(artifacts, input, search, limit = 20, guidance = null) {
   const candidates = [];
   const categoryMatches = new Map();
+  const guidanceRecordId = normalized(guidance?.recordId);
+  const referenceSelectors = publishedReferenceSelectors(guidance?.catalogReferences);
   for (const bundle of artifacts.bundles ?? []) {
     if (normalized(bundle?.tenantId) !== normalized(input.tenantId)) continue;
     for (const record of bundle.records ?? []) {
@@ -134,21 +146,40 @@ function exactPublishedCandidates(artifacts, input, search, limit = 20) {
         ...(metadata.crossDocumentCategoryAliases ?? []),
       ]);
       const routeForms = textList([
-        record.question, record.entity_name,
+        record.question, record.entity_name, record.content,
+        metadata.nodeKey, metadata.purpose, metadata.situation,
         ...(record.publicationAliases ?? record.entity_aliases ?? []),
         ...(record.publicationSttForms ?? []),
         ...(record.publicationPhoneticForms ?? []),
       ]);
       const directForms = recordType === 'CATALOG_ITEM' ? itemForms : routeForms;
       const directScore = publishedFormScore(search.query, directForms);
-      if (directScore > 0) {
+      const recordId = normalized(record.record_id ?? record.recordId ?? record.id);
+      const exactGuidance = guidanceRecordId && recordId === guidanceRecordId;
+      const itemReference = referenceSelectors.some((reference) => (
+        reference.type === 'item' && (
+          reference.key === normalized(metadata.itemKey ?? metadata.item_key)
+          || reference.label === normalized(record.entity_name)
+        )
+      ));
+      if (directScore > 0 || exactGuidance || itemReference) {
         const candidate = publishedRecordCandidate(record, bundle, input, {
-          score: directScore, searchForms: directForms,
+          score: exactGuidance ? 1 : itemReference ? 0.99 : directScore,
+          searchForms: directForms,
+          matchMethod: exactGuidance ? 'published_guidance_exact'
+            : itemReference ? 'published_reference_exact' : 'published_exact',
         });
         if (candidate) candidates.push(candidate);
       }
       if (recordType !== 'CATALOG_ITEM') continue;
-      const categoryScore = publishedFormScore(search.query, categoryForms);
+      const categoryReference = referenceSelectors.some((reference) => (
+        reference.type === 'category' && (
+          reference.key === normalized(metadata.categoryKey ?? metadata.category_key)
+          || reference.label === normalized(record.entity_category)
+        )
+      ));
+      const categoryScore = categoryReference ? 0.99
+        : publishedFormScore(search.query, categoryForms);
       const categoryKey = cleanText(metadata.categoryKey ?? metadata.category_key, 160);
       if (!categoryScore || !categoryKey) continue;
       const key = `${normalized(bundle.knowledgeBaseId)}:${bundle.publicationRevision}:${normalized(categoryKey)}`;
@@ -370,7 +401,7 @@ export async function loadTemplateEnginePublishedContext({
 
 export async function retrieveTemplateEngineEvidence({
   auth, scope, callId, usageDirection, language, searchDecision, state = {}, runtimeProfile,
-  preloadedArtifacts = null,
+  preloadedArtifacts = null, conversationGuidance = null,
 } = {}, dependencies = {}) {
   const startedAt = performance.now();
   const search = searchDecision?.search;
@@ -408,7 +439,9 @@ export async function retrieveTemplateEngineEvidence({
         limitPerChannel: 20,
       }, dependencies.retrieval);
       return addExactStructuredCandidates(
-        result, exactPublishedCandidates(artifacts, input, search, 20), 20,
+        result, exactPublishedCandidates(
+          artifacts, input, search, 20, conversationGuidance,
+        ), 20,
       );
     })();
     return channelPromise;

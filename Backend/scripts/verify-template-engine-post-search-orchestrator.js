@@ -404,7 +404,7 @@ assert.deepEqual(resolvedContext.decision.evidenceIds, ['evidence-1']);
 
 let fallbackCalls = 0;
 let fallbackDiagnostics;
-await assert.rejects(() => respondToTemplateEngineSearch({
+const malformedFallback = await respondToTemplateEngineSearch({
   mainPrompt, latestUtterance, state, searchDecision, verifiedEvidence, scope,
   informationUnavailableResponse: 'That information is not available right now.',
 }, {
@@ -419,16 +419,18 @@ await assert.rejects(() => respondToTemplateEngineSearch({
     };
   },
   onDecisionRepair: (details) => { fallbackDiagnostics = details; },
-}), (error) => error.code === 'TEMPLATE_ENGINE_POST_SEARCH_DECISION_INVALID'
-  && error.details?.reason === 'mixed_decision_payload');
+});
 assert.equal(fallbackCalls, 2);
-assert.equal(fallbackDiagnostics.recovered, false);
-assert.equal(fallbackDiagnostics.configuredFallbackApplied, false);
+assert.equal(fallbackDiagnostics.recovered, true);
+assert.equal(fallbackDiagnostics.configuredFallbackApplied, true);
 assert.equal(fallbackDiagnostics.first.responsePresent, true);
 assert.equal(fallbackDiagnostics.first.evidenceIdCount, 0);
+assert.equal(malformedFallback.decision.decision, 'NO_MATCH');
+assert.equal(malformedFallback.decision.response,
+  'That information is not available right now.');
 
 let changedDecisionCalls = 0;
-await assert.rejects(() => respondToTemplateEngineSearch({
+const citationFallback = await respondToTemplateEngineSearch({
   mainPrompt, latestUtterance, state, searchDecision, verifiedEvidence, scope,
   informationUnavailableResponse: 'That information is not available right now.',
 }, {
@@ -443,9 +445,11 @@ await assert.rejects(() => respondToTemplateEngineSearch({
       clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
     } };
   },
-}), (error) => error.code === 'TEMPLATE_ENGINE_POST_SEARCH_DECISION_INVALID'
-  && error.details?.reason === 'citation_repair_changed_decision');
+});
 assert.equal(changedDecisionCalls, 2);
+assert.equal(citationFallback.decision.decision, 'NO_MATCH');
+assert.equal(citationFallback.decision.response,
+  'That information is not available right now.');
 
 const emptyEvidenceFallback = await respondToTemplateEngineSearch({
   mainPrompt, latestUtterance, state, searchDecision, verifiedEvidence: [], scope,

@@ -153,6 +153,8 @@ export async function validateTemplateEngineClaims({
       role: 'system',
       content: [
         'Validate caller-facing speech against only the supplied reference JSON.',
+        'Non-factual conversational speech such as a greeting, acknowledgement, courtesy response, pause handling or presence check may be supported without published evidence.',
+        'Any tenant or business fact, including identities, available options, names, descriptions, policies, numbers, attributes or relationships, is unsupported when no published evidence is supplied.',
         'Treat the complete published evidence array as one permitted grounding set.',
         'A comparison may combine separately supported attributes from multiple cited records.',
         'supported is true only when every entity, number, attribute, polarity and relationship is directly entailed by the complete reference set.',

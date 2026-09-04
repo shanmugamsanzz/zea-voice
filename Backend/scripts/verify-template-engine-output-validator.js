@@ -65,6 +65,33 @@ assert.equal(result.valid, true);
 assert.equal(result.route, 'TTS');
 
 result = validateTemplateEngineOutput({
+  phase: 'post_search', decision: response('Service Alpha costs 3200 units.'),
+  factualClaimsPresent: true, selectedEvidence: evidence, publishedEntities: entities,
+  semanticClaimValidation: { supported: true, requestedFactAddressed: true },
+  searchInterpretation: { requestedFact: 'price' },
+});
+assert.equal(result.valid, false);
+assert.equal(result.reason, 'mixed_decision_payload');
+assert.equal(result.retrySearch, true);
+
+result = validateTemplateEngineOutput({
+  phase: 'post_search', decision: response('Service Beta costs 3200 units.', ['e-1']),
+  factualClaimsPresent: true, selectedEvidence: evidence,
+  publishedEntities: comparisonEntities,
+  semanticClaimValidation: { supported: true, requestedFactAddressed: true },
+});
+assert.equal(result.valid, false);
+assert.equal(result.reason, 'unsupported_entity_claim');
+
+result = validateTemplateEngineOutput({
+  phase: 'post_search', decision: response('Service Alpha has an unpublished attribute.', ['e-1']),
+  factualClaimsPresent: true, selectedEvidence: evidence, publishedEntities: entities,
+  semanticClaimValidation: { supported: false, requestedFactAddressed: false },
+});
+assert.equal(result.valid, false);
+assert.equal(result.reason, 'unsupported_factual_claim');
+
+result = validateTemplateEngineOutput({
   phase: 'post_search', decision: response('Service Alpha costs 3200 units.', ['e-1']),
   factualClaimsPresent: true, selectedEvidence: evidence, publishedEntities: entities,
   semanticClaimValidation: { supported: true, requestedFactAddressed: false },
@@ -100,6 +127,10 @@ const relevanceValidation = await validateTemplateEngineClaims({
 assert.equal(relevanceValidation.supported, true);
 assert.equal(relevanceValidation.requestedFactAddressed, false);
 assert.match(claimValidationRequest.messages[0].content, /included feature/u);
+assert.match(claimValidationRequest.messages[0].content,
+  /Non-factual conversational speech.+may be supported without published evidence/u);
+assert.match(claimValidationRequest.messages[0].content,
+  /tenant or business fact.+unsupported when no published evidence is supplied/u);
 
 const deterministicPrice = validateTemplateEngineSearchClaims({
   speech: 'Service Alpha costs 3200 units.', evidence,
@@ -307,7 +338,7 @@ result = validateTemplateEngineToolResultSpeech({
 assert.equal(result.reason, 'tool_result_unverified');
 
 let invalidGroundingCalls = 0;
-await assert.rejects(() => respondToTemplateEngineSearch({
+const invalidGroundingFallback = await respondToTemplateEngineSearch({
   mainPrompt: 'Use evidence for facts.', latestUtterance: 'What is the price?',
   state: {
     recentCompleteTurns: [], lastReferencedRecordIds: ['r-1'], comparisonRecordIds: [],
@@ -331,9 +362,11 @@ await assert.rejects(() => respondToTemplateEngineSearch({
     invalidGroundingCalls += 1;
     return { outputParsed: response('Service Alpha costs 9999 units.', ['E1']) };
   },
-}), (error) => error.code === 'TEMPLATE_ENGINE_OUTPUT_INVALID'
-  && error.details?.reason === 'no_match_rejected_when_requested_fact_is_available');
+});
 assert.equal(invalidGroundingCalls, 2);
+assert.equal(invalidGroundingFallback.decision.decision, 'NO_MATCH');
+assert.equal(invalidGroundingFallback.decision.response,
+  'That information is not available.');
 
 result = validateTemplateEngineOutput({
   phase: 'post_search', factualClaimsPresent: true, claimValidationRequired: true,

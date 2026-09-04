@@ -35,14 +35,15 @@ TYPE: message
 LANGUAGE: ta
 INTENT_CLASS: CATEGORY_OVERVIEW
 ENTRY: false
-PURPOSE: Use the single approved package overview after the caller responds to the configured welcome or identity question without ending the call, accepts the introduction offer, or asks for all, other or available package options.
-SITUATION: The caller gives a positive, neutral or non-cancelling negative response to the immediately preceding configured welcome, introduction or identity question without asking a different question; accepts the immediately preceding package-information offer; or asks for the complete package overview, all available options or other options. A wrong-person response, refusal, not-interested response, stop request, cancellation or clear call completion must not enter this stage.
+PURPOSE: Use the single approved package overview after the caller responds to the configured welcome or identity question without ending the call, accepts the introduction offer, or asks generally about packages, all packages, other packages or available package options.
+SITUATION: The caller gives a positive, neutral or non-cancelling negative response to the immediately preceding configured welcome, introduction or identity question without asking a different question; accepts the immediately preceding package-information offer; or asks generally for a package overview, available packages, all packages or other packages without naming or clearly referring to one particular package or category. A wrong-person response, refusal, not-interested response, stop request, cancellation or clear call completion must not enter this stage.
 EXAMPLES: ஆமாங்க | சரி சொல்லுங்க | package details சொல்லுங்க | உங்ககிட்ட என்ன packagesலாம் இருக்கு | வேற என்ன options இருக்கு | மொத்த overview சொல்லுங்க | yes please | yes, speaking | okay, explain the options | what packages are available | what other options do you have
 MATCH_MODE: semantic
 CONTEXT: no_selected_entity
+EXCLUDE: Never select this overview when the latest request names, selects or clearly refers to one particular package, item or category, including a contextual reference to the single previously selected package. Such a request belongs to category_selection, selected_package_explanation or selected_package_price according to the requested fact. A named package request must never be replaced with the complete package overview.
 CATALOG_REFERENCES: Master Health Checkup => category:master-health-checkup | Silver => item:silver-master-health-checkup | Gold => item:gold-master-health-checkup | Platinum => item:platinum-master-health-checkup | Diabetic Health Checkup => category:diabetes-health-checkup | Onco Care Packages => category:oncology-screening | Organ-Specific Packages => category:organ-specific-health-checkups | Kids Health Packages => category:pediatric-health-screening
-RESPONSE: எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Onco Care Packages, Organ-Specific Packages, Kids Health Packages இருக்குங்க. எது பத்தி தெரிஞ்சிக்கணும்?
-NEXT_QUESTION:
+RESPONSE: எங்ககிட்ட Master Health Checkupல Silver, Gold, Platinum இருக்கு. இதுக்கூடவே Diabetic Health Checkup, Onco Care Packages, Organ-Specific Packages, Kids health packages இருக்குங்க.
+NEXT_QUESTION: எது பத்தி தெரிஞ்சிக்கணும்?
 
 STAGE: call_purpose
 FLOW: main
@@ -105,7 +106,7 @@ LANGUAGE: ta
 INTENT_CLASS: CATEGORY_OVERVIEW
 ENTRY: false
 PURPOSE: Handle a request to hear about another package after an explanation.
-RESPONSE: If the caller names another package, explain it immediately. If no package is named, use the next question. Do not restart the introduction. Give the complete top-level overview only when the caller asks what other packages are available.
+RESPONSE: If the caller names or clearly selects another package, explain only that package immediately. If the caller asks generally what other packages are available without naming one, use the complete_package_overview response. If the caller merely accepts the offer to hear another package but has not selected one, use the next question. Do not restart the introduction and never use the complete overview for a named package request.
 NEXT_QUESTION: எந்த package details வேணும்?
 
 STAGE: required_related_item_selection

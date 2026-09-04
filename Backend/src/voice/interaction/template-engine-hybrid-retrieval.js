@@ -309,7 +309,8 @@ function fuseAndRank(channels, request) {
   ));
   const exactStructured = ranked.filter((candidate) => (
     candidate.channels.includes('structured')
-      && ['published_exact', 'published_category_exact'].includes(candidate.matchMethod)
+      && ['published_exact', 'published_category_exact', 'published_guidance_exact',
+        'published_reference_exact'].includes(candidate.matchMethod)
   ));
   const inferredComparisonIds = new Set(explicitlyRequested.length > 1
     ? explicitlyRequested.map((candidate) => candidate.recordId.toLocaleLowerCase()) : []);

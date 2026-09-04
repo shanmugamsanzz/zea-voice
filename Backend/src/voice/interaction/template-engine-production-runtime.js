@@ -412,6 +412,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       state,
       runtimeProfile: input.runtimeProfile,
       preloadedArtifacts: publishedContext.artifacts,
+      conversationGuidance: initialConversationGuidance,
       speculative: true,
     }).catch((error) => Object.freeze({ error }))
     : null;
@@ -511,6 +512,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     state,
     runtimeProfile: input.runtimeProfile,
     preloadedArtifacts: publishedContext.artifacts,
+    conversationGuidance: initialConversationGuidance,
   });
   if (typeof dependencies.onRetrievalDiagnostics === 'function') {
     dependencies.onRetrievalDiagnostics(Object.freeze({

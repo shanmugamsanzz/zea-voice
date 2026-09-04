@@ -2525,8 +2525,11 @@ export class RealtimeConversationOrchestrator {
         },
         validateGroundedClaims: ({
           response, decision, selectedEvidence, searchInterpretation, latestUtterance,
-        }) => (
-          decision === 'NO_MATCH' ? validateTemplateEngineClaims({
+        }) => {
+          const requiresSemanticDirectCheck = (decision === 'RESPONSE' || decision === 'CLARIFY')
+            && (!Array.isArray(selectedEvidence) || selectedEvidence.length === 0)
+            && !searchInterpretation;
+          return (decision === 'NO_MATCH' || requiresSemanticDirectCheck) ? validateTemplateEngineClaims({
             speech: response,
             evidence: selectedEvidence,
             decision,
@@ -2538,8 +2541,8 @@ export class RealtimeConversationOrchestrator {
             decision,
             searchInterpretation,
             latestUtterance,
-          })
-        ),
+          });
+        },
         validateToolResultSpeechClaims: ({ speech, verifiedResult }) => (
           validateTemplateEngineClaims({
             speech,

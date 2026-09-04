@@ -244,11 +244,18 @@ export function selectApplicableConversationGuidance({
   if (ranked[0].score <= 0) return null;
   return Object.freeze({
     recordId: ranked[0].candidate.recordId,
+    recordType: ranked[0].candidate.recordType,
+    tenantId: ranked[0].candidate.tenantId,
+    agentId: ranked[0].candidate.agentId,
+    knowledgeBaseId: ranked[0].candidate.knowledgeBaseId,
+    publicationRevision: ranked[0].candidate.publicationRevision,
+    content: ranked[0].candidate.content,
     purpose: ranked[0].candidate.purpose,
     nextQuestion: ranked[0].candidate.nextQuestion,
     intentClass: ranked[0].candidate.intentClass,
     nodeKey: ranked[0].candidate.nodeKey,
     flowKey: ranked[0].candidate.flowKey,
+    catalogReferences: ranked[0].candidate.catalogReferences,
     sequenceOrder: ranked[0].candidate.sequenceOrder,
     conversationStage: cleanText(conversationStage, 160) || null,
     selectionScore: Number(ranked[0].score.toFixed(4)),
@@ -264,6 +271,14 @@ export function sanitizeConversationGuidance(value) {
   if (!recordId || !purpose) return null;
   return Object.freeze({
     recordId, purpose, nextQuestion,
+    recordType: cleanText(value.recordType, 80) || null,
+    tenantId: cleanText(value.tenantId, 160) || null,
+    agentId: cleanText(value.agentId, 160) || null,
+    knowledgeBaseId: cleanText(value.knowledgeBaseId, 160) || null,
+    publicationRevision: Number.isInteger(Number(value.publicationRevision))
+      ? Number(value.publicationRevision) : null,
+    content: cleanText(value.content, 4_000) || null,
+    catalogReferences: Object.freeze(textList(value.catalogReferences, 100)),
     intentClass: cleanText(value.intentClass, 160) || null,
     nodeKey: cleanText(value.nodeKey, 160) || null,
     flowKey: cleanText(value.flowKey, 160) || null,
