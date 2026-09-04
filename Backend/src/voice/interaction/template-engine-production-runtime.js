@@ -17,7 +17,7 @@ import {
   validateAndComposeTemplateEngineSpeech,
 } from './template-engine-follow-up.js';
 
-export const TEMPLATE_ENGINE_PRODUCTION_RUNTIME_VERSION = 2;
+export const TEMPLATE_ENGINE_PRODUCTION_RUNTIME_VERSION = 3;
 
 function cleanText(value, maximum = 4_000) {
   return String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
@@ -42,16 +42,19 @@ export function templateEngineEvidenceSuppressesFollowUp(evidence = []) {
   });
 }
 
-async function followUpClaimsSupported(decision, evidence, validateGroundedClaims) {
+function numericTokens(value) {
+  return new Set(cleanText(value).match(/[+-]?\p{N}+(?:[.,]\p{N}+)?/gu) ?? []);
+}
+
+function followUpClaimsSupported(decision, evidence) {
   const question = cleanText(decision?.nextQuestion?.question);
   if (!question) return true;
   const cited = new Set(evidenceIds(decision));
   const selectedEvidence = evidence.filter((record) => cited.has(record.evidenceId));
-  const validation = await validateGroundedClaims({
-    response: question,
-    selectedEvidence: Object.freeze(selectedEvidence),
-  });
-  return validation?.supported === true;
+  const allowedNumbers = numericTokens(selectedEvidence.map((record) => [
+    record?.content, JSON.stringify(record?.authoritativeData ?? {}),
+  ].join(' ')).join(' '));
+  return [...numericTokens(question)].every((number) => allowedNumbers.has(number));
 }
 
 function conversationStage(state, decision = null) {
@@ -77,14 +80,71 @@ function reportGuidanceSelection(callback, phase, guidance) {
   }));
 }
 
+function activeClarificationAmbiguity(state) {
+  const candidates = [...new Set((Array.isArray(state?.pendingClarification?.candidates)
+    ? state.pendingClarification.candidates : [])
+    .map((candidate) => cleanText(candidate, 300)).filter(Boolean))];
+  return Object.freeze({
+    required: candidates.length >= 2,
+    kind: candidates.length >= 2 ? 'pending_clarification' : 'not_ambiguous',
+    candidates: Object.freeze(candidates.length >= 2 ? candidates : []),
+  });
+}
+
+function searchTokens(value) {
+  return new Set(cleanText(value).toLocaleLowerCase()
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').split(/\s+/u)
+    .filter((token) => token.length > 1));
+}
+
+function tokenCoverage(needle, haystack) {
+  const wanted = searchTokens(needle);
+  const available = searchTokens(haystack);
+  if (!wanted.size) return 0;
+  let matched = 0;
+  for (const token of wanted) if (available.has(token)) matched += 1;
+  return matched / wanted.size;
+}
+
+function speculativeSearchDecision(input, state) {
+  return Object.freeze({
+    decision: 'SEARCH', response: '', clarification: null,
+    search: Object.freeze({
+      query: cleanText(input.latestUtterance, 2_000),
+      requestedFact: null,
+      contextualReference: null,
+      preferredRecordIds: state.lastReferencedRecordIds,
+    }),
+    tool: null, nextQuestion: null, stateUpdate: null,
+  });
+}
+
+function speculativeEvidenceCompatible(retrieval, decision, input) {
+  if (!retrieval || retrieval.error || !Array.isArray(retrieval.evidence)) return false;
+  const preferred = new Set((decision.search?.preferredRecordIds ?? []).map((id) => cleanText(id, 160)));
+  const retrieved = new Set(retrieval.evidence.map((record) => cleanText(record?.recordId, 160)));
+  if ([...preferred].some((recordId) => !retrieved.has(recordId))) return false;
+  const contextual = preferred.size > 0;
+  const queryCompatible = Math.max(
+    tokenCoverage(input.latestUtterance, decision.search?.query),
+    tokenCoverage(decision.search?.query, input.latestUtterance),
+  ) >= 0.6;
+  const requestedFact = cleanText(decision.search?.requestedFact, 500);
+  const evidenceText = retrieval.evidence.map((record) => [
+    record?.content,
+    ...(record?.publishedAttributePaths ?? []),
+    JSON.stringify(record?.authoritativeData ?? {}),
+  ].join(' ')).join(' ');
+  const factAvailable = !requestedFact || tokenCoverage(requestedFact, evidenceText) > 0;
+  return (contextual || queryCompatible) && factAvailable;
+}
+
 async function composeWithFollowUpRepair({
   decision, mainPrompt, latestUtterance, recentCompleteTurns, conversationGuidance,
-  evidence, suppressFollowUp = false, validateGroundedClaims, invokeStructuredLlm,
+  evidence, suppressFollowUp = false, invokeStructuredLlm,
   onDiagnostics,
 }) {
-  let claimsValidated = await followUpClaimsSupported(
-    decision, evidence, validateGroundedClaims,
-  );
+  let claimsValidated = followUpClaimsSupported(decision, evidence);
   let composed = validateAndComposeTemplateEngineSpeech({
     decision, recentCompleteTurns, conversationGuidance, suppressFollowUp,
     claimsValidated,
@@ -99,9 +159,7 @@ async function composeWithFollowUpRepair({
     invokeStructuredLlm,
   });
   if (repair.attempted && repair.reason === null) {
-    claimsValidated = await followUpClaimsSupported(
-      repair.decision, evidence, validateGroundedClaims,
-    );
+    claimsValidated = followUpClaimsSupported(repair.decision, evidence);
     composed = validateAndComposeTemplateEngineSpeech({
       decision: repair.decision,
       recentCompleteTurns,
@@ -232,12 +290,15 @@ async function runWorkflow(input, decision, state, context, dependencies) {
     confirmation: { accepted: explicitConfirmation, explicit: explicitConfirmation },
     confirmationMessage: input.confirmationMessage,
     mainPrompt: input.mainPrompt,
+    language: input.language,
     conversationGuidance: resultConversationGuidance,
   }, {
     invokeStructuredLlm: dependencies.invokeStructuredLlm,
     persistWorkflowState: dependencies.persistWorkflowState,
     executeAuthorizedTool: dependencies.executeAuthorizedTool,
     validateToolResultSpeechClaims: dependencies.validateToolResultSpeechClaims,
+    getCachedWorkflowSpeech: dependencies.getCachedWorkflowSpeech,
+    cacheWorkflowSpeech: dependencies.cacheWorkflowSpeech,
   });
   const finished = ['SUCCEEDED', 'FAILED'].includes(transition.status);
   return Object.freeze({
@@ -326,6 +387,20 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     authorizedWorkflowTools: workflowSummaries,
     conversationGuidance: initialConversationGuidance,
   };
+  const speculativeRetrieval = typeof dependencies.retrieveSpeculativeEvidence === 'function'
+    ? dependencies.retrieveSpeculativeEvidence({
+      auth: input.auth,
+      scope: publishedContext.scope,
+      callId: input.callId,
+      usageDirection: input.usageDirection,
+      language: input.language,
+      searchDecision: speculativeSearchDecision(input, state),
+      state,
+      runtimeProfile: input.runtimeProfile,
+      preloadedArtifacts: publishedContext.artifacts,
+      speculative: true,
+    }).catch((error) => Object.freeze({ error }))
+    : null;
   const routed = await routeTemplateEngineUtterance(common, {
     invokeStructuredLlm: dependencies.invokeStructuredLlm,
     onDecisionRetry: dependencies.onRoutingDecisionRetry,
@@ -336,7 +411,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     assignedTools: input.assignedTools,
     informationFields: input.informationFields,
     scope: publishedContext.scope,
-    ambiguity: { required: true },
+    ambiguity: activeClarificationAmbiguity(state),
   });
   let first = routed.decision;
   let initialValidationResult = routed.outputValidation?.reason ?? 'valid';
@@ -388,7 +463,6 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       recentCompleteTurns: state.recentCompleteTurns,
       conversationGuidance: directConversationGuidance,
       evidence: [],
-      validateGroundedClaims: dependencies.validateGroundedClaims,
       invokeStructuredLlm: dependencies.invokeStructuredLlm,
       onDiagnostics: (details) => dependencies.onFollowUpDiagnostics?.(Object.freeze({
         phase: 'direct_response', ...details,
@@ -411,7 +485,9 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     });
   }
 
-  const retrieval = await dependencies.retrieveEvidence({
+  const speculativeResult = speculativeRetrieval ? await speculativeRetrieval : null;
+  const usedSpeculativeRetrieval = speculativeEvidenceCompatible(speculativeResult, first, input);
+  const retrieval = usedSpeculativeRetrieval ? speculativeResult : await dependencies.retrieveEvidence({
     auth: input.auth,
     scope: publishedContext.scope,
     callId: input.callId,
@@ -423,12 +499,16 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     preloadedArtifacts: publishedContext.artifacts,
   });
   if (typeof dependencies.onRetrievalDiagnostics === 'function') {
-    dependencies.onRetrievalDiagnostics(retrieval.diagnostics ?? Object.freeze({
+    dependencies.onRetrievalDiagnostics(Object.freeze({
+      ...(retrieval.diagnostics ?? {
       channelCounts: Object.freeze({}),
       retrievalCount: 0,
       hydrationCount: 0,
       verifiedEvidenceCount: retrieval.evidence?.length ?? 0,
       failedChannels: Object.freeze([]),
+      }),
+      speculative: Boolean(speculativeRetrieval),
+      speculativeReused: usedSpeculativeRetrieval,
     }));
   }
   const postSearchConversationGuidance = selectApplicableConversationGuidance({
@@ -458,7 +538,9 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     invokeStructuredLlm: dependencies.invokeStructuredLlm,
     tenantBoundaryVerified: true,
     publishedEntities: retrieval.evidence,
-    ambiguity: { required: true },
+    ambiguity: Object.freeze({
+      required: false, kind: 'derive_from_verified_evidence', candidates: Object.freeze([]),
+    }),
     validateGroundedClaims: ({
       response, decision, selectedEvidence, searchInterpretation, latestUtterance,
     }) => (
@@ -481,7 +563,6 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     conversationGuidance: postSearchConversationGuidance,
     evidence: retrieval.evidence,
     suppressFollowUp: templateEngineEvidenceSuppressesFollowUp(retrieval.evidence),
-    validateGroundedClaims: dependencies.validateGroundedClaims,
     invokeStructuredLlm: dependencies.invokeStructuredLlm,
     onDiagnostics: (details) => dependencies.onFollowUpDiagnostics?.(Object.freeze({
       phase: 'post_search', ...details,

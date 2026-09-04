@@ -127,7 +127,9 @@ const turn = await runTemplateEngineProductionTurn({
   retrieveEvidence: async () => retrieval,
   persistWorkflowState: async () => {},
   executeAuthorizedTool: async () => { throw new Error('must not execute'); },
-  validateGroundedClaims: async () => ({ supported: true, successClaimed: false }),
+  validateGroundedClaims: async () => ({
+    supported: true, successClaimed: false, requestedFactAddressed: true,
+  }),
   validateToolResultSpeechClaims: async () => ({ supported: true, successClaimed: false }),
   onRetrievalDiagnostics: (details) => { retrievalDiagnostics = details; },
   onPostSearchDiagnostics: (details) => { postSearchDiagnostics = details; },
@@ -144,6 +146,60 @@ assert.equal(turn.provenance.initialDecision, 'SEARCH');
 assert.equal(turn.provenance.finalDecision, 'RESPONSE');
 assert.deepEqual(turn.provenance.evidenceIds, ['evidence-1']);
 assert.equal(turn.provenance.searchPerformed, true);
+
+let speculativeStarted = false;
+let routedWhileSpeculativeActive = false;
+let ordinaryRetrievalCalls = 0;
+let speculativeDiagnostics;
+let deterministicChecks = 0;
+const speculativeDecisions = [searchDecision, {
+  decision: 'RESPONSE', response: 'Tenant Item costs 125.', clarification: null,
+  evidenceIds: ['E1'], nextQuestion: {
+    question: 'Would you like another published detail?', reason: 'guidance',
+  }, stateUpdate: null,
+}];
+const speculativeTurn = await runTemplateEngineProductionTurn({
+  auth: { tenantId }, scope, callId: 'call-speculative', usageDirection: 'inbound', language: 'en',
+  mainPrompt: 'Answer in English. Search for factual requests.',
+  latestUtterance: 'What is the tenant item price?', conversationHistory: [], state: {},
+  runtimeProfile: {}, authorizedWorkflowTools: [], assignedTools: [], informationFields: [],
+}, {
+  invokeStructuredLlm: async () => {
+    routedWhileSpeculativeActive ||= speculativeStarted;
+    return speculativeDecisions.shift();
+  },
+  loadPublishedContext: async () => ({
+    scope, publishedWorkflows: [], artifacts: {},
+    publishedConversationGuidance: [{
+      recordId: 'guidance-1', purpose: 'Continue relevant assistance',
+      nextQuestion: 'Would you like another published detail?',
+    }],
+  }),
+  retrieveSpeculativeEvidence: async () => {
+    speculativeStarted = true;
+    return retrieval;
+  },
+  retrieveEvidence: async () => {
+    ordinaryRetrievalCalls += 1;
+    return retrieval;
+  },
+  persistWorkflowState: async () => {},
+  executeAuthorizedTool: async () => { throw new Error('must not execute'); },
+  validateGroundedClaims: async () => {
+    deterministicChecks += 1;
+    return { supported: true, successClaimed: false, requestedFactAddressed: true };
+  },
+  validateToolResultSpeechClaims: async () => ({ supported: true, successClaimed: false }),
+  onRetrievalDiagnostics: (details) => { speculativeDiagnostics = details; },
+});
+assert.equal(routedWhileSpeculativeActive, true,
+  'Routing must run while speculative hybrid retrieval is already active');
+assert.equal(ordinaryRetrievalCalls, 0,
+  'A compatible speculative result must avoid duplicate retrieval');
+assert.equal(speculativeDiagnostics.speculativeReused, true);
+assert.equal(deterministicChecks, 1,
+  'Follow-up validation must not add a second grounding-validator call');
+assert.match(speculativeTurn.speech, /Tenant Item costs 125/u);
 
 const guardedDecisions = [{
   decision: 'RESPONSE', response: 'Tenant Item costs 125.', clarification: null,
@@ -170,7 +226,11 @@ const guardedTurn = await runTemplateEngineProductionTurn({
   executeAuthorizedTool: async () => { throw new Error('must not execute'); },
   validateGroundedClaims: async () => {
     guardedClaimChecks += 1;
-    return { supported: guardedClaimChecks > 1, successClaimed: false };
+    return {
+      supported: guardedClaimChecks > 1,
+      successClaimed: false,
+      requestedFactAddressed: guardedClaimChecks > 1,
+    };
   },
   validateToolResultSpeechClaims: async () => ({ supported: true, successClaimed: false }),
 });
@@ -216,7 +276,9 @@ const workflowTurn = await runTemplateEngineProductionTurn({
   retrieveEvidence: async () => { throw new Error('tool route must not run factual search'); },
   persistWorkflowState: async () => {},
   executeAuthorizedTool: async () => { throw new Error('incomplete workflow must not execute'); },
-  validateGroundedClaims: async () => ({ supported: true, successClaimed: false }),
+  validateGroundedClaims: async () => ({
+    supported: true, successClaimed: false, requestedFactAddressed: true,
+  }),
   validateToolResultSpeechClaims: async () => ({ supported: true, successClaimed: false }),
 });
 assert.equal(workflowTurn.workflow.status, 'AWAITING_FIELD');
@@ -256,7 +318,9 @@ const contextualWorkflowTurn = await runTemplateEngineProductionTurn({
   retrieveEvidence: async () => { throw new Error('tool route must not search'); },
   persistWorkflowState: async () => {},
   executeAuthorizedTool: async () => { throw new Error('confirmation is still required'); },
-  validateGroundedClaims: async () => ({ supported: true, successClaimed: false }),
+  validateGroundedClaims: async () => ({
+    supported: true, successClaimed: false, requestedFactAddressed: true,
+  }),
   validateToolResultSpeechClaims: async () => ({ supported: true, successClaimed: false }),
 });
 assert.equal(contextualWorkflowTurn.workflow.status, 'AWAITING_CONFIRMATION');
@@ -308,7 +372,9 @@ const confirmedTurn = await runTemplateEngineProductionTurn({
     executed += 1;
     return { verified: true, success: true, output: { success: true } };
   },
-  validateGroundedClaims: async () => ({ supported: true, successClaimed: false }),
+  validateGroundedClaims: async () => ({
+    supported: true, successClaimed: false, requestedFactAddressed: true,
+  }),
   validateToolResultSpeechClaims: async () => ({ supported: true, successClaimed: true }),
 });
 assert.equal(executed, 1);

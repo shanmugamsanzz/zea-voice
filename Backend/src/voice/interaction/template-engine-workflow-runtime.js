@@ -9,7 +9,7 @@ import { validateTemplateEngineDecision } from './template-engine-decision-contr
 import { validateTemplateEngineToolResultSpeech } from './template-engine-tool-result-validator.js';
 import { validateAndComposeTemplateEngineSpeech } from './template-engine-follow-up.js';
 
-export const TEMPLATE_ENGINE_WORKFLOW_RUNTIME_VERSION = 2;
+export const TEMPLATE_ENGINE_WORKFLOW_RUNTIME_VERSION = 3;
 
 const speechTasks = new Set(['ASK_FIELD', 'CONFIRM', 'RESULT']);
 
@@ -322,6 +322,19 @@ export function createTemplateEngineWorkflowSpeechTask({
   });
 }
 
+function workflowFieldCacheDescriptor(configuration, task, language) {
+  if (task?.type !== 'ASK_FIELD') return null;
+  return Object.freeze({
+    workflowRecordId: configuration.workflowId,
+    knowledgeBaseId: cleanText(configuration.workflow.knowledgeBaseId, 160),
+    publicationRevision: Number(configuration.workflow.publicationRevision),
+    toolId: cleanText(configuration.tool.id ?? configuration.tool.name, 160),
+    fieldKey: task.field.key,
+    configuredQuestion: task.field.configuredQuestion,
+    language: cleanText(language, 80) || null,
+  });
+}
+
 function speechOutput(value) {
   const direct = value && typeof value === 'object'
     ? value.outputParsed ?? value.output_parsed ?? value.parsed
@@ -339,10 +352,23 @@ function speechOutput(value) {
   }
 }
 
-export async function phraseTemplateEngineWorkflowSpeech({ mainPrompt, task } = {}, dependencies = {}) {
+export async function phraseTemplateEngineWorkflowSpeech({
+  mainPrompt, task, cacheDescriptor = null,
+} = {}, dependencies = {}) {
   if (!speechTasks.has(task?.type)) throw new TypeError('Unsupported Workflow speech task');
   const prompt = cleanText(mainPrompt, 24_000);
   if (!prompt) throw new TypeError('Workflow speech requires the tenant main prompt');
+  if (task.type === 'ASK_FIELD' && cacheDescriptor
+    && typeof dependencies.getCachedWorkflowSpeech === 'function') {
+    const cached = await dependencies.getCachedWorkflowSpeech(cacheDescriptor);
+    const cachedSpeech = cleanText(cached?.speech, 4_000);
+    if (cachedSpeech) {
+      return Object.freeze({
+        speech: cachedSpeech, nextQuestion: null, taskType: task.type,
+        cacheHit: true, cacheDescriptor, cachedAudio: cached.audio ?? null,
+      });
+    }
+  }
   if (typeof dependencies.invokeStructuredLlm !== 'function') {
     throw new TypeError('Workflow speech requires one structured LLM invoker');
   }
@@ -399,7 +425,14 @@ export async function phraseTemplateEngineWorkflowSpeech({ mainPrompt, task } = 
     }
     nextQuestion = Object.freeze({ question, reason });
   }
-  return Object.freeze({ speech, nextQuestion, taskType: task.type });
+  if (task.type === 'ASK_FIELD' && cacheDescriptor
+    && typeof dependencies.cacheWorkflowSpeech === 'function') {
+    await dependencies.cacheWorkflowSpeech(cacheDescriptor, speech);
+  }
+  return Object.freeze({
+    speech, nextQuestion, taskType: task.type,
+    cacheHit: false, cacheDescriptor, cachedAudio: null,
+  });
 }
 
 export async function executeTemplateEngineWorkflow(input = {}, dependencies = {}) {
@@ -542,9 +575,13 @@ export async function advanceTemplateEngineWorkflowTurn(input = {}, dependencies
     confirmationMessage: input.confirmationMessage,
   });
   await dependencies.persistWorkflowState(transition.state);
+  const cacheDescriptor = workflowFieldCacheDescriptor(
+    transition.configuration, task, input.language,
+  );
   const phrased = await phraseTemplateEngineWorkflowSpeech({
     mainPrompt: input.mainPrompt,
     task,
+    cacheDescriptor,
   }, dependencies);
   return Object.freeze({
     status: task.type === 'ASK_FIELD' ? 'AWAITING_FIELD' : 'AWAITING_CONFIRMATION',
@@ -553,6 +590,11 @@ export async function advanceTemplateEngineWorkflowTurn(input = {}, dependencies
     workflowRecordId: transition.configuration.workflowId,
     toolId: transition.configuration.tool.id ?? transition.configuration.tool.name,
     speechTask: task,
+    speechCache: cacheDescriptor ? Object.freeze({
+      descriptor: cacheDescriptor,
+      hit: phrased.cacheHit === true,
+      audio: phrased.cachedAudio ?? null,
+    }) : null,
     acceptedFields: transition.acceptedFields ?? Object.freeze([]),
     rejectedFields: transition.rejectedFields ?? Object.freeze([]),
     verifiedResult: null,

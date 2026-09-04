@@ -94,7 +94,7 @@ const envSchema = z.object({
   // has separate production completion deadlines so a target breach does not
   // cancel valid retrieval before authoritative hydration finishes.
   VOICE_TURN_FIRST_AUDIO_DEADLINE_MS: z.coerce.number().int().min(1000).max(10000).default(2000),
-  VOICE_TURN_ACKNOWLEDGEMENT_AFTER_MS: z.coerce.number().int().min(100).max(10000).default(900),
+  VOICE_TURN_ACKNOWLEDGEMENT_AFTER_MS: z.coerce.number().int().min(700).max(800).default(750),
   VOICE_ROUTING_TURN_TIMEOUT_MS: z.coerce.number().int().min(20).max(1000).default(100),
   VOICE_RETRIEVAL_TARGET_MS: z.coerce.number().int().min(25).max(1000).default(150),
   VOICE_RETRIEVAL_TURN_TIMEOUT_MS: z.coerce.number().int().min(100).max(5000).default(1250),
@@ -105,7 +105,7 @@ const envSchema = z.object({
   // acknowledgement is audible, allow the measured production structured
   // completion enough time to finish and validate, with a bounded maximum.
   VOICE_LLM_POST_ACK_TIMEOUT_MS: z.coerce.number().int().min(1000).max(15000).default(4000),
-  VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS: z.coerce.number().int().min(250).max(5000).default(600),
+  VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS: z.coerce.number().int().min(1200).max(1500).default(1400),
   VOICE_TTS_MAX_RESPONSE_CHARACTERS: z.coerce.number().int().min(100).max(2000).default(600),
   VOICE_TTS_SENTENCE_GROUPING_ENABLED: booleanFromString.default(true),
   VOICE_TTS_SHORT_SENTENCE_CHARACTERS: z.coerce.number().int().min(20).max(500).default(100),

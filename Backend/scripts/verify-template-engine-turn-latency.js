@@ -3,6 +3,10 @@ import { readFileSync } from 'node:fs';
 import {
   armTemplateEngineTurnLatencyAcknowledgement,
 } from '../src/voice/interaction/template-engine-turn-latency.js';
+import {
+  recordTemplateEngineTurnMetrics,
+  templateEngineFirstAudioTargets,
+} from '../src/voice/interaction/template-engine-observability.js';
 
 function fakeTimers() {
   const timers = [];
@@ -26,7 +30,7 @@ const slowTimers = fakeTimers();
 const spoken = [];
 const triggered = [];
 const slow = armTemplateEngineTurnLatencyAcknowledgement({
-  thresholdMs: 900,
+  thresholdMs: 750,
   acknowledgementText: 'Configured progress speech.',
   isActive: () => true,
   onAcknowledgement: (text) => { spoken.push(text); return true; },
@@ -34,7 +38,7 @@ const slow = armTemplateEngineTurnLatencyAcknowledgement({
   setTimer: slowTimers.setTimer,
   clearTimer: slowTimers.clearTimer,
 });
-assert.equal(slowTimers.timers[0].delay, 900);
+assert.equal(slowTimers.timers[0].delay, 750);
 slowTimers.fire(slowTimers.timers[0]);
 slowTimers.fire(slowTimers.timers[0]);
 assert.deepEqual(spoken, ['Configured progress speech.'],
@@ -46,7 +50,7 @@ assert.equal(slow.snapshot().queued, true);
 const fastTimers = fakeTimers();
 let fastSpoken = false;
 const fast = armTemplateEngineTurnLatencyAcknowledgement({
-  thresholdMs: 900,
+  thresholdMs: 750,
   acknowledgementText: 'Configured progress speech.',
   onAcknowledgement: () => { fastSpoken = true; return true; },
   setTimer: fastTimers.setTimer,
@@ -60,7 +64,7 @@ assert.equal(fastSpoken, false,
 const staleTimers = fakeTimers();
 let staleSpoken = false;
 armTemplateEngineTurnLatencyAcknowledgement({
-  thresholdMs: 900,
+  thresholdMs: 750,
   acknowledgementText: 'Configured progress speech.',
   isActive: () => false,
   onAcknowledgement: () => { staleSpoken = true; return true; },
@@ -80,5 +84,42 @@ assert.match(orchestrator, /finalResponseReady\s*=\s*true;[\s\S]*latencyAcknowle
 assert.match(orchestrator, /sentencePipeline\.enqueueAcknowledgement\(text\)/u);
 assert.match(orchestrator, /template_engine\.turn_latency_acknowledgement/u);
 assert.match(orchestrator, /templateEngineAcknowledgements\.triggered\s*\+=\s*1/u);
+assert.match(orchestrator, /setWorkflowFieldAudioCache\(result\.workflow\?\.speechCache/u,
+  'A Workflow field turn must hand cached audio to the live sentence pipeline');
+assert.match(orchestrator, /Buffer\.isBuffer\(reusableAudio\?\.audio\)/u,
+  'Cached Workflow field audio must bypass live TTS synthesis');
+assert.match(orchestrator, /capture:\s*capturedAudio/u,
+  'A cache miss must capture generated field audio for later turns');
+assert.match(orchestrator, /setLatencyAcknowledgementAudioCache/u,
+  'The latency acknowledgement must use reusable cached audio');
+assert.match(orchestrator, /latency_acknowledgement_audio_cache_hit/u);
+
+assert.deepEqual(templateEngineFirstAudioTargets, {
+  RESPONSE: 1_000, CLARIFY: 1_000, SEARCH: 3_000, TOOL: 2_000,
+});
+const metrics = {};
+for (const [route, elapsedMs] of [
+  ['RESPONSE', 999], ['SEARCH', 2_999], ['TOOL', 1_999],
+]) {
+  const sample = recordTemplateEngineTurnMetrics(metrics, {
+    epoch: route,
+    result: { provenance: { initialDecision: route, finalDecision: route } },
+    turnStartedAt: 10_000,
+    firstAudioAt: 10_000 + elapsedMs,
+    firstAudioDeadlineMs: 9_999,
+  });
+  assert.equal(sample.firstAudioStatus, 'passed', `${route} must pass below its route target`);
+  assert.equal(sample.firstAudioTargetMs, templateEngineFirstAudioTargets[route]);
+}
+for (const route of ['RESPONSE', 'SEARCH', 'TOOL']) {
+  const targetMs = templateEngineFirstAudioTargets[route];
+  const sample = recordTemplateEngineTurnMetrics(metrics, {
+    epoch: `${route}-boundary`,
+    result: { provenance: { initialDecision: route, finalDecision: route } },
+    turnStartedAt: 20_000,
+    firstAudioAt: 20_000 + targetMs,
+  });
+  assert.equal(sample.firstAudioStatus, 'missed', `${route} target is strictly less than ${targetMs}ms`);
+}
 
 console.log('Template-engine whole-turn latency acknowledgement verification passed.');

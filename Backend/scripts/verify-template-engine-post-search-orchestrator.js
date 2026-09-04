@@ -35,6 +35,7 @@ const verifiedEvidence = Object.freeze([
     verified: true, callerFacing: true, evidenceId: 'evidence-1', recordId: 'record-1',
     recordType: 'ITEM', tenantId: 'tenant-a', agentId: 'agent-a',
     knowledgeBaseId: 'kb-a', publicationRevision: 2,
+    canonicalName: 'First Service', aliases: Object.freeze(['First']),
     content: 'The selected service currently costs 3200 currency units.',
   }),
 ]);
@@ -54,7 +55,7 @@ const result = await respondToTemplateEngineSearch({
   tenantBoundaryVerified: true,
   validateGroundedClaims: async (input) => {
     groundedClaimInput = input;
-    return { supported: true };
+    return { supported: true, requestedFactAddressed: true };
   },
   invokeStructuredLlm: async (request) => {
     calls += 1;
@@ -92,6 +93,56 @@ assert.match(providerRequest.messages[0].content, /"evidenceId":"E1"/u);
 assert.doesNotMatch(providerRequest.messages[0].content, /evidence-1/u,
   'Real evidence IDs must not be exposed as provider-facing citation tokens');
 assert.deepEqual(providerRequest.responseFormat.schema.properties.evidenceIds.items.enum, ['E1']);
+
+let relevanceCalls = 0;
+const relevanceFacts = [];
+let relevanceDiagnostics;
+const relevantAnswer = await respondToTemplateEngineSearch({
+  mainPrompt,
+  latestUtterance: 'Which included feature does it have?',
+  state,
+  searchDecision: {
+    ...searchDecision,
+    search: {
+      ...searchDecision.search,
+      query: 'selected service included feature',
+      requestedFact: 'included feature',
+    },
+  },
+  verifiedEvidence: [{
+    ...verifiedEvidence[0],
+    content: 'The selected service costs 3200 currency units and includes feature Delta.',
+  }],
+  scope,
+}, {
+  tenantBoundaryVerified: true,
+  validateGroundedClaims: async (input) => {
+    relevanceFacts.push(input.searchInterpretation.requestedFact);
+    return {
+      supported: true,
+      requestedFactAddressed: input.response.includes('feature Delta'),
+      reason: input.response.includes('feature Delta') ? null : 'requested_fact_not_addressed',
+    };
+  },
+  invokeStructuredLlm: async () => {
+    relevanceCalls += 1;
+    return { outputParsed: {
+      decision: 'RESPONSE',
+      response: relevanceCalls === 1
+        ? 'The selected service costs 3200 currency units.'
+        : 'The selected service includes feature Delta.',
+      clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
+    } };
+  },
+  onPostSearchDiagnostics: (details) => { relevanceDiagnostics = details; },
+});
+assert.equal(relevanceCalls, 2,
+  'A grounded but incomplete answer must receive exactly one repair attempt');
+assert.equal(relevantAnswer.decision.response,
+  'The selected service includes feature Delta.');
+assert.deepEqual(relevanceFacts, ['included feature', 'included feature']);
+assert.equal(relevanceDiagnostics.initialValidationReason, 'requested_fact_not_addressed');
+assert.equal(relevanceDiagnostics.repairAttempted, true);
 
 const secondEvidence = Object.freeze({
   ...verifiedEvidence[0],
@@ -131,7 +182,7 @@ const comparisonResult = await respondToTemplateEngineSearch({
   ],
   validateGroundedClaims: async (input) => {
     comparisonClaimInput = input;
-    return { supported: true };
+    return { supported: true, requestedFactAddressed: true };
   },
   invokeStructuredLlm: async () => ({ outputParsed: {
     decision: 'RESPONSE',
@@ -201,7 +252,7 @@ const repaired = await respondToTemplateEngineSearch({
   mainPrompt, latestUtterance, state, searchDecision, verifiedEvidence, scope,
 }, {
   tenantBoundaryVerified: true,
-  validateGroundedClaims: async () => ({ supported: true }),
+  validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
   invokeStructuredLlm: async () => {
     repairCalls += 1;
     return repairCalls === 1 ? {
@@ -230,8 +281,9 @@ const groundedNoMatch = await respondToTemplateEngineSearch({
   validateGroundedClaims: async (input) => {
     groundedValidationCalls += 1;
     return input.decision === 'NO_MATCH'
-      ? { supported: true, reason: null }
-      : { supported: false, reason: 'attribute_not_supported' };
+      ? { supported: true, requestedFactAddressed: true, reason: null }
+      : { supported: false, requestedFactAddressed: false,
+        reason: 'attribute_not_supported' };
   },
   invokeStructuredLlm: async () => {
     groundedRepairCalls += 1;
@@ -264,6 +316,7 @@ const safeMissingAttribute = await respondToTemplateEngineSearch({
     supported: decision === 'NO_MATCH'
       && response === 'The published information does not provide that detail.'
       && searchInterpretation.requestedFact === 'unpublished attribute',
+    requestedFactAddressed: decision === 'NO_MATCH',
     reason: 'absence_does_not_support_negative_claim',
   }),
   invokeStructuredLlm: async () => {
@@ -286,26 +339,68 @@ assert.equal(safeMissingAttribute.decision.response,
 
 let clarificationValidationInput;
 const groundedClarification = await respondToTemplateEngineSearch({
-  mainPrompt, latestUtterance: 'Which selected service?', state, searchDecision,
-  verifiedEvidence, scope,
+  mainPrompt, latestUtterance: 'Which selected service?',
+  state: { ...state, lastReferencedRecordIds: [] },
+  searchDecision: {
+    ...searchDecision,
+    search: {
+      query: 'selected service', requestedFact: 'service identity',
+      contextualReference: null, preferredRecordIds: [],
+    },
+  },
+  verifiedEvidence: [verifiedEvidence[0], secondEvidence], scope,
 }, {
   tenantBoundaryVerified: true,
-  ambiguity: { required: true, kind: 'entity', candidates: ['Service Alpha', 'Service Beta'] },
+  ambiguity: { required: true, kind: 'entity', candidates: ['First Service', 'Second Service'] },
   validateGroundedClaims: async (input) => {
     clarificationValidationInput = input;
-    return { supported: true, reason: null };
+    return { supported: true, requestedFactAddressed: true, reason: null };
   },
   invokeStructuredLlm: async () => ({ outputParsed: {
     decision: 'CLARIFY', response: '', clarification: {
-      question: 'Do you mean Service Alpha or Service Beta?',
-      reason: 'ambiguous reference', candidates: ['Service Alpha', 'Service Beta'],
+      question: 'Do you mean First Service or Second Service?',
+      reason: 'ambiguous reference', candidates: ['First Service', 'Second Service'],
     }, evidenceIds: [], nextQuestion: null, stateUpdate: null,
   } }),
 });
 assert.equal(groundedClarification.decision.decision, 'CLARIFY');
 assert.equal(clarificationValidationInput.decision, 'CLARIFY');
-assert.equal(clarificationValidationInput.selectedEvidence.length, 1,
+assert.equal(clarificationValidationInput.selectedEvidence.length, 2,
   'Clarification speech validation receives the complete verified evidence set');
+
+let contextualRepairCalls = 0;
+const resolvedContext = await respondToTemplateEngineSearch({
+  mainPrompt, latestUtterance: 'What does it include?', state,
+  searchDecision: {
+    ...searchDecision,
+    search: {
+      query: 'selected service included features', requestedFact: 'included features',
+      contextualReference: 'selected service', preferredRecordIds: ['record-1'],
+    },
+  },
+  verifiedEvidence, scope,
+}, {
+  tenantBoundaryVerified: true,
+  validateGroundedClaims: async () => ({
+    supported: true, requestedFactAddressed: true, reason: null,
+  }),
+  invokeStructuredLlm: async () => {
+    contextualRepairCalls += 1;
+    return { outputParsed: contextualRepairCalls === 1 ? {
+      decision: 'CLARIFY', response: '', clarification: {
+        question: 'Which service do you mean?', reason: 'ambiguous reference',
+        candidates: ['First Service', 'Second Service'],
+      }, evidenceIds: [], nextQuestion: null, stateUpdate: null,
+    } : {
+      decision: 'RESPONSE', response: 'The selected service includes the published features.',
+      clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
+    } };
+  },
+});
+assert.equal(contextualRepairCalls, 2,
+  'A false clarification for one cited record must be repaired once');
+assert.equal(resolvedContext.decision.decision, 'RESPONSE');
+assert.deepEqual(resolvedContext.decision.evidenceIds, ['evidence-1']);
 
 let fallbackCalls = 0;
 let fallbackDiagnostics;
@@ -360,6 +455,7 @@ const emptyEvidenceFallback = await respondToTemplateEngineSearch({
   validateGroundedClaims: async ({ decision, response }) => ({
     supported: decision === 'NO_MATCH'
       && response === 'That information is not available right now.',
+    requestedFactAddressed: decision === 'NO_MATCH',
     reason: decision === 'NO_MATCH' ? null : 'unsupported_claim',
   }),
   invokeStructuredLlm: async () => ({ outputParsed: {

@@ -9,6 +9,7 @@ import {
   executeTemplateEngineWorkflow,
   phraseTemplateEngineWorkflowSpeech,
 } from '../src/voice/interaction/template-engine-workflow-runtime.js';
+import { WorkflowFieldAudioCache } from '../src/voice/workflow-field-audio-cache.service.js';
 
 const scope = Object.freeze({
   tenantId: 'tenant-a', agentId: 'agent-a',
@@ -104,6 +105,67 @@ const firstSpeech = await phraseTemplateEngineWorkflowSpeech({
   },
 });
 assert.equal(firstSpeech.speech, 'Could you tell me the full name?');
+
+let cachedSpeechLlmCalls = 0;
+const cachedSpeech = await phraseTemplateEngineWorkflowSpeech({
+  mainPrompt: 'Speak briefly and naturally.', task: firstTask,
+  cacheDescriptor: { workflowRecordId: 'workflow-1', fieldKey: 'full_name' },
+}, {
+  getCachedWorkflowSpeech: async () => ({
+    speech: 'Cached localized field question?', audio: Buffer.from([1, 2, 3]),
+  }),
+  invokeStructuredLlm: async () => { cachedSpeechLlmCalls += 1; },
+});
+assert.equal(cachedSpeech.speech, 'Cached localized field question?');
+assert.equal(cachedSpeech.cacheHit, true);
+assert.equal(cachedSpeechLlmCalls, 0,
+  'The Workflow speech LLM must not run when localized field speech is cached');
+
+let cacheMissLlmCalls = 0;
+let cachedGeneratedSpeech = null;
+const cacheMissSpeech = await phraseTemplateEngineWorkflowSpeech({
+  mainPrompt: 'Speak briefly and naturally.', task: firstTask,
+  cacheDescriptor: { workflowRecordId: 'workflow-1', fieldKey: 'full_name' },
+}, {
+  getCachedWorkflowSpeech: async () => null,
+  cacheWorkflowSpeech: async (_descriptor, speech) => { cachedGeneratedSpeech = speech; },
+  invokeStructuredLlm: async () => {
+    cacheMissLlmCalls += 1;
+    return { outputParsed: { speech: 'New localized field question?' } };
+  },
+});
+assert.equal(cacheMissLlmCalls, 1);
+assert.equal(cacheMissSpeech.cacheHit, false);
+assert.equal(cachedGeneratedSpeech, 'New localized field question?',
+  'A cache miss must store the one generated localized field question');
+
+const redisValues = new Map();
+const cacheRedis = {
+  status: 'ready',
+  async get(key) { return redisValues.get(key) ?? null; },
+  async set(key, value) { redisValues.set(key, value); return 'OK'; },
+};
+const audioCache = new WorkflowFieldAudioCache({
+  redis: cacheRedis, timeoutMs: 50, ttlSeconds: 60, maxBytes: 1_024,
+});
+const cacheProfile = {
+  agent: { tenantId: 'tenant-a', id: 'agent-a', language: 'en', voiceId: 'voice-a' },
+  providers: { tts: { providerId: 'tts-a', modelId: 'model-a', effectiveSettings: {} } },
+};
+const cacheDescriptor = {
+  workflowRecordId: 'workflow-1', knowledgeBaseId: 'kb-a', publicationRevision: 4,
+  toolId: 'tool-1', fieldKey: 'full_name',
+  configuredQuestion: 'Please tell me the full name.', language: 'en',
+};
+assert.equal(await audioCache.set(
+  cacheProfile, cacheDescriptor, 'Localized question?', Buffer.from([4, 5, 6]),
+), true);
+const cachedAudio = await audioCache.get(cacheProfile, cacheDescriptor);
+assert.equal(cachedAudio.speech, 'Localized question?');
+assert.deepEqual(cachedAudio.audio, Buffer.from([4, 5, 6]));
+assert.equal(await audioCache.get({
+  ...cacheProfile, agent: { ...cacheProfile.agent, tenantId: 'tenant-b' },
+}, cacheDescriptor), null, 'Workflow field audio must be isolated by tenant');
 
 const withName = collectTemplateEngineWorkflowFields({
   ...common, state: activated.state, candidateValues: { full_name: 'Alex Example' },

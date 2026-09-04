@@ -1,3 +1,16 @@
+export const templateEngineFirstAudioTargets = Object.freeze({
+  RESPONSE: 1_000,
+  CLARIFY: 1_000,
+  SEARCH: 3_000,
+  TOOL: 2_000,
+});
+
+export function templateEngineFirstAudioTarget(result, fallbackMs = null) {
+  const route = result?.provenance?.initialDecision ?? result?.decision?.decision ?? null;
+  return templateEngineFirstAudioTargets[route]
+    ?? (Number.isFinite(fallbackMs) ? fallbackMs : null);
+}
+
 export function recordTemplateEngineTurnMetrics(runtimeMetrics, {
   epoch,
   result,
@@ -16,7 +29,7 @@ export function recordTemplateEngineTurnMetrics(runtimeMetrics, {
   if (result?.workflow) runtimeMetrics.templateEngine.workflows += 1;
   const totalFirstAudioMs = Number.isFinite(firstAudioAt) && Number.isFinite(turnStartedAt)
     ? Math.max(0, firstAudioAt - turnStartedAt) : null;
-  const deadlineMs = Number.isFinite(firstAudioDeadlineMs) ? firstAudioDeadlineMs : null;
+  const targetMs = templateEngineFirstAudioTarget(result, firstAudioDeadlineMs);
   const sample = {
     epoch,
     route: result?.provenance?.initialDecision ?? result?.decision?.decision ?? null,
@@ -24,8 +37,9 @@ export function recordTemplateEngineTurnMetrics(runtimeMetrics, {
     retrievalMs: Number.isFinite(retrievalDiagnostics?.durationMs)
       ? retrievalDiagnostics.durationMs : null,
     totalFirstAudioMs,
-    firstAudioStatus: totalFirstAudioMs === null || deadlineMs === null
-      ? 'not_measured' : totalFirstAudioMs <= deadlineMs ? 'passed' : 'missed',
+    firstAudioTargetMs: targetMs,
+    firstAudioStatus: totalFirstAudioMs === null || targetMs === null
+      ? 'not_measured' : totalFirstAudioMs < targetMs ? 'passed' : 'missed',
   };
   runtimeMetrics.turnLatency.push(sample);
   return sample;

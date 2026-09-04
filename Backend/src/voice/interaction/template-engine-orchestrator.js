@@ -302,7 +302,10 @@ export async function routeTemplateEngineUtterance(input = {}, dependencies = {}
     contextualDecision.value, orchestratorInput, dependencies,
   ));
   if (!outputValidation.valid) {
-    if (outputValidation.retrySearch) {
+    const rejectedClarification = contextualDecision.value.decision === 'CLARIFY'
+      && ['clarification_not_required', 'clarification_candidates_required']
+        .includes(outputValidation.reason);
+    if (outputValidation.retrySearch || rejectedClarification) {
       return Object.freeze({
         decision: forcedSearchDecision(orchestratorInput, dependencies),
         input: turnInput,
@@ -408,6 +411,58 @@ function aliasPostSearchEvidence(evidence) {
   });
 }
 
+function recordId(value) {
+  return cleanText(value, 160).toLocaleLowerCase();
+}
+
+function candidateIdentity(value) {
+  return cleanText(value, 300).toLocaleLowerCase()
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim();
+}
+
+function evidenceCandidateNames(source) {
+  return cleanList([source?.canonicalName, ...(source?.aliases ?? [])], 60)
+    .map(candidateIdentity).filter(Boolean);
+}
+
+function verifiedClarificationAmbiguity(decision, evidence, searchInterpretation, supplied) {
+  if (decision?.decision !== 'CLARIFY') return supplied ?? null;
+
+  const preferred = new Set((searchInterpretation?.preferredRecordIds ?? [])
+    .map(recordId).filter(Boolean));
+  const resolvedPreferred = new Set(evidence.map((source) => recordId(source?.recordId))
+    .filter((id) => preferred.has(id)));
+  // A singular remembered record resolves "this/it". Multiple preferences
+  // represent an intentional comparison and must be answered together.
+  if (resolvedPreferred.size === 1 || preferred.size > 1) {
+    return Object.freeze({
+      required: false, kind: 'resolved_context', candidates: Object.freeze([]),
+    });
+  }
+
+  const suppliedCandidates = new Set((supplied?.candidates ?? [])
+    .map(candidateIdentity).filter(Boolean));
+  const proposed = cleanList(decision.clarification?.candidates, 10);
+  const resolved = [];
+  const resolvedRecordIds = new Set();
+  for (const candidate of proposed) {
+    const normalized = candidateIdentity(candidate);
+    if (!normalized || (suppliedCandidates.size && !suppliedCandidates.has(normalized))) continue;
+    const matches = evidence.filter((source) => evidenceCandidateNames(source).includes(normalized));
+    if (matches.length !== 1) continue;
+    const matchedRecordId = recordId(matches[0].recordId);
+    if (!matchedRecordId || resolvedRecordIds.has(matchedRecordId)) continue;
+    resolvedRecordIds.add(matchedRecordId);
+    resolved.push(candidate);
+  }
+  const genuine = resolvedRecordIds.size >= 2;
+  return Object.freeze({
+    required: genuine,
+    kind: genuine ? cleanText(supplied?.kind, 80) || 'verified_candidates' : 'not_ambiguous',
+    candidates: Object.freeze(genuine ? resolved : []),
+  });
+}
+
 function restorePostSearchEvidenceIds(decision, aliasToEvidenceId) {
   const restored = decision.evidenceIds.map((alias) => aliasToEvidenceId.get(alias));
   if (restored.some((evidenceId) => !evidenceId)) {
@@ -477,6 +532,9 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     'An absent attribute means the published evidence does not provide that information. Absence never proves a negative value, non-existence, non-requirement, non-availability, or zero.',
     'For NO_MATCH, describe only that the requested information is not present in the supplied published evidence; do not assert that the underlying real-world attribute is false.',
     'CLARIFY speech may identify supplied ambiguity candidates but must not introduce any unsupported factual claim.',
+    'Use CLARIFY only when at least two distinct supplied published records are genuinely possible, and name both candidates.',
+    'When preferredRecordIds resolves one previously cited record, answer from that record; do not ask which record the caller means.',
+    'When preferredRecordIds contains an intentional comparison set, compare those records; do not reinterpret the set as ambiguity.',
     '<orchestrator_turn_input>',
     JSON.stringify(turnInput),
     '</orchestrator_turn_input>',
@@ -599,6 +657,9 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     }));
   };
   semanticClaimValidation = await validateClaims(groundedDecision);
+  let clarificationAmbiguity = verifiedClarificationAmbiguity(
+    groundedDecision, evidence, search.value.search, dependencies.ambiguity,
+  );
   let outputValidation = validateTemplateEngineOutput(outputValidationInput(
     groundedDecision, base, dependencies, {
       phase: 'post_search',
@@ -606,6 +667,8 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       claimValidationRequired: true,
       selectedEvidence: evidence,
       semanticClaimValidation,
+      searchInterpretation: search.value.search,
+      ambiguity: clarificationAmbiguity,
     },
   ));
   if (!outputValidation.valid && !firstInvalidReason) {
@@ -615,6 +678,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       `Your previous caller-facing decision failed grounding validation: ${outputValidation.reason}.`,
       'Return one corrected JSON object matching the supplied post-search schema.',
       'Validate against the complete verified evidence set. A multi-record comparison may combine only attributes supported by its cited records.',
+      'The corrected RESPONSE must directly answer searchInterpretation.requestedFact. Do not substitute another true but unrequested attribute.',
       'Cite every evidence alias used for an entity, number, attribute or relationship.',
       'Generate any applicable nextQuestion in the same corrected response; do not add unsupported facts.',
       'Remove unsupported claims. If the supplied evidence cannot answer the request, return NO_MATCH with natural unavailable-information speech.',
@@ -633,6 +697,9 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
         validated.value, citations.aliasToEvidenceId,
       );
       semanticClaimValidation = await validateClaims(groundedDecision);
+      clarificationAmbiguity = verifiedClarificationAmbiguity(
+        groundedDecision, evidence, search.value.search, dependencies.ambiguity,
+      );
       outputValidation = validateTemplateEngineOutput(outputValidationInput(
         groundedDecision, base, dependencies, {
           phase: 'post_search',
@@ -640,6 +707,8 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
           claimValidationRequired: true,
           selectedEvidence: evidence,
           semanticClaimValidation,
+          searchInterpretation: search.value.search,
+          ambiguity: clarificationAmbiguity,
           retryCount: 1,
         },
       ));
@@ -666,6 +735,10 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
             claimValidationRequired: true,
             selectedEvidence: evidence,
             semanticClaimValidation: await validateClaims(groundedDecision),
+            searchInterpretation: search.value.search,
+            ambiguity: verifiedClarificationAmbiguity(
+              groundedDecision, evidence, search.value.search, dependencies.ambiguity,
+            ),
             retryCount: 1,
           },
         ));

@@ -94,7 +94,7 @@ for (const configuration of configurations) {
     scope: current.scope,
   }, {
     tenantBoundaryVerified: true,
-    validateGroundedClaims: async () => ({ supported: true }),
+    validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
     onPostSearchDiagnostics: (value) => { diagnostics = value; },
     invokeStructuredLlm: async () => {
       providerCalls += 1;
@@ -156,6 +156,7 @@ const noEvidence = await respondToTemplateEngineSearch({
     supported: decision === 'NO_MATCH'
       && response === 'That information is not published.'
       && selectedEvidence.length === 0,
+    requestedFactAddressed: decision === 'NO_MATCH',
     reason: decision === 'NO_MATCH' ? null : 'unsupported_claim',
   }),
   invokeStructuredLlm: async () => ({ outputParsed: {
@@ -181,7 +182,7 @@ const hallucinationBlocked = await respondToTemplateEngineSearch({
   informationUnavailableResponse: 'That information is not published.',
 }, {
   tenantBoundaryVerified: true,
-  validateGroundedClaims: async () => ({ supported: true }),
+  validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
   invokeStructuredLlm: async () => {
     hallucinationRepairCalls += 1;
     return { outputParsed: {

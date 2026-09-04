@@ -4,7 +4,7 @@ import { validateTemplateEnginePostSearchDecision } from './template-engine-post
 import { activateTemplateEngineWorkflow } from './template-engine-workflow-runtime.js';
 export { validateTemplateEngineToolResultSpeech } from './template-engine-tool-result-validator.js';
 
-export const TEMPLATE_ENGINE_OUTPUT_VALIDATOR_VERSION = 1;
+export const TEMPLATE_ENGINE_OUTPUT_VALIDATOR_VERSION = 3;
 
 function cleanText(value, maximum = 8_000) {
   return String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
@@ -125,6 +125,7 @@ function selectedEvidenceFor(decision, evidence) {
 
 function validateResponse(decision, input) {
   const factual = input.factualClaimsPresent === true;
+  const requestedFact = cleanText(input.searchInterpretation?.requestedFact, 500);
   if (internalOrJson(decision.response)) {
     return invalid('internal_or_json_speech', { factual, retryCount: input.retryCount });
   }
@@ -175,6 +176,11 @@ function validateResponse(decision, input) {
       factual: true, retryCount: input.retryCount,
     });
   }
+  if (requestedFact && input.semanticClaimValidation?.requestedFactAddressed !== true) {
+    return invalid('requested_fact_not_addressed', {
+      factual: true, retryCount: input.retryCount,
+    });
+  }
   return valid('TTS', decision);
 }
 
@@ -194,15 +200,11 @@ function validateClarification(decision, input) {
   }
   const allowedCandidates = new Set((input.ambiguity?.candidates ?? []).map(identity).filter(Boolean));
   const selectedCandidates = clarification.candidates.map(identity).filter(Boolean);
-  if (allowedCandidates.size && !selectedCandidates.length) {
+  if (allowedCandidates.size < 2 || selectedCandidates.length < 2) {
     return invalid('clarification_candidates_required');
   }
   if (selectedCandidates.some((candidate) => !allowedCandidates.has(candidate))) {
     return invalid('invented_clarification_candidate');
-  }
-  if (input.ambiguity?.kind === 'contextual_reference'
-    && (allowedCandidates.size < 2 || selectedCandidates.length < 2)) {
-    return invalid('contextual_clarification_not_ambiguous');
   }
   const permittedNumbers = new Set([
     ...numbers(input.currentUtterance),

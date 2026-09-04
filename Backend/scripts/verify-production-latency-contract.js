@@ -17,6 +17,7 @@ import { env } from '../src/config/env.js';
 import {
   canonicalToolArguments,
   configuredTechnicalFailureResponse,
+  configuredTtsFirstAudioTimeoutMs,
   remainingLiveTurnBudgetMs,
 } from '../src/voice/realtime-conversation-orchestrator.js';
 
@@ -73,10 +74,24 @@ for (let repeat = 1; repeat <= 3; repeat += 1) for (const fixture of task10Indus
   const session = await createSelectedLlmStream(profile, {
     callId: `call-${fixture.industry}`,
     query: fixture.query,
+    currentQuestion: fixture.query,
     history: [{ role: 'assistant', content: 'Previous configured question.' }],
     usageDirection: 'inbound',
     knowledge: zeroEvidenceKnowledge,
-    context: { groundedResponseMode: true, liveCallMemory: { currentTopic: fixture.industry } },
+    context: {
+      groundedResponseMode: true,
+      liveCallMemory: { currentTopic: fixture.industry },
+      groundedDecisionInput: {
+        currentQuestion: fixture.query,
+        recentRelevantTurns: [],
+        canonicalMemory: {},
+        hydratedRecords: [],
+        requestedFact: null,
+        ambiguityCandidates: [],
+        workflowAuthorization: [],
+        toolSchemas: [],
+      },
+    },
   }, { adapter, skipDefaultRegistration: true });
   let streamed = '';
   for await (const event of session.events) {
@@ -95,8 +110,22 @@ assert.ok(maximumHistoryMessages <= 4,
   'live grounded prompts must retain at most four recent history messages');
 
 const cancelledSession = await createSelectedLlmStream(profile, {
-  callId: 'call-cancel', query: 'new topic', history: [], usageDirection: 'inbound',
-  knowledge: zeroEvidenceKnowledge, context: { groundedResponseMode: true },
+  callId: 'call-cancel', query: 'new topic', currentQuestion: 'new topic',
+  history: [], usageDirection: 'inbound',
+  knowledge: zeroEvidenceKnowledge,
+  context: {
+    groundedResponseMode: true,
+    groundedDecisionInput: {
+      currentQuestion: 'new topic',
+      recentRelevantTurns: [],
+      canonicalMemory: {},
+      hydratedRecords: [],
+      requestedFact: null,
+      ambiguityCandidates: [],
+      workflowAuthorization: [],
+      toolSchemas: [],
+    },
+  },
 }, { adapter, skipDefaultRegistration: true });
 await cancelledSession.cancel('stale_turn');
 assert.equal(cancellations, 1);
@@ -208,6 +237,16 @@ assert.ok(env.VOICE_LLM_POST_ACK_TIMEOUT_MS >= 3000,
   'Post-acknowledgement completion needs production-latency headroom, not the fast test mock');
 assert.ok(env.VOICE_LLM_POST_ACK_TIMEOUT_MS <= env.LLM_REQUEST_TIMEOUT_MS);
 assert.ok(env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS < env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS);
+assert.ok(env.VOICE_TURN_ACKNOWLEDGEMENT_AFTER_MS >= 700
+  && env.VOICE_TURN_ACKNOWLEDGEMENT_AFTER_MS <= 800);
+assert.ok(env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS >= 1_200
+  && env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS <= 1_500,
+  'Final TTS must have a configurable 1.2-1.5 second provider-first-audio window');
+assert.equal(configuredTtsFirstAudioTimeoutMs(), env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS);
+assert.ok(configuredTtsFirstAudioTimeoutMs() > 600,
+  'A healthy TTS first chunk after 600 ms must not be rejected by an obsolete cap');
+assert.equal(configuredTtsFirstAudioTimeoutMs(1_000), 1_000,
+  'The shared end-to-end deadline may shorten, but never extend, the configured TTS window');
 assert.equal(remainingLiveTurnBudgetMs(2_000, 600, 0), 1_400);
 const technicalFallback = configuredTechnicalFailureResponse({
   agent: {
@@ -238,21 +277,29 @@ assert.deepEqual(canonicalToolArguments({
 const orchestrator = readFileSync(
   new URL('../src/voice/realtime-conversation-orchestrator.js', import.meta.url), 'utf8',
 );
-assert.match(orchestrator, /streaming\.onSentence\?\.\(sentence\)/u);
+const productionRuntime = readFileSync(
+  new URL('../src/voice/interaction/template-engine-production-runtime.js', import.meta.url),
+  'utf8',
+);
+const liveTemplateEngine = `${orchestrator}\n${productionRuntime}`;
+assert.match(orchestrator, /sentencePipeline\.enqueue\(finalAnswer\)/u,
+  'Validated template-engine speech must enter the immediate sentence TTS pipeline');
 assert.match(orchestrator, /activeRetrievalAbortController\?\.abort\(reason\)/u);
-assert.match(orchestrator, /LLM_REQUEST_TIMEOUT_MS|#llmAttempt/u);
-assert.match(orchestrator, /VOICE_KNOWLEDGE_TURN_TIMEOUT_MS/u);
-assert.match(orchestrator, /VOICE_RETRIEVAL_TARGET_MS/u);
+assert.match(liveTemplateEngine, /retrieveSpeculativeEvidence/u,
+  'Routing and speculative evidence retrieval must remain concurrent');
 assert.doesNotMatch(orchestrator,
   /RAG_RUNTIME_CHANNEL_DEADLINE_MS\s*\+\s*env\.RAG_RUNTIME_SEMANTIC_DEADLINE_MS/u,
   'Channel limits must not be added together as an artificial overall deadline');
 assert.doesNotMatch(orchestrator,
   /VOICE_KNOWLEDGE_TURN_TIMEOUT_MS,[\s\S]{0,80}\b500\b/u,
   'Knowledge completion must not retain the obsolete 500 ms hard cap');
-assert.match(orchestrator, /VOICE_LLM_TURN_TIMEOUT_MS/u);
 assert.doesNotMatch(orchestrator, /postAcknowledgementTimeoutMs:\s*env\.VOICE_LLM_POST_ACK_TIMEOUT_MS/u,
   'The post-acknowledgement phase must retain the independent full completion deadline');
 assert.match(orchestrator, /VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS/u);
+assert.match(orchestrator, /configuredTtsFirstAudioTimeoutMs/u);
+assert.doesNotMatch(orchestrator,
+  /Math\.min\(\s*env\.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS\s*,\s*600\s*,/u,
+  'Final TTS must not retain the obsolete hard 600 ms cap');
 assert.match(orchestrator, /remainingLiveTurnBudgetMs/u);
 assert.match(orchestrator,
   /Math\.min\(env\.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS, 2_000\)/u,
@@ -262,8 +309,8 @@ assert.match(orchestrator, /decisionWithoutRuntimeSpeech/u);
 assert.doesNotMatch(orchestrator, /One moment while I check the published information/iu);
 assert.doesNotMatch(orchestrator, /information service is temporarily unavailable/iu);
 assert.match(orchestrator, /turn_first_audio_deadline/u);
-assert.match(orchestrator, /voice\.late_validated_answer_continued/u,
-  'a validated answer that finishes after the soft first-audio deadline must still be delivered');
+assert.match(orchestrator, /currentSentenceNumber === 1 && !acknowledgementAudioPlayed/u,
+  'validated final speech must receive an independent TTS window after acknowledgement audio');
 assert.match(orchestrator, /options\.acknowledgement === true/u,
   'acknowledgement audio must be tracked independently from final response speech');
 assert.match(orchestrator, /!acknowledgement && maximumResponseCharacters/u,

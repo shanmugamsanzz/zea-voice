@@ -194,7 +194,9 @@ async function runFactualScenario(configuration, scenario, utterance) {
     },
     persistWorkflowState: async () => {},
     executeAuthorizedTool: async () => { throw new Error('factual route executed a tool'); },
-    validateGroundedClaims: async () => ({ supported: true, successClaimed: false }),
+    validateGroundedClaims: async () => ({
+      supported: true, successClaimed: false, requestedFactAddressed: true,
+    }),
     validateToolResultSpeechClaims: async () => ({ supported: true, successClaimed: false }),
   });
   assert.equal(result.decision.decision, 'RESPONSE');
@@ -418,6 +420,7 @@ async function runMissingAttribute(configuration) {
     validateGroundedClaims: async ({ decision, response }) => ({
       supported: decision === 'NO_MATCH' && response === configuration.unavailable,
       successClaimed: false,
+      requestedFactAddressed: decision === 'NO_MATCH',
     }),
     validateToolResultSpeechClaims: async () => ({ supported: true, successClaimed: false }),
   });
@@ -505,7 +508,9 @@ const hallucinationBlocked = await runTemplateEngineProductionTurn({
   }),
   persistWorkflowState: async () => {},
   executeAuthorizedTool: async () => { throw new Error('must not execute'); },
-  validateGroundedClaims: async () => ({ supported: true, successClaimed: false }),
+  validateGroundedClaims: async () => ({
+    supported: true, successClaimed: false, requestedFactAddressed: true,
+  }),
   validateToolResultSpeechClaims: async () => ({ supported: true, successClaimed: false }),
 });
 assert.equal(hallucinationBlocked.decision.decision, 'NO_MATCH');

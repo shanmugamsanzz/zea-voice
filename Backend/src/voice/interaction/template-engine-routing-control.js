@@ -68,7 +68,7 @@ export function buildTemplateEngineRoutingPrompt({
     '- Do not invent an implicit factual question merely because prior record references exist. Previous references matter only when the latest utterance semantically refers to them.',
     '- A request for an externally verifiable fact must use SEARCH. When uncertain whether a requested answer is factual, use SEARCH rather than an unsupported RESPONSE.',
     '- SEARCH must describe the fact actually requested in the latest utterance or its genuine contextual reference. Never manufacture requestedFact or contextualReference merely to justify SEARCH.',
-    '- Use CLARIFY only when essential meaning has multiple genuinely plausible interpretations after considering recentCompleteTurns. Ask one relevant question and include the plausible candidates when available.',
+    '- Use CLARIFY only when essential meaning has at least two genuinely plausible candidates after considering recentCompleteTurns and supplied published context. Ask one relevant question and include at least two candidate names. If factual candidate identities must first be discovered, use SEARCH.',
     '- Use TOOL only for an explicit external action that uniquely matches an authorized Workflow summary. A factual question about an action is SEARCH, not TOOL.',
     '- Resolve natural follow-up references from recentCompleteTurns and the latest utterance.',
     '- Treat lastReferencedRecordIds and comparisonRecordIds only as optional retrieval preferences, never as independent intent or factual evidence.',

@@ -20,6 +20,20 @@ assert.equal(contextualSearch.value.search.requestedFact, 'price');
 assert.equal(contextualSearch.value.search.contextualReference, 'Silver Master Health Checkup');
 assert.deepEqual(contextualSearch.value.search.preferredRecordIds, ['silver-record']);
 
+const diabetesFollowUp = normalizeTemplateEngineSearchDecision({
+  decision: 'SEARCH', response: '', clarification: null,
+  search: {
+    query: 'Diabetes Health Checkup included tests', requestedFact: 'included tests',
+    contextualReference: 'Diabetes Health Checkup', preferredRecordIds: [],
+  },
+  tool: null, nextQuestion: null, stateUpdate: null,
+}, {
+  lastReferencedRecordIds: ['diabetes-record'], comparisonRecordIds: [],
+});
+assert.equal(diabetesFollowUp.valid, true);
+assert.deepEqual(diabetesFollowUp.value.search.preferredRecordIds, ['diabetes-record'],
+  'A Diabetes contextual follow-up must reuse the cited Diabetes record');
+
 const explicitPreference = normalizeTemplateEngineSearchDecision({
   decision: 'SEARCH', response: '', clarification: null,
   search: {

@@ -18,6 +18,7 @@ import { templateEngineToolSchemas } from './interaction/template-engine-tool-sc
 import { executeAgentTools } from './tools/tool-executor.service.js';
 import { LlmCircuitBreaker } from './providers/llm/streaming-runtime.js';
 import { welcomeAudioCache } from './welcome-audio-cache.service.js';
+import { workflowFieldAudioCache } from './workflow-field-audio-cache.service.js';
 import { tenantProviderHealth } from './provider-health.service.js';
 import { renderWelcomeTemplate, welcomeTemplateContext } from './welcome-template.service.js';
 import { resolveInterruptionConfiguration } from './interruption/interruption-config.js';
@@ -61,7 +62,10 @@ import {
   loadTemplateEnginePublishedContext,
   retrieveTemplateEngineEvidence,
 } from './interaction/template-engine-production-retrieval.js';
-import { validateTemplateEngineClaims } from './interaction/template-engine-claim-validator.js';
+import {
+  validateTemplateEngineClaims,
+  validateTemplateEngineSearchClaims,
+} from './interaction/template-engine-claim-validator.js';
 import { evaluateFirstAudioSlo, percentile } from './interaction/voice-latency-slo.js';
 import { configuredCallDurationMs } from './interaction/call-duration-policy.js';
 import { sttEventPolicy } from './interaction/stt-event-policy.js';
@@ -345,6 +349,15 @@ export function configuredLatencyAcknowledgementResponse(profile, knowledge = {}
 
 export function remainingLiveTurnBudgetMs(deadlineAt, reserveMs = 0, now = Date.now()) {
   return Math.max(0, Math.floor(Number(deadlineAt) - Number(now) - Math.max(0, reserveMs)));
+}
+
+export function configuredTtsFirstAudioTimeoutMs(
+  sharedDeadlineRemainingMs = Number.POSITIVE_INFINITY,
+) {
+  return Math.max(1, Math.min(
+    env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS,
+    sharedDeadlineRemainingMs,
+  ));
 }
 
 function callerFacingText(
@@ -770,6 +783,7 @@ export class RealtimeConversationOrchestrator {
         : '👤 Generic welcome fallback prepared');
     }
     this.welcomeCache = this.dependencies.welcomeCache ?? welcomeAudioCache;
+    this.workflowFieldCache = this.dependencies.workflowFieldCache ?? workflowFieldAudioCache;
     this.cachedWelcomePromise = agentInitiates && this.runtimeProfile.agent.welcomeMessage
       && !this.personalizedWelcome && !this.followUpOpeningRequired
       ? this.welcomeCache.get(this.runtimeProfile, this.runtimeProfile.agent.welcomeMessage)
@@ -1901,6 +1915,8 @@ export class RealtimeConversationOrchestrator {
     const audibleSentences = [];
     let transcriptSources = [];
     let transcriptCommitted = false;
+    let workflowFieldCacheEntry = null;
+    let latencyAcknowledgementCacheEntry = null;
     const playbackGroupId = `turn-${epoch}`;
     const maximumResponseCharacters = Number(
       [
@@ -2019,6 +2035,44 @@ export class RealtimeConversationOrchestrator {
           stage: 'llm.sentence_ready_for_tts', callId: this.call.id,
           generationId, sentenceNumber: currentSentenceNumber, characters: sentenceCharacters,
         }, 'Complete LLM sentence queued for immediate TTS');
+        const fieldCache = !acknowledgement && currentSentenceNumber === 1
+          ? workflowFieldCacheEntry : null;
+        const reusableAudio = acknowledgement ? latencyAcknowledgementCacheEntry : fieldCache;
+        if (Buffer.isBuffer(reusableAudio?.audio) && reusableAudio.audio.length) {
+          if (!await this.#reserveTtsCharacters(sentence, generationId)) return false;
+          this.audioEngine.beginOutputGeneration(generationId, playbackGroupId);
+          firstAudioAt ??= Date.now();
+          if (!acknowledgement && !audibleSentences.includes(sentence)) {
+            audibleSentences.push(sentence);
+          }
+          const latencyMs = Math.max(0, firstAudioAt - turnStartedAt);
+          this.runtimeMetrics.latency.firstResponseAudioMs ??= [];
+          this.runtimeMetrics.latency.firstResponseAudioMs.push(latencyMs);
+          const queued = await this.audioEngine.enqueueSynthesized(reusableAudio.audio, generationId);
+          if (!queued) return false;
+          await this.audioEngine.flushSynthesized(generationId, { finalizeGroup: false });
+          if (acknowledgement) {
+            acknowledgementAudioPlayed = true;
+            this.runtimeMetrics.latency.latencyAcknowledgementAudioCacheHits ??= 0;
+            this.runtimeMetrics.latency.latencyAcknowledgementAudioCacheHits += 1;
+            this.log.info({
+              stage: 'template_engine.latency_acknowledgement_audio_cache_hit',
+              callId: this.call.id, turnEpoch: epoch, latencyMs,
+            }, 'Cached latency acknowledgement audio queued without live TTS');
+          } else {
+            completedSentences.push(sentence);
+            this.runtimeMetrics.latency.workflowFieldAudioCacheHits ??= 0;
+            this.runtimeMetrics.latency.workflowFieldAudioCacheHits += 1;
+            this.log.info({
+              stage: 'template_engine.workflow_field_audio_cache_hit',
+              callId: this.call.id, turnEpoch: epoch,
+              workflowRecordId: fieldCache.descriptor?.workflowRecordId,
+              fieldKey: fieldCache.descriptor?.fieldKey,
+              latencyMs,
+            }, 'Cached localized Workflow field audio queued without live TTS');
+          }
+          return true;
+        }
         if (lookahead) {
           const waitedForHandoff = !lookaheadReady;
           if (!waitedForHandoff) this.runtimeMetrics.ttsLookahead.readyBeforePlayback += 1;
@@ -2060,9 +2114,12 @@ export class RealtimeConversationOrchestrator {
           }
           return played;
         }
+        const capturedAudio = fieldCache?.descriptor || acknowledgement
+          ? [] : null;
         const played = await this.#synthesize(sentence, generationId, {
           kind, startedAt: turnStartedAt, deferDrain: true,
           playbackGroupId, deferBoundaryFlush: true, epoch,
+          capture: capturedAudio,
           // The acknowledgement satisfies the turn's first-audio contract.
           // Once it is audible, final TTS uses its independent provider timeout.
           firstAudioDeadlineAt: (acknowledgement
@@ -2071,9 +2128,33 @@ export class RealtimeConversationOrchestrator {
           validatedTextAt: acknowledgement ? undefined : firstValidatedTextAt,
           onFirstAudio: () => {
             firstAudioAt ??= Date.now();
-            if (!audibleSentences.includes(sentence)) audibleSentences.push(sentence);
+            if (!acknowledgement && !audibleSentences.includes(sentence)) {
+              audibleSentences.push(sentence);
+            }
           },
         });
+        if (played && capturedAudio?.length && fieldCache?.descriptor) {
+          const audio = Buffer.concat(capturedAudio);
+          this.runtimeMetrics.latency.workflowFieldAudioCacheMisses ??= 0;
+          this.runtimeMetrics.latency.workflowFieldAudioCacheMisses += 1;
+          void this.workflowFieldCache.set(
+            this.runtimeProfile, fieldCache.descriptor, sentence, audio,
+          );
+        }
+        if (played && acknowledgement && capturedAudio?.length
+          && latencyAcknowledgementCacheEntry?.text === sentence) {
+          const audio = Buffer.concat(capturedAudio);
+          this.runtimeMetrics.latency.latencyAcknowledgementAudioCacheMisses ??= 0;
+          this.runtimeMetrics.latency.latencyAcknowledgementAudioCacheMisses += 1;
+          void Promise.resolve(latencyAcknowledgementCacheEntry.store?.(audio)).catch((error) => {
+            this.log.warn({
+              err: error,
+              stage: 'template_engine.latency_acknowledgement_audio_cache_write_failed',
+              callId: this.call.id,
+              turnEpoch: epoch,
+            }, 'Latency acknowledgement audio cache write failed without blocking playback');
+          });
+        }
         if (played && acknowledgement) {
           acknowledgementAudioPlayed = true;
           this.log.info({
@@ -2169,6 +2250,10 @@ export class RealtimeConversationOrchestrator {
     return {
       enqueue,
       enqueueAcknowledgement,
+      setWorkflowFieldAudioCache: (entry) => { workflowFieldCacheEntry = entry ?? null; },
+      setLatencyAcknowledgementAudioCache: (entry) => {
+        latencyAcknowledgementCacheEntry = entry ?? null;
+      },
       setSources: (sources) => { transcriptSources = mergeMessageSources(sources ?? []); },
       markTranscriptCommitted: () => {
         transcriptCommitted = true;
@@ -2247,9 +2332,39 @@ export class RealtimeConversationOrchestrator {
       epoch, turnStartedAt, firstAudioDeadlineAt,
     );
     let finalResponseReady = false;
+    const latencyAcknowledgementText = configuredLatencyAcknowledgementResponse(
+      this.runtimeProfile,
+    );
+    const acknowledgementCacheEntry = (audio = null) => ({
+      text: latencyAcknowledgementText,
+      audio,
+      store: async (generatedAudio) => {
+        await this.welcomeCache.set(
+          this.runtimeProfile, latencyAcknowledgementText, generatedAudio,
+        );
+      },
+    });
+    sentencePipeline.setLatencyAcknowledgementAudioCache(acknowledgementCacheEntry());
+    if (latencyAcknowledgementText) {
+      void this.welcomeCache.get(this.runtimeProfile, latencyAcknowledgementText)
+        .then((audio) => {
+          if (epoch !== this.epoch || this.finalized) return;
+          sentencePipeline.setLatencyAcknowledgementAudioCache(
+            acknowledgementCacheEntry(audio),
+          );
+        })
+        .catch((error) => {
+          this.log.warn({
+            err: error,
+            stage: 'template_engine.latency_acknowledgement_audio_cache_read_failed',
+            callId: this.call.id,
+            turnEpoch: epoch,
+          }, 'Latency acknowledgement audio cache read failed; live TTS remains available');
+        });
+    }
     const latencyAcknowledgement = armTemplateEngineTurnLatencyAcknowledgement({
       thresholdMs: env.VOICE_TURN_ACKNOWLEDGEMENT_AFTER_MS,
-      acknowledgementText: configuredLatencyAcknowledgementResponse(this.runtimeProfile),
+      acknowledgementText: latencyAcknowledgementText,
       isActive: () => !finalResponseReady && epoch === this.epoch && !this.finalized,
       onAcknowledgement: (text) => sentencePipeline.enqueueAcknowledgement(text),
       onTriggered: ({ thresholdMs, queued }) => {
@@ -2355,9 +2470,18 @@ export class RealtimeConversationOrchestrator {
         retrieveEvidence: (input) => retrieveTemplateEngineEvidence(
           input, this.dependencies.templateEngineKnowledgeDependencies,
         ),
+        retrieveSpeculativeEvidence: (input) => retrieveTemplateEngineEvidence(
+          input, this.dependencies.templateEngineKnowledgeDependencies,
+        ),
         persistWorkflowState: async (state) => { this.templateEngineState = {
           ...this.templateEngineState, ...state,
         }; },
+        getCachedWorkflowSpeech: (descriptor) => (
+          this.workflowFieldCache.get(this.runtimeProfile, descriptor)
+        ),
+        cacheWorkflowSpeech: (descriptor, speech) => (
+          this.workflowFieldCache.set(this.runtimeProfile, descriptor, speech)
+        ),
         executeAuthorizedTool: async (toolCall) => {
           const results = await (this.dependencies.executeTools ?? executeAgentTools)(
             this.runtimeProfile,
@@ -2389,14 +2513,18 @@ export class RealtimeConversationOrchestrator {
         validateGroundedClaims: ({
           response, decision, selectedEvidence, searchInterpretation, latestUtterance,
         }) => (
-          validateTemplateEngineClaims({
+          decision === 'NO_MATCH' ? validateTemplateEngineClaims({
             speech: response,
             evidence: selectedEvidence,
             decision,
             searchInterpretation,
             latestUtterance,
-          }, {
-            invokeStructuredLlm,
+          }, { invokeStructuredLlm }) : validateTemplateEngineSearchClaims({
+            speech: response,
+            evidence: selectedEvidence,
+            decision,
+            searchInterpretation,
+            latestUtterance,
           })
         ),
         validateToolResultSpeechClaims: ({ speech, verifiedResult }) => (
@@ -2485,6 +2613,7 @@ export class RealtimeConversationOrchestrator {
       turnId: `${this.call.id}:${epoch}`,
     });
     const finalAnswer = this.#fitTtsMessage(result.speech);
+    sentencePipeline.setWorkflowFieldAudioCache(result.workflow?.speechCache ?? null);
     if (!finalAnswer || !sentencePipeline.enqueue(finalAnswer)) {
       sentencePipeline.cancel();
       throw new AppError(503, 'The template-engine response could not be queued for speech',
@@ -2666,17 +2795,15 @@ export class RealtimeConversationOrchestrator {
           throw new AppError(504, 'Turn exceeded the end-to-end first-audio deadline',
             'VOICE_TURN_FIRST_AUDIO_DEADLINE');
         }
-        const firstAudioTimeoutMs = Math.max(1, Math.min(
-          env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS,
-          600,
+        const firstAudioTimeoutMs = configuredTtsFirstAudioTimeoutMs(
           sharedDeadlineRemainingMs,
-        ));
+        );
         const next = firstAudio
           ? await rejectAfter(iterator.next(), firstAudioTimeoutMs,
             () => new AppError(504, 'TTS produced no audio within the live deadline',
-              options.firstAudioDeadlineAt && firstAudioTimeoutMs < Math.min(
-                env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS, 600,
-              ) ? 'VOICE_TURN_FIRST_AUDIO_DEADLINE' : 'TTS_FIRST_AUDIO_TIMEOUT'),
+              options.firstAudioDeadlineAt
+                && firstAudioTimeoutMs < env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS
+                ? 'VOICE_TURN_FIRST_AUDIO_DEADLINE' : 'TTS_FIRST_AUDIO_TIMEOUT'),
             () => this.adapters.tts.cancel?.('first_audio_timeout'))
           : await iterator.next();
         if (next.done) break;

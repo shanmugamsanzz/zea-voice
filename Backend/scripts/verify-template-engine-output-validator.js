@@ -4,6 +4,11 @@ import {
   validateTemplateEngineOutput,
   validateTemplateEngineToolResultSpeech,
 } from '../src/voice/interaction/template-engine-output-validator.js';
+import {
+  templateEngineClaimValidationJsonSchema,
+  validateTemplateEngineClaims,
+  validateTemplateEngineSearchClaims,
+} from '../src/voice/interaction/template-engine-claim-validator.js';
 import { respondToTemplateEngineSearch } from '../src/voice/interaction/template-engine-orchestrator.js';
 
 const response = (text, evidenceIds = []) => ({
@@ -25,6 +30,7 @@ const evidence = [{
   recordType: 'ITEM', tenantId: 'tenant-a', agentId: 'agent-a',
   knowledgeBaseId: 'kb-a', publicationRevision: 7,
   canonicalName: 'Service Alpha', aliases: ['Alpha'],
+  requestedFact: 'price',
   content: 'Service Alpha costs 3200 units and includes feature Delta.',
 }];
 const entities = [{ recordId: 'r-1', canonicalName: 'Service Alpha', aliases: ['Alpha'] }];
@@ -50,10 +56,62 @@ assert.equal(result.ttsAllowed, true);
 result = validateTemplateEngineOutput({
   phase: 'post_search', decision: response('Service Alpha costs 3200 units.', ['e-1']),
   factualClaimsPresent: true, selectedEvidence: evidence, publishedEntities: entities,
-  semanticClaimValidation: { supported: true },
+  semanticClaimValidation: { supported: true, requestedFactAddressed: true },
+  searchInterpretation: { requestedFact: 'price' },
 });
 assert.equal(result.valid, true);
 assert.equal(result.route, 'TTS');
+
+result = validateTemplateEngineOutput({
+  phase: 'post_search', decision: response('Service Alpha costs 3200 units.', ['e-1']),
+  factualClaimsPresent: true, selectedEvidence: evidence, publishedEntities: entities,
+  semanticClaimValidation: { supported: true, requestedFactAddressed: false },
+  searchInterpretation: { requestedFact: 'included feature' },
+});
+assert.equal(result.valid, false,
+  'A supported statement about another attribute must not satisfy the requested fact');
+assert.equal(result.reason, 'requested_fact_not_addressed');
+assert.equal(result.retrySearch, true);
+
+assert.equal(
+  templateEngineClaimValidationJsonSchema.required.includes('requestedFactAddressed'),
+  true,
+);
+let claimValidationRequest;
+const relevanceValidation = await validateTemplateEngineClaims({
+  speech: 'Service Alpha costs 3200 units.',
+  evidence,
+  decision: 'RESPONSE',
+  searchInterpretation: { requestedFact: 'included feature' },
+  latestUtterance: 'Which feature is included?',
+}, {
+  invokeStructuredLlm: async (request) => {
+    claimValidationRequest = request;
+    return { outputParsed: {
+      supported: true,
+      successClaimed: false,
+      requestedFactAddressed: false,
+      reason: 'requested_fact_not_addressed',
+    } };
+  },
+});
+assert.equal(relevanceValidation.supported, true);
+assert.equal(relevanceValidation.requestedFactAddressed, false);
+assert.match(claimValidationRequest.messages[0].content, /included feature/u);
+
+const deterministicPrice = validateTemplateEngineSearchClaims({
+  speech: 'Service Alpha costs 3200 units.', evidence,
+  decision: 'RESPONSE', searchInterpretation: { requestedFact: 'price' },
+});
+assert.equal(deterministicPrice.supported, true);
+assert.equal(deterministicPrice.requestedFactAddressed, true);
+const deterministicWrongFact = validateTemplateEngineSearchClaims({
+  speech: 'Service Alpha costs 3200 units.', evidence,
+  decision: 'RESPONSE', searchInterpretation: { requestedFact: 'included feature' },
+});
+assert.equal(deterministicWrongFact.supported, true);
+assert.equal(deterministicWrongFact.requestedFactAddressed, false,
+  'Deterministic requested-fact validation must reject a price-only answer to a detail request');
 
 result = validateTemplateEngineOutput({
   phase: 'post_search',
@@ -110,6 +168,15 @@ result = validateTemplateEngineOutput({
 });
 assert.equal(result.valid, true);
 assert.equal(result.ttsAllowed, true);
+
+result = validateTemplateEngineOutput({
+  phase: 'post_search', decision: clarify('Did you mean Alpha?', ['Alpha']),
+  ambiguity: { required: true, kind: 'entity', candidates: ['Alpha'] },
+  claimValidationRequired: true,
+  semanticClaimValidation: { supported: true, requestedFactAddressed: true },
+});
+assert.equal(result.reason, 'clarification_candidates_required',
+  'A single possible record must never be treated as genuine ambiguity');
 
 result = validateTemplateEngineOutput({
   phase: 'post_search', decision: clarify('Which one? Should I continue?', ['Alpha', 'Beta']),

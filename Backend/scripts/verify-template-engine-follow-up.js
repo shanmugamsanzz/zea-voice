@@ -176,7 +176,9 @@ const production = await runTemplateEngineProductionTurn({
   }),
   persistWorkflowState: async () => {},
   executeAuthorizedTool: async () => { throw new Error('must not execute'); },
-  validateGroundedClaims: async () => ({ supported: true, successClaimed: false }),
+  validateGroundedClaims: async () => ({
+    supported: true, successClaimed: false, requestedFactAddressed: true,
+  }),
   validateToolResultSpeechClaims: async () => ({ supported: true, successClaimed: false }),
   onConversationGuidanceSelected: (details) => { guidanceDiagnostics = details; },
   onFollowUpDiagnostics: (details) => { followUpDiagnostics = details; },

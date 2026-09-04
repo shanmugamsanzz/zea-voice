@@ -210,6 +210,32 @@ const ambiguousTurn = await routeTemplateEngineUtterance({
 assert.equal(ambiguousTurn.decision.decision, 'CLARIFY');
 assert.equal(ambiguousTurn.outputValidation.route, 'TTS');
 
+const resolvedContextSearch = await routeTemplateEngineUtterance({
+  mainPrompt: 'Clarify only genuine ambiguity and search for factual details.',
+  latestUtterance: 'What tests does it include?',
+  lastReferencedRecordIds: ['diabetes-record'],
+  conversationHistory: [
+    { role: 'user', content: 'Explain the selected option.' },
+    { role: 'assistant', content: 'Here is its grounded description.' },
+  ],
+}, {
+  tenantBoundaryVerified: true,
+  nonFactualResponseAllowed: true,
+  ambiguity: { required: false, kind: 'resolved_context', candidates: [] },
+  invokeStructuredLlm: async () => ({
+    decision: 'CLARIFY', response: '', search: null, tool: null,
+    clarification: {
+      question: 'Which option do you mean?', reason: 'ambiguous reference',
+      candidates: ['Only one option'],
+    },
+    nextQuestion: null, stateUpdate: null,
+  }),
+});
+assert.equal(resolvedContextSearch.decision.decision, 'SEARCH');
+assert.deepEqual(resolvedContextSearch.decision.search.preferredRecordIds, ['diabetes-record'],
+  'A contextual factual follow-up must retain its one cited record instead of clarifying');
+assert.equal(resolvedContextSearch.outputValidation.reason, 'clarification_not_required');
+
 const recoveredDecision = {
   decision: 'RESPONSE', response: 'Certainly, we can continue.', clarification: null,
   search: null, tool: null, nextQuestion: null, stateUpdate: null,

@@ -85,6 +85,7 @@ function dependencies(configuration, decisions, { evidence = true } = {}) {
       validateGroundedClaims: async ({ selectedEvidence }) => ({
         supported: selectedEvidence.length > 0 || decisions.length === 0,
         successClaimed: false,
+        requestedFactAddressed: true,
       }),
       validateToolResultSpeechClaims: async () => ({ supported: true, successClaimed: false }),
       onRetrievalDiagnostics: (value) => { retrievalDiagnostics = value; },
