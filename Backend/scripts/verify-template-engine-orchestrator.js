@@ -67,7 +67,7 @@ const routed = await routeTemplateEngineUtterance({
           query: 'available information', requestedFact: 'available information',
           contextualReference: null,
         },
-        tool: null, stateUpdate: null,
+        tool: null, nextQuestion: null, stateUpdate: null,
       },
     };
   },
@@ -94,19 +94,23 @@ const socialTurn = await routeTemplateEngineUtterance({
     socialRequest = request;
     return {
       decision: 'RESPONSE', response: 'Hello! You are welcome.', clarification: null,
-      search: null, tool: null, stateUpdate: null,
+      search: null, tool: null,
+      nextQuestion: { question: 'How may I help?', reason: 'conversation_guidance' },
+      stateUpdate: null,
     };
   },
 });
 assert.equal(socialTurn.decision.decision, 'RESPONSE');
+assert.equal(socialTurn.decision.nextQuestion.question, 'How may I help?');
 assert.equal(socialTurn.outputValidation.route, 'TTS');
 assert.match(socialRequest.messages[0].content,
-  /purely social greeting, courtesy, acknowledgement/u);
+  /Conversational interaction management includes greetings/u);
 
 let reviewedCalls = 0;
 const reviewedSocialTurn = await routeTemplateEngineUtterance({
   mainPrompt: 'Use RESPONSE for non-factual conversation and SEARCH for factual requests.',
   latestUtterance: 'Okay, please continue.',
+  lastReferencedRecordIds: ['record-from-prior-factual-turn'],
 }, {
   tenantBoundaryVerified: true,
   nonFactualResponseAllowed: true,
@@ -118,16 +122,93 @@ const reviewedSocialTurn = await routeTemplateEngineUtterance({
         query: 'continue', requestedFact: null, contextualReference: null,
         preferredRecordIds: [],
       },
-      tool: null, stateUpdate: null,
+      tool: null, nextQuestion: null, stateUpdate: null,
     } : {
       decision: 'RESPONSE', response: 'Certainly, please continue.', clarification: null,
-      search: null, tool: null, stateUpdate: null,
+      search: null, tool: null, nextQuestion: null, stateUpdate: null,
     };
   },
 });
 assert.equal(reviewedCalls, 2);
 assert.equal(reviewedSocialTurn.routingReviewAttempted, true);
 assert.equal(reviewedSocialTurn.decision.decision, 'RESPONSE');
+
+for (const interaction of [
+  ['Please wait for a moment.', 'Certainly, take your time.'],
+  ['Are you still present?', 'Yes, I am here.'],
+  ['Thanks, I understand.', 'You are welcome.'],
+]) {
+  const routedInteraction = await routeTemplateEngineUtterance({
+    mainPrompt: 'Respond naturally to non-factual conversation management and search for facts.',
+    latestUtterance: interaction[0],
+    conversationHistory: [
+      { role: 'user', content: 'Tell me the published value.' },
+      { role: 'assistant', content: 'The published value is 10.' },
+    ],
+    lastReferencedRecordIds: ['record-from-prior-factual-turn'],
+  }, {
+    tenantBoundaryVerified: true,
+    nonFactualResponseAllowed: true,
+    invokeStructuredLlm: async () => ({
+      decision: 'RESPONSE', response: interaction[1], clarification: null,
+      search: null, tool: null, nextQuestion: null, stateUpdate: null,
+    }),
+  });
+  assert.equal(routedInteraction.decision.decision, 'RESPONSE');
+  assert.equal(routedInteraction.outputValidation.route, 'TTS');
+}
+
+let factualReviewCalls = 0;
+const reviewedFactualTurn = await routeTemplateEngineUtterance({
+  mainPrompt: 'Respond to conversation management and search for externally verifiable facts.',
+  latestUtterance: 'What options are currently available?',
+}, {
+  tenantBoundaryVerified: true,
+  invokeStructuredLlm: async () => {
+    factualReviewCalls += 1;
+    return factualReviewCalls === 1 ? {
+      decision: 'SEARCH', response: '', clarification: null,
+      search: {
+        query: 'currently available options', requestedFact: null,
+        contextualReference: null, preferredRecordIds: [],
+      },
+      tool: null, nextQuestion: null, stateUpdate: null,
+    } : {
+      decision: 'SEARCH', response: '', clarification: null,
+      search: {
+        query: 'currently available options', requestedFact: 'available options',
+        contextualReference: null, preferredRecordIds: [],
+      },
+      tool: null, nextQuestion: null, stateUpdate: null,
+    };
+  },
+});
+assert.equal(factualReviewCalls, 2);
+assert.equal(reviewedFactualTurn.routingReviewAttempted, true);
+assert.equal(reviewedFactualTurn.decision.decision, 'SEARCH');
+assert.equal(reviewedFactualTurn.decision.search.requestedFact, 'available options');
+
+const ambiguousTurn = await routeTemplateEngineUtterance({
+  mainPrompt: 'Clarify only genuine ambiguity.',
+  latestUtterance: 'Tell me about that one.',
+}, {
+  tenantBoundaryVerified: true,
+  nonFactualResponseAllowed: true,
+  ambiguity: {
+    required: true, kind: 'contextual_reference',
+    candidates: ['Option Alpha', 'Option Beta'],
+  },
+  invokeStructuredLlm: async () => ({
+    decision: 'CLARIFY', response: '', search: null, tool: null, nextQuestion: null, stateUpdate: null,
+    clarification: {
+      question: 'Do you mean Option Alpha or Option Beta?',
+      reason: 'contextual_reference_ambiguous',
+      candidates: ['Option Alpha', 'Option Beta'],
+    },
+  }),
+});
+assert.equal(ambiguousTurn.decision.decision, 'CLARIFY');
+assert.equal(ambiguousTurn.outputValidation.route, 'TTS');
 
 await assert.rejects(() => routeTemplateEngineUtterance({
   mainPrompt: 'Use RESPONSE for greetings.',
@@ -137,7 +218,7 @@ await assert.rejects(() => routeTemplateEngineUtterance({
   invokeStructuredLlm: async () => ({
     decision: 'RESPONSE', response: 'Hello.', clarification: null,
     search: { query: 'not allowed', requestedFact: null, contextualReference: null },
-    tool: null, stateUpdate: null,
+    tool: null, nextQuestion: null, stateUpdate: null,
   }),
 }), (error) => error.code === 'TEMPLATE_ENGINE_ORCHESTRATOR_DECISION_INVALID'
   && error.details?.reason === 'mixed_decision_payload');

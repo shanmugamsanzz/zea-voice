@@ -5,9 +5,10 @@ export const templateEnginePostSearchDecisionTypes = Object.freeze({
 });
 
 const rootKeys = Object.freeze([
-  'decision', 'response', 'clarification', 'evidenceIds', 'stateUpdate',
+  'decision', 'response', 'clarification', 'evidenceIds', 'nextQuestion', 'stateUpdate',
 ]);
 const clarificationKeys = Object.freeze(['question', 'reason', 'candidates']);
+const nextQuestionKeys = Object.freeze(['question', 'reason']);
 const decisions = new Set(Object.values(templateEnginePostSearchDecisionTypes));
 
 export const templateEnginePostSearchJsonSchema = Object.freeze({
@@ -41,6 +42,23 @@ export const templateEnginePostSearchJsonSchema = Object.freeze({
     }),
     evidenceIds: Object.freeze({
       type: 'array', items: Object.freeze({ type: 'string' }),
+    }),
+    nextQuestion: Object.freeze({
+      anyOf: Object.freeze([
+        Object.freeze({ type: 'null' }),
+        Object.freeze({
+          type: 'object', additionalProperties: false, required: nextQuestionKeys,
+          properties: Object.freeze({
+            question: Object.freeze({ type: 'string' }),
+            reason: Object.freeze({
+              anyOf: Object.freeze([
+                Object.freeze({ type: 'string' }),
+                Object.freeze({ type: 'null' }),
+              ]),
+            }),
+          }),
+        }),
+      ]),
     }),
     // Post-search state is derived deterministically from citations and
     // clarification output; the LLM cannot write arbitrary state here.
@@ -108,15 +126,25 @@ function normalizeClarification(value) {
   return Object.freeze({ question, reason, candidates: Object.freeze(candidates) });
 }
 
+function normalizeNextQuestion(value) {
+  if (!exactKeys(value, nextQuestionKeys)) return null;
+  const question = text(value.question, 1_000);
+  const reason = value.reason === null ? null : text(value.reason, 500);
+  if (!question || (value.reason !== null && reason === null)) return null;
+  return Object.freeze({ question, reason });
+}
+
 function normalizeInactiveBranchFields(parsed) {
   if (!decisions.has(parsed?.decision)) return parsed;
   if (parsed.decision === templateEnginePostSearchDecisionTypes.RESPONSE) {
     return Object.freeze({ ...parsed, clarification: null });
   }
   if (parsed.decision === templateEnginePostSearchDecisionTypes.CLARIFY) {
-    return Object.freeze({ ...parsed, response: '', evidenceIds: [] });
+    return Object.freeze({ ...parsed, response: '', evidenceIds: [], nextQuestion: null });
   }
-  return Object.freeze({ ...parsed, clarification: null, evidenceIds: [] });
+  return Object.freeze({
+    ...parsed, clarification: null, evidenceIds: [], nextQuestion: null,
+  });
 }
 
 export function templateEnginePostSearchDecisionDiagnostics(value) {
@@ -130,6 +158,7 @@ export function templateEnginePostSearchDecisionDiagnostics(value) {
     decision: decisions.has(parsed?.decision) ? parsed.decision : null,
     responsePresent: typeof parsed?.response === 'string' && parsed.response.trim().length > 0,
     clarificationPresent: isObject(parsed?.clarification),
+    nextQuestionPresent: isObject(parsed?.nextQuestion),
     evidenceIdCount: Array.isArray(parsed?.evidenceIds) ? parsed.evidenceIds.length : null,
     evidenceAliases: Object.freeze(evidenceAliases),
     stateUpdateNull: parsed?.stateUpdate === null,
@@ -149,8 +178,11 @@ export function validateTemplateEnginePostSearchDecision(value, allowedEvidenceI
     ? null : normalizeClarification(parsed.clarification);
   const evidenceIds = Array.isArray(parsed.evidenceIds)
     ? parsed.evidenceIds.map((id) => text(id, 160)) : null;
+  const nextQuestion = parsed.nextQuestion === null
+    ? null : normalizeNextQuestion(parsed.nextQuestion);
   const stateUpdate = parsed.stateUpdate === null ? null : undefined;
   if (response === null || (parsed.clarification !== null && !clarification)
+    || (parsed.nextQuestion !== null && !nextQuestion)
     || !evidenceIds || evidenceIds.length > 5 || evidenceIds.some((id) => !id)
     || new Set(evidenceIds).size !== evidenceIds.length || stateUpdate === undefined) {
     return Object.freeze({ valid: false, reason: 'invalid_payload' });
@@ -161,15 +193,17 @@ export function validateTemplateEnginePostSearchDecision(value, allowedEvidenceI
   }
   const branchValid = ({
     RESPONSE: Boolean(response) && clarification === null && evidenceIds.length > 0,
-    CLARIFY: response === '' && clarification !== null && evidenceIds.length === 0,
-    NO_MATCH: Boolean(response) && clarification === null && evidenceIds.length === 0,
+    CLARIFY: response === '' && clarification !== null && evidenceIds.length === 0
+      && nextQuestion === null,
+    NO_MATCH: Boolean(response) && clarification === null && evidenceIds.length === 0
+      && nextQuestion === null,
   })[parsed.decision];
   if (!branchValid) return Object.freeze({ valid: false, reason: 'mixed_decision_payload' });
   return Object.freeze({
     valid: true,
     value: Object.freeze({
       decision: parsed.decision, response, clarification,
-      evidenceIds: Object.freeze(evidenceIds), stateUpdate,
+      evidenceIds: Object.freeze(evidenceIds), nextQuestion, stateUpdate,
     }),
   });
 }

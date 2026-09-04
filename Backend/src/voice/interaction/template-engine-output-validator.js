@@ -158,8 +158,14 @@ function validateResponse(decision, input) {
   if (mentioned.some((entity) => !evidenceSupportsEntity(entity, selectedEvidence))) {
     return invalid('unsupported_entity_claim', { factual: true, retryCount: input.retryCount });
   }
+  const citedRecordIds = new Set(selectedEvidence.map((source) => (
+    cleanText(source?.recordId, 160).toLocaleLowerCase()
+  )).filter(Boolean));
+  const completeMultiRecordEvidence = citedRecordIds.size > 1
+    && input.semanticClaimValidation?.supported === true;
   if (!evidenceSupportsRelationship(
-    mentioned, selectedEvidence, input.allowMultipleEntities,
+    mentioned, selectedEvidence,
+    input.allowMultipleEntities === true || completeMultiRecordEvidence,
   )) {
     return invalid('unsupported_relationship_claim', { factual: true, retryCount: input.retryCount });
   }

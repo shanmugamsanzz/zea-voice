@@ -22,7 +22,7 @@ const searchDecision = Object.freeze({
     query: 'selected service current price', requestedFact: 'price',
     contextualReference: 'selected service', preferredRecordIds: ['record-1'],
   }),
-  tool: null, stateUpdate: null,
+  tool: null, nextQuestion: null, stateUpdate: null,
 });
 const scope = Object.freeze({
   tenantId: 'tenant-a', agentId: 'agent-a',
@@ -62,7 +62,12 @@ const result = await respondToTemplateEngineSearch({
     return {
       outputParsed: {
         decision: 'RESPONSE', response: 'The current price is 3200 currency units.',
-        clarification: null, evidenceIds: ['E1'], stateUpdate: null,
+        clarification: null, evidenceIds: ['E1'],
+        nextQuestion: {
+          question: 'Would you like details about this service?',
+          reason: 'conversation_guidance',
+        },
+        stateUpdate: null,
       },
     };
   },
@@ -70,6 +75,8 @@ const result = await respondToTemplateEngineSearch({
 });
 assert.equal(calls, 1);
 assert.equal(result.decision.decision, 'RESPONSE');
+assert.equal(result.decision.nextQuestion.question,
+  'Would you like details about this service?');
 assert.deepEqual(result.decision.evidenceIds, ['evidence-1']);
 assert.deepEqual(groundedClaimInput.evidenceIds, ['evidence-1']);
 assert.deepEqual(postSearchDiagnostics.allowedAliases, ['E1']);
@@ -86,27 +93,84 @@ assert.doesNotMatch(providerRequest.messages[0].content, /evidence-1/u,
   'Real evidence IDs must not be exposed as provider-facing citation tokens');
 assert.deepEqual(providerRequest.responseFormat.schema.properties.evidenceIds.items.enum, ['E1']);
 
+const secondEvidence = Object.freeze({
+  ...verifiedEvidence[0],
+  evidenceId: 'evidence-2',
+  recordId: 'record-2',
+  canonicalName: 'Second Service',
+  aliases: Object.freeze(['Second']),
+  relationships: Object.freeze([]),
+  authoritativeData: Object.freeze({ name: 'Second Service', price: 4100 }),
+  content: 'The second service currently costs 4100 currency units.',
+});
+let comparisonClaimInput;
+const comparisonResult = await respondToTemplateEngineSearch({
+  mainPrompt,
+  latestUtterance: 'Compare the first and second services.',
+  state: {
+    ...state,
+    lastReferencedRecordIds: [],
+    comparisonRecordIds: ['record-1', 'record-2'],
+  },
+  searchDecision: {
+    ...searchDecision,
+    search: {
+      query: 'first service second service comparison',
+      requestedFact: 'differences',
+      contextualReference: 'first and second services',
+      preferredRecordIds: ['record-1', 'record-2'],
+    },
+  },
+  verifiedEvidence: [verifiedEvidence[0], secondEvidence],
+  scope,
+}, {
+  tenantBoundaryVerified: true,
+  publishedEntities: [
+    { recordId: 'record-1', canonicalName: 'First Service' },
+    { recordId: 'record-2', canonicalName: 'Second Service' },
+  ],
+  validateGroundedClaims: async (input) => {
+    comparisonClaimInput = input;
+    return { supported: true };
+  },
+  invokeStructuredLlm: async () => ({ outputParsed: {
+    decision: 'RESPONSE',
+    response: 'The first service costs 3200 units, while the second costs 4100 units.',
+    clarification: null,
+    evidenceIds: ['E1', 'E2'],
+    nextQuestion: null,
+    stateUpdate: null,
+  } }),
+});
+assert.equal(comparisonResult.decision.decision, 'RESPONSE');
+assert.deepEqual(comparisonResult.decision.evidenceIds, ['evidence-1', 'evidence-2']);
+assert.equal(comparisonClaimInput.selectedEvidence.length, 2,
+  'Grounded comparison validation must receive the complete selected evidence set');
+assert.equal(comparisonClaimInput.selectedEvidence[1].canonicalName, 'Second Service');
+assert.deepEqual(comparisonClaimInput.selectedEvidence[1].authoritativeData,
+  { name: 'Second Service', price: 4100 });
+
 assert.equal(validateTemplateEnginePostSearchDecision({
   decision: 'RESPONSE', response: 'Unsupported.', clarification: null,
-  evidenceIds: [], stateUpdate: null,
+  evidenceIds: [], nextQuestion: null, stateUpdate: null,
 }, ['evidence-1']).reason, 'mixed_decision_payload');
 assert.equal(validateTemplateEnginePostSearchDecision({
   decision: 'RESPONSE', response: 'Wrong citation.', clarification: null,
-  evidenceIds: ['unknown'], stateUpdate: null,
+  evidenceIds: ['unknown'], nextQuestion: null, stateUpdate: null,
 }, ['evidence-1']).reason, 'unknown_evidence_id');
 assert.equal(validateTemplateEnginePostSearchDecision({
   decision: 'NO_MATCH', response: 'I do not have that information right now.',
-  clarification: null, evidenceIds: [], stateUpdate: null,
+  clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
 }, []).valid, true);
 assert.equal(validateTemplateEnginePostSearchDecision({
   decision: 'CLARIFY', response: '',
   clarification: { question: 'Which service do you mean?', reason: null, candidates: [] },
-  evidenceIds: [], stateUpdate: null,
+  evidenceIds: [], nextQuestion: null, stateUpdate: null,
 }, []).valid, true);
 const normalizedResponse = validateTemplateEnginePostSearchDecision({
   decision: 'RESPONSE', response: 'The current price is supported.',
   clarification: { question: 'Ignore this?', reason: null, candidates: [] },
-  evidenceIds: ['evidence-1'], stateUpdate: null,
+  evidenceIds: ['evidence-1'], nextQuestion: null, stateUpdate: null,
 }, ['evidence-1']);
 assert.equal(normalizedResponse.valid, true);
 assert.equal(normalizedResponse.value.clarification, null,
@@ -114,14 +178,14 @@ assert.equal(normalizedResponse.value.clarification, null,
 const normalizedClarification = validateTemplateEnginePostSearchDecision({
   decision: 'CLARIFY', response: 'Inactive response text.',
   clarification: { question: 'Which service do you mean?', reason: null, candidates: [] },
-  evidenceIds: ['evidence-1'], stateUpdate: null,
+  evidenceIds: ['evidence-1'], nextQuestion: null, stateUpdate: null,
 }, ['evidence-1']);
 assert.equal(normalizedClarification.valid, true);
 assert.equal(normalizedClarification.value.response, '');
 assert.deepEqual(normalizedClarification.value.evidenceIds, []);
 assert.equal(validateTemplateEnginePostSearchDecision({
   decision: 'TOOL', response: '', clarification: null,
-  evidenceIds: [], stateUpdate: null,
+  evidenceIds: [], nextQuestion: null, stateUpdate: null,
 }, []).reason, 'invalid_decision');
 
 await assert.rejects(() => respondToTemplateEngineSearch({
@@ -143,12 +207,12 @@ const repaired = await respondToTemplateEngineSearch({
     return repairCalls === 1 ? {
       outputParsed: {
         decision: 'RESPONSE', response: 'A factual answer with a forbidden real identifier.',
-        clarification: null, evidenceIds: ['evidence-1'], stateUpdate: null,
+        clarification: null, evidenceIds: ['evidence-1'], nextQuestion: null, stateUpdate: null,
       },
     } : {
       outputParsed: {
         decision: 'RESPONSE', response: 'The current price is 3200 currency units.',
-        clarification: null, evidenceIds: ['E1'], stateUpdate: null,
+        clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
       },
     };
   },
@@ -156,6 +220,32 @@ const repaired = await respondToTemplateEngineSearch({
 assert.equal(repairCalls, 2, 'An invalid post-search branch must receive one repair attempt');
 assert.equal(repaired.decision.decision, 'RESPONSE');
 assert.deepEqual(repaired.decision.evidenceIds, ['evidence-1']);
+
+let groundedRepairCalls = 0;
+let groundedValidationCalls = 0;
+const groundedNoMatch = await respondToTemplateEngineSearch({
+  mainPrompt, latestUtterance, state, searchDecision, verifiedEvidence, scope,
+}, {
+  tenantBoundaryVerified: true,
+  validateGroundedClaims: async () => {
+    groundedValidationCalls += 1;
+    return { supported: false, reason: 'attribute_not_supported' };
+  },
+  invokeStructuredLlm: async () => {
+    groundedRepairCalls += 1;
+    return groundedRepairCalls === 1 ? { outputParsed: {
+      decision: 'RESPONSE', response: 'The service includes an unpublished attribute.',
+      clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
+    } } : { outputParsed: {
+      decision: 'NO_MATCH', response: 'That detail is not available in the published information.',
+      clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
+    } };
+  },
+});
+assert.equal(groundedRepairCalls, 2,
+  'An unsupported grounded response must receive exactly one repair attempt');
+assert.equal(groundedValidationCalls, 1);
+assert.equal(groundedNoMatch.decision.decision, 'NO_MATCH');
 
 let fallbackCalls = 0;
 let fallbackDiagnostics;
@@ -169,7 +259,7 @@ await assert.rejects(() => respondToTemplateEngineSearch({
     return {
       outputParsed: {
         decision: 'RESPONSE', response: 'Unsupported factual response.',
-        clarification: null, evidenceIds: [], stateUpdate: null,
+        clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
       },
     };
   },
@@ -192,10 +282,10 @@ await assert.rejects(() => respondToTemplateEngineSearch({
     changedDecisionCalls += 1;
     return changedDecisionCalls === 1 ? { outputParsed: {
       decision: 'RESPONSE', response: 'A supported answer without its citation.',
-      clarification: null, evidenceIds: [], stateUpdate: null,
+      clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
     } } : { outputParsed: {
       decision: 'NO_MATCH', response: 'That information is unavailable.',
-      clarification: null, evidenceIds: [], stateUpdate: null,
+      clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
     } };
   },
 }), (error) => error.code === 'TEMPLATE_ENGINE_POST_SEARCH_DECISION_INVALID'
@@ -209,7 +299,7 @@ const emptyEvidenceFallback = await respondToTemplateEngineSearch({
   tenantBoundaryVerified: true,
   invokeStructuredLlm: async () => ({ outputParsed: {
     decision: 'RESPONSE', response: 'An unsupported answer.',
-    clarification: null, evidenceIds: [], stateUpdate: null,
+    clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
   } }),
 });
 assert.equal(emptyEvidenceFallback.decision.decision, 'NO_MATCH');

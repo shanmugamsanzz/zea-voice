@@ -6,6 +6,7 @@ import { knowledgeSearchIndexes } from '../../knowledge-engine/query-classifier.
 import { loadPublishedEngineArtifacts } from '../../knowledge-engine/runtime-service.js';
 import { searchParallelHybridCandidates } from '../../knowledge-bases/parallel-hybrid-search.js';
 import { runTemplateEngineHybridRetrieval } from './template-engine-hybrid-retrieval.js';
+import { normalizePublishedConversationGuidance } from './template-engine-conversation-guidance.js';
 
 export const TEMPLATE_ENGINE_PRODUCTION_RETRIEVAL_VERSION = 1;
 
@@ -147,10 +148,18 @@ export async function loadTemplateEnginePublishedContext({
       record, artifacts.publications[index], scope.agentId,
     )).filter(Boolean)
   ));
+  const publishedConversationGuidance = artifacts.bundles.flatMap((bundle, index) => (
+    (bundle.records ?? []).map((record) => normalizePublishedConversationGuidance(
+      record,
+      { ...artifacts.publications[index], tenantId: scope.tenantId },
+      scope.agentId,
+    )).filter(Boolean)
+  ));
   return Object.freeze({
     artifacts,
     scope: Object.freeze({ ...scope, publications: artifacts.publications }),
     publishedWorkflows: Object.freeze(publishedWorkflows),
+    publishedConversationGuidance: Object.freeze(publishedConversationGuidance),
   });
 }
 

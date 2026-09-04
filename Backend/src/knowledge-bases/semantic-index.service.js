@@ -346,6 +346,9 @@ async function loadSemanticRecords(job, contextRunner) {
             'flowKey', cf.flow_key,
             'nodeKey', cf.node_key,
             'nodeType', cf.node_type,
+            'language', cf.language,
+            'variables', cf.variables,
+            'transitions', cf.transitions,
             'intentClass', COALESCE((
               SELECT variable->>'value'
                 FROM jsonb_array_elements(cf.variables) variable

@@ -6,7 +6,7 @@ export const templateEngineModes = Object.freeze({
 });
 
 export const requiredTemplateEngineScenarios = Object.freeze([
-  'greetings', 'acknowledgements', 'overview', 'direct_entities',
+  'greetings', 'acknowledgements', 'call_purpose', 'overview', 'direct_entities',
   'phonetic_variations', 'prices_and_details', 'contextual_follow_ups',
   'comparisons', 'corrections', 'topic_switching', 'missing_information',
   'workflow_activation', 'partial_field_collection', 'confirmation',
@@ -44,7 +44,28 @@ function zeroViolations(evidence) {
   return [
     'crossTenantLeakage', 'unrelatedEvidence', 'hallucinations',
     'unauthorizedTools', 'falseTechnicalFallbacks', 'silentTurns',
+    'technicalFallbacks', 'malformedOutputs', 'falseNoMatches',
+    'missedWorkflowActivations',
   ].every((field) => Number(evidence?.[field] ?? 0) === 0);
+}
+
+function validScenarioRuns(evidence, scenarios, repeats) {
+  const runs = Array.isArray(evidence?.scenarioRuns) ? evidence.scenarioRuns : [];
+  if (!runs.length) return false;
+  return [...scenarios].every((scenario) => {
+    const matching = runs.filter((run) => cleanText(run?.scenario, 120) === scenario);
+    if (matching.length < repeats) return false;
+    const tenants = new Set(matching.map((run) => cleanText(run?.tenantId, 160)).filter(Boolean));
+    const languages = new Set(matching.map((run) => cleanText(run?.language, 40)).filter(Boolean));
+    return tenants.size >= 2 && languages.size >= 2 && matching.every((run) => (
+      run?.passed === true
+      && run?.outputValid === true
+      && run?.speechDelivered === true
+      && cleanText(run?.expectedDecision, 40).toLocaleUpperCase()
+        === cleanText(run?.finalDecision, 40).toLocaleUpperCase()
+      && zeroViolations(run)
+    ));
+  });
 }
 
 export function validateTemplateEngineActivationEvidence(evidence, expectedGitSha = null) {
@@ -60,6 +81,13 @@ export function validateTemplateEngineActivationEvidence(evidence, expectedGitSh
   if (languages.size < 2) reasons.push('insufficient_languages');
   if (requiredTemplateEngineScenarios.some((scenario) => !scenarios.has(scenario))) {
     reasons.push('scenario_coverage_incomplete');
+  }
+  if (!validScenarioRuns(
+    evidence,
+    requiredTemplateEngineScenarios,
+    Math.max(3, Number(evidence?.repeats) || 0),
+  )) {
+    reasons.push('scenario_runs_incomplete');
   }
   if (!zeroViolations(evidence)) reasons.push('safety_violation_present');
   if (expectedGitSha && cleanText(evidence?.gitSha, 64) !== cleanText(expectedGitSha, 64)) {

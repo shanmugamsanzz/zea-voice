@@ -12,7 +12,22 @@ const { createTemplateEngineStructuredInvoker } = await import(
 
 const decision = {
   decision: 'RESPONSE', response: 'Hello.', clarification: null,
-  search: null, tool: null, stateUpdate: null,
+  search: null, tool: null, nextQuestion: null, stateUpdate: null,
+};
+const decisionSchema = {
+  type: 'object', additionalProperties: false,
+  required: [
+    'decision', 'response', 'clarification', 'search', 'tool', 'nextQuestion', 'stateUpdate',
+  ],
+  properties: {
+    decision: { type: 'string', enum: ['RESPONSE'] },
+    response: { type: 'string' },
+    clarification: { type: 'null' },
+    search: { type: 'null' },
+    tool: { type: 'null' },
+    nextQuestion: { type: 'null' },
+    stateUpdate: { type: 'null' },
+  },
 };
 let attempts = 0;
 const retryingAdapter = {
@@ -86,5 +101,79 @@ await assert.rejects(
     && error.details?.providerParam === 'response_format',
 );
 assert.equal(rejectedAttempts, 1);
+
+for (const failure of [
+  { name: 'empty', events: [{ type: 'completed', finishReason: 'stop' }], code: 'TEMPLATE_ENGINE_LLM_EMPTY' },
+  { name: 'malformed', events: [
+    { type: 'text_delta', delta: '{"decision":' },
+    { type: 'completed', finishReason: 'stop' },
+  ], code: 'TEMPLATE_ENGINE_LLM_INVALID_JSON' },
+  { name: 'truncated', events: [
+    { type: 'text_delta', delta: JSON.stringify(decision) },
+    { type: 'completed', finishReason: 'length' },
+  ], code: 'TEMPLATE_ENGINE_LLM_TRUNCATED' },
+  { name: 'incomplete', events: [
+    { type: 'text_delta', delta: JSON.stringify(decision) },
+  ], code: 'TEMPLATE_ENGINE_LLM_INCOMPLETE' },
+  { name: 'schema-invalid', events: [
+    { type: 'text_delta', delta: JSON.stringify({ decision: 'RESPONSE' }) },
+    { type: 'completed', finishReason: 'stop' },
+  ], code: 'TEMPLATE_ENGINE_LLM_SCHEMA_INVALID' },
+]) {
+  const requests = [];
+  let structuredRetry = null;
+  const adapter = {
+    async *stream(input) {
+      requests.push(input);
+      const events = requests.length === 1 ? failure.events : [
+        { type: 'text_delta', delta: JSON.stringify(decision) },
+        { type: 'completed', finishReason: 'stop' },
+      ];
+      for (const event of events) yield event;
+    },
+    cancel() {},
+  };
+  const originalMessages = Object.freeze([
+    Object.freeze({ role: 'system', content: 'Use the supplied generic schema.' }),
+    Object.freeze({ role: 'user', content: 'Final caller utterance' }),
+  ]);
+  const result = await createTemplateEngineStructuredInvoker(adapter, {
+    onStructuredOutputRetry: (details) => { structuredRetry = details; },
+  })({
+    messages: originalMessages,
+    responseFormat: { type: 'json_schema', schema: decisionSchema },
+  });
+  assert.deepEqual(result.outputParsed, decision, `${failure.name} output was not recovered`);
+  assert.equal(requests.length, 2, `${failure.name} output was not retried exactly once`);
+  assert.equal(requests[1].responseFormat, requests[0].responseFormat);
+  assert.deepEqual(requests[1].messages.slice(0, originalMessages.length), originalMessages,
+    `${failure.name} retry did not preserve the finalized caller turn`);
+  assert.equal(requests[1].messages.at(-1).role, 'system');
+  assert.equal(structuredRetry.code, failure.code);
+}
+
+let exhaustedAttempts = 0;
+await assert.rejects(() => createTemplateEngineStructuredInvoker({
+  async *stream() {
+    exhaustedAttempts += 1;
+    yield { type: 'completed', finishReason: 'stop' };
+  },
+  cancel() {},
+})({
+  messages: [{ role: 'user', content: 'Preserve this caller turn' }],
+  responseFormat: { type: 'json_schema', schema: decisionSchema },
+}), (error) => error.code === 'TEMPLATE_ENGINE_LLM_EMPTY');
+assert.equal(exhaustedAttempts, 2, 'Invalid structured output must be retried only once');
+
+let cancelledAttempts = 0;
+await assert.rejects(() => createTemplateEngineStructuredInvoker({
+  async *stream() {
+    cancelledAttempts += 1;
+    yield { type: 'cancelled', reason: 'barge-in' };
+  },
+  cancel() {},
+})({ messages: [{ role: 'user', content: 'Superseded caller turn' }] }),
+(error) => error.code === 'TEMPLATE_ENGINE_LLM_CANCELLED');
+assert.equal(cancelledAttempts, 1, 'A cancelled turn must never be retried');
 
 console.log('Template-engine provider diagnostics and retry verification passed.');

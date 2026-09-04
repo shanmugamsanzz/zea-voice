@@ -16,6 +16,32 @@ const decisionFor = (scenario) => {
       .includes(scenario)) return 'TOOL';
   return 'RESPONSE';
 };
+const scenarioRuns = requiredTemplateEngineScenarios.flatMap((scenario, scenarioIndex) => (
+  [1, 2, 3].map((repeat) => {
+    const decision = decisionFor(scenario);
+    return {
+      scenario,
+      repetition: repeat,
+      tenantId: tenants[(scenarioIndex + repeat) % tenants.length],
+      language: languages[(scenarioIndex + repeat) % languages.length],
+      expectedDecision: decision,
+      finalDecision: decision,
+      passed: true,
+      outputValid: true,
+      speechDelivered: true,
+      crossTenantLeakage: 0,
+      unrelatedEvidence: 0,
+      hallucinations: 0,
+      unauthorizedTools: 0,
+      falseTechnicalFallbacks: 0,
+      technicalFallbacks: 0,
+      silentTurns: 0,
+      malformedOutputs: 0,
+      falseNoMatches: 0,
+      missedWorkflowActivations: 0,
+    };
+  })
+));
 
 let calls = 0;
 const controller = createTemplateEngineCutoverController({
@@ -81,9 +107,15 @@ const liveEvidence = {
   tenants, languages, scenarios: requiredTemplateEngineScenarios,
   crossTenantLeakage: 0, unrelatedEvidence: 0, hallucinations: 0,
   unauthorizedTools: 0, falseTechnicalFallbacks: 0, silentTurns: 0,
+  malformedOutputs: 0, falseNoMatches: 0, missedWorkflowActivations: 0,
+  technicalFallbacks: 0,
+  scenarioRuns,
   gitSha: 'release-sha',
 };
 assert.equal(validateTemplateEngineActivationEvidence(liveEvidence, 'release-sha').valid, true);
+assert.equal(validateTemplateEngineActivationEvidence({
+  ...liveEvidence, scenarioRuns: scenarioRuns.slice(1),
+}, 'release-sha').valid, false);
 assert.throws(() => createTemplateEngineCutoverController({
   mode: 'active', acceptanceEvidence: liveEvidence, gitSha: 'release-sha',
 }), (error) => error.code === 'TEMPLATE_ENGINE_ACTIVE_RUNTIME_NOT_READY');

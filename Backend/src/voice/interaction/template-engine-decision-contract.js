@@ -1,4 +1,4 @@
-export const TEMPLATE_ENGINE_DECISION_CONTRACT_VERSION = 1;
+export const TEMPLATE_ENGINE_DECISION_CONTRACT_VERSION = 3;
 
 export const templateEngineDecisionTypes = Object.freeze({
   RESPONSE: 'RESPONSE',
@@ -9,9 +9,10 @@ export const templateEngineDecisionTypes = Object.freeze({
 
 const decisionTypes = new Set(Object.values(templateEngineDecisionTypes));
 const rootKeys = Object.freeze([
-  'decision', 'response', 'clarification', 'search', 'tool', 'stateUpdate',
+  'decision', 'response', 'clarification', 'search', 'tool', 'nextQuestion', 'stateUpdate',
 ]);
 const clarificationKeys = Object.freeze(['question', 'reason', 'candidates']);
+const nextQuestionKeys = Object.freeze(['question', 'reason']);
 const searchRequiredKeys = Object.freeze(['query', 'requestedFact', 'contextualReference']);
 const searchKeys = Object.freeze([...searchRequiredKeys, 'preferredRecordIds']);
 const toolKeys = Object.freeze(['name', 'arguments']);
@@ -92,6 +93,20 @@ export const templateEngineDecisionJsonSchema = Object.freeze({
         }),
       ]),
     }),
+    nextQuestion: Object.freeze({
+      anyOf: Object.freeze([
+        Object.freeze({ type: 'null' }),
+        Object.freeze({
+          type: 'object',
+          additionalProperties: false,
+          required: nextQuestionKeys,
+          properties: Object.freeze({
+            question: Object.freeze({ type: 'string' }),
+            reason: nullableTextSchema,
+          }),
+        }),
+      ]),
+    }),
     stateUpdate: Object.freeze({
       anyOf: Object.freeze([
         Object.freeze({ type: 'null' }),
@@ -105,7 +120,12 @@ export const templateEngineDecisionJsonSchema = Object.freeze({
               additionalProperties: false,
               required: Object.freeze(['confirmationStatus']),
               properties: Object.freeze({
-                confirmationStatus: Object.freeze({ type: 'string', enum: ['confirmed'] }),
+                confirmationStatus: Object.freeze({
+                  anyOf: Object.freeze([
+                    Object.freeze({ type: 'string', enum: ['confirmed'] }),
+                    Object.freeze({ type: 'null' }),
+                  ]),
+                }),
               }),
             }),
             clear: Object.freeze({
@@ -160,6 +180,14 @@ function normalizeClarification(value) {
   return Object.freeze({ question, reason, candidates: Object.freeze(candidates) });
 }
 
+function normalizeNextQuestion(value) {
+  if (!hasExactKeys(value, nextQuestionKeys)) return null;
+  const question = cleanText(value.question, 1_000);
+  const reason = nullableText(value.reason);
+  if (!question || (value.reason !== null && reason === null)) return null;
+  return Object.freeze({ question, reason });
+}
+
 function normalizeSearch(value) {
   if (!hasOnlyKeysAndRequired(value, searchKeys, searchRequiredKeys)) return null;
   const query = cleanText(value.query, 2_000);
@@ -208,7 +236,8 @@ function normalizeStateUpdate(value) {
   const set = jsonSafeObject(value.set);
   const clear = value.clear.map((key) => cleanText(key, 160));
   if (!set || Object.keys(set).some((key) => key !== 'confirmationStatus')
-    || (Object.hasOwn(set, 'confirmationStatus') && set.confirmationStatus !== 'confirmed')
+    || (Object.hasOwn(set, 'confirmationStatus')
+      && !['confirmed', null].includes(set.confirmationStatus))
     || clear.some((key) => !key || !clearableStateKeys.includes(key))
     || new Set(clear).size !== clear.length) return undefined;
   return Object.freeze({ set, clear: Object.freeze(clear) });
@@ -243,21 +272,37 @@ export function validateTemplateEngineDecision(value) {
     ? null : normalizeClarification(parsed.clarification);
   const search = parsed.search === null ? null : normalizeSearch(parsed.search);
   const tool = parsed.tool === null ? null : normalizeTool(parsed.tool);
+  const nextQuestion = parsed.nextQuestion === null
+    ? null : normalizeNextQuestion(parsed.nextQuestion);
   const stateUpdate = normalizeStateUpdate(parsed.stateUpdate);
   if ((parsed.clarification !== null && !clarification)
     || (parsed.search !== null && !search)
     || (parsed.tool !== null && !tool)
+    || (parsed.nextQuestion !== null && !nextQuestion)
     || stateUpdate === undefined) {
     return Object.freeze({ valid: false, reason: 'invalid_payload' });
   }
 
   const branchValid = ({
     RESPONSE: Boolean(response) && clarification === null && search === null && tool === null,
-    CLARIFY: response === '' && clarification !== null && search === null && tool === null,
-    SEARCH: response === '' && clarification === null && search !== null && tool === null,
-    TOOL: response === '' && clarification === null && search === null && tool !== null,
+    CLARIFY: response === '' && clarification !== null && search === null && tool === null
+      && nextQuestion === null,
+    SEARCH: response === '' && clarification === null && search !== null && tool === null
+      && nextQuestion === null,
+    TOOL: response === '' && clarification === null && search === null && tool !== null
+      && nextQuestion === null,
   })[parsed.decision];
   if (!branchValid) return Object.freeze({ valid: false, reason: 'mixed_decision_payload' });
+
+  const clearsWorkflow = stateUpdate?.clear.includes('activeWorkflowId') === true;
+  if (clearsWorkflow) {
+    const requiredClears = ['activeWorkflowId', 'collectedToolFields', 'confirmationStatus'];
+    if (parsed.decision !== 'RESPONSE' || nextQuestion !== null
+      || stateUpdate.set.confirmationStatus !== null
+      || requiredClears.some((key) => !stateUpdate.clear.includes(key))) {
+      return Object.freeze({ valid: false, reason: 'invalid_workflow_cancellation' });
+    }
+  }
 
   return Object.freeze({
     valid: true,
@@ -267,6 +312,7 @@ export function validateTemplateEngineDecision(value) {
       clarification,
       search,
       tool,
+      nextQuestion,
       stateUpdate,
     }),
   });

@@ -13,6 +13,9 @@ import {
   enforceTemplateEngineRuntimeInvariants,
 } from './template-engine-routing-control.js';
 import { validateTemplateEngineOutput } from './template-engine-output-validator.js';
+import {
+  sanitizeConversationGuidance,
+} from './template-engine-conversation-guidance.js';
 
 const maximumRecentPairs = 5;
 
@@ -66,17 +69,15 @@ function forcedSearchDecision(orchestratorInput, dependencies = {}) {
       contextualReference: cleanText(dependencies.contextualReference, 500) || null,
       preferredRecordIds: orchestratorInput.state.lastReferencedRecordIds,
     }),
-    tool: null, stateUpdate: null,
+    tool: null, nextQuestion: null, stateUpdate: null,
   });
 }
 
-function searchNeedsRoutingReview(decision, state) {
+function searchNeedsRoutingReview(decision) {
   if (decision?.decision !== 'SEARCH') return false;
   const search = decision.search ?? {};
   return !cleanText(search.requestedFact, 500)
-    && !cleanText(search.contextualReference, 500)
-    && cleanList(search.preferredRecordIds, 20).length === 0
-    && cleanList(state?.lastReferencedRecordIds, 20).length === 0;
+    && !cleanText(search.contextualReference, 500);
 }
 
 function outputValidationInput(decision, orchestratorInput, dependencies, additions = {}) {
@@ -119,6 +120,7 @@ export function createTemplateEngineOrchestratorInput({
   collectedToolFields = null,
   confirmationStatus = null,
   authorizedWorkflowTools = [],
+  conversationGuidance = null,
 } = {}) {
   const utterance = cleanText(latestUtterance);
   if (!utterance) throw new TypeError('A finalized caller utterance is required');
@@ -140,6 +142,7 @@ export function createTemplateEngineOrchestratorInput({
     latestUtterance: utterance,
     state: minimalState,
     authorizedWorkflowTools: authorizedSummaries(authorizedWorkflowTools),
+    conversationGuidance: sanitizeConversationGuidance(conversationGuidance),
   });
 }
 
@@ -154,6 +157,7 @@ export async function routeTemplateEngineUtterance(input = {}, dependencies = {}
     latestUtterance: orchestratorInput.latestUtterance,
     state: orchestratorInput.state,
     authorizedWorkflowTools: orchestratorInput.authorizedWorkflowTools,
+    conversationGuidance: orchestratorInput.conversationGuidance,
   });
   const routingPrompt = buildTemplateEngineRoutingPrompt({
     mainPrompt: orchestratorInput.mainPrompt,
@@ -201,17 +205,18 @@ export async function routeTemplateEngineUtterance(input = {}, dependencies = {}
       });
   }
   let routingReviewAttempted = false;
-  if (searchNeedsRoutingReview(validated.value, orchestratorInput.state)) {
+  if (searchNeedsRoutingReview(validated.value)) {
     routingReviewAttempted = true;
     completion = await invokeStructuredLlm(request([
       ...baseMessages,
       Object.freeze({
         role: 'user',
         content: [
-          'Review the route because SEARCH contains no requested fact, contextual reference, or preferred record.',
-          'If the caller utterance is purely non-factual conversation, return RESPONSE with natural speech.',
-          'If it requests an externally verifiable fact, keep SEARCH and populate requestedFact or contextualReference from meaning and recent context.',
-          'Do not use phrase matching or invent a fact, entity, action, or context.',
+          'Review the route because SEARCH does not identify a fact or genuine contextual reference requested by the caller.',
+          'Use RESPONSE when the complete utterance only manages the conversation, including a greeting, acknowledgement, courtesy, pause, wait, presence check, hearing check, brief confirmation, or resumption.',
+          'If it requests externally verifiable information, keep SEARCH and populate requestedFact or contextualReference from the latest utterance and relevant recentCompleteTurns.',
+          'Use CLARIFY only for multiple genuinely plausible meanings. Use TOOL only for an explicit action matching an authorized Workflow summary.',
+          'Stored record IDs alone never make the latest utterance factual. Do not use phrase matching or invent a fact, entity, action, or context.',
         ].join(' '),
       }),
     ]));
@@ -303,6 +308,14 @@ function verifiedEvidenceForPostSearch(values, scope = {}) {
       evidenceId, recordId, recordType, tenantId,
       agentId: agentId || scopeAgentId,
       knowledgeBaseId, publicationRevision, content,
+      canonicalName: cleanText(value?.canonicalName, 300) || null,
+      aliases: cleanList(value?.aliases, 50),
+      relationships: Object.freeze([...(Array.isArray(value?.relationships)
+        ? value.relationships : [])]),
+      authoritativeData: value?.authoritativeData
+        && typeof value.authoritativeData === 'object'
+        && !Array.isArray(value.authoritativeData)
+        ? Object.freeze({ ...value.authoritativeData }) : Object.freeze({}),
     }));
     if (evidence.length >= 5) break;
   }
@@ -363,6 +376,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     collectedToolFields: input.state?.collectedToolFields ?? {},
     confirmationStatus: input.state?.confirmationStatus ?? null,
     authorizedWorkflowTools: [],
+    conversationGuidance: input.conversationGuidance,
   });
   const search = normalizeTemplateEngineSearchDecision(input.searchDecision, base.state);
   if (!search.valid || search.value.decision !== 'SEARCH') {
@@ -383,6 +397,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     state: base.state,
     searchInterpretation: search.value.search,
     verifiedEvidence: citations.evidence,
+    conversationGuidance: base.conversationGuidance,
   });
   const systemPrompt = [
     buildTemplateEngineRoutingPrompt({
@@ -414,6 +429,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
   const firstDiagnostics = templateEnginePostSearchDecisionDiagnostics(output);
   let firstInvalidReason = null;
   let repairingCitation = false;
+  let groundingRepairAttempted = false;
   let configuredFallbackApplied = false;
   if (!validated.valid) {
     firstInvalidReason = validated.reason;
@@ -424,8 +440,9 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       `Your previous JSON object was rejected: ${validated.reason}.`,
       'Return one corrected JSON object matching the supplied schema.',
       'RESPONSE requires non-empty response, null clarification, and one or more supplied evidenceIds.',
-      'CLARIFY requires empty response, one clarification object, and no evidenceIds.',
-      'NO_MATCH requires a natural non-empty unavailable response, null clarification, and no evidenceIds.',
+      'RESPONSE may include one nullable nextQuestion generated in this same call.',
+      'CLARIFY requires empty response, one clarification object, no evidenceIds, and null nextQuestion.',
+      'NO_MATCH requires a natural non-empty unavailable response, null clarification, no evidenceIds, and null nextQuestion.',
       `Allowed evidenceIds for this turn: ${allowedEvidenceIds.join(', ') || 'none'}.`,
       repairingCitation
         ? 'This is a citation-only repair. Keep decision RESPONSE and cite only the allowed evidenceIds that support the response; do not change it to NO_MATCH.'
@@ -445,13 +462,13 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       });
     }
   }
-  const finalDiagnostics = templateEnginePostSearchDecisionDiagnostics(output);
+  let finalDiagnostics = templateEnginePostSearchDecisionDiagnostics(output);
   if (!validated.valid && evidence.length === 0) {
     const unavailableResponse = cleanText(input.informationUnavailableResponse, 4_000);
     if (unavailableResponse) {
       validated = validateTemplateEnginePostSearchDecision({
         decision: 'NO_MATCH', response: unavailableResponse,
-        clarification: null, evidenceIds: [], stateUpdate: null,
+        clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
       }, allowedEvidenceIds);
       configuredFallbackApplied = validated.valid;
     }
@@ -486,21 +503,29 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
         final: finalDiagnostics,
       });
   }
-  const groundedDecision = restorePostSearchEvidenceIds(
+  let groundedDecision = restorePostSearchEvidenceIds(
     validated.value, citations.aliasToEvidenceId,
   );
   let semanticClaimValidation = dependencies.semanticClaimValidation ?? null;
-  if (groundedDecision.decision === 'RESPONSE'
-    && typeof dependencies.validateGroundedClaims === 'function') {
-    semanticClaimValidation = await dependencies.validateGroundedClaims(Object.freeze({
-      response: groundedDecision.response,
-      evidenceIds: groundedDecision.evidenceIds,
-      selectedEvidence: evidence,
+  const validateClaims = async (decision) => {
+    if (decision.decision !== 'RESPONSE'
+      || typeof dependencies.validateGroundedClaims !== 'function') {
+      return dependencies.semanticClaimValidation ?? null;
+    }
+    const citedIds = new Set(decision.evidenceIds);
+    const completeCitedEvidence = evidence.filter((source) => (
+      citedIds.has(source.evidenceId)
+    ));
+    return dependencies.validateGroundedClaims(Object.freeze({
+      response: decision.response,
+      evidenceIds: decision.evidenceIds,
+      selectedEvidence: Object.freeze(completeCitedEvidence),
       latestUtterance: base.latestUtterance,
       searchInterpretation: search.value.search,
     }));
-  }
-  const outputValidation = validateTemplateEngineOutput(outputValidationInput(
+  };
+  semanticClaimValidation = await validateClaims(groundedDecision);
+  let outputValidation = validateTemplateEngineOutput(outputValidationInput(
     groundedDecision, base, dependencies, {
       phase: 'post_search',
       factualClaimsPresent: groundedDecision.decision === 'RESPONSE',
@@ -508,6 +533,79 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       semanticClaimValidation,
     },
   ));
+  if (!outputValidation.valid && !firstInvalidReason) {
+    groundingRepairAttempted = true;
+    firstInvalidReason = outputValidation.reason;
+    const groundingRepairInstruction = [
+      `Your previous caller-facing decision failed grounding validation: ${outputValidation.reason}.`,
+      'Return one corrected JSON object matching the supplied post-search schema.',
+      'Validate against the complete verified evidence set. A multi-record comparison may combine only attributes supported by its cited records.',
+      'Cite every evidence alias used for an entity, number, attribute or relationship.',
+      'Generate any applicable nextQuestion in the same corrected response; do not add unsupported facts.',
+      'Remove unsupported claims. If the supplied evidence cannot answer the request, return NO_MATCH with natural unavailable-information speech.',
+      `Allowed evidenceIds for this turn: ${allowedEvidenceIds.join(', ') || 'none'}.`,
+      'Do not invent facts, identifiers or citations.',
+    ].join(' ');
+    completion = await invokeStructuredLlm(request([
+      ...baseMessages,
+      Object.freeze({ role: 'user', content: groundingRepairInstruction }),
+    ]));
+    output = completionOutput(completion);
+    finalDiagnostics = templateEnginePostSearchDecisionDiagnostics(output);
+    validated = validateTemplateEnginePostSearchDecision(output, allowedEvidenceIds);
+    if (validated.valid) {
+      groundedDecision = restorePostSearchEvidenceIds(
+        validated.value, citations.aliasToEvidenceId,
+      );
+      semanticClaimValidation = await validateClaims(groundedDecision);
+      outputValidation = validateTemplateEngineOutput(outputValidationInput(
+        groundedDecision, base, dependencies, {
+          phase: 'post_search',
+          factualClaimsPresent: groundedDecision.decision === 'RESPONSE',
+          selectedEvidence: evidence,
+          semanticClaimValidation,
+          retryCount: 1,
+        },
+      ));
+    } else {
+      outputValidation = Object.freeze({
+        valid: false, reason: validated.reason, retrySearch: false, ttsAllowed: false,
+      });
+    }
+  }
+  if (!outputValidation.valid) {
+    const unavailableResponse = cleanText(input.informationUnavailableResponse, 4_000);
+    if (unavailableResponse) {
+      const noMatch = validateTemplateEnginePostSearchDecision({
+        decision: 'NO_MATCH', response: unavailableResponse,
+        clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
+      }, allowedEvidenceIds);
+      if (noMatch.valid) {
+        groundedDecision = restorePostSearchEvidenceIds(
+          noMatch.value, citations.aliasToEvidenceId,
+        );
+        outputValidation = validateTemplateEngineOutput(outputValidationInput(
+          groundedDecision, base, dependencies, {
+            phase: 'post_search', factualClaimsPresent: false,
+            selectedEvidence: evidence, semanticClaimValidation: null,
+            retryCount: 1,
+          },
+        ));
+        configuredFallbackApplied = outputValidation.valid;
+        finalDiagnostics = templateEnginePostSearchDecisionDiagnostics(noMatch.value);
+      }
+    }
+  }
+  if (groundingRepairAttempted && typeof dependencies.onDecisionRepair === 'function') {
+    dependencies.onDecisionRepair(Object.freeze({
+      initialReason: firstInvalidReason,
+      finalReason: outputValidation.valid ? null : outputValidation.reason,
+      recovered: outputValidation.valid,
+      configuredFallbackApplied,
+      first: firstDiagnostics,
+      final: finalDiagnostics,
+    }));
+  }
   if (!outputValidation.valid) {
     if (typeof dependencies.onPostSearchDiagnostics === 'function') {
       dependencies.onPostSearchDiagnostics(Object.freeze({
@@ -519,13 +617,6 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
         finalDecision: outputValidation.retrySearch ? 'SEARCH' : groundedDecision.decision,
         repairAttempted: Boolean(firstInvalidReason),
       }));
-    }
-    if (outputValidation.retrySearch) {
-      return Object.freeze({
-        decision: search.value,
-        input: turnInput,
-        outputValidation,
-      });
     }
     throw new AppError(502, 'The post-search output failed delivery validation',
       'TEMPLATE_ENGINE_OUTPUT_INVALID', { reason: outputValidation.reason });

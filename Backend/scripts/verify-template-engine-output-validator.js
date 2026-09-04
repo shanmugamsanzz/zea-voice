@@ -8,16 +8,16 @@ import { respondToTemplateEngineSearch } from '../src/voice/interaction/template
 
 const response = (text, evidenceIds = []) => ({
   decision: 'RESPONSE', response: text, clarification: null,
-  evidenceIds, stateUpdate: null,
+  evidenceIds, nextQuestion: null, stateUpdate: null,
 });
 const firstResponse = (text) => ({
   decision: 'RESPONSE', response: text, clarification: null,
-  search: null, tool: null, stateUpdate: null,
+  search: null, tool: null, nextQuestion: null, stateUpdate: null,
 });
 const clarify = (question, candidates) => ({
   decision: 'CLARIFY', response: '',
   clarification: { question, reason: 'ambiguous reference', candidates },
-  evidenceIds: [], stateUpdate: null,
+  evidenceIds: [], nextQuestion: null, stateUpdate: null,
 });
 
 const evidence = [{
@@ -28,6 +28,17 @@ const evidence = [{
   content: 'Service Alpha costs 3200 units and includes feature Delta.',
 }];
 const entities = [{ recordId: 'r-1', canonicalName: 'Service Alpha', aliases: ['Alpha'] }];
+const comparisonEvidence = [evidence[0], {
+  verified: true, callerFacing: true, evidenceId: 'e-2', recordId: 'r-2',
+  recordType: 'ITEM', tenantId: 'tenant-a', agentId: 'agent-a',
+  knowledgeBaseId: 'kb-a', publicationRevision: 7,
+  canonicalName: 'Service Beta', aliases: ['Beta'],
+  content: 'Service Beta costs 4100 units and includes feature Omega.',
+}];
+const comparisonEntities = [
+  ...entities,
+  { recordId: 'r-2', canonicalName: 'Service Beta', aliases: ['Beta'] },
+];
 
 let result = validateTemplateEngineOutput({
   decision: firstResponse('Hello, how can I help?'),
@@ -43,6 +54,20 @@ result = validateTemplateEngineOutput({
 });
 assert.equal(result.valid, true);
 assert.equal(result.route, 'TTS');
+
+result = validateTemplateEngineOutput({
+  phase: 'post_search',
+  decision: response(
+    'Service Alpha costs 3200 units while Service Beta costs 4100 units.',
+    ['e-1', 'e-2'],
+  ),
+  factualClaimsPresent: true,
+  selectedEvidence: comparisonEvidence,
+  publishedEntities: comparisonEntities,
+  semanticClaimValidation: { supported: true },
+});
+assert.equal(result.valid, true,
+  'A comparison supported across the complete cited record set must not be rejected');
 
 for (const [decision, reason] of [
   [response('Service Alpha costs 9900 units.', ['e-1']), 'unsupported_numeric_claim'],
@@ -119,7 +144,7 @@ const informationFields = [{
 }];
 const toolDecision = {
   decision: 'TOOL', response: '', clarification: null, search: null,
-  tool: { name: 'configured_action', arguments: {} }, stateUpdate: null,
+  tool: { name: 'configured_action', arguments: {} }, nextQuestion: null, stateUpdate: null,
 };
 const toolInput = {
   decision: toolDecision, state: {}, publishedWorkflows: [workflow], assignedTools: [tool],
@@ -174,6 +199,7 @@ result = validateTemplateEngineToolResultSpeech({
 });
 assert.equal(result.reason, 'tool_result_unverified');
 
+let invalidGroundingCalls = 0;
 const postSearch = await respondToTemplateEngineSearch({
   mainPrompt: 'Use evidence for facts.', latestUtterance: 'What is the price?',
   state: {
@@ -187,19 +213,22 @@ const postSearch = await respondToTemplateEngineSearch({
       query: 'Service Alpha price', requestedFact: 'price',
       contextualReference: 'Service Alpha', preferredRecordIds: ['r-1'],
     },
-    tool: null, stateUpdate: null,
+    tool: null, nextQuestion: null, stateUpdate: null,
   },
   verifiedEvidence: evidence, scope,
+  informationUnavailableResponse: 'That information is not available.',
 }, {
   tenantBoundaryVerified: true,
   validateGroundedClaims: async () => ({ supported: true }),
-  invokeStructuredLlm: async () => ({ outputParsed: response(
-    'Service Alpha costs 9999 units.', ['E1'],
-  ) }),
+  invokeStructuredLlm: async () => {
+    invalidGroundingCalls += 1;
+    return { outputParsed: response('Service Alpha costs 9999 units.', ['E1']) };
+  },
 });
-assert.equal(postSearch.decision.decision, 'SEARCH');
-assert.equal(postSearch.outputValidation.retrySearch, true);
-assert.equal(postSearch.outputValidation.ttsAllowed, false);
+assert.equal(invalidGroundingCalls, 2);
+assert.equal(postSearch.decision.decision, 'NO_MATCH');
+assert.equal(postSearch.outputValidation.valid, true);
+assert.equal(postSearch.outputValidation.ttsAllowed, true);
 
 const sources = [
   '../src/voice/interaction/template-engine-output-validator.js',

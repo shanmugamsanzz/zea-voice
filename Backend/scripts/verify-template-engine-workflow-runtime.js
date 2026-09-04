@@ -50,6 +50,7 @@ const toolDecision = Object.freeze({
     name: 'create_record',
     arguments: Object.freeze({ full_name: 'LLM invented value', quantity: 99 }),
   }),
+  nextQuestion: null,
   stateUpdate: null,
 });
 const common = Object.freeze({
@@ -67,6 +68,24 @@ assert.equal(activated.state.activeWorkflowId, 'workflow-1');
 assert.deepEqual(activated.state.collectedToolFields, {});
 assert.equal(activated.state.confirmationStatus, 'pending_fields');
 assert.equal(activated.progress.nextField.key, 'full_name');
+
+const aliasActivated = activateTemplateEngineWorkflow({
+  ...common,
+  publishedWorkflows: [{
+    ...workflow,
+    recordId: 'workflow-alias',
+    actionConfig: { toolIdentifier: 'published_action_identifier' },
+  }],
+  assignedTools: [{
+    ...tool,
+    identifiers: ['published_action_identifier'],
+  }],
+  toolDecision,
+  state: { activeWorkflowId: null, collectedToolFields: {}, confirmationStatus: null },
+});
+assert.equal(aliasActivated.configuration.workflowId, 'workflow-alias',
+  'A published Workflow identifier must resolve through the assigned UI tool identity set');
+assert.equal(aliasActivated.configuration.tool.id, 'tool-1');
 
 const firstTask = createTemplateEngineWorkflowSpeechTask({
   configuration: activated.configuration, state: activated.state,
@@ -135,6 +154,11 @@ assert.equal(executions, 0);
 const completed = await executeAndPhraseTemplateEngineWorkflow({
   ...common, mainPrompt: 'Speak briefly and naturally.',
   state: complete.state, confirmation: { accepted: true, explicit: true },
+  conversationGuidance: {
+    recordId: 'result-guidance',
+    purpose: 'Offer one relevant continuation after a verified result.',
+    nextQuestion: 'Would you like any further help?',
+  },
 }, {
   validateToolResultSpeechClaims: async () => ({ supported: true }),
   executeAuthorizedTool: async (request) => {
@@ -146,14 +170,23 @@ const completed = await executeAndPhraseTemplateEngineWorkflow({
   invokeStructuredLlm: async (request) => {
     speechCalls += 1;
     assert.match(request.messages[0].content, /"type":"RESULT","success":true/u);
-    return { outputParsed: { speech: 'The action was completed successfully.' } };
+    assert.deepEqual(request.responseFormat.schema.required, ['speech', 'nextQuestion']);
+    return { outputParsed: {
+      speech: 'The action was completed successfully.',
+      nextQuestion: {
+        question: 'Would you like any further help?', reason: 'Relevant continuation',
+      },
+    } };
   },
 });
 assert.equal(executions, 1);
 assert.equal(completed.result.success, true);
 assert.equal(completed.state.activeWorkflowId, null);
 assert.equal(completed.state.confirmationStatus, 'executed_success');
-assert.equal(completed.speech, 'The action was completed successfully.');
+assert.equal(completed.speech,
+  'The action was completed successfully. Would you like any further help?');
+assert.equal(completed.followUpValidation.accepted, true);
+assert.equal(completed.nextQuestion.question, 'Would you like any further help?');
 assert.equal(speechCalls, 2);
 
 const coordinated = await advanceTemplateEngineWorkflowTurn({
@@ -167,7 +200,7 @@ const coordinated = await advanceTemplateEngineWorkflowTurn({
     output: { accepted: false }, error: { code: 'DECLINED' },
   }),
   invokeStructuredLlm: async () => ({
-    outputParsed: { speech: 'The action could not be completed.' },
+    outputParsed: { speech: 'The action could not be completed.', nextQuestion: null },
   }),
 });
 assert.equal(coordinated.status, 'FAILED');

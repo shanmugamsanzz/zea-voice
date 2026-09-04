@@ -22,7 +22,11 @@ assert.match(prompt, /<tenant_main_prompt_json>/u);
 assert.match(prompt, /<orchestrator_output_schema>/u);
 assert.match(prompt, /Use RESPONSE for greetings/u);
 assert.match(prompt, /optional retrieval preferences/u);
-assert.match(prompt, /purely social greeting, courtesy, acknowledgement/u);
+assert.match(prompt, /Conversational interaction management includes greetings/u);
+assert.match(prompt, /requests to pause or wait/u);
+assert.match(prompt, /agent is present or can hear the caller/u);
+assert.match(prompt, /Previous references matter only when the latest utterance semantically refers/u);
+assert.match(prompt, /Use TOOL only for an explicit external action/u);
 assert.match(prompt, /externally verifiable fact must use SEARCH/u);
 const postSearchPrompt = buildTemplateEngineRoutingPrompt({
   mainPrompt: tenantPrompt, phase: 'post_search',
@@ -34,7 +38,7 @@ assert.throws(() => buildTemplateEngineRoutingPrompt({ mainPrompt: '' }),
 
 const response = {
   decision: 'RESPONSE', response: 'A concise factual response.',
-  clarification: null, search: null, tool: null, stateUpdate: null,
+  clarification: null, search: null, tool: null, nextQuestion: null, stateUpdate: null,
 };
 assert.equal(enforceTemplateEngineRuntimeInvariants(response, {
   tenantBoundaryVerified: true,
@@ -53,7 +57,7 @@ assert.equal(enforceTemplateEngineRuntimeInvariants(response, {
 
 const tool = {
   decision: 'TOOL', response: '', clarification: null, search: null,
-  tool: { name: 'configured_action', arguments: {} }, stateUpdate: null,
+  tool: { name: 'configured_action', arguments: {} }, nextQuestion: null, stateUpdate: null,
 };
 assert.equal(enforceTemplateEngineRuntimeInvariants(tool, {
   tenantBoundaryVerified: true,

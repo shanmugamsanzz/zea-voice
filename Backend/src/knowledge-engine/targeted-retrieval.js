@@ -535,6 +535,14 @@ function freezeCandidate(candidate, channel, rank) {
     callerFacingHint: candidate.callerFacingHint === true,
     deduplicationIdentity: Object.freeze({ ...(candidate.deduplicationIdentity ?? {}) }),
     authorizationHint: candidate.authorizationHint === true,
+    ...(candidate.itemKey ? { itemKey: String(candidate.itemKey) } : {}),
+    ...(candidate.canonicalName ? { canonicalName: String(candidate.canonicalName) } : {}),
+    ...(Array.isArray(candidate.searchForms) ? {
+      searchForms: Object.freeze([...candidate.searchForms].map(String)),
+    } : {}),
+    ...(Array.isArray(candidate.useCaseTokens) ? {
+      useCaseTokens: Object.freeze([...candidate.useCaseTokens].map(String)),
+    } : {}),
     ...(candidate.tokenCoverage === undefined
       ? {} : { tokenCoverage: boundedScore(candidate.tokenCoverage) }),
     ...(candidate.matchMethod ? { matchMethod: String(candidate.matchMethod) } : {}),
@@ -879,6 +887,7 @@ function bm25Candidates(
     }
     if (!matched || score <= 0) return [];
     return [{
+      ...recordScope.get(normalizeId(document.id)),
       tenantId: input.tenantId,
       agentId: input.agentId,
       recordId: document.id,
@@ -917,6 +926,7 @@ function semanticPayloadCandidate(match, scope, input, allowedTypes, recordScope
     || scopedRecord.publicationRevision !== publicationRevision
     || scopedRecord.recordType !== recordType) return null;
   return {
+    ...scopedRecord,
     tenantId: input.tenantId,
     agentId: input.agentId,
     recordId,

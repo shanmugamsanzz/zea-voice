@@ -11,12 +11,13 @@ const scope = { tenantId, agentId, publications: [publication] };
 const searchDecision = {
   decision: 'SEARCH', response: '', clarification: null,
   search: { query: 'tenant item price', requestedFact: 'price', contextualReference: 'tenant item', preferredRecordIds: [] },
-  tool: null, stateUpdate: null,
+  tool: null, nextQuestion: null, stateUpdate: null,
 };
 let channelCalls = 0;
 const candidate = {
   tenantId, agentId, knowledgeBaseId, publicationRevision: 4,
   recordId: 'record-1', recordType: 'CATALOG_ITEM', score: 0.9,
+  callerFacingHint: true, canonicalName: 'Tenant Item', searchForms: ['tenant item'],
 };
 const retrieval = await retrieveTemplateEngineEvidence({
   auth: { tenantId }, scope, callId: 'call-1', usageDirection: 'inbound',
@@ -104,7 +105,7 @@ await assert.rejects(() => retrieveTemplateEngineEvidence({
 
 const decisions = [searchDecision, {
   decision: 'RESPONSE', response: 'Tenant Item costs 125.', clarification: null,
-  evidenceIds: ['E1'], stateUpdate: null,
+  evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
 }];
 let retrievalDiagnostics;
 let postSearchDiagnostics;
@@ -139,10 +140,10 @@ assert.equal(turn.provenance.searchPerformed, true);
 
 const guardedDecisions = [{
   decision: 'RESPONSE', response: 'Tenant Item costs 125.', clarification: null,
-  search: null, tool: null, stateUpdate: null,
+  search: null, tool: null, nextQuestion: null, stateUpdate: null,
 }, {
   decision: 'RESPONSE', response: 'Tenant Item costs 125.', clarification: null,
-  evidenceIds: ['E1'], stateUpdate: null,
+  evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
 }];
 let guardedClaimChecks = 0;
 let guardedRetrievalCalls = 0;
@@ -191,7 +192,7 @@ const workflow = {
 };
 const workflowDecisions = [{
   decision: 'TOOL', response: '', clarification: null, search: null,
-  tool: { name: 'perform_action', arguments: {} }, stateUpdate: null,
+  tool: { name: 'perform_action', arguments: {} }, nextQuestion: null, stateUpdate: null,
 }, { speech: 'Please provide the configured contact name.' }];
 const workflowTurn = await runTemplateEngineProductionTurn({
   auth: { tenantId }, scope, callId: 'call-2', usageDirection: 'inbound', language: 'en',
@@ -221,11 +222,51 @@ assert.equal(workflowTurn.provenance.toolId, 'tool-1');
 assert.equal(workflowTurn.provenance.clarificationReason, 'missing_workflow_field');
 assert.equal(workflowDecisions.length, 0);
 
+const contextualWorkflowDecisions = [{
+  decision: 'TOOL', response: '', clarification: null, search: null,
+  tool: { name: 'perform_action', arguments: { contact_name: 'Sam' } },
+  nextQuestion: null,
+  stateUpdate: null,
+}, { speech: 'Please confirm the collected value Sam.' }];
+const contextualWorkflowTurn = await runTemplateEngineProductionTurn({
+  auth: { tenantId }, scope, callId: 'call-contextual-tool',
+  usageDirection: 'inbound', language: 'en',
+  mainPrompt: 'Use the authorized tool for requested actions.',
+  latestUtterance: 'Please perform it.',
+  conversationHistory: [
+    { role: 'user', content: 'The configured contact name is Sam.' },
+    { role: 'assistant', content: 'I have that value.' },
+  ],
+  state: { lastReferencedRecordIds: ['selected-record'] },
+  runtimeProfile: {}, authorizedWorkflowTools: [tool], assignedTools: [tool],
+  informationFields: [{
+    key: 'contact_name', label: 'Contact Name', type: 'text', required: true,
+    question: 'What is the contact name?', requiredAction: 'perform_action',
+  }],
+}, {
+  invokeStructuredLlm: async () => contextualWorkflowDecisions.shift(),
+  loadPublishedContext: async () => ({ scope, publishedWorkflows: [workflow], artifacts: {} }),
+  retrieveEvidence: async () => { throw new Error('tool route must not search'); },
+  persistWorkflowState: async () => {},
+  executeAuthorizedTool: async () => { throw new Error('confirmation is still required'); },
+  validateGroundedClaims: async () => ({ supported: true, successClaimed: false }),
+  validateToolResultSpeechClaims: async () => ({ supported: true, successClaimed: false }),
+});
+assert.equal(contextualWorkflowTurn.workflow.status, 'AWAITING_CONFIRMATION');
+assert.equal(contextualWorkflowTurn.state.collectedToolFields.contact_name, 'Sam');
+assert.deepEqual(contextualWorkflowTurn.state.lastReferencedRecordIds, ['selected-record'],
+  'Workflow activation must preserve the selected record reference');
+assert.equal(contextualWorkflowDecisions.length, 0);
+
 const confirmationDecisions = [{
   decision: 'TOOL', response: '', clarification: null, search: null,
   tool: { name: 'perform_action', arguments: {} },
+  nextQuestion: null,
   stateUpdate: { set: { confirmationStatus: 'confirmed' }, clear: [] },
-}, { speech: 'The action completed successfully.' }];
+}, {
+  speech: 'The action completed successfully.',
+  nextQuestion: { question: 'Would you like further help?', reason: 'Published continuation' },
+}];
 let executed = 0;
 const confirmedTurn = await runTemplateEngineProductionTurn({
   auth: { tenantId }, scope, callId: 'call-2', usageDirection: 'inbound', language: 'en',
@@ -242,7 +283,18 @@ const confirmedTurn = await runTemplateEngineProductionTurn({
   }],
 }, {
   invokeStructuredLlm: async () => confirmationDecisions.shift(),
-  loadPublishedContext: async () => ({ scope, publishedWorkflows: [workflow], artifacts: {} }),
+  loadPublishedContext: async () => ({
+    scope, publishedWorkflows: [workflow], artifacts: {},
+    publishedConversationGuidance: [{
+      recordId: 'result-guidance', recordType: 'CONVERSATION_NODE',
+      tenantId, agentId, knowledgeBaseId, publicationRevision: 4, published: true,
+      nodeKey: 'operation_execution_result', intentClass: null,
+      purpose: 'Report the verified execution result and offer further help.',
+      situation: 'The authorized operation has returned a verified result.',
+      examples: [], context: null, catalogReferences: [],
+      nextQuestion: 'Would you like further help?',
+    }],
+  }),
   retrieveEvidence: async () => { throw new Error('tool route must not run factual search'); },
   persistWorkflowState: async () => {},
   executeAuthorizedTool: async () => {
@@ -257,6 +309,9 @@ assert.equal(confirmedTurn.workflow.status, 'SUCCEEDED');
 assert.equal(confirmedTurn.state.activeWorkflowId, null);
 assert.equal(confirmedTurn.provenance.finalDecision, 'TOOL_RESULT');
 assert.equal(confirmedTurn.provenance.validationResult, 'verified_tool_result');
+assert.equal(confirmedTurn.speech,
+  'The action completed successfully. Would you like further help?');
+assert.equal(confirmedTurn.followUpValidation.accepted, true);
 assert.equal(confirmationDecisions.length, 0);
 
 const runtimeMetrics = {

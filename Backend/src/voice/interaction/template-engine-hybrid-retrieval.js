@@ -84,6 +84,77 @@ function boundedScore(value) {
   return Number.isFinite(score) ? Math.max(0, Math.min(1, score)) : 0;
 }
 
+function tokens(value) {
+  return [...new Set(cleanText(value, 4_000).toLocaleLowerCase()
+    .match(/[\p{L}\p{M}\p{N}]+/gu) ?? [])];
+}
+
+function textList(value, maximum = 40) {
+  if (!Array.isArray(value)) return Object.freeze([]);
+  return Object.freeze([...new Set(value.map((entry) => cleanText(entry, 300))
+    .filter(Boolean))].slice(0, maximum));
+}
+
+function candidateForms(candidate) {
+  return textList([
+    candidate.canonicalName,
+    candidate.itemKey,
+    candidate.categoryKey,
+    candidate.sourceSection,
+    ...(candidate.searchForms ?? []),
+    ...(candidate.useCaseTokens ?? []),
+  ]);
+}
+
+function entityForms(candidate) {
+  return textList([
+    candidate.canonicalName,
+    candidate.itemKey,
+    ...(candidate.searchForms ?? []),
+  ]);
+}
+
+function coverage(needles, haystack) {
+  if (!needles.length || !haystack.length) return 0;
+  const available = new Set(haystack);
+  return needles.filter((token) => available.has(token)).length / needles.length;
+}
+
+function requestRelevance(candidate, search) {
+  const formTokens = tokens(candidateForms(candidate).join(' '));
+  const queryCoverage = coverage(tokens(search.query), formTokens);
+  const factCoverage = coverage(tokens(search.requestedFact), formTokens);
+  const contextCoverage = coverage(tokens(search.contextualReference), formTokens);
+  const publishedCoverage = boundedScore(candidate.tokenCoverage);
+  const provider = boundedScore(candidate.providerScore);
+  return Math.max(
+    provider,
+    publishedCoverage,
+    queryCoverage,
+    (queryCoverage * 0.55) + (contextCoverage * 0.35) + (factCoverage * 0.1),
+  );
+}
+
+function requestAlignment(candidate, search) {
+  const formTokens = tokens(candidateForms(candidate).join(' '));
+  return Math.max(
+    coverage(tokens(search.query), formTokens),
+    coverage(tokens(search.requestedFact), formTokens),
+    coverage(tokens(search.contextualReference), formTokens),
+  );
+}
+
+function explicitlyNamed(candidate, search) {
+  if (candidate.recordType !== 'CATALOG_ITEM') return false;
+  const requestTokens = new Set(tokens([
+    search.query, search.contextualReference,
+  ].filter(Boolean).join(' ')));
+  return entityForms(candidate).some((form) => {
+    const formTokens = tokens(form);
+    return formTokens.length > 0 && formTokens.every((token) => requestTokens.has(token));
+  });
+}
+
 function plainMetadata(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return Object.freeze({});
   return Object.freeze({ ...value });
@@ -140,6 +211,18 @@ function normalizeCandidate(candidate, channel, rank, scope, allowedPublications
     ...(cleanText(candidate.categoryKey ?? candidate.category_key, 160) ? {
       categoryKey: cleanText(candidate.categoryKey ?? candidate.category_key, 160),
     } : {}),
+    ...(cleanText(candidate.itemKey ?? candidate.item_key, 160) ? {
+      itemKey: cleanText(candidate.itemKey ?? candidate.item_key, 160),
+    } : {}),
+    ...(cleanText(candidate.canonicalName ?? candidate.canonical_name, 300) ? {
+      canonicalName: cleanText(candidate.canonicalName ?? candidate.canonical_name, 300),
+    } : {}),
+    ...(Array.isArray(candidate.searchForms) ? {
+      searchForms: textList(candidate.searchForms),
+    } : {}),
+    ...(Array.isArray(candidate.useCaseTokens) ? {
+      useCaseTokens: textList(candidate.useCaseTokens),
+    } : {}),
     ...(cleanText(candidate.matchMethod, 160) ? {
       matchMethod: cleanText(candidate.matchMethod, 160),
     } : {}),
@@ -181,28 +264,75 @@ function fuseAndRank(channels, request) {
         candidate, channelRanks: {}, providerScores: {}, reciprocalRankScore: 0,
       };
       if (aggregate.channelRanks[channel] === undefined) {
-        aggregate.channelRanks[channel] = candidate.rank;
+        const namespaceRank = candidate.namespaceRank ?? candidate.rank;
+        aggregate.channelRanks[channel] = namespaceRank;
         aggregate.providerScores[channel] = candidate.providerScore;
-        aggregate.reciprocalRankScore += 1 / (reciprocalRankConstant + candidate.rank);
+        aggregate.reciprocalRankScore += 1 / (reciprocalRankConstant + namespaceRank);
       }
       byIdentity.set(key, aggregate);
     }
   }
-  return Object.freeze([...byIdentity.values()].map((aggregate) => {
+  const ranked = [...byIdentity.values()].map((aggregate) => {
     const preferredRecord = preferred.has(aggregate.candidate.recordId.toLocaleLowerCase());
+    const intentRelevance = requestRelevance(aggregate.candidate, request.search);
+    const intentAlignment = requestAlignment(aggregate.candidate, request.search);
     return Object.freeze({
       ...aggregate.candidate,
       channels: Object.freeze(Object.keys(aggregate.channelRanks)),
       channelRanks: Object.freeze(aggregate.channelRanks),
       providerScores: Object.freeze(aggregate.providerScores),
       preferredRecord,
-      score: aggregate.reciprocalRankScore + (preferredRecord ? 0.02 : 0),
+      intentRelevance,
+      intentAlignment,
+      score: aggregate.reciprocalRankScore + (intentRelevance * 0.04)
+        + (preferredRecord ? 0.08 : 0),
     });
   }).sort((left, right) => (
     right.score - left.score
+    || right.intentRelevance - left.intentRelevance
     || right.channels.length - left.channels.length
     || left.recordId.localeCompare(right.recordId)
+  ));
+
+  const explicitlyRequested = ranked.filter((candidate) => explicitlyNamed(
+    candidate, request.search,
+  ));
+  const inferredComparisonIds = new Set(explicitlyRequested.length > 1
+    ? explicitlyRequested.map((candidate) => candidate.recordId.toLocaleLowerCase()) : []);
+  const strictIds = preferred.size > 1 ? preferred : inferredComparisonIds;
+  if (strictIds.size > 1) {
+    return Object.freeze(ranked.filter((candidate) => (
+      strictIds.has(candidate.recordId.toLocaleLowerCase())
+    )).slice(0, request.candidateLimit));
+  }
+
+  const best = ranked[0]?.intentRelevance ?? 0;
+  const bestAlignment = Math.max(0, ...ranked.map((candidate) => candidate.intentAlignment));
+  return Object.freeze(ranked.filter((candidate) => (
+    candidate.preferredRecord
+      || explicitlyNamed(candidate, request.search)
+      || (candidate.callerFacingHint === true && (
+        (candidate.channels.length > 1 && (
+          bestAlignment === 0 || candidate.intentAlignment > 0
+        ))
+        || (candidate.intentAlignment > 0
+          && candidate.intentRelevance >= Math.max(0.2, best - 0.2))
+      ))
+      || candidate.authorizationHint === true
   )).slice(0, request.candidateLimit));
+}
+
+function reservationFor(candidate, reason) {
+  return Object.freeze({
+    tenantId: candidate.tenantId,
+    agentId: candidate.agentId,
+    knowledgeBaseId: candidate.knowledgeBaseId,
+    publicationRevision: candidate.publicationRevision,
+    recordId: candidate.recordId,
+    recordType: candidate.recordType,
+    categoryKey: candidate.categoryKey ?? null,
+    reason,
+  });
 }
 
 export async function runTemplateEngineHybridRetrieval(input = {}, dependencies = {}) {
@@ -251,14 +381,40 @@ export async function runTemplateEngineHybridRetrieval(input = {}, dependencies 
     throw new AppError(503, 'Every hybrid retrieval channel failed',
       'TEMPLATE_ENGINE_RETRIEVAL_UNAVAILABLE', { failures });
   }
-  const frozenChannels = Object.freeze(channels);
+  const rawChannels = Object.freeze(channels);
+  const candidates = fuseAndRank(rawChannels, request);
+  const selectedKeys = new Set(candidates.map(recordIdentity));
+  const frozenChannels = Object.freeze(Object.fromEntries(channelNames.map((channel) => [
+    channel,
+    Object.freeze(rawChannels[channel].filter((candidate) => selectedKeys.has(
+      recordIdentity(candidate),
+    )).map((candidate, index) => Object.freeze({ ...candidate, rank: index + 1 }))),
+  ])));
+  const preferred = new Set(request.search.preferredRecordIds.map((id) => id.toLocaleLowerCase()));
+  const comparison = candidates.length > 1 && (
+    preferred.size > 1 || candidates.every((candidate) => explicitlyNamed(candidate, request.search))
+  );
+  const reservedRecords = candidates.filter((candidate) => (
+    preferred.has(candidate.recordId.toLocaleLowerCase()) || comparison
+  )).map((candidate) => reservationFor(candidate, comparison
+    ? (preferred.size > 1 ? 'contextual_comparison' : 'explicit_comparison')
+    : 'canonical_memory'));
   return Object.freeze({
     version: TEMPLATE_ENGINE_HYBRID_RETRIEVAL_VERSION,
     query: request.search,
     scope: request.scope,
     executionMode: 'parallel',
     channels: frozenChannels,
+    rawChannelCounts: Object.freeze(Object.fromEntries(channelNames.map((channel) => [
+      channel, rawChannels[channel].length,
+    ]))),
     failures: Object.freeze(failures),
-    candidates: fuseAndRank(frozenChannels, request),
+    queryContext: Object.freeze({
+      query: request.search.query,
+      requestedFact: request.search.requestedFact,
+      contextualReference: request.search.contextualReference,
+      reservedRecords: Object.freeze(reservedRecords),
+    }),
+    candidates,
   });
 }

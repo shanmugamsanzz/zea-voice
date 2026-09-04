@@ -4,7 +4,19 @@ TYPE: guidance
 LANGUAGE: ta
 ENTRY: true
 PURPOSE: Give the caller's latest complete question priority over conversation continuation.
-RESPONSE: Stage labels in this document are guidance labels only, never gates. Understand the latest finalized caller utterance from its meaning, recent conversation and current topic. Answer it first using approved evidence. Ask a next question only when an active Workflow needs a missing configured field or relevant Conversation Guidance provides one. Resume a saved question only when it is still relevant. Never force the caller to use an exact sentence.
+RESPONSE: Stage labels in this document are guidance labels only, never gates. Send every finalized caller utterance through semantic conversation handling with the relevant recent complete turns and active Workflow state. Answer the latest request first. Use natural non-factual conversation without Knowledge Base evidence, search current published evidence for factual requests, clarify only genuine ambiguity, and use an authorized Workflow for external actions. Ask a next question only when an active Workflow needs a missing UI-configured field or relevant Conversation Guidance provides one. Resume a saved question only when it is still relevant. Never force the caller to use an exact sentence.
+NEXT_QUESTION:
+
+STAGE: natural_conversation
+FLOW: main
+TYPE: guidance
+LANGUAGE: ta
+INTENT_CLASS: ACKNOWLEDGEMENT
+ENTRY: false
+PURPOSE: Handle ordinary non-factual conversation naturally without unnecessary retrieval.
+SITUATION: The caller greets, acknowledges, thanks, asks the agent to wait, checks conversational presence, or gives a courtesy response without requesting a business fact or external action.
+MATCH_MODE: semantic
+RESPONSE: Respond briefly and naturally in the caller's active language using the relevant recent turn. Do not search merely to answer a greeting, acknowledgement, courtesy response, pause request or presence check. If the acknowledgement accepts an immediately preceding offer or answers a pending question, continue that accepted flow instead of treating it as isolated chitchat. Do not use an information-unavailable or technical-failure message for normal conversation.
 NEXT_QUESTION:
 
 STAGE: introduction
@@ -63,7 +75,7 @@ LANGUAGE: ta
 INTENT_CLASS: DETAILS_OR_PRICE
 ENTRY: false
 PURPOSE: Give a complete natural explanation of one exact selected package.
-RESPONSE: Use only the selected Product Catalog item. Speak in this order: package name, exact price when published, complete approved tests or services, and consultation. Give preparation or preferred test time here only when the caller explicitly asks; otherwise reserve preparation for the booking confirmation stage so it is spoken once. Split a long test list into natural spoken groups without dropping facts. Do not restart the introduction and do not substitute another item.
+RESPONSE: Use only the selected Product Catalog item. Speak in this order: package name, exact price when published, complete approved tests or services, and consultation. Give preparation or preferred test time here only when the caller explicitly asks; otherwise reserve preparation for the booking confirmation stage so it is spoken once. Split a long test list into natural spoken groups without dropping facts. Do not restart the introduction and do not substitute another item. After the factual answer, offer either appointment assistance or details about another package as the single next question.
 NEXT_QUESTION: Appointment book பண்ணலாமா, இல்ல வேற Package details வேணுமா?
 
 STAGE: selected_package_price
@@ -116,6 +128,66 @@ PURPOSE: Handle a non-emergency health concern or screening requirement.
 RESPONSE: Use only current Catalog relationships to mention a related screening option. Clearly distinguish screening information from diagnosis, suitability and treatment. Emergency Workflow Rules take priority.
 NEXT_QUESTION: இந்த Package details explain பண்ணட்டுமா?
 
+STAGE: appointment_workflow_activation
+FLOW: main
+TYPE: guidance
+LANGUAGE: ta
+INTENT_CLASS: ACTION_TOOL_REQUEST
+ENTRY: false
+PURPOSE: Start the authorized appointment Workflow when the caller explicitly asks to book the selected package.
+RESPONSE: Preserve the currently selected Catalog record as retrieval context. Activate only the current published Workflow whose identifier matches an active tool assigned in the UI. The runtime, not this document or the language model, owns authorization, required fields, field order, validation, confirmation and execution. If no Workflow or assigned tool authorizes the action, explain naturally that the action cannot be completed; do not claim a booking and do not call it missing package information.
+NEXT_QUESTION:
+
+STAGE: appointment_field_collection
+FLOW: main
+TYPE: guidance
+LANGUAGE: ta
+INTENT_CLASS: ACTION_TOOL_REQUEST
+ENTRY: false
+PURPOSE: Collect only the next missing field configured for the active appointment tool.
+RESPONSE: Accept every valid configured value supplied in the caller's latest utterance, including multiple values in one turn and corrections to earlier values. Preserve completed values. Ask one natural question for only the next missing required UI-configured field. Never define field names, validation rules or order from this document, never invent a value, and never ask again for a completed value.
+NEXT_QUESTION:
+
+STAGE: appointment_package_preparation
+FLOW: main
+TYPE: guidance
+LANGUAGE: ta
+INTENT_CLASS: ACTION_TOOL_REQUEST
+ENTRY: false
+PURPOSE: Read any preparation instruction for the selected package before final booking confirmation.
+RESPONSE: Hydrate the exact selected Catalog record. State fasting, preferred test time or other preparation only when that exact record publishes it. If no preparation is published, do not invent one. This factual instruction requires current Catalog evidence and must be spoken only once in the booking flow.
+NEXT_QUESTION:
+
+STAGE: appointment_confirmation
+FLOW: main
+TYPE: guidance
+LANGUAGE: ta
+INTENT_CLASS: ACTION_TOOL_REQUEST
+ENTRY: false
+PURPOSE: Read back completed configured values and obtain explicit confirmation before execution.
+RESPONSE: After all required UI-configured fields are valid, read back those values together with the selected package. Ask one clear confirmation question. A correction updates the relevant value and returns to confirmation. A cancellation ends the Workflow without execution. Silence, acknowledgement, a side question or tentative language is not confirmation.
+NEXT_QUESTION:
+
+STAGE: appointment_execution_result
+FLOW: main
+TYPE: guidance
+LANGUAGE: ta
+INTENT_CLASS: ACTION_TOOL_REQUEST
+ENTRY: false
+PURPOSE: Execute after explicit confirmation and report only the verified result.
+RESPONSE: The runtime executes the authorized assigned tool only after explicit confirmation. Phrase success only from a verified successful tool result. On timeout or failure, say naturally that the appointment was not completed and retain valid collected values for a permitted retry. Never let the language model infer success and never convert a business rejection into a technical system failure.
+NEXT_QUESTION: வேற ஏதாவது கேள்வி இருக்கா?
+
+STAGE: appointment_interruption
+FLOW: recovery
+TYPE: guidance
+LANGUAGE: ta
+INTENT_CLASS: ACTION_TOOL_REQUEST
+ENTRY: false
+PURPOSE: Handle a factual side question or topic change while an appointment Workflow is active.
+RESPONSE: Answer the newest request first using the appropriate normal route. Preserve valid Workflow progress only when it remains relevant. Resume by asking the still-missing configured field or confirmation once; cancel stale Workflow state when the caller changes or cancels the requested action.
+NEXT_QUESTION:
+
 STAGE: side_question
 FLOW: recovery
 TYPE: guidance
@@ -142,6 +214,6 @@ TYPE: guidance
 LANGUAGE: ta
 INTENT_CLASS: CALL_CONTROL
 ENTRY: false
-PURPOSE: Close only when the caller clearly finishes.
-RESPONSE: Use the configured closing message. Do not automatically promote another package after the caller finishes.
+PURPOSE: Close only when the caller clearly finishes, including after verified appointment completion.
+RESPONSE: If the caller has no further question after the final continuation offer, use the configured thank-you and closing message. Do not automatically promote another package, repeat completed booking fields or restart the introduction.
 NEXT_QUESTION:

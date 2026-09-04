@@ -10,13 +10,13 @@ import { templateEnginePostSearchJsonSchema } from '../src/voice/interaction/tem
 import { templateEngineClaimValidationJsonSchema } from '../src/voice/interaction/template-engine-claim-validator.js';
 import { templateEngineWorkflowSpeechJsonSchema } from '../src/voice/interaction/template-engine-workflow-runtime.js';
 
-assert.equal(TEMPLATE_ENGINE_DECISION_CONTRACT_VERSION, 1);
+assert.equal(TEMPLATE_ENGINE_DECISION_CONTRACT_VERSION, 3);
 assert.deepEqual(Object.values(templateEngineDecisionTypes), [
   'RESPONSE', 'CLARIFY', 'SEARCH', 'TOOL',
 ]);
 assert.equal(templateEngineDecisionJsonSchema.additionalProperties, false);
 assert.deepEqual(templateEngineDecisionJsonSchema.required, [
-  'decision', 'response', 'clarification', 'search', 'tool', 'stateUpdate',
+  'decision', 'response', 'clarification', 'search', 'tool', 'nextQuestion', 'stateUpdate',
 ]);
 const searchObjectSchema = templateEngineDecisionJsonSchema.properties.search.anyOf[1];
 assert.deepEqual(searchObjectSchema.required, [
@@ -29,6 +29,7 @@ const searchDecision = {
   clarification: null,
   search: { query: 'current caller request', requestedFact: null, contextualReference: null },
   tool: null,
+  nextQuestion: null,
   stateUpdate: null,
 };
 assert.equal(validateTemplateEngineDecision(JSON.stringify(searchDecision)).valid, true);
@@ -37,17 +38,28 @@ assert.deepEqual(validateTemplateEngineDecision(searchDecision).value.search.pre
 for (const decision of [
   {
     decision: 'RESPONSE', response: 'Hello.', clarification: null,
-    search: null, tool: null, stateUpdate: null,
+    search: null, tool: null,
+    nextQuestion: { question: 'How may I help?', reason: 'conversation_guidance' },
+    stateUpdate: null,
   },
   {
     decision: 'CLARIFY', response: '',
     clarification: { question: 'Which option do you mean?', reason: null, candidates: [] },
-    search: null, tool: null, stateUpdate: null,
+    search: null, tool: null, nextQuestion: null, stateUpdate: null,
   },
   {
     decision: 'TOOL', response: '', clarification: null, search: null,
     tool: { name: 'assigned_action', arguments: {} },
+    nextQuestion: null,
     stateUpdate: { set: { confirmationStatus: 'confirmed' }, clear: [] },
+  },
+  {
+    decision: 'RESPONSE', response: 'The pending operation was cancelled.',
+    clarification: null, search: null, tool: null, nextQuestion: null,
+    stateUpdate: {
+      set: { confirmationStatus: null },
+      clear: ['activeWorkflowId', 'collectedToolFields', 'confirmationStatus'],
+    },
   },
 ]) {
   assert.equal(validateTemplateEngineDecision(decision).valid, true);
@@ -61,19 +73,33 @@ assert.equal(validateTemplateEngineDecision({ ...searchDecision, response: 'unsu
   'mixed_decision_payload');
 assert.equal(validateTemplateEngineDecision({ ...searchDecision, search: null }).reason,
   'mixed_decision_payload');
+assert.equal(validateTemplateEngineDecision({
+  ...searchDecision,
+  nextQuestion: { question: 'Unsupported branch question?', reason: null },
+}).reason, 'mixed_decision_payload');
 assert.equal(validateTemplateEngineDecision('```json\n{}\n```').reason, 'invalid_json');
 assert.equal(validateTemplateEngineDecision({
   decision: 'TOOL', response: '', clarification: null, search: null,
-  tool: { name: 'assigned_action', arguments: {}, unexpected: true }, stateUpdate: null,
+  tool: { name: 'assigned_action', arguments: {}, unexpected: true },
+  nextQuestion: null, stateUpdate: null,
 }).reason, 'invalid_payload');
+assert.equal(validateTemplateEngineDecision({
+  decision: 'RESPONSE', response: 'Cancelled.', clarification: null,
+  search: null, tool: null, nextQuestion: null,
+  stateUpdate: {
+    set: { confirmationStatus: null }, clear: ['activeWorkflowId'],
+  },
+}).reason, 'invalid_workflow_cancellation');
 assert.deepEqual(validateTemplateEngineDecision({
   decision: 'TOOL', response: '', clarification: null, search: null,
   tool: { name: 'assigned_action', arguments: '{"field":"caller value"}' },
+  nextQuestion: null,
   stateUpdate: null,
 }).value.tool.arguments, { field: 'caller value' });
 assert.equal(validateTemplateEngineDecision({
   decision: 'TOOL', response: '', clarification: null, search: null,
   tool: { name: 'assigned_action', arguments: '{}' },
+  nextQuestion: null,
   stateUpdate: { set: { unsupportedState: true }, clear: [] },
 }).reason, 'invalid_payload');
 

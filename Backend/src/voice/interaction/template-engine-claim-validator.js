@@ -40,7 +40,10 @@ export async function validateTemplateEngineClaims({
       role: 'system',
       content: [
         'Validate caller-facing speech against only the supplied reference JSON.',
-        'supported is true only when every factual claim is directly entailed by that reference.',
+        'Treat the complete published evidence array as one permitted grounding set.',
+        'A comparison may combine separately supported attributes from multiple cited records.',
+        'supported is true only when every entity, number, attribute, polarity and relationship is directly entailed by the complete reference set.',
+        'Do not require one evidence record to contain every compared entity when each cited record supports its own entity and attributes.',
         'For a tool result, successClaimed is true when the speech says or implies the action succeeded.',
         'Do not use outside knowledge. Return only the required JSON object.',
         '<validation_input>',

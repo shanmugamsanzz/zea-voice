@@ -12,7 +12,7 @@ const contextualSearch = normalizeTemplateEngineSearchDecision({
     requestedFact: 'price',
     contextualReference: 'Silver Master Health Checkup',
   },
-  tool: null, stateUpdate: null,
+  tool: null, nextQuestion: null, stateUpdate: null,
 }, state);
 assert.equal(contextualSearch.valid, true);
 assert.equal(contextualSearch.value.search.query, 'Silver Master Health Checkup price');
@@ -26,12 +26,27 @@ const explicitPreference = normalizeTemplateEngineSearchDecision({
     query: 'compare selected records', requestedFact: 'difference',
     contextualReference: 'selected records', preferredRecordIds: ['first', 'second'],
   },
-  tool: null, stateUpdate: null,
+  tool: null, nextQuestion: null, stateUpdate: null,
 }, {
   lastReferencedRecordIds: [], comparisonRecordIds: ['first', 'second'],
 });
 assert.equal(explicitPreference.valid, true);
 assert.deepEqual(explicitPreference.value.search.preferredRecordIds, ['first', 'second']);
+
+const rememberedComparison = normalizeTemplateEngineSearchDecision({
+  decision: 'SEARCH', response: '', clarification: null,
+  search: {
+    query: 'compare the previously discussed options', requestedFact: 'differences',
+    contextualReference: 'the previously discussed options', preferredRecordIds: [],
+  },
+  tool: null, nextQuestion: null, stateUpdate: null,
+}, {
+  lastReferencedRecordIds: ['stale-third'],
+  comparisonRecordIds: ['first', 'second'],
+});
+assert.equal(rememberedComparison.valid, true);
+assert.deepEqual(rememberedComparison.value.search.preferredRecordIds, ['first', 'second'],
+  'A comparison follow-up must prefer the exact temporary comparison records');
 
 const inventedPreference = normalizeTemplateEngineSearchDecision({
   decision: 'SEARCH', response: '', clarification: null,
@@ -39,7 +54,7 @@ const inventedPreference = normalizeTemplateEngineSearchDecision({
     query: 'current fact', requestedFact: 'fact', contextualReference: null,
     preferredRecordIds: ['invented-record'],
   },
-  tool: null, stateUpdate: null,
+  tool: null, nextQuestion: null, stateUpdate: null,
 }, state);
 assert.equal(inventedPreference.reason, 'unknown_preferred_record_id');
 
@@ -48,7 +63,7 @@ const unsupportedClarification = normalizeTemplateEngineSearchDecision({
   clarification: {
     question: 'Which one?', reason: 'contextual_reference_ambiguous', candidates: ['Only one'],
   },
-  search: null, tool: null, stateUpdate: null,
+  search: null, tool: null, nextQuestion: null, stateUpdate: null,
 }, state);
 assert.equal(unsupportedClarification.reason,
   'contextual_clarification_requires_candidates');
@@ -58,9 +73,8 @@ const genuineClarification = normalizeTemplateEngineSearchDecision({
     question: 'Do you mean the first or second option?',
     reason: 'contextual_reference_ambiguous', candidates: ['First option', 'Second option'],
   },
-  search: null, tool: null, stateUpdate: null,
+  search: null, tool: null, nextQuestion: null, stateUpdate: null,
 }, state);
 assert.equal(genuineClarification.valid, true);
 
 console.log('Template-engine contextual SEARCH verification passed.');
-

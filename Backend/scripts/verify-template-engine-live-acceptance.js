@@ -18,5 +18,6 @@ console.log(JSON.stringify({
   gitSha: expectedGitSha, repeats: report.repeats,
   tenants: report.tenants, languages: report.languages,
   scenarios: report.scenarios,
+  scenarioRuns: report.scenarioRuns?.length ?? 0,
   legacyDeletionAuthorized: true,
 }, null, 2));

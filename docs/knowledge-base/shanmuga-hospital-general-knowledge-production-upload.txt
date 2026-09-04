@@ -1,10 +1,19 @@
 DOCUMENT_TYPE: GENERAL_KNOWLEDGE
-PURPOSE: Stable Hospital scheduling and callback policies that are not owned by the Product Catalog, Workflow Rules, Conversation Guidance or FAQ.
+PURPOSE: Stable caller-facing Hospital scheduling and callback policies that are not owned by the Product Catalog, Workflow Rules, Conversation Guidance or FAQ. This document supplies information only and does not authorize an external action.
 
-TOPIC: Hospital scheduling and callback policy
-ALIASES: preferred test time | health checkup timing | Sunday booking | appointment availability | callback timing | call me later
+TOPIC: Preferred health check-up test time
+ALIASES: preferred test time | health checkup timing | test எப்ப எடுக்கணும் | checkupக்கு எத்தனை மணிக்கு வரணும் | what time should I come for the test?
 PREFERRED_TEST_TIME: 8:00 AM to 11:00 AM.
+APPLICABILITY: This is the general preferred window. A current package-specific Catalog instruction takes priority when one is published.
+
+TOPIC: Appointment availability and verification
+ALIASES: Sunday booking | Sunday appointment | appointment availability | slot available ஆ? | appointment confirm ஆயிடுச்சா? | is my appointment confirmed?
 SUNDAY_BOOKING: Not available.
 APPOINTMENT_AVAILABILITY: A requested appointment slot is not confirmed until the configured booking tool or Hospital team verifies it.
+
+TOPIC: Callback availability
+ALIASES: callback timing | call me later | பிறகு call பண்ணுங்க | இப்ப busy ஆ இருக்கேன் | can you call me back later?
 CALLBACK_AVAILABLE: A caller may request a callback when they are busy or unable to continue.
 CALLBACK_WINDOW: 8:00 AM to 8:00 PM.
+
+AUTHORITY_BOUNDARY: Package identities, prices, tests, consultations and preparation belong to the current Product Catalog. Conversation continuation belongs to Conversation Guidance. Appointment and callback execution require their current published Workflow and assigned UI tool.

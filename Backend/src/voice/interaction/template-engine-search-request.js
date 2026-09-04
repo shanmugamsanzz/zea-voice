@@ -32,9 +32,12 @@ export function normalizeTemplateEngineSearchDecision(decision, state = {}) {
   }
 
   let preferredRecordIds = requestedPreferences;
-  if (!preferredRecordIds.length && value.search.contextualReference
-    && state.lastReferencedRecordIds?.length === 1) {
-    preferredRecordIds = recordIds(state.lastReferencedRecordIds);
+  if (!preferredRecordIds.length && value.search.contextualReference) {
+    const comparisonIds = recordIds(state.comparisonRecordIds);
+    preferredRecordIds = comparisonIds.length > 1
+      ? comparisonIds
+      : (state.lastReferencedRecordIds?.length === 1
+        ? recordIds(state.lastReferencedRecordIds) : []);
   }
   return Object.freeze({
     valid: true,
@@ -47,4 +50,3 @@ export function normalizeTemplateEngineSearchDecision(decision, state = {}) {
     }),
   });
 }
-

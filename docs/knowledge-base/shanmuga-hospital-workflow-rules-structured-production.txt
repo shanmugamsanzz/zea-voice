@@ -1,5 +1,6 @@
 SHANMUGA HOSPITAL - APPROVED WORKFLOW AND ACTION RULES
 FORMAT VERSION: 5
+AUTHORITY: These rules authorize safety responses and external actions only. The assigned UI tool schema owns fields, questions, order and validation. Product Catalog owns package facts and preparation. Conversation Guidance owns normal continuation.
 LANGUAGE: Tamil, Tanglish and English
 USAGE: Inbound and Outbound
 
@@ -7,28 +8,18 @@ RULE: emergency_support
 INTENT_CLASS: SAFETY_EMERGENCY
 SITUATION: The caller describes severe chest pain, severe breathing difficulty, unconsciousness, stroke symptoms, uncontrolled bleeding or another urgent medical emergency.
 EXAMPLE: நெஞ்சு வலி ரொம்ப அதிகமா இருக்கு | மூச்சு விட முடியல | மயங்கி விழுந்துட்டாங்க | ரத்தம் நிற்காம வருது | severe chest pain | cannot breathe | unconscious | heavy bleeding
-MATCH_MODE: any_phrase
+MATCH_MODE: semantic
 RESPONSE_MODE: exact
 PRIORITY: 100
 RESPONSE: இது urgent medical situationஆ இருக்கலாம். உடனே அருகிலுள்ள emergency medical help எடுத்துக்கோங்க.
 
 RULE: create_appointment
 INTENT_CLASS: ACTION_TOOL_REQUEST
-SITUATION: The caller explicitly requests to book an appointment for an already selected approved package.
+SITUATION: The caller explicitly requests an appointment for an approved package selected in the current utterance or relevant recent conversation.
 EXAMPLE: appointment book பண்ணுங்க | booking பண்ணலாம் | இந்த package book பண்ணுங்க | book an appointment | reserve this package
-MATCH_MODE: any_phrase
+MATCH_MODE: semantic
 RESPONSE_MODE: instruction
 PRIORITY: 96
 ACTION: create_appointment
 REQUIRES_CATALOG_ITEM: true
-BLOCKED_RESPONSE: Appointment book பண்ணலாம். முதல்ல எந்த approved Package வேணும்னு சொல்லுங்க.
-RESPONSE: Preserve the selected Catalog item. Collect only the missing UI-configured fields in their configured order. Read the details back once, request final confirmation, and execute the action only after confirmation. Confirm only details returned by a verified successful result. On failure or timeout, state that the appointment was not confirmed, preserve the collected values and offer only a configured recovery option.
-
-RULE: non_emergency_symptom_support
-INTENT_CLASS: KNOWN_INFORMATION
-SITUATION: The caller asks which package to choose because of a non-emergency symptom or health concern.
-EXAMPLE: symptomக்கு எந்த package choose பண்ணணும் | stomach painக்கு package சொல்லுங்க | உடம்பு வலிக்கு எந்த checkup | which package for my symptoms
-MATCH_MODE: any_phrase
-RESPONSE_MODE: exact
-PRIORITY: 95
-RESPONSE: உங்களுடைய symptoms வைத்து நான் package recommend பண்ண முடியாது. சரியான medical suitability-ஐ Doctor தான் confirm பண்ண வேண்டும்.
+RESPONSE: Preserve the exact selected Catalog item reference. Activate only when this published Workflow identifier uniquely matches one active tool assigned to the agent. Collect every valid caller-provided value for the assigned UI schema, including multiple values in one turn and corrections. Ask only the next missing required UI-configured field and never define fields in this rule. Before confirmation, use the selected Catalog record for any published preparation instruction. Read back completed configured values once and request explicit confirmation. Execute only after a separate explicit confirmation; cancellation must not execute. Phrase success only from a verified successful tool result. On rejection, timeout or failure, state that the appointment was not completed, preserve values only when retry is allowed, and never claim success or convert the result into missing package information.

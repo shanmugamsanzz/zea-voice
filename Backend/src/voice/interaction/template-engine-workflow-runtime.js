@@ -7,8 +7,9 @@ import {
 import { validateToolArguments, toolArgumentsMatchSchema } from '../tools/tool-security.js';
 import { validateTemplateEngineDecision } from './template-engine-decision-contract.js';
 import { validateTemplateEngineToolResultSpeech } from './template-engine-tool-result-validator.js';
+import { validateAndComposeTemplateEngineSpeech } from './template-engine-follow-up.js';
 
-export const TEMPLATE_ENGINE_WORKFLOW_RUNTIME_VERSION = 1;
+export const TEMPLATE_ENGINE_WORKFLOW_RUNTIME_VERSION = 2;
 
 const speechTasks = new Set(['ASK_FIELD', 'CONFIRM', 'RESULT']);
 
@@ -97,10 +98,11 @@ function resolveConfiguration({
     const workflowId = cleanText(workflow.recordId ?? workflow.id, 160);
     const workflowTool = identity(configuredWorkflowToolIdentifier(workflow));
     if (!workflowId || !workflowTool || (activeWorkflowId
-      ? workflowId !== activeWorkflowId : workflowTool !== requestedTool)) return [];
+      && workflowId !== activeWorkflowId)) return [];
     const tools = assignedTools.filter((tool) => toolActive(tool)
       && assignedToolIdentifiers(tool).has(workflowTool)
       && (!requestedTool || assignedToolIdentifiers(tool).has(requestedTool)));
+    if (!activeWorkflowId && (!requestedTool || tools.length !== 1)) return [];
     return tools.length === 1 ? [{ workflow, workflowId, tool: tools[0] }] : [];
   });
   if (eligible.length !== 1) {
@@ -219,6 +221,35 @@ export const templateEngineWorkflowSpeechJsonSchema = Object.freeze({
   }),
 });
 
+const nullableTextSchema = Object.freeze({
+  anyOf: Object.freeze([
+    Object.freeze({ type: 'string' }),
+    Object.freeze({ type: 'null' }),
+  ]),
+});
+
+export const templateEngineWorkflowResultSpeechJsonSchema = Object.freeze({
+  type: 'object',
+  additionalProperties: false,
+  required: Object.freeze(['speech', 'nextQuestion']),
+  properties: Object.freeze({
+    speech: Object.freeze({ type: 'string' }),
+    nextQuestion: Object.freeze({
+      anyOf: Object.freeze([
+        Object.freeze({ type: 'null' }),
+        Object.freeze({
+          type: 'object', additionalProperties: false,
+          required: Object.freeze(['question', 'reason']),
+          properties: Object.freeze({
+            question: Object.freeze({ type: 'string' }),
+            reason: nullableTextSchema,
+          }),
+        }),
+      ]),
+    }),
+  }),
+});
+
 function safeJson(value, maximumCharacters = 8_000) {
   try {
     const serialized = JSON.stringify(value ?? null);
@@ -239,6 +270,7 @@ function configuredConfirmation(value, configuration) {
 
 export function createTemplateEngineWorkflowSpeechTask({
   configuration, state, confirmationMessage = null, verifiedResult = null,
+  conversationGuidance = null,
 } = {}) {
   if (!configuration?.workflowId || !configuration?.inputSchema) {
     throw new TypeError('Workflow speech requires resolved runtime configuration');
@@ -253,6 +285,11 @@ export function createTemplateEngineWorkflowSpeechTask({
       success: verifiedResult.success,
       output: safeJson(verifiedResult.output),
       error: verifiedResult.success ? null : safeJson(verifiedResult.error),
+      conversationGuidance: conversationGuidance?.purpose ? Object.freeze({
+        recordId: cleanText(conversationGuidance.recordId, 160) || null,
+        purpose: cleanText(conversationGuidance.purpose, 1_500),
+        nextQuestion: cleanText(conversationGuidance.nextQuestion, 1_000) || null,
+      }) : null,
     });
   }
   const progress = workflowProgress(configuration, state);
@@ -315,7 +352,9 @@ export async function phraseTemplateEngineWorkflowSpeech({ mainPrompt, task } = 
     'Do not add, change or infer field values. Do not claim execution or success unless the supplied task is RESULT with success true.',
     'For ASK_FIELD, naturally phrase only the configured field question.',
     'For CONFIRM, read back every supplied value once and request explicit confirmation.',
-    'For RESULT, describe only the supplied verified result status and output.',
+    'For RESULT, put only the supplied verified result status and output in speech.',
+    'Only RESULT may include nextQuestion. Generate at most one natural question from the supplied Conversation Guidance. Keep it null when guidance is missing, has no nextQuestion, or is not relevant.',
+    'ASK_FIELD and CONFIRM use the runtime-controlled speech-only schema and must not add a normal conversational follow-up.',
     'Follow the tenant main prompt for language, tone and style when it does not conflict with these runtime rules.',
     '<tenant_main_prompt_json>',
     JSON.stringify(prompt),
@@ -330,11 +369,14 @@ export async function phraseTemplateEngineWorkflowSpeech({ mainPrompt, task } = 
     temperature: 0,
     responseFormat: Object.freeze({
       type: 'json_schema', name: 'template_engine_workflow_speech', strict: true,
-      schema: templateEngineWorkflowSpeechJsonSchema,
+      schema: task.type === 'RESULT'
+        ? templateEngineWorkflowResultSpeechJsonSchema
+        : templateEngineWorkflowSpeechJsonSchema,
     }),
   }));
   const output = speechOutput(completion);
-  if (!output || Object.keys(output).length !== 1 || !Object.hasOwn(output, 'speech')) {
+  const expectedKeys = task.type === 'RESULT' ? ['nextQuestion', 'speech'] : ['speech'];
+  if (!output || Object.keys(output).sort().join('|') !== expectedKeys.sort().join('|')) {
     throw new AppError(502, 'The Workflow speech LLM returned an invalid object',
       'TEMPLATE_ENGINE_WORKFLOW_SPEECH_INVALID');
   }
@@ -343,7 +385,21 @@ export async function phraseTemplateEngineWorkflowSpeech({ mainPrompt, task } = 
     throw new AppError(502, 'The Workflow speech LLM returned empty speech',
       'TEMPLATE_ENGINE_WORKFLOW_SPEECH_INVALID');
   }
-  return Object.freeze({ speech, taskType: task.type });
+  let nextQuestion = null;
+  if (task.type === 'RESULT' && output.nextQuestion !== null) {
+    const value = output.nextQuestion;
+    const keys = value && typeof value === 'object' && !Array.isArray(value)
+      ? Object.keys(value).sort().join('|') : '';
+    const question = cleanText(value?.question, 1_000);
+    const reason = value?.reason === null ? null : cleanText(value?.reason, 500);
+    if (keys !== 'question|reason' || !question
+      || (value?.reason !== null && !reason)) {
+      throw new AppError(502, 'The Workflow result follow-up is invalid',
+        'TEMPLATE_ENGINE_WORKFLOW_SPEECH_INVALID');
+    }
+    nextQuestion = Object.freeze({ question, reason });
+  }
+  return Object.freeze({ speech, nextQuestion, taskType: task.type });
 }
 
 export async function executeTemplateEngineWorkflow(input = {}, dependencies = {}) {
@@ -396,6 +452,7 @@ export async function executeAndPhraseTemplateEngineWorkflow(input = {}, depende
     configuration: execution.configuration,
     state: input.state,
     verifiedResult: execution.result,
+    conversationGuidance: input.conversationGuidance,
   });
   const phrased = await phraseTemplateEngineWorkflowSpeech({
     mainPrompt: input.mainPrompt, task,
@@ -419,8 +476,27 @@ export async function executeAndPhraseTemplateEngineWorkflow(input = {}, depende
         reason: validatedSpeech.reason,
       });
   }
+  const followUpClaimValidation = phrased.nextQuestion
+    && typeof dependencies.validateToolResultSpeechClaims === 'function'
+    ? await dependencies.validateToolResultSpeechClaims(Object.freeze({
+      speech: phrased.nextQuestion.question,
+      verifiedResult: execution.result,
+      workflowRecordId: execution.configuration.workflowId,
+    })) : { supported: true };
+  const composed = validateAndComposeTemplateEngineSpeech({
+    decision: Object.freeze({
+      decision: 'RESPONSE', response: validatedSpeech.value.speech,
+      clarification: null, search: null, tool: null,
+      nextQuestion: phrased.nextQuestion, stateUpdate: null,
+    }),
+    conversationGuidance: input.conversationGuidance,
+    suppressFollowUp: input.cancelled === true || input.callComplete === true,
+    claimsValidated: followUpClaimValidation?.supported === true,
+  });
   return Object.freeze({
-    ...execution, speech: validatedSpeech.value.speech, speechTask: task,
+    ...execution, speech: composed.speech, speechTask: task,
+    nextQuestion: composed.decision.nextQuestion,
+    followUpValidation: composed.followUp,
   });
 }
 
@@ -453,6 +529,8 @@ export async function advanceTemplateEngineWorkflowTurn(input = {}, dependencies
       state: execution.state,
       speech: execution.speech,
       verifiedResult: execution.result,
+      nextQuestion: execution.nextQuestion,
+      followUpValidation: execution.followUpValidation,
     });
   }
 
@@ -474,5 +552,7 @@ export async function advanceTemplateEngineWorkflowTurn(input = {}, dependencies
     acceptedFields: transition.acceptedFields ?? Object.freeze([]),
     rejectedFields: transition.rejectedFields ?? Object.freeze([]),
     verifiedResult: null,
+    nextQuestion: null,
+    followUpValidation: Object.freeze({ accepted: false, reason: 'workflow_in_progress' }),
   });
 }

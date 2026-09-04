@@ -27,7 +27,7 @@ function searchDecision(query, requestedFact, contextualReference, preferredReco
   return {
     decision: 'SEARCH', response: '', clarification: null,
     search: { query, requestedFact, contextualReference, preferredRecordIds },
-    tool: null, stateUpdate: null,
+    tool: null, nextQuestion: null, stateUpdate: null,
   };
 }
 
@@ -97,7 +97,7 @@ function dependencies(configuration, decisions, { evidence = true } = {}) {
 for (const configuration of tenants) {
   const acknowledgementDecisions = [
     searchDecision(configuration.acknowledgement, null, null),
-    { decision: 'RESPONSE', response: configuration.acknowledgementResponse, clarification: null, search: null, tool: null, stateUpdate: null },
+    { decision: 'RESPONSE', response: configuration.acknowledgementResponse, clarification: null, search: null, tool: null, nextQuestion: null, stateUpdate: null },
   ];
   const acknowledgementRuntime = dependencies(configuration, acknowledgementDecisions);
   const acknowledgement = await runTemplateEngineProductionTurn(
@@ -120,7 +120,7 @@ for (const configuration of tenants) {
     const decisions = [
       searchDecision(scenario.utterance, scenario.fact, scenario.reference,
         scenario.state.lastReferencedRecordIds ?? []),
-      { decision: 'RESPONSE', response: configuration.answer, clarification: null, evidenceIds: ['E1'], stateUpdate: null },
+      { decision: 'RESPONSE', response: configuration.answer, clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null },
     ];
     const runtime = dependencies(configuration, decisions);
     const result = await runTemplateEngineProductionTurn(

@@ -57,9 +57,19 @@ export function buildTemplateEngineRoutingPrompt({
     '- Apply the tenant main prompt to decide when unresolved ambiguity requires CLARIFY.',
     '- Apply the tenant main prompt to map caller actions to TOOL.',
     '- Apply the tenant main prompt for response language, tone, style, missing-information behavior and verified tool-result phrasing.',
+    '- Generate an applicable normal-response follow-up in nextQuestion during the same LLM call. Derive it only from the tenant prompt, relevant published Conversation Guidance and recent conversation; never from fixed industry vocabulary.',
+    '- conversationGuidance, when supplied in orchestrator_turn_input, contains one runtime-selected published record purpose and optional nextQuestion. Treat both as non-binding conversational guidance: decide whether they remain relevant, phrase any question naturally, and keep nextQuestion null when no follow-up helps the current turn.',
+    '- Conversation Guidance is not factual evidence. Never cite it or use it to support names, numbers, policies, availability, relationships or action results.',
+    '- Never copy a guidance nextQuestion as mandatory fixed speech. The caller\'s latest request, completed questions and active Workflow state take priority.',
+    '- nextQuestion is optional and nullable. Use at most one concise question. Keep it null for SEARCH, TOOL and CLARIFY because those routes have their own next step.',
     '- Do not infer tenant behavior from runtime source code or fixed industry vocabulary.',
-    '- A purely social greeting, courtesy, acknowledgement or conversational confirmation that requests no fact and no action must use RESPONSE; do not send it to SEARCH or turn it into missing-information speech.',
+    '- First classify the meaning of the complete latest utterance in its recent conversational context: conversational interaction management, factual information request, genuine ambiguity, or authorized external action.',
+    '- Conversational interaction management includes greetings, acknowledgements, courtesy, brief conversational confirmations, requests to pause or wait, checks that the agent is present or can hear the caller, and requests to resume. When it requests no fact and no external action, it must use RESPONSE; do not send it to SEARCH or turn it into missing-information speech.',
+    '- Do not invent an implicit factual question merely because prior record references exist. Previous references matter only when the latest utterance semantically refers to them.',
     '- A request for an externally verifiable fact must use SEARCH. When uncertain whether a requested answer is factual, use SEARCH rather than an unsupported RESPONSE.',
+    '- SEARCH must describe the fact actually requested in the latest utterance or its genuine contextual reference. Never manufacture requestedFact or contextualReference merely to justify SEARCH.',
+    '- Use CLARIFY only when essential meaning has multiple genuinely plausible interpretations after considering recentCompleteTurns. Ask one relevant question and include the plausible candidates when available.',
+    '- Use TOOL only for an explicit external action that uniquely matches an authorized Workflow summary. A factual question about an action is SEARCH, not TOOL.',
     '- Resolve natural follow-up references from recentCompleteTurns and the latest utterance.',
     '- Treat lastReferencedRecordIds and comparisonRecordIds only as optional retrieval preferences, never as independent intent or factual evidence.',
     '- For SEARCH, create a self-contained query from the latest utterance and recentCompleteTurns; include requestedFact, contextualReference and only known preferredRecordIds.',
@@ -67,11 +77,12 @@ export function buildTemplateEngineRoutingPrompt({
     '- When activeWorkflowId matches an authorized Workflow summary, use TOOL with that tool name to submit caller-provided field values or explicit confirmation; preserve the Workflow during unrelated side questions.',
     '- Encode TOOL arguments as one JSON-object string in tool.arguments exactly as required by the provider schema. The runtime parses and validates it against the assigned UI tool schema.',
     '- For an explicit final Workflow confirmation, return TOOL and set stateUpdate.set.confirmationStatus to confirmed. Do not set it for field values, corrections, tentative agreement or unrelated speech.',
+    '- When the caller explicitly cancels an active, unexecuted Workflow, use RESPONSE with no nextQuestion, set confirmationStatus to null, and clear activeWorkflowId, collectedToolFields and confirmationStatus together. Never execute the tool on that turn.',
     postSearch
       ? '- This is the post-search phase. Return only RESPONSE, CLARIFY or NO_MATCH; never return SEARCH or TOOL.'
       : null,
     postSearch
-      ? '- RESPONSE must cite supplied evidence IDs. CLARIFY asks one natural relevant question. NO_MATCH speaks the tenant-configured natural unavailable-information response.'
+      ? '- RESPONSE must cite supplied evidence IDs and may include one applicable nextQuestion generated in this same call. CLARIFY asks one natural relevant question. NO_MATCH speaks the tenant-configured natural unavailable-information response.'
       : null,
     postSearch
       ? '- Use NO_MATCH only after inspecting all supplied evidence and determining that it cannot answer the current request. Never use NO_MATCH to repair missing, malformed or invalid citations.'

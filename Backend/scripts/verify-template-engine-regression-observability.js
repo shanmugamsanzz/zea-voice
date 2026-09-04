@@ -58,7 +58,7 @@ for (const configuration of configurations) {
     nonFactualResponseAllowed: true,
     invokeStructuredLlm: async () => ({
       decision: 'RESPONSE', response: configuration.acknowledgementResponse,
-      clarification: null, search: null, tool: null, stateUpdate: null,
+      clarification: null, search: null, tool: null, nextQuestion: null, stateUpdate: null,
     }),
   });
   assert.equal(acknowledgement.decision.decision, 'RESPONSE');
@@ -71,7 +71,7 @@ for (const configuration of configurations) {
       contextualReference: 'previously referenced service',
       preferredRecordIds: [current.recordId],
     },
-    tool: null, stateUpdate: null,
+    tool: null, nextQuestion: null, stateUpdate: null,
   };
   const routed = await routeTemplateEngineUtterance({
     mainPrompt: 'Search for every externally verifiable fact.',
@@ -102,6 +102,7 @@ for (const configuration of configurations) {
         decision: 'RESPONSE', response: configuration.response,
         clarification: null,
         evidenceIds: providerCalls === 1 ? ['invalid-internal-id'] : ['E1'],
+        nextQuestion: null,
         stateUpdate: null,
       } };
     },
@@ -128,7 +129,7 @@ await assert.rejects(() => respondToTemplateEngineSearch({
       query: 'current value', requestedFact: 'current value', contextualReference: null,
       preferredRecordIds: [],
     },
-    tool: null, stateUpdate: null,
+    tool: null, nextQuestion: null, stateUpdate: null,
   },
   verifiedEvidence: second.evidence,
   scope: first.scope,
@@ -146,18 +147,19 @@ const noEvidence = await respondToTemplateEngineSearch({
       query: 'unpublished value', requestedFact: 'value', contextualReference: null,
       preferredRecordIds: [],
     },
-    tool: null, stateUpdate: null,
+    tool: null, nextQuestion: null, stateUpdate: null,
   },
   verifiedEvidence: [], scope: first.scope,
 }, {
   tenantBoundaryVerified: true,
   invokeStructuredLlm: async () => ({ outputParsed: {
     decision: 'NO_MATCH', response: 'That information is not published.',
-    clarification: null, evidenceIds: [], stateUpdate: null,
+    clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
   } }),
 });
 assert.equal(noEvidence.decision.decision, 'NO_MATCH');
 
+let hallucinationRepairCalls = 0;
 const hallucinationBlocked = await respondToTemplateEngineSearch({
   mainPrompt: 'Answer facts only from supplied evidence.',
   latestUtterance: configurations[0].factualQuestion, state: first.state,
@@ -167,20 +169,25 @@ const hallucinationBlocked = await respondToTemplateEngineSearch({
       query: 'current value', requestedFact: 'current value', contextualReference: null,
       preferredRecordIds: [first.recordId],
     },
-    tool: null, stateUpdate: null,
+    tool: null, nextQuestion: null, stateUpdate: null,
   },
   verifiedEvidence: first.evidence, scope: first.scope,
+  informationUnavailableResponse: 'That information is not published.',
 }, {
   tenantBoundaryVerified: true,
   validateGroundedClaims: async () => ({ supported: true }),
-  invokeStructuredLlm: async () => ({ outputParsed: {
-    decision: 'RESPONSE', response: 'The current value is 9999 units.',
-    clarification: null, evidenceIds: ['E1'], stateUpdate: null,
-  } }),
+  invokeStructuredLlm: async () => {
+    hallucinationRepairCalls += 1;
+    return { outputParsed: {
+      decision: 'RESPONSE', response: 'The current value is 9999 units.',
+      clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
+    } };
+  },
 });
-assert.equal(hallucinationBlocked.decision.decision, 'SEARCH');
-assert.equal(hallucinationBlocked.outputValidation.ttsAllowed, false);
-assert.equal(hallucinationBlocked.outputValidation.reason, 'unsupported_numeric_claim');
+assert.equal(hallucinationRepairCalls, 2);
+assert.equal(hallucinationBlocked.decision.decision, 'NO_MATCH');
+assert.equal(hallucinationBlocked.outputValidation.ttsAllowed, true);
+assert.equal(hallucinationBlocked.outputValidation.valid, true);
 
 const providerFailure = new Error('provider unavailable');
 await assert.rejects(() => respondToTemplateEngineSearch({
@@ -192,7 +199,7 @@ await assert.rejects(() => respondToTemplateEngineSearch({
       query: 'current value', requestedFact: 'current value', contextualReference: null,
       preferredRecordIds: [],
     },
-    tool: null, stateUpdate: null,
+    tool: null, nextQuestion: null, stateUpdate: null,
   },
   verifiedEvidence: first.evidence, scope: first.scope,
 }, {

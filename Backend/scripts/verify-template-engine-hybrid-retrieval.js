@@ -9,7 +9,7 @@ const decision = Object.freeze({
     query: 'selected service price', requestedFact: 'price',
     contextualReference: 'selected service', preferredRecordIds: ['record-1'],
   }),
-  tool: null, stateUpdate: null,
+  tool: null, nextQuestion: null, stateUpdate: null,
 });
 const state = Object.freeze({
   lastReferencedRecordIds: Object.freeze(['record-1']), comparisonRecordIds: Object.freeze([]),
@@ -78,6 +78,81 @@ assert.equal(retrieval.channels.structured[0].canonicalIdentity.recordType, 'CAT
 assert.ok(retrieval.channels.structured[0].canonicalIdentityKey);
 assert.deepEqual(retrieval.candidates.find((entry) => entry.recordId === 'record-2').channels,
   ['structured', 'bm25']);
+
+const comparisonDecision = Object.freeze({
+  decision: 'SEARCH', response: '', clarification: null,
+  search: Object.freeze({
+    query: 'Alpha Option compared with Beta Option', requestedFact: 'differences',
+    contextualReference: 'Alpha Option and Beta Option', preferredRecordIds: [],
+  }),
+  tool: null, nextQuestion: null, stateUpdate: null,
+});
+const namedCandidate = (recordId, canonicalName, score = 0.8, recordType = 'CATALOG_ITEM') => ({
+  ...candidate(recordId, score), recordType, canonicalName,
+  searchForms: [canonicalName], useCaseTokens: ['available', 'options'],
+});
+const comparison = await runTemplateEngineHybridRetrieval({
+  decision: comparisonDecision, state: {}, scope, candidateLimit: 5,
+}, {
+  searchStructuredPostgres: async () => [
+    namedCandidate('alpha', 'Alpha Option', 0.8),
+    namedCandidate('beta', 'Beta Option', 0.79),
+    namedCandidate('unrelated', 'Gamma Option', 0.99),
+  ],
+  searchBm25: async () => [
+    namedCandidate('alpha', 'Alpha Option', 0.8),
+    namedCandidate('beta', 'Beta Option', 0.79),
+  ],
+  searchQdrantE5: async () => [
+    namedCandidate('unrelated', 'Gamma Option', 0.99),
+    namedCandidate('alpha', 'Alpha Option', 0.8),
+    namedCandidate('beta', 'Beta Option', 0.79),
+  ],
+});
+assert.deepEqual(comparison.candidates.map((entry) => entry.recordId), ['alpha', 'beta']);
+assert.deepEqual(comparison.queryContext.reservedRecords.map((entry) => entry.recordId),
+  ['alpha', 'beta']);
+assert.ok(comparison.queryContext.reservedRecords.every((entry) => (
+  entry.reason === 'explicit_comparison'
+)));
+assert.ok(Object.values(comparison.channels).flat().every((entry) => (
+  ['alpha', 'beta'].includes(entry.recordId)
+)), 'Comparison channels must contain only the explicitly requested records');
+
+const overviewDecision = Object.freeze({
+  decision: 'SEARCH', response: '', clarification: null,
+  search: Object.freeze({
+    query: 'available service options', requestedFact: 'available options',
+    contextualReference: null, preferredRecordIds: [],
+  }),
+  tool: null, nextQuestion: null, stateUpdate: null,
+});
+const overview = await runTemplateEngineHybridRetrieval({
+  decision: overviewDecision, state: {}, scope, candidateLimit: 5,
+}, {
+  searchStructuredPostgres: async () => [
+    namedCandidate('group-a', 'First Group', 0.75, 'CATALOG_CATEGORY'),
+    namedCandidate('unrelated-item', 'Unrelated Detail', 0.99),
+  ].map((entry) => ({ ...entry,
+    searchForms: entry.recordId === 'group-a'
+      ? ['available service options'] : ['different subject'],
+    useCaseTokens: entry.recordId === 'group-a'
+      ? ['available', 'options'] : ['different', 'subject'],
+  })),
+  searchBm25: async () => [
+    { ...namedCandidate('group-a', 'First Group', 0.75, 'CATALOG_CATEGORY'),
+      searchForms: ['available service options'] },
+  ],
+  searchQdrantE5: async () => [
+    { ...namedCandidate('unrelated-item', 'Unrelated Detail', 0.99),
+      useCaseTokens: ['different', 'subject'] },
+  ],
+});
+assert.deepEqual(overview.candidates.map((entry) => entry.recordId), ['group-a']);
+assert.equal(overview.candidates[0].recordType, 'CATALOG_CATEGORY');
+assert.equal(overview.channels.structured[0].canonicalName, 'First Group');
+assert.deepEqual(overview.channels.structured[0].searchForms, ['available service options']);
+
 const authoritativeSelection = fuseCandidateRankings({
   ...retrieval,
   tenantId: scope.tenantId,
@@ -99,7 +174,8 @@ const partial = await runTemplateEngineHybridRetrieval({ decision, state, scope 
 });
 assert.equal(partial.failures.length, 1);
 assert.equal(partial.failures[0].channel, 'bm25');
-assert.equal(partial.candidates.length, 2);
+assert.deepEqual(partial.candidates.map((entry) => entry.recordId), ['record-1'],
+  'A preferred contextual record survives a partial outage without admitting an unrelated result');
 
 await assert.rejects(() => runTemplateEngineHybridRetrieval({ decision, state, scope }, {
   searchStructuredPostgres: async () => [{

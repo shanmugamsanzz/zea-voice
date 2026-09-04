@@ -52,6 +52,11 @@ import { createMinimalTemplateEngineState } from './interaction/template-engine-
 import { runTemplateEngineProductionTurn } from './interaction/template-engine-production-runtime.js';
 import { recordTemplateEngineTurnMetrics } from './interaction/template-engine-observability.js';
 import {
+  isTemplateEngineStructuredOutputFailure,
+  parseTemplateEngineStructuredOutput,
+  structuredOutputRetryMessages,
+} from './interaction/template-engine-structured-output.js';
+import {
   loadTemplateEnginePublishedContext,
   retrieveTemplateEngineEvidence,
 } from './interaction/template-engine-production-retrieval.js';
@@ -99,12 +104,14 @@ export function createTemplateEngineStructuredInvoker(adapter, options = {}) {
     let transientRetries = 0;
     let responseFormat = request.responseFormat;
     let schemaFallbackUsed = false;
+    let structuredOutputRetryUsed = false;
+    let messages = request.messages;
     while (true) {
       try {
         let text = '';
-        let completion = {};
+        let completion = null;
         const stream = adapter.stream({
-          messages: request.messages,
+          messages,
           tools: [],
           temperature: request.temperature ?? 0,
           maxOutputTokens: env.VOICE_GROUNDED_MAX_OUTPUT_TOKENS,
@@ -115,6 +122,10 @@ export function createTemplateEngineStructuredInvoker(adapter, options = {}) {
           if (event.type === 'text_delta') text += String(event.delta ?? '');
           if (event.type === 'completed' && event.usage) options.onUsage?.(event);
           if (event.type === 'completed') completion = event;
+          if (event.type === 'cancelled') {
+            throw new AppError(409, 'The template-engine LLM request was cancelled',
+              'TEMPLATE_ENGINE_LLM_CANCELLED', { reason: event.reason ?? null });
+          }
           if (event.type === 'error') {
             throw Object.assign(new AppError(
               Number(event.details?.status) === 429 ? 429 : 502,
@@ -124,15 +135,12 @@ export function createTemplateEngineStructuredInvoker(adapter, options = {}) {
             ), { retryable: event.retryable === true });
           }
         }
-        const raw = text.trim();
-        if (!raw) throw new AppError(502, 'The template-engine LLM returned no decision',
-          'TEMPLATE_ENGINE_LLM_EMPTY');
-        try {
-          return { ...completion, outputParsed: JSON.parse(raw) };
-        } catch (error) {
-          throw new AppError(502, 'The template-engine LLM returned malformed JSON',
-            'TEMPLATE_ENGINE_LLM_INVALID_JSON', { message: error.message });
-        }
+        const outputParsed = parseTemplateEngineStructuredOutput({
+          completion,
+          output: text,
+          schema: request.responseFormat?.schema,
+        });
+        return { ...completion, outputParsed };
       } catch (error) {
         const providerCode = String(error?.details?.providerCode ?? '').toLocaleLowerCase();
         const providerParam = String(error?.details?.providerParam ?? '').toLocaleLowerCase();
@@ -145,6 +153,16 @@ export function createTemplateEngineStructuredInvoker(adapter, options = {}) {
           schemaFallbackUsed = true;
           responseFormat = Object.freeze({ type: 'json_object' });
           options.onResponseFormatFallback?.(error.details);
+          continue;
+        }
+        if (!structuredOutputRetryUsed && isTemplateEngineStructuredOutputFailure(error)) {
+          structuredOutputRetryUsed = true;
+          messages = structuredOutputRetryMessages(request.messages, error);
+          options.onStructuredOutputRetry?.({
+            code: error.code,
+            finishReason: error.details?.finishReason ?? null,
+            responseFormat: responseFormat?.type ?? null,
+          });
           continue;
         }
         const canRetry = error?.retryable === true
@@ -2254,6 +2272,14 @@ export class RealtimeConversationOrchestrator {
           providerStatus: details?.status ?? null,
         }, 'LLM provider rejected strict schema; retrying with JSON-object mode');
       },
+      onStructuredOutputRetry: (details) => {
+        this.log.warn({
+          stage: 'template_engine.llm_structured_output_retry',
+          callId: this.call.id,
+          turnEpoch: epoch,
+          ...details,
+        }, 'LLM structured output was unusable; retrying the same caller turn once');
+      },
     });
     let result;
     let retrievalDiagnostics = null;
@@ -2362,6 +2388,10 @@ export class RealtimeConversationOrchestrator {
         },
       });
     } catch (error) {
+      if (error?.code === 'TEMPLATE_ENGINE_LLM_CANCELLED') {
+        sentencePipeline.cancel();
+        return;
+      }
       this.#recordProviderFailure('llm', error, 'template_engine.turn');
       this.log.error({
         err: error,
