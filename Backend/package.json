@@ -224,6 +224,7 @@
     "verify:template-engine-direct-cutover": "node scripts/verify-template-engine-direct-cutover.js",
     "verify:template-engine-provider-runtime": "node scripts/verify-template-engine-provider-runtime.js",
     "verify:template-engine-regression-observability": "node scripts/verify-template-engine-regression-observability.js",
+    "verify:template-engine-turn-latency": "node scripts/verify-template-engine-turn-latency.js",
     "verify:template-engine-developer-observability": "node scripts/verify-message-source-tracing.js && node scripts/verify-transcript-source-persistence.js && node scripts/verify-call-review-source-isolation.js && node scripts/verify-template-engine-production-runtime.js",
     "verify:template-engine-routing-evidence-gate": "node scripts/verify-template-engine-routing-evidence-gate.js && node scripts/verify-template-engine-regression-observability.js && node scripts/verify-template-engine-hybrid-retrieval.js",
     "verify:generic-intent-detection": "node scripts/verify-generic-intent-detection.js",

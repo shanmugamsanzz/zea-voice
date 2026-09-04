@@ -187,7 +187,9 @@ function validateClarification(decision, input) {
   if (questionMarks > 1) return invalid('multiple_clarification_questions');
   if (input.ambiguity?.required !== true) return invalid('clarification_not_required');
   if (input.clarificationRelevant === false
-    || input.semanticClaimValidation?.supported === false) {
+    || input.semanticClaimValidation?.supported === false
+    || (input.claimValidationRequired === true
+      && input.semanticClaimValidation?.supported !== true)) {
     return invalid('irrelevant_or_unsupported_clarification');
   }
   const allowedCandidates = new Set((input.ambiguity?.candidates ?? []).map(identity).filter(Boolean));
@@ -261,8 +263,17 @@ export function validateTemplateEngineOutput(input = {}) {
   if (decision.decision === 'TOOL') return validateTool(decision, input);
   if (decision.decision === 'SEARCH') return valid('SEARCH', decision);
   if (decision.decision === 'NO_MATCH') {
-    return internalOrJson(decision.response)
-      ? invalid('invalid_no_match_speech') : valid('TTS', decision);
+    if (internalOrJson(decision.response)) return invalid('invalid_no_match_speech', {
+      factual: input.factualClaimsPresent === true, retryCount: input.retryCount,
+    });
+    if (input.claimValidationRequired === true
+      && input.semanticClaimValidation?.supported !== true) {
+      return invalid(input.semanticClaimValidation
+        ? 'unsupported_no_match_claim' : 'grounding_validation_missing', {
+        factual: true, retryCount: input.retryCount,
+      });
+    }
+    return valid('TTS', decision);
   }
   return invalid('unsupported_decision');
 }

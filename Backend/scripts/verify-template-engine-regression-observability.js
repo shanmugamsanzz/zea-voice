@@ -152,6 +152,12 @@ const noEvidence = await respondToTemplateEngineSearch({
   verifiedEvidence: [], scope: first.scope,
 }, {
   tenantBoundaryVerified: true,
+  validateGroundedClaims: async ({ decision, response, selectedEvidence }) => ({
+    supported: decision === 'NO_MATCH'
+      && response === 'That information is not published.'
+      && selectedEvidence.length === 0,
+    reason: decision === 'NO_MATCH' ? null : 'unsupported_claim',
+  }),
   invokeStructuredLlm: async () => ({ outputParsed: {
     decision: 'NO_MATCH', response: 'That information is not published.',
     clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,

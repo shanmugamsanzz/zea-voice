@@ -105,6 +105,8 @@ assert.equal(result.retrySearch, true);
 result = validateTemplateEngineOutput({
   phase: 'post_search', decision: clarify('Did you mean Alpha or Beta?', ['Alpha', 'Beta']),
   ambiguity: { required: true, kind: 'entity', candidates: ['Alpha', 'Beta'] },
+  claimValidationRequired: true,
+  semanticClaimValidation: { supported: true },
 });
 assert.equal(result.valid, true);
 assert.equal(result.ttsAllowed, true);
@@ -121,6 +123,42 @@ result = validateTemplateEngineOutput({
   ambiguity: { required: true, kind: 'entity', candidates: ['Alpha', 'Beta'] },
 });
 assert.equal(result.reason, 'invented_clarification_candidate');
+
+result = validateTemplateEngineOutput({
+  phase: 'post_search', decision: clarify('Did you mean Alpha or Beta?', ['Alpha', 'Beta']),
+  ambiguity: { required: true, kind: 'entity', candidates: ['Alpha', 'Beta'] },
+  claimValidationRequired: true,
+  semanticClaimValidation: { supported: false },
+  factualClaimsPresent: true,
+});
+assert.equal(result.reason, 'irrelevant_or_unsupported_clarification');
+assert.equal(result.ttsAllowed, false);
+
+result = validateTemplateEngineOutput({
+  phase: 'post_search',
+  decision: {
+    decision: 'NO_MATCH', response: 'That attribute is not required.',
+    clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
+  },
+  claimValidationRequired: true,
+  semanticClaimValidation: { supported: false },
+  factualClaimsPresent: true,
+});
+assert.equal(result.reason, 'unsupported_no_match_claim');
+assert.equal(result.ttsAllowed, false);
+
+result = validateTemplateEngineOutput({
+  phase: 'post_search',
+  decision: {
+    decision: 'NO_MATCH', response: 'The published information does not provide that detail.',
+    clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
+  },
+  claimValidationRequired: true,
+  semanticClaimValidation: { supported: true },
+  factualClaimsPresent: true,
+});
+assert.equal(result.valid, true);
+assert.equal(result.ttsAllowed, true);
 
 const scope = {
   tenantId: 'tenant-a', agentId: 'agent-a',

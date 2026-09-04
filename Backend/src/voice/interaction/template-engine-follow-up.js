@@ -3,6 +3,121 @@ function cleanText(value, maximum = 4_000) {
     .replace(/\s+/gu, ' ').trim().slice(0, maximum);
 }
 
+const followUpRepairReasons = new Set([
+  'not_proposed', 'not_exactly_one_question', 'internal_or_structured_question',
+  'unsupported_question_claim', 'unrelated_question',
+]);
+
+export const templateEngineFollowUpRepairJsonSchema = Object.freeze({
+  type: 'object', additionalProperties: false,
+  required: Object.freeze(['nextQuestion']),
+  properties: Object.freeze({
+    nextQuestion: Object.freeze({
+      type: 'object', additionalProperties: false,
+      required: Object.freeze(['question', 'reason']),
+      properties: Object.freeze({
+        question: Object.freeze({ type: 'string' }),
+        reason: Object.freeze({
+          anyOf: Object.freeze([
+            Object.freeze({ type: 'string' }), Object.freeze({ type: 'null' }),
+          ]),
+        }),
+      }),
+    }),
+  }),
+});
+
+function completionOutput(completion) {
+  if (completion && typeof completion === 'object') {
+    return completion.outputParsed ?? completion.output_parsed ?? completion.parsed
+      ?? completion.answer ?? completion.output ?? completion.text ?? completion;
+  }
+  return completion;
+}
+
+function safeObject(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  if (typeof value !== 'string') return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function repairTemplateEngineFollowUp({
+  decision, mainPrompt, latestUtterance, recentCompleteTurns = [],
+  conversationGuidance, initialValidation, invokeStructuredLlm,
+} = {}) {
+  const reason = cleanText(initialValidation?.reason, 160);
+  const applicable = decision?.decision === 'RESPONSE'
+    && cleanText(conversationGuidance?.nextQuestion)
+    && followUpRepairReasons.has(reason)
+    && typeof invokeStructuredLlm === 'function';
+  if (!applicable) {
+    return Object.freeze({ decision, attempted: false, reason: reason || 'not_applicable' });
+  }
+  const repairInput = Object.freeze({
+    latestUtterance: cleanText(latestUtterance, 2_000),
+    recentCompleteTurns: Object.freeze((Array.isArray(recentCompleteTurns)
+      ? recentCompleteTurns : []).slice(-10)),
+    answer: cleanText(decision.response),
+    conversationGuidance: Object.freeze({
+      purpose: cleanText(conversationGuidance.purpose, 1_500),
+      nextQuestion: cleanText(conversationGuidance.nextQuestion, 1_500),
+      conversationStage: cleanText(conversationGuidance.conversationStage, 160) || null,
+    }),
+    rejectedReason: reason,
+  });
+  const messages = Object.freeze([
+    Object.freeze({
+      role: 'system',
+      content: [
+        cleanText(mainPrompt, 24_000),
+        'The caller-facing answer is already validated. Generate exactly one concise follow-up question only.',
+        'Use the supplied published Conversation Guidance as meaning guidance and phrase it naturally in the caller\'s active language.',
+        'Do not repeat a completed question, change the answer, add facts, or expose internal data.',
+        'Return exactly the supplied JSON schema, not Markdown or commentary.',
+      ].filter(Boolean).join('\n'),
+    }),
+    Object.freeze({ role: 'user', content: JSON.stringify(repairInput) }),
+  ]);
+  try {
+    const completion = await invokeStructuredLlm(Object.freeze({
+      messages,
+      temperature: 0,
+      responseFormat: Object.freeze({
+        type: 'json_schema', name: 'template_engine_follow_up_repair', strict: true,
+        schema: templateEngineFollowUpRepairJsonSchema,
+      }),
+    }));
+    const parsed = safeObject(completionOutput(completion));
+    const value = parsed?.nextQuestion;
+    const question = cleanText(value?.question, 1_000);
+    const repairedReason = value?.reason === null ? null : cleanText(value?.reason, 500);
+    if (!parsed || Object.keys(parsed).length !== 1
+      || !value || typeof value !== 'object' || Array.isArray(value)
+      || Object.keys(value).sort().join('|') !== 'question|reason'
+      || !question || (value.reason !== null && !repairedReason)) {
+      return Object.freeze({ decision, attempted: true, reason: 'repair_output_invalid' });
+    }
+    return Object.freeze({
+      decision: Object.freeze({
+        ...decision,
+        nextQuestion: Object.freeze({ question, reason: repairedReason }),
+      }),
+      attempted: true,
+      reason: null,
+    });
+  } catch (error) {
+    return Object.freeze({
+      decision, attempted: true, reason: 'repair_provider_failure',
+      errorCode: cleanText(error?.code, 160) || null,
+    });
+  }
+}
+
 function identity(value) {
   return cleanText(value).toLocaleLowerCase()
     .replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim();

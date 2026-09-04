@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   candidateTemplateEngineSpeech,
+  repairTemplateEngineFollowUp,
   validateAndComposeTemplateEngineSpeech,
 } from '../src/voice/interaction/template-engine-follow-up.js';
 import {
@@ -43,6 +44,22 @@ const multiple = validateAndComposeTemplateEngineSpeech({
 assert.equal(multiple.followUp.reason, 'not_exactly_one_question');
 assert.equal(multiple.decision.nextQuestion, null);
 assert.equal(multiple.speech, decision.response);
+const repairedMultiple = await repairTemplateEngineFollowUp({
+  decision: {
+    ...decision,
+    nextQuestion: { question: 'Would you like the next step? Or another option?', reason: null },
+  },
+  mainPrompt: 'Use concise natural language.',
+  latestUtterance: 'Explain the selected option.',
+  conversationGuidance: guidance,
+  initialValidation: multiple.followUp,
+  invokeStructuredLlm: async () => ({
+    nextQuestion: { question: 'Would you like another option?', reason: 'Relevant continuation' },
+  }),
+});
+assert.equal(repairedMultiple.attempted, true);
+assert.equal(repairedMultiple.reason, null);
+assert.equal(repairedMultiple.decision.nextQuestion.question, 'Would you like another option?');
 
 const repeated = validateAndComposeTemplateEngineSpeech({
   decision,
@@ -129,9 +146,13 @@ const decisions = [{
 }, {
   decision: 'RESPONSE', response: 'The selected option is available.',
   clarification: null, evidenceIds: ['E1'],
-  nextQuestion: { question: 'Would you like another option?', reason: 'Relevant continuation' },
+  nextQuestion: null,
   stateUpdate: null,
+}, {
+  nextQuestion: { question: 'Would you like another option?', reason: 'Relevant continuation' },
 }];
+let guidanceDiagnostics = null;
+let followUpDiagnostics = null;
 const production = await runTemplateEngineProductionTurn({
   auth: { tenantId }, scope, callId: 'call-follow-up', usageDirection: 'inbound',
   language: 'en', mainPrompt: 'Search facts and continue using published guidance.',
@@ -157,11 +178,18 @@ const production = await runTemplateEngineProductionTurn({
   executeAuthorizedTool: async () => { throw new Error('must not execute'); },
   validateGroundedClaims: async () => ({ supported: true, successClaimed: false }),
   validateToolResultSpeechClaims: async () => ({ supported: true, successClaimed: false }),
+  onConversationGuidanceSelected: (details) => { guidanceDiagnostics = details; },
+  onFollowUpDiagnostics: (details) => { followUpDiagnostics = details; },
 });
 assert.equal(production.speech,
   'The selected option is available. Would you like another option?');
 assert.equal(production.followUpValidation.accepted, true);
 assert.equal(production.decision.nextQuestion.question, 'Would you like another option?');
+assert.equal(production.followUpValidation.reason, null);
+assert.equal(guidanceDiagnostics.selected, true);
+assert.equal(guidanceDiagnostics.hasNextQuestion, true);
+assert.equal(followUpDiagnostics.repairAttempted, true);
+assert.equal(followUpDiagnostics.accepted, true);
 assert.equal(decisions.length, 0);
 
 const source = readFileSync(

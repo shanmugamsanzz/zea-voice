@@ -109,9 +109,23 @@ function candidateText(candidate) {
   ].filter(Boolean).join(' ');
 }
 
+function identifierText(value) {
+  return cleanText(value, 500).replace(/[_:/.-]+/gu, ' ');
+}
+
+function signalScore(signal, candidate) {
+  const value = identifierText(signal);
+  if (!value) return 0;
+  return overlapScore(value, [
+    identifierText(candidate.nodeKey), identifierText(candidate.intentClass),
+    identifierText(candidate.context), candidate.purpose, candidate.situation,
+  ].filter(Boolean).join(' '));
+}
+
 export function selectApplicableConversationGuidance({
   publishedConversationGuidance = [], scope = {}, latestUtterance, finalDecision = null,
   searchInterpretation = null, evidence = [], recentCompleteTurns = [],
+  currentIntent = null, conversationStage = null, language = null,
 } = {}) {
   const candidates = publishedConversationGuidance.filter((entry) => scoped(entry, scope))
     .slice(0, maximumGuidanceCandidates);
@@ -125,6 +139,7 @@ export function selectApplicableConversationGuidance({
     evidenceSearchText(evidence),
   ].filter(Boolean).join(' ');
   const contextualText = recentTurnText(recentCompleteTurns);
+  const evidenceText = evidenceSearchText(evidence);
   const normalizedRequest = normalized(requestText);
   const evidenceRecordIds = new Set((Array.isArray(evidence) ? evidence : [])
     .filter((entry) => entry?.recordType === 'CONVERSATION_NODE')
@@ -136,11 +151,35 @@ export function selectApplicableConversationGuidance({
       return normalizedExample && (normalizedRequest.includes(normalizedExample)
         || normalizedExample.includes(normalizedRequest));
     });
-    const score = (evidenceRecordIds.has(candidate.recordId) ? 100 : 0)
-      + (exampleMatch ? 8 : 0)
-      + overlapScore(requestText, semanticText) * 10
-      + overlapScore(contextualText, semanticText) * 2;
-    return { candidate, score };
+    const reasons = [];
+    const evidenceRecordMatch = evidenceRecordIds.has(candidate.recordId);
+    const intentCompatibility = signalScore(
+      currentIntent ?? searchInterpretation?.requestedFact, candidate,
+    );
+    const stageCompatibility = signalScore(conversationStage, candidate);
+    const requestCompatibility = overlapScore(requestText, semanticText);
+    const evidenceCompatibility = overlapScore(
+      evidenceText, [...candidate.catalogReferences, semanticText].join(' '),
+    );
+    const contextCompatibility = overlapScore(contextualText, semanticText);
+    const languageMatch = language && candidate.language !== 'und'
+      && normalized(language).split('-')[0] === normalized(candidate.language).split('-')[0];
+    if (evidenceRecordMatch) reasons.push('retrieved_guidance_record');
+    if (exampleMatch) reasons.push('semantic_example_match');
+    if (intentCompatibility > 0) reasons.push('intent_compatible');
+    if (stageCompatibility > 0) reasons.push('stage_compatible');
+    if (evidenceCompatibility > 0) reasons.push('evidence_compatible');
+    if (contextCompatibility > 0) reasons.push('recent_turn_compatible');
+    if (languageMatch) reasons.push('language_compatible');
+    const score = (evidenceRecordMatch ? 40 : 0)
+      + (exampleMatch ? 20 : 0)
+      + intentCompatibility * 24
+      + stageCompatibility * 20
+      + requestCompatibility * 12
+      + evidenceCompatibility * 12
+      + contextCompatibility * 3
+      + (languageMatch ? 2 : 0);
+    return { candidate, score, reasons };
   }).sort((left, right) => right.score - left.score
     || left.candidate.recordId.localeCompare(right.candidate.recordId));
   if (ranked[0].score <= 0) return null;
@@ -148,6 +187,12 @@ export function selectApplicableConversationGuidance({
     recordId: ranked[0].candidate.recordId,
     purpose: ranked[0].candidate.purpose,
     nextQuestion: ranked[0].candidate.nextQuestion,
+    intentClass: ranked[0].candidate.intentClass,
+    nodeKey: ranked[0].candidate.nodeKey,
+    flowKey: ranked[0].candidate.flowKey,
+    conversationStage: cleanText(conversationStage, 160) || null,
+    selectionScore: Number(ranked[0].score.toFixed(4)),
+    selectionReasons: Object.freeze(ranked[0].reasons),
   });
 }
 
@@ -157,5 +202,11 @@ export function sanitizeConversationGuidance(value) {
   const purpose = cleanText(value.purpose, 1_500);
   const nextQuestion = cleanText(value.nextQuestion, 1_500) || null;
   if (!recordId || !purpose) return null;
-  return Object.freeze({ recordId, purpose, nextQuestion });
+  return Object.freeze({
+    recordId, purpose, nextQuestion,
+    intentClass: cleanText(value.intentClass, 160) || null,
+    nodeKey: cleanText(value.nodeKey, 160) || null,
+    flowKey: cleanText(value.flowKey, 160) || null,
+    conversationStage: cleanText(value.conversationStage, 160) || null,
+  });
 }

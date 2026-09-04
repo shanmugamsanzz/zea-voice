@@ -13,6 +13,7 @@ import {
 } from '../../knowledge-bases/workflow-tool-authorization.js';
 import { selectApplicableConversationGuidance } from './template-engine-conversation-guidance.js';
 import {
+  repairTemplateEngineFollowUp,
   validateAndComposeTemplateEngineSpeech,
 } from './template-engine-follow-up.js';
 
@@ -51,6 +52,74 @@ async function followUpClaimsSupported(decision, evidence, validateGroundedClaim
     selectedEvidence: Object.freeze(selectedEvidence),
   });
   return validation?.supported === true;
+}
+
+function conversationStage(state, decision = null) {
+  if (state?.activeWorkflowId) {
+    return `workflow ${cleanText(state.confirmationStatus, 80) || 'active'}`;
+  }
+  if (state?.pendingClarification) return 'pending clarification';
+  return [decision?.decision, decision?.search?.requestedFact]
+    .map((value) => cleanText(value, 160)).filter(Boolean).join(' ') || 'conversation';
+}
+
+function reportGuidanceSelection(callback, phase, guidance) {
+  callback?.(Object.freeze({
+    phase,
+    selected: Boolean(guidance),
+    recordId: guidance?.recordId ?? null,
+    intentClass: guidance?.intentClass ?? null,
+    nodeKey: guidance?.nodeKey ?? null,
+    conversationStage: guidance?.conversationStage ?? null,
+    hasNextQuestion: Boolean(cleanText(guidance?.nextQuestion)),
+    selectionScore: guidance?.selectionScore ?? null,
+    selectionReasons: guidance?.selectionReasons ?? Object.freeze([]),
+  }));
+}
+
+async function composeWithFollowUpRepair({
+  decision, mainPrompt, latestUtterance, recentCompleteTurns, conversationGuidance,
+  evidence, suppressFollowUp = false, validateGroundedClaims, invokeStructuredLlm,
+  onDiagnostics,
+}) {
+  let claimsValidated = await followUpClaimsSupported(
+    decision, evidence, validateGroundedClaims,
+  );
+  let composed = validateAndComposeTemplateEngineSpeech({
+    decision, recentCompleteTurns, conversationGuidance, suppressFollowUp,
+    claimsValidated,
+  });
+  const repair = await repairTemplateEngineFollowUp({
+    decision,
+    mainPrompt,
+    latestUtterance,
+    recentCompleteTurns,
+    conversationGuidance,
+    initialValidation: composed.followUp,
+    invokeStructuredLlm,
+  });
+  if (repair.attempted && repair.reason === null) {
+    claimsValidated = await followUpClaimsSupported(
+      repair.decision, evidence, validateGroundedClaims,
+    );
+    composed = validateAndComposeTemplateEngineSpeech({
+      decision: repair.decision,
+      recentCompleteTurns,
+      conversationGuidance,
+      suppressFollowUp,
+      claimsValidated,
+    });
+  }
+  onDiagnostics?.(Object.freeze({
+    guidanceRecordId: conversationGuidance?.recordId ?? null,
+    guidanceHasNextQuestion: Boolean(cleanText(conversationGuidance?.nextQuestion)),
+    proposed: Boolean(cleanText(decision?.nextQuestion?.question)),
+    accepted: composed.followUp.accepted,
+    validationReason: composed.followUp.reason,
+    repairAttempted: repair.attempted,
+    repairReason: repair.reason,
+  }));
+  return Object.freeze({ ...composed, repair });
 }
 
 function applyDecisionState(state, decision, evidence = []) {
@@ -143,8 +212,14 @@ async function runWorkflow(input, decision, state, context, dependencies) {
     scope: context.scope,
     latestUtterance: input.latestUtterance,
     finalDecision: 'TOOL_RESULT',
+    currentIntent: 'TOOL_RESULT',
+    conversationStage: 'workflow result',
+    language: input.language,
     recentCompleteTurns: state.recentCompleteTurns,
   });
+  reportGuidanceSelection(
+    dependencies.onConversationGuidanceSelected, 'workflow_result', resultConversationGuidance,
+  );
   const transition = await advanceTemplateEngineWorkflowTurn({
     toolDecision: decision,
     state,
@@ -164,12 +239,6 @@ async function runWorkflow(input, decision, state, context, dependencies) {
     executeAuthorizedTool: dependencies.executeAuthorizedTool,
     validateToolResultSpeechClaims: dependencies.validateToolResultSpeechClaims,
   });
-  const workflow = context.publishedWorkflows.find((entry) => (
-    configuredWorkflowToolIdentifier(entry) === decision.tool?.name
-  ));
-  const assignedTool = input.assignedTools.find((entry) => (
-    assignedToolIdentifiers(entry).has(decision.tool?.name)
-  ));
   const finished = ['SUCCEEDED', 'FAILED'].includes(transition.status);
   return Object.freeze({
     decision,
@@ -191,8 +260,9 @@ async function runWorkflow(input, decision, state, context, dependencies) {
     provenance: responseProvenance({
       initialDecision: 'TOOL',
       finalDecision: finished ? 'TOOL_RESULT' : 'CLARIFY',
-      workflowId: workflow?.recordId ?? state.activeWorkflowId ?? transition.state.activeWorkflowId,
-      toolId: assignedTool?.id ?? decision.tool?.name,
+      workflowId: transition.workflowRecordId
+        ?? state.activeWorkflowId ?? transition.state.activeWorkflowId,
+      toolId: transition.toolId ?? decision.tool?.name,
       validationResult: finished
         ? (transition.verifiedResult?.verified === true ? 'verified_tool_result' : 'unverified_tool_result')
         : 'workflow_state_valid',
@@ -236,7 +306,12 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     latestUtterance: input.latestUtterance,
     evidence: [],
     recentCompleteTurns: state.recentCompleteTurns,
+    conversationStage: conversationStage(state),
+    language: input.language,
   });
+  reportGuidanceSelection(
+    dependencies.onConversationGuidanceSelected, 'initial_routing', initialConversationGuidance,
+  );
   const common = {
     mainPrompt: input.mainPrompt,
     latestUtterance: input.latestUtterance,
@@ -253,6 +328,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   };
   const routed = await routeTemplateEngineUtterance(common, {
     invokeStructuredLlm: dependencies.invokeStructuredLlm,
+    onDecisionRetry: dependencies.onRoutingDecisionRetry,
     tenantBoundaryVerified: true,
     nonFactualResponseAllowed: true,
     assignedToolSchemas: input.assignedTools,
@@ -264,13 +340,18 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   });
   let first = routed.decision;
   let initialValidationResult = routed.outputValidation?.reason ?? 'valid';
-  if (first.decision === 'RESPONSE') {
+  if (first.decision === 'RESPONSE' || first.decision === 'CLARIFY') {
+    const directSpeech = first.decision === 'CLARIFY'
+      ? first.clarification?.question : first.response;
     const directValidation = await dependencies.validateGroundedClaims({
-      response: first.response,
+      response: directSpeech,
+      decision: first.decision,
       selectedEvidence: Object.freeze([]),
+      latestUtterance: input.latestUtterance,
     });
     if (directValidation?.supported !== true) {
-      initialValidationResult = directValidation?.reason ?? 'factual_response_requires_search';
+      initialValidationResult = directValidation?.reason
+        ?? 'caller_speech_requires_grounding_search';
       first = Object.freeze({
         decision: 'SEARCH', response: '', clarification: null,
         search: Object.freeze({
@@ -287,14 +368,31 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     return runWorkflow(input, first, state, publishedContext, dependencies);
   }
   if (first.decision !== 'SEARCH') {
-    const followUpSupported = await followUpClaimsSupported(
-      first, [], dependencies.validateGroundedClaims,
-    );
-    const composed = validateAndComposeTemplateEngineSpeech({
-      decision: first,
+    const directConversationGuidance = selectApplicableConversationGuidance({
+      publishedConversationGuidance: publishedContext.publishedConversationGuidance ?? [],
+      scope: publishedContext.scope,
+      latestUtterance: input.latestUtterance,
+      finalDecision: first.decision,
+      currentIntent: first.decision,
       recentCompleteTurns: state.recentCompleteTurns,
-      conversationGuidance: initialConversationGuidance,
-      claimsValidated: followUpSupported,
+      conversationStage: conversationStage(state, first),
+      language: input.language,
+    }) ?? initialConversationGuidance;
+    reportGuidanceSelection(
+      dependencies.onConversationGuidanceSelected, 'direct_response', directConversationGuidance,
+    );
+    const composed = await composeWithFollowUpRepair({
+      decision: first,
+      mainPrompt: input.mainPrompt,
+      latestUtterance: input.latestUtterance,
+      recentCompleteTurns: state.recentCompleteTurns,
+      conversationGuidance: directConversationGuidance,
+      evidence: [],
+      validateGroundedClaims: dependencies.validateGroundedClaims,
+      invokeStructuredLlm: dependencies.invokeStructuredLlm,
+      onDiagnostics: (details) => dependencies.onFollowUpDiagnostics?.(Object.freeze({
+        phase: 'direct_response', ...details,
+      })),
     });
     first = composed.decision;
     const speech = composed.speech;
@@ -341,7 +439,13 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     searchInterpretation: first.search,
     evidence: retrieval.evidence,
     recentCompleteTurns: state.recentCompleteTurns,
+    currentIntent: first.search?.requestedFact ?? first.decision,
+    conversationStage: conversationStage(state, first),
+    language: input.language,
   });
+  reportGuidanceSelection(
+    dependencies.onConversationGuidanceSelected, 'post_search', postSearchConversationGuidance,
+  );
   const answered = await respondToTemplateEngineSearch({
     ...common,
     state,
@@ -355,8 +459,12 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     tenantBoundaryVerified: true,
     publishedEntities: retrieval.evidence,
     ambiguity: { required: true },
-    validateGroundedClaims: ({ response, selectedEvidence }) => (
-      dependencies.validateGroundedClaims({ response, selectedEvidence })
+    validateGroundedClaims: ({
+      response, decision, selectedEvidence, searchInterpretation, latestUtterance,
+    }) => (
+      dependencies.validateGroundedClaims({
+        response, decision, selectedEvidence, searchInterpretation, latestUtterance,
+      })
     ),
     onDecisionRepair: dependencies.onPostSearchDecisionRepair,
     onPostSearchDiagnostics: dependencies.onPostSearchDiagnostics,
@@ -365,15 +473,19 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     throw new AppError(502, 'Grounded answer failed validation after one search',
       'TEMPLATE_ENGINE_GROUNDING_REJECTED');
   }
-  const followUpSupported = await followUpClaimsSupported(
-    answered.decision, retrieval.evidence, dependencies.validateGroundedClaims,
-  );
-  const composed = validateAndComposeTemplateEngineSpeech({
+  const composed = await composeWithFollowUpRepair({
     decision: answered.decision,
+    mainPrompt: input.mainPrompt,
+    latestUtterance: input.latestUtterance,
     recentCompleteTurns: state.recentCompleteTurns,
     conversationGuidance: postSearchConversationGuidance,
+    evidence: retrieval.evidence,
     suppressFollowUp: templateEngineEvidenceSuppressesFollowUp(retrieval.evidence),
-    claimsValidated: followUpSupported,
+    validateGroundedClaims: dependencies.validateGroundedClaims,
+    invokeStructuredLlm: dependencies.invokeStructuredLlm,
+    onDiagnostics: (details) => dependencies.onFollowUpDiagnostics?.(Object.freeze({
+      phase: 'post_search', ...details,
+    })),
   });
   const speech = composed.speech;
   if (!speech) throw new AppError(502, 'Template engine produced no caller speech', 'TEMPLATE_ENGINE_SILENT_TURN');

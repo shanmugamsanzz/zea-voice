@@ -60,6 +60,46 @@ function completionOutput(completion) {
   return completion;
 }
 
+function decisionRetryMessages(messages, reason, phase) {
+  return Object.freeze([
+    ...(Array.isArray(messages) ? messages : []),
+    Object.freeze({
+      role: 'system',
+      content: [
+        `The previous ${phase} decision failed runtime validation: ${cleanText(reason, 160) || 'invalid_decision'}.`,
+        'Re-evaluate the same finalized caller utterance and relevant recent conversation.',
+        'Return exactly one decision branch and set every field belonging to other branches to null or empty as required by the supplied schema.',
+        'Do not change, discard, summarize, or replace the caller utterance.',
+        'Do not turn conversational interaction management into missing-information speech.',
+        'Return only one complete JSON object with no Markdown or commentary.',
+      ].join(' '),
+    }),
+  ]);
+}
+
+async function invokeValidatedDecision({
+  invokeStructuredLlm, request, messages, validateCompletion, phase, onRetry,
+}) {
+  let completion = await invokeStructuredLlm(request(messages));
+  let validated = validateCompletion(completion);
+  let retryAttempted = false;
+  let initialReason = null;
+  if (!validated.valid) {
+    retryAttempted = true;
+    initialReason = validated.reason;
+    const retryMessages = decisionRetryMessages(messages, validated.reason, phase);
+    onRetry?.(Object.freeze({
+      phase,
+      reason: validated.reason,
+      originalMessageCount: messages.length,
+      retryMessageCount: retryMessages.length,
+    }));
+    completion = await invokeStructuredLlm(request(retryMessages));
+    validated = validateCompletion(completion);
+  }
+  return Object.freeze({ completion, validated, retryAttempted, initialReason });
+}
+
 function forcedSearchDecision(orchestratorInput, dependencies = {}) {
   return Object.freeze({
     decision: 'SEARCH', response: '', clarification: null,
@@ -196,18 +236,28 @@ export async function routeTemplateEngineUtterance(input = {}, dependencies = {}
     verifiedToolResult: dependencies.verifiedToolResult ?? null,
     },
   );
-  let completion = await invokeStructuredLlm(request(baseMessages));
-  let validated = validateCompletion(completion);
+  let invocation = await invokeValidatedDecision({
+    invokeStructuredLlm,
+    request,
+    messages: baseMessages,
+    validateCompletion,
+    phase: 'initial_routing',
+    onRetry: dependencies.onDecisionRetry,
+  });
+  let { validated } = invocation;
+  let decisionRepairAttempted = invocation.retryAttempted;
   if (!validated.valid) {
     throw new AppError(502, 'The template-engine Orchestrator returned an invalid decision',
       'TEMPLATE_ENGINE_ORCHESTRATOR_DECISION_INVALID', {
         reason: validated.reason,
+        attempts: 2,
+        initialReason: invocation.initialReason,
       });
   }
   let routingReviewAttempted = false;
   if (searchNeedsRoutingReview(validated.value)) {
     routingReviewAttempted = true;
-    completion = await invokeStructuredLlm(request([
+    const reviewMessages = Object.freeze([
       ...baseMessages,
       Object.freeze({
         role: 'user',
@@ -219,12 +269,23 @@ export async function routeTemplateEngineUtterance(input = {}, dependencies = {}
           'Stored record IDs alone never make the latest utterance factual. Do not use phrase matching or invent a fact, entity, action, or context.',
         ].join(' '),
       }),
-    ]));
-    validated = validateCompletion(completion);
+    ]);
+    invocation = await invokeValidatedDecision({
+      invokeStructuredLlm,
+      request,
+      messages: reviewMessages,
+      validateCompletion,
+      phase: 'routing_review',
+      onRetry: dependencies.onDecisionRetry,
+    });
+    validated = invocation.validated;
+    decisionRepairAttempted ||= invocation.retryAttempted;
     if (!validated.valid) {
       throw new AppError(502, 'The template-engine routing review returned an invalid decision',
         'TEMPLATE_ENGINE_ORCHESTRATOR_DECISION_INVALID', {
           reason: validated.reason,
+          attempts: 2,
+          initialReason: invocation.initialReason,
         });
     }
   }
@@ -248,6 +309,7 @@ export async function routeTemplateEngineUtterance(input = {}, dependencies = {}
         verifiedEvidenceIds: validated.verifiedEvidenceIds,
         outputValidation,
         routingReviewAttempted,
+        decisionRepairAttempted,
       });
     }
     throw new AppError(502, 'The template-engine output failed delivery validation',
@@ -259,6 +321,7 @@ export async function routeTemplateEngineUtterance(input = {}, dependencies = {}
     verifiedEvidenceIds: validated.verifiedEvidenceIds,
     outputValidation,
     routingReviewAttempted,
+    decisionRepairAttempted,
   });
 }
 
@@ -316,6 +379,10 @@ function verifiedEvidenceForPostSearch(values, scope = {}) {
         && typeof value.authoritativeData === 'object'
         && !Array.isArray(value.authoritativeData)
         ? Object.freeze({ ...value.authoritativeData }) : Object.freeze({}),
+      requestedFact: cleanText(value?.requestedFact, 500) || null,
+      publishedAttributePaths: Object.freeze(cleanList(
+        value?.publishedAttributePaths, 120,
+      )),
     }));
     if (evidence.length >= 5) break;
   }
@@ -405,6 +472,11 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       outputSchema: templateEnginePostSearchJsonSchema,
       phase: 'post_search',
     }),
+    'Runtime grounding rules: authoritativeData, content, and publishedAttributePaths contain the only published facts available for each record.',
+    'Answer the requestedFact only when it is explicitly supported by those supplied facts.',
+    'An absent attribute means the published evidence does not provide that information. Absence never proves a negative value, non-existence, non-requirement, non-availability, or zero.',
+    'For NO_MATCH, describe only that the requested information is not present in the supplied published evidence; do not assert that the underlying real-world attribute is false.',
+    'CLARIFY speech may identify supplied ambiguity candidates but must not introduce any unsupported factual claim.',
     '<orchestrator_turn_input>',
     JSON.stringify(turnInput),
     '</orchestrator_turn_input>',
@@ -508,17 +580,19 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
   );
   let semanticClaimValidation = dependencies.semanticClaimValidation ?? null;
   const validateClaims = async (decision) => {
-    if (decision.decision !== 'RESPONSE'
-      || typeof dependencies.validateGroundedClaims !== 'function') {
+    if (typeof dependencies.validateGroundedClaims !== 'function') {
       return dependencies.semanticClaimValidation ?? null;
     }
-    const citedIds = new Set(decision.evidenceIds);
-    const completeCitedEvidence = evidence.filter((source) => (
-      citedIds.has(source.evidenceId)
-    ));
+    const citedIds = new Set(decision.evidenceIds ?? []);
+    const completeCitedEvidence = decision.decision === 'RESPONSE'
+      ? evidence.filter((source) => citedIds.has(source.evidenceId))
+      : evidence;
+    const speech = decision.decision === 'CLARIFY'
+      ? decision.clarification?.question : decision.response;
     return dependencies.validateGroundedClaims(Object.freeze({
-      response: decision.response,
-      evidenceIds: decision.evidenceIds,
+      response: speech,
+      decision: decision.decision,
+      evidenceIds: decision.evidenceIds ?? [],
       selectedEvidence: Object.freeze(completeCitedEvidence),
       latestUtterance: base.latestUtterance,
       searchInterpretation: search.value.search,
@@ -528,7 +602,8 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
   let outputValidation = validateTemplateEngineOutput(outputValidationInput(
     groundedDecision, base, dependencies, {
       phase: 'post_search',
-      factualClaimsPresent: groundedDecision.decision === 'RESPONSE',
+      factualClaimsPresent: true,
+      claimValidationRequired: true,
       selectedEvidence: evidence,
       semanticClaimValidation,
     },
@@ -561,7 +636,8 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       outputValidation = validateTemplateEngineOutput(outputValidationInput(
         groundedDecision, base, dependencies, {
           phase: 'post_search',
-          factualClaimsPresent: groundedDecision.decision === 'RESPONSE',
+          factualClaimsPresent: true,
+          claimValidationRequired: true,
           selectedEvidence: evidence,
           semanticClaimValidation,
           retryCount: 1,
@@ -586,8 +662,10 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
         );
         outputValidation = validateTemplateEngineOutput(outputValidationInput(
           groundedDecision, base, dependencies, {
-            phase: 'post_search', factualClaimsPresent: false,
-            selectedEvidence: evidence, semanticClaimValidation: null,
+            phase: 'post_search', factualClaimsPresent: true,
+            claimValidationRequired: true,
+            selectedEvidence: evidence,
+            semanticClaimValidation: await validateClaims(groundedDecision),
             retryCount: 1,
           },
         ));

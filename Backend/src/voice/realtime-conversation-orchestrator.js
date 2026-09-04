@@ -50,6 +50,7 @@ import {
 } from './interaction/grounded-turn-latency.js';
 import { createMinimalTemplateEngineState } from './interaction/template-engine-state.js';
 import { runTemplateEngineProductionTurn } from './interaction/template-engine-production-runtime.js';
+import { armTemplateEngineTurnLatencyAcknowledgement } from './interaction/template-engine-turn-latency.js';
 import { recordTemplateEngineTurnMetrics } from './interaction/template-engine-observability.js';
 import {
   isTemplateEngineStructuredOutputFailure,
@@ -2245,6 +2246,28 @@ export class RealtimeConversationOrchestrator {
     const sentencePipeline = this.#createSentenceTtsPipeline(
       epoch, turnStartedAt, firstAudioDeadlineAt,
     );
+    let finalResponseReady = false;
+    const latencyAcknowledgement = armTemplateEngineTurnLatencyAcknowledgement({
+      thresholdMs: env.VOICE_TURN_ACKNOWLEDGEMENT_AFTER_MS,
+      acknowledgementText: configuredLatencyAcknowledgementResponse(this.runtimeProfile),
+      isActive: () => !finalResponseReady && epoch === this.epoch && !this.finalized,
+      onAcknowledgement: (text) => sentencePipeline.enqueueAcknowledgement(text),
+      onTriggered: ({ thresholdMs, queued }) => {
+        this.runtimeMetrics.latency.templateEngineAcknowledgements ??= {
+          triggered: 0, queued: 0,
+        };
+        this.runtimeMetrics.latency.templateEngineAcknowledgements.triggered += 1;
+        if (queued) this.runtimeMetrics.latency.templateEngineAcknowledgements.queued += 1;
+        this.log.info({
+          stage: 'template_engine.turn_latency_acknowledgement',
+          callId: this.call.id,
+          turnEpoch: epoch,
+          thresholdMs,
+          queued,
+          elapsedMs: Date.now() - turnStartedAt,
+        }, 'Whole-turn latency acknowledgement threshold reached while processing continued');
+      },
+    });
     const assignedTools = templateEngineToolSchemas(this.runtimeProfile.tools);
     const informationFields = this.liveCallMemory?.fieldSchemas?.() ?? [];
     const auth = {
@@ -2302,6 +2325,30 @@ export class RealtimeConversationOrchestrator {
         informationUnavailableResponse: configuredInformationUnavailableResponse(this.runtimeProfile),
       }, {
         invokeStructuredLlm,
+        onRoutingDecisionRetry: (details) => {
+          this.log.warn({
+            stage: 'template_engine.routing_decision_retry',
+            callId: this.call.id,
+            turnEpoch: epoch,
+            ...details,
+          }, 'Invalid Orchestrator decision was retried for the same caller turn');
+        },
+        onConversationGuidanceSelected: (details) => {
+          this.log.info({
+            stage: 'template_engine.conversation_guidance_selected',
+            callId: this.call.id,
+            turnEpoch: epoch,
+            ...details,
+          }, 'Published Conversation Guidance selection completed');
+        },
+        onFollowUpDiagnostics: (details) => {
+          this.log.info({
+            stage: 'template_engine.follow_up_validated',
+            callId: this.call.id,
+            turnEpoch: epoch,
+            ...details,
+          }, 'Template-engine follow-up generation and validation completed');
+        },
         loadPublishedContext: (input) => loadTemplateEnginePublishedContext(
           input, this.dependencies.templateEngineKnowledgeDependencies,
         ),
@@ -2339,8 +2386,16 @@ export class RealtimeConversationOrchestrator {
           });
           return verified;
         },
-        validateGroundedClaims: ({ response, selectedEvidence }) => (
-          validateTemplateEngineClaims({ speech: response, evidence: selectedEvidence }, {
+        validateGroundedClaims: ({
+          response, decision, selectedEvidence, searchInterpretation, latestUtterance,
+        }) => (
+          validateTemplateEngineClaims({
+            speech: response,
+            evidence: selectedEvidence,
+            decision,
+            searchInterpretation,
+            latestUtterance,
+          }, {
             invokeStructuredLlm,
           })
         ),
@@ -2408,6 +2463,17 @@ export class RealtimeConversationOrchestrator {
         operationalFailure: error.code ?? 'TEMPLATE_ENGINE_OPERATIONAL_FAILURE',
       };
     } finally {
+      finalResponseReady = true;
+      const acknowledgement = latencyAcknowledgement.snapshot();
+      latencyAcknowledgement.cancel();
+      this.log.debug({
+        stage: 'template_engine.turn_latency_timer_cancelled',
+        callId: this.call.id,
+        turnEpoch: epoch,
+        triggered: acknowledgement.triggered,
+        queued: acknowledgement.queued,
+        elapsedMs: Date.now() - turnStartedAt,
+      }, 'Whole-turn latency acknowledgement timer cancelled when final response became ready');
       this.activeLlm = null;
     }
     if (epoch !== this.epoch || this.finalized) {

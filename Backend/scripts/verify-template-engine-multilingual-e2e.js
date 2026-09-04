@@ -5,6 +5,12 @@ import { runTemplateEngineProductionTurn } from '../src/voice/interaction/templa
 const locales = Object.freeze([
   Object.freeze({
     code: 'ta',
+    acknowledgement: '\u0b9a\u0bb0\u0bbf\u0b99\u0bcd\u0b95, \u0ba8\u0ba9\u0bcd\u0bb1\u0bbf.',
+    acknowledgementResponse: '\u0b9a\u0bb0\u0bbf\u0b99\u0bcd\u0b95, \u0b9a\u0bca\u0bb2\u0bcd\u0bb2\u0bc1\u0b99\u0bcd\u0b95.',
+    missingAttribute: '\u0b87\u0ba8\u0bcd\u0ba4 detail published information-\u0bb2 \u0b87\u0bb0\u0bc1\u0b95\u0bcd\u0b95\u0bbe?',
+    unavailable: '\u0bae\u0ba9\u0bcd\u0ba9\u0bbf\u0b95\u0bcd\u0b95\u0bb5\u0bc1\u0bae\u0bcd, \u0b85\u0ba8\u0bcd\u0ba4 detail published information-\u0b87\u0bb2\u0bcd \u0b87\u0bb2\u0bcd\u0bb2\u0bc8.',
+    workflowStart: '\u0b87\u0ba4\u0bc8 \u0b87\u0baa\u0bcd\u0baa\u0bcb book \u0baa\u0ba3\u0bcd\u0ba3\u0bc1\u0b99\u0bcd\u0b95.',
+    confirmation: '\u0b86\u0bae\u0bbe\u0bae\u0bcd, confirm \u0baa\u0ba3\u0bcd\u0ba3\u0bc1\u0b99\u0bcd\u0b95.',
     overview: 'என்னென்ன packages இருக்கு?', explanation: 'Silver package பற்றி சொல்லுங்க.',
     price: 'இதோட விலை எவ்வளவு?', comparison: 'Silver மற்றும் Gold வித்தியாசம் என்ன?',
     followUp: 'இதுல என்னென்ன tests இருக்கு?', switching: 'இப்ப Gold பற்றி சொல்லுங்க.',
@@ -18,6 +24,10 @@ const locales = Object.freeze([
   }),
   Object.freeze({
     code: 'ta-Latn',
+    acknowledgement: 'Saringa, nandri.', acknowledgementResponse: 'Saringa, sollunga.',
+    missingAttribute: 'Indha detail published information-la irukka?',
+    unavailable: 'Mannikkavum, andha detail published information-la illa.',
+    workflowStart: 'Idha ippo book pannunga.', confirmation: 'Aamam, confirm pannunga.',
     overview: 'Enna packages irukku?', explanation: 'Silver package pathi sollunga.',
     price: 'Idhoda price evlo?', comparison: 'Silver-க்கும் Gold-க்கும் difference enna?',
     followUp: 'Idhula enna tests irukku?', switching: 'Ippo Gold pathi sollunga.',
@@ -31,6 +41,10 @@ const locales = Object.freeze([
   }),
   Object.freeze({
     code: 'en',
+    acknowledgement: 'Okay, thank you.', acknowledgementResponse: 'You are welcome.',
+    missingAttribute: 'Does the published information contain this detail?',
+    unavailable: 'That detail is not present in the published information.',
+    workflowStart: 'Book this now.', confirmation: 'Yes, confirm it.',
     overview: 'What packages are available?', explanation: 'Explain the Silver package.',
     price: 'What is its price?', comparison: 'Compare Silver and Gold.',
     followUp: 'Which tests does it include?', switching: 'Now explain Gold.',
@@ -197,6 +211,7 @@ function workflowFixture(configuration) {
   const identity = scoped(configuration.code);
   const tool = {
     id: `tool-${configuration.code}`, name: 'create_request', status: 'active',
+    identifiers: ['published_request_action'],
     inputSchema: {
       type: 'object', additionalProperties: false,
       required: ['full_name', 'requested_date'],
@@ -210,7 +225,8 @@ function workflowFixture(configuration) {
   const workflow = {
     recordId: `workflow-${configuration.code}`, recordType: 'WORKFLOW_RULE',
     ...identity, publicationRevision: 3, published: true,
-    actionType: 'configured_tool', actionConfig: { toolIdentifier: 'create_request' },
+    actionType: 'configured_tool',
+    actionConfig: { toolIdentifier: 'published_request_action' },
   };
   const resultGuidance = {
     ...guidance(configuration, 'execution_result'), nextQuestion: configuration.further,
@@ -261,11 +277,17 @@ async function workflowTurn(configuration, fixture, utterance, state, outputs, e
 
 async function runWorkflowScenarios(configuration) {
   const fixture = workflowFixture(configuration);
+  const selectedRecordId = `record-${configuration.code}-Silver`;
   let executions = 0;
-  let result = await workflowTurn(configuration, fixture, 'Start the configured request.', {}, [
+  let result = await workflowTurn(configuration, fixture, configuration.workflowStart, {
+    lastReferencedRecordIds: [selectedRecordId],
+  }, [
     toolDecision(), { speech: configuration.askName },
   ], async () => { executions += 1; });
   assert.equal(result.workflow.status, 'AWAITING_FIELD');
+  assert.equal(result.provenance.workflowId, fixture.workflow.recordId);
+  assert.equal(result.provenance.toolId, fixture.tool.id);
+  assert.deepEqual(result.state.lastReferencedRecordIds, [selectedRecordId]);
   assert.equal(result.speech, configuration.askName);
   assert.equal(questionCount(result.speech), 1);
 
@@ -273,17 +295,19 @@ async function runWorkflowScenarios(configuration) {
     toolDecision({ full_name: 'Alex' }), { speech: configuration.askDate },
   ], async () => { executions += 1; });
   assert.equal(result.workflow.status, 'AWAITING_FIELD');
+  assert.deepEqual(result.state.lastReferencedRecordIds, [selectedRecordId]);
   assert.equal(result.speech, configuration.askDate);
 
   result = await workflowTurn(configuration, fixture, '2026-09-10', result.state, [
     toolDecision({ requested_date: '2026-09-10' }), { speech: configuration.confirm },
   ], async () => { executions += 1; });
   assert.equal(result.workflow.status, 'AWAITING_CONFIRMATION');
+  assert.deepEqual(result.state.lastReferencedRecordIds, [selectedRecordId]);
   assert.equal(questionCount(result.speech), 1);
   assert.equal(executions, 0);
 
   const awaiting = result.state;
-  result = await workflowTurn(configuration, fixture, 'Yes, confirm.', awaiting, [
+  result = await workflowTurn(configuration, fixture, configuration.confirmation, awaiting, [
     toolDecision({}, true), {
       speech: configuration.success,
       nextQuestion: { question: configuration.further, reason: 'Published continuation' },
@@ -293,18 +317,22 @@ async function runWorkflowScenarios(configuration) {
     return { verified: true, success: true, output: { accepted: true } };
   });
   assert.equal(result.workflow.status, 'SUCCEEDED');
+  assert.equal(result.workflow.verifiedResult.verified, true);
+  assert.deepEqual(result.state.lastReferencedRecordIds, [selectedRecordId]);
   assert.equal(result.followUpValidation.accepted, true);
   assert.equal(questionCount(result.speech), 1);
   assert.equal(occurrences(result.speech, configuration.further), 1);
   assert.equal(executions, 1);
 
-  const failed = await workflowTurn(configuration, fixture, 'Yes, confirm.', awaiting, [
+  const failed = await workflowTurn(configuration, fixture, configuration.confirmation, awaiting, [
     toolDecision({}, true), {
       speech: configuration.failure,
       nextQuestion: { question: configuration.further, reason: 'Published continuation' },
     },
   ], async () => ({ verified: true, success: false, output: {}, error: { code: 'DECLINED' } }));
   assert.equal(failed.workflow.status, 'FAILED');
+  assert.equal(failed.workflow.verifiedResult.verified, true);
+  assert.deepEqual(failed.state.lastReferencedRecordIds, [selectedRecordId]);
   assert.equal(failed.followUpValidation.accepted, true);
   assert.equal(questionCount(failed.speech), 1);
   assert.equal(occurrences(failed.speech, configuration.further), 1);
@@ -324,9 +352,79 @@ async function runWorkflowScenarios(configuration) {
   assert.equal(cancelled.state.activeWorkflowId, null);
   assert.deepEqual(cancelled.state.collectedToolFields, {});
   assert.equal(cancelled.state.confirmationStatus, null);
+  assert.deepEqual(cancelled.state.lastReferencedRecordIds, [selectedRecordId]);
   assert.equal(cancelled.decision.nextQuestion, null);
   assert.equal(questionCount(cancelled.speech), 0);
   assert.equal(executions, 1);
+}
+
+async function runAcknowledgement(configuration) {
+  const identity = scoped(configuration.code);
+  let retrievalCalls = 0;
+  const result = await runTemplateEngineProductionTurn({
+    auth: { tenantId: identity.tenantId }, scope: identity.scope,
+    callId: `${configuration.code}-acknowledgement`, usageDirection: 'inbound',
+    language: configuration.code, mainPrompt: 'Reply naturally to non-factual conversation.',
+    latestUtterance: configuration.acknowledgement, conversationHistory: [], state: {},
+    assignedTools: [], informationFields: [],
+  }, {
+    invokeStructuredLlm: async () => ({
+      decision: 'RESPONSE', response: configuration.acknowledgementResponse,
+      clarification: null, search: null, tool: null, nextQuestion: null, stateUpdate: null,
+    }),
+    loadPublishedContext: async () => ({
+      scope: identity.scope, artifacts: {}, publishedWorkflows: [],
+      publishedConversationGuidance: [],
+    }),
+    retrieveEvidence: async () => { retrievalCalls += 1; },
+    persistWorkflowState: async () => {},
+    executeAuthorizedTool: async () => { throw new Error('Acknowledgement executed a tool'); },
+    validateGroundedClaims: async () => ({ supported: true, successClaimed: false }),
+    validateToolResultSpeechClaims: async () => ({ supported: true, successClaimed: false }),
+  });
+  assert.equal(result.decision.decision, 'RESPONSE');
+  assert.equal(result.speech, configuration.acknowledgementResponse);
+  assert.equal(retrievalCalls, 0);
+}
+
+async function runMissingAttribute(configuration) {
+  const identity = scoped(configuration.code);
+  const records = evidenceFor(configuration);
+  const decisions = [
+    searchDecision(configuration.missingAttribute, 'unpublished detail'),
+    {
+      decision: 'NO_MATCH', response: configuration.unavailable,
+      clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
+    },
+  ];
+  const result = await runTemplateEngineProductionTurn({
+    auth: { tenantId: identity.tenantId }, scope: identity.scope,
+    callId: `${configuration.code}-missing-attribute`, usageDirection: 'inbound',
+    language: configuration.code, mainPrompt: 'Never infer a negative value from a missing fact.',
+    latestUtterance: configuration.missingAttribute, conversationHistory: [], state: {},
+    assignedTools: [], informationFields: [],
+  }, {
+    invokeStructuredLlm: async () => decisions.shift(),
+    loadPublishedContext: async () => ({
+      scope: identity.scope, artifacts: {}, publishedWorkflows: [],
+      publishedConversationGuidance: [],
+    }),
+    retrieveEvidence: async () => ({
+      scope: identity.scope, evidence: records,
+      diagnostics: { retrievalCount: 1, hydrationCount: 1, verifiedEvidenceCount: 1 },
+    }),
+    persistWorkflowState: async () => {},
+    executeAuthorizedTool: async () => { throw new Error('Missing attribute executed a tool'); },
+    validateGroundedClaims: async ({ decision, response }) => ({
+      supported: decision === 'NO_MATCH' && response === configuration.unavailable,
+      successClaimed: false,
+    }),
+    validateToolResultSpeechClaims: async () => ({ supported: true, successClaimed: false }),
+  });
+  assert.equal(result.decision.decision, 'NO_MATCH');
+  assert.equal(result.speech, configuration.unavailable);
+  assert.equal(result.evidenceIds.length, 0);
+  assert.equal(decisions.length, 0);
 }
 
 async function runClosing(configuration) {
@@ -359,17 +457,22 @@ async function runClosing(configuration) {
   assert.equal(questionCount(result.speech), 0);
 }
 
-for (const configuration of locales) {
-  for (const [scenario, utterance] of Object.entries({
-    overview: configuration.overview,
-    package_explanation: configuration.explanation,
-    price: configuration.price,
-    comparison: configuration.comparison,
-    contextual_follow_up: configuration.followUp,
-    topic_switching: configuration.switching,
-  })) await runFactualScenario(configuration, scenario, utterance);
-  await runWorkflowScenarios(configuration);
-  await runClosing(configuration);
+const repeats = 3;
+for (let pass = 0; pass < repeats; pass += 1) {
+  for (const configuration of locales) {
+    await runAcknowledgement(configuration);
+    for (const [scenario, utterance] of Object.entries({
+      overview: configuration.overview,
+      package_explanation: configuration.explanation,
+      price: configuration.price,
+      comparison: configuration.comparison,
+      contextual_follow_up: configuration.followUp,
+      topic_switching: configuration.switching,
+    })) await runFactualScenario(configuration, scenario, utterance);
+    await runMissingAttribute(configuration);
+    await runWorkflowScenarios(configuration);
+    await runClosing(configuration);
+  }
 }
 
 const hallucinationConfiguration = locales.at(-1);
@@ -422,10 +525,12 @@ for (const forbidden of ['silver', 'gold', 'shanmuga', 'hospital', 'appointment'
 
 console.log(JSON.stringify({
   gate: 'template-engine-multilingual-e2e', passed: true,
+  repeats,
   languages: locales.map((entry) => entry.code),
   scenarios: [
-    'overview', 'package_explanation', 'price', 'comparison', 'contextual_follow_up',
-    'topic_switching', 'booking_fields', 'confirmation', 'cancellation',
+    'acknowledgement', 'overview', 'package_explanation', 'price', 'comparison',
+    'contextual_follow_up', 'topic_switching', 'missing_attributes',
+    'booking_fields', 'confirmation', 'cancellation',
     'tool_success', 'tool_failure', 'closing',
   ],
   duplicateQuestions: 0, hallucinatedFacts: 0, hardcodedBusinessVocabulary: 0,

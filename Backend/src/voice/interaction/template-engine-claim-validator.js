@@ -28,13 +28,14 @@ function parsed(value) {
 
 export async function validateTemplateEngineClaims({
   speech, evidence = null, verifiedToolResult = null, callerValues = null,
+  decision = null, searchInterpretation = null, latestUtterance = null,
 } = {}, dependencies = {}) {
   if (typeof dependencies.invokeStructuredLlm !== 'function') {
     throw new TypeError('Claim validation requires the configured structured LLM');
   }
   const reference = verifiedToolResult
     ? { kind: 'verified_tool_result', verifiedToolResult, callerValues }
-    : { kind: 'published_evidence', evidence };
+    : { kind: 'published_evidence', evidence, searchInterpretation, latestUtterance };
   const completion = await dependencies.invokeStructuredLlm(Object.freeze({
     messages: Object.freeze([Object.freeze({
       role: 'system',
@@ -43,11 +44,14 @@ export async function validateTemplateEngineClaims({
         'Treat the complete published evidence array as one permitted grounding set.',
         'A comparison may combine separately supported attributes from multiple cited records.',
         'supported is true only when every entity, number, attribute, polarity and relationship is directly entailed by the complete reference set.',
+        'For RESPONSE, an attribute absent from every supplied published record is unsupported. Never infer a negative value from an absent attribute.',
+        'For CLARIFY, validate every factual statement in the question and every named candidate against the supplied reference.',
+        'For NO_MATCH, allow a neutral statement that the supplied published information does not contain the requested detail. Reject speech that turns missing evidence into a real-world negative claim, including claims that something does not exist, is unavailable, is unnecessary, is not included, or is zero.',
         'Do not require one evidence record to contain every compared entity when each cited record supports its own entity and attributes.',
         'For a tool result, successClaimed is true when the speech says or implies the action succeeded.',
         'Do not use outside knowledge. Return only the required JSON object.',
         '<validation_input>',
-        JSON.stringify({ speech, reference }),
+        JSON.stringify({ decision, speech, reference }),
         '</validation_input>',
       ].join('\n'),
     })]),

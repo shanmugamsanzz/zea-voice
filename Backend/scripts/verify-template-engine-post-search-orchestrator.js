@@ -227,9 +227,11 @@ const groundedNoMatch = await respondToTemplateEngineSearch({
   mainPrompt, latestUtterance, state, searchDecision, verifiedEvidence, scope,
 }, {
   tenantBoundaryVerified: true,
-  validateGroundedClaims: async () => {
+  validateGroundedClaims: async (input) => {
     groundedValidationCalls += 1;
-    return { supported: false, reason: 'attribute_not_supported' };
+    return input.decision === 'NO_MATCH'
+      ? { supported: true, reason: null }
+      : { supported: false, reason: 'attribute_not_supported' };
   },
   invokeStructuredLlm: async () => {
     groundedRepairCalls += 1;
@@ -244,8 +246,66 @@ const groundedNoMatch = await respondToTemplateEngineSearch({
 });
 assert.equal(groundedRepairCalls, 2,
   'An unsupported grounded response must receive exactly one repair attempt');
-assert.equal(groundedValidationCalls, 1);
+assert.equal(groundedValidationCalls, 2,
+  'Both factual RESPONSE and NO_MATCH recovery speech must be grounded');
 assert.equal(groundedNoMatch.decision.decision, 'NO_MATCH');
+
+let negativeNoMatchCalls = 0;
+const safeMissingAttribute = await respondToTemplateEngineSearch({
+  mainPrompt, latestUtterance: 'Is the unpublished attribute unnecessary?',
+  state, searchDecision: {
+    ...searchDecision,
+    search: { ...searchDecision.search, requestedFact: 'unpublished attribute' },
+  },
+  verifiedEvidence, scope,
+}, {
+  tenantBoundaryVerified: true,
+  validateGroundedClaims: async ({ decision, response, searchInterpretation }) => ({
+    supported: decision === 'NO_MATCH'
+      && response === 'The published information does not provide that detail.'
+      && searchInterpretation.requestedFact === 'unpublished attribute',
+    reason: 'absence_does_not_support_negative_claim',
+  }),
+  invokeStructuredLlm: async () => {
+    negativeNoMatchCalls += 1;
+    return { outputParsed: negativeNoMatchCalls === 1 ? {
+      decision: 'NO_MATCH', response: 'That attribute is not required.',
+      clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
+    } : {
+      decision: 'NO_MATCH',
+      response: 'The published information does not provide that detail.',
+      clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
+    } };
+  },
+});
+assert.equal(negativeNoMatchCalls, 2,
+  'A negative claim inferred from an unpublished attribute must be repaired once');
+assert.equal(safeMissingAttribute.decision.decision, 'NO_MATCH');
+assert.equal(safeMissingAttribute.decision.response,
+  'The published information does not provide that detail.');
+
+let clarificationValidationInput;
+const groundedClarification = await respondToTemplateEngineSearch({
+  mainPrompt, latestUtterance: 'Which selected service?', state, searchDecision,
+  verifiedEvidence, scope,
+}, {
+  tenantBoundaryVerified: true,
+  ambiguity: { required: true, kind: 'entity', candidates: ['Service Alpha', 'Service Beta'] },
+  validateGroundedClaims: async (input) => {
+    clarificationValidationInput = input;
+    return { supported: true, reason: null };
+  },
+  invokeStructuredLlm: async () => ({ outputParsed: {
+    decision: 'CLARIFY', response: '', clarification: {
+      question: 'Do you mean Service Alpha or Service Beta?',
+      reason: 'ambiguous reference', candidates: ['Service Alpha', 'Service Beta'],
+    }, evidenceIds: [], nextQuestion: null, stateUpdate: null,
+  } }),
+});
+assert.equal(groundedClarification.decision.decision, 'CLARIFY');
+assert.equal(clarificationValidationInput.decision, 'CLARIFY');
+assert.equal(clarificationValidationInput.selectedEvidence.length, 1,
+  'Clarification speech validation receives the complete verified evidence set');
 
 let fallbackCalls = 0;
 let fallbackDiagnostics;
@@ -297,6 +357,11 @@ const emptyEvidenceFallback = await respondToTemplateEngineSearch({
   informationUnavailableResponse: 'That information is not available right now.',
 }, {
   tenantBoundaryVerified: true,
+  validateGroundedClaims: async ({ decision, response }) => ({
+    supported: decision === 'NO_MATCH'
+      && response === 'That information is not available right now.',
+    reason: decision === 'NO_MATCH' ? null : 'unsupported_claim',
+  }),
   invokeStructuredLlm: async () => ({ outputParsed: {
     decision: 'RESPONSE', response: 'An unsupported answer.',
     clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,

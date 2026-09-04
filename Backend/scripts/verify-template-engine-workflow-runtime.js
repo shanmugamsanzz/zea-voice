@@ -204,6 +204,8 @@ const coordinated = await advanceTemplateEngineWorkflowTurn({
   }),
 });
 assert.equal(coordinated.status, 'FAILED');
+assert.equal(coordinated.workflowRecordId, 'workflow-1');
+assert.equal(coordinated.toolId, 'tool-1');
 assert.equal(coordinated.verifiedResult.verified, true);
 assert.equal(coordinated.verifiedResult.success, false);
 assert.equal(coordinated.state.activeWorkflowId, 'workflow-1');

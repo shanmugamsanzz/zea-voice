@@ -94,6 +94,7 @@ const envSchema = z.object({
   // has separate production completion deadlines so a target breach does not
   // cancel valid retrieval before authoritative hydration finishes.
   VOICE_TURN_FIRST_AUDIO_DEADLINE_MS: z.coerce.number().int().min(1000).max(10000).default(2000),
+  VOICE_TURN_ACKNOWLEDGEMENT_AFTER_MS: z.coerce.number().int().min(100).max(10000).default(900),
   VOICE_ROUTING_TURN_TIMEOUT_MS: z.coerce.number().int().min(20).max(1000).default(100),
   VOICE_RETRIEVAL_TARGET_MS: z.coerce.number().int().min(25).max(1000).default(150),
   VOICE_RETRIEVAL_TURN_TIMEOUT_MS: z.coerce.number().int().min(100).max(5000).default(1250),

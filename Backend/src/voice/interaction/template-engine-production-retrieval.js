@@ -37,8 +37,29 @@ function classification(input, search) {
   });
 }
 
-function evidenceRecord(source) {
+function publishedAttributePaths(value, prefix = '', depth = 0, collected = []) {
+  if (value === null || value === undefined || depth > 5 || collected.length >= 120) {
+    return collected;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) publishedAttributePaths(entry, prefix, depth + 1, collected);
+    return collected;
+  }
+  if (typeof value !== 'object') {
+    if (prefix) collected.push(prefix);
+    return collected;
+  }
+  for (const [key, entry] of Object.entries(value)) {
+    const path = prefix ? `${prefix}.${key}` : key;
+    publishedAttributePaths(entry, path, depth + 1, collected);
+    if (collected.length >= 120) break;
+  }
+  return collected;
+}
+
+function evidenceRecord(source, requestedFact = null) {
   const provenance = source.provenance ?? {};
+  const authoritativeData = source.authoritativeData ?? source.facts ?? {};
   return Object.freeze({
     verified: source.hydrationValidated === true && source.publicationValidated === true,
     callerFacing: source.callerFacing === true,
@@ -60,7 +81,7 @@ function evidenceRecord(source) {
     sourceSection: provenance.sourceSection ?? source.sourceSection,
     sourceLineStart: provenance.sourceLineStart ?? source.sourceLineStart ?? source.sourceLine,
     sourceLineEnd: provenance.sourceLineEnd ?? source.sourceLineEnd,
-    content: source.content ?? JSON.stringify(source.authoritativeData ?? source.facts ?? {}),
+    content: source.content ?? JSON.stringify(authoritativeData),
     canonicalName: source.canonicalName
       ?? source.authoritativeData?.name
       ?? source.authoritativeData?.category
@@ -69,7 +90,11 @@ function evidenceRecord(source) {
       ?? source.authoritativeData?.categoryAliases
       ?? [],
     relationships: source.authoritativeData?.relationships ?? [],
-    authoritativeData: source.authoritativeData ?? source.facts ?? {},
+    authoritativeData,
+    requestedFact: String(requestedFact ?? '').trim() || null,
+    publishedAttributePaths: Object.freeze([...new Set(
+      publishedAttributePaths(authoritativeData),
+    )]),
   });
 }
 
@@ -240,7 +265,8 @@ export async function retrieveTemplateEngineEvidence({
   const selectedCandidates = Array.isArray(authoritative?.fusion?.candidates)
     ? authoritative.fusion.candidates : retrieval.candidates;
   const evidence = verifyTemplateEngineEvidence(
-    hydratedEvidence.map(evidenceRecord).slice(0, 5), selectedCandidates,
+    hydratedEvidence.map((source) => evidenceRecord(source, search.requestedFact)).slice(0, 5),
+    selectedCandidates,
     { ...scope, publications: artifacts.publications },
   );
   if (selectedCandidates.length > 0 && evidence.length === 0) {

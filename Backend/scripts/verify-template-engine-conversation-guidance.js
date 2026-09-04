@@ -13,14 +13,17 @@ const knowledgeBaseId = '33333333-3333-4333-8333-333333333333';
 const publication = { tenantId, knowledgeBaseId, publicationRevision: 7 };
 const scope = { tenantId, agentId, publications: [publication] };
 
-function publishedRecord({ recordId, purpose, situation, examples, nextQuestion }) {
+function publishedRecord({
+  recordId, purpose, situation, examples, nextQuestion, intentClass = null, nodeKey = null,
+}) {
   return normalizePublishedConversationGuidance({
     record_id: recordId,
     record_type: 'conversation_node',
     language: 'en',
     entity_metadata: {
-      flowKey: 'main', nodeKey: recordId, nodeType: 'guidance',
+      flowKey: 'main', nodeKey: nodeKey ?? recordId, nodeType: 'guidance',
       variables: [
+        { key: 'intentClass', value: intentClass },
         { key: 'purpose', value: purpose },
         { key: 'situation', value: situation },
         { key: 'examples', value: examples },
@@ -36,6 +39,7 @@ const detailGuidance = publishedRecord({
   situation: 'The caller asks for details about one selected offering.',
   examples: ['Explain the selected option'],
   nextQuestion: 'Would you like the next configured step or another option?',
+  intentClass: 'DETAILS', nodeKey: 'selected_option_details',
 });
 const overviewGuidance = publishedRecord({
   recordId: 'guidance-overview',
@@ -43,6 +47,7 @@ const overviewGuidance = publishedRecord({
   situation: 'The caller requests an overview of available options.',
   examples: ['What options are available?'],
   nextQuestion: 'Which option would you like to explore?',
+  intentClass: 'OVERVIEW', nodeKey: 'available_options_overview',
 });
 const crossTenant = Object.freeze({
   ...overviewGuidance,
@@ -82,9 +87,13 @@ const selected = selectApplicableConversationGuidance({
   },
   evidence: [{ recordType: 'CATALOG_ITEM', canonicalName: 'Selected Option' }],
   recentCompleteTurns: [{ role: 'user', content: 'I selected one option.' }],
+  currentIntent: 'DETAILS', conversationStage: 'selected option details', language: 'en',
 });
 assert.equal(selected.recordId, 'guidance-detail');
-assert.deepEqual(Object.keys(selected), ['recordId', 'purpose', 'nextQuestion']);
+assert.equal(selected.intentClass, 'DETAILS');
+assert.equal(selected.conversationStage, 'selected option details');
+assert.equal(selected.selectionReasons.includes('intent_compatible'), true);
+assert.equal(selected.selectionReasons.includes('stage_compatible'), true);
 assert.equal(Object.values(selected).some((value) => String(value).includes('cross-tenant')), false);
 
 const evidenceSelected = selectApplicableConversationGuidance({

@@ -210,18 +210,73 @@ const ambiguousTurn = await routeTemplateEngineUtterance({
 assert.equal(ambiguousTurn.decision.decision, 'CLARIFY');
 assert.equal(ambiguousTurn.outputValidation.route, 'TTS');
 
+const recoveredDecision = {
+  decision: 'RESPONSE', response: 'Certainly, we can continue.', clarification: null,
+  search: null, tool: null, nextQuestion: null, stateUpdate: null,
+};
+for (const invalidOutput of [
+  '',
+  '{"decision":',
+  { decision: 'RESPONSE' },
+  {
+    decision: 'RESPONSE', response: 'Certainly.', clarification: null,
+    search: {
+      query: 'not allowed', requestedFact: null,
+      contextualReference: null, preferredRecordIds: [],
+    },
+    tool: null, nextQuestion: null, stateUpdate: null,
+  },
+]) {
+  const requests = [];
+  let retryDetails = null;
+  const recovered = await routeTemplateEngineUtterance({
+    mainPrompt: 'Use RESPONSE for conversational acknowledgement and SEARCH for facts.',
+    latestUtterance: 'Yes, please continue.',
+    conversationHistory: [
+      { role: 'user', content: 'May I continue?' },
+      { role: 'assistant', content: 'Yes, please confirm.' },
+    ],
+  }, {
+    tenantBoundaryVerified: true,
+    nonFactualResponseAllowed: true,
+    onDecisionRetry: (details) => { retryDetails = details; },
+    invokeStructuredLlm: async (request) => {
+      requests.push(request);
+      return requests.length === 1 ? invalidOutput : recoveredDecision;
+    },
+  });
+  assert.equal(requests.length, 2, 'Invalid decision must be retried exactly once');
+  assert.equal(recovered.decision.decision, 'RESPONSE');
+  assert.notEqual(recovered.decision.decision, 'NO_MATCH');
+  assert.equal(recovered.decisionRepairAttempted, true);
+  assert.equal(retryDetails.phase, 'initial_routing');
+  assert.deepEqual(requests[1].messages.slice(0, requests[0].messages.length),
+    requests[0].messages, 'Decision retry must preserve the complete caller turn envelope');
+  assert.equal(requests[1].messages.at(-1).role, 'system');
+}
+
+let exhaustedDecisionAttempts = 0;
 await assert.rejects(() => routeTemplateEngineUtterance({
-  mainPrompt: 'Use RESPONSE for greetings.',
-  latestUtterance: 'Hello',
+  mainPrompt: 'Use RESPONSE for conversational acknowledgement.',
+  latestUtterance: 'Yes, please continue.',
 }, {
   tenantBoundaryVerified: true,
-  invokeStructuredLlm: async () => ({
-    decision: 'RESPONSE', response: 'Hello.', clarification: null,
-    search: { query: 'not allowed', requestedFact: null, contextualReference: null },
-    tool: null, nextQuestion: null, stateUpdate: null,
-  }),
+  nonFactualResponseAllowed: true,
+  invokeStructuredLlm: async () => {
+    exhaustedDecisionAttempts += 1;
+    return {
+      decision: 'RESPONSE', response: 'Certainly.', clarification: null,
+      search: {
+        query: 'not allowed', requestedFact: null,
+        contextualReference: null, preferredRecordIds: [],
+      },
+      tool: null, nextQuestion: null, stateUpdate: null,
+    };
+  },
 }), (error) => error.code === 'TEMPLATE_ENGINE_ORCHESTRATOR_DECISION_INVALID'
-  && error.details?.reason === 'mixed_decision_payload');
+  && error.details?.reason === 'mixed_decision_payload'
+  && error.details?.attempts === 2);
+assert.equal(exhaustedDecisionAttempts, 2);
 
 const source = readFileSync(new URL(
   '../src/voice/interaction/template-engine-orchestrator.js', import.meta.url,

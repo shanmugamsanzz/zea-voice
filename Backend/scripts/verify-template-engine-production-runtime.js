@@ -42,7 +42,10 @@ const retrieval = await retrieveTemplateEngineEvidence({
     return { evidence: [{
       ...candidate, id: 'evidence-1', hydrationValidated: true,
       publicationValidated: true, callerFacing: true,
-      content: 'Tenant Item costs 125.', authoritativeData: { name: 'Tenant Item', price: 125 },
+      content: 'Tenant Item costs 125.', authoritativeData: {
+        name: 'Tenant Item', price: 125,
+        attributes: [{ key: 'published_detail', value: 'Approved value' }],
+      },
       provenance: {
         knowledgeBaseId, publicationRevision: 4,
         documentId: 'document-1', documentVersionId: 'document-version-1',
@@ -61,6 +64,10 @@ assert.equal(retrieval.evidence[0].documentDisplayName, 'Tenant Source');
 assert.equal(retrieval.evidence[0].pageNumber, 1);
 assert.equal(retrieval.evidence[0].sourceLineStart, 10);
 assert.equal(retrieval.evidence[0].sourceLineEnd, 12);
+assert.equal(retrieval.evidence[0].requestedFact, 'price');
+assert.equal(retrieval.evidence[0].publishedAttributePaths.includes('price'), true);
+assert.equal(retrieval.evidence[0].publishedAttributePaths.includes('attributes.key'), true);
+assert.equal(retrieval.evidence[0].publishedAttributePaths.includes('unpublished_detail'), false);
 assert.deepEqual(retrieval.diagnostics.channelCounts, {
   structured: 1, bm25: 1, qdrant: 1,
 });
