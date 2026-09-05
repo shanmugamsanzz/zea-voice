@@ -332,9 +332,10 @@ function belongsToActivePublication(value, scope = {}) {
 }
 
 function resolutionReservations(resolution) {
+  // Close alternatives are candidates for clarification, not a request to
+  // hydrate every alternative as though the caller requested a comparison.
   const resolved = resolution?.ambiguity?.detected === true
-    ? resolution.ambiguity.candidates
-    : resolution?.candidate ? [resolution.candidate] : [];
+    ? [] : resolution?.candidate ? [resolution.candidate] : [];
   return (resolved ?? []).filter((candidate) => (
     ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(
       cleanText(candidate?.recordType, 80).toUpperCase(),
@@ -354,8 +355,7 @@ function resolutionReservations(resolution) {
       recordId: identity.recordId,
       recordType: identity.recordType,
       categoryKey: identity.categoryKey ?? null,
-      reason: resolution?.ambiguity?.detected === true
-        ? 'published_entity_ambiguity' : 'resolved_published_entity',
+      reason: 'resolved_published_entity',
     }));
   });
 }
@@ -386,13 +386,14 @@ export function constrainHybridToRequestedEntities(
   ].includes(String(entry?.reason ?? '').toLocaleLowerCase()));
   const resolved = resolutionReservations(resolution);
   let requested = (comparison.length ? comparison : resolved).filter(isActive);
-  if (!requested.length) {
+  if (!requested.length && resolution?.ambiguity?.detected !== true) {
     const exactCatalog = candidates.filter((candidate) => (
       ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(String(candidate?.recordType ?? '').toUpperCase())
       && ['published_exact', 'published_category_exact'].includes(candidate?.matchMethod)
     ));
     const exactItems = exactCatalog.filter((candidate) => candidate.recordType === 'CATALOG_ITEM');
-    requested = (exactItems.length ? exactItems : exactCatalog).map((candidate) => Object.freeze({
+    const exact = exactItems.length ? exactItems : exactCatalog;
+    requested = (exact.length === 1 ? exact : []).map((candidate) => Object.freeze({
       tenantId: candidate.tenantId,
       agentId: candidate.agentId,
       knowledgeBaseId: candidate.knowledgeBaseId,
@@ -546,6 +547,30 @@ function verifyTemplateEngineEvidence(evidence, selectedCandidates, scope) {
     }
   }
   return Object.freeze(evidence);
+}
+
+function verifyHydratedScopeOnly(evidence, scope) {
+  const publications = activePublicationKeys(scope.publications);
+  for (const source of evidence) {
+    const coordinates = source?.provenance ?? source ?? {};
+    const knowledgeBaseId = coordinates.knowledgeBaseId ?? source?.knowledgeBaseId;
+    const publicationRevision = Number(
+      coordinates.publicationRevision ?? source?.publicationRevision,
+    );
+    const crossScope = normalized(source?.tenantId) !== normalized(scope.tenantId)
+      || (source?.agentId && normalized(source.agentId) !== normalized(scope.agentId))
+      || !publications.has(`${normalized(knowledgeBaseId)}:${publicationRevision}`);
+    if (crossScope) {
+      throw new AppError(500, 'PostgreSQL evidence is outside the template-engine scope',
+        'TEMPLATE_ENGINE_HYDRATION_SCOPE_VIOLATION', {
+          recordType: source?.recordType || null,
+        });
+    }
+  }
+}
+
+function recoverableHydrationMiss(error) {
+  return error?.code === 'KNOWLEDGE_AUTHORITATIVE_HYDRATION_EMPTY';
 }
 
 function publishedWorkflowRecord(record, publication, agentId) {
@@ -741,9 +766,21 @@ export async function retrieveTemplateEngineEvidence({
   try {
     authoritative = await hydrateSelection(retrieval);
   } catch (error) {
-    if (!entityConstraint.constrained) throw error;
+    if (!entityConstraint.constrained || !recoverableHydrationMiss(error)) throw error;
     selectionRetryAttempted = true;
-    authoritative = await hydrateSelection(exactSelection(), true);
+    const retrySelection = exactSelection();
+    try {
+      authoritative = await hydrateSelection(retrySelection, true);
+    } catch (retryError) {
+      if (!recoverableHydrationMiss(retryError)) throw retryError;
+      authoritative = Object.freeze({
+        evidence: Object.freeze([]),
+        fusion: Object.freeze({ candidates: retrySelection.candidates }),
+        rejectedRecordIds: Object.freeze(retrySelection.candidates.map(
+          (candidate) => candidate.recordId,
+        )),
+      });
+    }
   }
   const hydrationState = (result) => {
     const all = Array.isArray(result?.evidence) ? result.evidence : [];
@@ -769,24 +806,18 @@ export async function retrieveTemplateEngineEvidence({
     hydrated = hydrationState(authoritative);
   }
   const hydratedEvidence = hydrated.all;
+  verifyHydratedScopeOnly(hydratedEvidence, { ...scope, publications: artifacts.publications });
   const entityMatchedEvidence = hydrated.matched;
   const selectedCandidates = Array.isArray(authoritative?.fusion?.candidates)
     ? authoritative.fusion.candidates : retrieval.candidates;
-  if (entityConstraint.constrained
-    && !hydrated.exact) {
-    throw new AppError(503, 'Requested published entities were not completely hydrated',
-      'TEMPLATE_ENGINE_REQUESTED_ENTITY_HYDRATION_INCOMPLETE', {
-        requestedCount: requestedIdentities.size,
-        hydratedCount: entityMatchedEvidence.length,
-        comparison: entityConstraint.comparison,
-      });
-  }
+  const requestedEntityHydrationIncomplete = entityConstraint.constrained && !hydrated.exact;
   const evidence = verifyTemplateEngineEvidence(
     entityMatchedEvidence.map((source) => evidenceRecord(source, search.requestedFact)).slice(0, 5),
     selectedCandidates,
     { ...scope, publications: artifacts.publications },
   );
-  if (selectedCandidates.length > 0 && evidence.length === 0) {
+  if (selectedCandidates.length > 0 && evidence.length === 0
+    && !requestedEntityHydrationIncomplete) {
     throw new AppError(503,
       'Selected published records produced no verified template-engine evidence',
       'TEMPLATE_ENGINE_AUTHORITATIVE_EVIDENCE_EMPTY', {
@@ -810,6 +841,9 @@ export async function retrieveTemplateEngineEvidence({
       hydrationCount: hydratedEvidence.length,
       verifiedEvidenceCount: evidence.length,
       selectionRetryAttempted,
+      requestedEntityHydrationIncomplete,
+      requestedEntityCount: requestedIdentities.size,
+      hydratedRequestedEntityCount: entityMatchedEvidence.length,
       failedChannels: Object.freeze(hybrid.failures.map((failure) => failure.channel)),
       durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
     }),

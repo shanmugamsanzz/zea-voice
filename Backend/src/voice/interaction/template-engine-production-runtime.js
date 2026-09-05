@@ -525,8 +525,27 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     });
   }
 
+  const preRetrievalConversationGuidance = selectApplicableConversationGuidance({
+    publishedConversationGuidance: publishedContext.publishedConversationGuidance ?? [],
+    scope: publishedContext.scope,
+    latestUtterance: input.latestUtterance,
+    finalDecision: first.decision,
+    searchInterpretation: first.search,
+    evidence: [],
+    recentCompleteTurns: state.recentCompleteTurns,
+    currentIntent: first.search?.requestedFact ?? first.decision,
+    conversationStage: conversationStage(state, first),
+    language: input.language,
+  });
+  reportGuidanceSelection(
+    dependencies.onConversationGuidanceSelected,
+    'pre_retrieval', preRetrievalConversationGuidance,
+  );
   const speculativeResult = speculativeRetrieval ? await speculativeRetrieval : null;
-  const usedSpeculativeRetrieval = speculativeEvidenceCompatible(speculativeResult, first, input);
+  const guidanceCompatible = (initialConversationGuidance?.recordId ?? null)
+    === (preRetrievalConversationGuidance?.recordId ?? null);
+  const usedSpeculativeRetrieval = guidanceCompatible
+    && speculativeEvidenceCompatible(speculativeResult, first, input);
   const retrieval = usedSpeculativeRetrieval ? speculativeResult : await dependencies.retrieveEvidence({
     auth: input.auth,
     scope: publishedContext.scope,
@@ -537,7 +556,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     state,
     runtimeProfile: input.runtimeProfile,
     preloadedArtifacts: publishedContext.artifacts,
-    conversationGuidance: initialConversationGuidance,
+    conversationGuidance: preRetrievalConversationGuidance,
   });
   if (typeof dependencies.onRetrievalDiagnostics === 'function') {
     dependencies.onRetrievalDiagnostics(Object.freeze({

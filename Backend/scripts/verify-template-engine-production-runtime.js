@@ -383,7 +383,8 @@ assert.equal(guidanceRetrieval.evidence[0].documentId, 'guidance-document');
 assert.equal(guidanceRetrieval.evidence[0].documentDisplayName,
   'Tenant Conversation Guidance');
 
-await assert.rejects(() => retrieveTemplateEngineEvidence({
+let emptyHydrationAttempts = 0;
+const emptyHydration = await retrieveTemplateEngineEvidence({
   auth: { tenantId }, scope, callId: 'call-empty', usageDirection: 'inbound',
   language: 'en', searchDecision, state: {},
 }, {
@@ -391,11 +392,49 @@ await assert.rejects(() => retrieveTemplateEngineEvidence({
   searchCandidates: async () => ({
     channels: { structured: [candidate], bm25: [candidate], qdrant: [candidate] },
   }),
-  hydrateEvidence: async ({ retrieval: selected }) => ({
-    evidence: [], fusion: { candidates: selected.candidates }, rejectedRecordIds: [],
+  hydrateEvidence: async ({ retrieval: selected }) => {
+    emptyHydrationAttempts += 1;
+    return { evidence: [], fusion: { candidates: selected.candidates }, rejectedRecordIds: [] };
+  },
+});
+assert.equal(emptyHydrationAttempts, 2,
+  'An unresolved published identity must retry hydration exactly once');
+assert.deepEqual(emptyHydration.evidence, []);
+assert.equal(emptyHydration.diagnostics.selectionRetryAttempted, true);
+assert.equal(emptyHydration.diagnostics.requestedEntityHydrationIncomplete, true);
+assert.equal(emptyHydration.diagnostics.requestedEntityCount, 1);
+assert.equal(emptyHydration.diagnostics.hydratedRequestedEntityCount, 0);
+
+const unavailableSpeech = 'That requested information is not currently published.';
+const unavailableDecisions = [searchDecision, {
+  decision: 'NO_MATCH', response: unavailableSpeech,
+  clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
+}];
+const unavailableTurn = await runTemplateEngineProductionTurn({
+  auth: { tenantId }, scope, callId: 'call-empty-no-match', usageDirection: 'inbound',
+  language: 'en', mainPrompt: 'Use the configured unavailable response when evidence is absent.',
+  latestUtterance: 'Tell me the requested published information.',
+  conversationHistory: [], state: {}, runtimeProfile: {},
+  authorizedWorkflowTools: [], assignedTools: [], informationFields: [],
+  informationUnavailableResponse: unavailableSpeech,
+}, {
+  invokeStructuredLlm: async () => unavailableDecisions.shift(),
+  loadPublishedContext: async () => ({
+    scope, publishedWorkflows: [], publishedConversationGuidance: [], artifacts: {},
   }),
-}), (error) => error.code === 'TEMPLATE_ENGINE_REQUESTED_ENTITY_HYDRATION_INCOMPLETE'
-  && error.details?.requestedCount === 1);
+  retrieveEvidence: async () => emptyHydration,
+  persistWorkflowState: async () => {},
+  executeAuthorizedTool: async () => { throw new Error('must not execute'); },
+  validateGroundedClaims: async ({ decision }) => ({
+    supported: decision === 'NO_MATCH', successClaimed: false,
+    requestedFactAddressed: decision === 'NO_MATCH',
+  }),
+  validateToolResultSpeechClaims: async () => ({ supported: true, successClaimed: false }),
+});
+assert.equal(unavailableTurn.decision.decision, 'NO_MATCH');
+assert.equal(unavailableTurn.speech, unavailableSpeech);
+assert.deepEqual(unavailableTurn.evidenceIds, []);
+assert.equal(unavailableTurn.provenance.finalDecision, 'NO_MATCH');
 
 await assert.rejects(() => retrieveTemplateEngineEvidence({
   auth: { tenantId }, scope, callId: 'call-cross-scope', usageDirection: 'inbound',

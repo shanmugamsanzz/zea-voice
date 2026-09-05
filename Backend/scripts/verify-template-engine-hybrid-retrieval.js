@@ -148,6 +148,30 @@ assert.ok(Object.values(resolverBound.hybrid.channels).flat().every((entry) => (
 assert.equal(resolverBound.hybrid.queryContext.reservedRecords[0].reason,
   'resolved_published_entity');
 
+const ambiguousResolution = constrainHybridToRequestedEntities({
+  candidates: Object.freeze([
+    scopedCandidate('published-alpha', 'CATALOG_ITEM', 'semantic'),
+    scopedCandidate('published-beta', 'CATALOG_ITEM', 'semantic'),
+  ]),
+  channels: Object.freeze({ structured: Object.freeze([
+    scopedCandidate('published-alpha', 'CATALOG_ITEM', 'semantic'),
+    scopedCandidate('published-beta', 'CATALOG_ITEM', 'semantic'),
+  ]) }),
+  queryContext: Object.freeze({ reservedRecords: Object.freeze([]) }),
+}, 'tenant-a', Object.freeze({
+  candidate: Object.freeze(scopedCandidate('published-alpha', 'CATALOG_ITEM', 'semantic')),
+  ambiguity: Object.freeze({
+    detected: true,
+    candidates: Object.freeze([
+      scopedCandidate('published-alpha', 'CATALOG_ITEM', 'semantic'),
+      scopedCandidate('published-beta', 'CATALOG_ITEM', 'semantic'),
+    ]),
+  }),
+}));
+assert.equal(ambiguousResolution.constrained, false,
+  'Clarification alternatives must not become required hydration identities');
+assert.deepEqual(ambiguousResolution.requestedIdentities, []);
+
 const comparisonReservations = Object.freeze([
   Object.freeze({ ...scopedCandidate('published-alpha', 'CATALOG_ITEM'),
     reason: 'explicit_comparison' }),
