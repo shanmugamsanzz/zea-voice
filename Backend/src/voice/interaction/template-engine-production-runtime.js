@@ -91,6 +91,39 @@ function activeClarificationAmbiguity(state) {
   });
 }
 
+function publishedResolutionAmbiguity(resolution) {
+  const candidates = [...new Set((resolution?.ambiguity?.detected === true
+    ? resolution.ambiguity.candidates : resolution?.routingCandidates ?? [])
+    .map((candidate) => cleanText(candidate?.label ?? candidate?.canonicalName, 300))
+    .filter(Boolean))];
+  if (resolution?.ambiguity?.detected === true && candidates.length >= 2) {
+    return Object.freeze({
+      required: true,
+      kind: 'published_entity_candidates',
+      candidates: Object.freeze(candidates),
+    });
+  }
+  if (resolution?.requiresCandidateConfirmation === true && candidates.length) {
+    return Object.freeze({
+      required: true,
+      kind: 'published_entity_confirmation',
+      candidates: Object.freeze(candidates.slice(0, 1)),
+    });
+  }
+  if (resolution?.reason === 'no_candidate' || resolution?.action === 'CLARIFY') {
+    return Object.freeze({
+      required: true,
+      kind: 'unresolved_published_entity',
+      candidates: Object.freeze([]),
+    });
+  }
+  return Object.freeze({
+    required: false,
+    kind: 'resolved_published_entity',
+    candidates: Object.freeze([]),
+  });
+}
+
 function searchTokens(value) {
   return new Set(cleanText(value).toLocaleLowerCase()
     .replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').split(/\s+/u)
@@ -286,6 +319,7 @@ async function runWorkflow(input, decision, state, context, dependencies) {
     informationFields: input.informationFields,
     scope: context.scope,
     candidateValues: candidates,
+    selectedRecordIds: state.lastReferencedRecordIds,
     candidateValuesVerified: true,
     confirmation: { accepted: explicitConfirmation, explicit: explicitConfirmation },
     confirmationMessage: input.confirmationMessage,
@@ -554,9 +588,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     invokeStructuredLlm: dependencies.invokeStructuredLlm,
     tenantBoundaryVerified: true,
     publishedEntities: retrieval.evidence,
-    ambiguity: Object.freeze({
-      required: false, kind: 'derive_from_verified_evidence', candidates: Object.freeze([]),
-    }),
+    ambiguity: publishedResolutionAmbiguity(retrieval.entityResolution),
     validateGroundedClaims: ({
       response, decision, selectedEvidence, searchInterpretation, latestUtterance,
     }) => (

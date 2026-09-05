@@ -212,6 +212,49 @@ assert.equal(result.reason, 'clarification_candidates_required',
   'A single possible record must never be treated as genuine ambiguity');
 
 result = validateTemplateEngineOutput({
+  phase: 'post_search', decision: clarify('Did you mean Alpha?', ['Alpha']),
+  ambiguity: {
+    required: true, kind: 'published_entity_confirmation', candidates: ['Alpha'],
+  },
+  claimValidationRequired: true,
+  semanticClaimValidation: { supported: true, requestedFactAddressed: true },
+});
+assert.equal(result.valid, true,
+  'One non-strong published match may be confirmed without inventing alternatives');
+
+result = validateTemplateEngineOutput({
+  phase: 'post_search', decision: clarify('Which configured option did you mean?', []),
+  ambiguity: { required: true, kind: 'unresolved_published_entity', candidates: [] },
+  claimValidationRequired: true,
+  semanticClaimValidation: { supported: true, requestedFactAddressed: true },
+});
+assert.equal(result.valid, true,
+  'No credible published match must allow a candidate-free neutral clarification');
+
+result = validateTemplateEngineOutput({
+  phase: 'post_search',
+  decision: {
+    decision: 'NO_MATCH', response: 'That information is unavailable.',
+    clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
+  },
+  ambiguity: { required: true, kind: 'unresolved_published_entity', candidates: [] },
+  claimValidationRequired: true,
+  semanticClaimValidation: { supported: true, requestedFactAddressed: true },
+});
+assert.equal(result.reason, 'clarification_required_for_entity_resolution');
+
+result = validateTemplateEngineOutput({
+  phase: 'post_search', decision: response('Alpha is configured.', ['e-1']),
+  factualClaimsPresent: true, selectedEvidence: evidence,
+  ambiguity: {
+    required: true, kind: 'published_entity_candidates', candidates: ['Alpha', 'Beta'],
+  },
+  semanticClaimValidation: { supported: true, requestedFactAddressed: true },
+});
+assert.equal(result.reason, 'clarification_required_for_entity_resolution',
+  'A factual answer must not choose arbitrarily among genuine published matches');
+
+result = validateTemplateEngineOutput({
   phase: 'post_search', decision: clarify('Which one? Should I continue?', ['Alpha', 'Beta']),
   ambiguity: { required: true, kind: 'entity', candidates: ['Alpha', 'Beta'] },
 });
@@ -385,6 +428,40 @@ result = validateTemplateEngineOutput({
   semanticClaimValidation: { supported: true, requestedFactAddressed: true },
 });
 assert.equal(result.reason, 'no_match_rejected_when_requested_fact_is_available');
+
+let citedRecoveryCalls = 0;
+const citedRecovery = await respondToTemplateEngineSearch({
+  mainPrompt: 'Use supplied published evidence.', latestUtterance: 'What is the price?',
+  state: {
+    recentCompleteTurns: [], lastReferencedRecordIds: ['r-1'], comparisonRecordIds: [],
+    pendingClarification: null, activeWorkflowId: null, collectedToolFields: {},
+    confirmationStatus: null,
+  },
+  searchDecision: {
+    decision: 'SEARCH', response: '', clarification: null,
+    search: {
+      query: 'Service Alpha price', requestedFact: 'price',
+      contextualReference: 'Service Alpha', preferredRecordIds: ['r-1'],
+    },
+    tool: null, nextQuestion: null, stateUpdate: null,
+  },
+  verifiedEvidence: evidence, scope,
+  informationUnavailableResponse: 'That information is not published.',
+}, {
+  tenantBoundaryVerified: true,
+  validateGroundedClaims: async () => ({
+    supported: true, requestedFactAddressed: true, successClaimed: false,
+  }),
+  invokeStructuredLlm: async () => {
+    citedRecoveryCalls += 1;
+    return { outputParsed: response('Service Alpha costs 3200 units.', ['E9']) };
+  },
+});
+assert.equal(citedRecoveryCalls, 2, 'Invalid citations receive exactly one model repair');
+assert.equal(citedRecovery.decision.decision, 'RESPONSE');
+assert.deepEqual(citedRecovery.decision.evidenceIds, ['e-1']);
+assert.equal(citedRecovery.decision.response, evidence[0].content);
+assert.equal(citedRecovery.diagnostics.extractiveRecoveryApplied, true);
 
 const sources = [
   '../src/voice/interaction/template-engine-output-validator.js',

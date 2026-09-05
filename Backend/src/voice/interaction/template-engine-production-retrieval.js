@@ -9,6 +9,7 @@ import { publishedRecordCallerFacingHint } from '../../knowledge-engine/evidence
 import { buildPublicationDeduplicationIdentity } from '../../knowledge-engine/publication-deduplication.js';
 import { runTemplateEngineHybridRetrieval } from './template-engine-hybrid-retrieval.js';
 import { normalizePublishedConversationGuidance } from './template-engine-conversation-guidance.js';
+import { resolvePublishedEntityRoute } from '../../knowledge-engine/entity-route-resolver.js';
 
 export const TEMPLATE_ENGINE_PRODUCTION_RETRIEVAL_VERSION = 1;
 
@@ -263,14 +264,36 @@ function candidateIdentityKey(candidate, tenantId) {
   return canonicalRecordIdentityKey(candidate, { tenantId });
 }
 
-export function constrainHybridToRequestedEntities(hybrid, tenantId) {
+function resolutionReservations(resolution) {
+  const resolved = resolution?.ambiguity?.detected === true
+    ? resolution.ambiguity.candidates
+    : resolution?.candidate ? [resolution.candidate] : [];
+  return (resolved ?? []).filter((candidate) => (
+    ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(
+      cleanText(candidate?.recordType, 80).toUpperCase(),
+    )
+  )).map((candidate) => Object.freeze({
+    tenantId: candidate.tenantId,
+    agentId: candidate.agentId,
+    knowledgeBaseId: candidate.knowledgeBaseId,
+    publicationRevision: candidate.publicationRevision,
+    recordId: candidate.recordId,
+    recordType: candidate.recordType,
+    categoryKey: candidate.categoryKey ?? null,
+    reason: resolution?.ambiguity?.detected === true
+      ? 'published_entity_ambiguity' : 'resolved_published_entity',
+  }));
+}
+
+export function constrainHybridToRequestedEntities(hybrid, tenantId, resolution = null) {
   const candidates = Array.isArray(hybrid?.candidates) ? hybrid.candidates : [];
   const existing = Array.isArray(hybrid?.queryContext?.reservedRecords)
     ? hybrid.queryContext.reservedRecords : [];
   const comparison = existing.filter((entry) => [
     'explicit_comparison', 'contextual_comparison',
   ].includes(String(entry?.reason ?? '').toLocaleLowerCase()));
-  let requested = comparison;
+  const resolved = resolutionReservations(resolution);
+  let requested = comparison.length ? comparison : resolved;
   if (!requested.length) {
     const exactCatalog = candidates.filter((candidate) => (
       ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(String(candidate?.recordType ?? '').toUpperCase())
@@ -527,13 +550,28 @@ export async function retrieveTemplateEngineEvidence({
     dependencies.loadArtifacts ?? loadPublishedEngineArtifacts
   )(auth, input, dependencies.artifacts);
   const route = classification(input, search);
+  const scopedBundles = (artifacts.bundles ?? []).filter((bundle) => (
+    cleanText(bundle?.tenantId, 160).toLocaleLowerCase()
+      === cleanText(input.tenantId, 160).toLocaleLowerCase()
+    && (!(bundle?.assignedAgentIds ?? []).length
+      || bundle.assignedAgentIds.some((id) => (
+        cleanText(id, 160).toLocaleLowerCase()
+          === cleanText(input.agentId, 160).toLocaleLowerCase()
+      )))
+  ));
+  const entityResolution = scopedBundles.length
+    ? (dependencies.resolveEntityRoute ?? resolvePublishedEntityRoute)(
+      input, scopedBundles, {
+        confidenceConfiguration: dependencies.confidenceConfiguration,
+      },
+    ) : null;
   let channelPromise;
   const searchChannels = () => {
     channelPromise ??= (async () => {
       const result = await (dependencies.searchCandidates ?? searchParallelHybridCandidates)({
         input,
         classification: route,
-        resolution: null,
+        resolution: entityResolution,
         publicationBundles: artifacts.bundles,
         sparseIndexes: artifacts.sparseIndexes,
         limitPerChannel: 20,
@@ -557,7 +595,9 @@ export async function retrieveTemplateEngineEvidence({
     searchBm25: async () => (await searchChannels()).channels.bm25,
     searchQdrantE5: async () => (await searchChannels()).channels.qdrant,
   });
-  const entityConstraint = constrainHybridToRequestedEntities(rawHybrid, input.tenantId);
+  const entityConstraint = constrainHybridToRequestedEntities(
+    rawHybrid, input.tenantId, entityResolution,
+  );
   const hybrid = entityConstraint.hybrid;
   const retrieval = Object.freeze({
     ...hybrid,
@@ -574,7 +614,7 @@ export async function retrieveTemplateEngineEvidence({
     auth,
     input,
     classification: route,
-    resolution: null,
+    resolution: entityResolution,
     retrieval,
     limit: 5,
     minProviderScore: 0,
@@ -589,8 +629,16 @@ export async function retrieveTemplateEngineEvidence({
     ? hydratedEvidence.filter((source) => requestedIdentities.has(
       candidateIdentityKey(source, input.tenantId),
     )) : hydratedEvidence;
+  const hydratedIdentityCounts = new Map();
+  for (const source of entityMatchedEvidence) {
+    const key = candidateIdentityKey(source, input.tenantId);
+    if (key) hydratedIdentityCounts.set(key, (hydratedIdentityCounts.get(key) ?? 0) + 1);
+  }
+  const exactHydration = [...requestedIdentities].every((key) => (
+    hydratedIdentityCounts.get(key) === 1
+  ));
   if (entityConstraint.constrained
-    && entityMatchedEvidence.length !== requestedIdentities.size) {
+    && (entityMatchedEvidence.length !== requestedIdentities.size || !exactHydration)) {
     throw new AppError(503, 'Requested published entities were not completely hydrated',
       'TEMPLATE_ENGINE_REQUESTED_ENTITY_HYDRATION_INCOMPLETE', {
         requestedCount: requestedIdentities.size,
@@ -630,6 +678,7 @@ export async function retrieveTemplateEngineEvidence({
       durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
     }),
     authoritative,
+    entityResolution,
     artifacts,
   });
 }

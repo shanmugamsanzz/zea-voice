@@ -110,6 +110,19 @@ export function normalizePublishedConversationGuidance(record, publication, agen
     intentClass: cleanText(
       variables.intentclass ?? metadata.intentClass ?? metadata.intent_class, 160,
     ) || null,
+    applicableRoutes: Object.freeze(textList(
+      variables.applicableroutes ?? variables.routes ?? variables.route
+        ?? metadata.applicableRoutes ?? metadata.applicable_routes
+        ?? metadata.routes ?? metadata.route,
+      10,
+    ).map((route) => route.toUpperCase())),
+    configuredStages: Object.freeze(textList(
+      variables.conversationstages ?? variables.conversationstage ?? variables.stages
+        ?? variables.stage ?? metadata.conversationStages ?? metadata.conversation_stages
+        ?? metadata.conversationStage ?? metadata.conversation_stage
+        ?? metadata.stages ?? metadata.stage,
+      20,
+    )),
     purpose: purpose || null,
     situation: cleanText(variables.situation ?? metadata.situation, 2_000) || null,
     examples: Object.freeze(textList([
@@ -285,6 +298,15 @@ export function selectApplicableConversationGuidance({
     .filter((entry) => entry?.recordType === 'CONVERSATION_NODE')
     .map((entry) => cleanText(entry.recordId ?? entry.id, 200)).filter(Boolean));
   const compatibleCandidates = candidates.filter((candidate) => {
+    const route = cleanText(finalDecision, 80).toUpperCase();
+    const applicableRoutes = candidate.applicableRoutes ?? [];
+    const configuredStages = candidate.configuredStages ?? [];
+    if (applicableRoutes.length && route
+      && !applicableRoutes.includes(route)) return false;
+    if (configuredStages.length && conversationStage
+      && !configuredStages.some((stage) => (
+        overlapScore(stage, conversationStage) > 0
+      ))) return false;
     if (namedEntityRequest && overviewGuidance(candidate)) return false;
     const candidateKind = candidateGuidanceKind(candidate);
     if (requestedKind && candidateKind && requestedKind !== candidateKind) return false;
@@ -367,6 +389,8 @@ export function selectApplicableConversationGuidance({
     nodeKey: ranked[0].candidate.nodeKey,
     flowKey: ranked[0].candidate.flowKey,
     catalogReferences: ranked[0].candidate.catalogReferences,
+    applicableRoutes: Object.freeze([...(ranked[0].candidate.applicableRoutes ?? [])]),
+    configuredStages: Object.freeze([...(ranked[0].candidate.configuredStages ?? [])]),
     sequenceOrder: ranked[0].candidate.sequenceOrder,
     conversationStage: cleanText(conversationStage, 160) || null,
     selectionScore: Number(ranked[0].score.toFixed(4)),
@@ -390,6 +414,9 @@ export function sanitizeConversationGuidance(value) {
       ? Number(value.publicationRevision) : null,
     content: cleanText(value.content, 4_000) || null,
     catalogReferences: Object.freeze(textList(value.catalogReferences, 100)),
+    applicableRoutes: Object.freeze(textList(value.applicableRoutes, 10)
+      .map((route) => route.toUpperCase())),
+    configuredStages: Object.freeze(textList(value.configuredStages, 20)),
     intentClass: cleanText(value.intentClass, 160) || null,
     nodeKey: cleanText(value.nodeKey, 160) || null,
     flowKey: cleanText(value.flowKey, 160) || null,

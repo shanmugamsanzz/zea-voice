@@ -243,6 +243,7 @@ assert.equal(executions, 0);
 const completed = await executeAndPhraseTemplateEngineWorkflow({
   ...common, mainPrompt: 'Speak briefly and naturally.',
   state: complete.state, confirmation: { accepted: true, explicit: true },
+  selectedRecordIds: ['selected-record'],
   conversationGuidance: {
     recordId: 'result-guidance',
     purpose: 'Offer one relevant continuation after a verified result.',
@@ -254,6 +255,7 @@ const completed = await executeAndPhraseTemplateEngineWorkflow({
     executions += 1;
     assert.equal(request.authorizationRecordId, 'workflow-1');
     assert.deepEqual(request.arguments, { full_name: 'Alex Example', quantity: 2 });
+    assert.deepEqual(request.selectedRecordIds, ['selected-record']);
     return { verified: true, success: true, output: { reference: 'result-1' } };
   },
   invokeStructuredLlm: async (request) => {
@@ -299,6 +301,15 @@ assert.equal(coordinated.verifiedResult.verified, true);
 assert.equal(coordinated.verifiedResult.success, false);
 assert.equal(coordinated.state.activeWorkflowId, 'workflow-1');
 assert.equal(coordinated.state.confirmationStatus, 'execution_failed');
+
+await assert.rejects(() => advanceTemplateEngineWorkflowTurn({
+  ...common, mainPrompt: 'Speak briefly and naturally.',
+  state: { ...complete.state, confirmationStatus: 'executing' },
+  confirmation: { accepted: true, explicit: true },
+}, {
+  persistWorkflowState: async () => {},
+  executeAuthorizedTool: async () => { throw new Error('must not execute twice'); },
+}), (error) => error.code === 'TEMPLATE_ENGINE_WORKFLOW_EXECUTION_IN_PROGRESS');
 
 await assert.rejects(() => executeTemplateEngineWorkflow({
   ...common, state: complete.state, confirmation: { accepted: true, explicit: true },

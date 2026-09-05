@@ -216,6 +216,7 @@
     "verify:template-engine-conversation-guidance": "node scripts/verify-template-engine-conversation-guidance.js",
     "verify:template-engine-follow-up": "node scripts/verify-template-engine-follow-up.js",
     "verify:template-engine-multilingual-e2e": "node scripts/verify-template-engine-multilingual-e2e.js",
+    "verify:template-engine-realtime-generic": "node scripts/verify-template-engine-realtime-generic-gates.js",
     "verify:template-engine-hybrid-retrieval": "node scripts/verify-template-engine-hybrid-retrieval.js",
     "verify:template-engine-post-search": "node scripts/verify-template-engine-post-search-orchestrator.js",
     "verify:template-engine-workflow-runtime": "node scripts/verify-template-engine-workflow-runtime.js",

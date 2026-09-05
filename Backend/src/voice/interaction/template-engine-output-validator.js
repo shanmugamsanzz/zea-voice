@@ -140,6 +140,11 @@ function sameRecordSet(evidence, requiredValues) {
 function validateResponse(decision, input) {
   const factual = input.factualClaimsPresent === true;
   const requestedFact = cleanText(input.searchInterpretation?.requestedFact, 500);
+  if (input.ambiguity?.required === true) {
+    return invalid('clarification_required_for_entity_resolution', {
+      factual, retryCount: input.retryCount,
+    });
+  }
   if (internalOrJson(decision.response)) {
     return invalid('internal_or_json_speech', { factual, retryCount: input.retryCount });
   }
@@ -219,8 +224,18 @@ function validateClarification(decision, input) {
   }
   const allowedCandidates = new Set((input.ambiguity?.candidates ?? []).map(identity).filter(Boolean));
   const selectedCandidates = clarification.candidates.map(identity).filter(Boolean);
-  if (allowedCandidates.size < 2 || selectedCandidates.length < 2) {
+  const ambiguityKind = cleanText(input.ambiguity?.kind, 80);
+  const unresolved = ambiguityKind === 'unresolved_published_entity';
+  const confirmation = ambiguityKind === 'published_entity_confirmation';
+  if (unresolved && selectedCandidates.length) {
+    return invalid('invented_clarification_candidate');
+  }
+  if (!unresolved && !confirmation
+    && (allowedCandidates.size < 2 || selectedCandidates.length < 2)) {
     return invalid('clarification_candidates_required');
+  }
+  if (confirmation && (allowedCandidates.size !== 1 || selectedCandidates.length !== 1)) {
+    return invalid('clarification_candidate_confirmation_required');
   }
   if (selectedCandidates.some((candidate) => !allowedCandidates.has(candidate))) {
     return invalid('invented_clarification_candidate');
@@ -296,6 +311,11 @@ export function validateTemplateEngineOutput(input = {}) {
     }
     if (input.requestedFactAvailable === true) {
       return invalid('no_match_rejected_when_requested_fact_is_available', {
+        factual: true, retryCount: input.retryCount,
+      });
+    }
+    if (input.ambiguity?.required === true) {
+      return invalid('clarification_required_for_entity_resolution', {
         factual: true, retryCount: input.retryCount,
       });
     }

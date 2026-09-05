@@ -490,7 +490,7 @@ const hallucinationOutputs = [
   unsupportedDecision,
   unsupportedDecision,
 ];
-await assert.rejects(() => runTemplateEngineProductionTurn({
+const hallucinationRecovery = await runTemplateEngineProductionTurn({
   auth: { tenantId: hallucinationIdentity.tenantId }, scope: hallucinationIdentity.scope,
   callId: 'hallucination-gate', usageDirection: 'inbound', language: 'en',
   mainPrompt: 'Never invent factual values.', latestUtterance: hallucinationConfiguration.price,
@@ -512,8 +512,10 @@ await assert.rejects(() => runTemplateEngineProductionTurn({
     supported: true, successClaimed: false, requestedFactAddressed: true,
   }),
   validateToolResultSpeechClaims: async () => ({ supported: true, successClaimed: false }),
-}), (error) => error.code === 'TEMPLATE_ENGINE_OUTPUT_INVALID'
-  && error.details?.reason === 'unsupported_numeric_claim');
+});
+assert.equal(hallucinationRecovery.decision.decision, 'RESPONSE');
+assert.equal(hallucinationRecovery.diagnostics.postSearch.extractiveRecoveryApplied, true);
+assert.deepEqual(hallucinationRecovery.evidenceIds, [hallucinationEvidence[0].evidenceId]);
 assert.equal(hallucinationOutputs.length, 0);
 
 const productionSources = [

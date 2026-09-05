@@ -440,6 +440,41 @@ function evidenceProvidesRequestedFact(evidence, requestedFact) {
   });
 }
 
+function evidenceSupportingRequestedFact(evidence, requestedFact) {
+  const normalizedFact = candidateIdentity(requestedFact);
+  if (!normalizedFact) return Object.freeze([]);
+  const wanted = new Set(normalizedFact.split(/\s+/u).filter(Boolean));
+  return Object.freeze(evidence.filter((source) => {
+    const searchable = candidateIdentity([
+      ...(source?.publishedAttributePaths ?? []),
+      source?.content,
+      JSON.stringify(source?.authoritativeData ?? {}),
+    ].join(' '));
+    const available = new Set(searchable.split(/\s+/u).filter(Boolean));
+    let matches = 0;
+    for (const token of wanted) if (available.has(token)) matches += 1;
+    return matches > 0 && matches / wanted.size >= 0.5;
+  }));
+}
+
+function extractiveGroundedRecovery(evidence, requestedFact) {
+  const supporting = evidenceSupportingRequestedFact(evidence, requestedFact);
+  if (!supporting.length) return null;
+  const speechParts = [...new Set(supporting.map((source) => cleanText(
+    source?.authoritativeData?.callerFacingAnswer
+      ?? source?.authoritativeData?.answer
+      ?? source?.content,
+    4_000,
+  )).filter(Boolean))];
+  const response = cleanText(speechParts.join(' '), 4_000);
+  if (!response) return null;
+  return Object.freeze({
+    decision: 'RESPONSE', response, clarification: null,
+    evidenceIds: Object.freeze(supporting.map((source) => source.evidenceId)),
+    nextQuestion: null, stateUpdate: null,
+  });
+}
+
 function evidenceCandidateNames(source) {
   return cleanList([source?.canonicalName, ...(source?.aliases ?? [])], 60)
     .map(candidateIdentity).filter(Boolean);
@@ -447,6 +482,12 @@ function evidenceCandidateNames(source) {
 
 function verifiedClarificationAmbiguity(decision, evidence, searchInterpretation, supplied) {
   if (decision?.decision !== 'CLARIFY') return supplied ?? null;
+
+  if (supplied?.required === true && supplied?.kind === 'unresolved_published_entity') {
+    return Object.freeze({
+      required: true, kind: supplied.kind, candidates: Object.freeze([]),
+    });
+  }
 
   const preferred = new Set((searchInterpretation?.preferredRecordIds ?? [])
     .map(recordId).filter(Boolean));
@@ -475,7 +516,9 @@ function verifiedClarificationAmbiguity(decision, evidence, searchInterpretation
     resolvedRecordIds.add(matchedRecordId);
     resolved.push(candidate);
   }
-  const genuine = resolvedRecordIds.size >= 2;
+  const confirmation = supplied?.kind === 'published_entity_confirmation'
+    && resolvedRecordIds.size === 1;
+  const genuine = resolvedRecordIds.size >= 2 || confirmation;
   return Object.freeze({
     required: genuine,
     kind: genuine ? cleanText(supplied?.kind, 80) || 'verified_candidates' : 'not_ambiguous',
@@ -555,8 +598,8 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     'A RESPONSE must directly answer searchInterpretation.requestedFact before adding any other supported information. A true answer about a different attribute is incomplete.',
     'An absent attribute means the published evidence does not provide that information. Absence never proves a negative value, non-existence, non-requirement, non-availability, or zero.',
     'For NO_MATCH, describe only that the requested information is not present in the supplied published evidence; do not assert that the underlying real-world attribute is false.',
-    'CLARIFY speech may identify supplied ambiguity candidates but must not introduce any unsupported factual claim.',
-    'Use CLARIFY only when at least two distinct supplied published records are genuinely possible, and name both candidates.',
+    'CLARIFY speech must follow the supplied ambiguity object and must not introduce any unsupported factual claim.',
+    'For multiple supplied published candidates, ask one question identifying those candidates. For one confirmation candidate, ask whether the caller meant it. For unresolved_published_entity with no candidates, ask one neutral clarification without inventing or naming an entity.',
     'When preferredRecordIds resolves one previously cited record, answer from that record; do not ask which record the caller means.',
     'When preferredRecordIds contains an intentional comparison set, compare those records; do not reinterpret the set as ambiguity.',
     '<orchestrator_turn_input>',
@@ -585,6 +628,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
   let repairingCitation = false;
   let groundingRepairAttempted = false;
   let configuredFallbackApplied = false;
+  let extractiveRecoveryApplied = false;
   if (!validated.valid) {
     firstInvalidReason = validated.reason;
     repairingCitation = citationRepairRequired(
@@ -629,7 +673,19 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
   let finalDiagnostics = templateEnginePostSearchDecisionDiagnostics(output);
   if (!validated.valid) {
     const unavailableResponse = cleanText(input.informationUnavailableResponse, 4_000);
-    if (!requestedFactAvailable && unavailableResponse) {
+    const extractiveRecovery = requestedFactAvailable
+      && dependencies.ambiguity?.required !== true
+      ? extractiveGroundedRecovery(citations.evidence, search.value.search.requestedFact)
+      : null;
+    if (extractiveRecovery) {
+      validated = validateTemplateEnginePostSearchDecision(
+        extractiveRecovery, allowedEvidenceIds,
+      );
+      extractiveRecoveryApplied = validated.valid;
+      if (validated.valid) {
+        finalDiagnostics = templateEnginePostSearchDecisionDiagnostics(validated.value);
+      }
+    } else if (!requestedFactAvailable && unavailableResponse) {
       validated = validateTemplateEnginePostSearchDecision({
         decision: 'NO_MATCH', response: unavailableResponse,
         clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
@@ -646,6 +702,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       finalReason: validated.valid ? null : validated.reason,
       recovered: validated.valid,
       configuredFallbackApplied,
+      extractiveRecoveryApplied,
       first: firstDiagnostics,
       final: finalDiagnostics,
     }));
@@ -774,7 +831,34 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
   }
   if (!outputValidation.valid) {
     const unavailableResponse = cleanText(input.informationUnavailableResponse, 4_000);
-    if (!requestedFactAvailable && unavailableResponse) {
+    const extractiveRecovery = requestedFactAvailable
+      && dependencies.ambiguity?.required !== true
+      ? extractiveGroundedRecovery(citations.evidence, search.value.search.requestedFact)
+      : null;
+    if (extractiveRecovery) {
+      const recovered = validateTemplateEnginePostSearchDecision(
+        extractiveRecovery, allowedEvidenceIds,
+      );
+      if (recovered.valid) {
+        extractiveRecoveryApplied = true;
+        groundedDecision = restorePostSearchEvidenceIds(
+          recovered.value, citations.aliasToEvidenceId,
+        );
+        semanticClaimValidation = await validateClaims(groundedDecision);
+        outputValidation = validateTemplateEngineOutput(outputValidationInput(
+          groundedDecision, base, dependencies, {
+            phase: 'post_search', factualClaimsPresent: true,
+            claimValidationRequired: true, selectedEvidence: evidence,
+            semanticClaimValidation, searchInterpretation: search.value.search,
+            ambiguity: dependencies.ambiguity,
+            requiredEvidenceRecordIds: base.state.comparisonRecordIds.length > 1
+              ? base.state.comparisonRecordIds : [],
+            requestedFactAvailable: true, retryCount: 1,
+          },
+        ));
+        finalDiagnostics = templateEnginePostSearchDecisionDiagnostics(recovered.value);
+      }
+    } else if (!requestedFactAvailable && unavailableResponse) {
       const noMatch = validateTemplateEnginePostSearchDecision({
         decision: 'NO_MATCH', response: unavailableResponse,
         clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
@@ -811,6 +895,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       finalReason: outputValidation.valid ? null : outputValidation.reason,
       recovered: outputValidation.valid,
       configuredFallbackApplied,
+      extractiveRecoveryApplied,
       first: firstDiagnostics,
       final: finalDiagnostics,
     }));
@@ -838,6 +923,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     validationReason: null,
     finalDecision: groundedDecision.decision,
     repairAttempted: Boolean(firstInvalidReason),
+    extractiveRecoveryApplied,
   });
   if (typeof dependencies.onPostSearchDiagnostics === 'function') {
     dependencies.onPostSearchDiagnostics(diagnostics);

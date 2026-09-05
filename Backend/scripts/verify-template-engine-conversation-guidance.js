@@ -63,6 +63,17 @@ const comparisonGuidance = publishedRecord({
   examples: ['Compare these options'], nextQuestion: 'Would you like another detail?',
   intentClass: 'COMPARISON_COMPLEX', nodeKey: 'option_comparison',
 });
+const routedGuidance = normalizePublishedConversationGuidance({
+  record_id: 'guidance-routed', record_type: 'conversation_node', language: 'en',
+  entity_metadata: {
+    nodeKey: 'routed_guidance', nodeType: 'guidance',
+    variables: {
+      purpose: 'Continue only in the configured route and stage.',
+      nextQuestion: 'Should this configured flow continue?',
+      applicableRoutes: ['TOOL_RESULT'], conversationStages: ['workflow result'],
+    },
+  },
+}, publication, agentId);
 const categoryGuidance = publishedRecord({
   recordId: 'guidance-category', purpose: 'Explain the selected configured group.',
   situation: 'The caller selects one configured group.',
@@ -175,6 +186,17 @@ const namedCategorySelectsCategoryGuidance = selectApplicableConversationGuidanc
 assert.equal(namedCategorySelectsCategoryGuidance.recordId, 'guidance-category');
 assert.equal(namedCategorySelectsCategoryGuidance.selectionReasons
   .includes('requested_entity_kind_compatible'), true);
+
+assert.equal(selectApplicableConversationGuidance({
+  publishedConversationGuidance: [routedGuidance], scope,
+  latestUtterance: 'Continue', finalDecision: 'SEARCH',
+  conversationStage: 'selected item details',
+}), null, 'Guidance configured for another route and stage must be rejected');
+assert.equal(selectApplicableConversationGuidance({
+  publishedConversationGuidance: [routedGuidance], scope,
+  latestUtterance: 'Continue', finalDecision: 'TOOL_RESULT',
+  conversationStage: 'workflow result',
+})?.recordId, 'guidance-routed');
 
 for (const scenario of [
   {

@@ -154,11 +154,13 @@ function fieldValueValid(value, field, property) {
   return true;
 }
 
-function stateFor(configuration, collectedToolFields, confirmationStatus) {
+function stateFor(configuration, collectedToolFields, confirmationStatus, selectedRecordIds = []) {
   return Object.freeze({
     activeWorkflowId: configuration.workflowId,
     collectedToolFields: Object.freeze({ ...collectedToolFields }),
     confirmationStatus,
+    selectedRecordIds: Object.freeze([...new Set((selectedRecordIds ?? [])
+      .map((value) => cleanText(value, 160)).filter(Boolean))]),
   });
 }
 
@@ -179,11 +181,12 @@ function workflowProgress(configuration, state) {
 export function activateTemplateEngineWorkflow(input = {}) {
   const configuration = resolveConfiguration(input);
   const collected = object(input.state?.collectedToolFields);
-  const state = stateFor(configuration, collected, 'pending_fields');
+  const selectedRecordIds = input.selectedRecordIds ?? input.state?.selectedRecordIds ?? [];
+  const state = stateFor(configuration, collected, 'pending_fields', selectedRecordIds);
   const progress = workflowProgress(configuration, state);
   return Object.freeze({
     configuration, state: progress.complete
-      ? stateFor(configuration, collected, 'awaiting_confirmation') : state,
+      ? stateFor(configuration, collected, 'awaiting_confirmation', selectedRecordIds) : state,
     progress,
   });
 }
@@ -191,6 +194,7 @@ export function activateTemplateEngineWorkflow(input = {}) {
 export function collectTemplateEngineWorkflowFields(input = {}) {
   const configuration = resolveConfiguration(input);
   const collected = { ...object(input.state?.collectedToolFields) };
+  const selectedRecordIds = input.selectedRecordIds ?? input.state?.selectedRecordIds ?? [];
   const candidates = object(input.candidateValues);
   if (Object.keys(candidates).length && input.candidateValuesVerified !== true) {
     throw new TypeError('Workflow field candidates must come from the verified caller input');
@@ -204,15 +208,15 @@ export function collectTemplateEngineWorkflowFields(input = {}) {
       rejectedFields.push(field.key);
     } else collected[field.key] = value;
   }
-  const provisional = stateFor(configuration, collected, 'pending_fields');
+  const provisional = stateFor(configuration, collected, 'pending_fields', selectedRecordIds);
   const progress = workflowProgress(configuration, provisional);
   const state = progress.complete
-    ? stateFor(configuration, collected, 'awaiting_confirmation') : provisional;
+    ? stateFor(configuration, collected, 'awaiting_confirmation', selectedRecordIds) : provisional;
   return Object.freeze({
     configuration, state, progress,
-    acceptedFields: Object.freeze(Object.keys(candidates).filter((key) => (
-      Object.hasOwn(collected, key) && !rejectedFields.includes(key)
-    ))),
+    acceptedFields: Object.freeze(configuration.fields.map((field) => field.key)
+      .filter((key) => Object.hasOwn(candidates, key)
+        && Object.hasOwn(collected, key) && !rejectedFields.includes(key))),
     rejectedFields: Object.freeze(rejectedFields),
   });
 }
@@ -446,6 +450,7 @@ export async function executeTemplateEngineWorkflow(input = {}, dependencies = {
     configuration,
     object(input.state?.collectedToolFields),
     cleanText(input.state?.confirmationStatus, 40),
+    input.selectedRecordIds ?? input.state?.selectedRecordIds ?? [],
   );
   const progress = workflowProgress(configuration, state);
   const explicitConfirmation = input.confirmation?.accepted === true
@@ -467,6 +472,7 @@ export async function executeTemplateEngineWorkflow(input = {}, dependencies = {
     authorizationRecordId: configuration.workflowId,
     workflowRecord: configuration.workflow,
     assignedTool: configuration.tool,
+    selectedRecordIds: state.selectedRecordIds,
   }));
   if (!result || typeof result !== 'object' || result.verified !== true
     || typeof result.success !== 'boolean') {
@@ -479,7 +485,9 @@ export async function executeTemplateEngineWorkflow(input = {}, dependencies = {
       activeWorkflowId: null,
       collectedToolFields: Object.freeze({}),
       confirmationStatus: 'executed_success',
-    }) : stateFor(configuration, state.collectedToolFields, 'execution_failed'),
+    }) : stateFor(
+      configuration, state.collectedToolFields, 'execution_failed', state.selectedRecordIds,
+    ),
     configuration,
   });
 }
@@ -540,6 +548,10 @@ export async function executeAndPhraseTemplateEngineWorkflow(input = {}, depende
 
 export async function advanceTemplateEngineWorkflowTurn(input = {}, dependencies = {}) {
   const priorAwaitedConfirmation = input.state?.confirmationStatus === 'awaiting_confirmation';
+  if (input.state?.confirmationStatus === 'executing') {
+    throw new AppError(409, 'The Workflow execution is already in progress',
+      'TEMPLATE_ENGINE_WORKFLOW_EXECUTION_IN_PROGRESS');
+  }
   if (typeof dependencies.persistWorkflowState !== 'function') {
     throw new TypeError('The Workflow turn requires a state persistence adapter');
   }
@@ -557,6 +569,13 @@ export async function advanceTemplateEngineWorkflowTurn(input = {}, dependencies
     && input.confirmation?.explicit === true;
   if (priorAwaitedConfirmation && explicitConfirmation
     && transition.progress.complete) {
+    const executingState = stateFor(
+      transition.configuration,
+      transition.state.collectedToolFields,
+      'executing',
+      transition.state.selectedRecordIds,
+    );
+    await dependencies.persistWorkflowState(executingState);
     const execution = await executeAndPhraseTemplateEngineWorkflow({
       ...input,
       state: transition.state,
