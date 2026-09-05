@@ -4,6 +4,19 @@ import {
   validateTemplateEnginePostSearchDecision,
 } from '../src/voice/interaction/template-engine-post-search-contract.js';
 import { respondToTemplateEngineSearch } from '../src/voice/interaction/template-engine-orchestrator.js';
+import { classifyTemplateEngineTurnError } from '../src/voice/interaction/template-engine-error-classification.js';
+
+for (const code of ['TEMPLATE_ENGINE_OUTPUT_INVALID', 'TEMPLATE_ENGINE_POST_SEARCH_DECISION_INVALID',
+  'TEMPLATE_ENGINE_LLM_INVALID_JSON', 'TEMPLATE_ENGINE_CLAIM_VALIDATION_INVALID']) {
+  assert.equal(classifyTemplateEngineTurnError({ code, statusCode: 502 }), 'validation');
+}
+assert.equal(classifyTemplateEngineTurnError({ statusCode: 503 }), 'unclassified');
+for (const code of ['LLM_PROVIDER_TIMEOUT', 'TTS_PROVIDER_REQUEST_FAILED', 'ECONNREFUSED', '08006']) {
+  assert.equal(classifyTemplateEngineTurnError({ code }), 'operational');
+  assert.equal(classifyTemplateEngineTurnError({ code }, { stale: true }), 'cancelled');
+}
+assert.equal(classifyTemplateEngineTurnError({ code: 'LLM_PROVIDER_UNAVAILABLE',
+  cause: { name: 'AbortError' } }), 'cancelled');
 
 const mainPrompt = 'Use concise natural speech. Explain missing information naturally.';
 const latestUtterance = 'What is its current price?';
@@ -212,11 +225,16 @@ const secondEvidence = Object.freeze({
   content: 'The second service currently costs 4100 currency units.',
 });
 let comparisonClaimInput;
+for (const comparisonUtterance of [
+  'Compare the first and second services.', 'Yes, compare both.', 'ஆமாம்', 'aama compare pannunga',
+]) {
 const comparisonResult = await respondToTemplateEngineSearch({
   mainPrompt,
-  latestUtterance: 'Compare the first and second services.',
+  latestUtterance: comparisonUtterance,
   state: {
     ...state,
+    pendingClarification: { question: 'Compare the first and second services?',
+      reason: 'confirm comparison', candidates: ['First Service', 'Second Service'] },
     lastReferencedRecordIds: [],
     comparisonRecordIds: ['record-1', 'record-2'],
   },
@@ -233,6 +251,8 @@ const comparisonResult = await respondToTemplateEngineSearch({
   scope,
 }, {
   tenantBoundaryVerified: true,
+  ambiguity: { required: true, kind: 'published_entity_candidates',
+    candidates: ['First Service', 'Second Service'] },
   publishedEntities: [
     { recordId: 'record-1', canonicalName: 'First Service' },
     { recordId: 'record-2', canonicalName: 'Second Service' },
@@ -257,6 +277,7 @@ assert.equal(comparisonClaimInput.selectedEvidence.length, 2,
 assert.equal(comparisonClaimInput.selectedEvidence[1].canonicalName, 'Second Service');
 assert.deepEqual(comparisonClaimInput.selectedEvidence[1].authoritativeData,
   { name: 'Second Service', price: 4100 });
+}
 
 assert.equal(validateTemplateEnginePostSearchDecision({
   decision: 'RESPONSE', response: 'Unsupported.', clarification: null,
@@ -498,11 +519,18 @@ assert.deepEqual(resolvedContext.decision.evidenceIds, ['evidence-1']);
 
 let fallbackCalls = 0;
 let fallbackDiagnostics;
+let extractiveValidationCalls = 0;
 const deterministicFallback = await respondToTemplateEngineSearch({
   mainPrompt, latestUtterance, state, searchDecision, verifiedEvidence, scope,
   informationUnavailableResponse: 'That information is not available right now.',
 }, {
   tenantBoundaryVerified: true,
+  validateGroundedClaims: async ({ response, citedEvidence }) => {
+    extractiveValidationCalls += 1;
+    assert.equal(response, verifiedEvidence[0].content);
+    assert.deepEqual(citedEvidence.map((entry) => entry.evidenceId), ['evidence-1']);
+    return { supported: true, requestedFactAddressed: true };
+  },
   invokeStructuredLlm: async () => {
     fallbackCalls += 1;
     return {
@@ -515,6 +543,7 @@ const deterministicFallback = await respondToTemplateEngineSearch({
   onDecisionRepair: (details) => { fallbackDiagnostics = details; },
 });
 assert.equal(fallbackCalls, 2);
+assert.equal(extractiveValidationCalls, 1, 'Extracted recovery must not bypass claim validation');
 assert.equal(fallbackDiagnostics.recovered, true);
 assert.equal(fallbackDiagnostics.configuredFallbackApplied, false);
 assert.equal(fallbackDiagnostics.extractiveRecoveryApplied, true);
@@ -631,6 +660,28 @@ for (const [tenantId, languageText] of [
     'Answerable malformed output must recover to RESPONSE, never NO_MATCH');
   assert.deepEqual(recovered.decision.evidenceIds, [scopedEvidenceId]);
 }
+
+let rejectedAttempts = 0;
+let originalEvidenceMessage;
+await assert.rejects(respondToTemplateEngineSearch({
+  mainPrompt, latestUtterance, state, scope, verifiedEvidence,
+  searchDecision: { ...searchDecision, search: {
+    ...searchDecision.search, requestedFact: 'unmapped_attribute',
+  } },
+  informationUnavailableResponse: 'Published information is unavailable.',
+}, {
+  tenantBoundaryVerified: true,
+  invokeStructuredLlm: async ({ messages }) => {
+    rejectedAttempts += 1;
+    if (rejectedAttempts === 1) originalEvidenceMessage = messages[0].content;
+    else assert.equal(messages[0].content, originalEvidenceMessage,
+      'Repair must preserve the original evidence and aliases');
+    return { outputParsed: { decision: 'RESPONSE', response: 'Invalid uncited output.',
+      evidenceIds: [], clarification: null, nextQuestion: null, stateUpdate: null } };
+  },
+}), (error) => classifyTemplateEngineTurnError(error) === 'validation');
+assert.equal(rejectedAttempts, 2,
+  'Validation rejection must repair once, not infer NO_MATCH from a failed fact-token match');
 
 const emptyEvidenceFallback = await respondToTemplateEngineSearch({
   mainPrompt, latestUtterance, state, searchDecision, verifiedEvidence: [], scope,

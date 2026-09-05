@@ -136,6 +136,42 @@ const deterministicPrice = validateTemplateEngineSearchClaims({
   speech: 'Service Alpha costs 3200 units.', evidence,
   decision: 'RESPONSE', searchInterpretation: { requestedFact: 'price' },
 });
+const noCitations = await validateTemplateEngineClaims({
+  speech: 'Service Alpha costs 3200 units.', evidence, citedEvidence: [],
+  decision: 'RESPONSE', searchInterpretation: { requestedFact: 'price' },
+});
+assert.equal(noCitations.supported, false);
+assert.equal(noCitations.reason, 'verified_citations_required');
+
+// Provider-contract regressions: semantic decisions must reach the delivery gate,
+// and uncited records must remain distinct from the supporting reference set.
+for (const [fact, speech, supported, addressed] of [
+  ['price', 'Price information is unavailable.', false, false],
+  ['tests', 'Service Alpha offers useful features.', true, false],
+  ['details', 'Service Alpha guarantees the desired result.', false, false],
+  ['differences', 'Both services have features.', true, false],
+]) {
+  const semantic = await validateTemplateEngineClaims({
+    speech, evidence: comparisonEvidence, citedEvidence: evidence,
+    decision: 'RESPONSE', searchInterpretation: { requestedFact: fact },
+  }, {
+    invokeStructuredLlm: async ({ messages }) => {
+      const payload = JSON.parse(messages[0].content.split('<validation_input>\n')[1]
+        .split('\n</validation_input>')[0]);
+      assert.equal(payload.reference.evidence.length, 2);
+      assert.deepEqual(payload.reference.citedEvidence.map((entry) => entry.evidenceId), ['e-1']);
+      assert.match(messages[0].content, /only citedEvidence is the permitted grounding set/u);
+      return { outputParsed: { supported, requestedFactAddressed: addressed,
+        successClaimed: false, reason: 'rejected_by_semantic_validation' } };
+    },
+  });
+  const checked = validateTemplateEngineOutput({
+    phase: 'post_search', factualClaimsPresent: true, claimValidationRequired: true,
+    decision: response(speech, ['e-1']), selectedEvidence: comparisonEvidence,
+    searchInterpretation: { requestedFact: fact }, semanticClaimValidation: semantic,
+  });
+  assert.equal(checked.valid, false, `Must reject incomplete/unsupported ${fact} speech`);
+}
 assert.equal(deterministicPrice.supported, true);
 assert.equal(deterministicPrice.requestedFactAddressed, true);
 const deterministicWrongFact = validateTemplateEngineSearchClaims({
@@ -400,7 +436,10 @@ const invalidGroundingRecovery = await respondToTemplateEngineSearch({
   informationUnavailableResponse: 'That information is not available.',
 }, {
   tenantBoundaryVerified: true,
-  validateGroundedClaims: async () => ({ supported: true }),
+  validateGroundedClaims: async ({ response: speech }) => ({
+    supported: speech === evidence[0].content,
+    requestedFactAddressed: speech === evidence[0].content,
+  }),
   invokeStructuredLlm: async () => {
     invalidGroundingCalls += 1;
     return { outputParsed: response('Service Alpha costs 9999 units.', ['E1']) };

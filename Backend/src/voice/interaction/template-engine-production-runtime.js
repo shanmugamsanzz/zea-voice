@@ -101,6 +101,17 @@ export function publishedResolutionAmbiguity(
   resolution, evidence = [], searchClassification = null,
 ) {
   const searchKind = cleanText(searchClassification?.searchKind, 80).toLocaleLowerCase();
+  const requested = new Set((searchClassification?.comparisonRecordIds
+    ?? searchClassification?.requestedEntityRecordIds ?? [])
+    .map((id) => cleanText(id, 160).toLocaleLowerCase()).filter(Boolean));
+  const verified = new Set(evidence.filter((record) => record.verified === true)
+    .map((record) => cleanText(record.recordId, 160).toLocaleLowerCase()));
+  if (searchKind === 'comparison' && requested.size >= 2
+    && [...requested].every((id) => verified.has(id))) {
+    return Object.freeze({
+      required: false, kind: 'resolved_comparison_set', candidates: Object.freeze([]),
+    });
+  }
   if (['overview', 'general_knowledge'].includes(searchKind)) {
     return Object.freeze({
       required: false, kind: 'request_does_not_require_entity_resolution',
@@ -626,10 +637,10 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       retrieval.entityResolution, retrieval.evidence, retrieval.searchClassification,
     ),
     validateGroundedClaims: ({
-      response, decision, selectedEvidence, searchInterpretation, latestUtterance,
+      response, decision, selectedEvidence, citedEvidence, searchInterpretation, latestUtterance,
     }) => (
       dependencies.validateGroundedClaims({
-        response, decision, selectedEvidence, searchInterpretation, latestUtterance,
+        response, decision, selectedEvidence, citedEvidence, searchInterpretation, latestUtterance,
       })
     ),
     onDecisionRepair: dependencies.onPostSearchDecisionRepair,

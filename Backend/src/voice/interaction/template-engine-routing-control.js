@@ -62,6 +62,8 @@ export function buildTemplateEngineRoutingPrompt({
     '- Do not infer tenant behavior from runtime source code or fixed industry vocabulary.',
     '- SEARCH must describe the fact actually requested in the latest utterance or its genuine contextual reference. Never manufacture requestedFact or contextualReference merely to justify SEARCH.',
     '- Resolve natural follow-up references from recentCompleteTurns and the latest utterance.',
+    '- Multiple explicitly requested comparison entities are a requested set, not alternative interpretations. Search all of them; do not ask the caller to confirm that they want the comparison.',
+    '- Interpret a reply to pendingClarification using the preceding question and recentCompleteTurns. When it confirms the proposed comparison, resume that factual SEARCH with its known entities and requested fact rather than repeating the same question. A confirmation of a comparison does not authorize a tool.',
     '- Treat lastReferencedRecordIds and comparisonRecordIds only as optional retrieval preferences, never as independent intent or factual evidence.',
     '- For SEARCH, create a self-contained query from the latest utterance and recentCompleteTurns; include requestedFact, contextualReference and only known preferredRecordIds.',
     '- Use preferredRecordIds only when the latest utterance genuinely refers back to prior context. When the caller explicitly names a new entity, do not carry prior record IDs into that SEARCH.',

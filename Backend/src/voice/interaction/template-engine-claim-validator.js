@@ -140,14 +140,20 @@ export function validateTemplateEngineSearchClaims({
 
 export async function validateTemplateEngineClaims({
   speech, evidence = null, verifiedToolResult = null, callerValues = null,
-  decision = null, searchInterpretation = null, latestUtterance = null,
+  decision = null, searchInterpretation = null, latestUtterance = null, citedEvidence = null,
 } = {}, dependencies = {}) {
+  if (decision === 'RESPONSE' && searchInterpretation
+    && (!Array.isArray(citedEvidence ?? evidence) || !(citedEvidence ?? evidence).length)) {
+    return Object.freeze({ supported: false, successClaimed: false,
+      requestedFactAddressed: false, reason: 'verified_citations_required' });
+  }
   if (typeof dependencies.invokeStructuredLlm !== 'function') {
     throw new TypeError('Claim validation requires the configured structured LLM');
   }
   const reference = verifiedToolResult
     ? { kind: 'verified_tool_result', verifiedToolResult, callerValues }
-    : { kind: 'published_evidence', evidence, searchInterpretation, latestUtterance };
+    : { kind: 'published_evidence', evidence,
+      citedEvidence: citedEvidence ?? evidence, searchInterpretation, latestUtterance };
   const completion = await dependencies.invokeStructuredLlm(Object.freeze({
     messages: Object.freeze([Object.freeze({
       role: 'system',
@@ -155,11 +161,14 @@ export async function validateTemplateEngineClaims({
         'Validate caller-facing speech against only the supplied reference JSON.',
         'Non-factual conversational speech such as a greeting, acknowledgement, courtesy response, pause handling or presence check may be supported without published evidence.',
         'Any tenant or business fact, including identities, available options, names, descriptions, policies, numbers, attributes or relationships, is unsupported when no published evidence is supplied.',
-        'Treat the complete published evidence array as one permitted grounding set.',
+        'For RESPONSE, only citedEvidence is the permitted grounding set. Other evidence may identify omissions or contradict an unavailable claim, but cannot support uncited speech.',
         'A comparison may combine separately supported attributes from multiple cited records.',
         'supported is true only when every entity, number, attribute, polarity and relationship is directly entailed by the complete reference set.',
         'For RESPONSE, an attribute absent from every supplied published record is unsupported. Never infer a negative value from an absent attribute.',
         'For a factual RESPONSE with searchInterpretation.requestedFact, requestedFactAddressed is true only when the speech directly answers that requested fact. A true statement about a different supplied attribute is supported but does not address the requested fact.',
+        'Merely repeating the entity or requested attribute, giving a generic benefit, offering to check later, or asking another question does not address the requested fact.',
+        'An explanation must give the relevant published specifics; a requested list must give its supported entries; a value request must give that value; a comparison must give concrete supported common or different attributes for every requested entity.',
+        'An information-unavailable statement inside RESPONSE is also a claim: reject it when evidence supplies the requested information. Changing the route label must not bypass this rule.',
         'For CLARIFY, requestedFactAddressed is true only when the question resolves a genuine ambiguity that prevents answering the requested fact.',
         'For NO_MATCH, requestedFactAddressed is true only when the speech neutrally says that the supplied evidence does not provide the requested fact.',
         'If the supplied evidence does contain and answer the requested fact, NO_MATCH is unsupported and requestedFactAddressed must be false.',

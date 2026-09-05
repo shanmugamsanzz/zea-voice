@@ -35,7 +35,7 @@ function textList(values, maximum = 80) {
 }
 
 function recordMetadata(record) {
-  const value = record?.entity_metadata ?? record?.metadata;
+  const value = record?.entity_metadata ?? record?.entityMetadata ?? record?.metadata;
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
@@ -55,7 +55,7 @@ function publishedFormScore(query, forms) {
     const formTokens = searchableTokens(formText);
     if (!formText || !formTokens.length) continue;
     if (queryText === formText) best = Math.max(best, 1);
-    else if (queryText.includes(formText)) best = Math.max(best, 0.98);
+    else if (` ${queryText} `.includes(` ${formText} `)) best = Math.max(best, 0.98);
     else {
       const matched = formTokens.filter((token) => queryTokens.has(token)).length;
       const coverage = matched / formTokens.length;
@@ -142,16 +142,20 @@ export function exactPublishedCandidates(artifacts, input, search, limit = 20, g
         .toLocaleLowerCase();
       if (!['both', cleanText(input.usageDirection, 20).toLocaleLowerCase()].includes(usage)) continue;
       const itemForms = textList([
-        record.entity_name, record.itemKey, record.item_key,
+        record.entity_name, record.canonicalName, metadata.name,
+        record.itemKey, record.item_key,
         metadata.itemKey, metadata.item_key,
         ...(record.entity_aliases ?? []),
+        ...textList(metadata.aliases),
+        ...textList(metadata.sttForms),
+        ...textList(metadata.phoneticForms),
         ...(metadata.crossDocumentAliases ?? []),
         ...(record.publicationAliases ?? []),
         ...(record.publicationSttForms ?? []),
         ...(record.publicationPhoneticForms ?? []),
       ]);
       const categoryForms = textList([
-        record.entity_category, record.categoryKey, record.category_key,
+        record.entity_category, metadata.category, record.categoryKey, record.category_key,
         metadata.categoryKey, metadata.category_key,
         ...(record.entity_category_aliases ?? []),
         ...(metadata.categoryAliases ?? []),
@@ -166,7 +170,8 @@ export function exactPublishedCandidates(artifacts, input, search, limit = 20, g
         ...(record.publicationSttForms ?? []),
         ...(record.publicationPhoneticForms ?? []),
       ]);
-      const directForms = recordType === 'CATALOG_ITEM' ? itemForms : routeForms;
+      const directForms = recordType === 'CATALOG_ITEM' ? itemForms
+        : recordType === 'CATALOG_CATEGORY' ? [...itemForms, ...categoryForms] : routeForms;
       const directScore = publishedFormScore(search.query, directForms);
       const recordId = normalized(record.record_id ?? record.recordId ?? record.id);
       const exactGuidance = guidanceRecordId && recordId === guidanceRecordId;
@@ -181,7 +186,8 @@ export function exactPublishedCandidates(artifacts, input, search, limit = 20, g
           score: exactGuidance ? 1 : itemReference ? 0.99 : directScore,
           searchForms: directForms,
           matchMethod: exactGuidance ? 'published_guidance_exact'
-            : itemReference ? 'published_reference_exact' : 'published_exact',
+            : itemReference ? 'published_reference_exact'
+              : directScore >= 0.98 ? 'published_exact' : 'published_partial',
         });
         if (candidate) candidates.push(candidate);
       }
@@ -232,10 +238,13 @@ export function exactPublishedCandidates(artifacts, input, search, limit = 20, g
 
 function addExactStructuredCandidates(result, exact, limit = 20) {
   const merged = [...exact, ...(result.channels?.structured ?? [])];
-  const structured = Object.freeze([...new Map(merged.map((candidate) => [
-    `${cleanText(candidate.recordType, 80).toUpperCase()}:${normalized(candidate.recordId)}`,
-    candidate,
-  ])).values()].slice(0, limit).map((candidate, index) => Object.freeze({
+  // Preserve publication-derived identity and match metadata over provider duplicates.
+  const unique = new Map();
+  for (const candidate of merged) {
+    const key = candidateIdentityKey(candidate, candidate.tenantId);
+    if (key && !unique.has(key)) unique.set(key, candidate);
+  }
+  const structured = Object.freeze([...unique.values()].slice(0, limit).map((candidate, index) => Object.freeze({
     ...candidate, channel: 'structured', rank: index + 1,
   })));
   return Object.freeze({
@@ -683,12 +692,43 @@ export async function retrieveTemplateEngineEvidence({
           === cleanText(input.agentId, 160).toLocaleLowerCase()
       )))
   ));
-  const entityResolution = scopedBundles.length
+  const exactCandidates = exactPublishedCandidates(
+    { ...artifacts, bundles: scopedBundles }, input, search, 20, conversationGuidance,
+  );
+  let entityResolution = scopedBundles.length
     ? (dependencies.resolveEntityRoute ?? resolvePublishedEntityRoute)(
       input, scopedBundles, {
         confidenceConfiguration: dependencies.confidenceConfiguration,
       },
     ) : null;
+  const exactItems = exactCandidates.filter((candidate) => (
+    candidate.recordType === 'CATALOG_ITEM' && candidate.matchMethod === 'published_exact'
+  ));
+  const exactCatalog = exactItems.length ? exactItems : exactCandidates.filter((candidate) => (
+    candidate.recordType === 'CATALOG_CATEGORY'
+    && ['published_exact', 'published_category_exact'].includes(candidate.matchMethod)
+    && candidate.score >= 0.98
+  ));
+  // A unique explicit published name outranks contextual overview/FAQ matches.
+  // Multiple names remain with the resolver and comparison-selection contract.
+  if (exactCatalog.length === 1) {
+    const candidate = exactCatalog[0];
+    entityResolution = Object.freeze({
+      ...entityResolution,
+      candidate: Object.freeze({ ...candidate,
+        entityType: candidate.recordType === 'CATALOG_ITEM' ? 'ITEM' : 'CATEGORY',
+      }),
+      candidateNamespace: 'CATALOG',
+      ambiguity: Object.freeze({ detected: false, candidates: Object.freeze([]) }),
+    });
+  }
+  const resolvedIdentities = new Set(resolutionReservations(entityResolution)
+    .map((candidate) => candidateIdentityKey(candidate, input.tenantId)));
+  const resolvedRecords = scopedBundles.flatMap((bundle) => (bundle.records ?? [])
+    .map((record) => publishedRecordCandidate(record, bundle, input))
+    .filter((candidate) => candidate && resolvedIdentities.has(
+      candidateIdentityKey(candidate, input.tenantId),
+    )));
   const route = classification(
     input, search, state, entityResolution, conversationGuidance,
   );
@@ -704,9 +744,7 @@ export async function retrieveTemplateEngineEvidence({
         limitPerChannel: 20,
       }, dependencies.retrieval);
       return addExactStructuredCandidates(
-        result, exactPublishedCandidates(
-          { ...artifacts, bundles: scopedBundles }, input, search, 20, conversationGuidance,
-        ), 20,
+        result, [...resolvedRecords, ...exactCandidates], 20,
       );
     })();
     return channelPromise;

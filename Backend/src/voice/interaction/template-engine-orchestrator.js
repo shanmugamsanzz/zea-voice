@@ -471,23 +471,20 @@ function evidenceCandidateNames(source) {
 }
 
 function verifiedClarificationAmbiguity(decision, evidence, searchInterpretation, supplied) {
+  const preferred = new Set((searchInterpretation?.preferredRecordIds ?? [])
+    .map(recordId).filter(Boolean));
+  const resolvedPreferred = new Set(evidence.filter((source) => source.verified === true)
+    .map((source) => recordId(source?.recordId)).filter((id) => preferred.has(id)));
+  if (preferred.size > 0 && resolvedPreferred.size === preferred.size) {
+    return Object.freeze({
+      required: false, kind: 'resolved_context', candidates: Object.freeze([]),
+    });
+  }
   if (decision?.decision !== 'CLARIFY') return supplied ?? null;
 
   if (supplied?.required === true && supplied?.kind === 'unresolved_published_entity') {
     return Object.freeze({
       required: true, kind: supplied.kind, candidates: Object.freeze([]),
-    });
-  }
-
-  const preferred = new Set((searchInterpretation?.preferredRecordIds ?? [])
-    .map(recordId).filter(Boolean));
-  const resolvedPreferred = new Set(evidence.map((source) => recordId(source?.recordId))
-    .filter((id) => preferred.has(id)));
-  // A singular remembered record resolves "this/it". Multiple preferences
-  // represent an intentional comparison and must be answered together.
-  if (resolvedPreferred.size === 1 || preferred.size > 1) {
-    return Object.freeze({
-      required: false, kind: 'resolved_context', candidates: Object.freeze([]),
     });
   }
 
@@ -576,6 +573,12 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
   const requestedFactAvailable = evidenceProvidesRequestedFact(
     evidence, search.value.search.requestedFact,
   );
+  dependencies = { ...dependencies, ambiguity: verifiedClarificationAmbiguity(
+    { decision: 'RESPONSE' }, evidence,
+    { ...search.value.search, preferredRecordIds: requiredEntityRecordIds.length
+      ? requiredEntityRecordIds : search.value.search.preferredRecordIds },
+    dependencies.ambiguity,
+  ) };
   const citations = aliasPostSearchEvidence(evidence);
   const allowedEvidenceIds = citations.aliases;
   const responseSchema = templateEnginePostSearchJsonSchemaForEvidenceAliases(
@@ -697,7 +700,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       if (validated.valid) {
         finalDiagnostics = templateEnginePostSearchDecisionDiagnostics(validated.value);
       }
-    } else if (!requestedFactAvailable && unavailableResponse) {
+    } else if (evidence.length === 0 && unavailableResponse) {
       validated = validateTemplateEnginePostSearchDecision({
         decision: 'NO_MATCH', response: unavailableResponse,
         clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
@@ -752,14 +755,6 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
         reason: 'configured_validation_recovery',
       });
     }
-    if (extractiveRecoveryApplied && decision.decision === 'RESPONSE') {
-      return Object.freeze({
-        supported: true,
-        successClaimed: false,
-        requestedFactAddressed: true,
-        reason: 'deterministic_extract_from_requested_fact_evidence',
-      });
-    }
     if (typeof dependencies.validateGroundedClaims !== 'function') {
       return dependencies.semanticClaimValidation ?? null;
     }
@@ -773,9 +768,8 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       response: speech,
       decision: decision.decision,
       evidenceIds: decision.evidenceIds ?? [],
-      // Claims and requested-fact coverage are evaluated against the complete
-      // entity-bound hydration set. Citation enforcement separately verifies
-      // that the response cites the exact required records.
+      // Complete evidence detects false absence claims; only cited evidence
+      // may support the facts spoken in a RESPONSE.
       selectedEvidence: evidence,
       citedEvidence: Object.freeze(citedEvidence),
       latestUtterance: base.latestUtterance,
@@ -905,7 +899,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
         ));
         finalDiagnostics = templateEnginePostSearchDecisionDiagnostics(recovered.value);
       }
-    } else if (!requestedFactAvailable && unavailableResponse) {
+    } else if (evidence.length === 0 && unavailableResponse) {
       const noMatch = validateTemplateEnginePostSearchDecision({
         decision: 'NO_MATCH', response: unavailableResponse,
         clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,

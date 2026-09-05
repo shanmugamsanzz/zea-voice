@@ -34,6 +34,13 @@ const genuineAmbiguity = publishedResolutionAmbiguity(fuzzyAmbiguity, [
 ], { searchKind: 'named_entity' });
 assert.equal(genuineAmbiguity.required, true);
 assert.deepEqual(genuineAmbiguity.candidates, ['Option A', 'Option B']);
+assert.equal(publishedResolutionAmbiguity(fuzzyAmbiguity, ambiguousCandidates.map((entry) => ({
+  ...entry, verified: true,
+})), { searchKind: 'comparison', requestedEntityRecordIds: ['record-a', 'record-b'] }).required,
+false, 'Fully hydrated comparison operands are not ambiguous alternatives');
+assert.equal(publishedResolutionAmbiguity(fuzzyAmbiguity, [], {
+  searchKind: 'comparison', requestedEntityRecordIds: ['record-a', 'record-b'],
+}).required, true, 'Requested IDs alone must not count as verified resolution');
 assert.equal(publishedResolutionAmbiguity(fuzzyAmbiguity, [], {
   searchKind: 'overview',
 }).required, false, 'A general overview must not clarify between its listed entities');
@@ -253,6 +260,62 @@ assert.equal(exactStructuredRecords.length, 1,
 assert.equal(exactStructuredRecords[0].recordId, 'record-exact');
 assert.equal(exactStructuredRecords[0].matchMethod, 'published_exact');
 assert.equal(exactRetrieval.evidence[0].recordId, 'record-exact');
+
+// Production-shaped metadata must bind hydration even when semantic resolution
+// and all retrieval providers prefer conversational evidence.
+const metadataRecords = [
+  { record_id: 'metadata-alpha', record_type: 'catalog_item', usage_direction: 'both',
+    entity_metadata: { name: 'Configured Alpha Service', aliases: ['Alpha Spoken'],
+      sttForms: ['Alfa Spoken'], phoneticForms: ['Alfa Form'],
+      itemKey: 'metadata-alpha', category: 'Configured Collection',
+      categoryKey: 'metadata-collection', price: 17, details: 'Approved alpha detail' } },
+  { record_id: 'metadata-beta', record_type: 'catalog_item', usage_direction: 'both',
+    entity_metadata: { name: 'Configured Beta Service', itemKey: 'metadata-beta',
+      category: 'Configured Collection', categoryKey: 'metadata-collection', price: 29 } },
+];
+for (const [query, expectedIds] of [
+  ['Configured Alpha Service price', ['metadata-alpha']],
+  ['Alpha Spoken details', ['metadata-alpha']],
+  ['Alfa Spoken details', ['metadata-alpha']],
+  ['Alfa Form price', ['metadata-alpha']],
+  ['Configured Collection details', ['metadata-alpha', 'metadata-beta']],
+]) {
+  const result = await retrieveTemplateEngineEvidence({
+    auth: { tenantId }, scope, callId: 'exact-catalog-regression',
+    usageDirection: 'inbound', language: 'en',
+    searchDecision: { ...searchDecision, search: {
+      query, requestedFact: query.endsWith('price') ? 'price' : 'details',
+      contextualReference: null, preferredRecordIds: [],
+    } }, state: {},
+  }, {
+    loadArtifacts: async () => ({ ...exactArtifacts,
+      bundles: [{ ...exactArtifacts.bundles[0], records: metadataRecords }],
+    }),
+    resolveEntityRoute: () => ({ candidate: { ...candidate, recordId: 'overview',
+      recordType: 'CONVERSATION_NODE' }, candidateNamespace: 'CONVERSATION',
+      ambiguity: { detected: false } }),
+    searchCandidates: async () => ({ channels: {
+      structured: [{ ...candidate, recordId: 'metadata-alpha', matchMethod: 'semantic' }],
+      bm25: [{ ...candidate, recordId: 'unrelated-faq', recordType: 'FAQ', score: 1 }],
+      qdrant: [{ ...candidate, recordId: 'overview', recordType: 'CONVERSATION_NODE', score: 1 }],
+    } }),
+    hydrateEvidence: async ({ retrieval: selected }) => {
+      assert.deepEqual(selected.candidates.map((entry) => entry.recordId).sort(), expectedIds);
+      assert.ok(selected.candidates.every((entry) => entry.recordType === 'CATALOG_ITEM'));
+      assert.ok(selected.channels.structured.every((entry) => entry.matchMethod === 'published_exact'),
+        'Provider duplicates must not overwrite publication-derived match metadata');
+      return { evidence: selected.candidates.map((entry) => ({
+        ...entry, id: entry.recordId, hydrationValidated: true, publicationValidated: true,
+        callerFacing: true, content: 'Approved published detail',
+        authoritativeData: metadataRecords.find((record) => record.record_id === entry.recordId).entity_metadata,
+        provenance: { knowledgeBaseId, publicationRevision: 4 },
+      })) };
+    },
+  });
+  assert.deepEqual(result.evidence.map((entry) => entry.recordId).sort(), expectedIds);
+  assert.ok(result.evidence.every((entry) => entry.requestedFact
+    === (query.endsWith('price') ? 'price' : 'details')));
+}
 
 let sttSelectedIds = [];
 const sttVariantRetrieval = await retrieveTemplateEngineEvidence({

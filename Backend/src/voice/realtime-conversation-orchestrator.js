@@ -64,8 +64,8 @@ import {
 } from './interaction/template-engine-production-retrieval.js';
 import {
   validateTemplateEngineClaims,
-  validateTemplateEngineSearchClaims,
 } from './interaction/template-engine-claim-validator.js';
+import { classifyTemplateEngineTurnError } from './interaction/template-engine-error-classification.js';
 import { evaluateFirstAudioSlo, percentile } from './interaction/voice-latency-slo.js';
 import { configuredCallDurationMs } from './interaction/call-duration-policy.js';
 import { sttEventPolicy } from './interaction/stt-event-policy.js';
@@ -2525,24 +2525,16 @@ export class RealtimeConversationOrchestrator {
           return verified;
         },
         validateGroundedClaims: ({
-          response, decision, selectedEvidence, searchInterpretation, latestUtterance,
+          response, decision, selectedEvidence, citedEvidence, searchInterpretation, latestUtterance,
         }) => {
-          const requiresSemanticDirectCheck = (decision === 'RESPONSE' || decision === 'CLARIFY')
-            && (!Array.isArray(selectedEvidence) || selectedEvidence.length === 0)
-            && !searchInterpretation;
-          return (decision === 'NO_MATCH' || requiresSemanticDirectCheck) ? validateTemplateEngineClaims({
+          return validateTemplateEngineClaims({
             speech: response,
             evidence: selectedEvidence,
+            citedEvidence,
             decision,
             searchInterpretation,
             latestUtterance,
-          }, { invokeStructuredLlm }) : validateTemplateEngineSearchClaims({
-            speech: response,
-            evidence: selectedEvidence,
-            decision,
-            searchInterpretation,
-            latestUtterance,
-          });
+          }, { invokeStructuredLlm });
         },
         validateToolResultSpeechClaims: ({ speech, verifiedResult }) => (
           validateTemplateEngineClaims({
@@ -2588,8 +2580,21 @@ export class RealtimeConversationOrchestrator {
         },
       });
     } catch (error) {
-      if (error?.code === 'TEMPLATE_ENGINE_LLM_CANCELLED') {
+      const errorKind = classifyTemplateEngineTurnError(error, {
+        stale: this.#isStaleGeneration(epoch) || this.finalized,
+      });
+      if (errorKind === 'cancelled') {
         sentencePipeline.cancel();
+        return;
+      }
+      if (errorKind !== 'operational') {
+        sentencePipeline.cancel();
+        this.log.warn({ err: error, stage: 'template_engine.response_rejected',
+          callId: this.call.id, turnEpoch: epoch, errorKind,
+        }, 'Unvalidated speech suppressed; no operational failure was established');
+        if ([callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) {
+          await this.controller.interrupt('template_engine_response_rejected');
+        }
         return;
       }
       this.#recordProviderFailure('llm', error, 'template_engine.turn');
@@ -2620,7 +2625,7 @@ export class RealtimeConversationOrchestrator {
         queued: acknowledgement.queued,
         elapsedMs: Date.now() - turnStartedAt,
       }, 'Whole-turn latency acknowledgement timer cancelled when final response became ready');
-      this.activeLlm = null;
+      if (epoch === this.epoch) this.activeLlm = null;
     }
     if (epoch !== this.epoch || this.finalized) {
       sentencePipeline.cancel();
