@@ -10,6 +10,9 @@ const verificationScripts = Object.freeze([
   'verify-need-based-use-case-retrieval.js',
   'verify-template-engine-regression-observability.js',
   'verify-template-engine-workflow-runtime.js',
+  'verify-template-engine-follow-up.js',
+  'verify-template-engine-turn-latency.js',
+  'verify-audio-continuity-monitor.js',
   'verify-template-engine-multilingual-e2e.js',
 ]);
 
@@ -58,5 +61,8 @@ console.log(JSON.stringify({
     workflow_activated: true,
     ui_field_order_preserved: true,
     verified_tool_result_only: true,
+    published_follow_up_preserved: true,
+    missing_applicable_follow_up: 0,
+    acknowledgement_answer_gap_is_not_underrun: true,
   },
 }, null, 2));

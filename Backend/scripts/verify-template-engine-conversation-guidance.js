@@ -51,6 +51,11 @@ const overviewGuidance = publishedRecord({
   nextQuestion: 'Which option would you like to explore?',
   intentClass: 'OVERVIEW', nodeKey: 'available_options_overview',
 });
+const explicitlyDirectOverviewGuidance = Object.freeze({
+  ...overviewGuidance,
+  recordId: 'guidance-overview-direct',
+  applicableRoutes: Object.freeze(['RESPONSE']),
+});
 const priceGuidance = publishedRecord({
   recordId: 'guidance-price', purpose: 'Answer the requested value only.',
   situation: 'The caller asks for the price of one selected offering.',
@@ -259,8 +264,16 @@ const multilingualSelection = selectApplicableConversationGuidance({
   conversationStage: 'conversation',
   language: 'ta-IN',
 });
-assert.equal(multilingualSelection.recordId, 'guidance-published-shape');
-assert.equal(multilingualSelection.selectionReasons.includes('semantic_example_compatible'), true);
+assert.equal(multilingualSelection, null,
+  'Unscoped overview guidance must not bias an evidence-free RESPONSE');
+
+const explicitlyConfiguredDirectSelection = selectApplicableConversationGuidance({
+  publishedConversationGuidance: [detailGuidance, explicitlyDirectOverviewGuidance],
+  scope, latestUtterance: 'What options are available?', finalDecision: 'RESPONSE',
+  conversationStage: 'conversation', language: 'en',
+});
+assert.equal(explicitlyConfiguredDirectSelection.recordId, 'guidance-overview-direct',
+  'A tenant may explicitly configure overview guidance for RESPONSE');
 
 const contentMatchedGuidance = normalizePublishedConversationGuidance({
   record_id: 'guidance-content-match', record_type: 'conversation_node', language: 'en',

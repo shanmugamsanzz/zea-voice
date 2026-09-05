@@ -2014,6 +2014,12 @@ export class RealtimeConversationOrchestrator {
       const generationId = acknowledgement
         ? `turn-${epoch}-acknowledgement-${acknowledgementNumber}`
         : `turn-${epoch}-sentence-${currentSentenceNumber}`;
+      // Progress speech is a separate audible event from the eventual answer.
+      // Keeping it in a distinct playback group prevents the intentional
+      // processing interval from being reported as an audio underrun.
+      const generationPlaybackGroupId = acknowledgement
+        ? `${playbackGroupId}:acknowledgement:${acknowledgementNumber}`
+        : playbackGroupId;
       const kind = acknowledgement
         ? 'acknowledgement'
         : currentSentenceNumber === 1 ? 'response' : 'response_sentence';
@@ -2036,7 +2042,7 @@ export class RealtimeConversationOrchestrator {
         const reusableAudio = acknowledgement ? latencyAcknowledgementCacheEntry : fieldCache;
         if (Buffer.isBuffer(reusableAudio?.audio) && reusableAudio.audio.length) {
           if (!await this.#reserveTtsCharacters(sentence, generationId)) return false;
-          this.audioEngine.beginOutputGeneration(generationId, playbackGroupId);
+          this.audioEngine.beginOutputGeneration(generationId, generationPlaybackGroupId);
           firstAudioAt ??= Date.now();
           if (!acknowledgement && !audibleSentences.includes(sentence)) {
             firstFinalAudioAt ??= Date.now();
@@ -2095,14 +2101,14 @@ export class RealtimeConversationOrchestrator {
             }, 'Look-ahead TTS failed; retrying this sentence through the ordered primary adapter');
             played = await this.#synthesize(sentence, generationId, {
               kind, startedAt: turnStartedAt, deferDrain: true,
-              playbackGroupId, deferBoundaryFlush: true,
+              playbackGroupId: generationPlaybackGroupId, deferBoundaryFlush: true,
               charactersReserved: true, epoch,
               firstAudioDeadlineAt: currentSentenceNumber === 1
                 && Date.now() < firstAudioDeadlineAt ? firstAudioDeadlineAt : undefined,
             });
           } else {
             played = await this.#playPrefetchedTts(prepared.value, generationId, {
-              epoch, playbackGroupId, deferBoundaryFlush: true,
+              epoch, playbackGroupId: generationPlaybackGroupId, deferBoundaryFlush: true,
             });
           }
           if (played) {
@@ -2115,7 +2121,7 @@ export class RealtimeConversationOrchestrator {
           ? [] : null;
         const played = await this.#synthesize(sentence, generationId, {
           kind, startedAt: turnStartedAt, deferDrain: true,
-          playbackGroupId, deferBoundaryFlush: true, epoch,
+          playbackGroupId: generationPlaybackGroupId, deferBoundaryFlush: true, epoch,
           capture: capturedAudio,
           // The acknowledgement satisfies the turn's first-audio contract.
           // Once it is audible, final TTS uses its independent provider timeout.

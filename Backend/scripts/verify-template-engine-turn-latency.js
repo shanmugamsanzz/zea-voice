@@ -93,6 +93,8 @@ assert.match(orchestrator, /capture:\s*capturedAudio/u,
 assert.match(orchestrator, /setLatencyAcknowledgementAudioCache/u,
   'The latency acknowledgement must use reusable cached audio');
 assert.match(orchestrator, /latency_acknowledgement_audio_cache_hit/u);
+assert.match(orchestrator, /generationPlaybackGroupId/u,
+  'Latency acknowledgement and final response must use separate playback groups');
 
 assert.deepEqual(templateEngineFirstAudioTargets, {
   RESPONSE: 1_000, CLARIFY: 1_000, SEARCH: 3_000, TOOL: 2_000,

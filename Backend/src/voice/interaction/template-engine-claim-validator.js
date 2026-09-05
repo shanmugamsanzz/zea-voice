@@ -162,6 +162,7 @@ export async function validateTemplateEngineClaims({
         'For a factual RESPONSE with searchInterpretation.requestedFact, requestedFactAddressed is true only when the speech directly answers that requested fact. A true statement about a different supplied attribute is supported but does not address the requested fact.',
         'For CLARIFY, requestedFactAddressed is true only when the question resolves a genuine ambiguity that prevents answering the requested fact.',
         'For NO_MATCH, requestedFactAddressed is true only when the speech neutrally says that the supplied evidence does not provide the requested fact.',
+        'If the supplied evidence does contain and answer the requested fact, NO_MATCH is unsupported and requestedFactAddressed must be false.',
         'When no requestedFact is supplied, set requestedFactAddressed to true.',
         'For CLARIFY, validate every factual statement in the question and every named candidate against the supplied reference.',
         'For NO_MATCH, allow a neutral statement that the supplied published information does not contain the requested detail. Reject speech that turns missing evidence into a real-world negative claim, including claims that something does not exist, is unavailable, is unnecessary, is not included, or is zero.',

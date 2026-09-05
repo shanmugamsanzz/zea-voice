@@ -130,7 +130,7 @@ function normalizedRecordIds(values = []) {
 
 function sameRecordSet(evidence, requiredValues) {
   const required = normalizedRecordIds(requiredValues);
-  if (required.size < 2) return true;
+  if (!required.size) return true;
   const cited = normalizedRecordIds(evidence.map((source) => source?.recordId));
   if (required.size !== cited.size) return false;
   for (const value of required) if (!cited.has(value)) return false;

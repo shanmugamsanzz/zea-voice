@@ -381,7 +381,7 @@ result = validateTemplateEngineToolResultSpeech({
 assert.equal(result.reason, 'tool_result_unverified');
 
 let invalidGroundingCalls = 0;
-await assert.rejects(() => respondToTemplateEngineSearch({
+const invalidGroundingRecovery = await respondToTemplateEngineSearch({
   mainPrompt: 'Use evidence for facts.', latestUtterance: 'What is the price?',
   state: {
     recentCompleteTurns: [], lastReferencedRecordIds: ['r-1'], comparisonRecordIds: [],
@@ -405,8 +405,12 @@ await assert.rejects(() => respondToTemplateEngineSearch({
     invalidGroundingCalls += 1;
     return { outputParsed: response('Service Alpha costs 9999 units.', ['E1']) };
   },
-}), (error) => error.code === 'TEMPLATE_ENGINE_OUTPUT_INVALID');
+});
 assert.equal(invalidGroundingCalls, 2);
+assert.equal(invalidGroundingRecovery.decision.decision, 'RESPONSE');
+assert.doesNotMatch(invalidGroundingRecovery.decision.response, /9999/u,
+  'Repeated unsupported output must recover from verified evidence, not reach technical fallback');
+assert.deepEqual(invalidGroundingRecovery.decision.evidenceIds, ['e-1']);
 
 result = validateTemplateEngineOutput({
   phase: 'post_search', factualClaimsPresent: true, claimValidationRequired: true,

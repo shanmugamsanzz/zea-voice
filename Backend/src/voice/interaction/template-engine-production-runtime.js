@@ -431,15 +431,10 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   const workflowSummaries = authorizedWorkflowSummaries(
     publishedContext.publishedWorkflows, input.assignedTools,
   );
-  const initialConversationGuidance = selectApplicableConversationGuidance({
-    publishedConversationGuidance: publishedContext.publishedConversationGuidance ?? [],
-    scope: publishedContext.scope,
-    latestUtterance: input.latestUtterance,
-    evidence: [],
-    recentCompleteTurns: state.recentCompleteTurns,
-    conversationStage: conversationStage(state),
-    language: input.language,
-  });
+  // Guidance that is selected before the route is known can bias an ordinary
+  // conversational turn toward whichever published record happens to score
+  // highest. Route first, then select guidance against that concrete route.
+  const initialConversationGuidance = null;
   reportGuidanceSelection(
     dependencies.onConversationGuidanceSelected, 'initial_routing', initialConversationGuidance,
   );
@@ -520,7 +515,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       recentCompleteTurns: state.recentCompleteTurns,
       conversationStage: conversationStage(state, first),
       language: input.language,
-    }) ?? initialConversationGuidance;
+    });
     reportGuidanceSelection(
       dependencies.onConversationGuidanceSelected, 'direct_response', directConversationGuidance,
     );
@@ -622,6 +617,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     scope: retrieval.scope,
     informationUnavailableResponse: input.informationUnavailableResponse,
     conversationGuidance: postSearchConversationGuidance,
+    requestedEntityRecordIds: retrieval.requestedEntityRecordIds,
   }, {
     invokeStructuredLlm: dependencies.invokeStructuredLlm,
     tenantBoundaryVerified: true,

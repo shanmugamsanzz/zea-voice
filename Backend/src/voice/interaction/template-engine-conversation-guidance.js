@@ -307,6 +307,14 @@ export function selectApplicableConversationGuidance({
       && !configuredStages.some((stage) => (
         overlapScore(stage, conversationStage) > 0
       ))) return false;
+    // Published factual-flow guidance must not attach itself to an
+    // evidence-free conversational RESPONSE merely because its examples are
+    // semantically close. A tenant may opt in explicitly with applicableRoutes.
+    if (route === 'RESPONSE' && !applicableRoutes.includes('RESPONSE')) return false;
+    // Workflow turns use the published Workflow plus UI tool configuration.
+    // Conversation guidance may participate only when its route metadata
+    // explicitly authorizes that lifecycle route.
+    if (route === 'TOOL' && !applicableRoutes.includes(route)) return false;
     if (namedEntityRequest && overviewGuidance(candidate)) return false;
     const candidateKind = candidateGuidanceKind(candidate);
     if (requestedKind && candidateKind && requestedKind !== candidateKind) return false;

@@ -410,6 +410,7 @@ export function constrainHybridToRequestedEntities(
   if (!requestedByIdentity.size) return Object.freeze({
     hybrid: activeHybrid, constrained: false, comparison: false,
     requestedIdentities: Object.freeze([]),
+    requestedRecordIds: Object.freeze([]),
   });
   const requestedIdentities = new Set(requestedByIdentity.keys());
   const constrainedCandidates = candidates.filter((candidate) => requestedIdentities.has(
@@ -443,6 +444,9 @@ export function constrainHybridToRequestedEntities(
       'explicit_comparison', 'contextual_comparison',
     ].includes(String(entry.reason).toLocaleLowerCase())),
     requestedIdentities: Object.freeze([...requestedIdentities]),
+    requestedRecordIds: Object.freeze([...new Set(
+      reservations.map((entry) => cleanText(entry.recordId, 160)).filter(Boolean),
+    )]),
     hybrid: Object.freeze({
       ...hybrid,
       channels: constrainedChannels,
@@ -825,12 +829,14 @@ export async function retrieveTemplateEngineEvidence({
         rejectedCount: Number(authoritative?.rejectedRecordIds?.length ?? 0),
       });
   }
+  const requestedEntityRecordIds = entityConstraint.requestedRecordIds;
   return Object.freeze({
     version: TEMPLATE_ENGINE_PRODUCTION_RETRIEVAL_VERSION,
     search,
     scope: Object.freeze({ ...scope, publications: artifacts.publications }),
     retrieval,
     evidence,
+    requestedEntityRecordIds,
     diagnostics: Object.freeze({
       channelCounts: Object.freeze(Object.fromEntries(
         Object.entries(hybrid.channels).map(([channel, candidates]) => [
@@ -853,6 +859,8 @@ export async function retrieveTemplateEngineEvidence({
       searchKind: route.searchKind,
       resolvedEntityType: entityResolution?.candidate?.entityType ?? null,
       resolvedNamespace: entityResolution?.candidateNamespace ?? null,
+      requestedFact: search.requestedFact,
+      requestedEntityRecordIds,
     }),
     artifacts,
   });

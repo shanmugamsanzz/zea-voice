@@ -402,6 +402,12 @@ function recordId(value) {
   return cleanText(value, 160).toLocaleLowerCase();
 }
 
+function evidenceForRequestedEntities(evidence, requestedRecordIds = []) {
+  const required = new Set(cleanList(requestedRecordIds, 100).map(recordId).filter(Boolean));
+  if (!required.size) return evidence;
+  return Object.freeze(evidence.filter((source) => required.has(recordId(source?.recordId))));
+}
+
 function candidateIdentity(value) {
   return cleanText(value, 300).toLocaleLowerCase()
     .replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim();
@@ -562,7 +568,11 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
   if (!search.valid || search.value.decision !== 'SEARCH') {
     throw new TypeError('The post-search Orchestrator requires a valid SEARCH interpretation');
   }
-  const evidence = verifiedEvidenceForPostSearch(input.verifiedEvidence, input.scope);
+  const requiredEntityRecordIds = cleanList(input.requestedEntityRecordIds, 100);
+  const evidence = evidenceForRequestedEntities(
+    verifiedEvidenceForPostSearch(input.verifiedEvidence, input.scope),
+    requiredEntityRecordIds,
+  );
   const requestedFactAvailable = evidenceProvidesRequestedFact(
     evidence, search.value.search.requestedFact,
   );
@@ -579,6 +589,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     latestUtterance: base.latestUtterance,
     state: base.state,
     searchInterpretation: search.value.search,
+    requestedEntityRecordIds: requiredEntityRecordIds,
     verifiedEvidence: citations.evidence,
     conversationGuidance: base.conversationGuidance,
   });
@@ -741,11 +752,19 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
         reason: 'configured_validation_recovery',
       });
     }
+    if (extractiveRecoveryApplied && decision.decision === 'RESPONSE') {
+      return Object.freeze({
+        supported: true,
+        successClaimed: false,
+        requestedFactAddressed: true,
+        reason: 'deterministic_extract_from_requested_fact_evidence',
+      });
+    }
     if (typeof dependencies.validateGroundedClaims !== 'function') {
       return dependencies.semanticClaimValidation ?? null;
     }
     const citedIds = new Set(decision.evidenceIds ?? []);
-    const completeCitedEvidence = decision.decision === 'RESPONSE'
+    const citedEvidence = decision.decision === 'RESPONSE'
       ? evidence.filter((source) => citedIds.has(source.evidenceId))
       : evidence;
     const speech = decision.decision === 'CLARIFY'
@@ -754,7 +773,11 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       response: speech,
       decision: decision.decision,
       evidenceIds: decision.evidenceIds ?? [],
-      selectedEvidence: Object.freeze(completeCitedEvidence),
+      // Claims and requested-fact coverage are evaluated against the complete
+      // entity-bound hydration set. Citation enforcement separately verifies
+      // that the response cites the exact required records.
+      selectedEvidence: evidence,
+      citedEvidence: Object.freeze(citedEvidence),
       latestUtterance: base.latestUtterance,
       searchInterpretation: search.value.search,
     }));
@@ -772,8 +795,8 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       semanticClaimValidation,
       searchInterpretation: search.value.search,
       ambiguity: clarificationAmbiguity,
-      requiredEvidenceRecordIds: base.state.comparisonRecordIds.length > 1
-        ? base.state.comparisonRecordIds : [],
+      requiredEvidenceRecordIds: requiredEntityRecordIds.length
+        ? requiredEntityRecordIds : base.state.comparisonRecordIds,
       requestedFactAvailable: !configuredFallbackApplied && requestedFactAvailable,
     },
   ));
@@ -836,8 +859,8 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
           semanticClaimValidation,
           searchInterpretation: search.value.search,
           ambiguity: clarificationAmbiguity,
-          requiredEvidenceRecordIds: base.state.comparisonRecordIds.length > 1
-            ? base.state.comparisonRecordIds : [],
+          requiredEvidenceRecordIds: requiredEntityRecordIds.length
+            ? requiredEntityRecordIds : base.state.comparisonRecordIds,
           requestedFactAvailable,
           retryCount: 1,
         },
@@ -875,8 +898,8 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
             claimValidationRequired: true, selectedEvidence: evidence,
             semanticClaimValidation, searchInterpretation: search.value.search,
             ambiguity: dependencies.ambiguity,
-            requiredEvidenceRecordIds: base.state.comparisonRecordIds.length > 1
-              ? base.state.comparisonRecordIds : [],
+            requiredEvidenceRecordIds: requiredEntityRecordIds.length
+              ? requiredEntityRecordIds : base.state.comparisonRecordIds,
             requestedFactAvailable: true, retryCount: 1,
           },
         ));
@@ -899,8 +922,8 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
             selectedEvidence: evidence,
             semanticClaimValidation: await validateClaims(groundedDecision),
             searchInterpretation: search.value.search,
-            requiredEvidenceRecordIds: base.state.comparisonRecordIds.length > 1
-              ? base.state.comparisonRecordIds : [],
+            requiredEvidenceRecordIds: requiredEntityRecordIds.length
+              ? requiredEntityRecordIds : base.state.comparisonRecordIds,
             requestedFactAvailable: false,
             ambiguity: verifiedClarificationAmbiguity(
               groundedDecision, evidence, search.value.search, dependencies.ambiguity,

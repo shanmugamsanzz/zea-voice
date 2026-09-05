@@ -95,6 +95,61 @@ assert.doesNotMatch(providerRequest.messages[0].content, /evidence-1/u,
   'Real evidence IDs must not be exposed as provider-facing citation tokens');
 assert.deepEqual(providerRequest.responseFormat.schema.properties.evidenceIds.items.enum, ['E1']);
 
+let entityBoundRequest;
+const entityBound = await respondToTemplateEngineSearch({
+  mainPrompt, latestUtterance, state, searchDecision,
+  requestedEntityRecordIds: ['record-1'],
+  verifiedEvidence: [verifiedEvidence[0], {
+    ...verifiedEvidence[0], evidenceId: 'unrelated-evidence', recordId: 'unrelated-record',
+    canonicalName: 'Unrelated Service', content: 'An unrelated published value is 9999.',
+  }],
+  scope,
+}, {
+  tenantBoundaryVerified: true,
+  validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
+  invokeStructuredLlm: async (request) => {
+    entityBoundRequest = request;
+    return { outputParsed: {
+      decision: 'RESPONSE', response: 'The current price is 3200 currency units.',
+      clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
+    } };
+  },
+});
+assert.deepEqual(entityBound.input.requestedEntityRecordIds, ['record-1']);
+assert.equal(entityBound.input.verifiedEvidence.length, 1,
+  'Post-search generation must receive only evidence for the resolved entity');
+assert.doesNotMatch(entityBoundRequest.messages[0].content, /Unrelated Service|9999/u);
+assert.deepEqual(entityBoundRequest.responseFormat.schema.properties.evidenceIds.items.enum, ['E1']);
+
+let completeEvidenceValidation;
+const completeEvidenceResult = await respondToTemplateEngineSearch({
+  mainPrompt, latestUtterance, state: { ...state, lastReferencedRecordIds: [] },
+  searchDecision: {
+    ...searchDecision,
+    search: { ...searchDecision.search, preferredRecordIds: [] },
+  },
+  verifiedEvidence: [verifiedEvidence[0], {
+    ...verifiedEvidence[0], evidenceId: 'evidence-complete-2', recordId: 'record-complete-2',
+    canonicalName: 'Second Service', content: 'A second verified record.',
+  }],
+  scope,
+}, {
+  tenantBoundaryVerified: true,
+  validateGroundedClaims: async (input) => {
+    completeEvidenceValidation = input;
+    return { supported: true, requestedFactAddressed: true };
+  },
+  invokeStructuredLlm: async () => ({ outputParsed: {
+    decision: 'RESPONSE', response: 'The current price is 3200 currency units.',
+    clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
+  } }),
+});
+assert.equal(completeEvidenceResult.decision.decision, 'RESPONSE');
+assert.equal(completeEvidenceValidation.selectedEvidence.length, 2,
+  'Claim validation must receive the complete hydrated evidence set');
+assert.equal(completeEvidenceValidation.citedEvidence.length, 1,
+  'Citation validation must retain the exact cited evidence subset');
+
 let relevanceCalls = 0;
 const relevanceFacts = [];
 let relevanceDiagnostics;
@@ -443,7 +498,7 @@ assert.deepEqual(resolvedContext.decision.evidenceIds, ['evidence-1']);
 
 let fallbackCalls = 0;
 let fallbackDiagnostics;
-await assert.rejects(() => respondToTemplateEngineSearch({
+const deterministicFallback = await respondToTemplateEngineSearch({
   mainPrompt, latestUtterance, state, searchDecision, verifiedEvidence, scope,
   informationUnavailableResponse: 'That information is not available right now.',
 }, {
@@ -458,14 +513,16 @@ await assert.rejects(() => respondToTemplateEngineSearch({
     };
   },
   onDecisionRepair: (details) => { fallbackDiagnostics = details; },
-}), (error) => error.code === 'TEMPLATE_ENGINE_OUTPUT_INVALID'
-  && error.details?.reason === 'grounding_validation_missing');
+});
 assert.equal(fallbackCalls, 2);
 assert.equal(fallbackDiagnostics.recovered, true);
 assert.equal(fallbackDiagnostics.configuredFallbackApplied, false);
 assert.equal(fallbackDiagnostics.extractiveRecoveryApplied, true);
 assert.equal(fallbackDiagnostics.first.responsePresent, true);
 assert.equal(fallbackDiagnostics.first.evidenceIdCount, 0);
+assert.equal(deterministicFallback.decision.decision, 'RESPONSE',
+  'Answerable evidence must recover to RESPONSE without an operational failure');
+assert.deepEqual(deterministicFallback.decision.evidenceIds, ['evidence-1']);
 
 let changedDecisionCalls = 0;
 const changedDecisionRecovery = await respondToTemplateEngineSearch({
