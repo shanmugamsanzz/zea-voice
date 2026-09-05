@@ -91,9 +91,37 @@ function activeClarificationAmbiguity(state) {
   });
 }
 
-function publishedResolutionAmbiguity(resolution) {
-  const candidates = [...new Set((resolution?.ambiguity?.detected === true
-    ? resolution.ambiguity.candidates : resolution?.routingCandidates ?? [])
+function recordIdentity(value) {
+  const recordId = cleanText(value?.recordId ?? value?.record_id, 160).toLocaleLowerCase();
+  const recordType = cleanText(value?.recordType ?? value?.record_type, 80).toUpperCase();
+  return recordId && recordType ? `${recordType}:${recordId}` : null;
+}
+
+export function publishedResolutionAmbiguity(
+  resolution, evidence = [], searchClassification = null,
+) {
+  const searchKind = cleanText(searchClassification?.searchKind, 80).toLocaleLowerCase();
+  if (['overview', 'general_knowledge'].includes(searchKind)) {
+    return Object.freeze({
+      required: false, kind: 'request_does_not_require_entity_resolution',
+      candidates: Object.freeze([]),
+    });
+  }
+  const possible = resolution?.ambiguity?.detected === true
+    ? resolution.ambiguity.candidates : resolution?.routingCandidates ?? [];
+  const hydratedIdentities = new Set((Array.isArray(evidence) ? evidence : [])
+    .map(recordIdentity).filter(Boolean));
+  const hydratedCandidates = [...new Map(possible.map((candidate) => [
+    recordIdentity(candidate), candidate,
+  ]).filter(([identity]) => identity && hydratedIdentities.has(identity))).values()];
+  if (hydratedCandidates.length === 1) {
+    return Object.freeze({
+      required: false, kind: 'resolved_by_exact_hydrated_evidence',
+      candidates: Object.freeze([]),
+    });
+  }
+  const candidates = [...new Set((hydratedCandidates.length >= 2
+    ? hydratedCandidates : possible)
     .map((candidate) => cleanText(candidate?.label ?? candidate?.canonicalName, 300))
     .filter(Boolean))];
   if (resolution?.ambiguity?.detected === true && candidates.length >= 2) {
@@ -598,7 +626,9 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     invokeStructuredLlm: dependencies.invokeStructuredLlm,
     tenantBoundaryVerified: true,
     publishedEntities: retrieval.evidence,
-    ambiguity: publishedResolutionAmbiguity(retrieval.entityResolution),
+    ambiguity: publishedResolutionAmbiguity(
+      retrieval.entityResolution, retrieval.evidence, retrieval.searchClassification,
+    ),
     validateGroundedClaims: ({
       response, decision, selectedEvidence, searchInterpretation, latestUtterance,
     }) => (

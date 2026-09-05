@@ -529,6 +529,17 @@ function citationRepairRequired(reason, diagnostics, evidenceCount) {
     && ['unknown_evidence_id', 'mixed_decision_payload', 'invalid_payload'].includes(reason);
 }
 
+function postSearchSchemaForDecision(schema, decision) {
+  if (!decision) return schema;
+  return Object.freeze({
+    ...schema,
+    properties: Object.freeze({
+      ...schema.properties,
+      decision: Object.freeze({ type: 'string', enum: Object.freeze([decision]) }),
+    }),
+  });
+}
+
 export async function respondToTemplateEngineSearch(input = {}, dependencies = {}) {
   if (dependencies.tenantBoundaryVerified !== true) {
     throw new AppError(500, 'The post-search tenant boundary is not verified',
@@ -594,14 +605,14 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     Object.freeze({ role: 'system', content: systemPrompt }),
     Object.freeze({ role: 'user', content: base.latestUtterance }),
   ]);
-  const request = (messages) => Object.freeze({
+  const request = (messages, requiredDecision = null) => Object.freeze({
     messages: Object.freeze(messages),
     temperature: 0,
     responseFormat: Object.freeze({
       type: 'json_schema',
       name: 'template_engine_post_search_decision',
       strict: true,
-      schema: responseSchema,
+      schema: postSearchSchemaForDecision(responseSchema, requiredDecision),
     }),
   });
   let completion = await invokeStructuredLlm(request(baseMessages));
@@ -634,10 +645,12 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
         : null,
       'Do not add facts, citations, or candidates that were not supplied.',
     ].filter(Boolean).join(' ');
+    const requiredRepairDecision = requestedFactAvailable
+      ? 'RESPONSE' : dependencies.ambiguity?.required === true ? 'CLARIFY' : null;
     completion = await invokeStructuredLlm(request([
       ...baseMessages,
       Object.freeze({ role: 'user', content: repairInstruction }),
-    ]));
+    ], requiredRepairDecision));
     output = completionOutput(completion);
     validated = validateTemplateEnginePostSearchDecision(output, allowedEvidenceIds);
     if (repairingCitation && validated.valid && validated.value.decision !== 'RESPONSE') {
@@ -657,8 +670,12 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
   let finalDiagnostics = templateEnginePostSearchDecisionDiagnostics(output);
   if (!validated.valid) {
     const unavailableResponse = cleanText(input.informationUnavailableResponse, 4_000);
+    const initialAmbiguity = verifiedClarificationAmbiguity(
+      validated.valid ? validated.value : null,
+      evidence, search.value.search, dependencies.ambiguity,
+    );
     const extractiveRecovery = requestedFactAvailable
-      && dependencies.ambiguity?.required !== true
+      && initialAmbiguity?.required !== true
       ? extractiveGroundedRecovery(citations.evidence, search.value.search.requestedFact)
       : null;
     if (extractiveRecovery) {
@@ -760,6 +777,12 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       requestedFactAvailable: !configuredFallbackApplied && requestedFactAvailable,
     },
   ));
+  let answerableEvidence = clarificationAmbiguity?.required !== true && (
+    requestedFactAvailable || (
+      groundedDecision.decision === 'RESPONSE'
+      && semanticClaimValidation?.supported === true
+    )
+  );
   if (!outputValidation.valid && !firstInvalidReason) {
     groundingRepairAttempted = true;
     firstInvalidReason = outputValidation.reason;
@@ -771,19 +794,31 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       'Cite every evidence alias used for an entity, number, attribute or relationship.',
       'Generate any applicable nextQuestion in the same corrected response; do not add unsupported facts.',
       'Remove unsupported claims. If the supplied evidence cannot answer the request, return NO_MATCH with natural unavailable-information speech.',
-      requestedFactAvailable
+      clarificationAmbiguity?.required === true
+        ? 'Multiple genuine published candidates remain unresolved. Return CLARIFY with one natural question using only the supplied ambiguity candidates; RESPONSE and NO_MATCH are forbidden.'
+        : null,
+      answerableEvidence
         ? 'The verified evidence does answer the requested fact. Return RESPONSE and cite its exact supporting aliases; NO_MATCH is forbidden for this repair.'
         : null,
       `Allowed evidenceIds for this turn: ${allowedEvidenceIds.join(', ') || 'none'}.`,
       'Do not invent facts, identifiers or citations.',
     ].filter(Boolean).join(' ');
+    const requiredRepairDecision = clarificationAmbiguity?.required === true
+      ? 'CLARIFY' : answerableEvidence ? 'RESPONSE'
+        : requestedFactAvailable ? 'RESPONSE' : 'NO_MATCH';
     completion = await invokeStructuredLlm(request([
       ...baseMessages,
       Object.freeze({ role: 'user', content: groundingRepairInstruction }),
-    ]));
+    ], requiredRepairDecision));
     output = completionOutput(completion);
     finalDiagnostics = templateEnginePostSearchDecisionDiagnostics(output);
     validated = validateTemplateEnginePostSearchDecision(output, allowedEvidenceIds);
+    if (answerableEvidence && validated.valid
+      && validated.value.decision !== 'RESPONSE') {
+      validated = Object.freeze({
+        valid: false, reason: 'grounded_repair_requires_response',
+      });
+    }
     if (validated.valid) {
       groundedDecision = restorePostSearchEvidenceIds(
         validated.value, citations.aliasToEvidenceId,
@@ -807,6 +842,11 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
           retryCount: 1,
         },
       ));
+      answerableEvidence = answerableEvidence || (
+        groundedDecision.decision === 'RESPONSE'
+        && semanticClaimValidation?.supported === true
+        && clarificationAmbiguity?.required !== true
+      );
     } else {
       outputValidation = Object.freeze({
         valid: false, reason: validated.reason, retrySearch: false, ttsAllowed: false,
@@ -815,8 +855,8 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
   }
   if (!outputValidation.valid) {
     const unavailableResponse = cleanText(input.informationUnavailableResponse, 4_000);
-    const extractiveRecovery = requestedFactAvailable
-      && dependencies.ambiguity?.required !== true
+    const extractiveRecovery = answerableEvidence
+      && clarificationAmbiguity?.required !== true
       ? extractiveGroundedRecovery(citations.evidence, search.value.search.requestedFact)
       : null;
     if (extractiveRecovery) {

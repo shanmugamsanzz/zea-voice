@@ -369,6 +369,44 @@ assert.equal(clarificationValidationInput.decision, 'CLARIFY');
 assert.equal(clarificationValidationInput.selectedEvidence.length, 2,
   'Clarification speech validation receives the complete verified evidence set');
 
+let ambiguityRepairCalls = 0;
+const repairedAmbiguity = await respondToTemplateEngineSearch({
+  mainPrompt, latestUtterance: 'Which selected service?',
+  state: { ...state, lastReferencedRecordIds: [] },
+  searchDecision: {
+    ...searchDecision,
+    search: {
+      query: 'selected service', requestedFact: 'service identity',
+      contextualReference: null, preferredRecordIds: [],
+    },
+  },
+  verifiedEvidence: [verifiedEvidence[0], secondEvidence], scope,
+}, {
+  tenantBoundaryVerified: true,
+  ambiguity: {
+    required: true, kind: 'entity', candidates: ['First Service', 'Second Service'],
+  },
+  validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
+  invokeStructuredLlm: async (request) => {
+    ambiguityRepairCalls += 1;
+    if (ambiguityRepairCalls === 1) return { outputParsed: {
+      decision: 'RESPONSE', response: 'The selected service has published information.',
+      clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
+    } };
+    assert.deepEqual(request.responseFormat.schema.properties.decision.enum, ['CLARIFY']);
+    return { outputParsed: {
+      decision: 'CLARIFY', response: '', clarification: {
+        question: 'Do you mean First Service or Second Service?',
+        reason: 'Two published candidates remain',
+        candidates: ['First Service', 'Second Service'],
+      }, evidenceIds: [], nextQuestion: null, stateUpdate: null,
+    } };
+  },
+});
+assert.equal(ambiguityRepairCalls, 2);
+assert.equal(repairedAmbiguity.decision.decision, 'CLARIFY',
+  'A genuine ambiguity validation failure must become CLARIFY, not an operational error');
+
 let contextualRepairCalls = 0;
 const resolvedContext = await respondToTemplateEngineSearch({
   mainPrompt, latestUtterance: 'What does it include?', state,
@@ -420,19 +458,24 @@ await assert.rejects(() => respondToTemplateEngineSearch({
     };
   },
   onDecisionRepair: (details) => { fallbackDiagnostics = details; },
-}), (error) => error.code === 'TEMPLATE_ENGINE_POST_SEARCH_DECISION_INVALID');
+}), (error) => error.code === 'TEMPLATE_ENGINE_OUTPUT_INVALID'
+  && error.details?.reason === 'grounding_validation_missing');
 assert.equal(fallbackCalls, 2);
-assert.equal(fallbackDiagnostics.recovered, false);
+assert.equal(fallbackDiagnostics.recovered, true);
 assert.equal(fallbackDiagnostics.configuredFallbackApplied, false);
+assert.equal(fallbackDiagnostics.extractiveRecoveryApplied, true);
 assert.equal(fallbackDiagnostics.first.responsePresent, true);
 assert.equal(fallbackDiagnostics.first.evidenceIdCount, 0);
 
 let changedDecisionCalls = 0;
-await assert.rejects(() => respondToTemplateEngineSearch({
+const changedDecisionRecovery = await respondToTemplateEngineSearch({
   mainPrompt, latestUtterance, state, searchDecision, verifiedEvidence, scope,
   informationUnavailableResponse: 'That information is not available right now.',
 }, {
   tenantBoundaryVerified: true,
+  validateGroundedClaims: async () => ({
+    supported: true, requestedFactAddressed: true,
+  }),
   invokeStructuredLlm: async () => {
     changedDecisionCalls += 1;
     return changedDecisionCalls === 1 ? { outputParsed: {
@@ -443,9 +486,12 @@ await assert.rejects(() => respondToTemplateEngineSearch({
       clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
     } };
   },
-}), (error) => error.code === 'TEMPLATE_ENGINE_POST_SEARCH_DECISION_INVALID'
-  && error.details?.reason === 'citation_repair_changed_decision');
+});
 assert.equal(changedDecisionCalls, 2);
+assert.equal(changedDecisionRecovery.decision.decision, 'RESPONSE',
+  'A citation repair must never convert answerable evidence into NO_MATCH');
+assert.deepEqual(changedDecisionRecovery.decision.evidenceIds, ['evidence-1']);
+assert.equal(changedDecisionRecovery.diagnostics.extractiveRecoveryApplied, true);
 
 let malformedRepairCalls = 0;
 let malformedRepairDiagnostics;

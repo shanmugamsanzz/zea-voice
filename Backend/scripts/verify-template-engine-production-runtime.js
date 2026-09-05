@@ -4,7 +4,10 @@ import {
   constrainHybridToRequestedEntities,
   retrieveTemplateEngineEvidence,
 } from '../src/voice/interaction/template-engine-production-retrieval.js';
-import { runTemplateEngineProductionTurn } from '../src/voice/interaction/template-engine-production-runtime.js';
+import {
+  publishedResolutionAmbiguity,
+  runTemplateEngineProductionTurn,
+} from '../src/voice/interaction/template-engine-production-runtime.js';
 import { recordTemplateEngineTurnMetrics } from '../src/voice/interaction/template-engine-observability.js';
 
 const tenantId = '11111111-1111-4111-8111-111111111111';
@@ -12,6 +15,28 @@ const agentId = '22222222-2222-4222-8222-222222222222';
 const knowledgeBaseId = '33333333-3333-4333-8333-333333333333';
 const publication = { knowledgeBaseId, publicationRevision: 4 };
 const scope = { tenantId, agentId, publications: [publication] };
+
+const ambiguousCandidates = [
+  { recordId: 'record-a', recordType: 'CATALOG_ITEM', label: 'Option A' },
+  { recordId: 'record-b', recordType: 'CATALOG_ITEM', label: 'Option B' },
+];
+const fuzzyAmbiguity = {
+  ambiguity: { detected: true, candidates: ambiguousCandidates },
+  routingCandidates: ambiguousCandidates, requiresCandidateConfirmation: true,
+};
+assert.equal(publishedResolutionAmbiguity(fuzzyAmbiguity, [{
+  recordId: 'record-a', recordType: 'CATALOG_ITEM', verified: true,
+}], { searchKind: 'named_entity' }).required, false,
+'One exactly hydrated candidate must clear earlier fuzzy ambiguity');
+const genuineAmbiguity = publishedResolutionAmbiguity(fuzzyAmbiguity, [
+  { recordId: 'record-a', recordType: 'CATALOG_ITEM', verified: true },
+  { recordId: 'record-b', recordType: 'CATALOG_ITEM', verified: true },
+], { searchKind: 'named_entity' });
+assert.equal(genuineAmbiguity.required, true);
+assert.deepEqual(genuineAmbiguity.candidates, ['Option A', 'Option B']);
+assert.equal(publishedResolutionAmbiguity(fuzzyAmbiguity, [], {
+  searchKind: 'overview',
+}).required, false, 'A general overview must not clarify between its listed entities');
 
 for (const scenario of [
   {
