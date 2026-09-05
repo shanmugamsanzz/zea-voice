@@ -1,12 +1,12 @@
 export const callbackDefaults = Object.freeze({
-  enabled: true,
+  enabled: false,
   minimumDelaySeconds: 30,
   maximumDelayDays: 30,
   closeAfterScheduling: true,
-  confirmationInstructions: 'Briefly confirm the scheduled callback time in the customer language.',
-  clarificationInstructions: 'Ask the caller for a clear relative callback time.',
-  failureInstructions: 'Explain briefly that the callback could not be scheduled and do not promise it.',
-  followUpOpeningInstructions: 'Mention that the caller requested this callback and ask whether now is a good time to continue.',
+  confirmationInstructions: '',
+  clarificationInstructions: '',
+  failureInstructions: '',
+  followUpOpeningInstructions: '',
 });
 
 function boolean(value, fallback) {

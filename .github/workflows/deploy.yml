@@ -6,7 +6,30 @@ on:
       - main
 
 jobs:
+  zero-business-vocabulary-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: Backend/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: Backend
+        run: npm ci
+
+      - name: Verify configuration-driven template engine
+        working-directory: Backend
+        run: npm run verify:zero-business-vocabulary-release
+
   deploy:
+    needs: zero-business-vocabulary-release
     runs-on: ubuntu-latest
 
     steps:

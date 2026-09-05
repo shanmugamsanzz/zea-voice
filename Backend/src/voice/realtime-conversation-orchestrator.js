@@ -398,10 +398,6 @@ function decisionWithoutRuntimeSpeech(decision) {
 }
 
 const spokenWordPattern = /[\p{L}\p{N}][\p{L}\p{M}\p{N}'’_-]*/gu;
-const pauseFillerWords = new Set([
-  'hello', 'ok', 'okay', 'sure', 'hmm', 'please',
-  'ம்', 'ஹம்','சரி', 'சரிங்க', 'இருங்க', 'இருங்கள்',
-]);
 function spokenWords(value) {
   return String(value ?? '').normalize('NFKC').toLocaleLowerCase().match(spokenWordPattern) ?? [];
 }
@@ -416,7 +412,7 @@ function isPauseOnlyUtterance(text, matchedPhrase) {
     if (index < 0) return false;
     remaining.splice(index, 1);
   }
-  return remaining.length > 0 && remaining.every((word) => pauseFillerWords.has(word));
+  return remaining.length === 0;
 }
 
 export class RealtimeConversationOrchestrator {
@@ -1444,9 +1440,8 @@ export class RealtimeConversationOrchestrator {
         return;
       }
     }
-    // The caller may say “wait” after the previous audio has finished. This
-    // is not an LLM question. Pause silently instead of generating “Hello,
-    // can you hear me?” from the model.
+    // A configured explicit-stop utterance may arrive after output finishes.
+    // Pause silently and wait for the next finalized caller turn.
     if (!outputWasActive) {
       const listeningDecision = this.interruptionCandidate.observeTranscript(completedTurn);
       if (listeningDecision.classification === 'explicit_stop'

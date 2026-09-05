@@ -21,7 +21,12 @@ const workflow = Object.freeze({
   recordId: 'workflow-1', recordType: 'WORKFLOW_RULE', tenantId: 'tenant-a',
   knowledgeBaseId: 'kb-a', publicationRevision: 4, published: true,
   actionType: 'configured_tool',
-  actionConfig: Object.freeze({ toolIdentifier: 'create_record' }),
+  actionConfig: Object.freeze({
+    toolIdentifier: 'create_record',
+    resultBehavior: Object.freeze({
+      success: 'Use the verified reference.', failure: 'Explain the verified failure only.',
+    }),
+  }),
 });
 const tool = Object.freeze({
   id: 'tool-1', name: 'create_record', status: 'active', type: 'webhook_api',
@@ -223,6 +228,9 @@ const confirmationTask = createTemplateEngineWorkflowSpeechTask({
 assert.equal(confirmationTask.type, 'CONFIRM');
 assert.equal(confirmationTask.values.length, 2);
 assert.deepEqual(confirmationTask.values.map((entry) => entry.value), ['Alex Example', 2]);
+assert.deepEqual(confirmationTask.configuredWorkflowBehavior.resultBehavior, {
+  success: 'Use the verified reference.', failure: 'Explain the verified failure only.',
+});
 
 let executions = 0;
 await assert.rejects(() => executeTemplateEngineWorkflow({
@@ -261,6 +269,8 @@ const completed = await executeAndPhraseTemplateEngineWorkflow({
   invokeStructuredLlm: async (request) => {
     speechCalls += 1;
     assert.match(request.messages[0].content, /"type":"RESULT","success":true/u);
+    assert.match(request.messages[0].content,
+      /"resultBehavior":\{"success":"Use the verified reference\."/u);
     assert.deepEqual(request.responseFormat.schema.required, ['speech', 'nextQuestion']);
     return { outputParsed: {
       speech: 'The action was completed successfully.',

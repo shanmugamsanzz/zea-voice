@@ -277,6 +277,14 @@ function configuredConfirmation(value, configuration) {
   2_000);
 }
 
+function configuredWorkflowBehavior(configuration) {
+  return safeJson(
+    configuration.workflow.actionConfig
+      ?? configuration.workflow.authoritativeData?.actionConfig
+      ?? {},
+  );
+}
+
 export function createTemplateEngineWorkflowSpeechTask({
   configuration, state, confirmationMessage = null, verifiedResult = null,
   conversationGuidance = null,
@@ -294,6 +302,7 @@ export function createTemplateEngineWorkflowSpeechTask({
       success: verifiedResult.success,
       output: safeJson(verifiedResult.output),
       error: verifiedResult.success ? null : safeJson(verifiedResult.error),
+      configuredWorkflowBehavior: configuredWorkflowBehavior(configuration),
       conversationGuidance: conversationGuidance?.purpose ? Object.freeze({
         recordId: cleanText(conversationGuidance.recordId, 160) || null,
         purpose: cleanText(conversationGuidance.purpose, 1_500),
@@ -328,6 +337,7 @@ export function createTemplateEngineWorkflowSpeechTask({
       value: state.collectedToolFields[field.key],
     }))),
     configuredMessage: message,
+    configuredWorkflowBehavior: configuredWorkflowBehavior(configuration),
   });
 }
 
@@ -386,8 +396,8 @@ export async function phraseTemplateEngineWorkflowSpeech({
     'The runtime owns required fields, validation, completion, authorization, confirmation, execution and result status.',
     'Do not add, change or infer field values. Do not claim execution or success unless the supplied task is RESULT with success true.',
     'For ASK_FIELD, naturally phrase only the configured field question.',
-    'For CONFIRM, read back every supplied value once and request explicit confirmation.',
-    'For RESULT, put only the supplied verified result status and output in speech.',
+    'For CONFIRM, read back every supplied value once and use the supplied configured message to request explicit confirmation.',
+    'For RESULT, follow the published configured Workflow behavior using only the supplied verified result status, output and error.',
     'Only RESULT may include nextQuestion. Generate at most one natural question from the supplied Conversation Guidance. Keep it null when guidance is missing, has no nextQuestion, or is not relevant.',
     'ASK_FIELD and CONFIRM use the runtime-controlled speech-only schema and must not add a normal conversational follow-up.',
     'Follow the tenant main prompt for language, tone and style when it does not conflict with these runtime rules.',

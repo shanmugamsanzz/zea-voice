@@ -244,12 +244,63 @@ function addExactStructuredCandidates(result, exact, limit = 20) {
   });
 }
 
-function classification(input, search) {
+export const templateEngineSearchKinds = Object.freeze({
+  OVERVIEW: 'overview',
+  CATEGORY: 'category',
+  NAMED_ENTITY: 'named_entity',
+  CONTEXTUAL_FOLLOW_UP: 'contextual_follow_up',
+  COMPARISON: 'comparison',
+  GENERAL_KNOWLEDGE: 'general_knowledge',
+});
+
+function structuralTokens(value) {
+  return new Set(cleanText(value, 1_000).toLocaleLowerCase()
+    .replace(/[_:/.-]+/gu, ' ').split(/[^\p{L}\p{M}\p{N}]+/gu).filter(Boolean));
+}
+
+export function classifyTemplateEngineSearch({
+  search = {}, state = {}, resolution = null, conversationGuidance = null,
+} = {}) {
+  const requested = structuralTokens(search.requestedFact);
+  const guidance = structuralTokens([
+    conversationGuidance?.intentClass, conversationGuidance?.nodeKey,
+    conversationGuidance?.context,
+  ].filter(Boolean).join(' '));
+  const preferred = [...new Set([
+    ...(search.preferredRecordIds ?? []), ...(state.comparisonRecordIds ?? []),
+  ].map((value) => cleanText(value, 160)).filter(Boolean))];
+  let searchKind = templateEngineSearchKinds.GENERAL_KNOWLEDGE;
+  if (preferred.length > 1 || requested.has('comparison') || requested.has('compare')
+    || requested.has('difference') || requested.has('differences')) {
+    searchKind = templateEngineSearchKinds.COMPARISON;
+  } else if (preferred.length === 1 && cleanText(search.contextualReference, 500)) {
+    searchKind = templateEngineSearchKinds.CONTEXTUAL_FOLLOW_UP;
+  } else if (resolution?.candidate?.entityType === 'CATEGORY') {
+    searchKind = templateEngineSearchKinds.CATEGORY;
+  } else if (resolution?.candidate?.entityType === 'ITEM') {
+    searchKind = templateEngineSearchKinds.NAMED_ENTITY;
+  } else if (guidance.has('overview')) {
+    searchKind = templateEngineSearchKinds.OVERVIEW;
+  }
+  return Object.freeze({
+    searchKind,
+    resolvedEntityType: resolution?.candidate?.entityType ?? null,
+    resolvedNamespace: resolution?.candidateNamespace ?? null,
+    hasResolvedEntity: Boolean(resolution?.candidate),
+    comparisonRecordIds: Object.freeze(preferred.length > 1 ? preferred : []),
+  });
+}
+
+function classification(input, search, state, resolution, conversationGuidance) {
+  const searchClassification = classifyTemplateEngineSearch({
+    search, state, resolution, conversationGuidance,
+  });
   return Object.freeze({
     tenantId: input.tenantId,
     agentId: input.agentId,
     callId: input.callId,
-    intentClass: 'TEMPLATE_SEARCH',
+    intentClass: `TEMPLATE_SEARCH_${searchClassification.searchKind.toUpperCase()}`,
+    searchKind: searchClassification.searchKind,
     confidence: 1,
     relevantNamespaces: namespaces,
     primaryNamespaces: namespaces,
@@ -264,6 +315,22 @@ function candidateIdentityKey(candidate, tenantId) {
   return canonicalRecordIdentityKey(candidate, { tenantId });
 }
 
+function activePublicationKeys(publications = []) {
+  return new Set((publications ?? []).map((publication) => (
+    `${normalized(publication?.knowledgeBaseId)}:${Number(publication?.publicationRevision)}`
+  )).filter((key) => !key.startsWith(':') && !key.endsWith(':0')));
+}
+
+function belongsToActivePublication(value, scope = {}) {
+  if (normalized(value?.tenantId) !== normalized(scope.tenantId)) return false;
+  if (scope.agentId && normalized(value?.agentId)
+    && normalized(value.agentId) !== normalized(scope.agentId)) return false;
+  const publications = activePublicationKeys(scope.publications);
+  return publications.has(
+    `${normalized(value?.knowledgeBaseId)}:${Number(value?.publicationRevision)}`,
+  );
+}
+
 function resolutionReservations(resolution) {
   const resolved = resolution?.ambiguity?.detected === true
     ? resolution.ambiguity.candidates
@@ -272,28 +339,53 @@ function resolutionReservations(resolution) {
     ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(
       cleanText(candidate?.recordType, 80).toUpperCase(),
     )
-  )).map((candidate) => Object.freeze({
-    tenantId: candidate.tenantId,
-    agentId: candidate.agentId,
-    knowledgeBaseId: candidate.knowledgeBaseId,
-    publicationRevision: candidate.publicationRevision,
-    recordId: candidate.recordId,
-    recordType: candidate.recordType,
-    categoryKey: candidate.categoryKey ?? null,
-    reason: resolution?.ambiguity?.detected === true
-      ? 'published_entity_ambiguity' : 'resolved_published_entity',
-  }));
+  )).flatMap((candidate) => {
+    const evidenceRecordIds = candidate.recordType === 'CATALOG_CATEGORY'
+      && Array.isArray(candidate.evidenceRecordIds) ? candidate.evidenceRecordIds : [];
+    const identities = evidenceRecordIds.length
+      ? evidenceRecordIds.map((recordId) => ({
+        ...candidate, recordId, recordType: 'CATALOG_ITEM',
+      })) : [candidate];
+    return identities.map((identity) => Object.freeze({
+      tenantId: identity.tenantId,
+      agentId: identity.agentId,
+      knowledgeBaseId: identity.knowledgeBaseId,
+      publicationRevision: identity.publicationRevision,
+      recordId: identity.recordId,
+      recordType: identity.recordType,
+      categoryKey: identity.categoryKey ?? null,
+      reason: resolution?.ambiguity?.detected === true
+        ? 'published_entity_ambiguity' : 'resolved_published_entity',
+    }));
+  });
 }
 
-export function constrainHybridToRequestedEntities(hybrid, tenantId, resolution = null) {
-  const candidates = Array.isArray(hybrid?.candidates) ? hybrid.candidates : [];
+export function constrainHybridToRequestedEntities(
+  hybrid, tenantId, resolution = null, activeScope = null,
+) {
+  const scope = activeScope ?? { tenantId, publications: [] };
+  const enforcePublicationScope = (scope.publications ?? []).length > 0;
+  const isActive = (candidate) => normalized(candidate?.tenantId) === normalized(tenantId)
+    && (!enforcePublicationScope || belongsToActivePublication(candidate, scope));
+  const deduplicate = (values) => [...new Map((values ?? []).filter(isActive)
+    .map((candidate) => [candidateIdentityKey(candidate, tenantId), candidate])
+    .filter(([key]) => Boolean(key))).values()];
+  const candidates = deduplicate(Array.isArray(hybrid?.candidates) ? hybrid.candidates : []);
+  const activeChannels = Object.freeze(Object.fromEntries(
+    Object.entries(hybrid.channels ?? {}).map(([channel, values]) => [
+      channel, Object.freeze(deduplicate(values)),
+    ]),
+  ));
+  const activeHybrid = Object.freeze({
+    ...hybrid, channels: activeChannels, candidates: Object.freeze(candidates),
+  });
   const existing = Array.isArray(hybrid?.queryContext?.reservedRecords)
     ? hybrid.queryContext.reservedRecords : [];
   const comparison = existing.filter((entry) => [
     'explicit_comparison', 'contextual_comparison',
   ].includes(String(entry?.reason ?? '').toLocaleLowerCase()));
   const resolved = resolutionReservations(resolution);
-  let requested = comparison.length ? comparison : resolved;
+  let requested = (comparison.length ? comparison : resolved).filter(isActive);
   if (!requested.length) {
     const exactCatalog = candidates.filter((candidate) => (
       ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(String(candidate?.recordType ?? '').toUpperCase())
@@ -315,7 +407,7 @@ export function constrainHybridToRequestedEntities(hybrid, tenantId, resolution 
     [candidateIdentityKey(entry, tenantId), entry]
   )).filter(([key]) => Boolean(key)));
   if (!requestedByIdentity.size) return Object.freeze({
-    hybrid, constrained: false, comparison: false,
+    hybrid: activeHybrid, constrained: false, comparison: false,
     requestedIdentities: Object.freeze([]),
   });
   const requestedIdentities = new Set(requestedByIdentity.keys());
@@ -336,7 +428,7 @@ export function constrainHybridToRequestedEntities(hybrid, tenantId, resolution 
   const constrainedChannels = Object.freeze(Object.fromEntries(
     Object.entries(hybrid.channels ?? {}).map(([channel, values]) => [
       channel,
-      Object.freeze((values ?? []).filter((candidate) => requestedIdentities.has(
+      Object.freeze(deduplicate(values).filter((candidate) => requestedIdentities.has(
         candidateIdentityKey(candidate, tenantId),
       ))),
     ]),
@@ -549,10 +641,13 @@ export async function retrieveTemplateEngineEvidence({
   const artifacts = preloadedArtifacts ?? dependencies.preloadedArtifacts ?? await (
     dependencies.loadArtifacts ?? loadPublishedEngineArtifacts
   )(auth, input, dependencies.artifacts);
-  const route = classification(input, search);
+  const publicationKeys = activePublicationKeys(artifacts.publications);
   const scopedBundles = (artifacts.bundles ?? []).filter((bundle) => (
     cleanText(bundle?.tenantId, 160).toLocaleLowerCase()
       === cleanText(input.tenantId, 160).toLocaleLowerCase()
+    && publicationKeys.has(
+      `${normalized(bundle?.knowledgeBaseId)}:${Number(bundle?.publicationRevision)}`,
+    )
     && (!(bundle?.assignedAgentIds ?? []).length
       || bundle.assignedAgentIds.some((id) => (
         cleanText(id, 160).toLocaleLowerCase()
@@ -565,6 +660,9 @@ export async function retrieveTemplateEngineEvidence({
         confidenceConfiguration: dependencies.confidenceConfiguration,
       },
     ) : null;
+  const route = classification(
+    input, search, state, entityResolution, conversationGuidance,
+  );
   let channelPromise;
   const searchChannels = () => {
     channelPromise ??= (async () => {
@@ -572,13 +670,13 @@ export async function retrieveTemplateEngineEvidence({
         input,
         classification: route,
         resolution: entityResolution,
-        publicationBundles: artifacts.bundles,
+        publicationBundles: scopedBundles,
         sparseIndexes: artifacts.sparseIndexes,
         limitPerChannel: 20,
       }, dependencies.retrieval);
       return addExactStructuredCandidates(
         result, exactPublishedCandidates(
-          artifacts, input, search, 20, conversationGuidance,
+          { ...artifacts, bundles: scopedBundles }, input, search, 20, conversationGuidance,
         ), 20,
       );
     })();
@@ -596,7 +694,11 @@ export async function retrieveTemplateEngineEvidence({
     searchQdrantE5: async () => (await searchChannels()).channels.qdrant,
   });
   const entityConstraint = constrainHybridToRequestedEntities(
-    rawHybrid, input.tenantId, entityResolution,
+    rawHybrid, input.tenantId, entityResolution, {
+      tenantId: input.tenantId,
+      agentId: input.agentId,
+      publications: artifacts.publications,
+    },
   );
   const hybrid = entityConstraint.hybrid;
   const retrieval = Object.freeze({
@@ -609,36 +711,69 @@ export async function retrieveTemplateEngineEvidence({
       'WORKFLOW_RULE', 'KNOWLEDGE_CHUNK',
     ]),
   });
-  const authoritative = await (dependencies.hydrateEvidence
-    ?? rankAndHydrateAuthoritativeEvidence)({
+  const requestedIdentities = new Set(entityConstraint.requestedIdentities);
+  const hydrate = dependencies.hydrateEvidence ?? rankAndHydrateAuthoritativeEvidence;
+  const hydrateSelection = (selection, selectionRetry = false) => hydrate({
     auth,
     input,
     classification: route,
     resolution: entityResolution,
-    retrieval,
-    limit: 5,
+    retrieval: selection,
+    limit: Math.max(5, requestedIdentities.size),
     minProviderScore: 0,
     requireAtLeastOneHydratedEvidence: true,
+    selectionRetry,
   }, dependencies.hydration);
-  const hydratedEvidence = Array.isArray(authoritative.evidence)
-    ? authoritative.evidence : [];
+  const exactSelection = () => {
+    const candidates = retrieval.candidates.filter((candidate) => requestedIdentities.has(
+      candidateIdentityKey(candidate, input.tenantId),
+    ));
+    return Object.freeze({
+      ...retrieval,
+      candidates: Object.freeze(candidates),
+      channels: Object.freeze(Object.fromEntries(Object.keys(retrieval.channels ?? {}).map(
+        (channel) => [channel, Object.freeze([...candidates])],
+      ))),
+    });
+  };
+  let selectionRetryAttempted = false;
+  let authoritative;
+  try {
+    authoritative = await hydrateSelection(retrieval);
+  } catch (error) {
+    if (!entityConstraint.constrained) throw error;
+    selectionRetryAttempted = true;
+    authoritative = await hydrateSelection(exactSelection(), true);
+  }
+  const hydrationState = (result) => {
+    const all = Array.isArray(result?.evidence) ? result.evidence : [];
+    const matched = entityConstraint.constrained
+      ? all.filter((source) => requestedIdentities.has(
+        candidateIdentityKey(source, input.tenantId),
+      )) : all;
+    const counts = new Map();
+    for (const source of matched) {
+      const key = candidateIdentityKey(source, input.tenantId);
+      if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return Object.freeze({
+      all, matched,
+      exact: [...requestedIdentities].every((key) => counts.get(key) === 1)
+        && matched.length === requestedIdentities.size,
+    });
+  };
+  let hydrated = hydrationState(authoritative);
+  if (entityConstraint.constrained && !hydrated.exact && !selectionRetryAttempted) {
+    selectionRetryAttempted = true;
+    authoritative = await hydrateSelection(exactSelection(), true);
+    hydrated = hydrationState(authoritative);
+  }
+  const hydratedEvidence = hydrated.all;
+  const entityMatchedEvidence = hydrated.matched;
   const selectedCandidates = Array.isArray(authoritative?.fusion?.candidates)
     ? authoritative.fusion.candidates : retrieval.candidates;
-  const requestedIdentities = new Set(entityConstraint.requestedIdentities);
-  const entityMatchedEvidence = entityConstraint.constrained
-    ? hydratedEvidence.filter((source) => requestedIdentities.has(
-      candidateIdentityKey(source, input.tenantId),
-    )) : hydratedEvidence;
-  const hydratedIdentityCounts = new Map();
-  for (const source of entityMatchedEvidence) {
-    const key = candidateIdentityKey(source, input.tenantId);
-    if (key) hydratedIdentityCounts.set(key, (hydratedIdentityCounts.get(key) ?? 0) + 1);
-  }
-  const exactHydration = [...requestedIdentities].every((key) => (
-    hydratedIdentityCounts.get(key) === 1
-  ));
   if (entityConstraint.constrained
-    && (entityMatchedEvidence.length !== requestedIdentities.size || !exactHydration)) {
+    && !hydrated.exact) {
     throw new AppError(503, 'Requested published entities were not completely hydrated',
       'TEMPLATE_ENGINE_REQUESTED_ENTITY_HYDRATION_INCOMPLETE', {
         requestedCount: requestedIdentities.size,
@@ -674,11 +809,17 @@ export async function retrieveTemplateEngineEvidence({
       retrievalCount: hybrid.candidates.length,
       hydrationCount: hydratedEvidence.length,
       verifiedEvidenceCount: evidence.length,
+      selectionRetryAttempted,
       failedChannels: Object.freeze(hybrid.failures.map((failure) => failure.channel)),
       durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
     }),
     authoritative,
     entityResolution,
+    searchClassification: Object.freeze({
+      searchKind: route.searchKind,
+      resolvedEntityType: entityResolution?.candidate?.entityType ?? null,
+      resolvedNamespace: entityResolution?.candidateNamespace ?? null,
+    }),
     artifacts,
   });
 }

@@ -110,16 +110,10 @@ function publishedResolutionAmbiguity(resolution) {
       candidates: Object.freeze(candidates.slice(0, 1)),
     });
   }
-  if (resolution?.reason === 'no_candidate' || resolution?.action === 'CLARIFY') {
-    return Object.freeze({
-      required: true,
-      kind: 'unresolved_published_entity',
-      candidates: Object.freeze([]),
-    });
-  }
   return Object.freeze({
     required: false,
-    kind: 'resolved_published_entity',
+    kind: resolution?.reason === 'no_candidate' || resolution?.action === 'CLARIFY'
+      ? 'no_published_entity_match' : 'resolved_published_entity',
     candidates: Object.freeze([]),
   });
 }
@@ -450,7 +444,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       speculative: true,
     }).catch((error) => Object.freeze({ error }))
     : null;
-  const routed = await routeTemplateEngineUtterance(common, {
+  const routingDependencies = {
     invokeStructuredLlm: dependencies.invokeStructuredLlm,
     onDecisionRetry: dependencies.onRoutingDecisionRetry,
     tenantBoundaryVerified: true,
@@ -461,7 +455,8 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     informationFields: input.informationFields,
     scope: publishedContext.scope,
     ambiguity: activeClarificationAmbiguity(state),
-  });
+  };
+  let routed = await routeTemplateEngineUtterance(common, routingDependencies);
   let first = routed.decision;
   let initialValidationResult = routed.outputValidation?.reason ?? 'valid';
   if (first.decision === 'RESPONSE' || first.decision === 'CLARIFY') {
@@ -476,16 +471,12 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     if (directValidation?.supported !== true) {
       initialValidationResult = directValidation?.reason
         ?? 'caller_speech_requires_grounding_search';
-      first = Object.freeze({
-        decision: 'SEARCH', response: '', clarification: null,
-        search: Object.freeze({
-          query: cleanText(input.latestUtterance, 2_000),
-          requestedFact: null,
-          contextualReference: null,
-          preferredRecordIds: state.lastReferencedRecordIds,
-        }),
-        tool: null, nextQuestion: null, stateUpdate: first.stateUpdate,
+      routed = await routeTemplateEngineUtterance(common, {
+        ...routingDependencies,
+        factualClaimsPresent: true,
+        nonFactualResponseAllowed: false,
       });
+      first = routed.decision;
     }
   }
   if (first.decision === 'TOOL') {

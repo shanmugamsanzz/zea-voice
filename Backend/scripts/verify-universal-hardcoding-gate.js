@@ -253,9 +253,7 @@ async function javascriptFiles(directory) {
 }
 
 const runtimeRoots = [
-  join(backendRoot, 'src', 'knowledge-engine'),
-  join(backendRoot, 'src', 'knowledge-bases'),
-  join(backendRoot, 'src', 'voice'),
+  join(backendRoot, 'src'),
 ];
 const prohibitedBusinessLiterals = [
   'shanmuga hospital', 'silver package', 'gold package', 'platinum package',
@@ -264,14 +262,29 @@ const prohibitedBusinessLiterals = [
     tenant.sourceRecord.entity_name,
     ...tenant.sourceRecord.entity_aliases,
     tenant.sourceRecord.entity_category,
+    tenant.sourceRecord.answer,
+    tenant.tool.name,
+    ...Object.values(tenant.tool.inputSchema.properties)
+      .map((property) => property.question).filter(Boolean),
   ]),
 ];
+const prohibitedBusinessIdentifiers = tenants.flatMap((tenant) => [
+  tenant.tool.name,
+  ...Object.keys(tenant.tool.inputSchema.properties),
+]).filter((identifier) => /[._:-]/u.test(identifier));
 const violations = [];
 for (const path of (await Promise.all(runtimeRoots.map(javascriptFiles))).flat()) {
   const source = (await readFile(path, 'utf8')).toLocaleLowerCase();
   for (const literal of prohibitedBusinessLiterals) {
     if (source.includes(literal.toLocaleLowerCase())) {
       violations.push({ file: relative(backendRoot, path), literal });
+    }
+  }
+  for (const identifier of prohibitedBusinessIdentifiers) {
+    const literal = identifier.toLocaleLowerCase();
+    if (source.includes(`'${literal}'`) || source.includes(`"${literal}"`)
+      || source.includes(`\`${literal}\``)) {
+      violations.push({ file: relative(backendRoot, path), literal: identifier });
     }
   }
 }
@@ -287,4 +300,5 @@ console.log(JSON.stringify({
     await Promise.all(runtimeRoots.map(javascriptFiles))
   ).flat().length,
   prohibitedBusinessLiteralMatches: violations.length,
+  productionScope: 'Backend/src',
 }, null, 2));

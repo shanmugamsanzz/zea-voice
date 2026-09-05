@@ -67,10 +67,9 @@ function decisionRetryMessages(messages, reason, phase) {
       role: 'system',
       content: [
         `The previous ${phase} decision failed runtime validation: ${cleanText(reason, 160) || 'invalid_decision'}.`,
-        'Re-evaluate the same finalized caller utterance and relevant recent conversation.',
+        'Re-evaluate the same finalized caller utterance using the tenant prompt, supplied published guidance and relevant recent conversation.',
         'Return exactly one decision branch and set every field belonging to other branches to null or empty as required by the supplied schema.',
         'Do not change, discard, summarize, or replace the caller utterance.',
-        'Do not turn conversational interaction management into missing-information speech.',
         'Return only one complete JSON object with no Markdown or commentary.',
       ].join(' '),
     }),
@@ -98,26 +97,6 @@ async function invokeValidatedDecision({
     validated = validateCompletion(completion);
   }
   return Object.freeze({ completion, validated, retryAttempted, initialReason });
-}
-
-function forcedSearchDecision(orchestratorInput, dependencies = {}) {
-  return Object.freeze({
-    decision: 'SEARCH', response: '', clarification: null,
-    search: Object.freeze({
-      query: orchestratorInput.latestUtterance,
-      requestedFact: cleanText(dependencies.requestedFact, 500) || null,
-      contextualReference: cleanText(dependencies.contextualReference, 500) || null,
-      preferredRecordIds: orchestratorInput.state.lastReferencedRecordIds,
-    }),
-    tool: null, nextQuestion: null, stateUpdate: null,
-  });
-}
-
-function searchNeedsRoutingReview(decision) {
-  if (decision?.decision !== 'SEARCH') return false;
-  const search = decision.search ?? {};
-  return !cleanText(search.requestedFact, 500)
-    && !cleanText(search.contextualReference, 500);
 }
 
 function outputValidationInput(decision, orchestratorInput, dependencies, additions = {}) {
@@ -238,7 +217,7 @@ export async function routeTemplateEngineUtterance(input = {}, dependencies = {}
     verifiedToolResult: dependencies.verifiedToolResult ?? null,
     },
   );
-  let invocation = await invokeValidatedDecision({
+  const invocation = await invokeValidatedDecision({
     invokeStructuredLlm,
     request,
     messages: baseMessages,
@@ -246,8 +225,8 @@ export async function routeTemplateEngineUtterance(input = {}, dependencies = {}
     phase: 'initial_routing',
     onRetry: dependencies.onDecisionRetry,
   });
-  let { validated } = invocation;
-  let decisionRepairAttempted = invocation.retryAttempted;
+  const { validated } = invocation;
+  const decisionRepairAttempted = invocation.retryAttempted;
   if (!validated.valid) {
     throw new AppError(502, 'The template-engine Orchestrator returned an invalid decision',
       'TEMPLATE_ENGINE_ORCHESTRATOR_DECISION_INVALID', {
@@ -256,41 +235,7 @@ export async function routeTemplateEngineUtterance(input = {}, dependencies = {}
         initialReason: invocation.initialReason,
       });
   }
-  let routingReviewAttempted = false;
-  if (searchNeedsRoutingReview(validated.value)) {
-    routingReviewAttempted = true;
-    const reviewMessages = Object.freeze([
-      ...baseMessages,
-      Object.freeze({
-        role: 'user',
-        content: [
-          'Review the route because SEARCH does not identify a fact or genuine contextual reference requested by the caller.',
-          'Use RESPONSE when the complete utterance only manages the conversation, including a greeting, acknowledgement, courtesy, pause, wait, presence check, hearing check, brief confirmation, or resumption.',
-          'If it requests externally verifiable information, keep SEARCH and populate requestedFact or contextualReference from the latest utterance and relevant recentCompleteTurns.',
-          'Use CLARIFY only for multiple genuinely plausible meanings. Use TOOL only for an explicit action matching an authorized Workflow summary.',
-          'Stored record IDs alone never make the latest utterance factual. Do not use phrase matching or invent a fact, entity, action, or context.',
-        ].join(' '),
-      }),
-    ]);
-    invocation = await invokeValidatedDecision({
-      invokeStructuredLlm,
-      request,
-      messages: reviewMessages,
-      validateCompletion,
-      phase: 'routing_review',
-      onRetry: dependencies.onDecisionRetry,
-    });
-    validated = invocation.validated;
-    decisionRepairAttempted ||= invocation.retryAttempted;
-    if (!validated.valid) {
-      throw new AppError(502, 'The template-engine routing review returned an invalid decision',
-        'TEMPLATE_ENGINE_ORCHESTRATOR_DECISION_INVALID', {
-          reason: validated.reason,
-          attempts: 2,
-          initialReason: invocation.initialReason,
-        });
-    }
-  }
+  const routingReviewAttempted = false;
   const contextualDecision = normalizeTemplateEngineSearchDecision(
     validated.value, orchestratorInput.state,
     { latestUtterance: orchestratorInput.latestUtterance },
@@ -305,19 +250,6 @@ export async function routeTemplateEngineUtterance(input = {}, dependencies = {}
     contextualDecision.value, orchestratorInput, dependencies,
   ));
   if (!outputValidation.valid) {
-    const rejectedClarification = contextualDecision.value.decision === 'CLARIFY'
-      && ['clarification_not_required', 'clarification_candidates_required']
-        .includes(outputValidation.reason);
-    if (outputValidation.retrySearch || rejectedClarification) {
-      return Object.freeze({
-        decision: forcedSearchDecision(orchestratorInput, dependencies),
-        input: turnInput,
-        verifiedEvidenceIds: validated.verifiedEvidenceIds,
-        outputValidation,
-        routingReviewAttempted,
-        decisionRepairAttempted,
-      });
-    }
     throw new AppError(502, 'The template-engine output failed delivery validation',
       'TEMPLATE_ENGINE_OUTPUT_INVALID', { reason: outputValidation.reason });
   }

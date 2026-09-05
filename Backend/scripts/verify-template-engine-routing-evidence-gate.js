@@ -97,7 +97,6 @@ function dependencies(configuration, decisions, { evidence = true } = {}) {
 
 for (const configuration of tenants) {
   const acknowledgementDecisions = [
-    searchDecision(configuration.acknowledgement, null, null),
     { decision: 'RESPONSE', response: configuration.acknowledgementResponse, clarification: null, search: null, tool: null, nextQuestion: null, stateUpdate: null },
   ];
   const acknowledgementRuntime = dependencies(configuration, acknowledgementDecisions);

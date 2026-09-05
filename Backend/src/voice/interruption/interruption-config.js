@@ -1,12 +1,8 @@
 const thresholdBySensitivity = { low: 700, medium: 350, high: 150 };
 
-export const defaultAcknowledgementPhrases = Object.freeze([
-  'ம்', 'ஹம்', 'ஆமா', 'சரி', 'ok', 'okay', 'sure', 'சொல்லுங்க',
-]);
+export const defaultAcknowledgementPhrases = Object.freeze([]);
 
-export const defaultExplicitStopPhrases = Object.freeze([
-  'நிறுத்துங்க', 'ஒரு நிமிஷம்', 'கொஞ்சம் இருங்க', 'wait', 'stop', 'வேண்டாம்',
-]);
+export const defaultExplicitStopPhrases = Object.freeze([]);
 
 function boolean(value, fallback) {
   return typeof value === 'boolean' ? value : fallback;

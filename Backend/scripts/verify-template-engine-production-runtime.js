@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
-import { retrieveTemplateEngineEvidence } from '../src/voice/interaction/template-engine-production-retrieval.js';
+import {
+  classifyTemplateEngineSearch,
+  constrainHybridToRequestedEntities,
+  retrieveTemplateEngineEvidence,
+} from '../src/voice/interaction/template-engine-production-retrieval.js';
 import { runTemplateEngineProductionTurn } from '../src/voice/interaction/template-engine-production-runtime.js';
 import { recordTemplateEngineTurnMetrics } from '../src/voice/interaction/template-engine-observability.js';
 
@@ -8,16 +12,91 @@ const agentId = '22222222-2222-4222-8222-222222222222';
 const knowledgeBaseId = '33333333-3333-4333-8333-333333333333';
 const publication = { knowledgeBaseId, publicationRevision: 4 };
 const scope = { tenantId, agentId, publications: [publication] };
+
+for (const scenario of [
+  {
+    expected: 'overview', search: { requestedFact: 'available options' },
+    conversationGuidance: { intentClass: 'CATEGORY_OVERVIEW' },
+  },
+  {
+    expected: 'category', search: {},
+    resolution: { candidate: { entityType: 'CATEGORY' }, candidateNamespace: 'CATALOG' },
+  },
+  {
+    expected: 'named_entity', search: {},
+    resolution: { candidate: { entityType: 'ITEM' }, candidateNamespace: 'CATALOG' },
+  },
+  {
+    expected: 'contextual_follow_up',
+    search: { contextualReference: 'current selection', preferredRecordIds: ['record-a'] },
+  },
+  {
+    expected: 'comparison',
+    search: { requestedFact: 'comparison', preferredRecordIds: ['record-a', 'record-b'] },
+  },
+  { expected: 'general_knowledge', search: { requestedFact: 'published fact' } },
+]) {
+  assert.equal(classifyTemplateEngineSearch(scenario).searchKind, scenario.expected);
+}
+
+const identityCandidate = (recordId, overrides = {}) => ({
+  tenantId, agentId, knowledgeBaseId, publicationRevision: 4,
+  recordId, recordType: 'CATALOG_ITEM', ...overrides,
+});
+const requestedA = identityCandidate('record-a');
+const requestedB = identityCandidate('record-b');
+const duplicateA = identityCandidate('record-a', { score: 0.7 });
+const unrelated = identityCandidate('record-unrelated');
+const stale = identityCandidate('record-stale', { publicationRevision: 3 });
+const foreign = identityCandidate('record-foreign', {
+  tenantId: '99999999-9999-4999-8999-999999999999',
+});
+const constrainedComparison = constrainHybridToRequestedEntities({
+  channels: {
+    structured: [requestedA, duplicateA, unrelated, stale, foreign],
+    bm25: [requestedB, unrelated],
+    qdrant: [requestedA, requestedB, foreign],
+  },
+  candidates: [requestedA, duplicateA, requestedB, unrelated, stale, foreign],
+  queryContext: {
+    reservedRecords: [
+      { ...requestedA, reason: 'explicit_comparison' },
+      { ...requestedB, reason: 'explicit_comparison' },
+      { ...stale, reason: 'explicit_comparison' },
+    ],
+  },
+}, tenantId, null, scope);
+assert.equal(constrainedComparison.comparison, true);
+assert.deepEqual(new Set(constrainedComparison.hybrid.candidates.map((value) => value.recordId)),
+  new Set(['record-a', 'record-b']));
+assert.equal(constrainedComparison.hybrid.channels.structured.length, 1);
+assert.equal(constrainedComparison.hybrid.channels.bm25.length, 1);
+assert.equal(constrainedComparison.hybrid.channels.qdrant.length, 2);
+
+const categoryConstrained = constrainHybridToRequestedEntities({
+  channels: { structured: [requestedA, requestedB, unrelated] },
+  candidates: [requestedA, requestedB, unrelated],
+  queryContext: { reservedRecords: [] },
+}, tenantId, {
+  candidate: {
+    ...identityCandidate('synthetic-category', { recordType: 'CATALOG_CATEGORY' }),
+    evidenceRecordIds: ['record-a', 'record-b'],
+  },
+}, scope);
+assert.deepEqual(new Set(categoryConstrained.hybrid.candidates.map((value) => value.recordId)),
+  new Set(['record-a', 'record-b']));
 const searchDecision = {
   decision: 'SEARCH', response: '', clarification: null,
   search: { query: 'tenant item price', requestedFact: 'price', contextualReference: 'tenant item', preferredRecordIds: [] },
   tool: null, nextQuestion: null, stateUpdate: null,
 };
 let channelCalls = 0;
+let hydrationCalls = 0;
 const candidate = {
   tenantId, agentId, knowledgeBaseId, publicationRevision: 4,
   recordId: 'record-1', recordType: 'CATALOG_ITEM', score: 0.9,
   callerFacingHint: true, canonicalName: 'Tenant Item', searchForms: ['tenant item'],
+  matchMethod: 'published_exact',
 };
 const retrieval = await retrieveTemplateEngineEvidence({
   auth: { tenantId }, scope, callId: 'call-1', usageDirection: 'inbound',
@@ -28,7 +107,10 @@ const retrieval = await retrieveTemplateEngineEvidence({
     channelCalls += 1;
     return { channels: { structured: [candidate], bm25: [candidate], qdrant: [candidate] } };
   },
-  hydrateEvidence: async ({ retrieval: selected, requireAtLeastOneHydratedEvidence }) => {
+  hydrateEvidence: async ({
+    retrieval: selected, requireAtLeastOneHydratedEvidence, selectionRetry,
+  }) => {
+    hydrationCalls += 1;
     assert.equal(selected.candidates.length, 1);
     assert.equal(requireAtLeastOneHydratedEvidence, true);
     for (const channelCandidates of Object.values(selected.channels)) {
@@ -39,6 +121,11 @@ const retrieval = await retrieveTemplateEngineEvidence({
       assert.equal(channelCandidates[0].recordType, 'CATALOG_ITEM');
       assert.equal(channelCandidates[0].recordId, 'record-1');
     }
+    if (hydrationCalls === 1) {
+      assert.notEqual(selectionRetry, true);
+      return { evidence: [], fusion: { candidates: selected.candidates } };
+    }
+    assert.equal(selectionRetry, true);
     return { evidence: [{
       ...candidate, id: 'evidence-1', hydrationValidated: true,
       publicationValidated: true, callerFacing: true,
@@ -57,6 +144,7 @@ const retrieval = await retrieveTemplateEngineEvidence({
   },
 });
 assert.equal(channelCalls, 1);
+assert.equal(hydrationCalls, 2);
 assert.equal(retrieval.evidence.length, 1);
 assert.equal(retrieval.evidence[0].verified, true);
 assert.equal(retrieval.evidence[0].documentName, 'tenant-source.txt');
@@ -74,6 +162,7 @@ assert.deepEqual(retrieval.diagnostics.channelCounts, {
 assert.equal(retrieval.diagnostics.retrievalCount, 1);
 assert.equal(retrieval.diagnostics.hydrationCount, 1);
 assert.equal(retrieval.diagnostics.verifiedEvidenceCount, 1);
+assert.equal(retrieval.diagnostics.selectionRetryAttempted, true);
 assert.equal(Number.isFinite(retrieval.diagnostics.durationMs), true);
 assert.equal(retrieval.diagnostics.durationMs >= 0, true);
 
@@ -305,8 +394,8 @@ await assert.rejects(() => retrieveTemplateEngineEvidence({
   hydrateEvidence: async ({ retrieval: selected }) => ({
     evidence: [], fusion: { candidates: selected.candidates }, rejectedRecordIds: [],
   }),
-}), (error) => error.code === 'TEMPLATE_ENGINE_AUTHORITATIVE_EVIDENCE_EMPTY'
-  && error.details?.selectedCount === 1);
+}), (error) => error.code === 'TEMPLATE_ENGINE_REQUESTED_ENTITY_HYDRATION_INCOMPLETE'
+  && error.details?.requestedCount === 1);
 
 await assert.rejects(() => retrieveTemplateEngineEvidence({
   auth: { tenantId }, scope, callId: 'call-cross-scope', usageDirection: 'inbound',
@@ -325,7 +414,8 @@ await assert.rejects(() => retrieveTemplateEngineEvidence({
     }],
   }),
 }), (error) => error.code === 'TEMPLATE_ENGINE_RETRIEVAL_SCOPE_VIOLATION'
-  || error.code === 'TEMPLATE_ENGINE_HYDRATION_SCOPE_VIOLATION');
+  || error.code === 'TEMPLATE_ENGINE_HYDRATION_SCOPE_VIOLATION'
+  || error.code === 'TEMPLATE_ENGINE_REQUESTED_ENTITY_HYDRATION_INCOMPLETE');
 
 const decisions = [searchDecision, {
   decision: 'RESPONSE', response: 'Tenant Item costs 125.', clarification: null,
@@ -422,6 +512,8 @@ const guardedDecisions = [{
   decision: 'RESPONSE', response: 'Tenant Item costs 125.', clarification: null,
   search: null, tool: null, nextQuestion: null, stateUpdate: null,
 }, {
+  ...searchDecision,
+}, {
   decision: 'RESPONSE', response: 'Tenant Item costs 125.', clarification: null,
   evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
 }];
@@ -452,7 +544,7 @@ const guardedTurn = await runTemplateEngineProductionTurn({
   validateToolResultSpeechClaims: async () => ({ supported: true, successClaimed: false }),
 });
 assert.equal(guardedRetrievalCalls, 1,
-  'A factual direct RESPONSE rejected by grounding must be forced through SEARCH');
+  'A factual direct RESPONSE must be reclassified by the tenant-controlled LLM');
 assert.equal(guardedTurn.decision.decision, 'RESPONSE');
 assert.deepEqual(guardedTurn.evidenceIds, ['evidence-1']);
 assert.equal(guardedDecisions.length, 0);
