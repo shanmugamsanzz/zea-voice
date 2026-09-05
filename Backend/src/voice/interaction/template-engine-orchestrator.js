@@ -78,11 +78,20 @@ function decisionRetryMessages(messages, reason, phase) {
 
 async function invokeValidatedDecision({
   invokeStructuredLlm, request, messages, validateCompletion, phase, onRetry,
+  recoverInvalid,
 }) {
   let completion = await invokeStructuredLlm(request(messages));
   let validated = validateCompletion(completion);
   let retryAttempted = false;
   let initialReason = null;
+  let recoveryApplied = false;
+  if (!validated.valid && typeof recoverInvalid === 'function') {
+    const recovered = recoverInvalid(completion, validated);
+    if (recovered?.valid) {
+      validated = recovered;
+      recoveryApplied = true;
+    }
+  }
   if (!validated.valid) {
     retryAttempted = true;
     initialReason = validated.reason;
@@ -95,8 +104,48 @@ async function invokeValidatedDecision({
     }));
     completion = await invokeStructuredLlm(request(retryMessages));
     validated = validateCompletion(completion);
+    if (!validated.valid && typeof recoverInvalid === 'function') {
+      const recovered = recoverInvalid(completion, validated);
+      if (recovered?.valid) {
+        validated = recovered;
+        recoveryApplied = true;
+      }
+    }
   }
-  return Object.freeze({ completion, validated, retryAttempted, initialReason });
+  return Object.freeze({
+    completion, validated, retryAttempted, initialReason, recoveryApplied,
+  });
+}
+
+function redirectFactualResponseToSearch(completion, validation, orchestratorInput) {
+  if (validation?.reason !== 'factual_response_requires_evidence') return validation;
+  const raw = completionOutput(completion);
+  let supplied = raw;
+  if (typeof supplied === 'string') {
+    try { supplied = JSON.parse(supplied); } catch { supplied = null; }
+  }
+  const fallbackSearch = {
+    query: orchestratorInput.latestUtterance,
+    requestedFact: orchestratorInput.latestUtterance,
+    contextualReference: null,
+    preferredRecordIds: [],
+  };
+  const suppliedSearch = supplied?.search && typeof supplied.search === 'object'
+    ? supplied.search : fallbackSearch;
+  const redirected = (search) => ({
+    decision: 'SEARCH', response: '', clarification: null,
+    search,
+    tool: null, nextQuestion: null,
+    stateUpdate: supplied?.stateUpdate ?? null,
+  });
+  const recovered = enforceTemplateEngineRuntimeInvariants(redirected(suppliedSearch), {
+    tenantBoundaryVerified: true,
+  });
+  return recovered.valid || suppliedSearch === fallbackSearch
+    ? recovered
+    : enforceTemplateEngineRuntimeInvariants(redirected(fallbackSearch), {
+      tenantBoundaryVerified: true,
+    });
 }
 
 function outputValidationInput(decision, orchestratorInput, dependencies, additions = {}) {
@@ -224,9 +273,12 @@ export async function routeTemplateEngineUtterance(input = {}, dependencies = {}
     validateCompletion,
     phase: 'initial_routing',
     onRetry: dependencies.onDecisionRetry,
+    recoverInvalid: (completion, validation) => redirectFactualResponseToSearch(
+      completion, validation, orchestratorInput,
+    ),
   });
   const { validated } = invocation;
-  const decisionRepairAttempted = invocation.retryAttempted;
+  const decisionRepairAttempted = invocation.retryAttempted || invocation.recoveryApplied;
   if (!validated.valid) {
     throw new AppError(502, 'The template-engine Orchestrator returned an invalid decision',
       'TEMPLATE_ENGINE_ORCHESTRATOR_DECISION_INVALID', {

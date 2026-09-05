@@ -188,6 +188,56 @@ assert.equal(reviewedFactualTurn.routingReviewAttempted, true);
 assert.equal(reviewedFactualTurn.decision.decision, 'SEARCH');
 assert.equal(reviewedFactualTurn.decision.search.requestedFact, 'available options');
 
+let factualRedirectCalls = 0;
+const redirectedFactualResponse = await routeTemplateEngineUtterance({
+  mainPrompt: 'Use RESPONSE only without external facts and SEARCH for factual requests.',
+  latestUtterance: 'What options are currently available?',
+}, {
+  tenantBoundaryVerified: true,
+  factualClaimsPresent: true,
+  invokeStructuredLlm: async () => {
+    factualRedirectCalls += 1;
+    return {
+      decision: 'RESPONSE', response: 'Several options are available.',
+      clarification: null, search: null, tool: null,
+      nextQuestion: null, stateUpdate: null,
+    };
+  },
+});
+assert.equal(factualRedirectCalls, 1,
+  'An evidence-free factual RESPONSE must redirect without another provider call');
+assert.equal(redirectedFactualResponse.decision.decision, 'SEARCH');
+assert.equal(redirectedFactualResponse.decision.search.query,
+  'What options are currently available?');
+assert.equal(redirectedFactualResponse.decision.search.requestedFact,
+  'What options are currently available?');
+assert.equal(redirectedFactualResponse.decisionRepairAttempted, true);
+
+let malformedThenFactualCalls = 0;
+const malformedThenFactual = await routeTemplateEngineUtterance({
+  mainPrompt: 'Use RESPONSE only without external facts and SEARCH for factual requests.',
+  latestUtterance: 'Give me the current published information.',
+}, {
+  tenantBoundaryVerified: true,
+  factualClaimsPresent: true,
+  invokeStructuredLlm: async () => {
+    malformedThenFactualCalls += 1;
+    if (malformedThenFactualCalls === 1) return '{"decision":';
+    return {
+      decision: 'RESPONSE', response: 'Here is the current published information.',
+      clarification: null, search: null, tool: null,
+      nextQuestion: null, stateUpdate: null,
+    };
+  },
+});
+assert.equal(malformedThenFactualCalls, 2,
+  'Malformed provider output must be retried exactly once');
+assert.equal(malformedThenFactual.decision.decision, 'SEARCH',
+  'An invalid factual RESPONSE returned by the retry must continue through retrieval');
+assert.equal(malformedThenFactual.decision.search.query,
+  'Give me the current published information.');
+assert.equal(malformedThenFactual.decisionRepairAttempted, true);
+
 const ambiguousTurn = await routeTemplateEngineUtterance({
   mainPrompt: 'Clarify only genuine ambiguity.',
   latestUtterance: 'Tell me about that one.',

@@ -174,7 +174,7 @@
     "verify:answer-tool-validation": "node scripts/verify-answer-tool-validation.js",
     "verify:grounding-action-runtime": "node scripts/verify-grounding-action-runtime.js",
     "verify:universal-hardcoding-gate": "node scripts/verify-universal-hardcoding-gate.js",
-    "verify:zero-business-vocabulary-release": "npm run verify:universal-hardcoding-gate && npm run verify:template-engine-multilingual-e2e && npm run verify:template-engine-workflow-runtime",
+    "verify:zero-business-vocabulary-release": "npm run verify:universal-hardcoding-gate && npm run verify:template-engine-routing-evidence-gate && npm run verify:template-engine-multilingual-e2e && npm run verify:template-engine-workflow-runtime",
     "verify:unified-normal-turn-foundation": "node scripts/verify-unified-normal-turn-foundation.js",
     "verify:grounded-turn-evidence-pipeline": "node scripts/verify-grounded-turn-evidence-pipeline.js",
     "verify:caller-facing-workflow-evidence": "node scripts/verify-caller-facing-workflow-evidence.js",

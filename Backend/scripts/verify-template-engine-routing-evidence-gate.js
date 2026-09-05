@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { runTemplateEngineProductionTurn } from '../src/voice/interaction/template-engine-production-runtime.js';
+import { routeTemplateEngineUtterance } from '../src/voice/interaction/template-engine-orchestrator.js';
 
 const tenants = Object.freeze([
   Object.freeze({
@@ -16,10 +17,12 @@ const tenants = Object.freeze([
     answer: 'Option Alpha-\u0bb5\u0bbf\u0ba9\u0bcd \u0b89\u0bb1\u0bc1\u0ba4\u0bbf\u0baa\u0bcd\u0baa\u0b9f\u0bc1\u0ba4\u0bcd\u0ba4\u0baa\u0bcd\u0baa\u0b9f\u0bcd\u0b9f \u0bae\u0ba4\u0bbf\u0baa\u0bcd\u0baa\u0bc1 125.',
   }),
   Object.freeze({
-    tenantId: 'routing-tenant-hi', agentId: 'routing-agent-hi', knowledgeBaseId: 'routing-kb-hi',
-    language: 'hi', acknowledgement: '\u0920\u0940\u0915 \u0939\u0948, \u0927\u0928\u094d\u092f\u0935\u093e\u0926\u0964', acknowledgementResponse: '\u0906\u092a\u0915\u093e \u0938\u094d\u0935\u093e\u0917\u0924 \u0939\u0948\u0964',
-    overview: '\u0915\u094c\u0928-\u0915\u094c\u0928 \u0938\u0947 \u0935\u093f\u0915\u0932\u094d\u092a \u0909\u092a\u0932\u092c\u094d\u0927 \u0939\u0948\u0902?', direct: 'Option Alpha \u0915\u0947 \u092c\u093e\u0930\u0947 \u092e\u0947\u0902 \u092c\u0924\u093e\u0907\u090f\u0964',
-    followUp: '\u0907\u0938\u0915\u093e \u0935\u0930\u094d\u0924\u092e\u093e\u0928 \u092e\u0942\u0932\u094d\u092f \u0915\u094d\u092f\u093e \u0939\u0948?', answer: 'Option Alpha \u0915\u093e \u0938\u0924\u094d\u092f\u093e\u092a\u093f\u0924 \u092e\u0942\u0932\u094d\u092f 125 \u0907\u0915\u093e\u0908 \u0939\u0948\u0964',
+    tenantId: 'routing-tenant-ta-latn', agentId: 'routing-agent-ta-latn',
+    knowledgeBaseId: 'routing-kb-ta-latn', language: 'ta-Latn',
+    acknowledgement: 'Saringa, nandri.', acknowledgementResponse: 'Saringa, sollunga.',
+    overview: 'Enna options irukku?', direct: 'Option Alpha pathi sollunga.',
+    followUp: 'Idhoda current value enna?',
+    answer: 'Option Alpha verified value 125 units.',
   }),
 ]);
 
@@ -106,6 +109,29 @@ for (const configuration of tenants) {
   assert.equal(acknowledgement.decision.decision, 'RESPONSE');
   assert.equal(acknowledgementRuntime.inspect().retrievalCalls, 0);
   assert.equal(acknowledgementDecisions.length, 0);
+
+  let malformedCalls = 0;
+  const malformedRecovery = await routeTemplateEngineUtterance({
+    mainPrompt: `Use ${configuration.language}. Route facts through grounded search.`,
+    latestUtterance: configuration.overview,
+  }, {
+    tenantBoundaryVerified: true,
+    factualClaimsPresent: true,
+    invokeStructuredLlm: async () => {
+      malformedCalls += 1;
+      if (malformedCalls === 1) return '';
+      return {
+        decision: 'RESPONSE', response: configuration.answer,
+        clarification: null, search: null, tool: null,
+        nextQuestion: null, stateUpdate: null,
+      };
+    },
+  });
+  assert.equal(malformedCalls, 2, 'Malformed routing output must be retried once');
+  assert.equal(malformedRecovery.decision.decision, 'SEARCH',
+    'A factual retry must continue to retrieval without a route-validation fallback');
+  assert.notEqual(malformedRecovery.decision.decision, 'NO_MATCH');
+  assert.equal(malformedRecovery.outputValidation.route, 'SEARCH');
 
   const scenarios = [
     { utterance: configuration.overview, fact: 'available options', reference: null, state: {} },
