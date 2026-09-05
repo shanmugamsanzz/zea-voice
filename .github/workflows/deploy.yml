@@ -26,6 +26,12 @@ jobs:
 
       - name: Verify configuration-driven template engine
         working-directory: Backend
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/ci
+          REDIS_HOST: 127.0.0.1
+          AUTO_MIGRATE: false
+          RAG_ENABLED: false
         run: npm run verify:zero-business-vocabulary-release
 
   deploy:
