@@ -732,18 +732,43 @@ export async function retrieveTemplateEngineEvidence({
   // lexical/semantic channels cannot match a pronoun-only follow-up.
   // Explicit published names always take precedence over stale memory hints.
   const preferred = new Set((exactCatalog.length ? [] : search.preferredRecordIds ?? []).map(normalized));
-  const contextualRecords = scopedBundles.flatMap((bundle) => (bundle.records ?? [])
+  let contextualRecords = scopedBundles.flatMap((bundle) => (bundle.records ?? [])
     .filter((record) => preferred.has(normalized(record.record_id ?? record.recordId ?? record.id))
       && ['both', input.usageDirection].includes(normalized(record.usage_direction ?? record.usageDirection ?? 'both')))
     .map((record) => publishedRecordCandidate(record, bundle, input, { matchMethod: 'published_contextual' }))
     .filter((candidate) => candidate && ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(candidate.recordType)));
+  let contextualCategory = null;
+  if (!exactCatalog.length && preferred.size === 1 && search.contextualReference) {
+    // The LLM resolves the conversational reference to a published category
+    // name/key. Require both an exact published form and the remembered anchor;
+    // never expand an arbitrary item into all its siblings.
+    const categories = exactPublishedCandidates({ ...artifacts, bundles: scopedBundles }, input,
+      { ...search, query: search.contextualReference }, 20)
+      .filter((candidate) => candidate.recordType === 'CATALOG_CATEGORY' && candidate.score >= 0.98
+        && candidate.evidenceRecordIds?.some((id) => preferred.has(normalized(id))));
+    if (categories.length === 1) contextualCategory = categories[0];
+  }
   if (preferred.size > 1 && [...preferred].some((id) => !contextualRecords.some(
     (candidate) => normalized(candidate.recordId) === id,
   ))) {
     throw new AppError(503, 'A remembered comparison operand is not in the active publication',
       'TEMPLATE_ENGINE_REQUESTED_ENTITY_COVERAGE_INCOMPLETE');
   }
-  if (exactCatalog.length) {
+  let retrievalState = state;
+  if (contextualCategory) {
+    const children = contextualCategory.evidenceRecordIds;
+    search = Object.freeze({ ...search, preferredRecordIds: Object.freeze([...children]) });
+    searchDecision = Object.freeze({ ...searchDecision, search });
+    // This is a turn-local allowlist from the active publication, not model-
+    // invented IDs and not a change to persistent conversation memory.
+    retrievalState = { ...state, lastReferencedRecordIds: children, comparisonRecordIds: [] };
+    contextualRecords = [];
+    entityResolution = Object.freeze({ ...entityResolution,
+      candidate: Object.freeze({ ...contextualCategory, entityType: 'CATEGORY', explicit: true }),
+      candidateNamespace: 'CATALOG', action: 'CONTINUE', requiresCandidateConfirmation: false,
+      ambiguity: Object.freeze({ detected: false, candidates: Object.freeze([]) }),
+    });
+  } else if (exactCatalog.length) {
     search = Object.freeze({ ...search, preferredRecordIds: Object.freeze([]) });
     searchDecision = Object.freeze({ ...searchDecision, search });
   } else if (preferred.size === 1 && contextualRecords.length === 1) {
@@ -757,6 +782,10 @@ export async function retrieveTemplateEngineEvidence({
   }
   const resolvedIdentities = new Set(resolutionReservations(entityResolution)
     .map((candidate) => candidateIdentityKey(candidate, input.tenantId)));
+  if (resolvedIdentities.size > 20 || search.preferredRecordIds.length > 20) {
+    throw new AppError(503, 'The requested set exceeds the bounded evidence capacity',
+      'TEMPLATE_ENGINE_REQUESTED_ENTITY_COVERAGE_INCOMPLETE');
+  }
   const resolvedRecords = scopedBundles.flatMap((bundle) => (bundle.records ?? [])
     .map((record) => publishedRecordCandidate(record, bundle, input))
     .filter((candidate) => candidate && resolvedIdentities.has(
@@ -784,7 +813,7 @@ export async function retrieveTemplateEngineEvidence({
   };
   const rawHybrid = await runTemplateEngineHybridRetrieval({
     decision: searchDecision,
-    state: exactCatalog.length ? { ...state, lastReferencedRecordIds: [], comparisonRecordIds: [] } : state,
+    state: exactCatalog.length ? { ...state, lastReferencedRecordIds: [], comparisonRecordIds: [] } : retrievalState,
     scope: { ...scope, publications: artifacts.publications },
     limitPerChannel: 20,
     candidateLimit: 20,
@@ -800,7 +829,8 @@ export async function retrieveTemplateEngineEvidence({
       publications: artifacts.publications,
     },
   );
-  if (entityConstraint.comparison) {
+  if (entityConstraint.comparison || (entityResolution?.candidate?.entityType === 'CATEGORY'
+    && entityResolution.candidate.evidenceRecordIds?.length)) {
     // Multiple deliberately selected operands are not alternative identities.
     entityResolution = Object.freeze({ ...entityResolution, candidate: null,
       action: 'CONTINUE', requiresCandidateConfirmation: false,
@@ -884,7 +914,13 @@ export async function retrieveTemplateEngineEvidence({
   let hydrated = hydrationState(authoritative);
   if (entityConstraint.constrained && !hydrated.exact && !selectionRetryAttempted) {
     selectionRetryAttempted = true;
-    authoritative = await hydrateSelection(exactSelection(), true);
+    try {
+      authoritative = await hydrateSelection(exactSelection(), true);
+    } catch (error) {
+      if (!recoverableHydrationMiss(error)) throw error;
+      throw new AppError(503, 'Requested evidence hydration retry failed',
+        'TEMPLATE_ENGINE_REQUESTED_ENTITY_HYDRATION_INCOMPLETE');
+    }
     hydrated = hydrationState(authoritative);
   }
   const hydratedEvidence = hydrated.all;
@@ -893,8 +929,16 @@ export async function retrieveTemplateEngineEvidence({
   const selectedCandidates = Array.isArray(authoritative?.fusion?.candidates)
     ? authoritative.fusion.candidates : retrieval.candidates;
   const requestedEntityHydrationIncomplete = entityConstraint.constrained && !hydrated.exact;
+  if (requestedEntityHydrationIncomplete) {
+    throw new AppError(503, 'Requested published records could not all be hydrated after retry',
+      'TEMPLATE_ENGINE_REQUESTED_ENTITY_HYDRATION_INCOMPLETE', {
+        requestedCount: requestedIdentities.size, hydratedCount: entityMatchedEvidence.length,
+        selectionRetryAttempted,
+      });
+  }
   const evidence = verifyTemplateEngineEvidence(
-    entityMatchedEvidence.map((source) => evidenceRecord(source, search.requestedFact)).slice(0, 5),
+    entityMatchedEvidence.map((source) => evidenceRecord(source, search.requestedFact))
+      .slice(0, Math.max(5, requestedIdentities.size)),
     selectedCandidates,
     { ...scope, publications: artifacts.publications },
   );

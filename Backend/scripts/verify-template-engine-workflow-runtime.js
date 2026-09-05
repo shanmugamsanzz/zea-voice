@@ -8,6 +8,7 @@ import {
   executeAndPhraseTemplateEngineWorkflow,
   executeTemplateEngineWorkflow,
   phraseTemplateEngineWorkflowSpeech,
+  validateTemplateEngineWorkflowConfiguration,
 } from '../src/voice/interaction/template-engine-workflow-runtime.js';
 import { WorkflowFieldAudioCache } from '../src/voice/workflow-field-audio-cache.service.js';
 
@@ -70,6 +71,57 @@ const activated = activateTemplateEngineWorkflow({
   ...common, toolDecision,
   state: { activeWorkflowId: null, collectedToolFields: {}, confirmationStatus: null },
 });
+const missingConfirmationTool = { ...tool, inputSchema: { ...tool.inputSchema,
+  'x-confirmation-message': '   ',
+} };
+let configurationSideEffects = 0;
+await assert.rejects(() => advanceTemplateEngineWorkflowTurn({
+  ...common, assignedTools: [missingConfirmationTool], toolDecision, state: {},
+}, {
+  persistWorkflowState: async () => { configurationSideEffects += 1; },
+  executeAuthorizedTool: async () => { configurationSideEffects += 1; },
+  invokeStructuredLlm: async () => { configurationSideEffects += 1; },
+}), { code: 'TEMPLATE_ENGINE_WORKFLOW_CONFIRMATION_CONFIGURATION_MISSING' });
+assert.equal(configurationSideEffects, 0, 'Missing confirmation must fail before activation, questions or tool execution');
+assert.doesNotThrow(() => validateTemplateEngineWorkflowConfiguration({
+  ...common, toolDecision, confirmationMessage: '   ',
+}), 'Blank global overrides must not hide the configured tool confirmation');
+assert.doesNotThrow(() => validateTemplateEngineWorkflowConfiguration({
+  ...common, toolDecision, assignedTools: [missingConfirmationTool],
+  confirmationMessage: 'Confirm the collected values?',
+}));
+const reused = activateTemplateEngineWorkflow({
+  ...common, toolDecision, state: { collectedToolFields: {
+    full_name: 'Existing Caller', quantity: '2', unrelated_field: 'do not send',
+  } },
+});
+assert.equal(reused.progress.complete, true);
+assert.deepEqual(reused.state.collectedToolFields, { full_name: 'Existing Caller', quantity: 2 });
+const invalidReuse = activateTemplateEngineWorkflow({
+  ...common, toolDecision, state: { collectedToolFields: { full_name: 'Existing Caller', quantity: 0 } },
+});
+assert.equal(invalidReuse.progress.nextField.key, 'quantity');
+assert.equal(Object.hasOwn(invalidReuse.state.collectedToolFields, 'quantity'), false);
+const optionalTool = { ...tool, inputSchema: { ...tool.inputSchema,
+  properties: { ...tool.inputSchema.properties, reference: { type: 'string', pattern: '^REF-[0-9]+$' } },
+} };
+const optionalFields = [...fields, { key: 'reference', required: false, question: 'Your reference?', requiredAction: tool.name },
+  { key: 'unrelated_global', required: true, question: 'An unrelated field?' }];
+const optionalInput = { ...common, assignedTools: [optionalTool], informationFields: optionalFields };
+const optional = collectTemplateEngineWorkflowFields({
+  ...optionalInput, state: reused.state, candidateValues: { reference: 'invalid' }, candidateValuesVerified: true,
+});
+assert.equal(optional.progress.complete, true, 'Do not require absent optional or unrelated global fields');
+assert.deepEqual(optional.rejectedFields, ['reference']);
+const withOptional = collectTemplateEngineWorkflowFields({
+  ...optionalInput, state: reused.state, candidateValues: { reference: 'REF-42' }, candidateValuesVerified: true,
+});
+assert.equal(withOptional.state.collectedToolFields.reference, 'REF-42');
+const uiRequired = activateTemplateEngineWorkflow({
+  ...optionalInput, toolDecision, state: reused.state,
+  informationFields: optionalFields.map((field) => field.key === 'reference' ? { ...field, required: true } : field),
+});
+assert.equal(uiRequired.progress.nextField.key, 'reference', 'Respect UI-required fields even when the tool schema permits omission');
 assert.equal(activated.state.activeWorkflowId, 'workflow-1');
 assert.deepEqual(activated.state.collectedToolFields, {});
 assert.equal(activated.state.confirmationStatus, 'pending_fields');
@@ -311,6 +363,20 @@ assert.equal(coordinated.verifiedResult.verified, true);
 assert.equal(coordinated.verifiedResult.success, false);
 assert.equal(coordinated.state.activeWorkflowId, 'workflow-1');
 assert.equal(coordinated.state.confirmationStatus, 'execution_failed');
+
+let correctionExecutions = 0;
+const correctedConfirmation = await advanceTemplateEngineWorkflowTurn({
+  ...common, mainPrompt: 'Speak briefly.', state: complete.state,
+  candidateValues: { quantity: '3' }, candidateValuesVerified: true,
+  confirmation: { accepted: true, explicit: true },
+}, {
+  persistWorkflowState: async () => {},
+  executeAuthorizedTool: async () => { correctionExecutions += 1; },
+  invokeStructuredLlm: async () => ({ outputParsed: { speech: 'Alex Example, quantity 3. Please confirm these details.' } }),
+});
+assert.equal(correctionExecutions, 0, 'Changed details must be confirmed again, not executed using prior consent');
+assert.equal(correctedConfirmation.status, 'AWAITING_CONFIRMATION');
+assert.equal(correctedConfirmation.state.collectedToolFields.quantity, 3);
 
 await assert.rejects(() => advanceTemplateEngineWorkflowTurn({
   ...common, mainPrompt: 'Speak briefly and naturally.',

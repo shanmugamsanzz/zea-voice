@@ -8,7 +8,40 @@ import {
   publishedResolutionAmbiguity,
   runTemplateEngineProductionTurn,
 } from '../src/voice/interaction/template-engine-production-runtime.js';
-import { recordTemplateEngineTurnMetrics } from '../src/voice/interaction/template-engine-observability.js';
+import { recordTemplateEngineTurnMetrics, templateEngineAudioPercentiles } from '../src/voice/interaction/template-engine-observability.js';
+import { instrumentTemplateEngineTurn } from '../src/voice/interaction/template-engine-turn-timing.js';
+
+let validationInvocations = 0;
+const timingEvents = [];
+const timed = instrumentTemplateEngineTurn({
+  onStageTiming: (event) => timingEvents.push(event),
+  validateGroundedClaims: async (input) => {
+    validationInvocations += 1;
+    if (input.cancelled) throw Object.assign(new Error('Cancelled'), { name: 'AbortError' });
+    return { supported: input.response === 'supported' };
+  },
+});
+const validationInput = { response: 'supported', citedEvidence: [{ tenantId: 'a', publicationRevision: 1 }] };
+await Promise.all([timed.validateGroundedClaims(validationInput), timed.validateGroundedClaims(validationInput)]);
+assert.equal(validationInvocations, 1, 'Identical concurrent validation reuses one check within a turn');
+await timed.validateGroundedClaims({ ...validationInput, response: 'changed' });
+await timed.validateGroundedClaims({ ...validationInput, citedEvidence: [{ tenantId: 'b', publicationRevision: 1 }] });
+await timed.validateGroundedClaims({ ...validationInput, citedEvidence: [{ tenantId: 'a', publicationRevision: 2 }] });
+assert.equal(validationInvocations, 4, 'Changed speech, tenant or publication must be revalidated');
+for (let attempt = 0; attempt < 2; attempt += 1) {
+  await assert.rejects(() => timed.validateGroundedClaims({ cancelled: true }), { name: 'AbortError' });
+}
+assert.equal(validationInvocations, 6, 'Cancelled checks must not be cached');
+assert.ok(timingEvents.some((event) => event.cacheHit));
+assert.ok(timingEvents.every((event) => Number.isFinite(event.durationMs) && event.durationMs >= 0));
+const audioPercentiles = templateEngineAudioPercentiles([
+  { acknowledgementFirstAudioMs: 750, finalAnswerFirstAudioMs: 10000 },
+  { acknowledgementFirstAudioMs: null, finalAnswerFirstAudioMs: 12000 },
+  { acknowledgementFirstAudioMs: undefined, finalAnswerFirstAudioMs: null },
+]);
+assert.equal(audioPercentiles.acknowledgement.count, 1);
+assert.equal(audioPercentiles.finalAnswer.count, 2);
+assert.equal(audioPercentiles.finalAnswer.p90, 12000, 'Acknowledgements must never improve answer latency percentiles');
 
 const tenantId = '11111111-1111-4111-8111-111111111111';
 const agentId = '22222222-2222-4222-8222-222222222222';
@@ -535,7 +568,55 @@ assert.equal(guidanceRetrieval.evidence[0].documentDisplayName,
   'Tenant Conversation Guidance');
 
 let emptyHydrationAttempts = 0;
-const emptyHydration = await retrieveTemplateEngineEvidence({
+for (const tenantSuffix of ['a', 'b']) {
+  for (const size of [3, 6]) {
+    const activeTenant = `${tenantId}-${tenantSuffix}`;
+    const records = Array.from({ length: size }, (_, index) => ({
+      record_id: `choice-${index}`, record_type: 'catalog_item', usage_direction: 'both',
+      entity_name: `Published Choice ${index}`, entity_category: 'Published Collection',
+      entity_metadata: { categoryKey: 'published-collection', itemKey: `choice-${index}` },
+    }));
+    for (const reference of ['Published Collection', 'previous selections']) {
+      let attempts = 0;
+      const coverage = await retrieveTemplateEngineEvidence({
+        auth: { tenantId: activeTenant }, scope: { ...scope, tenantId: activeTenant },
+        callId: 'category-coverage', usageDirection: 'inbound', language: 'ta',
+        state: { lastReferencedRecordIds: reference === 'Published Collection'
+          ? ['choice-0'] : records.map((record) => record.record_id),
+          comparisonRecordIds: reference === 'previous selections' ? records.map((record) => record.record_id) : [] },
+        searchDecision: { ...searchDecision, search: { query: 'Explain all of them', requestedFact: 'details',
+          contextualReference: reference, preferredRecordIds: [] } },
+      }, {
+        loadArtifacts: async () => ({ publications: [publication], sparseIndexes: [], bundles: [
+          { tenantId: activeTenant, ...publication, records },
+          { tenantId: 'foreign-tenant', ...publication, records },
+          { tenantId: activeTenant, ...publication, publicationRevision: 3, records },
+        ] }),
+        resolveEntityRoute: () => ({ candidate: null, ambiguity: { detected: true, candidates: [] } }),
+        searchCandidates: async () => ({ channels: { structured: [], bm25: [], qdrant: [] } }),
+        hydrateEvidence: async ({ retrieval: selected, resolution, limit }) => {
+          attempts += 1;
+          assert.equal(selected.candidates.length, size);
+          assert.ok(limit >= size);
+          assert.equal(resolution.candidate, null, 'A category wrapper must not filter out its requested children');
+          const retained = attempts === 1 ? selected.candidates.slice(0, 1) : selected.candidates;
+          return { evidence: retained.map((entry) => ({ ...entry, id: entry.recordId,
+            hydrationValidated: true, publicationValidated: true, callerFacing: true,
+            content: 'Published details', authoritativeData: { details: 'Published details' }, provenance: publication,
+          })) };
+        },
+      });
+      assert.equal(attempts, 2, 'Retry partial hydration with the full exact set');
+      assert.equal(coverage.evidence.length, size, 'No top-five truncation of required operands');
+      assert.equal(coverage.requestedEntityRecordIds.length, size);
+      assert.ok(coverage.evidence.every((entry) => entry.tenantId === activeTenant && entry.publicationRevision === 4));
+      assert.equal(publishedResolutionAmbiguity(coverage.entityResolution, coverage.evidence,
+        coverage.searchClassification).required, false);
+    }
+  }
+}
+
+await assert.rejects(() => retrieveTemplateEngineEvidence({
   auth: { tenantId }, scope, callId: 'call-empty', usageDirection: 'inbound',
   language: 'en', searchDecision, state: {},
 }, {
@@ -547,21 +628,17 @@ const emptyHydration = await retrieveTemplateEngineEvidence({
     emptyHydrationAttempts += 1;
     return { evidence: [], fusion: { candidates: selected.candidates }, rejectedRecordIds: [] };
   },
-});
+}), { code: 'TEMPLATE_ENGINE_REQUESTED_ENTITY_HYDRATION_INCOMPLETE' });
 assert.equal(emptyHydrationAttempts, 2,
   'An unresolved published identity must retry hydration exactly once');
-assert.deepEqual(emptyHydration.evidence, []);
-assert.equal(emptyHydration.diagnostics.selectionRetryAttempted, true);
-assert.equal(emptyHydration.diagnostics.requestedEntityHydrationIncomplete, true);
-assert.equal(emptyHydration.diagnostics.requestedEntityCount, 1);
-assert.equal(emptyHydration.diagnostics.hydratedRequestedEntityCount, 0);
+const emptyHydration = { evidence: [], diagnostics: { requestedEntityHydrationIncomplete: true } };
 
 const unavailableSpeech = 'That requested information is not currently published.';
 const unavailableDecisions = [searchDecision, {
   decision: 'NO_MATCH', response: unavailableSpeech,
   clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
 }];
-const unavailableTurn = await runTemplateEngineProductionTurn({
+await assert.rejects(() => runTemplateEngineProductionTurn({
   auth: { tenantId }, scope, callId: 'call-empty-no-match', usageDirection: 'inbound',
   language: 'en', mainPrompt: 'Use the configured unavailable response when evidence is absent.',
   latestUtterance: 'Tell me the requested published information.',
@@ -581,11 +658,8 @@ const unavailableTurn = await runTemplateEngineProductionTurn({
     requestedFactAddressed: decision === 'NO_MATCH',
   }),
   validateToolResultSpeechClaims: async () => ({ supported: true, successClaimed: false }),
-});
-assert.equal(unavailableTurn.decision.decision, 'NO_MATCH');
-assert.equal(unavailableTurn.speech, unavailableSpeech);
-assert.deepEqual(unavailableTurn.evidenceIds, []);
-assert.equal(unavailableTurn.provenance.finalDecision, 'NO_MATCH');
+}), { code: 'TEMPLATE_ENGINE_REQUESTED_ENTITY_HYDRATION_INCOMPLETE' });
+assert.equal(unavailableDecisions.length, 1, 'Hydration failure must not reach the answer-generation LLM');
 
 await assert.rejects(() => retrieveTemplateEngineEvidence({
   auth: { tenantId }, scope, callId: 'call-cross-scope', usageDirection: 'inbound',
@@ -697,6 +771,52 @@ assert.equal(speculativeDiagnostics.speculativeReused, true);
 assert.equal(deterministicChecks, 1,
   'Follow-up validation must not add a second grounding-validator call');
 assert.match(speculativeTurn.speech, /Tenant Item costs 125/u);
+
+let releaseSpeculation;
+const delayedSpeculation = new Promise((resolve) => { releaseSpeculation = resolve; });
+const loadedArtifacts = {};
+let publicationLoads = 0;
+let foregroundRetrievals = 0;
+const foregroundStages = [];
+const foregroundDecisions = [searchDecision, { decision: 'RESPONSE', response: 'Tenant Item costs 125.',
+  clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null }];
+let deadline;
+try {
+  const foreground = runTemplateEngineProductionTurn({
+    auth: { tenantId }, scope, callId: 'slow-speculation', usageDirection: 'inbound', language: 'en',
+    mainPrompt: 'Use published facts.', latestUtterance: 'What is the tenant item price?', state: {},
+    assignedTools: [], informationFields: [],
+  }, {
+    invokeStructuredLlm: async () => foregroundDecisions.shift(),
+    loadPublishedContext: async () => { publicationLoads += 1;
+      return { scope, artifacts: loadedArtifacts, publishedWorkflows: [] }; },
+    retrieveSpeculativeEvidence: async ({ preloadedArtifacts }) => {
+      assert.equal(preloadedArtifacts, loadedArtifacts);
+      return delayedSpeculation;
+    },
+    retrieveEvidence: async ({ preloadedArtifacts }) => {
+      foregroundRetrievals += 1;
+      assert.equal(preloadedArtifacts, loadedArtifacts, 'Foreground and speculation share the exact per-turn publication snapshot');
+      return retrieval;
+    },
+    persistWorkflowState: async () => {}, executeAuthorizedTool: async () => { assert.fail('No tools'); },
+    validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
+    validateToolResultSpeechClaims: async () => ({ supported: true }),
+    onStageTiming: (event) => foregroundStages.push(event.stage),
+  });
+  const result = await Promise.race([foreground, new Promise((_, reject) => {
+    deadline = setTimeout(() => reject(new Error('Foreground waited for unfinished speculation')), 2000);
+  })]);
+  assert.equal(result.speech, 'Tenant Item costs 125.');
+  assert.equal(publicationLoads, 1);
+  assert.equal(foregroundRetrievals, 1);
+  for (const stage of ['publication_load', 'routing', 'retrieval', 'generation', 'validation']) {
+    assert.ok(foregroundStages.includes(stage), `Missing timing for ${stage}`);
+  }
+} finally {
+  clearTimeout(deadline);
+  releaseSpeculation(retrieval);
+}
 
 const guardedDecisions = [{
   decision: 'RESPONSE', response: 'Tenant Item costs 125.', clarification: null,

@@ -52,7 +52,7 @@ import {
 import { createMinimalTemplateEngineState } from './interaction/template-engine-state.js';
 import { runTemplateEngineProductionTurn } from './interaction/template-engine-production-runtime.js';
 import { armTemplateEngineTurnLatencyAcknowledgement } from './interaction/template-engine-turn-latency.js';
-import { recordTemplateEngineTurnMetrics } from './interaction/template-engine-observability.js';
+import { recordTemplateEngineTurnMetrics, templateEngineAudioPercentiles } from './interaction/template-engine-observability.js';
 import {
   isTemplateEngineStructuredOutputFailure,
   parseTemplateEngineStructuredOutput,
@@ -1900,6 +1900,7 @@ export class RealtimeConversationOrchestrator {
     let firstValidatedTextAt = null;
     let firstAudioAt = null;
     let firstFinalAudioAt = null;
+    let acknowledgementFirstAudioAt = null;
     let spokenCharacters = 0;
     let pendingShortSentence = '';
     let groupingTimer = null;
@@ -2044,6 +2045,7 @@ export class RealtimeConversationOrchestrator {
           if (!await this.#reserveTtsCharacters(sentence, generationId)) return false;
           this.audioEngine.beginOutputGeneration(generationId, generationPlaybackGroupId);
           firstAudioAt ??= Date.now();
+          if (acknowledgement) acknowledgementFirstAudioAt ??= Date.now();
           if (!acknowledgement && !audibleSentences.includes(sentence)) {
             firstFinalAudioAt ??= Date.now();
             audibleSentences.push(sentence);
@@ -2131,6 +2133,7 @@ export class RealtimeConversationOrchestrator {
           validatedTextAt: acknowledgement ? undefined : firstValidatedTextAt,
           onFirstAudio: () => {
             firstAudioAt ??= Date.now();
+            if (acknowledgement) acknowledgementFirstAudioAt ??= Date.now();
             if (!acknowledgement && !audibleSentences.includes(sentence)) {
               firstFinalAudioAt ??= Date.now();
               audibleSentences.push(sentence);
@@ -2302,6 +2305,7 @@ export class RealtimeConversationOrchestrator {
             spokenText: completedSentences.join(' ').trim(),
             firstAudioAt,
             firstFinalAudioAt,
+            acknowledgementFirstAudioAt,
           };
         } finally {
           clearGroupingTimer();
@@ -2426,6 +2430,7 @@ export class RealtimeConversationOrchestrator {
     });
     let result;
     let retrievalDiagnostics = null;
+    const stageTimings = {};
     let finalResponseReadyAt = null;
     try {
       result = await runTemplateEngineProductionTurn({
@@ -2435,6 +2440,10 @@ export class RealtimeConversationOrchestrator {
         usageDirection: this.call.direction,
         language: languageCode(this.runtimeProfile.agent.language),
         mainPrompt: this.runtimeProfile.agent.prompt,
+        maximumSpeechCharacters: Math.min(...[
+          Number(this.runtimeProfile.limits?.ttsMaxCharactersPerResponse ?? 0),
+          Number(env.VOICE_TTS_MAX_RESPONSE_CHARACTERS),
+        ].filter((value) => Number.isFinite(value) && value > 0)),
         latestUtterance: query,
         conversationHistory: history,
         state: this.templateEngineState,
@@ -2564,6 +2573,16 @@ export class RealtimeConversationOrchestrator {
             failedChannels: details.failedChannels,
           }, 'Template-engine retrieval and hydration completed');
         },
+        onStageTiming: (details) => {
+          const timing = stageTimings[details.stage] ??= { durationMs: 0, calls: 0, cacheHits: 0 };
+          timing.durationMs += details.durationMs;
+          timing.calls += 1;
+          if (details.cacheHit) timing.cacheHits += 1;
+          this.log.info({ stage: 'template_engine.stage_timing', callId: this.call.id,
+            turnEpoch: epoch, phase: details.stage, durationMs: details.durationMs,
+            outcome: details.outcome, cacheHit: details.cacheHit === true,
+          }, 'Template-engine stage timing');
+        },
         onPostSearchDiagnostics: (details) => {
           this.log.info({
             stage: 'template_engine.post_search_validated',
@@ -2664,10 +2683,12 @@ export class RealtimeConversationOrchestrator {
     const answer = playback.spokenText
       || sentencePipeline.completedText()
       || finalAnswer;
-    recordTemplateEngineTurnMetrics(this.runtimeMetrics, {
+    const turnTiming = recordTemplateEngineTurnMetrics(this.runtimeMetrics, {
       epoch, result, retrievalDiagnostics, turnStartedAt,
       firstAudioAt: playback.firstAudioAt,
       firstFinalAudioAt: playback.firstFinalAudioAt,
+      acknowledgementFirstAudioAt: playback.acknowledgementFirstAudioAt,
+      stageTimings,
       finalResponseReadyAt,
       firstAudioDeadlineMs: Math.min(env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS, 2_000),
     });
@@ -2687,6 +2708,11 @@ export class RealtimeConversationOrchestrator {
       toolExecuted: result.toolExecuted === true,
       operationalFailure: result.operationalFailure ?? null,
       validationFailure: result.validationFailure ?? null,
+      stageTimings,
+      acknowledgementFirstAudioMs: turnTiming.acknowledgementFirstAudioMs,
+      finalAnswerFirstAudioMs: turnTiming.finalAnswerFirstAudioMs,
+      finalAnswerAudioAfterReadyMs: turnTiming.finalAnswerAudioAfterReadyMs,
+      finalAnswerStatus: turnTiming.finalAnswerStatus,
       sttFinalizationMs: sttTiming.sttFinalizationMs ?? null,
       durationMs: Date.now() - turnStartedAt,
     }, 'Pure template-engine turn completed');
@@ -3664,10 +3690,10 @@ export class RealtimeConversationOrchestrator {
     const firstAudioSlo = evaluateFirstAudioSlo(
       (this.runtimeMetrics.turnLatency ?? [])
         .map((turn) => turn.totalFirstAudioMs)
-        .filter((value) => Number.isFinite(Number(value))),
+        .filter(Number.isFinite),
     );
     const retrievalSamples = (this.runtimeMetrics.turnLatency ?? [])
-      .map((turn) => turn.retrievalMs).filter((value) => Number.isFinite(Number(value)));
+      .map((turn) => turn.retrievalMs).filter(Number.isFinite);
     const retrievalPercentiles = {
       count: retrievalSamples.length,
       p50: percentile(retrievalSamples, 0.50),
@@ -3675,6 +3701,12 @@ export class RealtimeConversationOrchestrator {
       p95: percentile(retrievalSamples, 0.95),
     };
     this.runtimeMetrics.latency.firstAudioPercentiles = firstAudioSlo.observed;
+    const separatedAudio = templateEngineAudioPercentiles(this.runtimeMetrics.turnLatency ?? []);
+    this.runtimeMetrics.latency.acknowledgementAudioPercentiles = separatedAudio.acknowledgement;
+    this.runtimeMetrics.latency.finalAnswerAudioPercentiles = separatedAudio.finalAnswer;
+    this.log.info({ stage: 'template_engine.answer_audio_percentiles', callId: this.call.id,
+      acknowledgement: separatedAudio.acknowledgement, finalAnswer: separatedAudio.finalAnswer,
+    }, 'Acknowledgement and final-answer audio latency reported separately');
     this.runtimeMetrics.latency.retrievalPercentiles = retrievalPercentiles;
     this.log.info({
       stage: 'voice.first_audio_percentiles', callId: this.call.id,

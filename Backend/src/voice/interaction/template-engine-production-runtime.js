@@ -1,4 +1,6 @@
 import { AppError } from '../../middleware/errors.js';
+import { instrumentTemplateEngineTurn } from './template-engine-turn-timing.js';
+import { normalizedSpeechBudget, speechBudgetInstruction } from './template-engine-speech-budget.js';
 import { applyMinimalTemplateEngineStateUpdate, createMinimalTemplateEngineState } from './template-engine-state.js';
 import { routeTemplateEngineUtterance, respondToTemplateEngineSearch } from './template-engine-orchestrator.js';
 import {
@@ -208,12 +210,13 @@ function speculativeEvidenceCompatible(retrieval, decision, input) {
 async function composeWithFollowUpRepair({
   decision, mainPrompt, latestUtterance, recentCompleteTurns, conversationGuidance,
   evidence, suppressFollowUp = false, invokeStructuredLlm,
+  maximumSpeechCharacters = null,
   onDiagnostics,
 }) {
   let claimsValidated = followUpClaimsSupported(decision, evidence);
   let composed = validateAndComposeTemplateEngineSpeech({
     decision, recentCompleteTurns, conversationGuidance, suppressFollowUp,
-    claimsValidated,
+    claimsValidated, maximumSpeechCharacters,
   });
   const repair = await repairTemplateEngineFollowUp({
     decision,
@@ -222,6 +225,7 @@ async function composeWithFollowUpRepair({
     recentCompleteTurns,
     conversationGuidance,
     initialValidation: composed.followUp,
+    maximumSpeechCharacters,
     invokeStructuredLlm,
   });
   if (repair.attempted && repair.reason === null) {
@@ -231,8 +235,12 @@ async function composeWithFollowUpRepair({
       recentCompleteTurns,
       conversationGuidance,
       suppressFollowUp,
-      claimsValidated,
+      claimsValidated, maximumSpeechCharacters,
     });
+  }
+  if (maximumSpeechCharacters && composed.speech.length > maximumSpeechCharacters) {
+    throw new AppError(502, 'The complete validated answer exceeds the speech budget',
+      'TEMPLATE_ENGINE_SPEECH_BUDGET_EXCEEDED');
   }
   onDiagnostics?.(Object.freeze({
     guidanceRecordId: conversationGuidance?.recordId ?? null,
@@ -428,6 +436,9 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       throw new TypeError(`Template-engine production runtime requires ${dependency}`);
     }
   }
+  dependencies = instrumentTemplateEngineTurn(dependencies);
+  input = { ...input, maximumSpeechCharacters: normalizedSpeechBudget(input.maximumSpeechCharacters
+    ?? input.runtimeProfile?.limits?.ttsMaxCharactersPerResponse) };
   const state = createMinimalTemplateEngineState({
     conversationHistory: input.conversationHistory,
     ...object(input.state),
@@ -450,7 +461,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     dependencies.onConversationGuidanceSelected, 'initial_routing', initialConversationGuidance,
   );
   const common = {
-    mainPrompt: input.mainPrompt,
+    mainPrompt: [input.mainPrompt, speechBudgetInstruction(input.maximumSpeechCharacters)].filter(Boolean).join('\n'),
     latestUtterance: input.latestUtterance,
     conversationHistory: state.recentCompleteTurns,
     pendingClarification: state.pendingClarification,
@@ -463,6 +474,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     authorizedWorkflowTools: workflowSummaries,
     conversationGuidance: initialConversationGuidance,
   };
+  let completedSpeculativeResult = null;
   const speculativeRetrieval = typeof dependencies.retrieveSpeculativeEvidence === 'function'
     ? dependencies.retrieveSpeculativeEvidence({
       auth: input.auth,
@@ -476,7 +488,10 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       preloadedArtifacts: publishedContext.artifacts,
       conversationGuidance: initialConversationGuidance,
       speculative: true,
-    }).catch((error) => Object.freeze({ error }))
+    }).catch((error) => Object.freeze({ error })).then((value) => {
+      completedSpeculativeResult = value;
+      return value;
+    })
     : null;
   const routingDependencies = {
     invokeStructuredLlm: dependencies.invokeStructuredLlm,
@@ -537,6 +552,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       recentCompleteTurns: state.recentCompleteTurns,
       conversationGuidance: directConversationGuidance,
       evidence: [],
+      maximumSpeechCharacters: input.maximumSpeechCharacters,
       invokeStructuredLlm: dependencies.invokeStructuredLlm,
       onDiagnostics: (details) => dependencies.onFollowUpDiagnostics?.(Object.freeze({
         phase: 'direct_response', ...details,
@@ -575,9 +591,11 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     dependencies.onConversationGuidanceSelected,
     'pre_retrieval', preRetrievalConversationGuidance,
   );
-  const speculativeResult = speculativeRetrieval ? await speculativeRetrieval : null;
   const guidanceCompatible = (initialConversationGuidance?.recordId ?? null)
     === (preRetrievalConversationGuidance?.recordId ?? null);
+  // Speculation is an opportunistic optimization, never a dependency of the
+  // foreground answer. Reuse only completed, compatible verified evidence.
+  const speculativeResult = guidanceCompatible ? completedSpeculativeResult : null;
   const usedSpeculativeRetrieval = guidanceCompatible
     && speculativeEvidenceCompatible(speculativeResult, first, input);
   const retrieval = usedSpeculativeRetrieval ? speculativeResult : await dependencies.retrieveEvidence({
@@ -605,6 +623,15 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       speculativeReused: usedSpeculativeRetrieval,
     }));
   }
+  const hydratedRecordIds = new Set((retrieval.evidence ?? []).filter((source) => source.verified === true)
+    .map((source) => cleanText(source.recordId, 160).toLocaleLowerCase()));
+  if (retrieval.diagnostics?.requestedEntityHydrationIncomplete === true
+    || (retrieval.requestedEntityRecordIds ?? []).some((id) => !hydratedRecordIds.has(
+      cleanText(id, 160).toLocaleLowerCase(),
+    ))) {
+    throw new AppError(503, 'Requested evidence hydration is incomplete',
+      'TEMPLATE_ENGINE_REQUESTED_ENTITY_HYDRATION_INCOMPLETE');
+  }
   const postSearchConversationGuidance = selectApplicableConversationGuidance({
     publishedConversationGuidance: publishedContext.publishedConversationGuidance ?? [],
     scope: publishedContext.scope,
@@ -622,6 +649,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   );
   const answered = await respondToTemplateEngineSearch({
     ...common,
+    mainPrompt: input.mainPrompt,
     state,
     searchDecision: first,
     verifiedEvidence: retrieval.evidence,
@@ -629,6 +657,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     informationUnavailableResponse: input.informationUnavailableResponse,
     conversationGuidance: postSearchConversationGuidance,
     requestedEntityRecordIds: retrieval.requestedEntityRecordIds,
+    maximumSpeechCharacters: input.maximumSpeechCharacters,
   }, {
     invokeStructuredLlm: dependencies.invokeStructuredLlm,
     tenantBoundaryVerified: true,
@@ -658,6 +687,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     conversationGuidance: postSearchConversationGuidance,
     evidence: retrieval.evidence,
     suppressFollowUp: templateEngineEvidenceSuppressesFollowUp(retrieval.evidence),
+    maximumSpeechCharacters: input.maximumSpeechCharacters,
     invokeStructuredLlm: dependencies.invokeStructuredLlm,
     onDiagnostics: (details) => dependencies.onFollowUpDiagnostics?.(Object.freeze({
       phase: 'post_search', ...details,

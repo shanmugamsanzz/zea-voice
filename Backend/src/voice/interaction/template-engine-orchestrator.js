@@ -1,4 +1,5 @@
 import { AppError } from '../../middleware/errors.js';
+import { speechBudgetInstruction } from './template-engine-speech-budget.js';
 import { templateEngineDecisionJsonSchema } from './template-engine-decision-contract.js';
 import { createMinimalTemplateEngineState } from './template-engine-state.js';
 import { normalizeTemplateEngineSearchDecision } from './template-engine-search-request.js';
@@ -172,6 +173,7 @@ function outputValidationInput(decision, orchestratorInput, dependencies, additi
     toolExecutionRequested: dependencies.toolExecutionRequested === true,
     requiredEvidenceRecordIds: dependencies.requiredEvidenceRecordIds ?? [],
     requestedFactAvailable: dependencies.requestedFactAvailable === true,
+    maximumSpeechCharacters: dependencies.maximumSpeechCharacters,
     ...additions,
   });
 }
@@ -374,7 +376,7 @@ function verifiedEvidenceForPostSearch(values, scope = {}) {
         value?.publishedAttributePaths, 120,
       )),
     }));
-    if (evidence.length >= 5) break;
+    if (evidence.length >= 20) break;
   }
   return Object.freeze(evidence);
 }
@@ -573,7 +575,8 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
   const requestedFactAvailable = evidenceProvidesRequestedFact(
     evidence, search.value.search.requestedFact,
   );
-  dependencies = { ...dependencies, ambiguity: verifiedClarificationAmbiguity(
+  dependencies = { ...dependencies, maximumSpeechCharacters: input.maximumSpeechCharacters,
+    ambiguity: verifiedClarificationAmbiguity(
     { decision: 'RESPONSE' }, evidence,
     { ...search.value.search, preferredRecordIds: requiredEntityRecordIds.length
       ? requiredEntityRecordIds : search.value.search.preferredRecordIds },
@@ -603,6 +606,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       phase: 'post_search',
     }),
     'Runtime grounding rules: authoritativeData, content, and publishedAttributePaths contain the only published facts available for each record.',
+    speechBudgetInstruction(input.maximumSpeechCharacters),
     'Answer the requestedFact only when it is explicitly supported by those supplied facts.',
     'A RESPONSE must directly answer searchInterpretation.requestedFact before adding any other supported information. A true answer about a different attribute is incomplete.',
     'An absent attribute means the published evidence does not provide that information. Absence never proves a negative value, non-existence, non-requirement, non-availability, or zero.',
@@ -805,6 +809,9 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     firstInvalidReason = outputValidation.reason;
     const groundingRepairInstruction = [
       `Your previous caller-facing decision failed grounding validation: ${outputValidation.reason}.`,
+      outputValidation.reason === 'speech_budget_exceeded'
+        ? `Rewrite the complete answer within ${input.maximumSpeechCharacters} characters. Preserve the requested facts and exact supporting citations. The revised answer will be grounded and validated again; do not truncate it.`
+        : null,
       outputValidation.reason === 'unsupported_numeric_claim'
         ? `Numeric validation feedback: ${JSON.stringify({
           unsupportedNumbers: outputValidation.details?.unsupportedNumbers ?? [],

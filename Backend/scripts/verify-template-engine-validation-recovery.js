@@ -37,7 +37,8 @@ class Audio {
   async close() { for (const resolve of this.waiters.splice(0)) resolve(null); }
 }
 
-for (const mode of ['dedicated', 'technical', 'cancelled']) {
+for (const mode of ['dedicated', 'technical', 'cancelled', 'workflow-config', 'field-config', 'hydration-failure', 'speech-budget']) {
+  const configurationFailure = mode.endsWith('-config');
   const recovery = 'Sorry, I could not prepare that answer. Please try again.';
   const logs = [];
   const spoken = [];
@@ -56,15 +57,21 @@ for (const mode of ['dedicated', 'technical', 'cancelled']) {
     async *stream(request) {
       const name = request.responseFormat?.name;
       let output;
-      if (name === 'template_engine_claim_validation') {
+      if (configurationFailure) {
+        output = { decision: 'TOOL', response: '', clarification: null, search: null,
+          tool: { name: 'create_record', arguments: {} }, nextQuestion: null, stateUpdate: null };
+      } else if (name === 'template_engine_claim_validation') {
         output = { supported: false, successClaimed: false, requestedFactAddressed: false, reason: 'unsupported_test_claim' };
       } else if (name === 'template_engine_post_search_decision') {
         postSearchAttempts += 1;
+        if (mode === 'speech-budget') assert.ok(request.messages[0].content.includes('100 characters'),
+          'The live configured TTS limit must reach answer generation');
         if (mode === 'cancelled' && postSearchAttempts === 2) {
           yield { type: 'cancelled', reason: 'caller_barge_in' };
           return;
         }
-        output = { decision: 'RESPONSE', response: 'The price is 9999 units.',
+        output = { decision: 'RESPONSE', response: mode === 'speech-budget'
+          ? 'The price is 9999 units. '.repeat(10) : 'The price is 9999 units.',
           clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null };
       } else {
         output = { decision: 'SEARCH', response: '', clarification: null,
@@ -91,6 +98,12 @@ for (const mode of ['dedicated', 'technical', 'cancelled']) {
     providers: { stt: {}, llm: {}, tts: {} }, tools: [], limits: { maxCallDurationMinutes: 1 },
   };
   const publication = { knowledgeBaseId: 'kb-a', publicationRevision: 1 };
+  if (mode === 'speech-budget') profile.limits.ttsMaxCharactersPerResponse = 100;
+  if (configurationFailure) profile.tools = [{ id: 'tool-a', name: 'create_record', status: 'active',
+    type: 'webhook_api', inputSchema: { type: 'object', additionalProperties: false,
+      properties: mode === 'field-config' ? { caller_name: { type: 'string' } } : {},
+      required: mode === 'field-config' ? ['caller_name'] : [],
+    } }];
   const orchestrator = new RealtimeConversationOrchestrator(media, {
     loadProfile: async () => profile, createAdapters: async () => ({ stt, llm, tts }),
     createAudioEngine: () => new Audio(),
@@ -98,13 +111,16 @@ for (const mode of ['dedicated', 'technical', 'cancelled']) {
     appendTranscript: async (entry) => transcript.push(entry), completeCall: async () => ({}),
     contextStore: { get: async () => null, set: async () => true, delete: async () => true },
     memoryStore: { load: async () => null, save: async () => ({}) },
+    executeTools: async () => { assert.fail('Incomplete configuration must never execute a tool'); },
     templateEngineKnowledgeDependencies: {
       loadArtifacts: async () => ({ publications: [publication], sparseIndexes: [], bundles: [{
-        ...publication, tenantId: 'tenant-a', records: [{ record_id: 'alpha', record_type: 'catalog_item',
+        ...publication, tenantId: 'tenant-a', records: configurationFailure ? [{ record_id: 'workflow-a',
+          record_type: 'WORKFLOW_RULE', entity_metadata: { actionType: 'configured_tool',
+            actionConfig: { toolIdentifier: 'create_record' } } }] : [{ record_id: 'alpha', record_type: 'catalog_item',
           entity_name: 'Alpha', entity_metadata: { price: 17 }, usage_direction: 'both' }],
       }] }),
       searchCandidates: async () => ({ channels: { structured: [], bm25: [], qdrant: [] } }),
-      hydrateEvidence: async ({ retrieval }) => ({ evidence: retrieval.candidates.map((entry) => ({
+      hydrateEvidence: async ({ retrieval }) => ({ evidence: (mode === 'hydration-failure' ? [] : retrieval.candidates).map((entry) => ({
         ...entry, id: entry.recordId, callerFacing: true, hydrationValidated: true, publicationValidated: true,
         content: 'Alpha costs 17 units.', authoritativeData: { price: 17 }, provenance: publication,
       })) }),
@@ -122,7 +138,10 @@ for (const mode of ['dedicated', 'technical', 'cancelled']) {
       continue;
     }
     await waitFor(() => logs.some((entry) => entry.stage === 'template_engine.turn_completed'));
-    assert.equal(postSearchAttempts, 2, 'Exercise initial answer and failed repair');
+    assert.equal(postSearchAttempts, configurationFailure || mode === 'hydration-failure' ? 0 : 2,
+      'Configuration and hydration failures must not reach answer generation');
+    if (configurationFailure) assert.equal(orchestrator.templateEngineState.activeWorkflowId, null,
+      'No workflow state may be activated on configuration failure');
     assert.ok(spoken.includes(recovery), 'Configured recovery must reach TTS');
     assert.ok(!spoken.some((text) => text.includes('9999')), 'Rejected speech must never reach TTS');
     assert.ok(!JSON.stringify(transcript).includes('9999'), 'Rejected speech must never be committed to the transcript');

@@ -1,4 +1,5 @@
 import { validateToolArguments } from '../tools/tool-security.js';
+import { normalizedSpeechBudget } from './template-engine-speech-budget.js';
 import { validateTemplateEngineDecision } from './template-engine-decision-contract.js';
 import { validateTemplateEnginePostSearchDecision } from './template-engine-post-search-contract.js';
 import { activateTemplateEngineWorkflow } from './template-engine-workflow-runtime.js';
@@ -356,6 +357,12 @@ export function validateTemplateEngineOutput(input = {}) {
     retryCount: input.retryCount,
   });
   const decision = parsed.value;
+  const maximumSpeechCharacters = normalizedSpeechBudget(input.maximumSpeechCharacters);
+  const answer = decision.decision === 'CLARIFY' ? decision.clarification?.question : decision.response;
+  if (maximumSpeechCharacters && cleanText(answer).length > maximumSpeechCharacters) {
+    return invalid('speech_budget_exceeded', { factual: input.factualClaimsPresent === true,
+      retryCount: input.retryCount });
+  }
   if (decision.decision === 'RESPONSE') return validateResponse(decision, input);
   if (decision.decision === 'CLARIFY') return validateClarification(decision, input);
   if (decision.decision === 'TOOL') return validateTool(decision, input);

@@ -49,9 +49,12 @@ function safeObject(value) {
 export async function repairTemplateEngineFollowUp({
   decision, mainPrompt, latestUtterance, recentCompleteTurns = [],
   conversationGuidance, initialValidation, invokeStructuredLlm,
+  maximumSpeechCharacters = null,
 } = {}) {
   const reason = cleanText(initialValidation?.reason, 160);
-  const applicable = decision?.decision === 'RESPONSE'
+  const availableCharacters = Number(maximumSpeechCharacters) > 0
+    ? Number(maximumSpeechCharacters) - cleanText(decision?.response).length - 1 : null;
+  const applicable = (availableCharacters === null || availableCharacters > 0) && decision?.decision === 'RESPONSE'
     && cleanText(conversationGuidance?.nextQuestion)
     && followUpRepairReasons.has(reason)
     && typeof invokeStructuredLlm === 'function';
@@ -78,6 +81,7 @@ export async function repairTemplateEngineFollowUp({
         'The caller-facing answer is already validated. Generate exactly one concise follow-up question only.',
         'Use the supplied published Conversation Guidance as meaning guidance and phrase it naturally in the caller\'s active language.',
         'Do not repeat a completed question, change the answer, add facts, or expose internal data.',
+        availableCharacters === null ? '' : `The optional follow-up must fit within ${availableCharacters} characters including punctuation.`,
         'Return exactly the supplied JSON schema, not Markdown or commentary.',
       ].filter(Boolean).join('\n'),
     }),
@@ -184,6 +188,7 @@ export function validateAndComposeTemplateEngineSpeech({
   conversationGuidance = null,
   suppressFollowUp = false,
   claimsValidated = true,
+  maximumSpeechCharacters = null,
 } = {}) {
   if (decision?.decision === 'CLARIFY') {
     return Object.freeze({
@@ -206,7 +211,10 @@ export function validateAndComposeTemplateEngineSpeech({
     });
   }
   let rejection = null;
-  if (decision.decision !== 'RESPONSE') rejection = 'decision_disallows_follow_up';
+  if (Number(maximumSpeechCharacters) > 0 && `${answer} ${proposed}`.length > Number(maximumSpeechCharacters)) {
+    rejection = 'speech_budget_exceeded';
+  }
+  else if (decision.decision !== 'RESPONSE') rejection = 'decision_disallows_follow_up';
   else if (suppressFollowUp) rejection = 'turn_suppresses_follow_up';
   else if (!cleanText(conversationGuidance?.nextQuestion)) rejection = 'not_supported_by_guidance';
   else if (questionCount(proposed) !== 1) rejection = 'not_exactly_one_question';

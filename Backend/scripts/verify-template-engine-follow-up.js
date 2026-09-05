@@ -34,6 +34,25 @@ assert.equal(accepted.speech,
   'The selected option is available. Would you like another option?');
 assert.equal(accepted.decision.nextQuestion.question, 'Would you like another option?');
 
+const budgetedFollowUp = validateAndComposeTemplateEngineSpeech({
+  decision, conversationGuidance: guidance, maximumSpeechCharacters: decision.response.length,
+});
+assert.equal(budgetedFollowUp.speech, decision.response, 'Keep the entire validated answer');
+assert.equal(budgetedFollowUp.followUp.reason, 'speech_budget_exceeded');
+assert.equal(budgetedFollowUp.decision.nextQuestion, null);
+const exactBudget = validateAndComposeTemplateEngineSpeech({
+  decision, conversationGuidance: guidance, maximumSpeechCharacters: accepted.speech.length,
+});
+assert.equal(exactBudget.speech, accepted.speech, 'Keep an accepted question when the complete speech fits');
+let unnecessaryBudgetRepair = false;
+await repairTemplateEngineFollowUp({
+  decision: { ...decision, nextQuestion: null }, mainPrompt: 'Be concise.',
+  conversationGuidance: guidance, initialValidation: { reason: 'not_proposed' },
+  maximumSpeechCharacters: decision.response.length,
+  invokeStructuredLlm: async () => { unnecessaryBudgetRepair = true; },
+});
+assert.equal(unnecessaryBudgetRepair, false, 'Do not request a follow-up when there is no remaining budget');
+
 const multiple = validateAndComposeTemplateEngineSpeech({
   decision: {
     ...decision,

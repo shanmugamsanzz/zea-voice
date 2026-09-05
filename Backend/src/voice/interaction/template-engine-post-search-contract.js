@@ -68,7 +68,7 @@ export const templateEnginePostSearchJsonSchema = Object.freeze({
 
 export function templateEnginePostSearchJsonSchemaForEvidenceAliases(aliases = []) {
   const allowed = [...new Set((Array.isArray(aliases) ? aliases : [])
-    .map((alias) => String(alias ?? '').trim()).filter(Boolean))].slice(0, 5);
+    .map((alias) => String(alias ?? '').trim()).filter(Boolean))].slice(0, 20);
   const evidenceItems = allowed.length
     ? Object.freeze({ type: 'string', enum: Object.freeze(allowed) })
     : templateEnginePostSearchJsonSchema.properties.evidenceIds.items;
@@ -151,8 +151,8 @@ export function templateEnginePostSearchDecisionDiagnostics(value) {
   const parsed = parse(value);
   const evidenceAliases = Array.isArray(parsed?.evidenceIds)
     ? [...new Set(parsed.evidenceIds.filter((id) => (
-      typeof id === 'string' && /^E[1-5]$/u.test(id)
-    )))].slice(0, 5) : [];
+      typeof id === 'string' && /^E(?:[1-9]|1[0-9]|20)$/u.test(id)
+    )))].slice(0, 20) : [];
   return Object.freeze({
     parsed: Boolean(parsed),
     decision: decisions.has(parsed?.decision) ? parsed.decision : null,
@@ -183,7 +183,7 @@ export function validateTemplateEnginePostSearchDecision(value, allowedEvidenceI
   const stateUpdate = parsed.stateUpdate === null ? null : undefined;
   if (response === null || (parsed.clarification !== null && !clarification)
     || (parsed.nextQuestion !== null && !nextQuestion)
-    || !evidenceIds || evidenceIds.length > 5 || evidenceIds.some((id) => !id)
+    || !evidenceIds || evidenceIds.length > 20 || evidenceIds.some((id) => !id)
     || new Set(evidenceIds).size !== evidenceIds.length || stateUpdate === undefined) {
     return Object.freeze({ valid: false, reason: 'invalid_payload' });
   }

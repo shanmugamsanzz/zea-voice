@@ -9,7 +9,7 @@ import { validateTemplateEngineDecision } from './template-engine-decision-contr
 import { validateTemplateEngineToolResultSpeech } from './template-engine-tool-result-validator.js';
 import { validateAndComposeTemplateEngineSpeech } from './template-engine-follow-up.js';
 
-export const TEMPLATE_ENGINE_WORKFLOW_RUNTIME_VERSION = 4;
+export const TEMPLATE_ENGINE_WORKFLOW_RUNTIME_VERSION = 5;
 
 const speechTasks = new Set(['ASK_FIELD', 'CONFIRM', 'RESULT']);
 
@@ -61,11 +61,16 @@ function fieldAssignedToTool(field, tool) {
 }
 
 function fieldsForTool(informationFields, tool, schema) {
-  const required = Array.isArray(schema.required) ? schema.required.map((key) => cleanText(key, 64)) : [];
-  const requiredSet = new Set(required);
+  const assignedFields = (informationFields ?? []).filter((field) => fieldAssignedToTool(field, tool));
   const properties = object(schema.properties);
-  const configured = (informationFields ?? []).filter((field) => (
-    fieldAssignedToTool(field, tool) && requiredSet.has(fieldKey(field))
+  const required = [...new Set([
+    ...(Array.isArray(schema.required) ? schema.required.map((key) => cleanText(key, 64)) : []),
+    ...assignedFields.filter((field) => field.required === true
+      && (Object.hasOwn(properties, fieldKey(field)) || identity(field.requiredAction))).map(fieldKey),
+  ])];
+  const requiredSet = new Set(required);
+  const configured = assignedFields.filter((field) => (
+    Object.hasOwn(properties, fieldKey(field))
   ));
   const byKey = new Map(configured.map((field) => [fieldKey(field), field]));
   const missingConfiguration = required.filter((key) => !Object.hasOwn(properties, key)
@@ -77,10 +82,10 @@ function fieldsForTool(informationFields, tool, schema) {
         fields: missingConfiguration,
       });
   }
-  return Object.freeze(configured.map((field) => {
+  return Object.freeze([...byKey.values()].map((field) => {
     const key = fieldKey(field);
     return Object.freeze({
-      ...field, key,
+      ...field, key, required: requiredSet.has(key),
       label: cleanText(field?.label ?? key, 160),
       question: cleanText(field?.question, 1_000),
     });
@@ -148,7 +153,10 @@ function typedValue(value, property, field) {
 
 function fieldValueValid(value, field, property) {
   if (!toolArgumentsMatchSchema(value, property)) return false;
+  if (field.required && typeof value === 'string' && !cleanText(value)) return false;
   const type = cleanText(field.type, 40).toLocaleLowerCase();
+  if (type === 'select' && (field.options ?? []).length
+    && !field.options.some((option) => Object.is(option?.value, value))) return false;
   if (type === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(String(value))) return false;
   if (type === 'phone' && !/^\+?[\d\s()-]{8,25}$/u.test(String(value))) return false;
   return true;
@@ -168,8 +176,8 @@ function workflowProgress(configuration, state) {
   const fields = object(state.collectedToolFields);
   const properties = object(configuration.inputSchema.properties);
   const missingFields = configuration.fields.filter((field) => (
-    !Object.hasOwn(fields, field.key)
-    || !fieldValueValid(fields[field.key], field, properties[field.key])
+    field.required && (!Object.hasOwn(fields, field.key)
+    || !fieldValueValid(fields[field.key], field, properties[field.key]))
   ));
   return Object.freeze({
     missingFields: Object.freeze(missingFields),
@@ -180,7 +188,7 @@ function workflowProgress(configuration, state) {
 
 export function activateTemplateEngineWorkflow(input = {}) {
   const configuration = resolveConfiguration(input);
-  const collected = object(input.state?.collectedToolFields);
+  const collected = reusableWorkflowFields(configuration, input.state?.collectedToolFields);
   const selectedRecordIds = input.selectedRecordIds ?? input.state?.selectedRecordIds ?? [];
   const state = stateFor(configuration, collected, 'pending_fields', selectedRecordIds);
   const progress = workflowProgress(configuration, state);
@@ -193,7 +201,7 @@ export function activateTemplateEngineWorkflow(input = {}) {
 
 export function collectTemplateEngineWorkflowFields(input = {}) {
   const configuration = resolveConfiguration(input);
-  const collected = { ...object(input.state?.collectedToolFields) };
+  const collected = reusableWorkflowFields(configuration, input.state?.collectedToolFields);
   const selectedRecordIds = input.selectedRecordIds ?? input.state?.selectedRecordIds ?? [];
   const candidates = object(input.candidateValues);
   if (Object.keys(candidates).length && input.candidateValuesVerified !== true) {
@@ -270,11 +278,29 @@ function safeJson(value, maximumCharacters = 8_000) {
 }
 
 function configuredConfirmation(value, configuration) {
-  return cleanText(value
-    ?? configuration.inputSchema['x-confirmation-message']
-    ?? configuration.workflow.actionConfig?.confirmationMessage
-    ?? configuration.workflow.authoritativeData?.actionConfig?.confirmationMessage,
-  2_000);
+  return [value, configuration.inputSchema['x-confirmation-message'],
+    configuration.workflow.actionConfig?.confirmationMessage,
+    configuration.workflow.authoritativeData?.actionConfig?.confirmationMessage]
+    .map((message) => cleanText(message, 2_000)).find(Boolean) ?? '';
+}
+
+function reusableWorkflowFields(configuration, values) {
+  const known = object(values);
+  return Object.fromEntries(configuration.fields.flatMap((field) => {
+    if (!Object.hasOwn(known, field.key)) return [];
+    const property = configuration.inputSchema.properties[field.key];
+    const value = typedValue(known[field.key], property, field);
+    return fieldValueValid(value, field, property) ? [[field.key, value]] : [];
+  }));
+}
+
+export function validateTemplateEngineWorkflowConfiguration(input = {}) {
+  const configuration = resolveConfiguration(input);
+  if (!configuredConfirmation(input.confirmationMessage, configuration)) {
+    throw new AppError(409, 'A UI confirmation message is required before workflow activation',
+      'TEMPLATE_ENGINE_WORKFLOW_CONFIRMATION_CONFIGURATION_MISSING');
+  }
+  return configuration;
 }
 
 function configuredWorkflowBehavior(configuration) {
@@ -331,7 +357,7 @@ export function createTemplateEngineWorkflowSpeechTask({
   }
   return Object.freeze({
     type: 'CONFIRM',
-    values: Object.freeze(configuration.fields.map((field) => Object.freeze({
+    values: Object.freeze(configuration.fields.filter((field) => Object.hasOwn(state.collectedToolFields, field.key)).map((field) => Object.freeze({
       key: field.key,
       label: field.label,
       value: state.collectedToolFields[field.key],
@@ -565,6 +591,9 @@ export async function advanceTemplateEngineWorkflowTurn(input = {}, dependencies
   if (typeof dependencies.persistWorkflowState !== 'function') {
     throw new TypeError('The Workflow turn requires a state persistence adapter');
   }
+  // Preflight before collecting, activating, persisting or asking any field.
+  // Repeat for active workflows in case published configuration has changed.
+  validateTemplateEngineWorkflowConfiguration(input);
   let transition;
   if (input.state?.activeWorkflowId) {
     transition = collectTemplateEngineWorkflowFields(input);
@@ -577,8 +606,11 @@ export async function advanceTemplateEngineWorkflowTurn(input = {}, dependencies
 
   const explicitConfirmation = input.confirmation?.accepted === true
     && input.confirmation?.explicit === true;
+  const fieldsChanged = (transition.acceptedFields ?? []).some((key) => (
+    JSON.stringify(transition.state.collectedToolFields[key]) !== JSON.stringify(input.state?.collectedToolFields?.[key])
+  ));
   if (priorAwaitedConfirmation && explicitConfirmation
-    && transition.progress.complete) {
+    && transition.progress.complete && !fieldsChanged && !(transition.rejectedFields ?? []).length) {
     const executingState = stateFor(
       transition.configuration,
       transition.state.collectedToolFields,

@@ -55,6 +55,62 @@ const verifiedEvidence = Object.freeze([
 ]);
 
 let numericRepairCalls = 0;
+let budgetCalls = 0;
+let budgetClaimChecks = 0;
+const budgetAnswer = 'The price is 3200 units. Would you like more detail?';
+const budgetResult = await respondToTemplateEngineSearch({
+  mainPrompt, latestUtterance, state, searchDecision, scope, verifiedEvidence,
+  maximumSpeechCharacters: budgetAnswer.length,
+}, {
+  tenantBoundaryVerified: true,
+  validateGroundedClaims: async ({ response }) => {
+    budgetClaimChecks += 1;
+    return { supported: response.includes('3200'), requestedFactAddressed: response.includes('price') };
+  },
+  invokeStructuredLlm: async ({ messages }) => {
+    budgetCalls += 1;
+    assert.ok(messages[0].content.includes(`${budgetAnswer.length} characters`));
+    assert.ok(messages[0].content.includes('cover every requested operand'));
+    if (budgetCalls === 2) assert.ok(messages.at(-1).content.includes('speech_budget_exceeded'));
+    return { outputParsed: { decision: 'RESPONSE', response: budgetCalls === 1
+      ? `The price is 3200 units. ${'Additional explanation. '.repeat(12)}` : budgetAnswer,
+      clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null } };
+  },
+});
+assert.equal(budgetCalls, 2, 'Oversized answers get one complete rewrite, not substring truncation');
+assert.equal(budgetClaimChecks, 2, 'The revised answer must be independently grounded');
+assert.equal(budgetResult.decision.response, budgetAnswer);
+assert.deepEqual(budgetResult.decision.evidenceIds, ['evidence-1']);
+
+await assert.rejects(() => respondToTemplateEngineSearch({
+  mainPrompt, latestUtterance, state, searchDecision, scope, verifiedEvidence,
+  maximumSpeechCharacters: 10,
+}, {
+  tenantBoundaryVerified: true,
+  validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
+  invokeStructuredLlm: async () => ({ outputParsed: { decision: 'RESPONSE',
+    response: 'The price is 3200 units.', clarification: null,
+    evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null } }),
+}), { code: 'TEMPLATE_ENGINE_OUTPUT_INVALID' }, 'An impossible budget must not produce a truncated factual answer');
+const sixOperands = Array.from({ length: 6 }, (_, index) => ({ ...verifiedEvidence[0],
+  evidenceId: `operand-${index}`, recordId: `record-${index}`, canonicalName: `Option ${index}`,
+  content: 'The price is 3200 units.', authoritativeData: { price: 3200 },
+}));
+const completeComparison = await respondToTemplateEngineSearch({
+  mainPrompt, latestUtterance: 'Compare the prices of all selected options', scope, state: {},
+  searchDecision: { ...searchDecision, search: { ...searchDecision.search, preferredRecordIds: [] } },
+  verifiedEvidence: sixOperands, requestedEntityRecordIds: sixOperands.map((entry) => entry.recordId),
+}, {
+  tenantBoundaryVerified: true,
+  validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
+  invokeStructuredLlm: async ({ messages }) => {
+    assert.ok(messages[0].content.includes('E6'), 'The answer LLM must receive every required operand');
+    return { outputParsed: { decision: 'RESPONSE', response: 'Each selected option costs 3200 units.',
+      clarification: null, evidenceIds: sixOperands.map((_, index) => `E${index + 1}`),
+      nextQuestion: null, stateUpdate: null } };
+  },
+});
+assert.equal(completeComparison.decision.evidenceIds.length, 6);
 const numericRepair = await respondToTemplateEngineSearch({
   mainPrompt, latestUtterance, state, searchDecision, scope,
   verifiedEvidence: [{ ...verifiedEvidence[0], content: 'Published pricing is available.',
