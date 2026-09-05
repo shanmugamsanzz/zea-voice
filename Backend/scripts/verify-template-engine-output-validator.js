@@ -36,6 +36,50 @@ const evidence = [{
   content: 'Service Alpha costs 3200 units and includes feature Delta.',
 }];
 const entities = [{ recordId: 'r-1', canonicalName: 'Service Alpha', aliases: ['Alpha'] }];
+// Numeric grounding must use cited published facts, not runtime metadata.
+const numericEvidence = [{
+  ...evidence[0], content: 'Service Alpha has published pricing.',
+  authoritativeData: {
+    attributes: [{ price: 3200 }, { limit: '123456.50' }, { precision: '0.125' }],
+    metadata: { price: 8888 }, provenance: { page: 7777 },
+    recordId: '6666', nested: { tenant_id: 5555, publicationRevision: 4444 },
+    field9999: 'no numeric value',
+  },
+}];
+const numericCheck = (text, overrides = {}) => validateTemplateEngineOutput({
+  phase: 'post_search', decision: response(text, ['e-1']),
+  factualClaimsPresent: true, selectedEvidence: numericEvidence,
+  semanticClaimValidation: { supported: true, requestedFactAddressed: true },
+  ...overrides,
+});
+for (const text of ['3200', '3,200', '3200.00', '3,200.00', '3.200,00',
+  '123,456.50', '1,23,456.50', '123456,50', '0.1250']) {
+  assert.equal(numericCheck(`Published value is ${text}.`).valid, true, text);
+}
+for (const text of ['8888', '7777', '6666', '5555', '4444', '9999',
+  '3.200', '3200.01', '32,00,0', '-3200', '0.12']) {
+  assert.equal(numericCheck(`Published value is ${text}.`).reason,
+    'unsupported_numeric_claim', text);
+}
+assert.equal(numericCheck('The price is 3200.', {
+  semanticClaimValidation: { supported: false },
+}).reason, 'unsupported_factual_claim', 'Matching digits do not validate the meaning');
+assert.equal(numericCheck('The price is 3200.', {
+  semanticClaimValidation: null,
+}).reason, 'grounding_validation_missing');
+const uncitedNumeric = numericCheck('The price is 9000.', {
+  selectedEvidence: [...numericEvidence, {
+    ...evidence[0], evidenceId: 'e-other', authoritativeData: { price: 9000 },
+  }],
+});
+assert.equal(uncitedNumeric.reason, 'unsupported_numeric_claim');
+assert.deepEqual(uncitedNumeric.details, {
+  unsupportedNumbers: [{ raw: '9000', normalized: '9000' }],
+  checkedEvidenceIds: ['e-1'],
+});
+assert.equal(numericCheck('The value is 3200.', {
+  selectedEvidence: [{ ...numericEvidence[0], verified: false }],
+}).reason, 'unverified_cited_evidence');
 const comparisonEvidence = [evidence[0], {
   verified: true, callerFacing: true, evidenceId: 'e-2', recordId: 'r-2',
   recordType: 'ITEM', tenantId: 'tenant-a', agentId: 'agent-a',

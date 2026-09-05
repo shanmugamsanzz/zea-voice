@@ -805,6 +805,14 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     firstInvalidReason = outputValidation.reason;
     const groundingRepairInstruction = [
       `Your previous caller-facing decision failed grounding validation: ${outputValidation.reason}.`,
+      outputValidation.reason === 'unsupported_numeric_claim'
+        ? `Numeric validation feedback: ${JSON.stringify({
+          unsupportedNumbers: outputValidation.details?.unsupportedNumbers ?? [],
+          checkedEvidenceAliases: [...citations.aliasToEvidenceId]
+            .filter(([, id]) => outputValidation.details?.checkedEvidenceIds?.includes(id))
+            .map(([alias]) => alias),
+        })}. These numbers were not supported by the cited records. Correct their formatting or cite a supplied record that supports the actual claim; otherwise remove the claim. Never change a number merely to pass validation.`
+        : null,
       'Return one corrected JSON object matching the supplied post-search schema.',
       'Validate against the complete verified evidence set. A multi-record comparison may combine only attributes supported by its cited records.',
       'The corrected RESPONSE must directly answer searchInterpretation.requestedFact. Do not substitute another true but unrequested attribute.',

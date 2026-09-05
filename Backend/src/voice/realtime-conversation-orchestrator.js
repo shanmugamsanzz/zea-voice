@@ -2587,7 +2587,20 @@ export class RealtimeConversationOrchestrator {
         sentencePipeline.cancel();
         return;
       }
-      if (errorKind !== 'operational') {
+      if (errorKind === 'validation') {
+        const recovery = configuredOperationalFailureResponse(this.runtimeProfile, {}, { validation: true });
+        this.log.warn({ err: error, stage: 'template_engine.response_rejected',
+          callId: this.call.id, turnEpoch: epoch, errorKind, recoveryConfigured: Boolean(recovery),
+        }, 'Unvalidated answer suppressed; configured recovery replaces the rejected answer');
+        if (!recovery) throw error;
+        // Do not enqueue any part of the rejected answer or its citations.
+        // Preserve the epoch so the approved recovery can finish normally.
+        result = {
+          speech: recovery, state: this.templateEngineState,
+          evidence: [], evidenceIds: [], toolExecuted: false,
+          validationFailure: error.code ?? 'TEMPLATE_ENGINE_OUTPUT_INVALID',
+        };
+      } else if (errorKind !== 'operational') {
         sentencePipeline.cancel();
         this.log.warn({ err: error, stage: 'template_engine.response_rejected',
           callId: this.call.id, turnEpoch: epoch, errorKind,
@@ -2596,22 +2609,23 @@ export class RealtimeConversationOrchestrator {
           await this.controller.interrupt('template_engine_response_rejected');
         }
         return;
+      } else {
+        this.#recordProviderFailure('llm', error, 'template_engine.turn');
+        this.log.error({
+          err: error,
+          stage: 'template_engine.operational_failure',
+          callId: this.call.id,
+          turnEpoch: epoch,
+        }, 'Template-engine turn failed operationally');
+        const technical = configuredTechnicalFailureResponse(this.runtimeProfile);
+        if (!technical) throw error;
+        result = {
+          speech: technical,
+          state: this.templateEngineState,
+          evidence: [], evidenceIds: [], toolExecuted: false,
+          operationalFailure: error.code ?? 'TEMPLATE_ENGINE_OPERATIONAL_FAILURE',
+        };
       }
-      this.#recordProviderFailure('llm', error, 'template_engine.turn');
-      this.log.error({
-        err: error,
-        stage: 'template_engine.operational_failure',
-        callId: this.call.id,
-        turnEpoch: epoch,
-      }, 'Template-engine turn failed operationally');
-      const technical = configuredTechnicalFailureResponse(this.runtimeProfile);
-      if (!technical) throw error;
-      result = {
-        speech: technical,
-        state: this.templateEngineState,
-        evidence: [], evidenceIds: [], toolExecuted: false,
-        operationalFailure: error.code ?? 'TEMPLATE_ENGINE_OPERATIONAL_FAILURE',
-      };
     } finally {
       finalResponseReady = true;
       finalResponseReadyAt = Date.now();
@@ -2672,6 +2686,7 @@ export class RealtimeConversationOrchestrator {
       workflowStatus: result.workflow?.status ?? null,
       toolExecuted: result.toolExecuted === true,
       operationalFailure: result.operationalFailure ?? null,
+      validationFailure: result.validationFailure ?? null,
       sttFinalizationMs: sttTiming.sttFinalizationMs ?? null,
       durationMs: Date.now() - turnStartedAt,
     }, 'Pure template-engine turn completed');

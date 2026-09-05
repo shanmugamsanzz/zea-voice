@@ -4,7 +4,7 @@ import { validateTemplateEnginePostSearchDecision } from './template-engine-post
 import { activateTemplateEngineWorkflow } from './template-engine-workflow-runtime.js';
 export { validateTemplateEngineToolResultSpeech } from './template-engine-tool-result-validator.js';
 
-export const TEMPLATE_ENGINE_OUTPUT_VALIDATOR_VERSION = 4;
+export const TEMPLATE_ENGINE_OUTPUT_VALIDATOR_VERSION = 5;
 
 function cleanText(value, maximum = 8_000) {
   return String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
@@ -27,8 +27,62 @@ function internalOrJson(value) {
   return false;
 }
 
+function canonicalNumber(token) {
+  // Dot decimals by default; comma decimals only when unambiguous.
+  // In particular, 3.200 must not silently become 3200.
+  const commaDecimal = /,\d{1,2}$/u.test(token)
+    && (!token.includes('.') || token.lastIndexOf(',') > token.lastIndexOf('.'));
+  const decimal = commaDecimal ? ',' : '.';
+  const grouping = commaDecimal ? '.' : ',';
+  const parts = token.split(decimal);
+  if (parts.length > 2) return token;
+  let integer = parts[0];
+  const fraction = parts[1] ?? '';
+  if (integer.includes(grouping)) {
+    const groups = integer.replace(/^[+-]/u, '').split(grouping);
+    const western = /^\d{1,3}$/u.test(groups[0])
+      && groups.slice(1).every((part) => /^\d{3}$/u.test(part));
+    const indian = /^\d{1,2}$/u.test(groups[0])
+      && /^\d{3}$/u.test(groups.at(-1))
+      && groups.slice(1, -1).every((part) => /^\d{2}$/u.test(part));
+    if (!western && !indian) return token;
+    integer = integer.split(grouping).join('');
+  }
+  if (!/^[+-]?\d+$/u.test(integer) || (fraction && !/^\d+$/u.test(fraction))) return token;
+  const negative = integer.startsWith('-');
+  integer = integer.replace(/^[+-]/u, '').replace(/^0+(?=\d)/u, '');
+  const trimmedFraction = fraction.replace(/0+$/u, '');
+  return `${negative && (integer !== '0' || trimmedFraction) ? '-' : ''}${integer}${trimmedFraction ? `.${trimmedFraction}` : ''}`;
+}
+
+function numericClaims(value) {
+  return [...cleanText(value).matchAll(/[+-]?\p{N}+(?:[.,]\p{N}+)*/gu)]
+    .map(([raw]) => ({ raw, normalized: canonicalNumber(raw) }));
+}
+
 function numbers(value) {
-  return new Set(cleanText(value).match(/[+-]?\p{N}+(?:[.,]\p{N}+)?/gu) ?? []);
+  return new Set(numericClaims(value).map((claim) => claim.normalized));
+}
+
+const internalFactKeys = new Set([
+  'id', 'ids', 'metadata', 'internalmetadata', 'provenance', 'sourcetext',
+  'rawtext', 'rawcontent', 'publicationrevision', 'revision', 'version',
+  'createdat', 'updatedat', 'publishedat', 'pagenumber', 'pageend',
+  'sourcelinestart', 'sourcelineend', 'score', 'rank',
+]);
+
+function publishedFactValues(value, depth = 0) {
+  if (value == null || depth > 12) return [];
+  if (typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value))) return [value];
+  if (Array.isArray(value)) return value.flatMap((entry) => publishedFactValues(entry, depth + 1));
+  if (typeof value !== 'object') return [];
+  return Object.entries(value).flatMap(([key, entry]) => {
+    const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]/gu, '');
+    const identifier = /(?:Id|Ids|Key|Keys)$/u.test(key) || /_(?:id|ids|key|keys)$/iu.test(key)
+      || ['tenantid', 'agentid', 'recordid', 'documentid', 'knowledgebaseid', 'documentversionid'].includes(normalizedKey);
+    return internalFactKeys.has(normalizedKey) || identifier || key.startsWith('_')
+      ? [] : publishedFactValues(entry, depth + 1);
+  });
 }
 
 function sourceContent(source) {
@@ -41,7 +95,8 @@ function sourceContent(source) {
 
 function allowedNumbers(evidence, callerValues) {
   return new Set([
-    ...evidence.flatMap((source) => [...numbers(sourceContent(source))]),
+    ...evidence.flatMap((source) => [sourceContent(source), ...publishedFactValues(source?.authoritativeData)]
+      .flatMap((value) => [...numbers(value)])),
     ...[...numbers(JSON.stringify(callerValues ?? {}))],
   ]);
 }
@@ -98,7 +153,7 @@ function evidenceSupportsRelationship(entities, selectedEvidence, allowMultipleE
   });
 }
 
-function invalid(reason, { factual = false, retryCount = 0 } = {}) {
+function invalid(reason, { factual = false, retryCount = 0, details = null } = {}) {
   const retrySearch = factual && retryCount < 1;
   return Object.freeze({
     valid: false,
@@ -107,6 +162,7 @@ function invalid(reason, { factual = false, retryCount = 0 } = {}) {
     retrySearch,
     nextRetryCount: retrySearch ? retryCount + 1 : retryCount,
     reason,
+    ...(details ? { details: Object.freeze(details) } : {}),
   });
 }
 
@@ -172,10 +228,16 @@ function validateResponse(decision, input) {
     return invalid('unverified_cited_evidence', { factual: true, retryCount: input.retryCount });
   }
   const permittedNumbers = allowedNumbers(selectedEvidence, input.callerProvidedValues);
-  const unsupportedNumbers = [...numbers(decision.response)]
-    .filter((number) => !permittedNumbers.has(number));
+  const unsupportedNumbers = numericClaims(decision.response)
+    .filter((claim) => !permittedNumbers.has(claim.normalized));
   if (unsupportedNumbers.length) {
-    return invalid('unsupported_numeric_claim', { factual: true, retryCount: input.retryCount });
+    return invalid('unsupported_numeric_claim', {
+      factual: true, retryCount: input.retryCount,
+      details: {
+        unsupportedNumbers: Object.freeze(unsupportedNumbers.map(Object.freeze)),
+        checkedEvidenceIds: Object.freeze([...decision.evidenceIds]),
+      },
+    });
   }
   const mentioned = entitiesMentioned(
     decision.response, input.publishedEntities, input.claimedNames,

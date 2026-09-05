@@ -54,6 +54,34 @@ const verifiedEvidence = Object.freeze([
   }),
 ]);
 
+let numericRepairCalls = 0;
+const numericRepair = await respondToTemplateEngineSearch({
+  mainPrompt, latestUtterance, state, searchDecision, scope,
+  verifiedEvidence: [{ ...verifiedEvidence[0], content: 'Published pricing is available.',
+    authoritativeData: { price: 3200, metadata: { revision: 9900 } } }],
+}, {
+  tenantBoundaryVerified: true,
+  validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
+  invokeStructuredLlm: async (request) => {
+    numericRepairCalls += 1;
+    if (numericRepairCalls === 2) {
+      const instruction = request.messages.at(-1).content;
+      assert.ok(instruction.includes('Numeric validation feedback:'));
+      assert.ok(instruction.includes('9900'));
+      assert.ok(instruction.includes('checkedEvidenceAliases'));
+      assert.ok(instruction.includes('E1'));
+      assert.ok(!instruction.includes('evidence-1'), 'Repair feedback uses aliases, not runtime IDs');
+    }
+    return { outputParsed: {
+      decision: 'RESPONSE', response: numericRepairCalls === 1
+        ? 'The price is 9900 units.' : 'The price is 3,200.00 units.',
+      clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
+    } };
+  },
+});
+assert.equal(numericRepairCalls, 2);
+assert.equal(numericRepair.decision.response, 'The price is 3,200.00 units.');
+
 assert.deepEqual(templateEnginePostSearchJsonSchema.properties.decision.enum,
   ['RESPONSE', 'CLARIFY', 'NO_MATCH']);
 assert.equal(Object.hasOwn(templateEnginePostSearchJsonSchema.properties, 'tool'), false);

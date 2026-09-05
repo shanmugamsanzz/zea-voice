@@ -317,7 +317,70 @@ for (const [query, expectedIds] of [
     === (query.endsWith('price') ? 'price' : 'details')));
 }
 
+for (const language of ['en', 'ta', 'ta-Latn']) {
+  for (const scenario of [
+    { query: 'Tell me more about this', reference: 'current selection',
+      previous: ['metadata-beta'], expected: ['metadata-beta'], comparison: false },
+    { query: 'இதை பத்தி கொஞ்சம் detail சொல்லுங்க', reference: 'current selection',
+      previous: ['metadata-beta'], expected: ['metadata-beta'], comparison: false },
+    { query: 'Compare Configured Alpha Service and Configured Beta Service', reference: null,
+      previous: [], expected: ['metadata-alpha', 'metadata-beta'], comparison: true },
+    { query: 'Explain Configured Alpha Service and Configured Beta Service', reference: null,
+      previous: [], expected: ['metadata-alpha', 'metadata-beta'], comparison: true },
+    { query: 'Compare their details', reference: 'previous selections',
+      previous: ['metadata-alpha', 'metadata-beta'], expected: ['metadata-alpha', 'metadata-beta'], comparison: true },
+    { query: 'Configured Beta Service details', reference: 'Configured Beta Service',
+      previous: ['metadata-alpha', 'metadata-beta'], expected: ['metadata-beta'], comparison: false },
+  ]) {
+    const result = await retrieveTemplateEngineEvidence({
+      auth: { tenantId }, scope, callId: 'context-comparison-regression', usageDirection: 'inbound', language,
+      state: { lastReferencedRecordIds: scenario.previous,
+        comparisonRecordIds: scenario.previous.length > 1 ? scenario.previous : [] },
+      searchDecision: { ...searchDecision, search: {
+        query: scenario.query, requestedFact: 'details', contextualReference: scenario.reference,
+        preferredRecordIds: [],
+      } },
+    }, {
+      loadArtifacts: async () => ({ ...exactArtifacts,
+        bundles: [{ ...exactArtifacts.bundles[0], records: metadataRecords }],
+      }),
+      resolveEntityRoute: () => ({ candidate: null, action: 'CLARIFY', ambiguity: {
+        detected: true, candidates: metadataRecords.map((record) => ({
+          recordId: record.record_id, recordType: 'CATALOG_ITEM', label: record.entity_metadata.name,
+        })),
+      } }),
+      // No provider finds either operand. Published identities must survive.
+      searchCandidates: async () => ({ channels: { structured: [], bm25: [], qdrant: [] } }),
+      hydrateEvidence: async ({ retrieval: selected, resolution }) => {
+        assert.deepEqual(selected.candidates.map((entry) => entry.recordId).sort(), scenario.expected);
+        assert.equal(resolution.ambiguity.detected, false);
+        return { evidence: selected.candidates.map((entry) => ({
+          ...entry, id: entry.recordId, hydrationValidated: true, publicationValidated: true,
+          callerFacing: true, content: 'Approved published detail',
+          authoritativeData: metadataRecords.find((record) => record.record_id === entry.recordId).entity_metadata,
+          provenance: { knowledgeBaseId, publicationRevision: 4 },
+        })) };
+      },
+    });
+    assert.deepEqual([...result.requestedEntityRecordIds].sort(), scenario.expected);
+    assert.equal(result.searchClassification.searchKind === 'comparison', scenario.comparison);
+    assert.equal(publishedResolutionAmbiguity(result.entityResolution, result.evidence,
+      result.searchClassification).required, false);
+  }
+}
+
 let sttSelectedIds = [];
+await assert.rejects(() => retrieveTemplateEngineEvidence({
+  auth: { tenantId }, scope, callId: 'missing-comparison-operand', usageDirection: 'inbound', language: 'en',
+  state: { comparisonRecordIds: ['metadata-alpha', 'removed-record'] },
+  searchDecision: { ...searchDecision, search: { query: 'Compare their details', requestedFact: 'details',
+    contextualReference: 'previous selections', preferredRecordIds: [] } },
+}, {
+  loadArtifacts: async () => ({ ...exactArtifacts,
+    bundles: [{ ...exactArtifacts.bundles[0], records: metadataRecords }],
+  }),
+}), { code: 'TEMPLATE_ENGINE_REQUESTED_ENTITY_COVERAGE_INCOMPLETE' },
+'Never silently reduce a remembered comparison to its surviving operand');
 const sttVariantRetrieval = await retrieveTemplateEngineEvidence({
   auth: { tenantId }, scope, callId: 'call-stt-variant', usageDirection: 'inbound',
   language: 'en', searchDecision: {

@@ -25,6 +25,23 @@ const scope = Object.freeze({
   ]),
 });
 
+const sharedAliasRecords = ['first-option', 'second-option'].map((recordId) => ({
+  tenantId: scope.tenantId, agentId: scope.agentId, ...scope.publications[0],
+  recordId, recordType: 'CATALOG_ITEM', canonicalName: recordId,
+  searchForms: [recordId, 'Shared Option'], matchMethod: 'published_exact',
+  callerFacingHint: true, score: 1,
+}));
+const sharedAliasResult = await runTemplateEngineHybridRetrieval({
+  decision: { ...decision, search: { query: 'Shared Option details', requestedFact: 'details',
+    contextualReference: null, preferredRecordIds: [] } }, state: {}, scope,
+}, {
+  searchStructuredPostgres: async () => sharedAliasRecords,
+  searchBm25: async () => [], searchQdrantE5: async () => [],
+});
+assert.equal(sharedAliasResult.candidates.length, 2);
+assert.deepEqual(sharedAliasResult.queryContext.reservedRecords, [],
+  'A shared alias must remain ambiguous, not reserve two comparison operands');
+
 const publishedArtifacts = Object.freeze({ bundles: Object.freeze([
   Object.freeze({
     tenantId: 'tenant-a', knowledgeBaseId: 'kb-a', publicationRevision: 3,

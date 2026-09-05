@@ -164,6 +164,21 @@ function plainMetadata(value) {
   return Object.freeze({ ...value });
 }
 
+function uniquelyNamed(candidate, candidates, search) {
+  if (!explicitlyNamed(candidate, search)) return false;
+  const requested = new Set(tokens([search.query, search.contextualReference].filter(Boolean).join(' ')));
+  return entityForms(candidate).some((form) => {
+    const name = tokens(form);
+    if (!name.length || !name.every((token) => requested.has(token))) return false;
+    // Shared aliases denote alternatives, not two comparison operands.
+    return !candidates.some((other) => other.recordId !== candidate.recordId
+      && other.recordType === 'CATALOG_ITEM' && entityForms(other).some((otherForm) => {
+        const otherName = tokens(otherForm);
+        return otherName.length === name.length && otherName.every((token) => name.includes(token));
+      }));
+  });
+}
+
 function normalizeCandidate(candidate, channel, rank, scope, allowedPublications) {
   if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return null;
   const tenantId = cleanText(candidate.tenantId ?? candidate.tenant_id, 160);
@@ -304,8 +319,8 @@ function fuseAndRank(channels, request) {
     || left.recordId.localeCompare(right.recordId)
   ));
 
-  const explicitlyRequested = ranked.filter((candidate) => explicitlyNamed(
-    candidate, request.search,
+  const explicitlyRequested = ranked.filter((candidate) => uniquelyNamed(
+    candidate, ranked, request.search,
   ));
   const exactStructured = ranked.filter((candidate) => (
     candidate.channels.includes('structured')
@@ -315,7 +330,9 @@ function fuseAndRank(channels, request) {
   const inferredComparisonIds = new Set(explicitlyRequested.length > 1
     ? explicitlyRequested.map((candidate) => candidate.recordId.toLocaleLowerCase()) : []);
   const exactIds = new Set(exactStructured.map((candidate) => candidate.recordId.toLocaleLowerCase()));
-  const strictIds = preferred.size > 1
+  const strictIds = preferred.size > 1 || (preferred.size === 1 && ranked.some((candidate) => (
+    candidate.preferredRecord && candidate.matchMethod === 'published_contextual'
+  )))
     ? preferred
     : inferredComparisonIds.size > 1
       ? inferredComparisonIds : exactIds;
@@ -411,7 +428,7 @@ export async function runTemplateEngineHybridRetrieval(input = {}, dependencies 
   ])));
   const preferred = new Set(request.search.preferredRecordIds.map((id) => id.toLocaleLowerCase()));
   const comparison = candidates.length > 1 && (
-    preferred.size > 1 || candidates.every((candidate) => explicitlyNamed(candidate, request.search))
+    preferred.size > 1 || candidates.every((candidate) => uniquelyNamed(candidate, candidates, request.search))
   );
   const reservedRecords = candidates.filter((candidate) => (
     preferred.has(candidate.recordId.toLocaleLowerCase()) || comparison

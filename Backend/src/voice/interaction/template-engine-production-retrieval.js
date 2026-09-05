@@ -10,6 +10,7 @@ import { buildPublicationDeduplicationIdentity } from '../../knowledge-engine/pu
 import { runTemplateEngineHybridRetrieval } from './template-engine-hybrid-retrieval.js';
 import { normalizePublishedConversationGuidance } from './template-engine-conversation-guidance.js';
 import { resolvePublishedEntityRoute } from '../../knowledge-engine/entity-route-resolver.js';
+import { normalizeTemplateEngineSearchDecision } from './template-engine-search-request.js';
 
 export const TEMPLATE_ENGINE_PRODUCTION_RETRIEVAL_VERSION = 1;
 
@@ -276,7 +277,7 @@ export function classifyTemplateEngineSearch({
     conversationGuidance?.context,
   ].filter(Boolean).join(' '));
   const preferred = [...new Set([
-    ...(search.preferredRecordIds ?? []), ...(state.comparisonRecordIds ?? []),
+    ...(search.preferredRecordIds ?? []),
   ].map((value) => cleanText(value, 160)).filter(Boolean))];
   let searchKind = templateEngineSearchKinds.GENERAL_KNOWLEDGE;
   if (preferred.length > 1 || requested.has('comparison') || requested.has('compare')
@@ -394,7 +395,8 @@ export function constrainHybridToRequestedEntities(
     'explicit_comparison', 'contextual_comparison',
   ].includes(String(entry?.reason ?? '').toLocaleLowerCase()));
   const resolved = resolutionReservations(resolution);
-  let requested = (comparison.length ? comparison : resolved).filter(isActive);
+  const contextual = existing.filter((entry) => entry.reason === 'canonical_memory');
+  let requested = (comparison.length ? comparison : contextual.length ? contextual : resolved).filter(isActive);
   if (!requested.length && resolution?.ambiguity?.detected !== true) {
     const exactCatalog = candidates.filter((candidate) => (
       ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(String(candidate?.recordType ?? '').toUpperCase())
@@ -657,7 +659,10 @@ export async function retrieveTemplateEngineEvidence({
   preloadedArtifacts = null, conversationGuidance = null,
 } = {}, dependencies = {}) {
   const startedAt = performance.now();
-  const search = searchDecision?.search;
+  const normalizedSearch = normalizeTemplateEngineSearchDecision(searchDecision, state);
+  if (!normalizedSearch.valid) throw new TypeError('Template-engine retrieval requires valid SEARCH output');
+  searchDecision = normalizedSearch.value;
+  let search = searchDecision?.search;
   if (!search?.query) throw new TypeError('Template-engine retrieval requires SEARCH output');
   const input = createKnowledgeEngineInput({
     tenantId: scope.tenantId,
@@ -715,10 +720,38 @@ export async function retrieveTemplateEngineEvidence({
     const candidate = exactCatalog[0];
     entityResolution = Object.freeze({
       ...entityResolution,
-      candidate: Object.freeze({ ...candidate,
+      candidate: Object.freeze({ ...candidate, explicit: true,
         entityType: candidate.recordType === 'CATALOG_ITEM' ? 'ITEM' : 'CATEGORY',
       }),
       candidateNamespace: 'CATALOG',
+      action: 'CONTINUE', requiresCandidateConfirmation: false,
+      ambiguity: Object.freeze({ detected: false, candidates: Object.freeze([]) }),
+    });
+  }
+  // Resolve remembered IDs from the current assigned publication, even when
+  // lexical/semantic channels cannot match a pronoun-only follow-up.
+  // Explicit published names always take precedence over stale memory hints.
+  const preferred = new Set((exactCatalog.length ? [] : search.preferredRecordIds ?? []).map(normalized));
+  const contextualRecords = scopedBundles.flatMap((bundle) => (bundle.records ?? [])
+    .filter((record) => preferred.has(normalized(record.record_id ?? record.recordId ?? record.id))
+      && ['both', input.usageDirection].includes(normalized(record.usage_direction ?? record.usageDirection ?? 'both')))
+    .map((record) => publishedRecordCandidate(record, bundle, input, { matchMethod: 'published_contextual' }))
+    .filter((candidate) => candidate && ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(candidate.recordType)));
+  if (preferred.size > 1 && [...preferred].some((id) => !contextualRecords.some(
+    (candidate) => normalized(candidate.recordId) === id,
+  ))) {
+    throw new AppError(503, 'A remembered comparison operand is not in the active publication',
+      'TEMPLATE_ENGINE_REQUESTED_ENTITY_COVERAGE_INCOMPLETE');
+  }
+  if (exactCatalog.length) {
+    search = Object.freeze({ ...search, preferredRecordIds: Object.freeze([]) });
+    searchDecision = Object.freeze({ ...searchDecision, search });
+  } else if (preferred.size === 1 && contextualRecords.length === 1) {
+    const candidate = contextualRecords[0];
+    entityResolution = Object.freeze({ ...entityResolution,
+      candidate: Object.freeze({ ...candidate, explicit: true,
+        entityType: candidate.recordType === 'CATALOG_ITEM' ? 'ITEM' : 'CATEGORY' }),
+      action: 'CONTINUE', requiresCandidateConfirmation: false, candidateNamespace: 'CATALOG',
       ambiguity: Object.freeze({ detected: false, candidates: Object.freeze([]) }),
     });
   }
@@ -744,14 +777,14 @@ export async function retrieveTemplateEngineEvidence({
         limitPerChannel: 20,
       }, dependencies.retrieval);
       return addExactStructuredCandidates(
-        result, [...resolvedRecords, ...exactCandidates], 20,
+        result, [...contextualRecords, ...resolvedRecords, ...exactCandidates], 20,
       );
     })();
     return channelPromise;
   };
   const rawHybrid = await runTemplateEngineHybridRetrieval({
     decision: searchDecision,
-    state,
+    state: exactCatalog.length ? { ...state, lastReferencedRecordIds: [], comparisonRecordIds: [] } : state,
     scope: { ...scope, publications: artifacts.publications },
     limitPerChannel: 20,
     candidateLimit: 20,
@@ -767,6 +800,13 @@ export async function retrieveTemplateEngineEvidence({
       publications: artifacts.publications,
     },
   );
+  if (entityConstraint.comparison) {
+    // Multiple deliberately selected operands are not alternative identities.
+    entityResolution = Object.freeze({ ...entityResolution, candidate: null,
+      action: 'CONTINUE', requiresCandidateConfirmation: false,
+      ambiguity: Object.freeze({ detected: false, candidates: Object.freeze([]) }),
+    });
+  }
   const hybrid = entityConstraint.hybrid;
   const retrieval = Object.freeze({
     ...hybrid,
@@ -894,7 +934,7 @@ export async function retrieveTemplateEngineEvidence({
     authoritative,
     entityResolution,
     searchClassification: Object.freeze({
-      searchKind: route.searchKind,
+      searchKind: entityConstraint.comparison ? templateEngineSearchKinds.COMPARISON : route.searchKind,
       resolvedEntityType: entityResolution?.candidate?.entityType ?? null,
       resolvedNamespace: entityResolution?.candidateNamespace ?? null,
       requestedFact: search.requestedFact,
