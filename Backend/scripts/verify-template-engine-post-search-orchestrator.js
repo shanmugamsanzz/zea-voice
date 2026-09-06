@@ -569,6 +569,32 @@ assert.equal(clarificationValidationInput.selectedEvidence.length, 2,
   'Clarification speech validation receives the complete verified evidence set');
 
 let ambiguityRepairCalls = 0;
+{
+  let calls = 0;
+  const identityResult = await respondToTemplateEngineSearch({
+    mainPrompt, latestUtterance: 'Tell me about a different offering.', state,
+    searchDecision, verifiedEvidence, scope,
+  }, {
+    tenantBoundaryVerified: true,
+    validateGroundedClaims: async ({ decision }) => decision === 'CLARIFY'
+      ? { supported: true, requestedFactAddressed: true }
+      : { supported: false, requestedFactAddressed: false, reason: 'requested_entity_mapping_uncertain' },
+    invokeStructuredLlm: async (request) => {
+      calls += 1;
+      if (calls === 1) return { outputParsed: { decision: 'RESPONSE',
+        response: 'That offering means First Service. The price is 3200 currency units.',
+        clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null } };
+      assert.deepEqual(request.responseFormat.schema.properties.decision.enum, ['CLARIFY']);
+      assert.match(request.messages.at(-1).content, /requested_entity_mapping_uncertain/u);
+      return { outputParsed: { decision: 'CLARIFY', response: '',
+        clarification: { question: 'Which offering do you mean?', reason: 'unresolved identity', candidates: [] },
+        evidenceIds: [], nextQuestion: null, stateUpdate: null } };
+    },
+  });
+  assert.equal(identityResult.decision.decision, 'CLARIFY');
+  assert.equal(identityResult.diagnostics.initialSemanticValidationReason, 'requested_entity_mapping_uncertain');
+  assert.equal(calls, 2);
+}
 for (const utterance of ['What is the unrecognized option price?', 'தெரியாத package விலை என்ன?',
   'unknown option price sollunga']) {
   let calls = 0;

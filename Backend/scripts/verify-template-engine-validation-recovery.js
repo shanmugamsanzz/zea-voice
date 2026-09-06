@@ -186,6 +186,12 @@ for (const mode of ['dedicated', 'neutral', 'unconfigured', 'cancelled', 'workfl
     if (configurationFailure) assert.equal(orchestrator.templateEngineState.activeWorkflowId, null,
       'No workflow state may be activated on configuration failure');
     assert.ok(spoken.includes(recovery), 'Configured recovery must reach TTS');
+    if (!configurationFailure && mode !== 'hydration-failure') {
+      const retrievalLog = logs.find((entry) => entry.stage === 'template_engine.retrieval_completed');
+      assert.ok(Object.hasOwn(retrievalLog, 'entityMatch'));
+      assert.ok(Object.hasOwn(retrievalLog, 'preferredRecordIds'));
+      assert.ok(Object.hasOwn(retrievalLog, 'ambiguity'));
+    }
     assert.ok(!spoken.includes('A technical failure occurred.'), 'Validation/configuration failures are not provider outages');
     if (mode === 'field-config') {
       const rejection = logs.find((entry) => entry.stage === 'template_engine.response_rejected');

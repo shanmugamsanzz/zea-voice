@@ -658,8 +658,16 @@ export async function retrieveTemplateEngineEvidence({
   auth, scope, callId, usageDirection, language, searchDecision, state = {}, runtimeProfile,
   preloadedArtifacts = null, conversationGuidance = null,
   latestUtterance = null,
+  contextualMemoryVerified = false,
 } = {}, dependencies = {}) {
   const startedAt = performance.now();
+  if (!contextualMemoryVerified) {
+    state = { ...state, lastReferencedRecordIds: [], comparisonRecordIds: [] };
+    if (searchDecision?.search) searchDecision = { ...searchDecision, search: {
+      ...searchDecision.search, preferredRecordIds: [], contextualReference: null,
+      query: latestUtterance || searchDecision.search.query,
+    } };
+  }
   const normalizedSearch = normalizeTemplateEngineSearchDecision(searchDecision, state);
   if (!normalizedSearch.valid) throw new TypeError('Template-engine retrieval requires valid SEARCH output');
   searchDecision = normalizedSearch.value;
@@ -773,10 +781,10 @@ export async function retrieveTemplateEngineEvidence({
   } else if (exactCatalog.length) {
     search = Object.freeze({ ...search, preferredRecordIds: Object.freeze([]) });
     searchDecision = Object.freeze({ ...searchDecision, search });
-  } else if (preferred.size === 1 && contextualRecords.length === 1) {
+  } else if (contextualMemoryVerified && preferred.size === 1 && contextualRecords.length === 1) {
     const candidate = contextualRecords[0];
     entityResolution = Object.freeze({ ...entityResolution,
-      candidate: Object.freeze({ ...candidate, explicit: true,
+      candidate: Object.freeze({ ...candidate, explicit: false,
         entityType: candidate.recordType === 'CATALOG_ITEM' ? 'ITEM' : 'CATEGORY' }),
       action: 'CONTINUE', requiresCandidateConfirmation: false, candidateNamespace: 'CATALOG',
       ambiguity: Object.freeze({ detected: false, candidates: Object.freeze([]) }),
@@ -970,6 +978,8 @@ export async function retrieveTemplateEngineEvidence({
       retrievalCount: hybrid.candidates.length,
       hydrationCount: hydratedEvidence.length,
       verifiedEvidenceCount: evidence.length,
+      preferredRecordIds: Object.freeze([...(search.preferredRecordIds ?? [])]),
+      contextualMemoryVerified,
       entityMatch: Object.freeze({
         action: entityResolution?.action ?? null,
         reason: entityResolution?.reason ?? null,

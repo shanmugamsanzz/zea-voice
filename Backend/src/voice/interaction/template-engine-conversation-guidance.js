@@ -335,6 +335,12 @@ export function selectApplicableConversationGuidance({
     if (route === 'TOOL' && !applicableRoutes.includes(route)) return false;
     if (namedEntityRequest && overviewGuidance(candidate)) return false;
     const candidateKind = candidateGuidanceKind(candidate);
+    if (candidateKind === 'comparison' && requestedKind !== 'comparison') return false;
+    const structural = tokens(identifierText([candidate.nodeKey, candidate.context, candidate.intentClass].join(' ')));
+    if (structural.has('required') && structural.has('related')
+      && !evidence.some((record) => record.verified === true
+        && Array.isArray(record.authoritativeData?.relationships?.requires)
+        && record.authoritativeData.relationships.requires.length > 0)) return false;
     if (requestedKind && candidateKind && requestedKind !== candidateKind) return false;
     const candidateTarget = candidateTargetKind(candidate);
     if (requestedTarget && candidateTarget && requestedTarget !== candidateTarget) return false;

@@ -72,6 +72,20 @@ const uncitedNumeric = numericCheck('The price is 9000.', {
     ...evidence[0], evidenceId: 'e-other', authoritativeData: { price: 9000 },
   }],
 });
+for (const range of ['5-13', '5–13', '5—13', '5 to 13', '5 முதல் 13 வரை']) {
+  assert.equal(numericCheck(`Published ages ${range}.`, {
+    selectedEvidence: [{ ...numericEvidence[0], content: 'Published ages 5 to 13.', authoritativeData: {} }],
+  }).valid, true, range);
+}
+assert.equal(numericCheck('Published value is -13.', {
+  selectedEvidence: [{ ...numericEvidence[0], content: 'Published value 13.', authoritativeData: {} }],
+}).reason, 'unsupported_numeric_claim', 'A genuine negative must not match positive evidence');
+assert.equal(numericCheck('Published interval -5--1.', {
+  selectedEvidence: [{ ...numericEvidence[0], content: 'Published interval -5 to -1.', authoritativeData: {} }],
+}).valid, true);
+assert.equal(numericCheck('Published ages 5-14.', {
+  selectedEvidence: [{ ...numericEvidence[0], content: 'Published ages 5 to 13.', authoritativeData: {} }],
+}).valid, false, 'Invented range endpoints must remain rejected');
 for (const [utterance, speech] of [
   ['My daughter is 3. What is included?', 'You said your daughter is 3. The price is 3200.'],
   ['என் பொண்ணுக்கு 3 வயசு', 'நீங்கள் சொன்ன வயது 3. விலை 3200.'],
@@ -188,6 +202,7 @@ const relevanceValidation = await validateTemplateEngineClaims({
   },
 });
 assert.equal(relevanceValidation.supported, true);
+assert.match(claimValidationRequest.messages[0].content, /requested_entity_mapping_uncertain/u);
 assert.match(claimValidationRequest.messages[0].content, /clearly attributed restatement/u);
 assert.match(claimValidationRequest.messages[0].content, /Missing eligibility must not become either approval or rejection/u);
 assert.equal(relevanceValidation.requestedFactAddressed, false);

@@ -14,6 +14,7 @@ import {
   configuredWorkflowToolIdentifier,
 } from '../../knowledge-bases/workflow-tool-authorization.js';
 import { selectApplicableConversationGuidance, welcomeContinuationContext } from './template-engine-conversation-guidance.js';
+import { reviewRememberedReference } from './template-engine-reference-review.js';
 import {
   repairTemplateEngineFollowUp,
   validateAndComposeTemplateEngineSpeech,
@@ -186,7 +187,7 @@ function speculativeSearchDecision(input, state) {
       query: cleanText(input.latestUtterance, 2_000),
       requestedFact: null,
       contextualReference: null,
-      preferredRecordIds: state.lastReferencedRecordIds,
+      preferredRecordIds: [],
     }),
     tool: null, nextQuestion: null, stateUpdate: null,
   });
@@ -495,7 +496,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       language: input.language,
       searchDecision: speculativeSearchDecision(input, state),
       latestUtterance: input.latestUtterance,
-      state,
+      state: { ...state, lastReferencedRecordIds: [], comparisonRecordIds: [] },
       runtimeProfile: input.runtimeProfile,
       preloadedArtifacts: publishedContext.artifacts,
       conversationGuidance: initialConversationGuidance,
@@ -587,6 +588,15 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     });
   }
 
+  const contextualMemoryVerified = await reviewRememberedReference({
+    latestUtterance: input.latestUtterance, search: first.search, state,
+  }, dependencies.invokeStructuredLlm);
+  const searchState = contextualMemoryVerified ? state
+    : { ...state, lastReferencedRecordIds: [], comparisonRecordIds: [] };
+  if (!contextualMemoryVerified && (first.search.preferredRecordIds.length || first.search.contextualReference)) {
+    first = { ...first, search: { ...first.search, query: input.latestUtterance,
+      contextualReference: null, preferredRecordIds: [] } };
+  }
   const preRetrievalConversationGuidance = selectApplicableConversationGuidance({
     publishedConversationGuidance: publishedContext.publishedConversationGuidance ?? [],
     scope: publishedContext.scope,
@@ -618,8 +628,9 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     language: input.language,
     searchDecision: first,
     latestUtterance: input.latestUtterance,
-    state,
+    state: searchState,
     runtimeProfile: input.runtimeProfile,
+    contextualMemoryVerified,
     preloadedArtifacts: publishedContext.artifacts,
     conversationGuidance: preRetrievalConversationGuidance,
   });
@@ -634,6 +645,8 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       }),
       speculative: Boolean(speculativeRetrieval),
       speculativeReused: usedSpeculativeRetrieval,
+      ambiguity: publishedResolutionAmbiguity(retrieval.entityResolution,
+        retrieval.evidence ?? [], retrieval.searchClassification),
     }));
   }
   const hydratedRecordIds = new Set((retrieval.evidence ?? []).filter((source) => source.verified === true)
@@ -663,8 +676,9 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   const answered = await respondToTemplateEngineSearch({
     ...common,
     mainPrompt: input.mainPrompt,
-    state,
+    state: searchState,
     searchDecision: first,
+    contextualMemoryVerified,
     verifiedEvidence: retrieval.evidence,
     scope: retrieval.scope,
     informationUnavailableResponse: input.informationUnavailableResponse,
@@ -679,10 +693,10 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       retrieval.entityResolution, retrieval.evidence, retrieval.searchClassification,
     ),
     validateGroundedClaims: ({
-      response, decision, selectedEvidence, citedEvidence, searchInterpretation, latestUtterance,
+      response, decision, selectedEvidence, citedEvidence, searchInterpretation, latestUtterance, contextualReferenceVerified,
     }) => (
       dependencies.validateGroundedClaims({
-        response, decision, selectedEvidence, citedEvidence, searchInterpretation, latestUtterance,
+        response, decision, selectedEvidence, citedEvidence, searchInterpretation, latestUtterance, contextualReferenceVerified,
       })
     ),
     onDecisionRepair: dependencies.onPostSearchDecisionRepair,

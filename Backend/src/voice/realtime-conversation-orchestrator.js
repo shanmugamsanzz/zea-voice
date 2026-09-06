@@ -2545,7 +2545,7 @@ export class RealtimeConversationOrchestrator {
           return verified;
         },
         validateGroundedClaims: ({
-          response, decision, selectedEvidence, citedEvidence, searchInterpretation, latestUtterance,
+          response, decision, selectedEvidence, citedEvidence, searchInterpretation, latestUtterance, contextualReferenceVerified,
         }) => {
           return validateTemplateEngineClaims({
             speech: response,
@@ -2554,6 +2554,7 @@ export class RealtimeConversationOrchestrator {
             decision,
             searchInterpretation,
             latestUtterance,
+            contextualReferenceVerified,
           }, { invokeStructuredLlm });
         },
         validateToolResultSpeechClaims: ({ speech, verifiedResult }) => (
@@ -2582,6 +2583,10 @@ export class RealtimeConversationOrchestrator {
             hydrationCount: details.hydrationCount,
             verifiedEvidenceCount: details.verifiedEvidenceCount,
             failedChannels: details.failedChannels,
+            entityMatch: details.entityMatch ?? null,
+            preferredRecordIds: details.preferredRecordIds ?? [],
+            contextualMemoryVerified: details.contextualMemoryVerified === true,
+            ambiguity: details.ambiguity ?? null,
           }, 'Template-engine retrieval and hydration completed');
         },
         onStageTiming: (details) => {
@@ -2603,6 +2608,9 @@ export class RealtimeConversationOrchestrator {
             allowedAliases: details.allowedAliases,
             returnedAliases: details.returnedAliases,
             initialValidationReason: details.initialValidationReason,
+            initialSemanticValidationReason: details.initialSemanticValidationReason ?? null,
+            initialNumericValidationDetails: details.initialNumericValidationDetails ?? null,
+            finalNumericValidationDetails: details.finalNumericValidationDetails ?? null,
             validationReason: details.validationReason,
             finalDecision: details.finalDecision,
             repairAttempted: details.repairAttempted,

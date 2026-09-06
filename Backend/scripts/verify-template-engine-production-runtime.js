@@ -10,6 +10,7 @@ import {
 } from '../src/voice/interaction/template-engine-production-runtime.js';
 import { recordTemplateEngineTurnMetrics, templateEngineAudioPercentiles } from '../src/voice/interaction/template-engine-observability.js';
 import { instrumentTemplateEngineTurn } from '../src/voice/interaction/template-engine-turn-timing.js';
+import { reviewRememberedReference } from '../src/voice/interaction/template-engine-reference-review.js';
 
 let validationInvocations = 0;
 const timingEvents = [];
@@ -369,6 +370,7 @@ for (const language of ['en', 'ta', 'ta-Latn']) {
   ]) {
     const result = await retrieveTemplateEngineEvidence({
       auth: { tenantId }, scope, callId: 'context-comparison-regression', usageDirection: 'inbound', language,
+      contextualMemoryVerified: true,
       state: { lastReferencedRecordIds: scenario.previous,
         comparisonRecordIds: scenario.previous.length > 1 ? scenario.previous : [] },
       searchDecision: { ...searchDecision, search: {
@@ -407,6 +409,7 @@ for (const language of ['en', 'ta', 'ta-Latn']) {
 let sttSelectedIds = [];
 await assert.rejects(() => retrieveTemplateEngineEvidence({
   auth: { tenantId }, scope, callId: 'missing-comparison-operand', usageDirection: 'inbound', language: 'en',
+  contextualMemoryVerified: true,
   state: { comparisonRecordIds: ['metadata-alpha', 'removed-record'] },
   searchDecision: { ...searchDecision, search: { query: 'Compare their details', requestedFact: 'details',
     contextualReference: 'previous selections', preferredRecordIds: [] } },
@@ -583,6 +586,7 @@ for (const tenantSuffix of ['a', 'b']) {
       const coverage = await retrieveTemplateEngineEvidence({
         auth: { tenantId: activeTenant }, scope: { ...scope, tenantId: activeTenant },
         callId: 'category-coverage', usageDirection: 'inbound', language: 'ta',
+        contextualMemoryVerified: true,
         state: { lastReferencedRecordIds: reference === 'Published Collection'
           ? ['choice-0'] : records.map((record) => record.record_id),
           comparisonRecordIds: reference === 'previous selections' ? records.map((record) => record.record_id) : [] },
@@ -687,6 +691,61 @@ const decisions = [searchDecision, {
   decision: 'RESPONSE', response: 'Tenant Item costs 125.', clarification: null,
   evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
 }];
+for (const scenario of [
+  { text: 'No, I meant a different offering', relation: 'new_request' },
+  { text: 'இல்ல, வேற checkup பத்தி கேட்டேன்', relation: 'new_request' },
+  { text: 'vera option pathi sollunga', relation: 'unclear' },
+  { text: 'Tell me more about this', relation: 'reference' },
+  { text: 'Compare those two again', relation: 'reference' },
+  { text: 'No, the price of this one', relation: 'reference' },
+]) {
+  const previousState = { recentCompleteTurns: [
+    { role: 'user', content: 'Tell me about Tenant Item' },
+    { role: 'assistant', content: 'Tenant Item has published details.' },
+  ], lastReferencedRecordIds: ['record-1'], comparisonRecordIds: [] };
+  const originalState = JSON.stringify(previousState);
+  let calls = 0;
+  await runTemplateEngineProductionTurn({
+    scope, mainPrompt: 'Use only published information.', latestUtterance: scenario.text,
+    conversationHistory: previousState.recentCompleteTurns,
+    state: previousState, assignedTools: [], informationFields: [],
+  }, {
+    loadPublishedContext: async () => ({ scope, publishedWorkflows: [], artifacts: {} }),
+    invokeStructuredLlm: async (request) => {
+      if (request.responseFormat.name === 'template_engine_reference_review') {
+        assert.ok(request.messages[0].content.includes(scenario.text));
+        return { relation: scenario.relation };
+      }
+      calls += 1;
+      return calls === 1 ? { ...searchDecision, search: {
+        query: 'Tenant Item price', requestedFact: 'price',
+        contextualReference: 'Tenant Item', preferredRecordIds: ['record-1'],
+      } } : { decision: 'RESPONSE', response: 'Tenant Item costs 125.',
+        clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null };
+    },
+    retrieveEvidence: async (request) => {
+      const reuse = scenario.relation === 'reference';
+      assert.equal(request.contextualMemoryVerified, reuse);
+      assert.deepEqual(request.searchDecision.search.preferredRecordIds, reuse ? ['record-1'] : []);
+      assert.deepEqual(request.state.lastReferencedRecordIds, reuse ? ['record-1'] : []);
+      if (!reuse) assert.equal(request.searchDecision.search.query, scenario.text);
+      return retrieval;
+    },
+    persistWorkflowState: async () => assert.fail('Search must not persist a workflow'),
+    executeAuthorizedTool: async () => assert.fail('Search must not execute tools'),
+    validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
+    validateToolResultSpeechClaims: async () => ({ supported: true }),
+  });
+  assert.equal(JSON.stringify(previousState), originalState, 'Review must not mutate call memory');
+}
+const referenceInput = { latestUtterance: 'More details?',
+  search: { preferredRecordIds: ['record-1'], contextualReference: 'Tenant Item' },
+  state: { recentCompleteTurns: [{ role: 'assistant', content: 'Tenant Item details' }] } };
+assert.equal(await reviewRememberedReference(referenceInput, async () => ({ relation: 'invalid' })), false);
+assert.equal(await reviewRememberedReference(referenceInput, async () => 'not json'), false);
+await assert.rejects(() => reviewRememberedReference(referenceInput, async () => {
+  throw Object.assign(new Error('cancelled'), { name: 'AbortError' });
+}), { name: 'AbortError' });
 for (const latestUtterance of ['ஆமா Madam', 'Yes, speaking', 'No thanks',
   'Wrong person', 'Stop calling', 'Tell me the price instead']) {
   let calls = 0;

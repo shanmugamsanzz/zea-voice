@@ -174,7 +174,8 @@ async function runFactualScenario(configuration, scenario, utterance) {
     state: { lastReferencedRecordIds: history.length ? [priorId] : [] },
     assignedTools: [], informationFields: [],
   }, {
-    invokeStructuredLlm: async () => decisions.shift(),
+    invokeStructuredLlm: async (request) => request.responseFormat?.name === 'template_engine_reference_review'
+      ? { relation: scenario === 'contextual_follow_up' ? 'reference' : 'new_request' } : decisions.shift(),
     loadPublishedContext: async () => ({
       scope: identity.scope, artifacts: {}, publishedWorkflows: [],
       publishedConversationGuidance: [guidance(configuration, scenario)],

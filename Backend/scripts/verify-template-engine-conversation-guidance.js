@@ -302,6 +302,15 @@ const contentSelection = selectApplicableConversationGuidance({
 assert.equal(contentSelection.recordId, 'guidance-content-match');
 
 let request;
+assert.equal(selectApplicableConversationGuidance({
+  publishedConversationGuidance: [{ ...detailGuidance, nodeKey: 'required_related_item_selection',
+    intentClass: 'REQUIRED_RELATED_ITEM' }], scope, latestUtterance: 'Tell me about this offering',
+  finalDecision: 'SEARCH', evidence: [{ verified: true, authoritativeData: { relationships: { recommendedFor: ['screening'] } } }],
+}), null, 'Related-item guidance requires published prerequisites, not a shared category');
+assert.equal(selectApplicableConversationGuidance({
+  publishedConversationGuidance: [comparisonGuidance], scope, latestUtterance: 'Tell me about this offering',
+  finalDecision: 'SEARCH',
+}), null, 'An ordinary detail request must not select comparison guidance');
 const welcomeInput = {
   pendingQuestion: { key: 'configured_welcome_question', text: 'Am I speaking with the account holder?' },
   publishedConversationGuidance: [overviewGuidance, detailGuidance,

@@ -57,8 +57,15 @@ function canonicalNumber(token) {
 }
 
 function numericClaims(value) {
-  return [...cleanText(value).matchAll(/[+-]?\p{N}+(?:[.,]\p{N}+)*/gu)]
-    .map(([raw]) => ({ raw, normalized: canonicalNumber(raw) }));
+  const text = cleanText(value);
+  return [...text.matchAll(/[+-]?\p{N}+(?:[.,]\p{N}+)*/gu)]
+    .map((match) => {
+      // A single hyphen after a number separates a range. Explicit negative
+      // endpoints (-5--1 or -5 to -1) retain their unary minus.
+      const raw = match[0].startsWith('-') && /\p{N}\s*$/u.test(text.slice(0, match.index))
+        ? match[0].slice(1) : match[0];
+      return { raw, normalized: canonicalNumber(raw) };
+    });
 }
 
 function numbers(value) {

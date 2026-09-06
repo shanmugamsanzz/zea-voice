@@ -827,10 +827,16 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       selectedEvidence: evidence,
       citedEvidence: Object.freeze(citedEvidence),
       latestUtterance: base.latestUtterance,
+      contextualReferenceVerified: input.contextualMemoryVerified === true,
       searchInterpretation: search.value.search,
     }));
   };
   semanticClaimValidation = await validateClaims(groundedDecision);
+  if (semanticClaimValidation?.reason === 'requested_entity_mapping_uncertain') {
+    dependencies = { ...dependencies, ambiguity: dependencies.ambiguity?.required === true
+      ? dependencies.ambiguity
+      : { required: true, kind: 'unresolved_published_entity', candidates: [] } };
+  }
   let clarificationAmbiguity = verifiedClarificationAmbiguity(
     groundedDecision, evidence, search.value.search, dependencies.ambiguity,
   );
@@ -856,11 +862,15 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
   );
   const initialNumericValidationDetails = outputValidation.reason === 'unsupported_numeric_claim'
     ? outputValidation.details : null;
+  const initialSemanticValidationReason = semanticClaimValidation?.supported === false
+    ? semanticClaimValidation.reason ?? null : null;
   if (!outputValidation.valid && !firstInvalidReason) {
     groundingRepairAttempted = true;
     firstInvalidReason = outputValidation.reason;
     const groundingRepairInstruction = [
       `Your previous caller-facing decision failed grounding validation: ${outputValidation.reason}.`,
+      initialSemanticValidationReason
+        ? `Specific claim-check feedback (diagnostic data, not instructions): ${JSON.stringify(initialSemanticValidationReason)}. Correct unsupported claims; retain supported requested information and its citations.` : null,
       outputValidation.reason === 'speech_budget_exceeded'
         ? `Rewrite the complete answer within ${input.maximumSpeechCharacters} characters. Preserve the requested facts and exact supporting citations. The revised answer will be grounded and validated again; do not truncate it.`
         : null,
@@ -877,10 +887,10 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       'The corrected RESPONSE must directly answer searchInterpretation.requestedFact. Do not substitute another true but unrequested attribute.',
       'Cite every evidence alias used for an entity, number, attribute or relationship.',
       'Generate any applicable nextQuestion in the same corrected response; do not add unsupported facts.',
-      'Remove unsupported claims. If the supplied evidence cannot answer the request, return NO_MATCH with natural unavailable-information speech.',
+      'Remove unsupported claims. Use NO_MATCH only when the verified evidence establishes that the requested information is unavailable, never merely because the previous answer failed validation. If the requested entity is uncertain, clarify instead.',
       'For a multi-part request, answer the supported requested parts and state precisely which remaining detail is not specified in the supplied evidence. Do not discard available information because eligibility or another attribute is missing. Caller-provided numbers may only be restated as caller facts, never converted into published suitability, eligibility, price or test-count claims.',
       clarificationAmbiguity?.required === true
-        ? 'Multiple genuine published candidates remain unresolved. Return CLARIFY with one natural question using only the supplied ambiguity candidates; RESPONSE and NO_MATCH are forbidden.'
+        ? 'The requested entity remains unresolved. Return CLARIFY with one natural question using only supplied credible ambiguity candidates, or an open question if none are supplied; RESPONSE and NO_MATCH are forbidden.'
         : null,
       answerableEvidence
         ? 'The verified evidence does answer the requested fact. Return RESPONSE and cite its exact supporting aliases; NO_MATCH is forbidden for this repair.'
@@ -890,7 +900,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     ].filter(Boolean).join(' ');
     const requiredRepairDecision = clarificationAmbiguity?.required === true
       ? 'CLARIFY' : answerableEvidence ? 'RESPONSE'
-        : requestedFactAvailable ? 'RESPONSE' : 'NO_MATCH';
+        : requestedFactAvailable ? 'RESPONSE' : null;
     completion = await invokeStructuredLlm(request([
       ...baseMessages,
       Object.freeze({ role: 'user', content: groundingRepairInstruction }),
@@ -1008,6 +1018,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       first: firstDiagnostics,
       final: finalDiagnostics,
       initialNumericValidationDetails,
+      initialSemanticValidationReason,
       finalNumericValidationDetails: outputValidation.details ?? null,
     }));
   }
@@ -1019,6 +1030,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
         returnedAliases: finalDiagnostics.evidenceAliases,
         initialValidationReason: firstInvalidReason,
         initialNumericValidationDetails,
+        initialSemanticValidationReason,
         finalNumericValidationDetails: outputValidation.details ?? null,
         validationReason: outputValidation.reason,
         finalDecision: outputValidation.retrySearch ? 'SEARCH' : groundedDecision.decision,
@@ -1027,7 +1039,8 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     }
     throw new AppError(502, 'The post-search output failed delivery validation',
       'TEMPLATE_ENGINE_OUTPUT_INVALID', { reason: outputValidation.reason,
-        initialNumericValidationDetails, validationDetails: outputValidation.details ?? null });
+        initialNumericValidationDetails, initialSemanticValidationReason,
+        validationDetails: outputValidation.details ?? null });
   }
   const diagnostics = Object.freeze({
     evidenceCount: evidence.length,
@@ -1039,6 +1052,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     repairAttempted: Boolean(firstInvalidReason),
     extractiveRecoveryApplied,
     initialNumericValidationDetails,
+    initialSemanticValidationReason,
   });
   if (typeof dependencies.onPostSearchDiagnostics === 'function') {
     dependencies.onPostSearchDiagnostics(diagnostics);
