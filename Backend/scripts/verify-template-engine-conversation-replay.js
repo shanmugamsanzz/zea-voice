@@ -12,7 +12,7 @@ const publication = { tenantId: 'tenant-a', knowledgeBaseId: 'kb-a', publication
 const records = Object.entries(fixture.subjects).map(([id, subject]) => ({
   record_id: id, record_type: 'catalog_item', entity_name: subject.name, usage_direction: 'both',
   content: subject.answer, entity_metadata: { itemKey: id, name: subject.name,
-    aliases: fixture.turns.filter((turn) => turn.subject === id && turn.id !== 'welcome').map((turn) => turn.text),
+    aliases: fixture.turns.filter((turn) => turn.subject === id && turn.id !== 'welcome' && !turn.noPublishedAlias && !turn.contextual).map((turn) => turn.text),
     details: subject.answer },
 }));
 records.push({ record_id: 'welcome-next', record_type: 'conversation_node', usage_direction: 'both',
@@ -48,7 +48,18 @@ const llm = { async connect() {}, cancel() {}, close() {}, async *stream(request
   const name = request.responseFormat?.name;
   stages.add(name);
   let output;
-  if (name === 'template_engine_welcome_meaning') {
+  if (name === 'template_engine_contextual_subject_review') {
+    const data = JSON.parse(request.messages.at(-1).content);
+    const candidate = data.candidates.find((item) => item.name === fixture.subjects[turn.subject].name);
+    assert.ok(candidate);
+    output = { relation: 'reference', subjectIds: [candidate.id] };
+  } else if (name === 'template_engine_multilingual_entity_review') {
+    const data = JSON.parse(request.messages.at(-1).content);
+    const candidate = data.candidates.find((item) => item.name === fixture.subjects[turn.subject].name);
+    assert.ok(candidate);
+    assert.ok(!candidate.aliases.includes(turn.text), 'Cross-script regression must not rely on an exact alias');
+    output = { relation: 'equivalent', candidateId: candidate.id };
+  } else if (name === 'template_engine_welcome_meaning') {
     output = { continuation: true, guidanceRecordId: 'welcome-next', query: 'Available packages', requestedFact: 'details' };
   } else if (name === 'template_engine_entity_coverage') {
     const data = JSON.parse(request.messages.at(-1).content);
@@ -64,12 +75,14 @@ const llm = { async connect() {}, cancel() {}, close() {}, async *stream(request
     output = { decision: 'RESPONSE', response: failAnswer ? 'The price is 9999.' : fixture.subjects[turn.subject].answer,
       clarification: null, evidenceIds: [cited.evidenceId], nextQuestion: null, stateUpdate: null };
   } else if (name === 'template_engine_reference_review') {
-    output = { relation: 'new_request' };
+    output = { relation: turn.contextual ? 'reference' : 'new_request' };
   } else if (name === 'template_engine_pending_request_review') {
     output = { acknowledgementOnly: false, act: 'request', acknowledgementText: '' };
   } else {
     output = { decision: 'SEARCH', response: '', clarification: null,
-      search: { query: fixture.subjects[turn.subject].name, requestedFact: 'details', contextualReference: null, preferredRecordIds: [] },
+      search: { query: fixture.subjects[turn.subject].name, requestedFact: 'details',
+        contextualReference: turn.contextual ? 'Kids' : null,
+        preferredRecordIds: turn.contextual ? ['kids'] : [] },
       tool: null, nextQuestion: null, stateUpdate: null };
   }
   // Exercise the actual streaming structured-output parser, not outputParsed mocks.
@@ -143,6 +156,8 @@ try {
       assert.ok(stages.has(stage), `Stage skipped: ${turn.id}: ${stage}`);
     }
     if (turn.id === 'welcome') assert.ok(stages.has('template_engine_welcome_meaning'));
+    if (turn.noPublishedAlias) assert.ok(stages.has('template_engine_multilingual_entity_review'));
+    if (turn.contextual) assert.ok(stages.has('template_engine_contextual_subject_review'), JSON.stringify([...stages]));
     assert.ok(!media.closed);
     results.push({ id: turn.id, answer, audioFrames: audioFrames.length - framesBefore });
   }

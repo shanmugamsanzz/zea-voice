@@ -302,10 +302,20 @@ export async function routeTemplateEngineUtterance(input = {}, dependencies = {}
     && !orchestratorInput.state.activeWorkflowId;
   if (routingReviewAttempted) {
     const review = await invokeValidatedDecision({
-      invokeStructuredLlm, request, validateCompletion,
+      invokeStructuredLlm,
+      request: (messages) => {
+        const activationRequest = request(messages);
+        return { ...activationRequest, responseFormat: { ...activationRequest.responseFormat,
+          schema: { ...templateEngineDecisionJsonSchema, properties: {
+            ...templateEngineDecisionJsonSchema.properties, stateUpdate: { type: 'null' },
+          } },
+        } };
+      },
+      validateCompletion,
       phase: 'tool_activation_review', onRetry: dependencies.onDecisionRetry,
       messages: [...baseMessages, { role: 'system', content: [
         'TOOL_ACTIVATION_REVIEW: Independently check whether this caller actually requested a new external action before any workflow configuration is checked or tool is run.',
+        'There is no active workflow in this phase. Return stateUpdate:null: initiation must not clear state or manufacture confirmation. A refusal or cancellation of an unstarted action may be acknowledged without a workflow-clearing update.',
         'Use the unchanged caller utterance, recent complete turns, pending welcome context and published authorizedWorkflowTools descriptions. Do not assume the proposed tool is correct.',
         `Proposed tool: ${JSON.stringify(validated.value.tool.name)}.`,
         'Return TOOL only when there is a supported request to perform the matching action or clear acceptance of the immediately preceding offer of that action. Preserve caller-provided arguments only; never invent missing fields or final confirmation.',
@@ -526,6 +536,8 @@ function verifiedClarificationAmbiguity(decision, evidence, searchInterpretation
     });
   }
   if (decision?.decision !== 'CLARIFY') return supplied ?? null;
+  // Several cited records alone cannot turn a clear overview into ambiguity.
+  if (supplied?.required === false) return supplied;
 
   if (supplied?.required === true && supplied?.kind === 'unresolved_published_entity') {
     return Object.freeze({
@@ -626,13 +638,18 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     dependencies.ambiguity,
   ) };
   const citations = aliasPostSearchEvidence(evidence);
-  if (dependencies.ambiguity?.required !== true && dependencies.validateRequestedEntityCoverage) {
+  if (dependencies.validateRequestedEntityCoverage) {
     const coverage = await dependencies.validateRequestedEntityCoverage({
       latestUtterance: base.latestUtterance, searchInterpretation: search.value.search,
       requestMeaning: input.requestMeaning ?? null,
       contextualReferenceVerified: input.contextualMemoryVerified === true,
       evidence: citations.evidence,
     });
+    if (coverage.resolved === true && dependencies.ambiguity?.required === true) {
+      dependencies = { ...dependencies, ambiguity: {
+        required: false, kind: 'verified_current_request_coverage', candidates: [],
+      } };
+    }
     if (coverage.resolved !== true) dependencies = { ...dependencies,
       ambiguity: { required: true, kind: 'unresolved_published_entity', candidates: [] } };
     dependencies.onEntityCoverage?.({ resolved: coverage.resolved === true, reason: coverage.reason,

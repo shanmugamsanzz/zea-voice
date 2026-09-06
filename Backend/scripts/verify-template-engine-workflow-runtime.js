@@ -72,7 +72,26 @@ const activated = activateTemplateEngineWorkflow({
   state: { activeWorkflowId: null, collectedToolFields: {}, confirmationStatus: null },
 });
 const { templateEngineToolSchemas } = await import('../src/voice/interaction/template-engine-tool-schemas.js');
-const { assignedToolInputSchema } = await import('../src/knowledge-bases/workflow-tool-authorization.js');
+const { assignedToolInputSchema, assignedToolSchemaDiagnostics } = await import('../src/knowledge-bases/workflow-tool-authorization.js');
+const { createToolSchema } = await import('../src/agents/agent-resource.schemas.js');
+const sixFields = ['patient_name', 'patient_age', 'selected_package', 'appointment_date', 'appointment_time', 'booking_for'];
+const savedPayload = { name: 'configured_booking', type: 'webhook_api', status: 'active',
+  configuration: { url: 'https://example.test/booking', inputSchema: {
+    type: 'object', properties: {}, required: sixFields, additionalProperties: false,
+  } } };
+const invalidSavedSchema = createToolSchema.safeParse(savedPayload);
+assert.equal(invalidSavedSchema.success, false, 'Saving dangling required fields must fail');
+assert.equal(invalidSavedSchema.error.issues.length, sixFields.length);
+const validSavedSchema = createToolSchema.parse({ ...savedPayload, configuration: { ...savedPayload.configuration,
+  inputSchema: { ...savedPayload.configuration.inputSchema,
+    properties: Object.fromEntries(sixFields.map((key) => [key, { type: 'string' }])) },
+} });
+assert.deepEqual(Object.keys(assignedToolInputSchema(validSavedSchema).properties), sixFields);
+const diagnostics = assignedToolSchemaDiagnostics({ ...validSavedSchema, inputSchema: { type: 'object', properties: {} } });
+assert.equal(diagnostics.effectiveSource, 'inputSchema');
+assert.deepEqual(diagnostics.sources[0].propertyKeys, []);
+assert.deepEqual(diagnostics.sources[1].propertyKeys, sixFields);
+assert.ok(!JSON.stringify(diagnostics).includes('example.test'), 'Schema diagnostics must not expose endpoints');
 for (const key of ['inputSchema', 'input_schema', 'parametersSchema', 'parameters_schema']) {
   const loadedTool = { ...tool, inputSchema: undefined, configuration: { [key]: tool.inputSchema } };
   assert.deepEqual(templateEngineToolSchemas([loadedTool])[0].inputSchema, tool.inputSchema);

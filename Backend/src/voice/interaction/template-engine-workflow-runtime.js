@@ -2,6 +2,7 @@ import { AppError } from '../../middleware/errors.js';
 import {
   assignedToolIdentifiers,
   assignedToolInputSchema,
+  assignedToolSchemaDiagnostics,
   configuredWorkflowToolIdentifier,
 } from '../../knowledge-bases/workflow-tool-authorization.js';
 import { validateToolArguments, toolArgumentsMatchSchema } from '../tools/tool-security.js';
@@ -82,6 +83,9 @@ function fieldsForTool(informationFields, tool, schema) {
     throw new AppError(409, 'Required tool fields must have UI field configuration and questions',
       'TEMPLATE_ENGINE_WORKFLOW_FIELD_CONFIGURATION_MISSING', {
         fields: missingConfiguration,
+        schemaPropertyKeys: Object.keys(properties),
+        toolId: tool.id ?? null,
+        schemaDiagnostics: assignedToolSchemaDiagnostics(tool),
         fieldIssues: missingConfiguration.map((key) => ({
           field: key,
           reason: !Object.hasOwn(properties, key) ? 'missing_schema_property'

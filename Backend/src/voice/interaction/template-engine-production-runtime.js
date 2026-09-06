@@ -15,6 +15,8 @@ import {
 } from '../../knowledge-bases/workflow-tool-authorization.js';
 import { selectApplicableConversationGuidance, welcomeContinuationContext } from './template-engine-conversation-guidance.js';
 import { resolveRequestMeaning } from './template-engine-request-meaning.js';
+import { reviewMultilingualEntity } from './template-engine-multilingual-entity-review.js';
+import { reviewContextualSubjects } from './template-engine-contextual-subject-review.js';
 import { reviewRememberedReference } from './template-engine-reference-review.js';
 import {
   repairTemplateEngineFollowUp,
@@ -205,6 +207,10 @@ function speculativeSearchDecision(input, state) {
 
 function speculativeEvidenceCompatible(retrieval, decision, input) {
   if (!retrieval || retrieval.error || !Array.isArray(retrieval.evidence)) return false;
+  // Unresolved speculative hits must reach foreground multilingual review;
+  // factual text in a hit does not establish the caller's intended identity.
+  if (retrieval.entityResolution && (retrieval.entityResolution.action !== 'CONTINUE'
+    || retrieval.entityResolution.requiresCandidateConfirmation === true)) return false;
   const preferred = new Set((decision.search?.preferredRecordIds ?? []).map((id) => cleanText(id, 160)));
   const retrieved = new Set(retrieval.evidence.map((record) => cleanText(record?.recordId, 160)));
   if ([...preferred].some((recordId) => !retrieved.has(recordId))) return false;
@@ -603,10 +609,10 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   const welcomeVerified = requestMeaning.kind === 'published_welcome_continuation';
   if (welcomeVerified) first = { ...first, search: { ...first.search, query: requestMeaning.query,
     requestedFact: requestMeaning.requestedFact, contextualReference: null, preferredRecordIds: [] } };
-  const contextualMemoryVerified = !welcomeVerified && await reviewRememberedReference({
+  let contextualMemoryVerified = !welcomeVerified && await reviewRememberedReference({
     latestUtterance: input.latestUtterance, search: first.search, state,
   }, dependencies.invokeStructuredLlm);
-  const searchState = contextualMemoryVerified ? state
+  let searchState = contextualMemoryVerified ? state
     : { ...state, lastReferencedRecordIds: [], comparisonRecordIds: [] };
   if (!contextualMemoryVerified && (first.search.preferredRecordIds.length || first.search.contextualReference)) {
     first = { ...first, search: { ...first.search, query: input.latestUtterance,
@@ -633,7 +639,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   // Speculation is an opportunistic optimization, never a dependency of the
   // foreground answer. Reuse only completed, compatible verified evidence.
   const speculativeResult = guidanceCompatible ? completedSpeculativeResult : null;
-  const usedSpeculativeRetrieval = !welcomeVerified && guidanceCompatible
+  const usedSpeculativeRetrieval = !welcomeVerified && !contextualMemoryVerified && guidanceCompatible
     && speculativeEvidenceCompatible(speculativeResult, first, input);
   const retrieval = usedSpeculativeRetrieval ? speculativeResult : await dependencies.retrieveEvidence({
     auth: input.auth,
@@ -649,7 +655,17 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     requestMeaning,
     preloadedArtifacts: publishedContext.artifacts,
     conversationGuidance: preRetrievalConversationGuidance,
+    reviewEntityCandidates: (request) => reviewMultilingualEntity(request, dependencies.invokeStructuredLlm),
+    reviewContextualCandidates: (request) => reviewContextualSubjects(request, dependencies.invokeStructuredLlm),
   });
+  if (retrieval.resolvedSearch) {
+    first = { ...first, search: retrieval.resolvedSearch };
+    contextualMemoryVerified = retrieval.contextualMemoryVerified === true;
+    searchState = { ...searchState,
+      lastReferencedRecordIds: contextualMemoryVerified ? first.search.preferredRecordIds : [],
+      comparisonRecordIds: [],
+    };
+  }
   if (typeof dependencies.onRetrievalDiagnostics === 'function') {
     dependencies.onRetrievalDiagnostics(Object.freeze({
       ...(retrieval.diagnostics ?? {

@@ -1002,6 +1002,10 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       setError('An approved Neutral Recovery Message (or both dedicated recovery messages) is required before activation; maximum 500 characters.'); return;
     }
     const informationUnavailableMessage = String(agent.informationUnavailableMessage ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
+    if (agent.status === 'active' && tools.some((tool) => tool.status !== 'inactive')
+      && !agent.workflowConfigurationFailureMessage?.trim()) {
+      setError('Approve a Configuration Failure Message before saving an active agent with tools. Explain that the action cannot be started; do not ask the caller to rephrase.'); return;
+    }
     if (knowledgeHighConfidence < 0.7 || knowledgeHighConfidence > 1) {
       setError('High Confidence must be between 0.70 and 1.00.'); return;
     }
@@ -1476,7 +1480,9 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     setNewToolTimeoutSeconds(Number.isFinite(timeoutMs) ? String(timeoutMs / 1000) : '15');
     setNewToolHeaders(JSON.stringify(configuration.headers ?? {}, null, 2));
     setNewToolSecretHeaders('{}');
-    setNewToolInputSchema(JSON.stringify(configuration.inputSchema ?? { type: 'object', properties: {}, additionalProperties: true }, null, 2));
+    setNewToolInputSchema(JSON.stringify(configuration.inputSchema ?? configuration.input_schema
+      ?? configuration.parametersSchema ?? configuration.parameters_schema
+      ?? { type: 'object', properties: {}, additionalProperties: true }, null, 2));
     setShowToolRegistration(true);
   };
 
@@ -1492,9 +1498,25 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       setToolSaving(true);
       setError('');
       if (newToolType !== 'Webhook API') throw new Error('This service type is planned for a later phase.');
+      if (agent.status === 'active' && !agent.workflowConfigurationFailureMessage?.trim()) {
+        throw new Error('Approve and save a Configuration Failure Message before assigning an active tool.');
+      }
       const headers = parseToolJsonObject(newToolHeaders, 'Request headers');
       const secretHeaders = parseToolJsonObject(newToolSecretHeaders, 'Secret headers');
       const inputSchema = parseToolJsonObject(newToolInputSchema, 'Input schema');
+      const schemaProperties = inputSchema.properties;
+      if (inputSchema.type !== 'object' || !schemaProperties || typeof schemaProperties !== 'object'
+        || Array.isArray(schemaProperties)) throw new Error('Input schema must define an object with properties.');
+      const schemaKeys = new Set(Object.keys(schemaProperties));
+      const toolNames = new Set([newToolName.trim(), editingTool?.id,
+        editingTool?.configuration?.identifier, editingTool?.configuration?.toolIdentifier]
+        .filter(Boolean).map((value) => String(value).normalize('NFKC').trim().toLowerCase()));
+      const missingProperties = [...new Set([
+        ...(Array.isArray(inputSchema.required) ? inputSchema.required.map(String) : []),
+        ...(agent.conversationMemoryFields ?? []).filter((field) => field.requiredAction
+          && toolNames.has(field.requiredAction.normalize('NFKC').trim().toLowerCase())).map((field) => field.key),
+      ])].filter((key) => !schemaKeys.has(key));
+      if (missingProperties.length) throw new Error(`Input schema is missing configured fields: ${missingProperties.join(', ')}. Add the correct properties or correct the fields' tool assignment; no fields were created automatically.`);
       const timeoutSeconds = Number(newToolTimeoutSeconds);
       const saved = await apiRequest<AgentToolApiData>(editingTool ? `/agents/${agentId}/tools/${editingTool.id}` : `/agents/${agentId}/tools`, {
         method: editingTool ? 'PUT' : 'POST',
@@ -2510,7 +2532,13 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                         disabled={isReadOnly}
                         onChange={(event) => setAgent({ ...agent, nonFactualRecoveryMessage: event.target.value })}
                         className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold outline-none focus:border-violet-500" />
-                      <p className="mt-1 text-[10px] font-semibold text-slate-400">Approve neutral wording for an answer or action that could not be completed. Do not claim a technical outage, unavailable information, or booking success. Used when a dedicated recovery message is absent.</p>
+                      <p className="mt-1 text-[10px] font-semibold text-slate-400">Used only after an answer cannot be safely repaired. Do not claim a technical outage, unavailable information, or booking success. Not used for tool configuration or provider failures.</p>
+                      <label className="mb-1 mt-3 block text-[10px] font-bold text-slate-500">Configuration Failure Message</label>
+                      <textarea rows={2} maxLength={500} value={agent.workflowConfigurationFailureMessage || ''}
+                        disabled={isReadOnly}
+                        onChange={(event) => setAgent({ ...agent, workflowConfigurationFailureMessage: event.target.value })}
+                        className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold outline-none focus:border-violet-500" />
+                      <p className="mt-1 text-[10px] font-semibold text-slate-400">Required for active agents with tools. Approve wording explaining that the action cannot be started right now. Do not ask the caller to rephrase, expose internal fields, or claim success.</p>
                       <label className="mb-1 mt-3 block text-[10px] font-bold text-slate-500">Technical Failure Message</label>
                       <textarea
                         rows={2}

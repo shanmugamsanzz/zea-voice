@@ -11,6 +11,7 @@ const { templateEngineDecisionJsonSchema, validateTemplateEngineDecision } = awa
 const { respondToTemplateEngineSearch } = await import('../src/voice/interaction/template-engine-orchestrator.js');
 const { validateTemplateEngineClaims } = await import('../src/voice/interaction/template-engine-claim-validator.js');
 const { isPendingRequestAcknowledgement } = await import('../src/voice/interaction/template-engine-pending-request.js');
+const { validateRecoveryReadiness } = await import('../src/voice/interaction/recovery-readiness.js');
 
 for (const latestUtterance of [
   'Oncocare package பத்தி சொல்லுங்கன்னு கேட்டேன்',
@@ -43,6 +44,9 @@ for (const question of ['Which option do you mean?', 'நீங்கள் எ�
       let output;
       if (request.responseFormat.name === 'template_engine_claim_validation') {
         assert.ok(request.messages[0].content.includes('supported without factual evidence'));
+        assert.ok(request.messages[0].content.includes('NOT that it provides tests, prices or details'));
+        assert.ok(request.messages[0].content.includes('Named candidates must both belong to ambiguity.candidates'));
+        assert.ok(!request.messages[0].content.includes('A requested list must give its supported entries'));
         assert.ok(request.messages[0].content.includes('"ambiguity":{"required":true'));
         output = { supported: !rejected, successClaimed: false, requestedFactAddressed: !rejected,
           reason: rejected ? 'unsupported_named_option' : null };
@@ -160,6 +164,14 @@ for (const kind of ['validation', 'configuration']) {
 }
 assert.equal(configuredTemplateEngineFailureResponse(messageProfile, 'cancelled'), '');
 assert.equal(configuredTemplateEngineFailureResponse(messageProfile, 'unclassified'), '');
+const onlyRephrase = { nonFactualRecoveryMessage: 'Please rephrase your request.' };
+assert.equal(configuredTemplateEngineFailureResponse({ agent: { settings: onlyRephrase } }, 'configuration'), '',
+  'A caller cannot repair tool configuration by rephrasing');
+assert.equal(configuredTemplateEngineFailureResponse({ agent: { settings: onlyRephrase } }, 'operational'), '');
+assert.throws(() => validateRecoveryReadiness(onlyRephrase, { requiresWorkflowRecovery: true }),
+  { code: 'AGENT_WORKFLOW_RECOVERY_MESSAGE_REQUIRED' });
+assert.doesNotThrow(() => validateRecoveryReadiness({ ...onlyRephrase,
+  workflowConfigurationFailureMessage: 'I cannot start that action right now.' }, { requiresWorkflowRecovery: true }));
 
 async function waitFor(predicate) {
   const deadline = Date.now() + 5000;
@@ -192,10 +204,11 @@ class Audio {
   async close() { for (const resolve of this.waiters.splice(0)) resolve(null); }
 }
 
-for (const mode of ['dedicated', 'neutral', 'unconfigured', 'cancelled', 'workflow-config', 'field-config', 'hydration-failure', 'speech-budget', 'booking-routing']) {
+for (const mode of ['dedicated', 'neutral', 'unconfigured', 'cancelled', 'workflow-config', 'field-config', 'hydration-failure', 'speech-budget', 'booking-routing', 'provider-failure']) {
   const configurationFailure = mode.endsWith('-config');
+  const providerFailure = mode === 'provider-failure';
   const routingFailure = mode === 'booking-routing';
-  const recovery = mode === 'neutral'
+  const recovery = providerFailure ? 'A technical failure occurred.' : mode === 'neutral'
     ? 'மன்னிக்கவும், உங்கள் கோரிக்கைக்கு சரியான பதிலைத் தயார் செய்ய முடியவில்லை. கொஞ்சம் வேறு விதமாகச் சொல்ல முடியுமா?'
     : 'Sorry, I could not prepare that answer. Please try again.';
   const logs = [];
@@ -213,9 +226,12 @@ for (const mode of ['dedicated', 'neutral', 'unconfigured', 'cancelled', 'workfl
   const llm = {
     async connect() {}, cancel() {}, close() {},
     async *stream(request) {
+      if (providerFailure) throw Object.assign(new Error('Simulated provider outage'), { code: 'LLM_PROVIDER_TIMEOUT' });
       const name = request.responseFormat?.name;
       let output;
-      if (name === 'template_engine_entity_coverage') {
+      if (name === 'template_engine_multilingual_entity_review') {
+        output = { relation: 'unrelated', candidateId: null };
+      } else if (name === 'template_engine_entity_coverage') {
         const data = JSON.parse(request.messages.at(-1).content);
         output = { resolved: true, evidenceIds: data.evidence.map((entry) => entry.evidenceId) };
       } else if (name === 'template_engine_pending_request_review') {
@@ -317,24 +333,28 @@ for (const mode of ['dedicated', 'neutral', 'unconfigured', 'cancelled', 'workfl
       continue;
     }
     await waitFor(() => logs.some((entry) => entry.stage === 'template_engine.turn_completed'));
-    assert.equal(postSearchAttempts, configurationFailure || routingFailure || mode === 'hydration-failure' ? 0 : 2,
+    assert.equal(postSearchAttempts, configurationFailure || providerFailure || routingFailure || mode === 'hydration-failure' ? 0 : 2,
       'Configuration and hydration failures must not reach answer generation');
     if (configurationFailure) assert.equal(orchestrator.templateEngineState.activeWorkflowId, null,
       'No workflow state may be activated on configuration failure');
     assert.ok(spoken.includes(recovery), 'Configured recovery must reach TTS');
     assert.ok(!media.closed, 'Approved recovery must preserve the established call');
-    if (!configurationFailure && !routingFailure && mode !== 'hydration-failure') {
+    if (!configurationFailure && !providerFailure && !routingFailure && mode !== 'hydration-failure') {
       const retrievalLog = logs.find((entry) => entry.stage === 'template_engine.retrieval_completed');
       assert.ok(Object.hasOwn(retrievalLog, 'entityMatch'));
       assert.ok(Object.hasOwn(retrievalLog, 'preferredRecordIds'));
       assert.ok(Object.hasOwn(retrievalLog, 'ambiguity'));
     }
-    assert.ok(!spoken.includes('A technical failure occurred.'), 'Validation/configuration failures are not provider outages');
+    assert.equal(spoken.includes('A technical failure occurred.'), providerFailure,
+      'Only provider failures may use the technical failure message');
     if (mode === 'field-config') {
       const rejection = logs.find((entry) => entry.stage === 'template_engine.response_rejected');
       assert.equal(rejection.err.details.reason, 'TEMPLATE_ENGINE_WORKFLOW_FIELD_CONFIGURATION_MISSING');
       assert.deepEqual(rejection.err.details.validationDetails, {
         fields: ['caller_name'],
+        toolId: 'tool-a',
+        schemaDiagnostics: { effectiveSource: 'inputSchema', sources: [{ source: 'inputSchema',
+          propertyKeys: ['caller_name'], requiredKeys: ['caller_name'] }] },
         fieldIssues: [{ field: 'caller_name', reason: 'missing_input_field' }],
       });
       assert.ok(!spoken.some((text) => text.includes('caller_name')),
@@ -345,11 +365,11 @@ for (const mode of ['dedicated', 'neutral', 'unconfigured', 'cancelled', 'workfl
     assert.ok(!JSON.stringify(transcript).includes('9999'), 'Rejected speech must never be committed to the transcript');
     assert.equal(orchestrator.controller.state, 'listening');
     const completed = logs.find((entry) => entry.stage === 'template_engine.turn_completed');
-    assert.equal(completed.recoveryKind, configurationFailure ? 'configuration' : 'validation');
-    assert.ok(completed.validationFailure);
-    assert.equal(completed.operationalFailure, null);
+    assert.equal(completed.recoveryKind, providerFailure ? 'operational' : configurationFailure ? 'configuration' : 'validation');
+    assert.equal(Boolean(completed.validationFailure), !providerFailure);
+    assert.equal(completed.operationalFailure, providerFailure ? 'LLM_PROVIDER_TIMEOUT' : null);
     assert.deepEqual(completed.evidenceIds, []);
-    assert.equal(orchestrator.runtimeMetrics.providerFailures.llm, 0);
+    assert.equal(orchestrator.runtimeMetrics.providerFailures.llm, providerFailure ? 1 : 0);
     assert.ok(logs.some((entry) => entry.stage === 'template_engine.recovery_delivered'));
     if (mode === 'neutral' || routingFailure) {
       const pendingText = orchestrator.pendingTemplateEngineRequest.text;

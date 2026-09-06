@@ -356,7 +356,7 @@ export function configuredTemplateEngineFailureResponse(profile, kind) {
       : kind === 'operational' ? 'technical_failure' : null;
   if (!role) return '';
   const message = resolveRuntimeMessage(profile, role)
-    || (kind !== 'operational' ? resolveRuntimeMessage(profile, 'non_factual_recovery') : '');
+    || (kind === 'validation' ? resolveRuntimeMessage(profile, 'non_factual_recovery') : '');
   return message && !isInternalRuntimeText(message) ? message : '';
 }
 

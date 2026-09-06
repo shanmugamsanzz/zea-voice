@@ -320,7 +320,8 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
     const settings = row.settings ?? {};
     // Also protects agents activated before save-time readiness checks existed.
     // Run before decrypting credentials or constructing provider/tool adapters.
-    validateRecoveryReadiness(settings);
+    validateRecoveryReadiness(settings, { requiresWorkflowRecovery: Array.isArray(row.tools)
+      && row.tools.some((tool) => tool.status !== 'inactive') });
     const usageLimits = normalizeTtsUsageLimitSettings(settings);
     const interaction = resolveInteractionConfiguration(settings);
     const sttRuntimeSettings = selectedSettings(settings, sttSettingKeys);

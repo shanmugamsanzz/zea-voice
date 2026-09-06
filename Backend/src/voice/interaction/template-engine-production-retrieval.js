@@ -683,6 +683,8 @@ export async function retrieveTemplateEngineEvidence({
   latestUtterance = null,
   contextualMemoryVerified = false,
   requestMeaning = null,
+  reviewEntityCandidates = null,
+  reviewContextualCandidates = null,
 } = {}, dependencies = {}) {
   const startedAt = performance.now();
   const resolutionUtterance = requestMeaning?.kind === 'published_welcome_continuation'
@@ -700,7 +702,7 @@ export async function retrieveTemplateEngineEvidence({
   searchDecision = normalizedSearch.value;
   let search = searchDecision?.search;
   if (!search?.query) throw new TypeError('Template-engine retrieval requires SEARCH output');
-  const input = createKnowledgeEngineInput({
+  let input = createKnowledgeEngineInput({
     tenantId: scope.tenantId,
     agentId: scope.agentId,
     callId,
@@ -803,6 +805,36 @@ export async function retrieveTemplateEngineEvidence({
   // Resolve remembered IDs from the current assigned publication, even when
   // lexical/semantic channels cannot match a pronoun-only follow-up.
   // Explicit published names always take precedence over stale memory hints.
+  if (!exactCatalog.length && contextualMemoryVerified && reviewContextualCandidates) {
+    const candidates = scopedBundles.flatMap((bundle) => (bundle.records ?? [])
+      .filter((record) => ['both', input.usageDirection].includes(normalized(record.usage_direction ?? record.usageDirection ?? 'both')))
+      .map((record) => publishedRecordCandidate(record, bundle, input))
+      .filter((candidate) => candidate && ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(candidate.recordType))).slice(0, 80);
+    const selected = await reviewContextualCandidates({ utterance: latestUtterance || search.query,
+      recentTurns: state.recentCompleteTurns ?? [], candidates });
+    if (selected?.length && selected.every((candidate) => candidates.includes(candidate))) {
+      const names = selected.map((candidate) => candidate.canonicalName).filter(Boolean).join(' ');
+      const expanded = exactPublishedCandidates({ ...artifacts, bundles: scopedBundles }, input,
+        { ...search, query: names }, 80).filter((candidate) => candidate.score >= 0.98);
+      const ids = [...new Set(selected.flatMap((candidate) => {
+        const category = expanded.find((entry) => entry.recordType === 'CATALOG_CATEGORY'
+          && entry.categoryKey === candidate.categoryKey && entry.knowledgeBaseId === candidate.knowledgeBaseId
+          && entry.publicationRevision === candidate.publicationRevision);
+        return category?.evidenceRecordIds?.length ? category.evidenceRecordIds : [candidate.recordId];
+      }))];
+      search = Object.freeze({ ...search, query: `${names} ${search.requestedFact ?? ''}`.trim(),
+        preferredRecordIds: ids, contextualReference: names });
+      searchDecision = Object.freeze({ ...searchDecision, search });
+      input = { ...input, utterance: search.query, contextualReferences: [names] };
+      state = { ...state, lastReferencedRecordIds: ids, comparisonRecordIds: [] };
+    } else {
+      contextualMemoryVerified = false;
+      search = Object.freeze({ ...search, query: latestUtterance || search.query, preferredRecordIds: [], contextualReference: null });
+      searchDecision = Object.freeze({ ...searchDecision, search });
+      input = { ...input, utterance: search.query, contextualReferences: [] };
+      state = { ...state, lastReferencedRecordIds: [], comparisonRecordIds: [] };
+    }
+  }
   const preferred = new Set((exactCatalog.length ? [] : search.preferredRecordIds ?? []).map(normalized));
   let contextualRecords = scopedBundles.flatMap((bundle) => (bundle.records ?? [])
     .filter((record) => preferred.has(normalized(record.record_id ?? record.recordId ?? record.id))
@@ -884,7 +916,7 @@ export async function retrieveTemplateEngineEvidence({
     })();
     return channelPromise;
   };
-  const rawHybrid = await runTemplateEngineHybridRetrieval({
+  let rawHybrid = await runTemplateEngineHybridRetrieval({
     decision: searchDecision,
     state: exactCatalog.length ? { ...state, lastReferencedRecordIds: [], comparisonRecordIds: [] } : retrievalState,
     scope: { ...scope, publications: artifacts.publications },
@@ -895,6 +927,31 @@ export async function retrieveTemplateEngineEvidence({
     searchBm25: async () => (await searchChannels()).channels.bm25,
     searchQdrantE5: async () => (await searchChannels()).channels.qdrant,
   });
+  if (!exactCatalog.length && !contextualMemoryVerified
+    && requestMeaning?.kind !== 'published_welcome_continuation' && reviewEntityCandidates) {
+    // Semantic hits are hints only. Rebind their identities to active published
+    // records before exposing any candidate name to the language reviewer.
+    const published = scopedBundles.flatMap((bundle) => (bundle.records ?? [])
+      .filter((record) => ['both', input.usageDirection].includes(normalized(record.usage_direction ?? record.usageDirection ?? 'both')))
+      .map((record) => publishedRecordCandidate(record, bundle, input))
+      .filter((candidate) => candidate && ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(candidate.recordType)));
+    const byIdentity = new Map(published.map((candidate) => [candidateIdentityKey(candidate, input.tenantId), candidate]));
+    const candidates = [...new Map([
+      ...rawHybrid.candidates.map((candidate) => byIdentity.get(candidateIdentityKey(candidate, input.tenantId))).filter(Boolean),
+      ...published,
+    ].map((candidate) => [candidateIdentityKey(candidate, input.tenantId), candidate])).values()].slice(0, 80);
+    const reviewed = await reviewEntityCandidates({ utterance: latestUtterance || search.query,
+      candidates, recentTurns: state.recentCompleteTurns ?? [] });
+    if (reviewed && candidates.includes(reviewed)) {
+      const candidate = Object.freeze({ ...reviewed, matchMethod: 'published_multilingual_review', explicit: true,
+        entityType: reviewed.recordType === 'CATALOG_ITEM' ? 'ITEM' : 'CATEGORY' });
+      entityResolution = Object.freeze({ ...entityResolution, candidate, candidateNamespace: 'CATALOG',
+        action: 'CONTINUE', reason: 'verified_multilingual_identity', requiresCandidateConfirmation: false,
+        routingCandidates: [], ambiguity: { detected: false, candidates: [] } });
+      rawHybrid = { ...rawHybrid, candidates: [...rawHybrid.candidates.filter((entry) =>
+        candidateIdentityKey(entry, input.tenantId) !== candidateIdentityKey(candidate, input.tenantId)), candidate] };
+    }
+  }
   const entityConstraint = constrainHybridToRequestedEntities(
     rawHybrid, input.tenantId, entityResolution, {
       tenantId: input.tenantId,
@@ -1060,6 +1117,8 @@ export async function retrieveTemplateEngineEvidence({
     }),
     authoritative,
     entityResolution,
+    resolvedSearch: search,
+    contextualMemoryVerified,
     searchClassification: Object.freeze({
       searchKind: categoryConfirmation ? templateEngineSearchKinds.CATEGORY
         : entityConstraint.comparison ? templateEngineSearchKinds.COMPARISON : route.searchKind,

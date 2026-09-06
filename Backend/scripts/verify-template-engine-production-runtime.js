@@ -12,6 +12,32 @@ import { recordTemplateEngineTurnMetrics, templateEngineAudioPercentiles } from 
 import { instrumentTemplateEngineTurn } from '../src/voice/interaction/template-engine-turn-timing.js';
 import { reviewRememberedReference } from '../src/voice/interaction/template-engine-reference-review.js';
 import { resolveRequestMeaning } from '../src/voice/interaction/template-engine-request-meaning.js';
+import { reviewMultilingualEntity } from '../src/voice/interaction/template-engine-multilingual-entity-review.js';
+import { reviewContextualSubjects } from '../src/voice/interaction/template-engine-contextual-subject-review.js';
+
+const multilingualCandidates = [{ canonicalName: 'Configured Alpha', recordId: 'alpha', aliases: [] },
+  { canonicalName: 'Configured Beta', recordId: 'beta', aliases: [] }];
+const multilingualInput = { utterance: 'கான்ஃபிகர்ட் ஆல்பா', candidates: multilingualCandidates,
+  recentTurns: [{ role: 'assistant', content: 'Configured Beta details' }] };
+assert.deepEqual(await reviewContextualSubjects({ ...multilingualInput, utterance: 'What tests does that include?' },
+  async () => ({ relation: 'reference', subjectIds: ['S2'] })), [multilingualCandidates[1]]);
+for (const result of [{ relation: 'new_subject', subjectIds: ['S2'] },
+  { relation: 'uncertain', subjectIds: [] }, { relation: 'reference', subjectIds: ['foreign'] }]) {
+  assert.equal(await reviewContextualSubjects(multilingualInput, async () => result), null);
+}
+await assert.rejects(() => reviewContextualSubjects(multilingualInput, async () => {
+  throw Object.assign(new Error('cancelled'), { name: 'AbortError' });
+}), { name: 'AbortError' });
+assert.equal(await reviewMultilingualEntity(multilingualInput, async () => ({ outputParsed: {
+  relation: 'equivalent', candidateId: 'C1',
+} })), multilingualCandidates[0], 'New cross-script subject must not become the previous subject');
+for (const output of [{ relation: 'uncertain', candidateId: 'C1' },
+  { relation: 'unrelated', candidateId: null }, { relation: 'equivalent', candidateId: 'foreign' }, null]) {
+  assert.equal(await reviewMultilingualEntity(multilingualInput, async () => output), null);
+}
+await assert.rejects(() => reviewMultilingualEntity(multilingualInput, async () => {
+  throw Object.assign(new Error('cancelled'), { name: 'AbortError' });
+}), { name: 'AbortError' });
 
 const welcomeMeaningInput = { latestUtterance: 'Yes', welcomeContinuation: {
   pendingQuestion: { text: 'Is this the account holder?' },
@@ -1175,14 +1201,21 @@ workflowDecisions.splice(1, 0, structuredClone(workflowDecisions[0]));
 const workflowTurn = await runTemplateEngineProductionTurn({
   auth: { tenantId }, scope, callId: 'call-2', usageDirection: 'inbound', language: 'en',
   mainPrompt: 'Use the authorized tool for requested actions.',
-  latestUtterance: 'Please perform the action.', conversationHistory: [], state: {},
+  latestUtterance: 'Please perform the action for this option.', conversationHistory: [],
+  state: { lastReferencedRecordIds: ['selected-option'] },
   runtimeProfile: {}, authorizedWorkflowTools: [tool], assignedTools: [tool],
   informationFields: [{
     key: 'contact_name', label: 'Contact Name', type: 'text', required: true,
     question: 'What is the contact name?', requiredAction: 'perform_action',
   }],
 }, {
-  invokeStructuredLlm: async () => workflowDecisions.shift(),
+  invokeStructuredLlm: async (request) => {
+    if (request.messages.some((message) => message.content.includes('TOOL_ACTIVATION_REVIEW:'))) {
+      assert.deepEqual(request.responseFormat.schema.properties.stateUpdate, { type: 'null' },
+        'New activation review cannot clear workflow state or manufacture confirmation');
+    }
+    return workflowDecisions.shift();
+  },
   loadPublishedContext: async () => ({ scope, publishedWorkflows: [workflow], artifacts: {} }),
   retrieveEvidence: async () => { throw new Error('tool route must not run factual search'); },
   persistWorkflowState: async () => {},
@@ -1194,6 +1227,8 @@ const workflowTurn = await runTemplateEngineProductionTurn({
 });
 assert.equal(workflowTurn.workflow.status, 'AWAITING_FIELD');
 assert.equal(workflowTurn.state.activeWorkflowId, 'workflow-1');
+assert.deepEqual(workflowTurn.state.lastReferencedRecordIds, ['selected-option'],
+  'Entering field collection must preserve the selected subject without executing');
 assert.equal(workflowTurn.toolExecuted, false);
 assert.equal(workflowTurn.provenance.initialDecision, 'TOOL');
 assert.equal(workflowTurn.provenance.finalDecision, 'CLARIFY');

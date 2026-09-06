@@ -10,9 +10,12 @@
     { "id": "onco-details", "text": "Madam, Oncocare package சொல்லுங்க Madam. அதுல என்ன test, scan எல்லாம் வரும்ன்னு.", "subject": "onco" },
     { "id": "diabetic-switch", "text": "diabetic package பத்தி சொல்லுங்க", "subject": "diabetic" },
     { "id": "organ-switch", "text": "Organ specific package பத்தி சொல்லுங்க", "subject": "organ" },
-    { "id": "kids-switch", "text": "Kids package பத்தி சொல்லுங்க Madam", "subject": "kids" }
+    { "id": "kids-switch", "text": "Kids package பத்தி சொல்லுங்க Madam", "subject": "kids" },
+    { "id": "kids-context-tests", "text": "அதுல என்ன tests?", "subject": "kids", "contextual": true },
+    { "id": "tamil-transliteration", "text": "பிளாட்டினம் பேக்கேஜ் பத்தி கேட்டேன் மேடம்", "subject": "platinum", "noPublishedAlias": true }
   ],
   "subjects": {
+    "platinum": { "name": "Platinum", "answer": "Platinum package-ல் CBC மற்றும் ECG இருக்கு.", "required": ["Platinum", "CBC", "ECG"] },
     "overview": { "name": "Available packages", "answer": "Master, Diabetic, Onco Care, Organ-Specific, Kids packages இருக்கு.", "required": ["Master", "Diabetic", "Onco", "Organ", "Kids"] },
     "onco": { "name": "Onco Care", "answer": "Onco Care Premium-ல் CBC, Amylase, Lipase, CEA, CT Scan Screening of Chest and Whole Abdomen இருக்கு. Add-on options வேறு; அவற்றை Premium-உடன் ஒன்றாகக் கருதக்கூடாது.", "required": ["Onco", "Premium", "CBC", "CT Scan", "Add-on"] },
     "diabetic": { "name": "Diabetic", "answer": "Diabetic package-ல் USG Abdomen/Pelvis இருக்கு.", "required": ["Diabetic", "USG"] },

@@ -355,6 +355,8 @@ function validateTool(decision, input) {
     // credentials or arbitrary underlying error details in diagnostics.
     const details = error.code === 'TEMPLATE_ENGINE_WORKFLOW_FIELD_CONFIGURATION_MISSING'
       ? { fields: [...(error.details?.fields ?? [])],
+        toolId: error.details?.toolId ?? null,
+        schemaDiagnostics: error.details?.schemaDiagnostics ?? null,
         fieldIssues: (error.details?.fieldIssues ?? []).map(({ field, reason }) => ({ field, reason })) }
       : null;
     return invalid(error.code ?? 'tool_not_authorized', { details });

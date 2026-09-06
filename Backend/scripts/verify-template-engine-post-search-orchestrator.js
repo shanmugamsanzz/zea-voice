@@ -96,6 +96,36 @@ const verifiedEvidence = Object.freeze([
 }
 
 let numericRepairCalls = 0;
+{
+  let attempts = 0;
+  const summary = 'First Service and Second Service are the available options.';
+  const overviewResult = await respondToTemplateEngineSearch({
+    mainPrompt, latestUtterance: 'Explain all the available options one by one', scope,
+    state: { ...state, lastReferencedRecordIds: [] },
+    searchDecision: { ...searchDecision, search: { query: 'available options', requestedFact: 'overview',
+      contextualReference: null, preferredRecordIds: [] } },
+    verifiedEvidence: [verifiedEvidence[0], { ...verifiedEvidence[0], evidenceId: 'evidence-2',
+      recordId: 'record-2', canonicalName: 'Second Service', aliases: [], content: 'Second Service is available.' }],
+  }, {
+    tenantBoundaryVerified: true,
+    ambiguity: { required: true, kind: 'published_entity_candidates', candidates: ['First Service', 'Second Service'] },
+    validateRequestedEntityCoverage: async ({ latestUtterance }) => {
+      assert.ok(latestUtterance.includes('one by one'));
+      return { resolved: true };
+    },
+    validateGroundedClaims: async ({ decision }) => ({ supported: true, requestedFactAddressed: decision === 'RESPONSE' }),
+    invokeStructuredLlm: async () => {
+      attempts += 1;
+      return { outputParsed: attempts === 1 ? {
+        decision: 'CLARIFY', response: '', clarification: { question: 'First Service or Second Service?',
+          candidates: ['First Service', 'Second Service'], reason: null }, evidenceIds: [], nextQuestion: null, stateUpdate: null,
+      } : { decision: 'RESPONSE', response: summary, clarification: null,
+        evidenceIds: ['E1', 'E2'], nextQuestion: null, stateUpdate: null } };
+    },
+  });
+  assert.equal(attempts, 2, 'Unnecessary choice question must be repaired, not delivered');
+  assert.equal(overviewResult.decision.response, summary);
+}
 for (const decision of ['CLARIFY', 'NO_MATCH', 'RESPONSE']) {
   let coverageChecked = false;
   const pending = respondToTemplateEngineSearch({

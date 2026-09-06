@@ -2,6 +2,21 @@
 
 Production rollout remains **blocked pending live-model staging verification**.
 
+## Recovery configuration prerequisite
+
+Agents with tools now require a dedicated `workflowConfigurationFailureMessage`
+at profile loading. Configuration errors no longer borrow `nonFactualRecoveryMessage`.
+Approve and save this wording in the UI before deploying these changes to active
+tool-enabled agents, otherwise profile admission will reject the incomplete setup.
+Use wording explaining that the action cannot be started; do not ask the caller to
+rephrase or claim a booking succeeded. The runtime does not invent this message.
+Provider failures continue to use the separately approved technical message.
+
+The offline recovery replay also injects a provider timeout and verifies that it
+uses technical speech, while validation/configuration failures do not. It checks
+that rejected text is absent from TTS and transcripts and the established call
+remains listening. This is not evidence of real-provider or acoustic success.
+
 ## Offline integration check
 
 Run `npm run verify:template-engine-conversation-replay` from Backend.

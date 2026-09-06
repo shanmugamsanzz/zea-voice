@@ -12,7 +12,7 @@ export function isInternalRuntimeText(value) {
 
 // Shared by agent writes and production profile admission. Never supply an
 // engine-authored fallback: the tenant must approve caller-facing wording.
-export function validateRecoveryReadiness(settings = {}, { required = true } = {}) {
+export function validateRecoveryReadiness(settings = {}, { required = true, requiresWorkflowRecovery = false } = {}) {
   const profile = { agent: { settings } };
   const fields = [
     ['nonFactualRecoveryMessage', 'non_factual_recovery'],
@@ -35,5 +35,9 @@ export function validateRecoveryReadiness(settings = {}, { required = true } = {
     && !(usable.evidenceValidationFailureMessage && usable.workflowConfigurationFailureMessage)) {
     throw new AppError(400, 'Configure approved recovery wording before activating or loading the agent',
       'AGENT_NEUTRAL_RECOVERY_MESSAGE_REQUIRED', { field: 'settings.nonFactualRecoveryMessage' });
+  }
+  if (required && requiresWorkflowRecovery && !usable.workflowConfigurationFailureMessage) {
+    throw new AppError(400, 'Approve a dedicated configuration-failure message before loading an agent with tools; rephrasing cannot repair configuration',
+      'AGENT_WORKFLOW_RECOVERY_MESSAGE_REQUIRED', { field: 'settings.workflowConfigurationFailureMessage' });
   }
 }

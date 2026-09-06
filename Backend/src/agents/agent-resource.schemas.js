@@ -11,7 +11,8 @@ const toolInputSchema=z.object({
   properties:z.record(z.string(),toolInputPropertySchema).default({}),
   required:z.array(z.string().min(1).max(160)).max(50).default([]),
   additionalProperties:z.boolean().default(true),
-}).passthrough().refine((value)=>Object.keys(value.properties).length<=50,'Tool input schema cannot exceed 50 properties');
+}).passthrough().refine((value)=>Object.keys(value.properties).length<=50,'Tool input schema cannot exceed 50 properties')
+  .superRefine((value,ctx)=>{for(const key of value.required)if(!Object.hasOwn(value.properties,key))ctx.addIssue({code:'custom',path:['required'],message:`Required field ${key} is missing from schema properties`});});
 const webhookToolConfigurationSchema=z.object({
   version:z.literal(1).default(1),
   url:z.string().trim().url().max(2048),
