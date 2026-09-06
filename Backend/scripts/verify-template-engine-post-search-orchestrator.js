@@ -569,6 +569,29 @@ assert.equal(clarificationValidationInput.selectedEvidence.length, 2,
   'Clarification speech validation receives the complete verified evidence set');
 
 let ambiguityRepairCalls = 0;
+for (const utterance of ['What is the unrecognized option price?', 'தெரியாத package விலை என்ன?',
+  'unknown option price sollunga']) {
+  let calls = 0;
+  const clarified = await respondToTemplateEngineSearch({
+    mainPrompt, latestUtterance: utterance, state: { ...state, lastReferencedRecordIds: [] },
+    searchDecision: { ...searchDecision, search: { query: utterance, requestedFact: 'price',
+      contextualReference: null, preferredRecordIds: [] } }, verifiedEvidence: [], scope,
+  }, {
+    tenantBoundaryVerified: true,
+    ambiguity: { required: true, kind: 'unresolved_published_entity', candidates: [] },
+    validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
+    invokeStructuredLlm: async (request) => {
+      calls += 1;
+      assert.deepEqual(request.responseFormat.schema.properties.decision.enum, ['CLARIFY']);
+      assert.match(request.messages[0].content, /"ambiguity":\{"required":true/u);
+      return { outputParsed: { decision: 'CLARIFY', response: '', evidenceIds: [],
+        clarification: { question: 'Which option do you mean?', reason: 'unresolved request', candidates: [] },
+        nextQuestion: null, stateUpdate: null } };
+    },
+  });
+  assert.equal(calls, 1, 'Unresolved requests generate clarification first, without answer repair');
+  assert.equal(clarified.decision.decision, 'CLARIFY');
+}
 const repairedAmbiguity = await respondToTemplateEngineSearch({
   mainPrompt, latestUtterance: 'Which selected service?',
   state: { ...state, lastReferencedRecordIds: [] },

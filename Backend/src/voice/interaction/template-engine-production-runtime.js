@@ -123,18 +123,20 @@ export function publishedResolutionAmbiguity(
   const possible = resolution?.ambiguity?.detected === true
     ? resolution.ambiguity.candidates : resolution?.routingCandidates ?? [];
   const hydratedIdentities = new Set((Array.isArray(evidence) ? evidence : [])
+    .filter((record) => record.verified === true)
     .map(recordIdentity).filter(Boolean));
   const hydratedCandidates = [...new Map(possible.map((candidate) => [
     recordIdentity(candidate), candidate,
   ]).filter(([identity]) => identity && hydratedIdentities.has(identity))).values()];
-  if (hydratedCandidates.length === 1) {
+  if (hydratedCandidates.length === 1
+    && resolution?.requiresCandidateConfirmation !== true
+    && resolution?.ambiguity?.detected !== true) {
     return Object.freeze({
       required: false, kind: 'resolved_by_exact_hydrated_evidence',
       candidates: Object.freeze([]),
     });
   }
-  const candidates = [...new Set((hydratedCandidates.length >= 2
-    ? hydratedCandidates : possible)
+  const candidates = [...new Set(hydratedCandidates
     .map((candidate) => cleanText(candidate?.label ?? candidate?.canonicalName, 300))
     .filter(Boolean))];
   if (resolution?.ambiguity?.detected === true && candidates.length >= 2) {
@@ -144,7 +146,8 @@ export function publishedResolutionAmbiguity(
       candidates: Object.freeze(candidates),
     });
   }
-  if (resolution?.requiresCandidateConfirmation === true && candidates.length) {
+  if ((resolution?.requiresCandidateConfirmation === true
+    || resolution?.ambiguity?.detected === true) && candidates.length === 1) {
     return Object.freeze({
       required: true,
       kind: 'published_entity_confirmation',
@@ -152,9 +155,11 @@ export function publishedResolutionAmbiguity(
     });
   }
   return Object.freeze({
-    required: false,
+    required: resolution?.reason === 'no_candidate' || resolution?.action === 'CLARIFY'
+      || resolution?.requiresCandidateConfirmation === true || resolution?.ambiguity?.detected === true,
     kind: resolution?.reason === 'no_candidate' || resolution?.action === 'CLARIFY'
-      ? 'no_published_entity_match' : 'resolved_published_entity',
+      || resolution?.requiresCandidateConfirmation === true || resolution?.ambiguity?.detected === true
+      ? 'unresolved_published_entity' : 'resolved_published_entity',
     candidates: Object.freeze([]),
   });
 }
@@ -489,6 +494,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       usageDirection: input.usageDirection,
       language: input.language,
       searchDecision: speculativeSearchDecision(input, state),
+      latestUtterance: input.latestUtterance,
       state,
       runtimeProfile: input.runtimeProfile,
       preloadedArtifacts: publishedContext.artifacts,
@@ -611,6 +617,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     usageDirection: input.usageDirection,
     language: input.language,
     searchDecision: first,
+    latestUtterance: input.latestUtterance,
     state,
     runtimeProfile: input.runtimeProfile,
     preloadedArtifacts: publishedContext.artifacts,

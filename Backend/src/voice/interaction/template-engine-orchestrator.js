@@ -512,11 +512,15 @@ function evidenceCandidateNames(source) {
 }
 
 function verifiedClarificationAmbiguity(decision, evidence, searchInterpretation, supplied) {
+  // Hydrating an old preference is not proof of what the caller meant now.
   const preferred = new Set((searchInterpretation?.preferredRecordIds ?? [])
     .map(recordId).filter(Boolean));
   const resolvedPreferred = new Set(evidence.filter((source) => source.verified === true)
     .map((source) => recordId(source?.recordId)).filter((id) => preferred.has(id)));
-  if (preferred.size > 0 && resolvedPreferred.size === preferred.size) {
+  const explicitComparison = preferred.size >= 2
+    && /compar|difference/iu.test(searchInterpretation?.requestedFact ?? '');
+  if ((supplied?.required !== true || explicitComparison)
+    && preferred.size > 0 && resolvedPreferred.size === preferred.size) {
     return Object.freeze({
       required: false, kind: 'resolved_context', candidates: Object.freeze([]),
     });
@@ -636,6 +640,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     searchInterpretation: search.value.search,
     requestedEntityRecordIds: requiredEntityRecordIds,
     verifiedEvidence: citations.evidence,
+    ambiguity: dependencies.ambiguity ?? null,
     conversationGuidance: base.conversationGuidance,
   });
   const systemPrompt = [
@@ -652,6 +657,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     'An absent attribute means the published evidence does not provide that information. Absence never proves a negative value, non-existence, non-requirement, non-availability, or zero.',
     'For NO_MATCH, describe only that the requested information is not present in the supplied published evidence; do not assert that the underlying real-world attribute is false.',
     'CLARIFY speech must follow the supplied ambiguity object and must not introduce any unsupported factual claim.',
+    'When ambiguity.required is true, generate only CLARIFY now, not an answer or NO_MATCH. A retrieved record is not proof that the caller meant that entity. Never assert equivalence between the caller wording and a published name without published alias evidence or a confirmed contextual reference.',
     'For multiple supplied published candidates, ask one question identifying those candidates. For one confirmation candidate, ask whether the caller meant it. For unresolved_published_entity with no candidates, ask one neutral clarification without inventing or naming an entity.',
     'When preferredRecordIds resolves one previously cited record, answer from that record; do not ask which record the caller means.',
     'When preferredRecordIds contains an intentional comparison set, compare those records; do not reinterpret the set as ambiguity.',
@@ -663,7 +669,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     Object.freeze({ role: 'system', content: systemPrompt }),
     Object.freeze({ role: 'user', content: base.latestUtterance }),
   ]);
-  const request = (messages, requiredDecision = null) => Object.freeze({
+  const request = (messages, requiredDecision = dependencies.ambiguity?.required === true ? 'CLARIFY' : null) => Object.freeze({
     messages: Object.freeze(messages),
     temperature: 0,
     responseFormat: Object.freeze({
@@ -676,6 +682,10 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
   let completion = await invokeStructuredLlm(request(baseMessages));
   let output = completionOutput(completion);
   let validated = validateTemplateEnginePostSearchDecision(output, allowedEvidenceIds);
+  if (dependencies.ambiguity?.required === true && validated.valid
+    && validated.value.decision !== 'CLARIFY') {
+    validated = { valid: false, reason: 'clarification_required_for_entity_resolution' };
+  }
   const firstDiagnostics = templateEnginePostSearchDecisionDiagnostics(output);
   let firstInvalidReason = null;
   let repairingCitation = false;
@@ -698,13 +708,13 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       repairingCitation
         ? 'This is a citation-only repair. Keep decision RESPONSE and cite only the allowed evidenceIds that support the response; do not change it to NO_MATCH.'
         : null,
-      requestedFactAvailable
+      requestedFactAvailable && dependencies.ambiguity?.required !== true
         ? 'Verified evidence contains the requested fact. The corrected decision must be RESPONSE, must directly answer it, and must cite the exact supporting allowed aliases. Do not return CLARIFY or NO_MATCH.'
         : null,
       'Do not add facts, citations, or candidates that were not supplied.',
     ].filter(Boolean).join(' ');
-    const requiredRepairDecision = requestedFactAvailable
-      ? 'RESPONSE' : dependencies.ambiguity?.required === true ? 'CLARIFY' : null;
+    const requiredRepairDecision = dependencies.ambiguity?.required === true
+      ? 'CLARIFY' : requestedFactAvailable ? 'RESPONSE' : null;
     completion = await invokeStructuredLlm(request([
       ...baseMessages,
       Object.freeze({ role: 'user', content: repairInstruction }),
@@ -717,7 +727,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
         reason: 'citation_repair_changed_decision',
       });
     }
-    if (requestedFactAvailable && validated.valid
+    if (requestedFactAvailable && dependencies.ambiguity?.required !== true && validated.valid
       && validated.value.decision !== 'RESPONSE') {
       validated = Object.freeze({
         valid: false,

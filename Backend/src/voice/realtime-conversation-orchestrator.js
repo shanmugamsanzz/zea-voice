@@ -2626,9 +2626,10 @@ export class RealtimeConversationOrchestrator {
           sentencePipeline.cancel();
           this.log.error({ stage: 'template_engine.recovery_unconfigured',
             callId: this.call.id, turnEpoch: epoch, errorKind,
-          }, 'Approved non-technical recovery is missing; ending without invented speech');
-          await this.#finalize('failed', 'template_engine_recovery_unconfigured');
-          if (!this.mediaSession.closed) this.mediaSession.close(1011, 'approved recovery unavailable');
+          }, 'Approved neutral recovery is missing; preserving the call without invented speech');
+          if ([callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) {
+            await this.controller.interrupt('template_engine_recovery_unconfigured');
+          }
           return;
         }
         // Do not enqueue any part of the rejected answer or its citations.

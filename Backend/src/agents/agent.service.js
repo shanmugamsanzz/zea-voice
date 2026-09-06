@@ -44,7 +44,22 @@ function normalizedAgentSettings(settings, interruptionSensitivity) {
   }
 }
 
-function validateOperationalResponseSettings(status, settings = {}) {
+export function validateOperationalResponseSettings(status, settings = {}) {
+  const recoveryKeys = ['nonFactualRecoveryMessage', 'evidenceValidationFailureMessage',
+    'workflowConfigurationFailureMessage'];
+  const recovery = Object.fromEntries(recoveryKeys.map((key) => [key,
+    String(settings[key] ?? '').normalize('NFKC').trim()]));
+  for (const key of recoveryKeys) {
+    if (recovery[key].length > 500) throw new AppError(400,
+      'Approved recovery messages cannot exceed 500 characters', 'AGENT_RECOVERY_MESSAGE_INVALID',
+      { field: `settings.${key}` });
+  }
+  if (status === 'active' && !recovery.nonFactualRecoveryMessage
+    && !(recovery.evidenceValidationFailureMessage && recovery.workflowConfigurationFailureMessage)) {
+    throw new AppError(400,
+      'Configure an approved neutral recovery message or both answer-validation and workflow-configuration recovery messages before activation',
+      'AGENT_NEUTRAL_RECOVERY_MESSAGE_REQUIRED', { field: 'settings.nonFactualRecoveryMessage' });
+  }
   const unavailableMessage = String(settings.informationUnavailableMessage ?? '')
     .normalize('NFKC').trim();
   if (unavailableMessage.length > 500

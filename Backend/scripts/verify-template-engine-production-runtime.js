@@ -59,8 +59,8 @@ const fuzzyAmbiguity = {
 };
 assert.equal(publishedResolutionAmbiguity(fuzzyAmbiguity, [{
   recordId: 'record-a', recordType: 'CATALOG_ITEM', verified: true,
-}], { searchKind: 'named_entity' }).required, false,
-'One exactly hydrated candidate must clear earlier fuzzy ambiguity');
+}], { searchKind: 'named_entity' }).required, true,
+'Hydration alone must not clear fuzzy identity uncertainty');
 const genuineAmbiguity = publishedResolutionAmbiguity(fuzzyAmbiguity, [
   { recordId: 'record-a', recordType: 'CATALOG_ITEM', verified: true },
   { recordId: 'record-b', recordType: 'CATALOG_ITEM', verified: true },
@@ -306,18 +306,20 @@ const metadataRecords = [
     entity_metadata: { name: 'Configured Beta Service', itemKey: 'metadata-beta',
       category: 'Configured Collection', categoryKey: 'metadata-collection', price: 29 } },
 ];
-for (const [query, expectedIds] of [
+for (const [query, expectedIds, rewrittenQuery] of [
   ['Configured Alpha Service price', ['metadata-alpha']],
   ['Alpha Spoken details', ['metadata-alpha']],
   ['Alfa Spoken details', ['metadata-alpha']],
   ['Alfa Form price', ['metadata-alpha']],
+  ['Alpha Spoken details', ['metadata-alpha'], 'Configured Beta Service details'],
   ['Configured Collection details', ['metadata-alpha', 'metadata-beta']],
 ]) {
   const result = await retrieveTemplateEngineEvidence({
     auth: { tenantId }, scope, callId: 'exact-catalog-regression',
+    latestUtterance: query,
     usageDirection: 'inbound', language: 'en',
     searchDecision: { ...searchDecision, search: {
-      query, requestedFact: query.endsWith('price') ? 'price' : 'details',
+      query: rewrittenQuery || query, requestedFact: query.endsWith('price') ? 'price' : 'details',
       contextualReference: null, preferredRecordIds: [],
     } }, state: {},
   }, {

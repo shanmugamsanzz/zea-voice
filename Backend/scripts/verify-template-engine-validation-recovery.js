@@ -5,6 +5,21 @@ process.env.NODE_ENV = 'test';
 process.env.DATABASE_URL ??= 'postgresql://test:test@localhost:5432/test';
 process.env.REDIS_HOST ??= 'localhost';
 const { RealtimeConversationOrchestrator, configuredTemplateEngineFailureResponse } = await import('../src/voice/realtime-conversation-orchestrator.js');
+const { validateOperationalResponseSettings } = await import('../src/agents/agent.service.js');
+const activeSettings = { technicalFailureMessage: 'Technical problem.',
+  informationUnavailableMessage: 'That detail is not published.' };
+assert.throws(() => validateOperationalResponseSettings('active', activeSettings),
+  { code: 'AGENT_NEUTRAL_RECOVERY_MESSAGE_REQUIRED' });
+assert.throws(() => validateOperationalResponseSettings('active', { ...activeSettings,
+  nonFactualRecoveryMessage: '   ' }), { code: 'AGENT_NEUTRAL_RECOVERY_MESSAGE_REQUIRED' });
+assert.doesNotThrow(() => validateOperationalResponseSettings('inactive', activeSettings));
+assert.doesNotThrow(() => validateOperationalResponseSettings('active', { ...activeSettings,
+  nonFactualRecoveryMessage: 'Please rephrase your request.' }));
+assert.doesNotThrow(() => validateOperationalResponseSettings('active', { ...activeSettings,
+  evidenceValidationFailureMessage: 'Please rephrase.',
+  workflowConfigurationFailureMessage: 'I cannot complete this request right now.' }));
+assert.throws(() => validateOperationalResponseSettings('active', { ...activeSettings,
+  nonFactualRecoveryMessage: 'a'.repeat(501) }), { code: 'AGENT_RECOVERY_MESSAGE_INVALID' });
 const messageProfile = { agent: { settings: {
   evidenceValidationFailureMessage: 'Please rephrase that request.',
   workflowConfigurationFailureMessage: 'I cannot start this request right now.',
@@ -151,7 +166,9 @@ for (const mode of ['dedicated', 'neutral', 'unconfigured', 'cancelled', 'workfl
     await waitFor(() => orchestrator.controller.state === 'listening');
     stt.publish({ type: 'final_transcript', text: 'Alpha price please', language: 'en', isFinal: true });
     if (mode === 'unconfigured') {
-      await waitFor(() => media.closed);
+      await waitFor(() => logs.some((entry) => entry.stage === 'template_engine.recovery_unconfigured')
+        && orchestrator.controller.state === 'listening');
+      assert.ok(!media.closed, 'Missing recovery must not hang up an established call');
       assert.ok(logs.some((entry) => entry.stage === 'template_engine.recovery_unconfigured'));
       assert.ok(!spoken.includes('A technical failure occurred.'));
       assert.ok(!spoken.some((text) => text.includes('9999')));

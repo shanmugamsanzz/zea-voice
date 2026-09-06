@@ -657,6 +657,7 @@ export async function loadTemplateEnginePublishedContext({
 export async function retrieveTemplateEngineEvidence({
   auth, scope, callId, usageDirection, language, searchDecision, state = {}, runtimeProfile,
   preloadedArtifacts = null, conversationGuidance = null,
+  latestUtterance = null,
 } = {}, dependencies = {}) {
   const startedAt = performance.now();
   const normalizedSearch = normalizeTemplateEngineSearchDecision(searchDecision, state);
@@ -698,11 +699,12 @@ export async function retrieveTemplateEngineEvidence({
       )))
   ));
   const exactCandidates = exactPublishedCandidates(
-    { ...artifacts, bundles: scopedBundles }, input, search, 20, conversationGuidance,
+    { ...artifacts, bundles: scopedBundles }, input,
+    { ...search, query: latestUtterance || search.query }, 20, conversationGuidance,
   );
   let entityResolution = scopedBundles.length
     ? (dependencies.resolveEntityRoute ?? resolvePublishedEntityRoute)(
-      input, scopedBundles, {
+      latestUtterance ? { ...input, utterance: latestUtterance } : input, scopedBundles, {
         confidenceConfiguration: dependencies.confidenceConfiguration,
       },
     ) : null;
@@ -968,6 +970,14 @@ export async function retrieveTemplateEngineEvidence({
       retrievalCount: hybrid.candidates.length,
       hydrationCount: hydratedEvidence.length,
       verifiedEvidenceCount: evidence.length,
+      entityMatch: Object.freeze({
+        action: entityResolution?.action ?? null,
+        reason: entityResolution?.reason ?? null,
+        matchMethod: entityResolution?.candidate?.matchMethod ?? null,
+        recordId: entityResolution?.candidate?.recordId ?? null,
+        requiresCandidateConfirmation: entityResolution?.requiresCandidateConfirmation === true,
+        ambiguityDetected: entityResolution?.ambiguity?.detected === true,
+      }),
       selectionRetryAttempted,
       requestedEntityHydrationIncomplete,
       requestedEntityCount: requestedIdentities.size,

@@ -441,6 +441,9 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       knowledgeClarificationMessage: base.knowledgeClarificationMessage || 'I may not have heard the item correctly. Did you mean {{candidates}}?',
       latencyAcknowledgementMessage: base.latencyAcknowledgementMessage || 'One moment while I check the information.',
       technicalFailureMessage: base.technicalFailureMessage || '',
+      nonFactualRecoveryMessage: base.nonFactualRecoveryMessage || '',
+      evidenceValidationFailureMessage: base.evidenceValidationFailureMessage || '',
+      workflowConfigurationFailureMessage: base.workflowConfigurationFailureMessage || '',
       informationUnavailableMessage: base.informationUnavailableMessage || '',
       conversationMemoryFields: base.conversationMemoryFields || [],
       callbackEnabled: base.callbackEnabled !== undefined ? base.callbackEnabled : true,
@@ -992,6 +995,12 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     const knowledgeClarificationMessage = String(agent.knowledgeClarificationMessage ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
     const latencyAcknowledgementMessage = String(agent.latencyAcknowledgementMessage ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
     const technicalFailureMessage = String(agent.technicalFailureMessage ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
+    const nonFactualRecoveryMessage = String(agent.nonFactualRecoveryMessage ?? '').normalize('NFKC').trim();
+    if (nonFactualRecoveryMessage.length > 500 || (agent.status === 'active'
+      && !nonFactualRecoveryMessage && !(agent.evidenceValidationFailureMessage?.trim()
+        && agent.workflowConfigurationFailureMessage?.trim()))) {
+      setError('An approved Neutral Recovery Message (or both dedicated recovery messages) is required before activation; maximum 500 characters.'); return;
+    }
     const informationUnavailableMessage = String(agent.informationUnavailableMessage ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
     if (knowledgeHighConfidence < 0.7 || knowledgeHighConfidence > 1) {
       setError('High Confidence must be between 0.70 and 1.00.'); return;
@@ -1114,6 +1123,9 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         knowledgeClarificationMessage,
         latencyAcknowledgementMessage,
         technicalFailureMessage,
+        nonFactualRecoveryMessage,
+        evidenceValidationFailureMessage: agent.evidenceValidationFailureMessage,
+        workflowConfigurationFailureMessage: agent.workflowConfigurationFailureMessage,
         informationUnavailableMessage,
         maxInactivityPrompts,
         conversationMemoryFields: normalizedMemoryFields,
@@ -2493,7 +2505,13 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       <p className="mt-1 text-[10px] font-semibold text-slate-400">Spoken only when the grounded answer cannot begin before the first-audio deadline.</p>
                     </div>
                     <div className="mt-3">
-                      <label className="mb-1 block text-[10px] font-bold text-slate-500">Technical Failure Message</label>
+                      <label className="mb-1 block text-[10px] font-bold text-slate-500">Neutral Recovery Message</label>
+                      <textarea rows={2} maxLength={500} value={agent.nonFactualRecoveryMessage || ''}
+                        disabled={isReadOnly}
+                        onChange={(event) => setAgent({ ...agent, nonFactualRecoveryMessage: event.target.value })}
+                        className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold outline-none focus:border-violet-500" />
+                      <p className="mt-1 text-[10px] font-semibold text-slate-400">Approve neutral wording for an answer or action that could not be completed. Do not claim a technical outage, unavailable information, or booking success. Used when a dedicated recovery message is absent.</p>
+                      <label className="mb-1 mt-3 block text-[10px] font-bold text-slate-500">Technical Failure Message</label>
                       <textarea
                         rows={2}
                         maxLength={500}
@@ -2504,7 +2522,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                         placeholder="Required tenant-configured speech for a technical failure"
                         className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold outline-none focus:border-violet-500"
                       />
-                      <p className="mt-1 text-[10px] font-semibold text-slate-400">Used only for retrieval, hydration, prompt, provider, JSON, or validation failures. It is never used as clarification.</p>
+                      <p className="mt-1 text-[10px] font-semibold text-slate-400">Used for operational failures such as provider outages. Answer validation and incomplete workflow configuration use approved non-technical recovery instead.</p>
                     </div>
                     <div className="mt-3">
                       <label className="mb-1 block text-[10px] font-bold text-slate-500">Information Unavailable Message</label>
