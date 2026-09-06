@@ -71,6 +71,36 @@ const activated = activateTemplateEngineWorkflow({
   ...common, toolDecision,
   state: { activeWorkflowId: null, collectedToolFields: {}, confirmationStatus: null },
 });
+for (const scenario of [
+  { informationFields: [], expected: [
+    { field: 'full_name', reason: 'missing_input_field' },
+    { field: 'quantity', reason: 'missing_input_field' },
+  ] },
+  { informationFields: fields.map((field) => ({ ...field, question: '   ' })), expected: [
+    { field: 'full_name', reason: 'missing_question' },
+    { field: 'quantity', reason: 'missing_question' },
+  ] },
+  { informationFields: [...fields, { key: 'custom_field', required: true,
+    requiredAction: 'create_record', question: 'Custom question?' }], expected: [
+    { field: 'custom_field', reason: 'missing_schema_property' },
+  ] },
+]) {
+  let writes = 0;
+  await assert.rejects(() => advanceTemplateEngineWorkflowTurn({
+    ...common, informationFields: scenario.informationFields, toolDecision, state: {},
+  }, {
+    persistWorkflowState: async () => { writes += 1; },
+    executeAuthorizedTool: async () => { writes += 1; },
+    invokeStructuredLlm: async () => { writes += 1; },
+  }), (error) => {
+    assert.equal(error.code, 'TEMPLATE_ENGINE_WORKFLOW_FIELD_CONFIGURATION_MISSING');
+    assert.deepEqual([...error.details.fieldIssues].sort((a, b) => a.field.localeCompare(b.field)),
+      [...scenario.expected].sort((a, b) => a.field.localeCompare(b.field)));
+    assert.deepEqual([...error.details.fields].sort(), scenario.expected.map((issue) => issue.field).sort());
+    return true;
+  });
+  assert.equal(writes, 0, 'Incomplete fields must fail before state writes, speech or execution');
+}
 const missingConfirmationTool = { ...tool, inputSchema: { ...tool.inputSchema,
   'x-confirmation-message': '   ',
 } };

@@ -72,6 +72,25 @@ const uncitedNumeric = numericCheck('The price is 9000.', {
     ...evidence[0], evidenceId: 'e-other', authoritativeData: { price: 9000 },
   }],
 });
+for (const [utterance, speech] of [
+  ['My daughter is 3. What is included?', 'You said your daughter is 3. The price is 3200.'],
+  ['என் பொண்ணுக்கு 3 வயசு', 'நீங்கள் சொன்ன வயது 3. விலை 3200.'],
+]) {
+  assert.equal(numericCheck(speech, { currentUtterance: utterance }).valid, true);
+  assert.equal(numericCheck(speech, { currentUtterance: utterance,
+    semanticClaimValidation: null }).valid, false, 'Caller numbers require semantic approval');
+}
+assert.equal(numericCheck('This is suitable for age 3.', {
+  currentUtterance: 'My daughter is 3.',
+  semanticClaimValidation: { supported: false, requestedFactAddressed: false },
+}).valid, false, 'Caller age cannot establish eligibility');
+assert.equal(numericCheck('You said your daughter is 4.', {
+  currentUtterance: 'My daughter is 3.',
+}).reason, 'unsupported_numeric_claim', 'Invented caller numbers remain rejected');
+assert.equal(numericCheck('The price is 3.', {
+  currentUtterance: 'Is the price 3?',
+  semanticClaimValidation: { supported: false },
+}).valid, false, 'A question is not published pricing');
 assert.equal(uncitedNumeric.reason, 'unsupported_numeric_claim');
 assert.deepEqual(uncitedNumeric.details, {
   unsupportedNumbers: [{ raw: '9000', normalized: '9000' }],
@@ -169,6 +188,8 @@ const relevanceValidation = await validateTemplateEngineClaims({
   },
 });
 assert.equal(relevanceValidation.supported, true);
+assert.match(claimValidationRequest.messages[0].content, /clearly attributed restatement/u);
+assert.match(claimValidationRequest.messages[0].content, /Missing eligibility must not become either approval or rejection/u);
 assert.equal(relevanceValidation.requestedFactAddressed, false);
 assert.match(claimValidationRequest.messages[0].content, /included feature/u);
 assert.match(claimValidationRequest.messages[0].content,

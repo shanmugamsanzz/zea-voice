@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import {
   normalizePublishedConversationGuidance,
   selectApplicableConversationGuidance,
+  welcomeContinuationContext,
 } from '../src/voice/interaction/template-engine-conversation-guidance.js';
 import { routeTemplateEngineUtterance } from '../src/voice/interaction/template-engine-orchestrator.js';
 import { loadTemplateEnginePublishedContext } from '../src/voice/interaction/template-engine-production-retrieval.js';
@@ -301,10 +302,30 @@ const contentSelection = selectApplicableConversationGuidance({
 assert.equal(contentSelection.recordId, 'guidance-content-match');
 
 let request;
+const welcomeInput = {
+  pendingQuestion: { key: 'configured_welcome_question', text: 'Am I speaking with the account holder?' },
+  publishedConversationGuidance: [overviewGuidance, detailGuidance,
+    { ...overviewGuidance, tenantId: 'other-tenant', recordId: 'foreign' }], scope,
+};
+for (const reply of ['ஆமா Madam', 'yes, speaking', 'haan ji', 'No thanks',
+  'Wrong person', 'Stop calling', 'What is the price of Beta Option?']) {
+  const context = welcomeContinuationContext({ ...welcomeInput, latestUtterance: reply });
+  assert.equal(context.callerReply, reply, 'Preserve the reply, never coerce it to acceptance');
+  assert.equal(context.pendingQuestion.text, welcomeInput.pendingQuestion.text);
+  assert.deepEqual(context.candidates.map((item) => item.recordId),
+    [overviewGuidance.recordId, detailGuidance.recordId]);
+}
+for (const overrides of [
+  { pendingQuestion: null }, { pendingQuestion: { key: 'another_question', text: 'Continue?' } },
+  { activeWorkflowId: 'active' }, { pendingClarification: { question: 'Which one?' } },
+  { recentCompleteTurns: [{ role: 'user', content: 'Previous reply' }] },
+  { scope: { ...scope, publications: [] } },
+]) assert.equal(welcomeContinuationContext({ ...welcomeInput, ...overrides }), null);
 await routeTemplateEngineUtterance({
   mainPrompt: 'Use RESPONSE for non-factual conversation.',
   latestUtterance: 'Continue',
   conversationGuidance: selected,
+  welcomeContinuation: welcomeContinuationContext({ ...welcomeInput, latestUtterance: 'Continue' }),
 }, {
   tenantBoundaryVerified: true,
   nonFactualResponseAllowed: true,
@@ -319,6 +340,9 @@ await routeTemplateEngineUtterance({
   },
 });
 const systemPrompt = request.messages[0].content;
+assert.match(systemPrompt, /Am I speaking with the account holder/u);
+assert.match(systemPrompt, /refusals, wrong-person replies, cancellation and new questions take precedence/u);
+assert.match(systemPrompt, /return SEARCH for that step/u);
 assert.match(systemPrompt, /"conversationGuidance"/u);
 assert.match(systemPrompt, /"purpose":"Explain the selected offering/u);
 assert.match(systemPrompt, /"nextQuestion":"Would you like the next configured step/u);

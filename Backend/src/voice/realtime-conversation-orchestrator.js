@@ -351,6 +351,16 @@ export function remainingLiveTurnBudgetMs(deadlineAt, reserveMs = 0, now = Date.
   return Math.max(0, Math.floor(Number(deadlineAt) - Number(now) - Math.max(0, reserveMs)));
 }
 
+export function configuredTemplateEngineFailureResponse(profile, kind) {
+  const role = kind === 'configuration' ? 'workflow_configuration_failure'
+    : kind === 'validation' ? 'evidence_validation_failure'
+      : kind === 'operational' ? 'technical_failure' : null;
+  if (!role) return '';
+  const message = resolveRuntimeMessage(profile, role)
+    || (kind !== 'operational' ? resolveRuntimeMessage(profile, 'non_factual_recovery') : '');
+  return message && !isInternalRuntimeText(message) ? message : '';
+}
+
 export function configuredTtsFirstAudioTimeoutMs(
   sharedDeadlineRemainingMs = Number.POSITIVE_INFINITY,
 ) {
@@ -2446,6 +2456,7 @@ export class RealtimeConversationOrchestrator {
         ].filter((value) => Number.isFinite(value) && value > 0)),
         latestUtterance: query,
         conversationHistory: history,
+        pendingQuestion: this.liveCallMemory.snapshot().pendingQuestion,
         state: this.templateEngineState,
         runtimeProfile: this.runtimeProfile,
         authorizedWorkflowTools: assignedTools,
@@ -2606,18 +2617,27 @@ export class RealtimeConversationOrchestrator {
         sentencePipeline.cancel();
         return;
       }
-      if (errorKind === 'validation') {
-        const recovery = configuredOperationalFailureResponse(this.runtimeProfile, {}, { validation: true });
+      if (errorKind === 'validation' || errorKind === 'configuration') {
+        const recovery = configuredTemplateEngineFailureResponse(this.runtimeProfile, errorKind);
         this.log.warn({ err: error, stage: 'template_engine.response_rejected',
           callId: this.call.id, turnEpoch: epoch, errorKind, recoveryConfigured: Boolean(recovery),
         }, 'Unvalidated answer suppressed; configured recovery replaces the rejected answer');
-        if (!recovery) throw error;
+        if (!recovery) {
+          sentencePipeline.cancel();
+          this.log.error({ stage: 'template_engine.recovery_unconfigured',
+            callId: this.call.id, turnEpoch: epoch, errorKind,
+          }, 'Approved non-technical recovery is missing; ending without invented speech');
+          await this.#finalize('failed', 'template_engine_recovery_unconfigured');
+          if (!this.mediaSession.closed) this.mediaSession.close(1011, 'approved recovery unavailable');
+          return;
+        }
         // Do not enqueue any part of the rejected answer or its citations.
         // Preserve the epoch so the approved recovery can finish normally.
         result = {
           speech: recovery, state: this.templateEngineState,
           evidence: [], evidenceIds: [], toolExecuted: false,
           validationFailure: error.code ?? 'TEMPLATE_ENGINE_OUTPUT_INVALID',
+          recoveryKind: errorKind,
         };
       } else if (errorKind !== 'operational') {
         sentencePipeline.cancel();
@@ -2643,6 +2663,7 @@ export class RealtimeConversationOrchestrator {
           state: this.templateEngineState,
           evidence: [], evidenceIds: [], toolExecuted: false,
           operationalFailure: error.code ?? 'TEMPLATE_ENGINE_OPERATIONAL_FAILURE',
+          recoveryKind: 'operational',
         };
       }
     } finally {
@@ -2708,6 +2729,7 @@ export class RealtimeConversationOrchestrator {
       toolExecuted: result.toolExecuted === true,
       operationalFailure: result.operationalFailure ?? null,
       validationFailure: result.validationFailure ?? null,
+      recoveryKind: result.recoveryKind ?? null,
       stageTimings,
       acknowledgementFirstAudioMs: turnTiming.acknowledgementFirstAudioMs,
       finalAnswerFirstAudioMs: turnTiming.finalAnswerFirstAudioMs,

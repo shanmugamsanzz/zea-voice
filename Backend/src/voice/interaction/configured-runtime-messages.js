@@ -9,9 +9,10 @@ const settingKeys = Object.freeze({
     'technicalFailureMessage', 'knowledgeTechnicalFailureMessage', 'errorRecoveryMessage',
   ]),
   evidence_validation_failure: Object.freeze([
-    'evidenceValidationFailureMessage', 'technicalFailureMessage',
-    'knowledgeTechnicalFailureMessage',
+    'evidenceValidationFailureMessage',
   ]),
+  workflow_configuration_failure: Object.freeze(['workflowConfigurationFailureMessage']),
+  non_factual_recovery: Object.freeze(['nonFactualRecoveryMessage']),
   recovery: Object.freeze(['errorRecoveryMessage', 'technicalFailureMessage']),
   closing: Object.freeze(['closingMessage', 'postCallClosingMessage']),
 });

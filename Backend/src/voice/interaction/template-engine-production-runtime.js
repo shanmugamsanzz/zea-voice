@@ -13,7 +13,7 @@ import {
   assignedToolIdentifiers,
   configuredWorkflowToolIdentifier,
 } from '../../knowledge-bases/workflow-tool-authorization.js';
-import { selectApplicableConversationGuidance } from './template-engine-conversation-guidance.js';
+import { selectApplicableConversationGuidance, welcomeContinuationContext } from './template-engine-conversation-guidance.js';
 import {
   repairTemplateEngineFollowUp,
   validateAndComposeTemplateEngineSpeech,
@@ -473,6 +473,12 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     confirmationStatus: state.confirmationStatus,
     authorizedWorkflowTools: workflowSummaries,
     conversationGuidance: initialConversationGuidance,
+    welcomeContinuation: welcomeContinuationContext({
+      pendingQuestion: input.pendingQuestion, latestUtterance: input.latestUtterance,
+      publishedConversationGuidance: publishedContext.publishedConversationGuidance,
+      scope: publishedContext.scope, recentCompleteTurns: state.recentCompleteTurns,
+      activeWorkflowId: state.activeWorkflowId, pendingClarification: state.pendingClarification,
+    }),
   };
   let completedSpeculativeResult = null;
   const speculativeRetrieval = typeof dependencies.retrieveSpeculativeEvidence === 'function'

@@ -685,6 +685,40 @@ const decisions = [searchDecision, {
   decision: 'RESPONSE', response: 'Tenant Item costs 125.', clarification: null,
   evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
 }];
+for (const latestUtterance of ['ஆமா Madam', 'Yes, speaking', 'No thanks',
+  'Wrong person', 'Stop calling', 'Tell me the price instead']) {
+  let calls = 0;
+  const welcomeTurn = await runTemplateEngineProductionTurn({
+    scope, mainPrompt: 'Follow published conversation guidance.', latestUtterance,
+    pendingQuestion: { key: 'configured_welcome_question', text: 'Is this the account holder?' },
+    assignedTools: [], informationFields: [],
+  }, {
+    loadPublishedContext: async () => ({ scope, publishedWorkflows: [], artifacts: {},
+      publishedConversationGuidance: [{
+        recordId: 'welcome-guidance', recordType: 'CONVERSATION_NODE', published: true,
+        tenantId, agentId, knowledgeBaseId, publicationRevision: 4,
+        purpose: 'After acceptance, explain available account services.',
+        situation: 'Reply to the introduction', content: 'Follow the configured service overview.',
+        examples: ['Yes, speaking'], catalogReferences: [], language: 'en',
+      }],
+    }),
+    invokeStructuredLlm: async (request) => {
+      calls += 1;
+      assert.ok(request.messages[0].content.includes('Is this the account holder?'));
+      assert.ok(request.messages[0].content.includes('explain available account services'));
+      assert.equal(request.messages.at(-1).content, latestUtterance);
+      return { decision: 'RESPONSE', response: 'Understood.', clarification: null,
+        search: null, tool: null, nextQuestion: null, stateUpdate: null };
+    },
+    retrieveEvidence: async () => { throw new Error('Must not force search from welcome context'); },
+    persistWorkflowState: async () => {},
+    executeAuthorizedTool: async () => { throw new Error('Must not force tool activation'); },
+    validateGroundedClaims: async () => ({ supported: true }),
+    validateToolResultSpeechClaims: async () => ({ supported: true }),
+  });
+  assert.equal(welcomeTurn.speech, 'Understood.');
+  assert.equal(calls, 1, 'Welcome context must not add an LLM round-trip');
+}
 let retrievalDiagnostics;
 let postSearchDiagnostics;
 const turn = await runTemplateEngineProductionTurn({
@@ -880,6 +914,54 @@ const workflowDecisions = [{
   decision: 'TOOL', response: '', clarification: null, search: null,
   tool: { name: 'perform_action', arguments: {} }, nextQuestion: null, stateUpdate: null,
 }, { speech: 'Please provide the configured contact name.' }];
+// Wrong initial TOOL decisions must be corrected before missing-field preflight.
+for (const scenario of [
+  { utterance: 'Why did you call?', route: 'SEARCH' },
+  { utterance: 'எதுக்கு Madam phone பண்ணீங்க?', route: 'SEARCH' },
+  { utterance: 'Why phone panneenga?', route: 'SEARCH' },
+  { utterance: 'Can this service be requested online?', route: 'SEARCH' },
+  { utterance: 'Maybe that one, I am not sure what to do', route: 'CLARIFY' },
+  { utterance: 'That thing, maybe?', route: 'CLARIFY', directClarification: true },
+  { utterance: 'No thanks, wrong person', route: 'RESPONSE' },
+]) {
+  let calls = 0;
+  let searches = 0;
+  let writes = 0;
+  const reviewed = scenario.route === 'SEARCH' ? searchDecision : {
+    decision: scenario.route, response: scenario.route === 'RESPONSE' ? 'Understood.' : '',
+    clarification: scenario.route === 'CLARIFY'
+      ? { question: 'What would you like me to do?', reason: 'unclear action intent', candidates: [] } : null,
+    search: null, tool: null, nextQuestion: null, stateUpdate: null,
+  };
+  const result = await runTemplateEngineProductionTurn({
+    scope, mainPrompt: 'Follow the published service configuration.',
+    latestUtterance: scenario.utterance, assignedTools: [tool], informationFields: [],
+  }, {
+    invokeStructuredLlm: async (request) => {
+      calls += 1;
+      if (calls === 1) return scenario.directClarification ? reviewed : structuredClone(workflowDecisions[0]);
+      if (calls === 2) {
+        assert.match(request.messages.at(-1).content, /TOOL_ACTIVATION_REVIEW/u);
+        assert.ok(request.messages.some((message) => message.role === 'user'
+          && message.content === scenario.utterance));
+        return reviewed;
+      }
+      return { decision: 'RESPONSE', response: 'Tenant Item costs 125.',
+        clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null };
+    },
+    loadPublishedContext: async () => ({ scope, publishedWorkflows: [workflow], artifacts: {} }),
+    retrieveEvidence: async () => { searches += 1; return retrieval; },
+    persistWorkflowState: async () => { writes += 1; },
+    executeAuthorizedTool: async () => { throw new Error('Informational or unclear intent must not execute'); },
+    validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
+    validateToolResultSpeechClaims: async () => ({ supported: true }),
+  });
+  assert.equal(writes, 0);
+  assert.equal(result.state.activeWorkflowId, null);
+  assert.equal(searches, scenario.route === 'SEARCH' ? 1 : 0);
+  assert.equal(calls, scenario.directClarification ? 1 : scenario.route === 'SEARCH' ? 3 : 2);
+}
+workflowDecisions.splice(1, 0, structuredClone(workflowDecisions[0]));
 const workflowTurn = await runTemplateEngineProductionTurn({
   auth: { tenantId }, scope, callId: 'call-2', usageDirection: 'inbound', language: 'en',
   mainPrompt: 'Use the authorized tool for requested actions.',
@@ -916,6 +998,7 @@ const contextualWorkflowDecisions = [{
   nextQuestion: null,
   stateUpdate: null,
 }, { speech: 'Please confirm the collected value Sam.' }];
+contextualWorkflowDecisions.splice(1, 0, structuredClone(contextualWorkflowDecisions[0]));
 const contextualWorkflowTurn = await runTemplateEngineProductionTurn({
   auth: { tenantId }, scope, callId: 'call-contextual-tool',
   usageDirection: 'inbound', language: 'en',

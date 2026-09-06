@@ -229,6 +229,11 @@ function validateResponse(decision, input) {
     return invalid('unverified_cited_evidence', { factual: true, retryCount: input.retryCount });
   }
   const permittedNumbers = allowedNumbers(selectedEvidence, input.callerProvidedValues);
+  // Caller numbers are reference context, not published business facts. Permit
+  // their repetition only after the semantic validator approves the whole claim.
+  if (input.semanticClaimValidation?.supported === true) {
+    for (const number of numbers(input.currentUtterance)) permittedNumbers.add(number);
+  }
   const unsupportedNumbers = numericClaims(decision.response)
     .filter((claim) => !permittedNumbers.has(claim.normalized));
   if (unsupportedNumbers.length) {
@@ -288,7 +293,8 @@ function validateClarification(decision, input) {
   const allowedCandidates = new Set((input.ambiguity?.candidates ?? []).map(identity).filter(Boolean));
   const selectedCandidates = clarification.candidates.map(identity).filter(Boolean);
   const ambiguityKind = cleanText(input.ambiguity?.kind, 80);
-  const unresolved = ambiguityKind === 'unresolved_published_entity';
+  const unresolved = ambiguityKind === 'unresolved_published_entity'
+    || ambiguityKind === 'unresolved_action_intent';
   const confirmation = ambiguityKind === 'published_entity_confirmation';
   if (unresolved && selectedCandidates.length) {
     return invalid('invented_clarification_candidate');
@@ -326,7 +332,13 @@ function validateTool(decision, input) {
       scope: input.scope,
     });
   } catch (error) {
-    return invalid(error.code ?? 'tool_not_authorized');
+    // Preserve only configuration identifiers, never arguments, questions,
+    // credentials or arbitrary underlying error details in diagnostics.
+    const details = error.code === 'TEMPLATE_ENGINE_WORKFLOW_FIELD_CONFIGURATION_MISSING'
+      ? { fields: [...(error.details?.fields ?? [])],
+        fieldIssues: (error.details?.fieldIssues ?? []).map(({ field, reason }) => ({ field, reason })) }
+      : null;
+    return invalid(error.code ?? 'tool_not_authorized', { details });
   }
   if (input.toolExecutionRequested === true) {
     const confirmed = input.confirmation?.accepted === true

@@ -4,7 +4,24 @@ import { EventEmitter } from 'node:events';
 process.env.NODE_ENV = 'test';
 process.env.DATABASE_URL ??= 'postgresql://test:test@localhost:5432/test';
 process.env.REDIS_HOST ??= 'localhost';
-const { RealtimeConversationOrchestrator } = await import('../src/voice/realtime-conversation-orchestrator.js');
+const { RealtimeConversationOrchestrator, configuredTemplateEngineFailureResponse } = await import('../src/voice/realtime-conversation-orchestrator.js');
+const messageProfile = { agent: { settings: {
+  evidenceValidationFailureMessage: 'Please rephrase that request.',
+  workflowConfigurationFailureMessage: 'I cannot start this request right now.',
+  technicalFailureMessage: 'The service is temporarily having a technical problem.',
+  nonFactualRecoveryMessage: 'Sorry, I could not complete that response.',
+} } };
+for (const [kind, key] of [['validation', 'evidenceValidationFailureMessage'],
+  ['configuration', 'workflowConfigurationFailureMessage'], ['operational', 'technicalFailureMessage']]) {
+  assert.equal(configuredTemplateEngineFailureResponse(messageProfile, kind), messageProfile.agent.settings[key]);
+}
+for (const kind of ['validation', 'configuration']) {
+  assert.equal(configuredTemplateEngineFailureResponse({ agent: { settings: {
+    technicalFailureMessage: 'Technical problem.',
+  } } }, kind), '', 'Non-operational failures must never borrow technical speech');
+}
+assert.equal(configuredTemplateEngineFailureResponse(messageProfile, 'cancelled'), '');
+assert.equal(configuredTemplateEngineFailureResponse(messageProfile, 'unclassified'), '');
 
 async function waitFor(predicate) {
   const deadline = Date.now() + 5000;
@@ -37,7 +54,7 @@ class Audio {
   async close() { for (const resolve of this.waiters.splice(0)) resolve(null); }
 }
 
-for (const mode of ['dedicated', 'technical', 'cancelled', 'workflow-config', 'field-config', 'hydration-failure', 'speech-budget']) {
+for (const mode of ['dedicated', 'neutral', 'unconfigured', 'cancelled', 'workflow-config', 'field-config', 'hydration-failure', 'speech-budget']) {
   const configurationFailure = mode.endsWith('-config');
   const recovery = 'Sorry, I could not prepare that answer. Please try again.';
   const logs = [];
@@ -93,11 +110,13 @@ for (const mode of ['dedicated', 'technical', 'cancelled', 'workflow-config', 'f
   const profile = {
     agent: { id: 'agent-a', tenantId: 'tenant-a', workspaceId: 'workspace-a', language: 'English (US)',
       prompt: 'Answer only from supplied evidence.', welcomeMessage: 'Welcome.', inactivityTimeoutSeconds: 60,
-      settings: { technicalFailureMessage: recovery, informationUnavailableMessage: 'No published information.',
+      settings: { technicalFailureMessage: 'A technical failure occurred.', informationUnavailableMessage: 'No published information.',
+        ...(mode !== 'unconfigured' ? { nonFactualRecoveryMessage: recovery } : {}),
+        ...(configurationFailure ? { workflowConfigurationFailureMessage: recovery } : {}),
         ...(mode === 'dedicated' ? { evidenceValidationFailureMessage: recovery } : {}) } },
     providers: { stt: {}, llm: {}, tts: {} }, tools: [], limits: { maxCallDurationMinutes: 1 },
   };
-  const publication = { knowledgeBaseId: 'kb-a', publicationRevision: 1 };
+  const publication = { tenantId: 'tenant-a', knowledgeBaseId: 'kb-a', publicationRevision: 1 };
   if (mode === 'speech-budget') profile.limits.ttsMaxCharactersPerResponse = 100;
   if (configurationFailure) profile.tools = [{ id: 'tool-a', name: 'create_record', status: 'active',
     type: 'webhook_api', inputSchema: { type: 'object', additionalProperties: false,
@@ -131,6 +150,13 @@ for (const mode of ['dedicated', 'technical', 'cancelled', 'workflow-config', 'f
     media.emit('start', { session: media });
     await waitFor(() => orchestrator.controller.state === 'listening');
     stt.publish({ type: 'final_transcript', text: 'Alpha price please', language: 'en', isFinal: true });
+    if (mode === 'unconfigured') {
+      await waitFor(() => media.closed);
+      assert.ok(logs.some((entry) => entry.stage === 'template_engine.recovery_unconfigured'));
+      assert.ok(!spoken.includes('A technical failure occurred.'));
+      assert.ok(!spoken.some((text) => text.includes('9999')));
+      continue;
+    }
     if (mode === 'cancelled') {
       await waitFor(() => postSearchAttempts === 2 && orchestrator.activeLlm === null);
       assert.ok(!spoken.includes(recovery), 'Cancelled generations must not speak recovery');
@@ -143,10 +169,23 @@ for (const mode of ['dedicated', 'technical', 'cancelled', 'workflow-config', 'f
     if (configurationFailure) assert.equal(orchestrator.templateEngineState.activeWorkflowId, null,
       'No workflow state may be activated on configuration failure');
     assert.ok(spoken.includes(recovery), 'Configured recovery must reach TTS');
+    assert.ok(!spoken.includes('A technical failure occurred.'), 'Validation/configuration failures are not provider outages');
+    if (mode === 'field-config') {
+      const rejection = logs.find((entry) => entry.stage === 'template_engine.response_rejected');
+      assert.equal(rejection.err.details.reason, 'TEMPLATE_ENGINE_WORKFLOW_FIELD_CONFIGURATION_MISSING');
+      assert.deepEqual(rejection.err.details.validationDetails, {
+        fields: ['caller_name'],
+        fieldIssues: [{ field: 'caller_name', reason: 'missing_input_field' }],
+      });
+      assert.ok(!spoken.some((text) => text.includes('caller_name')),
+        'Internal field diagnostics must never become spoken recovery');
+      assert.ok(!JSON.stringify(transcript).includes('caller_name'));
+    }
     assert.ok(!spoken.some((text) => text.includes('9999')), 'Rejected speech must never reach TTS');
     assert.ok(!JSON.stringify(transcript).includes('9999'), 'Rejected speech must never be committed to the transcript');
     assert.equal(orchestrator.controller.state, 'listening');
     const completed = logs.find((entry) => entry.stage === 'template_engine.turn_completed');
+    assert.equal(completed.recoveryKind, configurationFailure ? 'configuration' : 'validation');
     assert.ok(completed.validationFailure);
     assert.equal(completed.operationalFailure, null);
     assert.deepEqual(completed.evidenceIds, []);

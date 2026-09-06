@@ -21,6 +21,11 @@ const operationalCodes = new Set([
   'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN',
   'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET',
 ]);
+const configurationCodes = new Set([
+  'TEMPLATE_ENGINE_WORKFLOW_CONFIRMATION_CONFIGURATION_MISSING',
+  'TEMPLATE_ENGINE_WORKFLOW_FIELD_CONFIGURATION_MISSING',
+  'TEMPLATE_ENGINE_WORKFLOW_NOT_AUTHORIZED',
+]);
 
 // Status 5xx alone is not proof of an infrastructure outage. Validation errors
 // historically used the same status and must never authorize technical speech.
@@ -36,6 +41,8 @@ export function classifyTemplateEngineTurnError(error, { stale = false } = {}) {
     || ['ABORT_ERR', 'ERR_CANCELED', 'TEMPLATE_ENGINE_LLM_CANCELLED'].includes(entry.code))) {
     return 'cancelled';
   }
+  if (chain.some((entry) => configurationCodes.has(entry.code)
+    || configurationCodes.has(entry.details?.reason))) return 'configuration';
   if (chain.some((entry) => validationCodes.has(entry.code))) return 'validation';
   if (chain.some((entry) => operationalCodes.has(entry.code)
     // PostgreSQL connection failures and server shutdowns.

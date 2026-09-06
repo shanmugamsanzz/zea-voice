@@ -255,6 +255,9 @@ function toolDecision(argumentsValue = {}, confirmation = false) {
 }
 
 async function workflowTurn(configuration, fixture, utterance, state, outputs, execute) {
+  if (!state?.activeWorkflowId && outputs[0]?.decision === 'TOOL') {
+    outputs.splice(1, 0, structuredClone(outputs[0]));
+  }
   return runTemplateEngineProductionTurn({
     auth: { tenantId: fixture.identity.tenantId }, scope: fixture.identity.scope,
     callId: `${configuration.code}-workflow`, usageDirection: 'inbound',

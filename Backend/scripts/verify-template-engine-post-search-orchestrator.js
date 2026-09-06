@@ -11,6 +11,13 @@ for (const code of ['TEMPLATE_ENGINE_OUTPUT_INVALID', 'TEMPLATE_ENGINE_POST_SEAR
   assert.equal(classifyTemplateEngineTurnError({ code, statusCode: 502 }), 'validation');
 }
 assert.equal(classifyTemplateEngineTurnError({ statusCode: 503 }), 'unclassified');
+for (const code of ['TEMPLATE_ENGINE_WORKFLOW_FIELD_CONFIGURATION_MISSING',
+  'TEMPLATE_ENGINE_WORKFLOW_CONFIRMATION_CONFIGURATION_MISSING', 'TEMPLATE_ENGINE_WORKFLOW_NOT_AUTHORIZED']) {
+  assert.equal(classifyTemplateEngineTurnError({ code }), 'configuration');
+  assert.equal(classifyTemplateEngineTurnError({ code: 'TEMPLATE_ENGINE_OUTPUT_INVALID',
+    details: { reason: code } }), 'configuration');
+  assert.equal(classifyTemplateEngineTurnError({ code }, { stale: true }), 'cancelled');
+}
 for (const code of ['LLM_PROVIDER_TIMEOUT', 'TTS_PROVIDER_REQUEST_FAILED', 'ECONNREFUSED', '08006']) {
   assert.equal(classifyTemplateEngineTurnError({ code }), 'operational');
   assert.equal(classifyTemplateEngineTurnError({ code }, { stale: true }), 'cancelled');
@@ -436,6 +443,38 @@ assert.deepEqual(repaired.decision.evidenceIds, ['evidence-1']);
 
 let groundedRepairCalls = 0;
 let groundedValidationCalls = 0;
+{
+let numericRepairCalls = 0;
+let numericDiagnostics;
+const partialAnswer = 'The current price is 3200 currency units. Age eligibility is not specified in the supplied information.';
+const numericPartialRecovery = await respondToTemplateEngineSearch({
+  mainPrompt, latestUtterance: 'My daughter is 3. What is the price and age eligibility?',
+  state, searchDecision, verifiedEvidence, scope,
+}, {
+  tenantBoundaryVerified: true,
+  onPostSearchDiagnostics: (details) => { numericDiagnostics = details; },
+  validateGroundedClaims: async ({ response: speech }) => ({
+    supported: speech === partialAnswer, requestedFactAddressed: speech === partialAnswer,
+  }),
+  invokeStructuredLlm: async (request) => {
+    numericRepairCalls += 1;
+    if (numericRepairCalls === 2) {
+      const prompt = request.messages.map((message) => message.content).join(' ');
+      assert.match(prompt, /"raw":"9999"/u);
+      assert.match(prompt, /"checkedEvidenceAliases":\["E1"\]/u);
+      assert.match(prompt, /answer the supported requested parts/u);
+    }
+    return { outputParsed: { decision: 'RESPONSE',
+      response: numericRepairCalls === 1 ? 'The price is 9999.' : partialAnswer,
+      clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null } };
+  },
+});
+assert.equal(numericRepairCalls, 2);
+assert.equal(numericPartialRecovery.decision.response, partialAnswer);
+assert.deepEqual(numericDiagnostics.initialNumericValidationDetails.unsupportedNumbers,
+  [{ raw: '9999', normalized: '9999' }]);
+assert.equal(numericDiagnostics.initialNumericValidationDetails.checkedEvidenceIds.length, 1);
+}
 const groundedRecovery = await respondToTemplateEngineSearch({
   mainPrompt, latestUtterance, state, searchDecision, verifiedEvidence, scope,
 }, {

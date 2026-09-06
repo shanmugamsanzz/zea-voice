@@ -1,5 +1,23 @@
 const maximumGuidanceCandidates = 200;
 
+// Supply alternatives, not a preselected factual route: the router must interpret
+// the reply (including refusals and new requests) against the published guidance.
+export function welcomeContinuationContext({ pendingQuestion, latestUtterance,
+  publishedConversationGuidance = [], scope = {}, recentCompleteTurns = [],
+  activeWorkflowId = null, pendingClarification = null } = {}) {
+  if (pendingQuestion?.key !== 'configured_welcome_question'
+    || !cleanText(pendingQuestion.text) || activeWorkflowId || pendingClarification
+    || recentCompleteTurns.some((turn) => turn.role === 'user')) return null;
+  const candidates = publishedConversationGuidance.filter((record) => scoped(record, scope))
+    .slice(0, maximumGuidanceCandidates).map((record) => ({
+      ...sanitizeConversationGuidance(record),
+      situation: record.situation, examples: record.examples,
+    }));
+  if (!candidates.length) return null;
+  return { pendingQuestion: { key: pendingQuestion.key, text: cleanText(pendingQuestion.text, 500) },
+    callerReply: cleanText(latestUtterance, 2_000), candidates };
+}
+
 function cleanText(value, maximum = 4_000) {
   return String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
     .replace(/\s+/gu, ' ').trim().slice(0, maximum);

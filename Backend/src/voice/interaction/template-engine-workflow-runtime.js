@@ -80,6 +80,11 @@ function fieldsForTool(informationFields, tool, schema) {
     throw new AppError(409, 'Required tool fields must have UI field configuration and questions',
       'TEMPLATE_ENGINE_WORKFLOW_FIELD_CONFIGURATION_MISSING', {
         fields: missingConfiguration,
+        fieldIssues: missingConfiguration.map((key) => ({
+          field: key,
+          reason: !Object.hasOwn(properties, key) ? 'missing_schema_property'
+            : !byKey.has(key) ? 'missing_input_field' : 'missing_question',
+        })),
       });
   }
   return Object.freeze([...byKey.values()].map((field) => {
