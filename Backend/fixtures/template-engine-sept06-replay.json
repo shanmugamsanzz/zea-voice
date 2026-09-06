@@ -1,0 +1,22 @@
+{
+  "id": "sept06-request-meaning",
+  "description": "Sanitized utterances from the failed call. Fixture facts are test-only; live review must use the active publication.",
+  "turns": [
+    { "id": "welcome", "text": "Yes Madam", "subject": "overview" },
+    { "id": "overview", "text": "அப்படியா உங்ககிட்ட என்ன packagesலாம் madam இருக்கு", "subject": "overview" },
+    { "id": "repeat-overview", "text": "என்ன package இருக்குன்னு first சொன்னாதானே madam எனக்கு தெரியும்", "subject": "overview" },
+    { "id": "correct-overview", "text": "இல்லை Madam உங்ககிட்ட என்ன package இருக்குன்னு first சொல்லுங்க", "subject": "overview" },
+    { "id": "onco-correction", "text": "Madam நான் வந்து Oncocare package பத்தி தான் சொல்றேன்", "subject": "onco" },
+    { "id": "onco-details", "text": "Madam, Oncocare package சொல்லுங்க Madam. அதுல என்ன test, scan எல்லாம் வரும்ன்னு.", "subject": "onco" },
+    { "id": "diabetic-switch", "text": "diabetic package பத்தி சொல்லுங்க", "subject": "diabetic" },
+    { "id": "organ-switch", "text": "Organ specific package பத்தி சொல்லுங்க", "subject": "organ" },
+    { "id": "kids-switch", "text": "Kids package பத்தி சொல்லுங்க Madam", "subject": "kids" }
+  ],
+  "subjects": {
+    "overview": { "name": "Available packages", "answer": "Master, Diabetic, Onco Care, Organ-Specific, Kids packages இருக்கு.", "required": ["Master", "Diabetic", "Onco", "Organ", "Kids"] },
+    "onco": { "name": "Onco Care", "answer": "Onco Care Premium-ல் CBC, Amylase, Lipase, CEA, CT Scan Screening of Chest and Whole Abdomen இருக்கு. Add-on options வேறு; அவற்றை Premium-உடன் ஒன்றாகக் கருதக்கூடாது.", "required": ["Onco", "Premium", "CBC", "CT Scan", "Add-on"] },
+    "diabetic": { "name": "Diabetic", "answer": "Diabetic package-ல் USG Abdomen/Pelvis இருக்கு.", "required": ["Diabetic", "USG"] },
+    "organ": { "name": "Organ Specific", "answer": "Organ Specific-ல் Renal, Liver, Cardiac, Lungs, Ortho, Gastro options இருக்கு.", "required": ["Renal", "Liver", "Cardiac", "Lungs", "Ortho", "Gastro"] },
+    "kids": { "name": "Kids", "answer": "Kids screening-ல் CBC மற்றும் developmental screening இருக்கு.", "required": ["Kids", "CBC"] }
+  }
+}

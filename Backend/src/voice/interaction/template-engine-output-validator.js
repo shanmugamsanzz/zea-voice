@@ -56,9 +56,16 @@ function canonicalNumber(token) {
   return `${negative && (integer !== '0' || trimmedFraction) ? '-' : ''}${integer}${trimmedFraction ? `.${trimmedFraction}` : ''}`;
 }
 
-function numericClaims(value) {
+function numericClaims(value, allowListLabels = false) {
   const text = cleanText(value);
+  // Only consecutive, explicitly punctuated list markers qualify. Business
+  // counts, decimals, ranges and isolated ordinals still require evidence.
+  const markers = [...text.matchAll(/(?:^|\s)(\d+)[.)]\s+(?=[\p{L}\p{M}])/gu)];
+  const listOffsets = new Set(allowListLabels && markers.length >= 2
+    && markers.every((match, index) => Number(match[1]) === index + 1)
+    ? markers.map((match) => match.index + (match[0].startsWith(' ') ? 1 : 0)) : []);
   return [...text.matchAll(/[+-]?\p{N}+(?:[.,]\p{N}+)*/gu)]
+    .filter((match) => !listOffsets.has(match.index))
     .map((match) => {
       // A single hyphen after a number separates a range. Explicit negative
       // endpoints (-5--1 or -5 to -1) retain their unary minus.
@@ -241,7 +248,10 @@ function validateResponse(decision, input) {
   if (input.semanticClaimValidation?.supported === true) {
     for (const number of numbers(input.currentUtterance)) permittedNumbers.add(number);
   }
-  const unsupportedNumbers = numericClaims(decision.response)
+  const unsupportedNumbers = numericClaims(
+    [decision.response, decision.nextQuestion?.question].filter(Boolean).join(' '),
+    input.semanticClaimValidation?.supported === true,
+  )
     .filter((claim) => !permittedNumbers.has(claim.normalized));
   if (unsupportedNumbers.length) {
     return invalid('unsupported_numeric_claim', {
@@ -275,7 +285,8 @@ function validateResponse(decision, input) {
       factual: true, retryCount: input.retryCount,
     });
   }
-  if (requestedFact && input.semanticClaimValidation?.requestedFactAddressed !== true) {
+  if ((requestedFact || cleanText(input.currentUtterance))
+    && input.semanticClaimValidation?.requestedFactAddressed !== true) {
     return invalid('requested_fact_not_addressed', {
       factual: true, retryCount: input.retryCount,
     });
@@ -292,6 +303,7 @@ function validateClarification(decision, input) {
   if (questionMarks > 1) return invalid('multiple_clarification_questions');
   if (input.ambiguity?.required !== true) return invalid('clarification_not_required');
   if (input.clarificationRelevant === false
+    || input.semanticClaimValidation?.requestedFactAddressed === false
     || input.semanticClaimValidation?.supported === false
     || (input.claimValidationRequired === true
       && input.semanticClaimValidation?.supported !== true)) {

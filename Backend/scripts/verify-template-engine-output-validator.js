@@ -52,6 +52,37 @@ const numericCheck = (text, overrides = {}) => validateTemplateEngineOutput({
   semanticClaimValidation: { supported: true, requestedFactAddressed: true },
   ...overrides,
 });
+for (const text of ['1. Service Alpha. 2. Feature Delta.', '1) Service Alpha.\n2) Feature Delta.',
+  '1. சேவை Alpha. 2. வசதி Delta.']) {
+  assert.equal(numericCheck(text).valid, true, 'Presentation labels are not factual quantities');
+}
+for (const text of ['1. Service Alpha costs 9000. 2. Feature Delta.',
+  '1. Service Alpha. 3. Feature Delta.', '2. Service Alpha.',
+  'There are 2 services.', 'Value is -2.', 'Value is 1.2.']) {
+  assert.equal(numericCheck(text).reason, 'unsupported_numeric_claim', text);
+}
+assert.equal(numericCheck('1. Age 2 is eligible. 2. Feature Delta.', {
+  semanticClaimValidation: { supported: false, requestedFactAddressed: false },
+}).valid, false, 'List syntax must not bypass semantic grounding');
+assert.equal(numericCheck('Service Alpha.', {
+  currentUtterance: 'Which features are included?',
+  semanticClaimValidation: { supported: true, requestedFactAddressed: false },
+}).reason, 'requested_fact_not_addressed', 'Relevance is required even without a rewritten requestedFact');
+assert.equal(numericCheck('Service Alpha.', {
+  decision: { ...response('Service Alpha.', ['e-1']),
+    nextQuestion: { question: 'Would you like 9000 units?', reason: 'detail' } },
+}).reason, 'unsupported_numeric_claim', 'Follow-up numbers also require grounding');
+assert.equal(numericCheck('Service Alpha.', {
+  maximumSpeechCharacters: 20,
+  decision: { ...response('Service Alpha.', ['e-1']),
+    nextQuestion: { question: 'More detail?', reason: 'detail' } },
+}).reason, 'speech_budget_exceeded', 'Budget includes the complete follow-up');
+assert.equal(validateTemplateEngineOutput({
+  phase: 'post_search', decision: clarify('Which service?', []),
+  ambiguity: { required: true, kind: 'unresolved_published_entity', candidates: [] },
+  semanticClaimValidation: { supported: true, requestedFactAddressed: false },
+  claimValidationRequired: true,
+}).reason, 'irrelevant_or_unsupported_clarification');
 for (const text of ['3200', '3,200', '3200.00', '3,200.00', '3.200,00',
   '123,456.50', '1,23,456.50', '123456,50', '0.1250']) {
   assert.equal(numericCheck(`Published value is ${text}.`).valid, true, text);

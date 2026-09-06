@@ -682,13 +682,17 @@ export async function retrieveTemplateEngineEvidence({
   preloadedArtifacts = null, conversationGuidance = null,
   latestUtterance = null,
   contextualMemoryVerified = false,
+  requestMeaning = null,
 } = {}, dependencies = {}) {
   const startedAt = performance.now();
+  const resolutionUtterance = requestMeaning?.kind === 'published_welcome_continuation'
+    ? requestMeaning.query : latestUtterance;
   if (!contextualMemoryVerified) {
     state = { ...state, lastReferencedRecordIds: [], comparisonRecordIds: [] };
     if (searchDecision?.search) searchDecision = { ...searchDecision, search: {
       ...searchDecision.search, preferredRecordIds: [], contextualReference: null,
-      query: latestUtterance || searchDecision.search.query,
+      query: requestMeaning?.kind === 'published_welcome_continuation'
+        ? requestMeaning.query : latestUtterance || searchDecision.search.query,
     } };
   }
   const normalizedSearch = normalizeTemplateEngineSearchDecision(searchDecision, state);
@@ -731,11 +735,11 @@ export async function retrieveTemplateEngineEvidence({
   ));
   const exactCandidates = exactPublishedCandidates(
     { ...artifacts, bundles: scopedBundles }, input,
-    { ...search, query: latestUtterance || search.query }, 20, conversationGuidance,
+    { ...search, query: resolutionUtterance || search.query }, 20, conversationGuidance,
   );
   let entityResolution = scopedBundles.length
     ? (dependencies.resolveEntityRoute ?? resolvePublishedEntityRoute)(
-      latestUtterance ? { ...input, utterance: latestUtterance } : input, scopedBundles, {
+      resolutionUtterance ? { ...input, utterance: resolutionUtterance } : input, scopedBundles, {
         confidenceConfiguration: dependencies.confidenceConfiguration,
       },
     ) : null;
@@ -759,7 +763,7 @@ export async function retrieveTemplateEngineEvidence({
       const identity = `${normalized(bundle.knowledgeBaseId)}:${bundle.publicationRevision}:${key}`;
       vocabulary.set(identity, new Set(searchableTokens(publishedNameText(forms.join(' ')))));
     }
-    const queryTokens = new Set(searchableTokens(publishedNameText(latestUtterance || search.query)));
+    const queryTokens = new Set(searchableTokens(publishedNameText(resolutionUtterance || search.query)));
     const distinctive = exactCandidates.filter((candidate) => {
       if (candidate.recordType !== 'CATALOG_CATEGORY' || !candidate.evidenceRecordIds?.length
         || candidate.score >= 0.98) return false;
@@ -775,8 +779,8 @@ export async function retrieveTemplateEngineEvidence({
   }
   // Current named operands must reach fusion too: correcting only the exact
   // lookup still lets a rewritten single-subject query discard other operands.
-  if (latestUtterance && exactCatalog.length) {
-    search = Object.freeze({ ...search, query: latestUtterance,
+  if (resolutionUtterance && exactCatalog.length) {
+    search = Object.freeze({ ...search, query: resolutionUtterance,
       contextualReference: null, preferredRecordIds: Object.freeze([]) });
     searchDecision = Object.freeze({ ...searchDecision, search });
   }

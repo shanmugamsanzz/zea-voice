@@ -62,6 +62,39 @@ const verifiedEvidence = Object.freeze([
   }),
 ]);
 
+// A true price is not a category overview. Repair must receive the specific
+// relevance failure even though every original fact was supported.
+{
+  let attempts = 0;
+  const overview = 'First Service offers Delta. More detail?';
+  const result = await respondToTemplateEngineSearch({
+    mainPrompt, latestUtterance: 'Give an overview of the available services', state, scope,
+    searchDecision: { ...searchDecision, search: { ...searchDecision.search, requestedFact: 'overview' } },
+    verifiedEvidence: [{ ...verifiedEvidence[0], content: 'First Service costs 3200 units and offers Delta.',
+      publishedAttributePaths: ['overview', 'price'] }],
+    maximumSpeechCharacters: overview.length,
+  }, {
+    tenantBoundaryVerified: true,
+    validateGroundedClaims: async ({ response }) => ({ supported: true,
+      requestedFactAddressed: response.includes('Delta'),
+      reason: response.includes('Delta') ? null : 'Price alone does not answer the requested overview',
+    }),
+    invokeStructuredLlm: async ({ messages }) => {
+      attempts += 1;
+      assert.ok(messages[0].content.includes('category or service overviews'));
+      if (attempts > 1) {
+        assert.ok(messages.at(-1).content.includes('Price alone does not answer the requested overview'));
+        assert.ok(messages.at(-1).content.includes(`${overview.length} characters`));
+      }
+      return { outputParsed: { decision: 'RESPONSE',
+        response: attempts === 1 ? 'The price is 3200 units.' : overview,
+        clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null } };
+    },
+  });
+  assert.equal(attempts, 2);
+  assert.equal(result.decision.response, overview);
+}
+
 let numericRepairCalls = 0;
 for (const decision of ['CLARIFY', 'NO_MATCH', 'RESPONSE']) {
   let coverageChecked = false;

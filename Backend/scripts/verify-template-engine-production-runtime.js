@@ -11,6 +11,32 @@ import {
 import { recordTemplateEngineTurnMetrics, templateEngineAudioPercentiles } from '../src/voice/interaction/template-engine-observability.js';
 import { instrumentTemplateEngineTurn } from '../src/voice/interaction/template-engine-turn-timing.js';
 import { reviewRememberedReference } from '../src/voice/interaction/template-engine-reference-review.js';
+import { resolveRequestMeaning } from '../src/voice/interaction/template-engine-request-meaning.js';
+
+const welcomeMeaningInput = { latestUtterance: 'Yes', welcomeContinuation: {
+  pendingQuestion: { text: 'Is this the account holder?' },
+  candidates: [{ recordId: 'published-next', purpose: 'Explain available services.' }],
+} };
+for (const output of [null, 'malformed', { continuation: true, guidanceRecordId: 'invented',
+  query: 'services', requestedFact: 'overview' }, { continuation: true, guidanceRecordId: 'published-next',
+  query: {}, requestedFact: 'overview' }]) {
+  assert.equal((await resolveRequestMeaning(welcomeMeaningInput, async () => output)).kind, 'direct_request');
+}
+for (const latestUtterance of ['No thanks', 'Wrong person', 'No, I meant another service',
+  'What services do you offer?', 'என்னென்ன சேவைகள் இருக்கு?']) {
+  const meaning = await resolveRequestMeaning({ ...welcomeMeaningInput, latestUtterance }, async (request) => {
+    assert.ok(request.messages[0].content.includes('new request, correction, refusal or wrong-person'));
+    return { continuation: false, guidanceRecordId: null, query: null, requestedFact: null };
+  });
+  assert.equal(meaning.originalUtterance, latestUtterance);
+  assert.equal(meaning.publishedNextStep, null);
+}
+assert.equal((await resolveRequestMeaning({ latestUtterance: 'Show all services' }, async () => {
+  throw new Error('Ordinary direct requests need no welcome review');
+})).originalUtterance, 'Show all services');
+await assert.rejects(() => resolveRequestMeaning(welcomeMeaningInput, async () => {
+  throw Object.assign(new Error('cancelled'), { name: 'AbortError' });
+}), { name: 'AbortError' });
 
 let validationInvocations = 0;
 const timingEvents = [];
@@ -606,6 +632,8 @@ const guidanceArtifacts = {
 let guidanceSelectedIds = [];
 const guidanceRetrieval = await retrieveTemplateEngineEvidence({
   auth: { tenantId }, scope, callId: 'call-guidance', usageDirection: 'inbound',
+  latestUtterance: 'Yes Madam',
+  requestMeaning: { kind: 'published_welcome_continuation', query: 'Show the configured overview' },
   language: 'en', searchDecision: {
     ...searchDecision,
     search: {
@@ -619,9 +647,10 @@ const guidanceRetrieval = await retrieveTemplateEngineEvidence({
   },
 }, {
   loadArtifacts: async () => guidanceArtifacts,
-  searchCandidates: async () => ({
-    channels: { structured: [], bm25: [], qdrant: [] },
-  }),
+  searchCandidates: async ({ input }) => {
+    assert.equal(input.utterance, 'Show the configured overview');
+    return { channels: { structured: [], bm25: [], qdrant: [] } };
+  },
   hydrateEvidence: async ({ retrieval: selected }) => {
     guidanceSelectedIds = selected.candidates.map((entry) => entry.recordId);
     assert.equal(guidanceSelectedIds.includes('guidance-overview'), true);
@@ -817,6 +846,51 @@ const referenceInput = { latestUtterance: 'More details?',
   search: { preferredRecordIds: ['record-1'], contextualReference: 'Tenant Item' },
   state: { recentCompleteTurns: [{ role: 'assistant', content: 'Tenant Item details' }] } };
 assert.equal(await reviewRememberedReference(referenceInput, async () => ({ relation: 'invalid' })), false);
+{
+  let calls = 0;
+  let coverageChecked = false;
+  const result = await runTemplateEngineProductionTurn({ scope, latestUtterance: 'Yes Madam',
+    mainPrompt: 'Follow published steps.', assignedTools: [], informationFields: [],
+    pendingQuestion: { key: 'configured_welcome_question', text: 'Is this the account holder?' },
+  }, {
+    persistWorkflowState: async () => {},
+    executeAuthorizedTool: async () => { throw new Error('Welcome is not tool consent'); },
+    validateToolResultSpeechClaims: async () => ({ supported: true }),
+    loadPublishedContext: async () => ({ scope, publishedWorkflows: [], artifacts: {},
+      publishedConversationGuidance: [{ recordId: 'next-step', recordType: 'CONVERSATION_NODE', published: true,
+        tenantId, agentId, knowledgeBaseId, publicationRevision: 4,
+        purpose: 'After acceptance explain the available services.', response: 'Explain available services.',
+        nextQuestion: null }] }),
+    invokeStructuredLlm: async (request) => {
+      if (request.responseFormat.name === 'template_engine_welcome_meaning') return { outputParsed: {
+        continuation: true, guidanceRecordId: 'next-step', query: 'available services', requestedFact: 'available services',
+      } };
+      if (++calls === 1) return searchDecision;
+      assert.ok(coverageChecked);
+      assert.ok(request.messages[0].content.includes('published_welcome_continuation'));
+      return { decision: 'RESPONSE', response: 'Tenant Item costs 125.', clarification: null,
+        evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null };
+    },
+    retrieveEvidence: async (input) => {
+      assert.equal(input.latestUtterance, 'Yes Madam');
+      assert.equal(input.searchDecision.search.query, 'available services');
+      assert.equal(input.requestMeaning.pendingWelcomeQuestion.text, 'Is this the account holder?');
+      return retrieval;
+    },
+    validateRequestedEntityCoverage: async (input) => {
+      coverageChecked = true;
+      assert.equal(input.requestMeaning.publishedNextStep.recordId, 'next-step');
+      assert.equal(input.latestUtterance, 'Yes Madam');
+      return { resolved: true };
+    },
+    validateGroundedClaims: async (input) => {
+      assert.equal(input.requestMeaning.kind, 'published_welcome_continuation');
+      return { supported: true, requestedFactAddressed: true };
+    },
+  });
+  assert.equal(result.decision.decision, 'RESPONSE');
+  assert.equal(result.toolExecuted, false);
+}
 assert.equal(await reviewRememberedReference(referenceInput, async () => 'not json'), false);
 await assert.rejects(() => reviewRememberedReference(referenceInput, async () => {
   throw Object.assign(new Error('cancelled'), { name: 'AbortError' });

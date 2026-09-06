@@ -143,6 +143,7 @@ export async function validateTemplateEngineClaims({
   decision = null, searchInterpretation = null, latestUtterance = null, citedEvidence = null,
   contextualReferenceVerified = false,
   ambiguity = null,
+  requestMeaning = null,
 } = {}, dependencies = {}) {
   if (decision === 'RESPONSE' && searchInterpretation
     && (!Array.isArray(citedEvidence ?? evidence) || !(citedEvidence ?? evidence).length)) {
@@ -155,12 +156,16 @@ export async function validateTemplateEngineClaims({
   const reference = verifiedToolResult
     ? { kind: 'verified_tool_result', verifiedToolResult, callerValues }
     : { kind: 'published_evidence', evidence,
-      citedEvidence: citedEvidence ?? evidence, searchInterpretation, latestUtterance, contextualReferenceVerified, ambiguity };
+      citedEvidence: citedEvidence ?? evidence, searchInterpretation, latestUtterance, contextualReferenceVerified, ambiguity, requestMeaning };
   const completion = await dependencies.invokeStructuredLlm(Object.freeze({
     messages: Object.freeze([Object.freeze({
       role: 'system',
       content: [
         'Validate caller-facing speech against only the supplied reference JSON.',
+        'Evaluate relevance against the original current request (or its reviewed published welcome continuation), not only searchInterpretation.requestedFact: a rewritten attribute must not replace what the caller actually asked. Set requestedFactAddressed=false for a true but irrelevant answer.',
+        'Consecutive list labels such as 1. and 2) enumerate presentation items, not published quantities. Do not reject those labels for missing numeric evidence. Still validate every factual quantity, price, age, range, rank, ordinal, test count and number embedded in each item against its cited evidence; numbering does not establish those facts.',
+        'A category overview may concisely identify the relevant published options without enumerating every test, price or preparation detail. A partial summary must not claim completeness. Any appended question must be relevant and grounded; ask clarification only for genuine uncertainty in meaning, not because a clear request is broad or its answer is long.',
+        'For a reviewed published_welcome_continuation, evaluate relevance against requestMeaning.pendingWelcomeQuestion and publishedNextStep, not the literal acknowledgement alone. Guidance defines the informational next step but facts still require cited evidence. For direct overview requests, the response must describe the requested available set rather than substitute one unrelated option.',
         'For CLARIFY with ambiguity.required=true, a neutral question asking which option, category or action the caller means is supported without factual evidence. It resolves the request rather than answering it; do not demand package details to approve that question. Set requestedFactAddressed=true when it asks for the missing identity.',
         'A quoted or clearly attributed repetition of caller wording in a clarification is not a claim that a published entity exists. Introducing a named option, mapping caller wording to a published name, or asserting availability, suitability, price or other facts still requires verified evidence. With no verified candidates, ask an open question without proposing names or asserting absence.',
         'Non-factual conversational speech such as a greeting, acknowledgement, courtesy response, pause handling or presence check may be supported without published evidence.',
@@ -181,7 +186,7 @@ export async function validateTemplateEngineClaims({
         'For CLARIFY, requestedFactAddressed is true only when the question resolves a genuine ambiguity that prevents answering the requested fact.',
         'For NO_MATCH, requestedFactAddressed is true only when the speech neutrally says that the supplied evidence does not provide the requested fact.',
         'If the supplied evidence does contain and answer the requested fact, NO_MATCH is unsupported and requestedFactAddressed must be false.',
-        'When no requestedFact is supplied, set requestedFactAddressed to true.',
+        'When no requestedFact is supplied, evaluate requestedFactAddressed against the current utterance or reviewed continuation if present; only default to true when no request context is supplied.',
         'For CLARIFY, validate every factual statement in the question and every named candidate against the supplied reference.',
         'For NO_MATCH, allow a neutral statement that the supplied published information does not contain the requested detail. Reject speech that turns missing evidence into a real-world negative claim, including claims that something does not exist, is unavailable, is unnecessary, is not included, or is zero.',
         'Do not require one evidence record to contain every compared entity when each cited record supports its own entity and attributes.',

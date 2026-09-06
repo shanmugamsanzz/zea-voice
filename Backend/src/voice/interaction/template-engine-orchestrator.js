@@ -629,6 +629,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
   if (dependencies.ambiguity?.required !== true && dependencies.validateRequestedEntityCoverage) {
     const coverage = await dependencies.validateRequestedEntityCoverage({
       latestUtterance: base.latestUtterance, searchInterpretation: search.value.search,
+      requestMeaning: input.requestMeaning ?? null,
       contextualReferenceVerified: input.contextualMemoryVerified === true,
       evidence: citations.evidence,
     });
@@ -648,6 +649,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
   const turnInput = Object.freeze({
     latestUtterance: base.latestUtterance,
     state: base.state,
+    requestMeaning: input.requestMeaning ?? null,
     searchInterpretation: search.value.search,
     requestedEntityRecordIds: requiredEntityRecordIds,
     verifiedEvidence: citations.evidence,
@@ -664,6 +666,8 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     speechBudgetInstruction(input.maximumSpeechCharacters),
     'Distinguish caller context from published facts. You may acknowledge a fact the caller stated, but it cannot establish eligibility, suitability, pricing or any business policy. For multi-part questions, answer the supported requested parts and identify the specific missing detail without inferring a negative or positive answer. Do not replace available information with a blanket NO_MATCH.',
     'Answer the requestedFact only when it is explicitly supported by those supplied facts.',
+    'Preserve the original request in requestMeaning and latestUtterance. A search rewrite must not replace an overview with a single unrelated item or replace a focused attribute question with a full record recital. Answer the current request concisely using the cited records.',
+    'Broad but clear requests require a useful summary, not clarification merely to reduce answer length. Ask one relevant clarification only when meaning is genuinely uncertain; do not invent candidates.',
     'A RESPONSE must directly answer searchInterpretation.requestedFact before adding any other supported information. A true answer about a different attribute is incomplete.',
     'An absent attribute means the published evidence does not provide that information. Absence never proves a negative value, non-existence, non-requirement, non-availability, or zero.',
     'For NO_MATCH, describe only that the requested information is not present in the supplied published evidence; do not assert that the underlying real-world attribute is false.',
@@ -842,6 +846,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       contextualReferenceVerified: input.contextualMemoryVerified === true,
       searchInterpretation: search.value.search,
       ambiguity: dependencies.ambiguity ?? null,
+      requestMeaning: input.requestMeaning ?? null,
     }));
   };
   semanticClaimValidation = await validateClaims(groundedDecision);
@@ -876,6 +881,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
   const initialNumericValidationDetails = outputValidation.reason === 'unsupported_numeric_claim'
     ? outputValidation.details : null;
   const initialSemanticValidationReason = semanticClaimValidation?.supported === false
+    || semanticClaimValidation?.requestedFactAddressed === false
     ? semanticClaimValidation.reason ?? null : null;
   const budgetRepairRequired = outputValidation.reason === 'speech_budget_exceeded';
   if (!outputValidation.valid && !firstInvalidReason) {

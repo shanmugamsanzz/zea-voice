@@ -14,6 +14,7 @@ import {
   configuredWorkflowToolIdentifier,
 } from '../../knowledge-bases/workflow-tool-authorization.js';
 import { selectApplicableConversationGuidance, welcomeContinuationContext } from './template-engine-conversation-guidance.js';
+import { resolveRequestMeaning } from './template-engine-request-meaning.js';
 import { reviewRememberedReference } from './template-engine-reference-review.js';
 import {
   repairTemplateEngineFollowUp,
@@ -597,7 +598,12 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     });
   }
 
-  const contextualMemoryVerified = await reviewRememberedReference({
+  const requestMeaning = await resolveRequestMeaning({ latestUtterance: input.latestUtterance,
+    welcomeContinuation: common.welcomeContinuation, search: first.search }, dependencies.invokeStructuredLlm);
+  const welcomeVerified = requestMeaning.kind === 'published_welcome_continuation';
+  if (welcomeVerified) first = { ...first, search: { ...first.search, query: requestMeaning.query,
+    requestedFact: requestMeaning.requestedFact, contextualReference: null, preferredRecordIds: [] } };
+  const contextualMemoryVerified = !welcomeVerified && await reviewRememberedReference({
     latestUtterance: input.latestUtterance, search: first.search, state,
   }, dependencies.invokeStructuredLlm);
   const searchState = contextualMemoryVerified ? state
@@ -606,7 +612,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     first = { ...first, search: { ...first.search, query: input.latestUtterance,
       contextualReference: null, preferredRecordIds: [] } };
   }
-  const preRetrievalConversationGuidance = selectApplicableConversationGuidance({
+  const preRetrievalConversationGuidance = requestMeaning.publishedNextStep ?? selectApplicableConversationGuidance({
     publishedConversationGuidance: publishedContext.publishedConversationGuidance ?? [],
     scope: publishedContext.scope,
     latestUtterance: input.latestUtterance,
@@ -627,7 +633,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   // Speculation is an opportunistic optimization, never a dependency of the
   // foreground answer. Reuse only completed, compatible verified evidence.
   const speculativeResult = guidanceCompatible ? completedSpeculativeResult : null;
-  const usedSpeculativeRetrieval = guidanceCompatible
+  const usedSpeculativeRetrieval = !welcomeVerified && guidanceCompatible
     && speculativeEvidenceCompatible(speculativeResult, first, input);
   const retrieval = usedSpeculativeRetrieval ? speculativeResult : await dependencies.retrieveEvidence({
     auth: input.auth,
@@ -640,6 +646,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     state: searchState,
     runtimeProfile: input.runtimeProfile,
     contextualMemoryVerified,
+    requestMeaning,
     preloadedArtifacts: publishedContext.artifacts,
     conversationGuidance: preRetrievalConversationGuidance,
   });
@@ -667,7 +674,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     throw new AppError(503, 'Requested evidence hydration is incomplete',
       'TEMPLATE_ENGINE_REQUESTED_ENTITY_HYDRATION_INCOMPLETE');
   }
-  const postSearchConversationGuidance = selectApplicableConversationGuidance({
+  const postSearchConversationGuidance = requestMeaning.publishedNextStep ?? selectApplicableConversationGuidance({
     publishedConversationGuidance: publishedContext.publishedConversationGuidance ?? [],
     scope: publishedContext.scope,
     latestUtterance: input.latestUtterance,
@@ -688,6 +695,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     state: searchState,
     searchDecision: first,
     contextualMemoryVerified,
+    requestMeaning,
     verifiedEvidence: retrieval.evidence,
     scope: retrieval.scope,
     informationUnavailableResponse: input.informationUnavailableResponse,
@@ -702,10 +710,10 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       retrieval.entityResolution, retrieval.evidence, retrieval.searchClassification,
     ),
     validateGroundedClaims: ({
-      response, decision, selectedEvidence, citedEvidence, searchInterpretation, latestUtterance, contextualReferenceVerified, ambiguity,
+      response, decision, selectedEvidence, citedEvidence, searchInterpretation, latestUtterance, contextualReferenceVerified, ambiguity, requestMeaning,
     }) => (
       dependencies.validateGroundedClaims({
-        response, decision, selectedEvidence, citedEvidence, searchInterpretation, latestUtterance, contextualReferenceVerified, ambiguity,
+        response, decision, selectedEvidence, citedEvidence, searchInterpretation, latestUtterance, contextualReferenceVerified, ambiguity, requestMeaning,
       })
     ),
     onDecisionRepair: dependencies.onPostSearchDecisionRepair,

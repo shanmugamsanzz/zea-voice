@@ -2561,7 +2561,7 @@ export class RealtimeConversationOrchestrator {
           return verified;
         },
         validateGroundedClaims: ({
-          response, decision, selectedEvidence, citedEvidence, searchInterpretation, latestUtterance, contextualReferenceVerified, ambiguity,
+          response, decision, selectedEvidence, citedEvidence, searchInterpretation, latestUtterance, contextualReferenceVerified, ambiguity, requestMeaning,
         }) => {
           return validateTemplateEngineClaims({
             speech: response,
@@ -2571,6 +2571,7 @@ export class RealtimeConversationOrchestrator {
             searchInterpretation,
             latestUtterance,
             ambiguity,
+            requestMeaning,
             contextualReferenceVerified,
           }, { invokeStructuredLlm });
         },
