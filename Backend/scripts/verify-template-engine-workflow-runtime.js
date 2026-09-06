@@ -71,6 +71,28 @@ const activated = activateTemplateEngineWorkflow({
   ...common, toolDecision,
   state: { activeWorkflowId: null, collectedToolFields: {}, confirmationStatus: null },
 });
+const { templateEngineToolSchemas } = await import('../src/voice/interaction/template-engine-tool-schemas.js');
+const { assignedToolInputSchema } = await import('../src/knowledge-bases/workflow-tool-authorization.js');
+for (const key of ['inputSchema', 'input_schema', 'parametersSchema', 'parameters_schema']) {
+  const loadedTool = { ...tool, inputSchema: undefined, configuration: { [key]: tool.inputSchema } };
+  assert.deepEqual(templateEngineToolSchemas([loadedTool])[0].inputSchema, tool.inputSchema);
+  assert.deepEqual(assignedToolInputSchema(loadedTool), tool.inputSchema);
+  const result = activateTemplateEngineWorkflow({ ...common, assignedTools: [loadedTool], toolDecision,
+    state: { collectedToolFields: { full_name: 'Valid Name', quantity: 2 } } });
+  assert.equal(result.progress.complete, true, 'Compatible previously collected fields must be reused');
+  assert.equal(result.state.confirmationStatus, 'awaiting_confirmation', 'Loading a schema never authorizes execution');
+  assert.deepEqual(result.configuration.fields.map((field) => field.question), fields.map((field) => field.question));
+}
+assert.deepEqual(templateEngineToolSchemas([tool])[0].inputSchema, tool.inputSchema,
+  'Routing must preserve a top-level schema, not replace it with empty defaults');
+assert.deepEqual(assignedToolInputSchema({ inputSchema: {}, configuration: { inputSchema: tool.inputSchema } }), {},
+  'An explicitly configured empty schema must not be silently replaced or synthesized');
+for (const informationFields of [[...fields, fields[0]], [...fields, {
+  key: 'unmapped_optional', requiredAction: 'create_record', required: false, question: 'Optional value?',
+}]]) {
+  assert.throws(() => activateTemplateEngineWorkflow({ ...common, informationFields, toolDecision }),
+    { code: 'TEMPLATE_ENGINE_WORKFLOW_FIELD_CONFIGURATION_MISSING' });
+}
 for (const scenario of [
   { informationFields: [], expected: [
     { field: 'full_name', reason: 'missing_input_field' },

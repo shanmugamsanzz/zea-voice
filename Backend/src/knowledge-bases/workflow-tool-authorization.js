@@ -26,7 +26,8 @@ export function assignedToolIdentifiers(tool = {}) {
 
 export function assignedToolInputSchema(tool = {}) {
   const configuration = object(tool.configuration);
-  return object(tool.inputSchema ?? configuration.inputSchema ?? configuration.input_schema);
+  return object(tool.inputSchema ?? configuration.inputSchema ?? configuration.input_schema
+    ?? configuration.parametersSchema ?? configuration.parameters_schema);
 }
 
 function toolSchemaIssue(tool = {}) {

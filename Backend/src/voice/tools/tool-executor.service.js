@@ -1,6 +1,7 @@
 import { env } from '../../config/env.js';
 import { logger } from '../../config/logger.js';
 import { AppError } from '../../middleware/errors.js';
+import { assignedToolInputSchema } from '../../knowledge-bases/workflow-tool-authorization.js';
 import { validateToolArguments, validateToolHeaders, validateWebhookEndpoint } from './tool-security.js';
 
 function safeName(value) {
@@ -35,7 +36,7 @@ async function configuration(tool, dependencies = {}) {
   validateToolHeaders(tool.secretConfiguration?.headers ?? tool.secretConfiguration ?? {}, { secret: true });
   if (!Object.keys(headers).some((key) => key.toLowerCase() === 'content-type')) headers['content-type'] = 'application/json';
   const timeoutMs = Math.max(1000, Math.min(30000, Number(value.timeoutMs ?? env.VOICE_TOOL_TIMEOUT_MS)));
-  return { url, method, headers, timeoutMs, inputSchema: value.inputSchema ?? value.input_schema ?? {} };
+  return { url, method, headers, timeoutMs, inputSchema: assignedToolInputSchema({ configuration: value }) };
 }
 
 async function boundedPayload(response) {

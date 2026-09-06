@@ -8,6 +8,71 @@ const { RealtimeConversationOrchestrator, configuredTemplateEngineFailureRespons
 const { validateOperationalResponseSettings } = await import('../src/agents/agent.service.js');
 const { createTemplateEngineStructuredInvoker } = await import('../src/voice/realtime-conversation-orchestrator.js');
 const { templateEngineDecisionJsonSchema, validateTemplateEngineDecision } = await import('../src/voice/interaction/template-engine-decision-contract.js');
+const { respondToTemplateEngineSearch } = await import('../src/voice/interaction/template-engine-orchestrator.js');
+const { validateTemplateEngineClaims } = await import('../src/voice/interaction/template-engine-claim-validator.js');
+const { isPendingRequestAcknowledgement } = await import('../src/voice/interaction/template-engine-pending-request.js');
+
+for (const latestUtterance of [
+  'Oncocare package பத்தி சொல்லுங்கன்னு கேட்டேன்',
+  'Kids health checkup பத்தி சொல்ல முடியுமானு கேட்டேன்',
+  'Okay diabetic appointment book பண்ணுங்க',
+  'No, I meant the other option', 'Please answer my earlier question',
+  'இதைத்தான் கேட்டேன் பதில் சொல்லுங்க', 'Price?', 'சொல்ல முடியுமா?',
+  'Explain the selected option',
+]) {
+  assert.equal(await isPendingRequestAcknowledgement({ latestUtterance,
+    pendingRequest: 'Explain the selected option' }, () => assert.fail('Requests must bypass the shortcut reviewer')), false);
+}
+for (const act of ['request', 'correction', 'cancellation', 'refusal', 'field_value', 'uncertain']) {
+  const invoke = createTemplateEngineStructuredInvoker({ cancel() {}, async *stream() {
+    // An inconsistent affirmative boolean must not override the routing act.
+    yield { type: 'text_delta', delta: JSON.stringify({ acknowledgementOnly: true, act, acknowledgementText: 'Continue' }) };
+    yield { type: 'completed', finishReason: 'stop' };
+  } });
+  assert.equal(await isPendingRequestAcknowledgement({ latestUtterance: 'Continue', pendingRequest: 'Explain an option' }, invoke), false);
+}
+assert.equal(await isPendingRequestAcknowledgement({ latestUtterance: 'Okay continue', pendingRequest: 'Explain an option' },
+  async () => ({ outputParsed: { acknowledgementOnly: true, act: 'acknowledgement', acknowledgementText: 'Okay' } })), false);
+assert.equal(await isPendingRequestAcknowledgement({ latestUtterance: 'Selected option', pendingRequest: 'Explain the selected option' },
+  () => assert.fail('Repeated subject words must enter routing')), false);
+
+for (const question of ['Which option do you mean?', 'நீங்கள் எந்தப் பேக்கேஜைக் குறிப்பிடுகிறீர்கள்?']) {
+  for (const rejected of [false, true]) {
+    let generations = 0;
+    const invoke = createTemplateEngineStructuredInvoker({ cancel() {}, async *stream(request) {
+      let output;
+      if (request.responseFormat.name === 'template_engine_claim_validation') {
+        assert.ok(request.messages[0].content.includes('supported without factual evidence'));
+        assert.ok(request.messages[0].content.includes('"ambiguity":{"required":true'));
+        output = { supported: !rejected, successClaimed: false, requestedFactAddressed: !rejected,
+          reason: rejected ? 'unsupported_named_option' : null };
+      } else {
+        generations += 1;
+        assert.deepEqual(request.responseFormat.schema.properties.decision.enum, ['CLARIFY']);
+        output = { decision: 'CLARIFY', response: '', evidenceIds: [], nextQuestion: null,
+          stateUpdate: null, clarification: { question: rejected ? 'Did you mean Unpublished Premium?' : question,
+            reason: null, candidates: [] } };
+      }
+      yield { type: 'text_delta', delta: JSON.stringify(output) };
+      yield { type: 'completed', finishReason: 'stop' };
+    } });
+    const pending = respondToTemplateEngineSearch({ mainPrompt: 'Clarify unresolved requests.',
+      latestUtterance: 'Unclear option details', state: {}, verifiedEvidence: [],
+      scope: { tenantId: 'tenant-a', agentId: 'agent-a', publications: [{ knowledgeBaseId: 'kb-a', publicationRevision: 1 }] },
+      informationUnavailableResponse: 'Information unavailable.',
+      searchDecision: { decision: 'SEARCH', response: '', clarification: null, tool: null,
+        nextQuestion: null, stateUpdate: null, search: { query: 'Unclear option', requestedFact: 'details',
+          contextualReference: null, preferredRecordIds: [] } },
+    }, { tenantBoundaryVerified: true, invokeStructuredLlm: invoke,
+      ambiguity: { required: true, kind: 'unresolved_published_entity', candidates: [] },
+      validateGroundedClaims: ({ response, selectedEvidence, ...rest }) => validateTemplateEngineClaims({
+        ...rest, speech: response, evidence: selectedEvidence }, { invokeStructuredLlm: invoke }),
+    });
+    if (rejected) await assert.rejects(pending, { code: 'TEMPLATE_ENGINE_OUTPUT_INVALID' });
+    else assert.equal((await pending).decision.clarification.question, question);
+    assert.equal(generations, rejected ? 2 : 1);
+  }
+}
 
 const initiation = { decision: 'TOOL', response: '', clarification: null, search: null,
   tool: { name: 'configured_action', arguments: {} }, nextQuestion: null, stateUpdate: null };
@@ -150,9 +215,14 @@ for (const mode of ['dedicated', 'neutral', 'unconfigured', 'cancelled', 'workfl
     async *stream(request) {
       const name = request.responseFormat?.name;
       let output;
-      if (name === 'template_engine_pending_request_review') {
+      if (name === 'template_engine_entity_coverage') {
         const data = JSON.parse(request.messages.at(-1).content);
-        output = { acknowledgementOnly: ['Hello', 'ஆ'].includes(data.latestUtterance) };
+        output = { resolved: true, evidenceIds: data.evidence.map((entry) => entry.evidenceId) };
+      } else if (name === 'template_engine_pending_request_review') {
+        const data = JSON.parse(request.messages.at(-1).content);
+        const acknowledgementOnly = ['Hello', 'ஆ'].includes(data.latestUtterance);
+        output = { acknowledgementOnly, act: acknowledgementOnly ? 'acknowledgement' : 'request',
+          acknowledgementText: acknowledgementOnly ? data.latestUtterance : '' };
       } else if (routingFailure) {
         output = { ...initiation, stateUpdate: { set: { confirmationStatus: null }, clear: ['activeWorkflowId'] } };
       } else if (configurationFailure) {
@@ -299,7 +369,8 @@ for (const mode of ['dedicated', 'neutral', 'unconfigured', 'cancelled', 'workfl
       await waitFor(() => logs.filter((entry) => entry.stage === 'template_engine.turn_completed').length > before);
       if (routingFailure) assert.equal(orchestrator.pendingTemplateEngineRequest.text, 'Different service price please');
       else {
-        assert.equal(orchestrator.pendingTemplateEngineRequest, null, 'Delivered new answer clears the pending request');
+        assert.equal(orchestrator.pendingTemplateEngineRequest.text, 'Different service price please',
+          'An empty search is unresolved coverage, not a successfully answered absence claim');
         assert.ok(postSearchAttempts > initialAttempts, 'A new question must proceed through normal routing');
       }
       const bounded = logs.filter((entry) => ['template_engine.pending_request_preserved',

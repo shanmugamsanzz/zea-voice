@@ -1,3 +1,5 @@
+import { assignedToolInputSchema } from '../../knowledge-bases/workflow-tool-authorization.js';
+
 const maximumFields = 30;
 
 function object(value) {
@@ -83,8 +85,7 @@ function validFieldKey(value) {
 }
 
 function toolFields(tool = {}) {
-  const schema = object(tool.inputSchema ?? tool.configuration?.inputSchema
-    ?? tool.configuration?.input_schema);
+  const schema = assignedToolInputSchema(tool);
   const properties = object(schema.properties);
   const required = new Set(Array.isArray(schema.required) ? schema.required : []);
   return Object.entries(properties).filter(([key, property]) => (

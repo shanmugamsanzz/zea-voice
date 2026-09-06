@@ -128,6 +128,25 @@ function publishedReferenceSelectors(values = []) {
   });
 }
 
+function publicationCategoryVocabulary(bundle, usageDirection) {
+  const categories = new Map();
+  for (const record of bundle.records ?? []) {
+    if (!['both', normalized(usageDirection)].includes(normalized(record.usage_direction ?? record.usageDirection ?? 'both'))) continue;
+    const metadata = recordMetadata(record);
+    const key = normalized(record.categoryKey ?? record.category_key ?? metadata.categoryKey ?? metadata.category_key);
+    if (!key) continue;
+    const categoryRecord = normalized(record.record_type ?? record.recordType) === 'catalog_category';
+    const forms = textList([record.entity_category, metadata.category,
+      ...(record.entity_category_aliases ?? []), ...(metadata.categoryAliases ?? []),
+      ...(metadata.categorySttForms ?? []), ...(metadata.crossDocumentCategoryAliases ?? []),
+      ...(categoryRecord ? [record.entity_name, metadata.name,
+        ...(record.entity_aliases ?? []), ...(metadata.aliases ?? []), ...(record.publicationAliases ?? [])] : []),
+    ]);
+    categories.set(key, textList([...(categories.get(key) ?? []), ...forms]));
+  }
+  return categories;
+}
+
 export function exactPublishedCandidates(artifacts, input, search, limit = 20, guidance = null) {
   const candidates = [];
   const categoryMatches = new Map();
@@ -135,6 +154,7 @@ export function exactPublishedCandidates(artifacts, input, search, limit = 20, g
   const referenceSelectors = publishedReferenceSelectors(guidance?.catalogReferences);
   for (const bundle of artifacts.bundles ?? []) {
     if (normalized(bundle?.tenantId) !== normalized(input.tenantId)) continue;
+    const categoryVocabulary = publicationCategoryVocabulary(bundle, input.usageDirection);
     for (const record of bundle.records ?? []) {
       const metadata = recordMetadata(record);
       const recordType = cleanText(
@@ -157,6 +177,8 @@ export function exactPublishedCandidates(artifacts, input, search, limit = 20, g
         ...(record.publicationPhoneticForms ?? []),
       ]);
       const categoryForms = textList([
+        ...(categoryVocabulary.get(normalized(record.categoryKey ?? record.category_key
+          ?? metadata.categoryKey ?? metadata.category_key)) ?? []),
         record.entity_category, metadata.category, record.categoryKey, record.category_key,
         metadata.categoryKey, metadata.category_key,
         ...(record.entity_category_aliases ?? []),
@@ -720,11 +742,37 @@ export async function retrieveTemplateEngineEvidence({
   const exactItems = exactCandidates.filter((candidate) => (
     candidate.recordType === 'CATALOG_ITEM' && candidate.matchMethod === 'published_exact'
   ));
-  const exactCatalog = exactItems.length ? exactItems : exactCandidates.filter((candidate) => (
+  let exactCatalog = exactItems.length ? exactItems : exactCandidates.filter((candidate) => (
     candidate.recordType === 'CATALOG_CATEGORY'
     && ['published_exact', 'published_category_exact'].includes(candidate.matchMethod)
     && candidate.score >= 0.98
   ));
+  exactCatalog = [...new Map([...exactCatalog].sort((a, b) =>
+    (a.evidenceRecordIds?.length ?? 0) - (b.evidenceRecordIds?.length ?? 0))
+    .map((candidate) => [candidate.recordType === 'CATALOG_CATEGORY'
+      ? `${candidate.knowledgeBaseId}:${candidate.publicationRevision}:${candidate.categoryKey}`
+      : candidateIdentityKey(candidate, input.tenantId), candidate])).values()];
+  let categoryConfirmation = false;
+  if (!exactCatalog.length) {
+    const vocabulary = new Map();
+    for (const bundle of scopedBundles) for (const [key, forms] of publicationCategoryVocabulary(bundle, input.usageDirection)) {
+      const identity = `${normalized(bundle.knowledgeBaseId)}:${bundle.publicationRevision}:${key}`;
+      vocabulary.set(identity, new Set(searchableTokens(publishedNameText(forms.join(' ')))));
+    }
+    const queryTokens = new Set(searchableTokens(publishedNameText(latestUtterance || search.query)));
+    const distinctive = exactCandidates.filter((candidate) => {
+      if (candidate.recordType !== 'CATALOG_CATEGORY' || !candidate.evidenceRecordIds?.length
+        || candidate.score >= 0.98) return false;
+      const identity = `${normalized(candidate.knowledgeBaseId)}:${candidate.publicationRevision}:${normalized(candidate.categoryKey)}`;
+      const own = vocabulary.get(identity) ?? new Set();
+      return [...own].some((token) => queryTokens.has(token)
+        && [...vocabulary].every(([other, tokens]) => other === identity || !tokens.has(token)));
+    });
+    if (distinctive.length === 1) {
+      exactCatalog = distinctive;
+      categoryConfirmation = true;
+    }
+  }
   // Current named operands must reach fusion too: correcting only the exact
   // lookup still lets a rewritten single-subject query discard other operands.
   if (latestUtterance && exactCatalog.length) {
@@ -738,11 +786,13 @@ export async function retrieveTemplateEngineEvidence({
     const candidate = exactCatalog[0];
     entityResolution = Object.freeze({
       ...entityResolution,
-      candidate: Object.freeze({ ...candidate, explicit: true,
+      candidate: Object.freeze({ ...candidate, explicit: !categoryConfirmation,
         entityType: candidate.recordType === 'CATALOG_ITEM' ? 'ITEM' : 'CATEGORY',
       }),
       candidateNamespace: 'CATALOG',
-      action: 'CONTINUE', requiresCandidateConfirmation: false,
+      action: categoryConfirmation ? 'CONFIRM' : 'CONTINUE', requiresCandidateConfirmation: categoryConfirmation,
+      reason: categoryConfirmation ? 'published_category_distinctive_partial' : 'published_exact_selection',
+      routingCandidates: [],
       ambiguity: Object.freeze({ detected: false, candidates: Object.freeze([]) }),
     });
   }
@@ -848,8 +898,8 @@ export async function retrieveTemplateEngineEvidence({
       publications: artifacts.publications,
     },
   );
-  if (entityConstraint.comparison || (entityResolution?.candidate?.entityType === 'CATEGORY'
-    && entityResolution.candidate.evidenceRecordIds?.length)) {
+  if (!categoryConfirmation && (entityConstraint.comparison || (entityResolution?.candidate?.entityType === 'CATEGORY'
+    && entityResolution.candidate.evidenceRecordIds?.length))) {
     // Multiple deliberately selected operands are not alternative identities.
     entityResolution = Object.freeze({ ...entityResolution, candidate: null,
       action: 'CONTINUE', requiresCandidateConfirmation: false,
@@ -1007,7 +1057,8 @@ export async function retrieveTemplateEngineEvidence({
     authoritative,
     entityResolution,
     searchClassification: Object.freeze({
-      searchKind: entityConstraint.comparison ? templateEngineSearchKinds.COMPARISON : route.searchKind,
+      searchKind: categoryConfirmation ? templateEngineSearchKinds.CATEGORY
+        : entityConstraint.comparison ? templateEngineSearchKinds.COMPARISON : route.searchKind,
       resolvedEntityType: entityResolution?.candidate?.entityType ?? null,
       resolvedNamespace: entityResolution?.candidateNamespace ?? null,
       requestedFact: search.requestedFact,

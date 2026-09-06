@@ -73,7 +73,9 @@ function fieldsForTool(informationFields, tool, schema) {
     Object.hasOwn(properties, fieldKey(field))
   ));
   const byKey = new Map(configured.map((field) => [fieldKey(field), field]));
-  const missingConfiguration = required.filter((key) => !Object.hasOwn(properties, key)
+  const checkedKeys = [...new Set([...required,
+    ...assignedFields.filter((field) => identity(field.requiredAction)).map(fieldKey)])];
+  const missingConfiguration = checkedKeys.filter((key) => !Object.hasOwn(properties, key)
     || !byKey.has(key)
     || !cleanText(byKey.get(key)?.question, 1_000));
   if (missingConfiguration.length) {
@@ -87,6 +89,11 @@ function fieldsForTool(informationFields, tool, schema) {
         })),
       });
   }
+  const duplicates = [...byKey.keys()].filter((key) => configured.filter((field) => fieldKey(field) === key).length > 1);
+  if (duplicates.length) throw new AppError(409, 'Tool fields must have unambiguous UI configuration',
+    'TEMPLATE_ENGINE_WORKFLOW_FIELD_CONFIGURATION_MISSING', {
+      fields: duplicates, fieldIssues: duplicates.map((field) => ({ field, reason: 'duplicate_input_field' })),
+    });
   return Object.freeze([...byKey.values()].map((field) => {
     const key = fieldKey(field);
     return Object.freeze({

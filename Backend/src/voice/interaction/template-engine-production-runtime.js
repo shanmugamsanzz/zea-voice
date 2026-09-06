@@ -702,13 +702,15 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       retrieval.entityResolution, retrieval.evidence, retrieval.searchClassification,
     ),
     validateGroundedClaims: ({
-      response, decision, selectedEvidence, citedEvidence, searchInterpretation, latestUtterance, contextualReferenceVerified,
+      response, decision, selectedEvidence, citedEvidence, searchInterpretation, latestUtterance, contextualReferenceVerified, ambiguity,
     }) => (
       dependencies.validateGroundedClaims({
-        response, decision, selectedEvidence, citedEvidence, searchInterpretation, latestUtterance, contextualReferenceVerified,
+        response, decision, selectedEvidence, citedEvidence, searchInterpretation, latestUtterance, contextualReferenceVerified, ambiguity,
       })
     ),
     onDecisionRepair: dependencies.onPostSearchDecisionRepair,
+    validateRequestedEntityCoverage: dependencies.validateRequestedEntityCoverage,
+    onEntityCoverage: dependencies.onEntityCoverage,
     onPostSearchDiagnostics: dependencies.onPostSearchDiagnostics,
   });
   if (answered.decision.decision === 'SEARCH') {

@@ -5,6 +5,7 @@ import {
 } from '../src/voice/interaction/template-engine-post-search-contract.js';
 import { respondToTemplateEngineSearch } from '../src/voice/interaction/template-engine-orchestrator.js';
 import { classifyTemplateEngineTurnError } from '../src/voice/interaction/template-engine-error-classification.js';
+import { validateRequestedEntityCoverage } from '../src/voice/interaction/template-engine-entity-coverage.js';
 
 for (const code of ['TEMPLATE_ENGINE_OUTPUT_INVALID', 'TEMPLATE_ENGINE_POST_SEARCH_DECISION_INVALID',
   'TEMPLATE_ENGINE_LLM_INVALID_JSON', 'TEMPLATE_ENGINE_CLAIM_VALIDATION_INVALID']) {
@@ -62,6 +63,34 @@ const verifiedEvidence = Object.freeze([
 ]);
 
 let numericRepairCalls = 0;
+for (const decision of ['CLARIFY', 'NO_MATCH', 'RESPONSE']) {
+  let coverageChecked = false;
+  const pending = respondToTemplateEngineSearch({
+    mainPrompt, latestUtterance: 'Explain the requested child category', state, searchDecision, scope, verifiedEvidence,
+  }, {
+    tenantBoundaryVerified: true,
+    validateRequestedEntityCoverage: async (input) => {
+      assert.equal(input.latestUtterance, 'Explain the requested child category');
+      coverageChecked = true;
+      return validateRequestedEntityCoverage(input, async () => ({ outputParsed: { resolved: false, evidenceIds: [] } }));
+    },
+    validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
+    invokeStructuredLlm: async ({ responseFormat }) => {
+      assert.ok(coverageChecked, 'Identity must be checked before any answer generation');
+      assert.deepEqual(responseFormat.schema.properties.decision.enum, ['CLARIFY']);
+      return { outputParsed: { decision, response: decision === 'CLARIFY' ? ''
+        : decision === 'NO_MATCH' ? 'That category is not available.' : 'The price is 3200 units.',
+        clarification: decision === 'CLARIFY' ? { question: 'Which category do you mean?', reason: null, candidates: [] } : null,
+        evidenceIds: decision === 'RESPONSE' ? ['E1'] : [], nextQuestion: null, stateUpdate: null } };
+    },
+  });
+  if (decision === 'CLARIFY') assert.equal((await pending).decision.decision, 'CLARIFY');
+  else await assert.rejects(pending, { code: 'TEMPLATE_ENGINE_OUTPUT_INVALID' });
+}
+assert.equal((await validateRequestedEntityCoverage({ evidence: [] }, () => assert.fail('Empty evidence needs no LLM'))).resolved, false);
+assert.equal((await validateRequestedEntityCoverage({ evidence: [{ evidenceId: 'E1' }] }, async () => ({
+  outputParsed: { resolved: true, evidenceIds: ['invented'] },
+}))).resolved, false);
 let budgetCalls = 0;
 let budgetClaimChecks = 0;
 const budgetAnswer = 'The price is 3200 units. Would you like more detail?';

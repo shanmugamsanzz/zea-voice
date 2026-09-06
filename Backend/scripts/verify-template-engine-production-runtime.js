@@ -419,6 +419,39 @@ for (const language of ['en', 'ta', 'ta-Latn']) {
 }
 
 let sttSelectedIds = [];
+// Generic category vocabulary, not business-name keywords: shared service
+// words must not outrank a category-specific published alias.
+for (const exact of [false, true]) {
+  const categoryRecords = [
+    { record_id: 'junior-category', record_type: 'catalog_category', entity_name: 'Junior Screening',
+      entity_metadata: { categoryKey: 'screening-youth', aliases: ['junior health packages', 'children health checkup'] } },
+    { record_id: 'junior-a', record_type: 'catalog_item', entity_metadata: {
+      name: 'Development Screening', category: 'Junior Screening', categoryKey: 'screening-youth' } },
+    { record_id: 'junior-b', record_type: 'catalog_item', entity_metadata: {
+      name: 'Growth Screening', category: 'Junior Screening', categoryKey: 'screening-youth' } },
+    { record_id: 'general-a', record_type: 'catalog_item', entity_metadata: {
+      name: 'General Health Checkup', category: 'General Health Checkup', categoryKey: 'general' } },
+  ];
+  const result = await retrieveTemplateEngineEvidence({
+    auth: { tenantId }, scope, callId: 'category-vocabulary', usageDirection: 'inbound', language: 'ta',
+    latestUtterance: exact ? 'junior health packages details' : 'junior health checkup details',
+    searchDecision: { ...searchDecision, search: { query: 'General Health Checkup',
+      requestedFact: 'details', contextualReference: null, preferredRecordIds: [] } },
+  }, {
+    loadArtifacts: async () => ({ ...exactArtifacts,
+      bundles: [{ ...exactArtifacts.bundles[0], records: categoryRecords }] }),
+    searchCandidates: async () => ({ channels: { structured: [], bm25: [], qdrant: [] } }),
+    hydrateEvidence: async ({ retrieval: selected }) => {
+      assert.deepEqual(selected.candidates.map((entry) => entry.recordId).sort(), ['junior-a', 'junior-b']);
+      return { evidence: selected.candidates.map((entry) => ({ ...entry, id: entry.recordId,
+        hydrationValidated: true, publicationValidated: true, callerFacing: true,
+        content: 'Published screening detail', provenance: { knowledgeBaseId, publicationRevision: 4 } })) };
+    },
+  });
+  assert.deepEqual([...result.requestedEntityRecordIds].sort(), ['junior-a', 'junior-b']);
+  assert.equal(publishedResolutionAmbiguity(result.entityResolution, result.evidence,
+    result.searchClassification).required, !exact, JSON.stringify({ exact, resolution: result.entityResolution, classification: result.searchClassification }));
+}
 for (const incompleteHydration of [false, true]) {
   const pending = retrieveTemplateEngineEvidence({
     auth: { tenantId }, scope, callId: 'comparison-coverage-guard', usageDirection: 'inbound', language: 'ta',

@@ -1,5 +1,6 @@
 import { withPlatformAdminContext } from '../../infrastructure/database-context.js';
 import { AppError } from '../../middleware/errors.js';
+import { assignedToolInputSchema } from '../../knowledge-bases/workflow-tool-authorization.js';
 import { validateRecoveryReadiness } from '../interaction/recovery-readiness.js';
 import { decryptCredential } from '../../security/credential-crypto.js';
 import { resolveInteractionConfiguration } from '../interaction/interaction-config.js';
@@ -79,9 +80,7 @@ function configuredToolContract(runtimeTools = []) {
     name: tool.name,
     type: tool.type,
     description: tool.description ?? null,
-    inputSchema: tool.configuration?.inputSchema ?? {
-      type: 'object', properties: {}, required: [], additionalProperties: true,
-    },
+    inputSchema: assignedToolInputSchema(tool),
   }));
 }
 

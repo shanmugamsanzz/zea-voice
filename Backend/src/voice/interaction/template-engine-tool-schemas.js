@@ -1,3 +1,5 @@
+import { assignedToolInputSchema } from '../../knowledge-bases/workflow-tool-authorization.js';
+
 function safeToolName(tool, index) {
   const name = String(tool?.name ?? `tool_${index + 1}`).trim()
     .replace(/[^a-zA-Z0-9_-]/gu, '_').slice(0, 64);
@@ -9,9 +11,7 @@ export function templateEngineToolSchemas(tools = []) {
   return tools.map((tool, index) => {
     const configuration = tool.configuration ?? {};
     const name = safeToolName(tool, index);
-    const inputSchema = configuration.inputSchema ?? configuration.input_schema
-      ?? configuration.parametersSchema ?? configuration.parameters_schema
-      ?? { type: 'object', properties: {}, additionalProperties: true };
+    const inputSchema = assignedToolInputSchema(tool);
     return Object.freeze({
       id: tool.id,
       name,

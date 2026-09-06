@@ -626,6 +626,17 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     dependencies.ambiguity,
   ) };
   const citations = aliasPostSearchEvidence(evidence);
+  if (dependencies.ambiguity?.required !== true && dependencies.validateRequestedEntityCoverage) {
+    const coverage = await dependencies.validateRequestedEntityCoverage({
+      latestUtterance: base.latestUtterance, searchInterpretation: search.value.search,
+      contextualReferenceVerified: input.contextualMemoryVerified === true,
+      evidence: citations.evidence,
+    });
+    if (coverage.resolved !== true) dependencies = { ...dependencies,
+      ambiguity: { required: true, kind: 'unresolved_published_entity', candidates: [] } };
+    dependencies.onEntityCoverage?.({ resolved: coverage.resolved === true, reason: coverage.reason,
+      checkedEvidenceCount: evidence.length });
+  }
   const allowedEvidenceIds = citations.aliases;
   const responseSchema = templateEnginePostSearchJsonSchemaForEvidenceAliases(
     allowedEvidenceIds,
@@ -754,7 +765,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       if (validated.valid) {
         finalDiagnostics = templateEnginePostSearchDecisionDiagnostics(validated.value);
       }
-    } else if (evidence.length === 0 && unavailableResponse) {
+    } else if (dependencies.ambiguity?.required !== true && evidence.length === 0 && unavailableResponse) {
       validated = validateTemplateEnginePostSearchDecision({
         decision: 'NO_MATCH', response: unavailableResponse,
         clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
@@ -830,6 +841,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       latestUtterance: base.latestUtterance,
       contextualReferenceVerified: input.contextualMemoryVerified === true,
       searchInterpretation: search.value.search,
+      ambiguity: dependencies.ambiguity ?? null,
     }));
   };
   semanticClaimValidation = await validateClaims(groundedDecision);
@@ -980,7 +992,8 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
         ));
         finalDiagnostics = templateEnginePostSearchDecisionDiagnostics(recovered.value);
       }
-    } else if (!budgetRepairRequired && evidence.length === 0 && unavailableResponse) {
+    } else if (!budgetRepairRequired && clarificationAmbiguity?.required !== true
+      && evidence.length === 0 && unavailableResponse) {
       const noMatch = validateTemplateEnginePostSearchDecision({
         decision: 'NO_MATCH', response: unavailableResponse,
         clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
