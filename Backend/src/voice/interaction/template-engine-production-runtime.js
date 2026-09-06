@@ -115,6 +115,15 @@ export function publishedResolutionAmbiguity(
       required: false, kind: 'resolved_comparison_set', candidates: Object.freeze([]),
     });
   }
+  if (searchKind === 'comparison') {
+    // Identity uncertainty is different from failure to hydrate known IDs.
+    // The latter must never become a caller clarification or absence claim.
+    if (requested.size >= 2) throw new AppError(503,
+      'Requested comparison evidence is incomplete',
+      'TEMPLATE_ENGINE_REQUESTED_ENTITY_HYDRATION_INCOMPLETE');
+    return Object.freeze({ required: true, kind: 'unresolved_published_entity',
+      candidates: Object.freeze([]) });
+  }
   if (['overview', 'general_knowledge'].includes(searchKind)) {
     return Object.freeze({
       required: false, kind: 'request_does_not_require_entity_resolution',

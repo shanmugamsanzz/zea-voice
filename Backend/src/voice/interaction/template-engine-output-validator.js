@@ -377,10 +377,14 @@ export function validateTemplateEngineOutput(input = {}) {
   });
   const decision = parsed.value;
   const maximumSpeechCharacters = normalizedSpeechBudget(input.maximumSpeechCharacters);
-  const answer = decision.decision === 'CLARIFY' ? decision.clarification?.question : decision.response;
+  const answer = decision.decision === 'CLARIFY' ? decision.clarification?.question
+    : [cleanText(decision.response), cleanText(decision.nextQuestion?.question)].filter(Boolean).join(' ');
   if (maximumSpeechCharacters && cleanText(answer).length > maximumSpeechCharacters) {
     return invalid('speech_budget_exceeded', { factual: input.factualClaimsPresent === true,
-      retryCount: input.retryCount });
+      retryCount: input.retryCount, details: { maximumSpeechCharacters,
+        actualSpeechCharacters: cleanText(answer).length,
+        answerCharacters: cleanText(decision.response).length,
+        followUpCharacters: cleanText(decision.nextQuestion?.question).length } });
   }
   if (decision.decision === 'RESPONSE') return validateResponse(decision, input);
   if (decision.decision === 'CLARIFY') return validateClarification(decision, input);

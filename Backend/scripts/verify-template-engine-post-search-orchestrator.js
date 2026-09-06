@@ -103,6 +103,44 @@ const sixOperands = Array.from({ length: 6 }, (_, index) => ({ ...verifiedEviden
   evidenceId: `operand-${index}`, recordId: `record-${index}`, canonicalName: `Option ${index}`,
   content: 'The price is 3200 units.', authoritativeData: { price: 3200 },
 }));
+for (const failedRepair of [false, true]) {
+  let calls = 0;
+  const checkedSpeech = [];
+  const concise = 'The price is 3200 units.';
+  const followUp = 'Would you like further details?';
+  const pending = respondToTemplateEngineSearch({
+    mainPrompt, latestUtterance, state, searchDecision, scope, verifiedEvidence,
+    maximumSpeechCharacters: concise.length + 2,
+  }, {
+    tenantBoundaryVerified: true,
+    validateGroundedClaims: async ({ response }) => {
+      checkedSpeech.push(response);
+      return { supported: true, requestedFactAddressed: true };
+    },
+    invokeStructuredLlm: async ({ messages, responseFormat }) => {
+      calls += 1;
+      if (calls === 2) {
+        assert.ok(messages.at(-1).content.includes('actualSpeechCharacters'));
+        assert.ok(messages.at(-1).content.includes('follow-up question'));
+        assert.deepEqual(responseFormat.schema.properties.decision.enum, ['RESPONSE']);
+      }
+      return { outputParsed: failedRepair && calls === 2
+        ? { decision: 'NO_MATCH', response: 'Not available.', evidenceIds: [],
+          clarification: null, nextQuestion: null, stateUpdate: null }
+        : { decision: 'RESPONSE', response: concise, evidenceIds: ['E1'], clarification: null,
+          nextQuestion: calls === 1 ? { question: followUp, reason: 'conversation_guidance' } : null,
+          stateUpdate: null } };
+    },
+  });
+  if (failedRepair) await assert.rejects(pending, { code: 'TEMPLATE_ENGINE_OUTPUT_INVALID' });
+  else {
+    const result = await pending;
+    assert.equal(result.decision.response, concise);
+    assert.equal(result.decision.nextQuestion, null);
+  }
+  assert.equal(calls, 2);
+  assert.equal(checkedSpeech[0], `${concise} ${followUp}`, 'Ground the complete proposed speech');
+}
 const completeComparison = await respondToTemplateEngineSearch({
   mainPrompt, latestUtterance: 'Compare the prices of all selected options', scope, state: {},
   searchDecision: { ...searchDecision, search: { ...searchDecision.search, preferredRecordIds: [] } },

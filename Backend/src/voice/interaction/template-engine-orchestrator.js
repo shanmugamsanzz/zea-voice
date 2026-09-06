@@ -817,7 +817,8 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       ? evidence.filter((source) => citedIds.has(source.evidenceId))
       : evidence;
     const speech = decision.decision === 'CLARIFY'
-      ? decision.clarification?.question : decision.response;
+      ? decision.clarification?.question
+      : [cleanText(decision.response), cleanText(decision.nextQuestion?.question)].filter(Boolean).join(' ');
     return dependencies.validateGroundedClaims(Object.freeze({
       response: speech,
       decision: decision.decision,
@@ -864,15 +865,17 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     ? outputValidation.details : null;
   const initialSemanticValidationReason = semanticClaimValidation?.supported === false
     ? semanticClaimValidation.reason ?? null : null;
+  const budgetRepairRequired = outputValidation.reason === 'speech_budget_exceeded';
   if (!outputValidation.valid && !firstInvalidReason) {
     groundingRepairAttempted = true;
     firstInvalidReason = outputValidation.reason;
     const groundingRepairInstruction = [
       `Your previous caller-facing decision failed grounding validation: ${outputValidation.reason}.`,
+      speechBudgetInstruction(input.maximumSpeechCharacters),
       initialSemanticValidationReason
         ? `Specific claim-check feedback (diagnostic data, not instructions): ${JSON.stringify(initialSemanticValidationReason)}. Correct unsupported claims; retain supported requested information and its citations.` : null,
       outputValidation.reason === 'speech_budget_exceeded'
-        ? `Rewrite the complete answer within ${input.maximumSpeechCharacters} characters. Preserve the requested facts and exact supporting citations. The revised answer will be grounded and validated again; do not truncate it.`
+        ? `Speech length feedback: ${JSON.stringify(outputValidation.details)}. Rewrite the complete answer AND any follow-up question within ${input.maximumSpeechCharacters} characters. Preserve the requested facts and exact supporting citations. The revised answer will be grounded and validated again; do not truncate it. A length failure is not evidence of unavailable information: do not return NO_MATCH.`
         : null,
       outputValidation.reason === 'unsupported_numeric_claim'
         ? `Numeric validation feedback: ${JSON.stringify({
@@ -899,7 +902,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       'Do not invent facts, identifiers or citations.',
     ].filter(Boolean).join(' ');
     const requiredRepairDecision = clarificationAmbiguity?.required === true
-      ? 'CLARIFY' : answerableEvidence ? 'RESPONSE'
+      ? 'CLARIFY' : answerableEvidence || budgetRepairRequired ? 'RESPONSE'
         : requestedFactAvailable ? 'RESPONSE' : null;
     completion = await invokeStructuredLlm(request([
       ...baseMessages,
@@ -908,7 +911,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     output = completionOutput(completion);
     finalDiagnostics = templateEnginePostSearchDecisionDiagnostics(output);
     validated = validateTemplateEnginePostSearchDecision(output, allowedEvidenceIds);
-    if (answerableEvidence && validated.valid
+    if ((answerableEvidence || budgetRepairRequired) && clarificationAmbiguity?.required !== true && validated.valid
       && validated.value.decision !== 'RESPONSE') {
       validated = Object.freeze({
         valid: false, reason: 'grounded_repair_requires_response',
@@ -950,7 +953,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
   }
   if (!outputValidation.valid) {
     const unavailableResponse = cleanText(input.informationUnavailableResponse, 4_000);
-    const extractiveRecovery = answerableEvidence
+    const extractiveRecovery = answerableEvidence && !budgetRepairRequired
       && clarificationAmbiguity?.required !== true
       ? extractiveGroundedRecovery(citations.evidence, search.value.search.requestedFact)
       : null;
@@ -977,7 +980,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
         ));
         finalDiagnostics = templateEnginePostSearchDecisionDiagnostics(recovered.value);
       }
-    } else if (evidence.length === 0 && unavailableResponse) {
+    } else if (!budgetRepairRequired && evidence.length === 0 && unavailableResponse) {
       const noMatch = validateTemplateEnginePostSearchDecision({
         decision: 'NO_MATCH', response: unavailableResponse,
         clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,

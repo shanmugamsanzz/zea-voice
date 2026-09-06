@@ -118,6 +118,7 @@ export function parseTemplateEngineStructuredOutput({ completion, output, schema
         'TEMPLATE_ENGINE_LLM_SCHEMA_INVALID', {
           finishReason: finishReason || null,
           reason: decisionValidation.reason,
+          contractDetails: decisionValidation.details ?? null,
           path: '$',
         });
     }
@@ -138,9 +139,13 @@ export function structuredOutputRetryMessages(messages, error) {
       content: [
         'The previous structured response was unusable.',
         `Failure: ${String(error?.code ?? 'invalid_structured_output')}.`,
+        `Failed contract condition: ${JSON.stringify({ reason: error?.details?.reason ?? null,
+          path: error?.details?.path ?? null, contractDetails: error?.details?.contractDetails ?? null })}.`,
+        error?.details?.reason === 'invalid_workflow_cancellation'
+          ? 'Re-evaluate the unchanged caller request. Initiating or continuing an action uses TOOL without clearing activeWorkflowId. Use stateUpdate:null when no state update is needed. Do not invent confirmation. Only an explicit cancellation may use RESPONSE with nextQuestion:null, set.confirmationStatus:null and clear containing activeWorkflowId, collectedToolFields and confirmationStatus. Do not change a booking request into cancellation merely to satisfy this contract.' : null,
         'Return exactly one complete JSON object matching the same supplied schema.',
         'Do not omit required fields and do not include markdown or commentary.',
-      ].join(' '),
+      ].filter(Boolean).join(' '),
     }),
   ]);
 }

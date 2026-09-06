@@ -6,6 +6,60 @@ process.env.DATABASE_URL ??= 'postgresql://test:test@localhost:5432/test';
 process.env.REDIS_HOST ??= 'localhost';
 const { RealtimeConversationOrchestrator, configuredTemplateEngineFailureResponse } = await import('../src/voice/realtime-conversation-orchestrator.js');
 const { validateOperationalResponseSettings } = await import('../src/agents/agent.service.js');
+const { createTemplateEngineStructuredInvoker } = await import('../src/voice/realtime-conversation-orchestrator.js');
+const { templateEngineDecisionJsonSchema, validateTemplateEngineDecision } = await import('../src/voice/interaction/template-engine-decision-contract.js');
+
+const initiation = { decision: 'TOOL', response: '', clarification: null, search: null,
+  tool: { name: 'configured_action', arguments: {} }, nextQuestion: null, stateUpdate: null };
+const cancellation = { ...initiation, decision: 'RESPONSE', response: 'Cancelled.', tool: null,
+  stateUpdate: { set: { confirmationStatus: null },
+    clear: ['activeWorkflowId', 'collectedToolFields', 'confirmationStatus'] } };
+assert.equal(validateTemplateEngineDecision(cancellation).valid, true);
+for (const [update, violation] of [
+  [{ ...cancellation, nextQuestion: { question: 'Continue?', reason: null } }, 'cancellation_disallows_next_question'],
+  [{ ...cancellation, stateUpdate: { ...cancellation.stateUpdate, set: { confirmationStatus: 'confirmed' } } }, 'cancellation_requires_null_confirmation'],
+  [{ ...cancellation, stateUpdate: { ...cancellation.stateUpdate, clear: ['activeWorkflowId', 'confirmationStatus'] } }, 'cancellation_missing_clear:collectedToolFields'],
+]) {
+  const rejection = validateTemplateEngineDecision(update);
+  assert.equal(rejection.reason, 'invalid_workflow_cancellation');
+  assert.ok(rejection.details.violations.includes(violation));
+}
+for (const repeatFailure of [false, true]) {
+  let attempts = 0;
+  const diagnostics = [];
+  const invoke = createTemplateEngineStructuredInvoker({
+    async *stream(request) {
+      attempts += 1;
+      if (attempts === 2) {
+        const feedback = request.messages.at(-1).content;
+        assert.ok(feedback.includes('cancellation_requires_response'));
+        assert.ok(feedback.includes('cancellation_missing_clear:collectedToolFields'));
+        assert.ok(feedback.includes('Do not change a booking request into cancellation'));
+        assert.equal(request.messages[0].content, 'Start the requested configured action.');
+      }
+      const output = attempts === 1 || repeatFailure ? { ...initiation,
+        stateUpdate: { set: { confirmationStatus: null }, clear: ['activeWorkflowId'] } } : initiation;
+      yield { type: 'text_delta', delta: JSON.stringify(output) };
+      yield { type: 'completed', finishReason: 'stop' };
+    },
+    cancel() {},
+  }, { onStructuredOutputRetry: (details) => diagnostics.push(details) });
+  const pending = invoke({ messages: [{ role: 'user', content: 'Start the requested configured action.' }],
+    responseFormat: { type: 'json_schema', name: 'template_engine_decision', strict: true,
+      schema: templateEngineDecisionJsonSchema } });
+  if (repeatFailure) await assert.rejects(pending, (error) =>
+    error.code === 'TEMPLATE_ENGINE_LLM_SCHEMA_INVALID'
+    && error.details.reason === 'invalid_workflow_cancellation');
+  else {
+    const result = await pending;
+    assert.equal(result.outputParsed.decision, 'TOOL');
+    assert.equal(result.outputParsed.stateUpdate, null);
+    assert.deepEqual(result.outputParsed.tool.arguments, {});
+  }
+  assert.equal(attempts, 2, 'Only one structured-output repair is permitted');
+  assert.equal(diagnostics[0].reason, 'invalid_workflow_cancellation');
+  assert.ok(diagnostics[0].contractDetails.violations.includes('cancellation_requires_response'));
+}
 const activeSettings = { technicalFailureMessage: 'Technical problem.',
   informationUnavailableMessage: 'That detail is not published.' };
 assert.throws(() => validateOperationalResponseSettings('active', activeSettings),
@@ -20,6 +74,10 @@ assert.doesNotThrow(() => validateOperationalResponseSettings('active', { ...act
   workflowConfigurationFailureMessage: 'I cannot complete this request right now.' }));
 assert.throws(() => validateOperationalResponseSettings('active', { ...activeSettings,
   nonFactualRecoveryMessage: 'a'.repeat(501) }), { code: 'AGENT_RECOVERY_MESSAGE_INVALID' });
+for (const value of ['{{missing}}', '\u200b', 'workflow: start the configured tool', { text: 'Please rephrase.' }]) {
+  assert.throws(() => validateOperationalResponseSettings('active', { ...activeSettings,
+    nonFactualRecoveryMessage: value }), { code: 'AGENT_RECOVERY_MESSAGE_INVALID' });
+}
 const messageProfile = { agent: { settings: {
   evidenceValidationFailureMessage: 'Please rephrase that request.',
   workflowConfigurationFailureMessage: 'I cannot start this request right now.',
@@ -69,9 +127,12 @@ class Audio {
   async close() { for (const resolve of this.waiters.splice(0)) resolve(null); }
 }
 
-for (const mode of ['dedicated', 'neutral', 'unconfigured', 'cancelled', 'workflow-config', 'field-config', 'hydration-failure', 'speech-budget']) {
+for (const mode of ['dedicated', 'neutral', 'unconfigured', 'cancelled', 'workflow-config', 'field-config', 'hydration-failure', 'speech-budget', 'booking-routing']) {
   const configurationFailure = mode.endsWith('-config');
-  const recovery = 'Sorry, I could not prepare that answer. Please try again.';
+  const routingFailure = mode === 'booking-routing';
+  const recovery = mode === 'neutral'
+    ? 'மன்னிக்கவும், உங்கள் கோரிக்கைக்கு சரியான பதிலைத் தயார் செய்ய முடியவில்லை. கொஞ்சம் வேறு விதமாகச் சொல்ல முடியுமா?'
+    : 'Sorry, I could not prepare that answer. Please try again.';
   const logs = [];
   const spoken = [];
   const transcript = [];
@@ -89,7 +150,12 @@ for (const mode of ['dedicated', 'neutral', 'unconfigured', 'cancelled', 'workfl
     async *stream(request) {
       const name = request.responseFormat?.name;
       let output;
-      if (configurationFailure) {
+      if (name === 'template_engine_pending_request_review') {
+        const data = JSON.parse(request.messages.at(-1).content);
+        output = { acknowledgementOnly: ['Hello', 'ஆ'].includes(data.latestUtterance) };
+      } else if (routingFailure) {
+        output = { ...initiation, stateUpdate: { set: { confirmationStatus: null }, clear: ['activeWorkflowId'] } };
+      } else if (configurationFailure) {
         output = { decision: 'TOOL', response: '', clarification: null, search: null,
           tool: { name: 'create_record', arguments: {} }, nextQuestion: null, stateUpdate: null };
       } else if (name === 'template_engine_claim_validation') {
@@ -181,12 +247,13 @@ for (const mode of ['dedicated', 'neutral', 'unconfigured', 'cancelled', 'workfl
       continue;
     }
     await waitFor(() => logs.some((entry) => entry.stage === 'template_engine.turn_completed'));
-    assert.equal(postSearchAttempts, configurationFailure || mode === 'hydration-failure' ? 0 : 2,
+    assert.equal(postSearchAttempts, configurationFailure || routingFailure || mode === 'hydration-failure' ? 0 : 2,
       'Configuration and hydration failures must not reach answer generation');
     if (configurationFailure) assert.equal(orchestrator.templateEngineState.activeWorkflowId, null,
       'No workflow state may be activated on configuration failure');
     assert.ok(spoken.includes(recovery), 'Configured recovery must reach TTS');
-    if (!configurationFailure && mode !== 'hydration-failure') {
+    assert.ok(!media.closed, 'Approved recovery must preserve the established call');
+    if (!configurationFailure && !routingFailure && mode !== 'hydration-failure') {
       const retrievalLog = logs.find((entry) => entry.stage === 'template_engine.retrieval_completed');
       assert.ok(Object.hasOwn(retrievalLog, 'entityMatch'));
       assert.ok(Object.hasOwn(retrievalLog, 'preferredRecordIds'));
@@ -213,6 +280,32 @@ for (const mode of ['dedicated', 'neutral', 'unconfigured', 'cancelled', 'workfl
     assert.equal(completed.operationalFailure, null);
     assert.deepEqual(completed.evidenceIds, []);
     assert.equal(orchestrator.runtimeMetrics.providerFailures.llm, 0);
+    assert.ok(logs.some((entry) => entry.stage === 'template_engine.recovery_delivered'));
+    if (mode === 'neutral' || routingFailure) {
+      const pendingText = orchestrator.pendingTemplateEngineRequest.text;
+      const initialAttempts = postSearchAttempts;
+      for (const utterance of ['Hello', 'ஆ']) {
+        const before = logs.filter((entry) => entry.stage === 'template_engine.turn_completed').length;
+        stt.publish({ type: 'final_transcript', text: utterance, language: 'ta', isFinal: true });
+        await waitFor(() => logs.filter((entry) => entry.stage === 'template_engine.turn_completed').length > before);
+        assert.equal(orchestrator.pendingTemplateEngineRequest.text, pendingText);
+        assert.equal(postSearchAttempts, initialAttempts, 'Acknowledgements must not become new knowledge searches');
+        assert.equal(orchestrator.controller.state, 'listening');
+        assert.ok(!media.closed);
+      }
+      assert.equal(logs.filter((entry) => entry.stage === 'template_engine.pending_request_preserved').length, 2);
+      const before = logs.filter((entry) => entry.stage === 'template_engine.turn_completed').length;
+      stt.publish({ type: 'final_transcript', text: 'Different service price please', language: 'en', isFinal: true });
+      await waitFor(() => logs.filter((entry) => entry.stage === 'template_engine.turn_completed').length > before);
+      if (routingFailure) assert.equal(orchestrator.pendingTemplateEngineRequest.text, 'Different service price please');
+      else {
+        assert.equal(orchestrator.pendingTemplateEngineRequest, null, 'Delivered new answer clears the pending request');
+        assert.ok(postSearchAttempts > initialAttempts, 'A new question must proceed through normal routing');
+      }
+      const bounded = logs.filter((entry) => ['template_engine.pending_request_preserved',
+        'template_engine.recovery_delivered'].includes(entry.stage));
+      assert.ok(!JSON.stringify(bounded).includes(pendingText), 'New diagnostics must not expose caller text');
+    }
   } finally {
     media.close();
   }

@@ -5,6 +5,7 @@ import {
   canonicalRecordNamespace,
 } from '../../knowledge-engine/canonical-record-identity.js';
 import { normalizeTemplateEngineSearchDecision } from './template-engine-search-request.js';
+import { publishedNameText } from './published-name-text.js';
 
 export const TEMPLATE_ENGINE_HYBRID_RETRIEVAL_VERSION = 1;
 
@@ -85,7 +86,7 @@ function boundedScore(value) {
 }
 
 function tokens(value) {
-  return [...new Set(cleanText(value, 4_000).toLocaleLowerCase()
+  return [...new Set(cleanText(publishedNameText(value), 4_000).toLocaleLowerCase()
     .match(/[\p{L}\p{M}\p{N}]+/gu) ?? [])];
 }
 

@@ -72,9 +72,14 @@ assert.equal(publishedResolutionAmbiguity(fuzzyAmbiguity, ambiguousCandidates.ma
   ...entry, verified: true,
 })), { searchKind: 'comparison', requestedEntityRecordIds: ['record-a', 'record-b'] }).required,
 false, 'Fully hydrated comparison operands are not ambiguous alternatives');
-assert.equal(publishedResolutionAmbiguity(fuzzyAmbiguity, [], {
+assert.throws(() => publishedResolutionAmbiguity(fuzzyAmbiguity, [], {
   searchKind: 'comparison', requestedEntityRecordIds: ['record-a', 'record-b'],
-}).required, true, 'Requested IDs alone must not count as verified resolution');
+}), { code: 'TEMPLATE_ENGINE_REQUESTED_ENTITY_HYDRATION_INCOMPLETE' },
+'Known operands without hydration are a retrieval failure, not unclear caller intent');
+assert.equal(publishedResolutionAmbiguity({ action: 'CONTINUE' }, [
+  { recordId: 'record-a', verified: true },
+], { searchKind: 'comparison', requestedEntityRecordIds: ['record-a'] }).required, true,
+'One remembered operand cannot resolve a comparison');
 assert.equal(publishedResolutionAmbiguity(fuzzyAmbiguity, [], {
   searchKind: 'overview',
 }).required, false, 'A general overview must not clarify between its listed entities');
@@ -355,6 +360,12 @@ for (const [query, expectedIds, rewrittenQuery] of [
 
 for (const language of ['en', 'ta', 'ta-Latn']) {
   for (const scenario of [
+    { query: 'Configured Alpha Serviceக்கும் Configured Beta Serviceக்கும் என்ன difference?',
+      rewritten: 'Configured Alpha Service details', reference: 'current selection',
+      previous: ['metadata-alpha'], expected: ['metadata-alpha', 'metadata-beta'], comparison: true },
+    { query: 'Compare Configured Alpha Service and Configured Beta Service',
+      rewritten: 'Configured Alpha Service details', reference: 'current selection',
+      previous: ['metadata-alpha'], expected: ['metadata-alpha', 'metadata-beta'], comparison: true },
     { query: 'Tell me more about this', reference: 'current selection',
       previous: ['metadata-beta'], expected: ['metadata-beta'], comparison: false },
     { query: 'இதை பத்தி கொஞ்சம் detail சொல்லுங்க', reference: 'current selection',
@@ -371,10 +382,11 @@ for (const language of ['en', 'ta', 'ta-Latn']) {
     const result = await retrieveTemplateEngineEvidence({
       auth: { tenantId }, scope, callId: 'context-comparison-regression', usageDirection: 'inbound', language,
       contextualMemoryVerified: true,
+      latestUtterance: scenario.query,
       state: { lastReferencedRecordIds: scenario.previous,
         comparisonRecordIds: scenario.previous.length > 1 ? scenario.previous : [] },
       searchDecision: { ...searchDecision, search: {
-        query: scenario.query, requestedFact: 'details', contextualReference: scenario.reference,
+        query: scenario.rewritten ?? scenario.query, requestedFact: 'details', contextualReference: scenario.reference,
         preferredRecordIds: [],
       } },
     }, {
@@ -407,6 +419,36 @@ for (const language of ['en', 'ta', 'ta-Latn']) {
 }
 
 let sttSelectedIds = [];
+for (const incompleteHydration of [false, true]) {
+  const pending = retrieveTemplateEngineEvidence({
+    auth: { tenantId }, scope, callId: 'comparison-coverage-guard', usageDirection: 'inbound', language: 'ta',
+    latestUtterance: incompleteHydration
+      ? 'Configured Alpha Serviceக்கும் Configured Beta Serviceக்கும் difference?'
+      : 'Compare Configured Alpha Service and an unknown selection',
+    contextualMemoryVerified: true,
+    state: { lastReferencedRecordIds: ['metadata-alpha'] },
+    searchDecision: { ...searchDecision, search: { query: 'Configured Alpha Service',
+      requestedFact: 'difference', contextualReference: 'current selection', preferredRecordIds: ['metadata-alpha'] } },
+  }, {
+    loadArtifacts: async () => ({ ...exactArtifacts,
+      bundles: [{ ...exactArtifacts.bundles[0], records: metadataRecords }] }),
+    searchCandidates: async () => ({ channels: { structured: [], bm25: [], qdrant: [] } }),
+    hydrateEvidence: async ({ retrieval: selected }) => ({ evidence: selected.candidates
+      .filter((entry) => entry.recordId === 'metadata-alpha').map((entry) => ({
+        ...entry, id: entry.recordId, hydrationValidated: true, publicationValidated: true,
+        callerFacing: true, content: 'Approved alpha detail',
+        authoritativeData: metadataRecords[0].entity_metadata,
+        provenance: { knowledgeBaseId, publicationRevision: 4 },
+      })) }),
+  });
+  if (incompleteHydration) {
+    await assert.rejects(pending, { code: 'TEMPLATE_ENGINE_REQUESTED_ENTITY_HYDRATION_INCOMPLETE' });
+  } else {
+    const result = await pending;
+    assert.equal(publishedResolutionAmbiguity(result.entityResolution, result.evidence,
+      result.searchClassification).required, true, 'Unknown operand requires clarification, not a one-record answer');
+  }
+}
 await assert.rejects(() => retrieveTemplateEngineEvidence({
   auth: { tenantId }, scope, callId: 'missing-comparison-operand', usageDirection: 'inbound', language: 'en',
   contextualMemoryVerified: true,

@@ -73,6 +73,9 @@ import { LiveMemoryMaintenanceQueue } from './interaction/live-memory-maintenanc
 import { resolveCallbackConfiguration } from './interaction/callback-config.js';
 import { mergeToolFieldSchemas } from './interaction/tool-field-schema.js';
 import { resolveRuntimeMessage } from './interaction/configured-runtime-messages.js';
+import { isPendingRequestAcknowledgement } from './interaction/template-engine-pending-request.js';
+import { isInternalRuntimeText } from './interaction/recovery-readiness.js';
+export { isInternalRuntimeText } from './interaction/recovery-readiness.js';
 import {
   applyCanonicalEntityToTaskCompletionState,
   createTaskCompletionState,
@@ -165,6 +168,9 @@ export function createTemplateEngineStructuredInvoker(adapter, options = {}) {
           messages = structuredOutputRetryMessages(request.messages, error);
           options.onStructuredOutputRetry?.({
             code: error.code,
+            reason: error.details?.reason ?? null,
+            path: error.details?.path ?? null,
+            contractDetails: error.details?.contractDetails ?? null,
             finishReason: error.details?.finishReason ?? null,
             responseFormat: responseFormat?.type ?? null,
           });
@@ -189,14 +195,6 @@ function fallbackRecovery(profile) {
   return resolveRuntimeMessage(profile, 'recovery');
 }
 
-export function isInternalRuntimeText(value) {
-  const text = String(value ?? '').normalize('NFKC').toLocaleLowerCase().replace(/\s+/gu, ' ').trim();
-  if (!text) return true;
-  return /(?:runtime_context|grounded_response_contract|response_mode|action_config|selectedentitykeys|evidencesourceids|flowaction|catalog_item_required)/iu.test(text)
-    || /\bstart or resume the configured\b/iu.test(text)
-    || /\buse (?:only )?the configured\b/iu.test(text)
-    || /^\s*(?:instruction|action|workflow|response)\s*:/iu.test(text);
-}
 
 function clarificationVariables(knowledge = {}) {
   const ambiguity = knowledge?.tenantEvidence?.authoritative?.ambiguity
@@ -475,6 +473,7 @@ export class RealtimeConversationOrchestrator {
       version: 1, mode: 'active', turns: 0, searches: 0, workflows: 0,
     };
     this.templateEngineState = createMinimalTemplateEngineState();
+    this.pendingTemplateEngineRequest = null;
     this.followUpOpeningSources = [];
     this.llmCircuitBreaker = new LlmCircuitBreaker();
     this.providerHealth = dependencies.providerHealth ?? tenantProviderHealth;
@@ -2443,6 +2442,22 @@ export class RealtimeConversationOrchestrator {
     const stageTimings = {};
     let finalResponseReadyAt = null;
     try {
+      const acknowledgementOnly = this.pendingTemplateEngineRequest
+        && !this.templateEngineState.activeWorkflowId
+        && await isPendingRequestAcknowledgement({ latestUtterance: query,
+          pendingRequest: this.pendingTemplateEngineRequest.text }, invokeStructuredLlm);
+      if (this.#isStaleGeneration(epoch) || this.finalized) return;
+      if (acknowledgementOnly) {
+        const speech = configuredTemplateEngineFailureResponse(this.runtimeProfile, 'validation');
+        if (!speech) throw new AppError(503, 'Pending request recovery is not configured',
+          'TEMPLATE_ENGINE_OUTPUT_INVALID');
+        result = { speech, state: this.templateEngineState, evidence: [], evidenceIds: [],
+          toolExecuted: false, recoveryKind: 'validation', pendingRequestPreserved: true };
+        this.log.info({ stage: 'template_engine.pending_request_preserved', callId: this.call.id,
+          turnEpoch: epoch, originalTurnEpoch: this.pendingTemplateEngineRequest.epoch,
+        }, 'Acknowledgement did not replace the unanswered request or authorize tools');
+      } else {
+      this.pendingTemplateEngineRequest = { text: String(query).slice(0, 4000), epoch };
       result = await runTemplateEngineProductionTurn({
         auth,
         scope,
@@ -2587,6 +2602,9 @@ export class RealtimeConversationOrchestrator {
             preferredRecordIds: details.preferredRecordIds ?? [],
             contextualMemoryVerified: details.contextualMemoryVerified === true,
             ambiguity: details.ambiguity ?? null,
+            requestedOperandCount: details.requestedEntityCount ?? 0,
+            hydratedOperandCount: details.hydratedRequestedEntityCount ?? 0,
+            operandHydrationIncomplete: details.requestedEntityHydrationIncomplete === true,
           }, 'Template-engine retrieval and hydration completed');
         },
         onStageTiming: (details) => {
@@ -2617,6 +2635,7 @@ export class RealtimeConversationOrchestrator {
           }, 'Template-engine post-search decision validated');
         },
       });
+      }
     } catch (error) {
       const errorKind = classifyTemplateEngineTurnError(error, {
         stale: this.#isStaleGeneration(epoch) || this.finalized,
@@ -2726,6 +2745,12 @@ export class RealtimeConversationOrchestrator {
     sentencePipeline.markTranscriptCommitted();
     if (this.#isStaleGeneration(epoch) || this.controller.state !== callStates.SPEAKING) return;
     await this.controller.playbackComplete();
+    if (!result.recoveryKind && !result.validationFailure && !result.operationalFailure
+      && this.pendingTemplateEngineRequest?.epoch === epoch) this.pendingTemplateEngineRequest = null;
+    if (result.recoveryKind) this.log.info({ stage: 'template_engine.recovery_delivered',
+      callId: this.call.id, turnEpoch: epoch, recoveryKind: result.recoveryKind,
+      spokenCharacters: answer.length, pendingRequestRetained: Boolean(this.pendingTemplateEngineRequest),
+    }, 'Approved recovery playback completed without exposing rejected speech');
     this.errorCount = 0;
     this.#scheduleLiveMemoryCheckpoint('template_engine_validated_turn');
     this.log.info({
@@ -2739,6 +2764,8 @@ export class RealtimeConversationOrchestrator {
       operationalFailure: result.operationalFailure ?? null,
       validationFailure: result.validationFailure ?? null,
       recoveryKind: result.recoveryKind ?? null,
+      spokenCharacters: answer.length,
+      configuredSpeechCharacters: this.runtimeProfile.limits?.ttsMaxCharactersPerResponse ?? null,
       stageTimings,
       acknowledgementFirstAudioMs: turnTiming.acknowledgementFirstAudioMs,
       finalAnswerFirstAudioMs: turnTiming.finalAnswerFirstAudioMs,

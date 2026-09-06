@@ -11,6 +11,7 @@ import { runTemplateEngineHybridRetrieval } from './template-engine-hybrid-retri
 import { normalizePublishedConversationGuidance } from './template-engine-conversation-guidance.js';
 import { resolvePublishedEntityRoute } from '../../knowledge-engine/entity-route-resolver.js';
 import { normalizeTemplateEngineSearchDecision } from './template-engine-search-request.js';
+import { publishedNameText } from './published-name-text.js';
 
 export const TEMPLATE_ENGINE_PRODUCTION_RETRIEVAL_VERSION = 1;
 
@@ -46,12 +47,12 @@ function searchableTokens(value) {
 }
 
 function publishedFormScore(query, forms) {
-  const queryText = cleanText(query, 4_000).toLocaleLowerCase()
+  const queryText = cleanText(publishedNameText(query), 4_000).toLocaleLowerCase()
     .replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim();
   const queryTokens = new Set(searchableTokens(queryText));
   let best = 0;
   for (const form of forms) {
-    const formText = cleanText(form, 500).toLocaleLowerCase()
+    const formText = cleanText(publishedNameText(form), 500).toLocaleLowerCase()
       .replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim();
     const formTokens = searchableTokens(formText);
     if (!formText || !formTokens.length) continue;
@@ -724,6 +725,13 @@ export async function retrieveTemplateEngineEvidence({
     && ['published_exact', 'published_category_exact'].includes(candidate.matchMethod)
     && candidate.score >= 0.98
   ));
+  // Current named operands must reach fusion too: correcting only the exact
+  // lookup still lets a rewritten single-subject query discard other operands.
+  if (latestUtterance && exactCatalog.length) {
+    search = Object.freeze({ ...search, query: latestUtterance,
+      contextualReference: null, preferredRecordIds: Object.freeze([]) });
+    searchDecision = Object.freeze({ ...searchDecision, search });
+  }
   // A unique explicit published name outranks contextual overview/FAQ matches.
   // Multiple names remain with the resolver and comparison-selection contract.
   if (exactCatalog.length === 1) {
@@ -781,7 +789,8 @@ export async function retrieveTemplateEngineEvidence({
   } else if (exactCatalog.length) {
     search = Object.freeze({ ...search, preferredRecordIds: Object.freeze([]) });
     searchDecision = Object.freeze({ ...searchDecision, search });
-  } else if (contextualMemoryVerified && preferred.size === 1 && contextualRecords.length === 1) {
+  } else if (contextualMemoryVerified && preferred.size === 1 && contextualRecords.length === 1
+    && classifyTemplateEngineSearch({ search }).searchKind !== templateEngineSearchKinds.COMPARISON) {
     const candidate = contextualRecords[0];
     entityResolution = Object.freeze({ ...entityResolution,
       candidate: Object.freeze({ ...candidate, explicit: false,

@@ -1,5 +1,6 @@
 import { withPlatformAdminContext } from '../../infrastructure/database-context.js';
 import { AppError } from '../../middleware/errors.js';
+import { validateRecoveryReadiness } from '../interaction/recovery-readiness.js';
 import { decryptCredential } from '../../security/credential-crypto.js';
 import { resolveInteractionConfiguration } from '../interaction/interaction-config.js';
 import { resolveLiveMemoryConfiguration } from '../interaction/live-memory-config.js';
@@ -318,6 +319,9 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
     }
     const row = result.rows[0];
     const settings = row.settings ?? {};
+    // Also protects agents activated before save-time readiness checks existed.
+    // Run before decrypting credentials or constructing provider/tool adapters.
+    validateRecoveryReadiness(settings);
     const usageLimits = normalizeTtsUsageLimitSettings(settings);
     const interaction = resolveInteractionConfiguration(settings);
     const sttRuntimeSettings = selectedSettings(settings, sttSettingKeys);

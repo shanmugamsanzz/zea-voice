@@ -377,10 +377,15 @@ export function validateTemplateEngineDecision(value) {
   const clearsWorkflow = stateUpdate?.clear.includes('activeWorkflowId') === true;
   if (clearsWorkflow) {
     const requiredClears = ['activeWorkflowId', 'collectedToolFields', 'confirmationStatus'];
-    if (parsed.decision !== 'RESPONSE' || nextQuestion !== null
-      || stateUpdate.set.confirmationStatus !== null
-      || requiredClears.some((key) => !stateUpdate.clear.includes(key))) {
-      return Object.freeze({ valid: false, reason: 'invalid_workflow_cancellation' });
+    const violations = [
+      ...(parsed.decision !== 'RESPONSE' ? ['cancellation_requires_response'] : []),
+      ...(nextQuestion !== null ? ['cancellation_disallows_next_question'] : []),
+      ...(stateUpdate.set.confirmationStatus !== null ? ['cancellation_requires_null_confirmation'] : []),
+      ...requiredClears.filter((key) => !stateUpdate.clear.includes(key)).map((key) => `cancellation_missing_clear:${key}`),
+    ];
+    if (violations.length) {
+      return Object.freeze({ valid: false, reason: 'invalid_workflow_cancellation',
+        details: Object.freeze({ decision: parsed.decision, violations: Object.freeze(violations) }) });
     }
   }
 
