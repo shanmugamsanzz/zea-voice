@@ -1,5 +1,5 @@
 // Business examples intentionally live only in test fixtures. Production
-// runtime code consumes the same generic contract for every tenant.
+// runtime code consumes the same generic contract for every tenant.test
 export const task10Industries = Object.freeze([
   { industry: 'healthcare', tenantId: '10000000-0000-4000-8000-000000000011',
     agentId: '20000000-0000-4000-8000-000000000011', kbId: '30000000-0000-4000-8000-000000000011',
