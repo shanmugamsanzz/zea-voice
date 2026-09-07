@@ -236,10 +236,19 @@ export function verifiedPublishedEntityFastPath(retrieval, decision, input) {
     || retrieval.entityResolution?.reason !== 'published_exact_selection'
     || retrieval.entityResolution?.requiresCandidateConfirmation === true
     || retrieval.entityResolution?.ambiguity?.detected === true
-    || retrieval.diagnostics?.requestedEntityHydrationIncomplete === true) return false;
+    || retrieval.diagnostics?.requestedEntityHydrationIncomplete === true
+    || retrieval.verifiedPublishedEntitySelection?.verified !== true
+    || !['published_exact', 'published_category_exact'].includes(
+      retrieval.verifiedPublishedEntitySelection?.matchMethod,
+    )) return false;
   const requested = new Set((retrieval.requestedEntityRecordIds ?? [])
     .map((id) => cleanText(id, 160).toLocaleLowerCase()).filter(Boolean));
   if (!requested.size) return false;
+  const selectionRequested = new Set((
+    retrieval.verifiedPublishedEntitySelection?.requestedRecordIds ?? []
+  ).map((id) => cleanText(id, 160).toLocaleLowerCase()).filter(Boolean));
+  if (selectionRequested.size !== requested.size
+    || [...requested].some((id) => !selectionRequested.has(id))) return false;
   const verified = new Set(retrieval.evidence.filter((source) => (
     source?.verified === true && source?.callerFacing !== false
   )).map((source) => cleanText(source?.recordId, 160).toLocaleLowerCase()).filter(Boolean));
@@ -398,6 +407,36 @@ function publicationScopeKeys(scope = {}) {
     cleanText(publication?.knowledgeBaseId, 160).toLocaleLowerCase(),
     Number(publication?.publicationRevision),
   ].join(':')));
+}
+
+function normalizedBoundaryValue(value, maximum = 2_000) {
+  return cleanText(value, maximum).toLocaleLowerCase();
+}
+
+function speculativeReuseBoundary(input, scope) {
+  return Object.freeze({
+    tenantId: normalizedBoundaryValue(scope?.tenantId, 160),
+    agentId: normalizedBoundaryValue(scope?.agentId, 160),
+    publications: Object.freeze([...publicationScopeKeys(scope)].sort()),
+    request: normalizedBoundaryValue(input?.latestUtterance),
+    turn: normalizedBoundaryValue(
+      input?.turnBoundaryId ?? `${input?.callId ?? ''}:${input?.turnEpoch ?? ''}`,
+      300,
+    ),
+  });
+}
+
+export function sameSpeculativeRetrievalBoundary(boundary, input, scope) {
+  if (!boundary || !input || !scope) return false;
+  const current = speculativeReuseBoundary(input, scope);
+  return Boolean(current.request && current.turn)
+    && boundary.tenantId === current.tenantId
+    && boundary.agentId === current.agentId
+    && boundary.request === current.request
+    && boundary.turn === current.turn
+    && Array.isArray(boundary.publications)
+    && boundary.publications.length === current.publications.length
+    && boundary.publications.every((key, index) => key === current.publications[index]);
 }
 
 function samePublishedRetrievalBoundary(retrieval, scope) {
@@ -582,6 +621,13 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     }
   }
   dependencies = instrumentTemplateEngineTurn(dependencies);
+  const assertCurrentTurn = () => {
+    if (typeof dependencies.isTurnCurrent === 'function' && !dependencies.isTurnCurrent()) {
+      const error = new Error('Template-engine turn was cancelled before retrieval reuse');
+      error.name = 'AbortError';
+      throw error;
+    }
+  };
   input = { ...input, maximumSpeechCharacters: normalizedSpeechBudget(input.maximumSpeechCharacters
     ?? input.runtimeProfile?.limits?.ttsMaxCharactersPerResponse) };
   // Start the publication I/O first. Minimal state and prompt preparation are
@@ -632,6 +678,8 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     }),
   };
   let completedSpeculativeResult = null;
+  let completedSpeculativeBoundary = null;
+  const currentSpeculativeBoundary = speculativeReuseBoundary(input, publishedContext.scope);
   // Active workflow replies normally use configured fields and saved values.
   // Let routing request foreground evidence for a factual side question instead
   // of launching a knowledge search for every collection/confirmation turn.
@@ -652,6 +700,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       speculative: true,
     }).catch((error) => Object.freeze({ error })).then((value) => {
       completedSpeculativeResult = value;
+      completedSpeculativeBoundary = currentSpeculativeBoundary;
       return value;
     })
     : null;
@@ -757,24 +806,38 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     });
   }
 
-  const requestMeaning = await resolveRequestMeaning({ latestUtterance: input.latestUtterance,
-    welcomeContinuation: common.welcomeContinuation, search: first.search }, dependencies.invokeStructuredLlm);
-  const welcomeVerified = requestMeaning.kind === 'published_welcome_continuation';
-  if (welcomeVerified) first = { ...first, search: { ...first.search, query: requestMeaning.query,
-    requestedFact: requestMeaning.requestedFact, contextualReference: null, preferredRecordIds: [] } };
-  if (!completedSpeculativeResult && !welcomeVerified
-    && speculativeRouteCompatible(first, input)) {
+  if (!completedSpeculativeResult && speculativeRouteCompatible(first, input)) {
     const handoff = await completedSpeculationWithin(
       speculativeRetrieval, dependencies.speculativeRetrievalHandoffMs ?? 25,
     );
     if (handoff) completedSpeculativeResult = handoff;
   }
   if (completedSpeculativeResult
-    && !samePublishedRetrievalBoundary(completedSpeculativeResult, publishedContext.scope)) {
+    && (!samePublishedRetrievalBoundary(completedSpeculativeResult, publishedContext.scope)
+      || !sameSpeculativeRetrievalBoundary(
+        completedSpeculativeBoundary, input, publishedContext.scope,
+      ))) {
     completedSpeculativeResult = null;
+    completedSpeculativeBoundary = null;
   }
-  const highConfidencePublishedEntity = !welcomeVerified
-    && verifiedPublishedEntityFastPath(completedSpeculativeResult, first, input);
+  assertCurrentTurn();
+  // A uniquely matched published name/alias whose requested records were all
+  // hydrated is already proof that this utterance is a direct entity request.
+  // It cannot be a bare acknowledgement of a pending welcome question.
+  const highConfidencePublishedEntity = verifiedPublishedEntityFastPath(
+    completedSpeculativeResult, first, input,
+  );
+  const requestMeaning = highConfidencePublishedEntity
+    ? Object.freeze({
+      kind: 'direct_request', originalUtterance: input.latestUtterance,
+      pendingWelcomeQuestion: common.welcomeContinuation?.pendingQuestion ?? null,
+      publishedNextStep: null,
+    })
+    : await resolveRequestMeaning({ latestUtterance: input.latestUtterance,
+      welcomeContinuation: common.welcomeContinuation, search: first.search }, dependencies.invokeStructuredLlm);
+  const welcomeVerified = requestMeaning.kind === 'published_welcome_continuation';
+  if (welcomeVerified) first = { ...first, search: { ...first.search, query: requestMeaning.query,
+    requestedFact: requestMeaning.requestedFact, contextualReference: null, preferredRecordIds: [] } };
   let contextualMemoryVerified = !welcomeVerified && !highConfidencePublishedEntity
     && await reviewRememberedReference({
     latestUtterance: input.latestUtterance, search: first.search, state,
@@ -809,6 +872,9 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   const usedSpeculativeRetrieval = !welcomeVerified && !contextualMemoryVerified && guidanceCompatible
     && (highConfidencePublishedEntity
       || speculativeEvidenceCompatible(speculativeResult, first, input));
+  // Routing and semantic reviews may finish after an interruption. Recheck the
+  // epoch immediately before consuming either speculative or foreground data.
+  assertCurrentTurn();
   const retrieval = usedSpeculativeRetrieval ? speculativeResult : await dependencies.retrieveEvidence({
     auth: input.auth,
     scope: publishedContext.scope,
@@ -896,6 +962,11 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     informationUnavailableResponse: input.informationUnavailableResponse,
     conversationGuidance: postSearchConversationGuidance,
     requestedEntityRecordIds: retrieval.requestedEntityRecordIds,
+    deterministicEntityCoverageVerified: requiresEntityCoverageReview === false
+      && resolutionAmbiguity?.required !== true
+      && (retrieval.evidence ?? []).every((source) => (
+        source?.verified === true && source?.callerFacing !== false
+      )),
     maximumSpeechCharacters: input.maximumSpeechCharacters,
   }, {
     invokeStructuredLlm: dependencies.invokeStructuredLlm,

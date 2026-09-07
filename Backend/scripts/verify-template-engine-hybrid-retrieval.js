@@ -49,7 +49,7 @@ const publishedArtifacts = Object.freeze({ bundles: Object.freeze([
       Object.freeze({
         record_id: 'published-alpha', record_type: 'catalog_item',
         entity_name: 'Alpha Service', entity_category: 'Configured Group',
-        entity_aliases: Object.freeze(['Alpha Alias']),
+        entity_aliases: Object.freeze(['Alpha Alias', 'ஆல்பா சேவை']),
         publicationSttForms: Object.freeze(['Alfa Service']),
         entity_metadata: Object.freeze({
           itemKey: 'alpha-service', categoryKey: 'configured-group',
@@ -95,6 +95,12 @@ const sttMatch = exactPublishedCandidates(publishedArtifacts, exactInput, {
   query: 'Alfa Service details',
 });
 assert.equal(sttMatch[0].recordId, 'published-alpha');
+const multilingualAliasMatch = exactPublishedCandidates(publishedArtifacts, exactInput, {
+  query: 'ஆல்பா சேவை பற்றி சொல்லுங்க',
+});
+assert.equal(multilingualAliasMatch[0].recordId, 'published-alpha');
+assert.equal(multilingualAliasMatch[0].matchMethod, 'published_exact',
+  'A published multilingual alias embedded in a clear request must use deterministic identity resolution');
 
 const categoryMatch = exactPublishedCandidates(publishedArtifacts, exactInput, {
   query: 'Spoken Group details',

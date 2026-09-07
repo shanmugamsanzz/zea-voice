@@ -8,7 +8,9 @@ import {
 } from '../src/voice/interaction/template-engine-turn-latency.js';
 import {
   recordTemplateEngineTurnMetrics,
+  templateEngineAudioPercentiles,
   templateEngineFirstAudioTargets,
+  TEMPLATE_ENGINE_ACTUAL_ANSWER_MAXIMUM_MS,
 } from '../src/voice/interaction/template-engine-observability.js';
 
 function fakeTimers() {
@@ -182,6 +184,7 @@ assert.match(orchestrator, /generationPlaybackGroupId/u,
 assert.deepEqual(templateEngineFirstAudioTargets, {
   RESPONSE: 1_000, CLARIFY: 1_000, SEARCH: 3_000, TOOL: 2_000,
 });
+assert.equal(TEMPLATE_ENGINE_ACTUAL_ANSWER_MAXIMUM_MS, 4_000);
 const metrics = {};
 for (const [route, elapsedMs] of [
   ['RESPONSE', 999], ['SEARCH', 2_999], ['TOOL', 1_999],
@@ -199,7 +202,48 @@ for (const [route, elapsedMs] of [
   assert.equal(sample.firstAudioTargetMs, templateEngineFirstAudioTargets[route]);
   assert.equal(sample.finalAnswerFirstAudioMs, elapsedMs + 150);
   assert.equal(sample.finalAnswerReadyMs, Math.max(1, elapsedMs - 200));
+  assert.equal(sample.actualAnswerBaseline.maximumMs, 4_000);
+  assert.equal(sample.actualAnswerBaseline.normalVerifiedRequest, true);
 }
+const maximumBoundary = recordTemplateEngineTurnMetrics({}, {
+  epoch: 'normal-maximum-boundary',
+  result: { provenance: { initialDecision: 'SEARCH', finalDecision: 'RESPONSE' } },
+  turnStartedAt: 30_000, firstFinalAudioAt: 34_000,
+});
+assert.equal(maximumBoundary.actualAnswerBaseline.maximumStatus, 'passed',
+  'Four seconds is the inclusive maximum for a normal verified request');
+const maximumBreach = recordTemplateEngineTurnMetrics({}, {
+  epoch: 'normal-maximum-breach',
+  result: { provenance: { initialDecision: 'SEARCH', finalDecision: 'RESPONSE' } },
+  turnStartedAt: 30_000, firstFinalAudioAt: 34_001,
+});
+assert.equal(maximumBreach.actualAnswerBaseline.maximumStatus, 'missed');
+const recoverySample = recordTemplateEngineTurnMetrics({}, {
+  epoch: 'recovery-not-normal', result: { recoveryKind: 'validation' },
+  turnStartedAt: 30_000, firstFinalAudioAt: 39_000,
+});
+assert.equal(recoverySample.normalVerifiedRequest, false);
+assert.equal(recoverySample.actualAnswerBaseline.maximumStatus, 'not_measured',
+  'Approved recovery timing must not be presented as a normal verified request sample');
+const passingDistribution = templateEngineAudioPercentiles([
+  ...Array.from({ length: 20 }, () => ({
+    finalAnswerFirstAudioMs: 2_900, normalVerifiedRequest: true,
+  })),
+  { finalAnswerFirstAudioMs: 9_000, normalVerifiedRequest: false },
+]);
+assert.equal(passingDistribution.actualAnswerUnderThreeSeconds.averageTargetStatus, 'passed');
+assert.equal(passingDistribution.actualAnswerUnderThreeSeconds.maximumTargetStatus, 'passed');
+assert.equal(passingDistribution.actualAnswerUnderThreeSeconds.measured, 20,
+  'Recovery audio must be excluded from the normal verified request SLO');
+const maximumBreachDistribution = templateEngineAudioPercentiles([
+  ...Array.from({ length: 19 }, () => ({
+    finalAnswerFirstAudioMs: 2_900, normalVerifiedRequest: true,
+  })),
+  { finalAnswerFirstAudioMs: 4_001, normalVerifiedRequest: true },
+]);
+assert.equal(maximumBreachDistribution.actualAnswerUnderThreeSeconds.averageTargetStatus, 'passed');
+assert.equal(maximumBreachDistribution.actualAnswerUnderThreeSeconds.maximumTargetStatus, 'missed',
+  'A normal verified request above four seconds must fail even when the average is below target');
 for (const route of ['RESPONSE', 'SEARCH', 'TOOL']) {
   const targetMs = templateEngineFirstAudioTargets[route];
   const sample = recordTemplateEngineTurnMetrics(metrics, {

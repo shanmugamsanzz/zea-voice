@@ -2493,6 +2493,8 @@ export class RealtimeConversationOrchestrator {
         auth,
         scope,
         callId: this.call.id,
+        turnEpoch: epoch,
+        turnBoundaryId: `${this.call.id}:${epoch}`,
         usageDirection: this.call.direction,
         language: languageCode(this.runtimeProfile.agent.language),
         mainPrompt: this.runtimeProfile.agent.prompt,
@@ -2511,6 +2513,7 @@ export class RealtimeConversationOrchestrator {
         confirmationMessage: this.actionConfirmationConfiguration?.confirmationMessage,
         informationUnavailableResponse: configuredInformationUnavailableResponse(this.runtimeProfile),
       }, {
+        isTurnCurrent: () => !this.#isStaleGeneration(epoch) && !this.finalized,
         invokeStructuredLlm,
         onRoutingDecisionRetry: (details) => {
           this.log.warn({
@@ -2682,6 +2685,7 @@ export class RealtimeConversationOrchestrator {
             validationReason: details.validationReason,
             finalDecision: details.finalDecision,
             repairAttempted: details.repairAttempted,
+            semanticValidationSkipped: details.semanticValidationSkipped === true,
           }, 'Template-engine post-search decision validated');
         },
       });
@@ -2821,6 +2825,8 @@ export class RealtimeConversationOrchestrator {
       operationalFailure: result.operationalFailure ?? null,
       validationFailure: result.validationFailure ?? null,
       recoveryKind: result.recoveryKind ?? null,
+      normalVerifiedRequest: turnTiming.normalVerifiedRequest,
+      semanticValidationSkipped: result.diagnostics?.postSearch?.semanticValidationSkipped === true,
       spokenCharacters: answer.length,
       configuredSpeechCharacters: this.runtimeProfile.limits?.ttsMaxCharactersPerResponse ?? null,
       stageTimings,

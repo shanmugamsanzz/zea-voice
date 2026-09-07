@@ -8,6 +8,7 @@ export const templateEngineFirstAudioTargets = Object.freeze({
 });
 
 export const TEMPLATE_ENGINE_ACTUAL_ANSWER_TARGET_MS = 3_000;
+export const TEMPLATE_ENGINE_ACTUAL_ANSWER_MAXIMUM_MS = 4_000;
 export const TEMPLATE_ENGINE_ACTUAL_ANSWER_MINIMUM_SAMPLES = 20;
 
 function stageDuration(stageTimings, stage) {
@@ -21,18 +22,21 @@ export function templateEngineAudioPercentiles(turns = []) {
     const percentile = (fraction) => values.length ? values[Math.ceil(values.length * fraction) - 1] : null;
     return Object.freeze({ count: values.length, p50: percentile(0.5), p90: percentile(0.9), p95: percentile(0.95) });
   };
-  const actualAnswers = turns.map((turn) => turn.finalAnswerFirstAudioMs)
+  const actualAnswers = turns.filter((turn) => turn.normalVerifiedRequest !== false)
+    .map((turn) => turn.finalAnswerFirstAudioMs)
     .filter(Number.isFinite);
   const actualAnswersUnderTarget = actualAnswers
     .filter((durationMs) => durationMs < TEMPLATE_ENGINE_ACTUAL_ANSWER_TARGET_MS).length;
   const actualAnswerAverageMs = actualAnswers.length
     ? Math.round((actualAnswers.reduce((total, value) => total + value, 0)
       / actualAnswers.length) * 100) / 100 : null;
+  const actualAnswerMaximumMs = actualAnswers.length ? Math.max(...actualAnswers) : null;
   return Object.freeze({
     acknowledgement: summarize('acknowledgementFirstAudioMs'),
     finalAnswer: summarize('finalAnswerFirstAudioMs'),
     actualAnswerUnderThreeSeconds: Object.freeze({
       targetMs: TEMPLATE_ENGINE_ACTUAL_ANSWER_TARGET_MS,
+      maximumMs: TEMPLATE_ENGINE_ACTUAL_ANSWER_MAXIMUM_MS,
       minimumSamples: TEMPLATE_ENGINE_ACTUAL_ANSWER_MINIMUM_SAMPLES,
       measured: actualAnswers.length,
       passed: actualAnswersUnderTarget,
@@ -43,6 +47,10 @@ export function templateEngineAudioPercentiles(turns = []) {
       averageTargetStatus: actualAnswers.length < TEMPLATE_ENGINE_ACTUAL_ANSWER_MINIMUM_SAMPLES
         ? 'insufficient_live_samples'
         : actualAnswerAverageMs < TEMPLATE_ENGINE_ACTUAL_ANSWER_TARGET_MS ? 'passed' : 'missed',
+      maximumObservedMs: actualAnswerMaximumMs,
+      maximumTargetStatus: actualAnswers.length < TEMPLATE_ENGINE_ACTUAL_ANSWER_MINIMUM_SAMPLES
+        ? 'insufficient_live_samples'
+        : actualAnswerMaximumMs <= TEMPLATE_ENGINE_ACTUAL_ANSWER_MAXIMUM_MS ? 'passed' : 'missed',
       p95: summarize('finalAnswerFirstAudioMs').p95,
       p95TargetStatus: actualAnswers.length < TEMPLATE_ENGINE_ACTUAL_ANSWER_MINIMUM_SAMPLES
         ? 'insufficient_live_samples'
@@ -110,6 +118,8 @@ export function recordTemplateEngineTurnMetrics(runtimeMetrics, {
       ? Math.max(0, firstFinalAudioAt - finalResponseReadyAt) : null,
     finalAnswerAudioAfterQueuedMs,
     answerQueueAfterReadyMs,
+    normalVerifiedRequest: !result?.recoveryKind
+      && !result?.validationFailure && !result?.operationalFailure,
     stageTimings: Object.fromEntries(Object.entries(stageTimings).map(([stage, timing]) => [stage, { ...timing }])),
     finalAnswerStatus: finalAnswerFirstAudioMs === null || targetMs === null
       ? 'not_measured' : finalAnswerFirstAudioMs < targetMs ? 'passed' : 'missed',
@@ -122,9 +132,14 @@ export function recordTemplateEngineTurnMetrics(runtimeMetrics, {
   // the actual-answer target.
   sample.actualAnswerBaseline = Object.freeze({
     targetMs: TEMPLATE_ENGINE_ACTUAL_ANSWER_TARGET_MS,
+    maximumMs: TEMPLATE_ENGINE_ACTUAL_ANSWER_MAXIMUM_MS,
+    normalVerifiedRequest: sample.normalVerifiedRequest,
     actualAnswerFirstAudioMs: finalAnswerFirstAudioMs,
     targetStatus: finalAnswerFirstAudioMs === null ? 'not_measured'
       : finalAnswerFirstAudioMs < TEMPLATE_ENGINE_ACTUAL_ANSWER_TARGET_MS ? 'passed' : 'missed',
+    maximumStatus: finalAnswerFirstAudioMs === null || !sample.normalVerifiedRequest
+      ? 'not_measured'
+      : finalAnswerFirstAudioMs <= TEMPLATE_ENGINE_ACTUAL_ANSWER_MAXIMUM_MS ? 'passed' : 'missed',
     stages: Object.freeze({
       sttFinalizationMs: Number.isFinite(sttFinalizationMs) ? Math.max(0, sttFinalizationMs) : null,
       routingMs: stageDuration(stageTimings, 'routing'),

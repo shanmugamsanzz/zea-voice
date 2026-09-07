@@ -63,6 +63,32 @@ const verifiedEvidence = Object.freeze([
   }),
 ]);
 
+{
+  let answerCalls = 0;
+  let semanticCalls = 0;
+  const result = await respondToTemplateEngineSearch({
+    mainPrompt, latestUtterance, state, scope, searchDecision, verifiedEvidence,
+    requestedEntityRecordIds: ['record-1'], deterministicEntityCoverageVerified: true,
+  }, {
+    tenantBoundaryVerified: true,
+    invokeStructuredLlm: async () => {
+      answerCalls += 1;
+      return { outputParsed: { decision: 'RESPONSE',
+        response: 'Selected service price is 3200 currency units.',
+        clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null } };
+    },
+    validateGroundedClaims: async () => {
+      semanticCalls += 1;
+      return { supported: true, successClaimed: false, requestedFactAddressed: true, reason: null };
+    },
+  });
+  assert.equal(answerCalls, 1);
+  assert.equal(semanticCalls, 0,
+    'A fully deterministic published answer must not invoke a redundant semantic reviewer');
+  assert.equal(result.diagnostics.semanticValidationSkipped, true);
+  assert.equal(result.outputValidation.valid, true);
+}
+
 // Focus the generation payload without dropping operands or structured facts.
 {
   const originals = [
@@ -234,6 +260,46 @@ await assert.rejects(() => respondToTemplateEngineSearch({
 }), { code: 'TEMPLATE_ENGINE_OUTPUT_INVALID' }, 'An impossible budget must not produce a truncated factual answer');
 assert.equal(impossibleBudgetSemanticChecks, 0,
   'A deterministically impossible speech budget must not invoke semantic grounding');
+
+{
+  const conciseEvidence = Object.freeze([{ ...verifiedEvidence[0],
+    content: 'The price is 3200 units.',
+  }]);
+  const conciseAnswer = conciseEvidence[0].content;
+  let calls = 0;
+  let semanticChecks = 0;
+  const result = await respondToTemplateEngineSearch({
+    mainPrompt, latestUtterance, state, searchDecision, scope,
+    verifiedEvidence: conciseEvidence,
+    requestedEntityRecordIds: ['record-1'],
+    deterministicEntityCoverageVerified: true,
+    maximumSpeechCharacters: conciseAnswer.length,
+  }, {
+    tenantBoundaryVerified: true,
+    validateGroundedClaims: async () => {
+      semanticChecks += 1;
+      return { supported: true, requestedFactAddressed: true };
+    },
+    invokeStructuredLlm: async () => {
+      calls += 1;
+      return { outputParsed: { decision: 'RESPONSE',
+        response: `${conciseAnswer} ${'Unnecessary explanation. '.repeat(8)}`,
+        clarification: null, evidenceIds: ['E1'],
+        nextQuestion: null, stateUpdate: null } };
+    },
+  });
+  assert.equal(calls, 2, 'The normal bounded repair remains available before extraction');
+  assert.equal(semanticChecks, 0,
+    'Oversized candidates are rejected before semantic review and verified extraction is deterministic');
+  assert.equal(result.decision.response, conciseAnswer);
+  assert.equal(result.decision.response.length <= conciseAnswer.length, true);
+  assert.deepEqual(result.decision.evidenceIds, ['evidence-1']);
+  assert.equal(result.decision.nextQuestion, null);
+  assert.equal(result.diagnostics.budgetCompressionApplied, true,
+    'A failed length repair must compress complete verified evidence instead of falling back');
+  assert.equal(result.outputValidation.valid, true,
+    'The compressed answer must pass the complete delivery validator');
+}
 const sixOperands = Array.from({ length: 6 }, (_, index) => ({ ...verifiedEvidence[0],
   evidenceId: `operand-${index}`, recordId: `record-${index}`, canonicalName: `Option ${index}`,
   content: 'The price is 3200 units.', authoritativeData: { price: 3200 },

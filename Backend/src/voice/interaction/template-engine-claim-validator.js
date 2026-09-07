@@ -66,6 +66,30 @@ function scalarFacts(value, path = '', depth = 0, result = []) {
   return result;
 }
 
+function deterministicPublishedGrounding(speech, records) {
+  const response = cleanText(speech);
+  if (!response || !records.length) return Object.freeze({
+    deterministicallyGrounded: false, unsupportedTerms: Object.freeze([]),
+  });
+  const corpus = records.flatMap((record) => [
+    record?.content, record?.canonicalName, ...(record?.aliases ?? []),
+    ...(record?.publishedAttributePaths ?? []),
+    ...scalarFacts(record?.authoritativeData ?? {}).flatMap((fact) => [fact.path, fact.value]),
+  ]).filter(Boolean).join(' ');
+  const allowed = tokens(corpus);
+  // One- and two-character grammatical tokens are not claims. Longer lexical terms and
+  // acronyms must be present in the cited published evidence; otherwise the
+  // semantic reviewer remains mandatory.
+  const substantive = [...tokens(response)].filter((token) => [...token].length > 2);
+  const acronyms = cleanText(speech).match(/\b[A-Z][A-Z\p{N}]{1,}\b/gu) ?? [];
+  const asserted = new Set([...substantive, ...acronyms.map(identity).filter(Boolean)]);
+  const unsupportedTerms = [...asserted].filter((term) => !allowed.has(term)).slice(0, 20);
+  return Object.freeze({
+    deterministicallyGrounded: asserted.size > 0 && unsupportedTerms.length === 0,
+    unsupportedTerms: Object.freeze(unsupportedTerms),
+  });
+}
+
 function responseContainsValue(responseIdentity, value) {
   const normalized = identity(value);
   return normalized.length > 1 && responseIdentity.includes(normalized);
@@ -80,33 +104,39 @@ export function validateTemplateEngineSearchClaims({
 } = {}) {
   const response = cleanText(speech);
   const records = Array.isArray(evidence) ? evidence : [];
+  const deterministicGrounding = deterministicPublishedGrounding(response, records);
   const requestedFact = cleanText(searchInterpretation?.requestedFact, 500);
   if (decision === 'CLARIFY') {
     return Object.freeze({
       supported: Boolean(response), successClaimed: false,
       requestedFactAddressed: true, reason: response ? null : 'empty_clarification',
+      ...deterministicGrounding,
     });
   }
   if (decision === 'NO_MATCH') {
     return Object.freeze({
       supported: Boolean(response), successClaimed: false,
       requestedFactAddressed: true, reason: response ? null : 'empty_no_match',
+      ...deterministicGrounding,
     });
   }
   if (decision === 'RESPONSE' && response && !records.length && !searchInterpretation) {
     return Object.freeze({
       supported: true, successClaimed: false, requestedFactAddressed: true, reason: null,
+      ...deterministicGrounding,
     });
   }
   if (decision !== 'RESPONSE' || !response || !records.length) {
     return Object.freeze({
       supported: false, successClaimed: false, requestedFactAddressed: !requestedFact,
       reason: !records.length ? 'verified_evidence_required' : 'empty_response',
+      ...deterministicGrounding,
     });
   }
   if (!requestedFact) {
     return Object.freeze({
       supported: true, successClaimed: false, requestedFactAddressed: true, reason: null,
+      ...deterministicGrounding,
     });
   }
 
@@ -135,6 +165,7 @@ export function validateTemplateEngineSearchClaims({
     reason: !evidenceMentionsFact
       ? 'requested_fact_not_in_evidence'
       : (requestedFactAddressed ? null : 'requested_fact_not_addressed'),
+    ...deterministicGrounding,
   });
 }
 

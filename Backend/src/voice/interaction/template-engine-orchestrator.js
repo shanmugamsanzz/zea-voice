@@ -554,7 +554,109 @@ function evidenceSupportingRequestedFact(evidence, requestedFact) {
   }));
 }
 
-function extractiveGroundedRecovery(evidence, requestedFact) {
+function completeSpeechFragments(value) {
+  const speech = cleanText(value, 8_000);
+  if (!speech) return Object.freeze([]);
+  const sentences = speech.match(/[^.!?\u0964\u061f\u3002]+[.!?\u0964\u061f\u3002]?/gu)
+    ?.map((sentence) => cleanText(sentence, 8_000)).filter(Boolean) ?? [];
+  return Object.freeze(sentences.length ? sentences : [speech]);
+}
+
+function publishedScalarFragments(source, requestedFact, value = source?.authoritativeData,
+  path = '', depth = 0, result = []) {
+  if (value === null || value === undefined || depth > 6 || result.length >= 100) return result;
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      publishedScalarFragments(source, requestedFact, entry, path, depth + 1, result);
+    }
+    return result;
+  }
+  if (typeof value === 'object') {
+    for (const [key, entry] of Object.entries(value)) {
+      publishedScalarFragments(source, requestedFact, entry, path ? `${path}.${key}` : key,
+        depth + 1, result);
+    }
+    return result;
+  }
+  const normalizedPath = candidateIdentity(path);
+  const requestedTokens = new Set(candidateIdentity(requestedFact).split(/\s+/u).filter(Boolean));
+  const pathTokens = normalizedPath.split(/\s+/u).filter(Boolean);
+  const published = (source?.publishedAttributePaths ?? []).some((publishedPath) => {
+    const normalizedPublishedPath = candidateIdentity(publishedPath);
+    return normalizedPublishedPath === normalizedPath
+      || normalizedPublishedPath.endsWith(` ${normalizedPath}`)
+      || normalizedPath.endsWith(` ${normalizedPublishedPath}`);
+  });
+  if (!published || !pathTokens.some((token) => requestedTokens.has(token))) return result;
+  const scalar = cleanText(value, 1_000);
+  if (!scalar) return result;
+  const canonicalName = cleanText(source?.canonicalName, 300);
+  result.push(`${canonicalName ? `${canonicalName}: ` : ''}${path}: ${scalar}.`);
+  return result;
+}
+
+function relevantFragment(source, requestedFact) {
+  const wanted = new Set(candidateIdentity(requestedFact).split(/\s+/u).filter(Boolean));
+  const canonicalTokens = new Set(candidateIdentity(source?.canonicalName)
+    .split(/\s+/u).filter(Boolean));
+  const candidates = [
+    ...publishedScalarFragments(source, requestedFact),
+    ...completeSpeechFragments(source?.authoritativeData?.callerFacingAnswer),
+    ...completeSpeechFragments(source?.authoritativeData?.answer),
+    ...completeSpeechFragments(source?.content),
+  ];
+  const unique = [...new Set(candidates)].filter((fragment) => (
+    candidateIdentity(fragment).split(/\s+/u).filter(Boolean).length >= 2
+  ));
+  if (!unique.length) return null;
+  const ranked = unique.map((fragment, index) => {
+    const tokens = new Set(candidateIdentity(fragment).split(/\s+/u).filter(Boolean));
+    let factMatches = 0;
+    let nameMatches = 0;
+    for (const token of wanted) if (tokens.has(token)) factMatches += 1;
+    for (const token of canonicalTokens) if (tokens.has(token)) nameMatches += 1;
+    return Object.freeze({ fragment, index, factMatches, nameMatches,
+      numeric: /\p{N}/u.test(fragment) ? 1 : 0 });
+  }).sort((left, right) => (
+    right.factMatches - left.factMatches
+      || right.nameMatches - left.nameMatches
+      || right.numeric - left.numeric
+      || left.fragment.length - right.fragment.length
+      || left.index - right.index
+  ));
+  return ranked[0]?.fragment ?? null;
+}
+
+function extractiveGroundedRecovery(evidence, requestedFact, {
+  maximumSpeechCharacters = null, requiredRecordIds = [],
+} = {}) {
+  const requiredCount = new Set(cleanList(requiredRecordIds, 100)
+    .map(recordId).filter(Boolean)).size;
+  const required = evidenceForRequestedEntities(evidence, requiredRecordIds);
+  const supporting = requiredCount
+    ? required : evidenceSupportingRequestedFact(evidence, requestedFact);
+  if (!supporting.length || (requiredCount && supporting.length !== requiredCount)) {
+    return null;
+  }
+  const fragments = supporting.map((source) => relevantFragment(source, requestedFact));
+  if (fragments.some((fragment) => !fragment)) return null;
+  const identifiedFragments = supporting.length > 1
+    ? fragments.map((fragment, index) => {
+      const name = cleanText(supporting[index]?.canonicalName, 300);
+      return name && !candidateIdentity(fragment).includes(candidateIdentity(name))
+        ? `${name}: ${fragment}` : fragment;
+    }) : fragments;
+  const response = [...new Set(identifiedFragments)].join(' ').trim();
+  const budget = Number(maximumSpeechCharacters);
+  if (!response || (Number.isFinite(budget) && budget > 0 && response.length > budget)) return null;
+  return Object.freeze({
+    decision: 'RESPONSE', response, clarification: null,
+    evidenceIds: Object.freeze(supporting.map((source) => source.evidenceId)),
+    nextQuestion: null, stateUpdate: null,
+  });
+}
+
+function fullExtractiveGroundedRecovery(evidence, requestedFact) {
   const supporting = evidenceSupportingRequestedFact(evidence, requestedFact);
   if (!supporting.length) return null;
   const speechParts = [...new Set(supporting.map((source) => cleanText(
@@ -744,6 +846,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     'Runtime grounding rules: authoritativeData, content, and publishedAttributePaths contain the only published facts available for each record.',
     speechBudgetInstruction(input.maximumSpeechCharacters),
     firstPassAnswerInstruction,
+    'For the fastest safe delivery, retain the published wording for factual names, attributes and values when it is natural in the caller language. Do not add synonymous factual claims that are absent from the evidence.',
     'Distinguish caller context from published facts. You may acknowledge a fact the caller stated, but it cannot establish eligibility, suitability, pricing or any business policy. For multi-part questions, answer the supported requested parts and identify the specific missing detail without inferring a negative or positive answer. Do not replace available information with a blanket NO_MATCH.',
     'Answer the requestedFact only when it is explicitly supported by those supplied facts.',
     'Preserve the original request in requestMeaning and latestUtterance. A search rewrite must not replace an overview with a single unrelated item or replace a focused attribute question with a full record recital. Answer the current request concisely using the cited records.',
@@ -787,6 +890,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
   let groundingRepairAttempted = false;
   let configuredFallbackApplied = false;
   let extractiveRecoveryApplied = false;
+  let budgetCompressionApplied = false;
   if (!validated.valid) {
     firstInvalidReason = validated.reason;
     repairingCitation = citationRepairRequired(
@@ -839,7 +943,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     );
     const extractiveRecovery = requestedFactAvailable
       && initialAmbiguity?.required !== true
-      ? extractiveGroundedRecovery(citations.evidence, search.value.search.requestedFact)
+      ? fullExtractiveGroundedRecovery(citations.evidence, search.value.search.requestedFact)
       : null;
     if (extractiveRecovery) {
       validated = validateTemplateEnginePostSearchDecision(
@@ -895,6 +999,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     validated.value, citations.aliasToEvidenceId,
   );
   let semanticClaimValidation = dependencies.semanticClaimValidation ?? null;
+  let semanticValidationSkipped = false;
   const validateClaims = async (decision) => {
     if (configuredFallbackApplied && decision.decision === 'NO_MATCH') {
       return Object.freeze({
@@ -988,10 +1093,26 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     }
     return Object.freeze({ validation, claims });
   };
+  const validateAfterDeterministicPreflight = async (decision, preflight) => {
+    const deterministic = preflight.validation.valid
+      && input.deterministicEntityCoverageVerified === true
+      && decision.decision === 'RESPONSE'
+      && preflight.claims.result.supported === true
+      && preflight.claims.result.requestedFactAddressed === true
+      && preflight.claims.result.deterministicallyGrounded === true;
+    if (!deterministic) return validateClaims(decision);
+    semanticValidationSkipped = true;
+    return Object.freeze({
+      supported: true, successClaimed: false, requestedFactAddressed: true,
+      reason: null, validationMethod: 'deterministic_published_evidence',
+    });
+  };
   const initialPreflight = deterministicPreflight(groundedDecision);
   let outputValidation = initialPreflight.validation;
   if (outputValidation.valid) {
-    semanticClaimValidation = await validateClaims(groundedDecision);
+    semanticClaimValidation = await validateAfterDeterministicPreflight(
+      groundedDecision, initialPreflight,
+    );
   }
   if (semanticClaimValidation?.reason === 'requested_entity_mapping_uncertain') {
     dependencies = { ...dependencies, ambiguity: dependencies.ambiguity?.required === true
@@ -1076,7 +1197,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       const repairedPreflight = deterministicPreflight(groundedDecision, { retryCount: 1 });
       outputValidation = repairedPreflight.validation;
       semanticClaimValidation = outputValidation.valid
-        ? await validateClaims(groundedDecision) : null;
+        ? await validateAfterDeterministicPreflight(groundedDecision, repairedPreflight) : null;
       clarificationAmbiguity = verifiedClarificationAmbiguity(
         groundedDecision, evidence, search.value.search, dependencies.ambiguity,
       );
@@ -1099,10 +1220,18 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     }
   }
   if (!outputValidation.valid) {
+    const recoveryReason = outputValidation.reason;
     const unavailableResponse = cleanText(input.informationUnavailableResponse, 4_000);
-    const extractiveRecovery = answerableEvidence && !budgetRepairRequired
-      && clarificationAmbiguity?.required !== true
-      ? extractiveGroundedRecovery(citations.evidence, search.value.search.requestedFact)
+    const extractiveRecovery = answerableEvidence && clarificationAmbiguity?.required !== true
+      ? recoveryReason === 'speech_budget_exceeded'
+        ? extractiveGroundedRecovery(citations.evidence, search.value.search.requestedFact, {
+          maximumSpeechCharacters: input.maximumSpeechCharacters,
+          requiredRecordIds: requiredEntityRecordIds.length
+            ? requiredEntityRecordIds : base.state.comparisonRecordIds,
+        })
+        : fullExtractiveGroundedRecovery(
+          citations.evidence, search.value.search.requestedFact,
+        )
       : null;
     if (extractiveRecovery) {
       const recovered = validateTemplateEnginePostSearchDecision(
@@ -1110,13 +1239,14 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       );
       if (recovered.valid) {
         extractiveRecoveryApplied = true;
+        budgetCompressionApplied = recoveryReason === 'speech_budget_exceeded';
         groundedDecision = restorePostSearchEvidenceIds(
           recovered.value, citations.aliasToEvidenceId,
         );
         const extractivePreflight = deterministicPreflight(groundedDecision, { retryCount: 1 });
         outputValidation = extractivePreflight.validation;
         semanticClaimValidation = outputValidation.valid
-          ? await validateClaims(groundedDecision) : null;
+          ? await validateAfterDeterministicPreflight(groundedDecision, extractivePreflight) : null;
         if (outputValidation.valid) {
           outputValidation = validateTemplateEngineOutput(validationInput(
             groundedDecision, semanticClaimValidation, {
@@ -1143,7 +1273,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
         });
         outputValidation = noMatchPreflight.validation;
         semanticClaimValidation = outputValidation.valid
-          ? await validateClaims(groundedDecision) : null;
+          ? await validateAfterDeterministicPreflight(groundedDecision, noMatchPreflight) : null;
         if (outputValidation.valid) {
           outputValidation = validateTemplateEngineOutput(validationInput(
             groundedDecision, semanticClaimValidation, {
@@ -1167,6 +1297,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       recovered: outputValidation.valid,
       configuredFallbackApplied,
       extractiveRecoveryApplied,
+      budgetCompressionApplied,
       first: firstDiagnostics,
       final: finalDiagnostics,
       initialNumericValidationDetails,
@@ -1203,8 +1334,10 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     finalDecision: groundedDecision.decision,
     repairAttempted: Boolean(firstInvalidReason),
     extractiveRecoveryApplied,
+    budgetCompressionApplied,
     initialNumericValidationDetails,
     initialSemanticValidationReason,
+    semanticValidationSkipped,
   });
   if (typeof dependencies.onPostSearchDiagnostics === 'function') {
     dependencies.onPostSearchDiagnostics(diagnostics);

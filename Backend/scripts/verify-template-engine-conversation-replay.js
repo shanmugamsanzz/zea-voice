@@ -144,6 +144,7 @@ try {
     stt.publish({ type: 'final_transcript', text: turn.text, language: 'ta', isFinal: true });
     await waitFor(() => logs.filter((entry) => entry.stage === 'template_engine.turn_completed').length > completed
       && orchestrator.controller.state === 'listening');
+    const completedTurn = logs.filter((entry) => entry.stage === 'template_engine.turn_completed').at(-1);
     const answer = spoken.slice(before).join(' ');
     assert.ok(answer && audioFrames.length > framesBefore, `Silent turn ${turn.id}`);
     if (failAnswer) { assert.ok(answer.includes(recovery)); assert.ok(!answer.includes('9999')); }
@@ -158,9 +159,9 @@ try {
     if (failAnswer) {
       assert.equal(stages.has('template_engine_claim_validation'), false,
         'Deterministically rejected drafts must not consume semantic claim validation');
-    } else {
-      assert.ok(stages.has('template_engine_claim_validation'),
-        `Stage skipped: ${turn.id}: template_engine_claim_validation`);
+    } else if (!stages.has('template_engine_claim_validation')) {
+      assert.equal(completedTurn?.semanticValidationSkipped, true,
+        `A semantic review may be skipped only after deterministic validation: ${turn.id}`);
     }
     if (!stages.has('template_engine_entity_coverage')) resolvedCoverageSkips += 1;
     if (turn.id === 'welcome') assert.ok(stages.has('template_engine_welcome_meaning'));

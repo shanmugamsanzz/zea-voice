@@ -294,6 +294,15 @@ for (const [fact, speech, supported, addressed] of [
 }
 assert.equal(deterministicPrice.supported, true);
 assert.equal(deterministicPrice.requestedFactAddressed, true);
+assert.equal(deterministicPrice.deterministicallyGrounded, true,
+  'Extractive published facts should pass conservative deterministic semantic grounding');
+const deterministicHallucination = validateTemplateEngineSearchClaims({
+  speech: 'Service Alpha includes FREE MRI.', evidence,
+  decision: 'RESPONSE', searchInterpretation: { requestedFact: 'included feature' },
+});
+assert.equal(deterministicHallucination.deterministicallyGrounded, false);
+assert.ok(deterministicHallucination.unsupportedTerms.includes('free'));
+assert.ok(deterministicHallucination.unsupportedTerms.includes('mri'));
 const deterministicWrongFact = validateTemplateEngineSearchClaims({
   speech: 'Service Alpha costs 3200 units.', evidence,
   decision: 'RESPONSE', searchInterpretation: { requestedFact: 'included feature' },

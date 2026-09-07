@@ -759,6 +759,7 @@ export async function retrieveTemplateEngineEvidence({
       ? `${candidate.knowledgeBaseId}:${candidate.publicationRevision}:${candidate.categoryKey}`
       : candidateIdentityKey(candidate, input.tenantId), candidate])).values()];
   let categoryConfirmation = false;
+  let exactPublishedSelection = null;
   if (!exactCatalog.length) {
     const vocabulary = new Map();
     for (const bundle of scopedBundles) for (const [key, forms] of publicationCategoryVocabulary(bundle, input.usageDirection)) {
@@ -790,6 +791,7 @@ export async function retrieveTemplateEngineEvidence({
   // Multiple names remain with the resolver and comparison-selection contract.
   if (exactCatalog.length === 1) {
     const candidate = exactCatalog[0];
+    if (!categoryConfirmation) exactPublishedSelection = candidate;
     entityResolution = Object.freeze({
       ...entityResolution,
       candidate: Object.freeze({ ...candidate, explicit: !categoryConfirmation,
@@ -927,7 +929,9 @@ export async function retrieveTemplateEngineEvidence({
     searchBm25: async () => (await searchChannels()).channels.bm25,
     searchQdrantE5: async () => (await searchChannels()).channels.qdrant,
   });
-  if (!exactCatalog.length && !contextualMemoryVerified
+  const uncertainExactIdentity = exactCatalog.length > 1
+    && entityResolution?.ambiguity?.detected === true;
+  if ((!exactCatalog.length || uncertainExactIdentity) && !contextualMemoryVerified
     && requestMeaning?.kind !== 'published_welcome_continuation' && reviewEntityCandidates) {
     // Semantic hits are hints only. Rebind their identities to active published
     // records before exposing any candidate name to the language reviewer.
@@ -1082,6 +1086,26 @@ export async function retrieveTemplateEngineEvidence({
       });
   }
   const requestedEntityRecordIds = entityConstraint.requestedRecordIds;
+  const exactSelectionRecordIds = exactPublishedSelection?.recordType === 'CATALOG_CATEGORY'
+    ? exactPublishedSelection.evidenceRecordIds ?? []
+    : exactPublishedSelection?.recordId ? [exactPublishedSelection.recordId] : [];
+  const normalizedRequestedIds = new Set(requestedEntityRecordIds.map(normalized).filter(Boolean));
+  const normalizedExactIds = new Set(exactSelectionRecordIds.map(normalized).filter(Boolean));
+  const normalizedVerifiedIds = new Set(evidence.filter((source) => (
+    source?.verified === true && source?.callerFacing !== false
+  )).map((source) => normalized(source.recordId)).filter(Boolean));
+  const verifiedPublishedEntitySelection = exactPublishedSelection
+    && normalizedExactIds.size > 0
+    && normalizedExactIds.size === normalizedRequestedIds.size
+    && [...normalizedExactIds].every((id) => normalizedRequestedIds.has(id)
+      && normalizedVerifiedIds.has(id))
+    ? Object.freeze({
+      verified: true,
+      matchMethod: exactPublishedSelection.matchMethod,
+      knowledgeBaseId: exactPublishedSelection.knowledgeBaseId,
+      publicationRevision: exactPublishedSelection.publicationRevision,
+      requestedRecordIds: Object.freeze([...requestedEntityRecordIds]),
+    }) : null;
   return Object.freeze({
     version: TEMPLATE_ENGINE_PRODUCTION_RETRIEVAL_VERSION,
     search,
@@ -1103,11 +1127,14 @@ export async function retrieveTemplateEngineEvidence({
       entityMatch: Object.freeze({
         action: entityResolution?.action ?? null,
         reason: entityResolution?.reason ?? null,
-        matchMethod: entityResolution?.candidate?.matchMethod ?? null,
-        recordId: entityResolution?.candidate?.recordId ?? null,
+        matchMethod: entityResolution?.candidate?.matchMethod
+          ?? verifiedPublishedEntitySelection?.matchMethod ?? null,
+        recordId: entityResolution?.candidate?.recordId
+          ?? exactPublishedSelection?.recordId ?? null,
         requiresCandidateConfirmation: entityResolution?.requiresCandidateConfirmation === true,
         ambiguityDetected: entityResolution?.ambiguity?.detected === true,
       }),
+      verifiedPublishedEntityFastPath: verifiedPublishedEntitySelection !== null,
       selectionRetryAttempted,
       requestedEntityHydrationIncomplete,
       requestedEntityCount: requestedIdentities.size,
@@ -1117,6 +1144,7 @@ export async function retrieveTemplateEngineEvidence({
     }),
     authoritative,
     entityResolution,
+    verifiedPublishedEntitySelection,
     resolvedSearch: search,
     contextualMemoryVerified,
     searchClassification: Object.freeze({

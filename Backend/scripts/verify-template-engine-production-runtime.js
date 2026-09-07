@@ -9,6 +9,7 @@ import {
   publishedResolutionAmbiguity,
   runTemplateEngineProductionTurn,
   verifiedPublishedEntityFastPath,
+  sameSpeculativeRetrievalBoundary,
 } from '../src/voice/interaction/template-engine-production-runtime.js';
 import { recordTemplateEngineTurnMetrics, templateEngineAudioPercentiles } from '../src/voice/interaction/template-engine-observability.js';
 import { instrumentTemplateEngineTurn } from '../src/voice/interaction/template-engine-turn-timing.js';
@@ -140,7 +141,24 @@ const agentId = '22222222-2222-4222-8222-222222222222';
 const knowledgeBaseId = '33333333-3333-4333-8333-333333333333';
 const publication = { knowledgeBaseId, publicationRevision: 4 };
 const scope = { tenantId, agentId, publications: [publication] };
-
+const speculativeBoundary = Object.freeze({
+  tenantId, agentId, publications: Object.freeze([`${knowledgeBaseId}:4`]),
+  request: 'tenant item price', turn: 'call-boundary:7',
+});
+assert.equal(sameSpeculativeRetrievalBoundary(speculativeBoundary, {
+  latestUtterance: 'Tenant Item Price', callId: 'call-boundary', turnEpoch: 7,
+}, scope), true);
+for (const mismatch of [
+  { input: { latestUtterance: 'another request', callId: 'call-boundary', turnEpoch: 7 }, scope },
+  { input: { latestUtterance: 'tenant item price', callId: 'call-boundary', turnEpoch: 8 }, scope },
+  { input: { latestUtterance: 'tenant item price', callId: 'call-boundary', turnEpoch: 7 },
+    scope: { ...scope, tenantId: 'another-tenant' } },
+  { input: { latestUtterance: 'tenant item price', callId: 'call-boundary', turnEpoch: 7 },
+    scope: { ...scope, publications: [{ knowledgeBaseId, publicationRevision: 5 }] } },
+]) {
+  assert.equal(sameSpeculativeRetrievalBoundary(speculativeBoundary, mismatch.input, mismatch.scope), false,
+    'Speculative retrieval must not cross request, turn, tenant, or publication boundaries');
+}
 const ambiguousCandidates = [
   { recordId: 'record-a', recordType: 'CATALOG_ITEM', label: 'Option A' },
   { recordId: 'record-b', recordType: 'CATALOG_ITEM', label: 'Option B' },
@@ -393,6 +411,42 @@ assert.equal(exactStructuredRecords.length, 1,
 assert.equal(exactStructuredRecords[0].recordId, 'record-exact');
 assert.equal(exactStructuredRecords[0].matchMethod, 'published_exact');
 assert.equal(exactRetrieval.evidence[0].recordId, 'record-exact');
+assert.equal(exactRetrieval.verifiedPublishedEntitySelection?.verified, true);
+assert.deepEqual(exactRetrieval.verifiedPublishedEntitySelection?.requestedRecordIds,
+  ['record-exact'], 'Fast-path proof must be emitted only after exact authoritative hydration');
+
+let ambiguousPublishedReviews = 0;
+const ambiguousAliasRecords = ['ambiguous-a', 'ambiguous-b'].map((recordId) => ({
+  record_id: recordId, record_type: 'catalog_item', entity_name: recordId,
+  entity_aliases: ['Shared Spoken Alias'], entity_metadata: { itemKey: recordId },
+}));
+const ambiguousRetrieval = await retrieveTemplateEngineEvidence({
+  auth: { tenantId }, scope, callId: 'call-ambiguous-alias', usageDirection: 'inbound',
+  language: 'en', latestUtterance: 'Shared Spoken Alias details',
+  searchDecision: { ...searchDecision, search: { query: 'Shared Spoken Alias details',
+    requestedFact: 'details', contextualReference: null, preferredRecordIds: [] } },
+  state: {},
+  reviewEntityCandidates: async () => { ambiguousPublishedReviews += 1; return null; },
+}, {
+  loadArtifacts: async () => ({ ...exactArtifacts,
+    bundles: [{ ...exactArtifacts.bundles[0], records: ambiguousAliasRecords }],
+  }),
+  resolveEntityRoute: () => ({ candidate: null, action: 'CLARIFY',
+    ambiguity: { detected: true, candidates: ambiguousAliasRecords.map((record) => ({
+      recordId: record.record_id, recordType: 'CATALOG_ITEM', label: record.entity_name,
+    })) } }),
+  searchCandidates: async () => ({ channels: { structured: [], bm25: [], qdrant: [] } }),
+  hydrateEvidence: async ({ retrieval: selected }) => ({ evidence: selected.candidates.map((entry) => ({
+    ...entry, id: entry.recordId, hydrationValidated: true, publicationValidated: true,
+    callerFacing: true, content: 'Published detail',
+    provenance: { knowledgeBaseId, publicationRevision: 4 },
+  })) }),
+});
+assert.equal(ambiguousPublishedReviews, 1,
+  'A shared exact alias must retain the slower multilingual review path');
+assert.equal(ambiguousRetrieval.verifiedPublishedEntitySelection, null,
+  'Competing published identities must never emit fast-path proof');
+assert.equal(ambiguousRetrieval.entityResolution.ambiguity.detected, true);
 
 // Production-shaped metadata must bind hydration even when semantic resolution
 // and all retrieval providers prefer conversational evidence.
@@ -448,6 +502,9 @@ for (const [query, expectedIds, rewrittenQuery] of [
     },
   });
   assert.deepEqual(result.evidence.map((entry) => entry.recordId).sort(), expectedIds);
+  assert.equal(result.verifiedPublishedEntitySelection?.verified, true,
+    `Exact published identity should emit hydrated fast-path proof: ${query}`);
+  assert.deepEqual([...result.verifiedPublishedEntitySelection.requestedRecordIds].sort(), expectedIds);
   assert.ok(result.evidence.every((entry) => entry.requestedFact
     === (query.endsWith('price') ? 'price' : 'details')));
 }
@@ -1153,6 +1210,11 @@ const exactSpeculativeRetrieval = Object.freeze({
     ambiguity: Object.freeze({ detected: false, candidates: Object.freeze([]) }),
   }),
   diagnostics: Object.freeze({ requestedEntityHydrationIncomplete: false }),
+  verifiedPublishedEntitySelection: Object.freeze({
+    verified: true, matchMethod: 'published_exact',
+    knowledgeBaseId, publicationRevision: 4,
+    requestedRecordIds: Object.freeze(['record-1']),
+  }),
 });
 assert.equal(verifiedPublishedEntityFastPath(exactSpeculativeRetrieval, searchDecision, {
   latestUtterance: 'tenant item price',
@@ -1162,6 +1224,15 @@ assert.equal(verifiedPublishedEntityFastPath({ ...exactSpeculativeRetrieval,
     requiresCandidateConfirmation: true },
 }, searchDecision, { latestUtterance: 'tenant item price' }), false,
 'Confirmation candidates must retain the existing clarification path');
+assert.equal(verifiedPublishedEntityFastPath({ ...exactSpeculativeRetrieval,
+  verifiedPublishedEntitySelection: null,
+}, searchDecision, { latestUtterance: 'tenant item price' }), false,
+'A reason label without hydrated published-selection proof must not activate the fast path');
+assert.equal(verifiedPublishedEntityFastPath({ ...exactSpeculativeRetrieval,
+  verifiedPublishedEntitySelection: { ...exactSpeculativeRetrieval.verifiedPublishedEntitySelection,
+    requestedRecordIds: ['another-record'] },
+}, searchDecision, { latestUtterance: 'tenant item price' }), false,
+'Fast-path selection IDs must exactly match the hydrated requested IDs');
 {
   let referenceReviews = 0;
   let foregroundRetrievals = 0;
@@ -1197,6 +1268,62 @@ assert.equal(verifiedPublishedEntityFastPath({ ...exactSpeculativeRetrieval,
     'Exact current published identity must bypass the stale remembered-reference review');
   assert.equal(foregroundRetrievals, 0, 'Verified exact speculative evidence must be reused');
   assert.equal(fastPathDiagnostics.highConfidenceFastPath, true);
+}
+{
+  let welcomeMeaningReviews = 0;
+  const decisions = [searchDecision, { decision: 'RESPONSE', response: 'Tenant Item costs 125.',
+    clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null }];
+  const result = await runTemplateEngineProductionTurn({
+    auth: { tenantId }, scope, callId: 'exact-fast-path-with-pending-welcome',
+    usageDirection: 'inbound', language: 'en', mainPrompt: 'Use published facts.',
+    latestUtterance: 'tenant item price',
+    pendingQuestion: { key: 'configured_welcome_question', text: 'May I continue?' },
+    state: {}, assignedTools: [], informationFields: [],
+  }, {
+    invokeStructuredLlm: async (request) => {
+      if (request.responseFormat.name === 'template_engine_welcome_meaning') {
+        welcomeMeaningReviews += 1;
+        return { outputParsed: { continuation: false, guidanceRecordId: null,
+          query: null, requestedFact: null } };
+      }
+      return decisions.shift();
+    },
+    loadPublishedContext: async () => ({ scope, publishedWorkflows: [], artifacts: {},
+      publishedConversationGuidance: [{ recordId: 'welcome-only', recordType: 'CONVERSATION_NODE',
+        published: true, tenantId, agentId, knowledgeBaseId, publicationRevision: 4,
+        purpose: 'Continue after an affirmative introduction response.', situation: 'Introduction',
+        examples: ['Yes'], catalogReferences: [], nodeKey: 'welcome_continuation',
+        intentClass: null, context: null, nextQuestion: null }],
+    }),
+    retrieveSpeculativeEvidence: async () => exactSpeculativeRetrieval,
+    retrieveEvidence: async () => exactSpeculativeRetrieval,
+    persistWorkflowState: async () => {}, executeAuthorizedTool: async () => assert.fail('No tools'),
+    validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
+    validateToolResultSpeechClaims: async () => ({ supported: true }),
+  });
+  assert.equal(result.speech, 'Tenant Item costs 125.');
+  assert.equal(welcomeMeaningReviews, 0,
+    'A hydrated exact entity request must not pay for a pending-welcome meaning review');
+}
+{
+  let foregroundRetrievals = 0;
+  await assert.rejects(() => runTemplateEngineProductionTurn({
+    auth: { tenantId }, scope, callId: 'cancelled-speculative-turn', turnEpoch: 11,
+    turnBoundaryId: 'cancelled-speculative-turn:11', usageDirection: 'inbound', language: 'en',
+    mainPrompt: 'Use published facts.', latestUtterance: 'tenant item price',
+    state: {}, assignedTools: [], informationFields: [],
+  }, {
+    invokeStructuredLlm: async () => searchDecision,
+    isTurnCurrent: () => false,
+    loadPublishedContext: async () => ({ scope, publishedWorkflows: [], artifacts: {} }),
+    retrieveSpeculativeEvidence: async () => exactSpeculativeRetrieval,
+    retrieveEvidence: async () => { foregroundRetrievals += 1; return exactSpeculativeRetrieval; },
+    persistWorkflowState: async () => {}, executeAuthorizedTool: async () => assert.fail('No tools'),
+    validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
+    validateToolResultSpeechClaims: async () => ({ supported: true }),
+  }), { name: 'AbortError' });
+  assert.equal(foregroundRetrievals, 0,
+    'A cancelled epoch must consume neither speculative nor foreground retrieval');
 }
 
 let releaseSpeculation;
@@ -1237,9 +1364,11 @@ try {
   assert.equal(result.speech, 'Tenant Item costs 125.');
   assert.equal(publicationLoads, 1);
   assert.equal(foregroundRetrievals, 1);
-  for (const stage of ['publication_load', 'routing', 'retrieval', 'generation', 'validation']) {
+  for (const stage of ['publication_load', 'routing', 'retrieval', 'generation']) {
     assert.ok(foregroundStages.includes(stage), `Missing timing for ${stage}`);
   }
+  assert.equal(foregroundStages.includes('validation'), false,
+    'Deterministically grounded normal answers must not invoke semantic validation');
 } finally {
   clearTimeout(deadline);
   releaseSpeculation(retrieval);

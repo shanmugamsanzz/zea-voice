@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { evaluateFirstAudioSlo } from '../src/voice/interaction/voice-latency-slo.js';
 
-const inputPath = process.argv[2];
+const inputPath = process.argv.slice(2).find((value) => !value.startsWith('--'));
+const enforce = process.argv.includes('--enforce');
 if (!inputPath) {
   console.error('Usage: npm run report:production-latency -- <json-lines-server-log>');
   process.exit(2);
@@ -29,7 +30,11 @@ for (const line of readFileSync(inputPath, 'utf8').split(/\r?\n/u)) {
   if (source?.stage === 'template_engine.turn_completed') {
     const actualAnswerFirstAudioMs = Number(source.finalAnswerFirstAudioMs
       ?? source.actualAnswerBaseline?.actualAnswerFirstAudioMs);
-    if (Number.isFinite(actualAnswerFirstAudioMs) && actualAnswerFirstAudioMs >= 0) {
+    const normalVerifiedRequest = source.normalVerifiedRequest
+      ?? source.actualAnswerBaseline?.normalVerifiedRequest
+      ?? (!source.recoveryKind && !source.operationalFailure && !source.validationFailure);
+    if (normalVerifiedRequest === true
+      && Number.isFinite(actualAnswerFirstAudioMs) && actualAnswerFirstAudioMs >= 0) {
       actualAnswerSamples.push(actualAnswerFirstAudioMs);
     }
     continue;
@@ -52,22 +57,34 @@ const actualAnswerP95 = actualAnswerSamples.length
 const actualAnswerAverage = actualAnswerSamples.length
   ? Math.round((actualAnswerSamples.reduce((total, value) => total + value, 0)
     / actualAnswerSamples.length) * 100) / 100 : null;
-process.stdout.write(`${JSON.stringify({
+const actualAnswerMaximum = actualAnswerSamples.length ? Math.max(...actualAnswerSamples) : null;
+const sufficientSamples = actualAnswerSamples.length >= 20;
+const averagePassed = sufficientSamples && actualAnswerAverage < 3_000;
+const maximumPassed = sufficientSamples && actualAnswerMaximum <= 4_000;
+const report = {
   generatedAt: new Date().toISOString(),
   samples,
   firstAudioSlo: evaluateFirstAudioSlo(samples),
   actualAnswerSlo: {
     targetAverageMs: 3_000,
+    maximumNormalRequestMs: 4_000,
     targetP95Ms: 3_000,
     minimumSamples: 20,
     count: actualAnswerSamples.length,
     p95Ms: actualAnswerP95,
     averageMs: actualAnswerAverage,
-    averagePassed: actualAnswerSamples.length >= 20 && actualAnswerAverage < 3_000,
-    averageReason: actualAnswerSamples.length < 20 ? 'insufficient_live_samples'
+    maximumMs: actualAnswerMaximum,
+    averagePassed,
+    maximumPassed,
+    averageReason: !sufficientSamples ? 'insufficient_live_samples'
       : actualAnswerAverage < 3_000 ? null : 'actual_answer_average_breached',
-    passed: actualAnswerSamples.length >= 20 && actualAnswerP95 < 3_000,
-    reason: actualAnswerSamples.length < 20 ? 'insufficient_live_samples'
-      : actualAnswerP95 < 3_000 ? null : 'actual_answer_p95_breached',
+    maximumReason: !sufficientSamples ? 'insufficient_live_samples'
+      : actualAnswerMaximum <= 4_000 ? null : 'actual_answer_maximum_breached',
+    passed: averagePassed && maximumPassed,
+    reason: !sufficientSamples ? 'insufficient_live_samples'
+      : !averagePassed ? 'actual_answer_average_breached'
+        : !maximumPassed ? 'actual_answer_maximum_breached' : null,
   },
-}, null, 2)}\n`);
+};
+process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+if (enforce && !report.actualAnswerSlo.passed) process.exitCode = 1;
