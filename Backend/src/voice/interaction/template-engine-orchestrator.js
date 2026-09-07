@@ -232,6 +232,8 @@ export async function routeTemplateEngineUtterance(input = {}, dependencies = {}
     state: orchestratorInput.state,
     authorizedWorkflowTools: orchestratorInput.authorizedWorkflowTools,
     conversationGuidance: orchestratorInput.conversationGuidance,
+    ...(dependencies.workflowRoutingContext
+      ? { workflowCollection: dependencies.workflowRoutingContext } : {}),
     ...(orchestratorInput.welcomeContinuation
       ? { welcomeContinuation: orchestratorInput.welcomeContinuation } : {}),
   });
@@ -296,6 +298,53 @@ export async function routeTemplateEngineUtterance(input = {}, dependencies = {}
         initialReason: invocation.initialReason,
       });
   }
+  // A free-form acknowledgement of a field does not persist that field. Review
+  // these routes before delivery, not after speaking an invented next question.
+  const unverifiedWorkflowKeys = (decision) => {
+    if (decision.decision !== 'TOOL' || !dependencies.verifyWorkflowArguments) return [];
+    const args = decision.tool?.arguments ?? {};
+    const verified = dependencies.verifyWorkflowArguments(args);
+    return Object.keys(args).filter((key) => !Object.hasOwn(verified, key));
+  };
+  if (dependencies.workflowRoutingContext
+    && !validated.value.stateUpdate?.clear?.includes('activeWorkflowId')
+    && (['RESPONSE', 'CLARIFY'].includes(validated.value.decision)
+      || (validated.value.decision === 'TOOL'
+        && dependencies.workflowRoutingContext.pendingFieldKey
+        && (Object.keys(validated.value.tool?.arguments ?? {}).length === 0
+          || unverifiedWorkflowKeys(validated.value).length > 0)))) {
+    const review = await invokeValidatedDecision({
+      invokeStructuredLlm, request,
+      validateCompletion: (completion) => {
+        const result = validateCompletion(completion);
+        if (result.valid && unverifiedWorkflowKeys(result.value).length) {
+          return { valid: false, reason: 'workflow_values_must_use_caller_evidence',
+            details: { fields: unverifiedWorkflowKeys(result.value) } };
+        }
+        if (result.valid && dependencies.workflowRoutingContext.pendingFieldKey
+          && result.value.decision === 'TOOL'
+          && Object.keys(result.value.tool?.arguments ?? {}).length === 0) {
+          return { valid: false, reason: 'workflow_field_reply_missing_use_clarification_or_cancellation' };
+        }
+        return result;
+      },
+      phase: 'workflow_collection_review', onRetry: dependencies.onDecisionRetry,
+      messages: [...baseMessages, { role: 'system', content: [
+        'WORKFLOW_COLLECTION_REVIEW: Review this active workflow reply before any speech is delivered.',
+        'Use workflowCollection.pendingFieldKey, configured questions, persisted values and the caller utterance. An assistant saying it understood a value does not save it.',
+        'For a clear answer or correction to a configured field, return TOOL for the active tool and submit the caller-provided values. Do not return RESPONSE to acknowledge a value or ask subsequent fields. The runtime selects the next single missing field.',
+        'For free-text fields preserve the exact caller-language value span; do not translate a self-reference into an English value absent from caller speech. Extract other voluntarily supplied fields too. Never invent values.',
+        'For an unclear field reply, return CLARIFY with one focused rephrasing about only the pending field, empty candidates and nextQuestion:null. Do not repeat the previous question verbatim. Do not mark the field complete.',
+        'A side question or topic change is not a field answer: route it normally and preserve the workflow. Explicit cancellation or a request to end the call takes priority: use the existing cancellation contract, never TOOL or another collection question. A field answer or acknowledgement is not final execution confirmation.',
+        `Proposed decision: ${JSON.stringify(validated.value)}.`,
+      ].join(' ') }],
+    });
+    if (!review.validated.valid) {
+      throw new AppError(502, 'Workflow collection review returned an invalid decision',
+        'TEMPLATE_ENGINE_ORCHESTRATOR_DECISION_INVALID', { reason: review.validated.reason });
+    }
+    validated = review.validated;
+  }
   // Review only new activations, before configuration preflight or side effects.
   // Existing field collection and confirmation retain their current lifecycle.
   const routingReviewAttempted = validated.value.decision === 'TOOL'
@@ -345,7 +394,7 @@ export async function routeTemplateEngineUtterance(input = {}, dependencies = {}
   const outputValidation = validateTemplateEngineOutput(outputValidationInput(
     contextualDecision.value, orchestratorInput, dependencies,
     contextualDecision.value.decision === 'CLARIFY'
-      && !orchestratorInput.state.activeWorkflowId
+      && (!orchestratorInput.state.activeWorkflowId || dependencies.workflowRoutingContext?.pendingFieldKey)
       && dependencies.ambiguity?.required !== true
       && contextualDecision.value.clarification?.candidates?.length === 0
       && cleanText(contextualDecision.value.clarification?.reason)

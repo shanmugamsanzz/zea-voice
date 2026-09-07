@@ -319,6 +319,30 @@ export function validateTemplateEngineWorkflowConfiguration(input = {}) {
   return configuration;
 }
 
+// Expose the deterministic pending field to routing; conversation prose is not
+// a substitute for the persisted collection state. Do not block cancellation
+// if an already-active workflow's configuration has subsequently changed.
+export function templateEngineWorkflowRoutingContext(input = {}) {
+  if (!input.state?.activeWorkflowId) return null;
+  try {
+    const configuration = resolveConfiguration(input);
+    const progress = workflowProgress(configuration, input.state);
+    return {
+      toolName: configuredWorkflowToolIdentifier(configuration.workflow),
+      fields: configuration.fields.map((field) => ({
+        key: field.key, question: field.question, required: field.required,
+        schema: configuration.inputSchema.properties[field.key],
+      })),
+      pendingFieldKey: progress.nextField?.key ?? null,
+      collectedFieldKeys: Object.keys(input.state.collectedToolFields ?? {}),
+      awaitingConfirmation: input.state.confirmationStatus === 'awaiting_confirmation',
+    };
+  } catch (error) {
+    if (!(error instanceof AppError)) throw error;
+    return null;
+  }
+}
+
 function configuredWorkflowBehavior(configuration) {
   return safeJson(
     configuration.workflow.actionConfig

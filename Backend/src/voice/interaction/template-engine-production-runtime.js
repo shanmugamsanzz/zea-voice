@@ -7,7 +7,7 @@ import {
   loadTemplateEnginePublishedContext,
   retrieveTemplateEngineEvidence,
 } from './template-engine-production-retrieval.js';
-import { advanceTemplateEngineWorkflowTurn } from './template-engine-workflow-runtime.js';
+import { advanceTemplateEngineWorkflowTurn, templateEngineWorkflowRoutingContext } from './template-engine-workflow-runtime.js';
 import { validateTemplateEngineClaims } from './template-engine-claim-validator.js';
 import {
   assignedToolIdentifiers,
@@ -523,6 +523,14 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     })
     : null;
   const routingDependencies = {
+    verifyWorkflowArguments: (args) => callerVerifiedArguments(
+      args, input.latestUtterance, state.recentCompleteTurns, state.collectedToolFields,
+    ),
+    workflowRoutingContext: templateEngineWorkflowRoutingContext({
+      state, publishedWorkflows: publishedContext.publishedWorkflows,
+      assignedTools: input.assignedTools, informationFields: input.informationFields,
+      scope: publishedContext.scope,
+    }),
     invokeStructuredLlm: dependencies.invokeStructuredLlm,
     onDecisionRetry: dependencies.onRoutingDecisionRetry,
     tenantBoundaryVerified: true,

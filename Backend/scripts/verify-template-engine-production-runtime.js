@@ -1237,6 +1237,91 @@ assert.equal(workflowTurn.provenance.toolId, 'tool-1');
 assert.equal(workflowTurn.provenance.clarificationReason, 'missing_workflow_field');
 assert.equal(workflowDecisions.length, 0);
 
+// Reproduce the live failure: a conversational acknowledgement must not bypass
+// field persistence, and subsequent answers must not restart collection.
+const collectionTool = structuredClone(tool);
+collectionTool.configuration.inputSchema.properties = {
+  recipient: { type: 'string' }, contact_name: { type: 'string' },
+  age: { type: 'number' }, requested_date: { type: 'string' },
+};
+collectionTool.configuration.inputSchema.required = ['recipient', 'contact_name', 'age', 'requested_date'];
+const collectionFields = [
+  ['recipient', 'யாருக்காக?', 'text'], ['contact_name', 'பெயர் என்ன?', 'text'],
+  ['age', 'வயசு என்ன?', 'number'], ['requested_date', 'எந்த தேதி?', 'text'],
+].map(([key, question, type]) => ({ key, label: key, type, question, required: true, requiredAction: tool.name }));
+const collectionResponse = (response) => ({ decision: 'RESPONSE', response,
+  clarification: null, search: null, tool: null, nextQuestion: null, stateUpdate: null });
+const collectionDecision = (args) => ({ decision: 'TOOL', response: '',
+  clarification: null, search: null, tool: { name: tool.name, arguments: JSON.stringify(args) },
+  nextQuestion: null, stateUpdate: null });
+let collectionState = { activeWorkflowId: workflow.recordId, collectedToolFields: {},
+  confirmationStatus: 'pending_fields', lastReferencedRecordIds: ['selected-option'] };
+async function replayCollection(utterance, initial, reviewed, expectedField) {
+  const outputs = [initial, ...(reviewed ? (Array.isArray(reviewed) ? reviewed : [reviewed]) : []),
+    ...(expectedField ? [{ speech: collectionFields.find((field) => field.key === expectedField).question }] : [])];
+  const result = await runTemplateEngineProductionTurn({
+    scope, mainPrompt: 'Use configured questions, one field at a time.',
+    latestUtterance: utterance, language: 'ta', state: collectionState,
+    assignedTools: [collectionTool], informationFields: collectionFields,
+  }, {
+    invokeStructuredLlm: async (request) => {
+      if (request.responseFormat.name === 'template_engine_orchestrator_decision') {
+        assert.match(request.messages[0].content, /workflowCollection/u);
+        assert.match(request.messages[0].content, /pendingFieldKey/u);
+      }
+      return { output: JSON.stringify(outputs.shift()) };
+    },
+    loadPublishedContext: async () => ({ scope, publishedWorkflows: [workflow], artifacts: {} }),
+    retrieveEvidence: async () => { throw new Error('Field replies must not search'); },
+    persistWorkflowState: async () => {},
+    executeAuthorizedTool: async () => { throw new Error('Unconfirmed collection must not execute'); },
+    validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
+    validateToolResultSpeechClaims: async () => ({ supported: true }),
+  });
+  assert.equal(outputs.length, 0);
+  assert.equal(result.toolExecuted, false);
+  if (expectedField) {
+    assert.equal(result.workflow.speechTask.field.key, expectedField);
+    assert.equal((result.speech.match(/\?/gu) ?? []).length, 1);
+  }
+  collectionState = result.state;
+  return result;
+}
+const unclearField = await replayCollection('ஐ மன்னிக்க தான் மனோ', collectionDecision({}), [collectionDecision({}), {
+  decision: 'CLARIFY', response: '', tool: null, search: null, nextQuestion: null, stateUpdate: null,
+  clarification: { question: 'யாருக்காக கேட்கிறீர்கள் என்று தெளிவாகச் சொல்ல முடியுமா?',
+    reason: 'Unclear reply to the pending field', candidates: [] },
+}]);
+assert.equal(unclearField.decision.decision, 'CLARIFY');
+assert.deepEqual(collectionState.collectedToolFields, {});
+await replayCollection('எனக்குத்தான் madam',
+  collectionResponse('Understood. What is your name, age and date?'),
+  collectionDecision({ recipient: 'எனக்குத்தான்' }), 'contact_name');
+assert.equal(collectionState.collectedToolFields.recipient, 'எனக்குத்தான்');
+await replayCollection('எனக்குத்தான் madam', collectionDecision({ recipient: 'self' }),
+  collectionDecision({ recipient: 'எனக்குத்தான்' }), 'contact_name');
+assert.equal(collectionState.collectedToolFields.recipient, 'எனக்குத்தான்',
+  'Translation must not be silently dropped and restart the already answered field');
+await replayCollection('என்னோட name சண்முகம் வயசு 21',
+  collectionDecision({ contact_name: 'சண்முகம்', age: 21 }), null, 'requested_date');
+assert.deepEqual(collectionState.collectedToolFields,
+  { recipient: 'எனக்குத்தான்', contact_name: 'சண்முகம்', age: 21 });
+await replayCollection('Correction: name is Arun', collectionDecision({ contact_name: 'Arun' }), null, 'requested_date');
+assert.equal(collectionState.collectedToolFields.contact_name, 'Arun');
+assert.equal(collectionState.collectedToolFields.recipient, 'எனக்குத்தான்');
+const beforeSideQuestion = structuredClone(collectionState.collectedToolFields);
+await replayCollection('Can you speak more slowly?', collectionResponse('Of course.'), collectionResponse('Of course.'));
+assert.deepEqual(collectionState.collectedToolFields, beforeSideQuestion);
+assert.equal(collectionState.activeWorkflowId, workflow.recordId);
+// A misrouted stop request must be reviewed before another field is spoken.
+await replayCollection('cut பண்ணுங்க madam', collectionDecision({}), {
+  ...collectionResponse('சரி, நிறுத்துகிறேன்.'),
+  stateUpdate: { set: { confirmationStatus: null },
+    clear: ['activeWorkflowId', 'collectedToolFields', 'confirmationStatus'] },
+});
+assert.equal(collectionState.activeWorkflowId, null);
+assert.deepEqual(collectionState.collectedToolFields, {});
+
 const contextualWorkflowDecisions = [{
   decision: 'TOOL', response: '', clarification: null, search: null,
   tool: { name: 'perform_action', arguments: { contact_name: 'Sam' } },
