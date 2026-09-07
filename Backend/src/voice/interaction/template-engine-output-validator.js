@@ -210,6 +210,7 @@ function sameRecordSet(evidence, requiredValues) {
 
 function validateResponse(decision, input) {
   const factual = input.factualClaimsPresent === true;
+  const deterministicOnly = input.deterministicOnly === true;
   const requestedFact = cleanText(input.searchInterpretation?.requestedFact, 500);
   if (input.ambiguity?.required === true) {
     return invalid('clarification_required_for_entity_resolution', {
@@ -243,14 +244,15 @@ function validateResponse(decision, input) {
     return invalid('unverified_cited_evidence', { factual: true, retryCount: input.retryCount });
   }
   const permittedNumbers = allowedNumbers(selectedEvidence, input.callerProvidedValues);
-  // Caller numbers are reference context, not published business facts. Permit
-  // their repetition only after the semantic validator approves the whole claim.
-  if (input.semanticClaimValidation?.supported === true) {
+  // Caller numbers are reference context, not published business facts. The
+  // deterministic pass permits them provisionally; semantic validation still
+  // decides whether speech uses them as caller facts or invents a business fact.
+  if (input.semanticClaimValidation?.supported === true || deterministicOnly) {
     for (const number of numbers(input.currentUtterance)) permittedNumbers.add(number);
   }
   const unsupportedNumbers = numericClaims(
     [decision.response, decision.nextQuestion?.question].filter(Boolean).join(' '),
-    input.semanticClaimValidation?.supported === true,
+    input.semanticClaimValidation?.supported === true || deterministicOnly,
   )
     .filter((claim) => !permittedNumbers.has(claim.normalized));
   if (unsupportedNumbers.length) {
@@ -272,20 +274,20 @@ function validateResponse(decision, input) {
     cleanText(source?.recordId, 160).toLocaleLowerCase()
   )).filter(Boolean));
   const completeMultiRecordEvidence = citedRecordIds.size > 1
-    && input.semanticClaimValidation?.supported === true;
+    && (input.semanticClaimValidation?.supported === true || deterministicOnly);
   if (!evidenceSupportsRelationship(
     mentioned, selectedEvidence,
     input.allowMultipleEntities === true || completeMultiRecordEvidence,
   )) {
     return invalid('unsupported_relationship_claim', { factual: true, retryCount: input.retryCount });
   }
-  if (input.semanticClaimValidation?.supported !== true) {
+  if (!deterministicOnly && input.semanticClaimValidation?.supported !== true) {
     return invalid(input.semanticClaimValidation
       ? 'unsupported_factual_claim' : 'grounding_validation_missing', {
       factual: true, retryCount: input.retryCount,
     });
   }
-  if ((requestedFact || cleanText(input.currentUtterance))
+  if (!deterministicOnly && (requestedFact || cleanText(input.currentUtterance))
     && input.semanticClaimValidation?.requestedFactAddressed !== true) {
     return invalid('requested_fact_not_addressed', {
       factual: true, retryCount: input.retryCount,
@@ -305,7 +307,7 @@ function validateClarification(decision, input) {
   if (input.clarificationRelevant === false
     || input.semanticClaimValidation?.requestedFactAddressed === false
     || input.semanticClaimValidation?.supported === false
-    || (input.claimValidationRequired === true
+    || (input.deterministicOnly !== true && input.claimValidationRequired === true
       && input.semanticClaimValidation?.supported !== true)) {
     return invalid('irrelevant_or_unsupported_clarification');
   }
@@ -408,7 +410,7 @@ export function validateTemplateEngineOutput(input = {}) {
     if (internalOrJson(decision.response)) return invalid('invalid_no_match_speech', {
       factual: input.factualClaimsPresent === true, retryCount: input.retryCount,
     });
-    if (input.claimValidationRequired === true
+    if (input.deterministicOnly !== true && input.claimValidationRequired === true
       && input.semanticClaimValidation?.supported !== true) {
       return invalid(input.semanticClaimValidation
         ? 'unsupported_no_match_claim' : 'grounding_validation_missing', {

@@ -16,6 +16,7 @@ import {
   enforceTemplateEngineRuntimeInvariants,
 } from './template-engine-routing-control.js';
 import { validateTemplateEngineOutput } from './template-engine-output-validator.js';
+import { validateTemplateEngineSearchClaims } from './template-engine-claim-validator.js';
 import {
   sanitizeConversationGuidance,
 } from './template-engine-conversation-guidance.js';
@@ -928,7 +929,70 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       requestMeaning: input.requestMeaning ?? null,
     }));
   };
-  semanticClaimValidation = await validateClaims(groundedDecision);
+  const deterministicClaims = (decision) => {
+    const citedIds = new Set(decision.evidenceIds ?? []);
+    const citedEvidence = decision.decision === 'RESPONSE'
+      ? evidence.filter((source) => citedIds.has(source.evidenceId)) : evidence;
+    const speech = decision.decision === 'CLARIFY'
+      ? decision.clarification?.question
+      : [cleanText(decision.response), cleanText(decision.nextQuestion?.question)]
+        .filter(Boolean).join(' ');
+    return Object.freeze({
+      result: validateTemplateEngineSearchClaims({
+        speech, evidence: citedEvidence, decision: decision.decision,
+        searchInterpretation: search.value.search,
+      }),
+      speech,
+      citedEvidence,
+    });
+  };
+  const validationInput = (decision, semantic, additions = {}) => outputValidationInput(
+    decision, base, dependencies, {
+      phase: 'post_search',
+      factualClaimsPresent: true,
+      claimValidationRequired: true,
+      selectedEvidence: evidence,
+      semanticClaimValidation: semantic,
+      searchInterpretation: search.value.search,
+      ambiguity: verifiedClarificationAmbiguity(
+        decision, evidence, search.value.search, dependencies.ambiguity,
+      ),
+      requiredEvidenceRecordIds: requiredEntityRecordIds.length
+        ? requiredEntityRecordIds : base.state.comparisonRecordIds,
+      requestedFactAvailable: !configuredFallbackApplied && requestedFactAvailable,
+      ...additions,
+    },
+  );
+  const deterministicPreflight = (decision, additions = {}) => {
+    const claims = deterministicClaims(decision);
+    let validation = validateTemplateEngineOutput(validationInput(
+      decision, null, { deterministicOnly: true, ...additions },
+    ));
+    if (validation.valid && decision.decision === 'RESPONSE'
+      && claims.result.requestedFactAddressed === false) {
+      const requestedTokens = new Set(candidateIdentity(search.value.search.requestedFact)
+        .split(/\s+/u).filter(Boolean));
+      const responseTokens = new Set(candidateIdentity(claims.speech)
+        .split(/\s+/u).filter(Boolean));
+      const explicitlyAnsweredDifferentAttribute = claims.citedEvidence.some((source) => (
+        (source?.publishedAttributePaths ?? []).some((path) => {
+          const pathTokens = candidateIdentity(path).split(/\s+/u).filter(Boolean);
+          return pathTokens.some((token) => !requestedTokens.has(token)
+            && responseTokens.has(token));
+        })
+      ));
+      if (explicitlyAnsweredDifferentAttribute) {
+        validation = Object.freeze({ valid: false, ttsAllowed: false, route: 'REJECT',
+          retrySearch: false, reason: 'requested_fact_not_addressed' });
+      }
+    }
+    return Object.freeze({ validation, claims });
+  };
+  const initialPreflight = deterministicPreflight(groundedDecision);
+  let outputValidation = initialPreflight.validation;
+  if (outputValidation.valid) {
+    semanticClaimValidation = await validateClaims(groundedDecision);
+  }
   if (semanticClaimValidation?.reason === 'requested_entity_mapping_uncertain') {
     dependencies = { ...dependencies, ambiguity: dependencies.ambiguity?.required === true
       ? dependencies.ambiguity
@@ -937,20 +1001,11 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
   let clarificationAmbiguity = verifiedClarificationAmbiguity(
     groundedDecision, evidence, search.value.search, dependencies.ambiguity,
   );
-  let outputValidation = validateTemplateEngineOutput(outputValidationInput(
-    groundedDecision, base, dependencies, {
-      phase: 'post_search',
-      factualClaimsPresent: true,
-      claimValidationRequired: true,
-      selectedEvidence: evidence,
-      semanticClaimValidation,
-      searchInterpretation: search.value.search,
-      ambiguity: clarificationAmbiguity,
-      requiredEvidenceRecordIds: requiredEntityRecordIds.length
-        ? requiredEntityRecordIds : base.state.comparisonRecordIds,
-      requestedFactAvailable: !configuredFallbackApplied && requestedFactAvailable,
-    },
-  ));
+  if (outputValidation.valid) {
+    outputValidation = validateTemplateEngineOutput(validationInput(
+      groundedDecision, semanticClaimValidation, { ambiguity: clarificationAmbiguity },
+    ));
+  }
   let answerableEvidence = clarificationAmbiguity?.required !== true && (
     requestedFactAvailable || (
       groundedDecision.decision === 'RESPONSE'
@@ -1018,25 +1073,20 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       groundedDecision = restorePostSearchEvidenceIds(
         validated.value, citations.aliasToEvidenceId,
       );
-      semanticClaimValidation = await validateClaims(groundedDecision);
+      const repairedPreflight = deterministicPreflight(groundedDecision, { retryCount: 1 });
+      outputValidation = repairedPreflight.validation;
+      semanticClaimValidation = outputValidation.valid
+        ? await validateClaims(groundedDecision) : null;
       clarificationAmbiguity = verifiedClarificationAmbiguity(
         groundedDecision, evidence, search.value.search, dependencies.ambiguity,
       );
-      outputValidation = validateTemplateEngineOutput(outputValidationInput(
-        groundedDecision, base, dependencies, {
-          phase: 'post_search',
-          factualClaimsPresent: true,
-          claimValidationRequired: true,
-          selectedEvidence: evidence,
-          semanticClaimValidation,
-          searchInterpretation: search.value.search,
-          ambiguity: clarificationAmbiguity,
-          requiredEvidenceRecordIds: requiredEntityRecordIds.length
-            ? requiredEntityRecordIds : base.state.comparisonRecordIds,
-          requestedFactAvailable,
-          retryCount: 1,
-        },
-      ));
+      if (outputValidation.valid) {
+        outputValidation = validateTemplateEngineOutput(validationInput(
+          groundedDecision, semanticClaimValidation, {
+            ambiguity: clarificationAmbiguity, requestedFactAvailable, retryCount: 1,
+          },
+        ));
+      }
       answerableEvidence = answerableEvidence || (
         groundedDecision.decision === 'RESPONSE'
         && semanticClaimValidation?.supported === true
@@ -1063,18 +1113,18 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
         groundedDecision = restorePostSearchEvidenceIds(
           recovered.value, citations.aliasToEvidenceId,
         );
-        semanticClaimValidation = await validateClaims(groundedDecision);
-        outputValidation = validateTemplateEngineOutput(outputValidationInput(
-          groundedDecision, base, dependencies, {
-            phase: 'post_search', factualClaimsPresent: true,
-            claimValidationRequired: true, selectedEvidence: evidence,
-            semanticClaimValidation, searchInterpretation: search.value.search,
-            ambiguity: dependencies.ambiguity,
-            requiredEvidenceRecordIds: requiredEntityRecordIds.length
-              ? requiredEntityRecordIds : base.state.comparisonRecordIds,
-            requestedFactAvailable: true, retryCount: 1,
-          },
-        ));
+        const extractivePreflight = deterministicPreflight(groundedDecision, { retryCount: 1 });
+        outputValidation = extractivePreflight.validation;
+        semanticClaimValidation = outputValidation.valid
+          ? await validateClaims(groundedDecision) : null;
+        if (outputValidation.valid) {
+          outputValidation = validateTemplateEngineOutput(validationInput(
+            groundedDecision, semanticClaimValidation, {
+              ambiguity: dependencies.ambiguity,
+              requestedFactAvailable: true, retryCount: 1,
+            },
+          ));
+        }
         finalDiagnostics = templateEnginePostSearchDecisionDiagnostics(recovered.value);
       }
     } else if (!budgetRepairRequired && clarificationAmbiguity?.required !== true
@@ -1088,22 +1138,23 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
         groundedDecision = restorePostSearchEvidenceIds(
           noMatch.value, citations.aliasToEvidenceId,
         );
-        outputValidation = validateTemplateEngineOutput(outputValidationInput(
-          groundedDecision, base, dependencies, {
-            phase: 'post_search', factualClaimsPresent: true,
-            claimValidationRequired: true,
-            selectedEvidence: evidence,
-            semanticClaimValidation: await validateClaims(groundedDecision),
-            searchInterpretation: search.value.search,
-            requiredEvidenceRecordIds: requiredEntityRecordIds.length
-              ? requiredEntityRecordIds : base.state.comparisonRecordIds,
-            requestedFactAvailable: false,
-            ambiguity: verifiedClarificationAmbiguity(
-              groundedDecision, evidence, search.value.search, dependencies.ambiguity,
-            ),
-            retryCount: 1,
-          },
-        ));
+        const noMatchPreflight = deterministicPreflight(groundedDecision, {
+          requestedFactAvailable: false, retryCount: 1,
+        });
+        outputValidation = noMatchPreflight.validation;
+        semanticClaimValidation = outputValidation.valid
+          ? await validateClaims(groundedDecision) : null;
+        if (outputValidation.valid) {
+          outputValidation = validateTemplateEngineOutput(validationInput(
+            groundedDecision, semanticClaimValidation, {
+              requestedFactAvailable: false,
+              ambiguity: verifiedClarificationAmbiguity(
+                groundedDecision, evidence, search.value.search, dependencies.ambiguity,
+              ),
+              retryCount: 1,
+            },
+          ));
+        }
         configuredFallbackApplied = outputValidation.valid;
         finalDiagnostics = templateEnginePostSearchDecisionDiagnostics(noMatch.value);
       }

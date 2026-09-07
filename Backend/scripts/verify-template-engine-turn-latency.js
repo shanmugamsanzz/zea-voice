@@ -112,8 +112,11 @@ assert.match(orchestrator, /Buffer\.isBuffer\(reusableAudio\?\.audio\)/u,
 assert.match(orchestrator, /capture:\s*capturedAudio/u,
   'A cache miss must capture generated field audio for later turns');
 assert.match(orchestrator,
-  /finalResponseReadyAt\s*=\s*Date\.now\(\);[\s\S]*sentencePipeline\.enqueue\(finalAnswer\)[\s\S]*sentencePipeline\.waitUntilStarted\(\)/u,
+  /finalResponseReadyAt\s*=\s*Date\.now\(\);[\s\S]*sentencePipeline\.enqueue\(finalAnswer\)[\s\S]*finalResponseQueuedAt\s*=\s*Date\.now\(\);[\s\S]*sentencePipeline\.waitUntilStarted\(\)/u,
   'Validated final speech must enter TTS immediately after the result becomes ready');
+assert.ok(orchestrator.indexOf('sentencePipeline.enqueue(finalAnswer)')
+  < orchestrator.indexOf('const factualAnswerSources = templateEngineMessageSources(result'),
+  'Source formatting must not delay validated answer audio startup');
 assert.match(orchestrator, /setLatencyAcknowledgementAudioCache/u,
   'The latency acknowledgement must use reusable cached audio');
 assert.match(orchestrator, /latency_acknowledgement_audio_cache_hit/u);

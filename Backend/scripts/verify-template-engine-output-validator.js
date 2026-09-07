@@ -55,6 +55,9 @@ const numericCheck = (text, overrides = {}) => validateTemplateEngineOutput({
 for (const text of ['1. Service Alpha. 2. Feature Delta.', '1) Service Alpha.\n2) Feature Delta.',
   '1. சேவை Alpha. 2. வசதி Delta.']) {
   assert.equal(numericCheck(text).valid, true, 'Presentation labels are not factual quantities');
+  assert.equal(numericCheck(text, {
+    deterministicOnly: true, semanticClaimValidation: null,
+  }).valid, true, 'Deterministic validation recognizes presentation labels without an LLM');
 }
 for (const text of ['1. Service Alpha costs 9000. 2. Feature Delta.',
   '1. Service Alpha. 3. Feature Delta.', '2. Service Alpha.',
@@ -98,6 +101,12 @@ assert.equal(numericCheck('The price is 3200.', {
 assert.equal(numericCheck('The price is 3200.', {
   semanticClaimValidation: null,
 }).reason, 'grounding_validation_missing');
+assert.equal(numericCheck('The price is 3200.', {
+  deterministicOnly: true, semanticClaimValidation: null,
+}).valid, true, 'Deterministic preflight runs before mandatory semantic grounding');
+assert.equal(numericCheck('The price is 9000.', {
+  deterministicOnly: true, semanticClaimValidation: null,
+}).reason, 'unsupported_numeric_claim', 'Deterministic preflight still rejects unsupported numbers');
 const uncitedNumeric = numericCheck('The price is 9000.', {
   selectedEvidence: [...numericEvidence, {
     ...evidence[0], evidenceId: 'e-other', authoritativeData: { price: 9000 },

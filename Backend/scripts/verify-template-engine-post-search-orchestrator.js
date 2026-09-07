@@ -96,6 +96,7 @@ const verifiedEvidence = Object.freeze([
 // relevance failure even though every original fact was supported.
 {
   let attempts = 0;
+  let semanticChecks = 0;
   const overview = 'First Service offers Delta. More detail?';
   const result = await respondToTemplateEngineSearch({
     mainPrompt, latestUtterance: 'Give an overview of the available services', state, scope,
@@ -105,15 +106,17 @@ const verifiedEvidence = Object.freeze([
     maximumSpeechCharacters: overview.length,
   }, {
     tenantBoundaryVerified: true,
-    validateGroundedClaims: async ({ response }) => ({ supported: true,
-      requestedFactAddressed: response.includes('Delta'),
-      reason: response.includes('Delta') ? null : 'Price alone does not answer the requested overview',
-    }),
+    validateGroundedClaims: async ({ response }) => {
+      semanticChecks += 1;
+      return { supported: true,
+        requestedFactAddressed: response.includes('Delta'),
+        reason: response.includes('Delta') ? null : 'Price alone does not answer the requested overview' };
+    },
     invokeStructuredLlm: async ({ messages }) => {
       attempts += 1;
       assert.ok(messages[0].content.includes('category or service overviews'));
       if (attempts > 1) {
-        assert.ok(messages.at(-1).content.includes('Price alone does not answer the requested overview'));
+        assert.ok(messages.at(-1).content.includes('requested_fact_not_addressed'));
         assert.ok(messages.at(-1).content.includes(`${overview.length} characters`));
       }
       return { outputParsed: { decision: 'RESPONSE',
@@ -122,10 +125,13 @@ const verifiedEvidence = Object.freeze([
     },
   });
   assert.equal(attempts, 2);
+  assert.equal(semanticChecks, 1,
+    'A deterministic relevance failure must be repaired before semantic grounding');
   assert.equal(result.decision.response, overview);
 }
 
 let numericRepairCalls = 0;
+let numericSemanticChecks = 0;
 {
   let attempts = 0;
   const summary = 'First Service and Second Service are the available options.';
@@ -207,20 +213,27 @@ const budgetResult = await respondToTemplateEngineSearch({
   },
 });
 assert.equal(budgetCalls, 2, 'Oversized answers get one complete rewrite, not substring truncation');
-assert.equal(budgetClaimChecks, 2, 'The revised answer must be independently grounded');
+assert.equal(budgetClaimChecks, 1,
+  'Deterministic length rejection must skip semantic review; the revision is independently grounded');
 assert.equal(budgetResult.decision.response, budgetAnswer);
 assert.deepEqual(budgetResult.decision.evidenceIds, ['evidence-1']);
 
+let impossibleBudgetSemanticChecks = 0;
 await assert.rejects(() => respondToTemplateEngineSearch({
   mainPrompt, latestUtterance, state, searchDecision, scope, verifiedEvidence,
   maximumSpeechCharacters: 10,
 }, {
   tenantBoundaryVerified: true,
-  validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
+  validateGroundedClaims: async () => {
+    impossibleBudgetSemanticChecks += 1;
+    return { supported: true, requestedFactAddressed: true };
+  },
   invokeStructuredLlm: async () => ({ outputParsed: { decision: 'RESPONSE',
     response: 'The price is 3200 units.', clarification: null,
     evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null } }),
 }), { code: 'TEMPLATE_ENGINE_OUTPUT_INVALID' }, 'An impossible budget must not produce a truncated factual answer');
+assert.equal(impossibleBudgetSemanticChecks, 0,
+  'A deterministically impossible speech budget must not invoke semantic grounding');
 const sixOperands = Array.from({ length: 6 }, (_, index) => ({ ...verifiedEvidence[0],
   evidenceId: `operand-${index}`, recordId: `record-${index}`, canonicalName: `Option ${index}`,
   content: 'The price is 3200 units.', authoritativeData: { price: 3200 },
@@ -261,7 +274,8 @@ for (const failedRepair of [false, true]) {
     assert.equal(result.decision.nextQuestion, null);
   }
   assert.equal(calls, 2);
-  assert.equal(checkedSpeech[0], `${concise} ${followUp}`, 'Ground the complete proposed speech');
+  assert.deepEqual(checkedSpeech, failedRepair ? [] : [concise],
+    'Only a deterministic-valid repaired response should reach semantic grounding');
 }
 const completeComparison = await respondToTemplateEngineSearch({
   mainPrompt, latestUtterance: 'Compare the prices of all selected options', scope, state: {},
@@ -284,7 +298,10 @@ const numericRepair = await respondToTemplateEngineSearch({
     authoritativeData: { price: 3200, metadata: { revision: 9900 } } }],
 }, {
   tenantBoundaryVerified: true,
-  validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
+  validateGroundedClaims: async () => {
+    numericSemanticChecks += 1;
+    return { supported: true, requestedFactAddressed: true };
+  },
   invokeStructuredLlm: async (request) => {
     numericRepairCalls += 1;
     if (numericRepairCalls === 2) {
@@ -303,6 +320,8 @@ const numericRepair = await respondToTemplateEngineSearch({
   },
 });
 assert.equal(numericRepairCalls, 2);
+assert.equal(numericSemanticChecks, 1,
+  'An unsupported number must be repaired before semantic grounding');
 assert.equal(numericRepair.decision.response, 'The price is 3,200.00 units.');
 
 assert.deepEqual(templateEnginePostSearchJsonSchema.properties.decision.enum,
@@ -912,13 +931,17 @@ assert.deepEqual(changedDecisionRecovery.decision.evidenceIds, ['evidence-1']);
 assert.equal(changedDecisionRecovery.diagnostics.extractiveRecoveryApplied, true);
 
 let malformedRepairCalls = 0;
+let malformedSemanticChecks = 0;
 let malformedRepairDiagnostics;
 const malformedRepair = await respondToTemplateEngineSearch({
   mainPrompt, latestUtterance, state, searchDecision, verifiedEvidence, scope,
   informationUnavailableResponse: 'That information is not available right now.',
 }, {
   tenantBoundaryVerified: true,
-  validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
+  validateGroundedClaims: async () => {
+    malformedSemanticChecks += 1;
+    return { supported: true, requestedFactAddressed: true };
+  },
   invokeStructuredLlm: async () => {
     malformedRepairCalls += 1;
     return malformedRepairCalls === 1 ? { outputParsed: {
@@ -932,6 +955,8 @@ const malformedRepair = await respondToTemplateEngineSearch({
   onDecisionRepair: (details) => { malformedRepairDiagnostics = details; },
 });
 assert.equal(malformedRepairCalls, 2);
+assert.equal(malformedSemanticChecks, 1,
+  'A missing citation must be repaired before semantic grounding');
 assert.equal(malformedRepair.decision.decision, 'RESPONSE');
 assert.deepEqual(malformedRepair.decision.evidenceIds, ['evidence-1']);
 assert.equal(malformedRepairDiagnostics.recovered, true);

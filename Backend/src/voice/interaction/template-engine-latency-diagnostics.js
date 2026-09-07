@@ -47,6 +47,10 @@ export function summarizeTemplateEngineLatency(stageTimings = {}, turnTiming = {
       ? turnTiming.acknowledgementFirstAudioMs : null,
     answerAudioStartupMs: Number.isFinite(turnTiming.finalAnswerAudioAfterReadyMs)
       ? turnTiming.finalAnswerAudioAfterReadyMs : null,
+    answerQueueAfterReadyMs: Number.isFinite(turnTiming.answerQueueAfterReadyMs)
+      ? turnTiming.answerQueueAfterReadyMs : null,
+    ttsAudioAfterQueueMs: Number.isFinite(turnTiming.finalAnswerAudioAfterQueuedMs)
+      ? turnTiming.finalAnswerAudioAfterQueuedMs : null,
     llmCalls, reviewCalls, repairCalls,
     repeatedOperations: Object.freeze(repeatedOperations),
     slowestOperations: Object.freeze(slowestOperations),

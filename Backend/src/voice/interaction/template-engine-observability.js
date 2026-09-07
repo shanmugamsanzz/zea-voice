@@ -25,6 +25,9 @@ export function templateEngineAudioPercentiles(turns = []) {
     .filter(Number.isFinite);
   const actualAnswersUnderTarget = actualAnswers
     .filter((durationMs) => durationMs < TEMPLATE_ENGINE_ACTUAL_ANSWER_TARGET_MS).length;
+  const actualAnswerAverageMs = actualAnswers.length
+    ? Math.round((actualAnswers.reduce((total, value) => total + value, 0)
+      / actualAnswers.length) * 100) / 100 : null;
   return Object.freeze({
     acknowledgement: summarize('acknowledgementFirstAudioMs'),
     finalAnswer: summarize('finalAnswerFirstAudioMs'),
@@ -36,6 +39,10 @@ export function templateEngineAudioPercentiles(turns = []) {
       passRate: actualAnswers.length
         ? Math.round((actualAnswersUnderTarget / actualAnswers.length) * 10_000) / 100
         : null,
+      averageMs: actualAnswerAverageMs,
+      averageTargetStatus: actualAnswers.length < TEMPLATE_ENGINE_ACTUAL_ANSWER_MINIMUM_SAMPLES
+        ? 'insufficient_live_samples'
+        : actualAnswerAverageMs < TEMPLATE_ENGINE_ACTUAL_ANSWER_TARGET_MS ? 'passed' : 'missed',
       p95: summarize('finalAnswerFirstAudioMs').p95,
       p95TargetStatus: actualAnswers.length < TEMPLATE_ENGINE_ACTUAL_ANSWER_MINIMUM_SAMPLES
         ? 'insufficient_live_samples'
@@ -58,6 +65,7 @@ export function recordTemplateEngineTurnMetrics(runtimeMetrics, {
   turnStartedAt,
   firstAudioAt = null,
   finalResponseReadyAt = null,
+  finalResponseQueuedAt = null,
   firstFinalAudioAt = null,
   acknowledgementFirstAudioAt = null,
   sttFinalizationMs = null,
@@ -81,6 +89,12 @@ export function recordTemplateEngineTurnMetrics(runtimeMetrics, {
   const finalAnswerFirstAudioMs = Number.isFinite(firstFinalAudioAt)
     && Number.isFinite(turnStartedAt)
     ? Math.max(0, firstFinalAudioAt - turnStartedAt) : null;
+  const answerQueueAfterReadyMs = Number.isFinite(finalResponseQueuedAt)
+    && Number.isFinite(finalResponseReadyAt)
+    ? Math.max(0, finalResponseQueuedAt - finalResponseReadyAt) : null;
+  const finalAnswerAudioAfterQueuedMs = Number.isFinite(firstFinalAudioAt)
+    && Number.isFinite(finalResponseQueuedAt)
+    ? Math.max(0, firstFinalAudioAt - finalResponseQueuedAt) : null;
   const sample = {
     epoch,
     route: result?.provenance?.initialDecision ?? result?.decision?.decision ?? null,
@@ -94,6 +108,8 @@ export function recordTemplateEngineTurnMetrics(runtimeMetrics, {
       ? Math.max(0, acknowledgementFirstAudioAt - turnStartedAt) : null,
     finalAnswerAudioAfterReadyMs: Number.isFinite(firstFinalAudioAt) && Number.isFinite(finalResponseReadyAt)
       ? Math.max(0, firstFinalAudioAt - finalResponseReadyAt) : null,
+    finalAnswerAudioAfterQueuedMs,
+    answerQueueAfterReadyMs,
     stageTimings: Object.fromEntries(Object.entries(stageTimings).map(([stage, timing]) => [stage, { ...timing }])),
     finalAnswerStatus: finalAnswerFirstAudioMs === null || targetMs === null
       ? 'not_measured' : finalAnswerFirstAudioMs < targetMs ? 'passed' : 'missed',
@@ -115,7 +131,9 @@ export function recordTemplateEngineTurnMetrics(runtimeMetrics, {
       retrievalMs: stageDuration(stageTimings, 'retrieval'),
       generationMs: stageDuration(stageTimings, 'generation'),
       validationMs: stageDuration(stageTimings, 'validation'),
-      ttsFirstAudioMs: sample.finalAnswerAudioAfterReadyMs,
+      answerQueueMs: sample.answerQueueAfterReadyMs,
+      ttsFirstAudioMs: sample.finalAnswerAudioAfterQueuedMs
+        ?? sample.finalAnswerAudioAfterReadyMs,
     }),
     acknowledgementFirstAudioMs: sample.acknowledgementFirstAudioMs,
     acknowledgementExcluded: true,

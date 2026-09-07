@@ -156,10 +156,13 @@ const diagnosis = summarizeTemplateEngineLatency({
     answer_repair: { durationMs: 1900, calls: 1, cacheHits: 0 },
   } },
 }, { finalAnswerFirstAudioMs: 9700, acknowledgementFirstAudioMs: 900,
-  finalAnswerAudioAfterReadyMs: 120 });
+  finalAnswerAudioAfterReadyMs: 120, answerQueueAfterReadyMs: 8,
+  finalAnswerAudioAfterQueuedMs: 112 });
 assert.equal(diagnosis.actualAnswerFirstAudioMs, 9700);
 assert.equal(diagnosis.acknowledgementFirstAudioMs, 900);
 assert.equal(diagnosis.answerAudioStartupMs, 120);
+assert.equal(diagnosis.answerQueueAfterReadyMs, 8);
+assert.equal(diagnosis.ttsAudioAfterQueueMs, 112);
 assert.equal(diagnosis.llmCalls, 6);
 assert.equal(diagnosis.reviewCalls, 1);
 assert.equal(diagnosis.repairCalls, 2);

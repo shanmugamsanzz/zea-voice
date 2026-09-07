@@ -8,6 +8,7 @@ import {
   deterministicPendingWorkflowFieldDecision,
   publishedResolutionAmbiguity,
   runTemplateEngineProductionTurn,
+  verifiedPublishedEntityFastPath,
 } from '../src/voice/interaction/template-engine-production-runtime.js';
 import { recordTemplateEngineTurnMetrics, templateEngineAudioPercentiles } from '../src/voice/interaction/template-engine-observability.js';
 import { instrumentTemplateEngineTurn } from '../src/voice/interaction/template-engine-turn-timing.js';
@@ -114,6 +115,7 @@ assert.equal(audioPercentiles.finalAnswer.count, 2);
 assert.equal(audioPercentiles.finalAnswer.p90, 12000, 'Acknowledgements must never improve answer latency percentiles');
 assert.deepEqual(audioPercentiles.actualAnswerUnderThreeSeconds, {
   targetMs: 3000, minimumSamples: 20, measured: 2, passed: 0, passRate: 0,
+  averageMs: 11000, averageTargetStatus: 'insufficient_live_samples',
   p95: 12000, p95TargetStatus: 'insufficient_live_samples',
 });
 const liveTargetSamples = Array.from({ length: 20 }, (_, index) => ({
@@ -122,11 +124,16 @@ const liveTargetSamples = Array.from({ length: 20 }, (_, index) => ({
 }));
 assert.equal(templateEngineAudioPercentiles(liveTargetSamples)
   .actualAnswerUnderThreeSeconds.p95TargetStatus, 'passed');
+assert.equal(templateEngineAudioPercentiles(liveTargetSamples)
+  .actualAnswerUnderThreeSeconds.averageTargetStatus, 'passed');
 liveTargetSamples[18].finalAnswerFirstAudioMs = 3_100;
 liveTargetSamples[19].finalAnswerFirstAudioMs = 3_200;
 assert.equal(templateEngineAudioPercentiles(liveTargetSamples)
   .actualAnswerUnderThreeSeconds.p95TargetStatus, 'missed',
 'Acknowledgement speed must not hide an actual-answer P95 breach');
+assert.equal(templateEngineAudioPercentiles(liveTargetSamples)
+  .actualAnswerUnderThreeSeconds.averageTargetStatus, 'passed',
+'Average and P95 actual-answer targets must be reported independently');
 
 const tenantId = '11111111-1111-4111-8111-111111111111';
 const agentId = '22222222-2222-4222-8222-222222222222';
@@ -356,6 +363,9 @@ const exactRetrieval = await retrieveTemplateEngineEvidence({
       contextualReference: 'Alpha Alias', preferredRecordIds: [],
     },
   }, state: {},
+  reviewEntityCandidates: async () => assert.fail(
+    'Published exact identity must not invoke multilingual clarification review',
+  ),
 }, {
   loadArtifacts: async () => exactArtifacts,
   searchCandidates: async () => ({
@@ -906,7 +916,7 @@ const referenceInput = { latestUtterance: 'More details?',
 assert.equal(await reviewRememberedReference(referenceInput, async () => ({ relation: 'invalid' })), false);
 {
   let calls = 0;
-  let coverageChecked = false;
+  let coverageChecks = 0;
   const result = await runTemplateEngineProductionTurn({ scope, latestUtterance: 'Yes Madam',
     mainPrompt: 'Follow published steps.', assignedTools: [], informationFields: [],
     pendingQuestion: { key: 'configured_welcome_question', text: 'Is this the account holder?' },
@@ -924,7 +934,6 @@ assert.equal(await reviewRememberedReference(referenceInput, async () => ({ rela
         continuation: true, guidanceRecordId: 'next-step', query: 'available services', requestedFact: 'available services',
       } };
       if (++calls === 1) return searchDecision;
-      assert.ok(coverageChecked);
       assert.ok(request.messages[0].content.includes('published_welcome_continuation'));
       return { decision: 'RESPONSE', response: 'Tenant Item costs 125.', clarification: null,
         evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null };
@@ -936,7 +945,7 @@ assert.equal(await reviewRememberedReference(referenceInput, async () => ({ rela
       return retrieval;
     },
     validateRequestedEntityCoverage: async (input) => {
-      coverageChecked = true;
+      coverageChecks += 1;
       assert.equal(input.requestMeaning.publishedNextStep.recordId, 'next-step');
       assert.equal(input.latestUtterance, 'Yes Madam');
       return { resolved: true };
@@ -948,6 +957,8 @@ assert.equal(await reviewRememberedReference(referenceInput, async () => ({ rela
   });
   assert.equal(result.decision.decision, 'RESPONSE');
   assert.equal(result.toolExecuted, false);
+  assert.equal(coverageChecks, 0,
+    'Resolved retrieval must rely on the complete post-answer grounding check instead of a duplicate entity review');
 }
 assert.equal(await reviewRememberedReference(referenceInput, async () => 'not json'), false);
 await assert.rejects(() => reviewRememberedReference(referenceInput, async () => {
@@ -1074,6 +1085,120 @@ assert.equal(deterministicChecks, 1,
   'Follow-up validation must not add a second grounding-validator call');
 assert.match(speculativeTurn.speech, /Tenant Item costs 125/u);
 
+{
+  let foregroundRetrievals = 0;
+  const decisions = [searchDecision, {
+    decision: 'RESPONSE', response: 'Tenant Item costs 125.', clarification: null,
+    evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
+  }];
+  const result = await runTemplateEngineProductionTurn({
+    auth: { tenantId }, scope, callId: 'bounded-speculative-handoff',
+    usageDirection: 'inbound', language: 'en', mainPrompt: 'Use published facts.',
+    latestUtterance: 'What is the tenant item price?', state: {}, assignedTools: [],
+    informationFields: [],
+  }, {
+    invokeStructuredLlm: async () => decisions.shift(),
+    loadPublishedContext: async () => ({ scope, publishedWorkflows: [], artifacts: {} }),
+    retrieveSpeculativeEvidence: async () => new Promise((resolve) => {
+      setTimeout(() => resolve(retrieval), 5);
+    }),
+    retrieveEvidence: async () => { foregroundRetrievals += 1; return retrieval; },
+    speculativeRetrievalHandoffMs: 25,
+    persistWorkflowState: async () => {}, executeAuthorizedTool: async () => assert.fail('No tools'),
+    validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
+    validateToolResultSpeechClaims: async () => ({ supported: true }),
+  });
+  assert.equal(result.speech, 'Tenant Item costs 125.');
+  assert.equal(foregroundRetrievals, 0,
+    'A routing-compatible speculative result finishing inside the bounded handoff must be reused');
+}
+
+{
+  let foregroundRetrievals = 0;
+  const decisions = [searchDecision, {
+    decision: 'RESPONSE', response: 'Tenant Item costs 125.', clarification: null,
+    evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
+  }];
+  const wrongRevision = { ...retrieval,
+    scope: { ...retrieval.scope, publications: retrieval.scope.publications.map((entry) => ({
+      ...entry, publicationRevision: Number(entry.publicationRevision) + 1,
+    })) } };
+  const result = await runTemplateEngineProductionTurn({
+    auth: { tenantId }, scope, callId: 'revision-isolated-speculation',
+    usageDirection: 'inbound', language: 'en', mainPrompt: 'Use published facts.',
+    latestUtterance: 'What is the tenant item price?', state: {}, assignedTools: [],
+    informationFields: [],
+  }, {
+    invokeStructuredLlm: async () => decisions.shift(),
+    loadPublishedContext: async () => ({ scope, publishedWorkflows: [], artifacts: {} }),
+    retrieveSpeculativeEvidence: async () => wrongRevision,
+    retrieveEvidence: async () => { foregroundRetrievals += 1; return retrieval; },
+    persistWorkflowState: async () => {}, executeAuthorizedTool: async () => assert.fail('No tools'),
+    validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
+    validateToolResultSpeechClaims: async () => ({ supported: true }),
+  });
+  assert.equal(result.speech, 'Tenant Item costs 125.');
+  assert.equal(foregroundRetrievals, 1,
+    'Speculative evidence from another publication revision must never be reused');
+}
+
+const exactSpeculativeRetrieval = Object.freeze({
+  ...retrieval,
+  search: searchDecision.search,
+  resolvedSearch: searchDecision.search,
+  requestedEntityRecordIds: Object.freeze(['record-1']),
+  entityResolution: Object.freeze({
+    action: 'CONTINUE', reason: 'published_exact_selection',
+    requiresCandidateConfirmation: false,
+    ambiguity: Object.freeze({ detected: false, candidates: Object.freeze([]) }),
+  }),
+  diagnostics: Object.freeze({ requestedEntityHydrationIncomplete: false }),
+});
+assert.equal(verifiedPublishedEntityFastPath(exactSpeculativeRetrieval, searchDecision, {
+  latestUtterance: 'tenant item price',
+}), true);
+assert.equal(verifiedPublishedEntityFastPath({ ...exactSpeculativeRetrieval,
+  entityResolution: { ...exactSpeculativeRetrieval.entityResolution,
+    requiresCandidateConfirmation: true },
+}, searchDecision, { latestUtterance: 'tenant item price' }), false,
+'Confirmation candidates must retain the existing clarification path');
+{
+  let referenceReviews = 0;
+  let foregroundRetrievals = 0;
+  let fastPathDiagnostics = null;
+  const fastPathDecisions = [{ ...searchDecision, search: {
+    ...searchDecision.search, contextualReference: 'Old Item', preferredRecordIds: ['old-record'],
+  } }, { decision: 'RESPONSE', response: 'Tenant Item costs 125.', clarification: null,
+    evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null }];
+  const result = await runTemplateEngineProductionTurn({
+    auth: { tenantId }, scope, callId: 'exact-fast-path', usageDirection: 'inbound', language: 'en',
+    mainPrompt: 'Use published facts.', latestUtterance: 'tenant item price',
+    conversationHistory: [{ role: 'user', content: 'Old Item details' },
+      { role: 'assistant', content: 'Old Item details.' }],
+    state: { lastReferencedRecordIds: ['old-record'] }, assignedTools: [], informationFields: [],
+  }, {
+    invokeStructuredLlm: async (request) => {
+      if (request.responseFormat.name === 'template_engine_reference_review') {
+        referenceReviews += 1;
+        return { relation: 'new_request' };
+      }
+      return fastPathDecisions.shift();
+    },
+    loadPublishedContext: async () => ({ scope, publishedWorkflows: [], artifacts: {} }),
+    retrieveSpeculativeEvidence: async () => exactSpeculativeRetrieval,
+    retrieveEvidence: async () => { foregroundRetrievals += 1; return exactSpeculativeRetrieval; },
+    persistWorkflowState: async () => {}, executeAuthorizedTool: async () => assert.fail('No tools'),
+    validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
+    validateToolResultSpeechClaims: async () => ({ supported: true }),
+    onRetrievalDiagnostics: (details) => { fastPathDiagnostics = details; },
+  });
+  assert.equal(result.speech, 'Tenant Item costs 125.');
+  assert.equal(referenceReviews, 0,
+    'Exact current published identity must bypass the stale remembered-reference review');
+  assert.equal(foregroundRetrievals, 0, 'Verified exact speculative evidence must be reused');
+  assert.equal(fastPathDiagnostics.highConfidenceFastPath, true);
+}
+
 let releaseSpeculation;
 const delayedSpeculation = new Promise((resolve) => { releaseSpeculation = resolve; });
 const loadedArtifacts = {};
@@ -1124,8 +1249,6 @@ const guardedDecisions = [{
   decision: 'RESPONSE', response: 'Tenant Item costs 125.', clarification: null,
   search: null, tool: null, nextQuestion: null, stateUpdate: null,
 }, {
-  ...searchDecision,
-}, {
   decision: 'RESPONSE', response: 'Tenant Item costs 125.', clarification: null,
   evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
 }];
@@ -1158,13 +1281,13 @@ const guardedTurn = await runTemplateEngineProductionTurn({
   onStageTiming: (event) => guardedTimingOperations.push(event.operation),
 });
 assert.equal(guardedRetrievalCalls, 1,
-  'A factual direct RESPONSE must be reclassified by the tenant-controlled LLM');
+  'A rejected factual direct RESPONSE must search the unchanged caller request');
 assert.equal(guardedTurn.decision.decision, 'RESPONSE');
 assert.deepEqual(guardedTurn.evidenceIds, ['evidence-1']);
 assert.equal(guardedDecisions.length, 0);
 assert.equal(guardedTimingOperations.filter((operation) => operation === 'initial_routing').length, 1);
-assert.equal(guardedTimingOperations.filter((operation) => operation === 'grounding_reroute').length, 1,
-  'Telemetry must identify the factual re-route instead of merging it with initial routing');
+assert.equal(guardedTimingOperations.filter((operation) => operation === 'grounding_reroute').length, 0,
+  'Rejected uncited speech must not trigger a duplicate routing LLM call');
 
 const tool = {
   id: 'tool-1', name: 'perform_action', status: 'active', type: 'webhook_api',
@@ -1585,6 +1708,7 @@ const runtimeMetrics = {
 const searchMetric = recordTemplateEngineTurnMetrics(runtimeMetrics, {
   epoch: 1, result: turn, retrievalDiagnostics: retrieval.diagnostics,
   turnStartedAt: 1_000, firstAudioAt: 1_750, finalResponseReadyAt: 2_900,
+  finalResponseQueuedAt: 2_920,
   firstFinalAudioAt: 3_200, firstAudioDeadlineMs: 2_000, sttFinalizationMs: 351,
   stageTimings: {
     routing: { durationMs: 500 }, retrieval: { durationMs: 250 },
@@ -1605,13 +1729,15 @@ assert.equal(searchMetric.retrievalMs, retrieval.diagnostics.durationMs);
 assert.equal(searchMetric.totalFirstAudioMs, 750);
 assert.equal(searchMetric.finalAnswerReadyMs, 1900);
 assert.equal(searchMetric.finalAnswerFirstAudioMs, 2200);
+assert.equal(searchMetric.answerQueueAfterReadyMs, 20);
+assert.equal(searchMetric.finalAnswerAudioAfterQueuedMs, 280);
 assert.deepEqual(searchMetric.actualAnswerBaseline, {
   targetMs: 3000,
   actualAnswerFirstAudioMs: 2200,
   targetStatus: 'passed',
   stages: {
     sttFinalizationMs: 351, routingMs: 500, retrievalMs: 250,
-    generationMs: 700, validationMs: 150, ttsFirstAudioMs: 300,
+    generationMs: 700, validationMs: 150, answerQueueMs: 20, ttsFirstAudioMs: 280,
   },
   acknowledgementFirstAudioMs: null,
   acknowledgementExcluded: true,

@@ -2446,6 +2446,8 @@ export class RealtimeConversationOrchestrator {
     let retrievalDiagnostics = null;
     const stageTimings = {};
     let finalResponseReadyAt = null;
+    let finalResponseQueuedAt = null;
+    let acknowledgementAtReady = null;
     try {
       const acknowledgementOnly = this.pendingTemplateEngineRequest
         && !this.templateEngineState.activeWorkflowId
@@ -2725,16 +2727,8 @@ export class RealtimeConversationOrchestrator {
     } finally {
       finalResponseReady = true;
       finalResponseReadyAt = Date.now();
-      const acknowledgement = latencyAcknowledgement.snapshot();
+      acknowledgementAtReady = latencyAcknowledgement.snapshot();
       latencyAcknowledgement.cancel();
-      this.log.debug({
-        stage: 'template_engine.turn_latency_timer_cancelled',
-        callId: this.call.id,
-        turnEpoch: epoch,
-        triggered: acknowledgement.triggered,
-        queued: acknowledgement.queued,
-        elapsedMs: Date.now() - turnStartedAt,
-      }, 'Whole-turn latency acknowledgement timer cancelled when final response became ready');
       if (epoch === this.epoch) this.activeLlm = null;
     }
     if (epoch !== this.epoch || this.finalized) {
@@ -2742,9 +2736,6 @@ export class RealtimeConversationOrchestrator {
       return;
     }
     this.templateEngineState = result.state;
-    const factualAnswerSources = templateEngineMessageSources(result, {
-      turnId: `${this.call.id}:${epoch}`,
-    });
     const finalAnswer = this.#fitTtsMessage(result.speech);
     sentencePipeline.setWorkflowFieldAudioCache(result.workflow?.speechCache ?? null);
     if (!finalAnswer || !sentencePipeline.enqueue(finalAnswer)) {
@@ -2752,7 +2743,22 @@ export class RealtimeConversationOrchestrator {
       throw new AppError(503, 'The template-engine response could not be queued for speech',
         'VOICE_FINAL_RESPONSE_NOT_QUEUED');
     }
+    finalResponseQueuedAt = Date.now();
+    // Source formatting and diagnostics are not prerequisites for audio. Do
+    // them only after validated text has entered the TTS pipeline.
+    const factualAnswerSources = templateEngineMessageSources(result, {
+      turnId: `${this.call.id}:${epoch}`,
+    });
     sentencePipeline.setSources(factualAnswerSources);
+    this.log.debug({
+      stage: 'template_engine.turn_latency_timer_cancelled',
+      callId: this.call.id,
+      turnEpoch: epoch,
+      triggered: acknowledgementAtReady?.triggered === true,
+      queued: acknowledgementAtReady?.queued === true,
+      elapsedMs: finalResponseReadyAt - turnStartedAt,
+      answerQueueAfterReadyMs: Math.max(0, finalResponseQueuedAt - finalResponseReadyAt),
+    }, 'Whole-turn latency acknowledgement timer cancelled when final response became ready');
     await sentencePipeline.waitUntilStarted();
     const playback = await sentencePipeline.finish();
     if (this.#isStaleGeneration(epoch)
@@ -2768,6 +2774,7 @@ export class RealtimeConversationOrchestrator {
       sttFinalizationMs: sttTiming.sttFinalizationMs,
       stageTimings,
       finalResponseReadyAt,
+      finalResponseQueuedAt,
       firstAudioDeadlineMs: Math.min(env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS, 2_000),
     });
     await this.controller.setAssistantResponse(answer, Date.now(), { sources: factualAnswerSources });
@@ -2801,6 +2808,8 @@ export class RealtimeConversationOrchestrator {
       acknowledgementFirstAudioMs: turnTiming.acknowledgementFirstAudioMs,
       finalAnswerFirstAudioMs: turnTiming.finalAnswerFirstAudioMs,
       finalAnswerAudioAfterReadyMs: turnTiming.finalAnswerAudioAfterReadyMs,
+      finalAnswerAudioAfterQueuedMs: turnTiming.finalAnswerAudioAfterQueuedMs,
+      answerQueueAfterReadyMs: turnTiming.answerQueueAfterReadyMs,
       finalAnswerStatus: turnTiming.finalAnswerStatus,
       sttFinalizationMs: sttTiming.sttFinalizationMs ?? null,
       durationMs: Date.now() - turnStartedAt,

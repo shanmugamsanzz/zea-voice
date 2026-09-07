@@ -49,15 +49,23 @@ const actualAnswerP95 = actualAnswerSamples.length
   ? [...actualAnswerSamples].sort((left, right) => left - right)[
     Math.ceil(actualAnswerSamples.length * 0.95) - 1
   ] : null;
+const actualAnswerAverage = actualAnswerSamples.length
+  ? Math.round((actualAnswerSamples.reduce((total, value) => total + value, 0)
+    / actualAnswerSamples.length) * 100) / 100 : null;
 process.stdout.write(`${JSON.stringify({
   generatedAt: new Date().toISOString(),
   samples,
   firstAudioSlo: evaluateFirstAudioSlo(samples),
   actualAnswerSlo: {
+    targetAverageMs: 3_000,
     targetP95Ms: 3_000,
     minimumSamples: 20,
     count: actualAnswerSamples.length,
     p95Ms: actualAnswerP95,
+    averageMs: actualAnswerAverage,
+    averagePassed: actualAnswerSamples.length >= 20 && actualAnswerAverage < 3_000,
+    averageReason: actualAnswerSamples.length < 20 ? 'insufficient_live_samples'
+      : actualAnswerAverage < 3_000 ? null : 'actual_answer_average_breached',
     passed: actualAnswerSamples.length >= 20 && actualAnswerP95 < 3_000,
     reason: actualAnswerSamples.length < 20 ? 'insufficient_live_samples'
       : actualAnswerP95 < 3_000 ? null : 'actual_answer_p95_breached',

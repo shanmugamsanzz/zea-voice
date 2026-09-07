@@ -230,6 +230,31 @@ function speculativeEvidenceCompatible(retrieval, decision, input) {
   return (contextual || queryCompatible) && factAvailable;
 }
 
+export function verifiedPublishedEntityFastPath(retrieval, decision, input) {
+  if (!retrieval || retrieval.error || !Array.isArray(retrieval.evidence)
+    || retrieval.entityResolution?.action !== 'CONTINUE'
+    || retrieval.entityResolution?.reason !== 'published_exact_selection'
+    || retrieval.entityResolution?.requiresCandidateConfirmation === true
+    || retrieval.entityResolution?.ambiguity?.detected === true
+    || retrieval.diagnostics?.requestedEntityHydrationIncomplete === true) return false;
+  const requested = new Set((retrieval.requestedEntityRecordIds ?? [])
+    .map((id) => cleanText(id, 160).toLocaleLowerCase()).filter(Boolean));
+  if (!requested.size) return false;
+  const verified = new Set(retrieval.evidence.filter((source) => (
+    source?.verified === true && source?.callerFacing !== false
+  )).map((source) => cleanText(source?.recordId, 160).toLocaleLowerCase()).filter(Boolean));
+  if ([...requested].some((id) => !verified.has(id))) return false;
+  const currentRequest = cleanText(input?.latestUtterance, 2_000);
+  const routedQuery = cleanText(decision?.search?.query, 2_000);
+  const resolvedQuery = cleanText(retrieval.resolvedSearch?.query ?? retrieval.search?.query, 2_000);
+  return Boolean(currentRequest) && Math.max(
+    tokenCoverage(currentRequest, routedQuery),
+    tokenCoverage(routedQuery, currentRequest),
+    tokenCoverage(currentRequest, resolvedQuery),
+    tokenCoverage(resolvedQuery, currentRequest),
+  ) >= 0.6;
+}
+
 async function composeWithFollowUpRepair({
   decision, mainPrompt, latestUtterance, recentCompleteTurns, conversationGuidance,
   evidence, suppressFollowUp = false, invokeStructuredLlm,
@@ -349,6 +374,68 @@ function callerVerifiedArguments(argumentsValue, utterance, recentTurns = [], ex
       .replace(/[^\p{L}\p{M}\p{N}@+.:/-]+/gu, ' ').trim();
     return normalizedValue && normalizedUtterance.includes(normalizedValue);
   }));
+}
+
+function searchAfterRejectedDirectSpeech(latestUtterance) {
+  return Object.freeze({
+    decision: 'SEARCH',
+    response: '',
+    clarification: null,
+    search: Object.freeze({
+      query: latestUtterance,
+      requestedFact: latestUtterance,
+      contextualReference: null,
+      preferredRecordIds: Object.freeze([]),
+    }),
+    tool: null,
+    nextQuestion: null,
+    stateUpdate: null,
+  });
+}
+
+function publicationScopeKeys(scope = {}) {
+  return new Set((scope.publications ?? []).map((publication) => [
+    cleanText(publication?.knowledgeBaseId, 160).toLocaleLowerCase(),
+    Number(publication?.publicationRevision),
+  ].join(':')));
+}
+
+function samePublishedRetrievalBoundary(retrieval, scope) {
+  if (!retrieval?.scope || !scope) return false;
+  if (cleanText(retrieval.scope.tenantId, 160).toLocaleLowerCase()
+      !== cleanText(scope.tenantId, 160).toLocaleLowerCase()
+    || cleanText(retrieval.scope.agentId, 160).toLocaleLowerCase()
+      !== cleanText(scope.agentId, 160).toLocaleLowerCase()) return false;
+  const expected = publicationScopeKeys(scope);
+  const actual = publicationScopeKeys(retrieval.scope);
+  return expected.size === actual.size && [...expected].every((key) => actual.has(key));
+}
+
+function speculativeRouteCompatible(decision, input) {
+  if (decision?.decision !== 'SEARCH'
+    || (decision.search?.preferredRecordIds ?? []).length) return false;
+  const contextualReference = cleanText(decision.search?.contextualReference, 500);
+  if (contextualReference
+    && tokenCoverage(contextualReference, input.latestUtterance) < 0.8) return false;
+  return Math.max(
+    tokenCoverage(input.latestUtterance, decision.search?.query),
+    tokenCoverage(decision.search?.query, input.latestUtterance),
+  ) >= 0.6;
+}
+
+async function completedSpeculationWithin(promise, waitMs) {
+  if (!promise) return null;
+  const timeout = Math.max(0, Math.min(Number(waitMs) || 0, 100));
+  if (!timeout) return null;
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeout); }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 const deterministicWorkflowFieldTypes = new Set([
@@ -497,17 +584,23 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   dependencies = instrumentTemplateEngineTurn(dependencies);
   input = { ...input, maximumSpeechCharacters: normalizedSpeechBudget(input.maximumSpeechCharacters
     ?? input.runtimeProfile?.limits?.ttsMaxCharactersPerResponse) };
-  const state = createMinimalTemplateEngineState({
-    conversationHistory: input.conversationHistory,
-    ...object(input.state),
-  });
-  const publishedContext = await dependencies.loadPublishedContext({
+  // Start the publication I/O first. Minimal state and prompt preparation are
+  // synchronous and independent, so they can run while that request is active.
+  const publishedContextPromise = dependencies.loadPublishedContext({
     auth: input.auth,
     scope: input.scope,
     callId: input.callId,
     usageDirection: input.usageDirection,
     language: input.language,
   });
+  const state = createMinimalTemplateEngineState({
+    conversationHistory: input.conversationHistory,
+    ...object(input.state),
+  });
+  const preparedMainPrompt = [
+    input.mainPrompt, speechBudgetInstruction(input.maximumSpeechCharacters),
+  ].filter(Boolean).join('\n');
+  const publishedContext = await publishedContextPromise;
   const workflowSummaries = authorizedWorkflowSummaries(
     publishedContext.publishedWorkflows, input.assignedTools,
   );
@@ -519,7 +612,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     dependencies.onConversationGuidanceSelected, 'initial_routing', initialConversationGuidance,
   );
   const common = {
-    mainPrompt: [input.mainPrompt, speechBudgetInstruction(input.maximumSpeechCharacters)].filter(Boolean).join('\n'),
+    mainPrompt: preparedMainPrompt,
     latestUtterance: input.latestUtterance,
     conversationHistory: state.recentCompleteTurns,
     pendingClarification: state.pendingClarification,
@@ -608,13 +701,11 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     if (directValidation?.supported !== true) {
       initialValidationResult = directValidation?.reason
         ?? 'caller_speech_requires_grounding_search';
-      routed = await routeTemplateEngineUtterance(common, {
-        ...routingDependencies,
-        routingOperation: 'grounding_reroute',
-        factualClaimsPresent: true,
-        nonFactualResponseAllowed: false,
-      });
-      first = routed.decision;
+      // The first routing decision already established that this is not a
+      // workflow action. Once its uncited speech is rejected, a second LLM
+      // routing pass cannot add evidence; search the unchanged caller request
+      // and let the grounded answer contract make the delivery decision.
+      first = searchAfterRejectedDirectSpeech(input.latestUtterance);
     }
   }
   if (first.decision === 'TOOL') {
@@ -671,7 +762,21 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   const welcomeVerified = requestMeaning.kind === 'published_welcome_continuation';
   if (welcomeVerified) first = { ...first, search: { ...first.search, query: requestMeaning.query,
     requestedFact: requestMeaning.requestedFact, contextualReference: null, preferredRecordIds: [] } };
-  let contextualMemoryVerified = !welcomeVerified && await reviewRememberedReference({
+  if (!completedSpeculativeResult && !welcomeVerified
+    && speculativeRouteCompatible(first, input)) {
+    const handoff = await completedSpeculationWithin(
+      speculativeRetrieval, dependencies.speculativeRetrievalHandoffMs ?? 25,
+    );
+    if (handoff) completedSpeculativeResult = handoff;
+  }
+  if (completedSpeculativeResult
+    && !samePublishedRetrievalBoundary(completedSpeculativeResult, publishedContext.scope)) {
+    completedSpeculativeResult = null;
+  }
+  const highConfidencePublishedEntity = !welcomeVerified
+    && verifiedPublishedEntityFastPath(completedSpeculativeResult, first, input);
+  let contextualMemoryVerified = !welcomeVerified && !highConfidencePublishedEntity
+    && await reviewRememberedReference({
     latestUtterance: input.latestUtterance, search: first.search, state,
   }, dependencies.invokeStructuredLlm);
   let searchState = contextualMemoryVerified ? state
@@ -702,7 +807,8 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   // foreground answer. Reuse only completed, compatible verified evidence.
   const speculativeResult = guidanceCompatible ? completedSpeculativeResult : null;
   const usedSpeculativeRetrieval = !welcomeVerified && !contextualMemoryVerified && guidanceCompatible
-    && speculativeEvidenceCompatible(speculativeResult, first, input);
+    && (highConfidencePublishedEntity
+      || speculativeEvidenceCompatible(speculativeResult, first, input));
   const retrieval = usedSpeculativeRetrieval ? speculativeResult : await dependencies.retrieveEvidence({
     auth: input.auth,
     scope: publishedContext.scope,
@@ -739,6 +845,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       }),
       speculative: Boolean(speculativeRetrieval),
       speculativeReused: usedSpeculativeRetrieval,
+      highConfidenceFastPath: highConfidencePublishedEntity,
       ambiguity: publishedResolutionAmbiguity(retrieval.entityResolution,
         retrieval.evidence ?? [], retrieval.searchClassification),
     }));
@@ -767,6 +874,16 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   reportGuidanceSelection(
     dependencies.onConversationGuidanceSelected, 'post_search', postSearchConversationGuidance,
   );
+  const resolutionAmbiguity = publishedResolutionAmbiguity(
+    retrieval.entityResolution, retrieval.evidence, retrieval.searchClassification,
+  );
+  // The post-answer grounding validator independently checks the requested
+  // entity against the original utterance. A separate pre-answer entity LLM
+  // review is therefore useful only when retrieval reports real ambiguity and
+  // the review may safely clear it. Avoid duplicating that semantic review on
+  // ordinary resolved factual turns.
+  const requiresEntityCoverageReview = resolutionAmbiguity?.required === true
+    || !(retrieval.evidence ?? []).some((source) => source?.verified === true);
   const answered = await respondToTemplateEngineSearch({
     ...common,
     mainPrompt: input.mainPrompt,
@@ -784,9 +901,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     invokeStructuredLlm: dependencies.invokeStructuredLlm,
     tenantBoundaryVerified: true,
     publishedEntities: retrieval.evidence,
-    ambiguity: publishedResolutionAmbiguity(
-      retrieval.entityResolution, retrieval.evidence, retrieval.searchClassification,
-    ),
+    ambiguity: resolutionAmbiguity,
     validateGroundedClaims: ({
       response, decision, selectedEvidence, citedEvidence, searchInterpretation, latestUtterance, contextualReferenceVerified, ambiguity, requestMeaning,
     }) => (
@@ -795,7 +910,8 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       })
     ),
     onDecisionRepair: dependencies.onPostSearchDecisionRepair,
-    validateRequestedEntityCoverage: dependencies.validateRequestedEntityCoverage,
+    validateRequestedEntityCoverage: requiresEntityCoverageReview
+      ? dependencies.validateRequestedEntityCoverage : null,
     onEntityCoverage: dependencies.onEntityCoverage,
     onPostSearchDiagnostics: dependencies.onPostSearchDiagnostics,
   });

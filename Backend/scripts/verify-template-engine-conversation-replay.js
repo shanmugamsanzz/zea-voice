@@ -21,7 +21,7 @@ records.push({ record_id: 'welcome-next', record_type: 'conversation_node', usag
     catalogReferences: ['Available packages => item:overview'] } });
 const recovery = 'Sorry, I could not prepare that answer. Please try again.';
 const logs = [], spoken = [], audioFrames = [], results = [];
-let turn, stages = new Set(), failAnswer = false;
+let turn, stages = new Set(), failAnswer = false, resolvedCoverageSkips = 0;
 class Stt {
   listeners = new Set();
   async connect() {} cancel() {} close() {} sendAudio() {} flush() {}
@@ -152,15 +152,25 @@ try {
       for (const token of fixture.subjects[turn.subject].required) assert.ok(answer.includes(token));
       assert.ok(!answer.includes(recovery));
     }
-    for (const stage of ['retrieval', 'template_engine_entity_coverage', 'template_engine_post_search_decision', 'template_engine_claim_validation']) {
+    for (const stage of ['retrieval', 'template_engine_post_search_decision']) {
       assert.ok(stages.has(stage), `Stage skipped: ${turn.id}: ${stage}`);
     }
+    if (failAnswer) {
+      assert.equal(stages.has('template_engine_claim_validation'), false,
+        'Deterministically rejected drafts must not consume semantic claim validation');
+    } else {
+      assert.ok(stages.has('template_engine_claim_validation'),
+        `Stage skipped: ${turn.id}: template_engine_claim_validation`);
+    }
+    if (!stages.has('template_engine_entity_coverage')) resolvedCoverageSkips += 1;
     if (turn.id === 'welcome') assert.ok(stages.has('template_engine_welcome_meaning'));
     if (turn.noPublishedAlias) assert.ok(stages.has('template_engine_multilingual_entity_review'));
     if (turn.contextual) assert.ok(stages.has('template_engine_contextual_subject_review'), JSON.stringify([...stages]));
     assert.ok(!media.closed);
     results.push({ id: turn.id, answer, audioFrames: audioFrames.length - framesBefore });
   }
+  assert.ok(resolvedCoverageSkips > 0,
+    'Resolved factual replay must skip at least one duplicate entity-coverage LLM review');
   console.log(JSON.stringify({ passed: true, mode: 'offline-provider-fixtures', liveModelVerified: false,
     acousticQualityVerified: false, productionRolloutApproved: false, results }, null, 2));
 } finally { media.close(); }
