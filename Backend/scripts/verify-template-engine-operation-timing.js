@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { instrumentTemplateEngineTurn, tagTemplateEngineTiming } from '../src/voice/interaction/template-engine-turn-timing.js';
+import { summarizeTemplateEngineLatency } from '../src/voice/interaction/template-engine-latency-diagnostics.js';
 
 const events = [];
 let expectedRequest;
@@ -53,6 +54,14 @@ console.log('Operation timing, unchanged inputs, cancellation and privacy verifi
 let checks = 0;
 let authorizationCalls = 0;
 const reuseDependencies = {
+  loadPublishedContext: async (input) => {
+    checks += 1;
+    return { scope: input.scope, artifacts: {}, publishedWorkflows: [] };
+  },
+  retrieveEvidence: async (input) => {
+    checks += 1;
+    return { scope: input.scope, evidence: [], diagnostics: {} };
+  },
   validateGroundedClaims: async (input) => {
     checks += 1;
     if (input.cancelled) throw failure;
@@ -92,8 +101,59 @@ for (let i = 0; i < 2; i += 1) {
 assert.equal(checks, 12, 'Negative and cancelled checks must run afresh');
 await instrumentTemplateEngineTurn(reuseDependencies).validateGroundedClaims(contract);
 assert.equal(checks, 13, 'No reuse across turns');
+const publicationContract = { callId: 'call-one', scope: { tenantId: 'one',
+  publications: [{ knowledgeBaseId: 'kb', publicationRevision: 1 }] } };
+const loaded = await reuse.loadPublishedContext(publicationContract);
+loaded.scope.tenantId = 'caller-mutation';
+const loadedAgain = await reuse.loadPublishedContext({ scope: {
+  publications: [{ publicationRevision: 1, knowledgeBaseId: 'kb' }], tenantId: 'one',
+}, callId: 'call-one' });
+assert.equal(loadedAgain.scope.tenantId, 'one');
+assert.equal(checks, 14, 'Identical publication contract loads once per turn');
+await reuse.loadPublishedContext({ ...publicationContract, scope: { ...publicationContract.scope,
+  publications: [{ knowledgeBaseId: 'kb', publicationRevision: 2 }] } });
+assert.equal(checks, 15, 'Publication revision changes cannot reuse a snapshot');
+const retrievalContract = { callId: 'call-one', scope: publicationContract.scope,
+  searchDecision: { search: { query: 'same request' } }, preloadedArtifacts: {} };
+await Promise.all([reuse.retrieveEvidence(retrievalContract), reuse.retrieveEvidence(retrievalContract)]);
+await reuse.retrieveEvidence({ preloadedArtifacts: {}, searchDecision: { search: { query: 'same request' } },
+  scope: publicationContract.scope, callId: 'call-one' });
+assert.equal(checks, 16, 'Concurrent and completed identical retrievals coalesce per turn');
+await reuse.retrieveEvidence({ ...retrievalContract, scope: { ...publicationContract.scope,
+  tenantId: 'two' } });
+assert.equal(checks, 17, 'Tenant changes cannot reuse retrieval');
+await reuse.retrieveEvidence({ ...retrievalContract, reviewEntityCandidates: () => null });
+await reuse.retrieveEvidence({ ...retrievalContract, reviewEntityCandidates: () => null });
+assert.equal(checks, 19, 'Function-bearing retrieval contracts disable reuse');
 const authorization = { responseFormat: { name: 'template_engine_orchestrator_decision' } };
 await reuse.invokeStructuredLlm(authorization);
 await reuse.invokeStructuredLlm(authorization);
 assert.equal(authorizationCalls, 2, 'Routing and authorization calls are never memoized');
 console.log('Full-contract validation reuse and independent authorization verified.');
+
+const diagnosis = summarizeTemplateEngineLatency({
+  routing: { operations: {
+    initial_routing: { durationMs: 1500, calls: 1, cacheHits: 0 },
+    grounding_reroute: { durationMs: 1400, calls: 1, cacheHits: 0 },
+  } },
+  validation: { operations: {
+    validation: { durationMs: 1800, calls: 2, cacheHits: 1 },
+    entity_coverage_review: { durationMs: 700, calls: 1, cacheHits: 0 },
+  } },
+  generation: { operations: {
+    answer_generation: { durationMs: 2000, calls: 1, cacheHits: 0 },
+    answer_repair: { durationMs: 1900, calls: 1, cacheHits: 0 },
+  } },
+}, { finalAnswerFirstAudioMs: 9700, acknowledgementFirstAudioMs: 900,
+  finalAnswerAudioAfterReadyMs: 120 });
+assert.equal(diagnosis.actualAnswerFirstAudioMs, 9700);
+assert.equal(diagnosis.acknowledgementFirstAudioMs, 900);
+assert.equal(diagnosis.answerAudioStartupMs, 120);
+assert.equal(diagnosis.llmCalls, 6);
+assert.equal(diagnosis.reviewCalls, 1);
+assert.equal(diagnosis.repairCalls, 2);
+assert.deepEqual(diagnosis.repeatedOperations, [{
+  operation: 'validation', calls: 2, cacheHits: 1, durationMs: 1800,
+}]);
+assert.equal(diagnosis.slowestOperations[0].operation, 'answer_generation');
+assert.ok(!JSON.stringify(diagnosis).includes('private caller data'));

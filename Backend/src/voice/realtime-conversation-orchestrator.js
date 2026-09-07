@@ -2795,6 +2795,7 @@ export class RealtimeConversationOrchestrator {
       spokenCharacters: answer.length,
       configuredSpeechCharacters: this.runtimeProfile.limits?.ttsMaxCharactersPerResponse ?? null,
       stageTimings,
+      latencyDiagnostics: turnTiming.workDiagnostics,
       acknowledgementFirstAudioMs: turnTiming.acknowledgementFirstAudioMs,
       finalAnswerFirstAudioMs: turnTiming.finalAnswerFirstAudioMs,
       finalAnswerAudioAfterReadyMs: turnTiming.finalAnswerAudioAfterReadyMs,

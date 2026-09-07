@@ -79,14 +79,41 @@ export function instrumentTemplateEngineTurn(dependencies) {
       return result;
     };
   };
+  const reusableOperation = (stage, invoke, operation, accepted) => {
+    const completed = new Map();
+    const pending = new Map();
+    const run = measured(stage, invoke, { operation });
+    return async (input) => {
+      // The complete input is the isolation boundary. AbortSignal, callbacks
+      // and other non-JSON values intentionally disable reuse.
+      const key = validationKey(input);
+      if (key !== null && (completed.has(key) || pending.has(key))) {
+        dependencies.onStageTiming?.(Object.freeze({ stage, operation,
+          durationMs: 0, outcome: pending.has(key) ? 'coalesced' : 'reused', cacheHit: true }));
+        const value = completed.has(key) ? completed.get(key) : await pending.get(key);
+        return structuredClone(value);
+      }
+      const work = run(input);
+      if (key !== null && pending.size < 32) pending.set(key, work);
+      let result;
+      try { result = await work; }
+      finally { if (key !== null && pending.get(key) === work) pending.delete(key); }
+      if (key !== null && accepted(result) && completed.size < 32) {
+        try { completed.set(key, structuredClone(result)); } catch { /* Not safely reusable. */ }
+      }
+      return result;
+    };
+  };
   return {
     ...dependencies,
     ...(dependencies.validateRequestedEntityCoverage ? {
       validateRequestedEntityCoverage: reusableValidation(dependencies.validateRequestedEntityCoverage,
         'entity_coverage_review', (result) => result?.resolved === true),
     } : {}),
-    loadPublishedContext: measured('publication_load', dependencies.loadPublishedContext),
-    retrieveEvidence: measured('retrieval', dependencies.retrieveEvidence),
+    loadPublishedContext: reusableOperation('publication_load', dependencies.loadPublishedContext,
+      'publication_load', (result) => Boolean(result?.scope && result?.artifacts)),
+    retrieveEvidence: reusableOperation('retrieval', dependencies.retrieveEvidence,
+      'retrieval', (result) => Array.isArray(result?.evidence) && !result?.error),
     ...(dependencies.retrieveSpeculativeEvidence ? {
       retrieveSpeculativeEvidence: measured('speculative_retrieval', dependencies.retrieveSpeculativeEvidence),
     } : {}),

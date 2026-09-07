@@ -331,6 +331,7 @@ export function templateEngineWorkflowRoutingContext(input = {}) {
       toolName: configuredWorkflowToolIdentifier(configuration.workflow),
       fields: configuration.fields.map((field) => ({
         key: field.key, question: field.question, required: field.required,
+        type: field.type,
         schema: configuration.inputSchema.properties[field.key],
       })),
       pendingFieldKey: progress.nextField?.key ?? null,
@@ -681,15 +682,20 @@ export async function advanceTemplateEngineWorkflowTurn(input = {}, dependencies
     state: transition.state,
     confirmationMessage: input.confirmationMessage,
   });
-  await dependencies.persistWorkflowState(transition.state);
   const cacheDescriptor = workflowFieldCacheDescriptor(
     transition.configuration, task, input.language,
   );
-  const phrased = await phraseTemplateEngineWorkflowSpeech({
-    mainPrompt: input.mainPrompt,
-    task,
-    cacheDescriptor,
-  }, dependencies);
+  // State persistence and preparation of the next caller prompt consume the
+  // same validated transition but do not depend on each other. Await both
+  // before returning so no speech can be delivered for an unpersisted state.
+  const [, phrased] = await Promise.all([
+    dependencies.persistWorkflowState(transition.state),
+    phraseTemplateEngineWorkflowSpeech({
+      mainPrompt: input.mainPrompt,
+      task,
+      cacheDescriptor,
+    }, dependencies),
+  ]);
   return Object.freeze({
     status: task.type === 'ASK_FIELD' ? 'AWAITING_FIELD' : 'AWAITING_CONFIRMATION',
     state: transition.state,

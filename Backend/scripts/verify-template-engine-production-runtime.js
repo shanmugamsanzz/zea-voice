@@ -5,6 +5,7 @@ import {
   retrieveTemplateEngineEvidence,
 } from '../src/voice/interaction/template-engine-production-retrieval.js';
 import {
+  deterministicPendingWorkflowFieldDecision,
   publishedResolutionAmbiguity,
   runTemplateEngineProductionTurn,
 } from '../src/voice/interaction/template-engine-production-runtime.js';
@@ -17,6 +18,22 @@ import { reviewContextualSubjects } from '../src/voice/interaction/template-engi
 
 const multilingualCandidates = [{ canonicalName: 'Configured Alpha', recordId: 'alpha', aliases: [] },
   { canonicalName: 'Configured Beta', recordId: 'beta', aliases: [] }];
+const scalarWorkflowContext = { toolName: 'configured_action', pendingFieldKey: 'quantity',
+  awaitingConfirmation: false, interruptedRequest: null,
+  fields: [{ key: 'quantity', question: 'What quantity?', type: 'number',
+    schema: { type: 'number', minimum: 1, maximum: 100 } }] };
+assert.deepEqual(deterministicPendingWorkflowFieldDecision(scalarWorkflowContext, '21')?.tool?.arguments,
+  { quantity: 21 });
+for (const utterance of ['age is 21', '21 or 22', 'cancel 21', 'what about 21?']) {
+  assert.equal(deterministicPendingWorkflowFieldDecision(scalarWorkflowContext, utterance), null);
+}
+assert.equal(deterministicPendingWorkflowFieldDecision({ ...scalarWorkflowContext,
+  awaitingConfirmation: true }, '21'), null);
+assert.equal(deterministicPendingWorkflowFieldDecision({ ...scalarWorkflowContext,
+  interruptedRequest: 'unfinished request' }, '21'), null);
+assert.equal(deterministicPendingWorkflowFieldDecision({ ...scalarWorkflowContext,
+  fields: [{ key: 'quantity', question: 'Name?', type: 'text', schema: { type: 'string' } }] },
+'Shanmugam'), null, 'Free text must retain normal intent routing');
 const multilingualInput = { utterance: 'கான்ஃபிகர்ட் ஆல்பா', candidates: multilingualCandidates,
   recentTurns: [{ role: 'assistant', content: 'Configured Beta details' }] };
 assert.deepEqual(await reviewContextualSubjects({ ...multilingualInput, utterance: 'What tests does that include?' },
@@ -1099,6 +1116,7 @@ const guardedDecisions = [{
 }];
 let guardedClaimChecks = 0;
 let guardedRetrievalCalls = 0;
+const guardedTimingOperations = [];
 const guardedTurn = await runTemplateEngineProductionTurn({
   auth: { tenantId }, scope, callId: 'call-guarded', usageDirection: 'inbound', language: 'en',
   mainPrompt: 'Use RESPONSE only for non-factual speech and SEARCH for facts.',
@@ -1122,12 +1140,16 @@ const guardedTurn = await runTemplateEngineProductionTurn({
     };
   },
   validateToolResultSpeechClaims: async () => ({ supported: true, successClaimed: false }),
+  onStageTiming: (event) => guardedTimingOperations.push(event.operation),
 });
 assert.equal(guardedRetrievalCalls, 1,
   'A factual direct RESPONSE must be reclassified by the tenant-controlled LLM');
 assert.equal(guardedTurn.decision.decision, 'RESPONSE');
 assert.deepEqual(guardedTurn.evidenceIds, ['evidence-1']);
 assert.equal(guardedDecisions.length, 0);
+assert.equal(guardedTimingOperations.filter((operation) => operation === 'initial_routing').length, 1);
+assert.equal(guardedTimingOperations.filter((operation) => operation === 'grounding_reroute').length, 1,
+  'Telemetry must identify the factual re-route instead of merging it with initial routing');
 
 const tool = {
   id: 'tool-1', name: 'perform_action', status: 'active', type: 'webhook_api',
@@ -1254,6 +1276,35 @@ const collectionResponse = (response) => ({ decision: 'RESPONSE', response,
 const collectionDecision = (args) => ({ decision: 'TOOL', response: '',
   clarification: null, search: null, tool: { name: tool.name, arguments: JSON.stringify(args) },
   nextQuestion: null, stateUpdate: null });
+let scalarRoutingCalls = 0;
+const scalarCollectionTurn = await runTemplateEngineProductionTurn({
+  scope, mainPrompt: 'Use configured questions, one field at a time.',
+  latestUtterance: '21', language: 'en',
+  state: { activeWorkflowId: workflow.recordId,
+    collectedToolFields: { recipient: 'self', contact_name: 'Shanmugam' },
+    confirmationStatus: 'pending_fields', lastReferencedRecordIds: ['selected-option'] },
+  assignedTools: [collectionTool], informationFields: collectionFields,
+}, {
+  invokeStructuredLlm: async (request) => {
+    if (request.responseFormat.name === 'template_engine_orchestrator_decision') {
+      scalarRoutingCalls += 1;
+      assert.fail('An exact configured numeric field answer must not repeat routing');
+    }
+    return { output: JSON.stringify({ speech: collectionFields
+      .find((field) => field.key === 'requested_date').question }) };
+  },
+  loadPublishedContext: async () => ({ scope, publishedWorkflows: [workflow], artifacts: {} }),
+  retrieveEvidence: async () => { throw new Error('Field replies must not search'); },
+  persistWorkflowState: async () => {},
+  executeAuthorizedTool: async () => { throw new Error('Unconfirmed collection must not execute'); },
+  validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
+  validateToolResultSpeechClaims: async () => ({ supported: true }),
+});
+assert.equal(scalarRoutingCalls, 0);
+assert.equal(scalarCollectionTurn.state.collectedToolFields.age, 21);
+assert.equal(scalarCollectionTurn.workflow.status, 'AWAITING_FIELD');
+assert.equal(scalarCollectionTurn.workflow.speechTask.field.key, 'requested_date');
+assert.equal(scalarCollectionTurn.toolExecuted, false);
 let collectionState = { activeWorkflowId: workflow.recordId, collectedToolFields: {},
   confirmationStatus: 'pending_fields', lastReferencedRecordIds: ['selected-option'] };
 let bookingSpeculativeCalls = 0;

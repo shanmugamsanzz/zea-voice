@@ -413,6 +413,41 @@ assert.equal(completed.followUpValidation.accepted, true);
 assert.equal(completed.nextQuestion.question, 'Would you like any further help?');
 assert.equal(speechCalls, 2);
 
+let releasePersist;
+let releaseSpeech;
+let markPersistStarted;
+let markSpeechStarted;
+const persistStarted = new Promise((resolve) => { markPersistStarted = resolve; });
+const speechStarted = new Promise((resolve) => { markSpeechStarted = resolve; });
+const persistBlocked = new Promise((resolve) => { releasePersist = resolve; });
+const speechBlocked = new Promise((resolve) => { releaseSpeech = resolve; });
+const parallelTransition = advanceTemplateEngineWorkflowTurn({
+  ...common, mainPrompt: 'Speak briefly and naturally.', state: withName.state,
+}, {
+  persistWorkflowState: async () => { markPersistStarted(); await persistBlocked; },
+  executeAuthorizedTool: async () => { assert.fail('Field collection cannot execute'); },
+  invokeStructuredLlm: async () => {
+    markSpeechStarted();
+    await speechBlocked;
+    return { outputParsed: { speech: 'What quantity?' } };
+  },
+});
+let parallelDeadline;
+try {
+  await Promise.race([Promise.all([persistStarted, speechStarted]), new Promise((_, reject) => {
+    parallelDeadline = setTimeout(() => reject(new Error(
+      'Independent workflow persistence and prompt preparation did not start concurrently',
+    )), 1_000);
+  })]);
+} finally {
+  clearTimeout(parallelDeadline);
+  releasePersist();
+  releaseSpeech();
+}
+const parallelResult = await parallelTransition;
+assert.equal(parallelResult.status, 'AWAITING_FIELD');
+assert.equal(parallelResult.speech, 'What quantity?');
+
 const coordinated = await advanceTemplateEngineWorkflowTurn({
   ...common, mainPrompt: 'Speak briefly and naturally.',
   state: complete.state, confirmation: { accepted: true, explicit: true },

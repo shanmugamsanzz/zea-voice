@@ -1,3 +1,5 @@
+import { summarizeTemplateEngineLatency } from './template-engine-latency-diagnostics.js';
+
 export const templateEngineFirstAudioTargets = Object.freeze({
   RESPONSE: 1_000,
   CLARIFY: 1_000,
@@ -72,6 +74,7 @@ export function recordTemplateEngineTurnMetrics(runtimeMetrics, {
     firstAudioStatus: totalFirstAudioMs === null || targetMs === null
       ? 'not_measured' : totalFirstAudioMs < targetMs ? 'passed' : 'missed',
   };
+  sample.workDiagnostics = summarizeTemplateEngineLatency(stageTimings, sample);
   runtimeMetrics.turnLatency.push(sample);
   return sample;
 }

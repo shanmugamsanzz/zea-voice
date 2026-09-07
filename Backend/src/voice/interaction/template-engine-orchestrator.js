@@ -265,6 +265,7 @@ export async function routeTemplateEngineUtterance(input = {}, dependencies = {}
       schema: templateEngineDecisionJsonSchema,
     }),
   });
+  const routingOperation = cleanText(dependencies.routingOperation, 80) || 'initial_routing';
 
   const authorizedNames = orchestratorInput.authorizedWorkflowTools
     .map((summary) => summary.toolName);
@@ -284,7 +285,7 @@ export async function routeTemplateEngineUtterance(input = {}, dependencies = {}
     request,
     messages: baseMessages,
     validateCompletion,
-    phase: 'initial_routing',
+    phase: routingOperation,
     onRetry: dependencies.onDecisionRetry,
     recoverInvalid: (completion, validation) => redirectFactualResponseToSearch(
       completion, validation, orchestratorInput,

@@ -18,6 +18,7 @@ import { resolveRequestMeaning } from './template-engine-request-meaning.js';
 import { reviewMultilingualEntity } from './template-engine-multilingual-entity-review.js';
 import { reviewContextualSubjects } from './template-engine-contextual-subject-review.js';
 import { reviewRememberedReference } from './template-engine-reference-review.js';
+import { extractSchemaFieldValue } from './schema-field-value-extractor.js';
 import {
   repairTemplateEngineFollowUp,
   validateAndComposeTemplateEngineSpeech,
@@ -350,6 +351,38 @@ function callerVerifiedArguments(argumentsValue, utterance, recentTurns = [], ex
   }));
 }
 
+const deterministicWorkflowFieldTypes = new Set([
+  'number', 'integer', 'date', 'time', 'email', 'phone',
+]);
+
+function scalarIdentity(value) {
+  return cleanText(value, 1_000).toLocaleLowerCase()
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim();
+}
+
+// This bypasses only classification of an exact scalar answer to the one
+// configured pending field. Collection still re-resolves workflow/tool scope,
+// validates the field schema, persists state and requires final confirmation.
+export function deterministicPendingWorkflowFieldDecision(context, utterance) {
+  if (!context?.pendingFieldKey || context.awaitingConfirmation
+    || cleanText(context.interruptedRequest)) return null;
+  const field = (context.fields ?? []).find((entry) => entry.key === context.pendingFieldKey);
+  const schemaType = cleanText(field?.type ?? field?.schema?.type, 40).toLocaleLowerCase();
+  if (!field || !deterministicWorkflowFieldTypes.has(schemaType)) return null;
+  const value = extractSchemaFieldValue({
+    ...field.schema, type: schemaType, question: field.question, label: field.key,
+  }, utterance, {
+    history: [{ role: 'assistant', content: field.question }], onlyMissing: true,
+  });
+  if (value === undefined || scalarIdentity(utterance) !== scalarIdentity(value)) return null;
+  return Object.freeze({
+    decision: 'TOOL', response: '', clarification: null, search: null,
+    tool: Object.freeze({ name: context.toolName,
+      arguments: Object.freeze({ [field.key]: value }) }),
+    nextQuestion: null, stateUpdate: null,
+  });
+}
+
 async function runWorkflow(input, decision, state, context, dependencies) {
   const workflows = context.publishedWorkflows;
   const candidates = callerVerifiedArguments(
@@ -529,17 +562,19 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       return value;
     })
     : null;
+  const workflowRoutingContext = templateEngineWorkflowRoutingContext({
+    state, publishedWorkflows: publishedContext.publishedWorkflows,
+    assignedTools: input.assignedTools, informationFields: input.informationFields,
+    scope: publishedContext.scope, interruptedRequest: input.interruptedWorkflowRequest,
+  });
   const routingDependencies = {
+    routingOperation: 'initial_routing',
     verifyWorkflowArguments: (args) => callerVerifiedArguments(
       args, input.latestUtterance, input.interruptedWorkflowRequest
         ? [...state.recentCompleteTurns, { role: 'user', content: input.interruptedWorkflowRequest }]
         : state.recentCompleteTurns, state.collectedToolFields,
     ),
-    workflowRoutingContext: templateEngineWorkflowRoutingContext({
-      state, publishedWorkflows: publishedContext.publishedWorkflows,
-      assignedTools: input.assignedTools, informationFields: input.informationFields,
-      scope: publishedContext.scope, interruptedRequest: input.interruptedWorkflowRequest,
-    }),
+    workflowRoutingContext,
     invokeStructuredLlm: dependencies.invokeStructuredLlm,
     onDecisionRetry: dependencies.onRoutingDecisionRetry,
     tenantBoundaryVerified: true,
@@ -551,7 +586,13 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     scope: publishedContext.scope,
     ambiguity: activeClarificationAmbiguity(state),
   };
-  let routed = await routeTemplateEngineUtterance(common, routingDependencies);
+  const deterministicWorkflowDecision = deterministicPendingWorkflowFieldDecision(
+    workflowRoutingContext, input.latestUtterance,
+  );
+  let routed = deterministicWorkflowDecision ? Object.freeze({
+    decision: deterministicWorkflowDecision,
+    outputValidation: Object.freeze({ valid: true, reason: 'verified_pending_field_fast_path' }),
+  }) : await routeTemplateEngineUtterance(common, routingDependencies);
   let first = routed.decision;
   let initialValidationResult = routed.outputValidation?.reason ?? 'valid';
   if (first.decision === 'RESPONSE' || first.decision === 'CLARIFY') {
@@ -569,6 +610,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
         ?? 'caller_speech_requires_grounding_search';
       routed = await routeTemplateEngineUtterance(common, {
         ...routingDependencies,
+        routingOperation: 'grounding_reroute',
         factualClaimsPresent: true,
         nonFactualResponseAllowed: false,
       });
