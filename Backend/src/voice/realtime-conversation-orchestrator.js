@@ -51,7 +51,11 @@ import {
 } from './interaction/grounded-turn-latency.js';
 import { createMinimalTemplateEngineState } from './interaction/template-engine-state.js';
 import { runTemplateEngineProductionTurn } from './interaction/template-engine-production-runtime.js';
-import { armTemplateEngineTurnLatencyAcknowledgement } from './interaction/template-engine-turn-latency.js';
+import {
+  armTemplateEngineTurnLatencyAcknowledgement,
+  latencyAcknowledgementEligibleForRoute,
+  resolveDynamicLatencyAcknowledgement,
+} from './interaction/template-engine-turn-latency.js';
 import { recordTemplateEngineTurnMetrics, templateEngineAudioPercentiles } from './interaction/template-engine-observability.js';
 import {
   isTemplateEngineStructuredOutputFailure,
@@ -1916,6 +1920,7 @@ export class RealtimeConversationOrchestrator {
     let groupingTimer = null;
     let activeLookaheadJobs = 0;
     let schedulerCancelled = false;
+    let acknowledgementsCancelled = false;
     const pendingLookaheadJobs = [];
     const spokenSentences = [];
     const completedSentences = [];
@@ -2042,8 +2047,10 @@ export class RealtimeConversationOrchestrator {
           .then((result) => { lookaheadReady = true; return result; })
         : null;
       chain = chain.then(async () => {
+        if (acknowledgement && acknowledgementsCancelled) return false;
         await beginPromise;
-        if (this.finalized || epoch !== this.epoch) return false;
+        if (this.finalized || epoch !== this.epoch
+          || (acknowledgement && acknowledgementsCancelled)) return false;
         this.log.info({
           stage: 'llm.sentence_ready_for_tts', callId: this.call.id,
           generationId, sentenceNumber: currentSentenceNumber, characters: sentenceCharacters,
@@ -2237,6 +2244,7 @@ export class RealtimeConversationOrchestrator {
       return true;
     };
     const enqueueAcknowledgement = (rawSentence) => {
+      if (acknowledgementsCancelled) return false;
       flushGrouping();
       return enqueueNow(rawSentence, 1, { acknowledgement: true });
     };
@@ -2267,6 +2275,11 @@ export class RealtimeConversationOrchestrator {
     return {
       enqueue,
       enqueueAcknowledgement,
+      cancelAcknowledgements: () => {
+        if (acknowledgementsCancelled) return false;
+        acknowledgementsCancelled = true;
+        return true;
+      },
       setWorkflowFieldAudioCache: (entry) => { workflowFieldCacheEntry = entry ?? null; },
       setLatencyAcknowledgementAudioCache: (entry) => {
         latencyAcknowledgementCacheEntry = entry ?? null;
@@ -2351,9 +2364,13 @@ export class RealtimeConversationOrchestrator {
       epoch, turnStartedAt, firstAudioDeadlineAt,
     );
     let finalResponseReady = false;
-    const latencyAcknowledgementText = configuredLatencyAcknowledgementResponse(
-      this.runtimeProfile,
-    );
+    const latencyAcknowledgementSelection = resolveDynamicLatencyAcknowledgement({
+      configuredText: configuredLatencyAcknowledgementResponse(this.runtimeProfile),
+      latestUtterance: query,
+      language: languageCode(this.runtimeProfile.agent.language),
+      variantSeed: epoch,
+    });
+    const latencyAcknowledgementText = latencyAcknowledgementSelection.text;
     const acknowledgementCacheEntry = (audio = null) => ({
       text: latencyAcknowledgementText,
       audio,
@@ -2382,10 +2399,10 @@ export class RealtimeConversationOrchestrator {
         });
     }
     const latencyAcknowledgement = armTemplateEngineTurnLatencyAcknowledgement({
-      // Wait for routing when tools are assigned: the first booking request
-      // must not emit progress speech before its TOOL route is known.
-      suppressed: Boolean(this.templateEngineState.activeWorkflowId)
-        || templateEngineToolSchemas(this.runtimeProfile.tools).length > 0,
+      // Eligibility is unknown until routing completes. Keeping the timer
+      // suppressed prevents booking, confirmation, closing and tool turns from
+      // emitting progress speech before their route is known.
+      suppressed: true,
       thresholdMs: env.VOICE_TURN_ACKNOWLEDGEMENT_AFTER_MS,
       acknowledgementText: latencyAcknowledgementText,
       isActive: () => !finalResponseReady && epoch === this.epoch && !this.finalized,
@@ -2402,6 +2419,8 @@ export class RealtimeConversationOrchestrator {
           turnEpoch: epoch,
           thresholdMs,
           queued,
+          acknowledgementRequestKind: latencyAcknowledgementSelection.requestKind,
+          acknowledgementLanguage: latencyAcknowledgementSelection.language,
           elapsedMs: Date.now() - turnStartedAt,
         }, 'Whole-turn latency acknowledgement threshold reached while processing continued');
       },
@@ -2518,8 +2537,9 @@ export class RealtimeConversationOrchestrator {
           }, 'Template-engine follow-up generation and validation completed');
         },
         onRoutingResolved: ({ decision, activeWorkflow }) => {
-          latencyAcknowledgement.setSuppressed(decision === 'TOOL'
-            || (activeWorkflow && decision !== 'SEARCH'));
+          latencyAcknowledgement.setSuppressed(!latencyAcknowledgementEligibleForRoute({
+            decision, activeWorkflow,
+          }));
         },
         onWorkflowDiagnostics: (details) => {
           this.log.info({
@@ -2727,6 +2747,7 @@ export class RealtimeConversationOrchestrator {
     } finally {
       finalResponseReady = true;
       finalResponseReadyAt = Date.now();
+      sentencePipeline.cancelAcknowledgements();
       acknowledgementAtReady = latencyAcknowledgement.snapshot();
       latencyAcknowledgement.cancel();
       if (epoch === this.epoch) this.activeLlm = null;

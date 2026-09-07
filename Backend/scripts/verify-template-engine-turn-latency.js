@@ -3,6 +3,8 @@ import './verify-template-engine-operation-timing.js';
 import { readFileSync } from 'node:fs';
 import {
   armTemplateEngineTurnLatencyAcknowledgement,
+  latencyAcknowledgementEligibleForRoute,
+  resolveDynamicLatencyAcknowledgement,
 } from '../src/voice/interaction/template-engine-turn-latency.js';
 import {
   recordTemplateEngineTurnMetrics,
@@ -26,6 +28,54 @@ function fakeTimers() {
     },
   };
 }
+
+const tamilComparison = resolveDynamicLatencyAcknowledgement({
+  configuredText: 'Configured progress speech.',
+  latestUtterance: 'Silverக்கும் Goldக்கும் என்ன வித்தியாசம்?',
+  language: 'ta-IN',
+  variantSeed: 1,
+});
+assert.equal(tamilComparison.requestKind, 'comparison');
+assert.equal(tamilComparison.language, 'ta');
+assert.ok(tamilComparison.text.includes('ஒப்பிட்டு') || tamilComparison.text.includes('வித்தியாச'));
+assert.doesNotMatch(tamilComparison.text, /Silver|Gold/iu,
+  'Latency speech must never repeat unverified business entities');
+
+const englishPrice = resolveDynamicLatencyAcknowledgement({
+  configuredText: 'Configured progress speech.',
+  latestUtterance: 'How much does that cost?',
+  language: 'en-US',
+  variantSeed: 2,
+});
+assert.equal(englishPrice.requestKind, 'price');
+assert.match(englishPrice.text, /price/iu);
+assert.equal(resolveDynamicLatencyAcknowledgement({
+  configuredText: '', latestUtterance: 'Tell me about it', language: 'en',
+}).text, '', 'Dynamic acknowledgement remains disabled without approved configuration');
+assert.equal(resolveDynamicLatencyAcknowledgement({
+  configuredText: 'ஒரு நிமிடம்.', latestUtterance: 'जानकारी बताइए', language: 'hi-IN',
+}).text, 'ஒரு நிமிடம்.',
+'Languages without reviewed variants must preserve the configured caller-facing wording');
+
+const firstVariant = resolveDynamicLatencyAcknowledgement({
+  configuredText: 'Configured progress speech.', latestUtterance: 'Tell me the details',
+  language: 'en', variantSeed: 0,
+});
+const secondVariant = resolveDynamicLatencyAcknowledgement({
+  configuredText: 'Configured progress speech.', latestUtterance: 'Tell me the details',
+  language: 'en', variantSeed: 1,
+});
+assert.notEqual(firstVariant.text, secondVariant.text,
+  'Successive turns can use varied context-compatible acknowledgement wording');
+
+assert.equal(latencyAcknowledgementEligibleForRoute({ decision: 'SEARCH' }), true);
+for (const decision of ['RESPONSE', 'CLARIFY', 'TOOL', 'TOOL_RESULT']) {
+  assert.equal(latencyAcknowledgementEligibleForRoute({ decision }), false,
+    `${decision} must not receive latency acknowledgement speech`);
+}
+assert.equal(latencyAcknowledgementEligibleForRoute({
+  decision: 'SEARCH', activeWorkflow: true,
+}), true, 'A separate factual search may remain responsive while a workflow is paused');
 
 const slowTimers = fakeTimers();
 const spoken = [];
@@ -103,6 +153,12 @@ assert.match(orchestrator, /runTemplateEngineProductionTurn\(\{/u);
 assert.match(orchestrator, /finalResponseReady\s*=\s*true;[\s\S]*latencyAcknowledgement\.cancel\(\)/u,
   'The whole-turn timer must be cancelled as soon as the final result is ready');
 assert.match(orchestrator, /sentencePipeline\.enqueueAcknowledgement\(text\)/u);
+assert.match(orchestrator, /suppressed:\s*true/u,
+  'Acknowledgement must remain suppressed until an eligible route is known');
+assert.match(orchestrator, /latencyAcknowledgementEligibleForRoute/u);
+assert.match(orchestrator,
+  /finalResponseReady\s*=\s*true;[\s\S]*sentencePipeline\.cancelAcknowledgements\(\);[\s\S]*latencyAcknowledgement\.cancel\(\)/u,
+  'A ready final answer must cancel both queued acknowledgement work and its timer');
 assert.match(orchestrator, /template_engine\.turn_latency_acknowledgement/u);
 assert.match(orchestrator, /templateEngineAcknowledgements\.triggered\s*\+=\s*1/u);
 assert.match(orchestrator, /setWorkflowFieldAudioCache\(result\.workflow\?\.speechCache/u,
