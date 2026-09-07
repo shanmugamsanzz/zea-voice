@@ -506,7 +506,11 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     }),
   };
   let completedSpeculativeResult = null;
-  const speculativeRetrieval = typeof dependencies.retrieveSpeculativeEvidence === 'function'
+  // Active workflow replies normally use configured fields and saved values.
+  // Let routing request foreground evidence for a factual side question instead
+  // of launching a knowledge search for every collection/confirmation turn.
+  const speculativeRetrieval = !state.activeWorkflowId
+    && typeof dependencies.retrieveSpeculativeEvidence === 'function'
     ? dependencies.retrieveSpeculativeEvidence({
       auth: input.auth,
       scope: publishedContext.scope,

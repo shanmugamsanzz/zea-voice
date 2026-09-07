@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import './verify-template-engine-operation-timing.js';
 import { readFileSync } from 'node:fs';
 import {
   armTemplateEngineTurnLatencyAcknowledgement,

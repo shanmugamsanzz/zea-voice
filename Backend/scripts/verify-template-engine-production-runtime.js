@@ -1256,6 +1256,7 @@ const collectionDecision = (args) => ({ decision: 'TOOL', response: '',
   nextQuestion: null, stateUpdate: null });
 let collectionState = { activeWorkflowId: workflow.recordId, collectedToolFields: {},
   confirmationStatus: 'pending_fields', lastReferencedRecordIds: ['selected-option'] };
+let bookingSpeculativeCalls = 0;
 async function replayCollection(utterance, initial, reviewed, expectedField) {
   const outputs = [initial, ...(reviewed ? (Array.isArray(reviewed) ? reviewed : [reviewed]) : []),
     ...(expectedField ? [{ speech: collectionFields.find((field) => field.key === expectedField).question }] : [])];
@@ -1273,6 +1274,7 @@ async function replayCollection(utterance, initial, reviewed, expectedField) {
     },
     loadPublishedContext: async () => ({ scope, publishedWorkflows: [workflow], artifacts: {} }),
     retrieveEvidence: async () => { throw new Error('Field replies must not search'); },
+    retrieveSpeculativeEvidence: async () => { bookingSpeculativeCalls += 1; return retrieval; },
     persistWorkflowState: async () => {},
     executeAuthorizedTool: async () => { throw new Error('Unconfirmed collection must not execute'); },
     validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
@@ -1389,6 +1391,7 @@ async function confirmationReviewTurn(utterance, proposed, reviewed, speech = nu
     },
     loadPublishedContext: async () => ({ scope, publishedWorkflows: [workflow], artifacts: {} }),
     retrieveEvidence: async () => { throw new Error('Stored values must not be searched'); },
+    retrieveSpeculativeEvidence: async () => { bookingSpeculativeCalls += 1; return retrieval; },
     persistWorkflowState: async () => {},
     executeAuthorizedTool: async () => { throw new Error('Corrections and questions cannot execute'); },
     validateGroundedClaims: async (input) => {
@@ -1423,6 +1426,43 @@ assert.equal(correctionState.confirmationStatus, 'awaiting_confirmation');
 await confirmationReviewTurn('hmm hmm', confirmationDecisions[0], collectionDecision({ contact_name: 'Arun' }),
   'Please confirm the revised details.', 'Change contact_name to Arun');
 assert.equal(correctionState.collectedToolFields.contact_name, 'Arun');
+assert.equal(bookingSpeculativeCalls, 0, 'Collection, correction, readback and confirmation must skip speculative KB retrieval');
+
+// Factual side questions still retrieve normally and retain the active workflow.
+for (const confirmationStatus of ['pending_fields', 'awaiting_confirmation']) {
+  const sideState = { ...correctionState, confirmationStatus };
+  const sideOutputs = [searchDecision,
+    ...(confirmationStatus === 'awaiting_confirmation' ? [searchDecision] : []),
+    { decision: 'RESPONSE', response: 'Tenant Item costs 125.', clarification: null,
+      evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null }];
+  let searches = 0;
+  const artifacts = {};
+  const sideResult = await runTemplateEngineProductionTurn({
+    scope, mainPrompt: 'Use published facts for factual questions.',
+    latestUtterance: 'What is the tenant item price?', state: sideState,
+    assignedTools: [collectionTool], informationFields: collectionFields,
+  }, {
+    invokeStructuredLlm: async () => sideOutputs.shift(),
+    loadPublishedContext: async () => ({ scope, publishedWorkflows: [workflow], artifacts }),
+    retrieveSpeculativeEvidence: async () => { bookingSpeculativeCalls += 1; return retrieval; },
+    retrieveEvidence: async (request) => {
+      searches += 1;
+      assert.equal(request.preloadedArtifacts, artifacts);
+      return retrieval;
+    },
+    persistWorkflowState: async () => { assert.fail('Side question must not advance collection'); },
+    executeAuthorizedTool: async () => { assert.fail('Side question must not execute'); },
+    validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
+    validateToolResultSpeechClaims: async () => ({ supported: true }),
+  });
+  assert.equal(searches, 1);
+  assert.equal(bookingSpeculativeCalls, 0);
+  assert.equal(sideOutputs.length, 0);
+  assert.equal(sideResult.state.activeWorkflowId, sideState.activeWorkflowId);
+  assert.deepEqual(sideResult.state.collectedToolFields, sideState.collectedToolFields);
+  assert.equal(sideResult.state.confirmationStatus, confirmationStatus);
+  assert.equal(sideResult.toolExecuted, false);
+}
 let executed = 0;
 const confirmedTurn = await runTemplateEngineProductionTurn({
   auth: { tenantId }, scope, callId: 'call-2', usageDirection: 'inbound', language: 'en',

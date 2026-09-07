@@ -2632,9 +2632,17 @@ export class RealtimeConversationOrchestrator {
           timing.durationMs += details.durationMs;
           timing.calls += 1;
           if (details.cacheHit) timing.cacheHits += 1;
+          timing.operations ??= {};
+          const operation = timing.operations[details.operation ?? details.stage]
+            ??= { durationMs: 0, calls: 0, cacheHits: 0 };
+          operation.durationMs += details.durationMs;
+          operation.calls += 1;
+          if (details.cacheHit) operation.cacheHits += 1;
           this.log.info({ stage: 'template_engine.stage_timing', callId: this.call.id,
             turnEpoch: epoch, phase: details.stage, durationMs: details.durationMs,
             outcome: details.outcome, cacheHit: details.cacheHit === true,
+            operation: details.operation ?? details.stage,
+            startedAtMs: details.startedAtMs, endedAtMs: details.endedAtMs,
           }, 'Template-engine stage timing');
         },
         onPostSearchDiagnostics: (details) => {

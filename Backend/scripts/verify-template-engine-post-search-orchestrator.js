@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createTemplateEngineAnswerContext } from '../src/voice/interaction/template-engine-answer-context.js';
 import {
   templateEnginePostSearchJsonSchema,
   validateTemplateEnginePostSearchDecision,
@@ -61,6 +62,35 @@ const verifiedEvidence = Object.freeze([
     publishedAttributePaths: Object.freeze(['price']),
   }),
 ]);
+
+// Focus the generation payload without dropping operands or structured facts.
+{
+  const originals = [
+    { ...verifiedEvidence[0], evidenceId: 'E1', authoritativeData: { price: '3,200.00', eligibility: '5–13' },
+      relationships: [{ relation: 'belongs_to', recordId: 'category-1' }] },
+    { ...verifiedEvidence[0], evidenceId: 'E2', recordId: 'record-2', canonicalName: 'Second Service',
+      authoritativeData: { price: 4000, tests: ['A', 'B'], qualification: 'Consultation required' } },
+  ];
+  const snapshot = JSON.stringify(originals);
+  const focused = createTemplateEngineAnswerContext({ evidence: originals,
+    latestUtterance: 'இந்த இரண்டுக்கும் என்ன வித்தியாசம்?', requestedFact: 'Compare both services',
+    maximumSpeechCharacters: 501 });
+  assert.equal(focused.answerRequirements.originalUtterance, 'இந்த இரண்டுக்கும் என்ன வித்தியாசம்?');
+  assert.equal(focused.answerRequirements.maximumSpokenCharacters, 501);
+  assert.deepEqual(focused.answerRequirements.allowedEvidenceIds, ['E1', 'E2']);
+  assert.equal(focused.evidence.length, 2);
+  for (let i = 0; i < originals.length; i += 1) {
+    for (const key of ['content', 'authoritativeData', 'relationships', 'aliases', 'publishedAttributePaths']) {
+      assert.deepEqual(focused.evidence[i][key], originals[i][key]);
+    }
+    assert.equal(Object.hasOwn(focused.evidence[i], 'tenantId'), false);
+    assert.equal(Object.hasOwn(focused.evidence[i], 'publicationRevision'), false);
+  }
+  assert.ok(JSON.stringify(focused.evidence).length < snapshot.length);
+  assert.equal(JSON.stringify(originals), snapshot);
+  assert.equal(createTemplateEngineAnswerContext({ evidence: [], latestUtterance: 'Which?',
+    requestedFact: 'unknown' }).answerRequirements.maximumSpokenCharacters, null);
+}
 
 // A true price is not a category overview. Repair must receive the specific
 // relevance failure even though every original fact was supported.

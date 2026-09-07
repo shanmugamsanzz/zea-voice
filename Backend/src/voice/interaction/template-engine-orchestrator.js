@@ -1,4 +1,6 @@
 import { AppError } from '../../middleware/errors.js';
+import { createTemplateEngineAnswerContext, firstPassAnswerInstruction } from './template-engine-answer-context.js';
+import { tagTemplateEngineTiming } from './template-engine-turn-timing.js';
 import { speechBudgetInstruction } from './template-engine-speech-budget.js';
 import { templateEngineDecisionJsonSchema } from './template-engine-decision-contract.js';
 import { createMinimalTemplateEngineState } from './template-engine-state.js';
@@ -81,7 +83,7 @@ async function invokeValidatedDecision({
   invokeStructuredLlm, request, messages, validateCompletion, phase, onRetry,
   recoverInvalid,
 }) {
-  let completion = await invokeStructuredLlm(request(messages));
+  let completion = await invokeStructuredLlm(tagTemplateEngineTiming(request(messages), phase));
   let validated = validateCompletion(completion);
   let retryAttempted = false;
   let initialReason = null;
@@ -103,7 +105,7 @@ async function invokeValidatedDecision({
       originalMessageCount: messages.length,
       retryMessageCount: retryMessages.length,
     }));
-    completion = await invokeStructuredLlm(request(retryMessages));
+    completion = await invokeStructuredLlm(tagTemplateEngineTiming(request(retryMessages), `${phase}_repair`));
     validated = validateCompletion(completion);
     if (!validated.valid && typeof recoverInvalid === 'function') {
       const recovered = recoverInvalid(completion, validated);
@@ -715,13 +717,19 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
   if (typeof invokeStructuredLlm !== 'function') {
     throw new TypeError('The post-search Orchestrator requires one structured LLM invoker');
   }
+  const answerContext = createTemplateEngineAnswerContext({
+    evidence: citations.evidence, latestUtterance: base.latestUtterance,
+    requestedFact: search.value.search.requestedFact,
+    maximumSpeechCharacters: input.maximumSpeechCharacters,
+  });
   const turnInput = Object.freeze({
+    answerRequirements: answerContext.answerRequirements,
     latestUtterance: base.latestUtterance,
     state: base.state,
     requestMeaning: input.requestMeaning ?? null,
     searchInterpretation: search.value.search,
     requestedEntityRecordIds: requiredEntityRecordIds,
-    verifiedEvidence: citations.evidence,
+    verifiedEvidence: answerContext.evidence,
     ambiguity: dependencies.ambiguity ?? null,
     conversationGuidance: base.conversationGuidance,
   });
@@ -733,6 +741,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     }),
     'Runtime grounding rules: authoritativeData, content, and publishedAttributePaths contain the only published facts available for each record.',
     speechBudgetInstruction(input.maximumSpeechCharacters),
+    firstPassAnswerInstruction,
     'Distinguish caller context from published facts. You may acknowledge a fact the caller stated, but it cannot establish eligibility, suitability, pricing or any business policy. For multi-part questions, answer the supported requested parts and identify the specific missing detail without inferring a negative or positive answer. Do not replace available information with a blanket NO_MATCH.',
     'Answer the requestedFact only when it is explicitly supported by those supplied facts.',
     'Preserve the original request in requestMeaning and latestUtterance. A search rewrite must not replace an overview with a single unrelated item or replace a focused attribute question with a full record recital. Answer the current request concisely using the cited records.',
@@ -753,7 +762,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     Object.freeze({ role: 'system', content: systemPrompt }),
     Object.freeze({ role: 'user', content: base.latestUtterance }),
   ]);
-  const request = (messages, requiredDecision = dependencies.ambiguity?.required === true ? 'CLARIFY' : null) => Object.freeze({
+  const request = (messages, requiredDecision = dependencies.ambiguity?.required === true ? 'CLARIFY' : null) => tagTemplateEngineTiming(Object.freeze({
     messages: Object.freeze(messages),
     temperature: 0,
     responseFormat: Object.freeze({
@@ -762,7 +771,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       strict: true,
       schema: postSearchSchemaForDecision(responseSchema, requiredDecision),
     }),
-  });
+  }), messages === baseMessages ? 'answer_generation' : 'answer_repair');
   let completion = await invokeStructuredLlm(request(baseMessages));
   let output = completionOutput(completion);
   let validated = validateTemplateEnginePostSearchDecision(output, allowedEvidenceIds);
