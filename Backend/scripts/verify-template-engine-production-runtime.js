@@ -1370,6 +1370,59 @@ const confirmationDecisions = [{
   speech: 'The action completed successfully.',
   nextQuestion: { question: 'Would you like further help?', reason: 'Published continuation' },
 }];
+confirmationDecisions.splice(1, 0, structuredClone(confirmationDecisions[0]));
+
+let correctionState = { activeWorkflowId: workflow.recordId, confirmationStatus: 'awaiting_confirmation',
+  collectedToolFields: { recipient: 'self', contact_name: 'Old Name', age: 21, requested_date: 'tomorrow' } };
+async function confirmationReviewTurn(utterance, proposed, reviewed, speech = null, interruptedWorkflowRequest = null) {
+  const outputs = [proposed, reviewed, ...(speech ? [{ speech }] : [])];
+  const result = await runTemplateEngineProductionTurn({
+    scope, mainPrompt: 'Read back stored details and collect corrections before authorization.',
+    latestUtterance: utterance, state: correctionState, interruptedWorkflowRequest,
+    assignedTools: [collectionTool], informationFields: collectionFields,
+  }, {
+    invokeStructuredLlm: async (request) => {
+      if (outputs.length === 1 + (speech ? 1 : 0)) {
+        assert.match(request.messages.at(-1).content, /WORKFLOW_COLLECTION_REVIEW/u);
+      }
+      return { output: JSON.stringify(outputs.shift()) };
+    },
+    loadPublishedContext: async () => ({ scope, publishedWorkflows: [workflow], artifacts: {} }),
+    retrieveEvidence: async () => { throw new Error('Stored values must not be searched'); },
+    persistWorkflowState: async () => {},
+    executeAuthorizedTool: async () => { throw new Error('Corrections and questions cannot execute'); },
+    validateGroundedClaims: async (input) => {
+      assert.deepEqual(input.callerValues, correctionState.collectedToolFields);
+      return { supported: true, requestedFactAddressed: true };
+    },
+    validateToolResultSpeechClaims: async () => ({ supported: true }),
+  });
+  assert.equal(outputs.length, 0);
+  assert.equal(result.toolExecuted, false);
+  correctionState = result.state;
+  return result;
+}
+const readback = await confirmationReviewTurn('What name did you record?', searchDecision,
+  collectionResponse('The recorded name is Old Name.'));
+assert.equal(readback.speech, 'The recorded name is Old Name.');
+await confirmationReviewTurn('The name is wrong', collectionResponse('Who do you mean?'), {
+  decision: 'CLARIFY', response: '', search: null, tool: null, nextQuestion: null, stateUpdate: null,
+  clarification: { question: 'What is the correct name?', reason: 'Replacement value needed', candidates: [] },
+});
+for (const [key, value] of [['contact_name', 'Shanmugam'], ['age', 22], ['requested_date', 'Friday'], ['recipient', 'family']]) {
+  const before = { ...correctionState.collectedToolFields };
+  await confirmationReviewTurn(`Change ${key} to ${value}`, confirmationDecisions[0],
+    collectionDecision({ [key]: value }), 'Please confirm the revised details.');
+  assert.deepEqual(correctionState.collectedToolFields, { ...before, [key]: value });
+  assert.equal(correctionState.confirmationStatus, 'awaiting_confirmation');
+}
+// A newer fragment cannot authorize stale details while a correction is unfinished.
+await confirmationReviewTurn('hmm hmm', confirmationDecisions[0], confirmationDecisions[0],
+  'Please confirm the details again.', 'Change contact_name to Arun');
+assert.equal(correctionState.confirmationStatus, 'awaiting_confirmation');
+await confirmationReviewTurn('hmm hmm', confirmationDecisions[0], collectionDecision({ contact_name: 'Arun' }),
+  'Please confirm the revised details.', 'Change contact_name to Arun');
+assert.equal(correctionState.collectedToolFields.contact_name, 'Arun');
 let executed = 0;
 const confirmedTurn = await runTemplateEngineProductionTurn({
   auth: { tenantId }, scope, callId: 'call-2', usageDirection: 'inbound', language: 'en',

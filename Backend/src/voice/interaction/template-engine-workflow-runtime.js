@@ -336,6 +336,7 @@ export function templateEngineWorkflowRoutingContext(input = {}) {
       pendingFieldKey: progress.nextField?.key ?? null,
       collectedFieldKeys: Object.keys(input.state.collectedToolFields ?? {}),
       awaitingConfirmation: input.state.confirmationStatus === 'awaiting_confirmation',
+      interruptedRequest: cleanText(input.interruptedRequest, 4_000) || null,
     };
   } catch (error) {
     if (!(error instanceof AppError)) throw error;

@@ -355,10 +355,13 @@ async function runWorkflow(input, decision, state, context, dependencies) {
   const candidates = callerVerifiedArguments(
     decision.tool?.arguments,
     input.latestUtterance,
-    state.recentCompleteTurns,
+    input.interruptedWorkflowRequest
+      ? [...state.recentCompleteTurns, { role: 'user', content: input.interruptedWorkflowRequest }]
+      : state.recentCompleteTurns,
     state.collectedToolFields,
   );
   const explicitConfirmation = state.confirmationStatus === 'awaiting_confirmation'
+    && !input.interruptedWorkflowRequest
     && decision.stateUpdate?.set?.confirmationStatus === 'confirmed'
     && Object.keys(candidates).length === 0;
   const resultConversationGuidance = selectApplicableConversationGuidance({
@@ -524,12 +527,14 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     : null;
   const routingDependencies = {
     verifyWorkflowArguments: (args) => callerVerifiedArguments(
-      args, input.latestUtterance, state.recentCompleteTurns, state.collectedToolFields,
+      args, input.latestUtterance, input.interruptedWorkflowRequest
+        ? [...state.recentCompleteTurns, { role: 'user', content: input.interruptedWorkflowRequest }]
+        : state.recentCompleteTurns, state.collectedToolFields,
     ),
     workflowRoutingContext: templateEngineWorkflowRoutingContext({
       state, publishedWorkflows: publishedContext.publishedWorkflows,
       assignedTools: input.assignedTools, informationFields: input.informationFields,
-      scope: publishedContext.scope,
+      scope: publishedContext.scope, interruptedRequest: input.interruptedWorkflowRequest,
     }),
     invokeStructuredLlm: dependencies.invokeStructuredLlm,
     onDecisionRetry: dependencies.onRoutingDecisionRetry,
@@ -549,6 +554,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     const directSpeech = first.decision === 'CLARIFY'
       ? first.clarification?.question : first.response;
     const directValidation = await dependencies.validateGroundedClaims({
+      callerValues: state.activeWorkflowId ? state.collectedToolFields : null,
       response: directSpeech,
       decision: first.decision,
       selectedEvidence: Object.freeze([]),

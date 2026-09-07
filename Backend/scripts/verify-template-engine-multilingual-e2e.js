@@ -256,7 +256,9 @@ function toolDecision(argumentsValue = {}, confirmation = false) {
 }
 
 async function workflowTurn(configuration, fixture, utterance, state, outputs, execute) {
-  if (!state?.activeWorkflowId && outputs[0]?.decision === 'TOOL') {
+  if ((!state?.activeWorkflowId && outputs[0]?.decision === 'TOOL')
+    || (state?.confirmationStatus === 'awaiting_confirmation'
+      && !outputs[0]?.stateUpdate?.clear?.includes('activeWorkflowId'))) {
     outputs.splice(1, 0, structuredClone(outputs[0]));
   }
   return runTemplateEngineProductionTurn({

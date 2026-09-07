@@ -2458,8 +2458,13 @@ export class RealtimeConversationOrchestrator {
           turnEpoch: epoch, originalTurnEpoch: this.pendingTemplateEngineRequest.epoch,
         }, 'Acknowledgement did not replace the unanswered request or authorize tools');
       } else {
-      this.pendingTemplateEngineRequest = { text: String(query).slice(0, 4000), epoch };
+      const interruptedWorkflowRequest = this.templateEngineState.activeWorkflowId
+        ? this.pendingTemplateEngineRequest?.text ?? null : null;
+      this.pendingTemplateEngineRequest = {
+        text: [interruptedWorkflowRequest, String(query)].filter(Boolean).join('\n').slice(-4000), epoch,
+      };
       result = await runTemplateEngineProductionTurn({
+        interruptedWorkflowRequest,
         auth,
         scope,
         callId: this.call.id,
@@ -2561,10 +2566,11 @@ export class RealtimeConversationOrchestrator {
           return verified;
         },
         validateGroundedClaims: ({
-          response, decision, selectedEvidence, citedEvidence, searchInterpretation, latestUtterance, contextualReferenceVerified, ambiguity, requestMeaning,
+          response, decision, selectedEvidence, citedEvidence, searchInterpretation, latestUtterance, contextualReferenceVerified, ambiguity, requestMeaning, callerValues,
         }) => {
           return validateTemplateEngineClaims({
             speech: response,
+            callerValues,
             evidence: selectedEvidence,
             citedEvidence,
             decision,

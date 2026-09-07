@@ -308,7 +308,8 @@ export async function routeTemplateEngineUtterance(input = {}, dependencies = {}
   };
   if (dependencies.workflowRoutingContext
     && !validated.value.stateUpdate?.clear?.includes('activeWorkflowId')
-    && (['RESPONSE', 'CLARIFY'].includes(validated.value.decision)
+    && (dependencies.workflowRoutingContext.awaitingConfirmation
+      || ['RESPONSE', 'CLARIFY'].includes(validated.value.decision)
       || (validated.value.decision === 'TOOL'
         && dependencies.workflowRoutingContext.pendingFieldKey
         && (Object.keys(validated.value.tool?.arguments ?? {}).length === 0
@@ -334,6 +335,8 @@ export async function routeTemplateEngineUtterance(input = {}, dependencies = {}
         'Use workflowCollection.pendingFieldKey, configured questions, persisted values and the caller utterance. An assistant saying it understood a value does not save it.',
         'For a clear answer or correction to a configured field, return TOOL for the active tool and submit the caller-provided values. Do not return RESPONSE to acknowledge a value or ask subsequent fields. The runtime selects the next single missing field.',
         'For free-text fields preserve the exact caller-language value span; do not translate a self-reference into an English value absent from caller speech. Extract other voluntarily supplied fields too. Never invent values.',
+        'During confirmation, questions about recorded values refer to state.collectedToolFields, not the assistant identity or published knowledge. Return RESPONSE quoting only the requested stored value. Do not SEARCH for it. If the caller says a detail is wrong without a replacement, ask one CLARIFY question for the correct value. If a replacement is supplied, submit it via TOOL with stateUpdate:null; a correction is never execution consent. Preserve all other fields.',
+        'Review every proposed confirmation independently. Only an unambiguous request to submit the unchanged details may set confirmed. Questions, objections, corrections, repetition and unclear audio are not confirmation. If workflowCollection.interruptedRequest exists, resolve that unfinished reply first and do not set confirmed on this turn; corrected details must be read back before fresh authorization.',
         'For an unclear field reply, return CLARIFY with one focused rephrasing about only the pending field, empty candidates and nextQuestion:null. Do not repeat the previous question verbatim. Do not mark the field complete.',
         'A side question or topic change is not a field answer: route it normally and preserve the workflow. Explicit cancellation or a request to end the call takes priority: use the existing cancellation contract, never TOOL or another collection question. A field answer or acknowledgement is not final execution confirmation.',
         `Proposed decision: ${JSON.stringify(validated.value)}.`,
@@ -394,7 +397,7 @@ export async function routeTemplateEngineUtterance(input = {}, dependencies = {}
   const outputValidation = validateTemplateEngineOutput(outputValidationInput(
     contextualDecision.value, orchestratorInput, dependencies,
     contextualDecision.value.decision === 'CLARIFY'
-      && (!orchestratorInput.state.activeWorkflowId || dependencies.workflowRoutingContext?.pendingFieldKey)
+      && (!orchestratorInput.state.activeWorkflowId || dependencies.workflowRoutingContext)
       && dependencies.ambiguity?.required !== true
       && contextualDecision.value.clarification?.candidates?.length === 0
       && cleanText(contextualDecision.value.clarification?.reason)
