@@ -2,7 +2,7 @@
 
 Catalog hierarchy is tenant-provided. Runtime code does not define industries, category names, item names or selection policies.
 // this is test msg ignore this is for deployemnt tst commit
-```text
+```tex
 CATEGORY: Service Plans | KEY=service-plans | PARENT=all-offerings | ALIASES=Plans, Options | DESCRIPTION=Available service tiers | DEFAULT_SELECTION={"strategy":"clarify","defaultItemKey":"standard-plan"}
 Standard Plan INR 100 | KEY=standard-plan | ALIASES=Standard, Basic | DESCRIPTION=Standard approved service | RELATIONSHIPS={"alternatives":["premium-plan"]} | SELECTION_RULES={"allowedIntents":["details","select"]}
 Premium Plan INR 200 | KEY=premium-plan | ALIASES=Premium, Advanced | DESCRIPTION=Premium approved service | RELATIONSHIPS={"alternatives":["standard-plan"]}
