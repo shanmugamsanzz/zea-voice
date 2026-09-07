@@ -111,6 +111,9 @@ assert.match(orchestrator, /Buffer\.isBuffer\(reusableAudio\?\.audio\)/u,
   'Cached Workflow field audio must bypass live TTS synthesis');
 assert.match(orchestrator, /capture:\s*capturedAudio/u,
   'A cache miss must capture generated field audio for later turns');
+assert.match(orchestrator,
+  /finalResponseReadyAt\s*=\s*Date\.now\(\);[\s\S]*sentencePipeline\.enqueue\(finalAnswer\)[\s\S]*sentencePipeline\.waitUntilStarted\(\)/u,
+  'Validated final speech must enter TTS immediately after the result becomes ready');
 assert.match(orchestrator, /setLatencyAcknowledgementAudioCache/u,
   'The latency acknowledgement must use reusable cached audio');
 assert.match(orchestrator, /latency_acknowledgement_audio_cache_hit/u);

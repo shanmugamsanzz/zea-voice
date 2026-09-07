@@ -514,7 +514,13 @@ export async function phraseTemplateEngineWorkflowSpeech({
   }
   if (task.type === 'ASK_FIELD' && cacheDescriptor
     && typeof dependencies.cacheWorkflowSpeech === 'function') {
-    await dependencies.cacheWorkflowSpeech(cacheDescriptor, speech);
+    // The generated question is already valid for this caller. Persisting it
+    // only benefits later turns/calls, so a slow cache must not delay current
+    // speech. Cache failures remain best-effort and never alter Workflow state.
+    try {
+      void Promise.resolve(dependencies.cacheWorkflowSpeech(cacheDescriptor, speech))
+        .catch(() => {});
+    } catch { /* Best-effort latency cache. */ }
   }
   return Object.freeze({
     speech, nextQuestion, taskType: task.type,

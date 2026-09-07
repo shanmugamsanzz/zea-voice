@@ -294,6 +294,32 @@ assert.equal(cacheMissSpeech.cacheHit, false);
 assert.equal(cachedGeneratedSpeech, 'New localized field question?',
   'A cache miss must store the one generated localized field question');
 
+let releaseSlowCacheWrite;
+let markSlowCacheWriteStarted;
+const slowCacheWriteStarted = new Promise((resolve) => { markSlowCacheWriteStarted = resolve; });
+const slowCacheWrite = new Promise((resolve) => { releaseSlowCacheWrite = resolve; });
+const cacheWriteDoesNotBlock = phraseTemplateEngineWorkflowSpeech({
+  mainPrompt: 'Speak briefly and naturally.', task: firstTask,
+  cacheDescriptor: { workflowRecordId: 'workflow-1', fieldKey: 'full_name' },
+}, {
+  getCachedWorkflowSpeech: async () => null,
+  cacheWorkflowSpeech: async () => { markSlowCacheWriteStarted(); await slowCacheWrite; },
+  invokeStructuredLlm: async () => ({ outputParsed: { speech: 'Non-blocking question?' } }),
+});
+await slowCacheWriteStarted;
+let cacheWriteDeadline;
+try {
+  const result = await Promise.race([cacheWriteDoesNotBlock, new Promise((_, reject) => {
+    cacheWriteDeadline = setTimeout(() => reject(new Error(
+      'A future-use Workflow cache write blocked current caller speech',
+    )), 1_000);
+  })]);
+  assert.equal(result.speech, 'Non-blocking question?');
+} finally {
+  clearTimeout(cacheWriteDeadline);
+  releaseSlowCacheWrite();
+}
+
 const redisValues = new Map();
 const cacheRedis = {
   status: 'ready',

@@ -112,6 +112,21 @@ const audioPercentiles = templateEngineAudioPercentiles([
 assert.equal(audioPercentiles.acknowledgement.count, 1);
 assert.equal(audioPercentiles.finalAnswer.count, 2);
 assert.equal(audioPercentiles.finalAnswer.p90, 12000, 'Acknowledgements must never improve answer latency percentiles');
+assert.deepEqual(audioPercentiles.actualAnswerUnderThreeSeconds, {
+  targetMs: 3000, minimumSamples: 20, measured: 2, passed: 0, passRate: 0,
+  p95: 12000, p95TargetStatus: 'insufficient_live_samples',
+});
+const liveTargetSamples = Array.from({ length: 20 }, (_, index) => ({
+  finalAnswerFirstAudioMs: 2_500 + index,
+  acknowledgementFirstAudioMs: 500,
+}));
+assert.equal(templateEngineAudioPercentiles(liveTargetSamples)
+  .actualAnswerUnderThreeSeconds.p95TargetStatus, 'passed');
+liveTargetSamples[18].finalAnswerFirstAudioMs = 3_100;
+liveTargetSamples[19].finalAnswerFirstAudioMs = 3_200;
+assert.equal(templateEngineAudioPercentiles(liveTargetSamples)
+  .actualAnswerUnderThreeSeconds.p95TargetStatus, 'missed',
+'Acknowledgement speed must not hide an actual-answer P95 breach');
 
 const tenantId = '11111111-1111-4111-8111-111111111111';
 const agentId = '22222222-2222-4222-8222-222222222222';
@@ -1570,7 +1585,11 @@ const runtimeMetrics = {
 const searchMetric = recordTemplateEngineTurnMetrics(runtimeMetrics, {
   epoch: 1, result: turn, retrievalDiagnostics: retrieval.diagnostics,
   turnStartedAt: 1_000, firstAudioAt: 1_750, finalResponseReadyAt: 2_900,
-  firstFinalAudioAt: 3_200, firstAudioDeadlineMs: 2_000,
+  firstFinalAudioAt: 3_200, firstAudioDeadlineMs: 2_000, sttFinalizationMs: 351,
+  stageTimings: {
+    routing: { durationMs: 500 }, retrieval: { durationMs: 250 },
+    generation: { durationMs: 700 }, validation: { durationMs: 150 },
+  },
 });
 recordTemplateEngineTurnMetrics(runtimeMetrics, {
   epoch: 2, result: workflowTurn, turnStartedAt: 2_000,
@@ -1586,6 +1605,17 @@ assert.equal(searchMetric.retrievalMs, retrieval.diagnostics.durationMs);
 assert.equal(searchMetric.totalFirstAudioMs, 750);
 assert.equal(searchMetric.finalAnswerReadyMs, 1900);
 assert.equal(searchMetric.finalAnswerFirstAudioMs, 2200);
+assert.deepEqual(searchMetric.actualAnswerBaseline, {
+  targetMs: 3000,
+  actualAnswerFirstAudioMs: 2200,
+  targetStatus: 'passed',
+  stages: {
+    sttFinalizationMs: 351, routingMs: 500, retrievalMs: 250,
+    generationMs: 700, validationMs: 150, ttsFirstAudioMs: 300,
+  },
+  acknowledgementFirstAudioMs: null,
+  acknowledgementExcluded: true,
+});
 assert.equal(searchMetric.firstAudioStatus, 'passed');
 assert.equal(runtimeMetrics.turnLatency[1].retrievalMs, null);
 assert.equal(runtimeMetrics.turnLatency[1].firstAudioStatus, 'missed');

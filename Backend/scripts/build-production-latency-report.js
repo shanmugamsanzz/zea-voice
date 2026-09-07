@@ -8,8 +8,9 @@ if (!inputPath) {
 }
 
 const samples = [];
+const actualAnswerSamples = [];
 for (const line of readFileSync(inputPath, 'utf8').split(/\r?\n/u)) {
-  if (!line.includes('voice.turn_latency')) continue;
+  if (!line.includes('voice.turn_latency') && !line.includes('template_engine.turn_completed')) continue;
   let entry;
   try { entry = JSON.parse(line); } catch {
     const readNumber = (key) => Number(new RegExp(`${key}[=:]\\s*([0-9.]+)`, 'iu').exec(line)?.[1]);
@@ -24,8 +25,15 @@ for (const line of readFileSync(inputPath, 'utf8').split(/\r?\n/u)) {
     }
     continue;
   }
-  const source = entry.stage === 'voice.turn_latency' ? entry
-    : (entry.data?.stage === 'voice.turn_latency' ? entry.data : entry.log);
+  const source = entry.stage ? entry : (entry.data?.stage ? entry.data : entry.log);
+  if (source?.stage === 'template_engine.turn_completed') {
+    const actualAnswerFirstAudioMs = Number(source.finalAnswerFirstAudioMs
+      ?? source.actualAnswerBaseline?.actualAnswerFirstAudioMs);
+    if (Number.isFinite(actualAnswerFirstAudioMs) && actualAnswerFirstAudioMs >= 0) {
+      actualAnswerSamples.push(actualAnswerFirstAudioMs);
+    }
+    continue;
+  }
   if (source?.stage !== 'voice.turn_latency') continue;
   const firstAudioMs = Number(source.totalFirstAudioMs);
   if (!Number.isFinite(firstAudioMs) || firstAudioMs < 0) continue;
@@ -37,8 +45,21 @@ for (const line of readFileSync(inputPath, 'utf8').split(/\r?\n/u)) {
   });
 }
 
+const actualAnswerP95 = actualAnswerSamples.length
+  ? [...actualAnswerSamples].sort((left, right) => left - right)[
+    Math.ceil(actualAnswerSamples.length * 0.95) - 1
+  ] : null;
 process.stdout.write(`${JSON.stringify({
   generatedAt: new Date().toISOString(),
   samples,
   firstAudioSlo: evaluateFirstAudioSlo(samples),
+  actualAnswerSlo: {
+    targetP95Ms: 3_000,
+    minimumSamples: 20,
+    count: actualAnswerSamples.length,
+    p95Ms: actualAnswerP95,
+    passed: actualAnswerSamples.length >= 20 && actualAnswerP95 < 3_000,
+    reason: actualAnswerSamples.length < 20 ? 'insufficient_live_samples'
+      : actualAnswerP95 < 3_000 ? null : 'actual_answer_p95_breached',
+  },
 }, null, 2)}\n`);

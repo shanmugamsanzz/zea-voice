@@ -2765,6 +2765,7 @@ export class RealtimeConversationOrchestrator {
       firstAudioAt: playback.firstAudioAt,
       firstFinalAudioAt: playback.firstFinalAudioAt,
       acknowledgementFirstAudioAt: playback.acknowledgementFirstAudioAt,
+      sttFinalizationMs: sttTiming.sttFinalizationMs,
       stageTimings,
       finalResponseReadyAt,
       firstAudioDeadlineMs: Math.min(env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS, 2_000),
@@ -2796,6 +2797,7 @@ export class RealtimeConversationOrchestrator {
       configuredSpeechCharacters: this.runtimeProfile.limits?.ttsMaxCharactersPerResponse ?? null,
       stageTimings,
       latencyDiagnostics: turnTiming.workDiagnostics,
+      actualAnswerBaseline: turnTiming.actualAnswerBaseline,
       acknowledgementFirstAudioMs: turnTiming.acknowledgementFirstAudioMs,
       finalAnswerFirstAudioMs: turnTiming.finalAnswerFirstAudioMs,
       finalAnswerAudioAfterReadyMs: turnTiming.finalAnswerAudioAfterReadyMs,
@@ -3793,6 +3795,7 @@ export class RealtimeConversationOrchestrator {
     this.runtimeMetrics.latency.finalAnswerAudioPercentiles = separatedAudio.finalAnswer;
     this.log.info({ stage: 'template_engine.answer_audio_percentiles', callId: this.call.id,
       acknowledgement: separatedAudio.acknowledgement, finalAnswer: separatedAudio.finalAnswer,
+      actualAnswerUnderThreeSeconds: separatedAudio.actualAnswerUnderThreeSeconds,
     }, 'Acknowledgement and final-answer audio latency reported separately');
     this.runtimeMetrics.latency.retrievalPercentiles = retrievalPercentiles;
     this.log.info({

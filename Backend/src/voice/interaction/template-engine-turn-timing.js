@@ -39,6 +39,27 @@ function validationKey(value) {
 
 export function instrumentTemplateEngineTurn(dependencies) {
   const origin = performance.now();
+  const callbackIdentities = new WeakMap();
+  let nextCallbackIdentity = 1;
+  const callbackIdentity = (callback) => {
+    if (typeof callback !== 'function') return callback == null ? 'none' : null;
+    if (!callbackIdentities.has(callback)) callbackIdentities.set(callback, nextCallbackIdentity++);
+    return callbackIdentities.get(callback);
+  };
+  const retrievalKey = (input) => {
+    if (!input || typeof input !== 'object') return validationKey(input);
+    const {
+      reviewEntityCandidates,
+      reviewContextualCandidates,
+      ...contract
+    } = input;
+    const entityReviewer = callbackIdentity(reviewEntityCandidates);
+    const contextualReviewer = callbackIdentity(reviewContextualCandidates);
+    if (entityReviewer === null || contextualReviewer === null) return null;
+    const contractKey = validationKey(contract);
+    return contractKey === null ? null
+      : `${contractKey}|entityReviewer:${entityReviewer}|contextualReviewer:${contextualReviewer}`;
+  };
   const measured = (stage, invoke, extra = {}) => async (...args) => {
     const started = performance.now();
     let outcome = 'success';
@@ -79,14 +100,14 @@ export function instrumentTemplateEngineTurn(dependencies) {
       return result;
     };
   };
-  const reusableOperation = (stage, invoke, operation, accepted) => {
+  const reusableOperation = (stage, invoke, operation, accepted, keyFor = validationKey) => {
     const completed = new Map();
     const pending = new Map();
     const run = measured(stage, invoke, { operation });
     return async (input) => {
       // The complete input is the isolation boundary. AbortSignal, callbacks
       // and other non-JSON values intentionally disable reuse.
-      const key = validationKey(input);
+      const key = keyFor(input);
       if (key !== null && (completed.has(key) || pending.has(key))) {
         dependencies.onStageTiming?.(Object.freeze({ stage, operation,
           durationMs: 0, outcome: pending.has(key) ? 'coalesced' : 'reused', cacheHit: true }));
@@ -113,7 +134,7 @@ export function instrumentTemplateEngineTurn(dependencies) {
     loadPublishedContext: reusableOperation('publication_load', dependencies.loadPublishedContext,
       'publication_load', (result) => Boolean(result?.scope && result?.artifacts)),
     retrieveEvidence: reusableOperation('retrieval', dependencies.retrieveEvidence,
-      'retrieval', (result) => Array.isArray(result?.evidence) && !result?.error),
+      'retrieval', (result) => Array.isArray(result?.evidence) && !result?.error, retrievalKey),
     ...(dependencies.retrieveSpeculativeEvidence ? {
       retrieveSpeculativeEvidence: measured('speculative_retrieval', dependencies.retrieveSpeculativeEvidence),
     } : {}),

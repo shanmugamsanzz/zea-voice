@@ -122,9 +122,20 @@ assert.equal(checks, 16, 'Concurrent and completed identical retrievals coalesce
 await reuse.retrieveEvidence({ ...retrievalContract, scope: { ...publicationContract.scope,
   tenantId: 'two' } });
 assert.equal(checks, 17, 'Tenant changes cannot reuse retrieval');
+const stableReviewer = () => null;
+await reuse.retrieveEvidence({ ...retrievalContract, reviewEntityCandidates: stableReviewer });
+await reuse.retrieveEvidence({ ...retrievalContract, reviewEntityCandidates: stableReviewer });
+assert.equal(checks, 18, 'An identical reviewer and retrieval contract can reuse safely');
 await reuse.retrieveEvidence({ ...retrievalContract, reviewEntityCandidates: () => null });
 await reuse.retrieveEvidence({ ...retrievalContract, reviewEntityCandidates: () => null });
-assert.equal(checks, 19, 'Function-bearing retrieval contracts disable reuse');
+assert.equal(checks, 20, 'Different reviewer callbacks cannot share retrieval results');
+await reuse.retrieveEvidence({ ...retrievalContract, latestUtterance: 'changed request' });
+await reuse.retrieveEvidence({ ...retrievalContract, state: { recentCompleteTurns: [{ role: 'user', content: 'new turn' }] } });
+assert.equal(checks, 22, 'Request and conversation changes cannot reuse retrieval');
+const cancellation = new AbortController();
+await reuse.retrieveEvidence({ ...retrievalContract, signal: cancellation.signal });
+await reuse.retrieveEvidence({ ...retrievalContract, signal: cancellation.signal });
+assert.equal(checks, 24, 'Cancellation-bearing contracts must never reuse retrieval');
 const authorization = { responseFormat: { name: 'template_engine_orchestrator_decision' } };
 await reuse.invokeStructuredLlm(authorization);
 await reuse.invokeStructuredLlm(authorization);
