@@ -268,7 +268,10 @@ async function workflowTurn(configuration, fixture, utterance, state, outputs, e
     latestUtterance: utterance, conversationHistory: [], state,
     assignedTools: [fixture.tool], informationFields: fixture.fields,
   }, {
-    invokeStructuredLlm: async () => outputs.shift(),
+    invokeStructuredLlm: async (request) => request.responseFormat?.name
+      === 'template_engine_pending_text_field'
+      ? { outputParsed: { classification: 'field_value', value: utterance } }
+      : outputs.shift(),
     loadPublishedContext: async () => ({
       scope: fixture.identity.scope, artifacts: {}, publishedWorkflows: [fixture.workflow],
       publishedConversationGuidance: [fixture.resultGuidance],
@@ -300,7 +303,7 @@ async function runWorkflowScenarios(configuration) {
   assert.equal(questionCount(result.speech), 1);
 
   result = await workflowTurn(configuration, fixture, 'Alex', result.state, [
-    toolDecision({ full_name: 'Alex' }), { speech: configuration.askDate },
+    { speech: configuration.askDate },
   ], async () => { executions += 1; });
   assert.equal(result.workflow.status, 'AWAITING_FIELD');
   assert.deepEqual(result.state.lastReferencedRecordIds, [selectedRecordId]);

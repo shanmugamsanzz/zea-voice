@@ -149,6 +149,9 @@ assert.equal(staleSpoken, false, 'A stale or finalized turn must not queue ackno
 const orchestrator = readFileSync(new URL(
   '../src/voice/realtime-conversation-orchestrator.js', import.meta.url,
 ), 'utf8');
+const liveReport = readFileSync(new URL(
+  './build-production-latency-report.js', import.meta.url,
+), 'utf8');
 assert.match(orchestrator, /armTemplateEngineTurnLatencyAcknowledgement\(\{/u);
 assert.match(orchestrator, /onRoutingResolved:[\s\S]*latencyAcknowledgement\.setSuppressed/u);
 assert.match(orchestrator, /runTemplateEngineProductionTurn\(\{/u);
@@ -162,6 +165,20 @@ assert.match(orchestrator,
   /finalResponseReady\s*=\s*true;[\s\S]*sentencePipeline\.cancelAcknowledgements\(\);[\s\S]*latencyAcknowledgement\.cancel\(\)/u,
   'A ready final answer must cancel both queued acknowledgement work and its timer');
 assert.match(orchestrator, /template_engine\.turn_latency_acknowledgement/u);
+for (const field of ['initialDecision', 'finalDecision', 'searchPerformed', 'validationResult',
+  'evidenceCount', 'configuredFallbackApplied']) {
+  assert.match(orchestrator, new RegExp(`${field}:`, 'u'),
+    `Completed-turn telemetry must expose ${field} to the live release gate`);
+}
+assert.match(liveReport, /actualAnswerSamples\.length\s*>=\s*20/u);
+assert.match(liveReport, /actualAnswerAverage\s*<\s*3_000/u);
+assert.match(liveReport, /actualAnswerMaximum\s*<=\s*4_000/u);
+assert.match(liveReport, /bookingFieldKnowledgeSearches/u);
+assert.match(liveReport, /ungroundedSearchResponses/u);
+assert.match(liveReport, /incompleteTelemetryTurns/u,
+  'Legacy or incomplete live logs must not satisfy the correctness gate');
+assert.match(liveReport, /report\.actualAnswerSlo\.passed\s*&&\s*report\.liveCorrectness\.passed/u,
+  'Live approval must require both latency and correctness');
 assert.match(orchestrator, /templateEngineAcknowledgements\.triggered\s*\+=\s*1/u);
 assert.match(orchestrator, /setWorkflowFieldAudioCache\(result\.workflow\?\.speechCache/u,
   'A Workflow field turn must hand cached audio to the live sentence pipeline');

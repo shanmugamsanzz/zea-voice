@@ -216,6 +216,40 @@ assert.equal((await validateRequestedEntityCoverage({ evidence: [] }, () => asse
 assert.equal((await validateRequestedEntityCoverage({ evidence: [{ evidenceId: 'E1' }] }, async () => ({
   outputParsed: { resolved: true, evidenceIds: ['invented'] },
 }))).resolved, false);
+
+{
+  let answerCalls = 0;
+  let coverageCalls = 0;
+  let semanticCalls = 0;
+  const result = await respondToTemplateEngineSearch({
+    mainPrompt, latestUtterance, state, searchDecision, scope, verifiedEvidence,
+    requestedEntityRecordIds: ['record-1'], deterministicEntityCoverageVerified: false,
+  }, {
+    tenantBoundaryVerified: true,
+    ambiguity: { required: true, kind: 'published_entity_confirmation',
+      candidates: ['First Service'] },
+    validateRequestedEntityCoverage: async ({ evidence }) => {
+      coverageCalls += 1;
+      return { resolved: true, evidenceIds: [evidence[0].evidenceId] };
+    },
+    validateGroundedClaims: async () => {
+      semanticCalls += 1;
+      return { supported: true, requestedFactAddressed: true };
+    },
+    invokeStructuredLlm: async () => {
+      answerCalls += 1;
+      return { outputParsed: { decision: 'RESPONSE',
+        response: 'First Service price is 3200 currency units.',
+        clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null } };
+    },
+  });
+  assert.equal(coverageCalls, 1, 'Real ambiguity receives one entity coverage review');
+  assert.equal(answerCalls, 1, 'Resolved coverage proceeds directly to one answer call');
+  assert.equal(semanticCalls, 0,
+    'A successful coverage review must not be repeated by semantic LLM validation');
+  assert.equal(result.diagnostics.semanticValidationSkipped, true);
+  assert.equal(result.outputValidation.valid, true);
+}
 let budgetCalls = 0;
 let budgetClaimChecks = 0;
 const budgetAnswer = 'The price is 3200 units. Would you like more detail?';
@@ -299,6 +333,52 @@ assert.equal(impossibleBudgetSemanticChecks, 0,
     'A failed length repair must compress complete verified evidence instead of falling back');
   assert.equal(result.outputValidation.valid, true,
     'The compressed answer must pass the complete delivery validator');
+}
+
+{
+  const categoryEvidence = Object.freeze([
+    Object.freeze({ ...verifiedEvidence[0], evidenceId: 'category-evidence-1',
+      recordId: 'category-record-1', canonicalName: 'Alpha',
+      content: 'Alpha details include screening.', publishedAttributePaths: ['details'] }),
+    Object.freeze({ ...verifiedEvidence[0], evidenceId: 'category-evidence-2',
+      recordId: 'category-record-2', canonicalName: 'Beta',
+      content: 'Beta details include consultation.', publishedAttributePaths: ['details'] }),
+    Object.freeze({ ...verifiedEvidence[0], evidenceId: 'category-evidence-3',
+      recordId: 'category-record-3', canonicalName: 'Gamma',
+      content: 'Gamma details include imaging.', publishedAttributePaths: ['details'] }),
+  ]);
+  const categorySearchDecision = Object.freeze({ ...searchDecision,
+    search: Object.freeze({ query: 'available category details', requestedFact: 'details',
+      contextualReference: null, preferredRecordIds: [] }),
+  });
+  const expected = `${categoryEvidence[0].content} ${categoryEvidence[1].content}`;
+  let calls = 0;
+  const result = await respondToTemplateEngineSearch({
+    mainPrompt, latestUtterance: 'What options are available?', state, scope,
+    searchDecision: categorySearchDecision, verifiedEvidence: categoryEvidence,
+    deterministicEntityCoverageVerified: true,
+    maximumSpeechCharacters: expected.length,
+  }, {
+    tenantBoundaryVerified: true,
+    validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
+    invokeStructuredLlm: async () => {
+      calls += 1;
+      return { outputParsed: { decision: 'RESPONSE',
+        response: `${categoryEvidence.map(({ content }) => content).join(' ')} Extra wording.`,
+        clarification: null, evidenceIds: ['E1', 'E2', 'E3'],
+        nextQuestion: null, stateUpdate: null } };
+    },
+  });
+  assert.equal(calls, 2, 'An oversized category answer receives the normal bounded repair first');
+  assert.equal(result.decision.response, expected,
+    'Category recovery must pack complete records in retrieval relevance order');
+  assert.equal(result.decision.response.length <= expected.length, true);
+  assert.deepEqual(result.decision.evidenceIds,
+    ['category-evidence-1', 'category-evidence-2'],
+    'Category recovery must cite only the records included in speech');
+  assert.equal(result.diagnostics.budgetCompressionApplied, true);
+  assert.equal(result.outputValidation.valid, true,
+    'The packed category answer must pass the complete delivery validator');
 }
 const sixOperands = Array.from({ length: 6 }, (_, index) => ({ ...verifiedEvidence[0],
   evidenceId: `operand-${index}`, recordId: `record-${index}`, canonicalName: `Option ${index}`,

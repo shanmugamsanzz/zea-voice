@@ -5,7 +5,9 @@ import {
   retrieveTemplateEngineEvidence,
 } from '../src/voice/interaction/template-engine-production-retrieval.js';
 import {
+  deterministicConfirmedContextualReference,
   deterministicPendingWorkflowFieldDecision,
+  reviewPendingTextWorkflowField,
   publishedResolutionAmbiguity,
   runTemplateEngineProductionTurn,
   verifiedPublishedEntityFastPath,
@@ -36,6 +38,34 @@ assert.equal(deterministicPendingWorkflowFieldDecision({ ...scalarWorkflowContex
 assert.equal(deterministicPendingWorkflowFieldDecision({ ...scalarWorkflowContext,
   fields: [{ key: 'quantity', question: 'Name?', type: 'text', schema: { type: 'string' } }] },
 'Shanmugam'), null, 'Free text must retain normal intent routing');
+const textWorkflowContext = { ...scalarWorkflowContext, pendingFieldKey: 'contact_value',
+  fields: [{ key: 'contact_value', question: 'What value should be recorded?',
+    type: 'text', schema: { type: 'string', minLength: 2, maxLength: 100 } }] };
+const acceptedText = await reviewPendingTextWorkflowField(
+  textWorkflowContext, 'Shanmugam', async (request) => {
+    assert.equal(request.responseFormat.name, 'template_engine_pending_text_field');
+    return { outputParsed: { classification: 'field_value', value: 'Shanmugam' } };
+  },
+);
+assert.deepEqual(acceptedText?.tool?.arguments, { contact_value: 'Shanmugam' });
+for (const classification of ['cancellation', 'correction', 'question', 'other', 'unclear']) {
+  assert.equal(await reviewPendingTextWorkflowField(textWorkflowContext, 'stop', async () => ({
+    outputParsed: { classification, value: null },
+  })), null, `${classification} must retain normal workflow routing`);
+}
+assert.equal(await reviewPendingTextWorkflowField(textWorkflowContext, 'Shanmugam', async () => ({
+  outputParsed: { classification: 'field_value', value: 'translated value' },
+})), null, 'A transformed or invented text value must not enter workflow state');
+assert.equal(deterministicConfirmedContextualReference({
+  search: { contextualReference: 'confirmed selection', preferredRecordIds: ['record-1'] },
+  state: { lastReferencedRecordIds: ['record-1'], comparisonRecordIds: [],
+    pendingClarification: { candidates: ['Configured selection'] } },
+}), true, 'A structurally confirmed reference may reuse the exact remembered record');
+assert.equal(deterministicConfirmedContextualReference({
+  search: { contextualReference: 'uncertain selection', preferredRecordIds: ['record-2'] },
+  state: { lastReferencedRecordIds: ['record-1'], comparisonRecordIds: [],
+    pendingClarification: { candidates: ['Configured selection'] } },
+}), false, 'A mismatched remembered record must retain semantic reference review');
 const multilingualInput = { utterance: 'கான்ஃபிகர்ட் ஆல்பா', candidates: multilingualCandidates,
   recentTurns: [{ role: 'assistant', content: 'Configured Beta details' }] };
 assert.deepEqual(await reviewContextualSubjects({ ...multilingualInput, utterance: 'What tests does that include?' },
@@ -115,8 +145,9 @@ assert.equal(audioPercentiles.acknowledgement.count, 1);
 assert.equal(audioPercentiles.finalAnswer.count, 2);
 assert.equal(audioPercentiles.finalAnswer.p90, 12000, 'Acknowledgements must never improve answer latency percentiles');
 assert.deepEqual(audioPercentiles.actualAnswerUnderThreeSeconds, {
-  targetMs: 3000, minimumSamples: 20, measured: 2, passed: 0, passRate: 0,
+  targetMs: 3000, maximumMs: 4000, minimumSamples: 20, measured: 2, passed: 0, passRate: 0,
   averageMs: 11000, averageTargetStatus: 'insufficient_live_samples',
+  maximumObservedMs: 12000, maximumTargetStatus: 'insufficient_live_samples',
   p95: 12000, p95TargetStatus: 'insufficient_live_samples',
 });
 const liveTargetSamples = Array.from({ length: 20 }, (_, index) => ({
@@ -801,6 +832,29 @@ assert.equal(guidanceRetrieval.evidence[0].documentId, 'guidance-document');
 assert.equal(guidanceRetrieval.evidence[0].documentDisplayName,
   'Tenant Conversation Guidance');
 
+{
+  let entityReviews = 0;
+  const overviewRetrieval = await retrieveTemplateEngineEvidence({
+    auth: { tenantId }, scope, callId: 'call-overview-without-entity-review',
+    usageDirection: 'inbound', language: 'en', latestUtterance: 'What is available?',
+    searchDecision: { ...searchDecision, search: { query: 'available overview',
+      requestedFact: 'overview', contextualReference: null, preferredRecordIds: [] } },
+    state: {}, conversationGuidance: { intentClass: 'overview' },
+    reviewEntityCandidates: async () => { entityReviews += 1; return null; },
+  }, {
+    loadArtifacts: async () => ({ publications: [publication], sparseIndexes: [],
+      bundles: [{ ...exactArtifacts.bundles[0], records: [exactRecord] }] }),
+    resolveEntityRoute: () => ({ candidate: null, action: 'CONTINUE',
+      ambiguity: { detected: false, candidates: [] } }),
+    searchCandidates: async () => ({ channels: { structured: [], bm25: [], qdrant: [] } }),
+    hydrateEvidence: async () => ({ evidence: [], fusion: { candidates: [] } }),
+  });
+  assert.equal(entityReviews, 0,
+    'A clear category overview must not invoke a multilingual entity review');
+  assert.equal(overviewRetrieval.searchClassification.searchKind, 'overview');
+  assert.equal(overviewRetrieval.diagnostics.identityReviewApplicable, false);
+}
+
 let emptyHydrationAttempts = 0;
 for (const tenantSuffix of ['a', 'b']) {
   for (const size of [3, 6]) {
@@ -966,6 +1020,40 @@ for (const scenario of [
     validateToolResultSpeechClaims: async () => ({ supported: true }),
   });
   assert.equal(JSON.stringify(previousState), originalState, 'Review must not mutate call memory');
+}
+{
+  const confirmedDecisions = [{ ...searchDecision, search: {
+    query: 'Tenant Item price', requestedFact: 'price',
+    contextualReference: 'Tenant Item', preferredRecordIds: ['record-1'],
+  } }, { decision: 'RESPONSE', response: 'Tenant Item costs 125.',
+    clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null }];
+  let diagnostics = null;
+  const result = await runTemplateEngineProductionTurn({
+    scope, mainPrompt: 'Use only published information.',
+    latestUtterance: 'What is its price?', assignedTools: [], informationFields: [],
+    state: { lastReferencedRecordIds: ['record-1'], comparisonRecordIds: [],
+      pendingClarification: { candidates: ['Tenant Item'] } },
+  }, {
+    loadPublishedContext: async () => ({ scope, publishedWorkflows: [], artifacts: {} }),
+    invokeStructuredLlm: async (request) => {
+      assert.notEqual(request.responseFormat.name, 'template_engine_reference_review',
+        'A confirmed exact reference must not invoke another reference reviewer');
+      return confirmedDecisions.shift();
+    },
+    retrieveEvidence: async (request) => {
+      assert.equal(request.contextualMemoryVerified, true);
+      assert.deepEqual(request.searchDecision.search.preferredRecordIds, ['record-1']);
+      return retrieval;
+    },
+    persistWorkflowState: async () => assert.fail('Search must not persist a workflow'),
+    executeAuthorizedTool: async () => assert.fail('Search must not execute tools'),
+    validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
+    validateToolResultSpeechClaims: async () => ({ supported: true }),
+    onRetrievalDiagnostics: (value) => { diagnostics = value; },
+  });
+  assert.equal(result.speech, 'Tenant Item costs 125.');
+  assert.equal(confirmedDecisions.length, 0);
+  assert.equal(diagnostics.confirmedContextualReferenceFastPath, true);
 }
 const referenceInput = { latestUtterance: 'More details?',
   search: { preferredRecordIds: ['record-1'], contextualReference: 'Tenant Item' },
@@ -1237,6 +1325,7 @@ assert.equal(verifiedPublishedEntityFastPath({ ...exactSpeculativeRetrieval,
   let referenceReviews = 0;
   let foregroundRetrievals = 0;
   let fastPathDiagnostics = null;
+  const factualLlmOperations = [];
   const fastPathDecisions = [{ ...searchDecision, search: {
     ...searchDecision.search, contextualReference: 'Old Item', preferredRecordIds: ['old-record'],
   } }, { decision: 'RESPONSE', response: 'Tenant Item costs 125.', clarification: null,
@@ -1253,6 +1342,7 @@ assert.equal(verifiedPublishedEntityFastPath({ ...exactSpeculativeRetrieval,
         referenceReviews += 1;
         return { relation: 'new_request' };
       }
+      factualLlmOperations.push(request.responseFormat.name);
       return fastPathDecisions.shift();
     },
     loadPublishedContext: async () => ({ scope, publishedWorkflows: [], artifacts: {} }),
@@ -1266,6 +1356,9 @@ assert.equal(verifiedPublishedEntityFastPath({ ...exactSpeculativeRetrieval,
   assert.equal(result.speech, 'Tenant Item costs 125.');
   assert.equal(referenceReviews, 0,
     'Exact current published identity must bypass the stale remembered-reference review');
+  assert.deepEqual(factualLlmOperations, [
+    'template_engine_orchestrator_decision', 'template_engine_post_search_decision',
+  ], 'A clear verified factual request must use one routing call and one answer call');
   assert.equal(foregroundRetrievals, 0, 'Verified exact speculative evidence must be reused');
   assert.equal(fastPathDiagnostics.highConfidenceFastPath, true);
 }
@@ -1862,8 +1955,11 @@ assert.equal(searchMetric.answerQueueAfterReadyMs, 20);
 assert.equal(searchMetric.finalAnswerAudioAfterQueuedMs, 280);
 assert.deepEqual(searchMetric.actualAnswerBaseline, {
   targetMs: 3000,
+  maximumMs: 4000,
+  normalVerifiedRequest: true,
   actualAnswerFirstAudioMs: 2200,
   targetStatus: 'passed',
+  maximumStatus: 'passed',
   stages: {
     sttFinalizationMs: 351, routingMs: 500, retrievalMs: 250,
     generationMs: 700, validationMs: 150, answerQueueMs: 20, ttsFirstAudioMs: 280,

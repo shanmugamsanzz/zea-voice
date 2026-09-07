@@ -931,8 +931,12 @@ export async function retrieveTemplateEngineEvidence({
   });
   const uncertainExactIdentity = exactCatalog.length > 1
     && entityResolution?.ambiguity?.detected === true;
+  const identityReviewApplicable = uncertainExactIdentity || ![
+    templateEngineSearchKinds.OVERVIEW,
+  ].includes(route.searchKind);
   if ((!exactCatalog.length || uncertainExactIdentity) && !contextualMemoryVerified
-    && requestMeaning?.kind !== 'published_welcome_continuation' && reviewEntityCandidates) {
+    && requestMeaning?.kind !== 'published_welcome_continuation'
+    && identityReviewApplicable && reviewEntityCandidates) {
     // Semantic hits are hints only. Rebind their identities to active published
     // records before exposing any candidate name to the language reviewer.
     const published = scopedBundles.flatMap((bundle) => (bundle.records ?? [])
@@ -1135,6 +1139,7 @@ export async function retrieveTemplateEngineEvidence({
         ambiguityDetected: entityResolution?.ambiguity?.detected === true,
       }),
       verifiedPublishedEntityFastPath: verifiedPublishedEntitySelection !== null,
+      identityReviewApplicable,
       selectionRetryAttempted,
       requestedEntityHydrationIncomplete,
       requestedEntityCount: requestedIdentities.size,

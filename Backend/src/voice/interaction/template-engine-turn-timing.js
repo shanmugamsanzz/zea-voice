@@ -18,6 +18,7 @@ const operations = new Map([
   ['template_engine_welcome_meaning', 'request_meaning_review'],
   ['template_engine_follow_up_repair', 'follow_up_repair'],
   ['template_engine_workflow_speech', 'workflow_speech_generation'],
+  ['template_engine_pending_text_field', 'workflow_text_field_review'],
 ]);
 
 // Sort object keys only: evidence/candidate/history array order remains part

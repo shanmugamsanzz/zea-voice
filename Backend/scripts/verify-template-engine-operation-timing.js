@@ -25,6 +25,7 @@ for (const [name, tag, operation] of [
   ['template_engine_post_search_decision', 'answer_repair', 'answer_repair'],
   ['template_engine_reference_review', null, 'reference_review'],
   ['template_engine_workflow_speech', null, 'workflow_speech_generation'],
+  ['template_engine_pending_text_field', null, 'workflow_text_field_review'],
   ['unrecognized', null, 'other_llm'],
 ]) {
   expectedRequest = Object.freeze({ responseFormat: { name }, messages: [{ content: 'private caller data' }] });

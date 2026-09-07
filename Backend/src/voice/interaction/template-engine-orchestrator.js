@@ -638,20 +638,43 @@ function extractiveGroundedRecovery(evidence, requestedFact, {
   if (!supporting.length || (requiredCount && supporting.length !== requiredCount)) {
     return null;
   }
-  const fragments = supporting.map((source) => relevantFragment(source, requestedFact));
-  if (fragments.some((fragment) => !fragment)) return null;
-  const identifiedFragments = supporting.length > 1
-    ? fragments.map((fragment, index) => {
-      const name = cleanText(supporting[index]?.canonicalName, 300);
-      return name && !candidateIdentity(fragment).includes(candidateIdentity(name))
-        ? `${name}: ${fragment}` : fragment;
-    }) : fragments;
-  const response = [...new Set(identifiedFragments)].join(' ').trim();
   const budget = Number(maximumSpeechCharacters);
-  if (!response || (Number.isFinite(budget) && budget > 0 && response.length > budget)) return null;
+  const bounded = Number.isFinite(budget) && budget > 0;
+  const candidates = supporting.map((source) => {
+    const fragment = relevantFragment(source, requestedFact);
+    const name = cleanText(source?.canonicalName, 300);
+    const speech = fragment && supporting.length > 1 && name
+      && !candidateIdentity(fragment).includes(candidateIdentity(name))
+      ? `${name}: ${fragment}` : fragment;
+    return Object.freeze({ source, speech });
+  });
+
+  // Explicitly requested records (notably comparison operands) remain
+  // all-or-nothing. For an aggregate/category answer, retrieval order is the
+  // relevance order, so pack as many complete verified record fragments as
+  // fit and cite only the records that are actually spoken.
+  if (requiredCount && candidates.some(({ speech }) => !speech)) return null;
+  const selected = [];
+  const seenSpeech = new Set();
+  let response = '';
+  for (const candidate of candidates) {
+    if (!candidate.speech || seenSpeech.has(candidate.speech)) continue;
+    const combined = response ? `${response} ${candidate.speech}` : candidate.speech;
+    if (bounded && combined.length > budget) {
+      if (requiredCount) return null;
+      continue;
+    }
+    response = combined;
+    selected.push(candidate.source);
+    seenSpeech.add(candidate.speech);
+  }
+  response = response.trim();
+  if (!response || !selected.length || (requiredCount && selected.length !== requiredCount)) {
+    return null;
+  }
   return Object.freeze({
     decision: 'RESPONSE', response, clarification: null,
-    evidenceIds: Object.freeze(supporting.map((source) => source.evidenceId)),
+    evidenceIds: Object.freeze(selected.map((source) => source.evidenceId)),
     nextQuestion: null, stateUpdate: null,
   });
 }
@@ -796,6 +819,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     dependencies.ambiguity,
   ) };
   const citations = aliasPostSearchEvidence(evidence);
+  let entityCoverageVerified = input.deterministicEntityCoverageVerified === true;
   if (dependencies.validateRequestedEntityCoverage) {
     const coverage = await dependencies.validateRequestedEntityCoverage({
       latestUtterance: base.latestUtterance, searchInterpretation: search.value.search,
@@ -804,6 +828,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       evidence: citations.evidence,
     });
     if (coverage.resolved === true && dependencies.ambiguity?.required === true) {
+      entityCoverageVerified = true;
       dependencies = { ...dependencies, ambiguity: {
         required: false, kind: 'verified_current_request_coverage', candidates: [],
       } };
@@ -1095,7 +1120,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
   };
   const validateAfterDeterministicPreflight = async (decision, preflight) => {
     const deterministic = preflight.validation.valid
-      && input.deterministicEntityCoverageVerified === true
+      && entityCoverageVerified
       && decision.decision === 'RESPONSE'
       && preflight.claims.result.supported === true
       && preflight.claims.result.requestedFactAddressed === true
@@ -1334,6 +1359,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     finalDecision: groundedDecision.decision,
     repairAttempted: Boolean(firstInvalidReason),
     extractiveRecoveryApplied,
+    configuredFallbackApplied,
     budgetCompressionApplied,
     initialNumericValidationDetails,
     initialSemanticValidationReason,
