@@ -8,6 +8,7 @@ function cleanText(value, maximum = 500) {
 export function armTemplateEngineTurnLatencyAcknowledgement({
   thresholdMs,
   acknowledgementText,
+  suppressed = false,
   isActive = () => true,
   onAcknowledgement,
   onTriggered,
@@ -20,20 +21,29 @@ export function armTemplateEngineTurnLatencyAcknowledgement({
   let cancelled = false;
   let triggered = false;
   let queued = false;
+  let thresholdReached = false;
+  const deliver = () => {
+    if (cancelled || suppressed || triggered || isActive() !== true) return;
+    triggered = true;
+    queued = onAcknowledgement(text) === true;
+    onTriggered?.(Object.freeze({ thresholdMs: delayMs, queued }));
+  };
 
   if (text && Number.isFinite(delayMs) && delayMs > 0
     && typeof onAcknowledgement === 'function') {
     timer = setTimer(() => {
       timer = null;
-      if (cancelled || isActive() !== true) return;
-      triggered = true;
-      queued = onAcknowledgement(text) === true;
-      onTriggered?.(Object.freeze({ thresholdMs: delayMs, queued }));
+      thresholdReached = true;
+      deliver();
     }, delayMs);
     timer?.unref?.();
   }
 
   return Object.freeze({
+    setSuppressed(value) {
+      suppressed = value === true;
+      if (!suppressed && thresholdReached) deliver();
+    },
     cancel() {
       if (cancelled) return false;
       cancelled = true;
@@ -48,6 +58,7 @@ export function armTemplateEngineTurnLatencyAcknowledgement({
         cancelled,
         triggered,
         queued,
+        suppressed,
       });
     },
   });

@@ -48,6 +48,25 @@ assert.equal(slow.snapshot().triggered, true);
 assert.equal(slow.snapshot().queued, true);
 
 const fastTimers = fakeTimers();
+// Routing may finish after the acknowledgement deadline. Tool turns must stay
+// quiet, while ordinary searches may release one deferred acknowledgement.
+for (const release of [false, true]) {
+  const clocks = fakeTimers();
+  let count = 0;
+  const controlled = armTemplateEngineTurnLatencyAcknowledgement({
+    thresholdMs: 750, acknowledgementText: 'Configured progress speech.', suppressed: true,
+    onAcknowledgement: () => { count += 1; return true; },
+    setTimer: clocks.setTimer, clearTimer: clocks.clearTimer,
+  });
+  clocks.fire(clocks.timers[0]);
+  assert.equal(count, 0);
+  controlled.setSuppressed(!release);
+  controlled.setSuppressed(!release);
+  assert.equal(count, release ? 1 : 0);
+  controlled.cancel();
+  controlled.setSuppressed(false);
+  assert.equal(count, release ? 1 : 0, 'Cancellation must prevent delayed acknowledgement');
+}
 let fastSpoken = false;
 const fast = armTemplateEngineTurnLatencyAcknowledgement({
   thresholdMs: 750,
@@ -78,6 +97,7 @@ const orchestrator = readFileSync(new URL(
   '../src/voice/realtime-conversation-orchestrator.js', import.meta.url,
 ), 'utf8');
 assert.match(orchestrator, /armTemplateEngineTurnLatencyAcknowledgement\(\{/u);
+assert.match(orchestrator, /onRoutingResolved:[\s\S]*latencyAcknowledgement\.setSuppressed/u);
 assert.match(orchestrator, /runTemplateEngineProductionTurn\(\{/u);
 assert.match(orchestrator, /finalResponseReady\s*=\s*true;[\s\S]*latencyAcknowledgement\.cancel\(\)/u,
   'The whole-turn timer must be cancelled as soon as the final result is ready');

@@ -572,8 +572,10 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     }
   }
   if (first.decision === 'TOOL') {
+    dependencies.onRoutingResolved?.({ decision: 'TOOL', activeWorkflow: Boolean(state.activeWorkflowId) });
     return runWorkflow(input, first, state, publishedContext, dependencies);
   }
+  dependencies.onRoutingResolved?.({ decision: first.decision, activeWorkflow: Boolean(state.activeWorkflowId) });
   if (first.decision !== 'SEARCH') {
     const directConversationGuidance = selectApplicableConversationGuidance({
       publishedConversationGuidance: publishedContext.publishedConversationGuidance ?? [],

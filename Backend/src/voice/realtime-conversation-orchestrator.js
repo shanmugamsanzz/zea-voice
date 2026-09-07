@@ -2382,6 +2382,10 @@ export class RealtimeConversationOrchestrator {
         });
     }
     const latencyAcknowledgement = armTemplateEngineTurnLatencyAcknowledgement({
+      // Wait for routing when tools are assigned: the first booking request
+      // must not emit progress speech before its TOOL route is known.
+      suppressed: Boolean(this.templateEngineState.activeWorkflowId)
+        || templateEngineToolSchemas(this.runtimeProfile.tools).length > 0,
       thresholdMs: env.VOICE_TURN_ACKNOWLEDGEMENT_AFTER_MS,
       acknowledgementText: latencyAcknowledgementText,
       isActive: () => !finalResponseReady && epoch === this.epoch && !this.finalized,
@@ -2510,6 +2514,10 @@ export class RealtimeConversationOrchestrator {
             turnEpoch: epoch,
             ...details,
           }, 'Template-engine follow-up generation and validation completed');
+        },
+        onRoutingResolved: ({ decision, activeWorkflow }) => {
+          latencyAcknowledgement.setSuppressed(decision === 'TOOL'
+            || (activeWorkflow && decision !== 'SEARCH'));
         },
         onWorkflowDiagnostics: (details) => {
           this.log.info({
