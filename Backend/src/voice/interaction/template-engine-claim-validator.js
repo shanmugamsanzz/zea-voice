@@ -66,7 +66,7 @@ function scalarFacts(value, path = '', depth = 0, result = []) {
   return result;
 }
 
-function deterministicPublishedGrounding(speech, records) {
+function deterministicPublishedGrounding(speech, records, requestVocabulary = null) {
   const response = cleanText(speech);
   if (!response || !records.length) return Object.freeze({
     deterministicallyGrounded: false, unsupportedTerms: Object.freeze([]),
@@ -75,7 +75,7 @@ function deterministicPublishedGrounding(speech, records) {
     record?.content, record?.canonicalName, ...(record?.aliases ?? []),
     ...(record?.publishedAttributePaths ?? []),
     ...scalarFacts(record?.authoritativeData ?? {}).flatMap((fact) => [fact.path, fact.value]),
-  ]).filter(Boolean).join(' ');
+  ]).concat([requestVocabulary]).filter(Boolean).join(' ');
   const allowed = tokens(corpus);
   // One- and two-character grammatical tokens are not claims. Longer lexical terms and
   // acronyms must be present in the cited published evidence; otherwise the
@@ -114,8 +114,13 @@ export function validateTemplateEngineSearchClaims({
 } = {}) {
   const response = cleanText(speech);
   const records = Array.isArray(evidence) ? evidence : [];
-  const deterministicGrounding = deterministicPublishedGrounding(response, records);
   const requestedFact = cleanText(searchInterpretation?.requestedFact, 500);
+  // The unchanged request may supply ordinary caller-language vocabulary, but
+  // never factual authority. Entities, numbers, relationships and requested
+  // facts are checked independently against cited published evidence below.
+  const deterministicGrounding = deterministicPublishedGrounding(
+    response, records, requestedFact,
+  );
   if (decision === 'CLARIFY') {
     return Object.freeze({
       supported: Boolean(response), successClaimed: false,

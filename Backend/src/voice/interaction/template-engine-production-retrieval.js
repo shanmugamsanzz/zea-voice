@@ -271,10 +271,59 @@ function candidateRequestedRecordIds(candidate) {
     .map((value) => cleanText(value, 160)).filter(Boolean))].sort();
 }
 
+function normalizedPublishedForm(value) {
+  return cleanText(publishedNameText(value), 500).toLocaleLowerCase()
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim();
+}
+
+function strongestContainedPublishedForm(candidate, utterance) {
+  const source = ` ${normalizedPublishedForm(utterance)} `;
+  return (candidate?.searchForms ?? []).map(normalizedPublishedForm).filter((form) => (
+    form && source.includes(` ${form} `)
+  )).sort((left, right) => {
+    const tokenDifference = searchableTokens(right).length - searchableTokens(left).length;
+    return tokenDifference || right.length - left.length;
+  })[0] ?? null;
+}
+
+function uniqueCandidateIdentities(candidates, utterance) {
+  const identities = new Map();
+  for (const candidate of candidates) {
+    const requestedRecordIds = candidateRequestedRecordIds(candidate);
+    const matchedForm = strongestContainedPublishedForm(candidate, utterance);
+    if (!requestedRecordIds.length || !matchedForm) continue;
+    const identity = [
+      normalized(candidate.knowledgeBaseId), Number(candidate.publicationRevision),
+      candidate.recordType, requestedRecordIds.join('|'),
+    ].join(':');
+    const current = identities.get(identity);
+    if (!current || searchableTokens(matchedForm).length
+      > searchableTokens(current.matchedForm).length) {
+      identities.set(identity, { candidate, requestedRecordIds, matchedForm });
+    }
+  }
+  return identities;
+}
+
+function deterministicFactualRequestKind(value) {
+  const text = cleanText(value, 2_000).toLocaleLowerCase();
+  if (/(?:\b(?:compare|comparison|difference|different|versus|vs)\b|வித்தியாச|ஒப்பிட)/iu.test(text)) {
+    return 'comparison';
+  }
+  if (/(?:\b(?:price|cost|rate|fee|charge|amount|how much)\b|விலை|எவ்வள|கட்டணம்)/iu.test(text)) {
+    return 'fact';
+  }
+  if (/(?:\b(?:which|what|available|options|list|detail|details|explain|tell|about|include|includes)\b|என்னென்ன|எந்தெந்த|கிடைக்க|விருப்ப|பற்றி|விவர|சொல்லு|என்ன வரும்)/iu.test(text)) {
+    return 'fact';
+  }
+  return null;
+}
+
 /**
- * Resolve only a complete, exact published identity. Phrase-contained and
- * partial matches deliberately remain on the semantic router because the
- * remaining words may express an action, correction, comparison or refusal.
+ * Resolve only identities proved by complete published names or aliases.
+ * Natural wrapper words may surround those identities. Multiple independently
+ * named items form a comparison set; one shared alias that maps to multiple
+ * records remains ambiguous and therefore stays on the semantic router.
  */
 export function deterministicPublishedRequestDecision({
   artifacts, scope, usageDirection = 'both', latestUtterance,
@@ -295,37 +344,46 @@ export function deterministicPublishedRequestDecision({
           || assigned.some((id) => normalized(id) === normalized(scope.agentId)));
     }),
   };
-  const exact = exactPublishedCandidates(scopedArtifacts, {
+  const publishedMatches = exactPublishedCandidates(scopedArtifacts, {
     tenantId: scope.tenantId,
     agentId: scope.agentId,
     usageDirection,
-  }, { query: utterance }, 50).filter((candidate) => (
-    Number(candidate.score) === 1
+  }, { query: utterance }, 50);
+  if (publishedMatches.some((candidate) => (
+    candidate.recordType === 'WORKFLOW_RULE' && Number(candidate.score) >= 0.98
+  ))) return null;
+  const exact = publishedMatches.filter((candidate) => (
+    Number(candidate.score) >= 0.98
     && ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(candidate.recordType)
     && ['published_exact', 'published_category_exact'].includes(candidate.matchMethod)
   ));
   if (!exact.length) return null;
 
   // A materialized category aggregate is stronger than its optional category
-  // heading record, but an exact item/category collision is still ambiguous.
+  // heading record. Explicit items outrank their surrounding category name.
   const exactItems = exact.filter((candidate) => candidate.recordType === 'CATALOG_ITEM');
   const aggregateCategories = exact.filter((candidate) => (
     candidate.recordType === 'CATALOG_CATEGORY'
     && Array.isArray(candidate.evidenceRecordIds)
     && candidate.evidenceRecordIds.length > 0
   ));
-  if (exactItems.length && aggregateCategories.length) return null;
   const eligible = exactItems.length ? exactItems
     : aggregateCategories.length ? aggregateCategories : exact;
-  const identities = new Map();
-  for (const candidate of eligible) {
-    const requestedRecordIds = candidateRequestedRecordIds(candidate);
-    if (!requestedRecordIds.length) continue;
-    const identity = `${candidate.recordType}:${requestedRecordIds.join('|')}`;
-    if (!identities.has(identity)) identities.set(identity, { candidate, requestedRecordIds });
-  }
-  if (identities.size !== 1) return null;
-  const [{ candidate, requestedRecordIds }] = identities.values();
+  const identities = uniqueCandidateIdentities(eligible, utterance);
+  if (!identities.size) return null;
+  const selections = [...identities.values()];
+  const itemComparison = selections.length > 1
+    && selections.every(({ candidate }) => candidate.recordType === 'CATALOG_ITEM');
+  if (selections.length > 1 && !itemComparison) return null;
+  const requestKind = deterministicFactualRequestKind(utterance);
+  if (itemComparison && requestKind !== 'comparison') return null;
+  if (itemComparison && new Set(selections.map(({ matchedForm }) => matchedForm)).size
+    !== selections.length) return null;
+  if (!itemComparison && Number(selections[0].candidate.score) < 1 && !requestKind) return null;
+  const [{ candidate }] = selections;
+  const requestedRecordIds = itemComparison
+    ? [...new Set(selections.flatMap((selection) => selection.requestedRecordIds))].sort()
+    : selections[0].requestedRecordIds;
   return Object.freeze({
     decision: 'SEARCH', response: '', clarification: null,
     search: Object.freeze({
@@ -337,6 +395,63 @@ export function deterministicPublishedRequestDecision({
       // carries that identity; individual items reserve their one record.
       preferredRecordIds: Object.freeze(candidate.recordType === 'CATALOG_ITEM'
         ? requestedRecordIds : []),
+    }),
+    tool: null, nextQuestion: null, stateUpdate: null,
+  });
+}
+
+const contextualReferenceTokens = new Set([
+  'it', 'its', 'this', 'that', 'these', 'those', 'them', 'their',
+  'அது', 'அதுல', 'அதில்', 'அதை', 'அதன்', 'அதுக்கு',
+  'இது', 'இதுல', 'இதில்', 'இதை', 'இதன்', 'இதுக்கு', 'அவை', 'இவை',
+  'athu', 'athula', 'athil', 'athoda', 'ithu', 'ithula', 'ithil', 'ithoda',
+]);
+
+function activePublishedCatalogRecordIds(artifacts, scope, usageDirection) {
+  const activePublications = new Set((scope?.publications ?? []).map((publication) => (
+    `${normalized(publication?.knowledgeBaseId)}:${Number(publication?.publicationRevision)}`
+  )));
+  return new Set((artifacts?.bundles ?? []).flatMap((bundle) => {
+    const publicationKey = `${normalized(bundle?.knowledgeBaseId)}:${Number(bundle?.publicationRevision)}`;
+    const assigned = Array.isArray(bundle?.assignedAgentIds) ? bundle.assignedAgentIds : [];
+    if (!activePublications.has(publicationKey)
+      || (scope?.agentId && assigned.length
+        && !assigned.some((id) => normalized(id) === normalized(scope.agentId)))) return [];
+    return (bundle.records ?? []).flatMap((record) => {
+      const type = normalized(record.record_type ?? record.recordType);
+      const usage = normalized(record.usage_direction ?? record.usageDirection ?? 'both');
+      const id = cleanText(record.record_id ?? record.recordId ?? record.id, 160);
+      return ['catalog_item', 'catalog_category'].includes(type)
+        && ['both', normalized(usageDirection)].includes(usage) && id ? [normalized(id)] : [];
+    });
+  }));
+}
+
+/**
+ * Bind an explicit conversational reference only to record IDs already
+ * verified in call state and still present in the active publication. A new
+ * published name must be resolved before this function is considered.
+ */
+export function deterministicContextualRequestDecision({
+  artifacts, scope, usageDirection = 'both', latestUtterance, state = {},
+} = {}) {
+  const utterance = cleanText(latestUtterance, 2_000);
+  const tokens = searchableTokens(utterance);
+  if (tokens.length < 2 || !tokens.some((token) => contextualReferenceTokens.has(token))) return null;
+  const rememberedComparison = textList(state.comparisonRecordIds, 20);
+  const rememberedSingle = textList(state.lastReferencedRecordIds, 20);
+  const remembered = rememberedComparison.length > 1
+    ? rememberedComparison : (rememberedSingle.length === 1 ? rememberedSingle : []);
+  if (!remembered.length) return null;
+  const active = activePublishedCatalogRecordIds(artifacts, scope, usageDirection);
+  if (!remembered.every((recordId) => active.has(normalized(recordId)))) return null;
+  return Object.freeze({
+    decision: 'SEARCH', response: '', clarification: null,
+    search: Object.freeze({
+      query: utterance,
+      requestedFact: utterance,
+      contextualReference: 'verified_previous_selection',
+      preferredRecordIds: Object.freeze([...remembered]),
     }),
     tool: null, nextQuestion: null, stateUpdate: null,
   });
@@ -847,6 +962,7 @@ export async function retrieveTemplateEngineEvidence({
   latestUtterance = null,
   contextualMemoryVerified = false,
   contextualMemoryCandidate = false,
+  deterministicRequestVerified = false,
   requestMeaning = null,
   reviewEntityCandidates = null,
   reviewContextualCandidates = null,
@@ -863,7 +979,7 @@ export async function retrieveTemplateEngineEvidence({
   assertCurrentTurn();
   const resolutionUtterance = requestMeaning?.kind === 'published_welcome_continuation'
     ? requestMeaning.query : latestUtterance;
-  if (!contextualMemoryVerified && !contextualMemoryCandidate) {
+  if (!deterministicRequestVerified && !contextualMemoryVerified && !contextualMemoryCandidate) {
     state = { ...state, lastReferencedRecordIds: [], comparisonRecordIds: [] };
     if (searchDecision?.search) searchDecision = { ...searchDecision, search: {
       ...searchDecision.search, preferredRecordIds: [], contextualReference: null,
@@ -871,7 +987,22 @@ export async function retrieveTemplateEngineEvidence({
         ? requestMeaning.query : latestUtterance || searchDecision.search.query,
     } };
   }
-  const normalizedSearch = normalizeTemplateEngineSearchDecision(searchDecision, state);
+  // Deterministic IDs came from this turn's assigned publication snapshot,
+  // not from model output. Keep them through generic search normalization;
+  // the focused-record check below still rejects any ID outside that exact
+  // tenant/agent/revision scope before provider or hydration work starts.
+  const normalizationState = deterministicRequestVerified ? {
+    ...state,
+    lastReferencedRecordIds: [
+      ...(state.lastReferencedRecordIds ?? []),
+      ...(searchDecision?.search?.preferredRecordIds ?? []),
+    ],
+    comparisonRecordIds: (searchDecision?.search?.preferredRecordIds ?? []).length > 1
+      ? searchDecision.search.preferredRecordIds : state.comparisonRecordIds,
+  } : state;
+  const normalizedSearch = normalizeTemplateEngineSearchDecision(
+    searchDecision, normalizationState,
+  );
   if (!normalizedSearch.valid) throw new TypeError('Template-engine retrieval requires valid SEARCH output');
   searchDecision = normalizedSearch.value;
   let search = searchDecision?.search;
@@ -955,7 +1086,9 @@ export async function retrieveTemplateEngineEvidence({
   // lookup still lets a rewritten single-subject query discard other operands.
   if (resolutionUtterance && exactCatalog.length) {
     search = Object.freeze({ ...search, query: resolutionUtterance,
-      contextualReference: null, preferredRecordIds: Object.freeze([]) });
+      contextualReference: deterministicRequestVerified ? search.contextualReference : null,
+      preferredRecordIds: Object.freeze(deterministicRequestVerified
+        ? search.preferredRecordIds : []) });
     searchDecision = Object.freeze({ ...searchDecision, search });
   }
   // A unique explicit published name outranks contextual overview/FAQ matches.
@@ -1047,7 +1180,7 @@ export async function retrieveTemplateEngineEvidence({
       candidateNamespace: 'CATALOG', action: 'CONTINUE', requiresCandidateConfirmation: false,
       ambiguity: Object.freeze({ detected: false, candidates: Object.freeze([]) }),
     });
-  } else if (exactCatalog.length) {
+  } else if (exactCatalog.length && !deterministicRequestVerified) {
     search = Object.freeze({ ...search, preferredRecordIds: Object.freeze([]) });
     searchDecision = Object.freeze({ ...searchDecision, search });
   } else if (contextualMemoryVerified && preferred.size === 1 && contextualRecords.length === 1
@@ -1071,12 +1204,58 @@ export async function retrieveTemplateEngineEvidence({
     .filter((candidate) => candidate && resolvedIdentities.has(
       candidateIdentityKey(candidate, input.tenantId),
     )));
+  const deterministicRecordIds = new Set(deterministicRequestVerified ? [
+    ...(search.preferredRecordIds ?? []),
+    ...exactCatalog.flatMap((candidate) => (
+      candidate.recordType === 'CATALOG_CATEGORY' && candidate.evidenceRecordIds?.length
+        ? candidate.evidenceRecordIds : [candidate.recordId]
+    )),
+  ].map(normalized).filter(Boolean) : []);
+  const focusedDeterministicCandidates = deterministicRecordIds.size
+    ? scopedBundles.flatMap((bundle) => (bundle.records ?? [])
+      .filter((record) => deterministicRecordIds.has(normalized(
+        record.record_id ?? record.recordId ?? record.id,
+      )) && ['both', input.usageDirection].includes(normalized(
+        record.usage_direction ?? record.usageDirection ?? 'both',
+      )))
+      .map((record) => publishedRecordCandidate(record, bundle, input, {
+        matchMethod: 'published_deterministic_id',
+      }))
+      .filter(Boolean)) : [];
+  const focusedIds = new Set(focusedDeterministicCandidates.map((candidate) => (
+    normalized(candidate.recordId)
+  )));
+  const focusedCoordinatesById = new Map();
+  for (const candidate of focusedDeterministicCandidates) {
+    const id = normalized(candidate.recordId);
+    const coordinates = focusedCoordinatesById.get(id) ?? new Set();
+    coordinates.add(`${normalized(candidate.knowledgeBaseId)}:${candidate.publicationRevision}`);
+    focusedCoordinatesById.set(id, coordinates);
+  }
+  if (deterministicRecordIds.size
+    && [...deterministicRecordIds].some((recordId) => !focusedIds.has(recordId)
+      || focusedCoordinatesById.get(recordId)?.size !== 1)) {
+    throw new AppError(503, 'A deterministically resolved record is outside the active publication',
+      'TEMPLATE_ENGINE_REQUESTED_ENTITY_COVERAGE_INCOMPLETE', {
+        requestedCount: deterministicRecordIds.size,
+        retainedCount: focusedIds.size,
+      });
+  }
   const route = classification(
     input, search, state, entityResolution, conversationGuidance,
   );
   let channelPromise;
   const searchChannels = () => {
     channelPromise ??= (async () => {
+      if (focusedDeterministicCandidates.length) {
+        return Object.freeze({
+          channels: Object.freeze({
+            structured: Object.freeze(focusedDeterministicCandidates),
+            bm25: Object.freeze([]),
+            qdrant: Object.freeze([]),
+          }),
+        });
+      }
       const result = await (dependencies.searchCandidates ?? searchParallelHybridCandidates)({
         input,
         classification: route,
@@ -1107,7 +1286,8 @@ export async function retrieveTemplateEngineEvidence({
   const identityReviewApplicable = uncertainExactIdentity || ![
     templateEngineSearchKinds.OVERVIEW,
   ].includes(route.searchKind);
-  if ((!exactCatalog.length || uncertainExactIdentity) && !contextualMemoryVerified
+  if ((!exactCatalog.length || uncertainExactIdentity) && !deterministicRequestVerified
+    && !contextualMemoryVerified
     && requestMeaning?.kind !== 'published_welcome_continuation'
     && identityReviewApplicable && reviewEntityCandidates) {
     // Semantic hits are hints only. Rebind their identities to active published
@@ -1399,6 +1579,8 @@ export async function retrieveTemplateEngineEvidence({
         ambiguityDetected: entityResolution?.ambiguity?.detected === true,
       }),
       verifiedPublishedEntityFastPath: verifiedPublishedEntitySelection !== null,
+      focusedDeterministicRetrieval: focusedDeterministicCandidates.length > 0,
+      providerSearchPerformed: focusedDeterministicCandidates.length === 0,
       identityReviewApplicable,
       selectionRetryAttempted,
       requestedEntityHydrationIncomplete,

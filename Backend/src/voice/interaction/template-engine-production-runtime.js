@@ -4,6 +4,7 @@ import { normalizedSpeechBudget, speechBudgetInstruction } from './template-engi
 import { applyMinimalTemplateEngineStateUpdate, createMinimalTemplateEngineState } from './template-engine-state.js';
 import { routeTemplateEngineUtterance, respondToTemplateEngineSearch } from './template-engine-orchestrator.js';
 import {
+  deterministicContextualRequestDecision,
   deterministicPublishedRequestDecision,
   loadTemplateEnginePublishedContext,
   retrieveTemplateEngineEvidence,
@@ -182,19 +183,68 @@ export function publishedResolutionAmbiguity(
   });
 }
 
-function searchTokens(value) {
-  return new Set(cleanText(value).toLocaleLowerCase()
-    .replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').split(/\s+/u)
-    .filter((token) => token.length > 1));
+export function verifiedDeterministicAnswerPath({
+  deterministicRequestResolved = false, retrieval, ambiguity,
+} = {}) {
+  if (deterministicRequestResolved !== true
+    || retrieval?.diagnostics?.focusedDeterministicRetrieval !== true
+    || retrieval?.diagnostics?.providerSearchPerformed !== false
+    || retrieval?.diagnostics?.requestedEntityHydrationIncomplete === true
+    || ambiguity?.required === true) return false;
+  const requested = normalizedRecordIdSet(retrieval?.requestedEntityRecordIds);
+  if (!requested.size) return false;
+  const verified = normalizedRecordIdSet((retrieval?.evidence ?? [])
+    .filter((source) => source?.verified === true && source?.callerFacing !== false)
+    .map((source) => source.recordId));
+  return verified.size > 0 && [...requested].every((recordId) => verified.has(recordId));
 }
 
-function tokenCoverage(needle, haystack) {
-  const wanted = searchTokens(needle);
-  const available = searchTokens(haystack);
-  if (!wanted.size) return 0;
-  let matched = 0;
-  for (const token of wanted) if (available.has(token)) matched += 1;
-  return matched / wanted.size;
+export function enforceVerifiedFactualArchitecture({
+  deterministicAnswerPath = false, answered, followUpRepair = null,
+} = {}) {
+  const postSearch = answered?.diagnostics ?? {};
+  const enforced = deterministicAnswerPath === true
+    && answered?.decision?.decision === 'RESPONSE';
+  if (!enforced) return Object.freeze({ enforced: false, path: 'reviewed_or_non_response' });
+  const answerGenerationCalls = Number(postSearch.answerGenerationCalls);
+  const answerRepairAttempted = postSearch.repairAttempted === true;
+  const answerRepairReason = cleanText(postSearch.initialValidationReason, 160) || null;
+  const followUpRepairAttempted = followUpRepair?.attempted === true;
+  const violations = [];
+  if (postSearch.verifiedAnswerFastPath !== true) violations.push('compact_answer_path_not_used');
+  if (postSearch.semanticValidationSkipped !== true) violations.push('semantic_validation_not_skipped');
+  if (!Number.isInteger(answerGenerationCalls) || answerGenerationCalls < 1) {
+    violations.push('answer_generation_count_missing');
+  }
+  if (!answerRepairAttempted && answerGenerationCalls !== 1) {
+    violations.push('clear_answer_requires_one_generation_call');
+  }
+  if (answerRepairAttempted && (!answerRepairReason || answerGenerationCalls < 2)) {
+    violations.push('answer_repair_requires_specific_validation_failure');
+  }
+  if (violations.length) {
+    throw new AppError(500, 'Verified factual turn violated the production architecture',
+      'TEMPLATE_ENGINE_ARCHITECTURE_VIOLATION', {
+        violations: Object.freeze(violations), answerGenerationCalls,
+        answerRepairAttempted, answerRepairReason,
+      });
+  }
+  return Object.freeze({
+    enforced: true,
+    path: answerRepairAttempted || followUpRepairAttempted
+      ? 'verified_factual_with_targeted_repair' : 'verified_factual_one_llm',
+    stages: Object.freeze([
+      'deterministic_resolution', 'focused_retrieval', 'grounded_answer_generation',
+      'deterministic_validation', 'tts_ready',
+    ]),
+    routingLlmCalls: 0,
+    semanticReviewLlmCalls: 0,
+    answerGenerationCalls,
+    answerRepairAttempted,
+    answerRepairReason,
+    followUpRepairAttempted,
+    ttsReady: true,
+  });
 }
 
 function normalizedRecordIdSet(values) {
@@ -227,77 +277,6 @@ function rememberedReferenceCandidate({ search, state } = {}) {
     ? normalizedRecordIdSet(state?.comparisonRecordIds)
     : normalizedRecordIdSet(state?.lastReferencedRecordIds);
   return equalRecordIdSets(preferred, remembered);
-}
-
-function speculativeSearchDecision(input, state) {
-  return Object.freeze({
-    decision: 'SEARCH', response: '', clarification: null,
-    search: Object.freeze({
-      query: cleanText(input.latestUtterance, 2_000),
-      requestedFact: null,
-      contextualReference: null,
-      preferredRecordIds: [],
-    }),
-    tool: null, nextQuestion: null, stateUpdate: null,
-  });
-}
-
-function speculativeEvidenceCompatible(retrieval, decision, input) {
-  if (!retrieval || retrieval.error || !Array.isArray(retrieval.evidence)) return false;
-  // Unresolved speculative hits must reach foreground multilingual review;
-  // factual text in a hit does not establish the caller's intended identity.
-  if (retrieval.entityResolution && (retrieval.entityResolution.action !== 'CONTINUE'
-    || retrieval.entityResolution.requiresCandidateConfirmation === true)) return false;
-  const preferred = new Set((decision.search?.preferredRecordIds ?? []).map((id) => cleanText(id, 160)));
-  const retrieved = new Set(retrieval.evidence.map((record) => cleanText(record?.recordId, 160)));
-  if ([...preferred].some((recordId) => !retrieved.has(recordId))) return false;
-  const contextual = preferred.size > 0;
-  const queryCompatible = Math.max(
-    tokenCoverage(input.latestUtterance, decision.search?.query),
-    tokenCoverage(decision.search?.query, input.latestUtterance),
-  ) >= 0.6;
-  const requestedFact = cleanText(decision.search?.requestedFact, 500);
-  const evidenceText = retrieval.evidence.map((record) => [
-    record?.content,
-    ...(record?.publishedAttributePaths ?? []),
-    JSON.stringify(record?.authoritativeData ?? {}),
-  ].join(' ')).join(' ');
-  const factAvailable = !requestedFact || tokenCoverage(requestedFact, evidenceText) > 0;
-  return (contextual || queryCompatible) && factAvailable;
-}
-
-export function verifiedPublishedEntityFastPath(retrieval, decision, input) {
-  if (!retrieval || retrieval.error || !Array.isArray(retrieval.evidence)
-    || retrieval.entityResolution?.action !== 'CONTINUE'
-    || retrieval.entityResolution?.reason !== 'published_exact_selection'
-    || retrieval.entityResolution?.requiresCandidateConfirmation === true
-    || retrieval.entityResolution?.ambiguity?.detected === true
-    || retrieval.diagnostics?.requestedEntityHydrationIncomplete === true
-    || retrieval.verifiedPublishedEntitySelection?.verified !== true
-    || !['published_exact', 'published_category_exact'].includes(
-      retrieval.verifiedPublishedEntitySelection?.matchMethod,
-    )) return false;
-  const requested = new Set((retrieval.requestedEntityRecordIds ?? [])
-    .map((id) => cleanText(id, 160).toLocaleLowerCase()).filter(Boolean));
-  if (!requested.size) return false;
-  const selectionRequested = new Set((
-    retrieval.verifiedPublishedEntitySelection?.requestedRecordIds ?? []
-  ).map((id) => cleanText(id, 160).toLocaleLowerCase()).filter(Boolean));
-  if (selectionRequested.size !== requested.size
-    || [...requested].some((id) => !selectionRequested.has(id))) return false;
-  const verified = new Set(retrieval.evidence.filter((source) => (
-    source?.verified === true && source?.callerFacing !== false
-  )).map((source) => cleanText(source?.recordId, 160).toLocaleLowerCase()).filter(Boolean));
-  if ([...requested].some((id) => !verified.has(id))) return false;
-  const currentRequest = cleanText(input?.latestUtterance, 2_000);
-  const routedQuery = cleanText(decision?.search?.query, 2_000);
-  const resolvedQuery = cleanText(retrieval.resolvedSearch?.query ?? retrieval.search?.query, 2_000);
-  return Boolean(currentRequest) && Math.max(
-    tokenCoverage(currentRequest, routedQuery),
-    tokenCoverage(routedQuery, currentRequest),
-    tokenCoverage(currentRequest, resolvedQuery),
-    tokenCoverage(resolvedQuery, currentRequest),
-  ) >= 0.6;
 }
 
 async function composeWithFollowUpRepair({
@@ -438,81 +417,6 @@ function searchAfterRejectedDirectSpeech(latestUtterance) {
   });
 }
 
-function publicationScopeKeys(scope = {}) {
-  return new Set((scope.publications ?? []).map((publication) => [
-    cleanText(publication?.knowledgeBaseId, 160).toLocaleLowerCase(),
-    Number(publication?.publicationRevision),
-  ].join(':')));
-}
-
-function normalizedBoundaryValue(value, maximum = 2_000) {
-  return cleanText(value, maximum).toLocaleLowerCase();
-}
-
-function speculativeReuseBoundary(input, scope) {
-  return Object.freeze({
-    tenantId: normalizedBoundaryValue(scope?.tenantId, 160),
-    agentId: normalizedBoundaryValue(scope?.agentId, 160),
-    publications: Object.freeze([...publicationScopeKeys(scope)].sort()),
-    request: normalizedBoundaryValue(input?.latestUtterance),
-    turn: normalizedBoundaryValue(
-      input?.turnBoundaryId ?? `${input?.callId ?? ''}:${input?.turnEpoch ?? ''}`,
-      300,
-    ),
-  });
-}
-
-export function sameSpeculativeRetrievalBoundary(boundary, input, scope) {
-  if (!boundary || !input || !scope) return false;
-  const current = speculativeReuseBoundary(input, scope);
-  return Boolean(current.request && current.turn)
-    && boundary.tenantId === current.tenantId
-    && boundary.agentId === current.agentId
-    && boundary.request === current.request
-    && boundary.turn === current.turn
-    && Array.isArray(boundary.publications)
-    && boundary.publications.length === current.publications.length
-    && boundary.publications.every((key, index) => key === current.publications[index]);
-}
-
-function samePublishedRetrievalBoundary(retrieval, scope) {
-  if (!retrieval?.scope || !scope) return false;
-  if (cleanText(retrieval.scope.tenantId, 160).toLocaleLowerCase()
-      !== cleanText(scope.tenantId, 160).toLocaleLowerCase()
-    || cleanText(retrieval.scope.agentId, 160).toLocaleLowerCase()
-      !== cleanText(scope.agentId, 160).toLocaleLowerCase()) return false;
-  const expected = publicationScopeKeys(scope);
-  const actual = publicationScopeKeys(retrieval.scope);
-  return expected.size === actual.size && [...expected].every((key) => actual.has(key));
-}
-
-function speculativeRouteCompatible(decision, input) {
-  if (decision?.decision !== 'SEARCH'
-    || (decision.search?.preferredRecordIds ?? []).length) return false;
-  const contextualReference = cleanText(decision.search?.contextualReference, 500);
-  if (contextualReference
-    && tokenCoverage(contextualReference, input.latestUtterance) < 0.8) return false;
-  return Math.max(
-    tokenCoverage(input.latestUtterance, decision.search?.query),
-    tokenCoverage(decision.search?.query, input.latestUtterance),
-  ) >= 0.6;
-}
-
-async function completedSpeculationWithin(promise, waitMs) {
-  if (!promise) return null;
-  const timeout = Math.max(0, Math.min(Number(waitMs) || 0, 100));
-  if (!timeout) return null;
-  let timer;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeout); }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
 const deterministicWorkflowFieldTypes = new Set([
   'number', 'integer', 'date', 'time', 'email', 'phone', 'string', 'text',
 ]);
@@ -537,8 +441,20 @@ export function deterministicPendingWorkflowFieldDecision(context, utterance, op
   if (reviewedTextWorkflowFieldTypes.has(schemaType)) {
     const excluded = new Set((options.excludedPhrases ?? [])
       .map((value) => scalarIdentity(value)).filter(Boolean));
-    if (!text || text.length > 240 || words.length !== 1 || /[?ï¼Ÿ]/u.test(text)
-      || excluded.has(scalarIdentity(text))) return null;
+    const identity = scalarIdentity(text);
+    const containsExcludedControl = [...excluded].some((phrase) => (
+      ` ${identity} `.includes(` ${phrase} `)
+    ));
+    const configuredValues = [
+      ...(Array.isArray(field.schema?.enum) ? field.schema.enum : []),
+      ...(Array.isArray(field.options) ? field.options : []),
+    ].map((value) => scalarIdentity(value)).filter(Boolean);
+    const configuredScalar = configuredValues.includes(identity);
+    const titleCasedScalar = words.length > 1 && words.length <= 8
+      && words.every((word) => /^\p{Lu}[\p{L}\p{M}'’-]*$/u.test(word));
+    if (!text || text.length > 240 || words.length < 1
+      || (words.length !== 1 && !configuredScalar && !titleCasedScalar)
+      || /[?？]/u.test(text) || containsExcludedControl) return null;
   }
   const value = extractSchemaFieldValue({
     ...field.schema, type: schemaType, question: field.question, label: field.key,
@@ -644,6 +560,40 @@ export function deterministicAcknowledgementDecision({
     }),
     nextQuestion: null, stateUpdate: null,
   });
+}
+
+export function deterministicPendingClarificationContinuation({
+  artifacts, scope, usageDirection = 'both', utterance, acknowledgementPhrases = [],
+  pendingClarification, unansweredRequest = null,
+} = {}) {
+  if (!acknowledgementOnly(utterance, acknowledgementPhrases)) return null;
+  const candidates = Array.isArray(pendingClarification?.candidates)
+    ? pendingClarification.candidates.map((candidate) => cleanText(candidate, 300)).filter(Boolean)
+    : [];
+  if (candidates.length !== 1) return null;
+  const resolved = deterministicPublishedRequestDecision({
+    artifacts, scope, usageDirection, latestUtterance: candidates[0],
+  });
+  if (resolved?.decision !== 'SEARCH') return null;
+  return Object.freeze({
+    ...resolved,
+    search: Object.freeze({
+      ...resolved.search,
+      query: [candidates[0], cleanText(unansweredRequest, 1_000)].filter(Boolean).join(' '),
+      requestedFact: cleanText(unansweredRequest, 1_000) || candidates[0],
+      contextualReference: candidates[0],
+    }),
+  });
+}
+
+function mostRecentAssistantQuestion(turns = []) {
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    if (turns[index]?.role !== 'assistant') continue;
+    const text = cleanText(turns[index]?.content, 1_000);
+    if (/[?？]\s*$/u.test(text)) return text;
+    break;
+  }
+  return null;
 }
 
 async function runWorkflow(input, decision, state, context, dependencies) {
@@ -816,40 +766,6 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     }),
     unansweredRequest: input.unansweredRequest,
   };
-  let completedSpeculativeResult = null;
-  let completedSpeculativeBoundary = null;
-  const currentSpeculativeBoundary = speculativeReuseBoundary(input, publishedContext.scope);
-  // Active workflow replies normally use configured fields and saved values.
-  // Let routing request foreground evidence for a factual side question instead
-  // of launching a knowledge search for every collection/confirmation turn.
-  // Retrieval must never start until a deterministic pre-router has explicitly
-  // established that the current utterance is factual. The live caller path
-  // currently leaves this false, preventing acknowledgements, fillers,
-  // misunderstanding, closing and cancellation turns from touching the KB.
-  const speculativeRetrieval = input.speculativeRetrievalAuthorized === true
-    && !state.activeWorkflowId
-    && typeof dependencies.retrieveSpeculativeEvidence === 'function'
-    ? dependencies.retrieveSpeculativeEvidence({
-      auth: input.auth,
-      scope: publishedContext.scope,
-      callId: input.callId,
-      usageDirection: input.usageDirection,
-      language: input.language,
-      searchDecision: speculativeSearchDecision(input, state),
-      latestUtterance: input.latestUtterance,
-      state: { ...state, lastReferencedRecordIds: [], comparisonRecordIds: [] },
-      runtimeProfile: input.runtimeProfile,
-      preloadedArtifacts: publishedContext.artifacts,
-      preloadedPublicationIndex: publishedContext.publicationIndex,
-      conversationGuidance: initialConversationGuidance,
-      isTurnCurrent: dependencies.isTurnCurrent,
-      speculative: true,
-    }).catch((error) => Object.freeze({ error })).then((value) => {
-      completedSpeculativeResult = value;
-      completedSpeculativeBoundary = currentSpeculativeBoundary;
-      return value;
-    })
-    : null;
   const workflowRoutingContext = templateEngineWorkflowRoutingContext({
     state, publishedWorkflows: publishedContext.publishedWorkflows,
     assignedTools: input.assignedTools, informationFields: input.informationFields,
@@ -880,23 +796,36 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       ...(input.acknowledgementPhrases ?? []), ...(input.explicitStopPhrases ?? []),
     ] },
   );
-  const deterministicAcknowledgement = deterministicWorkflowDecision ? null
+  const deterministicClarificationContinuation = deterministicWorkflowDecision ? null
+    : deterministicPendingClarificationContinuation({
+      artifacts: publishedContext.artifacts,
+      scope: publishedContext.scope,
+      usageDirection: input.usageDirection,
+      utterance: input.latestUtterance,
+      acknowledgementPhrases: input.acknowledgementPhrases,
+      pendingClarification: state.pendingClarification,
+      unansweredRequest: input.unansweredRequest,
+    });
+  const deterministicAcknowledgement = deterministicWorkflowDecision
+    || deterministicClarificationContinuation ? null
     : deterministicAcknowledgementDecision({
       utterance: input.latestUtterance,
       acknowledgementPhrases: input.acknowledgementPhrases,
       workflowContext: workflowRoutingContext,
       // Published welcome continuation owns acknowledgements to the welcome
       // question because it carries the configured next-step semantics.
-      pendingQuestion: common.welcomeContinuation ? null : input.pendingQuestion,
+      pendingQuestion: common.welcomeContinuation ? null
+        : input.pendingQuestion ?? mostRecentAssistantQuestion(state.recentCompleteTurns),
     });
   const reviewedTextWorkflowDecision = deterministicWorkflowDecision
-    || deterministicAcknowledgement ? null
+    || deterministicClarificationContinuation || deterministicAcknowledgement ? null
     : await reviewPendingTextWorkflowField(
       workflowRoutingContext, input.latestUtterance, dependencies.invokeStructuredLlm,
     );
   const workflowFieldDecision = deterministicWorkflowDecision ?? deterministicAcknowledgement
     ?? reviewedTextWorkflowDecision;
-  const deterministicWelcomeMeaning = workflowFieldDecision ? null
+  const deterministicWelcomeMeaning = workflowFieldDecision
+    || deterministicClarificationContinuation ? null
     : deterministicWelcomeContinuation({
       latestUtterance: input.latestUtterance,
       welcomeContinuation: common.welcomeContinuation,
@@ -920,14 +849,27 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       usageDirection: input.usageDirection,
       latestUtterance: input.latestUtterance,
     });
-  const deterministicDecision = workflowFieldDecision ?? deterministicWelcomeDecision
-    ?? deterministicPublishedDecision;
+  const deterministicContextualDecision = workflowFieldDecision || deterministicWelcomeDecision
+    || deterministicPublishedDecision || state.activeWorkflowId || state.pendingClarification ? null
+    : deterministicContextualRequestDecision({
+      artifacts: publishedContext.artifacts,
+      scope: publishedContext.scope,
+      usageDirection: input.usageDirection,
+      latestUtterance: input.latestUtterance,
+      state,
+    });
+  const deterministicDecision = workflowFieldDecision ?? deterministicClarificationContinuation
+    ?? deterministicWelcomeDecision
+    ?? deterministicPublishedDecision ?? deterministicContextualDecision;
   let routed = deterministicDecision ? Object.freeze({
     decision: deterministicDecision,
     outputValidation: Object.freeze({ valid: true, reason: deterministicWorkflowDecision
       ? 'verified_pending_field_fast_path' : deterministicAcknowledgement
-        ? 'verified_acknowledgement_fast_path' : deterministicWelcomeDecision
-          ? 'verified_pending_question_fast_path' : 'verified_published_identity_fast_path' }),
+        ? 'verified_acknowledgement_fast_path' : deterministicClarificationContinuation
+          ? 'verified_clarification_continuation_fast_path' : deterministicWelcomeDecision
+            ? 'verified_pending_question_fast_path' : deterministicPublishedDecision
+              ? 'verified_published_request_fast_path'
+              : 'verified_contextual_reference_fast_path' }),
   }) : await routeTemplateEngineUtterance(common, routingDependencies);
   let first = routed.decision;
   let initialValidationResult = routed.outputValidation?.reason ?? 'valid';
@@ -1002,53 +944,35 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     });
   }
 
-  if (!completedSpeculativeResult && speculativeRouteCompatible(first, input)) {
-    const handoff = await completedSpeculationWithin(
-      speculativeRetrieval, dependencies.speculativeRetrievalHandoffMs ?? 25,
-    );
-    if (handoff) completedSpeculativeResult = handoff;
-  }
-  if (completedSpeculativeResult
-    && (!samePublishedRetrievalBoundary(completedSpeculativeResult, publishedContext.scope)
-      || !sameSpeculativeRetrievalBoundary(
-        completedSpeculativeBoundary, input, publishedContext.scope,
-      ))) {
-    completedSpeculativeResult = null;
-    completedSpeculativeBoundary = null;
-  }
   assertCurrentTurn();
-  // A uniquely matched published name/alias whose requested records were all
-  // hydrated is already proof that this utterance is a direct entity request.
-  // It cannot be a bare acknowledgement of a pending welcome question.
-  const highConfidencePublishedEntity = verifiedPublishedEntityFastPath(
-    completedSpeculativeResult, first, input,
+  const deterministicRequestResolved = Boolean(
+    deterministicPublishedDecision || deterministicClarificationContinuation
+      || deterministicContextualDecision,
   );
-  const deterministicDirectRequest = deterministicPublishedDecision ? Object.freeze({
+  const deterministicDirectRequest = deterministicRequestResolved ? Object.freeze({
     kind: 'direct_request', originalUtterance: input.latestUtterance,
     pendingWelcomeQuestion: null, publishedNextStep: null,
   }) : null;
   const requestMeaning = deterministicWelcomeMeaning ?? deterministicDirectRequest
-    ?? (highConfidencePublishedEntity
-    ? Object.freeze({
-      kind: 'direct_request', originalUtterance: input.latestUtterance,
-      pendingWelcomeQuestion: common.welcomeContinuation?.pendingQuestion ?? null,
-      publishedNextStep: null,
-    })
-    : await resolveRequestMeaning({ latestUtterance: input.latestUtterance,
+    ?? await resolveRequestMeaning({ latestUtterance: input.latestUtterance,
       welcomeContinuation: common.welcomeContinuation, search: first.search,
       acknowledgementPhrases: input.acknowledgementPhrases,
-    }, dependencies.invokeStructuredLlm));
+    }, dependencies.invokeStructuredLlm);
   const welcomeVerified = requestMeaning.kind === 'published_welcome_continuation';
   if (welcomeVerified) first = { ...first, search: { ...first.search, query: requestMeaning.query,
     requestedFact: requestMeaning.requestedFact, contextualReference: null, preferredRecordIds: [] } };
-  const confirmedContextualReference = !welcomeVerified && !highConfidencePublishedEntity
-    && deterministicConfirmedContextualReference({ search: first.search, state });
-  const contextualMemoryCandidate = !welcomeVerified && !highConfidencePublishedEntity
+  const confirmedContextualReference = Boolean(
+    deterministicClarificationContinuation || deterministicContextualDecision,
+  )
+    || (!welcomeVerified
+      && deterministicConfirmedContextualReference({ search: first.search, state }));
+  const contextualMemoryCandidate = !welcomeVerified
     && rememberedReferenceCandidate({ search: first.search, state });
   let contextualMemoryVerified = confirmedContextualReference;
   let searchState = contextualMemoryCandidate ? state
     : { ...state, lastReferencedRecordIds: [], comparisonRecordIds: [] };
   if (!contextualMemoryCandidate && !deterministicPublishedDecision
+    && !deterministicClarificationContinuation && !deterministicContextualDecision
     && (first.search.preferredRecordIds.length || first.search.contextualReference)) {
     first = { ...first, search: { ...first.search, query: input.latestUtterance,
       contextualReference: null, preferredRecordIds: [] } };
@@ -1069,18 +993,10 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     dependencies.onConversationGuidanceSelected,
     'pre_retrieval', preRetrievalConversationGuidance,
   );
-  const guidanceCompatible = (initialConversationGuidance?.recordId ?? null)
-    === (preRetrievalConversationGuidance?.recordId ?? null);
-  // Speculation is an opportunistic optimization, never a dependency of the
-  // foreground answer. Reuse only completed, compatible verified evidence.
-  const speculativeResult = guidanceCompatible ? completedSpeculativeResult : null;
-  const usedSpeculativeRetrieval = !welcomeVerified && !contextualMemoryVerified && guidanceCompatible
-    && (highConfidencePublishedEntity
-      || speculativeEvidenceCompatible(speculativeResult, first, input));
-  // Routing and semantic reviews may finish after an interruption. Recheck the
-  // epoch immediately before consuming either speculative or foreground data.
+  // Routing and deterministic resolution may finish after an interruption.
+  // Recheck the epoch immediately before starting the single focused retrieval.
   assertCurrentTurn();
-  const retrieval = usedSpeculativeRetrieval ? speculativeResult : await dependencies.retrieveEvidence({
+  const retrieval = await dependencies.retrieveEvidence({
     auth: input.auth,
     scope: publishedContext.scope,
     callId: input.callId,
@@ -1093,12 +1009,15 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     contextualMemoryVerified,
     contextualMemoryCandidate,
     requestMeaning,
+    deterministicRequestVerified: deterministicRequestResolved,
     preloadedArtifacts: publishedContext.artifacts,
     preloadedPublicationIndex: publishedContext.publicationIndex,
     conversationGuidance: preRetrievalConversationGuidance,
     isTurnCurrent: dependencies.isTurnCurrent,
-    reviewEntityCandidates: (request) => reviewMultilingualEntity(request, dependencies.invokeStructuredLlm),
-    reviewContextualCandidates: (request) => reviewContextualSubjects(request, dependencies.invokeStructuredLlm),
+    reviewEntityCandidates: deterministicRequestResolved ? null
+      : (request) => reviewMultilingualEntity(request, dependencies.invokeStructuredLlm),
+    reviewContextualCandidates: deterministicRequestResolved ? null
+      : (request) => reviewContextualSubjects(request, dependencies.invokeStructuredLlm),
   });
   if (retrieval.resolvedSearch) {
     first = { ...first, search: retrieval.resolvedSearch };
@@ -1117,9 +1036,8 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       verifiedEvidenceCount: retrieval.evidence?.length ?? 0,
       failedChannels: Object.freeze([]),
       }),
-      speculative: Boolean(speculativeRetrieval),
-      speculativeReused: usedSpeculativeRetrieval,
-      highConfidenceFastPath: highConfidencePublishedEntity,
+      focusedDeterministicRetrieval:
+        retrieval.diagnostics?.focusedDeterministicRetrieval === true,
       confirmedContextualReferenceFastPath: confirmedContextualReference,
       ambiguity: publishedResolutionAmbiguity(retrieval.entityResolution,
         retrieval.evidence ?? [], retrieval.searchClassification),
@@ -1152,6 +1070,9 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   const resolutionAmbiguity = publishedResolutionAmbiguity(
     retrieval.entityResolution, retrieval.evidence, retrieval.searchClassification,
   );
+  const deterministicAnswerPath = verifiedDeterministicAnswerPath({
+    deterministicRequestResolved, retrieval, ambiguity: resolutionAmbiguity,
+  });
   // The post-answer grounding validator independently checks the requested
   // entity against the original utterance. A separate pre-answer entity LLM
   // review is therefore useful only when retrieval reports real ambiguity and
@@ -1177,6 +1098,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       && (retrieval.evidence ?? []).every((source) => (
         source?.verified === true && source?.callerFacing !== false
       )),
+    deterministicResolutionVerified: deterministicAnswerPath,
     maximumSpeechCharacters: input.maximumSpeechCharacters,
   }, {
     invokeStructuredLlm: dependencies.invokeStructuredLlm,
@@ -1214,6 +1136,9 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       phase: 'post_search', ...details,
     })),
   });
+  const architecture = enforceVerifiedFactualArchitecture({
+    deterministicAnswerPath, answered, followUpRepair: composed.repair,
+  });
   const speech = composed.speech;
   if (!speech) throw new AppError(502, 'Template engine produced no caller speech', 'TEMPLATE_ENGINE_SILENT_TURN');
   return Object.freeze({
@@ -1225,6 +1150,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     diagnostics: Object.freeze({
       retrieval: retrieval.diagnostics ?? null,
       postSearch: answered.diagnostics ?? null,
+      architecture,
     }),
     workflow: null,
     toolExecuted: false,

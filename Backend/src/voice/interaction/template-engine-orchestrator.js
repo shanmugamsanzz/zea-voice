@@ -885,7 +885,8 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     requestedEntityRecordIds: requiredEntityRecordIds,
     maximumSpeechCharacters: input.maximumSpeechCharacters,
   });
-  const verifiedAnswerFastPath = input.deterministicEntityCoverageVerified === true
+  const verifiedAnswerFastPath = input.deterministicResolutionVerified === true
+    && input.deterministicEntityCoverageVerified === true
     && dependencies.ambiguity?.required !== true;
   const turnInput = Object.freeze({
     answerRequirements: answerContext.answerRequirements,
@@ -950,7 +951,12 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       schema: postSearchSchemaForDecision(responseSchema, requiredDecision),
     }),
   }), messages === baseMessages ? 'answer_generation' : 'answer_repair');
-  let completion = await invokeStructuredLlm(request(baseMessages));
+  let answerGenerationCalls = 0;
+  const generateAnswer = async (answerRequest) => {
+    answerGenerationCalls += 1;
+    return invokeStructuredLlm(answerRequest);
+  };
+  let completion = await generateAnswer(request(baseMessages));
   let output = completionOutput(completion);
   let validated = validateTemplateEnginePostSearchDecision(output, allowedEvidenceIds);
   if (dependencies.ambiguity?.required === true && validated.valid
@@ -987,7 +993,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     ].filter(Boolean).join(' ');
     const requiredRepairDecision = dependencies.ambiguity?.required === true
       ? 'CLARIFY' : requestedFactAvailable ? 'RESPONSE' : null;
-    completion = await invokeStructuredLlm(request([
+    completion = await generateAnswer(request([
       ...baseMessages,
       Object.freeze({ role: 'user', content: repairInstruction }),
     ], requiredRepairDecision));
@@ -1146,7 +1152,21 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     let validation = validateTemplateEngineOutput(validationInput(
       decision, null, { deterministicOnly: true, ...additions },
     ));
-    if (validation.valid && decision.decision === 'RESPONSE'
+    if (validation.valid && verifiedAnswerFastPath && decision.decision === 'RESPONSE') {
+      if (claims.result.supported !== true) {
+        validation = Object.freeze({ valid: false, ttsAllowed: false, route: 'REJECT',
+          retrySearch: false, reason: claims.result.reason ?? 'requested_fact_not_in_evidence' });
+      } else if (claims.result.requestedFactAddressed !== true) {
+        validation = Object.freeze({ valid: false, ttsAllowed: false, route: 'REJECT',
+          retrySearch: false, reason: 'requested_fact_not_addressed' });
+      } else if (claims.result.deterministicallyGrounded !== true) {
+        validation = Object.freeze({ valid: false, ttsAllowed: false, route: 'REJECT',
+          retrySearch: false, reason: 'unsupported_factual_vocabulary',
+          details: Object.freeze({
+            unsupportedTerms: claims.result.unsupportedTerms ?? Object.freeze([]),
+          }) });
+      }
+    } else if (validation.valid && decision.decision === 'RESPONSE'
       && claims.result.requestedFactAddressed === false) {
       const requestedTokens = new Set(candidateIdentity(search.value.search.requestedFact)
         .split(/\s+/u).filter(Boolean));
@@ -1231,6 +1251,11 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
             .map(([alias]) => alias),
         })}. These numbers were not supported by the cited records. Correct their formatting or cite a supplied record that supports the actual claim; otherwise remove the claim. Never change a number merely to pass validation.`
         : null,
+      outputValidation.reason === 'unsupported_factual_vocabulary'
+        ? `Factual-vocabulary feedback: ${JSON.stringify(
+          outputValidation.details?.unsupportedTerms ?? [],
+        )}. Rewrite using only factual wording present in the exact request or cited evidence. Natural grammar is allowed, but do not introduce new entities, attributes, descriptions or relationships.`
+        : null,
       'Return one corrected JSON object matching the supplied post-search schema.',
       'Validate against the complete verified evidence set. A multi-record comparison may combine only attributes supported by its cited records.',
       'The corrected RESPONSE must directly answer searchInterpretation.requestedFact. Do not substitute another true but unrequested attribute.',
@@ -1250,7 +1275,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     const requiredRepairDecision = clarificationAmbiguity?.required === true
       ? 'CLARIFY' : answerableEvidence || budgetRepairRequired ? 'RESPONSE'
         : requestedFactAvailable ? 'RESPONSE' : null;
-    completion = await invokeStructuredLlm(request([
+    completion = await generateAnswer(request([
       ...baseMessages,
       Object.freeze({ role: 'user', content: groundingRepairInstruction }),
     ], requiredRepairDecision));
@@ -1412,6 +1437,8 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     initialNumericValidationDetails,
     initialSemanticValidationReason,
     semanticValidationSkipped,
+    verifiedAnswerFastPath,
+    answerGenerationCalls,
   });
   if (typeof dependencies.onPostSearchDiagnostics === 'function') {
     dependencies.onPostSearchDiagnostics(diagnostics);

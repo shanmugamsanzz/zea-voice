@@ -21,6 +21,52 @@ const operations = new Map([
   ['template_engine_pending_text_field', 'workflow_text_field_review'],
 ]);
 
+function timedOperationCalls(stageTimings, operation) {
+  return Object.values(stageTimings ?? {}).reduce((total, stage) => (
+    total + Number(stage?.operations?.[operation]?.calls ?? 0)
+  ), 0);
+}
+
+export function assertVerifiedFactualStageArchitecture({ architecture, stageTimings } = {}) {
+  if (architecture?.enforced !== true) {
+    return Object.freeze({ enforced: false, path: 'reviewed_or_non_response' });
+  }
+  const calls = Object.freeze({
+    publicationLoad: timedOperationCalls(stageTimings, 'publication_load'),
+    retrieval: timedOperationCalls(stageTimings, 'retrieval'),
+    routing: timedOperationCalls(stageTimings, 'routing'),
+    answerGeneration: timedOperationCalls(stageTimings, 'answer_generation'),
+    answerRepair: timedOperationCalls(stageTimings, 'answer_repair'),
+    claimReview: timedOperationCalls(stageTimings, 'claim_review')
+      + timedOperationCalls(stageTimings, 'validation'),
+    semanticReviews: [
+      'contextual_subject_review', 'entity_coverage_review', 'multilingual_entity_review',
+      'reference_review', 'pending_request_review', 'request_meaning_review',
+    ].reduce((total, operation) => total + timedOperationCalls(stageTimings, operation), 0),
+  });
+  const violations = [];
+  if (calls.publicationLoad !== 1) violations.push('publication_load_must_run_once');
+  if (calls.retrieval !== 1) violations.push('focused_retrieval_must_run_once');
+  if (calls.routing !== 0) violations.push('routing_llm_must_be_skipped');
+  if (calls.answerGeneration !== 1) violations.push('grounded_answer_generation_must_run_once');
+  if (calls.claimReview !== 0 || calls.semanticReviews !== 0) {
+    violations.push('semantic_validation_and_reviews_must_be_skipped');
+  }
+  const expectedRepairs = Math.max(0, Number(architecture.answerGenerationCalls) - 1);
+  if (calls.answerRepair !== expectedRepairs
+    || (expectedRepairs > 0 && architecture.answerRepairAttempted !== true)) {
+    violations.push('answer_repairs_require_recorded_validation_failure');
+  }
+  if (architecture.ttsReady !== true) violations.push('deterministic_validation_not_tts_ready');
+  if (violations.length) {
+    const error = new Error('Verified factual turn violated measured stage architecture');
+    error.code = 'TEMPLATE_ENGINE_STAGE_ARCHITECTURE_VIOLATION';
+    error.details = Object.freeze({ violations: Object.freeze(violations), calls });
+    throw error;
+  }
+  return Object.freeze({ enforced: true, path: architecture.path, calls, ttsReady: true });
+}
+
 // Sort object keys only: evidence/candidate/history array order remains part
 // of the contract. Non-JSON values disable reuse rather than collide.
 function validationKey(value) {
@@ -136,9 +182,6 @@ export function instrumentTemplateEngineTurn(dependencies) {
       'publication_load', (result) => Boolean(result?.scope && result?.artifacts)),
     retrieveEvidence: reusableOperation('retrieval', dependencies.retrieveEvidence,
       'retrieval', (result) => Array.isArray(result?.evidence) && !result?.error, retrievalKey),
-    ...(dependencies.retrieveSpeculativeEvidence ? {
-      retrieveSpeculativeEvidence: measured('speculative_retrieval', dependencies.retrieveSpeculativeEvidence),
-    } : {}),
     invokeStructuredLlm: (request) => measured(
       request.responseFormat?.name === 'template_engine_orchestrator_decision' ? 'routing' : 'generation',
       dependencies.invokeStructuredLlm,

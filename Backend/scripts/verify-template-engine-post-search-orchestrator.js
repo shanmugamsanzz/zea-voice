@@ -70,6 +70,7 @@ const verifiedEvidence = Object.freeze([
   const result = await respondToTemplateEngineSearch({
     mainPrompt, latestUtterance, state, scope, searchDecision, verifiedEvidence,
     requestedEntityRecordIds: ['record-1'], deterministicEntityCoverageVerified: true,
+    deterministicResolutionVerified: true,
   }, {
     tenantBoundaryVerified: true,
     invokeStructuredLlm: async (request) => {
@@ -97,6 +98,42 @@ const verifiedEvidence = Object.freeze([
   assert.equal(Object.hasOwn(fastInput, 'state'), false);
   assert.equal(Object.hasOwn(fastInput, 'conversationGuidance'), false);
   assert.equal(fastInput.answerRequirements.originalUtterance, latestUtterance);
+}
+
+// A verified fast-path answer with new factual vocabulary is repaired from the
+// deterministic failure. It must never add a separate semantic-review call.
+{
+  let answerCalls = 0;
+  let semanticCalls = 0;
+  let repairPrompt = '';
+  const result = await respondToTemplateEngineSearch({
+    mainPrompt, latestUtterance, state, scope, searchDecision, verifiedEvidence,
+    requestedEntityRecordIds: ['record-1'], deterministicEntityCoverageVerified: true,
+    deterministicResolutionVerified: true,
+  }, {
+    tenantBoundaryVerified: true,
+    invokeStructuredLlm: async (request) => {
+      answerCalls += 1;
+      if (answerCalls === 1) return { outputParsed: { decision: 'RESPONSE',
+        response: 'Selected service price is 3200 currency units with teleportation.',
+        clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null } };
+      repairPrompt = request.messages.at(-1).content;
+      return { outputParsed: { decision: 'RESPONSE',
+        response: 'Selected service price is 3200 currency units.',
+        clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null } };
+    },
+    validateGroundedClaims: async () => {
+      semanticCalls += 1;
+      return { supported: true, successClaimed: false,
+        requestedFactAddressed: true, reason: null };
+    },
+  });
+  assert.equal(answerCalls, 2);
+  assert.equal(semanticCalls, 0);
+  assert.match(repairPrompt, /unsupported_factual_vocabulary/u);
+  assert.match(repairPrompt, /teleportation/u);
+  assert.equal(result.decision.response, 'Selected service price is 3200 currency units.');
+  assert.equal(result.diagnostics.repairAttempted, true);
 }
 
 // Focus the generation payload without dropping operands or structured facts.
@@ -321,6 +358,7 @@ assert.equal(impossibleBudgetSemanticChecks, 0,
     verifiedEvidence: conciseEvidence,
     requestedEntityRecordIds: ['record-1'],
     deterministicEntityCoverageVerified: true,
+    deterministicResolutionVerified: true,
     maximumSpeechCharacters: conciseAnswer.length,
   }, {
     tenantBoundaryVerified: true,
@@ -371,6 +409,7 @@ assert.equal(impossibleBudgetSemanticChecks, 0,
     mainPrompt, latestUtterance: 'What options are available?', state, scope,
     searchDecision: categorySearchDecision, verifiedEvidence: categoryEvidence,
     deterministicEntityCoverageVerified: true,
+    deterministicResolutionVerified: true,
     maximumSpeechCharacters: expected.length,
   }, {
     tenantBoundaryVerified: true,

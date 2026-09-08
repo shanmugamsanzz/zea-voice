@@ -60,6 +60,7 @@ import {
   resolveDynamicLatencyAcknowledgement,
 } from './interaction/template-engine-turn-latency.js';
 import { recordTemplateEngineTurnMetrics, templateEngineAudioPercentiles } from './interaction/template-engine-observability.js';
+import { assertVerifiedFactualStageArchitecture } from './interaction/template-engine-turn-timing.js';
 import {
   isTemplateEngineStructuredOutputFailure,
   parseTemplateEngineStructuredOutput,
@@ -2769,6 +2770,10 @@ export class RealtimeConversationOrchestrator {
       return;
     }
     this.templateEngineState = result.state;
+    const architectureProof = assertVerifiedFactualStageArchitecture({
+      architecture: result.diagnostics?.architecture,
+      stageTimings,
+    });
     const finalAnswer = this.#fitTtsMessage(result.speech);
     sentencePipeline.setWorkflowFieldAudioCache(result.workflow?.speechCache ?? null);
     if (!finalAnswer || !sentencePipeline.enqueue(finalAnswer)) {
@@ -2868,6 +2873,7 @@ export class RealtimeConversationOrchestrator {
         result.diagnostics?.postSearch?.budgetCompressionApplied === true,
       normalVerifiedRequest: turnTiming.normalVerifiedRequest,
       semanticValidationSkipped: result.diagnostics?.postSearch?.semanticValidationSkipped === true,
+      architectureProof,
       spokenCharacters: answer.length,
       configuredSpeechCharacters: this.runtimeProfile.limits?.ttsMaxCharactersPerResponse ?? null,
       stageTimings,

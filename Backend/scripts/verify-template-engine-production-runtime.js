@@ -2,21 +2,26 @@ import assert from 'node:assert/strict';
 import {
   classifyTemplateEngineSearch,
   constrainHybridToRequestedEntities,
+  deterministicContextualRequestDecision,
   deterministicPublishedRequestDecision,
   retrieveTemplateEngineEvidence,
 } from '../src/voice/interaction/template-engine-production-retrieval.js';
 import {
   deterministicAcknowledgementDecision,
   deterministicConfirmedContextualReference,
+  deterministicPendingClarificationContinuation,
   deterministicPendingWorkflowFieldDecision,
+  enforceVerifiedFactualArchitecture,
   reviewPendingTextWorkflowField,
   publishedResolutionAmbiguity,
   runTemplateEngineProductionTurn,
-  verifiedPublishedEntityFastPath,
-  sameSpeculativeRetrievalBoundary,
+  verifiedDeterministicAnswerPath,
 } from '../src/voice/interaction/template-engine-production-runtime.js';
 import { recordTemplateEngineTurnMetrics, templateEngineAudioPercentiles } from '../src/voice/interaction/template-engine-observability.js';
-import { instrumentTemplateEngineTurn } from '../src/voice/interaction/template-engine-turn-timing.js';
+import {
+  assertVerifiedFactualStageArchitecture,
+  instrumentTemplateEngineTurn,
+} from '../src/voice/interaction/template-engine-turn-timing.js';
 import { reviewRememberedReference } from '../src/voice/interaction/template-engine-reference-review.js';
 import { resolveRequestMeaning } from '../src/voice/interaction/template-engine-request-meaning.js';
 import { reviewMultilingualEntity } from '../src/voice/interaction/template-engine-multilingual-entity-review.js';
@@ -41,6 +46,10 @@ assert.deepEqual(deterministicPendingWorkflowFieldDecision({ ...scalarWorkflowCo
   fields: [{ key: 'quantity', question: 'Name?', type: 'text', schema: { type: 'string' } }] },
 'Shanmugam')?.tool?.arguments, { quantity: 'Shanmugam' },
 'An exact scalar for a configured pending text field bypasses intent routing');
+assert.deepEqual(deterministicPendingWorkflowFieldDecision({ ...scalarWorkflowContext,
+  fields: [{ key: 'quantity', question: 'Name?', type: 'text', schema: { type: 'string' } }] },
+'Shanmugam Kumar')?.tool?.arguments, { quantity: 'Shanmugam Kumar' },
+'A clear multi-token scalar for a configured pending text field bypasses intent routing');
 assert.equal(deterministicPendingWorkflowFieldDecision({ ...scalarWorkflowContext,
   fields: [{ key: 'quantity', question: 'Name?', type: 'text', schema: { type: 'string' } }] },
 'Okay', { excludedPhrases: ['Okay'] }), null,
@@ -81,15 +90,44 @@ assert.deepEqual(deterministicPublishedRequestDecision({
   usageDirection: 'inbound', latestUtterance: 'Alpha',
 })?.search?.preferredRecordIds, ['item-alpha'],
 'One exact published alias may bypass semantic routing');
-assert.equal(deterministicPublishedRequestDecision({
+assert.deepEqual(deterministicPublishedRequestDecision({
   artifacts: deterministicPublicationArtifacts, scope: deterministicPublicationScope,
   usageDirection: 'inbound', latestUtterance: 'Tell me about Alpha',
-}), null, 'Phrase-contained requests retain the semantic route');
+})?.search?.preferredRecordIds, ['item-alpha'],
+'A natural request containing one exact published alias bypasses semantic routing');
+assert.deepEqual(deterministicPublishedRequestDecision({
+  artifacts: deterministicPublicationArtifacts, scope: deterministicPublicationScope,
+  usageDirection: 'inbound', latestUtterance: 'Compare Alpha and Beta',
+})?.search?.preferredRecordIds, ['item-alpha', 'item-beta'],
+'Independently named published operands bypass semantic comparison routing');
+assert.equal(deterministicPublishedRequestDecision({
+  artifacts: deterministicPublicationArtifacts, scope: deterministicPublicationScope,
+  usageDirection: 'inbound', latestUtterance: 'Not Alpha, Beta',
+}), null, 'Multiple names without a comparison request retain semantic correction routing');
+assert.equal(deterministicPublishedRequestDecision({
+  artifacts: deterministicPublicationArtifacts, scope: deterministicPublicationScope,
+  usageDirection: 'inbound', latestUtterance: 'Not Alpha',
+}), null, 'A refusal containing a published name must not become a factual search');
+const ambiguousPublicationArtifacts = { bundles: [{
+  ...deterministicPublicationArtifacts.bundles[0], records: [
+    { ...deterministicPublicationArtifacts.bundles[0].records[0], entity_aliases: ['Shared'] },
+    { ...deterministicPublicationArtifacts.bundles[0].records[1], entity_aliases: ['Shared'] },
+  ],
+}] };
+assert.equal(deterministicPublishedRequestDecision({
+  artifacts: ambiguousPublicationArtifacts, scope: deterministicPublicationScope,
+  usageDirection: 'inbound', latestUtterance: 'Tell me about Shared',
+}), null, 'One shared alias never becomes a fabricated comparison');
 assert.deepEqual(deterministicPublishedRequestDecision({
   artifacts: deterministicPublicationArtifacts, scope: deterministicPublicationScope,
   usageDirection: 'inbound', latestUtterance: 'Configured Group',
 })?.search?.preferredRecordIds, [],
 'One exact published category uses category retrieval without becoming a comparison');
+assert.equal(deterministicPublishedRequestDecision({
+  artifacts: deterministicPublicationArtifacts, scope: deterministicPublicationScope,
+  usageDirection: 'inbound', latestUtterance: 'Tell me about Configured Group',
+})?.decision, 'SEARCH',
+'A natural exact published category request bypasses semantic routing');
 assert.equal(deterministicPublishedRequestDecision({
   artifacts: deterministicPublicationArtifacts,
   scope: { ...deterministicPublicationScope, publications: [{
@@ -97,6 +135,29 @@ assert.equal(deterministicPublishedRequestDecision({
   }] },
   usageDirection: 'inbound', latestUtterance: 'Alpha',
 }), null, 'A stale publication revision must never activate the deterministic fast path');
+assert.deepEqual(deterministicContextualRequestDecision({
+  artifacts: deterministicPublicationArtifacts, scope: deterministicPublicationScope,
+  usageDirection: 'inbound', latestUtterance: 'What does it include?',
+  state: { lastReferencedRecordIds: ['item-alpha'], comparisonRecordIds: [] },
+})?.search?.preferredRecordIds, ['item-alpha'],
+'An explicit contextual reference may use one verified active published record');
+assert.equal(deterministicContextualRequestDecision({
+  artifacts: deterministicPublicationArtifacts, scope: deterministicPublicationScope,
+  usageDirection: 'inbound', latestUtterance: 'Tell me the address',
+  state: { lastReferencedRecordIds: ['item-alpha'], comparisonRecordIds: [] },
+}), null, 'A new request without a reference marker must not inherit stale context');
+assert.deepEqual(deterministicPendingClarificationContinuation({
+  artifacts: deterministicPublicationArtifacts, scope: deterministicPublicationScope,
+  usageDirection: 'inbound', utterance: 'Yes', acknowledgementPhrases: ['Yes'],
+  unansweredRequest: 'Tell me about Alpa',
+  pendingClarification: { candidates: ['Configured Alpha'] },
+})?.search?.preferredRecordIds, ['item-alpha'],
+'An affirmative answer continues one verified published clarification candidate');
+assert.equal(deterministicPendingClarificationContinuation({
+  artifacts: deterministicPublicationArtifacts, scope: deterministicPublicationScope,
+  usageDirection: 'inbound', utterance: 'Yes', acknowledgementPhrases: ['Yes'],
+  pendingClarification: { candidates: ['Configured Alpha', 'Configured Beta'] },
+}), null, 'An affirmative answer cannot choose among multiple clarification candidates');
 const textWorkflowContext = { ...scalarWorkflowContext, pendingFieldKey: 'contact_value',
   fields: [{ key: 'contact_value', question: 'What value should be recorded?',
     type: 'text', schema: { type: 'string', minLength: 2, maxLength: 100 } }] };
@@ -231,24 +292,6 @@ const agentId = '22222222-2222-4222-8222-222222222222';
 const knowledgeBaseId = '33333333-3333-4333-8333-333333333333';
 const publication = { knowledgeBaseId, publicationRevision: 4 };
 const scope = { tenantId, agentId, publications: [publication] };
-const speculativeBoundary = Object.freeze({
-  tenantId, agentId, publications: Object.freeze([`${knowledgeBaseId}:4`]),
-  request: 'tenant item price', turn: 'call-boundary:7',
-});
-assert.equal(sameSpeculativeRetrievalBoundary(speculativeBoundary, {
-  latestUtterance: 'Tenant Item Price', callId: 'call-boundary', turnEpoch: 7,
-}, scope), true);
-for (const mismatch of [
-  { input: { latestUtterance: 'another request', callId: 'call-boundary', turnEpoch: 7 }, scope },
-  { input: { latestUtterance: 'tenant item price', callId: 'call-boundary', turnEpoch: 8 }, scope },
-  { input: { latestUtterance: 'tenant item price', callId: 'call-boundary', turnEpoch: 7 },
-    scope: { ...scope, tenantId: 'another-tenant' } },
-  { input: { latestUtterance: 'tenant item price', callId: 'call-boundary', turnEpoch: 7 },
-    scope: { ...scope, publications: [{ knowledgeBaseId, publicationRevision: 5 }] } },
-]) {
-  assert.equal(sameSpeculativeRetrievalBoundary(speculativeBoundary, mismatch.input, mismatch.scope), false,
-    'Speculative retrieval must not cross request, turn, tenant, or publication boundaries');
-}
 const ambiguousCandidates = [
   { recordId: 'record-a', recordType: 'CATALOG_ITEM', label: 'Option A' },
   { recordId: 'record-b', recordType: 'CATALOG_ITEM', label: 'Option B' },
@@ -524,18 +567,75 @@ assert.equal(exactRetrieval.verifiedPublishedEntitySelection?.verified, true);
 assert.deepEqual(exactRetrieval.verifiedPublishedEntitySelection?.requestedRecordIds,
   ['record-exact'], 'Fast-path proof must be emitted only after exact authoritative hydration');
 
+let focusedProviderSearches = 0;
+let focusedSemanticReviews = 0;
+const focusedRetrieval = await retrieveTemplateEngineEvidence({
+  auth: { tenantId }, scope, callId: 'call-focused-record-id', usageDirection: 'inbound',
+  language: 'en', latestUtterance: 'Tell me about Alpha Alias', state: {},
+  deterministicRequestVerified: true,
+  preloadedArtifacts: exactArtifacts,
+  reviewEntityCandidates: async () => { focusedSemanticReviews += 1; return null; },
+  reviewContextualCandidates: async () => { focusedSemanticReviews += 1; return null; },
+  searchDecision: { ...searchDecision, search: {
+    query: 'Tell me about Alpha Alias', requestedFact: 'details',
+    contextualReference: null, preferredRecordIds: ['record-exact'],
+  } },
+}, {
+  searchCandidates: async () => { focusedProviderSearches += 1; return { channels: {} }; },
+  hydrateEvidence: async ({ retrieval: selected }) => ({ evidence: selected.candidates.map((entry) => ({
+    ...entry, id: 'evidence-focused', hydrationValidated: true,
+    publicationValidated: true, callerFacing: true,
+    content: 'Configured Alpha approved details.',
+    authoritativeData: { name: 'Configured Alpha', detail: 'approved' },
+    provenance: { knowledgeBaseId, publicationRevision: 4 },
+  })) }),
+});
+assert.equal(focusedProviderSearches, 0,
+  'Verified record IDs must bypass BM25, vector and unrelated provider searches');
+assert.equal(focusedSemanticReviews, 0,
+  'Deterministically resolved requests must bypass multilingual and contextual reviews');
+assert.deepEqual(focusedRetrieval.requestedEntityRecordIds, ['record-exact']);
+assert.equal(focusedRetrieval.diagnostics.focusedDeterministicRetrieval, true);
+assert.equal(focusedRetrieval.diagnostics.providerSearchPerformed, false);
+assert.deepEqual(focusedRetrieval.diagnostics.preferredRecordIds, ['record-exact']);
+assert.equal(verifiedDeterministicAnswerPath({
+  deterministicRequestResolved: true, retrieval: focusedRetrieval,
+  ambiguity: { required: false },
+}), true);
+assert.equal(verifiedDeterministicAnswerPath({
+  deterministicRequestResolved: false, retrieval: focusedRetrieval,
+  ambiguity: { required: false },
+}), false, 'Provider-routed turns cannot inherit the deterministic answer bypass');
+assert.equal(verifiedDeterministicAnswerPath({
+  deterministicRequestResolved: true, retrieval: focusedRetrieval,
+  ambiguity: { required: true },
+}), false, 'Ambiguity must retain the complete semantic review path');
+assert.equal(verifiedDeterministicAnswerPath({
+  deterministicRequestResolved: true,
+  retrieval: { ...focusedRetrieval, requestedEntityRecordIds: ['missing-record'] },
+  ambiguity: { required: false },
+}), false, 'Every deterministically requested record must be hydrated before bypassing reviews');
+
 {
   const llmOperations = [];
   let semanticValidationCalls = 0;
+  let fastPathDiagnostics = null;
   const fastTurn = await runTemplateEngineProductionTurn({
     auth: { tenantId }, scope, callId: 'deterministic-published-fast-path',
     usageDirection: 'inbound', language: 'en', mainPrompt: 'Use published facts.',
-    latestUtterance: 'Alpha Alias', state: {}, assignedTools: [], informationFields: [],
+    latestUtterance: 'Tell me about Alpha Alias', maximumSpeechCharacters: 320,
+    state: {}, assignedTools: [], informationFields: [],
   }, {
     invokeStructuredLlm: async (request) => {
       llmOperations.push(request.responseFormat.name);
       assert.ok(request.messages[0].content.includes('"language":"en"'));
-      assert.ok(request.messages[0].content.includes('"originalUtterance":"Alpha Alias"'));
+      assert.ok(request.messages[0].content.includes(
+        '"originalUtterance":"Tell me about Alpha Alias"',
+      ));
+      assert.ok(request.messages[0].content.includes('"maximumSpokenCharacters":320'));
+      assert.ok(request.messages[0].content.includes('Configured Alpha approved details.'));
+      assert.ok(!request.messages[0].content.includes('"state"'),
+        'The verified answer prompt must omit routing and conversation state');
       return { decision: 'RESPONSE', response: 'Configured Alpha approved details.',
         clarification: null, evidenceIds: ['E1'], nextQuestion: null,
         stateUpdate: null };
@@ -544,7 +644,7 @@ assert.deepEqual(exactRetrieval.verifiedPublishedEntitySelection?.requestedRecor
       publishedConversationGuidance: [], artifacts: exactArtifacts }),
     retrieveEvidence: async ({ searchDecision: selected }) => {
       assert.deepEqual(selected.search.preferredRecordIds, ['record-exact']);
-      return exactRetrieval;
+      return focusedRetrieval;
     },
     persistWorkflowState: async () => {},
     executeAuthorizedTool: async () => assert.fail('No tool may execute'),
@@ -553,13 +653,70 @@ assert.deepEqual(exactRetrieval.verifiedPublishedEntitySelection?.requestedRecor
       return { supported: true, requestedFactAddressed: true };
     },
     validateToolResultSpeechClaims: async () => ({ supported: true }),
+    onPostSearchDiagnostics: (details) => { fastPathDiagnostics = details; },
   });
   assert.equal(fastTurn.speech, 'Configured Alpha approved details.');
   assert.deepEqual(llmOperations, ['template_engine_post_search_decision'],
     'An exact unique published identity must bypass routing and semantic-review LLM calls');
   assert.equal(semanticValidationCalls, 0,
     'Verified entity, citation, number, relevance and length checks run without an LLM');
+  assert.equal(fastPathDiagnostics?.verifiedAnswerFastPath, true,
+    'The compact one-call path requires deterministic resolution plus focused hydration proof');
+  assert.deepEqual(fastTurn.diagnostics.architecture, {
+    enforced: true,
+    path: 'verified_factual_one_llm',
+    stages: [
+      'deterministic_resolution', 'focused_retrieval', 'grounded_answer_generation',
+      'deterministic_validation', 'tts_ready',
+    ],
+    routingLlmCalls: 0,
+    semanticReviewLlmCalls: 0,
+    answerGenerationCalls: 1,
+    answerRepairAttempted: false,
+    answerRepairReason: null,
+    followUpRepairAttempted: false,
+    ttsReady: true,
+  });
 }
+
+assert.throws(() => enforceVerifiedFactualArchitecture({
+  deterministicAnswerPath: true,
+  answered: {
+    decision: { decision: 'RESPONSE' },
+    diagnostics: {
+      verifiedAnswerFastPath: true, semanticValidationSkipped: true,
+      answerGenerationCalls: 2, repairAttempted: false,
+    },
+  },
+}), (error) => error?.code === 'TEMPLATE_ENGINE_ARCHITECTURE_VIOLATION'
+  && error?.details?.violations?.includes('clear_answer_requires_one_generation_call'));
+
+const measuredArchitecture = assertVerifiedFactualStageArchitecture({
+  architecture: {
+    enforced: true, path: 'verified_factual_one_llm', answerGenerationCalls: 1,
+    answerRepairAttempted: false, ttsReady: true,
+  },
+  stageTimings: {
+    publication_load: { operations: { publication_load: { calls: 1 } } },
+    retrieval: { operations: { retrieval: { calls: 1 } } },
+    generation: { operations: { answer_generation: { calls: 1 } } },
+  },
+});
+assert.equal(measuredArchitecture.calls.routing, 0);
+assert.equal(measuredArchitecture.calls.semanticReviews, 0);
+assert.throws(() => assertVerifiedFactualStageArchitecture({
+  architecture: {
+    enforced: true, path: 'verified_factual_one_llm', answerGenerationCalls: 1,
+    answerRepairAttempted: false, ttsReady: true,
+  },
+  stageTimings: {
+    publication_load: { operations: { publication_load: { calls: 1 } } },
+    retrieval: { operations: { retrieval: { calls: 1 } } },
+    routing: { operations: { routing: { calls: 1 } } },
+    generation: { operations: { answer_generation: { calls: 1 } } },
+  },
+}), (error) => error?.code === 'TEMPLATE_ENGINE_STAGE_ARCHITECTURE_VIOLATION'
+  && error?.details?.violations?.includes('routing_llm_must_be_skipped'));
 
 let ambiguousPublishedReviews = 0;
 const ambiguousAliasRecords = ['ambiguous-a', 'ambiguous-b'].map((recordId) => ({
@@ -1388,11 +1545,13 @@ const speculativeTurn = await runTemplateEngineProductionTurn({
   validateToolResultSpeechClaims: async () => ({ supported: true, successClaimed: false }),
   onRetrievalDiagnostics: (details) => { speculativeDiagnostics = details; },
 });
-assert.equal(routedWhileSpeculativeActive, true,
-  'Routing must run while speculative hybrid retrieval is already active');
-assert.equal(ordinaryRetrievalCalls, 0,
-  'A compatible speculative result must avoid duplicate retrieval');
-assert.equal(speculativeDiagnostics.speculativeReused, true);
+assert.equal(routedWhileSpeculativeActive, false,
+  'Routing must not launch speculative retrieval');
+assert.equal(speculativeStarted, false,
+  'Legacy speculative retrieval dependencies must remain unused');
+assert.equal(ordinaryRetrievalCalls, 1,
+  'The resolved request starts exactly one foreground retrieval');
+assert.equal(speculativeDiagnostics.focusedDeterministicRetrieval, false);
 assert.equal(deterministicChecks, 1,
   'Follow-up validation must not add a second grounding-validator call');
 assert.match(speculativeTurn.speech, /Tenant Item costs 125/u);
@@ -1422,8 +1581,8 @@ assert.match(speculativeTurn.speech, /Tenant Item costs 125/u);
     validateToolResultSpeechClaims: async () => ({ supported: true }),
   });
   assert.equal(result.speech, 'Tenant Item costs 125.');
-  assert.equal(foregroundRetrievals, 0,
-    'A routing-compatible speculative result finishing inside the bounded handoff must be reused');
+  assert.equal(foregroundRetrievals, 1,
+    'A routed request starts one foreground retrieval and ignores speculative input');
 }
 
 {
@@ -1473,23 +1632,6 @@ const exactSpeculativeRetrieval = Object.freeze({
     requestedRecordIds: Object.freeze(['record-1']),
   }),
 });
-assert.equal(verifiedPublishedEntityFastPath(exactSpeculativeRetrieval, searchDecision, {
-  latestUtterance: 'tenant item price',
-}), true);
-assert.equal(verifiedPublishedEntityFastPath({ ...exactSpeculativeRetrieval,
-  entityResolution: { ...exactSpeculativeRetrieval.entityResolution,
-    requiresCandidateConfirmation: true },
-}, searchDecision, { latestUtterance: 'tenant item price' }), false,
-'Confirmation candidates must retain the existing clarification path');
-assert.equal(verifiedPublishedEntityFastPath({ ...exactSpeculativeRetrieval,
-  verifiedPublishedEntitySelection: null,
-}, searchDecision, { latestUtterance: 'tenant item price' }), false,
-'A reason label without hydrated published-selection proof must not activate the fast path');
-assert.equal(verifiedPublishedEntityFastPath({ ...exactSpeculativeRetrieval,
-  verifiedPublishedEntitySelection: { ...exactSpeculativeRetrieval.verifiedPublishedEntitySelection,
-    requestedRecordIds: ['another-record'] },
-}, searchDecision, { latestUtterance: 'tenant item price' }), false,
-'Fast-path selection IDs must exactly match the hydrated requested IDs');
 {
   let referenceReviews = 0;
   let foregroundRetrievals = 0;
@@ -1529,8 +1671,8 @@ assert.equal(verifiedPublishedEntityFastPath({ ...exactSpeculativeRetrieval,
   assert.deepEqual(factualLlmOperations, [
     'template_engine_orchestrator_decision', 'template_engine_post_search_decision',
   ], 'A clear verified factual request must use one routing call and one answer call');
-  assert.equal(foregroundRetrievals, 0, 'Verified exact speculative evidence must be reused');
-  assert.equal(fastPathDiagnostics.highConfidenceFastPath, true);
+  assert.equal(foregroundRetrievals, 1, 'A routed request must perform one foreground retrieval');
+  assert.equal(fastPathDiagnostics.focusedDeterministicRetrieval, false);
 }
 {
   let welcomeMeaningReviews = 0;
@@ -1566,8 +1708,8 @@ assert.equal(verifiedPublishedEntityFastPath({ ...exactSpeculativeRetrieval,
     validateToolResultSpeechClaims: async () => ({ supported: true }),
   });
   assert.equal(result.speech, 'Tenant Item costs 125.');
-  assert.equal(welcomeMeaningReviews, 0,
-    'A hydrated exact entity request must not pay for a pending-welcome meaning review');
+  assert.equal(welcomeMeaningReviews, 1,
+    'Without deterministic publication proof, pending-welcome meaning remains on the safe path');
 }
 {
   let foregroundRetrievals = 0;
