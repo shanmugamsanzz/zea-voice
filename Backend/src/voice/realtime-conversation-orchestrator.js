@@ -62,17 +62,12 @@ import {
 import { recordTemplateEngineTurnMetrics, templateEngineAudioPercentiles } from './interaction/template-engine-observability.js';
 import { assertVerifiedFactualStageArchitecture } from './interaction/template-engine-turn-timing.js';
 import {
-  isTemplateEngineStructuredOutputFailure,
   parseTemplateEngineStructuredOutput,
-  structuredOutputRetryMessages,
 } from './interaction/template-engine-structured-output.js';
 import {
   loadTemplateEnginePublishedContext,
   retrieveTemplateEngineEvidence,
 } from './interaction/template-engine-production-retrieval.js';
-import {
-  validateTemplateEngineClaims,
-} from './interaction/template-engine-claim-validator.js';
 import { classifyTemplateEngineTurnError } from './interaction/template-engine-error-classification.js';
 import { evaluateFirstAudioSlo, percentile } from './interaction/voice-latency-slo.js';
 import { configuredCallDurationMs } from './interaction/call-duration-policy.js';
@@ -116,81 +111,39 @@ function languageCode(value) {
 
 export function createTemplateEngineStructuredInvoker(adapter, options = {}) {
   return async (request) => {
-    let transientRetries = 0;
-    let responseFormat = request.responseFormat;
-    let schemaFallbackUsed = false;
-    let structuredOutputRetryUsed = false;
-    let messages = request.messages;
-    while (true) {
-      try {
-        let text = '';
-        let completion = null;
-        const stream = adapter.stream({
-          messages,
-          tools: [],
-          temperature: request.temperature ?? 0,
-          maxOutputTokens: env.VOICE_GROUNDED_MAX_OUTPUT_TOKENS,
-          responseFormat,
-        });
-        options.onActive?.({ cancel: (reason) => adapter.cancel(reason) });
-        for await (const event of stream) {
-          if (event.type === 'text_delta') text += String(event.delta ?? '');
-          if (event.type === 'completed' && event.usage) options.onUsage?.(event);
-          if (event.type === 'completed') completion = event;
-          if (event.type === 'cancelled') {
-            throw new AppError(409, 'The template-engine LLM request was cancelled',
-              'TEMPLATE_ENGINE_LLM_CANCELLED', { reason: event.reason ?? null });
-          }
-          if (event.type === 'error') {
-            throw Object.assign(new AppError(
-              Number(event.details?.status) === 429 ? 429 : 502,
-              event.message,
-              event.code ?? 'LLM_PROVIDER_ERROR',
-              event.details ?? undefined,
-            ), { retryable: event.retryable === true });
-          }
-        }
-        const outputParsed = parseTemplateEngineStructuredOutput({
-          completion,
-          output: text,
-          schema: request.responseFormat?.schema,
-        });
-        return { ...completion, outputParsed };
-      } catch (error) {
-        const providerCode = String(error?.details?.providerCode ?? '').toLocaleLowerCase();
-        const providerParam = String(error?.details?.providerParam ?? '').toLocaleLowerCase();
-        const schemaRejected = !schemaFallbackUsed
-          && responseFormat?.type === 'json_schema'
-          && Number(error?.details?.status) === 400
-          && (providerParam.includes('response_format')
-            || providerCode.includes('json_schema') || providerCode.includes('response_format'));
-        if (schemaRejected) {
-          schemaFallbackUsed = true;
-          responseFormat = Object.freeze({ type: 'json_object' });
-          options.onResponseFormatFallback?.(error.details);
-          continue;
-        }
-        if (!structuredOutputRetryUsed && isTemplateEngineStructuredOutputFailure(error)) {
-          structuredOutputRetryUsed = true;
-          messages = structuredOutputRetryMessages(request.messages, error);
-          options.onStructuredOutputRetry?.({
-            code: error.code,
-            reason: error.details?.reason ?? null,
-            path: error.details?.path ?? null,
-            contractDetails: error.details?.contractDetails ?? null,
-            finishReason: error.details?.finishReason ?? null,
-            responseFormat: responseFormat?.type ?? null,
-          });
-          continue;
-        }
-        const canRetry = error?.retryable === true
-          && transientRetries < env.VOICE_PROVIDER_MAX_RETRIES;
-        if (!canRetry) throw error;
-        const delayMs = env.VOICE_PROVIDER_RETRY_BASE_MS * (2 ** transientRetries);
-        transientRetries += 1;
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
+    let text = '';
+    let completion = null;
+    const stream = adapter.stream({
+      messages: request.messages,
+      tools: [],
+      temperature: request.temperature ?? 0,
+      maxOutputTokens: env.VOICE_GROUNDED_MAX_OUTPUT_TOKENS,
+      responseFormat: request.responseFormat,
+    });
+    options.onActive?.({ cancel: (reason) => adapter.cancel(reason) });
+    for await (const event of stream) {
+      if (event.type === 'text_delta') text += String(event.delta ?? '');
+      if (event.type === 'completed' && event.usage) options.onUsage?.(event);
+      if (event.type === 'completed') completion = event;
+      if (event.type === 'cancelled') {
+        throw new AppError(409, 'The template-engine LLM request was cancelled',
+          'TEMPLATE_ENGINE_LLM_CANCELLED', { reason: event.reason ?? null });
+      }
+      if (event.type === 'error') {
+        throw Object.assign(new AppError(
+          Number(event.details?.status) === 429 ? 429 : 502,
+          event.message,
+          event.code ?? 'LLM_PROVIDER_ERROR',
+          event.details ?? undefined,
+        ), { retryable: event.retryable === true });
       }
     }
+    const outputParsed = parseTemplateEngineStructuredOutput({
+      completion,
+      output: text,
+      schema: request.responseFormat?.schema,
+    });
+    return { ...completion, outputParsed };
   };
 }
 
@@ -2401,7 +2354,7 @@ export class RealtimeConversationOrchestrator {
         });
     }
     const latencyAcknowledgement = armTemplateEngineTurnLatencyAcknowledgement({
-      // Eligibility is unknown until routing completes. Keeping the timer
+      // Eligibility is unknown until deterministic resolution completes. Keeping the timer
       // suppressed prevents booking, confirmation, closing and tool turns from
       // emitting progress speech before their route is known.
       suppressed: true,
@@ -2445,25 +2398,9 @@ export class RealtimeConversationOrchestrator {
       onUsage: (event) => {
         if (event.usage) this.usageTracker.record('llm', event.usage);
       },
-      onResponseFormatFallback: (details) => {
-        this.log.warn({
-          stage: 'template_engine.llm_schema_fallback',
-          callId: this.call.id,
-          providerCode: details?.providerCode ?? null,
-          providerParam: details?.providerParam ?? null,
-          providerStatus: details?.status ?? null,
-        }, 'LLM provider rejected strict schema; retrying with JSON-object mode');
-      },
-      onStructuredOutputRetry: (details) => {
-        this.log.warn({
-          stage: 'template_engine.llm_structured_output_retry',
-          callId: this.call.id,
-          turnEpoch: epoch,
-          ...details,
-        }, 'LLM structured output was unusable; retrying the same caller turn once');
-      },
     });
     let result;
+    let templateEngineLlmInvocations = 0;
     let retrievalDiagnostics = null;
     const stageTimings = {};
     let finalResponseReadyAt = null;
@@ -2513,13 +2450,16 @@ export class RealtimeConversationOrchestrator {
       }, {
         isTurnCurrent: () => !this.#isStaleGeneration(epoch) && !this.finalized,
         invokeStructuredLlm,
-        onRoutingDecisionRetry: (details) => {
-          this.log.warn({
-            stage: 'template_engine.routing_decision_retry',
+        onLlmInvocation: ({ invocationCount, operation }) => {
+          templateEngineLlmInvocations = invocationCount;
+          this.log.info({
+            stage: 'template_engine.llm_invocation',
             callId: this.call.id,
             turnEpoch: epoch,
-            ...details,
-          }, 'Invalid Orchestrator decision was retried for the same caller turn');
+            invocationCount,
+            maximumInvocations: 1,
+            operation,
+          }, 'Single permitted template-engine LLM invocation started');
         },
         onConversationGuidanceSelected: (details) => {
           this.log.info({
@@ -2537,7 +2477,7 @@ export class RealtimeConversationOrchestrator {
             ...details,
           }, 'Template-engine follow-up generation and validation completed');
         },
-        onRoutingResolved: ({ decision, activeWorkflow }) => {
+        onTurnResolved: ({ decision, activeWorkflow }) => {
           latencyAcknowledgement.setSuppressed(!latencyAcknowledgementEligibleForRoute({
             decision, activeWorkflow,
           }));
@@ -2593,37 +2533,6 @@ export class RealtimeConversationOrchestrator {
           });
           return verified;
         },
-        validateGroundedClaims: ({
-          response, decision, selectedEvidence, citedEvidence, searchInterpretation, latestUtterance, contextualReferenceVerified, ambiguity, requestMeaning, callerValues,
-        }) => {
-          return validateTemplateEngineClaims({
-            speech: response,
-            callerValues,
-            evidence: selectedEvidence,
-            citedEvidence,
-            decision,
-            searchInterpretation,
-            latestUtterance,
-            ambiguity,
-            requestMeaning,
-            contextualReferenceVerified,
-          }, { invokeStructuredLlm });
-        },
-        validateToolResultSpeechClaims: ({ speech, verifiedResult }) => (
-          validateTemplateEngineClaims({
-            speech,
-            verifiedToolResult: verifiedResult,
-            callerValues: this.templateEngineState.collectedToolFields,
-          }, { invokeStructuredLlm })
-        ),
-        onPostSearchDecisionRepair: (details) => {
-          this.log.warn({
-            stage: 'template_engine.post_search_decision_repaired',
-            callId: this.call.id,
-            turnEpoch: epoch,
-            ...details,
-          }, 'Invalid post-search decision was repaired without exposing unvalidated speech');
-        },
         onRetrievalDiagnostics: (details) => {
           retrievalDiagnostics = details;
           this.log.info({
@@ -2671,13 +2580,10 @@ export class RealtimeConversationOrchestrator {
             allowedAliases: details.allowedAliases,
             returnedAliases: details.returnedAliases,
             initialValidationReason: details.initialValidationReason,
-            initialSemanticValidationReason: details.initialSemanticValidationReason ?? null,
             initialNumericValidationDetails: details.initialNumericValidationDetails ?? null,
             finalNumericValidationDetails: details.finalNumericValidationDetails ?? null,
             validationReason: details.validationReason,
             finalDecision: details.finalDecision,
-            repairAttempted: details.repairAttempted,
-            semanticValidationSkipped: details.semanticValidationSkipped === true,
           }, 'Template-engine post-search decision validated');
         },
       });
@@ -2709,6 +2615,7 @@ export class RealtimeConversationOrchestrator {
         result = {
           speech: recovery, state: this.templateEngineState,
           evidence: [], evidenceIds: [], toolExecuted: false,
+          llmInvocationCount: templateEngineLlmInvocations,
           validationFailure: error.code ?? 'TEMPLATE_ENGINE_OUTPUT_INVALID',
           recoveryKind: errorKind,
         };
@@ -2726,6 +2633,7 @@ export class RealtimeConversationOrchestrator {
           speech: technical,
           state: this.templateEngineState,
           evidence: [], evidenceIds: [], toolExecuted: false,
+          llmInvocationCount: templateEngineLlmInvocations,
           operationalFailure: error.code ?? 'TEMPLATE_ENGINE_OPERATIONAL_FAILURE',
           recoveryKind: 'operational',
         };
@@ -2749,6 +2657,7 @@ export class RealtimeConversationOrchestrator {
           speech: technical,
           state: this.templateEngineState,
           evidence: [], evidenceIds: [], toolExecuted: false,
+          llmInvocationCount: templateEngineLlmInvocations,
           unexpectedFailure: error.code ?? 'TEMPLATE_ENGINE_UNEXPECTED_FAILURE',
           recoveryKind: 'unexpected',
         };
@@ -2862,13 +2771,14 @@ export class RealtimeConversationOrchestrator {
       operationalFailure: result.operationalFailure ?? null,
       unexpectedFailure: result.unexpectedFailure ?? null,
       validationFailure: result.validationFailure ?? null,
+      llmInvocationCount: result.llmInvocationCount ?? 0,
+      llmArchitecture: result.llmArchitecture ?? null,
       recoveryKind: result.recoveryKind ?? null,
       configuredFallbackApplied:
         result.diagnostics?.postSearch?.configuredFallbackApplied === true,
       budgetCompressionApplied:
         result.diagnostics?.postSearch?.budgetCompressionApplied === true,
       normalVerifiedRequest: turnTiming.normalVerifiedRequest,
-      semanticValidationSkipped: result.diagnostics?.postSearch?.semanticValidationSkipped === true,
       architectureProof,
       spokenCharacters: answer.length,
       configuredSpeechCharacters: this.runtimeProfile.limits?.ttsMaxCharactersPerResponse ?? null,

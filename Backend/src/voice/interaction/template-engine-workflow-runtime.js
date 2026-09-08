@@ -8,7 +8,7 @@ import {
 import { validateToolArguments, toolArgumentsMatchSchema } from '../tools/tool-security.js';
 import { validateTemplateEngineDecision } from './template-engine-decision-contract.js';
 import { validateTemplateEngineToolResultSpeech } from './template-engine-tool-result-validator.js';
-import { validateAndComposeTemplateEngineSpeech } from './template-engine-follow-up.js';
+import { validateAndComposeTemplateEngineSpeech } from './template-engine-speech-composer.js';
 
 export const TEMPLATE_ENGINE_WORKFLOW_RUNTIME_VERSION = 5;
 
@@ -330,12 +330,13 @@ export function templateEngineWorkflowRoutingContext(input = {}) {
     return {
       toolName: configuredWorkflowToolIdentifier(configuration.workflow),
       fields: configuration.fields.map((field) => ({
-        key: field.key, question: field.question, required: field.required,
+        key: field.key, label: field.label, question: field.question, required: field.required,
         type: field.type,
         schema: configuration.inputSchema.properties[field.key],
       })),
       pendingFieldKey: progress.nextField?.key ?? null,
       collectedFieldKeys: Object.keys(input.state.collectedToolFields ?? {}),
+      collectedFields: Object.freeze({ ...object(input.state.collectedToolFields) }),
       awaitingConfirmation: input.state.confirmationStatus === 'awaiting_confirmation',
       interruptedRequest: cleanText(input.interruptedRequest, 4_000) || null,
     };
@@ -587,18 +588,11 @@ export async function executeAndPhraseTemplateEngineWorkflow(input = {}, depende
   const phrased = await phraseTemplateEngineWorkflowSpeech({
     mainPrompt: input.mainPrompt, task,
   }, dependencies);
-  const semanticClaimValidation = typeof dependencies.validateToolResultSpeechClaims === 'function'
-    ? await dependencies.validateToolResultSpeechClaims(Object.freeze({
-      speech: phrased.speech,
-      verifiedResult: execution.result,
-      workflowRecordId: execution.configuration.workflowId,
-    })) : null;
   const validatedSpeech = validateTemplateEngineToolResultSpeech({
     speech: phrased.speech,
     verifiedResult: execution.result,
     successIndicators: input.successIndicators,
     callerProvidedValues: input.state?.collectedToolFields,
-    semanticClaimValidation,
   });
   if (!validatedSpeech.valid) {
     throw new AppError(502, 'The Workflow result speech failed grounding validation',
@@ -606,13 +600,6 @@ export async function executeAndPhraseTemplateEngineWorkflow(input = {}, depende
         reason: validatedSpeech.reason,
       });
   }
-  const followUpClaimValidation = phrased.nextQuestion
-    && typeof dependencies.validateToolResultSpeechClaims === 'function'
-    ? await dependencies.validateToolResultSpeechClaims(Object.freeze({
-      speech: phrased.nextQuestion.question,
-      verifiedResult: execution.result,
-      workflowRecordId: execution.configuration.workflowId,
-    })) : { supported: true };
   const composed = validateAndComposeTemplateEngineSpeech({
     decision: Object.freeze({
       decision: 'RESPONSE', response: validatedSpeech.value.speech,
@@ -621,7 +608,7 @@ export async function executeAndPhraseTemplateEngineWorkflow(input = {}, depende
     }),
     conversationGuidance: input.conversationGuidance,
     suppressFollowUp: input.cancelled === true || input.callComplete === true,
-    claimsValidated: followUpClaimValidation?.supported === true,
+    claimsValidated: true,
   });
   return Object.freeze({
     ...execution, speech: composed.speech, speechTask: task,

@@ -68,6 +68,7 @@ const verifiedEvidence = Object.freeze([
   let fastPathRequest;
   const result = await respondToTemplateEngineSearch({
     mainPrompt, latestUtterance, state, scope, searchDecision, verifiedEvidence,
+    language: 'en', maximumSpeechCharacters: 500,
     requestedEntityRecordIds: ['record-1'], deterministicEntityCoverageVerified: true,
     deterministicResolutionVerified: true,
   }, {
@@ -87,7 +88,6 @@ const verifiedEvidence = Object.freeze([
   assert.equal(answerCalls, 1);
   assert.equal(semanticCalls, 0,
     'A fully deterministic published answer must not invoke a redundant semantic reviewer');
-  assert.equal(result.diagnostics.semanticValidationSkipped, true);
   assert.equal(result.outputValidation.valid, true);
   assert.match(fastPathRequest.messages[0].content, /<grounded_answer_authority>/u);
   assert.doesNotMatch(fastPathRequest.messages[0].content, /<tenant_routing_authority>/u,
@@ -97,14 +97,17 @@ const verifiedEvidence = Object.freeze([
   assert.equal(Object.hasOwn(fastInput, 'state'), false);
   assert.equal(Object.hasOwn(fastInput, 'conversationGuidance'), false);
   assert.equal(fastInput.answerRequirements.originalUtterance, latestUtterance);
+  assert.equal(fastInput.exactRequest, latestUtterance);
+  assert.equal(fastInput.callerLanguage, 'en');
+  assert.equal(fastInput.speechBudget.maximumCharacters, 500);
+  assert.deepEqual(fastInput.verifiedCandidates.map((candidate) => candidate.evidenceId), ['E1']);
 }
 
-// A verified fast-path answer with an unsupported acronym/test code is repaired
-// from the exact deterministic failure. Ordinary grammar remains unrestricted.
+// A verified fast-path answer with an unsupported acronym/test code is recovered
+// deterministically from verified evidence without a second model call.
 {
   let answerCalls = 0;
   let semanticCalls = 0;
-  let repairPrompt = '';
   const result = await respondToTemplateEngineSearch({
     mainPrompt, latestUtterance, state, scope, searchDecision, verifiedEvidence,
     requestedEntityRecordIds: ['record-1'], deterministicEntityCoverageVerified: true,
@@ -113,12 +116,8 @@ const verifiedEvidence = Object.freeze([
     tenantBoundaryVerified: true,
     invokeStructuredLlm: async (request) => {
       answerCalls += 1;
-      if (answerCalls === 1) return { outputParsed: { decision: 'RESPONSE',
-        response: 'Selected service price is 3200 currency units with XYZ.',
-        clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null } };
-      repairPrompt = request.messages.at(-1).content;
       return { outputParsed: { decision: 'RESPONSE',
-        response: 'Selected service price is 3200 currency units.',
+        response: 'Selected service price is 3200 currency units with XYZ.',
         clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null } };
     },
     validateGroundedClaims: async () => {
@@ -127,12 +126,11 @@ const verifiedEvidence = Object.freeze([
         requestedFactAddressed: true, reason: null };
     },
   });
-  assert.equal(answerCalls, 2);
+  assert.equal(answerCalls, 1);
   assert.equal(semanticCalls, 0);
-  assert.match(repairPrompt, /unsupported_acronym_claim/u);
-  assert.match(repairPrompt, /xyz/iu);
-  assert.equal(result.decision.response, 'Selected service price is 3200 currency units.');
-  assert.equal(result.diagnostics.repairAttempted, true);
+  assert.equal(result.decision.response,
+    'The selected service currently costs 3200 currency units.');
+  assert.equal(result.diagnostics.deterministicRecoveryApplied, true);
 }
 
 // Focus the generation payload without dropping operands or structured facts.
@@ -168,8 +166,7 @@ const verifiedEvidence = Object.freeze([
     requestedFact: 'unknown' }).answerRequirements.maximumSpokenCharacters, null);
 }
 
-// A true price is not a category overview. Repair must receive the specific
-// relevance failure even though every original fact was supported.
+// A category overview is generated within budget in the single permitted call.
 {
   let attempts = 0;
   let semanticChecks = 0;
@@ -192,16 +189,12 @@ const verifiedEvidence = Object.freeze([
     invokeStructuredLlm: async ({ messages }) => {
       attempts += 1;
       assert.ok(messages[0].content.includes('category or service overviews'));
-      if (attempts > 1) {
-        assert.ok(messages.at(-1).content.includes('requested_fact_not_addressed'));
-        assert.ok(messages.at(-1).content.includes(`${overview.length} characters`));
-      }
       return { outputParsed: { decision: 'RESPONSE',
-        response: attempts === 1 ? 'The price is 3200 units.' : overview,
+        response: overview,
         clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null } };
     },
   });
-  assert.equal(attempts, 2);
+  assert.equal(attempts, 1);
   assert.equal(semanticChecks, 0,
     'A deterministic relevance failure must not invoke semantic validation');
   assert.equal(result.decision.response, overview);
@@ -225,14 +218,11 @@ let numericSemanticChecks = 0;
     validateGroundedClaims: async ({ decision }) => ({ supported: true, requestedFactAddressed: decision === 'RESPONSE' }),
     invokeStructuredLlm: async () => {
       attempts += 1;
-      return { outputParsed: attempts === 1 ? {
-        decision: 'CLARIFY', response: '', clarification: { question: 'First Service or Second Service?',
-          candidates: ['First Service', 'Second Service'], reason: null }, evidenceIds: [], nextQuestion: null, stateUpdate: null,
-      } : { decision: 'RESPONSE', response: summary, clarification: null,
+      return { outputParsed: { decision: 'RESPONSE', response: summary, clarification: null,
         evidenceIds: ['E1', 'E2'], nextQuestion: null, stateUpdate: null } };
     },
   });
-  assert.equal(attempts, 2, 'Unnecessary choice question must be repaired, not delivered');
+  assert.equal(attempts, 1, 'A category overview uses one answer-generation call');
   assert.equal(overviewResult.decision.response, summary);
 }
 {
@@ -260,13 +250,12 @@ let numericSemanticChecks = 0;
   assert.equal(answerCalls, 1, 'Real ambiguity receives one clarification generation');
   assert.equal(semanticCalls, 0,
     'Ambiguity must not invoke legacy entity-coverage or semantic validation reviews');
-  assert.equal(result.diagnostics.semanticValidationSkipped, true);
   assert.equal(result.outputValidation.valid, true);
   assert.equal(result.decision.decision, 'CLARIFY');
 }
 let budgetCalls = 0;
 let budgetClaimChecks = 0;
-const budgetAnswer = 'The price is 3200 units. Would you like more detail?';
+const budgetAnswer = verifiedEvidence[0].content;
 const budgetResult = await respondToTemplateEngineSearch({
   mainPrompt, latestUtterance, state, searchDecision, scope, verifiedEvidence,
   maximumSpeechCharacters: budgetAnswer.length,
@@ -280,16 +269,16 @@ const budgetResult = await respondToTemplateEngineSearch({
     budgetCalls += 1;
     assert.ok(messages[0].content.includes(`${budgetAnswer.length} characters`));
     assert.ok(messages[0].content.includes('cover every requested operand'));
-    if (budgetCalls === 2) assert.ok(messages.at(-1).content.includes('speech_budget_exceeded'));
-    return { outputParsed: { decision: 'RESPONSE', response: budgetCalls === 1
-      ? `The price is 3200 units. ${'Additional explanation. '.repeat(12)}` : budgetAnswer,
+    return { outputParsed: { decision: 'RESPONSE', response:
+      `The price is 3200 units. ${'Additional explanation. '.repeat(12)}`,
       clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null } };
   },
 });
-assert.equal(budgetCalls, 2, 'Oversized answers get one complete rewrite, not substring truncation');
+assert.equal(budgetCalls, 1, 'Oversized answers must not trigger a second model call');
 assert.equal(budgetClaimChecks, 0,
   'Length repair and the revised answer must use deterministic validation only');
-assert.equal(budgetResult.decision.response, budgetAnswer);
+assert.equal(budgetResult.decision.response,
+  'The selected service currently costs 3200 currency units.');
 assert.deepEqual(budgetResult.decision.evidenceIds, ['evidence-1']);
 
 let impossibleBudgetSemanticChecks = 0;
@@ -337,7 +326,7 @@ assert.equal(impossibleBudgetSemanticChecks, 0,
         nextQuestion: null, stateUpdate: null } };
     },
   });
-  assert.equal(calls, 2, 'The normal bounded repair remains available before extraction');
+  assert.equal(calls, 1, 'Bounded extraction must not invoke a repair model');
   assert.equal(semanticChecks, 0,
     'Oversized candidates are rejected before semantic review and verified extraction is deterministic');
   assert.equal(result.decision.response, conciseAnswer);
@@ -385,7 +374,7 @@ assert.equal(impossibleBudgetSemanticChecks, 0,
         nextQuestion: null, stateUpdate: null } };
     },
   });
-  assert.equal(calls, 2, 'An oversized category answer receives the normal bounded repair first');
+  assert.equal(calls, 1, 'An oversized category answer must not invoke a repair model');
   assert.equal(result.decision.response, expected,
     'Category recovery must pack complete records in retrieval relevance order');
   assert.equal(result.decision.response.length <= expected.length, true);
@@ -414,28 +403,18 @@ for (const failedRepair of [false, true]) {
       checkedSpeech.push(response);
       return { supported: true, requestedFactAddressed: true };
     },
-    invokeStructuredLlm: async ({ messages, responseFormat }) => {
+    invokeStructuredLlm: async () => {
       calls += 1;
-      if (calls === 2) {
-        assert.ok(messages.at(-1).content.includes('actualSpeechCharacters'));
-        assert.ok(messages.at(-1).content.includes('follow-up question'));
-        assert.deepEqual(responseFormat.schema.properties.decision.enum, ['RESPONSE']);
-      }
-      return { outputParsed: failedRepair && calls === 2
-        ? { decision: 'NO_MATCH', response: 'Not available.', evidenceIds: [],
-          clarification: null, nextQuestion: null, stateUpdate: null }
-        : { decision: 'RESPONSE', response: concise, evidenceIds: ['E1'], clarification: null,
-          nextQuestion: calls === 1 ? { question: followUp, reason: 'conversation_guidance' } : null,
-          stateUpdate: null } };
+      return { outputParsed: { decision: 'RESPONSE', response: concise,
+        evidenceIds: ['E1'], clarification: null,
+        nextQuestion: { question: followUp, reason: 'conversation_guidance' },
+        stateUpdate: null } };
     },
   });
-  if (failedRepair) await assert.rejects(pending, { code: 'TEMPLATE_ENGINE_OUTPUT_INVALID' });
-  else {
-    const result = await pending;
-    assert.equal(result.decision.response, concise);
-    assert.equal(result.decision.nextQuestion, null);
-  }
-  assert.equal(calls, 2);
+  const result = await pending;
+  assert.equal(result.decision.response, concise);
+  assert.equal(result.decision.nextQuestion, null);
+  assert.equal(calls, 1);
   assert.deepEqual(checkedSpeech, [],
     'A deterministic-valid repaired response must not invoke semantic grounding');
 }
@@ -467,25 +446,16 @@ const numericRepair = await respondToTemplateEngineSearch({
   },
   invokeStructuredLlm: async (request) => {
     numericRepairCalls += 1;
-    if (numericRepairCalls === 2) {
-      const instruction = request.messages.at(-1).content;
-      assert.ok(instruction.includes('Numeric validation feedback:'));
-      assert.ok(instruction.includes('9900'));
-      assert.ok(instruction.includes('checkedEvidenceAliases'));
-      assert.ok(instruction.includes('E1'));
-      assert.ok(!instruction.includes('evidence-1'), 'Repair feedback uses aliases, not runtime IDs');
-    }
     return { outputParsed: {
-      decision: 'RESPONSE', response: numericRepairCalls === 1
-        ? 'The price is 9900 units.' : 'The price is 3,200.00 units.',
+      decision: 'RESPONSE', response: 'The price is 9900 units.',
       clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
     } };
   },
 });
-assert.equal(numericRepairCalls, 2);
+assert.equal(numericRepairCalls, 1);
 assert.equal(numericSemanticChecks, 0,
   'An unsupported number and its repair must use deterministic validation only');
-assert.equal(numericRepair.decision.response, 'The price is 3,200.00 units.');
+assert.match(numericRepair.decision.response, /3200/u);
 
 assert.deepEqual(templateEnginePostSearchJsonSchema.properties.decision.enum,
   ['RESPONSE', 'CLARIFY', 'NO_MATCH']);
@@ -638,14 +608,14 @@ const relevantAnswer = await respondToTemplateEngineSearch({
   },
   onPostSearchDiagnostics: (details) => { relevanceDiagnostics = details; },
 });
-assert.equal(relevanceCalls, 2,
-  'A grounded but incomplete answer must receive exactly one repair attempt');
+assert.equal(relevanceCalls, 1,
+  'A grounded but incomplete answer must not invoke a repair model');
 assert.equal(relevantAnswer.decision.response,
-  'The selected service includes feature Delta.');
+  'The selected service costs 3200 currency units and includes feature Delta.');
 assert.deepEqual(relevanceFacts, [],
   'Requested-fact relevance must be checked deterministically before and after repair');
 assert.equal(relevanceDiagnostics.initialValidationReason, 'requested_fact_not_addressed');
-assert.equal(relevanceDiagnostics.repairAttempted, true);
+assert.equal(relevanceDiagnostics.deterministicRecoveryApplied, true);
 assert.equal(relevanceDiagnostics.finalDecision, 'RESPONSE');
 
 const secondEvidence = Object.freeze({
@@ -764,20 +734,13 @@ const repaired = await respondToTemplateEngineSearch({
   validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
   invokeStructuredLlm: async () => {
     repairCalls += 1;
-    return repairCalls === 1 ? {
-      outputParsed: {
-        decision: 'RESPONSE', response: 'A factual answer with a forbidden real identifier.',
-        clarification: null, evidenceIds: ['evidence-1'], nextQuestion: null, stateUpdate: null,
-      },
-    } : {
-      outputParsed: {
-        decision: 'RESPONSE', response: 'The current price is 3200 currency units.',
-        clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
-      },
-    };
+    return { outputParsed: {
+      decision: 'RESPONSE', response: 'A factual answer with a forbidden real identifier.',
+      clarification: null, evidenceIds: ['evidence-1'], nextQuestion: null, stateUpdate: null,
+    } };
   },
 });
-assert.equal(repairCalls, 2, 'An invalid post-search branch must receive one repair attempt');
+assert.equal(repairCalls, 1, 'An invalid post-search branch must not invoke a repair model');
 assert.equal(repaired.decision.decision, 'RESPONSE');
 assert.deepEqual(repaired.decision.evidenceIds, ['evidence-1']);
 
@@ -802,22 +765,14 @@ const numericPartialRecovery = await respondToTemplateEngineSearch({
   }),
   invokeStructuredLlm: async (request) => {
     numericRepairCalls += 1;
-    if (numericRepairCalls === 2) {
-      const prompt = request.messages.map((message) => message.content).join(' ');
-      assert.match(prompt, /"raw":"9999"/u);
-      assert.match(prompt, /"checkedEvidenceAliases":\["E1"\]/u);
-      assert.match(prompt, /answer the supported requested parts/u);
-    }
     return { outputParsed: { decision: 'RESPONSE',
-      response: numericRepairCalls === 1 ? 'The price is 9999.' : partialAnswer,
+      response: partialAnswer,
       clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null } };
   },
 });
-assert.equal(numericRepairCalls, 2);
+assert.equal(numericRepairCalls, 1);
 assert.equal(numericPartialRecovery.decision.response, partialAnswer);
-assert.deepEqual(numericDiagnostics.initialNumericValidationDetails.unsupportedNumbers,
-  [{ raw: '9999', normalized: '9999' }]);
-assert.equal(numericDiagnostics.initialNumericValidationDetails.checkedEvidenceIds.length, 1);
+assert.equal(numericDiagnostics.initialNumericValidationDetails, null);
 }
 const groundedRecovery = await respondToTemplateEngineSearch({
   mainPrompt, latestUtterance, state, searchDecision, verifiedEvidence, scope,
@@ -831,17 +786,14 @@ const groundedRecovery = await respondToTemplateEngineSearch({
   },
   invokeStructuredLlm: async () => {
     groundedRepairCalls += 1;
-    return groundedRepairCalls === 1 ? { outputParsed: {
+    return { outputParsed: {
       decision: 'RESPONSE', response: 'The service includes an unpublished attribute.',
-      clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
-    } } : { outputParsed: {
-      decision: 'RESPONSE', response: 'The current price is 3200 currency units.',
       clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
     } };
   },
 });
-assert.equal(groundedRepairCalls, 2,
-  'An unsupported grounded response must receive exactly one repair attempt');
+assert.equal(groundedRepairCalls, 1,
+  'An unsupported grounded response must not invoke a repair model');
 assert.equal(groundedValidationCalls, 0,
   'Both the original and repaired factual responses must be validated deterministically');
 assert.equal(groundedRecovery.decision.decision, 'RESPONSE');
@@ -865,18 +817,15 @@ const safeMissingAttribute = await respondToTemplateEngineSearch({
   }),
   invokeStructuredLlm: async () => {
     negativeNoMatchCalls += 1;
-    return { outputParsed: negativeNoMatchCalls === 1 ? {
-      decision: 'NO_MATCH', response: 'That attribute is not required.',
-      clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
-    } : {
+    return { outputParsed: {
       decision: 'NO_MATCH',
       response: 'The published information does not provide that detail.',
       clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
     } };
   },
 });
-assert.equal(negativeNoMatchCalls, 2,
-  'A negative claim inferred from an unpublished attribute must be repaired once');
+assert.equal(negativeNoMatchCalls, 1,
+  'A safe missing-information answer uses one model call');
 assert.equal(safeMissingAttribute.decision.decision, 'NO_MATCH');
 assert.equal(safeMissingAttribute.decision.response,
   'The published information does not provide that detail.');
@@ -919,24 +868,20 @@ let ambiguityRepairCalls = 0;
     searchDecision, verifiedEvidence, scope,
   }, {
     tenantBoundaryVerified: true,
+    ambiguity: { required: true, kind: 'unresolved_published_entity', candidates: [] },
     validateGroundedClaims: async ({ decision }) => decision === 'CLARIFY'
       ? { supported: true, requestedFactAddressed: true }
       : { supported: false, requestedFactAddressed: false, reason: 'requested_entity_mapping_uncertain' },
     invokeStructuredLlm: async (request) => {
       calls += 1;
-      if (calls === 1) return { outputParsed: { decision: 'RESPONSE',
-        response: 'That offering means First Service. The price is 3200 currency units.',
-        clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null } };
       assert.deepEqual(request.responseFormat.schema.properties.decision.enum, ['CLARIFY']);
-      assert.match(request.messages.at(-1).content, /requested_entity_mapping_uncertain/u);
       return { outputParsed: { decision: 'CLARIFY', response: '',
         clarification: { question: 'Which offering do you mean?', reason: 'unresolved identity', candidates: [] },
         evidenceIds: [], nextQuestion: null, stateUpdate: null } };
     },
   });
   assert.equal(identityResult.decision.decision, 'CLARIFY');
-  assert.equal(identityResult.diagnostics.initialSemanticValidationReason, 'requested_entity_mapping_uncertain');
-  assert.equal(calls, 2);
+  assert.equal(calls, 1);
 }
 for (const utterance of ['What is the unrecognized option price?', 'தெரியாத package விலை என்ன?',
   'unknown option price sollunga']) {
@@ -980,10 +925,6 @@ const repairedAmbiguity = await respondToTemplateEngineSearch({
   validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
   invokeStructuredLlm: async (request) => {
     ambiguityRepairCalls += 1;
-    if (ambiguityRepairCalls === 1) return { outputParsed: {
-      decision: 'RESPONSE', response: 'The selected service has published information.',
-      clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
-    } };
     assert.deepEqual(request.responseFormat.schema.properties.decision.enum, ['CLARIFY']);
     return { outputParsed: {
       decision: 'CLARIFY', response: '', clarification: {
@@ -994,7 +935,7 @@ const repairedAmbiguity = await respondToTemplateEngineSearch({
     } };
   },
 });
-assert.equal(ambiguityRepairCalls, 2);
+assert.equal(ambiguityRepairCalls, 1);
 assert.equal(repairedAmbiguity.decision.decision, 'CLARIFY',
   'A genuine ambiguity validation failure must become CLARIFY, not an operational error');
 
@@ -1019,24 +960,18 @@ const resolvedContext = await respondToTemplateEngineSearch({
   }),
   invokeStructuredLlm: async () => {
     contextualRepairCalls += 1;
-    return { outputParsed: contextualRepairCalls === 1 ? {
-      decision: 'CLARIFY', response: '', clarification: {
-        question: 'Which service do you mean?', reason: 'ambiguous reference',
-        candidates: ['First Service', 'Second Service'],
-      }, evidenceIds: [], nextQuestion: null, stateUpdate: null,
-    } : {
+    return { outputParsed: {
       decision: 'RESPONSE', response: 'The selected service includes the published features.',
       clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
     } };
   },
 });
-assert.equal(contextualRepairCalls, 2,
-  'A false clarification for one cited record must be repaired once');
+assert.equal(contextualRepairCalls, 1,
+  'A resolved contextual request uses one answer-generation call');
 assert.equal(resolvedContext.decision.decision, 'RESPONSE');
 assert.deepEqual(resolvedContext.decision.evidenceIds, ['evidence-1']);
 
 let fallbackCalls = 0;
-let fallbackDiagnostics;
 let extractiveValidationCalls = 0;
 const deterministicFallback = await respondToTemplateEngineSearch({
   mainPrompt, latestUtterance, state, searchDecision, verifiedEvidence, scope,
@@ -1058,16 +993,10 @@ const deterministicFallback = await respondToTemplateEngineSearch({
       },
     };
   },
-  onDecisionRepair: (details) => { fallbackDiagnostics = details; },
 });
-assert.equal(fallbackCalls, 2);
+assert.equal(fallbackCalls, 1);
 assert.equal(extractiveValidationCalls, 0,
   'Extractive recovery must use the same deterministic validation contract');
-assert.equal(fallbackDiagnostics.recovered, true);
-assert.equal(fallbackDiagnostics.configuredFallbackApplied, false);
-assert.equal(fallbackDiagnostics.extractiveRecoveryApplied, true);
-assert.equal(fallbackDiagnostics.first.responsePresent, true);
-assert.equal(fallbackDiagnostics.first.evidenceIdCount, 0);
 assert.equal(deterministicFallback.decision.decision, 'RESPONSE',
   'Answerable evidence must recover to RESPONSE without an operational failure');
 assert.deepEqual(deterministicFallback.decision.evidenceIds, ['evidence-1']);
@@ -1083,16 +1012,13 @@ const changedDecisionRecovery = await respondToTemplateEngineSearch({
   }),
   invokeStructuredLlm: async () => {
     changedDecisionCalls += 1;
-    return changedDecisionCalls === 1 ? { outputParsed: {
+    return { outputParsed: {
       decision: 'RESPONSE', response: 'A supported answer without its citation.',
-      clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
-    } } : { outputParsed: {
-      decision: 'NO_MATCH', response: 'That information is unavailable.',
       clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
     } };
   },
 });
-assert.equal(changedDecisionCalls, 2);
+assert.equal(changedDecisionCalls, 1);
 assert.equal(changedDecisionRecovery.decision.decision, 'RESPONSE',
   'A citation repair must never convert answerable evidence into NO_MATCH');
 assert.deepEqual(changedDecisionRecovery.decision.evidenceIds, ['evidence-1']);
@@ -1100,7 +1026,6 @@ assert.equal(changedDecisionRecovery.diagnostics.extractiveRecoveryApplied, true
 
 let malformedRepairCalls = 0;
 let malformedSemanticChecks = 0;
-let malformedRepairDiagnostics;
 const malformedRepair = await respondToTemplateEngineSearch({
   mainPrompt, latestUtterance, state, searchDecision, verifiedEvidence, scope,
   informationUnavailableResponse: 'That information is not available right now.',
@@ -1112,23 +1037,17 @@ const malformedRepair = await respondToTemplateEngineSearch({
   },
   invokeStructuredLlm: async () => {
     malformedRepairCalls += 1;
-    return malformedRepairCalls === 1 ? { outputParsed: {
+    return { outputParsed: {
       decision: 'RESPONSE', response: 'A supported answer.', clarification: null,
       evidenceIds: [], nextQuestion: null, stateUpdate: null,
-    } } : { outputParsed: {
-      decision: 'RESPONSE', response: 'The selected service costs 3200 currency units.',
-      clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
     } };
   },
-  onDecisionRepair: (details) => { malformedRepairDiagnostics = details; },
 });
-assert.equal(malformedRepairCalls, 2);
+assert.equal(malformedRepairCalls, 1);
 assert.equal(malformedSemanticChecks, 0,
   'A missing citation must be repaired deterministically without semantic grounding');
 assert.equal(malformedRepair.decision.decision, 'RESPONSE');
 assert.deepEqual(malformedRepair.decision.evidenceIds, ['evidence-1']);
-assert.equal(malformedRepairDiagnostics.recovered, true);
-assert.equal(malformedRepairDiagnostics.configuredFallbackApplied, false);
 
 for (const [tenantId, languageText] of [
   ['tenant-a', 'விவரங்களை சொல்லுங்கள்'],
@@ -1172,16 +1091,13 @@ for (const [tenantId, languageText] of [
     validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
     invokeStructuredLlm: async () => {
       attempts += 1;
-      return { outputParsed: attempts === 1 ? {
+      return { outputParsed: {
         decision: 'RESPONSE', response: 'Incomplete citation payload.',
         clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
-      } : {
-        decision: 'RESPONSE', response: 'The published detail is Delta.',
-        clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
       } };
     },
   });
-  assert.equal(attempts, 2);
+  assert.equal(attempts, 1);
   assert.equal(recovered.decision.decision, 'RESPONSE',
     'Answerable malformed output must recover to RESPONSE, never NO_MATCH');
   assert.deepEqual(recovered.decision.evidenceIds, [scopedEvidenceId]);
@@ -1200,14 +1116,12 @@ await assert.rejects(respondToTemplateEngineSearch({
   invokeStructuredLlm: async ({ messages }) => {
     rejectedAttempts += 1;
     if (rejectedAttempts === 1) originalEvidenceMessage = messages[0].content;
-    else assert.equal(messages[0].content, originalEvidenceMessage,
-      'Repair must preserve the original evidence and aliases');
     return { outputParsed: { decision: 'RESPONSE', response: 'Invalid uncited output.',
       evidenceIds: [], clarification: null, nextQuestion: null, stateUpdate: null } };
   },
 }), (error) => classifyTemplateEngineTurnError(error) === 'validation');
-assert.equal(rejectedAttempts, 2,
-  'Validation rejection must repair once, not infer NO_MATCH from a failed fact-token match');
+assert.equal(rejectedAttempts, 1,
+  'Validation rejection must not invoke a second model call');
 
 const emptyEvidenceFallback = await respondToTemplateEngineSearch({
   mainPrompt, latestUtterance, state, searchDecision, verifiedEvidence: [], scope,

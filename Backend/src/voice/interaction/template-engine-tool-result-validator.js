@@ -31,7 +31,6 @@ function invalid(reason) {
 
 export function validateTemplateEngineToolResultSpeech({
   speech, verifiedResult, successIndicators = [], callerProvidedValues = {},
-  semanticClaimValidation = null,
 } = {}) {
   const spoken = cleanText(speech);
   if (!spoken || internalOrJson(spoken)) return invalid('invalid_tool_result_speech');
@@ -54,13 +53,6 @@ export function validateTemplateEngineToolResultSpeech({
     if (indicators.some((indicator) => normalizedSpeech.includes(indicator))) {
       return invalid('success_claim_after_failed_tool');
     }
-    if (semanticClaimValidation?.successClaimed === true) {
-      return invalid('success_claim_after_failed_tool');
-    }
-  }
-  if (semanticClaimValidation?.supported !== true) {
-    return invalid(semanticClaimValidation
-      ? 'unsupported_tool_result_claim' : 'tool_result_grounding_validation_missing');
   }
   return Object.freeze({
     valid: true, ttsAllowed: true, route: 'TTS', value: Object.freeze({ speech: spoken }),

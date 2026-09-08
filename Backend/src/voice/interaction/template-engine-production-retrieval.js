@@ -192,8 +192,14 @@ export function exactPublishedCandidates(
         ...(metadata.crossDocumentCategoryAliases ?? []),
       ]);
       const routeForms = textList([
-        record.question, record.entity_name, record.content,
+        record.question, record.entity_name, record.name, record.intent, record.content,
         metadata.nodeKey, metadata.purpose, metadata.situation,
+        ...(record.conditions?.examples ?? []),
+        ...(record.conditions?.triggerPhrases ?? []),
+        ...(metadata.conditions?.examples ?? []),
+        ...(metadata.conditions?.triggerPhrases ?? []),
+        ...(metadata.authoritativeData?.conditions?.examples ?? []),
+        ...(metadata.authoritativeData?.conditions?.triggerPhrases ?? []),
         ...(record.publicationAliases ?? record.entity_aliases ?? []),
         ...(record.publicationSttForms ?? []),
         ...(record.publicationPhoneticForms ?? []),
@@ -262,6 +268,37 @@ export function exactPublishedCandidates(
   return Object.freeze([...new Map(candidates.sort((left, right) => right.score - left.score)
     .map((candidate) => [`${candidate.recordType}:${normalized(candidate.recordId)}`, candidate]))
     .values()].slice(0, limit));
+}
+
+export function deterministicPublishedWorkflowMatch({
+  artifacts, scope, usageDirection = 'both', latestUtterance,
+} = {}) {
+  const utterance = cleanText(latestUtterance, 2_000);
+  if (!utterance || !scope?.tenantId) return null;
+  const activePublications = new Set((scope.publications ?? []).map((publication) => (
+    `${normalized(publication?.knowledgeBaseId)}:${Number(publication?.publicationRevision)}`
+  )).filter((key) => !key.startsWith(':') && !key.endsWith(':0')));
+  const scopedArtifacts = {
+    ...(artifacts ?? {}),
+    bundles: (artifacts?.bundles ?? []).filter((bundle) => {
+      const publicationKey = `${normalized(bundle?.knowledgeBaseId)}:${Number(bundle?.publicationRevision)}`;
+      const assigned = Array.isArray(bundle?.assignedAgentIds) ? bundle.assignedAgentIds : [];
+      return activePublications.has(publicationKey)
+        && (!scope.agentId || !assigned.length
+          || assigned.some((id) => normalized(id) === normalized(scope.agentId)));
+    }),
+  };
+  const matches = exactPublishedCandidates(scopedArtifacts, {
+    tenantId: scope.tenantId, agentId: scope.agentId, usageDirection,
+  }, { query: utterance }, 20).filter((candidate) => (
+    candidate.recordType === 'WORKFLOW_RULE'
+    && Number(candidate.score) >= 0.98
+    && candidate.matchMethod === 'published_exact'
+  ));
+  const unique = [...new Map(matches.map((candidate) => [
+    normalized(candidate.recordId), candidate,
+  ])).values()];
+  return unique.length === 1 ? unique[0] : null;
 }
 
 function candidateRequestedRecordIds(candidate) {
@@ -427,6 +464,7 @@ const contextualReferenceTokens = new Set([
   'அது', 'அதுல', 'அதில்', 'அதை', 'அதன்', 'அதுக்கு',
   'இது', 'இதுல', 'இதில்', 'இதை', 'இதன்', 'இதுக்கு', 'அவை', 'இவை',
   'athu', 'athula', 'athil', 'athoda', 'ithu', 'ithula', 'ithil', 'ithoda',
+  'adhu', 'adhula', 'adhil', 'adhoda', 'idhu', 'idhula', 'idhil', 'idhoda',
 ]);
 
 function activePublishedCatalogRecordIds(artifacts, scope, usageDirection) {
@@ -987,8 +1025,6 @@ export async function retrieveTemplateEngineEvidence({
   contextualMemoryCandidate = false,
   deterministicRequestVerified = false,
   requestMeaning = null,
-  reviewEntityCandidates = null,
-  reviewContextualCandidates = null,
   isTurnCurrent = null,
 } = {}, dependencies = {}) {
   const startedAt = performance.now();
@@ -1148,40 +1184,16 @@ export async function retrieveTemplateEngineEvidence({
       reason: 'published_deterministic_route',
     });
   }
-  // Resolve remembered IDs from the current assigned publication, even when
-  // lexical/semantic channels cannot match a pronoun-only follow-up.
-  // Explicit published names always take precedence over stale memory hints.
-  if (!exactCatalog.length && !contextualMemoryVerified
-    && contextualMemoryCandidate && reviewContextualCandidates) {
-    const candidates = scopedBundles.flatMap((bundle) => (bundle.records ?? [])
-      .filter((record) => ['both', input.usageDirection].includes(normalized(record.usage_direction ?? record.usageDirection ?? 'both')))
-      .map((record) => publishedRecordCandidate(record, bundle, input))
-      .filter((candidate) => candidate && ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(candidate.recordType))).slice(0, 80);
-    const selected = await reviewContextualCandidates({ utterance: latestUtterance || search.query,
-      recentTurns: state.recentCompleteTurns ?? [], candidates });
-    if (selected?.length && selected.every((candidate) => candidates.includes(candidate))) {
-      const names = selected.map((candidate) => candidate.canonicalName).filter(Boolean).join(' ');
-      const expanded = exactPublishedCandidates({ ...artifacts, bundles: scopedBundles }, input,
-        { ...search, query: names }, 80, null, publicationIndex)
-        .filter((candidate) => candidate.score >= 0.98);
-      const ids = [...new Set(selected.flatMap((candidate) => {
-        const category = expanded.find((entry) => entry.recordType === 'CATALOG_CATEGORY'
-          && entry.categoryKey === candidate.categoryKey && entry.knowledgeBaseId === candidate.knowledgeBaseId
-          && entry.publicationRevision === candidate.publicationRevision);
-        return category?.evidenceRecordIds?.length ? category.evidenceRecordIds : [candidate.recordId];
-      }))];
-      search = Object.freeze({ ...search, query: `${names} ${search.requestedFact ?? ''}`.trim(),
-        preferredRecordIds: ids, contextualReference: names });
-      searchDecision = Object.freeze({ ...searchDecision, search });
-      input = { ...input, utterance: search.query, contextualReferences: [names] };
-      state = { ...state, lastReferencedRecordIds: ids, comparisonRecordIds: [] };
-    } else {
-      contextualMemoryVerified = false;
-      search = Object.freeze({ ...search, query: latestUtterance || search.query, preferredRecordIds: [], contextualReference: null });
-      searchDecision = Object.freeze({ ...searchDecision, search });
-      input = { ...input, utterance: search.query, contextualReferences: [] };
-      state = { ...state, lastReferencedRecordIds: [], comparisonRecordIds: [] };
-    }
+  // Unverified conversational memory is never resolved by a second model.
+  // Only deterministic contextual resolution may retain remembered IDs; all
+  // other speech is searched from the current utterance in the active snapshot.
+  if (!exactCatalog.length && !contextualMemoryVerified && contextualMemoryCandidate) {
+    contextualMemoryCandidate = false;
+    search = Object.freeze({ ...search, query: latestUtterance || search.query,
+      preferredRecordIds: [], contextualReference: null });
+    searchDecision = Object.freeze({ ...searchDecision, search });
+    input = { ...input, utterance: search.query, contextualReferences: [] };
+    state = { ...state, lastReferencedRecordIds: [], comparisonRecordIds: [] };
   }
   const preferred = new Set((exactCatalog.length ? [] : search.preferredRecordIds ?? []).map(normalized));
   let contextualRecords = scopedBundles.flatMap((bundle) => (bundle.records ?? [])
@@ -1331,37 +1343,37 @@ export async function retrieveTemplateEngineEvidence({
     searchBm25: async () => (await searchChannels()).channels.bm25,
     searchQdrantE5: async () => (await searchChannels()).channels.qdrant,
   });
-  const uncertainExactIdentity = exactCatalog.length > 1
-    && entityResolution?.ambiguity?.detected === true;
-  const identityReviewApplicable = uncertainExactIdentity || ![
-    templateEngineSearchKinds.OVERVIEW,
-  ].includes(route.searchKind);
-  if ((!exactCatalog.length || uncertainExactIdentity) && !deterministicRequestVerified
-    && !contextualMemoryVerified
-    && requestMeaning?.kind !== 'published_welcome_continuation'
-    && identityReviewApplicable && reviewEntityCandidates) {
-    // Semantic hits are hints only. Rebind their identities to active published
-    // records before exposing any candidate name to the language reviewer.
-    const published = scopedBundles.flatMap((bundle) => (bundle.records ?? [])
-      .filter((record) => ['both', input.usageDirection].includes(normalized(record.usage_direction ?? record.usageDirection ?? 'both')))
-      .map((record) => publishedRecordCandidate(record, bundle, input))
-      .filter((candidate) => candidate && ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(candidate.recordType)));
-    const byIdentity = new Map(published.map((candidate) => [candidateIdentityKey(candidate, input.tenantId), candidate]));
-    const candidates = [...new Map([
-      ...rawHybrid.candidates.map((candidate) => byIdentity.get(candidateIdentityKey(candidate, input.tenantId))).filter(Boolean),
-      ...published,
-    ].map((candidate) => [candidateIdentityKey(candidate, input.tenantId), candidate])).values()].slice(0, 80);
-    const reviewed = await reviewEntityCandidates({ utterance: latestUtterance || search.query,
-      candidates, recentTurns: state.recentCompleteTurns ?? [] });
-    if (reviewed && candidates.includes(reviewed)) {
-      const candidate = Object.freeze({ ...reviewed, matchMethod: 'published_multilingual_review', explicit: true,
-        entityType: reviewed.recordType === 'CATALOG_ITEM' ? 'ITEM' : 'CATEGORY' });
-      entityResolution = Object.freeze({ ...entityResolution, candidate, candidateNamespace: 'CATALOG',
-        action: 'CONTINUE', reason: 'verified_multilingual_identity', requiresCandidateConfirmation: false,
-        routingCandidates: [], ambiguity: { detected: false, candidates: [] } });
-      rawHybrid = { ...rawHybrid, candidates: [...rawHybrid.candidates.filter((entry) =>
-        candidateIdentityKey(entry, input.tenantId) !== candidateIdentityKey(candidate, input.tenantId)), candidate] };
-    }
+  // Hybrid results are already rebound to records in the assigned publication
+  // bundle. Keep a small ordered shortlist for unresolved speech; do not invoke
+  // multilingual/contextual identity reviewers or append the full catalog.
+  const reservedShortlistIdentities = new Set([
+    ...resolutionReservations(entityResolution),
+    ...(rawHybrid.queryContext?.reservedRecords ?? []),
+  ].map((candidate) => candidateIdentityKey(candidate, input.tenantId)).filter(Boolean));
+  const activeShortlistCandidates = (rawHybrid.candidates ?? [])
+    .filter((candidate) => belongsToActivePublication(candidate, {
+      ...scope, publications: artifacts.publications,
+    }));
+  const verifiedCandidateShortlist = Object.freeze([
+    ...activeShortlistCandidates.filter((candidate) => reservedShortlistIdentities.has(
+      candidateIdentityKey(candidate, input.tenantId),
+    )),
+    ...activeShortlistCandidates.filter((candidate) => !reservedShortlistIdentities.has(
+      candidateIdentityKey(candidate, input.tenantId),
+    )),
+  ].slice(0, Math.min(20, Math.max(5, reservedShortlistIdentities.size))));
+  if (!focusedDeterministicCandidates.length) {
+    const shortlistedIdentities = new Set(verifiedCandidateShortlist.map((candidate) => (
+      candidateIdentityKey(candidate, input.tenantId)
+    )));
+    rawHybrid = Object.freeze({
+      ...rawHybrid,
+      candidates: verifiedCandidateShortlist,
+      channels: Object.freeze(Object.fromEntries(Object.entries(rawHybrid.channels ?? {})
+        .map(([channel, candidates]) => [channel, Object.freeze((candidates ?? []).filter(
+          (candidate) => shortlistedIdentities.has(candidateIdentityKey(candidate, input.tenantId)),
+        ))]))),
+    });
   }
   const entityConstraint = constrainHybridToRequestedEntities(
     rawHybrid, input.tenantId, entityResolution, {
@@ -1645,7 +1657,9 @@ export async function retrieveTemplateEngineEvidence({
       verifiedPublishedEntityFastPath: verifiedPublishedEntitySelection !== null,
       focusedDeterministicRetrieval: focusedDeterministicCandidates.length > 0,
       providerSearchPerformed: focusedDeterministicCandidates.length === 0,
-      identityReviewApplicable,
+      verifiedCandidateShortlistCount: verifiedCandidateShortlist.length,
+      identityReviewPerformed: false,
+      contextualReviewPerformed: false,
       selectionRetryAttempted,
       requestedEntityHydrationIncomplete,
       requestedEntityCount: requestedIdentities.size,

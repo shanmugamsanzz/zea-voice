@@ -153,7 +153,7 @@ const liveReport = readFileSync(new URL(
   './build-production-latency-report.js', import.meta.url,
 ), 'utf8');
 assert.match(orchestrator, /armTemplateEngineTurnLatencyAcknowledgement\(\{/u);
-assert.match(orchestrator, /onRoutingResolved:[\s\S]*latencyAcknowledgement\.setSuppressed/u);
+assert.match(orchestrator, /onTurnResolved:[\s\S]*latencyAcknowledgement\.setSuppressed/u);
 assert.match(orchestrator, /runTemplateEngineProductionTurn\(\{/u);
 assert.match(orchestrator, /finalResponseReady\s*=\s*true;[\s\S]*latencyAcknowledgement\.cancel\(\)/u,
   'The whole-turn timer must be cancelled as soon as the final result is ready');

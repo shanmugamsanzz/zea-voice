@@ -7,7 +7,6 @@ import {
   validateTemplateEngineDecision,
 } from '../src/voice/interaction/template-engine-decision-contract.js';
 import { templateEnginePostSearchJsonSchema } from '../src/voice/interaction/template-engine-post-search-contract.js';
-import { templateEngineClaimValidationJsonSchema } from '../src/voice/interaction/template-engine-claim-validator.js';
 import { templateEngineWorkflowSpeechJsonSchema } from '../src/voice/interaction/template-engine-workflow-runtime.js';
 
 assert.equal(TEMPLATE_ENGINE_DECISION_CONTRACT_VERSION, 4);
@@ -140,7 +139,6 @@ function assertStrictProviderSchema(value, path = 'schema') {
 }
 assertStrictProviderSchema(templateEngineDecisionJsonSchema);
 assertStrictProviderSchema(templateEnginePostSearchJsonSchema);
-assertStrictProviderSchema(templateEngineClaimValidationJsonSchema);
 assertStrictProviderSchema(templateEngineWorkflowSpeechJsonSchema);
 
 const source = readFileSync(new URL(

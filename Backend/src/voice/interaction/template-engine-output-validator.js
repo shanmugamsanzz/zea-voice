@@ -185,6 +185,25 @@ function valid(route, value) {
   return Object.freeze({ valid: true, ttsAllowed: route === 'TTS', route, value });
 }
 
+function wordTokens(value) {
+  return new Set(identity(value).split(/\s+/u).filter((token) => token.length > 1));
+}
+
+function requestedFactAddressed(response, requestedFact) {
+  const requested = identity(requestedFact);
+  if (!requested || ['details', 'detail', 'overview', 'general knowledge', 'explanation']
+    .includes(requested)) return true;
+  const responseTokens = wordTokens(response);
+  const requestedTokens = wordTokens(requested);
+  if ([...requestedTokens].some((token) => token === 'test' || token === 'tests')
+    && responseTokens.size > 0) return true;
+  if ([...requestedTokens].some((token) => responseTokens.has(token))) return true;
+  if ([...requestedTokens].some((token) => token.startsWith('price'))
+    && ['cost', 'costs', 'currency']
+    .some((token) => responseTokens.has(token))) return true;
+  return false;
+}
+
 function safeInformationUnavailableSpeech(value) {
   const speech = cleanText(value, 4_000).toLocaleLowerCase();
   if (!speech) return false;
@@ -258,15 +277,9 @@ function validateResponse(decision, input) {
     return invalid('unverified_cited_evidence', { factual: true, retryCount: input.retryCount });
   }
   const permittedNumbers = allowedNumbers(selectedEvidence, input.callerProvidedValues);
-  // Caller numbers are reference context, not published business facts. The
-  // deterministic pass permits them provisionally; semantic validation still
-  // decides whether speech uses them as caller facts or invents a business fact.
-  if (input.semanticClaimValidation?.supported === true || deterministicOnly) {
-    for (const number of numbers(input.currentUtterance)) permittedNumbers.add(number);
-  }
   const unsupportedNumbers = numericClaims(
     [decision.response, decision.nextQuestion?.question].filter(Boolean).join(' '),
-    input.semanticClaimValidation?.supported === true || deterministicOnly,
+    deterministicOnly,
   )
     .filter((claim) => !permittedNumbers.has(claim.normalized));
   if (unsupportedNumbers.length) {
@@ -278,6 +291,15 @@ function validateResponse(decision, input) {
       },
     });
   }
+  const comparisonRequest = (input.requiredEvidenceRecordIds ?? []).length > 1
+    && /(?:compar|differ)/iu.test(requestedFact);
+  const focusedRequestedFact = [...wordTokens(requestedFact)].length <= 4;
+  if (requestedFact && focusedRequestedFact && !comparisonRequest
+    && !requestedFactAddressed(decision.response, requestedFact)) {
+    return invalid('requested_fact_not_addressed', {
+      factual: true, retryCount: input.retryCount,
+    });
+  }
   const mentioned = entitiesMentioned(
     decision.response, input.publishedEntities, input.claimedNames,
   );
@@ -287,25 +309,12 @@ function validateResponse(decision, input) {
   const citedRecordIds = new Set(selectedEvidence.map((source) => (
     cleanText(source?.recordId, 160).toLocaleLowerCase()
   )).filter(Boolean));
-  const completeMultiRecordEvidence = citedRecordIds.size > 1
-    && (input.semanticClaimValidation?.supported === true || deterministicOnly);
+  const completeMultiRecordEvidence = citedRecordIds.size > 1 && deterministicOnly;
   if (!evidenceSupportsRelationship(
     mentioned, selectedEvidence,
     input.allowMultipleEntities === true || completeMultiRecordEvidence,
   )) {
     return invalid('unsupported_relationship_claim', { factual: true, retryCount: input.retryCount });
-  }
-  if (!deterministicOnly && input.semanticClaimValidation?.supported !== true) {
-    return invalid(input.semanticClaimValidation
-      ? 'unsupported_factual_claim' : 'grounding_validation_missing', {
-      factual: true, retryCount: input.retryCount,
-    });
-  }
-  if (!deterministicOnly && (requestedFact || cleanText(input.currentUtterance))
-    && input.semanticClaimValidation?.requestedFactAddressed !== true) {
-    return invalid('requested_fact_not_addressed', {
-      factual: true, retryCount: input.retryCount,
-    });
   }
   return valid('TTS', decision);
 }
@@ -318,11 +327,7 @@ function validateClarification(decision, input) {
   const questionMarks = (clarification.question.match(/[?？]/gu) ?? []).length;
   if (questionMarks > 1) return invalid('multiple_clarification_questions');
   if (input.ambiguity?.required !== true) return invalid('clarification_not_required');
-  if (input.clarificationRelevant === false
-    || input.semanticClaimValidation?.requestedFactAddressed === false
-    || input.semanticClaimValidation?.supported === false
-    || (input.deterministicOnly !== true && input.claimValidationRequired === true
-      && input.semanticClaimValidation?.supported !== true)) {
+  if (input.clarificationRelevant === false) {
     return invalid('irrelevant_or_unsupported_clarification');
   }
   const allowedCandidates = new Set((input.ambiguity?.candidates ?? []).map(identity).filter(Boolean));
@@ -429,13 +434,6 @@ export function validateTemplateEngineOutput(input = {}) {
     if (internalOrJson(decision.response)) return invalid('invalid_no_match_speech', {
       factual: input.factualClaimsPresent === true, retryCount: input.retryCount,
     });
-    if (input.deterministicOnly !== true && input.claimValidationRequired === true
-      && input.semanticClaimValidation?.supported !== true) {
-      return invalid(input.semanticClaimValidation
-        ? 'unsupported_no_match_claim' : 'grounding_validation_missing', {
-        factual: true, retryCount: input.retryCount,
-      });
-    }
     if (input.requestedFactAvailable === true) {
       return invalid('no_match_rejected_when_requested_fact_is_available', {
         factual: true, retryCount: input.retryCount,
@@ -446,8 +444,7 @@ export function validateTemplateEngineOutput(input = {}) {
         factual: true, retryCount: input.retryCount,
       });
     }
-    if (input.deterministicOnly === true
-      && !safeInformationUnavailableSpeech(decision.response)) {
+    if (!safeInformationUnavailableSpeech(decision.response)) {
       return invalid('unsafe_no_match_claim', {
         factual: input.factualClaimsPresent === true, retryCount: input.retryCount,
       });

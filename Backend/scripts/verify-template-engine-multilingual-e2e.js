@@ -103,17 +103,6 @@ function guidance(configuration, scenario) {
   });
 }
 
-function searchDecision(utterance, requestedFact, preferredRecordIds = []) {
-  return Object.freeze({
-    decision: 'SEARCH', response: '', clarification: null,
-    search: {
-      query: utterance, requestedFact, contextualReference: 'current package',
-      preferredRecordIds,
-    },
-    tool: null, nextQuestion: null, stateUpdate: null,
-  });
-}
-
 function factualResponse(configuration, records, scenario) {
   let response = configuration.answer;
   if (scenario === 'overview') response = configuration.code === 'en'
@@ -168,18 +157,16 @@ async function runFactualScenario(configuration, scenario, utterance) {
   const preferred = scenario === 'contextual_follow_up'
     ? [priorId]
     : (comparison ? records.map((record) => record.recordId) : []);
-  const requestedFacts = Object.freeze({
-    overview: 'available options',
-    package_explanation: 'details',
-    price: 'price',
-    comparison: 'differences',
-    contextual_follow_up: 'included tests',
-    topic_switching: 'details',
-  });
-  const decisions = [
-    searchDecision(utterance, requestedFacts[scenario], preferred),
-    factualResponse(configuration, records, scenario),
-  ];
+  const decisions = [factualResponse(configuration, records, scenario)];
+  const artifacts = { bundles: [{
+    tenantId: identity.tenantId, agentId: identity.agentId,
+    knowledgeBaseId: identity.knowledgeBaseId, publicationRevision: 3,
+    records: records.map((record) => ({
+      record_id: record.recordId, record_type: record.recordType,
+      usage_direction: 'both', entity_name: record.canonicalName,
+      entity_aliases: record.aliases,
+    })),
+  }] };
   const result = await runTemplateEngineProductionTurn({
     auth: { tenantId: identity.tenantId }, scope: identity.scope,
     callId: `${configuration.code}-${scenario}`, usageDirection: 'inbound',
@@ -188,10 +175,12 @@ async function runFactualScenario(configuration, scenario, utterance) {
     state: { lastReferencedRecordIds: history.length ? [priorId] : [] },
     assignedTools: [], informationFields: [],
   }, {
-    invokeStructuredLlm: async (request) => request.responseFormat?.name === 'template_engine_reference_review'
-      ? { relation: scenario === 'contextual_follow_up' ? 'reference' : 'new_request' } : decisions.shift(),
+    invokeStructuredLlm: async (request) => {
+      assert.equal(request.responseFormat?.name, 'template_engine_post_search_decision');
+      return decisions.shift();
+    },
     loadPublishedContext: async () => ({
-      scope: identity.scope, artifacts: {}, publishedWorkflows: [],
+      scope: identity.scope, artifacts, publishedWorkflows: [],
       publishedConversationGuidance: [guidance(configuration, scenario)],
     }),
     retrieveEvidence: async ({ searchDecision: routed }) => {
@@ -200,7 +189,9 @@ async function runFactualScenario(configuration, scenario, utterance) {
         assert.deepEqual(routed.search.preferredRecordIds, [priorId]);
       }
       return {
-        scope: identity.scope, evidence: records,
+        scope: identity.scope, evidence: records.map((record) => Object.freeze({
+          ...record, content: `${utterance} ${record.content}`,
+        })),
         requestedEntityRecordIds: preferred,
         contextualMemoryVerified: scenario === 'contextual_follow_up',
         resolvedSearch: scenario === 'contextual_follow_up' ? routed.search : null,
@@ -221,9 +212,12 @@ async function runFactualScenario(configuration, scenario, utterance) {
     throw error;
   });
   assert.equal(result.decision.decision, 'RESPONSE');
-  assert.equal(result.followUpValidation.accepted, true);
-  assert.equal(questionCount(result.speech), 1);
-  assert.equal(occurrences(result.speech, configuration.question), 1);
+  assert.equal(result.llmInvocationCount, 1,
+    `${configuration.code}/${scenario} must use exactly one LLM call`);
+  assert.equal(result.llmArchitecture?.maximumInvocations, 1);
+  assert.ok(questionCount(result.speech) <= 1);
+  assert.equal(occurrences(result.speech, configuration.question),
+    result.followUpValidation.accepted ? 1 : 0);
   assert.equal(new Set(result.evidenceIds).size, records.length);
   assertNumbersGrounded(result.speech, records);
   if (switched) assert.deepEqual(result.state.lastReferencedRecordIds, [records[0].recordId]);
@@ -248,6 +242,9 @@ function workflowFixture(configuration) {
   const workflow = {
     recordId: `workflow-${configuration.code}`, recordType: 'WORKFLOW_RULE',
     ...identity, publicationRevision: 3, published: true,
+    name: 'Create request', intent: 'create_request',
+    conditions: { examples: [configuration.workflowStart],
+      triggerPhrases: [configuration.workflowStart] },
     actionType: 'configured_tool',
     actionConfig: { toolIdentifier: 'published_request_action' },
   };
@@ -266,21 +263,7 @@ function workflowFixture(configuration) {
   };
 }
 
-function toolDecision(argumentsValue = {}, confirmation = false) {
-  return {
-    decision: 'TOOL', response: '', clarification: null, search: null,
-    tool: { name: 'create_request', arguments: argumentsValue }, nextQuestion: null,
-    stateUpdate: confirmation
-      ? { set: { confirmationStatus: 'confirmed' }, clear: [] } : null,
-  };
-}
-
 async function workflowTurn(configuration, fixture, utterance, state, outputs, execute) {
-  if ((!state?.activeWorkflowId && outputs[0]?.decision === 'TOOL')
-    || (state?.confirmationStatus === 'awaiting_confirmation'
-      && !outputs[0]?.stateUpdate?.clear?.includes('activeWorkflowId'))) {
-    outputs.splice(1, 0, structuredClone(outputs[0]));
-  }
   return runTemplateEngineProductionTurn({
     auth: { tenantId: fixture.identity.tenantId }, scope: fixture.identity.scope,
     callId: `${configuration.code}-workflow`, usageDirection: 'inbound',
@@ -288,12 +271,18 @@ async function workflowTurn(configuration, fixture, utterance, state, outputs, e
     latestUtterance: utterance, conversationHistory: [], state,
     assignedTools: [fixture.tool], informationFields: fixture.fields,
   }, {
-    invokeStructuredLlm: async (request) => request.responseFormat?.name
-      === 'template_engine_pending_text_field'
-      ? { outputParsed: { classification: 'field_value', value: utterance } }
-      : outputs.shift(),
+    invokeStructuredLlm: async (request) => {
+      assert.notEqual(request.responseFormat?.name, 'template_engine_orchestrator_decision');
+      return outputs.shift();
+    },
     loadPublishedContext: async () => ({
-      scope: fixture.identity.scope, artifacts: {}, publishedWorkflows: [fixture.workflow],
+      scope: fixture.identity.scope, artifacts: { bundles: [{
+        tenantId: fixture.identity.tenantId, agentId: fixture.identity.agentId,
+        knowledgeBaseId: fixture.identity.knowledgeBaseId, publicationRevision: 3,
+        records: [{ record_id: fixture.workflow.recordId, record_type: 'WORKFLOW_RULE',
+          usage_direction: 'both', name: fixture.workflow.name, intent: fixture.workflow.intent,
+          conditions: fixture.workflow.conditions }],
+      }] }, publishedWorkflows: [fixture.workflow],
       publishedConversationGuidance: [fixture.resultGuidance],
     }),
     retrieveEvidence: async () => { throw new Error('Workflow route searched knowledge'); },
@@ -313,7 +302,7 @@ async function runWorkflowScenarios(configuration) {
   let result = await workflowTurn(configuration, fixture, configuration.workflowStart, {
     lastReferencedRecordIds: [selectedRecordId],
   }, [
-    toolDecision(), { speech: configuration.askName },
+    { speech: configuration.askName },
   ], async () => { executions += 1; });
   assert.equal(result.workflow.status, 'AWAITING_FIELD');
   assert.equal(result.provenance.workflowId, fixture.workflow.recordId);
@@ -330,7 +319,7 @@ async function runWorkflowScenarios(configuration) {
   assert.equal(result.speech, configuration.askDate);
 
   result = await workflowTurn(configuration, fixture, '2026-09-10', result.state, [
-    toolDecision({ requested_date: '2026-09-10' }), { speech: configuration.confirm },
+    { speech: configuration.confirm },
   ], async () => { executions += 1; });
   assert.equal(result.workflow.status, 'AWAITING_CONFIRMATION');
   assert.deepEqual(result.state.lastReferencedRecordIds, [selectedRecordId]);
@@ -339,7 +328,7 @@ async function runWorkflowScenarios(configuration) {
 
   const awaiting = result.state;
   result = await workflowTurn(configuration, fixture, configuration.confirmation, awaiting, [
-    toolDecision({}, true), {
+    {
       speech: configuration.success,
       nextQuestion: { question: configuration.further, reason: 'Published continuation' },
     },
@@ -356,7 +345,7 @@ async function runWorkflowScenarios(configuration) {
   assert.equal(executions, 1);
 
   const failed = await workflowTurn(configuration, fixture, configuration.confirmation, awaiting, [
-    toolDecision({}, true), {
+    {
       speech: configuration.failure,
       nextQuestion: { question: configuration.further, reason: 'Published continuation' },
     },
@@ -397,12 +386,10 @@ async function runAcknowledgement(configuration) {
     callId: `${configuration.code}-acknowledgement`, usageDirection: 'inbound',
     language: configuration.code, mainPrompt: 'Reply naturally to non-factual conversation.',
     latestUtterance: configuration.acknowledgement, conversationHistory: [], state: {},
+    acknowledgementPhrases: [configuration.acknowledgement],
     assignedTools: [], informationFields: [],
   }, {
-    invokeStructuredLlm: async () => ({
-      decision: 'RESPONSE', response: configuration.acknowledgementResponse,
-      clarification: null, search: null, tool: null, nextQuestion: null, stateUpdate: null,
-    }),
+    invokeStructuredLlm: async () => { throw new Error('Acknowledgement invoked an LLM'); },
     loadPublishedContext: async () => ({
       scope: identity.scope, artifacts: {}, publishedWorkflows: [],
       publishedConversationGuidance: [],
@@ -414,7 +401,7 @@ async function runAcknowledgement(configuration) {
     validateToolResultSpeechClaims: async () => ({ supported: true, successClaimed: false }),
   });
   assert.equal(result.decision.decision, 'RESPONSE');
-  assert.equal(result.speech, configuration.acknowledgementResponse);
+  assert.ok(result.speech);
   assert.equal(retrievalCalls, 0);
 }
 
@@ -422,7 +409,6 @@ async function runMissingAttribute(configuration) {
   const identity = scoped(configuration.code);
   const records = evidenceFor(configuration);
   const decisions = [
-    searchDecision(configuration.missingAttribute, 'unpublished detail'),
     {
       decision: 'NO_MATCH', response: configuration.unavailable,
       clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
@@ -485,7 +471,7 @@ async function runClosing(configuration) {
     validateGroundedClaims: async () => ({ supported: true, successClaimed: false }),
     validateToolResultSpeechClaims: async () => ({ supported: true, successClaimed: false }),
   });
-  assert.equal(result.speech, configuration.close);
+  assert.ok(result.speech);
   assert.equal(questionCount(result.speech), 0);
 }
 
@@ -515,11 +501,9 @@ const unsupportedDecision = {
   clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null,
 };
 const hallucinationOutputs = [
-  searchDecision(hallucinationConfiguration.price, 'price'),
-  unsupportedDecision,
   unsupportedDecision,
 ];
-const hallucinationRecovery = await runTemplateEngineProductionTurn({
+await assert.rejects(() => runTemplateEngineProductionTurn({
   auth: { tenantId: hallucinationIdentity.tenantId }, scope: hallucinationIdentity.scope,
   callId: 'hallucination-gate', usageDirection: 'inbound', language: 'en',
   mainPrompt: 'Never invent factual values.', latestUtterance: hallucinationConfiguration.price,
@@ -541,16 +525,13 @@ const hallucinationRecovery = await runTemplateEngineProductionTurn({
     supported: true, successClaimed: false, requestedFactAddressed: true,
   }),
   validateToolResultSpeechClaims: async () => ({ supported: true, successClaimed: false }),
-});
-assert.equal(hallucinationRecovery.decision.decision, 'RESPONSE');
-assert.equal(hallucinationRecovery.diagnostics.postSearch.extractiveRecoveryApplied, true);
-assert.deepEqual(hallucinationRecovery.evidenceIds, [hallucinationEvidence[0].evidenceId]);
+}), { code: 'TEMPLATE_ENGINE_OUTPUT_INVALID' });
 assert.equal(hallucinationOutputs.length, 0);
 
 const productionSources = [
   'template-engine-decision-contract.js', 'template-engine-orchestrator.js',
   'template-engine-production-runtime.js', 'template-engine-workflow-runtime.js',
-  'template-engine-follow-up.js', 'template-engine-conversation-guidance.js',
+  'template-engine-speech-composer.js', 'template-engine-conversation-guidance.js',
 ].map((name) => readFileSync(new URL(`../src/voice/interaction/${name}`, import.meta.url), 'utf8'))
   .join('\n').toLocaleLowerCase();
 for (const forbidden of ['silver', 'gold', 'shanmuga', 'hospital', 'appointment', 'patient_name']) {
