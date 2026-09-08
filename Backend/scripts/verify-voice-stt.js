@@ -186,4 +186,45 @@ assert.throws(
   (error) => error.code === 'STT_AUDIO_FORMAT_UNSUPPORTED',
 );
 
+// Terminating a socket that is still CONNECTING emits an error in ws. The
+// adapter must absorb that expected event and reject with the timeout error
+// instead of crashing the Node process with an unhandled EventEmitter error.
+class TimedOutWebSocket extends EventEmitter {
+  constructor() {
+    super();
+    this.readyState = 0;
+    this.terminationErrors = 0;
+  }
+  terminate() {
+    this.readyState = 3;
+    queueMicrotask(() => {
+      this.terminationErrors += 1;
+      this.emit('error', new Error('WebSocket was closed before the connection was established'));
+    });
+  }
+}
+
+let timedOutSocket;
+const timedOutAdapter = createSarvamSttAdapter({
+  providerConfig,
+  runtimeContext: {
+    connectTimeoutMs: 5,
+    webSocketFactory() {
+      timedOutSocket = new TimedOutWebSocket();
+      return timedOutSocket;
+    },
+  },
+});
+const timeoutTestKeepAlive = setInterval(() => {}, 100);
+try {
+  await assert.rejects(() => timedOutAdapter.connect(),
+    (error) => error.code === 'STT_CONNECT_TIMEOUT');
+} finally {
+  clearInterval(timeoutTestKeepAlive);
+}
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(timedOutSocket.terminationErrors, 1);
+assert.equal(timedOutSocket.listenerCount('error'), 0);
+timedOutAdapter.close();
+
 console.log(JSON.stringify({ success: true, task: 'Streaming STT - Sarvam normalized adapter' }));

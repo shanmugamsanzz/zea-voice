@@ -276,7 +276,12 @@ export function createSarvamSttAdapter({ providerConfig, runtimeContext = {} }) 
       socket = candidate;
       const timeout = setTimeout(() => {
         cleanup();
-        candidate.terminate?.();
+        // ws emits an `error` when a CONNECTING socket is terminated. The
+        // initial connection listener has just been removed by cleanup(), so
+        // keep a one-shot listener for that expected termination event. Without
+        // it, Node treats the event as unhandled and terminates the process.
+        candidate.once('error', () => {});
+        try { candidate.terminate?.(); } catch { /* timeout remains authoritative */ }
         reject(new AppError(504, 'Sarvam STT connection timed out', 'STT_CONNECT_TIMEOUT'));
       }, runtimeContext.connectTimeoutMs ?? 10_000);
       timeout.unref?.();
