@@ -4,12 +4,15 @@ import { normalizedSpeechBudget } from './template-engine-speech-budget.js';
 // omit repeated storage/scope metadata only from the generation prompt. The
 // original records remain available to coverage and grounding validators.
 export function createTemplateEngineAnswerContext({
-  evidence, latestUtterance, requestedFact, maximumSpeechCharacters,
+  evidence, latestUtterance, requestedFact, language, requestedEntityRecordIds = [],
+  maximumSpeechCharacters,
 }) {
   return {
     answerRequirements: {
       originalUtterance: latestUtterance,
       requestedFact,
+      language: String(language ?? '').trim() || null,
+      requestedEntityRecordIds: [...new Set(requestedEntityRecordIds)],
       maximumSpokenCharacters: normalizedSpeechBudget(maximumSpeechCharacters),
       budgetIncludes: ['response', 'nextQuestion', 'spaces', 'punctuation'],
       allowedEvidenceIds: evidence.map((entry) => entry.evidenceId),

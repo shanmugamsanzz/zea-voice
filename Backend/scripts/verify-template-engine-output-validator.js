@@ -303,6 +303,13 @@ const deterministicHallucination = validateTemplateEngineSearchClaims({
 assert.equal(deterministicHallucination.deterministicallyGrounded, false);
 assert.ok(deterministicHallucination.unsupportedTerms.includes('free'));
 assert.ok(deterministicHallucination.unsupportedTerms.includes('mri'));
+const deterministicInflection = validateTemplateEngineSearchClaims({
+  speech: 'Service Alpha includes screenings.', evidence: [{
+    ...evidence[0], content: 'Service Alpha includes screening.',
+  }], decision: 'RESPONSE', searchInterpretation: { requestedFact: 'included feature' },
+});
+assert.equal(deterministicInflection.deterministicallyGrounded, true,
+  'A safe inflection of published wording must not require semantic LLM validation');
 const deterministicWrongFact = validateTemplateEngineSearchClaims({
   speech: 'Service Alpha costs 3200 units.', evidence,
   decision: 'RESPONSE', searchInterpretation: { requestedFact: 'included feature' },

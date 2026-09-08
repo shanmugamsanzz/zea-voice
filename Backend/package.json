@@ -225,6 +225,7 @@
     "verify:template-engine-validation-recovery": "node scripts/verify-template-engine-validation-recovery.js",
     "verify:template-engine-shadow-cutover": "node scripts/verify-template-engine-shadow-cutover.js",
     "verify:template-engine-conversation-replay": "node scripts/verify-template-engine-conversation-replay.js",
+    "verify:template-engine-behavior-baseline": "node scripts/verify-template-engine-routing-evidence-gate.js && node scripts/verify-template-engine-multilingual-e2e.js && node scripts/verify-template-engine-conversation-replay.js && node scripts/verify-template-engine-workflow-runtime.js && node scripts/verify-interruption-audio-isolation.js",
     "verify:template-engine-live-acceptance": "node scripts/verify-template-engine-multilingual-e2e.js && node scripts/verify-template-engine-live-acceptance.js",
     "verify:template-engine-production-runtime": "node scripts/verify-template-engine-production-runtime.js",
     "verify:template-engine-direct-cutover": "node scripts/verify-template-engine-direct-cutover.js",

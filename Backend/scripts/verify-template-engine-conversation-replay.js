@@ -8,6 +8,9 @@ process.env.DATABASE_URL ??= 'postgresql://test:test@localhost:5432/test';
 process.env.REDIS_HOST ??= 'localhost';
 const { RealtimeConversationOrchestrator } = await import('../src/voice/realtime-conversation-orchestrator.js');
 const fixture = JSON.parse(readFileSync(new URL('../fixtures/template-engine-sept06-replay.json', import.meta.url), 'utf8'));
+const behaviorBaseline = JSON.parse(readFileSync(
+  new URL('../fixtures/template-engine-behavior-baseline.json', import.meta.url), 'utf8',
+));
 const publication = { tenantId: 'tenant-a', knowledgeBaseId: 'kb-a', publicationRevision: 1 };
 const records = Object.entries(fixture.subjects).map(([id, subject]) => ({
   record_id: id, record_type: 'catalog_item', entity_name: subject.name, usage_direction: 'both',
@@ -22,6 +25,7 @@ records.push({ record_id: 'welcome-next', record_type: 'conversation_node', usag
 const recovery = 'Sorry, I could not prepare that answer. Please try again.';
 const logs = [], spoken = [], audioFrames = [], results = [], normalAnswerLatencies = [];
 let turn, stages = new Set(), failAnswer = false, resolvedCoverageSkips = 0;
+let selectedEntityIds = [];
 class Stt {
   listeners = new Set();
   async connect() {} cancel() {} close() {} sendAudio() {} flush() {}
@@ -119,11 +123,14 @@ const orchestrator = new RealtimeConversationOrchestrator(media, {
   templateEngineKnowledgeDependencies: {
     loadArtifacts: async () => ({ publications: [publication], sparseIndexes: [], bundles: [{ ...publication, records }] }),
     searchCandidates: async () => { stages.add('retrieval'); return { channels: { structured: [], bm25: [], qdrant: [] } }; },
-    hydrateEvidence: async ({ retrieval }) => ({ evidence: retrieval.candidates.map((entry) => {
+    hydrateEvidence: async ({ retrieval }) => {
+      selectedEntityIds = retrieval.candidates.map((entry) => entry.recordId);
+      return { evidence: retrieval.candidates.map((entry) => {
       const record = records.find((item) => item.record_id === entry.recordId);
       return { ...entry, id: entry.recordId, callerFacing: true, hydrationValidated: true, publicationValidated: true,
         content: record.content, authoritativeData: record.entity_metadata, provenance: publication };
-    }) }),
+      }) };
+    },
   },
 });
 async function waitFor(fn) {
@@ -138,7 +145,7 @@ try {
   media.emit('start', { session: media });
   await waitFor(() => orchestrator.controller.state === 'listening');
   for (turn of [...fixture.turns, { id: 'rejected-repair', text: 'Kids package details please', subject: 'kids' }]) {
-    stages = new Set(); failAnswer = turn.id === 'rejected-repair';
+    stages = new Set(); selectedEntityIds = []; failAnswer = turn.id === 'rejected-repair';
     const before = spoken.length, framesBefore = audioFrames.length;
     const completed = logs.filter((entry) => entry.stage === 'template_engine.turn_completed').length;
     stt.publish({ type: 'final_transcript', text: turn.text, language: 'ta', isFinal: true });
@@ -186,7 +193,19 @@ try {
       normalAnswerLatencies.push(Number(completedTurn.finalAnswerFirstAudioMs));
     }
     assert.ok(!media.closed);
-    results.push({ id: turn.id, answer, audioFrames: audioFrames.length - framesBefore });
+    results.push({
+      id: turn.id,
+      route: { initial: completedTurn.initialDecision, final: completedTurn.finalDecision },
+      selectedEntityIds: [...selectedEntityIds],
+      evidenceIds: [...completedTurn.evidenceIds],
+      responseMeaning: stages.has('template_engine_welcome_meaning')
+        ? 'published_welcome_continuation'
+        : stages.has('template_engine_contextual_subject_review')
+          ? 'contextual_reference' : 'direct_request',
+      toolState: { workflowStatus: completedTurn.workflowStatus, toolExecuted: completedTurn.toolExecuted },
+      spokenAnswer: answer,
+      audioFrames: audioFrames.length - framesBefore,
+    });
   }
   assert.ok(resolvedCoverageSkips > 0,
     'Resolved factual replay must skip at least one duplicate entity-coverage LLM review');
@@ -194,6 +213,8 @@ try {
     / normalAnswerLatencies.length;
   assert.ok(averageNormalAnswerLatencyMs < 3_000,
     `Offline normal-response average exceeded three seconds: ${averageNormalAnswerLatencyMs}`);
+  assert.deepEqual(results.map(({ audioFrames, ...behavior }) => behavior), behaviorBaseline.conversation,
+    'Conversation behavior changed from the approved pre-optimization baseline');
   console.log(JSON.stringify({ passed: true, mode: 'offline-provider-fixtures', liveModelVerified: false,
     acousticQualityVerified: false, productionRolloutApproved: false,
     latency: { samples: normalAnswerLatencies.length,

@@ -4,6 +4,7 @@ import { normalizedSpeechBudget, speechBudgetInstruction } from './template-engi
 import { applyMinimalTemplateEngineStateUpdate, createMinimalTemplateEngineState } from './template-engine-state.js';
 import { routeTemplateEngineUtterance, respondToTemplateEngineSearch } from './template-engine-orchestrator.js';
 import {
+  deterministicPublishedRequestDecision,
   loadTemplateEnginePublishedContext,
   retrieveTemplateEngineEvidence,
 } from './template-engine-production-retrieval.js';
@@ -21,6 +22,7 @@ import {
 import { reviewMultilingualEntity } from './template-engine-multilingual-entity-review.js';
 import { reviewContextualSubjects } from './template-engine-contextual-subject-review.js';
 import { extractSchemaFieldValue } from './schema-field-value-extractor.js';
+import { acknowledgementOnly } from '../interruption/final-turn-validator.js';
 import {
   repairTemplateEngineFollowUp,
   validateAndComposeTemplateEngineSpeech,
@@ -512,7 +514,7 @@ async function completedSpeculationWithin(promise, waitMs) {
 }
 
 const deterministicWorkflowFieldTypes = new Set([
-  'number', 'integer', 'date', 'time', 'email', 'phone',
+  'number', 'integer', 'date', 'time', 'email', 'phone', 'string', 'text',
 ]);
 const reviewedTextWorkflowFieldTypes = new Set(['string', 'text']);
 
@@ -524,12 +526,20 @@ function scalarIdentity(value) {
 // This bypasses only classification of an exact scalar answer to the one
 // configured pending field. Collection still re-resolves workflow/tool scope,
 // validates the field schema, persists state and requires final confirmation.
-export function deterministicPendingWorkflowFieldDecision(context, utterance) {
+export function deterministicPendingWorkflowFieldDecision(context, utterance, options = {}) {
   if (!context?.pendingFieldKey || context.awaitingConfirmation
     || cleanText(context.interruptedRequest)) return null;
   const field = (context.fields ?? []).find((entry) => entry.key === context.pendingFieldKey);
   const schemaType = cleanText(field?.type ?? field?.schema?.type, 40).toLocaleLowerCase();
   if (!field || !deterministicWorkflowFieldTypes.has(schemaType)) return null;
+  const text = cleanText(utterance, 1_000);
+  const words = text.match(/[\p{L}\p{M}\p{N}]+/gu) ?? [];
+  if (reviewedTextWorkflowFieldTypes.has(schemaType)) {
+    const excluded = new Set((options.excludedPhrases ?? [])
+      .map((value) => scalarIdentity(value)).filter(Boolean));
+    if (!text || text.length > 240 || words.length !== 1 || /[?ï¼Ÿ]/u.test(text)
+      || excluded.has(scalarIdentity(text))) return null;
+  }
   const value = extractSchemaFieldValue({
     ...field.schema, type: schemaType, question: field.question, label: field.key,
   }, utterance, {
@@ -607,6 +617,31 @@ export async function reviewPendingTextWorkflowField(context, utterance, invokeS
     decision: 'TOOL', response: '', clarification: null, search: null,
     tool: Object.freeze({ name: context.toolName,
       arguments: Object.freeze({ [pending.field.key]: value }) }),
+    nextQuestion: null, stateUpdate: null,
+  });
+}
+
+export function deterministicAcknowledgementDecision({
+  utterance, acknowledgementPhrases = [], workflowContext, pendingQuestion,
+} = {}) {
+  if (!acknowledgementOnly(utterance, acknowledgementPhrases)) return null;
+  if (workflowContext?.pendingFieldKey && !workflowContext.awaitingConfirmation
+    && !cleanText(workflowContext.interruptedRequest) && workflowContext.toolName) {
+    return Object.freeze({
+      decision: 'TOOL', response: '', clarification: null, search: null,
+      tool: Object.freeze({ name: workflowContext.toolName, arguments: Object.freeze({}) }),
+      nextQuestion: null, stateUpdate: null,
+    });
+  }
+  const question = cleanText(
+    pendingQuestion?.question ?? pendingQuestion?.text ?? pendingQuestion, 1_000,
+  );
+  if (!question) return null;
+  return Object.freeze({
+    decision: 'CLARIFY', response: '', search: null, tool: null,
+    clarification: Object.freeze({
+      reason: 'acknowledgement_pending_question', question, candidates: Object.freeze([]),
+    }),
     nextQuestion: null, stateUpdate: null,
   });
 }
@@ -805,7 +840,9 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       state: { ...state, lastReferencedRecordIds: [], comparisonRecordIds: [] },
       runtimeProfile: input.runtimeProfile,
       preloadedArtifacts: publishedContext.artifacts,
+      preloadedPublicationIndex: publishedContext.publicationIndex,
       conversationGuidance: initialConversationGuidance,
+      isTurnCurrent: dependencies.isTurnCurrent,
       speculative: true,
     }).catch((error) => Object.freeze({ error })).then((value) => {
       completedSpeculativeResult = value;
@@ -839,12 +876,26 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   };
   const deterministicWorkflowDecision = deterministicPendingWorkflowFieldDecision(
     workflowRoutingContext, input.latestUtterance,
+    { excludedPhrases: [
+      ...(input.acknowledgementPhrases ?? []), ...(input.explicitStopPhrases ?? []),
+    ] },
   );
-  const reviewedTextWorkflowDecision = deterministicWorkflowDecision ? null
+  const deterministicAcknowledgement = deterministicWorkflowDecision ? null
+    : deterministicAcknowledgementDecision({
+      utterance: input.latestUtterance,
+      acknowledgementPhrases: input.acknowledgementPhrases,
+      workflowContext: workflowRoutingContext,
+      // Published welcome continuation owns acknowledgements to the welcome
+      // question because it carries the configured next-step semantics.
+      pendingQuestion: common.welcomeContinuation ? null : input.pendingQuestion,
+    });
+  const reviewedTextWorkflowDecision = deterministicWorkflowDecision
+    || deterministicAcknowledgement ? null
     : await reviewPendingTextWorkflowField(
       workflowRoutingContext, input.latestUtterance, dependencies.invokeStructuredLlm,
     );
-  const workflowFieldDecision = deterministicWorkflowDecision ?? reviewedTextWorkflowDecision;
+  const workflowFieldDecision = deterministicWorkflowDecision ?? deterministicAcknowledgement
+    ?? reviewedTextWorkflowDecision;
   const deterministicWelcomeMeaning = workflowFieldDecision ? null
     : deterministicWelcomeContinuation({
       latestUtterance: input.latestUtterance,
@@ -861,15 +912,28 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     }),
     tool: null, nextQuestion: null, stateUpdate: null,
   }) : null;
-  const deterministicDecision = workflowFieldDecision ?? deterministicWelcomeDecision;
+  const deterministicPublishedDecision = workflowFieldDecision || deterministicWelcomeDecision
+    || state.activeWorkflowId || state.pendingClarification ? null
+    : deterministicPublishedRequestDecision({
+      artifacts: publishedContext.artifacts,
+      scope: publishedContext.scope,
+      usageDirection: input.usageDirection,
+      latestUtterance: input.latestUtterance,
+    });
+  const deterministicDecision = workflowFieldDecision ?? deterministicWelcomeDecision
+    ?? deterministicPublishedDecision;
   let routed = deterministicDecision ? Object.freeze({
     decision: deterministicDecision,
-    outputValidation: Object.freeze({ valid: true, reason: workflowFieldDecision
-      ? 'verified_pending_field_fast_path' : 'verified_pending_question_fast_path' }),
+    outputValidation: Object.freeze({ valid: true, reason: deterministicWorkflowDecision
+      ? 'verified_pending_field_fast_path' : deterministicAcknowledgement
+        ? 'verified_acknowledgement_fast_path' : deterministicWelcomeDecision
+          ? 'verified_pending_question_fast_path' : 'verified_published_identity_fast_path' }),
   }) : await routeTemplateEngineUtterance(common, routingDependencies);
   let first = routed.decision;
   let initialValidationResult = routed.outputValidation?.reason ?? 'valid';
-  if (first.decision === 'RESPONSE' || first.decision === 'CLARIFY') {
+  const configuredNonFactualFastPath = deterministicAcknowledgement?.decision === 'CLARIFY';
+  if ((first.decision === 'RESPONSE' || first.decision === 'CLARIFY')
+    && !configuredNonFactualFastPath) {
     const directSpeech = first.decision === 'CLARIFY'
       ? first.clarification?.question : first.response;
     const directValidation = await dependencies.validateGroundedClaims({
@@ -959,7 +1023,12 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   const highConfidencePublishedEntity = verifiedPublishedEntityFastPath(
     completedSpeculativeResult, first, input,
   );
-  const requestMeaning = deterministicWelcomeMeaning ?? (highConfidencePublishedEntity
+  const deterministicDirectRequest = deterministicPublishedDecision ? Object.freeze({
+    kind: 'direct_request', originalUtterance: input.latestUtterance,
+    pendingWelcomeQuestion: null, publishedNextStep: null,
+  }) : null;
+  const requestMeaning = deterministicWelcomeMeaning ?? deterministicDirectRequest
+    ?? (highConfidencePublishedEntity
     ? Object.freeze({
       kind: 'direct_request', originalUtterance: input.latestUtterance,
       pendingWelcomeQuestion: common.welcomeContinuation?.pendingQuestion ?? null,
@@ -979,7 +1048,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   let contextualMemoryVerified = confirmedContextualReference;
   let searchState = contextualMemoryCandidate ? state
     : { ...state, lastReferencedRecordIds: [], comparisonRecordIds: [] };
-  if (!contextualMemoryCandidate
+  if (!contextualMemoryCandidate && !deterministicPublishedDecision
     && (first.search.preferredRecordIds.length || first.search.contextualReference)) {
     first = { ...first, search: { ...first.search, query: input.latestUtterance,
       contextualReference: null, preferredRecordIds: [] } };
@@ -1025,7 +1094,9 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     contextualMemoryCandidate,
     requestMeaning,
     preloadedArtifacts: publishedContext.artifacts,
+    preloadedPublicationIndex: publishedContext.publicationIndex,
     conversationGuidance: preRetrievalConversationGuidance,
+    isTurnCurrent: dependencies.isTurnCurrent,
     reviewEntityCandidates: (request) => reviewMultilingualEntity(request, dependencies.invokeStructuredLlm),
     reviewContextualCandidates: (request) => reviewContextualSubjects(request, dependencies.invokeStructuredLlm),
   });
@@ -1091,6 +1162,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   const answered = await respondToTemplateEngineSearch({
     ...common,
     mainPrompt: input.mainPrompt,
+    language: input.language,
     state: searchState,
     searchDecision: first,
     contextualMemoryVerified,

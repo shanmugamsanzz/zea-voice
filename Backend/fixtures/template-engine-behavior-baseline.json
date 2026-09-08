@@ -1,0 +1,227 @@
+{
+  "version": 1,
+  "coveredRegressionScenarios": [
+    "acknowledgement",
+    "filler",
+    "misunderstanding",
+    "closing",
+    "cancellation",
+    "overview",
+    "direct_entity",
+    "multilingual_entity",
+    "comparison",
+    "contextual_follow_up",
+    "topic_correction",
+    "missing_information",
+    "booking_initiation",
+    "booking_field_collection",
+    "booking_correction",
+    "booking_confirmation",
+    "verified_tool_success",
+    "verified_tool_failure",
+    "interruption_audio_isolation",
+    "rejected_answer_recovery"
+  ],
+  "conversation": [
+    {
+      "id": "welcome",
+      "route": { "initial": "SEARCH", "final": "RESPONSE" },
+      "selectedEntityIds": ["overview", "welcome-next"],
+      "evidenceIds": ["overview"],
+      "responseMeaning": "published_welcome_continuation",
+      "toolState": { "workflowStatus": null, "toolExecuted": false },
+      "spokenAnswer": "Master, Diabetic, Onco Care, Organ-Specific, Kids packages இருக்கு."
+    },
+    {
+      "id": "overview",
+      "route": { "initial": "SEARCH", "final": "RESPONSE" },
+      "selectedEntityIds": ["overview"],
+      "evidenceIds": ["overview"],
+      "responseMeaning": "direct_request",
+      "toolState": { "workflowStatus": null, "toolExecuted": false },
+      "spokenAnswer": "Master, Diabetic, Onco Care, Organ-Specific, Kids packages இருக்கு."
+    },
+    {
+      "id": "repeat-overview",
+      "route": { "initial": "SEARCH", "final": "RESPONSE" },
+      "selectedEntityIds": ["overview"],
+      "evidenceIds": ["overview"],
+      "responseMeaning": "direct_request",
+      "toolState": { "workflowStatus": null, "toolExecuted": false },
+      "spokenAnswer": "Master, Diabetic, Onco Care, Organ-Specific, Kids packages இருக்கு."
+    },
+    {
+      "id": "correct-overview",
+      "route": { "initial": "SEARCH", "final": "RESPONSE" },
+      "selectedEntityIds": ["overview"],
+      "evidenceIds": ["overview"],
+      "responseMeaning": "direct_request",
+      "toolState": { "workflowStatus": null, "toolExecuted": false },
+      "spokenAnswer": "Master, Diabetic, Onco Care, Organ-Specific, Kids packages இருக்கு."
+    },
+    {
+      "id": "onco-correction",
+      "route": { "initial": "SEARCH", "final": "RESPONSE" },
+      "selectedEntityIds": ["onco"],
+      "evidenceIds": ["onco"],
+      "responseMeaning": "direct_request",
+      "toolState": { "workflowStatus": null, "toolExecuted": false },
+      "spokenAnswer": "Onco Care Premium-ல் CBC, Amylase, Lipase, CEA, CT Scan Screening of Chest and Whole Abdomen இருக்கு. Add-on options வேறு; அவற்றை Premium-உடன் ஒன்றாகக் கருதக்கூடாது."
+    },
+    {
+      "id": "onco-details",
+      "route": { "initial": "SEARCH", "final": "RESPONSE" },
+      "selectedEntityIds": ["onco"],
+      "evidenceIds": ["onco"],
+      "responseMeaning": "direct_request",
+      "toolState": { "workflowStatus": null, "toolExecuted": false },
+      "spokenAnswer": "Onco Care Premium-ல் CBC, Amylase, Lipase, CEA, CT Scan Screening of Chest and Whole Abdomen இருக்கு. Add-on options வேறு; அவற்றை Premium-உடன் ஒன்றாகக் கருதக்கூடாது."
+    },
+    {
+      "id": "diabetic-switch",
+      "route": { "initial": "SEARCH", "final": "RESPONSE" },
+      "selectedEntityIds": ["diabetic"],
+      "evidenceIds": ["diabetic"],
+      "responseMeaning": "direct_request",
+      "toolState": { "workflowStatus": null, "toolExecuted": false },
+      "spokenAnswer": "Diabetic package-ல் USG Abdomen/Pelvis இருக்கு."
+    },
+    {
+      "id": "organ-switch",
+      "route": { "initial": "SEARCH", "final": "RESPONSE" },
+      "selectedEntityIds": ["organ"],
+      "evidenceIds": ["organ"],
+      "responseMeaning": "direct_request",
+      "toolState": { "workflowStatus": null, "toolExecuted": false },
+      "spokenAnswer": "Organ Specific-ல் Renal, Liver, Cardiac, Lungs, Ortho, Gastro options இருக்கு."
+    },
+    {
+      "id": "kids-switch",
+      "route": { "initial": "SEARCH", "final": "RESPONSE" },
+      "selectedEntityIds": ["kids"],
+      "evidenceIds": ["kids"],
+      "responseMeaning": "direct_request",
+      "toolState": { "workflowStatus": null, "toolExecuted": false },
+      "spokenAnswer": "Kids screening-ல் CBC மற்றும் developmental screening இருக்கு."
+    },
+    {
+      "id": "kids-context-tests",
+      "route": { "initial": "SEARCH", "final": "RESPONSE" },
+      "selectedEntityIds": ["kids"],
+      "evidenceIds": ["kids"],
+      "responseMeaning": "contextual_reference",
+      "toolState": { "workflowStatus": null, "toolExecuted": false },
+      "spokenAnswer": "Kids screening-ல் CBC மற்றும் developmental screening இருக்கு."
+    },
+    {
+      "id": "tamil-transliteration",
+      "route": { "initial": "SEARCH", "final": "RESPONSE" },
+      "selectedEntityIds": ["platinum"],
+      "evidenceIds": ["platinum"],
+      "responseMeaning": "direct_request",
+      "toolState": { "workflowStatus": null, "toolExecuted": false },
+      "spokenAnswer": "Platinum package-ல் CBC மற்றும் ECG இருக்கு."
+    },
+    {
+      "id": "rejected-repair",
+      "route": { "initial": "SEARCH", "final": "RESPONSE" },
+      "selectedEntityIds": ["kids"],
+      "evidenceIds": ["kids"],
+      "responseMeaning": "direct_request",
+      "toolState": { "workflowStatus": null, "toolExecuted": false },
+      "spokenAnswer": "Kids screening-ல் CBC மற்றும் developmental screening இருக்கு."
+    }
+  ],
+  "workflow": [
+    {
+      "id": "workflow_activation",
+      "route": "TOOL",
+      "selectedEntityIds": [],
+      "evidenceIds": [],
+      "responseMeaning": "booking_initiation",
+      "toolState": {
+        "workflowId": "workflow-1",
+        "status": "AWAITING_FIELD",
+        "collectedFieldKeys": [],
+        "confirmationStatus": "pending_fields",
+        "toolExecuted": false
+      },
+      "spokenAnswer": "Could you tell me the full name?"
+    },
+    {
+      "id": "workflow_field_collection",
+      "route": "TOOL",
+      "selectedEntityIds": [],
+      "evidenceIds": [],
+      "responseMeaning": "field_collection",
+      "toolState": {
+        "workflowId": "workflow-1",
+        "status": "AWAITING_FIELD",
+        "collectedFieldKeys": ["full_name"],
+        "confirmationStatus": "pending_fields",
+        "toolExecuted": false
+      },
+      "spokenAnswer": "What quantity should I use?"
+    },
+    {
+      "id": "workflow_confirmation",
+      "route": "TOOL",
+      "selectedEntityIds": [],
+      "evidenceIds": [],
+      "responseMeaning": "confirmation",
+      "toolState": {
+        "workflowId": "workflow-1",
+        "status": "AWAITING_CONFIRMATION",
+        "collectedFieldKeys": ["full_name", "quantity"],
+        "confirmationStatus": "awaiting_confirmation",
+        "toolExecuted": false
+      },
+      "spokenAnswer": "Please confirm these details."
+    },
+    {
+      "id": "workflow_correction",
+      "route": "TOOL",
+      "selectedEntityIds": [],
+      "evidenceIds": [],
+      "responseMeaning": "correction",
+      "toolState": {
+        "workflowId": "workflow-1",
+        "status": "AWAITING_CONFIRMATION",
+        "collectedFieldKeys": ["full_name", "quantity"],
+        "confirmationStatus": "awaiting_confirmation",
+        "toolExecuted": false
+      },
+      "spokenAnswer": "Alex Example, quantity 3. Please confirm these details."
+    },
+    {
+      "id": "workflow_success",
+      "route": "TOOL",
+      "selectedEntityIds": ["selected-record"],
+      "evidenceIds": [],
+      "responseMeaning": "verified_tool_success",
+      "toolState": {
+        "workflowId": null,
+        "status": "COMPLETED",
+        "collectedFieldKeys": [],
+        "confirmationStatus": "executed_success",
+        "toolExecuted": true
+      },
+      "spokenAnswer": "The action was completed successfully. Would you like any further help?"
+    },
+    {
+      "id": "workflow_failure",
+      "route": "TOOL",
+      "selectedEntityIds": [],
+      "evidenceIds": [],
+      "responseMeaning": "verified_tool_failure",
+      "toolState": {
+        "workflowId": "workflow-1",
+        "status": "FAILED",
+        "collectedFieldKeys": ["full_name", "quantity"],
+        "confirmationStatus": "execution_failed",
+        "toolExecuted": true
+      },
+      "spokenAnswer": "The action could not be completed."
+    }
+  ]
+}

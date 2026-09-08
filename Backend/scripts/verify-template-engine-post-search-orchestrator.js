@@ -66,13 +66,15 @@ const verifiedEvidence = Object.freeze([
 {
   let answerCalls = 0;
   let semanticCalls = 0;
+  let fastPathRequest;
   const result = await respondToTemplateEngineSearch({
     mainPrompt, latestUtterance, state, scope, searchDecision, verifiedEvidence,
     requestedEntityRecordIds: ['record-1'], deterministicEntityCoverageVerified: true,
   }, {
     tenantBoundaryVerified: true,
-    invokeStructuredLlm: async () => {
+    invokeStructuredLlm: async (request) => {
       answerCalls += 1;
+      fastPathRequest = request;
       return { outputParsed: { decision: 'RESPONSE',
         response: 'Selected service price is 3200 currency units.',
         clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null } };
@@ -87,6 +89,14 @@ const verifiedEvidence = Object.freeze([
     'A fully deterministic published answer must not invoke a redundant semantic reviewer');
   assert.equal(result.diagnostics.semanticValidationSkipped, true);
   assert.equal(result.outputValidation.valid, true);
+  assert.match(fastPathRequest.messages[0].content, /<grounded_answer_authority>/u);
+  assert.doesNotMatch(fastPathRequest.messages[0].content, /<tenant_routing_authority>/u,
+    'A verified answer must not resend the complete routing policy');
+  const fastInput = JSON.parse(fastPathRequest.messages[0].content
+    .split('<orchestrator_turn_input>\n')[1].split('\n</orchestrator_turn_input>')[0]);
+  assert.equal(Object.hasOwn(fastInput, 'state'), false);
+  assert.equal(Object.hasOwn(fastInput, 'conversationGuidance'), false);
+  assert.equal(fastInput.answerRequirements.originalUtterance, latestUtterance);
 }
 
 // Focus the generation payload without dropping operands or structured facts.
@@ -100,9 +110,13 @@ const verifiedEvidence = Object.freeze([
   const snapshot = JSON.stringify(originals);
   const focused = createTemplateEngineAnswerContext({ evidence: originals,
     latestUtterance: 'இந்த இரண்டுக்கும் என்ன வித்தியாசம்?', requestedFact: 'Compare both services',
+    language: 'ta', requestedEntityRecordIds: ['record-1', 'record-2'],
     maximumSpeechCharacters: 501 });
   assert.equal(focused.answerRequirements.originalUtterance, 'இந்த இரண்டுக்கும் என்ன வித்தியாசம்?');
   assert.equal(focused.answerRequirements.maximumSpokenCharacters, 501);
+  assert.equal(focused.answerRequirements.language, 'ta');
+  assert.deepEqual(focused.answerRequirements.requestedEntityRecordIds,
+    ['record-1', 'record-2']);
   assert.deepEqual(focused.answerRequirements.allowedEvidenceIds, ['E1', 'E2']);
   assert.equal(focused.evidence.length, 2);
   for (let i = 0; i < originals.length; i += 1) {

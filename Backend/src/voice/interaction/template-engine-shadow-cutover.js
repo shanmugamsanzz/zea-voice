@@ -45,7 +45,8 @@ function zeroViolations(evidence) {
     'crossTenantLeakage', 'unrelatedEvidence', 'hallucinations',
     'unauthorizedTools', 'falseTechnicalFallbacks', 'silentTurns',
     'technicalFallbacks', 'malformedOutputs', 'falseNoMatches',
-    'missedWorkflowActivations',
+    'missedWorkflowActivations', 'newFallbackResponses', 'incorrectEntities',
+    'workflowFieldKnowledgeSearches', 'unsupportedFactualClaims',
   ].every((field) => Number(evidence?.[field] ?? 0) === 0);
 }
 
@@ -61,6 +62,9 @@ function validScenarioRuns(evidence, scenarios, repeats) {
       run?.passed === true
       && run?.outputValid === true
       && run?.speechDelivered === true
+      && run?.routeEquivalent === true
+      && run?.entityEquivalent === true
+      && run?.answerMeaningEquivalent === true
       && cleanText(run?.expectedDecision, 40).toLocaleUpperCase()
         === cleanText(run?.finalDecision, 40).toLocaleUpperCase()
       && zeroViolations(run)
@@ -90,6 +94,18 @@ export function validateTemplateEngineActivationEvidence(evidence, expectedGitSh
     reasons.push('scenario_runs_incomplete');
   }
   if (!zeroViolations(evidence)) reasons.push('safety_violation_present');
+  const actualAnswerSlo = evidence?.actualAnswerSlo ?? {};
+  if (!Number.isInteger(actualAnswerSlo.count) || actualAnswerSlo.count < 20) {
+    reasons.push('fewer_than_twenty_live_normal_turns');
+  }
+  if (!(Number(actualAnswerSlo.averageMs) < 3_000)) {
+    reasons.push('actual_answer_average_breached');
+  }
+  if (!(Number(actualAnswerSlo.maximumMs) <= 4_000)) {
+    reasons.push('actual_answer_maximum_breached');
+  }
+  if (actualAnswerSlo.passed !== true) reasons.push('actual_answer_slo_not_passed');
+  if (evidence?.liveCorrectness?.passed !== true) reasons.push('live_correctness_not_passed');
   if (expectedGitSha && cleanText(evidence?.gitSha, 64) !== cleanText(expectedGitSha, 64)) {
     reasons.push('git_sha_mismatch');
   }

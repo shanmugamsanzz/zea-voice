@@ -83,7 +83,17 @@ function deterministicPublishedGrounding(speech, records) {
   const substantive = [...tokens(response)].filter((token) => [...token].length > 2);
   const acronyms = cleanText(speech).match(/\b[A-Z][A-Z\p{N}]{1,}\b/gu) ?? [];
   const asserted = new Set([...substantive, ...acronyms.map(identity).filter(Boolean)]);
-  const unsupportedTerms = [...asserted].filter((term) => !allowed.has(term)).slice(0, 20);
+  const supportedTerm = (term) => allowed.has(term) || [...allowed].some((published) => {
+    const termLength = [...term].length;
+    const publishedLength = [...published].length;
+    const shorter = Math.min(termLength, publishedLength);
+    const longer = Math.max(termLength, publishedLength);
+    return shorter >= 4 && shorter / longer >= 0.65
+      && (term.startsWith(published) || published.startsWith(term));
+  });
+  // Prefix-equivalent forms permit ordinary inflection in the caller language
+  // while still rejecting unrelated factual vocabulary absent from evidence.
+  const unsupportedTerms = [...asserted].filter((term) => !supportedTerm(term)).slice(0, 20);
   return Object.freeze({
     deterministicallyGrounded: asserted.size > 0 && unsupportedTerms.length === 0,
     unsupportedTerms: Object.freeze(unsupportedTerms),
@@ -146,7 +156,9 @@ export function validateTemplateEngineSearchClaims({
   const facts = records.flatMap((record) => scalarFacts(record?.authoritativeData ?? {}));
   const matchingFacts = facts.filter((fact) => intersects(tokens(fact.path), factTokens));
   const evidenceMentionsFact = records.some((record) => intersects(tokens([
-    record?.requestedFact, record?.content, ...(record?.publishedAttributePaths ?? []),
+    record?.requestedFact, record?.canonicalName, ...(record?.aliases ?? []),
+    record?.content, ...(record?.publishedAttributePaths ?? []),
+    JSON.stringify(record?.authoritativeData ?? {}),
   ].join(' ')), factTokens));
   const taggedForRequestedFact = records.some((record) => (
     tokenCoverageForFact(record?.requestedFact, factTokens)

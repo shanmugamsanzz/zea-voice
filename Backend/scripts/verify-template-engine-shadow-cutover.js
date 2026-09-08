@@ -29,6 +29,9 @@ const scenarioRuns = requiredTemplateEngineScenarios.flatMap((scenario, scenario
       passed: true,
       outputValid: true,
       speechDelivered: true,
+      routeEquivalent: true,
+      entityEquivalent: true,
+      answerMeaningEquivalent: true,
       crossTenantLeakage: 0,
       unrelatedEvidence: 0,
       hallucinations: 0,
@@ -110,9 +113,28 @@ const liveEvidence = {
   malformedOutputs: 0, falseNoMatches: 0, missedWorkflowActivations: 0,
   technicalFallbacks: 0,
   scenarioRuns,
+  actualAnswerSlo: {
+    count: 20, averageMs: 2_500, maximumMs: 3_900, passed: true,
+  },
+  liveCorrectness: { passed: true },
   gitSha: 'release-sha',
 };
 assert.equal(validateTemplateEngineActivationEvidence(liveEvidence, 'release-sha').valid, true);
+const insufficientLatency = validateTemplateEngineActivationEvidence({
+  ...liveEvidence,
+  actualAnswerSlo: { count: 19, averageMs: 2_500, maximumMs: 3_900, passed: false },
+}, 'release-sha');
+assert.equal(insufficientLatency.valid, false);
+assert.ok(insufficientLatency.reasons.includes('fewer_than_twenty_live_normal_turns'));
+assert.equal(validateTemplateEngineActivationEvidence({
+  ...liveEvidence,
+  actualAnswerSlo: { count: 20, averageMs: 3_000, maximumMs: 4_001, passed: false },
+}, 'release-sha').valid, false);
+assert.equal(validateTemplateEngineActivationEvidence({
+  ...liveEvidence,
+  scenarioRuns: scenarioRuns.map((run, index) => index === 0
+    ? { ...run, answerMeaningEquivalent: false } : run),
+}, 'release-sha').valid, false);
 assert.equal(validateTemplateEngineActivationEvidence({
   ...liveEvidence, scenarioRuns: scenarioRuns.slice(1),
 }, 'release-sha').valid, false);

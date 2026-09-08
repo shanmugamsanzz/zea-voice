@@ -12,6 +12,7 @@ import {
   validateTemplateEnginePostSearchDecision,
 } from './template-engine-post-search-contract.js';
 import {
+  buildTemplateEngineGroundedAnswerPrompt,
   buildTemplateEngineRoutingPrompt,
   enforceTemplateEngineRuntimeInvariants,
 } from './template-engine-routing-control.js';
@@ -556,6 +557,8 @@ function evidenceProvidesRequestedFact(evidence, requestedFact) {
   return evidence.some((source) => {
     const searchable = candidateIdentity([
       ...(source?.publishedAttributePaths ?? []),
+      source?.canonicalName,
+      ...(source?.aliases ?? []),
       source?.content,
       JSON.stringify(source?.authoritativeData ?? {}),
     ].join(' '));
@@ -878,28 +881,33 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
   const answerContext = createTemplateEngineAnswerContext({
     evidence: citations.evidence, latestUtterance: base.latestUtterance,
     requestedFact: search.value.search.requestedFact,
+    language: input.language,
+    requestedEntityRecordIds: requiredEntityRecordIds,
     maximumSpeechCharacters: input.maximumSpeechCharacters,
   });
+  const verifiedAnswerFastPath = input.deterministicEntityCoverageVerified === true
+    && dependencies.ambiguity?.required !== true;
   const turnInput = Object.freeze({
     answerRequirements: answerContext.answerRequirements,
-    latestUtterance: base.latestUtterance,
-    state: base.state,
     requestMeaning: input.requestMeaning ?? null,
     searchInterpretation: search.value.search,
     requestedEntityRecordIds: requiredEntityRecordIds,
     verifiedEvidence: answerContext.evidence,
-    ambiguity: dependencies.ambiguity ?? null,
-    conversationGuidance: base.conversationGuidance,
-  });
-  const systemPrompt = [
-    buildTemplateEngineRoutingPrompt({
-      mainPrompt: base.mainPrompt,
-      outputSchema: templateEnginePostSearchJsonSchema,
-      phase: 'post_search',
+    ...(verifiedAnswerFastPath ? {} : {
+      latestUtterance: base.latestUtterance,
+      state: base.state,
+      ambiguity: dependencies.ambiguity ?? null,
+      conversationGuidance: base.conversationGuidance,
     }),
+  });
+  const sharedGroundingInstructions = [
     'Runtime grounding rules: authoritativeData, content, and publishedAttributePaths contain the only published facts available for each record.',
     speechBudgetInstruction(input.maximumSpeechCharacters),
     firstPassAnswerInstruction,
+    'Answer the current requestedFact directly from the supplied evidence. Preserve every requested comparison operand and cite each supporting record only in evidenceIds.',
+    'Missing evidence never proves a negative claim. Answer supported parts and identify only the specific unpublished detail.',
+  ];
+  const detailedGroundingInstructions = [
     'For the fastest safe delivery, retain the published wording for factual names, attributes and values when it is natural in the caller language. Do not add synonymous factual claims that are absent from the evidence.',
     'Distinguish caller context from published facts. You may acknowledge a fact the caller stated, but it cannot establish eligibility, suitability, pricing or any business policy. For multi-part questions, answer the supported requested parts and identify the specific missing detail without inferring a negative or positive answer. Do not replace available information with a blanket NO_MATCH.',
     'Answer the requestedFact only when it is explicitly supported by those supplied facts.',
@@ -913,6 +921,17 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     'For multiple supplied published candidates, ask one question identifying those candidates. For one confirmation candidate, ask whether the caller meant it. For unresolved_published_entity with no candidates, ask one neutral clarification without inventing or naming an entity.',
     'When preferredRecordIds resolves one previously cited record, answer from that record; do not ask which record the caller means.',
     'When preferredRecordIds contains an intentional comparison set, compare those records; do not reinterpret the set as ambiguity.',
+  ];
+  const systemPrompt = [
+    verifiedAnswerFastPath
+      ? buildTemplateEngineGroundedAnswerPrompt({ mainPrompt: base.mainPrompt })
+      : buildTemplateEngineRoutingPrompt({
+        mainPrompt: base.mainPrompt,
+        outputSchema: templateEnginePostSearchJsonSchema,
+        phase: 'post_search',
+      }),
+    ...sharedGroundingInstructions,
+    ...(verifiedAnswerFastPath ? [] : detailedGroundingInstructions),
     '<orchestrator_turn_input>',
     JSON.stringify(turnInput),
     '</orchestrator_turn_input>',

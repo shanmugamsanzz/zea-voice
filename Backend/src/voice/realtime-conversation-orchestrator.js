@@ -2501,6 +2501,7 @@ export class RealtimeConversationOrchestrator {
         conversationHistory: history,
         pendingQuestion: this.liveCallMemory.snapshot().pendingQuestion,
         acknowledgementPhrases: this.interruptionConfiguration.acknowledgementPhrases,
+        explicitStopPhrases: this.interruptionConfiguration.explicitStopPhrases,
         unansweredRequest,
         state: this.templateEngineState,
         runtimeProfile: this.runtimeProfile,

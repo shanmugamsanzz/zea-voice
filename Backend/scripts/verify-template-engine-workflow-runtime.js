@@ -12,6 +12,10 @@ import {
 } from '../src/voice/interaction/template-engine-workflow-runtime.js';
 import { WorkflowFieldAudioCache } from '../src/voice/workflow-field-audio-cache.service.js';
 
+const behaviorBaseline = JSON.parse(readFileSync(
+  new URL('../fixtures/template-engine-behavior-baseline.json', import.meta.url), 'utf8',
+));
+
 const scope = Object.freeze({
   tenantId: 'tenant-a', agentId: 'agent-a',
   publications: Object.freeze([
@@ -509,6 +513,60 @@ const correctedConfirmation = await advanceTemplateEngineWorkflowTurn({
 assert.equal(correctionExecutions, 0, 'Changed details must be confirmed again, not executed using prior consent');
 assert.equal(correctedConfirmation.status, 'AWAITING_CONFIRMATION');
 assert.equal(correctedConfirmation.state.collectedToolFields.quantity, 3);
+
+const workflowBehavior = [
+  {
+    id: 'workflow_activation', route: 'TOOL', selectedEntityIds: [], evidenceIds: [],
+    responseMeaning: 'booking_initiation',
+    toolState: { workflowId: activated.state.activeWorkflowId,
+      status: 'AWAITING_FIELD', collectedFieldKeys: Object.keys(activated.state.collectedToolFields),
+      confirmationStatus: activated.state.confirmationStatus, toolExecuted: false },
+    spokenAnswer: firstSpeech.speech,
+  },
+  {
+    id: 'workflow_field_collection', route: 'TOOL', selectedEntityIds: [], evidenceIds: [],
+    responseMeaning: 'field_collection',
+    toolState: { workflowId: withName.state.activeWorkflowId,
+      status: 'AWAITING_FIELD', collectedFieldKeys: Object.keys(withName.state.collectedToolFields),
+      confirmationStatus: withName.state.confirmationStatus, toolExecuted: false },
+    spokenAnswer: fields.find((field) => field.key === withName.progress.nextField.key).question,
+  },
+  {
+    id: 'workflow_confirmation', route: 'TOOL', selectedEntityIds: [], evidenceIds: [],
+    responseMeaning: 'confirmation',
+    toolState: { workflowId: complete.state.activeWorkflowId,
+      status: 'AWAITING_CONFIRMATION', collectedFieldKeys: Object.keys(complete.state.collectedToolFields),
+      confirmationStatus: complete.state.confirmationStatus, toolExecuted: false },
+    spokenAnswer: tool.inputSchema['x-confirmation-message'],
+  },
+  {
+    id: 'workflow_correction', route: 'TOOL', selectedEntityIds: [], evidenceIds: [],
+    responseMeaning: 'correction',
+    toolState: { workflowId: correctedConfirmation.state.activeWorkflowId,
+      status: correctedConfirmation.status,
+      collectedFieldKeys: Object.keys(correctedConfirmation.state.collectedToolFields),
+      confirmationStatus: correctedConfirmation.state.confirmationStatus, toolExecuted: false },
+    spokenAnswer: correctedConfirmation.speech,
+  },
+  {
+    id: 'workflow_success', route: 'TOOL', selectedEntityIds: ['selected-record'], evidenceIds: [],
+    responseMeaning: 'verified_tool_success',
+    toolState: { workflowId: completed.state.activeWorkflowId,
+      status: 'COMPLETED', collectedFieldKeys: Object.keys(completed.state.collectedToolFields),
+      confirmationStatus: completed.state.confirmationStatus, toolExecuted: true },
+    spokenAnswer: completed.speech,
+  },
+  {
+    id: 'workflow_failure', route: 'TOOL', selectedEntityIds: [], evidenceIds: [],
+    responseMeaning: 'verified_tool_failure',
+    toolState: { workflowId: coordinated.state.activeWorkflowId,
+      status: coordinated.status, collectedFieldKeys: Object.keys(coordinated.state.collectedToolFields),
+      confirmationStatus: coordinated.state.confirmationStatus, toolExecuted: true },
+    spokenAnswer: coordinated.speech,
+  },
+];
+assert.deepEqual(workflowBehavior, behaviorBaseline.workflow,
+  'Workflow behavior changed from the approved pre-optimization baseline');
 
 await assert.rejects(() => advanceTemplateEngineWorkflowTurn({
   ...common, mainPrompt: 'Speak briefly and naturally.',

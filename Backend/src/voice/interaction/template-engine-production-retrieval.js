@@ -147,14 +147,18 @@ function publicationCategoryVocabulary(bundle, usageDirection) {
   return categories;
 }
 
-export function exactPublishedCandidates(artifacts, input, search, limit = 20, guidance = null) {
+export function exactPublishedCandidates(
+  artifacts, input, search, limit = 20, guidance = null, publicationIndex = null,
+) {
   const candidates = [];
   const categoryMatches = new Map();
   const guidanceRecordId = normalized(guidance?.recordId);
   const referenceSelectors = publishedReferenceSelectors(guidance?.catalogReferences);
   for (const bundle of artifacts.bundles ?? []) {
     if (normalized(bundle?.tenantId) !== normalized(input.tenantId)) continue;
-    const categoryVocabulary = publicationCategoryVocabulary(bundle, input.usageDirection);
+    const bundleKey = `${normalized(bundle.knowledgeBaseId)}:${Number(bundle.publicationRevision)}`;
+    const categoryVocabulary = publicationIndex?.categoryVocabularyByPublication?.[bundleKey]
+      ?? publicationCategoryVocabulary(bundle, input.usageDirection);
     for (const record of bundle.records ?? []) {
       const metadata = recordMetadata(record);
       const recordType = cleanText(
@@ -258,6 +262,84 @@ export function exactPublishedCandidates(artifacts, input, search, limit = 20, g
   return Object.freeze([...new Map(candidates.sort((left, right) => right.score - left.score)
     .map((candidate) => [`${candidate.recordType}:${normalized(candidate.recordId)}`, candidate]))
     .values()].slice(0, limit));
+}
+
+function candidateRequestedRecordIds(candidate) {
+  const categoryRecords = candidate?.recordType === 'CATALOG_CATEGORY'
+    && Array.isArray(candidate.evidenceRecordIds) ? candidate.evidenceRecordIds : [];
+  return [...new Set((categoryRecords.length ? categoryRecords : [candidate?.recordId])
+    .map((value) => cleanText(value, 160)).filter(Boolean))].sort();
+}
+
+/**
+ * Resolve only a complete, exact published identity. Phrase-contained and
+ * partial matches deliberately remain on the semantic router because the
+ * remaining words may express an action, correction, comparison or refusal.
+ */
+export function deterministicPublishedRequestDecision({
+  artifacts, scope, usageDirection = 'both', latestUtterance,
+} = {}) {
+  const utterance = cleanText(latestUtterance, 2_000);
+  if (!utterance || !scope?.tenantId) return null;
+  const activePublications = new Set((scope.publications ?? []).map((publication) => (
+    `${normalized(publication?.knowledgeBaseId)}:${Number(publication?.publicationRevision)}`
+  )).filter((key) => !key.startsWith(':') && !key.endsWith(':0')));
+  if (!activePublications.size) return null;
+  const scopedArtifacts = {
+    ...(artifacts ?? {}),
+    bundles: (artifacts?.bundles ?? []).filter((bundle) => {
+      const publicationKey = `${normalized(bundle?.knowledgeBaseId)}:${Number(bundle?.publicationRevision)}`;
+      const assigned = Array.isArray(bundle?.assignedAgentIds) ? bundle.assignedAgentIds : [];
+      return activePublications.has(publicationKey)
+        && (!scope.agentId || !assigned.length
+          || assigned.some((id) => normalized(id) === normalized(scope.agentId)));
+    }),
+  };
+  const exact = exactPublishedCandidates(scopedArtifacts, {
+    tenantId: scope.tenantId,
+    agentId: scope.agentId,
+    usageDirection,
+  }, { query: utterance }, 50).filter((candidate) => (
+    Number(candidate.score) === 1
+    && ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(candidate.recordType)
+    && ['published_exact', 'published_category_exact'].includes(candidate.matchMethod)
+  ));
+  if (!exact.length) return null;
+
+  // A materialized category aggregate is stronger than its optional category
+  // heading record, but an exact item/category collision is still ambiguous.
+  const exactItems = exact.filter((candidate) => candidate.recordType === 'CATALOG_ITEM');
+  const aggregateCategories = exact.filter((candidate) => (
+    candidate.recordType === 'CATALOG_CATEGORY'
+    && Array.isArray(candidate.evidenceRecordIds)
+    && candidate.evidenceRecordIds.length > 0
+  ));
+  if (exactItems.length && aggregateCategories.length) return null;
+  const eligible = exactItems.length ? exactItems
+    : aggregateCategories.length ? aggregateCategories : exact;
+  const identities = new Map();
+  for (const candidate of eligible) {
+    const requestedRecordIds = candidateRequestedRecordIds(candidate);
+    if (!requestedRecordIds.length) continue;
+    const identity = `${candidate.recordType}:${requestedRecordIds.join('|')}`;
+    if (!identities.has(identity)) identities.set(identity, { candidate, requestedRecordIds });
+  }
+  if (identities.size !== 1) return null;
+  const [{ candidate, requestedRecordIds }] = identities.values();
+  return Object.freeze({
+    decision: 'SEARCH', response: '', clarification: null,
+    search: Object.freeze({
+      query: utterance,
+      requestedFact: utterance,
+      contextualReference: null,
+      // Supplying all category children as preferred IDs would incorrectly
+      // classify the category as a comparison. Its exact category match
+      // carries that identity; individual items reserve their one record.
+      preferredRecordIds: Object.freeze(candidate.recordType === 'CATALOG_ITEM'
+        ? requestedRecordIds : []),
+    }),
+    tool: null, nextQuestion: null, stateUpdate: null,
+  });
 }
 
 function addExactStructuredCandidates(result, exact, limit = 20) {
@@ -551,9 +633,11 @@ function evidenceRecord(source, requestedFact = null) {
       ?? source.authoritativeData?.name
       ?? source.authoritativeData?.category
       ?? null,
-    aliases: source.authoritativeData?.aliases
-      ?? source.authoritativeData?.categoryAliases
-      ?? [],
+    aliases: Object.freeze(textList([
+      ...textList(source.authoritativeData?.aliases),
+      ...textList(source.authoritativeData?.categoryAliases),
+      ...textList(source.searchForms),
+    ])),
     relationships: source.authoritativeData?.relationships ?? [],
     authoritativeData,
     requestedFact: String(requestedFact ?? '').trim() || null,
@@ -653,6 +737,83 @@ function publishedWorkflowRecord(record, publication, agentId) {
   });
 }
 
+function publicationIndexKey(artifacts, scope, usageDirection) {
+  const revisions = (artifacts.publications ?? []).map((publication) => [
+    normalized(publication.knowledgeBaseId),
+    Number(publication.publicationRevision),
+  ].join('@')).sort();
+  return [
+    normalized(scope.tenantId), normalized(scope.agentId), normalized(usageDirection),
+    ...revisions,
+  ].join('|');
+}
+
+// This immutable index belongs to one production turn. It is revision-bound,
+// but never stored globally, so no caller, turn, or tenant can reuse it.
+export function createTemplateEnginePublicationIndex({
+  artifacts, scope, usageDirection,
+} = {}) {
+  const publicationKeys = activePublicationKeys(artifacts?.publications);
+  const bundles = (artifacts?.bundles ?? []).map((bundle, index) => {
+    const publication = artifacts.publications?.[index] ?? {};
+    return Object.freeze({
+      ...bundle,
+      tenantId: bundle?.tenantId ?? publication.tenantId ?? scope?.tenantId,
+      knowledgeBaseId: bundle?.knowledgeBaseId ?? publication.knowledgeBaseId,
+      publicationRevision: Number(
+        bundle?.publicationRevision ?? publication.publicationRevision,
+      ),
+    });
+  }).filter((bundle) => (
+    normalized(bundle.tenantId) === normalized(scope?.tenantId)
+    && publicationKeys.has(
+      `${normalized(bundle.knowledgeBaseId)}:${Number(bundle.publicationRevision)}`,
+    )
+    && (!(bundle.assignedAgentIds ?? []).length
+      || bundle.assignedAgentIds.some((id) => normalized(id) === normalized(scope?.agentId)))
+  ));
+  const publishedWorkflows = [];
+  const publishedConversationGuidance = [];
+  const categoryVocabularyByPublication = {};
+  for (const bundle of bundles) {
+    categoryVocabularyByPublication[
+      `${normalized(bundle.knowledgeBaseId)}:${Number(bundle.publicationRevision)}`
+    ] = publicationCategoryVocabulary(bundle, usageDirection);
+    const publication = (artifacts.publications ?? []).find((entry) => (
+      normalized(entry.knowledgeBaseId) === normalized(bundle.knowledgeBaseId)
+      && Number(entry.publicationRevision) === Number(bundle.publicationRevision)
+    ));
+    if (!publication) continue;
+    for (const record of bundle.records ?? []) {
+      const workflow = publishedWorkflowRecord(record, publication, scope.agentId);
+      if (workflow) publishedWorkflows.push(workflow);
+      const guidance = normalizePublishedConversationGuidance(
+        record, { ...publication, tenantId: scope.tenantId }, scope.agentId,
+      );
+      if (guidance) publishedConversationGuidance.push(guidance);
+    }
+  }
+  return Object.freeze({
+    key: publicationIndexKey(artifacts, scope, usageDirection),
+    tenantId: scope.tenantId,
+    agentId: scope.agentId,
+    usageDirection,
+    publications: artifacts.publications,
+    bundles: Object.freeze(bundles),
+    categoryVocabularyByPublication: Object.freeze(categoryVocabularyByPublication),
+    publishedWorkflows: Object.freeze(publishedWorkflows),
+    publishedConversationGuidance: Object.freeze(publishedConversationGuidance),
+  });
+}
+
+function verifiedPreloadedPublicationIndex(index, artifacts, scope, usageDirection) {
+  return index?.key === publicationIndexKey(artifacts, scope, usageDirection)
+    && normalized(index.tenantId) === normalized(scope.tenantId)
+    && normalized(index.agentId) === normalized(scope.agentId)
+    && normalized(index.usageDirection) === normalized(usageDirection)
+    ? index : null;
+}
+
 export async function loadTemplateEnginePublishedContext({
   auth, scope, callId, usageDirection, language,
 } = {}, dependencies = {}) {
@@ -667,37 +828,39 @@ export async function loadTemplateEnginePublishedContext({
   const artifacts = await (dependencies.loadArtifacts ?? loadPublishedEngineArtifacts)(
     auth, input, dependencies.artifacts,
   );
-  const publishedWorkflows = artifacts.bundles.flatMap((bundle, index) => (
-    (bundle.records ?? []).map((record) => publishedWorkflowRecord(
-      record, artifacts.publications[index], scope.agentId,
-    )).filter(Boolean)
-  ));
-  const publishedConversationGuidance = artifacts.bundles.flatMap((bundle, index) => (
-    (bundle.records ?? []).map((record) => normalizePublishedConversationGuidance(
-      record,
-      { ...artifacts.publications[index], tenantId: scope.tenantId },
-      scope.agentId,
-    )).filter(Boolean)
-  ));
+  const publicationIndex = createTemplateEnginePublicationIndex({
+    artifacts, scope, usageDirection,
+  });
   return Object.freeze({
     artifacts,
     scope: Object.freeze({ ...scope, publications: artifacts.publications }),
-    publishedWorkflows: Object.freeze(publishedWorkflows),
-    publishedConversationGuidance: Object.freeze(publishedConversationGuidance),
+    publicationIndex,
+    publishedWorkflows: publicationIndex.publishedWorkflows,
+    publishedConversationGuidance: publicationIndex.publishedConversationGuidance,
   });
 }
 
 export async function retrieveTemplateEngineEvidence({
   auth, scope, callId, usageDirection, language, searchDecision, state = {}, runtimeProfile,
   preloadedArtifacts = null, conversationGuidance = null,
+  preloadedPublicationIndex = null,
   latestUtterance = null,
   contextualMemoryVerified = false,
   contextualMemoryCandidate = false,
   requestMeaning = null,
   reviewEntityCandidates = null,
   reviewContextualCandidates = null,
+  isTurnCurrent = null,
 } = {}, dependencies = {}) {
   const startedAt = performance.now();
+  const assertCurrentTurn = () => {
+    if (typeof isTurnCurrent === 'function' && !isTurnCurrent()) {
+      const error = new Error('Template-engine retrieval was cancelled');
+      error.name = 'AbortError';
+      throw error;
+    }
+  };
+  assertCurrentTurn();
   const resolutionUtterance = requestMeaning?.kind === 'published_welcome_continuation'
     ? requestMeaning.query : latestUtterance;
   if (!contextualMemoryVerified && !contextualMemoryCandidate) {
@@ -733,22 +896,15 @@ export async function retrieveTemplateEngineEvidence({
   const artifacts = preloadedArtifacts ?? dependencies.preloadedArtifacts ?? await (
     dependencies.loadArtifacts ?? loadPublishedEngineArtifacts
   )(auth, input, dependencies.artifacts);
-  const publicationKeys = activePublicationKeys(artifacts.publications);
-  const scopedBundles = (artifacts.bundles ?? []).filter((bundle) => (
-    cleanText(bundle?.tenantId, 160).toLocaleLowerCase()
-      === cleanText(input.tenantId, 160).toLocaleLowerCase()
-    && publicationKeys.has(
-      `${normalized(bundle?.knowledgeBaseId)}:${Number(bundle?.publicationRevision)}`,
-    )
-    && (!(bundle?.assignedAgentIds ?? []).length
-      || bundle.assignedAgentIds.some((id) => (
-        cleanText(id, 160).toLocaleLowerCase()
-          === cleanText(input.agentId, 160).toLocaleLowerCase()
-      )))
-  ));
+  assertCurrentTurn();
+  const publicationIndex = verifiedPreloadedPublicationIndex(
+    preloadedPublicationIndex, artifacts, scope, usageDirection,
+  ) ?? createTemplateEnginePublicationIndex({ artifacts, scope, usageDirection });
+  const scopedBundles = publicationIndex.bundles;
   const exactCandidates = exactPublishedCandidates(
     { ...artifacts, bundles: scopedBundles }, input,
     { ...search, query: resolutionUtterance || search.query }, 20, conversationGuidance,
+    publicationIndex,
   );
   let entityResolution = scopedBundles.length
     ? (dependencies.resolveEntityRoute ?? resolvePublishedEntityRoute)(
@@ -773,7 +929,11 @@ export async function retrieveTemplateEngineEvidence({
   let exactPublishedSelection = null;
   if (!exactCatalog.length) {
     const vocabulary = new Map();
-    for (const bundle of scopedBundles) for (const [key, forms] of publicationCategoryVocabulary(bundle, input.usageDirection)) {
+    for (const bundle of scopedBundles) for (const [key, forms] of (
+      publicationIndex.categoryVocabularyByPublication[
+        `${normalized(bundle.knowledgeBaseId)}:${Number(bundle.publicationRevision)}`
+      ] ?? publicationCategoryVocabulary(bundle, input.usageDirection)
+    )) {
       const identity = `${normalized(bundle.knowledgeBaseId)}:${bundle.publicationRevision}:${key}`;
       vocabulary.set(identity, new Set(searchableTokens(publishedNameText(forms.join(' ')))));
     }
@@ -829,7 +989,8 @@ export async function retrieveTemplateEngineEvidence({
     if (selected?.length && selected.every((candidate) => candidates.includes(candidate))) {
       const names = selected.map((candidate) => candidate.canonicalName).filter(Boolean).join(' ');
       const expanded = exactPublishedCandidates({ ...artifacts, bundles: scopedBundles }, input,
-        { ...search, query: names }, 80).filter((candidate) => candidate.score >= 0.98);
+        { ...search, query: names }, 80, null, publicationIndex)
+        .filter((candidate) => candidate.score >= 0.98);
       const ids = [...new Set(selected.flatMap((candidate) => {
         const category = expanded.find((entry) => entry.recordType === 'CATALOG_CATEGORY'
           && entry.categoryKey === candidate.categoryKey && entry.knowledgeBaseId === candidate.knowledgeBaseId
@@ -861,7 +1022,7 @@ export async function retrieveTemplateEngineEvidence({
     // name/key. Require both an exact published form and the remembered anchor;
     // never expand an arbitrary item into all its siblings.
     const categories = exactPublishedCandidates({ ...artifacts, bundles: scopedBundles }, input,
-      { ...search, query: search.contextualReference }, 20)
+      { ...search, query: search.contextualReference }, 20, null, publicationIndex)
       .filter((candidate) => candidate.recordType === 'CATALOG_CATEGORY' && candidate.score >= 0.98
         && candidate.evidenceRecordIds?.some((id) => preferred.has(normalized(id))));
     if (categories.length === 1) contextualCategory = categories[0];
@@ -1000,6 +1161,10 @@ export async function retrieveTemplateEngineEvidence({
   });
   const requestedIdentities = new Set(entityConstraint.requestedIdentities);
   const hydrate = dependencies.hydrateEvidence ?? rankAndHydrateAuthoritativeEvidence;
+  // Cache only identical hydration work inside this retrieval turn. The key is
+  // tenant/agent/revision scoped, and the Map is discarded on return.
+  const hydrationCache = new Map();
+  let hydrationCacheHits = 0;
   const rrfLimit = (count) => Math.max(1, Math.min(5, Number(count) || 5));
   const selectionForIdentities = (selection, identities) => {
     const allowed = new Set(identities);
@@ -1021,17 +1186,38 @@ export async function retrieveTemplateEngineEvidence({
       }),
     });
   };
-  const hydrateOne = (selection, selectionRetry = false) => hydrate({
-    auth,
-    input,
-    classification: route,
-    resolution: entityResolution,
-    retrieval: selection,
-    limit: rrfLimit(selection.candidates?.length),
-    minProviderScore: 0,
-    requireAtLeastOneHydratedEvidence: true,
-    selectionRetry,
-  }, dependencies.hydration);
+  const hydrateOne = async (selection, selectionRetry = false) => {
+    assertCurrentTurn();
+    const identities = (selection.candidates ?? []).map((candidate) => (
+      candidateIdentityKey(candidate, input.tenantId)
+    )).filter(Boolean).sort();
+    const cacheKey = [publicationIndex.key, selectionRetry ? 'retry' : 'initial', ...identities]
+      .join('|');
+    let pending = hydrationCache.get(cacheKey);
+    if (pending) hydrationCacheHits += 1;
+    else {
+      pending = Promise.resolve(hydrate({
+        auth,
+        input,
+        classification: route,
+        resolution: entityResolution,
+        retrieval: selection,
+        limit: rrfLimit(selection.candidates?.length),
+        minProviderScore: 0,
+        requireAtLeastOneHydratedEvidence: true,
+        selectionRetry,
+      }, dependencies.hydration));
+      hydrationCache.set(cacheKey, pending);
+    }
+    try {
+      const result = await pending;
+      assertCurrentTurn();
+      return result;
+    } catch (error) {
+      if (hydrationCache.get(cacheKey) === pending) hydrationCache.delete(cacheKey);
+      throw error;
+    }
+  };
   const hydrateSelection = async (selection, selectionRetry = false) => {
     if (requestedIdentities.size <= 5) return hydrateOne(selection, selectionRetry);
     const identities = [...requestedIdentities];
@@ -1218,6 +1404,8 @@ export async function retrieveTemplateEngineEvidence({
       requestedEntityHydrationIncomplete,
       requestedEntityCount: requestedIdentities.size,
       hydratedRequestedEntityCount: entityMatchedEvidence.length,
+      publicationIndexKey: publicationIndex.key,
+      hydrationCacheHits,
       failedChannels: Object.freeze(hybrid.failures.map((failure) => failure.channel)),
       durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
     }),

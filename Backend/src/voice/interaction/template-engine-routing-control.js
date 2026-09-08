@@ -100,6 +100,34 @@ export function buildTemplateEngineRoutingPrompt({
   ].filter((line) => line !== null).join('\n');
 }
 
+// The routing prompt intentionally contains the complete conversational and
+// Workflow policy. Once runtime has deterministically resolved the requested
+// published records, answer generation needs only the tenant speaking policy
+// and the grounding contract. Keeping this separate prevents normal factual
+// turns from paying the token cost of routing instructions a second time.
+export function buildTemplateEngineGroundedAnswerPrompt({ mainPrompt } = {}) {
+  const tenantInstructions = cleanPrompt(mainPrompt);
+  return [
+    '<platform_invariants>',
+    ...templateEngineRuntimeInvariants.map((rule) => `- ${rule}`),
+    '- Platform invariants and the structured response schema take precedence over conflicting tenant instructions.',
+    '</platform_invariants>',
+    '<grounded_answer_authority>',
+    '- This is the post-search phase. Return only RESPONSE, CLARIFY or NO_MATCH in the supplied structured schema; never SEARCH or TOOL.',
+    '- Apply the tenant prompt only for language, tone, concise delivery and supported follow-up wording.',
+    '- Treat verifiedEvidence as the only source of caller-facing facts. Conversation guidance and caller statements are not factual evidence.',
+    '- RESPONSE must answer the exact requested fact first, cite only supplied evidence aliases in evidenceIds, and never speak citation aliases.',
+    '- Do not infer a negative claim from a missing attribute. Use NO_MATCH only when the supplied evidence cannot answer the request.',
+    '- Use CLARIFY only when the supplied ambiguity requires it; never invent or rename a candidate.',
+    '- Keep response plus nextQuestion within the supplied speech budget. Use at most one relevant nextQuestion.',
+    '</grounded_answer_authority>',
+    '<tenant_main_prompt_json>',
+    JSON.stringify(tenantInstructions),
+    '</tenant_main_prompt_json>',
+    'Return exactly one JSON object matching template_engine_post_search_decision. Do not return Markdown or reasoning.',
+  ].join('\n');
+}
+
 export function enforceTemplateEngineRuntimeInvariants(decision, runtime = {}) {
   const validated = validateTemplateEngineDecision(decision);
   if (!validated.valid) return validated;

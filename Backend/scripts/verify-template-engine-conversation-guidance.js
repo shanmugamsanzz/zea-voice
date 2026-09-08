@@ -122,6 +122,21 @@ const loadedContext = await loadTemplateEnginePublishedContext({
 assert.equal(loadedContext.publishedConversationGuidance.length, 1);
 assert.equal(loadedContext.publishedConversationGuidance[0].recordId, 'guidance-loaded');
 assert.equal(loadedContext.publishedConversationGuidance[0].tenantId, tenantId);
+assert.match(loadedContext.publicationIndex.key, new RegExp(`${tenantId}\\|${agentId}\\|inbound`, 'u'));
+assert.match(loadedContext.publicationIndex.key, new RegExp(`${knowledgeBaseId}@7`, 'u'));
+assert.equal(loadedContext.publicationIndex.bundles.length, 1);
+const otherTenantContext = await loadTemplateEnginePublishedContext({
+  auth: { tenantId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
+  scope: { ...scope, tenantId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
+  callId: 'call-other-tenant', usageDirection: 'inbound', language: 'en',
+}, {
+  loadArtifacts: async () => ({
+    publications: [{ knowledgeBaseId, publicationRevision: 7 }],
+    bundles: [{ records: [] }],
+  }),
+});
+assert.notEqual(otherTenantContext.publicationIndex.key, loadedContext.publicationIndex.key,
+  'Publication indexes must be tenant isolated even for an identical revision');
 const selected = selectApplicableConversationGuidance({
   publishedConversationGuidance: [detailGuidance, overviewGuidance, crossTenant],
   scope,
