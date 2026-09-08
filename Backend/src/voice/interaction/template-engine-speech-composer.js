@@ -2,7 +2,7 @@ function cleanText(value, maximum = 4_000) {
   return String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
     .replace(/\s+/gu, ' ').trim().slice(0, maximum);
 }
-
+//test
 function identity(value) {
   return cleanText(value).toLocaleLowerCase()
     .replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim();
