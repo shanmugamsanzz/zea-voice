@@ -284,6 +284,25 @@ assert.equal(constrainedComparison.hybrid.channels.structured.length, 1);
 assert.equal(constrainedComparison.hybrid.channels.bm25.length, 1);
 assert.equal(constrainedComparison.hybrid.channels.qdrant.length, 2);
 
+const currentExplicit = identityCandidate('record-current', {
+  canonicalName: 'Current Published Choice', explicit: true,
+});
+const staleContextConstraint = constrainHybridToRequestedEntities({
+  channels: { structured: [requestedA, requestedB, currentExplicit] },
+  candidates: [requestedA, requestedB, currentExplicit],
+  queryContext: { reservedRecords: [
+    { ...requestedA, reason: 'canonical_memory' },
+    { ...requestedB, reason: 'contextual_comparison' },
+  ] },
+}, tenantId, {
+  candidate: { ...currentExplicit, entityType: 'ITEM', explicit: true },
+  ambiguity: { detected: false, candidates: [] },
+}, scope);
+assert.deepEqual(staleContextConstraint.requestedRecordIds, ['record-current'],
+  'A verified entity named in the current turn must replace stale memory');
+assert.deepEqual(staleContextConstraint.hybrid.candidates.map((value) => value.recordId),
+  ['record-current']);
+
 const categoryConstrained = constrainHybridToRequestedEntities({
   channels: { structured: [requestedA, requestedB, unrelated] },
   candidates: [requestedA, requestedB, unrelated],
@@ -747,6 +766,44 @@ const phoneticVariantRetrieval = await retrieveTemplateEngineEvidence({
 assert.deepEqual(phoneticSelectedIds, ['record-stt-variant']);
 assert.equal(phoneticVariantRetrieval.evidence[0].verified, true);
 
+let reviewedVariantSelection = [];
+const reviewedVariantRetrieval = await retrieveTemplateEngineEvidence({
+  auth: { tenantId }, scope, callId: 'call-reviewed-phonetic-variant', usageDirection: 'inbound',
+  language: 'ta', latestUtterance: 'கான்ஃபிகர்ட் பேட்டா விவரம்',
+  searchDecision: { ...searchDecision, search: {
+    query: 'கான்ஃபிகர்ட் பேட்டா விவரம்', requestedFact: 'details',
+    contextualReference: null, preferredRecordIds: ['record-exact'],
+  } },
+  state: { lastReferencedRecordIds: ['record-exact'], comparisonRecordIds: [] },
+  contextualMemoryVerified: false,
+  reviewEntityCandidates: async ({ candidates }) => candidates.find(
+    (entry) => entry.recordId === 'record-stt-variant',
+  ),
+}, {
+  loadArtifacts: async () => ({ publications: [publication], sparseIndexes: [],
+    bundles: [{ ...exactArtifacts.bundles[0], records: [exactRecord, sttVariantRecord] }] }),
+  resolveEntityRoute: () => ({ candidate: null, action: 'CLARIFY',
+    ambiguity: { detected: true, candidates: [] } }),
+  searchCandidates: async () => ({ channels: {
+    structured: [], bm25: [], qdrant: [],
+  } }),
+  hydrateEvidence: async ({ retrieval: selected }) => {
+    reviewedVariantSelection = selected.candidates.map((entry) => entry.recordId);
+    assert.deepEqual(reviewedVariantSelection, ['record-stt-variant'],
+      'A newly verified multilingual subject must replace an old remembered subject');
+    const selectedRecord = selected.candidates[0];
+    return { evidence: [{
+      ...selectedRecord, id: 'evidence-reviewed-variant', hydrationValidated: true,
+      publicationValidated: true, callerFacing: true, content: sttVariantRecord.content,
+      authoritativeData: { name: sttVariantRecord.entity_name, detail: 'approved' },
+      provenance: { knowledgeBaseId, publicationRevision: 4 },
+    }] };
+  },
+});
+assert.deepEqual(reviewedVariantSelection, ['record-stt-variant']);
+assert.equal(reviewedVariantRetrieval.entityResolution.reason, 'verified_multilingual_identity');
+assert.equal(reviewedVariantRetrieval.evidence[0].recordId, 'record-stt-variant');
+
 let unpublishedAliasCandidates = null;
 const unpublishedAliasRetrieval = await retrieveTemplateEngineEvidence({
   auth: { tenantId }, scope, callId: 'call-unpublished-alias', usageDirection: 'inbound',
@@ -865,7 +922,7 @@ for (const tenantSuffix of ['a', 'b']) {
       entity_metadata: { categoryKey: 'published-collection', itemKey: `choice-${index}` },
     }));
     for (const reference of ['Published Collection', 'previous selections']) {
-      let attempts = 0;
+      const hydrationAttempts = [];
       const coverage = await retrieveTemplateEngineEvidence({
         auth: { tenantId: activeTenant }, scope: { ...scope, tenantId: activeTenant },
         callId: 'category-coverage', usageDirection: 'inbound', language: 'ta',
@@ -883,19 +940,26 @@ for (const tenantSuffix of ['a', 'b']) {
         ] }),
         resolveEntityRoute: () => ({ candidate: null, ambiguity: { detected: true, candidates: [] } }),
         searchCandidates: async () => ({ channels: { structured: [], bm25: [], qdrant: [] } }),
-        hydrateEvidence: async ({ retrieval: selected, resolution, limit }) => {
-          attempts += 1;
-          assert.equal(selected.candidates.length, size);
-          assert.ok(limit >= size);
+        hydrateEvidence: async ({ retrieval: selected, resolution, limit, selectionRetry }) => {
+          hydrationAttempts.push({ ids: selected.candidates.map((entry) => entry.recordId),
+            limit, selectionRetry: selectionRetry === true });
+          assert.ok(selected.candidates.length >= 1 && selected.candidates.length <= 5);
+          assert.equal(limit, selected.candidates.length);
+          assert.ok(limit <= 5, 'Every authoritative RRF request must respect its five-record contract');
           assert.equal(resolution.candidate, null, 'A category wrapper must not filter out its requested children');
-          const retained = attempts === 1 ? selected.candidates.slice(0, 1) : selected.candidates;
+          const retained = selectionRetry ? selected.candidates : selected.candidates.slice(0, 1);
           return { evidence: retained.map((entry) => ({ ...entry, id: entry.recordId,
             hydrationValidated: true, publicationValidated: true, callerFacing: true,
             content: 'Published details', authoritativeData: { details: 'Published details' }, provenance: publication,
           })) };
         },
       });
-      assert.equal(attempts, 2, 'Retry partial hydration with the full exact set');
+      assert.equal(hydrationAttempts.length, size > 5 ? 4 : 2,
+        'Retry every bounded identity batch when the first hydration is incomplete');
+      assert.equal(hydrationAttempts.filter((attempt) => attempt.selectionRetry).length,
+        size > 5 ? 2 : 1);
+      assert.deepEqual(new Set(hydrationAttempts.flatMap((attempt) => attempt.ids)),
+        new Set(records.map((record) => record.record_id)));
       assert.equal(coverage.evidence.length, size, 'No top-five truncation of required operands');
       assert.equal(coverage.requestedEntityRecordIds.length, size);
       assert.ok(coverage.evidence.every((entry) => entry.tenantId === activeTenant && entry.publicationRevision === 4));
@@ -995,10 +1059,8 @@ for (const scenario of [
   }, {
     loadPublishedContext: async () => ({ scope, publishedWorkflows: [], artifacts: {} }),
     invokeStructuredLlm: async (request) => {
-      if (request.responseFormat.name === 'template_engine_reference_review') {
-        assert.ok(request.messages[0].content.includes(scenario.text));
-        return { relation: scenario.relation };
-      }
+      assert.notEqual(request.responseFormat.name, 'template_engine_reference_review',
+        'Context verification must be deferred to the retrieval resolver');
       calls += 1;
       return calls === 1 ? { ...searchDecision, search: {
         query: 'Tenant Item price', requestedFact: 'price',
@@ -1008,11 +1070,15 @@ for (const scenario of [
     },
     retrieveEvidence: async (request) => {
       const reuse = scenario.relation === 'reference';
-      assert.equal(request.contextualMemoryVerified, reuse);
-      assert.deepEqual(request.searchDecision.search.preferredRecordIds, reuse ? ['record-1'] : []);
-      assert.deepEqual(request.state.lastReferencedRecordIds, reuse ? ['record-1'] : []);
-      if (!reuse) assert.equal(request.searchDecision.search.query, scenario.text);
-      return retrieval;
+      assert.equal(request.contextualMemoryVerified, false);
+      assert.equal(request.contextualMemoryCandidate, true);
+      assert.deepEqual(request.searchDecision.search.preferredRecordIds, ['record-1']);
+      assert.deepEqual(request.state.lastReferencedRecordIds, ['record-1']);
+      return { ...retrieval, contextualMemoryVerified: reuse,
+        resolvedSearch: reuse ? request.searchDecision.search : {
+          ...request.searchDecision.search, query: scenario.text,
+          contextualReference: null, preferredRecordIds: [],
+        } };
     },
     persistWorkflowState: async () => assert.fail('Search must not persist a workflow'),
     executeAuthorizedTool: async () => assert.fail('Search must not execute tools'),
@@ -1042,6 +1108,7 @@ for (const scenario of [
     },
     retrieveEvidence: async (request) => {
       assert.equal(request.contextualMemoryVerified, true);
+      assert.equal(request.contextualMemoryCandidate, true);
       assert.deepEqual(request.searchDecision.search.preferredRecordIds, ['record-1']);
       return retrieval;
     },
@@ -1064,6 +1131,7 @@ assert.equal(await reviewRememberedReference(referenceInput, async () => ({ rela
   let coverageChecks = 0;
   const result = await runTemplateEngineProductionTurn({ scope, latestUtterance: 'Yes Madam',
     mainPrompt: 'Follow published steps.', assignedTools: [], informationFields: [],
+    acknowledgementPhrases: ['Yes Madam'],
     pendingQuestion: { key: 'configured_welcome_question', text: 'Is this the account holder?' },
   }, {
     persistWorkflowState: async () => {},
@@ -1075,17 +1143,18 @@ assert.equal(await reviewRememberedReference(referenceInput, async () => ({ rela
         purpose: 'After acceptance explain the available services.', response: 'Explain available services.',
         nextQuestion: null }] }),
     invokeStructuredLlm: async (request) => {
-      if (request.responseFormat.name === 'template_engine_welcome_meaning') return { outputParsed: {
-        continuation: true, guidanceRecordId: 'next-step', query: 'available services', requestedFact: 'available services',
-      } };
-      if (++calls === 1) return searchDecision;
+      assert.notEqual(request.responseFormat.name, 'template_engine_orchestrator_decision',
+        'An exact configured acknowledgement with one published next step must skip routing');
+      assert.notEqual(request.responseFormat.name, 'template_engine_welcome_meaning',
+        'A deterministic published continuation must not need a meaning-review LLM call');
+      calls += 1;
       assert.ok(request.messages[0].content.includes('published_welcome_continuation'));
       return { decision: 'RESPONSE', response: 'Tenant Item costs 125.', clarification: null,
         evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null };
     },
     retrieveEvidence: async (input) => {
       assert.equal(input.latestUtterance, 'Yes Madam');
-      assert.equal(input.searchDecision.search.query, 'available services');
+      assert.match(input.searchDecision.search.query, /available services/u);
       assert.equal(input.requestMeaning.pendingWelcomeQuestion.text, 'Is this the account holder?');
       return retrieval;
     },
@@ -1102,6 +1171,7 @@ assert.equal(await reviewRememberedReference(referenceInput, async () => ({ rela
   });
   assert.equal(result.decision.decision, 'RESPONSE');
   assert.equal(result.toolExecuted, false);
+  assert.equal(calls, 1, 'Only grounded answer generation is needed after deterministic continuation');
   assert.equal(coverageChecks, 0,
     'Resolved retrieval must rely on the complete post-answer grounding check instead of a duplicate entity review');
 }
@@ -1189,6 +1259,7 @@ const speculativeDecisions = [searchDecision, {
 }];
 const speculativeTurn = await runTemplateEngineProductionTurn({
   auth: { tenantId }, scope, callId: 'call-speculative', usageDirection: 'inbound', language: 'en',
+  speculativeRetrievalAuthorized: true,
   mainPrompt: 'Answer in English. Search for factual requests.',
   latestUtterance: 'What is the tenant item price?', conversationHistory: [], state: {},
   runtimeProfile: {}, authorizedWorkflowTools: [], assignedTools: [], informationFields: [],
@@ -1238,6 +1309,7 @@ assert.match(speculativeTurn.speech, /Tenant Item costs 125/u);
   }];
   const result = await runTemplateEngineProductionTurn({
     auth: { tenantId }, scope, callId: 'bounded-speculative-handoff',
+    speculativeRetrievalAuthorized: true,
     usageDirection: 'inbound', language: 'en', mainPrompt: 'Use published facts.',
     latestUtterance: 'What is the tenant item price?', state: {}, assignedTools: [],
     informationFields: [],
@@ -1270,6 +1342,7 @@ assert.match(speculativeTurn.speech, /Tenant Item costs 125/u);
     })) } };
   const result = await runTemplateEngineProductionTurn({
     auth: { tenantId }, scope, callId: 'revision-isolated-speculation',
+    speculativeRetrievalAuthorized: true,
     usageDirection: 'inbound', language: 'en', mainPrompt: 'Use published facts.',
     latestUtterance: 'What is the tenant item price?', state: {}, assignedTools: [],
     informationFields: [],
@@ -1332,6 +1405,7 @@ assert.equal(verifiedPublishedEntityFastPath({ ...exactSpeculativeRetrieval,
     evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null }];
   const result = await runTemplateEngineProductionTurn({
     auth: { tenantId }, scope, callId: 'exact-fast-path', usageDirection: 'inbound', language: 'en',
+    speculativeRetrievalAuthorized: true,
     mainPrompt: 'Use published facts.', latestUtterance: 'tenant item price',
     conversationHistory: [{ role: 'user', content: 'Old Item details' },
       { role: 'assistant', content: 'Old Item details.' }],
@@ -1368,6 +1442,7 @@ assert.equal(verifiedPublishedEntityFastPath({ ...exactSpeculativeRetrieval,
     clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null }];
   const result = await runTemplateEngineProductionTurn({
     auth: { tenantId }, scope, callId: 'exact-fast-path-with-pending-welcome',
+    speculativeRetrievalAuthorized: true,
     usageDirection: 'inbound', language: 'en', mainPrompt: 'Use published facts.',
     latestUtterance: 'tenant item price',
     pendingQuestion: { key: 'configured_welcome_question', text: 'May I continue?' },
@@ -1402,6 +1477,7 @@ assert.equal(verifiedPublishedEntityFastPath({ ...exactSpeculativeRetrieval,
   let foregroundRetrievals = 0;
   await assert.rejects(() => runTemplateEngineProductionTurn({
     auth: { tenantId }, scope, callId: 'cancelled-speculative-turn', turnEpoch: 11,
+    speculativeRetrievalAuthorized: true,
     turnBoundaryId: 'cancelled-speculative-turn:11', usageDirection: 'inbound', language: 'en',
     mainPrompt: 'Use published facts.', latestUtterance: 'tenant item price',
     state: {}, assignedTools: [], informationFields: [],
@@ -1431,6 +1507,7 @@ let deadline;
 try {
   const foreground = runTemplateEngineProductionTurn({
     auth: { tenantId }, scope, callId: 'slow-speculation', usageDirection: 'inbound', language: 'en',
+    speculativeRetrievalAuthorized: true,
     mainPrompt: 'Use published facts.', latestUtterance: 'What is the tenant item price?', state: {},
     assignedTools: [], informationFields: [],
   }, {

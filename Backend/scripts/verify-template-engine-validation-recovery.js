@@ -154,7 +154,8 @@ const messageProfile = { agent: { settings: {
   nonFactualRecoveryMessage: 'Sorry, I could not complete that response.',
 } } };
 for (const [kind, key] of [['validation', 'evidenceValidationFailureMessage'],
-  ['configuration', 'workflowConfigurationFailureMessage'], ['operational', 'technicalFailureMessage']]) {
+  ['configuration', 'workflowConfigurationFailureMessage'], ['operational', 'technicalFailureMessage'],
+  ['unexpected', 'technicalFailureMessage']]) {
   assert.equal(configuredTemplateEngineFailureResponse(messageProfile, kind), messageProfile.agent.settings[key]);
 }
 for (const kind of ['validation', 'configuration']) {
@@ -171,7 +172,11 @@ assert.equal(configuredTemplateEngineFailureResponse({ agent: { settings: onlyRe
 assert.throws(() => validateRecoveryReadiness(onlyRephrase, { requiresWorkflowRecovery: true }),
   { code: 'AGENT_WORKFLOW_RECOVERY_MESSAGE_REQUIRED' });
 assert.doesNotThrow(() => validateRecoveryReadiness({ ...onlyRephrase,
-  workflowConfigurationFailureMessage: 'I cannot start that action right now.' }, { requiresWorkflowRecovery: true }));
+  workflowConfigurationFailureMessage: 'I cannot start that action right now.',
+  technicalFailureMessage: 'A technical failure occurred.' }, { requiresWorkflowRecovery: true }));
+assert.throws(() => validateRecoveryReadiness({ ...onlyRephrase,
+  workflowConfigurationFailureMessage: 'I cannot start that action right now.' },
+{ requiresWorkflowRecovery: true }), { code: 'AGENT_TECHNICAL_FAILURE_MESSAGE_REQUIRED' });
 
 async function waitFor(predicate) {
   const deadline = Date.now() + 5000;
@@ -204,11 +209,14 @@ class Audio {
   async close() { for (const resolve of this.waiters.splice(0)) resolve(null); }
 }
 
-for (const mode of ['dedicated', 'neutral', 'unconfigured', 'cancelled', 'workflow-config', 'field-config', 'hydration-failure', 'speech-budget', 'booking-routing', 'provider-failure']) {
+for (const mode of ['dedicated', 'neutral', 'unconfigured', 'cancelled', 'workflow-config', 'field-config', 'hydration-failure', 'speech-budget', 'booking-routing', 'provider-failure', 'unexpected-failure']) {
   const configurationFailure = mode.endsWith('-config');
   const providerFailure = mode === 'provider-failure';
+  const unexpectedFailure = mode === 'unexpected-failure';
   const routingFailure = mode === 'booking-routing';
-  const recovery = providerFailure ? 'A technical failure occurred.' : mode === 'neutral'
+  const forceHydrationFailure = ['dedicated', 'neutral', 'unconfigured',
+    'hydration-failure'].includes(mode);
+  const recovery = providerFailure || unexpectedFailure ? 'A technical failure occurred.' : mode === 'neutral'
     ? 'மன்னிக்கவும், உங்கள் கோரிக்கைக்கு சரியான பதிலைத் தயார் செய்ய முடியவில்லை. கொஞ்சம் வேறு விதமாகச் சொல்ல முடியுமா?'
     : 'Sorry, I could not prepare that answer. Please try again.';
   const logs = [];
@@ -227,6 +235,7 @@ for (const mode of ['dedicated', 'neutral', 'unconfigured', 'cancelled', 'workfl
     async connect() {}, cancel() {}, close() {},
     async *stream(request) {
       if (providerFailure) throw Object.assign(new Error('Simulated provider outage'), { code: 'LLM_PROVIDER_TIMEOUT' });
+      if (unexpectedFailure) throw new Error('Simulated unexpected application failure');
       const name = request.responseFormat?.name;
       let output;
       if (name === 'template_engine_multilingual_entity_review') {
@@ -239,13 +248,20 @@ for (const mode of ['dedicated', 'neutral', 'unconfigured', 'cancelled', 'workfl
         const acknowledgementOnly = ['Hello', 'ஆ'].includes(data.latestUtterance);
         output = { acknowledgementOnly, act: acknowledgementOnly ? 'acknowledgement' : 'request',
           acknowledgementText: acknowledgementOnly ? data.latestUtterance : '' };
+      } else if (name === 'template_engine_orchestrator_decision'
+        && ['Hello', 'ஆ'].includes(request.messages.at(-1)?.content)) {
+        output = { decision: 'RESPONSE', response: 'I am listening.', clarification: null,
+          search: null, tool: null, nextQuestion: null, stateUpdate: null };
       } else if (routingFailure) {
         output = { ...initiation, stateUpdate: { set: { confirmationStatus: null }, clear: ['activeWorkflowId'] } };
       } else if (configurationFailure) {
         output = { decision: 'TOOL', response: '', clarification: null, search: null,
           tool: { name: 'create_record', arguments: {} }, nextQuestion: null, stateUpdate: null };
       } else if (name === 'template_engine_claim_validation') {
-        output = { supported: false, successClaimed: false, requestedFactAddressed: false, reason: 'unsupported_test_claim' };
+        const conversational = request.messages.some((message) => message.content.includes('I am listening.'));
+        output = { supported: conversational, successClaimed: false,
+          requestedFactAddressed: conversational,
+          reason: conversational ? null : 'unsupported_test_claim' };
       } else if (name === 'template_engine_post_search_decision') {
         postSearchAttempts += 1;
         if (mode === 'speech-budget') assert.ok(request.messages[0].content.includes('100 characters'),
@@ -278,6 +294,7 @@ for (const mode of ['dedicated', 'neutral', 'unconfigured', 'cancelled', 'workfl
     agent: { id: 'agent-a', tenantId: 'tenant-a', workspaceId: 'workspace-a', language: 'English (US)',
       prompt: 'Answer only from supplied evidence.', welcomeMessage: 'Welcome.', inactivityTimeoutSeconds: 60,
       settings: { technicalFailureMessage: 'A technical failure occurred.', informationUnavailableMessage: 'No published information.',
+        acknowledgementPhrases: ['Hello', 'ஆ'],
         ...(mode !== 'unconfigured' ? { nonFactualRecoveryMessage: recovery } : {}),
         ...(configurationFailure ? { workflowConfigurationFailureMessage: recovery } : {}),
         ...(mode === 'dedicated' ? { evidenceValidationFailureMessage: recovery } : {}) } },
@@ -306,7 +323,8 @@ for (const mode of ['dedicated', 'neutral', 'unconfigured', 'cancelled', 'workfl
           entity_name: 'Alpha', entity_metadata: { price: 17 }, usage_direction: 'both' }],
       }] }),
       searchCandidates: async () => ({ channels: { structured: [], bm25: [], qdrant: [] } }),
-      hydrateEvidence: async ({ retrieval }) => ({ evidence: (mode === 'hydration-failure' ? [] : retrieval.candidates).map((entry) => ({
+      hydrateEvidence: async ({ retrieval }) => ({ evidence: (forceHydrationFailure && spoken.length === 0
+        ? [] : retrieval.candidates).map((entry) => ({
         ...entry, id: entry.recordId, callerFacing: true, hydrationValidated: true, publicationValidated: true,
         content: 'Alpha costs 17 units.', authoritativeData: { price: 17 }, provenance: publication,
       })) }),
@@ -333,20 +351,30 @@ for (const mode of ['dedicated', 'neutral', 'unconfigured', 'cancelled', 'workfl
       continue;
     }
     await waitFor(() => logs.some((entry) => entry.stage === 'template_engine.turn_completed'));
-    assert.equal(postSearchAttempts, configurationFailure || providerFailure || routingFailure || mode === 'hydration-failure' ? 0 : 2,
+    assert.equal(postSearchAttempts, configurationFailure || providerFailure || unexpectedFailure
+      || routingFailure || forceHydrationFailure ? 0 : 2,
       'Configuration and hydration failures must not reach answer generation');
     if (configurationFailure) assert.equal(orchestrator.templateEngineState.activeWorkflowId, null,
       'No workflow state may be activated on configuration failure');
-    assert.ok(spoken.includes(recovery), 'Configured recovery must reach TTS');
+    const completed = logs.find((entry) => entry.stage === 'template_engine.turn_completed');
+    if (mode === 'speech-budget') {
+      assert.equal(completed.recoveryKind, null,
+        'A supported extractive answer should be preferred over configured recovery');
+      assert.ok(!spoken.some((text) => text.includes('9999')),
+        'Oversized rejected speech must never reach TTS');
+      continue;
+    }
+    assert.ok(spoken.includes(recovery), `Configured recovery must reach TTS (${mode})`);
     assert.ok(!media.closed, 'Approved recovery must preserve the established call');
-    if (!configurationFailure && !providerFailure && !routingFailure && mode !== 'hydration-failure') {
+    if (!configurationFailure && !providerFailure && !unexpectedFailure
+      && !routingFailure && !forceHydrationFailure) {
       const retrievalLog = logs.find((entry) => entry.stage === 'template_engine.retrieval_completed');
       assert.ok(Object.hasOwn(retrievalLog, 'entityMatch'));
       assert.ok(Object.hasOwn(retrievalLog, 'preferredRecordIds'));
       assert.ok(Object.hasOwn(retrievalLog, 'ambiguity'));
     }
-    assert.equal(spoken.includes('A technical failure occurred.'), providerFailure,
-      'Only provider failures may use the technical failure message');
+    assert.equal(spoken.includes('A technical failure occurred.'), providerFailure || unexpectedFailure,
+      'Only operational or unexpected runtime failures may use the technical failure message');
     if (mode === 'field-config') {
       const rejection = logs.find((entry) => entry.stage === 'template_engine.response_rejected');
       assert.equal(rejection.err.details.reason, 'TEMPLATE_ENGINE_WORKFLOW_FIELD_CONFIGURATION_MISSING');
@@ -364,10 +392,12 @@ for (const mode of ['dedicated', 'neutral', 'unconfigured', 'cancelled', 'workfl
     assert.ok(!spoken.some((text) => text.includes('9999')), 'Rejected speech must never reach TTS');
     assert.ok(!JSON.stringify(transcript).includes('9999'), 'Rejected speech must never be committed to the transcript');
     assert.equal(orchestrator.controller.state, 'listening');
-    const completed = logs.find((entry) => entry.stage === 'template_engine.turn_completed');
-    assert.equal(completed.recoveryKind, providerFailure ? 'operational' : configurationFailure ? 'configuration' : 'validation');
-    assert.equal(Boolean(completed.validationFailure), !providerFailure);
+    assert.equal(completed.recoveryKind, providerFailure ? 'operational'
+      : unexpectedFailure ? 'unexpected' : configurationFailure ? 'configuration' : 'validation');
+    assert.equal(Boolean(completed.validationFailure), !providerFailure && !unexpectedFailure);
     assert.equal(completed.operationalFailure, providerFailure ? 'LLM_PROVIDER_TIMEOUT' : null);
+    assert.equal(completed.unexpectedFailure,
+      unexpectedFailure ? 'TEMPLATE_ENGINE_UNEXPECTED_FAILURE' : null);
     assert.deepEqual(completed.evidenceIds, []);
     assert.equal(orchestrator.runtimeMetrics.providerFailures.llm, providerFailure ? 1 : 0);
     assert.ok(logs.some((entry) => entry.stage === 'template_engine.recovery_delivered'));

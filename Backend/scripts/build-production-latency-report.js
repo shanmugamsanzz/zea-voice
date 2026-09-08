@@ -69,9 +69,10 @@ const incompleteTelemetryTurns = completedTurns.filter((turn) => (
   || !String(turn.validationResult ?? '').trim()
   || !Number.isFinite(Number(turn.evidenceCount))
   || typeof turn.configuredFallbackApplied !== 'boolean'
+  || typeof turn.entityCoverageComplete !== 'boolean'
 ));
 const recoveryTurns = completedTurns.filter((turn) => Boolean(
-  turn.recoveryKind || turn.operationalFailure || turn.validationFailure,
+  turn.recoveryKind || turn.operationalFailure || turn.validationFailure || turn.unexpectedFailure,
 ));
 const configuredFallbackTurns = completedTurns.filter((turn) => (
   turn.configuredFallbackApplied === true
@@ -85,12 +86,18 @@ const ungroundedSearchResponses = completedTurns.filter((turn) => (
   && String(turn.finalDecision ?? turn.decision ?? '').toUpperCase() === 'RESPONSE'
   && Number(turn.evidenceCount ?? turn.evidenceIds?.length ?? 0) < 1
 ));
+const incorrectEntityResponses = completedTurns.filter((turn) => (
+  String(turn.initialDecision ?? '').toUpperCase() === 'SEARCH'
+  && String(turn.finalDecision ?? turn.decision ?? '').toUpperCase() === 'RESPONSE'
+  && turn.entityCoverageComplete === false
+));
 const correctnessPassed = completedTurns.length > 0
   && incompleteTelemetryTurns.length === 0
   && recoveryTurns.length === 0
   && configuredFallbackTurns.length === 0
   && bookingFieldSearchTurns.length === 0
-  && ungroundedSearchResponses.length === 0;
+  && ungroundedSearchResponses.length === 0
+  && incorrectEntityResponses.length === 0;
 const report = {
   generatedAt: new Date().toISOString(),
   samples,
@@ -122,13 +129,15 @@ const report = {
     configuredFallbackTurns: configuredFallbackTurns.length,
     bookingFieldKnowledgeSearches: bookingFieldSearchTurns.length,
     ungroundedSearchResponses: ungroundedSearchResponses.length,
+    incorrectEntityResponses: incorrectEntityResponses.length,
     passed: correctnessPassed,
     reason: !completedTurns.length ? 'no_completed_live_turns'
       : incompleteTelemetryTurns.length ? 'incomplete_live_correctness_telemetry'
         : recoveryTurns.length ? 'recovery_delivered_during_controlled_replay'
         : configuredFallbackTurns.length ? 'fallback_delivered_during_controlled_replay'
           : bookingFieldSearchTurns.length ? 'booking_field_knowledge_search_detected'
-            : ungroundedSearchResponses.length ? 'ungrounded_search_response_detected' : null,
+            : ungroundedSearchResponses.length ? 'ungrounded_search_response_detected'
+              : incorrectEntityResponses.length ? 'incorrect_entity_response_detected' : null,
   },
 };
 report.releaseGate = {

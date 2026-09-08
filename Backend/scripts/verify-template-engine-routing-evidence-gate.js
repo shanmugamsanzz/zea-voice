@@ -57,10 +57,19 @@ function dependencies(configuration, decisions, { evidence = true } = {}) {
   let retrievalDiagnostics = null;
   let postSearchDiagnostics = null;
   let retrievalCalls = 0;
+  let speculativeRetrievalCalls = 0;
+  const llmRequests = [];
   return {
     dependencies: {
-      invokeStructuredLlm: async () => decisions.shift(),
+      invokeStructuredLlm: async (request) => {
+        llmRequests.push(request);
+        return decisions.shift();
+      },
       loadPublishedContext: async () => ({ scope, publishedWorkflows: [], artifacts: {} }),
+      retrieveSpeculativeEvidence: async () => {
+        speculativeRetrievalCalls += 1;
+        throw new Error('Conversational turns must not start speculative knowledge retrieval');
+      },
       retrieveEvidence: async () => {
         retrievalCalls += 1;
         const records = evidence ? [Object.freeze({
@@ -94,7 +103,8 @@ function dependencies(configuration, decisions, { evidence = true } = {}) {
       onRetrievalDiagnostics: (value) => { retrievalDiagnostics = value; },
       onPostSearchDiagnostics: (value) => { postSearchDiagnostics = value; },
     },
-    inspect: () => ({ retrievalDiagnostics, postSearchDiagnostics, retrievalCalls, recordId, evidenceId }),
+    inspect: () => ({ retrievalDiagnostics, postSearchDiagnostics, retrievalCalls,
+      speculativeRetrievalCalls, llmRequests, recordId, evidenceId }),
   };
 }
 
@@ -108,7 +118,48 @@ for (const configuration of tenants) {
   );
   assert.equal(acknowledgement.decision.decision, 'RESPONSE');
   assert.equal(acknowledgementRuntime.inspect().retrievalCalls, 0);
+  assert.equal(acknowledgementRuntime.inspect().speculativeRetrievalCalls, 0);
   assert.equal(acknowledgementDecisions.length, 0);
+
+  const conversationalScenarios = [
+    { utterance: configuration.language === 'ta' ? '\u0b86' : 'Hmm', decision: 'RESPONSE', response: 'I am listening.' },
+    { utterance: configuration.language === 'ta' ? '\u0b90\u0baf\u0bcb \u0baa\u0bc1\u0bb0\u0bbf\u0baf\u0bb2' : 'I did not understand that', decision: 'CLARIFY' },
+    { utterance: configuration.language === 'ta' ? '\u0b85\u0bb5\u0bcd\u0bb5\u0bb3\u0bb5\u0bc1\u0ba4\u0bbe\u0ba9\u0bcd' : 'That is all', decision: 'RESPONSE', response: 'Understood.' },
+    { utterance: configuration.language === 'ta' ? '\u0bb5\u0bc7\u0ba3\u0bcd\u0b9f\u0bbe\u0bae\u0bcd' : 'Cancel that', decision: 'RESPONSE', response: 'Understood.' },
+  ];
+  for (const scenario of conversationalScenarios) {
+    const conversationalDecisions = [scenario.decision === 'CLARIFY'
+      ? { decision: 'CLARIFY', response: '',
+        clarification: { question: 'What would you like me to explain again?', reason: 'caller_did_not_understand', candidates: [] },
+        search: null, tool: null, nextQuestion: null, stateUpdate: null }
+      : { decision: 'RESPONSE', response: scenario.response,
+        clarification: null, search: null, tool: null, nextQuestion: null, stateUpdate: null }];
+    const conversationalRuntime = dependencies(configuration, conversationalDecisions);
+    const conversationalInput = runtimeInput(configuration, scenario.utterance);
+    conversationalInput.unansweredRequest = configuration.direct;
+    conversationalInput.pendingQuestion = {
+      key: 'configured_follow_up', text: 'Would you like to continue?', kind: 'follow_up',
+    };
+    conversationalInput.conversationHistory = [
+      { role: 'user', content: configuration.direct },
+      { role: 'assistant', content: 'The previous answer was interrupted.' },
+    ];
+    const conversational = await runTemplateEngineProductionTurn(
+      conversationalInput, conversationalRuntime.dependencies,
+    );
+    assert.equal(conversational.decision.decision, scenario.decision);
+    assert.equal(conversationalRuntime.inspect().retrievalCalls, 0,
+      `${scenario.decision} conversational act must not run foreground retrieval`);
+    assert.equal(conversationalRuntime.inspect().speculativeRetrievalCalls, 0,
+      `${scenario.decision} conversational act must not run speculative retrieval`);
+    assert.match(conversationalRuntime.inspect().llmRequests[0].messages[0].content,
+      /"unansweredRequest"/u,
+      'The router must receive the unanswered request as context without searching it');
+    assert.match(conversationalRuntime.inspect().llmRequests[0].messages[0].content,
+      /"pendingQuestion"/u,
+      'The router must interpret short replies against the saved pending question');
+    assert.equal(conversationalDecisions.length, 0);
+  }
 
   let malformedCalls = 0;
   const malformedRecovery = await routeTemplateEngineUtterance({

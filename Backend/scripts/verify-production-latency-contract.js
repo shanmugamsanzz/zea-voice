@@ -285,8 +285,8 @@ const liveTemplateEngine = `${orchestrator}\n${productionRuntime}`;
 assert.match(orchestrator, /sentencePipeline\.enqueue\(finalAnswer\)/u,
   'Validated template-engine speech must enter the immediate sentence TTS pipeline');
 assert.match(orchestrator, /activeRetrievalAbortController\?\.abort\(reason\)/u);
-assert.match(liveTemplateEngine, /retrieveSpeculativeEvidence/u,
-  'Routing and speculative evidence retrieval must remain concurrent');
+assert.doesNotMatch(orchestrator, /retrieveSpeculativeEvidence:/u,
+  'Live calls must not launch speculative knowledge searches before routing');
 assert.doesNotMatch(orchestrator,
   /RAG_RUNTIME_CHANNEL_DEADLINE_MS\s*\+\s*env\.RAG_RUNTIME_SEMANTIC_DEADLINE_MS/u,
   'Channel limits must not be added together as an artificial overall deadline');

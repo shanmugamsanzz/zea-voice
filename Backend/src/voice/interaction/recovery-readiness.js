@@ -18,6 +18,9 @@ export function validateRecoveryReadiness(settings = {}, { required = true, requ
     ['nonFactualRecoveryMessage', 'non_factual_recovery'],
     ['evidenceValidationFailureMessage', 'evidence_validation_failure'],
     ['workflowConfigurationFailureMessage', 'workflow_configuration_failure'],
+    ['technicalFailureMessage', 'technical_failure'],
+    ['knowledgeTechnicalFailureMessage', 'technical_failure'],
+    ['errorRecoveryMessage', 'technical_failure'],
   ];
   const usable = {};
   for (const [key, role] of fields) {
@@ -39,5 +42,16 @@ export function validateRecoveryReadiness(settings = {}, { required = true, requ
   if (required && requiresWorkflowRecovery && !usable.workflowConfigurationFailureMessage) {
     throw new AppError(400, 'Approve a dedicated configuration-failure message before loading an agent with tools; rephrasing cannot repair configuration',
       'AGENT_WORKFLOW_RECOVERY_MESSAGE_REQUIRED', { field: 'settings.workflowConfigurationFailureMessage' });
+  }
+  if (required && ![
+    usable.technicalFailureMessage,
+    usable.knowledgeTechnicalFailureMessage,
+    usable.errorRecoveryMessage,
+  ].some(Boolean)) {
+    throw new AppError(400,
+      'Approve a technical-failure message before activating or loading the agent',
+      'AGENT_TECHNICAL_FAILURE_MESSAGE_REQUIRED', {
+        field: 'settings.technicalFailureMessage',
+      });
   }
 }

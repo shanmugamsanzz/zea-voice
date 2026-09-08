@@ -417,9 +417,19 @@ export function constrainHybridToRequestedEntities(
   const comparison = existing.filter((entry) => [
     'explicit_comparison', 'contextual_comparison',
   ].includes(String(entry?.reason ?? '').toLocaleLowerCase()));
+  const explicitComparison = comparison.filter((entry) => (
+    String(entry?.reason ?? '').toLocaleLowerCase() === 'explicit_comparison'
+  ));
   const resolved = resolutionReservations(resolution);
+  const explicitlyResolved = resolution?.candidate?.explicit === true ? resolved : [];
   const contextual = existing.filter((entry) => entry.reason === 'canonical_memory');
-  let requested = (comparison.length ? comparison : contextual.length ? contextual : resolved).filter(isActive);
+  // A newly and explicitly resolved published identity is the current subject.
+  // It must replace stale contextual/comparison reservations rather than being
+  // silently substituted by them. Non-explicit pronoun resolution still uses
+  // the canonical memory path.
+  let requested = (explicitComparison.length ? explicitComparison
+    : explicitlyResolved.length ? explicitlyResolved
+    : comparison.length ? comparison : contextual.length ? contextual : resolved).filter(isActive);
   if (!requested.length && resolution?.ambiguity?.detected !== true) {
     const exactCatalog = candidates.filter((candidate) => (
       ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(String(candidate?.recordType ?? '').toUpperCase())
@@ -682,6 +692,7 @@ export async function retrieveTemplateEngineEvidence({
   preloadedArtifacts = null, conversationGuidance = null,
   latestUtterance = null,
   contextualMemoryVerified = false,
+  contextualMemoryCandidate = false,
   requestMeaning = null,
   reviewEntityCandidates = null,
   reviewContextualCandidates = null,
@@ -689,7 +700,7 @@ export async function retrieveTemplateEngineEvidence({
   const startedAt = performance.now();
   const resolutionUtterance = requestMeaning?.kind === 'published_welcome_continuation'
     ? requestMeaning.query : latestUtterance;
-  if (!contextualMemoryVerified) {
+  if (!contextualMemoryVerified && !contextualMemoryCandidate) {
     state = { ...state, lastReferencedRecordIds: [], comparisonRecordIds: [] };
     if (searchDecision?.search) searchDecision = { ...searchDecision, search: {
       ...searchDecision.search, preferredRecordIds: [], contextualReference: null,
@@ -807,7 +818,8 @@ export async function retrieveTemplateEngineEvidence({
   // Resolve remembered IDs from the current assigned publication, even when
   // lexical/semantic channels cannot match a pronoun-only follow-up.
   // Explicit published names always take precedence over stale memory hints.
-  if (!exactCatalog.length && contextualMemoryVerified && reviewContextualCandidates) {
+  if (!exactCatalog.length && !contextualMemoryVerified
+    && contextualMemoryCandidate && reviewContextualCandidates) {
     const candidates = scopedBundles.flatMap((bundle) => (bundle.records ?? [])
       .filter((record) => ['both', input.usageDirection].includes(normalized(record.usage_direction ?? record.usageDirection ?? 'both')))
       .map((record) => publishedRecordCandidate(record, bundle, input))
@@ -988,17 +1000,79 @@ export async function retrieveTemplateEngineEvidence({
   });
   const requestedIdentities = new Set(entityConstraint.requestedIdentities);
   const hydrate = dependencies.hydrateEvidence ?? rankAndHydrateAuthoritativeEvidence;
-  const hydrateSelection = (selection, selectionRetry = false) => hydrate({
+  const rrfLimit = (count) => Math.max(1, Math.min(5, Number(count) || 5));
+  const selectionForIdentities = (selection, identities) => {
+    const allowed = new Set(identities);
+    const candidates = (selection.candidates ?? []).filter((candidate) => allowed.has(
+      candidateIdentityKey(candidate, input.tenantId),
+    ));
+    return Object.freeze({
+      ...selection,
+      candidates: Object.freeze(candidates),
+      channels: Object.freeze(Object.fromEntries(Object.entries(selection.channels ?? {})
+        .map(([channel, values]) => [channel, Object.freeze((values ?? []).filter(
+          (candidate) => allowed.has(candidateIdentityKey(candidate, input.tenantId)),
+        ))]))),
+      queryContext: Object.freeze({
+        ...(selection.queryContext ?? {}),
+        reservedRecords: Object.freeze((selection.queryContext?.reservedRecords ?? []).filter(
+          (candidate) => allowed.has(candidateIdentityKey(candidate, input.tenantId)),
+        )),
+      }),
+    });
+  };
+  const hydrateOne = (selection, selectionRetry = false) => hydrate({
     auth,
     input,
     classification: route,
     resolution: entityResolution,
     retrieval: selection,
-    limit: Math.max(5, requestedIdentities.size),
+    limit: rrfLimit(selection.candidates?.length),
     minProviderScore: 0,
     requireAtLeastOneHydratedEvidence: true,
     selectionRetry,
   }, dependencies.hydration);
+  const hydrateSelection = async (selection, selectionRetry = false) => {
+    if (requestedIdentities.size <= 5) return hydrateOne(selection, selectionRetry);
+    const identities = [...requestedIdentities];
+    const batches = Array.from({ length: Math.ceil(identities.length / 5) }, (_, index) => (
+      identities.slice(index * 5, (index + 1) * 5)
+    ));
+    const hydratedBatches = await Promise.all(batches.map((batch) => hydrateOne(
+      selectionForIdentities(selection, batch), selectionRetry,
+    )));
+    const uniqueEvidence = new Map();
+    const uniqueCandidates = new Map();
+    const rejectedRecordIds = new Set();
+    // Some hydrators return only evidence and omit their fusion candidates.
+    // Retain the already-verified selection so the merged result still proves
+    // coverage for every requested identity.
+    for (const candidate of selection.candidates ?? []) {
+      const key = candidateIdentityKey(candidate, input.tenantId);
+      if (key && requestedIdentities.has(key) && !uniqueCandidates.has(key)) {
+        uniqueCandidates.set(key, candidate);
+      }
+    }
+    for (const result of hydratedBatches) {
+      for (const source of result?.evidence ?? []) {
+        const key = candidateIdentityKey(source, input.tenantId);
+        if (key && !uniqueEvidence.has(key)) uniqueEvidence.set(key, source);
+      }
+      for (const candidate of result?.fusion?.candidates ?? []) {
+        const key = candidateIdentityKey(candidate, input.tenantId);
+        if (key && !uniqueCandidates.has(key)) uniqueCandidates.set(key, candidate);
+      }
+      for (const recordId of result?.rejectedRecordIds ?? []) rejectedRecordIds.add(recordId);
+    }
+    return Object.freeze({
+      evidence: Object.freeze([...uniqueEvidence.values()]),
+      fusion: Object.freeze({
+        ...(hydratedBatches[0]?.fusion ?? {}),
+        candidates: Object.freeze([...uniqueCandidates.values()]),
+      }),
+      rejectedRecordIds: Object.freeze([...rejectedRecordIds]),
+    });
+  };
   const exactSelection = () => {
     const candidates = retrieval.candidates.filter((candidate) => requestedIdentities.has(
       candidateIdentityKey(candidate, input.tenantId),

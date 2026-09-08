@@ -1,9 +1,46 @@
+import { acknowledgementOnly } from '../interruption/final-turn-validator.js';
+
+function cleanText(value, maximum = 2_000) {
+  return String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
+    .replace(/\s+/gu, ' ').trim().slice(0, maximum);
+}
+
+export function deterministicWelcomeContinuation({
+  latestUtterance, welcomeContinuation, acknowledgementPhrases = [],
+} = {}) {
+  const candidates = Array.isArray(welcomeContinuation?.candidates)
+    ? welcomeContinuation.candidates : [];
+  if (!acknowledgementOnly(latestUtterance, acknowledgementPhrases)
+    || candidates.length !== 1) return null;
+  const selected = candidates[0];
+  const query = cleanText([
+    ...(Array.isArray(selected.catalogReferences) ? selected.catalogReferences : []),
+    selected.content,
+    selected.purpose,
+  ].filter(Boolean).join(' '));
+  const requestedFact = cleanText(selected.intentClass ?? selected.purpose, 500);
+  if (!selected.recordId || !query || !requestedFact) return null;
+  return Object.freeze({
+    kind: 'published_welcome_continuation',
+    originalUtterance: cleanText(latestUtterance),
+    pendingWelcomeQuestion: welcomeContinuation.pendingQuestion ?? null,
+    publishedNextStep: selected,
+    query,
+    requestedFact,
+  });
+}
+
 // Turn-local interpretation, not persistent memory or tool authorization.
-export async function resolveRequestMeaning({ latestUtterance, welcomeContinuation, search }, invoke) {
+export async function resolveRequestMeaning({ latestUtterance, welcomeContinuation, search,
+  acknowledgementPhrases = [] }, invoke) {
   const direct = Object.freeze({ kind: 'direct_request', originalUtterance: latestUtterance,
     pendingWelcomeQuestion: welcomeContinuation?.pendingQuestion ?? null,
     publishedNextStep: null });
   if (!welcomeContinuation) return direct;
+  const deterministic = deterministicWelcomeContinuation({
+    latestUtterance, welcomeContinuation, acknowledgementPhrases,
+  });
+  if (deterministic) return deterministic;
   const completion = await invoke({ temperature: 0,
     responseFormat: { type: 'json_schema', name: 'template_engine_welcome_meaning', strict: true,
       schema: { type: 'object', additionalProperties: false,

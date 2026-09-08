@@ -12,7 +12,7 @@ for (const code of ['TEMPLATE_ENGINE_OUTPUT_INVALID', 'TEMPLATE_ENGINE_POST_SEAR
   'TEMPLATE_ENGINE_LLM_INVALID_JSON', 'TEMPLATE_ENGINE_CLAIM_VALIDATION_INVALID']) {
   assert.equal(classifyTemplateEngineTurnError({ code, statusCode: 502 }), 'validation');
 }
-assert.equal(classifyTemplateEngineTurnError({ statusCode: 503 }), 'unclassified');
+assert.equal(classifyTemplateEngineTurnError({ statusCode: 503 }), 'unexpected');
 for (const code of ['TEMPLATE_ENGINE_WORKFLOW_FIELD_CONFIGURATION_MISSING',
   'TEMPLATE_ENGINE_WORKFLOW_CONFIRMATION_CONFIGURATION_MISSING', 'TEMPLATE_ENGINE_WORKFLOW_NOT_AUTHORIZED']) {
   assert.equal(classifyTemplateEngineTurnError({ code }), 'configuration');

@@ -24,7 +24,10 @@ import { renderWelcomeTemplate, welcomeTemplateContext } from './welcome-templat
 import { resolveInterruptionConfiguration } from './interruption/interruption-config.js';
 import { InterruptionCandidateManager } from './interruption/interruption-candidate-manager.js';
 import { CustomerUtteranceBuffer } from './interruption/customer-utterance-buffer.js';
-import { validateFinalCustomerTurn } from './interruption/final-turn-validator.js';
+import {
+  acknowledgementOnly,
+  validateFinalCustomerTurn,
+} from './interruption/final-turn-validator.js';
 import { ShortTurnMerger } from './interruption/short-turn-merger.js';
 import { greetingModes, resolveInteractionConfiguration } from './interaction/interaction-config.js';
 import {
@@ -78,7 +81,6 @@ import { resolveCallbackConfiguration } from './interaction/callback-config.js';
 import { mergeToolFieldSchemas } from './interaction/tool-field-schema.js';
 import { resolveRuntimeMessage } from './interaction/configured-runtime-messages.js';
 import { validateRequestedEntityCoverage } from './interaction/template-engine-entity-coverage.js';
-import { isPendingRequestAcknowledgement } from './interaction/template-engine-pending-request.js';
 import { isInternalRuntimeText } from './interaction/recovery-readiness.js';
 export { isInternalRuntimeText } from './interaction/recovery-readiness.js';
 import {
@@ -357,7 +359,7 @@ export function remainingLiveTurnBudgetMs(deadlineAt, reserveMs = 0, now = Date.
 export function configuredTemplateEngineFailureResponse(profile, kind) {
   const role = kind === 'configuration' ? 'workflow_configuration_failure'
     : kind === 'validation' ? 'evidence_validation_failure'
-      : kind === 'operational' ? 'technical_failure' : null;
+      : ['operational', 'unexpected'].includes(kind) ? 'technical_failure' : null;
   if (!role) return '';
   const message = resolveRuntimeMessage(profile, role)
     || (kind === 'validation' ? resolveRuntimeMessage(profile, 'non_factual_recovery') : '');
@@ -2467,26 +2469,19 @@ export class RealtimeConversationOrchestrator {
     let finalResponseReadyAt = null;
     let finalResponseQueuedAt = null;
     let acknowledgementAtReady = null;
+    let preservePendingRequest = false;
     try {
-      const acknowledgementOnly = this.pendingTemplateEngineRequest
+      const unansweredRequest = this.pendingTemplateEngineRequest?.text ?? null;
+      preservePendingRequest = Boolean(unansweredRequest)
         && !this.templateEngineState.activeWorkflowId
-        && await isPendingRequestAcknowledgement({ latestUtterance: query,
-          pendingRequest: this.pendingTemplateEngineRequest.text }, invokeStructuredLlm);
-      if (this.#isStaleGeneration(epoch) || this.finalized) return;
-      if (acknowledgementOnly) {
-        const speech = configuredTemplateEngineFailureResponse(this.runtimeProfile, 'validation');
-        if (!speech) throw new AppError(503, 'Pending request recovery is not configured',
-          'TEMPLATE_ENGINE_OUTPUT_INVALID');
-        result = { speech, state: this.templateEngineState, evidence: [], evidenceIds: [],
-          toolExecuted: false, recoveryKind: 'validation', pendingRequestPreserved: true };
-        this.log.info({ stage: 'template_engine.pending_request_preserved', callId: this.call.id,
-          turnEpoch: epoch, originalTurnEpoch: this.pendingTemplateEngineRequest.epoch,
-        }, 'Acknowledgement did not replace the unanswered request or authorize tools');
-      } else {
+        && acknowledgementOnly(query, this.interruptionConfiguration.acknowledgementPhrases);
       const interruptedWorkflowRequest = this.templateEngineState.activeWorkflowId
-        ? this.pendingTemplateEngineRequest?.text ?? null : null;
+        ? unansweredRequest : null;
       this.pendingTemplateEngineRequest = {
-        text: [interruptedWorkflowRequest, String(query)].filter(Boolean).join('\n').slice(-4000), epoch,
+        text: preservePendingRequest
+          ? unansweredRequest
+          : [interruptedWorkflowRequest, String(query)].filter(Boolean).join('\n').slice(-4000),
+        epoch,
       };
       result = await runTemplateEngineProductionTurn({
         interruptedWorkflowRequest,
@@ -2505,6 +2500,8 @@ export class RealtimeConversationOrchestrator {
         latestUtterance: query,
         conversationHistory: history,
         pendingQuestion: this.liveCallMemory.snapshot().pendingQuestion,
+        acknowledgementPhrases: this.interruptionConfiguration.acknowledgementPhrases,
+        unansweredRequest,
         state: this.templateEngineState,
         runtimeProfile: this.runtimeProfile,
         authorizedWorkflowTools: assignedTools,
@@ -2556,9 +2553,6 @@ export class RealtimeConversationOrchestrator {
           input, this.dependencies.templateEngineKnowledgeDependencies,
         ),
         retrieveEvidence: (input) => retrieveTemplateEngineEvidence(
-          input, this.dependencies.templateEngineKnowledgeDependencies,
-        ),
-        retrieveSpeculativeEvidence: (input) => retrieveTemplateEngineEvidence(
           input, this.dependencies.templateEngineKnowledgeDependencies,
         ),
         persistWorkflowState: async (state) => { this.templateEngineState = {
@@ -2689,7 +2683,6 @@ export class RealtimeConversationOrchestrator {
           }, 'Template-engine post-search decision validated');
         },
       });
-      }
     } catch (error) {
       const errorKind = classifyTemplateEngineTurnError(error, {
         stale: this.#isStaleGeneration(epoch) || this.finalized,
@@ -2721,16 +2714,7 @@ export class RealtimeConversationOrchestrator {
           validationFailure: error.code ?? 'TEMPLATE_ENGINE_OUTPUT_INVALID',
           recoveryKind: errorKind,
         };
-      } else if (errorKind !== 'operational') {
-        sentencePipeline.cancel();
-        this.log.warn({ err: error, stage: 'template_engine.response_rejected',
-          callId: this.call.id, turnEpoch: epoch, errorKind,
-        }, 'Unvalidated speech suppressed; no operational failure was established');
-        if ([callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) {
-          await this.controller.interrupt('template_engine_response_rejected');
-        }
-        return;
-      } else {
+      } else if (errorKind === 'operational') {
         this.#recordProviderFailure('llm', error, 'template_engine.turn');
         this.log.error({
           err: error,
@@ -2746,6 +2730,29 @@ export class RealtimeConversationOrchestrator {
           evidence: [], evidenceIds: [], toolExecuted: false,
           operationalFailure: error.code ?? 'TEMPLATE_ENGINE_OPERATIONAL_FAILURE',
           recoveryKind: 'operational',
+        };
+      } else {
+        // Unknown application exceptions are not evidence of a provider
+        // outage, but an established call must never return to listening in
+        // silence. Suppress all partial output and speak only tenant-approved
+        // technical recovery.
+        this.log.error({
+          err: error,
+          stage: 'template_engine.unexpected_failure',
+          callId: this.call.id,
+          turnEpoch: epoch,
+          errorKind,
+        }, 'Unexpected template-engine failure; approved recovery replaces partial output');
+        const technical = configuredTemplateEngineFailureResponse(
+          this.runtimeProfile, 'unexpected',
+        );
+        if (!technical) throw error;
+        result = {
+          speech: technical,
+          state: this.templateEngineState,
+          evidence: [], evidenceIds: [], toolExecuted: false,
+          unexpectedFailure: error.code ?? 'TEMPLATE_ENGINE_UNEXPECTED_FAILURE',
+          recoveryKind: 'unexpected',
         };
       }
     } finally {
@@ -2802,12 +2809,31 @@ export class RealtimeConversationOrchestrator {
       finalResponseQueuedAt,
       firstAudioDeadlineMs: Math.min(env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS, 2_000),
     });
+    const retrievalEntityDiagnostics = result.diagnostics?.retrieval ?? null;
+    const requestedEntityCount = Number(retrievalEntityDiagnostics?.requestedEntityCount ?? 0);
+    const hydratedRequestedEntityCount = Number(
+      retrievalEntityDiagnostics?.hydratedRequestedEntityCount ?? 0,
+    );
+    const entityResolutionAmbiguous =
+      retrievalEntityDiagnostics?.entityMatch?.ambiguityDetected === true
+      || retrievalEntityDiagnostics?.entityMatch?.requiresCandidateConfirmation === true;
+    const entityCoverageComplete = result.provenance?.searchPerformed !== true
+      || (retrievalEntityDiagnostics?.requestedEntityHydrationIncomplete !== true
+        && hydratedRequestedEntityCount >= requestedEntityCount
+        && !entityResolutionAmbiguous);
     await this.controller.setAssistantResponse(answer, Date.now(), { sources: factualAnswerSources });
     sentencePipeline.markTranscriptCommitted();
     if (this.#isStaleGeneration(epoch) || this.controller.state !== callStates.SPEAKING) return;
     await this.controller.playbackComplete();
     if (!result.recoveryKind && !result.validationFailure && !result.operationalFailure
+      && !result.unexpectedFailure
+      && !preservePendingRequest
       && this.pendingTemplateEngineRequest?.epoch === epoch) this.pendingTemplateEngineRequest = null;
+    if (preservePendingRequest) this.log.info({
+      stage: 'template_engine.pending_request_preserved',
+      callId: this.call.id,
+      turnEpoch: epoch,
+    }, 'Conversational acknowledgement did not erase the unanswered request');
     if (result.recoveryKind) this.log.info({ stage: 'template_engine.recovery_delivered',
       callId: this.call.id, turnEpoch: epoch, recoveryKind: result.recoveryKind,
       spokenCharacters: answer.length, pendingRequestRetained: Boolean(this.pendingTemplateEngineRequest),
@@ -2825,9 +2851,14 @@ export class RealtimeConversationOrchestrator {
       validationResult: result.provenance?.validationResult ?? null,
       evidenceIds: result.evidenceIds ?? [],
       evidenceCount: result.evidenceIds?.length ?? 0,
+      requestedEntityCount,
+      hydratedRequestedEntityCount,
+      entityResolutionAmbiguous,
+      entityCoverageComplete: entityCoverageComplete,
       workflowStatus: result.workflow?.status ?? null,
       toolExecuted: result.toolExecuted === true,
       operationalFailure: result.operationalFailure ?? null,
+      unexpectedFailure: result.unexpectedFailure ?? null,
       validationFailure: result.validationFailure ?? null,
       recoveryKind: result.recoveryKind ?? null,
       configuredFallbackApplied:

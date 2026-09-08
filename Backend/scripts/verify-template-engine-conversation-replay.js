@@ -20,7 +20,7 @@ records.push({ record_id: 'welcome-next', record_type: 'conversation_node', usag
   entity_metadata: { nodeKey: 'welcome-next', purpose: 'After identity acknowledgement give the published overview.',
     catalogReferences: ['Available packages => item:overview'] } });
 const recovery = 'Sorry, I could not prepare that answer. Please try again.';
-const logs = [], spoken = [], audioFrames = [], results = [];
+const logs = [], spoken = [], audioFrames = [], results = [], normalAnswerLatencies = [];
 let turn, stages = new Set(), failAnswer = false, resolvedCoverageSkips = 0;
 class Stt {
   listeners = new Set();
@@ -147,7 +147,11 @@ try {
     const completedTurn = logs.filter((entry) => entry.stage === 'template_engine.turn_completed').at(-1);
     const answer = spoken.slice(before).join(' ');
     assert.ok(answer && audioFrames.length > framesBefore, `Silent turn ${turn.id}`);
-    if (failAnswer) { assert.ok(answer.includes(recovery)); assert.ok(!answer.includes('9999')); }
+    if (failAnswer) {
+      assert.ok(!answer.includes('9999'), 'Rejected content must never be spoken');
+      assert.ok(answer.includes(recovery) || answer.includes(fixture.subjects[turn.subject].answer),
+        'Failed repair must deliver approved recovery or a verified extractive answer');
+    }
     else {
       assert.ok(answer.includes(fixture.subjects[turn.subject].answer), `Wrong spoken answer: ${turn.id}: ${answer}; diagnostics=${JSON.stringify(logs.filter((entry) => entry.error || entry.code || entry.validationReason || entry.reason))}`);
       for (const token of fixture.subjects[turn.subject].required) assert.ok(answer.includes(token));
@@ -164,14 +168,37 @@ try {
         `A semantic review may be skipped only after deterministic validation: ${turn.id}`);
     }
     if (!stages.has('template_engine_entity_coverage')) resolvedCoverageSkips += 1;
+    assert.equal(stages.has('template_engine_reference_review'), false,
+      `The duplicate pre-retrieval reference review must not run: ${turn.id}`);
     if (turn.id === 'welcome') assert.ok(stages.has('template_engine_welcome_meaning'));
     if (turn.noPublishedAlias) assert.ok(stages.has('template_engine_multilingual_entity_review'));
     if (turn.contextual) assert.ok(stages.has('template_engine_contextual_subject_review'), JSON.stringify([...stages]));
+    if (['onco-details', 'diabetic-switch', 'organ-switch', 'kids-switch'].includes(turn.id)) {
+      assert.equal(stages.has('template_engine_contextual_subject_review'), false,
+        `A clear current request must not consume contextual review: ${turn.id}`);
+      assert.equal(stages.has('template_engine_multilingual_entity_review'), false,
+        `A published exact/alias request must not consume multilingual review: ${turn.id}`);
+    }
+    if (!failAnswer) {
+      assert.equal(completedTurn?.normalVerifiedRequest, true, `Normal sample not classified: ${turn.id}`);
+      assert.ok(Number(completedTurn?.finalAnswerFirstAudioMs) <= 4_000,
+        `Offline normal response exceeded four seconds: ${turn.id}`);
+      normalAnswerLatencies.push(Number(completedTurn.finalAnswerFirstAudioMs));
+    }
     assert.ok(!media.closed);
     results.push({ id: turn.id, answer, audioFrames: audioFrames.length - framesBefore });
   }
   assert.ok(resolvedCoverageSkips > 0,
     'Resolved factual replay must skip at least one duplicate entity-coverage LLM review');
+  const averageNormalAnswerLatencyMs = normalAnswerLatencies.reduce((sum, value) => sum + value, 0)
+    / normalAnswerLatencies.length;
+  assert.ok(averageNormalAnswerLatencyMs < 3_000,
+    `Offline normal-response average exceeded three seconds: ${averageNormalAnswerLatencyMs}`);
   console.log(JSON.stringify({ passed: true, mode: 'offline-provider-fixtures', liveModelVerified: false,
-    acousticQualityVerified: false, productionRolloutApproved: false, results }, null, 2));
+    acousticQualityVerified: false, productionRolloutApproved: false,
+    latency: { samples: normalAnswerLatencies.length,
+      averageNormalAnswerLatencyMs: Math.round(averageNormalAnswerLatencyMs * 100) / 100,
+      maximumNormalAnswerLatencyMs: Math.max(...normalAnswerLatencies),
+      targetAverageMs: 3_000, maximumNormalRequestMs: 4_000 },
+    results }, null, 2));
 } finally { media.close(); }

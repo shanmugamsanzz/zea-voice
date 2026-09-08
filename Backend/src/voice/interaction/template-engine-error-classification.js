@@ -47,5 +47,8 @@ export function classifyTemplateEngineTurnError(error, { stale = false } = {}) {
   if (chain.some((entry) => operationalCodes.has(entry.code)
     // PostgreSQL connection failures and server shutdowns.
     || /^(08[0-9A-Z]{3}|57P0[123])$/u.test(String(entry.code ?? '')))) return 'operational';
-  return 'unclassified';
+  // An unknown exception is still a real runtime failure. Keep it distinct
+  // from provider outages so observability does not blame a provider, while
+  // allowing the live voice layer to deliver approved technical recovery.
+  return 'unexpected';
 }

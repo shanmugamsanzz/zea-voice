@@ -14,10 +14,12 @@ import {
   configuredWorkflowToolIdentifier,
 } from '../../knowledge-bases/workflow-tool-authorization.js';
 import { selectApplicableConversationGuidance, welcomeContinuationContext } from './template-engine-conversation-guidance.js';
-import { resolveRequestMeaning } from './template-engine-request-meaning.js';
+import {
+  deterministicWelcomeContinuation,
+  resolveRequestMeaning,
+} from './template-engine-request-meaning.js';
 import { reviewMultilingualEntity } from './template-engine-multilingual-entity-review.js';
 import { reviewContextualSubjects } from './template-engine-contextual-subject-review.js';
-import { reviewRememberedReference } from './template-engine-reference-review.js';
 import { extractSchemaFieldValue } from './schema-field-value-extractor.js';
 import {
   repairTemplateEngineFollowUp,
@@ -214,6 +216,15 @@ export function deterministicConfirmedContextualReference({ search, state } = {}
   const candidates = Array.isArray(state.pendingClarification?.candidates)
     ? state.pendingClarification.candidates.filter((candidate) => cleanText(candidate, 300)) : [];
   return candidates.length >= preferred.size && equalRecordIdSets(preferred, remembered);
+}
+
+function rememberedReferenceCandidate({ search, state } = {}) {
+  const preferred = normalizedRecordIdSet(search?.preferredRecordIds);
+  if (!preferred.size || !cleanText(search?.contextualReference, 500)) return false;
+  const remembered = preferred.size > 1
+    ? normalizedRecordIdSet(state?.comparisonRecordIds)
+    : normalizedRecordIdSet(state?.lastReferencedRecordIds);
+  return equalRecordIdSets(preferred, remembered);
 }
 
 function speculativeSearchDecision(input, state) {
@@ -761,12 +772,14 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     confirmationStatus: state.confirmationStatus,
     authorizedWorkflowTools: workflowSummaries,
     conversationGuidance: initialConversationGuidance,
+    pendingQuestion: input.pendingQuestion,
     welcomeContinuation: welcomeContinuationContext({
       pendingQuestion: input.pendingQuestion, latestUtterance: input.latestUtterance,
       publishedConversationGuidance: publishedContext.publishedConversationGuidance,
       scope: publishedContext.scope, recentCompleteTurns: state.recentCompleteTurns,
       activeWorkflowId: state.activeWorkflowId, pendingClarification: state.pendingClarification,
     }),
+    unansweredRequest: input.unansweredRequest,
   };
   let completedSpeculativeResult = null;
   let completedSpeculativeBoundary = null;
@@ -774,7 +787,12 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   // Active workflow replies normally use configured fields and saved values.
   // Let routing request foreground evidence for a factual side question instead
   // of launching a knowledge search for every collection/confirmation turn.
-  const speculativeRetrieval = !state.activeWorkflowId
+  // Retrieval must never start until a deterministic pre-router has explicitly
+  // established that the current utterance is factual. The live caller path
+  // currently leaves this false, preventing acknowledgements, fillers,
+  // misunderstanding, closing and cancellation turns from touching the KB.
+  const speculativeRetrieval = input.speculativeRetrievalAuthorized === true
+    && !state.activeWorkflowId
     && typeof dependencies.retrieveSpeculativeEvidence === 'function'
     ? dependencies.retrieveSpeculativeEvidence({
       auth: input.auth,
@@ -827,9 +845,27 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       workflowRoutingContext, input.latestUtterance, dependencies.invokeStructuredLlm,
     );
   const workflowFieldDecision = deterministicWorkflowDecision ?? reviewedTextWorkflowDecision;
-  let routed = workflowFieldDecision ? Object.freeze({
-    decision: workflowFieldDecision,
-    outputValidation: Object.freeze({ valid: true, reason: 'verified_pending_field_fast_path' }),
+  const deterministicWelcomeMeaning = workflowFieldDecision ? null
+    : deterministicWelcomeContinuation({
+      latestUtterance: input.latestUtterance,
+      welcomeContinuation: common.welcomeContinuation,
+      acknowledgementPhrases: input.acknowledgementPhrases,
+    });
+  const deterministicWelcomeDecision = deterministicWelcomeMeaning ? Object.freeze({
+    decision: 'SEARCH', response: '', clarification: null,
+    search: Object.freeze({
+      query: deterministicWelcomeMeaning.query,
+      requestedFact: deterministicWelcomeMeaning.requestedFact,
+      contextualReference: null,
+      preferredRecordIds: Object.freeze([]),
+    }),
+    tool: null, nextQuestion: null, stateUpdate: null,
+  }) : null;
+  const deterministicDecision = workflowFieldDecision ?? deterministicWelcomeDecision;
+  let routed = deterministicDecision ? Object.freeze({
+    decision: deterministicDecision,
+    outputValidation: Object.freeze({ valid: true, reason: workflowFieldDecision
+      ? 'verified_pending_field_fast_path' : 'verified_pending_question_fast_path' }),
   }) : await routeTemplateEngineUtterance(common, routingDependencies);
   let first = routed.decision;
   let initialValidationResult = routed.outputValidation?.reason ?? 'valid';
@@ -923,26 +959,28 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   const highConfidencePublishedEntity = verifiedPublishedEntityFastPath(
     completedSpeculativeResult, first, input,
   );
-  const requestMeaning = highConfidencePublishedEntity
+  const requestMeaning = deterministicWelcomeMeaning ?? (highConfidencePublishedEntity
     ? Object.freeze({
       kind: 'direct_request', originalUtterance: input.latestUtterance,
       pendingWelcomeQuestion: common.welcomeContinuation?.pendingQuestion ?? null,
       publishedNextStep: null,
     })
     : await resolveRequestMeaning({ latestUtterance: input.latestUtterance,
-      welcomeContinuation: common.welcomeContinuation, search: first.search }, dependencies.invokeStructuredLlm);
+      welcomeContinuation: common.welcomeContinuation, search: first.search,
+      acknowledgementPhrases: input.acknowledgementPhrases,
+    }, dependencies.invokeStructuredLlm));
   const welcomeVerified = requestMeaning.kind === 'published_welcome_continuation';
   if (welcomeVerified) first = { ...first, search: { ...first.search, query: requestMeaning.query,
     requestedFact: requestMeaning.requestedFact, contextualReference: null, preferredRecordIds: [] } };
   const confirmedContextualReference = !welcomeVerified && !highConfidencePublishedEntity
     && deterministicConfirmedContextualReference({ search: first.search, state });
-  let contextualMemoryVerified = !welcomeVerified && !highConfidencePublishedEntity
-    && (confirmedContextualReference || await reviewRememberedReference({
-      latestUtterance: input.latestUtterance, search: first.search, state,
-    }, dependencies.invokeStructuredLlm));
-  let searchState = contextualMemoryVerified ? state
+  const contextualMemoryCandidate = !welcomeVerified && !highConfidencePublishedEntity
+    && rememberedReferenceCandidate({ search: first.search, state });
+  let contextualMemoryVerified = confirmedContextualReference;
+  let searchState = contextualMemoryCandidate ? state
     : { ...state, lastReferencedRecordIds: [], comparisonRecordIds: [] };
-  if (!contextualMemoryVerified && (first.search.preferredRecordIds.length || first.search.contextualReference)) {
+  if (!contextualMemoryCandidate
+    && (first.search.preferredRecordIds.length || first.search.contextualReference)) {
     first = { ...first, search: { ...first.search, query: input.latestUtterance,
       contextualReference: null, preferredRecordIds: [] } };
   }
@@ -984,6 +1022,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     state: searchState,
     runtimeProfile: input.runtimeProfile,
     contextualMemoryVerified,
+    contextualMemoryCandidate,
     requestMeaning,
     preloadedArtifacts: publishedContext.artifacts,
     conversationGuidance: preRetrievalConversationGuidance,

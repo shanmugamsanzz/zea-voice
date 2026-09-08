@@ -69,6 +69,22 @@ assert.equal(enforceTemplateEngineRuntimeInvariants(tool, {
   workflowAuthorizedTools: ['configured_action'],
   assignedToolSchemas: [{ name: 'configured_action' }],
 }).valid, true);
+const confirmation = {
+  ...tool,
+  stateUpdate: { set: { confirmationStatus: 'confirmed' }, clear: [] },
+};
+assert.equal(enforceTemplateEngineRuntimeInvariants(confirmation, {
+  tenantBoundaryVerified: true,
+  workflowAuthorizedTools: ['configured_action'],
+  assignedToolSchemas: [{ name: 'configured_action' }],
+  workflowConfirmationPending: false,
+}).reason, 'workflow_confirmation_not_pending');
+assert.equal(enforceTemplateEngineRuntimeInvariants(confirmation, {
+  tenantBoundaryVerified: true,
+  workflowAuthorizedTools: ['configured_action'],
+  assignedToolSchemas: [{ name: 'configured_action' }],
+  workflowConfirmationPending: true,
+}).valid, true);
 assert.equal(enforceTemplateEngineRuntimeInvariants(response, {
   tenantBoundaryVerified: true,
   toolSuccessClaimed: true,

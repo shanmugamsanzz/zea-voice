@@ -60,11 +60,16 @@ export function buildTemplateEngineRoutingPrompt({
     '- Never copy a guidance nextQuestion as mandatory fixed speech. The caller\'s latest request, completed questions and active Workflow state take priority.',
     '- nextQuestion is optional and nullable. Use at most one concise question. Keep it null for SEARCH, TOOL and CLARIFY because those routes have their own next step.',
     '- Do not infer tenant behavior from runtime source code or fixed industry vocabulary.',
+    '- Conversational interaction management includes greetings, courtesy responses, acknowledgements, fillers, presence checks, statements of misunderstanding, refusals, conversational closings and cancellations. These are conversational acts, not knowledge queries. Use RESPONSE or one relevant CLARIFY question without factual claims; never SEARCH for the literal conversational words. A mixed utterance containing a real factual request, correction or action request must follow that substantive request instead.',
+    '- Treat requests to pause or wait and checks that the agent is present or can hear the caller as conversational control, not factual retrieval.',
+    '- Interpret acknowledgements only against the immediately pending question and recent completed turns. An acknowledgement may continue a published informational welcome step, but it never supplies factual evidence, authorizes a tool, or confirms execution unless the active Workflow is explicitly awaiting final confirmation.',
+    '- When the caller says they did not understand, ask one concise non-factual question about what should be repeated or clarified. Do not claim information is unavailable and do not search merely to ground the clarification question.',
     '- SEARCH must describe the fact actually requested in the latest utterance or its genuine contextual reference. Never manufacture requestedFact or contextualReference merely to justify SEARCH.',
     '- Resolve natural follow-up references from recentCompleteTurns and the latest utterance.',
     '- Multiple explicitly requested comparison entities are a requested set, not alternative interpretations. Search all of them; do not ask the caller to confirm that they want the comparison.',
     '- Interpret a reply to pendingClarification using the preceding question and recentCompleteTurns. When it confirms the proposed comparison, resume that factual SEARCH with its known entities and requested fact rather than repeating the same question. A confirmation of a comparison does not authorize a tool.',
     '- Treat lastReferencedRecordIds and comparisonRecordIds only as optional retrieval preferences, never as independent intent or factual evidence.',
+    '- Previous references matter only when the latest utterance semantically refers to them; otherwise the latest subject replaces them.',
     '- For SEARCH, create a self-contained query from the latest utterance and recentCompleteTurns; include requestedFact, contextualReference and only known preferredRecordIds.',
     '- Use preferredRecordIds only when the latest utterance genuinely refers back to prior context. When the caller explicitly names a new entity, do not carry prior record IDs into that SEARCH.',
     '- When activeWorkflowId matches an authorized Workflow summary, use TOOL with that tool name to submit caller-provided field values or explicit confirmation; preserve the Workflow during unrelated side questions.',
@@ -72,6 +77,7 @@ export function buildTemplateEngineRoutingPrompt({
     '- Initiating a new authorized action uses TOOL with configured arguments and stateUpdate:null unless a supported field or explicit confirmation update is needed. The workflow runtime owns activation. Do not clear activeWorkflowId, collectedToolFields or confirmationStatus to initialize an action.',
     '- Cancellation is a separate caller-requested action, never initialization or cleanup. Only explicit cancellation may return RESPONSE with nextQuestion:null, stateUpdate.set.confirmationStatus:null and stateUpdate.clear containing activeWorkflowId, collectedToolFields and confirmationStatus. Do not infer cancellation from a new action request or side question.',
     '- Start a new Workflow only when the latest caller utterance requests that assigned action, or clearly accepts the immediately preceding offer of that action. Match the action to the published Workflow description. Mentioning an entity, asking why you called, asking what an action means or whether it is available, and acknowledging an identity question are not action requests. Answer informational questions using SEARCH when grounding is needed; use CLARIFY only when the intended action is genuinely unclear. Never infer action consent from remembered entity IDs or from the existence of an assigned tool.',
+    '- Use TOOL only for an explicit external action. Any externally verifiable fact must use SEARCH unless verified evidence is already supplied to the current phase.',
     '- Encode TOOL arguments as one JSON-object string in tool.arguments exactly as required by the provider schema. The runtime parses and validates it against the assigned UI tool schema.',
     '- For an explicit final Workflow confirmation, return TOOL and set stateUpdate.set.confirmationStatus to confirmed. Do not set it for field values, corrections, tentative agreement or unrelated speech.',
     postSearch
@@ -114,6 +120,12 @@ export function enforceTemplateEngineRuntimeInvariants(decision, runtime = {}) {
     if (!workflowTools.has(value.tool.name) || !assignedTools.has(value.tool.name)) {
       return Object.freeze({ valid: false, reason: 'tool_not_authorized' });
     }
+  }
+
+  const confirmsWorkflow = value.stateUpdate?.set?.confirmationStatus === 'confirmed';
+  if (confirmsWorkflow && (value.decision !== 'TOOL'
+    || runtime.workflowConfirmationPending !== true)) {
+    return Object.freeze({ valid: false, reason: 'workflow_confirmation_not_pending' });
   }
 
   if (runtime.toolSuccessClaimed === true

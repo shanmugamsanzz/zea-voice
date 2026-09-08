@@ -166,7 +166,7 @@ assert.match(orchestrator,
   'A ready final answer must cancel both queued acknowledgement work and its timer');
 assert.match(orchestrator, /template_engine\.turn_latency_acknowledgement/u);
 for (const field of ['initialDecision', 'finalDecision', 'searchPerformed', 'validationResult',
-  'evidenceCount', 'configuredFallbackApplied']) {
+  'evidenceCount', 'configuredFallbackApplied', 'entityCoverageComplete']) {
   assert.match(orchestrator, new RegExp(`${field}:`, 'u'),
     `Completed-turn telemetry must expose ${field} to the live release gate`);
 }
@@ -175,6 +175,7 @@ assert.match(liveReport, /actualAnswerAverage\s*<\s*3_000/u);
 assert.match(liveReport, /actualAnswerMaximum\s*<=\s*4_000/u);
 assert.match(liveReport, /bookingFieldKnowledgeSearches/u);
 assert.match(liveReport, /ungroundedSearchResponses/u);
+assert.match(liveReport, /incorrectEntityResponses/u);
 assert.match(liveReport, /incompleteTelemetryTurns/u,
   'Legacy or incomplete live logs must not satisfy the correctness gate');
 assert.match(liveReport, /report\.actualAnswerSlo\.passed\s*&&\s*report\.liveCorrectness\.passed/u,
@@ -242,6 +243,11 @@ const recoverySample = recordTemplateEngineTurnMetrics({}, {
 assert.equal(recoverySample.normalVerifiedRequest, false);
 assert.equal(recoverySample.actualAnswerBaseline.maximumStatus, 'not_measured',
   'Approved recovery timing must not be presented as a normal verified request sample');
+const unexpectedFailureSample = recordTemplateEngineTurnMetrics({}, {
+  epoch: 'unexpected-failure-not-normal', result: { unexpectedFailure: 'UNEXPECTED' },
+  turnStartedAt: 30_000, firstFinalAudioAt: 39_000,
+});
+assert.equal(unexpectedFailureSample.normalVerifiedRequest, false);
 const passingDistribution = templateEngineAudioPercentiles([
   ...Array.from({ length: 20 }, () => ({
     finalAnswerFirstAudioMs: 2_900, normalVerifiedRequest: true,
