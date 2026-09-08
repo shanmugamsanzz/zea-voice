@@ -1,6 +1,6 @@
 import { AppError } from '../../middleware/errors.js';
 
-export const TEMPLATE_ENGINE_CLAIM_VALIDATOR_VERSION = 3;
+export const TEMPLATE_ENGINE_CLAIM_VALIDATOR_VERSION = 4;
 
 export const templateEngineClaimValidationJsonSchema = Object.freeze({
   type: 'object',
@@ -77,12 +77,13 @@ function deterministicPublishedGrounding(speech, records, requestVocabulary = nu
     ...scalarFacts(record?.authoritativeData ?? {}).flatMap((fact) => [fact.path, fact.value]),
   ]).concat([requestVocabulary]).filter(Boolean).join(' ');
   const allowed = tokens(corpus);
-  // One- and two-character grammatical tokens are not claims. Longer lexical terms and
-  // acronyms must be present in the cited published evidence; otherwise the
-  // semantic reviewer remains mandatory.
-  const substantive = [...tokens(response)].filter((token) => [...token].length > 2);
+  // Free-form lexical tokens contain ordinary grammar, inflection and natural
+  // translations; absence from a publication is not proof that they are
+  // factual claims. Validate only high-signal acronym/test-code vocabulary
+  // here. Record IDs, citations, entities, numbers, relevance and length are
+  // checked independently by the deterministic delivery contract.
   const acronyms = cleanText(speech).match(/\b[A-Z][A-Z\p{N}]{1,}\b/gu) ?? [];
-  const asserted = new Set([...substantive, ...acronyms.map(identity).filter(Boolean)]);
+  const asserted = new Set(acronyms.map(identity).filter(Boolean));
   const supportedTerm = (term) => allowed.has(term) || [...allowed].some((published) => {
     const termLength = [...term].length;
     const publishedLength = [...published].length;
@@ -91,11 +92,11 @@ function deterministicPublishedGrounding(speech, records, requestVocabulary = nu
     return shorter >= 4 && shorter / longer >= 0.65
       && (term.startsWith(published) || published.startsWith(term));
   });
-  // Prefix-equivalent forms permit ordinary inflection in the caller language
-  // while still rejecting unrelated factual vocabulary absent from evidence.
+  // Prefix-equivalent forms permit formatting variants such as a published
+  // acronym with an attached suffix while rejecting invented test codes.
   const unsupportedTerms = [...asserted].filter((term) => !supportedTerm(term)).slice(0, 20);
   return Object.freeze({
-    deterministicallyGrounded: asserted.size > 0 && unsupportedTerms.length === 0,
+    deterministicallyGrounded: unsupportedTerms.length === 0,
     unsupportedTerms: Object.freeze(unsupportedTerms),
   });
 }
@@ -111,6 +112,7 @@ function numbers(value) {
 
 export function validateTemplateEngineSearchClaims({
   speech, evidence = [], decision = null, searchInterpretation = null,
+  latestUtterance = null, contextualReferenceVerified = false,
 } = {}) {
   const response = cleanText(speech);
   const records = Array.isArray(evidence) ? evidence : [];
@@ -155,6 +157,25 @@ export function validateTemplateEngineSearchClaims({
     });
   }
 
+  const contextualReference = cleanText(searchInterpretation?.contextualReference, 500);
+  const contextualMarker = identity(contextualReference) === 'verified previous selection';
+  const utteranceIdentity = identity(latestUtterance);
+  const pronounReference = /\b(?:it|its|this|that|these|those|them|their)\b/iu.test(utteranceIdentity)
+    || /(?:அது|அதுல|அதில்|அதை|அதன்|இது|இதுல|இதில்|இதை|இதன்|அவை|இவை)/u.test(utteranceIdentity);
+  const publishedIdentityMentioned = records.some((record) => [
+    record?.canonicalName, ...(record?.aliases ?? []),
+  ].map(identity).filter((value) => value.length > 1).some((value) => (
+    utteranceIdentity.includes(value)
+  )));
+  if (contextualReference && !contextualMarker && contextualReferenceVerified !== true
+    && !pronounReference && !publishedIdentityMentioned) {
+    return Object.freeze({
+      supported: false, successClaimed: false, requestedFactAddressed: false,
+      reason: 'requested_entity_mapping_uncertain',
+      ...deterministicGrounding,
+    });
+  }
+
   const factTokens = tokens(requestedFact);
   const responseIdentity = identity(response);
   const responseTokens = tokens(response);
@@ -172,14 +193,90 @@ export function validateTemplateEngineSearchClaims({
   const evidenceNumbers = numbers(records.map((record) => record?.content).join(' '));
   const citesTaggedNumericValue = taggedForRequestedFact
     && [...responseNumbers].some((number) => evidenceNumbers.has(number));
+  const selectedEntityAddressed = records.some((record) => {
+    const identityTokens = tokens([
+      record?.canonicalName, ...(record?.aliases ?? []),
+      record?.authoritativeData?.name, record?.authoritativeData?.itemKey,
+      record?.authoritativeData?.category, record?.authoritativeData?.categoryKey,
+    ].filter(Boolean).join(' '));
+    const evidenceAnswerTokens = tokens(record?.content);
+    return intersects(identityTokens, factTokens)
+      && (intersects(responseTokens, identityTokens)
+        || intersects(responseTokens, evidenceAnswerTokens));
+  });
+  const requestedStructuredFactAddressed = records.some((record) => {
+    const paths = (record?.publishedAttributePaths ?? []).map((path) => ({
+      path, tokens: tokens(path),
+    }));
+    const matchingPaths = paths.filter((entry) => intersects(entry.tokens, factTokens));
+    if (!matchingPaths.length) return false;
+    const explicitlyDifferentPath = paths.some((entry) => (
+      !matchingPaths.includes(entry) && intersects(entry.tokens, responseTokens)
+    ));
+    const identityTokens = tokens([
+      record?.canonicalName, ...(record?.aliases ?? []),
+      record?.authoritativeData?.name, record?.authoritativeData?.itemKey,
+    ].filter(Boolean).join(' '));
+    const publishedAnswerTokens = new Set([...tokens([
+      record?.content,
+      ...scalarFacts(record?.authoritativeData ?? {}).map((fact) => fact.value),
+    ].filter(Boolean).join(' '))].filter((token) => (
+      !identityTokens.has(token) && [...token].length >= 4
+    )));
+    return !explicitlyDifferentPath && intersects(responseTokens, publishedAnswerTokens);
+  });
+  const broadSummaryIntent = new Set([
+    'details', 'detail', 'overview', 'available options', 'available information',
+    'attributes', 'explanation',
+  ]).has(identity(requestedFact));
+  const structuredRequestedFactPublished = records.some((record) => (
+    (record?.publishedAttributePaths ?? []).some((path) => (
+      intersects(tokens(path), factTokens)
+    ))
+  ));
+  const broadSummaryAddressed = broadSummaryIntent && !structuredRequestedFactPublished
+    && records.every((record) => {
+    const publishedTokens = tokens([
+      record?.canonicalName, ...(record?.aliases ?? []), record?.content,
+      ...scalarFacts(record?.authoritativeData ?? {}).map((fact) => fact.value),
+    ].filter(Boolean).join(' '));
+    return intersects(responseTokens, publishedTokens);
+    });
+  const preferredRecordIds = new Set((searchInterpretation?.preferredRecordIds ?? [])
+    .map((value) => identity(value)).filter(Boolean));
+  const comparisonSelectionAddressed = preferredRecordIds.size > 1
+    && records.length > 1
+    && records.every((record) => {
+      const recordTokens = tokens([
+        record?.canonicalName, ...(record?.aliases ?? []), record?.content,
+        ...scalarFacts(record?.authoritativeData ?? {}).map((fact) => fact.value),
+      ].filter(Boolean).join(' '));
+      return preferredRecordIds.has(identity(record?.recordId))
+        && intersects(responseTokens, recordTokens);
+    });
+  const verifiedContextualSelectionAddressed = Boolean(
+    contextualMarker
+      && preferredRecordIds.size
+      && records.every((record) => preferredRecordIds.has(identity(record?.recordId)))
+      && records.some((record) => intersects(responseTokens, tokens([
+        record?.content,
+        ...scalarFacts(record?.authoritativeData ?? {}).map((fact) => fact.value),
+      ].filter(Boolean).join(' ')))),
+  );
   const requestedFactAddressed = intersects(responseTokens, factTokens)
     || matchingFacts.some((fact) => responseContainsValue(responseIdentity, fact.value))
-    || citesTaggedNumericValue;
+    || citesTaggedNumericValue || selectedEntityAddressed
+    || requestedStructuredFactAddressed
+    || broadSummaryAddressed
+    || verifiedContextualSelectionAddressed || comparisonSelectionAddressed;
+  const requestedFactSupported = evidenceMentionsFact
+    || broadSummaryAddressed
+    || verifiedContextualSelectionAddressed || comparisonSelectionAddressed;
   return Object.freeze({
-    supported: evidenceMentionsFact,
+    supported: requestedFactSupported,
     successClaimed: false,
     requestedFactAddressed,
-    reason: !evidenceMentionsFact
+    reason: !requestedFactSupported
       ? 'requested_fact_not_in_evidence'
       : (requestedFactAddressed ? null : 'requested_fact_not_addressed'),
     ...deterministicGrounding,

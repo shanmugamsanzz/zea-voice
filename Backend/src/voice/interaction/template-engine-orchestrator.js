@@ -851,25 +851,15 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     dependencies.ambiguity,
   ) };
   const citations = aliasPostSearchEvidence(evidence);
-  let entityCoverageVerified = input.deterministicEntityCoverageVerified === true;
-  if (dependencies.validateRequestedEntityCoverage) {
-    const coverage = await dependencies.validateRequestedEntityCoverage({
-      latestUtterance: base.latestUtterance, searchInterpretation: search.value.search,
-      requestMeaning: input.requestMeaning ?? null,
-      contextualReferenceVerified: input.contextualMemoryVerified === true,
-      evidence: citations.evidence,
-    });
-    if (coverage.resolved === true && dependencies.ambiguity?.required === true) {
-      entityCoverageVerified = true;
-      dependencies = { ...dependencies, ambiguity: {
-        required: false, kind: 'verified_current_request_coverage', candidates: [],
-      } };
-    }
-    if (coverage.resolved !== true) dependencies = { ...dependencies,
-      ambiguity: { required: true, kind: 'unresolved_published_entity', candidates: [] } };
-    dependencies.onEntityCoverage?.({ resolved: coverage.resolved === true, reason: coverage.reason,
-      checkedEvidenceCount: evidence.length });
-  }
+  const verifiedEvidenceRecordIds = new Set(evidence.filter((source) => (
+    source?.verified === true && source?.callerFacing !== false
+  )).map((source) => cleanText(source.recordId, 160).toLocaleLowerCase()).filter(Boolean));
+  const entityCoverageVerified = input.deterministicEntityCoverageVerified === true
+    || (dependencies.ambiguity?.required !== true && evidence.length > 0
+      && evidence.every((source) => source?.verified === true && source?.callerFacing !== false)
+      && requiredEntityRecordIds.every((recordId) => verifiedEvidenceRecordIds.has(
+        cleanText(recordId, 160).toLocaleLowerCase(),
+      )));
   const allowedEvidenceIds = citations.aliases;
   const responseSchema = templateEnginePostSearchJsonSchemaForEvidenceAliases(
     allowedEvidenceIds,
@@ -1077,42 +1067,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
   let groundedDecision = restorePostSearchEvidenceIds(
     validated.value, citations.aliasToEvidenceId,
   );
-  let semanticClaimValidation = dependencies.semanticClaimValidation ?? null;
-  let semanticValidationSkipped = false;
-  const validateClaims = async (decision) => {
-    if (configuredFallbackApplied && decision.decision === 'NO_MATCH') {
-      return Object.freeze({
-        supported: true,
-        successClaimed: false,
-        requestedFactAddressed: true,
-        reason: 'configured_validation_recovery',
-      });
-    }
-    if (typeof dependencies.validateGroundedClaims !== 'function') {
-      return dependencies.semanticClaimValidation ?? null;
-    }
-    const citedIds = new Set(decision.evidenceIds ?? []);
-    const citedEvidence = decision.decision === 'RESPONSE'
-      ? evidence.filter((source) => citedIds.has(source.evidenceId))
-      : evidence;
-    const speech = decision.decision === 'CLARIFY'
-      ? decision.clarification?.question
-      : [cleanText(decision.response), cleanText(decision.nextQuestion?.question)].filter(Boolean).join(' ');
-    return dependencies.validateGroundedClaims(Object.freeze({
-      response: speech,
-      decision: decision.decision,
-      evidenceIds: decision.evidenceIds ?? [],
-      // Complete evidence detects false absence claims; only cited evidence
-      // may support the facts spoken in a RESPONSE.
-      selectedEvidence: evidence,
-      citedEvidence: Object.freeze(citedEvidence),
-      latestUtterance: base.latestUtterance,
-      contextualReferenceVerified: input.contextualMemoryVerified === true,
-      searchInterpretation: search.value.search,
-      ambiguity: dependencies.ambiguity ?? null,
-      requestMeaning: input.requestMeaning ?? null,
-    }));
-  };
+  const semanticValidationSkipped = true;
   const deterministicClaims = (decision) => {
     const citedIds = new Set(decision.evidenceIds ?? []);
     const citedEvidence = decision.decision === 'RESPONSE'
@@ -1121,22 +1076,38 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       ? decision.clarification?.question
       : [cleanText(decision.response), cleanText(decision.nextQuestion?.question)]
         .filter(Boolean).join(' ');
+    const preferredForValidation = requiredEntityRecordIds.length
+      ? requiredEntityRecordIds : search.value.search.preferredRecordIds;
+    const rememberedComparisonIds = new Set((base.state.comparisonRecordIds ?? [])
+      .map((value) => cleanText(value, 160).toLocaleLowerCase()).filter(Boolean));
+    const confirmedComparisonContext = Boolean(base.state.pendingClarification)
+      && preferredForValidation.length > 1
+      && preferredForValidation.length === rememberedComparisonIds.size
+      && preferredForValidation.every((recordId) => rememberedComparisonIds.has(
+        cleanText(recordId, 160).toLocaleLowerCase(),
+      ));
     return Object.freeze({
       result: validateTemplateEngineSearchClaims({
         speech, evidence: citedEvidence, decision: decision.decision,
-        searchInterpretation: search.value.search,
+        searchInterpretation: {
+          ...search.value.search,
+          preferredRecordIds: preferredForValidation,
+        },
+        latestUtterance: base.latestUtterance,
+        contextualReferenceVerified: input.contextualMemoryVerified === true
+          || confirmedComparisonContext,
       }),
       speech,
       citedEvidence,
     });
   };
-  const validationInput = (decision, semantic, additions = {}) => outputValidationInput(
+  const validationInput = (decision, additions = {}) => outputValidationInput(
     decision, base, dependencies, {
       phase: 'post_search',
       factualClaimsPresent: true,
       claimValidationRequired: true,
       selectedEvidence: evidence,
-      semanticClaimValidation: semantic,
+      semanticClaimValidation: null,
       searchInterpretation: search.value.search,
       ambiguity: verifiedClarificationAmbiguity(
         decision, evidence, search.value.search, dependencies.ambiguity,
@@ -1150,10 +1121,13 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
   const deterministicPreflight = (decision, additions = {}) => {
     const claims = deterministicClaims(decision);
     let validation = validateTemplateEngineOutput(validationInput(
-      decision, null, { deterministicOnly: true, ...additions },
+      decision, { deterministicOnly: true, ...additions },
     ));
-    if (validation.valid && verifiedAnswerFastPath && decision.decision === 'RESPONSE') {
-      if (claims.result.supported !== true) {
+    if (validation.valid && decision.decision === 'RESPONSE') {
+      if (!entityCoverageVerified) {
+        validation = Object.freeze({ valid: false, ttsAllowed: false, route: 'REJECT',
+          retrySearch: false, reason: 'requested_entity_coverage_not_verified' });
+      } else if (claims.result.supported !== true) {
         validation = Object.freeze({ valid: false, ttsAllowed: false, route: 'REJECT',
           retrySearch: false, reason: claims.result.reason ?? 'requested_fact_not_in_evidence' });
       } else if (claims.result.requestedFactAddressed !== true) {
@@ -1161,53 +1135,17 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
           retrySearch: false, reason: 'requested_fact_not_addressed' });
       } else if (claims.result.deterministicallyGrounded !== true) {
         validation = Object.freeze({ valid: false, ttsAllowed: false, route: 'REJECT',
-          retrySearch: false, reason: 'unsupported_factual_vocabulary',
+          retrySearch: false, reason: 'unsupported_acronym_claim',
           details: Object.freeze({
             unsupportedTerms: claims.result.unsupportedTerms ?? Object.freeze([]),
           }) });
       }
-    } else if (validation.valid && decision.decision === 'RESPONSE'
-      && claims.result.requestedFactAddressed === false) {
-      const requestedTokens = new Set(candidateIdentity(search.value.search.requestedFact)
-        .split(/\s+/u).filter(Boolean));
-      const responseTokens = new Set(candidateIdentity(claims.speech)
-        .split(/\s+/u).filter(Boolean));
-      const explicitlyAnsweredDifferentAttribute = claims.citedEvidence.some((source) => (
-        (source?.publishedAttributePaths ?? []).some((path) => {
-          const pathTokens = candidateIdentity(path).split(/\s+/u).filter(Boolean);
-          return pathTokens.some((token) => !requestedTokens.has(token)
-            && responseTokens.has(token));
-        })
-      ));
-      if (explicitlyAnsweredDifferentAttribute) {
-        validation = Object.freeze({ valid: false, ttsAllowed: false, route: 'REJECT',
-          retrySearch: false, reason: 'requested_fact_not_addressed' });
-      }
     }
     return Object.freeze({ validation, claims });
   };
-  const validateAfterDeterministicPreflight = async (decision, preflight) => {
-    const deterministic = preflight.validation.valid
-      && entityCoverageVerified
-      && decision.decision === 'RESPONSE'
-      && preflight.claims.result.supported === true
-      && preflight.claims.result.requestedFactAddressed === true
-      && preflight.claims.result.deterministicallyGrounded === true;
-    if (!deterministic) return validateClaims(decision);
-    semanticValidationSkipped = true;
-    return Object.freeze({
-      supported: true, successClaimed: false, requestedFactAddressed: true,
-      reason: null, validationMethod: 'deterministic_published_evidence',
-    });
-  };
   const initialPreflight = deterministicPreflight(groundedDecision);
   let outputValidation = initialPreflight.validation;
-  if (outputValidation.valid) {
-    semanticClaimValidation = await validateAfterDeterministicPreflight(
-      groundedDecision, initialPreflight,
-    );
-  }
-  if (semanticClaimValidation?.reason === 'requested_entity_mapping_uncertain') {
+  if (initialPreflight.claims.result.reason === 'requested_entity_mapping_uncertain') {
     dependencies = { ...dependencies, ambiguity: dependencies.ambiguity?.required === true
       ? dependencies.ambiguity
       : { required: true, kind: 'unresolved_published_entity', candidates: [] } };
@@ -1215,22 +1153,18 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
   let clarificationAmbiguity = verifiedClarificationAmbiguity(
     groundedDecision, evidence, search.value.search, dependencies.ambiguity,
   );
-  if (outputValidation.valid) {
-    outputValidation = validateTemplateEngineOutput(validationInput(
-      groundedDecision, semanticClaimValidation, { ambiguity: clarificationAmbiguity },
-    ));
-  }
   let answerableEvidence = clarificationAmbiguity?.required !== true && (
     requestedFactAvailable || (
       groundedDecision.decision === 'RESPONSE'
-      && semanticClaimValidation?.supported === true
+      && initialPreflight.claims.result.supported === true
+      && initialPreflight.claims.result.requestedFactAddressed === true
     )
   );
   const initialNumericValidationDetails = outputValidation.reason === 'unsupported_numeric_claim'
     ? outputValidation.details : null;
-  const initialSemanticValidationReason = semanticClaimValidation?.supported === false
-    || semanticClaimValidation?.requestedFactAddressed === false
-    ? semanticClaimValidation.reason ?? null : null;
+  const initialSemanticValidationReason = initialPreflight.claims.result.supported === false
+    || initialPreflight.claims.result.requestedFactAddressed === false
+    ? initialPreflight.claims.result.reason ?? null : null;
   const budgetRepairRequired = outputValidation.reason === 'speech_budget_exceeded';
   if (!outputValidation.valid && !firstInvalidReason) {
     groundingRepairAttempted = true;
@@ -1251,10 +1185,13 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
             .map(([alias]) => alias),
         })}. These numbers were not supported by the cited records. Correct their formatting or cite a supplied record that supports the actual claim; otherwise remove the claim. Never change a number merely to pass validation.`
         : null,
-      outputValidation.reason === 'unsupported_factual_vocabulary'
+      outputValidation.reason === 'unsupported_acronym_claim'
         ? `Factual-vocabulary feedback: ${JSON.stringify(
           outputValidation.details?.unsupportedTerms ?? [],
         )}. Rewrite using only factual wording present in the exact request or cited evidence. Natural grammar is allowed, but do not introduce new entities, attributes, descriptions or relationships.`
+        : null,
+      outputValidation.reason === 'unsafe_no_match_claim'
+        ? 'The unavailable response made a categorical factual claim from missing evidence. State only that the supplied published information does not provide or specify the requested detail.'
         : null,
       'Return one corrected JSON object matching the supplied post-search schema.',
       'Validate against the complete verified evidence set. A multi-record comparison may combine only attributes supported by its cited records.',
@@ -1294,21 +1231,13 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       );
       const repairedPreflight = deterministicPreflight(groundedDecision, { retryCount: 1 });
       outputValidation = repairedPreflight.validation;
-      semanticClaimValidation = outputValidation.valid
-        ? await validateAfterDeterministicPreflight(groundedDecision, repairedPreflight) : null;
       clarificationAmbiguity = verifiedClarificationAmbiguity(
         groundedDecision, evidence, search.value.search, dependencies.ambiguity,
       );
-      if (outputValidation.valid) {
-        outputValidation = validateTemplateEngineOutput(validationInput(
-          groundedDecision, semanticClaimValidation, {
-            ambiguity: clarificationAmbiguity, requestedFactAvailable, retryCount: 1,
-          },
-        ));
-      }
       answerableEvidence = answerableEvidence || (
         groundedDecision.decision === 'RESPONSE'
-        && semanticClaimValidation?.supported === true
+        && repairedPreflight.claims.result.supported === true
+        && repairedPreflight.claims.result.requestedFactAddressed === true
         && clarificationAmbiguity?.required !== true
       );
     } else {
@@ -1343,16 +1272,6 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
         );
         const extractivePreflight = deterministicPreflight(groundedDecision, { retryCount: 1 });
         outputValidation = extractivePreflight.validation;
-        semanticClaimValidation = outputValidation.valid
-          ? await validateAfterDeterministicPreflight(groundedDecision, extractivePreflight) : null;
-        if (outputValidation.valid) {
-          outputValidation = validateTemplateEngineOutput(validationInput(
-            groundedDecision, semanticClaimValidation, {
-              ambiguity: dependencies.ambiguity,
-              requestedFactAvailable: true, retryCount: 1,
-            },
-          ));
-        }
         finalDiagnostics = templateEnginePostSearchDecisionDiagnostics(recovered.value);
       }
     } else if (!budgetRepairRequired && clarificationAmbiguity?.required !== true
@@ -1370,19 +1289,6 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
           requestedFactAvailable: false, retryCount: 1,
         });
         outputValidation = noMatchPreflight.validation;
-        semanticClaimValidation = outputValidation.valid
-          ? await validateAfterDeterministicPreflight(groundedDecision, noMatchPreflight) : null;
-        if (outputValidation.valid) {
-          outputValidation = validateTemplateEngineOutput(validationInput(
-            groundedDecision, semanticClaimValidation, {
-              requestedFactAvailable: false,
-              ambiguity: verifiedClarificationAmbiguity(
-                groundedDecision, evidence, search.value.search, dependencies.ambiguity,
-              ),
-              retryCount: 1,
-            },
-          ));
-        }
         configuredFallbackApplied = outputValidation.valid;
         finalDiagnostics = templateEnginePostSearchDecisionDiagnostics(noMatch.value);
       }
@@ -1421,7 +1327,9 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     throw new AppError(502, 'The post-search output failed delivery validation',
       'TEMPLATE_ENGINE_OUTPUT_INVALID', { reason: outputValidation.reason,
         initialNumericValidationDetails, initialSemanticValidationReason,
-        validationDetails: outputValidation.details ?? null });
+        validationDetails: outputValidation.details ?? null,
+        contextualMemoryVerified: input.contextualMemoryVerified === true,
+        requestedEntityRecordIds: requiredEntityRecordIds });
   }
   const diagnostics = Object.freeze({
     evidenceCount: evidence.length,

@@ -10,7 +10,6 @@ import {
   retrieveTemplateEngineEvidence,
 } from './template-engine-production-retrieval.js';
 import { advanceTemplateEngineWorkflowTurn, templateEngineWorkflowRoutingContext } from './template-engine-workflow-runtime.js';
-import { validateTemplateEngineClaims } from './template-engine-claim-validator.js';
 import {
   assignedToolIdentifiers,
   configuredWorkflowToolIdentifier,
@@ -29,7 +28,7 @@ import {
   validateAndComposeTemplateEngineSpeech,
 } from './template-engine-follow-up.js';
 
-export const TEMPLATE_ENGINE_PRODUCTION_RUNTIME_VERSION = 3;
+export const TEMPLATE_ENGINE_PRODUCTION_RUNTIME_VERSION = 4;
 
 function cleanText(value, maximum = 4_000) {
   return String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
@@ -222,6 +221,7 @@ export function enforceVerifiedFactualArchitecture({
   if (answerRepairAttempted && (!answerRepairReason || answerGenerationCalls < 2)) {
     violations.push('answer_repair_requires_specific_validation_failure');
   }
+  if (followUpRepairAttempted) violations.push('follow_up_llm_must_be_skipped');
   if (violations.length) {
     throw new AppError(500, 'Verified factual turn violated the production architecture',
       'TEMPLATE_ENGINE_ARCHITECTURE_VIOLATION', {
@@ -282,6 +282,7 @@ function rememberedReferenceCandidate({ search, state } = {}) {
 async function composeWithFollowUpRepair({
   decision, mainPrompt, latestUtterance, recentCompleteTurns, conversationGuidance,
   evidence, suppressFollowUp = false, invokeStructuredLlm,
+  allowLlmRepair = true,
   maximumSpeechCharacters = null,
   onDiagnostics,
 }) {
@@ -290,16 +291,20 @@ async function composeWithFollowUpRepair({
     decision, recentCompleteTurns, conversationGuidance, suppressFollowUp,
     claimsValidated, maximumSpeechCharacters,
   });
-  const repair = await repairTemplateEngineFollowUp({
-    decision,
-    mainPrompt,
-    latestUtterance,
-    recentCompleteTurns,
-    conversationGuidance,
-    initialValidation: composed.followUp,
-    maximumSpeechCharacters,
-    invokeStructuredLlm,
-  });
+  const repair = allowLlmRepair
+    ? await repairTemplateEngineFollowUp({
+      decision,
+      mainPrompt,
+      latestUtterance,
+      recentCompleteTurns,
+      conversationGuidance,
+      initialValidation: composed.followUp,
+      maximumSpeechCharacters,
+      invokeStructuredLlm,
+    })
+    : Object.freeze({
+      decision, attempted: false, reason: 'verified_factual_single_llm_path',
+    });
   if (repair.attempted && repair.reason === null) {
     claimsValidated = followUpClaimsSupported(repair.decision, evidence);
     composed = validateAndComposeTemplateEngineSpeech({
@@ -817,13 +822,8 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       pendingQuestion: common.welcomeContinuation ? null
         : input.pendingQuestion ?? mostRecentAssistantQuestion(state.recentCompleteTurns),
     });
-  const reviewedTextWorkflowDecision = deterministicWorkflowDecision
-    || deterministicClarificationContinuation || deterministicAcknowledgement ? null
-    : await reviewPendingTextWorkflowField(
-      workflowRoutingContext, input.latestUtterance, dependencies.invokeStructuredLlm,
-    );
   const workflowFieldDecision = deterministicWorkflowDecision ?? deterministicAcknowledgement
-    ?? reviewedTextWorkflowDecision;
+    ?? null;
   const deterministicWelcomeMeaning = workflowFieldDecision
     || deterministicClarificationContinuation ? null
     : deterministicWelcomeContinuation({
@@ -842,7 +842,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     tool: null, nextQuestion: null, stateUpdate: null,
   }) : null;
   const deterministicPublishedDecision = workflowFieldDecision || deterministicWelcomeDecision
-    || state.activeWorkflowId || state.pendingClarification ? null
+    ? null
     : deterministicPublishedRequestDecision({
       artifacts: publishedContext.artifacts,
       scope: publishedContext.scope,
@@ -1073,13 +1073,11 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   const deterministicAnswerPath = verifiedDeterministicAnswerPath({
     deterministicRequestResolved, retrieval, ambiguity: resolutionAmbiguity,
   });
-  // The post-answer grounding validator independently checks the requested
-  // entity against the original utterance. A separate pre-answer entity LLM
-  // review is therefore useful only when retrieval reports real ambiguity and
-  // the review may safely clear it. Avoid duplicating that semantic review on
-  // ordinary resolved factual turns.
-  const requiresEntityCoverageReview = resolutionAmbiguity?.required === true
-    || !(retrieval.evidence ?? []).some((source) => source?.verified === true);
+  const deterministicEntityCoverageVerified = resolutionAmbiguity?.required !== true
+    && (retrieval.evidence ?? []).length > 0
+    && (retrieval.evidence ?? []).every((source) => (
+      source?.verified === true && source?.callerFacing !== false
+    ));
   const answered = await respondToTemplateEngineSearch({
     ...common,
     mainPrompt: input.mainPrompt,
@@ -1093,11 +1091,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     informationUnavailableResponse: input.informationUnavailableResponse,
     conversationGuidance: postSearchConversationGuidance,
     requestedEntityRecordIds: retrieval.requestedEntityRecordIds,
-    deterministicEntityCoverageVerified: requiresEntityCoverageReview === false
-      && resolutionAmbiguity?.required !== true
-      && (retrieval.evidence ?? []).every((source) => (
-        source?.verified === true && source?.callerFacing !== false
-      )),
+    deterministicEntityCoverageVerified,
     deterministicResolutionVerified: deterministicAnswerPath,
     maximumSpeechCharacters: input.maximumSpeechCharacters,
   }, {
@@ -1105,17 +1099,8 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     tenantBoundaryVerified: true,
     publishedEntities: retrieval.evidence,
     ambiguity: resolutionAmbiguity,
-    validateGroundedClaims: ({
-      response, decision, selectedEvidence, citedEvidence, searchInterpretation, latestUtterance, contextualReferenceVerified, ambiguity, requestMeaning,
-    }) => (
-      dependencies.validateGroundedClaims({
-        response, decision, selectedEvidence, citedEvidence, searchInterpretation, latestUtterance, contextualReferenceVerified, ambiguity, requestMeaning,
-      })
-    ),
+    validateGroundedClaims: null,
     onDecisionRepair: dependencies.onPostSearchDecisionRepair,
-    validateRequestedEntityCoverage: requiresEntityCoverageReview
-      ? dependencies.validateRequestedEntityCoverage : null,
-    onEntityCoverage: dependencies.onEntityCoverage,
     onPostSearchDiagnostics: dependencies.onPostSearchDiagnostics,
   });
   if (answered.decision.decision === 'SEARCH') {
@@ -1130,6 +1115,10 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     conversationGuidance: postSearchConversationGuidance,
     evidence: retrieval.evidence,
     suppressFollowUp: templateEngineEvidenceSuppressesFollowUp(retrieval.evidence),
+    // The single grounded generation call owns the complete verified response.
+    // Drop an optional invalid/omitted follow-up deterministically instead of
+    // adding another LLM operation after the factual answer is ready.
+    allowLlmRepair: !deterministicAnswerPath,
     maximumSpeechCharacters: input.maximumSpeechCharacters,
     invokeStructuredLlm: dependencies.invokeStructuredLlm,
     onDiagnostics: (details) => dependencies.onFollowUpDiagnostics?.(Object.freeze({
@@ -1169,5 +1158,4 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
 export const productionTemplateEngineDependencies = Object.freeze({
   loadPublishedContext: loadTemplateEnginePublishedContext,
   retrieveEvidence: retrieveTemplateEngineEvidence,
-  validateClaims: validateTemplateEngineClaims,
 });

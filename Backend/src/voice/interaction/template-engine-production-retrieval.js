@@ -307,6 +307,17 @@ function uniqueCandidateIdentities(candidates, utterance) {
 
 function deterministicFactualRequestKind(value) {
   const text = cleanText(value, 2_000).toLocaleLowerCase();
+  // Keep non-Latin request markers escaped so source/editor encoding cannot
+  // silently disable the deterministic path in production.
+  if (/(?:\u0BB5\u0BBF\u0BA4\u0BCD\u0BA4\u0BBF\u0BAF\u0BBE\u0B9A|\u0B92\u0BAA\u0BCD\u0BAA\u0BBF\u0B9F)/u.test(text)) {
+    return 'comparison';
+  }
+  if (/(?:\u0BB5\u0BBF\u0BB2\u0BC8|\u0B8E\u0BB5\u0BCD\u0BB5\u0BB3|\u0B95\u0B9F\u0BCD\u0B9F\u0BA3)/u.test(text)) {
+    return 'fact';
+  }
+  if (/(?:\u0B8E\u0BA9\u0BCD\u0BA9\u0BC6\u0BA9\u0BCD\u0BA9|\u0B8E\u0BA8\u0BCD\u0BA4\u0BC6\u0BA8\u0BCD\u0BA4|\u0B95\u0BBF\u0B9F\u0BC8\u0B95\u0BCD\u0B95|\u0BB5\u0BBF\u0BB0\u0BC1\u0BAA\u0BCD\u0BAA|\u0BAA\u0BB1\u0BCD\u0BB1\u0BBF|\u0BB5\u0BBF\u0BB5\u0BB0|\u0B9A\u0BCA\u0BB2\u0BCD\u0BB2)/u.test(text)) {
+    return 'fact';
+  }
   if (/(?:\b(?:compare|comparison|difference|different|versus|vs)\b|வித்தியாச|ஒப்பிட)/iu.test(text)) {
     return 'comparison';
   }
@@ -354,7 +365,9 @@ export function deterministicPublishedRequestDecision({
   ))) return null;
   const exact = publishedMatches.filter((candidate) => (
     Number(candidate.score) >= 0.98
-    && ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(candidate.recordType)
+    && ['CATALOG_ITEM', 'CATALOG_CATEGORY', 'FAQ', 'CONVERSATION_NODE'].includes(
+      candidate.recordType,
+    )
     && ['published_exact', 'published_category_exact'].includes(candidate.matchMethod)
   ));
   if (!exact.length) return null;
@@ -367,8 +380,15 @@ export function deterministicPublishedRequestDecision({
     && Array.isArray(candidate.evidenceRecordIds)
     && candidate.evidenceRecordIds.length > 0
   ));
+  const exactCatalog = exact.filter((candidate) => (
+    ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(candidate.recordType)
+  ));
+  const exactRoutes = exact.filter((candidate) => (
+    ['FAQ', 'CONVERSATION_NODE'].includes(candidate.recordType)
+  ));
   const eligible = exactItems.length ? exactItems
-    : aggregateCategories.length ? aggregateCategories : exact;
+    : aggregateCategories.length ? aggregateCategories
+      : exactCatalog.length ? exactCatalog : exactRoutes;
   const identities = uniqueCandidateIdentities(eligible, utterance);
   if (!identities.size) return null;
   const selections = [...identities.values()];
@@ -393,8 +413,10 @@ export function deterministicPublishedRequestDecision({
       // Supplying all category children as preferred IDs would incorrectly
       // classify the category as a comparison. Its exact category match
       // carries that identity; individual items reserve their one record.
-      preferredRecordIds: Object.freeze(candidate.recordType === 'CATALOG_ITEM'
-        ? requestedRecordIds : []),
+      preferredRecordIds: Object.freeze(
+        ['CATALOG_ITEM', 'FAQ', 'CONVERSATION_NODE'].includes(candidate.recordType)
+          ? requestedRecordIds : [],
+      ),
     }),
     tool: null, nextQuestion: null, stateUpdate: null,
   });
@@ -566,11 +588,12 @@ function resolutionReservations(resolution) {
   // hydrate every alternative as though the caller requested a comparison.
   const resolved = resolution?.ambiguity?.detected === true
     ? [] : resolution?.candidate ? [resolution.candidate] : [];
-  return (resolved ?? []).filter((candidate) => (
-    ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(
-      cleanText(candidate?.recordType, 80).toUpperCase(),
-    )
-  )).flatMap((candidate) => {
+  return (resolved ?? []).filter((candidate) => {
+    const recordType = cleanText(candidate?.recordType, 80).toUpperCase();
+    return ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(recordType)
+      || (['FAQ', 'CONVERSATION_NODE'].includes(recordType)
+        && candidate?.matchMethod === 'published_deterministic_id');
+  }).flatMap((candidate) => {
     const evidenceRecordIds = candidate.recordType === 'CATALOG_CATEGORY'
       && Array.isArray(candidate.evidenceRecordIds) ? candidate.evidenceRecordIds : [];
     const identities = evidenceRecordIds.length
@@ -1055,7 +1078,14 @@ export async function retrieveTemplateEngineEvidence({
     (a.evidenceRecordIds?.length ?? 0) - (b.evidenceRecordIds?.length ?? 0))
     .map((candidate) => [candidate.recordType === 'CATALOG_CATEGORY'
       ? `${candidate.knowledgeBaseId}:${candidate.publicationRevision}:${candidate.categoryKey}`
-      : candidateIdentityKey(candidate, input.tenantId), candidate])).values()];
+    : candidateIdentityKey(candidate, input.tenantId), candidate])).values()];
+  const deterministicPreferredIds = new Set((deterministicRequestVerified
+    ? search.preferredRecordIds ?? [] : []).map(normalized));
+  const exactPublishedRoute = exactCandidates.filter((candidate) => (
+    ['FAQ', 'CONVERSATION_NODE'].includes(candidate.recordType)
+    && deterministicPreferredIds.has(normalized(candidate.recordId))
+    && candidate.score >= 0.98
+  ));
   let categoryConfirmation = false;
   let exactPublishedSelection = null;
   if (!exactCatalog.length) {
@@ -1106,6 +1136,16 @@ export async function retrieveTemplateEngineEvidence({
       reason: categoryConfirmation ? 'published_category_distinctive_partial' : 'published_exact_selection',
       routingCandidates: [],
       ambiguity: Object.freeze({ detected: false, candidates: Object.freeze([]) }),
+    });
+  } else if (!exactCatalog.length && exactPublishedRoute.length === 1) {
+    entityResolution = Object.freeze({
+      ...entityResolution,
+      candidate: Object.freeze({ ...exactPublishedRoute[0], explicit: true,
+        matchMethod: 'published_deterministic_id', entityType: 'ROUTE' }),
+      candidateNamespace: 'ROUTE', action: 'CONTINUE',
+      requiresCandidateConfirmation: false, routingCandidates: Object.freeze([]),
+      ambiguity: Object.freeze({ detected: false, candidates: Object.freeze([]) }),
+      reason: 'published_deterministic_route',
     });
   }
   // Resolve remembered IDs from the current assigned publication, even when
@@ -1189,7 +1229,8 @@ export async function retrieveTemplateEngineEvidence({
     entityResolution = Object.freeze({ ...entityResolution,
       candidate: Object.freeze({ ...candidate, explicit: false,
         entityType: candidate.recordType === 'CATALOG_ITEM' ? 'ITEM' : 'CATEGORY' }),
-      action: 'CONTINUE', requiresCandidateConfirmation: false, candidateNamespace: 'CATALOG',
+      action: 'CONTINUE', reason: 'verified_contextual_memory',
+      requiresCandidateConfirmation: false, candidateNamespace: 'CATALOG',
       ambiguity: Object.freeze({ detected: false, candidates: Object.freeze([]) }),
     });
   }
@@ -1211,6 +1252,9 @@ export async function retrieveTemplateEngineEvidence({
         ? candidate.evidenceRecordIds : [candidate.recordId]
     )),
   ].map(normalized).filter(Boolean) : []);
+  const deterministicExactByRecordId = new Map(exactCandidates.map((candidate) => (
+    [normalized(candidate.recordId), candidate]
+  )));
   const focusedDeterministicCandidates = deterministicRecordIds.size
     ? scopedBundles.flatMap((bundle) => (bundle.records ?? [])
       .filter((record) => deterministicRecordIds.has(normalized(
@@ -1218,9 +1262,15 @@ export async function retrieveTemplateEngineEvidence({
       )) && ['both', input.usageDirection].includes(normalized(
         record.usage_direction ?? record.usageDirection ?? 'both',
       )))
-      .map((record) => publishedRecordCandidate(record, bundle, input, {
-        matchMethod: 'published_deterministic_id',
-      }))
+      .map((record) => {
+        const recordId = normalized(record.record_id ?? record.recordId ?? record.id);
+        const exactCandidate = deterministicExactByRecordId.get(recordId);
+        return publishedRecordCandidate(record, bundle, input, {
+          score: exactCandidate?.score ?? 1,
+          searchForms: exactCandidate?.searchForms,
+          matchMethod: 'published_deterministic_id',
+        });
+      })
       .filter(Boolean)) : [];
   const focusedIds = new Set(focusedDeterministicCandidates.map((candidate) => (
     normalized(candidate.recordId)
@@ -1345,6 +1395,7 @@ export async function retrieveTemplateEngineEvidence({
   // tenant/agent/revision scoped, and the Map is discarded on return.
   const hydrationCache = new Map();
   let hydrationCacheHits = 0;
+  let hydrationCalls = 0;
   const rrfLimit = (count) => Math.max(1, Math.min(5, Number(count) || 5));
   const selectionForIdentities = (selection, identities) => {
     const allowed = new Set(identities);
@@ -1376,6 +1427,7 @@ export async function retrieveTemplateEngineEvidence({
     let pending = hydrationCache.get(cacheKey);
     if (pending) hydrationCacheHits += 1;
     else {
+      hydrationCalls += 1;
       pending = Promise.resolve(hydrate({
         auth,
         input,
@@ -1456,7 +1508,11 @@ export async function retrieveTemplateEngineEvidence({
   try {
     authoritative = await hydrateSelection(retrieval);
   } catch (error) {
-    if (!entityConstraint.constrained || !recoverableHydrationMiss(error)) throw error;
+    // A deterministic allowlist is already the exact retry selection. Running
+    // the same hydration again adds latency and cannot discover another valid
+    // record, so fail distinctly and let the configured recovery path speak.
+    if (focusedDeterministicCandidates.length || !entityConstraint.constrained
+      || !recoverableHydrationMiss(error)) throw error;
     selectionRetryAttempted = true;
     const retrySelection = exactSelection();
     try {
@@ -1491,6 +1547,14 @@ export async function retrieveTemplateEngineEvidence({
   };
   let hydrated = hydrationState(authoritative);
   if (entityConstraint.constrained && !hydrated.exact && !selectionRetryAttempted) {
+    if (focusedDeterministicCandidates.length) {
+      throw new AppError(503, 'Focused published evidence hydration was incomplete',
+        'TEMPLATE_ENGINE_REQUESTED_ENTITY_HYDRATION_INCOMPLETE', {
+          requestedCount: requestedIdentities.size,
+          hydratedCount: hydrated.matched.length,
+          selectionRetryAttempted: false,
+        });
+    }
     selectionRetryAttempted = true;
     try {
       authoritative = await hydrateSelection(exactSelection(), true);
@@ -1588,6 +1652,7 @@ export async function retrieveTemplateEngineEvidence({
       hydratedRequestedEntityCount: entityMatchedEvidence.length,
       publicationIndexKey: publicationIndex.key,
       hydrationCacheHits,
+      hydrationCalls,
       failedChannels: Object.freeze(hybrid.failures.map((failure) => failure.channel)),
       durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
     }),

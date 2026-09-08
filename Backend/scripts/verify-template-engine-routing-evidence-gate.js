@@ -70,19 +70,25 @@ function dependencies(configuration, decisions, { evidence = true } = {}) {
         speculativeRetrievalCalls += 1;
         throw new Error('Conversational turns must not start speculative knowledge retrieval');
       },
-      retrieveEvidence: async () => {
+      retrieveEvidence: async ({ searchDecision: routed }) => {
         retrievalCalls += 1;
         const records = evidence ? [Object.freeze({
           verified: true, callerFacing: true, evidenceId, recordId,
           tenantId: configuration.tenantId, agentId: configuration.agentId,
           knowledgeBaseId: configuration.knowledgeBaseId, publicationRevision: 7,
           recordType: 'CATALOG_ITEM', canonicalIdentity: `identity-${recordId}`,
+          canonicalName: 'Option Alpha', aliases: ['Alpha'],
           categoryKey: 'category-alpha', callerFacingHint: configuration.answer,
           tokenCoverage: 1, authorizationHint: null, deduplicationIdentity: `dedup-${recordId}`,
-          namespaceRank: 1, content: configuration.answer,
+          namespaceRank: 1,
+          content: `Option Alpha is available. ${configuration.answer}`,
+          publishedAttributePaths: ['available options', 'current value'],
         })] : [];
         return {
           evidence: records, scope,
+          requestedEntityRecordIds: routed.search.preferredRecordIds,
+          contextualMemoryVerified: routed.search.preferredRecordIds.length === 1,
+          resolvedSearch: routed.search.preferredRecordIds.length ? routed.search : null,
           diagnostics: {
             retrievalCount: evidence ? 1 : 0,
             hydrationCount: evidence ? 1 : 0,
@@ -194,10 +200,12 @@ for (const configuration of tenants) {
   ];
   for (const scenario of scenarios) {
     const recordId = `record-${configuration.tenantId}`;
+    const scenarioAnswer = scenario.fact === 'available options'
+      ? 'Option Alpha is available.' : configuration.answer;
     const decisions = [
       searchDecision(scenario.utterance, scenario.fact, scenario.reference,
         scenario.state.lastReferencedRecordIds ?? []),
-      { decision: 'RESPONSE', response: configuration.answer, clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null },
+      { decision: 'RESPONSE', response: scenarioAnswer, clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null },
     ];
     const runtime = dependencies(configuration, decisions);
     const result = await runTemplateEngineProductionTurn(

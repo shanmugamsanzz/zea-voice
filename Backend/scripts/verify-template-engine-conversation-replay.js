@@ -24,7 +24,7 @@ records.push({ record_id: 'welcome-next', record_type: 'conversation_node', usag
     catalogReferences: ['Available packages => item:overview'] } });
 const recovery = 'Sorry, I could not prepare that answer. Please try again.';
 const logs = [], spoken = [], audioFrames = [], results = [], normalAnswerLatencies = [];
-let turn, stages = new Set(), failAnswer = false, resolvedCoverageSkips = 0;
+let turn, stages = new Set(), llmCalls = [], failAnswer = false, resolvedCoverageSkips = 0;
 let selectedEntityIds = [];
 class Stt {
   listeners = new Set();
@@ -51,6 +51,7 @@ const stt = new Stt();
 const llm = { async connect() {}, cancel() {}, close() {}, async *stream(request) {
   const name = request.responseFormat?.name;
   stages.add(name);
+  llmCalls.push(name);
   let output;
   if (name === 'template_engine_contextual_subject_review') {
     const data = JSON.parse(request.messages.at(-1).content);
@@ -124,6 +125,7 @@ const orchestrator = new RealtimeConversationOrchestrator(media, {
     loadArtifacts: async () => ({ publications: [publication], sparseIndexes: [], bundles: [{ ...publication, records }] }),
     searchCandidates: async () => { stages.add('retrieval'); return { channels: { structured: [], bm25: [], qdrant: [] } }; },
     hydrateEvidence: async ({ retrieval }) => {
+      stages.add('hydration');
       selectedEntityIds = retrieval.candidates.map((entry) => entry.recordId);
       return { evidence: retrieval.candidates.map((entry) => {
       const record = records.find((item) => item.record_id === entry.recordId);
@@ -145,7 +147,8 @@ try {
   media.emit('start', { session: media });
   await waitFor(() => orchestrator.controller.state === 'listening');
   for (turn of [...fixture.turns, { id: 'rejected-repair', text: 'Kids package details please', subject: 'kids' }]) {
-    stages = new Set(); selectedEntityIds = []; failAnswer = turn.id === 'rejected-repair';
+    stages = new Set(); llmCalls = []; selectedEntityIds = [];
+    failAnswer = turn.id === 'rejected-repair';
     const before = spoken.length, framesBefore = audioFrames.length;
     const completed = logs.filter((entry) => entry.stage === 'template_engine.turn_completed').length;
     stt.publish({ type: 'final_transcript', text: turn.text, language: 'ta', isFinal: true });
@@ -164,9 +167,10 @@ try {
       for (const token of fixture.subjects[turn.subject].required) assert.ok(answer.includes(token));
       assert.ok(!answer.includes(recovery));
     }
-    for (const stage of ['retrieval', 'template_engine_post_search_decision']) {
-      assert.ok(stages.has(stage), `Stage skipped: ${turn.id}: ${stage}`);
-    }
+    assert.ok(stages.has('retrieval') || stages.has('hydration'),
+      `Evidence retrieval skipped: ${turn.id}`);
+    assert.ok(stages.has('template_engine_post_search_decision'),
+      `Answer generation skipped: ${turn.id}`);
     if (failAnswer) {
       assert.equal(stages.has('template_engine_claim_validation'), false,
         'Deterministically rejected drafts must not consume semantic claim validation');
@@ -179,7 +183,26 @@ try {
       `The duplicate pre-retrieval reference review must not run: ${turn.id}`);
     if (turn.id === 'welcome') assert.ok(stages.has('template_engine_welcome_meaning'));
     if (turn.noPublishedAlias) assert.ok(stages.has('template_engine_multilingual_entity_review'));
-    if (turn.contextual) assert.ok(stages.has('template_engine_contextual_subject_review'), JSON.stringify([...stages]));
+    if (turn.contextual) assert.equal(stages.has('template_engine_contextual_subject_review'), false,
+      `A verified contextual reference must bypass semantic review: ${turn.id}`);
+    const verifiedNormalFastPath = !failAnswer && turn.id !== 'welcome'
+      && turn.noPublishedAlias !== true;
+    if (verifiedNormalFastPath) {
+      assert.deepEqual(llmCalls, ['template_engine_post_search_decision'],
+        `A verified normal request must use exactly one grounded-answer LLM call: ${turn.id}`);
+      for (const review of [
+        'template_engine_orchestrator_decision',
+        'template_engine_welcome_meaning',
+        'template_engine_multilingual_entity_review',
+        'template_engine_contextual_subject_review',
+        'template_engine_entity_coverage',
+        'template_engine_claim_validation',
+        'template_engine_follow_up_repair',
+      ]) {
+        assert.equal(stages.has(review), false,
+          `Verified normal request unexpectedly invoked ${review}: ${turn.id}`);
+      }
+    }
     if (['onco-details', 'diabetic-switch', 'organ-switch', 'kids-switch'].includes(turn.id)) {
       assert.equal(stages.has('template_engine_contextual_subject_review'), false,
         `A clear current request must not consume contextual review: ${turn.id}`);
@@ -200,7 +223,7 @@ try {
       evidenceIds: [...completedTurn.evidenceIds],
       responseMeaning: stages.has('template_engine_welcome_meaning')
         ? 'published_welcome_continuation'
-        : stages.has('template_engine_contextual_subject_review')
+        : turn.contextual
           ? 'contextual_reference' : 'direct_request',
       toolState: { workflowStatus: completedTurn.workflowStatus, toolExecuted: completedTurn.toolExecuted },
       spokenAnswer: answer,

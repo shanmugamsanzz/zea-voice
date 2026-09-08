@@ -123,6 +123,10 @@ function factualResponse(configuration, records, scenario) {
     ? 'Silver costs 100 rupees and Gold costs 200 rupees.' : configuration.code === 'ta'
       ? 'Silver விலை 100 ரூபாய், Gold விலை 200 ரூபாய்.'
       : 'Silver price 100 rupees, Gold price 200 rupees.';
+  if (scenario === 'contextual_follow_up') response = configuration.code === 'en'
+    ? 'The Silver package includes tests A and B.' : configuration.code === 'ta'
+      ? 'Silver package-ல் tests A மற்றும் B உள்ளன.'
+      : 'Silver package-la tests A and B irukku.';
   if (scenario === 'topic_switching') response = configuration.code === 'en'
     ? 'The Gold package costs 200 rupees.' : configuration.code === 'ta'
       ? 'Gold package விலை 200 ரூபாய்.' : 'Gold package price 200 rupees.';
@@ -161,9 +165,19 @@ async function runFactualScenario(configuration, scenario, utterance) {
     { role: 'user', content: configuration.explanation },
     { role: 'assistant', content: configuration.answer },
   ] : [];
-  const preferred = scenario === 'contextual_follow_up' ? [priorId] : [];
+  const preferred = scenario === 'contextual_follow_up'
+    ? [priorId]
+    : (comparison ? records.map((record) => record.recordId) : []);
+  const requestedFacts = Object.freeze({
+    overview: 'available options',
+    package_explanation: 'details',
+    price: 'price',
+    comparison: 'differences',
+    contextual_follow_up: 'included tests',
+    topic_switching: 'details',
+  });
   const decisions = [
-    searchDecision(utterance, scenario, preferred),
+    searchDecision(utterance, requestedFacts[scenario], preferred),
     factualResponse(configuration, records, scenario),
   ];
   const result = await runTemplateEngineProductionTurn({
@@ -187,6 +201,9 @@ async function runFactualScenario(configuration, scenario, utterance) {
       }
       return {
         scope: identity.scope, evidence: records,
+        requestedEntityRecordIds: preferred,
+        contextualMemoryVerified: scenario === 'contextual_follow_up',
+        resolvedSearch: scenario === 'contextual_follow_up' ? routed.search : null,
         diagnostics: {
           retrievalCount: records.length, hydrationCount: records.length,
           verifiedEvidenceCount: records.length,
@@ -199,6 +216,9 @@ async function runFactualScenario(configuration, scenario, utterance) {
       supported: true, successClaimed: false, requestedFactAddressed: true,
     }),
     validateToolResultSpeechClaims: async () => ({ supported: true, successClaimed: false }),
+  }).catch((error) => {
+    error.message = `${configuration.code}/${scenario}: ${error.message}`;
+    throw error;
   });
   assert.equal(result.decision.decision, 'RESPONSE');
   assert.equal(result.followUpValidation.accepted, true);

@@ -91,7 +91,7 @@ for (const configuration of configurations) {
     mainPrompt: 'Answer facts only from supplied evidence.',
     latestUtterance: configuration.followUp,
     state: current.state, searchDecision, verifiedEvidence: current.evidence,
-    scope: current.scope,
+    scope: current.scope, contextualMemoryVerified: true,
   }, {
     tenantBoundaryVerified: true,
     validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),

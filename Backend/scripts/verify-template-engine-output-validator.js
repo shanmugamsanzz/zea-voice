@@ -310,6 +310,14 @@ const deterministicInflection = validateTemplateEngineSearchClaims({
 });
 assert.equal(deterministicInflection.deterministicallyGrounded, true,
   'A safe inflection of published wording must not require semantic LLM validation');
+const deterministicNaturalGrammar = validateTemplateEngineSearchClaims({
+  speech: 'Based on the published details, Service Alpha currently costs 3200 units.',
+  evidence, decision: 'RESPONSE', searchInterpretation: { requestedFact: 'price' },
+});
+assert.equal(deterministicNaturalGrammar.supported, true);
+assert.equal(deterministicNaturalGrammar.requestedFactAddressed, true);
+assert.equal(deterministicNaturalGrammar.deterministicallyGrounded, true,
+  'Ordinary connective grammar must not trigger repair when all factual claims are supported');
 const deterministicWrongFact = validateTemplateEngineSearchClaims({
   speech: 'Service Alpha costs 3200 units.', evidence,
   decision: 'RESPONSE', searchInterpretation: { requestedFact: 'included feature' },
@@ -569,6 +577,7 @@ const invalidGroundingRecovery = await respondToTemplateEngineSearch({
     tool: null, nextQuestion: null, stateUpdate: null,
   },
   verifiedEvidence: evidence, scope,
+  contextualMemoryVerified: true,
   informationUnavailableResponse: 'That information is not available.',
 }, {
   tenantBoundaryVerified: true,
@@ -625,6 +634,7 @@ const citedRecovery = await respondToTemplateEngineSearch({
     tool: null, nextQuestion: null, stateUpdate: null,
   },
   verifiedEvidence: evidence, scope,
+  contextualMemoryVerified: true,
   informationUnavailableResponse: 'That information is not published.',
 }, {
   tenantBoundaryVerified: true,

@@ -419,8 +419,8 @@ for (const mode of ['dedicated', 'neutral', 'unconfigured', 'cancelled', 'workfl
       await waitFor(() => logs.filter((entry) => entry.stage === 'template_engine.turn_completed').length > before);
       if (routingFailure) assert.equal(orchestrator.pendingTemplateEngineRequest.text, 'Different service price please');
       else {
-        assert.equal(orchestrator.pendingTemplateEngineRequest.text, 'Different service price please',
-          'An empty search is unresolved coverage, not a successfully answered absence claim');
+        assert.equal(orchestrator.pendingTemplateEngineRequest, null,
+          'A safe configured NO_MATCH response must complete an empty-evidence request');
         assert.ok(postSearchAttempts > initialAttempts, 'A new question must proceed through normal routing');
       }
       const bounded = logs.filter((entry) => ['template_engine.pending_request_preserved',

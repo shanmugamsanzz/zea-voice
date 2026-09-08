@@ -81,7 +81,6 @@ import { LiveMemoryMaintenanceQueue } from './interaction/live-memory-maintenanc
 import { resolveCallbackConfiguration } from './interaction/callback-config.js';
 import { mergeToolFieldSchemas } from './interaction/tool-field-schema.js';
 import { resolveRuntimeMessage } from './interaction/configured-runtime-messages.js';
-import { validateRequestedEntityCoverage } from './interaction/template-engine-entity-coverage.js';
 import { isInternalRuntimeText } from './interaction/recovery-readiness.js';
 export { isInternalRuntimeText } from './interaction/recovery-readiness.js';
 import {
@@ -2625,9 +2624,6 @@ export class RealtimeConversationOrchestrator {
             ...details,
           }, 'Invalid post-search decision was repaired without exposing unvalidated speech');
         },
-        validateRequestedEntityCoverage: (input) => validateRequestedEntityCoverage(input, invokeStructuredLlm),
-        onEntityCoverage: (details) => this.log.info({ stage: 'template_engine.entity_coverage',
-          callId: this.call.id, turnEpoch: epoch, ...details }, 'Pre-generation subject coverage checked'),
         onRetrievalDiagnostics: (details) => {
           retrievalDiagnostics = details;
           this.log.info({

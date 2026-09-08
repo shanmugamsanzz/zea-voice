@@ -5,7 +5,7 @@ import { validateTemplateEnginePostSearchDecision } from './template-engine-post
 import { activateTemplateEngineWorkflow } from './template-engine-workflow-runtime.js';
 export { validateTemplateEngineToolResultSpeech } from './template-engine-tool-result-validator.js';
 
-export const TEMPLATE_ENGINE_OUTPUT_VALIDATOR_VERSION = 5;
+export const TEMPLATE_ENGINE_OUTPUT_VALIDATOR_VERSION = 6;
 
 function cleanText(value, maximum = 8_000) {
   return String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
@@ -185,6 +185,20 @@ function valid(route, value) {
   return Object.freeze({ valid: true, ttsAllowed: route === 'TTS', route, value });
 }
 
+function safeInformationUnavailableSpeech(value) {
+  const speech = cleanText(value, 4_000).toLocaleLowerCase();
+  if (!speech) return false;
+  // NO_MATCH may describe the limits of supplied information, but it must not
+  // convert an absent attribute into a real-world negative or policy claim.
+  // These are generic epistemic markers, not tenant/business vocabulary.
+  const informationLimited = /\b(?:information|details?|evidence|published|provided|specified|mentioned|documented|known|found)\b/iu.test(speech)
+    || /(?:தகவல்|விவர|ஆதார|குறிப்பிட|தெரிய)/u.test(speech);
+  const categoricalNegative = /\b(?:not required|not available|does not exist|doesn't exist|never offered|not allowed|ineligible)\b/iu.test(speech)
+    || /(?:தேவையில்லை|கிடையாது|இல்லவே இல்லை|அனுமதி இல்லை|தகுதி இல்லை)/u.test(speech);
+  const explicitlyInformationLimited = /\b(?:information|details?|evidence)\s+(?:is\s+|are\s+)?(?:not available|unavailable)\b/iu.test(speech);
+  return informationLimited && (!categoricalNegative || explicitlyInformationLimited);
+}
+
 function selectedEvidenceFor(decision, evidence) {
   const byId = new Map(evidence.map((source) => [
     cleanText(source.evidenceId ?? source.sourceId ?? source.id, 160), source,
@@ -320,6 +334,11 @@ function validateClarification(decision, input) {
   if (unresolved && selectedCandidates.length) {
     return invalid('invented_clarification_candidate');
   }
+  const proposesUnverifiedCandidate = /\b(?:did|do)\s+you\s+mean\s+(?!which\b|what\b|who\b|where\b|when\b|how\b)/iu
+    .test(clarification.question);
+  if (unresolved && allowedCandidates.size === 0 && proposesUnverifiedCandidate) {
+    return invalid('invented_clarification_candidate');
+  }
   if (!unresolved && !confirmation
     && (allowedCandidates.size < 2 || selectedCandidates.length < 2)) {
     return invalid('clarification_candidates_required');
@@ -425,6 +444,12 @@ export function validateTemplateEngineOutput(input = {}) {
     if (input.ambiguity?.required === true) {
       return invalid('clarification_required_for_entity_resolution', {
         factual: true, retryCount: input.retryCount,
+      });
+    }
+    if (input.deterministicOnly === true
+      && !safeInformationUnavailableSpeech(decision.response)) {
+      return invalid('unsafe_no_match_claim', {
+        factual: input.factualClaimsPresent === true, retryCount: input.retryCount,
       });
     }
     return valid('TTS', decision);

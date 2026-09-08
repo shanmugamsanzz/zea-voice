@@ -129,6 +129,24 @@ assert.equal(deterministicPublishedRequestDecision({
 })?.decision, 'SEARCH',
 'A natural exact published category request bypasses semantic routing');
 assert.equal(deterministicPublishedRequestDecision({
+  artifacts: deterministicPublicationArtifacts, scope: deterministicPublicationScope,
+  usageDirection: 'inbound',
+  latestUtterance: `Alpha \u0BAA\u0BA4\u0BCD\u0BA4\u0BBF \u0B9A\u0BCA\u0BB2\u0BCD\u0BB2\u0BC1\u0B99\u0BCD\u0B95`,
+})?.decision, 'SEARCH',
+'A Tamil factual wrapper around a published alias bypasses semantic routing');
+const deterministicRouteArtifacts = { bundles: [{
+  ...deterministicPublicationArtifacts.bundles[0], records: [{
+    record_id: 'overview-route', record_type: 'CONVERSATION_NODE', usage_direction: 'both',
+    question: 'What options are available?', entity_aliases: ['Show available options'],
+    content: 'Configured Alpha and Configured Beta are available.',
+  }],
+}] };
+assert.deepEqual(deterministicPublishedRequestDecision({
+  artifacts: deterministicRouteArtifacts, scope: deterministicPublicationScope,
+  usageDirection: 'inbound', latestUtterance: 'What options are available?',
+})?.search?.preferredRecordIds, ['overview-route'],
+'An exact published conversational route bypasses semantic routing');
+assert.equal(deterministicPublishedRequestDecision({
   artifacts: deterministicPublicationArtifacts,
   scope: { ...deterministicPublicationScope, publications: [{
     knowledgeBaseId: 'kb-fast-path', publicationRevision: 1,
@@ -597,7 +615,29 @@ assert.equal(focusedSemanticReviews, 0,
 assert.deepEqual(focusedRetrieval.requestedEntityRecordIds, ['record-exact']);
 assert.equal(focusedRetrieval.diagnostics.focusedDeterministicRetrieval, true);
 assert.equal(focusedRetrieval.diagnostics.providerSearchPerformed, false);
+assert.equal(focusedRetrieval.diagnostics.hydrationCalls, 1,
+  'A bounded focused request performs one authoritative hydration');
+assert.equal(focusedRetrieval.diagnostics.selectionRetryAttempted, false,
+  'A focused record allowlist must never repeat the same hydration');
 assert.deepEqual(focusedRetrieval.diagnostics.preferredRecordIds, ['record-exact']);
+let incompleteFocusedHydrations = 0;
+await assert.rejects(() => retrieveTemplateEngineEvidence({
+  auth: { tenantId }, scope, callId: 'call-focused-incomplete', usageDirection: 'inbound',
+  language: 'en', latestUtterance: 'Tell me about Alpha Alias', state: {},
+  deterministicRequestVerified: true, preloadedArtifacts: exactArtifacts,
+  searchDecision: { ...searchDecision, search: {
+    query: 'Tell me about Alpha Alias', requestedFact: 'details',
+    contextualReference: null, preferredRecordIds: ['record-exact'],
+  } },
+}, {
+  searchCandidates: async () => assert.fail('Focused retrieval must not search providers'),
+  hydrateEvidence: async () => {
+    incompleteFocusedHydrations += 1;
+    return { evidence: [], fusion: { candidates: [] }, rejectedRecordIds: [] };
+  },
+}), { code: 'TEMPLATE_ENGINE_REQUESTED_ENTITY_HYDRATION_INCOMPLETE' });
+assert.equal(incompleteFocusedHydrations, 1,
+  'Failed focused hydration must not repeat the identical database operation');
 assert.equal(verifiedDeterministicAnswerPath({
   deterministicRequestResolved: true, retrieval: focusedRetrieval,
   ambiguity: { required: false },
@@ -620,6 +660,7 @@ assert.equal(verifiedDeterministicAnswerPath({
   const llmOperations = [];
   let semanticValidationCalls = 0;
   let fastPathDiagnostics = null;
+  let fastFollowUpDiagnostics = null;
   const fastTurn = await runTemplateEngineProductionTurn({
     auth: { tenantId }, scope, callId: 'deterministic-published-fast-path',
     usageDirection: 'inbound', language: 'en', mainPrompt: 'Use published facts.',
@@ -641,7 +682,17 @@ assert.equal(verifiedDeterministicAnswerPath({
         stateUpdate: null };
     },
     loadPublishedContext: async () => ({ scope, publishedWorkflows: [],
-      publishedConversationGuidance: [], artifacts: exactArtifacts }),
+      publishedConversationGuidance: [{
+        recordId: 'alpha-follow-up', recordType: 'CONVERSATION_NODE', published: true,
+        tenantId, agentId, knowledgeBaseId, publicationRevision: 4,
+        flowKey: null, nodeKey: 'details', nodeType: null, sequenceOrder: null,
+        isEntry: false, content: null, language: 'en', intentClass: 'details',
+        applicableRoutes: ['SEARCH'], configuredStages: [],
+        purpose: 'Continue after Alpha details.', situation: null,
+        examples: ['Tell me about Alpha Alias'], context: null,
+        catalogReferences: [],
+        nextQuestion: 'Would you like another Alpha detail?',
+      }], artifacts: exactArtifacts }),
     retrieveEvidence: async ({ searchDecision: selected }) => {
       assert.deepEqual(selected.search.preferredRecordIds, ['record-exact']);
       return focusedRetrieval;
@@ -654,6 +705,7 @@ assert.equal(verifiedDeterministicAnswerPath({
     },
     validateToolResultSpeechClaims: async () => ({ supported: true }),
     onPostSearchDiagnostics: (details) => { fastPathDiagnostics = details; },
+    onFollowUpDiagnostics: (details) => { fastFollowUpDiagnostics = details; },
   });
   assert.equal(fastTurn.speech, 'Configured Alpha approved details.');
   assert.deepEqual(llmOperations, ['template_engine_post_search_decision'],
@@ -662,6 +714,12 @@ assert.equal(verifiedDeterministicAnswerPath({
     'Verified entity, citation, number, relevance and length checks run without an LLM');
   assert.equal(fastPathDiagnostics?.verifiedAnswerFastPath, true,
     'The compact one-call path requires deterministic resolution plus focused hydration proof');
+  assert.equal(fastTurn.followUpValidation.accepted, false,
+    'An omitted optional follow-up must stay omitted without a repair LLM call');
+  assert.equal(fastFollowUpDiagnostics?.guidanceHasNextQuestion, true,
+    'The fixture must exercise an applicable optional follow-up');
+  assert.equal(fastFollowUpDiagnostics?.repairReason, 'verified_factual_single_llm_path',
+    'Verified normal turns must deterministically skip follow-up regeneration');
   assert.deepEqual(fastTurn.diagnostics.architecture, {
     enforced: true,
     path: 'verified_factual_one_llm',
@@ -690,6 +748,19 @@ assert.throws(() => enforceVerifiedFactualArchitecture({
   },
 }), (error) => error?.code === 'TEMPLATE_ENGINE_ARCHITECTURE_VIOLATION'
   && error?.details?.violations?.includes('clear_answer_requires_one_generation_call'));
+
+assert.throws(() => enforceVerifiedFactualArchitecture({
+  deterministicAnswerPath: true,
+  answered: {
+    decision: { decision: 'RESPONSE' },
+    diagnostics: {
+      verifiedAnswerFastPath: true, semanticValidationSkipped: true,
+      answerGenerationCalls: 1, repairAttempted: false,
+    },
+  },
+  followUpRepair: { attempted: true, reason: null },
+}), (error) => error?.code === 'TEMPLATE_ENGINE_ARCHITECTURE_VIOLATION'
+  && error?.details?.violations?.includes('follow_up_llm_must_be_skipped'));
 
 const measuredArchitecture = assertVerifiedFactualStageArchitecture({
   architecture: {
@@ -1381,7 +1452,6 @@ const referenceInput = { latestUtterance: 'More details?',
 assert.equal(await reviewRememberedReference(referenceInput, async () => ({ relation: 'invalid' })), false);
 {
   let calls = 0;
-  let coverageChecks = 0;
   const result = await runTemplateEngineProductionTurn({ scope, latestUtterance: 'Yes Madam',
     mainPrompt: 'Follow published steps.', assignedTools: [], informationFields: [],
     acknowledgementPhrases: ['Yes Madam'],
@@ -1411,12 +1481,6 @@ assert.equal(await reviewRememberedReference(referenceInput, async () => ({ rela
       assert.equal(input.requestMeaning.pendingWelcomeQuestion.text, 'Is this the account holder?');
       return retrieval;
     },
-    validateRequestedEntityCoverage: async (input) => {
-      coverageChecks += 1;
-      assert.equal(input.requestMeaning.publishedNextStep.recordId, 'next-step');
-      assert.equal(input.latestUtterance, 'Yes Madam');
-      return { resolved: true };
-    },
     validateGroundedClaims: async (input) => {
       assert.equal(input.requestMeaning.kind, 'published_welcome_continuation');
       return { supported: true, requestedFactAddressed: true };
@@ -1425,8 +1489,6 @@ assert.equal(await reviewRememberedReference(referenceInput, async () => ({ rela
   assert.equal(result.decision.decision, 'RESPONSE');
   assert.equal(result.toolExecuted, false);
   assert.equal(calls, 1, 'Only grounded answer generation is needed after deterministic continuation');
-  assert.equal(coverageChecks, 0,
-    'Resolved retrieval must rely on the complete post-answer grounding check instead of a duplicate entity review');
 }
 assert.equal(await reviewRememberedReference(referenceInput, async () => 'not json'), false);
 await assert.rejects(() => reviewRememberedReference(referenceInput, async () => {
@@ -1552,8 +1614,8 @@ assert.equal(speculativeStarted, false,
 assert.equal(ordinaryRetrievalCalls, 1,
   'The resolved request starts exactly one foreground retrieval');
 assert.equal(speculativeDiagnostics.focusedDeterministicRetrieval, false);
-assert.equal(deterministicChecks, 1,
-  'Follow-up validation must not add a second grounding-validator call');
+assert.equal(deterministicChecks, 0,
+  'Published-answer validation must not invoke the semantic grounding validator');
 assert.match(speculativeTurn.speech, /Tenant Item costs 125/u);
 
 {

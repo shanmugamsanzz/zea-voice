@@ -6,7 +6,6 @@ import {
 } from '../src/voice/interaction/template-engine-post-search-contract.js';
 import { respondToTemplateEngineSearch } from '../src/voice/interaction/template-engine-orchestrator.js';
 import { classifyTemplateEngineTurnError } from '../src/voice/interaction/template-engine-error-classification.js';
-import { validateRequestedEntityCoverage } from '../src/voice/interaction/template-engine-entity-coverage.js';
 
 for (const code of ['TEMPLATE_ENGINE_OUTPUT_INVALID', 'TEMPLATE_ENGINE_POST_SEARCH_DECISION_INVALID',
   'TEMPLATE_ENGINE_LLM_INVALID_JSON', 'TEMPLATE_ENGINE_CLAIM_VALIDATION_INVALID']) {
@@ -100,8 +99,8 @@ const verifiedEvidence = Object.freeze([
   assert.equal(fastInput.answerRequirements.originalUtterance, latestUtterance);
 }
 
-// A verified fast-path answer with new factual vocabulary is repaired from the
-// deterministic failure. It must never add a separate semantic-review call.
+// A verified fast-path answer with an unsupported acronym/test code is repaired
+// from the exact deterministic failure. Ordinary grammar remains unrestricted.
 {
   let answerCalls = 0;
   let semanticCalls = 0;
@@ -115,7 +114,7 @@ const verifiedEvidence = Object.freeze([
     invokeStructuredLlm: async (request) => {
       answerCalls += 1;
       if (answerCalls === 1) return { outputParsed: { decision: 'RESPONSE',
-        response: 'Selected service price is 3200 currency units with teleportation.',
+        response: 'Selected service price is 3200 currency units with XYZ.',
         clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null } };
       repairPrompt = request.messages.at(-1).content;
       return { outputParsed: { decision: 'RESPONSE',
@@ -130,8 +129,8 @@ const verifiedEvidence = Object.freeze([
   });
   assert.equal(answerCalls, 2);
   assert.equal(semanticCalls, 0);
-  assert.match(repairPrompt, /unsupported_factual_vocabulary/u);
-  assert.match(repairPrompt, /teleportation/u);
+  assert.match(repairPrompt, /unsupported_acronym_claim/u);
+  assert.match(repairPrompt, /xyz/iu);
   assert.equal(result.decision.response, 'Selected service price is 3200 currency units.');
   assert.equal(result.diagnostics.repairAttempted, true);
 }
@@ -177,7 +176,8 @@ const verifiedEvidence = Object.freeze([
   const overview = 'First Service offers Delta. More detail?';
   const result = await respondToTemplateEngineSearch({
     mainPrompt, latestUtterance: 'Give an overview of the available services', state, scope,
-    searchDecision: { ...searchDecision, search: { ...searchDecision.search, requestedFact: 'overview' } },
+    searchDecision: { ...searchDecision, search: { ...searchDecision.search,
+      requestedFact: 'overview', contextualReference: null, preferredRecordIds: [] } },
     verifiedEvidence: [{ ...verifiedEvidence[0], content: 'First Service costs 3200 units and offers Delta.',
       publishedAttributePaths: ['overview', 'price'] }],
     maximumSpeechCharacters: overview.length,
@@ -202,8 +202,8 @@ const verifiedEvidence = Object.freeze([
     },
   });
   assert.equal(attempts, 2);
-  assert.equal(semanticChecks, 1,
-    'A deterministic relevance failure must be repaired before semantic grounding');
+  assert.equal(semanticChecks, 0,
+    'A deterministic relevance failure must not invoke semantic validation');
   assert.equal(result.decision.response, overview);
 }
 
@@ -215,17 +215,13 @@ let numericSemanticChecks = 0;
   const overviewResult = await respondToTemplateEngineSearch({
     mainPrompt, latestUtterance: 'Explain all the available options one by one', scope,
     state: { ...state, lastReferencedRecordIds: [] },
-    searchDecision: { ...searchDecision, search: { query: 'available options', requestedFact: 'overview',
+    searchDecision: { ...searchDecision, search: { query: 'available options', requestedFact: 'available options',
       contextualReference: null, preferredRecordIds: [] } },
     verifiedEvidence: [verifiedEvidence[0], { ...verifiedEvidence[0], evidenceId: 'evidence-2',
       recordId: 'record-2', canonicalName: 'Second Service', aliases: [], content: 'Second Service is available.' }],
   }, {
     tenantBoundaryVerified: true,
-    ambiguity: { required: true, kind: 'published_entity_candidates', candidates: ['First Service', 'Second Service'] },
-    validateRequestedEntityCoverage: async ({ latestUtterance }) => {
-      assert.ok(latestUtterance.includes('one by one'));
-      return { resolved: true };
-    },
+    ambiguity: { required: false, kind: 'resolved_published_category', candidates: [] },
     validateGroundedClaims: async ({ decision }) => ({ supported: true, requestedFactAddressed: decision === 'RESPONSE' }),
     invokeStructuredLlm: async () => {
       attempts += 1;
@@ -239,38 +235,8 @@ let numericSemanticChecks = 0;
   assert.equal(attempts, 2, 'Unnecessary choice question must be repaired, not delivered');
   assert.equal(overviewResult.decision.response, summary);
 }
-for (const decision of ['CLARIFY', 'NO_MATCH', 'RESPONSE']) {
-  let coverageChecked = false;
-  const pending = respondToTemplateEngineSearch({
-    mainPrompt, latestUtterance: 'Explain the requested child category', state, searchDecision, scope, verifiedEvidence,
-  }, {
-    tenantBoundaryVerified: true,
-    validateRequestedEntityCoverage: async (input) => {
-      assert.equal(input.latestUtterance, 'Explain the requested child category');
-      coverageChecked = true;
-      return validateRequestedEntityCoverage(input, async () => ({ outputParsed: { resolved: false, evidenceIds: [] } }));
-    },
-    validateGroundedClaims: async () => ({ supported: true, requestedFactAddressed: true }),
-    invokeStructuredLlm: async ({ responseFormat }) => {
-      assert.ok(coverageChecked, 'Identity must be checked before any answer generation');
-      assert.deepEqual(responseFormat.schema.properties.decision.enum, ['CLARIFY']);
-      return { outputParsed: { decision, response: decision === 'CLARIFY' ? ''
-        : decision === 'NO_MATCH' ? 'That category is not available.' : 'The price is 3200 units.',
-        clarification: decision === 'CLARIFY' ? { question: 'Which category do you mean?', reason: null, candidates: [] } : null,
-        evidenceIds: decision === 'RESPONSE' ? ['E1'] : [], nextQuestion: null, stateUpdate: null } };
-    },
-  });
-  if (decision === 'CLARIFY') assert.equal((await pending).decision.decision, 'CLARIFY');
-  else await assert.rejects(pending, { code: 'TEMPLATE_ENGINE_OUTPUT_INVALID' });
-}
-assert.equal((await validateRequestedEntityCoverage({ evidence: [] }, () => assert.fail('Empty evidence needs no LLM'))).resolved, false);
-assert.equal((await validateRequestedEntityCoverage({ evidence: [{ evidenceId: 'E1' }] }, async () => ({
-  outputParsed: { resolved: true, evidenceIds: ['invented'] },
-}))).resolved, false);
-
 {
   let answerCalls = 0;
-  let coverageCalls = 0;
   let semanticCalls = 0;
   const result = await respondToTemplateEngineSearch({
     mainPrompt, latestUtterance, state, searchDecision, scope, verifiedEvidence,
@@ -279,27 +245,24 @@ assert.equal((await validateRequestedEntityCoverage({ evidence: [{ evidenceId: '
     tenantBoundaryVerified: true,
     ambiguity: { required: true, kind: 'published_entity_confirmation',
       candidates: ['First Service'] },
-    validateRequestedEntityCoverage: async ({ evidence }) => {
-      coverageCalls += 1;
-      return { resolved: true, evidenceIds: [evidence[0].evidenceId] };
-    },
     validateGroundedClaims: async () => {
       semanticCalls += 1;
       return { supported: true, requestedFactAddressed: true };
     },
     invokeStructuredLlm: async () => {
       answerCalls += 1;
-      return { outputParsed: { decision: 'RESPONSE',
-        response: 'First Service price is 3200 currency units.',
-        clarification: null, evidenceIds: ['E1'], nextQuestion: null, stateUpdate: null } };
+      return { outputParsed: { decision: 'CLARIFY', response: '',
+        clarification: { question: 'Did you mean First Service?', reason: null,
+          candidates: ['First Service'] },
+        evidenceIds: [], nextQuestion: null, stateUpdate: null } };
     },
   });
-  assert.equal(coverageCalls, 1, 'Real ambiguity receives one entity coverage review');
-  assert.equal(answerCalls, 1, 'Resolved coverage proceeds directly to one answer call');
+  assert.equal(answerCalls, 1, 'Real ambiguity receives one clarification generation');
   assert.equal(semanticCalls, 0,
-    'A successful coverage review must not be repeated by semantic LLM validation');
+    'Ambiguity must not invoke legacy entity-coverage or semantic validation reviews');
   assert.equal(result.diagnostics.semanticValidationSkipped, true);
   assert.equal(result.outputValidation.valid, true);
+  assert.equal(result.decision.decision, 'CLARIFY');
 }
 let budgetCalls = 0;
 let budgetClaimChecks = 0;
@@ -324,8 +287,8 @@ const budgetResult = await respondToTemplateEngineSearch({
   },
 });
 assert.equal(budgetCalls, 2, 'Oversized answers get one complete rewrite, not substring truncation');
-assert.equal(budgetClaimChecks, 1,
-  'Deterministic length rejection must skip semantic review; the revision is independently grounded');
+assert.equal(budgetClaimChecks, 0,
+  'Length repair and the revised answer must use deterministic validation only');
 assert.equal(budgetResult.decision.response, budgetAnswer);
 assert.deepEqual(budgetResult.decision.evidenceIds, ['evidence-1']);
 
@@ -473,12 +436,13 @@ for (const failedRepair of [false, true]) {
     assert.equal(result.decision.nextQuestion, null);
   }
   assert.equal(calls, 2);
-  assert.deepEqual(checkedSpeech, failedRepair ? [] : [concise],
-    'Only a deterministic-valid repaired response should reach semantic grounding');
+  assert.deepEqual(checkedSpeech, [],
+    'A deterministic-valid repaired response must not invoke semantic grounding');
 }
 const completeComparison = await respondToTemplateEngineSearch({
   mainPrompt, latestUtterance: 'Compare the prices of all selected options', scope, state: {},
-  searchDecision: { ...searchDecision, search: { ...searchDecision.search, preferredRecordIds: [] } },
+  searchDecision: { ...searchDecision, search: { ...searchDecision.search,
+    requestedFact: 'compare prices', contextualReference: null, preferredRecordIds: [] } },
   verifiedEvidence: sixOperands, requestedEntityRecordIds: sixOperands.map((entry) => entry.recordId),
 }, {
   tenantBoundaryVerified: true,
@@ -519,8 +483,8 @@ const numericRepair = await respondToTemplateEngineSearch({
   },
 });
 assert.equal(numericRepairCalls, 2);
-assert.equal(numericSemanticChecks, 1,
-  'An unsupported number must be repaired before semantic grounding');
+assert.equal(numericSemanticChecks, 0,
+  'An unsupported number and its repair must use deterministic validation only');
 assert.equal(numericRepair.decision.response, 'The price is 3,200.00 units.');
 
 assert.deepEqual(templateEnginePostSearchJsonSchema.properties.decision.enum,
@@ -562,7 +526,8 @@ assert.equal(result.decision.decision, 'RESPONSE');
 assert.equal(result.decision.nextQuestion.question,
   'Would you like details about this service?');
 assert.deepEqual(result.decision.evidenceIds, ['evidence-1']);
-assert.deepEqual(groundedClaimInput.evidenceIds, ['evidence-1']);
+assert.equal(groundedClaimInput, undefined,
+  'Valid grounded answers must bypass the semantic claim validator');
 assert.deepEqual(postSearchDiagnostics.allowedAliases, ['E1']);
 assert.deepEqual(postSearchDiagnostics.returnedAliases, ['E1']);
 assert.equal(postSearchDiagnostics.validationReason, null);
@@ -627,10 +592,9 @@ const completeEvidenceResult = await respondToTemplateEngineSearch({
   } }),
 });
 assert.equal(completeEvidenceResult.decision.decision, 'RESPONSE');
-assert.equal(completeEvidenceValidation.selectedEvidence.length, 2,
-  'Claim validation must receive the complete hydrated evidence set');
-assert.equal(completeEvidenceValidation.citedEvidence.length, 1,
-  'Citation validation must retain the exact cited evidence subset');
+assert.equal(completeEvidenceValidation, undefined,
+  'Citation selection must be validated without semantic claim review');
+assert.deepEqual(completeEvidenceResult.decision.evidenceIds, ['evidence-1']);
 
 let relevanceCalls = 0;
 const relevanceFacts = [];
@@ -678,7 +642,8 @@ assert.equal(relevanceCalls, 2,
   'A grounded but incomplete answer must receive exactly one repair attempt');
 assert.equal(relevantAnswer.decision.response,
   'The selected service includes feature Delta.');
-assert.deepEqual(relevanceFacts, ['included feature', 'included feature']);
+assert.deepEqual(relevanceFacts, [],
+  'Requested-fact relevance must be checked deterministically before and after repair');
 assert.equal(relevanceDiagnostics.initialValidationReason, 'requested_fact_not_addressed');
 assert.equal(relevanceDiagnostics.repairAttempted, true);
 assert.equal(relevanceDiagnostics.finalDecision, 'RESPONSE');
@@ -741,11 +706,8 @@ const comparisonResult = await respondToTemplateEngineSearch({
 });
 assert.equal(comparisonResult.decision.decision, 'RESPONSE');
 assert.deepEqual(comparisonResult.decision.evidenceIds, ['evidence-1', 'evidence-2']);
-assert.equal(comparisonClaimInput.selectedEvidence.length, 2,
-  'Grounded comparison validation must receive the complete selected evidence set');
-assert.equal(comparisonClaimInput.selectedEvidence[1].canonicalName, 'Second Service');
-assert.deepEqual(comparisonClaimInput.selectedEvidence[1].authoritativeData,
-  { name: 'Second Service', price: 4100 });
+assert.equal(comparisonClaimInput, undefined,
+  'Grounded comparisons must validate exact operands without semantic review');
 }
 
 assert.equal(validateTemplateEnginePostSearchDecision({
@@ -827,7 +789,11 @@ let numericDiagnostics;
 const partialAnswer = 'The current price is 3200 currency units. Age eligibility is not specified in the supplied information.';
 const numericPartialRecovery = await respondToTemplateEngineSearch({
   mainPrompt, latestUtterance: 'My daughter is 3. What is the price and age eligibility?',
-  state, searchDecision, verifiedEvidence, scope,
+  state: { ...state, lastReferencedRecordIds: [] },
+  searchDecision: { ...searchDecision, search: { query: 'price and age eligibility',
+    requestedFact: 'price and age eligibility', contextualReference: null,
+    preferredRecordIds: [] } },
+  verifiedEvidence, scope,
 }, {
   tenantBoundaryVerified: true,
   onPostSearchDiagnostics: (details) => { numericDiagnostics = details; },
@@ -876,8 +842,8 @@ const groundedRecovery = await respondToTemplateEngineSearch({
 });
 assert.equal(groundedRepairCalls, 2,
   'An unsupported grounded response must receive exactly one repair attempt');
-assert.equal(groundedValidationCalls, 2,
-  'Both the original and repaired factual responses must be grounded');
+assert.equal(groundedValidationCalls, 0,
+  'Both the original and repaired factual responses must be validated deterministically');
 assert.equal(groundedRecovery.decision.decision, 'RESPONSE');
 
 let negativeNoMatchCalls = 0;
@@ -942,9 +908,8 @@ const groundedClarification = await respondToTemplateEngineSearch({
   } }),
 });
 assert.equal(groundedClarification.decision.decision, 'CLARIFY');
-assert.equal(clarificationValidationInput.decision, 'CLARIFY');
-assert.equal(clarificationValidationInput.selectedEvidence.length, 2,
-  'Clarification speech validation receives the complete verified evidence set');
+assert.equal(clarificationValidationInput, undefined,
+  'Clarification candidates and speech must be validated deterministically');
 
 let ambiguityRepairCalls = 0;
 {
@@ -1043,7 +1008,10 @@ const resolvedContext = await respondToTemplateEngineSearch({
       contextualReference: 'selected service', preferredRecordIds: ['record-1'],
     },
   },
-  verifiedEvidence, scope,
+  verifiedEvidence: [{ ...verifiedEvidence[0],
+    content: 'The selected service includes the published features.',
+    publishedAttributePaths: ['features'] }], scope,
+  contextualMemoryVerified: true,
 }, {
   tenantBoundaryVerified: true,
   validateGroundedClaims: async () => ({
@@ -1093,7 +1061,8 @@ const deterministicFallback = await respondToTemplateEngineSearch({
   onDecisionRepair: (details) => { fallbackDiagnostics = details; },
 });
 assert.equal(fallbackCalls, 2);
-assert.equal(extractiveValidationCalls, 1, 'Extracted recovery must not bypass claim validation');
+assert.equal(extractiveValidationCalls, 0,
+  'Extractive recovery must use the same deterministic validation contract');
 assert.equal(fallbackDiagnostics.recovered, true);
 assert.equal(fallbackDiagnostics.configuredFallbackApplied, false);
 assert.equal(fallbackDiagnostics.extractiveRecoveryApplied, true);
@@ -1154,8 +1123,8 @@ const malformedRepair = await respondToTemplateEngineSearch({
   onDecisionRepair: (details) => { malformedRepairDiagnostics = details; },
 });
 assert.equal(malformedRepairCalls, 2);
-assert.equal(malformedSemanticChecks, 1,
-  'A missing citation must be repaired before semantic grounding');
+assert.equal(malformedSemanticChecks, 0,
+  'A missing citation must be repaired deterministically without semantic grounding');
 assert.equal(malformedRepair.decision.decision, 'RESPONSE');
 assert.deepEqual(malformedRepair.decision.evidenceIds, ['evidence-1']);
 assert.equal(malformedRepairDiagnostics.recovered, true);
@@ -1196,6 +1165,7 @@ for (const [tenantId, languageText] of [
   const recovered = await respondToTemplateEngineSearch({
     mainPrompt, latestUtterance: languageText, state: scopedState,
     searchDecision: scopedSearch, verifiedEvidence: scopedEvidence, scope: scopedScope,
+    contextualMemoryVerified: true,
     informationUnavailableResponse: 'Published information is unavailable.',
   }, {
     tenantBoundaryVerified: true,

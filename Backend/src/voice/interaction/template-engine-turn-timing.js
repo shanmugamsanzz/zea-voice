@@ -11,7 +11,6 @@ const operations = new Map([
   ['template_engine_post_search_decision', 'answer_generation'],
   ['template_engine_claim_validation', 'claim_review'],
   ['template_engine_contextual_subject_review', 'contextual_subject_review'],
-  ['template_engine_entity_coverage', 'entity_coverage_review'],
   ['template_engine_multilingual_entity_review', 'multilingual_entity_review'],
   ['template_engine_reference_review', 'reference_review'],
   ['template_engine_pending_request_review', 'pending_request_review'],
@@ -40,7 +39,7 @@ export function assertVerifiedFactualStageArchitecture({ architecture, stageTimi
     claimReview: timedOperationCalls(stageTimings, 'claim_review')
       + timedOperationCalls(stageTimings, 'validation'),
     semanticReviews: [
-      'contextual_subject_review', 'entity_coverage_review', 'multilingual_entity_review',
+      'contextual_subject_review', 'multilingual_entity_review',
       'reference_review', 'pending_request_review', 'request_meaning_review',
     ].reduce((total, operation) => total + timedOperationCalls(stageTimings, operation), 0),
   });
@@ -174,10 +173,6 @@ export function instrumentTemplateEngineTurn(dependencies) {
   };
   return {
     ...dependencies,
-    ...(dependencies.validateRequestedEntityCoverage ? {
-      validateRequestedEntityCoverage: reusableValidation(dependencies.validateRequestedEntityCoverage,
-        'entity_coverage_review', (result) => result?.resolved === true),
-    } : {}),
     loadPublishedContext: reusableOperation('publication_load', dependencies.loadPublishedContext,
       'publication_load', (result) => Boolean(result?.scope && result?.artifacts)),
     retrieveEvidence: reusableOperation('retrieval', dependencies.retrieveEvidence,

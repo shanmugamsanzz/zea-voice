@@ -153,6 +153,7 @@ const evidence = Object.freeze([Object.freeze({
   evidenceId: 'evidence-1', recordId: 'record-1', recordType: 'CATALOG_ITEM',
   tenantId, agentId, knowledgeBaseId, publicationRevision: 2,
   content: 'The selected option is available.', canonicalName: 'Selected Option',
+  publishedAttributePaths: ['details'],
   authoritativeData: { name: 'Selected Option' },
 })]);
 const decisions = [{

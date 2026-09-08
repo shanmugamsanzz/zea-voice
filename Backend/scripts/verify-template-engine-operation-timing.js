@@ -14,7 +14,6 @@ const measured = instrumentTemplateEngineTurn({
     return response;
   },
   validateGroundedClaims: async () => response,
-  validateRequestedEntityCoverage: async () => response,
   validateToolResultSpeechClaims: async () => response,
 });
 for (const [name, tag, operation] of [
@@ -40,8 +39,6 @@ for (const [name, tag, operation] of [
 expectedRequest = { abort: true };
 await assert.rejects(() => measured.invokeStructuredLlm(expectedRequest), (error) => error === failure);
 assert.equal(events.at(-1).outcome, 'error');
-await measured.validateRequestedEntityCoverage({});
-assert.equal(events.at(-1).operation, 'entity_coverage_review');
 await measured.validateToolResultSpeechClaims({});
 assert.equal(events.at(-1).operation, 'tool_result_validation');
 await measured.validateGroundedClaims({ speech: 'private caller data' });
@@ -68,7 +65,6 @@ const reuseDependencies = {
     if (input.cancelled) throw failure;
     return { supported: !input.rejected, nested: { unchanged: true } };
   },
-  validateRequestedEntityCoverage: async () => { checks += 1; return { resolved: true }; },
   validateToolResultSpeechClaims: async () => { checks += 1; return { supported: true }; },
   invokeStructuredLlm: async () => { authorizationCalls += 1; return response; },
 };
@@ -89,19 +85,17 @@ for (const changed of [
   { ...contract, evidence: [{ ...contract.evidence[0], content: 'changed' }] },
 ]) await reuse.validateGroundedClaims(changed);
 assert.equal(checks, 6);
-await reuse.validateRequestedEntityCoverage(contract);
 await reuse.validateToolResultSpeechClaims(contract);
-assert.equal(checks, 8, 'Independent validation purposes must not share approvals');
-await reuse.validateRequestedEntityCoverage(contract);
+assert.equal(checks, 7, 'Independent validation purposes must not share approvals');
 await reuse.validateToolResultSpeechClaims(contract);
-assert.equal(checks, 8);
+assert.equal(checks, 7);
 for (let i = 0; i < 2; i += 1) {
   await reuse.validateGroundedClaims({ ...contract, rejected: true });
   await assert.rejects(() => reuse.validateGroundedClaims({ cancelled: true }), (error) => error === failure);
 }
-assert.equal(checks, 12, 'Negative and cancelled checks must run afresh');
+assert.equal(checks, 11, 'Negative and cancelled checks must run afresh');
 await instrumentTemplateEngineTurn(reuseDependencies).validateGroundedClaims(contract);
-assert.equal(checks, 13, 'No reuse across turns');
+assert.equal(checks, 12, 'No reuse across turns');
 const publicationContract = { callId: 'call-one', scope: { tenantId: 'one',
   publications: [{ knowledgeBaseId: 'kb', publicationRevision: 1 }] } };
 const loaded = await reuse.loadPublishedContext(publicationContract);
@@ -110,33 +104,33 @@ const loadedAgain = await reuse.loadPublishedContext({ scope: {
   publications: [{ publicationRevision: 1, knowledgeBaseId: 'kb' }], tenantId: 'one',
 }, callId: 'call-one' });
 assert.equal(loadedAgain.scope.tenantId, 'one');
-assert.equal(checks, 14, 'Identical publication contract loads once per turn');
+assert.equal(checks, 13, 'Identical publication contract loads once per turn');
 await reuse.loadPublishedContext({ ...publicationContract, scope: { ...publicationContract.scope,
   publications: [{ knowledgeBaseId: 'kb', publicationRevision: 2 }] } });
-assert.equal(checks, 15, 'Publication revision changes cannot reuse a snapshot');
+assert.equal(checks, 14, 'Publication revision changes cannot reuse a snapshot');
 const retrievalContract = { callId: 'call-one', scope: publicationContract.scope,
   searchDecision: { search: { query: 'same request' } }, preloadedArtifacts: {} };
 await Promise.all([reuse.retrieveEvidence(retrievalContract), reuse.retrieveEvidence(retrievalContract)]);
 await reuse.retrieveEvidence({ preloadedArtifacts: {}, searchDecision: { search: { query: 'same request' } },
   scope: publicationContract.scope, callId: 'call-one' });
-assert.equal(checks, 16, 'Concurrent and completed identical retrievals coalesce per turn');
+assert.equal(checks, 15, 'Concurrent and completed identical retrievals coalesce per turn');
 await reuse.retrieveEvidence({ ...retrievalContract, scope: { ...publicationContract.scope,
   tenantId: 'two' } });
-assert.equal(checks, 17, 'Tenant changes cannot reuse retrieval');
+assert.equal(checks, 16, 'Tenant changes cannot reuse retrieval');
 const stableReviewer = () => null;
 await reuse.retrieveEvidence({ ...retrievalContract, reviewEntityCandidates: stableReviewer });
 await reuse.retrieveEvidence({ ...retrievalContract, reviewEntityCandidates: stableReviewer });
-assert.equal(checks, 18, 'An identical reviewer and retrieval contract can reuse safely');
+assert.equal(checks, 17, 'An identical reviewer and retrieval contract can reuse safely');
 await reuse.retrieveEvidence({ ...retrievalContract, reviewEntityCandidates: () => null });
 await reuse.retrieveEvidence({ ...retrievalContract, reviewEntityCandidates: () => null });
-assert.equal(checks, 20, 'Different reviewer callbacks cannot share retrieval results');
+assert.equal(checks, 19, 'Different reviewer callbacks cannot share retrieval results');
 await reuse.retrieveEvidence({ ...retrievalContract, latestUtterance: 'changed request' });
 await reuse.retrieveEvidence({ ...retrievalContract, state: { recentCompleteTurns: [{ role: 'user', content: 'new turn' }] } });
-assert.equal(checks, 22, 'Request and conversation changes cannot reuse retrieval');
+assert.equal(checks, 21, 'Request and conversation changes cannot reuse retrieval');
 const cancellation = new AbortController();
 await reuse.retrieveEvidence({ ...retrievalContract, signal: cancellation.signal });
 await reuse.retrieveEvidence({ ...retrievalContract, signal: cancellation.signal });
-assert.equal(checks, 24, 'Cancellation-bearing contracts must never reuse retrieval');
+assert.equal(checks, 23, 'Cancellation-bearing contracts must never reuse retrieval');
 const authorization = { responseFormat: { name: 'template_engine_orchestrator_decision' } };
 await reuse.invokeStructuredLlm(authorization);
 await reuse.invokeStructuredLlm(authorization);
