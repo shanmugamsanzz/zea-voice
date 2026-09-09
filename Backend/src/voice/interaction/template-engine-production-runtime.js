@@ -86,7 +86,21 @@ function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
-function deterministicWelcomeContinuation({
+const conversationalAcknowledgementTokens = new Set([
+  'ok', 'okay', 'yes', 'sure', 'continue', 'go', 'ahead', 'please', 'madam', 'sir',
+  'சரி', 'ஆம்', 'ஆமா', 'ஆமாம்', 'சொல்லுங்க', 'சொல்லு', 'ம்', 'ம்ம்', 'ஆ',
+  'seri', 'sari', 'aama', 'aamam', 'sollunga', 'sollu', 'madam', 'sir',
+]);
+
+function deterministicAcknowledgementOnly(value, configuredPhrases = []) {
+  if (acknowledgementOnly(value, configuredPhrases)) return true;
+  const tokens = cleanText(value, 300).toLocaleLowerCase()
+    .split(/[^\p{L}\p{M}\p{N}]+/gu).filter(Boolean);
+  return tokens.length > 0 && tokens.length <= 4
+    && tokens.every((token) => conversationalAcknowledgementTokens.has(token));
+}
+
+export function deterministicWelcomeContinuation({
   latestUtterance, welcomeContinuation, acknowledgementPhrases = [],
 } = {}) {
   const candidates = Array.isArray(welcomeContinuation?.candidates)
@@ -97,7 +111,7 @@ function deterministicWelcomeContinuation({
     cleanText(phrase, 100).toLocaleLowerCase()
       .split(/[^\p{L}\p{M}\p{N}]+/gu).filter(Boolean)
   )));
-  const acknowledgement = acknowledgementOnly(latestUtterance, acknowledgementPhrases)
+  const acknowledgement = deterministicAcknowledgementOnly(latestUtterance, acknowledgementPhrases)
     || (utteranceTokens.length > 0 && utteranceTokens.length <= 4
       && utteranceTokens.every((token) => configuredTokens.has(token)
         || ['yes', 'okay', 'ok', 'sure', 'madam', 'sir'].includes(token))
@@ -428,6 +442,45 @@ function callerVerifiedArguments(argumentsValue, utterance, recentTurns = [], ex
   }));
 }
 
+function resolvedSubjectState(retrieval = {}) {
+  const classification = retrieval.searchClassification ?? {};
+  const comparison = normalizedRecordIdSet(classification.comparisonRecordIds);
+  if (comparison.size > 1) return Object.freeze({
+    referencedRecordIds: Object.freeze([]),
+    comparisonRecordIds: Object.freeze([...comparison]),
+  });
+  const candidate = retrieval.entityResolution?.candidate;
+  const candidateId = cleanText(candidate?.recordId, 160);
+  const candidateType = cleanText(candidate?.recordType, 80).toUpperCase();
+  if (candidateId && ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(candidateType)) {
+    return Object.freeze({
+      referencedRecordIds: Object.freeze([candidateId]),
+      comparisonRecordIds: Object.freeze([]),
+    });
+  }
+  const requested = [...normalizedRecordIdSet(retrieval.requestedEntityRecordIds)];
+  return Object.freeze({
+    referencedRecordIds: Object.freeze(requested.length === 1 ? requested : []),
+    comparisonRecordIds: Object.freeze([]),
+  });
+}
+
+function applyResolvedSubjectState(state, subject) {
+  if ((subject?.comparisonRecordIds ?? []).length > 1) {
+    return applyMinimalTemplateEngineStateUpdate(state, {
+      set: { comparisonRecordIds: subject.comparisonRecordIds }, clear: [],
+    });
+  }
+  if (!(subject?.referencedRecordIds ?? []).length) return state;
+  return applyMinimalTemplateEngineStateUpdate(state, {
+    set: {
+      lastReferencedRecordIds: subject.referencedRecordIds,
+      comparisonRecordIds: [],
+    },
+    clear: [],
+  });
+}
+
 function deterministicWorkflowActivationDecision(match, workflows, tools) {
   if (!match?.recordId) return null;
   const workflow = workflows.find((candidate) => (
@@ -505,8 +558,7 @@ function phraseContained(utterance, phrases = []) {
 }
 
 function deterministicConversationControlDecision({
-  utterance, acknowledgementPhrases = [], explicitStopPhrases = [], state,
-  pendingQuestion = null,
+  utterance, explicitStopPhrases = [], state,
 } = {}) {
   const text = cleanText(utterance, 1_000);
   const normalized = scalarIdentity(text);
@@ -551,19 +603,29 @@ function deterministicConversationControlDecision({
     }),
     nextQuestion: null, stateUpdate: null,
   });
-  if (acknowledgementOnly(text, acknowledgementPhrases)) {
-    const question = cleanText(pendingQuestion?.question ?? pendingQuestion?.text
-      ?? pendingQuestion, 1_000);
-    return Object.freeze({
-      decision: question ? 'CLARIFY' : 'RESPONSE',
-      response: question ? '' : (tamil ? 'சரி, சொல்லுங்க.' : 'Okay, please go ahead.'),
-      clarification: question ? Object.freeze({
-        reason: 'acknowledgement_pending_question', question, candidates: Object.freeze([]),
-      }) : null,
-      search: null, tool: null, nextQuestion: null, stateUpdate: null,
-    });
-  }
   return null;
+}
+
+export function deterministicIdentityQuestionDecision({ utterance, runtimeProfile } = {}) {
+  const text = cleanText(utterance, 1_000);
+  const normalized = scalarIdentity(text);
+  const asksOrigin = /\b(?:where are you (?:calling|speaking) from|which (?:company|organisation|organization)|what (?:company|organisation|organization))\b/iu
+    .test(normalized)
+    || /(?:எங்கிருந்து\s+பேசு|எங்க\s+இருந்து\s+பேசு|எந்த\s+(?:ஹாஸ்பிடல்|மருத்துவமனை|கம்பெனி)|என்ன\s+(?:ஹாஸ்பிடல்|மருத்துவமனை|கம்பெனி))/u.test(normalized);
+  const asksIdentity = /\b(?:who are you|who is (?:calling|speaking)|what is your name)\b/iu.test(normalized)
+    || /(?:யார்\s+பேசு|நீங்க\s+யாரு|உங்க\s+பெயர்\s+என்ன)/u.test(normalized);
+  if (!asksOrigin && !asksIdentity) return null;
+  const agentName = cleanText(runtimeProfile?.agent?.name, 240);
+  const description = cleanText(runtimeProfile?.agent?.description, 500);
+  const identity = agentName || description;
+  if (!identity) return null;
+  const response = tamilSpeech(text)
+    ? asksOrigin ? `நான் ${identity} சார்பாக பேசுகிறேன்.` : `நான் ${identity}.`
+    : asksOrigin ? `I am calling on behalf of ${identity}.` : `I am ${identity}.`;
+  return Object.freeze({
+    decision: 'RESPONSE', response, clarification: null, search: null,
+    tool: null, nextQuestion: null, stateUpdate: null,
+  });
 }
 
 function regexEscape(value) {
@@ -667,7 +729,7 @@ function factualSideRequest(utterance) {
   const normalized = scalarIdentity(utterance);
   return /[?\uFF1F]/u.test(cleanText(utterance))
     || /\b(?:what|which|who|where|when|why|how|explain|tell)\b/iu.test(normalized)
-    || /(?:விலை|எவ்வளவு|விவரம்|என்னென்ன|எங்கே|எப்போது|பேக்கேஜ்|பேக்கேஜ்|டெஸ்ட்|வித்தியாசம்|ஒப்பிடு)/u.test(normalized);
+    || /(?:விலை|எவ்வளவு|விவரம்|என்னென்ன|எங்கே|எங்கிருந்து|யார்|எப்போது|பேக்கேஜ்|பேக்கேஜ்|டெஸ்ட்|வித்தியாசம்|ஒப்பிடு)/u.test(normalized);
 }
 
 function deterministicActiveWorkflowFallback(context, utterance) {
@@ -732,12 +794,14 @@ export function deterministicPendingWorkflowFieldDecision(context, utterance, op
 
 export function deterministicAcknowledgementDecision({
   utterance, acknowledgementPhrases = [], workflowContext, pendingQuestion,
+  deferWithoutPending = false,
 } = {}) {
   const confirmation = workflowContext?.awaitingConfirmation && phraseContained(utterance, [
     ...acknowledgementPhrases, 'yes', 'confirm', 'confirmed', 'proceed', 'go ahead',
     'ஆம்', 'ஆமாம்', 'சரி', 'உறுதி', 'புக் பண்ணுங்க',
   ]);
-  if (!confirmation && !acknowledgementOnly(utterance, acknowledgementPhrases)) return null;
+  if (!confirmation
+    && !deterministicAcknowledgementOnly(utterance, acknowledgementPhrases)) return null;
   if (workflowContext?.pendingFieldKey && !workflowContext.awaitingConfirmation
     && !cleanText(workflowContext.interruptedRequest) && workflowContext.toolName) {
     return Object.freeze({
@@ -759,7 +823,14 @@ export function deterministicAcknowledgementDecision({
   const question = cleanText(
     pendingQuestion?.question ?? pendingQuestion?.text ?? pendingQuestion, 1_000,
   );
-  if (!question) return null;
+  if (!question) {
+    if (deferWithoutPending) return null;
+    return Object.freeze({
+      decision: 'RESPONSE',
+      response: tamilSpeech(utterance) ? 'சரி, சொல்லுங்க.' : 'Okay, please go ahead.',
+      clarification: null, search: null, tool: null, nextQuestion: null, stateUpdate: null,
+    });
+  }
   return Object.freeze({
     decision: 'CLARIFY', response: '', search: null, tool: null,
     clarification: Object.freeze({
@@ -773,7 +844,7 @@ export function deterministicPendingClarificationContinuation({
   artifacts, scope, usageDirection = 'both', utterance, acknowledgementPhrases = [],
   pendingClarification, unansweredRequest = null,
 } = {}) {
-  if (!acknowledgementOnly(utterance, acknowledgementPhrases)) return null;
+  if (!deterministicAcknowledgementOnly(utterance, acknowledgementPhrases)) return null;
   const candidates = Array.isArray(pendingClarification?.candidates)
     ? pendingClarification.candidates.map((candidate) => cleanText(candidate, 300)).filter(Boolean)
     : [];
@@ -990,9 +1061,11 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     assignedTools: input.assignedTools, informationFields: input.informationFields,
     scope: publishedContext.scope, interruptedRequest: input.interruptedWorkflowRequest,
   });
+  const welcomeAcknowledgementPending = Boolean(common.welcomeContinuation)
+    || input.pendingQuestion?.key === 'configured_welcome_question'
+    || Number(input.turnEpoch) === 1;
   const deterministicPriorityControl = deterministicConversationControlDecision({
     utterance: input.latestUtterance,
-    acknowledgementPhrases: [],
     explicitStopPhrases: input.explicitStopPhrases,
     state,
   });
@@ -1017,18 +1090,18 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     || deterministicWorkflowCorrection || deterministicWorkflowReadback ? null
     : deterministicConversationControlDecision({
       utterance: input.latestUtterance,
-      acknowledgementPhrases: workflowRoutingContext || common.welcomeContinuation
-        ? [] : input.acknowledgementPhrases,
       explicitStopPhrases: input.explicitStopPhrases,
       state,
-      // Workflow acknowledgements are handled below so they can repeat a field
-      // or authorize only an explicitly pending confirmation.
-      pendingQuestion: workflowRoutingContext || common.welcomeContinuation ? null
-        : input.pendingQuestion ?? mostRecentAssistantQuestion(state.recentCompleteTurns),
     }));
-  const deterministicClarificationContinuation = deterministicWorkflowDecision
+  const deterministicIdentityQuestion = deterministicWorkflowDecision
     || deterministicWorkflowCorrection || deterministicWorkflowReadback
     || deterministicConversationControl ? null
+    : deterministicIdentityQuestionDecision({
+      utterance: input.latestUtterance, runtimeProfile: input.runtimeProfile,
+    });
+  const deterministicClarificationContinuation = deterministicWorkflowDecision
+    || deterministicWorkflowCorrection || deterministicWorkflowReadback
+    || deterministicConversationControl || deterministicIdentityQuestion ? null
     : deterministicPendingClarificationContinuation({
       artifacts: publishedContext.artifacts,
       scope: publishedContext.scope,
@@ -1040,7 +1113,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     });
   const deterministicAcknowledgement = deterministicWorkflowDecision
     || deterministicWorkflowCorrection || deterministicWorkflowReadback
-    || deterministicConversationControl
+    || deterministicConversationControl || deterministicIdentityQuestion
     || deterministicClarificationContinuation ? null
     : deterministicAcknowledgementDecision({
       utterance: input.latestUtterance,
@@ -1050,11 +1123,12 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       // question because it carries the configured next-step semantics.
       pendingQuestion: common.welcomeContinuation ? null
         : input.pendingQuestion ?? mostRecentAssistantQuestion(state.recentCompleteTurns),
+      deferWithoutPending: welcomeAcknowledgementPending,
     });
   const workflowFieldDecision = deterministicWorkflowDecision
     ?? deterministicWorkflowCorrection ?? deterministicAcknowledgement ?? null;
   const deterministicWelcomeMeaning = workflowFieldDecision
-    || deterministicClarificationContinuation ? null
+    || deterministicIdentityQuestion || deterministicClarificationContinuation ? null
     : deterministicWelcomeContinuation({
       latestUtterance: input.latestUtterance,
       welcomeContinuation: common.welcomeContinuation,
@@ -1070,7 +1144,8 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     }),
     tool: null, nextQuestion: null, stateUpdate: null,
   }) : null;
-  const deterministicWorkflowMatch = workflowFieldDecision || deterministicWelcomeDecision
+  const deterministicWorkflowMatch = workflowFieldDecision || deterministicIdentityQuestion
+    || deterministicWelcomeDecision
     || state.activeWorkflowId ? null
     : deterministicPublishedWorkflowMatch({
       artifacts: publishedContext.artifacts,
@@ -1085,7 +1160,8 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     : deterministicContextualWorkflowActivationDecision({
       utterance: input.latestUtterance, state, workflowSummaries,
     });
-  const deterministicPublishedDecision = workflowFieldDecision || deterministicWelcomeDecision
+  const deterministicPublishedDecision = workflowFieldDecision || deterministicIdentityQuestion
+    || deterministicWelcomeDecision
     || deterministicWorkflowActivation || deterministicContextualWorkflowActivation
     ? null
     : deterministicPublishedRequestDecision({
@@ -1094,7 +1170,8 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       usageDirection: input.usageDirection,
       latestUtterance: input.latestUtterance,
     });
-  const deterministicContextualDecision = workflowFieldDecision || deterministicWelcomeDecision
+  const deterministicContextualDecision = workflowFieldDecision || deterministicIdentityQuestion
+    || deterministicWelcomeDecision
     || deterministicPublishedDecision || state.activeWorkflowId ? null
     : deterministicContextualRequestDecision({
       artifacts: publishedContext.artifacts,
@@ -1108,6 +1185,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     : deterministicActiveWorkflowFallback(workflowRoutingContext, input.latestUtterance);
   const deterministicDecision = workflowFieldDecision ?? deterministicWorkflowReadback
     ?? deterministicConversationControl
+    ?? deterministicIdentityQuestion
     ?? deterministicClarificationContinuation
     ?? deterministicWelcomeDecision
     ?? deterministicWorkflowActivation ?? deterministicContextualWorkflowActivation
@@ -1121,7 +1199,8 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
         ? 'verified_workflow_correction_fast_path' : deterministicWorkflowReadback
           ? 'verified_workflow_readback_fast_path' : deterministicConversationControl
           ? 'verified_conversation_control_fast_path' : deterministicAcknowledgement
-        ? 'verified_acknowledgement_fast_path' : deterministicClarificationContinuation
+        ? 'verified_acknowledgement_fast_path' : deterministicIdentityQuestion
+          ? 'verified_identity_question_fast_path' : deterministicClarificationContinuation
           ? 'verified_clarification_continuation_fast_path' : deterministicWelcomeDecision
             ? 'verified_pending_question_fast_path' : deterministicPublishedDecision
               ? 'verified_published_request_fast_path'
@@ -1358,10 +1437,14 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   const architecture = enforceVerifiedFactualArchitecture({ deterministicAnswerPath, answered });
   const speech = composed.speech;
   if (!speech) throw new AppError(502, 'Template engine produced no caller speech', 'TEMPLATE_ENGINE_SILENT_TURN');
+  const answeredState = applyDecisionState(state, answered.decision, retrieval.evidence);
+  const finalState = answered.decision.decision === 'RESPONSE'
+    ? applyResolvedSubjectState(answeredState, resolvedSubjectState(retrieval))
+    : answeredState;
   return finalizeTurn({
     decision: composed.decision,
     speech,
-    state: applyDecisionState(state, answered.decision, retrieval.evidence),
+    state: finalState,
     evidence: retrieval.evidence,
     evidenceIds: Object.freeze(evidenceIds(answered.decision)),
     diagnostics: Object.freeze({

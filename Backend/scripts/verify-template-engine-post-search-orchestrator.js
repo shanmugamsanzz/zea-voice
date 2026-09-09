@@ -69,6 +69,7 @@ const verifiedEvidence = Object.freeze([
   const result = await respondToTemplateEngineSearch({
     mainPrompt, latestUtterance, state, scope, searchDecision, verifiedEvidence,
     language: 'en', maximumSpeechCharacters: 500,
+    informationUnavailableResponse: 'I do not have that published information yet.',
     requestedEntityRecordIds: ['record-1'], deterministicEntityCoverageVerified: true,
     deterministicResolutionVerified: true,
   }, {
@@ -96,6 +97,11 @@ const verifiedEvidence = Object.freeze([
     .split('<orchestrator_turn_input>\n')[1].split('\n</orchestrator_turn_input>')[0]);
   assert.equal(Object.hasOwn(fastInput, 'state'), false);
   assert.equal(Object.hasOwn(fastInput, 'conversationGuidance'), false);
+  assert.deepEqual(fastInput.conversationContext, state.recentCompleteTurns);
+  assert.deepEqual(fastInput.activeSubject.recordIds, ['record-1']);
+  assert.equal(fastInput.activeSubject.entities[0].canonicalName, 'First Service');
+  assert.equal(fastInput.safeUnavailableResponse,
+    'I do not have that published information yet.');
   assert.equal(fastInput.answerRequirements.originalUtterance, latestUtterance);
   assert.equal(fastInput.exactRequest, latestUtterance);
   assert.equal(fastInput.callerLanguage, 'en');
@@ -278,8 +284,10 @@ assert.equal(budgetCalls, 1, 'Oversized answers must not trigger a second model 
 assert.equal(budgetClaimChecks, 0,
   'Length repair and the revised answer must use deterministic validation only');
 assert.equal(budgetResult.decision.response,
-  'The selected service currently costs 3200 currency units.');
+  'The price is 3200 units.');
 assert.deepEqual(budgetResult.decision.evidenceIds, ['evidence-1']);
+assert.equal(budgetResult.diagnostics.budgetCompressionApplied, true,
+  'A supported complete sentence must be shortened in code before extractive recovery');
 
 let impossibleBudgetSemanticChecks = 0;
 await assert.rejects(() => respondToTemplateEngineSearch({
@@ -1049,6 +1057,36 @@ assert.equal(malformedSemanticChecks, 0,
 assert.equal(malformedRepair.decision.decision, 'RESPONSE');
 assert.deepEqual(malformedRepair.decision.evidenceIds, ['evidence-1']);
 
+{
+  let calls = 0;
+  const overviewEvidence = Object.freeze([Object.freeze({
+    ...verifiedEvidence[0], content: 'Published package choices are Alpha and Beta.',
+    publishedAttributePaths: Object.freeze(['catalog.items']),
+  })]);
+  const overviewSearch = Object.freeze({ ...searchDecision, search: Object.freeze({
+    query: 'available packages', requestedFact: 'overview',
+    contextualReference: null, preferredRecordIds: [],
+  }) });
+  const recovered = await respondToTemplateEngineSearch({
+    mainPrompt, latestUtterance: 'What packages are available?', state, scope,
+    searchDecision: overviewSearch, verifiedEvidence: overviewEvidence,
+    informationUnavailableResponse: 'Published information is unavailable.',
+  }, {
+    tenantBoundaryVerified: true,
+    invokeStructuredLlm: async () => {
+      calls += 1;
+      return { outputParsed: { decision: 'RESPONSE', response: 'Malformed uncited overview.',
+        clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null } };
+    },
+  });
+  assert.equal(calls, 1);
+  assert.equal(recovered.decision.response, overviewEvidence[0].content,
+    'Broad answerable requests must recover from verified evidence instead of static fallback');
+  assert.deepEqual(recovered.decision.evidenceIds, ['evidence-1']);
+  assert.equal(recovered.diagnostics.extractiveRecoveryApplied, true);
+  assert.equal(recovered.diagnostics.configuredFallbackApplied, false);
+}
+
 for (const [tenantId, languageText] of [
   ['tenant-a', 'விவரங்களை சொல்லுங்கள்'],
   ['tenant-a', 'details sollunga'],
@@ -1123,6 +1161,7 @@ await assert.rejects(respondToTemplateEngineSearch({
 assert.equal(rejectedAttempts, 1,
   'Validation rejection must not invoke a second model call');
 
+let emptyEvidenceTurnInput;
 const emptyEvidenceFallback = await respondToTemplateEngineSearch({
   mainPrompt, latestUtterance, state, searchDecision, verifiedEvidence: [], scope,
   informationUnavailableResponse: 'That information is not available right now.',
@@ -1134,13 +1173,40 @@ const emptyEvidenceFallback = await respondToTemplateEngineSearch({
     requestedFactAddressed: decision === 'NO_MATCH',
     reason: decision === 'NO_MATCH' ? null : 'unsupported_claim',
   }),
-  invokeStructuredLlm: async () => ({ outputParsed: {
-    decision: 'RESPONSE', response: 'An unsupported answer.',
+  invokeStructuredLlm: async ({ messages }) => {
+    emptyEvidenceTurnInput = JSON.parse(messages[0].content
+      .split('<orchestrator_turn_input>\n')[1].split('\n</orchestrator_turn_input>')[0]);
+    return { outputParsed: {
+    decision: 'NO_MATCH', response: 'That information is not available right now.',
     clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
-  } }),
+  } };
+  },
 });
 assert.equal(emptyEvidenceFallback.decision.decision, 'NO_MATCH');
 assert.equal(emptyEvidenceFallback.decision.response,
   'That information is not available right now.');
+assert.equal(emptyEvidenceTurnInput.safeUnavailableResponse,
+  'That information is not available right now.');
+assert.deepEqual(emptyEvidenceTurnInput.conversationContext, state.recentCompleteTurns);
+assert.equal(emptyEvidenceTurnInput.activeSubject, null);
+assert.equal(emptyEvidenceFallback.diagnostics.configuredFallbackApplied, false,
+  'The one context-aware LLM call must own a valid unavailable-information response');
+assert.equal(emptyEvidenceFallback.diagnostics.providerFailureRecoveryApplied, false);
+
+let malformedProviderCalls = 0;
+const malformedProviderRecovery = await respondToTemplateEngineSearch({
+  mainPrompt, latestUtterance, state, searchDecision, verifiedEvidence: [], scope,
+  informationUnavailableResponse: 'That information is not available right now.',
+}, {
+  tenantBoundaryVerified: true,
+  invokeStructuredLlm: async () => {
+    malformedProviderCalls += 1;
+    return { outputParsed: 'invalid-provider-payload' };
+  },
+});
+assert.equal(malformedProviderCalls, 1);
+assert.equal(malformedProviderRecovery.decision.decision, 'NO_MATCH');
+assert.equal(malformedProviderRecovery.diagnostics.providerFailureRecoveryApplied, true,
+  'Static recovery is reserved for a malformed provider response');
 
 console.log('Template-engine post-search Orchestrator verification passed.');

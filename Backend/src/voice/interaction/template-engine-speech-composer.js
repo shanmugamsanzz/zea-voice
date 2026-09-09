@@ -45,6 +45,24 @@ function withoutNextQuestion(decision) {
   return Object.freeze({ ...decision, nextQuestion: null });
 }
 
+export function shortenSupportedTemplateEngineDecision(decision, maximumSpeechCharacters) {
+  const maximum = Number(maximumSpeechCharacters);
+  if (decision?.decision !== 'RESPONSE' || decision.evidenceIds?.length !== 1
+    || !Number.isFinite(maximum) || maximum <= 0) {
+    return null;
+  }
+  const response = cleanText(decision.response);
+  if (!response) return null;
+  if (response.length <= maximum) return withoutNextQuestion(decision);
+  const sentences = response.match(/[^.!?\u0964\u061f\u3002]+[.!?\u0964\u061f\u3002]?/gu)
+    ?.map((sentence) => cleanText(sentence)).filter(Boolean) ?? [];
+  // Prefer the first complete sentence. It is the model's direct answer and
+  // avoids retaining optional trailing explanation merely because it fits.
+  const shortened = sentences[0]?.length <= maximum ? sentences[0] : '';
+  if (!shortened || shortened === response) return null;
+  return Object.freeze({ ...decision, response: shortened, nextQuestion: null });
+}
+
 export function validateAndComposeTemplateEngineSpeech({
   decision, recentCompleteTurns = [], conversationGuidance = null,
   suppressFollowUp = false, claimsValidated = true,

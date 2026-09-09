@@ -17,6 +17,7 @@ import { validateTemplateEngineOutput } from './template-engine-output-validator
 import {
   sanitizeConversationGuidance,
 } from './template-engine-conversation-guidance.js';
+import { shortenSupportedTemplateEngineDecision } from './template-engine-speech-composer.js';
 
 const maximumRecentPairs = 5;
 
@@ -261,6 +262,8 @@ function candidateIdentity(value) {
 function evidenceProvidesRequestedFact(evidence, requestedFact) {
   const normalizedFact = candidateIdentity(requestedFact);
   if (!normalizedFact) return false;
+  if (['details', 'detail', 'overview', 'general knowledge', 'explanation']
+    .includes(normalizedFact)) return evidence.length > 0;
   const wanted = new Set(normalizedFact.split(/\s+/u).filter(Boolean));
   return evidence.some((source) => {
     const searchable = candidateIdentity([
@@ -280,6 +283,8 @@ function evidenceProvidesRequestedFact(evidence, requestedFact) {
 function evidenceSupportingRequestedFact(evidence, requestedFact) {
   const normalizedFact = candidateIdentity(requestedFact);
   if (!normalizedFact) return Object.freeze([]);
+  if (['details', 'detail', 'overview', 'general knowledge', 'explanation']
+    .includes(normalizedFact)) return Object.freeze([...evidence]);
   const wanted = new Set(normalizedFact.split(/\s+/u).filter(Boolean));
   return Object.freeze(evidence.filter((source) => {
     const searchable = candidateIdentity([
@@ -579,6 +584,11 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     language: input.language,
     requestedEntityRecordIds: requiredEntityRecordIds,
     maximumSpeechCharacters: input.maximumSpeechCharacters,
+    recentCompleteTurns: base.state.recentCompleteTurns,
+    activeSubjectRecordIds: cleanText(search.value.search.contextualReference, 500)
+      ? (requiredEntityRecordIds.length ? requiredEntityRecordIds
+        : search.value.search.preferredRecordIds)
+      : requiredEntityRecordIds,
   });
   const verifiedAnswerFastPath = input.deterministicResolutionVerified === true
     && input.deterministicEntityCoverageVerified === true
@@ -588,6 +598,9 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     callerLanguage: cleanText(input.language, 80) || null,
     speechBudget: Object.freeze({ maximumCharacters: input.maximumSpeechCharacters }),
     answerRequirements: answerContext.answerRequirements,
+    conversationContext: answerContext.conversationContext,
+    activeSubject: answerContext.activeSubject,
+    safeUnavailableResponse: cleanText(input.informationUnavailableResponse, 4_000) || null,
     requestMeaning: input.requestMeaning ?? null,
     searchInterpretation: search.value.search,
     requestedEntityRecordIds: requiredEntityRecordIds,
@@ -601,7 +614,6 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     verifiedEvidence: answerContext.evidence,
     ...(verifiedAnswerFastPath ? {} : {
       latestUtterance: base.latestUtterance,
-      state: base.state,
       ambiguity: dependencies.ambiguity ?? null,
       conversationGuidance: base.conversationGuidance,
     }),
@@ -612,6 +624,8 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     firstPassAnswerInstruction,
     'Answer the current requestedFact directly from the supplied evidence. Preserve every requested comparison operand and cite each supporting record only in evidenceIds.',
     'Missing evidence never proves a negative claim. Answer supported parts and identify only the specific unpublished detail.',
+    'Use conversationContext only to interpret conversational meaning and references. It is not factual evidence. activeSubject contains verified published identities for the current contextual request; factual claims must still come only from verifiedEvidence.',
+    'When verifiedEvidence cannot support the requested information, return NO_MATCH with one natural, concise response in callerLanguage. Use safeUnavailableResponse when supplied, and never invent availability, policy, price, capability or contact details.',
   ];
   const detailedGroundingInstructions = [
     'For the fastest safe delivery, retain the published wording for factual names, attributes and values when it is natural in the caller language. Do not add synonymous factual claims that are absent from the evidence.',
@@ -785,6 +799,19 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       budgetCompressionApplied = true;
     }
   }
+  if (!outputValidation.valid && outputValidation.reason === 'speech_budget_exceeded') {
+    const shortenedDecision = shortenSupportedTemplateEngineDecision(
+      groundedDecision, input.maximumSpeechCharacters,
+    );
+    if (shortenedDecision) {
+      const shortenedPreflight = deterministicPreflight(shortenedDecision, { retryCount: 1 });
+      if (shortenedPreflight.validation.valid) {
+        groundedDecision = shortenedDecision;
+        outputValidation = shortenedPreflight.validation;
+        budgetCompressionApplied = true;
+      }
+    }
+  }
   if (!outputValidation.valid) {
     const recoveryReason = outputValidation.reason;
     const unavailableResponse = cleanText(input.informationUnavailableResponse, 4_000);
@@ -860,6 +887,7 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     deterministicRecoveryApplied: extractiveRecoveryApplied || configuredFallbackApplied,
     extractiveRecoveryApplied,
     configuredFallbackApplied,
+    providerFailureRecoveryApplied: configuredFallbackApplied,
     budgetCompressionApplied,
     initialNumericValidationDetails,
     verifiedAnswerFastPath,

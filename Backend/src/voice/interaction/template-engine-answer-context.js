@@ -1,11 +1,56 @@
 import { normalizedSpeechBudget } from './template-engine-speech-budget.js';
 
+function cleanText(value, maximum = 1_000) {
+  return String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
+    .replace(/\s+/gu, ' ').trim().slice(0, maximum);
+}
+
+function boundedRelevantConversation(turns = [], currentUtterance = '') {
+  const current = cleanText(currentUtterance, 1_000).toLocaleLowerCase();
+  const normalized = (Array.isArray(turns) ? turns : []).flatMap((turn) => {
+    const role = turn?.role === 'assistant' ? 'assistant'
+      : turn?.role === 'user' ? 'user' : null;
+    const content = cleanText(turn?.content ?? turn?.text, 600);
+    return role && content ? [{ role, content }] : [];
+  });
+  if (normalized.at(-1)?.role === 'user'
+    && normalized.at(-1).content.toLocaleLowerCase() === current) normalized.pop();
+  const selected = [];
+  let characters = 0;
+  for (let index = normalized.length - 1; index >= 0 && selected.length < 6; index -= 1) {
+    const turn = normalized[index];
+    if (characters + turn.content.length > 2_400) break;
+    selected.unshift(Object.freeze(turn));
+    characters += turn.content.length;
+  }
+  return Object.freeze(selected);
+}
+
+function verifiedActiveSubject(recordIds = [], evidence = []) {
+  const requested = new Set((Array.isArray(recordIds) ? recordIds : [])
+    .map((value) => cleanText(value, 160).toLocaleLowerCase()).filter(Boolean));
+  if (!requested.size) return null;
+  const entities = evidence.filter((entry) => requested.has(
+    cleanText(entry?.recordId, 160).toLocaleLowerCase(),
+  )).map((entry) => Object.freeze({
+    recordId: entry.recordId,
+    recordType: entry.recordType,
+    canonicalName: entry.canonicalName ?? null,
+    evidenceId: entry.evidenceId,
+  }));
+  if (!entities.length) return null;
+  return Object.freeze({
+    recordIds: Object.freeze(entities.map((entry) => entry.recordId)),
+    entities: Object.freeze(entities),
+  });
+}
+
 // Input has already passed scope verification. Keep every fact and operand;
 // omit repeated storage/scope metadata only from the generation prompt. The
 // original records remain available to coverage and grounding validators.
 export function createTemplateEngineAnswerContext({
   evidence, latestUtterance, requestedFact, language, requestedEntityRecordIds = [],
-  maximumSpeechCharacters,
+  maximumSpeechCharacters, recentCompleteTurns = [], activeSubjectRecordIds = [],
 }) {
   return {
     answerRequirements: {
@@ -17,6 +62,8 @@ export function createTemplateEngineAnswerContext({
       budgetIncludes: ['response', 'nextQuestion', 'spaces', 'punctuation'],
       allowedEvidenceIds: evidence.map((entry) => entry.evidenceId),
     },
+    conversationContext: boundedRelevantConversation(recentCompleteTurns, latestUtterance),
+    activeSubject: verifiedActiveSubject(activeSubjectRecordIds, evidence),
     evidence: evidence.map((entry) => ({
       evidenceId: entry.evidenceId,
       recordId: entry.recordId,

@@ -2,9 +2,15 @@ import assert from 'node:assert/strict';
 import {
   assertSingleLlmTurnArchitecture,
   createSingleLlmTurnInvoker,
+  deterministicAcknowledgementDecision,
+  deterministicIdentityQuestionDecision,
+  deterministicPendingWorkflowFieldDecision,
+  deterministicWelcomeContinuation,
   enforceVerifiedFactualArchitecture,
+  runTemplateEngineProductionTurn,
 } from '../src/voice/interaction/template-engine-production-runtime.js';
 import { assertVerifiedFactualStageArchitecture } from '../src/voice/interaction/template-engine-turn-timing.js';
+import { welcomeContinuationContext } from '../src/voice/interaction/template-engine-conversation-guidance.js';
 
 let providerCalls = 0;
 const guarded = createSingleLlmTurnInvoker(async () => {
@@ -60,6 +66,71 @@ const measured = assertVerifiedFactualStageArchitecture({
 });
 assert.equal(measured.calls.answerGeneration, 1);
 assert.equal(measured.calls.otherLlm, 0);
+
+const acknowledgement = deterministicAcknowledgementDecision({
+  utterance: 'சொல்லுங்க Madam.', acknowledgementPhrases: [],
+});
+assert.equal(acknowledgement.decision, 'RESPONSE');
+assert.match(acknowledgement.response, /சொல்லுங்க/u);
+
+const identity = deterministicIdentityQuestionDecision({
+  utterance: 'எங்கிருந்து பேசுறீங்க?',
+  runtimeProfile: { agent: { name: 'Configured Care Team' } },
+});
+assert.equal(identity.decision, 'RESPONSE');
+assert.match(identity.response, /Configured Care Team/u);
+assert.equal(deterministicPendingWorkflowFieldDecision({
+  pendingFieldKey: 'patient_name', awaitingConfirmation: false,
+  interruptedRequest: null, toolName: 'create_booking', collectedFields: {},
+  fields: [{ key: 'patient_name', type: 'string', question: 'What is the patient name?' }],
+}, 'எங்கிருந்து பேசுறீங்க?', { excludedPhrases: [] }), null,
+'An identity question must not be captured as a pending text field');
+
+const scope = {
+  tenantId: 'tenant-a', agentId: 'agent-a',
+  publications: [{ knowledgeBaseId: 'kb-a', publicationRevision: 4 }],
+};
+const overviewGuidance = {
+  recordId: 'welcome-overview', recordType: 'CONVERSATION_NODE',
+  tenantId: scope.tenantId, agentId: scope.agentId,
+  knowledgeBaseId: 'kb-a', publicationRevision: 4, published: true,
+  isEntry: true, nodeKey: 'package_overview', intentClass: 'overview',
+  purpose: 'Present the published options overview.',
+  content: 'Published overview', catalogReferences: ['category: published-options'],
+  examples: [], applicableRoutes: [], configuredStages: [],
+};
+const continuationContext = welcomeContinuationContext({
+  pendingQuestion: null, latestUtterance: 'சொல்லுங்க Madam.',
+  publishedConversationGuidance: [overviewGuidance], scope,
+  recentCompleteTurns: [{ role: 'assistant', content: 'Configured welcome.' }],
+});
+assert.equal(continuationContext.candidates.length, 1);
+assert.equal(deterministicWelcomeContinuation({
+  latestUtterance: 'சொல்லுங்க Madam.', welcomeContinuation: continuationContext,
+  acknowledgementPhrases: [],
+})?.kind, 'published_welcome_continuation');
+
+let identityRetrievals = 0;
+let identityLlmCalls = 0;
+const identityTurn = await runTemplateEngineProductionTurn({
+  auth: { tenantId: scope.tenantId }, scope, callId: 'identity-turn',
+  usageDirection: 'inbound', language: 'ta', mainPrompt: 'Configured prompt.',
+  latestUtterance: 'எங்கிருந்து பேசுறீங்க?', conversationHistory: [],
+  state: {}, assignedTools: [], informationFields: [],
+  runtimeProfile: { agent: { name: 'Configured Care Team' } },
+}, {
+  invokeStructuredLlm: async () => { identityLlmCalls += 1; throw new Error('unexpected LLM'); },
+  loadPublishedContext: async () => ({
+    scope, artifacts: { bundles: [] }, publicationIndex: null,
+    publishedWorkflows: [], publishedConversationGuidance: [],
+  }),
+  retrieveEvidence: async () => { identityRetrievals += 1; throw new Error('unexpected retrieval'); },
+  persistWorkflowState: async () => {}, executeAuthorizedTool: async () => {},
+});
+assert.equal(identityTurn.decision.decision, 'RESPONSE');
+assert.equal(identityTurn.llmInvocationCount, 0);
+assert.equal(identityRetrievals, 0);
+assert.equal(identityLlmCalls, 0);
 
 console.log(JSON.stringify({
   suite: 'template-engine-production-runtime', passed: true,

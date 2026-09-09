@@ -5,16 +5,30 @@ const maximumGuidanceCandidates = 200;
 export function welcomeContinuationContext({ pendingQuestion, latestUtterance,
   publishedConversationGuidance = [], scope = {}, recentCompleteTurns = [],
   activeWorkflowId = null, pendingClarification = null } = {}) {
-  if (pendingQuestion?.key !== 'configured_welcome_question'
-    || !cleanText(pendingQuestion.text) || activeWorkflowId || pendingClarification
-    || recentCompleteTurns.some((turn) => turn.role === 'user')) return null;
-  const candidates = publishedConversationGuidance.filter((record) => scoped(record, scope))
+  const configuredQuestion = pendingQuestion?.key === 'configured_welcome_question'
+    && cleanText(pendingQuestion.text);
+  const firstCallerContinuation = !pendingQuestion
+    && !recentCompleteTurns.some((turn) => turn.role === 'user');
+  if ((!configuredQuestion && !firstCallerContinuation)
+    || activeWorkflowId || pendingClarification) return null;
+  const available = publishedConversationGuidance.filter((record) => scoped(record, scope))
     .slice(0, maximumGuidanceCandidates).map((record) => ({
       ...sanitizeConversationGuidance(record),
       situation: record.situation, examples: record.examples,
     }));
+  // A welcome without a literal question still has a conversational next
+  // step. Only expose a unique published entry/overview node so a short
+  // caller continuation cannot accidentally select an arbitrary KB route.
+  const entry = available.filter((candidate) => candidate.isEntry === true
+    && overviewGuidance(candidate));
+  const overview = available.filter(overviewGuidance);
+  const candidates = configuredQuestion ? available
+    : entry.length === 1 ? entry
+      : overview.length === 1 ? overview : [];
   if (!candidates.length) return null;
-  return { pendingQuestion: { key: pendingQuestion.key, text: cleanText(pendingQuestion.text, 500) },
+  return { pendingQuestion: configuredQuestion
+    ? { key: pendingQuestion.key, text: cleanText(pendingQuestion.text, 500) }
+    : { key: 'configured_welcome_continuation', text: null },
     callerReply: cleanText(latestUtterance, 2_000), candidates };
 }
 
@@ -451,7 +465,10 @@ export function sanitizeConversationGuidance(value) {
     configuredStages: Object.freeze(textList(value.configuredStages, 20)),
     intentClass: cleanText(value.intentClass, 160) || null,
     nodeKey: cleanText(value.nodeKey, 160) || null,
+    nodeType: cleanText(value.nodeType, 80) || null,
+    isEntry: value.isEntry === true,
     flowKey: cleanText(value.flowKey, 160) || null,
+    context: cleanText(value.context, 300) || null,
     conversationStage: cleanText(value.conversationStage, 160) || null,
   });
 }
