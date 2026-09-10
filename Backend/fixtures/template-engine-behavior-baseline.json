@@ -60,6 +60,15 @@
       "spokenAnswer": "Master, Diabetic, Onco Care, Organ-Specific, Kids packages இருக்கு."
     },
     {
+      "id": "direct-silver",
+      "route": { "initial": "SEARCH", "final": "RESPONSE" },
+      "selectedEntityIds": ["silver"],
+      "evidenceIds": ["silver"],
+      "responseMeaning": "direct_request",
+      "toolState": { "workflowStatus": null, "toolExecuted": false },
+      "spokenAnswer": "Silver package-ல் CBC மற்றும் ECG இருக்கு."
+    },
+    {
       "id": "onco-correction",
       "route": { "initial": "SEARCH", "final": "RESPONSE" },
       "selectedEntityIds": ["onco"],
@@ -70,6 +79,15 @@
     },
     {
       "id": "onco-details",
+      "route": { "initial": "SEARCH", "final": "RESPONSE" },
+      "selectedEntityIds": ["onco"],
+      "evidenceIds": ["onco"],
+      "responseMeaning": "direct_request",
+      "toolState": { "workflowStatus": null, "toolExecuted": false },
+      "spokenAnswer": "Onco Care Premium-ல் CBC, Amylase, Lipase, CEA, CT Scan Screening of Chest and Whole Abdomen இருக்கு. Add-on options வேறு; அவற்றை Premium-உடன் ஒன்றாகக் கருதக்கூடாது."
+    },
+    {
+      "id": "onco-stt-variant",
       "route": { "initial": "SEARCH", "final": "RESPONSE" },
       "selectedEntityIds": ["onco"],
       "evidenceIds": ["onco"],

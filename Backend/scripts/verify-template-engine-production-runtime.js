@@ -110,13 +110,55 @@ assert.equal(deterministicWelcomeContinuation({
   acknowledgementPhrases: [],
 })?.kind, 'published_welcome_continuation');
 
+const seededWelcomeWithoutText = welcomeContinuationContext({
+  pendingQuestion: { key: 'configured_welcome_question', text: null },
+  latestUtterance: 'Yes Madam', publishedConversationGuidance: [overviewGuidance], scope,
+  recentCompleteTurns: [
+    { role: 'assistant', content: 'Configured welcome.' },
+    { role: 'user', content: 'Yes Madam' },
+  ],
+});
+assert.equal(seededWelcomeWithoutText.candidates.length, 1,
+  'A seeded welcome key must remain actionable when the welcome has no literal question');
+assert.equal(deterministicWelcomeContinuation({
+  latestUtterance: 'Yes Madam', welcomeContinuation: seededWelcomeWithoutText,
+  acknowledgementPhrases: [],
+})?.kind, 'published_welcome_continuation');
+
+const currentTurnInHistory = welcomeContinuationContext({
+  pendingQuestion: null, latestUtterance: 'Yes Madam',
+  publishedConversationGuidance: [overviewGuidance], scope,
+  recentCompleteTurns: [
+    { role: 'assistant', content: 'Configured welcome.' },
+    { role: 'user', content: 'Yes Madam' },
+  ],
+});
+assert.equal(currentTurnInHistory.candidates.length, 1,
+  'The current caller turn in history must not hide first-turn welcome context');
+
+const actualTamilIdentity = deterministicIdentityQuestionDecision({
+  utterance: 'எங்கிருந்து பேசுறீங்க?',
+  runtimeProfile: { agent: { name: 'Configured Care Team' } },
+});
+assert.equal(actualTamilIdentity.decision, 'RESPONSE');
+assert.equal(actualTamilIdentity.response, 'நான் Configured Care Team சார்பாக பேசுகிறேன்.');
+assert.equal(deterministicPendingWorkflowFieldDecision({
+  pendingFieldKey: 'patient_name', awaitingConfirmation: false,
+  interruptedRequest: null, toolName: 'create_booking', collectedFields: {},
+  fields: [{ key: 'patient_name', type: 'string', question: 'What is the patient name?' }],
+}, 'எங்கிருந்து பேசுறீங்க?', { excludedPhrases: [] }), null,
+'An actual Tamil identity question must not be captured as a booking text field');
+
 let identityRetrievals = 0;
 let identityLlmCalls = 0;
 const identityTurn = await runTemplateEngineProductionTurn({
   auth: { tenantId: scope.tenantId }, scope, callId: 'identity-turn',
   usageDirection: 'inbound', language: 'ta', mainPrompt: 'Configured prompt.',
   latestUtterance: 'எங்கிருந்து பேசுறீங்க?', conversationHistory: [],
-  state: {}, assignedTools: [], informationFields: [],
+  state: { lastReferencedRecordIds: ['record-1'], pendingClarification: {
+    reason: 'published_entity_confirmation', question: 'Did you mean the selected item?',
+    candidates: ['record-1'],
+  } }, assignedTools: [], informationFields: [],
   runtimeProfile: { agent: { name: 'Configured Care Team' } },
 }, {
   invokeStructuredLlm: async () => { identityLlmCalls += 1; throw new Error('unexpected LLM'); },
@@ -131,6 +173,9 @@ assert.equal(identityTurn.decision.decision, 'RESPONSE');
 assert.equal(identityTurn.llmInvocationCount, 0);
 assert.equal(identityRetrievals, 0);
 assert.equal(identityLlmCalls, 0);
+assert.deepEqual(identityTurn.state.lastReferencedRecordIds, ['record-1']);
+assert.equal(identityTurn.state.pendingClarification?.reason, 'published_entity_confirmation',
+  'A side identity question must preserve the pending factual clarification');
 
 console.log(JSON.stringify({
   suite: 'template-engine-production-runtime', passed: true,

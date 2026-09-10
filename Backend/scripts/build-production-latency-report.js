@@ -70,6 +70,7 @@ const incompleteTelemetryTurns = completedTurns.filter((turn) => (
   || !Number.isFinite(Number(turn.evidenceCount))
   || typeof turn.configuredFallbackApplied !== 'boolean'
   || typeof turn.entityCoverageComplete !== 'boolean'
+  || !Number.isFinite(Number(turn.llmInvocationCount))
 ));
 const recoveryTurns = completedTurns.filter((turn) => Boolean(
   turn.recoveryKind || turn.operationalFailure || turn.validationFailure || turn.unexpectedFailure,
@@ -91,6 +92,16 @@ const incorrectEntityResponses = completedTurns.filter((turn) => (
   && String(turn.finalDecision ?? turn.decision ?? '').toUpperCase() === 'RESPONSE'
   && turn.entityCoverageComplete === false
 ));
+const multipleLlmInvocationTurns = completedTurns.filter((turn) => (
+  Number(turn.llmInvocationCount) > 1
+));
+const ordinaryStaticFallbackTurns = completedTurns.filter((turn) => (
+  turn.configuredFallbackApplied === true
+  && !turn.recoveryKind
+  && !turn.operationalFailure
+  && !turn.validationFailure
+  && !turn.unexpectedFailure
+));
 const unsupportedFactualClaimTurns = completedTurns.filter((turn) => (
   String(turn.finalDecision ?? turn.decision ?? '').toUpperCase() === 'RESPONSE'
   && !['valid', 'deterministically_grounded'].includes(
@@ -104,6 +115,8 @@ const correctnessPassed = completedTurns.length > 0
   && bookingFieldSearchTurns.length === 0
   && ungroundedSearchResponses.length === 0
   && incorrectEntityResponses.length === 0
+  && multipleLlmInvocationTurns.length === 0
+  && ordinaryStaticFallbackTurns.length === 0
   && unsupportedFactualClaimTurns.length === 0;
 const report = {
   generatedAt: new Date().toISOString(),
@@ -137,6 +150,8 @@ const report = {
     bookingFieldKnowledgeSearches: bookingFieldSearchTurns.length,
     ungroundedSearchResponses: ungroundedSearchResponses.length,
     incorrectEntityResponses: incorrectEntityResponses.length,
+    multipleLlmInvocationTurns: multipleLlmInvocationTurns.length,
+    ordinaryStaticFallbackTurns: ordinaryStaticFallbackTurns.length,
     unsupportedFactualClaims: unsupportedFactualClaimTurns.length,
     passed: correctnessPassed,
     reason: !completedTurns.length ? 'no_completed_live_turns'
@@ -146,8 +161,10 @@ const report = {
           : bookingFieldSearchTurns.length ? 'booking_field_knowledge_search_detected'
             : ungroundedSearchResponses.length ? 'ungrounded_search_response_detected'
               : incorrectEntityResponses.length ? 'incorrect_entity_response_detected'
-                : unsupportedFactualClaimTurns.length
-                  ? 'unsupported_factual_claim_detected' : null,
+                : multipleLlmInvocationTurns.length ? 'multiple_llm_invocations_detected'
+                  : ordinaryStaticFallbackTurns.length ? 'ordinary_static_fallback_detected'
+                    : unsupportedFactualClaimTurns.length
+                      ? 'unsupported_factual_claim_detected' : null,
   },
 };
 report.releaseGate = {

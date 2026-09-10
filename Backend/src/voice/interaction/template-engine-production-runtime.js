@@ -89,6 +89,7 @@ function object(value) {
 const conversationalAcknowledgementTokens = new Set([
   'ok', 'okay', 'yes', 'sure', 'continue', 'go', 'ahead', 'please', 'madam', 'sir',
   'சரி', 'ஆம்', 'ஆமா', 'ஆமாம்', 'சொல்லுங்க', 'சொல்லு', 'ம்', 'ம்ம்', 'ஆ',
+  'சரி', 'ஆம்', 'ஆமா', 'ஆமாம்', 'சொல்லுங்க', 'சொல்லு', 'ம்', 'ம்ம்', 'ஆ',
   'seri', 'sari', 'aama', 'aamam', 'sollunga', 'sollu', 'madam', 'sir',
 ]);
 
@@ -227,9 +228,26 @@ export function publishedResolutionAmbiguity(
   const hydratedIdentities = new Set((Array.isArray(evidence) ? evidence : [])
     .filter((record) => record.verified === true)
     .map(recordIdentity).filter(Boolean));
+  const hydratedPublicationRecords = (Array.isArray(evidence) ? evidence : [])
+    .filter((record) => record.verified === true);
+  const candidateHydrated = (candidate) => {
+    const identity = recordIdentity(candidate);
+    if (identity && hydratedIdentities.has(identity)) return true;
+    const candidateIds = new Set((candidate?.evidenceRecordIds ?? [])
+      .map((id) => cleanText(id, 160).toLocaleLowerCase()).filter(Boolean));
+    if (!candidateIds.size) return false;
+    return hydratedPublicationRecords.some((record) => (
+      candidateIds.has(cleanText(record.recordId, 160).toLocaleLowerCase())
+      && cleanText(record.tenantId, 160).toLocaleLowerCase()
+        === cleanText(candidate.tenantId, 160).toLocaleLowerCase()
+      && cleanText(record.knowledgeBaseId, 160).toLocaleLowerCase()
+        === cleanText(candidate.knowledgeBaseId, 160).toLocaleLowerCase()
+      && Number(record.publicationRevision) === Number(candidate.publicationRevision)
+    ));
+  };
   const hydratedCandidates = [...new Map(possible.map((candidate) => [
     recordIdentity(candidate), candidate,
-  ]).filter(([identity]) => identity && hydratedIdentities.has(identity))).values()];
+  ]).filter(([identity, candidate]) => identity && candidateHydrated(candidate))).values()];
   if (hydratedCandidates.length === 1
     && resolution?.requiresCandidateConfirmation !== true
     && resolution?.ambiguity?.detected !== true) {
@@ -368,7 +386,9 @@ function composeDeterministicSpeech({
   return composed;
 }
 
-function applyDecisionState(state, decision, evidence = []) {
+function applyDecisionState(state, decision, evidence = [], {
+  preservePendingClarification = false,
+} = {}) {
   let next = state;
   if (decision?.stateUpdate) next = applyMinimalTemplateEngineStateUpdate(next, decision.stateUpdate);
   const citedEvidenceIds = evidenceIds(decision);
@@ -385,7 +405,7 @@ function applyDecisionState(state, decision, evidence = []) {
     next = applyMinimalTemplateEngineStateUpdate(next, {
       set: { pendingClarification: decision.clarification }, clear: [],
     });
-  } else if (next.pendingClarification) {
+  } else if (next.pendingClarification && !preservePendingClarification) {
     next = applyMinimalTemplateEngineStateUpdate(next, {
       set: {}, clear: ['pendingClarification'],
     });
@@ -568,6 +588,31 @@ function deterministicConversationControlDecision({
     set: Object.freeze({ confirmationStatus: null }),
     clear: Object.freeze(['activeWorkflowId', 'collectedToolFields', 'confirmationStatus']),
   });
+  if (phraseContained(text, [
+    'வேண்டாம்', 'நிறுத்து', 'ரத்து', 'கட் பண்ணு',
+  ])) return Object.freeze({
+    decision: 'RESPONSE', response: 'சரி, இந்த கோரிக்கையை நிறுத்திவிட்டேன்.',
+    clarification: null, search: null, tool: null, nextQuestion: null,
+    stateUpdate: state?.activeWorkflowId ? clearWorkflow : null,
+  });
+  if (phraseContained(text, [
+    'அவ்வளவுதான்', 'வேற எதுவும் இல்லை', 'போதும்', 'நன்றி வணக்கம்',
+  ])) return Object.freeze({
+    decision: 'RESPONSE', response: 'நன்றி. வணக்கம்.',
+    clarification: null, search: null, tool: null, nextQuestion: null,
+    stateUpdate: state?.activeWorkflowId ? clearWorkflow : null,
+  });
+  if (phraseContained(text, [
+    'புரியல', 'புரியவில்லை', 'தெளிவாக இல்லை',
+  ])) return Object.freeze({
+    decision: 'CLARIFY', response: '', search: null, tool: null,
+    clarification: Object.freeze({
+      reason: 'caller_did_not_understand',
+      question: 'எந்த விஷயத்தை மீண்டும் விளக்க வேண்டும் என்று சொல்லுங்கள்.',
+      candidates: Object.freeze([]),
+    }),
+    nextQuestion: null, stateUpdate: null,
+  });
   const cancellation = phraseContained(text, [
     ...explicitStopPhrases, 'cancel', 'stop', 'cut', 'never mind', 'do not book',
     'வேண்டாம்', 'நிறுத்து', 'ரத்து', 'கட் பண்ணு',
@@ -609,6 +654,22 @@ function deterministicConversationControlDecision({
 export function deterministicIdentityQuestionDecision({ utterance, runtimeProfile } = {}) {
   const text = cleanText(utterance, 1_000);
   const normalized = scalarIdentity(text);
+  const actualTamilOrigin = /(?:எங்கிருந்து\s+பேசு|எங்க\s+இருந்து\s+பேசு|எந்த\s+(?:ஹாஸ்பிடல்|மருத்துவமனை|கம்பெனி)|என்ன\s+(?:ஹாஸ்பிடல்|மருத்துவமனை|கம்பெனி))/u
+    .test(normalized);
+  const actualTamilIdentity = /(?:யார்\s+பேசு|நீங்க\s+யாரு|உங்க\s+பெயர்\s+என்ன)/u
+    .test(normalized);
+  if (actualTamilOrigin || actualTamilIdentity) {
+    const configuredIdentity = cleanText(
+      runtimeProfile?.agent?.name ?? runtimeProfile?.agent?.description, 500,
+    );
+    if (!configuredIdentity) return null;
+    return Object.freeze({
+      decision: 'RESPONSE',
+      response: actualTamilOrigin
+        ? `நான் ${configuredIdentity} சார்பாக பேசுகிறேன்.` : `நான் ${configuredIdentity}.`,
+      clarification: null, search: null, tool: null, nextQuestion: null, stateUpdate: null,
+    });
+  }
   const asksOrigin = /\b(?:where are you (?:calling|speaking) from|which (?:company|organisation|organization)|what (?:company|organisation|organization))\b/iu
     .test(normalized)
     || /(?:எங்கிருந்து\s+பேசு|எங்க\s+இருந்து\s+பேசு|எந்த\s+(?:ஹாஸ்பிடல்|மருத்துவமனை|கம்பெனி)|என்ன\s+(?:ஹாஸ்பிடல்|மருத்துவமனை|கம்பெனி))/u.test(normalized);
@@ -729,6 +790,7 @@ function factualSideRequest(utterance) {
   const normalized = scalarIdentity(utterance);
   return /[?\uFF1F]/u.test(cleanText(utterance))
     || /\b(?:what|which|who|where|when|why|how|explain|tell)\b/iu.test(normalized)
+    || /(?:விலை|எவ்வளவு|விவரம்|என்னென்ன|எங்கே|எங்கிருந்து|யார்|எப்போது|பேக்கேஜ்|டெஸ்ட்|வித்தியாசம்|ஒப்பிடு)/u.test(normalized)
     || /(?:விலை|எவ்வளவு|விவரம்|என்னென்ன|எங்கே|எங்கிருந்து|யார்|எப்போது|பேக்கேஜ்|பேக்கேஜ்|டெஸ்ட்|வித்தியாசம்|ஒப்பிடு)/u.test(normalized);
 }
 
@@ -868,6 +930,7 @@ function mostRecentAssistantQuestion(turns = []) {
   for (let index = turns.length - 1; index >= 0; index -= 1) {
     if (turns[index]?.role !== 'assistant') continue;
     const text = cleanText(turns[index]?.content, 1_000);
+    if (/[?？]\s*$/u.test(text)) return text;
     if (/[?？]\s*$/u.test(text)) return text;
     break;
   }
@@ -1252,7 +1315,11 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     const speech = composed.speech;
     if (!speech) throw new AppError(502, 'Template engine produced no caller speech', 'TEMPLATE_ENGINE_SILENT_TURN');
     return finalizeTurn({
-      decision: first, speech, state: applyDecisionState(state, first),
+      decision: first, speech, state: applyDecisionState(state, first, [], {
+        preservePendingClarification: Boolean(
+          deterministicIdentityQuestion || deterministicAcknowledgement,
+        ),
+      }),
       evidence: Object.freeze([]), evidenceIds: Object.freeze([]),
       workflow: null, toolExecuted: false,
       provenance: responseProvenance({

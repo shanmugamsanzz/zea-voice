@@ -259,11 +259,17 @@ function candidateIdentity(value) {
     .replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim();
 }
 
+function broadRequestedFact(value) {
+  const normalizedFact = candidateIdentity(value);
+  const factTokens = new Set(normalizedFact.split(/\s+/u).filter(Boolean));
+  return factTokens.size <= 3 && (['details', 'detail', 'overview', 'explanation']
+    .some((token) => factTokens.has(token)) || normalizedFact === 'general knowledge');
+}
+
 function evidenceProvidesRequestedFact(evidence, requestedFact) {
   const normalizedFact = candidateIdentity(requestedFact);
   if (!normalizedFact) return false;
-  if (['details', 'detail', 'overview', 'general knowledge', 'explanation']
-    .includes(normalizedFact)) return evidence.length > 0;
+  if (broadRequestedFact(normalizedFact)) return evidence.length > 0;
   const wanted = new Set(normalizedFact.split(/\s+/u).filter(Boolean));
   return evidence.some((source) => {
     const searchable = candidateIdentity([
@@ -283,8 +289,7 @@ function evidenceProvidesRequestedFact(evidence, requestedFact) {
 function evidenceSupportingRequestedFact(evidence, requestedFact) {
   const normalizedFact = candidateIdentity(requestedFact);
   if (!normalizedFact) return Object.freeze([]);
-  if (['details', 'detail', 'overview', 'general knowledge', 'explanation']
-    .includes(normalizedFact)) return Object.freeze([...evidence]);
+  if (broadRequestedFact(normalizedFact)) return Object.freeze([...evidence]);
   const wanted = new Set(normalizedFact.split(/\s+/u).filter(Boolean));
   return Object.freeze(evidence.filter((source) => {
     const searchable = candidateIdentity([
@@ -600,7 +605,10 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     answerRequirements: answerContext.answerRequirements,
     conversationContext: answerContext.conversationContext,
     activeSubject: answerContext.activeSubject,
-    safeUnavailableResponse: cleanText(input.informationUnavailableResponse, 4_000) || null,
+    recoveryPolicy: Object.freeze({
+      normalNoMatch: 'generate_natural_caller_language_response',
+      staticRecoveryReservedFor: Object.freeze(['provider_failure', 'system_failure']),
+    }),
     requestMeaning: input.requestMeaning ?? null,
     searchInterpretation: search.value.search,
     requestedEntityRecordIds: requiredEntityRecordIds,
@@ -610,6 +618,9 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
       canonicalName: source.canonicalName ?? null,
       aliases: Object.freeze(cleanList(source.aliases, 20)),
       evidenceId: citations.evidence[index]?.evidenceId ?? null,
+      tenantId: source.tenantId,
+      knowledgeBaseId: source.knowledgeBaseId,
+      publicationRevision: source.publicationRevision,
     }))),
     verifiedEvidence: answerContext.evidence,
     ...(verifiedAnswerFastPath ? {} : {
@@ -625,7 +636,8 @@ export async function respondToTemplateEngineSearch(input = {}, dependencies = {
     'Answer the current requestedFact directly from the supplied evidence. Preserve every requested comparison operand and cite each supporting record only in evidenceIds.',
     'Missing evidence never proves a negative claim. Answer supported parts and identify only the specific unpublished detail.',
     'Use conversationContext only to interpret conversational meaning and references. It is not factual evidence. activeSubject contains verified published identities for the current contextual request; factual claims must still come only from verifiedEvidence.',
-    'When verifiedEvidence cannot support the requested information, return NO_MATCH with one natural, concise response in callerLanguage. Use safeUnavailableResponse when supplied, and never invent availability, policy, price, capability or contact details.',
+    'When verifiedEvidence cannot support the requested information, return NO_MATCH with one natural, concise response in callerLanguage. Relate it to exactRequest and relevant conversationContext without claiming the real-world information is false. Never invent availability, policy, price, capability or contact details.',
+    'Normal NO_MATCH and CLARIFY speech must be generated naturally in this one call. Static configured recovery is not part of this prompt and is reserved by the runtime for provider or system failure.',
   ];
   const detailedGroundingInstructions = [
     'For the fastest safe delivery, retain the published wording for factual names, attributes and values when it is natural in the caller language. Do not add synonymous factual claims that are absent from the evidence.',

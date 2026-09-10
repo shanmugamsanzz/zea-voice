@@ -191,10 +191,10 @@ function wordTokens(value) {
 
 function requestedFactAddressed(response, requestedFact) {
   const requested = identity(requestedFact);
-  if (!requested || ['details', 'detail', 'overview', 'general knowledge', 'explanation']
-    .includes(requested)) return true;
-  const responseTokens = wordTokens(response);
   const requestedTokens = wordTokens(requested);
+  if (!requested || (requestedTokens.size <= 3 && (['details', 'detail', 'overview', 'explanation']
+    .some((token) => requestedTokens.has(token)) || requested === 'general knowledge'))) return true;
+  const responseTokens = wordTokens(response);
   if ([...requestedTokens].some((token) => token === 'test' || token === 'tests')
     && responseTokens.size > 0) return true;
   if ([...requestedTokens].some((token) => responseTokens.has(token))) return true;

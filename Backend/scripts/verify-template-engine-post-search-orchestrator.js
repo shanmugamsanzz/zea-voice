@@ -100,13 +100,20 @@ const verifiedEvidence = Object.freeze([
   assert.deepEqual(fastInput.conversationContext, state.recentCompleteTurns);
   assert.deepEqual(fastInput.activeSubject.recordIds, ['record-1']);
   assert.equal(fastInput.activeSubject.entities[0].canonicalName, 'First Service');
-  assert.equal(fastInput.safeUnavailableResponse,
-    'I do not have that published information yet.');
+  assert.equal(Object.hasOwn(fastInput, 'safeUnavailableResponse'), false,
+    'Static operational recovery must not be exposed to normal answer generation');
+  assert.equal(fastInput.recoveryPolicy.normalNoMatch,
+    'generate_natural_caller_language_response');
+  assert.deepEqual(fastInput.recoveryPolicy.staticRecoveryReservedFor,
+    ['provider_failure', 'system_failure']);
   assert.equal(fastInput.answerRequirements.originalUtterance, latestUtterance);
   assert.equal(fastInput.exactRequest, latestUtterance);
   assert.equal(fastInput.callerLanguage, 'en');
   assert.equal(fastInput.speechBudget.maximumCharacters, 500);
   assert.deepEqual(fastInput.verifiedCandidates.map((candidate) => candidate.evidenceId), ['E1']);
+  assert.equal(fastInput.verifiedCandidates[0].knowledgeBaseId, 'kb-a');
+  assert.equal(fastInput.verifiedCandidates[0].publicationRevision, 2);
+  assert.deepEqual(fastInput.answerRequirements.focusedEvidenceRecordIds, ['record-1']);
 }
 
 // A verified fast-path answer with an unsupported acronym/test code is recovered
@@ -1169,7 +1176,7 @@ const emptyEvidenceFallback = await respondToTemplateEngineSearch({
   tenantBoundaryVerified: true,
   validateGroundedClaims: async ({ decision, response }) => ({
     supported: decision === 'NO_MATCH'
-      && response === 'That information is not available right now.',
+      && response === 'I could not find that detail in the published information.',
     requestedFactAddressed: decision === 'NO_MATCH',
     reason: decision === 'NO_MATCH' ? null : 'unsupported_claim',
   }),
@@ -1177,16 +1184,20 @@ const emptyEvidenceFallback = await respondToTemplateEngineSearch({
     emptyEvidenceTurnInput = JSON.parse(messages[0].content
       .split('<orchestrator_turn_input>\n')[1].split('\n</orchestrator_turn_input>')[0]);
     return { outputParsed: {
-    decision: 'NO_MATCH', response: 'That information is not available right now.',
+    decision: 'NO_MATCH', response: 'I could not find that detail in the published information.',
     clarification: null, evidenceIds: [], nextQuestion: null, stateUpdate: null,
   } };
   },
 });
 assert.equal(emptyEvidenceFallback.decision.decision, 'NO_MATCH');
 assert.equal(emptyEvidenceFallback.decision.response,
-  'That information is not available right now.');
-assert.equal(emptyEvidenceTurnInput.safeUnavailableResponse,
-  'That information is not available right now.');
+  'I could not find that detail in the published information.');
+assert.notEqual(emptyEvidenceFallback.decision.response,
+  'That information is not available right now.',
+  'A normal no-evidence turn must not emit the configured static recovery');
+assert.equal(Object.hasOwn(emptyEvidenceTurnInput, 'safeUnavailableResponse'), false);
+assert.equal(emptyEvidenceTurnInput.recoveryPolicy.normalNoMatch,
+  'generate_natural_caller_language_response');
 assert.deepEqual(emptyEvidenceTurnInput.conversationContext, state.recentCompleteTurns);
 assert.equal(emptyEvidenceTurnInput.activeSubject, null);
 assert.equal(emptyEvidenceFallback.diagnostics.configuredFallbackApplied, false,

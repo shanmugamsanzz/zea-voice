@@ -176,6 +176,12 @@ assert.match(liveReport, /actualAnswerMaximum\s*<=\s*4_000/u);
 assert.match(liveReport, /bookingFieldKnowledgeSearches/u);
 assert.match(liveReport, /ungroundedSearchResponses/u);
 assert.match(liveReport, /incorrectEntityResponses/u);
+assert.match(liveReport, /multipleLlmInvocationTurns/u,
+  'Live approval must reject every turn that exceeds the one-LLM ceiling');
+assert.match(liveReport, /ordinaryStaticFallbackTurns/u,
+  'Live approval must reject static recovery on ordinary turns');
+assert.match(liveReport, /llmInvocationCount/u,
+  'One-LLM evidence must be present in every completed-turn sample');
 assert.match(liveReport, /incompleteTelemetryTurns/u,
   'Legacy or incomplete live logs must not satisfy the correctness gate');
 assert.match(liveReport, /report\.actualAnswerSlo\.passed\s*&&\s*report\.liveCorrectness\.passed/u,

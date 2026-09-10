@@ -160,6 +160,10 @@ try {
       && orchestrator.controller.state === 'listening');
     const completedTurn = logs.filter((entry) => entry.stage === 'template_engine.turn_completed').at(-1);
     const answer = spoken.slice(before).join(' ');
+    assert.ok(llmCalls.length <= 1,
+      `A turn exceeded the one-LLM ceiling: ${turn.id}: ${llmCalls.join(', ')}`);
+    assert.ok(Number(completedTurn?.llmInvocationCount ?? 0) <= 1,
+      `Completed-turn telemetry reported multiple LLM calls: ${turn.id}`);
     assert.ok(answer && audioFrames.length > framesBefore, `Silent turn ${turn.id}`);
     if (failAnswer) {
       assert.ok(!answer.includes('9999'), 'Rejected content must never be spoken');
@@ -170,9 +174,17 @@ try {
       assert.ok(answer.includes(fixture.subjects[turn.subject].answer), `Wrong spoken answer: ${turn.id}: ${answer}; diagnostics=${JSON.stringify(logs.slice(-40))}`);
       for (const token of fixture.subjects[turn.subject].required) assert.ok(answer.includes(token));
       assert.ok(!answer.includes(recovery));
+      assert.equal(completedTurn?.configuredFallbackApplied, false,
+        `An ordinary replay turn used static configured recovery: ${turn.id}`);
     }
     assert.ok(stages.has('retrieval') || stages.has('hydration'),
       `Evidence retrieval skipped: ${turn.id}`);
+    if (turn.id !== 'welcome') {
+      assert.equal(stages.has('retrieval'), false,
+        `A resolved request performed broad provider retrieval: ${turn.id}`);
+      assert.equal(stages.has('hydration'), true,
+        `A resolved request did not hydrate its focused publication records: ${turn.id}`);
+    }
     assert.ok(stages.has('template_engine_post_search_decision'),
       `Answer generation skipped: ${turn.id}`);
     if (failAnswer) {

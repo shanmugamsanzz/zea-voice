@@ -9,6 +9,7 @@ import {
 } from '../src/knowledge-engine/entity-route-resolver.js';
 import { prepareKnowledgeQuery } from '../src/knowledge-engine/fast-query-preparation.js';
 import { buildContextEnrichedRetrievalQuery } from '../src/knowledge-engine/targeted-retrieval.js';
+import { deterministicPublishedRequestDecision } from '../src/voice/interaction/template-engine-production-retrieval.js';
 
 const tenantId = '20000000-0000-4000-8000-000000000001';
 const agentId = '20000000-0000-4000-8000-000000000002';
@@ -271,6 +272,40 @@ assert.equal(result.action, knowledgeResolutionActions.CONTINUE);
 assert.equal(result.candidate.entityType, 'CATEGORY');
 assert.equal(result.candidate.categoryKey, 'oncology-screening');
 assert.ok(['phonetic', 'fuzzy'].includes(result.candidate.method));
+
+const activeTemplateScope = Object.freeze({
+  tenantId, agentId,
+  publications: Object.freeze([Object.freeze({
+    knowledgeBaseId: job.knowledge_base_id, publicationRevision: 1,
+  })]),
+});
+const phoneticTemplateDecision = deterministicPublishedRequestDecision({
+  artifacts: Object.freeze({ bundles: Object.freeze([bundle]) }),
+  scope: activeTemplateScope,
+  latestUtterance: 'on cooker package pathi sollunga',
+});
+assert.equal(phoneticTemplateDecision?.decision, 'SEARCH',
+  'A tenant-published phonetic entity must enter the verified template-engine path');
+assert.deepEqual(phoneticTemplateDecision.search.preferredRecordIds, [],
+  'A resolved category must not be rewritten as an item comparison');
+
+const phoneticItemTemplateDecision = deterministicPublishedRequestDecision({
+  artifacts: Object.freeze({ bundles: Object.freeze([bundle]) }),
+  scope: activeTemplateScope,
+  latestUtterance: 'Beta Voise details',
+});
+assert.deepEqual(phoneticItemTemplateDecision?.search?.preferredRecordIds, [beta.record_id],
+  'A unique current STT/phonetic item must bind retrieval to its published record ID');
+
+const sharedTemplateDecision = deterministicPublishedRequestDecision({
+  artifacts: Object.freeze({ bundles: Object.freeze([bundle]) }),
+  scope: activeTemplateScope,
+  latestUtterance: 'shared',
+});
+assert.equal(sharedTemplateDecision?.decision, 'SEARCH',
+  'A shared published alias must proceed with its verified ambiguity candidates');
+assert.deepEqual(sharedTemplateDecision.search.preferredRecordIds, [],
+  'Uncertain candidates must never be silently selected');
 
 result = resolvePublishedEntityRoute(
   input('on cooker package pathi sollunga', staleAlphaMemory), bundle,

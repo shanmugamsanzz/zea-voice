@@ -37,6 +37,9 @@ function verifiedActiveSubject(recordIds = [], evidence = []) {
     recordType: entry.recordType,
     canonicalName: entry.canonicalName ?? null,
     evidenceId: entry.evidenceId,
+    tenantId: entry.tenantId,
+    knowledgeBaseId: entry.knowledgeBaseId,
+    publicationRevision: entry.publicationRevision,
   }));
   if (!entities.length) return null;
   return Object.freeze({
@@ -58,6 +61,7 @@ export function createTemplateEngineAnswerContext({
       requestedFact,
       language: String(language ?? '').trim() || null,
       requestedEntityRecordIds: [...new Set(requestedEntityRecordIds)],
+      focusedEvidenceRecordIds: [...new Set(evidence.map((entry) => entry.recordId))],
       maximumSpokenCharacters: normalizedSpeechBudget(maximumSpeechCharacters),
       budgetIncludes: ['response', 'nextQuestion', 'spaces', 'punctuation'],
       allowedEvidenceIds: evidence.map((entry) => entry.evidenceId),

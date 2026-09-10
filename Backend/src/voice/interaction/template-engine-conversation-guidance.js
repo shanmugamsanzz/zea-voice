@@ -5,11 +5,16 @@ const maximumGuidanceCandidates = 200;
 export function welcomeContinuationContext({ pendingQuestion, latestUtterance,
   publishedConversationGuidance = [], scope = {}, recentCompleteTurns = [],
   activeWorkflowId = null, pendingClarification = null } = {}) {
-  const configuredQuestion = pendingQuestion?.key === 'configured_welcome_question'
-    && cleanText(pendingQuestion.text);
-  const firstCallerContinuation = !pendingQuestion
-    && !recentCompleteTurns.some((turn) => turn.role === 'user');
-  if ((!configuredQuestion && !firstCallerContinuation)
+  const configuredWelcomePending = pendingQuestion?.key === 'configured_welcome_question';
+  const configuredQuestion = configuredWelcomePending ? cleanText(pendingQuestion.text) : '';
+  const currentReply = normalized(latestUtterance);
+  const priorUserTurns = recentCompleteTurns.filter((turn, index, turns) => (
+    turn?.role === 'user'
+      && !(index === turns.length - 1
+        && normalized(turn?.content ?? turn?.text) === currentReply)
+  ));
+  const firstCallerContinuation = !pendingQuestion && priorUserTurns.length === 0;
+  if ((!configuredWelcomePending && !firstCallerContinuation)
     || activeWorkflowId || pendingClarification) return null;
   const available = publishedConversationGuidance.filter((record) => scoped(record, scope))
     .slice(0, maximumGuidanceCandidates).map((record) => ({
@@ -26,8 +31,8 @@ export function welcomeContinuationContext({ pendingQuestion, latestUtterance,
     : entry.length === 1 ? entry
       : overview.length === 1 ? overview : [];
   if (!candidates.length) return null;
-  return { pendingQuestion: configuredQuestion
-    ? { key: pendingQuestion.key, text: cleanText(pendingQuestion.text, 500) }
+  return { pendingQuestion: configuredWelcomePending
+    ? { key: pendingQuestion.key, text: configuredQuestion || null }
     : { key: 'configured_welcome_continuation', text: null },
     callerReply: cleanText(latestUtterance, 2_000), candidates };
 }

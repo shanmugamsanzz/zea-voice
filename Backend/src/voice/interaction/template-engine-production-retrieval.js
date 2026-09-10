@@ -342,6 +342,37 @@ function uniqueCandidateIdentities(candidates, utterance) {
   return identities;
 }
 
+function deterministicCatalogResolutionDecision(resolution, utterance) {
+  const candidate = resolution?.candidate;
+  if (resolution?.candidateNamespace !== 'CATALOG' || candidate?.explicit !== true) return null;
+  const recordType = cleanText(candidate.recordType, 80).toUpperCase();
+  if (!['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(recordType)) return null;
+  const verifiedCandidates = resolution?.ambiguity?.detected === true
+    ? resolution.ambiguity.candidates ?? [] : [candidate];
+  if (!verifiedCandidates.length || verifiedCandidates.some((entry) => (
+    normalized(entry?.tenantId) !== normalized(resolution.tenantId)
+    || !cleanText(entry?.knowledgeBaseId, 160)
+    || !Number(entry?.publicationRevision)
+    || !cleanText(entry?.recordId, 160)
+  ))) return null;
+  // A category is represented by several published child records. Do not put
+  // those IDs into preferredRecordIds here because the generic search contract
+  // would misclassify them as an item comparison. Retrieval reserves the
+  // resolver's verified category projection directly.
+  const preferredRecordIds = resolution.ambiguity?.detected !== true
+    && recordType === 'CATALOG_ITEM' ? candidateRequestedRecordIds(candidate) : [];
+  return Object.freeze({
+    decision: 'SEARCH', response: '', clarification: null,
+    search: Object.freeze({
+      query: utterance,
+      requestedFact: utterance,
+      contextualReference: null,
+      preferredRecordIds: Object.freeze(preferredRecordIds),
+    }),
+    tool: null, nextQuestion: null, stateUpdate: null,
+  });
+}
+
 function deterministicFactualRequestKind(value) {
   const text = cleanText(value, 2_000).toLocaleLowerCase();
   // Keep non-Latin request markers escaped so source/editor encoding cannot
@@ -400,6 +431,18 @@ export function deterministicPublishedRequestDecision({
   if (publishedMatches.some((candidate) => (
     candidate.recordType === 'WORKFLOW_RULE' && Number(candidate.score) >= 0.98
   ))) return null;
+  const publishedResolution = scopedArtifacts.bundles.length
+    ? resolvePublishedEntityRoute({
+      tenantId: scope.tenantId,
+      agentId: scope.agentId,
+      usageDirection,
+      utterance,
+    }, scopedArtifacts.bundles, {
+      confidenceConfiguration: scope.confidenceConfiguration,
+    }) : null;
+  const resolutionDecision = deterministicCatalogResolutionDecision(
+    publishedResolution, utterance,
+  );
   const exact = publishedMatches.filter((candidate) => (
     Number(candidate.score) >= 0.98
     && ['CATALOG_ITEM', 'CATALOG_CATEGORY', 'FAQ', 'CONVERSATION_NODE'].includes(
@@ -407,7 +450,7 @@ export function deterministicPublishedRequestDecision({
     )
     && ['published_exact', 'published_category_exact'].includes(candidate.matchMethod)
   ));
-  if (!exact.length) return null;
+  if (!exact.length) return resolutionDecision;
 
   // A materialized category aggregate is stronger than its optional category
   // heading record. Explicit items outrank their surrounding category name.
@@ -427,16 +470,18 @@ export function deterministicPublishedRequestDecision({
     : aggregateCategories.length ? aggregateCategories
       : exactCatalog.length ? exactCatalog : exactRoutes;
   const identities = uniqueCandidateIdentities(eligible, utterance);
-  if (!identities.size) return null;
+  if (!identities.size) return resolutionDecision;
   const selections = [...identities.values()];
   const itemComparison = selections.length > 1
     && selections.every(({ candidate }) => candidate.recordType === 'CATALOG_ITEM');
-  if (selections.length > 1 && !itemComparison) return null;
+  if (selections.length > 1 && !itemComparison) return resolutionDecision;
   const requestKind = deterministicFactualRequestKind(utterance);
-  if (itemComparison && requestKind !== 'comparison') return null;
+  if (itemComparison && requestKind !== 'comparison') return resolutionDecision;
   if (itemComparison && new Set(selections.map(({ matchedForm }) => matchedForm)).size
-    !== selections.length) return null;
-  if (!itemComparison && Number(selections[0].candidate.score) < 1 && !requestKind) return null;
+    !== selections.length) return resolutionDecision;
+  if (!itemComparison && Number(selections[0].candidate.score) < 1 && !requestKind) {
+    return resolutionDecision;
+  }
   const [{ candidate }] = selections;
   const requestedRecordIds = itemComparison
     ? [...new Set(selections.flatMap((selection) => selection.requestedRecordIds))].sort()
@@ -603,6 +648,29 @@ function classification(input, search, state, resolution, conversationGuidance) 
 
 function candidateIdentityKey(candidate, tenantId) {
   return canonicalRecordIdentityKey(candidate, { tenantId });
+}
+
+function assertFocusedHybridSelection(hybrid, focusedCandidates, tenantId, stage) {
+  if (!focusedCandidates.length) return;
+  const expected = new Set(focusedCandidates.map((candidate) => (
+    candidateIdentityKey(candidate, tenantId)
+  )).filter(Boolean));
+  const selected = Array.isArray(hybrid?.candidates) ? hybrid.candidates : [];
+  const actual = new Set(selected.map((candidate) => candidateIdentityKey(candidate, tenantId))
+    .filter(Boolean));
+  const channelCandidates = Object.values(hybrid?.channels ?? {}).flat();
+  const unexpected = [...selected, ...channelCandidates].find((candidate) => (
+    !expected.has(candidateIdentityKey(candidate, tenantId))
+  ));
+  if (unexpected || actual.size !== expected.size
+    || [...expected].some((identity) => !actual.has(identity))) {
+    throw new AppError(503, 'Focused retrieval changed the resolved publication allowlist',
+      'TEMPLATE_ENGINE_FOCUSED_RETRIEVAL_SCOPE_VIOLATION', {
+        stage,
+        expectedCount: expected.size,
+        retainedCount: actual.size,
+      });
+  }
 }
 
 function activePublicationKeys(publications = []) {
@@ -1115,6 +1183,19 @@ export async function retrieveTemplateEngineEvidence({
     .map((candidate) => [candidate.recordType === 'CATALOG_CATEGORY'
       ? `${candidate.knowledgeBaseId}:${candidate.publicationRevision}:${candidate.categoryKey}`
     : candidateIdentityKey(candidate, input.tenantId), candidate])).values()];
+  const resolvedCatalogCandidate = entityResolution?.candidateNamespace === 'CATALOG'
+    && entityResolution?.candidate?.explicit === true ? entityResolution.candidate : null;
+  if (resolvedCatalogCandidate && entityResolution?.ambiguity?.detected !== true
+    && exactCatalog.length) {
+    const resolvedIds = new Set(candidateRequestedRecordIds(resolvedCatalogCandidate).map(normalized));
+    const alignedExact = exactCatalog.filter((candidate) => candidateRequestedRecordIds(candidate)
+      .some((recordId) => resolvedIds.has(normalized(recordId))));
+    // Exact-form scanning is intentionally permissive for wrapper text. The
+    // canonical publication resolver knows whether that form is distinctive.
+    // Never let a generic overview/category form replace a current explicit
+    // entity that the resolver identified from aliases, STT, or phonetics.
+    exactCatalog = alignedExact;
+  }
   const deterministicPreferredIds = new Set((deterministicRequestVerified
     ? search.preferredRecordIds ?? [] : []).map(normalized));
   const exactPublishedRoute = exactCandidates.filter((candidate) => (
@@ -1124,7 +1205,7 @@ export async function retrieveTemplateEngineEvidence({
   ));
   let categoryConfirmation = false;
   let exactPublishedSelection = null;
-  if (!exactCatalog.length) {
+  if (!exactCatalog.length && !resolvedCatalogCandidate) {
     const vocabulary = new Map();
     for (const bundle of scopedBundles) for (const [key, forms] of (
       publicationIndex.categoryVocabularyByPublication[
@@ -1257,12 +1338,38 @@ export async function retrieveTemplateEngineEvidence({
     .filter((candidate) => candidate && resolvedIdentities.has(
       candidateIdentityKey(candidate, input.tenantId),
     )));
+  const uncertainResolutionCandidates = entityResolution?.ambiguity?.detected === true
+    ? entityResolution.ambiguity.candidates ?? []
+    : entityResolution?.requiresCandidateConfirmation === true && entityResolution.candidate
+      ? [entityResolution.candidate] : [];
+  const uncertainCoordinates = new Map(uncertainResolutionCandidates.flatMap((candidate) => {
+    const recordIds = candidate.recordType === 'CATALOG_CATEGORY'
+      ? candidate.evidenceRecordIds ?? [] : [candidate.recordId];
+    return recordIds.map((recordId) => [
+      `${normalized(candidate.knowledgeBaseId)}:${Number(candidate.publicationRevision)}:${normalized(recordId)}`,
+      candidate,
+    ]);
+  }));
+  // Candidate uncertainty must remain grounded in the same active publication.
+  // Add the candidate records to structured fusion without reserving or
+  // selecting them; the single answer LLM can then ask a named clarification.
+  const uncertainPublishedRecords = scopedBundles.flatMap((bundle) => (bundle.records ?? [])
+    .map((record) => {
+      const recordId = normalized(record.record_id ?? record.recordId ?? record.id);
+      const key = `${normalized(bundle.knowledgeBaseId)}:${Number(bundle.publicationRevision)}:${recordId}`;
+      const source = uncertainCoordinates.get(key);
+      return source ? publishedRecordCandidate(record, bundle, input, {
+        score: source.score,
+        matchMethod: 'published_candidate',
+      }) : null;
+    }).filter(Boolean));
   const deterministicRecordIds = new Set(deterministicRequestVerified ? [
     ...(search.preferredRecordIds ?? []),
     ...exactCatalog.flatMap((candidate) => (
       candidate.recordType === 'CATALOG_CATEGORY' && candidate.evidenceRecordIds?.length
         ? candidate.evidenceRecordIds : [candidate.recordId]
     )),
+    ...resolutionReservations(entityResolution).map((candidate) => candidate.recordId),
   ].map(normalized).filter(Boolean) : []);
   const deterministicExactByRecordId = new Map(exactCandidates.map((candidate) => (
     [normalized(candidate.recordId), candidate]
@@ -1327,11 +1434,14 @@ export async function retrieveTemplateEngineEvidence({
         limitPerChannel: 20,
       }, dependencies.retrieval);
       return addExactStructuredCandidates(
-        result, [...contextualRecords, ...resolvedRecords, ...exactCandidates], 20,
+        result, [
+          ...uncertainPublishedRecords, ...contextualRecords, ...resolvedRecords, ...exactCandidates,
+        ], 20,
       );
     })();
     return channelPromise;
   };
+  assertCurrentTurn();
   let rawHybrid = await runTemplateEngineHybridRetrieval({
     decision: searchDecision,
     state: exactCatalog.length ? { ...state, lastReferencedRecordIds: [], comparisonRecordIds: [] } : retrievalState,
@@ -1343,6 +1453,10 @@ export async function retrieveTemplateEngineEvidence({
     searchBm25: async () => (await searchChannels()).channels.bm25,
     searchQdrantE5: async () => (await searchChannels()).channels.qdrant,
   });
+  assertCurrentTurn();
+  assertFocusedHybridSelection(
+    rawHybrid, focusedDeterministicCandidates, input.tenantId, 'fusion',
+  );
   // Hybrid results are already rebound to records in the assigned publication
   // bundle. Keep a small ordered shortlist for unresolved speech; do not invoke
   // multilingual/contextual identity reviewers or append the full catalog.
@@ -1391,6 +1505,9 @@ export async function retrieveTemplateEngineEvidence({
     });
   }
   const hybrid = entityConstraint.hybrid;
+  assertFocusedHybridSelection(
+    hybrid, focusedDeterministicCandidates, input.tenantId, 'entity_constraint',
+  );
   const retrieval = Object.freeze({
     ...hybrid,
     tenantId: input.tenantId,
@@ -1596,6 +1713,7 @@ export async function retrieveTemplateEngineEvidence({
     selectedCandidates,
     { ...scope, publications: artifacts.publications },
   );
+  assertCurrentTurn();
   if (selectedCandidates.length > 0 && evidence.length === 0
     && !requestedEntityHydrationIncomplete) {
     throw new AppError(503,
@@ -1656,6 +1774,9 @@ export async function retrieveTemplateEngineEvidence({
       }),
       verifiedPublishedEntityFastPath: verifiedPublishedEntitySelection !== null,
       focusedDeterministicRetrieval: focusedDeterministicCandidates.length > 0,
+      focusedRequestedRecordIds: Object.freeze(focusedDeterministicCandidates.map(
+        (candidate) => candidate.recordId,
+      )),
       providerSearchPerformed: focusedDeterministicCandidates.length === 0,
       verifiedCandidateShortlistCount: verifiedCandidateShortlist.length,
       identityReviewPerformed: false,
