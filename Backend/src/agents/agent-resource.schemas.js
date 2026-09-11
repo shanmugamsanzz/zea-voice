@@ -3,8 +3,6 @@ export const resourceAgentIdSchema=z.object({agentId:z.string().uuid()});
 export const resourceIdSchema=z.object({resourceId:z.string().uuid()});
 export const browserTestSessionParamsSchema=z.object({agentId:z.string().uuid(),testCallId:z.string().uuid().optional()});
 export const createBrowserTestSessionSchema=z.object({direction:z.enum(['inbound','outbound']).optional()}).strict();
-export const agentKnowledgeBaseParamsSchema=z.object({agentId:z.string().uuid(),knowledgeBaseId:z.string().uuid().optional()});
-export const assignAgentKnowledgeBaseSchema=z.object({usageDirection:z.enum(['inbound','outbound','both']).optional(),priority:z.number().int().min(0).max(100000).default(100)}).strict();
 const toolInputPropertySchema=z.object({type:z.enum(['string','number','integer','boolean','array','object']).optional()}).passthrough();
 const toolInputSchema=z.object({
   type:z.literal('object').default('object'),
