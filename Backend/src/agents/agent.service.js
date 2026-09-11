@@ -46,16 +46,6 @@ function normalizedAgentSettings(settings, interruptionSensitivity) {
 
 export function validateOperationalResponseSettings(status, settings = {}) {
   validateRecoveryReadiness(settings, { required: status === 'active' });
-  const unavailableMessage = String(settings.informationUnavailableMessage ?? '')
-    .normalize('NFKC').trim();
-  if (unavailableMessage.length > 500
-    || (status === 'active' && !unavailableMessage)) {
-    throw new AppError(400,
-      'Information Unavailable Message is required for an active agent and cannot exceed 500 characters',
-      'AGENT_INFORMATION_UNAVAILABLE_MESSAGE_REQUIRED', {
-        field: 'settings.informationUnavailableMessage',
-      });
-  }
   if (status !== 'active') return;
   const configured = [
     settings.technicalFailureMessage,

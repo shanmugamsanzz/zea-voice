@@ -194,11 +194,6 @@ export function configuredTechnicalFailureResponse(profile, knowledge = {}) {
   return configured && !isInternalRuntimeText(configured) ? configured : '';
 }
 
-export function configuredInformationUnavailableResponse(profile, knowledge = {}) {
-  const configured = resolveRuntimeMessage(profile, 'information_unavailable', knowledge);
-  return configured && !isInternalRuntimeText(configured) ? configured : '';
-}
-
 export function llmOperationalFailureClass(error) {
   const code = String(error?.code ?? '').trim().toUpperCase();
   if (code === 'LLM_PROVIDER_TIMEOUT' || code === 'VOICE_TURN_STAGE_TIMEOUT'
@@ -2415,7 +2410,6 @@ export class RealtimeConversationOrchestrator {
         assignedTools: this.runtimeProfile.tools,
         informationFields,
         confirmationMessage: this.actionConfirmationConfiguration?.confirmationMessage,
-        informationUnavailableResponse: configuredInformationUnavailableResponse(this.runtimeProfile),
         cancellationSignal: retrievalAbortController.signal,
       }, {
         isTurnCurrent: () => !this.#isStaleGeneration(epoch) && !this.finalized,

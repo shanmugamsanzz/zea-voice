@@ -116,7 +116,7 @@ const orchestrator = new RealtimeConversationOrchestrator(media, {
     language: 'Tamil', prompt: 'Follow published guidance and answer the current request.',
     welcomeMessage: 'Am I speaking to the account holder?', inactivityTimeoutSeconds: 60,
     settings: { nonFactualRecoveryMessage: recovery, technicalFailureMessage: 'Technical failure.',
-      informationUnavailableMessage: 'No published information.' } },
+    } },
     providers: { stt: {}, llm: {}, tts: {} }, tools: [],
     limits: { maxCallDurationMinutes: 5, ttsMaxCharactersPerResponse: 500 } }),
   createAdapters: async () => ({ stt, llm, tts }), createAudioEngine: () => new Audio(),

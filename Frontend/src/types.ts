@@ -146,7 +146,6 @@ export interface VoiceAgent {
   nonFactualRecoveryMessage?: string;
   evidenceValidationFailureMessage?: string;
   workflowConfigurationFailureMessage?: string;
-  informationUnavailableMessage?: string;
   conversationMemoryFields?: Array<{
     key: string;
     label: string;

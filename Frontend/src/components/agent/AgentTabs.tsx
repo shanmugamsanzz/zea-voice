@@ -262,7 +262,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       nonFactualRecoveryMessage: base.nonFactualRecoveryMessage || '',
       evidenceValidationFailureMessage: base.evidenceValidationFailureMessage || '',
       workflowConfigurationFailureMessage: base.workflowConfigurationFailureMessage || '',
-      informationUnavailableMessage: base.informationUnavailableMessage || '',
       conversationMemoryFields: base.conversationMemoryFields || [],
       callbackEnabled: base.callbackEnabled !== undefined ? base.callbackEnabled : true,
       callbackMinimumDelaySeconds: base.callbackMinimumDelaySeconds ?? 30,
@@ -623,7 +622,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         && agent.workflowConfigurationFailureMessage?.trim()))) {
       setError('An approved Neutral Recovery Message (or both dedicated recovery messages) is required before activation; maximum 500 characters.'); return;
     }
-    const informationUnavailableMessage = String(agent.informationUnavailableMessage ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
     if (agent.status === 'active' && tools.some((tool) => tool.status !== 'inactive')
       && !agent.workflowConfigurationFailureMessage?.trim()) {
       setError('Approve a Configuration Failure Message before saving an active agent with tools. Explain that the action cannot be started; do not ask the caller to rephrase.'); return;
@@ -634,10 +632,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     if (technicalFailureMessage.length > 500
       || (agent.status === 'active' && !technicalFailureMessage)) {
       setError('Technical Failure Message is required for an active agent and cannot exceed 500 characters.'); return;
-    }
-    if (informationUnavailableMessage.length > 500
-      || (agent.status === 'active' && !informationUnavailableMessage)) {
-      setError('Information Unavailable Message is required for an active agent and cannot exceed 500 characters.'); return;
     }
     if (!Array.isArray(agent.conversationMemoryFields) || agent.conversationMemoryFields.length > 30) {
       setError('Important Information Fields must be a list with no more than 30 fields.'); return;
@@ -736,7 +730,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         nonFactualRecoveryMessage,
         evidenceValidationFailureMessage: agent.evidenceValidationFailureMessage,
         workflowConfigurationFailureMessage: agent.workflowConfigurationFailureMessage,
-        informationUnavailableMessage,
         maxInactivityPrompts,
         conversationMemoryFields: normalizedMemoryFields,
       };
@@ -1822,20 +1815,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                         className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold outline-none focus:border-violet-500"
                       />
                       <p className="mt-1 text-[10px] font-semibold text-slate-400">Used for operational failures such as provider outages. Answer validation and incomplete workflow configuration use approved non-technical recovery instead.</p>
-                    </div>
-                    <div className="mt-3">
-                      <label className="mb-1 block text-[10px] font-bold text-slate-500">Information Unavailable Message</label>
-                      <textarea
-                        rows={2}
-                        maxLength={500}
-                        required={agent.status === 'active'}
-                        value={agent.informationUnavailableMessage || ''}
-                        disabled={isReadOnly}
-                        onChange={(event) => setAgent({ ...agent, informationUnavailableMessage: event.target.value })}
-                        placeholder="Configured speech when the question is clear but published knowledge has no answer"
-                        className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold outline-none focus:border-violet-500"
-                      />
-                      <p className="mt-1 text-[10px] font-semibold text-slate-400">Used only when no caller-facing evidence answers a clear question. It is not a technical failure or inactivity prompt.</p>
                     </div>
                   </div>
                   <div>

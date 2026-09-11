@@ -28,14 +28,20 @@ const [panel, resourceRoutes, resourceSchemas] = await Promise.all([
   readFile(new URL('../src/agents/agent-resource.routes.js', import.meta.url), 'utf8'),
   readFile(new URL('../src/agents/agent-resource.schemas.js', import.meta.url), 'utf8'),
 ]);
+const { validateOperationalResponseSettings } = await import('../src/agents/agent.service.js');
 assert.match(panel, /\/agents\/\$\{agentId\}\/knowledge-documents/u);
 assert.match(resourceRoutes, /use\('\/knowledge-documents',agentQdrantDocumentRouter\)/u);
 assert.doesNotMatch(resourceRoutes, /use\('\/knowledge-bases/u);
 assert.doesNotMatch(resourceSchemas, /agentKnowledgeBase|assignAgentKnowledgeBase/u);
+assert.doesNotThrow(() => validateOperationalResponseSettings('active', {
+  nonFactualRecoveryMessage: 'Please ask that another way.',
+  technicalFailureMessage: 'The service is temporarily unavailable.',
+}), 'Active agents must not require the removed static information-unavailable message');
 
 console.log(JSON.stringify({
   cutover: 'agent-qdrant-knowledge-documents',
   frontendFilesScanned: contents.length,
   legacyKnowledgeBaseApiCalls: 0,
   legacyAgentKnowledgeBaseSchemas: 0,
+  staticInformationUnavailableMessageRequired: false,
 }, null, 2));
