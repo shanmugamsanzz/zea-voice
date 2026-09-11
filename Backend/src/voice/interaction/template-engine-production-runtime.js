@@ -2,14 +2,7 @@ import { AppError } from '../../middleware/errors.js';
 import { instrumentTemplateEngineTurn } from './template-engine-turn-timing.js';
 import { normalizedSpeechBudget, speechBudgetInstruction } from './template-engine-speech-budget.js';
 import { applyMinimalTemplateEngineStateUpdate, createMinimalTemplateEngineState } from './template-engine-state.js';
-import { respondToTemplateEngineSearch } from './template-engine-orchestrator.js';
-import {
-  deterministicContextualRequestDecision,
-  deterministicPublishedWorkflowMatch,
-  deterministicPublishedRequestDecision,
-  loadTemplateEnginePublishedContext,
-  retrieveTemplateEngineEvidence,
-} from './template-engine-production-retrieval.js';
+import { loadTemplateEngineWorkflowContext } from './template-engine-workflow-context.js';
 import { advanceTemplateEngineWorkflowTurn, templateEngineWorkflowRoutingContext } from './template-engine-workflow-runtime.js';
 import {
   assignedToolIdentifiers,
@@ -19,6 +12,8 @@ import { selectApplicableConversationGuidance, welcomeContinuationContext } from
 import { extractSchemaFieldValue } from './schema-field-value-extractor.js';
 import { acknowledgementOnly } from '../interruption/final-turn-validator.js';
 import { validateAndComposeTemplateEngineSpeech } from './template-engine-speech-composer.js';
+import { retrieveAgentQdrantKnowledge } from './agent-qdrant-retrieval.js';
+import { runAgentQdrantGroundedTurn } from './agent-qdrant-grounded-turn.js';
 
 export const TEMPLATE_ENGINE_PRODUCTION_RUNTIME_VERSION = 4;
 
@@ -74,6 +69,41 @@ export function assertSingleLlmTurnArchitecture({
     maximumInvocations: 1,
     exactlyOneRequired: requireExactlyOne,
     turnKind,
+  });
+}
+
+export function assertQdrantFactualRetrievalArchitecture(diagnostics = {}) {
+  const queryEmbeddingCount = Number(diagnostics.queryEmbeddingCount);
+  const qdrantSearchCount = Number(diagnostics.qdrantSearchCount);
+  const returnedChunkCount = Number(diagnostics.returnedChunkCount);
+  const maximumChunks = Number(diagnostics.maximumChunks);
+  const violations = [];
+  if (queryEmbeddingCount !== 1) violations.push('query_embedding_must_run_once');
+  if (qdrantSearchCount !== 1) violations.push('qdrant_search_must_run_once');
+  if (!Number.isInteger(returnedChunkCount) || returnedChunkCount < 0
+    || returnedChunkCount > 3) violations.push('qdrant_must_return_at_most_three_chunks');
+  if (maximumChunks !== 3) violations.push('qdrant_maximum_chunks_must_be_three');
+  if (diagnostics.tenantAgentFiltered !== true) {
+    violations.push('qdrant_search_must_be_tenant_agent_filtered');
+  }
+  if (violations.length) {
+    throw new AppError(500, 'Factual retrieval violated the Qdrant architecture',
+      'TEMPLATE_ENGINE_RETRIEVAL_ARCHITECTURE_VIOLATION', {
+        violations: Object.freeze(violations),
+        queryEmbeddingCount,
+        qdrantSearchCount,
+        returnedChunkCount,
+        maximumChunks,
+        tenantAgentFiltered: diagnostics.tenantAgentFiltered === true,
+      });
+  }
+  return Object.freeze({
+    enforced: true,
+    queryEmbeddingCount,
+    qdrantSearchCount,
+    returnedChunkCount,
+    maximumChunks,
+    tenantAgentFiltered: true,
   });
 }
 
@@ -139,16 +169,6 @@ function evidenceIds(decision) {
   return Array.isArray(decision?.evidenceIds) ? decision.evidenceIds : [];
 }
 
-export function templateEngineEvidenceSuppressesFollowUp(evidence = []) {
-  return evidence.some((record) => {
-    const data = object(record?.authoritativeData);
-    const action = object(data.actionConfig);
-    return String(record?.recordType ?? '').toUpperCase() === 'WORKFLOW_RULE'
-      && String(data.actionType ?? '').toLowerCase() === 'respond'
-      && String(action.responseMode ?? '').toLowerCase() === 'exact';
-  });
-}
-
 function numericTokens(value) {
   return new Set(cleanText(value).match(/[+-]?\p{N}+(?:[.,]\p{N}+)?/gu) ?? []);
 }
@@ -185,180 +205,6 @@ function reportGuidanceSelection(callback, phase, guidance) {
     selectionScore: guidance?.selectionScore ?? null,
     selectionReasons: guidance?.selectionReasons ?? Object.freeze([]),
   }));
-}
-
-function recordIdentity(value) {
-  const recordId = cleanText(value?.recordId ?? value?.record_id, 160).toLocaleLowerCase();
-  const recordType = cleanText(value?.recordType ?? value?.record_type, 80).toUpperCase();
-  return recordId && recordType ? `${recordType}:${recordId}` : null;
-}
-
-export function publishedResolutionAmbiguity(
-  resolution, evidence = [], searchClassification = null,
-) {
-  const searchKind = cleanText(searchClassification?.searchKind, 80).toLocaleLowerCase();
-  const requested = new Set((searchClassification?.comparisonRecordIds
-    ?? searchClassification?.requestedEntityRecordIds ?? [])
-    .map((id) => cleanText(id, 160).toLocaleLowerCase()).filter(Boolean));
-  const verified = new Set(evidence.filter((record) => record.verified === true)
-    .map((record) => cleanText(record.recordId, 160).toLocaleLowerCase()));
-  if (searchKind === 'comparison' && requested.size >= 2
-    && [...requested].every((id) => verified.has(id))) {
-    return Object.freeze({
-      required: false, kind: 'resolved_comparison_set', candidates: Object.freeze([]),
-    });
-  }
-  if (searchKind === 'comparison') {
-    // Identity uncertainty is different from failure to hydrate known IDs.
-    // The latter must never become a caller clarification or absence claim.
-    if (requested.size >= 2) throw new AppError(503,
-      'Requested comparison evidence is incomplete',
-      'TEMPLATE_ENGINE_REQUESTED_ENTITY_HYDRATION_INCOMPLETE');
-    return Object.freeze({ required: true, kind: 'unresolved_published_entity',
-      candidates: Object.freeze([]) });
-  }
-  if (['overview', 'general_knowledge'].includes(searchKind)) {
-    return Object.freeze({
-      required: false, kind: 'request_does_not_require_entity_resolution',
-      candidates: Object.freeze([]),
-    });
-  }
-  const possible = resolution?.ambiguity?.detected === true
-    ? resolution.ambiguity.candidates : resolution?.routingCandidates ?? [];
-  const hydratedIdentities = new Set((Array.isArray(evidence) ? evidence : [])
-    .filter((record) => record.verified === true)
-    .map(recordIdentity).filter(Boolean));
-  const hydratedPublicationRecords = (Array.isArray(evidence) ? evidence : [])
-    .filter((record) => record.verified === true);
-  const candidateHydrated = (candidate) => {
-    const identity = recordIdentity(candidate);
-    if (identity && hydratedIdentities.has(identity)) return true;
-    const candidateIds = new Set((candidate?.evidenceRecordIds ?? [])
-      .map((id) => cleanText(id, 160).toLocaleLowerCase()).filter(Boolean));
-    if (!candidateIds.size) return false;
-    return hydratedPublicationRecords.some((record) => (
-      candidateIds.has(cleanText(record.recordId, 160).toLocaleLowerCase())
-      && cleanText(record.tenantId, 160).toLocaleLowerCase()
-        === cleanText(candidate.tenantId, 160).toLocaleLowerCase()
-      && cleanText(record.knowledgeBaseId, 160).toLocaleLowerCase()
-        === cleanText(candidate.knowledgeBaseId, 160).toLocaleLowerCase()
-      && Number(record.publicationRevision) === Number(candidate.publicationRevision)
-    ));
-  };
-  const hydratedCandidates = [...new Map(possible.map((candidate) => [
-    recordIdentity(candidate), candidate,
-  ]).filter(([identity, candidate]) => identity && candidateHydrated(candidate))).values()];
-  if (hydratedCandidates.length === 1
-    && resolution?.requiresCandidateConfirmation !== true
-    && resolution?.ambiguity?.detected !== true) {
-    return Object.freeze({
-      required: false, kind: 'resolved_by_exact_hydrated_evidence',
-      candidates: Object.freeze([]),
-    });
-  }
-  const candidates = [...new Set(hydratedCandidates
-    .map((candidate) => cleanText(candidate?.label ?? candidate?.canonicalName, 300))
-    .filter(Boolean))];
-  if (resolution?.ambiguity?.detected === true && candidates.length >= 2) {
-    return Object.freeze({
-      required: true,
-      kind: 'published_entity_candidates',
-      candidates: Object.freeze(candidates),
-    });
-  }
-  if ((resolution?.requiresCandidateConfirmation === true
-    || resolution?.ambiguity?.detected === true) && candidates.length === 1) {
-    return Object.freeze({
-      required: true,
-      kind: 'published_entity_confirmation',
-      candidates: Object.freeze(candidates.slice(0, 1)),
-    });
-  }
-  return Object.freeze({
-    required: resolution?.reason === 'no_candidate' || resolution?.action === 'CLARIFY'
-      || resolution?.requiresCandidateConfirmation === true || resolution?.ambiguity?.detected === true,
-    kind: resolution?.reason === 'no_candidate' || resolution?.action === 'CLARIFY'
-      || resolution?.requiresCandidateConfirmation === true || resolution?.ambiguity?.detected === true
-      ? 'unresolved_published_entity' : 'resolved_published_entity',
-    candidates: Object.freeze([]),
-  });
-}
-
-export function verifiedDeterministicAnswerPath({
-  deterministicRequestResolved = false, retrieval, ambiguity,
-} = {}) {
-  if (deterministicRequestResolved !== true
-    || retrieval?.diagnostics?.focusedDeterministicRetrieval !== true
-    || retrieval?.diagnostics?.providerSearchPerformed !== false
-    || retrieval?.diagnostics?.requestedEntityHydrationIncomplete === true
-    || ambiguity?.required === true) return false;
-  const requested = normalizedRecordIdSet(retrieval?.requestedEntityRecordIds);
-  if (!requested.size) return false;
-  const verified = normalizedRecordIdSet((retrieval?.evidence ?? [])
-    .filter((source) => source?.verified === true && source?.callerFacing !== false)
-    .map((source) => source.recordId));
-  return verified.size > 0 && [...requested].every((recordId) => verified.has(recordId));
-}
-
-export function enforceVerifiedFactualArchitecture({
-  deterministicAnswerPath = false, answered,
-} = {}) {
-  const postSearch = answered?.diagnostics ?? {};
-  const enforced = deterministicAnswerPath === true
-    && answered?.decision?.decision === 'RESPONSE';
-  if (!enforced) return Object.freeze({ enforced: false, path: 'reviewed_or_non_response' });
-  const answerGenerationCalls = Number(postSearch.answerGenerationCalls);
-  const violations = [];
-  if (postSearch.verifiedAnswerFastPath !== true) violations.push('compact_answer_path_not_used');
-  if (answerGenerationCalls !== 1) violations.push('answer_requires_exactly_one_llm_call');
-  if (violations.length) {
-    throw new AppError(500, 'Verified factual turn violated the production architecture',
-      'TEMPLATE_ENGINE_ARCHITECTURE_VIOLATION', {
-        violations: Object.freeze(violations), answerGenerationCalls,
-      });
-  }
-  return Object.freeze({
-    enforced: true,
-    path: 'verified_factual_one_llm',
-    stages: Object.freeze([
-      'deterministic_resolution', 'focused_retrieval', 'grounded_answer_generation',
-      'deterministic_validation', 'tts_ready',
-    ]),
-    answerGenerationCalls,
-    ttsReady: true,
-  });
-}
-
-function normalizedRecordIdSet(values) {
-  return new Set((Array.isArray(values) ? values : [])
-    .map((value) => cleanText(value, 160).toLocaleLowerCase()).filter(Boolean));
-}
-
-function equalRecordIdSets(left, right) {
-  if (!left.size || left.size !== right.size) return false;
-  for (const value of left) if (!right.has(value)) return false;
-  return true;
-}
-
-export function deterministicConfirmedContextualReference({ search, state } = {}) {
-  const preferred = normalizedRecordIdSet(search?.preferredRecordIds);
-  if (!preferred.size || !cleanText(search?.contextualReference, 500)
-    || !state?.pendingClarification) return false;
-  const remembered = preferred.size > 1
-    ? normalizedRecordIdSet(state?.comparisonRecordIds)
-    : normalizedRecordIdSet(state?.lastReferencedRecordIds);
-  const candidates = Array.isArray(state.pendingClarification?.candidates)
-    ? state.pendingClarification.candidates.filter((candidate) => cleanText(candidate, 300)) : [];
-  return candidates.length >= preferred.size && equalRecordIdSets(preferred, remembered);
-}
-
-function rememberedReferenceCandidate({ search, state } = {}) {
-  const preferred = normalizedRecordIdSet(search?.preferredRecordIds);
-  if (!preferred.size || !cleanText(search?.contextualReference, 500)) return false;
-  const remembered = preferred.size > 1
-    ? normalizedRecordIdSet(state?.comparisonRecordIds)
-    : normalizedRecordIdSet(state?.lastReferencedRecordIds);
-  return equalRecordIdSets(preferred, remembered);
 }
 
 function composeDeterministicSpeech({
@@ -462,43 +308,20 @@ function callerVerifiedArguments(argumentsValue, utterance, recentTurns = [], ex
   }));
 }
 
-function resolvedSubjectState(retrieval = {}) {
-  const classification = retrieval.searchClassification ?? {};
-  const comparison = normalizedRecordIdSet(classification.comparisonRecordIds);
-  if (comparison.size > 1) return Object.freeze({
-    referencedRecordIds: Object.freeze([]),
-    comparisonRecordIds: Object.freeze([...comparison]),
-  });
-  const candidate = retrieval.entityResolution?.candidate;
-  const candidateId = cleanText(candidate?.recordId, 160);
-  const candidateType = cleanText(candidate?.recordType, 80).toUpperCase();
-  if (candidateId && ['CATALOG_ITEM', 'CATALOG_CATEGORY'].includes(candidateType)) {
-    return Object.freeze({
-      referencedRecordIds: Object.freeze([candidateId]),
-      comparisonRecordIds: Object.freeze([]),
-    });
-  }
-  const requested = [...normalizedRecordIdSet(retrieval.requestedEntityRecordIds)];
-  return Object.freeze({
-    referencedRecordIds: Object.freeze(requested.length === 1 ? requested : []),
-    comparisonRecordIds: Object.freeze([]),
-  });
-}
-
-function applyResolvedSubjectState(state, subject) {
-  if ((subject?.comparisonRecordIds ?? []).length > 1) {
-    return applyMinimalTemplateEngineStateUpdate(state, {
-      set: { comparisonRecordIds: subject.comparisonRecordIds }, clear: [],
-    });
-  }
-  if (!(subject?.referencedRecordIds ?? []).length) return state;
-  return applyMinimalTemplateEngineStateUpdate(state, {
-    set: {
-      lastReferencedRecordIds: subject.referencedRecordIds,
-      comparisonRecordIds: [],
-    },
-    clear: [],
-  });
+function deterministicConfiguredWorkflowMatch(utterance, workflows = []) {
+  const request = scalarIdentity(utterance);
+  if (!request) return null;
+  const requestTokens = new Set(request.split(/\s+/u).filter((token) => token.length > 1));
+  const matches = workflows.map((workflow) => {
+    const configured = scalarIdentity([workflow.intent, workflow.name].filter(Boolean).join(' '));
+    const tokens = configured.split(/\s+/u).filter((token) => token.length > 1);
+    const overlap = tokens.filter((token) => requestTokens.has(token)).length;
+    const exact = configured && (request.includes(configured) || configured.includes(request));
+    return { workflow, score: exact ? 1 : tokens.length ? overlap / tokens.length : 0 };
+  }).filter(({ score }) => score >= 0.8).sort((left, right) => right.score - left.score
+    || Number(left.workflow.priority ?? 100) - Number(right.workflow.priority ?? 100));
+  if (!matches.length || (matches[1] && matches[0].score === matches[1].score)) return null;
+  return Object.freeze({ recordId: matches[0].workflow.recordId });
 }
 
 function deterministicWorkflowActivationDecision(match, workflows, tools) {
@@ -903,7 +726,7 @@ export function deterministicAcknowledgementDecision({
 }
 
 export function deterministicPendingClarificationContinuation({
-  artifacts, scope, usageDirection = 'both', utterance, acknowledgementPhrases = [],
+  utterance, acknowledgementPhrases = [],
   pendingClarification, unansweredRequest = null,
 } = {}) {
   if (!deterministicAcknowledgementOnly(utterance, acknowledgementPhrases)) return null;
@@ -911,18 +734,15 @@ export function deterministicPendingClarificationContinuation({
     ? pendingClarification.candidates.map((candidate) => cleanText(candidate, 300)).filter(Boolean)
     : [];
   if (candidates.length !== 1) return null;
-  const resolved = deterministicPublishedRequestDecision({
-    artifacts, scope, usageDirection, latestUtterance: candidates[0],
-  });
-  if (resolved?.decision !== 'SEARCH') return null;
   return Object.freeze({
-    ...resolved,
+    decision: 'SEARCH', response: '', clarification: null,
     search: Object.freeze({
-      ...resolved.search,
       query: [candidates[0], cleanText(unansweredRequest, 1_000)].filter(Boolean).join(' '),
       requestedFact: cleanText(unansweredRequest, 1_000) || candidates[0],
       contextualReference: candidates[0],
+      preferredRecordIds: Object.freeze([]),
     }),
+    tool: null, nextQuestion: null, stateUpdate: null,
   });
 }
 
@@ -1039,7 +859,8 @@ async function runWorkflow(input, decision, state, context, dependencies) {
 
 export async function runTemplateEngineProductionTurn(input = {}, dependencies = {}) {
   for (const dependency of [
-    'invokeStructuredLlm', 'loadPublishedContext', 'retrieveEvidence',
+    'invokeStructuredLlm', 'loadWorkflowContext', 'retrieveQdrantKnowledge',
+    'runQdrantGroundedTurn',
     'persistWorkflowState', 'executeAuthorizedTool',
   ]) {
     if (typeof dependencies[dependency] !== 'function') {
@@ -1072,7 +893,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     ?? input.runtimeProfile?.limits?.ttsMaxCharactersPerResponse) };
   // Start the publication I/O first. Minimal state and prompt preparation are
   // synchronous and independent, so they can run while that request is active.
-  const publishedContextPromise = dependencies.loadPublishedContext({
+  const workflowContextPromise = dependencies.loadWorkflowContext({
     auth: input.auth,
     scope: input.scope,
     callId: input.callId,
@@ -1086,7 +907,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   const preparedMainPrompt = [
     input.mainPrompt, speechBudgetInstruction(input.maximumSpeechCharacters),
   ].filter(Boolean).join('\n');
-  const publishedContext = await publishedContextPromise;
+  const publishedContext = await workflowContextPromise;
   const workflowSummaries = authorizedWorkflowSummaries(
     publishedContext.publishedWorkflows, input.assignedTools,
   );
@@ -1166,9 +987,6 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     || deterministicWorkflowCorrection || deterministicWorkflowReadback
     || deterministicConversationControl || deterministicIdentityQuestion ? null
     : deterministicPendingClarificationContinuation({
-      artifacts: publishedContext.artifacts,
-      scope: publishedContext.scope,
-      usageDirection: input.usageDirection,
       utterance: input.latestUtterance,
       acknowledgementPhrases: input.acknowledgementPhrases,
       pendingClarification: state.pendingClarification,
@@ -1210,38 +1028,15 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   const deterministicWorkflowMatch = workflowFieldDecision || deterministicIdentityQuestion
     || deterministicWelcomeDecision
     || state.activeWorkflowId ? null
-    : deterministicPublishedWorkflowMatch({
-      artifacts: publishedContext.artifacts,
-      scope: publishedContext.scope,
-      usageDirection: input.usageDirection,
-      latestUtterance: input.latestUtterance,
-    });
+    : deterministicConfiguredWorkflowMatch(
+      input.latestUtterance, publishedContext.publishedWorkflows,
+    );
   const deterministicWorkflowActivation = deterministicWorkflowActivationDecision(
     deterministicWorkflowMatch, publishedContext.publishedWorkflows, input.assignedTools,
   );
   const deterministicContextualWorkflowActivation = deterministicWorkflowActivation ? null
     : deterministicContextualWorkflowActivationDecision({
       utterance: input.latestUtterance, state, workflowSummaries,
-    });
-  const deterministicPublishedDecision = workflowFieldDecision || deterministicIdentityQuestion
-    || deterministicWelcomeDecision
-    || deterministicWorkflowActivation || deterministicContextualWorkflowActivation
-    ? null
-    : deterministicPublishedRequestDecision({
-      artifacts: publishedContext.artifacts,
-      scope: publishedContext.scope,
-      usageDirection: input.usageDirection,
-      latestUtterance: input.latestUtterance,
-    });
-  const deterministicContextualDecision = workflowFieldDecision || deterministicIdentityQuestion
-    || deterministicWelcomeDecision
-    || deterministicPublishedDecision || state.activeWorkflowId ? null
-    : deterministicContextualRequestDecision({
-      artifacts: publishedContext.artifacts,
-      scope: publishedContext.scope,
-      usageDirection: input.usageDirection,
-      latestUtterance: input.latestUtterance,
-      state,
     });
   const deterministicActiveWorkflow = workflowFieldDecision || deterministicConversationControl
     || deterministicWorkflowReadback || !state.activeWorkflowId ? null
@@ -1252,7 +1047,6 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     ?? deterministicClarificationContinuation
     ?? deterministicWelcomeDecision
     ?? deterministicWorkflowActivation ?? deterministicContextualWorkflowActivation
-    ?? deterministicPublishedDecision ?? deterministicContextualDecision
     ?? deterministicActiveWorkflow
     ?? deterministicUnresolvedSearchDecision(input.latestUtterance);
   const routed = Object.freeze({
@@ -1265,14 +1059,11 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
         ? 'verified_acknowledgement_fast_path' : deterministicIdentityQuestion
           ? 'verified_identity_question_fast_path' : deterministicClarificationContinuation
           ? 'verified_clarification_continuation_fast_path' : deterministicWelcomeDecision
-            ? 'verified_pending_question_fast_path' : deterministicPublishedDecision
-              ? 'verified_published_request_fast_path'
-              : deterministicWorkflowActivation
+            ? 'verified_pending_question_fast_path' : deterministicWorkflowActivation
                 ? 'verified_workflow_activation_fast_path'
                 : deterministicContextualWorkflowActivation
                   ? 'verified_contextual_workflow_activation_fast_path'
-                : deterministicContextualDecision
-                  ? 'verified_contextual_reference_fast_path' : deterministicActiveWorkflow
+                : deterministicActiveWorkflow
                     ? 'verified_active_workflow_fast_path'
                     : 'deterministic_unresolved_search' }),
   });
@@ -1333,207 +1124,71 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   }
 
   assertCurrentTurn();
-  const deterministicRequestResolved = Boolean(
-    deterministicPublishedDecision || deterministicClarificationContinuation
-      || deterministicContextualDecision,
-  );
-  const deterministicDirectRequest = Object.freeze({
-    kind: 'direct_request', originalUtterance: input.latestUtterance,
-    pendingWelcomeQuestion: null, publishedNextStep: null,
-  });
-  const requestMeaning = deterministicWelcomeMeaning ?? deterministicDirectRequest;
-  const welcomeVerified = requestMeaning.kind === 'published_welcome_continuation';
-  if (welcomeVerified) first = { ...first, search: { ...first.search, query: requestMeaning.query,
-    requestedFact: requestMeaning.requestedFact, contextualReference: null, preferredRecordIds: [] } };
-  const confirmedContextualReference = Boolean(
-    deterministicClarificationContinuation || deterministicContextualDecision,
-  )
-    || (!welcomeVerified
-      && deterministicConfirmedContextualReference({ search: first.search, state }));
-  const contextualMemoryCandidate = !welcomeVerified
-    && rememberedReferenceCandidate({ search: first.search, state });
-  let contextualMemoryVerified = confirmedContextualReference;
-  let searchState = contextualMemoryCandidate ? state
-    : { ...state, lastReferencedRecordIds: [], comparisonRecordIds: [] };
-  if (!contextualMemoryCandidate && !deterministicPublishedDecision
-    && !deterministicClarificationContinuation && !deterministicContextualDecision
-    && (first.search.preferredRecordIds.length || first.search.contextualReference)) {
-    first = { ...first, search: { ...first.search, query: input.latestUtterance,
-      contextualReference: null, preferredRecordIds: [] } };
-  }
-  const preRetrievalConversationGuidance = requestMeaning.publishedNextStep ?? selectApplicableConversationGuidance({
-    publishedConversationGuidance: publishedContext.publishedConversationGuidance ?? [],
-    scope: publishedContext.scope,
-    latestUtterance: input.latestUtterance,
-    finalDecision: first.decision,
-    searchInterpretation: first.search,
-    evidence: [],
-    recentCompleteTurns: state.recentCompleteTurns,
-    currentIntent: first.search?.requestedFact ?? first.decision,
-    conversationStage: conversationStage(state, first),
-    language: input.language,
-  });
-  reportGuidanceSelection(
-    dependencies.onConversationGuidanceSelected,
-    'pre_retrieval', preRetrievalConversationGuidance,
-  );
-  // Deterministic resolution may finish after an interruption.
-  // Recheck the epoch immediately before starting the single focused retrieval.
-  assertCurrentTurn();
-  const retrieval = await dependencies.retrieveEvidence({
-    auth: input.auth,
-    scope: publishedContext.scope,
-    callId: input.callId,
-    usageDirection: input.usageDirection,
-    language: input.language,
-    searchDecision: first,
-    latestUtterance: input.latestUtterance,
-    state: searchState,
-    runtimeProfile: input.runtimeProfile,
-    contextualMemoryVerified,
-    contextualMemoryCandidate,
-    requestMeaning,
-    deterministicRequestVerified: deterministicRequestResolved,
-    preloadedArtifacts: publishedContext.artifacts,
-    preloadedPublicationIndex: publishedContext.publicationIndex,
-    conversationGuidance: preRetrievalConversationGuidance,
-    isTurnCurrent: dependencies.isTurnCurrent,
-  });
-  if (retrieval.resolvedSearch) {
-    first = { ...first, search: retrieval.resolvedSearch };
-    contextualMemoryVerified = retrieval.contextualMemoryVerified === true;
-    searchState = { ...searchState,
-      lastReferencedRecordIds: contextualMemoryVerified ? first.search.preferredRecordIds : [],
-      comparisonRecordIds: [],
-    };
-  }
-  if (typeof dependencies.onRetrievalDiagnostics === 'function') {
-    dependencies.onRetrievalDiagnostics(Object.freeze({
-      ...(retrieval.diagnostics ?? {
-      channelCounts: Object.freeze({}),
-      retrievalCount: 0,
-      hydrationCount: 0,
-      verifiedEvidenceCount: retrieval.evidence?.length ?? 0,
-      failedChannels: Object.freeze([]),
+  {
+    const qdrantRetrieval = await dependencies.retrieveQdrantKnowledge({
+      tenantId: input.auth?.tenantId,
+      agentId: input.scope?.agentId,
+      question: input.latestUtterance,
+      previousContext: state.recentCompleteTurns,
+      cancellationSignal: input.cancellationSignal,
+    });
+    assertCurrentTurn();
+    const retrievalArchitecture = assertQdrantFactualRetrievalArchitecture(
+      qdrantRetrieval.diagnostics,
+    );
+    dependencies.onRetrievalDiagnostics?.(qdrantRetrieval.diagnostics);
+    const grounded = await dependencies.runQdrantGroundedTurn({
+      retrieval: qdrantRetrieval,
+      tenantId: input.auth?.tenantId,
+      agentId: input.scope?.agentId,
+      currentQuestion: input.latestUtterance,
+      previousContext: state.recentCompleteTurns,
+      cancellationSignal: input.cancellationSignal,
+      agentPrompt: input.mainPrompt,
+      language: input.language,
+      maximumSpeechCharacters: input.maximumSpeechCharacters,
+    }, { invokeStructuredLlm: dependencies.invokeStructuredLlm });
+    assertCurrentTurn();
+    const finalState = applyDecisionState(state, grounded.decision, grounded.evidence);
+    const architecture = Object.freeze({
+      enforced: true,
+      path: 'qdrant_contextual_one_llm',
+      stages: Object.freeze([
+        'deterministic_resolution', 'focused_retrieval', 'grounded_answer_generation',
+        'deterministic_validation', 'tts_ready',
+      ]),
+      answerGenerationCalls: 1,
+      retrieval: retrievalArchitecture,
+      ttsReady: true,
+    });
+    return finalizeTurn({
+      decision: grounded.decision,
+      speech: grounded.speech,
+      state: finalState,
+      evidence: grounded.evidence,
+      evidenceIds: grounded.evidenceIds,
+      diagnostics: Object.freeze({
+        retrieval: grounded.retrievalDiagnostics,
+        postSearch: Object.freeze({ answerGenerationCalls: 1 }),
+        architecture,
       }),
-      focusedDeterministicRetrieval:
-        retrieval.diagnostics?.focusedDeterministicRetrieval === true,
-      confirmedContextualReferenceFastPath: confirmedContextualReference,
-      ambiguity: publishedResolutionAmbiguity(retrieval.entityResolution,
-        retrieval.evidence ?? [], retrieval.searchClassification),
-    }));
+      workflow: null,
+      toolExecuted: false,
+      followUpValidation: Object.freeze({ accepted: false, reason: 'single_grounded_response' }),
+      provenance: responseProvenance({
+        initialDecision: 'SEARCH',
+        finalDecision: grounded.decision.decision,
+        evidenceIds: grounded.evidenceIds,
+        validationResult: 'deterministic_qdrant_grounding_valid',
+        searchPerformed: true,
+        clarificationReason: grounded.decision.clarification?.reason ?? null,
+      }),
+    }, { requireExactlyOne: true, turnKind: 'factual' });
   }
-  const hydratedRecordIds = new Set((retrieval.evidence ?? []).filter((source) => source.verified === true)
-    .map((source) => cleanText(source.recordId, 160).toLocaleLowerCase()));
-  if (retrieval.diagnostics?.requestedEntityHydrationIncomplete === true
-    || (retrieval.requestedEntityRecordIds ?? []).some((id) => !hydratedRecordIds.has(
-      cleanText(id, 160).toLocaleLowerCase(),
-    ))) {
-    throw new AppError(503, 'Requested evidence hydration is incomplete',
-      'TEMPLATE_ENGINE_REQUESTED_ENTITY_HYDRATION_INCOMPLETE');
-  }
-  const postSearchConversationGuidance = requestMeaning.publishedNextStep ?? selectApplicableConversationGuidance({
-    publishedConversationGuidance: publishedContext.publishedConversationGuidance ?? [],
-    scope: publishedContext.scope,
-    latestUtterance: input.latestUtterance,
-    finalDecision: first.decision,
-    searchInterpretation: first.search,
-    evidence: retrieval.evidence,
-    recentCompleteTurns: state.recentCompleteTurns,
-    currentIntent: first.search?.requestedFact ?? first.decision,
-    conversationStage: conversationStage(state, first),
-    language: input.language,
-  });
-  reportGuidanceSelection(
-    dependencies.onConversationGuidanceSelected, 'post_search', postSearchConversationGuidance,
-  );
-  const resolutionAmbiguity = publishedResolutionAmbiguity(
-    retrieval.entityResolution, retrieval.evidence, retrieval.searchClassification,
-  );
-  const deterministicAnswerPath = verifiedDeterministicAnswerPath({
-    deterministicRequestResolved, retrieval, ambiguity: resolutionAmbiguity,
-  });
-  const deterministicEntityCoverageVerified = resolutionAmbiguity?.required !== true
-    && (retrieval.evidence ?? []).length > 0
-    && (retrieval.evidence ?? []).every((source) => (
-      source?.verified === true && source?.callerFacing !== false
-    ));
-  const answered = await respondToTemplateEngineSearch({
-    ...common,
-    mainPrompt: input.mainPrompt,
-    language: input.language,
-    state: searchState,
-    searchDecision: first,
-    contextualMemoryVerified,
-    requestMeaning,
-    verifiedEvidence: retrieval.evidence,
-    scope: retrieval.scope,
-    informationUnavailableResponse: input.informationUnavailableResponse,
-    conversationGuidance: postSearchConversationGuidance,
-    requestedEntityRecordIds: retrieval.requestedEntityRecordIds,
-    deterministicEntityCoverageVerified,
-    deterministicResolutionVerified: deterministicAnswerPath,
-    maximumSpeechCharacters: input.maximumSpeechCharacters,
-  }, {
-    invokeStructuredLlm: dependencies.invokeStructuredLlm,
-    tenantBoundaryVerified: true,
-    publishedEntities: retrieval.evidence,
-    ambiguity: resolutionAmbiguity,
-    onPostSearchDiagnostics: dependencies.onPostSearchDiagnostics,
-  });
-  if (answered.decision.decision === 'SEARCH') {
-    throw new AppError(502, 'Grounded answer failed validation after one search',
-      'TEMPLATE_ENGINE_GROUNDING_REJECTED');
-  }
-  const composed = composeDeterministicSpeech({
-    decision: answered.decision,
-    mainPrompt: input.mainPrompt,
-    latestUtterance: input.latestUtterance,
-    recentCompleteTurns: state.recentCompleteTurns,
-    conversationGuidance: postSearchConversationGuidance,
-    evidence: retrieval.evidence,
-    suppressFollowUp: templateEngineEvidenceSuppressesFollowUp(retrieval.evidence),
-    // The single grounded generation call owns the complete verified response.
-    // Drop an optional invalid/omitted follow-up deterministically instead of
-    // adding another LLM operation after the factual answer is ready.
-    maximumSpeechCharacters: input.maximumSpeechCharacters,
-    onDiagnostics: (details) => dependencies.onFollowUpDiagnostics?.(Object.freeze({
-      phase: 'post_search', ...details,
-    })),
-  });
-  const architecture = enforceVerifiedFactualArchitecture({ deterministicAnswerPath, answered });
-  const speech = composed.speech;
-  if (!speech) throw new AppError(502, 'Template engine produced no caller speech', 'TEMPLATE_ENGINE_SILENT_TURN');
-  const answeredState = applyDecisionState(state, answered.decision, retrieval.evidence);
-  const finalState = answered.decision.decision === 'RESPONSE'
-    ? applyResolvedSubjectState(answeredState, resolvedSubjectState(retrieval))
-    : answeredState;
-  return finalizeTurn({
-    decision: composed.decision,
-    speech,
-    state: finalState,
-    evidence: retrieval.evidence,
-    evidenceIds: Object.freeze(evidenceIds(answered.decision)),
-    diagnostics: Object.freeze({
-      retrieval: retrieval.diagnostics ?? null,
-      postSearch: answered.diagnostics ?? null,
-      architecture,
-    }),
-    workflow: null,
-    toolExecuted: false,
-    followUpValidation: composed.followUp,
-    provenance: responseProvenance({
-      initialDecision: 'SEARCH',
-      finalDecision: answered.decision.decision,
-      evidenceIds: evidenceIds(answered.decision),
-      validationResult: answered.outputValidation?.reason ?? 'valid',
-      searchPerformed: true,
-      clarificationReason: answered.decision.clarification?.reason ?? null,
-    }),
-  }, { requireExactlyOne: true, turnKind: 'factual' });
 }
 
 export const productionTemplateEngineDependencies = Object.freeze({
-  loadPublishedContext: loadTemplateEnginePublishedContext,
-  retrieveEvidence: retrieveTemplateEngineEvidence,
+  loadWorkflowContext: loadTemplateEngineWorkflowContext,
+  retrieveQdrantKnowledge: retrieveAgentQdrantKnowledge,
+  runQdrantGroundedTurn: runAgentQdrantGroundedTurn,
 });

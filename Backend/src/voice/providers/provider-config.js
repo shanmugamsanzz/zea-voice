@@ -272,35 +272,7 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
             WHERE aa.tenant_id=a.tenant_id AND aa.workspace_id=a.workspace_id
               AND aa.agent_id=a.id AND caa.status='active'
               AND caa.storage_status='ready' AND caa.deleted_at IS NULL) ambience,
-          COALESCE((SELECT jsonb_agg(jsonb_build_object(
-            'id', kb.id, 'name', kb.name, 'description', kb.description,
-            'usageDirection', akb.usage_direction, 'priority', akb.priority,
-            'publicationRevision', kb.publication_revision,
-            'semanticReady', EXISTS (
-              SELECT 1 FROM knowledge_processing_jobs j
-               WHERE j.tenant_id=kb.tenant_id AND j.knowledge_base_id=kb.id
-                 AND j.job_type='index' AND j.status='completed'
-                 AND j.metadata->>'publicationRevision'=kb.publication_revision::text
-            ), 'settings', kb.settings
-          ) ORDER BY akb.priority, kb.id)
-            FROM agent_knowledge_bases akb
-            JOIN knowledge_bases kb
-              ON kb.tenant_id=akb.tenant_id AND kb.id=akb.knowledge_base_id
-           WHERE akb.tenant_id=a.tenant_id AND akb.agent_id=a.id
-             AND kb.status = 'published'
-             AND kb.publication_revision>0 AND kb.deleted_at IS NULL
-             AND EXISTS (
-               SELECT 1 FROM knowledge_processing_jobs active_index
-                WHERE active_index.tenant_id=kb.tenant_id
-                  AND active_index.knowledge_base_id=kb.id
-                  AND active_index.job_type='index' AND active_index.status='completed'
-                  AND active_index.metadata->>'publicationRevision'=kb.publication_revision::text
-             )
-             AND ($4::agent_usage_direction IS NULL
-               OR akb.usage_direction='both' OR akb.usage_direction=$4::agent_usage_direction)
-             AND ($4::agent_usage_direction IS NULL
-               OR kb.usage_direction='both' OR kb.usage_direction=$4::agent_usage_direction)
-          ), '[]'::jsonb) knowledge_bases
+          '[]'::jsonb knowledge_bases
          FROM voice_agents a
          JOIN provider_models sm ON sm.id=a.stt_model_id AND sm.status='active' AND sm.deleted_at IS NULL
          JOIN ai_providers sp ON sp.id=sm.provider_id AND sp.type='stt' AND sp.status='connected' AND sp.deleted_at IS NULL

@@ -8,7 +8,6 @@ import { checkRedis, closeRedis } from './infrastructure/redis.js';
 import { closeQueues } from './queues/queue.registry.js';
 import { closeCampaignWorkers, startCampaignWorkers } from './campaigns/campaign.workers.js';
 import { assertRagInfrastructure } from './rag/rag-infrastructure.js';
-import { closeKnowledgeProcessingWorker, startKnowledgeProcessingWorker } from './knowledge-bases/knowledge-processing.worker.js';
 import { attachPlivoMediaWebSocket } from './voice/plivo-media.socket.js';
 import { attachBrowserTestMediaWebSocket } from './voice/browser-test-media.socket.js';
 import { attachRealtimeConversationOrchestrator } from './voice/realtime-conversation-orchestrator.js';
@@ -31,7 +30,6 @@ async function bootstrap() {
 
   logger.info({ databaseHealth, redisHealth, ragHealth }, 'Infrastructure connections verified');
   startCampaignWorkers();
-  await startKnowledgeProcessingWorker();
   startRecordingWorker();
   await startPostCallSummaryWorker(executePostCallSummaryJob);
   startCallReconciliation();
@@ -62,7 +60,7 @@ async function bootstrap() {
     server.close(async (serverError) => {
       await closeCallReconciliation();
       const results = await Promise.allSettled([
-        closeCampaignWorkers(), closeKnowledgeProcessingWorker(), closeRecordingWorker(),
+        closeCampaignWorkers(), closeRecordingWorker(),
         closePostCallSummaryWorker(), closeQueues(), closeRedis(), closeDatabase(),
       ]);
       const failed = results.filter((result) => result.status === 'rejected');
@@ -88,7 +86,7 @@ async function bootstrap() {
 bootstrap().catch(async (error) => {
   logger.fatal({ err: error }, 'Backend startup failed');
   await Promise.allSettled([
-    closeCampaignWorkers(), closeKnowledgeProcessingWorker(), closeRecordingWorker(),
+    closeCampaignWorkers(), closeRecordingWorker(),
     closePostCallSummaryWorker(), closeQueues(), closeRedis(), closeDatabase(),
   ]);
   process.exit(1);

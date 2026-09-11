@@ -9,7 +9,7 @@ const release = await readFile(new URL(
 ), 'utf8');
 
 assert.match(source, /outcome\s*=\s*await this\.#runTemplateEngineTurn\(/u);
-assert.match(source, /engine:\s*'template_engine_v1'/u);
+assert.match(source, /engine:\s*'qdrant_single_llm_v1'/u);
 assert.doesNotMatch(source, /#runGroundedTurn\s*\(/u);
 assert.doesNotMatch(source, /#llmAttempt\s*\(/u);
 assert.doesNotMatch(source, /#knowledge\s*\(/u);
@@ -18,7 +18,7 @@ assert.doesNotMatch(source, /applyUnifiedGroundedTurn/u);
 assert.doesNotMatch(source, /createGroundedLlmOutput/u);
 assert.doesNotMatch(source, /createSelectedLlmStream/u);
 assert.doesNotMatch(source, /templateEngineCutover/u);
-assert.match(release, /engine:\s*'template_engine_v1'/u);
+assert.match(release, /engine:\s*'qdrant_single_llm_v1'/u);
 assert.doesNotMatch(release, /unified_grounded_decision/u);
 assert.doesNotMatch(release, /GROUNDED_NORMAL_TURN_RUNTIME_VERSION/u);
 

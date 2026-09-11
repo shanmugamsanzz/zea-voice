@@ -2,8 +2,6 @@ import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
 import { AppError } from '../middleware/errors.js';
 import { appendTranscriptEntry } from '../calls/call.service.js';
-import { createKnowledgeEngineInput } from '../knowledge-engine/engine-contract.js';
-import { ensurePublishedEngineReady } from '../knowledge-engine/runtime-service.js';
 import { ProviderIndependentAudioEngine } from './audio/audio-engine.js';
 import { completeVoiceCall, completeVoiceCallWithoutRuntime } from './call-completion.service.js';
 import { CallController } from './call-controller.js';
@@ -64,10 +62,9 @@ import { assertVerifiedFactualStageArchitecture } from './interaction/template-e
 import {
   parseTemplateEngineStructuredOutput,
 } from './interaction/template-engine-structured-output.js';
-import {
-  loadTemplateEnginePublishedContext,
-  retrieveTemplateEngineEvidence,
-} from './interaction/template-engine-production-retrieval.js';
+import { loadTemplateEngineWorkflowContext } from './interaction/template-engine-workflow-context.js';
+import { retrieveAgentQdrantKnowledge } from './interaction/agent-qdrant-retrieval.js';
+import { runAgentQdrantGroundedTurn } from './interaction/agent-qdrant-grounded-turn.js';
 import { classifyTemplateEngineTurnError } from './interaction/template-engine-error-classification.js';
 import { evaluateFirstAudioSlo, percentile } from './interaction/voice-latency-slo.js';
 import { configuredCallDurationMs } from './interaction/call-duration-policy.js';
@@ -584,36 +581,6 @@ export class RealtimeConversationOrchestrator {
       agentId: this.runtimeProfile.agent.id,
       callId: this.call.id,
     }) ?? this.log;
-    const ensureKnowledgeReady = this.dependencies.ensurePublishedEngineReady
-      ?? (env.NODE_ENV === 'production' ? ensurePublishedEngineReady : null);
-    if (ensureKnowledgeReady) {
-      const readinessInput = createKnowledgeEngineInput({
-        tenantId: this.runtimeProfile.agent.tenantId,
-        agentId: this.runtimeProfile.agent.id,
-        callId: this.call.id,
-        utterance: 'knowledge publication readiness',
-        usageDirection: this.call.direction,
-        language: languageCode(this.runtimeProfile.agent.language),
-      });
-      const readiness = await ensureKnowledgeReady({
-        tenantId: this.runtimeProfile.agent.tenantId,
-        workspaceId: this.runtimeProfile.agent.workspaceId,
-        userId: null,
-        role: 'COMPANY_DEVELOPER',
-      }, readinessInput, this.dependencies.knowledgeReadinessDependencies ?? {});
-      this.log.info({
-        stage: 'knowledge.publication_ready',
-        callId: this.call.id,
-        attempts: readiness?.readiness?.attempts ?? 1,
-        waitedMs: readiness?.readiness?.waitedMs ?? 0,
-        artifactCount: readiness?.readiness?.artifactCount ?? 0,
-        indexVersion: readiness?.readiness?.indexVersion ?? null,
-        publicationRevisions: (readiness?.publications ?? []).map((publication) => ({
-          knowledgeBaseId: publication.knowledgeBaseId,
-          publicationRevision: publication.publicationRevision,
-        })),
-      }, 'All assigned knowledge publication artifacts are ready before call startup');
-    }
     this.preCallContext = this.call.providerMetadata?.preCall?.context ?? {};
     const ttsTemplateContext = welcomeTemplateContext(this.call);
     this.ttsTextProcessor = (this.dependencies.createTtsTextProcessor
@@ -666,7 +633,7 @@ export class RealtimeConversationOrchestrator {
     await this.#loadConversationMemory();
     this.log.info({
       stage: 'voice.engine_selected', callId: this.call.id,
-      engine: 'template_engine_v1',
+      engine: 'qdrant_single_llm_v1',
     }, 'Live call using the template-engine runtime');
     const memoryIdentity = {
       tenantId: this.runtimeProfile.agent.tenantId ?? this.call.tenantId,
@@ -2407,6 +2374,8 @@ export class RealtimeConversationOrchestrator {
     let finalResponseQueuedAt = null;
     let acknowledgementAtReady = null;
     let preservePendingRequest = false;
+    const retrievalAbortController = new AbortController();
+    this.activeRetrievalAbortController = retrievalAbortController;
     try {
       const unansweredRequest = this.pendingTemplateEngineRequest?.text ?? null;
       preservePendingRequest = Boolean(unansweredRequest)
@@ -2447,6 +2416,7 @@ export class RealtimeConversationOrchestrator {
         informationFields,
         confirmationMessage: this.actionConfirmationConfiguration?.confirmationMessage,
         informationUnavailableResponse: configuredInformationUnavailableResponse(this.runtimeProfile),
+        cancellationSignal: retrievalAbortController.signal,
       }, {
         isTurnCurrent: () => !this.#isStaleGeneration(epoch) && !this.finalized,
         invokeStructuredLlm,
@@ -2490,12 +2460,11 @@ export class RealtimeConversationOrchestrator {
             ...details,
           }, 'Authorized template-engine Workflow transition completed');
         },
-        loadPublishedContext: (input) => loadTemplateEnginePublishedContext(
-          input, this.dependencies.templateEngineKnowledgeDependencies,
+        loadWorkflowContext: (input) => loadTemplateEngineWorkflowContext(
+          input, this.dependencies.templateEngineWorkflowDependencies,
         ),
-        retrieveEvidence: (input) => retrieveTemplateEngineEvidence(
-          input, this.dependencies.templateEngineKnowledgeDependencies,
-        ),
+        retrieveQdrantKnowledge,
+        runQdrantGroundedTurn,
         persistWorkflowState: async (state) => { this.templateEngineState = {
           ...this.templateEngineState, ...state,
         }; },
@@ -2669,6 +2638,9 @@ export class RealtimeConversationOrchestrator {
       acknowledgementAtReady = latencyAcknowledgement.snapshot();
       latencyAcknowledgement.cancel();
       if (epoch === this.epoch) this.activeLlm = null;
+      if (this.activeRetrievalAbortController === retrievalAbortController) {
+        this.activeRetrievalAbortController = null;
+      }
     }
     if (epoch !== this.epoch || this.finalized) {
       sentencePipeline.cancel();

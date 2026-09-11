@@ -24,7 +24,6 @@ import { platformDashboardRouter } from './dashboard/platform-dashboard.routes.j
 import { userRouter } from './users/user.routes.js';
 import { agentRouter } from './agents/agent.routes.js';
 import { campaignRouter } from './campaigns/campaign.routes.js';
-import { knowledgeBaseRouter } from './knowledge-bases/knowledge-base.routes.js';
 import { plivoWebhookRouter } from './telephony/plivo-webhook.routes.js';
 import { performanceMiddleware } from './middleware/performance.js';
 import { voiceRouter } from './voice/voice.routes.js';
@@ -123,7 +122,6 @@ export function createApp() {
   app.use('/pronunciation-groups', pronunciationRouter);
   app.use('/ambience-assets', ambienceRouter);
   app.use('/campaigns', campaignRouter);
-  app.use('/knowledge-bases', knowledgeBaseRouter);
   app.use('/webhooks/plivo', plivoWebhookRouter);
   app.use('/webhooks/plivo', voiceRouter);
 

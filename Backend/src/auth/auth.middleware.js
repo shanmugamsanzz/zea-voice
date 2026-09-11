@@ -29,7 +29,6 @@ function requiredApiKeyScope(request) {
     '/agents': 'agents',
     '/pronunciation-groups': 'agents',
     '/campaigns': 'campaigns',
-    '/knowledge-bases': 'knowledge_bases',
     '/calls': 'calls',
     '/reports': 'reports',
   };

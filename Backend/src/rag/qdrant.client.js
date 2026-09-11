@@ -2,12 +2,6 @@ import { env } from '../config/env.js';
 import { measureExternalProvider } from '../performance/performance-context.js';
 import { requireEntityId, requireTenantId, tenantCollectionName } from './tenant-isolation.js';
 
-// Discovery is intentionally wider than the final evidence window. The
-// hybrid ranker reduces this set to three-to-five hydrated records, while a
-// wider Qdrant window prevents clusters of near-duplicate records from hiding
-// authoritative Catalog or Conversation evidence before reranking.
-export const QDRANT_SEARCH_LIMIT_MAX = 30;
-
 function qdrantBaseUrl() {
   return env.QDRANT_URL.replace(/\/$/, '');
 }
@@ -76,16 +70,14 @@ export async function ensureTenantCollection(tenantId) {
 
   const indexes = [
     ['tenant_id', 'keyword'],
-    ['knowledge_base_id', 'keyword'],
     ['document_id', 'keyword'],
-    ['document_version_id', 'keyword'],
-    ['record_type', 'keyword'],
-    ['document_type', 'keyword'],
-    ['category', 'keyword'],
-    ['agent_usage', 'keyword'],
-    ['assigned_agent_ids', 'keyword'],
     ['language', 'keyword'],
-    ['publication_revision', 'integer'],
+    ['agent_id', 'keyword'],
+    ['source_kind', 'keyword'],
+    ['filename', 'keyword'],
+    ['chunk_index', 'integer'],
+    ['content_hash', 'keyword'],
+    ['uploaded_at', 'datetime'],
   ];
   for (const [fieldName, fieldSchema] of indexes) {
     try {
@@ -114,242 +106,104 @@ export async function upsertTenantPoints(tenantId, points) {
   return { count: points.length };
 }
 
-export async function countTenantPointsByKnowledgeBaseRevision(tenantId, knowledgeBaseId, publicationRevision) {
-  const tenant = requireTenantId(tenantId);
-  const knowledgeBase = requireEntityId(knowledgeBaseId, 'knowledgeBaseId');
-  if (!Number.isInteger(publicationRevision) || publicationRevision < 1) {
-    throw new TypeError('publicationRevision must be a positive integer');
+function agentDocumentFilter(tenantId, agentId, documentId = undefined) {
+  const must = [
+    { key: 'tenant_id', match: { value: requireTenantId(tenantId) } },
+    { key: 'agent_id', match: { value: requireEntityId(agentId, 'agentId') } },
+    { key: 'source_kind', match: { value: 'agent_text_document' } },
+  ];
+  if (documentId !== undefined) {
+    must.push({ key: 'document_id', match: { value: requireEntityId(documentId, 'documentId') } });
   }
-  const collectionName = collectionForTenant(tenant);
-  const filter = { must: [
-    { key: 'tenant_id', match: { value: tenant } },
-    { key: 'knowledge_base_id', match: { value: knowledgeBase } },
-    { key: 'publication_revision', match: { value: publicationRevision } },
-  ] };
-  const counted = await qdrantFetch(`/collections/${encodeURIComponent(collectionName)}/points/count`, {
-    method: 'POST',
-    operation: 'count-publication-revision-points',
-    body: JSON.stringify({ filter, exact: true }),
-  });
-  const count = counted?.result?.count;
-  if (!Number.isInteger(count) || count < 0) throw new Error('Qdrant returned an invalid publication count');
-  return { count, verified: true, filter };
+  return Object.freeze({ must: Object.freeze(must) });
 }
 
-export async function searchTenantPoints(tenantId, vector, {
-  knowledgeBases,
-  usageDirection,
-  agentId,
-  abortSignal,
-  limit = env.RAG_RUNTIME_TOP_K,
+export async function scrollTenantAgentDocumentPoints(
+  tenantId, agentId, { documentId = undefined, abortSignal = undefined } = {},
+) {
+  const collectionName = collectionForTenant(tenantId);
+  const filter = agentDocumentFilter(tenantId, agentId, documentId);
+  const points = [];
+  let offset = null;
+  do {
+    let payload;
+    try {
+      payload = await qdrantFetch(`/collections/${encodeURIComponent(collectionName)}/points/scroll`, {
+        method: 'POST', operation: 'scroll-agent-document-points', signal: abortSignal,
+        body: JSON.stringify({
+          filter, limit: 256, with_payload: true, with_vector: false,
+          ...(offset === null ? {} : { offset }),
+        }),
+      });
+    } catch (error) {
+      if (error.statusCode === 404) return [];
+      throw error;
+    }
+    if (!Array.isArray(payload?.result?.points)) {
+      throw new Error('Qdrant returned an invalid document scroll response');
+    }
+    points.push(...payload.result.points);
+    offset = payload.result.next_page_offset ?? null;
+    if (points.length > 100_000) throw new Error('Qdrant document listing exceeded its safety limit');
+  } while (offset !== null);
+  return points;
+}
+
+export async function deleteTenantAgentDocumentPoints(tenantId, agentId, documentId) {
+  const collectionName = collectionForTenant(tenantId);
+  const filter = agentDocumentFilter(tenantId, agentId, documentId);
+  try {
+    await qdrantFetch(`/collections/${encodeURIComponent(collectionName)}/points/delete?wait=true`, {
+      method: 'POST', operation: 'delete-agent-document-points',
+      body: JSON.stringify({ filter }),
+    });
+  } catch (error) {
+    if (error.statusCode !== 404) throw error;
+    return { deleted: true, verified: true, remainingCount: 0, collectionMissing: true };
+  }
+  const remaining = await scrollTenantAgentDocumentPoints(
+    tenantId, agentId, { documentId },
+  );
+  if (remaining.length) {
+    const error = new Error(`Qdrant still contains ${remaining.length} document point(s)`);
+    error.code = 'QDRANT_AGENT_DOCUMENT_DELETE_INCOMPLETE';
+    error.remainingCount = remaining.length;
+    throw error;
+  }
+  return { deleted: true, verified: true, remainingCount: 0, collectionMissing: false };
+}
+
+export async function searchTenantAgentDocumentPoints(tenantId, agentId, vector, {
+  limit = 3,
   scoreThreshold = env.RAG_RUNTIME_MIN_SCORE,
-  recordTypes = ['FAQ', 'KNOWLEDGE_CHUNK'],
+  abortSignal = undefined,
 } = {}) {
   if (!Array.isArray(vector) || vector.length !== env.QDRANT_VECTOR_SIZE
     || vector.some((value) => typeof value !== 'number' || !Number.isFinite(value))) {
     throw new TypeError(`A numeric ${env.QDRANT_VECTOR_SIZE}-dimension query vector is required`);
   }
-  if (!Array.isArray(knowledgeBases) || knowledgeBases.length === 0) return [];
-  if (!['inbound', 'outbound'].includes(usageDirection)) {
-    throw new TypeError('usageDirection must be inbound or outbound');
-  }
-  if (!Number.isInteger(limit) || limit < 1 || limit > QDRANT_SEARCH_LIMIT_MAX) {
-    throw new TypeError(`limit must be between 1 and ${QDRANT_SEARCH_LIMIT_MAX}`);
-  }
-  if (!Array.isArray(recordTypes) || recordTypes.length === 0
-    || recordTypes.some((value) => typeof value !== 'string' || !value.trim())) {
-    throw new TypeError('recordTypes must contain at least one record type');
-  }
-  const normalizedRecordTypes = [...new Set(recordTypes.map((value) => value.trim().toUpperCase()))];
-
-  const tenant = tenantId.toLowerCase();
-  // Agent assignment is mutable runtime state, while Qdrant payloads are an
-  // immutable snapshot of the assignment at publication time. Filtering on
-  // assigned_agent_ids here makes a correctly assigned, published KB
-  // undiscoverable whenever an assignment changes without a republish.
-  //
-  // Current assignment is enforced twice by the caller: the active scope is
-  // loaded from PostgreSQL before this search, and every selected record is
-  // hydrated through the same current assignment/revision scope before it can
-  // become evidence. Keep Qdrant discovery scoped to tenant + exact KB
-  // revision + direction + record type; never trust discovery as authority.
-  if (agentId !== undefined) requireEntityId(agentId, 'agentId');
-  const revisionConditions = knowledgeBases.map(({ id, publicationRevision }) => {
-    if (typeof id !== 'string' || !Number.isInteger(publicationRevision) || publicationRevision < 1) {
-      throw new TypeError('Every Knowledge Base filter requires an id and positive publicationRevision');
-    }
-    return {
-      must: [
-        { key: 'knowledge_base_id', match: { value: id.toLowerCase() } },
-        { key: 'publication_revision', match: { value: publicationRevision } },
-      ],
-    };
-  });
-  const collectionName = collectionForTenant(tenant);
-  const payload = await qdrantFetch(`/collections/${encodeURIComponent(collectionName)}/points/search`, {
-    method: 'POST',
-    operation: 'search-points',
-    signal: abortSignal,
-    body: JSON.stringify({
-      vector,
-      limit,
-      score_threshold: scoreThreshold,
-      with_payload: true,
-      with_vector: false,
-      filter: {
-        must: [
-          { key: 'tenant_id', match: { value: tenant } },
-          { key: 'agent_usage', match: { any: [usageDirection.toUpperCase(), 'BOTH'] } },
-          { key: 'record_type', match: { any: normalizedRecordTypes } },
-          { should: revisionConditions },
-        ],
-      },
-    }),
-  });
-  if (!Array.isArray(payload?.result)) throw new Error('Qdrant returned an invalid search response');
-  return payload.result;
-}
-
-export async function deleteTenantPointsByKnowledgeBase(
-  tenantId,
-  knowledgeBaseId,
-  { publicationRevision = undefined, revisionMode = 'all' } = {},
-) {
-  const tenant = requireTenantId(tenantId);
-  const knowledgeBase = requireEntityId(knowledgeBaseId, 'knowledgeBaseId');
-  const collectionName = collectionForTenant(tenant);
-  const must = [
-    { key: 'tenant_id', match: { value: tenant } },
-    { key: 'knowledge_base_id', match: { value: knowledgeBase } },
-  ];
-  if (publicationRevision !== undefined) {
-    if (!Number.isInteger(publicationRevision) || publicationRevision < 1) {
-      throw new TypeError('publicationRevision must be a positive integer');
-    }
-    if (revisionMode === 'equal') {
-      must.push({ key: 'publication_revision', match: { value: publicationRevision } });
-    } else if (revisionMode === 'older') {
-      must.push({ key: 'publication_revision', range: { lt: publicationRevision } });
-    } else {
-      throw new TypeError('revisionMode must be equal or older when publicationRevision is provided');
-    }
-  } else if (revisionMode !== 'all') {
-    throw new TypeError('revisionMode must be all when publicationRevision is omitted');
-  }
-  try {
-    await qdrantFetch(`/collections/${encodeURIComponent(collectionName)}/points/delete?wait=true`, {
-      method: 'POST',
-      operation: 'delete-knowledge-base-points',
-      body: JSON.stringify({ filter: { must } }),
-    });
-  } catch (error) {
-    if (error.statusCode !== 404) throw error;
-    return { deleted: true, verified: true, remainingCount: 0, collectionMissing: true };
-  }
-  let counted;
-  try {
-    counted = await qdrantFetch(`/collections/${encodeURIComponent(collectionName)}/points/count`, {
-      method: 'POST',
-      operation: 'verify-knowledge-base-points-deleted',
-      body: JSON.stringify({ filter: { must }, exact: true }),
-    });
-  } catch (error) {
-    if (error.statusCode === 404) {
-      return { deleted: true, verified: true, remainingCount: 0, collectionMissing: true };
-    }
-    throw error;
-  }
-  const remainingCount = counted?.result?.count;
-  if (!Number.isInteger(remainingCount) || remainingCount < 0) {
-    throw new Error('Qdrant returned an invalid Knowledge Base deletion verification count');
-  }
-  if (remainingCount !== 0) {
-    const error = new Error(`Qdrant still contains ${remainingCount} matching Knowledge Base point(s)`);
-    error.code = 'QDRANT_KNOWLEDGE_DELETE_INCOMPLETE';
-    error.remainingCount = remainingCount;
-    throw error;
-  }
-  return { deleted: true, verified: true, remainingCount, collectionMissing: false };
-}
-
-async function deleteTenantPointsByEntity(
-  tenantId,
-  field,
-  entityId,
-  operation,
-  { knowledgeBaseId = undefined } = {},
-) {
-  const tenant = requireTenantId(tenantId);
-  const entity = requireEntityId(entityId, field);
-  const collectionName = collectionForTenant(tenant);
-  const must = [
-    { key: 'tenant_id', match: { value: tenant } },
-    { key: field, match: { value: entity } },
-  ];
-  if (knowledgeBaseId !== undefined) {
-    must.splice(1, 0, {
-      key: 'knowledge_base_id',
-      match: { value: requireEntityId(knowledgeBaseId, 'knowledgeBaseId') },
-    });
-  }
-  try {
-    await qdrantFetch(`/collections/${encodeURIComponent(collectionName)}/points/delete?wait=true`, {
-      method: 'POST',
-      operation,
-      body: JSON.stringify({ filter: { must } }),
-    });
-  } catch (error) {
-    if (error.statusCode !== 404) throw error;
-    return { deleted: true, verified: true, remainingCount: 0, collectionMissing: true };
-  }
-  let counted;
-  try {
-    counted = await qdrantFetch(`/collections/${encodeURIComponent(collectionName)}/points/count`, {
-      method: 'POST',
-      operation: `verify-${operation}`,
-      body: JSON.stringify({ filter: { must }, exact: true }),
-    });
-  } catch (error) {
-    if (error.statusCode === 404) {
-      return { deleted: true, verified: true, remainingCount: 0, collectionMissing: true };
-    }
-    throw error;
-  }
-  const remainingCount = counted?.result?.count;
-  if (!Number.isInteger(remainingCount) || remainingCount < 0) {
-    throw new Error('Qdrant returned an invalid entity deletion verification count');
-  }
-  if (remainingCount !== 0) {
-    const error = new Error(`Qdrant still contains ${remainingCount} matching ${field} point(s)`);
-    error.code = 'QDRANT_KNOWLEDGE_DELETE_INCOMPLETE';
-    error.remainingCount = remainingCount;
-    throw error;
-  }
-  return { deleted: true, verified: true, remainingCount, collectionMissing: false };
-}
-
-export function deleteTenantPointsByDocument(tenantId, documentId, options = {}) {
-  return deleteTenantPointsByEntity(
-    tenantId, 'document_id', documentId, 'delete-document-points', options,
-  );
-}
-
-export function deleteTenantPointsByDocumentVersion(tenantId, documentVersionId) {
-  return deleteTenantPointsByEntity(
-    tenantId, 'document_version_id', documentVersionId, 'delete-document-version-points',
-  );
-}
-
-export async function deleteTenantCollection(tenantId) {
+  if (![2, 3].includes(limit)) throw new TypeError('Agent document search limit must be 2 or 3');
   const collectionName = collectionForTenant(tenantId);
   try {
-    await qdrantFetch(`/collections/${encodeURIComponent(collectionName)}`, {
-      method: 'DELETE',
-      operation: 'delete-collection',
-    });
-    return { collectionName, deleted: true };
+    const payload = await qdrantFetch(
+      `/collections/${encodeURIComponent(collectionName)}/points/search`, {
+        method: 'POST', operation: 'search-agent-document-points', signal: abortSignal,
+        body: JSON.stringify({
+          vector,
+          filter: agentDocumentFilter(tenantId, agentId),
+          limit,
+          score_threshold: scoreThreshold,
+          with_payload: true,
+          with_vector: false,
+        }),
+      },
+    );
+    if (!Array.isArray(payload?.result)) {
+      throw new Error('Qdrant returned an invalid agent document search response');
+    }
+    return payload.result;
   } catch (error) {
-    if (error.statusCode === 404) return { collectionName, deleted: false };
+    if (error.statusCode === 404) return [];
     throw error;
   }
 }

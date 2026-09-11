@@ -1,7 +1,13 @@
 import { AppError } from '../middleware/errors.js';
-import { normalizeConfiguredToolIdentifier } from './knowledge-record-validation.js';
 
 export const WORKFLOW_TOOL_AUTHORIZATION_VERSION = 3;
+
+const configuredToolIdentifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/u;
+
+function normalizeConfiguredToolIdentifier(input) {
+  const identifier = String(input ?? '').normalize('NFKC').trim();
+  return configuredToolIdentifierPattern.test(identifier) ? identifier : null;
+}
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -121,7 +127,7 @@ async function assignedAgentIds(client, tenantId, knowledgeBaseId, requestedAgen
 }
 
 export async function assertKnowledgeBaseWorkflowToolsAssigned(client, {
-  tenantId, knowledgeBaseId, agentIds = null, documentVersionIds = null,
+  tenantId, knowledgeBaseId, agentIds = null,
 } = {}) {
   const selectedAgentIds = await assignedAgentIds(
     client, tenantId, knowledgeBaseId, agentIds,
@@ -131,23 +137,10 @@ export async function assertKnowledgeBaseWorkflowToolsAssigned(client, {
   const workflowResult = await client.query(
     `SELECT workflow.id, workflow.name, workflow.action_type, workflow.action_config
        FROM workflow_rules workflow
-       JOIN knowledge_document_versions version
-         ON version.tenant_id=workflow.tenant_id
-        AND version.knowledge_base_id=workflow.knowledge_base_id
-        AND version.document_id=workflow.document_id
-        AND version.id=workflow.document_version_id
-       JOIN knowledge_documents document
-         ON document.tenant_id=workflow.tenant_id
-        AND document.knowledge_base_id=workflow.knowledge_base_id
-        AND document.id=workflow.document_id
       WHERE workflow.tenant_id=$1 AND workflow.knowledge_base_id=$2
         AND workflow.status='approved' AND lower(workflow.action_type)='configured_tool'
-        AND version.is_current=true AND version.status='ready' AND version.deleted_at IS NULL
-        AND document.status='ready' AND document.deleted_at IS NULL
-        AND ($3::uuid[] IS NULL OR workflow.document_version_id=ANY($3::uuid[]))
       ORDER BY workflow.id`,
-    [tenantId, knowledgeBaseId,
-      Array.isArray(documentVersionIds) ? documentVersionIds : null],
+    [tenantId, knowledgeBaseId],
   );
   if (!workflowResult.rowCount) {
     return Object.freeze({ validatedAgents: selectedAgentIds.length, workflows: 0 });
