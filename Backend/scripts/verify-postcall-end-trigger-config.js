@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import {
-  defaultCallEndTriggerPhrases,
   classifyFinalCallEndUtterance,
   findCallEndTriggerPhrase,
   normalizePostCallEndTriggerSettings,
@@ -23,10 +22,9 @@ assert.throws(() => normalizePostCallEndTriggerSettings({
 }), { code: 'POSTCALL_END_TRIGGER_CONFIGURATION_INVALID' });
 assert.deepEqual(resolvePostCallEndTriggerConfiguration({ callEndTriggerPhrases: 'bye' }).phrases, []);
 
-assert.equal(resolveCallEndTriggerPhrases({}).source, 'default');
-assert.ok(defaultCallEndTriggerPhrases.includes('போதும்'));
-assert.equal(findCallEndTriggerPhrase('Okay, goodbye for now', {}).phrase, 'goodbye');
-assert.equal(findCallEndTriggerPhrase('போதும், அழைப்பை முடிக்கலாம்', {}).phrase, 'போதும்');
+assert.deepEqual(resolveCallEndTriggerPhrases({}), { source: 'none', phrases: [] });
+assert.equal(findCallEndTriggerPhrase('Okay, goodbye for now', {}), null);
+assert.equal(findCallEndTriggerPhrase('போதும், அழைப்பை முடிக்கலாம்', {}), null);
 assert.equal(findCallEndTriggerPhrase('This is a byeline update', {}), null);
 
 const companyA = { callEndTriggerPhrases: ['stop the demo', 'பிறகு பேசலாம்'] };

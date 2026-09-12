@@ -1,9 +1,4 @@
 const wordPattern = /[\p{L}\p{N}][\p{L}\p{M}\p{N}'â€™_-]*/gu;
-const incompleteEndings = new Set([
-  'வந்து', 'எனக்கு', 'உங்களுக்கு', 'நீங்க', 'நான்', 'அது', 'இந்த', 'ஒரு',
-  'and', 'or', 'to', 'for', 'with', 'about', 'the', 'a', 'an', 'i', 'you', 'my', 'your',
-]);
-
 function normalized(value) {
   return String(value ?? '').normalize('NFKC').replace(/\s+/gu, ' ').trim();
 }
@@ -62,29 +57,11 @@ export function validateFinalCustomerTurn({
   }
   const configuredMinimum = Math.min(3, Math.max(1, Number(minimumWords) || 2));
   if (finalTokens.length < configuredMinimum) {
-    // A provider-finalized lexical turn received while listening must reach
-    // semantic understanding regardless of language or spelling. Word count
-    // remains an interruption/noise threshold while output is active; it is
-    // not an intent classifier for a completed caller turn.
-    if (!/[.?!]$/u.test(finalText) && incompleteEndings.has(finalTokens.at(-1))) {
-      return {
-        accepted: false, reason: 'incomplete', text: finalText,
-        confidence: resolvedConfidence, wordCount: finalTokens.length,
-      };
-    }
     return {
       accepted: true, text: finalText,
       confidence: resolvedConfidence, wordCount: finalTokens.length,
       shortMeaningfulTurn: true,
     };
-  }
-  // Sentence-ending punctuation is an explicit STT signal that this is a
-  // complete customer turn. Do not defer it because of a trailing period.
-  if (/[.?!]$/u.test(finalText)) {
-    return { accepted: true, text: finalText, confidence: resolvedConfidence, wordCount: finalTokens.length };
-  }
-  if (/[….]$/u.test(finalText) || incompleteEndings.has(finalTokens.at(-1))) {
-    return { accepted: false, reason: 'incomplete', text: finalText };
   }
   return { accepted: true, text: finalText, confidence: resolvedConfidence, wordCount: finalTokens.length };
 }

@@ -1,14 +1,7 @@
 const maxPhrases = 50;
 const maxPhraseLength = 160;
 
-// These are retained only for agents that have not configured their own list.
-// A configured list deliberately replaces these defaults so every company can
-// control its own language and call-ending policy.
-export const defaultCallEndTriggerPhrases = Object.freeze([
-  'bye', 'goodbye', 'hang up', 'disconnect', 'end call', 'end the call',
-  'not interested', 'call me later', "i'm busy", 'i am busy',
-  'போதும்', 'அழைப்பை முடி', 'பிறகு அழைக்கவும்',
-]);
+export const defaultCallEndTriggerPhrases = Object.freeze([]);
 
 function configurationError(message, field = 'callEndTriggerPhrases') {
   return Object.assign(new TypeError(message), {
@@ -80,8 +73,8 @@ export function normalizePostCallEndTriggerSettings(settings = {}) {
 export function resolveCallEndTriggerPhrases(settings = {}) {
   const configured = resolvePostCallEndTriggerConfiguration(settings).phrases;
   return Object.freeze({
-    source: configured.length > 0 ? 'agent' : 'default',
-    phrases: configured.length > 0 ? configured : defaultCallEndTriggerPhrases,
+    source: configured.length > 0 ? 'agent' : 'none',
+    phrases: configured,
   });
 }
 

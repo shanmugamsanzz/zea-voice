@@ -36,10 +36,6 @@ const row = {
     },
     secretConfigurationEncrypted: 'encrypted-tool',
   }],
-  knowledge_bases: [{
-    id: 'kb-id', name: 'Published KB', description: 'Published knowledge', usageDirection: 'both',
-    priority: 10, publicationRevision: 2, semanticReady: true, settings: {},
-  }],
 };
 for (const type of ['stt', 'llm', 'tts']) {
   Object.assign(row, {
@@ -91,12 +87,11 @@ assert.deepEqual(profile.limits, {
   maxCallDurationMinutes: 5,
   ttsLimitFallbackMessage: '',
 });
-assert.equal(profile.knowledgeBases[0].name, 'Published KB');
 assert.equal(profile.tools[0].secretConfiguration.token, 'decrypted-tool-token');
 assert.equal(profile.configuration.scope.tenantId, resolved.tenantId);
 assert.equal(profile.configuration.scope.workspaceId, resolved.workspaceId);
 assert.equal(profile.configuration.prompt.system, 'Be helpful');
-assert.equal(profile.configuration.knowledge.assignedPublishedRevisions[0].knowledgeBaseId, 'kb-id');
+assert.equal(Object.hasOwn(profile.configuration, 'knowledge'), false);
 assert.equal(profile.configuration.tools[0].name, 'Lookup_Record');
 assert.deepEqual(profile.configuration.tools[0].inputSchema.required, ['reference']);
 assert.equal(profile.configuration.speech.voiceId, 'selected-voice');

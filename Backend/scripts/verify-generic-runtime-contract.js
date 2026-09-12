@@ -18,8 +18,6 @@ const identifiers = Object.freeze({
   workspaceB: '20000000-0000-4000-8000-000000000002',
   agentA: '30000000-0000-4000-8000-000000000001',
   agentB: '30000000-0000-4000-8000-000000000002',
-  kbA: '40000000-0000-4000-8000-000000000001',
-  kbB: '40000000-0000-4000-8000-000000000002',
 });
 
 const settings = Object.freeze({
@@ -62,15 +60,11 @@ function runtimeRow({ tenantId, workspaceId, agentId, prompt, language, voiceId 
   };
 }
 
-function contract({ tenantId, workspaceId, agentId, knowledgeBaseId, prompt, language, voiceId }) {
+function contract({ tenantId, workspaceId, agentId, prompt, language, voiceId }) {
   return buildCanonicalRuntimeConfiguration({
     row: runtimeRow({ tenantId, workspaceId, agentId, prompt, language, voiceId }),
     resolvedAgent: { agentId, tenantId, workspaceId, callDirection: 'inbound' },
     settings,
-    knowledgeBases: [{
-      id: knowledgeBaseId, usageDirection: 'both', priority: 1,
-      publicationRevision: 7, semanticReady: true,
-    }],
     runtimeTools: [{
       id: '60000000-0000-4000-8000-000000000001',
       name: 'lookup_record', type: 'webhook_api', description: 'Retrieve an approved current record.',
@@ -88,12 +82,12 @@ function contract({ tenantId, workspaceId, agentId, knowledgeBaseId, prompt, lan
 
 const configurationA = contract({
   tenantId: identifiers.tenantA, workspaceId: identifiers.workspaceA,
-  agentId: identifiers.agentA, knowledgeBaseId: identifiers.kbA,
+  agentId: identifiers.agentA,
   prompt: 'Use the assigned published evidence.', language: 'en-IN', voiceId: 'voice-a',
 });
 const configurationB = contract({
   tenantId: identifiers.tenantB, workspaceId: identifiers.workspaceB,
-  agentId: identifiers.agentB, knowledgeBaseId: identifiers.kbB,
+  agentId: identifiers.agentB,
   prompt: 'Follow this tenant configuration.', language: 'ta-IN', voiceId: 'voice-b',
 });
 
@@ -110,15 +104,13 @@ assert.equal(configurationA.speech.voiceId, 'voice-a');
 assert.deepEqual([...configurationA.interruption.explicitStopPhrases], ['pause now']);
 assert.equal(configurationA.closing.staticMessage, settings.postCallStaticMessage);
 assert.deepEqual([...configurationA.closing.endTriggerPhrases], settings.callEndTriggerPhrases);
-assert.equal(configurationA.knowledge.assignedPublishedRevisions[0].publicationRevision, 7);
+assert.equal(Object.hasOwn(configurationA, 'knowledge'), false);
 
 // Scope and revision lists never bleed between tenants or workspaces.
 assert.equal(configurationA.scope.tenantId, identifiers.tenantA);
 assert.equal(configurationA.scope.workspaceId, identifiers.workspaceA);
-assert.equal(configurationA.knowledge.assignedPublishedRevisions[0].knowledgeBaseId, identifiers.kbA);
 assert.equal(configurationB.scope.tenantId, identifiers.tenantB);
 assert.equal(configurationB.scope.workspaceId, identifiers.workspaceB);
-assert.equal(configurationB.knowledge.assignedPublishedRevisions[0].knowledgeBaseId, identifiers.kbB);
 assert.equal(JSON.stringify(configurationA).includes(identifiers.tenantB), false);
 assert.equal(JSON.stringify(configurationB).includes(identifiers.tenantA), false);
 
@@ -143,7 +135,7 @@ const uiSource = fs.readFileSync(new URL('../../Frontend/src/components/agent/Ag
 assert.match(providerSource, /a\.id=\$1 AND a\.tenant_id=\$2 AND a\.workspace_id=\$3/u);
 for (const uiOwnedSetting of [
   'prompt: agent.prompt', 'conversationMemoryFields: normalizedMemoryFields',
-  'newToolInputSchema', 'knowledge-bases',
+  'newToolInputSchema', 'AgentKnowledgeDocumentsPanel',
 ]) assert.match(uiSource, new RegExp(uiOwnedSetting.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'u'));
 
 const businessDefaults = /(?:shanmuga|hospital|silver|gold|platinum|appointment|booking)/iu;

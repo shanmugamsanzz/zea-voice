@@ -74,7 +74,8 @@ for (const customerText of [
   assert.equal(validateFinalCustomerTurn({ text: customerText, minimumWords: 2 }).accepted, true);
 }
 
-assert.equal(validateFinalCustomerTurn({ text: 'எனக்கு வந்து', minimumWords: 2 }).reason, 'incomplete');
+assert.equal(validateFinalCustomerTurn({ text: 'எனக்கு வந்து', minimumWords: 2 }).accepted, true,
+  'provider-finalized speech must not be classified with language-specific trailing words');
 assert.equal(validateFinalCustomerTurn({ text: 'hmm', minimumWords: 2 }).accepted, true,
   'provider-finalized short speech must reach generic meaning resolution');
 for (const acknowledgement of ['சரி', 'okay', 'yes']) {

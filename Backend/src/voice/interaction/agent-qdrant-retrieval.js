@@ -1,4 +1,5 @@
 import { searchTenantAgentDocumentPoints } from '../../rag/qdrant.client.js';
+import { embeddingModelSpec } from '../../rag/model-spec.js';
 import { embedAgentRetrievalQuestion } from './agent-document-embeddings.js';
 import {
   assertQdrantRetrievalActive,
@@ -42,14 +43,26 @@ function runtimeDependencies(overrides = {}) {
   };
 }
 
+function verifiedQueryEmbedding(value) {
+  if (value?.model !== embeddingModelSpec.id
+    || !Array.isArray(value?.vector)
+    || value.vector.length !== embeddingModelSpec.dimensions
+    || value.vector.some((entry) => typeof entry !== 'number' || !Number.isFinite(entry))) {
+    throw new TypeError(
+      `Contextual retrieval requires one ${embeddingModelSpec.id} query embedding`,
+    );
+  }
+  return value;
+}
+
 export async function retrieveAgentQdrantKnowledge(input = {}, overrides = {}) {
   const request = createQdrantRetrievalRequest(input);
   const dependencies = runtimeDependencies(overrides);
   assertQdrantRetrievalActive(request);
   const searchText = contextualAgentDocumentSearchText(request);
-  const embedding = await dependencies.embedQuestion(
+  const embedding = verifiedQueryEmbedding(await dependencies.embedQuestion(
     Object.freeze({ ...request, question: searchText }),
-  );
+  ));
   assertQdrantRetrievalActive(request);
   const points = await dependencies.searchPoints(
     request.tenantId,

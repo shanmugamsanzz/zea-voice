@@ -1,8 +1,4 @@
 import { AppError } from '../../middleware/errors.js';
-import {
-  normalizeTemplateEngineProviderEnvelope,
-  validateTemplateEngineDecision,
-} from './template-engine-decision-contract.js';
 
 const truncatedFinishReasons = new Set([
   'length', 'max_tokens', 'max_output_tokens', 'max_tokens_reached', 'incomplete',
@@ -17,6 +13,7 @@ export const templateEngineStructuredOutputFailureCodes = Object.freeze(new Set(
 ]));
 
 function schemaTypeMatches(value, type) {
+  if (Array.isArray(type)) return type.some((candidate) => schemaTypeMatches(value, candidate));
   if (type === 'null') return value === null;
   if (type === 'array') return Array.isArray(value);
   if (type === 'object') return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -67,13 +64,6 @@ function validateSchema(value, schema, path = '$') {
   return { valid: true };
 }
 
-function isInitialDecisionSchema(schema) {
-  const properties = schema?.properties;
-  return schema?.type === 'object'
-    && properties && Object.hasOwn(properties, 'decision')
-    && Object.hasOwn(properties, 'search') && Object.hasOwn(properties, 'tool');
-}
-
 export function parseTemplateEngineStructuredOutput({ completion, output, schema } = {}) {
   const finishReason = String(completion?.finishReason ?? '').trim().toLocaleLowerCase();
   if (completion?.type !== 'completed') {
@@ -99,9 +89,6 @@ export function parseTemplateEngineStructuredOutput({ completion, output, schema
         message: String(error?.message ?? '').slice(0, 240),
       });
   }
-  if (isInitialDecisionSchema(schema)) {
-    parsed = normalizeTemplateEngineProviderEnvelope(parsed) ?? parsed;
-  }
   const validation = validateSchema(parsed, schema);
   if (!validation.valid) {
     throw new AppError(502, 'The template-engine LLM response did not match its schema',
@@ -110,19 +97,6 @@ export function parseTemplateEngineStructuredOutput({ completion, output, schema
         reason: validation.reason,
         path: validation.path,
       });
-  }
-  if (isInitialDecisionSchema(schema)) {
-    const decisionValidation = validateTemplateEngineDecision(parsed);
-    if (!decisionValidation.valid) {
-      throw new AppError(502, 'The template-engine LLM response has no usable active route',
-        'TEMPLATE_ENGINE_LLM_SCHEMA_INVALID', {
-          finishReason: finishReason || null,
-          reason: decisionValidation.reason,
-          contractDetails: decisionValidation.details ?? null,
-          path: '$',
-        });
-    }
-    return decisionValidation.value;
   }
   return parsed;
 }

@@ -16,22 +16,16 @@ import { templateEngineToolSchemas } from './interaction/template-engine-tool-sc
 import { executeAgentTools } from './tools/tool-executor.service.js';
 import { LlmCircuitBreaker } from './providers/llm/streaming-runtime.js';
 import { welcomeAudioCache } from './welcome-audio-cache.service.js';
-import { workflowFieldAudioCache } from './workflow-field-audio-cache.service.js';
 import { tenantProviderHealth } from './provider-health.service.js';
 import { renderWelcomeTemplate, welcomeTemplateContext } from './welcome-template.service.js';
 import { resolveInterruptionConfiguration } from './interruption/interruption-config.js';
 import { InterruptionCandidateManager } from './interruption/interruption-candidate-manager.js';
 import { CustomerUtteranceBuffer } from './interruption/customer-utterance-buffer.js';
 import {
-  acknowledgementOnly,
   validateFinalCustomerTurn,
 } from './interruption/final-turn-validator.js';
 import { ShortTurnMerger } from './interruption/short-turn-merger.js';
 import { greetingModes, resolveInteractionConfiguration } from './interaction/interaction-config.js';
-import {
-  classifyFinalCallCheckUtterance,
-  resolveCallCheckConfiguration,
-} from './interaction/call-check-config.js';
 import { resolveCallContextId } from './interaction/context-id-resolver.js';
 import { createContextCachePolicy, publicContextCacheMetadata } from './interaction/context-cache-policy.js';
 import { conversationContextCache } from './interaction/conversation-context-cache.service.js';
@@ -62,9 +56,8 @@ import { assertVerifiedFactualStageArchitecture } from './interaction/template-e
 import {
   parseTemplateEngineStructuredOutput,
 } from './interaction/template-engine-structured-output.js';
-import { loadTemplateEngineWorkflowContext } from './interaction/template-engine-workflow-context.js';
 import { retrieveAgentQdrantKnowledge } from './interaction/agent-qdrant-retrieval.js';
-import { runAgentQdrantGroundedTurn } from './interaction/agent-qdrant-grounded-turn.js';
+import { runAgentQdrantUniversalTurn } from './interaction/agent-qdrant-grounded-turn.js';
 import { classifyTemplateEngineTurnError } from './interaction/template-engine-error-classification.js';
 import { evaluateFirstAudioSlo, percentile } from './interaction/voice-latency-slo.js';
 import { configuredCallDurationMs } from './interaction/call-duration-policy.js';
@@ -79,17 +72,12 @@ import {
   applyCanonicalEntityToTaskCompletionState,
   createTaskCompletionState,
 } from './interaction/task-completion-state.js';
-import {
-  resolveCustomerCallbackRequest,
-  scheduleCustomerCallback,
-} from '../campaigns/customer-callback.service.js';
 import { createPronunciationTextProcessor } from './pronunciation/pronunciation-text-processor.js';
 import { createTtsTextPreprocessor } from './tts-text-preprocessor.js';
 import { createStreamingSentenceBuffer } from './streaming-sentence-buffer.js';
 import { createTtsSpeedMonitor } from './tts-speed-monitor.js';
 import { loadRuntimeAmbience } from './ambience-runtime.service.js';
 import { resolvePostCallClosingConfiguration } from './integrations/postcall-closing-config.js';
-import { classifyFinalCallEndUtterance } from './integrations/postcall-end-trigger-config.js';
 import {
   createMessageSource,
   llmMessageSource,
@@ -99,11 +87,9 @@ import {
 } from './source-trace.js';
 
 function languageCode(value) {
-  const match = String(value ?? '').match(/\b([a-z]{2,3})(?:-[A-Z]{2})?\b/);
+  const match = String(value ?? '').match(/\b([a-z]{2,3})(?:-[A-Z]{2})?\b/i);
   if (match) return match[1].toLowerCase();
-  const names = { english: 'en', tamil: 'ta', hindi: 'hi', telugu: 'te', kannada: 'kn', malayalam: 'ml' };
-  const lower = String(value ?? '').toLowerCase();
-  return Object.entries(names).find(([name]) => lower.includes(name))?.[1] ?? 'en';
+  return '';
 }
 
 export function createTemplateEngineStructuredInvoker(adapter, options = {}) {
@@ -413,7 +399,6 @@ export class RealtimeConversationOrchestrator {
         samples: [],
       },
       shortTurns: { deferred: 0, merged: 0, discarded: 0 },
-      callChecks: { detected: 0, spoken: 0, failed: 0 },
       grounding: {
         validated: 0, rejected: 0, fallbacks: 0,
         streamedSentencesValidated: 0, streamedSentencesRejected: 0, samples: [],
@@ -596,7 +581,6 @@ export class RealtimeConversationOrchestrator {
       ...this.runtimeProfile.agent.settings,
       ...this.runtimeProfile.agent.speech?.interaction,
     });
-    this.callCheckConfiguration = resolveCallCheckConfiguration(this.runtimeProfile.agent.settings);
     this.callbackConfiguration = resolveCallbackConfiguration(this.runtimeProfile.agent.settings);
     const assignedToolSchemas = templateEngineToolSchemas(this.runtimeProfile.tools);
     const configuredToolFields = mergeToolFieldSchemas(
@@ -628,7 +612,7 @@ export class RealtimeConversationOrchestrator {
     await this.#loadConversationMemory();
     this.log.info({
       stage: 'voice.engine_selected', callId: this.call.id,
-      engine: 'qdrant_single_llm_v1',
+      engine: 'qdrant_universal_single_llm_v2',
     }, 'Live call using the template-engine runtime');
     const memoryIdentity = {
       tenantId: this.runtimeProfile.agent.tenantId ?? this.call.tenantId,
@@ -710,7 +694,6 @@ export class RealtimeConversationOrchestrator {
         : '👤 Generic welcome fallback prepared');
     }
     this.welcomeCache = this.dependencies.welcomeCache ?? welcomeAudioCache;
-    this.workflowFieldCache = this.dependencies.workflowFieldCache ?? workflowFieldAudioCache;
     this.cachedWelcomePromise = agentInitiates && this.runtimeProfile.agent.welcomeMessage
       && !this.personalizedWelcome && !this.followUpOpeningRequired
       ? this.welcomeCache.get(this.runtimeProfile, this.runtimeProfile.agent.welcomeMessage)
@@ -1317,22 +1300,6 @@ export class RealtimeConversationOrchestrator {
     this.#recordInterruptionTrace('final_turn_assembled', {
       epoch: this.epoch, text: completedTurn, confidence: finalConfidence,
     });
-    const callCheckClassification = classifyFinalCallCheckUtterance(
-      completedTurn, this.callCheckConfiguration, { finalized: true },
-    );
-    const callCheckPhrase = callCheckClassification.matchedPhrase;
-    const callCheckOnly = callCheckClassification.shortcut;
-    if (callCheckPhrase && callCheckOnly) {
-      await this.#handleCallCheck(completedTurn, callCheckPhrase);
-      return;
-    }
-    if (callCheckPhrase && !callCheckOnly) {
-      this.log.info({
-        stage: 'call_check.mixed_utterance', callId: this.call.id,
-        text: completedTurn,
-        matchedPhrase: callCheckPhrase,
-      }, 'Call-check candidate contains additional content; sending the complete turn to unified understanding');
-    }
     const outputWasActive = [callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state);
     const agentAudioWasPlaying = [callStates.GREETING, callStates.SPEAKING].includes(this.controller.state);
     if (outputWasActive || this.interruptionCandidate.active) {
@@ -1437,75 +1404,6 @@ export class RealtimeConversationOrchestrator {
     this.#scheduleLiveSummary();
     this.#scheduleLiveMemoryCheckpoint('caller_turn');
     this.customerUtterance.reset();
-    const callbackRequest = this.callbackConfiguration.enabled && this.call.direction === 'outbound'
-      ? resolveCustomerCallbackRequest(validation.text, this.callbackConfiguration)
-      : { detected: false, resolved: false };
-    if (callbackRequest.detected) {
-      this.currentCallbackRequest = {
-        ...callbackRequest,
-        scheduling: callbackRequest.resolved ? 'pending' : 'needs_clarification',
-      };
-      if (callbackRequest.resolved) {
-        const scheduleCallback = this.dependencies.scheduleCallback ?? scheduleCustomerCallback;
-        try {
-          const result = await scheduleCallback({
-            callId: this.call.id,
-            tenantId: this.runtimeProfile.agent.tenantId,
-            requestedFor: callbackRequest.requestedFor,
-            requestText: callbackRequest.requestText,
-            minimumDelaySeconds: this.callbackConfiguration.minimumDelaySeconds,
-            maximumDelayDays: this.callbackConfiguration.maximumDelayDays,
-          });
-          this.currentCallbackRequest = {
-            ...this.currentCallbackRequest,
-            scheduling: result.scheduled ? 'scheduled' : 'not_scheduled',
-            scheduled: result.scheduled === true,
-            reason: result.reason ?? null,
-            retryCount: result.retryCount ?? null,
-            requestedFor: result.requestedFor ?? callbackRequest.requestedFor,
-          };
-          this.runtimeMetrics.callback = {
-            detected: true,
-            resolved: true,
-            scheduled: result.scheduled === true,
-            reason: result.reason ?? null,
-          };
-        } catch (error) {
-          this.currentCallbackRequest = {
-            ...this.currentCallbackRequest,
-            scheduling: 'not_scheduled', scheduled: false, reason: 'scheduling_failed',
-          };
-          this.runtimeMetrics.callback = {
-            detected: true, resolved: true, scheduled: false, reason: 'scheduling_failed',
-          };
-          this.log.warn({
-            errorCode: error?.code ?? 'CALLBACK_SCHEDULING_FAILED',
-            stage: 'callback.schedule_failed', callId: this.call.id,
-          }, 'Callback request was understood but could not be scheduled');
-        }
-      } else {
-        this.runtimeMetrics.callback = {
-          detected: true, resolved: false, scheduled: false, reason: callbackRequest.reason,
-        };
-      }
-    }
-    if (this.currentCallbackRequest?.scheduled && this.callbackConfiguration.closeAfterScheduling) {
-      await this.#close('customer_callback_scheduled');
-      return;
-    }
-    const callEndControl = classifyFinalCallEndUtterance(
-      validation.text, this.runtimeProfile.agent.settings, { finalized: true },
-    );
-    if (callEndControl.shortcut && !callbackRequest.detected) {
-      this.log.info({
-        stage: 'postcall.end_trigger_detected', callId: this.call.id,
-        source: callEndControl.source, phrase: callEndControl.matchedPhrase,
-      }, 'Caller requested call end through configured trigger phrase');
-      await this.#close(this.currentCallbackRequest?.scheduled
-        ? 'customer_callback_scheduled'
-        : 'caller_requested_hangup');
-      return;
-    }
     const epoch = ++this.epoch;
     void this.#guard('turn', () => this.#runTurn(validation.text, action.history, epoch, {
       sttSpeechDurationMs: this.activeCustomerSpeechStartedAt
@@ -1513,89 +1411,6 @@ export class RealtimeConversationOrchestrator {
       sttFinalizationMs: this.lastSpeechEndedAt
         ? Math.max(0, (finalEventReceivedAt ?? Date.now()) - this.lastSpeechEndedAt) : null,
     }));
-  }
-
-  async #handleCallCheck(customerText, matchedPhrase) {
-    if (this.finalized) return;
-    this.runtimeMetrics.callChecks.detected += 1;
-    this.#clearInactivity();
-
-    if ([callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) {
-      await this.#cancelActive('caller_call_check');
-    }
-    if (this.controller.state !== callStates.LISTENING) {
-      this.runtimeMetrics.callChecks.failed += 1;
-      this.log.warn({
-        stage: 'call_check.not_ready', callId: this.call.id,
-        state: this.controller.state, matchedPhrase,
-      }, 'Configured call-check phrase could not run because the call was not listening');
-      this.customerUtterance.reset();
-      return;
-    }
-
-    const liveMemory = this.liveCallMemory?.snapshot();
-    const pendingQuestion = liveMemory?.pendingQuestion && typeof liveMemory.pendingQuestion === 'object'
-      ? liveMemory.pendingQuestion
-      : {
-        key: liveMemory?.pendingQuestion,
-        text: liveMemory?.pendingQuestionText,
-        kind: liveMemory?.pendingQuestionKind,
-      };
-    const pendingField = (this.liveCallMemory?.fieldSchemas?.() ?? liveMemory?.fields ?? [])
-      .find((field) => field.key === pendingQuestion?.key);
-    const configuredResponse = String(this.callCheckConfiguration.response ?? '').trim();
-    const pendingText = pendingField?.question ?? pendingQuestion?.text;
-    const answeredQuestions = new Set((liveMemory?.answeredQuestions ?? [])
-      .map((value) => String(value).trim().toLocaleLowerCase()).filter(Boolean));
-    const explicitlyScheduled = pendingText
-      && String(liveMemory?.resumeQuestionAfterAnswer ?? '').trim().toLocaleLowerCase()
-        === String(pendingText).trim().toLocaleLowerCase();
-    // A presence check must not revive stale conversational prompts. Required
-    // configured fields and questions explicitly scheduled by validated
-    // continuation state remain resumable; all other pending context stays in
-    // memory for the next grounded turn.
-    const questionToResume = pendingText
-      && !answeredQuestions.has(String(pendingText).trim().toLocaleLowerCase())
-      && (Boolean(pendingField) || explicitlyScheduled)
-      ? pendingText
-      : '';
-    const resumeQuestion = questionToResume
-      && !configuredResponse.toLocaleLowerCase().includes(String(questionToResume).toLocaleLowerCase())
-      ? questionToResume
-      : '';
-    const response = this.#fitTtsMessage([configuredResponse, resumeQuestion].filter(Boolean).join(' '));
-    if (!response) {
-      this.runtimeMetrics.callChecks.failed += 1;
-      this.customerUtterance.reset();
-      this.#armInactivity();
-      return;
-    }
-
-    await this.controller.receiveFinalTranscript(customerText);
-    this.customerUtterance.reset();
-    this.shortTurnMerger.clear();
-    await this.controller.setAssistantResponse(response, Date.now(), {
-      sources: [createMessageSource(messageSourceTypes.CALL_CHECK_CONFIGURATION, {
-        id: this.runtimeProfile.agent.id,
-        label: 'Call Check Response',
-        metadata: { matchedPhrase },
-      })],
-    });
-    const epoch = ++this.epoch;
-    this.log.info({
-      stage: 'call_check.detected', callId: this.call.id,
-      epoch, matchedPhrase, resumedField: pendingField?.key ?? null,
-      resumedQuestion: questionToResume ?? null,
-    }, 'Configured call-check phrase matched; bypassing Knowledge Base and LLM');
-    const spoken = await this.#synthesize(response, `call-check-${epoch}`, { epoch });
-    if (!spoken || this.#isStaleGeneration(epoch) || this.controller.state !== callStates.SPEAKING) return;
-    await this.audioEngine.drainOutput();
-    if (this.#isStaleGeneration(epoch) || this.controller.state !== callStates.SPEAKING) return;
-    await this.controller.playbackComplete();
-    this.#scheduleLiveMemoryCheckpoint('call_check_side_action');
-    this.runtimeMetrics.callChecks.spoken += 1;
-    this.errorCount = 0;
-    this.#armInactivity();
   }
 
   #isDuplicateFinalTurn(text) {
@@ -1844,7 +1659,6 @@ export class RealtimeConversationOrchestrator {
     const audibleSentences = [];
     let transcriptSources = [];
     let transcriptCommitted = false;
-    let workflowFieldCacheEntry = null;
     let latencyAcknowledgementCacheEntry = null;
     const playbackGroupId = `turn-${epoch}`;
     const maximumResponseCharacters = Number(
@@ -1972,9 +1786,7 @@ export class RealtimeConversationOrchestrator {
           stage: 'llm.sentence_ready_for_tts', callId: this.call.id,
           generationId, sentenceNumber: currentSentenceNumber, characters: sentenceCharacters,
         }, 'Complete LLM sentence queued for immediate TTS');
-        const fieldCache = !acknowledgement && currentSentenceNumber === 1
-          ? workflowFieldCacheEntry : null;
-        const reusableAudio = acknowledgement ? latencyAcknowledgementCacheEntry : fieldCache;
+        const reusableAudio = acknowledgement ? latencyAcknowledgementCacheEntry : null;
         if (Buffer.isBuffer(reusableAudio?.audio) && reusableAudio.audio.length) {
           if (!await this.#reserveTtsCharacters(sentence, generationId)) return false;
           this.audioEngine.beginOutputGeneration(generationId, generationPlaybackGroupId);
@@ -1998,17 +1810,6 @@ export class RealtimeConversationOrchestrator {
               stage: 'template_engine.latency_acknowledgement_audio_cache_hit',
               callId: this.call.id, turnEpoch: epoch, latencyMs,
             }, 'Cached latency acknowledgement audio queued without live TTS');
-          } else {
-            completedSentences.push(sentence);
-            this.runtimeMetrics.latency.workflowFieldAudioCacheHits ??= 0;
-            this.runtimeMetrics.latency.workflowFieldAudioCacheHits += 1;
-            this.log.info({
-              stage: 'template_engine.workflow_field_audio_cache_hit',
-              callId: this.call.id, turnEpoch: epoch,
-              workflowRecordId: fieldCache.descriptor?.workflowRecordId,
-              fieldKey: fieldCache.descriptor?.fieldKey,
-              latencyMs,
-            }, 'Cached localized Workflow field audio queued without live TTS');
           }
           return true;
         }
@@ -2053,8 +1854,7 @@ export class RealtimeConversationOrchestrator {
           }
           return played;
         }
-        const capturedAudio = fieldCache?.descriptor || acknowledgement
-          ? [] : null;
+        const capturedAudio = acknowledgement ? [] : null;
         const played = await this.#synthesize(sentence, generationId, {
           kind, startedAt: turnStartedAt, deferDrain: true,
           playbackGroupId: generationPlaybackGroupId, deferBoundaryFlush: true, epoch,
@@ -2074,14 +1874,6 @@ export class RealtimeConversationOrchestrator {
             }
           },
         });
-        if (played && capturedAudio?.length && fieldCache?.descriptor) {
-          const audio = Buffer.concat(capturedAudio);
-          this.runtimeMetrics.latency.workflowFieldAudioCacheMisses ??= 0;
-          this.runtimeMetrics.latency.workflowFieldAudioCacheMisses += 1;
-          void this.workflowFieldCache.set(
-            this.runtimeProfile, fieldCache.descriptor, sentence, audio,
-          );
-        }
         if (played && acknowledgement && capturedAudio?.length
           && latencyAcknowledgementCacheEntry?.text === sentence) {
           const audio = Buffer.concat(capturedAudio);
@@ -2197,7 +1989,6 @@ export class RealtimeConversationOrchestrator {
         acknowledgementsCancelled = true;
         return true;
       },
-      setWorkflowFieldAudioCache: (entry) => { workflowFieldCacheEntry = entry ?? null; },
       setLatencyAcknowledgementAudioCache: (entry) => {
         latencyAcknowledgementCacheEntry = entry ?? null;
       },
@@ -2313,9 +2104,8 @@ export class RealtimeConversationOrchestrator {
         });
     }
     const latencyAcknowledgement = armTemplateEngineTurnLatencyAcknowledgement({
-      // Eligibility is unknown until deterministic resolution completes. Keeping the timer
-      // suppressed prevents booking, confirmation, closing and tool turns from
-      // emitting progress speech before their route is known.
+      // Release the configured progress message only after the unified runtime
+      // confirms that this turn is entering contextual retrieval.
       suppressed: true,
       thresholdMs: env.VOICE_TURN_ACKNOWLEDGEMENT_AFTER_MS,
       acknowledgementText: latencyAcknowledgementText,
@@ -2363,24 +2153,14 @@ export class RealtimeConversationOrchestrator {
     let finalResponseReadyAt = null;
     let finalResponseQueuedAt = null;
     let acknowledgementAtReady = null;
-    let preservePendingRequest = false;
     const retrievalAbortController = new AbortController();
     this.activeRetrievalAbortController = retrievalAbortController;
     try {
-      const unansweredRequest = this.pendingTemplateEngineRequest?.text ?? null;
-      preservePendingRequest = Boolean(unansweredRequest)
-        && !this.templateEngineState.activeWorkflowId
-        && acknowledgementOnly(query, this.interruptionConfiguration.acknowledgementPhrases);
-      const interruptedWorkflowRequest = this.templateEngineState.activeWorkflowId
-        ? unansweredRequest : null;
       this.pendingTemplateEngineRequest = {
-        text: preservePendingRequest
-          ? unansweredRequest
-          : [interruptedWorkflowRequest, String(query)].filter(Boolean).join('\n').slice(-4000),
+        text: String(query).slice(-4000),
         epoch,
       };
       result = await runTemplateEngineProductionTurn({
-        interruptedWorkflowRequest,
         auth,
         scope,
         callId: this.call.id,
@@ -2396,9 +2176,6 @@ export class RealtimeConversationOrchestrator {
         latestUtterance: query,
         conversationHistory: history,
         pendingQuestion: this.liveCallMemory.snapshot().pendingQuestion,
-        acknowledgementPhrases: this.interruptionConfiguration.acknowledgementPhrases,
-        explicitStopPhrases: this.interruptionConfiguration.explicitStopPhrases,
-        unansweredRequest,
         state: this.templateEngineState,
         runtimeProfile: this.runtimeProfile,
         authorizedWorkflowTools: assignedTools,
@@ -2420,51 +2197,18 @@ export class RealtimeConversationOrchestrator {
             operation,
           }, 'Single permitted template-engine LLM invocation started');
         },
-        onConversationGuidanceSelected: (details) => {
-          this.log.info({
-            stage: 'template_engine.conversation_guidance_selected',
-            callId: this.call.id,
-            turnEpoch: epoch,
-            ...details,
-          }, 'Published Conversation Guidance selection completed');
-        },
-        onFollowUpDiagnostics: (details) => {
-          this.log.info({
-            stage: 'template_engine.follow_up_validated',
-            callId: this.call.id,
-            turnEpoch: epoch,
-            ...details,
-          }, 'Template-engine follow-up generation and validation completed');
-        },
         onTurnResolved: ({ decision, activeWorkflow }) => {
           latencyAcknowledgement.setSuppressed(!latencyAcknowledgementEligibleForRoute({
             decision, activeWorkflow,
           }));
         },
-        onWorkflowDiagnostics: (details) => {
-          this.log.info({
-            stage: 'template_engine.workflow_transition',
-            callId: this.call.id,
-            turnEpoch: epoch,
-            ...details,
-          }, 'Authorized template-engine Workflow transition completed');
-        },
-        loadWorkflowContext: (input) => loadTemplateEngineWorkflowContext(
-          input, this.dependencies.templateEngineWorkflowDependencies,
-        ),
         retrieveQdrantKnowledge: this.dependencies.retrieveQdrantKnowledge
           ?? retrieveAgentQdrantKnowledge,
-        runQdrantGroundedTurn: this.dependencies.runQdrantGroundedTurn
-          ?? runAgentQdrantGroundedTurn,
+        runQdrantUniversalTurn: this.dependencies.runQdrantUniversalTurn
+          ?? runAgentQdrantUniversalTurn,
         persistWorkflowState: async (state) => { this.templateEngineState = {
           ...this.templateEngineState, ...state,
         }; },
-        getCachedWorkflowSpeech: (descriptor) => (
-          this.workflowFieldCache.get(this.runtimeProfile, descriptor)
-        ),
-        cacheWorkflowSpeech: (descriptor, speech) => (
-          this.workflowFieldCache.set(this.runtimeProfile, descriptor, speech)
-        ),
         executeAuthorizedTool: async (toolCall) => {
           const results = await (this.dependencies.executeTools ?? executeAgentTools)(
             this.runtimeProfile,
@@ -2643,7 +2387,6 @@ export class RealtimeConversationOrchestrator {
       stageTimings,
     });
     const finalAnswer = this.#fitTtsMessage(result.speech);
-    sentencePipeline.setWorkflowFieldAudioCache(result.workflow?.speechCache ?? null);
     if (!finalAnswer || !sentencePipeline.enqueue(finalAnswer)) {
       sentencePipeline.cancel();
       throw new AppError(503, 'The template-engine response could not be queued for speech',
@@ -2699,15 +2442,13 @@ export class RealtimeConversationOrchestrator {
     sentencePipeline.markTranscriptCommitted();
     if (this.#isStaleGeneration(epoch) || this.controller.state !== callStates.SPEAKING) return;
     await this.controller.playbackComplete();
+    if (result.callControl === 'close') {
+      await this.#close('configured_universal_turn_closing', { speakClosing: false });
+      return Object.freeze({ playbackCompleted: true, callClosed: true });
+    }
     if (!result.recoveryKind && !result.validationFailure && !result.operationalFailure
       && !result.unexpectedFailure
-      && !preservePendingRequest
       && this.pendingTemplateEngineRequest?.epoch === epoch) this.pendingTemplateEngineRequest = null;
-    if (preservePendingRequest) this.log.info({
-      stage: 'template_engine.pending_request_preserved',
-      callId: this.call.id,
-      turnEpoch: epoch,
-    }, 'Conversational acknowledgement did not erase the unanswered request');
     if (result.recoveryKind) this.log.info({ stage: 'template_engine.recovery_delivered',
       callId: this.call.id, turnEpoch: epoch, recoveryKind: result.recoveryKind,
       spokenCharacters: answer.length, pendingRequestRetained: Boolean(this.pendingTemplateEngineRequest),

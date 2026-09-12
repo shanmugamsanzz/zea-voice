@@ -6,9 +6,7 @@ export function tagTemplateEngineTiming(request, operation) {
 }
 
 const operations = new Map([
-  ['template_engine_post_search_decision', 'answer_generation'],
-  ['agent_qdrant_grounded_answer', 'answer_generation'],
-  ['template_engine_workflow_speech', 'workflow_speech_generation'],
+  ['agent_qdrant_universal_turn', 'answer_generation'],
 ]);
 
 function timedOperationCalls(stageTimings, operation) {
@@ -28,7 +26,7 @@ export function assertVerifiedFactualStageArchitecture({ architecture, stageTimi
   });
   const violations = [];
   if (calls.retrieval !== 1) violations.push('focused_retrieval_must_run_once');
-  if (calls.answerGeneration !== 1) violations.push('grounded_answer_generation_must_run_once');
+  if (calls.answerGeneration !== 1) violations.push('universal_llm_operation_must_run_once');
   if (calls.otherLlm !== 0) violations.push('unexpected_llm_operation');
   if (architecture.ttsReady !== true) violations.push('deterministic_validation_not_tts_ready');
   if (violations.length) {
@@ -59,11 +57,6 @@ export function instrumentTemplateEngineTurn(dependencies) {
   };
   return {
     ...dependencies,
-    ...(typeof dependencies.loadWorkflowContext === 'function' ? {
-      loadWorkflowContext: measured(
-        'preparation', dependencies.loadWorkflowContext, { operation: 'workflow_context' },
-      ),
-    } : {}),
     ...(typeof dependencies.retrieveQdrantKnowledge === 'function' ? {
       retrieveQdrantKnowledge: measured(
         'retrieval', dependencies.retrieveQdrantKnowledge, { operation: 'retrieval' },

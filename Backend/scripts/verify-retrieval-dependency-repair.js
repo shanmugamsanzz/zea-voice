@@ -6,14 +6,11 @@ await import('../src/voice/realtime-conversation-orchestrator.js');
 const workflowAuthorization = await readFile(new URL(
   '../src/knowledge-bases/workflow-tool-authorization.js', import.meta.url,
 ), 'utf8');
-const workflowContext = await readFile(new URL(
-  '../src/voice/interaction/template-engine-workflow-context.js', import.meta.url,
-), 'utf8');
 const realtime = await readFile(new URL(
   '../src/voice/realtime-conversation-orchestrator.js', import.meta.url,
 ), 'utf8');
 
-for (const source of [workflowAuthorization, workflowContext]) {
+for (const source of [workflowAuthorization]) {
   assert.doesNotMatch(source, /\bknowledge_documents\b/u);
   assert.doesNotMatch(source, /\bknowledge_document_versions\b/u);
   assert.doesNotMatch(source, /\bknowledge_chunks\b/u);
@@ -21,13 +18,16 @@ for (const source of [workflowAuthorization, workflowContext]) {
 }
 assert.doesNotMatch(realtime, /template-engine-production-retrieval/u);
 assert.doesNotMatch(realtime, /ensurePublishedEngineReady/u);
+assert.doesNotMatch(realtime, /loadTemplateEngineWorkflowContext/u);
+assert.doesNotMatch(realtime, /template-engine-(?:decision-contract|output-validator|post-search-contract|workflow-context|workflow-runtime)/u);
 assert.match(realtime, /retrieveAgentQdrantKnowledge/u);
-assert.match(realtime, /runAgentQdrantGroundedTurn/u);
+assert.match(realtime, /runAgentQdrantUniversalTurn/u);
 
 console.log(JSON.stringify({
   applicationImports: true,
   realtimeImports: true,
   workflowAuthorizationImports: true,
+  legacyWorkflowContextRestored: false,
   legacyDocumentTableDependencies: 0,
   legacyPublicationRuntimeRestored: false,
 }, null, 2));

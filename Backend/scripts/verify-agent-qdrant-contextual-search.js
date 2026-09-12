@@ -90,10 +90,44 @@ assert.deepEqual(result.diagnostics, {
   tenantAgentFiltered: true,
 });
 
+let emptyEmbeddingCalls = 0;
+let emptySearchCalls = 0;
+const empty = await retrieveAgentQdrantKnowledge({
+  tenantId,
+  agentId,
+  question: 'A finalized turn with no matching document',
+  previousContext: request.previousContext,
+  cancellationSignal: controller.signal,
+}, {
+  embedQuestion: async () => {
+    emptyEmbeddingCalls += 1;
+    return { model: 'intfloat/multilingual-e5-base', vector: Array(768).fill(0.02) };
+  },
+  searchPoints: async (receivedTenantId, receivedAgentId, _vector, options) => {
+    emptySearchCalls += 1;
+    assert.equal(receivedTenantId, tenantId);
+    assert.equal(receivedAgentId, agentId);
+    assert.equal(options.limit, 3);
+    return [];
+  },
+});
+assert.equal(emptyEmbeddingCalls, 1);
+assert.equal(emptySearchCalls, 1);
+assert.deepEqual(empty.chunks, []);
+assert.equal(empty.diagnostics.returnedChunkCount, 0);
+
+await assert.rejects(() => retrieveAgentQdrantKnowledge(request, {
+  embedQuestion: async () => ({ model: 'another-model', vector: Array(768).fill(0.01) }),
+  searchPoints: async () => {
+    throw new Error('Search must not run with an unverified query embedding');
+  },
+}), /multilingual-e5-base/u);
+
 console.log(JSON.stringify({
   retrieval: 'one-contextual-vector-search',
   queryEmbeddingCount: embeddingCalls,
   qdrantSearchCount: searchCalls,
   returnedChunks: result.chunks.length,
+  emptyResultVerified: true,
   tenantAgentFiltered: true,
 }, null, 2));

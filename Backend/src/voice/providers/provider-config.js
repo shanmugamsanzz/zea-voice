@@ -94,7 +94,6 @@ export function buildCanonicalRuntimeConfiguration({
   row,
   resolvedAgent,
   settings = {},
-  knowledgeBases = [],
   runtimeTools = [],
   sttRuntimeSettings = {},
   ttsRuntimeSettings = {},
@@ -117,15 +116,6 @@ export function buildCanonicalRuntimeConfiguration({
       system: row.prompt,
       welcome: row.welcome_message ?? null,
       temperature: Number(row.temperature),
-    }),
-    knowledge: Object.freeze({
-      assignedPublishedRevisions: Object.freeze(knowledgeBases.map((knowledgeBase) => Object.freeze({
-        knowledgeBaseId: knowledgeBase.id,
-        usageDirection: knowledgeBase.usageDirection,
-        priority: knowledgeBase.priority,
-        publicationRevision: knowledgeBase.publicationRevision,
-        semanticReady: knowledgeBase.semanticReady === true,
-      }))),
     }),
     memory: Object.freeze({
       policy: interaction.cachePolicy,
@@ -192,7 +182,6 @@ const sttSettingKeys = [
   'timeBasedInterruptionEnabled', 'wordBasedInterruptionEnabled',
   'speechConfirmationDelayMs', 'minimumMeaningfulWords',
   'acknowledgementPhrases', 'explicitStopPhrases',
-  'callCheckPhrases', 'callCheckResponse',
   'wordInterruptionMinWords', 'wordInterruptionTriggerWords', 'interruptionPolicy',
   'sttHighVadSensitivity', 'sttVadSignals', 'sttFlushSignal',
   'sttPositiveSpeechThreshold', 'sttNegativeSpeechThreshold', 'sttMinSpeechFrames',
@@ -272,7 +261,6 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
             WHERE aa.tenant_id=a.tenant_id AND aa.workspace_id=a.workspace_id
               AND aa.agent_id=a.id AND caa.status='active'
               AND caa.storage_status='ready' AND caa.deleted_at IS NULL) ambience,
-          '[]'::jsonb knowledge_bases
          FROM voice_agents a
          JOIN provider_models sm ON sm.id=a.stt_model_id AND sm.status='active' AND sm.deleted_at IS NULL
          JOIN ai_providers sp ON sp.id=sm.provider_id AND sp.type='stt' AND sp.status='connected' AND sp.deleted_at IS NULL
@@ -301,12 +289,10 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
     // agent only contributes the voice selected by its configured model.
     const ttsRuntimeSettings = { voiceId: row.voice_id };
     const runtimeTools = tools(row.tools, decrypt);
-    const knowledgeBases = row.knowledge_bases ?? [];
     const configuration = buildCanonicalRuntimeConfiguration({
       row,
       resolvedAgent,
       settings,
-      knowledgeBases,
       runtimeTools,
       sttRuntimeSettings,
       ttsRuntimeSettings,
@@ -356,7 +342,6 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
         llm: provider(row, 'llm', decrypt),
         tts: provider(row, 'tts', decrypt, ttsRuntimeSettings),
       },
-      knowledgeBases,
       pronunciation: { groups: row.pronunciation_groups ?? [] },
       ambience: row.ambience ?? null,
       tools: runtimeTools,

@@ -2,18 +2,13 @@ import assert from 'node:assert/strict';
 import { instrumentTemplateEngineTurn, tagTemplateEngineTiming } from '../src/voice/interaction/template-engine-turn-timing.js';
 
 const events = [];
-let publicationCalls = 0;
 let retrievalCalls = 0;
 let llmCalls = 0;
 const measured = instrumentTemplateEngineTurn({
   onStageTiming: (event) => events.push(event),
-  loadPublishedContext: async (input) => {
-    publicationCalls += 1;
-    return { scope: input.scope, artifacts: {}, publishedWorkflows: [] };
-  },
-  retrieveEvidence: async (input) => {
+  retrieveQdrantKnowledge: async (input) => {
     retrievalCalls += 1;
-    return { scope: input.scope, evidence: [], diagnostics: {} };
+    return { request: input, chunks: [], diagnostics: {} };
   },
   invokeStructuredLlm: async () => {
     llmCalls += 1;
@@ -21,17 +16,10 @@ const measured = instrumentTemplateEngineTurn({
   },
 });
 
-const scope = { tenantId: 'tenant-1', publications: [{ knowledgeBaseId: 'kb-1', publicationRevision: 2 }] };
-const publicationInput = { callId: 'call-1', scope };
-await measured.loadPublishedContext(publicationInput);
-await measured.loadPublishedContext(structuredClone(publicationInput));
-assert.equal(publicationCalls, 1);
-
-const retrievalInput = { callId: 'call-1', scope, latestUtterance: 'configured request' };
-await Promise.all([measured.retrieveEvidence(retrievalInput), measured.retrieveEvidence(retrievalInput)]);
+const retrievalInput = { tenantId: 'tenant-1', agentId: 'agent-1', question: 'configured request' };
+await measured.retrieveQdrantKnowledge(retrievalInput);
 assert.equal(retrievalCalls, 1);
-await measured.retrieveEvidence({ ...retrievalInput, latestUtterance: 'changed request' });
-assert.equal(retrievalCalls, 2);
+assert.equal(events.at(-1).operation, 'retrieval');
 
 const answerRequest = tagTemplateEngineTiming(Object.freeze({
   responseFormat: { name: 'template_engine_post_search_decision' },
@@ -44,5 +32,5 @@ assert.ok(events.every((event) => Number.isFinite(event.durationMs) && event.dur
 
 console.log(JSON.stringify({
   suite: 'template-engine-operation-timing', passed: true,
-  publicationCalls, retrievalCalls, llmCalls,
+  retrievalCalls, llmCalls,
 }));

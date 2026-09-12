@@ -17,9 +17,9 @@ const checks = [
   ['multilingual E5 embeddings', 'verify-agent-document-embeddings.js'],
   ['multiple-document lifecycle', 'verify-agent-qdrant-documents.js'],
   ['contextual tenant-agent search', 'verify-agent-qdrant-contextual-search.js'],
-  ['one grounded LLM turn', 'verify-agent-qdrant-grounded-turn.js'],
+  ['one universal LLM turn', 'verify-agent-qdrant-grounded-turn.js'],
   ['production runtime', 'verify-template-engine-production-runtime.js'],
-  ['booking and cancellation workflow', 'verify-template-engine-workflow-runtime.js'],
+  ['configured workflow actions', 'verify-agent-qdrant-grounded-turn.js'],
   ['interruption audio isolation', 'verify-interruption-audio-isolation.js'],
   ['existing TTS', 'verify-voice-tts.js'],
   ['retrieval dependency cutover', 'verify-retrieval-dependency-repair.js'],
@@ -92,9 +92,9 @@ async function verifyLiveOrchestratorRetrievalWiring() {
     /retrieveQdrantKnowledge:\s*this\.dependencies\.retrieveQdrantKnowledge\s*\?\?\s*retrieveAgentQdrantKnowledge/u,
     'Live orchestrator must wire the Qdrant retrieval implementation');
   assert.match(source,
-    /runQdrantGroundedTurn:\s*this\.dependencies\.runQdrantGroundedTurn\s*\?\?\s*runAgentQdrantGroundedTurn/u,
+    /runQdrantUniversalTurn:\s*this\.dependencies\.runQdrantUniversalTurn\s*\?\?\s*runAgentQdrantUniversalTurn/u,
     'Live orchestrator must wire the single-LLM grounded-turn implementation');
-  assert.doesNotMatch(source, /^\s*(?:retrieveQdrantKnowledge|runQdrantGroundedTurn),\s*$/gmu,
+  assert.doesNotMatch(source, /^\s*(?:retrieveQdrantKnowledge|runQdrantUniversalTurn),\s*$/gmu,
     'Live orchestrator must not reference undefined shorthand dependencies');
   return { label: 'live orchestrator Qdrant dependency wiring', passed: true };
 }
@@ -149,14 +149,14 @@ console.log(JSON.stringify({
     'bounded_context_query_embedding',
     'tenant_agent_filtered_qdrant_search',
     'top_two_or_three_chunks',
-    'one_grounded_llm_call',
+    'one_universal_llm_call',
     'deterministic_validation',
     'existing_tts',
   ],
   passed: true,
   checks: results,
   guarantees: {
-    maximumLlmCallsPerFactualTurn: 1,
+    maximumLlmCallsPerUserTurn: 1,
     queryEmbeddingsPerFactualTurn: 1,
     qdrantSearchesPerFactualTurn: 1,
     maximumRetrievedChunks: 3,

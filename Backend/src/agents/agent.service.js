@@ -14,7 +14,6 @@ import {
 import { normalizePostCallClosingSettings } from '../voice/integrations/postcall-closing-config.js';
 import { normalizePostCallEndTriggerSettings } from '../voice/integrations/postcall-end-trigger-config.js';
 import { normalizeTtsUsageLimitSettings } from '../voice/tts-usage-limit-config.js';
-import { normalizeCallCheckSettings } from '../voice/interaction/call-check-config.js';
 import { normalizeLiveMemorySettings } from '../voice/interaction/live-memory-config.js';
 
 const legacyAgentTtsProviderOverrides = new Set([
@@ -30,13 +29,13 @@ function withoutAgentTtsProviderOverrides(settings = {}) {
 
 function normalizedAgentSettings(settings, interruptionSensitivity) {
   try {
-    return normalizeLiveMemorySettings(normalizeCallCheckSettings(normalizeTtsUsageLimitSettings(normalizeTaskCompletionSettings(normalizeCallbackSettings(
+    return normalizeLiveMemorySettings(normalizeTtsUsageLimitSettings(normalizeTaskCompletionSettings(normalizeCallbackSettings(
       normalizePostCallClosingSettings(normalizePostCallSummarySettings(
         normalizePostCallEndTriggerSettings(normalizeInteractionSettings(normalizeInterruptionSettings(
           withoutAgentTtsProviderOverrides(settings), interruptionSensitivity,
         ))),
       )),
-    )))));
+    ))));
   } catch (error) {
     throw new AppError(400, error.message, error.code ?? 'VOICE_AGENT_SETTINGS_INVALID', {
       field: error.field ?? 'settings',
