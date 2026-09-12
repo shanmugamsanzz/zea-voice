@@ -20,6 +20,8 @@ const row = {
   interruption_sensitivity: '0.3', silence_timeout_ms: 600, inactivity_timeout_seconds: 8,
   settings: {
     nonFactualRecoveryMessage: 'Sorry, I could not complete that response. Could you rephrase your request?',
+    workflowConfigurationFailureMessage: 'I cannot complete this configured action right now.',
+    technicalFailureMessage: 'I am having a technical problem right now. Please try again shortly.',
     greetingMode: 'Agent Initiates', sttLanguage: 'en-IN', sttMode: 'transcribe',
     ttsMaxCharactersPerMinute: 1000, maxCallDurationMinutes: 5,
     ttsLanguage: 'legacy-agent-value', ttsSpeed: 1.1, silentMessage: 'Are you still there?',
@@ -53,7 +55,15 @@ for (const type of ['stt', 'llm', 'tts']) {
   });
 }
 row.tts_model_settings = { streaming: true, ttsLanguage: 'en-IN', ttsSpeed: 0.9 };
-const contextRunner = async (operation) => operation({ query: async () => ({ rowCount: 1, rows: [row] }) });
+const contextRunner = async (operation) => operation({
+  query: async (sql, parameters) => {
+    const placeholders = [...sql.matchAll(/\$(\d+)/gu)].map((match) => Number(match[1]));
+    assert.equal(parameters.length, Math.max(0, ...placeholders),
+      'Runtime profile query parameter count must match its SQL placeholders');
+    assert.deepEqual(parameters, [resolved.agentId, resolved.tenantId, resolved.workspaceId]);
+    return { rowCount: 1, rows: [row] };
+  },
+});
 const profile = await loadAgentRuntimeProfile(resolved, {
   contextRunner,
   decryptCredential: (value) => value === 'encrypted-tool'

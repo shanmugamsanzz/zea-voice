@@ -283,7 +283,7 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
          JOIN workspaces w ON w.id=a.workspace_id AND w.tenant_id=a.tenant_id
         WHERE a.id=$1 AND a.tenant_id=$2 AND a.workspace_id=$3
           AND a.status='active' AND a.deleted_at IS NULL`,
-      [resolvedAgent.agentId, resolvedAgent.tenantId, resolvedAgent.workspaceId, resolvedAgent.callDirection ?? null],
+      [resolvedAgent.agentId, resolvedAgent.tenantId, resolvedAgent.workspaceId],
     );
     if (!result.rowCount) {
       throw new AppError(409, 'Agent runtime profile is no longer available', 'VOICE_RUNTIME_PROFILE_UNAVAILABLE');
