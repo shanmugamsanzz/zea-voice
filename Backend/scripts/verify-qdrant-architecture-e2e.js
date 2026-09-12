@@ -84,6 +84,21 @@ async function verifyNoPostgresKnowledgeRetrieval() {
   return { label: 'zero PostgreSQL document/chunk queries', passed: true };
 }
 
+async function verifyLiveOrchestratorRetrievalWiring() {
+  const source = await readFile(new URL(
+    '../src/voice/realtime-conversation-orchestrator.js', import.meta.url,
+  ), 'utf8');
+  assert.match(source,
+    /retrieveQdrantKnowledge:\s*this\.dependencies\.retrieveQdrantKnowledge\s*\?\?\s*retrieveAgentQdrantKnowledge/u,
+    'Live orchestrator must wire the Qdrant retrieval implementation');
+  assert.match(source,
+    /runQdrantGroundedTurn:\s*this\.dependencies\.runQdrantGroundedTurn\s*\?\?\s*runAgentQdrantGroundedTurn/u,
+    'Live orchestrator must wire the single-LLM grounded-turn implementation');
+  assert.doesNotMatch(source, /^\s*(?:retrieveQdrantKnowledge|runQdrantGroundedTurn),\s*$/gmu,
+    'Live orchestrator must not reference undefined shorthand dependencies');
+  return { label: 'live orchestrator Qdrant dependency wiring', passed: true };
+}
+
 function liveLatencyReport() {
   if (!liveLogPath) {
     if (enforceLive) {
@@ -126,6 +141,7 @@ const results = [];
 for (const [label, script] of checks) results.push(runNodeScript(label, script));
 results.push(await verifyBackendHttpStartup());
 results.push(await verifyNoPostgresKnowledgeRetrieval());
+results.push(await verifyLiveOrchestratorRetrievalWiring());
 
 console.log(JSON.stringify({
   architecture: [

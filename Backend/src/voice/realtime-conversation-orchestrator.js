@@ -2457,8 +2457,10 @@ export class RealtimeConversationOrchestrator {
         loadWorkflowContext: (input) => loadTemplateEngineWorkflowContext(
           input, this.dependencies.templateEngineWorkflowDependencies,
         ),
-        retrieveQdrantKnowledge,
-        runQdrantGroundedTurn,
+        retrieveQdrantKnowledge: this.dependencies.retrieveQdrantKnowledge
+          ?? retrieveAgentQdrantKnowledge,
+        runQdrantGroundedTurn: this.dependencies.runQdrantGroundedTurn
+          ?? runAgentQdrantGroundedTurn,
         persistWorkflowState: async (state) => { this.templateEngineState = {
           ...this.templateEngineState, ...state,
         }; },
