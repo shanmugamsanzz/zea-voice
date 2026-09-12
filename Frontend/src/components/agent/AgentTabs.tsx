@@ -257,7 +257,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       contextId: base.contextId || '',
       conversationContextMode: normalizeConversationContextMode(base.conversationContextMode),
       conversationContextTurns: base.conversationContextTurns ?? 5,
-      latencyAcknowledgementMessage: base.latencyAcknowledgementMessage || 'One moment while I check the information.',
+      latencyAcknowledgementMessage: base.latencyAcknowledgementMessage || '',
       technicalFailureMessage: base.technicalFailureMessage || '',
       nonFactualRecoveryMessage: base.nonFactualRecoveryMessage || '',
       evidenceValidationFailureMessage: base.evidenceValidationFailureMessage || '',
@@ -1785,7 +1785,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                         value={agent.latencyAcknowledgementMessage || ''}
                         disabled={isReadOnly}
                         onChange={(event) => setAgent({ ...agent, latencyAcknowledgementMessage: event.target.value })}
-                        placeholder="One moment while I check the information."
                         className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold outline-none focus:border-violet-500"
                       />
                       <p className="mt-1 text-[10px] font-semibold text-slate-400">Spoken only when the grounded answer cannot begin before the first-audio deadline.</p>

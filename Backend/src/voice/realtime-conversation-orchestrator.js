@@ -55,7 +55,7 @@ import { runTemplateEngineProductionTurn } from './interaction/template-engine-p
 import {
   armTemplateEngineTurnLatencyAcknowledgement,
   latencyAcknowledgementEligibleForRoute,
-  resolveDynamicLatencyAcknowledgement,
+  resolveConfiguredLatencyAcknowledgement,
 } from './interaction/template-engine-turn-latency.js';
 import { recordTemplateEngineTurnMetrics, templateEngineAudioPercentiles } from './interaction/template-engine-observability.js';
 import { assertVerifiedFactualStageArchitecture } from './interaction/template-engine-turn-timing.js';
@@ -2281,11 +2281,8 @@ export class RealtimeConversationOrchestrator {
       epoch, turnStartedAt, firstAudioDeadlineAt,
     );
     let finalResponseReady = false;
-    const latencyAcknowledgementSelection = resolveDynamicLatencyAcknowledgement({
+    const latencyAcknowledgementSelection = resolveConfiguredLatencyAcknowledgement({
       configuredText: configuredLatencyAcknowledgementResponse(this.runtimeProfile),
-      latestUtterance: query,
-      language: languageCode(this.runtimeProfile.agent.language),
-      variantSeed: epoch,
     });
     const latencyAcknowledgementText = latencyAcknowledgementSelection.text;
     const acknowledgementCacheEntry = (audio = null) => ({
@@ -2336,8 +2333,6 @@ export class RealtimeConversationOrchestrator {
           turnEpoch: epoch,
           thresholdMs,
           queued,
-          acknowledgementRequestKind: latencyAcknowledgementSelection.requestKind,
-          acknowledgementLanguage: latencyAcknowledgementSelection.language,
           elapsedMs: Date.now() - turnStartedAt,
         }, 'Whole-turn latency acknowledgement threshold reached while processing continued');
       },

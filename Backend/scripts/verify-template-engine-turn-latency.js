@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import {
   armTemplateEngineTurnLatencyAcknowledgement,
   latencyAcknowledgementEligibleForRoute,
-  resolveDynamicLatencyAcknowledgement,
+  resolveConfiguredLatencyAcknowledgement,
 } from '../src/voice/interaction/template-engine-turn-latency.js';
 import {
   recordTemplateEngineTurnMetrics,
@@ -31,44 +31,12 @@ function fakeTimers() {
   };
 }
 
-const tamilComparison = resolveDynamicLatencyAcknowledgement({
+assert.equal(resolveConfiguredLatencyAcknowledgement({
   configuredText: 'Configured progress speech.',
-  latestUtterance: 'Silverக்கும் Goldக்கும் என்ன வித்தியாசம்?',
-  language: 'ta-IN',
-  variantSeed: 1,
-});
-assert.equal(tamilComparison.requestKind, 'comparison');
-assert.equal(tamilComparison.language, 'ta');
-assert.ok(tamilComparison.text.includes('ஒப்பிட்டு') || tamilComparison.text.includes('வித்தியாச'));
-assert.doesNotMatch(tamilComparison.text, /Silver|Gold/iu,
-  'Latency speech must never repeat unverified business entities');
-
-const englishPrice = resolveDynamicLatencyAcknowledgement({
-  configuredText: 'Configured progress speech.',
-  latestUtterance: 'How much does that cost?',
-  language: 'en-US',
-  variantSeed: 2,
-});
-assert.equal(englishPrice.requestKind, 'price');
-assert.match(englishPrice.text, /price/iu);
-assert.equal(resolveDynamicLatencyAcknowledgement({
-  configuredText: '', latestUtterance: 'Tell me about it', language: 'en',
-}).text, '', 'Dynamic acknowledgement remains disabled without approved configuration');
-assert.equal(resolveDynamicLatencyAcknowledgement({
-  configuredText: 'ஒரு நிமிடம்.', latestUtterance: 'जानकारी बताइए', language: 'hi-IN',
-}).text, 'ஒரு நிமிடம்.',
-'Languages without reviewed variants must preserve the configured caller-facing wording');
-
-const firstVariant = resolveDynamicLatencyAcknowledgement({
-  configuredText: 'Configured progress speech.', latestUtterance: 'Tell me the details',
-  language: 'en', variantSeed: 0,
-});
-const secondVariant = resolveDynamicLatencyAcknowledgement({
-  configuredText: 'Configured progress speech.', latestUtterance: 'Tell me the details',
-  language: 'en', variantSeed: 1,
-});
-assert.notEqual(firstVariant.text, secondVariant.text,
-  'Successive turns can use varied context-compatible acknowledgement wording');
+}).text, 'Configured progress speech.',
+'Latency acknowledgement must preserve the agent-configured caller-facing wording');
+assert.equal(resolveConfiguredLatencyAcknowledgement({ configuredText: '' }).text, '',
+  'Latency acknowledgement remains disabled without agent configuration');
 
 assert.equal(latencyAcknowledgementEligibleForRoute({ decision: 'SEARCH' }), true);
 for (const decision of ['RESPONSE', 'CLARIFY', 'TOOL', 'TOOL_RESULT']) {
