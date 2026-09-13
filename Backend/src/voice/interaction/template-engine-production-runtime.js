@@ -7,6 +7,7 @@ import {
 } from './template-engine-state.js';
 import { retrieveAgentQdrantKnowledge } from './agent-qdrant-retrieval.js';
 import { runAgentQdrantUniversalTurn } from './agent-qdrant-grounded-turn.js';
+import { buildUniversalTurnContext } from './universal-turn-context.js';
 import {
   applyUniversalWorkflowResult,
   buildUniversalAgentConfiguration,
@@ -205,8 +206,14 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     ?? input.runtimeProfile?.limits?.ttsMaxCharactersPerResponse);
   const retrievalScope = authenticatedRetrievalScope(input);
   const state = createMinimalTemplateEngineState({
-    conversationHistory: input.conversationHistory,
     ...object(input.state),
+    conversationHistory: input.conversationHistory ?? input.state?.recentCompleteTurns,
+  });
+  const conversationContext = buildUniversalTurnContext({
+    currentQuestion: input.latestUtterance,
+    conversationHistory: input.conversationHistory ?? state.recentCompleteTurns,
+    pendingQuestion: input.pendingQuestion ?? state.pendingClarification?.question,
+    speechStatus: input.speechStatus,
   });
   const agentPrompt = [
     input.mainPrompt,
@@ -230,7 +237,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     tenantId: retrievalScope.tenantId,
     agentId: retrievalScope.agentId,
     question: input.latestUtterance,
-    previousContext: state.recentCompleteTurns,
+    previousContext: conversationContext.recentConversation,
     cancellationSignal: input.cancellationSignal,
   });
   assertCurrentTurn();
@@ -245,7 +252,8 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     tenantId: retrievalScope.tenantId,
     agentId: retrievalScope.agentId,
     currentQuestion: input.latestUtterance,
-    previousContext: state.recentCompleteTurns,
+    previousContext: conversationContext.recentConversation,
+    conversationContext,
     cancellationSignal: input.cancellationSignal,
     agentPrompt,
     agentConfiguration,
@@ -260,6 +268,9 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   const workflowResult = await applyUniversalWorkflowResult({
     outcome: grounded.outcome,
     workflowAction: grounded.workflowAction,
+    actionAuthorization: grounded.actionAuthorization,
+    conversationContext,
+    speech: grounded.speech,
     state: groundedState,
     definitions: workflowDefinitions,
     persistWorkflowState: dependencies.persistWorkflowState,

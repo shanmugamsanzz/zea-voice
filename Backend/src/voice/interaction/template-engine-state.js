@@ -8,6 +8,7 @@ export const templateEngineStateKeys = Object.freeze([
   'activeWorkflowId',
   'collectedToolFields',
   'confirmationStatus',
+  'confirmationPrompt',
 ]);
 
 const mutableStateKeys = new Set(templateEngineStateKeys.filter((key) => (
@@ -55,6 +56,7 @@ export function createMinimalTemplateEngineState({
   activeWorkflowState = null,
   collectedToolFields = null,
   confirmationStatus = null,
+  confirmationPrompt = null,
 } = {}) {
   const pairLimit = Math.max(3, Math.min(5, Number(recentPairLimit) || 5));
   const workflow = workflowSource(activeWorkflowState);
@@ -85,6 +87,7 @@ export function createMinimalTemplateEngineState({
         ?? activeWorkflowState?.confirmationStatus,
       40,
     ) || null,
+    confirmationPrompt: cleanText(confirmationPrompt, 4000) || null,
   });
 }
 
@@ -109,6 +112,6 @@ export function applyMinimalTemplateEngineStateUpdate(state, update) {
     activeWorkflowId: next.activeWorkflowId,
     collectedToolFields: next.collectedToolFields,
     confirmationStatus: next.confirmationStatus,
+    confirmationPrompt: next.confirmationPrompt,
   });
 }
-

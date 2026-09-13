@@ -36,8 +36,10 @@ function request() {
 }
 
 let successfulAttempts = 0;
+let baseOutputTokens;
 const successful = await createTemplateEngineStructuredInvoker({
-  async *stream() {
+  async *stream(input) {
+    baseOutputTokens = input.maxOutputTokens;
     successfulAttempts += 1;
     yield { type: 'text_delta', delta: JSON.stringify(decision) };
     yield { type: 'completed', finishReason: 'stop', usage: { totalTokens: 10 } };
@@ -46,6 +48,17 @@ const successful = await createTemplateEngineStructuredInvoker({
 })(request());
 assert.deepEqual(successful.outputParsed, decision);
 assert.equal(successfulAttempts, 1);
+let reservedAttempts = 0;
+await createTemplateEngineStructuredInvoker({
+  async *stream(input) {
+    reservedAttempts += 1;
+    assert.equal(input.maxOutputTokens, Math.min(4096, baseOutputTokens + 768));
+    yield { type: 'text_delta', delta: JSON.stringify(decision) };
+    yield { type: 'completed', finishReason: 'stop' };
+  },
+  cancel() {},
+})({ ...request(), structuredOutputTokenReserve: 768 });
+assert.equal(reservedAttempts, 1);
 
 for (const failure of [
   {

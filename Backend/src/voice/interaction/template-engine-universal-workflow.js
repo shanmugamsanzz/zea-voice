@@ -1,4 +1,6 @@
 import { AppError } from '../../middleware/errors.js';
+import { isDeepStrictEqual } from 'node:util';
+import { assertExplicitAction } from './universal-response-safety.js';
 import { resolveTaskCompletionConfiguration } from './completion-config.js';
 import { toolArgumentsMatchSchema, validateToolArguments } from '../tools/tool-security.js';
 
@@ -114,14 +116,15 @@ function validatePartialArguments(values, definition) {
   return values;
 }
 
-function workflowState(state, values, status, workflowId) {
+function workflowState(state, values, status, workflowId, confirmationPrompt = null) {
   return Object.freeze({ ...state, activeWorkflowId: workflowId,
-    collectedToolFields: Object.freeze({ ...values }), confirmationStatus: status });
+    collectedToolFields: Object.freeze({ ...values }), confirmationStatus: status, confirmationPrompt });
 }
 
 export async function applyUniversalWorkflowResult({
   outcome, workflowAction, state = {}, definitions = [], persistWorkflowState,
   executeAuthorizedTool,
+  actionAuthorization, conversationContext, speech,
 } = {}) {
   if (outcome === 'WORKFLOW_CANCELLATION') {
     const nextState = workflowState(state, {}, null, null);
@@ -140,16 +143,24 @@ export async function applyUniversalWorkflowResult({
   }
   const supplied = validatePartialArguments(object(workflowAction.arguments), definition);
   const collected = { ...object(state.collectedToolFields), ...supplied };
-  const missingFields = definition.requiredFields.filter((field) => !Object.hasOwn(collected, field));
+  const missingFields = definition.requiredFields.filter((field) => !Object.hasOwn(collected, field)
+    || collected[field] == null || typeof collected[field] === 'string' && !collected[field].trim());
   if (workflowAction.action === 'UPSERT') {
     const status = missingFields.length ? 'pending_fields' : 'awaiting_confirmation';
-    const nextState = workflowState(state, collected, status, definition.workflowId);
+    const nextState = workflowState(state, collected, status, definition.workflowId,
+      status === 'awaiting_confirmation' ? cleanText(speech, 4000) || null : null);
     await persistWorkflowState?.(nextState);
     return Object.freeze({ state: nextState,
       workflow: Object.freeze({ id: definition.workflowId, status,
         nextField: missingFields[0] ?? null }), toolExecuted: false, toolResult: null });
   }
-  if (missingFields.length || state.confirmationStatus !== 'awaiting_confirmation') {
+  assertExplicitAction(actionAuthorization, 'execute', conversationContext);
+  const delivered = conversationContext?.lastAssistantResponse;
+  if (missingFields.length || state.confirmationStatus !== 'awaiting_confirmation'
+    || activeWorkflowId !== definition.workflowId
+    || !state.confirmationPrompt || delivered?.completion !== 'complete'
+    || cleanText(delivered.content, 4000) !== state.confirmationPrompt
+    || Object.entries(supplied).some(([key, value]) => !isDeepStrictEqual(value, state.collectedToolFields?.[key]))) {
     throw new AppError(409, 'The configured workflow cannot execute before field collection and confirmation',
       'TEMPLATE_ENGINE_UNIVERSAL_WORKFLOW_NOT_READY', { missingFields });
   }

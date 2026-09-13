@@ -100,7 +100,8 @@ export function createTemplateEngineStructuredInvoker(adapter, options = {}) {
       messages: request.messages,
       tools: [],
       temperature: request.temperature ?? 0,
-      maxOutputTokens: env.VOICE_GROUNDED_MAX_OUTPUT_TOKENS,
+      maxOutputTokens: Math.min(4096, env.VOICE_GROUNDED_MAX_OUTPUT_TOKENS
+        + Math.max(0, Math.min(768, Number(request.structuredOutputTokenReserve) || 0))),
       responseFormat: request.responseFormat,
     });
     options.onActive?.({ cancel: (reason) => adapter.cancel(reason) });
@@ -1391,6 +1392,7 @@ export class RealtimeConversationOrchestrator {
         ? Math.max(0, Date.now() - this.activeCustomerSpeechStartedAt) : null,
       sttFinalizationMs: this.lastSpeechEndedAt
         ? Math.max(0, (finalEventReceivedAt ?? Date.now()) - this.lastSpeechEndedAt) : null,
+      speechStatus: { transcriptFinal: true, speechEnded: Boolean(this.lastSpeechEndedAt) },
     }));
   }
 
@@ -1952,6 +1954,7 @@ export class RealtimeConversationOrchestrator {
         transcriptCommitted = true;
         await this.controller.recordAssistantMessage(audibleText, Date.now(), {
           sources: transcriptSources,
+          interrupted: true,
         });
         this.log.info({
           stage: 'transcript.audible_partial_persisted', callId: this.call.id,
@@ -2155,6 +2158,7 @@ export class RealtimeConversationOrchestrator {
           Number(env.VOICE_TTS_MAX_RESPONSE_CHARACTERS),
         ].filter((value) => Number.isFinite(value) && value > 0)),
         latestUtterance: query,
+        speechStatus: sttTiming.speechStatus,
         conversationHistory: history,
         pendingQuestion: this.liveCallMemory.snapshot().pendingQuestion,
         state: this.templateEngineState,
@@ -2438,6 +2442,7 @@ export class RealtimeConversationOrchestrator {
     this.#scheduleLiveMemoryCheckpoint('template_engine_validated_turn');
     this.log.info({
       stage: 'template_engine.turn_completed',
+      outcome: result.decision?.outcome ?? null,
       callId: this.call.id,
       turnEpoch: epoch,
       decision: result.decision?.decision ?? null,

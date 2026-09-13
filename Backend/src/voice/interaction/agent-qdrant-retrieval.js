@@ -7,8 +7,8 @@ import {
   createQdrantRetrievalResult,
 } from './qdrant-retrieval-contract.js';
 
-const MAXIMUM_CONTEXT_TURNS = 4;
-const MAXIMUM_CONTEXT_CHARACTERS = 1_200;
+const MAXIMUM_CONTEXT_TURNS = 2;
+const MAXIMUM_CONTEXT_CHARACTERS = 320;
 export const AGENT_QDRANT_RETRIEVAL_VERSION = 1;
 
 function cleanText(value, maximum = 2_000) {
@@ -23,17 +23,22 @@ function cleanText(value, maximum = 2_000) {
  */
 export function contextualAgentDocumentSearchText(request) {
   const question = cleanText(request?.question, 2_000);
-  let remaining = MAXIMUM_CONTEXT_CHARACTERS;
+  let remaining = Math.min(MAXIMUM_CONTEXT_CHARACTERS, Math.max(80, question.length));
   const context = [];
-  for (const turn of (request?.previousContext ?? []).slice(-MAXIMUM_CONTEXT_TURNS).reverse()) {
+  // Assistant-generated claims must not feed back into retrieval as search
+  // anchors. Full delivered conversation remains available to the answer LLM.
+  const callerTurns = (request?.previousContext ?? []).filter((turn) => turn.role === 'user');
+  for (const turn of callerTurns.slice(-MAXIMUM_CONTEXT_TURNS).reverse()) {
     if (remaining <= 0) break;
-    const content = cleanText(turn?.content, Math.min(400, remaining));
+    // Preserve the end of a caller fragment because it can correct its start.
+    const content = cleanText(turn?.content).slice(-remaining);
     if (!content || content.toLocaleLowerCase() === question.toLocaleLowerCase()) continue;
-    const role = turn?.role === 'assistant' ? 'Assistant' : 'Caller';
-    context.push(`${role}: ${content}`);
+    context.push(content);
     remaining -= content.length;
   }
-  return [question, ...context.reverse()].join('\nContext: ');
+  if (!context.length) return question;
+  // Keep the explicit request at both boundaries of the single embedding input.
+  return `${question}\nPrevious caller context: ${context.reverse().join('\n')}\nCurrent question: ${question}`;
 }
 
 function runtimeDependencies(overrides = {}) {
@@ -81,6 +86,8 @@ export async function retrieveAgentQdrantKnowledge(input = {}, overrides = {}) {
       retrievalCount: points.length,
       hydrationCount: result.chunks.length,
       verifiedEvidenceCount: result.chunks.length,
+      candidateEvidenceCount: result.chunks.length,
+      answerSupportVerified: false,
       failedChannels: Object.freeze([]),
       queryEmbeddingCount: 1,
       qdrantSearchCount: 1,

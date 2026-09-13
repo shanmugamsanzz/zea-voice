@@ -22,6 +22,22 @@ const request = createQdrantRetrievalRequest({
 const contextual = contextualAgentDocumentSearchText(request);
 assert.ok(contextual.startsWith('What is its price?'));
 assert.match(contextual, /Gold package/u);
+assert.doesNotMatch(contextual, /several health checks/u);
+const changedTopic = contextualAgentDocumentSearchText({ question: 'New item details?', previousContext: [
+  { role: 'user', content: 'Earlier item' },
+  { role: 'assistant', content: 'Invented entity costs 999999. '.repeat(80) },
+] });
+assert.ok(changedTopic.startsWith('New item details?'));
+assert.ok(changedTopic.endsWith('New item details?'));
+assert.doesNotMatch(changedTopic, /Invented|999999/u);
+assert.ok(changedTopic.length < 200);
+assert.equal(contextualAgentDocumentSearchText({ question: 'Details?', previousContext: [
+  { role: 'assistant', content: 'Unsupported old answer' },
+] }), 'Details?');
+const corrected = contextualAgentDocumentSearchText({ question: 'அதன் விலை?', previousContext: [
+  { role: 'user', content: `${'Earlier choice '.repeat(70)}Correction: newer choice` },
+] });
+assert.match(corrected, /Correction: newer choice/u);
 
 let embeddingCalls = 0;
 let searchCalls = 0;
@@ -82,6 +98,8 @@ assert.deepEqual(result.diagnostics, {
   retrievalCount: 5,
   hydrationCount: 3,
   verifiedEvidenceCount: 3,
+  candidateEvidenceCount: 3,
+  answerSupportVerified: false,
   failedChannels: [],
   queryEmbeddingCount: 1,
   qdrantSearchCount: 1,
@@ -115,6 +133,18 @@ assert.equal(emptyEmbeddingCalls, 1);
 assert.equal(emptySearchCalls, 1);
 assert.deepEqual(empty.chunks, []);
 assert.equal(empty.diagnostics.returnedChunkCount, 0);
+
+const cancelled = new AbortController();
+let cancelledSearches = 0;
+await assert.rejects(() => retrieveAgentQdrantKnowledge({ ...request,
+  cancellationSignal: cancelled.signal }, {
+  embedQuestion: async () => {
+    cancelled.abort();
+    return { model: 'intfloat/multilingual-e5-base', vector: Array(768).fill(0.01) };
+  },
+  searchPoints: async () => { cancelledSearches += 1; return []; },
+}), { code: 'QDRANT_RETRIEVAL_CANCELLED' });
+assert.equal(cancelledSearches, 0);
 
 await assert.rejects(() => retrieveAgentQdrantKnowledge(request, {
   embedQuestion: async () => ({ model: 'another-model', vector: Array(768).fill(0.01) }),

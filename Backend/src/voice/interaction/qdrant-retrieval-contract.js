@@ -35,7 +35,9 @@ function boundedPreviousContext(value) {
     const role = raw?.role === 'assistant' ? 'assistant' : raw?.role === 'user' ? 'user' : null;
     const content = cleanText(raw?.content, Math.min(1_000, remaining));
     if (!role || !content) continue;
-    turns.push(Object.freeze({ role, content }));
+    turns.push(Object.freeze({ role, content,
+      ...(['interrupted', 'incomplete'].includes(raw.completion)
+        ? { completion: raw.completion } : {}) }));
     remaining -= content.length;
   }
   return Object.freeze(turns.reverse());
@@ -105,7 +107,11 @@ function verifiedChunk(request, point) {
     id: pointId,
     text,
     score,
+    // Compatibility flag verifies origin/scope only, not relevance or claims.
     verified: true,
+    provenanceVerified: true,
+    evidenceStatus: 'candidate',
+    answerSupportVerified: false,
     source: Object.freeze({
       documentId,
       filename,

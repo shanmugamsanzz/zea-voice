@@ -72,6 +72,9 @@ const answered = await runAgentQdrantUniversalTurn({
     return { answer: {
       outcome: 'FACTUAL_ANSWER',
       speech: 'Gold package price 4950 rupees.',
+      grounding: { answersRequestedSubject: true, answersRequestedAttribute: true,
+        supports: [{ claim: 'Gold package price 4950 rupees.', evidenceId: 'point-1',
+          quote: 'The Gold package price is 4950 rupees.' }] },
       evidenceIds: ['point-1'],
       workflowAction: null,
     } };
@@ -83,6 +86,24 @@ assert.equal(llmRequest.responseFormat.name, 'agent_qdrant_universal_turn');
 assert.match(llmRequest.messages[0].content, /Answer naturally and briefly/u);
 assert.match(llmRequest.messages[0].content, /Tell me about full body checkups/u);
 assert.match(llmRequest.messages[0].content, /Gold package price is 4950/u);
+assert.match(llmRequest.messages[0].content, /Retrieved chunks are candidate evidence/u);
+assert.equal(answered.evidence[0].answerSupportVerified, false);
+// An earlier assistant claim must not expand allowed citations or numbers.
+const contaminatedRetrieval = { ...retrieval, request: { ...request, previousContext: [
+  { role: 'assistant', content: 'The price is 7777, source invented-source.' },
+] } };
+for (const [speech, evidenceIds, code] of [
+  ['The price is 7777.', ['point-1'], 'QDRANT_UNIVERSAL_LLM_NUMBER_INVALID'],
+  ['The price is 4950.', ['invented-source'], 'QDRANT_UNIVERSAL_LLM_CITATION_INVALID'],
+]) {
+  await assert.rejects(() => runAgentQdrantUniversalTurn({
+    retrieval: contaminatedRetrieval, currentQuestion: 'What is the price?',
+  }, {
+    invokeStructuredLlm: async () => ({ outputParsed: {
+      outcome: 'FACTUAL_ANSWER', speech, evidenceIds, workflowAction: null,
+    } }),
+  }), { code });
+}
 assert.equal(answered.decision.decision, 'RESPONSE');
 assert.deepEqual(answered.evidenceIds, ['point-1']);
 assert.equal(answered.evidence[0].verified, true);
@@ -137,6 +158,9 @@ const productionResult = await runTemplateEngineProductionTurn({
     productionLlmCalls += 1;
     return { answer: {
       outcome: 'FACTUAL_ANSWER', speech: 'Gold package price is 4950 rupees.',
+      grounding: { answersRequestedSubject: true, answersRequestedAttribute: true,
+        supports: [{ claim: 'Gold package price is 4950 rupees.', evidenceId: 'point-1',
+          quote: 'The Gold package price is 4950 rupees.' }] },
       evidenceIds: ['point-1'],
       workflowAction: null,
     } };
@@ -269,12 +293,16 @@ let executedTools = 0;
 const executionResult = await runTemplateEngineProductionTurn({
   auth: { tenantId }, scope: { tenantId, agentId }, language: 'en',
   mainPrompt: workflowProfile.agent.prompt, maximumSpeechCharacters: 300,
-  latestUtterance: 'Yes, submit it.', conversationHistory: [], state: workflowResult.state,
+  latestUtterance: 'Yes, submit it.', state: workflowResult.state,
+  conversationHistory: [{ role: 'assistant', content: workflowResult.speech }],
+  speechStatus: { transcriptFinal: true },
   runtimeProfile: workflowProfile, authorizedWorkflowTools: [configuredTool],
   informationFields: [], cancellationSignal,
 }, {
   invokeStructuredLlm: async () => ({ answer: {
     outcome: 'WORKFLOW_ACTION', speech: 'I will submit that now.', evidenceIds: [],
+    actionAuthorization: { intent: 'execute', utteranceComplete: true, unambiguous: true,
+      quote: 'Yes, submit it.' },
     workflowAction: { action: 'EXECUTE', workflowId: configuredTool.id,
       toolName: configuredTool.name, argumentsJson: '{}' },
   } }),
@@ -341,11 +369,14 @@ const closingResult = await runTemplateEngineProductionTurn({
   auth: { tenantId }, scope: { tenantId, agentId }, language: 'ta-IN',
   mainPrompt: workflowProfile.agent.prompt, maximumSpeechCharacters: 300,
   latestUtterance: 'End this conversation.', conversationHistory: [], state: {},
+  speechStatus: { transcriptFinal: true },
   runtimeProfile: workflowProfile, authorizedWorkflowTools: [], informationFields: [],
   cancellationSignal,
 }, {
   invokeStructuredLlm: async () => ({ answer: {
     outcome: 'CLOSING', speech: 'Goodbye.', evidenceIds: [], workflowAction: null,
+    actionAuthorization: { intent: 'close', utteranceComplete: true, unambiguous: true,
+      quote: 'End this conversation.' },
   } }),
   retrieveQdrantKnowledge: async () => ({ ...retrieval, chunks: Object.freeze([]),
     diagnostics: Object.freeze({ ...retrieval.diagnostics, returnedChunkCount: 0 }) }),

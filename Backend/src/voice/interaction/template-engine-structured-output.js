@@ -36,7 +36,8 @@ function validateSchema(value, schema, path = '$') {
   if (schema.type && !schemaTypeMatches(value, schema.type)) {
     return { valid: false, reason: 'type', path };
   }
-  if (schema.type === 'object') {
+  if ((schema.type === 'object' || Array.isArray(schema.type) && schema.type.includes('object'))
+    && value !== null && typeof value === 'object' && !Array.isArray(value)) {
     const properties = schema.properties ?? {};
     for (const required of schema.required ?? []) {
       if (!Object.hasOwn(value, required)) {

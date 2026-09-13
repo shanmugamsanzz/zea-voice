@@ -67,7 +67,8 @@ export class CallController {
       at: now,
       sources: Array.isArray(options.sources) ? options.sources : [],
     };
-    this.#history.push({ role, content: normalized });
+    this.#history.push({ role, content: normalized,
+      ...(options.interrupted === true ? { interrupted: true } : {}) });
     this.#history = this.#history.slice(-env.LLM_MAX_HISTORY_MESSAGES);
     this.#lastActivityAt = now;
     await this.#hooks.onTranscript({ callId: this.callSession.id, ...entry });

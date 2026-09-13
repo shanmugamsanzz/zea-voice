@@ -1,0 +1,889 @@
+# SHANMUGA HOSPITAL — VOICE AGENT KNOWLEDGE BASE
+
+Document Purpose: Approved factual knowledge for the Shanmuga Hospital health-checkup voice agent.
+
+The agent must answer factual questions using this knowledge. If information is unavailable or marked as requiring confirmation, the agent must not invent it.
+
+---
+
+# HOSPITAL INFORMATION
+
+Hospital Name: Shanmuga Hospital Limited
+
+Type: Multi-speciality hospital
+
+Address:
+51/24, Saradha College Road,
+Salem – 636007,
+Tamil Nadu, India
+
+Telephone:
+0427 2706666
+87540 33833
+
+Email:
+[info@shanmugahospital.com](mailto:info@shanmugahospital.com)
+
+Website:
+[www.shanmugahospital.com](http://www.shanmugahospital.com)
+
+Health Checkup Service Hours (not appointment-booking hours):
+Monday to Saturday
+8:00 AM to 4:00 PM
+
+Preferred fasting checkup arrival:
+8:00 AM to 11:00 AM
+
+Emergency Services:
+Available 24 hours a day, 7 days a week.
+
+---
+
+# PACKAGE CATEGORIES
+
+Available health-checkup categories include:
+
+## Master Health Checkup
+
+* Silver Master Health Checkup
+* Gold Master Health Checkup
+* Platinum Master Health Checkup
+
+## Specialty Packages
+
+* Diabetic Health Checkup
+* Cardiac Health Checkup
+* Male Oncology Screening
+* Female Oncology Screening
+* Paediatric Health Checkup
+
+## Organ-Specific Packages
+
+* Renal Health Checkup
+* Liver Health Checkup
+* Cardiac Health Checkup
+* Lungs Health Checkup
+* Ortho Health Checkup
+* Gastro Health Checkup
+
+## Add-On Tests
+
+* Treadmill Test
+* Audiogram / Hearing Test
+* Pulmonary Function Test
+
+## Oncology Add-Ons
+
+* Male Oncology Add-On
+* Female Oncology Add-On
+
+---
+
+# SILVER MASTER HEALTH CHECKUP
+
+Package ID: SH-MHC-SILVER
+
+Package Name: Silver Master Health Checkup
+
+Aliases:
+
+* Silver
+* Silver Package
+* Silver Health Checkup
+* Silver Master
+* Basic Master Health Checkup
+
+Price:
+₹1,650 per person
+
+Category:
+General preventive health checkup
+
+Included Services:
+
+1. Complete Blood Count
+2. Blood Grouping and Rh Type
+3. Fasting Blood Sugar
+4. Post-Prandial Blood Sugar
+5. HbA1c
+6. Urea
+7. Creatinine
+8. Uric Acid
+9. Lipid Profile
+10. Liver Function Test
+11. Urine Routine Examination
+12. ECG
+13. Chest X-Ray
+14. General Physician Consultation
+
+Breakfast:
+Not included.
+
+Consultation:
+One General Physician consultation.
+
+Purpose:
+For people requesting a basic general health overview.
+
+Safety:
+Do not claim that Silver is medically appropriate for a specific caller.
+
+---
+
+# GOLD MASTER HEALTH CHECKUP
+
+Package ID: SH-MHC-GOLD
+
+Package Name: Gold Master Health Checkup
+
+Aliases:
+
+* Gold
+* Gold Package
+* Gold Health Checkup
+* Gold Master
+
+Price:
+₹4,950 per person
+
+Category:
+Comprehensive preventive health checkup
+
+Gold includes every service available in Silver plus:
+
+1. Calcium
+2. Iron and TIBC
+3. Vitamin D
+4. Vitamin B12
+5. Homocysteine
+6. TSH
+7. T3
+8. T4
+9. Electrolytes
+10. High-Sensitivity CRP
+11. ECHO
+12. USG Abdomen
+13. Dental Checkup
+14. Complimentary light breakfast after blood collection
+
+Consultation:
+One General Physician consultation.
+
+Purpose:
+A broader listed evaluation including vitamin, thyroid, inflammatory, cardiac and abdominal screening.
+
+---
+
+# PLATINUM MASTER HEALTH CHECKUP
+
+Package ID: SH-MHC-PLATINUM
+
+Package Name: Platinum Master Health Checkup
+
+Aliases:
+
+* Platinum
+* Platinum Package
+* Platinum Health Checkup
+* Platinum Master
+
+Price:
+₹7,980 per person
+
+Category:
+Most comprehensive Master Health Checkup.
+
+Platinum includes every Silver and Gold service plus:
+
+1. ESR
+2. HIV Screening
+3. HBsAg
+4. HCV Screening
+5. Pulmonary Function Test
+6. Carotid Doppler
+7. Ankle Brachial Index
+8. Apolipoprotein A1 and B
+9. Magnesium
+10. Phosphorus
+11. Diabetic Foot Assessment
+12. Complimentary light breakfast after blood collection
+13. Any four eligible specialist consultations
+
+Eligible specialist categories may include:
+
+* Cardiology
+* General Surgery
+* General Medicine
+* Gynaecology
+* Orthopaedics
+* Dermatology
+* Medical Gastroenterology
+* Surgical Gastroenterology
+* Pulmonology
+* Dietetics
+
+Specialist availability must be confirmed during booking.
+
+Purpose:
+For callers requesting the broadest listed Master Health Checkup with additional vascular, respiratory, viral-marker and specialist assessments.
+
+---
+
+# SILVER VS GOLD
+
+Both Silver and Gold include the core Silver services such as:
+
+* CBC
+* Blood Grouping and Rh Type
+* Fasting Blood Sugar
+* Post-Prandial Blood Sugar
+* HbA1c
+* Urea
+* Creatinine
+* Uric Acid
+* Lipid Profile
+* Liver Function Test
+* Urine Routine
+* ECG
+* Chest X-Ray
+* General Physician consultation
+
+Gold additionally includes:
+
+* Calcium
+* Iron and TIBC
+* Vitamin D
+* Vitamin B12
+* Homocysteine
+* Thyroid tests
+* Electrolytes
+* High-Sensitivity CRP
+* ECHO
+* USG Abdomen
+* Dental Checkup
+* Complimentary light breakfast after blood collection
+
+Silver Price: ₹1,650
+
+Gold Price: ₹4,950
+
+---
+
+# GOLD VS PLATINUM
+
+Platinum contains the Silver and Gold package services.
+
+Compared with Gold, Platinum additionally includes:
+
+* ESR
+* HIV Screening
+* HBsAg
+* HCV Screening
+* Pulmonary Function Test
+* Carotid Doppler
+* Ankle Brachial Index
+* Apolipoprotein A1 and B
+* Magnesium
+* Phosphorus
+* Diabetic Foot Assessment
+
+Gold:
+One General Physician consultation.
+
+Platinum:
+Any four eligible specialist consultations, subject to availability.
+
+Gold Price: ₹4,950
+
+Platinum Price: ₹7,980
+
+---
+
+# SILVER VS PLATINUM
+
+Silver provides the basic Master Health Checkup services.
+
+Platinum includes the Silver services plus the broader Gold services and additional Platinum-level screening.
+
+Silver Price:
+₹1,650
+
+Platinum Price:
+₹7,980
+
+Silver Consultation:
+One General Physician consultation.
+
+Platinum Consultation:
+Any four eligible specialist consultations, subject to availability.
+
+---
+
+# DIABETIC HEALTH CHECKUP
+
+Package ID:
+SH-SP-DIABETIC
+
+Package Name:
+Diabetic Health Checkup
+
+Aliases:
+
+* Diabetic Package
+* Diabetes Package
+* Sugar Package
+* Diabetes Health Check
+* Diabetic Screening
+
+Price:
+₹3,200
+
+Approved catalog information indicates diabetic screening involving:
+
+* Blood-sugar testing
+* HbA1c
+* ECG
+* ECHO
+* Lipid Profile
+* Insulin fasting
+* Abdominal imaging
+* Urine-related assessments
+
+IMPORTANT:
+The exact current inclusion list must be confirmed before listing every individual test.
+
+Do not invent additional inclusions.
+
+---
+
+# CARDIAC HEALTH CHECKUP
+
+Package ID:
+SH-SP-CARDIAC
+
+Package Name:
+Cardiac Health Checkup
+
+Aliases:
+
+* Cardiac Package
+* Heart Package
+* Heart Health Checkup
+* Cardiac Screening
+
+Price:
+₹2,950
+
+Included Services:
+
+* Complete Blood Count
+* Fasting Blood Sugar
+* Post-Prandial Blood Sugar
+* HbA1c
+* Urea
+* Creatinine
+* Lipid Profile
+* Homocysteine
+* High-Sensitivity CRP
+* Urine Complete Analysis
+* Apolipoprotein A1 and B
+* ECG
+* ECHO
+* Treadmill Test
+* Physical Examination
+* Cardiologist Consultation
+
+Purpose:
+General evaluation of heart health and cardiovascular risk markers.
+
+---
+
+# MALE ONCOLOGY SCREENING
+
+Package ID:
+SH-SP-ONCO-MALE
+
+Package Name:
+Male Oncology Screening Package
+
+Aliases:
+
+* Male Onco
+* Male Onco Care
+* Male Cancer Screening
+* Male Oncology Package
+* Onco Premium Male
+
+Price:
+₹8,600
+
+IMPORTANT:
+The exact current test list must be confirmed by the Oncology or Health Checkup Department.
+
+The agent may provide the package price.
+
+Do not provide an exact cancer-marker/test inclusion list unless an approved current source confirms it.
+
+---
+
+# FEMALE ONCOLOGY SCREENING
+
+Package ID:
+SH-SP-ONCO-FEMALE
+
+Package Name:
+Female Oncology Screening Package
+
+Aliases:
+
+* Female Onco
+* Female Onco Care
+* Female Cancer Screening
+* Female Oncology Package
+* Onco Premium Female
+
+Price:
+₹8,800
+
+IMPORTANT:
+The exact current test list must be confirmed by the Oncology or Health Checkup Department.
+
+The agent may provide the package price.
+
+Do not provide an exact cancer-marker/test inclusion list unless an approved current source confirms it.
+
+---
+
+# PAEDIATRIC HEALTH CHECKUP
+
+Package ID:
+SH-SP-PAEDIATRIC
+
+Package Name:
+Paediatric Health Checkup
+
+Aliases:
+
+* Paediatric Package
+* Pediatric Package
+* Kids Health Checkup
+* Child Health Checkup
+* Children Health Package
+
+Price:
+₹1,500
+
+IMPORTANT:
+The exact current test list and age eligibility must be confirmed before booking.
+
+---
+
+# RENAL HEALTH CHECKUP
+
+Package ID:
+SH-ORG-RENAL
+
+Package Name:
+Renal Health Checkup
+
+Aliases:
+
+* Kidney Package
+* Kidney Health Checkup
+* Renal Package
+* Kidney Function Test
+* Renal Profile
+
+Price:
+₹1,400
+
+Included Services:
+
+* Haemoglobin
+* Urea
+* Creatinine
+* Uric Acid
+* Calcium
+* Electrolytes
+* Blood Urea Nitrogen
+* USG Abdomen
+
+Purpose:
+General evaluation of kidney function and electrolyte balance.
+
+---
+
+# LIVER HEALTH CHECKUP
+
+Package ID:
+SH-ORG-LIVER
+
+Package Name:
+Liver Health Checkup
+
+Aliases:
+
+* Liver Package
+* Liver Test
+* Liver Health Check
+* Liver Screening
+* கல்லீரல் test
+
+Price:
+₹1,400
+
+Included Services:
+
+* Haemoglobin
+* Liver Function Test
+* USG Abdomen
+
+Purpose:
+General evaluation of liver health.
+
+---
+
+# LUNGS HEALTH CHECKUP
+
+Package ID:
+SH-ORG-LUNGS
+
+Package Name:
+Lungs Health Checkup
+
+Aliases:
+
+* Lung Package
+* Lungs Package
+* Lung Health Check
+* Respiratory Package
+* Pulmonary Package
+* Breathing Health Check
+* நுரையீரல் test
+
+Price:
+₹999
+
+Included Services:
+
+* Complete Blood Count
+* Random Blood Sugar
+* CRP
+* ESR
+* Urea
+* Creatinine
+* X-Ray
+* ECG
+* Pulmonary Function Test
+* Pulmonologist Consultation
+
+Purpose:
+General evaluation of respiratory and lung function.
+
+---
+
+# ORTHO HEALTH CHECKUP
+
+Package ID:
+SH-ORG-ORTHO
+
+Package Name:
+Ortho Health Checkup
+
+Aliases:
+
+* Ortho Package
+* Orthopaedic Package
+* Bone Health Check
+* Joint Health Check
+* Bones and Joints Package
+
+Price:
+₹1,499
+
+Included Services:
+
+* X-Ray, two views as required
+* ESR
+* CRP
+* Calcium
+* Vitamin D
+* Uric Acid
+* Rheumatoid Factor
+
+Purpose:
+General evaluation of bone, joint and inflammation-related markers.
+
+---
+
+# GASTRO HEALTH CHECKUP
+
+Package ID:
+SH-ORG-GASTRO
+
+Package Name:
+Gastro Health Checkup
+
+Aliases:
+
+* Gastro Package
+* Gastroenterology Package
+* Digestion Package
+* Digestive Health Check
+
+Price:
+₹25,000
+
+Included Services:
+
+* Haemoglobin
+* Liver Function Test
+* USG Abdomen
+* Twenty-Four-Hour pH Monitoring
+* Manometry
+* Endoscopy
+* Gastroenterology Consultation
+
+Operational Requirement:
+One-day hospital admission is listed as required.
+
+Admission requirements and preparation instructions must be confirmed by hospital staff.
+
+Purpose:
+Evaluation of digestive-system health, reflux and gastrointestinal conditions.
+
+---
+
+# ADD-ON TESTS
+
+Treadmill Test
+ID: SH-ADD-TMT
+Price: ₹1,186
+
+Audiogram / Hearing Test
+ID: SH-ADD-AUDIOGRAM
+Price: ₹300
+
+Pulmonary Function Test
+ID: SH-ADD-PFT
+Price: ₹350
+
+---
+
+# MALE ONCOLOGY ADD-ON
+
+Package ID:
+SH-ADD-ONCO-MALE
+
+Name:
+Male Oncology Add-On
+
+Price:
+₹750
+
+Eligibility:
+Requires an eligible Master Health Checkup package.
+
+Example:
+
+Silver ₹1,650
++
+Male Oncology Add-On ₹750
+=========================
+
+₹2,400
+
+Do not list exact cancer markers unless an approved current inclusion list is available.
+
+---
+
+# FEMALE ONCOLOGY ADD-ON
+
+Package ID:
+SH-ADD-ONCO-FEMALE
+
+Name:
+Female Oncology Add-On
+
+Price:
+₹1,100
+
+Eligibility:
+Requires an eligible Master Health Checkup package.
+
+Example:
+
+Silver ₹1,650
++
+Female Oncology Add-On ₹1,100
+=============================
+
+₹2,750
+
+Do not list exact cancer markers unless an approved current inclusion list is available.
+
+---
+
+# PRICE CALCULATION RULE
+
+When combining an eligible Master Health Checkup with an Oncology Add-On:
+
+Final Price =
+Selected Master Package Price + Selected Oncology Add-On Price
+
+Before booking, repeat:
+
+* Master package
+* Add-on
+* Package price
+* Add-on price
+* Final total
+
+Then obtain confirmation.
+
+---
+
+# HEALTH CHECKUP PROCESS
+
+General health checkup process:
+
+1. Schedule the health checkup.
+2. Follow approved fasting/preparation instructions.
+3. Arrive at the hospital and complete registration.
+4. Complete sample collection and listed tests.
+5. Receive breakfast where included.
+6. Complete scans and assessments.
+7. Meet included doctor/specialists.
+8. Review reports with the doctor.
+9. Follow the doctor's advice regarding further evaluation.
+
+---
+
+# FASTING AND PREPARATION
+
+Preferred fasting-checkup arrival:
+8:00 AM to 11:00 AM.
+
+The conversational package material supplied for the voice agent states an 8-hour fasting instruction before applicable health-checkup testing.
+
+Because preparation can depend on the package/test and current hospital instructions, the agent must use the approved preparation information retrieved for the selected package.
+
+Do not invent preparation requirements.
+
+If exact package-specific preparation is not available, it must be confirmed with hospital staff.
+
+---
+
+# GENERAL TEST INFORMATION
+
+Complete Blood Count:
+Measures components of blood including red blood cells, white blood cells, haemoglobin and platelets.
+
+Fasting Blood Sugar:
+Measures blood glucose after the required fasting period.
+
+Post-Prandial Blood Sugar:
+Measures blood glucose after a meal according to laboratory instructions.
+
+HbA1c:
+Reflects average blood-glucose levels over approximately the previous two to three months.
+
+Urea and Creatinine:
+Commonly used as part of kidney-function assessment.
+
+Lipid Profile:
+Commonly measures total cholesterol, LDL cholesterol, HDL cholesterol and triglycerides.
+
+Liver Function Test:
+Measures blood markers used to assess liver health and function.
+
+ECG:
+Records the electrical activity of the heart.
+
+ECHO:
+Uses ultrasound to examine the heart's structure and movement.
+
+Chest X-Ray:
+Produces images of the chest including the lungs and heart area.
+
+USG Abdomen:
+Uses ultrasound to examine abdominal organs.
+
+Vitamin D:
+Measures Vitamin D status.
+
+Vitamin B12:
+Measures Vitamin B12 levels.
+
+TSH, T3 and T4:
+Thyroid-related tests used to evaluate thyroid function.
+
+CRP:
+General marker of inflammation.
+
+ESR:
+General marker that may indicate inflammation.
+
+Pulmonary Function Test:
+Measures how well the lungs move air and may help evaluate breathing function.
+
+Carotid Doppler:
+Assesses blood flow through the carotid arteries.
+
+Ankle Brachial Index:
+Compares blood pressure measured at the ankle and arm.
+
+Diabetic Foot Assessment:
+Checks areas including skin condition, circulation and sensation in the feet.
+
+Treadmill Test:
+Monitors the heart while the patient exercises under supervised conditions.
+
+Audiogram:
+Measures hearing ability across different sound frequencies.
+
+Endoscopy:
+Uses a flexible instrument with a camera to examine part of the digestive tract.
+
+Preparation, consent and clinical suitability for procedures such as endoscopy must be confirmed by hospital staff.
+
+---
+
+# CLINICAL SAFETY
+
+The voice agent must not:
+
+* Interpret whether a test result is normal or abnormal.
+* Confirm that a caller has or does not have a disease.
+* Diagnose medical conditions.
+* Recommend medication.
+* Tell a patient to stop medication.
+* Guarantee screening will detect every disease.
+* Replace consultation with a qualified doctor.
+
+If personal medical guidance is requested, transfer or direct the caller to an authorized hospital professional.
+
+---
+
+# INFORMATION FRESHNESS
+
+Prices, timings, specialist availability and promotional offers can change.
+
+Current approved package information should be treated as authoritative.
+
+If approved live booking or hospital information differs from this document, the approved live information takes precedence.
+
+Never guess when current information is unavailable.
+
+
+
+# SCOPE CLARIFICATIONS
+
+Appointment-booking desk hours are not specified in this document. Confirm them with hospital staff; do not infer them from health-checkup service hours.
+
+The Paediatric Health Checkup is the child-health package listed above. Distorted speech is not an approved alias. Ask the caller to confirm an uncertain name instead of inventing a test or substituting a different package.
+
+No test named Battery is documented here. This means its details are unsupported by this document, not that the hospital has verified its nonexistence.
+
+The package category list is an overview only. It does not establish an individual package\'s tests, eligibility, or suitability. Use the named package section and respect its confirmation requirements.
+

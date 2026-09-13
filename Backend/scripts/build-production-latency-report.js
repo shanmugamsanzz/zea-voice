@@ -11,6 +11,8 @@ if (!inputPath) {
 const samples = [];
 const actualAnswerSamples = [];
 const completedTurns = [];
+const measurement = (value) => value !== null && value !== undefined && value !== ''
+  && Number.isFinite(Number(value)) ? Number(value) : Number.NaN;
 for (const line of readFileSync(inputPath, 'utf8').split(/\r?\n/u)) {
   if (!line.includes('voice.turn_latency') && !line.includes('template_engine.turn_completed')) continue;
   let entry;
@@ -29,7 +31,8 @@ for (const line of readFileSync(inputPath, 'utf8').split(/\r?\n/u)) {
   }
   const source = entry.stage ? entry : (entry.data?.stage ? entry.data : entry.log);
   if (source?.stage === 'template_engine.turn_completed') {
-    const actualAnswerFirstAudioMs = Number(source.finalAnswerFirstAudioMs
+    const actualAnswerFirstAudioMs = measurement(source.finalAnswerFirstAudioMs
+      ?? source.actualAnswerFirstAudioMs
       ?? source.actualAnswerBaseline?.actualAnswerFirstAudioMs);
     const normalVerifiedRequest = source.normalVerifiedRequest === true
       || source.actualAnswerBaseline?.normalVerifiedRequest === true;
@@ -41,7 +44,7 @@ for (const line of readFileSync(inputPath, 'utf8').split(/\r?\n/u)) {
     continue;
   }
   if (source?.stage !== 'voice.turn_latency') continue;
-  const firstAudioMs = Number(source.totalFirstAudioMs);
+  const firstAudioMs = measurement(source.totalFirstAudioMs);
   if (!Number.isFinite(firstAudioMs) || firstAudioMs < 0) continue;
   samples.push({
     firstAudioMs,
@@ -79,10 +82,13 @@ const configuredFallbackTurns = completedTurns.filter((turn) => (
   turn.configuredFallbackApplied === true
 ));
 const bookingFieldSearchTurns = completedTurns.filter((turn) => (
+  !turn.outcome
+  &&
   ['AWAITING_FIELD', 'AWAITING_CONFIRMATION'].includes(String(turn.workflowStatus ?? '').toUpperCase())
   && turn.searchPerformed === true
 ));
 const ungroundedSearchResponses = completedTurns.filter((turn) => (
+  (!turn.outcome || turn.outcome === 'FACTUAL_ANSWER') &&
   String(turn.initialDecision ?? '').toUpperCase() === 'SEARCH'
   && String(turn.finalDecision ?? turn.decision ?? '').toUpperCase() === 'RESPONSE'
   && Number(turn.evidenceCount ?? turn.evidenceIds?.length ?? 0) < 1
@@ -103,8 +109,9 @@ const ordinaryStaticFallbackTurns = completedTurns.filter((turn) => (
   && !turn.unexpectedFailure
 ));
 const unsupportedFactualClaimTurns = completedTurns.filter((turn) => (
+  (!turn.outcome || turn.outcome === 'FACTUAL_ANSWER') &&
   String(turn.finalDecision ?? turn.decision ?? '').toUpperCase() === 'RESPONSE'
-  && !['valid', 'deterministically_grounded'].includes(
+  && !['valid', 'deterministically_grounded', 'deterministic_qdrant_grounding_valid'].includes(
     String(turn.validationResult ?? '').toLowerCase(),
   )
 ));
@@ -131,6 +138,7 @@ const report = {
     p95Ms: actualAnswerP95,
     averageMs: actualAnswerAverage,
     maximumMs: actualAnswerMaximum,
+    atOrAboveThreeSeconds: actualAnswerSamples.filter((value) => value >= 3000).length,
     averagePassed,
     maximumPassed,
     averageReason: !sufficientSamples ? 'insufficient_live_samples'
@@ -143,6 +151,8 @@ const report = {
         : !maximumPassed ? 'actual_answer_maximum_breached' : null,
   },
   liveCorrectness: {
+    semanticCorrectnessMeasured: false,
+    semanticReviewRequired: true,
     completedTurns: completedTurns.length,
     incompleteTelemetryTurns: incompleteTelemetryTurns.length,
     recoveryTurns: recoveryTurns.length,
@@ -168,9 +178,10 @@ const report = {
   },
 };
 report.releaseGate = {
-  passed: report.actualAnswerSlo.passed && report.liveCorrectness.passed,
+  passed: false,
   reason: !report.actualAnswerSlo.passed
-    ? report.actualAnswerSlo.reason : report.liveCorrectness.reason,
+    ? report.actualAnswerSlo.reason : !report.liveCorrectness.passed
+      ? report.liveCorrectness.reason : 'independent_semantic_review_required',
 };
 process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 if (enforce && !report.releaseGate.passed) process.exitCode = 1;

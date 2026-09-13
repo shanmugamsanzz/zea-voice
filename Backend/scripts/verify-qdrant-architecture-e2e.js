@@ -19,6 +19,11 @@ const checks = [
   ['contextual tenant-agent search', 'verify-agent-qdrant-contextual-search.js'],
   ['one universal LLM turn', 'verify-agent-qdrant-grounded-turn.js'],
   ['production runtime', 'verify-template-engine-production-runtime.js'],
+  ['conversation context and incomplete turns', 'verify-universal-turn-context.js'],
+  ['single-call factual support contract', 'verify-universal-grounding-contract.js'],
+  ['validation and action safeguards', 'verify-universal-response-safety.js'],
+  ['multi-agent conversation replay', 'verify-multi-agent-conversation-replay.js'],
+  ['production latency release gate', 'verify-production-latency-release-gate.js'],
   ['configured workflow actions', 'verify-agent-qdrant-grounded-turn.js'],
   ['interruption audio isolation', 'verify-interruption-audio-isolation.js'],
   ['existing TTS', 'verify-voice-tts.js'],
@@ -106,7 +111,7 @@ function liveLatencyReport() {
     }
     return {
       measured: false,
-      targetFirstAudioMs: 1_000,
+      targetActualAnswerFirstAudioMs: 3_000,
       reason: 'live_log_not_supplied',
       command: 'npm run verify:qdrant-architecture-live -- <json-lines-server-log>',
     };
@@ -129,7 +134,7 @@ function liveLatencyReport() {
   const report = JSON.parse(result.stdout);
   return {
     measured: true,
-    targetFirstAudioMs: 1_000,
+    targetActualAnswerFirstAudioMs: 3_000,
     firstAudioSlo: report.firstAudioSlo,
     actualAnswerSlo: report.actualAnswerSlo,
     liveCorrectness: report.liveCorrectness,
