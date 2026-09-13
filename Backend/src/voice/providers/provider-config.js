@@ -260,7 +260,7 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
               AND caa.id=aa.ambience_asset_id
             WHERE aa.tenant_id=a.tenant_id AND aa.workspace_id=a.workspace_id
               AND aa.agent_id=a.id AND caa.status='active'
-              AND caa.storage_status='ready' AND caa.deleted_at IS NULL) ambience,
+              AND caa.storage_status='ready' AND caa.deleted_at IS NULL) ambience
          FROM voice_agents a
          JOIN provider_models sm ON sm.id=a.stt_model_id AND sm.status='active' AND sm.deleted_at IS NULL
          JOIN ai_providers sp ON sp.id=sm.provider_id AND sp.type='stt' AND sp.status='connected' AND sp.deleted_at IS NULL

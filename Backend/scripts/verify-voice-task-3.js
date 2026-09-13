@@ -5,6 +5,10 @@ process.env.DATABASE_URL ??= 'postgresql://test:test@localhost:5432/test';
 process.env.REDIS_HOST ??= 'localhost';
 
 const { loadAgentRuntimeProfile } = await import('../src/voice/providers/provider-config.js');
+const providerSource = await (await import('node:fs/promises')).readFile(
+  new URL('../src/voice/providers/provider-config.js', import.meta.url), 'utf8',
+);
+assert.doesNotMatch(providerSource, /\)\s+ambience\s*,\s*FROM\s+voice_agents/u);
 
 const resolved = {
   agentId: '00000000-0000-4000-8000-000000000001',

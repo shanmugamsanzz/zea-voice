@@ -2527,6 +2527,12 @@ export class RealtimeConversationOrchestrator {
 
   #recordProviderFailure(kind, error, stage) {
     if (error && typeof error === 'object') {
+      // Startup can fail before the constructor finishes initializing metrics.
+      // Keep the recovery path safe so the configured provider-failure response
+      // can still be attempted.
+      if (!(this.recordedProviderFailures instanceof WeakSet)) {
+        this.recordedProviderFailures = new WeakSet();
+      }
       if (this.recordedProviderFailures.has(error)) return;
       this.recordedProviderFailures.add(error);
     }
