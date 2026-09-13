@@ -121,15 +121,20 @@ function validateDecision(raw, chunks, maximumSpeechCharacters, workflowDefiniti
   if (!speech) throw new AppError(502, 'Universal conversation LLM returned empty speech',
     'QDRANT_UNIVERSAL_LLM_EMPTY');
   const allowed = new Set(chunks.map(({ id }) => id));
-  const evidenceIds = [...new Set(raw.evidenceIds.map((id) => cleanText(id, 240)).filter(Boolean))];
-  if (evidenceIds.some((id) => !allowed.has(id))) throw new AppError(502,
-    'Universal conversation LLM cited an unknown chunk', 'QDRANT_UNIVERSAL_LLM_CITATION_INVALID');
+  const requestedEvidenceIds = [...new Set(raw.evidenceIds
+    .map((id) => cleanText(id, 240)).filter(Boolean))];
+  // Citations are only required for factual answers. Models occasionally attach
+  // retrieved IDs to a clarification or conversational response; those IDs do
+  // not make the spoken response factual and must not trigger static recovery.
+  const evidenceIds = raw.outcome === 'FACTUAL_ANSWER' ? requestedEvidenceIds : [];
+  if (raw.outcome === 'FACTUAL_ANSWER' && evidenceIds.some((id) => !allowed.has(id))) {
+    throw new AppError(502, 'Universal conversation LLM cited an unknown chunk',
+      'QDRANT_UNIVERSAL_LLM_CITATION_INVALID');
+  }
   if (raw.outcome === 'FACTUAL_ANSWER' && (!chunks.length || !evidenceIds.length)) {
     throw new AppError(502, 'A factual answer requires retrieved evidence',
       'QDRANT_UNIVERSAL_LLM_EVIDENCE_REQUIRED');
   }
-  if (raw.outcome !== 'FACTUAL_ANSWER' && evidenceIds.length) throw new AppError(502,
-    'Only a factual answer may cite knowledge chunks', 'QDRANT_UNIVERSAL_LLM_CITATION_INVALID');
   const cited = chunks.filter(({ id }) => evidenceIds.includes(id));
   const allowedNumbers = numericTokens(cited.map(({ text }) => text).join(' '));
   if (raw.outcome === 'FACTUAL_ANSWER'

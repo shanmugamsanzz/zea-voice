@@ -1,16 +1,7 @@
 const settingKeys = Object.freeze({
   acknowledgement: Object.freeze(['latencyAcknowledgementMessage']),
-  clarification: Object.freeze(['knowledgeClarificationMessage', 'noResponseMessage']),
-  clarification_recovery_support: Object.freeze(['clarificationRecoverySupportMessage']),
-  technical_failure: Object.freeze([
-    'technicalFailureMessage', 'knowledgeTechnicalFailureMessage', 'errorRecoveryMessage',
-  ]),
-  evidence_validation_failure: Object.freeze([
-    'evidenceValidationFailureMessage',
-  ]),
-  workflow_configuration_failure: Object.freeze(['workflowConfigurationFailureMessage']),
-  non_factual_recovery: Object.freeze(['nonFactualRecoveryMessage']),
-  recovery: Object.freeze(['errorRecoveryMessage', 'technicalFailureMessage']),
+  technical_failure: Object.freeze(['technicalFailureMessage']),
+  recovery: Object.freeze(['technicalFailureMessage']),
   closing: Object.freeze(['closingMessage', 'postCallClosingMessage']),
 });
 

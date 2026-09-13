@@ -55,18 +55,7 @@ export function buildUniversalAgentConfiguration(runtimeProfile = {}) {
     closing: Object.freeze(jsonClone(canonical.closing, {})),
     configuredMessages: Object.freeze({
       latencyAcknowledgementMessage: cleanText(settings.latencyAcknowledgementMessage, 500),
-      knowledgeClarificationMessage: cleanText(settings.knowledgeClarificationMessage, 500),
-      clarificationRecoverySupportMessage: cleanText(
-        settings.clarificationRecoverySupportMessage, 500,
-      ),
-      nonFactualRecoveryMessage: cleanText(settings.nonFactualRecoveryMessage, 500),
       technicalFailureMessage: cleanText(settings.technicalFailureMessage, 500),
-      knowledgeTechnicalFailureMessage: cleanText(settings.knowledgeTechnicalFailureMessage, 500),
-      errorRecoveryMessage: cleanText(settings.errorRecoveryMessage, 500),
-      evidenceValidationFailureMessage: cleanText(settings.evidenceValidationFailureMessage, 500),
-      workflowConfigurationFailureMessage: cleanText(
-        settings.workflowConfigurationFailureMessage, 500,
-      ),
       closingMessage: cleanText(settings.closingMessage, 500),
       postCallClosingMessage: cleanText(settings.postCallClosingMessage, 500),
     }),

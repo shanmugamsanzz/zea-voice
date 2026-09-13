@@ -264,21 +264,6 @@ function canonicalResolvedMemoryContext(tenantEvidence = {}) {
     ? Object.freeze({ entity: Object.freeze(entity), explicitEntity: true }) : null;
 }
 
-export function configuredEvidenceValidationFailureResponse(profile, knowledge = {}) {
-  const configured = resolveRuntimeMessage(profile, 'evidence_validation_failure', knowledge);
-  return configured && !isInternalRuntimeText(configured) ? configured : '';
-}
-
-export function configuredOperationalFailureResponse(
-  profile, knowledge = {}, { validation = false } = {},
-) {
-  if (validation) {
-    const validationResponse = configuredEvidenceValidationFailureResponse(profile, knowledge);
-    if (validationResponse) return validationResponse;
-  }
-  return configuredTechnicalFailureResponse(profile, knowledge);
-}
-
 export function configuredLatencyAcknowledgementResponse(profile, knowledge = {}) {
   return resolveRuntimeMessage(profile, 'acknowledgement', knowledge);
 }
@@ -288,12 +273,8 @@ export function remainingLiveTurnBudgetMs(deadlineAt, reserveMs = 0, now = Date.
 }
 
 export function configuredTemplateEngineFailureResponse(profile, kind) {
-  const role = kind === 'configuration' ? 'workflow_configuration_failure'
-    : kind === 'validation' ? 'evidence_validation_failure'
-      : ['operational', 'unexpected'].includes(kind) ? 'technical_failure' : null;
-  if (!role) return '';
-  const message = resolveRuntimeMessage(profile, role)
-    || (kind === 'validation' ? resolveRuntimeMessage(profile, 'non_factual_recovery') : '');
+  if (!['configuration', 'validation', 'operational', 'unexpected'].includes(kind)) return '';
+  const message = resolveRuntimeMessage(profile, 'technical_failure');
   return message && !isInternalRuntimeText(message) ? message : '';
 }
 

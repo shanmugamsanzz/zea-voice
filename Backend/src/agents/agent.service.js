@@ -46,12 +46,7 @@ function normalizedAgentSettings(settings, interruptionSensitivity) {
 export function validateOperationalResponseSettings(status, settings = {}) {
   validateRecoveryReadiness(settings, { required: status === 'active' });
   if (status !== 'active') return;
-  const configured = [
-    settings.technicalFailureMessage,
-    settings.knowledgeTechnicalFailureMessage,
-    settings.errorRecoveryMessage,
-  ].map((value) => String(value ?? '').normalize('NFKC').trim())
-    .find(Boolean);
+  const configured = String(settings.technicalFailureMessage ?? '').normalize('NFKC').trim();
   if (!configured || configured.length > 500) {
     throw new AppError(400,
       'Technical Failure Message is required for an active agent and cannot exceed 500 characters',

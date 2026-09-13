@@ -23,8 +23,6 @@ const row = {
   usage_direction: 'both', prompt: 'Be helpful', welcome_message: 'Hello', temperature: '0.4',
   interruption_sensitivity: '0.3', silence_timeout_ms: 600, inactivity_timeout_seconds: 8,
   settings: {
-    nonFactualRecoveryMessage: 'Sorry, I could not complete that response. Could you rephrase your request?',
-    workflowConfigurationFailureMessage: 'I cannot complete this configured action right now.',
     technicalFailureMessage: 'I am having a technical problem right now. Please try again shortly.',
     greetingMode: 'Agent Initiates', sttLanguage: 'en-IN', sttMode: 'transcribe',
     ttsMaxCharactersPerMinute: 1000, maxCallDurationMinutes: 5,
@@ -103,27 +101,16 @@ assert.equal(profile.integrations.preCall.api.url, 'https://example.com/pre');
 assert.equal(profile.integrations.postCall.api.active, true);
 
 const unavailableRunner = async (operation) => operation({ query: async () => ({ rowCount: 0, rows: [] }) });
-const dedicatedSettings = { ...row.settings, nonFactualRecoveryMessage: '',
-  evidenceValidationFailureMessage: 'Please rephrase your question.',
-  workflowConfigurationFailureMessage: 'I cannot complete this request right now.' };
-const dedicatedProfile = await loadAgentRuntimeProfile(resolved, {
-  contextRunner: async (operation) => operation({ query: async () => ({ rowCount: 1,
-    rows: [{ ...row, settings: dedicatedSettings, tools: [] }] }) }),
-  decryptCredential: () => 'test-credential',
-});
-assert.equal(dedicatedProfile.agent.settings.evidenceValidationFailureMessage,
-  dedicatedSettings.evidenceValidationFailureMessage);
-for (const settings of [{}, { nonFactualRecoveryMessage: ' ' },
-  { evidenceValidationFailureMessage: 'Please rephrase.' },
-  { nonFactualRecoveryMessage: '{{missing}}' },
-  { nonFactualRecoveryMessage: 'workflow: start the tool' },
-  { nonFactualRecoveryMessage: '\u200b' },
-  { nonFactualRecoveryMessage: 'x'.repeat(501) }]) {
+for (const settings of [{}, { technicalFailureMessage: ' ' },
+  { technicalFailureMessage: '{{missing}}' },
+  { technicalFailureMessage: 'workflow: start the tool' },
+  { technicalFailureMessage: '\u200b' },
+  { technicalFailureMessage: 'x'.repeat(501) }]) {
   let decrypted = false;
   await assert.rejects(loadAgentRuntimeProfile(resolved, {
     contextRunner: async (operation) => operation({ query: async () => ({ rowCount: 1, rows: [{ ...row, settings }] }) }),
     decryptCredential: () => { decrypted = true; return ''; },
-  }), (error) => ['AGENT_NEUTRAL_RECOVERY_MESSAGE_REQUIRED', 'AGENT_RECOVERY_MESSAGE_INVALID'].includes(error.code));
+  }), (error) => ['AGENT_TECHNICAL_FAILURE_MESSAGE_REQUIRED', 'AGENT_RECOVERY_MESSAGE_INVALID'].includes(error.code));
   assert.equal(decrypted, false, 'Invalid recovery must fail admission before credentials/providers are loaded');
 }
 await assert.rejects(

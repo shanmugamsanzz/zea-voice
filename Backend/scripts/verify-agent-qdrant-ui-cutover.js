@@ -34,7 +34,6 @@ assert.match(resourceRoutes, /use\('\/knowledge-documents',agentQdrantDocumentRo
 assert.doesNotMatch(resourceRoutes, /use\('\/knowledge-bases/u);
 assert.doesNotMatch(resourceSchemas, /agentKnowledgeBase|assignAgentKnowledgeBase/u);
 assert.doesNotThrow(() => validateOperationalResponseSettings('active', {
-  nonFactualRecoveryMessage: 'Please ask that another way.',
   technicalFailureMessage: 'The service is temporarily unavailable.',
 }), 'Active agents must not require the removed static information-unavailable message');
 

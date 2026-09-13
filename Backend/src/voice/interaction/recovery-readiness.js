@@ -12,15 +12,10 @@ export function isInternalRuntimeText(value) {
 
 // Shared by agent writes and production profile admission. Never supply an
 // engine-authored fallback: the tenant must approve caller-facing wording.
-export function validateRecoveryReadiness(settings = {}, { required = true, requiresWorkflowRecovery = false } = {}) {
+export function validateRecoveryReadiness(settings = {}, { required = true } = {}) {
   const profile = { agent: { settings } };
   const fields = [
-    ['nonFactualRecoveryMessage', 'non_factual_recovery'],
-    ['evidenceValidationFailureMessage', 'evidence_validation_failure'],
-    ['workflowConfigurationFailureMessage', 'workflow_configuration_failure'],
     ['technicalFailureMessage', 'technical_failure'],
-    ['knowledgeTechnicalFailureMessage', 'technical_failure'],
-    ['errorRecoveryMessage', 'technical_failure'],
   ];
   const usable = {};
   for (const [key, role] of fields) {
@@ -34,20 +29,7 @@ export function validateRecoveryReadiness(settings = {}, { required = true, requ
     }
     usable[key] = Boolean(rendered) && !isInternalRuntimeText(rendered);
   }
-  if (required && !usable.nonFactualRecoveryMessage
-    && !(usable.evidenceValidationFailureMessage && usable.workflowConfigurationFailureMessage)) {
-    throw new AppError(400, 'Configure approved recovery wording before activating or loading the agent',
-      'AGENT_NEUTRAL_RECOVERY_MESSAGE_REQUIRED', { field: 'settings.nonFactualRecoveryMessage' });
-  }
-  if (required && requiresWorkflowRecovery && !usable.workflowConfigurationFailureMessage) {
-    throw new AppError(400, 'Approve a dedicated configuration-failure message before loading an agent with tools; rephrasing cannot repair configuration',
-      'AGENT_WORKFLOW_RECOVERY_MESSAGE_REQUIRED', { field: 'settings.workflowConfigurationFailureMessage' });
-  }
-  if (required && ![
-    usable.technicalFailureMessage,
-    usable.knowledgeTechnicalFailureMessage,
-    usable.errorRecoveryMessage,
-  ].some(Boolean)) {
+  if (required && !usable.technicalFailureMessage) {
     throw new AppError(400,
       'Approve a technical-failure message before activating or loading the agent',
       'AGENT_TECHNICAL_FAILURE_MESSAGE_REQUIRED', {

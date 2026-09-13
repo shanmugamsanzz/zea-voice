@@ -141,9 +141,6 @@ export interface VoiceAgent {
   conversationContextTurns?: number;
   latencyAcknowledgementMessage?: string;
   technicalFailureMessage?: string;
-  nonFactualRecoveryMessage?: string;
-  evidenceValidationFailureMessage?: string;
-  workflowConfigurationFailureMessage?: string;
   conversationMemoryFields?: Array<{
     key: string;
     label: string;

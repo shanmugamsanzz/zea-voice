@@ -104,7 +104,7 @@ const noMatch = await runAgentQdrantUniversalTurn({
     return { answer: {
       outcome: 'UNAVAILABLE',
       speech: 'அந்த தகவல் என்னிடம் இல்லைங்க. வேறு விதமாக உதவட்டுமா?',
-      evidenceIds: [],
+      evidenceIds: ['point-1'],
       workflowAction: null,
     } };
   },
@@ -112,6 +112,7 @@ const noMatch = await runAgentQdrantUniversalTurn({
 assert.equal(noMatchCalls, 1);
 assert.equal(noMatch.decision.decision, 'NO_MATCH');
 assert.ok(noMatch.speech.length > 0);
+assert.deepEqual(noMatch.evidenceIds, []);
 
 let productionLlmCalls = 0;
 let legacyRetrievalCalls = 0;
