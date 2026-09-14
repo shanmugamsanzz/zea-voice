@@ -95,14 +95,9 @@ const envSchema = z.object({
   // cancel valid retrieval before authoritative hydration finishes.
   VOICE_TURN_FIRST_AUDIO_DEADLINE_MS: z.coerce.number().int().min(1000).max(10000).default(2000),
   VOICE_TURN_ACKNOWLEDGEMENT_AFTER_MS: z.coerce.number().int().min(700).max(800).default(750),
-  VOICE_ROUTING_TURN_TIMEOUT_MS: z.coerce.number().int().min(20).max(1000).default(100),
   VOICE_RETRIEVAL_TARGET_MS: z.coerce.number().int().min(25).max(1000).default(150),
   VOICE_RETRIEVAL_TURN_TIMEOUT_MS: z.coerce.number().int().min(100).max(5000).default(1250),
   VOICE_LLM_TURN_TIMEOUT_MS: z.coerce.number().int().min(250).max(10000).default(900),
-  // First audio still uses VOICE_LLM_TURN_TIMEOUT_MS. Once a short
-  // acknowledgement is audible, allow the measured production structured
-  // completion enough time to finish and validate, with a bounded maximum.
-  VOICE_LLM_POST_ACK_TIMEOUT_MS: z.coerce.number().int().min(1000).max(15000).default(4000),
   VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS: z.coerce.number().int().min(1200).max(1500).default(1400),
   VOICE_TTS_SENTENCE_GROUPING_ENABLED: booleanFromString.default(true),
   VOICE_TTS_SHORT_SENTENCE_CHARACTERS: z.coerce.number().int().min(20).max(500).default(100),
@@ -173,16 +168,10 @@ const envSchema = z.object({
   LLM_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(16).max(8192).default(300),
   LLM_MAX_HISTORY_MESSAGES: z.coerce.number().int().min(0).max(50).default(12),
   LLM_SYSTEM_PROMPT_MAX_CHARS: z.coerce.number().int().min(2000).max(100000).default(40000),
-  // Unified voice turns reserve the structured contract and cap composition
-  // before provider invocation; legacy/non-voice callers may configure more.
-  VOICE_LLM_PROMPT_BUDGET_CHARS: z.coerce.number().int().min(4000).max(40000).default(8000),
-  VOICE_LLM_PROMPT_BUDGET_TOKENS: z.coerce.number().int().min(1000).max(32000).default(4000),
-  VOICE_LLM_MAX_HISTORY_MESSAGES: z.coerce.number().int().min(0).max(20).default(4),
   // Used only when a streaming STT provider does not send its own speech-end
   // event.  It finalizes a complete caller turn after genuine quiet, never
   // from sound alone.
   VOICE_STT_FINALIZATION_SILENCE_MS: z.coerce.number().int().min(500).max(1500).default(600),
-  LLM_KNOWLEDGE_CONTEXT_MAX_CHARS: z.coerce.number().int().min(500).max(50000).default(12000),
   TTS_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(30000),
   TTS_SPEED_MONITOR_ENABLED: booleanFromString.default(true),
   TTS_SPEED_MIN_CHARACTERS_PER_SECOND: z.coerce.number().min(0.1).max(100).default(3),

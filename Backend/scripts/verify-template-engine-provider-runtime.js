@@ -30,18 +30,28 @@ function request() {
 
 let successfulAttempts = 0;
 let baseOutputTokens;
+let speechObservedBeforeCompletion = false;
+const streamedSpeech = [];
 const successful = await createTemplateEngineStructuredInvoker({
   async *stream(input) {
     baseOutputTokens = input.maxOutputTokens;
     successfulAttempts += 1;
-    yield { type: 'text_delta', delta: JSON.stringify(response) };
+    const serialized = JSON.stringify(response);
+    const splitAt = serialized.indexOf(',"workflowAction"');
+    yield { type: 'text_delta', delta: serialized.slice(0, splitAt) };
+    speechObservedBeforeCompletion = streamedSpeech.includes('Hello.');
+    yield { type: 'text_delta', delta: serialized.slice(splitAt) };
     yield { type: 'completed', finishReason: 'stop', usage: { totalTokens: 10 } };
   },
   cancel() {},
-})(request());
+})(request(), { onSpeechSentence: (sentence) => streamedSpeech.push(sentence) });
 assert.deepEqual(successful.outputParsed, response);
 assert.equal(successfulAttempts, 1);
 assert.ok(baseOutputTokens >= 128);
+assert.equal(speechObservedBeforeCompletion, true);
+assert.deepEqual(streamedSpeech, ['Hello.']);
+assert.equal(successful.speechStreaming.complete, true);
+assert.equal(successful.speechStreaming.sentenceCount, 1);
 
 for (const failure of [
   {
@@ -96,6 +106,17 @@ await assert.rejects(() => createTemplateEngineStructuredInvoker({
   cancel() {},
 })(request()), (error) => error.code === 'TEMPLATE_ENGINE_LLM_CANCELLED');
 assert.equal(cancelledAttempts, 1);
+
+let deadlineCancellation = null;
+await assert.rejects(() => createTemplateEngineStructuredInvoker({
+  async *stream() {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    yield { type: 'text_delta', delta: JSON.stringify(response) };
+  },
+  cancel(reason) { deadlineCancellation = reason; },
+})(request(), { firstSentenceDeadlineAt: Date.now() + 10 }),
+(error) => error.code === 'VOICE_LLM_FIRST_SENTENCE_TIMEOUT');
+assert.equal(deadlineCancellation, 'llm_first_sentence_timeout');
 
 console.log(JSON.stringify({
   suite: 'template-engine-provider-runtime', passed: true,

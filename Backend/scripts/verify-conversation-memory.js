@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import {
   conversationContextHash,
   conversationMemoryScope,
@@ -6,6 +7,7 @@ import {
   saveConversationMemory,
 } from '../src/voice/interaction/conversation-memory.service.js';
 import { buildConversationMemoryState } from '../src/voice/interaction/conversation-memory-state.js';
+import { openGenericConversationState } from '../src/voice/interaction/generic-conversation-state.js';
 
 const cleanState = buildConversationMemoryState({ previous: null, call: { id: 'call-null' } });
 assert.deepEqual(Object.keys(cleanState.callFrame).sort(), [
@@ -60,7 +62,7 @@ const state = buildConversationMemoryState({
   collectedData: { customer_name: 'Shanmugam' }, completedQuestions: ['customer_name'],
   pendingQuestions: ['preferred_date'], runningSummary: 'Customer selected a package.',
 });
-assert.equal(state.recentMessages.length, 12);
+assert.equal(state.recentMessages.length, 21);
 assert.equal(state.recentMessages.at(-1).content, 'm19');
 assert.equal(state.lastCall.id, 'call-2');
 assert.equal(state.collectedData.customer_name, 'Shanmugam');
@@ -105,5 +107,35 @@ const clearedSelection = buildConversationMemoryState({
 assert.equal(clearedSelection.callFrame.currentTopic, 'Kids Health Packages');
 assert.equal(clearedSelection.callFrame.knownEntities[0].key, 'kids');
 assert.equal(clearedSelection.callFrame.pendingQuestion.key, null);
+
+const priorTurns = [
+  { role: 'user', content: 'first question' },
+  { role: 'assistant', content: 'first answer' },
+  { role: 'user', content: 'second question' },
+  { role: 'assistant', content: 'second answer' },
+];
+const recentMemory = openGenericConversationState({
+  tenantId: 'tenant-1', agentId: 'agent-1', callId: 'call-recent',
+}, { conversationContextMode: 'last_n_turns', conversationContextTurns: 1 }, 0,
+{ recentTurns: priorTurns });
+assert.deepEqual(recentMemory.promptMessages().map(({ content }) => content),
+  ['second question', 'second answer']);
+recentMemory.close();
+const fullMemory = openGenericConversationState({
+  tenantId: 'tenant-1', agentId: 'agent-1', callId: 'call-full',
+}, { conversationContextMode: 'full_current_call', conversationContextTurns: 1 }, 0,
+{ recentTurns: priorTurns });
+assert.equal(fullMemory.promptMessages().length, priorTurns.length);
+fullMemory.close();
+
+const orchestrator = await readFile(new URL(
+  '../src/voice/realtime-conversation-orchestrator.js', import.meta.url,
+), 'utf8');
+assert.match(orchestrator,
+  /restoredMemory\s*=\s*this\.contextCachePolicy\.crossCall[\s\S]*previousConversationMemory\?\.callFrame/u,
+  'Persistent UI policy must authorize previous-call restoration');
+assert.match(orchestrator,
+  /conversationHistory:\s*this\.liveCallMemory\?\.promptMessages\?\.\(\)\s*\?\?\s*history/u,
+  'The LLM must receive conversation history bounded by the UI memory configuration');
 
 console.log(JSON.stringify({ success: true, task: 'Permanent PostgreSQL conversation memory' }));

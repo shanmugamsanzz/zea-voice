@@ -129,8 +129,18 @@ function acceptDecision(raw, chunks, maximumSpeechCharacters, workflowDefinition
     evidenceIds: Object.freeze(evidenceIds), workflowAction });
 }
 
-function universalPrompt({ agentPrompt, agentConfiguration, request, language, chunks,
+function universalPrompt({ agentPrompt, language, chunks, previousContext,
   maximumSpeechCharacters, workflowDefinitions, workflowState, conversationContext }) {
+  const latestAssistantDelivery = ['interrupted', 'incomplete']
+    .includes(conversationContext?.lastAssistantResponse?.completion)
+    ? conversationContext.lastAssistantResponse : null;
+  const compactTurnContext = Object.freeze({
+    recentConversation: conversationContext?.recentConversation
+      ?? previousContext ?? Object.freeze([]),
+    pendingQuestion: conversationContext?.pendingQuestion ?? null,
+    currentSpeech: conversationContext?.currentSpeech ?? Object.freeze({}),
+    latestAssistantDelivery,
+  });
   return [
     cleanText(agentPrompt, 24_000),
     'Generate one natural spoken response using the configured agent prompt, current question, recent conversation, retrieved context and workflow state.',
@@ -142,9 +152,7 @@ function universalPrompt({ agentPrompt, agentConfiguration, request, language, c
     ...(Number(maximumSpeechCharacters) > 0
       ? [`Maximum spoken characters: ${Math.floor(Number(maximumSpeechCharacters))}`]
       : ['No spoken character limit is configured for this agent.']),
-    '<agent_configuration>', JSON.stringify(serializableObject(agentConfiguration)),
-    '</agent_configuration>', '<conversation_context>', JSON.stringify(request.previousContext),
-    '</conversation_context>', '<turn_context>', JSON.stringify(conversationContext ?? {}),
+    '<turn_context>', JSON.stringify(compactTurnContext),
     '</turn_context>', '<workflow_definitions>', JSON.stringify(workflowDefinitions),
     '</workflow_definitions>', '<current_workflow_state>', JSON.stringify(serializableObject(workflowState)),
     '</current_workflow_state>', '<retrieved_chunks>',
@@ -184,8 +192,8 @@ export async function runAgentQdrantUniversalTurn(input = {}, overrides = {}) {
   const request = tagTemplateEngineTiming(Object.freeze({
     messages: Object.freeze([
       Object.freeze({ role: 'system', content: universalPrompt({
-        agentPrompt: input.agentPrompt, agentConfiguration: input.agentConfiguration,
-        request: retrieval.request, language: input.language, chunks: retrieval.chunks,
+        agentPrompt: input.agentPrompt, language: input.language, chunks: retrieval.chunks,
+        previousContext: retrieval.request.previousContext,
         maximumSpeechCharacters: input.maximumSpeechCharacters, workflowDefinitions,
         workflowState: input.workflowState,
         conversationContext: input.conversationContext,
@@ -197,7 +205,11 @@ export async function runAgentQdrantUniversalTurn(input = {}, overrides = {}) {
     responseFormat: Object.freeze({ type: 'json_schema', name: 'agent_qdrant_universal_turn',
       strict: true, schema: universalTurnSchema }),
   }), 'answer_generation');
-  const completion = await invokeStructuredLlm(request);
+  const completion = await invokeStructuredLlm(request, {
+    onSpeechSentence: input.onSpeechSentence,
+    firstSentenceDeadlineAt: input.firstSentenceDeadlineAt,
+    cancellationSignal: input.cancellationSignal,
+  });
   const validated = acceptDecision(completionValue(completion), retrieval.chunks,
     input.maximumSpeechCharacters, workflowDefinitions, input.conversationContext);
   const evidence = Object.freeze(retrieval.chunks.map((chunk) => evidenceRecord(
@@ -207,6 +219,7 @@ export async function runAgentQdrantUniversalTurn(input = {}, overrides = {}) {
     decision: legacyDecision(validated), outcome: validated.outcome,
     workflowAction: validated.workflowAction, speech: validated.speech, evidence,
     evidenceIds: validated.evidenceIds, retrievalDiagnostics: retrieval.diagnostics,
+    speechStreaming: completion?.speechStreaming ?? null,
     llmInvocationCount: 1,
   });
 }

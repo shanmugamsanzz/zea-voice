@@ -16,27 +16,6 @@ function jsonClone(value, fallback = {}) {
   try { return JSON.parse(JSON.stringify(value)); } catch { return fallback; }
 }
 
-export function buildUniversalAgentConfiguration(runtimeProfile = {}) {
-  const agent = object(runtimeProfile.agent);
-  const settings = object(agent.settings);
-  const canonical = object(runtimeProfile.configuration);
-  return Object.freeze({
-    identity: Object.freeze({
-      name: cleanText(agent.name, 240), description: cleanText(agent.description, 2_000),
-      goal: cleanText(agent.goal, 2_000), language: cleanText(agent.language, 80),
-      welcomeMessage: cleanText(agent.welcomeMessage, 2_000),
-    }),
-    conversation: Object.freeze({
-      memoryMode: cleanText(canonical.memory?.mode, 80),
-      recentTurns: Number(canonical.memory?.recentTurns ?? 5),
-    }),
-    configuredMessages: Object.freeze({
-      latencyAcknowledgementMessage: cleanText(settings.latencyAcknowledgementMessage, 500),
-      technicalFailureMessage: cleanText(settings.technicalFailureMessage, 500),
-    }),
-  });
-}
-
 export function buildUniversalWorkflowDefinitions({
   authorizedTools = [],
 } = {}) {

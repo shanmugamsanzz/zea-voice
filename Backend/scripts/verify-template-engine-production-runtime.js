@@ -43,6 +43,29 @@ await assert.rejects(() => runTemplateEngineProductionTurn({
   runQdrantUniversalTurn: async () => ({}),
 }), { code: 'TEMPLATE_ENGINE_RETRIEVAL_SCOPE_MISMATCH' });
 
+let retrievalCancelled = false;
+await assert.rejects(() => runTemplateEngineProductionTurn({
+  auth: { tenantId: 'tenant-a' },
+  scope: { tenantId: 'tenant-a', agentId: 'agent-a' },
+  latestUtterance: 'Question',
+  cancellationSignal: new AbortController().signal,
+  turnDeadlineAt: Date.now() + 3_000,
+}, {
+  invokeStructuredLlm: async () => ({}),
+  retrieveQdrantKnowledge: ({ cancellationSignal }) => new Promise((_resolve, reject) => {
+    const keepAlive = setTimeout(() => {}, 500);
+    cancellationSignal.addEventListener('abort', () => {
+      clearTimeout(keepAlive);
+      retrievalCancelled = true;
+      const error = new Error('cancelled');
+      error.name = 'AbortError';
+      reject(error);
+    }, { once: true });
+  }),
+  runQdrantUniversalTurn: async () => ({}),
+}), { code: 'VOICE_RETRIEVAL_DEADLINE' });
+assert.equal(retrievalCancelled, true);
+
 const source = await readFile(new URL(
   '../src/voice/interaction/template-engine-production-runtime.js', import.meta.url,
 ), 'utf8');

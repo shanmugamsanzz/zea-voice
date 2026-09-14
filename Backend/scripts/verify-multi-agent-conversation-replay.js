@@ -31,7 +31,7 @@ async function turn(agent, { question, history = [], pendingQuestion = null, sta
         source: { documentId: `${agent.agentId}-document`, filename: agent.filename, chunkIndex: 0 },
       }] : [], diagnostics: { queryEmbeddingCount: 1, qdrantSearchCount: 1,
         returnedChunkCount: answer.outcome === 'FACTUAL_ANSWER' ? 1 : 0,
-        maximumChunks: 3, tenantAgentFiltered: true } };
+        maximumChunks: 2, tenantAgentFiltered: true } };
     },
     runQdrantUniversalTurn: runAgentQdrantUniversalTurn,
     invokeStructuredLlm: async (request) => {
@@ -49,6 +49,8 @@ async function turn(agent, { question, history = [], pendingQuestion = null, sta
   assert.equal(result.llmInvocationCount, 1);
   assert.equal(result.diagnostics.retrieval.queryEmbeddingCount, 1);
   assert.equal(result.diagnostics.retrieval.qdrantSearchCount, 1);
+  assert.equal(result.speech, answer.speech,
+    'The replay must preserve the expected answer without substitution');
   return result;
 }
 
@@ -77,6 +79,15 @@ for (const agent of agents) {
   await turn(agent, { question: `¿Cuánto cuesta ${subject}?`, history: [
     { role: 'user', content: `Háblame de ${subject}.` },
   ], answer: { outcome: 'FACTUAL_ANSWER', speech: `${subject} cuesta ${amount}.` } });
+  await turn(agent, { question: 'Please start the configured request.', answer: {
+    outcome: 'CLARIFICATION', speech: 'Which configured option should I use for the request?',
+  } });
+  await turn(agent, { question: 'Cancel the pending request.', state: {
+    workflow: { status: 'collecting' },
+  }, answer: { outcome: 'WORKFLOW_CANCELLATION', speech: 'The pending request is cancelled.' } });
+  await turn(agent, { question: 'Please continue.', history: [
+    { role: 'assistant', content: 'The previous response was interrupted.', completion: 'interrupted' },
+  ], answer: { outcome: 'CONVERSATIONAL_RESPONSE', speech: 'I will continue from the interrupted response.' } });
 }
 
 await assert.rejects(() => runTemplateEngineProductionTurn({
@@ -87,6 +98,7 @@ await assert.rejects(() => runTemplateEngineProductionTurn({
   runQdrantUniversalTurn: async () => ({}) }),
 { code: 'TEMPLATE_ENGINE_RETRIEVAL_SCOPE_MISMATCH' });
 
-console.log(JSON.stringify({ agents: agents.length, scenariosPerAgent: 6,
-  multilingual: true, oneEmbedding: true, oneSearch: true, maximumLlmCalls: 1,
-  tenantIsolation: true }));
+console.log(JSON.stringify({ agents: agents.length, scenariosPerAgent: 9,
+  multilingual: true, followUps: true, missingKnowledge: true, booking: true,
+  correction: true, cancellation: true, interruption: true, expectedAnswersPreserved: true,
+  oneEmbedding: true, oneSearch: true, maximumLlmCalls: 1, tenantIsolation: true }));

@@ -1,5 +1,5 @@
 const maxSummaryCharacters = 12_000;
-const maxMessages = 12;
+const maxMessages = 2_000;
 const maxMessageCharacters = 2_000;
 const forbiddenKeys = new Set(['__proto__', 'prototype', 'constructor']);
 

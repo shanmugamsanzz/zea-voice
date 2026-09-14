@@ -1,11 +1,11 @@
 export const QDRANT_RETRIEVAL_CONTRACT_VERSION = 1;
 
 export const QDRANT_RETRIEVAL_LIMITS = Object.freeze({
-  maximumPreviousTurns: 6,
-  maximumContextCharacters: 4_000,
+  maximumPreviousTurns: 3,
+  maximumContextCharacters: 3_000,
   maximumQuestionCharacters: 2_000,
   maximumChunkCharacters: 8_000,
-  maximumChunks: 3,
+  maximumChunks: 2,
 });
 
 function cleanText(value, maximum) {

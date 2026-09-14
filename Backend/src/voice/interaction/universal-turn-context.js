@@ -3,12 +3,31 @@ function text(value, limit = 2000) {
     .replace(/\s+/gu, ' ').trim().slice(0, limit);
 }
 
+function configuredConversation(entries, mode, recentTurns) {
+  if (mode === 'full_current_call') return entries;
+  const requestedTurns = Number(recentTurns);
+  const turnLimit = Number.isInteger(requestedTurns) && requestedTurns > 0
+    ? requestedTurns : 5;
+  let callerTurns = 0;
+  let start = 0;
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    if (entries[index].role !== 'user') continue;
+    callerTurns += 1;
+    if (callerTurns === turnLimit) {
+      start = index;
+      break;
+    }
+  }
+  return entries.slice(start);
+}
+
 // Preserve chronological fragments and delivered openings, including messages
 // that have no matching reply. Never infer semantic completion from keywords.
 export function buildUniversalTurnContext({ currentQuestion, conversationHistory = [],
-  pendingQuestion = null, speechStatus = {} } = {}) {
+  pendingQuestion = null, speechStatus = {}, conversationContextMode = 'last_n_turns',
+  conversationContextTurns = 5 } = {}) {
   const question = text(currentQuestion);
-  const history = (Array.isArray(conversationHistory) ? conversationHistory : [])
+  const audibleHistory = (Array.isArray(conversationHistory) ? conversationHistory : [])
     .filter((entry) => ['user', 'assistant'].includes(entry?.role)
       && entry.isFinal !== false && entry.audible !== false)
     .map((entry) => ({ role: entry.role, content: text(entry.content),
@@ -17,16 +36,14 @@ export function buildUniversalTurnContext({ currentQuestion, conversationHistory
     .filter((entry) => entry.content);
   // The controller appends this finalized question before invoking the engine.
   // Remove only that trailing occurrence; earlier repetitions remain context.
-  if (history.at(-1)?.role === 'user' && history.at(-1).content === question) history.pop();
-  const recent = [];
-  let remaining = 6000;
-  for (const entry of history.slice(-12).reverse()) {
-    if (entry.content.length > remaining) break;
-    recent.push(Object.freeze(entry));
-    remaining -= entry.content.length;
-  }
-  recent.reverse();
-  const lastAssistant = [...recent].reverse().find((entry) => entry.role === 'assistant');
+  if (audibleHistory.at(-1)?.role === 'user'
+    && audibleHistory.at(-1).content === question) audibleHistory.pop();
+  const lastAssistant = [...audibleHistory].reverse()
+    .find((entry) => entry.role === 'assistant');
+  const history = audibleHistory.filter((entry) => entry.completion === 'complete');
+  const recent = configuredConversation(
+    history, conversationContextMode, conversationContextTurns,
+  ).map((entry) => Object.freeze(entry));
   const pending = typeof pendingQuestion === 'string' ? text(pendingQuestion)
     : pendingQuestion && typeof pendingQuestion === 'object'
       ? Object.fromEntries(Object.entries(pendingQuestion).slice(0, 12)

@@ -9,8 +9,11 @@ import { retrieveAgentQdrantKnowledge } from './agent-qdrant-retrieval.js';
 import { runAgentQdrantUniversalTurn } from './agent-qdrant-grounded-turn.js';
 import { buildUniversalTurnContext } from './universal-turn-context.js';
 import {
+  UNIVERSAL_TURN_LATENCY_BUDGET,
+  universalStageDeadline,
+} from './universal-turn-latency-budget.js';
+import {
   applyUniversalWorkflowResult,
-  buildUniversalAgentConfiguration,
   buildUniversalWorkflowDefinitions,
 } from './template-engine-universal-workflow.js';
 
@@ -23,6 +26,38 @@ function cleanText(value, maximum = 4_000) {
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+async function retrieveWithinDeadline(invoke, input, turnDeadlineAt) {
+  const controller = new AbortController();
+  const upstream = input.cancellationSignal;
+  const cancelFromUpstream = () => controller.abort(upstream?.reason ?? 'turn_cancelled');
+  if (upstream?.aborted) cancelFromUpstream();
+  else upstream?.addEventListener?.('abort', cancelFromUpstream, { once: true });
+  const deadlineAt = universalStageDeadline({
+    turnDeadlineAt,
+    maximumMs: UNIVERSAL_TURN_LATENCY_BUDGET.retrievalMs,
+  });
+  let timer;
+  const timeout = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(new AppError(504, 'Contextual retrieval exceeded its turn budget',
+        'VOICE_RETRIEVAL_DEADLINE', {
+          maximumMs: UNIVERSAL_TURN_LATENCY_BUDGET.retrievalMs,
+        }));
+      controller.abort('retrieval_deadline');
+    }, Math.max(1, deadlineAt - Date.now()));
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([
+      Promise.resolve().then(() => invoke({ ...input, cancellationSignal: controller.signal })),
+      timeout,
+    ]);
+  } finally {
+    clearTimeout(timer);
+    upstream?.removeEventListener?.('abort', cancelFromUpstream);
+  }
 }
 
 function authenticatedRetrievalScope(input) {
@@ -48,7 +83,7 @@ export function createSingleLlmTurnInvoker(invoke, onInvocation = null) {
   if (typeof invoke !== 'function') throw new TypeError('Single-LLM turn requires an invoker');
   let invocationCount = 0;
   return Object.freeze({
-    invoke: async (request) => {
+    invoke: async (request, invocationOptions = {}) => {
       if (request?.responseFormat?.type !== 'json_schema'
         || !cleanText(request?.responseFormat?.name, 160)) {
         throw new AppError(500, 'Template-engine LLM operation must use a structured schema',
@@ -66,7 +101,7 @@ export function createSingleLlmTurnInvoker(invoke, onInvocation = null) {
         invocationCount,
         operation: request?.responseFormat?.name ?? null,
       }));
-      return invoke(request);
+      return invoke(request, invocationOptions);
     },
     count: () => invocationCount,
   });
@@ -110,8 +145,8 @@ export function assertQdrantFactualRetrievalArchitecture(diagnostics = {}) {
   if (queryEmbeddingCount !== 1) violations.push('query_embedding_must_run_once');
   if (qdrantSearchCount !== 1) violations.push('qdrant_search_must_run_once');
   if (!Number.isInteger(returnedChunkCount) || returnedChunkCount < 0
-    || returnedChunkCount > 3) violations.push('qdrant_must_return_at_most_three_chunks');
-  if (maximumChunks !== 3) violations.push('qdrant_maximum_chunks_must_be_three');
+    || returnedChunkCount > 2) violations.push('qdrant_must_return_at_most_two_chunks');
+  if (maximumChunks !== 2) violations.push('qdrant_maximum_chunks_must_be_two');
   if (diagnostics.tenantAgentFiltered !== true) {
     violations.push('qdrant_search_must_be_tenant_agent_filtered');
   }
@@ -213,12 +248,15 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     conversationHistory: input.conversationHistory ?? state.recentCompleteTurns,
     pendingQuestion: input.pendingQuestion ?? state.pendingClarification?.question,
     speechStatus: input.speechStatus,
+    conversationContextMode: input.conversationContextMode
+      ?? input.runtimeProfile?.agent?.settings?.conversationContextMode,
+    conversationContextTurns: input.conversationContextTurns
+      ?? input.runtimeProfile?.agent?.settings?.conversationContextTurns,
   });
   const agentPrompt = [
     input.mainPrompt,
     speechBudgetInstruction(maximumSpeechCharacters),
   ].filter(Boolean).join('\n');
-  const agentConfiguration = buildUniversalAgentConfiguration(input.runtimeProfile);
   const workflowDefinitions = buildUniversalWorkflowDefinitions({
     authorizedTools: input.authorizedWorkflowTools,
   });
@@ -229,13 +267,16 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   });
   assertCurrentTurn();
 
-  const retrieval = await dependencies.retrieveQdrantKnowledge({
+  const turnDeadlineAt = Number.isFinite(Number(input.turnDeadlineAt))
+    ? Number(input.turnDeadlineAt)
+    : Date.now() + UNIVERSAL_TURN_LATENCY_BUDGET.totalFirstAudioMs;
+  const retrieval = await retrieveWithinDeadline(dependencies.retrieveQdrantKnowledge, {
     tenantId: retrievalScope.tenantId,
     agentId: retrievalScope.agentId,
     question: input.latestUtterance,
     previousContext: conversationContext.recentConversation,
     cancellationSignal: input.cancellationSignal,
-  });
+  }, turnDeadlineAt);
   assertCurrentTurn();
 
   const retrievalArchitecture = assertQdrantFactualRetrievalArchitecture(
@@ -252,11 +293,16 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     conversationContext,
     cancellationSignal: input.cancellationSignal,
     agentPrompt,
-    agentConfiguration,
     workflowDefinitions,
     workflowState: state,
     language: input.language,
     maximumSpeechCharacters,
+    onSpeechSentence: dependencies.onSpeechSentence,
+    firstSentenceDeadlineAt: universalStageDeadline({
+      turnDeadlineAt,
+      maximumMs: UNIVERSAL_TURN_LATENCY_BUDGET.llmFirstSentenceMs,
+      reserveMs: UNIVERSAL_TURN_LATENCY_BUDGET.ttsFirstAudioMs,
+    }),
   }, { invokeStructuredLlm: llmTurn.invoke });
   assertCurrentTurn();
 

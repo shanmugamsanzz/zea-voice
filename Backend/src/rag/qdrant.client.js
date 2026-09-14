@@ -174,7 +174,7 @@ export async function deleteTenantAgentDocumentPoints(tenantId, agentId, documen
 }
 
 export async function searchTenantAgentDocumentPoints(tenantId, agentId, vector, {
-  limit = 3,
+  limit = 2,
   scoreThreshold = env.RAG_RUNTIME_MIN_SCORE,
   abortSignal = undefined,
 } = {}) {
@@ -182,7 +182,7 @@ export async function searchTenantAgentDocumentPoints(tenantId, agentId, vector,
     || vector.some((value) => typeof value !== 'number' || !Number.isFinite(value))) {
     throw new TypeError(`A numeric ${env.QDRANT_VECTOR_SIZE}-dimension query vector is required`);
   }
-  if (![2, 3].includes(limit)) throw new TypeError('Agent document search limit must be 2 or 3');
+  if (limit !== 2) throw new TypeError('Agent document search limit must be 2');
   const collectionName = collectionForTenant(tenantId);
   try {
     const payload = await qdrantFetch(

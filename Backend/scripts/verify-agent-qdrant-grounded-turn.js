@@ -32,7 +32,7 @@ const retrieval = Object.freeze({
   embeddingModel: 'intfloat/multilingual-e5-base',
   chunks,
   diagnostics: Object.freeze({ queryEmbeddingCount: 1, qdrantSearchCount: 1,
-    returnedChunkCount: 1, maximumChunks: 3, tenantAgentFiltered: true }),
+    returnedChunkCount: 1, maximumChunks: 2, tenantAgentFiltered: true }),
 });
 
 const parsedUniversalEnvelope = parseTemplateEngineStructuredOutput({
@@ -173,7 +173,7 @@ assert.deepEqual(productionResult.diagnostics.architecture.retrieval, {
   queryEmbeddingCount: 1,
   qdrantSearchCount: 1,
   returnedChunkCount: 1,
-  maximumChunks: 3,
+  maximumChunks: 2,
   tenantAgentFiltered: true,
 });
 assert.equal(stageTimings.retrieval.operations.retrieval.calls, 1);
@@ -266,7 +266,10 @@ const workflowResult = await runTemplateEngineProductionTurn({
 assert.equal(workflowResult.llmInvocationCount, 1);
 assert.equal(workflowResult.workflow.status, 'awaiting_confirmation');
 assert.equal(workflowResult.state.collectedToolFields.customer_name, 'Arun');
-assert.match(workflowPrompt, /Configured identity/u);
+assert.doesNotMatch(workflowPrompt, /Configured identity/u,
+  'Runtime identity metadata must not duplicate the configured agent prompt');
+assert.doesNotMatch(workflowPrompt, /<agent_configuration>|<conversation_context>/u,
+  'The answer prompt must not contain duplicate configuration or conversation blocks');
 assert.match(workflowPrompt, /Ask for confirmation before submission/u);
 assert.match(workflowPrompt, /customer_name/u);
 assert.doesNotMatch(workflowPrompt, /taskCompletion/u);

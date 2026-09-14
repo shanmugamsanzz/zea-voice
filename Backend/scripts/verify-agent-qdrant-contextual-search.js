@@ -89,21 +89,21 @@ const result = await retrieveAgentQdrantKnowledge(request, {
 assert.equal(embeddingCalls, 1);
 assert.equal(searchCalls, 1);
 assert.match(embeddedText, /Gold package/u);
-assert.equal(searchOptions.limit, 3);
+assert.equal(searchOptions.limit, 2);
 assert.equal(searchOptions.abortSignal, controller.signal);
-assert.equal(result.chunks.length, 3);
-assert.deepEqual(result.chunks.map(({ id }) => id), ['point-0', 'point-1', 'point-2']);
+assert.equal(result.chunks.length, 2);
+assert.deepEqual(result.chunks.map(({ id }) => id), ['point-0', 'point-1']);
 assert.deepEqual(result.diagnostics, {
   channelCounts: { qdrant: 5 },
   retrievalCount: 5,
-  verifiedEvidenceCount: 3,
-  candidateEvidenceCount: 3,
+  verifiedEvidenceCount: 2,
+  candidateEvidenceCount: 2,
   answerSupportVerified: false,
   failedChannels: [],
   queryEmbeddingCount: 1,
   qdrantSearchCount: 1,
-  returnedChunkCount: 3,
-  maximumChunks: 3,
+  returnedChunkCount: 2,
+  maximumChunks: 2,
   tenantAgentFiltered: true,
 });
 
@@ -124,7 +124,7 @@ const empty = await retrieveAgentQdrantKnowledge({
     emptySearchCalls += 1;
     assert.equal(receivedTenantId, tenantId);
     assert.equal(receivedAgentId, agentId);
-    assert.equal(options.limit, 3);
+    assert.equal(options.limit, 2);
     return [];
   },
 });

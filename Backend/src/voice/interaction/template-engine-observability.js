@@ -7,8 +7,8 @@ export const templateEngineFirstAudioTargets = Object.freeze({
   TOOL: 2_000,
 });
 
-export const TEMPLATE_ENGINE_ACTUAL_ANSWER_TARGET_MS = 3_000;
-export const TEMPLATE_ENGINE_ACTUAL_ANSWER_MAXIMUM_MS = 4_000;
+export const TEMPLATE_ENGINE_ACTUAL_ANSWER_TARGET_MS = 2_000;
+export const TEMPLATE_ENGINE_ACTUAL_ANSWER_MAXIMUM_MS = 3_000;
 export const TEMPLATE_ENGINE_ACTUAL_ANSWER_MINIMUM_SAMPLES = 20;
 
 function stageDuration(stageTimings, stage) {
@@ -50,7 +50,7 @@ export function templateEngineAudioPercentiles(turns = []) {
       maximumObservedMs: actualAnswerMaximumMs,
       maximumTargetStatus: actualAnswers.length < TEMPLATE_ENGINE_ACTUAL_ANSWER_MINIMUM_SAMPLES
         ? 'insufficient_live_samples'
-        : actualAnswerMaximumMs <= TEMPLATE_ENGINE_ACTUAL_ANSWER_MAXIMUM_MS ? 'passed' : 'missed',
+        : actualAnswerMaximumMs < TEMPLATE_ENGINE_ACTUAL_ANSWER_MAXIMUM_MS ? 'passed' : 'missed',
       p95: summarize('finalAnswerFirstAudioMs').p95,
       p95TargetStatus: actualAnswers.length < TEMPLATE_ENGINE_ACTUAL_ANSWER_MINIMUM_SAMPLES
         ? 'insufficient_live_samples'
@@ -140,7 +140,7 @@ export function recordTemplateEngineTurnMetrics(runtimeMetrics, {
       : finalAnswerFirstAudioMs < TEMPLATE_ENGINE_ACTUAL_ANSWER_TARGET_MS ? 'passed' : 'missed',
     maximumStatus: finalAnswerFirstAudioMs === null || !sample.normalVerifiedRequest
       ? 'not_measured'
-      : finalAnswerFirstAudioMs <= TEMPLATE_ENGINE_ACTUAL_ANSWER_MAXIMUM_MS ? 'passed' : 'missed',
+      : finalAnswerFirstAudioMs < TEMPLATE_ENGINE_ACTUAL_ANSWER_MAXIMUM_MS ? 'passed' : 'missed',
     stages: Object.freeze({
       sttFinalizationMs: Number.isFinite(sttFinalizationMs) ? Math.max(0, sttFinalizationMs) : null,
       routingMs: stageDuration(stageTimings, 'routing'),

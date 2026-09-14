@@ -2,8 +2,19 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { env } from '../src/config/env.js';
 import { CallController } from '../src/voice/call-controller.js';
+import { configuredTtsFirstAudioTimeoutMs } from
+  '../src/voice/realtime-conversation-orchestrator.js';
+import { UNIVERSAL_TURN_LATENCY_BUDGET } from
+  '../src/voice/interaction/universal-turn-latency-budget.js';
 
-assert.equal(env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS, 2_000);
+assert.deepEqual(UNIVERSAL_TURN_LATENCY_BUDGET, {
+  totalFirstAudioMs: 3_000,
+  retrievalMs: 150,
+  llmFirstSentenceMs: 2_200,
+  ttsFirstAudioMs: 500,
+});
+assert.equal(configuredTtsFirstAudioTimeoutMs(), 500);
+assert.equal(configuredTtsFirstAudioTimeoutMs(275), 275);
 assert.ok(env.VOICE_RETRIEVAL_TURN_TIMEOUT_MS > env.VOICE_RETRIEVAL_TARGET_MS,
   'The retrieval performance target must remain separate from its operational timeout');
 assert.equal(Object.hasOwn(env, 'VOICE_TTS_MAX_RESPONSE_CHARACTERS'), false,
@@ -45,8 +56,15 @@ assert.match(orchestrator, /onFirstAudio/u);
 assert.match(orchestrator, /persistAudible/u);
 assert.match(orchestrator, /await this\.activeAssistantPlayback\?\.persistAudible\?\.\(reason\)/u);
 assert.match(orchestrator, /sentencePipeline\.markTranscriptCommitted\(\)/u);
-assert.match(orchestrator, /VOICE_TURN_FIRST_AUDIO_DEADLINE_MS/u);
+assert.match(orchestrator, /UNIVERSAL_TURN_LATENCY_BUDGET\.totalFirstAudioMs/u);
 assert.match(orchestrator, /TTS_FIRST_AUDIO_TIMEOUT/u);
+assert.match(orchestrator, /tts\.first_audio_fresh_connection_retry/u);
+assert.match(orchestrator, /#createLookaheadTtsAdapter\(`\$\{generationId\}-fresh-retry`\)/u);
+assert.match(orchestrator, /#primeTechnicalRecoveryAudio\(\)/u);
+assert.match(orchestrator, /tts\.cached_technical_recovery_played/u);
+assert.match(orchestrator,
+  /error\?\.code\s*===\s*'VOICE_TURN_FIRST_AUDIO_DEADLINE'[\s\S]*#playCachedTechnicalRecovery/u,
+  'Exhausting the shared budget must use cached audible recovery instead of disconnecting silently');
 
 console.log(JSON.stringify({
   success: true,

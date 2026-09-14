@@ -62,11 +62,11 @@ export function instrumentTemplateEngineTurn(dependencies) {
         'retrieval', dependencies.retrieveQdrantKnowledge, { operation: 'retrieval' },
       ),
     } : {}),
-    invokeStructuredLlm: (request) => measured(
+    invokeStructuredLlm: (request, invocationOptions = {}) => measured(
       'generation',
       dependencies.invokeStructuredLlm,
       { operation: requestOperations.get(request)
         ?? operations.get(request.responseFormat?.name) ?? 'other_llm' },
-    )(request),
+    )(request, invocationOptions),
   };
 }

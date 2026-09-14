@@ -5,6 +5,7 @@ import {
   assertQdrantRetrievalActive,
   createQdrantRetrievalRequest,
   createQdrantRetrievalResult,
+  QDRANT_RETRIEVAL_LIMITS,
 } from './qdrant-retrieval-contract.js';
 
 const MAXIMUM_CONTEXT_TURNS = 2;
@@ -73,7 +74,8 @@ export async function retrieveAgentQdrantKnowledge(input = {}, overrides = {}) {
     request.tenantId,
     request.agentId,
     embedding.vector,
-    { limit: 3, abortSignal: request.cancellationSignal },
+    { limit: QDRANT_RETRIEVAL_LIMITS.maximumChunks,
+      abortSignal: request.cancellationSignal },
   );
   const result = createQdrantRetrievalResult(request, points);
   return Object.freeze({
@@ -91,7 +93,7 @@ export async function retrieveAgentQdrantKnowledge(input = {}, overrides = {}) {
       queryEmbeddingCount: 1,
       qdrantSearchCount: 1,
       returnedChunkCount: result.chunks.length,
-      maximumChunks: 3,
+      maximumChunks: QDRANT_RETRIEVAL_LIMITS.maximumChunks,
       tenantAgentFiltered: true,
     }),
   });

@@ -111,7 +111,8 @@ function liveLatencyReport() {
     }
     return {
       measured: false,
-      targetActualAnswerFirstAudioMs: 3_000,
+      targetAverageActualAnswerFirstAudioMs: 2_000,
+      maximumNormalActualAnswerFirstAudioMs: 3_000,
       reason: 'live_log_not_supplied',
       command: 'npm run verify:qdrant-architecture-live -- <json-lines-server-log>',
     };
@@ -134,7 +135,8 @@ function liveLatencyReport() {
   const report = JSON.parse(result.stdout);
   return {
     measured: true,
-    targetActualAnswerFirstAudioMs: 3_000,
+    targetAverageActualAnswerFirstAudioMs: 2_000,
+    maximumNormalActualAnswerFirstAudioMs: 3_000,
     firstAudioSlo: report.firstAudioSlo,
     actualAnswerSlo: report.actualAnswerSlo,
     liveCorrectness: report.liveCorrectness,
@@ -153,7 +155,7 @@ console.log(JSON.stringify({
     'documents_chunk_embed_qdrant',
     'bounded_context_query_embedding',
     'tenant_agent_filtered_qdrant_search',
-    'top_two_or_three_chunks',
+    'top_two_chunks',
     'one_universal_llm_call',
     'llm_answer_pass_through',
     'existing_tts',
@@ -164,7 +166,7 @@ console.log(JSON.stringify({
     maximumLlmCallsPerUserTurn: 1,
     queryEmbeddingsPerFactualTurn: 1,
     qdrantSearchesPerFactualTurn: 1,
-    maximumRetrievedChunks: 3,
+    maximumRetrievedChunks: 2,
     postgresDocumentChunkQueries: 0,
   },
   latency: liveLatencyReport(),

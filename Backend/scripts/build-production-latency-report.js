@@ -63,8 +63,8 @@ const actualAnswerAverage = actualAnswerSamples.length
     / actualAnswerSamples.length) * 100) / 100 : null;
 const actualAnswerMaximum = actualAnswerSamples.length ? Math.max(...actualAnswerSamples) : null;
 const sufficientSamples = actualAnswerSamples.length >= 20;
-const averagePassed = sufficientSamples && actualAnswerAverage < 3_000;
-const maximumPassed = sufficientSamples && actualAnswerMaximum <= 4_000;
+const averagePassed = sufficientSamples && actualAnswerAverage < 2_000;
+const maximumPassed = sufficientSamples && actualAnswerMaximum < 3_000;
 const incompleteTelemetryTurns = completedTurns.filter((turn) => (
   !String(turn.initialDecision ?? '').trim()
   || !String(turn.finalDecision ?? turn.decision ?? '').trim()
@@ -96,8 +96,8 @@ const report = {
   samples,
   firstAudioSlo: evaluateFirstAudioSlo(samples),
   actualAnswerSlo: {
-    targetAverageMs: 3_000,
-    maximumNormalRequestMs: 4_000,
+    targetAverageMs: 2_000,
+    maximumNormalRequestMs: 3_000,
     targetP95Ms: 3_000,
     minimumSamples: 20,
     count: actualAnswerSamples.length,
@@ -108,9 +108,9 @@ const report = {
     averagePassed,
     maximumPassed,
     averageReason: !sufficientSamples ? 'insufficient_live_samples'
-      : actualAnswerAverage < 3_000 ? null : 'actual_answer_average_breached',
+      : actualAnswerAverage < 2_000 ? null : 'actual_answer_average_breached',
     maximumReason: !sufficientSamples ? 'insufficient_live_samples'
-      : actualAnswerMaximum <= 4_000 ? null : 'actual_answer_maximum_breached',
+      : actualAnswerMaximum < 3_000 ? null : 'actual_answer_maximum_breached',
     passed: averagePassed && maximumPassed,
     reason: !sufficientSamples ? 'insufficient_live_samples'
       : !averagePassed ? 'actual_answer_average_breached'

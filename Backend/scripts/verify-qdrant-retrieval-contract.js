@@ -48,11 +48,11 @@ const wrongAgent = { ...points[0], id: 'cross-agent', score: 1,
   payload: { ...points[0].payload, agent_id: 'agent-b' } };
 assert.deepEqual(createQdrantRetrievalResult(request, [wrongAgent]).chunks, []);
 assert.deepEqual(Object.keys(result), ['chunks']);
-assert.equal(result.chunks.length, 3);
+assert.equal(result.chunks.length, 2);
 assert.ok(result.chunks.every((chunk) => chunk.verified === true));
 assert.ok(result.chunks.every((chunk) => chunk.provenanceVerified === true
   && chunk.evidenceStatus === 'candidate' && chunk.answerSupportVerified === false));
-assert.deepEqual(result.chunks.map((chunk) => chunk.id), ['point-0', 'point-1', 'point-2']);
+assert.deepEqual(result.chunks.map((chunk) => chunk.id), ['point-0', 'point-1']);
 assert.equal(result.chunks[0].source.filename, 'knowledge.txt');
 assert.deepEqual(result.chunks[0].source.metadata, {
   chunkId: 'chunk-0', contentHash: 'hash-0', uploadedAt: '2026-09-10T00:00:00.000Z',
