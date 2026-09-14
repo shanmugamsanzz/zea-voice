@@ -6,7 +6,7 @@ process.env.DATABASE_URL ??= 'postgresql://test:test@localhost:5432/test';
 process.env.REDIS_HOST ??= 'localhost';
 
 const { createAgentSchema } = await import('../src/agents/agent.schemas.js');
-const { resolveLiveMemoryConfiguration } = await import('../src/voice/interaction/live-memory-config.js');
+const { normalizeLiveMemorySettings } = await import('../src/voice/interaction/live-memory-config.js');
 const {
   buildCanonicalRuntimeConfiguration,
 } = await import('../src/voice/providers/provider-config.js');
@@ -22,13 +22,8 @@ const identifiers = Object.freeze({
 
 const settings = Object.freeze({
   cachePolicy: 'session_only',
-  contextId: 'customer-session',
   conversationContextMode: 'last_n_turns',
   conversationContextTurns: 4,
-  conversationMemoryFields: [{
-    key: 'reference_code', label: 'Reference code', type: 'text', required: true,
-    question: 'What is the reference code?', requiredAction: 'lookup_record',
-  }],
   timeBasedInterruptionEnabled: true,
   speechConfirmationDelayMs: 240,
   minimumMeaningfulWords: 2,
@@ -96,14 +91,15 @@ assert.equal(configurationA.prompt.system, 'Use the assigned published evidence.
 assert.equal(configurationA.prompt.temperature, 0.2);
 assert.equal(configurationA.memory.mode, settings.conversationContextMode);
 assert.equal(configurationA.memory.recentTurns, settings.conversationContextTurns);
-assert.deepEqual(configurationA.memory.fields.map((field) => ({ ...field })), settings.conversationMemoryFields);
+assert.equal(Object.hasOwn(configurationA.memory, 'fields'), false);
 assert.equal(configurationA.tools[0].name, 'lookup_record');
 assert.deepEqual(configurationA.tools[0].inputSchema.required, ['reference_code']);
 assert.equal(configurationA.speech.language, 'en-IN');
 assert.equal(configurationA.speech.voiceId, 'voice-a');
 assert.deepEqual([...configurationA.interruption.explicitStopPhrases], ['pause now']);
-assert.equal(configurationA.closing.staticMessage, settings.postCallStaticMessage);
-assert.deepEqual([...configurationA.closing.endTriggerPhrases], settings.callEndTriggerPhrases);
+assert.equal(Object.hasOwn(configurationA, 'closing'), false);
+assert.equal(JSON.stringify(configurationA).includes(settings.postCallStaticMessage), false);
+assert.equal(JSON.stringify(configurationA).includes(settings.callEndTriggerPhrases[0]), false);
 assert.equal(Object.hasOwn(configurationA, 'knowledge'), false);
 
 // Scope and revision lists never bleed between tenants or workspaces.
@@ -114,13 +110,14 @@ assert.equal(configurationB.scope.workspaceId, identifiers.workspaceB);
 assert.equal(JSON.stringify(configurationA).includes(identifiers.tenantB), false);
 assert.equal(JSON.stringify(configurationB).includes(identifiers.tenantA), false);
 
-// Backend validation remains authoritative for the same UI-owned fields.
-assert.throws(
-  () => resolveLiveMemoryConfiguration({
-    conversationMemoryFields: [{ key: 'Invalid Key', label: 'Invalid', question: 'Value?' }],
-  }, { strict: true }),
-  (error) => error.code === 'VOICE_LIVE_MEMORY_CONFIG_INVALID',
-);
+// Removed UI-owned field and namespace settings are discarded by backend normalization.
+const cleanedSettings = normalizeLiveMemorySettings({
+  ...settings,
+  contextId: 'legacy-namespace',
+  conversationMemoryFields: [{ key: 'legacy_field' }],
+});
+assert.equal(Object.hasOwn(cleanedSettings, 'contextId'), false);
+assert.equal(Object.hasOwn(cleanedSettings, 'conversationMemoryFields'), false);
 const validAgent = createAgentSchema.safeParse({
   name: 'Generic Agent', language: 'en-IN', usageDirection: 'both', status: 'draft',
   sttModelId: '70000000-0000-4000-8000-000000000001',
@@ -134,9 +131,10 @@ const providerSource = fs.readFileSync(new URL('../src/voice/providers/provider-
 const uiSource = fs.readFileSync(new URL('../../Frontend/src/components/agent/AgentTabs.tsx', import.meta.url), 'utf8');
 assert.match(providerSource, /a\.id=\$1 AND a\.tenant_id=\$2 AND a\.workspace_id=\$3/u);
 for (const uiOwnedSetting of [
-  'prompt: agent.prompt', 'conversationMemoryFields: normalizedMemoryFields',
+  'prompt: agent.prompt',
   'newToolInputSchema', 'AgentKnowledgeDocumentsPanel',
 ]) assert.match(uiSource, new RegExp(uiOwnedSetting.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'u'));
+assert.doesNotMatch(uiSource, /Context Namespace|Important Information Fields/u);
 
 const businessDefaults = /(?:shanmuga|hospital|silver|gold|platinum|appointment|booking)/iu;
 assert.doesNotMatch(providerSource, businessDefaults);

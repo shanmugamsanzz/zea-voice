@@ -10,7 +10,6 @@ import {
 assert.deepEqual(resolveInteractionConfiguration({}), {
   greetingMode: greetingModes.AGENT_INITIATES,
   cachePolicy: cachePolicies.PERSISTENT_24H,
-  contextId: null,
 });
 
 assert.deepEqual(resolveInteractionConfiguration({
@@ -20,7 +19,6 @@ assert.deepEqual(resolveInteractionConfiguration({
 }), {
   greetingMode: greetingModes.AGENT_INITIATES,
   cachePolicy: cachePolicies.PERSISTENT_24H,
-  contextId: null,
 });
 
 assert.deepEqual(resolveInteractionConfiguration({
@@ -30,7 +28,6 @@ assert.deepEqual(resolveInteractionConfiguration({
 }), {
   greetingMode: greetingModes.USER_INITIATES,
   cachePolicy: cachePolicies.SESSION_ONLY,
-  contextId: 'crm:lead/123-ABC',
 });
 
 const original = { greetingMode: 'user_initiates', cachePolicy: 'Disabled', custom: true };
@@ -38,7 +35,6 @@ const normalized = normalizeInteractionSettings(original);
 assert.deepEqual(normalized, {
   greetingMode: greetingModes.USER_INITIATES,
   cachePolicy: cachePolicies.DISABLED,
-  contextId: null,
   custom: true,
 });
 assert.equal(original.cachePolicy, 'Disabled');

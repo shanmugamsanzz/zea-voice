@@ -46,7 +46,6 @@ const contextRunner = async (operation) => operation({
             apiKey: 'must-not-leak', engine: 'template_engine_v1',
             modelKey: 'gpt-test',
             initialDecision: 'SEARCH', finalDecision: 'RESPONSE', evidenceIds: ['evidence-1'],
-            validationResult: 'valid',
           } },
           { type: 'unsupported_private_source', id: 'private', label: 'private', metadata: {} },
         ],
@@ -63,7 +62,6 @@ assert.equal(call.transcript[0].sources[1].metadata.apiKey, undefined);
 assert.equal(call.transcript[0].sources[1].metadata.modelKey, 'gpt-test');
 assert.equal(call.transcript[0].sources[1].metadata.initialDecision, 'SEARCH');
 assert.deepEqual(call.transcript[0].sources[1].metadata.evidenceIds, ['evidence-1']);
-assert.equal(call.transcript[0].sources[1].metadata.validationResult, 'valid');
 assert.equal(call.transcript[0].sources[0].metadata.documentDisplayName, 'Company A Catalog');
 assert.equal(call.transcript[0].sources[0].metadata.sourceSection, 'Option Alpha');
 assert.equal(call.transcript[0].sources[0].metadata.pageNumber, 2);

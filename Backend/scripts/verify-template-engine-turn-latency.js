@@ -133,17 +133,14 @@ assert.match(orchestrator,
   /finalResponseReady\s*=\s*true;[\s\S]*sentencePipeline\.cancelAcknowledgements\(\);[\s\S]*latencyAcknowledgement\.cancel\(\)/u,
   'A ready final answer must cancel both queued acknowledgement work and its timer');
 assert.match(orchestrator, /template_engine\.turn_latency_acknowledgement/u);
-for (const field of ['initialDecision', 'finalDecision', 'searchPerformed', 'validationResult',
-  'evidenceCount', 'configuredFallbackApplied', 'entityCoverageComplete']) {
+for (const field of ['initialDecision', 'finalDecision', 'searchPerformed',
+  'technicalRecoveryApplied', 'llmInvocationCount']) {
   assert.match(orchestrator, new RegExp(`${field}:`, 'u'),
     `Completed-turn telemetry must expose ${field} to the live release gate`);
 }
 assert.match(liveReport, /actualAnswerSamples\.length\s*>=\s*20/u);
 assert.match(liveReport, /actualAnswerAverage\s*<\s*3_000/u);
 assert.match(liveReport, /actualAnswerMaximum\s*<=\s*4_000/u);
-assert.match(liveReport, /bookingFieldKnowledgeSearches/u);
-assert.match(liveReport, /ungroundedSearchResponses/u);
-assert.match(liveReport, /incorrectEntityResponses/u);
 assert.match(liveReport, /multipleLlmInvocationTurns/u,
   'Live approval must reject every turn that exceeds the one-LLM ceiling');
 assert.match(liveReport, /ordinaryStaticFallbackTurns/u,
@@ -155,12 +152,6 @@ assert.match(liveReport, /incompleteTelemetryTurns/u,
 assert.match(liveReport, /report\.actualAnswerSlo\.passed\s*&&\s*report\.liveCorrectness\.passed/u,
   'Live approval must require both latency and correctness');
 assert.match(orchestrator, /templateEngineAcknowledgements\.triggered\s*\+=\s*1/u);
-assert.match(orchestrator, /setWorkflowFieldAudioCache\(result\.workflow\?\.speechCache/u,
-  'A Workflow field turn must hand cached audio to the live sentence pipeline');
-assert.match(orchestrator, /Buffer\.isBuffer\(reusableAudio\?\.audio\)/u,
-  'Cached Workflow field audio must bypass live TTS synthesis');
-assert.match(orchestrator, /capture:\s*capturedAudio/u,
-  'A cache miss must capture generated field audio for later turns');
 assert.match(orchestrator,
   /finalResponseReadyAt\s*=\s*Date\.now\(\);[\s\S]*sentencePipeline\.enqueue\(finalAnswer\)[\s\S]*finalResponseQueuedAt\s*=\s*Date\.now\(\);[\s\S]*sentencePipeline\.waitUntilStarted\(\)/u,
   'Validated final speech must enter TTS immediately after the result becomes ready');
@@ -211,7 +202,7 @@ const maximumBreach = recordTemplateEngineTurnMetrics({}, {
 });
 assert.equal(maximumBreach.actualAnswerBaseline.maximumStatus, 'missed');
 const recoverySample = recordTemplateEngineTurnMetrics({}, {
-  epoch: 'recovery-not-normal', result: { recoveryKind: 'validation' },
+  epoch: 'recovery-not-normal', result: { recoveryKind: 'operational' },
   turnStartedAt: 30_000, firstFinalAudioAt: 39_000,
 });
 assert.equal(recoverySample.normalVerifiedRequest, false);

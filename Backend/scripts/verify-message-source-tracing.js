@@ -66,7 +66,7 @@ assert.equal(llm.metadata.providerRequestId, 'request-1');
 const templateSources = templateEngineMessageSources({
   provenance: {
     initialDecision: 'SEARCH', finalDecision: 'RESPONSE',
-    evidenceIds: ['published:catalog_item:item-1'], validationResult: 'valid',
+    evidenceIds: ['published:catalog_item:item-1'],
     searchPerformed: true,
   },
   evidenceIds: ['published:catalog_item:item-1'],
@@ -91,7 +91,7 @@ assert.equal(templateSources[1].metadata.sourceLineEnd, 18);
 const nonFactualTemplateSources = templateEngineMessageSources({
   provenance: {
     initialDecision: 'RESPONSE', finalDecision: 'RESPONSE',
-    evidenceIds: [], validationResult: 'valid', searchPerformed: false,
+    evidenceIds: [], searchPerformed: false,
   },
   evidenceIds: [], evidence: [],
 }, { turnId: 'call-1:turn-2' });

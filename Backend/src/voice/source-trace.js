@@ -9,7 +9,6 @@ const sourceTypeValues = [
   'silent_message',
   'call_check_configuration',
   'runtime_fallback',
-  'post_call_closing',
 ];
 
 export const messageSourceTypes = Object.freeze(Object.fromEntries(
@@ -204,7 +203,6 @@ export function templateEngineMessageSources(result = {}, { turnId = null } = {}
       evidenceIds: provenance.evidenceIds ?? result.evidenceIds ?? [],
       workflowId: provenance.workflowId,
       toolId: provenance.toolId,
-      validationResult: provenance.validationResult,
       searchPerformed: provenance.searchPerformed === true,
       clarificationReason: provenance.clarificationReason,
     },
@@ -216,7 +214,6 @@ export function templateEngineMessageSources(result = {}, { turnId = null } = {}
       workflowId: provenance.workflowId,
       status: result.workflow?.status,
       success: result.workflow?.verifiedResult?.success,
-      validationResult: provenance.validationResult,
     },
   }) : null;
   return mergeMessageSources(decisionSource, knowledgeSources, toolSource);

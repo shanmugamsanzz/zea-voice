@@ -6,11 +6,10 @@ import { CallController } from '../src/voice/call-controller.js';
 assert.equal(env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS, 2_000);
 assert.ok(env.VOICE_RETRIEVAL_TURN_TIMEOUT_MS > env.VOICE_RETRIEVAL_TARGET_MS,
   'The retrieval performance target must remain separate from its operational timeout');
-assert.ok(env.VOICE_KNOWLEDGE_TURN_TIMEOUT_MS
-  >= env.VOICE_RETRIEVAL_TURN_TIMEOUT_MS + env.VOICE_HYDRATION_TURN_TIMEOUT_MS,
-  'Knowledge completion must leave enough time for authoritative hydration');
-assert.ok(env.VOICE_TTS_MAX_RESPONSE_CHARACTERS <= 600,
-  'Live responses must remain short enough for conversational playback');
+assert.equal(Object.hasOwn(env, 'VOICE_TTS_MAX_RESPONSE_CHARACTERS'), false,
+  'Per-agent UI configuration must be the only spoken response character limit');
+assert.equal(Object.hasOwn(env, 'VOICE_LLM_MAX_OUTPUT_TOKENS'), false,
+  'The LLM allowance must be derived from the per-agent UI speech limit');
 
 const persisted = [];
 const controller = new CallController({

@@ -232,7 +232,7 @@ Conversation context modes:
 - `last_n_turns`: retain the configured number of complete caller/agent pairs, up to the runtime limit.
 - `full_current_call`: retain the current-call history while selecting only relevant context that fits the LLM prompt budget.
 
-Important Information Fields are UI-defined and schema-validated. Current-call fields work independently of cross-call persistence. Fields cannot authorize tools; `requiredAction` ties collection to an already authorized action.
+Conversation behavior is prompt-driven. Structured workflow inputs are derived from each authorized tool's input schema; callers cannot create fields or authorize tools through agent settings.
 
 ## 10. Latency and audio lifecycle
 

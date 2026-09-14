@@ -53,7 +53,6 @@ function mapCall(row, includeTranscript = false, includeDeveloperMetadata = true
       callDurationSeconds: row.live_duration_seconds === undefined
         ? row.duration_seconds : number(row.live_duration_seconds),
     }),
-    taskCompletion: runtime?.metrics?.taskCompletion ?? null,
     runtimeObservability: includeDeveloperMetadata && runtime ? {
       turnLatency: runtime.metrics?.turnLatency ?? [],
       tools: runtime.metrics?.tools ?? [],

@@ -1,38 +1,22 @@
-import { AppError } from '../../middleware/errors.js';
-
-export function normalizedNumericTokens(value) {
-  const ascii = String(value ?? '').normalize('NFKC').replace(/\p{Nd}/gu, (digit) => {
-    let start = digit.codePointAt(0);
-    while (start > 0 && /\p{Nd}/u.test(String.fromCodePoint(start - 1))) start -= 1;
-    return String((digit.codePointAt(0) - start) % 10);
-  });
-  const tokens = ascii.match(/[+-]?\d+(?:[,\.]\d+)*/gu) ?? [];
-  return new Set(tokens.map((token) => {
-    // Normalize unambiguous grouped thousands; do not guess decimal-comma values.
-    const grouped = /^[+-]?\d{1,3}(?:,\d{3})+(?:\.\d+)?$/u.test(token)
-      || /^[+-]?\d{1,2}(?:,\d{2})*,\d{3}(?:\.\d+)?$/u.test(token);
-    const normalized = grouped ? token.replaceAll(',', '') : token;
-    if (normalized.includes(',')) return normalized;
-    const [integer, fraction = ''] = normalized.replace(/^\+/u, '').split('.');
-    const whole = BigInt(integer).toString();
-    const decimal = fraction.replace(/0+$/u, '');
-    return decimal ? `${integer.startsWith('-') && whole === '0' ? '-0' : whole}.${decimal}` : whole;
-  }));
-}
-
 export function shortenCompleteSpeech(value, maximum) {
   const speech = String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
     .replace(/\s+/gu, ' ').trim();
-  if (speech.length <= maximum) return speech;
+  const limit = Math.max(1, Number(maximum) || 1);
+  if (Array.from(speech).length <= limit) return speech;
   let shortened = '';
   for (const { segment } of new Intl.Segmenter(undefined, { granularity: 'sentence' }).segment(speech)) {
     const next = `${shortened} ${segment}`.trim();
-    if (next.length > maximum) break;
+    if (Array.from(next).length > limit) break;
     shortened = next;
   }
-  if (!shortened) throw new AppError(502, 'No complete sentence fits the speech budget',
-    'TEMPLATE_ENGINE_SPEECH_BUDGET_EXCEEDED');
-  return shortened;
+  if (shortened) return shortened;
+
+  // A valid generated answer must not be replaced merely because its first
+  // sentence is longer than the configured TTS budget. Keep the model's own
+  // speech and trim it directly to the limit, preferring a word boundary.
+  const clipped = Array.from(speech).slice(0, limit).join('').trimEnd();
+  const boundary = clipped.search(/\s+\S*$/u);
+  return (boundary > Math.floor(limit * 0.6) ? clipped.slice(0, boundary) : clipped).trim();
 }
 
 export function assertExplicitAction(authorization, expectedIntent, context) {

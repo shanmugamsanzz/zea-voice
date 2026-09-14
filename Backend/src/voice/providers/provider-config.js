@@ -6,8 +6,6 @@ import { decryptCredential } from '../../security/credential-crypto.js';
 import { resolveInteractionConfiguration } from '../interaction/interaction-config.js';
 import { resolveLiveMemoryConfiguration } from '../interaction/live-memory-config.js';
 import { resolveInterruptionConfiguration } from '../interruption/interruption-config.js';
-import { resolvePostCallClosingConfiguration } from '../integrations/postcall-closing-config.js';
-import { resolvePostCallEndTriggerConfiguration } from '../integrations/postcall-end-trigger-config.js';
 import { normalizeTtsUsageLimitSettings } from '../tts-usage-limit-config.js';
 
 const defaultContextRunner = (operation) => withPlatformAdminContext(null, operation);
@@ -101,8 +99,6 @@ export function buildCanonicalRuntimeConfiguration({
   const interaction = resolveInteractionConfiguration(settings);
   const memory = resolveLiveMemoryConfiguration(settings);
   const interruption = resolveInterruptionConfiguration(settings, Number(row.interruption_sensitivity));
-  const closing = resolvePostCallClosingConfiguration(settings);
-  const endTriggers = resolvePostCallEndTriggerConfiguration(settings);
   return Object.freeze({
     schemaVersion: 1,
     scope: Object.freeze({
@@ -119,10 +115,8 @@ export function buildCanonicalRuntimeConfiguration({
     }),
     memory: Object.freeze({
       policy: interaction.cachePolicy,
-      contextId: interaction.contextId,
       mode: memory.mode,
       recentTurns: memory.recentTurns,
-      fields: memory.fields,
     }),
     tools: Object.freeze(configuredToolContract(runtimeTools).map((tool) => Object.freeze(tool))),
     speech: Object.freeze({
@@ -135,14 +129,6 @@ export function buildCanonicalRuntimeConfiguration({
       speaker: Object.freeze({ ...ttsRuntimeSettings }),
     }),
     interruption,
-    closing: Object.freeze({
-      messageType: closing.messageType,
-      prompt: closing.prompt,
-      staticMessage: closing.staticMessage,
-      endTriggerPhrases: endTriggers.phrases,
-      uninterruptibleReasons: Object.freeze([...(settings.postCallUninterruptibleReasons ?? [])]),
-      includePhoneNumbers: settings.postCallIncludePhoneNumbers === true,
-    }),
   });
 }
 
@@ -161,12 +147,6 @@ function integrationConfiguration(settings) {
       },
     },
     postCall: {
-      prompt: settings.postCallPrompt ?? '',
-      messageType: settings.postCallMessageType ?? null,
-      staticMessage: settings.postCallStaticMessage ?? '',
-      dynamicClosing: settings.postCallDynamicClosing ?? '',
-      uninterruptibleReasons: settings.postCallUninterruptibleReasons ?? [],
-      endTriggerPhrases: settings.callEndTriggerPhrases ?? [],
       api: {
         active: settings.postCallEndpointDetailsActive === true,
         url: settings.postCallApiUrl ?? '',
@@ -325,7 +305,6 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
           interaction: {
             greetingMode: interaction.greetingMode,
             cachePolicy: interaction.cachePolicy,
-            contextId: interaction.contextId,
             silentMessage: settings.silentMessage ?? '',
           },
         },

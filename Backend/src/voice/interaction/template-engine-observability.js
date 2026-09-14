@@ -119,7 +119,7 @@ export function recordTemplateEngineTurnMetrics(runtimeMetrics, {
     finalAnswerAudioAfterQueuedMs,
     answerQueueAfterReadyMs,
     normalVerifiedRequest: !result?.recoveryKind
-      && !result?.validationFailure && !result?.operationalFailure
+      && !result?.operationalFailure
       && !result?.unexpectedFailure,
     stageTimings: Object.fromEntries(Object.entries(stageTimings).map(([stage, timing]) => [stage, { ...timing }])),
     finalAnswerStatus: finalAnswerFirstAudioMs === null || targetMs === null
@@ -146,7 +146,6 @@ export function recordTemplateEngineTurnMetrics(runtimeMetrics, {
       routingMs: stageDuration(stageTimings, 'routing'),
       retrievalMs: stageDuration(stageTimings, 'retrieval'),
       generationMs: stageDuration(stageTimings, 'generation'),
-      validationMs: stageDuration(stageTimings, 'validation'),
       answerQueueMs: sample.answerQueueAfterReadyMs,
       ttsFirstAudioMs: sample.finalAnswerAudioAfterQueuedMs
         ?? sample.finalAnswerAudioAfterReadyMs,

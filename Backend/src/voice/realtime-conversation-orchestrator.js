@@ -52,12 +52,13 @@ import {
   resolveConfiguredLatencyAcknowledgement,
 } from './interaction/template-engine-turn-latency.js';
 import { recordTemplateEngineTurnMetrics, templateEngineAudioPercentiles } from './interaction/template-engine-observability.js';
-import { assertVerifiedFactualStageArchitecture } from './interaction/template-engine-turn-timing.js';
+import { assertUniversalTurnArchitecture } from './interaction/template-engine-turn-timing.js';
 import {
   parseTemplateEngineStructuredOutput,
 } from './interaction/template-engine-structured-output.js';
 import { retrieveAgentQdrantKnowledge } from './interaction/agent-qdrant-retrieval.js';
 import { runAgentQdrantUniversalTurn } from './interaction/agent-qdrant-grounded-turn.js';
+import { llmTokenBudgetForSpeech } from './interaction/template-engine-speech-budget.js';
 import { classifyTemplateEngineTurnError } from './interaction/template-engine-error-classification.js';
 import { evaluateFirstAudioSlo, percentile } from './interaction/voice-latency-slo.js';
 import { configuredCallDurationMs } from './interaction/call-duration-policy.js';
@@ -68,16 +69,11 @@ import { mergeToolFieldSchemas } from './interaction/tool-field-schema.js';
 import { resolveRuntimeMessage } from './interaction/configured-runtime-messages.js';
 import { isInternalRuntimeText } from './interaction/recovery-readiness.js';
 export { isInternalRuntimeText } from './interaction/recovery-readiness.js';
-import {
-  applyCanonicalEntityToTaskCompletionState,
-  createTaskCompletionState,
-} from './interaction/task-completion-state.js';
 import { createPronunciationTextProcessor } from './pronunciation/pronunciation-text-processor.js';
 import { createTtsTextPreprocessor } from './tts-text-preprocessor.js';
 import { createStreamingSentenceBuffer } from './streaming-sentence-buffer.js';
 import { createTtsSpeedMonitor } from './tts-speed-monitor.js';
 import { loadRuntimeAmbience } from './ambience-runtime.service.js';
-import { resolvePostCallClosingConfiguration } from './integrations/postcall-closing-config.js';
 import {
   createMessageSource,
   llmMessageSource,
@@ -100,8 +96,7 @@ export function createTemplateEngineStructuredInvoker(adapter, options = {}) {
       messages: request.messages,
       tools: [],
       temperature: request.temperature ?? 0,
-      maxOutputTokens: Math.min(4096, env.VOICE_GROUNDED_MAX_OUTPUT_TOKENS
-        + Math.max(0, Math.min(768, Number(request.structuredOutputTokenReserve) || 0))),
+      maxOutputTokens: Number(request.maxOutputTokens) || 4_096,
       responseFormat: request.responseFormat,
     });
     options.onActive?.({ cancel: (reason) => adapter.cancel(reason) });
@@ -129,10 +124,6 @@ export function createTemplateEngineStructuredInvoker(adapter, options = {}) {
     });
     return { ...completion, outputParsed };
   };
-}
-
-function fallbackClosing(profile) {
-  return resolveRuntimeMessage(profile, 'closing');
 }
 
 function fallbackRecovery(profile) {
@@ -210,61 +201,6 @@ export function configuredClarificationRecovery(profile, knowledge = {}) {
   });
 }
 
-function canonicalResolvedMemoryContext(tenantEvidence = {}) {
-  const resolution = tenantEvidence.resolution ?? {};
-  const candidate = resolution.candidate;
-  if (!candidate || candidate.explicit !== true
-    || resolution.confidence !== 'HIGH' || resolution.action !== 'CONTINUE') return null;
-  const evidence = tenantEvidence.authoritative?.evidence ?? tenantEvidence.sources ?? [];
-  const normalized = (value) => String(value ?? '').normalize('NFKC').trim().toLocaleLowerCase();
-  const hydrated = evidence.filter((source) => source?.hydrationValidated === true
-    && source?.publicationValidated === true);
-  const categorySelection = candidate.entityType === 'CATEGORY'
-    || String(candidate.recordType ?? '').toLocaleUpperCase() === 'CATALOG_CATEGORY';
-  if (categorySelection) {
-    const categoryKey = normalized(candidate.categoryKey);
-    const source = hydrated.find((entry) => (
-      String(entry.recordType ?? '').toLocaleUpperCase() === 'CATALOG_CATEGORY'
-      && (normalized(entry.recordId) === normalized(candidate.recordId)
-        || normalized(entry.authoritativeData?.categoryKey) === categoryKey)
-    )) ?? hydrated.find((entry) => (
-      String(entry.recordType ?? '').toLocaleUpperCase() === 'CATALOG_ITEM'
-      && normalized(entry.authoritativeData?.categoryKey) === categoryKey
-    ));
-    if (!source) return null;
-    const data = source.authoritativeData ?? {};
-    const category = {
-      id: String(source.recordType ?? '').toLocaleUpperCase() === 'CATALOG_CATEGORY'
-        ? source.recordId : null,
-      recordId: String(source.recordType ?? '').toLocaleUpperCase() === 'CATALOG_CATEGORY'
-        ? source.recordId : null,
-      key: data.categoryKey ?? candidate.categoryKey,
-      name: data.category ?? candidate.label,
-      description: data.categoryDescription ?? candidate.categoryDescription,
-    };
-    return category.key && category.name
-      ? Object.freeze({ category: Object.freeze(category), explicitCategory: true }) : null;
-  }
-  if (candidate.entityType !== 'ITEM'
-    && String(candidate.recordType ?? '').toLocaleUpperCase() !== 'CATALOG_ITEM') return null;
-  const source = hydrated.find((entry) => (
-    String(entry.recordType ?? '').toLocaleUpperCase() === 'CATALOG_ITEM'
-    && normalized(entry.recordId) === normalized(candidate.recordId)
-  ));
-  if (!source) return null;
-  const data = source.authoritativeData ?? {};
-  const entity = {
-    id: source.recordId,
-    recordId: source.recordId,
-    key: data.itemKey,
-    name: data.name,
-    category: data.category,
-    categoryKey: data.categoryKey,
-  };
-  return entity.key && entity.name
-    ? Object.freeze({ entity: Object.freeze(entity), explicitEntity: true }) : null;
-}
-
 export function configuredLatencyAcknowledgementResponse(profile, knowledge = {}) {
   return resolveRuntimeMessage(profile, 'acknowledgement', knowledge);
 }
@@ -274,7 +210,7 @@ export function remainingLiveTurnBudgetMs(deadlineAt, reserveMs = 0, now = Date.
 }
 
 export function configuredTemplateEngineFailureResponse(profile, kind) {
-  if (!['configuration', 'validation', 'operational', 'unexpected'].includes(kind)) return '';
+  if (!['operational', 'unexpected'].includes(kind)) return '';
   const message = resolveRuntimeMessage(profile, 'technical_failure');
   return message && !isInternalRuntimeText(message) ? message : '';
 }
@@ -381,10 +317,6 @@ export class RealtimeConversationOrchestrator {
         samples: [],
       },
       shortTurns: { deferred: 0, merged: 0, discarded: 0 },
-      grounding: {
-        validated: 0, rejected: 0, fallbacks: 0,
-        streamedSentencesValidated: 0, streamedSentencesRejected: 0, samples: [],
-      },
       llmStreaming: { requests: 0, firstTokenSamples: [], firstTokenTargetMinMs: 250, firstTokenTargetMaxMs: 500 },
       turnLatency: [],
     };
@@ -565,23 +497,7 @@ export class RealtimeConversationOrchestrator {
     });
     this.callbackConfiguration = resolveCallbackConfiguration(this.runtimeProfile.agent.settings);
     const assignedToolSchemas = templateEngineToolSchemas(this.runtimeProfile.tools);
-    const configuredToolFields = mergeToolFieldSchemas(
-      this.runtimeProfile.agent.settings?.conversationMemoryFields,
-      assignedToolSchemas,
-    );
-    const actionConfigurationState = createTaskCompletionState(this.runtimeProfile.agent.settings, {
-      ...(this.call.providerMetadata?.context ?? {}),
-      ...(this.call.providerMetadata?.preCall?.context ?? {}),
-    }, {
-      fieldSchemas: configuredToolFields,
-    });
-    this.taskCompletionState = actionConfigurationState;
-    this.actionConfirmationConfiguration = actionConfigurationState.configuration;
-    this.runtimeMetrics.taskCompletion = {
-      enabled: this.actionConfirmationConfiguration.enabled === true,
-      intent: this.actionConfirmationConfiguration.intent ?? null,
-      requiredFields: this.actionConfirmationConfiguration.requiredFields ?? [],
-    };
+    const configuredToolFields = mergeToolFieldSchemas(assignedToolSchemas);
     this.contextResolution = this.call.providerMetadata?.conversationContext
       ?? resolveCallContextId({ call: this.call, runtimeProfile: this.runtimeProfile });
     this.contextCachePolicy = createContextCachePolicy({
@@ -605,7 +521,7 @@ export class RealtimeConversationOrchestrator {
     const memorySettings = {
       ...this.runtimeProfile.agent.settings,
       conversationLanguage: languageCode(this.runtimeProfile.agent.language),
-      conversationMemoryFields: configuredToolFields,
+      workflowFieldSchemas: configuredToolFields,
     };
     const restoredMemory = this.previousConversationMemory?.lastCall?.id === this.call.id
       ? { ...this.previousConversationMemory.callFrame, scope: memoryIdentity } : {};
@@ -835,7 +751,6 @@ export class RealtimeConversationOrchestrator {
               sttFinalizationMs: turnLatency.sttFinalizationMs,
               routingMs: turnLatency.routingMs,
               retrievalMs: turnLatency.retrievalMs,
-              hydrationMs: turnLatency.hydrationMs,
               llmMs: turnLatency.llmMs,
               ttsFirstChunkMs: turnLatency.ttsFirstChunkMs,
             }, 'First response audio was delivered to the Plivo WebSocket');
@@ -1070,8 +985,8 @@ export class RealtimeConversationOrchestrator {
       && this.interactionConfiguration.greetingMode === greetingModes.AGENT_INITIATES) {
       try {
         const response = await this.#generateUtilitySpeech(
-          `Open this follow-up call in one short natural spoken sentence. The caller previously requested this callback. Do not repeat the original introduction or invent details. Follow-up instruction: ${this.callbackConfiguration.followUpOpeningInstructions}`,
-          [],
+          'CALL_EVENT: scheduled_callback_follow_up. Respond according to the configured agent prompt.',
+          this.controller.history,
         );
         followUpOpening = response.text ? this.#fitTtsMessage(response.text) : null;
         this.followUpOpeningSources = mergeMessageSources(
@@ -1509,7 +1424,7 @@ export class RealtimeConversationOrchestrator {
     );
   }
 
-  #fitTtsMessage(text) {
+  #fitTtsMessage(text, { preserveGeneratedSpeech = false } = {}) {
     const originalText = String(text ?? '').trim();
     if (!originalText) return '';
     const prepared = this.ttsTextProcessor?.process(text)
@@ -1529,7 +1444,6 @@ export class RealtimeConversationOrchestrator {
     }
     const configuredLimits = [
       Number(this.runtimeProfile.limits?.ttsMaxCharactersPerResponse ?? 0),
-      Number(env.VOICE_TTS_MAX_RESPONSE_CHARACTERS),
     ].filter((value) => Number.isFinite(value) && value > 0);
     const maximumCharacters = configuredLimits.length ? Math.min(...configuredLimits) : 0;
     const configuredFallback = String(
@@ -1539,15 +1453,17 @@ export class RealtimeConversationOrchestrator {
     ).trim();
     const fitted = this.ttsCharacterBudget.fitMessage(
       prepared.text || configuredFallback,
-      configuredFallback,
-      { maximumCharacters, locale: languageCode(this.runtimeProfile.agent.language) },
+      preserveGeneratedSpeech ? '' : configuredFallback,
+      { maximumCharacters, locale: languageCode(this.runtimeProfile.agent.language),
+        preserveGeneratedSpeech },
     );
     if (fitted !== prepared.text) {
       this.log.warn({
         stage: 'tts.character_limit_message_fitted',
         callId: this.call.id,
         configuredMaximum: maximumCharacters,
-      }, 'Spoken message was reduced at a complete sentence boundary');
+        preservedGeneratedSpeech: preserveGeneratedSpeech === true,
+      }, 'Spoken message was reduced to the configured character limit');
     }
     return fitted;
   }
@@ -1564,7 +1480,9 @@ export class RealtimeConversationOrchestrator {
       messages,
       tools: [],
       temperature: this.runtimeProfile.agent.temperature,
-      maxOutputTokens: Math.min(256, env.VOICE_GROUNDED_MAX_OUTPUT_TOKENS),
+      maxOutputTokens: Math.min(256, llmTokenBudgetForSpeech(
+        this.runtimeProfile.limits?.ttsMaxCharactersPerResponse,
+      )),
     })) {
       if (event.type === 'text_delta') text += String(event.delta ?? '');
       if (event.type === 'completed' && event.usage) {
@@ -1647,7 +1565,6 @@ export class RealtimeConversationOrchestrator {
     const maximumResponseCharacters = Number(
       [
         Number(this.runtimeProfile.limits?.ttsMaxCharactersPerResponse ?? 0),
-        Number(env.VOICE_TTS_MAX_RESPONSE_CHARACTERS),
       ].filter((value) => Number.isFinite(value) && value > 0).sort((left, right) => left - right)[0] ?? 0,
     );
 
@@ -2112,7 +2029,6 @@ export class RealtimeConversationOrchestrator {
       },
     });
     const assignedTools = templateEngineToolSchemas(this.runtimeProfile.tools);
-    const informationFields = this.liveCallMemory?.fieldSchemas?.() ?? [];
     const auth = {
       tenantId: this.runtimeProfile.agent.tenantId,
       workspaceId: this.runtimeProfile.agent.workspaceId,
@@ -2153,10 +2069,9 @@ export class RealtimeConversationOrchestrator {
         usageDirection: this.call.direction,
         language: languageCode(this.runtimeProfile.agent.language),
         mainPrompt: this.runtimeProfile.agent.prompt,
-        maximumSpeechCharacters: Math.min(...[
-          Number(this.runtimeProfile.limits?.ttsMaxCharactersPerResponse ?? 0),
-          Number(env.VOICE_TTS_MAX_RESPONSE_CHARACTERS),
-        ].filter((value) => Number.isFinite(value) && value > 0)),
+        maximumSpeechCharacters:
+          Number(this.runtimeProfile.limits?.ttsMaxCharactersPerResponse) > 0
+            ? Number(this.runtimeProfile.limits.ttsMaxCharactersPerResponse) : null,
         latestUtterance: query,
         speechStatus: sttTiming.speechStatus,
         conversationHistory: history,
@@ -2165,8 +2080,6 @@ export class RealtimeConversationOrchestrator {
         runtimeProfile: this.runtimeProfile,
         authorizedWorkflowTools: assignedTools,
         assignedTools: this.runtimeProfile.tools,
-        informationFields,
-        confirmationMessage: this.actionConfirmationConfiguration?.confirmationMessage,
         cancellationSignal: retrievalAbortController.signal,
       }, {
         isTurnCurrent: () => !this.#isStaleGeneration(epoch) && !this.finalized,
@@ -2230,7 +2143,6 @@ export class RealtimeConversationOrchestrator {
             turnEpoch: epoch,
             channelCounts: details.channelCounts,
             retrievalCount: details.retrievalCount,
-            hydrationCount: details.hydrationCount,
             verifiedEvidenceCount: details.verifiedEvidenceCount,
             failedChannels: details.failedChannels,
             entityMatch: details.entityMatch ?? null,
@@ -2240,7 +2152,7 @@ export class RealtimeConversationOrchestrator {
             requestedOperandCount: details.requestedEntityCount ?? 0,
             hydratedOperandCount: details.hydratedRequestedEntityCount ?? 0,
             operandHydrationIncomplete: details.requestedEntityHydrationIncomplete === true,
-          }, 'Template-engine retrieval and hydration completed');
+          }, 'Template-engine Qdrant retrieval completed');
         },
         onStageTiming: (details) => {
           const timing = stageTimings[details.stage] ??= { durationMs: 0, calls: 0, cacheHits: 0 };
@@ -2260,21 +2172,6 @@ export class RealtimeConversationOrchestrator {
             startedAtMs: details.startedAtMs, endedAtMs: details.endedAtMs,
           }, 'Template-engine stage timing');
         },
-        onPostSearchDiagnostics: (details) => {
-          this.log.info({
-            stage: 'template_engine.post_search_validated',
-            callId: this.call.id,
-            turnEpoch: epoch,
-            evidenceCount: details.evidenceCount,
-            allowedAliases: details.allowedAliases,
-            returnedAliases: details.returnedAliases,
-            initialValidationReason: details.initialValidationReason,
-            initialNumericValidationDetails: details.initialNumericValidationDetails ?? null,
-            finalNumericValidationDetails: details.finalNumericValidationDetails ?? null,
-            validationReason: details.validationReason,
-            finalDecision: details.finalDecision,
-          }, 'Template-engine post-search decision validated');
-        },
       });
     } catch (error) {
       const errorKind = classifyTemplateEngineTurnError(error, {
@@ -2284,30 +2181,15 @@ export class RealtimeConversationOrchestrator {
         sentencePipeline.cancel();
         return;
       }
-      if (errorKind === 'validation' || errorKind === 'configuration') {
-        const recovery = configuredTemplateEngineFailureResponse(this.runtimeProfile, errorKind);
-        this.log.warn({ err: error, stage: 'template_engine.response_rejected',
-          callId: this.call.id, turnEpoch: epoch, errorKind, recoveryConfigured: Boolean(recovery),
-        }, 'Unvalidated answer suppressed; configured recovery replaces the rejected answer');
-        if (!recovery) {
-          sentencePipeline.cancel();
-          this.log.error({ stage: 'template_engine.recovery_unconfigured',
-            callId: this.call.id, turnEpoch: epoch, errorKind,
-          }, 'Approved neutral recovery is missing; preserving the call without invented speech');
-          if ([callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) {
-            await this.controller.interrupt('template_engine_recovery_unconfigured');
-          }
-          return;
+      if (errorKind === 'action') {
+        sentencePipeline.cancel();
+        this.log.warn({ err: error, stage: 'template_engine.action_blocked',
+          callId: this.call.id, turnEpoch: epoch,
+        }, 'Unauthorized or invalid workflow action was blocked without technical recovery');
+        if ([callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) {
+          await this.controller.interrupt('template_engine_action_blocked');
         }
-        // Do not enqueue any part of the rejected answer or its citations.
-        // Preserve the epoch so the approved recovery can finish normally.
-        result = {
-          speech: recovery, state: this.templateEngineState,
-          evidence: [], evidenceIds: [], toolExecuted: false,
-          llmInvocationCount: templateEngineLlmInvocations,
-          validationFailure: error.code ?? 'TEMPLATE_ENGINE_OUTPUT_INVALID',
-          recoveryKind: errorKind,
-        };
+        return;
       } else if (errorKind === 'operational') {
         this.#recordProviderFailure('llm', error, 'template_engine.turn');
         this.log.error({
@@ -2367,11 +2249,11 @@ export class RealtimeConversationOrchestrator {
       return;
     }
     this.templateEngineState = result.state;
-    const architectureProof = assertVerifiedFactualStageArchitecture({
+    const architectureProof = assertUniversalTurnArchitecture({
       architecture: result.diagnostics?.architecture,
       stageTimings,
     });
-    const finalAnswer = this.#fitTtsMessage(result.speech);
+    const finalAnswer = this.#fitTtsMessage(result.speech, { preserveGeneratedSpeech: true });
     if (!finalAnswer || !sentencePipeline.enqueue(finalAnswer)) {
       sentencePipeline.cancel();
       throw new AppError(503, 'The template-engine response could not be queued for speech',
@@ -2411,27 +2293,15 @@ export class RealtimeConversationOrchestrator {
       finalResponseQueuedAt,
       firstAudioDeadlineMs: Math.min(env.VOICE_TURN_FIRST_AUDIO_DEADLINE_MS, 2_000),
     });
-    const retrievalEntityDiagnostics = result.diagnostics?.retrieval ?? null;
-    const requestedEntityCount = Number(retrievalEntityDiagnostics?.requestedEntityCount ?? 0);
-    const hydratedRequestedEntityCount = Number(
-      retrievalEntityDiagnostics?.hydratedRequestedEntityCount ?? 0,
-    );
-    const entityResolutionAmbiguous =
-      retrievalEntityDiagnostics?.entityMatch?.ambiguityDetected === true
-      || retrievalEntityDiagnostics?.entityMatch?.requiresCandidateConfirmation === true;
-    const entityCoverageComplete = result.provenance?.searchPerformed !== true
-      || (retrievalEntityDiagnostics?.requestedEntityHydrationIncomplete !== true
-        && hydratedRequestedEntityCount >= requestedEntityCount
-        && !entityResolutionAmbiguous);
     await this.controller.setAssistantResponse(answer, Date.now(), { sources: factualAnswerSources });
     sentencePipeline.markTranscriptCommitted();
     if (this.#isStaleGeneration(epoch) || this.controller.state !== callStates.SPEAKING) return;
     await this.controller.playbackComplete();
     if (result.callControl === 'close') {
-      await this.#close('configured_universal_turn_closing', { speakClosing: false });
+      await this.#close('configured_universal_turn_closing');
       return Object.freeze({ playbackCompleted: true, callClosed: true });
     }
-    if (!result.recoveryKind && !result.validationFailure && !result.operationalFailure
+    if (!result.recoveryKind && !result.operationalFailure
       && !result.unexpectedFailure
       && this.pendingTemplateEngineRequest?.epoch === epoch) this.pendingTemplateEngineRequest = null;
     if (result.recoveryKind) this.log.info({ stage: 'template_engine.recovery_delivered',
@@ -2439,7 +2309,7 @@ export class RealtimeConversationOrchestrator {
       spokenCharacters: answer.length, pendingRequestRetained: Boolean(this.pendingTemplateEngineRequest),
     }, 'Approved recovery playback completed without exposing rejected speech');
     this.errorCount = 0;
-    this.#scheduleLiveMemoryCheckpoint('template_engine_validated_turn');
+    this.#scheduleLiveMemoryCheckpoint('template_engine_universal_turn');
     this.log.info({
       stage: 'template_engine.turn_completed',
       outcome: result.decision?.outcome ?? null,
@@ -2449,25 +2319,16 @@ export class RealtimeConversationOrchestrator {
       initialDecision: result.provenance?.initialDecision ?? null,
       finalDecision: result.provenance?.finalDecision ?? result.decision?.decision ?? null,
       searchPerformed: result.provenance?.searchPerformed === true,
-      validationResult: result.provenance?.validationResult ?? null,
       evidenceIds: result.evidenceIds ?? [],
       evidenceCount: result.evidenceIds?.length ?? 0,
-      requestedEntityCount,
-      hydratedRequestedEntityCount,
-      entityResolutionAmbiguous,
-      entityCoverageComplete: entityCoverageComplete,
       workflowStatus: result.workflow?.status ?? null,
       toolExecuted: result.toolExecuted === true,
       operationalFailure: result.operationalFailure ?? null,
       unexpectedFailure: result.unexpectedFailure ?? null,
-      validationFailure: result.validationFailure ?? null,
       llmInvocationCount: result.llmInvocationCount ?? 0,
       llmArchitecture: result.llmArchitecture ?? null,
       recoveryKind: result.recoveryKind ?? null,
-      configuredFallbackApplied:
-        result.diagnostics?.postSearch?.configuredFallbackApplied === true,
-      budgetCompressionApplied:
-        result.diagnostics?.postSearch?.budgetCompressionApplied === true,
+      technicalRecoveryApplied: Boolean(result.recoveryKind),
       normalVerifiedRequest: turnTiming.normalVerifiedRequest,
       architectureProof,
       spokenCharacters: answer.length,
@@ -2679,7 +2540,7 @@ export class RealtimeConversationOrchestrator {
                 turnLatency.validatedTextToAudioMs = Math.max(
                   0, Date.now() - Number(options.validatedTextAt ?? requestStartedAt),
                 );
-                turnLatency.responseClass = turnLatency.fastKnowledge ? 'direct_approved' : 'grounded_llm';
+                turnLatency.responseClass = turnLatency.fastKnowledge ? 'direct_approved' : 'universal_llm';
                 turnLatency.firstAudioTargetMs = 1000;
                 turnLatency.firstAudioAcceptableMs = turnLatency.fastKnowledge ? 1000 : 2000;
                 turnLatency.firstAudioStatus = latencyMs <= turnLatency.firstAudioTargetMs
@@ -2690,9 +2551,7 @@ export class RealtimeConversationOrchestrator {
                   epoch: turnLatency.epoch,
                   routingMs: turnLatency.routingMs,
                   retrievalMs: turnLatency.retrievalMs,
-                  hydrationMs: turnLatency.hydrationMs,
                   llmMs: turnLatency.llmMs,
-                  validationMs: turnLatency.validationMs,
                   ttsFirstChunkMs: turnLatency.ttsFirstChunkMs,
                   totalFirstAudioMs: turnLatency.totalFirstAudioMs,
                   firstAudioStatus: turnLatency.firstAudioStatus,
@@ -2708,11 +2567,9 @@ export class RealtimeConversationOrchestrator {
                   knowledgeMs: turnLatency.knowledgeMs,
                   routingMs: turnLatency.routingMs,
                   retrievalMs: turnLatency.retrievalMs,
-                  hydrationMs: turnLatency.hydrationMs,
                   rankingMs: turnLatency.rankingMs,
                   llmMs: turnLatency.llmMs,
                   llmFirstTokenMs: turnLatency.llmFirstTokenMs,
-                  validationMs: turnLatency.validationMs,
                   ttsFirstAudioMs: turnLatency.ttsFirstAudioMs,
                   ttsFirstChunkMs: turnLatency.ttsFirstChunkMs,
                   validatedTextToAudioMs: turnLatency.validatedTextToAudioMs,
@@ -3111,7 +2968,7 @@ export class RealtimeConversationOrchestrator {
       this.log.info({
         stage: 'call.maximum_duration_reached', callId: this.call.id, maximumCallDurationMinutes: minutes,
       }, 'Maximum configured call duration reached');
-      await this.#close('maximum_duration_reached', { speakClosing: false });
+      await this.#close('maximum_duration_reached');
     }), durationMs);
     this.callDurationTimer?.unref?.();
   }
@@ -3150,56 +3007,12 @@ export class RealtimeConversationOrchestrator {
     }
   }
 
-  async #closingMessage(reason) {
-    const closing = resolvePostCallClosingConfiguration({
-      ...this.runtimeProfile.agent.settings,
-      ...this.runtimeProfile.integrations?.postCall,
-    });
-    if (closing.messageType === 'None') return { text: '', sources: [] };
-    const closingSource = createMessageSource(messageSourceTypes.POST_CALL_CLOSING, {
-      id: this.runtimeProfile.agent.id,
-      label: `${closing.messageType} closing`,
-      metadata: { reason },
-    });
-    if (closing.messageType === 'Static') return { text: closing.staticMessage, sources: [closingSource] };
-    try {
-      const response = await this.#generateUtilitySpeech(
-        `End the call now. Reason: ${reason}. Generate exactly one brief natural closing sentence. Closing instruction: ${closing.prompt}`,
-        this.controller.history,
-      );
-      return {
-        text: response.text || fallbackClosing(this.runtimeProfile),
-        sources: mergeMessageSources(closingSource, this.#baseLlmSources(), response.sources),
-      };
-    } catch {
-      return {
-        text: fallbackClosing(this.runtimeProfile),
-        sources: mergeMessageSources(closingSource, createMessageSource(messageSourceTypes.RUNTIME_FALLBACK, {
-          label: 'Closing fallback',
-        })),
-      };
-    }
-  }
-
-  async #close(reason, options = {}) {
+  async #close(reason) {
     if (this.closing || this.finalized) return;
     this.closing = true;
     this.#clearInactivity();
     await this.#cancelActive(reason);
     await this.controller.requestClose(reason);
-    const closing = options.speakClosing === false
-      ? { text: '', sources: [] }
-      : await this.#closingMessage(reason);
-    const closingText = closing.text ? this.#fitTtsMessage(closing.text) : '';
-    if (closingText && !this.mediaSession.closed) {
-      await this.controller.recordAssistantMessage(closingText, Date.now(), { sources: closing.sources });
-      try {
-        await this.#synthesize(closingText, `closing-${this.epoch}`);
-        await this.audioEngine.drainOutput();
-      } catch (error) {
-        this.log.warn({ err: error, callId: this.call.id }, 'Post-Call closing audio failed');
-      }
-    }
     await this.#finalize('completed', reason);
     if (!this.mediaSession.closed) this.mediaSession.close(1000, reason);
   }

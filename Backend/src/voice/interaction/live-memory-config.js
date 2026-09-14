@@ -37,23 +37,23 @@ function normalizeField(input, index, strict) {
   const question = cleanText(input?.question, 500);
   const requiredAction = cleanText(input?.requiredAction, 80).toLowerCase();
   if (!/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(key)) {
-    if (strict) throw configurationError('Information field keys must use letters, numbers and underscores', `conversationMemoryFields.${index}.key`);
+    if (strict) throw configurationError('Workflow field keys must use letters, numbers and underscores', `workflowFieldSchemas.${index}.key`);
     return null;
   }
   if (!label) {
-    if (strict) throw configurationError('Information field label is required', `conversationMemoryFields.${index}.label`);
+    if (strict) throw configurationError('Workflow field label is required', `workflowFieldSchemas.${index}.label`);
     return null;
   }
   if (!memoryFieldTypes.includes(type)) {
-    if (strict) throw configurationError('Information field type is not supported', `conversationMemoryFields.${index}.type`);
+    if (strict) throw configurationError('Workflow field type is not supported', `workflowFieldSchemas.${index}.type`);
     return null;
   }
   if (!question) {
-    if (strict) throw configurationError('Information field question is required', `conversationMemoryFields.${index}.question`);
+    if (strict) throw configurationError('Workflow field question is required', `workflowFieldSchemas.${index}.question`);
     return null;
   }
   if (requiredAction && !/^[a-z][a-z0-9_-]{0,79}$/.test(requiredAction)) {
-    if (strict) throw configurationError('Required Action must use lowercase letters, numbers, underscores or hyphens', `conversationMemoryFields.${index}.requiredAction`);
+    if (strict) throw configurationError('Required Action must use lowercase letters, numbers, underscores or hyphens', `workflowFieldSchemas.${index}.requiredAction`);
     return null;
   }
   const options = Object.freeze((Array.isArray(input?.options) ? input.options : []).flatMap((entry) => {
@@ -84,13 +84,13 @@ export function resolveLiveMemoryConfiguration(settings = {}, { strict = false }
   if ((!Number.isInteger(numericTurns) || numericTurns < 1 || numericTurns > maximumRecentTurns) && strict) {
     throw configurationError(`Recent Turns must be between 1 and ${maximumRecentTurns}`, 'conversationContextTurns');
   }
-  const sourceFields = settings.conversationMemoryFields ?? [];
+  const sourceFields = settings.workflowFieldSchemas ?? [];
   if (!Array.isArray(sourceFields)) {
-    if (strict) throw configurationError('Important Information Fields must be a list', 'conversationMemoryFields');
+    if (strict) throw configurationError('Workflow field schemas must be a list', 'workflowFieldSchemas');
     return Object.freeze({ mode, recentTurns: 5, fields: Object.freeze([]) });
   }
   if (sourceFields.length > maximumFields && strict) {
-    throw configurationError(`Important Information Fields cannot contain more than ${maximumFields} fields`, 'conversationMemoryFields');
+    throw configurationError(`Workflow field schemas cannot contain more than ${maximumFields} fields`, 'workflowFieldSchemas');
   }
   const fields = [];
   const seen = new Set();
@@ -98,7 +98,7 @@ export function resolveLiveMemoryConfiguration(settings = {}, { strict = false }
     const field = normalizeField(input, index, strict);
     if (!field) continue;
     if (seen.has(field.key)) {
-      if (strict) throw configurationError('Information field keys must be unique', `conversationMemoryFields.${index}.key`);
+      if (strict) throw configurationError('Workflow field keys must be unique', `workflowFieldSchemas.${index}.key`);
       continue;
     }
     seen.add(field.key);
@@ -113,10 +113,13 @@ export function resolveLiveMemoryConfiguration(settings = {}, { strict = false }
 
 export function normalizeLiveMemorySettings(settings = {}) {
   const configuration = resolveLiveMemoryConfiguration(settings, { strict: true });
-  return {
+  const normalized = {
     ...settings,
     conversationContextMode: configuration.mode,
     conversationContextTurns: configuration.recentTurns,
-    conversationMemoryFields: configuration.fields.map((field) => ({ ...field })),
   };
+  delete normalized.contextId;
+  delete normalized.conversationMemoryFields;
+  delete normalized.workflowFieldSchemas;
+  return normalized;
 }

@@ -35,7 +35,7 @@ function phoneIdentity(call) {
   return `phone:${digest}`;
 }
 
-export function resolveCallContextId({ call, runtimeProfile }) {
+export function resolveCallContextId({ call }) {
   const taskContext = call?.providerMetadata?.context ?? {};
   const preCallContext = call?.providerMetadata?.preCall?.context ?? {};
   const direction = call?.direction === 'outbound' ? 'outbound' : 'inbound';
@@ -53,17 +53,15 @@ export function resolveCallContextId({ call, runtimeProfile }) {
   const selected = candidates.find(([value]) => Boolean(value));
   const identity = selected?.[0] ?? phoneIdentity(call);
   const source = selected?.[1] ?? 'phone_fallback';
-  const namespace = safeId(runtimeProfile?.agent?.speech?.interaction?.contextId
-    ?? runtimeProfile?.agent?.settings?.contextId);
   if (!identity) {
     const error = new TypeError('A call Context ID could not be resolved');
     error.code = 'VOICE_CONTEXT_ID_UNRESOLVED';
     throw error;
   }
   return Object.freeze({
-    contextId: namespace ? `${namespace}:${identity}` : identity,
+    contextId: identity,
     identity,
-    namespace,
+    namespace: null,
     source,
     direction,
   });

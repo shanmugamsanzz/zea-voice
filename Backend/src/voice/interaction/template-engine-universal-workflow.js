@@ -1,7 +1,6 @@
 import { AppError } from '../../middleware/errors.js';
 import { isDeepStrictEqual } from 'node:util';
 import { assertExplicitAction } from './universal-response-safety.js';
-import { resolveTaskCompletionConfiguration } from './completion-config.js';
 import { toolArgumentsMatchSchema, validateToolArguments } from '../tools/tool-security.js';
 
 function cleanText(value, maximum = 2_000) {
@@ -13,31 +12,8 @@ function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
-function normalizedIdentifier(value) {
-  return cleanText(value, 160).toLocaleLowerCase();
-}
-
 function jsonClone(value, fallback = {}) {
   try { return JSON.parse(JSON.stringify(value)); } catch { return fallback; }
-}
-
-function toolIdentifiers(tool) {
-  return new Set((tool?.identifiers ?? [tool?.id, tool?.name])
-    .map(normalizedIdentifier).filter(Boolean));
-}
-
-function fieldsForTool(fields, tool, toolCount) {
-  const identifiers = toolIdentifiers(tool);
-  return (fields ?? []).filter((field) => {
-    const requiredAction = normalizedIdentifier(field?.requiredAction);
-    return requiredAction ? identifiers.has(requiredAction) : toolCount === 1;
-  }).filter((field) => Object.hasOwn(object(tool.inputSchema?.properties), field.key))
-    .map((field) => Object.freeze({
-      key: cleanText(field.key, 64), label: cleanText(field.label, 160),
-      type: cleanText(field.type, 40), required: field.required !== false,
-      question: cleanText(field.question, 1_000),
-      ...(Array.isArray(field.options) ? { options: Object.freeze(jsonClone(field.options, [])) } : {}),
-    }));
 }
 
 export function buildUniversalAgentConfiguration(runtimeProfile = {}) {
@@ -54,43 +30,27 @@ export function buildUniversalAgentConfiguration(runtimeProfile = {}) {
       memoryMode: cleanText(canonical.memory?.mode, 80),
       recentTurns: Number(canonical.memory?.recentTurns ?? 5),
     }),
-    closing: Object.freeze(jsonClone(canonical.closing, {})),
     configuredMessages: Object.freeze({
       latencyAcknowledgementMessage: cleanText(settings.latencyAcknowledgementMessage, 500),
       technicalFailureMessage: cleanText(settings.technicalFailureMessage, 500),
-      closingMessage: cleanText(settings.closingMessage, 500),
-      postCallClosingMessage: cleanText(settings.postCallClosingMessage, 500),
     }),
   });
 }
 
 export function buildUniversalWorkflowDefinitions({
-  runtimeProfile = {}, authorizedTools = [], informationFields = [], confirmationMessage = '',
+  authorizedTools = [],
 } = {}) {
-  const settings = object(runtimeProfile.agent?.settings);
-  const completion = resolveTaskCompletionConfiguration(settings);
   const tools = Array.isArray(authorizedTools) ? authorizedTools : [];
   return Object.freeze(tools.map((tool) => {
-    const identifiers = toolIdentifiers(tool);
-    const completionApplies = completion.enabled
-      && (tools.length === 1 || identifiers.has(normalizedIdentifier(completion.intent)));
-    const fields = fieldsForTool(informationFields, tool, tools.length);
     const schemaRequired = Array.isArray(tool.inputSchema?.required) ? tool.inputSchema.required : [];
-    const requiredFields = [...new Set([...schemaRequired,
-      ...fields.filter((field) => field.required).map((field) => field.key)])];
+    const requiredFields = [...new Set(schemaRequired)];
     return Object.freeze({
       workflowId: cleanText(tool.id, 160), toolName: cleanText(tool.name, 160),
       identifiers: Object.freeze((tool.identifiers ?? []).map((value) => cleanText(value, 160))
         .filter(Boolean)),
       description: cleanText(tool.description, 1_024),
-      trigger: completionApplies ? completion.intent : '',
       inputSchema: Object.freeze(jsonClone(tool.inputSchema, {})),
       requiredFields: Object.freeze(requiredFields),
-      fields: Object.freeze(fields),
-      confirmationMessage: cleanText(
-        confirmationMessage || (completionApplies
-          ? completion.confirmationMessage : ''), 2_000,
-      ),
     });
   }).filter((workflow) => workflow.workflowId && workflow.toolName));
 }
@@ -124,7 +84,7 @@ function workflowState(state, values, status, workflowId, confirmationPrompt = n
 export async function applyUniversalWorkflowResult({
   outcome, workflowAction, state = {}, definitions = [], persistWorkflowState,
   executeAuthorizedTool,
-  actionAuthorization, conversationContext, speech,
+  conversationContext, speech,
 } = {}) {
   if (outcome === 'WORKFLOW_CANCELLATION') {
     const nextState = workflowState(state, {}, null, null);
@@ -154,7 +114,10 @@ export async function applyUniversalWorkflowResult({
       workflow: Object.freeze({ id: definition.workflowId, status,
         nextField: missingFields[0] ?? null }), toolExecuted: false, toolResult: null });
   }
-  assertExplicitAction(actionAuthorization, 'execute', conversationContext);
+  assertExplicitAction({
+    intent: 'execute', utteranceComplete: true, unambiguous: true,
+    quote: workflowAction.authorizationQuote,
+  }, 'execute', conversationContext);
   const delivered = conversationContext?.lastAssistantResponse;
   if (missingFields.length || state.confirmationStatus !== 'awaiting_confirmation'
     || activeWorkflowId !== definition.workflowId

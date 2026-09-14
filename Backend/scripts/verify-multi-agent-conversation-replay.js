@@ -40,8 +40,7 @@ async function turn(agent, { question, history = [], pendingQuestion = null, sta
       assert.match(prompt, new RegExp(agent.prompt.replace('.', '\\.')));
       assert.doesNotMatch(prompt, new RegExp(agents.find((entry) => entry !== agent).text));
       assert.match(request.messages.at(-1).content, new RegExp(question.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')));
-      return { outputParsed: { evidenceIds: [], workflowAction: null, grounding: null,
-        actionAuthorization: null, ...answer } };
+      return { outputParsed: { workflowAction: null, ...answer } };
     },
     persistWorkflowState: async () => {},
   });
@@ -54,13 +53,9 @@ async function turn(agent, { question, history = [], pendingQuestion = null, sta
 }
 
 for (const agent of agents) {
-  const evidenceId = `${agent.agentId}-chunk`;
   const [subject, amount] = agent.text.match(/^(.*?) costs (\d+)/u).slice(1);
   const factual = await turn(agent, { question: `What does ${subject} cost?`, answer: {
-    outcome: 'FACTUAL_ANSWER', speech: `${subject} costs ${amount}.`, evidenceIds: [evidenceId],
-    grounding: { answersRequestedSubject: true, answersRequestedAttribute: true,
-      supports: [{ claim: `${subject} costs ${amount}.`, evidenceId,
-        quote: `${subject} costs ${amount}` }] },
+    outcome: 'FACTUAL_ANSWER', speech: `${subject} costs ${amount}.`,
   } });
   assert.equal(factual.evidence[0].tenantId, agent.tenantId);
   assert.equal(factual.evidence[0].agentId, agent.agentId);
@@ -79,6 +74,9 @@ for (const agent of agents) {
   await turn(agent, { question: 'Tell me about the name I just mispronounced.', history: [
     { role: 'assistant', content: 'I previously invented a name.' },
   ], answer: { outcome: 'CLARIFICATION', speech: 'Which configured option did you mean?' } });
+  await turn(agent, { question: `¿Cuánto cuesta ${subject}?`, history: [
+    { role: 'user', content: `Háblame de ${subject}.` },
+  ], answer: { outcome: 'FACTUAL_ANSWER', speech: `${subject} cuesta ${amount}.` } });
 }
 
 await assert.rejects(() => runTemplateEngineProductionTurn({
@@ -89,5 +87,6 @@ await assert.rejects(() => runTemplateEngineProductionTurn({
   runQdrantUniversalTurn: async () => ({}) }),
 { code: 'TEMPLATE_ENGINE_RETRIEVAL_SCOPE_MISMATCH' });
 
-console.log(JSON.stringify({ agents: agents.length, scenariosPerAgent: 5,
-  oneEmbedding: true, oneSearch: true, maximumLlmCalls: 1, tenantIsolation: true }));
+console.log(JSON.stringify({ agents: agents.length, scenariosPerAgent: 6,
+  multilingual: true, oneEmbedding: true, oneSearch: true, maximumLlmCalls: 1,
+  tenantIsolation: true }));

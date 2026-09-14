@@ -6,13 +6,10 @@ import { registerImplementedProviderAdapters } from '../voice/providers/defaults
 import { normalizeInterruptionSettings } from '../voice/interruption/interruption-config.js';
 import { normalizeInteractionSettings } from '../voice/interaction/interaction-config.js';
 import { normalizeCallbackSettings } from '../voice/interaction/callback-config.js';
-import { normalizeTaskCompletionSettings } from '../voice/interaction/completion-config.js';
 import {
   normalizePostCallSummarySettings,
   resolvePostCallSummaryConfiguration,
 } from '../voice/integrations/postcall-summary-config.js';
-import { normalizePostCallClosingSettings } from '../voice/integrations/postcall-closing-config.js';
-import { normalizePostCallEndTriggerSettings } from '../voice/integrations/postcall-end-trigger-config.js';
 import { normalizeTtsUsageLimitSettings } from '../voice/tts-usage-limit-config.js';
 import { normalizeLiveMemorySettings } from '../voice/interaction/live-memory-config.js';
 
@@ -21,21 +18,29 @@ const legacyAgentTtsProviderOverrides = new Set([
   'ttsPrice1k', 'ttsSimilarityBoost', 'ttsEmotion', 'ttsVolume',
 ]);
 
+const promptOwnedLegacySettings = new Set([
+  'postCallPrompt', 'postCallMessageType', 'postCallStaticMessage',
+  'postCallDynamicClosing', 'postCallUninterruptibleReasons', 'callEndTriggerPhrases',
+  'taskCompletionEnabled', 'taskCompletionIntent', 'taskCompletionRequiredFields',
+  'taskCompletionConfirmationMessage', 'taskCompletionRequiresCatalogItem',
+  'taskCompletionCatalogField', 'closingMessage', 'postCallClosingMessage',
+]);
+
 function withoutAgentTtsProviderOverrides(settings = {}) {
   return Object.fromEntries(
-    Object.entries(settings ?? {}).filter(([key]) => !legacyAgentTtsProviderOverrides.has(key)),
+    Object.entries(settings ?? {}).filter(([key]) => (
+      !legacyAgentTtsProviderOverrides.has(key) && !promptOwnedLegacySettings.has(key)
+    )),
   );
 }
 
 function normalizedAgentSettings(settings, interruptionSensitivity) {
   try {
-    return normalizeLiveMemorySettings(normalizeTtsUsageLimitSettings(normalizeTaskCompletionSettings(normalizeCallbackSettings(
-      normalizePostCallClosingSettings(normalizePostCallSummarySettings(
-        normalizePostCallEndTriggerSettings(normalizeInteractionSettings(normalizeInterruptionSettings(
-          withoutAgentTtsProviderOverrides(settings), interruptionSensitivity,
-        ))),
-      )),
-    ))));
+    return normalizeLiveMemorySettings(normalizeTtsUsageLimitSettings(normalizeCallbackSettings(
+      normalizePostCallSummarySettings(normalizeInteractionSettings(normalizeInterruptionSettings(
+        withoutAgentTtsProviderOverrides(settings), interruptionSensitivity,
+      ))),
+    )));
   } catch (error) {
     throw new AppError(400, error.message, error.code ?? 'VOICE_AGENT_SETTINGS_INVALID', {
       field: error.field ?? 'settings',

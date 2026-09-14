@@ -6,7 +6,6 @@ export const voiceTurnStages = Object.freeze({
   STT_FINALIZATION: 'sttFinalizationMs',
   ROUTING: 'routingMs',
   RETRIEVAL: 'retrievalMs',
-  HYDRATION: 'hydrationMs',
   LLM: 'llmMs',
   TTS_FIRST_CHUNK: 'ttsFirstChunkMs',
   FIRST_AUDIO_DELIVERY: 'firstAudioDeliveryMs',

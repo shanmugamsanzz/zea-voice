@@ -2,7 +2,6 @@ const settingKeys = Object.freeze({
   acknowledgement: Object.freeze(['latencyAcknowledgementMessage']),
   technical_failure: Object.freeze(['technicalFailureMessage']),
   recovery: Object.freeze(['technicalFailureMessage']),
-  closing: Object.freeze(['closingMessage', 'postCallClosingMessage']),
 });
 
 function clean(value, maximum = 1_000) {

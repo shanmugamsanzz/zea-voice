@@ -21,17 +21,9 @@ function cleanOperations(stageTimings = {}) {
   return rows;
 }
 
-const llmStages = new Set(['routing', 'generation', 'validation']);
-
-// Diagnostic labels describe observed work only. They do not decide whether a
-// call was necessary and therefore cannot alter routing, grounding or tools.
 export function summarizeTemplateEngineLatency(stageTimings = {}, turnTiming = {}) {
   const operations = cleanOperations(stageTimings);
-  const llmCalls = operations.filter((row) => llmStages.has(row.stage))
-    .reduce((total, row) => total + row.calls - row.cacheHits, 0);
-  const reviewCalls = operations.filter((row) => row.operation.includes('review'))
-    .reduce((total, row) => total + row.calls - row.cacheHits, 0);
-  const repairCalls = operations.filter((row) => /(?:repair|reroute|retry)/u.test(row.operation))
+  const llmCalls = operations.filter((row) => row.stage === 'generation')
     .reduce((total, row) => total + row.calls - row.cacheHits, 0);
   const repeatedOperations = operations.filter((row) => row.calls > 1)
     .map((row) => Object.freeze({ operation: row.operation,
@@ -51,7 +43,7 @@ export function summarizeTemplateEngineLatency(stageTimings = {}, turnTiming = {
       ? turnTiming.answerQueueAfterReadyMs : null,
     ttsAudioAfterQueueMs: Number.isFinite(turnTiming.finalAnswerAudioAfterQueuedMs)
       ? turnTiming.finalAnswerAudioAfterQueuedMs : null,
-    llmCalls, reviewCalls, repairCalls,
+    llmCalls,
     repeatedOperations: Object.freeze(repeatedOperations),
     slowestOperations: Object.freeze(slowestOperations),
   });

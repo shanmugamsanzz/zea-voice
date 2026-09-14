@@ -75,17 +75,17 @@ export function resolveInteractionConfiguration(settings = {}, { strict = false 
       'cachePolicy',
       strict,
     ),
-    contextId: normalizeContextId(settings.contextId, { strict }),
   });
 }
 
 export function normalizeInteractionSettings(settings = {}) {
   const interaction = resolveInteractionConfiguration(settings, { strict: true });
-  return {
+  const normalized = {
     ...settings,
     greetingMode: interaction.greetingMode,
     cachePolicy: interaction.cachePolicy,
-    contextId: interaction.contextId,
   };
+  delete normalized.contextId;
+  return normalized;
 }
 

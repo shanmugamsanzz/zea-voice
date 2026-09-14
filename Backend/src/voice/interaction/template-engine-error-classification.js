@@ -1,48 +1,20 @@
 import { templateEngineStructuredOutputFailureCodes } from './template-engine-structured-output.js';
 
-const validationCodes = new Set([
-  ...[...templateEngineStructuredOutputFailureCodes].filter((code) => code !== 'TEMPLATE_ENGINE_LLM_INCOMPLETE'),
-  'TEMPLATE_ENGINE_OUTPUT_INVALID', 'TEMPLATE_ENGINE_POST_SEARCH_INVALID',
-  'TEMPLATE_ENGINE_SPEECH_BUDGET_EXCEEDED',
-  'TEMPLATE_ENGINE_ORCHESTRATOR_DECISION_INVALID', 'TEMPLATE_ENGINE_POST_SEARCH_DECISION_INVALID',
-  'TEMPLATE_ENGINE_WORKFLOW_SPEECH_INVALID', 'TEMPLATE_ENGINE_WORKFLOW_RESULT_SPEECH_INVALID',
-  'TEMPLATE_ENGINE_EVIDENCE_ALIAS_INVALID',
-  'TEMPLATE_ENGINE_CLAIM_VALIDATION_INVALID', 'TEMPLATE_ENGINE_GROUNDING_REJECTED',
-  'TEMPLATE_ENGINE_REQUESTED_ENTITY_COVERAGE_INCOMPLETE',
-  'TEMPLATE_ENGINE_REQUESTED_ENTITY_HYDRATION_INCOMPLETE',
-  'TEMPLATE_ENGINE_AUTHORITATIVE_EVIDENCE_EMPTY',
-  'TEMPLATE_ENGINE_HYDRATED_EVIDENCE_INVALID',
-  'QDRANT_GROUNDED_LLM_SCHEMA_INVALID',
-  'QDRANT_GROUNDED_LLM_EMPTY',
-  'QDRANT_GROUNDED_LLM_CITATION_INVALID',
-  'QDRANT_GROUNDED_LLM_EVIDENCE_REQUIRED',
-  'QDRANT_GROUNDED_LLM_NUMBER_INVALID',
-  'QDRANT_UNIVERSAL_LLM_SCHEMA_INVALID', 'QDRANT_UNIVERSAL_LLM_EMPTY',
-  'QDRANT_UNIVERSAL_LLM_CITATION_INVALID', 'QDRANT_UNIVERSAL_LLM_EVIDENCE_REQUIRED',
-  'QDRANT_UNIVERSAL_LLM_NUMBER_INVALID', 'QDRANT_UNIVERSAL_LLM_REQUEST_SUPPORT_INVALID',
-  'QDRANT_UNIVERSAL_LLM_CLAIM_SUPPORT_INVALID', 'QDRANT_UNIVERSAL_LLM_ACTION_NOT_AUTHORIZED',
+const actionCodes = new Set([
+  'QDRANT_UNIVERSAL_LLM_ACTION_NOT_AUTHORIZED',
   'QDRANT_UNIVERSAL_LLM_WORKFLOW_INVALID', 'QDRANT_UNIVERSAL_LLM_WORKFLOW_NOT_AUTHORIZED',
   'QDRANT_UNIVERSAL_LLM_WORKFLOW_ARGUMENTS_INVALID',
   'TEMPLATE_ENGINE_UNIVERSAL_WORKFLOW_NOT_READY', 'TEMPLATE_ENGINE_UNIVERSAL_WORKFLOW_CONFLICT',
   'TEMPLATE_ENGINE_UNIVERSAL_WORKFLOW_NOT_AUTHORIZED', 'TEMPLATE_ENGINE_UNIVERSAL_WORKFLOW_ARGUMENTS_INVALID',
-  'TEMPLATE_ENGINE_WORKFLOW_CONFIRMATION_CONFIGURATION_MISSING',
-  'TEMPLATE_ENGINE_WORKFLOW_FIELD_CONFIGURATION_MISSING',
 ]);
 const operationalCodes = new Set([
-  'TEMPLATE_ENGINE_LLM_INCOMPLETE',
+  ...templateEngineStructuredOutputFailureCodes,
+  'QDRANT_UNIVERSAL_LLM_SCHEMA_INVALID', 'QDRANT_UNIVERSAL_LLM_EMPTY',
   'LLM_PROVIDER_TIMEOUT', 'LLM_PROVIDER_UNAVAILABLE', 'LLM_PROVIDER_REQUEST_FAILED',
   'TTS_PROVIDER_TIMEOUT', 'TTS_PROVIDER_UNAVAILABLE', 'TTS_PROVIDER_REQUEST_FAILED',
   'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN',
   'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET',
 ]);
-const configurationCodes = new Set([
-  'TEMPLATE_ENGINE_WORKFLOW_CONFIRMATION_CONFIGURATION_MISSING',
-  'TEMPLATE_ENGINE_WORKFLOW_FIELD_CONFIGURATION_MISSING',
-  'TEMPLATE_ENGINE_WORKFLOW_NOT_AUTHORIZED',
-]);
-
-// Status 5xx alone is not proof of an infrastructure outage. Validation errors
-// historically used the same status and must never authorize technical speech.
 export function classifyTemplateEngineTurnError(error, { stale = false } = {}) {
   if (stale) return 'cancelled';
   const chain = [];
@@ -55,14 +27,10 @@ export function classifyTemplateEngineTurnError(error, { stale = false } = {}) {
     || ['ABORT_ERR', 'ERR_CANCELED', 'TEMPLATE_ENGINE_LLM_CANCELLED'].includes(entry.code))) {
     return 'cancelled';
   }
-  if (chain.some((entry) => configurationCodes.has(entry.code)
-    || configurationCodes.has(entry.details?.reason))) return 'configuration';
-  if (chain.some((entry) => validationCodes.has(entry.code))) return 'validation';
+  if (chain.some((entry) => actionCodes.has(entry.code))) return 'action';
   if (chain.some((entry) => operationalCodes.has(entry.code)
     // PostgreSQL connection failures and server shutdowns.
     || /^(08[0-9A-Z]{3}|57P0[123])$/u.test(String(entry.code ?? '')))) return 'operational';
-  // An unknown exception is still a real runtime failure. Keep it distinct
-  // from provider outages so observability does not blame a provider, while
-  // allowing the live voice layer to deliver approved technical recovery.
+  // Unknown exceptions are genuine runtime/system failures.
   return 'unexpected';
 }

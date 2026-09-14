@@ -12,23 +12,23 @@ try {
       ? 'CONVERSATIONAL_RESPONSE' : 'FACTUAL_ANSWER',
     actualAnswerFirstAudioMs: 1800 + index * 40, normalVerifiedRequest: true,
     initialDecision: 'SEARCH', finalDecision: 'RESPONSE', searchPerformed: true,
-    validationResult: 'deterministic_qdrant_grounding_valid', evidenceCount: index % 5 === 0 ? 0 : 1,
-    configuredFallbackApplied: false, entityCoverageComplete: true, llmInvocationCount: 1,
+    technicalRecoveryApplied: false, llmInvocationCount: 1,
   }));
   writeFileSync(path, entries.map((entry) => JSON.stringify(entry)).join('\n'));
   const passed = spawnSync(process.execPath,
     ['scripts/build-production-latency-report.js', path, '--enforce'],
     { cwd: process.cwd(), encoding: 'utf8' });
-  assert.equal(passed.status, 1,
-    'Automatic gate must still require independent semantic review');
+  assert.equal(passed.status, 0,
+    'The automatic gate must require latency and retained technical safeguards');
   const report = JSON.parse(passed.stdout);
   assert.equal(report.actualAnswerSlo.count, 20);
   assert.equal(report.actualAnswerSlo.averageMs, 2180);
   assert.equal(report.actualAnswerSlo.maximumMs, 2560);
   assert.equal(report.actualAnswerSlo.passed, true);
   assert.equal(report.liveCorrectness.passed, true);
-  assert.equal(report.liveCorrectness.semanticReviewRequired, true);
-  assert.equal(report.releaseGate.reason, 'independent_semantic_review_required');
+  assert.equal(report.liveCorrectness.technicalSafeguardsMeasured, true);
+  assert.equal(report.releaseGate.passed, true);
+  assert.equal(report.releaseGate.reason, null);
 
   entries[19].actualAnswerFirstAudioMs = 4100;
   writeFileSync(path, entries.map((entry) => JSON.stringify(entry)).join('\n'));

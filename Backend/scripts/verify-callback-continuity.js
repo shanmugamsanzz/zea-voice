@@ -4,7 +4,10 @@ import {
   scheduleCustomerCallback,
 } from '../src/campaigns/customer-callback.service.js';
 import { finishAttempt } from '../src/campaigns/campaign-execution.service.js';
-import { resolveCallbackConfiguration } from '../src/voice/interaction/callback-config.js';
+import {
+  normalizeCallbackSettings,
+  resolveCallbackConfiguration,
+} from '../src/voice/interaction/callback-config.js';
 
 const now = new Date('2026-07-24T10:00:00.000Z');
 const configured = resolveCallbackConfiguration({
@@ -12,11 +15,20 @@ const configured = resolveCallbackConfiguration({
   callbackMinimumDelaySeconds: 120,
   callbackMaximumDelayDays: 7,
   callbackCloseAfterScheduling: false,
-  callbackFollowUpOpeningInstructions: 'Continue the product enquiry without repeating completed questions.',
 });
 assert.equal(configured.minimumDelaySeconds, 120);
 assert.equal(configured.maximumDelayDays, 7);
 assert.equal(configured.closeAfterScheduling, false);
+const normalizedCallback = normalizeCallbackSettings({
+  callbackFollowUpOpeningInstructions: 'Legacy value',
+  callbackConfirmationInstructions: 'Legacy value',
+  callbackClarificationInstructions: 'Legacy value',
+  callbackFailureInstructions: 'Legacy value',
+});
+for (const key of ['callbackFollowUpOpeningInstructions', 'callbackConfirmationInstructions',
+  'callbackClarificationInstructions', 'callbackFailureInstructions']) {
+  assert.equal(Object.hasOwn(normalizedCallback, key), false);
+}
 assert.throws(() => resolveCallbackConfiguration({ callbackMaximumDelayDays: 31 }), /between 1 and 30/);
 assert.equal(resolveCustomerCallbackRequest('call me after 1 minute', {
   now, minimumDelaySeconds: configured.minimumDelaySeconds, maximumDelayDays: configured.maximumDelayDays,

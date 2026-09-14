@@ -20,8 +20,8 @@ const checks = [
   ['one universal LLM turn', 'verify-agent-qdrant-grounded-turn.js'],
   ['production runtime', 'verify-template-engine-production-runtime.js'],
   ['conversation context and incomplete turns', 'verify-universal-turn-context.js'],
-  ['single-call factual support contract', 'verify-universal-grounding-contract.js'],
-  ['validation and action safeguards', 'verify-universal-response-safety.js'],
+  ['single-call answer pass-through contract', 'verify-universal-answer-pass-through.js'],
+  ['speech limits and action safeguards', 'verify-universal-response-safety.js'],
   ['multi-agent conversation replay', 'verify-multi-agent-conversation-replay.js'],
   ['production latency release gate', 'verify-production-latency-release-gate.js'],
   ['configured workflow actions', 'verify-agent-qdrant-grounded-turn.js'],
@@ -98,7 +98,7 @@ async function verifyLiveOrchestratorRetrievalWiring() {
     'Live orchestrator must wire the Qdrant retrieval implementation');
   assert.match(source,
     /runQdrantUniversalTurn:\s*this\.dependencies\.runQdrantUniversalTurn\s*\?\?\s*runAgentQdrantUniversalTurn/u,
-    'Live orchestrator must wire the single-LLM grounded-turn implementation');
+    'Live orchestrator must wire the single universal LLM implementation');
   assert.doesNotMatch(source, /^\s*(?:retrieveQdrantKnowledge|runQdrantUniversalTurn),\s*$/gmu,
     'Live orchestrator must not reference undefined shorthand dependencies');
   return { label: 'live orchestrator Qdrant dependency wiring', passed: true };
@@ -155,7 +155,7 @@ console.log(JSON.stringify({
     'tenant_agent_filtered_qdrant_search',
     'top_two_or_three_chunks',
     'one_universal_llm_call',
-    'deterministic_validation',
+    'llm_answer_pass_through',
     'existing_tts',
   ],
   passed: true,

@@ -81,7 +81,6 @@ export class CallController {
       ...this.#profile.agent.settings,
       greetingMode: configuredInteraction.greetingMode ?? this.#profile.agent.settings?.greetingMode,
       cachePolicy: configuredInteraction.cachePolicy ?? this.#profile.agent.settings?.cachePolicy,
-      contextId: configuredInteraction.contextId ?? this.#profile.agent.settings?.contextId,
     });
     if (interaction.greetingMode !== greetingModes.AGENT_INITIATES) {
       await this.#transition(callStates.LISTENING, 'user_initiates', now);

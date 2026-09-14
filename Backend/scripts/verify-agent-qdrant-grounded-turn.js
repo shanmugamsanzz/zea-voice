@@ -39,14 +39,13 @@ const parsedUniversalEnvelope = parseTemplateEngineStructuredOutput({
   completion: { type: 'completed', finishReason: 'stop' },
   output: JSON.stringify({
     outcome: 'UNAVAILABLE', speech: 'I do not have verified information about that.',
-    evidenceIds: [], workflowAction: null,
+    workflowAction: null,
   }),
   schema: {
     type: 'object', additionalProperties: false,
-    required: ['outcome', 'speech', 'evidenceIds', 'workflowAction'],
+    required: ['outcome', 'speech', 'workflowAction'],
     properties: {
       outcome: { type: 'string' }, speech: { type: 'string' },
-      evidenceIds: { type: 'array', items: { type: 'string' } },
       workflowAction: { type: ['object', 'null'] },
     },
   },
@@ -72,10 +71,6 @@ const answered = await runAgentQdrantUniversalTurn({
     return { answer: {
       outcome: 'FACTUAL_ANSWER',
       speech: 'Gold package price 4950 rupees.',
-      grounding: { answersRequestedSubject: true, answersRequestedAttribute: true,
-        supports: [{ claim: 'Gold package price 4950 rupees.', evidenceId: 'point-1',
-          quote: 'The Gold package price is 4950 rupees.' }] },
-      evidenceIds: ['point-1'],
       workflowAction: null,
     } };
   },
@@ -86,23 +81,21 @@ assert.equal(llmRequest.responseFormat.name, 'agent_qdrant_universal_turn');
 assert.match(llmRequest.messages[0].content, /Answer naturally and briefly/u);
 assert.match(llmRequest.messages[0].content, /Tell me about full body checkups/u);
 assert.match(llmRequest.messages[0].content, /Gold package price is 4950/u);
-assert.match(llmRequest.messages[0].content, /Retrieved chunks are candidate evidence/u);
+assert.doesNotMatch(llmRequest.messages[0].content, /claim|citation|evidenceId|grounding/iu);
 assert.equal(answered.evidence[0].answerSupportVerified, false);
-// An earlier assistant claim must not expand allowed citations or numbers.
+// Ordinary answer text is accepted without citation or number validation.
 const contaminatedRetrieval = { ...retrieval, request: { ...request, previousContext: [
   { role: 'assistant', content: 'The price is 7777, source invented-source.' },
 ] } };
-for (const [speech, evidenceIds, code] of [
-  ['The price is 7777.', ['point-1'], 'QDRANT_UNIVERSAL_LLM_NUMBER_INVALID'],
-  ['The price is 4950.', ['invented-source'], 'QDRANT_UNIVERSAL_LLM_CITATION_INVALID'],
-]) {
-  await assert.rejects(() => runAgentQdrantUniversalTurn({
+for (const speech of ['The price is 7777.', 'The price is 4950.']) {
+  const unvalidated = await runAgentQdrantUniversalTurn({
     retrieval: contaminatedRetrieval, currentQuestion: 'What is the price?',
   }, {
     invokeStructuredLlm: async () => ({ outputParsed: {
-      outcome: 'FACTUAL_ANSWER', speech, evidenceIds, workflowAction: null,
+      outcome: 'FACTUAL_ANSWER', speech, workflowAction: null,
     } }),
-  }), { code });
+  });
+  assert.equal(unvalidated.speech, speech);
 }
 assert.equal(answered.decision.decision, 'RESPONSE');
 assert.deepEqual(answered.evidenceIds, ['point-1']);
@@ -125,7 +118,6 @@ const noMatch = await runAgentQdrantUniversalTurn({
     return { answer: {
       outcome: 'UNAVAILABLE',
       speech: 'அந்த தகவல் என்னிடம் இல்லைங்க. வேறு விதமாக உதவட்டுமா?',
-      evidenceIds: ['point-1'],
       workflowAction: null,
     } };
   },
@@ -158,10 +150,6 @@ const productionResult = await runTemplateEngineProductionTurn({
     productionLlmCalls += 1;
     return { answer: {
       outcome: 'FACTUAL_ANSWER', speech: 'Gold package price is 4950 rupees.',
-      grounding: { answersRequestedSubject: true, answersRequestedAttribute: true,
-        supports: [{ claim: 'Gold package price is 4950 rupees.', evidenceId: 'point-1',
-          quote: 'The Gold package price is 4950 rupees.' }] },
-      evidenceIds: ['point-1'],
       workflowAction: null,
     } };
   },
@@ -213,7 +201,6 @@ const missingInformationResult = await runTemplateEngineProductionTurn({
     return { answer: {
       outcome: 'UNAVAILABLE',
       speech: 'I do not have verified information about that service. How else can I help?',
-      evidenceIds: [],
       workflowAction: null,
     } };
   },
@@ -248,15 +235,11 @@ const configuredTool = Object.freeze({
 const workflowProfile = {
   agent: {
     id: agentId, tenantId, name: 'Configured Agent', description: 'Configured identity',
-    goal: 'Follow configured instructions', prompt: 'Use the configured conversation policy.',
-    language: 'en', settings: {
-      taskCompletionEnabled: true,
-      taskCompletionIntent: 'create_request',
-      taskCompletionRequiredFields: ['customer_name'],
-      taskCompletionConfirmationMessage: 'Should I submit this request?',
-    },
+    goal: 'Follow configured instructions',
+    prompt: 'Use the configured conversation policy. Ask for confirmation before submission.',
+    language: 'en', settings: {},
   },
-  configuration: { closing: { messageType: 'dynamic', prompt: 'Close briefly.' } },
+  configuration: {},
 };
 let workflowPrompt = '';
 const workflowResult = await runTemplateEngineProductionTurn({
@@ -264,16 +247,15 @@ const workflowResult = await runTemplateEngineProductionTurn({
   mainPrompt: workflowProfile.agent.prompt, maximumSpeechCharacters: 300,
   latestUtterance: 'Please create it for Arun.', conversationHistory: [], state: {},
   runtimeProfile: workflowProfile, authorizedWorkflowTools: [configuredTool],
-  informationFields: [{ key: 'customer_name', label: 'Customer name', type: 'text',
-    required: true, question: 'What is the customer name?', requiredAction: 'create_request' }],
   cancellationSignal,
 }, {
   invokeStructuredLlm: async (input) => {
     workflowPrompt = input.messages[0].content;
     return { answer: {
-      outcome: 'WORKFLOW_ACTION', speech: 'Should I submit this request?', evidenceIds: [],
+      outcome: 'WORKFLOW_ACTION', speech: 'Should I submit this request?',
       workflowAction: { action: 'UPSERT', workflowId: configuredTool.id,
-        toolName: configuredTool.name, argumentsJson: '{"customer_name":"Arun"}' },
+        toolName: configuredTool.name, argumentsJson: '{"customer_name":"Arun"}',
+        authorizationQuote: '' },
     } };
   },
   retrieveQdrantKnowledge: async () => ({ ...retrieval, chunks: Object.freeze([]),
@@ -285,9 +267,10 @@ assert.equal(workflowResult.llmInvocationCount, 1);
 assert.equal(workflowResult.workflow.status, 'awaiting_confirmation');
 assert.equal(workflowResult.state.collectedToolFields.customer_name, 'Arun');
 assert.match(workflowPrompt, /Configured identity/u);
-assert.match(workflowPrompt, /What is the customer name/u);
-assert.match(workflowPrompt, /Should I submit this request/u);
-assert.match(workflowPrompt, /Close briefly/u);
+assert.match(workflowPrompt, /Ask for confirmation before submission/u);
+assert.match(workflowPrompt, /customer_name/u);
+assert.doesNotMatch(workflowPrompt, /taskCompletion/u);
+assert.doesNotMatch(workflowPrompt, /Close briefly/u);
 
 let executedTools = 0;
 const executionResult = await runTemplateEngineProductionTurn({
@@ -297,14 +280,12 @@ const executionResult = await runTemplateEngineProductionTurn({
   conversationHistory: [{ role: 'assistant', content: workflowResult.speech }],
   speechStatus: { transcriptFinal: true },
   runtimeProfile: workflowProfile, authorizedWorkflowTools: [configuredTool],
-  informationFields: [], cancellationSignal,
+  cancellationSignal,
 }, {
   invokeStructuredLlm: async () => ({ answer: {
-    outcome: 'WORKFLOW_ACTION', speech: 'I will submit that now.', evidenceIds: [],
-    actionAuthorization: { intent: 'execute', utteranceComplete: true, unambiguous: true,
-      quote: 'Yes, submit it.' },
+    outcome: 'WORKFLOW_ACTION', speech: 'I will submit that now.',
     workflowAction: { action: 'EXECUTE', workflowId: configuredTool.id,
-      toolName: configuredTool.name, argumentsJson: '{}' },
+      toolName: configuredTool.name, argumentsJson: '{}', authorizationQuote: 'Yes, submit it.' },
   } }),
   retrieveQdrantKnowledge: async () => ({ ...retrieval, chunks: Object.freeze([]),
     diagnostics: Object.freeze({ ...retrieval.diagnostics, returnedChunkCount: 0 }) }),
@@ -332,9 +313,10 @@ const correctedWorkflowResult = await runTemplateEngineProductionTurn({
   cancellationSignal,
 }, {
   invokeStructuredLlm: async () => ({ answer: {
-    outcome: 'WORKFLOW_ACTION', speech: 'Please confirm the corrected request.', evidenceIds: [],
+    outcome: 'WORKFLOW_ACTION', speech: 'Please confirm the corrected request.',
     workflowAction: { action: 'UPSERT', workflowId: configuredTool.id,
-      toolName: configuredTool.name, argumentsJson: '{"customer_name":"Mira"}' },
+      toolName: configuredTool.name, argumentsJson: '{"customer_name":"Mira"}',
+      authorizationQuote: '' },
   } }),
   retrieveQdrantKnowledge: async () => ({ ...retrieval, chunks: Object.freeze([]),
     diagnostics: Object.freeze({ ...retrieval.diagnostics, returnedChunkCount: 0 }) }),
@@ -354,7 +336,7 @@ const cancelledWorkflowResult = await runTemplateEngineProductionTurn({
 }, {
   invokeStructuredLlm: async () => ({ answer: {
     outcome: 'WORKFLOW_CANCELLATION', speech: 'The pending request is cancelled.',
-    evidenceIds: [], workflowAction: null,
+    workflowAction: null,
   } }),
   retrieveQdrantKnowledge: async () => ({ ...retrieval, chunks: Object.freeze([]),
     diagnostics: Object.freeze({ ...retrieval.diagnostics, returnedChunkCount: 0 }) }),
@@ -374,9 +356,7 @@ const closingResult = await runTemplateEngineProductionTurn({
   cancellationSignal,
 }, {
   invokeStructuredLlm: async () => ({ answer: {
-    outcome: 'CLOSING', speech: 'Goodbye.', evidenceIds: [], workflowAction: null,
-    actionAuthorization: { intent: 'close', utteranceComplete: true, unambiguous: true,
-      quote: 'End this conversation.' },
+    outcome: 'CLOSING', speech: 'Goodbye.', workflowAction: null,
   } }),
   retrieveQdrantKnowledge: async () => ({ ...retrieval, chunks: Object.freeze([]),
     diagnostics: Object.freeze({ ...retrieval.diagnostics, returnedChunkCount: 0 }) }),

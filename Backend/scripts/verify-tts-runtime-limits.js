@@ -42,5 +42,14 @@ assert.equal(unlimited.fitMessage('A'.repeat(80), 'Please ask again.', {
   maximumCharacters: 50,
   locale: 'en',
 }), 'Please ask again.');
+const preservedGenerated = unlimited.fitMessage('Generated answer without sentence punctuation'.repeat(3),
+  'Do not substitute this fallback.', {
+    maximumCharacters: 50,
+    locale: 'en',
+    preserveGeneratedSpeech: true,
+  });
+assert.ok(preservedGenerated.startsWith('Generated answer'));
+assert.notEqual(preservedGenerated, 'Do not substitute this fallback.');
+assert.ok(spokenCharacterCount(preservedGenerated) <= 50);
 
 console.log(JSON.stringify({ success: true, task: 'Rolling TTS character budget' }));

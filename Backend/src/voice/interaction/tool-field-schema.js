@@ -111,10 +111,7 @@ function toolFields(tool = {}) {
   });
 }
 
-export function mergeToolFieldSchemas(configuredFields = [], tools = []) {
-  const explicit = new Map((Array.isArray(configuredFields) ? configuredFields : [])
-    .filter((field) => validFieldKey(clean(field?.key, 64)))
-    .map((field) => [clean(field.key, 64), { ...field }]));
+export function mergeToolFieldSchemas(tools = []) {
   const owners = new Map();
   const generated = [];
   for (const tool of tools ?? []) {
@@ -128,20 +125,11 @@ export function mergeToolFieldSchemas(configuredFields = [], tools = []) {
   for (const field of generated) {
     if (seen.has(field.key)) continue;
     seen.add(field.key);
-    const override = explicit.get(field.key);
     merged.push({
       ...field,
-      ...override,
       key: field.key,
-      required: field.required || override?.required === true,
-      ...(owners.get(field.key) === 1
-        ? { requiredAction: override?.requiredAction ?? field.requiredAction }
-        : (override?.requiredAction ? { requiredAction: override.requiredAction } : {})),
+      ...(owners.get(field.key) === 1 ? { requiredAction: field.requiredAction } : {}),
     });
-  }
-  for (const [key, field] of explicit) {
-    if (seen.has(key)) continue;
-    merged.push(field);
   }
   return Object.freeze(merged.slice(0, maximumFields).map((field) => Object.freeze({ ...field })));
 }

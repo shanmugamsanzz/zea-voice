@@ -5,7 +5,7 @@ export type TraceMetadataValue = string | number | boolean | null
 
 export type TraceSourceType = 'welcome_configuration' | 'system_prompt' | 'pre_call_context'
   | 'conversation_memory' | 'knowledge' | 'tool' | 'llm' | 'silent_message'
-  | 'call_check_configuration' | 'runtime_fallback' | 'post_call_closing';
+  | 'call_check_configuration' | 'runtime_fallback';
 
 export interface TraceSource {
   type: TraceSourceType;

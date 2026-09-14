@@ -8,30 +8,23 @@ const { createTemplateEngineStructuredInvoker } = await import(
   '../src/voice/realtime-conversation-orchestrator.js'
 );
 
-const decision = {
-  decision: 'RESPONSE', response: 'Hello.', clarification: null,
-  search: null, tool: null, nextQuestion: null, stateUpdate: null,
+const response = {
+  outcome: 'CONVERSATIONAL_RESPONSE', speech: 'Hello.', workflowAction: null,
 };
-const decisionSchema = {
+const responseSchema = {
   type: 'object', additionalProperties: false,
-  required: [
-    'decision', 'response', 'clarification', 'search', 'tool', 'nextQuestion', 'stateUpdate',
-  ],
+  required: ['outcome', 'speech', 'workflowAction'],
   properties: {
-    decision: { type: 'string', enum: ['RESPONSE'] },
-    response: { type: 'string' },
-    clarification: { type: 'null' },
-    search: { type: 'null' },
-    tool: { type: 'null' },
-    nextQuestion: { type: 'null' },
-    stateUpdate: { type: 'null' },
+    outcome: { type: 'string', enum: ['CONVERSATIONAL_RESPONSE'] },
+    speech: { type: 'string' },
+    workflowAction: { type: 'null' },
   },
 };
 
 function request() {
   return {
     messages: [{ role: 'user', content: 'Final caller utterance' }],
-    responseFormat: { type: 'json_schema', schema: decisionSchema },
+    responseFormat: { type: 'json_schema', schema: responseSchema },
   };
 }
 
@@ -41,24 +34,14 @@ const successful = await createTemplateEngineStructuredInvoker({
   async *stream(input) {
     baseOutputTokens = input.maxOutputTokens;
     successfulAttempts += 1;
-    yield { type: 'text_delta', delta: JSON.stringify(decision) };
+    yield { type: 'text_delta', delta: JSON.stringify(response) };
     yield { type: 'completed', finishReason: 'stop', usage: { totalTokens: 10 } };
   },
   cancel() {},
 })(request());
-assert.deepEqual(successful.outputParsed, decision);
+assert.deepEqual(successful.outputParsed, response);
 assert.equal(successfulAttempts, 1);
-let reservedAttempts = 0;
-await createTemplateEngineStructuredInvoker({
-  async *stream(input) {
-    reservedAttempts += 1;
-    assert.equal(input.maxOutputTokens, Math.min(4096, baseOutputTokens + 768));
-    yield { type: 'text_delta', delta: JSON.stringify(decision) };
-    yield { type: 'completed', finishReason: 'stop' };
-  },
-  cancel() {},
-})({ ...request(), structuredOutputTokenReserve: 768 });
-assert.equal(reservedAttempts, 1);
+assert.ok(baseOutputTokens >= 128);
 
 for (const failure of [
   {
@@ -83,11 +66,11 @@ for (const failure of [
     { type: 'completed', finishReason: 'stop' },
   ] },
   { name: 'truncated', code: 'TEMPLATE_ENGINE_LLM_TRUNCATED', events: [
-    { type: 'text_delta', delta: JSON.stringify(decision) },
+    { type: 'text_delta', delta: JSON.stringify(response) },
     { type: 'completed', finishReason: 'length' },
   ] },
   { name: 'incomplete', code: 'TEMPLATE_ENGINE_LLM_INCOMPLETE',
-    events: [{ type: 'text_delta', delta: JSON.stringify(decision) }] },
+    events: [{ type: 'text_delta', delta: JSON.stringify(response) }] },
   { name: 'schema-invalid', code: 'TEMPLATE_ENGINE_LLM_SCHEMA_INVALID', events: [
     { type: 'text_delta', delta: JSON.stringify({ decision: 'RESPONSE' }) },
     { type: 'completed', finishReason: 'stop' },

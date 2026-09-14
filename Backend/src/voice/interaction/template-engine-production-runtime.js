@@ -140,7 +140,7 @@ function evidenceIds(decision) {
   return Array.isArray(decision?.evidenceIds) ? decision.evidenceIds : [];
 }
 
-function applyGroundedState(state, decision, evidence = []) {
+function applyTurnState(state, decision, evidence = []) {
   let next = state;
   if (decision?.stateUpdate) {
     next = applyMinimalTemplateEngineStateUpdate(next, decision.stateUpdate);
@@ -175,7 +175,6 @@ function responseProvenance(decision, citedEvidenceIds, workflow = null) {
     evidenceIds: Object.freeze([...new Set(citedEvidenceIds)]),
     workflowId: workflow?.id ?? null,
     toolId: workflow?.id ?? null,
-    validationResult: 'deterministic_qdrant_grounding_valid',
     searchPerformed: true,
     clarificationReason: decision?.clarification?.reason ?? null,
   });
@@ -221,10 +220,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   ].filter(Boolean).join('\n');
   const agentConfiguration = buildUniversalAgentConfiguration(input.runtimeProfile);
   const workflowDefinitions = buildUniversalWorkflowDefinitions({
-    runtimeProfile: input.runtimeProfile,
     authorizedTools: input.authorizedWorkflowTools,
-    informationFields: input.informationFields,
-    confirmationMessage: input.confirmationMessage,
   });
 
   dependencies.onTurnResolved?.({
@@ -247,7 +243,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   );
   dependencies.onRetrievalDiagnostics?.(retrieval.diagnostics);
 
-  const grounded = await dependencies.runQdrantUniversalTurn({
+  const universalTurn = await dependencies.runQdrantUniversalTurn({
     retrieval,
     tenantId: retrievalScope.tenantId,
     agentId: retrievalScope.agentId,
@@ -264,14 +260,13 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   }, { invokeStructuredLlm: llmTurn.invoke });
   assertCurrentTurn();
 
-  const groundedState = applyGroundedState(state, grounded.decision, grounded.evidence);
+  const turnState = applyTurnState(state, universalTurn.decision, universalTurn.evidence);
   const workflowResult = await applyUniversalWorkflowResult({
-    outcome: grounded.outcome,
-    workflowAction: grounded.workflowAction,
-    actionAuthorization: grounded.actionAuthorization,
+    outcome: universalTurn.outcome,
+    workflowAction: universalTurn.workflowAction,
     conversationContext,
-    speech: grounded.speech,
-    state: groundedState,
+    speech: universalTurn.speech,
+    state: turnState,
     definitions: workflowDefinitions,
     persistWorkflowState: dependencies.persistWorkflowState,
     executeAuthorizedTool: dependencies.executeAuthorizedTool,
@@ -290,7 +285,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       'contextual_search_text',
       'tenant_agent_qdrant_search',
       'universal_response_and_workflow_generation',
-      'deterministic_validation',
+      'llm_output_accepted',
       'tts_ready',
     ]),
     answerGenerationCalls: 1,
@@ -301,23 +296,22 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   });
 
   return Object.freeze({
-    decision: grounded.decision,
-    speech: grounded.speech,
+    decision: universalTurn.decision,
+    speech: universalTurn.speech,
     state: workflowResult.state,
-    evidence: grounded.evidence,
-    evidenceIds: grounded.evidenceIds,
+    evidence: universalTurn.evidence,
+    evidenceIds: universalTurn.evidenceIds,
     diagnostics: Object.freeze({
-      retrieval: grounded.retrievalDiagnostics,
+      retrieval: universalTurn.retrievalDiagnostics,
       postSearch: Object.freeze({ answerGenerationCalls: 1 }),
       architecture,
     }),
     workflow: workflowResult.workflow,
     toolExecuted: workflowResult.toolExecuted,
     toolResult: workflowResult.toolResult,
-    callControl: grounded.outcome === 'CLOSING' ? 'close' : null,
-    followUpValidation: Object.freeze({ accepted: false, reason: 'single_grounded_response' }),
+    callControl: universalTurn.outcome === 'CLOSING' ? 'close' : null,
     provenance: responseProvenance(
-      grounded.decision, grounded.evidenceIds, workflowResult.workflow,
+      universalTurn.decision, universalTurn.evidenceIds, workflowResult.workflow,
     ),
     llmInvocationCount: llmArchitecture.invocationCount,
     llmArchitecture,

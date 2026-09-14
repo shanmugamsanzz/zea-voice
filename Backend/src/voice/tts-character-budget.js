@@ -29,6 +29,13 @@ export function completeSentencePrefix(text, maximumCharacters, locale = 'und') 
   return output;
 }
 
+function directCharacterPrefix(text, maximumCharacters) {
+  const clipped = Array.from(String(text ?? '')).slice(0, maximumCharacters).join('').trimEnd();
+  const boundary = clipped.search(/\s+\S*$/u);
+  return (boundary > Math.floor(maximumCharacters * 0.6)
+    ? clipped.slice(0, boundary) : clipped).trim();
+}
+
 export class TtsCharacterBudget {
   #entries = [];
 
@@ -60,6 +67,9 @@ export class TtsCharacterBudget {
     if (maximum <= 0 || spokenCharacterCount(normalized) <= maximum) return normalized;
     const prefix = completeSentencePrefix(normalized, maximum, options.locale);
     if (prefix) return prefix;
+    if (options.preserveGeneratedSpeech === true) {
+      return directCharacterPrefix(normalized, maximum);
+    }
     const safeFallback = String(fallback ?? '').trim();
     if (safeFallback && terminalPunctuation.test(safeFallback)
       && spokenCharacterCount(safeFallback) <= maximum) return safeFallback;

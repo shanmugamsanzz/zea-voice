@@ -84,7 +84,6 @@ export async function retrieveAgentQdrantKnowledge(input = {}, overrides = {}) {
     diagnostics: Object.freeze({
       channelCounts: Object.freeze({ qdrant: points.length }),
       retrievalCount: points.length,
-      hydrationCount: result.chunks.length,
       verifiedEvidenceCount: result.chunks.length,
       candidateEvidenceCount: result.chunks.length,
       answerSupportVerified: false,

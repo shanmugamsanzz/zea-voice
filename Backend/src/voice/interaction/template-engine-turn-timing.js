@@ -1,4 +1,4 @@
-// Per-turn timing for the Qdrant retrieval and single grounded LLM path.
+// Per-turn timing for the Qdrant retrieval and single universal LLM path.
 const requestOperations = new WeakMap();
 export function tagTemplateEngineTiming(request, operation) {
   requestOperations.set(request, operation);
@@ -15,7 +15,7 @@ function timedOperationCalls(stageTimings, operation) {
   ), 0);
 }
 
-export function assertVerifiedFactualStageArchitecture({ architecture, stageTimings } = {}) {
+export function assertUniversalTurnArchitecture({ architecture, stageTimings } = {}) {
   if (architecture?.enforced !== true) {
     return Object.freeze({ enforced: false, path: 'reviewed_or_non_response' });
   }
@@ -28,9 +28,9 @@ export function assertVerifiedFactualStageArchitecture({ architecture, stageTimi
   if (calls.retrieval !== 1) violations.push('focused_retrieval_must_run_once');
   if (calls.answerGeneration !== 1) violations.push('universal_llm_operation_must_run_once');
   if (calls.otherLlm !== 0) violations.push('unexpected_llm_operation');
-  if (architecture.ttsReady !== true) violations.push('deterministic_validation_not_tts_ready');
+  if (architecture.ttsReady !== true) violations.push('generated_speech_not_tts_ready');
   if (violations.length) {
-    const error = new Error('Verified factual turn violated measured stage architecture');
+    const error = new Error('Universal turn violated the measured stage architecture');
     error.code = 'TEMPLATE_ENGINE_STAGE_ARCHITECTURE_VIOLATION';
     error.details = Object.freeze({ violations: Object.freeze(violations), calls });
     throw error;

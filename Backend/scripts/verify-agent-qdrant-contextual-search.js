@@ -96,7 +96,6 @@ assert.deepEqual(result.chunks.map(({ id }) => id), ['point-0', 'point-1', 'poin
 assert.deepEqual(result.diagnostics, {
   channelCounts: { qdrant: 5 },
   retrievalCount: 5,
-  hydrationCount: 3,
   verifiedEvidenceCount: 3,
   candidateEvidenceCount: 3,
   answerSupportVerified: false,

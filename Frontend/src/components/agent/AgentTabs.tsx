@@ -37,7 +37,6 @@ import {
   Clock,
   Terminal,
   Music,
-  PhoneOff,
   Globe,
   RefreshCw,
   BookOpen,
@@ -250,20 +249,14 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       llmModel: base.llmModel || 'gemini-2.5-flash',
       greetingMode: normalizeGreetingMode(base.greetingMode),
       cachePolicy: normalizeCachePolicy(base.cachePolicy),
-      contextId: base.contextId || '',
       conversationContextMode: normalizeConversationContextMode(base.conversationContextMode),
       conversationContextTurns: base.conversationContextTurns ?? 5,
       latencyAcknowledgementMessage: base.latencyAcknowledgementMessage || '',
       technicalFailureMessage: base.technicalFailureMessage || '',
-      conversationMemoryFields: base.conversationMemoryFields || [],
       callbackEnabled: base.callbackEnabled !== undefined ? base.callbackEnabled : true,
       callbackMinimumDelaySeconds: base.callbackMinimumDelaySeconds ?? 30,
       callbackMaximumDelayDays: base.callbackMaximumDelayDays ?? 30,
       callbackCloseAfterScheduling: base.callbackCloseAfterScheduling !== undefined ? base.callbackCloseAfterScheduling : true,
-      callbackConfirmationInstructions: base.callbackConfirmationInstructions || 'Briefly confirm the scheduled callback time in the customer language.',
-      callbackClarificationInstructions: base.callbackClarificationInstructions || 'Ask the caller for a clear relative callback time.',
-      callbackFailureInstructions: base.callbackFailureInstructions || 'Explain briefly that the callback could not be scheduled and do not promise it.',
-      callbackFollowUpOpeningInstructions: base.callbackFollowUpOpeningInstructions || 'Mention that the caller requested this callback and ask whether now is a good time to continue.',
       welcomeMessage: base.welcomeMessage || '',
       inactivityTimeout: base.inactivityTimeout !== undefined ? base.inactivityTimeout : 5,
       maxInactivityPrompts: base.maxInactivityPrompts ?? 1,
@@ -285,18 +278,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       preCallApiHeaders: base.preCallApiHeaders || '',
       preCallApiRequestBody: base.preCallApiRequestBody || '{ "event": "pre_call", "direction": "${direction}", "customer_number": "${customer_number}", "caller": "${caller}", "callee": "${callee}", "call_uuid": "${call_uuid}", "agent_id": "${agent_id}", "company_id": "${company_id}", "workspace_id": "${workspace_id}" }',
       preCallApiResponseMappings: base.preCallApiResponseMappings || [],
-      postCallPrompt: base.postCallPrompt || 'Use this to end the call when the task is complete, the user asks to hang up, is busy, unresponsive, sends to voicemail, is abusive, provides a time to call back later, or when explicitly instructed in the prompt.',
-      postCallMessageType: base.postCallMessageType || 'Dynamic',
-      postCallStaticMessage: base.postCallStaticMessage || '',
-      postCallDynamicClosing: base.postCallDynamicClosing || 'The AI agent will automatically generate a natural, contextual closing message in the customer\'s language before ending the call.',
-      postCallUninterruptibleReasons: base.postCallUninterruptibleReasons || [],
-      callEndTriggerPhrases: base.callEndTriggerPhrases || [],
-      taskCompletionEnabled: base.taskCompletionEnabled === true,
-      taskCompletionIntent: base.taskCompletionIntent || '',
-      taskCompletionRequiredFields: base.taskCompletionRequiredFields || [],
-      taskCompletionConfirmationMessage: base.taskCompletionConfirmationMessage || '',
-      taskCompletionRequiresCatalogItem: base.taskCompletionRequiresCatalogItem === true,
-      taskCompletionCatalogField: base.taskCompletionCatalogField || '',
       postCallSummaryEnabled: base.postCallSummaryEnabled !== undefined ? base.postCallSummaryEnabled : false,
       postCallSummaryModelId: base.postCallSummaryModelId || '',
       postCallSummaryInstructions: base.postCallSummaryInstructions || 'Create a concise, factual summary of the call. Capture the customer intent, outcome, sentiment, collected information and required follow-up. Do not invent missing information.',
@@ -332,9 +313,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const [ttsModelId, setTtsModelId] = useState('');
   const [pronunciationGroupIds, setPronunciationGroupIds] = useState<string[]>([]);
   const [ambienceAssetId, setAmbienceAssetId] = useState<string | null>(null);
-  const [newReason, setNewReason] = useState('');
-  const [newCallEndTriggerPhrase, setNewCallEndTriggerPhrase] = useState('');
-  const [newCompletionRequiredField, setNewCompletionRequiredField] = useState('');
   const [newAcknowledgementPhrase, setNewAcknowledgementPhrase] = useState('');
   const [newExplicitStopPhrase, setNewExplicitStopPhrase] = useState('');
 
@@ -355,12 +333,8 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       totalCalls: value.metrics.totalCalls, avgDuration: value.metrics.averageDurationSeconds, successRate: value.metrics.successRate,
       greetingMode: normalizeGreetingMode(savedSettings.greetingMode),
       cachePolicy: normalizeCachePolicy(savedSettings.cachePolicy),
-      contextId: String(savedSettings.contextId ?? '').trim(),
       conversationContextMode: normalizeConversationContextMode(savedSettings.conversationContextMode),
       conversationContextTurns: Number(savedSettings.conversationContextTurns ?? 5),
-      conversationMemoryFields: Array.isArray(savedSettings.conversationMemoryFields)
-        ? savedSettings.conversationMemoryFields as VoiceAgent['conversationMemoryFields']
-        : [],
       wordBasedInterruptionEnabled: true,
       speechConfirmationDelayMs: legacySpeechConfirmationDelay(savedSettings),
       minimumMeaningfulWords: Number(savedSettings.minimumMeaningfulWords ?? savedSettings.wordInterruptionMinWords ?? 2),
@@ -488,36 +462,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       setError(`System Prompt cannot exceed ${Number(systemPromptMaxCharacters).toLocaleString()} characters. Current: ${systemPromptCharacterCount.toLocaleString()}.`); return;
     }
     if (!sttModelId || !llmModelId || !ttsModelId) { setError('Connected STT, LLM and TTS models are required.'); return; }
-    const postCallMessageType = agent.postCallMessageType || 'Dynamic';
-    if (postCallMessageType === 'Dynamic' && !agent.postCallPrompt?.trim()) {
-      setError('Dynamic Closing Prompt is required when Message Type is Dynamic.'); return;
-    }
-    if (postCallMessageType === 'Static' && !agent.postCallStaticMessage?.trim()) {
-      setError('Static Closing Message is required when Message Type is Static.'); return;
-    }
-    if ((agent.postCallPrompt?.trim().length ?? 0) > 20_000) {
-      setError('Dynamic Closing Prompt cannot exceed 20,000 characters.'); return;
-    }
-    if ((agent.postCallStaticMessage?.trim().length ?? 0) > 10_000) {
-      setError('Static Closing Message cannot exceed 10,000 characters.'); return;
-    }
-    if (!Array.isArray(agent.callEndTriggerPhrases)) {
-      setError('Call End Trigger Phrases must be a list of phrases.'); return;
-    }
-    const normalizedEndTriggerPhrases: string[] = [];
-    const seenEndTriggerPhrases = new Set<string>();
-    for (const rawPhrase of agent.callEndTriggerPhrases) {
-      const phrase = String(rawPhrase ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
-      if (!phrase) { setError('Call End Trigger Phrases cannot contain an empty phrase.'); return; }
-      if (phrase.length > 160) { setError('Each Call End Trigger Phrase cannot exceed 160 characters.'); return; }
-      const key = phrase.toLocaleLowerCase();
-      if (seenEndTriggerPhrases.has(key)) continue;
-      seenEndTriggerPhrases.add(key);
-      normalizedEndTriggerPhrases.push(phrase);
-    }
-    if (normalizedEndTriggerPhrases.length > 50) {
-      setError('Call End Trigger Phrases cannot contain more than 50 phrases.'); return;
-    }
     if (agent.postCallSummaryEnabled) {
       if (!agent.postCallSummaryModelId) { setError('Select an active LLM model for Post-Call AI Summary.'); return; }
       if (!models.some((model) => model.id === agent.postCallSummaryModelId && model.providerType === 'llm')) {
@@ -585,70 +529,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       || (agent.status === 'active' && !technicalFailureMessage)) {
       setError('Technical Failure Message is required for an active agent and cannot exceed 500 characters.'); return;
     }
-    if (!Array.isArray(agent.conversationMemoryFields) || agent.conversationMemoryFields.length > 30) {
-      setError('Important Information Fields must be a list with no more than 30 fields.'); return;
-    }
-    const normalizedMemoryFields: NonNullable<VoiceAgent['conversationMemoryFields']> = [];
-    const seenMemoryFieldKeys = new Set<string>();
-    for (const rawField of agent.conversationMemoryFields) {
-      const key = String(rawField?.key ?? '').normalize('NFKC').trim().toLowerCase();
-      const label = String(rawField?.label ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
-      const question = String(rawField?.question ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
-      const type = rawField?.type || 'text';
-      const requiredAction = String(rawField?.requiredAction ?? '').normalize('NFKC').trim().toLowerCase();
-      if (!/^[a-z][a-z0-9_]{0,63}$/.test(key)) {
-        setError('Each Information Field key must use lowercase letters, numbers and underscores only.'); return;
-      }
-      if (seenMemoryFieldKeys.has(key)) { setError('Information Field keys must be unique.'); return; }
-      if (!label || label.length > 100) { setError('Each Information Field requires a label of 100 characters or fewer.'); return; }
-      if (!question || question.length > 500) { setError('Each Information Field requires a question of 500 characters or fewer.'); return; }
-      if (requiredAction && !/^[a-z][a-z0-9_-]{0,79}$/.test(requiredAction)) {
-        setError('Required Action must use lowercase letters, numbers, underscores or hyphens.'); return;
-      }
-      seenMemoryFieldKeys.add(key);
-      normalizedMemoryFields.push({ key, label, type, required: rawField.required !== false, question, ...(requiredAction ? { requiredAction } : {}) });
-    }
-    const taskCompletionEnabled = agent.taskCompletionEnabled === true;
-    const taskCompletionIntent = String(agent.taskCompletionIntent || '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
-    const taskCompletionConfirmationMessage = String(agent.taskCompletionConfirmationMessage || '').normalize('NFKC').trim();
-    const taskCompletionRequiresCatalogItem = agent.taskCompletionRequiresCatalogItem === true;
-    const taskCompletionCatalogField = String(agent.taskCompletionCatalogField || '').normalize('NFKC').trim().toLowerCase();
-    if (!Array.isArray(agent.taskCompletionRequiredFields)) {
-      setError('Required Information must be a list of field identifiers.'); return;
-    }
-    const normalizedCompletionFields: string[] = [];
-    const seenCompletionFields = new Set<string>();
-    for (const rawField of agent.taskCompletionRequiredFields) {
-      const field = String(rawField ?? '').normalize('NFKC').trim().toLowerCase();
-      if (!/^[a-z][a-z0-9_]{0,63}$/.test(field)) {
-        setError('Each Required Information field must use lowercase letters, numbers and underscores only.'); return;
-      }
-      if (!seenCompletionFields.has(field)) {
-        seenCompletionFields.add(field);
-        normalizedCompletionFields.push(field);
-      }
-    }
-    if (normalizedCompletionFields.length > 20) {
-      setError('Required Information cannot contain more than 20 fields.'); return;
-    }
-    if (taskCompletionEnabled) {
-      if (!/^[a-z][a-z0-9_-]{0,79}$/.test(taskCompletionIntent)) {
-        setError('Completion Intent is required and must use lowercase letters, numbers, underscores or hyphens only.'); return;
-      }
-      if (!normalizedCompletionFields.length) {
-        setError('Add at least one Required Information field when Task Completion Auto Close is enabled.'); return;
-      }
-      if (!taskCompletionConfirmationMessage) {
-        setError('Completion Confirmation Message is required when Task Completion Auto Close is enabled.'); return;
-      }
-      if (taskCompletionConfirmationMessage.length > 2_000) {
-        setError('Completion Confirmation Message cannot exceed 2,000 characters.'); return;
-      }
-      if (taskCompletionRequiresCatalogItem
-        && (!taskCompletionCatalogField || !normalizedCompletionFields.includes(taskCompletionCatalogField))) {
-        setError('Catalog Field must be one of Required Information when Catalog selection is required.'); return;
-      }
-    }
     setSaving(true); setError('');
     try {
       const {
@@ -660,25 +540,19 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       const deprecatedAgentSettings = new Set([
         'ttsSpeed', 'ttsStyle', 'ttsStyleDegree', 'ttsLanguage', 'ttsStability',
         'ttsPrice1k', 'ttsSimilarityBoost', 'ttsEmotion', 'ttsVolume',
-        'preCallPrompt',
+        'preCallPrompt', 'contextId', 'conversationMemoryFields',
+        'callbackConfirmationInstructions', 'callbackClarificationInstructions',
+        'callbackFailureInstructions', 'callbackFollowUpOpeningInstructions',
       ]);
       const agentSettings = {
         ...Object.fromEntries(
         Object.entries(rawAgentSettings).filter(([key]) => !deprecatedAgentSettings.has(key)),
         ),
-        callEndTriggerPhrases: normalizedEndTriggerPhrases,
-        taskCompletionEnabled,
-        taskCompletionIntent,
-        taskCompletionRequiredFields: normalizedCompletionFields,
-        taskCompletionConfirmationMessage,
-        taskCompletionRequiresCatalogItem,
-        taskCompletionCatalogField,
         conversationContextMode,
         conversationContextTurns,
         latencyAcknowledgementMessage,
         technicalFailureMessage,
         maxInactivityPrompts,
-        conversationMemoryFields: normalizedMemoryFields,
       };
       const payload = {
         name: agent.name, description: agent.description || null, goal: agent.goal || null,
@@ -787,13 +661,8 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       if (inputSchema.type !== 'object' || !schemaProperties || typeof schemaProperties !== 'object'
         || Array.isArray(schemaProperties)) throw new Error('Input schema must define an object with properties.');
       const schemaKeys = new Set(Object.keys(schemaProperties));
-      const toolNames = new Set([newToolName.trim(), editingTool?.id,
-        editingTool?.configuration?.identifier, editingTool?.configuration?.toolIdentifier]
-        .filter(Boolean).map((value) => String(value).normalize('NFKC').trim().toLowerCase()));
       const missingProperties = [...new Set([
         ...(Array.isArray(inputSchema.required) ? inputSchema.required.map(String) : []),
-        ...(agent.conversationMemoryFields ?? []).filter((field) => field.requiredAction
-          && toolNames.has(field.requiredAction.normalize('NFKC').trim().toLowerCase())).map((field) => field.key),
       ])].filter((key) => !schemaKeys.has(key));
       if (missingProperties.length) throw new Error(`Input schema is missing configured fields: ${missingProperties.join(', ')}. Add the correct properties or correct the fields' tool assignment; no fields were created automatically.`);
       const timeoutSeconds = Number(newToolTimeoutSeconds);
@@ -1693,151 +1562,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       <p className="mt-1 text-[10px] font-semibold text-slate-400">Used only when a provider or system failure prevents a response.</p>
                     </div>
                   </div>
-                  <div>
-                    <div className="mb-1.5 flex items-center gap-1.5">
-                      <label className="block text-[10px] font-black uppercase tracking-wider text-slate-500">Context Namespace</label>
-                      <FieldInfoTooltip
-                        id="context-namespace-information"
-                        text="The backend combines this namespace with the tenant, workspace, agent, and customer identity. It never shares memory across companies."
-                      />
-                    </div>
-                    <input
-                      type="text"
-                      value={agent.contextId || ''}
-                      placeholder="Optional, e.g. sales_lead"
-                      maxLength={160}
-                      disabled={isReadOnly || agent.cachePolicy === 'disabled'}
-                      onChange={(event) => setAgent({ ...agent, contextId: event.target.value })}
-                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-800 outline-none transition focus:border-violet-500 focus:bg-white disabled:cursor-not-allowed disabled:opacity-50"
-                    />
-                  </div>
-                  <div>
-                    <div className="mb-2 flex items-center justify-between gap-3">
-                      <div>
-                        <label className="block text-[10px] font-black uppercase tracking-wider text-slate-500">Important Information Fields</label>
-                        <p className="mt-1 text-[10px] font-semibold text-slate-400">Define reusable information for this agent. No industry-specific fields are built into the runtime.</p>
-                      </div>
-                      {!isReadOnly && (
-                        <button
-                          type="button"
-                          onClick={() => setAgent({
-                            ...agent,
-                            conversationMemoryFields: [
-                              ...(agent.conversationMemoryFields || []),
-                              { key: '', label: '', type: 'text', required: true, question: '', requiredAction: '' },
-                            ],
-                          })}
-                          className="flex shrink-0 items-center gap-1 rounded-lg bg-violet-600 px-3 py-2 text-[10px] font-black text-white transition hover:bg-violet-700"
-                        >
-                          <Plus className="h-3.5 w-3.5" /> Add Field
-                        </button>
-                      )}
-                    </div>
-                    <div className="space-y-3">
-                      {(agent.conversationMemoryFields || []).length === 0 ? (
-                        <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-center text-[10px] font-semibold text-slate-400">
-                          No important information fields configured.
-                        </div>
-                      ) : agent.conversationMemoryFields?.map((field, index) => (
-                        <div key={`${field.key}-${index}`} className="rounded-xl border border-violet-100 bg-violet-50/30 p-3">
-                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                            <input
-                              type="text"
-                              value={field.key}
-                              disabled={isReadOnly}
-                              maxLength={64}
-                              placeholder="Field key, e.g. customer_name"
-                              onChange={(event) => {
-                                const fields = [...(agent.conversationMemoryFields || [])];
-                                fields[index] = { ...field, key: event.target.value };
-                                setAgent({ ...agent, conversationMemoryFields: fields });
-                              }}
-                              className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold outline-none focus:border-violet-500"
-                            />
-                            <input
-                              type="text"
-                              value={field.label}
-                              disabled={isReadOnly}
-                              maxLength={100}
-                              placeholder="Label, e.g. Customer Name"
-                              onChange={(event) => {
-                                const fields = [...(agent.conversationMemoryFields || [])];
-                                fields[index] = { ...field, label: event.target.value };
-                                setAgent({ ...agent, conversationMemoryFields: fields });
-                              }}
-                              className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold outline-none focus:border-violet-500"
-                            />
-                            <select
-                              value={field.type}
-                              disabled={isReadOnly}
-                              onChange={(event) => {
-                                const fields = [...(agent.conversationMemoryFields || [])];
-                                fields[index] = { ...field, type: event.target.value as typeof field.type };
-                                setAgent({ ...agent, conversationMemoryFields: fields });
-                              }}
-                              className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold outline-none focus:border-violet-500"
-                            >
-                              <option value="text">Text</option><option value="number">Number</option>
-                              <option value="date">Date</option><option value="time">Time</option>
-                              <option value="boolean">Yes / No</option><option value="select">Selection</option>
-                              <option value="email">Email</option><option value="phone">Phone</option>
-                            </select>
-                            <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-600">
-                              <input
-                                type="checkbox"
-                                checked={field.required !== false}
-                                disabled={isReadOnly}
-                                onChange={(event) => {
-                                  const fields = [...(agent.conversationMemoryFields || [])];
-                                  fields[index] = { ...field, required: event.target.checked };
-                                  setAgent({ ...agent, conversationMemoryFields: fields });
-                                }}
-                              /> Required
-                            </label>
-                          </div>
-                          <div className="mt-3 flex gap-2">
-                            <input
-                              type="text"
-                              value={field.question}
-                              disabled={isReadOnly}
-                              maxLength={500}
-                              placeholder="Question the agent should ask when this field is missing"
-                              onChange={(event) => {
-                                const fields = [...(agent.conversationMemoryFields || [])];
-                                fields[index] = { ...field, question: event.target.value };
-                                setAgent({ ...agent, conversationMemoryFields: fields });
-                              }}
-                              className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold outline-none focus:border-violet-500"
-                            />
-                            {!isReadOnly && (
-                              <button
-                                type="button"
-                                aria-label={`Remove ${field.label || field.key || 'information field'}`}
-                                onClick={() => setAgent({
-                                  ...agent,
-                                  conversationMemoryFields: (agent.conversationMemoryFields || []).filter((_, fieldIndex) => fieldIndex !== index),
-                                })}
-                                className="rounded-lg border border-red-100 bg-red-50 px-3 text-red-600 hover:bg-red-100"
-                              ><Trash2 className="h-4 w-4" /></button>
-                            )}
-                          </div>
-                          <input
-                            type="text"
-                            value={field.requiredAction || ''}
-                            disabled={isReadOnly}
-                            maxLength={80}
-                            placeholder="Required action (optional), e.g. appointment_booking"
-                            onChange={(event) => {
-                              const fields = [...(agent.conversationMemoryFields || [])];
-                              fields[index] = { ...field, requiredAction: event.target.value };
-                              setAgent({ ...agent, conversationMemoryFields: fields });
-                            }}
-                            className="mt-3 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold outline-none focus:border-violet-500"
-                          />
-                        </div>
-                      ))}
-                    </div>
-                  </div>
                   {agent.cachePolicy !== 'session_only' && (
                     <div className={`rounded-xl border p-4 text-[11px] font-semibold leading-relaxed ${agent.cachePolicy === 'persistent_24h' ? 'border-emerald-100 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
                       {agent.cachePolicy === 'persistent_24h'
@@ -1901,36 +1625,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                 </div>
               </div>
             </div>
-
-            {agent.callbackEnabled !== false && (
-              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
-                <div className="border-b border-slate-100 p-5">
-                  <h3 className="text-sm font-extrabold text-slate-800">Callback Language & Industry Instructions</h3>
-                  <p className="mt-1 text-xs font-semibold text-slate-500">These trusted instructions are given to the selected LLM. Write them for this company and industry.</p>
-                </div>
-                <div className="grid grid-cols-1 gap-5 p-6 lg:grid-cols-2">
-                  {([
-                    ['Successful Scheduling', 'callbackConfirmationInstructions', 'Tell the agent how to confirm a successfully scheduled callback.'],
-                    ['Unclear Time', 'callbackClarificationInstructions', 'Tell the agent how to ask for a clearer callback time.'],
-                    ['Scheduling Failure', 'callbackFailureInstructions', 'Tell the agent what to say when scheduling fails or retries are exhausted.'],
-                    ['Follow-Up Opening', 'callbackFollowUpOpeningInstructions', 'Tell the agent how the next connected callback should begin.'],
-                  ] as const).map(([label, field, help]) => (
-                    <div key={field}>
-                      <div className="mb-1.5 flex items-center gap-1.5">
-                        <label className="block text-[10px] font-black uppercase tracking-wider text-slate-500">{label}</label>
-                        <FieldInfoTooltip
-                          id={`${field}-information`}
-                          text={help}
-                        />
-                      </div>
-                      <textarea rows={4} maxLength={2000} value={agent[field] || ''} disabled={isReadOnly}
-                        onChange={(event) => setAgent({ ...agent, [field]: event.target.value })}
-                        className="w-full resize-y rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold leading-relaxed text-slate-800 outline-none transition focus:border-amber-500 focus:bg-white" />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
 
             {/* Welcome Message Section */}
             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs p-6 space-y-4">
@@ -2514,398 +2208,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         {/* TAB: POSTCALL */}
         {activeTab === 'postcall' && (
           <div className="w-full space-y-8">
-            {/* Post Call Configuration Card */}
-            <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs animate-fade-in">
-              <div className="bg-amber-50/40 p-5 border-b border-amber-100/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div className="flex items-center space-x-3">
-                  <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center border border-amber-200/50">
-                    <PhoneOff className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h3 className="text-base font-extrabold text-slate-800 tracking-tight">Post Call Configuration</h3>
-                    <p className="text-xs text-slate-500 font-semibold">Define how the AI agent should end conversations.</p>
-                  </div>
-                </div>
-                
-                <button
-                  type="button"
-                  disabled={isReadOnly}
-                  onClick={() => void saveAgent()}
-                  className="flex items-center space-x-1.5 px-4 py-2 border border-[#dfa822] text-[#dfa822] hover:bg-amber-50 rounded-xl text-xs font-black transition cursor-pointer self-start sm:self-auto shadow-2xs"
-                >
-                  <Save className="w-3.5 h-3.5" />
-                  <span>Save Post Call</span>
-                </button>
-              </div>
-
-              <div className="p-6 space-y-6">
-                {/* Message Type Dropdown */}
-                <div>
-                  <label className="block text-[11px] font-black text-slate-500 mb-1.5 uppercase tracking-wider">
-                    Message Type
-                  </label>
-                  <div className="relative">
-                    <select
-                      value={agent.postCallMessageType || 'Dynamic'}
-                      disabled={isReadOnly}
-                      onChange={(e) => setAgent({ ...agent, postCallMessageType: e.target.value })}
-                      className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none appearance-none cursor-pointer pr-10"
-                    >
-                      <option value="Dynamic">Dynamic</option>
-                      <option value="Static">Static</option>
-                      <option value="None">None</option>
-                    </select>
-                    <div className="absolute inset-y-0 right-0 flex items-center pr-4 pointer-events-none text-slate-400">
-                      <ChevronDown className="w-4 h-4" />
-                    </div>
-                  </div>
-                </div>
-
-                {(agent.postCallMessageType || 'Dynamic') === 'Dynamic' && <div className="space-y-3">
-                  <div>
-                    <label className="block text-[11px] font-black text-slate-500 mb-1.5 uppercase tracking-wider">
-                      Dynamic Closing Prompt
-                    </label>
-                    <textarea
-                      rows={4}
-                      disabled={isReadOnly}
-                      value={agent.postCallPrompt || ''}
-                      onChange={(e) => setAgent({ ...agent, postCallPrompt: e.target.value })}
-                      placeholder="Describe when and how the AI should close the call..."
-                      className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-2xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none"
-                    />
-                  </div>
-                  <div className="zea-postcall-llm-helper rounded-xl border border-violet-100 bg-violet-50 px-4 py-3 text-[10px] font-semibold leading-relaxed text-violet-700">
-                    The selected LLM will generate one brief, contextual closing message in the customer&apos;s language.
-                  </div>
-                </div>}
-
-                {agent.postCallMessageType === 'Static' && <div>
-                  <label className="block text-[11px] font-black text-slate-500 mb-1.5 uppercase tracking-wider">
-                    Static Closing Message
-                  </label>
-                  <textarea
-                    rows={3}
-                    disabled={isReadOnly}
-                    value={agent.postCallStaticMessage || ''}
-                    onChange={(e) => setAgent({ ...agent, postCallStaticMessage: e.target.value })}
-                    placeholder="Enter the exact message the agent should speak before ending the call..."
-                    className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-2xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none"
-                  />
-                  <p className="mt-1.5 text-[10px] font-semibold text-slate-400">The agent will speak this exact text without asking the LLM to rewrite it.</p>
-                </div>}
-
-                {agent.postCallMessageType === 'None' && <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-[10px] font-semibold leading-relaxed text-amber-800">
-                  No closing message will be spoken. The call will end after pending tools and required data operations are finished.
-                </div>}
-
-                {/* Uninterruptible Reasons */}
-                <div>
-                  <label className="block text-[11px] font-black text-slate-500 mb-1.5 uppercase tracking-wider">
-                    Uninterruptible Reasons
-                  </label>
-                  
-                  <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-4 shadow-2xs hover:border-amber-200 transition">
-                    <div className="flex flex-wrap items-center gap-2">
-                      {(!agent.postCallUninterruptibleReasons || agent.postCallUninterruptibleReasons.length === 0) ? (
-                        <span className="text-xs font-bold text-slate-400 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-100">
-                          No uninterruptible reasons listed yet.
-                        </span>
-                      ) : (
-                        agent.postCallUninterruptibleReasons.map((reason, idx) => (
-                          <span key={idx} className="text-xs font-bold text-[#dfa822] bg-amber-50 border border-amber-100 px-3 py-1.5 rounded-lg flex items-center gap-1.5 animate-fade-in">
-                            {reason}
-                            {!isReadOnly && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  const updated = (agent.postCallUninterruptibleReasons || []).filter((_, i) => i !== idx);
-                                  setAgent({ ...agent, postCallUninterruptibleReasons: updated });
-                                }}
-                                className="text-amber-400 hover:text-amber-600 font-extrabold focus:outline-none"
-                              >
-                                &times;
-                              </button>
-                            )}
-                          </span>
-                        ))
-                      )}
-                    </div>
-
-                    {!isReadOnly && (
-                      <div className="relative flex items-center">
-                        <input
-                          type="text"
-                          placeholder="Add reason"
-                          value={newReason}
-                          onChange={(e) => setNewReason(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault();
-                              if (newReason.trim()) {
-                                const updated = [...(agent.postCallUninterruptibleReasons || []), newReason.trim()];
-                                setAgent({ ...agent, postCallUninterruptibleReasons: updated });
-                                setNewReason('');
-                              }
-                            }
-                          }}
-                          className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl pl-4 pr-12 py-3 text-xs font-semibold text-slate-800 transition outline-none"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (newReason.trim()) {
-                              const updated = [...(agent.postCallUninterruptibleReasons || []), newReason.trim()];
-                              setAgent({ ...agent, postCallUninterruptibleReasons: updated });
-                              setNewReason('');
-                            }
-                          }}
-                          className="absolute right-2 w-8 h-8 rounded-full bg-amber-500 hover:bg-amber-600 text-white flex items-center justify-center transition cursor-pointer shadow-sm"
-                        >
-                          <Plus className="w-4 h-4" />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Call End Trigger Phrases */}
-                <div>
-                  <label className="block text-[11px] font-black text-slate-500 mb-1.5 uppercase tracking-wider">
-                    Call End Trigger Phrases
-                  </label>
-                  <p className="mb-3 text-[10px] font-semibold leading-relaxed text-slate-400">
-                    Add phrases that mean the customer wants to end the call. Tamil, English and Tanglish are supported. The agent will use these phrases in a later runtime update.
-                  </p>
-                  <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-4 shadow-2xs hover:border-amber-200 transition">
-                    <div className="flex flex-wrap items-center gap-2">
-                      {(!agent.callEndTriggerPhrases || agent.callEndTriggerPhrases.length === 0) ? (
-                        <span className="text-xs font-bold text-slate-400 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-100">
-                          No call end trigger phrases added yet.
-                        </span>
-                      ) : (
-                        agent.callEndTriggerPhrases.map((phrase, idx) => (
-                          <span key={`${phrase}-${idx}`} className="text-xs font-bold text-rose-600 bg-rose-50 border border-rose-100 px-3 py-1.5 rounded-lg flex items-center gap-1.5 animate-fade-in">
-                            {phrase}
-                            {!isReadOnly && (
-                              <button
-                                type="button"
-                                onClick={() => setAgent({
-                                  ...agent,
-                                  callEndTriggerPhrases: (agent.callEndTriggerPhrases || []).filter((_, index) => index !== idx),
-                                })}
-                                className="text-rose-400 hover:text-rose-600 font-extrabold focus:outline-none"
-                                aria-label={`Remove ${phrase}`}
-                              >
-                                &times;
-                              </button>
-                            )}
-                          </span>
-                        ))
-                      )}
-                    </div>
-
-                    {!isReadOnly && (
-                      <div className="relative flex items-center">
-                        <input
-                          type="text"
-                          placeholder="Example: bye, வேண்டாம், பிறகு பேசலாம்"
-                          value={newCallEndTriggerPhrase}
-                          onChange={(event) => setNewCallEndTriggerPhrase(event.target.value)}
-                          onKeyDown={(event) => {
-                            if (event.key !== 'Enter') return;
-                            event.preventDefault();
-                            const phrase = newCallEndTriggerPhrase.normalize('NFKC').trim().replace(/\s+/gu, ' ');
-                            if (!phrase) { setError('Enter a Call End Trigger Phrase before adding it.'); return; }
-                            if (phrase.length > 160) { setError('Each Call End Trigger Phrase cannot exceed 160 characters.'); return; }
-                            const current = agent.callEndTriggerPhrases || [];
-                            if (current.some((entry) => entry.toLocaleLowerCase() === phrase.toLocaleLowerCase())) {
-                              setError('This Call End Trigger Phrase is already added.'); return;
-                            }
-                            if (current.length >= 50) { setError('You can add up to 50 Call End Trigger Phrases.'); return; }
-                            setAgent({ ...agent, callEndTriggerPhrases: [...current, phrase] });
-                            setNewCallEndTriggerPhrase('');
-                            setError('');
-                          }}
-                          className="w-full bg-white border border-slate-200 focus:border-amber-500 rounded-xl pl-4 pr-12 py-3 text-xs font-semibold text-slate-800 transition outline-none"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const phrase = newCallEndTriggerPhrase.normalize('NFKC').trim().replace(/\s+/gu, ' ');
-                            if (!phrase) { setError('Enter a Call End Trigger Phrase before adding it.'); return; }
-                            if (phrase.length > 160) { setError('Each Call End Trigger Phrase cannot exceed 160 characters.'); return; }
-                            const current = agent.callEndTriggerPhrases || [];
-                            if (current.some((entry) => entry.toLocaleLowerCase() === phrase.toLocaleLowerCase())) {
-                              setError('This Call End Trigger Phrase is already added.'); return;
-                            }
-                            if (current.length >= 50) { setError('You can add up to 50 Call End Trigger Phrases.'); return; }
-                            setAgent({ ...agent, callEndTriggerPhrases: [...current, phrase] });
-                            setNewCallEndTriggerPhrase('');
-                            setError('');
-                          }}
-                          className="absolute right-2 w-8 h-8 rounded-full bg-amber-500 hover:bg-amber-600 text-white flex items-center justify-center transition cursor-pointer shadow-sm"
-                          aria-label="Add call end trigger phrase"
-                        >
-                          <Plus className="w-4 h-4" />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Task Completion Auto Close */}
-                <div className="overflow-hidden rounded-2xl border border-emerald-200 bg-emerald-50/40 shadow-2xs">
-                  <div className="flex flex-col gap-4 border-b border-emerald-100 bg-emerald-50/70 p-5 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                      <h4 className="text-sm font-extrabold text-slate-800">Task Completion Auto Close</h4>
-                      <p className="mt-1 text-[10px] font-semibold leading-relaxed text-slate-500">
-                        After a future runtime update, the agent can confirm a completed task and end the call when every required item is collected.
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-2.5">
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={agent.taskCompletionEnabled === true}
-                        disabled={isReadOnly}
-                        onClick={() => setAgent({ ...agent, taskCompletionEnabled: agent.taskCompletionEnabled !== true })}
-                        className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
-                          agent.taskCompletionEnabled ? 'bg-emerald-600' : 'bg-slate-200'
-                        }`}
-                      >
-                        <span className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transition ${
-                          agent.taskCompletionEnabled ? 'translate-x-5' : 'translate-x-0'
-                        }`} />
-                      </button>
-                      <span className={`text-xs font-bold ${agent.taskCompletionEnabled ? 'text-emerald-700' : 'text-slate-400'}`}>
-                        {agent.taskCompletionEnabled ? 'Enabled' : 'Disabled'}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className={`space-y-5 p-5 ${agent.taskCompletionEnabled ? '' : 'opacity-60'}`}>
-                    <div>
-                      <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-500">Completion Intent</label>
-                      <input
-                        type="text"
-                        disabled={isReadOnly || !agent.taskCompletionEnabled}
-                        value={agent.taskCompletionIntent || ''}
-                        onChange={(event) => setAgent({ ...agent, taskCompletionIntent: event.target.value })}
-                        placeholder="Example: appointment_booking"
-                        className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-semibold text-slate-800 outline-none transition focus:border-emerald-500 disabled:cursor-not-allowed"
-                      />
-                      <p className="mt-1.5 text-[10px] font-semibold text-slate-400">Use lowercase letters, numbers, underscores or hyphens.</p>
-                    </div>
-
-                    <div>
-                      <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-500">Required Information</label>
-                      <p className="mb-3 text-[10px] font-semibold leading-relaxed text-slate-400">
-                        The future completion flow will close only after every field is collected and validated. Example: patient_name, patient_age, selected_package, appointment_date, appointment_time.
-                      </p>
-                      <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
-                        <div className="flex flex-wrap gap-2">
-                          {(agent.taskCompletionRequiredFields || []).length === 0 ? (
-                            <span className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-400">No required information added yet.</span>
-                          ) : agent.taskCompletionRequiredFields?.map((field, index) => (
-                            <span key={`${field}-${index}`} className="flex items-center gap-1.5 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700">
-                              {field}
-                              {!isReadOnly && (
-                                <button
-                                  type="button"
-                                  aria-label={`Remove ${field}`}
-                                  onClick={() => setAgent({
-                                    ...agent,
-                                    taskCompletionRequiredFields: (agent.taskCompletionRequiredFields || []).filter((_, entryIndex) => entryIndex !== index),
-                                  })}
-                                  className="font-extrabold text-emerald-500 hover:text-emerald-700"
-                                >&times;</button>
-                              )}
-                            </span>
-                          ))}
-                        </div>
-                        {!isReadOnly && (
-                          <div className="relative flex items-center">
-                            <input
-                              type="text"
-                              disabled={!agent.taskCompletionEnabled}
-                              value={newCompletionRequiredField}
-                              onChange={(event) => setNewCompletionRequiredField(event.target.value)}
-                              onKeyDown={(event) => {
-                                if (event.key !== 'Enter') return;
-                                event.preventDefault();
-                                const field = newCompletionRequiredField.trim().toLowerCase();
-                                if (!field) return;
-                                const current = agent.taskCompletionRequiredFields || [];
-                                if (current.includes(field)) { setError('This Required Information field is already added.'); return; }
-                                setAgent({ ...agent, taskCompletionRequiredFields: [...current, field] });
-                                setNewCompletionRequiredField('');
-                                setError('');
-                              }}
-                              placeholder="Example: patient_name"
-                              className="w-full rounded-xl border border-slate-200 bg-white py-3 pl-4 pr-12 text-xs font-semibold text-slate-800 outline-none transition focus:border-emerald-500 disabled:cursor-not-allowed"
-                            />
-                            <button
-                              type="button"
-                              disabled={!agent.taskCompletionEnabled}
-                              onClick={() => {
-                                const field = newCompletionRequiredField.trim().toLowerCase();
-                                if (!field) return;
-                                const current = agent.taskCompletionRequiredFields || [];
-                                if (current.includes(field)) { setError('This Required Information field is already added.'); return; }
-                                setAgent({ ...agent, taskCompletionRequiredFields: [...current, field] });
-                                setNewCompletionRequiredField('');
-                                setError('');
-                              }}
-                              className="absolute right-2 flex h-8 w-8 items-center justify-center rounded-full bg-emerald-600 text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-                              aria-label="Add required information"
-                            ><Plus className="h-4 w-4" /></button>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                      <label className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold text-slate-600">
-                        <input
-                          type="checkbox"
-                          checked={agent.taskCompletionRequiresCatalogItem === true}
-                          disabled={isReadOnly || !agent.taskCompletionEnabled}
-                          onChange={(event) => setAgent({ ...agent, taskCompletionRequiresCatalogItem: event.target.checked })}
-                        />
-                        Require a valid Catalog item before collecting fields
-                      </label>
-                      <div>
-                        <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-500">Catalog Field</label>
-                        <input
-                          type="text"
-                          value={agent.taskCompletionCatalogField || ''}
-                          disabled={isReadOnly || !agent.taskCompletionEnabled || !agent.taskCompletionRequiresCatalogItem}
-                          maxLength={64}
-                          onChange={(event) => setAgent({ ...agent, taskCompletionCatalogField: event.target.value })}
-                          placeholder="Example: selected_item"
-                          className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-semibold text-slate-800 outline-none transition focus:border-emerald-500 disabled:cursor-not-allowed disabled:bg-slate-50"
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="mb-1.5 block text-[11px] font-black uppercase tracking-wider text-slate-500">Completion Confirmation Message</label>
-                      <textarea
-                        rows={3}
-                        disabled={isReadOnly || !agent.taskCompletionEnabled}
-                        value={agent.taskCompletionConfirmationMessage || ''}
-                        onChange={(event) => setAgent({ ...agent, taskCompletionConfirmationMessage: event.target.value })}
-                        placeholder="Example: சரிங்க {{patient_name}}, உங்க {{selected_package}} appointment பதிவு பண்ணியாச்சு."
-                        className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-semibold text-slate-800 outline-none transition focus:border-emerald-500 disabled:cursor-not-allowed"
-                      />
-                      <p className="mt-1.5 text-[10px] font-semibold text-slate-400">This will be spoken before the configured Post-Call closing and automatic hangup.</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
             {/* Post-Call AI Summary Configuration */}
             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
               <div className="flex flex-col gap-4 border-b border-violet-100 bg-violet-50/40 p-5 sm:flex-row sm:items-center sm:justify-between">
