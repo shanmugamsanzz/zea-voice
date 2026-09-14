@@ -1,5 +1,5 @@
 import { benchmarkEmbedding } from '../src/rag/embedding.client.js';
-
+//test
 try {
   const result = await benchmarkEmbedding();
   console.log(JSON.stringify(result, null, 2));
