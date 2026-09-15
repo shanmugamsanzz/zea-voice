@@ -89,15 +89,7 @@ const envSchema = z.object({
   VOICE_AUDIO_DELIVERY_LEAD_MS: z.coerce.number().int().min(20).max(1000).default(160),
   VOICE_AUDIO_WEBSOCKET_WARN_MS: z.coerce.number().int().min(5).max(5000).default(40),
   VOICE_AUDIO_WEBSOCKET_BUFFER_WARN_BYTES: z.coerce.number().int().min(1024).max(16777216).default(262144),
-  VOICE_FIRST_AUDIO_TARGET_MS: z.coerce.number().int().min(100).max(10000).default(1000),
-  // The first-audio target is an observability/SLO boundary. Knowledge work
-  // has separate production completion deadlines so a target breach does not
-  // cancel valid retrieval before authoritative hydration finishes.
-  VOICE_TURN_FIRST_AUDIO_DEADLINE_MS: z.coerce.number().int().min(1000).max(10000).default(2000),
   VOICE_TURN_ACKNOWLEDGEMENT_AFTER_MS: z.coerce.number().int().min(700).max(800).default(750),
-  VOICE_RETRIEVAL_TARGET_MS: z.coerce.number().int().min(25).max(1000).default(150),
-  VOICE_RETRIEVAL_TURN_TIMEOUT_MS: z.coerce.number().int().min(100).max(5000).default(1250),
-  VOICE_LLM_TURN_TIMEOUT_MS: z.coerce.number().int().min(250).max(10000).default(900),
   VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS: z.coerce.number().int().min(1200).max(1500).default(1400),
   VOICE_TTS_SENTENCE_GROUPING_ENABLED: booleanFromString.default(true),
   VOICE_TTS_SHORT_SENTENCE_CHARACTERS: z.coerce.number().int().min(20).max(500).default(100),
@@ -154,7 +146,6 @@ const envSchema = z.object({
   EMBEDDING_DIMENSIONS: z.coerce.number().int().positive().default(768),
   EMBEDDING_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(100).max(30000).default(5000),
   EMBEDDING_BENCHMARK_ITERATIONS: z.coerce.number().int().min(3).max(100).default(10),
-  EMBEDDING_BENCHMARK_TARGET_P95_MS: z.coerce.number().int().min(10).max(10000).default(250),
   QDRANT_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
   QDRANT_API_KEY: z.preprocess(emptyToUndefined, z.string().min(16).optional()),
   QDRANT_COLLECTION_PREFIX: z.string().regex(/^[a-z0-9_]+$/)
@@ -172,6 +163,7 @@ const envSchema = z.object({
   // event.  It finalizes a complete caller turn after genuine quiet, never
   // from sound alone.
   VOICE_STT_FINALIZATION_SILENCE_MS: z.coerce.number().int().min(500).max(1500).default(600),
+  STT_CONNECT_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(10000),
   TTS_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(30000),
   TTS_SPEED_MONITOR_ENABLED: booleanFromString.default(true),
   TTS_SPEED_MIN_CHARACTERS_PER_SECOND: z.coerce.number().min(0.1).max(100).default(3),

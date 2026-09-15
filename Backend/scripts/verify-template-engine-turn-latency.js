@@ -9,9 +9,6 @@ import {
 import {
   recordTemplateEngineTurnMetrics,
   templateEngineAudioPercentiles,
-  templateEngineFirstAudioTargets,
-  TEMPLATE_ENGINE_ACTUAL_ANSWER_TARGET_MS,
-  TEMPLATE_ENGINE_ACTUAL_ANSWER_MAXIMUM_MS,
 } from '../src/voice/interaction/template-engine-observability.js';
 
 function fakeTimers() {
@@ -139,9 +136,10 @@ for (const field of ['initialDecision', 'finalDecision', 'searchPerformed',
   assert.match(orchestrator, new RegExp(`${field}:`, 'u'),
     `Completed-turn telemetry must expose ${field} to the live release gate`);
 }
-assert.match(liveReport, /actualAnswerSamples\.length\s*>=\s*20/u);
-assert.match(liveReport, /actualAnswerAverage\s*<\s*2_000/u);
-assert.match(liveReport, /actualAnswerMaximum\s*<\s*3_000/u);
+assert.match(liveReport, /actualAnswerLatency:\s*\{/u,
+  'Production reporting must retain raw actual-answer latency measurements');
+assert.doesNotMatch(liveReport, /averageTargetMs|maximumTargetMs/u,
+  'Production latency reporting must record measurements without fixed thresholds');
 assert.match(liveReport, /multipleLlmInvocationTurns/u,
   'Live approval must reject every turn that exceeds the one-LLM ceiling');
 assert.match(liveReport, /ordinaryStaticFallbackTurns/u,
@@ -150,8 +148,8 @@ assert.match(liveReport, /llmInvocationCount/u,
   'One-LLM evidence must be present in every completed-turn sample');
 assert.match(liveReport, /incompleteTelemetryTurns/u,
   'Legacy or incomplete live logs must not satisfy the correctness gate');
-assert.match(liveReport, /report\.actualAnswerSlo\.passed\s*&&\s*report\.liveCorrectness\.passed/u,
-  'Live approval must require both latency and correctness');
+assert.match(liveReport, /passed:\s*report\.liveCorrectness\.passed/u,
+  'Live approval must retain correctness checks without a fixed latency gate');
 assert.match(orchestrator, /templateEngineAcknowledgements\.triggered\s*\+=\s*1/u);
 assert.match(orchestrator,
   /onSpeechSentence:[\s\S]*sentencePipeline\.enqueue\(sentence\)[\s\S]*finalResponseQueuedAt\s*\?\?=\s*Date\.now\(\)/u,
@@ -168,15 +166,8 @@ assert.match(orchestrator, /latency_acknowledgement_audio_cache_hit/u);
 assert.match(orchestrator, /generationPlaybackGroupId/u,
   'Latency acknowledgement and final response must use separate playback groups');
 
-assert.deepEqual(templateEngineFirstAudioTargets, {
-  RESPONSE: 1_000, CLARIFY: 1_000, SEARCH: 3_000, TOOL: 2_000,
-});
-assert.equal(TEMPLATE_ENGINE_ACTUAL_ANSWER_TARGET_MS, 2_000);
-assert.equal(TEMPLATE_ENGINE_ACTUAL_ANSWER_MAXIMUM_MS, 3_000);
 const metrics = {};
-for (const [route, elapsedMs] of [
-  ['RESPONSE', 999], ['SEARCH', 2_999], ['TOOL', 1_999],
-]) {
+for (const [route, elapsedMs] of [['RESPONSE', 700], ['SEARCH', 1_700], ['TOOL', 900]]) {
   const sample = recordTemplateEngineTurnMetrics(metrics, {
     epoch: route,
     result: { provenance: { initialDecision: route, finalDecision: route } },
@@ -184,35 +175,19 @@ for (const [route, elapsedMs] of [
     firstAudioAt: 10_000 + elapsedMs,
     finalResponseReadyAt: 10_000 + Math.max(1, elapsedMs - 200),
     firstFinalAudioAt: 10_000 + elapsedMs + 150,
-    firstAudioDeadlineMs: 9_999,
   });
-  assert.equal(sample.firstAudioStatus, 'passed', `${route} must pass below its route target`);
-  assert.equal(sample.firstAudioTargetMs, templateEngineFirstAudioTargets[route]);
   assert.equal(sample.finalAnswerFirstAudioMs, elapsedMs + 150);
   assert.equal(sample.finalAnswerReadyMs, Math.max(1, elapsedMs - 200));
-  assert.equal(sample.actualAnswerBaseline.maximumMs, 3_000);
   assert.equal(sample.actualAnswerBaseline.normalVerifiedRequest, true);
+  assert.equal(Object.hasOwn(sample, 'firstAudioTargetMs'), false);
+  assert.equal(Object.hasOwn(sample.actualAnswerBaseline, 'maximumMs'), false);
 }
-const maximumBoundary = recordTemplateEngineTurnMetrics({}, {
-  epoch: 'normal-maximum-boundary',
-  result: { provenance: { initialDecision: 'SEARCH', finalDecision: 'RESPONSE' } },
-  turnStartedAt: 30_000, firstFinalAudioAt: 33_000,
-});
-assert.equal(maximumBoundary.actualAnswerBaseline.maximumStatus, 'missed',
-  'A normal verified request must remain strictly below three seconds');
-const maximumBreach = recordTemplateEngineTurnMetrics({}, {
-  epoch: 'normal-maximum-breach',
-  result: { provenance: { initialDecision: 'SEARCH', finalDecision: 'RESPONSE' } },
-  turnStartedAt: 30_000, firstFinalAudioAt: 33_001,
-});
-assert.equal(maximumBreach.actualAnswerBaseline.maximumStatus, 'missed');
 const recoverySample = recordTemplateEngineTurnMetrics({}, {
   epoch: 'recovery-not-normal', result: { recoveryKind: 'operational' },
   turnStartedAt: 30_000, firstFinalAudioAt: 39_000,
 });
 assert.equal(recoverySample.normalVerifiedRequest, false);
-assert.equal(recoverySample.actualAnswerBaseline.maximumStatus, 'not_measured',
-  'Approved recovery timing must not be presented as a normal verified request sample');
+assert.equal(recoverySample.actualAnswerBaseline.actualAnswerFirstAudioMs, 9_000);
 const unexpectedFailureSample = recordTemplateEngineTurnMetrics({}, {
   epoch: 'unexpected-failure-not-normal', result: { unexpectedFailure: 'UNEXPECTED' },
   turnStartedAt: 30_000, firstFinalAudioAt: 39_000,
@@ -220,32 +195,14 @@ const unexpectedFailureSample = recordTemplateEngineTurnMetrics({}, {
 assert.equal(unexpectedFailureSample.normalVerifiedRequest, false);
 const passingDistribution = templateEngineAudioPercentiles([
   ...Array.from({ length: 20 }, () => ({
-    finalAnswerFirstAudioMs: 1_900, normalVerifiedRequest: true,
+    finalAnswerFirstAudioMs: 900, normalVerifiedRequest: true,
   })),
   { finalAnswerFirstAudioMs: 9_000, normalVerifiedRequest: false },
 ]);
-assert.equal(passingDistribution.actualAnswerUnderThreeSeconds.averageTargetStatus, 'passed');
-assert.equal(passingDistribution.actualAnswerUnderThreeSeconds.maximumTargetStatus, 'passed');
-assert.equal(passingDistribution.actualAnswerUnderThreeSeconds.measured, 20,
-  'Recovery audio must be excluded from the normal verified request SLO');
-const maximumBreachDistribution = templateEngineAudioPercentiles([
-  ...Array.from({ length: 19 }, () => ({
-    finalAnswerFirstAudioMs: 1_900, normalVerifiedRequest: true,
-  })),
-  { finalAnswerFirstAudioMs: 3_000, normalVerifiedRequest: true },
-]);
-assert.equal(maximumBreachDistribution.actualAnswerUnderThreeSeconds.averageTargetStatus, 'passed');
-assert.equal(maximumBreachDistribution.actualAnswerUnderThreeSeconds.maximumTargetStatus, 'missed',
-  'A normal verified request at three seconds must fail even when the average is below target');
-for (const route of ['RESPONSE', 'SEARCH', 'TOOL']) {
-  const targetMs = templateEngineFirstAudioTargets[route];
-  const sample = recordTemplateEngineTurnMetrics(metrics, {
-    epoch: `${route}-boundary`,
-    result: { provenance: { initialDecision: route, finalDecision: route } },
-    turnStartedAt: 20_000,
-    firstAudioAt: 20_000 + targetMs,
-  });
-  assert.equal(sample.firstAudioStatus, 'missed', `${route} target is strictly less than ${targetMs}ms`);
-}
+assert.equal(passingDistribution.actualAnswerLatency.measured, 20,
+  'Recovery audio must be excluded from normal answer latency measurements');
+assert.equal(passingDistribution.actualAnswerLatency.averageMs, 900);
+assert.equal(passingDistribution.actualAnswerLatency.maximumObservedMs, 900);
+assert.equal(Object.hasOwn(passingDistribution.actualAnswerLatency, 'maximumTargetStatus'), false);
 
 console.log('Template-engine whole-turn latency acknowledgement verification passed.');

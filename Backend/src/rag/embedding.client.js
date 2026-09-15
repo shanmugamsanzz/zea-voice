@@ -88,7 +88,7 @@ export async function benchmarkEmbedding({ iterations = env.EMBEDDING_BENCHMARK_
 
   for (let index = 0; index < iterations; index += 1) {
     const startedAt = performance.now();
-    await embedQuery(`Hospital package price benchmark query ${index + 1}`);
+    await embedQuery(`Embedding benchmark query ${index + 1}`);
     durations.push(Math.round((performance.now() - startedAt) * 100) / 100);
   }
 
@@ -104,7 +104,5 @@ export async function benchmarkEmbedding({ iterations = env.EMBEDDING_BENCHMARK_
     p50Ms: percentile(sorted, 0.5),
     p95Ms,
     maxMs: sorted.at(-1),
-    targetP95Ms: env.EMBEDDING_BENCHMARK_TARGET_P95_MS,
-    meetsTarget: p95Ms <= env.EMBEDDING_BENCHMARK_TARGET_P95_MS,
   };
 }

@@ -39,11 +39,6 @@ import {
   openIsolatedCallMemory,
   seedConfiguredQuestion,
 } from '../knowledge-engine/call-memory.js';
-import {
-  awaitLlmWithSafeLatency,
-  VoiceTurnLatencyTracker,
-  voiceTurnStages,
-} from './interaction/grounded-turn-latency.js';
 import { createMinimalTemplateEngineState } from './interaction/template-engine-state.js';
 import { runTemplateEngineProductionTurn } from './interaction/template-engine-production-runtime.js';
 import {
@@ -57,14 +52,11 @@ import {
   parseTemplateEngineStructuredOutput,
 } from './interaction/template-engine-structured-output.js';
 import { createStructuredSpeechSentenceStream } from './interaction/structured-speech-stream.js';
-import {
-  UNIVERSAL_TURN_LATENCY_BUDGET,
-} from './interaction/universal-turn-latency-budget.js';
 import { retrieveAgentQdrantKnowledge } from './interaction/agent-qdrant-retrieval.js';
 import { runAgentQdrantUniversalTurn } from './interaction/agent-qdrant-grounded-turn.js';
 import { llmTokenBudgetForSpeech } from './interaction/template-engine-speech-budget.js';
 import { classifyTemplateEngineTurnError } from './interaction/template-engine-error-classification.js';
-import { evaluateFirstAudioSlo, percentile } from './interaction/voice-latency-slo.js';
+import { percentile, summarizeFirstAudioLatency } from './interaction/voice-latency-slo.js';
 import { configuredCallDurationMs } from './interaction/call-duration-policy.js';
 import { sttEventPolicy } from './interaction/stt-event-policy.js';
 import { LiveMemoryMaintenanceQueue } from './interaction/live-memory-maintenance.js';
@@ -96,9 +88,7 @@ export function createTemplateEngineStructuredInvoker(adapter, options = {}) {
   return async (request, invocationOptions = {}) => {
     let text = '';
     let completion = null;
-    let firstSpeechSentenceSeen = false;
     const speechStream = createStructuredSpeechSentenceStream((sentence, details) => {
-      firstSpeechSentenceSeen = true;
       invocationOptions.onSpeechSentence?.(sentence, details);
     });
     const stream = adapter.stream({
@@ -111,21 +101,7 @@ export function createTemplateEngineStructuredInvoker(adapter, options = {}) {
     options.onActive?.({ cancel: (reason) => adapter.cancel(reason) });
     const iterator = stream[Symbol.asyncIterator]();
     while (true) {
-      const firstSentenceRemainingMs = Number.isFinite(
-        Number(invocationOptions.firstSentenceDeadlineAt),
-      ) ? remainingLiveTurnBudgetMs(invocationOptions.firstSentenceDeadlineAt) : null;
-      if (!firstSpeechSentenceSeen && firstSentenceRemainingMs !== null
-        && firstSentenceRemainingMs <= 0) {
-        adapter.cancel?.('llm_first_sentence_timeout');
-        throw new AppError(504, 'LLM did not produce a complete speech sentence in time',
-          'VOICE_LLM_FIRST_SENTENCE_TIMEOUT');
-      }
-      const next = !firstSpeechSentenceSeen && firstSentenceRemainingMs !== null
-        ? await rejectAfter(iterator.next(), firstSentenceRemainingMs,
-          () => new AppError(504, 'LLM did not produce a complete speech sentence in time',
-            'VOICE_LLM_FIRST_SENTENCE_TIMEOUT'),
-          () => adapter.cancel?.('llm_first_sentence_timeout'))
-        : await iterator.next();
+      const next = await iterator.next();
       if (next.done) break;
       const event = next.value;
       if (event.type === 'text_delta') {
@@ -237,23 +213,14 @@ export function configuredLatencyAcknowledgementResponse(profile, knowledge = {}
   return resolveRuntimeMessage(profile, 'acknowledgement', knowledge);
 }
 
-export function remainingLiveTurnBudgetMs(deadlineAt, reserveMs = 0, now = Date.now()) {
-  return Math.max(0, Math.floor(Number(deadlineAt) - Number(now) - Math.max(0, reserveMs)));
-}
-
 export function configuredTemplateEngineFailureResponse(profile, kind) {
   if (!['operational', 'unexpected'].includes(kind)) return '';
   const message = resolveRuntimeMessage(profile, 'technical_failure');
   return message && !isInternalRuntimeText(message) ? message : '';
 }
 
-export function configuredTtsFirstAudioTimeoutMs(
-  sharedDeadlineRemainingMs = Number.POSITIVE_INFINITY,
-) {
-  return Math.max(1, Math.min(
-    UNIVERSAL_TURN_LATENCY_BUDGET.ttsFirstAudioMs,
-    sharedDeadlineRemainingMs,
-  ));
+export function configuredTtsFirstAudioTimeoutMs() {
+  return env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS;
 }
 
 function callerFacingText(
@@ -351,7 +318,7 @@ export class RealtimeConversationOrchestrator {
         samples: [],
       },
       shortTurns: { deferred: 0, merged: 0, discarded: 0 },
-      llmStreaming: { requests: 0, firstTokenSamples: [], firstTokenTargetMinMs: 250, firstTokenTargetMaxMs: 500 },
+      llmStreaming: { requests: 0, firstTokenSamples: [] },
       turnLatency: [],
     };
     this.runtimeMetrics.templateEngine = {
@@ -765,31 +732,19 @@ export class RealtimeConversationOrchestrator {
             ? this.runtimeMetrics.turnLatency.find((entry) => entry.epoch === turnEpoch)
             : null;
           if (turnLatency && turnLatency.firstAudioDeliveryMs === null) {
-            const tracker = this.turnLatencyTrackers?.get(turnEpoch);
-            const firstAudioDeliveryMs = tracker
-              ? Math.max(0, Date.now() - tracker.startedAt)
-              : Math.max(0, Number(turnLatency.totalFirstAudioMs ?? 0) + deliveryMs);
+            const firstAudioDeliveryMs = Math.max(
+              0, Number(turnLatency.totalFirstAudioMs ?? 0) + deliveryMs,
+            );
             turnLatency.firstAudioDeliveryMs = firstAudioDeliveryMs;
-            tracker?.record(voiceTurnStages.FIRST_AUDIO_DELIVERY, firstAudioDeliveryMs, {
-              playbackGroupId: metric.playbackGroupId,
-            });
-            const latencySnapshot = tracker?.snapshot();
-            if (latencySnapshot) {
-              turnLatency.firstAudioStatus = latencySnapshot.firstAudioStatus;
-              turnLatency.firstAudioDeadlineMs = latencySnapshot.deadlineMs;
-            }
             this.log.info({
               stage: 'voice.first_audio_delivered', callId: this.call.id,
-              epoch: turnEpoch, playbackGroupId: metric.playbackGroupId,
-              firstAudioDeliveryMs, firstAudioDeadlineMs: turnLatency.firstAudioDeadlineMs,
-              firstAudioStatus: turnLatency.firstAudioStatus,
+              epoch: turnEpoch, playbackGroupId: metric.playbackGroupId, firstAudioDeliveryMs,
               sttFinalizationMs: turnLatency.sttFinalizationMs,
               routingMs: turnLatency.routingMs,
               retrievalMs: turnLatency.retrievalMs,
               llmMs: turnLatency.llmMs,
               ttsFirstChunkMs: turnLatency.ttsFirstChunkMs,
             }, 'First response audio was delivered to the Plivo WebSocket');
-            this.turnLatencyTrackers?.delete(turnEpoch);
           }
         }
         if (continuity.samples.length < 100) continuity.samples.push({
@@ -1575,7 +1530,7 @@ export class RealtimeConversationOrchestrator {
   }
 
 
-  #createSentenceTtsPipeline(epoch, turnStartedAt, firstAudioDeadlineAt) {
+  #createSentenceTtsPipeline(epoch, turnStartedAt) {
     const memoryBeforeValidatedResponse = this.liveCallMemory?.snapshot?.() ?? {};
     let chain = Promise.resolve();
     let beginPromise = null;
@@ -1780,8 +1735,6 @@ export class RealtimeConversationOrchestrator {
               kind, startedAt: turnStartedAt, deferDrain: true,
               playbackGroupId: generationPlaybackGroupId, deferBoundaryFlush: true,
               charactersReserved: true, epoch,
-              firstAudioDeadlineAt: currentSentenceNumber === 1
-                && Date.now() < firstAudioDeadlineAt ? firstAudioDeadlineAt : undefined,
             });
           } else {
             played = await this.#playPrefetchedTts(prepared.value, generationId, {
@@ -1806,11 +1759,6 @@ export class RealtimeConversationOrchestrator {
           kind, startedAt: turnStartedAt, deferDrain: true,
           playbackGroupId: generationPlaybackGroupId, deferBoundaryFlush: true, epoch,
           capture: capturedAudio,
-          // The acknowledgement satisfies the turn's first-audio contract.
-          // Once it is audible, final TTS uses its independent provider timeout.
-          firstAudioDeadlineAt: (acknowledgement
-            || (currentSentenceNumber === 1 && !acknowledgementAudioPlayed))
-            && Date.now() < firstAudioDeadlineAt ? firstAudioDeadlineAt : undefined,
           validatedTextAt: acknowledgement ? undefined : firstValidatedTextAt,
           onFirstAudio: (details = {}) => {
             firstAudioAt ??= Date.now();
@@ -2025,11 +1973,7 @@ export class RealtimeConversationOrchestrator {
   async #runTemplateEngineTurn(query, history, epoch, sttTiming = {}) {
     this.liveCallMemory?.beginTurn?.(epoch);
     const turnStartedAt = Date.now();
-    const firstAudioDeadlineAt = turnStartedAt
-      + UNIVERSAL_TURN_LATENCY_BUDGET.totalFirstAudioMs;
-    const sentencePipeline = this.#createSentenceTtsPipeline(
-      epoch, turnStartedAt, firstAudioDeadlineAt,
-    );
+    const sentencePipeline = this.#createSentenceTtsPipeline(epoch, turnStartedAt);
     let finalResponseReady = false;
     const latencyAcknowledgementSelection = resolveConfiguredLatencyAcknowledgement({
       configuredText: configuredLatencyAcknowledgementResponse(this.runtimeProfile),
@@ -2140,7 +2084,6 @@ export class RealtimeConversationOrchestrator {
         authorizedWorkflowTools: assignedTools,
         assignedTools: this.runtimeProfile.tools,
         cancellationSignal: retrievalAbortController.signal,
-        turnDeadlineAt: firstAudioDeadlineAt,
       }, {
         isTurnCurrent: () => !this.#isStaleGeneration(epoch) && !this.finalized,
         invokeStructuredLlm,
@@ -2372,7 +2315,6 @@ export class RealtimeConversationOrchestrator {
       stageTimings,
       finalResponseReadyAt,
       finalResponseQueuedAt,
-      firstAudioDeadlineMs: UNIVERSAL_TURN_LATENCY_BUDGET.totalFirstAudioMs,
     });
     await this.controller.setAssistantResponse(answer, Date.now(), { sources: factualAnswerSources });
     sentencePipeline.markTranscriptCommitted();
@@ -2566,27 +2508,11 @@ export class RealtimeConversationOrchestrator {
       const stream = ttsAdapter.synthesizeStream({ text, generationId });
       const iterator = stream[Symbol.asyncIterator]();
       while (true) {
-        const firstAudioDeliveryReserveMs = firstAudio
-          ? Math.min(200, env.VOICE_AUDIO_PRE_ROLL_MAX_WAIT_MS
-            + env.VOICE_AUDIO_WEBSOCKET_WARN_MS)
-          : 0;
-        const sharedDeadlineRemainingMs = options.firstAudioDeadlineAt
-          ? remainingLiveTurnBudgetMs(options.firstAudioDeadlineAt, firstAudioDeliveryReserveMs)
-          : Number.POSITIVE_INFINITY;
-        if (firstAudio && sharedDeadlineRemainingMs <= 0) {
-          ttsAdapter.cancel?.('turn_first_audio_deadline');
-          throw new AppError(504, 'Turn exceeded the end-to-end first-audio deadline',
-            'VOICE_TURN_FIRST_AUDIO_DEADLINE');
-        }
-        const firstAudioTimeoutMs = configuredTtsFirstAudioTimeoutMs(
-          sharedDeadlineRemainingMs,
-        );
+        const firstAudioTimeoutMs = configuredTtsFirstAudioTimeoutMs();
         const next = firstAudio
           ? await rejectAfter(iterator.next(), firstAudioTimeoutMs,
-            () => new AppError(504, 'TTS produced no audio within the live deadline',
-              options.firstAudioDeadlineAt
-                && firstAudioTimeoutMs < UNIVERSAL_TURN_LATENCY_BUDGET.ttsFirstAudioMs
-                ? 'VOICE_TURN_FIRST_AUDIO_DEADLINE' : 'TTS_FIRST_AUDIO_TIMEOUT'),
+            () => new AppError(504, 'TTS produced no audio before the configured provider timeout',
+              'TTS_FIRST_AUDIO_TIMEOUT'),
             () => ttsAdapter.cancel?.('first_audio_timeout'))
           : await iterator.next();
         if (next.done) break;
@@ -2623,12 +2549,6 @@ export class RealtimeConversationOrchestrator {
                   0, Date.now() - Number(options.validatedTextAt ?? requestStartedAt),
                 );
                 turnLatency.responseClass = turnLatency.fastKnowledge ? 'direct_approved' : 'universal_llm';
-                turnLatency.firstAudioTargetMs = 1000;
-                turnLatency.firstAudioAcceptableMs = turnLatency.fastKnowledge ? 1000 : 2000;
-                turnLatency.firstAudioStatus = latencyMs <= turnLatency.firstAudioTargetMs
-                  ? 'target_met'
-                  : (latencyMs <= turnLatency.firstAudioAcceptableMs
-                    ? 'acceptable_fallback' : 'target_missed');
                 this.#browserDiagnostic('latency', {
                   epoch: turnLatency.epoch,
                   routingMs: turnLatency.routingMs,
@@ -2636,11 +2556,7 @@ export class RealtimeConversationOrchestrator {
                   llmMs: turnLatency.llmMs,
                   ttsFirstChunkMs: turnLatency.ttsFirstChunkMs,
                   totalFirstAudioMs: turnLatency.totalFirstAudioMs,
-                  firstAudioStatus: turnLatency.firstAudioStatus,
                 });
-                this.turnLatencyTrackers?.get(options.epoch ?? this.epoch)?.record(
-                  voiceTurnStages.TTS_FIRST_CHUNK, firstAudioLatencyMs,
-                );
                 this.log.info({
                   stage: 'voice.turn_latency', callId: this.call.id,
                   epoch: turnLatency.epoch,
@@ -2659,24 +2575,12 @@ export class RealtimeConversationOrchestrator {
                   route: turnLatency.route,
                   fastKnowledge: turnLatency.fastKnowledge,
                   responseClass: turnLatency.responseClass,
-                  firstAudioStatus: turnLatency.firstAudioStatus,
                 }, 'Voice turn timing captured from STT through first TTS audio');
               }
               this.log.info({
                 stage: 'voice.first_response_audio', callId: this.call.id,
                 epoch: options.epoch ?? this.epoch, generationId, latencyMs,
               }, 'First response audio is ready for Plivo playback');
-              const applicableBreachMs = turnLatency?.fastKnowledge === true
-                ? env.VOICE_FIRST_AUDIO_TARGET_MS : Math.max(env.VOICE_FIRST_AUDIO_TARGET_MS, 2000);
-              if (latencyMs > applicableBreachMs) {
-                this.runtimeMetrics.latency.firstAudioTargetBreaches ??= 0;
-                this.runtimeMetrics.latency.firstAudioTargetBreaches += 1;
-                this.log.warn({
-                  stage: 'voice.first_audio_target_missed', callId: this.call.id,
-                  epoch: options.epoch ?? this.epoch, generationId, latencyMs,
-                  targetMs: applicableBreachMs,
-                }, 'End-to-end first response audio exceeded the configured target');
-              }
             }
           }
           if (options.capture) options.capture.push(Buffer.from(event.audio));
@@ -2797,10 +2701,7 @@ export class RealtimeConversationOrchestrator {
         text, generationId: `technical-recovery-cache-${this.call.id}`,
       })[Symbol.asyncIterator]();
       while (true) {
-        const next = await rejectAfter(iterator.next(), 2_000,
-          () => new AppError(504, 'Technical recovery audio pre-cache timed out',
-            'TTS_RECOVERY_CACHE_TIMEOUT'),
-          () => adapter.cancel?.('technical_recovery_cache_timeout'));
+        const next = await iterator.next();
         if (next.done) break;
         const event = next.value;
         if (event.type === 'audio_chunk') {
@@ -3028,31 +2929,17 @@ export class RealtimeConversationOrchestrator {
         return await this.#synthesizeAttempt(pronunciation.text, generationId, { ...options, attempt });
       } catch (error) {
         lastError = error;
-        if (error?.code === 'VOICE_TURN_FIRST_AUDIO_DEADLINE'
-          && error.audioStarted !== true && options.kind === 'response') {
-          const recovery = await this.#playCachedTechnicalRecovery(generationId, options);
-          if (recovery) return recovery;
-          throw error;
-        }
         if (error?.code === 'TTS_FIRST_AUDIO_TIMEOUT' && error.audioStarted !== true
-          && options.kind === 'response' && !firstAudioTimeoutRetried) {
+          && ['response', 'welcome'].includes(options.kind) && !firstAudioTimeoutRetried) {
           firstAudioTimeoutRetried = true;
           let freshAdapter = null;
           try {
-            if (options.firstAudioDeadlineAt
-              && remainingLiveTurnBudgetMs(options.firstAudioDeadlineAt) <= 0) {
-              throw new AppError(504, 'No turn budget remains for a fresh TTS connection',
-                'VOICE_TURN_FIRST_AUDIO_DEADLINE');
-            }
             freshAdapter = await this.#createLookaheadTtsAdapter(`${generationId}-fresh-retry`);
             this.activeLookaheadTtsAdapters.add(freshAdapter);
-            const retryConnectionBudgetMs = options.firstAudioDeadlineAt
-              ? remainingLiveTurnBudgetMs(options.firstAudioDeadlineAt)
-              : UNIVERSAL_TURN_LATENCY_BUDGET.ttsFirstAudioMs;
             await rejectAfter(Promise.resolve().then(() => freshAdapter.connect()),
-              retryConnectionBudgetMs,
-              () => new AppError(504, 'Fresh TTS connection exceeded the remaining turn budget',
-                'VOICE_TURN_FIRST_AUDIO_DEADLINE'),
+              env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS,
+              () => new AppError(504, 'Fresh TTS connection timed out',
+                'TTS_PROVIDER_TIMEOUT'),
               () => freshAdapter.cancel?.('fresh_connection_timeout'));
             this.log.warn({
               stage: 'tts.first_audio_fresh_connection_retry', callId: this.call.id,
@@ -3076,7 +2963,6 @@ export class RealtimeConversationOrchestrator {
           ? env.TTS_SPEED_MAX_RETRIES : env.VOICE_PROVIDER_MAX_RETRIES;
         const canRetry = error?.retryable === true && error.audioStarted !== true
           && error?.code !== 'TTS_FIRST_AUDIO_TIMEOUT'
-          && error?.code !== 'VOICE_TURN_FIRST_AUDIO_DEADLINE'
           && attempt < retryLimit;
         if (!canRetry) throw error;
         if (error?.code === 'TTS_ABNORMAL_SPEED') this.runtimeMetrics.ttsSpeed.retries += 1;
@@ -3106,7 +2992,6 @@ export class RealtimeConversationOrchestrator {
       await this.activeAssistantPlayback?.persistAudible?.(reason);
       if (this.activeAssistantPlayback?.epoch === cancelledEpoch) this.activeAssistantPlayback = null;
       this.epoch += 1;
-      this.turnLatencyTrackers?.delete(cancelledEpoch);
       this.liveCallMemory?.cancelTurn?.(cancelledEpoch);
       this.runtimeMetrics.interruptions.cancellationEpochs += 1;
       this.runtimeMetrics.interruptions.cancellationCalls += 1;
@@ -3287,8 +3172,7 @@ export class RealtimeConversationOrchestrator {
     }
     await this.#cancelActive(`${stage}_recovery`);
     const ttsFailed = stage === 'audio_output' || stage.startsWith('tts')
-      || String(error?.code ?? '').startsWith('TTS_')
-      || error?.code === 'VOICE_TURN_FIRST_AUDIO_DEADLINE';
+      || String(error?.code ?? '').startsWith('TTS_');
     if (ttsFailed) {
       this.log.error({
         stage: 'voice.audible_recovery_unavailable', callId: this.call.id,
@@ -3355,7 +3239,6 @@ export class RealtimeConversationOrchestrator {
     this.#clearCallDuration();
     this.interruptionCandidate?.reset();
     this.epoch += 1;
-    this.turnLatencyTrackers?.clear();
     for (const cancelScheduler of this.activeLookaheadSchedulers) cancelScheduler(finalReason);
     this.activeLlm?.cancel(finalReason);
     this.adapters?.llm?.cancel?.(finalReason);
@@ -3487,7 +3370,7 @@ export class RealtimeConversationOrchestrator {
       sentenceHandoffWaits: this.runtimeMetrics.ttsGeneration?.sentenceHandoffWaits ?? 0,
       maximumSentenceHandoffWaitMs: this.runtimeMetrics.ttsGeneration?.maximumSentenceHandoffWaitMs ?? 0,
     }, 'TTS generation and sentence handoff summary');
-    const firstAudioSlo = evaluateFirstAudioSlo(
+    const firstAudioLatency = summarizeFirstAudioLatency(
       (this.runtimeMetrics.turnLatency ?? [])
         .map((turn) => turn.totalFirstAudioMs)
         .filter(Number.isFinite),
@@ -3500,28 +3383,25 @@ export class RealtimeConversationOrchestrator {
       p90: percentile(retrievalSamples, 0.90),
       p95: percentile(retrievalSamples, 0.95),
     };
-    this.runtimeMetrics.latency.firstAudioPercentiles = firstAudioSlo.observed;
+    this.runtimeMetrics.latency.firstAudioPercentiles = firstAudioLatency;
     const separatedAudio = templateEngineAudioPercentiles(this.runtimeMetrics.turnLatency ?? []);
     this.runtimeMetrics.latency.acknowledgementAudioPercentiles = separatedAudio.acknowledgement;
     this.runtimeMetrics.latency.finalAnswerAudioPercentiles = separatedAudio.finalAnswer;
     this.log.info({ stage: 'template_engine.answer_audio_percentiles', callId: this.call.id,
       acknowledgement: separatedAudio.acknowledgement, finalAnswer: separatedAudio.finalAnswer,
-      actualAnswerUnderThreeSeconds: separatedAudio.actualAnswerUnderThreeSeconds,
+      actualAnswerLatency: separatedAudio.actualAnswerLatency,
     }, 'Acknowledgement and final-answer audio latency reported separately');
     this.runtimeMetrics.latency.retrievalPercentiles = retrievalPercentiles;
     this.log.info({
       stage: 'voice.first_audio_percentiles', callId: this.call.id,
-      samples: firstAudioSlo.observed.count,
-      p50Ms: firstAudioSlo.observed.p50,
-      p90Ms: firstAudioSlo.observed.p90,
-      p95Ms: firstAudioSlo.observed.p95,
-      targetP90Ms: firstAudioSlo.targets.p90FirstAudioMs,
-      status: firstAudioSlo.reason ?? 'passed',
+      samples: firstAudioLatency.count,
+      p50Ms: firstAudioLatency.p50,
+      p90Ms: firstAudioLatency.p90,
+      p95Ms: firstAudioLatency.p95,
       retrievalP50Ms: retrievalPercentiles.p50,
       retrievalP90Ms: retrievalPercentiles.p90,
       retrievalP95Ms: retrievalPercentiles.p95,
-      retrievalTargetMs: 150,
-    }, 'End-to-end first-audio latency percentiles');
+    }, 'End-to-end first-audio latency measurements');
     this.log.info({
       stage: 'provider.failure_summary', callId: this.call.id,
       total: this.runtimeMetrics.providerFailures?.total ?? 0,

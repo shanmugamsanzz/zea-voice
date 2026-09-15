@@ -44,12 +44,12 @@ await assert.rejects(() => runTemplateEngineProductionTurn({
 }), { code: 'TEMPLATE_ENGINE_RETRIEVAL_SCOPE_MISMATCH' });
 
 let retrievalCancelled = false;
-await assert.rejects(() => runTemplateEngineProductionTurn({
+const cancellation = new AbortController();
+const cancelledTurn = runTemplateEngineProductionTurn({
   auth: { tenantId: 'tenant-a' },
   scope: { tenantId: 'tenant-a', agentId: 'agent-a' },
   latestUtterance: 'Question',
-  cancellationSignal: new AbortController().signal,
-  turnDeadlineAt: Date.now() + 3_000,
+  cancellationSignal: cancellation.signal,
 }, {
   invokeStructuredLlm: async () => ({}),
   retrieveQdrantKnowledge: ({ cancellationSignal }) => new Promise((_resolve, reject) => {
@@ -63,7 +63,9 @@ await assert.rejects(() => runTemplateEngineProductionTurn({
     }, { once: true });
   }),
   runQdrantUniversalTurn: async () => ({}),
-}), { code: 'VOICE_RETRIEVAL_DEADLINE' });
+});
+setTimeout(() => cancellation.abort('test_cancelled'), 10);
+await assert.rejects(cancelledTurn, { name: 'AbortError' });
 assert.equal(retrievalCancelled, true);
 
 const source = await readFile(new URL(
@@ -77,6 +79,7 @@ assert.match(source, /runAgentQdrantUniversalTurn/u);
 assert.doesNotMatch(source, /retrieveEvidence|loadPublishedContext|postSearchDecision/u);
 assert.doesNotMatch(source, /deterministic(?:Acknowledgement|Identity|Conversation|Workflow|Welcome)/u);
 assert.doesNotMatch(source, /acknowledgementPhrases|explicitStopPhrases/u);
+assert.doesNotMatch(source, /turnDeadlineAt|UNIVERSAL_TURN_LATENCY_BUDGET/u);
 assert.doesNotMatch(orchestratorSource,
   /classifyFinalCallCheckUtterance|resolveCustomerCallbackRequest|classifyFinalCallEndUtterance/u);
 

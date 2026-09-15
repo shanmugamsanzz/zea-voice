@@ -173,9 +173,9 @@ export function createSarvamSttAdapter({ providerConfig, runtimeContext = {} }) 
 
   function schedulePendingFinalization(requestId) {
     clearPendingFinalization();
-    const quietPeriodMs = Math.max(500, Number(
+    const quietPeriodMs = Number(
       runtimeContext.partialFinalizationDelayMs ?? env.VOICE_STT_FINALIZATION_SILENCE_MS,
-    ));
+    );
     pendingFinalizationTimer = setTimeout(() => finalizePendingTranscript(requestId), quietPeriodMs);
     pendingFinalizationTimer.unref?.();
   }
@@ -283,7 +283,7 @@ export function createSarvamSttAdapter({ providerConfig, runtimeContext = {} }) 
         candidate.once('error', () => {});
         try { candidate.terminate?.(); } catch { /* timeout remains authoritative */ }
         reject(new AppError(504, 'Sarvam STT connection timed out', 'STT_CONNECT_TIMEOUT'));
-      }, runtimeContext.connectTimeoutMs ?? 10_000);
+      }, runtimeContext.connectTimeoutMs ?? env.STT_CONNECT_TIMEOUT_MS);
       timeout.unref?.();
       const cleanup = () => {
         clearTimeout(timeout);

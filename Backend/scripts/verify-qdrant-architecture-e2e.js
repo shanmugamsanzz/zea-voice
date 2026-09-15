@@ -111,8 +111,7 @@ function liveLatencyReport() {
     }
     return {
       measured: false,
-      targetAverageActualAnswerFirstAudioMs: 2_000,
-      maximumNormalActualAnswerFirstAudioMs: 3_000,
+      measurementsOnly: true,
       reason: 'live_log_not_supplied',
       command: 'npm run verify:qdrant-architecture-live -- <json-lines-server-log>',
     };
@@ -135,10 +134,9 @@ function liveLatencyReport() {
   const report = JSON.parse(result.stdout);
   return {
     measured: true,
-    targetAverageActualAnswerFirstAudioMs: 2_000,
-    maximumNormalActualAnswerFirstAudioMs: 3_000,
-    firstAudioSlo: report.firstAudioSlo,
-    actualAnswerSlo: report.actualAnswerSlo,
+    measurementsOnly: true,
+    firstAudioLatency: report.firstAudioLatency,
+    actualAnswerLatency: report.actualAnswerLatency,
     liveCorrectness: report.liveCorrectness,
     releaseGate: report.releaseGate,
   };

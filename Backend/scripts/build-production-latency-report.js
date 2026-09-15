@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { evaluateFirstAudioSlo } from '../src/voice/interaction/voice-latency-slo.js';
+import { summarizeFirstAudioLatency } from '../src/voice/interaction/voice-latency-slo.js';
 
 const inputPath = process.argv.slice(2).find((value) => !value.startsWith('--'));
 const enforce = process.argv.includes('--enforce');
@@ -62,9 +62,6 @@ const actualAnswerAverage = actualAnswerSamples.length
   ? Math.round((actualAnswerSamples.reduce((total, value) => total + value, 0)
     / actualAnswerSamples.length) * 100) / 100 : null;
 const actualAnswerMaximum = actualAnswerSamples.length ? Math.max(...actualAnswerSamples) : null;
-const sufficientSamples = actualAnswerSamples.length >= 20;
-const averagePassed = sufficientSamples && actualAnswerAverage < 2_000;
-const maximumPassed = sufficientSamples && actualAnswerMaximum < 3_000;
 const incompleteTelemetryTurns = completedTurns.filter((turn) => (
   !String(turn.initialDecision ?? '').trim()
   || !String(turn.finalDecision ?? turn.decision ?? '').trim()
@@ -94,27 +91,12 @@ const correctnessPassed = completedTurns.length > 0
 const report = {
   generatedAt: new Date().toISOString(),
   samples,
-  firstAudioSlo: evaluateFirstAudioSlo(samples),
-  actualAnswerSlo: {
-    targetAverageMs: 2_000,
-    maximumNormalRequestMs: 3_000,
-    targetP95Ms: 3_000,
-    minimumSamples: 20,
+  firstAudioLatency: summarizeFirstAudioLatency(samples),
+  actualAnswerLatency: {
     count: actualAnswerSamples.length,
     p95Ms: actualAnswerP95,
     averageMs: actualAnswerAverage,
     maximumMs: actualAnswerMaximum,
-    atOrAboveThreeSeconds: actualAnswerSamples.filter((value) => value >= 3000).length,
-    averagePassed,
-    maximumPassed,
-    averageReason: !sufficientSamples ? 'insufficient_live_samples'
-      : actualAnswerAverage < 2_000 ? null : 'actual_answer_average_breached',
-    maximumReason: !sufficientSamples ? 'insufficient_live_samples'
-      : actualAnswerMaximum < 3_000 ? null : 'actual_answer_maximum_breached',
-    passed: averagePassed && maximumPassed,
-    reason: !sufficientSamples ? 'insufficient_live_samples'
-      : !averagePassed ? 'actual_answer_average_breached'
-        : !maximumPassed ? 'actual_answer_maximum_breached' : null,
   },
   liveCorrectness: {
     technicalSafeguardsMeasured: true,
@@ -134,10 +116,8 @@ const report = {
   },
 };
 report.releaseGate = {
-  passed: report.actualAnswerSlo.passed && report.liveCorrectness.passed,
-  reason: !report.actualAnswerSlo.passed
-    ? report.actualAnswerSlo.reason : !report.liveCorrectness.passed
-      ? report.liveCorrectness.reason : null,
+  passed: report.liveCorrectness.passed,
+  reason: report.liveCorrectness.reason,
 };
 process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 if (enforce && !report.releaseGate.passed) process.exitCode = 1;

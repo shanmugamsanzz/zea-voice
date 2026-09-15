@@ -1,16 +1,5 @@
 import { summarizeTemplateEngineLatency } from './template-engine-latency-diagnostics.js';
 
-export const templateEngineFirstAudioTargets = Object.freeze({
-  RESPONSE: 1_000,
-  CLARIFY: 1_000,
-  SEARCH: 3_000,
-  TOOL: 2_000,
-});
-
-export const TEMPLATE_ENGINE_ACTUAL_ANSWER_TARGET_MS = 2_000;
-export const TEMPLATE_ENGINE_ACTUAL_ANSWER_MAXIMUM_MS = 3_000;
-export const TEMPLATE_ENGINE_ACTUAL_ANSWER_MINIMUM_SAMPLES = 20;
-
 function stageDuration(stageTimings, stage) {
   const value = Number(stageTimings?.[stage]?.durationMs);
   return Number.isFinite(value) && value >= 0 ? value : null;
@@ -25,8 +14,6 @@ export function templateEngineAudioPercentiles(turns = []) {
   const actualAnswers = turns.filter((turn) => turn.normalVerifiedRequest !== false)
     .map((turn) => turn.finalAnswerFirstAudioMs)
     .filter(Number.isFinite);
-  const actualAnswersUnderTarget = actualAnswers
-    .filter((durationMs) => durationMs < TEMPLATE_ENGINE_ACTUAL_ANSWER_TARGET_MS).length;
   const actualAnswerAverageMs = actualAnswers.length
     ? Math.round((actualAnswers.reduce((total, value) => total + value, 0)
       / actualAnswers.length) * 100) / 100 : null;
@@ -34,36 +21,13 @@ export function templateEngineAudioPercentiles(turns = []) {
   return Object.freeze({
     acknowledgement: summarize('acknowledgementFirstAudioMs'),
     finalAnswer: summarize('finalAnswerFirstAudioMs'),
-    actualAnswerUnderThreeSeconds: Object.freeze({
-      targetMs: TEMPLATE_ENGINE_ACTUAL_ANSWER_TARGET_MS,
-      maximumMs: TEMPLATE_ENGINE_ACTUAL_ANSWER_MAXIMUM_MS,
-      minimumSamples: TEMPLATE_ENGINE_ACTUAL_ANSWER_MINIMUM_SAMPLES,
+    actualAnswerLatency: Object.freeze({
       measured: actualAnswers.length,
-      passed: actualAnswersUnderTarget,
-      passRate: actualAnswers.length
-        ? Math.round((actualAnswersUnderTarget / actualAnswers.length) * 10_000) / 100
-        : null,
       averageMs: actualAnswerAverageMs,
-      averageTargetStatus: actualAnswers.length < TEMPLATE_ENGINE_ACTUAL_ANSWER_MINIMUM_SAMPLES
-        ? 'insufficient_live_samples'
-        : actualAnswerAverageMs < TEMPLATE_ENGINE_ACTUAL_ANSWER_TARGET_MS ? 'passed' : 'missed',
       maximumObservedMs: actualAnswerMaximumMs,
-      maximumTargetStatus: actualAnswers.length < TEMPLATE_ENGINE_ACTUAL_ANSWER_MINIMUM_SAMPLES
-        ? 'insufficient_live_samples'
-        : actualAnswerMaximumMs < TEMPLATE_ENGINE_ACTUAL_ANSWER_MAXIMUM_MS ? 'passed' : 'missed',
       p95: summarize('finalAnswerFirstAudioMs').p95,
-      p95TargetStatus: actualAnswers.length < TEMPLATE_ENGINE_ACTUAL_ANSWER_MINIMUM_SAMPLES
-        ? 'insufficient_live_samples'
-        : summarize('finalAnswerFirstAudioMs').p95 < TEMPLATE_ENGINE_ACTUAL_ANSWER_TARGET_MS
-          ? 'passed' : 'missed',
     }),
   });
-}
-
-export function templateEngineFirstAudioTarget(result, fallbackMs = null) {
-  const route = result?.provenance?.initialDecision ?? result?.decision?.decision ?? null;
-  return templateEngineFirstAudioTargets[route]
-    ?? (Number.isFinite(fallbackMs) ? fallbackMs : null);
 }
 
 export function recordTemplateEngineTurnMetrics(runtimeMetrics, {
@@ -78,7 +42,6 @@ export function recordTemplateEngineTurnMetrics(runtimeMetrics, {
   acknowledgementFirstAudioAt = null,
   sttFinalizationMs = null,
   stageTimings = {},
-  firstAudioDeadlineMs,
 } = {}) {
   if (!runtimeMetrics || typeof runtimeMetrics !== 'object') {
     throw new TypeError('Template-engine observability requires runtime metrics');
@@ -90,7 +53,6 @@ export function recordTemplateEngineTurnMetrics(runtimeMetrics, {
   if (result?.workflow) runtimeMetrics.templateEngine.workflows += 1;
   const totalFirstAudioMs = Number.isFinite(firstAudioAt) && Number.isFinite(turnStartedAt)
     ? Math.max(0, firstAudioAt - turnStartedAt) : null;
-  const targetMs = templateEngineFirstAudioTarget(result, firstAudioDeadlineMs);
   const finalAnswerReadyMs = Number.isFinite(finalResponseReadyAt)
     && Number.isFinite(turnStartedAt)
     ? Math.max(0, finalResponseReadyAt - turnStartedAt) : null;
@@ -122,25 +84,12 @@ export function recordTemplateEngineTurnMetrics(runtimeMetrics, {
       && !result?.operationalFailure
       && !result?.unexpectedFailure,
     stageTimings: Object.fromEntries(Object.entries(stageTimings).map(([stage, timing]) => [stage, { ...timing }])),
-    finalAnswerStatus: finalAnswerFirstAudioMs === null || targetMs === null
-      ? 'not_measured' : finalAnswerFirstAudioMs < targetMs ? 'passed' : 'missed',
-    firstAudioTargetMs: targetMs,
-    firstAudioStatus: totalFirstAudioMs === null || targetMs === null
-      ? 'not_measured' : totalFirstAudioMs < targetMs ? 'passed' : 'missed',
   };
-  // This baseline intentionally uses final-answer audio only. A latency
-  // acknowledgement may make the call feel responsive, but cannot satisfy
-  // the actual-answer target.
+  // Keep final-answer audio separate from optional acknowledgement audio so
+  // production measurements reflect the generated answer itself.
   sample.actualAnswerBaseline = Object.freeze({
-    targetMs: TEMPLATE_ENGINE_ACTUAL_ANSWER_TARGET_MS,
-    maximumMs: TEMPLATE_ENGINE_ACTUAL_ANSWER_MAXIMUM_MS,
     normalVerifiedRequest: sample.normalVerifiedRequest,
     actualAnswerFirstAudioMs: finalAnswerFirstAudioMs,
-    targetStatus: finalAnswerFirstAudioMs === null ? 'not_measured'
-      : finalAnswerFirstAudioMs < TEMPLATE_ENGINE_ACTUAL_ANSWER_TARGET_MS ? 'passed' : 'missed',
-    maximumStatus: finalAnswerFirstAudioMs === null || !sample.normalVerifiedRequest
-      ? 'not_measured'
-      : finalAnswerFirstAudioMs < TEMPLATE_ENGINE_ACTUAL_ANSWER_MAXIMUM_MS ? 'passed' : 'missed',
     stages: Object.freeze({
       sttFinalizationMs: Number.isFinite(sttFinalizationMs) ? Math.max(0, sttFinalizationMs) : null,
       routingMs: stageDuration(stageTimings, 'routing'),

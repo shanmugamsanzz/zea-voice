@@ -9,10 +9,6 @@ import { retrieveAgentQdrantKnowledge } from './agent-qdrant-retrieval.js';
 import { runAgentQdrantUniversalTurn } from './agent-qdrant-grounded-turn.js';
 import { buildUniversalTurnContext } from './universal-turn-context.js';
 import {
-  UNIVERSAL_TURN_LATENCY_BUDGET,
-  universalStageDeadline,
-} from './universal-turn-latency-budget.js';
-import {
   applyUniversalWorkflowResult,
   buildUniversalWorkflowDefinitions,
 } from './template-engine-universal-workflow.js';
@@ -26,38 +22,6 @@ function cleanText(value, maximum = 4_000) {
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-}
-
-async function retrieveWithinDeadline(invoke, input, turnDeadlineAt) {
-  const controller = new AbortController();
-  const upstream = input.cancellationSignal;
-  const cancelFromUpstream = () => controller.abort(upstream?.reason ?? 'turn_cancelled');
-  if (upstream?.aborted) cancelFromUpstream();
-  else upstream?.addEventListener?.('abort', cancelFromUpstream, { once: true });
-  const deadlineAt = universalStageDeadline({
-    turnDeadlineAt,
-    maximumMs: UNIVERSAL_TURN_LATENCY_BUDGET.retrievalMs,
-  });
-  let timer;
-  const timeout = new Promise((_resolve, reject) => {
-    timer = setTimeout(() => {
-      reject(new AppError(504, 'Contextual retrieval exceeded its turn budget',
-        'VOICE_RETRIEVAL_DEADLINE', {
-          maximumMs: UNIVERSAL_TURN_LATENCY_BUDGET.retrievalMs,
-        }));
-      controller.abort('retrieval_deadline');
-    }, Math.max(1, deadlineAt - Date.now()));
-    timer.unref?.();
-  });
-  try {
-    return await Promise.race([
-      Promise.resolve().then(() => invoke({ ...input, cancellationSignal: controller.signal })),
-      timeout,
-    ]);
-  } finally {
-    clearTimeout(timer);
-    upstream?.removeEventListener?.('abort', cancelFromUpstream);
-  }
 }
 
 function authenticatedRetrievalScope(input) {
@@ -267,16 +231,13 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   });
   assertCurrentTurn();
 
-  const turnDeadlineAt = Number.isFinite(Number(input.turnDeadlineAt))
-    ? Number(input.turnDeadlineAt)
-    : Date.now() + UNIVERSAL_TURN_LATENCY_BUDGET.totalFirstAudioMs;
-  const retrieval = await retrieveWithinDeadline(dependencies.retrieveQdrantKnowledge, {
+  const retrieval = await dependencies.retrieveQdrantKnowledge({
     tenantId: retrievalScope.tenantId,
     agentId: retrievalScope.agentId,
     question: input.latestUtterance,
     previousContext: conversationContext.recentConversation,
     cancellationSignal: input.cancellationSignal,
-  }, turnDeadlineAt);
+  });
   assertCurrentTurn();
 
   const retrievalArchitecture = assertQdrantFactualRetrievalArchitecture(
@@ -298,11 +259,6 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
     language: input.language,
     maximumSpeechCharacters,
     onSpeechSentence: dependencies.onSpeechSentence,
-    firstSentenceDeadlineAt: universalStageDeadline({
-      turnDeadlineAt,
-      maximumMs: UNIVERSAL_TURN_LATENCY_BUDGET.llmFirstSentenceMs,
-      reserveMs: UNIVERSAL_TURN_LATENCY_BUDGET.ttsFirstAudioMs,
-    }),
   }, { invokeStructuredLlm: llmTurn.invoke });
   assertCurrentTurn();
 

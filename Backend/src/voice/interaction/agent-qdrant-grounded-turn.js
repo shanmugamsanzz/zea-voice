@@ -207,7 +207,6 @@ export async function runAgentQdrantUniversalTurn(input = {}, overrides = {}) {
   }), 'answer_generation');
   const completion = await invokeStructuredLlm(request, {
     onSpeechSentence: input.onSpeechSentence,
-    firstSentenceDeadlineAt: input.firstSentenceDeadlineAt,
     cancellationSignal: input.cancellationSignal,
   });
   const validated = acceptDecision(completionValue(completion), retrieval.chunks,

@@ -4,19 +4,14 @@ import { env } from '../src/config/env.js';
 import { CallController } from '../src/voice/call-controller.js';
 import { configuredTtsFirstAudioTimeoutMs } from
   '../src/voice/realtime-conversation-orchestrator.js';
-import { UNIVERSAL_TURN_LATENCY_BUDGET } from
-  '../src/voice/interaction/universal-turn-latency-budget.js';
 
-assert.deepEqual(UNIVERSAL_TURN_LATENCY_BUDGET, {
-  totalFirstAudioMs: 3_000,
-  retrievalMs: 150,
-  llmFirstSentenceMs: 2_200,
-  ttsFirstAudioMs: 500,
-});
-assert.equal(configuredTtsFirstAudioTimeoutMs(), 500);
-assert.equal(configuredTtsFirstAudioTimeoutMs(275), 275);
-assert.ok(env.VOICE_RETRIEVAL_TURN_TIMEOUT_MS > env.VOICE_RETRIEVAL_TARGET_MS,
-  'The retrieval performance target must remain separate from its operational timeout');
+assert.equal(configuredTtsFirstAudioTimeoutMs(), env.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS);
+for (const removed of ['VOICE_FIRST_AUDIO_TARGET_MS', 'VOICE_TURN_FIRST_AUDIO_DEADLINE_MS',
+  'VOICE_RETRIEVAL_TARGET_MS', 'VOICE_RETRIEVAL_TURN_TIMEOUT_MS',
+  'VOICE_LLM_TURN_TIMEOUT_MS']) {
+  assert.equal(Object.hasOwn(env, removed), false,
+    `${removed} must not impose a fixed latency target`);
+}
 assert.equal(Object.hasOwn(env, 'VOICE_TTS_MAX_RESPONSE_CHARACTERS'), false,
   'Per-agent UI configuration must be the only spoken response character limit');
 assert.equal(Object.hasOwn(env, 'VOICE_LLM_MAX_OUTPUT_TOKENS'), false,
@@ -56,17 +51,17 @@ assert.match(orchestrator, /onFirstAudio/u);
 assert.match(orchestrator, /persistAudible/u);
 assert.match(orchestrator, /await this\.activeAssistantPlayback\?\.persistAudible\?\.\(reason\)/u);
 assert.match(orchestrator, /sentencePipeline\.markTranscriptCommitted\(\)/u);
-assert.match(orchestrator, /UNIVERSAL_TURN_LATENCY_BUDGET\.totalFirstAudioMs/u);
+assert.doesNotMatch(orchestrator, /UNIVERSAL_TURN_LATENCY_BUDGET/u,
+  'A fixed aggregate latency budget must not cancel normal provider work');
 assert.match(orchestrator, /TTS_FIRST_AUDIO_TIMEOUT/u);
 assert.match(orchestrator, /tts\.first_audio_fresh_connection_retry/u);
 assert.match(orchestrator, /#createLookaheadTtsAdapter\(`\$\{generationId\}-fresh-retry`\)/u);
 assert.match(orchestrator, /#primeTechnicalRecoveryAudio\(\)/u);
 assert.match(orchestrator, /tts\.cached_technical_recovery_played/u);
-assert.match(orchestrator,
-  /error\?\.code\s*===\s*'VOICE_TURN_FIRST_AUDIO_DEADLINE'[\s\S]*#playCachedTechnicalRecovery/u,
-  'Exhausting the shared budget must use cached audible recovery instead of disconnecting silently');
+assert.match(orchestrator, /env\.VOICE_TTS_FIRST_AUDIO_TIMEOUT_MS/u,
+  'TTS failure detection must use the configured provider timeout');
 
 console.log(JSON.stringify({
   success: true,
-  task: 'Bounded first-audio latency and interruption-safe transcript consistency',
+  task: 'Provider-configured latency and interruption-safe transcript consistency',
 }));

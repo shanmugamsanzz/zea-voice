@@ -26,6 +26,5 @@ console.log(JSON.stringify({
   ]),
   architecture: Object.freeze({ queryEmbeddingsPerTurn: 1, qdrantSearchesPerTurn: 1,
     maximumLlmCallsPerTurn: 1 }),
-  latencyGate: Object.freeze({ minimumLiveSamples: 20,
-    averageFinalAnswerFirstAudioMs: '<2000', normalMaximumFirstAudioMs: '<3000' }),
+  latencyReporting: Object.freeze({ measurementsOnly: true, fixedTargets: false }),
 }));

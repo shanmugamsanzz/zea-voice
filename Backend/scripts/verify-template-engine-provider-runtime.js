@@ -107,16 +107,18 @@ await assert.rejects(() => createTemplateEngineStructuredInvoker({
 })(request()), (error) => error.code === 'TEMPLATE_ENGINE_LLM_CANCELLED');
 assert.equal(cancelledAttempts, 1);
 
-let deadlineCancellation = null;
-await assert.rejects(() => createTemplateEngineStructuredInvoker({
+let obsoleteDeadlineCancellation = null;
+const unboundedFirstSentence = await createTemplateEngineStructuredInvoker({
   async *stream() {
     await new Promise((resolve) => setTimeout(resolve, 50));
     yield { type: 'text_delta', delta: JSON.stringify(response) };
+    yield { type: 'completed' };
   },
-  cancel(reason) { deadlineCancellation = reason; },
-})(request(), { firstSentenceDeadlineAt: Date.now() + 10 }),
-(error) => error.code === 'VOICE_LLM_FIRST_SENTENCE_TIMEOUT');
-assert.equal(deadlineCancellation, 'llm_first_sentence_timeout');
+  cancel(reason) { obsoleteDeadlineCancellation = reason; },
+})(request(), { firstSentenceDeadlineAt: Date.now() + 10 });
+assert.equal(unboundedFirstSentence.outputParsed.speech, response.speech);
+assert.equal(obsoleteDeadlineCancellation, null,
+  'Obsolete first-sentence targets must not cancel the configured provider request');
 
 console.log(JSON.stringify({
   suite: 'template-engine-provider-runtime', passed: true,
