@@ -3347,3 +3347,19 @@ html.dark body .zea-company-create-modal .zea-company-form-section-title {
 body .zea-company-create-modal form > .space-y-4 > div {
   border-color: var(--zea-form-divider) !important;
 }
+/* Browser Test is a separate live-console surface. Its original palette was
+   dark-only, so explicitly restore contrast when the dashboard is light. */
+html:not(.dark) .browser-agent-test-panel h2 { color: #0f172a; }
+html:not(.dark) .browser-agent-test-panel [class~="text-amber-400"] { color: #d97706; }
+html:not(.dark) .browser-agent-test-panel [class~="text-slate-400"] { color: #64748b; }
+html:not(.dark) .browser-agent-test-panel [class~="text-slate-500"] { color: #94a3b8; }
+html:not(.dark) .browser-agent-test-panel [class~="border-slate-700"] { border-color: #cbd5e1; }
+html:not(.dark) .browser-agent-test-panel [class~="bg-slate-900/60"] { background-color: #f8fafc; }
+html:not(.dark) .browser-agent-test-panel [class~="bg-slate-950"] { background-color: #ffffff; }
+html:not(.dark) .browser-agent-test-panel [class~="border-slate-800"] { border-color: #e2e8f0; }
+html:not(.dark) .browser-agent-test-panel [class~="text-slate-200"] { color: #334155; }
+html:not(.dark) .browser-agent-test-panel [class~="text-slate-300"] { color: #475569; }
+html:not(.dark) .browser-agent-test-panel [class~="text-slate-600"] { color: #475569; }
+html:not(.dark) .browser-agent-test-panel [class~="text-cyan-100/70"] { color: #155e75; }
+html:not(.dark) .browser-agent-test-panel [class~="border-cyan-500/20"] { border-color: #bae6fd; }
+html:not(.dark) .browser-agent-test-panel [class~="bg-cyan-500/5"] { background-color: #ecfeff; }
