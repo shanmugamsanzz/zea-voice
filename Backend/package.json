@@ -119,6 +119,7 @@
     "verify:unified-runtime-only": "node scripts/verify-unified-runtime-only.js",
     "verify:live-latency-transcript-hardening": "node scripts/verify-live-latency-transcript-hardening.js",
     "verify:browser-test-transport": "node scripts/verify-browser-test-session-isolation.js && node scripts/verify-browser-test-media.js && node scripts/verify-voice-task-6.js",
+    "verify:browser-test-share-links": "node scripts/verify-browser-test-share-links.js",
     "verify:tenant-regression-generator": "node scripts/verify-tenant-regression-generator.js",
     "verify:production-release-regression": "node scripts/verify-production-release-regression.js --repeats=3",
     "report:production-latency": "node scripts/build-production-latency-report.js",

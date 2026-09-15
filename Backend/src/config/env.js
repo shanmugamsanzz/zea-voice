@@ -59,6 +59,7 @@ const envSchema = z.object({
   VOICE_MEDIA_SIGNING_SECRET: z.preprocess(emptyToUndefined, z.string().min(32).optional()),
   VOICE_MEDIA_TOKEN_TTL_SECONDS: z.coerce.number().int().min(30).max(600).default(120),
   BROWSER_TEST_TOKEN_TTL_SECONDS: z.coerce.number().int().min(30).max(600).default(120),
+  BROWSER_TEST_SHARE_LINK_TTL_SECONDS: z.coerce.number().int().min(300).max(604800).default(86400),
   BROWSER_TEST_SESSION_MAX_SECONDS: z.coerce.number().int().min(60).max(7200).default(1800),
   BROWSER_TEST_MAX_CONCURRENT_PER_TENANT: z.coerce.number().int().min(1).max(100).default(3),
   VOICE_CALL_SESSION_TTL_SECONDS: z.coerce.number().int().min(60).max(86400).default(3600),

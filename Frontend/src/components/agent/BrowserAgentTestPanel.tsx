@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle, AudioLines, Clock3, LoaderCircle, Mic, MicOff, PhoneOff,
-  Play, Radio, Wrench, X,
+  Copy, Link, Play, Radio, Wrench, X,
 } from 'lucide-react';
 import { apiRequest } from '../../lib/api';
 import {
@@ -20,6 +20,11 @@ type Warning = { id: string; message: string; tone: 'warning' | 'error' };
 interface BrowserAgentTestPanelProps {
   agent: { id: string; name: string; status: string; agentUsage?: 'inbound' | 'outbound' | 'both' };
   onClose: () => void;
+  sessionClient?: {
+    create: (agent: BrowserAgentTestPanelProps['agent']) => Promise<BrowserTestSessionContract>;
+    end: (agent: BrowserAgentTestPanelProps['agent'], testCallId: string) => Promise<void>;
+  };
+  allowSharing?: boolean;
 }
 
 function elapsed(offsetMs: number) {
@@ -31,7 +36,7 @@ function milliseconds(value?: number | null) {
   return Number.isFinite(Number(value)) ? `${Math.round(Number(value))} ms` : '—';
 }
 
-export function BrowserAgentTestPanel({ agent, onClose }: BrowserAgentTestPanelProps) {
+export function BrowserAgentTestPanel({ agent, onClose, sessionClient, allowSharing = true }: BrowserAgentTestPanelProps) {
   const mediaRef = useRef<BrowserAgentMediaClient | null>(null);
   const sessionRef = useRef<BrowserTestSessionContract | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
@@ -47,6 +52,7 @@ export function BrowserAgentTestPanel({ agent, onClose }: BrowserAgentTestPanelP
   const [durationSeconds, setDurationSeconds] = useState(0);
   const [ending, setEnding] = useState(false);
   const [localRecordingUrl, setLocalRecordingUrl] = useState('');
+  const [sharedLink, setSharedLink] = useState('');
 
   const active = ['requesting_microphone', 'connecting', 'connected'].includes(state);
   const latestLatency = latencies.at(-1);
@@ -113,13 +119,13 @@ export function BrowserAgentTestPanel({ agent, onClose }: BrowserAgentTestPanelP
     setRuntimeState('starting'); setMuted(false);
     if (localRecordingUrl) { URL.revokeObjectURL(localRecordingUrl); setLocalRecordingUrl(''); }
     try {
-      const created = await apiRequest<BrowserTestSessionContract>(
-        `/agents/${agent.id}/browser-test-sessions`, {
+      const created = sessionClient
+        ? await sessionClient.create(agent)
+        : await apiRequest<BrowserTestSessionContract>(`/agents/${agent.id}/browser-test-sessions`, {
           method: 'POST', body: JSON.stringify({
             direction: agent.agentUsage === 'outbound' ? 'outbound' : 'inbound',
           }),
-        },
-      );
+        });
       sessionRef.current = created;
       setSession(created);
       const media = new BrowserAgentMediaClient();
@@ -131,7 +137,8 @@ export function BrowserAgentTestPanel({ agent, onClose }: BrowserAgentTestPanelP
       addWarning(error instanceof Error ? error.message : 'Test Agent could not start.', 'error');
       setState('failed');
       if (sessionRef.current) {
-        await apiRequest(`/agents/${agent.id}/browser-test-sessions/${sessionRef.current.testCallId}`,
+        if (sessionClient) await sessionClient.end(agent, sessionRef.current.testCallId).catch(() => undefined);
+        else await apiRequest(`/agents/${agent.id}/browser-test-sessions/${sessionRef.current.testCallId}`,
           { method: 'DELETE' }).catch(() => undefined);
       }
     }
@@ -148,7 +155,8 @@ export function BrowserAgentTestPanel({ agent, onClose }: BrowserAgentTestPanelP
         addWarning('Recording is available locally. Server recording storage requires explicit B2 upload approval.');
       }
       if (sessionRef.current) {
-        await apiRequest(`/agents/${agent.id}/browser-test-sessions/${sessionRef.current.testCallId}`,
+        if (sessionClient) await sessionClient.end(agent, sessionRef.current.testCallId);
+        else await apiRequest(`/agents/${agent.id}/browser-test-sessions/${sessionRef.current.testCallId}`,
           { method: 'DELETE' });
       }
       setRuntimeState('completed');
@@ -164,6 +172,20 @@ export function BrowserAgentTestPanel({ agent, onClose }: BrowserAgentTestPanelP
     }
   };
 
+  const share = async () => {
+    try {
+      const created = await apiRequest<{ token: string; expiresAt: string }>(
+        `/agents/${agent.id}/browser-test-share-links`, { method: 'POST', body: '{}' },
+      );
+      const link = `${window.location.origin}/test/${created.token}`;
+      setSharedLink(link);
+      await navigator.clipboard?.writeText(link);
+      addWarning('Share link copied. It expires automatically after 24 hours.');
+    } catch (error) {
+      addWarning(error instanceof Error ? error.message : 'Share link could not be created.', 'error');
+    }
+  };
+
   const statusTone = useMemo(() => state === 'connected'
     ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
     : state === 'failed' ? 'bg-red-50 text-red-700 border-red-200'
@@ -173,7 +195,7 @@ export function BrowserAgentTestPanel({ agent, onClose }: BrowserAgentTestPanelP
     <div className="flex max-h-[94vh] w-full max-w-6xl flex-col overflow-hidden rounded-3xl border border-slate-700 bg-slate-950 shadow-2xl">
       <div className="flex items-center justify-between border-b border-slate-800 px-5 py-4 sm:px-7">
         <div className="min-w-0"><div className="flex items-center gap-2"><Radio className="h-5 w-5 text-amber-400" /><h2 className="truncate text-lg font-black text-white">Test Agent</h2></div><p className="mt-1 truncate text-xs font-semibold text-slate-400">{agent.name} · same live runtime and reporting pipeline</p></div>
-        <button onClick={() => { if (active) void end().then(onClose); else onClose(); }} className="rounded-xl p-2 text-slate-400 hover:bg-slate-800 hover:text-white"><X className="h-5 w-5" /></button>
+        <div className="flex items-center gap-2">{allowSharing && <button onClick={() => void share()} className="inline-flex items-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-[10px] font-black text-slate-200 hover:bg-slate-800"><Link className="h-3.5 w-3.5" />Share test</button>}<button onClick={() => { if (active) void end().then(onClose); else onClose(); }} className="rounded-xl p-2 text-slate-400 hover:bg-slate-800 hover:text-white"><X className="h-5 w-5" /></button></div>
       </div>
 
       <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,1fr)_320px]">
@@ -194,6 +216,7 @@ export function BrowserAgentTestPanel({ agent, onClose }: BrowserAgentTestPanelP
               <button disabled={ending} onClick={() => void end()} className="inline-flex items-center gap-2 rounded-xl bg-red-500 px-5 py-3 text-xs font-black text-white hover:bg-red-400 disabled:opacity-50">{ending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <PhoneOff className="h-4 w-4" />}End</button>
             </>}
             {localRecordingUrl && <a href={localRecordingUrl} download={`browser-test-${agent.id}.webm`} className="rounded-xl border border-slate-700 px-4 py-3 text-xs font-bold text-slate-300 hover:bg-slate-800">Download local recording</a>}
+            {sharedLink && <button onClick={() => void navigator.clipboard?.writeText(sharedLink)} className="inline-flex items-center gap-2 rounded-xl border border-slate-700 px-4 py-3 text-xs font-black text-slate-200 hover:bg-slate-800"><Copy className="h-4 w-4" />Copy share link</button>}
           </div>
         </section>
 
