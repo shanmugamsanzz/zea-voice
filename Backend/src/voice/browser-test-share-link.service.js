@@ -36,18 +36,24 @@ async function resolveBrowserTestShareLink(token) {
   if (!/^[A-Za-z0-9_-]{32,128}$/u.test(value)) {
     throw new AppError(404, 'Shared browser test link is unavailable', 'BROWSER_TEST_SHARE_LINK_UNAVAILABLE');
   }
-  return withAuthServiceContext(async (client) => {
-    const found = await client.query(`SELECT link.*,agent.name AS agent_name,agent.status AS agent_status,
-      agent.usage_direction FROM browser_test_share_links link
-      JOIN voice_agents agent ON agent.id=link.agent_id AND agent.tenant_id=link.tenant_id
-        AND agent.workspace_id=link.workspace_id
-      WHERE link.token_hash=$1 AND link.revoked_at IS NULL AND link.expires_at > now()
-        AND agent.deleted_at IS NULL`, [hash(value)]);
-    if (!found.rowCount || found.rows[0].agent_status !== 'active') {
+  const link = await withAuthServiceContext(async (client) => {
+    const found = await client.query(`SELECT * FROM browser_test_share_links
+      WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at > now()
+        `, [hash(value)]);
+    if (!found.rowCount) throw new AppError(404, 'Shared browser test link is unavailable', 'BROWSER_TEST_SHARE_LINK_UNAVAILABLE');
+    return found.rows[0];
+  });
+  const resolved = await withTenantContext(linkAuth(link), async (client) => {
+    const agent = await client.query(`SELECT name,status,usage_direction FROM voice_agents
+      WHERE id=$1 AND tenant_id=$2 AND workspace_id=$3 AND deleted_at IS NULL`,
+    [link.agent_id, link.tenant_id, link.workspace_id]);
+    if (!agent.rowCount || agent.rows[0].status !== 'active') {
       throw new AppError(404, 'Shared browser test link is unavailable', 'BROWSER_TEST_SHARE_LINK_UNAVAILABLE');
     }
-    return Object.freeze({ token: value, link: found.rows[0] });
+    return Object.freeze({ ...link, agent_name: agent.rows[0].name,
+      agent_status: agent.rows[0].status, usage_direction: agent.rows[0].usage_direction });
   });
+  return Object.freeze({ token: value, link: resolved });
 }
 
 export async function getPublicBrowserTestShareLink(token) {
