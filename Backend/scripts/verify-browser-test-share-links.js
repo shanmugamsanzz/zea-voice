@@ -5,7 +5,7 @@ const root = new URL('..', import.meta.url);
 const read = (path) => readFile(new URL(path, root), 'utf8');
 
 const [migration, service, publicRoutes, app, panel, publicView] = await Promise.all([
-  read('migrations/202609150001_browser-test-share-links.js'),
+  read('migrations/1787800000000_browser-test-share-links.js'),
   read('src/voice/browser-test-share-link.service.js'),
   read('src/voice/browser-test-share-link.routes.js'),
   read('src/app.js'),
