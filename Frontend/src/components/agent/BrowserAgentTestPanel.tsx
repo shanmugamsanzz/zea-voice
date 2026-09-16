@@ -53,6 +53,7 @@ export function BrowserAgentTestPanel({ agent, onClose, sessionClient, allowShar
   const [ending, setEnding] = useState(false);
   const [localRecordingUrl, setLocalRecordingUrl] = useState('');
   const [sharedLink, setSharedLink] = useState('');
+  const [shareOptionsOpen, setShareOptionsOpen] = useState(false);
 
   const active = ['requesting_microphone', 'connecting', 'connected'].includes(state);
   const latestLatency = latencies.at(-1);
@@ -172,15 +173,18 @@ export function BrowserAgentTestPanel({ agent, onClose, sessionClient, allowShar
     }
   };
 
-  const share = async () => {
+  const share = async (expiresIn: '24_hours' | 'permanent') => {
     try {
-      const created = await apiRequest<{ token: string; expiresAt: string }>(
-        `/agents/${agent.id}/browser-test-share-links`, { method: 'POST', body: '{}' },
+      const created = await apiRequest<{ token: string; expiresAt: string | null; permanent: boolean }>(
+        `/agents/${agent.id}/browser-test-share-links`, {
+          method: 'POST', body: JSON.stringify({ expiresIn }),
+        },
       );
       const link = `${window.location.origin}/test/${created.token}`;
       setSharedLink(link);
+      setShareOptionsOpen(false);
       await navigator.clipboard?.writeText(link);
-      addWarning('Share link copied. It expires automatically after 24 hours.');
+      addWarning(created.permanent ? 'Permanent share link copied.' : '24-hour share link copied.');
     } catch (error) {
       addWarning(error instanceof Error ? error.message : 'Share link could not be created.', 'error');
     }
@@ -195,7 +199,7 @@ export function BrowserAgentTestPanel({ agent, onClose, sessionClient, allowShar
     <div className="browser-agent-test-panel flex max-h-[94vh] w-full max-w-6xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-950">
       <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800 sm:px-7">
         <div className="min-w-0"><div className="flex items-center gap-2"><Radio className="h-5 w-5 text-amber-400" /><h2 className="truncate text-lg font-black text-white">Test Agent</h2></div><p className="mt-1 truncate text-xs font-semibold text-slate-400">{agent.name} · same live runtime and reporting pipeline</p></div>
-        <div className="flex items-center gap-2">{allowSharing && <button onClick={() => void share()} className="inline-flex items-center gap-2 rounded-xl border border-slate-300 px-3 py-2 text-[10px] font-black text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"><Link className="h-3.5 w-3.5" />Share test</button>}<button onClick={() => { if (active) void end().then(onClose); else onClose(); }} className="rounded-xl p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white"><X className="h-5 w-5" /></button></div>
+        <div className="flex items-center gap-2">{allowSharing && <div className="relative"><button onClick={() => setShareOptionsOpen((current) => !current)} className="inline-flex items-center gap-2 rounded-xl border border-slate-300 px-3 py-2 text-[10px] font-black text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"><Link className="h-3.5 w-3.5" />Share test</button>{shareOptionsOpen && <div className="absolute right-0 top-11 z-10 w-56 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl dark:border-slate-700 dark:bg-slate-900"><p className="px-2 pb-2 pt-1 text-[10px] font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">Choose link expiry</p><button onClick={() => void share('24_hours')} className="w-full rounded-xl px-3 py-2 text-left text-xs font-bold text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800">24-hour link<span className="mt-0.5 block text-[10px] font-medium text-slate-400">Expires automatically</span></button><button onClick={() => void share('permanent')} className="mt-1 w-full rounded-xl px-3 py-2 text-left text-xs font-bold text-slate-700 hover:bg-amber-50 dark:text-slate-200 dark:hover:bg-amber-500/10">Permanent link<span className="mt-0.5 block text-[10px] font-medium text-slate-400">Stays active while this agent is active</span></button></div>}</div>}<button onClick={() => { if (active) void end().then(onClose); else onClose(); }} className="rounded-xl p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white"><X className="h-5 w-5" /></button></div>
       </div>
 
       <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,1fr)_320px]">

@@ -17,10 +17,10 @@ async function publicRequest<T>(path: string, init: RequestInit = {}) {
 }
 
 export function PublicBrowserAgentTestView({ shareToken }: { shareToken: string }) {
-  const [details, setDetails] = useState<{ agent: { id: string; name: string; status: string; agentUsage?: 'inbound' | 'outbound' | 'both' }; expiresAt: string } | null>(null);
+  const [details, setDetails] = useState<{ agent: { id: string; name: string; status: string; agentUsage?: 'inbound' | 'outbound' | 'both' }; expiresAt: string | null; permanent: boolean } | null>(null);
   const [error, setError] = useState('');
   useEffect(() => {
-    void publicRequest<{ agent: { id: string; name: string; status: string; agentUsage?: 'inbound' | 'outbound' | 'both' }; expiresAt: string }>(
+    void publicRequest<{ agent: { id: string; name: string; status: string; agentUsage?: 'inbound' | 'outbound' | 'both' }; expiresAt: string | null; permanent: boolean }>(
       `/public/browser-test-links/${encodeURIComponent(shareToken)}`,
     ).then(setDetails).catch((reason) => setError(reason instanceof Error ? reason.message : 'This shared test link is unavailable.'));
   }, [shareToken]);

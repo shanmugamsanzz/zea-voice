@@ -10,18 +10,19 @@ const tokenValue = () => crypto.randomBytes(32).toString('base64url');
 function publicLink(row, token = null) {
   return Object.freeze({
     id: row.id, agentId: row.agent_id, expiresAt: row.expires_at,
-    revokedAt: row.revoked_at, ...(token ? { token } : {}),
+    permanent: row.expires_at == null, revokedAt: row.revoked_at, ...(token ? { token } : {}),
   });
 }
 
-export async function createBrowserTestShareLink(auth, agentId) {
+export async function createBrowserTestShareLink(auth, agentId, input = {}) {
   return withTenantContext(auth, async (client) => {
     const agent = await client.query(`SELECT id FROM voice_agents
       WHERE id=$1 AND tenant_id=$2 AND workspace_id=$3 AND status='active' AND deleted_at IS NULL`,
     [agentId, auth.tenantId, auth.workspaceId]);
     if (!agent.rowCount) throw new AppError(404, 'Agent was not found', 'BROWSER_TEST_AGENT_NOT_FOUND');
     const token = tokenValue();
-    const expiresAt = new Date(Date.now() + env.BROWSER_TEST_SHARE_LINK_TTL_SECONDS * 1000);
+    const expiresAt = input.expiresIn === 'permanent'
+      ? null : new Date(Date.now() + env.BROWSER_TEST_SHARE_LINK_TTL_SECONDS * 1000);
     const inserted = await client.query(`INSERT INTO browser_test_share_links
       (id,tenant_id,workspace_id,agent_id,created_by_user_id,token_hash,expires_at)
       VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *`, [
@@ -38,7 +39,7 @@ async function resolveBrowserTestShareLink(token) {
   }
   const link = await withAuthServiceContext(async (client) => {
     const found = await client.query(`SELECT * FROM browser_test_share_links
-      WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at > now()
+      WHERE token_hash=$1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())
         `, [hash(value)]);
     if (!found.rowCount) throw new AppError(404, 'Shared browser test link is unavailable', 'BROWSER_TEST_SHARE_LINK_UNAVAILABLE');
     return found.rows[0];
@@ -61,7 +62,7 @@ export async function getPublicBrowserTestShareLink(token) {
   return Object.freeze({
     agent: Object.freeze({ id: link.agent_id, name: link.agent_name, status: link.agent_status,
       agentUsage: link.usage_direction }),
-    expiresAt: link.expires_at,
+    expiresAt: link.expires_at, permanent: link.expires_at == null,
   });
 }
 

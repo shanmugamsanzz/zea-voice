@@ -3,7 +3,7 @@ export const resourceAgentIdSchema=z.object({agentId:z.string().uuid()});
 export const resourceIdSchema=z.object({resourceId:z.string().uuid()});
 export const browserTestSessionParamsSchema=z.object({agentId:z.string().uuid(),testCallId:z.string().uuid().optional()});
 export const createBrowserTestSessionSchema=z.object({direction:z.enum(['inbound','outbound']).optional()}).strict();
-export const createBrowserTestShareLinkSchema=z.object({}).strict();
+export const createBrowserTestShareLinkSchema=z.object({expiresIn:z.enum(['24_hours','permanent']).default('24_hours')}).strict();
 const toolInputPropertySchema=z.object({type:z.enum(['string','number','integer','boolean','array','object']).optional()}).passthrough();
 const toolInputSchema=z.object({
   type:z.literal('object').default('object'),
