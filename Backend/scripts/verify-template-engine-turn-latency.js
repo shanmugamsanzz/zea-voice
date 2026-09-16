@@ -157,6 +157,15 @@ assert.match(orchestrator,
 assert.match(orchestrator,
   /streamedFinalSentenceCount\s*===\s*0\s*&&\s*!sentencePipeline\.enqueue\(finalAnswer\)/u,
   'Whole-answer enqueue must remain only as a non-streaming provider fallback');
+assert.match(orchestrator,
+  /streamedFinalSentenceCount\s*>\s*0[\s\S]*template_engine\.streamed_speech_preserved_after_failure/u,
+  'A provider failure after streamed speech must preserve that speech instead of adding recovery audio');
+assert.match(orchestrator,
+  /preserveStreamedSpeech:\s*true/u,
+  'An incomplete streamed result must explicitly prevent final-answer or recovery enqueue');
+assert.match(orchestrator,
+  /streamedSpeechPreservedAfterFailure\s*\?[\s\S]*''[\s\S]*:\s*this\.#fitTtsMessage/u,
+  'Only a completed LLM result may create additional final-answer audio');
 assert.ok(orchestrator.indexOf('sentencePipeline.enqueue(finalAnswer)')
   < orchestrator.indexOf('const factualAnswerSources = templateEngineMessageSources(result'),
   'Source formatting must not delay fallback answer audio startup');

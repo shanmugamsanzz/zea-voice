@@ -64,7 +64,11 @@ interface CallRecord {
   currency: string;
   recordingAvailable: boolean;
   runtimeObservability: {
-    turnLatency: Array<{ epoch?: number; retrievalMs?: number; llmMs?: number; totalFirstAudioMs?: number; firstAudioStatus?: string }>;
+    turnLatency: Array<{
+      epoch?: number; retrievalMs?: number; llmMs?: number;
+      totalFirstAudioMs?: number; finalAnswerFirstAudioMs?: number;
+      normalVerifiedRequest?: boolean; firstAudioStatus?: string;
+    }>;
     tools: Array<{ name?: string; success?: boolean; durationMs?: number }>;
     providerFailures: Record<string, number> | null;
   } | null;
@@ -155,8 +159,20 @@ function finiteMetricRange<T extends Record<string, unknown>>(values: T[], field
   const samples = values
     .map((value) => Number(value[field]))
     .filter((value) => Number.isFinite(value) && value >= 0);
-  if (!samples.length) return { minimum: null, maximum: null };
-  return { minimum: Math.min(...samples), maximum: Math.max(...samples) };
+  if (!samples.length) return { minimum: null, maximum: null, average: null };
+  return {
+    minimum: Math.min(...samples),
+    maximum: Math.max(...samples),
+    average: samples.reduce((total, value) => total + value, 0) / samples.length,
+  };
+}
+
+function answerResponseLatency(turns: NonNullable<CallRecord['runtimeObservability']>['turnLatency']) {
+  // Progress acknowledgements and technical recovery audio are not answers.
+  return finiteMetricRange(
+    turns.filter((turn) => turn.normalVerifiedRequest !== false),
+    'finalAnswerFirstAudioMs',
+  );
 }
 
 function knowledgeRecordDescription(source: MessageSource) {
@@ -614,10 +630,11 @@ export function DeveloperReportsView({
         {selected.runtimeObservability && <div className="rounded-2xl border border-slate-200 bg-white p-5"><h4 className="text-sm font-black text-slate-800">Runtime Observability</h4><div className="mt-4 grid grid-cols-2 gap-3">{[
           ['Measured turns', selected.runtimeObservability.turnLatency.length],
           ['Tool executions', selected.runtimeObservability.tools.length],
-          ['Latest first audio', milliseconds(latestFiniteMetric(selected.runtimeObservability.turnLatency, 'totalFirstAudioMs'))],
+          ['Latest response latency', milliseconds(latestFiniteMetric(selected.runtimeObservability.turnLatency.filter((turn) => turn.normalVerifiedRequest !== false), 'finalAnswerFirstAudioMs'))],
           ['Latest retrieval', milliseconds(latestFiniteMetric(selected.runtimeObservability.turnLatency, 'retrievalMs'))],
-          ['Lowest first audio', milliseconds(finiteMetricRange(selected.runtimeObservability.turnLatency, 'totalFirstAudioMs').minimum)],
-          ['Highest first audio', milliseconds(finiteMetricRange(selected.runtimeObservability.turnLatency, 'totalFirstAudioMs').maximum)],
+          ['Lowest response latency', milliseconds(answerResponseLatency(selected.runtimeObservability.turnLatency).minimum)],
+          ['Highest response latency', milliseconds(answerResponseLatency(selected.runtimeObservability.turnLatency).maximum)],
+          ['Average response latency', milliseconds(answerResponseLatency(selected.runtimeObservability.turnLatency).average)],
         ].map(([label, value]) => <div key={label} className="rounded-xl bg-slate-50 p-3"><p className="text-[8px] font-black uppercase text-slate-400">{label}</p><p className="mt-1 text-xs font-black text-slate-700">{value}</p></div>)}</div>{selected.runtimeObservability.tools.length > 0 && <div className="mt-4 space-y-2">{selected.runtimeObservability.tools.map((tool, index) => <div key={`${tool.name}-${index}`} className={`flex items-center justify-between rounded-xl border p-3 text-xs font-bold ${tool.success ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-800'}`}><span>{tool.name || 'Configured tool'}</span><span>{tool.success ? 'Verified success' : 'Not verified'} · {milliseconds(tool.durationMs)}</span></div>)}</div>}</div>}
         {false && <>
         <div className="rounded-2xl border border-slate-200 bg-white p-5"><div className="mb-4 flex items-center justify-between"><h4 className="text-sm font-black text-slate-800">Transcript</h4><span className="rounded-full bg-slate-100 px-2 py-1 text-[9px] font-black uppercase text-slate-500">{selected.transcript?.length ?? 0} entries</span></div>{selected.transcript?.length ? <div className="space-y-4">{selected.transcript.map((entry) => <div key={entry.id} className={`flex flex-col ${entry.speaker === 'agent' ? 'items-end' : 'items-start'}`}><span className="mb-1 text-[9px] font-black uppercase tracking-wider text-slate-400">{entry.speaker} · {elapsed(entry.offsetMs)}</span><div className={`max-w-[88%] rounded-2xl px-4 py-3 text-xs font-semibold leading-relaxed ${entry.speaker === 'agent' ? 'rounded-tr-none bg-gradient-to-r from-violet-600 to-amber-500 text-white' : entry.speaker === 'system' ? 'border border-amber-200 bg-amber-50 text-amber-800' : 'rounded-tl-none border border-slate-200 bg-slate-50 text-slate-800'}`}>{entry.text}</div></div>)}</div> : <p className="py-8 text-center text-xs font-semibold text-slate-400">No finalized transcript entries were saved for this call.</p>}</div>

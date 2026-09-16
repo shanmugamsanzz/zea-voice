@@ -2056,6 +2056,7 @@ export class RealtimeConversationOrchestrator {
     let finalResponseQueuedAt = null;
     let acknowledgementAtReady = null;
     let streamedFinalSentenceCount = 0;
+    let streamedSpeechPreservedAfterFailure = false;
     const retrievalAbortController = new AbortController();
     this.activeRetrievalAbortController = retrievalAbortController;
     try {
@@ -2213,6 +2214,33 @@ export class RealtimeConversationOrchestrator {
           await this.controller.interrupt('template_engine_action_blocked');
         }
         return;
+      } else if (streamedFinalSentenceCount > 0) {
+        // Streaming speech is already caller-facing work. A provider can fail
+        // while closing its response after one or more complete sentences have
+        // entered TTS; appending recovery speech in that case produces the
+        // confusing "technical problem" + valid answer combination. Preserve
+        // the queued speech, but do not accept state, tools, or call-control
+        // from an incomplete structured response.
+        streamedSpeechPreservedAfterFailure = true;
+        if (errorKind === 'operational') this.#recordProviderFailure('llm', error, 'template_engine.turn');
+        this.log.warn({
+          err: error,
+          stage: 'template_engine.streamed_speech_preserved_after_failure',
+          callId: this.call.id,
+          turnEpoch: epoch,
+          errorKind,
+          streamedSentenceCount: streamedFinalSentenceCount,
+        }, 'LLM failure occurred after caller-facing speech entered TTS; technical recovery was suppressed');
+        result = {
+          speech: '',
+          state: this.templateEngineState,
+          evidence: [], evidenceIds: [], toolExecuted: false,
+          llmInvocationCount: templateEngineLlmInvocations,
+          ...(errorKind === 'operational'
+            ? { operationalFailure: error.code ?? 'TEMPLATE_ENGINE_OPERATIONAL_FAILURE' }
+            : { unexpectedFailure: error.code ?? 'TEMPLATE_ENGINE_UNEXPECTED_FAILURE' }),
+          preserveStreamedSpeech: true,
+        };
       } else if (errorKind === 'operational') {
         this.#recordProviderFailure('llm', error, 'template_engine.turn');
         this.log.error({
@@ -2276,9 +2304,11 @@ export class RealtimeConversationOrchestrator {
       architecture: result.diagnostics?.architecture,
       stageTimings,
     });
-    const finalAnswer = this.#fitTtsMessage(result.speech, { preserveGeneratedSpeech: true });
-    if (!finalAnswer
-      || (streamedFinalSentenceCount === 0 && !sentencePipeline.enqueue(finalAnswer))) {
+    const finalAnswer = streamedSpeechPreservedAfterFailure
+      ? '' : this.#fitTtsMessage(result.speech, { preserveGeneratedSpeech: true });
+    if ((!streamedSpeechPreservedAfterFailure && !finalAnswer)
+      || (!streamedSpeechPreservedAfterFailure
+        && streamedFinalSentenceCount === 0 && !sentencePipeline.enqueue(finalAnswer))) {
       sentencePipeline.cancel();
       throw new AppError(503, 'The template-engine response could not be queued for speech',
         'VOICE_FINAL_RESPONSE_NOT_QUEUED');
