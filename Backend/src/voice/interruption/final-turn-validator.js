@@ -65,3 +65,16 @@ export function validateFinalCustomerTurn({
   }
   return { accepted: true, text: finalText, confidence: resolvedConfidence, wordCount: finalTokens.length };
 }
+
+// Call-check phrases intentionally require an exact completed-turn match. A
+// common word such as "hello" inside a genuine question must still follow the
+// normal contextual Qdrant → LLM route.
+export function exactConfiguredPhrase(text, phrases = []) {
+  const source = normalized(text).toLocaleLowerCase();
+  if (!source) return null;
+  for (const value of Array.isArray(phrases) ? phrases : []) {
+    const phrase = normalized(value).toLocaleLowerCase();
+    if (phrase && source === phrase) return String(value).trim();
+  }
+  return null;
+}

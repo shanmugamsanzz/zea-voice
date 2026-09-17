@@ -162,6 +162,7 @@ const sttSettingKeys = [
   'timeBasedInterruptionEnabled', 'wordBasedInterruptionEnabled',
   'speechConfirmationDelayMs', 'minimumMeaningfulWords',
   'acknowledgementPhrases', 'explicitStopPhrases',
+  'callCheckPhrases', 'callCheckResponse',
   'wordInterruptionMinWords', 'wordInterruptionTriggerWords', 'interruptionPolicy',
   'sttHighVadSensitivity', 'sttVadSignals', 'sttFlushSignal',
   'sttPositiveSpeechThreshold', 'sttNegativeSpeechThreshold', 'sttMinSpeechFrames',

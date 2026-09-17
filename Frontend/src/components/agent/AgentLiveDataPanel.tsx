@@ -17,6 +17,26 @@ const columnLabel = (index: number) => {
   return label;
 };
 
+const parseClipboardGrid = (rawValue: string) => {
+  const source = String(rawValue ?? '').replace(/\r\n?/gu, '\n').replace(/\n+$/u, '');
+  if (!source) return [];
+  if (source.includes('\t')) return source.split('\n').map((line) => line.split('\t'));
+  // Spreadsheet applications normally provide tab-delimited clipboard text.
+  // This small CSV parser also supports copied CSV files, including commas in
+  // quoted values, without asking the user to reformat their data.
+  const rows: string[][] = [[]]; let value = ''; let quoted = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index]; const next = source[index + 1];
+    if (character === '"' && quoted && next === '"') { value += '"'; index += 1; }
+    else if (character === '"') quoted = !quoted;
+    else if (character === ',' && !quoted) { rows.at(-1)?.push(value); value = ''; }
+    else if (character === '\n' && !quoted) { rows.at(-1)?.push(value); rows.push([]); value = ''; }
+    else value += character;
+  }
+  rows.at(-1)?.push(value);
+  return rows;
+};
+
 export function AgentLiveDataPanel({ agentId }: { agentId: string }) {
   const [tables, setTables] = useState<ApiTable[]>([]);
   const [selectedId, setSelectedId] = useState('');
@@ -68,6 +88,37 @@ export function AgentLiveDataPanel({ agentId }: { agentId: string }) {
       if (row === next.length - 1) next.push(Array.from({ length: columns.length + (addColumn ? 1 : 0) }, () => ''));
       return next;
     });
+  };
+  const pasteGrid = (startRow: number, startColumn: number, rawValue: string) => {
+    const pasted = parseClipboardGrid(rawValue);
+    if (!pasted.length || !pasted.some((row) => row.length)) return;
+    const pastedWidth = Math.max(...pasted.map((row) => row.length));
+    const requiredColumns = Math.max(columns.length, startColumn + pastedWidth);
+    const requiredRows = Math.max(cells.length, startRow + pasted.length + 1);
+    if (requiredColumns > columns.length) {
+      setColumns((current) => [...current, ...Array.from(
+        { length: requiredColumns - current.length },
+        (_, index) => ({ id: `draft_${current.length + index}`, name: '', dataType: 'text' as ColumnType }),
+      )]);
+    }
+    setCells((current) => {
+      const next = current.map((row) => [...row, ...Array(Math.max(0, requiredColumns - row.length)).fill('')]);
+      while (next.length < requiredRows) next.push(Array(requiredColumns).fill(''));
+      pasted.forEach((row, rowOffset) => row.forEach((value, columnOffset) => {
+        next[startRow + rowOffset][startColumn + columnOffset] = value;
+      }));
+      return next;
+    });
+    setActive({ row: startRow + pasted.length - 1, column: startColumn + pastedWidth - 1 });
+    setNotice(`${pasted.length} row${pasted.length === 1 ? '' : 's'} and ${pastedWidth} column${pastedWidth === 1 ? '' : 's'} pasted. Select Save Changes to sync.`);
+  };
+  const pasteFromClipboard = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      pasteGrid(active.row, active.column, text);
+    } catch {
+      setError('Clipboard access was blocked. Click a cell and press Ctrl+V (or Cmd+V on Mac).');
+    }
   };
   const addColumn = () => { setColumns((current) => [...current, { id: `draft_${current.length}`, name: '', dataType: 'text' }]); setCells((current) => current.map((row) => [...row, ''])); };
   const addRow = () => setCells((current) => [...current, Array.from({ length: columns.length }, () => '')]);
@@ -128,9 +179,9 @@ export function AgentLiveDataPanel({ agentId }: { agentId: string }) {
     {error && <div className="flex gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-700"><AlertCircle className="h-4 w-4 shrink-0" />{error}</div>}{notice && <div className="flex gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs font-semibold text-emerald-700"><CheckCircle2 className="h-4 w-4 shrink-0" />{notice}</div>}
     <div className="flex gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3"><input value={newName} onChange={(event) => setNewName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void createSheet(); }} placeholder="New spreadsheet name" className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold outline-none focus:border-emerald-500" /><button type="button" onClick={() => void createSheet()} disabled={saving || !newName.trim()} className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-xs font-black text-white hover:bg-emerald-700 disabled:opacity-50"><Plus className="h-4 w-4" />New sheet</button></div>
     {loading ? <div className="h-64 animate-pulse rounded-xl bg-slate-100" /> : !tables.length ? <div className="rounded-xl border border-dashed border-slate-300 p-12 text-center text-sm font-semibold text-slate-500">Create a spreadsheet to begin.</div> : <><div className="flex flex-wrap gap-1 border-b border-slate-200 pb-2">{tables.map((table) => <button key={table.id} type="button" onClick={() => setSelectedId(table.id)} className={`rounded-t-lg px-4 py-2 text-xs font-black ${table.id === selectedId ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{table.name}</button>)}</div>{selected && <div className="overflow-hidden rounded-xl border border-slate-300 bg-white">
-      <div className="flex flex-wrap items-center gap-2 border-b border-slate-300 bg-slate-50 px-3 py-2"><span className="mr-auto text-xs font-black text-slate-700">{selected.name}</span><span title={selected.sync?.error ?? undefined} className={`rounded-full px-2 py-1 text-[9px] font-black uppercase ${selected.sync?.status === 'synced' ? 'bg-emerald-100 text-emerald-700' : selected.sync?.status === 'failed' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>Index {selected.sync?.status ?? 'pending'}</span><button type="button" onClick={addColumn} className="rounded border border-slate-300 bg-white px-2.5 py-1.5 text-[10px] font-bold text-slate-600 hover:bg-slate-100">+ Column</button><button type="button" onClick={addRow} className="rounded border border-slate-300 bg-white px-2.5 py-1.5 text-[10px] font-bold text-slate-600 hover:bg-slate-100">+ Row</button><button type="button" onClick={deleteActiveColumn} disabled={!columns.length} className="inline-flex items-center gap-1 rounded border border-red-200 bg-white px-2.5 py-1.5 text-[10px] font-bold text-red-600 hover:bg-red-50 disabled:opacity-50"><Trash2 className="h-3 w-3" />Column</button><button type="button" onClick={deleteActiveRow} disabled={!cells.length} className="inline-flex items-center gap-1 rounded border border-red-200 bg-white px-2.5 py-1.5 text-[10px] font-bold text-red-600 hover:bg-red-50 disabled:opacity-50"><Trash2 className="h-3 w-3" />Row</button><button type="button" onClick={() => void deleteSheet()} disabled={saving} className="inline-flex items-center gap-1 rounded border border-red-300 bg-red-50 px-2.5 py-1.5 text-[10px] font-black text-red-700 hover:bg-red-100 disabled:opacity-50"><Trash2 className="h-3 w-3" />Sheet</button><button type="button" disabled={saving} onClick={() => void saveGrid()} className="inline-flex items-center gap-1.5 rounded bg-emerald-600 px-3 py-1.5 text-[10px] font-black text-white hover:bg-emerald-700 disabled:opacity-50"><Save className="h-3.5 w-3.5" />Save changes</button></div>
-      <div className="max-h-[600px] overflow-auto bg-white"><table className="border-separate border-spacing-0 text-xs"><thead className="sticky top-0 z-20"><tr><th className="sticky left-0 z-30 h-7 min-w-11 border-b border-r border-slate-300 bg-slate-100" />{columns.map((_, index) => <th key={index} onClick={(event) => toggleSelection(index, setSelectedColumns, event)} className={`h-7 min-w-24 cursor-pointer border-b border-r border-slate-300 bg-slate-100 text-center text-[10px] font-bold ${selectedColumns.includes(index) || active.column === index ? 'bg-emerald-100 text-emerald-800' : 'text-slate-500 hover:bg-slate-200'}`}><span className="inline-flex items-center gap-1">{columnLabel(index)}{selectedColumns.includes(index) && <Check className="h-3 w-3 stroke-[3]" />}</span></th>)}</tr></thead><tbody>{Array.from({ length: gridRows }, (_, row) => <tr key={row}><th onClick={(event) => toggleSelection(row, setSelectedRows, event)} className={`sticky left-0 z-10 h-8 min-w-11 cursor-pointer border-b border-r border-slate-300 bg-slate-100 text-center text-[10px] font-bold ${selectedRows.includes(row) || active.row === row ? 'bg-emerald-100 text-emerald-800' : 'text-slate-500 hover:bg-slate-200'}`}><span className="inline-flex items-center gap-0.5">{row + 1}{selectedRows.includes(row) && <Check className="h-3 w-3 stroke-[3]" />}</span></th>{columns.map((_, column) => <td key={column} className={`h-8 min-w-24 border-b border-r border-slate-200 p-0 ${active.row === row && active.column === column ? 'ring-2 ring-inset ring-emerald-600' : ''}`}><input id={`live-cell-${row}-${column}`} value={cells[row]?.[column] ?? ''} onFocus={() => setActive({ row, column })} onChange={(event) => updateCell(row, column, event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); document.getElementById(`live-cell-${Math.min(row + 1, gridRows - 1)}-${column}`)?.focus(); } }} className="h-full w-full min-w-24 bg-transparent px-2 text-xs text-slate-800 outline-none" aria-label={`Cell ${columnLabel(column)}${row + 1}`} /></td>)}</tr>)}</tbody></table></div>
-      <div className="border-t border-slate-200 bg-slate-50 px-3 py-2 text-[10px] font-semibold text-slate-500">Type into any empty cell. The grid grows automatically when you use the last row or column.</div>
+      <div className="flex flex-wrap items-center gap-2 border-b border-slate-300 bg-slate-50 px-3 py-2"><span className="mr-auto text-xs font-black text-slate-700">{selected.name}</span><span title={selected.sync?.error ?? undefined} className={`rounded-full px-2 py-1 text-[9px] font-black uppercase ${selected.sync?.status === 'synced' ? 'bg-emerald-100 text-emerald-700' : selected.sync?.status === 'failed' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>Index {selected.sync?.status ?? 'pending'}</span><button type="button" onClick={() => void pasteFromClipboard()} className="rounded border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-[10px] font-bold text-emerald-700 hover:bg-emerald-100">Paste table</button><button type="button" onClick={addColumn} className="rounded border border-slate-300 bg-white px-2.5 py-1.5 text-[10px] font-bold text-slate-600 hover:bg-slate-100">+ Column</button><button type="button" onClick={addRow} className="rounded border border-slate-300 bg-white px-2.5 py-1.5 text-[10px] font-bold text-slate-600 hover:bg-slate-100">+ Row</button><button type="button" onClick={deleteActiveColumn} disabled={!columns.length} className="inline-flex items-center gap-1 rounded border border-red-200 bg-white px-2.5 py-1.5 text-[10px] font-bold text-red-600 hover:bg-red-50 disabled:opacity-50"><Trash2 className="h-3 w-3" />Column</button><button type="button" onClick={deleteActiveRow} disabled={!cells.length} className="inline-flex items-center gap-1 rounded border border-red-200 bg-white px-2.5 py-1.5 text-[10px] font-bold text-red-600 hover:bg-red-50 disabled:opacity-50"><Trash2 className="h-3 w-3" />Row</button><button type="button" onClick={() => void deleteSheet()} disabled={saving} className="inline-flex items-center gap-1 rounded border border-red-300 bg-red-50 px-2.5 py-1.5 text-[10px] font-black text-red-700 hover:bg-red-100 disabled:opacity-50"><Trash2 className="h-3 w-3" />Sheet</button><button type="button" disabled={saving} onClick={() => void saveGrid()} className="inline-flex items-center gap-1.5 rounded bg-emerald-600 px-3 py-1.5 text-[10px] font-black text-white hover:bg-emerald-700 disabled:opacity-50"><Save className="h-3.5 w-3.5" />Save changes</button></div>
+      <div className="max-h-[600px] overflow-auto bg-white"><table className="border-separate border-spacing-0 text-xs"><thead className="sticky top-0 z-20"><tr><th className="sticky left-0 z-30 h-7 min-w-11 border-b border-r border-slate-300 bg-slate-100" />{columns.map((_, index) => <th key={index} onClick={(event) => toggleSelection(index, setSelectedColumns, event)} className={`h-7 min-w-24 cursor-pointer border-b border-r border-slate-300 bg-slate-100 text-center text-[10px] font-bold ${selectedColumns.includes(index) || active.column === index ? 'bg-emerald-100 text-emerald-800' : 'text-slate-500 hover:bg-slate-200'}`}><span className="inline-flex items-center gap-1">{columnLabel(index)}{selectedColumns.includes(index) && <Check className="h-3 w-3 stroke-[3]" />}</span></th>)}</tr></thead><tbody>{Array.from({ length: gridRows }, (_, row) => <tr key={row}><th onClick={(event) => toggleSelection(row, setSelectedRows, event)} className={`sticky left-0 z-10 h-8 min-w-11 cursor-pointer border-b border-r border-slate-300 bg-slate-100 text-center text-[10px] font-bold ${selectedRows.includes(row) || active.row === row ? 'bg-emerald-100 text-emerald-800' : 'text-slate-500 hover:bg-slate-200'}`}><span className="inline-flex items-center gap-0.5">{row + 1}{selectedRows.includes(row) && <Check className="h-3 w-3 stroke-[3]" />}</span></th>{columns.map((_, column) => <td key={column} className={`h-8 min-w-24 border-b border-r border-slate-200 p-0 ${active.row === row && active.column === column ? 'ring-2 ring-inset ring-emerald-600' : ''}`}><input id={`live-cell-${row}-${column}`} value={cells[row]?.[column] ?? ''} onFocus={() => setActive({ row, column })} onChange={(event) => updateCell(row, column, event.target.value)} onPaste={(event) => { const text = event.clipboardData.getData('text/plain'); if (text) { event.preventDefault(); pasteGrid(row, column, text); } }} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); document.getElementById(`live-cell-${Math.min(row + 1, gridRows - 1)}-${column}`)?.focus(); } }} className="h-full w-full min-w-24 bg-transparent px-2 text-xs text-slate-800 outline-none" aria-label={`Cell ${columnLabel(column)}${row + 1}`} /></td>)}</tr>)}</tbody></table></div>
+      <div className="border-t border-slate-200 bg-slate-50 px-3 py-2 text-[10px] font-semibold text-slate-500">Copy a table from Excel, Google Sheets, or CSV. Click the starting cell and press Ctrl+V / Cmd+V, or use Paste table. The grid grows automatically; first pasted row can be your column names.</div>
     </div>}</>}
   </div>;
 }

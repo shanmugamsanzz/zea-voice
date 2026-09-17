@@ -133,6 +133,8 @@ export interface VoiceAgent {
   minimumMeaningfulWords?: number;
   acknowledgementPhrases?: string[];
   explicitStopPhrases?: string[];
+  callCheckPhrases?: string[];
+  callCheckResponse?: string;
   llmProvider?: string;
   greetingMode?: 'agent_initiates' | 'user_initiates';
   cachePolicy?: 'persistent_24h' | 'session_only' | 'disabled';

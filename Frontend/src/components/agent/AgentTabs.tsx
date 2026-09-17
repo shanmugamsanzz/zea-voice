@@ -246,6 +246,8 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       explicitStopPhrases: base.explicitStopPhrases?.length
         ? base.explicitStopPhrases
         : (base.wordInterruptionTriggerWords ?? []),
+      callCheckPhrases: base.callCheckPhrases ?? [],
+      callCheckResponse: base.callCheckResponse ?? '',
       llmProvider: base.llmProvider || 'Gemini',
       llmModel: base.llmModel || 'gemini-2.5-flash',
       greetingMode: normalizeGreetingMode(base.greetingMode),
@@ -316,6 +318,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const [ambienceAssetId, setAmbienceAssetId] = useState<string | null>(null);
   const [newAcknowledgementPhrase, setNewAcknowledgementPhrase] = useState('');
   const [newExplicitStopPhrase, setNewExplicitStopPhrase] = useState('');
+  const [newCallCheckPhrase, setNewCallCheckPhrase] = useState('');
 
   const applyApiAgent = (value: AgentApiData) => {
     const savedSettings = value.settings ?? {};
@@ -347,6 +350,10 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         : (Array.isArray(savedSettings.wordInterruptionTriggerWords) && savedSettings.wordInterruptionTriggerWords.length
           ? savedSettings.wordInterruptionTriggerWords.map(String)
           : []),
+      callCheckPhrases: Array.isArray(savedSettings.callCheckPhrases)
+        ? savedSettings.callCheckPhrases.map(String)
+        : [],
+      callCheckResponse: String(savedSettings.callCheckResponse ?? ''),
     }));
     setPhoneNumberId(value.phoneNumberId ?? '');
     setSttModelId(value.stt.modelId); setLlmModelId(value.llm.modelId); setTtsModelId(value.tts.modelId);
@@ -530,6 +537,14 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       || (agent.status === 'active' && !technicalFailureMessage)) {
       setError('Technical Failure Message is required for an active agent and cannot exceed 500 characters.'); return;
     }
+    const callCheckPhrases = agent.callCheckPhrases ?? [];
+    const callCheckResponse = String(agent.callCheckResponse ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
+    if (callCheckPhrases.length > 0 && !callCheckResponse) {
+      setError('Call Check Response is required when Call Check Phrases are configured.'); return;
+    }
+    if (callCheckResponse.length > 500) {
+      setError('Call Check Response cannot exceed 500 characters.'); return;
+    }
     setSaving(true); setError('');
     try {
       const {
@@ -553,6 +568,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         conversationContextTurns,
         latencyAcknowledgementMessage,
         technicalFailureMessage,
+        callCheckResponse,
         maxInactivityPrompts,
       };
       const payload = {
@@ -605,6 +621,26 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     });
     if (field === 'acknowledgementPhrases') setNewAcknowledgementPhrase('');
     else setNewExplicitStopPhrase('');
+  };
+
+  const addCallCheckPhrases = (rawValue: string) => {
+    const additions = rawValue.split(',')
+      .map((value) => value.normalize('NFKC').trim().replace(/\s+/gu, ' '))
+      .filter(Boolean);
+    if (!additions.length) return;
+    setAgent((current) => {
+      const phrases: string[] = [];
+      const seen = new Set<string>();
+      for (const phrase of [...(current.callCheckPhrases ?? []), ...additions]) {
+        const key = phrase.toLocaleLowerCase();
+        if (!seen.has(key)) {
+          seen.add(key);
+          phrases.push(phrase);
+        }
+      }
+      return { ...current, callCheckPhrases: phrases.slice(0, 20) };
+    });
+    setNewCallCheckPhrase('');
   };
 
   const resetToolForm = () => {
@@ -1334,6 +1370,76 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                           ))}
                         </div>
                       )}
+                    </div>
+
+                    <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-4 space-y-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <FieldInfoTooltip
+                            id="call-check-phrases-information"
+                            text="When a completed STT turn exactly matches one of these phrases, the configured response is spoken immediately. It skips Qdrant search and the LLM. Maximum 20 phrases."
+                            triggerContent={<span className="block text-[11px] font-black uppercase tracking-wider text-emerald-800">Call Check Phrases</span>}
+                          />
+                          <p className="mt-1 text-[11px] font-medium text-emerald-700">Use this for short presence checks such as “hello” or “are you there?”.</p>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={isReadOnly || !newCallCheckPhrase.trim() || (agent.callCheckPhrases?.length ?? 0) >= 20}
+                          onClick={() => addCallCheckPhrases(newCallCheckPhrase)}
+                          className="zea-trigger-add-button rounded-lg border border-emerald-700 bg-emerald-600 px-3 py-1.5 text-xs font-black text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          + Add
+                        </button>
+                      </div>
+                      <input
+                        type="text"
+                        value={newCallCheckPhrase}
+                        disabled={isReadOnly || (agent.callCheckPhrases?.length ?? 0) >= 20}
+                        onChange={(event) => setNewCallCheckPhrase(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
+                            addCallCheckPhrases(newCallCheckPhrase);
+                          }
+                        }}
+                        placeholder="Example: hello, கேக்குதா, இருக்கீங்களா"
+                        className="w-full bg-white border border-emerald-200 focus:border-emerald-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none disabled:bg-slate-50"
+                      />
+                      {(agent.callCheckPhrases?.length ?? 0) > 0 && (
+                        <div className="flex flex-wrap gap-2">
+                          {agent.callCheckPhrases?.map((phrase) => (
+                            <span key={phrase} className="inline-flex items-center gap-1.5 rounded-full bg-white border border-emerald-200 px-3 py-1.5 text-xs font-bold text-emerald-700">
+                              {phrase}
+                              {!isReadOnly && (
+                                <button
+                                  type="button"
+                                  aria-label={`Remove ${phrase}`}
+                                  onClick={() => setAgent({ ...agent, callCheckPhrases: agent.callCheckPhrases?.filter((value) => value !== phrase) })}
+                                  className="inline-flex h-4 w-4 items-center justify-center rounded-full text-emerald-700 transition hover:bg-emerald-100"
+                                >
+                                  <X className="h-3 w-3" aria-hidden="true" />
+                                </button>
+                              )}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      <div>
+                        <FieldInfoTooltip
+                          id="call-check-response-information"
+                          text="This exact message is sent directly to TTS after an exact configured Call Check Phrase match."
+                          triggerContent={<span className="block text-[11px] font-black uppercase tracking-wider text-emerald-800">Call Check Response</span>}
+                        />
+                        <textarea
+                          value={agent.callCheckResponse ?? ''}
+                          disabled={isReadOnly}
+                          maxLength={500}
+                          rows={3}
+                          onChange={(event) => setAgent({ ...agent, callCheckResponse: event.target.value })}
+                          placeholder="Example: வணக்கம்! நான் Zea AI பேசுறேன். உங்களுக்கு எப்படி உதவலாம்?"
+                          className="mt-2 w-full resize-y bg-white border border-emerald-200 focus:border-emerald-500 rounded-xl px-4 py-3 text-xs font-semibold text-slate-800 transition outline-none disabled:bg-slate-50"
+                        />
+                      </div>
                     </div>
 
                     <div className="hidden" aria-hidden="true">

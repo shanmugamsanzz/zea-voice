@@ -22,6 +22,7 @@ import { resolveInterruptionConfiguration } from './interruption/interruption-co
 import { InterruptionCandidateManager } from './interruption/interruption-candidate-manager.js';
 import { CustomerUtteranceBuffer } from './interruption/customer-utterance-buffer.js';
 import {
+  exactConfiguredPhrase,
   validateFinalCustomerTurn,
 } from './interruption/final-turn-validator.js';
 import { ShortTurnMerger } from './interruption/short-turn-merger.js';
@@ -1283,6 +1284,28 @@ export class RealtimeConversationOrchestrator {
       return;
     }
     this.shortTurnMerger.clear();
+    const callCheckPhrase = exactConfiguredPhrase(
+      validation.text,
+      this.runtimeProfile.agent.settings?.callCheckPhrases,
+    );
+    const callCheckResponse = String(
+      this.runtimeProfile.agent.settings?.callCheckResponse ?? '',
+    ).normalize('NFKC').trim().replace(/\s+/gu, ' ');
+    if (callCheckPhrase && callCheckResponse) {
+      const action = await this.controller.receiveFinalTranscript(validation.text);
+      this.#scheduleLiveSummary();
+      this.#scheduleLiveMemoryCheckpoint('caller_turn');
+      this.customerUtterance.reset();
+      const epoch = ++this.epoch;
+      this.log.info({
+        stage: 'stt.call_check_matched', callId: this.call.id, epoch,
+        phrase: callCheckPhrase,
+      }, 'Configured call-check phrase matched a completed STT turn; responding without retrieval or LLM');
+      void this.#guard('call_check', () => this.#runConfiguredCallCheckTurn(
+        callCheckResponse, epoch,
+      ));
+      return;
+    }
     if (this.#isDuplicateFinalTurn(validation.text)) {
       this.log.info({
         stage: 'stt.final_turn_ignored', callId: this.call.id, reason: 'duplicate',
@@ -1967,6 +1990,37 @@ export class RealtimeConversationOrchestrator {
         && !this.finalized && this.controller.state === callStates.LISTENING) {
         this.#armInactivity();
       }
+    }
+  }
+
+  async #runConfiguredCallCheckTurn(response, epoch) {
+    this.#clearInactivity();
+    const turnStartedAt = Date.now();
+    const sentencePipeline = this.#createSentenceTtsPipeline(epoch, turnStartedAt);
+    try {
+      if (!sentencePipeline.enqueue(response)) {
+        throw new AppError(503, 'Configured call-check response could not be queued for speech',
+          'VOICE_CALL_CHECK_RESPONSE_NOT_QUEUED');
+      }
+      await sentencePipeline.waitUntilStarted();
+      const playback = await sentencePipeline.finish();
+      if (this.#isStaleGeneration(epoch) || this.controller.state !== callStates.SPEAKING) {
+        return Object.freeze({ playbackCompleted: false, suppressInactivity: true });
+      }
+      const spoken = playback.spokenText || response;
+      await this.controller.setAssistantResponse(spoken, Date.now(), { sources: [] });
+      sentencePipeline.markTranscriptCommitted();
+      await this.controller.playbackComplete();
+      if (!this.finalized && this.controller.state === callStates.LISTENING) this.#armInactivity();
+      this.#scheduleLiveMemoryCheckpoint('stt_call_check_response');
+      this.log.info({
+        stage: 'stt.call_check_response_completed', callId: this.call.id, epoch,
+        durationMs: Date.now() - turnStartedAt,
+      }, 'Configured call-check response completed without retrieval or LLM');
+      return Object.freeze({ playbackCompleted: true });
+    } catch (error) {
+      sentencePipeline.cancel();
+      throw error;
     }
   }
 
