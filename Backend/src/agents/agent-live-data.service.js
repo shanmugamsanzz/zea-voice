@@ -53,7 +53,8 @@ async function markTableSync(auth, agentId, tableId, status, error = null) {
   return withTenantContext(auth, async (client) => {
     await client.query(
       `UPDATE agent_live_data_tables
-       SET sync_status=$4, sync_error=$5, synced_at=CASE WHEN $4='synced' THEN now() ELSE synced_at END
+       SET sync_status=$4::varchar, sync_error=$5::varchar,
+           synced_at=CASE WHEN $4::varchar='synced'::varchar THEN now() ELSE synced_at END
        WHERE tenant_id=$1 AND agent_id=$2 AND id=$3`,
       [auth.tenantId, agentId, tableId, status, error],
     );
