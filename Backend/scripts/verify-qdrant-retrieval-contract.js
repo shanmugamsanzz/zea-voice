@@ -47,8 +47,9 @@ const result = createQdrantRetrievalResult(request, points);
 const wrongAgent = { ...points[0], id: 'cross-agent', score: 1,
   payload: { ...points[0].payload, agent_id: 'agent-b' } };
 assert.deepEqual(createQdrantRetrievalResult(request, [wrongAgent]).chunks, []);
-assert.deepEqual(Object.keys(result), ['chunks']);
+assert.deepEqual(Object.keys(result), ['chunks', 'liveDataCandidates']);
 assert.equal(result.chunks.length, 2);
+assert.deepEqual(result.liveDataCandidates, []);
 assert.ok(result.chunks.every((chunk) => chunk.verified === true));
 assert.ok(result.chunks.every((chunk) => chunk.provenanceVerified === true
   && chunk.evidenceStatus === 'candidate' && chunk.answerSupportVerified === false));

@@ -103,6 +103,7 @@ assert.deepEqual(result.diagnostics, {
   queryEmbeddingCount: 1,
   qdrantSearchCount: 1,
   returnedChunkCount: 2,
+  returnedLiveDataTableCount: 0,
   maximumChunks: 2,
   tenantAgentFiltered: true,
 });
