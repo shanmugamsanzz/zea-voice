@@ -5,12 +5,12 @@ import {
   createLiveDataColumnSchema, createLiveDataRowSchema, createLiveDataTableSchema,
   liveDataAgentParamsSchema, liveDataColumnParamsSchema, liveDataRowParamsSchema,
   liveDataTableParamsSchema, parseLiveDataInput, updateLiveDataColumnSchema,
-  updateLiveDataRowSchema, updateLiveDataTableSchema,
+  updateLiveDataRowSchema, updateLiveDataTableSchema, replaceLiveDataGridSchema,
 } from './agent-live-data.schemas.js';
 import {
   createLiveDataColumn, createLiveDataRow, createLiveDataTable, deleteLiveDataColumn,
   deleteLiveDataRow, deleteLiveDataTable, listLiveDataHistory, listLiveDataTables, updateLiveDataColumn,
-  updateLiveDataRow, updateLiveDataTable,
+  updateLiveDataRow, updateLiveDataTable, replaceLiveDataGrid,
 } from './agent-live-data.service.js';
 
 function valid(schema, value) {
@@ -37,6 +37,10 @@ agentLiveDataRouter.post('/tables', write, async (request, response) => {
 agentLiveDataRouter.put('/tables/:tableId', write, async (request, response) => {
   const { agentId, tableId } = valid(liveDataTableParamsSchema, request.params);
   response.json({ success: true, data: await updateLiveDataTable(auth(request), agentId, tableId, valid(updateLiveDataTableSchema, request.body)) });
+});
+agentLiveDataRouter.put('/tables/:tableId/grid', write, async (request, response) => {
+  const { agentId, tableId } = valid(liveDataTableParamsSchema, request.params);
+  response.json({ success: true, data: await replaceLiveDataGrid(auth(request), agentId, tableId, valid(replaceLiveDataGridSchema, request.body)) });
 });
 agentLiveDataRouter.delete('/tables/:tableId', write, async (request, response) => {
   const { agentId, tableId } = valid(liveDataTableParamsSchema, request.params);

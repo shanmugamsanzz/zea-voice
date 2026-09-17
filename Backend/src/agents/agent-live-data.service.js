@@ -179,6 +179,45 @@ export async function deleteLiveDataTable(auth, agentId, tableId) {
   return result;
 }
 
+/** Replace a sheet in one PostgreSQL transaction, followed by one Qdrant sync. */
+export async function replaceLiveDataGrid(auth, agentId, tableId, input) {
+  await withTenantContext(auth, async (client) => {
+    await requireTable(client, auth.tenantId, agentId, tableId);
+    await client.query('DELETE FROM agent_live_data_rows WHERE tenant_id=$1 AND table_id=$2', [auth.tenantId, tableId]);
+    await client.query('DELETE FROM agent_live_data_columns WHERE tenant_id=$1 AND table_id=$2', [auth.tenantId, tableId]);
+    const keys = new Set();
+    const columns = [];
+    for (const [position, inputColumn] of input.columns.entries()) {
+      const base = keyFromName(inputColumn.name);
+      let key = base; let suffix = 2;
+      while (keys.has(key)) key = `${base.slice(0, 150)}_${suffix++}`;
+      keys.add(key);
+      await client.query(
+        `INSERT INTO agent_live_data_columns (tenant_id, table_id, name, column_key, data_type, position)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [auth.tenantId, tableId, inputColumn.name, key, inputColumn.dataType, position],
+      );
+      columns.push({ column_key: key, name: inputColumn.name, data_type: inputColumn.dataType });
+    }
+    for (const sourceRow of input.rows) {
+      const values = {};
+      columns.forEach((column, index) => { values[column.column_key] = sourceRow[index] ?? null; });
+      const hasValue = Object.values(values).some((value) => value !== null && value !== '');
+      if (!hasValue) continue;
+      const normalized = normalizedValues(values, columns);
+      await client.query(
+        `INSERT INTO agent_live_data_rows (tenant_id, table_id, row_values, created_by, updated_by)
+         VALUES ($1,$2,$3::jsonb,$4,$4)`,
+        [auth.tenantId, tableId, JSON.stringify(normalized), auth.userId],
+      );
+    }
+    await audit(client, auth, 'AGENT_LIVE_DATA_GRID_REPLACED', tableId, {
+      tableId, columnCount: columns.length, rowCount: input.rows.length,
+    });
+  });
+  return synchronizeAfterChange(auth, agentId, tableId);
+}
+
 export async function createLiveDataColumn(auth, agentId, tableId, input) {
   await withTenantContext(auth, async (client) => {
     await requireTable(client, auth.tenantId, agentId, tableId);
