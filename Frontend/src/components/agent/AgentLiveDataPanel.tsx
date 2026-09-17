@@ -24,6 +24,8 @@ export function AgentLiveDataPanel({ agentId }: { agentId: string }) {
   const [columns, setColumns] = useState<GridColumn[]>([]);
   const [cells, setCells] = useState<string[][]>(emptyGrid());
   const [active, setActive] = useState({ row: 0, column: 0 });
+  const [selectedRows, setSelectedRows] = useState<number[]>([]);
+  const [selectedColumns, setSelectedColumns] = useState<number[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -46,7 +48,7 @@ export function AgentLiveDataPanel({ agentId }: { agentId: string }) {
     const savedRows = selected.rows.map((row) => visibleColumns.map((column) => String(row.values[column.id] ?? '')));
     setColumns(visibleColumns);
     setCells([[...visibleColumns.map((column) => column.name)], ...savedRows, ...emptyGrid(Math.max(INITIAL_ROWS - savedRows.length - 1, 1), visibleColumns.length)]);
-    setActive({ row: 0, column: 0 });
+    setActive({ row: 0, column: 0 }); setSelectedRows([]); setSelectedColumns([]);
   }, [selectedId, selected]);
 
   const createSheet = async () => {
@@ -69,16 +71,23 @@ export function AgentLiveDataPanel({ agentId }: { agentId: string }) {
   };
   const addColumn = () => { setColumns((current) => [...current, { id: `draft_${current.length}`, name: '', dataType: 'text' }]); setCells((current) => current.map((row) => [...row, ''])); };
   const addRow = () => setCells((current) => [...current, Array.from({ length: columns.length }, () => '')]);
+  const toggleSelection = (value: number, setSelection: React.Dispatch<React.SetStateAction<number[]>>, event: React.MouseEvent) => {
+    setSelection((current) => event.ctrlKey || event.metaKey ? (current.includes(value) ? current.filter((item) => item !== value) : [...current, value]) : [value]);
+  };
   const deleteActiveColumn = () => {
-    if (!columns.length || !window.confirm(`Delete column ${columnLabel(active.column)}? Save Changes will permanently remove it.`)) return;
-    setColumns((current) => current.filter((_, index) => index !== active.column));
-    setCells((current) => current.map((row) => row.filter((_, index) => index !== active.column)));
-    setActive((current) => ({ ...current, column: Math.max(0, Math.min(current.column, columns.length - 2)) }));
+    const targets = selectedColumns.length ? selectedColumns : [active.column];
+    if (!columns.length || !window.confirm(`Delete ${targets.length} selected column${targets.length === 1 ? '' : 's'}? Save Changes will permanently remove them.`)) return;
+    const targetSet = new Set(targets);
+    setColumns((current) => current.filter((_, index) => !targetSet.has(index)));
+    setCells((current) => current.map((row) => row.filter((_, index) => !targetSet.has(index))));
+    setActive((current) => ({ ...current, column: 0 })); setSelectedColumns([]);
   };
   const deleteActiveRow = () => {
-    if (!cells.length || !window.confirm(`Delete row ${active.row + 1}? Save Changes will permanently remove it.`)) return;
-    setCells((current) => current.filter((_, index) => index !== active.row));
-    setActive((current) => ({ ...current, row: Math.max(0, Math.min(current.row, cells.length - 2)) }));
+    const targets = selectedRows.length ? selectedRows : [active.row];
+    if (!cells.length || !window.confirm(`Delete ${targets.length} selected row${targets.length === 1 ? '' : 's'}? Save Changes will permanently remove them.`)) return;
+    const targetSet = new Set(targets);
+    setCells((current) => current.filter((_, index) => !targetSet.has(index)));
+    setActive((current) => ({ ...current, row: 0 })); setSelectedRows([]);
   };
   const deleteSheet = async () => {
     if (!selected || !window.confirm(`Delete spreadsheet "${selected.name}" and all its data?`)) return;
@@ -120,7 +129,7 @@ export function AgentLiveDataPanel({ agentId }: { agentId: string }) {
     <div className="flex gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3"><input value={newName} onChange={(event) => setNewName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void createSheet(); }} placeholder="New spreadsheet name" className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold outline-none focus:border-emerald-500" /><button type="button" onClick={() => void createSheet()} disabled={saving || !newName.trim()} className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-xs font-black text-white hover:bg-emerald-700 disabled:opacity-50"><Plus className="h-4 w-4" />New sheet</button></div>
     {loading ? <div className="h-64 animate-pulse rounded-xl bg-slate-100" /> : !tables.length ? <div className="rounded-xl border border-dashed border-slate-300 p-12 text-center text-sm font-semibold text-slate-500">Create a spreadsheet to begin.</div> : <><div className="flex flex-wrap gap-1 border-b border-slate-200 pb-2">{tables.map((table) => <button key={table.id} type="button" onClick={() => setSelectedId(table.id)} className={`rounded-t-lg px-4 py-2 text-xs font-black ${table.id === selectedId ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{table.name}</button>)}</div>{selected && <div className="overflow-hidden rounded-xl border border-slate-300 bg-white">
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-300 bg-slate-50 px-3 py-2"><span className="mr-auto text-xs font-black text-slate-700">{selected.name}</span><span title={selected.sync?.error ?? undefined} className={`rounded-full px-2 py-1 text-[9px] font-black uppercase ${selected.sync?.status === 'synced' ? 'bg-emerald-100 text-emerald-700' : selected.sync?.status === 'failed' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>Index {selected.sync?.status ?? 'pending'}</span><button type="button" onClick={addColumn} className="rounded border border-slate-300 bg-white px-2.5 py-1.5 text-[10px] font-bold text-slate-600 hover:bg-slate-100">+ Column</button><button type="button" onClick={addRow} className="rounded border border-slate-300 bg-white px-2.5 py-1.5 text-[10px] font-bold text-slate-600 hover:bg-slate-100">+ Row</button><button type="button" onClick={deleteActiveColumn} disabled={!columns.length} className="inline-flex items-center gap-1 rounded border border-red-200 bg-white px-2.5 py-1.5 text-[10px] font-bold text-red-600 hover:bg-red-50 disabled:opacity-50"><Trash2 className="h-3 w-3" />Column</button><button type="button" onClick={deleteActiveRow} disabled={!cells.length} className="inline-flex items-center gap-1 rounded border border-red-200 bg-white px-2.5 py-1.5 text-[10px] font-bold text-red-600 hover:bg-red-50 disabled:opacity-50"><Trash2 className="h-3 w-3" />Row</button><button type="button" onClick={() => void deleteSheet()} disabled={saving} className="inline-flex items-center gap-1 rounded border border-red-300 bg-red-50 px-2.5 py-1.5 text-[10px] font-black text-red-700 hover:bg-red-100 disabled:opacity-50"><Trash2 className="h-3 w-3" />Sheet</button><button type="button" disabled={saving} onClick={() => void saveGrid()} className="inline-flex items-center gap-1.5 rounded bg-emerald-600 px-3 py-1.5 text-[10px] font-black text-white hover:bg-emerald-700 disabled:opacity-50"><Save className="h-3.5 w-3.5" />Save changes</button></div>
-      <div className="max-h-[600px] overflow-auto bg-white"><table className="border-separate border-spacing-0 text-xs"><thead className="sticky top-0 z-20"><tr><th className="sticky left-0 z-30 h-7 min-w-11 border-b border-r border-slate-300 bg-slate-100" />{columns.map((_, index) => <th key={index} className={`h-7 min-w-24 border-b border-r border-slate-300 bg-slate-100 text-center text-[10px] font-bold ${active.column === index ? 'bg-emerald-100 text-emerald-800' : 'text-slate-500'}`}>{columnLabel(index)}</th>)}</tr></thead><tbody>{Array.from({ length: gridRows }, (_, row) => <tr key={row}><th className={`sticky left-0 z-10 h-8 min-w-11 border-b border-r border-slate-300 bg-slate-100 text-center text-[10px] font-bold ${active.row === row ? 'bg-emerald-100 text-emerald-800' : 'text-slate-500'}`}>{row + 1}</th>{columns.map((_, column) => <td key={column} className={`h-8 min-w-24 border-b border-r border-slate-200 p-0 ${active.row === row && active.column === column ? 'ring-2 ring-inset ring-emerald-600' : ''}`}><input id={`live-cell-${row}-${column}`} value={cells[row]?.[column] ?? ''} onFocus={() => setActive({ row, column })} onChange={(event) => updateCell(row, column, event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); document.getElementById(`live-cell-${Math.min(row + 1, gridRows - 1)}-${column}`)?.focus(); } }} className="h-full w-full min-w-24 bg-transparent px-2 text-xs text-slate-800 outline-none" aria-label={`Cell ${columnLabel(column)}${row + 1}`} /></td>)}</tr>)}</tbody></table></div>
+      <div className="max-h-[600px] overflow-auto bg-white"><table className="border-separate border-spacing-0 text-xs"><thead className="sticky top-0 z-20"><tr><th className="sticky left-0 z-30 h-7 min-w-11 border-b border-r border-slate-300 bg-slate-100" />{columns.map((_, index) => <th key={index} onClick={(event) => toggleSelection(index, setSelectedColumns, event)} className={`h-7 min-w-24 cursor-pointer border-b border-r border-slate-300 bg-slate-100 text-center text-[10px] font-bold ${selectedColumns.includes(index) || active.column === index ? 'bg-emerald-100 text-emerald-800' : 'text-slate-500 hover:bg-slate-200'}`}>{columnLabel(index)}</th>)}</tr></thead><tbody>{Array.from({ length: gridRows }, (_, row) => <tr key={row}><th onClick={(event) => toggleSelection(row, setSelectedRows, event)} className={`sticky left-0 z-10 h-8 min-w-11 cursor-pointer border-b border-r border-slate-300 bg-slate-100 text-center text-[10px] font-bold ${selectedRows.includes(row) || active.row === row ? 'bg-emerald-100 text-emerald-800' : 'text-slate-500 hover:bg-slate-200'}`}>{row + 1}</th>{columns.map((_, column) => <td key={column} className={`h-8 min-w-24 border-b border-r border-slate-200 p-0 ${active.row === row && active.column === column ? 'ring-2 ring-inset ring-emerald-600' : ''}`}><input id={`live-cell-${row}-${column}`} value={cells[row]?.[column] ?? ''} onFocus={() => setActive({ row, column })} onChange={(event) => updateCell(row, column, event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); document.getElementById(`live-cell-${Math.min(row + 1, gridRows - 1)}-${column}`)?.focus(); } }} className="h-full w-full min-w-24 bg-transparent px-2 text-xs text-slate-800 outline-none" aria-label={`Cell ${columnLabel(column)}${row + 1}`} /></td>)}</tr>)}</tbody></table></div>
       <div className="border-t border-slate-200 bg-slate-50 px-3 py-2 text-[10px] font-semibold text-slate-500">Type into any empty cell. The grid grows automatically when you use the last row or column.</div>
     </div>}</>}
   </div>;
