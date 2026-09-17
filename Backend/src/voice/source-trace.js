@@ -4,6 +4,7 @@ const sourceTypeValues = [
   'pre_call_context',
   'conversation_memory',
   'knowledge',
+  'live_data',
   'tool',
   'llm',
   'silent_message',
@@ -193,6 +194,20 @@ export function templateEngineMessageSources(result = {}, { turnId = null } = {}
         sourceLineEnd: source.sourceLineEnd,
       },
     }));
+  // Qdrant finds the relevant Live Data table, while PostgreSQL supplies its
+  // current rows. Persist table-level provenance only, never row values.
+  const liveDataSources = (Array.isArray(result.liveData) ? result.liveData : [])
+    .filter((table) => table && typeof table === 'object' && table.id && table.name)
+    .map((table) => createMessageSource(messageSourceTypes.LIVE_DATA, {
+      id: table.id,
+      label: table.name,
+      metadata: {
+        tableId: table.id,
+        tableName: table.name,
+        rowCount: table.rowCount,
+        truncated: table.truncated === true,
+      },
+    }));
   const decisionSource = createMessageSource(messageSourceTypes.LLM, {
     id: turnId,
     label: 'Template engine decision',
@@ -216,5 +231,5 @@ export function templateEngineMessageSources(result = {}, { turnId = null } = {}
       success: result.workflow?.verifiedResult?.success,
     },
   }) : null;
-  return mergeMessageSources(decisionSource, knowledgeSources, toolSource);
+  return mergeMessageSources(decisionSource, knowledgeSources, liveDataSources, toolSource);
 }

@@ -20,7 +20,7 @@ type CallDirection = 'inbound' | 'outbound';
 type CallStatus = 'queued' | 'ringing' | 'connected' | 'completed' | 'failed' | 'busy' | 'no_answer' | 'canceled' | 'manual_follow_up_required';
 
 type MessageSourceType = 'welcome_configuration' | 'system_prompt' | 'pre_call_context'
-  | 'conversation_memory' | 'knowledge' | 'tool' | 'llm' | 'silent_message'
+  | 'conversation_memory' | 'knowledge' | 'live_data' | 'tool' | 'llm' | 'silent_message'
   | 'call_check_configuration' | 'runtime_fallback';
 
 interface MessageSource {
@@ -130,6 +130,7 @@ const sourceDisplay: Record<MessageSourceType, { label: string; icon: typeof Dat
   pre_call_context: { label: 'Pre-call context', icon: Database, style: 'border-cyan-200 bg-cyan-50 text-cyan-700' },
   conversation_memory: { label: 'Conversation memory', icon: History, style: 'border-indigo-200 bg-indigo-50 text-indigo-700' },
   knowledge: { label: 'Knowledge', icon: BookOpen, style: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
+  live_data: { label: 'Live Data', icon: FileSpreadsheet, style: 'border-cyan-200 bg-cyan-50 text-cyan-700' },
   tool: { label: 'Tool result', icon: Wrench, style: 'border-amber-200 bg-amber-50 text-amber-700' },
   llm: { label: 'LLM', icon: Brain, style: 'border-pink-200 bg-pink-50 text-pink-700' },
   silent_message: { label: 'Silent message', icon: Settings, style: 'border-blue-200 bg-blue-50 text-blue-700' },
@@ -143,6 +144,9 @@ function sourceDescription(source: MessageSource) {
     const document = metadata.documentDisplayName || metadata.documentName || source.label || 'Published knowledge';
     const page = metadata.pageNumber ? ` · Page ${metadata.pageNumber}${metadata.pageEnd && metadata.pageEnd !== metadata.pageNumber ? `–${metadata.pageEnd}` : ''}` : '';
     return `${document}${page}`;
+  }
+  if (source.type === 'live_data') {
+    return `${metadata.tableName || source.label || 'Live Data'} · Live Data table`;
   }
   if (source.type === 'tool') return `${source.label || 'Assigned tool'} · ${metadata.success === true ? 'successful' : 'used'}`;
   if (source.type === 'llm') return `${metadata.providerName || 'Selected provider'} · ${metadata.modelKey || source.label || 'selected model'}`;
@@ -186,13 +190,27 @@ function knowledgeRecordDescription(source: MessageSource) {
   return [name, typeLabel[recordType] ?? 'Published record'].filter(Boolean).join(' · ');
 }
 
+function answerSourceRecordDescription(source: MessageSource) {
+  if (source.type === 'live_data') {
+    const rowCount = Number(source.metadata?.rowCount);
+    return Number.isFinite(rowCount)
+      ? `${rowCount} current row${rowCount === 1 ? '' : 's'}`
+      : 'Current Live Data';
+  }
+  return knowledgeRecordDescription(source);
+}
+
 function callerFacingAnswerSources(values: MessageSource[]) {
   const seen = new Set<string>();
   return values.filter((source) => {
     const metadata = source.metadata ?? {};
-    if (source.type !== 'knowledge' || !metadata.documentId
-      || !(metadata.documentDisplayName || metadata.documentName)) return false;
-    const key = [source.id, metadata.documentId, metadata.pageNumber, metadata.pageEnd].join(':');
+    const isKnowledge = source.type === 'knowledge' && metadata.documentId
+      && (metadata.documentDisplayName || metadata.documentName);
+    const isLiveData = source.type === 'live_data' && metadata.tableId && metadata.tableName;
+    if (!isKnowledge && !isLiveData) return false;
+    const key = source.type === 'live_data'
+      ? [source.type, metadata.tableId].join(':')
+      : [source.id, metadata.documentId, metadata.pageNumber, metadata.pageEnd].join(':');
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -218,11 +236,11 @@ export function TranscriptMessage({ entry, showDeveloperDiagnostics = true }: {
       <div className="space-y-2 border-t border-slate-100 p-3">
         <DeveloperResponseTracePanel sources={allSources} visible={showDeveloperDiagnostics} />
         {sources.map((source, index) => {
-          const display = sourceDisplay.knowledge;
+          const display = sourceDisplay[source.type];
           const Icon = display.icon;
           return <div key={`${source.type}-${String(source.id ?? source.label ?? index)}-${index}`} className="flex items-start gap-2">
             <span className={`mt-0.5 rounded-md border p-1 ${display.style}`}><Icon className="h-3 w-3" /></span>
-            <div className="min-w-0"><p className="break-words text-[10px] font-bold leading-relaxed text-slate-800">{sourceDescription(source)}</p><p className="mt-0.5 break-words text-[10px] font-semibold leading-relaxed text-slate-600">{knowledgeRecordDescription(source)}</p></div>
+            <div className="min-w-0"><p className="break-words text-[10px] font-bold leading-relaxed text-slate-800">{sourceDescription(source)}</p><p className="mt-0.5 break-words text-[10px] font-semibold leading-relaxed text-slate-600">{answerSourceRecordDescription(source)}</p></div>
           </div>;
         })}
       </div>

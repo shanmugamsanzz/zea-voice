@@ -1194,6 +1194,36 @@ export class RealtimeConversationOrchestrator {
     });
     const outputWasActive = [callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state);
     const agentAudioWasPlaying = [callStates.GREETING, callStates.SPEAKING].includes(this.controller.state);
+    // An exact configured call-check phrase is a caller request for an
+    // immediate presence response, not an acknowledgement. Handle it before
+    // the normal acknowledgement filter so "hello" can barge in safely.
+    const callCheckPhrase = exactConfiguredPhrase(
+      completedTurn,
+      this.runtimeProfile.agent.settings?.callCheckPhrases,
+    );
+    const callCheckResponse = String(
+      this.runtimeProfile.agent.settings?.callCheckResponse ?? '',
+    ).normalize('NFKC').trim().replace(/\s+/gu, ' ');
+    if (outputWasActive && callCheckPhrase && callCheckResponse) {
+      await this.#cancelActive('configured_call_check_phrase');
+      if (this.finalized || this.controller.state !== callStates.LISTENING) {
+        this.customerUtterance.reset();
+        return;
+      }
+      await this.controller.receiveFinalTranscript(completedTurn);
+      this.#scheduleLiveSummary();
+      this.#scheduleLiveMemoryCheckpoint('caller_turn');
+      this.customerUtterance.reset();
+      const epoch = ++this.epoch;
+      this.log.info({
+        stage: 'stt.call_check_matched', callId: this.call.id, epoch,
+        phrase: callCheckPhrase, interruptedActiveOutput: true,
+      }, 'Configured call-check phrase interrupted active output and will respond without retrieval or LLM');
+      void this.#guard('call_check', () => this.#runConfiguredCallCheckTurn(
+        callCheckResponse, epoch,
+      ));
+      return;
+    }
     if (outputWasActive || this.interruptionCandidate.active) {
       if (!this.interruptionCandidate.active) this.runtimeMetrics.interruptions.candidates += 1;
       let decision = this.interruptionCandidate.observeTranscript(completedTurn);
@@ -1284,13 +1314,6 @@ export class RealtimeConversationOrchestrator {
       return;
     }
     this.shortTurnMerger.clear();
-    const callCheckPhrase = exactConfiguredPhrase(
-      validation.text,
-      this.runtimeProfile.agent.settings?.callCheckPhrases,
-    );
-    const callCheckResponse = String(
-      this.runtimeProfile.agent.settings?.callCheckResponse ?? '',
-    ).normalize('NFKC').trim().replace(/\s+/gu, ' ');
     if (callCheckPhrase && callCheckResponse) {
       const action = await this.controller.receiveFinalTranscript(validation.text);
       this.#scheduleLiveSummary();

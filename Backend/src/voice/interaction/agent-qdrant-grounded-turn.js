@@ -220,6 +220,7 @@ export async function runAgentQdrantUniversalTurn(input = {}, overrides = {}) {
   return Object.freeze({
     decision: legacyDecision(validated), outcome: validated.outcome,
     workflowAction: validated.workflowAction, speech: validated.speech, evidence,
+    liveData: retrieval.liveData,
     evidenceIds: validated.evidenceIds, retrievalDiagnostics: retrieval.diagnostics,
     speechStreaming: completion?.speechStreaming ?? null,
     llmInvocationCount: 1,

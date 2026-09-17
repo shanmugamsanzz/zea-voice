@@ -4,7 +4,7 @@ export type TraceMetadataValue = string | number | boolean | null
   | ReadonlyArray<string | number | boolean | null>;
 
 export type TraceSourceType = 'welcome_configuration' | 'system_prompt' | 'pre_call_context'
-  | 'conversation_memory' | 'knowledge' | 'tool' | 'llm' | 'silent_message'
+  | 'conversation_memory' | 'knowledge' | 'live_data' | 'tool' | 'llm' | 'silent_message'
   | 'call_check_configuration' | 'runtime_fallback';
 
 export interface TraceSource {
@@ -44,7 +44,9 @@ export function buildDeveloperResponseTrace(sources: TraceSource[]) {
   const route = initialDecision && finalDecision && initialDecision !== finalDecision
     ? `${initialDecision} → ${finalDecision}`
     : initialDecision || finalDecision || 'UNKNOWN';
-  const knowledgeSources = sources.filter((source) => source.type === 'knowledge');
+  const knowledgeSources = sources.filter((source) => (
+    source.type === 'knowledge' || source.type === 'live_data'
+  ));
   const tool = sources.find((source) => source.type === 'tool');
   const workflowId = text(decision.metadata.workflowId) || text(tool?.metadata.workflowId);
   const toolStatus = text(tool?.metadata.status);

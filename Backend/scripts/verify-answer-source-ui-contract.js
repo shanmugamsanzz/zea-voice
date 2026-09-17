@@ -51,8 +51,10 @@ try {
   assert.match(frontendSource, /metadata\.documentDisplayName \|\| metadata\.documentName/);
   assert.match(frontendSource, /Page \$\{metadata\.pageNumber\}/u);
   assert.match(frontendSource, /CATALOG_ITEM: 'Catalog item'/u);
-  assert.match(frontendSource, /source\.type !== 'knowledge'/u);
-  assert.match(frontendSource, /!metadata\.documentId/u);
+  assert.match(frontendSource, /source\.type === 'live_data'/u);
+  assert.match(frontendSource, /metadata\.tableName/u);
+  assert.match(frontendSource, /isKnowledge/u);
+  assert.match(frontendSource, /isLiveData/u);
   assert.match(frontendSource, /seen\.has\(key\)/u);
   frontendSourceInspected = true;
 } catch (error) {
@@ -67,6 +69,7 @@ console.log(JSON.stringify({
     exactDocumentAndPage: true,
     authoritativeRecordLabel: true,
     duplicatesHidden: true,
+    liveDataTableNamesShown: true,
     internalRuntimeSourcesHidden: true,
   },
 }));

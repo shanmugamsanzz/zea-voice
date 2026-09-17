@@ -11,8 +11,10 @@ export function DeveloperResponseTracePanel({
   const trace = visible ? buildDeveloperResponseTrace(sources) : null;
   if (!trace) return null;
   const sourceSummary = trace.knowledgeSources.map((source) => {
-    const document = String(source.metadata.documentDisplayName
-      ?? source.metadata.documentName ?? source.label ?? 'Published knowledge');
+    const document = source.type === 'live_data'
+      ? String(source.metadata.tableName ?? source.label ?? 'Live Data')
+      : String(source.metadata.documentDisplayName
+        ?? source.metadata.documentName ?? source.label ?? 'Published knowledge');
     const record = String(source.metadata.recordName ?? source.metadata.sourceSection ?? '').trim();
     return [document, record].filter(Boolean).join(' · ');
   }).join(', ');

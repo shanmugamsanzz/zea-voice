@@ -88,6 +88,16 @@ assert.equal(templateSources[1].id, 'published:catalog_item:item-1');
 assert.equal(templateSources[1].metadata.documentDisplayName, 'Published Packages');
 assert.equal(templateSources[1].metadata.sourceLineEnd, 18);
 
+const liveDataTemplateSources = templateEngineMessageSources({
+  provenance: { initialDecision: 'SEARCH', finalDecision: 'RESPONSE', evidenceIds: [], searchPerformed: true },
+  evidenceIds: [], evidence: [],
+  liveData: [{ id: 'table-1', name: 'Current Pricing', rowCount: 12, truncated: false }],
+}, { turnId: 'call-1:turn-live-data' });
+assert.deepEqual(liveDataTemplateSources.map((source) => source.type), ['llm', 'live_data']);
+assert.equal(liveDataTemplateSources[1].label, 'Current Pricing');
+assert.equal(liveDataTemplateSources[1].metadata.tableName, 'Current Pricing');
+assert.equal(liveDataTemplateSources[1].metadata.rowCount, 12);
+
 const nonFactualTemplateSources = templateEngineMessageSources({
   provenance: {
     initialDecision: 'RESPONSE', finalDecision: 'RESPONSE',
