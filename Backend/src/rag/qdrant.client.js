@@ -78,6 +78,8 @@ export async function ensureTenantCollection(tenantId) {
     ['chunk_index', 'integer'],
     ['content_hash', 'keyword'],
     ['uploaded_at', 'datetime'],
+    ['live_data_table_id', 'keyword'],
+    ['live_data_row_id', 'keyword'],
   ];
   for (const [fieldName, fieldSchema] of indexes) {
     try {
@@ -173,6 +175,29 @@ export async function deleteTenantAgentDocumentPoints(tenantId, agentId, documen
   return { deleted: true, verified: true, remainingCount: 0, collectionMissing: false };
 }
 
+function agentLiveDataTableFilter(tenantId, agentId, tableId) {
+  return Object.freeze({ must: Object.freeze([
+    { key: 'tenant_id', match: { value: requireTenantId(tenantId) } },
+    { key: 'agent_id', match: { value: requireEntityId(agentId, 'agentId') } },
+    { key: 'source_kind', match: { value: 'agent_live_data_row' } },
+    { key: 'live_data_table_id', match: { value: requireEntityId(tableId, 'tableId') } },
+  ]) });
+}
+
+/** Delete only one agent table's Live Data points; knowledge-document points remain untouched. */
+export async function deleteTenantAgentLiveDataTablePoints(tenantId, agentId, tableId) {
+  const collectionName = collectionForTenant(tenantId);
+  try {
+    await qdrantFetch(`/collections/${encodeURIComponent(collectionName)}/points/delete?wait=true`, {
+      method: 'POST', operation: 'delete-agent-live-data-table-points',
+      body: JSON.stringify({ filter: agentLiveDataTableFilter(tenantId, agentId, tableId) }),
+    });
+  } catch (error) {
+    if (error.statusCode !== 404) throw error;
+  }
+  return { deleted: true };
+}
+
 export async function searchTenantAgentDocumentPoints(tenantId, agentId, vector, {
   limit = 2,
   scoreThreshold = env.RAG_RUNTIME_MIN_SCORE,
@@ -200,6 +225,55 @@ export async function searchTenantAgentDocumentPoints(tenantId, agentId, vector,
     );
     if (!Array.isArray(payload?.result)) {
       throw new Error('Qdrant returned an invalid agent document search response');
+    }
+    return payload.result;
+  } catch (error) {
+    if (error.statusCode === 404) return [];
+    throw error;
+  }
+}
+
+function verifiedSearchVector(vector) {
+  if (!Array.isArray(vector) || vector.length !== env.QDRANT_VECTOR_SIZE
+    || vector.some((value) => typeof value !== 'number' || !Number.isFinite(value))) {
+    throw new TypeError(`A numeric ${env.QDRANT_VECTOR_SIZE}-dimension query vector is required`);
+  }
+}
+
+function agentKnowledgeAndLiveDataFilter(tenantId, agentId) {
+  return Object.freeze({
+    must: Object.freeze([
+      { key: 'tenant_id', match: { value: requireTenantId(tenantId) } },
+      { key: 'agent_id', match: { value: requireEntityId(agentId, 'agentId') } },
+    ]),
+    should: Object.freeze([
+      { key: 'source_kind', match: { value: 'agent_text_document' } },
+      { key: 'source_kind', match: { value: 'agent_live_data_row' } },
+    ]),
+  });
+}
+
+/** One tenant/agent Qdrant search across published documents and Live Data row indexes. */
+export async function searchTenantAgentKnowledgeAndLiveDataPoints(tenantId, agentId, vector, {
+  limit = 2,
+  scoreThreshold = env.RAG_RUNTIME_MIN_SCORE,
+  abortSignal = undefined,
+} = {}) {
+  verifiedSearchVector(vector);
+  if (limit !== 2) throw new TypeError('Unified agent search limit must be 2');
+  const collectionName = collectionForTenant(tenantId);
+  try {
+    const payload = await qdrantFetch(
+      `/collections/${encodeURIComponent(collectionName)}/points/search`, {
+        method: 'POST', operation: 'search-agent-knowledge-and-live-data-points', signal: abortSignal,
+        body: JSON.stringify({
+          vector, filter: agentKnowledgeAndLiveDataFilter(tenantId, agentId), limit,
+          score_threshold: scoreThreshold, with_payload: true, with_vector: false,
+        }),
+      },
+    );
+    if (!Array.isArray(payload?.result)) {
+      throw new Error('Qdrant returned an invalid unified agent search response');
     }
     return payload.result;
   } catch (error) {

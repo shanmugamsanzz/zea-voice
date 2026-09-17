@@ -11,6 +11,7 @@
     "build": "npm run check",
     "start": "node src/server.js",
     "check": "node scripts/check-javascript.js",
+    "verify:agent-live-data-retrieval": "node scripts/verify-agent-live-data-retrieval.js",
     "lint": "npm run check",
     "verify:task2": "node scripts/verify-task-2.js",
     "verify:task3": "node scripts/verify-task-3.js",

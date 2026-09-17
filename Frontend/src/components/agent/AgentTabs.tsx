@@ -11,6 +11,7 @@ import { apiRequest, isAbortError } from '../../lib/api';
 import { PronunciationGroupManager } from './PronunciationGroupManager';
 import { AmbienceManager } from './AmbienceManager';
 import { AgentKnowledgeDocumentsPanel } from './AgentKnowledgeDocumentsPanel';
+import { AgentLiveDataPanel } from './AgentLiveDataPanel';
 import { TableActionsMenu } from '../common/TableActionsMenu';
 import { 
   Bot, 
@@ -293,7 +294,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     };
   });
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'listener' | 'brain' | 'speaker' | 'precall' | 'postcall' | 'tools' | 'knowledge' | 'analytics'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'listener' | 'brain' | 'speaker' | 'precall' | 'postcall' | 'tools' | 'knowledge' | 'liveData' | 'analytics'>('overview');
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [systemPromptMaxCharacters, setSystemPromptMaxCharacters] = useState<number | null>(null);
@@ -749,6 +750,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     { id: 'postcall', name: 'Post-Call', icon: FileText },
     { id: 'tools', name: 'Tools', icon: Wrench },
     { id: 'knowledge', name: 'Knowledge', icon: Database },
+    { id: 'liveData', name: 'Live Data', icon: Database },
     { id: 'analytics', name: 'Analytics', icon: BarChart2 }
   ] as const;
   const sttModels = models.filter((model) => model.providerType === 'stt');
@@ -2764,6 +2766,12 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         {activeTab === 'knowledge' && !agentId && (
           <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-xs font-semibold text-amber-800">
             Save this agent before uploading knowledge documents.
+          </div>
+        )}
+        {activeTab === 'liveData' && agentId && <AgentLiveDataPanel agentId={agentId} />}
+        {activeTab === 'liveData' && !agentId && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-xs font-semibold text-amber-800">
+            Save this agent before creating Live Data tables.
           </div>
         )}
         {/* TAB: ANALYTICS */}

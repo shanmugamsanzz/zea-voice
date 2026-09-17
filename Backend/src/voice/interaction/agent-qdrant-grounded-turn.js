@@ -129,7 +129,7 @@ function acceptDecision(raw, chunks, maximumSpeechCharacters, workflowDefinition
     evidenceIds: Object.freeze(evidenceIds), workflowAction });
 }
 
-function universalPrompt({ agentPrompt, language, chunks, previousContext,
+function universalPrompt({ agentPrompt, language, chunks, liveData, previousContext,
   maximumSpeechCharacters, workflowDefinitions, workflowState, conversationContext }) {
   const latestAssistantDelivery = ['interrupted', 'incomplete']
     .includes(conversationContext?.lastAssistantResponse?.completion)
@@ -148,6 +148,7 @@ function universalPrompt({ agentPrompt, language, chunks, previousContext,
     'Use WORKFLOW_ACTION only for a supplied workflow. Use UPSERT to collect or correct fields. Use EXECUTE only after the completely delivered confirmation and explicit caller confirmation.',
     'For WORKFLOW_ACTION, return the configured workflowId and toolName, newly supplied arguments as argumentsJson, and the exact current-caller authorization phrase as authorizationQuote for EXECUTE; otherwise use an empty authorizationQuote.',
     'Do not use configured technical recovery text during an ordinary conversation.',
+    'Live Data is the current source of truth for its tables. Use its current rows for prices, availability, counts and filters; do not use older conversation statements for those facts. Use rowCount as the exact full-table count. If a table says truncated, do not invent an exact filtered count from its partial rows.',
     `Caller language: ${cleanText(language, 80) || 'Follow the caller language'}`,
     ...(Number(maximumSpeechCharacters) > 0
       ? [`Maximum spoken characters: ${Math.floor(Number(maximumSpeechCharacters))}`]
@@ -159,6 +160,7 @@ function universalPrompt({ agentPrompt, language, chunks, previousContext,
     JSON.stringify(chunks.map((chunk) => ({ id: chunk.id, filename: chunk.source.filename,
       chunkIndex: chunk.source.chunkIndex, text: chunk.text }))),
     '</retrieved_chunks>',
+    '<current_live_data>', JSON.stringify(liveData ?? []), '</current_live_data>',
     'Return only the required JSON object. workflowAction must be null for every outcome except WORKFLOW_ACTION.',
   ].filter(Boolean).join('\n');
 }
@@ -193,6 +195,7 @@ export async function runAgentQdrantUniversalTurn(input = {}, overrides = {}) {
     messages: Object.freeze([
       Object.freeze({ role: 'system', content: universalPrompt({
         agentPrompt: input.agentPrompt, language: input.language, chunks: retrieval.chunks,
+        liveData: retrieval.liveData,
         previousContext: retrieval.request.previousContext,
         maximumSpeechCharacters: input.maximumSpeechCharacters, workflowDefinitions,
         workflowState: input.workflowState,

@@ -51,10 +51,12 @@ import {
   ArrowLeft,
   RefreshCw,
   LayoutGrid,
-  Mic
+  Mic,
+  Database
 } from 'lucide-react';
 import { AgentTabs } from '../agent/AgentTabs';
 import { BrowserAgentTestPanel } from '../agent/BrowserAgentTestPanel';
+import { AgentLiveDataPanel } from '../agent/AgentLiveDataPanel';
 import { DeveloperReportsView } from '../reports/DeveloperReportsView';
 import { DeveloperVqaView } from '../vqa/DeveloperVqaView';
 import { DeveloperAiInsightsView } from '../insights/DeveloperAiInsightsView';
@@ -1807,6 +1809,7 @@ function AgentsListView({ agents, setAgents, onEditAgent, onAddAgent }: { agents
   const [agentError, setAgentError] = useState('');
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
   const [testAgent, setTestAgent] = useState<VoiceAgent | null>(null);
+  const [liveDataAgent, setLiveDataAgent] = useState<VoiceAgent | null>(null);
 
   const userAgents = agents.map((agent) => ({ ...agent, statusLabel: agent.status === 'active' ? 'Live' : agent.status }));
 
@@ -1930,7 +1933,7 @@ function AgentsListView({ agents, setAgents, onEditAgent, onAddAgent }: { agents
                         </div>
                       </div>
                     </div>
-                    <div>
+                    <div className="flex items-center gap-2">
                       {/* Live status badge with pulsating green dot */}
                       <span className="bg-emerald-50 text-emerald-600 border border-emerald-100 rounded-full px-3.5 py-1.5 text-xs font-black tracking-wide flex items-center space-x-2 select-none">
                         <span className="relative flex h-1.5 w-1.5 shrink-0">
@@ -1939,6 +1942,7 @@ function AgentsListView({ agents, setAgents, onEditAgent, onAddAgent }: { agents
                         </span>
                         <span>{agent.statusLabel}</span>
                       </span>
+                      <button type="button" onClick={() => setLiveDataAgent(agent)} className="inline-flex items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-3 py-1.5 text-[10px] font-black text-violet-700 hover:bg-violet-100"><Database className="h-3.5 w-3.5" />Live Data</button>
                     </div>
                   </div>
                 ))}
@@ -1976,11 +1980,13 @@ function AgentsListView({ agents, setAgents, onEditAgent, onAddAgent }: { agents
                       <span>{agent.statusLabel}</span>
                     </span>
                   </div>
+                  <button type="button" onClick={() => setLiveDataAgent(agent)} className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-black text-violet-700 hover:bg-violet-100"><Database className="h-3.5 w-3.5" />Live Data</button>
                 </div>
               </div>
             ))}
           </div>
         )}
+        {liveDataAgent && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4" onMouseDown={() => setLiveDataAgent(null)}><div className="max-h-[92vh] w-full max-w-6xl overflow-y-auto rounded-2xl bg-slate-50 p-5 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}><div className="mb-5 flex items-center justify-between gap-4"><div><p className="text-[10px] font-black uppercase tracking-wider text-violet-600">Agent Live Data</p><h3 className="text-lg font-black text-slate-800">{liveDataAgent.name}</h3></div><button type="button" onClick={() => setLiveDataAgent(null)} className="rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-white"><X className="h-4 w-4" /></button></div><AgentLiveDataPanel agentId={liveDataAgent.id} /></div></div>}
       </div>
     );
   }

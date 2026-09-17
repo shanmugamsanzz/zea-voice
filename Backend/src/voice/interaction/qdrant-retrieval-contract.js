@@ -125,6 +125,20 @@ function verifiedChunk(request, point) {
   });
 }
 
+function verifiedLiveDataCandidate(request, point) {
+  const payload = point?.payload;
+  if (!payload || typeof payload !== 'object') return null;
+  if (cleanText(payload.tenant_id, 200) !== request.tenantId
+    || cleanText(payload.agent_id, 200) !== request.agentId
+    || payload.source_kind !== 'agent_live_data_row') return null;
+  const id = cleanText(point.id, 240);
+  const tableId = cleanText(payload.live_data_table_id, 240);
+  const rowId = cleanText(payload.live_data_row_id, 240);
+  const score = Number(point.score);
+  if (!id || !tableId || !rowId || !Number.isFinite(score)) return null;
+  return Object.freeze({ id, tableId, rowId, score });
+}
+
 /**
  * Converts filtered Qdrant points into the only retrieval output exposed to
  * answer generation. Cross-tenant/agent, malformed and duplicate points are
@@ -142,5 +156,15 @@ export function createQdrantRetrievalResult(request, points = []) {
   const chunks = [...byPointId.values()]
     .sort((left, right) => right.score - left.score || left.id.localeCompare(right.id))
     .slice(0, QDRANT_RETRIEVAL_LIMITS.maximumChunks);
-  return Object.freeze({ chunks: Object.freeze(chunks) });
+  const liveDataByTable = new Map();
+  for (const point of Array.isArray(points) ? points : []) {
+    const candidate = verifiedLiveDataCandidate(request, point);
+    if (!candidate) continue;
+    const current = liveDataByTable.get(candidate.tableId);
+    if (!current || candidate.score > current.score) liveDataByTable.set(candidate.tableId, candidate);
+  }
+  const liveDataCandidates = [...liveDataByTable.values()]
+    .sort((left, right) => right.score - left.score || left.tableId.localeCompare(right.tableId))
+    .slice(0, QDRANT_RETRIEVAL_LIMITS.maximumChunks);
+  return Object.freeze({ chunks: Object.freeze(chunks), liveDataCandidates: Object.freeze(liveDataCandidates) });
 }

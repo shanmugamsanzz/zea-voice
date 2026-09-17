@@ -1,4 +1,5 @@
-import { searchTenantAgentDocumentPoints } from '../../rag/qdrant.client.js';
+import { searchTenantAgentKnowledgeAndLiveDataPoints } from '../../rag/qdrant.client.js';
+import { retrieveCurrentAgentLiveData } from '../../agents/agent-live-data-retrieval.service.js';
 import { embeddingModelSpec } from '../../rag/model-spec.js';
 import { embedAgentRetrievalQuestion } from './agent-document-embeddings.js';
 import {
@@ -45,7 +46,8 @@ export function contextualAgentDocumentSearchText(request) {
 function runtimeDependencies(overrides = {}) {
   return {
     embedQuestion: overrides.embedQuestion ?? embedAgentRetrievalQuestion,
-    searchPoints: overrides.searchPoints ?? searchTenantAgentDocumentPoints,
+    searchPoints: overrides.searchPoints ?? searchTenantAgentKnowledgeAndLiveDataPoints,
+    retrieveLiveData: overrides.retrieveLiveData ?? retrieveCurrentAgentLiveData,
   };
 }
 
@@ -78,11 +80,15 @@ export async function retrieveAgentQdrantKnowledge(input = {}, overrides = {}) {
       abortSignal: request.cancellationSignal },
   );
   const result = createQdrantRetrievalResult(request, points);
+  const liveData = await dependencies.retrieveLiveData(
+    request.tenantId, request.agentId, result.liveDataCandidates.map(({ tableId }) => tableId),
+  );
   return Object.freeze({
     request,
     searchText,
     embeddingModel: embedding.model,
     chunks: result.chunks,
+    liveData,
     diagnostics: Object.freeze({
       channelCounts: Object.freeze({ qdrant: points.length }),
       retrievalCount: points.length,
@@ -93,6 +99,7 @@ export async function retrieveAgentQdrantKnowledge(input = {}, overrides = {}) {
       queryEmbeddingCount: 1,
       qdrantSearchCount: 1,
       returnedChunkCount: result.chunks.length,
+      returnedLiveDataTableCount: liveData.length,
       maximumChunks: QDRANT_RETRIEVAL_LIMITS.maximumChunks,
       tenantAgentFiltered: true,
     }),
