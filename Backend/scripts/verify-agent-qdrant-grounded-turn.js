@@ -285,11 +285,15 @@ const executionResult = await runTemplateEngineProductionTurn({
   runtimeProfile: workflowProfile, authorizedWorkflowTools: [configuredTool],
   cancellationSignal,
 }, {
-  invokeStructuredLlm: async () => ({ answer: {
-    outcome: 'WORKFLOW_ACTION', speech: 'I will submit that now.',
-    workflowAction: { action: 'EXECUTE', workflowId: configuredTool.id,
-      toolName: configuredTool.name, argumentsJson: '{}', authorizationQuote: 'Yes, submit it.' },
-  } }),
+  invokeStructuredLlm: async (request) => (
+    request.responseFormat?.name === 'tool_result_response'
+      ? { answer: { speech: 'Your request was submitted successfully.' } }
+      : { answer: {
+        outcome: 'WORKFLOW_ACTION', speech: 'I will submit that now.',
+        workflowAction: { action: 'EXECUTE', workflowId: configuredTool.id,
+          toolName: configuredTool.name, argumentsJson: '{}', authorizationQuote: 'Yes, submit it.' },
+      } }
+  ),
   retrieveQdrantKnowledge: async () => ({ ...retrieval, chunks: Object.freeze([]),
     diagnostics: Object.freeze({ ...retrieval.diagnostics, returnedChunkCount: 0 }) }),
   runQdrantUniversalTurn: runAgentQdrantUniversalTurn,
@@ -301,10 +305,11 @@ const executionResult = await runTemplateEngineProductionTurn({
     return { success: true, name: configuredTool.name };
   },
 });
-assert.equal(executionResult.llmInvocationCount, 1);
+assert.equal(executionResult.llmInvocationCount, 2);
 assert.equal(executedTools, 1);
 assert.equal(executionResult.toolExecuted, true);
 assert.equal(executionResult.workflow.status, 'completed');
+assert.equal(executionResult.speech, 'Your request was submitted successfully.');
 
 const correctedWorkflowResult = await runTemplateEngineProductionTurn({
   auth: { tenantId }, scope: { tenantId, agentId }, language: 'ta-IN',

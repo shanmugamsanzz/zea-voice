@@ -73,7 +73,8 @@ export function createSingleLlmTurnInvoker(invoke, onInvocation = null, maximumI
 }
 
 export function assertSingleLlmTurnArchitecture({
-  invocationCount, requireExactlyOne = false, maximumInvocations = 1, turnKind = 'contextual',
+  invocationCount, requireExactlyOne = false, requiredInvocations = null,
+  maximumInvocations = 1, turnKind = 'contextual',
 } = {}) {
   const count = Number(invocationCount);
   if (!Number.isInteger(count) || count < 0 || count > maximumInvocations) {
@@ -84,11 +85,12 @@ export function assertSingleLlmTurnArchitecture({
         turnKind,
       });
   }
-  if (requireExactlyOne && count !== 1) {
-    throw new AppError(500, 'Contextual template-engine turn did not use exactly one LLM call',
+  const required = requiredInvocations ?? (requireExactlyOne ? 1 : null);
+  if (required !== null && count !== required) {
+    throw new AppError(500, 'Template-engine turn did not use the required LLM call count',
       'TEMPLATE_ENGINE_ARCHITECTURE_VIOLATION', {
         invocationCount: count,
-        requiredInvocations: 1,
+        requiredInvocations: required,
         turnKind,
       });
   }
@@ -96,7 +98,7 @@ export function assertSingleLlmTurnArchitecture({
     enforced: true,
     invocationCount: count,
     maximumInvocations,
-    exactlyOneRequired: requireExactlyOne,
+    requiredInvocations: required,
     turnKind,
   });
 }
@@ -296,7 +298,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
 
   const llmArchitecture = assertSingleLlmTurnArchitecture({
     invocationCount: llmTurn.count(),
-    requireExactlyOne: true,
+    requiredInvocations: workflowResult.toolExecuted ? 2 : 1,
     maximumInvocations: workflowResult.toolExecuted ? 2 : 1,
     turnKind: workflowResult.toolExecuted ? 'contextual_qdrant_tool_result' : 'contextual_qdrant',
   });

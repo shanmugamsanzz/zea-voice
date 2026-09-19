@@ -25,6 +25,6 @@ console.log(JSON.stringify({
     'correction', 'cancellation', 'interruption',
   ]),
   architecture: Object.freeze({ queryEmbeddingsPerTurn: 1, qdrantSearchesPerTurn: 1,
-    maximumLlmCallsPerTurn: 1 }),
+    normalMaximumLlmCallsPerTurn: 1, toolResultLlmCallsPerTurn: 2 }),
   latencyReporting: Object.freeze({ measurementsOnly: true, fixedTargets: false }),
 }));

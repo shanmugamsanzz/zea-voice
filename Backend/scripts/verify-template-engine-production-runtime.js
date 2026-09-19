@@ -29,6 +29,9 @@ assert.equal(assertSingleLlmTurnArchitecture({
 assert.throws(() => assertSingleLlmTurnArchitecture({ invocationCount: 2 }), {
   code: 'TEMPLATE_ENGINE_LLM_INVOCATION_LIMIT_EXCEEDED',
 });
+assert.equal(assertSingleLlmTurnArchitecture({
+  invocationCount: 2, requiredInvocations: 2, maximumInvocations: 2, turnKind: 'tool_result',
+}).requiredInvocations, 2);
 
 await assert.rejects(() => runTemplateEngineProductionTurn({
   auth: { tenantId: 'tenant-a' },
@@ -87,7 +90,8 @@ console.log(JSON.stringify({
   suite: 'template-engine-production-runtime',
   passed: true,
   retrieval: 'qdrant',
-  maximumLlmCallsPerTurn: 1,
+  normalMaximumLlmCallsPerTurn: 1,
+  toolResultLlmCallsPerTurn: 2,
   languageOrBusinessRouting: false,
   legacyRetrievalBranches: 0,
 }));

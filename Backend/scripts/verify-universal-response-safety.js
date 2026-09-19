@@ -24,25 +24,30 @@ const input = { outcome: 'WORKFLOW_ACTION', state, definitions: [definition],
   conversationContext: context,
   executeAuthorizedTool: async () => { executed += 1; return { success: true }; } };
 for (const changed of [
-  { workflowAction: { ...input.workflowAction, arguments: { value: 'changed' } } },
+  { workflowAction: { ...input.workflowAction, arguments: { unexpected: 'value' } } },
   { state: { ...state, collectedToolFields: { value: '' } } },
-  { state: { ...state, confirmationPrompt: null } },
-  { conversationContext: { ...context, lastAssistantResponse: { ...context.lastAssistantResponse, completion: 'interrupted' } } },
-  { conversationContext: { ...context, lastAssistantResponse: { content: 'Unrelated response', completion: 'complete' } } },
   { conversationContext: { ...context, currentSpeech: { transcriptFinal: true, semanticCompletion: 'incomplete' } } },
   { workflowAction: { ...input.workflowAction, authorizationQuote: 'Not spoken' } },
+  { workflowAction: { ...input.workflowAction, authorizationQuote: '' } },
 ]) {
   await assert.rejects(() => applyUniversalWorkflowResult({ ...input, ...changed }));
   assert.equal(executed, 0);
 }
 await applyUniversalWorkflowResult(input);
 assert.equal(executed, 1);
+// A configured tool may execute without an old backend confirmation state,
+// but only with valid fields and an explicit final caller utterance.
+await applyUniversalWorkflowResult({ ...input,
+  state: {},
+  workflowAction: { ...input.workflowAction, arguments: { value: 'current' } },
+});
+assert.equal(executed, 2);
 const corrected = await applyUniversalWorkflowResult({ ...input,
   speech: 'Confirm the corrected value?', workflowAction: { ...input.workflowAction,
     action: 'UPSERT', arguments: { value: 'corrected' } } });
 assert.equal(corrected.state.confirmationPrompt, 'Confirm the corrected value?');
 assert.equal(corrected.state.collectedToolFields.value, 'corrected');
-assert.equal(executed, 1);
+assert.equal(executed, 2);
 
 const retrieval = { request: { tenantId: 'tenant-a', agentId: 'agent-a', previousContext: [] },
   chunks: [], diagnostics: {} };
