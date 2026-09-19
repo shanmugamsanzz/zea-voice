@@ -1,5 +1,4 @@
 import { AppError } from '../../middleware/errors.js';
-import { isDeepStrictEqual } from 'node:util';
 import { assertExplicitAction } from './universal-response-safety.js';
 import { toolArgumentsMatchSchema, validateToolArguments } from '../tools/tool-security.js';
 
@@ -76,15 +75,16 @@ export async function applyUniversalWorkflowResult({
   }
   const definition = definitionFor(workflowAction, definitions);
   const activeWorkflowId = cleanText(state.activeWorkflowId, 160);
-  if (activeWorkflowId && activeWorkflowId !== definition.workflowId) {
+  if (workflowAction.action === 'UPSERT'
+    && activeWorkflowId && activeWorkflowId !== definition.workflowId) {
     throw new AppError(409, 'A different configured workflow is already active',
       'TEMPLATE_ENGINE_UNIVERSAL_WORKFLOW_CONFLICT');
   }
   const supplied = validatePartialArguments(object(workflowAction.arguments), definition);
-  const collected = { ...object(state.collectedToolFields), ...supplied };
-  const missingFields = definition.requiredFields.filter((field) => !Object.hasOwn(collected, field)
-    || collected[field] == null || typeof collected[field] === 'string' && !collected[field].trim());
   if (workflowAction.action === 'UPSERT') {
+    const collected = { ...object(state.collectedToolFields), ...supplied };
+    const missingFields = definition.requiredFields.filter((field) => !Object.hasOwn(collected, field)
+      || collected[field] == null || typeof collected[field] === 'string' && !collected[field].trim());
     const status = missingFields.length ? 'pending_fields' : 'awaiting_confirmation';
     const nextState = workflowState(state, collected, status, definition.workflowId,
       status === 'awaiting_confirmation' ? cleanText(speech, 4000) || null : null);
@@ -97,27 +97,33 @@ export async function applyUniversalWorkflowResult({
     intent: 'execute', utteranceComplete: true, unambiguous: true,
     quote: workflowAction.authorizationQuote,
   }, 'execute', conversationContext);
-  const delivered = conversationContext?.lastAssistantResponse;
-  if (missingFields.length || state.confirmationStatus !== 'awaiting_confirmation'
-    || activeWorkflowId !== definition.workflowId
-    || !state.confirmationPrompt || delivered?.completion !== 'complete'
-    || cleanText(delivered.content, 4000) !== state.confirmationPrompt
-    || Object.entries(supplied).some(([key, value]) => !isDeepStrictEqual(value, state.collectedToolFields?.[key]))) {
-    throw new AppError(409, 'The configured workflow cannot execute before field collection and confirmation',
+  // The configured prompt controls when a tool should run. A read-only tool
+  // (for example, slot checking) can therefore run after the caller provides
+  // its required inputs, while a booking prompt can still ask for confirmation
+  // before it emits EXECUTE. Authorization remains enforced by tool identity.
+  const argumentsValue = activeWorkflowId === definition.workflowId
+    ? { ...object(state.collectedToolFields), ...supplied }
+    : supplied;
+  const missingFields = definition.requiredFields.filter((field) => !Object.hasOwn(argumentsValue, field)
+    || argumentsValue[field] == null || typeof argumentsValue[field] === 'string' && !argumentsValue[field].trim());
+  if (missingFields.length) {
+    throw new AppError(409, 'The configured workflow cannot execute before required fields are collected',
       'TEMPLATE_ENGINE_UNIVERSAL_WORKFLOW_NOT_READY', { missingFields });
   }
   if (typeof executeAuthorizedTool !== 'function') {
     throw new AppError(500, 'Configured workflow tool execution is unavailable',
       'TEMPLATE_ENGINE_UNIVERSAL_WORKFLOW_EXECUTOR_MISSING');
   }
-  const argumentsValue = validateToolArguments(collected, definition.inputSchema);
+  const validatedArguments = validateToolArguments(argumentsValue, definition.inputSchema);
   const toolResult = await executeAuthorizedTool(Object.freeze({
-    name: definition.toolName, arguments: argumentsValue,
+    name: definition.toolName, arguments: validatedArguments,
     authorizationRecordId: definition.workflowId,
+    intent: cleanText(conversationContext?.currentQuestion, 2_000),
   }));
   if (!toolResult?.success) throw new AppError(502, 'The configured workflow tool failed',
     'TEMPLATE_ENGINE_UNIVERSAL_WORKFLOW_TOOL_FAILED');
-  const nextState = workflowState(state, {}, null, null);
+  const nextState = activeWorkflowId === definition.workflowId
+    ? workflowState(state, {}, null, null) : state;
   await persistWorkflowState?.(nextState);
   return Object.freeze({ state: nextState,
     workflow: Object.freeze({ id: definition.workflowId, status: 'completed' }),

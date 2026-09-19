@@ -2172,9 +2172,9 @@ export class RealtimeConversationOrchestrator {
             callId: this.call.id,
             turnEpoch: epoch,
             invocationCount,
-            maximumInvocations: 1,
+            maximumInvocations: 2,
             operation,
-          }, 'Single permitted template-engine LLM invocation started');
+          }, 'Template-engine LLM invocation started');
         },
         onTurnResolved: ({ decision, activeWorkflow }) => {
           latencyAcknowledgement.setSuppressed(!latencyAcknowledgementEligibleForRoute({

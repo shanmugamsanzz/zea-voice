@@ -7,6 +7,7 @@ export function tagTemplateEngineTiming(request, operation) {
 
 const operations = new Map([
   ['agent_qdrant_universal_turn', 'answer_generation'],
+  ['tool_result_response', 'tool_result_response'],
 ]);
 
 function timedOperationCalls(stageTimings, operation) {
@@ -22,11 +23,16 @@ export function assertUniversalTurnArchitecture({ architecture, stageTimings } =
   const calls = Object.freeze({
     retrieval: timedOperationCalls(stageTimings, 'retrieval'),
     answerGeneration: timedOperationCalls(stageTimings, 'answer_generation'),
+    toolResultResponse: timedOperationCalls(stageTimings, 'tool_result_response'),
     otherLlm: timedOperationCalls(stageTimings, 'other_llm'),
   });
   const violations = [];
   if (calls.retrieval !== 1) violations.push('focused_retrieval_must_run_once');
   if (calls.answerGeneration !== 1) violations.push('universal_llm_operation_must_run_once');
+  const expectedToolResultCalls = architecture.toolResultResponseCalls ?? 0;
+  if (calls.toolResultResponse !== expectedToolResultCalls) {
+    violations.push('tool_result_llm_operation_count_invalid');
+  }
   if (calls.otherLlm !== 0) violations.push('unexpected_llm_operation');
   if (architecture.ttsReady !== true) violations.push('generated_speech_not_tts_ready');
   if (violations.length) {

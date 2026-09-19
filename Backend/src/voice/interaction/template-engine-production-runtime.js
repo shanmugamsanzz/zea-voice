@@ -7,6 +7,7 @@ import {
 } from './template-engine-state.js';
 import { retrieveAgentQdrantKnowledge } from './agent-qdrant-retrieval.js';
 import { runAgentQdrantUniversalTurn } from './agent-qdrant-grounded-turn.js';
+import { runToolResultResponse } from './tool-result-response.js';
 import { buildUniversalTurnContext } from './universal-turn-context.js';
 import {
   applyUniversalWorkflowResult,
@@ -43,7 +44,7 @@ function authenticatedRetrievalScope(input) {
   return Object.freeze({ tenantId, agentId });
 }
 
-export function createSingleLlmTurnInvoker(invoke, onInvocation = null) {
+export function createSingleLlmTurnInvoker(invoke, onInvocation = null, maximumInvocations = 1) {
   if (typeof invoke !== 'function') throw new TypeError('Single-LLM turn requires an invoker');
   let invocationCount = 0;
   return Object.freeze({
@@ -53,10 +54,10 @@ export function createSingleLlmTurnInvoker(invoke, onInvocation = null) {
         throw new AppError(500, 'Template-engine LLM operation must use a structured schema',
           'TEMPLATE_ENGINE_LLM_OPERATION_NOT_STRUCTURED');
       }
-      if (invocationCount >= 1) {
-        throw new AppError(500, 'Template-engine turn attempted more than one LLM invocation',
+      if (invocationCount >= maximumInvocations) {
+        throw new AppError(500, 'Template-engine turn exceeded its permitted LLM invocations',
           'TEMPLATE_ENGINE_LLM_INVOCATION_LIMIT_EXCEEDED', {
-            maximumInvocations: 1,
+            maximumInvocations,
             attemptedOperation: request?.responseFormat?.name ?? null,
           });
       }
@@ -72,14 +73,14 @@ export function createSingleLlmTurnInvoker(invoke, onInvocation = null) {
 }
 
 export function assertSingleLlmTurnArchitecture({
-  invocationCount, requireExactlyOne = false, turnKind = 'contextual',
+  invocationCount, requireExactlyOne = false, maximumInvocations = 1, turnKind = 'contextual',
 } = {}) {
   const count = Number(invocationCount);
-  if (!Number.isInteger(count) || count < 0 || count > 1) {
-    throw new AppError(500, 'Template-engine turn exceeded the one-LLM architecture',
+  if (!Number.isInteger(count) || count < 0 || count > maximumInvocations) {
+    throw new AppError(500, 'Template-engine turn exceeded its permitted LLM architecture',
       'TEMPLATE_ENGINE_LLM_INVOCATION_LIMIT_EXCEEDED', {
         invocationCount: Number.isFinite(count) ? count : null,
-        maximumInvocations: 1,
+        maximumInvocations,
         turnKind,
       });
   }
@@ -94,7 +95,7 @@ export function assertSingleLlmTurnArchitecture({
   return Object.freeze({
     enforced: true,
     invocationCount: count,
-    maximumInvocations: 1,
+    maximumInvocations,
     exactlyOneRequired: requireExactlyOne,
     turnKind,
   });
@@ -190,7 +191,7 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
 
   dependencies = instrumentTemplateEngineTurn(dependencies);
   const llmTurn = createSingleLlmTurnInvoker(
-    dependencies.invokeStructuredLlm, dependencies.onLlmInvocation,
+    dependencies.invokeStructuredLlm, dependencies.onLlmInvocation, 2,
   );
   const assertCurrentTurn = () => {
     if (typeof dependencies.isTurnCurrent === 'function' && !dependencies.isTurnCurrent()) {
@@ -275,10 +276,29 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
   });
   assertCurrentTurn();
 
+  const toolResponse = workflowResult.toolExecuted
+    ? await runToolResultResponse({
+      invokeStructuredLlm: llmTurn.invoke,
+      agentPrompt,
+      language: input.language,
+      currentQuestion: input.latestUtterance,
+      toolCall: {
+        name: universalTurn.workflowAction?.toolName,
+        intent: input.latestUtterance,
+        arguments: universalTurn.workflowAction?.arguments,
+      },
+      toolResult: workflowResult.toolResult,
+      maximumSpeechCharacters,
+      cancellationSignal: input.cancellationSignal,
+      onSpeechSentence: dependencies.onSpeechSentence,
+    }) : null;
+  assertCurrentTurn();
+
   const llmArchitecture = assertSingleLlmTurnArchitecture({
     invocationCount: llmTurn.count(),
     requireExactlyOne: true,
-    turnKind: 'contextual_qdrant',
+    maximumInvocations: workflowResult.toolExecuted ? 2 : 1,
+    turnKind: workflowResult.toolExecuted ? 'contextual_qdrant_tool_result' : 'contextual_qdrant',
   });
   const architecture = Object.freeze({
     enforced: true,
@@ -287,10 +307,12 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
       'contextual_search_text',
       'tenant_agent_qdrant_search',
       'universal_response_and_workflow_generation',
+      ...(workflowResult.toolExecuted ? ['authorized_tool_execution', 'tool_result_response_generation'] : []),
       'llm_output_accepted',
       'tts_ready',
     ]),
     answerGenerationCalls: 1,
+    toolResultResponseCalls: workflowResult.toolExecuted ? 1 : 0,
     universalOperation: true,
     languageOrBusinessRouting: false,
     retrieval: retrievalArchitecture,
@@ -299,13 +321,16 @@ export async function runTemplateEngineProductionTurn(input = {}, dependencies =
 
   return Object.freeze({
     decision: universalTurn.decision,
-    speech: universalTurn.speech,
+    speech: toolResponse?.speech ?? universalTurn.speech,
     state: workflowResult.state,
     evidence: universalTurn.evidence,
     evidenceIds: universalTurn.evidenceIds,
     diagnostics: Object.freeze({
       retrieval: universalTurn.retrievalDiagnostics,
-      postSearch: Object.freeze({ answerGenerationCalls: 1 }),
+      postSearch: Object.freeze({
+        answerGenerationCalls: 1,
+        toolResultResponseCalls: workflowResult.toolExecuted ? 1 : 0,
+      }),
       architecture,
     }),
     workflow: workflowResult.workflow,

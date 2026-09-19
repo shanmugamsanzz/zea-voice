@@ -1,3 +1,5 @@
+import { AppError } from '../../middleware/errors.js';
+
 export function shortenCompleteSpeech(value, maximum) {
   const speech = String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
     .replace(/\s+/gu, ' ').trim();

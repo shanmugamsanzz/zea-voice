@@ -102,6 +102,9 @@ export async function executeAgentTool(runtimeProfile, call, toolCall, dependenc
       redirect: 'error',
       signal: AbortSignal.timeout(timeoutMs),
       body: JSON.stringify({
+        mobileNumber: call.fromNumber ?? call.from ?? null,
+        intent: String(toolCall?.intent ?? '').trim() || null,
+        toolName: safeName(tool.name),
         arguments: argumentsValue,
         context: {
           callId: call.id,
