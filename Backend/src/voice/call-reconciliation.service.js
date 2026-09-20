@@ -6,6 +6,7 @@ import { getPlivoCallDetails } from '../telephony/plivo.client.js';
 import { voiceCallOwnership } from './call-ownership.service.js';
 import { queuePostCallSummary } from './postcall-summary/postcall-summary.queue.js';
 import { finalizeCallCreditBilling } from '../credits/call-credit.service.js';
+import { expireBrowserTestSessions } from './browser-test-session.service.js';
 
 function asDate(value) {
   if (!value) return null;
@@ -181,8 +182,10 @@ export function startCallReconciliation() {
   if (!env.VOICE_CALL_RECONCILIATION_ENABLED || timer) return;
   const run = () => {
     if (running) return;
-    running = reconcileStaleVoiceCalls().then((result) => {
-      if (result.reconciled || result.failed) logger.info({ stage: 'call.reconciliation_cycle', ...result },
+    running = Promise.all([reconcileStaleVoiceCalls(), expireBrowserTestSessions()]).then(([result, browserTests]) => {
+      if (result.reconciled || result.failed || browserTests.expired) logger.info({
+        stage: 'call.reconciliation_cycle', ...result, expiredBrowserTests: browserTests.expired,
+      },
         'Call reconciliation cycle completed');
     }).catch((error) => logger.error({ err: error, stage: 'call.reconciliation_cycle_failed' },
       'Call reconciliation cycle failed')).finally(() => { running = null; });

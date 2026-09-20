@@ -119,6 +119,27 @@ export function createBrowserTestSession(auth, agentId, input = {}, dependencies
   });
 }
 
+// A browser test is not backed by a telephony provider callback.  If its tab
+// never opens the media WebSocket (or a process restarts), nothing else can
+// move its initial `ringing` row to a terminal state.  Run this from the
+// existing call watchdog so expired tests cannot look like live calls forever.
+export async function expireBrowserTestSessions(dependencies = {}) {
+  const contextRunner = dependencies.contextRunner ?? withAuthServiceContext;
+  return contextRunner(async (client) => {
+    const expired = await client.query(`UPDATE call_sessions
+      SET status='failed',ended_at=now(),duration_seconds=0,
+          reserved_credits=0,credits_charged=0,credit_billing_finalized=true,
+          provider_metadata=provider_metadata||jsonb_build_object('browserTest',
+            COALESCE(provider_metadata->'browserTest','{}'::jsonb)
+              || jsonb_build_object('expired',true,'expiredAt',now()))
+      WHERE status IN ('ringing','connected') AND ended_at IS NULL
+        AND provider_metadata->>'source'=$1
+        AND (provider_metadata->'browserTest'->>'expiresAt')::timestamptz <= now()
+      RETURNING id`, [browserSource]);
+    return Object.freeze({ expired: expired.rowCount });
+  });
+}
+
 export function claimBrowserTestMediaSession(callId, claims, dependencies = {}) {
   const contextRunner = dependencies.contextRunner ?? withAuthServiceContext;
   return contextRunner(async (client) => {
