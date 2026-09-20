@@ -136,6 +136,9 @@ assert.equal(contextCall.providerMetadata.conversationContext.contextId, 'hospit
 let toolRequest;
 const toolResult = await executeAgentTool(runtimeProfile, call, {
   id: 'tool-call-1', name: 'book_visit', arguments: { date: 'tomorrow' },
+  intent: 'Book a visit tomorrow', currentUserMessage: 'Tomorrow works for me.',
+  conversation: [{ role: 'user', content: 'I need to book a visit.' }],
+  collectedDetails: { date: 'tomorrow' },
 }, {
   fetchImpl: async (url, request) => {
     toolRequest = { url, request };
@@ -144,7 +147,15 @@ const toolResult = await executeAgentTool(runtimeProfile, call, {
 });
 assert.equal(toolResult.success, true);
 assert.equal(toolRequest.request.headers.authorization, 'Bearer secret');
-assert.equal(JSON.parse(toolRequest.request.body).context.tenantId, 'tenant-a');
+const toolPayload = JSON.parse(toolRequest.request.body);
+assert.equal(toolPayload.context.tenantId, 'tenant-a');
+assert.equal(toolPayload.callerPhoneNumber, call.from);
+assert.equal(toolPayload.intent, 'Book a visit tomorrow');
+assert.equal(toolPayload.currentUserMessage, 'Tomorrow works for me.');
+assert.equal(toolPayload.collectedDetails.date, 'tomorrow');
+assert.match(toolPayload.conversationSummary, /Caller: I need to book a visit/u);
+assert.equal(toolPayload.agentContext.agentId, 'agent-1');
+assert.equal(toolPayload.callContext.callId, call.id);
 let unassignedNetworkCalled = false;
 await assert.rejects(
   executeAgentTool(runtimeProfile, call, { name: 'delete_everything', arguments: {} }, {

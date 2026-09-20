@@ -1,3 +1,5 @@
+import { env } from '../../config/env.js';
+
 export const QDRANT_RETRIEVAL_CONTRACT_VERSION = 1;
 
 export const QDRANT_RETRIEVAL_LIMITS = Object.freeze({
@@ -5,7 +7,7 @@ export const QDRANT_RETRIEVAL_LIMITS = Object.freeze({
   maximumContextCharacters: 3_000,
   maximumQuestionCharacters: 2_000,
   maximumChunkCharacters: 8_000,
-  maximumChunks: 2,
+  maximumChunks: env.RAG_RETRIEVAL_MAX_CHUNKS,
 });
 
 function cleanText(value, maximum) {

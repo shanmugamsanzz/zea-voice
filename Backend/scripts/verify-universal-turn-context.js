@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { buildUniversalTurnContext } from '../src/voice/interaction/universal-turn-context.js';
 import { runTemplateEngineProductionTurn } from '../src/voice/interaction/template-engine-production-runtime.js';
 import { runAgentQdrantUniversalTurn } from '../src/voice/interaction/agent-qdrant-grounded-turn.js';
-import { createQdrantRetrievalRequest } from '../src/voice/interaction/qdrant-retrieval-contract.js';
+import { createQdrantRetrievalRequest, QDRANT_RETRIEVAL_LIMITS } from '../src/voice/interaction/qdrant-retrieval-contract.js';
 
 const history = [
   { role: 'assistant', content: 'Welcome. How can I help?' },
@@ -66,7 +66,7 @@ const result = await runTemplateEngineProductionTurn({
     assert.equal(input.previousContext.at(-1).content, 'Which date?');
     return { request: createQdrantRetrievalRequest(input), chunks: [],
       diagnostics: { queryEmbeddingCount: 1, qdrantSearchCount: 1,
-        returnedChunkCount: 0, maximumChunks: 2, tenantAgentFiltered: true } };
+        returnedChunkCount: 0, maximumChunks: QDRANT_RETRIEVAL_LIMITS.maximumChunks, tenantAgentFiltered: true } };
   },
   runQdrantUniversalTurn: runAgentQdrantUniversalTurn,
   invokeStructuredLlm: async (request) => {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { runAgentQdrantUniversalTurn } from '../src/voice/interaction/agent-qdrant-grounded-turn.js';
 import { parseTemplateEngineStructuredOutput } from '../src/voice/interaction/template-engine-structured-output.js';
-import { createQdrantRetrievalRequest } from '../src/voice/interaction/qdrant-retrieval-contract.js';
+import { createQdrantRetrievalRequest, QDRANT_RETRIEVAL_LIMITS } from '../src/voice/interaction/qdrant-retrieval-contract.js';
 import { runTemplateEngineProductionTurn } from '../src/voice/interaction/template-engine-production-runtime.js';
 
 const tenantId = '11111111-1111-4111-8111-111111111111';
@@ -32,7 +32,7 @@ const retrieval = Object.freeze({
   embeddingModel: 'intfloat/multilingual-e5-base',
   chunks,
   diagnostics: Object.freeze({ queryEmbeddingCount: 1, qdrantSearchCount: 1,
-    returnedChunkCount: 1, maximumChunks: 2, tenantAgentFiltered: true }),
+    returnedChunkCount: 1, maximumChunks: QDRANT_RETRIEVAL_LIMITS.maximumChunks, tenantAgentFiltered: true }),
 });
 
 const parsedUniversalEnvelope = parseTemplateEngineStructuredOutput({
@@ -173,7 +173,7 @@ assert.deepEqual(productionResult.diagnostics.architecture.retrieval, {
   queryEmbeddingCount: 1,
   qdrantSearchCount: 1,
   returnedChunkCount: 1,
-  maximumChunks: 2,
+  maximumChunks: QDRANT_RETRIEVAL_LIMITS.maximumChunks,
   tenantAgentFiltered: true,
 });
 assert.equal(stageTimings.retrieval.operations.retrieval.calls, 1);

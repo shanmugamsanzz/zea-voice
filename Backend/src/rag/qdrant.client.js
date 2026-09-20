@@ -199,7 +199,7 @@ export async function deleteTenantAgentLiveDataTablePoints(tenantId, agentId, ta
 }
 
 export async function searchTenantAgentDocumentPoints(tenantId, agentId, vector, {
-  limit = 2,
+  limit = env.RAG_RETRIEVAL_MAX_CHUNKS,
   scoreThreshold = env.RAG_RUNTIME_MIN_SCORE,
   abortSignal = undefined,
 } = {}) {
@@ -207,7 +207,9 @@ export async function searchTenantAgentDocumentPoints(tenantId, agentId, vector,
     || vector.some((value) => typeof value !== 'number' || !Number.isFinite(value))) {
     throw new TypeError(`A numeric ${env.QDRANT_VECTOR_SIZE}-dimension query vector is required`);
   }
-  if (limit !== 2) throw new TypeError('Agent document search limit must be 2');
+  if (limit !== env.RAG_RETRIEVAL_MAX_CHUNKS) {
+    throw new TypeError('Agent document search limit must match RAG_RETRIEVAL_MAX_CHUNKS');
+  }
   const collectionName = collectionForTenant(tenantId);
   try {
     const payload = await qdrantFetch(
@@ -255,12 +257,14 @@ function agentKnowledgeAndLiveDataFilter(tenantId, agentId) {
 
 /** One tenant/agent Qdrant search across published documents and Live Data row indexes. */
 export async function searchTenantAgentKnowledgeAndLiveDataPoints(tenantId, agentId, vector, {
-  limit = 2,
+  limit = env.RAG_RETRIEVAL_MAX_CHUNKS,
   scoreThreshold = env.RAG_RUNTIME_MIN_SCORE,
   abortSignal = undefined,
 } = {}) {
   verifiedSearchVector(vector);
-  if (limit !== 2) throw new TypeError('Unified agent search limit must be 2');
+  if (limit !== env.RAG_RETRIEVAL_MAX_CHUNKS) {
+    throw new TypeError('Unified agent search limit must match RAG_RETRIEVAL_MAX_CHUNKS');
+  }
   const collectionName = collectionForTenant(tenantId);
   try {
     const payload = await qdrantFetch(

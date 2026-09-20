@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { createApp } from '../src/app.js';
+import { QDRANT_RETRIEVAL_LIMITS } from '../src/voice/interaction/qdrant-retrieval-contract.js';
 
 const backendDirectory = fileURLToPath(new URL('../', import.meta.url));
 const argumentsList = process.argv.slice(2);
@@ -153,7 +154,7 @@ console.log(JSON.stringify({
     'documents_chunk_embed_qdrant',
     'bounded_context_query_embedding',
     'tenant_agent_filtered_qdrant_search',
-    'top_two_chunks',
+    `top_${QDRANT_RETRIEVAL_LIMITS.maximumChunks}_chunks`,
     'one_universal_llm_call_or_tool_result_follow_up',
     'llm_answer_pass_through',
     'existing_tts',
@@ -165,7 +166,7 @@ console.log(JSON.stringify({
     toolResultLlmCallsPerUserTurn: 2,
     queryEmbeddingsPerFactualTurn: 1,
     qdrantSearchesPerFactualTurn: 1,
-    maximumRetrievedChunks: 2,
+    maximumRetrievedChunks: QDRANT_RETRIEVAL_LIMITS.maximumChunks,
     postgresDocumentChunkQueries: 0,
   },
   latency: liveLatencyReport(),

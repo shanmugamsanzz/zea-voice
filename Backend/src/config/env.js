@@ -135,6 +135,7 @@ const envSchema = z.object({
   RAG_CHUNK_OVERLAP_TOKENS: z.coerce.number().int().min(0).max(500).default(50),
   RAG_EMBEDDING_BATCH_SIZE: z.coerce.number().int().min(1).max(128).default(16),
   RAG_EMBEDDING_MAX_CHARS: z.coerce.number().int().min(200).max(10000).default(1800),
+  RAG_RETRIEVAL_MAX_CHUNKS: z.coerce.number().int().min(1).max(10).default(2),
   QDRANT_UPSERT_BATCH_SIZE: z.coerce.number().int().min(1).max(512).default(64),
   RAG_RUNTIME_MIN_SCORE: z.coerce.number().min(0).max(1).default(0.72),
 

@@ -15,20 +15,31 @@ function jsonClone(value, fallback = {}) {
   try { return JSON.parse(JSON.stringify(value)); } catch { return fallback; }
 }
 
+function hasConfiguredFields(schema) {
+  return Object.keys(object(schema?.properties)).length > 0
+    || (Array.isArray(schema?.required) && schema.required.length > 0);
+}
+
 export function buildUniversalWorkflowDefinitions({
   authorizedTools = [],
 } = {}) {
   const tools = Array.isArray(authorizedTools) ? authorizedTools : [];
   return Object.freeze(tools.map((tool) => {
-    const schemaRequired = Array.isArray(tool.inputSchema?.required) ? tool.inputSchema.required : [];
+    const configuredSchema = jsonClone(tool.inputSchema, {});
+    const promptDriven = !hasConfiguredFields(configuredSchema);
+    const inputSchema = promptDriven
+      ? { type: 'object', properties: {}, required: [], additionalProperties: true }
+      : configuredSchema;
+    const schemaRequired = Array.isArray(inputSchema.required) ? inputSchema.required : [];
     const requiredFields = [...new Set(schemaRequired)];
     return Object.freeze({
       workflowId: cleanText(tool.id, 160), toolName: cleanText(tool.name, 160),
       identifiers: Object.freeze((tool.identifiers ?? []).map((value) => cleanText(value, 160))
         .filter(Boolean)),
       description: cleanText(tool.description, 1_024),
-      inputSchema: Object.freeze(jsonClone(tool.inputSchema, {})),
+      inputSchema: Object.freeze(inputSchema),
       requiredFields: Object.freeze(requiredFields),
+      promptDriven,
     });
   }).filter((workflow) => workflow.workflowId && workflow.toolName));
 }
@@ -44,6 +55,9 @@ function definitionFor(action, definitions) {
 }
 
 function validatePartialArguments(values, definition) {
+  if (definition.promptDriven) {
+    return validateToolArguments(values, definition.inputSchema);
+  }
   const properties = object(definition.inputSchema?.properties);
   for (const [key, value] of Object.entries(values)) {
     if (!Object.hasOwn(properties, key) || !toolArgumentsMatchSchema(value, properties[key])) {
@@ -119,6 +133,9 @@ export async function applyUniversalWorkflowResult({
     name: definition.toolName, arguments: validatedArguments,
     authorizationRecordId: definition.workflowId,
     intent: cleanText(conversationContext?.currentQuestion, 2_000),
+    currentUserMessage: cleanText(conversationContext?.currentQuestion, 2_000),
+    conversation: conversationContext?.recentConversation ?? [],
+    collectedDetails: argumentsValue,
   }));
   if (!toolResult?.success) throw new AppError(502, 'The configured workflow tool failed',
     'TEMPLATE_ENGINE_UNIVERSAL_WORKFLOW_TOOL_FAILED');

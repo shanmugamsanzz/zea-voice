@@ -8,6 +8,24 @@ function safeName(value) {
   return String(value ?? '').trim().replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
 }
 
+function cleanText(value, maximum = 4_000) {
+  return String(value ?? '').normalize('NFKC').replace(/[\p{Cc}\p{Cf}]/gu, ' ')
+    .replace(/\s+/gu, ' ').trim().slice(0, maximum);
+}
+
+function object(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function compactConversationSummary(entries) {
+  const messages = (Array.isArray(entries) ? entries : [])
+    .filter((entry) => ['user', 'assistant'].includes(entry?.role))
+    .slice(-12)
+    .map((entry) => `${entry.role === 'user' ? 'Caller' : 'Agent'}: ${cleanText(entry.content, 700)}`)
+    .filter(Boolean);
+  return cleanText(messages.join(' | '), 6_000) || null;
+}
+
 function configuredHeaders(tool) {
   const publicHeaders = tool.configuration?.headers ?? {};
   const secrets = tool.secretConfiguration ?? {};
@@ -103,9 +121,27 @@ export async function executeAgentTool(runtimeProfile, call, toolCall, dependenc
       signal: AbortSignal.timeout(timeoutMs),
       body: JSON.stringify({
         mobileNumber: call.fromNumber ?? call.from ?? null,
-        intent: String(toolCall?.intent ?? '').trim() || null,
+        callerPhoneNumber: call.fromNumber ?? call.from ?? null,
+        intent: cleanText(toolCall?.intent, 2_000) || null,
+        currentUserMessage: cleanText(toolCall?.currentUserMessage ?? toolCall?.intent, 2_000) || null,
+        conversationSummary: compactConversationSummary(toolCall?.conversation),
+        collectedDetails: object(toolCall?.collectedDetails ?? argumentsValue),
         toolName: safeName(tool.name),
         arguments: argumentsValue,
+        agentContext: {
+          tenantId: runtimeProfile.agent.tenantId,
+          workspaceId: runtimeProfile.agent.workspaceId,
+          agentId: runtimeProfile.agent.id,
+          agentName: cleanText(runtimeProfile.agent.name, 300) || null,
+          language: cleanText(runtimeProfile.agent.language, 80) || null,
+        },
+        callContext: {
+          callId: call.id,
+          providerCallId: call.providerCallId ?? null,
+          direction: call.direction ?? null,
+          fromNumber: call.fromNumber ?? call.from ?? null,
+          toNumber: call.toNumber ?? call.to ?? null,
+        },
         context: {
           callId: call.id,
           providerCallId: call.providerCallId,

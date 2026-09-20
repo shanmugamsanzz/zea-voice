@@ -1,4 +1,5 @@
 import { AppError } from '../../middleware/errors.js';
+import { env } from '../../config/env.js';
 import { instrumentTemplateEngineTurn } from './template-engine-turn-timing.js';
 import { normalizedSpeechBudget, speechBudgetInstruction } from './template-engine-speech-budget.js';
 import {
@@ -112,8 +113,12 @@ export function assertQdrantFactualRetrievalArchitecture(diagnostics = {}) {
   if (queryEmbeddingCount !== 1) violations.push('query_embedding_must_run_once');
   if (qdrantSearchCount !== 1) violations.push('qdrant_search_must_run_once');
   if (!Number.isInteger(returnedChunkCount) || returnedChunkCount < 0
-    || returnedChunkCount > 2) violations.push('qdrant_must_return_at_most_two_chunks');
-  if (maximumChunks !== 2) violations.push('qdrant_maximum_chunks_must_be_two');
+    || returnedChunkCount > env.RAG_RETRIEVAL_MAX_CHUNKS) {
+    violations.push('qdrant_returned_chunk_count_exceeds_configured_maximum');
+  }
+  if (maximumChunks !== env.RAG_RETRIEVAL_MAX_CHUNKS) {
+    violations.push('qdrant_maximum_chunks_must_match_environment');
+  }
   if (diagnostics.tenantAgentFiltered !== true) {
     violations.push('qdrant_search_must_be_tenant_agent_filtered');
   }

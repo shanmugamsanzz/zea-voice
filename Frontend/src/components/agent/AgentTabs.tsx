@@ -2755,8 +2755,8 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
 
                     <div>
                       <div className="mb-1 flex items-center gap-1.5">
-                        <label className="block text-[10px] font-bold text-slate-400">Input Schema (JSON)</label>
-                        <FieldInfoTooltip id="tool-input-schema-information" text="Describe the arguments the LLM must provide when it calls this tool." />
+                        <label className="block text-[10px] font-bold text-slate-400">Input Schema (JSON, optional advanced)</label>
+                        <FieldInfoTooltip id="tool-input-schema-information" text="Leave the default empty schema for prompt-driven tools. The runtime automatically sends caller, conversation, agent, and call context. Add fields only when this webhook requires strict argument validation." />
                       </div>
                       <textarea value={newToolInputSchema} disabled={isReadOnly} onChange={(e) => setNewToolInputSchema(e.target.value)} rows={7} spellCheck={false} className="w-full resize-y bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 font-mono text-[10px] text-sky-300 outline-none" />
                     </div>

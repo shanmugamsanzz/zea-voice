@@ -2216,6 +2216,10 @@ export class RealtimeConversationOrchestrator {
               id: `template-${epoch}`,
               name: toolCall.name,
               arguments: toolCall.arguments,
+              intent: toolCall.intent,
+              currentUserMessage: toolCall.currentUserMessage,
+              conversation: toolCall.conversation,
+              collectedDetails: toolCall.collectedDetails,
               authorizationRecordId: toolCall.authorizationRecordId,
             }],
             {

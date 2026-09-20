@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { shortenCompleteSpeech } from '../src/voice/interaction/universal-response-safety.js';
-import { applyUniversalWorkflowResult } from '../src/voice/interaction/template-engine-universal-workflow.js';
+import {
+  applyUniversalWorkflowResult,
+  buildUniversalWorkflowDefinitions,
+} from '../src/voice/interaction/template-engine-universal-workflow.js';
 import { classifyTemplateEngineTurnError } from '../src/voice/interaction/template-engine-error-classification.js';
 import { runAgentQdrantUniversalTurn } from '../src/voice/interaction/agent-qdrant-grounded-turn.js';
 
@@ -42,6 +45,30 @@ await applyUniversalWorkflowResult({ ...input,
   workflowAction: { ...input.workflowAction, arguments: { value: 'current' } },
 });
 assert.equal(executed, 2);
+const promptDrivenDefinitions = buildUniversalWorkflowDefinitions({ authorizedTools: [{
+  id: 'prompt-tool', name: 'slot_check', description: 'Check an appointment slot', inputSchema: {},
+}] });
+assert.equal(promptDrivenDefinitions[0].promptDriven, true);
+let promptDrivenCall;
+await applyUniversalWorkflowResult({
+  outcome: 'WORKFLOW_ACTION', state: {}, definitions: promptDrivenDefinitions,
+  workflowAction: {
+    action: 'EXECUTE', workflowId: 'prompt-tool', toolName: 'slot_check',
+    arguments: { date: 'tomorrow', time: '11:00 AM' }, authorizationQuote: 'Tomorrow at 11 AM.',
+  },
+  conversationContext: {
+    currentQuestion: 'Tomorrow at 11 AM.', currentSpeech: { transcriptFinal: true },
+    recentConversation: [{ role: 'user', content: 'I want a demo appointment.' }],
+  },
+  executeAuthorizedTool: async (value) => {
+    promptDrivenCall = value;
+    return { success: true, output: { available: true } };
+  },
+});
+assert.deepEqual(promptDrivenCall.arguments, { date: 'tomorrow', time: '11:00 AM' });
+assert.deepEqual(promptDrivenCall.collectedDetails, { date: 'tomorrow', time: '11:00 AM' });
+assert.equal(promptDrivenCall.currentUserMessage, 'Tomorrow at 11 AM.');
+assert.equal(promptDrivenCall.conversation.length, 1);
 const corrected = await applyUniversalWorkflowResult({ ...input,
   speech: 'Confirm the corrected value?', workflowAction: { ...input.workflowAction,
     action: 'UPSERT', arguments: { value: 'corrected' } } });

@@ -3,7 +3,7 @@ import {
   contextualAgentDocumentSearchText,
   retrieveAgentQdrantKnowledge,
 } from '../src/voice/interaction/agent-qdrant-retrieval.js';
-import { createQdrantRetrievalRequest } from '../src/voice/interaction/qdrant-retrieval-contract.js';
+import { createQdrantRetrievalRequest, QDRANT_RETRIEVAL_LIMITS } from '../src/voice/interaction/qdrant-retrieval-contract.js';
 
 const controller = new AbortController();
 const tenantId = '11111111-1111-4111-8111-111111111111';
@@ -104,7 +104,7 @@ assert.deepEqual(result.diagnostics, {
   qdrantSearchCount: 1,
   returnedChunkCount: 2,
   returnedLiveDataTableCount: 0,
-  maximumChunks: 2,
+  maximumChunks: QDRANT_RETRIEVAL_LIMITS.maximumChunks,
   tenantAgentFiltered: true,
 });
 

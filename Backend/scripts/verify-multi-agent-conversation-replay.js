@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { runTemplateEngineProductionTurn } from '../src/voice/interaction/template-engine-production-runtime.js';
 import { runAgentQdrantUniversalTurn } from '../src/voice/interaction/agent-qdrant-grounded-turn.js';
-import { createQdrantRetrievalRequest } from '../src/voice/interaction/qdrant-retrieval-contract.js';
+import { createQdrantRetrievalRequest, QDRANT_RETRIEVAL_LIMITS } from '../src/voice/interaction/qdrant-retrieval-contract.js';
 
 const cancellationSignal = new AbortController().signal;
 const agents = [
@@ -31,7 +31,7 @@ async function turn(agent, { question, history = [], pendingQuestion = null, sta
         source: { documentId: `${agent.agentId}-document`, filename: agent.filename, chunkIndex: 0 },
       }] : [], diagnostics: { queryEmbeddingCount: 1, qdrantSearchCount: 1,
         returnedChunkCount: answer.outcome === 'FACTUAL_ANSWER' ? 1 : 0,
-        maximumChunks: 2, tenantAgentFiltered: true } };
+        maximumChunks: QDRANT_RETRIEVAL_LIMITS.maximumChunks, tenantAgentFiltered: true } };
     },
     runQdrantUniversalTurn: runAgentQdrantUniversalTurn,
     invokeStructuredLlm: async (request) => {
