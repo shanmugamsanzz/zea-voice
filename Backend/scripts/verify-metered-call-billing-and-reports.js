@@ -2,13 +2,39 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 
 const { finalizeCallCreditBilling } = await import('../src/credits/call-credit.service.js');
-const { isTelephonyMeteredCall } = await import('../src/voice/call-completion.service.js');
+const { isTelephonyMeteredCall, persistTelephonyUsage } = await import('../src/voice/call-completion.service.js');
 
 assert.equal(isTelephonyMeteredCall({ telephony_account_id: 'plivo-1',
   provider_metadata: { source: 'browser_test' } }), false);
 assert.equal(isTelephonyMeteredCall({ telephony_account_id: 'plivo-1',
   provider_metadata: { source: 'plivo' } }), true);
 const { getCallCostReport } = await import('../src/calls/call-cost-report.service.js');
+
+let telephonyCost = null;
+await persistTelephonyUsage({ query: async (sql, values) => {
+  if (sql.includes('FROM telephony_accounts')) {
+    assert.ok(sql.includes('lower(p.runtime_connection_type)=lower(account.provider)'),
+      'Generated pricing provider slugs must match through their Plivo connection type');
+    return { rowCount: 1, rows: [{ provider_id: 'pricing-provider', provider_name: 'Plivo Telephony Pricing',
+      model_id: 'voice-model', model_key: 'plivo-voice' }] };
+  }
+  if (sql.includes('INSERT INTO call_metered_usage_events')) {
+    assert.equal(values[6], 120000);
+    return { rowCount: 1, rows: [{ id: 'telephony-event' }] };
+  }
+  if (sql.includes('FROM provider_model_prices')) return { rows: [{ id: 'voice-price',
+    parameter_name: 'Voice Minutes', currency: 'INR', unit_name: 'minute', unit_quantity: 1, price: 0.38 }] };
+  if (sql.includes('FROM currency_exchange_rates')) return { rows: [] };
+  if (sql.includes('INSERT INTO call_metered_usage_costs')) {
+    telephonyCost = values[14];
+    return { rowCount: 1, rows: [{}] };
+  }
+  throw new Error(`Unexpected query: ${sql}`);
+} }, { id: 'phone-call', tenant_id: 'tenant', telephony_account_id: 'account', direction: 'inbound' },
+120, new Date('2026-10-02T10:00:00Z'));
+assert.equal(telephonyCost, 0.76);
+await persistTelephonyUsage({ query: () => { throw new Error('Browser calls must not incur telephony usage'); } },
+{ telephony_account_id: 'account', provider_metadata: { source: 'browser_test' } }, 120, new Date());
 
 const queries = [];
 const billing = await finalizeCallCreditBilling({

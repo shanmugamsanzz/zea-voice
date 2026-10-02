@@ -14,13 +14,14 @@ export function isTelephonyMeteredCall(call) {
   return call?.provider_metadata?.source !== 'browser_test' && Boolean(call?.telephony_account_id);
 }
 
-async function persistTelephonyUsage(client, call, durationSeconds, endedAt) {
+export async function persistTelephonyUsage(client, call, durationSeconds, endedAt) {
   if (!isTelephonyMeteredCall(call)) return null;
   const provider = await client.query(`SELECT p.id AS provider_id,p.name AS provider_name,
       m.id AS model_id,m.model_key
     FROM telephony_accounts account
     JOIN ai_providers p ON p.type='telephony' AND p.status='connected' AND p.deleted_at IS NULL
-      AND lower(p.slug)=lower(account.provider)
+      AND (lower(p.runtime_connection_type)=lower(account.provider)
+        OR lower(p.slug)=lower(account.provider))
     JOIN provider_models m ON m.provider_id=p.id AND m.status='active' AND m.deleted_at IS NULL
     WHERE account.id=$1 ORDER BY m.created_at ASC LIMIT 1`, [call.telephony_account_id]);
   if (!provider.rowCount) return null;
