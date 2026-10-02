@@ -58,4 +58,28 @@ await assert.rejects(
     && error.message === 'Runtime adapter is not available for this provider/model.',
 );
 
+const { validateAgentRuntimeModels } = await import('../src/agents/agent.service.js');
+const agentClient = {
+  async query(_sql, [_modelId, kind]) {
+    return { rowCount: 1, rows: [{
+      model_id: `${kind}-model`, model_key: 'model', provider_name: `${kind}-required`,
+      provider_slug: `${kind}-required`, provider_status: 'connected',
+      runtime_connection_type: kind === 'llm' ? 'openai' : 'sarvam',
+      provider_settings: { API_KEY: '__configured_secret__' },
+    }] };
+  },
+};
+await validateAgentRuntimeModels(agentClient, {
+  sttModelId: 'stt-model', llmModelId: 'llm-model', ttsModelId: 'tts-model',
+}, parameterRegistry);
+await assert.rejects(validateAgentRuntimeModels({
+  async query(...args) {
+    const result = await agentClient.query(...args);
+    result.rows[0].provider_settings = {};
+    return result;
+  },
+}, { sttModelId: 'stt-model' }, parameterRegistry),
+(error) => error.code === 'AGENT_MODEL_RUNTIME_INCOMPATIBLE'
+  && error.message === 'Selected STT model is missing required runtime provider parameters');
+
 console.log(JSON.stringify({ success: true, task: 'Runtime adapter validation and safe selection' }));

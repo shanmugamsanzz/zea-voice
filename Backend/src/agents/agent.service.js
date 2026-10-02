@@ -130,6 +130,7 @@ export async function validateAgentRuntimeModels(client, input, registry = provi
         modelKey: row.model_key,
         modelSettings: row.model_settings ?? {},
         modelCapabilities: row.model_capabilities ?? {},
+        parameters: row.provider_settings ?? {},
         effectiveSettings: { ...(row.provider_settings ?? {}), ...(row.model_settings ?? {}) },
       });
     } catch (error) {
