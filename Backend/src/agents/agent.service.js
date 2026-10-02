@@ -104,7 +104,7 @@ export async function validateAgentRuntimeModels(client, input, registry = provi
     const modelId = field === 'postCallSummaryModelId' ? summary.modelId : input[field];
     const result = await client.query(`SELECT m.id model_id,m.model_key,m.settings model_settings,
       m.capabilities model_capabilities,p.id provider_id,p.name provider_name,p.slug provider_slug,
-      p.runtime_connection_type,p.status provider_status,
+      p.runtime_connection_type,p.status provider_status,p.base_url,
       COALESCE((SELECT jsonb_object_agg(x.key,COALESCE(x.plain_value, '__configured_secret__'))
         FROM ai_provider_parameters x
         WHERE x.provider_id=p.id AND (x.plain_value IS NOT NULL OR x.encrypted_value IS NOT NULL)), '{}'::jsonb) provider_settings
@@ -126,6 +126,7 @@ export async function validateAgentRuntimeModels(client, input, registry = provi
         providerId: row.provider_id,
         providerName: row.provider_name,
         providerSlug: row.provider_slug,
+        baseUrl: row.base_url,
         modelId: row.model_id,
         modelKey: row.model_key,
         modelSettings: row.model_settings ?? {},
@@ -137,12 +138,13 @@ export async function validateAgentRuntimeModels(client, input, registry = provi
       throw new AppError(400,
         error.code === 'VOICE_RUNTIME_REQUIRED_PARAMETER_MISSING'
           ? `Selected ${label} model is missing required runtime provider parameters`
-          : 'Runtime adapter is not available for this provider/model.',
+          : `Selected ${label} runtime configuration is invalid (${error.details?.reason ?? error.code ?? 'VALIDATION_FAILED'}).`,
         field === 'postCallSummaryModelId'
           ? 'AGENT_SUMMARY_MODEL_RUNTIME_INCOMPATIBLE'
           : 'AGENT_MODEL_RUNTIME_INCOMPATIBLE',
         { field: field === 'postCallSummaryModelId' ? 'settings.postCallSummaryModelId' : field,
-          providerId: row.provider_id, modelId: row.model_id, reason: error.code },
+          providerId: row.provider_id, modelId: row.model_id,
+          reason: error.details?.reason ?? error.code },
       );
     }
   }

@@ -82,4 +82,32 @@ await assert.rejects(validateAgentRuntimeModels({
 (error) => error.code === 'AGENT_MODEL_RUNTIME_INCOMPATIBLE'
   && error.message === 'Selected STT model is missing required runtime provider parameters');
 
+// Exercise the actual Sarvam factory: credentials, language, audio and endpoint
+// must all reach validation without opening a provider connection.
+const sarvamClient = {
+  async query(...args) {
+    const result = await agentClient.query(...args);
+    if (args[1][1] === 'stt') Object.assign(result.rows[0], {
+      provider_name: 'Sarvam', provider_slug: 'sarvam', model_key: 'saaras:v3',
+      base_url: 'https://api.sarvam.ai', model_settings: { sttLanguage: 'ta-IN' },
+      model_capabilities: { audio: { input: {
+        encoding: 'pcm_s16le', sampleRate: 16000, channels: 1,
+      } } },
+    });
+    return result;
+  },
+};
+await validateAgentRuntimeModels(sarvamClient, {
+  sttModelId: 'stt-model', llmModelId: 'llm-model', ttsModelId: 'tts-model',
+}, parameterRegistry);
+await assert.rejects(validateAgentRuntimeModels({
+  async query(...args) {
+    const result = await sarvamClient.query(...args);
+    result.rows[0].base_url = null;
+    return result;
+  },
+}, { sttModelId: 'stt-model' }, parameterRegistry),
+(error) => error.details.reason === 'STT_BASE_URL_MISSING'
+  && error.message.includes('STT_BASE_URL_MISSING'));
+
 console.log(JSON.stringify({ success: true, task: 'Runtime adapter validation and safe selection' }));
