@@ -7,7 +7,7 @@ import {
   providerIdSchema, providerStatusSchema, updateModelPriceSchema, updateModelSchema, updateProviderSchema,
 } from './provider.schemas.js';
 import {
-  createProvider, createProviderModel, createProviderModelPrices, deleteProvider, getProviderCatalog, listProviderModels, listProviders,
+  createProvider, createProviderModel, createProviderModelPrices, deleteProvider, ensurePlivoPricingProvider, getProviderCatalog, listProviderModels, listProviders,
   listProviderModelPriceHistory, listProviderModelPrices, listRuntimeConnectionTypes, updateProviderModelPrice,
   updateProviderModel, updateModelStatus, updateProvider, updateProviderModelPriceStatus, updateProviderStatus,
 } from './provider.service.js';
@@ -22,6 +22,9 @@ export const providerRouter = Router();
 providerRouter.use(authenticateRequest, requireRoles('SUPER_ADMIN'));
 providerRouter.get('/', async (req, res) => res.json({ success: true, data: await listProviders(req.auth.userId, valid(listProvidersSchema, req.query)) }));
 providerRouter.get('/runtime-connection-types', (req, res) => res.json({ success: true, data: listRuntimeConnectionTypes() }));
+providerRouter.post('/telephony-pricing-provider', async (req, res) => res.json({
+  success: true, data: await ensurePlivoPricingProvider(req.auth.userId),
+}));
 providerRouter.post('/', async (req, res) => res.status(201).json({ success: true, data: await createProvider(req.auth.userId, valid(createProviderSchema, req.body)) }));
 providerRouter.patch('/:providerId', async (req, res) => {
   const { providerId } = valid(providerIdSchema, req.params);

@@ -266,6 +266,33 @@ export function listRuntimeConnectionTypes() {
   return providerRuntimeConnectionTypes;
 }
 
+export function ensurePlivoPricingProvider(actorUserId) {
+  return withPlatformAdminContext(actorUserId, async (client) => {
+    // Serialize setup so simultaneous pricing visits cannot create duplicates.
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('plivo-pricing-provider'))");
+    const account = await client.query(`SELECT id FROM telephony_accounts
+      WHERE provider='plivo' AND account_type='main' AND status='connected'
+      AND deleted_at IS NULL LIMIT 1`);
+    if (!account.rowCount) throw new AppError(400,
+      'Connect a Plivo telephony account before assigning telephony prices.', 'PLIVO_ACCOUNT_REQUIRED');
+    let provider = await client.query(`SELECT id FROM ai_providers
+      WHERE type='telephony' AND runtime_connection_type='plivo' AND deleted_at IS NULL
+      ORDER BY created_at LIMIT 1`);
+    if (!provider.rowCount) provider = await client.query(`INSERT INTO ai_providers
+      (name,slug,type,runtime_connection_type,status,created_by)
+      VALUES ($1,$2,'telephony','plivo','connected',$3) RETURNING id`,
+    ['Plivo Telephony Pricing', `plivo-pricing-${crypto.randomUUID()}`, actorUserId]);
+    const providerId = provider.rows[0].id;
+    const models = await client.query(`SELECT id FROM provider_models
+      WHERE provider_id=$1 AND deleted_at IS NULL LIMIT 1`, [providerId]);
+    if (!models.rowCount) await client.query(`INSERT INTO provider_models
+      (provider_id,model_key,display_name,status,capabilities,settings,created_by)
+      VALUES ($1,'plivo-voice','Plivo Voice Calls','active','{}'::jsonb,'{}'::jsonb,$2)`,
+    [providerId, actorUserId]);
+    return mapProvider(await providerRow(client, providerId));
+  });
+}
+
 export function deleteProvider(actorUserId, providerId) {
   return withPlatformAdminContext(actorUserId, async (client) => {
     const before = mapProvider(await providerRow(client, providerId));

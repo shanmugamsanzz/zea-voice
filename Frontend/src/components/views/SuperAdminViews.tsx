@@ -1560,6 +1560,7 @@ function emptyModelPriceDraft(): ModelPriceDraft {
 }
 
 function ModelPriceAssignmentPanel({ providers }: { providers: ProviderApiData[] }) {
+  const [plivoPricingProvider, setPlivoPricingProvider] = useState<ProviderApiData | null>(null);
   const [serviceType, setServiceType] = useState<ProviderType>('llm');
   const [providerId, setProviderId] = useState('');
   const [modelId, setModelId] = useState('');
@@ -1575,12 +1576,29 @@ function ModelPriceAssignmentPanel({ providers }: { providers: ProviderApiData[]
   const [success, setSuccess] = useState('');
 
   const matchingProviders = providers.filter((provider) => provider.type === serviceType);
+  if (serviceType === 'telephony' && plivoPricingProvider
+    && !matchingProviders.some((provider) => provider.id === plivoPricingProvider.id)) {
+    matchingProviders.push(plivoPricingProvider);
+  }
   const selectedProvider = matchingProviders.find((provider) => provider.id === providerId) ?? null;
   const selectedModel = models.find((model) => model.id === modelId) ?? null;
 
   useEffect(() => {
     setProviderId(''); setModelId(''); setModels([]); setPrices([]); setEditingPriceId(null);
     setDrafts([emptyModelPriceDraft()]); setError(''); setSuccess('');
+  }, [serviceType]);
+
+  useEffect(() => {
+    if (serviceType !== 'telephony') return;
+    let cancelled = false;
+    void apiRequest<ProviderApiData>('/admin/providers/telephony-pricing-provider', { method: 'POST', body: '{}' })
+      .then((provider) => {
+        if (!cancelled) { setPlivoPricingProvider(provider); setProviderId(provider.id); }
+      })
+      .catch((requestError) => {
+        if (!cancelled) setError(requestError instanceof Error ? requestError.message : 'Plivo pricing provider could not be loaded');
+      });
+    return () => { cancelled = true; };
   }, [serviceType]);
 
   useEffect(() => {
