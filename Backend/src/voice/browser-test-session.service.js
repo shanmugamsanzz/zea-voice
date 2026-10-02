@@ -104,7 +104,7 @@ export function createBrowserTestSession(auth, agentId, input = {}, dependencies
       (id,tenant_id,workspace_id,provider_call_id,agent_id,agent_name,
        from_number,to_number,direction,status,ringing_at,answered_at,provider_metadata,
        reserved_credits,credits_charged,credit_billing_finalized)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'ringing',$10,NULL,$11::jsonb,0,0,true)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'ringing',$10,NULL,$11::jsonb,0,0,false)
       RETURNING *`, [
       callId, auth.tenantId, auth.workspaceId, providerCallId, agentId, agent.rows[0].name,
       direction === 'inbound' ? browserFrom : browserTo,
@@ -178,6 +178,7 @@ export function endBrowserTestSession(auth, agentId, testCallId, dependencies = 
     if (!selected.rowCount) {
       throw new AppError(404, 'Browser test session was not found', 'BROWSER_TEST_SESSION_NOT_FOUND');
     }
+    if (selected.rows[0].ended_at) return publicSession(selected.rows[0]);
     const activeSession = sessionStore.get(testCallId, { touch: false });
     if (activeSession?.transport === browserSource) {
       activeSession.close(1000, 'browser test ended by user');
@@ -194,12 +195,4 @@ export function endBrowserTestSession(auth, agentId, testCallId, dependencies = 
       WHERE id=$1 RETURNING *`, [testCallId]);
     return publicSession(ended.rows[0]);
   });
-}
-
-export async function finalizeBrowserTestBilling(client, { call }) {
-  await client.query(`UPDATE call_sessions
-    SET reserved_credits=0,credits_charged=0,credit_billing_finalized=true,
-        provider_metadata=provider_metadata||'{"browserTestBilling":{"billable":false,"finalized":true}}'::jsonb
-    WHERE id=$1`, [call.id]);
-  return { idempotent: call.credit_billing_finalized === true, creditsCharged: 0 };
 }

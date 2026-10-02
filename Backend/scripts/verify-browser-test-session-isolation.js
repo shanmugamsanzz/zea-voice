@@ -54,7 +54,7 @@ async function contextRunner(_auth, operation) {
           provider_call_id: parameters[3], agent_id: parameters[4], agent_name: parameters[5],
           from_number: parameters[6], to_number: parameters[7], direction: parameters[8],
           status: 'ringing', answered_at: null, started_at: parameters[9], ended_at: null,
-          duration_seconds: 0, provider_metadata: metadata, credit_billing_finalized: true,
+          duration_seconds: 0, provider_metadata: metadata, credit_billing_finalized: false,
         };
         calls.set(row.id, row);
         return { rowCount: 1, rows: [row] };
@@ -95,7 +95,7 @@ for (const company of companies) {
     assert.equal(claims.workspaceId, company.workspaceId);
     assert.equal(claims.agentId, agent.id);
     assert.equal(claims.userId, company.userId);
-    assert.equal(calls.get(session.callId).credit_billing_finalized, true);
+    assert.equal(calls.get(session.callId).credit_billing_finalized, false);
     created.push({ company, agent, auth, session });
   }
   await assert.rejects(() => createBrowserTestSession(auth, company.agents[2].id, {}, {
@@ -127,8 +127,13 @@ assert.ok(calls.get(owner.session.testCallId).ended_at);
 assert.equal(calls.get(owner.session.testCallId).provider_metadata.browserTest.userId,
   owner.auth.userId);
 assert.equal(calls.get(owner.session.testCallId).provider_metadata.browserTest.endedByUser, true);
+assert.equal(calls.get(owner.session.testCallId).credit_billing_finalized, true);
+
+const endedAgain = await endBrowserTestSession(owner.auth, owner.agent.id,
+  owner.session.testCallId, { contextRunner });
+assert.equal(endedAgain.status, 'canceled');
 
 console.log(JSON.stringify({ success: true, task: 'browser test session isolation',
   companies: companies.length, agentsTested: created.length, concurrentPerCompany: 2,
   scopedTokens: true, unauthorizedCreateRejected: true, unauthorizedEndRejected: true,
-  concurrencyEnforced: true, disconnectCleanupPersisted: true, nonBillable: true }));
+  concurrencyEnforced: true, disconnectCleanupPersisted: true, aiUsageBillable: true }));

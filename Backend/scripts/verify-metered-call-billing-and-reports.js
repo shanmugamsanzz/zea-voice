@@ -2,6 +2,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 
 const { finalizeCallCreditBilling } = await import('../src/credits/call-credit.service.js');
+const { isTelephonyMeteredCall } = await import('../src/voice/call-completion.service.js');
+
+assert.equal(isTelephonyMeteredCall({ telephony_account_id: 'plivo-1',
+  provider_metadata: { source: 'browser_test' } }), false);
+assert.equal(isTelephonyMeteredCall({ telephony_account_id: 'plivo-1',
+  provider_metadata: { source: 'plivo' } }), true);
 const { getCallCostReport } = await import('../src/calls/call-cost-report.service.js');
 
 const queries = [];
@@ -27,6 +33,32 @@ assert.ok(debit, 'one usage debit must be created');
 assert.equal(debit.values[2], 2.75);
 assert.equal(debit.values[4], 'call-1');
 assert.equal(queries.some(({ sql }) => /durationSeconds/.test(sql)), false);
+
+const browserQueries = [];
+const browserBilling = await finalizeCallCreditBilling({
+  query: async (sql, values) => {
+    browserQueries.push({ sql, values });
+    if (/FROM credit_ledger_entries/.test(sql)) return { rowCount: 0, rows: [] };
+    if (/FROM call_metered_usage_costs/.test(sql)) return {
+      rowCount: 1, rows: [{ total_cost_inr: '0.125', cost_line_count: 3 }],
+    };
+    if (/SELECT w\.id AS wallet_id/.test(sql)) return { rowCount: 1, rows: [{
+      wallet_id: 'wallet-browser', balance: '10', reserved_balance: '0',
+      available_credits: '10', low_credit_threshold: '1',
+    }] };
+    if (/UPDATE company_credit_wallets/.test(sql)) return { rowCount: 1, rows: [{
+      balance: '9.875', reserved_balance: '0', available_balance: '9.875',
+    }] };
+    return { rowCount: 1, rows: [] };
+  },
+}, {
+  call: { id: 'browser-call-1', tenant_id: 'tenant-1', reserved_credits: 0,
+    credit_billing_finalized: false, provider_metadata: { source: 'browser_test' } },
+  durationSeconds: 120,
+});
+assert.equal(browserBilling.creditsCharged, 0.125);
+assert.equal(browserBilling.availableCredits, 9.875);
+assert.equal(browserQueries.filter(({ sql }) => /INSERT INTO credit_ledger_entries/.test(sql)).length, 1);
 
 let replayQueries = 0;
 const replay = await finalizeCallCreditBilling({

@@ -10,8 +10,12 @@ import { calculateAndPersistUsageEventCosts } from '../credits/usage-price-calcu
 const terminalStatuses = new Set(['completed', 'failed', 'canceled', 'manual_follow_up_required']);
 const wholeNumber = (value) => Math.max(0, Math.round(Number(value) || 0));
 
+export function isTelephonyMeteredCall(call) {
+  return call?.provider_metadata?.source !== 'browser_test' && Boolean(call?.telephony_account_id);
+}
+
 async function persistTelephonyUsage(client, call, durationSeconds, endedAt) {
-  if (!call.telephony_account_id) return null;
+  if (!isTelephonyMeteredCall(call)) return null;
   const provider = await client.query(`SELECT p.id AS provider_id,p.name AS provider_name,
       m.id AS model_id,m.model_key
     FROM telephony_accounts account

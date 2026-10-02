@@ -5,10 +5,7 @@ import { logger } from '../config/logger.js';
 import { AppError } from '../middleware/errors.js';
 import { activeCallSessions } from './call-session-store.js';
 import { validateBrowserTestMediaToken } from './browser-test-token.js';
-import {
-  claimBrowserTestMediaSession,
-  finalizeBrowserTestBilling,
-} from './browser-test-session.service.js';
+import { claimBrowserTestMediaSession } from './browser-test-session.service.js';
 import { attachRealtimeConversationOrchestrator } from './realtime-conversation-orchestrator.js';
 
 const mediaPath = '/voice/browser-test/media';
@@ -274,7 +271,7 @@ export function attachBrowserTestMediaWebSocket(httpServer, options = {}) {
         ...(options.orchestratorDependencies ?? {}),
         completionDependencies: {
           ...(options.orchestratorDependencies?.completionDependencies ?? {}),
-          finalizeCreditBilling: options.finalizeBilling ?? finalizeBrowserTestBilling,
+          ...(options.finalizeBilling ? { finalizeCreditBilling: options.finalizeBilling } : {}),
         },
       });
       queueMicrotask(() => session.accept());
